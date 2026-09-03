@@ -5,6 +5,8 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"io"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -66,21 +68,51 @@ func TestDecodeDescriptorCompletesAtNewlineWithoutWaitingForEOF(t *testing.T) {
 	}
 }
 
+func TestDaemonEnvironmentUsesAPrivateDataScopedHome(t *testing.T) {
+	t.Parallel()
+	directory := filepath.Join(t.TempDir(), "data")
+	if err := os.Mkdir(directory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	environment, err := isolatedDaemonEnvironment(
+		[]string{"PATH=/usr/bin", "HOME=/Users/example", "TOKEN=sentinel"},
+		directory,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	home := "HOME=" + filepath.Join(directory, "acceptance-home")
+	if !slices.Contains(environment, home) ||
+		slices.Contains(environment, "HOME=/Users/example") ||
+		!slices.Contains(environment, "TOKEN=sentinel") {
+		t.Fatalf("isolated daemon environment = %v", environment)
+	}
+	info, err := os.Stat(filepath.Join(directory, "acceptance-home"))
+	if err != nil || !info.IsDir() || info.Mode().Perm() != 0o700 {
+		t.Fatalf("isolated daemon home = %+v, %v", info, err)
+	}
+}
+
 func TestDaemonInvocationPinsPackagedWebviewOrigin(t *testing.T) {
 	t.Parallel()
 
 	arguments := daemonArguments("/private/tmp/cache", "/private/tmp/data")
 	if !slices.Contains(
 		arguments,
-		"--webview-origin=tauri://localhost",
+		"--webview-origin=vibermate://desktop",
 	) {
 		t.Fatalf("daemon arguments = %v", arguments)
 	}
-	if slices.Contains(
-		arguments,
+	for _, retired := range []string{
+		"--webview-origin=tauri://localhost",
 		"--webview-origin=http://127.0.0.1:1420",
-	) {
-		t.Fatalf("daemon arguments enabled development origin = %v", arguments)
+	} {
+		if slices.Contains(arguments, retired) {
+			t.Fatalf("daemon arguments enabled retired origin %q: %v", retired, arguments)
+		}
+	}
+	if !slices.Contains(arguments, "--parent-lifetime-fd=0") {
+		t.Fatalf("daemon arguments omit parent ownership = %v", arguments)
 	}
 }
 
@@ -92,7 +124,7 @@ func TestDecodeDescriptorAcceptsOnlyClosedStartupFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	failure, err := json.Marshal(desktopbootstrap.StartupFailure(
-		desktopbootstrap.FailureStorageSchemaNewer,
+		desktopbootstrap.FailureStorageUnavailable,
 	))
 	if err != nil {
 		t.Fatal(err)
@@ -101,7 +133,7 @@ func TestDecodeDescriptorAcceptsOnlyClosedStartupFailure(t *testing.T) {
 	_, err = decodeDescriptor(bytes.NewReader(payload))
 	if err == nil || !strings.Contains(
 		err.Error(),
-		"reason=storage_schema_newer",
+		"reason=storage_unavailable",
 	) {
 		t.Fatalf("typed startup failure error = %v", err)
 	}

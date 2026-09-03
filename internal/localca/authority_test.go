@@ -3,17 +3,19 @@ package localca
 import (
 	"context"
 	"crypto/ecdsa"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/pem"
 	"errors"
+	"fmt"
 	"net"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
-	"github.com/vibe-agi/vibermate/internal/access"
+	"github.com/vibe-agi/vibermate/internal/captureassignment"
 	"github.com/vibe-agi/vibermate/internal/certidentity"
 )
 
@@ -47,8 +49,8 @@ func TestLocalCAReopensOneRootAndIssuesRevisionAuthorizedLeaf(t *testing.T) {
 		t.Fatalf("invalid Root certificate identity: %+v", rootCertificate)
 	}
 
-	fixture := newAccessFixture(t, "api", 1)
-	projection := newAccessProjection(t, authority, fixture)
+	fixture := newEnvironmentFixture(t, "api", 1)
+	projection := newEnvironmentProjection(t, authority, fixture)
 	leaf, err := authority.Issue(
 		context.Background(),
 		leafAdmission(t, projection, authority, fixture),
@@ -58,14 +60,14 @@ func TestLocalCAReopensOneRootAndIssuesRevisionAuthorizedLeaf(t *testing.T) {
 	}
 	if leaf.Leaf == nil ||
 		len(leaf.Leaf.DNSNames) != 1 ||
-		leaf.Leaf.DNSNames[0] != fixture.origin.TLSServerName() ||
+		leaf.Leaf.DNSNames[0] != fixture.origin.Host() ||
 		len(leaf.Leaf.IPAddresses) != 0 {
 		t.Fatalf("leaf SANs = dns:%v ip:%v", leaf.Leaf.DNSNames, leaf.Leaf.IPAddresses)
 	}
 	if err := verifyHandshake(
 		leaf,
 		delivery.CertificatePEM(),
-		fixture.origin.TLSServerName(),
+		fixture.origin.Host(),
 	); err != nil {
 		t.Fatalf("verify issued leaf: %v", err)
 	}
@@ -93,7 +95,7 @@ func TestLocalCAReopensOneRootAndIssuesRevisionAuthorizedLeaf(t *testing.T) {
 	if err := verifyHandshake(
 		fresh,
 		authority.Certificate().CertificatePEM(),
-		fixture.origin.TLSServerName(),
+		fixture.origin.Host(),
 	); err != nil {
 		t.Fatalf("caller mutation changed cached leaf: %v", err)
 	}
@@ -123,7 +125,7 @@ func TestLocalCARejectsForgedAdmissionAndIncompletePersistentState(t *testing.T)
 	authority := openAuthority(t, directory, nil)
 	if _, err := authority.Issue(
 		context.Background(),
-		access.LeafIssuanceAdmission{},
+		captureassignment.LeafIssuanceAdmission{},
 	); !errors.Is(err, ErrLeafRequestInvalid) {
 		t.Fatalf("forged admission error = %v", err)
 	}
@@ -172,6 +174,26 @@ func TestRootIdentityDoesNotIncludeCertificateDeliveryPath(t *testing.T) {
 			second.Identity(),
 			second.Certificate().Path(),
 		)
+	}
+}
+
+func TestRootCertificateExportsDefensiveDERBoundToItsIdentity(t *testing.T) {
+	t.Parallel()
+	authority := openAuthority(t, filepath.Join(t.TempDir(), "ca"), nil)
+	defer shutdownAuthority(t, authority)
+
+	der := authority.Certificate().CertificateDER()
+	certificate, err := x509.ParseCertificate(der)
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest := sha256.Sum256(certificate.Raw)
+	if got := fmt.Sprintf("%x", digest); got != authority.Identity().Digest().String() {
+		t.Fatalf("DER digest=%s identity=%s", got, authority.Identity().Digest().String())
+	}
+	der[0] ^= 0xff
+	if _, err := x509.ParseCertificate(authority.Certificate().CertificateDER()); err != nil {
+		t.Fatalf("caller mutated Root delivery material: %v", err)
 	}
 }
 

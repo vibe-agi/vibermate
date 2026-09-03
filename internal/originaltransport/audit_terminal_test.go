@@ -10,9 +10,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/vibe-agi/vibermate/internal/access"
 	"github.com/vibe-agi/vibermate/internal/egressaudit"
+	"github.com/vibe-agi/vibermate/internal/egressnetwork"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
+	"github.com/vibe-agi/vibermate/internal/originidentity"
+	"github.com/vibe-agi/vibermate/internal/protocolspec"
 )
 
 func TestOriginalAuditRecordsResponseReadFailure(t *testing.T) {
@@ -206,7 +208,7 @@ var _ terminalFailureReporter = (*originalTerminalAuditDouble)(nil)
 
 func originalAuditRequest(t *testing.T) Request {
 	t.Helper()
-	origin, err := access.NewClientOrigin("https://origin.example:443")
+	origin, err := originidentity.ParseClientOrigin("https://origin.example:443")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -216,7 +218,7 @@ func originalAuditRequest(t *testing.T) Request {
 		Origin:       origin,
 		Method:       http.MethodGet,
 		Path:         "/status",
-		PayloadClass: access.OperationPayloadControl,
+		PayloadClass: protocolspec.OperationPayloadControl,
 		ConnectionID: "connection-read-failure",
 		ParentID:     "request-read-failure",
 	})
@@ -267,6 +269,7 @@ type originalAuditRoundTripper struct {
 
 func (transport originalAuditRoundTripper) RoundTrip(
 	*http.Request,
+	egressnetwork.Policy,
 ) (*http.Response, error) {
 	return transport.response, nil
 }

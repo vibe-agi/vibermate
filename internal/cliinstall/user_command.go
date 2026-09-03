@@ -105,26 +105,6 @@ func (command *UserCommand) Inspect() (Observation, error) {
 	if command == nil || command.manager == nil {
 		return Observation{}, errors.New("user terminal command is unavailable")
 	}
-	_, targetErr := os.Lstat(filepath.Dir(command.spec.TargetPath))
-	if errors.Is(targetErr, os.ErrNotExist) {
-		_, receiptErr := os.Lstat(command.spec.ReceiptPath)
-		if errors.Is(receiptErr, os.ErrNotExist) {
-			return Observation{State: StateNotInstalled}, nil
-		}
-		if receiptErr != nil {
-			return Observation{}, fmt.Errorf(
-				"inspect private installation record: %w",
-				receiptErr,
-			)
-		}
-		return Observation{
-			State:  StateTargetMissing,
-			Detail: "the terminal command directory is missing",
-		}, nil
-	}
-	if targetErr != nil {
-		return Observation{}, fmt.Errorf("inspect terminal command directory: %w", targetErr)
-	}
 	return command.manager.Inspect(command.spec)
 }
 
@@ -158,6 +138,33 @@ func (command *UserCommand) Refresh() (Receipt, error) {
 		command.spec,
 		observation.Receipt.SourceSHA256,
 	)
+}
+
+// Repair recreates only a missing terminal entry backed by this App's exact
+// private record. Removal compares the complete record again, and installation
+// never replaces an object that appears while the repair is in progress.
+func (command *UserCommand) Repair() (Receipt, error) {
+	if command == nil || command.manager == nil {
+		return Receipt{}, errors.New("user terminal command is unavailable")
+	}
+	observation, err := command.Inspect()
+	if err != nil {
+		return Receipt{}, err
+	}
+	if observation.State != StateTargetMissing || observation.Receipt == nil {
+		return Receipt{}, fmt.Errorf(
+			"terminal command is not safely repairable: %s",
+			observation.State,
+		)
+	}
+	removed, err := command.Remove()
+	if err != nil {
+		return Receipt{}, err
+	}
+	if removed.State != RemoveMissing {
+		return Receipt{}, errors.New("terminal command changed during repair")
+	}
+	return command.Install()
 }
 
 func (command *UserCommand) Remove() (RemoveResult, error) {

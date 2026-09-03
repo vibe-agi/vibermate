@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sync"
 	"testing"
 	"time"
 )
@@ -142,4 +143,77 @@ func TestIdentityRegeneratesCorruptStateAndFailsClosedAfterShutdown(t *testing.T
 	if replacement.MachineID() == oldID {
 		t.Fatal("corrupt state retained the old installation identity")
 	}
+}
+
+func TestConcurrentFirstOpenReturnsOnePersistentMachineIdentity(t *testing.T) {
+	t.Parallel()
+	directory := t.TempDir()
+	entered := make(chan struct{}, 2)
+	release := make(chan struct{})
+	results := make(chan *Manager, 2)
+	errors := make(chan error, 2)
+	for _, value := range []byte{0x71, 0x72} {
+		go func(value byte) {
+			manager, err := Open(
+				context.Background(),
+				directory,
+				&gatedIdentityRandom{
+					value: value, entered: entered, release: release,
+				},
+				identityTestTime,
+			)
+			if err != nil {
+				errors <- err
+				return
+			}
+			results <- manager
+		}(value)
+	}
+	<-entered
+	select {
+	case <-entered:
+	case <-time.After(250 * time.Millisecond):
+		// A cross-process transaction allows only the winner to consume entropy;
+		// the other opener will read its committed identity afterwards.
+	}
+	close(release)
+
+	managers := make([]*Manager, 0, 2)
+	for len(managers) < 2 {
+		select {
+		case err := <-errors:
+			t.Fatal(err)
+		case manager := <-results:
+			managers = append(managers, manager)
+		case <-time.After(2 * time.Second):
+			t.Fatal("concurrent identity opens did not finish")
+		}
+	}
+	defer managers[0].Shutdown(context.Background())
+	defer managers[1].Shutdown(context.Background())
+	if managers[0].MachineID() != managers[1].MachineID() {
+		t.Fatalf(
+			"concurrent first opens returned %q and %q",
+			managers[0].MachineID(),
+			managers[1].MachineID(),
+		)
+	}
+}
+
+type gatedIdentityRandom struct {
+	value   byte
+	entered chan<- struct{}
+	release <-chan struct{}
+	once    sync.Once
+}
+
+func (random *gatedIdentityRandom) Read(destination []byte) (int, error) {
+	random.once.Do(func() {
+		random.entered <- struct{}{}
+		<-random.release
+	})
+	for index := range destination {
+		destination[index] = random.value
+	}
+	return len(destination), nil
 }

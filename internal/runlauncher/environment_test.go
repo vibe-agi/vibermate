@@ -7,6 +7,7 @@ import (
 
 	"github.com/vibe-agi/vibermate/internal/capturecontrol"
 	"github.com/vibe-agi/vibermate/internal/clientadapter"
+	"github.com/vibe-agi/vibermate/internal/environment"
 )
 
 func TestBuildEnvironmentPinsProxyAndRemovesProtectedBypasses(t *testing.T) {
@@ -25,6 +26,7 @@ func TestBuildEnvironmentPinsProxyAndRemovesProtectedBypasses(t *testing.T) {
 		Adapter:         adapter,
 		ExecutablePath:  "/tmp/claude",
 		ProxyAddress:    "http://127.0.0.1:43210",
+		ProxyDelivery:   capturecontrol.ProxyDeliveryLocalListener,
 		ProxyToken:      "proxy-capability",
 		RunCapability:   "run-capability",
 		RootPEMPath:     "/tmp/root.pem",
@@ -86,7 +88,7 @@ func TestBuildEnvironmentPinsProxyAndRemovesProtectedBypasses(t *testing.T) {
 	}
 	if values["NODE_EXTRA_CA_CERTS"] != "/tmp/root.pem" ||
 		values["NODE_USE_ENV_PROXY"] != "1" ||
-		values["ANTHROPIC_API_KEY"] != "vibermate-local-proxy" ||
+		values["ANTHROPIC_AUTH_TOKEN"] != "vibermate-local-proxy" ||
 		values[claudeDisableNonStreamingFallback] != "1" ||
 		values["CLAUDE_CONFIG_DIR"] != "/tmp/client-state" ||
 		values["UNRELATED"] != "value" ||
@@ -94,7 +96,7 @@ func TestBuildEnvironmentPinsProxyAndRemovesProtectedBypasses(t *testing.T) {
 		t.Fatalf("managed environment = %+v", values)
 	}
 	for _, forbidden := range []string{
-		"ANTHROPIC_AUTH_TOKEN",
+		"ANTHROPIC_API_KEY",
 		"Anthropic_Auth_Token",
 		"CLAUDE_CODE_OAUTH_TOKEN",
 		"ANTHROPIC_BASE_URL",
@@ -129,6 +131,58 @@ func TestBuildEnvironmentPinsProxyAndRemovesProtectedBypasses(t *testing.T) {
 	}
 }
 
+func TestBuildEnvironmentAppliesTheFrozenLaunchEnvironmentPolicy(
+	t *testing.T,
+) {
+	t.Parallel()
+	grant := capturecontrol.LaunchGrant{
+		Run: testCaptureRunView(
+			"run-launch-environment",
+			clientadapter.RecognitionUnknown,
+			nil,
+		),
+		CatalogRevision:              7,
+		LaunchRecipe:                 clientadapter.LaunchGeneric,
+		Recognition:                  clientadapter.RecognitionUnknown,
+		ExecutablePath:               "/tmp/agent",
+		ProxyAddress:                 "http://127.0.0.1:43210",
+		ProxyDelivery:                capturecontrol.ProxyDeliveryLocalListener,
+		ProxyToken:                   "proxy-capability",
+		RunCapability:                "run-capability",
+		ProtectedAuthorities:         []string{},
+		ManagedCredentialAuthorities: []string{},
+		LaunchEnvironment: environment.LaunchEnvironmentPolicy{
+			SetEnv: map[string]string{
+				"EXISTING_SETTING": "environment-value",
+				"NEW_SETTING":      "new-value",
+			},
+			DeleteEnv: []string{"REMOVE_SETTING"},
+		},
+	}
+	base := []string{
+		"EXISTING_SETTING=ambient-value",
+		"REMOVE_SETTING=ambient-value",
+		"PRESERVE_SETTING=ambient-value",
+	}
+
+	built, err := buildEnvironment(base, grant)
+	if err != nil {
+		t.Fatal(err)
+	}
+	values := environmentMap(built)
+	if values["EXISTING_SETTING"] != "environment-value" ||
+		values["NEW_SETTING"] != "new-value" ||
+		values["PRESERVE_SETTING"] != "ambient-value" {
+		t.Fatalf("child launch environment = %+v", values)
+	}
+	if _, exists := values["REMOVE_SETTING"]; exists {
+		t.Fatalf("deleted child variable survived: %+v", values)
+	}
+	if base[0] != "EXISTING_SETTING=ambient-value" {
+		t.Fatal("building the child environment mutated the launcher environment")
+	}
+}
+
 func TestBuildEnvironmentDoesNotTrustRootForGenericClient(t *testing.T) {
 	t.Parallel()
 
@@ -143,6 +197,7 @@ func TestBuildEnvironmentDoesNotTrustRootForGenericClient(t *testing.T) {
 		Recognition:                  clientadapter.RecognitionUnknown,
 		ExecutablePath:               "/tmp/agent",
 		ProxyAddress:                 "http://127.0.0.1:43210",
+		ProxyDelivery:                capturecontrol.ProxyDeliveryLocalListener,
 		ProxyToken:                   "proxy-capability",
 		RunCapability:                "run-capability",
 		ProtectedAuthorities:         []string{},
@@ -196,7 +251,7 @@ func TestBuildEnvironmentPreservesClientAuthOutsideManagedAuthority(t *testing.T
 		},
 		{
 			name:   "Codex",
-			recipe: clientadapter.LaunchSSLCertFile,
+			recipe: clientadapter.LaunchCodexResponsesHTTP,
 			base: []string{
 				"CODEX_API_KEY=client-api-key",
 				"OPENAI_BASE_URL=https://api.openai.com/v1",
@@ -224,6 +279,7 @@ func TestBuildEnvironmentPreservesClientAuthOutsideManagedAuthority(t *testing.T
 				Adapter:                      adapter,
 				ExecutablePath:               "/tmp/agent",
 				ProxyAddress:                 "http://127.0.0.1:43210",
+				ProxyDelivery:                capturecontrol.ProxyDeliveryLocalListener,
 				ProxyToken:                   "proxy-capability",
 				RunCapability:                "run-capability",
 				RootPEMPath:                  "/tmp/root.pem",
@@ -259,11 +315,11 @@ func TestBuildEnvironmentBootstrapsDefaultManagedClientOrigins(t *testing.T) {
 			recipe:           clientadapter.LaunchNodeEnvProxy,
 			managedAuthority: "api.anthropic.com:443",
 			ambientKey:       "ANTHROPIC_API_KEY=client-api-key",
-			placeholderKey:   "ANTHROPIC_API_KEY",
+			placeholderKey:   "ANTHROPIC_AUTH_TOKEN",
 		},
 		{
 			name:             "Codex",
-			recipe:           clientadapter.LaunchSSLCertFile,
+			recipe:           clientadapter.LaunchCodexResponsesHTTP,
 			managedAuthority: "api.openai.com:443",
 			ambientKey:       "CODEX_API_KEY=client-api-key",
 			placeholderKey:   "CODEX_API_KEY",
@@ -285,6 +341,7 @@ func TestBuildEnvironmentBootstrapsDefaultManagedClientOrigins(t *testing.T) {
 				Adapter:                      adapter,
 				ExecutablePath:               "/tmp/agent",
 				ProxyAddress:                 "http://127.0.0.1:43210",
+				ProxyDelivery:                capturecontrol.ProxyDeliveryLocalListener,
 				ProxyToken:                   "proxy-capability",
 				RunCapability:                "run-capability",
 				RootPEMPath:                  "/tmp/root.pem",
@@ -308,7 +365,7 @@ func TestBuildEnvironmentBootstrapsDefaultManagedClientOrigins(t *testing.T) {
 func TestBuildEnvironmentIsolatesFixedCodexInputs(t *testing.T) {
 	t.Parallel()
 
-	adapter := testAdapterEvidence(clientadapter.LaunchSSLCertFile)
+	adapter := testAdapterEvidence(clientadapter.LaunchCodexResponsesHTTP)
 	grant := capturecontrol.LaunchGrant{
 		Run: testCaptureRunView(
 			"run-codex",
@@ -316,11 +373,12 @@ func TestBuildEnvironmentIsolatesFixedCodexInputs(t *testing.T) {
 			adapter,
 		),
 		CatalogRevision: 7,
-		LaunchRecipe:    clientadapter.LaunchSSLCertFile,
+		LaunchRecipe:    clientadapter.LaunchCodexResponsesHTTP,
 		Recognition:     clientadapter.RecognitionVerified,
 		Adapter:         adapter,
 		ExecutablePath:  "/tmp/codex.js",
 		ProxyAddress:    "http://127.0.0.1:43210",
+		ProxyDelivery:   capturecontrol.ProxyDeliveryLocalListener,
 		ProxyToken:      "proxy-capability",
 		RunCapability:   "run-capability",
 		RootPEMPath:     "/tmp/root.pem",
@@ -386,7 +444,7 @@ func TestBuildEnvironmentIsolatesFixedCodexInputs(t *testing.T) {
 func TestBuildEnvironmentRejectsUnboundAdapterRecipes(t *testing.T) {
 	t.Parallel()
 
-	adapter := testAdapterEvidence(clientadapter.LaunchSSLCertFile)
+	adapter := testAdapterEvidence(clientadapter.LaunchCodexResponsesHTTP)
 	base := capturecontrol.LaunchGrant{
 		Run: testCaptureRunView(
 			"run-invalid",
@@ -394,11 +452,12 @@ func TestBuildEnvironmentRejectsUnboundAdapterRecipes(t *testing.T) {
 			adapter,
 		),
 		CatalogRevision:              7,
-		LaunchRecipe:                 clientadapter.LaunchSSLCertFile,
+		LaunchRecipe:                 clientadapter.LaunchCodexResponsesHTTP,
 		Recognition:                  clientadapter.RecognitionVerified,
 		Adapter:                      adapter,
 		ExecutablePath:               "/tmp/codex.js",
 		ProxyAddress:                 "http://127.0.0.1:43210",
+		ProxyDelivery:                capturecontrol.ProxyDeliveryLocalListener,
 		ProxyToken:                   "proxy-capability",
 		RunCapability:                "run-capability",
 		RootPEMPath:                  "/tmp/root.pem",
@@ -464,7 +523,7 @@ func testAdapterEvidence(
 	id := "claude-code"
 	shape := clientadapter.InstallNativeSingleBinary
 	fallbackPolicy := clientadapter.StreamingFallbackCoreOwned
-	if recipe == clientadapter.LaunchSSLCertFile {
+	if recipe == clientadapter.LaunchCodexResponsesHTTP {
 		id = "codex-cli"
 		shape = clientadapter.InstallNPMWrapperNativeChild
 		fallbackPolicy = clientadapter.StreamingFallbackClientDefault

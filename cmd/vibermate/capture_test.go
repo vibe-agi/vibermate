@@ -16,13 +16,14 @@ func TestParseCaptureCreateKeepsRoutingOutOfTheCommand(t *testing.T) {
 	t.Parallel()
 
 	config, err := parseCaptureCreate([]string{
+		"--env", "work",
 		"--name", "Project terminal",
 		"--client", "desktop-app",
 		"--expires-in", "2h",
 		"--yes",
 		"--format", "shell",
 	})
-	if err != nil || config.name != "Project terminal" ||
+	if err != nil || config.environmentID != "work" || config.name != "Project terminal" ||
 		config.clientClass != manualcapture.ClientDesktopApp ||
 		config.lifetime != manualcapture.LifetimeTemporary ||
 		config.expiresIn != 2*time.Hour || !config.yes ||
@@ -30,10 +31,11 @@ func TestParseCaptureCreateKeepsRoutingOutOfTheCommand(t *testing.T) {
 		t.Fatalf("config=%+v err=%v", config, err)
 	}
 	for _, arguments := range [][]string{
-		{"--name", "Project terminal", "--route", "route-one"},
-		{"--name", "Project terminal", "--until-revoked", "--expires-in", "2h"},
-		{"--name", "Project terminal", "--expires-in", "30s"},
-		{"--name", "Project terminal", "--format", "json"},
+		{"--name", "Project terminal"},
+		{"--env", "work", "--name", "Project terminal", "--route", "route-one"},
+		{"--env", "work", "--name", "Project terminal", "--until-revoked", "--expires-in", "2h"},
+		{"--env", "work", "--name", "Project terminal", "--expires-in", "30s"},
+		{"--env", "work", "--name", "Project terminal", "--format", "json"},
 	} {
 		if _, err := parseCaptureCreate(arguments); err == nil {
 			t.Fatalf("parseCaptureCreate(%v) succeeded", arguments)
@@ -48,15 +50,15 @@ func TestCaptureReviewLocalizesFactsWithoutLeakingInternalState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	root := &capturecontrol.RootPublicDelivery{
+		Kind: "local_path", DERSHA256: strings.Repeat("a", 64),
+		Fingerprint: "AA:BB:CC", PEMPath: "/private/root.pem",
+	}
 	context := capturecontrol.ManualCaptureContext{
 		ConfirmationToken: "ctx_private-review-token",
 		ProxyAddress:      "http://127.0.0.1:32123",
-		Root: capturecontrol.RootPublicDelivery{
-			Kind:        "local_path",
-			DERSHA256:   strings.Repeat("a", 64),
-			Fingerprint: "AA:BB:CC",
-			PEMPath:     "/private/root.pem",
-		},
+		EnvironmentID:     "work",
+		Root:              root,
 	}
 	config := captureCreateConfig{
 		name:        "Project terminal",
@@ -76,7 +78,7 @@ func TestCaptureReviewLocalizesFactsWithoutLeakingInternalState(t *testing.T) {
 		for _, expected := range []string{
 			"Project terminal",
 			"http://127.0.0.1:32123",
-			"AA:BB:CC",
+			"work", "AA:BB:CC",
 			"/private/root.pem",
 		} {
 			if !strings.Contains(message, expected) {

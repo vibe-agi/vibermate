@@ -16,7 +16,9 @@ import (
 
 	"github.com/vibe-agi/vibermate/internal/capturegrant"
 	"github.com/vibe-agi/vibermate/internal/capturerun"
+	"github.com/vibe-agi/vibermate/internal/clienttarget"
 	"github.com/vibe-agi/vibermate/internal/controlprincipal"
+	"github.com/vibe-agi/vibermate/internal/environment"
 )
 
 const (
@@ -31,7 +33,9 @@ const (
 	ReasonCaptureGrantNotAllowed       ReasonCode = "capture_grant_not_allowed"
 	ReasonInvalidCaptureRun            ReasonCode = "invalid_capture_run"
 	ReasonAdapterVerification          ReasonCode = "adapter_verification_failed"
-	ReasonProjectionUnavailable        ReasonCode = "access_projection_unavailable"
+	ReasonEnvironmentNotFound          ReasonCode = "environment_not_found"
+	ReasonEnvironmentUnavailable       ReasonCode = "environment_unavailable"
+	ReasonProjectionUnavailable        ReasonCode = "environment_projection_unavailable"
 	ReasonCaptureRunCreate             ReasonCode = "capture_run_create_failed"
 	ReasonWorkspaceUnavailable         ReasonCode = "workspace_identity_unavailable"
 	ReasonInvalidManualCapture         ReasonCode = "invalid_manual_capture"
@@ -44,7 +48,7 @@ const (
 )
 
 type PrincipalAuthenticator interface {
-	Authenticate(string) (controlprincipal.Principal, bool)
+	Authenticate(context.Context, string) (controlprincipal.Principal, bool)
 }
 
 type CaptureRunIssuer interface {
@@ -73,10 +77,59 @@ type Handler struct {
 }
 
 type CreateRequest struct {
-	CWD            string   `json:"cwd"`
-	Command        []string `json:"command"`
-	ExecutablePath string   `json:"executablePath"`
-	LocalUserLabel string   `json:"localUserLabel,omitempty"`
+	EnvironmentID     string                     `json:"environmentId"`
+	CWD               string                     `json:"cwd"`
+	Command           []string                   `json:"command"`
+	ExecutablePath    string                     `json:"executablePath"`
+	RuntimeMetadata   ClientRuntimeMetadataInput `json:"runtimeMetadata"`
+	ClientEnvironment *ClientEnvironmentInput    `json:"clientEnvironment,omitempty"`
+	Companion         *CompanionAttestationInput `json:"companion,omitempty"`
+}
+
+type ClientRuntimeMetadataInput struct {
+	LocalUserName          string `json:"localUserName,omitempty"`
+	HomeDirectory          string `json:"homeDirectory,omitempty"`
+	OperatingSystem        string `json:"operatingSystem,omitempty"`
+	OperatingSystemVersion string `json:"operatingSystemVersion,omitempty"`
+	Architecture           string `json:"architecture,omitempty"`
+	TimeZone               string `json:"timeZone,omitempty"`
+}
+
+func (input ClientRuntimeMetadataInput) domain() (capturerun.RuntimeMetadata, error) {
+	metadata := capturerun.RuntimeMetadata{
+		LocalUserName:          input.LocalUserName,
+		HomeDirectory:          input.HomeDirectory,
+		OperatingSystem:        input.OperatingSystem,
+		OperatingSystemVersion: input.OperatingSystemVersion,
+		Architecture:           input.Architecture,
+		TimeZone:               input.TimeZone,
+	}
+	return metadata, metadata.Validate()
+}
+
+// ClientEnvironmentInput is the non-secret allowlist needed to establish a
+// verified client's actual Original Destination. API key values never belong
+// to this control contract.
+type ClientEnvironmentInput struct {
+	AnthropicBaseURL    string `json:"anthropicBaseUrl,omitempty"`
+	CodexBaseURL        string `json:"codexBaseUrl,omitempty"`
+	OpenAIBaseURL       string `json:"openaiBaseUrl,omitempty"`
+	CodexAPIKeyPresent  bool   `json:"codexApiKeyPresent,omitempty"`
+	OpenAIAPIKeyPresent bool   `json:"openaiApiKeyPresent,omitempty"`
+}
+
+func (input *ClientEnvironmentInput) domain() (clienttarget.EnvironmentFacts, error) {
+	if input == nil {
+		return clienttarget.EnvironmentFacts{}, nil
+	}
+	facts := clienttarget.EnvironmentFacts{
+		AnthropicBaseURL:    input.AnthropicBaseURL,
+		CodexBaseURL:        input.CodexBaseURL,
+		OpenAIBaseURL:       input.OpenAIBaseURL,
+		CodexAPIKeyPresent:  input.CodexAPIKeyPresent,
+		OpenAIAPIKeyPresent: input.OpenAIAPIKeyPresent,
+	}
+	return facts, facts.Validate()
 }
 
 type AttachRequest struct {
@@ -171,14 +224,41 @@ func (handler *Handler) create(
 		writeProblem(writer, http.StatusUnprocessableEntity, ReasonInvalidCaptureRun)
 		return
 	}
+	var environmentID environment.EnvironmentID
+	if input.EnvironmentID != "" {
+		var err error
+		environmentID, err = environment.NewEnvironmentID(input.EnvironmentID)
+		if err != nil {
+			writeProblem(writer, http.StatusUnprocessableEntity, ReasonInvalidCaptureRun)
+			return
+		}
+	}
+	companion, err := input.Companion.domain()
+	if err != nil {
+		writeProblem(writer, http.StatusUnprocessableEntity, ReasonInvalidCaptureRun)
+		return
+	}
+	clientEnvironment, err := input.ClientEnvironment.domain()
+	if err != nil {
+		writeProblem(writer, http.StatusUnprocessableEntity, ReasonInvalidCaptureRun)
+		return
+	}
+	runtimeMetadata, err := input.RuntimeMetadata.domain()
+	if err != nil {
+		writeProblem(writer, http.StatusUnprocessableEntity, ReasonInvalidCaptureRun)
+		return
+	}
 	grant, err := handler.issuer.IssueCaptureRun(
 		request.Context(),
 		principal,
 		capturegrant.CaptureRunRequest{
-			CWD:            input.CWD,
-			Command:        append([]string(nil), input.Command...),
-			ExecutablePath: input.ExecutablePath,
-			LocalUserLabel: input.LocalUserLabel,
+			EnvironmentID:     environmentID,
+			CWD:               input.CWD,
+			Command:           append([]string(nil), input.Command...),
+			ExecutablePath:    input.ExecutablePath,
+			RuntimeMetadata:   runtimeMetadata,
+			ClientEnvironment: clientEnvironment,
+			Companion:         companion,
 		},
 	)
 	if err != nil {
@@ -195,14 +275,17 @@ func (handler *Handler) create(
 		Signer:               clientSignerViewOf(grant.Signer),
 		ExecutablePath:       grant.ExecutablePath,
 		ProxyAddress:         grant.ProxyAddress,
+		ProxyDelivery:        grant.ProxyDelivery,
 		ProxyToken:           grant.Run.ProxyCapability.Value(),
 		RunCapability:        grant.Run.ControlCapability.Value(),
 		RootPEMPath:          grant.RootPEMPath,
+		RootPEM:              grant.RootPEM,
 		ProtectedAuthorities: append([]string{}, grant.ProtectedAuthorities...),
 		ManagedCredentialAuthorities: append(
 			[]string{},
 			grant.ManagedCredentialAuthorities...,
 		),
+		LaunchEnvironment: grant.LaunchEnvironment.Clone(),
 	})
 }
 
@@ -292,7 +375,7 @@ func (handler *Handler) authenticatePrincipal(
 		return controlprincipal.Principal{}, false
 	}
 	credential := strings.TrimPrefix(authorization[0], "Bearer ")
-	return handler.principals.Authenticate(credential)
+	return handler.principals.Authenticate(request.Context(), credential)
 }
 
 func consumeRunCapability(
@@ -320,6 +403,10 @@ func (handler *Handler) writeIssueFailure(
 		writeProblem(writer, http.StatusUnprocessableEntity, ReasonInvalidCaptureRun)
 	case errors.Is(err, capturegrant.ErrAdapterVerification):
 		writeProblem(writer, http.StatusUnprocessableEntity, ReasonAdapterVerification)
+	case errors.Is(err, capturegrant.ErrEnvironmentNotFound):
+		writeProblem(writer, http.StatusNotFound, ReasonEnvironmentNotFound)
+	case errors.Is(err, capturegrant.ErrEnvironmentUnavailable):
+		writeProblem(writer, http.StatusConflict, ReasonEnvironmentUnavailable)
 	case errors.Is(err, capturegrant.ErrProjectionUnavailable):
 		writeProblem(writer, http.StatusServiceUnavailable, ReasonProjectionUnavailable)
 	case errors.Is(err, capturegrant.ErrWorkspaceUnavailable):

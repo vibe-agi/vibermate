@@ -13,13 +13,15 @@ import (
 // become launch authority when read back.
 type CaptureRunAuditView struct {
 	capturecontrol.CaptureRunView
-	IngressProfileID        string                    `json:"ingressProfileId"`
 	CanonicalExecutablePath string                    `json:"canonicalExecutablePath"`
 	State                   capturerun.State          `json:"state"`
 	Observation             capturerun.Observation    `json:"observation"`
 	Recognition             clientadapter.Recognition `json:"recognition"`
 	LocalUserLabel          string                    `json:"localUserLabel,omitempty"`
+	RuntimeUserID           string                    `json:"runtimeUserId,omitempty"`
+	LoginSessionID          string                    `json:"loginSessionId,omitempty"`
 	MachineID               string                    `json:"machineId,omitempty"`
+	DeviceName              string                    `json:"deviceName,omitempty"`
 	WorkspaceID             string                    `json:"workspaceId,omitempty"`
 	WorkspaceLabel          string                    `json:"workspaceLabel,omitempty"`
 	WorkspaceEvidence       string                    `json:"workspaceEvidence,omitempty"`
@@ -42,7 +44,6 @@ func CaptureRunAuditPageOf(page capturerun.Page) CaptureRunAuditPage {
 }
 
 func CaptureRunAuditViewOf(view capturerun.View) CaptureRunAuditView {
-	ingressProfileID, _ := capturerun.IngressProfileID(view.ID)
 	var firstObservedAt *time.Time
 	if !view.FirstObservedAt.IsZero() {
 		observedAt := view.FirstObservedAt
@@ -50,13 +51,15 @@ func CaptureRunAuditViewOf(view capturerun.View) CaptureRunAuditView {
 	}
 	return CaptureRunAuditView{
 		CaptureRunView:          capturecontrol.CaptureRunViewOf(view),
-		IngressProfileID:        ingressProfileID,
 		CanonicalExecutablePath: view.CanonicalExecutablePath,
 		State:                   view.State,
 		Observation:             view.Observation,
 		Recognition:             capturerun.NormalizedRecognition(view.Recognition),
 		LocalUserLabel:          view.LocalUserLabel,
+		RuntimeUserID:           string(view.RuntimeUserID),
+		LoginSessionID:          string(view.LoginSessionID),
 		MachineID:               view.MachineID,
+		DeviceName:              view.DeviceName,
 		WorkspaceID:             view.WorkspaceID,
 		WorkspaceLabel:          view.WorkspaceLabel,
 		WorkspaceEvidence:       string(view.WorkspaceEvidence),

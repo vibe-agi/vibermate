@@ -1,5 +1,5 @@
 // Package responseschat explicitly composes the OpenAI Responses client edge
-// with the existing OpenAI Chat backend edge. It owns no transport, Access
+// with the existing OpenAI Chat backend edge. It owns no transport, Environment
 // selection, credentials, or global codec registry.
 package responseschat
 
@@ -7,12 +7,12 @@ import (
 	"context"
 	"net/http"
 
-	"github.com/vibe-agi/vibermate/internal/access"
 	"github.com/vibe-agi/vibermate/internal/anthropicchat"
 	"github.com/vibe-agi/vibermate/internal/openairesponses"
 	"github.com/vibe-agi/vibermate/internal/operationcatalog"
 	"github.com/vibe-agi/vibermate/internal/protocolcore"
 	"github.com/vibe-agi/vibermate/internal/protocolpath"
+	"github.com/vibe-agi/vibermate/internal/protocolspec"
 )
 
 const (
@@ -39,8 +39,8 @@ type clientCodec struct {
 	codec *openairesponses.Codec
 }
 
-func (clientCodec) Dialect() access.Dialect {
-	return access.DialectOpenAIResponses
+func (clientCodec) Dialect() protocolspec.Dialect {
+	return protocolspec.DialectOpenAIResponses
 }
 
 func (codec clientCodec) DecodeRequest(
@@ -60,8 +60,8 @@ type backendCodec struct {
 	codec *anthropicchat.Codec
 }
 
-func (backendCodec) Dialect() access.Dialect {
-	return access.DialectOpenAIChat
+func (backendCodec) Dialect() protocolspec.Dialect {
+	return protocolspec.DialectOpenAIChat
 }
 
 func (codec backendCodec) EncodeRequest(
@@ -146,19 +146,19 @@ func NewProtocolPath(options Options) (*protocolpath.Path, error) {
 	if err != nil {
 		return nil, err
 	}
-	identifier, err := access.NewCodecPairID(CodecPairID)
+	identifier, err := protocolspec.NewCodecPairID(CodecPairID)
 	if err != nil {
 		return nil, err
 	}
 	// Both observed Responses create entrypoints share these semantics: the
 	// API-key path and the ChatGPT-login path differ only in where the client
 	// sends them, so one codec serves both.
-	operationIDs := make([]access.ClientOperationID, 0, 2)
+	operationIDs := make([]protocolspec.ClientOperationID, 0, 2)
 	for _, raw := range []string{
 		operationcatalog.OpenAIResponsesCreateID,
 		operationcatalog.OpenAICodexResponsesCreateID,
 	} {
-		operationID, idErr := access.NewClientOperationID(raw)
+		operationID, idErr := protocolspec.NewClientOperationID(raw)
 		if idErr != nil {
 			return nil, idErr
 		}
@@ -166,7 +166,7 @@ func NewProtocolPath(options Options) (*protocolpath.Path, error) {
 	}
 	return protocolpath.New(protocolpath.Options{
 		ID:                 identifier,
-		Revision:           access.Revision(CodecRevision),
+		Revision:           protocolspec.Revision(CodecRevision),
 		ClientOperationIDs: operationIDs,
 		Client:             clientCodec{codec: client},
 		Backend:            backendCodec{codec: chat},

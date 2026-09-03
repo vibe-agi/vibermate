@@ -6,11 +6,13 @@ import (
 	"errors"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
-	"github.com/vibe-agi/vibermate/internal/access"
 	"github.com/vibe-agi/vibermate/internal/activity"
+	"github.com/vibe-agi/vibermate/internal/agentconversation"
+	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/runtimepersistence"
 )
 
@@ -38,34 +40,40 @@ func TestActivityTimelinePersistsRedactedEventsAndPaginates(t *testing.T) {
 	if empty.Items == nil || len(empty.Items) != 0 {
 		t.Fatalf("empty Activity page = %+v", empty)
 	}
-	accessID, err := access.NewAccessID("access-activity")
+	environmentID, err := environment.NewEnvironmentID("environment-activity")
 	if err != nil {
 		t.Fatal(err)
 	}
 	first, err := manager.Record(context.Background(), activity.Event{
-		Kind:      activity.KindAccessApplied,
-		AccessID:  accessID,
-		SubjectID: "access-activity",
-		Status:    activity.StatusSucceeded,
+		Kind:                activity.KindEnvironmentApplied,
+		EnvironmentID:       environmentID,
+		EnvironmentRevision: 1,
+		EnvironmentDigest:   strings.Repeat("1", 64),
+		SubjectID:           "environment-activity",
+		Status:              activity.StatusSucceeded,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	second, err := manager.Record(context.Background(), activity.Event{
-		Kind:       activity.KindApprovalResolved,
-		AccessID:   accessID,
-		SubjectID:  "approval-1",
-		Status:     activity.StatusFailed,
-		ReasonCode: "tool_denied",
+		Kind:                activity.KindApprovalResolved,
+		EnvironmentID:       environmentID,
+		EnvironmentRevision: 1,
+		EnvironmentDigest:   strings.Repeat("1", 64),
+		SubjectID:           "approval-1",
+		Status:              activity.StatusFailed,
+		ReasonCode:          "tool_denied",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	third, err := manager.Record(context.Background(), activity.Event{
-		Kind:      activity.KindCredentialSecretReplaced,
-		AccessID:  accessID,
-		SubjectID: "credential-1",
-		Status:    activity.StatusSucceeded,
+		Kind:            activity.KindCredentialSecretReplaced,
+		AccountID:       "anthropic-work",
+		AccountRevision: 2,
+		CredentialEpoch: 3,
+		SubjectID:       "credential-1",
+		Status:          activity.StatusSucceeded,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -150,10 +158,6 @@ func TestActivityPersistsImmutableTransportSelectionEvidence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	accessID, err := access.NewAccessID("access-transport-evidence")
-	if err != nil {
-		t.Fatal(err)
-	}
 	requested := activity.TransportProfileEvidence{
 		Ref:      "observed-client-strict-h1",
 		Revision: 1,
@@ -182,20 +186,16 @@ func TestActivityPersistsImmutableTransportSelectionEvidence(t *testing.T) {
 		UpstreamNegotiatedALPN:   "http/1.1",
 		HTTPTransport:            "http1",
 	}
-	recorded, err := manager.Record(context.Background(), activity.Event{
-		Kind:              activity.KindExchangeCompleted,
-		AccessID:          accessID,
-		AccessName:        "Transport Access",
-		AccessRevision:    1,
-		SubjectID:         "exchange-transport",
-		Status:            activity.StatusSucceeded,
-		SourceKind:        activity.SourceSystemProxy,
-		SourceDisplayName: "ViberMate runtime",
-		SourceRecognition: activity.SourceRecognitionUnknown,
-		IngressProfileID:  "system-proxy",
-		ConnectionID:      "connection-transport",
-		Transport:         &evidence,
-	})
+	event := validExchangeEvent(t)
+	event.SubjectID = "exchange-transport"
+	event.SourceKind = activity.SourceSystemProxy
+	event.SourceDisplayName = "ViberMate runtime"
+	event.SourceRecognition = activity.SourceRecognitionUnknown
+	event.CaptureRunID = ""
+	event.ConnectionID = "connection-transport"
+	event.Conversation = isolatedConversation("exchange-transport")
+	event.Transport = &evidence
+	recorded, err := manager.Record(context.Background(), event)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -267,6 +267,14 @@ func TestActivityPersistsImmutableTransportSelectionEvidence(t *testing.T) {
 		recovered.Items[0].Transport == nil ||
 		!reflect.DeepEqual(*recovered.Items[0].Transport, want) {
 		t.Fatalf("recovered transport evidence = %+v", recovered)
+	}
+}
+
+func isolatedConversation(exchangeID string) agentconversation.Ref {
+	return agentconversation.Ref{
+		ProjectionID: "exchange:" + exchangeID,
+		Kind:         agentconversation.KindIsolatedExchange,
+		Evidence:     agentconversation.EvidenceUndecodedExchange,
 	}
 }
 

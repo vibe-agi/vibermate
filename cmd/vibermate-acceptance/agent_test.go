@@ -282,9 +282,10 @@ func TestAgentPromptUsesStandardInputInsteadOfProcessArguments(t *testing.T) {
 
 	const prompt = "prompt-that-must-not-enter-argv"
 	command, err := newAgentCommand(config{
-		clientID:     acceptanceClientClaudeCode,
-		launcherPath: "/absolute/launcher",
-		claudePath:   "/absolute/claude",
+		clientID:      acceptanceClientClaudeCode,
+		launcherPath:  "/absolute/launcher",
+		claudePath:    "/absolute/claude",
+		environmentID: "assembly-001",
 	}, "/trusted/workspace", prompt, "")
 	if err != nil {
 		t.Fatal(err)
@@ -360,9 +361,10 @@ func TestDeferredClaudeCommandUsesStreamingInput(t *testing.T) {
 
 	command, err := newDeferredClaudeCommand(
 		config{
-			clientID:     acceptanceClientClaudeCode,
-			launcherPath: "/absolute/launcher",
-			claudePath:   "/absolute/claude",
+			clientID:      acceptanceClientClaudeCode,
+			launcherPath:  "/absolute/launcher",
+			claudePath:    "/absolute/claude",
+			environmentID: "assembly-001",
 		},
 		"/trusted/workspace",
 		"",
@@ -401,9 +403,10 @@ func TestFixedCodexInvocationUsesIsolatedStateAndStandardInput(
 	const prompt = "codex-prompt-that-must-not-enter-argv"
 	workingDirectory := "/trusted/workspace"
 	command, err := newAgentCommand(config{
-		clientID:     acceptanceClientCodexCLI,
-		launcherPath: "/absolute/launcher",
-		codexPath:    "/absolute/codex",
+		clientID:      acceptanceClientCodexCLI,
+		launcherPath:  "/absolute/launcher",
+		codexPath:     "/absolute/codex",
+		environmentID: "assembly-001",
 	}, workingDirectory, prompt, "")
 	if err != nil {
 		t.Fatal(err)
@@ -411,6 +414,8 @@ func TestFixedCodexInvocationUsesIsolatedStateAndStandardInput(
 	expected := []string{
 		"/absolute/launcher",
 		"run",
+		"--env",
+		"assembly-001",
 		"--",
 		"/absolute/codex",
 		"-c",
@@ -458,9 +463,10 @@ func TestFixedCodexFallbackInvocationLeavesWebSocketCapabilityEnabled(
 
 	command, err := newFallbackAgentCommand(
 		config{
-			clientID:     acceptanceClientCodexCLI,
-			launcherPath: "/absolute/launcher",
-			codexPath:    "/absolute/codex",
+			clientID:      acceptanceClientCodexCLI,
+			launcherPath:  "/absolute/launcher",
+			codexPath:     "/absolute/codex",
+			environmentID: "assembly-001",
 		},
 		"/trusted/workspace",
 		"fallback-through-stdin",
@@ -491,9 +497,10 @@ func TestFixedCodexResumeUsesExactTrustedThreadIdentity(t *testing.T) {
 	}
 	command, err := newResumeAgentCommand(
 		config{
-			clientID:     acceptanceClientCodexCLI,
-			launcherPath: "/absolute/launcher",
-			codexPath:    "/absolute/codex",
+			clientID:      acceptanceClientCodexCLI,
+			launcherPath:  "/absolute/launcher",
+			codexPath:     "/absolute/codex",
+			environmentID: "assembly-001",
 		},
 		"/trusted/workspace",
 		"continue-through-stdin",
@@ -505,6 +512,8 @@ func TestFixedCodexResumeUsesExactTrustedThreadIdentity(t *testing.T) {
 	expected := []string{
 		"/absolute/launcher",
 		"run",
+		"--env",
+		"assembly-001",
 		"--",
 		"/absolute/codex",
 		"-c",

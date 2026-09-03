@@ -2,10 +2,10 @@ package exchange
 
 import (
 	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"net/http"
 	"slices"
@@ -14,415 +14,1538 @@ import (
 	"testing"
 	"time"
 
-	"github.com/vibe-agi/vibermate/internal/access"
+	"github.com/vibe-agi/vibermate/internal/accountselector"
+	"github.com/vibe-agi/vibermate/internal/agentconversation"
 	"github.com/vibe-agi/vibermate/internal/anthropicchat"
+	"github.com/vibe-agi/vibermate/internal/captureadmission"
+	"github.com/vibe-agi/vibermate/internal/clientannotation"
+	"github.com/vibe-agi/vibermate/internal/codelibrary"
+	"github.com/vibe-agi/vibermate/internal/egressprofile"
+	"github.com/vibe-agi/vibermate/internal/environment"
+	"github.com/vibe-agi/vibermate/internal/messagetransform"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
+	"github.com/vibe-agi/vibermate/internal/openairesponses"
 	"github.com/vibe-agi/vibermate/internal/operationcatalog"
+	"github.com/vibe-agi/vibermate/internal/originidentity"
 	"github.com/vibe-agi/vibermate/internal/protocolcore"
 	"github.com/vibe-agi/vibermate/internal/protocolpath"
+	"github.com/vibe-agi/vibermate/internal/protocolspec"
+	"github.com/vibe-agi/vibermate/internal/providerauth"
 	"github.com/vibe-agi/vibermate/internal/providertransport"
+	"github.com/vibe-agi/vibermate/internal/rawevidence"
 	"github.com/vibe-agi/vibermate/internal/responseschat"
 	"github.com/vibe-agi/vibermate/internal/secretstore"
 	"github.com/vibe-agi/vibermate/internal/ssewire"
-	"github.com/vibe-agi/vibermate/internal/transportprofile"
+	"github.com/vibe-agi/vibermate/internal/wireprofile"
 )
 
-func TestPipelineExecutesCompleteResponseFromOneFrozenPlan(t *testing.T) {
-	t.Parallel()
-
-	accessID := mustAccessID(t, "access-complete")
-	snapshot := compileTestSnapshot(t, accessID, 1, "gpt-plan-one")
-	resolver := &resolverDouble{snapshots: []access.AccessPlanSnapshot{snapshot}}
+func TestManagedRequestUsesOnlyFrozenEnvironmentRouteAndAccount(t *testing.T) {
+	const exactUpstreamModel = "dashscope_deepseek-v4-flash-0731"
+	plan := mustEnvironmentRequestPlan(t, testPlanOptions{
+		destination:    environment.DestinationKindUpstream,
+		providerOrigin: "https://provider.example/v1",
+		backend:        protocolspec.DialectOpenAIChat,
+		modelMode:      environment.ModelModeMap,
+		mappedModel:    exactUpstreamModel,
+		accounts:       []testAccount{{id: "account.primary", revision: 3, epoch: 7}},
+		preferred:      "account.primary",
+	})
+	authority := newAccountAuthority(t, testAccount{id: "account.primary", revision: 3, epoch: 7})
 	provider := &providerDouble{results: []providerResult{{
-		response: jsonResponse(http.StatusOK, completeProviderResponse("gpt-plan-one")),
-		evidence: providertransport.CredentialEvidence{
-			DriverRef:  access.AuthDriverStaticHeaderValue,
-			HeaderName: "authorization",
-			SecretRead: true,
-		},
+		response: jsonResponse(http.StatusOK, completeProviderResponse(exactUpstreamModel)),
 	}}}
-	decisions := &decisionDouble{decision: ToolDecision{
-		Outcome: ToolDecisionApproved,
-	}}
-	pipeline := newTestPipeline(t, resolver, provider, decisions)
-	t.Cleanup(func() { shutdownPipeline(t, pipeline) })
+	observer := &attemptObserverDouble{}
+	pipeline := newTestPipeline(t, authority, provider, approvedDecisions(), observer)
+	defer shutdownPipeline(t, pipeline)
 
-	inputBody := []byte(`{
-		"model":"claude-client-alias",
-		"max_tokens":32,
-		"metadata":{"user_id":"test-only"},
-		"messages":[{"role":"user","content":"hello"}]
-	}`)
-	request, err := NewClientRequest(
-		"exchange-complete",
-		snapshot.IngressBinding(),
-		mustAnthropicOperationEvidence(t),
-		inputBody,
-		ReplayGenerationCostOnly,
-		access.ApplicationProtocolHTTP1,
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	inputBody[0] = '!'
+	request := mustClientRequest(t, "exchange-managed", plan, completeClientRequest())
 	downstream := &downstreamRecorder{}
 	result, err := pipeline.Execute(context.Background(), request, downstream)
 	if err != nil {
-		t.Fatalf("Execute() error = %v", err)
+		t.Fatal(err)
 	}
-
-	if resolver.callCount() != 1 {
-		t.Fatalf("resolver calls = %d, want 1", resolver.callCount())
+	if result.Outcome != AttemptSucceeded || result.EnvironmentID != "environment.test" ||
+		result.EnvironmentRevision != 9 || result.EndpointID != "endpoint.anthropic" ||
+		result.ProtocolPlanID != "protocol.anthropic" || result.RouteID != "route.primary" ||
+		result.AccountID != "account.primary" || result.AccountRevision != 3 ||
+		result.CredentialEpoch != 7 {
+		t.Fatalf("result = %+v", result)
+	}
+	if !bytes.Contains(downstream.bytesSnapshot(), []byte("Done.")) {
+		t.Fatalf("downstream body = %s", downstream.bytesSnapshot())
 	}
 	requests := provider.requestsSnapshot()
 	if len(requests) != 1 {
-		t.Fatalf("provider request count = %d, want 1", len(requests))
+		t.Fatalf("provider requests = %d", len(requests))
 	}
-	if requests[0].RelativePath() != anthropicchat.ProviderRelativePath {
-		t.Fatalf("provider path = %q", requests[0].RelativePath())
+	frozen := requests[0]
+	account, ok := frozen.AccountRef()
+	if !ok || frozen.CredentialMode() != providerauth.CredentialManaged ||
+		account.ID != "account.primary" || account.Revision != 3 ||
+		frozen.Provenance().EnvironmentID().String() != "environment.test" ||
+		frozen.Provenance().EnvironmentRevision() != 9 ||
+		frozen.Provenance().RouteID().String() != "route.primary" ||
+		frozen.Target().Origin().String() != "https://provider.example/v1" ||
+		frozen.RelativePath() != anthropicchat.ProviderRelativePath {
+		t.Fatalf("provider request authority = %+v account=%+v", frozen, account)
 	}
-	var providerWire struct {
-		Model  string `json:"model"`
-		Stream bool   `json:"stream"`
+	var providerBody map[string]any
+	if err := json.Unmarshal(frozen.Body(), &providerBody); err != nil {
+		t.Fatal(err)
 	}
-	if err := json.Unmarshal(requests[0].Body(), &providerWire); err != nil {
-		t.Fatalf("decode provider request: %v", err)
+	if providerBody["model"] != exactUpstreamModel {
+		t.Fatalf("provider model = %#v", providerBody["model"])
 	}
-	if providerWire.Model != "gpt-plan-one" || providerWire.Stream {
-		t.Fatalf("provider request = %+v", providerWire)
+	if got := authority.snapshot(); len(got) != 1 || got[0].AccountID() != "account.primary" ||
+		got[0].EnvironmentID().String() != "environment.test" || got[0].RouteID().String() != "route.primary" {
+		t.Fatalf("account lease requests = %+v", got)
 	}
-	if decisions.callCount() != 0 {
-		t.Fatalf("tool decision calls = %d, want 0", decisions.callCount())
+	if authority.releaseCount("account.primary") != 1 {
+		t.Fatal("managed account lease was not released exactly once")
 	}
-	if downstream.modesSnapshot()[0] != ResponseModeJSON {
-		t.Fatalf("downstream modes = %v", downstream.modesSnapshot())
-	}
-	if result.Outcome != AttemptSucceeded ||
-		result.AccessRevision != 1 ||
-		result.PlanHash != snapshot.PlanHash().String() ||
-		!result.Ledger.DownstreamOrdinaryHeaders ||
-		!result.Ledger.DownstreamTerminal ||
-		result.Ledger.UpstreamSends != 1 ||
-		result.Ledger.UpstreamResponses != 1 ||
-		!translationHasNotice(
-			result.Translation,
-			protocolcore.NoticeMetadataNotForwarded,
-		) {
-		t.Fatalf("result = %+v", result)
+	observations := observer.snapshot()
+	if len(observations) != 1 || observations[0].EnvironmentID.String() != "environment.test" ||
+		observations[0].RouteID.String() != "route.primary" || observations[0].AccountID != "account.primary" {
+		t.Fatalf("attempt observations = %+v", observations)
 	}
 }
 
-func TestPipelineOriginalPassthroughPreservesRequestAndResponseEnvelope(
-	t *testing.T,
-) {
-	t.Parallel()
-
-	accessID := mustAccessID(t, "access-original-passthrough")
-	snapshot := compileOriginalTestSnapshot(
-		t,
-		accessID,
-		access.DialectAnthropicMessages,
-		"https://api.anthropic.com:443",
-	)
-	providerBody := []byte(`{"id":"msg_original","content":[{"type":"text","text":"unchanged"}]}`)
+func TestManagedCompleteExchangeTransformsWireMessagesWithOneTurnContext(t *testing.T) {
+	const mappedModel = "opaque:upstream-model"
+	plan := mustEnvironmentRequestPlan(t, testPlanOptions{
+		destination:    environment.DestinationKindUpstream,
+		providerOrigin: "https://provider.example/v1",
+		backend:        protocolspec.DialectOpenAIChat,
+		modelMode:      environment.ModelModeMap,
+		mappedModel:    mappedModel,
+		accounts:       []testAccount{{id: "account.primary", revision: 3, epoch: 7}},
+		preferred:      "account.primary",
+		transform: messagetransform.Policy{
+			RequestJavaScript: `
+				const payload = JSON.parse(request.body);
+				context.originalModel = payload.model;
+				request.headers["x-transform-request"] = "yes";
+				payload.transform_marker = "request";
+				request.body = JSON.stringify(payload);
+			`,
+			ResponseJavaScript: `
+				const payload = JSON.parse(response.body);
+				response.headers["x-transform-response"] = context.originalModel;
+				payload.choices[0].message.content = "transformed:" + context.originalModel;
+				response.body = JSON.stringify(payload);
+			`,
+		},
+	})
 	provider := &providerDouble{results: []providerResult{{
-		response: &http.Response{
-			StatusCode: http.StatusCreated,
-			Header: http.Header{
-				"Content-Type": []string{"application/json; charset=utf-8"},
-				"X-Upstream":   []string{"preserved"},
-			},
-			Body: io.NopCloser(bytes.NewReader(providerBody)),
-		},
-		evidence: providertransport.CredentialEvidence{
-			DriverRef: string(access.CredentialSourceClientPassthrough),
-		},
+		response: jsonResponse(http.StatusOK, completeProviderResponse(mappedModel)),
 	}}}
-	decisions := &decisionDouble{decision: ToolDecision{
-		Outcome: ToolDecisionRejected,
-	}}
 	pipeline := newTestPipeline(
 		t,
-		&resolverDouble{snapshots: []access.AccessPlanSnapshot{snapshot}},
+		newAccountAuthority(t, testAccount{id: "account.primary", revision: 3, epoch: 7}),
 		provider,
-		decisions,
+		approvedDecisions(),
+		&attemptObserverDouble{},
 	)
-	t.Cleanup(func() { shutdownPipeline(t, pipeline) })
+	raw := &rawObserverDouble{}
+	pipeline.rawEvidence = raw
+	defer shutdownPipeline(t, pipeline)
+	downstream := &downstreamRecorder{}
+	_, err := pipeline.Execute(
+		context.Background(),
+		mustClientRequest(t, "exchange-transform", plan, completeClientRequest()),
+		downstream,
+	)
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	requests := provider.requestsSnapshot()
+	if len(requests) != 1 || requests[0].Headers().Get("X-Transform-Request") != "yes" {
+		t.Fatalf("provider request Headers = %#v", requests)
+	}
+	if !bytes.Contains(requests[0].Body(), []byte(`"transform_marker":"request"`)) {
+		t.Fatalf("provider request Body = %s", requests[0].Body())
+	}
+	if !bytes.Contains(downstream.bytesSnapshot(), []byte("transformed:"+mappedModel)) {
+		t.Fatalf("downstream Body = %s", downstream.bytesSnapshot())
+	}
+	envelopes := downstream.envelopesSnapshot()
+	if len(envelopes) != 1 || envelopes[0].Headers().Get("X-Transform-Response") != mappedModel {
+		t.Fatalf("downstream response Headers = %#v", envelopes)
+	}
+	rawMessages := raw.snapshot()
+	if len(rawMessages) != 2 ||
+		rawMessages[0].Layer != rawevidence.LayerTransformRequestInput ||
+		bytes.Contains(rawMessages[0].Body, []byte("transform_marker")) ||
+		rawMessages[0].Headers.Get("Authorization") != "" ||
+		rawMessages[1].Layer != rawevidence.LayerTransformResponseInput ||
+		bytes.Contains(rawMessages[1].Body, []byte("transformed:")) {
+		t.Fatalf("transform input evidence = %+v", rawMessages)
+	}
+}
 
-	clientBody := []byte(`{"model":"claude-client-choice","messages":[{"role":"user","content":"hello"}],"client_extension":{"keep":true}}`)
-	clientHeaders := http.Header{
-		"Authorization":     []string{"Bearer client-oauth"},
-		"Cookie":            []string{"session=client"},
-		"Anthropic-Version": []string{"2023-06-01"},
-		"X-Client-Exact":    []string{"keep"},
-		"User-Agent":        []string{"client-cli/1.0"},
-	}
-	operationID, err := access.NewClientOperationID(
-		operationcatalog.AnthropicMessagesCreateID,
+func TestResponseOnlyTransformRecordsAPairedRequestInput(t *testing.T) {
+	plan := mustEnvironmentRequestPlan(t, testPlanOptions{
+		destination:    environment.DestinationKindUpstream,
+		providerOrigin: "https://provider.example/v1",
+		backend:        protocolspec.DialectOpenAIChat,
+		modelMode:      environment.ModelModeMap,
+		mappedModel:    "opaque:upstream-model",
+		accounts:       []testAccount{{id: "account.primary", revision: 3, epoch: 7}},
+		preferred:      "account.primary",
+		transform: messagetransform.Policy{ResponseJavaScript: `
+			response.headers["x-transform-response"] = "yes";
+		`},
+	})
+	provider := &providerDouble{results: []providerResult{{
+		response: jsonResponse(http.StatusOK, completeProviderResponse("opaque:upstream-model")),
+	}}}
+	pipeline := newTestPipeline(
+		t,
+		newAccountAuthority(t, testAccount{id: "account.primary", revision: 3, epoch: 7}),
+		provider,
+		approvedDecisions(),
+		&attemptObserverDouble{},
+	)
+	raw := &rawObserverDouble{}
+	pipeline.rawEvidence = raw
+	defer shutdownPipeline(t, pipeline)
+
+	_, err := pipeline.Execute(
+		context.Background(),
+		mustClientRequest(t, "exchange-response-only-transform", plan, completeClientRequest()),
+		&downstreamRecorder{},
 	)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("Execute() error = %v", err)
 	}
-	operation, err := NewClientOperationEvidence(
-		operationID,
-		1,
-		http.MethodPost,
-		"/v1/messages",
-		"beta=true",
-	)
-	if err != nil {
-		t.Fatal(err)
+	evidence := raw.snapshot()
+	if len(evidence) != 2 ||
+		evidence[0].Layer != rawevidence.LayerTransformRequestInput ||
+		evidence[1].Layer != rawevidence.LayerTransformResponseInput {
+		t.Fatalf("paired Transform inputs = %+v", evidence)
 	}
-	request, err := NewClientRequest(
-		"exchange-original-passthrough",
-		snapshot.IngressBinding(),
-		operation,
-		clientBody,
-		ReplayGenerationCostOnly,
-		access.ApplicationProtocolHTTP1,
-		WithOriginalHeaders(clientHeaders),
-		WithClientUserAgent("client-cli/1.0"),
+}
+
+func TestManagedMessageTransformReceivesLauncherRuntimeMetadata(t *testing.T) {
+	t.Parallel()
+	plan := mustEnvironmentRequestPlan(t, testPlanOptions{
+		destination:    environment.DestinationKindUpstream,
+		providerOrigin: "https://provider.example/v1",
+		backend:        protocolspec.DialectOpenAIChat,
+		modelMode:      environment.ModelModeMap,
+		mappedModel:    "opaque:upstream-model",
+		accounts:       []testAccount{{id: "account.primary", revision: 3, epoch: 7}},
+		preferred:      "account.primary",
+		transform: messagetransform.Policy{
+			RequestJavaScript: `
+				request.headers["x-runtime-user"] = [runtime.user.name];
+				context.home = runtime.user.homeDirectory;
+			`,
+			ResponseJavaScript: `
+				response.headers["x-runtime"] = [runtime.device.timeZone, runtime.workspace.root, context.home];
+			`,
+		},
+	})
+	provider := &providerDouble{results: []providerResult{{
+		response: jsonResponse(http.StatusOK, completeProviderResponse("opaque:upstream-model")),
+	}}}
+	pipeline := newTestPipeline(
+		t,
+		newAccountAuthority(t, testAccount{id: "account.primary", revision: 3, epoch: 7}),
+		provider,
+		approvedDecisions(),
+		&attemptObserverDouble{},
 	)
+	defer shutdownPipeline(t, pipeline)
+	admission, err := captureadmission.NewManagedRun(captureadmission.ManagedRunEvidence{
+		CaptureRunID:  "capture-runtime-metadata",
+		SourceLabel:   "codex",
+		WorkspaceRoot: "/Users/jack/Code/vibermate",
+		Runtime: captureadmission.ManagedRuntimeMetadata{
+			LocalUserName: "jack", HomeDirectory: "/Users/jack",
+			OperatingSystem: "darwin", OperatingSystemVersion: "15.6",
+			Architecture: "arm64", TimeZone: "Asia/Singapore",
+		},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	downstream := &downstreamRecorder{}
+	_, err = pipeline.Execute(
+		context.Background(),
+		mustClientRequestWithOptions(
+			t, "exchange-runtime-metadata", plan, completeClientRequest(),
+			WithIngressCorrelation(admission, "connection-runtime-metadata"),
+		),
+		downstream,
+	)
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	requests := provider.requestsSnapshot()
+	if len(requests) != 1 || requests[0].Headers().Get("X-Runtime-User") != "jack" {
+		t.Fatalf("provider runtime metadata = %#v", requests)
+	}
+	envelopes := downstream.envelopesSnapshot()
+	want := []string{"Asia/Singapore", "/Users/jack/Code/vibermate", "/Users/jack"}
+	if len(envelopes) != 1 || !slices.Equal(envelopes[0].Headers().Values("X-Runtime"), want) {
+		t.Fatalf("downstream runtime metadata = %#v, want %#v", envelopes, want)
+	}
+}
+
+func TestManagedMessageTransformReceivesFrozenTurnTimeAndAnnotationSigner(t *testing.T) {
+	fixed := time.Date(2026, 8, 27, 6, 5, 4, 0, time.UTC)
+	plan := mustEnvironmentRequestPlan(t, testPlanOptions{
+		destination:    environment.DestinationKindUpstream,
+		providerOrigin: "https://provider.example/v1",
+		backend:        protocolspec.DialectOpenAIChat,
+		modelMode:      environment.ModelModeMap,
+		mappedModel:    "opaque:upstream-model",
+		accounts:       []testAccount{{id: "account.primary", revision: 3, epoch: 7}},
+		preferred:      "account.primary",
+		transform: messagetransform.Policy{ResponseJavaScript: `
+			const payload = JSON.parse(response.body);
+			payload.choices[0].message.content = runtime.annotations.create(
+				"turn-time", runtime.turn.startedAt
+			);
+			response.body = JSON.stringify(payload);
+		`},
+	})
+	provider := &providerDouble{results: []providerResult{{
+		response: jsonResponse(http.StatusOK, completeProviderResponse("opaque:upstream-model")),
+	}}}
+	pipeline := newTestPipeline(
+		t,
+		newAccountAuthority(t, testAccount{id: "account.primary", revision: 3, epoch: 7}),
+		provider,
+		approvedDecisions(),
+		&attemptObserverDouble{},
+	)
+	pipeline.now = func() time.Time { return fixed }
+	defer shutdownPipeline(t, pipeline)
+	downstream := &downstreamRecorder{}
+	if _, err := pipeline.Execute(
+		context.Background(),
+		mustClientRequest(t, "exchange-turn-time", plan, completeClientRequest()),
+		downstream,
+	); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	body := string(downstream.bytesSnapshot())
+	if !strings.Contains(body, "vibermate:annotation:v1:turn-time:") ||
+		!strings.Contains(body, fixed.Format(time.RFC3339Nano)) {
+		t.Fatalf("downstream body = %s", body)
+	}
+}
+
+func TestManagedMessageTransformFailsClosedBeforeItsCommitBoundary(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name      string
+		transform messagetransform.Policy
+		wantCalls int
+	}{
+		{
+			name: "request",
+			transform: messagetransform.Policy{
+				RequestJavaScript: `throw new Error("request rejected");`,
+			},
+			wantCalls: 0,
+		},
+		{
+			name: "response",
+			transform: messagetransform.Policy{
+				ResponseJavaScript: `throw new Error("response rejected");`,
+			},
+			wantCalls: 1,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			plan := mustEnvironmentRequestPlan(t, testPlanOptions{
+				destination:    environment.DestinationKindUpstream,
+				providerOrigin: "https://provider.example/v1",
+				backend:        protocolspec.DialectOpenAIChat,
+				modelMode:      environment.ModelModeMap,
+				mappedModel:    "opaque:upstream-model",
+				accounts:       []testAccount{{id: "account.primary", revision: 3, epoch: 7}},
+				preferred:      "account.primary",
+				transform:      test.transform,
+			})
+			provider := &providerDouble{results: []providerResult{{
+				response: jsonResponse(http.StatusOK, completeProviderResponse("opaque:upstream-model")),
+			}}}
+			pipeline := newTestPipeline(
+				t,
+				newAccountAuthority(t, testAccount{id: "account.primary", revision: 3, epoch: 7}),
+				provider,
+				approvedDecisions(),
+				&attemptObserverDouble{},
+			)
+			defer shutdownPipeline(t, pipeline)
+			downstream := &downstreamRecorder{}
+			_, err := pipeline.Execute(
+				context.Background(),
+				mustClientRequest(t, "exchange-transform-failure-"+test.name, plan, completeClientRequest()),
+				downstream,
+			)
+			if ReasonOf(err) != ReasonMessageTransformFailed {
+				t.Fatalf("Execute() error = %v, want %s", err, ReasonMessageTransformFailed)
+			}
+			if provider.callCount() != test.wantCalls {
+				t.Fatalf("provider calls = %d, want %d", provider.callCount(), test.wantCalls)
+			}
+			if len(downstream.envelopesSnapshot()) != 0 || len(downstream.bytesSnapshot()) != 0 {
+				t.Fatalf("failed transform committed downstream: envelopes=%d body=%q", len(downstream.envelopesSnapshot()), downstream.bytesSnapshot())
+			}
+		})
+	}
+}
+
+func TestManagedMessagesSecondTurnPreservesCitedAssistantHistory(t *testing.T) {
+	const mappedModel = "dashscope:deepseek-v4-flash-0731"
+	plan := mustEnvironmentRequestPlan(t, testPlanOptions{
+		destination:    environment.DestinationKindUpstream,
+		providerOrigin: "http://127.0.0.1:23333",
+		backend:        protocolspec.DialectAnthropicMessages,
+		modelMode:      environment.ModelModeMap,
+		mappedModel:    mappedModel,
+		accounts: []testAccount{{
+			id: "account.primary", revision: 3, epoch: 7,
+		}},
+		preferred: "account.primary",
+	})
+	provider := &providerDouble{results: []providerResult{{
+		response: jsonResponse(http.StatusOK, []byte(`{
+			"id":"msg_second_turn","type":"message","role":"assistant",
+			"model":"`+mappedModel+`",
+			"content":[{"type":"text","text":"second answer","citations":[]}],
+			"stop_reason":"end_turn","stop_sequence":null,
+			"usage":{"input_tokens":8,"output_tokens":3}
+		}`)),
+	}}}
+	content := &contentObserverDouble{}
+	pipeline := newTestPipelineWithContentObserver(
+		t,
+		newAccountAuthority(
+			t,
+			testAccount{id: "account.primary", revision: 3, epoch: 7},
+		),
+		provider,
+		approvedDecisions(),
+		&attemptObserverDouble{},
+		content,
+	)
+	defer shutdownPipeline(t, pipeline)
+
+	downstream := &downstreamRecorder{}
+	result, err := pipeline.Execute(
+		context.Background(),
+		mustClientRequest(
+			t,
+			"exchange-messages-second-turn",
+			plan,
+			secondTurnCitedClientRequest(),
+		),
+		downstream,
+	)
+	if err != nil || result.Outcome != AttemptSucceeded {
+		t.Fatalf("Execute() = %+v, %v", result, err)
+	}
+	requests := provider.requestsSnapshot()
+	if len(requests) != 1 ||
+		requests[0].RelativePath() != anthropicchat.MessagesProviderRelativePath ||
+		!bytes.Contains(requests[0].Body(), []byte(`"citations":[]`)) ||
+		!bytes.Contains(requests[0].Body(), []byte(`"model":"`+mappedModel+`"`)) {
+		t.Fatalf("provider request = %+v", requests)
+	}
+	var clientBody map[string]any
+	if err := json.Unmarshal(downstream.bytesSnapshot(), &clientBody); err != nil {
+		t.Fatal(err)
+	}
+	if clientBody["model"] != "claude-client-alias" {
+		t.Fatalf("client response model = %#v", clientBody["model"])
+	}
+	observation, ok := content.latest()
+	if !ok || observation.Response == nil ||
+		observation.Response.RequestedModel != "claude-client-alias" ||
+		observation.Response.EffectiveModel != mappedModel ||
+		observation.Response.ReportedModel != mappedModel {
+		t.Fatalf("content observation = %+v", observation)
+	}
+}
+
+func TestUnmappedClientModelIsPreservedExactly(t *testing.T) {
+	const unrelatedUpstreamModel = "relay:only-for-another-client-model"
+	plan := mustEnvironmentRequestPlan(t, testPlanOptions{
+		destination:    environment.DestinationKindUpstream,
+		providerOrigin: "https://provider.example/v1",
+		backend:        protocolspec.DialectOpenAIChat,
+		modelMode:      environment.ModelModeMap,
+		modelMappings: []environment.ModelMapping{{
+			RequestedModel: "another-client-model",
+			UpstreamModel:  unrelatedUpstreamModel,
+		}},
+		accounts:  []testAccount{{id: "account.primary", revision: 3, epoch: 7}},
+		preferred: "account.primary",
+	})
+	provider := &providerDouble{results: []providerResult{{
+		response: jsonResponse(http.StatusOK, completeProviderResponse("claude-client-alias")),
+	}}}
+	pipeline := newTestPipeline(
+		t,
+		newAccountAuthority(t, testAccount{id: "account.primary", revision: 3, epoch: 7}),
+		provider,
+		approvedDecisions(),
+		&attemptObserverDouble{},
+	)
+	defer shutdownPipeline(t, pipeline)
+
+	if _, err := pipeline.Execute(
+		context.Background(),
+		mustClientRequest(t, "exchange-unmapped-model", plan, completeClientRequest()),
+		&downstreamRecorder{},
+	); err != nil {
+		t.Fatal(err)
+	}
+	var providerBody map[string]any
+	if err := json.Unmarshal(provider.requestsSnapshot()[0].Body(), &providerBody); err != nil {
+		t.Fatal(err)
+	}
+	if providerBody["model"] != "claude-client-alias" {
+		t.Fatalf("unmapped provider model = %#v", providerBody["model"])
+	}
+}
+
+func TestManagedRequestPublishesFrozenConversationEvidence(t *testing.T) {
+	plan := mustEnvironmentRequestPlan(t, testPlanOptions{
+		destination:    environment.DestinationKindUpstream,
+		providerOrigin: "https://provider.example/v1",
+		backend:        protocolspec.DialectOpenAIChat,
+		modelMode:      environment.ModelModeMap,
+		mappedModel:    "gpt-provider",
+		accounts:       []testAccount{{id: "account.primary", revision: 3, epoch: 7}},
+		preferred:      "account.primary",
+	})
+	content := &contentObserverDouble{}
+	pipeline := newTestPipelineWithContentObserver(
+		t,
+		newAccountAuthority(t, testAccount{id: "account.primary", revision: 3, epoch: 7}),
+		&providerDouble{results: []providerResult{{
+			response: jsonResponse(http.StatusOK, completeToolProviderResponse("gpt-provider")),
+		}}},
+		approvedDecisions(),
+		&attemptObserverDouble{},
+		content,
+	)
+	defer shutdownPipeline(t, pipeline)
+
+	result, err := pipeline.Execute(
+		context.Background(),
+		mustClientRequest(t, "exchange-content", plan, toolClientRequest()),
+		&downstreamRecorder{},
+	)
+	if err != nil || result.Outcome != AttemptSucceeded {
+		t.Fatalf("Execute() = %+v, %v", result, err)
+	}
+	observation, ok := content.latest()
+	if !ok || observation.ExchangeID != "exchange-content" ||
+		observation.EnvironmentID.String() != "environment.test" ||
+		observation.EnvironmentRevision != 9 ||
+		observation.EndpointID.String() != "endpoint.anthropic" ||
+		observation.EndpointRevision != 7 ||
+		observation.ProtocolPlanID.String() != "protocol.anthropic" ||
+		observation.ProtocolPlanRevision != 8 ||
+		observation.RouteID.String() != "route.primary" ||
+		observation.RouteRevision != 6 ||
+		observation.Recording.Mode != environment.ContentRecordingFull {
+		t.Fatalf("content observation = %+v", observation)
+	}
+	if len(observation.Request.Messages) != 1 ||
+		observation.Request.Messages[0].Role != "user" ||
+		observation.Request.Messages[0].Blocks[0].Text != "hello" ||
+		len(observation.Request.Tools) != 1 ||
+		observation.Request.Tools[0].Name != "shell" {
+		t.Fatalf("captured request = %+v", observation.Request)
+	}
+	if observation.Response == nil || len(observation.Response.Blocks) != 1 ||
+		observation.Response.Blocks[0].Kind != "tool_call" ||
+		observation.Response.Blocks[0].ToolCall.Name != "shell" ||
+		observation.Response.StopReason != "tool_use" ||
+		!observation.Response.Usage.Output.Known ||
+		observation.Response.Usage.Output.Tokens != 2 {
+		t.Fatalf("captured response = %+v", observation.Response)
+	}
+	content.mu.Lock()
+	observations := append([]ContentObservation(nil), content.observations...)
+	content.mu.Unlock()
+	if len(observations) != 2 || observations[0].Response != nil ||
+		observations[1].Response == nil {
+		t.Fatalf("content lifecycle observations = %+v", observations)
+	}
+}
+
+func TestLocalIncrementalEvidenceNeverTruncatesTheUpstreamRequest(t *testing.T) {
+	plan := mustEnvironmentRequestPlan(t, testPlanOptions{
+		destination:    environment.DestinationKindUpstream,
+		providerOrigin: "https://provider.example/v1",
+		backend:        protocolspec.DialectOpenAIChat,
+		modelMode:      environment.ModelModeMap,
+		mappedModel:    "gpt-provider",
+		accounts:       []testAccount{{id: "account.primary", revision: 3, epoch: 7}},
+		preferred:      "account.primary",
+	})
+	provider := &providerDouble{results: []providerResult{{
+		response: jsonResponse(http.StatusOK, completeProviderResponse("gpt-provider")),
+	}}}
+	content := &contentObserverDouble{}
+	pipeline := newTestPipelineWithContentObserver(
+		t,
+		newAccountAuthority(t, testAccount{id: "account.primary", revision: 3, epoch: 7}),
+		provider,
+		approvedDecisions(),
+		&attemptObserverDouble{},
+		content,
+	)
+	defer shutdownPipeline(t, pipeline)
+
+	admission, err := captureadmission.NewManagedRun(captureadmission.ManagedRunEvidence{
+		CaptureRunID: "capture-full-context",
+		SourceLabel:  "claude",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := []byte(`{
+		"model":"claude-client-alias","max_tokens":32,
+		"messages":[
+			{"role":"user","content":"first"},
+			{"role":"assistant","content":"second"},
+			{"role":"user","content":"third"}
+		]
+	}`)
+	request := mustClientRequestWithOptions(
+		t,
+		"exchange-full-context",
+		plan,
+		body,
+		WithIngressCorrelation(admission, "connection-full-context"),
+	)
+	result, err := pipeline.Execute(context.Background(), request, &downstreamRecorder{})
+	if err != nil || result.Outcome != AttemptSucceeded {
+		t.Fatalf("Execute() = %+v, %v", result, err)
+	}
+
+	requests := provider.requestsSnapshot()
+	if len(requests) != 1 {
+		t.Fatalf("provider requests = %d", len(requests))
+	}
+	var upstream struct {
+		Messages []json.RawMessage `json:"messages"`
+	}
+	if err := json.Unmarshal(requests[0].Body(), &upstream); err != nil || len(upstream.Messages) != 3 {
+		t.Fatalf("upstream received a truncated request: body=%s err=%v", requests[0].Body(), err)
+	}
+	observation, ok := content.latest()
+	if !ok || observation.CaptureRunID != "capture-full-context" ||
+		observation.ManualCaptureID != "" || len(observation.Request.Messages) != 3 ||
+		observation.Request.Messages[2].Blocks[0].Text != "third" {
+		t.Fatalf("local full evidence = %+v", observation)
+	}
+}
+
+func TestDisabledContentRecordingCreatesNoConversationEvidence(t *testing.T) {
+	plan := mustEnvironmentRequestPlan(t, testPlanOptions{
+		destination:    environment.DestinationKindUpstream,
+		providerOrigin: "https://provider.example/v1",
+		backend:        protocolspec.DialectOpenAIChat,
+		modelMode:      environment.ModelModeMap,
+		mappedModel:    "gpt-provider",
+		accounts:       []testAccount{{id: "account.primary", revision: 3, epoch: 7}},
+		preferred:      "account.primary",
+		recording: environment.ContentRecordingPolicy{
+			Mode: environment.ContentRecordingOff,
+		},
+	})
+	content := &contentObserverDouble{}
+	pipeline := newTestPipelineWithContentObserver(
+		t,
+		newAccountAuthority(t, testAccount{id: "account.primary", revision: 3, epoch: 7}),
+		&providerDouble{results: []providerResult{{
+			response: jsonResponse(http.StatusOK, completeProviderResponse("gpt-provider")),
+		}}},
+		approvedDecisions(),
+		&attemptObserverDouble{},
+		content,
+	)
+	defer shutdownPipeline(t, pipeline)
+
+	result, err := pipeline.Execute(
+		context.Background(),
+		mustClientRequest(t, "exchange-no-content", plan, completeClientRequest()),
+		&downstreamRecorder{},
+	)
+	if err != nil || result.Outcome != AttemptSucceeded {
+		t.Fatalf("Execute() = %+v, %v", result, err)
+	}
+	if _, ok := content.latest(); ok {
+		t.Fatal("recording-off Environment emitted conversation evidence")
+	}
+}
+
+func TestContentObserverFailureDoesNotChangeCommittedExchange(t *testing.T) {
+	plan := mustEnvironmentRequestPlan(t, testPlanOptions{
+		destination:    environment.DestinationKindUpstream,
+		providerOrigin: "https://provider.example/v1",
+		backend:        protocolspec.DialectOpenAIChat,
+		modelMode:      environment.ModelModeMap,
+		mappedModel:    "gpt-provider",
+		accounts:       []testAccount{{id: "account.primary", revision: 3, epoch: 7}},
+		preferred:      "account.primary",
+	})
+	content := &contentObserverDouble{err: errors.New("content store unavailable")}
+	pipeline := newTestPipelineWithContentObserver(
+		t,
+		newAccountAuthority(t, testAccount{id: "account.primary", revision: 3, epoch: 7}),
+		&providerDouble{results: []providerResult{{
+			response: jsonResponse(http.StatusOK, completeProviderResponse("gpt-provider")),
+		}}},
+		approvedDecisions(),
+		&attemptObserverDouble{},
+		content,
+	)
+	defer shutdownPipeline(t, pipeline)
+
+	downstream := &downstreamRecorder{}
+	result, err := pipeline.Execute(
+		context.Background(),
+		mustClientRequest(t, "exchange-observer-failure", plan, completeClientRequest()),
+		downstream,
+	)
+	if err != nil || result.Outcome != AttemptSucceeded ||
+		!bytes.Contains(downstream.bytesSnapshot(), []byte("Done.")) {
+		t.Fatalf("Execute() = %+v, %v; downstream=%q", result, err, downstream.bytesSnapshot())
+	}
+	if _, ok := content.latest(); !ok {
+		t.Fatal("failing observer was not called")
+	}
+}
+
+func TestOriginalDestinationPreservesClientEnvelopeAndResponse(t *testing.T) {
+	plan := mustEnvironmentRequestPlan(t, testPlanOptions{
+		destination:    environment.DestinationKindOriginal,
+		providerOrigin: "https://api.anthropic.com",
+		backend:        protocolspec.DialectAnthropicMessages,
+		modelMode:      environment.ModelModePassthrough,
+	})
+	responseBody := []byte(`{
+		"id":"msg_original","type":"message","role":"assistant","model":"claude-client-alias",
+		"content":[{"type":"text","text":"provider-compatible"}],"stop_reason":"end_turn",
+		"stop_sequence":null,"usage":{"input_tokens":4,"output_tokens":2}
+	}`)
+	provider := &providerDouble{results: []providerResult{{response: &http.Response{
+		StatusCode: http.StatusCreated,
+		Header: http.Header{
+			"Content-Type": []string{"application/json"},
+			"X-Upstream":   []string{"kept"},
+			"Connection":   []string{"X-Hop"},
+			"X-Hop":        []string{"removed"},
+		},
+		Body: io.NopCloser(bytes.NewReader(responseBody)),
+	}}}}
+	content := &contentObserverDouble{}
+	pipeline := newTestPipelineWithContentObserver(
+		t, nil, provider, approvedDecisions(), &attemptObserverDouble{}, content,
+	)
+	defer shutdownPipeline(t, pipeline)
+	body := completeClientRequest()
+	request := mustClientRequestWithOptions(
+		t,
+		"exchange-original",
+		plan,
+		body,
+		WithOriginalHeaders(http.Header{
+			"Authorization":       []string{"Bearer client-owned"},
+			"Anthropic-Version":   []string{"2023-06-01"},
+			"Proxy-Authorization": []string{"must-not-leave"},
+		}),
+	)
+	downstream := &downstreamRecorder{}
 	result, err := pipeline.Execute(context.Background(), request, downstream)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Outcome != AttemptSucceeded || result.AccountID != "" ||
+		!bytes.Equal(downstream.bytesSnapshot(), responseBody) {
+		t.Fatalf("result=%+v downstream=%s", result, downstream.bytesSnapshot())
+	}
+	requests := provider.requestsSnapshot()
+	if len(requests) != 1 || requests[0].CredentialMode() != providerauth.CredentialClientPassthrough ||
+		!bytes.Equal(requests[0].Body(), body) || requests[0].Headers().Get("Authorization") != "Bearer client-owned" ||
+		requests[0].Headers().Get("Proxy-Authorization") != "" ||
+		requests[0].Target().Origin().String() != "https://api.anthropic.com" ||
+		requests[0].RelativePath() != "v1/messages" {
+		t.Fatalf("original provider request = %+v", requests)
+	}
+	envelopes := downstream.envelopesSnapshot()
+	if len(envelopes) != 1 || envelopes[0].StatusCode() != http.StatusCreated ||
+		envelopes[0].Headers().Get("X-Upstream") != "kept" || envelopes[0].Headers().Get("X-Hop") != "" {
+		t.Fatalf("downstream envelopes = %+v", envelopes)
+	}
+	observation, ok := content.latest()
+	if !ok || observation.Request.Messages[0].Blocks[0].Text != "hello" ||
+		observation.Response == nil || observation.Response.Blocks[0].Text != "provider-compatible" ||
+		observation.Response.Usage.Output.Tokens != 2 {
+		t.Fatalf("original passthrough content = %+v", observation)
+	}
+}
+
+func TestOriginalDestinationTransformsCompleteMessagesWithoutExposingCredentials(t *testing.T) {
+	plan := mustEnvironmentRequestPlan(t, testPlanOptions{
+		destination:    environment.DestinationKindOriginal,
+		providerOrigin: "https://api.anthropic.com",
+		backend:        protocolspec.DialectAnthropicMessages,
+		modelMode:      environment.ModelModePassthrough,
+		transform: messagetransform.Policy{
+			RequestJavaScript: `
+				if (request.headers.authorization !== undefined || request.headers["x-api-key"] !== undefined) {
+					throw new Error("credential exposed");
+				}
+				const payload = JSON.parse(request.body);
+				context.marker = payload.model;
+				payload.metadata = {transformed: true};
+				request.body = JSON.stringify(payload);
+			`,
+			ResponseJavaScript: `
+				const payload = JSON.parse(response.body);
+				payload.content[0].text = "transformed:" + context.marker;
+				response.headers["x-transform-response"] = "yes";
+				response.body = JSON.stringify(payload);
+			`,
+		},
+	})
+	responseBody := []byte(`{
+		"id":"msg_original","type":"message","role":"assistant","model":"claude-client-alias",
+		"content":[{"type":"text","text":"provider-compatible"}],"stop_reason":"end_turn",
+		"stop_sequence":null,"usage":{"input_tokens":4,"output_tokens":2}
+	}`)
+	provider := &providerDouble{results: []providerResult{{response: &http.Response{
+		StatusCode: http.StatusCreated,
+		Header: http.Header{
+			"Content-Type": {"application/json"},
+			"X-Upstream":   {"kept"},
+			"Set-Cookie":   {"provider-secret=hidden"},
+		},
+		Body: io.NopCloser(bytes.NewReader(responseBody)),
+	}}}}
+	pipeline := newTestPipeline(t, nil, provider, approvedDecisions(), &attemptObserverDouble{})
+	defer shutdownPipeline(t, pipeline)
+	downstream := &downstreamRecorder{}
+	_, err := pipeline.Execute(
+		context.Background(),
+		mustClientRequestWithOptions(
+			t,
+			"exchange-original-transform",
+			plan,
+			completeClientRequest(),
+			WithOriginalHeaders(http.Header{
+				"Authorization": {"Bearer client-owned"},
+				"X-Api-Key":     {"client-owned-key"},
+			}),
+		),
+		downstream,
+	)
 	if err != nil {
 		t.Fatalf("Execute() error = %v", err)
 	}
 	requests := provider.requestsSnapshot()
 	if len(requests) != 1 ||
-		requests[0].CredentialSource() !=
-			access.CredentialSourceClientPassthrough ||
-		requests[0].Target().Origin() != "https://api.anthropic.com:443" ||
-		requests[0].RelativePath() != "v1/messages" ||
-		requests[0].RawQuery() != "beta=true" ||
-		!bytes.Equal(requests[0].Body(), clientBody) ||
-		requests[0].Headers().Get("Authorization") != "Bearer client-oauth" ||
-		requests[0].Headers().Get("Cookie") != "session=client" ||
-		requests[0].AuthDriverRef().String() != "" {
-		t.Fatalf("original provider requests = %#v", requests)
+		requests[0].Headers().Get("Authorization") != "Bearer client-owned" ||
+		requests[0].Headers().Get("X-Api-Key") != "client-owned-key" ||
+		!bytes.Contains(requests[0].Body(), []byte(`"transformed":true`)) {
+		t.Fatalf("transformed original request = %#v", requests)
+	}
+	if !bytes.Contains(downstream.bytesSnapshot(), []byte("transformed:claude-client-alias")) {
+		t.Fatalf("transformed original response = %s", downstream.bytesSnapshot())
 	}
 	envelopes := downstream.envelopesSnapshot()
 	if len(envelopes) != 1 ||
 		envelopes[0].StatusCode() != http.StatusCreated ||
-		envelopes[0].Headers().Get("Content-Type") !=
-			"application/json; charset=utf-8" ||
-		envelopes[0].Headers().Get("X-Upstream") != "preserved" ||
-		!bytes.Equal(downstream.bytesSnapshot(), providerBody) {
+		envelopes[0].Headers().Get("X-Upstream") != "kept" ||
+		envelopes[0].Headers().Get("X-Transform-Response") != "yes" ||
+		envelopes[0].Headers().Get("Set-Cookie") != "provider-secret=hidden" {
+		t.Fatalf("transformed original response envelope = %#v", envelopes)
+	}
+}
+
+func TestOriginalDestinationPreservesGzipStreamAndRecordsDecodedResponse(t *testing.T) {
+	plan := mustEnvironmentRequestPlan(t, testPlanOptions{
+		destination:    environment.DestinationKindOriginal,
+		providerOrigin: "https://api.anthropic.com",
+		backend:        protocolspec.DialectAnthropicMessages,
+		modelMode:      environment.ModelModePassthrough,
+	})
+	wire := []byte(strings.Join([]string{
+		`event: message_start`,
+		`data: {"type":"message_start","message":{"id":"msg_gzip","type":"message","role":"assistant","model":"claude-client-alias","usage":{"input_tokens":4}}}`,
+		``,
+		`event: content_block_start`,
+		`data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`,
+		``,
+		`event: content_block_delta`,
+		`data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"compressed evidence"}}`,
+		``,
+		`event: content_block_stop`,
+		`data: {"type":"content_block_stop","index":0}`,
+		``,
+		`event: message_delta`,
+		`data: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":2}}`,
+		``,
+		`event: message_stop`,
+		`data: {"type":"message_stop"}`,
+		``,
+	}, "\n") + "\n")
+	compressed := gzipFixture(t, wire)
+	provider := &providerDouble{results: []providerResult{{response: &http.Response{
+		StatusCode: http.StatusOK,
+		Header: http.Header{
+			"Content-Type":     []string{"text/event-stream"},
+			"Content-Encoding": []string{"gzip"},
+		},
+		Body: io.NopCloser(bytes.NewReader(compressed)),
+	}}}}
+	content := &contentObserverDouble{}
+	pipeline := newTestPipelineWithContentObserver(
+		t, nil, provider, approvedDecisions(), &attemptObserverDouble{}, content,
+	)
+	defer shutdownPipeline(t, pipeline)
+	downstream := &downstreamRecorder{}
+	request := mustClientRequestWithOptions(
+		t,
+		"exchange-original-gzip",
+		plan,
+		streamingClientRequest(),
+		WithOriginalHeaders(http.Header{
+			"Authorization":     []string{"Bearer client-owned"},
+			"Anthropic-Version": []string{"2023-06-01"},
+		}),
+	)
+	result, err := pipeline.Execute(
+		context.Background(),
+		request,
+		downstream,
+	)
+	if err != nil || result.Outcome != AttemptSucceeded {
+		t.Fatalf("Execute() = %+v, %v", result, err)
+	}
+	if !bytes.Equal(downstream.bytesSnapshot(), compressed) {
+		t.Fatal("original gzip response bytes changed before downstream delivery")
+	}
+	envelopes := downstream.envelopesSnapshot()
+	if len(envelopes) != 1 || envelopes[0].Headers().Get("Content-Encoding") != "gzip" {
+		t.Fatalf("downstream envelope = %+v", envelopes)
+	}
+	observation, ok := content.latest()
+	if !ok || observation.Response == nil || len(observation.Response.Blocks) != 1 ||
+		observation.Response.Blocks[0].Text != "compressed evidence" ||
+		!observation.Response.Usage.Output.Known ||
+		observation.Response.Usage.Output.Tokens != 2 {
+		t.Fatalf("gzip content observation = %+v", observation)
+	}
+}
+
+func TestOriginalDestinationTransformsSSEEventsAndPreservesStreaming(t *testing.T) {
+	plan := mustEnvironmentRequestPlan(t, testPlanOptions{
+		destination:    environment.DestinationKindOriginal,
+		providerOrigin: "https://api.anthropic.com",
+		backend:        protocolspec.DialectAnthropicMessages,
+		modelMode:      environment.ModelModePassthrough,
+		transform: messagetransform.Policy{ResponseJavaScript: `
+			response.headers["x-stream-transform"] = "yes";
+			const payload = JSON.parse(response.body);
+			if (payload.type === "content_block_delta") {
+				payload.delta.text = "rewritten";
+			}
+			response.body = JSON.stringify(payload);
+		`},
+	})
+	provider := &providerDouble{results: []providerResult{{response: streamResponse(
+		http.StatusOK,
+		&boundedChunkReader{reader: anthropicTextProviderStream(), maximum: 37},
+	)}}}
+	content := &contentObserverDouble{}
+	pipeline := newTestPipelineWithContentObserver(
+		t,
+		nil,
+		provider,
+		approvedDecisions(),
+		&attemptObserverDouble{},
+		content,
+	)
+	raw := &rawObserverDouble{}
+	pipeline.rawEvidence = raw
+	defer shutdownPipeline(t, pipeline)
+	downstream := &downstreamRecorder{}
+	result, err := pipeline.Execute(
+		context.Background(),
+		mustClientRequestWithOptions(
+			t,
+			"exchange-original-stream-transform",
+			plan,
+			streamingClientRequest(),
+			WithOriginalHeaders(http.Header{"X-Api-Key": {"client-owned"}}),
+		),
+		downstream,
+	)
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if !bytes.Contains(downstream.bytesSnapshot(), []byte("rewritten")) ||
+		bytes.Contains(downstream.bytesSnapshot(), []byte(`"text":"hello"`)) ||
+		result.Ledger.DownstreamSemanticWrites < 2 {
+		t.Fatalf("transformed original stream result=%+v wire=%s", result, downstream.bytesSnapshot())
+	}
+	envelopes := downstream.envelopesSnapshot()
+	if len(envelopes) != 1 || envelopes[0].Headers().Get("X-Stream-Transform") != "yes" {
+		t.Fatalf("transformed original stream envelope = %#v", envelopes)
+	}
+	observation, ok := content.latest()
+	if !ok || observation.Response == nil ||
+		len(observation.Response.Blocks) != 1 ||
+		observation.Response.Blocks[0].Text != "rewritten" {
+		t.Fatalf("transformed original stream observation = %+v", observation)
+	}
+	rawMessages := raw.snapshot()
+	if len(rawMessages) != 2 ||
+		rawMessages[0].Layer != rawevidence.LayerTransformRequestInput ||
+		rawMessages[1].Layer != rawevidence.LayerTransformResponseInput ||
+		!bytes.Contains(rawMessages[1].Body, []byte(`"text":"hello"`)) ||
+		bytes.Contains(rawMessages[1].Body, []byte("rewritten")) ||
+		rawMessages[1].Headers.Get("Content-Encoding") != "" {
+		t.Fatalf("stream Transform input evidence = %+v", rawMessages)
+	}
+}
+
+func TestOriginalDestinationTransformsCompressedSSEAsLogicalMessages(t *testing.T) {
+	plan := mustEnvironmentRequestPlan(t, testPlanOptions{
+		destination:    environment.DestinationKindOriginal,
+		providerOrigin: "https://api.anthropic.com",
+		backend:        protocolspec.DialectAnthropicMessages,
+		modelMode:      environment.ModelModePassthrough,
+		transform: messagetransform.Policy{ResponseJavaScript: `
+			response.headers["x-stream-transform"] = "gzip-decoded";
+			const payload = JSON.parse(response.body);
+			if (payload.type === "content_block_delta") {
+				payload.delta.text = "rewritten compressed";
+			}
+			response.body = JSON.stringify(payload);
+		`},
+	})
+	wire, err := io.ReadAll(anthropicTextProviderStream())
+	if err != nil {
+		t.Fatalf("read provider stream: %v", err)
+	}
+	compressed := gzipFixture(t, wire)
+	provider := &providerDouble{results: []providerResult{{response: &http.Response{
+		StatusCode: http.StatusOK,
+		Header: http.Header{
+			"Content-Type":     {"text/event-stream"},
+			"Content-Encoding": {"gzip"},
+		},
+		Body: io.NopCloser(&boundedChunkReader{
+			reader: bytes.NewReader(compressed), maximum: 19,
+		}),
+	}}}}
+	pipeline := newTestPipeline(
+		t, nil, provider, approvedDecisions(), &attemptObserverDouble{},
+	)
+	defer shutdownPipeline(t, pipeline)
+	downstream := &downstreamRecorder{}
+	result, err := pipeline.Execute(
+		context.Background(),
+		mustClientRequestWithOptions(
+			t,
+			"exchange-original-compressed-stream-transform",
+			plan,
+			streamingClientRequest(),
+			WithOriginalHeaders(http.Header{"X-Api-Key": {"client-owned"}}),
+		),
+		downstream,
+	)
+	if err != nil || result.Outcome != AttemptSucceeded {
+		t.Fatalf("Execute() = %+v, %v", result, err)
+	}
+	if !bytes.Contains(downstream.bytesSnapshot(), []byte("rewritten compressed")) {
+		t.Fatalf("transformed stream = %s", downstream.bytesSnapshot())
+	}
+	envelopes := downstream.envelopesSnapshot()
+	if len(envelopes) != 1 ||
+		envelopes[0].Headers().Get("Content-Encoding") != "" ||
+		envelopes[0].Headers().Get("X-Stream-Transform") != "gzip-decoded" {
+		t.Fatalf("transformed stream envelope = %#v", envelopes)
+	}
+}
+
+func TestOriginalResponsesAcceptsCanceledReadAfterProvenTerminal(t *testing.T) {
+	plan := mustEnvironmentRequestPlan(t, testPlanOptions{
+		clientProtocol: environment.ClientProtocolOpenAIResponses,
+		destination:    environment.DestinationKindOriginal,
+		providerOrigin: "https://api.openai.com",
+		backend:        protocolspec.DialectOpenAIResponses,
+		modelMode:      environment.ModelModePassthrough,
+	})
+	wire := originalResponsesTerminalWire(t)
+	provider := &providerDouble{results: []providerResult{{response: &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{},
+		Body:       io.NopCloser(&terminalCanceledReader{body: wire}),
+	}}}}
+	content := &contentObserverDouble{}
+	pipeline := newTestPipelineWithContentObserver(
+		t, nil, provider, approvedDecisions(), &attemptObserverDouble{}, content,
+	)
+	defer shutdownPipeline(t, pipeline)
+	downstream := &downstreamRecorder{}
+	request := mustClientRequestWithOptions(
+		t,
+		"exchange-original-responses-canceled-eof",
+		plan,
+		streamingResponsesClientRequest(),
+		WithOriginalHeaders(http.Header{"Authorization": []string{"Bearer client-owned"}}),
+	)
+
+	result, err := pipeline.Execute(context.Background(), request, downstream)
+	if err != nil || result.Outcome != AttemptSucceeded || !result.Ledger.DownstreamTerminal {
+		t.Fatalf("Execute() = %+v, %v", result, err)
+	}
+	if !bytes.Equal(downstream.bytesSnapshot(), wire) {
+		t.Fatal("original Responses stream changed before downstream delivery")
+	}
+	observation, ok := content.latest()
+	if !ok || observation.Response == nil || len(observation.Response.Blocks) != 1 ||
+		observation.Response.Blocks[0].Text != "provider-compatible" {
+		t.Fatalf("Responses content observation = %+v", observation)
+	}
+}
+
+func TestTransformedOriginalResponsesAcceptsCanceledReadAfterProvenTerminal(t *testing.T) {
+	plan := mustEnvironmentRequestPlan(t, testPlanOptions{
+		clientProtocol: environment.ClientProtocolOpenAIResponses,
+		destination:    environment.DestinationKindOriginal,
+		providerOrigin: "https://api.openai.com",
+		backend:        protocolspec.DialectOpenAIResponses,
+		modelMode:      environment.ModelModePassthrough,
+		transform: messagetransform.Policy{ResponseJavaScript: `
+			response.headers["x-transform"] = "applied";
+		`},
+	})
+	wire := originalResponsesTerminalWire(t)
+	provider := &providerDouble{results: []providerResult{{response: &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{},
+		Body:       io.NopCloser(&terminalCanceledReader{body: wire}),
+	}}}}
+	content := &contentObserverDouble{}
+	pipeline := newTestPipelineWithContentObserver(
+		t, nil, provider, approvedDecisions(), &attemptObserverDouble{}, content,
+	)
+	defer shutdownPipeline(t, pipeline)
+	downstream := &downstreamRecorder{}
+	request := mustClientRequestWithOptions(
+		t,
+		"exchange-transformed-original-responses-canceled-eof",
+		plan,
+		streamingResponsesClientRequest(),
+		WithOriginalHeaders(http.Header{"Authorization": []string{"Bearer client-owned"}}),
+	)
+
+	result, err := pipeline.Execute(context.Background(), request, downstream)
+	if err != nil || result.Outcome != AttemptSucceeded || !result.Ledger.DownstreamTerminal {
+		t.Fatalf("Execute() = %+v, %v", result, err)
+	}
+	if len(downstream.envelopesSnapshot()) != 1 ||
+		downstream.envelopesSnapshot()[0].Headers().Get("X-Transform") != "applied" {
+		t.Fatalf("transformed response envelope = %#v", downstream.envelopesSnapshot())
+	}
+	observation, ok := content.latest()
+	if !ok || observation.Response == nil || len(observation.Response.Blocks) != 1 ||
+		observation.Response.Blocks[0].Text != "provider-compatible" {
+		t.Fatalf("Responses content observation = %+v", observation)
+	}
+}
+
+func TestOriginalDestinationClientCredentialPathRemainsSemantic(t *testing.T) {
+	plan := mustEnvironmentRequestPlan(t, testPlanOptions{
+		destination: environment.DestinationKindOriginal,
+	})
+	providerBody := []byte(`{
+		"id":"msg_provider","type":"message","role":"assistant","model":"claude-provider",
+		"content":[{"type":"text","text":"same dialect"}],"stop_reason":"end_turn",
+		"stop_sequence":null,"usage":{"input_tokens":4,"output_tokens":2}
+	}`)
+	provider := &providerDouble{results: []providerResult{{response: jsonResponse(http.StatusOK, providerBody)}}}
+	pipeline := newTestPipeline(t, nil, provider, approvedDecisions(), &attemptObserverDouble{})
+	defer shutdownPipeline(t, pipeline)
+	request := mustClientRequestWithOptions(
+		t,
+		"exchange-client-credential",
+		plan,
+		completeClientRequest(),
+		WithOriginalHeaders(http.Header{"X-Api-Key": []string{"client-secret"}}),
+	)
+	downstream := &downstreamRecorder{}
+	if _, err := pipeline.Execute(context.Background(), request, downstream); err != nil {
+		t.Fatal(err)
+	}
+	requests := provider.requestsSnapshot()
+	if len(requests) != 1 || requests[0].Headers().Get("X-Api-Key") != "client-secret" ||
+		requests[0].CredentialMode() != providerauth.CredentialClientPassthrough {
+		t.Fatalf("same-origin request = %+v", requests)
+	}
+	if !bytes.Equal(downstream.bytesSnapshot(), providerBody) {
+		t.Fatalf("same-origin response changed: %s", downstream.bytesSnapshot())
+	}
+}
+
+func TestStreamingStillPublishesIncrementalClientEvents(t *testing.T) {
+	plan := mustEnvironmentRequestPlan(t, testPlanOptions{
+		destination:    environment.DestinationKindUpstream,
+		providerOrigin: "https://provider.example/v1",
+		backend:        protocolspec.DialectOpenAIChat,
+		modelMode:      environment.ModelModeMap,
+		mappedModel:    "gpt-provider",
+		accounts:       []testAccount{{id: "account.primary", revision: 1, epoch: 1}},
+		preferred:      "account.primary",
+	})
+	authority := newAccountAuthority(t, testAccount{id: "account.primary", revision: 1, epoch: 1})
+	provider := &providerDouble{results: []providerResult{{response: streamResponse(
+		http.StatusOK,
+		normalProviderStream(t, "gpt-provider"),
+	)}}}
+	content := &contentObserverDouble{}
+	pipeline := newTestPipelineWithContentObserver(
+		t, authority, provider, approvedDecisions(), &attemptObserverDouble{}, content,
+	)
+	defer shutdownPipeline(t, pipeline)
+	downstream := &downstreamRecorder{}
+	result, err := pipeline.Execute(
+		context.Background(),
+		mustClientRequest(t, "exchange-stream", plan, streamingClientRequest()),
+		downstream,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wire := downstream.bytesSnapshot()
+	if result.Outcome != AttemptSucceeded || result.Ledger.DownstreamSemanticWrites < 2 ||
+		!bytes.Contains(wire, []byte("Hello")) || !bytes.Contains(wire, []byte("message_stop")) {
+		t.Fatalf("result=%+v stream=%s", result, wire)
+	}
+	observation, ok := content.latest()
+	if !ok || observation.Response == nil ||
+		len(observation.Response.Blocks) != 1 ||
+		observation.Response.Blocks[0].Text != "Hello" ||
+		!observation.Response.Usage.Output.Known ||
+		observation.Response.Usage.Output.Tokens != 1 {
+		t.Fatalf("stream content observation = %+v", observation)
+	}
+}
+
+func TestStreamingResponseTransformRewritesEachSSEEventWithoutBufferingTheTurn(t *testing.T) {
+	plan := mustEnvironmentRequestPlan(t, testPlanOptions{
+		destination:    environment.DestinationKindUpstream,
+		providerOrigin: "https://provider.example/v1",
+		backend:        protocolspec.DialectOpenAIChat,
+		modelMode:      environment.ModelModeMap,
+		mappedModel:    "gpt-provider",
+		accounts:       []testAccount{{id: "account.primary", revision: 1, epoch: 1}},
+		preferred:      "account.primary",
+		transform: messagetransform.Policy{ResponseJavaScript: `
+			if (!response.streaming || response.eventName !== "message") {
+				throw new Error("stream metadata missing");
+			}
+			response.headers["x-stream-transform"] = "yes";
+			const payload = JSON.parse(response.body);
+			if (payload.choices?.[0]?.delta?.content === "Hello") {
+				payload.choices[0].delta.content = "Rewritten";
+			}
+			response.body = JSON.stringify(payload);
+		`},
+	})
+	provider := &providerDouble{results: []providerResult{{response: streamResponse(
+		http.StatusOK,
+		normalProviderStream(t, "gpt-provider"),
+	)}}}
+	content := &contentObserverDouble{}
+	pipeline := newTestPipelineWithContentObserver(
+		t,
+		newAccountAuthority(t, testAccount{id: "account.primary", revision: 1, epoch: 1}),
+		provider,
+		approvedDecisions(),
+		&attemptObserverDouble{},
+		content,
+	)
+	defer shutdownPipeline(t, pipeline)
+	downstream := &downstreamRecorder{}
+	result, err := pipeline.Execute(
+		context.Background(),
+		mustClientRequest(t, "exchange-stream-transform", plan, streamingClientRequest()),
+		downstream,
+	)
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	wire := downstream.bytesSnapshot()
+	if !bytes.Contains(wire, []byte("Rewritten")) || bytes.Contains(wire, []byte(`"Hello"`)) ||
+		result.Ledger.DownstreamSemanticWrites < 2 {
+		t.Fatalf("transformed stream result=%+v wire=%s", result, wire)
+	}
+	envelopes := downstream.envelopesSnapshot()
+	if len(envelopes) != 1 || envelopes[0].Headers().Get("X-Stream-Transform") != "yes" {
+		t.Fatalf("transformed stream envelope = %#v", envelopes)
+	}
+	observation, ok := content.latest()
+	if !ok || observation.Response == nil ||
+		len(observation.Response.Blocks) != 1 ||
+		observation.Response.Blocks[0].Text != "Rewritten" {
+		t.Fatalf("transformed stream content observation = %+v", observation)
+	}
+}
+
+func TestManagedStreamingResponseTransformDecodesGzipBeforeEditing(t *testing.T) {
+	plan := mustEnvironmentRequestPlan(t, testPlanOptions{
+		destination:    environment.DestinationKindUpstream,
+		providerOrigin: "https://provider.example/v1",
+		backend:        protocolspec.DialectOpenAIChat,
+		modelMode:      environment.ModelModeMap,
+		mappedModel:    "gpt-provider",
+		accounts:       []testAccount{{id: "account.primary", revision: 1, epoch: 1}},
+		preferred:      "account.primary",
+		transform: messagetransform.Policy{ResponseJavaScript: `
+			response.headers["x-stream-transform"] = "gzip-decoded";
+			const payload = JSON.parse(response.body);
+			if (payload.choices?.[0]?.delta?.content === "Hello") {
+				payload.choices[0].delta.content = "Rewritten compressed";
+			}
+			response.body = JSON.stringify(payload);
+		`},
+	})
+	wire, err := io.ReadAll(normalProviderStream(t, "gpt-provider"))
+	if err != nil {
+		t.Fatalf("read provider stream: %v", err)
+	}
+	compressed := gzipFixture(t, wire)
+	provider := &providerDouble{results: []providerResult{{response: &http.Response{
+		StatusCode: http.StatusOK,
+		Header: http.Header{
+			"Content-Type":     {"text/event-stream"},
+			"Content-Encoding": {"gzip"},
+		},
+		Body: io.NopCloser(&boundedChunkReader{
+			reader: bytes.NewReader(compressed), maximum: 17,
+		}),
+	}}}}
+	pipeline := newTestPipeline(
+		t,
+		newAccountAuthority(t, testAccount{id: "account.primary", revision: 1, epoch: 1}),
+		provider,
+		approvedDecisions(),
+		&attemptObserverDouble{},
+	)
+	defer shutdownPipeline(t, pipeline)
+	downstream := &downstreamRecorder{}
+	result, err := pipeline.Execute(
+		context.Background(),
+		mustClientRequest(t, "exchange-compressed-stream-transform", plan, streamingClientRequest()),
+		downstream,
+	)
+	if err != nil || result.Outcome != AttemptSucceeded {
+		t.Fatalf("Execute() = %+v, %v", result, err)
+	}
+	if !bytes.Contains(downstream.bytesSnapshot(), []byte("Rewritten compressed")) {
+		t.Fatalf("transformed stream = %s", downstream.bytesSnapshot())
+	}
+	envelopes := downstream.envelopesSnapshot()
+	if len(envelopes) != 1 ||
+		envelopes[0].Headers().Get("Content-Encoding") != "" ||
+		envelopes[0].Headers().Get("X-Stream-Transform") != "gzip-decoded" {
+		t.Fatalf("transformed stream envelope = %#v", envelopes)
+	}
+}
+
+func TestStreamingResponseTransformFailureBeforeFirstEventCommitsNothing(t *testing.T) {
+	plan := mustEnvironmentRequestPlan(t, testPlanOptions{
+		destination:    environment.DestinationKindUpstream,
+		providerOrigin: "https://provider.example/v1",
+		backend:        protocolspec.DialectOpenAIChat,
+		modelMode:      environment.ModelModeMap,
+		mappedModel:    "gpt-provider",
+		accounts:       []testAccount{{id: "account.primary", revision: 1, epoch: 1}},
+		preferred:      "account.primary",
+		transform: messagetransform.Policy{
+			ResponseJavaScript: `throw new Error("must stay private");`,
+		},
+	})
+	provider := &providerDouble{results: []providerResult{{response: streamResponse(
+		http.StatusOK,
+		normalProviderStream(t, "gpt-provider"),
+	)}}}
+	pipeline := newTestPipeline(
+		t,
+		newAccountAuthority(t, testAccount{id: "account.primary", revision: 1, epoch: 1}),
+		provider,
+		approvedDecisions(),
+		&attemptObserverDouble{},
+	)
+	defer shutdownPipeline(t, pipeline)
+	downstream := &downstreamRecorder{}
+
+	_, err := pipeline.Execute(
+		context.Background(),
+		mustClientRequest(t, "exchange-stream-transform-before-commit", plan, streamingClientRequest()),
+		downstream,
+	)
+	if ReasonOf(err) != ReasonMessageTransformFailed {
+		t.Fatalf("Execute() error = %v, want %s", err, ReasonMessageTransformFailed)
+	}
+	if len(downstream.envelopesSnapshot()) != 0 || len(downstream.bytesSnapshot()) != 0 ||
+		len(downstream.abortsSnapshot()) != 0 {
 		t.Fatalf(
-			"downstream envelopes=%+v body=%q",
-			envelopes,
+			"pre-commit failure reached downstream: envelopes=%d body=%q aborts=%+v",
+			len(downstream.envelopesSnapshot()),
+			downstream.bytesSnapshot(),
+			downstream.abortsSnapshot(),
+		)
+	}
+}
+
+func TestStreamingResponseTransformFailureAfterFirstEventAbortsCommittedStream(t *testing.T) {
+	plan := mustEnvironmentRequestPlan(t, testPlanOptions{
+		destination:    environment.DestinationKindUpstream,
+		providerOrigin: "https://provider.example/v1",
+		backend:        protocolspec.DialectOpenAIChat,
+		modelMode:      environment.ModelModeMap,
+		mappedModel:    "gpt-provider",
+		accounts:       []testAccount{{id: "account.primary", revision: 1, epoch: 1}},
+		preferred:      "account.primary",
+		transform: messagetransform.Policy{ResponseJavaScript: `
+			context.events = (context.events ?? 0) + 1;
+			if (context.events === 2) throw new Error("must stay private");
+		`},
+	})
+	first := `{"id":"chatcmpl-stream","object":"chat.completion.chunk","created":1,"model":"gpt-provider","choices":[{"index":0,"delta":{"role":"assistant","content":"Hello"},"finish_reason":null}]}`
+	second := `{"id":"chatcmpl-stream","object":"chat.completion.chunk","created":1,"model":"gpt-provider","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}`
+	provider := &providerDouble{results: []providerResult{{response: streamResponse(
+		http.StatusOK,
+		&chunkSequenceReader{chunks: [][]byte{
+			joinProviderEvents(t, first),
+			joinProviderEvents(t, second),
+		}},
+	)}}}
+	pipeline := newTestPipeline(
+		t,
+		newAccountAuthority(t, testAccount{id: "account.primary", revision: 1, epoch: 1}),
+		provider,
+		approvedDecisions(),
+		&attemptObserverDouble{},
+	)
+	defer shutdownPipeline(t, pipeline)
+	downstream := &downstreamRecorder{}
+
+	_, err := pipeline.Execute(
+		context.Background(),
+		mustClientRequest(t, "exchange-stream-transform-after-commit", plan, streamingClientRequest()),
+		downstream,
+	)
+	if ReasonOf(err) != ReasonMessageTransformFailed {
+		t.Fatalf("Execute() error = %v, want %s", err, ReasonMessageTransformFailed)
+	}
+	if len(downstream.envelopesSnapshot()) != 1 ||
+		!bytes.Contains(downstream.bytesSnapshot(), []byte("Hello")) {
+		t.Fatalf(
+			"first transformed event was not committed: envelopes=%d body=%q",
+			len(downstream.envelopesSnapshot()),
 			downstream.bytesSnapshot(),
 		)
 	}
-	if decisions.callCount() != 0 ||
-		result.Outcome != AttemptSucceeded ||
-		result.CredentialBindingID != "" ||
-		!result.Ledger.DownstreamOrdinaryHeaders ||
-		!result.Ledger.DownstreamTerminal ||
-		result.Ledger.UpstreamSends != 1 ||
-		result.Ledger.UpstreamResponses != 1 {
-		t.Fatalf("result=%+v toolDecisions=%d", result, decisions.callCount())
+	aborts := downstream.abortsSnapshot()
+	if len(aborts) != 1 || aborts[0].ReasonCode != ReasonMessageTransformFailed {
+		t.Fatalf("post-commit failure aborts = %+v", aborts)
 	}
 }
 
-func TestPipelineOriginalResponsesPreservesSSE(t *testing.T) {
-	t.Parallel()
+func TestManagedCompatibleTextStreamCompletesAfterEmptyTerminalRelease(t *testing.T) {
+	plan := mustEnvironmentRequestPlan(t, testPlanOptions{
+		destination:    environment.DestinationKindUpstream,
+		providerOrigin: "https://api.anthropic.com",
+		backend:        protocolspec.DialectAnthropicMessages,
+		modelMode:      environment.ModelModeMap,
+		mappedModel:    "claude-provider",
+		accounts:       []testAccount{{id: "account.primary", revision: 1, epoch: 1}},
+		preferred:      "account.primary",
+	})
+	authority := newAccountAuthority(t, testAccount{id: "account.primary", revision: 1, epoch: 1})
+	provider := &providerDouble{results: []providerResult{{response: streamResponse(
+		http.StatusOK,
+		anthropicTextProviderStream(),
+	)}}}
+	pipeline := newTestPipeline(t, authority, provider, approvedDecisions(), &attemptObserverDouble{})
+	defer shutdownPipeline(t, pipeline)
 
-	accessID := mustAccessID(t, "access-original-responses")
-	snapshot := compileOriginalTestSnapshot(
-		t,
-		accessID,
-		access.DialectOpenAIResponses,
-		"https://api.openai.com:443",
-	)
-	providerBody := []byte("event: response.output_text.delta\ndata: {\"delta\":\"hi\"}\n\n")
-	provider := &providerDouble{results: []providerResult{{
-		response: &http.Response{
-			StatusCode: http.StatusOK,
-			Header: http.Header{
-				"Content-Type":  []string{"text/event-stream; charset=utf-8"},
-				"Cache-Control": []string{"no-cache"},
-			},
-			Body: io.NopCloser(bytes.NewReader(providerBody)),
-		},
-	}}}
-	pipeline := newTestPipeline(
-		t,
-		&resolverDouble{snapshots: []access.AccessPlanSnapshot{snapshot}},
-		provider,
-		&decisionDouble{},
-	)
-	t.Cleanup(func() { shutdownPipeline(t, pipeline) })
-	operationID, err := access.NewClientOperationID(
-		operationcatalog.OpenAIResponsesCreateID,
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	operation, err := NewClientOperationEvidence(
-		operationID,
-		1,
-		http.MethodPost,
-		"/v1/responses",
-		"",
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	clientBody := []byte(`{"model":"client-choice","stream":true,"input":"hello"}`)
-	request, err := NewClientRequest(
-		"exchange-original-responses",
-		snapshot.IngressBinding(),
-		operation,
-		clientBody,
-		ReplayGenerationCostOnly,
-		access.ApplicationProtocolHTTP2,
-		WithOriginalHeaders(http.Header{
-			"Authorization": []string{"Bearer client-oauth"},
-			"Content-Type":  []string{"application/json"},
-		}),
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
 	downstream := &downstreamRecorder{}
-	result, err := pipeline.Execute(context.Background(), request, downstream)
+	result, err := pipeline.Execute(
+		context.Background(),
+		mustClientRequest(t, "exchange-compatible-stream", plan, streamingClientRequest()),
+		downstream,
+	)
+	if err != nil || result.Outcome != AttemptSucceeded || !result.Ledger.DownstreamTerminal {
+		t.Fatalf("Execute() = %+v, %v", result, err)
+	}
+	wire := downstream.bytesSnapshot()
+	if !bytes.Contains(wire, []byte(`"text":"hello"`)) ||
+		!bytes.Contains(wire, []byte(`"type":"message_stop"`)) ||
+		!bytes.Contains(wire, []byte(`"model":"claude-client-alias"`)) ||
+		bytes.Contains(wire, []byte(`"model":"claude-provider"`)) {
+		t.Fatalf("downstream stream = %s", wire)
+	}
+}
+
+func TestManagedResponsesRequestUsesTheSameFrozenEnvironmentAuthority(t *testing.T) {
+	plan := mustEnvironmentRequestPlan(t, testPlanOptions{
+		clientProtocol: environment.ClientProtocolOpenAIResponses,
+		destination:    environment.DestinationKindUpstream,
+		providerOrigin: "https://provider.example/v1",
+		backend:        protocolspec.DialectOpenAIChat,
+		modelMode:      environment.ModelModeMap,
+		mappedModel:    "gpt-provider",
+		accounts:       []testAccount{{id: "account.primary", revision: 3, epoch: 7}},
+		preferred:      "account.primary",
+	})
+	authority := newAccountAuthority(t, testAccount{id: "account.primary", revision: 3, epoch: 7})
+	provider := &providerDouble{results: []providerResult{{
+		response: jsonResponse(http.StatusOK, completeProviderResponse("gpt-provider")),
+	}}}
+	pipeline := newTestPipeline(t, authority, provider, approvedDecisions(), &attemptObserverDouble{})
+	defer shutdownPipeline(t, pipeline)
+
+	downstream := &downstreamRecorder{}
+	result, err := pipeline.Execute(
+		context.Background(),
+		mustClientRequest(t, "exchange-responses", plan, completeResponsesClientRequest()),
+		downstream,
+	)
 	if err != nil {
-		t.Fatalf("Execute() error = %v", err)
+		t.Fatal(err)
+	}
+	if result.Outcome != AttemptSucceeded || result.EnvironmentID != "environment.test" ||
+		result.RouteID != "route.primary" || result.AccountID != "account.primary" {
+		t.Fatalf("result = %+v", result)
 	}
 	requests := provider.requestsSnapshot()
-	if len(requests) != 1 ||
-		requests[0].RelativePath() != "v1/responses" ||
-		requests[0].RawQuery() != "" ||
-		requests[0].Headers().Get("Authorization") != "Bearer client-oauth" ||
-		!bytes.Equal(requests[0].Body(), clientBody) {
-		t.Fatalf("original Responses request = %#v", requests)
-	}
-	envelopes := downstream.envelopesSnapshot()
-	if len(envelopes) != 1 ||
-		envelopes[0].Mode() != ResponseModeEventStream ||
-		envelopes[0].Headers().Get("Cache-Control") != "no-cache" ||
-		!bytes.Equal(downstream.bytesSnapshot(), providerBody) ||
-		result.Outcome != AttemptSucceeded {
-		t.Fatalf("result=%+v envelopes=%+v body=%q", result, envelopes, downstream.bytesSnapshot())
-	}
-}
-
-func TestPipelineOriginalPassthroughForwardsProviderAuthenticationFailure(
-	t *testing.T,
-) {
-	t.Parallel()
-
-	accessID := mustAccessID(t, "access-original-auth-failure")
-	snapshot := compileOriginalTestSnapshot(
-		t,
-		accessID,
-		access.DialectAnthropicMessages,
-		"https://api.anthropic.com:443",
-	)
-	providerBody := []byte(`{"type":"error","error":{"type":"authentication_error"}}`)
-	provider := &providerDouble{results: []providerResult{{
-		response: &http.Response{
-			StatusCode: http.StatusUnauthorized,
-			Header: http.Header{
-				"Content-Type":     []string{"application/json"},
-				"Www-Authenticate": []string{`Bearer realm="provider"`},
-			},
-			Body: io.NopCloser(bytes.NewReader(providerBody)),
-		},
-	}}}
-	pipeline := newTestPipeline(
-		t,
-		&resolverDouble{snapshots: []access.AccessPlanSnapshot{snapshot}},
-		provider,
-		&decisionDouble{},
-	)
-	t.Cleanup(func() { shutdownPipeline(t, pipeline) })
-	request, err := NewClientRequest(
-		"exchange-original-auth-failure",
-		snapshot.IngressBinding(),
-		mustAnthropicOperationEvidence(t),
-		[]byte(`{"model":"client-choice","messages":[]}`),
-		ReplayGenerationCostOnly,
-		access.ApplicationProtocolHTTP1,
-		WithOriginalHeaders(http.Header{
-			"Authorization": []string{"Bearer expired-client-oauth"},
-		}),
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	downstream := &downstreamRecorder{}
-	result, err := pipeline.Execute(context.Background(), request, downstream)
-	if err == nil {
-		t.Fatal("Execute() error = nil, want provider status failure")
-	}
-	envelopes := downstream.envelopesSnapshot()
-	if len(envelopes) != 1 ||
-		envelopes[0].StatusCode() != http.StatusUnauthorized ||
-		envelopes[0].Headers().Get("Www-Authenticate") != `Bearer realm="provider"` ||
-		!bytes.Equal(downstream.bytesSnapshot(), providerBody) ||
-		result.Outcome != AttemptFailed {
-		t.Fatalf("result=%+v envelopes=%+v body=%q err=%v", result, envelopes, downstream.bytesSnapshot(), err)
-	}
-}
-
-func TestPipelineExecutesCompleteResponsesOperationFromOneFrozenPlan(
-	t *testing.T,
-) {
-	t.Parallel()
-
-	accessID := mustAccessID(t, "access-responses-complete")
-	snapshot := compileResponsesTestSnapshot(t, accessID, 1, "gpt-plan-responses")
-	resolver := &resolverDouble{snapshots: []access.AccessPlanSnapshot{snapshot}}
-	provider := &providerDouble{results: []providerResult{{
-		response: jsonResponse(
-			http.StatusOK,
-			completeProviderResponse("gpt-plan-responses"),
-		),
-	}}}
-	pipeline := newTestPipeline(
-		t,
-		resolver,
-		provider,
-		&decisionDouble{decision: ToolDecision{Outcome: ToolDecisionApproved}},
-	)
-	t.Cleanup(func() { shutdownPipeline(t, pipeline) })
-
-	request, err := NewClientRequest(
-		"exchange-responses-complete",
-		snapshot.IngressBinding(),
-		mustResponsesOperationEvidence(t),
-		completeResponsesClientRequest(),
-		ReplayGenerationCostOnly,
-		access.ApplicationProtocolHTTP1,
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	downstream := &downstreamRecorder{}
-	result, err := pipeline.Execute(context.Background(), request, downstream)
-	if err != nil {
-		t.Fatalf("Execute() error = %v", err)
-	}
-	if resolver.callCount() != 1 {
-		t.Fatalf("resolver calls = %d, want 1", resolver.callCount())
-	}
-	requests := provider.requestsSnapshot()
-	if len(requests) != 1 ||
-		requests[0].RelativePath() != anthropicchat.ProviderRelativePath {
-		t.Fatalf("provider requests = %#v", requests)
-	}
-	providerHeaders := requests[0].Headers()
-	if providerHeaders.Get("Accept") != "application/json" ||
-		providerHeaders.Get("Authorization") != "" ||
-		providerHeaders.Get("Proxy-Authorization") != "" ||
-		providerHeaders.Get("Connection") != "" ||
-		providerHeaders.Get("X-Client-Hop") != "" {
-		t.Fatalf("provider headers = %v", providerHeaders)
+	if len(requests) != 1 || requests[0].RelativePath() != anthropicchat.ProviderRelativePath ||
+		requests[0].Provenance().EnvironmentID().String() != "environment.test" ||
+		requests[0].Provenance().RouteID().String() != "route.primary" {
+		t.Fatalf("provider requests = %+v", requests)
 	}
 	var providerWire struct {
 		Model  string `json:"model"`
@@ -431,8 +1554,8 @@ func TestPipelineExecutesCompleteResponsesOperationFromOneFrozenPlan(
 	if err := json.Unmarshal(requests[0].Body(), &providerWire); err != nil {
 		t.Fatal(err)
 	}
-	if providerWire.Model != "gpt-plan-responses" || providerWire.Stream {
-		t.Fatalf("provider request = %+v", providerWire)
+	if providerWire.Model != "gpt-provider" || providerWire.Stream {
+		t.Fatalf("provider wire = %+v", providerWire)
 	}
 	var clientWire struct {
 		Object string `json:"object"`
@@ -449,1734 +1572,968 @@ func TestPipelineExecutesCompleteResponsesOperationFromOneFrozenPlan(
 	if err := json.Unmarshal(downstream.bytesSnapshot(), &clientWire); err != nil {
 		t.Fatalf("decode Responses body: %v", err)
 	}
-	if clientWire.Object != "response" ||
-		clientWire.Status != "completed" ||
-		clientWire.Model != "codex-client-alias" ||
-		len(clientWire.Output) != 1 ||
-		clientWire.Output[0].Type != "message" ||
-		len(clientWire.Output[0].Content) != 1 ||
+	if clientWire.Object != "response" || clientWire.Status != "completed" ||
+		clientWire.Model != "codex-client-alias" || len(clientWire.Output) != 1 ||
+		clientWire.Output[0].Type != "message" || len(clientWire.Output[0].Content) != 1 ||
 		clientWire.Output[0].Content[0].Type != "output_text" ||
 		clientWire.Output[0].Content[0].Text != "Done." {
 		t.Fatalf("Responses body = %#v", clientWire)
 	}
-	if result.Outcome != AttemptSucceeded ||
-		result.AccessRevision != snapshot.Revision() ||
-		result.PlanHash != snapshot.PlanHash().String() ||
-		result.Ledger.DownstreamSemanticBytes == 0 ||
-		!result.Ledger.DownstreamTerminal {
-		t.Fatalf("result = %+v", result)
-	}
 }
 
-func TestPipelineRejectsResponsesOperationEvidenceMismatchBeforeProvider(
-	t *testing.T,
-) {
-	t.Parallel()
-
-	responsesID, err := access.NewClientOperationID(
-		operationcatalog.OpenAIResponsesCreateID,
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	anthropicID, err := access.NewClientOperationID(
-		operationcatalog.AnthropicMessagesCreateID,
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	tests := []struct {
-		name     string
-		id       access.ClientOperationID
-		revision access.Revision
-		method   string
-		path     string
-		query    string
-	}{
-		{
-			name:     "operation ID",
-			id:       anthropicID,
-			revision: 1,
-			method:   http.MethodPost,
-			path:     "/v1/responses",
-		},
-		{
-			name:     "operation revision",
-			id:       responsesID,
-			revision: 2,
-			method:   http.MethodPost,
-			path:     "/v1/responses",
-		},
-		{
-			name:     "method",
-			id:       responsesID,
-			revision: 1,
-			method:   http.MethodGet,
-			path:     "/v1/responses",
-		},
-		{
-			name:     "path",
-			id:       responsesID,
-			revision: 1,
-			method:   http.MethodPost,
-			path:     "/v1/other",
-		},
-		{
-			name:     "query",
-			id:       responsesID,
-			revision: 1,
-			method:   http.MethodPost,
-			path:     "/v1/responses",
-			query:    "mode=test",
-		},
-	}
-	for _, test := range tests {
-		test := test
-		t.Run(test.name, func(t *testing.T) {
-			t.Parallel()
-			accessID := mustAccessID(
-				t,
-				"access-responses-mismatch-"+strings.ReplaceAll(test.name, " ", "-"),
-			)
-			snapshot := compileResponsesTestSnapshot(
-				t,
-				accessID,
-				1,
-				"gpt-plan-responses",
-			)
-			resolver := &resolverDouble{
-				snapshots: []access.AccessPlanSnapshot{snapshot},
-			}
-			provider := &providerDouble{}
-			pipeline := newTestPipeline(
-				t,
-				resolver,
-				provider,
-				&decisionDouble{},
-			)
-			t.Cleanup(func() { shutdownPipeline(t, pipeline) })
-			evidence, err := NewClientOperationEvidence(
-				test.id,
-				test.revision,
-				test.method,
-				test.path,
-				test.query,
-			)
-			if err != nil {
-				t.Fatal(err)
-			}
-			request, err := NewClientRequest(
-				"exchange-responses-mismatch",
-				snapshot.IngressBinding(),
-				evidence,
-				completeResponsesClientRequest(),
-				ReplayGenerationCostOnly,
-				access.ApplicationProtocolHTTP1,
-			)
-			if err != nil {
-				t.Fatal(err)
-			}
-			_, executeErr := pipeline.Execute(
-				context.Background(),
-				request,
-				&downstreamRecorder{},
-			)
-			if ReasonOf(executeErr) != ReasonUnsupportedAccessPlan {
-				t.Fatalf("Execute() error = %v", executeErr)
-			}
-			if resolver.callCount() != 1 || provider.callCount() != 0 {
-				t.Fatalf(
-					"resolver calls=%d provider calls=%d",
-					resolver.callCount(),
-					provider.callCount(),
-				)
-			}
-		})
-	}
-}
-
-func TestPipelineIsolatesConcurrentAnthropicAndResponsesAccesses(
-	t *testing.T,
-) {
-	t.Parallel()
-
-	anthropicID := mustAccessID(t, "access-concurrent-anthropic")
-	responsesID := mustAccessID(t, "access-concurrent-responses")
-	anthropicSnapshot := compileTestSnapshot(
-		t,
-		anthropicID,
-		1,
-		"gpt-concurrent-anthropic",
-	)
-	responsesSnapshot := compileResponsesTestSnapshot(
-		t,
-		responsesID,
-		1,
-		"gpt-concurrent-responses",
-	)
-	resolver := &keyedResolverDouble{
-		snapshots: map[access.AccessID]access.AccessPlanSnapshot{
-			anthropicID: anthropicSnapshot,
-			responsesID: responsesSnapshot,
-		},
-	}
-	const exchanges = 40
-	results := make([]providerResult, exchanges)
-	for index := range results {
-		results[index] = providerResult{
-			response: jsonResponse(
-				http.StatusOK,
-				completeProviderResponse("gpt-concurrent-provider"),
-			),
-		}
-	}
-	provider := &providerDouble{results: results}
-	pipeline := newTestPipeline(
-		t,
-		resolver,
-		provider,
-		&decisionDouble{decision: ToolDecision{Outcome: ToolDecisionApproved}},
-	)
-	t.Cleanup(func() { shutdownPipeline(t, pipeline) })
-	type execution struct {
-		request   ClientRequest
-		accessID  access.AccessID
-		planHash  string
-		responses bool
-	}
-	executions := make([]execution, 0, exchanges)
-	for index := 0; index < exchanges; index++ {
-		snapshot := anthropicSnapshot
-		evidence := mustAnthropicOperationEvidence(t)
-		body := completeClientRequest()
-		responses := false
-		if index%2 == 1 {
-			snapshot = responsesSnapshot
-			evidence = mustResponsesOperationEvidence(t)
-			body = completeResponsesClientRequest()
-			responses = true
-		}
-		request, err := NewClientRequest(
-			fmt.Sprintf("exchange-concurrent-%d", index),
-			snapshot.IngressBinding(),
-			evidence,
-			body,
-			ReplayGenerationCostOnly,
-			access.ApplicationProtocolHTTP1,
-		)
-		if err != nil {
-			t.Fatal(err)
-		}
-		executions = append(executions, execution{
-			request:   request,
-			accessID:  snapshot.AccessID(),
-			planHash:  snapshot.PlanHash().String(),
-			responses: responses,
-		})
-	}
-
-	errs := make(chan error, exchanges)
-	var group sync.WaitGroup
-	for _, item := range executions {
-		item := item
-		group.Add(1)
-		go func() {
-			defer group.Done()
-			downstream := &downstreamRecorder{}
-			result, err := pipeline.Execute(
-				context.Background(),
-				item.request,
-				downstream,
-			)
-			if err != nil {
-				errs <- err
-				return
-			}
-			if result.AccessID != item.accessID.String() ||
-				result.PlanHash != item.planHash ||
-				result.Outcome != AttemptSucceeded {
-				errs <- fmt.Errorf(
-					"isolated result mismatch: %+v",
-					result,
-				)
-				return
-			}
-			wire := downstream.bytesSnapshot()
-			if item.responses != bytes.Contains(wire, []byte(`"object":"response"`)) {
-				errs <- fmt.Errorf(
-					"client dialect response mismatch: responses=%t body=%s",
-					item.responses,
-					wire,
-				)
-			}
-		}()
-	}
-	group.Wait()
-	close(errs)
-	for err := range errs {
-		t.Error(err)
-	}
-	if resolver.callCount(anthropicID) != exchanges/2 ||
-		resolver.callCount(responsesID) != exchanges/2 ||
-		provider.callCount() != exchanges {
-		t.Fatalf(
-			"calls: anthropic=%d responses=%d provider=%d",
-			resolver.callCount(anthropicID),
-			resolver.callCount(responsesID),
-			provider.callCount(),
-		)
-	}
-}
-
-func TestPipelineResendsSameFrozenRepresentationBeforeSemanticCommit(t *testing.T) {
-	t.Parallel()
-
-	accessID := mustAccessID(t, "access-resend")
-	snapshot := compileTestSnapshot(t, accessID, 1, "gpt-frozen")
-	resolver := &resolverDouble{snapshots: []access.AccessPlanSnapshot{snapshot}}
-	provider := &providerDouble{results: []providerResult{
-		{response: streamResponse(http.StatusServiceUnavailable, nil)},
-		{response: streamResponse(http.StatusOK, normalProviderStream(t, "gpt-frozen"))},
-	}}
-	waiter := &retryWaiterDouble{}
-	pipeline := newTestPipelineWithWaiter(
-		t,
-		resolver,
-		provider,
-		&decisionDouble{decision: ToolDecision{Outcome: ToolDecisionApproved}},
-		waiter,
-	)
-	t.Cleanup(func() { shutdownPipeline(t, pipeline) })
-	request := mustClientRequest(
-		t,
-		"exchange-resend",
-		accessID,
-		streamingClientRequest(),
-		ReplayGenerationCostOnly,
-	)
-	downstream := &downstreamRecorder{}
-
-	result, err := pipeline.Execute(context.Background(), request, downstream)
-	if err != nil {
-		t.Fatalf("Execute() error = %v", err)
-	}
-	requests := provider.requestsSnapshot()
-	if len(requests) != 2 {
-		t.Fatalf("provider request count = %d, want 2", len(requests))
-	}
-	if !bytes.Equal(requests[0].Body(), requests[1].Body()) ||
-		requests[0].RequestID() != requests[1].RequestID() ||
-		requests[0].TargetRef() != requests[1].TargetRef() {
-		t.Fatal("transport resend did not replay the frozen representation")
-	}
-	if got := downstream.modesSnapshot(); !slices.Equal(
-		got,
-		[]ResponseMode{ResponseModeEventStream},
-	) {
-		t.Fatalf("downstream envelopes = %v, want exactly one", got)
-	}
-	if waiter.callCount() != 1 ||
-		result.TransportResends != 1 ||
-		result.Ledger.UpstreamSends != 2 ||
-		result.Ledger.UpstreamResponses != 2 ||
-		!result.Ledger.DownstreamHoldEnvelope ||
-		!result.Ledger.DownstreamTerminal ||
-		!translationHasNotice(
-			result.Translation,
-			protocolcore.NoticeLateUsageAccounting,
-		) {
-		t.Fatalf("resend result = %+v; waiter calls=%d", result, waiter.callCount())
-	}
-}
-
-func translationHasNotice(
-	report protocolcore.TranslationReport,
-	code protocolcore.NoticeCode,
-) bool {
-	return slices.ContainsFunc(
-		report.Notices(),
-		func(notice protocolcore.TranslationNotice) bool {
-			return notice.Code == code
-		},
-	)
-}
-
-func TestPipelineNeverResolvesAgainDuringAnActiveExchange(t *testing.T) {
-	t.Parallel()
-
-	accessID := mustAccessID(t, "access-frozen")
-	revisionOne := compileTestSnapshot(t, accessID, 1, "gpt-revision-one")
-	revisionTwo := compileTestSnapshot(t, accessID, 2, "gpt-revision-two")
-	resolver := &resolverDouble{
-		snapshots: []access.AccessPlanSnapshot{revisionOne, revisionTwo},
-	}
-	provider := &providerDouble{results: []providerResult{
-		{response: jsonResponse(http.StatusOK, completeProviderResponse("reported-one"))},
-		{response: jsonResponse(http.StatusOK, completeProviderResponse("reported-two"))},
-	}}
-	pipeline := newTestPipeline(
-		t,
-		resolver,
-		provider,
-		&decisionDouble{decision: ToolDecision{Outcome: ToolDecisionApproved}},
-	)
-	t.Cleanup(func() { shutdownPipeline(t, pipeline) })
-
-	first, err := pipeline.Execute(
-		context.Background(),
-		mustClientRequest(
-			t,
-			"exchange-frozen-one",
-			accessID,
-			completeClientRequest(),
-			ReplayGenerationCostOnly,
-		),
-		&downstreamRecorder{},
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	second, err := pipeline.Execute(
-		context.Background(),
-		mustClientRequest(
-			t,
-			"exchange-frozen-two",
-			accessID,
-			completeClientRequest(),
-			ReplayGenerationCostOnly,
-		),
-		&downstreamRecorder{},
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	requests := provider.requestsSnapshot()
-	var models []string
-	for _, request := range requests {
-		var wire struct {
-			Model string `json:"model"`
-		}
-		if err := json.Unmarshal(request.Body(), &wire); err != nil {
-			t.Fatal(err)
-		}
-		models = append(models, wire.Model)
-	}
-	if !slices.Equal(models, []string{"gpt-revision-one", "gpt-revision-two"}) ||
-		first.AccessRevision != 1 ||
-		second.AccessRevision != 2 ||
-		resolver.callCount() != 2 {
-		t.Fatalf(
-			"models=%v first=%+v second=%+v resolverCalls=%d",
-			models,
-			first,
-			second,
-			resolver.callCount(),
-		)
-	}
-}
-
-func TestPipelineRejectsConnectionBindingAfterAgentEndpointChange(
-	t *testing.T,
-) {
-	t.Parallel()
-
-	accessID := mustAccessID(t, "access-stale-ingress")
-	connectionPlan := compileTestSnapshot(
-		t,
-		accessID,
-		1,
-		"gpt-connection-plan",
-	)
-	currentPlan := compileTestSnapshotWithEndpoint(
-		t,
-		accessID,
-		2,
-		"gpt-current-plan",
-		accessID.String()+"-replacement-endpoint",
-	)
-	resolver := &resolverDouble{
-		snapshots: []access.AccessPlanSnapshot{currentPlan},
-	}
-	provider := &providerDouble{}
-	pipeline := newTestPipeline(
-		t,
-		resolver,
-		provider,
-		&decisionDouble{decision: ToolDecision{Outcome: ToolDecisionApproved}},
-	)
-	t.Cleanup(func() { shutdownPipeline(t, pipeline) })
-	request, err := NewClientRequest(
-		"exchange-stale-ingress",
-		connectionPlan.IngressBinding(),
-		mustAnthropicOperationEvidence(t),
-		completeClientRequest(),
-		ReplayGenerationCostOnly,
-		access.ApplicationProtocolHTTP1,
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	_, err = pipeline.Execute(
-		context.Background(),
-		request,
-		&downstreamRecorder{},
-	)
-	if ReasonOf(err) != ReasonIngressBindingStale {
-		t.Fatalf("Execute() error = %v, want stale ingress failure", err)
-	}
-	if resolver.callCount() != 1 || provider.callCount() != 0 {
-		t.Fatalf(
-			"stale ingress resolver calls=%d provider calls=%d",
-			resolver.callCount(),
-			provider.callCount(),
-		)
-	}
-}
-
-func TestPipelineObservesSanitizedProviderRejection(t *testing.T) {
-	t.Parallel()
-
-	accessID := mustAccessID(t, "access-provider-rejection")
-	snapshot := compileTestSnapshot(t, accessID, 1, "gpt-rejection")
-	observer := &attemptObserverDouble{}
-	pipeline, err := New(Options{
-		OwnerContext: context.Background(),
-		Actions:      newTestActionGate(t),
-		Resolver: &resolverDouble{
-			snapshots: []access.AccessPlanSnapshot{snapshot},
-		},
-		ProtocolPaths: mustProtocolPathSelector(t),
-		Provider: &providerDouble{results: []providerResult{{
-			response: streamResponse(
-				http.StatusUnprocessableEntity,
-				io.NopCloser(strings.NewReader(
-					`{"detail":[{"loc":["body","tools"],"msg":"private"}]}`,
-				)),
-			),
-		}}},
-		ToolDecisions:      &decisionDouble{},
-		RetryWaiter:        &retryWaiterDouble{},
-		Observer:           observer,
-		ObservationTimeout: time.Second,
-		Hold:               DefaultHoldPolicy(),
-		Stream:             DefaultStreamBudgets(),
+func TestManagedResponsesHTTP2ClientUsesLoopbackHTTP1Provider(t *testing.T) {
+	const mappedModel = "dashscope:deepseek-v4-flash-0731"
+	plan := mustEnvironmentRequestPlan(t, testPlanOptions{
+		clientProtocol:     environment.ClientProtocolOpenAIResponses,
+		downstreamProtocol: wireprofile.ApplicationProtocolHTTP2,
+		destination:        environment.DestinationKindUpstream,
+		providerOrigin:     "http://127.0.0.1:23333/v1",
+		backend:            protocolspec.DialectOpenAIResponses,
+		modelMode:          environment.ModelModeMap,
+		mappedModel:        mappedModel,
+		accounts: []testAccount{{
+			id: "account.primary", revision: 3, epoch: 7,
+		}},
+		preferred: "account.primary",
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { shutdownPipeline(t, pipeline) })
-	result, err := pipeline.Execute(
-		context.Background(),
-		mustClientRequest(
-			t,
-			"exchange-provider-rejection",
-			accessID,
-			streamingClientRequest(),
-			ReplayGenerationCostOnly,
-		),
-		&downstreamRecorder{},
-	)
-	if ReasonOf(err) != ReasonProviderStatusRejected ||
-		result.Outcome != AttemptFailed {
-		t.Fatalf("Execute() result=%+v error=%v", result, err)
-	}
-	observations := observer.snapshot()
-	if len(observations) != 1 ||
-		observations[0].ReasonCode != ReasonProviderStatusRejected ||
-		observations[0].ProviderStatus != http.StatusUnprocessableEntity ||
-		observations[0].ProviderField != ProviderFieldTools {
-		t.Fatalf("Attempt observations = %+v", observations)
-	}
-}
-
-func TestPipelineClassifiesProviderBodyIdleAfterResponseHeaders(t *testing.T) {
-	t.Parallel()
-
-	accessID := mustAccessID(t, "access-provider-idle")
-	snapshot := compileTestSnapshot(t, accessID, 1, "gpt-idle")
-	provider := &providerDouble{results: []providerResult{{
-		response: &http.Response{
-			StatusCode: http.StatusOK,
-			Header: http.Header{
-				"Content-Type": []string{"text/event-stream"},
-			},
-			Body: idleProviderBody{},
-		},
-	}}}
-	pipeline := newTestPipeline(
+	authority := newAccountAuthority(
 		t,
-		&resolverDouble{snapshots: []access.AccessPlanSnapshot{snapshot}},
-		provider,
-		&decisionDouble{decision: ToolDecision{
-			Outcome: ToolDecisionApproved,
-		}},
-	)
-	t.Cleanup(func() { shutdownPipeline(t, pipeline) })
-	downstream := &downstreamRecorder{}
-	result, err := pipeline.Execute(
-		context.Background(),
-		mustClientRequest(
-			t,
-			"exchange-provider-idle",
-			accessID,
-			streamingClientRequest(),
-			ReplayGenerationCostOnly,
-		),
-		downstream,
-	)
-	var failure *Failure
-	if !errors.As(err, &failure) ||
-		failure.Code != ReasonProviderResponseIdle ||
-		failure.ProviderStatus != http.StatusOK {
-		t.Fatalf("Execute() result=%+v error=%v", result, err)
-	}
-	if len(downstream.aborts) != 1 ||
-		downstream.aborts[0].ReasonCode != ReasonProviderResponseIdle ||
-		downstream.aborts[0].ProviderStatus != http.StatusOK {
-		t.Fatalf("downstream aborts = %+v", downstream.aborts)
-	}
-}
-
-func TestPipelinePublishesStableProtocolReasonForMalformedStream(t *testing.T) {
-	t.Parallel()
-
-	accessID := mustAccessID(t, "access-malformed-stream")
-	snapshot := compileTestSnapshot(t, accessID, 1, "gpt-malformed")
-	provider := &providerDouble{results: []providerResult{{
-		response: &http.Response{
-			StatusCode: http.StatusOK,
-			Header: http.Header{
-				"Content-Type": []string{"text/event-stream"},
-			},
-			Body: io.NopCloser(strings.NewReader(
-				"data: {invalid-json}\n\ndata: [DONE]\n\n",
-			)),
-		},
-	}}}
-	pipeline := newTestPipeline(
-		t,
-		&resolverDouble{snapshots: []access.AccessPlanSnapshot{snapshot}},
-		provider,
-		&decisionDouble{decision: ToolDecision{
-			Outcome: ToolDecisionApproved,
-		}},
-	)
-	t.Cleanup(func() { shutdownPipeline(t, pipeline) })
-	downstream := &downstreamRecorder{}
-	result, err := pipeline.Execute(
-		context.Background(),
-		mustClientRequest(
-			t,
-			"exchange-malformed-stream",
-			accessID,
-			streamingClientRequest(),
-			ReplayGenerationCostOnly,
-		),
-		downstream,
-	)
-	var failure *Failure
-	if !errors.As(err, &failure) ||
-		failure.Code != ReasonProviderResponseInvalid ||
-		failure.ProtocolReason != protocolcore.ReasonMalformedEventStream ||
-		result.Outcome != AttemptFailed {
-		t.Fatalf("Execute() result=%+v error=%v", result, err)
-	}
-	if len(downstream.aborts) != 1 ||
-		downstream.aborts[0].ReasonCode != ReasonProviderResponseInvalid ||
-		downstream.aborts[0].ProtocolReason !=
-			protocolcore.ReasonMalformedEventStream {
-		t.Fatalf("downstream aborts = %+v", downstream.aborts)
-	}
-}
-
-func TestPipelineResponsesRejectsMalformedProviderStreamWithoutTerminal(
-	t *testing.T,
-) {
-	t.Parallel()
-
-	accessID := mustAccessID(t, "access-responses-malformed-stream")
-	snapshot := compileResponsesTestSnapshot(
-		t,
-		accessID,
-		1,
-		"gpt-responses-malformed",
+		testAccount{id: "account.primary", revision: 3, epoch: 7},
 	)
 	provider := &providerDouble{results: []providerResult{{
-		response: &http.Response{
-			StatusCode: http.StatusOK,
-			Header: http.Header{
-				"Content-Type": []string{"text/event-stream"},
-			},
-			Body: io.NopCloser(strings.NewReader(
-				"data: {invalid-json}\n\ndata: [DONE]\n\n",
-			)),
-		},
-	}}}
-	pipeline := newTestPipeline(
-		t,
-		&resolverDouble{snapshots: []access.AccessPlanSnapshot{snapshot}},
-		provider,
-		&decisionDouble{decision: ToolDecision{Outcome: ToolDecisionApproved}},
-	)
-	t.Cleanup(func() { shutdownPipeline(t, pipeline) })
-	request, err := NewClientRequest(
-		"exchange-responses-malformed-stream",
-		snapshot.IngressBinding(),
-		mustResponsesOperationEvidence(t),
-		streamingResponsesClientRequest(),
-		ReplayGenerationCostOnly,
-		access.ApplicationProtocolHTTP1,
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	downstream := &downstreamRecorder{}
-	result, err := pipeline.Execute(context.Background(), request, downstream)
-	var failure *Failure
-	if !errors.As(err, &failure) ||
-		failure.Code != ReasonProviderResponseInvalid ||
-		failure.ProtocolReason != protocolcore.ReasonMalformedEventStream ||
-		result.Outcome != AttemptFailed ||
-		result.Ledger.DownstreamTerminal ||
-		!result.Ledger.DownstreamFailure {
-		t.Fatalf("Execute() result=%+v error=%v", result, err)
-	}
-	if bytes.Contains(
-		downstream.bytesSnapshot(),
-		[]byte(`"type":"response.completed"`),
-	) {
-		t.Fatalf("malformed stream emitted a terminal: %s", downstream.bytesSnapshot())
-	}
-}
-
-func TestPipelineClassifiesUnexpectedStreamContentTypeWithoutBodyText(
-	t *testing.T,
-) {
-	t.Parallel()
-
-	accessID := mustAccessID(t, "access-stream-content-type")
-	snapshot := compileTestSnapshot(t, accessID, 1, "gpt-content-type")
-	provider := &providerDouble{results: []providerResult{{
-		response: &http.Response{
-			StatusCode: http.StatusOK,
-			Header: http.Header{
-				"Content-Type": []string{"application/json"},
-			},
-			Body: io.NopCloser(strings.NewReader(
-				`{"error":{"param":"tools","message":"private provider text"}}`,
-			)),
-		},
-	}}}
-	pipeline := newTestPipeline(
-		t,
-		&resolverDouble{snapshots: []access.AccessPlanSnapshot{snapshot}},
-		provider,
-		&decisionDouble{decision: ToolDecision{
-			Outcome: ToolDecisionApproved,
-		}},
-	)
-	t.Cleanup(func() { shutdownPipeline(t, pipeline) })
-	downstream := &downstreamRecorder{}
-	result, err := pipeline.Execute(
-		context.Background(),
-		mustClientRequest(
-			t,
-			"exchange-stream-content-type",
-			accessID,
-			streamingClientRequest(),
-			ReplayGenerationCostOnly,
-		),
-		downstream,
-	)
-	var failure *Failure
-	if !errors.As(err, &failure) ||
-		failure.Code != ReasonProviderResponseInvalid ||
-		failure.ProviderField != ProviderFieldTools ||
-		failure.ProtocolReason != protocolcore.ReasonInvalidProviderResponse ||
-		failure.ResponseIssue != ProviderResponseIssueContentType ||
-		strings.Contains(failure.Error(), "private provider text") ||
-		result.Outcome != AttemptFailed {
-		t.Fatalf("Execute() result=%+v error=%v", result, err)
-	}
-	if len(downstream.aborts) != 1 ||
-		downstream.aborts[0].ProviderField != ProviderFieldTools ||
-		downstream.aborts[0].ProtocolReason !=
-			protocolcore.ReasonInvalidProviderResponse ||
-		downstream.aborts[0].ResponseIssue !=
-			ProviderResponseIssueContentType {
-		t.Fatalf("downstream aborts = %+v", downstream.aborts)
-	}
-}
-
-func TestPipelineProviderCommentsDoNotResetSemanticProgressTimeout(t *testing.T) {
-	t.Parallel()
-
-	accessID := mustAccessID(t, "access-semantic-idle")
-	snapshot := compileTestSnapshot(t, accessID, 1, "gpt-semantic-idle")
-	body := newCommentingProviderBody(2 * time.Millisecond)
-	provider := &providerDouble{results: []providerResult{{
-		response: &http.Response{
-			StatusCode: http.StatusOK,
-			Header: http.Header{
-				"Content-Type": []string{"text/event-stream"},
-			},
-			Body: body,
-		},
-	}}}
-	pipeline := newTestPipeline(
-		t,
-		&resolverDouble{snapshots: []access.AccessPlanSnapshot{snapshot}},
-		provider,
-		&decisionDouble{decision: ToolDecision{
-			Outcome: ToolDecisionApproved,
-		}},
-	)
-	pipeline.hold.MaxTransportResends = 0
-	pipeline.streamBudgets = StreamBudgets{
-		KeepaliveInterval:       5 * time.Millisecond,
-		ProviderProgressTimeout: 30 * time.Millisecond,
-	}
-	t.Cleanup(func() { shutdownPipeline(t, pipeline) })
-	downstream := &downstreamRecorder{}
-	started := time.Now()
-	result, err := pipeline.Execute(
-		context.Background(),
-		mustClientRequest(
-			t,
-			"exchange-semantic-idle",
-			accessID,
-			streamingClientRequest(),
-			ReplayGenerationCostOnly,
-		),
-		downstream,
-	)
-	var failure *Failure
-	if !errors.As(err, &failure) ||
-		failure.Code != ReasonTransportRetryExhausted ||
-		!errors.Is(err, ErrProviderSemanticIdle) {
-		t.Fatalf("Execute() result=%+v error=%v", result, err)
-	}
-	if elapsed := time.Since(started); elapsed > time.Second {
-		t.Fatalf("semantic idle timeout converged after %s", elapsed)
-	}
-	if downstream.keepaliveCount() == 0 {
-		t.Fatal("provider silence emitted no downstream keepalive")
-	}
-	select {
-	case <-body.closed:
-	default:
-		t.Fatal("semantic idle did not close the provider body")
-	}
-}
-
-func TestPipelineKeepaliveFailureCancelsProviderRead(t *testing.T) {
-	t.Parallel()
-
-	accessID := mustAccessID(t, "access-downstream-disconnect")
-	snapshot := compileTestSnapshot(t, accessID, 1, "gpt-disconnect")
-	body := newBlockingProviderBody()
-	provider := &providerDouble{results: []providerResult{{
-		response: &http.Response{
-			StatusCode: http.StatusOK,
-			Header: http.Header{
-				"Content-Type": []string{"text/event-stream"},
-			},
-			Body: body,
-		},
-	}}}
-	pipeline := newTestPipeline(
-		t,
-		&resolverDouble{snapshots: []access.AccessPlanSnapshot{snapshot}},
-		provider,
-		&decisionDouble{decision: ToolDecision{
-			Outcome: ToolDecisionApproved,
-		}},
-	)
-	pipeline.hold.MaxTransportResends = 0
-	pipeline.streamBudgets = StreamBudgets{
-		KeepaliveInterval:       5 * time.Millisecond,
-		ProviderProgressTimeout: time.Second,
-	}
-	t.Cleanup(func() { shutdownPipeline(t, pipeline) })
-	downstream := &downstreamRecorder{
-		keepaliveErr: errors.New("downstream connection closed"),
-	}
-	result, err := pipeline.Execute(
-		context.Background(),
-		mustClientRequest(
-			t,
-			"exchange-downstream-disconnect",
-			accessID,
-			streamingClientRequest(),
-			ReplayGenerationCostOnly,
-		),
-		downstream,
-	)
-	if ReasonOf(err) != ReasonDownstreamDisconnected {
-		t.Fatalf("Execute() result=%+v error=%v", result, err)
-	}
-	select {
-	case <-body.closed:
-	default:
-		t.Fatal("downstream disconnect did not close the provider body")
-	}
-}
-
-func TestStreamBudgetsKeepIndependentPositiveDurations(t *testing.T) {
-	t.Parallel()
-
-	if err := DefaultStreamBudgets().Validate(); err != nil {
-		t.Fatalf("default stream budgets: %v", err)
-	}
-	for _, budgets := range []StreamBudgets{
-		{},
-		{
-			KeepaliveInterval:       time.Second,
-			ProviderProgressTimeout: time.Second,
-		},
-		{
-			KeepaliveInterval:       2 * time.Second,
-			ProviderProgressTimeout: time.Second,
-		},
-	} {
-		if err := budgets.Validate(); err == nil {
-			t.Fatalf("invalid stream budgets were accepted: %+v", budgets)
-		}
-	}
-}
-
-func TestClientRequestFieldClassificationIsFiniteAndValueFree(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name    string
-		body    []byte
-		failure error
-		want    ClientField
-	}{
-		{
-			name: "known unsupported root field",
-			body: []byte(`{
-				"model":"claude-client-alias",
-				"max_tokens":32,
-				"messages":[],
-				"output_config":{"effort":"private-value"}
-			}`),
-			failure: errors.New("root decode failed"),
-			want:    ClientFieldOutputConfigEffortInvalid,
-		},
-		{
-			name: "known none effort extension",
-			body: []byte(`{
-				"output_config":{"effort":"none"}
-			}`),
-			failure: protocolcore.NewFailure(
-				protocolcore.ReasonInvalidClientRequest,
-				"$.output_config.effort",
-				errors.New("effort decode failed"),
-			),
-			want: ClientFieldOutputConfigEffortNone,
-		},
-		{
-			name: "known minimal effort extension",
-			body: []byte(`{
-				"output_config":{"effort":"minimal"}
-			}`),
-			failure: protocolcore.NewFailure(
-				protocolcore.ReasonInvalidClientRequest,
-				"$.output_config.effort",
-				errors.New("effort decode failed"),
-			),
-			want: ClientFieldOutputConfigEffortMinimal,
-		},
-		{
-			name: "unknown nested field name is not disclosed",
-			body: []byte(`{
-				"output_config":{
-					"effort":"high",
-					"private_customer_field":"private-value"
-				}
-			}`),
-			failure: errors.New("root decode failed"),
-			want:    ClientFieldOutputConfigUnknown,
-		},
-		{
-			name: "valid output config does not mask unsupported root capability",
-			body: []byte(`{
-				"output_config":{"effort":"high"},
-				"mcp_servers":[{"private":"value"}]
-			}`),
-			failure: errors.New("root decode failed"),
-			want:    ClientFieldMCPServers,
-		},
-		{
-			name: "valid output config is not blamed for another unknown field",
-			body: []byte(`{
-				"output_config":{"effort":"high"},
-				"private_customer_field":"private-value"
-			}`),
-			failure: errors.New("root decode failed"),
-			want:    ClientFieldUnknown,
-		},
-		{
-			name: "known task budget path",
-			body: []byte(`{
-				"output_config":{
-					"task_budget":{"type":"private-value"}
-				}
-			}`),
-			failure: protocolcore.NewFailure(
-				protocolcore.ReasonInvalidClientRequest,
-				"$.output_config.task_budget.type",
-				errors.New("nested decode failed"),
-			),
-			want: ClientFieldOutputConfigTaskBudget,
-		},
-		{
-			name: "known format is classified without its schema",
-			body: []byte(`{
-				"output_config":{
-					"format":{"type":"private-value","schema":{"private":"value"}}
-				}
-			}`),
-			failure: errors.New("root decode failed"),
-			want:    ClientFieldOutputConfigFormat,
-		},
-		{
-			name: "known nested path",
-			body: []byte(`{"thinking":{"type":"enabled","budget_tokens":1024}}`),
-			failure: protocolcore.NewFailure(
-				protocolcore.ReasonInvalidClientRequest,
-				"$.thinking",
-				errors.New("nested decode failed"),
-			),
-			want: ClientFieldThinking,
-		},
-		{
-			name:    "arbitrary field is not disclosed",
-			body:    []byte(`{"private_customer_field":"private-value"}`),
-			failure: errors.New("root decode failed"),
-			want:    ClientFieldUnknown,
-		},
-		{
-			name:    "invalid JSON is not inspected",
-			body:    []byte(`{"output_config":`),
-			failure: errors.New("root decode failed"),
-			want:    ClientFieldUnknown,
-		},
-	}
-	for _, test := range tests {
-		test := test
-		t.Run(test.name, func(t *testing.T) {
-			t.Parallel()
-			if got := classifyClientRequestField(test.body, test.failure); got != test.want {
-				t.Fatalf("classifyClientRequestField() = %q, want %q", got, test.want)
-			}
-		})
-	}
-}
-
-func TestPipelineObservesUnsupportedClientCapability(t *testing.T) {
-	t.Parallel()
-
-	accessID := mustAccessID(t, "access-client-capability")
-	snapshot := compileTestSnapshot(t, accessID, 1, "gpt-client-capability")
-	observer := &attemptObserverDouble{}
-	provider := &providerDouble{}
-	pipeline, err := New(Options{
-		OwnerContext: context.Background(),
-		Actions:      newTestActionGate(t),
-		Resolver: &resolverDouble{
-			snapshots: []access.AccessPlanSnapshot{snapshot},
-		},
-		ProtocolPaths:      mustProtocolPathSelector(t),
-		Provider:           provider,
-		ToolDecisions:      &decisionDouble{},
-		RetryWaiter:        &retryWaiterDouble{},
-		Observer:           observer,
-		ObservationTimeout: time.Second,
-		Hold:               DefaultHoldPolicy(),
-		Stream:             DefaultStreamBudgets(),
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { shutdownPipeline(t, pipeline) })
-	body := []byte(`{
-		"model":"claude-client-alias",
-		"max_tokens":32,
-		"messages":[{"role":"user","content":"hello"}],
-		"output_config":{
-			"format":{"type":"regex","schema":{"type":"object"}}
-		}
-	}`)
-	result, err := pipeline.Execute(
-		context.Background(),
-		mustClientRequest(
-			t,
-			"exchange-client-capability",
-			accessID,
-			body,
-			ReplayGenerationCostOnly,
-		),
-		&downstreamRecorder{},
-	)
-	if ReasonOf(err) != ReasonUnsupportedClientInput ||
-		result.Outcome != AttemptFailed ||
-		provider.callCount() != 0 {
-		t.Fatalf("Execute() result=%+v error=%v providerCalls=%d",
-			result,
-			err,
-			provider.callCount(),
-		)
-	}
-	observations := observer.snapshot()
-	if len(observations) != 1 ||
-		observations[0].ReasonCode != ReasonUnsupportedClientInput ||
-		observations[0].ClientField != ClientFieldOutputConfigFormat {
-		t.Fatalf("Attempt observations = %+v", observations)
-	}
-}
-
-func TestPipelineClassifiesSecretAuthorityFailuresSeparatelyFromTransport(
-	t *testing.T,
-) {
-	t.Parallel()
-
-	pipeline := &Pipeline{}
-	for _, cause := range []error{
-		secretstore.ErrNotFound,
-		secretstore.ErrLocked,
-		secretstore.ErrDenied,
-		secretstore.ErrUnavailable,
-	} {
-		failure := pipeline.classifyProviderError(
-			context.Background(),
-			"exchange-secret",
-			errors.Join(errors.New("authenticate provider"), cause),
-		)
-		if failure.Code != ReasonProviderCredentialUnavailable {
-			t.Fatalf("classifyProviderError(%v) = %s", cause, failure.Code)
-		}
-	}
-	transportFailure := pipeline.classifyProviderError(
-		context.Background(),
-		"exchange-transport",
-		errors.New("dial provider"),
-	)
-	if transportFailure.Code != ReasonProviderTransportFailed {
-		t.Fatalf("transport failure code = %s", transportFailure.Code)
-	}
-}
-
-func TestPipelineDoesNotRetryAfterClientVisibleSemantics(t *testing.T) {
-	t.Parallel()
-
-	accessID := mustAccessID(t, "access-commit-barrier")
-	snapshot := compileTestSnapshot(t, accessID, 1, "gpt-commit-barrier")
-	body := &scriptedReader{
-		first: firstTextProviderEvent(t, "gpt-commit-barrier"),
-		err:   temporaryNetworkError{},
-	}
-	provider := &providerDouble{results: []providerResult{{
-		response: streamResponse(http.StatusOK, body),
-	}}}
-	pipeline := newTestPipeline(
-		t,
-		&resolverDouble{snapshots: []access.AccessPlanSnapshot{snapshot}},
-		provider,
-		&decisionDouble{decision: ToolDecision{Outcome: ToolDecisionApproved}},
-	)
-	t.Cleanup(func() { shutdownPipeline(t, pipeline) })
-	downstream := &downstreamRecorder{}
-
-	result, err := pipeline.Execute(
-		context.Background(),
-		mustClientRequest(
-			t,
-			"exchange-commit-barrier",
-			accessID,
-			streamingClientRequest(),
-			ReplayGenerationCostOnly,
-		),
-		downstream,
-	)
-	if ReasonOf(err) != ReasonProviderTransportFailed {
-		t.Fatalf("Execute() error = %v", err)
-	}
-	if provider.callCount() != 1 ||
-		result.TransportResends != 0 ||
-		result.Ledger.DownstreamSemanticBytes == 0 ||
-		!result.Ledger.DownstreamFailure ||
-		result.Ledger.DownstreamTerminal {
-		t.Fatalf("result = %+v; provider calls=%d", result, provider.callCount())
-	}
-}
-
-func TestPipelineResponsesDoesNotRetryAfterClientVisibleSemantics(
-	t *testing.T,
-) {
-	t.Parallel()
-
-	accessID := mustAccessID(t, "access-responses-commit-barrier")
-	snapshot := compileResponsesTestSnapshot(
-		t,
-		accessID,
-		1,
-		"gpt-responses-commit-barrier",
-	)
-	body := &scriptedReader{
-		first: firstTextProviderEvent(t, "gpt-responses-commit-barrier"),
-		err:   temporaryNetworkError{},
-	}
-	provider := &providerDouble{results: []providerResult{{
-		response: streamResponse(http.StatusOK, body),
-	}}}
-	pipeline := newTestPipeline(
-		t,
-		&resolverDouble{snapshots: []access.AccessPlanSnapshot{snapshot}},
-		provider,
-		&decisionDouble{decision: ToolDecision{Outcome: ToolDecisionApproved}},
-	)
-	t.Cleanup(func() { shutdownPipeline(t, pipeline) })
-	request, err := NewClientRequest(
-		"exchange-responses-commit-barrier",
-		snapshot.IngressBinding(),
-		mustResponsesOperationEvidence(t),
-		streamingResponsesClientRequest(),
-		ReplayGenerationCostOnly,
-		access.ApplicationProtocolHTTP1,
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	downstream := &downstreamRecorder{}
-	result, err := pipeline.Execute(
-		context.Background(),
-		request,
-		downstream,
-	)
-	if ReasonOf(err) != ReasonProviderTransportFailed {
-		t.Fatalf("Execute() error = %v", err)
-	}
-	if provider.callCount() != 1 ||
-		result.TransportResends != 0 ||
-		result.Ledger.DownstreamSemanticBytes == 0 ||
-		!result.Ledger.DownstreamFailure ||
-		result.Ledger.DownstreamTerminal ||
-		!bytes.Contains(
-			downstream.bytesSnapshot(),
-			[]byte(`"type":"response.output_text.delta"`),
-		) {
-		t.Fatalf(
-			"result = %+v; provider calls=%d downstream=%s",
-			result,
-			provider.callCount(),
-			downstream.bytesSnapshot(),
-		)
-	}
-}
-
-func TestPipelineToolDecisionBarrierRejectsWithoutToolOrTerminalLeak(t *testing.T) {
-	t.Parallel()
-
-	accessID := mustAccessID(t, "access-tool-reject")
-	snapshot := compileTestSnapshot(t, accessID, 1, "gpt-tool")
-	decisions := &decisionDouble{decision: ToolDecision{
-		Outcome:    ToolDecisionRejected,
-		ReasonCode: "approval_required",
-	}}
-	provider := &providerDouble{results: []providerResult{{
-		response: streamResponse(http.StatusOK, toolProviderStream(t, "gpt-tool")),
-	}}}
-	pipeline := newTestPipeline(
-		t,
-		&resolverDouble{snapshots: []access.AccessPlanSnapshot{snapshot}},
-		provider,
-		decisions,
-	)
-	t.Cleanup(func() { shutdownPipeline(t, pipeline) })
-	downstream := &downstreamRecorder{}
-
-	result, err := pipeline.Execute(
-		context.Background(),
-		mustClientRequest(
-			t,
-			"exchange-tool-reject",
-			accessID,
-			streamingToolClientRequest(),
-			ReplayGenerationCostOnly,
-		),
-		downstream,
-	)
-	if ReasonOf(err) != ReasonToolDecisionRejected {
-		t.Fatalf("Execute() error = %v", err)
-	}
-	if decisions.callCount() != 1 {
-		t.Fatalf("decision calls = %d, want 1", decisions.callCount())
-	}
-	intents := decisions.lastRequest().ToolIntents()
-	if len(intents) != 1 ||
-		intents[0].Call.Key.WireID() != "call-hidden" ||
-		string(intents[0].Call.Arguments.Bytes()) != `{"cmd":"pwd"}` {
-		t.Fatalf("decision intents = %#v", intents)
-	}
-	wire := downstream.bytesSnapshot()
-	for _, forbidden := range [][]byte{
-		[]byte("call-hidden"),
-		[]byte(`"name":"shell"`),
-		[]byte(`"partial_json"`),
-		[]byte(`"message_stop"`),
-	} {
-		if bytes.Contains(wire, forbidden) {
-			t.Fatalf("rejected stream leaked %q: %s", forbidden, wire)
-		}
-	}
-	if len(result.Ledger.DownstreamToolKeys()) != 0 ||
-		result.Ledger.DownstreamTerminal ||
-		!result.Ledger.DownstreamFailure ||
-		result.Outcome != AttemptAborted {
-		t.Fatalf("result = %+v", result)
-	}
-}
-
-func TestPipelineResponsesToolDecisionBarrierRejectsWithoutToolOrTerminalLeak(
-	t *testing.T,
-) {
-	t.Parallel()
-
-	accessID := mustAccessID(t, "access-responses-tool-reject")
-	snapshot := compileResponsesTestSnapshot(t, accessID, 1, "gpt-responses-tool")
-	decisions := &decisionDouble{decision: ToolDecision{
-		Outcome:    ToolDecisionRejected,
-		ReasonCode: "approval_required",
-	}}
-	provider := &providerDouble{results: []providerResult{{
-		response: streamResponse(
+		response: jsonResponse(
 			http.StatusOK,
-			toolProviderStream(t, "gpt-responses-tool"),
+			completeResponsesProviderResponse(mappedModel),
 		),
 	}}}
-	pipeline := newTestPipeline(
+	content := &contentObserverDouble{}
+	pipeline := newTestPipelineWithContentObserver(
 		t,
-		&resolverDouble{snapshots: []access.AccessPlanSnapshot{snapshot}},
+		authority,
 		provider,
-		decisions,
+		approvedDecisions(),
+		&attemptObserverDouble{},
+		content,
 	)
-	t.Cleanup(func() { shutdownPipeline(t, pipeline) })
-	request, err := NewClientRequest(
-		"exchange-responses-tool-reject",
-		snapshot.IngressBinding(),
-		mustResponsesOperationEvidence(t),
-		streamingResponsesToolClientRequest(),
-		ReplayGenerationCostOnly,
-		access.ApplicationProtocolHTTP1,
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
+	defer shutdownPipeline(t, pipeline)
+
 	downstream := &downstreamRecorder{}
 	result, err := pipeline.Execute(
 		context.Background(),
-		request,
-		downstream,
-	)
-	if ReasonOf(err) != ReasonToolDecisionRejected ||
-		decisions.callCount() != 1 ||
-		result.Outcome != AttemptAborted ||
-		result.Ledger.DownstreamTerminal ||
-		!result.Ledger.DownstreamFailure ||
-		len(result.Ledger.DownstreamToolKeys()) != 0 {
-		t.Fatalf(
-			"Execute() result=%+v error=%v decisions=%d",
-			result,
-			err,
-			decisions.callCount(),
-		)
-	}
-	wire := downstream.bytesSnapshot()
-	for _, forbidden := range [][]byte{
-		[]byte("call-hidden"),
-		[]byte(`"type":"response.function_call_arguments.delta"`),
-		[]byte(`"type":"response.output_item.done"`),
-		[]byte(`"type":"response.completed"`),
-	} {
-		if bytes.Contains(wire, forbidden) {
-			t.Fatalf("rejected Responses stream leaked %q: %s", forbidden, wire)
-		}
-	}
-}
-
-func TestPipelineToolDecisionApprovalReleasesCompleteToolThenTerminal(t *testing.T) {
-	t.Parallel()
-
-	accessID := mustAccessID(t, "access-tool-approve")
-	snapshot := compileTestSnapshot(t, accessID, 1, "gpt-tool")
-	provider := &providerDouble{results: []providerResult{{
-		response: streamResponse(http.StatusOK, toolProviderStream(t, "gpt-tool")),
-	}}}
-	pipeline := newTestPipeline(
-		t,
-		&resolverDouble{snapshots: []access.AccessPlanSnapshot{snapshot}},
-		provider,
-		&decisionDouble{decision: ToolDecision{Outcome: ToolDecisionApproved}},
-	)
-	t.Cleanup(func() { shutdownPipeline(t, pipeline) })
-	downstream := &downstreamRecorder{}
-
-	result, err := pipeline.Execute(
-		context.Background(),
-		mustClientRequest(
+		mustClientRequestWithHTTPProtocol(
 			t,
-			"exchange-tool-approve",
-			accessID,
-			streamingToolClientRequest(),
-			ReplayGenerationCostOnly,
+			"exchange-responses-loopback-h2",
+			plan,
+			completeResponsesClientRequest(),
+			wireprofile.ApplicationProtocolHTTP2,
 		),
 		downstream,
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	wire := downstream.bytesSnapshot()
-	if !bytes.Contains(wire, []byte("call-hidden")) ||
-		!bytes.Contains(wire, []byte(`"partial_json":"{\"cmd\":\"pwd\"}"`)) ||
-		!bytes.Contains(wire, []byte(`"message_stop"`)) {
-		t.Fatalf("approved stream is incomplete: %s", wire)
+	requests := provider.requestsSnapshot()
+	if result.Outcome != AttemptSucceeded || len(requests) != 1 ||
+		requests[0].RelativePath() != responseschat.ResponsesProviderRelativePath ||
+		result.Presentation.ClientProtocol != wireprofile.ApplicationProtocolHTTP2 ||
+		result.Presentation.UpstreamProtocol != wireprofile.ApplicationProtocolHTTP1 {
+		t.Fatalf("result = %+v, requests = %+v", result, requests)
 	}
-	if !slices.Equal(
-		result.Ledger.DownstreamToolKeys(),
-		[]string{anthropicchat.CallNamespace + ":call-hidden"},
-	) || !result.Ledger.DownstreamTerminal {
-		t.Fatalf("result = %+v", result)
+	var clientBody struct {
+		Model string `json:"model"`
+	}
+	if err := json.Unmarshal(downstream.bytesSnapshot(), &clientBody); err != nil {
+		t.Fatal(err)
+	}
+	if clientBody.Model != "codex-client-alias" {
+		t.Fatalf("client response model = %q", clientBody.Model)
+	}
+	observation, ok := content.latest()
+	if !ok || observation.Response == nil ||
+		observation.Response.RequestedModel != "codex-client-alias" ||
+		observation.Response.EffectiveModel != mappedModel ||
+		observation.Response.ReportedModel != mappedModel {
+		t.Fatalf("content observation = %+v", observation)
 	}
 }
 
-func TestPipelineShutdownCancelsAndDrainsActiveExchange(t *testing.T) {
-	t.Parallel()
-
-	accessID := mustAccessID(t, "access-shutdown")
-	snapshot := compileTestSnapshot(t, accessID, 1, "gpt-shutdown")
-	provider := &blockingProvider{
-		started: make(chan struct{}),
-	}
+func TestManagedResponsesStartGroupsExactCodexSessionBeforeTerminal(t *testing.T) {
+	plan := mustEnvironmentRequestPlan(t, testPlanOptions{
+		clientProtocol: environment.ClientProtocolOpenAIResponses,
+		destination:    environment.DestinationKindUpstream,
+		providerOrigin: "https://provider.example/v1",
+		backend:        protocolspec.DialectOpenAIResponses,
+		modelMode:      environment.ModelModeMap,
+		mappedModel:    "provider-model",
+		accounts:       []testAccount{{id: "account.primary", revision: 1, epoch: 1}},
+		preferred:      "account.primary",
+	})
+	provider := &providerDouble{results: []providerResult{
+		{response: jsonResponse(http.StatusOK, completeResponsesProviderResponse("provider-model"))},
+		{response: jsonResponse(http.StatusOK, completeResponsesProviderResponse("provider-model"))},
+		{response: jsonResponse(http.StatusOK, completeResponsesProviderResponse("provider-model"))},
+	}}
+	observer := &attemptObserverDouble{}
 	pipeline := newTestPipeline(
 		t,
-		&resolverDouble{snapshots: []access.AccessPlanSnapshot{snapshot}},
+		newAccountAuthority(t, testAccount{id: "account.primary", revision: 1, epoch: 1}),
 		provider,
-		&decisionDouble{decision: ToolDecision{Outcome: ToolDecisionApproved}},
+		approvedDecisions(),
+		observer,
 	)
-	resultChannel := make(chan error, 1)
-	go func() {
-		_, executeErr := pipeline.Execute(
+	defer shutdownPipeline(t, pipeline)
+	admission, err := captureadmission.NewManagedRun(
+		captureadmission.ManagedRunEvidence{
+			CaptureRunID: "capture-codex-session",
+			SourceLabel:  "codex",
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, test := range []struct {
+		exchangeID string
+		sessionID  string
+		threadID   string
+		turnID     string
+	}{
+		{exchangeID: "exchange-session-turn-1", sessionID: "session-1", threadID: "thread-1", turnID: "turn-1"},
+		{exchangeID: "exchange-session-turn-2", sessionID: "session-1", threadID: "thread-1", turnID: "turn-2"},
+		{exchangeID: "exchange-other-session", sessionID: "session-2", threadID: "thread-2", turnID: "turn-1"},
+	} {
+		result, err := pipeline.Execute(
 			context.Background(),
-			mustClientRequest(
+			mustClientRequestWithOptions(
 				t,
-				"exchange-shutdown",
-				accessID,
-				streamingClientRequest(),
-				ReplayGenerationCostOnly,
+				test.exchangeID,
+				plan,
+				responsesClientRequestWithIdentity(
+					test.sessionID,
+					test.threadID,
+					test.turnID,
+				),
+				WithIngressCorrelation(admission, "connection-codex-session"),
 			),
 			&downstreamRecorder{},
 		)
-		resultChannel <- executeErr
+		if err != nil || result.Outcome != AttemptSucceeded {
+			t.Fatalf("Execute(%s) = %+v, %v", test.exchangeID, result, err)
+		}
+	}
+
+	starts := observer.startSnapshot()
+	if len(starts) != 3 ||
+		starts[0].Conversation.Kind != agentconversation.KindMain ||
+		starts[0].Conversation.Evidence != agentconversation.EvidenceExplicitSession ||
+		starts[0].Conversation.ProjectionID != starts[1].Conversation.ProjectionID ||
+		starts[0].Conversation.ProjectionID == starts[2].Conversation.ProjectionID {
+		t.Fatalf("start Conversations = %#v", starts)
+	}
+}
+
+func TestManagedResponsesStreamingKeepsIncrementalClientSemantics(t *testing.T) {
+	plan := mustEnvironmentRequestPlan(t, testPlanOptions{
+		clientProtocol: environment.ClientProtocolOpenAIResponses,
+		destination:    environment.DestinationKindUpstream,
+		providerOrigin: "https://provider.example/v1",
+		backend:        protocolspec.DialectOpenAIChat,
+		modelMode:      environment.ModelModeMap,
+		mappedModel:    "gpt-provider",
+		accounts:       []testAccount{{id: "account.primary", revision: 1, epoch: 1}},
+		preferred:      "account.primary",
+	})
+	authority := newAccountAuthority(t, testAccount{id: "account.primary", revision: 1, epoch: 1})
+	provider := &providerDouble{results: []providerResult{{response: streamResponse(
+		http.StatusOK,
+		normalProviderStream(t, "gpt-provider"),
+	)}}}
+	pipeline := newTestPipeline(t, authority, provider, approvedDecisions(), &attemptObserverDouble{})
+	defer shutdownPipeline(t, pipeline)
+
+	downstream := &downstreamRecorder{}
+	result, err := pipeline.Execute(
+		context.Background(),
+		mustClientRequest(t, "exchange-responses-stream", plan, streamingResponsesClientRequest()),
+		downstream,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wire := downstream.bytesSnapshot()
+	if result.Outcome != AttemptSucceeded || result.Ledger.DownstreamSemanticWrites < 2 ||
+		!bytes.Contains(wire, []byte(`"type":"response.output_text.delta"`)) ||
+		!bytes.Contains(wire, []byte(`"type":"response.completed"`)) {
+		t.Fatalf("result=%+v stream=%s", result, wire)
+	}
+}
+
+func TestAccountSelectorChoosesOneFrozenEndpointAccount(t *testing.T) {
+	accounts := []testAccount{
+		{id: "account.backup", revision: 4, epoch: 5},
+		{id: "account.primary", revision: 2, epoch: 3},
+	}
+	plan := mustEnvironmentRequestPlan(t, testPlanOptions{
+		destination:    environment.DestinationKindUpstream,
+		providerOrigin: "https://provider.example/v1",
+		backend:        protocolspec.DialectOpenAIChat,
+		modelMode:      environment.ModelModeMap,
+		mappedModel:    "gpt-provider",
+		accounts:       accounts,
+		preferred:      "account.primary",
+		selector: &codelibrary.AccountSelectorRevision{
+			ID: "model-account", Revision: 2, CollectionID: "routing", DisplayName: "Model account",
+			Policy: accountselector.Policy{JavaScript: `
+selection.accountId = request.requestedModel === "claude-client-alias"
+  ? "account.backup"
+  : "account.primary";
+`},
+			PublishedAt: time.Date(2026, time.August, 28, 0, 0, 0, 0, time.UTC),
+		},
+	})
+	authority := newAccountAuthority(t, accounts...)
+	provider := &providerDouble{results: []providerResult{{
+		response: jsonResponse(http.StatusOK, completeProviderResponse("gpt-provider")),
+	}}}
+	pipeline := newTestPipeline(t, authority, provider, approvedDecisions(), &attemptObserverDouble{})
+	defer shutdownPipeline(t, pipeline)
+	result, err := pipeline.Execute(
+		context.Background(),
+		mustClientRequest(t, "exchange-account-selector", plan, completeClientRequest()),
+		&downstreamRecorder{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.AccountID != "account.backup" || result.AccountRevision != 4 || result.CredentialEpoch != 5 {
+		t.Fatalf("final account = %+v", result)
+	}
+	leaseRequests := authority.snapshot()
+	if len(leaseRequests) != 1 || leaseRequests[0].AccountID() != "account.backup" {
+		t.Fatalf("lease selection = %+v", leaseRequests)
+	}
+	providerRequests := provider.requestsSnapshot()
+	if len(providerRequests) != 1 {
+		t.Fatalf("provider attempts = %d", len(providerRequests))
+	}
+	for _, request := range providerRequests {
+		if request.Provenance().RouteID().String() != "route.primary" ||
+			request.Provenance().RouteRevision() != 6 {
+			t.Fatalf("attempt escaped frozen route = %+v", request.Provenance())
+		}
+	}
+}
+
+func TestAccountSelectorUsesFrozenRuntimeLoginUsername(t *testing.T) {
+	accounts := []testAccount{
+		{id: "account.alice", revision: 2, epoch: 3},
+		{id: "account.other", revision: 4, epoch: 5},
+	}
+	plan := mustEnvironmentRequestPlan(t, testPlanOptions{
+		destination:    environment.DestinationKindUpstream,
+		providerOrigin: "https://provider.example/v1",
+		backend:        protocolspec.DialectOpenAIChat,
+		modelMode:      environment.ModelModeMap,
+		mappedModel:    "gpt-provider", accounts: accounts,
+		selector: &codelibrary.AccountSelectorRevision{
+			ID: "login-account", Revision: 1, CollectionID: "routing", DisplayName: "Login account",
+			Policy: accountselector.Policy{JavaScript: `
+if (runtime.user.name !== "local-os-user") throw new Error("local user changed");
+selection.accountId = runtime.login.username === "alice"
+  ? "account.alice"
+  : "account.other";
+`},
+			PublishedAt: time.Date(2026, time.September, 1, 0, 0, 0, 0, time.UTC),
+		},
+	})
+	admission, err := captureadmission.NewManagedRun(captureadmission.ManagedRunEvidence{
+		CaptureRunID: "capture-login-account", SourceLabel: "claude",
+		RuntimeUsername: "alice",
+		Runtime:         captureadmission.ManagedRuntimeMetadata{LocalUserName: "local-os-user"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	authority := newAccountAuthority(t, accounts...)
+	provider := &providerDouble{results: []providerResult{{
+		response: jsonResponse(http.StatusOK, completeProviderResponse("gpt-provider")),
+	}}}
+	pipeline := newTestPipeline(t, authority, provider, approvedDecisions(), &attemptObserverDouble{})
+	defer shutdownPipeline(t, pipeline)
+	result, err := pipeline.Execute(
+		context.Background(),
+		mustClientRequestWithOptions(
+			t, "exchange-login-account", plan, completeClientRequest(),
+			WithIngressCorrelation(admission, "connection-login-account"),
+		),
+		&downstreamRecorder{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.AccountID != "account.alice" {
+		t.Fatalf("selected Account = %q, want account.alice", result.AccountID)
+	}
+}
+
+func TestManagedAuthenticationRejectionNeverSelectsAnotherAccount(t *testing.T) {
+	t.Parallel()
+	for _, status := range []int{http.StatusUnauthorized, http.StatusForbidden} {
+		status := status
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			t.Parallel()
+			accounts := []testAccount{
+				{id: "account.primary", revision: 2, epoch: 3},
+				{id: "account.backup", revision: 4, epoch: 5},
+			}
+			plan := mustEnvironmentRequestPlan(t, testPlanOptions{
+				destination: environment.DestinationKindUpstream, providerOrigin: "https://provider.example/v1",
+				backend: protocolspec.DialectOpenAIChat, modelMode: environment.ModelModeMap,
+				mappedModel: "gpt-provider", accounts: accounts,
+				preferred: "account.primary",
+			})
+			authority := newAccountAuthority(t, accounts...)
+			provider := &providerDouble{results: []providerResult{
+				{response: jsonResponse(status, []byte(`{"error":{"type":"authentication_error"}}`))},
+				{response: jsonResponse(http.StatusOK, completeProviderResponse("gpt-provider"))},
+			}}
+			pipeline := newTestPipeline(
+				t, authority, provider, approvedDecisions(), &attemptObserverDouble{},
+			)
+			defer shutdownPipeline(t, pipeline)
+
+			_, err := pipeline.Execute(
+				context.Background(),
+				mustClientRequest(t, "exchange-auth-rejected", plan, completeClientRequest()),
+				&downstreamRecorder{},
+			)
+			var failure *Failure
+			if !errors.As(err, &failure) ||
+				failure.Code != ReasonProviderStatusRejected ||
+				failure.ProviderStatus != status {
+				t.Fatalf("authentication rejection = %v", err)
+			}
+			if got := provider.requestsSnapshot(); len(got) != 1 {
+				t.Fatalf("provider attempts = %d, want 1", len(got))
+			}
+			if got := authority.snapshot(); len(got) != 1 ||
+				got[0].AccountID() != "account.primary" {
+				t.Fatalf("account lease requests = %+v", got)
+			}
+			if authority.releaseCount("account.primary") != 1 ||
+				authority.releaseCount("account.backup") != 0 {
+				t.Fatal("authentication rejection crossed the frozen account boundary")
+			}
+		})
+	}
+}
+
+func TestAccountSelectorFailureSendsNothing(t *testing.T) {
+	accounts := []testAccount{{id: "account.only", revision: 2, epoch: 3}}
+	plan := mustEnvironmentRequestPlan(t, testPlanOptions{
+		destination:    environment.DestinationKindUpstream,
+		providerOrigin: "https://provider.example/v1",
+		backend:        protocolspec.DialectOpenAIChat,
+		modelMode:      environment.ModelModeMap,
+		mappedModel:    "gpt-provider",
+		accounts:       accounts,
+		selector: &codelibrary.AccountSelectorRevision{
+			ID: "reject", Revision: 1, CollectionID: "routing", DisplayName: "Reject",
+			Policy:      accountselector.Policy{JavaScript: `selection.accountId = "account.outside";`},
+			PublishedAt: time.Date(2026, time.August, 28, 0, 0, 0, 0, time.UTC),
+		},
+	})
+	authority := newAccountAuthority(t, accounts...)
+	provider := &providerDouble{}
+	pipeline := newTestPipeline(t, authority, provider, approvedDecisions(), &attemptObserverDouble{})
+	defer shutdownPipeline(t, pipeline)
+
+	_, err := pipeline.Execute(
+		context.Background(),
+		mustClientRequest(t, "exchange-selector-failed", plan, completeClientRequest()),
+		&downstreamRecorder{},
+	)
+	if ReasonOf(err) != ReasonAccountSelectorFailed {
+		t.Fatalf("selector failure = %v", err)
+	}
+	if len(authority.snapshot()) != 0 || provider.callCount() != 0 {
+		t.Fatal("failed selector acquired credentials or sent provider traffic")
+	}
+}
+
+func TestToolDecisionRejectsBeforeAnyToolBytesReachClient(t *testing.T) {
+	plan := mustEnvironmentRequestPlan(t, testPlanOptions{
+		destination:    environment.DestinationKindUpstream,
+		providerOrigin: "https://provider.example/v1",
+		backend:        protocolspec.DialectOpenAIChat,
+		modelMode:      environment.ModelModeMap,
+		mappedModel:    "gpt-provider",
+		accounts:       []testAccount{{id: "account.primary", revision: 1, epoch: 1}},
+		preferred:      "account.primary",
+	})
+	authority := newAccountAuthority(t, testAccount{id: "account.primary", revision: 1, epoch: 1})
+	provider := &providerDouble{results: []providerResult{{response: jsonResponse(
+		http.StatusOK,
+		completeToolProviderResponse("gpt-provider"),
+	)}}}
+	decisions := &decisionDouble{decision: ToolDecision{Outcome: ToolDecisionRejected, ReasonCode: "user_rejected"}}
+	pipeline := newTestPipeline(t, authority, provider, decisions, &attemptObserverDouble{})
+	defer shutdownPipeline(t, pipeline)
+	downstream := &downstreamRecorder{}
+	result, err := pipeline.Execute(
+		context.Background(),
+		mustClientRequest(t, "exchange-tool-reject", plan, toolClientRequest()),
+		downstream,
+	)
+	if ReasonOf(err) != ReasonToolDecisionRejected || result.Outcome != AttemptAborted ||
+		len(downstream.bytesSnapshot()) != 0 || decisions.callCount() != 1 {
+		t.Fatalf("result=%+v err=%v body=%s decisions=%d", result, err, downstream.bytesSnapshot(), decisions.callCount())
+	}
+	decision := decisions.lastRequest()
+	if decision.EnvironmentID().String() != "environment.test" || decision.RouteID().String() != "route.primary" {
+		t.Fatalf("tool decision authority = %+v", decision)
+	}
+}
+
+func TestToolDecisionExpiryHasDistinctReasonAndNeverReleasesBytes(t *testing.T) {
+	plan := mustEnvironmentRequestPlan(t, testPlanOptions{
+		destination:    environment.DestinationKindUpstream,
+		providerOrigin: "https://provider.example/v1",
+		backend:        protocolspec.DialectOpenAIChat,
+		modelMode:      environment.ModelModeMap,
+		mappedModel:    "gpt-provider",
+		accounts:       []testAccount{{id: "account.primary", revision: 1, epoch: 1}},
+		preferred:      "account.primary",
+	})
+	authority := newAccountAuthority(t, testAccount{id: "account.primary", revision: 1, epoch: 1})
+	provider := &providerDouble{results: []providerResult{{response: jsonResponse(
+		http.StatusOK,
+		completeToolProviderResponse("gpt-provider"),
+	)}}}
+	decisions := &decisionDouble{decision: ToolDecision{Outcome: ToolDecisionRejected, ReasonCode: "approval_expired"}}
+	pipeline := newTestPipeline(t, authority, provider, decisions, &attemptObserverDouble{})
+	defer shutdownPipeline(t, pipeline)
+	downstream := &downstreamRecorder{}
+	result, err := pipeline.Execute(
+		context.Background(),
+		mustClientRequest(t, "exchange-tool-expired", plan, toolClientRequest()),
+		downstream,
+	)
+	if ReasonOf(err) != ReasonToolDecisionExpired || result.Outcome != AttemptAborted ||
+		len(downstream.bytesSnapshot()) != 0 || decisions.callCount() != 1 {
+		t.Fatalf("result=%+v err=%v body=%s decisions=%d", result, err, downstream.bytesSnapshot(), decisions.callCount())
+	}
+}
+
+func TestStreamingToolDecisionKeepsTheClientAliveUntilApproval(t *testing.T) {
+	plan := mustEnvironmentRequestPlan(t, testPlanOptions{
+		destination:    environment.DestinationKindUpstream,
+		providerOrigin: "https://provider.example/v1",
+		backend:        protocolspec.DialectOpenAIChat,
+		modelMode:      environment.ModelModeMap,
+		mappedModel:    "gpt-provider",
+		accounts:       []testAccount{{id: "account.primary", revision: 1, epoch: 1}},
+		preferred:      "account.primary",
+	})
+	authority := newAccountAuthority(t, testAccount{id: "account.primary", revision: 1, epoch: 1})
+	provider := &providerDouble{results: []providerResult{{response: streamResponse(
+		http.StatusOK,
+		streamingToolProviderResponse(t, "gpt-provider"),
+	)}}}
+	decisions := newBlockingDecisionDouble()
+	pipeline := newTestPipeline(t, authority, provider, decisions, &attemptObserverDouble{})
+	pipeline.streamBudgets = StreamBudgets{
+		KeepaliveInterval:       10 * time.Millisecond,
+		ProviderProgressTimeout: time.Second,
+	}
+	defer shutdownPipeline(t, pipeline)
+	downstream := &downstreamRecorder{}
+	completed := make(chan error, 1)
+	go func() {
+		_, err := pipeline.Execute(
+			context.Background(),
+			mustClientRequest(t, "exchange-stream-tool-approval", plan, streamingToolClientRequest()),
+			downstream,
+		)
+		completed <- err
+	}()
+	select {
+	case <-decisions.entered:
+	case err := <-completed:
+		t.Fatalf("stream completed before requesting tool approval: %v", err)
+	case <-time.After(time.Second):
+		t.Fatal("tool decision was not requested")
+	}
+	deadline := time.Now().Add(time.Second)
+	for downstream.keepaliveCount() < 2 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if got := downstream.keepaliveCount(); got < 2 {
+		t.Fatalf("keepalives while awaiting approval = %d, want at least 2", got)
+	}
+	close(decisions.approve)
+	select {
+	case err := <-completed:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("approved streaming tool response did not complete")
+	}
+	if !bytes.Contains(downstream.bytesSnapshot(), []byte("call-shell")) {
+		t.Fatalf("approved tool response was not released: %s", downstream.bytesSnapshot())
+	}
+}
+
+func TestOperationEvidenceMismatchFailsBeforeAccountOrProvider(t *testing.T) {
+	plan := mustEnvironmentRequestPlan(t, testPlanOptions{
+		destination: environment.DestinationKindUpstream, providerOrigin: "https://provider.example/v1",
+		backend: protocolspec.DialectOpenAIChat, modelMode: environment.ModelModeMap, mappedModel: "gpt-provider",
+		accounts: []testAccount{{id: "account.primary", revision: 1, epoch: 1}}, preferred: "account.primary",
+	})
+	wrongID, err := protocolspec.NewClientOperationID(operationcatalog.AnthropicMessagesCountTokensID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wrongEvidence, err := NewClientOperationEvidence(wrongID, 1, http.MethodPost, "/v1/messages", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, err := NewClientRequest(
+		"exchange-wrong-operation", plan, wrongEvidence, completeClientRequest(),
+		ReplayGenerationCostOnly, wireprofile.ApplicationProtocolHTTP1,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	authority := newAccountAuthority(t, testAccount{id: "account.primary", revision: 1, epoch: 1})
+	provider := &providerDouble{}
+	pipeline := newTestPipeline(t, authority, provider, approvedDecisions(), &attemptObserverDouble{})
+	defer shutdownPipeline(t, pipeline)
+	_, err = pipeline.Execute(context.Background(), request, &downstreamRecorder{})
+	if ReasonOf(err) != ReasonEnvironmentPlanInvalid || len(authority.snapshot()) != 0 || provider.callCount() != 0 {
+		t.Fatalf("err=%v leases=%d provider=%d", err, len(authority.snapshot()), provider.callCount())
+	}
+}
+
+func TestShutdownCancelsAndDrainsActiveFrozenRequest(t *testing.T) {
+	plan := mustEnvironmentRequestPlan(t, testPlanOptions{
+		destination: environment.DestinationKindUpstream, providerOrigin: "https://provider.example/v1",
+		backend: protocolspec.DialectOpenAIChat, modelMode: environment.ModelModeMap, mappedModel: "gpt-provider",
+		accounts: []testAccount{{id: "account.primary", revision: 1, epoch: 1}}, preferred: "account.primary",
+	})
+	authority := newAccountAuthority(t, testAccount{id: "account.primary", revision: 1, epoch: 1})
+	provider := &blockingProvider{started: make(chan struct{})}
+	pipeline := newTestPipeline(t, authority, provider, approvedDecisions(), &attemptObserverDouble{})
+	done := make(chan error, 1)
+	go func() {
+		_, err := pipeline.Execute(
+			context.Background(),
+			mustClientRequest(t, "exchange-shutdown", plan, completeClientRequest()),
+			&downstreamRecorder{},
+		)
+		done <- err
 	}()
 	select {
 	case <-provider.started:
 	case <-time.After(time.Second):
 		t.Fatal("provider did not start")
 	}
-	shutdownContext, cancel := context.WithTimeout(context.Background(), time.Second)
+	pipeline.BeginShutdown()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	if err := pipeline.Shutdown(shutdownContext); err != nil {
-		t.Fatalf("Shutdown() error = %v", err)
+	if err := pipeline.Drain(ctx); err != nil {
+		t.Fatal(err)
 	}
-	select {
-	case err := <-resultChannel:
-		if ReasonOf(err) != ReasonExchangeCanceled {
-			t.Fatalf("Execute() after shutdown = %v", err)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("active Exchange did not drain")
+	if err := <-done; ReasonOf(err) != ReasonExchangeRuntimeStopping {
+		t.Fatalf("active request error = %v", err)
 	}
-	_, err := pipeline.Execute(
+	if authority.releaseCount("account.primary") != 1 {
+		t.Fatal("shutdown did not release the account lease")
+	}
+	if _, err := pipeline.Execute(
 		context.Background(),
-		mustClientRequest(
-			t,
-			"exchange-after-shutdown",
-			accessID,
-			completeClientRequest(),
-			ReplayGenerationCostOnly,
-		),
+		mustClientRequest(t, "exchange-after-shutdown", plan, completeClientRequest()),
 		&downstreamRecorder{},
-	)
-	if ReasonOf(err) != ReasonExchangeRuntimeStopping {
-		t.Fatalf("new Execute() after shutdown = %v", err)
+	); ReasonOf(err) != ReasonExchangeRuntimeStopping {
+		t.Fatalf("post-shutdown error = %v", err)
 	}
 }
 
-func TestPipelineResponsesShutdownCancelsAndDrainsActiveExchange(
-	t *testing.T,
-) {
-	t.Parallel()
-
-	accessID := mustAccessID(t, "access-responses-shutdown")
-	snapshot := compileResponsesTestSnapshot(
-		t,
-		accessID,
-		1,
-		"gpt-responses-shutdown",
-	)
-	provider := &blockingProvider{started: make(chan struct{})}
-	pipeline := newTestPipeline(
-		t,
-		&resolverDouble{snapshots: []access.AccessPlanSnapshot{snapshot}},
-		provider,
-		&decisionDouble{decision: ToolDecision{Outcome: ToolDecisionApproved}},
-	)
-	request, err := NewClientRequest(
-		"exchange-responses-shutdown",
-		snapshot.IngressBinding(),
-		mustResponsesOperationEvidence(t),
-		streamingResponsesClientRequest(),
-		ReplayGenerationCostOnly,
-		access.ApplicationProtocolHTTP1,
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	resultChannel := make(chan error, 1)
-	go func() {
-		_, executeErr := pipeline.Execute(
-			context.Background(),
-			request,
-			&downstreamRecorder{},
-		)
-		resultChannel <- executeErr
-	}()
-	select {
-	case <-provider.started:
-	case <-time.After(time.Second):
-		t.Fatal("Responses provider did not start")
-	}
-	shutdownContext, cancel := context.WithTimeout(
-		context.Background(),
-		time.Second,
-	)
-	defer cancel()
-	if err := pipeline.Shutdown(shutdownContext); err != nil {
-		t.Fatalf("Shutdown() error = %v", err)
-	}
-	select {
-	case executeErr := <-resultChannel:
-		if ReasonOf(executeErr) != ReasonExchangeCanceled {
-			t.Fatalf("Execute() after shutdown = %v", executeErr)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("active Responses Exchange did not drain")
-	}
-	_, err = pipeline.Execute(
-		context.Background(),
-		request,
-		&downstreamRecorder{},
-	)
-	if ReasonOf(err) != ReasonExchangeRuntimeStopping {
-		t.Fatalf("new Responses Execute() after shutdown = %v", err)
-	}
+type testPlanOptions struct {
+	clientProtocol     environment.ClientProtocol
+	downstreamProtocol wireprofile.ApplicationProtocol
+	destination        environment.DestinationKind
+	providerOrigin     string
+	backend            protocolspec.Dialect
+	modelMode          environment.ModelMode
+	mappedModel        string
+	modelMappings      []environment.ModelMapping
+	accounts           []testAccount
+	preferred          string
+	selector           *codelibrary.AccountSelectorRevision
+	recording          environment.ContentRecordingPolicy
+	transform          messagetransform.Policy
 }
 
-func TestPipelinePlannedHoldResumesThroughGatedProviderClient(t *testing.T) {
-	t.Parallel()
+type testAccount struct {
+	id       string
+	revision environment.Revision
+	epoch    uint64
+}
 
-	gate, err := offlinehold.New(offlinehold.DefaultConfig())
+type testAccountCatalog map[string]environment.AccountDescriptor
+
+func (catalog testAccountCatalog) LookupAccount(id string) (environment.AccountDescriptor, bool) {
+	account, ok := catalog[id]
+	return account, ok
+}
+
+func mustEnvironmentRequestPlan(t *testing.T, options testPlanOptions) environment.RequestPlan {
+	t.Helper()
+	clientProtocol := options.clientProtocol
+	if clientProtocol == "" {
+		clientProtocol = environment.ClientProtocolAnthropicMessages
+	}
+	clientOriginValue := "https://api.anthropic.com"
+	requestPath := "/v1/messages"
+	if clientProtocol == environment.ClientProtocolOpenAIResponses {
+		clientOriginValue = "https://api.openai.com"
+		requestPath = "/v1/responses"
+	}
+	clientOrigin := mustClientOrigin(t, clientOriginValue)
+	realm := "realm.provider"
+	accountPolicy := environment.RouteAccountPolicy{
+		Revision: 5, Mode: environment.AccountSelectionFixed,
+	}
+	catalog := make(testAccountCatalog, len(options.accounts))
+	for _, account := range options.accounts {
+		catalog[account.id] = environment.AccountDescriptor{
+			ID: account.id, Revision: account.revision, DisplayName: account.id,
+			UpstreamEndpointID: "target.primary", UpstreamEndpointRevision: 3,
+			RealmID: realm, Active: true,
+			BackendProtocols: []string{string(options.backend)},
+		}
+	}
+	if options.selector != nil {
+		selector := *options.selector
+		accountPolicy.Mode = environment.AccountSelectionJavaScript
+		accountPolicy.Selector = &selector
+		for _, account := range options.accounts {
+			accountPolicy.Accounts = append(accountPolicy.Accounts, environment.RouteAccountReference{
+				ID: account.id, Revision: account.revision, DisplayName: account.id,
+			})
+		}
+	} else if options.preferred != "" {
+		accountPolicy.FixedAccountID = options.preferred
+		for _, account := range options.accounts {
+			if account.id == options.preferred {
+				accountPolicy.Accounts = []environment.RouteAccountReference{{
+					ID: account.id, Revision: account.revision, DisplayName: account.id,
+				}}
+				break
+			}
+		}
+	}
+	recording := options.recording
+	if recording.Mode == "" {
+		recording = environment.DefaultContentRecordingPolicy()
+	}
+	modelPolicy := environment.ModelPolicy{Revision: 4, Mode: options.modelMode}
+	if options.modelMode == environment.ModelModeMap {
+		if len(options.modelMappings) != 0 {
+			modelPolicy.Mappings = slices.Clone(options.modelMappings)
+		} else {
+			requestedModel := "claude-client-alias"
+			if clientProtocol == environment.ClientProtocolOpenAIResponses {
+				requestedModel = "codex-client-alias"
+			}
+			modelPolicy.Mappings = []environment.ModelMapping{{
+				RequestedModel: requestedModel,
+				UpstreamModel:  options.mappedModel,
+			}}
+		}
+	}
+	destination := environment.DestinationPlan{Kind: options.destination}
+	if options.destination == environment.DestinationKindUpstream {
+		providerOrigin := mustProviderOrigin(t, options.providerOrigin)
+		destination.Upstream = &environment.UpstreamPlan{
+			DefaultRouteID: "route.primary",
+			RouteSet: environment.RouteSet{
+				ID: "routes.primary", Revision: 4,
+				CandidateRouteIDs: []environment.UpstreamRouteID{"route.primary"},
+			},
+			Routes: []environment.UpstreamRoute{{
+				ID: "route.primary", Revision: 6,
+				ProviderTarget: environment.ProviderTarget{
+					ID: "target.primary", Revision: 3,
+					Origin: providerOrigin, RealmID: realm,
+					Capabilities: []protocolspec.ProviderCapability{
+						protocolspec.ProviderCapabilityMessages,
+						protocolspec.ProviderCapabilityStreaming,
+						protocolspec.ProviderCapabilityToolCalls,
+					},
+				},
+				BackendProtocol: string(options.backend), AccountPolicy: accountPolicy,
+				ModelPolicy:    modelPolicy,
+				WireProfileRef: wireprofile.UpstreamWireProfileFollowClientValue,
+			}},
+		}
+	}
+	var transforms []codelibrary.TransformRevision
+	if options.transform.Enabled() {
+		transforms = []codelibrary.TransformRevision{{
+			ID: "transform.test", Revision: 1, CollectionID: "tests",
+			DisplayName: "Test Transform", Policy: options.transform,
+			PublishedAt: time.Date(2026, time.August, 27, 0, 0, 0, 0, time.UTC),
+		}}
+	}
+	aggregate := environment.Environment{
+		ID: "environment.test", Name: "Test", State: environment.StateActive, Revision: 9,
+		ContentRecording: recording,
+		ClientEndpoints: []environment.ClientEndpoint{{
+			ID: "endpoint.anthropic", Revision: 7, ClientOrigin: clientOrigin,
+			ProtocolPlans: []environment.ClientProtocolPlan{{
+				ID: "protocol.anthropic", Revision: 8,
+				ClientProtocol:      clientProtocol,
+				ClientAdapterPolicy: environment.ClientAdapterPolicy{ID: "adapter.anthropic", Revision: 2},
+				Destination:         destination,
+				EgressProfile:       egressprofile.Direct(),
+				Transforms:          transforms,
+			}},
+		}},
+	}
+	compiler := mustEnvironmentCompiler(t, catalog)
+	snapshot, err := compiler.Compile(aggregate)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("compile Environment: %v", err)
 	}
-	if err := gate.Start(context.Background(), offlinehold.RuntimeBinding{
-		InstanceID: "exchange-hold-runtime",
-	}); err != nil {
-		t.Fatal(err)
+	downstreamProtocol := options.downstreamProtocol
+	if downstreamProtocol == "" {
+		downstreamProtocol = wireprofile.ApplicationProtocolHTTP1
 	}
-	if _, err := gate.Enter(
-		context.Background(),
-		gate.Snapshot().Revision,
-	); err != nil {
-		t.Fatal(err)
-	}
-	secrets := &integrationSecretReader{}
-	authenticator, err := providertransport.NewStaticBearerAuthenticator(secrets)
-	if err != nil {
-		t.Fatal(err)
-	}
-	transport := &integrationRoundTripper{
-		body: normalProviderStream(t, "gpt-held"),
-	}
-	provider, err := providertransport.NewClient(
-		providertransport.ClientOptions{
-			Coordinator:   gate,
-			Authenticator: authenticator,
-			Transport:     transport,
+	plan, err := snapshot.ResolveRequest(clientOrigin, environment.RequestFacts{
+		Target: protocolspec.RequestTarget{
+			Method: http.MethodPost, Path: requestPath,
+			Transport: protocolspec.ClientOperationTransportHTTP,
 		},
+		DownstreamProtocol: downstreamProtocol,
+	})
+	if err != nil {
+		t.Fatalf("resolve Environment request: %v", err)
+	}
+	return plan
+}
+
+func mustEnvironmentCompiler(t *testing.T, accounts environment.AccountCatalog) environment.Compiler {
+	t.Helper()
+	operations, err := operationcatalog.BuiltIn()
+	if err != nil {
+		t.Fatal(err)
+	}
+	newPair := func(
+		id string,
+		revision protocolspec.Revision,
+		client protocolspec.Dialect,
+		provider protocolspec.Dialect,
+	) protocolspec.CodecPairDefinition {
+		pairID, pairErr := protocolspec.NewCodecPairID(id)
+		if pairErr != nil {
+			t.Fatal(pairErr)
+		}
+		return protocolspec.CodecPairDefinition{
+			ID: pairID, Revision: revision,
+			ClientDialect: client, ProviderDialect: provider,
+			ClientOperationIDs: operations.SemanticOperationIDs(client),
+			RequiredCapabilities: []protocolspec.ProviderCapability{
+				protocolspec.ProviderCapabilityMessages,
+				protocolspec.ProviderCapabilityStreaming,
+				protocolspec.ProviderCapabilityToolCalls,
+			},
+		}
+	}
+	protocols, err := protocolspec.NewCatalog(operations.Definitions(), []protocolspec.CodecPairDefinition{
+		newPair(anthropicchat.CodecPairID, anthropicchat.CodecRevision, protocolspec.DialectAnthropicMessages, protocolspec.DialectOpenAIChat),
+		newPair(anthropicchat.MessagesCodecPairID, anthropicchat.MessagesCodecRevision, protocolspec.DialectAnthropicMessages, protocolspec.DialectAnthropicMessages),
+		newPair(responseschat.CodecPairID, responseschat.CodecRevision, protocolspec.DialectOpenAIResponses, protocolspec.DialectOpenAIChat),
+		newPair(responseschat.ResponsesPassthroughCodecPairID, responseschat.ResponsesPassthroughCodecRevision, protocolspec.DialectOpenAIResponses, protocolspec.DialectOpenAIResponses),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wires, err := wireprofile.BuiltInCatalog()
+	if err != nil {
+		t.Fatal(err)
+	}
+	compiler, err := environment.NewCompiler(accounts, nil, protocols, wires)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return compiler
+}
+
+func mustClientOrigin(t *testing.T, value string) originidentity.ClientOrigin {
+	t.Helper()
+	origin, err := originidentity.ParseClientOrigin(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return origin
+}
+
+func mustProviderOrigin(t *testing.T, value string) originidentity.ProviderOrigin {
+	t.Helper()
+	origin, err := originidentity.ParseProviderOrigin(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return origin
+}
+
+func mustClientRequest(t *testing.T, exchangeID string, plan environment.RequestPlan, body []byte) ClientRequest {
+	t.Helper()
+	return mustClientRequestWithHTTPProtocol(
+		t,
+		exchangeID,
+		plan,
+		body,
+		wireprofile.ApplicationProtocolHTTP1,
+	)
+}
+
+func mustClientRequestWithHTTPProtocol(
+	t *testing.T,
+	exchangeID string,
+	plan environment.RequestPlan,
+	body []byte,
+	protocol wireprofile.ApplicationProtocol,
+) ClientRequest {
+	t.Helper()
+	return mustClientRequestWithOptionsAndHTTPProtocol(
+		t,
+		exchangeID,
+		plan,
+		body,
+		protocol,
+	)
+}
+
+func mustClientRequestWithOptions(
+	t *testing.T,
+	exchangeID string,
+	plan environment.RequestPlan,
+	body []byte,
+	options ...ClientRequestOption,
+) ClientRequest {
+	return mustClientRequestWithOptionsAndHTTPProtocol(
+		t,
+		exchangeID,
+		plan,
+		body,
+		wireprofile.ApplicationProtocolHTTP1,
+		options...,
+	)
+}
+
+func mustClientRequestWithOptionsAndHTTPProtocol(
+	t *testing.T,
+	exchangeID string,
+	plan environment.RequestPlan,
+	body []byte,
+	protocol wireprofile.ApplicationProtocol,
+	options ...ClientRequestOption,
+) ClientRequest {
+	t.Helper()
+	operation := plan.Operation()
+	evidence, err := NewClientOperationEvidence(
+		operation.ID(), operation.Revision(), http.MethodPost, operation.PathPattern(), "",
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	accessID := mustAccessID(t, "access-planned-hold")
-	snapshot := compileTestSnapshot(t, accessID, 1, "gpt-held")
-	pipeline := newTestPipelineWithActions(
-		t,
-		&resolverDouble{snapshots: []access.AccessPlanSnapshot{snapshot}},
-		provider,
-		&decisionDouble{decision: ToolDecision{Outcome: ToolDecisionApproved}},
-		&retryWaiterDouble{},
-		gate,
-	)
-	t.Cleanup(func() {
-		shutdownPipeline(t, pipeline)
-		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-		defer cancel()
-		if err := provider.Shutdown(ctx); err != nil {
-			t.Fatalf("provider Shutdown() error = %v", err)
-		}
-		gate.BeginShutdown()
-		if err := gate.Drain(ctx); err != nil {
-			t.Fatalf("gate Drain() error = %v", err)
-		}
-	})
-	downstream := &downstreamRecorder{}
-	resultChannel := make(chan struct {
-		result Result
-		err    error
-	}, 1)
-	go func() {
-		result, executeErr := pipeline.Execute(
-			context.Background(),
-			mustClientRequest(
-				t,
-				"exchange-planned-hold",
-				accessID,
-				streamingClientRequest(),
-				ReplayGenerationCostOnly,
-			),
-			downstream,
-		)
-		resultChannel <- struct {
-			result Result
-			err    error
-		}{result: result, err: executeErr}
-	}()
-
-	waitForQueuedEgress(t, gate, 1)
-	if secrets.callCount() != 0 ||
-		transport.callCount() != 0 ||
-		!slices.Equal(
-			downstream.modesSnapshot(),
-			[]ResponseMode{ResponseModeEventStream},
-		) {
-		t.Fatalf(
-			"held Exchange secret=%d transport=%d modes=%v",
-			secrets.callCount(),
-			transport.callCount(),
-			downstream.modesSnapshot(),
-		)
-	}
-	if _, err := gate.Resume(
-		context.Background(),
-		gate.Snapshot().Revision,
-		offlinehold.ResumeRequest{Targets: gate.PendingProbeTargets()},
-		integrationProber{},
-	); err != nil {
+	replay, err := exchangeReplayClass(operation.ReplayClass())
+	if err != nil {
 		t.Fatal(err)
 	}
-	select {
-	case completed := <-resultChannel:
-		if completed.err != nil {
-			t.Fatalf("Execute() error = %v", completed.err)
-		}
-		if completed.result.Outcome != AttemptSucceeded ||
-			!completed.result.Ledger.DownstreamTerminal {
-			t.Fatalf("result = %+v", completed.result)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("held Exchange did not resume")
+	request, err := NewClientRequest(
+		exchangeID, plan, evidence, body, replay, protocol, options...,
+	)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if secrets.callCount() != 1 || transport.callCount() != 1 {
-		t.Fatalf(
-			"resumed Exchange secret=%d transport=%d",
-			secrets.callCount(),
-			transport.callCount(),
-		)
+	return request
+}
+
+func mustProtocolPathSelector(t *testing.T) *protocolpath.Selector {
+	t.Helper()
+	managed, err := anthropicchat.NewProtocolPath(anthropicchat.DefaultOptions())
+	if err != nil {
+		t.Fatal(err)
 	}
+	compatible, err := anthropicchat.NewMessagesProtocolPath(anthropicchat.DefaultOptions())
+	if err != nil {
+		t.Fatal(err)
+	}
+	responses, err := responseschat.NewProtocolPath(responseschat.DefaultOptions())
+	if err != nil {
+		t.Fatal(err)
+	}
+	responsesPassthrough, err := responseschat.NewResponsesPassthroughProtocolPath(
+		openairesponses.DefaultOptions(),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	selector, err := protocolpath.NewSelector(managed, compatible, responses, responsesPassthrough)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return selector
 }
 
 func newTestPipeline(
 	t *testing.T,
-	resolver access.SnapshotResolver,
+	accounts AccountLeaseAuthority,
 	provider Provider,
 	decisions ToolDecisionGate,
+	observer ExchangeObserver,
 ) *Pipeline {
-	t.Helper()
-	return newTestPipelineWithWaiter(
+	return newTestPipelineWithContentObserver(
 		t,
-		resolver,
+		accounts,
 		provider,
 		decisions,
-		&retryWaiterDouble{},
+		observer,
+		&contentObserverDouble{},
 	)
 }
 
-func newTestPipelineWithWaiter(
+func newTestPipelineWithContentObserver(
 	t *testing.T,
-	resolver access.SnapshotResolver,
+	accounts AccountLeaseAuthority,
 	provider Provider,
 	decisions ToolDecisionGate,
-	waiter RetryWaiter,
+	observer ExchangeObserver,
+	content ContentObserver,
 ) *Pipeline {
 	t.Helper()
-	actions := newTestActionGate(t)
-	return newTestPipelineWithActions(
-		t,
-		resolver,
-		provider,
-		decisions,
-		waiter,
-		actions,
-	)
-}
-
-func newTestPipelineWithActions(
-	t *testing.T,
-	resolver access.SnapshotResolver,
-	provider Provider,
-	decisions ToolDecisionGate,
-	waiter RetryWaiter,
-	actions offlinehold.ActionAdmission,
-) *Pipeline {
-	t.Helper()
+	annotations, err := clientannotation.NewSigner(bytes.Repeat([]byte{0x5a}, 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(annotations.Destroy)
 	pipeline, err := New(Options{
-		OwnerContext:       context.Background(),
-		Actions:            actions,
-		Resolver:           resolver,
-		ProtocolPaths:      mustProtocolPathSelector(t),
-		Provider:           provider,
-		ToolDecisions:      decisions,
-		RetryWaiter:        waiter,
-		Observer:           &attemptObserverDouble{},
+		OwnerContext: context.Background(), Actions: newTestActionGate(t), Accounts: accounts,
+		ProtocolPaths: mustProtocolPathSelector(t), Provider: provider, ToolDecisions: decisions,
+		RetryWaiter: &retryWaiterDouble{}, Observer: observer, ContentObserver: content,
 		ObservationTimeout: time.Second,
-		Hold: HoldPolicy{
-			MaxTransportResends: 1,
-			RetryDelay:          0,
-			MaxDuration:         time.Second,
-			// This fixture exists to exercise resend mechanics, so it opts
-			// into repeat billing explicitly. Production refuses by default;
-			// the ledger and policy tests lock that default down.
-			AllowResendAfterProviderResponse: true,
-		},
-		Stream: DefaultStreamBudgets(),
+		Hold:               HoldPolicy{MaxTransportResends: 0, RetryDelay: 0, MaxDuration: time.Second},
+		Stream:             DefaultStreamBudgets(),
+		ClientAnnotations:  annotations,
+		Now:                time.Now,
 	})
 	if err != nil {
-		t.Fatalf("New() error = %v", err)
+		t.Fatal(err)
 	}
 	return pipeline
 }
@@ -2185,20 +2542,17 @@ func newTestActionGate(t *testing.T) *offlinehold.Gate {
 	t.Helper()
 	gate, err := offlinehold.New(offlinehold.DefaultConfig())
 	if err != nil {
-		t.Fatalf("new offline-hold Gate: %v", err)
+		t.Fatal(err)
 	}
-	if err := gate.Start(
-		context.Background(),
-		offlinehold.RuntimeBinding{InstanceID: "exchange-test-runtime"},
-	); err != nil {
-		t.Fatalf("start offline-hold Gate: %v", err)
+	if err := gate.Start(context.Background(), offlinehold.RuntimeBinding{InstanceID: "exchange-test-runtime"}); err != nil {
+		t.Fatal(err)
 	}
 	t.Cleanup(func() {
 		gate.BeginShutdown()
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
 		if err := gate.Drain(ctx); err != nil {
-			t.Fatalf("drain offline-hold Gate: %v", err)
+			t.Errorf("drain offline-hold Gate: %v", err)
 		}
 	})
 	return gate
@@ -2209,93 +2563,90 @@ func shutdownPipeline(t *testing.T, pipeline *Pipeline) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	if err := pipeline.Shutdown(ctx); err != nil {
-		t.Fatalf("Shutdown() error = %v", err)
+		t.Fatal(err)
 	}
 }
 
-type attemptObserverDouble struct {
-	mu           sync.Mutex
-	observations []AttemptObservation
+type accountLeaseDouble struct {
+	account providerauth.AccountRef
+	driver  providerauth.DriverRef
+	secret  secretstore.Reference
+	release func()
+	once    sync.Once
 }
 
-func (observer *attemptObserverDouble) Observe(
-	_ context.Context,
-	observation AttemptObservation,
-) error {
-	observer.mu.Lock()
-	defer observer.mu.Unlock()
-	observer.observations = append(
-		observer.observations,
-		observation,
-	)
-	return nil
+func (lease *accountLeaseDouble) Mode() providerauth.CredentialMode {
+	return providerauth.CredentialManaged
+}
+func (lease *accountLeaseDouble) Driver() providerauth.DriverRef { return lease.driver }
+func (lease *accountLeaseDouble) Secret() secretstore.Reference  { return lease.secret }
+func (lease *accountLeaseDouble) Account() (providerauth.AccountRef, bool) {
+	return lease.account, true
+}
+func (lease *accountLeaseDouble) Release() { lease.once.Do(lease.release) }
+
+type accountAuthorityDouble struct {
+	mu       sync.Mutex
+	accounts map[string]testAccount
+	requests []AccountLeaseRequest
+	releases map[string]int
 }
 
-func (observer *attemptObserverDouble) snapshot() []AttemptObservation {
-	observer.mu.Lock()
-	defer observer.mu.Unlock()
-	return slices.Clone(observer.observations)
-}
-
-type resolverDouble struct {
-	mu        sync.Mutex
-	snapshots []access.AccessPlanSnapshot
-	calls     int
-}
-
-func (resolver *resolverDouble) ResolveAccess(
-	_ access.AccessID,
-) (access.AccessPlanSnapshot, error) {
-	resolver.mu.Lock()
-	defer resolver.mu.Unlock()
-	index := resolver.calls
-	resolver.calls++
-	if len(resolver.snapshots) == 0 {
-		return access.AccessPlanSnapshot{}, access.ErrAccessNotConfigured
+func newAccountAuthority(t *testing.T, accounts ...testAccount) *accountAuthorityDouble {
+	t.Helper()
+	authority := &accountAuthorityDouble{accounts: make(map[string]testAccount), releases: make(map[string]int)}
+	for _, account := range accounts {
+		authority.accounts[account.id] = account
 	}
-	if index >= len(resolver.snapshots) {
-		index = len(resolver.snapshots) - 1
+	return authority
+}
+
+func (authority *accountAuthorityDouble) Acquire(
+	ctx context.Context,
+	request AccountLeaseRequest,
+) (providerauth.Lease, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
-	return resolver.snapshots[index], nil
-}
-
-func (resolver *resolverDouble) callCount() int {
-	resolver.mu.Lock()
-	defer resolver.mu.Unlock()
-	return resolver.calls
-}
-
-type keyedResolverDouble struct {
-	mu        sync.Mutex
-	snapshots map[access.AccessID]access.AccessPlanSnapshot
-	calls     map[access.AccessID]int
-}
-
-func (resolver *keyedResolverDouble) ResolveAccess(
-	accessID access.AccessID,
-) (access.AccessPlanSnapshot, error) {
-	resolver.mu.Lock()
-	defer resolver.mu.Unlock()
-	if resolver.calls == nil {
-		resolver.calls = make(map[access.AccessID]int)
+	authority.mu.Lock()
+	account, ok := authority.accounts[request.AccountID()]
+	authority.requests = append(authority.requests, request)
+	authority.mu.Unlock()
+	if !ok {
+		return nil, errors.New("account is unavailable")
 	}
-	resolver.calls[accessID]++
-	snapshot, exists := resolver.snapshots[accessID]
-	if !exists {
-		return access.AccessPlanSnapshot{}, access.ErrAccessNotConfigured
+	secret, err := secretstore.ParseReference("secret://provider/" + account.id)
+	if err != nil {
+		return nil, err
 	}
-	return snapshot, nil
+	return &accountLeaseDouble{
+		account: providerauth.AccountRef{
+			ID: account.id, Revision: uint64(account.revision), CredentialEpoch: account.epoch,
+			RealmID: request.RealmID(),
+		},
+		driver: providerauth.StaticHeaderDriverRef(), secret: secret,
+		release: func() {
+			authority.mu.Lock()
+			authority.releases[account.id]++
+			authority.mu.Unlock()
+		},
+	}, nil
 }
 
-func (resolver *keyedResolverDouble) callCount(accessID access.AccessID) int {
-	resolver.mu.Lock()
-	defer resolver.mu.Unlock()
-	return resolver.calls[accessID]
+func (authority *accountAuthorityDouble) snapshot() []AccountLeaseRequest {
+	authority.mu.Lock()
+	defer authority.mu.Unlock()
+	return slices.Clone(authority.requests)
+}
+
+func (authority *accountAuthorityDouble) releaseCount(accountID string) int {
+	authority.mu.Lock()
+	defer authority.mu.Unlock()
+	return authority.releases[accountID]
 }
 
 type providerResult struct {
 	response *http.Response
-	evidence providertransport.CredentialEvidence
 	err      error
 }
 
@@ -2313,14 +2664,11 @@ func (provider *providerDouble) Do(
 	defer provider.mu.Unlock()
 	provider.requests = append(provider.requests, request)
 	if len(provider.results) == 0 {
-		return nil, providertransport.Evidence{},
-			errors.New("provider result queue is empty")
+		return nil, providertransport.Evidence{}, errors.New("provider result queue is empty")
 	}
 	result := provider.results[0]
 	provider.results = provider.results[1:]
-	return result.response, providertransport.Evidence{
-		Credential: result.evidence,
-	}, result.err
+	return result.response, providertransport.Evidence{}, result.err
 }
 
 func (provider *providerDouble) requestsSnapshot() []providertransport.Request {
@@ -2350,128 +2698,30 @@ func (provider *blockingProvider) Do(
 }
 
 type downstreamRecorder struct {
-	mu           sync.Mutex
-	modes        []ResponseMode
-	envelopes    []ResponseEnvelope
-	body         bytes.Buffer
-	aborts       []FailureNotice
-	keepalives   int
-	keepaliveErr error
-	writeN       int
-	writeErr     error
+	mu         sync.Mutex
+	envelopes  []ResponseEnvelope
+	body       bytes.Buffer
+	aborts     []FailureNotice
+	keepalives int
 }
 
-type idleProviderBody struct{}
-
-func (idleProviderBody) Read([]byte) (int, error) {
-	return 0, providertransport.ErrProviderResponseIdle
-}
-
-func (idleProviderBody) Close() error {
-	return nil
-}
-
-type commentingProviderBody struct {
-	interval time.Duration
-	closed   chan struct{}
-	once     sync.Once
-}
-
-func newCommentingProviderBody(interval time.Duration) *commentingProviderBody {
-	return &commentingProviderBody{
-		interval: interval,
-		closed:   make(chan struct{}),
-	}
-}
-
-func (body *commentingProviderBody) Read(destination []byte) (int, error) {
-	timer := time.NewTimer(body.interval)
-	defer timer.Stop()
-	select {
-	case <-body.closed:
-		return 0, io.EOF
-	case <-timer.C:
-		return copy(destination, []byte(": provider keepalive\n\n")), nil
-	}
-}
-
-func (body *commentingProviderBody) Close() error {
-	body.once.Do(func() {
-		close(body.closed)
-	})
-	return nil
-}
-
-type blockingProviderBody struct {
-	closed chan struct{}
-	once   sync.Once
-}
-
-func newBlockingProviderBody() *blockingProviderBody {
-	return &blockingProviderBody{closed: make(chan struct{})}
-}
-
-func (body *blockingProviderBody) Read([]byte) (int, error) {
-	<-body.closed
-	return 0, io.EOF
-}
-
-func (body *blockingProviderBody) Close() error {
-	body.once.Do(func() {
-		close(body.closed)
-	})
-	return nil
-}
-
-func (downstream *downstreamRecorder) Begin(
-	_ context.Context,
-	envelope ResponseEnvelope,
-) error {
+func (downstream *downstreamRecorder) Begin(_ context.Context, envelope ResponseEnvelope) error {
 	downstream.mu.Lock()
 	defer downstream.mu.Unlock()
-	downstream.modes = append(downstream.modes, envelope.Mode())
-	cloned, err := NewResponseEnvelope(
-		envelope.Mode(),
-		envelope.StatusCode(),
-		envelope.Headers(),
-	)
-	if err != nil {
-		return err
-	}
-	downstream.envelopes = append(downstream.envelopes, cloned)
+	downstream.envelopes = append(downstream.envelopes, envelope)
 	return nil
 }
 
-func (downstream *downstreamRecorder) Write(
-	_ context.Context,
-	body []byte,
-) (int, error) {
+func (downstream *downstreamRecorder) Write(_ context.Context, body []byte) (int, error) {
 	downstream.mu.Lock()
 	defer downstream.mu.Unlock()
-	count := len(body)
-	if downstream.writeN > 0 && downstream.writeN < count {
-		count = downstream.writeN
-	}
-	_, _ = downstream.body.Write(body[:count])
-	return count, downstream.writeErr
+	return downstream.body.Write(body)
 }
 
-func (downstream *downstreamRecorder) Keepalive(
-	_ context.Context,
-) error {
+func (downstream *downstreamRecorder) Keepalive(context.Context) error {
 	downstream.mu.Lock()
 	defer downstream.mu.Unlock()
 	downstream.keepalives++
-	return downstream.keepaliveErr
-}
-
-func (downstream *downstreamRecorder) Abort(
-	_ context.Context,
-	notice FailureNotice,
-) error {
-	downstream.mu.Lock()
-	defer downstream.mu.Unlock()
-	downstream.aborts = append(downstream.aborts, notice)
 	return nil
 }
 
@@ -2481,30 +2731,29 @@ func (downstream *downstreamRecorder) keepaliveCount() int {
 	return downstream.keepalives
 }
 
-func (downstream *downstreamRecorder) modesSnapshot() []ResponseMode {
+func (downstream *downstreamRecorder) Abort(_ context.Context, notice FailureNotice) error {
 	downstream.mu.Lock()
 	defer downstream.mu.Unlock()
-	return slices.Clone(downstream.modes)
-}
-
-func (downstream *downstreamRecorder) envelopesSnapshot() []ResponseEnvelope {
-	downstream.mu.Lock()
-	defer downstream.mu.Unlock()
-	envelopes := make([]ResponseEnvelope, len(downstream.envelopes))
-	for index, envelope := range downstream.envelopes {
-		envelopes[index], _ = NewResponseEnvelope(
-			envelope.Mode(),
-			envelope.StatusCode(),
-			envelope.Headers(),
-		)
-	}
-	return envelopes
+	downstream.aborts = append(downstream.aborts, notice)
+	return nil
 }
 
 func (downstream *downstreamRecorder) bytesSnapshot() []byte {
 	downstream.mu.Lock()
 	defer downstream.mu.Unlock()
 	return bytes.Clone(downstream.body.Bytes())
+}
+
+func (downstream *downstreamRecorder) envelopesSnapshot() []ResponseEnvelope {
+	downstream.mu.Lock()
+	defer downstream.mu.Unlock()
+	return slices.Clone(downstream.envelopes)
+}
+
+func (downstream *downstreamRecorder) abortsSnapshot() []FailureNotice {
+	downstream.mu.Lock()
+	defer downstream.mu.Unlock()
+	return slices.Clone(downstream.aborts)
 }
 
 type decisionDouble struct {
@@ -2514,13 +2763,42 @@ type decisionDouble struct {
 	requests []ToolDecisionRequest
 }
 
+type blockingDecisionDouble struct {
+	entered chan struct{}
+	approve chan struct{}
+	once    sync.Once
+}
+
+func newBlockingDecisionDouble() *blockingDecisionDouble {
+	return &blockingDecisionDouble{
+		entered: make(chan struct{}),
+		approve: make(chan struct{}),
+	}
+}
+
+func (decisions *blockingDecisionDouble) Decide(
+	ctx context.Context,
+	_ ToolDecisionRequest,
+) (ToolDecision, error) {
+	decisions.once.Do(func() { close(decisions.entered) })
+	select {
+	case <-decisions.approve:
+		return ToolDecision{Outcome: ToolDecisionApproved}, nil
+	case <-ctx.Done():
+		return ToolDecision{}, context.Cause(ctx)
+	}
+}
+
+func approvedDecisions() *decisionDouble {
+	return &decisionDouble{decision: ToolDecision{Outcome: ToolDecisionApproved}}
+}
+
 func (decisions *decisionDouble) Decide(
 	_ context.Context,
 	request ToolDecisionRequest,
 ) (ToolDecision, error) {
 	decisions.mu.Lock()
 	defer decisions.mu.Unlock()
-	request.intents = cloneToolIntents(request.intents)
 	decisions.requests = append(decisions.requests, request)
 	return decisions.decision, decisions.err
 }
@@ -2534,159 +2812,224 @@ func (decisions *decisionDouble) callCount() int {
 func (decisions *decisionDouble) lastRequest() ToolDecisionRequest {
 	decisions.mu.Lock()
 	defer decisions.mu.Unlock()
-	if len(decisions.requests) == 0 {
-		return ToolDecisionRequest{}
-	}
 	return decisions.requests[len(decisions.requests)-1]
 }
 
-type retryWaiterDouble struct {
+type attemptObserverDouble struct {
 	mu           sync.Mutex
-	observations []RetryObservation
+	starts       []StartObservation
+	observations []AttemptObservation
+}
+
+type rawObserverDouble struct {
+	mu           sync.Mutex
+	observations []rawevidence.Observation
+}
+
+func (observer *rawObserverDouble) Observe(
+	_ context.Context,
+	observation rawevidence.Observation,
+) (rawevidence.Watermark, error) {
+	observer.mu.Lock()
+	defer observer.mu.Unlock()
+	observation.Headers = observation.Headers.Clone()
+	observation.Body = bytes.Clone(observation.Body)
+	observer.observations = append(observer.observations, observation)
+	return rawevidence.Watermark{
+		WriterID: "transform-test", Sequence: uint64(len(observer.observations)),
+	}, nil
+}
+
+func (observer *rawObserverDouble) snapshot() []rawevidence.Observation {
+	observer.mu.Lock()
+	defer observer.mu.Unlock()
+	return slices.Clone(observer.observations)
+}
+
+type contentObserverDouble struct {
+	mu           sync.Mutex
+	observations []ContentObservation
 	err          error
 }
 
-func (waiter *retryWaiterDouble) WaitForRetry(
+func (observer *contentObserverDouble) ObserveContent(
 	_ context.Context,
-	observation RetryObservation,
+	observation ContentObservation,
 ) error {
-	waiter.mu.Lock()
-	defer waiter.mu.Unlock()
-	waiter.observations = append(waiter.observations, observation)
-	return waiter.err
+	observer.mu.Lock()
+	defer observer.mu.Unlock()
+	observer.observations = append(observer.observations, observation)
+	return observer.err
 }
 
-func (waiter *retryWaiterDouble) callCount() int {
-	waiter.mu.Lock()
-	defer waiter.mu.Unlock()
-	return len(waiter.observations)
+func (observer *contentObserverDouble) latest() (ContentObservation, bool) {
+	observer.mu.Lock()
+	defer observer.mu.Unlock()
+	if len(observer.observations) == 0 {
+		return ContentObservation{}, false
+	}
+	return observer.observations[len(observer.observations)-1], true
 }
 
-type temporaryNetworkError struct{}
-
-func (temporaryNetworkError) Error() string   { return "temporary network failure" }
-func (temporaryNetworkError) Timeout() bool   { return false }
-func (temporaryNetworkError) Temporary() bool { return true }
-
-type scriptedReader struct {
-	first []byte
-	err   error
-	read  bool
-}
-
-type integrationSecretReader struct {
-	mu    sync.Mutex
-	calls int
-}
-
-func (reader *integrationSecretReader) Read(
+func (observer *attemptObserverDouble) ObserveStart(
 	_ context.Context,
-	_ secretstore.Reference,
-) (*secretstore.Value, error) {
-	reader.mu.Lock()
-	reader.calls++
-	reader.mu.Unlock()
-	return secretstore.NewValue([]byte("provider-token"))
-}
-
-func (reader *integrationSecretReader) callCount() int {
-	reader.mu.Lock()
-	defer reader.mu.Unlock()
-	return reader.calls
-}
-
-type integrationRoundTripper struct {
-	mu    sync.Mutex
-	calls int
-	body  io.Reader
-}
-
-func (transport *integrationRoundTripper) RoundTrip(
-	_ *http.Request,
-	_ providertransport.TransportDispatch,
-) (*http.Response, transportprofile.Evidence, error) {
-	transport.mu.Lock()
-	defer transport.mu.Unlock()
-	transport.calls++
-	return streamResponse(http.StatusOK, transport.body),
-		transportprofile.Evidence{},
-		nil
-}
-
-func (transport *integrationRoundTripper) callCount() int {
-	transport.mu.Lock()
-	defer transport.mu.Unlock()
-	return transport.calls
-}
-
-type integrationProber struct{}
-
-func (integrationProber) Probe(
-	context.Context,
-	offlinehold.ProbeRequest,
+	observation StartObservation,
 ) error {
+	observer.mu.Lock()
+	defer observer.mu.Unlock()
+	observer.starts = append(observer.starts, observation)
 	return nil
 }
 
-func waitForQueuedEgress(
-	t *testing.T,
-	gate *offlinehold.Gate,
-	want int,
-) {
-	t.Helper()
-	deadline := time.Now().Add(time.Second)
-	for time.Now().Before(deadline) {
-		if gate.Snapshot().QueuedRequests == want {
-			return
-		}
-		time.Sleep(time.Millisecond)
-	}
-	t.Fatalf("queued egress = %d, want %d", gate.Snapshot().QueuedRequests, want)
+func (observer *attemptObserverDouble) ObserveTerminal(_ context.Context, observation AttemptObservation) error {
+	observer.mu.Lock()
+	defer observer.mu.Unlock()
+	observer.observations = append(observer.observations, observation)
+	return nil
 }
 
-func (reader *scriptedReader) Read(destination []byte) (int, error) {
-	if !reader.read {
-		reader.read = true
-		return copy(destination, reader.first), nil
-	}
-	return 0, reader.err
+func (observer *attemptObserverDouble) snapshot() []AttemptObservation {
+	observer.mu.Lock()
+	defer observer.mu.Unlock()
+	return slices.Clone(observer.observations)
 }
+
+func (observer *attemptObserverDouble) startSnapshot() []StartObservation {
+	observer.mu.Lock()
+	defer observer.mu.Unlock()
+	return slices.Clone(observer.starts)
+}
+
+type retryWaiterDouble struct{}
+
+func (*retryWaiterDouble) WaitForRetry(context.Context, RetryObservation) error { return nil }
 
 func jsonResponse(status int, body []byte) *http.Response {
 	return &http.Response{
 		StatusCode: status,
-		Header: http.Header{
-			"Content-Type": []string{"application/json"},
-		},
-		Body: io.NopCloser(bytes.NewReader(body)),
+		Header:     http.Header{"Content-Type": []string{"application/json"}},
+		Body:       io.NopCloser(bytes.NewReader(body)),
 	}
 }
 
 func streamResponse(status int, body io.Reader) *http.Response {
-	if body == nil {
-		body = bytes.NewReader(nil)
-	}
 	return &http.Response{
 		StatusCode: status,
-		Header: http.Header{
-			"Content-Type": []string{"text/event-stream"},
-		},
-		Body: io.NopCloser(body),
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+		Body:       io.NopCloser(body),
 	}
+}
+
+func gzipFixture(t *testing.T, body []byte) []byte {
+	t.Helper()
+	var encoded bytes.Buffer
+	writer := gzip.NewWriter(&encoded)
+	if _, err := writer.Write(body); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return encoded.Bytes()
+}
+
+type terminalCanceledReader struct {
+	body []byte
+	done bool
+}
+
+type boundedChunkReader struct {
+	reader  io.Reader
+	maximum int
+}
+
+type chunkSequenceReader struct {
+	chunks [][]byte
+}
+
+func (reader *chunkSequenceReader) Read(destination []byte) (int, error) {
+	if len(reader.chunks) == 0 {
+		return 0, io.EOF
+	}
+	chunk := reader.chunks[0]
+	count := copy(destination, chunk)
+	if count == len(chunk) {
+		reader.chunks = reader.chunks[1:]
+	} else {
+		reader.chunks[0] = chunk[count:]
+	}
+	return count, nil
+}
+
+func (reader *boundedChunkReader) Read(destination []byte) (int, error) {
+	if reader.maximum > 0 && len(destination) > reader.maximum {
+		destination = destination[:reader.maximum]
+	}
+	return reader.reader.Read(destination)
+}
+
+func (reader *terminalCanceledReader) Read(destination []byte) (int, error) {
+	if len(reader.body) > 0 {
+		count := copy(destination, reader.body)
+		reader.body = reader.body[count:]
+		return count, nil
+	}
+	if !reader.done {
+		reader.done = true
+		return 0, context.Canceled
+	}
+	return 0, io.EOF
+}
+
+func appendSSEFixture(t *testing.T, name string, payload any) []byte {
+	t.Helper()
+	data, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := ssewire.Encode(ssewire.Event{Name: name, Data: data})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return encoded
+}
+
+func originalResponsesTerminalWire(t *testing.T) []byte {
+	t.Helper()
+	item := json.RawMessage(`{
+		"id":"msg_original_responses",
+		"type":"message",
+		"status":"completed",
+		"role":"assistant",
+		"content":[{"type":"output_text","text":"provider-compatible"}]
+	}`)
+	wire := appendSSEFixture(t, "response.output_item.done", map[string]any{
+		"type": "response.output_item.done", "sequence_number": 1,
+		"output_index": 0, "item": item,
+	})
+	return append(wire, appendSSEFixture(t, "response.completed", map[string]any{
+		"type": "response.completed", "sequence_number": 2,
+		"response": json.RawMessage(`{
+			"id":"resp_original","created_at":1,"status":"completed",
+			"model":"codex-client-alias","output":[],
+			"usage":{"input_tokens":4,"input_tokens_details":{"cached_tokens":0},
+			"output_tokens":2,"output_tokens_details":{"reasoning_tokens":0}}
+		}`),
+	})...)
 }
 
 func completeProviderResponse(model string) []byte {
 	return []byte(`{
-		"id":"chatcmpl-complete",
-		"object":"chat.completion",
-		"created":1,
-		"model":"` + model + `",
-		"choices":[{
-			"index":0,
-			"message":{"role":"assistant","content":"Done.","refusal":null},
-			"finish_reason":"stop",
-			"logprobs":null
-		}],
+		"id":"chatcmpl-complete","object":"chat.completion","created":1,"model":"` + model + `",
+		"choices":[{"index":0,"message":{"role":"assistant","content":"Done.","refusal":null},"finish_reason":"stop","logprobs":null}],
+		"usage":{"prompt_tokens":4,"completion_tokens":2,"total_tokens":6}
+	}`)
+}
+
+func completeToolProviderResponse(model string) []byte {
+	return []byte(`{
+		"id":"chatcmpl-tool","object":"chat.completion","created":1,"model":"` + model + `",
+		"choices":[{"index":0,"message":{"role":"assistant","content":null,"tool_calls":[{"id":"call-shell","type":"function","function":{"name":"shell","arguments":"{}"}}]},"finish_reason":"tool_calls","logprobs":null}],
 		"usage":{"prompt_tokens":4,"completion_tokens":2,"total_tokens":6}
 	}`)
 }
@@ -2702,35 +3045,46 @@ func normalProviderStream(t *testing.T, model string) io.Reader {
 	))
 }
 
-func firstTextProviderEvent(t *testing.T, model string) []byte {
-	t.Helper()
-	return joinProviderEvents(
-		t,
-		`{"id":"chatcmpl-partial","object":"chat.completion.chunk","created":1,"model":"`+model+`","choices":[{"index":0,"delta":{"role":"assistant","content":"Visible"},"finish_reason":null}]}`,
-	)
-}
-
-func toolProviderStream(t *testing.T, model string) io.Reader {
+func streamingToolProviderResponse(t *testing.T, model string) io.Reader {
 	t.Helper()
 	return bytes.NewReader(joinProviderEvents(
 		t,
-		`{"id":"chatcmpl-tool","object":"chat.completion.chunk","created":1,"model":"`+model+`","choices":[{"index":0,"delta":{"role":"assistant","content":null},"finish_reason":null}]}`,
-		`{"id":"chatcmpl-tool","object":"chat.completion.chunk","created":1,"model":"`+model+`","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call-hidden","type":"function","function":{"name":"shell","arguments":"{\"cmd\":\""}}]},"finish_reason":null}]}`,
-		`{"id":"chatcmpl-tool","object":"chat.completion.chunk","created":1,"model":"`+model+`","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"pwd\"}"}}]},"finish_reason":null}]}`,
-		`{"id":"chatcmpl-tool","object":"chat.completion.chunk","created":1,"model":"`+model+`","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}`,
-		`{"id":"chatcmpl-tool","object":"chat.completion.chunk","created":1,"model":"`+model+`","choices":[],"usage":{"prompt_tokens":8,"completion_tokens":4,"total_tokens":12}}`,
+		`{"id":"chatcmpl-stream-tool","object":"chat.completion.chunk","created":1,"model":"`+model+`","choices":[{"index":0,"delta":{"role":"assistant","tool_calls":[{"index":0,"id":"call-shell","type":"function","function":{"name":"shell","arguments":""}}]},"finish_reason":null}]}`,
+		`{"id":"chatcmpl-stream-tool","object":"chat.completion.chunk","created":1,"model":"`+model+`","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{}"}}]},"finish_reason":null}]}`,
+		`{"id":"chatcmpl-stream-tool","object":"chat.completion.chunk","created":1,"model":"`+model+`","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}`,
+		`{"id":"chatcmpl-stream-tool","object":"chat.completion.chunk","created":1,"model":"`+model+`","choices":[],"usage":{"prompt_tokens":4,"completion_tokens":2,"total_tokens":6}}`,
 		`[DONE]`,
 	))
+}
+
+func anthropicTextProviderStream() io.Reader {
+	return strings.NewReader(strings.Join([]string{
+		`event: message_start`,
+		`data: {"type":"message_start","message":{"id":"msg_text","type":"message","role":"assistant","model":"claude-provider","usage":{"input_tokens":3}}}`,
+		``,
+		`event: content_block_start`,
+		`data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`,
+		``,
+		`event: content_block_delta`,
+		`data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hello"}}`,
+		``,
+		`event: content_block_stop`,
+		`data: {"type":"content_block_stop","index":0}`,
+		``,
+		`event: message_delta`,
+		`data: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":1}}`,
+		``,
+		`event: message_stop`,
+		`data: {"type":"message_stop"}`,
+		``,
+	}, "\n") + "\n")
 }
 
 func joinProviderEvents(t *testing.T, payloads ...string) []byte {
 	t.Helper()
 	var wire bytes.Buffer
 	for _, payload := range payloads {
-		event, err := ssewire.Encode(ssewire.Event{
-			Name: "message",
-			Data: []byte(payload),
-		})
+		event, err := ssewire.Encode(ssewire.Event{Name: "message", Data: []byte(payload)})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -2740,19 +3094,21 @@ func joinProviderEvents(t *testing.T, payloads ...string) []byte {
 }
 
 func completeClientRequest() []byte {
-	return []byte(`{
-		"model":"claude-client-alias",
-		"max_tokens":32,
-		"messages":[{"role":"user","content":"hello"}]
-	}`)
+	return []byte(`{"model":"claude-client-alias","max_tokens":32,"messages":[{"role":"user","content":"hello"}]}`)
 }
 
-func streamingClientRequest() []byte {
+func secondTurnCitedClientRequest() []byte {
 	return []byte(`{
 		"model":"claude-client-alias",
-		"max_tokens":32,
-		"stream":true,
-		"messages":[{"role":"user","content":"hello"}]
+		"max_tokens":64,
+		"messages":[
+			{"role":"assistant","content":[
+				{"type":"thinking","thinking":"private state","signature":"signed-state"},
+				{"type":"text","text":"first answer","citations":[]}
+			]},
+			{"role":"user","content":[{"type":"text","text":"follow up"}]}
+		],
+		"stream":false
 	}`)
 }
 
@@ -2769,6 +3125,43 @@ func completeResponsesClientRequest() []byte {
 	}`)
 }
 
+func responsesClientRequestWithIdentity(
+	sessionID string,
+	threadID string,
+	turnID string,
+) []byte {
+	return []byte(`{
+		"model":"codex-client-alias",
+		"input":[{
+			"type":"message","role":"user",
+			"content":[{"type":"input_text","text":"hello"}]
+		}],
+		"store":false,"stream":false,
+		"client_metadata":{
+			"session_id":"` + sessionID + `",
+			"thread_id":"` + threadID + `",
+			"turn_id":"` + turnID + `"
+		}
+	}`)
+}
+
+func completeResponsesProviderResponse(model string) []byte {
+	return []byte(`{
+		"id":"resp_complete",
+		"created_at":1,
+		"status":"completed",
+		"model":"` + model + `",
+		"output":[{
+			"id":"msg_complete",
+			"type":"message",
+			"status":"completed",
+			"role":"assistant",
+			"content":[{"type":"output_text","text":"Done.","annotations":[]}]
+		}],
+		"usage":{}
+	}`)
+}
+
 func streamingResponsesClientRequest() []byte {
 	return []byte(`{
 		"model":"codex-client-alias",
@@ -2782,661 +3175,70 @@ func streamingResponsesClientRequest() []byte {
 	}`)
 }
 
-func streamingResponsesToolClientRequest() []byte {
+func streamingClientRequest() []byte {
+	return []byte(`{"model":"claude-client-alias","max_tokens":32,"stream":true,"messages":[{"role":"user","content":"hello"}]}`)
+}
+
+func toolClientRequest() []byte {
 	return []byte(`{
-		"model":"codex-client-alias",
-		"input":[{
-			"type":"message",
-			"role":"user",
-			"content":[{"type":"input_text","text":"hello"}]
-		}],
-		"tools":[{
-			"type":"function",
-			"name":"shell",
-			"description":"Run a command.",
-			"parameters":{
-				"type":"object",
-				"properties":{"cmd":{"type":"string"}},
-				"required":["cmd"],
-				"additionalProperties":false
-			},
-			"strict":false
-		}],
-		"tool_choice":"auto",
-		"store":false,
-		"stream":true
+		"model":"claude-client-alias","max_tokens":32,
+		"messages":[{"role":"user","content":"hello"}],
+		"tools":[{"name":"shell","description":"Run a command.","input_schema":{"type":"object","properties":{}}}]
 	}`)
 }
 
 func streamingToolClientRequest() []byte {
 	return []byte(`{
-		"model":"claude-client-alias",
-		"max_tokens":32,
-		"stream":true,
+		"model":"claude-client-alias","max_tokens":32,"stream":true,
 		"messages":[{"role":"user","content":"hello"}],
-		"tools":[{
-			"name":"shell",
-			"description":"Run a command.",
-			"input_schema":{"type":"object","properties":{"cmd":{"type":"string"}}}
-		}]
+		"tools":[{"name":"shell","description":"Run a command.","input_schema":{"type":"object","properties":{}}}]
 	}`)
 }
 
-func mustClientRequest(
-	t *testing.T,
-	exchangeID string,
-	accessID access.AccessID,
-	body []byte,
-	replayClass ReplayClass,
-) ClientRequest {
-	t.Helper()
-	request, err := NewClientRequest(
-		exchangeID,
-		testIngressBinding(t, accessID),
-		mustAnthropicOperationEvidence(t),
-		body,
-		replayClass,
-		access.ApplicationProtocolHTTP1,
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return request
-}
-
-func mustAnthropicOperationEvidence(t *testing.T) ClientOperationEvidence {
-	t.Helper()
-	operationID, err := access.NewClientOperationID(
-		operationcatalog.AnthropicMessagesCreateID,
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	evidence, err := NewClientOperationEvidence(
-		operationID,
-		1,
-		http.MethodPost,
-		"/v1/messages",
-		"",
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return evidence
-}
-
-func mustResponsesOperationEvidence(t *testing.T) ClientOperationEvidence {
-	t.Helper()
-	operationID, err := access.NewClientOperationID(
-		operationcatalog.OpenAIResponsesCreateID,
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	evidence, err := NewClientOperationEvidence(
-		operationID,
-		1,
-		http.MethodPost,
-		"/v1/responses",
-		"",
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return evidence
-}
-
-func mustProtocolPathSelector(t *testing.T) *protocolpath.Selector {
-	t.Helper()
-	anthropicPath, err := anthropicchat.NewProtocolPath(
-		anthropicchat.DefaultOptions(),
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	responsesPath, err := responseschat.NewProtocolPath(
-		responseschat.DefaultOptions(),
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	selector, err := protocolpath.NewSelector(anthropicPath, responsesPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return selector
-}
-
-func testIngressBinding(
-	t *testing.T,
-	accessID access.AccessID,
-) access.IngressBinding {
-	t.Helper()
-	return compileTestSnapshot(
-		t,
-		accessID,
-		1,
-		"gpt-ingress-binding",
-	).IngressBinding()
-}
-
-func compileTestSnapshot(
-	t *testing.T,
-	accessID access.AccessID,
-	revision access.Revision,
-	modelValue string,
-) access.AccessPlanSnapshot {
-	t.Helper()
-	return compileTestSnapshotWithDialect(
-		t,
-		accessID,
-		revision,
-		modelValue,
-		accessID.String()+"-endpoint",
-		1,
-		access.DialectAnthropicMessages,
-		"https://api.anthropic.com:443",
-	)
-}
-
-func compileTestSnapshotWithEndpoint(
-	t *testing.T,
-	accessID access.AccessID,
-	revision access.Revision,
-	modelValue string,
-	endpointValue string,
-) access.AccessPlanSnapshot {
-	t.Helper()
-	return compileTestSnapshotWithDialect(
-		t,
-		accessID,
-		revision,
-		modelValue,
-		endpointValue,
-		revision,
-		access.DialectAnthropicMessages,
-		"https://api.anthropic.com:443",
-	)
-}
-
-func compileResponsesTestSnapshot(
-	t *testing.T,
-	accessID access.AccessID,
-	revision access.Revision,
-	modelValue string,
-) access.AccessPlanSnapshot {
-	t.Helper()
-	return compileTestSnapshotWithDialect(
-		t,
-		accessID,
-		revision,
-		modelValue,
-		accessID.String()+"-endpoint",
-		1,
-		access.DialectOpenAIResponses,
-		"https://api.openai.com:443",
-	)
-}
-
-func compileTestSnapshotWithDialect(
-	t *testing.T,
-	accessID access.AccessID,
-	revision access.Revision,
-	modelValue string,
-	endpointValue string,
-	endpointRevision access.Revision,
-	clientDialect access.Dialect,
-	clientOriginValue string,
-) access.AccessPlanSnapshot {
-	return compileTestSnapshotWithDialectMode(
-		t,
-		accessID,
-		revision,
-		modelValue,
-		endpointValue,
-		endpointRevision,
-		clientDialect,
-		clientOriginValue,
-		false,
-	)
-}
-
-func compileOriginalTestSnapshot(
-	t *testing.T,
-	accessID access.AccessID,
-	clientDialect access.Dialect,
-	clientOriginValue string,
-) access.AccessPlanSnapshot {
-	t.Helper()
-	return compileTestSnapshotWithDialectMode(
-		t,
-		accessID,
-		1,
-		"unused-managed-model",
-		accessID.String()+"-endpoint",
-		1,
-		clientDialect,
-		clientOriginValue,
-		true,
-	)
-}
-
-func compileTestSnapshotWithDialectMode(
-	t *testing.T,
-	accessID access.AccessID,
-	revision access.Revision,
-	modelValue string,
-	endpointValue string,
-	endpointRevision access.Revision,
-	clientDialect access.Dialect,
-	clientOriginValue string,
-	original bool,
-) access.AccessPlanSnapshot {
-	t.Helper()
-	anthropicCodecID, err := access.NewCodecPairID(anthropicchat.CodecPairID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	responsesCodecID, err := access.NewCodecPairID(responseschat.CodecPairID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	anthropicPassthroughID, err := access.NewCodecPairID(
-		anthropicchat.MessagesCodecPairID,
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	responsesPassthroughID, err := access.NewCodecPairID(
-		"openai-responses-original-passthrough",
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	operations, err := operationcatalog.BuiltIn()
-	if err != nil {
-		t.Fatal(err)
-	}
-	catalog, err := access.NewCatalog(access.CatalogOptions{
-		Capabilities: access.PlanCapabilities{
-			MaxEndpointProfiles: 2,
-			MaxAccountBindings:  1,
-			MaxRouteSets:        1,
-		},
-		ClientOperations: operations.Definitions(),
-		CodecPairs: []access.CodecPairDefinition{
-			{
-				ID:              anthropicCodecID,
-				Revision:        anthropicchat.CodecRevision,
-				ClientDialect:   access.DialectAnthropicMessages,
-				ProviderDialect: access.DialectOpenAIChat,
-				ClientOperationIDs: operations.SemanticOperationIDs(
-					access.DialectAnthropicMessages,
-				),
-				RequiredCapabilities: []access.ProviderCapability{
-					access.ProviderCapabilityMessages,
-					access.ProviderCapabilityStreaming,
-					access.ProviderCapabilityToolCalls,
-				},
-			},
-			{
-				ID:              responsesCodecID,
-				Revision:        responseschat.CodecRevision,
-				ClientDialect:   access.DialectOpenAIResponses,
-				ProviderDialect: access.DialectOpenAIChat,
-				ClientOperationIDs: operations.SemanticOperationIDs(
-					access.DialectOpenAIResponses,
-				),
-				RequiredCapabilities: []access.ProviderCapability{
-					access.ProviderCapabilityMessages,
-					access.ProviderCapabilityStreaming,
-					access.ProviderCapabilityToolCalls,
-				},
-			},
-			{
-				ID:              anthropicPassthroughID,
-				Revision:        anthropicchat.MessagesCodecRevision,
-				ClientDialect:   access.DialectAnthropicMessages,
-				ProviderDialect: access.DialectAnthropicMessages,
-				ClientOperationIDs: operations.SemanticOperationIDs(
-					access.DialectAnthropicMessages,
-				),
-				RequiredCapabilities: []access.ProviderCapability{
-					access.ProviderCapabilityMessages,
-					access.ProviderCapabilityStreaming,
-					access.ProviderCapabilityToolCalls,
-				},
-			},
-			{
-				ID:              responsesPassthroughID,
-				Revision:        1,
-				ClientDialect:   access.DialectOpenAIResponses,
-				ProviderDialect: access.DialectOpenAIResponses,
-				ClientOperationIDs: operations.SemanticOperationIDs(
-					access.DialectOpenAIResponses,
-				),
-				RequiredCapabilities: []access.ProviderCapability{
-					access.ProviderCapabilityMessages,
-					access.ProviderCapabilityStreaming,
-					access.ProviderCapabilityToolCalls,
-				},
-			},
-		},
-		AuthDrivers: []access.AuthDriverDefinition{{
-			Ref:      access.StaticHeaderAuthDriverRef(),
-			Revision: 1,
-		}},
-		EgressModes: []access.EgressModeDefinition{{
-			Mode:     access.EgressModeDirect,
-			Revision: 1,
-		}},
-		PluginPlanModes: []access.PluginPlanModeDefinition{{
-			Mode:     access.PluginPlanModePassThrough,
-			Revision: 1,
-		}},
-		ModelPolicyModes: []access.ModelPolicyModeDefinition{
-			{Mode: access.ModelPolicyModePassthrough, Revision: 1},
-			{Mode: access.ModelPolicyModeFixed, Revision: 1},
-		},
-		TransportProfiles:    access.BuiltInTransportFingerprintDefinitions(),
-		UpstreamWireProfiles: access.BuiltInUpstreamWireProfileDefinitions(),
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	compiler, err := access.NewCompiler(catalog)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	suffix := accessID.String()
-	endpointID := mustAgentEndpointID(t, endpointValue)
-	profileID := mustEndpointProfileID(t, suffix+"-profile")
-	targetID := mustProviderTargetID(t, suffix+"-target")
-	accountID := mustAccountBindingID(t, suffix+"-account")
-	routeID := mustRouteSetID(t, suffix+"-routes")
-	egressID := mustEgressPolicyID(t, suffix+"-egress")
-	clientOrigin, err := access.NewClientOrigin(clientOriginValue)
-	if err != nil {
-		t.Fatal(err)
-	}
-	providerOrigin, err := access.NewProviderOrigin(
-		"https://api.openai.com:443/v1",
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	model, err := access.NewModelName(modelValue)
-	if err != nil {
-		t.Fatal(err)
-	}
-	secretRef, err := access.NewSecretRef("secret://provider/" + suffix)
-	if err != nil {
-		t.Fatal(err)
-	}
-	aggregate := access.Aggregate{
-		Binding: access.AccessBinding{
-			ID:                accessID,
-			Revision:          revision,
-			Name:              "Pipeline Access",
-			Description:       "Executable Exchange pipeline Access",
-			Status:            access.AccessStatusEnabled,
-			AgentEndpointID:   endpointID,
-			DefaultRouteSetID: routeID,
-			ProfileIDs:        []access.EndpointProfileID{profileID},
-			EgressPolicyID:    egressID,
-		},
-		AgentEndpoint: access.AgentEndpoint{
-			ID:            endpointID,
-			Revision:      endpointRevision,
-			AccessID:      accessID,
-			ClientOrigin:  clientOrigin,
-			ClientDialect: clientDialect,
-		},
-		Profiles: []access.EndpointProfile{{
-			ID:                      profileID,
-			Revision:                revision,
-			AccessID:                accessID,
-			Kind:                    access.EndpointProfileManaged,
-			CredentialSource:        access.CredentialSourceManagedAccount,
-			ProcessingMode:          access.ProfileProcessingManaged,
-			Name:                    "OpenAI Chat",
-			Description:             "Fixed provider profile",
-			BackendDialect:          access.DialectOpenAIChat,
-			TargetID:                targetID,
-			UpstreamWireProfileRef:  access.FollowClientUpstreamWireProfileRef(),
-			DefaultAccountBindingID: accountID,
-			AccountBindingIDs:       []access.AccountBindingID{accountID},
-			DefaultModelPolicy: access.ModelPolicy{
-				Revision:   revision,
-				Mode:       access.ModelPolicyModeFixed,
-				FixedModel: model,
-			},
-		}},
-		ProviderTargets: []access.ProviderTarget{{
-			ID:        targetID,
-			Revision:  revision,
-			AccessID:  accessID,
-			ProfileID: profileID,
-			Origin:    providerOrigin,
-			Protocol:  access.DialectOpenAIChat,
-			Capabilities: []access.ProviderCapability{
-				access.ProviderCapabilityMessages,
-				access.ProviderCapabilityStreaming,
-				access.ProviderCapabilityToolCalls,
-			},
-		}},
-		AccountBindings: []access.ProviderAccountBinding{{
-			ID:            accountID,
-			Revision:      revision,
-			AccessID:      accessID,
-			ProfileID:     profileID,
-			Label:         "Primary",
-			SecretRef:     secretRef,
-			AuthDriverRef: access.StaticHeaderAuthDriverRef(),
-			Enabled:       true,
-		}},
-		RouteSets: []access.RouteSet{{
-			ID:                  routeID,
-			Revision:            revision,
-			AccessID:            accessID,
-			CandidateProfileIDs: []access.EndpointProfileID{profileID},
-		}},
-		EgressPolicy: access.AccessEgressPolicy{
-			ID:       egressID,
-			Revision: revision,
-			AccessID: accessID,
-			Mode:     access.EgressModeDirect,
-		},
-		PluginPlan: access.PluginPlan{
-			Revision: revision,
-			AccessID: accessID,
-			Mode:     access.PluginPlanModePassThrough,
-		},
-	}
-	aggregate, err = access.AttachOriginalPassthrough(aggregate)
-	if err != nil {
-		t.Fatalf("AttachOriginalPassthrough() error = %v", err)
-	}
-	if original {
-		aggregate.RouteSets[0].CandidateProfileIDs =
-			[]access.EndpointProfileID{access.OriginalPassthroughProfileID()}
-	}
-	snapshot, err := compiler.Compile(aggregate)
-	if err != nil {
-		t.Fatalf("Compile() error = %v", err)
-	}
-	return snapshot
-}
-
-func mustAccessID(t *testing.T, value string) access.AccessID {
-	t.Helper()
-	id, err := access.NewAccessID(value)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return id
-}
-
-func mustAgentEndpointID(t *testing.T, value string) access.AgentEndpointID {
-	t.Helper()
-	id, err := access.NewAgentEndpointID(value)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return id
-}
-
-func mustEndpointProfileID(
-	t *testing.T,
-	value string,
-) access.EndpointProfileID {
-	t.Helper()
-	id, err := access.NewEndpointProfileID(value)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return id
-}
-
-func mustProviderTargetID(
-	t *testing.T,
-	value string,
-) access.ProviderTargetID {
-	t.Helper()
-	id, err := access.NewProviderTargetID(value)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return id
-}
-
-func mustAccountBindingID(
-	t *testing.T,
-	value string,
-) access.AccountBindingID {
-	t.Helper()
-	id, err := access.NewAccountBindingID(value)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return id
-}
-
-func mustRouteSetID(t *testing.T, value string) access.RouteSetID {
-	t.Helper()
-	id, err := access.NewRouteSetID(value)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return id
-}
-
-func mustEgressPolicyID(
-	t *testing.T,
-	value string,
-) access.EgressPolicyID {
-	t.Helper()
-	id, err := access.NewEgressPolicyID(value)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return id
-}
-
 func TestProviderRejectionClassifierReturnsOnlyKnownEmittedFields(t *testing.T) {
-	t.Parallel()
-
 	tests := []struct {
-		name string
 		body string
 		want ProviderField
 	}{
-		{
-			name: "OpenAI parameter",
-			body: `{"error":{"message":"private","param":"max_completion_tokens"}}`,
-			want: ProviderFieldMaxCompletionTokens,
-		},
-		{
-			name: "validation location",
-			body: `{"detail":[{"loc":["body","reasoning_effort"],"msg":"private"}]}`,
-			want: ProviderFieldReasoningEffort,
-		},
-		{
-			name: "structured output parameter",
-			body: `{"error":{"message":"private","param":"response_format"}}`,
-			want: ProviderFieldResponseFormat,
-		},
-		{
-			name: "unknown provider value",
-			body: `{"error":{"param":"private_provider_field"}}`,
-			want: ProviderFieldUnknown,
-		},
-		{
-			name: "provider text is not scanned",
-			body: `{"error":{"message":"max_tokens is private text"}}`,
-			want: ProviderFieldUnknown,
-		},
-		{
-			name: "malformed payload",
-			body: `{"error":`,
-			want: ProviderFieldUnknown,
-		},
+		{`{"error":{"message":"private","param":"max_completion_tokens"}}`, ProviderFieldMaxCompletionTokens},
+		{`{"detail":[{"loc":["body","reasoning_effort"],"msg":"private"}]}`, ProviderFieldReasoningEffort},
+		{`{"error":{"message":"private","param":"response_format"}}`, ProviderFieldResponseFormat},
+		{`{"error":{"param":"private_provider_field"}}`, ProviderFieldUnknown},
+		{`{"error":{"message":"max_tokens is private text"}}`, ProviderFieldUnknown},
 	}
 	for _, test := range tests {
-		test := test
-		t.Run(test.name, func(t *testing.T) {
-			t.Parallel()
-			got := classifyProviderRejection(strings.NewReader(test.body))
-			if got != test.want {
-				t.Fatalf(
-					"classifyProviderRejection() = %q, want %q",
-					got,
-					test.want,
-				)
-			}
-		})
+		if got := classifyProviderRejection(strings.NewReader(test.body)); got != test.want {
+			t.Fatalf("classifyProviderRejection() = %q, want %q", got, test.want)
+		}
 	}
 }
 
-func TestProviderRequestAcceptHeaderMatchesResponseMode(t *testing.T) {
+func TestMergeClientProtocolEvidenceFillsOnlyAbsentNames(t *testing.T) {
 	t.Parallel()
 
-	path, err := anthropicchat.NewProtocolPath(anthropicchat.DefaultOptions())
-	if err != nil {
-		t.Fatal(err)
-	}
-	tests := []struct {
-		body []byte
-		want string
-	}{
-		{body: streamingClientRequest(), want: "text/event-stream"},
-		{
-			body: []byte(
-				`{"model":"client","max_tokens":8,"messages":[{"role":"user","content":"hello"}]}`,
-			),
-			want: "application/json",
+	request := protocolcore.Request{ProtocolEvidence: []protocolcore.ProtocolEvidenceValue{
+		{Name: "claude.agent_id", Value: "decoder-agent"},
+		{Name: "openai_responses.turn_id", Value: "turn-1"},
+	}}
+	merged := mergeClientProtocolEvidence(
+		request,
+		[]protocolcore.ProtocolEvidenceValue{
+			{Name: "claude.agent_id", Value: "header-agent"},
+			{Name: "claude.parent_agent_id", Value: "parent-1"},
+			{Name: "claude.session_id", Value: "session-1"},
 		},
+	)
+	want := []protocolcore.ProtocolEvidenceValue{
+		{Name: "claude.agent_id", Value: "decoder-agent"},
+		{Name: "claude.parent_agent_id", Value: "parent-1"},
+		{Name: "claude.session_id", Value: "session-1"},
+		{Name: "openai_responses.turn_id", Value: "turn-1"},
 	}
-	for _, test := range tests {
-		request, _, err := path.Client().DecodeRequest(test.body)
-		if err != nil {
-			t.Fatal(err)
-		}
-		request, err = request.WithEffectiveModel("provider")
-		if err != nil {
-			t.Fatal(err)
-		}
-		encoded, _, err := path.Backend().EncodeRequest(request)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if got := encoded.Headers().Get("Accept"); got != test.want {
-			t.Fatalf(
-				"provider request Accept = %q, want %q",
-				got,
-				test.want,
-			)
-		}
+	if !slices.Equal(merged.ProtocolEvidence, want) {
+		t.Fatalf("merged protocol evidence = %#v", merged.ProtocolEvidence)
+	}
+	if request.ProtocolEvidence[0].Value != "decoder-agent" ||
+		len(request.ProtocolEvidence) != 2 {
+		t.Fatalf("merge mutated decoded request: %#v", request.ProtocolEvidence)
 	}
 }

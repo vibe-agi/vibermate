@@ -3,8 +3,8 @@ package main
 import (
 	"errors"
 
-	"github.com/vibe-agi/vibermate/internal/access"
 	"github.com/vibe-agi/vibermate/internal/clientadapter"
+	"github.com/vibe-agi/vibermate/internal/environment"
 )
 
 type acceptanceClientID string
@@ -20,7 +20,7 @@ type acceptanceClient struct {
 	ReportLabel    string
 	ExecutablePath string
 	ClientOrigin   string
-	ClientDialect  access.Dialect
+	ClientProtocol environment.ClientProtocol
 	Release        clientadapter.Release
 }
 
@@ -35,7 +35,7 @@ func selectedAcceptanceClient(
 			ReportLabel:    "Claude Code",
 			ExecutablePath: config.claudePath,
 			ClientOrigin:   "https://api.anthropic.com",
-			ClientDialect:  access.DialectAnthropicMessages,
+			ClientProtocol: environment.ClientProtocolAnthropicMessages,
 			Release:        clientadapter.ClaudeCode221220DarwinARM64(),
 		}, nil
 	case acceptanceClientCodexCLI:
@@ -45,7 +45,7 @@ func selectedAcceptanceClient(
 			ReportLabel:    "Codex CLI",
 			ExecutablePath: config.codexPath,
 			ClientOrigin:   "https://api.openai.com",
-			ClientDialect:  access.DialectOpenAIResponses,
+			ClientProtocol: environment.ClientProtocolOpenAIResponses,
 			Release:        clientadapter.CodexCLI01450DarwinARM64(),
 		}, nil
 	default:

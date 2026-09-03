@@ -77,6 +77,13 @@ func buildEnvironment(
 	}
 	managedClientCredential := usesManagedClientCredential(base, grant)
 	preserved := make(map[string]string)
+	deletedByEnvironment := make(
+		map[string]struct{},
+		len(grant.LaunchEnvironment.DeleteEnv),
+	)
+	for _, key := range grant.LaunchEnvironment.DeleteEnv {
+		deletedByEnvironment[key] = struct{}{}
+	}
 	var noProxyValues []string
 	for _, entry := range base {
 		key, value, ok := strings.Cut(entry, "=")
@@ -87,6 +94,12 @@ func buildEnvironment(
 			noProxyValues = append(noProxyValues, value)
 			continue
 		}
+		if _, deleted := deletedByEnvironment[key]; deleted {
+			continue
+		}
+		if _, replaced := grant.LaunchEnvironment.SetEnv[key]; replaced {
+			continue
+		}
 		if environmentManaged(
 			key,
 			grant.LaunchRecipe,
@@ -94,6 +107,9 @@ func buildEnvironment(
 		) || launchPolicyManagesEnvironment(key, grant) {
 			continue
 		}
+		preserved[key] = value
+	}
+	for key, value := range grant.LaunchEnvironment.SetEnv {
 		preserved[key] = value
 	}
 	noProxy := safeNoProxy(noProxyValues, grant.ProtectedAuthorities)
@@ -115,9 +131,15 @@ func buildEnvironment(
 		preserved["NODE_EXTRA_CA_CERTS"] = grant.RootPEMPath
 		preserved["NODE_USE_ENV_PROXY"] = "1"
 		if managedClientCredential {
-			preserved["ANTHROPIC_API_KEY"] = clientCredentialPlaceholder
+			// Claude Code treats ANTHROPIC_API_KEY as an explicit user
+			// credential and enters its custom-key onboarding flow. A managed
+			// Environment must instead use the documented gateway-token input:
+			// the placeholder only makes the client emit an authenticated
+			// request, then Core removes it and applies the selected account at
+			// the final provider boundary.
+			preserved["ANTHROPIC_AUTH_TOKEN"] = clientCredentialPlaceholder
 		}
-	case clientadapter.LaunchSSLCertFile:
+	case clientadapter.LaunchCodexResponsesHTTP:
 		preserved["SSL_CERT_FILE"] = grant.RootPEMPath
 		if managedClientCredential {
 			preserved["CODEX_API_KEY"] = clientCredentialPlaceholder
@@ -159,7 +181,7 @@ func environmentManaged(
 	if !managedClientCredential {
 		return false
 	}
-	if recipe == clientadapter.LaunchSSLCertFile {
+	if recipe == clientadapter.LaunchCodexResponsesHTTP {
 		_, managed := codexManagedEnvironment[normalizedKey]
 		return managed
 	}
@@ -196,28 +218,22 @@ func usesManagedClientCredential(
 }
 
 func clientTargetAuthority(base []string, clientID string) (string, bool) {
-	values := make(map[string]string)
-	for _, entry := range base {
-		key, value, ok := strings.Cut(entry, "=")
-		if ok && key != "" {
-			values[strings.ToUpper(key)] = value
-		}
-	}
 	rawOrigin := ""
 	switch clientID {
 	case "claude-code":
-		rawOrigin = values["ANTHROPIC_BASE_URL"]
+		rawOrigin = environmentValue(base, "ANTHROPIC_BASE_URL")
 		if rawOrigin == "" {
 			rawOrigin = "https://api.anthropic.com"
 		}
 	case "codex-cli":
-		rawOrigin = values["CODEX_BASE_URL"]
-		if rawOrigin == "" {
-			rawOrigin = values["OPENAI_BASE_URL"]
+		// The same answer the launch recipe writes into the child's provider
+		// configuration, so the managed-credential decision cannot be made for a
+		// host the child never contacts.
+		origin, err := codexOrigin(base)
+		if err != nil {
+			return "", false
 		}
-		if rawOrigin == "" {
-			rawOrigin = "https://api.openai.com"
-		}
+		rawOrigin = origin
 	default:
 		return "", false
 	}

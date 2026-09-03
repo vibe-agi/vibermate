@@ -10,11 +10,13 @@ import (
 // deliberately coarser admission and UI-counting taxonomy.
 func KindForPurpose(purpose egressaudit.EgressPurpose) (EgressKind, error) {
 	switch purpose {
-	case egressaudit.PurposeProviderAttempt:
+	case egressaudit.PurposeProviderAttempt,
+		egressaudit.PurposeUpstreamModelDiscovery:
 		return EgressProvider, nil
 	case egressaudit.PurposeOriginalOrigin:
 		return EgressOpaque, nil
-	case egressaudit.PurposeProfileOperation, egressaudit.PurposeAgentProbe,
+	case egressaudit.PurposeRouteOperation, egressaudit.PurposeAgentProbe,
+		egressaudit.PurposeModelMetadataDirectory,
 		egressaudit.PurposeAuxiliaryLLM, egressaudit.PurposeLanguageTransform:
 		return EgressAuxiliary, nil
 	case egressaudit.PurposePluginCatalogSync,

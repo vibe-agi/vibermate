@@ -15,13 +15,14 @@ import (
 )
 
 type messagesStreamBlock struct {
-	kind         string
-	text         bytes.Buffer
-	id           string
-	name         string
-	initialInput json.RawMessage
-	partialInput bytes.Buffer
-	stopped      bool
+	kind               string
+	text               bytes.Buffer
+	id                 string
+	name               string
+	initialInput       json.RawMessage
+	partialInput       bytes.Buffer
+	extensionFragments [][]byte
+	stopped            bool
 }
 
 // AnthropicProviderStream validates and inventories an Anthropic-compatible
@@ -128,7 +129,12 @@ func (stream *AnthropicProviderStream) Feed(
 		if stream.barrier {
 			destination = &stream.held
 		}
-		if err := appendCompatibleEvent(destination, event); err != nil {
+		clientEvent, err := stream.clientEvent(event)
+		if err != nil {
+			stream.failed = true
+			return nil, err
+		}
+		if err := appendCompatibleEvent(destination, clientEvent); err != nil {
 			stream.failed = true
 			return nil, err
 		}
@@ -137,6 +143,53 @@ func (stream *AnthropicProviderStream) Feed(
 	// introduces the first tool call, plus every event after it, remains behind
 	// the complete-tool approval barrier.
 	return bytes.Clone(safe.Bytes()), nil
+}
+
+func (stream *AnthropicProviderStream) clientEvent(
+	event ssewire.Event,
+) (ssewire.Event, error) {
+	if stream.request.RequestedModel == stream.request.EffectiveModel {
+		return event, nil
+	}
+	var envelope struct {
+		Type string `json:"type"`
+	}
+	if json.Unmarshal(event.Data, &envelope) != nil || envelope.Type != "message_start" {
+		return event, nil
+	}
+	var root map[string]json.RawMessage
+	if err := json.Unmarshal(event.Data, &root); err != nil || root == nil {
+		return ssewire.Event{}, errors.New("Anthropic message_start is invalid")
+	}
+	var message map[string]json.RawMessage
+	if err := json.Unmarshal(root["message"], &message); err != nil || message == nil {
+		return ssewire.Event{}, errors.New("Anthropic message_start message is invalid")
+	}
+	var reportedModel string
+	if err := json.Unmarshal(message["model"], &reportedModel); err != nil ||
+		reportedModel == "" {
+		return ssewire.Event{}, errors.New("Anthropic message_start model is invalid")
+	}
+	if reportedModel == stream.request.RequestedModel {
+		return event, nil
+	}
+	model, err := json.Marshal(stream.request.RequestedModel)
+	if err != nil {
+		return ssewire.Event{}, err
+	}
+	message["model"] = model
+	encodedMessage, err := json.Marshal(message)
+	if err != nil {
+		return ssewire.Event{}, err
+	}
+	root["message"] = encodedMessage
+	encodedEvent, err := json.Marshal(root)
+	if err != nil {
+		return ssewire.Event{}, err
+	}
+	rewritten := event
+	rewritten.Data = encodedEvent
+	return rewritten, nil
 }
 
 func (stream *AnthropicProviderStream) SemanticProgress() uint64 {
@@ -233,6 +286,29 @@ func (stream *AnthropicProviderStream) FinishDecoded(
 	)
 	if err != nil {
 		return nil, err
+	}
+	for _, index := range indices {
+		block := stream.blocks[index]
+		if block.kind != "thinking" && block.kind != "redacted_thinking" {
+			continue
+		}
+		kind := protocolcore.ProviderExtensionThinking
+		if block.kind == "redacted_thinking" {
+			kind = protocolcore.ProviderExtensionRedactedThinking
+		}
+		extension, extensionErr := protocolcore.NewProviderExtension(
+			protocolcore.ProviderExtensionSourceAnthropicMessages,
+			kind,
+			fmt.Sprintf("$.content[%d]", index),
+			block.extensionFragments,
+		)
+		if extensionErr != nil {
+			return nil, messagesProviderFailure(fmt.Sprintf("$.content[%d]", index), extensionErr)
+		}
+		response.ProviderExtensions = append(response.ProviderExtensions, extension)
+	}
+	if err := response.Validate(); err != nil {
+		return nil, messagesProviderFailure("$", err)
 	}
 	intents := make([]protocolcore.ToolIntent, 0)
 	for _, block := range response.Blocks {
@@ -370,7 +446,7 @@ func (stream *AnthropicProviderStream) consumeEvent(
 			block.initialInput = bytes.Clone(content.Input)
 			stream.barrier = true
 		case "thinking", "redacted_thinking":
-			// Preserved in the held source wire; it is not an executable tool.
+			block.extensionFragments = append(block.extensionFragments, bytes.Clone(payload.ContentBlock))
 		default:
 			return stream.stateFailure(index, "content block type is unsupported")
 		}
@@ -382,6 +458,8 @@ func (stream *AnthropicProviderStream) consumeEvent(
 				Type        string `json:"type"`
 				Text        string `json:"text"`
 				PartialJSON string `json:"partial_json"`
+				Thinking    string `json:"thinking,omitempty"`
+				Signature   string `json:"signature,omitempty"`
 			} `json:"delta"`
 		}
 		if err := json.Unmarshal(event.Data, &payload); err != nil {
@@ -414,6 +492,11 @@ func (stream *AnthropicProviderStream) consumeEvent(
 			if block.kind != "thinking" && block.kind != "redacted_thinking" {
 				return stream.stateFailure(index, "thinking delta targets a different block")
 			}
+			fragment, err := json.Marshal(payload.Delta)
+			if err != nil {
+				return stream.eventFailure(index, err)
+			}
+			block.extensionFragments = append(block.extensionFragments, fragment)
 		default:
 			return stream.stateFailure(index, "content delta type is unsupported")
 		}

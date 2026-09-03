@@ -8,10 +8,10 @@ import (
 	"io"
 	"net/http"
 
-	"github.com/vibe-agi/vibermate/internal/access"
 	"github.com/vibe-agi/vibermate/internal/operationcatalog"
 	"github.com/vibe-agi/vibermate/internal/protocolcore"
 	"github.com/vibe-agi/vibermate/internal/protocolpath"
+	"github.com/vibe-agi/vibermate/internal/protocolspec"
 )
 
 const (
@@ -29,14 +29,14 @@ type messagesClientCodec struct {
 	codec *Codec
 }
 
-func (messagesClientCodec) Dialect() access.Dialect {
-	return access.DialectAnthropicMessages
+func (messagesClientCodec) Dialect() protocolspec.Dialect {
+	return protocolspec.DialectAnthropicMessages
 }
 
 func (codec messagesClientCodec) DecodeRequest(
 	body []byte,
 ) (protocolcore.Request, protocolcore.TranslationReport, error) {
-	request, _, err := codec.codec.DecodeClientRequest(body)
+	request, _, err := codec.codec.DecodeCompatibleClientRequest(body)
 	// Same-dialect forwarding preserves compatible extensions in the source
 	// body, so the cross-dialect "not forwarded" notices do not apply here.
 	return request, protocolcore.TranslationReport{}, err
@@ -67,15 +67,41 @@ func (codec messagesClientCodec) EncodeSourceResponse(
 		return nil, protocolcore.TranslationReport{},
 			errors.New("Anthropic-compatible response body is invalid")
 	}
-	return bytes.Clone(sourceBody), protocolcore.TranslationReport{}, nil
+	if request.RequestedModel == request.EffectiveModel {
+		return bytes.Clone(sourceBody), protocolcore.TranslationReport{}, nil
+	}
+	var root map[string]json.RawMessage
+	if err := json.Unmarshal(sourceBody, &root); err != nil || root == nil {
+		return nil, protocolcore.TranslationReport{},
+			errors.New("Anthropic-compatible response body is invalid")
+	}
+	var reportedModel string
+	if err := json.Unmarshal(root["model"], &reportedModel); err != nil ||
+		reportedModel == "" {
+		return nil, protocolcore.TranslationReport{},
+			errors.New("Anthropic-compatible response model is invalid")
+	}
+	if reportedModel == request.RequestedModel {
+		return bytes.Clone(sourceBody), protocolcore.TranslationReport{}, nil
+	}
+	model, err := json.Marshal(request.RequestedModel)
+	if err != nil {
+		return nil, protocolcore.TranslationReport{}, err
+	}
+	root["model"] = model
+	encoded, err := json.Marshal(root)
+	if err != nil {
+		return nil, protocolcore.TranslationReport{}, err
+	}
+	return encoded, protocolcore.TranslationReport{}, nil
 }
 
 type messagesBackendCodec struct {
 	codec *Codec
 }
 
-func (messagesBackendCodec) Dialect() access.Dialect {
-	return access.DialectAnthropicMessages
+func (messagesBackendCodec) Dialect() protocolspec.Dialect {
+	return protocolspec.DialectAnthropicMessages
 }
 
 func (codec messagesBackendCodec) EncodeRequest(
@@ -171,11 +197,11 @@ func NewMessagesProtocolPath(options Options) (*protocolpath.Path, error) {
 	if err != nil {
 		return nil, err
 	}
-	identifier, err := access.NewCodecPairID(MessagesCodecPairID)
+	identifier, err := protocolspec.NewCodecPairID(MessagesCodecPairID)
 	if err != nil {
 		return nil, err
 	}
-	operationID, err := access.NewClientOperationID(
+	operationID, err := protocolspec.NewClientOperationID(
 		operationcatalog.AnthropicMessagesCreateID,
 	)
 	if err != nil {
@@ -183,8 +209,8 @@ func NewMessagesProtocolPath(options Options) (*protocolpath.Path, error) {
 	}
 	path, err := protocolpath.New(protocolpath.Options{
 		ID:                 identifier,
-		Revision:           access.Revision(MessagesCodecRevision),
-		ClientOperationIDs: []access.ClientOperationID{operationID},
+		Revision:           protocolspec.Revision(MessagesCodecRevision),
+		ClientOperationIDs: []protocolspec.ClientOperationID{operationID},
 		Client:             messagesClientCodec{codec: codec},
 		Backend:            messagesBackendCodec{codec: codec},
 		Streaming:          messagesStreamingBridge{codec: codec},

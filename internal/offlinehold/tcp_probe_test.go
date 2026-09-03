@@ -1,6 +1,43 @@
 package offlinehold
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
+
+func TestProbePlanIdentityIsPairedAndCanonical(t *testing.T) {
+	t.Parallel()
+
+	valid := ProbeTarget{
+		Kind:          EgressProvider,
+		Transport:     ProbeTransportStrictTLS,
+		TargetRef:     "provider-target",
+		NetworkOrigin: "https://provider.example/v1",
+		HTTPAuthority: "provider.example",
+		TLSServerName: "provider.example",
+		PlanRevision:  7,
+		PlanDigest:    strings.Repeat("a", 64),
+	}
+	if err := valid.Validate(); err != nil {
+		t.Fatalf("canonical plan identity was rejected: %v", err)
+	}
+
+	for name, mutate := range map[string]func(*ProbeTarget){
+		"missing revision": func(target *ProbeTarget) { target.PlanRevision = 0 },
+		"missing digest":   func(target *ProbeTarget) { target.PlanDigest = "" },
+		"short digest":     func(target *ProbeTarget) { target.PlanDigest = "aa" },
+		"uppercase digest": func(target *ProbeTarget) { target.PlanDigest = strings.Repeat("A", 64) },
+		"non-hex digest":   func(target *ProbeTarget) { target.PlanDigest = strings.Repeat("z", 64) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			candidate := valid
+			mutate(&candidate)
+			if err := candidate.Validate(); err == nil {
+				t.Fatal("non-canonical plan identity was accepted")
+			}
+		})
+	}
+}
 
 // A blind tunnel forwards bytes it never interprets, so its resume probe can
 // only be a TCP connect: there is no TLS server name to verify and no protocol

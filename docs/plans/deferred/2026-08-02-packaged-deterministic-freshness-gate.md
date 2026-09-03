@@ -3,7 +3,7 @@
 Status: deferred after the clean `8b6c304` baseline; resume before any Preview claim
 Created: 2026-08-02
 Implementation baseline: `1b1a1b5fe43e1e4d89243006b10ff9c67ef0ea28`
-Predecessor: `docs/plans/archive/2026-08-02-packaged-deterministic-discovery.md`
+Predecessor: `2026-08-02-packaged-deterministic-discovery` (Git history)
 
 ## Scope coordinates
 

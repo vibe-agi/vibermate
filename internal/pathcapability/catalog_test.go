@@ -5,10 +5,10 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/vibe-agi/vibermate/internal/access"
 	"github.com/vibe-agi/vibermate/internal/exchange"
 	"github.com/vibe-agi/vibermate/internal/operationcatalog"
 	"github.com/vibe-agi/vibermate/internal/pathcapability"
+	"github.com/vibe-agi/vibermate/internal/protocolspec"
 )
 
 func TestBuiltInPathCapabilityClassifiesSemanticAuxiliaryAndOpaque(t *testing.T) {
@@ -16,7 +16,7 @@ func TestBuiltInPathCapabilityClassifiesSemanticAuxiliaryAndOpaque(t *testing.T)
 
 	catalog := builtInCatalog(t)
 	semantic, err := catalog.Classify(
-		access.DialectAnthropicMessages,
+		protocolspec.DialectAnthropicMessages,
 		http.MethodPost,
 		"/v1/messages",
 		"",
@@ -30,7 +30,7 @@ func TestBuiltInPathCapabilityClassifiesSemanticAuxiliaryAndOpaque(t *testing.T)
 		t.Fatalf("semantic capability=%+v err=%v", semantic, err)
 	}
 	betaSemantic, err := catalog.Classify(
-		access.DialectAnthropicMessages,
+		protocolspec.DialectAnthropicMessages,
 		http.MethodPost,
 		"/v1/messages",
 		"",
@@ -46,7 +46,7 @@ func TestBuiltInPathCapabilityClassifiesSemanticAuxiliaryAndOpaque(t *testing.T)
 	}
 
 	auxiliary, err := catalog.Classify(
-		access.DialectAnthropicMessages,
+		protocolspec.DialectAnthropicMessages,
 		http.MethodPost,
 		"/v1/messages/count_tokens",
 		"",
@@ -58,7 +58,7 @@ func TestBuiltInPathCapabilityClassifiesSemanticAuxiliaryAndOpaque(t *testing.T)
 		t.Fatalf("auxiliary capability=%+v err=%v", auxiliary, err)
 	}
 	betaAuxiliary, err := catalog.Classify(
-		access.DialectAnthropicMessages,
+		protocolspec.DialectAnthropicMessages,
 		http.MethodPost,
 		"/v1/messages/count_tokens",
 		"",
@@ -68,7 +68,7 @@ func TestBuiltInPathCapabilityClassifiesSemanticAuxiliaryAndOpaque(t *testing.T)
 		t.Fatalf("beta auxiliary capability=%+v err=%v", betaAuxiliary, err)
 	}
 	opaque, err := catalog.Classify(
-		access.DialectAnthropicMessages,
+		protocolspec.DialectAnthropicMessages,
 		http.MethodGet,
 		"/v1/unknown",
 		"",
@@ -147,7 +147,7 @@ func TestBuiltInPathCapabilityFailsClosedForKnownOrNonCanonicalTargets(
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			_, err := catalog.Classify(
-				access.DialectAnthropicMessages,
+				protocolspec.DialectAnthropicMessages,
 				test.method,
 				test.path,
 				test.rawPath,
@@ -168,7 +168,7 @@ func TestBuiltInPathCapabilityIsolatesResponsesFromOtherOpenAIOperations(
 
 	catalog := builtInCatalog(t)
 	responses, err := catalog.Classify(
-		access.DialectOpenAIResponses,
+		protocolspec.DialectOpenAIResponses,
 		http.MethodPost,
 		"/v1/responses",
 		"",
@@ -180,12 +180,12 @@ func TestBuiltInPathCapabilityIsolatesResponsesFromOtherOpenAIOperations(
 			operationcatalog.OpenAIResponsesCreateID ||
 		responses.Revision() != 1 ||
 		responses.BodyKind() != pathcapability.BodyJSON ||
-		responses.Transport() != access.ClientOperationTransportHTTP ||
+		responses.Transport() != protocolspec.ClientOperationTransportHTTP ||
 		responses.ReplayClass() != exchange.ReplayGenerationCostOnly {
 		t.Fatalf("Responses capability=%+v err=%v", responses, err)
 	}
 	websocket, err := catalog.Classify(
-		access.DialectOpenAIResponses,
+		protocolspec.DialectOpenAIResponses,
 		http.MethodGet,
 		"/v1/responses",
 		"",
@@ -195,13 +195,13 @@ func TestBuiltInPathCapabilityIsolatesResponsesFromOtherOpenAIOperations(
 		websocket.Kind() != pathcapability.KindUnsupported ||
 		websocket.OperationID().String() !=
 			operationcatalog.OpenAIResponsesWebSocketUnsupportedID ||
-		websocket.Transport() != access.ClientOperationTransportWebSocket ||
+		websocket.Transport() != protocolspec.ClientOperationTransportWebSocket ||
 		websocket.EgressBearing() {
 		t.Fatalf("Responses WebSocket capability=%+v err=%v", websocket, err)
 	}
 
 	models, err := catalog.Classify(
-		access.DialectOpenAIResponses,
+		protocolspec.DialectOpenAIResponses,
 		http.MethodGet,
 		"/v1/models",
 		"",
@@ -228,7 +228,7 @@ func TestBuiltInPathCapabilityIsolatesResponsesFromOtherOpenAIOperations(
 		"/v1/embeddings",
 	} {
 		capability, classifyErr := catalog.Classify(
-			access.DialectOpenAIResponses,
+			protocolspec.DialectOpenAIResponses,
 			http.MethodPost,
 			path,
 			"",
@@ -246,7 +246,7 @@ func TestBuiltInPathCapabilityIsolatesResponsesFromOtherOpenAIOperations(
 	}
 
 	unknown, err := catalog.Classify(
-		access.DialectOpenAIResponses,
+		protocolspec.DialectOpenAIResponses,
 		http.MethodGet,
 		"/codex/client/settings",
 		"",
@@ -285,7 +285,7 @@ func TestBuiltInPathCapabilityRejectsWrongResponsesMethodAndQuery(
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			_, err := catalog.Classify(
-				access.DialectOpenAIResponses,
+				protocolspec.DialectOpenAIResponses,
 				test.method,
 				"/v1/responses",
 				"",

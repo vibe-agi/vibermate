@@ -4,9 +4,10 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/vibe-agi/vibermate/internal/access"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
 	"github.com/vibe-agi/vibermate/internal/originaltransport"
+	"github.com/vibe-agi/vibermate/internal/originidentity"
+	"github.com/vibe-agi/vibermate/internal/protocolspec"
 )
 
 func payloadClassRequestOptions(
@@ -14,7 +15,7 @@ func payloadClassRequestOptions(
 ) originaltransport.RequestOptions {
 	t.Helper()
 
-	origin, err := access.NewClientOrigin("https://api.anthropic.com:443")
+	origin, err := originidentity.ParseClientOrigin("https://api.anthropic.com:443")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -25,7 +26,7 @@ func payloadClassRequestOptions(
 		Method:       http.MethodGet,
 		Path:         "/api/claude_code/settings",
 		Headers:      http.Header{"Authorization": []string{"Bearer client"}},
-		PayloadClass: access.OperationPayloadControl,
+		PayloadClass: protocolspec.OperationPayloadControl,
 		ConnectionID: "connection-test",
 		ParentID:     "original-request-test",
 	}
@@ -34,9 +35,9 @@ func payloadClassRequestOptions(
 func TestOriginalRequestAcceptsProvenNoPayloadClasses(t *testing.T) {
 	t.Parallel()
 
-	for _, class := range []access.OperationPayloadClass{
-		access.OperationPayloadNone,
-		access.OperationPayloadControl,
+	for _, class := range []protocolspec.OperationPayloadClass{
+		protocolspec.OperationPayloadNone,
+		protocolspec.OperationPayloadControl,
 	} {
 		options := payloadClassRequestOptions(t)
 		options.PayloadClass = class
@@ -56,11 +57,11 @@ func TestOriginalRequestAcceptsProvenNoPayloadClasses(t *testing.T) {
 func TestOriginalRequestRejectsClientPayloadClasses(t *testing.T) {
 	t.Parallel()
 
-	for _, class := range []access.OperationPayloadClass{
-		access.OperationPayloadClientSemantic,
-		access.OperationPayloadClientData,
-		access.OperationPayloadClass(""),
-		access.OperationPayloadClass("prompt"),
+	for _, class := range []protocolspec.OperationPayloadClass{
+		protocolspec.OperationPayloadClientSemantic,
+		protocolspec.OperationPayloadClientData,
+		protocolspec.OperationPayloadClass(""),
+		protocolspec.OperationPayloadClass("prompt"),
 	} {
 		options := payloadClassRequestOptions(t)
 		options.PayloadClass = class
@@ -77,7 +78,7 @@ func TestOriginalRequestAdmitsUnclassifiedOnlyWithoutABody(t *testing.T) {
 	t.Parallel()
 
 	options := payloadClassRequestOptions(t)
-	options.PayloadClass = access.OperationPayloadUnknown
+	options.PayloadClass = protocolspec.OperationPayloadUnknown
 	if _, err := originaltransport.NewRequest(options); err != nil {
 		t.Fatalf("bodyless unclassified request was rejected: %v", err)
 	}

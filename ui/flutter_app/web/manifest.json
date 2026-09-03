@@ -1,0 +1,10 @@
+{
+  "name": "ViberMate Runtime Server",
+  "short_name": "ViberMate",
+  "start_url": ".",
+  "display": "standalone",
+  "background_color": "#10151A",
+  "theme_color": "#1769A6",
+  "description": "Manage a ViberMate Runtime Server and inspect captured Agent traffic.",
+  "orientation": "landscape-primary"
+}

@@ -1,6 +1,7 @@
-// Package exchange executes one immutable Access plan against the protocol and
-// provider boundaries. It owns Exchange admission, Attempt commit accounting,
-// and downstream publication, but it does not own an ingress listener.
+// Package exchange executes one immutable Environment request plan against the
+// protocol and provider boundaries. It owns Exchange admission, Attempt commit
+// accounting, and downstream publication, but it does not own an ingress
+// listener or resolve mutable configuration.
 package exchange
 
 import (
@@ -11,21 +12,27 @@ import (
 	"net/http"
 	"net/url"
 	pathpkg "path"
+	"path/filepath"
 	"slices"
 	"strings"
 	"time"
 	"unicode"
 	"unicode/utf8"
 
-	"github.com/vibe-agi/vibermate/internal/access"
+	"github.com/vibe-agi/vibermate/internal/agentconversation"
 	"github.com/vibe-agi/vibermate/internal/captureadmission"
+	"github.com/vibe-agi/vibermate/internal/clientannotation"
+	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
 	"github.com/vibe-agi/vibermate/internal/protocolcore"
 	"github.com/vibe-agi/vibermate/internal/protocolpath"
+	"github.com/vibe-agi/vibermate/internal/protocolspec"
+	"github.com/vibe-agi/vibermate/internal/providerauth"
 	"github.com/vibe-agi/vibermate/internal/providertransport"
+	"github.com/vibe-agi/vibermate/internal/rawevidence"
 	"github.com/vibe-agi/vibermate/internal/transportprofile"
+	"github.com/vibe-agi/vibermate/internal/wireprofile"
 	"github.com/vibe-agi/vibermate/internal/workspaceidentity"
-	"github.com/vibe-agi/vibermate/internal/workspaceroute"
 )
 
 const MaxExchangeIdentityBytes = 512
@@ -35,12 +42,11 @@ type ReasonCode string
 const (
 	ReasonInvalidExchangeRequest        ReasonCode = "invalid_exchange_request"
 	ReasonUnsupportedClientInput        ReasonCode = "unsupported_client_input"
-	ReasonAccessPlanUnavailable         ReasonCode = "access_plan_unavailable"
-	ReasonIngressBindingStale           ReasonCode = "ingress_binding_stale"
-	ReasonWorkspaceRouteUnavailable     ReasonCode = "workspace_route_unavailable"
+	ReasonEnvironmentPlanInvalid        ReasonCode = "environment_plan_invalid"
+	ReasonAccountSelectorFailed         ReasonCode = "account_selector_failed"
 	ReasonOfflineHoldUnavailable        ReasonCode = "offline_hold_unavailable"
-	ReasonUnsupportedAccessPlan         ReasonCode = "unsupported_access_plan"
 	ReasonProviderRequestInvalid        ReasonCode = "provider_request_invalid"
+	ReasonMessageTransformFailed        ReasonCode = "message_transform_failed"
 	ReasonProviderCredentialUnavailable ReasonCode = "provider_credential_unavailable"
 	ReasonProviderTransportFailed       ReasonCode = "provider_transport_failed"
 	ReasonProviderResponseIdle          ReasonCode = "provider_response_idle"
@@ -48,6 +54,7 @@ const (
 	ReasonProviderResponseInvalid       ReasonCode = "provider_response_invalid"
 	ReasonTransportRetryExhausted       ReasonCode = "transport_retry_exhausted"
 	ReasonToolDecisionRejected          ReasonCode = "tool_decision_rejected"
+	ReasonToolDecisionExpired           ReasonCode = "tool_decision_expired"
 	ReasonToolDecisionUnavailable       ReasonCode = "tool_decision_unavailable"
 	ReasonDownstreamCommitFailed        ReasonCode = "downstream_commit_failed"
 	ReasonDownstreamDisconnected        ReasonCode = "downstream_disconnect"
@@ -233,7 +240,7 @@ func newFailure(
 	if cause == nil {
 		cause = errors.New("Exchange operation failed")
 	}
-	return &Failure{
+	failure := &Failure{
 		Code:           code,
 		ExchangeID:     exchangeID,
 		ProviderStatus: providerStatus,
@@ -241,6 +248,7 @@ func newFailure(
 		ProtocolReason: protocolcore.ReasonOf(cause),
 		cause:          cause,
 	}
+	return failure
 }
 
 // structuralPath extracts the failure's location in the request's shape.
@@ -297,6 +305,18 @@ func ReasonOf(err error) ReasonCode {
 	return ""
 }
 
+// ProviderStatusOf returns the upstream HTTP status recorded on a classified
+// Exchange failure. It exposes only the numeric status needed to preserve the
+// provider's retry semantics at the downstream HTTP boundary; response bodies
+// and private transport causes remain internal evidence.
+func ProviderStatusOf(err error) int {
+	var failure *Failure
+	if errors.As(err, &failure) {
+		return failure.ProviderStatus
+	}
+	return 0
+}
+
 type ReplayClass string
 
 const (
@@ -334,16 +354,16 @@ func (class ReplayClass) allowsTransportResend() bool {
 // ClientOperationEvidence freezes the operation-catalog match made before
 // semantic decoding. Exchange revalidates it against the one resolved plan.
 type ClientOperationEvidence struct {
-	id       access.ClientOperationID
-	revision access.Revision
+	id       protocolspec.ClientOperationID
+	revision protocolspec.Revision
 	method   string
 	path     string
 	rawQuery string
 }
 
 func NewClientOperationEvidence(
-	id access.ClientOperationID,
-	revision access.Revision,
+	id protocolspec.ClientOperationID,
+	revision protocolspec.Revision,
 	method string,
 	path string,
 	rawQuery string,
@@ -361,11 +381,11 @@ func NewClientOperationEvidence(
 	return evidence, nil
 }
 
-func (evidence ClientOperationEvidence) ID() access.ClientOperationID {
+func (evidence ClientOperationEvidence) ID() protocolspec.ClientOperationID {
 	return evidence.id
 }
 
-func (evidence ClientOperationEvidence) Revision() access.Revision {
+func (evidence ClientOperationEvidence) Revision() protocolspec.Revision {
 	return evidence.revision
 }
 
@@ -396,11 +416,11 @@ func (evidence ClientOperationEvidence) validate() error {
 // ClientRequest is an owned immutable ingress representation.
 type ClientRequest struct {
 	exchangeID         string
-	ingress            access.IngressBinding
+	plan               environment.RequestPlan
 	operation          ClientOperationEvidence
 	body               []byte
 	replayClass        ReplayClass
-	clientProtocol     access.ApplicationProtocol
+	clientProtocol     wireprofile.ApplicationProtocol
 	clientHello        transportprofile.Observation
 	hasClientHello     bool
 	admission          captureadmission.Admission
@@ -408,6 +428,8 @@ type ClientRequest struct {
 	hasCorrelation     bool
 	anthropicBeta      string
 	clientUserAgent    string
+	clientEvidence     []protocolcore.ProtocolEvidenceValue
+	hasClientEvidence  bool
 	originalHeaders    http.Header
 	hasOriginalHeaders bool
 }
@@ -415,11 +437,12 @@ type ClientRequest struct {
 type clientRequestOptionKind uint8
 
 const (
-	clientRequestOptionClientHello     clientRequestOptionKind = 1
-	clientRequestOptionCorrelation     clientRequestOptionKind = 2
-	clientRequestOptionAnthropicBeta   clientRequestOptionKind = 3
-	clientRequestOptionUserAgent       clientRequestOptionKind = 4
-	clientRequestOptionOriginalHeaders clientRequestOptionKind = 5
+	clientRequestOptionClientHello      clientRequestOptionKind = 1
+	clientRequestOptionCorrelation      clientRequestOptionKind = 2
+	clientRequestOptionAnthropicBeta    clientRequestOptionKind = 3
+	clientRequestOptionUserAgent        clientRequestOptionKind = 4
+	clientRequestOptionOriginalHeaders  clientRequestOptionKind = 5
+	clientRequestOptionProtocolEvidence clientRequestOptionKind = 6
 )
 
 // ClientRequestOption is a closed typed option. Its fields are private so an
@@ -431,6 +454,7 @@ type ClientRequestOption struct {
 	connectionRef   string
 	anthropicBeta   string
 	clientUserAgent string
+	clientEvidence  []protocolcore.ProtocolEvidenceValue
 	originalHeaders http.Header
 }
 
@@ -476,10 +500,24 @@ func WithClientUserAgent(value string) ClientRequestOption {
 	}
 }
 
+// WithClientProtocolEvidence carries a bounded allowlist of non-secret,
+// client-native identifiers across the ingress boundary. Raw HTTP remains the
+// wire authority; these canonical values exist only so semantic projections
+// can associate Exchanges without guessing from time, titles, or content.
+func WithClientProtocolEvidence(
+	values []protocolcore.ProtocolEvidenceValue,
+) ClientRequestOption {
+	return ClientRequestOption{
+		kind:           clientRequestOptionProtocolEvidence,
+		clientEvidence: slices.Clone(values),
+	}
+}
+
 // WithOriginalHeaders carries the client-owned request envelope needed only
-// by the system original-passthrough profile. The managed path never reads it;
-// selection must prove exact ClientOrigin equality before these headers can
-// reach a transport. Values remain in memory only and are never evidence.
+// by an exact client-passthrough route. A managed-credential path never reads
+// it; the frozen Environment plan must prove exact Original Destination
+// equality before these headers can reach a transport. Values remain in
+// memory only and are never evidence.
 func WithOriginalHeaders(headers http.Header) ClientRequestOption {
 	return ClientRequestOption{
 		kind:            clientRequestOptionOriginalHeaders,
@@ -489,17 +527,17 @@ func WithOriginalHeaders(headers http.Header) ClientRequestOption {
 
 func NewClientRequest(
 	exchangeID string,
-	ingress access.IngressBinding,
+	plan environment.RequestPlan,
 	operation ClientOperationEvidence,
 	body []byte,
 	replayClass ReplayClass,
-	clientProtocol access.ApplicationProtocol,
+	clientProtocol wireprofile.ApplicationProtocol,
 	options ...ClientRequestOption,
 ) (ClientRequest, error) {
 	if err := validateIdentity("Exchange ID", exchangeID); err != nil {
 		return ClientRequest{}, err
 	}
-	if err := ingress.Validate(); err != nil {
+	if err := validateFrozenRequestPlan(plan); err != nil {
 		return ClientRequest{}, err
 	}
 	if err := operation.validate(); err != nil {
@@ -511,13 +549,15 @@ func NewClientRequest(
 	if err := replayClass.validate(); err != nil {
 		return ClientRequest{}, err
 	}
-	if clientProtocol != access.ApplicationProtocolHTTP1 &&
-		clientProtocol != access.ApplicationProtocolHTTP2 {
+	if !clientProtocol.Valid() {
 		return ClientRequest{}, errors.New("client HTTP protocol is unavailable")
+	}
+	if err := validateFrozenWireVariant(plan, clientProtocol); err != nil {
+		return ClientRequest{}, err
 	}
 	request := ClientRequest{
 		exchangeID:     exchangeID,
-		ingress:        ingress,
+		plan:           plan,
 		operation:      operation,
 		body:           bytes.Clone(body),
 		replayClass:    replayClass,
@@ -572,6 +612,19 @@ func NewClientRequest(
 				)
 			}
 			request.clientUserAgent = option.clientUserAgent
+		case clientRequestOptionProtocolEvidence:
+			if request.hasClientEvidence || len(option.clientEvidence) == 0 {
+				return ClientRequest{}, errors.New(
+					"client protocol evidence option is invalid",
+				)
+			}
+			if err := protocolcore.ValidateProtocolEvidence(
+				option.clientEvidence,
+			); err != nil {
+				return ClientRequest{}, err
+			}
+			request.clientEvidence = slices.Clone(option.clientEvidence)
+			request.hasClientEvidence = true
 		case clientRequestOptionOriginalHeaders:
 			if request.hasOriginalHeaders {
 				return ClientRequest{}, errors.New(
@@ -627,6 +680,10 @@ func (request ClientRequest) protocolHeaders() http.Header {
 
 func (request ClientRequest) ClientUserAgent() string {
 	return request.clientUserAgent
+}
+
+func (request ClientRequest) ClientProtocolEvidence() []protocolcore.ProtocolEvidenceValue {
+	return slices.Clone(request.clientEvidence)
 }
 
 func (request ClientRequest) OriginalHeaders() (http.Header, bool) {
@@ -701,11 +758,11 @@ func (request ClientRequest) CaptureAdmission() (
 	return request.admission, request.hasCorrelation
 }
 
-func (request ClientRequest) IngressProfileRef() string {
+func (request ClientRequest) CaptureAdmissionRef() string {
 	if !request.hasCorrelation {
 		return ""
 	}
-	return request.admission.IngressProfileID()
+	return request.admission.AdmissionRef()
 }
 
 // CaptureRunRef is present only for an Exchange admitted through managed run.
@@ -738,12 +795,8 @@ func (request ClientRequest) ExchangeID() string {
 	return request.exchangeID
 }
 
-func (request ClientRequest) AccessID() access.AccessID {
-	return request.ingress.AccessID()
-}
-
-func (request ClientRequest) IngressBinding() access.IngressBinding {
-	return request.ingress
+func (request ClientRequest) RequestPlan() environment.RequestPlan {
+	return request.plan
 }
 
 func (request ClientRequest) ClientOperation() ClientOperationEvidence {
@@ -765,7 +818,7 @@ func (request ClientRequest) ClientHelloObservation() (
 	return request.clientHello, request.hasClientHello
 }
 
-func (request ClientRequest) ClientHTTPProtocol() access.ApplicationProtocol {
+func (request ClientRequest) ClientHTTPProtocol() wireprofile.ApplicationProtocol {
 	return request.clientProtocol
 }
 
@@ -773,7 +826,7 @@ func (request ClientRequest) validate() error {
 	if err := validateIdentity("Exchange ID", request.exchangeID); err != nil {
 		return err
 	}
-	if err := request.ingress.Validate(); err != nil {
+	if err := validateFrozenRequestPlan(request.plan); err != nil {
 		return err
 	}
 	if err := request.operation.validate(); err != nil {
@@ -786,12 +839,22 @@ func (request ClientRequest) validate() error {
 	if request.hasClientHello && !request.clientHello.Available() {
 		return errors.New("client TLS ClientHello observation is unavailable")
 	}
-	if request.clientProtocol != access.ApplicationProtocolHTTP1 &&
-		request.clientProtocol != access.ApplicationProtocolHTTP2 {
+	if !request.clientProtocol.Valid() {
 		return errors.New("client HTTP protocol is unavailable")
+	}
+	if err := validateFrozenWireVariant(request.plan, request.clientProtocol); err != nil {
+		return err
 	}
 	if request.hasOriginalHeaders {
 		if _, err := validateOriginalHeaders(request.originalHeaders); err != nil {
+			return err
+		}
+	}
+	if request.hasClientEvidence {
+		if len(request.clientEvidence) == 0 {
+			return errors.New("client protocol evidence is unavailable")
+		}
+		if err := protocolcore.ValidateProtocolEvidence(request.clientEvidence); err != nil {
 			return err
 		}
 	}
@@ -813,7 +876,7 @@ func validOperationMethod(value string) bool {
 
 func canonicalOperationPath(value string) bool {
 	if value == "" ||
-		len(value) > access.MaxClientOperationPath ||
+		len(value) > protocolspec.MaxOperationPath ||
 		!utf8.ValidString(value) ||
 		value[0] != '/' ||
 		strings.ContainsAny(value, "\\%\x00\r\n\t") ||
@@ -940,26 +1003,142 @@ type Provider interface {
 	) (*http.Response, providertransport.Evidence, error)
 }
 
-type AttemptObservation struct {
-	ExchangeID     string
-	AccessID       access.AccessID
-	AccessName     string
-	AccessRevision access.Revision
-	Admission      captureadmission.Admission
-	HasAdmission   bool
-	ConnectionID   string
-	Outcome        AttemptOutcome
-	ReasonCode     ReasonCode
-	ProviderStatus int
-	ProviderField  ProviderField
-	ClientField    ClientField
-	ClientPath     string
-	Presentation   providertransport.WirePresentationEvidence
-	Transport      transportprofile.Evidence
+// AccountLeaseRequest is the immutable authorization scope for one managed
+// provider attempt. It is derived only from the frozen Environment request
+// plan; an ingress caller cannot choose a different account or realm.
+type AccountLeaseRequest struct {
+	environmentID            environment.EnvironmentID
+	environmentRevision      environment.Revision
+	environmentDigest        environment.CandidateDigest
+	routeID                  environment.UpstreamRouteID
+	routeRevision            environment.Revision
+	upstreamEndpointID       string
+	upstreamEndpointRevision environment.Revision
+	accountID                string
+	accountRevision          environment.Revision
+	realmID                  string
 }
 
-type AttemptObserver interface {
-	Observe(context.Context, AttemptObservation) error
+func (request AccountLeaseRequest) EnvironmentID() environment.EnvironmentID {
+	return request.environmentID
+}
+
+func (request AccountLeaseRequest) EnvironmentRevision() environment.Revision {
+	return request.environmentRevision
+}
+
+func (request AccountLeaseRequest) EnvironmentDigest() environment.CandidateDigest {
+	return request.environmentDigest
+}
+
+func (request AccountLeaseRequest) RouteID() environment.UpstreamRouteID {
+	return request.routeID
+}
+
+func (request AccountLeaseRequest) RouteRevision() environment.Revision {
+	return request.routeRevision
+}
+
+func (request AccountLeaseRequest) UpstreamEndpointID() string {
+	return request.upstreamEndpointID
+}
+
+func (request AccountLeaseRequest) UpstreamEndpointRevision() environment.Revision {
+	return request.upstreamEndpointRevision
+}
+
+func (request AccountLeaseRequest) AccountID() string {
+	return request.accountID
+}
+
+func (request AccountLeaseRequest) AccountRevision() environment.Revision {
+	return request.accountRevision
+}
+
+func (request AccountLeaseRequest) RealmID() string {
+	return request.realmID
+}
+
+type AccountLeaseAuthority interface {
+	Acquire(context.Context, AccountLeaseRequest) (providerauth.Lease, error)
+}
+
+type AttemptObservation struct {
+	ExchangeID             string
+	EnvironmentID          environment.EnvironmentID
+	EnvironmentRevision    environment.Revision
+	EnvironmentDigest      string
+	EndpointID             environment.ClientEndpointID
+	EndpointRevision       environment.Revision
+	ProtocolPlanID         environment.ClientProtocolPlanID
+	ProtocolPlanRevision   environment.Revision
+	RouteID                environment.UpstreamRouteID
+	RouteRevision          environment.Revision
+	AccountID              string
+	AccountRevision        uint64
+	CredentialEpoch        uint64
+	Admission              captureadmission.Admission
+	HasAdmission           bool
+	ConnectionID           string
+	Outcome                AttemptOutcome
+	ReasonCode             ReasonCode
+	ProviderStatus         int
+	ProviderField          ProviderField
+	ClientField            ClientField
+	ClientPath             string
+	Presentation           providertransport.WirePresentationEvidence
+	Transport              transportprofile.Evidence
+	Conversation           agentconversation.Ref
+	ClientProtocolEvidence []protocolcore.ProtocolEvidenceValue
+	ProviderResponseID     string
+}
+
+type StartObservation struct {
+	ExchangeID             string
+	EnvironmentID          environment.EnvironmentID
+	EnvironmentRevision    environment.Revision
+	EnvironmentDigest      string
+	EndpointID             environment.ClientEndpointID
+	EndpointRevision       environment.Revision
+	ProtocolPlanID         environment.ClientProtocolPlanID
+	ProtocolPlanRevision   environment.Revision
+	RouteID                environment.UpstreamRouteID
+	RouteRevision          environment.Revision
+	Admission              captureadmission.Admission
+	HasAdmission           bool
+	ConnectionID           string
+	Conversation           agentconversation.Ref
+	ClientProtocolEvidence []protocolcore.ProtocolEvidenceValue
+}
+
+type ExchangeObserver interface {
+	ObserveStart(context.Context, StartObservation) error
+	ObserveTerminal(context.Context, AttemptObservation) error
+}
+
+// ContentObservation is the explicit plaintext boundary for one semantic
+// Exchange. It is independent from AttemptObservation so body-free audit
+// consumers cannot accidentally gain access to messages or tool arguments.
+type ContentObservation struct {
+	ExchangeID           string
+	CaptureRunID         string
+	ManualCaptureID      string
+	EnvironmentID        environment.EnvironmentID
+	EnvironmentRevision  environment.Revision
+	EnvironmentDigest    string
+	EndpointID           environment.ClientEndpointID
+	EndpointRevision     environment.Revision
+	ProtocolPlanID       environment.ClientProtocolPlanID
+	ProtocolPlanRevision environment.Revision
+	RouteID              environment.UpstreamRouteID
+	RouteRevision        environment.Revision
+	Recording            environment.ContentRecordingPolicy
+	Request              protocolcore.Request
+	Response             *protocolcore.Response
+}
+
+type ContentObserver interface {
+	ObserveContent(context.Context, ContentObservation) error
 }
 
 type ToolDecisionOutcome string
@@ -993,24 +1172,130 @@ func (decision ToolDecision) validate() error {
 // ToolDecisionRequest is an immutable complete decision group. Parallel tool
 // calls from one provider terminal are never split into independent decisions.
 type ToolDecisionRequest struct {
-	exchangeID   string
-	accessID     access.AccessID
-	planRevision access.Revision
-	planHash     access.PlanHash
-	intents      []protocolcore.ToolIntent
+	exchangeID          string
+	environmentID       environment.EnvironmentID
+	environmentRevision environment.Revision
+	environmentDigest   environment.CandidateDigest
+	routeID             environment.UpstreamRouteID
+	routeRevision       environment.Revision
+	decisionContext     ToolDecisionContext
+	intents             []protocolcore.ToolIntent
+}
+
+// ToolDecisionContext freezes the policy and the only evidence allowed to
+// classify structured workspace actions. A tool name on its own is never
+// authority: Core also requires exact adapter capability, the request's tool
+// schema, and the launcher's canonical workspace root.
+type ToolDecisionContext struct {
+	policySet                environment.PolicySet
+	workspaceRoot            string
+	structuredWorkspaceTools bool
+	tools                    []protocolcore.ToolDefinition
+	toolNamespaces           []protocolcore.ToolNamespace
+}
+
+func NewToolDecisionContext(
+	policySet environment.PolicySet,
+	workspaceRoot string,
+	structuredWorkspaceTools bool,
+	tools []protocolcore.ToolDefinition,
+	toolNamespaces []protocolcore.ToolNamespace,
+) (ToolDecisionContext, error) {
+	if err := policySet.Validate(); err != nil {
+		return ToolDecisionContext{}, err
+	}
+	if workspaceRoot != "" &&
+		(!filepath.IsAbs(workspaceRoot) || filepath.Clean(workspaceRoot) != workspaceRoot) {
+		return ToolDecisionContext{}, errors.New("tool decision workspace root is invalid")
+	}
+	if len(tools) > protocolcore.MaxToolCount ||
+		len(toolNamespaces) > protocolcore.MaxToolCount {
+		return ToolDecisionContext{}, errors.New("tool decision definitions exceed the limit")
+	}
+	toolNames := make(map[string]struct{}, len(tools))
+	clonedTools := make([]protocolcore.ToolDefinition, len(tools))
+	for index, tool := range tools {
+		if err := tool.Validate(); err != nil {
+			return ToolDecisionContext{}, err
+		}
+		if _, duplicate := toolNames[tool.Name]; duplicate {
+			return ToolDecisionContext{}, errors.New("tool decision definition is duplicated")
+		}
+		toolNames[tool.Name] = struct{}{}
+		clonedTools[index] = tool.Clone()
+	}
+	namespaceNames := make(map[string]struct{}, len(toolNamespaces))
+	totalTools := len(tools)
+	clonedNamespaces := make([]protocolcore.ToolNamespace, len(toolNamespaces))
+	for index, namespace := range toolNamespaces {
+		if err := namespace.Validate(); err != nil {
+			return ToolDecisionContext{}, err
+		}
+		if _, duplicate := namespaceNames[namespace.Name]; duplicate {
+			return ToolDecisionContext{}, errors.New("tool decision namespace is duplicated")
+		}
+		namespaceNames[namespace.Name] = struct{}{}
+		totalTools += len(namespace.Tools)
+		if totalTools > protocolcore.MaxToolCount {
+			return ToolDecisionContext{}, errors.New("tool decision definitions exceed the total limit")
+		}
+		clonedNamespaces[index] = namespace.Clone()
+	}
+	return ToolDecisionContext{
+		policySet: policySet, workspaceRoot: workspaceRoot,
+		structuredWorkspaceTools: structuredWorkspaceTools,
+		tools:                    clonedTools, toolNamespaces: clonedNamespaces,
+	}, nil
+}
+
+func (context ToolDecisionContext) PolicySet() environment.PolicySet {
+	return context.policySet
+}
+
+func (context ToolDecisionContext) WorkspaceRoot() (string, bool) {
+	return context.workspaceRoot, context.workspaceRoot != ""
+}
+
+func (context ToolDecisionContext) StructuredWorkspaceTools() bool {
+	return context.structuredWorkspaceTools
+}
+
+func (context ToolDecisionContext) Tools() []protocolcore.ToolDefinition {
+	cloned := make([]protocolcore.ToolDefinition, len(context.tools))
+	for index, tool := range context.tools {
+		cloned[index] = tool.Clone()
+	}
+	return cloned
+}
+
+func (context ToolDecisionContext) ToolNamespaces() []protocolcore.ToolNamespace {
+	cloned := make([]protocolcore.ToolNamespace, len(context.toolNamespaces))
+	for index, namespace := range context.toolNamespaces {
+		cloned[index] = namespace.Clone()
+	}
+	return cloned
 }
 
 func NewToolDecisionRequest(
 	exchangeID string,
-	accessID access.AccessID,
-	planRevision access.Revision,
-	planHash access.PlanHash,
+	environmentID environment.EnvironmentID,
+	environmentRevision environment.Revision,
+	environmentDigest environment.CandidateDigest,
+	routeID environment.UpstreamRouteID,
+	routeRevision environment.Revision,
+	decisionContext ToolDecisionContext,
 	intents []protocolcore.ToolIntent,
 ) (ToolDecisionRequest, error) {
+	parsedEnvironmentID, environmentErr := environment.NewEnvironmentID(environmentID.String())
+	parsedRouteID, routeErr := environment.NewUpstreamRouteID(routeID.String())
+	parsedDigest, digestErr := environment.ParseCandidateDigest(environmentDigest.String())
 	if err := validateIdentity("Exchange ID", exchangeID); err != nil ||
-		accessID.String() == "" ||
-		planRevision == 0 ||
-		planHash.IsZero() ||
+		environmentErr != nil || parsedEnvironmentID != environmentID ||
+		routeErr != nil || parsedRouteID != routeID ||
+		digestErr != nil || parsedDigest != environmentDigest ||
+		environmentRevision == 0 || environmentRevision > environment.MaxRevision ||
+		routeRevision == 0 || routeRevision > environment.MaxRevision ||
+		decisionContext.policySet.Validate() != nil ||
 		len(intents) == 0 ||
 		len(intents) > protocolcore.MaxToolCount {
 		return ToolDecisionRequest{}, errors.New("tool decision request is invalid")
@@ -1021,11 +1306,11 @@ func NewToolDecisionRequest(
 		}
 	}
 	return ToolDecisionRequest{
-		exchangeID:   exchangeID,
-		accessID:     accessID,
-		planRevision: planRevision,
-		planHash:     planHash,
-		intents:      cloneToolIntents(intents),
+		exchangeID: exchangeID, environmentID: environmentID,
+		environmentRevision: environmentRevision,
+		environmentDigest:   environmentDigest, routeID: routeID,
+		routeRevision: routeRevision, decisionContext: decisionContext,
+		intents: cloneToolIntents(intents),
 	}, nil
 }
 
@@ -1033,20 +1318,32 @@ func (request ToolDecisionRequest) ExchangeID() string {
 	return request.exchangeID
 }
 
-func (request ToolDecisionRequest) AccessID() access.AccessID {
-	return request.accessID
+func (request ToolDecisionRequest) EnvironmentID() environment.EnvironmentID {
+	return request.environmentID
 }
 
-func (request ToolDecisionRequest) PlanRevision() access.Revision {
-	return request.planRevision
+func (request ToolDecisionRequest) EnvironmentRevision() environment.Revision {
+	return request.environmentRevision
 }
 
-func (request ToolDecisionRequest) PlanHash() access.PlanHash {
-	return request.planHash
+func (request ToolDecisionRequest) EnvironmentDigest() environment.CandidateDigest {
+	return request.environmentDigest
+}
+
+func (request ToolDecisionRequest) RouteID() environment.UpstreamRouteID {
+	return request.routeID
+}
+
+func (request ToolDecisionRequest) RouteRevision() environment.Revision {
+	return request.routeRevision
 }
 
 func (request ToolDecisionRequest) ToolIntents() []protocolcore.ToolIntent {
 	return cloneToolIntents(request.intents)
+}
+
+func (request ToolDecisionRequest) Context() ToolDecisionContext {
+	return request.decisionContext
 }
 
 type ToolDecisionGate interface {
@@ -1176,19 +1473,23 @@ func (budgets StreamBudgets) Validate() error {
 }
 
 type Options struct {
-	OwnerContext       context.Context
-	Actions            offlinehold.ActionAdmission
-	Resolver           access.SnapshotResolver
-	WorkspaceRoutes    workspaceroute.Resolver
-	ProtocolPaths      *protocolpath.Selector
-	Provider           Provider
-	ToolDecisions      ToolDecisionGate
-	RetryWaiter        RetryWaiter
-	Observer           AttemptObserver
-	ObservationTimeout time.Duration
-	Hold               HoldPolicy
-	Stream             StreamBudgets
-	AttemptIDs         AttemptIDSource
+	OwnerContext             context.Context
+	Actions                  offlinehold.ActionAdmission
+	Accounts                 AccountLeaseAuthority
+	ProtocolPaths            *protocolpath.Selector
+	Provider                 Provider
+	ToolDecisions            ToolDecisionGate
+	RetryWaiter              RetryWaiter
+	Observer                 ExchangeObserver
+	ContentObserver          ContentObserver
+	ObservationTimeout       time.Duration
+	Hold                     HoldPolicy
+	Stream                   StreamBudgets
+	AttemptIDs               AttemptIDSource
+	ClientAnnotations        *clientannotation.Signer
+	Now                      func() time.Time
+	RawEvidence              rawevidence.Observer
+	ReportRawEvidenceFailure func(error)
 }
 
 type AttemptOutcome string
@@ -1200,25 +1501,30 @@ const (
 	AttemptAborted   AttemptOutcome = "aborted"
 )
 
-// Result is evidence for one logical Exchange and its one provider Attempt. It does
-// not expose the Access plan handle or provider response body.
+// Result is evidence for one logical Exchange and its provider attempts. It
+// does not expose the Environment plan handle or provider response body.
 type Result struct {
-	ExchangeID              string
-	AccessID                string
-	AccessRevision          access.Revision
-	PlanHash                string
-	RouteHost               string
-	CredentialBindingID     string
-	WorkspaceRouteBindingID string
-	WorkspaceRouteRevision  workspaceroute.Revision
-	WorkspaceProfileID      string
-	Outcome                 AttemptOutcome
-	TransportResends        uint32
-	Ledger                  LedgerSnapshot
-	Translation             protocolcore.TranslationReport
-	Credential              providertransport.CredentialEvidence
-	Presentation            providertransport.WirePresentationEvidence
-	Transport               transportprofile.Evidence
+	ExchangeID           string
+	EnvironmentID        string
+	EnvironmentRevision  environment.Revision
+	EnvironmentDigest    string
+	EndpointID           string
+	EndpointRevision     environment.Revision
+	ProtocolPlanID       string
+	ProtocolPlanRevision environment.Revision
+	RouteID              string
+	RouteRevision        environment.Revision
+	RouteHost            string
+	AccountID            string
+	AccountRevision      uint64
+	CredentialEpoch      uint64
+	Outcome              AttemptOutcome
+	TransportResends     uint32
+	Ledger               LedgerSnapshot
+	Translation          protocolcore.TranslationReport
+	Credential           providertransport.CredentialEvidence
+	Presentation         providertransport.WirePresentationEvidence
+	Transport            transportprofile.Evidence
 }
 
 func cloneToolIntents(

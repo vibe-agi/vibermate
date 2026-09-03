@@ -17,6 +17,7 @@ import (
 
 	"github.com/vibe-agi/vibermate/internal/capturecredential"
 	"github.com/vibe-agi/vibermate/internal/clientadapter"
+	"github.com/vibe-agi/vibermate/internal/runtimeuser"
 	"github.com/vibe-agi/vibermate/internal/workspaceidentity"
 )
 
@@ -87,7 +88,11 @@ type DurableRecord struct {
 	ControlCapabilityHash       CapabilityDigest
 	CWD                         string
 	CanonicalExecutablePath     string
-	LocalUserLabel              string
+	Runtime                     RuntimeMetadata
+	RuntimeUserID               runtimeuser.UserID
+	RuntimeUsername             string
+	LoginSessionID              runtimeuser.LoginSessionID
+	DeviceName                  string
 	ExecutableLabel             string
 	CatalogRevision             clientadapter.CatalogRevision
 	Adapter                     *clientadapter.Evidence
@@ -149,8 +154,17 @@ func (record DurableRecord) Validate() error {
 	); err != nil {
 		return err
 	}
-	if !ValidLocalUserLabel(record.LocalUserLabel) {
-		return fmt.Errorf("%w: local user label is invalid", ErrInvalidRequest)
+	if err := record.Runtime.Validate(); err != nil {
+		return err
+	}
+	if (record.RuntimeUserID == "") != (record.RuntimeUsername == "") ||
+		(record.RuntimeUserID == "") != (record.LoginSessionID == "") ||
+		(record.RuntimeUserID == "") != (record.DeviceName == "") ||
+		(record.RuntimeUserID != "" &&
+			(!record.RuntimeUserID.Valid() || !runtimeuser.ValidUsername(record.RuntimeUsername) ||
+				!record.LoginSessionID.Valid() ||
+				!runtimeuser.ValidDeviceName(record.DeviceName))) {
+		return fmt.Errorf("%w: Runtime User attribution is invalid", ErrInvalidRequest)
 	}
 	if err := validateText(
 		"executable label",
@@ -232,8 +246,15 @@ type View struct {
 	CWD             string `json:"cwd"`
 	// CanonicalExecutablePath is Desktop-local read-only diagnostic evidence.
 	// Launcher and Server projections deliberately do not serialize it.
-	CanonicalExecutablePath     string                     `json:"-"`
-	LocalUserLabel              string                     `json:"localUserLabel,omitempty"`
+	CanonicalExecutablePath string `json:"-"`
+	LocalUserLabel          string `json:"localUserLabel,omitempty"`
+	// Runtime remains Desktop-local display evidence. It is never serialized by
+	// the launcher-facing View itself; Desktop control chooses the exact fields.
+	Runtime                     RuntimeMetadata            `json:"-"`
+	RuntimeUserID               runtimeuser.UserID         `json:"runtimeUserId,omitempty"`
+	RuntimeUsername             string                     `json:"runtimeUsername,omitempty"`
+	LoginSessionID              runtimeuser.LoginSessionID `json:"loginSessionId,omitempty"`
+	DeviceName                  string                     `json:"deviceName,omitempty"`
 	MachineID                   string                     `json:"machineId,omitempty"`
 	MachineRegistrationRevision uint64                     `json:"machineRegistrationRevision,omitempty"`
 	WorkspaceID                 string                     `json:"workspaceId,omitempty"`
@@ -274,7 +295,12 @@ func ViewOf(record DurableRecord) View {
 		ExecutableLabel:             record.ExecutableLabel,
 		CWD:                         record.CWD,
 		CanonicalExecutablePath:     record.CanonicalExecutablePath,
-		LocalUserLabel:              record.LocalUserLabel,
+		LocalUserLabel:              record.Runtime.LocalUserName,
+		Runtime:                     record.Runtime,
+		RuntimeUserID:               record.RuntimeUserID,
+		RuntimeUsername:             record.RuntimeUsername,
+		LoginSessionID:              record.LoginSessionID,
+		DeviceName:                  record.DeviceName,
 		MachineID:                   record.MachineID.String(),
 		MachineRegistrationRevision: record.MachineRegistrationRevision,
 		WorkspaceID:                 record.WorkspaceID.String(),
@@ -350,7 +376,11 @@ type CreateCommand struct {
 	Adapter         *clientadapter.Evidence
 	Recognition     clientadapter.Recognition
 	Workspace       workspaceidentity.Scope
-	LocalUserLabel  string
+	Runtime         RuntimeMetadata
+	RuntimeUserID   runtimeuser.UserID
+	RuntimeUsername string
+	LoginSessionID  runtimeuser.LoginSessionID
+	DeviceName      string
 }
 
 func (command CreateCommand) validate(maxLifetime time.Duration) error {
@@ -383,8 +413,17 @@ func (command CreateCommand) validate(maxLifetime time.Duration) error {
 		command.Workspace.Validate() != nil {
 		return fmt.Errorf("%w: workspace scope is invalid", ErrInvalidRequest)
 	}
-	if !ValidLocalUserLabel(command.LocalUserLabel) {
-		return fmt.Errorf("%w: local user label is invalid", ErrInvalidRequest)
+	if err := command.Runtime.Validate(); err != nil {
+		return err
+	}
+	if (command.RuntimeUserID == "") != (command.RuntimeUsername == "") ||
+		(command.RuntimeUserID == "") != (command.LoginSessionID == "") ||
+		(command.RuntimeUserID == "") != (command.DeviceName == "") ||
+		(command.RuntimeUserID != "" &&
+			(!command.RuntimeUserID.Valid() || !runtimeuser.ValidUsername(command.RuntimeUsername) ||
+				!command.LoginSessionID.Valid() ||
+				!runtimeuser.ValidDeviceName(command.DeviceName))) {
+		return fmt.Errorf("%w: Runtime User attribution is invalid", ErrInvalidRequest)
 	}
 	if command.Adapter != nil {
 		if err := command.Adapter.Validate(); err != nil ||
@@ -421,12 +460,16 @@ type Evidence struct {
 	ProcessID       int
 	ExpiresAt       time.Time
 	Workspace       workspaceidentity.Scope
-	LocalUserLabel  string
+	Runtime         RuntimeMetadata
+	RuntimeUserID   runtimeuser.UserID
+	RuntimeUsername string
+	LoginSessionID  runtimeuser.LoginSessionID
+	DeviceName      string
 }
 
-// IngressProfileID returns the exact short-lived ingress identity owned by a
+// AdmissionRef returns the exact short-lived ingress identity owned by a
 // run. It is safe to expose as an audit join key and never carries a bearer.
-func IngressProfileID(runID string) (string, error) {
+func AdmissionRef(runID string) (string, error) {
 	if err := validateID(runID); err != nil {
 		return "", err
 	}
@@ -453,19 +496,56 @@ func evidenceOf(record DurableRecord) Evidence {
 		ProcessID:       record.ProcessID,
 		ExpiresAt:       record.ExpiresAt,
 		Workspace:       workspace,
-		LocalUserLabel:  record.LocalUserLabel,
+		Runtime:         record.Runtime,
+		RuntimeUserID:   record.RuntimeUserID,
+		RuntimeUsername: record.RuntimeUsername,
+		LoginSessionID:  record.LoginSessionID,
+		DeviceName:      record.DeviceName,
 	}
 }
 
-// ValidLocalUserLabel validates display-only launcher metadata. The value is
-// never authentication evidence and an empty value means unavailable.
-func ValidLocalUserLabel(value string) bool {
-	if value == "" {
-		return true
+// RuntimeMetadata is display-only launcher evidence. It never grants capture,
+// filesystem, process, routing, or credential authority.
+type RuntimeMetadata struct {
+	LocalUserName          string
+	HomeDirectory          string
+	OperatingSystem        string
+	OperatingSystemVersion string
+	Architecture           string
+	TimeZone               string
+}
+
+func (metadata RuntimeMetadata) Validate() error {
+	for _, item := range []struct {
+		name  string
+		value string
+		limit int
+	}{
+		{"local user name", metadata.LocalUserName, MaxLocalUserLabelBytes},
+		{"home directory", metadata.HomeDirectory, MaxPathBytes},
+		{"operating system", metadata.OperatingSystem, 64},
+		{"operating system version", metadata.OperatingSystemVersion, 256},
+		{"architecture", metadata.Architecture, 64},
+		{"time zone", metadata.TimeZone, 128},
+	} {
+		if len(item.value) > item.limit || !utf8.ValidString(item.value) ||
+			strings.TrimSpace(item.value) != item.value ||
+			strings.ContainsAny(item.value, "\x00\r\n") {
+			return fmt.Errorf("%w: %s is invalid", ErrInvalidRequest, item.name)
+		}
+		for _, character := range item.value {
+			if unicode.IsControl(character) {
+				return fmt.Errorf("%w: %s is invalid", ErrInvalidRequest, item.name)
+			}
+		}
 	}
-	return len(value) <= MaxLocalUserLabelBytes && utf8.ValidString(value) &&
-		strings.TrimSpace(value) == value &&
-		!strings.ContainsAny(value, "\x00\r\n")
+	return nil
+}
+
+// ValidLocalUserLabel is retained as the narrow validator used while reading
+// a launcher environment before the complete RuntimeMetadata value exists.
+func ValidLocalUserLabel(value string) bool {
+	return (RuntimeMetadata{LocalUserName: value}).Validate() == nil
 }
 
 func (record DurableRecord) workspaceScopeEmpty() bool {
@@ -493,6 +573,7 @@ type Recovery struct {
 }
 
 type Repository interface {
+	ActivityReader
 	Create(context.Context, DurableRecord) error
 	AuthorizeProxy(
 		ctx context.Context,
@@ -528,9 +609,41 @@ type Repository interface {
 	RevokeActive(context.Context, time.Time) (int, error)
 }
 
+// ActivityReader is an internal lifecycle projection. It deliberately returns
+// only whether a Capture is still live; control-plane callers use Reader and
+// cannot obtain this unscoped storage read.
+type ActivityReader interface {
+	Active(context.Context, string, time.Time) (bool, error)
+}
+
+// GlobalActivityReader is the installation-wide lifecycle projection for
+// operations that affect every CaptureRun without exposing their catalog.
+type GlobalActivityReader interface {
+	ActiveCount(context.Context) (int, error)
+}
+
 // PageRequest bounds a read of the run list.
 type PageRequest struct {
-	Limit int
+	Limit  int
+	Cursor *PageCursor
+}
+
+// PageCursor is the stable position of the last CaptureRun returned by a
+// running-first, most-recent-first catalog. IncludeAtUpdatedAt lets a caller
+// merging multiple Capture kinds either include every item at the boundary
+// timestamp or continue after one exact run ID without using offsets.
+type PageCursor struct {
+	Running            bool
+	UpdatedAt          time.Time
+	AfterID            string
+	IncludeAtUpdatedAt bool
+}
+
+func (cursor PageCursor) Valid() bool {
+	return !cursor.UpdatedAt.IsZero() &&
+		cursor.UpdatedAt.Equal(cursor.UpdatedAt.UTC().Truncate(time.Millisecond)) &&
+		(cursor.AfterID == "" || validateID(cursor.AfterID) == nil) &&
+		(cursor.IncludeAtUpdatedAt || cursor.AfterID == "")
 }
 
 const (

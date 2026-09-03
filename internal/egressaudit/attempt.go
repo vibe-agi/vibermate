@@ -26,16 +26,18 @@ const RecoveryErrorClass = "daemon_restarted"
 type EgressPurpose string
 
 const (
-	PurposeProviderAttempt     EgressPurpose = "provider_attempt"
-	PurposeProfileOperation    EgressPurpose = "profile_operation"
-	PurposeOriginalOrigin      EgressPurpose = "original_origin"
-	PurposeAgentProbe          EgressPurpose = "agent_probe"
-	PurposeBlindTunnel         EgressPurpose = "blind_tunnel"
-	PurposeAuxiliaryLLM        EgressPurpose = "auxiliary_llm"
-	PurposeLanguageTransform   EgressPurpose = "language_transform"
-	PurposePluginCatalogSync   EgressPurpose = "plugin_catalog_sync"
-	PurposePluginArtifactFetch EgressPurpose = "plugin_artifact_fetch"
-	PurposeUpdate              EgressPurpose = "update"
+	PurposeProviderAttempt        EgressPurpose = "provider_attempt"
+	PurposeUpstreamModelDiscovery EgressPurpose = "upstream_model_discovery"
+	PurposeModelMetadataDirectory EgressPurpose = "model_metadata_directory"
+	PurposeRouteOperation         EgressPurpose = "route_operation"
+	PurposeOriginalOrigin         EgressPurpose = "original_origin"
+	PurposeAgentProbe             EgressPurpose = "agent_probe"
+	PurposeBlindTunnel            EgressPurpose = "blind_tunnel"
+	PurposeAuxiliaryLLM           EgressPurpose = "auxiliary_llm"
+	PurposeLanguageTransform      EgressPurpose = "language_transform"
+	PurposePluginCatalogSync      EgressPurpose = "plugin_catalog_sync"
+	PurposePluginArtifactFetch    EgressPurpose = "plugin_artifact_fetch"
+	PurposeUpdate                 EgressPurpose = "update"
 )
 
 // Purposes returns the complete set of supported logical egress purposes.
@@ -44,7 +46,9 @@ const (
 func Purposes() []EgressPurpose {
 	return []EgressPurpose{
 		PurposeProviderAttempt,
-		PurposeProfileOperation,
+		PurposeUpstreamModelDiscovery,
+		PurposeModelMetadataDirectory,
+		PurposeRouteOperation,
 		PurposeOriginalOrigin,
 		PurposeAgentProbe,
 		PurposeBlindTunnel,
@@ -61,9 +65,9 @@ func Purposes() []EgressPurpose {
 type PolicyAuthorityKind string
 
 const (
-	AuthorityAccess  PolicyAuthorityKind = "access"
-	AuthorityNetwork PolicyAuthorityKind = "network"
-	AuthorityRuntime PolicyAuthorityKind = "runtime"
+	AuthorityEnvironment PolicyAuthorityKind = "environment"
+	AuthorityNetwork     PolicyAuthorityKind = "network"
+	AuthorityRuntime     PolicyAuthorityKind = "runtime"
 )
 
 // AuthorityForPurpose is the exhaustive typed mapping. An unknown purpose has
@@ -72,11 +76,12 @@ func AuthorityForPurpose(
 	purpose EgressPurpose,
 ) (PolicyAuthorityKind, error) {
 	switch purpose {
-	case PurposeProviderAttempt, PurposeProfileOperation:
-		return AuthorityAccess, nil
+	case PurposeProviderAttempt, PurposeRouteOperation:
+		return AuthorityEnvironment, nil
 	case PurposeOriginalOrigin, PurposeAgentProbe, PurposeBlindTunnel:
 		return AuthorityNetwork, nil
-	case PurposeAuxiliaryLLM, PurposeLanguageTransform,
+	case PurposeUpstreamModelDiscovery, PurposeModelMetadataDirectory,
+		PurposeAuxiliaryLLM, PurposeLanguageTransform,
 		PurposePluginCatalogSync, PurposePluginArtifactFetch, PurposeUpdate:
 		return AuthorityRuntime, nil
 	default:
@@ -343,7 +348,7 @@ func validatePayloadClass(
 	class PayloadClass,
 ) error {
 	switch purpose {
-	case PurposeProviderAttempt, PurposeProfileOperation:
+	case PurposeProviderAttempt, PurposeRouteOperation:
 		return nil
 	case PurposeOriginalOrigin, PurposeAgentProbe:
 		if class.carriesClientPayload() {
@@ -360,7 +365,8 @@ func validatePayloadClass(
 				class,
 			)
 		}
-	case PurposeAuxiliaryLLM, PurposeLanguageTransform,
+	case PurposeUpstreamModelDiscovery, PurposeModelMetadataDirectory,
+		PurposeAuxiliaryLLM, PurposeLanguageTransform,
 		PurposePluginCatalogSync, PurposePluginArtifactFetch, PurposeUpdate:
 		if class != PayloadRuntime {
 			return fmt.Errorf(
@@ -418,10 +424,10 @@ func validateParent(
 			return nil
 		}
 		return requireConnection()
-	case PurposeProfileOperation:
+	case PurposeRouteOperation:
 		if parent.Kind != ParentClientOperation || parent.ExchangeID != "" {
 			return errors.New(
-				"profile operation requires a client-operation parent with no Exchange",
+				"route operation requires a client-operation parent with no Exchange",
 			)
 		}
 		return requireConnection()
@@ -439,7 +445,8 @@ func validateParent(
 			)
 		}
 		return requireConnection()
-	case PurposeAuxiliaryLLM, PurposeLanguageTransform,
+	case PurposeUpstreamModelDiscovery, PurposeModelMetadataDirectory,
+		PurposeAuxiliaryLLM, PurposeLanguageTransform,
 		PurposePluginCatalogSync, PurposePluginArtifactFetch, PurposeUpdate:
 		if parent.Kind != ParentRuntimeAction || parent.ExchangeID != "" {
 			return errors.New(

@@ -23,11 +23,13 @@ type runtimeEgressRepository struct {
 	completionTimeout time.Duration
 	stop              context.CancelCauseFunc
 
-	mu              sync.Mutex
-	failureErr      error
-	shutdownContext context.Context
-	nextCompletion  uint64
-	completions     map[uint64]context.CancelCauseFunc
+	mu                      sync.Mutex
+	failureErr              error
+	rawEvidenceFailureErr   error
+	rawEvidenceFailureCount uint64
+	shutdownContext         context.Context
+	nextCompletion          uint64
+	completions             map[uint64]context.CancelCauseFunc
 }
 
 var _ egressaudit.Repository = (*runtimeEgressRepository)(nil)
@@ -85,6 +87,22 @@ func (repository *runtimeEgressRepository) ReportTerminalFailure(err error) {
 	if err != nil {
 		repository.fail("construct EgressAttempt terminal", err)
 	}
+}
+
+// ReportRawEvidenceFailure records an optional Raw HTTP retention failure
+// without weakening or stopping the core Activity/Egress audit. ViberMate is a
+// transparent runtime by default: losing a secondary encrypted packet copy is
+// observable degradation, never authority to interrupt Agent traffic.
+func (repository *runtimeEgressRepository) ReportRawEvidenceFailure(err error) {
+	if err == nil {
+		return
+	}
+	repository.mu.Lock()
+	repository.rawEvidenceFailureErr = fmt.Errorf(
+		"record Raw evidence: %w", err,
+	)
+	repository.rawEvidenceFailureCount++
+	repository.mu.Unlock()
 }
 
 func (repository *runtimeEgressRepository) List(

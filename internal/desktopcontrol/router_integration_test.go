@@ -6,23 +6,17 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
-	"errors"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
 	"strconv"
-	"strings"
 	"sync"
 	"testing"
 	"time"
 
-	"github.com/vibe-agi/vibermate/internal/access"
-	"github.com/vibe-agi/vibermate/internal/accessapply"
-	"github.com/vibe-agi/vibermate/internal/activity"
-	"github.com/vibe-agi/vibermate/internal/connectionevent"
 	"github.com/vibe-agi/vibermate/internal/controlprincipal"
 	"github.com/vibe-agi/vibermate/internal/desktopcontrol"
-	"github.com/vibe-agi/vibermate/internal/egressaudit"
+	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/exchange"
 	"github.com/vibe-agi/vibermate/internal/hostcontract"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
@@ -78,992 +72,6 @@ func desktopManualPrincipal(t *testing.T) controlprincipal.Principal {
 	return principal
 }
 
-func TestDesktopControlAppliesAccessAndControlsOfflineHoldWithScopedAuth(
-	t *testing.T,
-) {
-	t.Parallel()
-
-	runtime := startRuntime(t)
-	defer shutdownRuntime(t, runtime)
-	now := time.Date(2026, 7, 29, 8, 0, 0, 0, time.UTC)
-	readToken := capability(0x11)
-	writeToken := capability(0x22)
-	authenticator, err := desktopcontrol.NewAuthenticator(
-		desktopcontrol.CapabilityGrant{
-			ReadToken:  readToken,
-			WriteToken: writeToken,
-			ExpiresAt:  now.Add(time.Hour),
-		},
-		fixedClock{now: now},
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	application, err := desktopcontrol.New(desktopcontrol.Options{
-		Readiness:      readyState(true),
-		Status:         runtime,
-		Accesses:       runtime.AccessWriter(),
-		AccessDeletion: runtime.AccessDeleter(),
-		Clock:          desktopcontrol.SystemClock{},
-		AccessCatalog:  runtime.AccessCatalog(),
-		Resolver:       runtime.SnapshotResolver(),
-		Credentials:    runtime.Credentials(),
-		Activities:     runtime.Activities(),
-		Connections:    runtime.ConnectionEvents(),
-		Egress:         runtime.EgressAttempts(),
-		Approvals:      runtime.ToolApprovals(),
-		Offline:        runtime,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	capture := http.HandlerFunc(func(
-		writer http.ResponseWriter,
-		_ *http.Request,
-	) {
-		writer.WriteHeader(http.StatusNoContent)
-	})
-	manualCaptures := &recordingManualCaptureHandler{}
-	const authority = "127.0.0.1:43127"
-	router, err := desktopcontrol.NewRouter(desktopcontrol.RouterOptions{
-		Authority:        authority,
-		AllowedOrigins:   []string{"tauri://localhost"},
-		Authenticator:    authenticator,
-		Application:      application,
-		Bootstrap:        emptyBootstrap(),
-		CLIControl:       capture,
-		ManualCaptures:   manualCaptures,
-		DesktopPrincipal: desktopManualPrincipal(t),
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	status := doRequest(
-		t,
-		router,
-		authority,
-		http.MethodGet,
-		"/api/v1/status",
-		readToken,
-		nil,
-	)
-	if status.Code != http.StatusOK {
-		t.Fatalf("status code=%d body=%s", status.Code, status.Body.Bytes())
-	}
-	var statusBody desktopcontrol.StatusResponse
-	decodeResponse(t, status, &statusBody)
-	if !statusBody.Ready ||
-		statusBody.Generation != runtime.Status().InstanceID ||
-		statusBody.StatusKey != "runtime.state.initialized" {
-		t.Fatalf("status response = %+v", statusBody)
-	}
-
-	manualCapturesResponse := doRequest(
-		t,
-		router,
-		authority,
-		http.MethodGet,
-		"/api/v1/manual-captures",
-		readToken,
-		nil,
-	)
-	if manualCapturesResponse.Code != http.StatusNoContent ||
-		!manualCaptures.called ||
-		manualCaptures.authorization != "" ||
-		manualCaptures.principal.ID() != desktopManualPrincipal(t).ID() ||
-		manualCaptures.principal.Kind() != controlprincipal.KindDesktopApp ||
-		!manualCaptures.principal.Allows(controlprincipal.GrantManualCapture) {
-		t.Fatalf(
-			"manual capture status=%d handler=%+v principal=%s",
-			manualCapturesResponse.Code,
-			manualCaptures,
-			manualCaptures.principal.ID(),
-		)
-	}
-
-	emptyActivities := doRequest(
-		t,
-		router,
-		authority,
-		http.MethodGet,
-		"/api/v1/activities?limit=10",
-		readToken,
-		nil,
-	)
-	if emptyActivities.Code != http.StatusOK {
-		t.Fatalf(
-			"empty activities code=%d body=%s",
-			emptyActivities.Code,
-			emptyActivities.Body.Bytes(),
-		)
-	}
-	if strings.TrimSpace(emptyActivities.Body.String()) != `{"items":[]}` {
-		t.Fatalf("empty Activity wire = %s", emptyActivities.Body.Bytes())
-	}
-	var emptyActivityPage desktopcontrol.ActivityPage
-	decodeResponse(t, emptyActivities, &emptyActivityPage)
-	if emptyActivityPage.Items == nil || len(emptyActivityPage.Items) != 0 {
-		t.Fatalf("empty Activity page = %+v", emptyActivityPage)
-	}
-	emptyConnections := doRequest(
-		t,
-		router,
-		authority,
-		http.MethodGet,
-		"/api/v1/connections?limit=10",
-		readToken,
-		nil,
-	)
-	if emptyConnections.Code != http.StatusOK {
-		t.Fatalf(
-			"empty connections code=%d body=%s",
-			emptyConnections.Code,
-			emptyConnections.Body.Bytes(),
-		)
-	}
-	// ADR-0015 keeps the two decisions readable separately: the connection
-	// list answers who connected where from here, and the egress list answers
-	// where each request actually went.
-	emptyEgress := doRequest(
-		t,
-		router,
-		authority,
-		http.MethodGet,
-		"/api/v1/egress-attempts?limit=10",
-		readToken,
-		nil,
-	)
-	if emptyEgress.Code != http.StatusOK {
-		t.Fatalf(
-			"empty egress attempts code=%d body=%s",
-			emptyEgress.Code,
-			emptyEgress.Body.Bytes(),
-		)
-	}
-	var emptyEgressPage egressaudit.Page
-	decodeResponse(t, emptyEgress, &emptyEgressPage)
-	if emptyEgressPage.Items == nil || len(emptyEgressPage.Items) != 0 {
-		t.Fatalf("empty egress page = %+v", emptyEgressPage)
-	}
-	unauthenticatedEgress := doRequest(
-		t,
-		router,
-		authority,
-		http.MethodGet,
-		"/api/v1/egress-attempts",
-		"",
-		nil,
-	)
-	if unauthenticatedEgress.Code == http.StatusOK {
-		t.Fatal("the egress list served an unauthenticated request")
-	}
-	var emptyConnectionPage connectionevent.Page
-	decodeResponse(t, emptyConnections, &emptyConnectionPage)
-	if emptyConnectionPage.Items == nil ||
-		len(emptyConnectionPage.Items) != 0 {
-		t.Fatalf("empty ConnectionEvent page = %+v", emptyConnectionPage)
-	}
-	connection, err := runtime.ConnectionEvents().Start(
-		context.Background(),
-		connectionevent.Attempt{
-			Source: connectionevent.Source{
-				Confidence: connectionevent.SourceConfidenceUnknown,
-			},
-			RequestedHost: "api.anthropic.com",
-			Port:          443,
-		},
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := connection.Decide(
-		context.Background(),
-		connectionevent.DecisionEvidence{
-			Source: connectionevent.Source{
-				IngressID:  "run-control",
-				Label:      "claude",
-				Confidence: connectionevent.SourceConfidenceConfigured,
-			},
-			Decision:   connectionevent.DecisionDeny,
-			RuleID:     "control-test-deny",
-			Decryption: connectionevent.DecryptionNone,
-			ErrorClass: "control-test-deny",
-		},
-	); err != nil {
-		t.Fatal(err)
-	}
-	connections := doRequest(
-		t,
-		router,
-		authority,
-		http.MethodGet,
-		"/api/v1/connections?limit=10",
-		readToken,
-		nil,
-	)
-	if connections.Code != http.StatusOK {
-		t.Fatalf(
-			"connections code=%d body=%s",
-			connections.Code,
-			connections.Body.Bytes(),
-		)
-	}
-	var connectionPage connectionevent.Page
-	decodeResponse(t, connections, &connectionPage)
-	if len(connectionPage.Items) != 2 ||
-		connectionPage.Items[0].Outcome != connectionevent.OutcomeDenied {
-		t.Fatalf("ConnectionEvent page = %+v", connectionPage)
-	}
-	latestConnections := doRequest(
-		t,
-		router,
-		authority,
-		http.MethodGet,
-		"/api/v1/connections?limit=10&view=latest",
-		readToken,
-		nil,
-	)
-	if latestConnections.Code != http.StatusOK {
-		t.Fatalf(
-			"latest connections code=%d body=%s",
-			latestConnections.Code,
-			latestConnections.Body.Bytes(),
-		)
-	}
-	var latestConnectionPage connectionevent.Page
-	decodeResponse(t, latestConnections, &latestConnectionPage)
-	if len(latestConnectionPage.Items) != 1 ||
-		latestConnectionPage.Items[0].ConnectionID != connection.ID() ||
-		latestConnectionPage.Items[0].Outcome != connectionevent.OutcomeDenied {
-		t.Fatalf("latest ConnectionEvent page = %+v", latestConnectionPage)
-	}
-	timelineResponse := doRequest(
-		t,
-		router,
-		authority,
-		http.MethodGet,
-		"/api/v1/connections/"+connection.ID(),
-		readToken,
-		nil,
-	)
-	if timelineResponse.Code != http.StatusOK {
-		t.Fatalf(
-			"connection timeline code=%d body=%s",
-			timelineResponse.Code,
-			timelineResponse.Body.Bytes(),
-		)
-	}
-	var timeline connectionevent.Timeline
-	decodeResponse(t, timelineResponse, &timeline)
-	if timeline.ConnectionID != connection.ID() ||
-		len(timeline.Events) != 2 {
-		t.Fatalf("ConnectionEvent timeline = %+v", timeline)
-	}
-	invalidCursor := doRequest(
-		t,
-		router,
-		authority,
-		http.MethodGet,
-		"/api/v1/connections?cursor=42",
-		readToken,
-		nil,
-	)
-	if invalidCursor.Code != http.StatusUnprocessableEntity {
-		t.Fatalf(
-			"invalid cursor code=%d body=%s",
-			invalidCursor.Code,
-			invalidCursor.Body.Bytes(),
-		)
-	}
-
-	initialHold := runtime.OfflineHoldSnapshot()
-	entered := doMutation(
-		t,
-		router,
-		authority,
-		"/api/v1/offline-hold/actions/enter",
-		writeToken,
-		initialHold.Revision,
-		"offline-enter-0001",
-		nil,
-	)
-	if entered.Code != http.StatusOK {
-		t.Fatalf("enter code=%d body=%s", entered.Code, entered.Body.Bytes())
-	}
-	var held offlinehold.Snapshot
-	decodeResponse(t, entered, &held)
-	if held.State != offlinehold.StateHeld || !held.SafeToDisconnect {
-		t.Fatalf("held snapshot = %+v", held)
-	}
-	resumed := doMutation(
-		t,
-		router,
-		authority,
-		"/api/v1/offline-hold/actions/resume",
-		writeToken,
-		held.Revision,
-		"offline-resume-001",
-		nil,
-	)
-	if resumed.Code != http.StatusOK {
-		t.Fatalf("resume code=%d body=%s", resumed.Code, resumed.Body.Bytes())
-	}
-	var online offlinehold.Snapshot
-	decodeResponse(t, resumed, &online)
-	if online.State != offlinehold.StateOnline {
-		t.Fatalf("resumed snapshot = %+v", online)
-	}
-
-	notConfigured := doRequest(
-		t,
-		router,
-		authority,
-		http.MethodGet,
-		"/api/v1/accesses/missing-access/plan",
-		readToken,
-		nil,
-	)
-	var notConfiguredProblem map[string]json.RawMessage
-	if err := json.Unmarshal(
-		notConfigured.Body.Bytes(),
-		&notConfiguredProblem,
-	); err != nil {
-		t.Fatal(err)
-	}
-	if notConfigured.Code != http.StatusNotFound ||
-		len(notConfiguredProblem) != 4 ||
-		string(notConfiguredProblem["type"]) !=
-			`"urn:vibermate:error:access-not-configured"` ||
-		string(notConfiguredProblem["title"]) != `"Not Found"` ||
-		string(notConfiguredProblem["status"]) != "404" ||
-		string(notConfiguredProblem["code"]) != `"access_not_configured"` {
-		t.Fatalf(
-			"missing plan code=%d body=%s",
-			notConfigured.Code,
-			notConfigured.Body.Bytes(),
-		)
-	}
-
-	unauthenticatedAccesses := doRequest(
-		t,
-		router,
-		authority,
-		http.MethodGet,
-		"/api/v1/accesses",
-		"",
-		nil,
-	)
-	if unauthenticatedAccesses.Code != http.StatusUnauthorized {
-		t.Fatalf(
-			"unauthenticated Access list code=%d body=%s",
-			unauthenticatedAccesses.Code,
-			unauthenticatedAccesses.Body.Bytes(),
-		)
-	}
-	emptyAccesses := doRequest(
-		t,
-		router,
-		authority,
-		http.MethodGet,
-		"/api/v1/accesses",
-		readToken,
-		nil,
-	)
-	if emptyAccesses.Code != http.StatusOK ||
-		strings.TrimSpace(emptyAccesses.Body.String()) != `{"items":[]}` {
-		t.Fatalf(
-			"empty Access list code=%d body=%s",
-			emptyAccesses.Code,
-			emptyAccesses.Body.Bytes(),
-		)
-	}
-
-	input := validApplyInput()
-	encoded, err := json.Marshal(input)
-	if err != nil {
-		t.Fatal(err)
-	}
-	applied := doMutation(
-		t,
-		router,
-		authority,
-		"/api/v1/accesses/access-control/actions/apply",
-		writeToken,
-		0,
-		"access-apply-0001",
-		encoded,
-	)
-	if applied.Code != http.StatusOK {
-		t.Fatalf("apply code=%d body=%s", applied.Code, applied.Body.Bytes())
-	}
-	appliedBody := append([]byte(nil), applied.Body.Bytes()...)
-	var applyResult desktopcontrol.AccessApplyResponse
-	decodeResponse(t, applied, &applyResult)
-	if applyResult.Outcome != access.WriteOutcomeCommitted ||
-		applyResult.Revision != 1 ||
-		applyResult.ApplicationState != desktopcontrol.AccessApplicationStateActive ||
-		len(applyResult.PlanHash) != 64 {
-		t.Fatalf("Access apply response = %+v", applyResult)
-	}
-	accessID, _ := access.NewAccessID("access-control")
-	active, err := runtime.SnapshotResolver().ResolveAccess(accessID)
-	if err != nil || active.Revision() != 1 {
-		t.Fatalf("active Access revision=%d err=%v", active.Revision(), err)
-	}
-	accesses := doRequest(
-		t,
-		router,
-		authority,
-		http.MethodGet,
-		"/api/v1/accesses",
-		readToken,
-		nil,
-	)
-	if accesses.Code != http.StatusOK {
-		t.Fatalf("Access list code=%d body=%s", accesses.Code, accesses.Body.Bytes())
-	}
-	var accessList desktopcontrol.AccessListResponse
-	decodeResponse(t, accesses, &accessList)
-	if len(accessList.Items) != 1 ||
-		accessList.Items[0].AccessID != "access-control" ||
-		accessList.Items[0].Name != "Control Access" ||
-		accessList.Items[0].Revision != 1 {
-		t.Fatalf("Access list = %+v", accessList)
-	}
-	accessDetail := doRequest(
-		t,
-		router,
-		authority,
-		http.MethodGet,
-		"/api/v1/accesses/access-control",
-		readToken,
-		nil,
-	)
-	if accessDetail.Code != http.StatusOK ||
-		accessDetail.Header().Get("ETag") != `"revision-1"` ||
-		bytes.Contains(accessDetail.Body.Bytes(), []byte("secret://")) ||
-		bytes.Contains(accessDetail.Body.Bytes(), []byte("secretRef")) {
-		t.Fatalf(
-			"Access detail code=%d ETag=%q body=%s",
-			accessDetail.Code,
-			accessDetail.Header().Get("ETag"),
-			accessDetail.Body.Bytes(),
-		)
-	}
-	missingAccess := doRequest(
-		t,
-		router,
-		authority,
-		http.MethodGet,
-		"/api/v1/accesses/missing-access",
-		readToken,
-		nil,
-	)
-	if missingAccess.Code != http.StatusNotFound {
-		t.Fatalf(
-			"missing Access code=%d body=%s",
-			missingAccess.Code,
-			missingAccess.Body.Bytes(),
-		)
-	}
-	plan := doRequest(
-		t,
-		router,
-		authority,
-		http.MethodGet,
-		"/api/v1/accesses/access-control/plan",
-		readToken,
-		nil,
-	)
-	if plan.Code != http.StatusOK ||
-		plan.Header().Get("ETag") != `"revision-1"` {
-		t.Fatalf(
-			"plan code=%d ETag=%q body=%s",
-			plan.Code,
-			plan.Header().Get("ETag"),
-			plan.Body.Bytes(),
-		)
-	}
-	var planSummary desktopcontrol.AccessPlanSummaryResponse
-	decodeResponse(t, plan, &planSummary)
-	if planSummary.AccessID != "access-control" ||
-		planSummary.Revision != 1 ||
-		planSummary.PlanHash != applyResult.PlanHash ||
-		len(planSummary.Profiles) != 2 ||
-		planSummary.Profiles[0] != "access-control-profile" ||
-		planSummary.Profiles[1] != "original-passthrough" ||
-		len(planSummary.AccountBindings) != 1 ||
-		planSummary.AccountBindings[0].ID != "access-control-account" ||
-		planSummary.AccountBindings[0].ProfileID != "access-control-profile" {
-		t.Fatalf("plan summary = %+v", planSummary)
-	}
-
-	replayed := doMutation(
-		t,
-		router,
-		authority,
-		"/api/v1/accesses/access-control/actions/apply",
-		writeToken,
-		0,
-		"access-apply-0001",
-		encoded,
-	)
-	if replayed.Code != applied.Code ||
-		!bytes.Equal(replayed.Body.Bytes(), appliedBody) {
-		t.Fatalf(
-			"idempotent replay code=%d body=%s",
-			replayed.Code,
-			replayed.Body.Bytes(),
-		)
-	}
-	input.Access.Name = "Different command"
-	different, _ := json.Marshal(input)
-	conflict := doMutation(
-		t,
-		router,
-		authority,
-		"/api/v1/accesses/access-control/actions/apply",
-		writeToken,
-		0,
-		"access-apply-0001",
-		different,
-	)
-	if conflict.Code != http.StatusConflict {
-		t.Fatalf("idempotency conflict code=%d body=%s", conflict.Code, conflict.Body.Bytes())
-	}
-	active, err = runtime.SnapshotResolver().ResolveAccess(accessID)
-	if err != nil ||
-		active.Revision() != 1 ||
-		active.Binding().Name != "Control Access" {
-		t.Fatalf("idempotency conflict changed active plan: %+v err=%v", active.Binding(), err)
-	}
-	disabledInput := validApplyInput()
-	disabledInput.ExpectedRevision = 1
-	disabledInput.Access.Status = string(access.AccessStatusDisabled)
-	disabledBody, err := json.Marshal(disabledInput)
-	if err != nil {
-		t.Fatal(err)
-	}
-	disabled := doMutation(
-		t,
-		router,
-		authority,
-		"/api/v1/accesses/access-control/actions/apply",
-		writeToken,
-		1,
-		"access-apply-disabled-0001",
-		disabledBody,
-	)
-	if disabled.Code != http.StatusUnprocessableEntity {
-		t.Fatalf("disabled apply code=%d body=%s", disabled.Code, disabled.Body.Bytes())
-	}
-	active, err = runtime.SnapshotResolver().ResolveAccess(accessID)
-	if err != nil || active.Revision() != 1 {
-		t.Fatalf("disabled apply changed active plan revision=%d err=%v", active.Revision(), err)
-	}
-	lifecycleBody, err := json.Marshal(desktopcontrol.AccessStatusUpdate{
-		Status: access.AccessStatusDisabled,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	disabled = doMutationWithMethod(
-		t,
-		router,
-		authority,
-		http.MethodPatch,
-		"/api/v1/accesses/access-control",
-		writeToken,
-		1,
-		"access-disable-0001",
-		lifecycleBody,
-	)
-	if disabled.Code != http.StatusOK {
-		t.Fatalf("disable code=%d body=%s", disabled.Code, disabled.Body.Bytes())
-	}
-	var disabledResult desktopcontrol.AccessApplyResponse
-	decodeResponse(t, disabled, &disabledResult)
-	if disabledResult.Outcome != access.WriteOutcomeCommitted ||
-		disabledResult.Revision != 2 ||
-		disabledResult.ApplicationState != desktopcontrol.AccessApplicationStateInactive ||
-		disabledResult.PlanHash != "" {
-		t.Fatalf("disable result = %+v", disabledResult)
-	}
-	if _, err = runtime.SnapshotResolver().ResolveAccess(accessID); !errors.Is(
-		err,
-		access.ErrAccessNotConfigured,
-	) {
-		t.Fatalf("disabled Access remained active: %v", err)
-	}
-	disabledDetail := doRequest(
-		t,
-		router,
-		authority,
-		http.MethodGet,
-		"/api/v1/accesses/access-control",
-		readToken,
-		nil,
-	)
-	if disabledDetail.Code != http.StatusOK ||
-		disabledDetail.Header().Get("ETag") != `"revision-2"` {
-		t.Fatalf(
-			"disabled detail code=%d ETag=%q body=%s",
-			disabledDetail.Code,
-			disabledDetail.Header().Get("ETag"),
-			disabledDetail.Body.Bytes(),
-		)
-	}
-	var disabledView desktopcontrol.AccessDetailResponse
-	decodeResponse(t, disabledDetail, &disabledView)
-	if disabledView.Access.Status != access.AccessStatusDisabled {
-		t.Fatalf("disabled detail = %+v", disabledView.Access)
-	}
-	lifecycleBody, err = json.Marshal(desktopcontrol.AccessStatusUpdate{
-		Status: access.AccessStatusEnabled,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	reenabled := doMutationWithMethod(
-		t,
-		router,
-		authority,
-		http.MethodPatch,
-		"/api/v1/accesses/access-control",
-		writeToken,
-		2,
-		"access-enable-0001",
-		lifecycleBody,
-	)
-	if reenabled.Code != http.StatusOK {
-		t.Fatalf("re-enable code=%d body=%s", reenabled.Code, reenabled.Body.Bytes())
-	}
-	var reenabledResult desktopcontrol.AccessApplyResponse
-	decodeResponse(t, reenabled, &reenabledResult)
-	if reenabledResult.Outcome != access.WriteOutcomeCommitted ||
-		reenabledResult.Revision != 3 ||
-		reenabledResult.ApplicationState != desktopcontrol.AccessApplicationStateActive ||
-		len(reenabledResult.PlanHash) != 64 {
-		t.Fatalf("re-enable result = %+v", reenabledResult)
-	}
-	active, err = runtime.SnapshotResolver().ResolveAccess(accessID)
-	if err != nil || active.Revision() != 3 {
-		t.Fatalf("re-enabled Access revision=%d err=%v", active.Revision(), err)
-	}
-
-	credentialPath := "/api/v1/accesses/access-control/profiles/" +
-		"access-control-profile/credentials/access-control-account"
-	missingCredential := doRequest(
-		t,
-		router,
-		authority,
-		http.MethodGet,
-		credentialPath,
-		readToken,
-		nil,
-	)
-	if missingCredential.Code != http.StatusOK ||
-		missingCredential.Header().Get("ETag") != `"revision-0"` {
-		t.Fatalf(
-			"missing credential code=%d ETag=%q body=%s",
-			missingCredential.Code,
-			missingCredential.Header().Get("ETag"),
-			missingCredential.Body.Bytes(),
-		)
-	}
-	var missingCredentialView struct {
-		CredentialID   string               `json:"credentialId"`
-		ProfileID      string               `json:"profileId"`
-		SecretState    secretstore.State    `json:"secretState"`
-		SecretRevision secretstore.Revision `json:"secretRevision"`
-	}
-	decodeResponse(t, missingCredential, &missingCredentialView)
-	if missingCredentialView.SecretState != secretstore.StateMissing ||
-		missingCredentialView.SecretRevision != 0 {
-		t.Fatalf("missing credential = %+v", missingCredentialView)
-	}
-	invalidCredential := doMutation(
-		t,
-		router,
-		authority,
-		credentialPath+"/actions/replace-secret",
-		writeToken,
-		0,
-		"credential-replace-invalid-0001",
-		[]byte(`{"secret":"provider-secret\nvalue"}`),
-	)
-	if invalidCredential.Code != http.StatusUnprocessableEntity ||
-		!bytes.Contains(
-			invalidCredential.Body.Bytes(),
-			[]byte(`"code":"credential_value_invalid"`),
-		) ||
-		!bytes.Contains(
-			invalidCredential.Body.Bytes(),
-			[]byte(`"title":"Unprocessable Entity"`),
-		) {
-		t.Fatalf(
-			"invalid credential code=%d body=%s",
-			invalidCredential.Code,
-			invalidCredential.Body.Bytes(),
-		)
-	}
-	secretBody := []byte(`{"secret":"provider-secret-value"}`)
-	replacedCredential := doMutation(
-		t,
-		router,
-		authority,
-		credentialPath+"/actions/replace-secret",
-		writeToken,
-		0,
-		"credential-replace-0001",
-		secretBody,
-	)
-	if replacedCredential.Code != http.StatusOK {
-		t.Fatalf(
-			"replace credential code=%d body=%s",
-			replacedCredential.Code,
-			replacedCredential.Body.Bytes(),
-		)
-	}
-	if bytes.Contains(replacedCredential.Body.Bytes(), []byte("provider-secret-value")) ||
-		bytes.Contains(replacedCredential.Body.Bytes(), []byte("secret://")) {
-		t.Fatalf("credential response exposed secret authority: %s", replacedCredential.Body.Bytes())
-	}
-	var configuredCredentialView struct {
-		CredentialID   string               `json:"credentialId"`
-		ProfileID      string               `json:"profileId"`
-		SecretState    secretstore.State    `json:"secretState"`
-		SecretRevision secretstore.Revision `json:"secretRevision"`
-	}
-	decodeResponse(t, replacedCredential, &configuredCredentialView)
-	if configuredCredentialView.SecretState != secretstore.StateConfigured ||
-		configuredCredentialView.SecretRevision != 1 {
-		t.Fatalf("configured credential = %+v", configuredCredentialView)
-	}
-	staleCredential := doMutation(
-		t,
-		router,
-		authority,
-		credentialPath+"/actions/replace-secret",
-		writeToken,
-		0,
-		"credential-replace-0002",
-		[]byte(`{"secret":"different-provider-secret"}`),
-	)
-	if staleCredential.Code != http.StatusConflict {
-		t.Fatalf(
-			"stale credential code=%d body=%s",
-			staleCredential.Code,
-			staleCredential.Body.Bytes(),
-		)
-	}
-
-	activities := doRequest(
-		t,
-		router,
-		authority,
-		http.MethodGet,
-		"/api/v1/activities?limit=10",
-		readToken,
-		nil,
-	)
-	if activities.Code != http.StatusOK {
-		t.Fatalf("activities code=%d body=%s", activities.Code, activities.Body.Bytes())
-	}
-	var page desktopcontrol.ActivityPage
-	decodeResponse(t, activities, &page)
-	if len(page.Items) != 0 {
-		t.Fatalf("public Activity page exposed management events: %+v", page)
-	}
-	rawPage, err := runtime.Activities().List(
-		context.Background(),
-		activity.PageRequest{Limit: 20},
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	foundApply := false
-	foundCredential := false
-	foundDisabled := false
-	foundEnabled := false
-	for _, record := range rawPage.Items {
-		if record.Kind == activity.KindAccessApplied &&
-			record.AccessID == "access-control" {
-			foundApply = true
-		}
-		if record.Kind == activity.KindCredentialSecretReplaced &&
-			record.AccessID == "access-control" &&
-			record.SubjectID == "access-control-account" {
-			foundCredential = true
-		}
-		if record.Kind == activity.KindAccessDisabled &&
-			record.AccessID == "access-control" {
-			foundDisabled = true
-		}
-		if record.Kind == activity.KindAccessEnabled &&
-			record.AccessID == "access-control" {
-			foundEnabled = true
-		}
-	}
-	if !foundApply || !foundCredential || !foundDisabled || !foundEnabled {
-		t.Fatalf("raw Activity page lost management evidence: %+v", rawPage)
-	}
-
-	deleteLifecycleBody, err := json.Marshal(desktopcontrol.AccessStatusUpdate{
-		Status: access.AccessStatusDisabled,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	deletedAccessDisabled := doMutationWithMethod(
-		t,
-		router,
-		authority,
-		http.MethodPatch,
-		"/api/v1/accesses/access-control",
-		writeToken,
-		3,
-		"access-disable-for-delete-0001",
-		deleteLifecycleBody,
-	)
-	if deletedAccessDisabled.Code != http.StatusOK {
-		t.Fatalf(
-			"disable before delete code=%d body=%s",
-			deletedAccessDisabled.Code,
-			deletedAccessDisabled.Body.Bytes(),
-		)
-	}
-	deletionPreview := doRevisionedRequest(
-		t,
-		router,
-		authority,
-		http.MethodGet,
-		"/api/v1/accesses/access-control/deletion-preview",
-		readToken,
-		4,
-		nil,
-	)
-	if deletionPreview.Code != http.StatusOK {
-		t.Fatalf(
-			"deletion preview code=%d body=%s",
-			deletionPreview.Code,
-			deletionPreview.Body.Bytes(),
-		)
-	}
-	var deletionView desktopcontrol.AccessDeletionPreviewResponse
-	decodeResponse(t, deletionPreview, &deletionView)
-	if deletionView.AccessID != "access-control" ||
-		deletionView.Revision != 4 ||
-		deletionView.Status != access.AccessStatusDisabled ||
-		deletionView.ExclusiveSecretCount != 1 ||
-		deletionView.SharedSecretCount != 0 ||
-		deletionView.ProxyClientBindingCount != 0 ||
-		deletionView.ImpactToken == "" ||
-		len(deletionView.Blockers) != 0 {
-		t.Fatalf("deletion preview = %+v", deletionView)
-	}
-	deletionBody, err := json.Marshal(desktopcontrol.AccessDeletionInput{
-		ImpactToken: deletionView.ImpactToken,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	deleted := doMutationWithMethod(
-		t,
-		router,
-		authority,
-		http.MethodDelete,
-		"/api/v1/accesses/access-control",
-		writeToken,
-		4,
-		"access-delete-0001",
-		deletionBody,
-	)
-	if deleted.Code != http.StatusOK {
-		t.Fatalf("delete code=%d body=%s", deleted.Code, deleted.Body.Bytes())
-	}
-	var deletionResult desktopcontrol.AccessDeletionResponse
-	decodeResponse(t, deleted, &deletionResult)
-	if deletionResult.Outcome != access.DeleteOutcomeCommitted ||
-		deletionResult.Revision != 4 {
-		t.Fatalf("delete result = %+v", deletionResult)
-	}
-	repeatedDelete := doMutationWithMethod(
-		t,
-		router,
-		authority,
-		http.MethodDelete,
-		"/api/v1/accesses/access-control",
-		writeToken,
-		4,
-		"access-delete-0002",
-		deletionBody,
-	)
-	if repeatedDelete.Code != http.StatusOK {
-		t.Fatalf(
-			"repeated delete code=%d body=%s",
-			repeatedDelete.Code,
-			repeatedDelete.Body.Bytes(),
-		)
-	}
-	activityPage, err := runtime.Activities().List(t.Context(), activity.PageRequest{
-		Limit: activity.MaxPageSize,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	deletedEvents := 0
-	for _, event := range activityPage.Items {
-		if event.Kind == activity.KindAccessDeleted &&
-			event.AccessID == "access-control" {
-			deletedEvents++
-		}
-	}
-	if deletedEvents != 1 {
-		t.Fatalf("Access deletion activity count = %d, want 1", deletedEvents)
-	}
-	missingAfterDelete := doRequest(
-		t,
-		router,
-		authority,
-		http.MethodGet,
-		"/api/v1/accesses/access-control",
-		readToken,
-		nil,
-	)
-	if missingAfterDelete.Code != http.StatusNotFound {
-		t.Fatalf(
-			"deleted Access detail code=%d body=%s",
-			missingAfterDelete.Code,
-			missingAfterDelete.Body.Bytes(),
-		)
-	}
-	reuseInput := validApplyInput()
-	reuseBody, err := json.Marshal(reuseInput)
-	if err != nil {
-		t.Fatal(err)
-	}
-	reused := doMutation(
-		t,
-		router,
-		authority,
-		"/api/v1/accesses/access-control/actions/apply",
-		writeToken,
-		0,
-		"access-reuse-after-delete-0001",
-		reuseBody,
-	)
-	if reused.Code != http.StatusConflict ||
-		!bytes.Contains(reused.Body.Bytes(), []byte(`"code":"access_retired"`)) {
-		t.Fatalf(
-			"retired Access reuse code=%d body=%s",
-			reused.Code,
-			reused.Body.Bytes(),
-		)
-	}
-}
-
 func TestDesktopControlApprovalRouteResolvesDurableAuthority(
 	t *testing.T,
 ) {
@@ -1115,19 +123,19 @@ func TestDesktopControlApprovalRouteResolvesDurableAuthority(
 		t.Fatal(err)
 	}
 	application, err := desktopcontrol.New(desktopcontrol.Options{
-		Readiness:      readyState(true),
-		Status:         runtime,
-		Accesses:       runtime.AccessWriter(),
-		AccessDeletion: runtime.AccessDeleter(),
-		Clock:          desktopcontrol.SystemClock{},
-		AccessCatalog:  runtime.AccessCatalog(),
-		Resolver:       runtime.SnapshotResolver(),
-		Credentials:    runtime.Credentials(),
-		Activities:     runtime.Activities(),
-		Connections:    runtime.ConnectionEvents(),
-		Egress:         runtime.EgressAttempts(),
-		Approvals:      approvalAuthority,
-		Offline:        runtime,
+		Readiness:    readyState(true),
+		Status:       runtime,
+		Environments: runtime.Environments(),
+		Assignments:  runtime.CaptureAssignments(),
+		Clock:        desktopcontrol.SystemClock{},
+		Activities:   runtime.Activities(),
+		Contents:     runtime.ExchangeContents(),
+		Connections:  runtime.ConnectionEvents(),
+		Egress:       runtime.EgressAttempts(),
+		Approvals:    approvalAuthority,
+		Endpoints:    runtime.UpstreamEndpoints(),
+		Accounts:     runtime.ProviderAccounts(),
+		Offline:      runtime,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1135,7 +143,7 @@ func TestDesktopControlApprovalRouteResolvesDurableAuthority(
 	const authority = "127.0.0.1:43129"
 	router, err := desktopcontrol.NewRouter(desktopcontrol.RouterOptions{
 		Authority:      authority,
-		AllowedOrigins: []string{"tauri://localhost"},
+		AllowedOrigins: []string{"vibermate://desktop"},
 		Authenticator:  authenticator,
 		Application:    application,
 		Bootstrap:      emptyBootstrap(),
@@ -1294,19 +302,19 @@ func TestDesktopControlRejectsCapabilityAndTransportBoundaryConfusion(t *testing
 		t.Fatal(err)
 	}
 	application, err := desktopcontrol.New(desktopcontrol.Options{
-		Readiness:      readyState(true),
-		Status:         runtime,
-		Accesses:       runtime.AccessWriter(),
-		AccessDeletion: runtime.AccessDeleter(),
-		Clock:          desktopcontrol.SystemClock{},
-		AccessCatalog:  runtime.AccessCatalog(),
-		Resolver:       runtime.SnapshotResolver(),
-		Credentials:    runtime.Credentials(),
-		Activities:     runtime.Activities(),
-		Connections:    runtime.ConnectionEvents(),
-		Egress:         runtime.EgressAttempts(),
-		Approvals:      runtime.ToolApprovals(),
-		Offline:        runtime,
+		Readiness:    readyState(true),
+		Status:       runtime,
+		Environments: runtime.Environments(),
+		Assignments:  runtime.CaptureAssignments(),
+		Clock:        desktopcontrol.SystemClock{},
+		Activities:   runtime.Activities(),
+		Contents:     runtime.ExchangeContents(),
+		Connections:  runtime.ConnectionEvents(),
+		Egress:       runtime.EgressAttempts(),
+		Approvals:    runtime.ToolApprovals(),
+		Endpoints:    runtime.UpstreamEndpoints(),
+		Accounts:     runtime.ProviderAccounts(),
+		Offline:      runtime,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1314,7 +322,7 @@ func TestDesktopControlRejectsCapabilityAndTransportBoundaryConfusion(t *testing
 	const authority = "127.0.0.1:43128"
 	router, err := desktopcontrol.NewRouter(desktopcontrol.RouterOptions{
 		Authority:        authority,
-		AllowedOrigins:   []string{"tauri://localhost"},
+		AllowedOrigins:   []string{"vibermate://desktop"},
 		Authenticator:    authenticator,
 		Application:      application,
 		Bootstrap:        emptyBootstrap(),
@@ -1340,7 +348,7 @@ func TestDesktopControlRejectsCapabilityAndTransportBoundaryConfusion(t *testing
 			token:  writeToken,
 			host:   authority,
 			remote: "127.0.0.1:50000",
-			origin: "tauri://localhost",
+			origin: "vibermate://desktop",
 			want:   http.StatusUnauthorized,
 		},
 		{
@@ -1348,7 +356,7 @@ func TestDesktopControlRejectsCapabilityAndTransportBoundaryConfusion(t *testing
 			token:  capability(0x33),
 			host:   authority,
 			remote: "127.0.0.1:50000",
-			origin: "tauri://localhost",
+			origin: "vibermate://desktop",
 			want:   http.StatusUnauthorized,
 		},
 		{
@@ -1356,7 +364,7 @@ func TestDesktopControlRejectsCapabilityAndTransportBoundaryConfusion(t *testing
 			token:  readToken,
 			host:   authority,
 			remote: "192.0.2.2:50000",
-			origin: "tauri://localhost",
+			origin: "vibermate://desktop",
 			want:   http.StatusForbidden,
 		},
 		{
@@ -1364,7 +372,7 @@ func TestDesktopControlRejectsCapabilityAndTransportBoundaryConfusion(t *testing
 			token:  readToken,
 			host:   "localhost:43128",
 			remote: "127.0.0.1:50000",
-			origin: "tauri://localhost",
+			origin: "vibermate://desktop",
 			want:   http.StatusForbidden,
 		},
 		{
@@ -1380,7 +388,7 @@ func TestDesktopControlRejectsCapabilityAndTransportBoundaryConfusion(t *testing
 			token:     readToken,
 			host:      authority,
 			remote:    "127.0.0.1:50000",
-			origin:    "tauri://localhost",
+			origin:    "vibermate://desktop",
 			forwarded: "for=127.0.0.1",
 			want:      http.StatusForbidden,
 		},
@@ -1389,7 +397,7 @@ func TestDesktopControlRejectsCapabilityAndTransportBoundaryConfusion(t *testing
 			token:     readToken,
 			host:      authority,
 			remote:    "127.0.0.1:50000",
-			origin:    "tauri://localhost",
+			origin:    "vibermate://desktop",
 			fetchSite: "same-origin",
 			want:      http.StatusForbidden,
 		},
@@ -1535,7 +543,7 @@ func newRequest(
 	)
 	request.Host = authority
 	request.RemoteAddr = "127.0.0.1:50000"
-	request.Header.Set("Origin", "tauri://localhost")
+	request.Header.Set("Origin", "vibermate://desktop")
 	request.Header.Set("Sec-Fetch-Site", "cross-site")
 	request.Header.Set("Sec-Fetch-Mode", "cors")
 	request.Header.Set("Sec-Fetch-Dest", "empty")
@@ -1651,6 +659,23 @@ func (store *credentialStoreFixture) Read(
 	return secretstore.NewValue(item.bytes)
 }
 
+func (store *credentialStoreFixture) ReadAtRevision(
+	_ context.Context,
+	reference secretstore.Reference,
+	expected secretstore.Revision,
+) (*secretstore.Value, error) {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	item, found := store.items[reference.String()]
+	if !found {
+		return nil, secretstore.ErrNotFound
+	}
+	if item.revision != expected {
+		return nil, secretstore.ErrRevisionConflict
+	}
+	return secretstore.NewValue(item.bytes)
+}
+
 func (store *credentialStoreFixture) Inspect(
 	_ context.Context,
 	reference secretstore.Reference,
@@ -1732,75 +757,9 @@ func emptyBootstrap() http.Handler {
 	})
 }
 
-func validApplyInput() accessapply.Input {
-	return accessapply.Input{
-		ExpectedRevision: 0,
-		Access: accessapply.AccessInput{
-			ID:                "access-control",
-			Name:              "Control Access",
-			Description:       "Executable control Access",
-			Status:            "enabled",
-			AgentEndpointID:   "access-control-endpoint",
-			DefaultRouteSetID: "access-control-routes",
-			ProfileIDs:        []string{"access-control-profile"},
-			EgressPolicyID:    "access-control-egress",
-		},
-		AgentEndpoint: accessapply.AgentEndpointInput{
-			ID:            "access-control-endpoint",
-			ClientOrigin:  "https://agent.example.test:443",
-			ClientDialect: "anthropic-messages",
-		},
-		Profiles: []accessapply.ProfileInput{{
-			ID:                     "access-control-profile",
-			Name:                   "OpenAI Chat",
-			Description:            "Fixed profile",
-			BackendDialect:         "openai-chat",
-			TargetID:               "access-control-target",
-			UpstreamWireProfileRef: access.UpstreamWireProfileFollowClientValue,
-			DefaultModelPolicy: accessapply.ModelPolicyInput{
-				Mode:       "fixed",
-				FixedModel: "gpt-4.1-mini",
-			},
-			AccountBindingIDs:       []string{"access-control-account"},
-			DefaultAccountBindingID: "access-control-account",
-		}},
-		ProviderTargets: []accessapply.ProviderTargetInput{{
-			ID:        "access-control-target",
-			ProfileID: "access-control-profile",
-			Origin:    "https://api.openai.com:443/v1",
-			Protocol:  "openai-chat",
-			Capabilities: []string{
-				"messages",
-				"streaming",
-				"tool_calls",
-			},
-		}},
-		AccountBindings: []accessapply.AccountBindingInput{{
-			ID:            "access-control-account",
-			ProfileID:     "access-control-profile",
-			Label:         "Primary",
-			SecretRef:     "secret://provider/access-control",
-			AuthDriverRef: "static_header",
-			Enabled:       true,
-		}},
-		RouteSets: []accessapply.RouteSetInput{{
-			ID:                  "access-control-routes",
-			CandidateProfileIDs: []string{"access-control-profile"},
-		}},
-		EgressPolicy: accessapply.EgressPolicyInput{
-			ID:   "access-control-egress",
-			Mode: "direct",
-		},
-		PluginPlan: accessapply.PluginPlanInput{
-			Mode:       "pass_through",
-			BindingIDs: []string{},
-		},
-	}
-}
-
 func validToolDecisionRequest(t *testing.T) exchange.ToolDecisionRequest {
 	t.Helper()
-	accessID, err := access.NewAccessID("access-control-approval")
+	environmentID, err := environment.NewEnvironmentID("environment-control-approval")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1815,11 +774,20 @@ func validToolDecisionRequest(t *testing.T) exchange.ToolDecisionRequest {
 	if err != nil {
 		t.Fatal(err)
 	}
+	decisionContext, err := exchange.NewToolDecisionContext(
+		environment.DefaultPolicySet(), "", false, nil, nil,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
 	request, err := exchange.NewToolDecisionRequest(
 		"exchange-control-approval",
-		accessID,
+		environmentID,
 		1,
-		access.PlanHash{0x41},
+		environment.CandidateDigest{0x41},
+		"route-control-approval",
+		1,
+		decisionContext,
 		[]protocolcore.ToolIntent{{
 			ResponseID: "response-control-approval",
 			Ordinal:    0,

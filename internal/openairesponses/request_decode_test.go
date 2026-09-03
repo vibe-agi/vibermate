@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"testing"
 
+	openai "github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/responses"
 	"github.com/vibe-agi/vibermate/internal/protocolcore"
 )
@@ -159,6 +160,125 @@ func TestDecodeFixedCodexRequestProducesTypedIRAndExplicitNotices(t *testing.T) 
 	body[offset+1] = 'X'
 	if !bytes.Contains(function.InputSchema.Bytes(), []byte(`"cell_id"`)) {
 		t.Fatal("decoded function schema aliases the request body")
+	}
+}
+
+func TestDecodeCompatibleRequestPreservesResponsesReasoningHistory(t *testing.T) {
+	t.Parallel()
+
+	body := []byte(`{
+		"model":"gpt-5.6-sol",
+		"input":[
+			{
+				"id":"rs_1",
+				"type":"reasoning",
+				"summary":[{"type":"summary_text","text":"Checked the repository state."}],
+				"content":[],
+				"encrypted_content":"opaque-provider-state",
+				"status":"completed"
+			},
+			{"type":"message","role":"assistant","phase":"commentary","content":[{"type":"output_text","text":"I will inspect it."}]},
+			{"type":"message","role":"user","content":[{"type":"input_text","text":"Continue."}]}
+		],
+		"stream":true
+	}`)
+	request, _, err := newTestCodec(t).DecodeCompatibleClientRequest(body)
+	if err != nil {
+		t.Fatalf("DecodeCompatibleClientRequest() error = %v", err)
+	}
+	if len(request.Messages) != 3 || request.Messages[0].Role != protocolcore.RoleAssistant ||
+		len(request.Messages[0].Blocks) != 2 {
+		t.Fatalf("reasoning history = %#v", request.Messages)
+	}
+	summary := request.Messages[0].Blocks[0].ProviderExtension
+	encrypted := request.Messages[0].Blocks[1].ProviderExtension
+	if summary.Source() != protocolcore.ProviderExtensionSourceOpenAIResponses ||
+		summary.Kind() != protocolcore.ProviderExtensionReasoningSummary ||
+		encrypted.Kind() != protocolcore.ProviderExtensionReasoningEncryptedContent {
+		t.Fatalf("reasoning extensions = %#v / %#v", summary, encrypted)
+	}
+	if !bytes.Contains(summary.Fragments()[0], []byte("Checked the repository state.")) ||
+		!bytes.Contains(encrypted.Fragments()[0], []byte("opaque-provider-state")) {
+		t.Fatalf("reasoning fragments were not preserved")
+	}
+}
+
+func TestDecodeCompatibleRequestPreservesOfficialMultiAgentEvidence(t *testing.T) {
+	t.Parallel()
+
+	body := []byte(`{
+		"model":"gpt-5.6-sol",
+		"input":[
+			{
+				"id":"agent-message-1",
+				"type":"agent_message",
+				"author":"root",
+				"recipient":"reviewer",
+				"agent":{"agent_name":"root"},
+				"content":[
+					{"type":"input_text","text":"Inspect the protocol boundary."},
+					{"type":"encrypted_content","encrypted_content":"opaque-agent-state"}
+				]
+			},
+			{
+				"id":"multi-agent-call-1",
+				"type":"multi_agent_call",
+				"action":"spawn_agent",
+				"arguments":"{\"task_name\":\"reviewer\"}",
+				"call_id":"agent-call-1"
+			},
+			{
+				"id":"multi-agent-output-1",
+				"type":"multi_agent_call_output",
+				"action":"spawn_agent",
+				"call_id":"agent-call-1",
+				"output":[{"type":"output_text","text":"reviewer started"}]
+			}
+		],
+		"store":false,
+		"stream":true
+	}`)
+	var oracle openai.BetaResponseNewParams
+	if err := json.Unmarshal(body, &oracle); err != nil {
+		t.Fatalf("official OpenAI beta SDK rejected fixture: %v", err)
+	}
+	oracleItems := oracle.Input.OfInputItemList
+	if len(oracleItems) != 3 ||
+		oracleItems[0].OfAgentMessage == nil ||
+		oracleItems[1].OfMultiAgentCall == nil ||
+		oracleItems[2].OfMultiAgentCallOutput == nil {
+		t.Fatalf("official OpenAI beta SDK did not classify multi-agent fixture: %#v", oracleItems)
+	}
+
+	request, report, err := newTestCodec(t).DecodeCompatibleClientRequest(body)
+	if err != nil {
+		t.Fatalf("DecodeCompatibleClientRequest() error = %v", err)
+	}
+	if len(request.Messages) != 3 {
+		t.Fatalf("message count = %d, want 3", len(request.Messages))
+	}
+	agentMessage := request.Messages[0]
+	if agentMessage.Agent == nil || agentMessage.Agent.AgentName != "root" ||
+		agentMessage.Agent.Author != "root" || agentMessage.Agent.Recipient != "reviewer" ||
+		len(agentMessage.Blocks) != 2 ||
+		agentMessage.Blocks[1].ProviderExtension.Kind() !=
+			protocolcore.ProviderExtensionAgentMessageEncryptedContent {
+		t.Fatalf("agent message = %#v", agentMessage)
+	}
+	callMessage := request.Messages[1]
+	call := callMessage.Blocks[0].ToolCall
+	if callMessage.Agent != nil || call.Namespace != "multi_agent" ||
+		call.Name != "spawn_agent" || call.Key.WireID() != "agent-call-1" {
+		t.Fatalf("multi-agent call = %#v", callMessage)
+	}
+	outputMessage := request.Messages[2]
+	if outputMessage.Agent != nil ||
+		outputMessage.Blocks[0].ToolResult.Key != call.Key ||
+		outputMessage.Blocks[0].ToolResult.Content != "reviewer started" {
+		t.Fatalf("multi-agent output = %#v", outputMessage)
+	}
+	if !reportHasNotice(report, protocolcore.NoticeAgentItemIdentityNotForwarded) {
+		t.Fatalf("translation report = %#v", report.Notices())
 	}
 }
 
@@ -486,6 +606,38 @@ func TestDecodeResponsesMessageMetadataRejectsInvalidShape(t *testing.T) {
 			protocolcore.ReasonInvalidClientRequest {
 			t.Fatalf("metadata %s error = %v", metadata, err)
 		}
+	}
+}
+
+func TestDecodeCodexRequestRetainsLatestInputTurnIDForExactRolloutJoin(t *testing.T) {
+	t.Parallel()
+
+	request, _, err := newTestCodec(t).DecodeClientRequest([]byte(`{
+		"model":"gpt-5.6-sol",
+		"input":[
+			{
+				"type":"message",
+				"role":"assistant",
+				"content":[{"type":"output_text","text":"older"}],
+				"internal_chat_message_metadata_passthrough":{"turn_id":"turn-parent"}
+			},
+			{
+				"type":"message",
+				"role":"user",
+				"content":[{"type":"input_text","text":"current"}],
+				"internal_chat_message_metadata_passthrough":{"turn_id":"turn-child"}
+			}
+		],
+		"store":false,
+		"stream":true
+	}`))
+	if err != nil {
+		t.Fatalf("DecodeClientRequest() error = %v", err)
+	}
+	if len(request.ProtocolEvidence) != 1 ||
+		request.ProtocolEvidence[0].Name != "openai_responses.turn_id" ||
+		request.ProtocolEvidence[0].Value != "turn-child" {
+		t.Fatalf("protocol evidence = %#v", request.ProtocolEvidence)
 	}
 }
 

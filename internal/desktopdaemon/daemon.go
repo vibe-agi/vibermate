@@ -17,6 +17,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/exchange"
 	"github.com/vibe-agi/vibermate/internal/hostcontract"
 	"github.com/vibe-agi/vibermate/internal/instanceguard"
+	"github.com/vibe-agi/vibermate/internal/localca"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
 	"github.com/vibe-agi/vibermate/internal/productruntime"
 	"github.com/vibe-agi/vibermate/internal/runtimepersistence"
@@ -49,8 +50,7 @@ func ProductionOptions(
 	if bootstrapWriter == nil {
 		return Options{}, errors.New("Desktop bootstrap descriptor is unavailable")
 	}
-	if webviewOrigin != "tauri://localhost" &&
-		webviewOrigin != "http://127.0.0.1:1420" {
+	if webviewOrigin != "vibermate://desktop" {
 		return Options{}, errors.New("Desktop Webview origin is unsupported")
 	}
 	hostPaths, err := desktophost.NewPaths(appCacheDirectory)
@@ -86,6 +86,9 @@ func ProductionOptions(
 	}
 	hostOptions := desktophost.DefaultOptions(hostPaths, runtimeOptions)
 	hostOptions.AllowedOrigins = []string{webviewOrigin}
+	// The native App is also a Runtime Server. Remote clients authenticate as
+	// Runtime Users and share the same evidence database as the local App.
+	hostOptions.RemoteServerEnabled = true
 	return Options{
 		Host:            hostOptions,
 		BootstrapWriter: bootstrapWriter,
@@ -169,12 +172,10 @@ func classifyStartupFailure(err error) desktopbootstrap.Failure {
 	switch {
 	case errors.Is(err, instanceguard.ErrAlreadyOwned):
 		reason = desktopbootstrap.FailureRuntimeAlreadyActive
-	case errors.Is(err, runtimepersistence.ErrSchemaNewerThanBinary):
-		reason = desktopbootstrap.FailureStorageSchemaNewer
+	case errors.Is(err, localca.ErrRootResetFailed):
+		reason = desktopbootstrap.FailureRootResetFailed
 	case errors.Is(err, runtimepersistence.ErrInvalidDatabasePath),
-		errors.Is(err, runtimepersistence.ErrSchemaBaselineMismatch),
-		errors.Is(err, runtimepersistence.ErrSchemaNotInitialized),
-		errors.Is(err, runtimepersistence.ErrSchemaRevisionMismatch):
+		errors.Is(err, runtimepersistence.ErrSchemaBaselineMismatch):
 		reason = desktopbootstrap.FailureStorageUnavailable
 	case errors.Is(err, secretstore.ErrLocked),
 		errors.Is(err, secretstore.ErrDenied),

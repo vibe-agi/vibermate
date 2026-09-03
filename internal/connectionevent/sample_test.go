@@ -46,7 +46,7 @@ func TestConnectionSamplesDescribeWhatTheRuntimeSends(t *testing.T) {
 				RequestedHost:    "unknown.example.com",
 				Port:             443,
 				Decision:         connectionevent.DecisionDeny,
-				RuleID:           "default.ask",
+				RuleID:           "mode.deny_unknown",
 				Decryption:       connectionevent.DecryptionNone,
 				Phase:            connectionevent.PhaseDecided,
 				StartedAt:        started.Add(time.Minute),

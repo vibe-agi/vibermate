@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/vibe-agi/vibermate/internal/accessapply"
+	"github.com/vibe-agi/vibermate/internal/environment"
 )
 
 type config struct {
@@ -20,12 +20,10 @@ type config struct {
 	clientID          acceptanceClientID
 	claudePath        string
 	codexPath         string
-	accessID          string
-	providerOrigin    string
-	providerModel     string
-	secretRef         string
+	environmentID     string
 	dataDirectory     string
 	reportPath        string
+	anthropicKeyPath  string
 	deterministicOnly bool
 	keepData          bool
 	timeout           time.Duration
@@ -56,28 +54,10 @@ func parseConfig(arguments []string) (config, error) {
 	flags.StringVar(&parsed.claudePath, "claude", "", "absolute Claude Code 2.1.220 path")
 	flags.StringVar(&parsed.codexPath, "codex", "", "absolute Codex CLI 0.145.0 path")
 	flags.StringVar(
-		&parsed.accessID,
-		"access-id",
-		parsed.accessID,
-		"acceptance Access ID",
-	)
-	flags.StringVar(
-		&parsed.providerOrigin,
-		"provider-origin",
-		parsed.providerOrigin,
-		"required provider origin",
-	)
-	flags.StringVar(
-		&parsed.providerModel,
-		"provider-model",
-		parsed.providerModel,
-		"required fixed provider model",
-	)
-	flags.StringVar(
-		&parsed.secretRef,
-		"secret-ref",
-		"",
-		"provider SecretRef; defaults to the Access account reference",
+		&parsed.environmentID,
+		"environment-id",
+		parsed.environmentID,
+		"acceptance Environment ID",
 	)
 	flags.StringVar(
 		&parsed.dataDirectory,
@@ -90,6 +70,12 @@ func parseConfig(arguments []string) (config, error) {
 		"report",
 		"",
 		"optional absolute JSON evidence path",
+	)
+	flags.StringVar(
+		&parsed.anthropicKeyPath,
+		"anthropic-api-key-file",
+		"",
+		"absolute private 0600 file used only by opt-in credentialed acceptance",
 	)
 	flags.BoolVar(
 		&parsed.deterministicOnly,
@@ -191,36 +177,41 @@ func parseConfig(arguments []string) (config, error) {
 	case acceptanceClientCodexCLI:
 		parsed.codexPath = clientInvocation
 	}
-	if parsed.accessID == "" ||
-		strings.TrimSpace(parsed.accessID) != parsed.accessID ||
-		parsed.providerOrigin == "" ||
-		strings.TrimSpace(parsed.providerOrigin) != parsed.providerOrigin ||
-		parsed.providerModel == "" ||
-		strings.TrimSpace(parsed.providerModel) != parsed.providerModel ||
+	if parsed.environmentID == "" ||
+		strings.TrimSpace(parsed.environmentID) != parsed.environmentID ||
 		parsed.timeout <= 0 {
 		return config{}, errors.New(
-			"--provider-origin, --provider-model, Access, and timeout inputs are required",
+			"Environment and timeout inputs are required",
 		)
 	}
-	if parsed.secretRef == "" {
-		parsed.secretRef = "secret://provider/" + parsed.accessID + "-account"
+	if parsed.deterministicOnly {
+		if parsed.anthropicKeyPath != "" {
+			return config{}, errors.New(
+				"deterministic acceptance cannot receive a provider credential file",
+			)
+		}
+	} else {
+		if parsed.clientID != acceptanceClientClaudeCode {
+			return config{}, errors.New(
+				"credentialed acceptance currently requires the fixed Claude client",
+			)
+		}
+		if parsed.anthropicKeyPath == "" {
+			return config{}, errors.New(
+				"credentialed acceptance requires --anthropic-api-key-file",
+			)
+		}
 	}
-	if strings.TrimSpace(parsed.secretRef) != parsed.secretRef {
-		return config{}, errors.New("provider SecretRef is invalid")
+	if _, err := environment.NewEnvironmentID(parsed.environmentID); err != nil {
+		return config{}, fmt.Errorf("acceptance Environment: %w", err)
 	}
-	assembly, err := assemblyAccess(parsed, 0)
-	if err != nil {
-		return config{}, fmt.Errorf("acceptance client: %w", err)
-	}
-	if _, err := accessapply.BuildCommand(
-		parsed.accessID,
-		assembly,
-	); err != nil {
-		return config{}, fmt.Errorf("acceptance Access: %w", err)
+	if _, err := assemblyEnvironment(parsed, 1, nil); err != nil {
+		return config{}, fmt.Errorf("acceptance Environment: %w", err)
 	}
 	for label, value := range map[string]string{
-		"data directory": parsed.dataDirectory,
-		"report path":    parsed.reportPath,
+		"data directory":         parsed.dataDirectory,
+		"report path":            parsed.reportPath,
+		"Anthropic API key file": parsed.anthropicKeyPath,
 	} {
 		if value == "" {
 			continue
@@ -234,9 +225,9 @@ func parseConfig(arguments []string) (config, error) {
 
 func defaultConfig() config {
 	return config{
-		clientID: acceptanceClientClaudeCode,
-		accessID: "assembly-001",
-		timeout:  8 * time.Minute,
+		clientID:      acceptanceClientClaudeCode,
+		environmentID: "assembly-001",
+		timeout:       8 * time.Minute,
 	}
 }
 

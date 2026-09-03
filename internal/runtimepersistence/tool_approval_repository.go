@@ -10,7 +10,7 @@ import (
 	"io"
 	"time"
 
-	"github.com/vibe-agi/vibermate/internal/access"
+	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/toolapproval"
 )
 
@@ -18,9 +18,11 @@ const toolApprovalColumns = `
 	approval_id,
 	revision,
 	exchange_id,
-	access_id,
-	plan_revision,
-	plan_hash,
+	environment_id,
+	environment_revision,
+	environment_digest,
+	route_id,
+	route_revision,
 	kind,
 	subject_refs_json,
 	subject_labels_json,
@@ -75,11 +77,12 @@ func (repository *toolApprovalRepository) Create(
 	if err != nil {
 		return err
 	}
-	// A record with no plan binding stores no binding. Writing a zero hash and
-	// a zero revision would record an Access that was never resolved.
-	planHash := []byte{}
-	if record.PlanRevision != 0 {
-		planHash = record.PlanHash[:]
+	// A record with no Environment route binding stores no binding. Writing a
+	// zero digest and zero revisions would record an authority that was never
+	// resolved.
+	environmentDigest := []byte{}
+	if record.EnvironmentRevision != 0 {
+		environmentDigest = record.EnvironmentDigest[:]
 	}
 	operation, finish, err := repository.operations.begin(ctx)
 	if err != nil {
@@ -92,9 +95,11 @@ func (repository *toolApprovalRepository) Create(
 		     approval_id,
 		     revision,
 		     exchange_id,
-		     access_id,
-		     plan_revision,
-		     plan_hash,
+		     environment_id,
+		     environment_revision,
+		     environment_digest,
+		     route_id,
+		     route_revision,
 		     kind,
 		     subject_refs_json,
 		     subject_labels_json,
@@ -107,13 +112,15 @@ func (repository *toolApprovalRepository) Create(
 		     created_at_unix_ms,
 		     expires_at_unix_ms
 		 )
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		record.ID,
 		record.Revision,
 		record.ExchangeID,
-		record.AccessID.String(),
-		record.PlanRevision,
-		planHash,
+		record.EnvironmentID.String(),
+		record.EnvironmentRevision,
+		environmentDigest,
+		record.RouteID.String(),
+		record.RouteRevision,
 		string(record.Kind),
 		callIDs,
 		names,
@@ -420,9 +427,11 @@ type toolApprovalScanner interface {
 
 func scanToolApproval(scanner toolApprovalScanner) (toolapproval.Record, error) {
 	var record toolapproval.Record
-	var accessID string
-	var planRevision int64
-	var planHash []byte
+	var environmentID string
+	var environmentRevision int64
+	var environmentDigest []byte
+	var routeID string
+	var routeRevision int64
 	var callIDs []byte
 	var names []byte
 	var createdAt int64
@@ -435,9 +444,11 @@ func scanToolApproval(scanner toolApprovalScanner) (toolapproval.Record, error) 
 		&record.ID,
 		&record.Revision,
 		&record.ExchangeID,
-		&accessID,
-		&planRevision,
-		&planHash,
+		&environmentID,
+		&environmentRevision,
+		&environmentDigest,
+		&routeID,
+		&routeRevision,
 		&record.Kind,
 		&callIDs,
 		&names,
@@ -457,23 +468,25 @@ func scanToolApproval(scanner toolApprovalScanner) (toolapproval.Record, error) 
 	); err != nil {
 		return toolapproval.Record{}, err
 	}
-	bound := planRevision != 0
-	if bound {
-		typedAccessID, err := access.NewAccessID(accessID)
-		if err != nil {
-			return toolapproval.Record{}, err
-		}
-		if planRevision < 0 || uint64(planRevision) > uint64(access.MaxRevision) {
+	hasBinding := record.ExchangeID != "" || environmentID != "" ||
+		environmentRevision != 0 || len(environmentDigest) != 0 ||
+		routeID != "" || routeRevision != 0
+	if hasBinding {
+		typedEnvironmentID, environmentErr := environment.NewEnvironmentID(environmentID)
+		typedRouteID, routeErr := environment.NewUpstreamRouteID(routeID)
+		if environmentErr != nil || routeErr != nil ||
+			environmentRevision <= 0 ||
+			uint64(environmentRevision) > uint64(environment.MaxRevision) ||
+			routeRevision <= 0 ||
+			uint64(routeRevision) > uint64(environment.MaxRevision) ||
+			len(environmentDigest) != len(record.EnvironmentDigest) {
 			return toolapproval.Record{}, toolapproval.ErrInvalidApproval
 		}
-		if len(planHash) != len(record.PlanHash) {
-			return toolapproval.Record{}, toolapproval.ErrInvalidApproval
-		}
-		record.AccessID = typedAccessID
-		record.PlanRevision = access.Revision(planRevision)
-		copy(record.PlanHash[:], planHash)
-	} else if accessID != "" || len(planHash) != 0 {
-		return toolapproval.Record{}, toolapproval.ErrInvalidApproval
+		record.EnvironmentID = typedEnvironmentID
+		record.EnvironmentRevision = environment.Revision(environmentRevision)
+		copy(record.EnvironmentDigest[:], environmentDigest)
+		record.RouteID = typedRouteID
+		record.RouteRevision = environment.Revision(routeRevision)
 	}
 	if requestCount <= 0 || waiterCount <= 0 ||
 		requestCount > int64(^uint32(0)) || waiterCount > int64(^uint32(0)) {

@@ -46,6 +46,47 @@ type CurrentPublicRootSource interface {
 	currentPublicRoot(context.Context) (publicRoot, error)
 }
 
+// NewPublicRootSnapshotSource seals one already-owned public Root snapshot for
+// a Host adapter. Only the identity and certificate are accepted; paths and
+// private material never cross this seam. The returned interface cannot be
+// implemented by callers because its observation method is package-private.
+func NewPublicRootSnapshotSource(
+	identity localca.RootIdentity,
+	certificate localca.RootCertificate,
+) (CurrentPublicRootSource, error) {
+	if !identity.Valid() {
+		return nil, ErrCurrentRootInvalid
+	}
+	der, err := parseSingleCertificatePEM(certificate.CertificatePEM())
+	if err != nil {
+		return nil, err
+	}
+	root := publicRoot{identity: identity, certificateDER: der}
+	if !root.valid() {
+		return nil, ErrCurrentRootInvalid
+	}
+	return snapshotRootSource{root: root.clone()}, nil
+}
+
+type snapshotRootSource struct {
+	root publicRoot
+}
+
+func (source snapshotRootSource) currentPublicRoot(
+	ctx context.Context,
+) (publicRoot, error) {
+	if ctx == nil {
+		return publicRoot{}, ErrCurrentRootInvalid
+	}
+	if err := ctx.Err(); err != nil {
+		return publicRoot{}, context.Cause(ctx)
+	}
+	if !source.root.valid() {
+		return publicRoot{}, ErrCurrentRootInvalid
+	}
+	return source.root.clone(), nil
+}
+
 type localAuthorityRootSource struct {
 	authority *localca.Authority
 }

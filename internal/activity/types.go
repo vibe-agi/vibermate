@@ -13,7 +13,9 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"github.com/vibe-agi/vibermate/internal/access"
+	"github.com/vibe-agi/vibermate/internal/agentconversation"
+	"github.com/vibe-agi/vibermate/internal/captureidentity"
+	"github.com/vibe-agi/vibermate/internal/environment"
 )
 
 const (
@@ -30,15 +32,16 @@ var (
 type Kind string
 
 const (
-	KindAccessApplied            Kind = "access.applied"
-	KindAccessDisabled           Kind = "access.disabled"
-	KindAccessEnabled            Kind = "access.enabled"
-	KindAccessDeleted            Kind = "access.deleted"
+	KindEnvironmentApplied       Kind = "environment.applied"
+	KindEnvironmentDisabled      Kind = "environment.disabled"
+	KindEnvironmentEnabled       Kind = "environment.enabled"
+	KindEnvironmentDeleted       Kind = "environment.deleted"
 	KindCredentialSecretReplaced Kind = "credential.secret_replaced"
 	KindOfflineHoldEntered       Kind = "offline_hold.entered"
 	KindOfflineHoldResumed       Kind = "offline_hold.resumed"
 	KindApprovalPending          Kind = "approval.pending"
 	KindApprovalResolved         Kind = "approval.resolved"
+	KindExchangeStarted          Kind = "exchange.started"
 	KindExchangeCompleted        Kind = "exchange.completed"
 )
 
@@ -70,35 +73,45 @@ const (
 )
 
 type Event struct {
-	Kind              Kind
-	AccessID          access.AccessID
-	AccessName        string
-	AccessRevision    uint64
-	SubjectID         string
-	Status            Status
-	ReasonCode        string
-	SourceKind        SourceKind
-	SourceDisplayName string
-	SourceRecognition SourceRecognition
-	CaptureRunID      string
-	ManualCaptureID   string
-	IngressProfileID  string
-	ConnectionID      string
-	Diagnosis         Diagnosis
-	Transport         *TransportEvidence
+	Kind                   Kind
+	EnvironmentID          environment.EnvironmentID
+	EnvironmentRevision    environment.Revision
+	EnvironmentDigest      string
+	ClientEndpointID       environment.ClientEndpointID
+	ClientEndpointRevision environment.Revision
+	ProtocolPlanID         environment.ClientProtocolPlanID
+	ProtocolPlanRevision   environment.Revision
+	RouteID                environment.UpstreamRouteID
+	RouteRevision          environment.Revision
+	AccountID              string
+	AccountRevision        uint64
+	CredentialEpoch        uint64
+	SubjectID              string
+	Status                 Status
+	ReasonCode             string
+	SourceKind             SourceKind
+	SourceDisplayName      string
+	SourceRecognition      SourceRecognition
+	CaptureRunID           string
+	ManualCaptureID        string
+	ConnectionID           string
+	Conversation           agentconversation.Ref
+	Diagnosis              Diagnosis
+	Transport              *TransportEvidence
 }
 
 func (event Event) Validate() error {
 	switch event.Kind {
-	case KindAccessApplied,
-		KindAccessDisabled,
-		KindAccessEnabled,
-		KindAccessDeleted,
+	case KindEnvironmentApplied,
+		KindEnvironmentDisabled,
+		KindEnvironmentEnabled,
+		KindEnvironmentDeleted,
 		KindCredentialSecretReplaced,
 		KindOfflineHoldEntered,
 		KindOfflineHoldResumed,
 		KindApprovalPending,
 		KindApprovalResolved,
+		KindExchangeStarted,
 		KindExchangeCompleted:
 	default:
 		return fmt.Errorf("%w: kind is unsupported", ErrInvalidEvent)
@@ -119,19 +132,55 @@ func (event Event) Validate() error {
 	if err := event.Diagnosis.validate(); err != nil {
 		return err
 	}
-	if (event.Kind == KindAccessApplied ||
-		event.Kind == KindAccessDisabled ||
-		event.Kind == KindAccessEnabled ||
-		event.Kind == KindAccessDeleted) && event.AccessID.String() == "" {
-		return fmt.Errorf("%w: Access event has no Access ID", ErrInvalidEvent)
+	hasEnvironment, err := event.validateEnvironmentEvidence()
+	if err != nil {
+		return err
 	}
-	if event.Kind == KindExchangeCompleted {
-		if event.AccessID.String() == "" ||
-			validateIdentity("Access name", event.AccessName, false) != nil ||
-			event.AccessRevision == 0 ||
+	hasExecution, err := event.validateExecutionEvidence(hasEnvironment)
+	if err != nil {
+		return err
+	}
+	hasAccount, err := event.validateAccountEvidence()
+	if err != nil {
+		return err
+	}
+	if hasAccount &&
+		(event.Kind == KindExchangeStarted || event.Kind == KindExchangeCompleted) &&
+		event.RouteID.String() == "" {
+		return fmt.Errorf(
+			"%w: Account evidence requires an Upstream Route",
+			ErrInvalidEvent,
+		)
+	}
+	isEnvironmentLifecycle := event.Kind == KindEnvironmentApplied ||
+		event.Kind == KindEnvironmentDisabled ||
+		event.Kind == KindEnvironmentEnabled ||
+		event.Kind == KindEnvironmentDeleted
+	if isEnvironmentLifecycle && (!hasEnvironment || hasExecution || hasAccount) {
+		return fmt.Errorf(
+			"%w: Environment lifecycle evidence is incomplete",
+			ErrInvalidEvent,
+		)
+	}
+	if event.Kind == KindCredentialSecretReplaced && !hasAccount {
+		return fmt.Errorf(
+			"%w: credential event has no frozen Account reference",
+			ErrInvalidEvent,
+		)
+	}
+	if hasAccount && event.Kind != KindExchangeCompleted &&
+		event.Kind != KindCredentialSecretReplaced {
+		return fmt.Errorf(
+			"%w: Account evidence belongs only to an Exchange or credential event",
+			ErrInvalidEvent,
+		)
+	}
+	isExchange := event.Kind == KindExchangeStarted ||
+		event.Kind == KindExchangeCompleted
+	if isExchange {
+		if !hasExecution ||
 			validateIdentity("source display name", event.SourceDisplayName, false) != nil ||
-			validateIdentity("connection ID", event.ConnectionID, true) != nil ||
-			validateIdentity("ingress profile ID", event.IngressProfileID, false) != nil {
+			validateIdentity("connection ID", event.ConnectionID, true) != nil {
 			return fmt.Errorf(
 				"%w: Exchange relationship evidence is incomplete",
 				ErrInvalidEvent,
@@ -142,7 +191,6 @@ func (event Event) Validate() error {
 			if validateIdentity("CaptureRun ID", event.CaptureRunID, false) != nil ||
 				event.ManualCaptureID != "" ||
 				event.ConnectionID == "" ||
-				event.IngressProfileID != "capture-run/"+event.CaptureRunID ||
 				(event.SourceRecognition != SourceRecognitionVerified &&
 					event.SourceRecognition != SourceRecognitionConfigured) {
 				return fmt.Errorf("%w: CaptureRun source is invalid", ErrInvalidEvent)
@@ -151,7 +199,6 @@ func (event Event) Validate() error {
 			if validateIdentity("ManualCapture ID", event.ManualCaptureID, false) != nil ||
 				event.CaptureRunID != "" ||
 				event.ConnectionID == "" ||
-				event.IngressProfileID != "manual-capture/"+event.ManualCaptureID ||
 				(event.SourceRecognition != SourceRecognitionVerified &&
 					event.SourceRecognition != SourceRecognitionConfigured) {
 				return fmt.Errorf("%w: manual proxy source is invalid", ErrInvalidEvent)
@@ -159,24 +206,50 @@ func (event Event) Validate() error {
 		case SourceSystemProxy:
 			if event.CaptureRunID != "" ||
 				event.ManualCaptureID != "" ||
-				event.IngressProfileID != "system-proxy" ||
 				event.SourceRecognition != SourceRecognitionUnknown {
 				return fmt.Errorf("%w: system proxy source is invalid", ErrInvalidEvent)
 			}
 		default:
 			return fmt.Errorf("%w: source kind is invalid", ErrInvalidEvent)
 		}
-	} else if event.AccessName != "" ||
-		event.AccessRevision != 0 ||
+		if err := event.Conversation.Validate(); err != nil {
+			return fmt.Errorf(
+				"%w: Agent Conversation evidence is invalid: %v",
+				ErrInvalidEvent,
+				err,
+			)
+		}
+	} else if hasExecution ||
 		event.SourceKind != "" ||
 		event.SourceDisplayName != "" ||
 		event.SourceRecognition != "" ||
 		event.CaptureRunID != "" ||
 		event.ManualCaptureID != "" ||
-		event.IngressProfileID != "" ||
-		event.ConnectionID != "" {
+		event.ConnectionID != "" || event.Conversation != (agentconversation.Ref{}) {
 		return fmt.Errorf(
 			"%w: Exchange relationship evidence belongs only to an Exchange",
+			ErrInvalidEvent,
+		)
+	}
+	if event.Kind == KindExchangeStarted {
+		conversationKnown := event.Conversation.Kind == agentconversation.KindPendingExchange ||
+			(event.SourceKind == SourceCaptureRun &&
+				(event.Conversation.Kind == agentconversation.KindMain ||
+					event.Conversation.Kind == agentconversation.KindAgent))
+		if event.Status != StatusPending || hasAccount || event.ReasonCode != "" ||
+			!event.Diagnosis.Empty() || event.Transport != nil ||
+			!conversationKnown {
+			return fmt.Errorf(
+				"%w: started Exchange contains terminal evidence",
+				ErrInvalidEvent,
+			)
+		}
+	}
+	if event.Kind == KindExchangeCompleted &&
+		(event.Status == StatusPending ||
+			event.Conversation.Kind == agentconversation.KindPendingExchange) {
+		return fmt.Errorf(
+			"%w: completed Exchange is still pending",
 			ErrInvalidEvent,
 		)
 	}
@@ -192,6 +265,98 @@ func (event Event) Validate() error {
 		}
 	}
 	return nil
+}
+
+func (event Event) validateEnvironmentEvidence() (bool, error) {
+	hasAny := event.EnvironmentID.String() != "" ||
+		event.EnvironmentRevision != 0 ||
+		event.EnvironmentDigest != ""
+	if !hasAny {
+		return false, nil
+	}
+	if event.EnvironmentID.String() == "" ||
+		event.EnvironmentRevision == 0 ||
+		event.EnvironmentRevision > environment.MaxRevision ||
+		event.EnvironmentDigest == "" {
+		return false, fmt.Errorf(
+			"%w: frozen Environment reference is incomplete",
+			ErrInvalidEvent,
+		)
+	}
+	digest, err := environment.ParseCandidateDigest(event.EnvironmentDigest)
+	if err != nil || digest.String() != event.EnvironmentDigest {
+		return false, fmt.Errorf(
+			"%w: frozen Environment digest is invalid",
+			ErrInvalidEvent,
+		)
+	}
+	return true, nil
+}
+
+func (event Event) validateExecutionEvidence(hasEnvironment bool) (bool, error) {
+	hasExecution := event.ClientEndpointID.String() != "" ||
+		event.ClientEndpointRevision != 0 ||
+		event.ProtocolPlanID.String() != "" ||
+		event.ProtocolPlanRevision != 0
+	hasRoute := event.RouteID.String() != "" || event.RouteRevision != 0
+	if !hasExecution && !hasRoute {
+		return false, nil
+	}
+	if !hasEnvironment ||
+		event.ClientEndpointID.String() == "" ||
+		!validRevision(event.ClientEndpointRevision) ||
+		event.ProtocolPlanID.String() == "" ||
+		!validRevision(event.ProtocolPlanRevision) ||
+		(hasRoute && (event.RouteID.String() == "" ||
+			!validRevision(event.RouteRevision))) {
+		return false, fmt.Errorf(
+			"%w: frozen execution chain is incomplete",
+			ErrInvalidEvent,
+		)
+	}
+	return true, nil
+}
+
+func (event Event) validateAccountEvidence() (bool, error) {
+	hasAny := event.AccountID != "" ||
+		event.AccountRevision != 0 ||
+		event.CredentialEpoch != 0
+	if !hasAny {
+		return false, nil
+	}
+	if !validAccountID(event.AccountID) ||
+		event.AccountRevision == 0 ||
+		event.AccountRevision > uint64(environment.MaxRevision) ||
+		event.CredentialEpoch == 0 ||
+		event.CredentialEpoch > uint64(environment.MaxRevision) {
+		return false, fmt.Errorf(
+			"%w: frozen Account reference is incomplete",
+			ErrInvalidEvent,
+		)
+	}
+	return true, nil
+}
+
+func validRevision(revision environment.Revision) bool {
+	return revision != 0 && revision <= environment.MaxRevision
+}
+
+func validAccountID(value string) bool {
+	if value == "" || len(value) > environment.MaxIDBytes ||
+		!utf8.ValidString(value) || strings.TrimSpace(value) != value {
+		return false
+	}
+	for _, character := range value {
+		if unicode.IsControl(character) || character > unicode.MaxASCII ||
+			!(character >= 'a' && character <= 'z') &&
+				!(character >= 'A' && character <= 'Z') &&
+				!(character >= '0' && character <= '9') &&
+				character != '-' && character != '_' && character != '.' &&
+				character != ':' {
+			return false
+		}
+	}
+	return true
 }
 
 type TransportProfileEvidence struct {
@@ -484,25 +649,34 @@ func (evidence TransportEvidence) Clone() TransportEvidence {
 
 // Record is the immutable durable projection returned by readers.
 type Record struct {
-	Sequence          int64              `json:"sequence"`
-	ID                string             `json:"id"`
-	OccurredAt        time.Time          `json:"occurredAt"`
-	Kind              Kind               `json:"kind"`
-	AccessID          string             `json:"accessId,omitempty"`
-	AccessName        string             `json:"accessName,omitempty"`
-	AccessRevision    uint64             `json:"accessRevision,omitempty"`
-	SubjectID         string             `json:"subjectId"`
-	Status            Status             `json:"status"`
-	ReasonCode        string             `json:"reasonCode,omitempty"`
-	SourceKind        SourceKind         `json:"sourceKind,omitempty"`
-	SourceDisplayName string             `json:"sourceDisplayName,omitempty"`
-	SourceRecognition SourceRecognition  `json:"sourceRecognition,omitempty"`
-	CaptureRunID      string             `json:"captureRunId,omitempty"`
-	ManualCaptureID   string             `json:"manualCaptureId,omitempty"`
-	IngressProfileID  string             `json:"ingressProfileId,omitempty"`
-	ConnectionID      string             `json:"connectionId,omitempty"`
-	Diagnosis         *Diagnosis         `json:"diagnosis,omitempty"`
-	Transport         *TransportEvidence `json:"transport,omitempty"`
+	Sequence               int64                  `json:"sequence"`
+	ID                     string                 `json:"id"`
+	OccurredAt             time.Time              `json:"occurredAt"`
+	Kind                   Kind                   `json:"kind"`
+	EnvironmentID          string                 `json:"environmentId,omitempty"`
+	EnvironmentRevision    uint64                 `json:"environmentRevision,omitempty"`
+	EnvironmentDigest      string                 `json:"environmentDigest,omitempty"`
+	ClientEndpointID       string                 `json:"clientEndpointId,omitempty"`
+	ClientEndpointRevision uint64                 `json:"clientEndpointRevision,omitempty"`
+	ProtocolPlanID         string                 `json:"protocolPlanId,omitempty"`
+	ProtocolPlanRevision   uint64                 `json:"protocolPlanRevision,omitempty"`
+	RouteID                string                 `json:"routeId,omitempty"`
+	RouteRevision          uint64                 `json:"routeRevision,omitempty"`
+	AccountID              string                 `json:"accountId,omitempty"`
+	AccountRevision        uint64                 `json:"accountRevision,omitempty"`
+	CredentialEpoch        uint64                 `json:"credentialEpoch,omitempty"`
+	SubjectID              string                 `json:"subjectId"`
+	Status                 Status                 `json:"status"`
+	ReasonCode             string                 `json:"reasonCode,omitempty"`
+	SourceKind             SourceKind             `json:"sourceKind,omitempty"`
+	SourceDisplayName      string                 `json:"sourceDisplayName,omitempty"`
+	SourceRecognition      SourceRecognition      `json:"sourceRecognition,omitempty"`
+	CaptureRunID           string                 `json:"captureRunId,omitempty"`
+	ManualCaptureID        string                 `json:"manualCaptureId,omitempty"`
+	ConnectionID           string                 `json:"connectionId,omitempty"`
+	Conversation           *agentconversation.Ref `json:"conversation,omitempty"`
+	Diagnosis              *Diagnosis             `json:"diagnosis,omitempty"`
+	Transport              *TransportEvidence     `json:"transport,omitempty"`
 }
 
 // Diagnosis is what a failed request can say about itself without saying what
@@ -568,32 +742,84 @@ func (record Record) Validate() error {
 		validateIdentity("Activity ID", record.ID, false) != nil {
 		return ErrInvalidEvent
 	}
-	var accessID access.AccessID
-	var err error
-	if record.AccessID != "" {
-		accessID, err = access.NewAccessID(record.AccessID)
-		if err != nil {
-			return err
+	environmentID, err := optionalEnvironmentID(record.EnvironmentID)
+	if err != nil {
+		return err
+	}
+	endpointID, err := optionalClientEndpointID(record.ClientEndpointID)
+	if err != nil {
+		return err
+	}
+	protocolPlanID, err := optionalProtocolPlanID(record.ProtocolPlanID)
+	if err != nil {
+		return err
+	}
+	routeID, err := optionalRouteID(record.RouteID)
+	if err != nil {
+		return err
+	}
+	conversation := agentconversation.Ref{}
+	if record.Conversation != nil {
+		conversation = *record.Conversation
+		if conversation == (agentconversation.Ref{}) {
+			return ErrInvalidEvent
 		}
 	}
 	return Event{
-		Kind:              record.Kind,
-		AccessID:          accessID,
-		AccessName:        record.AccessName,
-		AccessRevision:    record.AccessRevision,
-		SubjectID:         record.SubjectID,
-		Status:            record.Status,
-		ReasonCode:        record.ReasonCode,
-		SourceKind:        record.SourceKind,
-		SourceDisplayName: record.SourceDisplayName,
-		SourceRecognition: record.SourceRecognition,
-		CaptureRunID:      record.CaptureRunID,
-		ManualCaptureID:   record.ManualCaptureID,
-		IngressProfileID:  record.IngressProfileID,
-		ConnectionID:      record.ConnectionID,
-		Diagnosis:         diagnosisValue(record.Diagnosis),
-		Transport:         record.Transport,
+		Kind:                   record.Kind,
+		EnvironmentID:          environmentID,
+		EnvironmentRevision:    environment.Revision(record.EnvironmentRevision),
+		EnvironmentDigest:      record.EnvironmentDigest,
+		ClientEndpointID:       endpointID,
+		ClientEndpointRevision: environment.Revision(record.ClientEndpointRevision),
+		ProtocolPlanID:         protocolPlanID,
+		ProtocolPlanRevision:   environment.Revision(record.ProtocolPlanRevision),
+		RouteID:                routeID,
+		RouteRevision:          environment.Revision(record.RouteRevision),
+		AccountID:              record.AccountID,
+		AccountRevision:        record.AccountRevision,
+		CredentialEpoch:        record.CredentialEpoch,
+		SubjectID:              record.SubjectID,
+		Status:                 record.Status,
+		ReasonCode:             record.ReasonCode,
+		SourceKind:             record.SourceKind,
+		SourceDisplayName:      record.SourceDisplayName,
+		SourceRecognition:      record.SourceRecognition,
+		CaptureRunID:           record.CaptureRunID,
+		ManualCaptureID:        record.ManualCaptureID,
+		ConnectionID:           record.ConnectionID,
+		Conversation:           conversation,
+		Diagnosis:              diagnosisValue(record.Diagnosis),
+		Transport:              record.Transport,
 	}.Validate()
+}
+
+func optionalEnvironmentID(value string) (environment.EnvironmentID, error) {
+	if value == "" {
+		return "", nil
+	}
+	return environment.NewEnvironmentID(value)
+}
+
+func optionalClientEndpointID(value string) (environment.ClientEndpointID, error) {
+	if value == "" {
+		return "", nil
+	}
+	return environment.NewClientEndpointID(value)
+}
+
+func optionalProtocolPlanID(value string) (environment.ClientProtocolPlanID, error) {
+	if value == "" {
+		return "", nil
+	}
+	return environment.NewClientProtocolPlanID(value)
+}
+
+func optionalRouteID(value string) (environment.UpstreamRouteID, error) {
+	if value == "" {
+		return "", nil
+	}
+	return environment.NewUpstreamRouteID(value)
 }
 
 func diagnosisValue(value *Diagnosis) Diagnosis {
@@ -604,19 +830,61 @@ func diagnosisValue(value *Diagnosis) Diagnosis {
 }
 
 type PageRequest struct {
-	BeforeSequence int64
-	Limit          int
-	CaptureRunID   string
-	AccessID       string
+	BeforeSequence           int64
+	Limit                    int
+	CaptureRunID             string
+	ManualCaptureID          string
+	EnvironmentID            string
+	ConversationProjectionID string
+	OccurredAtOrAfter        time.Time
+	OccurredBefore           time.Time
 }
 
 func (request PageRequest) Validate() error {
 	if request.BeforeSequence < 0 ||
 		request.Limit <= 0 ||
 		request.Limit > MaxPageSize ||
-		validateIdentity("CaptureRun filter", request.CaptureRunID, true) != nil ||
-		validateIdentity("Access filter", request.AccessID, true) != nil {
+		(request.CaptureRunID != "" && request.ManualCaptureID != "") ||
+		request.OccurredAtOrAfter.IsZero() != request.OccurredBefore.IsZero() {
 		return ErrInvalidEvent
+	}
+	if !request.OccurredAtOrAfter.IsZero() &&
+		(!request.OccurredAtOrAfter.Equal(
+			request.OccurredAtOrAfter.UTC().Truncate(time.Millisecond),
+		) ||
+			!request.OccurredBefore.Equal(
+				request.OccurredBefore.UTC().Truncate(time.Millisecond),
+			) ||
+			!request.OccurredBefore.After(request.OccurredAtOrAfter)) {
+		return ErrInvalidEvent
+	}
+	if request.CaptureRunID != "" {
+		if _, err := captureidentity.New(
+			captureidentity.KindManagedRun,
+			request.CaptureRunID,
+		); err != nil {
+			return ErrInvalidEvent
+		}
+	}
+	if request.ManualCaptureID != "" {
+		if _, err := captureidentity.New(
+			captureidentity.KindManualCapture,
+			request.ManualCaptureID,
+		); err != nil {
+			return ErrInvalidEvent
+		}
+	}
+	if request.EnvironmentID != "" {
+		if _, err := environment.NewEnvironmentID(request.EnvironmentID); err != nil {
+			return ErrInvalidEvent
+		}
+	}
+	if request.ConversationProjectionID != "" {
+		if err := agentconversation.ValidateProjectionID(
+			request.ConversationProjectionID,
+		); err != nil {
+			return ErrInvalidEvent
+		}
 	}
 	return nil
 }
@@ -626,11 +894,84 @@ type Page struct {
 	NextBeforeSequence int64    `json:"nextBeforeSequence,omitempty"`
 }
 
+// ConversationIndexRequest pages flat Conversation projections newest-first by
+// the first sequence at which the runtime could prove each projection. Existing
+// Conversations therefore never jump when a new Turn arrives.
+type ConversationIndexRequest struct {
+	BeforeFirstSequence int64
+	Limit               int
+	CaptureRunID        string
+	ManualCaptureID     string
+}
+
+func (request ConversationIndexRequest) Validate() error {
+	if request.BeforeFirstSequence < 0 || request.Limit <= 0 ||
+		request.Limit > MaxPageSize ||
+		(request.CaptureRunID != "" && request.ManualCaptureID != "") {
+		return ErrInvalidEvent
+	}
+	if request.CaptureRunID != "" {
+		if _, err := captureidentity.New(
+			captureidentity.KindManagedRun,
+			request.CaptureRunID,
+		); err != nil {
+			return ErrInvalidEvent
+		}
+	}
+	if request.ManualCaptureID != "" {
+		if _, err := captureidentity.New(
+			captureidentity.KindManualCapture,
+			request.ManualCaptureID,
+		); err != nil {
+			return ErrInvalidEvent
+		}
+	}
+	return nil
+}
+
+type ConversationRecord struct {
+	Conversation    agentconversation.Ref
+	FirstSequence   int64
+	FirstOccurredAt time.Time
+	TurnCount       int
+	Latest          Record
+}
+
+func (record ConversationRecord) Validate() error {
+	if record.FirstSequence <= 0 || record.FirstOccurredAt.IsZero() ||
+		record.TurnCount <= 0 || record.Conversation.Validate() != nil ||
+		record.Latest.Validate() != nil || record.Latest.Conversation == nil ||
+		record.Latest.Conversation.ProjectionID != record.Conversation.ProjectionID {
+		return ErrInvalidEvent
+	}
+	return nil
+}
+
+type ConversationPage struct {
+	Items                   []ConversationRecord
+	NextBeforeFirstSequence int64
+}
+
 type Repository interface {
 	Append(context.Context, Record) (Record, error)
 	GetExchange(context.Context, string) (Record, error)
 	List(context.Context, PageRequest) (Page, error)
 	ListExchanges(context.Context, PageRequest) (Page, error)
+	ListConversations(context.Context, ConversationIndexRequest) (ConversationPage, error)
+}
+
+// ConversationIdentityRepository retains exact client session/actor/provider
+// identifiers independently from retention-bound semantic content.
+type ConversationIdentityRepository interface {
+	PutConversationIdentity(context.Context, string, agentconversation.ClientIdentity) error
+	GetConversationIdentity(context.Context, string) (agentconversation.ClientIdentity, error)
+}
+
+// ConversationProjectionWriter replaces only the rebuildable Conversation
+// fields on the current Exchange row after exact client identity is found.
+// Lifecycle kind, status, timestamps, and evidence remain immutable.
+type ConversationProjectionWriter interface {
+	ReprojectConversation(context.Context, string, agentconversation.Ref) error
 }
 
 type Recorder interface {
@@ -641,6 +982,7 @@ type Reader interface {
 	GetExchange(context.Context, string) (Record, error)
 	List(context.Context, PageRequest) (Page, error)
 	ListExchanges(context.Context, PageRequest) (Page, error)
+	ListConversations(context.Context, ConversationIndexRequest) (ConversationPage, error)
 }
 
 type Runtime interface {

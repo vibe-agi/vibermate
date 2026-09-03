@@ -20,12 +20,92 @@ import (
 )
 
 var (
-	ErrCheckFailed           = errors.New("repository check failed")
-	placeholderRE            = regexp.MustCompile(`\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}`)
-	jsxTextRE                = regexp.MustCompile(`>\s*([\pL][^<>{}]*)\s*</`)
-	jsxExpressionLiteralRE   = regexp.MustCompile(">\\s*\\{\\s*[\"'`]([^\"'`]+)[\"'`]\\s*\\}\\s*</")
-	jsxStaticUserAttributeRE = regexp.MustCompile(
-		`\b(?:alt|aria-label|placeholder|title)\s*=\s*["']([^"']+)["']`,
+	ErrCheckFailed            = errors.New("repository check failed")
+	placeholderRE             = regexp.MustCompile(`\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}`)
+	retiredProductAuthorityRE = regexp.MustCompile(
+		`\b(?:AccessID|ProfileID|AccessPlan|AccessBinding|EndpointProfile|` +
+			`AccessWriter|AccessCatalog|AccessDeletion)\b|` +
+			`internal/access(?:/|")|` +
+			`\b(?:accessId|profileId|access_id|profile_id|workspace_route)\b|` +
+			`/api/v1/accesses\b|workspace-route-bindings\b|\bAI Access\b`,
+	)
+	// atRestEncryptionRE names only constructs that can mean application-layer
+	// field encryption of the local archive. Provider-encrypted reasoning blocks
+	// and TLS blind tunnelling legitimately use the word "encrypted", so the word
+	// itself is deliberately not matched.
+	atRestEncryptionRE = regexp.MustCompile(
+		`\b(?:CipherNonce|cipherNonce|cipher_nonce|Ciphertext|ciphertext|` +
+			`EncryptionKeyRevision|encryptionKeyRevision|encryption_key_revision)\b|` +
+			`\bSQLCipher\b|raw-evidence-key`,
+	)
+	// Symbols were not the only way the removed encryption survived: comments
+	// claiming the archive is encrypted outlived it and read as current
+	// documentation. Inside the packages that own stored evidence, the word is
+	// allowed only in a sentence that states the absence.
+	storageEncryptionProseRE = regexp.MustCompile(`(?i)encrypt`)
+	// A user-facing surface may say "encrypted" about a provider's reasoning
+	// blocks or a TLS tunnel. What it may never say is that the archive itself is
+	// encrypted, or that a data key can be rotated - the two claims
+	// INV-STORE-DISCLOSED names outright.
+	// The Simplified Chinese alternatives are escaped for the same ASCII-only
+	// reason; they read "content", "storage", "database", "archive", "rotate"
+	// and "data key".
+	archiveEncryptionClaimRE = regexp.MustCompile(
+		`(?i)(?:encrypt\w*)[^\n]{0,40}` +
+			`(?:at rest|stored|storage|database|archive|on disk|\x{6b63}\x{6587}|\x{5b58}\x{50a8}|\x{6570}\x{636e}\x{5e93}|\x{5b58}\x{6863})|` +
+			`(?:at rest|stored|storage|database|archive|on disk|\x{6b63}\x{6587}|\x{5b58}\x{50a8}|\x{6570}\x{636e}\x{5e93}|\x{5b58}\x{6863})` +
+			`[^\n]{0,40}(?:encrypt\w*)|` +
+			`(?i)(?:rotate|\x{8f6e}\x{6362})[^\n]{0,24}(?:data key|\x{6570}\x{636e}\x{5bc6}\x{94a5})`,
+	)
+	flutterCopyKeyRE = regexp.MustCompile(`^\s+'([^']+)':`)
+	// A sentence, key or identifier that states the absence is exactly what the
+	// product must be able to say, on every surface. The Simplified Chinese
+	// alternatives are escaped because implementation source is ASCII-only; they
+	// read "not encrypted" and "does not encrypt".
+	storageEncryptionAbsenceRE = regexp.MustCompile(
+		`(?i)forbids|not[_ ]encrypted|never encrypt|no application-layer|` +
+			`without.{0,24}encrypt|rules out|disclose an absence|` +
+			`\x{672a}\x{52a0}\x{5bc6}|\x{4e0d}\x{52a0}\x{5bc6}`,
+	)
+	// A credential-absence claim is recognized by three independent signals
+	// rather than one combined pattern. Alternating unbounded runs across a
+	// sentence backtracks badly on real prose, and three linear scans are both
+	// faster and easier to reason about.
+	//
+	// The Simplified Chinese alternatives are escaped because implementation
+	// source is ASCII-only; they read "credential", "secret", "never", "does
+	// not", "none of them", "removed", "enter the database", "written to disk"
+	// and "storage".
+	credentialNounRE = regexp.MustCompile(
+		`(?i)credential|api[ -]?key|authorization|cookie|` +
+			`\x{51ed}\x{8bc1}|\x{5bc6}\x{94a5}`,
+	)
+	credentialAbsenceRE = regexp.MustCompile(
+		`(?i)\bnever\b|\bno\b|\bnone\b|\bnot\b|\bremoved\b|\bstrips?\b|` +
+			`\x{6c38}\x{4e0d}|\x{4e0d}\x{4f1a}|\x{90fd}\x{4e0d}|\x{79fb}\x{9664}`,
+	)
+	credentialStorageRE = regexp.MustCompile(
+		`(?i)stor\w*|reach\w*|writ\w*|column|database|archive|payload|` +
+			`\x{5165}\x{5e93}|\x{843d}\x{76d8}|\x{5b58}\x{50a8}`,
+	)
+	// What makes the claim honest is naming the domain it covers. Recognition is
+	// by header field name, so any of these turns an absolute statement into a
+	// bounded one. The Chinese alternatives read "credential header" and
+	// "field name".
+	credentialScopeRE = regexp.MustCompile(
+		`(?i)header|field name|by name|predicate|recognized|recognised|` +
+			`identified|known|NameIsCredential|` +
+			`\x{51ed}\x{8bc1}\x{5934}|\x{5b57}\x{6bb5}\x{540d}`,
+	)
+	// A sentence about the SecretStore boundary is a different claim, and it is
+	// absolute because it is true: ProviderAccount and proxy credentials belong
+	// to the host-selected SecretStore and genuinely never enter SQLite. Only
+	// the evidence archive keeps wire bytes it cannot vouch for. The Chinese
+	// alternative reads "secret store".
+	credentialControlPlaneRE = regexp.MustCompile(
+		`(?i)SecretStore|SecretRef|secret_reference|ProviderAccount|` +
+			`AuxiliaryLLM|CredentialBinding|` +
+			`\x{5bc6}\x{94a5}\x{5b58}\x{50a8}`,
 	)
 )
 
@@ -50,13 +130,17 @@ func Check(repositoryRoot string) error {
 	violations = append(violations, CheckProductionEnglish(repositoryRoot)...)
 	violations = append(violations, CheckProtocolSDKIsolation(repositoryRoot)...)
 	violations = append(violations, CheckExternalEgressGate(repositoryRoot)...)
-	violations = append(violations, CheckDataPlaneAccessBoundary(repositoryRoot)...)
+	violations = append(violations, CheckDataPlaneEnvironmentBoundary(repositoryRoot)...)
+	violations = append(violations, CheckRetiredProductAuthority(repositoryRoot)...)
 	violations = append(violations, CheckDesktopFrontendBoundary(repositoryRoot)...)
 	violations = append(violations, CheckSystemTrustBoundary(repositoryRoot)...)
 	violations = append(violations, CheckSignerIdentityBoundary(repositoryRoot)...)
 	violations = append(violations, CheckProductionCompositionBoundary(repositoryRoot)...)
 	violations = append(violations, CheckPayloadDispatchBoundary(repositoryRoot)...)
 	violations = append(violations, CheckIdentityComposition(repositoryRoot)...)
+	violations = append(violations, CheckAtRestEncryptionAbsence(repositoryRoot)...)
+	violations = append(violations, CheckCredentialClaimScope(repositoryRoot)...)
+	violations = append(violations, CheckFlutterCopyPair(repositoryRoot)...)
 	violations = append(
 		violations,
 		CheckCatalogPair(
@@ -82,6 +166,105 @@ func Check(repositoryRoot string) error {
 		joined = append(joined, errors.New(violation.String()))
 	}
 	return errors.Join(joined...)
+}
+
+// CheckRetiredProductAuthority prevents the deleted Access/Profile product
+// model from re-entering current production source, wire contracts, UI, or
+// authority documentation. Historical evidence and tests may still name the
+// retired model when explaining or attacking a migration; they are
+// intentionally outside this source-shape gate.
+func CheckRetiredProductAuthority(repositoryRoot string) []Violation {
+	const rule = "retired-product-authority"
+	currentFiles := map[string]struct{}{
+		"README.md":                {},
+		"README.zh-CN.md":          {},
+		"PLAN.md":                  {},
+		"docs/m0-acceptance.md":    {},
+		"docs/module-map.md":       {},
+		"api/control.openapi.yaml": {},
+		"locales/en-US.json":       {},
+		"locales/zh-CN.json":       {},
+	}
+	productionRoots := []string{"cmd", "internal", "ui/flutter_app/lib"}
+	var violations []Violation
+	scan := func(path, relative string) error {
+		if relative == "internal/repositorycheck/check.go" ||
+			strings.HasSuffix(relative, "_test.go") {
+			return nil
+		}
+		file, err := os.Open(path)
+		if err != nil {
+			return err
+		}
+		defer file.Close()
+		scanner := bufio.NewScanner(file)
+		scanner.Buffer(make([]byte, 64*1024), 2*1024*1024)
+		lineNumber := 0
+		for scanner.Scan() {
+			lineNumber++
+			match := retiredProductAuthorityRE.FindString(scanner.Text())
+			if match == "" {
+				continue
+			}
+			violations = append(violations, Violation{
+				Rule:    rule,
+				Path:    filepath.FromSlash(relative),
+				Line:    lineNumber,
+				Message: fmt.Sprintf("retired product authority %q entered a current surface", match),
+			})
+		}
+		return scanner.Err()
+	}
+	for relative := range currentFiles {
+		path := filepath.Join(repositoryRoot, filepath.FromSlash(relative))
+		if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err := scan(path, relative); err != nil {
+			violations = append(violations, Violation{
+				Rule: rule, Path: filepath.FromSlash(relative), Message: err.Error(),
+			})
+		}
+	}
+	for _, relativeRoot := range productionRoots {
+		root := filepath.Join(repositoryRoot, filepath.FromSlash(relativeRoot))
+		if _, err := os.Stat(root); errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		walkErr := filepath.WalkDir(root, func(
+			path string,
+			entry fs.DirEntry,
+			err error,
+		) error {
+			if err != nil {
+				return err
+			}
+			if entry.IsDir() {
+				switch entry.Name() {
+				case "generated", "node_modules", "target", "testdata", "vendor":
+					return filepath.SkipDir
+				default:
+					return nil
+				}
+			}
+			extension := filepath.Ext(path)
+			if extension != ".dart" && extension != ".go" &&
+				extension != ".json" && extension != ".sql" {
+				return nil
+			}
+			relative, relativeErr := filepath.Rel(repositoryRoot, path)
+			if relativeErr != nil {
+				return relativeErr
+			}
+			return scan(path, filepath.ToSlash(relative))
+		})
+		if walkErr != nil {
+			violations = append(violations, Violation{
+				Rule: rule, Path: filepath.FromSlash(relativeRoot), Message: walkErr.Error(),
+			})
+		}
+	}
+	return violations
 }
 
 // CheckIdentityComposition rejects building one identity by joining another
@@ -344,17 +527,18 @@ func dispatchKindName(expression ast.Expr) string {
 	}
 }
 
-// CheckSystemTrustBoundary protects the fixture-only trust-operation shape:
-// production composition cannot import it, the package cannot acquire a live
-// process runner or concrete command executor, mutation command literals stay
-// in the one bounded macOS adapter, and the exact capability namespace cannot
-// appear in user-facing production surfaces.
+// CheckSystemTrustBoundary protects the system-trust operation shape:
+// platform-neutral planning stays free of process execution, while the one
+// explicitly named Desktop adapter may own the live runner. Mutation command
+// literals remain in the bounded macOS adapter, and the exact capability
+// namespace cannot appear in user-facing production surfaces.
 func CheckSystemTrustBoundary(repositoryRoot string) []Violation {
 	const (
-		systemTrustImport = "github.com/vibe-agi/vibermate/internal/systemtrust"
-		systemTrustRoot   = "internal/systemtrust"
-		adapterPath       = "internal/systemtrust/macos.go"
-		checkerPath       = "internal/repositorycheck/check.go"
+		systemTrustImport     = "github.com/vibe-agi/vibermate/internal/systemtrust"
+		systemTrustRoot       = "internal/systemtrust"
+		productionAdapterRoot = "internal/desktoptrust"
+		adapterPath           = "internal/systemtrust/macos.go"
+		checkerPath           = "internal/repositorycheck/check.go"
 	)
 	mutationCommands := map[string]struct{}{
 		"add-trusted-cert":    {},
@@ -428,11 +612,14 @@ func CheckSystemTrustBoundary(repositoryRoot string) []Violation {
 		}
 		insideSystemTrust := relative == systemTrustRoot ||
 			strings.HasPrefix(relative, systemTrustRoot+"/")
+		insideProductionAdapter := relative == productionAdapterRoot ||
+			strings.HasPrefix(relative, productionAdapterRoot+"/")
 		for _, imported := range parsed.Imports {
 			importPath := strings.Trim(imported.Path.Value, `"`)
 			position := fileSet.Position(imported.Pos())
 			switch {
-			case importPath == systemTrustImport && !insideSystemTrust:
+			case importPath == systemTrustImport &&
+				!insideSystemTrust && !insideProductionAdapter:
 				violations = append(violations, Violation{
 					Rule:    "system-trust-composition",
 					Path:    relative,
@@ -517,9 +704,7 @@ func isSystemTrustUserSurface(relative string) bool {
 	for _, prefix := range []string{
 		"api/",
 		"openapi/",
-		"ui/desktop/src/",
-		"ui/desktop/src-tauri/src/",
-		"ui/desktop/src-tauri/capabilities/",
+		"ui/flutter_app/lib/",
 	} {
 		if strings.HasPrefix(relative, prefix) {
 			return true
@@ -530,27 +715,64 @@ func isSystemTrustUserSurface(relative string) bool {
 
 func isSystemTrustSurfaceSource(path string) bool {
 	switch strings.ToLower(filepath.Ext(path)) {
-	case ".js", ".json", ".mjs", ".rs", ".ts", ".tsx", ".yaml", ".yml":
+	case ".dart", ".js", ".json", ".mjs", ".rs", ".ts", ".tsx", ".yaml", ".yml":
 		return true
 	default:
 		return false
 	}
 }
 
-// CheckDesktopFrontendBoundary protects the production Desktop UI shape that
-// now exists: only the native Host adapter may import Tauri, Web Storage cannot
-// hold capabilities, and visible TSX copy must come from the locale catalogs.
+// CheckDesktopFrontendBoundary protects the production Flutter Desktop shape.
+// Direct IO, control-network, and process access stay in the small bootstrap
+// and API adapters; the UI cannot introduce FFI or authority-bearing local
+// stores; and the non-secret preference adapter cannot gain capabilities.
 func CheckDesktopFrontendBoundary(repositoryRoot string) []Violation {
-	sourceRoot := filepath.Join(repositoryRoot, "ui", "desktop", "src")
+	sourceRoot := filepath.Join(repositoryRoot, "ui", "flutter_app", "lib")
 	if _, err := os.Stat(sourceRoot); errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
-	allowedTauriImport := filepath.Join(
-		"ui",
-		"desktop",
-		"src",
-		"desktop-host.ts",
-	)
+	allowedIO := map[string]struct{}{
+		"ui/flutter_app/lib/main.dart":                               {},
+		"ui/flutter_app/lib/core/api/control_api.dart":               {},
+		"ui/flutter_app/lib/core/bootstrap/desktop_runtime.dart":     {},
+		"ui/flutter_app/lib/core/bootstrap/platform_runtime_io.dart": {},
+		"ui/flutter_app/lib/core/bootstrap/terminal_command.dart":    {},
+		"ui/flutter_app/lib/core/bootstrap/terminal_command_io.dart": {},
+	}
+	allowedNetwork := map[string]struct{}{
+		"ui/flutter_app/lib/core/api/control_api.dart":           {},
+		"ui/flutter_app/lib/core/bootstrap/desktop_runtime.dart": {},
+	}
+	allowedProcess := map[string]struct{}{
+		"ui/flutter_app/lib/core/bootstrap/desktop_runtime.dart":     {},
+		"ui/flutter_app/lib/core/bootstrap/terminal_command.dart":    {},
+		"ui/flutter_app/lib/core/bootstrap/terminal_command_io.dart": {},
+	}
+	authorityStores := []string{
+		"package:flutter_secure_storage/",
+		"package:hive/",
+		"package:isar/",
+		"package:shared_preferences/",
+		"package:sqflite/",
+	}
+	networkCalls := []string{
+		"HttpClient(",
+		"RawSocket",
+		"SecureSocket",
+		"Socket.connect",
+	}
+	processCalls := []string{
+		"Process.run(",
+		"Process.runSync(",
+		"Process.start(",
+	}
+	capabilityNames := []string{
+		"bootstrapNonce",
+		"proxyPassword",
+		"readToken",
+		"stateTag",
+		"writeToken",
+	}
 	var violations []Violation
 	walkErr := filepath.WalkDir(sourceRoot, func(
 		path string,
@@ -561,16 +783,12 @@ func CheckDesktopFrontendBoundary(repositoryRoot string) []Violation {
 			return err
 		}
 		if entry.IsDir() {
-			if entry.Name() == "generated" {
-				return filepath.SkipDir
-			}
 			return nil
 		}
-		extension := filepath.Ext(path)
-		if extension != ".ts" && extension != ".tsx" {
+		if filepath.Ext(path) != ".dart" {
 			return nil
 		}
-		relative := relativeDisplayPath(repositoryRoot, path)
+		relative := filepath.ToSlash(relativeDisplayPath(repositoryRoot, path))
 		file, openErr := os.Open(path)
 		if openErr != nil {
 			return openErr
@@ -581,86 +799,123 @@ func CheckDesktopFrontendBoundary(repositoryRoot string) []Violation {
 		for scanner.Scan() {
 			lineNumber++
 			line := scanner.Text()
-			if strings.Contains(line, "@tauri-apps/") &&
-				filepath.Clean(relative) != allowedTauriImport {
+			if strings.Contains(line, "import 'dart:io'") {
+				if _, allowed := allowedIO[relative]; !allowed {
+					violations = append(violations, Violation{
+						Rule:    "desktop-io-boundary",
+						Path:    relative,
+						Line:    lineNumber,
+						Message: "direct dart:io access must stay in a bounded Desktop adapter",
+					})
+				}
+			}
+			if strings.Contains(line, "import 'dart:ffi'") {
 				violations = append(violations, Violation{
-					Rule:    "desktop-host-boundary",
+					Rule:    "desktop-ffi-boundary",
 					Path:    relative,
 					Line:    lineNumber,
-					Message: "only the Desktop Host adapter may import Tauri",
+					Message: "Flutter production UI cannot acquire direct FFI authority",
 				})
 			}
-			if strings.Contains(line, "localStorage") ||
-				strings.Contains(line, "sessionStorage") {
+			for _, packagePrefix := range authorityStores {
+				if !strings.Contains(line, packagePrefix) {
+					continue
+				}
 				violations = append(violations, Violation{
-					Rule:    "desktop-capability-storage",
+					Rule:    "desktop-authority-storage",
 					Path:    relative,
 					Line:    lineNumber,
-					Message: "Desktop capabilities cannot use Web Storage",
+					Message: "Flutter UI cannot introduce an authority-bearing local store",
 				})
 			}
-			if extension == ".tsx" && hasJSXUserCopy(line) {
-				violations = append(violations, Violation{
-					Rule:    "frontend-i18n",
-					Path:    relative,
-					Line:    lineNumber,
-					Message: "visible TSX copy must use a stable locale key",
-				})
+			if _, allowed := allowedNetwork[relative]; !allowed {
+				for _, call := range networkCalls {
+					if !strings.Contains(line, call) {
+						continue
+					}
+					violations = append(violations, Violation{
+						Rule:    "desktop-control-network-boundary",
+						Path:    relative,
+						Line:    lineNumber,
+						Message: "direct network access must stay in the control or bootstrap adapter",
+					})
+					break
+				}
+			}
+			if _, allowed := allowedProcess[relative]; !allowed {
+				for _, call := range processCalls {
+					if !strings.Contains(line, call) {
+						continue
+					}
+					violations = append(violations, Violation{
+						Rule:    "desktop-process-boundary",
+						Path:    relative,
+						Line:    lineNumber,
+						Message: "process execution must stay in a bounded Desktop adapter",
+					})
+					break
+				}
+			}
+			if strings.HasPrefix(relative, "ui/flutter_app/lib/core/preferences/") {
+				for _, capabilityName := range capabilityNames {
+					if !strings.Contains(line, capabilityName) {
+						continue
+					}
+					violations = append(violations, Violation{
+						Rule:    "desktop-capability-storage",
+						Path:    relative,
+						Line:    lineNumber,
+						Message: "Desktop preferences must remain non-secret and non-authoritative",
+					})
+					break
+				}
 			}
 		}
 		return scanner.Err()
 	})
 	if walkErr != nil {
 		violations = append(violations, Violation{
-			Rule:    "desktop-host-boundary",
-			Path:    filepath.Join("ui", "desktop", "src"),
+			Rule:    "desktop-io-boundary",
+			Path:    filepath.Join("ui", "flutter_app", "lib"),
 			Message: walkErr.Error(),
 		})
 	}
 	return violations
 }
 
-func hasJSXUserCopy(line string) bool {
-	for _, expression := range []*regexp.Regexp{
-		jsxTextRE,
-		jsxExpressionLiteralRE,
-		jsxStaticUserAttributeRE,
-	} {
-		for _, match := range expression.FindAllStringSubmatch(line, -1) {
-			if len(match) > 1 && containsLetter(match[1]) {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-func containsLetter(value string) bool {
-	for _, character := range value {
-		if unicode.IsLetter(character) {
-			return true
-		}
-	}
-	return false
-}
-
-// CheckDataPlaneAccessBoundary keeps the Exchange hot path on the immutable
-// SnapshotResolver boundary. It rejects persistence access and Access mutation
-// contracts from the production package that now executes provider requests.
-func CheckDataPlaneAccessBoundary(repositoryRoot string) []Violation {
+// CheckDataPlaneEnvironmentBoundary keeps the Exchange hot path on immutable
+// request-plan contracts. Configuration mutation, projection ownership, and
+// persistence remain outside the package that executes provider requests.
+func CheckDataPlaneEnvironmentBoundary(repositoryRoot string) []Violation {
 	sourceRoot := filepath.Join(repositoryRoot, "internal", "exchange")
 	if _, err := os.Stat(sourceRoot); errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
-	const accessImport = "github.com/vibe-agi/vibermate/internal/access"
+	const environmentImport = "github.com/vibe-agi/vibermate/internal/environment"
 	const persistenceImport = "github.com/vibe-agi/vibermate/internal/runtimepersistence"
-	blockedAccessSymbols := map[string]struct{}{
-		"Manager":            {},
-		"Repository":         {},
-		"SnapshotProjection": {},
-		"WriteCommand":       {},
-		"WriteResult":        {},
-		"Writer":             {},
+	allowedEnvironmentSymbols := map[string]struct{}{
+		"CandidateDigest":              {},
+		"ClientEndpointID":             {},
+		"ClientProtocolPlanID":         {},
+		"CompiledAccountPolicy":        {},
+		"CompiledAccountReference":     {},
+		"ContentRecordingFull":         {},
+		"ContentRecordingMetadataOnly": {},
+		"ContentRecordingOff":          {},
+		"ContentRecordingPolicy":       {},
+		"EnvironmentID":                {},
+		"AccountSelectionFixed":        {},
+		"AccountSelectionJavaScript":   {},
+		"MaxRevision":                  {},
+		"NewClientEndpointID":          {},
+		"NewClientProtocolPlanID":      {},
+		"NewEnvironmentID":             {},
+		"NewUpstreamRouteID":           {},
+		"ParseCandidateDigest":         {},
+		"PolicySet":                    {},
+		"RequestPlan":                  {},
+		"Revision":                     {},
+		"UpstreamRouteID":              {},
 	}
 	var violations []Violation
 	walkErr := filepath.WalkDir(sourceRoot, func(
@@ -686,36 +941,36 @@ func CheckDataPlaneAccessBoundary(repositoryRoot string) []Violation {
 			return parseErr
 		}
 		relative := relativeDisplayPath(repositoryRoot, path)
-		accessNames := make(map[string]struct{})
+		environmentNames := make(map[string]struct{})
 		for _, imported := range parsed.Imports {
 			importPath := strings.Trim(imported.Path.Value, `"`)
 			if importPath == persistenceImport {
 				position := fileSet.Position(imported.Pos())
 				violations = append(violations, Violation{
-					Rule:    "data-plane-access-boundary",
+					Rule:    "data-plane-environment-boundary",
 					Path:    relative,
 					Line:    position.Line,
 					Message: "Exchange hot path cannot import runtime persistence",
 				})
 			}
-			if importPath != accessImport {
+			if importPath != environmentImport {
 				continue
 			}
-			name := "access"
+			name := "environment"
 			if imported.Name != nil {
 				if imported.Name.Name == "." || imported.Name.Name == "_" {
 					position := fileSet.Position(imported.Pos())
 					violations = append(violations, Violation{
-						Rule:    "data-plane-access-boundary",
+						Rule:    "data-plane-environment-boundary",
 						Path:    relative,
 						Line:    position.Line,
-						Message: "Access contracts must use a named import",
+						Message: "Environment contracts must use a named import",
 					})
 					continue
 				}
 				name = imported.Name.Name
 			}
-			accessNames[name] = struct{}{}
+			environmentNames[name] = struct{}{}
 		}
 		ast.Inspect(parsed, func(node ast.Node) bool {
 			selector, ok := node.(*ast.SelectorExpr)
@@ -726,19 +981,19 @@ func CheckDataPlaneAccessBoundary(repositoryRoot string) []Violation {
 			if !ok {
 				return true
 			}
-			if _, imported := accessNames[identifier.Name]; !imported {
+			if _, imported := environmentNames[identifier.Name]; !imported {
 				return true
 			}
-			if _, blocked := blockedAccessSymbols[selector.Sel.Name]; !blocked {
+			if _, allowed := allowedEnvironmentSymbols[selector.Sel.Name]; allowed {
 				return true
 			}
 			position := fileSet.Position(selector.Pos())
 			violations = append(violations, Violation{
-				Rule: "data-plane-access-boundary",
+				Rule: "data-plane-environment-boundary",
 				Path: relative,
 				Line: position.Line,
 				Message: fmt.Sprintf(
-					"Exchange hot path cannot use Access mutation symbol %s.%s",
+					"Exchange hot path cannot use Environment authority symbol %s.%s",
 					identifier.Name,
 					selector.Sel.Name,
 				),
@@ -749,7 +1004,7 @@ func CheckDataPlaneAccessBoundary(repositoryRoot string) []Violation {
 	})
 	if walkErr != nil {
 		violations = append(violations, Violation{
-			Rule:    "data-plane-access-boundary",
+			Rule:    "data-plane-environment-boundary",
 			Path:    filepath.Join("internal", "exchange"),
 			Message: walkErr.Error(),
 		})
@@ -758,7 +1013,7 @@ func CheckDataPlaneAccessBoundary(repositoryRoot string) []Violation {
 }
 
 // CheckExternalEgressGate rejects new raw outbound-client construction outside
-// the gated provider and original-origin transports and their typed probes.
+// the small set of transport modules that own an external-network boundary.
 func CheckExternalEgressGate(repositoryRoot string) []Violation {
 	allowedFiles := map[string]struct{}{
 		"internal/providertransport/transport.go": {},
@@ -768,6 +1023,16 @@ func CheckExternalEgressGate(repositoryRoot string) []Violation {
 		"internal/originaltransport/probe.go":     {},
 		"internal/loopbackclient/client.go":       {},
 		"internal/blindtunnel/dialer.go":          {},
+		// egressnetwork is the single typed compiler for a frozen per-flow
+		// direct/SOCKS/DoH policy. Only these implementation files may construct
+		// its base dialer and the private HTTP client used for DNS-over-HTTPS;
+		// callers receive ContextDialer and Resolver interfaces instead.
+		"internal/egressnetwork/dialer.go": {},
+		"internal/egressnetwork/doh.go":    {},
+		// Runtime Server clients have one typed transport adapter. Callers may
+		// issue HTTP requests and open the proxy stream through its interface,
+		// but cannot construct another outbound client or dialer themselves.
+		"internal/servertransport/transport.go": {},
 		// The third egress kind's typed probe, alongside the two above it.
 		//
 		// A probe cannot reach its target through the gated dialer that sits
@@ -1288,4 +1553,464 @@ func CheckSignerIdentityBoundary(repositoryRoot string) []Violation {
 		})
 	}
 	return violations
+}
+
+// CheckAtRestEncryptionAbsence keeps application-layer field encryption out of
+// the local archive and out of every surface that describes it.
+//
+// `INV-STORE-DISCLOSED` is a release gate in design 06 §8.1: the product must
+// disclose that the runtime database is not encrypted at rest, and must not
+// display "content is encrypted" or "rotate the data key". An implementation
+// that seals a payload with a key stored beside it buys nothing against the
+// threat model it appears to address, and it did real harm here — it made
+// retaining a live `Authorization` header feel acceptable, and it made the
+// stored bytes incompressible and undedupable. This rule is what stops that
+// construct from returning.
+func CheckAtRestEncryptionAbsence(repositoryRoot string) []Violation {
+	const rule = "at-rest-encryption"
+	surfaceFiles := map[string]struct{}{
+		"README.md":          {},
+		"README.zh-CN.md":    {},
+		"PLAN.md":            {},
+		"locales/en-US.json": {},
+		"locales/zh-CN.json": {},
+	}
+	productionRoots := []string{"cmd", "internal", "ui/flutter_app/lib", "api"}
+	// Packages that own stored evidence. Elsewhere "encrypted" legitimately
+	// describes provider-encrypted reasoning blocks and TLS tunnelling.
+	storageRoots := []string{
+		"internal/rawevidence/", "internal/runtimepersistence/",
+	}
+	// Every other surface is checked for the narrower claim about the archive.
+	claimSuffixes := []string{".dart", ".json", ".md", ".yaml", ".yml"}
+	var violations []Violation
+	scan := func(path, relative string) error {
+		if relative == "internal/repositorycheck/check.go" ||
+			strings.HasSuffix(relative, "_test.go") {
+			return nil
+		}
+		storage := false
+		for _, root := range storageRoots {
+			if strings.HasPrefix(relative, root) {
+				storage = true
+			}
+		}
+		file, err := os.Open(path)
+		if err != nil {
+			return err
+		}
+		defer file.Close()
+		scanner := bufio.NewScanner(file)
+		scanner.Buffer(make([]byte, 64*1024), 2*1024*1024)
+		lineNumber := 0
+		sentence := ""
+		sentenceLine := 0
+		for scanner.Scan() {
+			lineNumber++
+			line := scanner.Text()
+			if match := atRestEncryptionRE.FindString(line); match != "" {
+				violations = append(violations, Violation{
+					Rule: rule,
+					Path: filepath.FromSlash(relative),
+					Line: lineNumber,
+					Message: fmt.Sprintf(
+						"at-rest archive encryption construct %q entered a current surface",
+						match,
+					),
+				})
+				continue
+			}
+			if !storage {
+				checked := false
+				for _, suffix := range claimSuffixes {
+					if strings.HasSuffix(relative, suffix) {
+						checked = true
+					}
+				}
+				if checked && archiveEncryptionClaimRE.MatchString(line) &&
+					!storageEncryptionAbsenceRE.MatchString(line) {
+					violations = append(violations, Violation{
+						Rule: rule,
+						Path: filepath.FromSlash(relative),
+						Line: lineNumber,
+						Message: "this surface tells the user the archive is " +
+							"encrypted or that a data key rotates; neither is true",
+					})
+				}
+				continue
+			}
+			// Prose wraps, so the claim is judged one sentence at a time: a line
+			// containing "encryption" is often the continuation of a sentence
+			// whose subject is the absence of it.
+			if sentence == "" {
+				sentenceLine = lineNumber
+			}
+			sentence += " " + line
+			trimmed := strings.TrimSpace(line)
+			if trimmed != "" && !strings.HasSuffix(trimmed, ".") {
+				continue
+			}
+			if storageEncryptionProseRE.MatchString(sentence) &&
+				!storageEncryptionAbsenceRE.MatchString(sentence) {
+				violations = append(violations, Violation{
+					Rule: rule,
+					Path: filepath.FromSlash(relative),
+					Line: sentenceLine,
+					Message: "stored evidence is not encrypted; " +
+						"this sentence still says it is",
+				})
+			}
+			sentence = ""
+		}
+		if err := scanner.Err(); err != nil {
+			return err
+		}
+		// A file whose last claim never reached a full stop must still be judged.
+		if storage && sentence != "" &&
+			storageEncryptionProseRE.MatchString(sentence) &&
+			!storageEncryptionAbsenceRE.MatchString(sentence) {
+			violations = append(violations, Violation{
+				Rule: rule,
+				Path: filepath.FromSlash(relative),
+				Line: sentenceLine,
+				Message: "stored evidence is not encrypted; " +
+					"this sentence still says it is",
+			})
+		}
+		return nil
+	}
+	for relative := range surfaceFiles {
+		path := filepath.Join(repositoryRoot, filepath.FromSlash(relative))
+		if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err := scan(path, relative); err != nil {
+			violations = append(violations, Violation{
+				Rule: rule, Path: filepath.FromSlash(relative), Message: err.Error(),
+			})
+		}
+	}
+	for _, relativeRoot := range productionRoots {
+		root := filepath.Join(repositoryRoot, filepath.FromSlash(relativeRoot))
+		if _, err := os.Stat(root); errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		walkErr := filepath.WalkDir(root, func(
+			path string,
+			entry fs.DirEntry,
+			err error,
+		) error {
+			if err != nil {
+				return err
+			}
+			if entry.IsDir() {
+				switch entry.Name() {
+				case "generated", "node_modules", "target", "testdata", "vendor":
+					return filepath.SkipDir
+				default:
+					return nil
+				}
+			}
+			switch filepath.Ext(path) {
+			case ".dart", ".go", ".json", ".sql", ".yaml", ".yml":
+			default:
+				return nil
+			}
+			relative, relativeErr := filepath.Rel(repositoryRoot, path)
+			if relativeErr != nil {
+				return relativeErr
+			}
+			return scan(path, filepath.ToSlash(relative))
+		})
+		if walkErr != nil {
+			violations = append(violations, Violation{
+				Rule: rule, Path: filepath.FromSlash(relativeRoot), Message: walkErr.Error(),
+			})
+		}
+	}
+	return violations
+}
+
+// prose reports whether a trimmed source line carries human-readable text: a
+// comment in any of the languages this repository uses, or a single-quoted
+// string, which is the shape a Dart copy entry takes. Double quotes are left
+// out on purpose: in Go they open a map-literal key, not a sentence.
+func prose(trimmed string) bool {
+	switch {
+	case strings.HasPrefix(trimmed, "//"),
+		strings.HasPrefix(trimmed, "--"),
+		strings.HasPrefix(trimmed, "*"),
+		strings.HasPrefix(trimmed, "'"):
+		return true
+	default:
+		return false
+	}
+}
+
+// CheckCredentialClaimScope keeps every statement about credential absence
+// bounded to what the product actually does.
+//
+// The archive removes the values of headers whose names match the credential
+// predicate. It does not scan bodies, tool arguments or query strings, and it
+// must not, because rewriting observed bytes is how a forensic archive stops
+// being evidence. An unbounded sentence — "no credential value is stored" —
+// therefore tells a user something false in the one direction that costs them
+// something: it reads as permission to paste a key into a prompt.
+//
+// The scope was corrected by hand once, across four surfaces, and the sweep
+// missed several more. This rule is what makes the claim checkable instead of
+// remembered.
+func CheckCredentialClaimScope(repositoryRoot string) []Violation {
+	const rule = "credential-claim-scope"
+	// Packages that own stored evidence. Elsewhere a credential absence claim is
+	// about the control plane or a DTO, where it is both true and unrelated.
+	storageRoots := []string{
+		"internal/rawevidence/", "internal/runtimepersistence/",
+	}
+	// The shipping surfaces that describe the archive to a user.
+	surfaceFiles := []string{
+		"ui/flutter_app/lib/core/i18n/app_copy.dart",
+		"ui/flutter_app/lib/features/workbench/settings_view.dart",
+		"ui/flutter_app/lib/features/workbench/conversation_timeline.dart",
+		"ui/flutter_app/lib/preview/preview_control_api.dart",
+	}
+	var violations []Violation
+	judgeSentence := func(relative, sentence string, line int) {
+		if !credentialStorageRE.MatchString(sentence) ||
+			credentialScopeRE.MatchString(sentence) ||
+			credentialControlPlaneRE.MatchString(sentence) {
+			return
+		}
+		// The negation has to be about the credential, not merely nearby. In
+		// "a query-string API key lands in a plaintext column, and no dialect
+		// this product supports uses it", every signal is present and no claim
+		// about credential absence is made. Requiring the noun and the negation
+		// to share a clause is what tells the two apart.
+		claimed := false
+		for _, clause := range strings.FieldsFunc(sentence, func(r rune) bool {
+			return r == ',' || r == ';' || r == ':'
+		}) {
+			if credentialNounRE.MatchString(clause) &&
+				credentialAbsenceRE.MatchString(clause) {
+				claimed = true
+				break
+			}
+		}
+		if !claimed {
+			return
+		}
+		violations = append(violations, Violation{
+			Rule: rule,
+			Path: filepath.FromSlash(relative),
+			Line: line,
+			Message: "this sentence claims credential absence without naming " +
+				"its scope; only recognized credential header values are " +
+				"removed, and bodies, tool arguments and query strings are not",
+		})
+	}
+	// A flushed block is split on its own full stops before judging. A line
+	// often ends one sentence and starts another, and a later sentence that
+	// names the scope must not launder an earlier one that made the claim
+	// without it.
+	judge := func(relative, block string, line int) {
+		for _, sentence := range strings.SplitAfter(block, ". ") {
+			judgeSentence(relative, sentence, line)
+		}
+	}
+	scan := func(path, relative string) error {
+		if relative == "internal/repositorycheck/check.go" {
+			return nil
+		}
+		file, err := os.Open(path)
+		if err != nil {
+			return err
+		}
+		defer file.Close()
+		scanner := bufio.NewScanner(file)
+		scanner.Buffer(make([]byte, 64*1024), 2*1024*1024)
+		lineNumber := 0
+		block := ""
+		blockLine := 0
+		for scanner.Scan() {
+			lineNumber++
+			trimmed := strings.TrimSpace(scanner.Text())
+			// The rule judges prose, and code is not prose. Accumulating code
+			// lines lets a parameter named `credential`, an unrelated `never`
+			// and the word `database` combine across a whole function into a
+			// claim that no line actually makes.
+			if !prose(trimmed) {
+				if block != "" {
+					judge(relative, block, blockLine)
+					block = ""
+				}
+				continue
+			}
+			if block == "" {
+				blockLine = lineNumber
+			}
+			block += " " + trimmed
+			// Prose wraps, so a claim is judged one sentence at a time. A Dart
+			// copy entry ends on a comma rather than a full stop, so both close
+			// a block here.
+			if !strings.HasSuffix(trimmed, ".") &&
+				!strings.HasSuffix(trimmed, "',") {
+				continue
+			}
+			judge(relative, block, blockLine)
+			block = ""
+		}
+		if err := scanner.Err(); err != nil {
+			return err
+		}
+		// A file whose last claim never reached a full stop must still be judged.
+		if block != "" {
+			judge(relative, block, blockLine)
+		}
+		return nil
+	}
+	paths := make(map[string]struct{}, len(surfaceFiles))
+	for _, relative := range surfaceFiles {
+		paths[relative] = struct{}{}
+	}
+	for _, relativeRoot := range storageRoots {
+		root := filepath.Join(repositoryRoot, filepath.FromSlash(relativeRoot))
+		if _, err := os.Stat(root); errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		walkErr := filepath.WalkDir(root, func(
+			path string,
+			entry fs.DirEntry,
+			err error,
+		) error {
+			if err != nil {
+				return err
+			}
+			if entry.IsDir() {
+				switch entry.Name() {
+				case "generated", "node_modules", "target", "testdata", "vendor":
+					return filepath.SkipDir
+				default:
+					return nil
+				}
+			}
+			switch filepath.Ext(path) {
+			case ".go", ".sql":
+			default:
+				return nil
+			}
+			relative, relativeErr := filepath.Rel(repositoryRoot, path)
+			if relativeErr != nil {
+				return relativeErr
+			}
+			paths[filepath.ToSlash(relative)] = struct{}{}
+			return nil
+		})
+		if walkErr != nil {
+			violations = append(violations, Violation{
+				Rule: rule, Path: filepath.FromSlash(relativeRoot),
+				Message: walkErr.Error(),
+			})
+		}
+	}
+	ordered := make([]string, 0, len(paths))
+	for relative := range paths {
+		ordered = append(ordered, relative)
+	}
+	sort.Strings(ordered)
+	for _, relative := range ordered {
+		path := filepath.Join(repositoryRoot, filepath.FromSlash(relative))
+		if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err := scan(path, relative); err != nil {
+			violations = append(violations, Violation{
+				Rule: rule, Path: filepath.FromSlash(relative), Message: err.Error(),
+			})
+		}
+	}
+	return violations
+}
+
+// CheckFlutterCopyPair keeps the Dart copy table's two language maps in step.
+//
+// AppCopy resolves a missing key to the key itself, so an untranslated string
+// reaches the user as `exchange.system_parameter` and no widget test notices. The
+// JSON locale catalogs already have a parity gate; this is the same gate for the
+// table the Flutter workbench actually reads.
+func CheckFlutterCopyPair(repositoryRoot string) []Violation {
+	const rule = "flutter-copy-parity"
+	relative := "ui/flutter_app/lib/core/i18n/app_copy.dart"
+	path := filepath.Join(repositoryRoot, filepath.FromSlash(relative))
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return []Violation{{
+			Rule: rule, Path: filepath.FromSlash(relative), Message: err.Error(),
+		}}
+	}
+	english, englishErr := flutterCopyKeys(string(contents), "_en")
+	chinese, chineseErr := flutterCopyKeys(string(contents), "_zh")
+	for _, mapErr := range []error{englishErr, chineseErr} {
+		if mapErr != nil {
+			return []Violation{{
+				Rule: rule, Path: filepath.FromSlash(relative),
+				Message: mapErr.Error(),
+			}}
+		}
+	}
+	var violations []Violation
+	report := func(missingFrom string, keys map[string]int, other map[string]int) {
+		names := make([]string, 0)
+		for key := range keys {
+			if _, ok := other[key]; !ok {
+				names = append(names, key)
+			}
+		}
+		sort.Strings(names)
+		for _, key := range names {
+			violations = append(violations, Violation{
+				Rule: rule,
+				Path: filepath.FromSlash(relative),
+				Line: keys[key],
+				Message: fmt.Sprintf(
+					"copy key %q is missing from %s, so it would render as its own key",
+					key, missingFrom,
+				),
+			})
+		}
+	}
+	report("_zh", english, chinese)
+	report("_en", chinese, english)
+	return violations
+}
+
+// flutterCopyKeys returns each key in one `static const <name> = <String,
+// String>{ ... }` literal, mapped to the line it is declared on. A key is a
+// quoted string at the start of a line followed by a colon, which excludes the
+// wrapped continuation lines of a long value.
+func flutterCopyKeys(contents, name string) (map[string]int, error) {
+	opening := "static const " + name + " = <String, String>{"
+	start := strings.Index(contents, opening)
+	if start < 0 {
+		return nil, fmt.Errorf("copy table %s was not found", name)
+	}
+	line := 1 + strings.Count(contents[:start], "\n")
+	keys := make(map[string]int)
+	for _, text := range strings.Split(contents[start:], "\n")[1:] {
+		line++
+		if strings.TrimSpace(text) == "};" {
+			return keys, nil
+		}
+		match := flutterCopyKeyRE.FindStringSubmatch(text)
+		if match == nil {
+			continue
+		}
+		if _, duplicate := keys[match[1]]; duplicate {
+			return nil, fmt.Errorf("copy key %q is declared twice in %s", match[1], name)
+		}
+		keys[match[1]] = line
+	}
+	return nil, fmt.Errorf("copy table %s was not terminated", name)
 }

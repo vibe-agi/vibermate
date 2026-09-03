@@ -61,7 +61,7 @@ func TestEquivalentAuthorityFormsMatchTheSameEndpoint(t *testing.T) {
 }
 
 // Canonicalization must never widen the match. Two distinct hosts stay
-// distinct, and a suffix or wildcard is still not an AgentEndpoint.
+// distinct, and a suffix or wildcard is still not a ClientEndpoint.
 func TestCanonicalizationDoesNotWidenTheMatch(t *testing.T) {
 	t.Parallel()
 

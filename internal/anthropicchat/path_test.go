@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/vibe-agi/vibermate/internal/access"
+	"github.com/vibe-agi/vibermate/internal/protocolspec"
 )
 
 func TestProtocolPathComposesAnthropicClientAndChatBackendEdges(t *testing.T) {
@@ -15,8 +15,8 @@ func TestProtocolPathComposesAnthropicClientAndChatBackendEdges(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if path.Client().Dialect() != access.DialectAnthropicMessages ||
-		path.Backend().Dialect() != access.DialectOpenAIChat {
+	if path.Client().Dialect() != protocolspec.DialectAnthropicMessages ||
+		path.Backend().Dialect() != protocolspec.DialectOpenAIChat {
 		t.Fatal("protocol path dialect edges are incomplete")
 	}
 	request, _, err := path.Client().DecodeRequest([]byte(`{

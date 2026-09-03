@@ -57,7 +57,7 @@ func TestDaemonPublishesBootstrapThenParentEOFReleasesGeneration(t *testing.T) {
 				Paths:          runtimePaths,
 				Host:           hostcontract.Desktop(),
 				OfflineHold:    gate,
-				Secrets:        unavailableSecrets{},
+				Secrets:        seededSecrets{},
 				Approvals:      toolapproval.DefaultConfig(),
 				ExchangeHold:   exchange.DefaultHoldPolicy(),
 				Clock:          productruntime.SystemClock{},
@@ -110,13 +110,13 @@ func TestProductionOptionsUsesExplicitSecretStoreFactory(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()
-	store := unavailableSecrets{}
+	store := seededSecrets{}
 	factory := &secretFactoryFixture{store: store}
 	options, err := desktopdaemon.ProductionOptions(
 		context.Background(),
 		filepath.Join(root, "cache"),
 		filepath.Join(root, "data"),
-		"tauri://localhost",
+		"vibermate://desktop",
 		io.Discard,
 		factory,
 	)
@@ -131,15 +131,21 @@ func TestProductionOptionsUsesExplicitSecretStoreFactory(t *testing.T) {
 		)
 	}
 	if got := options.Host.AllowedOrigins; len(got) != 1 ||
-		got[0] != "tauri://localhost" {
+		got[0] != "vibermate://desktop" {
 		t.Fatalf("allowed origins = %v", got)
+	}
+	if options.Host.RemoteServerListenAddress != "127.0.0.1:9666" {
+		t.Fatalf(
+			"default remote Server listen address = %q, want loopback",
+			options.Host.RemoteServerListenAddress,
+		)
 	}
 
 	if _, err := desktopdaemon.ProductionOptions(
 		context.Background(),
 		filepath.Join(root, "other-cache"),
 		filepath.Join(root, "other-data"),
-		"tauri://localhost",
+		"vibermate://desktop",
 		io.Discard,
 		&secretFactoryFixture{},
 	); err == nil {
@@ -157,6 +163,24 @@ func TestProductionOptionsUsesExplicitSecretStoreFactory(t *testing.T) {
 	}
 }
 
+func TestProductionOptionsRejectsRetiredDesktopOrigins(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	for _, origin := range []string{"tauri://localhost", "http://127.0.0.1:1420"} {
+		if _, err := desktopdaemon.ProductionOptions(
+			context.Background(),
+			filepath.Join(root, "cache"),
+			filepath.Join(root, "data"),
+			origin,
+			io.Discard,
+			&secretFactoryFixture{store: seededSecrets{}},
+		); err == nil {
+			t.Fatalf("retired Desktop origin %q was accepted", origin)
+		}
+	}
+}
+
 type secretFactoryFixture struct {
 	store secretstore.Store
 	opens int
@@ -169,32 +193,52 @@ func (factory *secretFactoryFixture) Open(
 	return factory.store, nil
 }
 
-type unavailableSecrets struct{}
+type seededSecrets struct{}
 
-func (unavailableSecrets) Read(
-	context.Context,
-	secretstore.Reference,
+func (seededSecrets) Read(
+	_ context.Context,
+	reference secretstore.Reference,
 ) (*secretstore.Value, error) {
+	if reference.String() == "secret://runtime/client-annotation-signing-v1" {
+		return secretstore.NewValue([]byte("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"))
+	}
 	return nil, secretstore.ErrNotFound
 }
 
-func (unavailableSecrets) Inspect(
-	context.Context,
-	secretstore.Reference,
+func (seededSecrets) ReadAtRevision(
+	ctx context.Context,
+	reference secretstore.Reference,
+	revision secretstore.Revision,
+) (*secretstore.Value, error) {
+	if reference.String() == "secret://runtime/client-annotation-signing-v1" && revision != 1 {
+		return nil, secretstore.ErrRevisionConflict
+	}
+	return seededSecrets{}.Read(ctx, reference)
+}
+
+func (seededSecrets) Inspect(
+	_ context.Context,
+	reference secretstore.Reference,
 ) (secretstore.Metadata, error) {
+	if reference.String() == "secret://runtime/client-annotation-signing-v1" {
+		return secretstore.Metadata{State: secretstore.StateConfigured, Revision: 1}, nil
+	}
 	return secretstore.Metadata{State: secretstore.StateMissing}, nil
 }
 
-func (unavailableSecrets) Replace(
+func (seededSecrets) Replace(
 	context.Context,
 	secretstore.ReplaceCommand,
 ) (secretstore.Metadata, error) {
 	return secretstore.Metadata{}, secretstore.ErrReadOnly
 }
 
-func (unavailableSecrets) Delete(
-	context.Context,
-	secretstore.Reference,
+func (seededSecrets) Delete(
+	_ context.Context,
+	reference secretstore.Reference,
 ) error {
+	if reference.String() == "secret://runtime/client-annotation-signing-v1" {
+		return secretstore.ErrReadOnly
+	}
 	return secretstore.ErrNotFound
 }

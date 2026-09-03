@@ -1,5 +1,5 @@
 // Package loopbackproxy implements authenticated HTTP CONNECT ingress for
-// exact registered AgentEndpoints. It owns handler and hijacked-connection
+// Capture-selected Environments. It owns handler and hijacked-connection
 // lifecycle, but the Host owns the loopback listener and external publication.
 package loopbackproxy
 
@@ -7,15 +7,18 @@ import (
 	"bufio"
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/tls"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash"
 	"io"
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -24,22 +27,26 @@ import (
 
 	"golang.org/x/net/http2"
 
-	"github.com/vibe-agi/vibermate/internal/access"
 	"github.com/vibe-agi/vibermate/internal/blindtunnel"
 	"github.com/vibe-agi/vibermate/internal/captureadmission"
+	"github.com/vibe-agi/vibermate/internal/captureassignment"
+	"github.com/vibe-agi/vibermate/internal/captureidentity"
 	"github.com/vibe-agi/vibermate/internal/certidentity"
-	"github.com/vibe-agi/vibermate/internal/clientadapter"
 	"github.com/vibe-agi/vibermate/internal/connectionevent"
 	"github.com/vibe-agi/vibermate/internal/connectionpolicy"
 	"github.com/vibe-agi/vibermate/internal/egressaudit"
+	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/exchange"
 	"github.com/vibe-agi/vibermate/internal/localca"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
 	"github.com/vibe-agi/vibermate/internal/originaltransport"
-	"github.com/vibe-agi/vibermate/internal/pathcapability"
+	"github.com/vibe-agi/vibermate/internal/originidentity"
 	"github.com/vibe-agi/vibermate/internal/protocolcore"
+	"github.com/vibe-agi/vibermate/internal/protocolspec"
+	"github.com/vibe-agi/vibermate/internal/rawevidence"
 	"github.com/vibe-agi/vibermate/internal/ssewire"
 	"github.com/vibe-agi/vibermate/internal/transportprofile"
+	"github.com/vibe-agi/vibermate/internal/wireprofile"
 )
 
 const (
@@ -50,47 +57,56 @@ const (
 	blindTunnelFailureClass     = "tunnel_failed"
 )
 
+var ErrProxyStopping = errors.New("loopback proxy is stopping")
+
 type ReasonCode string
 
 const (
-	ReasonProxyAuthenticationRequired    ReasonCode = "proxy_authentication_required"
-	ReasonCaptureAdmissionRejected       ReasonCode = "capture_admission_rejected"
-	ReasonAgentEndpointNotConfigured     ReasonCode = "agent_endpoint_not_configured"
-	ReasonConnectAuthorityInvalid        ReasonCode = "connect_authority_invalid"
-	ReasonConnectSNIMismatch             ReasonCode = "connect_sni_mismatch"
-	ReasonApplicationProtocolUnavailable ReasonCode = "application_protocol_unavailable"
-	ReasonMITMUnavailable                ReasonCode = "mitm_unavailable"
-	ReasonRequestAuthorityMismatch       ReasonCode = "request_authority_mismatch"
-	ReasonAgentEndpointChanged           ReasonCode = "agent_endpoint_changed"
-	ReasonPathUnsupported                ReasonCode = "path_unsupported"
-	ReasonResponsesWebSocketUnsupported  ReasonCode = "responses_websocket_unsupported"
-	ReasonRequestBodyInvalid             ReasonCode = "request_body_invalid"
-	ReasonExchangeFailed                 ReasonCode = "exchange_failed"
-	ReasonOriginalEgressFailed           ReasonCode = "original_egress_failed"
-	ReasonProxyStopping                  ReasonCode = "proxy_stopping"
-	ReasonConnectOnly                    ReasonCode = "connect_only"
-	ReasonConnectionAuditUnavailable     ReasonCode = "connection_audit_unavailable"
-	ReasonProfileOperationUnsupported    ReasonCode = "profile_operation_unsupported"
-	ReasonBlindTunnelFailed              ReasonCode = "blind_tunnel_failed"
-	ReasonUnsupportedUpgrade             ReasonCode = "unsupported_upgrade"
-	ReasonConnectionDenied               ReasonCode = "connection_denied"
-	ReasonAccessProjectionUnavailable    ReasonCode = "access_projection_unavailable"
+	ReasonProxyAuthenticationRequired     ReasonCode = "proxy_authentication_required"
+	ReasonCaptureAdmissionRejected        ReasonCode = "capture_admission_rejected"
+	ReasonClientEndpointNotConfigured     ReasonCode = "client_endpoint_not_configured"
+	ReasonConnectAuthorityInvalid         ReasonCode = "connect_authority_invalid"
+	ReasonConnectSNIMismatch              ReasonCode = "connect_sni_mismatch"
+	ReasonApplicationProtocolUnavailable  ReasonCode = "application_protocol_unavailable"
+	ReasonMITMUnavailable                 ReasonCode = "mitm_unavailable"
+	ReasonRequestAuthorityMismatch        ReasonCode = "request_authority_mismatch"
+	ReasonEnvironmentChanged              ReasonCode = "environment_changed"
+	ReasonPathUnsupported                 ReasonCode = "path_unsupported"
+	ReasonResponsesWebSocketUnsupported   ReasonCode = "responses_websocket_unsupported"
+	ReasonRequestBodyInvalid              ReasonCode = "request_body_invalid"
+	ReasonExchangeFailed                  ReasonCode = "exchange_failed"
+	ReasonOriginalEgressFailed            ReasonCode = "original_egress_failed"
+	ReasonProxyStopping                   ReasonCode = "proxy_stopping"
+	ReasonConnectOnly                     ReasonCode = "connect_only"
+	ReasonConnectionAuditUnavailable      ReasonCode = "connection_audit_unavailable"
+	ReasonEnvironmentOperationUnsupported ReasonCode = "environment_operation_unsupported"
+	ReasonBlindTunnelFailed               ReasonCode = "blind_tunnel_failed"
+	ReasonUnsupportedUpgrade              ReasonCode = "unsupported_upgrade"
+	ReasonConnectionDenied                ReasonCode = "connection_denied"
+	ReasonCaptureEnvironmentUnavailable   ReasonCode = "capture_environment_unavailable"
+	ReasonRawEvidenceUnavailable          ReasonCode = "raw_evidence_unavailable"
 )
 
-const noAccessPassthroughRuleID = "no_access_passthrough"
-
-var ErrProxyStopping = errors.New("loopback proxy is stopping")
+const systemTransparentRuleID = "system_transparent"
 
 type CertificateAuthority interface {
 	Identity() localca.RootIdentity
-	Issue(context.Context, access.LeafIssuanceAdmission) (tls.Certificate, error)
+	Issue(context.Context, captureassignment.LeafIssuanceAdmission) (tls.Certificate, error)
 }
 
-type IngressAuthority interface {
-	access.IngressResolver
-	access.LeafIssuanceAdmitter
-	access.DownstreamProtocolResolver
-	access.ActivePlanCatalog
+type CaptureAssignmentAuthority interface {
+	RegisterProviderConnection(
+		context.Context,
+		captureidentity.Reference,
+		string,
+		originidentity.ProviderOrigin,
+	) (*captureassignment.ConnectionLease, error)
+	BeginRequest(
+		context.Context,
+		captureidentity.Reference,
+		string,
+		environment.RequestFacts,
+	) (*captureassignment.RequestLease, error)
 }
 
 type OriginalClient interface {
@@ -148,27 +164,28 @@ func (source RandomExchangeIDSource) NewExchangeID(
 }
 
 type Options struct {
-	OwnerContext   context.Context
-	Admissions     captureadmission.Authorizer
-	Ingress        IngressAuthority
-	AccessRequests access.RequestUseAdmitter
-	Paths          *pathcapability.Catalog
-	Exchanges      exchange.Executor
-	Original       OriginalClient
-	Certificates   CertificateAuthority
-	Connections    ConnectionJournal
+	OwnerContext context.Context
+	Admissions   captureadmission.Authorizer
+	Assignments  CaptureAssignmentAuthority
+	Exchanges    exchange.Executor
+	Original     OriginalClient
+	Certificates CertificateAuthority
+	Connections  ConnectionJournal
 	// Policy decides every proxied connection before any dial, DNS
-	// resolution, or certificate issuance. An AgentEndpoint is not exempt. It
+	// resolution, or certificate issuance. A ClientEndpoint is not exempt. It
 	// is read once per connection, so a rule change reaches the next
 	// connection and never splits one across two revisions.
 	Policy connectionpolicy.Source
 	// Approvals answers a policy `ask`. Without it an ask cannot block on a
 	// person, so it denies rather than degrading into an allow.
-	Approvals        NetworkApprovals
-	BlindTunnels     BlindTunnelDialer
-	EgressAudit      egressaudit.Writer
-	ExchangeIDs      ExchangeIDSource
-	HandshakeTimeout time.Duration
+	Approvals             NetworkApprovals
+	BlindTunnels          BlindTunnelDialer
+	EgressAudit           egressaudit.Writer
+	RawEvidence           rawevidence.RequestRecorder
+	RawObservationTimeout time.Duration
+	RawResponseBodyBytes  int
+	ExchangeIDs           ExchangeIDSource
+	HandshakeTimeout      time.Duration
 }
 
 // terminalFailureReporter is implemented by the production audit boundary.
@@ -178,28 +195,33 @@ type terminalFailureReporter interface {
 	ReportTerminalFailure(error)
 }
 
+type rawEvidenceFailureReporter interface {
+	ReportRawEvidenceFailure(error)
+}
+
 type operation struct {
 	connection net.Conn
 }
 
 type Handler struct {
-	admissions     captureadmission.Authorizer
-	ingress        IngressAuthority
-	accessRequests access.RequestUseAdmitter
-	paths          *pathcapability.Catalog
-	exchanges      exchange.Executor
-	original       OriginalClient
-	certificates   CertificateAuthority
-	connections    ConnectionJournal
-	policy         connectionpolicy.Source
-	approvals      NetworkApprovals
-	blindTunnels   BlindTunnelDialer
-	egressAudit    egressaudit.Writer
-	exchangeIDs    ExchangeIDSource
-	handshake      time.Duration
-	clock          func() time.Time
-	auditTimeout   time.Duration
-	ownerContext   context.Context
+	admissions   captureadmission.Authorizer
+	assignments  CaptureAssignmentAuthority
+	exchanges    exchange.Executor
+	original     OriginalClient
+	certificates CertificateAuthority
+	connections  ConnectionJournal
+	policy       connectionpolicy.Source
+	approvals    NetworkApprovals
+	blindTunnels BlindTunnelDialer
+	egressAudit  egressaudit.Writer
+	rawEvidence  rawevidence.RequestRecorder
+	rawTimeout   time.Duration
+	rawBodyBytes int
+	exchangeIDs  ExchangeIDSource
+	handshake    time.Duration
+	clock        func() time.Time
+	auditTimeout time.Duration
+	ownerContext context.Context
 
 	mu        sync.Mutex
 	accepting bool
@@ -211,9 +233,7 @@ type Handler struct {
 func New(options Options) (*Handler, error) {
 	if options.OwnerContext == nil ||
 		options.Admissions == nil ||
-		options.Ingress == nil ||
-		options.AccessRequests == nil ||
-		options.Paths == nil ||
+		options.Assignments == nil ||
 		options.Exchanges == nil ||
 		options.Original == nil ||
 		options.Certificates == nil ||
@@ -227,27 +247,42 @@ func New(options Options) (*Handler, error) {
 	if options.HandshakeTimeout < 0 {
 		return nil, errors.New("TLS handshake timeout must be positive")
 	}
+	rawTimeout := options.RawObservationTimeout
+	rawBodyBytes := options.RawResponseBodyBytes
+	if options.RawEvidence != nil {
+		if rawTimeout == 0 {
+			rawTimeout = rawevidence.DefaultObservationLimit
+		}
+		if rawBodyBytes == 0 {
+			rawBodyBytes = rawevidence.DefaultMaximumBodyBytes
+		}
+		if rawTimeout <= 0 || rawBodyBytes <= 0 ||
+			rawBodyBytes > rawevidence.DefaultMaximumBodyBytes {
+			return nil, errors.New("client raw evidence configuration is invalid")
+		}
+	}
 	handler := &Handler{
-		admissions:     options.Admissions,
-		ingress:        options.Ingress,
-		accessRequests: options.AccessRequests,
-		paths:          options.Paths,
-		exchanges:      options.Exchanges,
-		original:       options.Original,
-		certificates:   options.Certificates,
-		connections:    options.Connections,
-		policy:         options.Policy,
-		approvals:      options.Approvals,
-		blindTunnels:   options.BlindTunnels,
-		egressAudit:    options.EgressAudit,
-		exchangeIDs:    options.ExchangeIDs,
-		handshake:      options.HandshakeTimeout,
-		clock:          time.Now,
-		auditTimeout:   defaultAuditCompletionLimit,
-		ownerContext:   options.OwnerContext,
-		accepting:      true,
-		active:         make(map[*operation]struct{}),
-		changed:        make(chan struct{}),
+		admissions:   options.Admissions,
+		assignments:  options.Assignments,
+		exchanges:    options.Exchanges,
+		original:     options.Original,
+		certificates: options.Certificates,
+		connections:  options.Connections,
+		policy:       options.Policy,
+		approvals:    options.Approvals,
+		blindTunnels: options.BlindTunnels,
+		egressAudit:  options.EgressAudit,
+		rawEvidence:  options.RawEvidence,
+		rawTimeout:   rawTimeout,
+		rawBodyBytes: rawBodyBytes,
+		exchangeIDs:  options.ExchangeIDs,
+		handshake:    options.HandshakeTimeout,
+		clock:        time.Now,
+		auditTimeout: defaultAuditCompletionLimit,
+		ownerContext: options.OwnerContext,
+		accepting:    true,
+		active:       make(map[*operation]struct{}),
+		changed:      make(chan struct{}),
 	}
 	handler.stopOwner = context.AfterFunc(options.OwnerContext, handler.BeginShutdown)
 	return handler, nil
@@ -402,100 +437,98 @@ func (handler *Handler) ServeHTTP(
 		return
 	}
 	source := connectionSource(admission)
-	// With no enabled Access, capture is transparent: the authenticated child
-	// still traverses this listener and leaves body-free connection evidence,
-	// but no firewall question, TLS decryption, or semantic processing applies.
-	// Once an Access is active, every proxied connection is decided by the
-	// configured policy before any dial, DNS resolution, or certificate issue.
-	policyHost, policyPort := policyTarget(request, cleartextForward)
-	plans, err := handler.ingress.ActiveAccessPlans()
+	capture, err := admission.CaptureReference()
 	if err != nil {
-		if handler.denyConnection(
-			request.Context(),
-			audit,
-			source,
-			ReasonAccessProjectionUnavailable,
-		) != nil {
-			writeReason(
-				writer,
-				http.StatusServiceUnavailable,
-				ReasonConnectionAuditUnavailable,
-				"",
-			)
+		if handler.denyConnection(request.Context(), audit, source, ReasonCaptureAdmissionRejected) == nil {
+			terminal = true
+			writeReason(writer, http.StatusForbidden, ReasonCaptureAdmissionRejected, "")
 			return
 		}
-		terminal = true
-		writeReason(
-			writer,
-			http.StatusServiceUnavailable,
-			ReasonAccessProjectionUnavailable,
-			"",
-		)
-		return
-	}
-	outcome := connectionpolicy.Outcome{
-		Decision: connectionpolicy.DecisionAllow,
-		RuleID:   noAccessPassthroughRuleID,
-	}
-	if len(plans) != 0 {
-		outcome = handler.rules().Evaluate(connectionpolicy.Request{
-			Host: policyHost,
-			Port: policyPort,
-		})
-	}
-	// An ask blocks here, still before any dial. It resolves to exactly one of
-	// allow or deny; there is no third answer this far in front of a socket.
-	denialReason := ReasonCode(outcome.RuleID)
-	if outcome.Decision == connectionpolicy.DecisionAsk {
-		resolution := handler.resolveAsk(
-			request.Context(),
-			outcome,
-			source.IngressID,
-			policyHost,
-			policyPort,
-		)
-		outcome = resolution.outcome
-		if resolution.reason != "" {
-			denialReason = resolution.reason
-		}
-	}
-	if outcome.Decision != connectionpolicy.DecisionAllow {
-		if handler.denyConnection(
-			request.Context(),
-			audit,
-			source,
-			denialReason,
-		) != nil {
-			writeReason(
-				writer,
-				http.StatusServiceUnavailable,
-				ReasonConnectionAuditUnavailable,
-				"",
-			)
-			return
-		}
-		terminal = true
-		writeReason(
-			writer,
-			http.StatusForbidden,
-			ReasonConnectionDenied,
-			outcome.RuleID,
-		)
+		writeReason(writer, http.StatusServiceUnavailable, ReasonConnectionAuditUnavailable, "")
 		return
 	}
 	// A cleartext forward-proxy request carries its target in an absolute
-	// request-target. It is authenticated exactly like a CONNECT, then
-	// forwarded to that origin; it never enters a model pipeline and never
-	// carries a provider credential.
+	// request-target. It enters the model pipeline only when the exact target
+	// was frozen from this verified Agent's client configuration; every other
+	// cleartext request remains an ordinary blind forward.
 	if cleartextForward {
-		terminal = handler.serveCleartextForward(
-			writer,
-			request,
-			active,
-			audit,
-			source,
-			outcome.RuleID,
+		policyHost, policyPort := policyTarget(request, true)
+		outcome, denialReason := handler.decideConnection(
+			request.Context(), source.IngressID, policyHost, policyPort, false,
 		)
+		if outcome.Decision != connectionpolicy.DecisionAllow {
+			if handler.denyConnection(request.Context(), audit, source, denialReason) != nil {
+				writeReason(writer, http.StatusServiceUnavailable, ReasonConnectionAuditUnavailable, "")
+				return
+			}
+			terminal = true
+			writeReason(writer, http.StatusForbidden, ReasonConnectionDenied, outcome.RuleID)
+			return
+		}
+		providerOrigin, originErr := cleartextProviderOrigin(request.URL)
+		if originErr != nil {
+			writeReason(writer, http.StatusBadRequest, ReasonConnectAuthorityInvalid, "")
+			return
+		}
+		connectionLease, registerErr := handler.assignments.RegisterProviderConnection(
+			request.Context(), capture, audit.ID(), providerOrigin,
+		)
+		if registerErr != nil {
+			if handler.denyConnection(request.Context(), audit, source, ReasonCaptureEnvironmentUnavailable) != nil {
+				writeReason(writer, http.StatusServiceUnavailable, ReasonConnectionAuditUnavailable, "")
+				return
+			}
+			terminal = true
+			writeReason(writer, http.StatusServiceUnavailable, ReasonCaptureEnvironmentUnavailable, "")
+			return
+		}
+		defer connectionLease.Close()
+		binding := connectionLease.Binding()
+		if binding.Mode == environment.ConnectionModeBlind {
+			terminal = handler.serveCleartextForward(
+				writer,
+				request,
+				active,
+				audit,
+				source,
+				outcome.RuleID,
+			)
+			return
+		}
+		snapshot := connectionLease.Environment()
+		endpoint, exists := snapshot.LookupCompiledClientOrigin(binding.ClientOrigin)
+		if !exists || endpoint.ID() != binding.ClientEndpointID {
+			writeReason(writer, http.StatusMisdirectedRequest, ReasonEnvironmentChanged, "")
+			return
+		}
+		if err := audit.Decide(request.Context(), connectionevent.DecisionEvidence{
+			Source: source, Decision: connectionevent.DecisionAllow,
+			RuleID: outcome.RuleID, RouteHost: providerOrigin.Host(),
+			EnvironmentID: snapshot.ID(), EnvironmentName: snapshot.Name(),
+			EnvironmentRevision: snapshot.Revision(),
+			ClientEndpointID:    endpoint.ID(), ClientEndpointRevision: endpoint.Revision(),
+			EgressScope:          connectionevent.EgressScopeEnvironment,
+			EgressSource:         connectionevent.EgressSourceEnvironmentDefault,
+			EgressPolicyRevision: uint64(snapshot.Revision()),
+			Decryption:           connectionevent.DecryptionCleartext,
+		}); err != nil {
+			writeReason(writer, http.StatusServiceUnavailable, ReasonConnectionAuditUnavailable, "")
+			return
+		}
+		if err := audit.Connected(request.Context(), connectionevent.ConnectedEvidence{
+			RouteHost: providerOrigin.Host(),
+		}); err != nil {
+			writeReason(writer, http.StatusServiceUnavailable, ReasonConnectionAuditUnavailable, "")
+			return
+		}
+		handler.serveInner(
+			writer, request, admission, capture, connectionLease,
+			transportprofile.Observation{}, audit,
+		)
+		handler.finishConnectionAudit(audit, connectionevent.TerminalEvidence{
+			Outcome: connectionevent.OutcomeCompleted,
+		})
+		terminal = true
 		return
 	}
 	origin, host, err := connectOrigin(request.Host)
@@ -518,41 +551,84 @@ func (handler *Handler) ServeHTTP(
 		writeReason(writer, http.StatusBadRequest, ReasonConnectAuthorityInvalid, "")
 		return
 	}
-	binding, err := handler.ingress.ResolveClientOrigin(origin)
+	providerOrigin, err := originidentity.ParseProviderOrigin(origin.String())
 	if err != nil {
-		// An authority that is not an enabled AgentEndpoint is forwarded
-		// without decryption. The launcher exports the proxy to the whole
-		// child process tree, so refusing these would refuse every package
-		// install, update check, and MCP server an Agent touches.
+		writeReason(writer, http.StatusBadRequest, ReasonConnectAuthorityInvalid, "")
+		return
+	}
+	connectionLease, err := handler.assignments.RegisterProviderConnection(
+		request.Context(), capture, audit.ID(), providerOrigin,
+	)
+	if err != nil {
+		if handler.denyConnection(request.Context(), audit, source, ReasonCaptureEnvironmentUnavailable) != nil {
+			writeReason(writer, http.StatusServiceUnavailable, ReasonConnectionAuditUnavailable, "")
+			return
+		}
+		terminal = true
+		writeReason(writer, http.StatusServiceUnavailable, ReasonCaptureEnvironmentUnavailable, "")
+		return
+	}
+	defer connectionLease.Close()
+	snapshot := connectionLease.Environment()
+	binding := connectionLease.Binding()
+	bypassPolicy := snapshot.SystemOwned() && snapshot.ID() == environment.SystemTransparentID
+	policyHost, policyPort := policyTarget(request, false)
+	outcome, denialReason := handler.decideConnection(
+		request.Context(), source.IngressID, policyHost, policyPort, bypassPolicy,
+	)
+	if outcome.Decision != connectionpolicy.DecisionAllow {
+		if handler.denyConnection(request.Context(), audit, source, denialReason) != nil {
+			writeReason(writer, http.StatusServiceUnavailable, ReasonConnectionAuditUnavailable, "")
+			return
+		}
+		terminal = true
+		writeReason(writer, http.StatusForbidden, ReasonConnectionDenied, outcome.RuleID)
+		return
+	}
+	if binding.Mode == environment.ConnectionModeBlind {
+		// The selected Environment does not intercept this exact origin. The
+		// connection remains attributed to that Environment but is forwarded
+		// without TLS termination or payload inspection.
 		terminal = handler.serveBlindTunnel(
 			writer,
 			request,
 			active,
 			audit,
 			source,
-			outcome.RuleID,
+			outcome,
 			request.Host,
 			host,
 			port,
+			snapshot,
 		)
+		return
+	}
+	endpoint, exists := snapshot.LookupCompiledClientOrigin(binding.ClientOrigin)
+	if !exists || endpoint.ID() != binding.ClientEndpointID {
+		if handler.denyConnection(request.Context(), audit, source, ReasonEnvironmentChanged) == nil {
+			terminal = true
+			writeReason(writer, http.StatusMisdirectedRequest, ReasonEnvironmentChanged, "")
+			return
+		}
+		writeReason(writer, http.StatusServiceUnavailable, ReasonConnectionAuditUnavailable, "")
 		return
 	}
 	if err := audit.Decide(
 		request.Context(),
 		connectionevent.DecisionEvidence{
-			Source:                source,
-			Decision:              connectionevent.DecisionAllow,
-			RuleID:                outcome.RuleID,
-			RouteHost:             origin.TLSServerName(),
-			AccessID:              binding.AccessID().String(),
-			AccessName:            binding.AccessName(),
-			AccessRevision:        uint64(binding.AccessRevision()),
-			AgentEndpointID:       binding.AgentEndpointID().String(),
-			AgentEndpointRevision: uint64(binding.AgentEndpointRevision()),
-			EgressScope:           connectionevent.EgressScopeAccess,
-			EgressSource:          connectionevent.EgressSourceAccessDefault,
-			EgressPolicyRevision:  uint64(binding.AccessRevision()),
-			Decryption:            connectionevent.DecryptionMITM,
+			Source:                 source,
+			Decision:               connectionevent.DecisionAllow,
+			RuleID:                 outcome.RuleID,
+			RouteHost:              origin.Host(),
+			EnvironmentID:          snapshot.ID(),
+			EnvironmentName:        snapshot.Name(),
+			EnvironmentRevision:    snapshot.Revision(),
+			ClientEndpointID:       endpoint.ID(),
+			ClientEndpointRevision: endpoint.Revision(),
+			EgressScope:            connectionevent.EgressScopeEnvironment,
+			EgressSource:           connectionevent.EgressSourceEnvironmentDefault,
+			EgressPolicyRevision:   uint64(snapshot.Revision()),
+			Decryption:             connectionevent.DecryptionMITM,
 		},
 	); err != nil {
 		writeReason(
@@ -588,7 +664,8 @@ func (handler *Handler) ServeHTTP(
 		counted,
 		host,
 		admission,
-		binding,
+		capture,
+		connectionLease,
 		audit,
 	); err != nil {
 		terminalEvidence.Outcome, terminalEvidence.ErrorClass =
@@ -604,9 +681,14 @@ func (handler *Handler) serveTLS(
 	connection net.Conn,
 	expectedHost string,
 	admission captureadmission.Admission,
-	binding access.IngressBinding,
+	capture captureidentity.Reference,
+	connectionLease *captureassignment.ConnectionLease,
 	audit *connectionevent.Connection,
 ) error {
+	if connectionLease == nil {
+		return errors.New(string(ReasonCaptureEnvironmentUnavailable))
+	}
+	binding := connectionLease.Binding()
 	handshakeContext, cancel := context.WithTimeout(parent, handler.handshake)
 	defer cancel()
 	observation, replay, err := transportprofile.CaptureClientHello(
@@ -617,12 +699,9 @@ func (handler *Handler) serveTLS(
 	if err != nil {
 		return err
 	}
-	protocols, err := handler.ingress.ResolveDownstreamProtocols(binding)
-	if err != nil {
-		return errors.Join(
-			errors.New(string(ReasonApplicationProtocolUnavailable)),
-			err,
-		)
+	protocols := []wireprofile.ApplicationProtocol{
+		wireprofile.ApplicationProtocolHTTP2,
+		wireprofile.ApplicationProtocolHTTP1,
 	}
 	nextProtos, err := downstreamNextProtos(protocols, observation.OfferedALPN())
 	if err != nil {
@@ -647,9 +726,9 @@ func (handler *Handler) serveTLS(
 					err,
 				)
 			}
-			intent, err := access.NewLeafIssuanceIntent(
+			leafAdmission, err := connectionLease.AdmitLeaf(
+				hello.Context(),
 				handler.certificates.Identity().Revision(),
-				binding,
 				san,
 				certidentity.LeafKeyAlgorithmECDSAP256,
 			)
@@ -659,16 +738,9 @@ func (handler *Handler) serveTLS(
 					err,
 				)
 			}
-			admission, err := handler.ingress.AdmitLeaf(intent)
-			if err != nil {
-				return nil, errors.Join(
-					errors.New(string(ReasonMITMUnavailable)),
-					err,
-				)
-			}
 			certificate, err := handler.certificates.Issue(
 				hello.Context(),
-				admission,
+				leafAdmission,
 			)
 			if err != nil {
 				return nil, errors.Join(
@@ -694,7 +766,7 @@ func (handler *Handler) serveTLS(
 		parent,
 		connectionevent.ConnectedEvidence{
 			ObservedSNI: observedSNI,
-			RouteHost:   binding.ClientOrigin().TLSServerName(),
+			RouteHost:   binding.ProviderOrigin.Host(),
 		},
 	); err != nil {
 		return fmt.Errorf("record connected ConnectionEvent: %w", err)
@@ -711,7 +783,8 @@ func (handler *Handler) serveTLS(
 				writer,
 				request,
 				admission,
-				binding,
+				capture,
+				connectionLease,
 				observation,
 				audit,
 			)
@@ -733,7 +806,7 @@ func (handler *Handler) serveTLS(
 		WriteByteTimeout:             handler.handshake,
 	}
 	if connectionState.NegotiatedProtocol ==
-		string(access.ApplicationProtocolHTTP2) {
+		string(wireprofile.ApplicationProtocolHTTP2) {
 		h2Server.ServeConn(secured, &http2.ServeConnOpts{
 			Context:    parent,
 			BaseConfig: inner,
@@ -752,15 +825,22 @@ func (handler *Handler) serveInner(
 	writer http.ResponseWriter,
 	request *http.Request,
 	admission captureadmission.Admission,
-	binding access.IngressBinding,
+	capture captureidentity.Reference,
+	connectionLease *captureassignment.ConnectionLease,
 	observation transportprofile.Observation,
 	audit *connectionevent.Connection,
 ) {
-	if request == nil ||
-		request.URL == nil ||
-		request.URL.IsAbs() ||
-		request.TLS == nil ||
-		!authorityMatches(request.Host, binding.ClientOrigin()) {
+	if connectionLease == nil {
+		writeReason(writer, http.StatusServiceUnavailable, ReasonCaptureEnvironmentUnavailable, "")
+		return
+	}
+	binding := connectionLease.Binding()
+	secureRequest := request != nil && request.URL != nil &&
+		!request.URL.IsAbs() && request.TLS != nil
+	cleartextRequest := request != nil && request.URL != nil &&
+		request.URL.IsAbs() && request.TLS == nil && request.URL.Scheme == "http"
+	if (!secureRequest && !cleartextRequest) ||
+		!authorityMatches(request.Host, binding.ProviderOrigin) {
 		writeReason(
 			writer,
 			http.StatusMisdirectedRequest,
@@ -769,73 +849,77 @@ func (handler *Handler) serveInner(
 		)
 		return
 	}
-	requestLease, err := handler.accessRequests.AdmitRequest(
-		request.Context(),
-		binding,
-	)
-	if err != nil {
-		writer.Header().Set("Connection", "close")
-		writeReason(
-			writer,
-			http.StatusMisdirectedRequest,
-			ReasonAgentEndpointChanged,
-			"",
-		)
-		return
-	}
-	defer requestLease.Release()
-	currentBinding, err := handler.ingress.ResolveClientOrigin(
-		binding.ClientOrigin(),
-	)
-	if err != nil || binding.ValidateCurrent(currentBinding) != nil {
-		writer.Header().Set("Connection", "close")
-		writeReason(
-			writer,
-			http.StatusMisdirectedRequest,
-			ReasonAgentEndpointChanged,
-			"",
-		)
-		return
-	}
 	request.Header.Del("Proxy-Authorization")
 	request.Header.Del("Proxy-Connection")
-	capability, err := handler.paths.Classify(
-		binding.ClientDialect(),
-		request.Method,
-		request.URL.Path,
-		request.URL.RawPath,
-		request.URL.RawQuery,
-	)
+	if handler.rawEvidence != nil {
+		scopeKind, scopeID, err := rawEvidenceScope(capture)
+		if err != nil {
+			handler.reportRawEvidenceFailure(fmt.Errorf(
+				"resolve Raw evidence scope: %w", err,
+			))
+		} else {
+			scopeLease, beginErr := handler.rawEvidence.BeginScope(
+				request.Context(), scopeKind, scopeID,
+			)
+			if beginErr != nil {
+				handler.reportRawEvidenceFailure(fmt.Errorf(
+					"begin Raw evidence scope: %w", beginErr,
+				))
+			} else {
+				defer scopeLease.Release()
+			}
+		}
+	}
+	clientProtocol, err := downstreamProtocolOf(request)
 	if err != nil {
-		writeReason(
-			writer,
-			http.StatusUnprocessableEntity,
-			ReasonPathUnsupported,
-			string(pathcapability.ReasonOf(err)),
-		)
+		writeReason(writer, http.StatusBadRequest, ReasonRequestBodyInvalid, "")
 		return
 	}
-	if capability.Kind() == pathcapability.KindUnsupported {
-		if capability.Transport() ==
-			access.ClientOperationTransportWebSocket &&
-			isWebSocketUpgrade(request) &&
-			admission.Supports(
-				clientadapter.FeatureResponsesWebSocketHTTPFallback,
-			) {
-			writeReason(
-				writer,
-				http.StatusUpgradeRequired,
-				ReasonResponsesWebSocketUnsupported,
-				"",
-			)
+	transport := protocolspec.ClientOperationTransportHTTP
+	if isWebSocketUpgrade(request) {
+		transport = protocolspec.ClientOperationTransportWebSocket
+	}
+	requestLease, err := handler.assignments.BeginRequest(
+		request.Context(), capture, audit.ID(), environment.RequestFacts{
+			Target: protocolspec.RequestTarget{
+				Method: request.Method, Path: request.URL.Path,
+				RawPath: request.URL.RawPath, RawQuery: request.URL.RawQuery,
+				Transport: transport,
+			},
+			DownstreamProtocol: clientProtocol,
+		},
+	)
+	if err != nil {
+		if errors.Is(err, captureassignment.ErrConnectionNotFound) ||
+			errors.Is(err, captureassignment.ErrOperationInProgress) ||
+			errors.Is(err, environment.ErrInvalidEnvironment) {
+			writer.Header().Set("Connection", "close")
+			writeReason(writer, http.StatusMisdirectedRequest, ReasonEnvironmentChanged, "")
 			return
 		}
 		writeReason(
 			writer,
 			http.StatusUnprocessableEntity,
 			ReasonPathUnsupported,
-			"",
+			protocolReasonCode(err),
 		)
+		return
+	}
+	defer requestLease.Release()
+	plan := requestLease.Plan()
+	operation := plan.Operation()
+	clientDialect := plan.ProtocolPlan().ClientDialect()
+	if operation.Kind() == protocolspec.ClientOperationUnsupported {
+		// Unsupported WebSocket operations are an operation-catalog fact, not a
+		// property of one frozen client build. Returning the bounded upgrade
+		// response only after the exact operation matched keeps unknown paths
+		// fail-closed while allowing signed, newer Codex releases to use their
+		// HTTPS transport without teaching the proxy every release digest.
+		if operation.Transport() == protocolspec.ClientOperationTransportWebSocket {
+			writeReason(writer, http.StatusUpgradeRequired, ReasonResponsesWebSocketUnsupported, "")
+			return
+		}
+		writeReason(writer, http.StatusUnprocessableEntity, ReasonPathUnsupported, "")
 		return
 	}
 	// An upgrade the proxy cannot serve is refused explicitly. Answering it as
@@ -843,11 +927,11 @@ func (handler *Handler) serveInner(
 	// proxy never spoke, which it discovers only once it starts sending
 	// frames.
 	if isWebSocketUpgrade(request) &&
-		capability.Transport() != access.ClientOperationTransportWebSocket {
-		drainBounded(request.Body, capability.MaxBodyBytes())
+		operation.Transport() != protocolspec.ClientOperationTransportWebSocket {
+		drainBounded(request.Body, operation.MaxBodyBytes())
 		writeDialectReason(
 			writer,
-			binding.ClientDialect(),
+			clientDialect,
 			http.StatusUpgradeRequired,
 			ReasonUnsupportedUpgrade,
 		)
@@ -856,17 +940,17 @@ func (handler *Handler) serveInner(
 	// Admission is decided from the frozen payload class before any body is
 	// read, so a request whose typed handling plan does not exist cannot place
 	// client payload in a buffer that outlives this decision.
-	if !admitsLocalDispatch(capability, request) {
-		drainBounded(request.Body, capability.MaxBodyBytes())
+	if !admitsLocalDispatch(operation, request) {
+		drainBounded(request.Body, operation.MaxBodyBytes())
 		writeDialectReason(
 			writer,
-			binding.ClientDialect(),
+			clientDialect,
 			http.StatusUnprocessableEntity,
-			ReasonProfileOperationUnsupported,
+			ReasonEnvironmentOperationUnsupported,
 		)
 		return
 	}
-	body, err := readBounded(request.Body, capability.MaxBodyBytes())
+	body, err := readBounded(request.Body, operation.MaxBodyBytes())
 	if err != nil {
 		writeReason(writer, http.StatusRequestEntityTooLarge, ReasonRequestBodyInvalid, "")
 		return
@@ -876,41 +960,54 @@ func (handler *Handler) serveInner(
 		writeReason(writer, http.StatusServiceUnavailable, ReasonProxyStopping, "")
 		return
 	}
-	switch capability.Kind() {
-	case pathcapability.KindSemantic:
+	switch operation.Kind() {
+	case protocolspec.ClientOperationSemantic:
 		handler.serveSemantic(
 			writer,
 			request,
 			admission,
-			binding,
-			capability,
+			plan,
 			exchangeID,
 			body,
 			observation,
 			audit,
 		)
-	case pathcapability.KindAuxiliary:
+	case protocolspec.ClientOperationAuxiliary:
 		handler.serveAgentProbe(
 			writer,
 			request,
-			binding,
-			capability,
+			plan,
 			audit.ID(),
 			exchangeID,
 			body,
 		)
-	case pathcapability.KindOpaque:
+	case protocolspec.ClientOperationOpaque:
 		handler.serveOriginal(
 			writer,
 			request,
-			binding,
-			capability,
+			plan,
 			audit.ID(),
 			exchangeID,
 			body,
 		)
 	default:
 		writeReason(writer, http.StatusUnprocessableEntity, ReasonPathUnsupported, "")
+	}
+}
+
+func rawEvidenceScope(
+	capture captureidentity.Reference,
+) (rawevidence.ScopeKind, string, error) {
+	if err := capture.Validate(); err != nil {
+		return "", "", err
+	}
+	switch capture.Kind {
+	case captureidentity.KindManagedRun:
+		return rawevidence.ScopeManagedRun, capture.ID, nil
+	case captureidentity.KindManualCapture:
+		return rawevidence.ScopeManualCapture, capture.ID, nil
+	default:
+		return "", "", captureidentity.ErrInvalidReference
 	}
 }
 
@@ -936,16 +1033,16 @@ func (handler *Handler) serveSemantic(
 	writer http.ResponseWriter,
 	request *http.Request,
 	admission captureadmission.Admission,
-	binding access.IngressBinding,
-	capability pathcapability.Capability,
+	plan environment.RequestPlan,
 	exchangeID string,
 	body []byte,
 	observation transportprofile.Observation,
 	audit *connectionevent.Connection,
 ) {
+	operationPlan := plan.Operation()
 	operation, err := exchange.NewClientOperationEvidence(
-		capability.OperationID(),
-		capability.Revision(),
+		operationPlan.ID(),
+		operationPlan.Revision(),
 		request.Method,
 		request.URL.Path,
 		request.URL.RawQuery,
@@ -954,19 +1051,28 @@ func (handler *Handler) serveSemantic(
 		writeReason(writer, http.StatusBadRequest, ReasonRequestBodyInvalid, "")
 		return
 	}
-	clientProtocol := access.ApplicationProtocolHTTP1
-	if request.ProtoMajor == 2 {
-		clientProtocol = access.ApplicationProtocolHTTP2
-	} else if request.ProtoMajor != 1 {
+	clientProtocol, err := downstreamProtocolOf(request)
+	if err != nil {
 		writeReason(writer, http.StatusBadRequest, ReasonRequestBodyInvalid, "")
 		return
 	}
 	requestOptions := []exchange.ClientRequestOption{
-		exchange.WithClientHelloObservation(observation),
 		exchange.WithOriginalHeaders(request.Header),
 		// Every identity is generated independently; association travels as
 		// typed references rather than as a delimiter-joined string.
 		exchange.WithIngressCorrelation(admission, audit.ID()),
+	}
+	if observation.Available() {
+		requestOptions = append(
+			requestOptions,
+			exchange.WithClientHelloObservation(observation),
+		)
+	}
+	if evidence := clientProtocolEvidenceFromHeaders(request.Header); len(evidence) != 0 {
+		requestOptions = append(
+			requestOptions,
+			exchange.WithClientProtocolEvidence(evidence),
+		)
 	}
 	if beta := strings.Join(request.Header.Values("Anthropic-Beta"), ","); beta != "" {
 		requestOptions = append(
@@ -987,10 +1093,10 @@ func (handler *Handler) serveSemantic(
 	}
 	clientRequest, err := exchange.NewClientRequest(
 		exchangeID,
-		binding,
+		plan,
 		operation,
 		body,
-		capability.ReplayClass(),
+		replayClassOf(operationPlan.ReplayClass()),
 		clientProtocol,
 		requestOptions...,
 	)
@@ -998,7 +1104,61 @@ func (handler *Handler) serveSemantic(
 		writeReason(writer, http.StatusBadRequest, ReasonRequestBodyInvalid, "")
 		return
 	}
-	downstream := newHTTPDownstream(writer)
+	rawContext, rawContextErr := clientRequest.RawEvidenceContext()
+	if rawContextErr != nil {
+		handler.reportRawEvidenceFailure(fmt.Errorf(
+			"construct client Raw evidence context: %w", rawContextErr,
+		))
+		rawContext = rawevidence.Context{Recording: rawevidence.RecordingOff}
+	}
+	rawEnabled := handler.rawEvidence != nil &&
+		rawContext.Recording != rawevidence.RecordingOff
+	if rawEnabled {
+		retained, complete, reason := retainedRawBody(
+			body,
+			rawContext.Recording,
+			handler.rawBodyBytes,
+			"request_payload_limit",
+		)
+		if _, err := handler.observeRaw(request.Context(), rawevidence.Observation{
+			Context:             rawContext,
+			Layer:               rawevidence.LayerClientIngress,
+			Method:              request.Method,
+			Scheme:              requestScheme(request),
+			Authority:           request.Host,
+			Path:                request.URL.EscapedPath(),
+			RawQuery:            request.URL.RawQuery,
+			Headers:             request.Header.Clone(),
+			Body:                retained,
+			TotalBodyBytes:      int64(len(body)),
+			BodySHA256:          sha256.Sum256(body),
+			DigestAvailable:     true,
+			FullDigestAvailable: true,
+			Complete:            complete,
+			IncompleteReason:    reason,
+			Representation:      "http_message",
+			ContentType:         request.Header.Get("Content-Type"),
+			ContentEncoding:     request.Header.Get("Content-Encoding"),
+		}); err != nil {
+			handler.reportRawEvidenceFailure(fmt.Errorf(
+				"record client ingress Raw evidence: %w", err,
+			))
+			// Do not make a second best-effort write for this response when the
+			// ingress writer is already degraded. Semantic traffic and the core
+			// Activity/Egress audit remain authoritative and continue normally.
+			rawContext = rawevidence.Context{Recording: rawevidence.RecordingOff}
+		}
+	}
+	downstream := newHTTPDownstream(writer, httpDownstreamOptions{
+		Observer:         handler.rawEvidence,
+		ObservationLimit: handler.rawTimeout,
+		MaximumBodyBytes: handler.rawBodyBytes,
+		Context:          rawContext,
+		Scheme:           requestScheme(request),
+		Authority:        request.Host,
+		Path:             request.URL.EscapedPath(),
+		RawQuery:         request.URL.RawQuery,
+	})
 	_, err = handler.exchanges.Execute(
 		request.Context(),
 		clientRequest,
@@ -1009,7 +1169,92 @@ func (handler *Handler) serveSemantic(
 	// connection would leave only the last request's answer on a persistent
 	// connection carrying several.
 	if err != nil && !downstream.Begun() {
-		writeExchangeFailure(writer, binding.ClientDialect(), err)
+		if writeErr := writeExchangeFailureDownstream(
+			request.Context(),
+			downstream,
+			plan.ProtocolPlan().ClientDialect(),
+			err,
+		); writeErr != nil {
+			if !downstream.Begun() {
+				writeExchangeFailure(writer, plan.ProtocolPlan().ClientDialect(), err)
+			}
+		}
+	}
+	if finalizeErr := downstream.Finalize(); finalizeErr != nil {
+		handler.reportRawEvidenceFailure(fmt.Errorf(
+			"record client downstream raw evidence: %w",
+			finalizeErr,
+		))
+	}
+}
+
+// clientProtocolEvidenceFromHeaders extracts only documented, non-secret
+// client-native identity headers. Duplicate or malformed optional values are
+// omitted instead of rejecting transparent forwarding; Raw HTTP still retains
+// the exact wire envelope for operator inspection.
+func clientProtocolEvidenceFromHeaders(
+	headers http.Header,
+) []protocolcore.ProtocolEvidenceValue {
+	specs := [...]struct {
+		header string
+		name   string
+	}{
+		{header: "X-Claude-Code-Agent-Id", name: "claude.agent_id"},
+		{header: "X-Claude-Code-Parent-Agent-Id", name: "claude.parent_agent_id"},
+		{header: "X-Claude-Code-Session-Id", name: "claude.session_id"},
+	}
+	values := make([]protocolcore.ProtocolEvidenceValue, 0, len(specs))
+	for _, spec := range specs {
+		raw := headers.Values(spec.header)
+		if len(raw) != 1 || raw[0] == "" || strings.TrimSpace(raw[0]) != raw[0] {
+			continue
+		}
+		value := protocolcore.ProtocolEvidenceValue{Name: spec.name, Value: raw[0]}
+		if value.Validate() != nil {
+			continue
+		}
+		values = append(values, value)
+	}
+	return values
+}
+
+func retainedRawBody(
+	body []byte,
+	mode rawevidence.RecordingMode,
+	maximum int,
+	reason string,
+) ([]byte, bool, string) {
+	if mode != rawevidence.RecordingFull {
+		if len(body) == 0 {
+			return nil, true, ""
+		}
+		return nil, false, "recording_metadata_only"
+	}
+	if len(body) <= maximum {
+		return body, true, ""
+	}
+	return body[:maximum], false, reason
+}
+
+func (handler *Handler) observeRaw(
+	ctx context.Context,
+	observation rawevidence.Observation,
+) (rawevidence.Watermark, error) {
+	operation, cancel := context.WithTimeout(
+		context.WithoutCancel(ctx),
+		handler.rawTimeout,
+	)
+	defer cancel()
+	return handler.rawEvidence.Observe(operation, observation)
+}
+
+func (handler *Handler) reportRawEvidenceFailure(err error) {
+	if err == nil {
+		return
+	}
+	reporter, ok := handler.egressAudit.(rawEvidenceFailureReporter)
+	if ok {
+		reporter.ReportRawEvidenceFailure(err)
 	}
 }
 
@@ -1028,6 +1273,31 @@ func (handler *Handler) rules() connectionpolicy.RuleSet {
 	return handler.policy.Current()
 }
 
+func (handler *Handler) decideConnection(
+	ctx context.Context,
+	ingressID string,
+	host string,
+	port uint16,
+	bypass bool,
+) (connectionpolicy.Outcome, ReasonCode) {
+	outcome := connectionpolicy.Outcome{
+		Decision: connectionpolicy.DecisionAllow,
+		RuleID:   systemTransparentRuleID,
+	}
+	if !bypass {
+		outcome = handler.rules().Evaluate(connectionpolicy.Request{Host: host, Port: port})
+	}
+	reason := ReasonCode(outcome.RuleID)
+	if outcome.Decision != connectionpolicy.DecisionAsk {
+		return outcome, reason
+	}
+	resolution := handler.resolveAsk(ctx, outcome, ingressID, host, port)
+	if resolution.reason != "" {
+		reason = resolution.reason
+	}
+	return resolution.outcome, reason
+}
+
 func connectionSource(admission captureadmission.Admission) connectionevent.Source {
 	confidence := connectionevent.SourceConfidenceUnknown
 	switch admission.AttributionConfidence() {
@@ -1037,7 +1307,7 @@ func connectionSource(admission captureadmission.Admission) connectionevent.Sour
 		confidence = connectionevent.SourceConfidenceConfigured
 	}
 	return connectionevent.Source{
-		IngressID:  admission.IngressProfileID(),
+		IngressID:  admission.AdmissionRef(),
 		Label:      admission.SourceLabel(),
 		Confidence: confidence,
 	}
@@ -1096,18 +1366,18 @@ func connectionTerminalOf(err error) (connectionevent.Outcome, string) {
 }
 
 func downstreamNextProtos(
-	protocols []access.ApplicationProtocol,
+	protocols []wireprofile.ApplicationProtocol,
 	offered []string,
 ) ([]string, error) {
 	if len(protocols) == 0 || len(protocols) > 2 {
 		return nil, errors.New(string(ReasonApplicationProtocolUnavailable))
 	}
-	seen := make(map[access.ApplicationProtocol]struct{}, len(protocols))
+	seen := make(map[wireprofile.ApplicationProtocol]struct{}, len(protocols))
 	next := make([]string, 0, len(protocols))
 	compatible := false
 	for _, protocol := range protocols {
-		if protocol != access.ApplicationProtocolHTTP1 &&
-			protocol != access.ApplicationProtocolHTTP2 {
+		if protocol != wireprofile.ApplicationProtocolHTTP1 &&
+			protocol != wireprofile.ApplicationProtocolHTTP2 {
 			return nil, errors.New(string(ReasonApplicationProtocolUnavailable))
 		}
 		if _, duplicate := seen[protocol]; duplicate {
@@ -1115,9 +1385,9 @@ func downstreamNextProtos(
 		}
 		seen[protocol] = struct{}{}
 		next = append(next, string(protocol))
-		if len(offered) == 0 && protocol == access.ApplicationProtocolHTTP1 {
+		if len(offered) == 0 && protocol == wireprofile.ApplicationProtocolHTTP1 {
 			// A TLS client that omits ALPN is an HTTP/1.1 client. It cannot
-			// satisfy an H2-only Access plan merely because no token was sent.
+			// satisfy an H2-only Environment plan merely because no token was sent.
 			compatible = true
 		}
 		for _, candidate := range offered {
@@ -1130,6 +1400,52 @@ func downstreamNextProtos(
 		return nil, errors.New(string(ReasonApplicationProtocolUnavailable))
 	}
 	return next, nil
+}
+
+func downstreamProtocolOf(request *http.Request) (wireprofile.ApplicationProtocol, error) {
+	if request == nil {
+		return "", errors.New(string(ReasonApplicationProtocolUnavailable))
+	}
+	switch request.ProtoMajor {
+	case 1:
+		return wireprofile.ApplicationProtocolHTTP1, nil
+	case 2:
+		return wireprofile.ApplicationProtocolHTTP2, nil
+	default:
+		return "", errors.New(string(ReasonApplicationProtocolUnavailable))
+	}
+}
+
+func replayClassOf(class protocolspec.ClientReplayClass) exchange.ReplayClass {
+	switch class {
+	case protocolspec.ClientReplaySafe:
+		return exchange.ReplaySafe
+	case protocolspec.ClientReplayIdempotencyKeyed:
+		return exchange.ReplayIdempotencyKeyed
+	case protocolspec.ClientReplayGenerationCostOnly:
+		return exchange.ReplayGenerationCostOnly
+	case protocolspec.ClientReplaySideEffectPossible:
+		return exchange.ReplaySideEffectPossible
+	case protocolspec.ClientReplayNonReplayable:
+		return exchange.ReplayNonReplayable
+	default:
+		return exchange.ReplayUnknown
+	}
+}
+
+func protocolReasonCode(err error) string {
+	switch {
+	case errors.Is(err, protocolspec.ErrInvalidRequestTarget):
+		return "invalid_request_target"
+	case errors.Is(err, protocolspec.ErrOperationContractMismatch):
+		return "operation_contract_mismatch"
+	case errors.Is(err, protocolspec.ErrAmbiguousOperation):
+		return "ambiguous_operation"
+	case errors.Is(err, protocolspec.ErrOperationNotCatalogued):
+		return "operation_not_catalogued"
+	default:
+		return "environment_request_unavailable"
+	}
 }
 
 type countingConnection struct {
@@ -1156,25 +1472,17 @@ func (connection *countingConnection) Write(source []byte) (int, error) {
 
 // admitsLocalDispatch decides whether a classified request may continue to its
 // dispatch arm. Semantic operations enter the model pipeline and are governed
-// by the frozen Access plan. Every other arm forwards to the inbound origin
+// by the frozen Environment plan. Every other arm forwards to the inbound origin
 // with the client's own credentials, so it requires a payload class that
 // proves no client payload travels.
 func admitsLocalDispatch(
-	capability pathcapability.Capability,
+	operation protocolspec.ClientOperationDefinition,
 	request *http.Request,
 ) bool {
-	if capability.Kind() == pathcapability.KindSemantic {
+	if operation.Kind() == protocolspec.ClientOperationSemantic {
 		return true
 	}
-	class := capability.PayloadClass()
-	if class.AllowsOriginalOrigin() {
-		return true
-	}
-	// An unclassified request without a body still reaches the inbound origin
-	// today. The connection-policy Goal replaces this with an explicit
-	// allow/deny/ask decision; until then the exception stays narrow and is
-	// never extended to a request that can carry a body.
-	return class == access.OperationPayloadUnknown && !carriesBody(request)
+	return operation.PayloadClass().AllowsOriginalOrigin() && !(operation.BodyKind() == protocolspec.ClientOperationBodyNone && carriesBody(request))
 }
 
 func carriesBody(request *http.Request) bool {
@@ -1197,27 +1505,27 @@ func carriesBody(request *http.Request) bool {
 func (handler *Handler) serveAgentProbe(
 	writer http.ResponseWriter,
 	request *http.Request,
-	binding access.IngressBinding,
-	capability pathcapability.Capability,
+	plan environment.RequestPlan,
 	connectionID string,
 	requestID string,
 	body []byte,
 ) {
-	if !admitsLocalDispatch(capability, request) {
+	operation := plan.Operation()
+	if !admitsLocalDispatch(operation, request) {
 		writeDialectReason(
 			writer,
-			binding.ClientDialect(),
+			plan.ProtocolPlan().ClientDialect(),
 			http.StatusUnprocessableEntity,
-			ReasonProfileOperationUnsupported,
+			ReasonEnvironmentOperationUnsupported,
 		)
 		return
 	}
 	handler.forwardToOriginalOrigin(
 		writer,
 		request,
-		binding,
+		plan,
 		offlinehold.EgressAuxiliary,
-		capability.PayloadClass(),
+		operation.PayloadClass(),
 		connectionID,
 		requestID,
 		body,
@@ -1227,27 +1535,27 @@ func (handler *Handler) serveAgentProbe(
 func (handler *Handler) serveOriginal(
 	writer http.ResponseWriter,
 	request *http.Request,
-	binding access.IngressBinding,
-	capability pathcapability.Capability,
+	plan environment.RequestPlan,
 	connectionID string,
 	requestID string,
 	body []byte,
 ) {
-	if !admitsLocalDispatch(capability, request) {
+	operation := plan.Operation()
+	if !admitsLocalDispatch(operation, request) {
 		writeDialectReason(
 			writer,
-			binding.ClientDialect(),
+			plan.ProtocolPlan().ClientDialect(),
 			http.StatusUnprocessableEntity,
-			ReasonProfileOperationUnsupported,
+			ReasonEnvironmentOperationUnsupported,
 		)
 		return
 	}
 	handler.forwardToOriginalOrigin(
 		writer,
 		request,
-		binding,
+		plan,
 		offlinehold.EgressOpaque,
-		capability.PayloadClass(),
+		operation.PayloadClass(),
 		connectionID,
 		requestID,
 		body,
@@ -1257,9 +1565,9 @@ func (handler *Handler) serveOriginal(
 func (handler *Handler) forwardToOriginalOrigin(
 	writer http.ResponseWriter,
 	request *http.Request,
-	binding access.IngressBinding,
+	plan environment.RequestPlan,
 	kind offlinehold.EgressKind,
-	payloadClass access.OperationPayloadClass,
+	payloadClass protocolspec.OperationPayloadClass,
 	connectionID string,
 	requestID string,
 	body []byte,
@@ -1276,13 +1584,14 @@ func (handler *Handler) forwardToOriginalOrigin(
 		ConnectionID: connectionID,
 		ParentID:     requestID,
 		Kind:         kind,
-		Origin:       binding.ClientOrigin(),
+		Origin:       plan.Endpoint().ClientOrigin(),
 		Method:       request.Method,
 		Path:         request.URL.Path,
 		RawQuery:     request.URL.RawQuery,
 		Headers:      request.Header,
 		Body:         body,
 		PayloadClass: payloadClass,
+		EgressPolicy: plan.EgressPolicy(),
 	})
 	if err != nil {
 		writeReason(writer, http.StatusBadRequest, ReasonRequestBodyInvalid, "")
@@ -1447,18 +1756,18 @@ func authorizeCaptureAdmission(
 	return admission, nil
 }
 
-func connectOrigin(authority string) (access.ClientOrigin, string, error) {
+func connectOrigin(authority string) (originidentity.ClientOrigin, string, error) {
 	host, port, err := splitAuthority(authority)
 	if err != nil {
-		return access.ClientOrigin{}, "", err
+		return originidentity.ClientOrigin{}, "", err
 	}
-	origin, err := access.NewClientOrigin(
+	origin, err := originidentity.ParseClientOrigin(
 		"https://" + net.JoinHostPort(host, strconv.Itoa(int(port))),
 	)
 	if err != nil {
-		return access.ClientOrigin{}, "", err
+		return originidentity.ClientOrigin{}, "", err
 	}
-	return origin, origin.TLSServerName(), nil
+	return origin, origin.Host(), nil
 }
 
 // splitAuthority canonicalizes rather than refuses. RFC 3986 makes a host
@@ -1495,14 +1804,21 @@ func canonicalCONNECTHost(host string) string {
 	return host
 }
 
-func authorityMatches(authority string, origin access.ClientOrigin) bool {
+func authorityMatches(authority string, origin originidentity.ProviderOrigin) bool {
 	host, port, err := splitAuthority(authority)
 	if err != nil {
 		// HTTP/1.1 Host may omit the default HTTPS port after MITM.
 		host = strings.ToLower(authority)
 		port = 443
 	}
-	return host == origin.TLSServerName() && port == origin.Port()
+	return host == origin.Host() && port == origin.Port()
+}
+
+func requestScheme(request *http.Request) string {
+	if request != nil && request.TLS != nil {
+		return "https"
+	}
+	return "http"
 }
 
 // sniMatches compares canonically: RFC 6066 server names are case-insensitive
@@ -1551,7 +1867,7 @@ func readBounded(reader io.Reader, limit int64) ([]byte, error) {
 		return nil, err
 	}
 	if int64(len(data)) > limit {
-		return nil, errors.New("request body exceeds PathCapability limit")
+		return nil, errors.New("request body exceeds frozen operation limit")
 	}
 	return data, nil
 }
@@ -1562,13 +1878,23 @@ func exchangeStatus(err error) int {
 		return http.StatusBadRequest
 	case exchange.ReasonUnsupportedClientInput:
 		return http.StatusUnprocessableEntity
+	case exchange.ReasonProviderStatusRejected:
+		// Keep the provider's retry signal intact. In particular, Anthropic uses
+		// 529 for overload; rewriting it to 502 changes SDK retry behavior and
+		// falsely attributes the failure to ViberMate. The response body remains
+		// the fixed, non-echoing dialect envelope written by
+		// writeExchangeFailure.
+		if status := exchange.ProviderStatusOf(err); status >= 400 && status <= 599 {
+			return status
+		}
+		return http.StatusBadGateway
 	case exchange.ReasonProviderCredentialUnavailable:
 		// The client reached the selected managed route, but that route cannot
 		// authenticate its provider attempt. Reporting a generic gateway failure
 		// asks SDKs to retry an operator configuration error and hides the action
 		// the user needs to take.
 		return http.StatusUnauthorized
-	case exchange.ReasonAccessPlanUnavailable,
+	case exchange.ReasonEnvironmentPlanInvalid,
 		exchange.ReasonExchangeRuntimeStopping,
 		exchange.ReasonToolDecisionUnavailable:
 		return http.StatusServiceUnavailable
@@ -1602,14 +1928,46 @@ func copyResponseHeaders(destination, source http.Header) {
 	}
 }
 
-type httpDownstream struct {
-	writer http.ResponseWriter
-	mode   exchange.ResponseMode
-	begun  bool
+type httpDownstreamOptions struct {
+	Observer         rawevidence.Observer
+	ObservationLimit time.Duration
+	MaximumBodyBytes int
+	Context          rawevidence.Context
+	Scheme           string
+	Authority        string
+	Path             string
+	RawQuery         string
 }
 
-func newHTTPDownstream(writer http.ResponseWriter) *httpDownstream {
-	return &httpDownstream{writer: writer}
+type httpDownstream struct {
+	writer  http.ResponseWriter
+	options httpDownstreamOptions
+	mode    exchange.ResponseMode
+	begun   bool
+	status  int
+	headers http.Header
+	hash    hash.Hash
+	body    []byte
+	total   int64
+	frames  []rawevidence.Frame
+	once    sync.Once
+	rawErr  error
+}
+
+func newHTTPDownstream(
+	writer http.ResponseWriter,
+	options httpDownstreamOptions,
+) *httpDownstream {
+	maximum := options.MaximumBodyBytes
+	if options.Context.Recording != rawevidence.RecordingFull {
+		maximum = 0
+	}
+	return &httpDownstream{
+		writer:  writer,
+		options: options,
+		hash:    sha256.New(),
+		body:    make([]byte, 0, min(maximum, 32<<10)),
+	}
 }
 
 func (downstream *httpDownstream) Begin(
@@ -1632,7 +1990,9 @@ func (downstream *httpDownstream) Begin(
 	}
 	downstream.mode = mode
 	downstream.begun = true
-	copyResponseHeaders(downstream.writer.Header(), envelope.Headers())
+	downstream.status = envelope.StatusCode()
+	downstream.headers = envelope.Headers()
+	copyResponseHeaders(downstream.writer.Header(), downstream.headers)
 	downstream.writer.WriteHeader(envelope.StatusCode())
 	if mode == exchange.ResponseModeEventStream {
 		if flusher, ok := downstream.writer.(http.Flusher); ok {
@@ -1646,6 +2006,14 @@ func (downstream *httpDownstream) Write(
 	ctx context.Context,
 	data []byte,
 ) (int, error) {
+	return downstream.write(ctx, data, rawevidence.FrameData)
+}
+
+func (downstream *httpDownstream) write(
+	ctx context.Context,
+	data []byte,
+	kind rawevidence.FrameKind,
+) (int, error) {
 	if err := ctx.Err(); err != nil {
 		return 0, err
 	}
@@ -1653,6 +2021,31 @@ func (downstream *httpDownstream) Write(
 		return 0, errors.New("downstream response did not begin")
 	}
 	count, err := downstream.writer.Write(data)
+	if count < 0 || count > len(data) {
+		return 0, fmt.Errorf(
+			"downstream response writer returned invalid byte count %d for %d bytes",
+			count,
+			len(data),
+		)
+	}
+	if count > 0 {
+		committed := data[:count]
+		_, _ = downstream.hash.Write(committed)
+		downstream.total += int64(count)
+		maximum := downstream.options.MaximumBodyBytes
+		if downstream.options.Context.Recording != rawevidence.RecordingFull {
+			maximum = 0
+		}
+		remaining := maximum - len(downstream.body)
+		if remaining > 0 {
+			retained := min(remaining, count)
+			offset := int64(len(downstream.body))
+			downstream.body = append(downstream.body, committed[:retained]...)
+			downstream.frames = append(downstream.frames, rawevidence.Frame{
+				Kind: kind, Offset: offset, Length: int64(retained),
+			})
+		}
+	}
 	if downstream.mode == exchange.ResponseModeEventStream {
 		if flusher, ok := downstream.writer.(http.Flusher); ok {
 			flusher.Flush()
@@ -1667,7 +2060,11 @@ func (downstream *httpDownstream) Keepalive(ctx context.Context) error {
 		return errors.New("only a begun event stream accepts a keepalive")
 	}
 	const wire = ": keepalive\n\n"
-	count, err := downstream.Write(ctx, []byte(wire))
+	count, err := downstream.write(
+		ctx,
+		[]byte(wire),
+		rawevidence.FrameKeepalive,
+	)
 	if err != nil {
 		return err
 	}
@@ -1712,7 +2109,7 @@ func (downstream *httpDownstream) Abort(
 	if err != nil {
 		return err
 	}
-	_, err = downstream.Write(ctx, encoded)
+	_, err = downstream.write(ctx, encoded, rawevidence.FrameAbort)
 	return err
 }
 
@@ -1720,8 +2117,58 @@ func (downstream *httpDownstream) Begun() bool {
 	return downstream.begun
 }
 
-// serveBlindTunnel forwards a connection whose authority is not an enabled
-// AgentEndpoint. It terminates no TLS, reads no request, and records only
+func (downstream *httpDownstream) Finalize() error {
+	downstream.once.Do(func() {
+		if downstream.options.Observer == nil ||
+			downstream.options.Context.Recording == rawevidence.RecordingOff ||
+			!downstream.begun {
+			return
+		}
+		var digest [sha256.Size]byte
+		copy(digest[:], downstream.hash.Sum(nil))
+		complete := downstream.total == int64(len(downstream.body))
+		reason := ""
+		if !complete {
+			reason = "response_payload_limit"
+			if downstream.options.Context.Recording == rawevidence.RecordingMetadataOnly {
+				reason = "recording_metadata_only"
+			}
+		}
+		operation, cancel := context.WithTimeout(
+			context.Background(),
+			downstream.options.ObservationLimit,
+		)
+		defer cancel()
+		_, downstream.rawErr = downstream.options.Observer.Observe(
+			operation,
+			rawevidence.Observation{
+				Context:             downstream.options.Context,
+				Layer:               rawevidence.LayerClientDownstream,
+				StatusCode:          downstream.status,
+				Scheme:              downstream.options.Scheme,
+				Authority:           downstream.options.Authority,
+				Path:                downstream.options.Path,
+				RawQuery:            downstream.options.RawQuery,
+				Headers:             downstream.headers.Clone(),
+				Body:                downstream.body,
+				TotalBodyBytes:      downstream.total,
+				BodySHA256:          digest,
+				DigestAvailable:     true,
+				FullDigestAvailable: true,
+				Frames:              downstream.frames,
+				Complete:            complete,
+				IncompleteReason:    reason,
+				Representation:      "http_message",
+				ContentType:         downstream.headers.Get("Content-Type"),
+				ContentEncoding:     downstream.headers.Get("Content-Encoding"),
+			},
+		)
+	})
+	return downstream.rawErr
+}
+
+// serveBlindTunnel forwards a connection the selected Environment does not
+// intercept. It terminates no TLS, reads no request, and records only
 // counts, so nothing it carries can reach a record. It reports whether the
 // connection audit already reached a terminal.
 func (handler *Handler) serveBlindTunnel(
@@ -1730,17 +2177,18 @@ func (handler *Handler) serveBlindTunnel(
 	active *operation,
 	audit *connectionevent.Connection,
 	source connectionevent.Source,
-	policyRuleID string,
+	policy connectionpolicy.Outcome,
 	authority string,
 	host string,
 	port uint16,
+	snapshot environment.EnvironmentSnapshot,
 ) bool {
 	if handler.blindTunnels == nil {
 		if handler.denyConnection(
 			request.Context(),
 			audit,
 			source,
-			ReasonAgentEndpointNotConfigured,
+			ReasonClientEndpointNotConfigured,
 		) != nil {
 			writeReason(
 				writer,
@@ -1753,22 +2201,26 @@ func (handler *Handler) serveBlindTunnel(
 		writeReason(
 			writer,
 			http.StatusForbidden,
-			ReasonAgentEndpointNotConfigured,
+			ReasonClientEndpointNotConfigured,
 			"",
 		)
 		return true
 	}
+	decision := connectionevent.DecisionEvidence{
+		Source: source, Decision: connectionevent.DecisionAllow,
+		RuleID: policy.RuleID, RouteHost: host,
+		EnvironmentID: snapshot.ID(), EnvironmentName: snapshot.Name(),
+		EnvironmentRevision: snapshot.Revision(),
+		Decryption:          connectionevent.DecryptionBlind,
+	}
+	if policy.Revision != 0 {
+		decision.EgressScope = connectionevent.EgressScopeNetwork
+		decision.EgressSource = connectionevent.EgressSourceNetworkDefault
+		decision.EgressPolicyRevision = policy.Revision
+	}
 	if err := audit.Decide(
 		request.Context(),
-		connectionevent.DecisionEvidence{
-			Source:   source,
-			Decision: connectionevent.DecisionAllow,
-			RuleID:   policyRuleID,
-			// A blind tunnel performs no route translation, so the client's
-			// requested authority is the actual destination.
-			RouteHost:  host,
-			Decryption: connectionevent.DecryptionBlind,
-		},
+		decision,
 	); err != nil {
 		writeReason(
 			writer,
@@ -2143,6 +2595,24 @@ func cleartextAuthority(hostPort string) (string, uint16, error) {
 		return "", 0, errors.New("cleartext authority is invalid")
 	}
 	return host, 80, nil
+}
+
+func cleartextProviderOrigin(value *url.URL) (originidentity.ProviderOrigin, error) {
+	if value == nil || value.Scheme != "http" {
+		return originidentity.ProviderOrigin{}, errors.New("cleartext origin is invalid")
+	}
+	host, port, err := cleartextAuthority(value.Host)
+	if err != nil {
+		return originidentity.ProviderOrigin{}, err
+	}
+	authority := host
+	if strings.Contains(host, ":") {
+		authority = "[" + host + "]"
+	}
+	if port != 80 {
+		authority = net.JoinHostPort(host, strconv.Itoa(int(port)))
+	}
+	return originidentity.ParseProviderOrigin("http://" + authority)
 }
 
 // forwardableHeaders removes proxy and hop-by-hop headers so the origin sees

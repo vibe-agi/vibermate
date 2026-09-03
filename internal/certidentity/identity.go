@@ -1,5 +1,5 @@
 // Package certidentity defines public certificate identity values shared by
-// Access authorization and the local certificate authority. It owns no key
+// Environment authorization and the local certificate authority. It owns no key
 // material and performs no signing or trust-store mutation.
 package certidentity
 

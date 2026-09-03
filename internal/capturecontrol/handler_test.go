@@ -8,19 +8,25 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"testing"
 	"time"
 
+	"github.com/vibe-agi/vibermate/internal/captureassignment"
 	"github.com/vibe-agi/vibermate/internal/capturecontrol"
 	"github.com/vibe-agi/vibermate/internal/capturegrant"
+	"github.com/vibe-agi/vibermate/internal/captureidentity"
 	"github.com/vibe-agi/vibermate/internal/capturerun"
 	"github.com/vibe-agi/vibermate/internal/clientadapter"
+	"github.com/vibe-agi/vibermate/internal/clienttarget"
 	"github.com/vibe-agi/vibermate/internal/controlprincipal"
+	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/localca"
 	"github.com/vibe-agi/vibermate/internal/manualcapture"
 	"github.com/vibe-agi/vibermate/internal/runtimepersistence"
@@ -33,6 +39,7 @@ func TestCaptureControlSeparatesControlAndPerRunCredentials(t *testing.T) {
 	fixture := newFixture(t)
 	defer fixture.Close(t)
 	create := capturecontrol.CreateRequest{
+		EnvironmentID:  testEnvironmentID,
 		CWD:            fixture.workspace,
 		Command:        []string{"claude", "--print", "private prompt"},
 		ExecutablePath: fixture.executable,
@@ -197,6 +204,115 @@ func TestCaptureControlSeparatesControlAndPerRunCredentials(t *testing.T) {
 	}
 }
 
+func TestCaptureControlUsesSystemCaptureDefaultAndRejectsInvalidEnvironment(t *testing.T) {
+	t.Parallel()
+
+	fixture := newFixture(t)
+	defer fixture.Close(t)
+	response := fixture.DoJSON(
+		t,
+		http.MethodPost,
+		"/api/v1/capture-runs",
+		fixture.controlCredential,
+		"",
+		capturecontrol.CreateRequest{
+			CWD: fixture.workspace, Command: []string{"claude"}, ExecutablePath: fixture.executable,
+		},
+	)
+	if response.Code != http.StatusCreated {
+		t.Fatalf("transparent fallback status=%d body=%s", response.Code, response.Body.Bytes())
+	}
+	var grant capturecontrol.LaunchGrant
+	decodeRecorder(t, response, &grant)
+	if grant.RootPEMPath == "" || !slices.Equal(grant.ProtectedAuthorities, []string{
+		"api.anthropic.com:443", "api.openai.com:443", "chatgpt.com:443",
+	}) ||
+		len(grant.ManagedCredentialAuthorities) != 0 {
+		t.Fatalf("system capture default authority = %+v", grant)
+	}
+
+	invalid := fixture.DoJSON(
+		t,
+		http.MethodPost,
+		"/api/v1/capture-runs",
+		fixture.controlCredential,
+		"",
+		capturecontrol.CreateRequest{
+			EnvironmentID: "Bad ID", CWD: fixture.workspace,
+			Command: []string{"claude"}, ExecutablePath: fixture.executable,
+		},
+	)
+	if invalid.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("invalid environment status=%d body=%s", invalid.Code, invalid.Body.Bytes())
+	}
+}
+
+func TestCaptureControlOmittedEnvironmentAlwaysCapturesOriginalDestination(t *testing.T) {
+	t.Parallel()
+	fixture := newFixture(t)
+	defer fixture.Close(t)
+	response := fixture.DoJSON(
+		t,
+		http.MethodPost,
+		"/api/v1/capture-runs",
+		fixture.controlCredential,
+		"",
+		capturecontrol.CreateRequest{
+			CWD: fixture.workspace, Command: []string{"claude"}, ExecutablePath: fixture.executable,
+		},
+	)
+	if response.Code != http.StatusCreated {
+		t.Fatalf("original destination status=%d body=%s", response.Code, response.Body.Bytes())
+	}
+	var grant capturecontrol.LaunchGrant
+	decodeRecorder(t, response, &grant)
+	if grant.RootPEMPath == "" || !slices.Equal(grant.ProtectedAuthorities, []string{
+		"api.anthropic.com:443", "api.openai.com:443", "chatgpt.com:443",
+	}) ||
+		len(grant.ManagedCredentialAuthorities) != 0 {
+		t.Fatalf("omitted Environment did not preserve Original Destination: %+v", grant)
+	}
+}
+
+func TestCaptureControlRejectsMissingEnvironmentBeforeCreatingRun(t *testing.T) {
+	t.Parallel()
+	assignCalled := false
+	fixture := newFixture(t, func(options *capturegrant.Options) {
+		options.Authorities = missingEnvironmentAuthorities{
+			assignCalled: &assignCalled,
+		}
+	})
+	defer fixture.Close(t)
+
+	response := fixture.DoJSON(
+		t,
+		http.MethodPost,
+		"/api/v1/capture-runs",
+		fixture.controlCredential,
+		"",
+		capturecontrol.CreateRequest{
+			EnvironmentID:  "missing",
+			CWD:            fixture.workspace,
+			Command:        []string{"claude"},
+			ExecutablePath: fixture.executable,
+		},
+	)
+	if response.Code != http.StatusNotFound ||
+		!bytes.Contains(response.Body.Bytes(), []byte(`"code":"environment_not_found"`)) {
+		t.Fatalf("missing Environment status=%d body=%s", response.Code, response.Body.Bytes())
+	}
+	if assignCalled {
+		t.Fatal("missing Environment reached assignment linearization")
+	}
+	page, err := fixture.runs.ListRuns(
+		context.Background(),
+		capturerun.PageRequest{Limit: 10},
+	)
+	if err != nil || len(page.Items) != 0 {
+		t.Fatalf("missing Environment created CaptureRun page=%+v err=%v", page, err)
+	}
+}
+
 func TestCaptureAuthorityFailureObservesThenFinishesTheActiveRun(t *testing.T) {
 	t.Parallel()
 	sawActive := false
@@ -218,6 +334,7 @@ func TestCaptureAuthorityFailureObservesThenFinishesTheActiveRun(t *testing.T) {
 		fixture.controlCredential,
 		"",
 		capturecontrol.CreateRequest{
+			EnvironmentID:  testEnvironmentID,
 			CWD:            fixture.workspace,
 			Command:        []string{"claude", "--print", "prompt"},
 			ExecutablePath: fixture.executable,
@@ -252,7 +369,7 @@ func TestManualCaptureControlHidesInternalEpochAndUsesOpaqueStateTags(
 	contextResponse := fixture.DoJSON(
 		t,
 		http.MethodGet,
-		"/api/v1/manual-captures/context",
+		"/api/v1/manual-captures/context?environmentId="+testEnvironmentID,
 		fixture.controlCredential,
 		"",
 		nil,
@@ -260,7 +377,7 @@ func TestManualCaptureControlHidesInternalEpochAndUsesOpaqueStateTags(
 	if contextResponse.Code != http.StatusOK ||
 		contextResponse.Header().Get("Cache-Control") != "no-store" ||
 		bytes.Contains(contextResponse.Body.Bytes(), []byte("generation")) ||
-		bytes.Contains(contextResponse.Body.Bytes(), []byte("revision")) {
+		bytes.Contains(contextResponse.Body.Bytes(), []byte("credentialRevision")) {
 		t.Fatalf(
 			"context status=%d headers=%v body=%s",
 			contextResponse.Code,
@@ -272,7 +389,8 @@ func TestManualCaptureControlHidesInternalEpochAndUsesOpaqueStateTags(
 	decodeRecorder(t, contextResponse, &captureContext)
 	if captureContext.ConfirmationToken == "" ||
 		captureContext.ProxyAddress != "http://127.0.0.1:32123" ||
-		captureContext.Root.DERSHA256 == "" ||
+		captureContext.EnvironmentID != testEnvironmentID ||
+		captureContext.Root == nil || captureContext.Root.DERSHA256 == "" ||
 		captureContext.Root.PEMPath == "" {
 		t.Fatalf("context=%+v", captureContext)
 	}
@@ -285,6 +403,7 @@ func TestManualCaptureControlHidesInternalEpochAndUsesOpaqueStateTags(
 		fixture.controlCredential,
 		"",
 		capturecontrol.ManualCaptureCreateRequest{
+			EnvironmentID:     testEnvironmentID,
 			DisplayName:       "Terminal in project alpha",
 			ClientClass:       manualcapture.ClientCLI,
 			Lifetime:          manualcapture.LifetimeTemporary,
@@ -409,6 +528,7 @@ func TestManualCaptureCreateRejectsStaleConfirmationWithoutMutation(t *testing.T
 		fixture.controlCredential,
 		"",
 		capturecontrol.ManualCaptureCreateRequest{
+			EnvironmentID:     testEnvironmentID,
 			DisplayName:       "Stale review",
 			ClientClass:       manualcapture.ClientOther,
 			Lifetime:          manualcapture.LifetimeTemporary,
@@ -427,6 +547,58 @@ func TestManualCaptureCreateRejectsStaleConfirmationWithoutMutation(t *testing.T
 	}
 }
 
+func TestManualCaptureSystemTransparentReturnsAgentInterceptionRoot(t *testing.T) {
+	t.Parallel()
+
+	fixture := newFixture(t)
+	defer fixture.Close(t)
+	contextResponse := fixture.DoJSON(
+		t,
+		http.MethodGet,
+		"/api/v1/manual-captures/context?environmentId=system_transparent",
+		fixture.controlCredential,
+		"",
+		nil,
+	)
+	if contextResponse.Code != http.StatusOK ||
+		!bytes.Contains(contextResponse.Body.Bytes(), []byte(`"root"`)) {
+		t.Fatalf("transparent context status=%d body=%s", contextResponse.Code, contextResponse.Body.Bytes())
+	}
+	var captureContext capturecontrol.ManualCaptureContext
+	decodeRecorder(t, contextResponse, &captureContext)
+	if captureContext.EnvironmentID != "system_transparent" || captureContext.Root == nil ||
+		!slices.Equal(captureContext.ProtectedAuthorities, []string{
+			"api.anthropic.com:443", "api.openai.com:443", "chatgpt.com:443",
+		}) || len(captureContext.ManagedAuthorities) != 0 {
+		t.Fatalf("transparent context=%+v", captureContext)
+	}
+	expiresIn := int64((24 * time.Hour) / time.Second)
+	createResponse := fixture.DoJSON(
+		t,
+		http.MethodPost,
+		"/api/v1/manual-captures",
+		fixture.controlCredential,
+		"",
+		capturecontrol.ManualCaptureCreateRequest{
+			EnvironmentID: "system_transparent", DisplayName: "Transparent terminal",
+			ClientClass: manualcapture.ClientCLI, Lifetime: manualcapture.LifetimeTemporary,
+			ExpiresInSeconds: &expiresIn, ConfirmationToken: captureContext.ConfirmationToken,
+		},
+	)
+	if createResponse.Code != http.StatusCreated ||
+		!bytes.Contains(createResponse.Body.Bytes(), []byte(`"root"`)) {
+		t.Fatalf("transparent create status=%d body=%s", createResponse.Code, createResponse.Body.Bytes())
+	}
+	var grant capturecontrol.ManualCaptureGrant
+	decodeRecorder(t, createResponse, &grant)
+	if grant.EnvironmentID != "system_transparent" || grant.AssignmentRevision != 1 ||
+		grant.Root == nil || !slices.Equal(grant.ProtectedAuthorities, []string{
+		"api.anthropic.com:443", "api.openai.com:443", "chatgpt.com:443",
+	}) || len(grant.ManagedAuthorities) != 0 {
+		t.Fatalf("transparent grant=%+v", grant)
+	}
+}
+
 func TestCaptureControlCredentialDoesNotExpireWithDiscoveryLease(t *testing.T) {
 	t.Parallel()
 
@@ -440,6 +612,7 @@ func TestCaptureControlCredentialDoesNotExpireWithDiscoveryLease(t *testing.T) {
 		fixture.controlCredential,
 		"",
 		capturecontrol.CreateRequest{
+			EnvironmentID:  testEnvironmentID,
 			CWD:            fixture.workspace,
 			Command:        []string{"claude"},
 			ExecutablePath: fixture.executable,
@@ -463,10 +636,13 @@ func TestLocalUserLabelDoesNotChangeMachineWorkspaceIdentity(t *testing.T) {
 			fixture.controlCredential,
 			"",
 			capturecontrol.CreateRequest{
+				EnvironmentID:  testEnvironmentID,
 				CWD:            fixture.workspace,
 				Command:        []string{"claude"},
 				ExecutablePath: fixture.executable,
-				LocalUserLabel: user,
+				RuntimeMetadata: capturecontrol.ClientRuntimeMetadataInput{
+					LocalUserName: user,
+				},
 			},
 		)
 		if response.Code != http.StatusCreated {
@@ -519,6 +695,7 @@ func TestCaptureControlKeepsUnknownClientBuildGeneric(t *testing.T) {
 		fixture.controlCredential,
 		"",
 		capturecontrol.CreateRequest{
+			EnvironmentID:  testEnvironmentID,
 			CWD:            fixture.workspace,
 			Command:        []string{"claude"},
 			ExecutablePath: fixture.executable,
@@ -725,10 +902,11 @@ func newFixture(t *testing.T, overrides ...fixtureOverride) *fixture {
 		Generation: base64.RawURLEncoding.EncodeToString(
 			bytes.Repeat([]byte{0x31}, 32),
 		),
-		RootIdentity: authority.Identity(),
-		Root:         authority.Certificate(),
-		RunLifetime:  2 * time.Minute,
-		Workspaces:   workspaceResolver,
+		RootIdentity:  authority.Identity(),
+		Root:          authority.Certificate(),
+		RunLifetime:   2 * time.Minute,
+		Workspaces:    workspaceResolver,
+		ProxyDelivery: capturegrant.ProxyDeliveryLocalListener,
 	}
 	for _, override := range overrides {
 		override(&issuerOptions)
@@ -843,11 +1021,64 @@ func (clock *fakeClock) Now() time.Time {
 
 type fixedAuthorities []string
 
-func (authorities fixedAuthorities) ResolveCaptureAuthorities(
-	context.Context,
-	workspaceidentity.Scope,
+func (authorities fixedAuthorities) Review(
+	_ context.Context,
+	environmentID environment.EnvironmentID,
+) (capturegrant.CaptureAuthorityReview, error) {
+	set, err := authorities.authoritySet(
+		captureidentity.Reference{Kind: captureidentity.KindManagedRun, ID: "review"},
+		environmentID,
+		captureassignment.SourceLaunch,
+	)
+	return set.Review(), err
+}
+
+func (authorities fixedAuthorities) AssignAndResolve(
+	_ context.Context,
+	capture captureidentity.Reference,
+	environmentID environment.EnvironmentID,
+	source captureassignment.Source,
+	_ clienttarget.Profile,
 ) (capturegrant.CaptureAuthoritySet, error) {
-	return capturegrant.NewCaptureAuthoritySet(authorities, authorities)
+	return authorities.authoritySet(capture, environmentID, source)
+}
+
+func (authorities fixedAuthorities) Resolve(
+	_ context.Context,
+	capture captureidentity.Reference,
+) (capturegrant.CaptureAuthoritySet, error) {
+	return authorities.authoritySet(capture, testEnvironmentID, captureassignment.SourceLaunch)
+}
+
+func (authorities fixedAuthorities) authoritySet(
+	capture captureidentity.Reference,
+	environmentID environment.EnvironmentID,
+	source captureassignment.Source,
+) (capturegrant.CaptureAuthoritySet, error) {
+	protected := []string(authorities)
+	managed := []string(authorities)
+	if environmentID == environment.SystemTransparentID {
+		protected = []string{
+			"api.anthropic.com:443",
+			"api.openai.com:443",
+			"chatgpt.com:443",
+		}
+		managed = nil
+	}
+	var candidateDigest environment.CandidateDigest
+	candidateDigest[0] = 1
+	boundary, err := environment.NewLaunchAuthorityBoundaryFromScopes(
+		environmentID, 1, candidateDigest, protected, managed,
+	)
+	if err != nil {
+		return capturegrant.CaptureAuthoritySet{}, err
+	}
+	return capturegrant.NewCaptureAuthoritySet(captureassignment.Assignment{
+		Capture: capture, EnvironmentID: environmentID, Revision: 1,
+		EnvironmentRevision: 1, EnvironmentDigest: candidateDigest,
+		Source: source, LaunchAuthority: boundary,
+		UpdatedAt: time.Date(2026, 8, 8, 1, 2, 3, 0, time.UTC),
+	})
 }
 
 type inspectingFailingAuthorities struct {
@@ -855,9 +1086,12 @@ type inspectingFailingAuthorities struct {
 	sawActive *bool
 }
 
-func (resolver inspectingFailingAuthorities) ResolveCaptureAuthorities(
+func (resolver inspectingFailingAuthorities) AssignAndResolve(
 	ctx context.Context,
-	_ workspaceidentity.Scope,
+	_ captureidentity.Reference,
+	_ environment.EnvironmentID,
+	_ captureassignment.Source,
+	_ clienttarget.Profile,
 ) (capturegrant.CaptureAuthoritySet, error) {
 	page, err := resolver.reader.ListRuns(
 		ctx,
@@ -875,6 +1109,52 @@ func (resolver inspectingFailingAuthorities) ResolveCaptureAuthorities(
 	return capturegrant.CaptureAuthoritySet{}, errors.New(
 		"injected authority resolution failure",
 	)
+}
+
+func (resolver inspectingFailingAuthorities) Review(
+	ctx context.Context,
+	environmentID environment.EnvironmentID,
+) (capturegrant.CaptureAuthorityReview, error) {
+	return (fixedAuthorities{"api.anthropic.com:443"}).Review(ctx, environmentID)
+}
+
+func (resolver inspectingFailingAuthorities) Resolve(
+	context.Context,
+	captureidentity.Reference,
+) (capturegrant.CaptureAuthoritySet, error) {
+	return capturegrant.CaptureAuthoritySet{}, errors.New("injected authority resolution failure")
+}
+
+type missingEnvironmentAuthorities struct {
+	assignCalled *bool
+}
+
+func (resolver missingEnvironmentAuthorities) Review(
+	context.Context,
+	environment.EnvironmentID,
+) (capturegrant.CaptureAuthorityReview, error) {
+	return capturegrant.CaptureAuthorityReview{}, fmt.Errorf(
+		"%w: test Environment",
+		environment.ErrEnvironmentNotFound,
+	)
+}
+
+func (resolver missingEnvironmentAuthorities) AssignAndResolve(
+	context.Context,
+	captureidentity.Reference,
+	environment.EnvironmentID,
+	captureassignment.Source,
+	clienttarget.Profile,
+) (capturegrant.CaptureAuthoritySet, error) {
+	*resolver.assignCalled = true
+	return capturegrant.CaptureAuthoritySet{}, errors.New("unexpected assignment")
+}
+
+func (resolver missingEnvironmentAuthorities) Resolve(
+	context.Context,
+	captureidentity.Reference,
+) (capturegrant.CaptureAuthoritySet, error) {
+	return capturegrant.CaptureAuthoritySet{}, errors.New("unexpected resolve")
 }
 
 func decodeRecorder(

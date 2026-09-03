@@ -84,8 +84,8 @@ func TestAnAcceptedChangeTakesEffectImmediately(t *testing.T) {
 	manager := newManager(t, store)
 	request := connectionpolicy.Request{Host: "api.example.com", Port: 443}
 	if manager.Source().Current().Evaluate(request).Decision !=
-		connectionpolicy.DecisionAsk {
-		t.Fatal("the shipped set did not ask about an undecided host")
+		connectionpolicy.DecisionAllow {
+		t.Fatal("the shipped set did not start in monitor mode")
 	}
 	if _, err := manager.Replace(
 		context.Background(),
@@ -96,11 +96,7 @@ func TestAnAcceptedChangeTakesEffectImmediately(t *testing.T) {
 			Decision: connectionpolicy.DecisionDeny,
 			Match:    connectionpolicy.MatchExactHost("api.example.com"),
 		}},
-		connectionpolicy.Rule{
-			ID:       connectionpolicy.DefaultDenyRuleID,
-			Decision: connectionpolicy.DecisionDeny,
-			Match:    connectionpolicy.MatchAny(),
-		},
+		connectionpolicy.ModeDenyUnknown,
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -123,28 +119,20 @@ func TestARefusedChangeLeavesTheOldRulesInForce(t *testing.T) {
 		name     string
 		expected uint64
 		rules    []connectionpolicy.Rule
-		fallback connectionpolicy.Rule
+		mode     connectionpolicy.Mode
 		wants    error
 	}{
 		{
 			name:     "prepared against a revision that moved",
 			expected: 7,
-			fallback: connectionpolicy.Rule{
-				ID:       connectionpolicy.DefaultDenyRuleID,
-				Decision: connectionpolicy.DecisionDeny,
-				Match:    connectionpolicy.MatchAny(),
-			},
-			wants: connectionpolicy.ErrRevisionConflict,
+			mode:     connectionpolicy.ModeDenyUnknown,
+			wants:    connectionpolicy.ErrRevisionConflict,
 		},
 		{
-			name:     "a default that allows everything",
+			name:     "an unknown policy mode",
 			expected: 1,
-			fallback: connectionpolicy.Rule{
-				ID:       "default.allow-everything",
-				Decision: connectionpolicy.DecisionAllow,
-				Match:    connectionpolicy.MatchAny(),
-			},
-			wants: connectionpolicy.ErrInvalidRuleSet,
+			mode:     connectionpolicy.Mode("allow_everything"),
+			wants:    connectionpolicy.ErrInvalidRuleSet,
 		},
 		{
 			name:     "a rule that carries a pattern",
@@ -154,11 +142,7 @@ func TestARefusedChangeLeavesTheOldRulesInForce(t *testing.T) {
 				Decision: connectionpolicy.DecisionAllow,
 				Match:    connectionpolicy.MatchExactHost("*.example.com"),
 			}},
-			fallback: connectionpolicy.Rule{
-				ID:       connectionpolicy.DefaultDenyRuleID,
-				Decision: connectionpolicy.DecisionDeny,
-				Match:    connectionpolicy.MatchAny(),
-			},
+			mode:  connectionpolicy.ModeDenyUnknown,
 			wants: connectionpolicy.ErrInvalidRuleSet,
 		},
 	}
@@ -173,7 +157,7 @@ func TestARefusedChangeLeavesTheOldRulesInForce(t *testing.T) {
 				context.Background(),
 				refusal.expected,
 				refusal.rules,
-				refusal.fallback,
+				refusal.mode,
 			); !errors.Is(err, refusal.wants) {
 				t.Fatalf("error = %v", err)
 			}
@@ -204,11 +188,7 @@ func TestRulesThatWereNotStoredNeverTakeEffect(t *testing.T) {
 		context.Background(),
 		1,
 		nil,
-		connectionpolicy.Rule{
-			ID:       connectionpolicy.DefaultDenyRuleID,
-			Decision: connectionpolicy.DecisionDeny,
-			Match:    connectionpolicy.MatchAny(),
-		},
+		connectionpolicy.ModeDenyUnknown,
 	); err == nil {
 		t.Fatal("a failed write reported success")
 	}

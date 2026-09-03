@@ -15,6 +15,8 @@ import (
 const (
 	daemonImportPath           = "github.com/vibe-agi/vibermate/internal/desktopdaemon"
 	hostImportPath             = "github.com/vibe-agi/vibermate/internal/desktophost"
+	serverDaemonImportPath     = "github.com/vibe-agi/vibermate/internal/serverdaemon"
+	serverHostImportPath       = "github.com/vibe-agi/vibermate/internal/serverhost"
 	runtimeImportPath          = "github.com/vibe-agi/vibermate/internal/productruntime"
 	controlPrincipalImportPath = "github.com/vibe-agi/vibermate/internal/controlprincipal"
 	captureGrantImportPath     = "github.com/vibe-agi/vibermate/internal/capturegrant"
@@ -25,18 +27,19 @@ const (
 )
 
 const (
-	desktopMainFile         = "cmd/vibermated/main.go"
-	daemonPackageDir        = "internal/desktopdaemon"
-	hostPackageDir          = "internal/desktophost"
-	runtimePackageDir       = "internal/productruntime"
-	productionBuildersLocal = "productionBuilders"
+	desktopMainFile        = "cmd/vibermated/main.go"
+	daemonPackageDir       = "internal/desktopdaemon"
+	hostPackageDir         = "internal/desktophost"
+	serverDaemonPackageDir = "internal/serverdaemon"
+	serverHostPackageDir   = "internal/serverhost"
+	runtimePackageDir      = "internal/productruntime"
 )
 
-// CheckProductionCompositionBoundary keeps one chain from the Desktop entry
-// point to the runtime, and keeps it the only one.
+// CheckProductionCompositionBoundary keeps the Desktop and headless Server
+// entry chains explicit, and keeps them the only production composition paths.
 //
 //	main.main → desktopdaemon.Run → desktophost.Start → productruntime.Start
-//	→ productionBuilders()
+//	main.runServer → serverdaemon.Run → serverhost.Start → productruntime.Start
 //
 // The first version asked whether a package contained a call anywhere, and
 // resolved selectors by receiver name. Both were bypassable and a review found
@@ -73,6 +76,10 @@ func CheckProductionCompositionBoundary(repositoryRoot string) []Violation {
 			present["main"] = true
 		case strings.HasPrefix(file.relative, daemonPackageDir+"/"):
 			present["daemon"] = true
+		case strings.HasPrefix(file.relative, serverDaemonPackageDir+"/"):
+			present["server-daemon"] = true
+		case strings.HasPrefix(file.relative, serverHostPackageDir+"/"):
+			present["server-host"] = true
 		case strings.HasPrefix(file.relative, hostPackageDir+"/"):
 			present["host"] = true
 		case strings.HasPrefix(file.relative, runtimePackageDir+"/"):
@@ -159,9 +166,12 @@ func CheckProductionCompositionBoundary(repositoryRoot string) []Violation {
 		holder:   hostPackageDir,
 		function: "Start",
 		target:   calledFunction{importPath: runtimeImportPath, name: "Start"},
-		callers:  []string{hostPackageDir + "/", runtimePackageDir + "/"},
-		missing:  "host-does-not-start-the-runtime",
-		extra:    "unreviewed-runtime-composition",
+		callers: []string{
+			hostPackageDir + "/", serverHostPackageDir + "/",
+			runtimePackageDir + "/",
+		},
+		missing: "host-does-not-start-the-runtime",
+		extra:   "unreviewed-runtime-composition",
 	}, {
 		required: present["host"] && present["control-principal"],
 		holder:   hostPackageDir,
@@ -170,7 +180,7 @@ func CheckProductionCompositionBoundary(repositoryRoot string) []Violation {
 			importPath: controlPrincipalImportPath,
 			name:       "NewAuthority",
 		},
-		callers: []string{hostPackageDir + "/"},
+		callers: []string{hostPackageDir + "/", serverHostPackageDir + "/"},
 		missing: "host-does-not-create-control-authority",
 		extra:   "unreviewed-control-authority-composition",
 	}, {
@@ -181,7 +191,7 @@ func CheckProductionCompositionBoundary(repositoryRoot string) []Violation {
 			importPath: captureGrantImportPath,
 			name:       "New",
 		},
-		callers: []string{hostPackageDir + "/"},
+		callers: []string{hostPackageDir + "/", serverHostPackageDir + "/"},
 		missing: "host-does-not-create-capture-grant-issuer",
 		extra:   "unreviewed-capture-grant-composition",
 	}, {
@@ -192,7 +202,7 @@ func CheckProductionCompositionBoundary(repositoryRoot string) []Violation {
 			importPath: captureControlImportPath,
 			name:       "NewManualHandler",
 		},
-		callers: []string{hostPackageDir + "/"},
+		callers: []string{hostPackageDir + "/", serverHostPackageDir + "/"},
 		missing: "host-does-not-create-manual-capture-handler",
 		extra:   "unreviewed-manual-capture-handler-composition",
 	}, {
@@ -203,24 +213,80 @@ func CheckProductionCompositionBoundary(repositoryRoot string) []Violation {
 			importPath: captureControlImportPath,
 			name:       "New",
 		},
-		callers: []string{hostPackageDir + "/"},
+		callers: []string{hostPackageDir + "/", serverHostPackageDir + "/"},
 		missing: "host-does-not-create-capture-control-handler",
+		extra:   "unreviewed-capture-control-composition",
+	}, {
+		required: present["main"] && present["server-daemon"],
+		holder:   desktopMainFile,
+		function: "runServer",
+		target: calledFunction{
+			importPath: serverDaemonImportPath,
+			name:       "Run",
+		},
+		callers: []string{desktopMainFile},
+		missing: "server-entry-does-not-run-the-daemon",
+		extra:   "unreviewed-server-daemon-composition",
+	}, {
+		required: present["server-daemon"] && present["server-host"],
+		holder:   serverDaemonPackageDir,
+		function: "Run",
+		target: calledFunction{
+			importPath: serverHostImportPath,
+			name:       "Start",
+		},
+		callers: []string{serverDaemonPackageDir + "/"},
+		missing: "server-daemon-does-not-start-the-host",
+		extra:   "unreviewed-server-host-composition",
+	}, {
+		required: present["server-host"] && present["runtime"],
+		holder:   serverHostPackageDir,
+		function: "Start",
+		target: calledFunction{
+			importPath: runtimeImportPath,
+			name:       "Start",
+		},
+		callers: []string{
+			hostPackageDir + "/", serverHostPackageDir + "/",
+			runtimePackageDir + "/",
+		},
+		missing: "server-host-does-not-start-the-runtime",
+		extra:   "unreviewed-runtime-composition",
+	}, {
+		required: present["server-host"] && present["capture-grant"],
+		holder:   serverHostPackageDir,
+		function: "startAttached",
+		target: calledFunction{
+			importPath: captureGrantImportPath,
+			name:       "New",
+		},
+		callers: []string{hostPackageDir + "/", serverHostPackageDir + "/"},
+		missing: "server-host-does-not-create-capture-grant-issuer",
+		extra:   "unreviewed-capture-grant-composition",
+	}, {
+		required: present["server-host"] && present["capture-control"],
+		holder:   serverHostPackageDir,
+		function: "startAttached",
+		target: calledFunction{
+			importPath: captureControlImportPath,
+			name:       "NewManualHandler",
+		},
+		callers: []string{hostPackageDir + "/", serverHostPackageDir + "/"},
+		missing: "server-host-does-not-create-manual-capture-handler",
+		extra:   "unreviewed-manual-capture-handler-composition",
+	}, {
+		required: present["server-host"] && present["capture-control"],
+		holder:   serverHostPackageDir,
+		function: "startAttached",
+		target: calledFunction{
+			importPath: captureControlImportPath,
+			name:       "New",
+		},
+		callers: []string{hostPackageDir + "/", serverHostPackageDir + "/"},
+		missing: "server-host-does-not-create-capture-control-handler",
 		extra:   "unreviewed-capture-control-composition",
 	}} {
 		violations = append(violations, link.check(files)...)
-	}
-
-	// The runtime's selection of production builders is a plain call in its
-	// own package, so it needs no import resolution — only the same insistence
-	// that it appear in the function that owes it.
-	if present["runtime"] {
-		violations = append(violations, checkLocalCallInFunction(
-			files,
-			runtimePackageDir,
-			"Start",
-			productionBuildersLocal,
-			"runtime-does-not-select-production-builders",
-		)...)
 	}
 
 	// A CaptureRun can be created only by the typed grant issuer. Tests may
@@ -271,6 +337,16 @@ func CheckProductionCompositionBoundary(repositoryRoot string) []Violation {
 				Rule:    "desktop-entry-skips-production-options",
 				Path:    file.relative,
 				Message: "the Desktop entry point starts the product from desktopdaemon.ProductionOptions",
+			})
+		}
+		if present["server-daemon"] && !file.callsInFunction(
+			"runServer",
+			calledFunction{importPath: serverDaemonImportPath, name: "ProductionOptions"},
+		) {
+			violations = append(violations, Violation{
+				Rule:    "server-entry-skips-production-options",
+				Path:    file.relative,
+				Message: "the Server entry point starts from serverdaemon.ProductionOptions",
 			})
 		}
 	}
@@ -340,44 +416,6 @@ func (link compositionLink) allows(relative string) bool {
 		}
 	}
 	return false
-}
-
-func checkLocalCallInFunction(
-	files []productionFile,
-	packageDir string,
-	function string,
-	callee string,
-	rule string,
-) []Violation {
-	for _, file := range files {
-		if !strings.HasPrefix(file.relative, packageDir+"/") {
-			continue
-		}
-		body := file.functionBody(function)
-		if body == nil {
-			continue
-		}
-		found := false
-		ast.Inspect(body, func(node ast.Node) bool {
-			call, ok := node.(*ast.CallExpr)
-			if !ok {
-				return true
-			}
-			if identifier, ok := call.Fun.(*ast.Ident); ok &&
-				identifier.Name == callee {
-				found = true
-			}
-			return true
-		})
-		if found {
-			return nil
-		}
-	}
-	return []Violation{{
-		Rule:    rule,
-		Path:    packageDir,
-		Message: "the selection must appear in the function that owes this step, not merely somewhere in its package",
-	}}
 }
 
 type productionFile struct {

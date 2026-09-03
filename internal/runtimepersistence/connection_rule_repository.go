@@ -12,7 +12,6 @@ import (
 
 const connectionRuleSelect = `SELECT
 	    rule_id,
-	    is_default,
 	    priority,
 	    decision,
 	    match_kind,
@@ -174,29 +173,26 @@ func (repository *connectionRuleRepository) write(
 ) error {
 	if _, err := transaction.ExecContext(
 		ctx,
-		`INSERT INTO connection_rule_sets (id, revision, updated_at_unix_ms)
-		 VALUES (1, ?, ?)
+		`INSERT INTO connection_rule_sets (id, revision, mode, updated_at_unix_ms)
+		 VALUES (1, ?, ?, ?)
 		 ON CONFLICT (id) DO UPDATE
 		 SET revision = excluded.revision,
+		     mode = excluded.mode,
 		     updated_at_unix_ms = excluded.updated_at_unix_ms`,
 		int64(snapshot.Revision),
+		string(snapshot.Mode),
 		toUnixMillis(now.UTC()),
 	); err != nil {
 		return fmt.Errorf("write connection rule set: %w", err)
 	}
-	for _, rule := range append([]connectionpolicy.Rule{snapshot.Default}, snapshot.Rules...) {
-		isDefault := 0
-		if rule.ID == snapshot.Default.ID {
-			isDefault = 1
-		}
+	for _, rule := range snapshot.Rules {
 		if _, err := transaction.ExecContext(
 			ctx,
 			`INSERT INTO connection_rules (
-			     rule_id, is_default, priority, decision,
+			     rule_id, priority, decision,
 			     match_kind, match_host, match_port
-			 ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+			 ) VALUES (?, ?, ?, ?, ?, ?)`,
 			rule.ID,
-			isDefault,
 			int64(rule.Priority),
 			string(rule.Decision),
 			string(rule.Match.Kind),
@@ -213,11 +209,14 @@ func (repository *connectionRuleRepository) read(
 	ctx context.Context,
 	transaction *sql.Tx,
 ) (connectionpolicy.Snapshot, error) {
-	var revision int64
+	var (
+		revision int64
+		mode     string
+	)
 	err := transaction.QueryRowContext(
 		ctx,
-		`SELECT revision FROM connection_rule_sets WHERE id = 1`,
-	).Scan(&revision)
+		`SELECT revision, mode FROM connection_rule_sets WHERE id = 1`,
+	).Scan(&revision, &mode)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		return connectionpolicy.Snapshot{}, connectionpolicy.ErrNoRuleSet
@@ -237,12 +236,13 @@ func (repository *connectionRuleRepository) read(
 	defer func() {
 		_ = rows.Close()
 	}()
-	snapshot := connectionpolicy.Snapshot{Revision: uint64(revision)}
-	seenDefault := false
+	snapshot := connectionpolicy.Snapshot{
+		Revision: uint64(revision),
+		Mode:     connectionpolicy.Mode(mode),
+	}
 	for rows.Next() {
 		var (
 			rule      connectionpolicy.Rule
-			isDefault int64
 			priority  int64
 			decision  string
 			matchKind string
@@ -251,7 +251,6 @@ func (repository *connectionRuleRepository) read(
 		)
 		if err := rows.Scan(
 			&rule.ID,
-			&isDefault,
 			&priority,
 			&decision,
 			&matchKind,
@@ -267,23 +266,13 @@ func (repository *connectionRuleRepository) read(
 			Host: host,
 			Port: uint16(port),
 		}
-		if isDefault == 1 {
-			snapshot.Default = rule
-			seenDefault = true
-			continue
-		}
 		snapshot.Rules = append(snapshot.Rules, rule)
 	}
 	if err := rows.Err(); err != nil {
 		return connectionpolicy.Snapshot{}, err
 	}
-	// A set with no default cannot answer an unmatched connection, and a
-	// runtime that filled one in would be inventing an answer nobody stored.
-	if !seenDefault {
-		return connectionpolicy.Snapshot{}, fmt.Errorf(
-			"%w: the stored set has no default",
-			connectionpolicy.ErrInvalidRuleSet,
-		)
+	if _, err := snapshot.Compile(); err != nil {
+		return connectionpolicy.Snapshot{}, err
 	}
 	return snapshot, nil
 }

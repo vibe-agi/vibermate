@@ -61,10 +61,13 @@ func (authorizer *compositeAuthorizer) authorizeManaged(
 		return Admission{}, errors.Join(ErrCredentialRejected, err)
 	}
 	return NewManagedRun(ManagedRunEvidence{
-		CaptureRunID: evidence.RunID,
-		SourceLabel:  evidence.ExecutableLabel,
-		Workspace:    evidence.Workspace,
-		Adapter:      evidence.Adapter,
+		CaptureRunID:    evidence.RunID,
+		SourceLabel:     evidence.ExecutableLabel,
+		WorkspaceRoot:   evidence.CWD,
+		Workspace:       evidence.Workspace,
+		Adapter:         evidence.Adapter,
+		Runtime:         evidence.Runtime,
+		RuntimeUsername: evidence.RuntimeUsername,
 	})
 }
 

@@ -83,6 +83,7 @@ func decodeMessagesResponse(
 		)
 	}
 	blocks := make([]protocolcore.ContentBlock, 0, len(wire.Content))
+	extensions := make([]protocolcore.ProviderExtension, 0)
 	knownTools := make(map[string]struct{}, len(request.Tools))
 	for _, tool := range request.Tools {
 		knownTools[tool.Name] = struct{}{}
@@ -142,9 +143,20 @@ func decodeMessagesResponse(
 			}
 			blocks = append(blocks, block)
 		case "thinking", "redacted_thinking":
-			// These blocks remain byte-for-byte in the compatible wire response.
-			// They are non-actionable provider content, so they do not enter the
-			// tool-decision projection.
+			kind := protocolcore.ProviderExtensionThinking
+			if header.Type == "redacted_thinking" {
+				kind = protocolcore.ProviderExtensionRedactedThinking
+			}
+			extension, err := protocolcore.NewProviderExtension(
+				protocolcore.ProviderExtensionSourceAnthropicMessages,
+				kind,
+				path,
+				[][]byte{bytes.Clone(raw)},
+			)
+			if err != nil {
+				return protocolcore.Response{}, messagesProviderFailure(path, err)
+			}
+			extensions = append(extensions, extension)
 		default:
 			return protocolcore.Response{}, messagesProviderFailure(
 				path+".type",
@@ -172,14 +184,15 @@ func decodeMessagesResponse(
 		return protocolcore.Response{}, err
 	}
 	response := protocolcore.Response{
-		ID:             wire.ID,
-		RequestedModel: request.RequestedModel,
-		EffectiveModel: request.EffectiveModel,
-		ReportedModel:  wire.Model,
-		Blocks:         blocks,
-		StopReason:     stopReason,
-		StopSequence:   stopSequence,
-		Usage:          usage,
+		ID:                 wire.ID,
+		RequestedModel:     request.RequestedModel,
+		EffectiveModel:     request.EffectiveModel,
+		ReportedModel:      wire.Model,
+		Blocks:             blocks,
+		ProviderExtensions: extensions,
+		StopReason:         stopReason,
+		StopSequence:       stopSequence,
+		Usage:              usage,
 	}
 	if err := response.Validate(); err != nil {
 		return protocolcore.Response{}, messagesProviderFailure("$", err)

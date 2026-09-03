@@ -1,4 +1,4 @@
-//go:build !vibermate_native_secrets && !windows
+//go:build !windows
 
 package hostsecret
 

@@ -58,8 +58,8 @@ type LinkSpec struct {
 }
 
 // Receipt is the private ownership record. TargetIdentity binds removal to the
-// exact symbolic-link filesystem object created by Install, including when a
-// different link later points to the same source text.
+// symbolic-link file ID created by Install while tolerating macOS mount-device
+// renumbering; a different link that points to the same source remains unowned.
 type Receipt struct {
 	Schema         string    `json:"schema"`
 	Owner          Owner     `json:"owner"`
@@ -133,18 +133,22 @@ func (manager *LinkManager) Inspect(spec LinkSpec) (Observation, error) {
 	if receiptErr != nil {
 		return Observation{}, fmt.Errorf("read private installation record: %w", receiptErr)
 	}
+	// A missing target can be repaired across App-location changes when the
+	// private record still names this exact user-owned terminal entry. The
+	// record itself remains the CAS token for removal; a record for another
+	// target, owner, or installation method still fails closed as a conflict.
+	if targetMissing && receiptOwnsTarget(receipt, spec) {
+		return Observation{
+			State:   StateTargetMissing,
+			Receipt: cloneReceipt(receipt),
+			Detail:  "the terminal command recorded by the app is missing",
+		}, nil
+	}
 	if !receiptMatchesSpec(receipt, spec) {
 		return Observation{
 			State:   StateConflict,
 			Receipt: cloneReceipt(receipt),
 			Detail:  "the private installation record belongs to a different application location or terminal command",
-		}, nil
-	}
-	if targetMissing {
-		return Observation{
-			State:   StateTargetMissing,
-			Receipt: cloneReceipt(receipt),
-			Detail:  "the terminal command recorded by the app is missing",
 		}, nil
 	}
 	if target.metadata.kind != entrySymlink {
@@ -161,7 +165,7 @@ func (manager *LinkManager) Inspect(spec LinkSpec) (Observation, error) {
 			Detail:  "the terminal command now points to a different application location",
 		}, nil
 	}
-	if target.metadata.identity != receipt.TargetIdentity {
+	if !sameManagedTargetIdentity(receipt.TargetIdentity, target.metadata.identity) {
 		return Observation{
 			State:   StateConflict,
 			Receipt: cloneReceipt(receipt),
@@ -799,7 +803,7 @@ func quarantineLink(
 		return nil, err
 	}
 	if current.metadata.kind != entrySymlink ||
-		current.metadata.identity != identity ||
+		!sameManagedTargetIdentity(identity, current.metadata.identity) ||
 		current.destination != destination {
 		return nil, errNotOwned
 	}
@@ -817,7 +821,8 @@ func quarantineLink(
 		moved:     quarantineName,
 	}
 	moved, inspectErr := inspectTargetEntry(directory, quarantineName)
-	if inspectErr != nil || moved.metadata.identity != identity ||
+	if inspectErr != nil ||
+		!sameManagedTargetIdentity(identity, moved.metadata.identity) ||
 		moved.destination != destination {
 		restoreErr := quarantine.restore()
 		return nil, errors.Join(errNotOwned, inspectErr, restoreErr)
@@ -1221,9 +1226,30 @@ func randomEntryName(prefix string) (string, error) {
 
 func receiptMatchesSpec(receipt Receipt, spec LinkSpec) bool {
 	return receipt.SourcePath == spec.SourcePath &&
-		receipt.TargetPath == spec.TargetPath &&
+		receiptOwnsTarget(receipt, spec)
+}
+
+func receiptOwnsTarget(receipt Receipt, spec LinkSpec) bool {
+	return receipt.TargetPath == spec.TargetPath &&
 		receipt.Owner == OwnerDesktopApp &&
 		receipt.Method == MethodManagedSymlink
+}
+
+// Darwin's st_dev identifies the current mount, not the persistent volume.
+// macOS may therefore renumber it after a reboot while preserving the file ID
+// (st_ino) of the exact same symbolic link. SourcePath, TargetPath, entry kind,
+// and link destination are checked separately before this comparison.
+func sameManagedTargetIdentity(recorded, current string) bool {
+	if recorded == current {
+		return true
+	}
+	if runtime.GOOS != "darwin" ||
+		!validFileIdentity(recorded) || !validFileIdentity(current) {
+		return false
+	}
+	recordedParts := strings.Split(recorded, ":")
+	currentParts := strings.Split(current, ":")
+	return recordedParts[1] == currentParts[1]
 }
 
 func sameReceipt(left, right Receipt) bool {

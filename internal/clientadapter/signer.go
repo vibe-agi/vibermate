@@ -278,6 +278,6 @@ func CodexCLISignerDarwin() Signer {
 			"vendor/aarch64-apple-darwin/bin/codex",
 		SigningIdentifier: "codex",
 		TeamID:            "2DC432GLL2",
-		LaunchRecipe:      LaunchSSLCertFile,
+		LaunchRecipe:      LaunchCodexResponsesHTTP,
 	}
 }

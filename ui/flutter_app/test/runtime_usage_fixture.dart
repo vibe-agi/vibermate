@@ -1,0 +1,97 @@
+Map<String, Object?> runtimeUsagePayload() => {
+  'schema': 'vibermate-runtime-usage-report-v3',
+  'generatedAt': '2026-08-24T14:00:00.000Z',
+  'period': {
+    'from': '2026-07-27',
+    'until': '2026-08-26',
+    'timeZone': 'Asia/Singapore',
+  },
+  'truncated': false,
+  'days': [dayUsagePayload('2026-08-24')],
+  'users': [
+    {
+      'userId': 'user.test',
+      'username': 'alice',
+      'state': 'active',
+      'captureRuns': 1,
+      'activeRuns': 0,
+      'agentApiCalls': 2,
+      'succeeded': 1,
+      'failed': 1,
+      'canceled': 0,
+      'contentUnavailableCalls': 0,
+      'modelUnavailableCalls': 0,
+      'tokens': tokenUsagePayload(),
+      'latestContext': {
+        'loginSessionId': 'login.test',
+        'deviceName': 'MacBook Pro',
+        'machineId': 'machine.test',
+        'workspaceId': 'workspace.test',
+        'workspaceLabel': 'vibermate',
+        'observedAt': '2026-08-24T13:59:00.000Z',
+      },
+      'lastActivityAt': '2026-08-24T13:58:00.000Z',
+      'days': [dayUsagePayload('2026-08-24')],
+      'models': [
+        {
+          'requestedModel': 'gpt-5.6-sol',
+          'upstreamModel': 'relay:model/custom',
+          'agentApiCalls': 2,
+          'succeeded': 1,
+          'failed': 1,
+          'canceled': 0,
+          'tokens': tokenUsagePayload(),
+        },
+      ],
+      'contexts': [
+        {
+          'loginSessionId': 'login.test',
+          'deviceName': 'MacBook Pro',
+          'machineId': 'machine.test',
+          'workspaceId': 'workspace.test',
+          'workspaceLabel': 'vibermate',
+          'captureRuns': 1,
+          'activeRuns': 0,
+          'agentApiCalls': 2,
+          'succeeded': 1,
+          'failed': 1,
+          'canceled': 0,
+          'tokens': tokenUsagePayload(),
+          'lastActivityAt': '2026-08-24T13:58:00.000Z',
+        },
+      ],
+      'agentSessions': [
+        {
+          'client': 'codex',
+          'sessionId': 'native-session-one',
+          'captureRuns': 1,
+          'agentApiCalls': 2,
+          'succeeded': 1,
+          'failed': 1,
+          'canceled': 0,
+          'tokens': tokenUsagePayload(),
+          'lastActivityAt': '2026-08-24T13:58:00.000Z',
+        },
+      ],
+    },
+  ],
+};
+
+Map<String, Object?> dayUsagePayload(String date) => {
+  'date': date,
+  'agentApiCalls': 2,
+  'succeeded': 1,
+  'failed': 1,
+  'canceled': 0,
+  'contentUnavailableCalls': 0,
+  'modelUnavailableCalls': 0,
+  'tokens': tokenUsagePayload(),
+};
+
+Map<String, Object?> tokenUsagePayload() => {
+  'inputUncached': {'tokens': 42, 'knownCalls': 1, 'unknownCalls': 1},
+  'cacheWrite': {'tokens': 0, 'knownCalls': 0, 'unknownCalls': 2},
+  'cacheRead': {'tokens': 5, 'knownCalls': 1, 'unknownCalls': 1},
+  'output': {'tokens': 9, 'knownCalls': 1, 'unknownCalls': 1},
+  'reasoning': {'tokens': 0, 'knownCalls': 0, 'unknownCalls': 2},
+};

@@ -1,12 +1,13 @@
 package loopbackproxy
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
 
-	"github.com/vibe-agi/vibermate/internal/access"
 	"github.com/vibe-agi/vibermate/internal/exchange"
+	"github.com/vibe-agi/vibermate/internal/protocolspec"
 )
 
 // ReasonHeader carries the stable vibermate reason code beside a dialect-shaped
@@ -18,10 +19,12 @@ const ReasonHeader = "X-Vibermate-Reason"
 // interpolates request content, so no client payload can travel back out
 // through an error body.
 var reasonMessages = map[ReasonCode]string{
-	ReasonProfileOperationUnsupported: "This API operation is not available " +
+	ReasonEnvironmentOperationUnsupported: "This API operation is not available " +
 		"through vibermate for the selected upstream plan.",
 	ReasonUnsupportedUpgrade: "vibermate cannot serve this protocol upgrade " +
 		"on this connection.",
+	ReasonRawEvidenceUnavailable: "vibermate could not preserve the configured " +
+		"request evidence, so no provider request was sent.",
 }
 
 func reasonMessage(reason ReasonCode) string {
@@ -37,7 +40,7 @@ func reasonMessage(reason ReasonCode) string {
 // rejection instead of failing on an unparseable body.
 func writeDialectReason(
 	writer http.ResponseWriter,
-	dialect access.Dialect,
+	dialect protocolspec.Dialect,
 	status int,
 	reason ReasonCode,
 ) {
@@ -50,10 +53,10 @@ func writeDialectReason(
 	)
 }
 
-func dialectErrorEnvelope(dialect access.Dialect, reason ReasonCode) any {
+func dialectErrorEnvelope(dialect protocolspec.Dialect, reason ReasonCode) any {
 	message := reasonMessage(reason)
 	switch dialect {
-	case access.DialectOpenAIResponses:
+	case protocolspec.DialectOpenAIResponses:
 		type openAIError struct {
 			Message string  `json:"message"`
 			Type    string  `json:"type"`
@@ -94,7 +97,7 @@ func dialectErrorEnvelope(dialect access.Dialect, reason ReasonCode) any {
 // how to render.
 func writeExchangeFailure(
 	writer http.ResponseWriter,
-	dialect access.Dialect,
+	dialect protocolspec.Dialect,
 	err error,
 ) {
 	reason := exchange.ReasonOf(err)
@@ -104,7 +107,7 @@ func writeExchangeFailure(
 	writer.Header().Set("Content-Type", "application/json")
 	writer.Header().Set("Cache-Control", "no-store")
 	writer.Header().Set(ReasonHeader, string(reason))
-	if reason == exchange.ReasonProviderCredentialUnavailable {
+	if exchangeFailureShouldNotRetry(reason) {
 		// The Anthropic SDK recognizes this as a terminal configuration failure.
 		// It must not turn a missing managed-route credential into a second model
 		// request merely because a generic 5xx looks transient.
@@ -116,13 +119,59 @@ func writeExchangeFailure(
 	)
 }
 
+// writeExchangeFailureDownstream keeps locally generated Exchange failures on
+// the same client-downstream evidence boundary as provider-backed responses.
+func writeExchangeFailureDownstream(
+	ctx context.Context,
+	downstream exchange.Downstream,
+	dialect protocolspec.Dialect,
+	err error,
+) error {
+	reason := exchange.ReasonOf(err)
+	if reason == "" {
+		reason = exchange.ReasonProviderTransportFailed
+	}
+	headers := http.Header{
+		"Content-Type":  {"application/json"},
+		"Cache-Control": {"no-store"},
+		ReasonHeader:    {string(reason)},
+	}
+	if exchangeFailureShouldNotRetry(reason) {
+		headers.Set("X-Should-Retry", "false")
+	}
+	envelope, envelopeErr := exchange.NewResponseEnvelope(
+		exchange.ResponseModeJSON,
+		exchangeStatus(err),
+		headers,
+	)
+	if envelopeErr != nil {
+		return envelopeErr
+	}
+	body, marshalErr := json.Marshal(exchangeErrorEnvelope(dialect, reason))
+	if marshalErr != nil {
+		return marshalErr
+	}
+	body = append(body, '\n')
+	if beginErr := downstream.Begin(ctx, envelope); beginErr != nil {
+		return beginErr
+	}
+	written, writeErr := downstream.Write(ctx, body)
+	if writeErr != nil {
+		return writeErr
+	}
+	if written != len(body) {
+		return io.ErrShortWrite
+	}
+	return nil
+}
+
 func exchangeErrorEnvelope(
-	dialect access.Dialect,
+	dialect protocolspec.Dialect,
 	reason exchange.ReasonCode,
 ) any {
 	message := exchangeReasonMessage(reason)
 	switch dialect {
-	case access.DialectOpenAIResponses:
+	case protocolspec.DialectOpenAIResponses:
 		type openAIError struct {
 			Message string  `json:"message"`
 			Type    string  `json:"type"`
@@ -173,8 +222,21 @@ func exchangeReasonMessage(reason exchange.ReasonCode) string {
 	case exchange.ReasonProviderCredentialUnavailable:
 		return "ViberMate has no provider credential configured for the selected route (" +
 			string(reason) + ")."
+	case exchange.ReasonMessageTransformFailed:
+		return "ViberMate could not apply the configured message transform (" +
+			string(reason) + ")."
 	default:
 		return "ViberMate could not complete this request (" + string(reason) + ")."
+	}
+}
+
+func exchangeFailureShouldNotRetry(reason exchange.ReasonCode) bool {
+	switch reason {
+	case exchange.ReasonProviderCredentialUnavailable,
+		exchange.ReasonMessageTransformFailed:
+		return true
+	default:
+		return false
 	}
 }
 

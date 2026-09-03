@@ -1,6 +1,7 @@
 package controlprincipal
 
 import (
+	"context"
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/base64"
@@ -43,8 +44,8 @@ func NewAuthority(grant CredentialGrant) (*Authority, error) {
 
 // Authenticate returns only the typed principal. The raw credential is never
 // copied into the result or retained outside the digest authority.
-func (authority *Authority) Authenticate(value string) (Principal, bool) {
-	if authority == nil || !validCredential(value) {
+func (authority *Authority) Authenticate(ctx context.Context, value string) (Principal, bool) {
+	if authority == nil || ctx == nil || ctx.Err() != nil || !validCredential(value) {
 		return Principal{}, false
 	}
 	digest := credentialDigest(value)

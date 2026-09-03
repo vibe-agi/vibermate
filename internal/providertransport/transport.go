@@ -14,8 +14,10 @@ import (
 
 	"golang.org/x/net/http2"
 
-	"github.com/vibe-agi/vibermate/internal/access"
+	"github.com/vibe-agi/vibermate/internal/egressnetwork"
+	"github.com/vibe-agi/vibermate/internal/originidentity"
 	"github.com/vibe-agi/vibermate/internal/transportprofile"
+	"github.com/vibe-agi/vibermate/internal/wireprofile"
 )
 
 const (
@@ -30,12 +32,17 @@ var ErrProviderResponseIdle = errors.New(
 )
 
 type TransportDispatch struct {
-	target      Target
-	plan        access.CompiledTransportFingerprintPlan
-	clientHello transportprofile.Observation
+	target       Target
+	plan         wireprofile.CompiledTransportFingerprintPlan
+	clientHello  transportprofile.Observation
+	egressPolicy egressnetwork.Policy
 }
 
 type contextDialer = transportprofile.ContextDialer
+
+type egressDialerBuilder interface {
+	Dialer(egressnetwork.Policy) (egressnetwork.ContextDialer, error)
+}
 
 type Transport interface {
 	RoundTrip(
@@ -74,13 +81,14 @@ func (timeouts TransportTimeouts) validate() error {
 }
 
 type profileTransport struct {
-	connector *transportprofile.Connector
-	timeouts  TransportTimeouts
+	dialers  egressDialerBuilder
+	roots    *x509.CertPool
+	timeouts TransportTimeouts
 }
 
 type productionTransport struct {
 	strictTLS Transport
-	loopback  Transport
+	cleartext Transport
 }
 
 func newProductionTransport(
@@ -90,13 +98,13 @@ func newProductionTransport(
 	if err != nil {
 		return nil, err
 	}
-	loopback, err := newProductionLoopbackTransport(timeouts)
+	cleartext, err := newProductionCleartextTransport(timeouts)
 	if err != nil {
 		return nil, err
 	}
 	return &productionTransport{
 		strictTLS: strictTLS,
-		loopback:  loopback,
+		cleartext: cleartext,
 	}, nil
 }
 
@@ -106,16 +114,17 @@ func (transport *productionTransport) RoundTrip(
 ) (*http.Response, transportprofile.Evidence, error) {
 	if transport == nil ||
 		transport.strictTLS == nil ||
-		transport.loopback == nil {
+		transport.cleartext == nil {
 		return nil, transportprofile.Evidence{}, errors.New(
 			"production provider transport is not initialized",
 		)
 	}
-	switch dispatch.target.transportKind {
-	case access.ProviderTransportStrictTLS:
+	switch dispatch.target.TransportKind() {
+	case originidentity.ProviderTransportStrictTLS:
 		return transport.strictTLS.RoundTrip(request, dispatch)
-	case access.ProviderTransportLoopbackCleartext:
-		return transport.loopback.RoundTrip(request, dispatch)
+	case originidentity.ProviderTransportLoopbackCleartext,
+		originidentity.ProviderTransportPrivateCleartext:
+		return transport.cleartext.RoundTrip(request, dispatch)
 	default:
 		return nil, transportprofile.Evidence{}, errors.New(
 			"provider transport kind is unsupported",
@@ -143,19 +152,29 @@ func newStrictTransport(
 	if err := timeouts.validate(); err != nil {
 		return nil, err
 	}
-	connector, err := transportprofile.NewConnector(
-		transportprofile.ConnectorOptions{
-			Dialer:           dialer,
-			RootCAs:          roots,
-			HandshakeTimeout: timeouts.TLSHandshake,
-		},
-	)
+	tlsConfig := &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: roots}
+	dialers, err := egressnetwork.NewBuilder(egressnetwork.BuilderOptions{
+		BaseDialer: dialer, TLSClientConfig: tlsConfig,
+	})
 	if err != nil {
 		return nil, err
 	}
+	return newStrictTransportWithDialers(roots, dialers, timeouts)
+}
+
+func newStrictTransportWithDialers(
+	roots *x509.CertPool,
+	dialers egressDialerBuilder,
+	timeouts TransportTimeouts,
+) (*profileTransport, error) {
+	if dialers == nil {
+		return nil, errors.New("provider traffic egress dialer builder is nil")
+	}
+	if err := timeouts.validate(); err != nil {
+		return nil, err
+	}
 	return &profileTransport{
-		connector: connector,
-		timeouts:  timeouts,
+		dialers: dialers, roots: roots, timeouts: timeouts,
 	}, nil
 }
 
@@ -163,7 +182,7 @@ func (transport *profileTransport) RoundTrip(
 	request *http.Request,
 	dispatch TransportDispatch,
 ) (*http.Response, transportprofile.Evidence, error) {
-	if transport == nil || transport.connector == nil {
+	if transport == nil || transport.dialers == nil {
 		return nil, transportprofile.Evidence{}, errors.New(
 			"provider transport is not initialized",
 		)
@@ -176,23 +195,40 @@ func (transport *profileTransport) RoundTrip(
 	if err := dispatch.target.validate(); err != nil {
 		return nil, transportprofile.Evidence{}, err
 	}
-	if dispatch.target.transportKind != access.ProviderTransportStrictTLS {
+	if dispatch.target.TransportKind() != originidentity.ProviderTransportStrictTLS {
 		return nil, transportprofile.Evidence{}, errors.New(
 			"strict TLS provider transport received a non-TLS target",
 		)
 	}
 	if request.URL.Scheme != "https" ||
-		request.URL.Host != dispatch.target.httpAuthority ||
-		request.Host != dispatch.target.httpAuthority {
+		request.URL.Host != dispatch.target.HTTPAuthority() ||
+		request.Host != dispatch.target.HTTPAuthority() {
 		return nil, transportprofile.Evidence{}, errors.New(
 			"provider HTTP and transport target identities disagree",
 		)
 	}
+	dialer, err := transport.dialers.Dialer(dispatch.egressPolicy)
+	if err != nil {
+		return nil, transportprofile.Evidence{}, fmt.Errorf(
+			"compile provider traffic egress: %w",
+			err,
+		)
+	}
+	connector, err := transportprofile.NewConnector(
+		transportprofile.ConnectorOptions{
+			Dialer:           dialer,
+			RootCAs:          transport.roots,
+			HandshakeTimeout: transport.timeouts.TLSHandshake,
+		},
+	)
+	if err != nil {
+		return nil, transportprofile.Evidence{}, err
+	}
 	switch dispatch.plan.Requested().HTTPTransport() {
-	case access.HTTPTransportHTTP1:
-		return transport.roundTripHTTP1(request, dispatch)
-	case access.HTTPTransportHTTP2:
-		return transport.roundTripHTTP2(request, dispatch)
+	case wireprofile.HTTPTransportHTTP1:
+		return transport.roundTripHTTP1(request, dispatch, connector)
+	case wireprofile.HTTPTransportHTTP2:
+		return transport.roundTripHTTP2(request, dispatch, connector)
 	default:
 		return nil, transportprofile.Evidence{}, errors.New(
 			"provider HTTP transport kind is unsupported",
@@ -203,6 +239,7 @@ func (transport *profileTransport) RoundTrip(
 func (transport *profileTransport) roundTripHTTP1(
 	request *http.Request,
 	dispatch TransportDispatch,
+	connector *transportprofile.Connector,
 ) (*http.Response, transportprofile.Evidence, error) {
 	var evidenceMu sync.Mutex
 	var evidence transportprofile.Evidence
@@ -219,12 +256,12 @@ func (transport *profileTransport) roundTripHTTP1(
 			network string,
 			address string,
 		) (net.Conn, error) {
-			connection, dialEvidence, err := transport.connector.Connect(
+			connection, dialEvidence, err := connector.Connect(
 				ctx,
 				transportprofile.ConnectRequest{
 					Network:       network,
 					Address:       address,
-					TLSServerName: dispatch.target.tlsServerName,
+					TLSServerName: dispatch.target.TLSServerName(),
 					Plan:          dispatch.plan,
 					Observation:   dispatch.clientHello,
 				},
@@ -270,6 +307,7 @@ func (transport *profileTransport) roundTripHTTP1(
 func (transport *profileTransport) roundTripHTTP2(
 	request *http.Request,
 	dispatch TransportDispatch,
+	connector *transportprofile.Connector,
 ) (*http.Response, transportprofile.Evidence, error) {
 	var evidenceMu sync.Mutex
 	var evidence transportprofile.Evidence
@@ -288,12 +326,12 @@ func (transport *profileTransport) roundTripHTTP2(
 		address string,
 		_ *tls.Config,
 	) (net.Conn, error) {
-		connection, dialEvidence, connectErr := transport.connector.Connect(
+		connection, dialEvidence, connectErr := connector.Connect(
 			ctx,
 			transportprofile.ConnectRequest{
 				Network:       network,
 				Address:       address,
-				TLSServerName: dispatch.target.tlsServerName,
+				TLSServerName: dispatch.target.TLSServerName(),
 				Plan:          dispatch.plan,
 				Observation:   dispatch.clientHello,
 			},

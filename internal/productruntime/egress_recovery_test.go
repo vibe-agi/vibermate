@@ -77,26 +77,19 @@ func TestProductRuntimeRefusesToStartWhenEgressRecoveryFails(t *testing.T) {
 	t.Parallel()
 
 	recoveryErr := errors.New("injected EgressAttempt recovery failure")
-	closed := make(chan struct{}, 1)
-	builders := productionBuilders()
-	builders.storage = failingEgressRecoveryStorageBuilder{
-		delegate:    builders.storage,
-		recoveryErr: recoveryErr,
-		closed:      closed,
+	overrides := runtimeBuildOverrides{
+		recoverEgress: func(context.Context, egressaudit.Repository, time.Time) error {
+			return recoveryErr
+		},
 	}
 	_, err := startWithBuilders(
 		context.Background(),
 		testOptions(t, hostcontract.Desktop(), &coordinatorDouble{}),
-		builders,
+		overrides,
 	)
 	if !errors.Is(err, recoveryErr) ||
 		!strings.Contains(err.Error(), `stage "EgressAttempt recovery"`) {
 		t.Fatalf("startup recovery error = %v", err)
-	}
-	select {
-	case <-closed:
-	default:
-		t.Fatal("SQLite was not closed after EgressAttempt recovery failed")
 	}
 }
 
@@ -313,7 +306,7 @@ func runtimeProviderAttempt(t *testing.T, id string) egressaudit.Attempt {
 		Decision: egressaudit.DecisionRef{
 			PolicyID:       "policy-before-restart",
 			PolicyRevision: 7,
-			Authority:      egressaudit.AuthorityAccess,
+			Authority:      egressaudit.AuthorityEnvironment,
 			RuleID:         "rule-before-restart",
 			ProxyID:        "direct",
 		},
@@ -323,63 +316,6 @@ func runtimeProviderAttempt(t *testing.T, id string) egressaudit.Attempt {
 		t.Fatal(err)
 	}
 	return attempt
-}
-
-type failingEgressRecoveryStorageBuilder struct {
-	delegate    storageBuilder
-	recoveryErr error
-	closed      chan<- struct{}
-}
-
-func (builder failingEgressRecoveryStorageBuilder) Build(
-	ctx context.Context,
-	request storageBuildRequest,
-) (storageBuildResult, error) {
-	result, err := builder.delegate.Build(ctx, request)
-	if err != nil {
-		return storageBuildResult{}, err
-	}
-	delegate := result.store.EgressAttemptRepository()
-	result.store = &failingEgressRecoveryStore{
-		RuntimeStore: result.store,
-		repository: &failingEgressRecoveryRepository{
-			Repository: delegate,
-			err:        builder.recoveryErr,
-		},
-		closed: builder.closed,
-	}
-	return result, nil
-}
-
-type failingEgressRecoveryStore struct {
-	runtimepersistence.RuntimeStore
-	repository egressaudit.Repository
-	closed     chan<- struct{}
-}
-
-func (store *failingEgressRecoveryStore) EgressAttemptRepository() egressaudit.Repository {
-	return store.repository
-}
-
-func (store *failingEgressRecoveryStore) Shutdown(ctx context.Context) error {
-	err := store.RuntimeStore.Shutdown(ctx)
-	select {
-	case store.closed <- struct{}{}:
-	default:
-	}
-	return err
-}
-
-type failingEgressRecoveryRepository struct {
-	egressaudit.Repository
-	err error
-}
-
-func (repository *failingEgressRecoveryRepository) Recover(
-	context.Context,
-	time.Time,
-) (int, error) {
-	return 0, repository.err
 }
 
 type completionRepositoryDouble struct {

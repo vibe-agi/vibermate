@@ -12,14 +12,13 @@ import (
 	"github.com/vibe-agi/vibermate/internal/clientadapter"
 )
 
-const reportSchema = acceptancereport.SchemaV6
+const reportSchema = acceptancereport.SchemaV7
 
 type checkStatus = acceptancereport.Status
 
 const (
-	checkPassed  checkStatus = acceptancereport.StatusPassed
-	checkFailed  checkStatus = acceptancereport.StatusFailed
-	checkBlocked checkStatus = acceptancereport.StatusBlocked
+	checkPassed checkStatus = acceptancereport.StatusPassed
+	checkFailed checkStatus = acceptancereport.StatusFailed
 )
 
 type acceptanceCheck = acceptancereport.Check
@@ -73,8 +72,6 @@ func (report *acceptanceReport) add(
 	})
 	if status == checkFailed {
 		report.Status = checkFailed
-	} else if status == checkBlocked && report.Status == checkPassed {
-		report.Status = checkBlocked
 	}
 }
 
@@ -116,12 +113,4 @@ func writeReport(path string, report acceptanceReport) error {
 		return fmt.Errorf("publish acceptance report: %w", err)
 	}
 	return nil
-}
-
-type blockedError struct {
-	reason string
-}
-
-func (err *blockedError) Error() string {
-	return "packaged-app acceptance blocked: " + err.reason
 }

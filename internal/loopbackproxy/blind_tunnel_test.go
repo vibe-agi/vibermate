@@ -6,16 +6,12 @@ import (
 	"encoding/base64"
 	"io"
 	"net"
-	"net/http"
 	"testing"
 	"time"
 
-	"github.com/vibe-agi/vibermate/internal/access"
 	"github.com/vibe-agi/vibermate/internal/capturerun"
 	"github.com/vibe-agi/vibermate/internal/connectionevent"
-	"github.com/vibe-agi/vibermate/internal/connectionpolicy"
 	"github.com/vibe-agi/vibermate/internal/egressaudit"
-	"github.com/vibe-agi/vibermate/internal/toolapproval"
 )
 
 // echoTarget stands in for any host an Agent touches that is not a model API:
@@ -46,7 +42,11 @@ func echoTarget(t *testing.T) (string, func()) {
 			}()
 		}
 	}()
-	return listener.Addr().String(), func() { _ = listener.Close() }
+	_, port, err := net.SplitHostPort(listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return net.JoinHostPort("localhost", port), func() { _ = listener.Close() }
 }
 
 // The launcher exports HTTP_PROXY to the whole child process tree, so an Agent
@@ -143,64 +143,6 @@ func TestUnmatchedAuthorityIsTunnelledWithoutDecryption(t *testing.T) {
 	t.Fatal("no blind EgressAttempt reached a terminal")
 }
 
-func TestNoAccessIsTransparentEvenWhenConfiguredDefaultWouldAsk(t *testing.T) {
-	t.Parallel()
-
-	fixture := newProxyFixtureWithPolicy(t, connectionpolicy.Snapshot{
-		Revision: 1,
-		Default: connectionpolicy.Rule{
-			ID:       "test-default-ask",
-			Decision: connectionpolicy.DecisionAsk,
-			Match:    connectionpolicy.MatchAny(),
-		},
-	})
-	defer fixture.Close(t)
-	empty, err := access.NewSnapshotProjection(
-		fixture.authority.Identity().Revision(),
-		fixture.authority,
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := empty.Restore(nil); err != nil {
-		t.Fatal(err)
-	}
-	fixture.ingress.delegate = empty
-
-	authority, stop := echoTarget(t)
-	defer stop()
-	connection, response := fixture.Connect(
-		t,
-		fixture.grant.ProxyCapability.Value(),
-		authority,
-	)
-	defer connection.Close()
-	if response.StatusCode != http.StatusOK {
-		t.Fatalf("transparent CONNECT status = %d", response.StatusCode)
-	}
-	if _, err := connection.Write([]byte("transparent")); err != nil {
-		t.Fatal(err)
-	}
-	reader := bufio.NewReader(connection)
-	echoed := make([]byte, len("echo:transparent"))
-	if _, err := io.ReadFull(reader, echoed); err != nil {
-		t.Fatal(err)
-	}
-	if string(echoed) != "echo:transparent" {
-		t.Fatalf("transparent tunnel payload = %q", echoed)
-	}
-	page, err := fixture.approvals.ListApprovals(
-		context.Background(),
-		toolapproval.PageRequest{State: toolapproval.StatePending, Limit: 20},
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(page.Items) != 0 {
-		t.Fatalf("zero-Access capture created approvals: %+v", page.Items)
-	}
-}
-
 // A blind connection still leaves a connection record, and the record still
 // contains no path, header, or tunnelled byte.
 func TestBlindTunnelRecordsAConnectionWithoutContent(t *testing.T) {
@@ -244,12 +186,12 @@ func TestBlindTunnelRecordsAConnectionWithoutContent(t *testing.T) {
 		if record.RouteHost == "" {
 			t.Fatalf("blind connection has no destination: %+v", record)
 		}
-		if record.AccessID != "" ||
-			record.AccessName != "" ||
-			record.AccessRevision != 0 ||
-			record.AgentEndpointID != "" ||
-			record.AgentEndpointRevision != 0 {
-			t.Fatalf("blind connection acquired an Access relation: %+v", record)
+		if record.EnvironmentID != fixture.environment.ID ||
+			record.EnvironmentName == "" ||
+			record.EnvironmentRevision != fixture.environment.Revision ||
+			record.ClientEndpointID != "" ||
+			record.ClientEndpointRevision != 0 {
+			t.Fatalf("blind connection Environment relation = %+v", record)
 		}
 	}
 	if !found {

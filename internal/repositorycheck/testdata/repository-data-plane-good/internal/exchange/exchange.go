@@ -1,7 +1,8 @@
 package exchange
 
-import "github.com/vibe-agi/vibermate/internal/access"
+import "github.com/vibe-agi/vibermate/internal/environment"
 
-type Runtime struct {
-	resolver access.SnapshotResolver
+type ClientRequest struct {
+	plan   environment.RequestPlan
+	policy environment.PolicySet
 }

@@ -500,25 +500,32 @@ func cliManifest(t *testing.T, artifactRoot, revision string) releasemanifest.Ma
 		PublishedAt: "2026-08-03T12:34:56+08:00",
 	}
 	configuration := map[string]string{
-		"go.mod":                               strings.Repeat("1", 64),
-		"go.sum":                               strings.Repeat("2", 64),
-		"rust-toolchain.toml":                  strings.Repeat("3", 64),
-		"ui/desktop/package.json":              strings.Repeat("4", 64),
-		"ui/desktop/pnpm-lock.yaml":            strings.Repeat("5", 64),
-		"ui/desktop/src-tauri/Cargo.toml":      strings.Repeat("6", 64),
-		"ui/desktop/src-tauri/Cargo.lock":      strings.Repeat("7", 64),
-		"ui/desktop/src-tauri/tauri.conf.json": strings.Repeat("8", 64),
+		"go.mod":                              strings.Repeat("1", 64),
+		"go.sum":                              strings.Repeat("2", 64),
+		"ui/flutter_app/.metadata":            strings.Repeat("3", 64),
+		"ui/flutter_app/pubspec.yaml":         strings.Repeat("4", 64),
+		"ui/flutter_app/pubspec.lock":         strings.Repeat("5", 64),
+		"ui/flutter_app/tool/flutter-sdk.env": strings.Repeat("6", 64),
+		"ui/flutter_app/macos/Runner.xcodeproj/project.pbxproj": strings.Repeat("7", 64),
+		"ui/flutter_app/macos/Runner/Configs/AppInfo.xcconfig":  strings.Repeat("8", 64),
+		"ui/flutter_app/macos/Runner/Configs/Release.xcconfig":  strings.Repeat("9", 64),
+		"ui/flutter_app/macos/Runner/Info.plist":                strings.Repeat("a", 64),
+		"ui/flutter_app/macos/Runner/Release.entitlements":      strings.Repeat("b", 64),
 	}
 	sidecarPayloads := map[string][]byte{
 		"vibermate":  []byte("launcher\n"),
 		"vibermated": []byte("daemon!!\n"),
 	}
-	sidecars := map[string]string{
-		"vibermate":  cliSHA256(sidecarPayloads["vibermate"]),
-		"vibermated": cliSHA256(sidecarPayloads["vibermated"]),
+	appFrameworkPayload := []byte("universal App framework\n")
+	flutterFrameworkPayload := []byte("universal FlutterMacOS framework\n")
+	nestedCode := map[string]string{
+		"app-framework":           cliSHA256(appFrameworkPayload),
+		"flutter-macos-framework": cliSHA256(flutterFrameworkPayload),
+		"vibermate":               cliSHA256(sidecarPayloads["vibermate"]),
+		"vibermated":              cliSHA256(sidecarPayloads["vibermated"]),
 	}
 	desktopPayload := cliJSON(t, map[string]any{
-		"schema": releasemanifest.DesktopBuildSchemaV2,
+		"schema": releasemanifest.DesktopBuildSchemaV3,
 		"source": map[string]any{
 			"vcs":        "git",
 			"revision":   revision,
@@ -527,19 +534,18 @@ func cliManifest(t *testing.T, artifactRoot, revision string) releasemanifest.Ma
 		},
 		"profiles": map[string]string{
 			"desktop":  "release",
-			"sidecars": "distribution",
+			"sidecars": "release",
 			"target":   "universal-apple-darwin",
+			"toolkit":  "flutter",
 		},
 		"toolchains": map[string]string{
-			"go":    "go version go1.25.12 darwin/arm64",
-			"node":  "v22.23.1",
-			"rustc": "rustc 1.88.0",
-			"cargo": "cargo 1.88.0",
-			"pnpm":  "10.33.2",
-			"tauri": "tauri-cli 2.11.4",
+			"go":      "go version go1.25.13 darwin/arm64",
+			"flutter": "Flutter 3.41.5 (2c9...)",
+			"dart":    "Dart 3.11.3",
+			"xcode":   "Xcode 16.2\nBuild version 16C5032a",
 		},
 		"configurationSHA256": configuration,
-		"sidecarSHA256":       sidecars,
+		"nestedCodeSHA256":    nestedCode,
 	})
 	writeCLIArtifact(t, artifactRoot, &manifest, releasemanifest.ArtifactRoleDesktopBuildManifest, desktopPayload)
 	desktopDigest := cliArtifactForRole(t, &manifest, releasemanifest.ArtifactRoleDesktopBuildManifest).SHA256
@@ -562,6 +568,8 @@ func cliManifest(t *testing.T, artifactRoot, revision string) releasemanifest.Ma
 	writeCLIPayloadFile(t, artifactRoot, "vibermate-desktop", mainPayload, 0o755)
 	writeCLIPayloadFile(t, artifactRoot, "vibermate", sidecarPayloads["vibermate"], 0o755)
 	writeCLIPayloadFile(t, artifactRoot, "vibermated", sidecarPayloads["vibermated"], 0o755)
+	writeCLIPayloadFile(t, artifactRoot, "dist/App.framework/App", appFrameworkPayload, 0o755)
+	writeCLIPayloadFile(t, artifactRoot, "dist/FlutterMacOS.framework/FlutterMacOS", flutterFrameworkPayload, 0o755)
 	writeCLIPayloadFile(t, artifactRoot, "vibermate-build-manifest.json", desktopPayload, 0o644)
 	writeCLIPayloadFile(t, artifactRoot, "LICENSE", licensePayload, 0o644)
 	writeCLIPayloadFile(t, artifactRoot, "dist/index.html", distPayload, 0o644)
@@ -574,6 +582,10 @@ func cliManifest(t *testing.T, artifactRoot, revision string) releasemanifest.Ma
 			{"mode": 0o755, "path": ".", "type": "directory"},
 			cliLedgerFileEntry("LICENSE", licensePayload, 0o644),
 			{"mode": 0o755, "path": "dist", "type": "directory"},
+			{"mode": 0o755, "path": "dist/App.framework", "type": "directory"},
+			cliLedgerFileEntry("dist/App.framework/App", appFrameworkPayload, 0o755),
+			{"mode": 0o755, "path": "dist/FlutterMacOS.framework", "type": "directory"},
+			cliLedgerFileEntry("dist/FlutterMacOS.framework/FlutterMacOS", flutterFrameworkPayload, 0o755),
 			cliLedgerFileEntry("dist/index.html", distPayload, 0o644),
 			cliLedgerFileEntry("vibermate", sidecarPayloads["vibermate"], 0o755),
 			cliLedgerFileEntry("vibermate-build-manifest.json", desktopPayload, 0o644),

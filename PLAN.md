@@ -1,77 +1,72 @@
-# Safe Access Retirement Closure
+# Environment-first Production Vertical
 
-Status: complete
-Created: 2026-08-05
-Implementation baseline: `e3f5ffae88957692d376390d3749f707c80b003f`
-Implementation candidate: `5bcb6d8b66f4e3bf550ff93dd58933d47596c9d2`
+Status: managed Anthropic first-use vertical frozen; deterministic packaged evidence passed
 
 ## Goal
 
-Close permanent Access retirement through the existing SQLite, immutable
-projection, request data plane, SecretStore, authenticated Desktop control
-plane, and compact UI. The operation must be explicit, revision-bound,
-retryable, and safe under concurrent requests; it must not turn a missing UI
-row into permission to reuse the same durable identity.
+Ship the first honest Desktop vertical around two product authorities:
 
-## Invariants
+- an Environment is an immutable revisioned configuration aggregate; and
+- a Capture is a running source with one independently switchable Environment
+  assignment.
 
-1. Only a disabled Access can be retired. Deletion never acts as an implicit
-   disable operation.
-2. Preview is evidence, not authority. Execution re-reads the aggregate,
-   workspace revisions, active CaptureRun IDs, ProxyClientBinding Profile
-   references, and cross-Access secret ownership and compares one exact impact
-   token.
-3. A per-Access request-admission cut closes before drain. Every MITM request
-   holds its Access-use lease through its complete downstream response.
-4. Active CaptureRuns block deletion. Durable workspace assignments require a
-   separate explicit confirmation and are removed in the SQLite transaction.
-   A ProxyClientBinding policy that names any owned Profile blocks deletion;
-   it is never rewritten or swept implicitly.
-5. A secret referenced by another Access is preserved. Only exclusive
-   references are passed to the host SecretStore, whose missing result is
-   idempotent and whose errors never contain the reference.
-6. Durable deletion writes an immutable tombstone before removing the Access
-   aggregate in the same transaction. The `AccessID` cannot be created again.
-7. A lost success response can be retried without repeating secret cleanup or
-   recording another deletion Activity event. Commit ambiguity is reconciled
-   from SQLite; an unresolvable result fails closed.
-8. Activity, ConnectionEvent, and EgressAttempt history is retained. Deletion
-   never claims to erase historical evidence or force-cancel an Agent process.
+The retired Access/Profile product model is not retained through aliases,
+dual writes, compatibility readers, or legacy database migrations.
 
-## Product acceptance
+## Required vertical
 
-- The Desktop shows `Delete` only for a disabled Access.
-- The confirmation is compact and names only bounded counts: workspace
-  assignments, active captures, remote-client policy references, exclusive
-  credentials, and preserved shared credentials.
-- Workspace retirement requires a checkbox; active captures leave the action
-  disabled and expose Refresh.
-- A successful deletion removes the Access from the directory. A later create
-  using the retired identity returns `access_retired`.
-- Activity and traffic views remain ten-row paginated tables and stay operable
-  with at least eight captured Agents and dozens of connection/attempt rows.
+1. `system_transparent` is always available and performs blind forwarding with
+   body-free connection and egress evidence. It never receives a local Root,
+   parses semantic content, invokes plugins, or rewrites credentials.
+2. A custom Environment owns exact ClientEndpoints, ProtocolPlans, Routes,
+   account references, policy bindings, and egress selection. Draft, impact
+   preview, and CAS publication form one atomic authority path.
+3. `vibermate run --env <id> -- <agent>` and Manual Capture create a typed
+   Capture assignment. The launch boundary freezes the Environment revision,
+   digest, protected origins, and managed-credential origins.
+4. Every admitted request freezes
+   Environment -> ClientEndpoint -> ProtocolPlan -> Route -> ProviderAccount
+   references. A later publish or Capture switch cannot rewrite an in-flight
+   request.
+5. Compatible assignment changes are hot; protocol-sensitive changes drain
+   affected connections; authority expansion requires a new Capture launch.
+6. SQLite is the durable authority for Environment revisions, Capture
+   assignments, ProviderAccount configuration, activities, approvals, and
+   launch boundaries. Secret bytes remain exclusively in SecretStore.
+7. ProductRuntime, Desktop Control API, CLI, and Flutter consume those same
+   typed authorities. No UI projection invents missing values or reconstructs
+   historical evidence from current configuration.
+8. A Desktop-managed Anthropic API-key account is selected explicitly by one
+   managed Route. Core removes ambient client authentication and injects only
+   the frozen account lease at the final provider boundary; failover remains
+   off. Request evidence exposes the frozen target, Route, account revision,
+   credential epoch, usage, Attempts, and terminal outcome without exposing
+   the credential.
 
-## Required evidence
+## Freeze gates
 
-- Request admission close/drain/release through the real proxy handler.
-- SQLite impact CAS, workspace retirement, ProxyClientBinding reference fence,
-  tombstone reopen, identity non-reuse, commit-then-error and rollback-then-error
-  reconciliation.
-- Exclusive/shared secret classification, cleanup failure/retry, and changed
-  ownership between preview and execution.
-- Authenticated control preview/DELETE, capability separation, idempotency,
-  single Activity event, strict closed response validation, and UI workflow.
-- Full Go, race-touched packages, vet, structural/cross-platform builds,
-  TypeScript, React, and Playwright checks.
-
-All evidence above passed from the clean implementation candidate. The
-development macOS bundle was then rebuilt from that commit and both the
-Desktop process and packaged daemon reached their live loopback listeners.
+- all Go tests, race tests, vet, formatting, module integrity, and structural
+  repository checks pass;
+- the compact Flutter workbench passes analyzer, unit/widget, native host, and
+  desktop/narrow packaged-App flows;
+- the development App starts the production composition and exits cleanly;
+- a clean committed candidate produces current deterministic packaged
+  acceptance evidence bound to its exact App and sidecars; and
+- current documentation, API names, locales, and generated artifacts contain
+  no retired Access/Profile product authority.
 
 ## Explicitly deferred
 
-- Force-terminating running CaptureRuns or requests.
-- Erasing retained Activity, ConnectionEvent, or EgressAttempt history.
-- Native release secret storage, Keychain, system Root installation,
-  Server/LAN composition, plugins, Language Bridge, transparent application
-  capture, and Preview/Release readiness.
+- linked client-session account connectors, automatic account failover, and a
+  retained external credentialed-provider report (the explicit private
+  `0600` key-file acceptance contract is implemented but remains operator
+  opt-in);
+- plugin execution and the Language Bridge;
+- quality evaluation and long-term usage/cost analytics;
+- Server/LAN composition and remote enrollment;
+- system trust-store mutation and Keychain;
+- application-wide capture through Network Extension/TUN;
+- signed/notarized distribution and Preview/Release claims.
+
+Deferral keeps those seams typed; it does not permit placeholder success,
+fabricated evidence, or fallback to the retired model.

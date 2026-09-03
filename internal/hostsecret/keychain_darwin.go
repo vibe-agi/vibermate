@@ -60,21 +60,46 @@ func (factory KeychainFactory) Open(
 	if factory.service == "" {
 		return nil, errors.New("keychain SecretStore factory is invalid")
 	}
-	return &KeychainStore{service: factory.service}, nil
+	return newContextBoundReadStore(
+		&KeychainStore{service: factory.service},
+	), nil
 }
 
 func (store *KeychainStore) Read(
 	ctx context.Context,
 	reference secretstore.Reference,
 ) (*secretstore.Value, error) {
+	return store.read(ctx, reference, 0, false)
+}
+
+func (store *KeychainStore) ReadAtRevision(
+	ctx context.Context,
+	reference secretstore.Reference,
+	expected secretstore.Revision,
+) (*secretstore.Value, error) {
+	if expected == 0 || expected > secretstore.MaxRevision {
+		return nil, secretstore.ErrRevisionConflict
+	}
+	return store.read(ctx, reference, expected, true)
+}
+
+func (store *KeychainStore) read(
+	ctx context.Context,
+	reference secretstore.Reference,
+	expected secretstore.Revision,
+	pinned bool,
+) (*secretstore.Value, error) {
 	if err := storeReady(ctx, store, reference); err != nil {
 		return nil, err
 	}
-	data, _, err := store.copyItem(reference, true)
+	data, actual, err := store.copyItem(reference, true)
 	if err != nil {
 		return nil, err
 	}
 	defer wipe(data)
+	if pinned && actual != expected {
+		return nil, secretstore.ErrRevisionConflict
+	}
 	return secretstore.NewValue(data)
 }
 
@@ -168,6 +193,7 @@ func (store *KeychainStore) Delete(
 	}
 	query := store.query(reference)
 	defer C.CFRelease(C.CFTypeRef(query))
+	preventAuthenticationUI(query)
 	status := C.SecItemDelete(C.CFDictionaryRef(query))
 	if status == C.errSecItemNotFound {
 		return secretstore.ErrNotFound

@@ -9,6 +9,8 @@ import (
 	"io"
 	"sync"
 	"time"
+
+	"github.com/vibe-agi/vibermate/internal/agentconversation"
 )
 
 const activityIDBytes = 20
@@ -79,22 +81,34 @@ func (manager *Manager) Record(
 		return Record{}, fmt.Errorf("generate Activity ID: %w", err)
 	}
 	record := Record{
-		ID:                base64.RawURLEncoding.EncodeToString(identifier),
-		OccurredAt:        manager.clock.Now().UTC(),
-		Kind:              event.Kind,
-		AccessID:          event.AccessID.String(),
-		AccessName:        event.AccessName,
-		AccessRevision:    event.AccessRevision,
-		SubjectID:         event.SubjectID,
-		Status:            event.Status,
-		ReasonCode:        event.ReasonCode,
-		SourceKind:        event.SourceKind,
-		SourceDisplayName: event.SourceDisplayName,
-		SourceRecognition: event.SourceRecognition,
-		CaptureRunID:      event.CaptureRunID,
-		ManualCaptureID:   event.ManualCaptureID,
-		IngressProfileID:  event.IngressProfileID,
-		ConnectionID:      event.ConnectionID,
+		ID:                     base64.RawURLEncoding.EncodeToString(identifier),
+		OccurredAt:             manager.clock.Now().UTC(),
+		Kind:                   event.Kind,
+		EnvironmentID:          event.EnvironmentID.String(),
+		EnvironmentRevision:    uint64(event.EnvironmentRevision),
+		EnvironmentDigest:      event.EnvironmentDigest,
+		ClientEndpointID:       event.ClientEndpointID.String(),
+		ClientEndpointRevision: uint64(event.ClientEndpointRevision),
+		ProtocolPlanID:         event.ProtocolPlanID.String(),
+		ProtocolPlanRevision:   uint64(event.ProtocolPlanRevision),
+		RouteID:                event.RouteID.String(),
+		RouteRevision:          uint64(event.RouteRevision),
+		AccountID:              event.AccountID,
+		AccountRevision:        event.AccountRevision,
+		CredentialEpoch:        event.CredentialEpoch,
+		SubjectID:              event.SubjectID,
+		Status:                 event.Status,
+		ReasonCode:             event.ReasonCode,
+		SourceKind:             event.SourceKind,
+		SourceDisplayName:      event.SourceDisplayName,
+		SourceRecognition:      event.SourceRecognition,
+		CaptureRunID:           event.CaptureRunID,
+		ManualCaptureID:        event.ManualCaptureID,
+		ConnectionID:           event.ConnectionID,
+	}
+	if event.Conversation != (agentconversation.Ref{}) {
+		conversation := event.Conversation
+		record.Conversation = &conversation
 	}
 	if !event.Diagnosis.Empty() {
 		diagnosis := event.Diagnosis
@@ -140,6 +154,10 @@ func (manager *Manager) GetExchange(
 		transport := record.Transport.Clone()
 		record.Transport = &transport
 	}
+	if record.Conversation != nil {
+		conversation := *record.Conversation
+		record.Conversation = &conversation
+	}
 	return record, nil
 }
 
@@ -154,6 +172,34 @@ func (manager *Manager) ListExchanges(
 		return Page{}, ErrInvalidEvent
 	}
 	return manager.list(ctx, request, manager.repository.ListExchanges)
+}
+
+func (manager *Manager) ListConversations(
+	ctx context.Context,
+	request ConversationIndexRequest,
+) (ConversationPage, error) {
+	if manager == nil || request.Validate() != nil {
+		return ConversationPage{}, ErrInvalidEvent
+	}
+	operation, finish, err := manager.begin(ctx)
+	if err != nil {
+		return ConversationPage{}, err
+	}
+	defer finish()
+	page, err := manager.repository.ListConversations(operation, request)
+	if err != nil {
+		return ConversationPage{}, err
+	}
+	page.Items = append([]ConversationRecord{}, page.Items...)
+	for index := range page.Items {
+		conversation := page.Items[index].Conversation
+		page.Items[index].Conversation = conversation
+		if page.Items[index].Latest.Conversation != nil {
+			latest := *page.Items[index].Latest.Conversation
+			page.Items[index].Latest.Conversation = &latest
+		}
+	}
+	return page, nil
 }
 
 func (manager *Manager) list(
@@ -175,6 +221,10 @@ func (manager *Manager) list(
 	}
 	page.Items = append([]Record{}, page.Items...)
 	for index := range page.Items {
+		if page.Items[index].Conversation != nil {
+			conversation := *page.Items[index].Conversation
+			page.Items[index].Conversation = &conversation
+		}
 		if page.Items[index].Transport != nil {
 			transport := page.Items[index].Transport.Clone()
 			page.Items[index].Transport = &transport

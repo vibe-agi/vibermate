@@ -1,5 +1,5 @@
 // Package transportprofile captures a bounded downstream TLS ClientHello and
-// applies an immutable Access transport profile to one upstream connection.
+// applies an immutable wire presentation to one upstream connection.
 //
 // It preserves protocol conversion as a separate codec/IR concern. This
 // package handles only transport identity, strict TLS, and transport evidence.

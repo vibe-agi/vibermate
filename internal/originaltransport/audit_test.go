@@ -9,10 +9,12 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/vibe-agi/vibermate/internal/access"
 	"github.com/vibe-agi/vibermate/internal/egressaudit"
+	"github.com/vibe-agi/vibermate/internal/egressnetwork"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
 	"github.com/vibe-agi/vibermate/internal/originaltransport"
+	"github.com/vibe-agi/vibermate/internal/originidentity"
+	"github.com/vibe-agi/vibermate/internal/protocolspec"
 )
 
 type auditRecorder struct {
@@ -54,7 +56,7 @@ func (recorder *auditRecorder) snapshot() (
 func auditedRequest(t *testing.T) originaltransport.Request {
 	t.Helper()
 
-	origin, err := access.NewClientOrigin("https://api.anthropic.com:443")
+	origin, err := originidentity.ParseClientOrigin("https://api.anthropic.com:443")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -65,7 +67,7 @@ func auditedRequest(t *testing.T) originaltransport.Request {
 			Origin:       origin,
 			Method:       http.MethodGet,
 			Path:         "/api/claude_code/settings",
-			PayloadClass: access.OperationPayloadControl,
+			PayloadClass: protocolspec.OperationPayloadControl,
 			ConnectionID: "connection-1",
 			ParentID:     "original-request-1",
 		},
@@ -114,7 +116,7 @@ func TestOriginalEgressRecordsOneAttemptPerOutbound(t *testing.T) {
 		attempt.ConnectionID() != "connection-1" ||
 		attempt.Parent().Kind != egressaudit.ParentOriginalRequest ||
 		attempt.Parent().ID != "original-request-1" ||
-		attempt.TargetOrigin() != "https://api.anthropic.com:443" {
+		attempt.TargetOrigin() != originidentityMustString(t, "https://api.anthropic.com:443") {
 		t.Fatalf("recorded attempt = %+v parent=%+v",
 			attempt, attempt.Parent())
 	}
@@ -122,6 +124,15 @@ func TestOriginalEgressRecordsOneAttemptPerOutbound(t *testing.T) {
 		completed[0].Outcome() != egressaudit.OutcomeCompleted {
 		t.Fatalf("completed attempts = %+v", completed)
 	}
+}
+
+func originidentityMustString(t *testing.T, raw string) string {
+	t.Helper()
+	origin, err := originidentity.ParseClientOrigin(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return origin.String()
 }
 
 // A failed outbound is still evidence; it must not vanish.
@@ -157,6 +168,7 @@ type failingRoundTripper struct{}
 
 func (transport *failingRoundTripper) RoundTrip(
 	request *http.Request,
+	_ egressnetwork.Policy,
 ) (*http.Response, error) {
 	if request.Body != nil {
 		_, _ = io.Copy(io.Discard, request.Body)

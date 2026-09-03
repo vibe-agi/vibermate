@@ -10,16 +10,14 @@ import (
 )
 
 const (
-	SchemaV5                     = "vibermate.m0-assembly-acceptance/v5"
-	SchemaV6                     = "vibermate.m0-assembly-acceptance/v6"
-	DesktopBuildManifestSchemaV1 = "vibermate.desktop-build/v1"
-	DesktopBuildManifestSchemaV2 = "vibermate.desktop-build/v2"
-	DesktopBuildManifestSchema   = DesktopBuildManifestSchemaV2
-	ExpectedGoVersion            = "go1.25.12"
-	ExpectedNodeVersion          = "v22.23.1"
-	ExpectedRustVersion          = "1.88.0"
-	ExpectedPNPMVersion          = "10.33.2"
-	ExpectedTauriVersion         = "tauri-cli 2.11.4"
+	SchemaV7                     = "vibermate.m0-assembly-acceptance/v7"
+	DesktopBuildManifestSchemaV3 = "vibermate.desktop-build/v3"
+	DesktopBuildManifestSchema   = DesktopBuildManifestSchemaV3
+	ExpectedGoVersion            = "go1.25.13"
+	ExpectedFlutterVersion       = "3.41.5"
+	ExpectedFlutterRevision      = "2c9eb20739dfec95e2c74bd3dfa4601b0a8a36aa"
+	ExpectedDartVersion          = "3.11.3"
+	ExpectedXcodeVersion         = "Xcode 16.2\nBuild version 16C5032a"
 	ExpectedPlatform             = "darwin"
 	ExpectedArchitecture         = "arm64"
 	ExpectedBuildTarget          = "aarch64-apple-darwin"
@@ -74,20 +72,17 @@ type ArtifactProvenance struct {
 }
 
 type ToolchainProvenance struct {
-	Go    string `json:"go"`
-	Node  string `json:"node"`
-	Rustc string `json:"rustc"`
-	Cargo string `json:"cargo"`
-	PNPM  string `json:"pnpm"`
+	Go      string `json:"go"`
+	Flutter string `json:"flutter"`
+	Dart    string `json:"dart"`
+	Xcode   string `json:"xcode"`
 }
 
 type DesktopBuildToolchains struct {
-	Go    string `json:"go"`
-	Node  string `json:"node"`
-	Rustc string `json:"rustc"`
-	Cargo string `json:"cargo"`
-	PNPM  string `json:"pnpm"`
-	Tauri string `json:"tauri"`
+	Go      string `json:"go"`
+	Flutter string `json:"flutter"`
+	Dart    string `json:"dart"`
+	Xcode   string `json:"xcode"`
 }
 
 type BuildProvenance struct {
@@ -95,6 +90,7 @@ type BuildProvenance struct {
 	DesktopProfile      string                 `json:"desktopProfile"`
 	SidecarProfile      string                 `json:"sidecarProfile"`
 	Target              string                 `json:"target"`
+	Toolkit             string                 `json:"toolkit"`
 	Toolchains          DesktopBuildToolchains `json:"toolchains"`
 	ConfigurationSHA256 map[string]string      `json:"configurationSHA256"`
 	GoBuildVersions     map[string]string      `json:"goBuildVersions"`
@@ -105,9 +101,7 @@ type Configuration struct {
 	DeterministicOnly bool   `json:"deterministicOnly"`
 	ClientID          string `json:"clientId"`
 	ClientVersion     string `json:"clientVersion"`
-	AccessID          string `json:"accessId"`
-	ProviderOrigin    string `json:"providerOrigin"`
-	ProviderModel     string `json:"providerModel"`
+	EnvironmentID     string `json:"environmentId"`
 	Timeout           string `json:"timeout"`
 }
 

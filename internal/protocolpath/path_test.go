@@ -6,8 +6,8 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/vibe-agi/vibermate/internal/access"
 	"github.com/vibe-agi/vibermate/internal/protocolcore"
+	"github.com/vibe-agi/vibermate/internal/protocolspec"
 )
 
 func TestProviderRequestOwnsWireValues(t *testing.T) {
@@ -41,18 +41,18 @@ func TestProviderRequestOwnsWireValues(t *testing.T) {
 func TestPathRequiresTwoTypedEdgesAndRejectsAnUnmatchedPlan(t *testing.T) {
 	t.Parallel()
 
-	identifier, err := access.NewCodecPairID("client-to-provider")
+	identifier, err := protocolspec.NewCodecPairID("client-to-provider")
 	if err != nil {
 		t.Fatal(err)
 	}
-	operationID, err := access.NewClientOperationID("client-create")
+	operationID, err := protocolspec.NewClientOperationID("client-create")
 	if err != nil {
 		t.Fatal(err)
 	}
 	path, err := New(Options{
 		ID:                 identifier,
 		Revision:           1,
-		ClientOperationIDs: []access.ClientOperationID{operationID},
+		ClientOperationIDs: []protocolspec.ClientOperationID{operationID},
 		Client:             clientCodecFixture{},
 		Backend:            backendCodecFixture{},
 		Streaming:          streamingFixture{},
@@ -60,17 +60,17 @@ func TestPathRequiresTwoTypedEdgesAndRejectsAnUnmatchedPlan(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if path.Client().Dialect() != access.DialectAnthropicMessages ||
-		path.Backend().Dialect() != access.DialectOpenAIChat {
+	if path.Client().Dialect() != protocolspec.DialectAnthropicMessages ||
+		path.Backend().Dialect() != protocolspec.DialectOpenAIChat {
 		t.Fatal("path did not retain both typed wire edges")
 	}
-	if err := path.ValidatePlan(access.CodecPlan{}); err == nil {
+	if err := path.ValidatePlan(protocolspec.CodecPlan{}); err == nil {
 		t.Fatal("path accepted an unmatched Access codec plan")
 	}
 	operations := path.ClientOperationIDs()
-	operations[0] = access.ClientOperationID{}
+	operations[0] = protocolspec.ClientOperationID{}
 	if !path.SupportsClientOperation(operationID) ||
-		path.SupportsClientOperation(access.ClientOperationID{}) ||
+		path.SupportsClientOperation(protocolspec.ClientOperationID{}) ||
 		path.ClientOperationIDs()[0] != operationID {
 		t.Fatal("path did not own its typed client operation identities")
 	}
@@ -78,7 +78,7 @@ func TestPathRequiresTwoTypedEdgesAndRejectsAnUnmatchedPlan(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := selector.Select(access.CodecPlan{}, operationID); err == nil {
+	if _, err := selector.Select(protocolspec.CodecPlan{}, operationID); err == nil {
 		t.Fatal("selector accepted an unmatched Access codec plan")
 	}
 	if _, err := NewSelector(path, path); err == nil {
@@ -91,8 +91,8 @@ func TestPathRequiresTwoTypedEdgesAndRejectsAnUnmatchedPlan(t *testing.T) {
 
 type clientCodecFixture struct{}
 
-func (clientCodecFixture) Dialect() access.Dialect {
-	return access.DialectAnthropicMessages
+func (clientCodecFixture) Dialect() protocolspec.Dialect {
+	return protocolspec.DialectAnthropicMessages
 }
 
 func (clientCodecFixture) DecodeRequest(
@@ -110,8 +110,8 @@ func (clientCodecFixture) EncodeResponse(
 
 type backendCodecFixture struct{}
 
-func (backendCodecFixture) Dialect() access.Dialect {
-	return access.DialectOpenAIChat
+func (backendCodecFixture) Dialect() protocolspec.Dialect {
+	return protocolspec.DialectOpenAIChat
 }
 
 func (backendCodecFixture) EncodeRequest(

@@ -17,7 +17,7 @@ import (
 // returns; a keychain is the person's, not the suite's.
 const keychainEnvironment = "VIBERMATE_KEYCHAIN_TEST"
 
-func keychainStore(t *testing.T) *hostsecret.KeychainStore {
+func keychainStore(t *testing.T) secretstore.Store {
 	t.Helper()
 
 	if os.Getenv(keychainEnvironment) == "" {
@@ -34,11 +34,7 @@ func keychainStore(t *testing.T) *hostsecret.KeychainStore {
 	if err != nil {
 		t.Fatal(err)
 	}
-	store, ok := opened.(*hostsecret.KeychainStore)
-	if !ok {
-		t.Fatalf("factory returned %T", opened)
-	}
-	return store
+	return opened
 }
 
 func testReference(t *testing.T) secretstore.Reference {
@@ -144,6 +140,30 @@ func TestTheKeychainStoresReadsAndGuardsARevision(t *testing.T) {
 	}
 	if replaced.Revision != 2 {
 		t.Fatalf("replacement revision = %d", replaced.Revision)
+	}
+	if _, err := store.ReadAtRevision(
+		context.Background(),
+		reference,
+		written.Revision,
+	); !errors.Is(err, secretstore.ErrRevisionConflict) {
+		t.Fatalf("stale pinned read error = %v", err)
+	}
+	pinned, err := store.ReadAtRevision(
+		context.Background(),
+		reference,
+		replaced.Revision,
+	)
+	if err != nil {
+		t.Fatalf("read current pinned revision: %v", err)
+	}
+	defer pinned.Destroy()
+	pinnedBytes, err := pinned.CopyBytes()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clear(pinnedBytes)
+	if string(pinnedBytes) != "second-secret-value" {
+		t.Fatalf("pinned keychain value = %q", pinnedBytes)
 	}
 }
 

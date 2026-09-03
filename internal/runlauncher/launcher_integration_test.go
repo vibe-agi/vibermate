@@ -7,10 +7,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -19,6 +21,7 @@ import (
 
 	"github.com/vibe-agi/vibermate/internal/capturecontrol"
 	"github.com/vibe-agi/vibermate/internal/clientadapter"
+	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/localdiscovery"
 	"github.com/vibe-agi/vibermate/internal/runlauncher"
 )
@@ -44,7 +47,8 @@ func TestLauncherSupervisesExactChildAndCaptureRunLifecycle(t *testing.T) {
   printf 'root=%s\n' "$NODE_EXTRA_CA_CERTS"
   printf 'node_proxy=%s\n' "$NODE_USE_ENV_PROXY"
   printf 'client_key=%s\n' "$ANTHROPIC_API_KEY"
-  printf 'client_token=%s\n' "$CLAUDE_CODE_OAUTH_TOKEN"
+  printf 'client_token=%s\n' "$ANTHROPIC_AUTH_TOKEN"
+  printf 'client_oauth=%s\n' "$CLAUDE_CODE_OAUTH_TOKEN"
   printf 'client_origin=%s\n' "$ANTHROPIC_BASE_URL"
   printf 'fallback=%s\n' "$CLAUDE_CODE_DISABLE_NONSTREAMING_FALLBACK"
 } > "$LAUNCH_TEST_OUTPUT"
@@ -67,7 +71,15 @@ exit 7
 			"first",
 			"two words",
 		},
-		userLabel:   "alice",
+		expectedEnvironment: "work",
+		userLabel:           "alice",
+		runtimeMetadata: &capturecontrol.ClientRuntimeMetadataInput{
+			LocalUserName:   "alice",
+			HomeDirectory:   "/Users/alice",
+			OperatingSystem: runtime.GOOS,
+			Architecture:    runtime.GOARCH,
+			TimeZone:        "Asia/Singapore",
+		},
 		recipe:      clientadapter.LaunchNodeEnvProxy,
 		recognition: clientadapter.RecognitionVerified,
 		adapter: &capturecontrol.ClientLaunchAdapterView{
@@ -107,6 +119,8 @@ exit 7
 		BaseEnvironment: []string{
 			"PATH=/usr/bin:/bin",
 			"USER=  alice  ",
+			"HOME=/Users/alice",
+			"TZ=Asia/Singapore",
 			"LAUNCH_TEST_OUTPUT=" + outputPath,
 			"ANTHROPIC_API_KEY=ambient-api-key",
 			"CLAUDE_CODE_OAUTH_TOKEN=ambient-oauth-token",
@@ -130,7 +144,10 @@ exit 7
 	}
 	code, err := launcher.Run(
 		context.Background(),
-		[]string{"agent", "first", "two words"},
+		runlauncher.LaunchRequest{
+			EnvironmentID: environment.EnvironmentID("work"),
+			Command:       []string{"agent", "first", "two words"},
+		},
 	)
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
@@ -153,8 +170,9 @@ exit 7
 		lines["run"] != "capture-run-1" ||
 		lines["root"] != rootPath ||
 		lines["node_proxy"] != "1" ||
-		lines["client_key"] != "vibermate-local-proxy" ||
-		lines["client_token"] != "" ||
+		lines["client_key"] != "" ||
+		lines["client_token"] != "vibermate-local-proxy" ||
+		lines["client_oauth"] != "" ||
 		lines["client_origin"] != "" ||
 		lines["fallback"] != "1" {
 		t.Fatalf("captured child output = %+v", lines)
@@ -167,6 +185,90 @@ exit 7
 		control.finishCalls != 1 ||
 		control.attachedPID <= 0 {
 		t.Fatalf("control lifecycle = %+v", control)
+	}
+}
+
+func TestLauncherPreservesTheResolvedInvocationPathAfterCanonicalVerification(t *testing.T) {
+	t.Parallel()
+
+	directory := t.TempDir()
+	outputPath := filepath.Join(directory, "invoked-as")
+	canonical, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonical, err = filepath.EvalSymlinks(canonical)
+	if err != nil {
+		t.Fatal(err)
+	}
+	invocation := filepath.Join(directory, "agent")
+	if err := os.Symlink(canonical, invocation); err != nil {
+		t.Fatal(err)
+	}
+	command := []string{
+		"agent",
+		"-test.run=TestLaunchArgv0Helper",
+		"--",
+	}
+	control := &controlFixture{
+		t:               t,
+		executable:      invocation,
+		grantExecutable: canonical,
+		workspace:       directory,
+		credential:      capability(0x61),
+		proxy:           capability(0x62),
+		run:             capability(0x63),
+		expectedCommand: command,
+		recipe:          clientadapter.LaunchGeneric,
+		recognition:     clientadapter.RecognitionUnknown,
+	}
+	server := httptest.NewServer(control)
+	defer server.Close()
+	launcher, err := runlauncher.New(runlauncher.Config{
+		Discovery: fixedDiscovery{session: localdiscovery.Session{
+			Schema:            localdiscovery.Schema,
+			InstanceID:        base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x64}, 20)),
+			ProcessID:         os.Getpid(),
+			BaseURL:           server.URL,
+			ControlCredential: control.credential,
+			ExpiresAt:         time.Now().UTC().Add(time.Minute),
+		}},
+		BaseEnvironment: []string{
+			"PATH=/usr/bin:/bin",
+			"RUNLAUNCHER_ARGV0_OUTPUT=" + outputPath,
+		},
+		Getwd:    func() (string, error) { return directory, nil },
+		LookPath: func(string) (string, error) { return invocation, nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	code, err := launcher.Run(
+		context.Background(),
+		runlauncher.LaunchRequest{
+			EnvironmentID: environment.SystemTransparentID,
+			Command:       command,
+		},
+	)
+	if err != nil || code != 0 {
+		t.Fatalf("Run() exit=%d error=%v", code, err)
+	}
+	invokedAs, err := os.ReadFile(outputPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(invokedAs) != invocation {
+		t.Fatalf("child argv[0] = %q, want invocation path %q", invokedAs, invocation)
+	}
+}
+
+func TestLaunchArgv0Helper(t *testing.T) {
+	outputPath := os.Getenv("RUNLAUNCHER_ARGV0_OUTPUT")
+	if outputPath == "" {
+		return
+	}
+	if err := os.WriteFile(outputPath, []byte(os.Args[0]), 0o600); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -196,7 +298,7 @@ func TestLauncherRejectsControlRedirectWithoutStartingChild(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := launcher.Run(context.Background(), []string{"echo"}); err == nil ||
+	if _, err := launcher.Run(context.Background(), transparentLaunch("echo")); err == nil ||
 		!strings.Contains(err.Error(), "redirect") {
 		t.Fatalf("Run() redirect error = %v", err)
 	}
@@ -206,6 +308,7 @@ func TestLauncherBoundsCaptureRunCreation(t *testing.T) {
 	t.Parallel()
 
 	releaseRequest := make(chan struct{})
+	var stderr bytes.Buffer
 	server := httptest.NewServer(http.HandlerFunc(func(
 		_ http.ResponseWriter,
 		_ *http.Request,
@@ -222,6 +325,7 @@ func TestLauncherBoundsCaptureRunCreation(t *testing.T) {
 			ControlCredential: capability(0x52),
 		}},
 		BaseEnvironment: []string{"PATH=/usr/bin:/bin"},
+		Stderr:          &stderr,
 		ControlTimeout:  50 * time.Millisecond,
 		// Create carries its own budget because it is the only control call
 		// that can contain signature verification and a question put to a
@@ -242,17 +346,60 @@ func TestLauncherBoundsCaptureRunCreation(t *testing.T) {
 	go func() {
 		_, runErr := launcher.Run(
 			context.Background(),
-			[]string{"echo"},
+			transparentLaunch("echo"),
 		)
 		finished <- runErr
 	}()
 	select {
 	case runErr := <-finished:
-		if runErr == nil {
-			t.Fatal("unresponsive CaptureRun creation succeeded")
+		if !errors.Is(runErr, runlauncher.ErrCapturePreparationTimedOut) {
+			t.Fatalf("unresponsive CaptureRun creation error = %v", runErr)
+		}
+		if !strings.Contains(
+			stderr.String(),
+			"decide any client trust request in the App",
+		) {
+			t.Fatalf("stalled create had no actionable progress: %q", stderr.String())
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("CaptureRun creation ignored the configured create timeout")
+	}
+}
+
+func TestLauncherClassifiesAStaleDiscoveryEndpointAsRuntimeUnavailable(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	baseURL := "http://" + listener.Addr().String()
+	if err := listener.Close(); err != nil {
+		t.Fatal(err)
+	}
+	launcher, err := runlauncher.New(runlauncher.Config{
+		Discovery: fixedDiscovery{session: localdiscovery.Session{
+			BaseURL:           baseURL,
+			ControlCredential: capability(0x54),
+		}},
+		BaseEnvironment: []string{"PATH=/usr/bin:/bin"},
+		CreateTimeout:   time.Second,
+		Getwd: func() (string, error) {
+			return t.TempDir(), nil
+		},
+		LookPath: func(string) (string, error) {
+			return "/bin/echo", nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := launcher.Run(
+		context.Background(), transparentLaunch("echo"),
+	); !errors.Is(err, runlauncher.ErrRuntimeUnavailable) {
+		t.Fatalf("stale discovery launch error = %v", err)
 	}
 }
 
@@ -292,7 +439,7 @@ func TestLauncherCancelsCaptureRunCreationFromCallerContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	finished := make(chan error, 1)
 	go func() {
-		_, runErr := launcher.Run(ctx, []string{"echo"})
+		_, runErr := launcher.Run(ctx, transparentLaunch("echo"))
 		finished <- runErr
 	}()
 	select {
@@ -321,19 +468,22 @@ func (discovery fixedDiscovery) Load() (localdiscovery.Session, error) {
 }
 
 type controlFixture struct {
-	t               *testing.T
-	executable      string
-	workspace       string
-	rootPath        string
-	credential      string
-	proxy           string
-	run             string
-	expectedCommand []string
-	userLabel       string
-	recipe          clientadapter.LaunchRecipe
-	recognition     clientadapter.Recognition
-	adapter         *capturecontrol.ClientLaunchAdapterView
-	authorities     []string
+	t                   *testing.T
+	executable          string
+	grantExecutable     string
+	workspace           string
+	rootPath            string
+	credential          string
+	proxy               string
+	run                 string
+	expectedCommand     []string
+	expectedEnvironment string
+	userLabel           string
+	runtimeMetadata     *capturecontrol.ClientRuntimeMetadataInput
+	recipe              clientadapter.LaunchRecipe
+	recognition         clientadapter.Recognition
+	adapter             *capturecontrol.ClientLaunchAdapterView
+	authorities         []string
 
 	mu             sync.Mutex
 	createCalls    int
@@ -359,21 +509,39 @@ func (fixture *controlFixture) ServeHTTP(
 		}
 		var input capturecontrol.CreateRequest
 		decodeRequest(fixture.t, request, &input)
+		expectedEnvironment := fixture.expectedEnvironment
+		if expectedEnvironment == "" {
+			expectedEnvironment = environment.SystemTransparentID.String()
+		}
 		if input.CWD != fixture.workspace ||
+			input.EnvironmentID != expectedEnvironment ||
 			input.ExecutablePath != fixture.executable ||
-			input.LocalUserLabel != fixture.userLabel ||
+			input.RuntimeMetadata.LocalUserName != fixture.userLabel ||
 			!slices.Equal(input.Command, fixture.expectedCommand) {
 			fixture.t.Errorf("create request = %+v", input)
 		}
+		if fixture.runtimeMetadata != nil {
+			got, want := input.RuntimeMetadata, *fixture.runtimeMetadata
+			if got.LocalUserName != want.LocalUserName || got.HomeDirectory != want.HomeDirectory ||
+				got.OperatingSystem != want.OperatingSystem || got.OperatingSystemVersion == "" ||
+				got.Architecture != want.Architecture || got.TimeZone != want.TimeZone {
+				fixture.t.Errorf("runtime metadata = %+v, want %+v with an OS version", got, want)
+			}
+		}
 		fixture.createCalls++
+		grantExecutable := fixture.grantExecutable
+		if grantExecutable == "" {
+			grantExecutable = fixture.executable
+		}
 		writeControlJSON(writer, http.StatusCreated, capturecontrol.LaunchGrant{
 			Run:             fixture.runView(0),
 			CatalogRevision: 7,
 			LaunchRecipe:    fixture.recipe,
 			Recognition:     fixture.recognition,
 			Adapter:         fixture.adapter,
-			ExecutablePath:  fixture.executable,
+			ExecutablePath:  grantExecutable,
 			ProxyAddress:    "http://" + request.Host,
+			ProxyDelivery:   capturecontrol.ProxyDeliveryLocalListener,
 			ProxyToken:      fixture.proxy,
 			RunCapability:   fixture.run,
 			RootPEMPath:     fixture.rootPath,

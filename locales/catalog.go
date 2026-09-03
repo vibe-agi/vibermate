@@ -108,19 +108,6 @@ func (catalogs *Catalogs) Render(
 	}), nil
 }
 
-// Parameters returns the stable sorted parameter names for one production
-// message key. New guarantees the same names for both locales.
-func (catalogs *Catalogs) Parameters(key string) ([]string, error) {
-	if catalogs == nil {
-		return nil, errors.New("locale catalogs are unavailable")
-	}
-	template, exists := catalogs.values[EnglishUS][key]
-	if !exists {
-		return nil, fmt.Errorf("locale key %q is unavailable", key)
-	}
-	return parameterNames(template), nil
-}
-
 func Detect(environment []string) Locale {
 	values := make(map[string]string)
 	for _, entry := range environment {
@@ -141,19 +128,6 @@ func Detect(environment []string) Locale {
 		}
 	}
 	return EnglishUS
-}
-
-func (catalogs *Catalogs) Keys(locale Locale) []string {
-	if catalogs == nil {
-		return nil
-	}
-	catalog := catalogs.values[locale]
-	keys := make([]string, 0, len(catalog))
-	for key := range catalog {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-	return keys
 }
 
 func parameterNames(template string) []string {

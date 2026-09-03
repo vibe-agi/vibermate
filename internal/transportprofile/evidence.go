@@ -3,7 +3,7 @@ package transportprofile
 import (
 	"slices"
 
-	"github.com/vibe-agi/vibermate/internal/access"
+	"github.com/vibe-agi/vibermate/internal/wireprofile"
 )
 
 type FallbackReason string
@@ -19,8 +19,8 @@ const (
 
 type ProfileEvidence struct {
 	Ref      string
-	Revision access.Revision
-	Source   access.TransportFingerprintSource
+	Revision wireprofile.Revision
+	Source   wireprofile.TransportFingerprintSource
 }
 
 // Evidence records selection and negotiated protocol facts without retaining
@@ -34,7 +34,7 @@ type Evidence struct {
 	downstreamNegotiatedALPN string
 	upstreamOfferedALPN      []string
 	upstreamNegotiatedALPN   string
-	httpTransport            access.HTTPTransportKind
+	httpTransport            wireprofile.HTTPTransportKind
 }
 
 func (evidence Evidence) Requested() ProfileEvidence {
@@ -73,7 +73,7 @@ func (evidence Evidence) UpstreamNegotiatedALPN() string {
 	return evidence.upstreamNegotiatedALPN
 }
 
-func (evidence Evidence) HTTPTransport() access.HTTPTransportKind {
+func (evidence Evidence) HTTPTransport() wireprofile.HTTPTransportKind {
 	return evidence.httpTransport
 }
 
@@ -86,7 +86,7 @@ func (evidence Evidence) Clone() Evidence {
 }
 
 func newEvidence(
-	requested access.TransportFingerprintTemplate,
+	requested wireprofile.TransportFingerprintTemplate,
 	observation Observation,
 ) Evidence {
 	return Evidence{
@@ -98,7 +98,7 @@ func newEvidence(
 }
 
 func profileEvidence(
-	template access.TransportFingerprintTemplate,
+	template wireprofile.TransportFingerprintTemplate,
 ) ProfileEvidence {
 	return ProfileEvidence{
 		Ref:      template.Ref().String(),

@@ -15,9 +15,115 @@ import (
 	"github.com/vibe-agi/vibermate/internal/capturecredential"
 	"github.com/vibe-agi/vibermate/internal/capturerun"
 	"github.com/vibe-agi/vibermate/internal/clientadapter"
+	"github.com/vibe-agi/vibermate/internal/evidencearchive"
 	"github.com/vibe-agi/vibermate/internal/runtimepersistence"
+	"github.com/vibe-agi/vibermate/internal/runtimeuser"
 	"github.com/vibe-agi/vibermate/internal/workspaceidentity"
 )
+
+func TestCaptureRunCreateHoldsTheArchiveBarrierUntilPersistenceCompletes(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	store := openStore(t, filepath.Join(t.TempDir(), "runtime.db"))
+	defer shutdownStore(t, store)
+	barrier := &recordingCaptureCreationBarrier{}
+	repository := &barrierCheckingCaptureRunRepository{
+		Repository: store.CaptureRunRepository(),
+		barrier:    barrier,
+	}
+	options := capturerun.DefaultOptions(repository)
+	options.ArchiveBarrier = barrier
+	manager, err := capturerun.NewManager(context.Background(), options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = manager.Create(context.Background(), capturerun.CreateCommand{
+		CWD:                     filepath.Join(t.TempDir(), "workspace"),
+		CanonicalExecutablePath: filepath.Join(t.TempDir(), "bin", "codex"),
+		ExecutableLabel:         "codex",
+		Lifetime:                time.Minute,
+		CatalogRevision:         1,
+		Workspace:               testWorkspaceScope(t),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !repository.sawBarrier || barrier.calls != 1 || barrier.releases != 1 ||
+		barrier.active != 0 {
+		t.Fatalf(
+			"archive barrier saw=%t calls=%d releases=%d active=%d",
+			repository.sawBarrier,
+			barrier.calls,
+			barrier.releases,
+			barrier.active,
+		)
+	}
+}
+
+func TestCaptureRunActiveCountReconcilesWithoutExposingTheCatalog(t *testing.T) {
+	t.Parallel()
+	store := openStore(t, filepath.Join(t.TempDir(), "runtime.db"))
+	defer shutdownStore(t, store)
+	clock := newClock(time.Date(2026, 9, 2, 4, 5, 6, 0, time.UTC))
+	manager := newManager(t, store, clock)
+	grant, err := manager.Create(context.Background(), capturerun.CreateCommand{
+		CWD:                     filepath.Join(t.TempDir(), "workspace"),
+		CanonicalExecutablePath: filepath.Join(t.TempDir(), "bin", "codex"),
+		ExecutableLabel:         "codex",
+		Lifetime:                time.Minute,
+		CatalogRevision:         1,
+		Workspace:               testWorkspaceScope(t),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count, err := manager.ActiveCount(context.Background()); err != nil || count != 1 {
+		t.Fatalf("active count=%d error=%v", count, err)
+	}
+	if err := manager.Finish(
+		context.Background(),
+		grant.Run.ID,
+		grant.ControlCapability,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if count, err := manager.ActiveCount(context.Background()); err != nil || count != 0 {
+		t.Fatalf("finished count=%d error=%v", count, err)
+	}
+}
+
+type recordingCaptureCreationBarrier struct {
+	active   int
+	calls    int
+	releases int
+}
+
+func (barrier *recordingCaptureCreationBarrier) BeginCaptureCreation(
+	context.Context,
+) (evidencearchive.Release, error) {
+	barrier.calls++
+	barrier.active++
+	return func() {
+		barrier.releases++
+		barrier.active--
+	}, nil
+}
+
+type barrierCheckingCaptureRunRepository struct {
+	capturerun.Repository
+	barrier    *recordingCaptureCreationBarrier
+	sawBarrier bool
+}
+
+func (repository *barrierCheckingCaptureRunRepository) Create(
+	ctx context.Context,
+	record capturerun.DurableRecord,
+) error {
+	repository.sawBarrier = repository.barrier.active == 1
+	return repository.Repository.Create(ctx, record)
+}
 
 func TestCaptureRunPersistsVerifiedAdapterEvidenceWithProxyCapability(
 	t *testing.T,
@@ -35,7 +141,7 @@ func TestCaptureRunPersistsVerifiedAdapterEvidenceWithProxyCapability(
 		CatalogRevision: 7,
 		InstallShape:    clientadapter.InstallNPMWrapperNativeChild,
 		ReleaseSHA256:   "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-		LaunchRecipe:    clientadapter.LaunchSSLCertFile,
+		LaunchRecipe:    clientadapter.LaunchCodexResponsesHTTP,
 		Features:        clientadapter.FeatureResponsesWebSocketHTTPFallback,
 	}
 	grant, err := first.Create(
@@ -49,6 +155,11 @@ func TestCaptureRunPersistsVerifiedAdapterEvidenceWithProxyCapability(
 			Adapter:                 &adapter,
 			Recognition:             clientadapter.RecognitionVerified,
 			Workspace:               testWorkspaceScope(t),
+			Runtime: capturerun.RuntimeMetadata{
+				LocalUserName: "jack", HomeDirectory: "/Users/jack",
+				OperatingSystem: "darwin", OperatingSystemVersion: "15.6",
+				Architecture: "arm64", TimeZone: "Asia/Singapore",
+			},
 		},
 	)
 	if err != nil {
@@ -76,6 +187,65 @@ func TestCaptureRunPersistsVerifiedAdapterEvidenceWithProxyCapability(
 		t.Fatal(err)
 	}
 	assertCodexEvidence(t, recovered)
+	view, err := second.GetRun(context.Background(), grant.Run.ID)
+	if err != nil || view.Runtime != recovered.Runtime {
+		t.Fatalf("CaptureRun runtime view = %+v, %v", view.Runtime, err)
+	}
+}
+
+func TestCaptureRunFreezesRuntimeUsernameAcrossStoreReopen(t *testing.T) {
+	t.Parallel()
+
+	databasePath := filepath.Join(t.TempDir(), "data", "runtime.db")
+	clock := newClock(time.Date(2026, 9, 1, 8, 0, 0, 0, time.UTC))
+	firstStore := openStore(t, databasePath)
+	users, err := runtimeuser.New(runtimeuser.Options{
+		Repository: firstStore.RuntimeUserRepository(), Clock: clock,
+		Random:          bytes.NewReader(bytes.Repeat([]byte{0x41}, 512)),
+		SessionLifetime: 8 * time.Hour,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	user, err := users.Create(context.Background(), runtimeuser.CreateCommand{
+		Username: "alice", Password: []byte("test-only-password"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	workspace := testWorkspaceScope(t)
+	session, err := users.Login(context.Background(), runtimeuser.LoginCommand{
+		Username: "alice", Password: []byte("test-only-password"),
+		MachineID: workspace.MachineID(), DeviceName: "Alice workstation",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager := newManager(t, firstStore, clock)
+	grant, err := manager.Create(context.Background(), capturerun.CreateCommand{
+		CWD:                     filepath.Join(t.TempDir(), "workspace"),
+		CanonicalExecutablePath: filepath.Join(t.TempDir(), "bin", "claude"),
+		ExecutableLabel:         "claude", Lifetime: 2 * time.Minute,
+		CatalogRevision: 1, Workspace: workspace,
+		RuntimeUserID: user.ID, RuntimeUsername: user.Username,
+		LoginSessionID: session.ID, DeviceName: session.DeviceName,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertRuntimeUsername := func(evidence capturerun.Evidence, err error) {
+		t.Helper()
+		if err != nil || evidence.RuntimeUsername != "alice" {
+			t.Fatalf("CaptureRun Runtime username = %q, %v", evidence.RuntimeUsername, err)
+		}
+	}
+	assertRuntimeUsername(manager.AuthorizeProxy(context.Background(), grant.ProxyCapability))
+
+	shutdownStore(t, firstStore)
+	reopened := openStore(t, databasePath)
+	defer shutdownStore(t, reopened)
+	recovered := newManager(t, reopened, clock)
+	assertRuntimeUsername(recovered.AuthorizeProxy(context.Background(), grant.ProxyCapability))
 }
 
 func TestCaptureRunCapabilitiesArePersistedAsHashesAndDriveLifecycle(
@@ -155,6 +325,12 @@ func TestCaptureRunCapabilitiesArePersistedAsHashesAndDriveLifecycle(
 		evidence.ProcessID != 0 {
 		t.Fatalf("proxy evidence = %+v", evidence)
 	}
+	active, err := store.CaptureRunRepository().Active(
+		context.Background(), grant.Run.ID, clock.Now(),
+	)
+	if err != nil || !active {
+		t.Fatalf("created CaptureRun activity = %v, %v", active, err)
+	}
 
 	attached, err := manager.Attach(
 		context.Background(),
@@ -193,6 +369,12 @@ func TestCaptureRunCapabilitiesArePersistedAsHashesAndDriveLifecycle(
 	); err != nil {
 		t.Fatalf("idempotent finish CaptureRun: %v", err)
 	}
+	active, err = store.CaptureRunRepository().Active(
+		context.Background(), grant.Run.ID, clock.Now(),
+	)
+	if err != nil || active {
+		t.Fatalf("finished CaptureRun activity = %v, %v", active, err)
+	}
 	if _, err := manager.AuthorizeProxy(
 		context.Background(),
 		grant.ProxyCapability,
@@ -214,6 +396,174 @@ func TestCaptureRunCapabilitiesArePersistedAsHashesAndDriveLifecycle(
 			bytes.Contains(data, []byte(grant.ControlCapability.Value())) {
 			t.Fatalf("SQLite artifact %q contains a raw capability", filepath.Base(path))
 		}
+	}
+}
+
+func TestCaptureRunFinishDoesNotCommitWhenEvidenceBarrierFails(t *testing.T) {
+	t.Parallel()
+
+	store := openStore(t, filepath.Join(t.TempDir(), "runtime.db"))
+	defer shutdownStore(t, store)
+	clock := newClock(time.Date(2026, 8, 13, 1, 2, 3, 0, time.UTC))
+	barrierErr := errors.New("raw evidence flush failed")
+	barrier := &captureRunBarrier{err: barrierErr}
+	options := capturerun.DefaultOptions(store.CaptureRunRepository())
+	options.Clock = clock
+	options.EvidenceBarrier = barrier
+	manager, err := capturerun.NewManager(context.Background(), options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	grant, err := manager.Create(context.Background(), capturerun.CreateCommand{
+		CWD:                     filepath.Join(t.TempDir(), "workspace"),
+		CanonicalExecutablePath: filepath.Join(t.TempDir(), "bin", "claude"),
+		ExecutableLabel:         "claude",
+		Lifetime:                time.Minute,
+		CatalogRevision:         1,
+		Workspace:               testWorkspaceScope(t),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.Finish(
+		context.Background(),
+		grant.Run.ID,
+		grant.ControlCapability,
+	); !errors.Is(err, barrierErr) {
+		t.Fatalf("Finish error = %v", err)
+	}
+	view, err := manager.GetRun(context.Background(), grant.Run.ID)
+	if err != nil || view.State == capturerun.StateFinished ||
+		barrier.runID != grant.Run.ID {
+		t.Fatalf("view=%+v barrier=%q err=%v", view, barrier.runID, err)
+	}
+}
+
+type captureRunBarrier struct {
+	runID string
+	err   error
+}
+
+func (barrier *captureRunBarrier) PrepareManagedRun(
+	_ context.Context,
+	runID string,
+) (capturerun.TerminalEvidence, error) {
+	barrier.runID = runID
+	return captureRunTerminal{}, barrier.err
+}
+
+type captureRunTerminal struct{}
+
+func (captureRunTerminal) Commit() {}
+func (captureRunTerminal) Abort()  {}
+
+func TestCaptureRunCatalogPaginatesRunningFirstAtSharedTimestamp(t *testing.T) {
+	t.Parallel()
+
+	store := openStore(t, filepath.Join(t.TempDir(), "runtime.db"))
+	defer shutdownStore(t, store)
+	clock := newClock(time.Date(2026, 8, 11, 4, 5, 6, 0, time.UTC))
+	manager := newManager(t, store, clock)
+	workspace := testWorkspaceScope(t)
+	create := func(label string, finish bool) {
+		t.Helper()
+		grant, err := manager.Create(context.Background(), capturerun.CreateCommand{
+			CWD:                     filepath.Join(t.TempDir(), "workspace"),
+			CanonicalExecutablePath: filepath.Join(t.TempDir(), "bin", label),
+			ExecutableLabel:         label,
+			Lifetime:                2 * time.Minute,
+			CatalogRevision:         1,
+			Workspace:               workspace,
+		})
+		if err != nil {
+			t.Fatalf("create CaptureRun %q: %v", label, err)
+		}
+		if finish {
+			if err := manager.Finish(
+				context.Background(),
+				grant.Run.ID,
+				grant.ControlCapability,
+			); err != nil {
+				t.Fatalf("finish CaptureRun %q: %v", label, err)
+			}
+		}
+	}
+	create("running-a", false)
+	create("finished-a", true)
+	create("running-b", false)
+	create("finished-b", true)
+
+	seen := make(map[string]struct{}, 4)
+	var cursor *capturerun.PageCursor
+	for index := range 4 {
+		page, err := manager.ListRuns(context.Background(), capturerun.PageRequest{
+			Limit:  1,
+			Cursor: cursor,
+		})
+		if err != nil {
+			t.Fatalf("list CaptureRun page %d: %v", index+1, err)
+		}
+		if len(page.Items) != 1 {
+			t.Fatalf("CaptureRun page %d = %+v", index+1, page.Items)
+		}
+		item := page.Items[0]
+		if _, duplicate := seen[item.ID]; duplicate {
+			t.Fatalf("CaptureRun %q appeared on multiple pages", item.ID)
+		}
+		seen[item.ID] = struct{}{}
+		running := item.State == capturerun.StateCreated || item.State == capturerun.StateAttached
+		if wantRunning := index < 2; running != wantRunning {
+			t.Fatalf("CaptureRun page %d state = %q", index+1, item.State)
+		}
+		cursor = &capturerun.PageCursor{
+			Running:            running,
+			UpdatedAt:          item.UpdatedAt,
+			AfterID:            item.ID,
+			IncludeAtUpdatedAt: true,
+		}
+	}
+	page, err := manager.ListRuns(context.Background(), capturerun.PageRequest{
+		Limit:  1,
+		Cursor: cursor,
+	})
+	if err != nil || len(page.Items) != 0 {
+		t.Fatalf("CaptureRun terminal page = %+v, %v", page.Items, err)
+	}
+}
+
+func TestCaptureRunCatalogReconcilesExpiredLeaseBeforeListing(t *testing.T) {
+	t.Parallel()
+
+	store := openStore(t, filepath.Join(t.TempDir(), "runtime.db"))
+	defer shutdownStore(t, store)
+	clock := newClock(time.Date(2026, 8, 13, 4, 5, 6, 0, time.UTC))
+	manager := newManager(t, store, clock)
+	grant, err := manager.Create(context.Background(), capturerun.CreateCommand{
+		CWD:                     filepath.Join(t.TempDir(), "workspace"),
+		CanonicalExecutablePath: filepath.Join(t.TempDir(), "bin", "claude"),
+		ExecutableLabel:         "claude",
+		Lifetime:                time.Minute,
+		CatalogRevision:         1,
+		Workspace:               testWorkspaceScope(t),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if grant.Run.State != capturerun.StateCreated {
+		t.Fatalf("new CaptureRun state = %q", grant.Run.State)
+	}
+
+	clock.Advance(2 * time.Minute)
+	page, err := manager.ListRuns(
+		context.Background(),
+		capturerun.PageRequest{Limit: 10},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Items) != 1 || page.Items[0].ID != grant.Run.ID ||
+		page.Items[0].State != capturerun.StateExpired {
+		t.Fatalf("reconciled CaptureRun page = %+v", page.Items)
 	}
 }
 
@@ -322,6 +672,12 @@ func assertCodexEvidence(
 	t.Helper()
 
 	if evidence.CatalogRevision != 7 ||
+		evidence.Runtime.LocalUserName != "jack" ||
+		evidence.Runtime.HomeDirectory != "/Users/jack" ||
+		evidence.Runtime.OperatingSystem != "darwin" ||
+		evidence.Runtime.OperatingSystemVersion != "15.6" ||
+		evidence.Runtime.Architecture != "arm64" ||
+		evidence.Runtime.TimeZone != "Asia/Singapore" ||
 		evidence.Adapter == nil ||
 		evidence.Adapter.ID != "codex-cli" ||
 		evidence.Adapter.Version != "0.145.0" ||

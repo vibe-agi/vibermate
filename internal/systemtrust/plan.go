@@ -26,7 +26,7 @@ func buildPlan(
 	}
 	if observation.rootRevision != root.identity.Revision() ||
 		observation.rootDigest != root.identity.Digest() ||
-		observation.target != MacOSSystemTarget() {
+		observation.target != MacOSCurrentUserTarget() {
 		return ChangePlan{}, ErrPlanStale
 	}
 	steps, desiredPresence, desiredDecision, err := planShape(
@@ -53,7 +53,7 @@ func buildPlan(
 		rootRevision:            root.identity.Revision(),
 		rootDigest:              root.identity.Digest(),
 		certificateDER:          bytes.Clone(root.certificateDER),
-		target:                  MacOSSystemTarget(),
+		target:                  MacOSCurrentUserTarget(),
 		desired:                 desired,
 		precondition:            observation,
 		steps:                   steps,
@@ -83,7 +83,7 @@ func planShape(
 			return nil, ExactPresencePresent, TrustDecisionTrusted, nil
 		case decision == TrustDecisionUntrusted:
 			return []Step{
-				StepEnsureExactCertificateAndAdminTrust,
+				StepEnsureExactCertificateAndUserTrust,
 				StepInspectExactRoot,
 			}, ExactPresencePresent, TrustDecisionTrusted, nil
 		}
@@ -91,7 +91,7 @@ func planShape(
 		switch {
 		case presence == ExactPresencePresent && decision == TrustDecisionTrusted:
 			return []Step{
-				StepRemoveExactAdminTrustSettings,
+				StepRemoveExactUserTrustSettings,
 				StepInspectExactRoot,
 				StepDeleteExactCertificate,
 				StepInspectExactRoot,

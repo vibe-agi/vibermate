@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/vibe-agi/vibermate/internal/controlprincipal"
+	"github.com/vibe-agi/vibermate/internal/environment"
 )
 
 func TestCredentialsUseDisjointCanonicalNamespacesAndRedactFormatting(t *testing.T) {
@@ -46,20 +47,20 @@ func TestCredentialsUseDisjointCanonicalNamespacesAndRedactFormatting(t *testing
 func TestBindingPolicyIsCanonicalImmutableAndRejectsDuplicates(t *testing.T) {
 	t.Parallel()
 	ingress := []string{"scope-b", "scope-a"}
-	profiles := []string{"profile-b", "profile-a"}
+	environments := []environment.EnvironmentID{"environment-b", "environment-a"}
 	grants := []controlprincipal.GrantKind{
 		controlprincipal.GrantManualCapture,
 		controlprincipal.GrantCaptureRun,
 	}
-	policy, err := NewBindingPolicy(ingress, profiles, "quota-default", grants)
+	policy, err := NewBindingPolicy(ingress, environments, "quota-default", grants)
 	if err != nil {
 		t.Fatal(err)
 	}
 	ingress[0] = "changed"
-	profiles[0] = "changed"
+	environments[0] = "changed"
 	grants[0] = "changed"
 	if !slices.Equal(policy.AllowedIngressScopes(), []string{"scope-a", "scope-b"}) ||
-		!slices.Equal(policy.AllowedProfileIDs(), []string{"profile-a", "profile-b"}) ||
+		!slices.Equal(policy.AllowedEnvironmentIDs(), []environment.EnvironmentID{"environment-a", "environment-b"}) ||
 		!slices.Equal(policy.AllowedGrantKinds(), []controlprincipal.GrantKind{
 			controlprincipal.GrantCaptureRun,
 			controlprincipal.GrantManualCapture,
@@ -73,7 +74,7 @@ func TestBindingPolicyIsCanonicalImmutableAndRejectsDuplicates(t *testing.T) {
 	}
 	if _, err := NewBindingPolicy(
 		[]string{"same", "same"},
-		[]string{"profile"},
+		[]environment.EnvironmentID{"environment"},
 		"quota",
 		[]controlprincipal.GrantKind{controlprincipal.GrantCaptureRun},
 	); err == nil {

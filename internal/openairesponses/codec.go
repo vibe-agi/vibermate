@@ -1,5 +1,5 @@
 // Package openairesponses implements the trusted OpenAI Responses client wire
-// edge. It owns no transport, Access selection, credentials, or global codec
+// edge. It owns no transport, Environment selection, credentials, or global codec
 // registry.
 package openairesponses
 

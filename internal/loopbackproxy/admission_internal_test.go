@@ -84,7 +84,7 @@ func TestValidCaptureAdmissionCrossesBoundaryUnchanged(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.IngressProfileID() != want.IngressProfileID() ||
+	if got.AdmissionRef() != want.AdmissionRef() ||
 		got.Kind() != want.Kind() ||
 		got.CredentialRevision() != want.CredentialRevision() {
 		t.Fatalf("admission = %#v, want %#v", got, want)

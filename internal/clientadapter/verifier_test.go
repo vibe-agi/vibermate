@@ -29,7 +29,7 @@ func TestBuiltInCatalogPublishesExactExpectedEvidence(t *testing.T) {
 		{
 			id: "codex-cli", version: "0.145.0",
 			shape:  clientadapter.InstallNPMWrapperNativeChild,
-			recipe: clientadapter.LaunchSSLCertFile,
+			recipe: clientadapter.LaunchCodexResponsesHTTP,
 		},
 	} {
 		evidence, ok := catalog.ExpectedEvidence(expected.id, expected.version)

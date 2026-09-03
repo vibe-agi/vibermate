@@ -10,8 +10,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/vibe-agi/vibermate/internal/access"
+	"github.com/vibe-agi/vibermate/internal/captureassignment"
 	"github.com/vibe-agi/vibermate/internal/certidentity"
+	"github.com/vibe-agi/vibermate/internal/environment"
 )
 
 func TestLeafCacheIsBoundedAndSingleflightsOneColdIdentity(t *testing.T) {
@@ -21,12 +22,12 @@ func TestLeafCacheIsBoundedAndSingleflightsOneColdIdentity(t *testing.T) {
 		options.LeafCacheCapacity = 2
 	})
 	defer shutdownAuthority(t, authority)
-	fixtures := []accessFixture{
-		newAccessFixture(t, "one", 1),
-		newAccessFixture(t, "two", 1),
-		newAccessFixture(t, "three", 1),
+	fixtures := []environmentFixture{
+		newEnvironmentFixture(t, "one", 1),
+		newEnvironmentFixture(t, "two", 1),
+		newEnvironmentFixture(t, "three", 1),
 	}
-	projection := newAccessProjection(t, authority, fixtures...)
+	projection := newEnvironmentProjection(t, authority, fixtures...)
 	realGenerator := authority.generator
 	controlled := newControlledGenerator(realGenerator)
 	authority.generator = controlled
@@ -35,7 +36,7 @@ func TestLeafCacheIsBoundedAndSingleflightsOneColdIdentity(t *testing.T) {
 	release := make(chan struct{})
 	controlled.setBarrier(release, false)
 	results := make(chan error, callers)
-	admissions := make([]access.LeafIssuanceAdmission, callers)
+	admissions := make([]captureassignment.LeafIssuanceAdmission, callers)
 	for index := range callers {
 		admissions[index] = leafAdmission(t, projection, authority, fixtures[0])
 	}
@@ -48,7 +49,7 @@ func TestLeafCacheIsBoundedAndSingleflightsOneColdIdentity(t *testing.T) {
 			)
 			if err == nil {
 				err = certificate.Leaf.VerifyHostname(
-					fixtures[0].origin.TLSServerName(),
+					fixtures[0].origin.Host(),
 				)
 			}
 			results <- err
@@ -93,16 +94,16 @@ func TestDifferentLeafIdentitiesGenerateConcurrently(t *testing.T) {
 
 	authority := openAuthority(t, filepath.Join(t.TempDir(), "ca"), nil)
 	defer shutdownAuthority(t, authority)
-	first := newAccessFixture(t, "parallel-one", 1)
-	second := newAccessFixture(t, "parallel-two", 1)
-	projection := newAccessProjection(t, authority, first, second)
+	first := newEnvironmentFixture(t, "parallel-one", 1)
+	second := newEnvironmentFixture(t, "parallel-two", 1)
+	projection := newEnvironmentProjection(t, authority, first, second)
 	controlled := newControlledGenerator(authority.generator)
 	release := make(chan struct{})
 	controlled.setBarrier(release, false)
 	authority.generator = controlled
 
 	results := make(chan error, 2)
-	for _, fixture := range []accessFixture{first, second} {
+	for _, fixture := range []environmentFixture{first, second} {
 		fixture := fixture
 		admission := leafAdmission(t, projection, authority, fixture)
 		go func() {
@@ -130,8 +131,8 @@ func TestLeafWaiterCancellationDoesNotCancelSharedGeneration(t *testing.T) {
 
 	authority := openAuthority(t, filepath.Join(t.TempDir(), "ca"), nil)
 	defer shutdownAuthority(t, authority)
-	fixture := newAccessFixture(t, "waiter", 1)
-	projection := newAccessProjection(t, authority, fixture)
+	fixture := newEnvironmentFixture(t, "waiter", 1)
+	projection := newEnvironmentProjection(t, authority, fixture)
 	controlled := newControlledGenerator(authority.generator)
 	release := make(chan struct{})
 	controlled.setBarrier(release, false)
@@ -179,8 +180,8 @@ func TestLeafFailureAndPanicAreNotCached(t *testing.T) {
 		t.Run(string(mode), func(t *testing.T) {
 			authority := openAuthority(t, filepath.Join(t.TempDir(), "ca"), nil)
 			defer shutdownAuthority(t, authority)
-			fixture := newAccessFixture(t, "retry-"+string(mode), 1)
-			projection := newAccessProjection(t, authority, fixture)
+			fixture := newEnvironmentFixture(t, "retry-"+string(mode), 1)
+			projection := newEnvironmentProjection(t, authority, fixture)
 			controlled := newControlledGenerator(authority.generator)
 			controlled.failNext(mode)
 			release := make(chan struct{})
@@ -188,7 +189,7 @@ func TestLeafFailureAndPanicAreNotCached(t *testing.T) {
 			authority.generator = controlled
 			const callers = 16
 			results := make(chan error, callers)
-			admissions := make([]access.LeafIssuanceAdmission, callers)
+			admissions := make([]captureassignment.LeafIssuanceAdmission, callers)
 			for index := range callers {
 				admissions[index] = leafAdmission(t, projection, authority, fixture)
 			}
@@ -241,8 +242,8 @@ func TestLeafGenerationTimeoutIsTypedAndRetryable(t *testing.T) {
 		options.GenerationTimeout = 250 * time.Millisecond
 	})
 	defer shutdownAuthority(t, authority)
-	fixture := newAccessFixture(t, "timeout", 1)
-	projection := newAccessProjection(t, authority, fixture)
+	fixture := newEnvironmentFixture(t, "timeout", 1)
+	projection := newEnvironmentProjection(t, authority, fixture)
 	seedAdmission := leafAdmission(t, projection, authority, fixture)
 	seedRequest, err := seedAdmission.ClaimForIssuance()
 	if err != nil {
@@ -280,7 +281,7 @@ type staticLeafGenerator struct {
 
 func (generator staticLeafGenerator) Generate(
 	ctx context.Context,
-	_ access.LeafIssuanceRequest,
+	_ captureassignment.LeafIssuanceRequest,
 ) (tlsCertificate, error) {
 	if err := ctx.Err(); err != nil {
 		return tlsCertificate{}, context.Cause(ctx)
@@ -296,8 +297,8 @@ func TestLeafRandomFailureIsNotCachedAndCanRetry(t *testing.T) {
 		options.Random = randomness
 	})
 	defer shutdownAuthority(t, authority)
-	fixture := newAccessFixture(t, "random-retry", 1)
-	projection := newAccessProjection(t, authority, fixture)
+	fixture := newEnvironmentFixture(t, "random-retry", 1)
+	projection := newEnvironmentProjection(t, authority, fixture)
 	randomness.setFailed(true)
 	if _, err := authority.Issue(
 		context.Background(),
@@ -328,8 +329,8 @@ func TestOwnerCancellationClosesCachedAndColdIssuance(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	fixture := newAccessFixture(t, "owner", 1)
-	projection := newAccessProjection(t, authority, fixture)
+	fixture := newEnvironmentFixture(t, "owner", 1)
+	projection := newEnvironmentProjection(t, authority, fixture)
 	if _, err := authority.Issue(
 		context.Background(),
 		leafAdmission(t, projection, authority, fixture),
@@ -347,37 +348,17 @@ func TestOwnerCancellationClosesCachedAndColdIssuance(t *testing.T) {
 	shutdownAuthority(t, authority)
 }
 
-func TestRevocationCutAllowsAdmittedHandshakeWithoutCacheResurrection(
+func TestEnvironmentPublishDoesNotRevokeFrozenCaptureLeaf(
 	t *testing.T,
 ) {
 	t.Parallel()
 
 	authority := openAuthority(t, filepath.Join(t.TempDir(), "ca"), nil)
 	defer shutdownAuthority(t, authority)
-	revisionOne := newAccessFixture(t, "revoked", 1)
-	revisionTwo := newAccessFixture(t, "revoked", 2)
-	projection := newAccessProjection(t, authority, revisionOne)
-	oldBinding, err := projection.ResolveClientOrigin(revisionOne.origin)
-	if err != nil {
-		t.Fatal(err)
-	}
-	oldSAN, err := certidentity.NewDNSName(revisionOne.origin.TLSServerName())
-	if err != nil {
-		t.Fatal(err)
-	}
-	oldIntent, err := access.NewLeafIssuanceIntent(
-		authority.Identity().Revision(),
-		oldBinding,
-		oldSAN,
-		certidentity.LeafKeyAlgorithmECDSAP256,
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	oldAdmission, err := projection.AdmitLeaf(oldIntent)
-	if err != nil {
-		t.Fatal(err)
-	}
+	revisionOne := newEnvironmentFixture(t, "revoked", 1)
+	revisionTwo := newEnvironmentFixture(t, "revoked", 2)
+	projection := newEnvironmentProjection(t, authority, revisionOne)
+	oldAdmission := leafAdmission(t, projection, authority, revisionOne)
 	controlled := newControlledGenerator(authority.generator)
 	release := make(chan struct{})
 	controlled.setBarrier(release, false)
@@ -389,48 +370,37 @@ func TestRevocationCutAllowsAdmittedHandshakeWithoutCacheResurrection(
 	}()
 	waitControlledCalls(t, controlled, 1)
 
-	if err := projection.Publish(revisionTwo.plan); err != nil {
-		t.Fatalf("publish endpoint replacement: %v", err)
-	}
-	if _, err := projection.AdmitLeaf(oldIntent); !errors.Is(
-		err,
-		access.ErrLeafIssuanceUnauthorized,
-	) {
-		t.Fatalf("post-cut old admission error = %v", err)
+	projection.Publish(t, revisionTwo)
+	if !oldAdmission.Cacheable() {
+		t.Fatal("publishing a later revision revoked the running Capture")
 	}
 	close(release)
 	if err := <-oldResult; err != nil {
 		t.Fatalf("pre-cut admitted issuance error = %v", err)
 	}
-	if authority.cache.Len() != 0 {
-		t.Fatalf("revoked worker resurrected %d cache entries", authority.cache.Len())
+	if authority.cache.Len() != 1 {
+		t.Fatalf("frozen Capture cache length = %d", authority.cache.Len())
 	}
 
 	controlled.clearBarrier()
 	if _, err := authority.Issue(
 		context.Background(),
-		leafAdmission(t, projection, authority, revisionTwo),
+		leafAdmission(t, projection, authority, revisionOne),
 	); err != nil {
-		t.Fatalf("issue replacement endpoint leaf: %v", err)
+		t.Fatalf("reuse frozen Capture leaf: %v", err)
 	}
-	if _, err := authority.Issue(
-		context.Background(),
-		leafAdmission(t, projection, authority, revisionTwo),
-	); err != nil {
-		t.Fatalf("reuse replacement endpoint leaf: %v", err)
-	}
-	if controlled.callCount() != 2 {
-		t.Fatalf("post-revocation generation count = %d, want 2", controlled.callCount())
+	if controlled.callCount() != 1 {
+		t.Fatalf("generation count = %d, want 1", controlled.callCount())
 	}
 }
 
-func TestDisabledAccessWithdrawalPurgesCacheAndFailsNewAdmission(t *testing.T) {
+func TestDisablingEnvironmentAffectsOnlyNewCaptures(t *testing.T) {
 	t.Parallel()
 
 	authority := openAuthority(t, filepath.Join(t.TempDir(), "ca"), nil)
 	defer shutdownAuthority(t, authority)
-	fixture := newAccessFixture(t, "disabled", 1)
-	projection := newAccessProjection(t, authority, fixture)
+	fixture := newEnvironmentFixture(t, "disabled", 1)
+	projection := newEnvironmentProjection(t, authority, fixture)
 	if _, err := authority.Issue(
 		context.Background(),
 		leafAdmission(t, projection, authority, fixture),
@@ -440,44 +410,28 @@ func TestDisabledAccessWithdrawalPurgesCacheAndFailsNewAdmission(t *testing.T) {
 	if authority.cache.Len() != 1 {
 		t.Fatalf("primed cache length = %d", authority.cache.Len())
 	}
-	binding, err := projection.ResolveClientOrigin(fixture.origin)
-	if err != nil {
-		t.Fatal(err)
+	preCut := leafAdmission(t, projection, authority, fixture)
+	disabled := newEnvironmentFixture(t, "disabled", 2)
+	disabled.aggregate.State = environment.StateDisabled
+	projection.Publish(t, disabled)
+	if authority.cache.Len() != 1 {
+		t.Fatalf("running Capture cache length = %d", authority.cache.Len())
 	}
-	san, err := certidentity.NewDNSName(fixture.origin.TLSServerName())
-	if err != nil {
-		t.Fatal(err)
-	}
-	intent, err := access.NewLeafIssuanceIntent(
-		authority.Identity().Revision(),
-		binding,
-		san,
-		certidentity.LeafKeyAlgorithmECDSAP256,
+	postPublish, err := projection.connections[fixture.environmentID].AdmitLeaf(
+		context.Background(), authority.Identity().Revision(),
+		mustDNSName(t, fixture.origin.Host()), certidentity.LeafKeyAlgorithmECDSAP256,
 	)
 	if err != nil {
-		t.Fatal(err)
-	}
-	preCut, err := projection.AdmitLeaf(intent)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := projection.Withdraw(fixture.accessID, 2); err != nil {
-		t.Fatalf("withdraw disabled Access: %v", err)
-	}
-	if authority.cache.Len() != 0 {
-		t.Fatalf("disabled Access cache length = %d", authority.cache.Len())
-	}
-	if _, err := projection.AdmitLeaf(intent); !errors.Is(
-		err,
-		access.ErrLeafIssuanceUnauthorized,
-	) {
-		t.Fatalf("post-disable admission error = %v", err)
+		t.Fatalf("running Capture admission after disable: %v", err)
 	}
 	if _, err := authority.Issue(context.Background(), preCut); err != nil {
-		t.Fatalf("pre-cut disabled admission could not finish: %v", err)
+		t.Fatalf("pre-publish admission could not finish: %v", err)
 	}
-	if authority.cache.Len() != 0 {
-		t.Fatalf("pre-cut disabled worker restored %d cache entries", authority.cache.Len())
+	if _, err := authority.Issue(context.Background(), postPublish); err != nil {
+		t.Fatalf("post-publish frozen admission could not finish: %v", err)
+	}
+	if authority.cache.Len() != 1 {
+		t.Fatalf("frozen Capture cache length = %d", authority.cache.Len())
 	}
 }
 
@@ -485,8 +439,8 @@ func TestShutdownDeadlineIsRetryableAndClosesNewAdmission(t *testing.T) {
 	t.Parallel()
 
 	authority := openAuthority(t, filepath.Join(t.TempDir(), "ca"), nil)
-	fixture := newAccessFixture(t, "shutdown", 1)
-	projection := newAccessProjection(t, authority, fixture)
+	fixture := newEnvironmentFixture(t, "shutdown", 1)
+	projection := newEnvironmentProjection(t, authority, fixture)
 	controlled := newControlledGenerator(authority.generator)
 	release := make(chan struct{})
 	controlled.setBarrier(release, true)
@@ -607,7 +561,7 @@ func (generator *controlledGenerator) failNext(mode controlledFailure) {
 
 func (generator *controlledGenerator) Generate(
 	ctx context.Context,
-	request access.LeafIssuanceRequest,
+	request captureassignment.LeafIssuanceRequest,
 ) (tlsCertificate, error) {
 	generator.mu.Lock()
 	generator.calls++

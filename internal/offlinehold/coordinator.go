@@ -2,6 +2,7 @@ package offlinehold
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"slices"
@@ -187,6 +188,11 @@ func (gate *Gate) Acquire(
 	if ctx == nil {
 		return nil, ErrInvalidRequest
 	}
+	normalizedPolicy, err := request.Target.EgressPolicy.Normalize()
+	if err != nil {
+		return nil, ErrInvalidRequest
+	}
+	request.Target.EgressPolicy = normalizedPolicy
 	if err := validateAcquireRequest(request); err != nil {
 		return nil, err
 	}
@@ -384,14 +390,15 @@ func (gate *Gate) PendingProbeTargets() []ProbeTarget {
 		}
 		seen[key] = struct{}{}
 		targets = append(targets, ProbeTarget{
-			Kind:           key.target.Kind,
-			Transport:      key.target.Transport,
-			TargetRef:      key.target.TargetRef,
-			NetworkOrigin:  key.target.NetworkOrigin,
-			HTTPAuthority:  key.target.HTTPAuthority,
-			TLSServerName:  key.target.TLSServerName,
-			AccessRevision: key.target.AccessRevision,
-			PlanHash:       key.target.PlanHash,
+			Kind:          key.target.Kind,
+			Transport:     key.target.Transport,
+			TargetRef:     key.target.TargetRef,
+			NetworkOrigin: key.target.NetworkOrigin,
+			HTTPAuthority: key.target.HTTPAuthority,
+			TLSServerName: key.target.TLSServerName,
+			PlanRevision:  key.target.PlanRevision,
+			PlanDigest:    key.target.PlanDigest,
+			EgressPolicy:  key.target.EgressPolicy,
 		})
 	}
 	slices.SortFunc(targets, func(left, right ProbeTarget) int {
@@ -706,7 +713,13 @@ func probeReasonOf(err error) ProbeReason {
 func normalizeProbeTargets(targets []ProbeTarget) ([]ProbeTarget, error) {
 	normalized := slices.Clone(targets)
 	seen := make(map[targetKey]struct{}, len(normalized))
-	for _, target := range normalized {
+	for index, target := range normalized {
+		policy, err := target.EgressPolicy.Normalize()
+		if err != nil {
+			return nil, ErrInvalidRequest
+		}
+		target.EgressPolicy = policy
+		normalized[index] = target
 		if err := validateProbeTarget(target); err != nil {
 			return nil, err
 		}
@@ -747,7 +760,7 @@ func validateProbeTarget(target ProbeTarget) error {
 		); err != nil {
 			return err
 		}
-	case ProbeTransportLoopbackCleartext:
+	case ProbeTransportLoopbackCleartext, ProbeTransportPrivateCleartext:
 		if target.Kind != EgressProvider || target.TLSServerName != "" {
 			return ErrInvalidRequest
 		}
@@ -773,13 +786,16 @@ func validateProbeTarget(target ProbeTarget) error {
 			return err
 		}
 	}
-	if (target.AccessRevision == 0) != (target.PlanHash == "") {
+	if (target.PlanRevision == 0) != (target.PlanDigest == "") {
 		return ErrInvalidRequest
 	}
-	if target.PlanHash != "" {
-		if err := validateOpaqueIdentity("probe PlanHash", target.PlanHash); err != nil {
+	if target.PlanDigest != "" {
+		if err := validatePlanDigest(target.PlanDigest); err != nil {
 			return err
 		}
+	}
+	if err := target.EgressPolicy.Validate(); err != nil {
+		return ErrInvalidRequest
 	}
 	return nil
 }
@@ -792,9 +808,25 @@ func probeTargetSortKey(target ProbeTarget) string {
 		target.NetworkOrigin,
 		target.HTTPAuthority,
 		target.TLSServerName,
-		fmt.Sprintf("%020d", target.AccessRevision),
-		target.PlanHash,
+		fmt.Sprintf("%020d", target.PlanRevision),
+		target.PlanDigest,
+		string(target.EgressPolicy.Proxy.Kind),
+		target.EgressPolicy.Proxy.Endpoint,
+		string(target.EgressPolicy.Resolver.Kind),
+		target.EgressPolicy.Resolver.DoHURL,
+		string(target.EgressPolicy.Resolver.Transport),
 	}, "\x00")
+}
+
+func validatePlanDigest(value string) error {
+	if len(value) != 64 || strings.ToLower(value) != value {
+		return fmt.Errorf("%w: probe plan digest is invalid", ErrInvalidRequest)
+	}
+	decoded, err := hex.DecodeString(value)
+	if err != nil || len(decoded) != 32 {
+		return fmt.Errorf("%w: probe plan digest is invalid", ErrInvalidRequest)
+	}
+	return nil
 }
 
 func validEgressKind(kind EgressKind) bool {

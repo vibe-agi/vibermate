@@ -40,9 +40,9 @@
     "caller": "core",
     "targetOrigin": "https://api.anthropic.com:443",
     "decision": {
-      "policyId": "access-work",
+      "policyId": "environment-work",
       "policyRevision": 4,
-      "authority": "access",
+      "authority": "environment",
       "ruleId": "anthropic-direct",
       "proxyId": "direct"
     },

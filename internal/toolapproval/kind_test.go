@@ -25,10 +25,10 @@ func genericRecord(t *testing.T) Record {
 	}
 }
 
-// A network ask is decided before any Access is resolved, so it has no plan
-// binding to supply. Requiring one made connection policy impossible to build
-// on this record.
-func TestApprovalWithoutAnAccessPlanBindingIsValid(t *testing.T) {
+// A network ask is decided before any Environment route is resolved, so it
+// has no route binding to supply. Requiring one would make connection policy
+// impossible to build on this record.
+func TestApprovalWithoutAnEnvironmentRouteBindingIsValid(t *testing.T) {
 	t.Parallel()
 
 	if err := genericRecord(t).Validate(); err != nil {
@@ -36,9 +36,9 @@ func TestApprovalWithoutAnAccessPlanBindingIsValid(t *testing.T) {
 	}
 }
 
-// A tool intent still carries its binding, and a stale plan still cannot
-// resolve it.
-func TestToolIntentStillRequiresItsAccessPlanBinding(t *testing.T) {
+// A tool intent still carries its frozen Environment route binding, and a
+// stale or partial binding still cannot resolve it.
+func TestToolIntentRequiresItsEnvironmentRouteBinding(t *testing.T) {
 	t.Parallel()
 
 	record := genericRecord(t)
@@ -48,7 +48,17 @@ func TestToolIntentStillRequiresItsAccessPlanBinding(t *testing.T) {
 	record.SubjectLabels = []string{"Bash"}
 	record.ExchangeID = "exchange-1"
 	if err := record.Validate(); err == nil {
-		t.Fatal("a tool intent without a plan binding was accepted")
+		t.Fatal("a tool intent without an Environment route binding was accepted")
+	}
+}
+
+func TestApprovalRejectsAPartialEnvironmentRouteBinding(t *testing.T) {
+	t.Parallel()
+
+	record := genericRecord(t)
+	record.ExchangeID = "exchange-1"
+	if err := record.Validate(); err == nil {
+		t.Fatal("a partial Environment route binding was accepted")
 	}
 }
 

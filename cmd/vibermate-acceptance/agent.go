@@ -17,6 +17,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/exchange"
 	"github.com/vibe-agi/vibermate/internal/protocolcore"
 )
@@ -400,6 +401,10 @@ func newDeferredClaudeCommand(
 		"--input-format",
 		"stream-json",
 	)
+	arguments, err = bindInitialEnvironment(arguments, config.environmentID)
+	if err != nil {
+		return nil, err
+	}
 	command := exec.Command(config.launcherPath, arguments...)
 	command.Dir = workingDirectory
 	command.Env = environment
@@ -445,6 +450,10 @@ func newAgentCommandWithCodexTransport(
 		)
 	default:
 		return nil, errors.New("acceptance client invocation is unsupported")
+	}
+	arguments, err = bindInitialEnvironment(arguments, config.environmentID)
+	if err != nil {
+		return nil, err
 	}
 	command := exec.Command(config.launcherPath, arguments...)
 	command.Dir = workingDirectory
@@ -535,6 +544,19 @@ func fixedCodexArguments(
 	return arguments, nil
 }
 
+func bindInitialEnvironment(arguments []string, value string) ([]string, error) {
+	environmentID, err := environment.NewEnvironmentID(value)
+	if err != nil {
+		return nil, errors.New("acceptance launch Environment is invalid")
+	}
+	if len(arguments) < 3 || arguments[0] != "run" || arguments[1] != "--" {
+		return nil, errors.New("acceptance launcher arguments are invalid")
+	}
+	bound := make([]string, 0, len(arguments)+2)
+	bound = append(bound, "run", "--env", environmentID.String(), "--")
+	return append(bound, arguments[2:]...), nil
+}
+
 func newResumeAgentCommand(
 	config config,
 	workingDirectory string,
@@ -582,6 +604,10 @@ func newResumeAgentCommand(
 		fixedCodexRequestedModel,
 		threadID.String(),
 		"-",
+	}
+	arguments, err = bindInitialEnvironment(arguments, config.environmentID)
+	if err != nil {
+		return nil, err
 	}
 	command := exec.Command(config.launcherPath, arguments...)
 	command.Dir = workingDirectory
@@ -1237,8 +1263,7 @@ func knownExchangeReasons() []exchange.ReasonCode {
 	return []exchange.ReasonCode{
 		exchange.ReasonInvalidExchangeRequest,
 		exchange.ReasonUnsupportedClientInput,
-		exchange.ReasonAccessPlanUnavailable,
-		exchange.ReasonUnsupportedAccessPlan,
+		exchange.ReasonEnvironmentPlanInvalid,
 		exchange.ReasonProviderRequestInvalid,
 		exchange.ReasonProviderCredentialUnavailable,
 		exchange.ReasonProviderTransportFailed,
@@ -1247,6 +1272,7 @@ func knownExchangeReasons() []exchange.ReasonCode {
 		exchange.ReasonProviderResponseInvalid,
 		exchange.ReasonTransportRetryExhausted,
 		exchange.ReasonToolDecisionRejected,
+		exchange.ReasonToolDecisionExpired,
 		exchange.ReasonToolDecisionUnavailable,
 		exchange.ReasonDownstreamCommitFailed,
 		exchange.ReasonDownstreamDisconnected,

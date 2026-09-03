@@ -44,7 +44,7 @@ func TestDeniedConnectionNeverReachesATransport(t *testing.T) {
 			denied = true
 			// The record explains itself with the rule that decided, not a
 			// literal.
-			if record.RuleID != "deny-all" {
+			if record.RuleID != "mode.deny_unknown" {
 				t.Fatalf("denied record rule = %q", record.RuleID)
 			}
 		}
@@ -57,8 +57,8 @@ func TestDeniedConnectionNeverReachesATransport(t *testing.T) {
 	}
 }
 
-// An AgentEndpoint is not exempt: policy decides every proxied connection.
-func TestPolicyDecidesAnAgentEndpointToo(t *testing.T) {
+// A ClientEndpoint is not exempt: policy decides every proxied connection.
+func TestPolicyDecidesAClientEndpointToo(t *testing.T) {
 	t.Parallel()
 
 	fixture := newProxyFixtureWithPolicy(t, denyEverythingPolicy(t))
@@ -72,10 +72,10 @@ func TestPolicyDecidesAnAgentEndpointToo(t *testing.T) {
 	_ = response.Body.Close()
 	_ = connection.Close()
 	if response.StatusCode != http.StatusForbidden {
-		t.Fatalf("denied AgentEndpoint status = %d", response.StatusCode)
+		t.Fatalf("denied ClientEndpoint status = %d", response.StatusCode)
 	}
 	if len(fixture.exchanges.Requests()) != 0 {
-		t.Fatal("a denied AgentEndpoint created an Exchange")
+		t.Fatal("a denied ClientEndpoint created an Exchange")
 	}
 }
 
@@ -118,16 +118,7 @@ func denyEverythingPolicy(t *testing.T) connectionpolicy.Snapshot {
 
 	set := connectionpolicy.Snapshot{
 		Revision: 1,
-		Rules: []connectionpolicy.Rule{{
-			ID:       "deny-all",
-			Decision: connectionpolicy.DecisionDeny,
-			Match:    connectionpolicy.MatchAny(),
-		}},
-		Default: connectionpolicy.Rule{
-			ID:       "default-deny",
-			Decision: connectionpolicy.DecisionDeny,
-			Match:    connectionpolicy.MatchAny(),
-		},
+		Mode:     connectionpolicy.ModeDenyUnknown,
 	}
 	return set
 }
@@ -137,16 +128,12 @@ func allowAnthropicPolicy(t *testing.T) connectionpolicy.Snapshot {
 
 	set := connectionpolicy.Snapshot{
 		Revision: 1,
+		Mode:     connectionpolicy.ModeDenyUnknown,
 		Rules: []connectionpolicy.Rule{{
 			ID:       "allow-anthropic",
 			Decision: connectionpolicy.DecisionAllow,
 			Match:    connectionpolicy.MatchExactHost("api.anthropic.com"),
 		}},
-		Default: connectionpolicy.Rule{
-			ID:       "default-deny",
-			Decision: connectionpolicy.DecisionDeny,
-			Match:    connectionpolicy.MatchAny(),
-		},
 	}
 	return set
 }
@@ -160,16 +147,7 @@ func TestARuleChangeReachesTheNextConnectionOnly(t *testing.T) {
 
 	allowAll := connectionpolicy.Snapshot{
 		Revision: 1,
-		Rules: []connectionpolicy.Rule{{
-			ID:       "allow.everything-for-now",
-			Decision: connectionpolicy.DecisionAllow,
-			Match:    connectionpolicy.MatchAny(),
-		}},
-		Default: connectionpolicy.Rule{
-			ID:       "default.deny",
-			Decision: connectionpolicy.DecisionDeny,
-			Match:    connectionpolicy.MatchAny(),
-		},
+		Mode:     connectionpolicy.ModeMonitor,
 	}
 	fixture := newProxyFixtureWithPolicy(t, allowAll)
 	defer fixture.Close(t)
@@ -193,11 +171,7 @@ func TestARuleChangeReachesTheNextConnectionOnly(t *testing.T) {
 		context.Background(),
 		1,
 		nil,
-		connectionpolicy.Rule{
-			ID:       "default.deny",
-			Decision: connectionpolicy.DecisionDeny,
-			Match:    connectionpolicy.MatchAny(),
-		},
+		connectionpolicy.ModeDenyUnknown,
 	); err != nil {
 		t.Fatal(err)
 	}

@@ -12,7 +12,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"github.com/vibe-agi/vibermate/internal/access"
+	"github.com/vibe-agi/vibermate/internal/environment"
 )
 
 const (
@@ -199,10 +199,10 @@ func (kind Kind) valid() bool {
 	return known
 }
 
-// requiresAccessPlan reports whether this kind is decided after an Access plan
-// exists. A network ask is decided before any Access is resolved, so it has no
-// binding to supply.
-func (kind Kind) requiresAccessPlan() bool {
+// requiresEnvironmentRoute reports whether this kind is decided after one
+// immutable Environment route has been selected. A network ask is decided
+// before semantic request routing, so it has no binding to supply.
+func (kind Kind) requiresEnvironmentRoute() bool {
 	return kind == KindToolIntent
 }
 
@@ -247,20 +247,22 @@ type Record struct {
 	Target Target
 	// RequestCount and WaiterCount describe how much this one entry stands
 	// for.
-	RequestCount   uint32
-	WaiterCount    uint32
-	ExchangeID     string
-	AccessID       access.AccessID
-	PlanRevision   access.Revision
-	PlanHash       access.PlanHash
-	State          State
-	Decision       Decision
-	DecisionScope  string
-	DecisionReason string
-	IdempotencyKey string
-	CreatedAt      time.Time
-	ExpiresAt      time.Time
-	ResolvedAt     time.Time
+	RequestCount        uint32
+	WaiterCount         uint32
+	ExchangeID          string
+	EnvironmentID       environment.EnvironmentID
+	EnvironmentRevision environment.Revision
+	EnvironmentDigest   environment.CandidateDigest
+	RouteID             environment.UpstreamRouteID
+	RouteRevision       environment.Revision
+	State               State
+	Decision            Decision
+	DecisionScope       string
+	DecisionReason      string
+	IdempotencyKey      string
+	CreatedAt           time.Time
+	ExpiresAt           time.Time
+	ResolvedAt          time.Time
 }
 
 func (record Record) Validate() error {
@@ -288,16 +290,33 @@ func (record Record) Validate() error {
 		record.WaiterCount > record.RequestCount {
 		return ErrInvalidApproval
 	}
-	// A binding is mandatory only for a kind decided after Access resolution.
-	// When present it is complete, so a partial binding cannot pass.
-	hasBinding := record.AccessID.String() != "" ||
-		record.PlanRevision != 0 ||
-		!record.PlanHash.IsZero() ||
+	// A binding is mandatory only for a kind decided after an Environment
+	// route has been frozen. When present it is complete, so a partial binding
+	// cannot pass.
+	hasBinding := record.EnvironmentID.String() != "" ||
+		record.EnvironmentRevision != 0 ||
+		record.EnvironmentDigest != (environment.CandidateDigest{}) ||
+		record.RouteID.String() != "" ||
+		record.RouteRevision != 0 ||
 		record.ExchangeID != ""
-	if record.Kind.requiresAccessPlan() || hasBinding {
-		if record.AccessID.String() == "" ||
-			record.PlanRevision == 0 ||
-			record.PlanHash.IsZero() {
+	if record.Kind.requiresEnvironmentRoute() || hasBinding {
+		environmentID, environmentErr := environment.NewEnvironmentID(
+			record.EnvironmentID.String(),
+		)
+		routeID, routeErr := environment.NewUpstreamRouteID(
+			record.RouteID.String(),
+		)
+		digest, digestErr := environment.ParseCandidateDigest(
+			record.EnvironmentDigest.String(),
+		)
+		if environmentErr != nil || environmentID != record.EnvironmentID ||
+			routeErr != nil || routeID != record.RouteID ||
+			digestErr != nil || digest != record.EnvironmentDigest ||
+			record.EnvironmentDigest == (environment.CandidateDigest{}) ||
+			record.EnvironmentRevision == 0 ||
+			record.EnvironmentRevision > environment.MaxRevision ||
+			record.RouteRevision == 0 ||
+			record.RouteRevision > environment.MaxRevision {
 			return ErrInvalidApproval
 		}
 		if err := validateIdentity(
@@ -404,18 +423,20 @@ type Choice struct {
 }
 
 type View struct {
-	ID           string          `json:"id"`
-	Revision     uint64          `json:"revision"`
-	Kind         string          `json:"kind"`
-	State        State           `json:"state"`
-	Risk         string          `json:"risk"`
-	TitleKey     string          `json:"titleKey"`
-	SummaryKey   string          `json:"summaryKey"`
-	ExchangeID   string          `json:"exchangeId,omitempty"`
-	AccessID     string          `json:"accessId,omitempty"`
-	PlanRevision access.Revision `json:"planRevision,omitempty"`
-	PlanHash     string          `json:"planHash,omitempty"`
-	AggregateKey string          `json:"aggregateKey"`
+	ID                  string               `json:"id"`
+	Revision            uint64               `json:"revision"`
+	Kind                string               `json:"kind"`
+	State               State                `json:"state"`
+	Risk                string               `json:"risk"`
+	TitleKey            string               `json:"titleKey"`
+	SummaryKey          string               `json:"summaryKey"`
+	ExchangeID          string               `json:"exchangeId,omitempty"`
+	EnvironmentID       string               `json:"environmentId,omitempty"`
+	EnvironmentRevision environment.Revision `json:"environmentRevision,omitempty"`
+	EnvironmentDigest   string               `json:"environmentDigest,omitempty"`
+	RouteID             string               `json:"routeId,omitempty"`
+	RouteRevision       environment.Revision `json:"routeRevision,omitempty"`
+	AggregateKey        string               `json:"aggregateKey"`
 	// Target is what a connection question is about, so a window can name the
 	// host and port instead of taking a subject string apart.
 	Target         *Target    `json:"target,omitempty"`
@@ -435,32 +456,34 @@ type View struct {
 func ViewOf(record Record) View {
 	look := presentations[record.Kind]
 	view := View{
-		ID:             record.ID,
-		Revision:       record.Revision,
-		Kind:           string(record.Kind),
-		State:          record.State,
-		Risk:           look.risk,
-		TitleKey:       look.titleKey,
-		SummaryKey:     look.summaryKey,
-		AggregateKey:   record.AggregateKey,
-		ExchangeID:     record.ExchangeID,
-		AccessID:       record.AccessID.String(),
-		PlanRevision:   record.PlanRevision,
-		SubjectRefs:    slices.Clone(record.SubjectRefs),
-		SubjectLabels:  slices.Clone(record.SubjectLabels),
-		RequestCount:   record.RequestCount,
-		WaiterCount:    record.WaiterCount,
-		Choices:        slices.Clone(look.choices),
-		CreatedAt:      record.CreatedAt,
-		ExpiresAt:      record.ExpiresAt,
-		Decision:       record.Decision,
-		DecisionScope:  record.DecisionScope,
-		TerminalReason: record.DecisionReason,
+		ID:                  record.ID,
+		Revision:            record.Revision,
+		Kind:                string(record.Kind),
+		State:               record.State,
+		Risk:                look.risk,
+		TitleKey:            look.titleKey,
+		SummaryKey:          look.summaryKey,
+		AggregateKey:        record.AggregateKey,
+		ExchangeID:          record.ExchangeID,
+		EnvironmentID:       record.EnvironmentID.String(),
+		EnvironmentRevision: record.EnvironmentRevision,
+		RouteID:             record.RouteID.String(),
+		RouteRevision:       record.RouteRevision,
+		SubjectRefs:         slices.Clone(record.SubjectRefs),
+		SubjectLabels:       slices.Clone(record.SubjectLabels),
+		RequestCount:        record.RequestCount,
+		WaiterCount:         record.WaiterCount,
+		Choices:             slices.Clone(look.choices),
+		CreatedAt:           record.CreatedAt,
+		ExpiresAt:           record.ExpiresAt,
+		Decision:            record.Decision,
+		DecisionScope:       record.DecisionScope,
+		TerminalReason:      record.DecisionReason,
 	}
-	// A record with no plan binding has no plan hash. Presenting a zero hash
-	// would show a person a fact that does not exist.
-	if record.PlanRevision != 0 {
-		view.PlanHash = record.PlanHash.String()
+	// A record with no Environment route binding has no digest. Presenting a
+	// zero digest would show a person a fact that does not exist.
+	if record.EnvironmentRevision != 0 {
+		view.EnvironmentDigest = record.EnvironmentDigest.String()
 	}
 	if record.Target.present() {
 		target := record.Target

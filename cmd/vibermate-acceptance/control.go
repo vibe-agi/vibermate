@@ -15,29 +15,33 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 	"unicode"
 	"unicode/utf8"
 
-	"github.com/vibe-agi/vibermate/internal/access"
-	"github.com/vibe-agi/vibermate/internal/accessapply"
-	"github.com/vibe-agi/vibermate/internal/accesscredential"
 	"github.com/vibe-agi/vibermate/internal/activity"
+	"github.com/vibe-agi/vibermate/internal/captureidentity"
 	"github.com/vibe-agi/vibermate/internal/connectionevent"
 	"github.com/vibe-agi/vibermate/internal/desktopbootstrap"
 	"github.com/vibe-agi/vibermate/internal/desktopcontrol"
+	"github.com/vibe-agi/vibermate/internal/egressprofile"
+	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/loopbackclient"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
+	"github.com/vibe-agi/vibermate/internal/originidentity"
+	"github.com/vibe-agi/vibermate/internal/protocolspec"
+	"github.com/vibe-agi/vibermate/internal/provideraccount"
+	"github.com/vibe-agi/vibermate/internal/secretstore"
 	"github.com/vibe-agi/vibermate/internal/toolapproval"
+	"github.com/vibe-agi/vibermate/internal/wireprofile"
 )
 
-const (
-	controlResponseLimit             = 2 << 20
-	maximumUnresolvedAccessMutations = 16
-)
+const controlResponseLimit = 2 << 20
+
+const acceptanceManagedAccountID = "acceptance.anthropic"
 
 var controlReasonCodePattern = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
 
@@ -46,9 +50,6 @@ type controlClient struct {
 	readToken  string
 	writeToken string
 	client     *loopbackclient.Client
-
-	accessMu                  sync.Mutex
-	unresolvedAccessMutations map[[sha256.Size]byte]string
 }
 
 type controlProblem struct {
@@ -90,11 +91,8 @@ func newControlClient(
 		return nil, err
 	}
 	return &controlClient{
-		baseURL:                   session.BaseURL,
-		readToken:                 session.ReadToken,
-		writeToken:                session.WriteToken,
-		client:                    client,
-		unresolvedAccessMutations: make(map[[sha256.Size]byte]string),
+		baseURL: session.BaseURL, readToken: session.ReadToken,
+		writeToken: session.WriteToken, client: client,
 	}, nil
 }
 
@@ -163,7 +161,7 @@ func (client *controlClient) requestEncoded(
 	if err != nil {
 		return 0, controlProblem{}, err
 	}
-	request.Header.Set("Origin", "tauri://localhost")
+	request.Header.Set("Origin", "vibermate://desktop")
 	request.Header.Set("Sec-Fetch-Site", "cross-site")
 	request.Header.Set("Sec-Fetch-Mode", "cors")
 	request.Header.Set("Sec-Fetch-Dest", "empty")
@@ -314,229 +312,224 @@ func (client *controlClient) status(
 	return status, nil
 }
 
-func (client *controlClient) applyAccess(
+func (client *controlClient) createAnthropicAccount(
 	ctx context.Context,
-	config config,
-	expected uint64,
-) (desktopcontrol.AccessApplyResponse, int, controlProblem, error) {
-	if ctx == nil {
-		return desktopcontrol.AccessApplyResponse{},
-			0,
-			controlProblem{},
-			errors.New("Access apply context is nil")
-	}
-	if err := ctx.Err(); err != nil {
-		return desktopcontrol.AccessApplyResponse{}, 0, controlProblem{}, err
-	}
-	input, err := assemblyAccess(config, expected)
-	if err != nil {
-		return desktopcontrol.AccessApplyResponse{}, 0, controlProblem{}, err
-	}
-	encoded, err := json.Marshal(input)
-	if err != nil {
-		return desktopcontrol.AccessApplyResponse{}, 0, controlProblem{}, err
-	}
-	path := "/api/v1/accesses/" +
-		url.PathEscape(config.accessID) +
-		"/actions/apply"
-	fingerprint := sha256.Sum256(bytes.Join(
-		[][]byte{
-			[]byte(http.MethodPut),
-			[]byte(path),
-			[]byte(strconv.FormatUint(expected, 10)),
-			encoded,
-		},
-		[]byte{0},
-	))
-	key, err := client.accessMutationKey(fingerprint)
-	if err != nil {
-		return desktopcontrol.AccessApplyResponse{}, 0, controlProblem{}, err
-	}
-	attempt := func() (
-		desktopcontrol.AccessApplyResponse,
-		int,
-		controlProblem,
-		error,
-		bool,
-	) {
-		var payload json.RawMessage
-		status, problem, requestErr := client.requestEncoded(
-			ctx,
-			http.MethodPut,
-			path,
-			true,
-			&expected,
-			encoded,
-			true,
-			key,
-			&payload,
+	secret *secretstore.Value,
+) (desktopcontrol.ProviderAccountResponse, error) {
+	if ctx == nil || secret == nil {
+		return desktopcontrol.ProviderAccountResponse{}, errors.New(
+			"managed account dependencies are required",
 		)
-		if requestErr != nil {
-			return desktopcontrol.AccessApplyResponse{},
-				status, problem, requestErr, false
-		}
-		if status < http.StatusOK || status >= http.StatusMultipleChoices {
-			return desktopcontrol.AccessApplyResponse{}, status, problem, nil, true
-		}
-		if status != http.StatusOK {
-			return desktopcontrol.AccessApplyResponse{},
-				status,
-				problem,
-				errors.New("Access apply success status is invalid"),
-				false
-		}
-		result, decodeErr := decodeAccessApplyResponse(payload)
-		if decodeErr == nil &&
-			(expected == ^uint64(0) || uint64(result.Revision) != expected+1) {
-			decodeErr = errors.New("Access apply response revision is invalid")
-		}
-		if decodeErr != nil {
-			return desktopcontrol.AccessApplyResponse{},
-				status, problem, decodeErr, false
-		}
-		return result, status, problem, nil, true
 	}
-	result, status, problem, err, authoritative := attempt()
-	if authoritative {
-		client.settleAccessMutation(fingerprint)
-		return result, status, problem, err
+	payload, err := secret.CopyBytes()
+	if err != nil {
+		return desktopcontrol.ProviderAccountResponse{}, err
 	}
-	if ctx.Err() != nil {
-		return result, status, problem, err
+	input := desktopcontrol.ProviderAccountCreateInput{
+		ID: acceptanceManagedAccountID, DisplayName: "Anthropic acceptance",
+		Kind:   desktopcontrol.ProviderAccountKindAnthropicAPIKey,
+		Secret: string(payload),
 	}
-	result, status, problem, err, authoritative = attempt()
-	if authoritative {
-		client.settleAccessMutation(fingerprint)
+	clear(payload)
+	encoded, err := json.Marshal(input)
+	input.Secret = ""
+	if err != nil {
+		return desktopcontrol.ProviderAccountResponse{}, err
 	}
-	return result, status, problem, err
-}
-
-func (client *controlClient) accessMutationKey(
-	fingerprint [sha256.Size]byte,
-) (string, error) {
-	if client == nil {
-		return "", errors.New("control client is unavailable")
-	}
-	client.accessMu.Lock()
-	defer client.accessMu.Unlock()
-	if key := client.unresolvedAccessMutations[fingerprint]; key != "" {
-		return key, nil
-	}
-	if len(client.unresolvedAccessMutations) >= maximumUnresolvedAccessMutations {
-		return "", errors.New("too many unresolved Access apply commands")
-	}
+	defer clear(encoded)
 	key, err := idempotencyKey()
 	if err != nil {
-		return "", err
+		return desktopcontrol.ProviderAccountResponse{}, err
 	}
-	client.unresolvedAccessMutations[fingerprint] = key
-	return key, nil
-}
-
-func (client *controlClient) settleAccessMutation(
-	fingerprint [sha256.Size]byte,
-) {
-	if client == nil {
-		return
+	expected := uint64(0)
+	var response desktopcontrol.ProviderAccountResponse
+	status, problem, err := client.requestEncoded(
+		ctx, http.MethodPost, "/api/v1/provider-accounts", true,
+		&expected, encoded, true, key, &response,
+	)
+	if err != nil {
+		return desktopcontrol.ProviderAccountResponse{}, err
 	}
-	client.accessMu.Lock()
-	delete(client.unresolvedAccessMutations, fingerprint)
-	client.accessMu.Unlock()
-}
-
-func decodeAccessApplyResponse(
-	payload []byte,
-) (desktopcontrol.AccessApplyResponse, error) {
-	var fields map[string]json.RawMessage
-	if err := decodeClosedJSON(payload, &fields); err != nil || fields == nil {
-		return desktopcontrol.AccessApplyResponse{}, errors.New(
-			"Access apply response is not a closed object",
+	if status != http.StatusCreated || problem.ReasonCode != "" {
+		return desktopcontrol.ProviderAccountResponse{}, fmt.Errorf(
+			"create managed account: status=%d reason=%s",
+			status,
+			problem.ReasonCode,
 		)
 	}
-	statePayload, exists := fields["applicationState"]
-	if !exists {
-		return desktopcontrol.AccessApplyResponse{}, errors.New(
-			"Access apply response application state is missing",
-		)
+	if err := validateAnthropicAccount(response); err != nil {
+		return desktopcontrol.ProviderAccountResponse{}, err
 	}
-	var state desktopcontrol.AccessApplicationState
-	if err := decodeClosedJSON(statePayload, &state); err != nil {
-		return desktopcontrol.AccessApplyResponse{}, errors.New(
-			"Access apply response application state is invalid",
-		)
-	}
-	baseFields := []string{"outcome", "revision", "applicationState"}
-	switch state {
-	case desktopcontrol.AccessApplicationStateActive:
-		if !hasExactJSONFields(
-			fields,
-			"outcome",
-			"revision",
-			"applicationState",
-			"planHash",
-		) {
-			return desktopcontrol.AccessApplyResponse{}, errors.New(
-				"active Access apply response fields are invalid",
-			)
-		}
-	case desktopcontrol.AccessApplicationStateUnavailable:
-		if !hasExactJSONFields(fields, baseFields...) {
-			return desktopcontrol.AccessApplyResponse{}, errors.New(
-				"unavailable Access apply response fields are invalid",
-			)
-		}
-	default:
-		return desktopcontrol.AccessApplyResponse{}, errors.New(
-			"Access apply response application state is invalid",
-		)
-	}
-	var result desktopcontrol.AccessApplyResponse
-	if err := decodeClosedJSON(payload, &result); err != nil {
-		return desktopcontrol.AccessApplyResponse{}, err
-	}
-	if err := validateAccessApplyResponse(result); err != nil {
-		return desktopcontrol.AccessApplyResponse{}, err
-	}
-	return result, nil
+	return response, nil
 }
 
-func hasExactJSONFields(
-	fields map[string]json.RawMessage,
-	expected ...string,
-) bool {
-	if len(fields) != len(expected) {
-		return false
+func (client *controlClient) providerAccount(
+	ctx context.Context,
+	accountID string,
+) (desktopcontrol.ProviderAccountResponse, error) {
+	if _, err := provideraccount.NewID(accountID); err != nil {
+		return desktopcontrol.ProviderAccountResponse{}, err
 	}
-	for _, field := range expected {
-		if _, exists := fields[field]; !exists {
-			return false
-		}
+	var response desktopcontrol.ProviderAccountResponse
+	status, problem, err := client.request(
+		ctx, http.MethodGet,
+		"/api/v1/provider-accounts/"+url.PathEscape(accountID),
+		false, nil, nil, &response,
+	)
+	if err != nil {
+		return desktopcontrol.ProviderAccountResponse{}, err
 	}
-	return true
+	if status != http.StatusOK || problem.ReasonCode != "" {
+		return desktopcontrol.ProviderAccountResponse{}, fmt.Errorf(
+			"read managed account: status=%d reason=%s",
+			status,
+			problem.ReasonCode,
+		)
+	}
+	if err := validateAnthropicAccount(response); err != nil {
+		return desktopcontrol.ProviderAccountResponse{}, err
+	}
+	return response, nil
 }
 
-func validateAccessApplyResponse(
-	result desktopcontrol.AccessApplyResponse,
+func validateAnthropicAccount(
+	response desktopcontrol.ProviderAccountResponse,
 ) error {
-	if result.Outcome != access.WriteOutcomeCommitted || result.Revision == 0 {
-		return errors.New("Access apply response commit receipt is invalid")
-	}
-	switch result.ApplicationState {
-	case desktopcontrol.AccessApplicationStateActive:
-		decoded, err := hex.DecodeString(result.PlanHash)
-		if err != nil ||
-			len(decoded) != sha256.Size ||
-			strings.ToLower(result.PlanHash) != result.PlanHash {
-			return errors.New("active Access apply response plan hash is invalid")
-		}
-	case desktopcontrol.AccessApplicationStateUnavailable:
-		if result.PlanHash != "" {
-			return errors.New("unavailable Access apply response exposed a plan hash")
-		}
-	default:
-		return errors.New("Access apply response application state is invalid")
+	if response.ID != acceptanceManagedAccountID ||
+		response.Kind != desktopcontrol.ProviderAccountKindAnthropicAPIKey ||
+		response.RealmID != "anthropic.official" ||
+		response.State != provideraccount.StateActive ||
+		response.Revision != 1 ||
+		response.CredentialState != provideraccount.HealthReady ||
+		response.CredentialEpoch != 1 {
+		return errors.New("managed Anthropic account response is inconsistent")
 	}
 	return nil
+}
+
+func providerAccountResponsesEqual(
+	left desktopcontrol.ProviderAccountResponse,
+	right desktopcontrol.ProviderAccountResponse,
+) bool {
+	return left.ID == right.ID &&
+		left.DisplayName == right.DisplayName &&
+		left.UpstreamEndpointID == right.UpstreamEndpointID &&
+		left.Kind == right.Kind &&
+		left.RealmID == right.RealmID &&
+		left.State == right.State &&
+		left.Revision == right.Revision &&
+		left.CredentialState == right.CredentialState &&
+		left.CredentialEpoch == right.CredentialEpoch &&
+		slices.Equal(left.SetHeaderNames, right.SetHeaderNames) &&
+		slices.Equal(left.DeleteHeaderNames, right.DeleteHeaderNames)
+}
+
+type environmentPublication struct {
+	Draft   desktopcontrol.EnvironmentDraftResponse
+	Preview desktopcontrol.EnvironmentImpactResponse
+	Publish desktopcontrol.EnvironmentPublishResponse
+}
+
+func (client *controlClient) publishInitialEnvironment(
+	ctx context.Context,
+	config config,
+	expectedBase uint64,
+	account *desktopcontrol.ProviderAccountResponse,
+) (environmentPublication, int, controlProblem, error) {
+	if ctx == nil {
+		return environmentPublication{}, 0, controlProblem{},
+			errors.New("Environment publish context is nil")
+	}
+	if err := ctx.Err(); err != nil {
+		return environmentPublication{}, 0, controlProblem{}, err
+	}
+	candidate, err := assemblyEnvironment(
+		config,
+		environment.Revision(expectedBase+1),
+		account,
+	)
+	if err != nil {
+		return environmentPublication{}, 0, controlProblem{}, err
+	}
+	input := desktopcontrol.EnvironmentDraftInput{
+		ExpectedDraftRevision: 0,
+		Name:                  candidate.Name,
+		State:                 candidate.State,
+		ClientEndpoints:       candidate.ClientEndpoints,
+		PluginBindings:        candidate.PluginBindings,
+		BudgetPolicy:          candidate.BudgetPolicy,
+		ContentRecording:      candidate.ContentRecording,
+	}
+	path := "/api/v1/environments/" + url.PathEscape(config.environmentID) + "/draft"
+	var result environmentPublication
+	status, problem, err := client.request(
+		ctx, http.MethodPut, path, true, &expectedBase, input, &result.Draft,
+	)
+	if err != nil || status != http.StatusOK || problem.ReasonCode != "" {
+		return environmentPublication{}, status, problem, err
+	}
+	if err := validateEnvironmentDraft(result.Draft, candidate, expectedBase); err != nil {
+		return environmentPublication{}, status, problem, err
+	}
+	draftRevision := uint64(result.Draft.DraftRevision)
+	actionPath := path + "/actions/preview"
+	status, problem, err = client.request(
+		ctx, http.MethodPost, actionPath, true, &draftRevision, nil, &result.Preview,
+	)
+	if err != nil || status != http.StatusOK || problem.ReasonCode != "" {
+		return environmentPublication{}, status, problem, err
+	}
+	if err := validateEnvironmentImpact(result.Preview, result.Draft); err != nil {
+		return environmentPublication{}, status, problem, err
+	}
+	actionPath = path + "/actions/publish"
+	status, problem, err = client.request(
+		ctx, http.MethodPost, actionPath, true, &draftRevision, nil, &result.Publish,
+	)
+	if err != nil || status != http.StatusOK || problem.ReasonCode != "" {
+		return environmentPublication{}, status, problem, err
+	}
+	if err := validateEnvironmentPublication(result, candidate); err != nil {
+		return environmentPublication{}, status, problem, err
+	}
+	return result, status, problem, nil
+}
+
+func validateEnvironmentDraft(result desktopcontrol.EnvironmentDraftResponse, candidate environment.Environment, expectedBase uint64) error {
+	if result.EnvironmentID != candidate.ID || uint64(result.BaseRevision) != expectedBase ||
+		result.DraftRevision == 0 || result.Candidate.ID != candidate.ID ||
+		result.Candidate.Revision != candidate.Revision || !canonicalSHA256(result.CandidateDigest) ||
+		result.Candidate.Digest != result.CandidateDigest {
+		return errors.New("Environment draft response is inconsistent")
+	}
+	return nil
+}
+
+func validateEnvironmentImpact(result desktopcontrol.EnvironmentImpactResponse, draft desktopcontrol.EnvironmentDraftResponse) error {
+	if result.EnvironmentID != draft.EnvironmentID || result.BaseRevision != draft.BaseRevision ||
+		result.DraftRevision != draft.DraftRevision || result.CandidateDigest != draft.CandidateDigest ||
+		len(result.ContinuingCaptures) != 0 {
+		return errors.New("Environment impact preview is inconsistent")
+	}
+	return nil
+}
+
+func validateEnvironmentPublication(result environmentPublication, candidate environment.Environment) error {
+	published := result.Publish.Environment
+	if result.Publish.Outcome != environment.CommitOutcomeCommitted ||
+		published.ID != candidate.ID || published.Revision != candidate.Revision ||
+		published.Digest != result.Draft.CandidateDigest || !canonicalSHA256(published.Digest) {
+		return errors.New("Environment publish response is inconsistent")
+	}
+	if err := validateEnvironmentImpact(result.Publish.Impact, result.Draft); err != nil {
+		return err
+	}
+	return nil
+}
+
+func canonicalSHA256(value string) bool {
+	decoded, err := hex.DecodeString(value)
+	return err == nil && len(decoded) == sha256.Size && strings.ToLower(value) == value
 }
 
 func (client *controlClient) connectionRules(
@@ -591,33 +584,67 @@ func (client *controlClient) replaceConnectionRules(
 	return rules, nil
 }
 
-func (client *controlClient) credential(
+func (client *controlClient) environment(
 	ctx context.Context,
-	config config,
-) (accesscredential.View, error) {
-	identifiers := assemblyIdentifiers(config.accessID)
-	var view accesscredential.View
+	environmentID environment.EnvironmentID,
+) (desktopcontrol.EnvironmentResponse, error) {
+	var view desktopcontrol.EnvironmentResponse
 	status, problem, err := client.request(
-		ctx,
-		http.MethodGet,
-		"/api/v1/accesses/"+url.PathEscape(identifiers.access)+
-			"/profiles/"+url.PathEscape(identifiers.profile)+
-			"/credentials/"+url.PathEscape(identifiers.account),
-		false,
-		nil,
-		nil,
-		&view,
+		ctx, http.MethodGet,
+		"/api/v1/environments/"+url.PathEscape(environmentID.String()),
+		false, nil, nil, &view,
 	)
 	if err != nil {
-		return accesscredential.View{}, err
+		return desktopcontrol.EnvironmentResponse{}, err
 	}
 	if status != http.StatusOK {
-		return accesscredential.View{}, fmt.Errorf(
-			"read provider credential metadata: %s",
-			problem.ReasonCode,
+		return desktopcontrol.EnvironmentResponse{}, fmt.Errorf(
+			"read Environment: %s", problem.ReasonCode,
 		)
 	}
 	return view, nil
+}
+
+func (client *controlClient) captures(
+	ctx context.Context,
+) (desktopcontrol.CaptureListResponse, error) {
+	var page desktopcontrol.CaptureListResponse
+	status, problem, err := client.request(
+		ctx, http.MethodGet, "/api/v1/captures?limit=200", false, nil, nil, &page,
+	)
+	if err != nil {
+		return desktopcontrol.CaptureListResponse{}, err
+	}
+	if status != http.StatusOK {
+		return desktopcontrol.CaptureListResponse{}, fmt.Errorf(
+			"read Captures: %s", problem.ReasonCode,
+		)
+	}
+	return page, nil
+}
+
+func (client *controlClient) captureAssignment(
+	ctx context.Context,
+	reference captureidentity.Reference,
+) (desktopcontrol.CaptureAssignmentResponse, error) {
+	if err := reference.Validate(); err != nil {
+		return desktopcontrol.CaptureAssignmentResponse{}, err
+	}
+	var assignment desktopcontrol.CaptureAssignmentResponse
+	status, problem, err := client.request(
+		ctx, http.MethodGet,
+		"/api/v1/captures/"+url.PathEscape(reference.Key())+"/environment-assignment",
+		false, nil, nil, &assignment,
+	)
+	if err != nil {
+		return desktopcontrol.CaptureAssignmentResponse{}, err
+	}
+	if status != http.StatusOK {
+		return desktopcontrol.CaptureAssignmentResponse{}, fmt.Errorf(
+			"read Capture assignment: %s", problem.ReasonCode,
+		)
+	}
+	return assignment, nil
 }
 
 func (client *controlClient) activities(
@@ -662,6 +689,35 @@ func (client *controlClient) activities(
 	return page, nil
 }
 
+func (client *controlClient) exchange(
+	ctx context.Context,
+	exchangeID string,
+) (desktopcontrol.ExchangeDetail, error) {
+	if !validControlIdentity(exchangeID, activity.MaxIdentityBytes) {
+		return desktopcontrol.ExchangeDetail{}, errors.New(
+			"Exchange identity is invalid",
+		)
+	}
+	var detail desktopcontrol.ExchangeDetail
+	status, problem, err := client.request(
+		ctx, http.MethodGet,
+		"/api/v1/exchanges/"+url.PathEscape(exchangeID),
+		false, nil, nil, &detail,
+	)
+	if err != nil {
+		return desktopcontrol.ExchangeDetail{}, err
+	}
+	if status != http.StatusOK || problem.ReasonCode != "" ||
+		detail.ID != exchangeID ||
+		detail.ParentRefs.ExchangeID != exchangeID ||
+		!validFrozenEnvironmentRef(detail.Environment) {
+		return desktopcontrol.ExchangeDetail{}, errors.New(
+			"Exchange detail is inconsistent",
+		)
+	}
+	return detail, nil
+}
+
 func activityPageFromWire(
 	wire activityPageWire,
 ) (desktopcontrol.ActivityPage, error) {
@@ -674,6 +730,7 @@ func activityPageFromWire(
 	}
 	for _, item := range items {
 		if item.Validate() != nil ||
+			!validFrozenEnvironmentRef(item.Environment) ||
 			!validControlIdentity(item.ID, activity.MaxIdentityBytes) ||
 			item.OccurredAt.IsZero() ||
 			!validExchangeSummaryStatus(item.Status) {
@@ -692,6 +749,25 @@ func activityPageFromWire(
 		}
 	}
 	return page, nil
+}
+
+func validFrozenEnvironmentRef(reference desktopcontrol.FrozenEnvironmentRef) bool {
+	if _, err := environment.NewEnvironmentID(reference.ID); err != nil {
+		return false
+	}
+	if _, err := environment.ParseCandidateDigest(reference.Digest); err != nil {
+		return false
+	}
+	if _, err := environment.NewClientEndpointID(reference.ClientEndpointID); err != nil {
+		return false
+	}
+	if _, err := environment.NewClientProtocolPlanID(reference.ProtocolPlanID); err != nil {
+		return false
+	}
+	if _, err := environment.NewUpstreamRouteID(reference.RouteID); err != nil {
+		return false
+	}
+	return true
 }
 
 func validExchangeSummaryStatus(value string) bool {
@@ -935,98 +1011,101 @@ func idempotencyKey() (string, error) {
 	return base64.RawURLEncoding.EncodeToString(value), nil
 }
 
-func assemblyAccess(
+func assemblyEnvironment(
 	config config,
-	expected uint64,
-) (accessapply.Input, error) {
-	identifiers := assemblyIdentifiers(config.accessID)
+	revision environment.Revision,
+	account *desktopcontrol.ProviderAccountResponse,
+) (environment.Environment, error) {
 	client, err := selectedAcceptanceClient(config)
 	if err != nil {
-		return accessapply.Input{}, err
+		return environment.Environment{}, err
 	}
-	return accessapply.Input{
-		ExpectedRevision: expected,
-		Access: accessapply.AccessInput{
-			ID:                identifiers.access,
-			Name:              "Assembly Access",
-			Description:       "Fixed client assembly acceptance",
-			Status:            string(access.AccessStatusEnabled),
-			AgentEndpointID:   identifiers.endpoint,
-			DefaultRouteSetID: identifiers.routeSet,
-			ProfileIDs:        []string{identifiers.profile},
-			EgressPolicyID:    identifiers.egress,
-		},
-		AgentEndpoint: accessapply.AgentEndpointInput{
-			ID:            identifiers.endpoint,
-			ClientOrigin:  client.ClientOrigin,
-			ClientDialect: string(client.ClientDialect),
-		},
-		Profiles: []accessapply.ProfileInput{{
-			ID:                     identifiers.profile,
-			Name:                   "Assembly Profile",
-			Description:            "Fixed client to OpenAI Chat path",
-			BackendDialect:         string(access.DialectOpenAIChat),
-			TargetID:               identifiers.target,
-			UpstreamWireProfileRef: access.UpstreamWireProfileFollowClientValue,
-			DefaultModelPolicy: accessapply.ModelPolicyInput{
-				Mode:       string(access.ModelPolicyModeFixed),
-				FixedModel: config.providerModel,
+	if revision == 0 {
+		return environment.Environment{}, errors.New("Environment revision is required")
+	}
+	environmentID, err := environment.NewEnvironmentID(config.environmentID)
+	if err != nil {
+		return environment.Environment{}, err
+	}
+	clientOrigin, err := originidentity.ParseClientOrigin(client.ClientOrigin)
+	if err != nil {
+		return environment.Environment{}, err
+	}
+	const (
+		endpointID = environment.ClientEndpointID("acceptance.endpoint")
+		planID     = environment.ClientProtocolPlanID("acceptance.protocol")
+		routeID    = environment.UpstreamRouteID("acceptance.route")
+	)
+	destination := environment.DestinationPlan{
+		Kind: environment.DestinationKindOriginal,
+	}
+	if account != nil {
+		if account.Kind != desktopcontrol.ProviderAccountKindAnthropicAPIKey ||
+			account.RealmID != "anthropic.official" ||
+			account.State != provideraccount.StateActive ||
+			account.Revision == 0 ||
+			account.CredentialState != provideraccount.HealthReady ||
+			account.CredentialEpoch == 0 {
+			return environment.Environment{}, errors.New(
+				"managed acceptance account is not ready for Anthropic",
+			)
+		}
+		if _, accountErr := provideraccount.NewID(account.ID); accountErr != nil {
+			return environment.Environment{}, accountErr
+		}
+		providerOrigin, originErr := originidentity.ParseProviderOrigin(client.ClientOrigin)
+		if originErr != nil {
+			return environment.Environment{}, originErr
+		}
+		accountPolicy := environment.RouteAccountPolicy{
+			Revision:       revision,
+			Mode:           environment.AccountSelectionFixed,
+			FixedAccountID: account.ID,
+			Accounts: []environment.RouteAccountReference{{
+				ID: account.ID, Revision: environment.Revision(account.Revision),
+				DisplayName: account.DisplayName,
+			}},
+		}
+		destination = environment.DestinationPlan{
+			Kind: environment.DestinationKindUpstream,
+			Upstream: &environment.UpstreamPlan{
+				DefaultRouteID: routeID,
+				RouteSet: environment.RouteSet{
+					ID: "acceptance.routes", Revision: revision,
+					CandidateRouteIDs: []environment.UpstreamRouteID{routeID},
+				},
+				Routes: []environment.UpstreamRoute{{
+					ID: routeID, Revision: revision,
+					ProviderTarget: environment.ProviderTarget{
+						ID: account.UpstreamEndpointID, Revision: revision, Origin: providerOrigin,
+						RealmID: "acceptance.realm", Capabilities: []protocolspec.ProviderCapability{
+							protocolspec.ProviderCapabilityMessages,
+							protocolspec.ProviderCapabilityStreaming,
+							protocolspec.ProviderCapabilityToolCalls,
+						},
+					},
+					BackendProtocol: string(client.ClientProtocol),
+					AccountPolicy:   accountPolicy,
+					ModelPolicy: environment.ModelPolicy{
+						Revision: revision, Mode: environment.ModelModePassthrough,
+					},
+					WireProfileRef: wireprofile.UpstreamWireProfileFollowClientValue,
+				}},
 			},
-			AccountBindingIDs:       []string{identifiers.account},
-			DefaultAccountBindingID: identifiers.account,
+		}
+	}
+	return environment.Environment{
+		ID: environmentID, Name: "Assembly Environment", State: environment.StateActive,
+		Revision:         revision,
+		ContentRecording: environment.DefaultContentRecordingPolicy(),
+		ClientEndpoints: []environment.ClientEndpoint{{
+			ID: endpointID, Revision: revision, ClientOrigin: clientOrigin,
+			ProtocolPlans: []environment.ClientProtocolPlan{{
+				ID: planID, Revision: revision, ClientProtocol: client.ClientProtocol,
+				ClientAdapterPolicy: environment.ClientAdapterPolicy{ID: "acceptance.adapter", Revision: revision},
+				Destination:         destination,
+				EgressProfile:       egressprofile.Direct(),
+			}},
 		}},
-		ProviderTargets: []accessapply.ProviderTargetInput{{
-			ID:        identifiers.target,
-			ProfileID: identifiers.profile,
-			Origin:    config.providerOrigin,
-			Protocol:  string(access.DialectOpenAIChat),
-			Capabilities: []string{
-				string(access.ProviderCapabilityMessages),
-				string(access.ProviderCapabilityStreaming),
-				string(access.ProviderCapabilityToolCalls),
-			},
-		}},
-		AccountBindings: []accessapply.AccountBindingInput{{
-			ID:            identifiers.account,
-			ProfileID:     identifiers.profile,
-			Label:         "Assembly Account",
-			SecretRef:     config.secretRef,
-			AuthDriverRef: access.AuthDriverStaticHeaderValue,
-			Enabled:       true,
-		}},
-		RouteSets: []accessapply.RouteSetInput{{
-			ID:                  identifiers.routeSet,
-			CandidateProfileIDs: []string{identifiers.profile},
-		}},
-		EgressPolicy: accessapply.EgressPolicyInput{
-			ID:   identifiers.egress,
-			Mode: string(access.EgressModeDirect),
-		},
-		PluginPlan: accessapply.PluginPlanInput{
-			Mode:       string(access.PluginPlanModePassThrough),
-			BindingIDs: []string{},
-		},
 	}, nil
-}
-
-type assemblyIDs struct {
-	access   string
-	endpoint string
-	profile  string
-	target   string
-	account  string
-	routeSet string
-	egress   string
-}
-
-func assemblyIdentifiers(accessID string) assemblyIDs {
-	return assemblyIDs{
-		access:   accessID,
-		endpoint: accessID + "-agent",
-		profile:  accessID + "-openai",
-		target:   accessID + "-target",
-		account:  accessID + "-account",
-		routeSet: accessID + "-routes",
-		egress:   accessID + "-egress",
-	}
 }

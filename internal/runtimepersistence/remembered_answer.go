@@ -45,11 +45,10 @@ func rememberConnectionAnswer(
 	if _, err := transaction.ExecContext(
 		ctx,
 		`INSERT INTO connection_rules (
-		     rule_id, is_default, priority, decision,
+		     rule_id, priority, decision,
 		     match_kind, match_host, match_port
-		 ) VALUES (?, 0, ?, ?, 'exact_host_port', ?, ?)
+		 ) VALUES (?, ?, ?, 'exact_host_port', ?, ?)
 		 ON CONFLICT (match_kind, match_host, match_port)
-		     WHERE is_default = 0
 		 DO UPDATE SET decision = excluded.decision,
 		               priority = excluded.priority`,
 		identifier,

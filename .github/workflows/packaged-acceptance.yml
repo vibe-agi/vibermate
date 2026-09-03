@@ -23,10 +23,9 @@ jobs:
     runs-on: [self-hosted, macOS, ARM64, vibermate-acceptance]
     timeout-minutes: 30
     env:
-      DESKTOP_APP: ${{ github.workspace }}/ui/desktop/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/ViberMate.app
+      DEVELOPER_DIR: /Applications/Xcode_16.2.app/Contents/Developer
+      DESKTOP_APP: ${{ github.workspace }}/dist/ViberMate.app
       FIXED_CLAUDE_PATH: ${{ vars.VIBERMATE_CLAUDE_2_1_220_PATH }}
-      PROVIDER_MODEL: ${{ vars.VIBERMATE_ACCEPTANCE_PROVIDER_MODEL }}
-      PROVIDER_ORIGIN: ${{ vars.VIBERMATE_ACCEPTANCE_PROVIDER_ORIGIN }}
 
     steps:
       - name: Check out the selected candidate
@@ -45,7 +44,7 @@ jobs:
             printf 'ACCEPTANCE_ROOT=%s\n' "${acceptance_root}"
             printf 'ACCEPTANCE_BIN=%s/vibermate-acceptance\n' "${acceptance_root}"
             printf 'VERIFY_BIN=%s/vibermate-acceptance-verify\n' "${acceptance_root}"
-            printf 'REPORT_PATH=%s/deterministic-v6.json\n' "${acceptance_root}"
+            printf 'REPORT_PATH=%s/deterministic-v7.json\n' "${acceptance_root}"
           } >> "${GITHUB_ENV}"
 
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
@@ -54,19 +53,18 @@ jobs:
           check-latest: false
           cache: true
 
-      - uses: pnpm/action-setup@a15d269cd4658e1107c09f1fabf4cbd7bd1f308a # v4.4.0
-        with:
-          version: 10.33.2
-
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: 22.23.1
-          cache: pnpm
-          cache-dependency-path: ui/desktop/pnpm-lock.yaml
 
-      - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0 # 1.88.0
-        with:
-          components: rustfmt
+      - name: Install the pinned Flutter SDK
+        shell: bash
+        run: |
+          set -euo pipefail
+          flutter_root="${RUNNER_TEMP}/vibermate-flutter-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          ui/flutter_app/tool/install_ci_flutter.sh "${flutter_root}"
+          printf '%s/bin\n' "${flutter_root}" >> "${GITHUB_PATH}"
+          printf 'FLUTTER_ROOT=%s\n' "${flutter_root}" >> "${GITHUB_ENV}"
 
       - name: Prove the isolated runner inputs
         shell: bash
@@ -77,8 +75,6 @@ jobs:
           test "${FIXED_CLAUDE_PATH}" != "${FIXED_CLAUDE_PATH#/}"
           test -f "${FIXED_CLAUDE_PATH}"
           test -x "${FIXED_CLAUDE_PATH}"
-          test -n "${PROVIDER_MODEL}"
-          test -n "${PROVIDER_ORIGIN}"
           test -z "$(git status --porcelain=v1 --untracked-files=all)"
           install -d -m 0700 "${ACCEPTANCE_ROOT}"
 
@@ -87,8 +83,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          pnpm --dir ui/desktop install --frozen-lockfile
-          pnpm --dir ui/desktop bundle:packaged-acceptance
+          ui/flutter_app/tool/build_macos_app.sh live
+          ui/flutter_app/tool/verify_macos_app.sh "${DESKTOP_APP}" live
           go build -buildvcs=true -trimpath -o "${ACCEPTANCE_BIN}" ./cmd/vibermate-acceptance
           go build -buildvcs=true -trimpath -o "${VERIFY_BIN}" ./cmd/vibermate-acceptance-verify
 
@@ -100,8 +96,6 @@ jobs:
           "${ACCEPTANCE_BIN}" \
             --desktop-app "${DESKTOP_APP}" \
             --claude "${FIXED_CLAUDE_PATH}" \
-            --provider-model "${PROVIDER_MODEL}" \
-            --provider-origin "${PROVIDER_ORIGIN}" \
             --deterministic-only \
             --report "${REPORT_PATH}" \
             --timeout 10m
@@ -114,7 +108,7 @@ jobs:
           "${VERIFY_BIN}" \
             --report "${REPORT_PATH}" \
             --expected-mode deterministic \
-            --expected-schema vibermate.m0-assembly-acceptance/v6 \
+            --expected-schema vibermate.m0-assembly-acceptance/v7 \
             --expected-revision "${GITHUB_SHA}" \
             --expected-client-id claude-code \
             --expected-client-version 2.1.220 \
@@ -127,7 +121,7 @@ jobs:
         if: ${{ always() && steps.build.outcome == 'success' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: private-packaged-deterministic-v6-${{ github.sha }}
+          name: private-packaged-deterministic-v7-${{ github.sha }}
           path: ${{ env.REPORT_PATH }}
           if-no-files-found: error
           retention-days: 7

@@ -27,6 +27,7 @@ type desktopBuildProfiles struct {
 	Desktop  string `json:"desktop"`
 	Sidecars string `json:"sidecars"`
 	Target   string `json:"target"`
+	Toolkit  string `json:"toolkit"`
 }
 
 type desktopBuildManifest struct {
@@ -35,7 +36,7 @@ type desktopBuildManifest struct {
 	Profiles            desktopBuildProfiles   `json:"profiles"`
 	Toolchains          DesktopBuildToolchains `json:"toolchains"`
 	ConfigurationSHA256 map[string]string      `json:"configurationSHA256"`
-	SidecarSHA256       map[string]string      `json:"sidecarSHA256"`
+	NestedCodeSHA256    map[string]string      `json:"nestedCodeSHA256"`
 }
 
 // DigestArtifact returns stable evidence for one direct regular file. It
@@ -439,21 +440,40 @@ func expectedArtifactPaths(
 	coordinates ArtifactCoordinates,
 ) (map[string]string, error) {
 	macOSDirectory := filepath.Join(coordinates.DesktopApp, "Contents", "MacOS")
+	frameworksDirectory := filepath.Join(
+		coordinates.DesktopApp,
+		"Contents",
+		"Frameworks",
+	)
 	resourcesDirectory := filepath.Join(
 		coordinates.DesktopApp,
 		"Contents",
 		"Resources",
 	)
 	paths := map[string]string{
-		"acceptance":             coordinates.AcceptanceExecutable,
+		"acceptance": coordinates.AcceptanceExecutable,
+		"app-framework": filepath.Join(
+			frameworksDirectory,
+			"App.framework", "Versions", "A", "App",
+		),
 		"client-entrypoint":      coordinates.ClientEntrypoint,
 		"daemon":                 filepath.Join(macOSDirectory, "vibermated"),
 		"desktop-app-bundle":     coordinates.DesktopApp,
 		"desktop-app-executable": filepath.Join(macOSDirectory, "vibermate-desktop"),
 		"desktop-build-manifest": filepath.Join(resourcesDirectory, "vibermate-build-manifest.json"),
-		"launcher":               filepath.Join(macOSDirectory, "vibermate"),
+		"flutter-macos-framework": filepath.Join(
+			frameworksDirectory,
+			"FlutterMacOS.framework", "Versions", "A", "FlutterMacOS",
+		),
+		"launcher": filepath.Join(macOSDirectory, "vibermate"),
 	}
-	for _, role := range []string{"daemon", "desktop-app-executable", "launcher"} {
+	for _, role := range []string{
+		"app-framework",
+		"daemon",
+		"desktop-app-executable",
+		"flutter-macos-framework",
+		"launcher",
+	} {
 		path, err := directExecutable(paths[role], role)
 		if err != nil {
 			return nil, err
@@ -546,8 +566,8 @@ func verifyDesktopBuildManifest(
 	artifacts map[string]ArtifactProvenance,
 	expectedRevision string,
 ) error {
-	if manifest.Schema != DesktopBuildManifestSchemaV2 {
-		return errors.New("current v6 evidence requires Desktop build manifest v2")
+	if manifest.Schema != DesktopBuildManifestSchemaV3 {
+		return errors.New("current v7 evidence requires Flutter Desktop build manifest v3")
 	}
 	if manifest.Source != provenance.Source ||
 		manifest.Source.Revision != expectedRevision ||
@@ -556,7 +576,8 @@ func verifyDesktopBuildManifest(
 	}
 	if manifest.Profiles.Desktop != provenance.Build.DesktopProfile ||
 		manifest.Profiles.Sidecars != provenance.Build.SidecarProfile ||
-		manifest.Profiles.Target != provenance.Build.Target {
+		manifest.Profiles.Target != provenance.Build.Target ||
+		manifest.Profiles.Toolkit != provenance.Build.Toolkit {
 		return errors.New("Desktop build manifest profiles differ from the report")
 	}
 	if manifest.Toolchains != provenance.Build.Toolchains {
@@ -568,10 +589,19 @@ func verifyDesktopBuildManifest(
 	) {
 		return errors.New("Desktop build manifest configuration differs from the report")
 	}
-	if len(manifest.SidecarSHA256) != 2 ||
-		manifest.SidecarSHA256["vibermated"] != artifacts["daemon"].SHA256 ||
-		manifest.SidecarSHA256["vibermate"] != artifacts["launcher"].SHA256 {
-		return errors.New("Desktop build manifest does not bind the verified sidecars")
+	wanted := map[string]string{
+		"app-framework":           artifacts["app-framework"].SHA256,
+		"flutter-macos-framework": artifacts["flutter-macos-framework"].SHA256,
+		"vibermate":               artifacts["launcher"].SHA256,
+		"vibermated":              artifacts["daemon"].SHA256,
+	}
+	if len(manifest.NestedCodeSHA256) != len(wanted) {
+		return errors.New("Desktop build manifest nested-code digest set is incomplete")
+	}
+	for name, digest := range wanted {
+		if manifest.NestedCodeSHA256[name] != digest {
+			return errors.New("Desktop build manifest does not bind verified nested code")
+		}
 	}
 	return nil
 }

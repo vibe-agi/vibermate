@@ -329,6 +329,7 @@ func principalOf(record AuthenticationRecord) (controlprincipal.Principal, error
 		Kind:                  controlprincipal.KindEnrolledClient,
 		ProxyClientBindingID:  record.Binding.ID.String(),
 		MachineRegistrationID: record.Machine.ID.String(),
+		MachineID:             record.Machine.MachineID.String(),
 		CredentialRevision: controlprincipal.CredentialRevision(
 			record.Principal.CredentialRevision,
 		),

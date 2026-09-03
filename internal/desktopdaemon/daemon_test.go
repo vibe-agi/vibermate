@@ -6,12 +6,14 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"os"
 	"testing"
 	"time"
 
 	"github.com/vibe-agi/vibermate/internal/desktopbootstrap"
 	"github.com/vibe-agi/vibermate/internal/desktophost"
 	"github.com/vibe-agi/vibermate/internal/instanceguard"
+	"github.com/vibe-agi/vibermate/internal/localca"
 	"github.com/vibe-agi/vibermate/internal/runtimepersistence"
 )
 
@@ -29,14 +31,19 @@ func TestStartupFailureClassificationIsClosed(t *testing.T) {
 			reason: desktopbootstrap.FailureRuntimeAlreadyActive,
 		},
 		{
-			name:   "future schema",
-			err:    errors.Join(errors.New("wrapped"), runtimepersistence.ErrSchemaNewerThanBinary),
-			reason: desktopbootstrap.FailureStorageSchemaNewer,
+			name:   "unsupported schema",
+			err:    errors.Join(errors.New("wrapped"), runtimepersistence.ErrSchemaBaselineMismatch),
+			reason: desktopbootstrap.FailureStorageUnavailable,
 		},
 		{
 			name:   "invalid storage",
 			err:    runtimepersistence.ErrInvalidDatabasePath,
 			reason: desktopbootstrap.FailureStorageUnavailable,
+		},
+		{
+			name:   "invalid Root reset",
+			err:    errors.Join(errors.New("wrapped"), localca.ErrRootResetFailed),
+			reason: desktopbootstrap.FailureRootResetFailed,
 		},
 		{
 			name:   "unknown runtime",
@@ -118,5 +125,36 @@ func TestParentLifetimeInputFailsClosed(t *testing.T) {
 	case <-ownership.Context().Done():
 	case <-time.After(time.Second):
 		t.Fatal("parent lifetime input did not fail closed")
+	}
+}
+
+func TestParentOwnershipCloseDoesNotWaitForInheritedPipeEOF(t *testing.T) {
+	t.Parallel()
+
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer writer.Close()
+	ownership, err := NewParentOwnership(context.Background(), reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	closed := make(chan error, 1)
+	go func() {
+		closed <- ownership.Close()
+	}()
+	select {
+	case err := <-closed:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("parent ownership close waited for external pipe EOF")
+	}
+	select {
+	case <-ownership.Context().Done():
+	case <-time.After(time.Second):
+		t.Fatal("parent ownership close did not cancel ownership")
 	}
 }

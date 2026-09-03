@@ -8,16 +8,14 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net"
-	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"time"
 
-	"github.com/vibe-agi/vibermate/internal/access"
 	"github.com/vibe-agi/vibermate/internal/clientadapter"
+	"github.com/vibe-agi/vibermate/internal/environment"
 )
 
 const (
@@ -28,53 +26,30 @@ const (
 var (
 	requiredArtifactRoles = []string{
 		"acceptance",
+		"app-framework",
 		"client-entrypoint",
 		"daemon",
 		"desktop-app-bundle",
 		"desktop-app-executable",
 		"desktop-build-manifest",
+		"flutter-macos-framework",
 		"launcher",
-	}
-	requiredConfigurationDigestsV1 = []string{
-		"go.mod",
-		"go.sum",
-		"ui/desktop/package.json",
-		"ui/desktop/pnpm-lock.yaml",
-		"ui/desktop/src-tauri/Cargo.toml",
-		"ui/desktop/src-tauri/Cargo.lock",
-		"ui/desktop/src-tauri/tauri.conf.json",
 	}
 	requiredConfigurationDigests = []string{
 		"go.mod",
 		"go.sum",
-		"rust-toolchain.toml",
-		"ui/desktop/package.json",
-		"ui/desktop/pnpm-lock.yaml",
-		"ui/desktop/src-tauri/Cargo.toml",
-		"ui/desktop/src-tauri/Cargo.lock",
-		"ui/desktop/src-tauri/tauri.conf.json",
+		"ui/flutter_app/.metadata",
+		"ui/flutter_app/pubspec.yaml",
+		"ui/flutter_app/pubspec.lock",
+		"ui/flutter_app/tool/flutter-sdk.env",
+		"ui/flutter_app/macos/Runner.xcodeproj/project.pbxproj",
+		"ui/flutter_app/macos/Runner/Configs/AppInfo.xcconfig",
+		"ui/flutter_app/macos/Runner/Configs/Release.xcconfig",
+		"ui/flutter_app/macos/Runner/Info.plist",
+		"ui/flutter_app/macos/Runner/Release.entitlements",
 	}
 	requiredGoBinaries     = []string{"acceptance", "daemon", "launcher"}
-	requiredClaudeChecksV5 = []string{
-		"build-provenance",
-		"fixed-client-identity",
-		"exclusive-generation-preflight",
-		"packaged-desktop-shell",
-		"private-data-directory",
-		"daemon-first-start",
-		"access-apply",
-		"fixed-client-connection-policy",
-		"fixed-client-ingress-preflight",
-		"fixed-client-provider-fail-closed",
-		"fixed-client-connection-audit",
-		"daemon-sigint",
-		"sqlite-reopen",
-		"daemon-sigkill-active-request",
-		"daemon-sigkill",
-		"daemon-sigkill-connection-recovery",
-		"deterministic-shutdown",
-	}
-	requiredClaudeChecksV6 = []string{
+	requiredClaudeChecksV7 = []string{
 		"build-provenance",
 		"fixed-client-identity",
 		"exclusive-generation-preflight",
@@ -82,101 +57,48 @@ var (
 		"packaged-main-navigation-cold-restore",
 		"private-data-directory",
 		"daemon-first-start",
-		"access-apply",
-		"fixed-client-connection-policy",
-		"fixed-client-ingress-preflight",
-		"fixed-client-provider-fail-closed",
-		"fixed-client-connection-audit",
+		"environment-publish",
+		"capture-environment-assignment",
 		"daemon-sigint",
-		"sqlite-reopen",
-		"daemon-sigkill-active-request",
-		"daemon-sigkill",
-		"daemon-sigkill-connection-recovery",
+		"environment-recovery",
+		"capture-assignment-recovery",
 		"deterministic-shutdown",
 	}
-	requiredCodexChecksV5 = []string{
-		"build-provenance",
-		"fixed-client-identity",
-		"exclusive-generation-preflight",
-		"packaged-desktop-shell",
-		"private-data-directory",
-		"daemon-first-start",
-		"access-apply",
-		"fixed-client-connection-policy",
-		"fixed-client-ingress-preflight",
-		"fixed-codex-http-fallback",
-		"fixed-client-provider-fail-closed",
-		"fixed-client-connection-audit",
-		"daemon-sigint",
-		"sqlite-reopen",
-		"daemon-sigkill-active-request",
-		"daemon-sigkill",
-		"daemon-sigkill-connection-recovery",
-		"deterministic-shutdown",
-	}
-	requiredCodexChecksV6 = []string{
-		"build-provenance",
-		"fixed-client-identity",
-		"exclusive-generation-preflight",
-		"packaged-desktop-shell",
-		"packaged-main-navigation-cold-restore",
-		"private-data-directory",
-		"daemon-first-start",
-		"access-apply",
-		"fixed-client-connection-policy",
-		"fixed-client-ingress-preflight",
-		"fixed-codex-http-fallback",
-		"fixed-client-provider-fail-closed",
-		"fixed-client-connection-audit",
-		"daemon-sigint",
-		"sqlite-reopen",
-		"daemon-sigkill-active-request",
-		"daemon-sigkill",
-		"daemon-sigkill-connection-recovery",
-		"deterministic-shutdown",
-	}
-	requiredClaudeCredentialedChecksV6 = credentialedCheckIDs(
-		requiredClaudeChecksV6,
+	requiredCodexChecksV7              = requiredClaudeChecksV7
+	requiredClaudeCredentialedChecksV7 = credentialedCheckIDs(
+		requiredClaudeChecksV7,
 		false,
 	)
-	requiredCodexCredentialedChecksV6 = credentialedCheckIDs(
-		requiredCodexChecksV6,
+	requiredCodexCredentialedChecksV7 = credentialedCheckIDs(
+		requiredCodexChecksV7,
 		true,
 	)
 )
 
 type fixedClientExpectation struct {
 	evidence             clientadapter.Evidence
-	checksV5             []string
-	checksV6             []string
-	credentialedChecksV6 []string
+	checksV7             []string
+	credentialedChecksV7 []string
 }
 
-func credentialedCheckIDs(deterministic []string, codex bool) []string {
+func credentialedCheckIDs(deterministic []string, _ bool) []string {
 	checks := append([]string(nil), deterministic[:len(deterministic)-1]...)
 	checks = append(checks,
 		"deterministic-phase-shutdown",
 		"credentialed-private-data-directory",
-		"credentialed-access-apply",
-		"provider-secret",
-		"normal-streaming-reply",
+		"provider-account",
+		"credentialed-environment-publish",
+		"credentialed-capture-environment-assignment",
+		"credentialed-managed-request",
+		"credentialed-managed-evidence",
+		"credentialed-recovery",
+		"credentialed-recovered-request",
 	)
-	if codex {
-		checks = append(checks, "fixed-codex-exec-resume")
-	}
-	checks = append(checks,
-		"tool-approval",
-		"planned-hold-streaming",
-		"agent-sigint",
-	)
-	if codex {
-		checks = append(checks, "fixed-codex-http-scope")
-	}
 	return append(checks, "final-shutdown")
 }
 
-// VerifyFile verifies one private current or historical report through the
-// complete public package entrypoint. A missing or unreadable report is an
+// VerifyFile verifies one private current report through the complete public
+// package entrypoint. A missing, unreadable, or retired-schema report is an
 // error, never a skip.
 func VerifyFile(path string, expected Expectations) error {
 	fixedClient, err := validateExpectations(expected)
@@ -199,7 +121,7 @@ func VerifyFile(path string, expected Expectations) error {
 
 // RequiredCheckIDs returns a copy of the current check contract for one mode
 // and supported fixed client. It is primarily useful to producers and fixtures
-// that emit SchemaV6 reports.
+// that emit SchemaV7 reports.
 func RequiredCheckIDs(
 	mode Mode,
 	clientID, clientVersion string,
@@ -210,9 +132,9 @@ func RequiredCheckIDs(
 	}
 	switch mode {
 	case ModeDeterministic:
-		return append([]string(nil), expected.checksV6...), nil
+		return append([]string(nil), expected.checksV7...), nil
 	case ModeCredentialed:
-		return append([]string(nil), expected.credentialedChecksV6...), nil
+		return append([]string(nil), expected.credentialedChecksV7...), nil
 	default:
 		return nil, errors.New("acceptance mode is unsupported")
 	}
@@ -224,9 +146,9 @@ func validateExpectations(expected Expectations) (fixedClientExpectation, error)
 			"expected mode must be deterministic or credentialed",
 		)
 	}
-	if expected.Schema != SchemaV5 && expected.Schema != SchemaV6 {
+	if expected.Schema != SchemaV7 {
 		return fixedClientExpectation{}, errors.New(
-			"expected schema must be an explicitly supported report schema",
+			"expected schema must be the current report schema",
 		)
 	}
 	if !validRevision(expected.Revision) {
@@ -234,31 +156,22 @@ func validateExpectations(expected Expectations) (fixedClientExpectation, error)
 			"expected revision must be a full lowercase Git commit identity",
 		)
 	}
-	if expected.Schema == SchemaV6 {
-		if _, err := normalizeArtifactCoordinates(expected.Artifacts); err != nil {
-			return fixedClientExpectation{}, fmt.Errorf(
-				"current artifact coordinates: %w",
-				err,
-			)
-		}
-	}
-	if expected.Mode == ModeCredentialed && expected.Schema != SchemaV6 {
-		return fixedClientExpectation{}, errors.New(
-			"credentialed verification requires the current report schema",
+	if _, err := normalizeArtifactCoordinates(expected.Artifacts); err != nil {
+		return fixedClientExpectation{}, fmt.Errorf(
+			"current artifact coordinates: %w",
+			err,
 		)
 	}
 	return fixedClient(expected.ClientID, expected.ClientVersion)
 }
 
 func fixedClient(id, version string) (fixedClientExpectation, error) {
-	var checksV5, checksV6 []string
+	var checksV7 []string
 	switch {
 	case id == "claude-code" && version == "2.1.220":
-		checksV5 = requiredClaudeChecksV5
-		checksV6 = requiredClaudeChecksV6
+		checksV7 = requiredClaudeChecksV7
 	case id == "codex-cli" && version == "0.145.0":
-		checksV5 = requiredCodexChecksV5
-		checksV6 = requiredCodexChecksV6
+		checksV7 = requiredCodexChecksV7
 	default:
 		return fixedClientExpectation{}, errors.New(
 			"expected client must be claude-code 2.1.220 or codex-cli 0.145.0",
@@ -272,13 +185,12 @@ func fixedClient(id, version string) (fixedClientExpectation, error) {
 	}
 	return fixedClientExpectation{
 		evidence: evidence,
-		checksV5: checksV5,
-		checksV6: checksV6,
-		credentialedChecksV6: func() []string {
+		checksV7: checksV7,
+		credentialedChecksV7: func() []string {
 			if id == "codex-cli" {
-				return requiredCodexCredentialedChecksV6
+				return requiredCodexCredentialedChecksV7
 			}
-			return requiredClaudeCredentialedChecksV6
+			return requiredClaudeCredentialedChecksV7
 		}(),
 	}, nil
 }
@@ -487,13 +399,8 @@ func verifyReport(
 	if err := verifyBuild(report.Provenance.Build); err != nil {
 		return err
 	}
-	if expected.Schema == SchemaV6 &&
-		report.Provenance.Build.ManifestSchema != DesktopBuildManifestSchemaV2 {
-		return errors.New("current v6 report does not use Desktop build manifest v2")
-	}
-	if expected.Schema == SchemaV5 &&
-		report.Provenance.Build.ManifestSchema != DesktopBuildManifestSchemaV1 {
-		return errors.New("historical v5 report does not use Desktop build manifest v1")
+	if report.Provenance.Build.ManifestSchema != DesktopBuildManifestSchemaV3 {
+		return errors.New("current report does not use the current Desktop build manifest")
 	}
 	if err := verifyToolchainContinuity(
 		report.Provenance.Toolchains,
@@ -501,10 +408,8 @@ func verifyReport(
 	); err != nil {
 		return err
 	}
-	if expected.Schema == SchemaV6 {
-		if err := verifyCurrentArtifacts(report, expected); err != nil {
-			return fmt.Errorf("verify current artifacts: %w", err)
-		}
+	if err := verifyCurrentArtifacts(report, expected); err != nil {
+		return fmt.Errorf("verify current artifacts: %w", err)
 	}
 	return nil
 }
@@ -514,20 +419,16 @@ func requiredChecksForSchema(
 	mode Mode,
 	fixed fixedClientExpectation,
 ) ([]string, error) {
+	if schema != SchemaV7 {
+		return nil, errors.New("report schema is unsupported")
+	}
 	if mode == ModeCredentialed {
-		if schema != SchemaV6 {
-			return nil, errors.New("credentialed report schema is unsupported")
-		}
-		return append([]string(nil), fixed.credentialedChecksV6...), nil
+		return append([]string(nil), fixed.credentialedChecksV7...), nil
 	}
-	switch schema {
-	case SchemaV6:
-		return append([]string(nil), fixed.checksV6...), nil
-	case SchemaV5:
-		return append([]string(nil), fixed.checksV5...), nil
-	default:
-		return nil, errors.New("unsupported report schema")
+	if mode == ModeDeterministic {
+		return append([]string(nil), fixed.checksV7...), nil
 	}
+	return nil, errors.New("report mode is unsupported")
 }
 
 func verifySource(source SourceProvenance, expectedRevision string) error {
@@ -559,26 +460,8 @@ func verifyConfiguration(
 		configuration.ClientVersion != expected.ClientVersion {
 		return errors.New("report configuration has client drift")
 	}
-	if _, err := access.NewAccessID(configuration.AccessID); err != nil {
-		return errors.New("report configuration access ID is invalid")
-	}
-	if !boundedTrimmed(configuration.ProviderModel, 1, 512) {
-		return errors.New("report configuration provider model is invalid")
-	}
-	origin, err := url.Parse(configuration.ProviderOrigin)
-	if err != nil || origin.Scheme == "" || origin.Host == "" ||
-		origin.User != nil || origin.RawQuery != "" || origin.Fragment != "" ||
-		(origin.Scheme != "http" && origin.Scheme != "https") ||
-		origin.String() != configuration.ProviderOrigin {
-		return errors.New("report configuration provider origin is invalid")
-	}
-	if origin.Scheme == "http" {
-		address := net.ParseIP(origin.Hostname())
-		if address == nil || !address.IsLoopback() {
-			return errors.New(
-				"report cleartext provider origin is not a literal loopback IP",
-			)
-		}
+	if _, err := environment.NewEnvironmentID(configuration.EnvironmentID); err != nil {
+		return errors.New("report configuration Environment ID is invalid")
 	}
 	timeout, err := time.ParseDuration(configuration.Timeout)
 	if err != nil || timeout <= 0 {
@@ -665,6 +548,10 @@ func verifyArtifacts(artifacts []ArtifactProvenance) error {
 		return errors.New("report Desktop App bundle path is invalid")
 	}
 	requiredMembers := map[string]string{
+		"app-framework": filepath.Join(
+			bundle,
+			"Contents", "Frameworks", "App.framework", "Versions", "A", "App",
+		),
 		"desktop-app-executable": filepath.Join(
 			bundle,
 			"Contents",
@@ -679,6 +566,10 @@ func verifyArtifacts(artifacts []ArtifactProvenance) error {
 			"Resources",
 			"vibermate-build-manifest.json",
 		),
+		"flutter-macos-framework": filepath.Join(
+			bundle,
+			"Contents", "Frameworks", "FlutterMacOS.framework", "Versions", "A", "FlutterMacOS",
+		),
 	}
 	for role, expectedPath := range requiredMembers {
 		if byRole[role].Path != expectedPath {
@@ -690,43 +581,33 @@ func verifyArtifacts(artifacts []ArtifactProvenance) error {
 
 func verifyToolchains(toolchains ToolchainProvenance) error {
 	if !validGoToolchain(toolchains.Go) ||
-		toolchains.Node != ExpectedNodeVersion ||
-		!validRustcToolchain(toolchains.Rustc) ||
-		!strings.HasPrefix(
-			toolchains.Cargo,
-			"cargo "+ExpectedRustVersion+" ",
-		) ||
-		toolchains.PNPM != ExpectedPNPMVersion {
+		toolchains.Flutter != expectedFlutterToolchain() ||
+		toolchains.Dart != "Dart "+ExpectedDartVersion ||
+		toolchains.Xcode != ExpectedXcodeVersion {
 		return errors.New("report runtime toolchains are not the frozen versions")
 	}
 	return nil
 }
 
 func verifyBuild(build BuildProvenance) error {
-	if (build.ManifestSchema != DesktopBuildManifestSchemaV1 &&
-		build.ManifestSchema != DesktopBuildManifestSchemaV2) ||
+	if build.ManifestSchema != DesktopBuildManifestSchemaV3 ||
 		build.DesktopProfile != "release" ||
 		(build.SidecarProfile != "development" &&
 			build.SidecarProfile != "release") ||
-		build.Target != ExpectedBuildTarget {
+		build.Target != ExpectedBuildTarget ||
+		build.Toolkit != "flutter" {
 		return errors.New("report Desktop build identity is invalid")
 	}
 	tools := build.Toolchains
 	if !validGoToolchain(tools.Go) ||
-		tools.Node != ExpectedNodeVersion ||
-		!validRustcToolchain(tools.Rustc) ||
-		!strings.HasPrefix(tools.Cargo, "cargo "+ExpectedRustVersion+" ") ||
-		tools.PNPM != ExpectedPNPMVersion ||
-		tools.Tauri != ExpectedTauriVersion {
+		tools.Flutter != expectedFlutterToolchain() ||
+		tools.Dart != "Dart "+ExpectedDartVersion ||
+		tools.Xcode != ExpectedXcodeVersion {
 		return errors.New("report Desktop build toolchains are not frozen")
-	}
-	requiredDigests := requiredConfigurationDigests
-	if build.ManifestSchema == DesktopBuildManifestSchemaV1 {
-		requiredDigests = requiredConfigurationDigestsV1
 	}
 	if err := verifyDigestMap(
 		build.ConfigurationSHA256,
-		requiredDigests,
+		requiredConfigurationDigests,
 		"Desktop configuration",
 	); err != nil {
 		return err
@@ -771,10 +652,9 @@ func verifyToolchainContinuity(
 	buildTools DesktopBuildToolchains,
 ) error {
 	if runtimeTools.Go != buildTools.Go ||
-		runtimeTools.Node != buildTools.Node ||
-		runtimeTools.Rustc != buildTools.Rustc ||
-		runtimeTools.Cargo != buildTools.Cargo ||
-		runtimeTools.PNPM != buildTools.PNPM {
+		runtimeTools.Flutter != buildTools.Flutter ||
+		runtimeTools.Dart != buildTools.Dart ||
+		runtimeTools.Xcode != buildTools.Xcode {
 		return errors.New(
 			"report build and acceptance toolchain evidence differs",
 		)
@@ -802,16 +682,8 @@ func validGoToolchain(value string) bool {
 	return value == "go version "+ExpectedGoVersion+" darwin/arm64"
 }
 
-func validRustcToolchain(value string) bool {
-	if !strings.HasPrefix(value, "rustc "+ExpectedRustVersion+" ") {
-		return false
-	}
-	for _, line := range strings.Split(value, "\n") {
-		if line == "host: "+ExpectedBuildTarget {
-			return true
-		}
-	}
-	return false
+func expectedFlutterToolchain() string {
+	return "Flutter " + ExpectedFlutterVersion + " (" + ExpectedFlutterRevision + ")"
 }
 
 func validRevision(value string) bool {

@@ -4,8 +4,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/vibe-agi/vibermate/internal/access"
 	"github.com/vibe-agi/vibermate/internal/egressaudit"
+	"github.com/vibe-agi/vibermate/internal/protocolspec"
 )
 
 func baseInput() egressaudit.NewInput {
@@ -24,7 +24,7 @@ func baseInput() egressaudit.NewInput {
 		Decision: egressaudit.DecisionRef{
 			PolicyID:       "policy-1",
 			PolicyRevision: 1,
-			Authority:      egressaudit.AuthorityAccess,
+			Authority:      egressaudit.AuthorityEnvironment,
 			RuleID:         "rule-1",
 			ProxyID:        "direct",
 		},
@@ -42,7 +42,7 @@ func TestNewFreezesACompleteAttempt(t *testing.T) {
 	if attempt.Purpose() != egressaudit.PurposeProviderAttempt ||
 		attempt.PayloadClass() != egressaudit.PayloadClientSemantic ||
 		attempt.Parent().ExchangeID != "exchange-1" ||
-		attempt.Decision().Authority != egressaudit.AuthorityAccess ||
+		attempt.Decision().Authority != egressaudit.AuthorityEnvironment ||
 		attempt.TargetOrigin() != "https://provider.example:443" {
 		t.Fatalf("frozen attempt = %+v", attempt)
 	}
@@ -58,16 +58,18 @@ func TestPurposeAndAuthorityMustAgree(t *testing.T) {
 	t.Parallel()
 
 	expected := map[egressaudit.EgressPurpose]egressaudit.PolicyAuthorityKind{
-		egressaudit.PurposeProviderAttempt:     egressaudit.AuthorityAccess,
-		egressaudit.PurposeProfileOperation:    egressaudit.AuthorityAccess,
-		egressaudit.PurposeOriginalOrigin:      egressaudit.AuthorityNetwork,
-		egressaudit.PurposeAgentProbe:          egressaudit.AuthorityNetwork,
-		egressaudit.PurposeBlindTunnel:         egressaudit.AuthorityNetwork,
-		egressaudit.PurposeAuxiliaryLLM:        egressaudit.AuthorityRuntime,
-		egressaudit.PurposeLanguageTransform:   egressaudit.AuthorityRuntime,
-		egressaudit.PurposePluginCatalogSync:   egressaudit.AuthorityRuntime,
-		egressaudit.PurposePluginArtifactFetch: egressaudit.AuthorityRuntime,
-		egressaudit.PurposeUpdate:              egressaudit.AuthorityRuntime,
+		egressaudit.PurposeProviderAttempt:        egressaudit.AuthorityEnvironment,
+		egressaudit.PurposeUpstreamModelDiscovery: egressaudit.AuthorityRuntime,
+		egressaudit.PurposeModelMetadataDirectory: egressaudit.AuthorityRuntime,
+		egressaudit.PurposeRouteOperation:         egressaudit.AuthorityEnvironment,
+		egressaudit.PurposeOriginalOrigin:         egressaudit.AuthorityNetwork,
+		egressaudit.PurposeAgentProbe:             egressaudit.AuthorityNetwork,
+		egressaudit.PurposeBlindTunnel:            egressaudit.AuthorityNetwork,
+		egressaudit.PurposeAuxiliaryLLM:           egressaudit.AuthorityRuntime,
+		egressaudit.PurposeLanguageTransform:      egressaudit.AuthorityRuntime,
+		egressaudit.PurposePluginCatalogSync:      egressaudit.AuthorityRuntime,
+		egressaudit.PurposePluginArtifactFetch:    egressaudit.AuthorityRuntime,
+		egressaudit.PurposeUpdate:                 egressaudit.AuthorityRuntime,
 	}
 	seen := make(map[egressaudit.EgressPurpose]struct{}, len(expected))
 	for _, purpose := range egressaudit.Purposes() {
@@ -183,7 +185,7 @@ func TestParentCombinationsAreExhaustivelyValidated(t *testing.T) {
 		{
 			name:         "provider attempt without an Exchange",
 			purpose:      egressaudit.PurposeProviderAttempt,
-			authority:    egressaudit.AuthorityAccess,
+			authority:    egressaudit.AuthorityEnvironment,
 			payloadClass: egressaudit.PayloadClientSemantic,
 			connectionID: "connection-1",
 			parent: egressaudit.ParentRef{
@@ -193,8 +195,8 @@ func TestParentCombinationsAreExhaustivelyValidated(t *testing.T) {
 		},
 		{
 			name:         "profile operation carrying an Exchange",
-			purpose:      egressaudit.PurposeProfileOperation,
-			authority:    egressaudit.AuthorityAccess,
+			purpose:      egressaudit.PurposeRouteOperation,
+			authority:    egressaudit.AuthorityEnvironment,
 			payloadClass: egressaudit.PayloadClientSemantic,
 			connectionID: "connection-1",
 			parent: egressaudit.ParentRef{
@@ -205,8 +207,8 @@ func TestParentCombinationsAreExhaustivelyValidated(t *testing.T) {
 		},
 		{
 			name:         "profile operation without an Exchange",
-			purpose:      egressaudit.PurposeProfileOperation,
-			authority:    egressaudit.AuthorityAccess,
+			purpose:      egressaudit.PurposeRouteOperation,
+			authority:    egressaudit.AuthorityEnvironment,
 			payloadClass: egressaudit.PayloadClientSemantic,
 			connectionID: "connection-1",
 			parent: egressaudit.ParentRef{
@@ -343,7 +345,7 @@ func TestUnknownPayloadClassCannotBeRecorded(t *testing.T) {
 
 	input := baseInput()
 	input.PayloadClass = egressaudit.PayloadClass(
-		string(access.OperationPayloadUnknown),
+		string(protocolspec.OperationPayloadUnknown),
 	)
 	input.Purpose = egressaudit.PurposeOriginalOrigin
 	input.Decision.Authority = egressaudit.AuthorityNetwork

@@ -6,14 +6,17 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/vibe-agi/vibermate/internal/access"
+	"github.com/vibe-agi/vibermate/internal/egressnetwork"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
+	"github.com/vibe-agi/vibermate/internal/providerauth"
+	"github.com/vibe-agi/vibermate/internal/secretstore"
+	"github.com/vibe-agi/vibermate/internal/wireprofile"
 )
 
 func validRequestOptions(t *testing.T) RequestOptions {
 	t.Helper()
 
-	secretRef, err := access.NewSecretRef("secret://provider/account")
+	secretRef, err := secretstore.ParseReference("secret://provider/account")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -26,26 +29,26 @@ func validRequestOptions(t *testing.T) RequestOptions {
 		t.Fatal(err)
 	}
 	t.Cleanup(action.Release)
-	plan := testRequestAccessPlan(t)
+	plan := testRequestPlan(t)
 	return RequestOptions{
-		RequestID:        "request-egress-identity",
-		ExchangeID:       "exchange-egress-identity",
-		ParentAttemptID:  "attempt-egress-identity",
-		EgressAttemptID:  "egress-egress-identity",
-		TargetRef:        "target-egress-identity",
-		Target:           testTarget("provider.example", 443),
-		AccessRevision:   plan.Revision(),
-		PlanHash:         plan.PlanHash(),
-		Action:           action,
-		Method:           http.MethodPost,
-		RelativePath:     "chat/completions",
-		Headers:          http.Header{},
-		Body:             []byte(`{"model":"gpt-provider-model"}`),
-		CredentialSource: access.CredentialSourceManagedAccount,
-		SecretRef:        secretRef,
-		AuthDriverRef:    access.StaticHeaderAuthDriverRef(),
-		WireProfile:      plan.UpstreamWireProfile(),
-		ClientProtocol:   access.ApplicationProtocolHTTP1,
+		RequestID:       "request-egress-identity",
+		ExchangeID:      "exchange-egress-identity",
+		ParentAttemptID: "attempt-egress-identity",
+		EgressAttemptID: "egress-egress-identity",
+		TargetRef:       "target-egress-identity",
+		Target:          testTarget("provider.example", 443),
+		Provenance:      plan.provenance,
+		Action:          action,
+		Method:          http.MethodPost,
+		RelativePath:    "chat/completions",
+		Headers:         http.Header{},
+		Body:            []byte(`{"model":"gpt-provider-model"}`),
+		CredentialMode:  providerauth.CredentialManaged,
+		AccountRef:      testAccountRef(),
+		SecretRef:       secretRef,
+		AuthDriverRef:   providerauth.StaticHeaderDriverRef(),
+		WireProfile:     plan.wireProfile,
+		ClientProtocol:  wireprofile.ApplicationProtocolHTTP1,
 	}
 }
 
@@ -76,6 +79,35 @@ func TestAProviderRequestCarriesItsOwnEgressIdentity(t *testing.T) {
 	}
 }
 
+func TestAProviderRequestFreezesItsTrafficEgressPolicy(t *testing.T) {
+	t.Parallel()
+
+	options := validRequestOptions(t)
+	options.EgressPolicy = egressnetwork.Policy{
+		Proxy: egressnetwork.ProxyPolicy{
+			Kind:     egressnetwork.ProxySOCKS5,
+			Endpoint: "PROXY.Example.:1080",
+		},
+		Resolver: egressnetwork.ResolverPolicy{Kind: egressnetwork.ResolverSystem},
+	}
+	frozen, err := NewRequest(options)
+	if err != nil {
+		t.Fatalf("NewRequest(): %v", err)
+	}
+	want, err := options.EgressPolicy.Normalize()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if frozen.EgressPolicy() != want || frozen.probeTarget.EgressPolicy != want {
+		t.Fatalf(
+			"frozen policy = %#v, probe policy = %#v, want %#v",
+			frozen.EgressPolicy(),
+			frozen.probeTarget.EgressPolicy,
+			want,
+		)
+	}
+}
+
 // An outbound that cannot be identified cannot be recorded, and an outbound
 // that is not recorded must not go out.
 func TestAProviderRequestWithoutAnEgressIdentityIsRefused(t *testing.T) {
@@ -92,15 +124,79 @@ func TestProviderRequestRejectsMissingProtocolVariantBeforeExecution(t *testing.
 	t.Parallel()
 
 	options := validRequestOptions(t)
-	options.WireProfile = testRequestAccessPlanWithWireProfile(
+	options.WireProfile = testRequestPlanWithWireProfile(
 		t,
 		"https://provider.example:443/v1",
-		access.DialectOpenAIChat,
-		access.ClaudeCodeUpstreamWireProfileRef(),
-	).UpstreamWireProfile()
-	options.ClientProtocol = access.ApplicationProtocolHTTP2
+		wireprofile.ClaudeCodeUpstreamWireProfileRef(),
+	).wireProfile
+	options.ClientProtocol = wireprofile.ApplicationProtocolHTTP2
 	if _, err := NewRequest(options); err == nil ||
 		!strings.Contains(err.Error(), "does not support the client HTTP protocol") {
 		t.Fatalf("missing HTTP/2 variant error = %v", err)
+	}
+}
+
+func TestProviderProbeIdentitySeparatesFrozenRouteRevisions(t *testing.T) {
+	t.Parallel()
+
+	target := testTarget("provider.example", 443)
+	first := testRequestProvenance(t)
+	second, err := NewUpstreamRequestProvenance(
+		first.EnvironmentID(),
+		first.EnvironmentRevision(),
+		first.EnvironmentDigest(),
+		first.RouteID(),
+		first.RouteRevision()+1,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstProbe, err := NewProbeTarget(
+		"provider-target",
+		first,
+		target,
+		egressnetwork.DefaultPolicy(),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondProbe, err := NewProbeTarget(
+		"provider-target",
+		second,
+		target,
+		egressnetwork.DefaultPolicy(),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if firstProbe.TargetRef != "provider-target" ||
+		secondProbe.TargetRef != "provider-target" {
+		t.Fatal("provider target reference was overloaded with plan identity")
+	}
+	if firstProbe.PlanDigest == secondProbe.PlanDigest {
+		t.Fatal("different frozen Route revisions coalesced into one plan digest")
+	}
+	for _, probe := range []offlinehold.ProbeTarget{firstProbe, secondProbe} {
+		if probe.PlanRevision != uint64(first.EnvironmentRevision()) ||
+			len(probe.PlanDigest) != 64 {
+			t.Fatalf("provider probe omitted immutable plan identity: %+v", probe)
+		}
+	}
+}
+
+func TestProviderRequestExposesOnlyFrozenEnvironmentRouteAndAccountReferences(t *testing.T) {
+	t.Parallel()
+
+	options := validRequestOptions(t)
+	frozen, err := NewRequest(options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if frozen.Provenance() != options.Provenance {
+		t.Fatal("request provenance changed while freezing")
+	}
+	account, managed := frozen.AccountRef()
+	if !managed || account != options.AccountRef {
+		t.Fatalf("frozen account = %+v, managed=%v", account, managed)
 	}
 }

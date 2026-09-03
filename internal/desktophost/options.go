@@ -3,12 +3,14 @@ package desktophost
 import (
 	"errors"
 	"net"
+	"path/filepath"
 	"strconv"
 	"time"
 
 	"github.com/vibe-agi/vibermate/internal/clientadapter"
 	"github.com/vibe-agi/vibermate/internal/hostcontract"
 	"github.com/vibe-agi/vibermate/internal/productruntime"
+	"github.com/vibe-agi/vibermate/internal/serverhost"
 )
 
 const (
@@ -22,18 +24,22 @@ const (
 
 // Options is the complete typed Desktop Host construction input.
 type Options struct {
-	Paths                  Paths
-	Runtime                productruntime.Options
-	ProxyListenAddress     string
-	ControlListenAddress   string
-	AllowedOrigins         []string
-	ClientCatalog          clientadapter.Catalog
-	CLIControlDiscoveryTTL time.Duration
-	BootstrapTTL           time.Duration
-	AppSessionTTL          time.Duration
-	AppSessionReplayTTL    time.Duration
-	CaptureRunLifetime     time.Duration
-	ShutdownTimeout        time.Duration
+	Paths                        Paths
+	Runtime                      productruntime.Options
+	ProxyListenAddress           string
+	ControlListenAddress         string
+	AllowedOrigins               []string
+	ClientCatalog                clientadapter.Catalog
+	CLIControlDiscoveryTTL       time.Duration
+	BootstrapTTL                 time.Duration
+	AppSessionTTL                time.Duration
+	AppSessionReplayTTL          time.Duration
+	CaptureRunLifetime           time.Duration
+	ShutdownTimeout              time.Duration
+	RemoteServerEnabled          bool
+	RemoteServerListenAddress    string
+	RemoteServerTransport        serverhost.TransportOptions
+	RemoteServerManagementUIRoot string
 }
 
 // DefaultOptions creates the current macOS arm64 Host policy. Callers still
@@ -43,18 +49,20 @@ func DefaultOptions(
 	runtimeOptions productruntime.Options,
 ) Options {
 	return Options{
-		Paths:                  paths,
-		Runtime:                runtimeOptions,
-		ProxyListenAddress:     "127.0.0.1:0",
-		ControlListenAddress:   "127.0.0.1:0",
-		AllowedOrigins:         []string{"tauri://localhost"},
-		ClientCatalog:          clientadapter.BuiltInCatalog(),
-		CLIControlDiscoveryTTL: defaultCLIControlDiscoveryTTL,
-		BootstrapTTL:           defaultBootstrapTTL,
-		AppSessionTTL:          defaultAppSessionTTL,
-		AppSessionReplayTTL:    defaultAppSessionReplayTTL,
-		CaptureRunLifetime:     defaultCaptureRunLifetime,
-		ShutdownTimeout:        defaultShutdownTimeout,
+		Paths:                     paths,
+		Runtime:                   runtimeOptions,
+		ProxyListenAddress:        "127.0.0.1:0",
+		ControlListenAddress:      "127.0.0.1:0",
+		AllowedOrigins:            []string{"vibermate://desktop"},
+		ClientCatalog:             clientadapter.BuiltInCatalog(),
+		CLIControlDiscoveryTTL:    defaultCLIControlDiscoveryTTL,
+		BootstrapTTL:              defaultBootstrapTTL,
+		AppSessionTTL:             defaultAppSessionTTL,
+		AppSessionReplayTTL:       defaultAppSessionReplayTTL,
+		CaptureRunLifetime:        defaultCaptureRunLifetime,
+		ShutdownTimeout:           defaultShutdownTimeout,
+		RemoteServerListenAddress: "127.0.0.1:9666",
+		RemoteServerTransport:     serverhost.TransportOptions{Mode: serverhost.TransportHTTP},
 	}
 }
 
@@ -92,6 +100,38 @@ func (options Options) validate() error {
 	}
 	if options.BootstrapTTL > 5*time.Minute {
 		return errors.New("Desktop bootstrap lifetime exceeds the supported bound")
+	}
+	if options.RemoteServerEnabled {
+		if err := validateRemoteServerAddress(options.RemoteServerListenAddress); err != nil {
+			return err
+		}
+		if options.RemoteServerTransport.Mode == serverhost.TransportHTTP {
+			host, _, _ := net.SplitHostPort(options.RemoteServerListenAddress)
+			address := net.ParseIP(host)
+			if address == nil || !address.IsLoopback() {
+				return errors.New(
+					"Desktop plaintext remote Server must use literal loopback",
+				)
+			}
+		}
+		if !options.RemoteServerTransport.Valid() ||
+			(options.RemoteServerManagementUIRoot != "" &&
+				(!filepath.IsAbs(options.RemoteServerManagementUIRoot) ||
+					filepath.Clean(options.RemoteServerManagementUIRoot) != options.RemoteServerManagementUIRoot)) {
+			return errors.New("Desktop remote Server policy is invalid")
+		}
+	}
+	return nil
+}
+
+func validateRemoteServerAddress(address string) error {
+	host, port, err := net.SplitHostPort(address)
+	if err != nil || host == "" || port == "" {
+		return errors.New("Desktop remote Server listen address is invalid")
+	}
+	number, err := strconv.ParseUint(port, 10, 16)
+	if err != nil || number > 65535 {
+		return errors.New("Desktop remote Server listen port is invalid")
 	}
 	return nil
 }

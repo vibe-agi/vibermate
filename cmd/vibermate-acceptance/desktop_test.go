@@ -14,9 +14,9 @@ import (
 	"time"
 )
 
-const testDesktopNavigationLocator = "settings/recovery"
+const testDesktopPreferencesEnvironmentID = "test.environment"
 
-func TestPackagedDesktopInvocationUsesIsolatedHome(t *testing.T) {
+func TestPackagedDesktopInvocationIsolatesAppDataWithoutReplacingLoginHome(t *testing.T) {
 	t.Parallel()
 
 	arguments := desktopOpenArguments(
@@ -25,9 +25,12 @@ func TestPackagedDesktopInvocationUsesIsolatedHome(t *testing.T) {
 	)
 	if !slices.Contains(
 		arguments,
-		"HOME=/private/tmp/vibermate-home",
+		"CFFIXED_USER_HOME=/private/tmp/vibermate-home",
 	) {
 		t.Fatalf("Desktop open arguments = %v", arguments)
+	}
+	if slices.Contains(arguments, "HOME=/private/tmp/vibermate-home") {
+		t.Fatalf("Desktop invocation replaced the login HOME: %v", arguments)
 	}
 	if !slices.Contains(arguments, "-F") {
 		t.Fatalf("Desktop open arguments do not disable saved-window restore: %v", arguments)
@@ -37,32 +40,44 @@ func TestPackagedDesktopInvocationUsesIsolatedHome(t *testing.T) {
 	}
 }
 
-func TestDesktopNavigationFixtureProvesAtomicCanonicalRewrite(t *testing.T) {
+func TestDesktopPreferencesFixtureProvesAtomicCanonicalRewrite(t *testing.T) {
 	t.Parallel()
 
 	homeDirectory := filepath.Join(t.TempDir(), "home")
-	path := desktopNavigationStatePath(homeDirectory)
-	seed, err := publishDesktopNavigationFixture(
+	path := desktopPreferencesStatePath(homeDirectory)
+	seed, err := publishDesktopPreferencesFixture(
 		path,
-		nonCanonicalDesktopNavigationState(testDesktopNavigationLocator),
+		staleDesktopPreferences(),
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	expected := canonicalDesktopNavigationState(testDesktopNavigationLocator)
+	expected := canonicalDesktopPreferences(
+		desktopPreferencesRestoreLanguage,
+		desktopPreferencesRestoreSection,
+		nil,
+		nil,
+	)
 	if bytes.Equal(seed.encoded, expected) {
-		t.Fatal("navigation seed was already canonical")
+		t.Fatal("preference seed was already canonical")
 	}
-	assertDesktopNavigationValue(t, seed.encoded, testDesktopNavigationLocator)
+	staleEnvironmentID := testDesktopPreferencesEnvironmentID
+	assertDesktopPreferencesValue(
+		t,
+		seed.encoded,
+		desktopPreferencesRestoreLanguage,
+		desktopPreferencesRestoreSection,
+		&staleEnvironmentID,
+	)
 
-	committed, err := publishDesktopNavigationFixture(path, expected)
+	committed, err := publishDesktopPreferencesFixture(path, expected)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if os.SameFile(seed.info, committed.info) {
-		t.Fatal("navigation fixture replaced contents without replacing the inode")
+		t.Fatal("preference fixture replaced contents without replacing the inode")
 	}
-	observed, err := waitForDesktopNavigationRewrite(
+	observed, err := waitForDesktopPreferencesRewrite(
 		context.Background(),
 		make(chan error),
 		path,
@@ -73,24 +88,24 @@ func TestDesktopNavigationFixtureProvesAtomicCanonicalRewrite(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !os.SameFile(committed.info, observed.info) {
-		t.Fatal("navigation observation returned the wrong committed file")
+		t.Fatal("preference observation returned the wrong committed file")
 	}
 	info, err := os.Stat(path)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if info.Mode().Perm() != 0o600 {
-		t.Fatalf("navigation permission=%04o", info.Mode().Perm())
+		t.Fatalf("preference permission=%04o", info.Mode().Perm())
 	}
 }
 
-func TestDesktopNavigationObservationFailsOnPrematureExit(t *testing.T) {
+func TestDesktopPreferencesObservationFailsOnPrematureExit(t *testing.T) {
 	t.Parallel()
 
-	path := desktopNavigationStatePath(filepath.Join(t.TempDir(), "home"))
-	seed, err := publishDesktopNavigationFixture(
+	path := desktopPreferencesStatePath(filepath.Join(t.TempDir(), "home"))
+	seed, err := publishDesktopPreferencesFixture(
 		path,
-		nonCanonicalDesktopNavigationState(testDesktopNavigationLocator),
+		staleDesktopPreferences(),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -99,30 +114,35 @@ func TestDesktopNavigationObservationFailsOnPrematureExit(t *testing.T) {
 	done <- nil
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	if _, err := waitForDesktopNavigationRewrite(
+	if _, err := waitForDesktopPreferencesRewrite(
 		ctx,
 		done,
 		path,
 		seed,
-		canonicalDesktopNavigationState(testDesktopNavigationLocator),
+		canonicalDesktopPreferences(
+			desktopPreferencesRestoreLanguage,
+			desktopPreferencesRestoreSection,
+			nil,
+			nil,
+		),
 	); err == nil {
 		t.Fatal("premature packaged Desktop exit was accepted")
 	}
 }
 
-func TestDesktopNavigationFixtureRejectsSymbolicLinkDestination(t *testing.T) {
+func TestDesktopPreferencesFixtureRejectsSymbolicLinkDestination(t *testing.T) {
 	t.Parallel()
 
 	homeDirectory := filepath.Join(t.TempDir(), "home")
-	path := desktopNavigationStatePath(homeDirectory)
-	if _, err := publishDesktopNavigationFixture(
+	path := desktopPreferencesStatePath(homeDirectory)
+	if _, err := publishDesktopPreferencesFixture(
 		path,
-		nonCanonicalDesktopNavigationState(testDesktopNavigationLocator),
+		staleDesktopPreferences(),
 	); err != nil {
 		t.Fatal(err)
 	}
 	target := filepath.Join(t.TempDir(), "target.json")
-	if err := os.WriteFile(target, canonicalDesktopNavigationState("overview"), 0o600); err != nil {
+	if err := os.WriteFile(target, canonicalDesktopPreferences("en-US", "captures", nil, nil), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Remove(path); err != nil {
@@ -131,36 +151,46 @@ func TestDesktopNavigationFixtureRejectsSymbolicLinkDestination(t *testing.T) {
 	if err := os.Symlink(target, path); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := publishDesktopNavigationFixture(
+	if _, err := publishDesktopPreferencesFixture(
 		path,
-		canonicalDesktopNavigationState(testDesktopNavigationLocator),
+		canonicalDesktopPreferences(
+			desktopPreferencesRestoreLanguage,
+			desktopPreferencesRestoreSection,
+			nil,
+			nil,
+		),
 	); err == nil {
-		t.Fatal("symbolic-link navigation destination was accepted")
+		t.Fatal("symbolic-link preference destination was accepted")
 	}
 }
 
-func TestDesktopNavigationRestoreLocatorIsFreshAndBounded(t *testing.T) {
+func staleDesktopPreferences() []byte {
+	environmentID := testDesktopPreferencesEnvironmentID
+	return canonicalDesktopPreferences(
+		desktopPreferencesRestoreLanguage,
+		desktopPreferencesRestoreSection,
+		&environmentID,
+		nil,
+	)
+}
+
+func TestDesktopPreferencesStaleEnvironmentIdentityIsFreshAndBounded(t *testing.T) {
 	t.Parallel()
 
-	locator, err := newDesktopNavigationRestoreLocator()
+	identity, err := newDesktopPreferencesStaleEnvironmentID()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.HasPrefix(locator, "access/") ||
-		!strings.HasSuffix(locator, "/routing") {
-		t.Fatalf("navigation locator = %q", locator)
+	if !strings.HasPrefix(identity, "acceptance.") {
+		t.Fatalf("preference identity = %q", identity)
 	}
-	encodedIdentity := strings.TrimSuffix(
-		strings.TrimPrefix(locator, "access/"),
-		"/routing",
-	)
-	identity, err := hex.DecodeString(encodedIdentity)
-	if err != nil || len(identity) != 16 {
-		t.Fatalf("navigation locator identity = %q, error = %v", encodedIdentity, err)
+	encodedIdentity := strings.TrimPrefix(identity, "acceptance.")
+	decoded, err := hex.DecodeString(encodedIdentity)
+	if err != nil || len(decoded) != 16 {
+		t.Fatalf("preference environment identity = %q, error = %v", encodedIdentity, err)
 	}
-	if locator == desktopNavigationSentinelLocator ||
-		locator == testDesktopNavigationLocator {
-		t.Fatalf("navigation locator reused a static route: %q", locator)
+	if identity == testDesktopPreferencesEnvironmentID {
+		t.Fatalf("preference identity reused a static value: %q", identity)
 	}
 }
 
@@ -337,15 +367,32 @@ func TestPackagedDesktopApplicationSelectionRequiresSidecarParentAndExactPath(
 	}
 }
 
-func assertDesktopNavigationValue(t *testing.T, encoded []byte, locator string) {
+func assertDesktopPreferencesValue(
+	t *testing.T,
+	encoded []byte,
+	language string,
+	section string,
+	environmentID *string,
+) {
 	t.Helper()
-	var state desktopNavigationState
+	var state desktopWorkbenchPreferences
 	decoder := json.NewDecoder(bytes.NewReader(encoded))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&state); err != nil {
 		t.Fatal(err)
 	}
-	if state.Schema != desktopNavigationSchema || state.Locator != locator {
-		t.Fatalf("navigation state=%+v", state)
+	if state.Schema != desktopPreferencesSchema ||
+		state.Language != language ||
+		state.Theme != desktopPreferencesTheme ||
+		state.Section != section ||
+		!equalOptionalString(state.SelectedEnvironmentID, environmentID) {
+		t.Fatalf("workbench preferences=%+v", state)
 	}
+}
+
+func equalOptionalString(left, right *string) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return *left == *right
 }

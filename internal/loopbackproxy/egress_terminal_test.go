@@ -14,8 +14,12 @@ import (
 
 	"github.com/vibe-agi/vibermate/internal/blindtunnel"
 	"github.com/vibe-agi/vibermate/internal/connectionevent"
+	"github.com/vibe-agi/vibermate/internal/connectionpolicy"
 	"github.com/vibe-agi/vibermate/internal/egressaudit"
+	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
+	"github.com/vibe-agi/vibermate/internal/protocolspec"
+	"github.com/vibe-agi/vibermate/internal/wireprofile"
 )
 
 func TestBlindTunnelDoesNotDialBeforeAuditAppend(t *testing.T) {
@@ -71,10 +75,14 @@ func TestBlindTunnelDoesNotDialBeforeAuditAppend(t *testing.T) {
 			Label:      "fixture",
 			Confidence: connectionevent.SourceConfidenceConfigured,
 		},
-		"allow-target",
+		connectionpolicy.Outcome{
+			Decision: connectionpolicy.DecisionAllow,
+			RuleID:   "allow-target", Revision: 1,
+		},
 		"target.example:443",
 		"target.example",
 		443,
+		blindEnvironmentSnapshot(t),
 	)
 	if !terminal {
 		t.Fatal("blind path did not own its ConnectionEvent terminal")
@@ -95,6 +103,50 @@ func TestBlindTunnelDoesNotDialBeforeAuditAppend(t *testing.T) {
 		last.ErrorClass != blindTunnelFailureClass {
 		t.Fatalf("connection terminal = %+v", last)
 	}
+}
+
+type unusedProtocolCatalog struct{}
+
+func (unusedProtocolCatalog) Resolve(
+	protocolspec.Dialect,
+	protocolspec.Dialect,
+) (protocolspec.CodecPlan, error) {
+	return protocolspec.CodecPlan{}, errors.New("unused protocol catalog")
+}
+
+func (unusedProtocolCatalog) OperationsForDialect(
+	protocolspec.Dialect,
+) ([]protocolspec.ClientOperationDefinition, error) {
+	return nil, errors.New("unused protocol catalog")
+}
+
+type unusedWireProfileCatalog struct{}
+
+func (unusedWireProfileCatalog) Resolve(
+	wireprofile.UpstreamWireProfileRef,
+) (wireprofile.CompiledUpstreamWireProfile, error) {
+	return wireprofile.CompiledUpstreamWireProfile{}, errors.New("unused wire profile catalog")
+}
+
+func blindEnvironmentSnapshot(t *testing.T) environment.EnvironmentSnapshot {
+	t.Helper()
+	compiler, err := environment.NewCompiler(
+		nil,
+		nil,
+		unusedProtocolCatalog{},
+		unusedWireProfileCatalog{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := compiler.Compile(environment.Environment{
+		ID: "blind_test", Name: "Blind test", State: environment.StateActive, Revision: 1,
+		ContentRecording: environment.ContentRecordingPolicy{Mode: environment.ContentRecordingOff},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return snapshot
 }
 
 func TestBlindTunnelTerminalKeepsAuditOutcomesConsistent(t *testing.T) {

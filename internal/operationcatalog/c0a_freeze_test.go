@@ -5,8 +5,8 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/vibe-agi/vibermate/internal/access"
 	"github.com/vibe-agi/vibermate/internal/operationcatalog"
+	"github.com/vibe-agi/vibermate/internal/protocolspec"
 )
 
 // M1.0-C0a step 3 freezes a state, and a state that only prose describes is
@@ -26,12 +26,12 @@ import (
 func TestOriginalOriginAdmissionIsExactlyTheAbsenceOfClientPayload(t *testing.T) {
 	t.Parallel()
 
-	classes := []access.OperationPayloadClass{
-		access.OperationPayloadNone,
-		access.OperationPayloadControl,
-		access.OperationPayloadClientData,
-		access.OperationPayloadClientSemantic,
-		access.OperationPayloadUnknown,
+	classes := []protocolspec.OperationPayloadClass{
+		protocolspec.OperationPayloadNone,
+		protocolspec.OperationPayloadControl,
+		protocolspec.OperationPayloadClientData,
+		protocolspec.OperationPayloadClientSemantic,
+		protocolspec.OperationPayloadUnknown,
 	}
 	for _, class := range classes {
 		if class.AllowsOriginalOrigin() == class.CarriesClientPayload() {
@@ -62,7 +62,7 @@ func TestCataloguedBodyBearingOperationsDeclareAPayloadClass(t *testing.T) {
 		http.MethodPatch,
 	}
 	for _, definition := range catalog.Definitions() {
-		if definition.BodyKind() == access.ClientOperationBodyNone {
+		if definition.BodyKind() == protocolspec.ClientOperationBodyNone {
 			continue
 		}
 		carries := false
@@ -96,7 +96,7 @@ func TestCountTokensStaysTheFrozenCounterexample(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var found *access.ClientOperationDefinition
+	var found *protocolspec.ClientOperationDefinition
 	for _, definition := range catalog.Definitions() {
 		if definition.ID().String() ==
 			operationcatalog.AnthropicMessagesCountTokensID {
@@ -107,10 +107,10 @@ func TestCountTokensStaysTheFrozenCounterexample(t *testing.T) {
 	if found == nil {
 		t.Fatal("count_tokens is not catalogued")
 	}
-	if found.Kind() != access.ClientOperationAuxiliary {
+	if found.Kind() != protocolspec.ClientOperationAuxiliary {
 		t.Errorf("kind is %q, want auxiliary", found.Kind())
 	}
-	if found.PayloadClass() != access.OperationPayloadClientSemantic {
+	if found.PayloadClass() != protocolspec.OperationPayloadClientSemantic {
 		t.Errorf(
 			"payload class is %q, want client_semantic",
 			found.PayloadClass(),

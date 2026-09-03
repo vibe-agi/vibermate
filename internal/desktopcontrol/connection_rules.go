@@ -20,7 +20,7 @@ type ConnectionRuleController interface {
 		ctx context.Context,
 		expectedRevision uint64,
 		rules []connectionpolicy.Rule,
-		fallback connectionpolicy.Rule,
+		mode connectionpolicy.Mode,
 	) (connectionpolicy.Snapshot, error)
 }
 
@@ -40,14 +40,14 @@ type ConnectionRuleInput struct {
 // a time, because a set that would not construct must be refused before
 // anything is stored.
 type ConnectionRuleSetInput struct {
-	Rules   []ConnectionRuleInput `json:"rules"`
-	Default ConnectionRuleInput   `json:"default"`
+	Rules []ConnectionRuleInput `json:"rules"`
+	Mode  string                `json:"mode"`
 }
 
 type ConnectionRuleSetResponse struct {
 	Revision uint64                `json:"revision"`
 	Rules    []ConnectionRuleInput `json:"rules"`
-	Default  ConnectionRuleInput   `json:"default"`
+	Mode     string                `json:"mode"`
 }
 
 func (input ConnectionRuleInput) rule() connectionpolicy.Rule {
@@ -80,7 +80,7 @@ func connectionRuleSetView(
 	response := ConnectionRuleSetResponse{
 		Revision: snapshot.Revision,
 		Rules:    make([]ConnectionRuleInput, 0, len(snapshot.Rules)),
-		Default:  connectionRuleView(snapshot.Default),
+		Mode:     string(snapshot.Mode),
 	}
 	for _, rule := range snapshot.Rules {
 		response.Rules = append(response.Rules, connectionRuleView(rule))
@@ -142,7 +142,7 @@ func (handler *Handler) replaceConnectionRules(
 		request.Context(),
 		expected,
 		rules,
-		input.Default.rule(),
+		connectionpolicy.Mode(input.Mode),
 	)
 	if err != nil {
 		status := http.StatusUnprocessableEntity

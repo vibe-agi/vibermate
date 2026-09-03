@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/vibe-agi/vibermate/internal/access"
+	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/exchange"
 	"github.com/vibe-agi/vibermate/internal/protocolcore"
 	"github.com/vibe-agi/vibermate/internal/runtimepersistence"
@@ -52,6 +52,11 @@ func TestAuthorityDurablyBlocksAndReleasesCompleteToolGroup(t *testing.T) {
 	if pending.State != toolapproval.StatePending ||
 		len(pending.SubjectRefs) != 2 ||
 		len(pending.SubjectLabels) != 2 ||
+		pending.EnvironmentID != request.EnvironmentID().String() ||
+		pending.EnvironmentRevision != request.EnvironmentRevision() ||
+		pending.EnvironmentDigest != request.EnvironmentDigest().String() ||
+		pending.RouteID != request.RouteID().String() ||
+		pending.RouteRevision != request.RouteRevision() ||
 		pending.TitleKey == "" ||
 		pending.SummaryKey == "" {
 		t.Fatalf("pending approval = %+v", pending)
@@ -123,7 +128,12 @@ func TestAuthorityDurablyBlocksAndReleasesCompleteToolGroup(t *testing.T) {
 		t.Fatal(err)
 	}
 	if stored.State != toolapproval.StateAllowed ||
-		stored.Decision != toolapproval.DecisionAllowOnce {
+		stored.Decision != toolapproval.DecisionAllowOnce ||
+		stored.EnvironmentID != request.EnvironmentID() ||
+		stored.EnvironmentRevision != request.EnvironmentRevision() ||
+		stored.EnvironmentDigest != request.EnvironmentDigest() ||
+		stored.RouteID != request.RouteID() ||
+		stored.RouteRevision != request.RouteRevision() {
 		t.Fatalf("stored approval = %+v", stored)
 	}
 }
@@ -169,6 +179,11 @@ func TestAuthorityRecoveryCancelsOrphanedPendingApproval(t *testing.T) {
 	}
 	if recovered.State != toolapproval.StateCanceled ||
 		recovered.TerminalReason != "runtime_recovered" ||
+		recovered.EnvironmentID != record.EnvironmentID.String() ||
+		recovered.EnvironmentRevision != record.EnvironmentRevision ||
+		recovered.EnvironmentDigest != record.EnvironmentDigest.String() ||
+		recovered.RouteID != record.RouteID.String() ||
+		recovered.RouteRevision != record.RouteRevision ||
 		recovered.ResolvedAt == nil {
 		t.Fatalf("recovered approval = %+v", recovered)
 	}
@@ -179,7 +194,11 @@ func decisionRequest(
 	rawArguments string,
 ) exchange.ToolDecisionRequest {
 	t.Helper()
-	accessID, err := access.NewAccessID("access-approval")
+	environmentID, err := environment.NewEnvironmentID("environment-approval")
+	if err != nil {
+		t.Fatal(err)
+	}
+	routeID, err := environment.NewUpstreamRouteID("route-approval")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -198,12 +217,20 @@ func decisionRequest(
 	if err != nil {
 		t.Fatal(err)
 	}
-	hash := access.PlanHash{0x42}
+	decisionContext, err := exchange.NewToolDecisionContext(
+		environment.DefaultPolicySet(), "", false, nil, nil,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
 	request, err := exchange.NewToolDecisionRequest(
 		"exchange-approval",
-		accessID,
+		environmentID,
 		3,
-		hash,
+		environment.CandidateDigest{0x42},
+		routeID,
+		2,
+		decisionContext,
 		[]protocolcore.ToolIntent{
 			{
 				ResponseID: "response-1",
@@ -233,26 +260,32 @@ func decisionRequest(
 
 func pendingRecord(t *testing.T, now time.Time) toolapproval.Record {
 	t.Helper()
-	accessID, err := access.NewAccessID("access-recovery")
+	environmentID, err := environment.NewEnvironmentID("environment-recovery")
+	if err != nil {
+		t.Fatal(err)
+	}
+	routeID, err := environment.NewUpstreamRouteID("route-recovery")
 	if err != nil {
 		t.Fatal(err)
 	}
 	return toolapproval.Record{
-		ID:            "approval-recovery",
-		Revision:      1,
-		ExchangeID:    "exchange-recovery",
-		AccessID:      accessID,
-		PlanRevision:  1,
-		PlanHash:      access.PlanHash{0x33},
-		Kind:          toolapproval.KindToolIntent,
-		AggregateKey:  "recovery-key",
-		SubjectRefs:   []string{"call-recovery"},
-		SubjectLabels: []string{"read_file"},
-		RequestCount:  1,
-		WaiterCount:   1,
-		State:         toolapproval.StatePending,
-		CreatedAt:     now,
-		ExpiresAt:     now.Add(time.Minute),
+		ID:                  "approval-recovery",
+		Revision:            1,
+		ExchangeID:          "exchange-recovery",
+		EnvironmentID:       environmentID,
+		EnvironmentRevision: 1,
+		EnvironmentDigest:   environment.CandidateDigest{0x33},
+		RouteID:             routeID,
+		RouteRevision:       1,
+		Kind:                toolapproval.KindToolIntent,
+		AggregateKey:        "recovery-key",
+		SubjectRefs:         []string{"call-recovery"},
+		SubjectLabels:       []string{"read_file"},
+		RequestCount:        1,
+		WaiterCount:         1,
+		State:               toolapproval.StatePending,
+		CreatedAt:           now,
+		ExpiresAt:           now.Add(time.Minute),
 	}
 }
 

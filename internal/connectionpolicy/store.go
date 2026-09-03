@@ -19,9 +19,7 @@ var ErrRevisionConflict = errors.New("connection rule set revision conflict")
 type Snapshot struct {
 	Revision uint64
 	Rules    []Rule
-	// Default answers a connection no rule matched. It is stored like any
-	// other rule so that reading the set back shows every answer it can give.
-	Default Rule
+	Mode     Mode
 }
 
 // Compile turns stored rules into the frozen set the proxy evaluates. Every
@@ -30,7 +28,7 @@ func (snapshot Snapshot) Compile() (RuleSet, error) {
 	return NewRuleSet(RuleSetOptions{
 		Revision: snapshot.Revision,
 		Rules:    snapshot.Rules,
-		Default:  snapshot.Default,
+		Mode:     snapshot.Mode,
 	})
 }
 
@@ -52,30 +50,20 @@ var ErrNoRuleSet = errors.New("no connection rule set is stored")
 
 // ShippedSnapshot is what a fresh runtime starts with.
 //
-// Design 06 §4.1 makes the released answer for an unknown host `ask`, and
-// INV-FIREWALL-NO-WILDCARD forbids a wildcard allow in the shipped
-// configuration. Allowing everything is still possible; it is a rule a person
-// writes on purpose and can see in the list.
+// A fresh local installation starts in Monitor mode. Network policy
+// is an optional governance layer; it must not make an otherwise unmodified
+// captured program hang on every previously unseen host. The mode is explicit
+// stored state rather than a wildcard rule or an implicit missing default.
 //
-// Nothing is allowed here in advance, not even a well-known model host: what
-// an agent is allowed to reach is a decision about that installation, and a
-// shipped allow list would be this product deciding it for everyone.
+// This does not widen semantic inspection. Environment-owned exact endpoints,
+// Root admission, account selection, plugins, and tool decisions retain their
+// independent authorities.
 func ShippedSnapshot(revision uint64) Snapshot {
 	return Snapshot{
 		Revision: revision,
-		Default: Rule{
-			ID:       DefaultAskRuleID,
-			Decision: DecisionAsk,
-			Match:    MatchAny(),
-		},
+		Mode:     ModeMonitor,
 	}
 }
-
-// DefaultAskRuleID names the answer an undecided connection gets.
-const DefaultAskRuleID = "default.ask"
-
-// DefaultDenyRuleID names the answer a connection gets when no rule matched.
-const DefaultDenyRuleID = "default.deny"
 
 func (snapshot Snapshot) validate() error {
 	if snapshot.Revision == 0 {

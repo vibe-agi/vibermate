@@ -1,0 +1,229 @@
+package runlauncher
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"path/filepath"
+	"time"
+
+	"github.com/vibe-agi/vibermate/internal/serverconnection"
+	"github.com/vibe-agi/vibermate/internal/servercontrol"
+	"github.com/vibe-agi/vibermate/internal/servertransport"
+	"github.com/vibe-agi/vibermate/internal/workspaceidentity"
+)
+
+type RemoteLoginRequest struct {
+	Config   RemoteConfig
+	Username string
+	Password []byte
+}
+
+type RemoteLoginResult struct {
+	Target         serverconnection.Target
+	UserID         string
+	Username       string
+	ExpiresAt      time.Time
+	FirstUse       bool
+	TLSFingerprint string
+}
+
+type RemoteInspection struct {
+	Origin     string
+	InstanceID string
+	APIVersion string
+	UserID     string
+	Username   string
+	SessionID  string
+	Encrypted  bool
+}
+
+func InspectRemote(
+	ctx context.Context,
+	target serverconnection.Target,
+	stateDirectory string,
+	clock RemoteClock,
+	timeout time.Duration,
+) (RemoteInspection, error) {
+	if ctx == nil || !target.Valid() || stateDirectory == "" ||
+		!filepath.IsAbs(stateDirectory) || filepath.Clean(stateDirectory) != stateDirectory ||
+		clock == nil || timeout <= 0 {
+		return RemoteInspection{}, errors.New("remote Runtime inspection is incomplete")
+	}
+	loginStore, err := serverconnection.OpenLoginStore(filepath.Join(stateDirectory, "login"))
+	if err != nil {
+		return RemoteInspection{}, err
+	}
+	login, err := loginStore.Load(target, clock.Now().UTC())
+	if err != nil {
+		if errors.Is(err, serverconnection.ErrLoginRequired) {
+			return RemoteInspection{}, ErrRemoteLoginRequired
+		}
+		return RemoteInspection{}, err
+	}
+	transport, err := servertransport.Open(servertransport.Options{
+		Target: target, TrustDirectory: filepath.Join(stateDirectory, "trust"),
+		Clock: clock, Timeout: timeout,
+	})
+	if err != nil {
+		return RemoteInspection{}, fmt.Errorf("%w: %v", ErrRemoteRuntimeUnavailable, err)
+	}
+	client, err := newRemoteControlClient(
+		target.Origin(), login.SessionToken().Value(), transport, transport.Close,
+	)
+	if err != nil {
+		transport.Close()
+		return RemoteInspection{}, err
+	}
+	defer client.close()
+	var current servercontrol.RuntimeUserCurrentSession
+	if err := client.jsonRequest(
+		ctx, http.MethodGet, servercontrol.RuntimeUserCurrentSessionPath,
+		client.credential, "", nil, http.StatusOK, &current,
+	); err != nil {
+		var failure *ControlFailure
+		if errors.As(err, &failure) && failure.Status == http.StatusUnauthorized {
+			return RemoteInspection{}, ErrRemoteLoginRequired
+		}
+		return RemoteInspection{}, fmt.Errorf("%w: %v", ErrRemoteRuntimeUnavailable, err)
+	}
+	if current.Schema != servercontrol.RuntimeUserCurrentSessionSchema ||
+		current.APIVersion != "v1" || current.InstanceID != login.InstanceID() ||
+		current.User.ID != login.UserID() || current.User.Username != login.Username() ||
+		current.SessionID != login.SessionID() {
+		return RemoteInspection{}, ErrRemoteLoginRequired
+	}
+	return RemoteInspection{
+		Origin: target.Origin(), InstanceID: current.InstanceID, APIVersion: current.APIVersion,
+		UserID: current.User.ID, Username: current.User.Username,
+		SessionID: current.SessionID,
+		Encrypted: target.Transport() == serverconnection.TransportHTTPS,
+	}, nil
+}
+
+func LoginRemote(
+	ctx context.Context,
+	request RemoteLoginRequest,
+) (RemoteLoginResult, error) {
+	if ctx == nil || request.Username == "" || len(request.Password) == 0 {
+		return RemoteLoginResult{}, errors.New("remote Runtime Server login is incomplete")
+	}
+	config := request.Config
+	if err := config.validate(); err != nil {
+		return RemoteLoginResult{}, err
+	}
+	workspace, err := workspaceidentity.Open(
+		ctx,
+		filepath.Join(config.StateDirectory, "identity"),
+		config.Random,
+		config.Clock.Now().UTC(),
+	)
+	if err != nil {
+		return RemoteLoginResult{}, fmt.Errorf("open remote companion identity: %w", err)
+	}
+	defer func() { _ = workspace.Shutdown(context.Background()) }()
+	transport, err := servertransport.Open(servertransport.Options{
+		Target: config.Target, TrustDirectory: filepath.Join(config.StateDirectory, "trust"),
+		Clock: config.Clock, Timeout: 15 * time.Second,
+	})
+	if err != nil {
+		return RemoteLoginResult{}, err
+	}
+	defer transport.Close()
+	password := append([]byte(nil), request.Password...)
+	defer clear(password)
+	session, err := requestRuntimeUserSession(
+		ctx,
+		transport,
+		config.Target,
+		servercontrol.RuntimeUserLogin{
+			Schema: servercontrol.RuntimeUserLoginSchema, Username: request.Username,
+			Password: string(password), MachineID: workspace.MachineID().String(),
+			DeviceName: config.DisplayName,
+		},
+		config.Clock.Now().UTC(),
+	)
+	if err != nil {
+		return RemoteLoginResult{}, err
+	}
+	credential, err := serverconnection.NewLoginCredential(
+		serverconnection.LoginCredentialInput{
+			Target: config.Target, InstanceID: session.InstanceID,
+			UserID: session.User.ID, Username: session.User.Username,
+			SessionID: session.SessionID, SessionToken: session.SessionToken,
+			ExpiresAt: session.ExpiresAt,
+		},
+	)
+	if err != nil {
+		return RemoteLoginResult{}, errors.New("Runtime Server login response is invalid")
+	}
+	store, err := serverconnection.OpenLoginStore(filepath.Join(config.StateDirectory, "login"))
+	if err != nil {
+		return RemoteLoginResult{}, err
+	}
+	if err := store.Save(credential); err != nil {
+		return RemoteLoginResult{}, fmt.Errorf("save Runtime Server login: %w", err)
+	}
+	firstUse, fingerprint := transport.Trust()
+	return RemoteLoginResult{
+		Target: config.Target, UserID: session.User.ID, Username: session.User.Username,
+		ExpiresAt: session.ExpiresAt, FirstUse: firstUse, TLSFingerprint: fingerprint,
+	}, nil
+}
+
+func requestRuntimeUserSession(
+	ctx context.Context,
+	client requestDoer,
+	target serverconnection.Target,
+	input servercontrol.RuntimeUserLogin,
+	now time.Time,
+) (servercontrol.RuntimeUserSession, error) {
+	payload, err := json.Marshal(input)
+	input.Password = ""
+	if err != nil {
+		return servercontrol.RuntimeUserSession{}, err
+	}
+	request, err := http.NewRequestWithContext(
+		ctx,
+		http.MethodPost,
+		target.Origin()+servercontrol.RuntimeUserSessionPath,
+		bytes.NewReader(payload),
+	)
+	if err != nil {
+		return servercontrol.RuntimeUserSession{}, err
+	}
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Accept", "application/json, application/problem+json")
+	response, err := client.Do(request)
+	if err != nil {
+		return servercontrol.RuntimeUserSession{}, fmt.Errorf("connect to Runtime Server: %w", err)
+	}
+	defer response.Body.Close()
+	encoded, err := io.ReadAll(io.LimitReader(response.Body, maxControlResponseBytes+1))
+	if err != nil || len(encoded) > maxControlResponseBytes {
+		return servercontrol.RuntimeUserSession{}, errors.New("Runtime Server login response is invalid")
+	}
+	if response.StatusCode != http.StatusCreated {
+		return servercontrol.RuntimeUserSession{}, decodeControlFailure(response.StatusCode, encoded)
+	}
+	var session servercontrol.RuntimeUserSession
+	decoder := json.NewDecoder(bytes.NewReader(encoded))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&session); err != nil ||
+		session.Schema != servercontrol.RuntimeUserSessionSchema ||
+		session.InstanceID == "" || session.APIVersion != "v1" ||
+		session.User.ID == "" || session.User.Username == "" ||
+		session.SessionID == "" || session.SessionToken == "" ||
+		!now.Before(session.ExpiresAt) {
+		return servercontrol.RuntimeUserSession{}, errors.New("Runtime Server login response is invalid")
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
+		return servercontrol.RuntimeUserSession{}, errors.New("Runtime Server login response is invalid")
+	}
+	return session, nil
+}

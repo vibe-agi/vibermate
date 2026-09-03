@@ -133,9 +133,10 @@ func TestCleartextRequestIsForwardedToItsOrigin(t *testing.T) {
 	t.Fatal("a cleartext forward left no per-egress record")
 }
 
-// Cleartext forwarding never enters the model pipeline and never carries a
-// provider credential.
-func TestCleartextRequestNeverReachesTheModelPipeline(t *testing.T) {
+// Generic cleartext forwarding never enters the model pipeline and never
+// carries a provider credential. Only a verified Agent's frozen target may be
+// inspected semantically.
+func TestGenericCleartextRequestNeverReachesTheModelPipeline(t *testing.T) {
 	t.Parallel()
 
 	fixture := newProxyFixture(t)

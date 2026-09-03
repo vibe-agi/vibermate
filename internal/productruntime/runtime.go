@@ -8,58 +8,79 @@ import (
 	"net"
 	"net/http"
 	"sync"
+	"time"
 
-	"github.com/vibe-agi/vibermate/internal/access"
-	"github.com/vibe-agi/vibermate/internal/accesscredential"
 	"github.com/vibe-agi/vibermate/internal/activity"
 	"github.com/vibe-agi/vibermate/internal/blindtunnel"
 	"github.com/vibe-agi/vibermate/internal/captureadmission"
+	"github.com/vibe-agi/vibermate/internal/captureassignment"
 	"github.com/vibe-agi/vibermate/internal/capturerun"
+	"github.com/vibe-agi/vibermate/internal/clientannotation"
+	"github.com/vibe-agi/vibermate/internal/codelibrary"
 	"github.com/vibe-agi/vibermate/internal/connectionevent"
 	"github.com/vibe-agi/vibermate/internal/connectionpolicy"
 	"github.com/vibe-agi/vibermate/internal/egressaudit"
+	"github.com/vibe-agi/vibermate/internal/egressprofile"
+	"github.com/vibe-agi/vibermate/internal/environment"
+	"github.com/vibe-agi/vibermate/internal/evidencearchive"
 	"github.com/vibe-agi/vibermate/internal/exchange"
+	"github.com/vibe-agi/vibermate/internal/exchangecontent"
 	"github.com/vibe-agi/vibermate/internal/localca"
 	"github.com/vibe-agi/vibermate/internal/manualcapture"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
 	"github.com/vibe-agi/vibermate/internal/originaltransport"
+	"github.com/vibe-agi/vibermate/internal/provideraccount"
+	"github.com/vibe-agi/vibermate/internal/providerauth"
 	"github.com/vibe-agi/vibermate/internal/providertransport"
+	"github.com/vibe-agi/vibermate/internal/rawevidence"
+	"github.com/vibe-agi/vibermate/internal/resourcedeletion"
 	"github.com/vibe-agi/vibermate/internal/runtimepersistence"
+	"github.com/vibe-agi/vibermate/internal/runtimeuser"
 	"github.com/vibe-agi/vibermate/internal/toolapproval"
+	"github.com/vibe-agi/vibermate/internal/toolpolicy"
+	"github.com/vibe-agi/vibermate/internal/upstreamendpoint"
 	"github.com/vibe-agi/vibermate/internal/workspaceidentity"
-	"github.com/vibe-agi/vibermate/internal/workspaceroute"
 )
 
 var ErrInvalidBuildResult = errors.New("invalid runtime build result")
 
 // Runtime owns every successfully constructed production component.
 type Runtime struct {
-	status            *statusTracker
-	schemaReader      runtimepersistence.SchemaStateReader
-	accesses          accessRuntime
-	probeCatalog      access.ProviderProbeCatalog
-	credentials       credentialRuntime
-	workspaceIdentity *workspaceidentity.Manager
-	workspaceRoutes   *workspaceroute.Manager
-	activities        activityRuntime
-	connections       connectionEventRuntime
-	egress            egressaudit.Reader
-	egressCompletion  *runtimeEgressRepository
-	approvals         approvalRuntime
-	connectionRules   *connectionpolicy.Manager
-	monitor           ownedComponent
-	provider          providerRuntime
-	original          originalRuntime
-	exchanges         exchangeRuntime
-	captureRuns       captureRuntime
-	manualCaptures    manualCaptureRuntime
-	localCA           localCARuntime
-	proxy             proxyRuntime
-	offlineHold       offlinehold.RuntimeCoordinator
-	resumeProber      offlinehold.Prober
-	cleanups          cleanupStack
-	clock             Clock
-	timeout           LifecycleOptions
+	status             *statusTracker
+	schemaReader       runtimepersistence.SchemaStateReader
+	environments       environmentRuntime
+	assignments        captureAssignmentRuntime
+	workspaceIdentity  *workspaceidentity.Manager
+	activities         activityRuntime
+	conversationIDs    activity.ConversationIdentityRepository
+	conversationWriter activity.ConversationProjectionWriter
+	contents           exchangeContentRuntime
+	connections        connectionEventRuntime
+	egress             egressaudit.Reader
+	egressCompletion   *runtimeEgressRepository
+	endpoints          *upstreamendpoint.Manager
+	accounts           *provideraccount.Manager
+	codeLibrary        *codelibrary.Manager
+	egressProfiles     *egressprofile.Manager
+	runtimeUsers       *runtimeuser.Manager
+	approvals          approvalRuntime
+	connectionRules    *connectionpolicy.Manager
+	monitor            ownedComponent
+	rawEvidence        rawEvidenceRuntime
+	evidenceArchive    resourcedeletion.Archive
+	archiveBarrier     *evidencearchive.Barrier
+	provider           providerRuntime
+	original           originalRuntime
+	exchanges          exchangeRuntime
+	captureRuns        captureRuntime
+	manualCaptures     manualCaptureRuntime
+	localCA            localCARuntime
+	proxy              proxyRuntime
+	offlineHold        offlinehold.RuntimeCoordinator
+	resumeProber       offlinehold.Prober
+	cleanups           cleanupStack
+	clock              Clock
+	timeout            LifecycleOptions
 
 	shutdownOnce sync.Once
 	shutdownDone chan struct{}
@@ -68,13 +89,27 @@ type Runtime struct {
 
 // Start validates all dependencies and executes the typed production builder.
 func Start(ctx context.Context, options Options) (*Runtime, error) {
-	return startWithBuilders(ctx, options, productionBuilders())
+	return startWithBuilders(ctx, options, runtimeBuildOverrides{})
+}
+
+type runtimeBuildOverrides struct {
+	environment   func(context.Context, environmentBuildRequest) (environmentBuildResult, error)
+	recoverEgress func(context.Context, egressaudit.Repository, time.Time) error
+}
+
+func recoverEgressAttempts(
+	ctx context.Context,
+	repository egressaudit.Repository,
+	at time.Time,
+) error {
+	_, err := repository.Recover(ctx, at)
+	return err
 }
 
 func startWithBuilders(
 	ctx context.Context,
 	options Options,
-	builders runtimeBuilders,
+	overrides runtimeBuildOverrides,
 ) (*Runtime, error) {
 	if ctx == nil {
 		return nil, fmt.Errorf("%w: startup context is nil", ErrInvalidOptions)
@@ -85,21 +120,13 @@ func startWithBuilders(
 	if err := ctx.Err(); err != nil {
 		return nil, fmt.Errorf("start ProductRuntime: %w", err)
 	}
-	if builders.storage == nil ||
-		builders.access == nil ||
-		builders.credential == nil ||
-		builders.activity == nil ||
-		builders.connection == nil ||
-		builders.approval == nil ||
-		builders.monitor == nil ||
-		builders.provider == nil ||
-		builders.original == nil ||
-		builders.exchange == nil ||
-		builders.capture == nil ||
-		builders.manualCapture == nil ||
-		builders.localCA == nil ||
-		builders.proxy == nil {
-		return nil, fmt.Errorf("%w: component builder is missing", ErrInvalidBuildResult)
+	environmentBuilder := buildEnvironment
+	if overrides.environment != nil {
+		environmentBuilder = overrides.environment
+	}
+	recoverEgress := recoverEgressAttempts
+	if overrides.recoverEgress != nil {
+		recoverEgress = overrides.recoverEgress
 	}
 
 	instanceID, err := options.InstanceIDs.NewInstanceID(ctx)
@@ -132,7 +159,7 @@ func startWithBuilders(
 		return nil, startupErr
 	}
 
-	storageResult, err := builders.storage.Build(ctx, storageBuildRequest{
+	storageResult, err := buildStorage(ctx, storageBuildRequest{
 		databasePath: options.Paths.DatabasePath(),
 	})
 	if err != nil {
@@ -165,19 +192,69 @@ func startWithBuilders(
 			),
 		)
 	}
-	if _, err := egressRepository.Recover(
+	if err := recoverEgress(
 		ctx,
+		egressRepository,
 		options.Clock.Now().UTC(),
 	); err != nil {
 		return fail("EgressAttempt recovery", err)
 	}
 
 	securityRandom := newSynchronizedReader(options.SecurityRandom)
+	clientAnnotations, err := clientannotation.Open(ctx, options.Secrets, securityRandom)
+	if err != nil {
+		return fail("client annotation signing", err)
+	}
+	cleanups.register("client annotation signer", func(context.Context) error {
+		clientAnnotations.Destroy()
+		return nil
+	})
+	codeLibrary, err := codelibrary.NewManager(
+		storageResult.store.CodeLibraryRepository(),
+		options.Clock,
+	)
+	if err != nil {
+		return fail("Code Library", err)
+	}
+	egressProfiles, err := egressprofile.NewManager(
+		storageResult.store.EgressProfileRepository(),
+		options.Clock,
+	)
+	if err != nil {
+		return fail("egress profiles", err)
+	}
+	runtimeUsers, err := runtimeuser.New(runtimeuser.Options{
+		Repository:      storageResult.store.RuntimeUserRepository(),
+		Clock:           options.Clock,
+		Random:          securityRandom,
+		SessionLifetime: 30 * 24 * time.Hour,
+	})
+	if err != nil {
+		return fail("Runtime User authority", err)
+	}
 	ownerContext, cancelOwner := context.WithCancelCause(context.WithoutCancel(ctx))
 	cleanups.register("runtime owner context", func(context.Context) error {
 		cancelOwner(errors.New("runtime owner context stopped"))
 		return nil
 	})
+	rawEvidence, err := buildRawEvidence(rawEvidenceBuildRequest{
+		ctx:        ownerContext,
+		repository: storageResult.store.RawEvidenceRepository(),
+		random:     securityRandom,
+		clock:      options.Clock,
+		config:     rawevidence.DefaultConfig(),
+	})
+	if err != nil || rawEvidence == nil {
+		buildErr := err
+		if buildErr == nil {
+			buildErr = fmt.Errorf(
+				"%w: Raw evidence writer is nil",
+				ErrInvalidBuildResult,
+			)
+		}
+		return fail("Raw evidence writer", buildErr)
+	}
+	cleanups.register("Raw evidence writer", rawEvidence.Shutdown)
 	runtimeEgress := newRuntimeEgressRepository(
 		egressRepository,
 		tracker,
@@ -196,7 +273,7 @@ func startWithBuilders(
 	}
 	cleanups.register("machine and workspace identity", workspaceIdentity.Shutdown)
 
-	certificateAuthority, err := builders.localCA.Build(ctx, localCABuildRequest{
+	certificateAuthority, err := buildLocalCA(ctx, localCABuildRequest{
 		ownerContext: ownerContext,
 		directory:    options.Paths.LocalCADirectory(),
 		clock:        options.Clock,
@@ -234,47 +311,71 @@ func startWithBuilders(
 	}
 	cleanups.register("local Root CA", certificateAuthority.Shutdown)
 
-	accesses, err := builders.access.Build(ctx, accessBuildRequest{
-		repository:   storageResult.store.AccessRepository(),
-		rootRevision: certificateAuthority.Identity().Revision(),
-		leafCache:    certificateAuthority,
-		secrets:      options.Secrets,
-	})
+	builtInEndpoints, err := upstreamendpoint.BuiltInCommands()
 	if err != nil {
-		return fail("Access recovery", err)
+		return fail("UpstreamEndpoint definitions", err)
 	}
-	if accesses == nil {
-		return fail(
-			"Access recovery",
-			fmt.Errorf("%w: Access component is nil", ErrInvalidBuildResult),
-		)
-	}
-	cleanups.register("Access runtime", accesses.Shutdown)
-	workspaceRoutes, err := workspaceroute.New(
-		storageResult.store.WorkspaceRouteRepository(),
-		accesses,
+	endpoints, err := upstreamendpoint.NewManager(
+		ctx,
+		storageResult.store.UpstreamEndpointRepository(),
+		builtInEndpoints,
 		options.Clock,
 	)
 	if err != nil {
-		return fail("workspace route binding", err)
+		return fail("UpstreamEndpoint recovery", err)
+	}
+	cleanups.register("UpstreamEndpoint manager", endpoints.Shutdown)
+
+	accounts, err := provideraccount.NewManager(
+		ctx,
+		storageResult.store.ProviderAccountRepository(),
+		options.Secrets,
+		endpoints,
+		provideraccount.BuiltInRealms(),
+		options.Clock,
+	)
+	if err != nil {
+		return fail("ProviderAccount recovery", err)
+	}
+	cleanups.register("ProviderAccount manager", accounts.Shutdown)
+	captureRunRepository := storageResult.store.CaptureRunRepository()
+	manualCaptureRepository := storageResult.store.ManualCaptureRepository()
+	captureActivity, err := newCaptureActivityResolver(
+		captureRunRepository,
+		manualCaptureRepository,
+		options.Clock,
+	)
+	if err != nil {
+		return fail("Capture activity projection", err)
 	}
 
-	credentials, err := builders.credential.Build(credentialBuildRequest{
-		resolver: accesses,
-		secrets:  options.Secrets,
+	environmentResult, err := environmentBuilder(ctx, environmentBuildRequest{
+		repository:           storageResult.store.EnvironmentRepository(),
+		assignmentRepository: storageResult.store.CaptureAssignmentRepository(),
+		activity:             captureActivity,
+		clock:                options.Clock,
+		accounts:             accounts,
+		endpoints:            endpoints,
 	})
-	if err != nil || credentials == nil {
-		buildErr := err
-		if buildErr == nil {
-			buildErr = fmt.Errorf(
-				"%w: credential component is nil",
-				ErrInvalidBuildResult,
-			)
-		}
-		return fail("credential control", buildErr)
+	if err != nil {
+		return fail("Environment and Capture assignment recovery", err)
 	}
-
-	activities, err := builders.activity.Build(activityBuildRequest{
+	if environmentResult.environments == nil || environmentResult.assignments == nil {
+		return fail(
+			"Environment and Capture assignment recovery",
+			fmt.Errorf(
+				"%w: Environment or Capture assignment component is nil",
+				ErrInvalidBuildResult,
+			),
+		)
+	}
+	environments := environmentResult.environments
+	assignments := environmentResult.assignments
+	if err := accounts.BindDeletionGuard(environments); err != nil {
+		return fail("ProviderAccount deletion authority", err)
+	}
+	pending.register("Capture assignment runtime", assignments.Shutdown)
+	activities, err := buildActivity(activityBuildRequest{
 		repository: storageResult.store.ActivityRepository(),
 		clock:      options.Clock,
 		random:     securityRandom,
@@ -291,7 +392,24 @@ func startWithBuilders(
 	}
 	cleanups.register("Activity component", activities.Shutdown)
 
-	connections, err := builders.connection.Build(ctx, connectionEventBuildRequest{
+	contents, err := buildExchangeContent(exchangeContentBuildRequest{
+		ctx:        ctx,
+		repository: storageResult.store.ExchangeContentRepository(),
+		clock:      options.Clock,
+	})
+	if err != nil || contents == nil {
+		buildErr := err
+		if buildErr == nil {
+			buildErr = fmt.Errorf(
+				"%w: Exchange content component is nil",
+				ErrInvalidBuildResult,
+			)
+		}
+		return fail("Exchange content recovery", buildErr)
+	}
+	cleanups.register("Exchange content component", contents.Shutdown)
+
+	connections, err := buildConnectionEvent(ctx, connectionEventBuildRequest{
 		repository: storageResult.store.ConnectionEventRepository(),
 		clock:      options.Clock,
 		random:     securityRandom,
@@ -322,7 +440,7 @@ func startWithBuilders(
 		return fail("connection policy", err)
 	}
 
-	approvals, err := builders.approval.Build(approvalBuildRequest{
+	approvals, err := buildApproval(approvalBuildRequest{
 		ctx:        ctx,
 		repository: storageResult.store.ToolApprovalRepository(),
 		clock:      options.Clock,
@@ -341,8 +459,12 @@ func startWithBuilders(
 		return fail("tool approval recovery", buildErr)
 	}
 	cleanups.register("tool approval component", approvals.Shutdown)
+	toolDecisions, err := toolpolicy.New(approvals)
+	if err != nil {
+		return fail("tool policy", err)
+	}
 
-	monitor, err := builders.monitor.Build(monitorBuildRequest{
+	monitor, err := buildMonitor(monitorBuildRequest{
 		ownerContext: ownerContext,
 		reader:       storageResult.store.SchemaStateReader(),
 		interval:     options.Lifecycle.HealthPollInterval,
@@ -382,10 +504,12 @@ func startWithBuilders(
 		return fail("offline-hold resume probe", err)
 	}
 
-	provider, err := builders.provider.Build(providerBuildRequest{
+	provider, err := buildProvider(providerBuildRequest{
 		coordinator: options.OfflineHold,
 		secrets:     options.Secrets,
+		instanceIDs: options.InstanceIDs,
 		audit:       runtimeEgress,
+		rawEvidence: rawEvidence,
 	})
 	if err != nil {
 		return fail("provider transport", err)
@@ -398,7 +522,7 @@ func startWithBuilders(
 	}
 	pending.register("provider transport", provider.Shutdown)
 
-	original, err := builders.original.Build(originalBuildRequest{
+	original, err := buildOriginal(originalBuildRequest{
 		coordinator: options.OfflineHold,
 		audit:       runtimeEgress,
 	})
@@ -416,15 +540,20 @@ func startWithBuilders(
 	}
 	pending.register("original-origin transport", original.Shutdown)
 
-	exchanges, err := builders.exchange.Build(exchangeBuildRequest{
-		ownerContext:    ownerContext,
-		actions:         options.OfflineHold,
-		resolver:        accesses,
-		workspaceRoutes: workspaceRoutes,
-		provider:        provider,
-		toolDecisions:   approvals,
-		activities:      activities,
-		hold:            options.ExchangeHold,
+	exchanges, err := buildExchange(exchangeBuildRequest{
+		ownerContext:             ownerContext,
+		actions:                  options.OfflineHold,
+		accounts:                 accounts,
+		provider:                 provider,
+		toolDecisions:            toolDecisions,
+		activities:               activities,
+		identities:               storageResult.store.ConversationIdentityRepository(),
+		contents:                 contents,
+		clock:                    options.Clock,
+		hold:                     options.ExchangeHold,
+		annotations:              clientAnnotations,
+		rawEvidence:              rawEvidence,
+		reportRawEvidenceFailure: runtimeEgress.ReportRawEvidenceFailure,
 	})
 	if err != nil || exchanges == nil {
 		buildErr := err
@@ -438,10 +567,15 @@ func startWithBuilders(
 	}
 	pending.register("Exchange pipeline", exchanges.Shutdown)
 
-	captureRuns, err := builders.capture.Build(ctx, captureBuildRequest{
-		repository: storageResult.store.CaptureRunRepository(),
-		clock:      options.Clock,
-		random:     securityRandom,
+	archiveBarrier := evidencearchive.NewBarrier()
+	captureRuns, err := buildCapture(ctx, captureBuildRequest{
+		repository:     captureRunRepository,
+		clock:          options.Clock,
+		random:         securityRandom,
+		archiveBarrier: archiveBarrier,
+		barrier: captureEvidenceBarrier{
+			raw: rawEvidence, reporter: runtimeEgress,
+		},
 	})
 	if err != nil {
 		return fail("CaptureRun recovery", err)
@@ -453,10 +587,14 @@ func startWithBuilders(
 		)
 	}
 	pending.register("CaptureRun component", captureRuns.Shutdown)
-	manualCaptures, err := builders.manualCapture.Build(ctx, manualCaptureBuildRequest{
-		repository: storageResult.store.ManualCaptureRepository(),
-		clock:      options.Clock,
-		random:     securityRandom,
+	manualCaptures, err := buildManualCapture(ctx, manualCaptureBuildRequest{
+		repository:     manualCaptureRepository,
+		clock:          options.Clock,
+		random:         securityRandom,
+		archiveBarrier: archiveBarrier,
+		barrier: captureEvidenceBarrier{
+			raw: rawEvidence, reporter: runtimeEgress,
+		},
 	})
 	if err != nil {
 		return fail("ManualCapture recovery", err)
@@ -482,21 +620,21 @@ func startWithBuilders(
 	if err != nil {
 		return fail("blind tunnel dialer", err)
 	}
-	proxy, err := builders.proxy.Build(proxyBuildRequest{
-		ownerContext:   ownerContext,
-		admissions:     captureAdmissions,
-		ingress:        accesses,
-		accessRequests: accesses,
-		exchanges:      exchanges,
-		original:       original,
-		certificates:   certificateAuthority,
-		connections:    connections,
-		policy:         connectionRules.Source(),
+	proxy, err := buildProxy(proxyBuildRequest{
+		ownerContext: ownerContext,
+		admissions:   captureAdmissions,
+		assignments:  assignments,
+		exchanges:    exchanges,
+		original:     original,
+		certificates: certificateAuthority,
+		connections:  connections,
+		policy:       connectionRules.Source(),
 		// A rule that asks blocks the connection on the same ApprovalCenter a
 		// tool intent goes to, so a person answers both in one place.
 		approvals:    approvals,
 		blindTunnels: blindTunnels,
 		egressAudit:  runtimeEgress,
+		rawEvidence:  rawEvidence,
 		random:       securityRandom,
 	})
 	if err != nil {
@@ -522,6 +660,7 @@ func startWithBuilders(
 
 	cleanups.register("offline-hold drain", options.OfflineHold.Drain)
 	cleanups.register("Exchange drain", exchanges.Drain)
+	cleanups.register("Capture assignment drain", assignments.Drain)
 	cleanups.register("loopback proxy drain", proxy.Drain)
 	cleanups.register("provider transport", provider.Shutdown)
 	cleanups.register("original-origin transport", original.Shutdown)
@@ -543,6 +682,10 @@ func startWithBuilders(
 		manualCaptures.BeginShutdown()
 		return nil
 	})
+	cleanups.register("Capture assignment admission", func(context.Context) error {
+		assignments.BeginShutdown()
+		return nil
+	})
 	cleanups.register("loopback proxy admission", func(context.Context) error {
 		proxy.BeginShutdown()
 		return nil
@@ -555,42 +698,51 @@ func startWithBuilders(
 	}
 	tracker.commitInitialized(finalState.Revision)
 	return &Runtime{
-		status:            tracker,
-		schemaReader:      storageResult.store.SchemaStateReader(),
-		accesses:          accesses,
-		probeCatalog:      accesses,
-		credentials:       credentials,
-		workspaceIdentity: workspaceIdentity,
-		workspaceRoutes:   workspaceRoutes,
-		activities:        activities,
-		connections:       connections,
-		egress:            runtimeEgress,
-		egressCompletion:  runtimeEgress,
-		approvals:         approvals,
-		connectionRules:   connectionRules,
-		monitor:           monitor,
-		provider:          provider,
-		original:          original,
-		exchanges:         exchanges,
-		captureRuns:       captureRuns,
-		manualCaptures:    manualCaptures,
-		localCA:           certificateAuthority,
-		proxy:             proxy,
-		offlineHold:       options.OfflineHold,
-		resumeProber:      resumeProber,
-		cleanups:          cleanups,
-		clock:             options.Clock,
-		timeout:           options.Lifecycle,
-		shutdownDone:      make(chan struct{}),
+		status:             tracker,
+		schemaReader:       storageResult.store.SchemaStateReader(),
+		environments:       environments,
+		assignments:        assignments,
+		workspaceIdentity:  workspaceIdentity,
+		activities:         activities,
+		conversationIDs:    storageResult.store.ConversationIdentityRepository(),
+		conversationWriter: storageResult.store.ConversationProjectionWriter(),
+		contents:           contents,
+		connections:        connections,
+		egress:             runtimeEgress,
+		egressCompletion:   runtimeEgress,
+		endpoints:          endpoints,
+		accounts:           accounts,
+		codeLibrary:        codeLibrary,
+		egressProfiles:     egressProfiles,
+		runtimeUsers:       runtimeUsers,
+		approvals:          approvals,
+		connectionRules:    connectionRules,
+		monitor:            monitor,
+		rawEvidence:        rawEvidence,
+		evidenceArchive:    storageResult.store,
+		archiveBarrier:     archiveBarrier,
+		provider:           provider,
+		original:           original,
+		exchanges:          exchanges,
+		captureRuns:        captureRuns,
+		manualCaptures:     manualCaptures,
+		localCA:            certificateAuthority,
+		proxy:              proxy,
+		offlineHold:        options.OfflineHold,
+		resumeProber:       resumeProber,
+		cleanups:           cleanups,
+		clock:              options.Clock,
+		timeout:            options.Lifecycle,
+		shutdownDone:       make(chan struct{}),
 	}, nil
 }
 
 // Status returns an immutable copy of the current runtime state.
 func (r *Runtime) Status() RuntimeStatus {
 	status := r.status.snapshot()
-	status.AccessProjection = r.accesses.ProjectionHealth()
+	status.EnvironmentProjection = r.environments.Health()
 	status.OfflineHold = r.offlineHold.Snapshot()
-	if status.AccessProjection.State == access.ProjectionStateUnavailable &&
+	if status.EnvironmentProjection.State == environment.ProjectionStateUnavailable &&
 		status.State == RuntimeStateInitialized {
 		status.State = RuntimeStateDegraded
 	}
@@ -598,7 +750,7 @@ func (r *Runtime) Status() RuntimeStatus {
 }
 
 // ExchangeExecutor returns the runtime-owned data-plane core. It has no
-// listener and resolves one Access plan for each submitted Exchange.
+// listener and executes one immutable Environment request plan per Exchange.
 func (r *Runtime) ExchangeExecutor() exchange.Executor {
 	return r.exchanges
 }
@@ -615,11 +767,35 @@ func (r *Runtime) CaptureRuns() capturerun.Controller {
 	return r.captureRuns
 }
 
+// CaptureRunActivity exposes only an installation-wide active count for
+// lifecycle operations that affect all managed Captures.
+func (r *Runtime) CaptureRunActivity() capturerun.GlobalActivityReader {
+	return r.captureRuns
+}
+
 // ManualCaptures returns the runtime-owned durable manual capture authority.
 // It has no HTTP exposure until a Host composes an authenticated control
 // adapter through the shared capture-grant issuer.
 func (r *Runtime) ManualCaptures() manualcapture.Controller {
 	return r.manualCaptures
+}
+
+// ManualCaptureActivity exposes only an installation-wide active count for
+// lifecycle operations that affect all local and remote Capture owners.
+func (r *Runtime) ManualCaptureActivity() manualcapture.GlobalActivityReader {
+	return r.manualCaptures
+}
+
+// BeginCaptureMaintenance excludes every Capture creation until release.
+// Existing Captures remain visible so the caller can check them while holding
+// the same admission boundary.
+func (r *Runtime) BeginCaptureMaintenance(
+	ctx context.Context,
+) (func(), error) {
+	if r == nil || r.archiveBarrier == nil || ctx == nil {
+		return nil, evidencearchive.ErrBarrierUnavailable
+	}
+	return r.archiveBarrier.BeginClear(ctx)
 }
 
 // WorkspaceIdentity resolves local working directories into opaque,
@@ -628,15 +804,56 @@ func (r *Runtime) WorkspaceIdentity() workspaceidentity.LocalResolver {
 	return r.workspaceIdentity
 }
 
-// WorkspaceRoutes is the single Core authority for machine-scoped default
-// profile selection inside an already-resolved Access.
-func (r *Runtime) WorkspaceRoutes() workspaceroute.Controller {
-	return r.workspaceRoutes
-}
-
 // Activities returns the runtime-owned durable redacted timeline.
 func (r *Runtime) Activities() activity.Runtime {
 	return r.activities
+}
+
+// ConversationIdentities retains exact, client-owned session and actor IDs
+// independently from retention-bound semantic content.
+func (r *Runtime) ConversationIdentities() activity.ConversationIdentityRepository {
+	return r.conversationIDs
+}
+
+// ConversationProjectionWriter updates only the rebuildable terminal index.
+func (r *Runtime) ConversationProjectionWriter() activity.ConversationProjectionWriter {
+	return r.conversationWriter
+}
+
+// ExchangeContents returns the separate, retention-bound semantic evidence
+// reader. Body-free Activity and egress journals never expose this content.
+func (r *Runtime) ExchangeContents() exchangecontent.Reader {
+	return r.contents
+}
+
+// RawEvidence returns retained HTTP evidence. Search and timeline reads expose
+// metadata; an explicit reveal returns the original retained payload.
+func (r *Runtime) RawEvidence() rawevidence.Reader {
+	return r.rawEvidence
+}
+
+// RawEvidenceStatistics exposes writer health without reading payload bytes.
+// It is useful for diagnostics and for proving that an
+// apparently empty read is not an unflushed or degraded writer.
+func (r *Runtime) RawEvidenceStatistics() rawevidence.Statistics {
+	if r == nil || r.rawEvidence == nil {
+		return rawevidence.Statistics{}
+	}
+	return r.rawEvidence.Statistics()
+}
+
+// EvidenceArchive returns the one transactional boundary that can remove a
+// Capture evidence graph or clear all retained evidence. Hosts expose it only
+// behind an authenticated, confirmed control action.
+func (r *Runtime) EvidenceArchive() resourcedeletion.Archive {
+	return r.evidenceArchive
+}
+
+// EvidenceArchiveBarrier is shared by both Capture creation authorities and
+// the whole-archive clear. A Host must expose the destructive action with this
+// exact runtime-owned instance so holder discovery cannot race a new Capture.
+func (r *Runtime) EvidenceArchiveBarrier() evidencearchive.ClearBarrier {
+	return r.archiveBarrier
 }
 
 // ConnectionEvents returns the durable body-free connection audit boundary.
@@ -648,6 +865,50 @@ func (r *Runtime) ConnectionEvents() connectionevent.Runtime {
 // where each request actually went, which one connection record cannot.
 func (r *Runtime) EgressAttempts() egressaudit.Reader {
 	return r.egress
+}
+
+// ProviderAccounts returns the runtime-owned non-secret account authority.
+// Credentials remain in the Host-selected SecretStore and are never exposed
+// through this interface.
+func (r *Runtime) ProviderAccounts() provideraccount.Controller {
+	return r.accounts
+}
+
+// CodeLibrary returns the published immutable Transform revision authority.
+func (r *Runtime) CodeLibrary() codelibrary.Controller {
+	return r.codeLibrary
+}
+
+// EgressProfiles returns the reusable immutable network-exit authority.
+func (r *Runtime) EgressProfiles() egressprofile.Controller {
+	return r.egressProfiles
+}
+
+// UpstreamEndpoints returns the reusable upstream authority. Every managed
+// ProviderAccount belongs to exactly one Endpoint exposed by this controller.
+func (r *Runtime) UpstreamEndpoints() upstreamendpoint.Controller {
+	return r.endpoints
+}
+
+// FetchEndpointModels discovers models through the same Hold, audit, and
+// transport authority as every other ProductRuntime egress.
+func (r *Runtime) FetchEndpointModels(
+	ctx context.Context,
+	endpoint upstreamendpoint.Endpoint,
+	credential providerauth.Lease,
+) (*http.Response, error) {
+	if r == nil || r.provider == nil {
+		return nil, errors.New("provider transport is unavailable")
+	}
+	return r.provider.FetchEndpointModels(ctx, endpoint, credential)
+}
+
+// FetchModelsDev reads the fixed metadata directory through ProductRuntime.
+func (r *Runtime) FetchModelsDev(ctx context.Context) (*http.Response, error) {
+	if r == nil || r.provider == nil {
+		return nil, errors.New("provider transport is unavailable")
+	}
+	return r.provider.FetchModelsDev(ctx)
 }
 
 // ToolApprovals returns the durable interactive tool decision authority used
@@ -688,56 +949,43 @@ func (r *Runtime) ProxyHandler() http.Handler {
 }
 
 // SchemaStateReader returns the SQLite-backed initialization-state reader.
-// It is distinct from the Access aggregate SnapshotResolver.
+// It is distinct from the Environment aggregate SnapshotResolver.
 func (r *Runtime) SchemaStateReader() runtimepersistence.SchemaStateReader {
 	return r.schemaReader
 }
 
-// AccessWriter returns the serialized Access aggregate mutation boundary.
-func (r *Runtime) AccessWriter() access.Writer {
-	return r.accesses
+// Environments is the single editable configuration authority. Publishing a
+// revision updates the immutable projection only after Capture transition
+// coordination has reached its declared boundary.
+func (r *Runtime) Environments() environment.Controller {
+	return r.environments
 }
 
-// AccessDeleter returns the preview-confirm-drain deletion boundary. It is
-// separate from Writer so a control surface cannot mistake an aggregate write
-// for authority to retire credentials and durable workspace references.
-func (r *Runtime) AccessDeleter() access.Deleter {
-	return r.accesses
+// RuntimeUsers owns server-created human identities and their revocable Login
+// Sessions. It is deliberately separate from upstream Provider Accounts.
+func (r *Runtime) RuntimeUsers() *runtimeuser.Manager {
+	if r == nil {
+		return nil
+	}
+	return r.runtimeUsers
 }
 
-// AccessCatalog returns the durable editable Access aggregates. Unlike the
-// active SnapshotResolver, it also includes draft and disabled Accesses.
-func (r *Runtime) AccessCatalog() access.AggregateCatalog {
-	return r.accesses
+// EnvironmentResolver returns the process-local immutable Environment
+// projection consumed by Capture assignment and request planning.
+func (r *Runtime) EnvironmentResolver() environment.SnapshotResolver {
+	return r.environments
 }
 
-// Credentials returns the write-only credential control boundary bound to the
-// active Access plan and host SecretStore.
-func (r *Runtime) Credentials() accesscredential.Controller {
-	return r.credentials
+// CaptureAssignments owns the mutable Capture-to-Environment choice. It is
+// intentionally separate from Environment configuration and request routing.
+func (r *Runtime) CaptureAssignments() captureassignment.Controller {
+	return r.assignments
 }
 
-// SnapshotResolver returns the current process-local Access projection.
-func (r *Runtime) SnapshotResolver() access.SnapshotResolver {
-	return r.accesses
-}
-
-// ActiveClientAuthorities returns the enabled exact AgentEndpoint authorities
-// used to remove dangerous NO_PROXY bypasses from captured child environments.
-func (r *Runtime) ActiveClientAuthorities() ([]string, error) {
-	return r.accesses.ActiveClientAuthorities()
-}
-
-// ActiveAccessPlans returns one atomically observed immutable active-plan set.
-// It is used by Host-owned CaptureRun grant composition, not by the UI.
-func (r *Runtime) ActiveAccessPlans() ([]access.AccessPlanSnapshot, error) {
-	return r.accesses.ActiveAccessPlans()
-}
-
-// AccessProjectionHealth reports whether process-local Access snapshots can be
-// trusted. It is an internal health signal, not product readiness.
-func (r *Runtime) AccessProjectionHealth() access.ProjectionHealth {
-	return r.accesses.ProjectionHealth()
+// EnvironmentProjectionHealth reports whether published Environment
+// snapshots can be trusted. It is an internal health signal, not readiness.
+func (r *Runtime) EnvironmentProjectionHealth() environment.ProjectionHealth {
+	return r.environments.Health()
 }
 
 // Shutdown starts one bounded LIFO shutdown and waits for either that result or

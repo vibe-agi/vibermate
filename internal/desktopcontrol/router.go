@@ -9,6 +9,7 @@ import (
 	"sync/atomic"
 
 	"github.com/vibe-agi/vibermate/internal/controlprincipal"
+	"github.com/vibe-agi/vibermate/internal/servercontrol"
 )
 
 type RouterOptions struct {
@@ -20,6 +21,7 @@ type RouterOptions struct {
 	CLIControl       http.Handler
 	ManualCaptures   ManualCaptureHandler
 	DesktopPrincipal controlprincipal.Principal
+	ServerManagement http.Handler
 }
 
 type ManualCaptureHandler interface {
@@ -39,6 +41,7 @@ type Router struct {
 	cliControl       http.Handler
 	manualCaptures   ManualCaptureHandler
 	desktopPrincipal controlprincipal.Principal
+	serverManagement http.Handler
 	closing          atomic.Bool
 }
 
@@ -85,6 +88,7 @@ func NewRouter(options RouterOptions) (*Router, error) {
 		cliControl:       options.CLIControl,
 		manualCaptures:   options.ManualCaptures,
 		desktopPrincipal: options.DesktopPrincipal,
+		serverManagement: options.ServerManagement,
 	}, nil
 }
 
@@ -204,12 +208,39 @@ func (router *Router) ServeHTTP(
 		)
 		return
 	}
+	if serverManagementPath(request.URL.Path) && router.serverManagement != nil {
+		scope := serverManagementScope(request.Method)
+		if scope == "" || !router.authenticator.Authorize(request, scope) {
+			writeProblem(writer, http.StatusUnauthorized, ReasonUnauthorized)
+			return
+		}
+		request.Header.Del("Authorization")
+		router.serverManagement.ServeHTTP(writer, request)
+		return
+	}
 	scope := router.application.RequiredScope(request)
 	if scope == "" || !router.authenticator.Authorize(request, scope) {
 		writeProblem(writer, http.StatusUnauthorized, ReasonUnauthorized)
 		return
 	}
 	router.application.ServeHTTP(writer, request)
+}
+
+func serverManagementPath(path string) bool {
+	return path == servercontrol.ServerAccessPath ||
+		path == servercontrol.RuntimeUsersPath ||
+		strings.HasPrefix(path, servercontrol.RuntimeUsersPath+"/")
+}
+
+func serverManagementScope(method string) Scope {
+	switch method {
+	case http.MethodGet:
+		return ScopeRead
+	case http.MethodPost, http.MethodPatch:
+		return ScopeWrite
+	default:
+		return ""
+	}
 }
 
 func (router *Router) validTransport(request *http.Request) bool {

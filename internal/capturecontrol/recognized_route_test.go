@@ -7,9 +7,13 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/vibe-agi/vibermate/internal/captureassignment"
 	"github.com/vibe-agi/vibermate/internal/capturecontrol"
 	"github.com/vibe-agi/vibermate/internal/capturegrant"
+	"github.com/vibe-agi/vibermate/internal/captureidentity"
 	"github.com/vibe-agi/vibermate/internal/clientadapter"
+	"github.com/vibe-agi/vibermate/internal/clienttarget"
+	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/toolapproval"
 )
 
@@ -63,6 +67,53 @@ func (versionNamedVerifier) Verify(
 		),
 		ExecutableLabel: "claude",
 	}, nil
+}
+
+type recognizingCodexVerifier struct{}
+
+func (recognizingCodexVerifier) Verify(
+	_ context.Context,
+	request clientadapter.Request,
+) (clientadapter.Detection, error) {
+	canonical, err := filepath.EvalSymlinks(request.ExecutablePath)
+	if err != nil {
+		return clientadapter.Detection{}, err
+	}
+	return clientadapter.Detection{
+		Status:          clientadapter.StatusGeneric,
+		Recognition:     clientadapter.RecognitionRecognized,
+		CatalogRevision: 4,
+		CanonicalPath:   canonical,
+		ExecutableLabel: "codex",
+		Signer: &clientadapter.SignerEvidence{
+			ID: "codex-cli", Revision: 1, CatalogRevision: 4,
+			InstallShape: clientadapter.InstallNPMWrapperNativeChild,
+			LaunchRecipe: clientadapter.LaunchCodexResponsesHTTP,
+			SignedPath:   canonical,
+		},
+	}, nil
+}
+
+type recordingEnvironmentAuthorities struct {
+	fixedAuthorities
+	assigned environment.EnvironmentID
+}
+
+func (authorities *recordingEnvironmentAuthorities) AssignAndResolve(
+	ctx context.Context,
+	capture captureidentity.Reference,
+	environmentID environment.EnvironmentID,
+	source captureassignment.Source,
+	profile clienttarget.Profile,
+) (capturegrant.CaptureAuthoritySet, error) {
+	authorities.assigned = environmentID
+	return authorities.fixedAuthorities.AssignAndResolve(
+		ctx,
+		capture,
+		environmentID,
+		source,
+		profile,
+	)
 }
 
 type fixedApprover struct{ allow bool }
@@ -206,6 +257,85 @@ func TestCaptureRunKeepsInvocationLabelSeparateFromCanonicalExecutable(
 	}
 }
 
+func TestNativeResumeWithoutEnvironmentUsesOrdinaryLaunchSelection(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	const sessionID = "01a02deb-d420-79e2-b0bc-1a9cbdaa643f"
+	authorities := &recordingEnvironmentAuthorities{
+		fixedAuthorities: fixedAuthorities{"api.openai.com:443"},
+	}
+	fixture := newFixture(t, func(options *capturegrant.Options) {
+		options.Verifier = recognizingCodexVerifier{}
+		options.ClientRootApprovals = fixedApprover{allow: true}
+		options.Authorities = authorities
+	})
+	defer fixture.Close(t)
+
+	recorder := fixture.DoJSON(
+		t,
+		http.MethodPost,
+		"/api/v1/capture-runs",
+		fixture.controlCredential,
+		"",
+		capturecontrol.CreateRequest{
+			CWD: fixture.workspace, Command: []string{"codex", "resume", sessionID},
+			ExecutablePath: fixture.executable,
+		},
+	)
+	if recorder.Code != http.StatusCreated {
+		t.Fatalf("create returned %d: %s", recorder.Code, recorder.Body.String())
+	}
+	if authorities.assigned != environment.SystemTransparentID {
+		t.Fatalf(
+			"resume without --env selected %q; want current launch selection %q",
+			authorities.assigned,
+			environment.SystemTransparentID,
+		)
+	}
+}
+
+func TestNativeResumeWithEnvironmentUsesOnlyCurrentLaunchSelection(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	const sessionID = "01a02deb-d420-79e2-b0bc-1a9cbdaa643f"
+	authorities := &recordingEnvironmentAuthorities{
+		fixedAuthorities: fixedAuthorities{"api.openai.com:443"},
+	}
+	fixture := newFixture(t, func(options *capturegrant.Options) {
+		options.Verifier = recognizingCodexVerifier{}
+		options.ClientRootApprovals = fixedApprover{allow: true}
+		options.Authorities = authorities
+	})
+	defer fixture.Close(t)
+
+	recorder := fixture.DoJSON(
+		t,
+		http.MethodPost,
+		"/api/v1/capture-runs",
+		fixture.controlCredential,
+		"",
+		capturecontrol.CreateRequest{
+			EnvironmentID: testEnvironmentID,
+			CWD:           fixture.workspace, Command: []string{"codex", "resume", sessionID},
+			ExecutablePath: fixture.executable,
+		},
+	)
+	if recorder.Code != http.StatusCreated {
+		t.Fatalf("create returned %d: %s", recorder.Code, recorder.Body.String())
+	}
+	if authorities.assigned != testEnvironmentID {
+		t.Fatalf(
+			"resume with --env selected %q; want current launch selection %q",
+			authorities.assigned,
+			testEnvironmentID,
+		)
+	}
+}
+
 func (fixture *fixture) createRun(t *testing.T) capturecontrol.LaunchGrant {
 	t.Helper()
 
@@ -216,6 +346,7 @@ func (fixture *fixture) createRun(t *testing.T) capturecontrol.LaunchGrant {
 		fixture.controlCredential,
 		"",
 		capturecontrol.CreateRequest{
+			EnvironmentID:  testEnvironmentID,
 			CWD:            fixture.workspace,
 			Command:        []string{"claude"},
 			ExecutablePath: fixture.executable,

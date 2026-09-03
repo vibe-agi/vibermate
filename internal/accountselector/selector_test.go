@@ -1,0 +1,244 @@
+package accountselector
+
+import (
+	"context"
+	"errors"
+	"net/http"
+	"testing"
+	"time"
+)
+
+func TestPublishedSelectorChoosesOneFrozenAccountFromReadOnlyTurn(t *testing.T) {
+	program, err := Compile(Policy{JavaScript: `
+if (runtime.user.name !== "jack" || runtime.workspace.label !== "vibermate") {
+  throw new Error("unexpected runtime");
+}
+if (request.method !== "POST" || request.path !== "/v1/messages") {
+  throw new Error("unexpected request");
+}
+if (request.headers["anthropic-beta"][0] !== "sample-beta") {
+  throw new Error("unexpected protocol Header");
+}
+let readOnly = false;
+try { request.body = "forged"; } catch (_) { readOnly = true; }
+if (!readOnly) throw new Error("request is mutable");
+selection.accountId = request.body.includes("premium") ? accounts[1].id : accounts[0].id;
+`}, DefaultLimits())
+	if err != nil {
+		t.Fatalf("Compile() error = %v", err)
+	}
+	turn, err := program.NewTurn(TurnOptions{
+		Runtime: RuntimeMetadata{
+			LocalUserName: "jack", WorkspaceLabel: "vibermate",
+			TurnStartedAt: time.Date(2026, 8, 28, 12, 0, 0, 0, time.UTC),
+		},
+		Accounts: []Account{
+			{ID: "account.basic", DisplayName: "Basic"},
+			{ID: "account.premium", DisplayName: "Premium"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewTurn() error = %v", err)
+	}
+	request := Request{
+		Method: "POST", Path: "/v1/messages",
+		Headers: http.Header{"Anthropic-Beta": {"sample-beta"}},
+		Body:    []byte(`{"tier":"premium"}`),
+	}
+	selection, err := turn.Select(context.Background(), request)
+	if err != nil {
+		t.Fatalf("Select() error = %v", err)
+	}
+	if selection.AccountID != "account.premium" {
+		t.Fatalf("AccountID = %q, want account.premium", selection.AccountID)
+	}
+
+	// An internal retry of the same logical Turn reuses the decision rather
+	// than executing user JavaScript again.
+	again, err := turn.Select(context.Background(), request)
+	if err != nil || again != selection {
+		t.Fatalf("second Select() = %#v, %v, want %#v", again, err, selection)
+	}
+	request.Body = []byte(`{"tier":"basic"}`)
+	if _, err := turn.Select(context.Background(), request); !errors.Is(err, ErrExecutionFailed) {
+		t.Fatalf("different second Select() error = %v, want ErrExecutionFailed", err)
+	}
+}
+
+func TestPublishedSelectorUsesReadOnlyLoginUsernameInsteadOfClientClaims(t *testing.T) {
+	program, err := Compile(Policy{JavaScript: `
+if (runtime.user.name !== "local-os-user") throw new Error("local user changed");
+let readOnly = false;
+try { runtime.login.username = "mallory"; } catch (_) { readOnly = true; }
+if (!readOnly || runtime.login.username !== "alice") {
+  throw new Error("login username is mutable");
+}
+selection.accountId = runtime.login.username === "alice"
+  ? "account.alice"
+  : "account.other";
+`}, DefaultLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	turn, err := program.NewTurn(TurnOptions{
+		Runtime: RuntimeMetadata{
+			LocalUserName: "local-os-user", LoginUsername: "alice",
+		},
+		Accounts: []Account{
+			{ID: "account.alice", DisplayName: "Alice"},
+			{ID: "account.other", DisplayName: "Other"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	selection, err := turn.Select(context.Background(), Request{
+		Method: "POST", Path: "/v1/messages",
+		Body: []byte(`{"runtime":{"login":{"username":"mallory"}}}`),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if selection.AccountID != "account.alice" {
+		t.Fatalf("AccountID = %q, want account.alice", selection.AccountID)
+	}
+}
+
+func TestPublishedSelectorFailsClosedWithoutLoginUsername(t *testing.T) {
+	program, err := Compile(Policy{JavaScript: `
+if (!runtime.login.username) throw new Error("ViberMate login is required");
+selection.accountId = accounts[0].id;
+`}, DefaultLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	turn, err := program.NewTurn(TurnOptions{
+		Accounts: []Account{{ID: "account.allowed", DisplayName: "Allowed"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = turn.Select(context.Background(), Request{
+		Method: "POST", Path: "/v1/messages", Body: []byte(`{}`),
+	})
+	if !errors.Is(err, ErrExecutionFailed) {
+		t.Fatalf("Select() error = %v, want ErrExecutionFailed", err)
+	}
+}
+
+func TestPublishedSelectorDoesNotExposeAnUnprovenTurnIndex(t *testing.T) {
+	program, err := Compile(Policy{JavaScript: `
+if ("index" in runtime.turn) throw new Error("unproven Turn index exposed");
+selection.accountId = accounts[0].id;
+`}, DefaultLimits())
+	if err != nil {
+		t.Fatalf("Compile() error = %v", err)
+	}
+	turn, err := program.NewTurn(TurnOptions{
+		Runtime:  RuntimeMetadata{TurnStartedAt: time.Date(2026, 8, 28, 12, 0, 0, 0, time.UTC)},
+		Accounts: []Account{{ID: "account.allowed", DisplayName: "Allowed"}},
+	})
+	if err != nil {
+		t.Fatalf("NewTurn() error = %v", err)
+	}
+	selection, err := turn.Select(context.Background(), Request{
+		Method: "POST", Path: "/v1/messages", Body: []byte(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("Select() error = %v", err)
+	}
+	if selection.AccountID != "account.allowed" {
+		t.Fatalf("AccountID = %q, want account.allowed", selection.AccountID)
+	}
+}
+
+func TestPublishedSelectorRejectsHeadersUnavailableInProduction(t *testing.T) {
+	program, err := Compile(Policy{JavaScript: `selection.accountId = accounts[0].id;`}, DefaultLimits())
+	if err != nil {
+		t.Fatalf("Compile() error = %v", err)
+	}
+	turn, err := program.NewTurn(TurnOptions{
+		Accounts: []Account{{ID: "account.allowed", DisplayName: "Allowed"}},
+	})
+	if err != nil {
+		t.Fatalf("NewTurn() error = %v", err)
+	}
+	_, err = turn.Select(context.Background(), Request{
+		Method: "POST", Path: "/v1/messages", Body: []byte(`{}`),
+		Headers: http.Header{"X-Name": {"private"}},
+	})
+	if !errors.Is(err, ErrExecutionFailed) {
+		t.Fatalf("Select() error = %v, want ErrExecutionFailed", err)
+	}
+}
+
+func TestPublishedSelectorFailsClosedOutsideFrozenAccounts(t *testing.T) {
+	program, err := Compile(Policy{
+		JavaScript: `selection.accountId = "account.foreign";`,
+	}, DefaultLimits())
+	if err != nil {
+		t.Fatalf("Compile() error = %v", err)
+	}
+	turn, err := program.NewTurn(TurnOptions{
+		Accounts: []Account{{ID: "account.allowed", DisplayName: "Allowed"}},
+	})
+	if err != nil {
+		t.Fatalf("NewTurn() error = %v", err)
+	}
+	_, err = turn.Select(context.Background(), Request{
+		Method: "POST", Path: "/v1/responses", Body: []byte(`{}`),
+	})
+	if !errors.Is(err, ErrInvalidSelection) {
+		t.Fatalf("Select() error = %v, want ErrInvalidSelection", err)
+	}
+}
+
+func TestPublishedSelectorFailsClosedWhenAccountIDAccessorThrows(t *testing.T) {
+	program, err := Compile(Policy{JavaScript: `
+Object.defineProperty(selection, "accountId", {
+  get() { throw new Error("do not escape JavaScript"); }
+});
+`}, DefaultLimits())
+	if err != nil {
+		t.Fatalf("Compile() error = %v", err)
+	}
+	turn, err := program.NewTurn(TurnOptions{
+		Accounts: []Account{{ID: "account.allowed", DisplayName: "Allowed"}},
+	})
+	if err != nil {
+		t.Fatalf("NewTurn() error = %v", err)
+	}
+	_, err = turn.Select(context.Background(), Request{
+		Method: "POST", Path: "/v1/responses", Body: []byte(`{}`),
+	})
+	if !errors.Is(err, ErrExecutionFailed) {
+		t.Fatalf("Select() error = %v, want ErrExecutionFailed", err)
+	}
+}
+
+func TestPublishedSelectorStopsAtTheProgramLimitWithoutACallerDeadline(t *testing.T) {
+	t.Parallel()
+
+	limits := DefaultLimits()
+	limits.MaximumExecutionDuration = 10 * time.Millisecond
+	program, err := Compile(Policy{JavaScript: `for (;;) {}`}, limits)
+	if err != nil {
+		t.Fatalf("Compile(infinite loop) error = %v", err)
+	}
+	turn, err := program.NewTurn(TurnOptions{
+		Accounts: []Account{{ID: "account.allowed", DisplayName: "Allowed"}},
+	})
+	if err != nil {
+		t.Fatalf("NewTurn() error = %v", err)
+	}
+	started := time.Now()
+	_, err = turn.Select(context.Background(), Request{
+		Method: "POST", Path: "/v1/messages", Body: []byte(`{}`),
+	})
+	if !errors.Is(err, ErrExecutionFailed) {
+		t.Fatalf("Select(infinite loop) error = %v, want ErrExecutionFailed", err)
+	}
+	if elapsed := time.Since(started); elapsed >= time.Second {
+		t.Fatalf("Select(infinite loop) elapsed = %v, want bounded execution", elapsed)
+	}
+}

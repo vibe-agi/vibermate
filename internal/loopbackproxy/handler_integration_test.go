@@ -8,7 +8,6 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/base64"
-	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -17,21 +16,22 @@ import (
 	"runtime"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
 	"golang.org/x/net/http2"
 
-	"github.com/vibe-agi/vibermate/internal/access"
-	"github.com/vibe-agi/vibermate/internal/anthropicchat"
 	"github.com/vibe-agi/vibermate/internal/blindtunnel"
 	"github.com/vibe-agi/vibermate/internal/captureadmission"
+	"github.com/vibe-agi/vibermate/internal/captureassignment"
+	"github.com/vibe-agi/vibermate/internal/captureidentity"
 	"github.com/vibe-agi/vibermate/internal/capturerun"
 	"github.com/vibe-agi/vibermate/internal/clientadapter"
 	"github.com/vibe-agi/vibermate/internal/connectionevent"
 	"github.com/vibe-agi/vibermate/internal/connectionpolicy"
 	"github.com/vibe-agi/vibermate/internal/egressaudit"
+	"github.com/vibe-agi/vibermate/internal/egressprofile"
+	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/exchange"
 	"github.com/vibe-agi/vibermate/internal/localca"
 	"github.com/vibe-agi/vibermate/internal/loopbackproxy"
@@ -39,15 +39,16 @@ import (
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
 	"github.com/vibe-agi/vibermate/internal/operationcatalog"
 	"github.com/vibe-agi/vibermate/internal/originaltransport"
-	"github.com/vibe-agi/vibermate/internal/pathcapability"
-	"github.com/vibe-agi/vibermate/internal/productruntime"
-	"github.com/vibe-agi/vibermate/internal/responseschat"
+	"github.com/vibe-agi/vibermate/internal/originidentity"
+	"github.com/vibe-agi/vibermate/internal/protocolspec"
+	"github.com/vibe-agi/vibermate/internal/rawevidence"
 	"github.com/vibe-agi/vibermate/internal/runtimepersistence"
 	"github.com/vibe-agi/vibermate/internal/toolapproval"
+	"github.com/vibe-agi/vibermate/internal/wireprofile"
 	"github.com/vibe-agi/vibermate/internal/workspaceidentity"
 )
 
-func TestLoopbackProxyAuthenticatesMITMAndDispatchesByPathCapability(
+func TestLoopbackProxyAuthenticatesMITMAndDispatchesByEnvironmentOperation(
 	t *testing.T,
 ) {
 	t.Parallel()
@@ -95,11 +96,16 @@ func TestLoopbackProxyAuthenticatesMITMAndDispatchesByPathCapability(
 		t.Fatalf("semantic Exchange requests = %+v", requests)
 	}
 	originalHeaders, hasOriginalHeaders := requests[0].OriginalHeaders()
-	if requests[0].AccessID() != fixture.accessID ||
+	requestPlan := requests[0].RequestPlan()
+	_, hasRoute := requestPlan.UpstreamRoute()
+	if requestPlan.EnvironmentID() != fixture.environment.ID ||
+		requestPlan.EnvironmentRevision() != fixture.environment.Revision ||
+		requestPlan.Endpoint().ID() != fixture.environment.ClientEndpoints[0].ID ||
+		hasRoute ||
 		requests[0].ReplayClass() != exchange.ReplayGenerationCostOnly ||
 		string(requests[0].Body()) != `{"model":"client"}` ||
 		requests[0].CaptureRunRef() != fixture.grant.Run.ID ||
-		requests[0].IngressProfileRef() != "capture-run/"+fixture.grant.Run.ID ||
+		requests[0].CaptureAdmissionRef() != "capture-run/"+fixture.grant.Run.ID ||
 		requests[0].ManualCaptureRef() != "" ||
 		requests[0].ClientUserAgent() != "agent-client/1.0" ||
 		!hasOriginalHeaders ||
@@ -116,25 +122,25 @@ func TestLoopbackProxyAuthenticatesMITMAndDispatchesByPathCapability(
 	if err != nil {
 		t.Fatal(err)
 	}
-	foundAccessRelation := false
+	foundEnvironmentRelation := false
 	for _, record := range connectionPage.Items {
 		if record.ConnectionID != requests[0].ConnectionRef() ||
 			(record.Phase != connectionevent.PhaseConnected &&
 				record.Phase != connectionevent.PhaseClosed) {
 			continue
 		}
-		if record.AccessID != fixture.accessID.String() ||
-			record.AccessName == "" ||
-			record.AccessRevision == 0 ||
-			record.AgentEndpointID == "" ||
-			record.AgentEndpointRevision == 0 ||
+		if record.EnvironmentID != fixture.environment.ID ||
+			record.EnvironmentName == "" ||
+			record.EnvironmentRevision != fixture.environment.Revision ||
+			record.ClientEndpointID != fixture.environment.ClientEndpoints[0].ID ||
+			record.ClientEndpointRevision == 0 ||
 			record.Decryption != connectionevent.DecryptionMITM {
 			t.Fatalf("semantic connection relation = %+v", record)
 		}
-		foundAccessRelation = true
+		foundEnvironmentRelation = true
 	}
-	if !foundAccessRelation {
-		t.Fatal("semantic connection left no Access relation")
+	if !foundEnvironmentRelation {
+		t.Fatal("semantic connection left no Environment relation")
 	}
 
 	wrongMethod := writeInnerRequest(t, secured, &http.Request{
@@ -190,7 +196,7 @@ func TestLoopbackProxyAuthenticatesMITMAndDispatchesByPathCapability(
 
 	opaque := writeInnerRequest(t, secured, &http.Request{
 		Method: http.MethodGet,
-		URL:    mustURL(t, "/v1/unknown?page=1"),
+		URL:    mustURL(t, "/api/hello"),
 		Host:   "api.anthropic.com:443",
 		Header: http.Header{
 			"Authorization":       []string{"Bearer client-owned"},
@@ -205,9 +211,9 @@ func TestLoopbackProxyAuthenticatesMITMAndDispatchesByPathCapability(
 	}
 	original := fixture.original.Request()
 	if original.Kind() != offlinehold.EgressOpaque ||
-		original.Origin().String() != "https://api.anthropic.com:443" ||
-		original.Path() != "/v1/unknown" ||
-		original.RawQuery() != "page=1" ||
+		original.Origin().String() != "https://api.anthropic.com" ||
+		original.Path() != "/api/hello" ||
+		original.RawQuery() != "" ||
 		original.Headers().Get("Authorization") != "Bearer client-owned" ||
 		original.Headers().Get("Proxy-Authorization") != "" ||
 		strings.Contains(original.RequestID(), fixture.grant.Run.ID) {
@@ -249,6 +255,88 @@ func TestLoopbackProxyAuthenticatesMITMAndDispatchesByPathCapability(
 	}
 }
 
+func TestSystemTransparentMITMsKnownCodexOriginWithoutRewritingRequest(t *testing.T) {
+	t.Parallel()
+
+	adapter := fixedCodexAdapterEvidence()
+	fixture := newProxyFixtureForDialectWithPolicyAndRawEvidence(
+		t,
+		protocolspec.DialectOpenAIResponses,
+		&adapter,
+		allowEverythingTestPolicy(t),
+		nil,
+		environment.SystemTransparentID,
+	)
+	defer fixture.Close(t)
+
+	secured := fixture.ConnectTLS(
+		t,
+		fixture.grant.ProxyCapability.Value(),
+		"chatgpt.com:443",
+		"chatgpt.com",
+	)
+	defer secured.Close()
+	const body = `{"model":"gpt-5.6-sol","input":"hello"}`
+	response := writeInnerRequest(t, secured, &http.Request{
+		Method: http.MethodPost,
+		URL:    mustURL(t, "/backend-api/codex/responses"),
+		Host:   "chatgpt.com:443",
+		Header: http.Header{
+			"Authorization": []string{"Bearer client-owned"},
+			"Content-Type":  []string{"application/json"},
+			"User-Agent":    []string{"codex-cli/0.149.0"},
+		},
+		Body:          io.NopCloser(strings.NewReader(body)),
+		ContentLength: int64(len(body)),
+	})
+	responseBody, err := io.ReadAll(response.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = response.Body.Close()
+	if response.StatusCode != http.StatusOK || string(responseBody) != `{"result":"proxied"}` {
+		t.Fatalf("response status=%d body=%q", response.StatusCode, responseBody)
+	}
+
+	requests := fixture.exchanges.Requests()
+	if len(requests) != 1 {
+		t.Fatalf("Exchange requests = %+v", requests)
+	}
+	request := requests[0]
+	plan := request.RequestPlan()
+	headers, hasHeaders := request.OriginalHeaders()
+	_, hasRoute := plan.UpstreamRoute()
+	if plan.EnvironmentID() != environment.SystemTransparentID ||
+		!plan.PreservesOriginalDestination() || hasRoute ||
+		plan.Endpoint().ClientOrigin().String() != "https://chatgpt.com" ||
+		plan.Operation().ID().String() != "openai-codex-responses-create" ||
+		plan.ContentRecording().Mode != environment.ContentRecordingFull ||
+		!hasHeaders || headers.Get("Authorization") != "Bearer client-owned" ||
+		headers.Get("Content-Type") != "application/json" ||
+		string(request.Body()) != body {
+		t.Fatalf("transparent request plan=%+v headers=%v body=%q", plan, headers, request.Body())
+	}
+
+	page, err := fixture.connections.List(
+		context.Background(),
+		connectionevent.PageRequest{Limit: 20},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	foundMITM := false
+	for _, record := range page.Items {
+		if record.EnvironmentID == environment.SystemTransparentID &&
+			record.RequestedHost == "chatgpt.com" &&
+			record.Decryption == connectionevent.DecryptionMITM {
+			foundMITM = true
+		}
+	}
+	if !foundMITM {
+		t.Fatalf("system transparent left no MITM connection evidence: %+v", page.Items)
+	}
+}
+
 func TestLoopbackProxyNegotiatesHTTP2AndPreservesTheRequestProtocol(
 	t *testing.T,
 ) {
@@ -278,7 +366,7 @@ func TestLoopbackProxyNegotiatesHTTP2AndPreservesTheRequestProtocol(
 		RootCAs:    pool,
 		ServerName: "api.anthropic.com",
 		MinVersion: tls.VersionTLS12,
-		NextProtos: []string{string(access.ApplicationProtocolHTTP2)},
+		NextProtos: []string{string(wireprofile.ApplicationProtocolHTTP2)},
 	})
 	if err := secured.Handshake(); err != nil {
 		_ = secured.Close()
@@ -320,59 +408,30 @@ func TestLoopbackProxyNegotiatesHTTP2AndPreservesTheRequestProtocol(
 	}
 	requests := fixture.exchanges.Requests()
 	if len(requests) != 1 ||
-		requests[0].ClientHTTPProtocol() != access.ApplicationProtocolHTTP2 ||
+		requests[0].ClientHTTPProtocol() != wireprofile.ApplicationProtocolHTTP2 ||
 		requests[0].ClientUserAgent() != "agent-h2/1.0" {
 		t.Fatalf("HTTP/2 Exchange requests = %+v", requests)
 	}
 }
 
-func TestLoopbackProxyNegotiatesOnlyAProtocolTheAccessCanPreserve(
+func TestLoopbackProxyPreservesHTTP1WithoutALPN(
 	t *testing.T,
 ) {
 	t.Parallel()
 
 	fixture := newProxyFixture(t)
 	defer fixture.Close(t)
-	fixture.ingress.SetProtocols([]access.ApplicationProtocol{
-		access.ApplicationProtocolHTTP1,
-	})
-	connection, response := fixture.Connect(
+	secured := fixture.ConnectTLS(
 		t,
 		fixture.grant.ProxyCapability.Value(),
 		"api.anthropic.com:443",
+		"api.anthropic.com",
 	)
-	if response.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(response.Body)
-		_ = response.Body.Close()
-		_ = connection.Close()
-		t.Fatalf("CONNECT status=%d body=%s", response.StatusCode, body)
-	}
-	_ = response.Body.Close()
-	pool := x509.NewCertPool()
-	if !pool.AppendCertsFromPEM(
-		fixture.authority.Certificate().CertificatePEM(),
-	) {
-		t.Fatal("append local Root")
-	}
-	secured := tls.Client(connection, &tls.Config{
-		RootCAs:    pool,
-		ServerName: "api.anthropic.com",
-		MinVersion: tls.VersionTLS12,
-		NextProtos: []string{
-			string(access.ApplicationProtocolHTTP2),
-			string(access.ApplicationProtocolHTTP1),
-		},
-	})
-	if err := secured.Handshake(); err != nil {
-		_ = secured.Close()
-		t.Fatalf("TLS handshake: %v", err)
-	}
 	defer secured.Close()
-	if got := secured.ConnectionState().NegotiatedProtocol; got !=
-		string(access.ApplicationProtocolHTTP1) {
+	if got := secured.ConnectionState().NegotiatedProtocol; got != "" {
 		t.Fatalf("negotiated protocol = %q", got)
 	}
-	response = writeInnerRequest(t, secured, &http.Request{
+	response := writeInnerRequest(t, secured, &http.Request{
 		Method: http.MethodPost,
 		URL:    mustURL(t, "/v1/messages"),
 		Host:   "api.anthropic.com:443",
@@ -385,7 +444,7 @@ func TestLoopbackProxyNegotiatesOnlyAProtocolTheAccessCanPreserve(
 	_ = response.Body.Close()
 	requests := fixture.exchanges.Requests()
 	if len(requests) != 1 ||
-		requests[0].ClientHTTPProtocol() != access.ApplicationProtocolHTTP1 {
+		requests[0].ClientHTTPProtocol() != wireprofile.ApplicationProtocolHTTP1 {
 		t.Fatalf("preserved requests = %+v", requests)
 	}
 }
@@ -485,50 +544,63 @@ func TestLoopbackProxyReturnsBounded426ForResponsesWebSocketUpgrade(
 ) {
 	t.Parallel()
 
-	fixture := newResponsesProxyFixture(t)
-	defer fixture.Close(t)
-	secured := fixture.ConnectTLS(
-		t,
-		fixture.grant.ProxyCapability.Value(),
-		"api.openai.com:443",
-		"api.openai.com",
-	)
-	defer secured.Close()
-	response := writeInnerRequest(t, secured, &http.Request{
-		Method: http.MethodGet,
-		URL:    mustURL(t, "/v1/responses"),
-		Host:   "api.openai.com:443",
-		Header: http.Header{
-			"Connection":            []string{"keep-alive, Upgrade"},
-			"Upgrade":               []string{"websocket"},
-			"Sec-Websocket-Version": []string{"13"},
-		},
-	})
-	body, err := io.ReadAll(io.LimitReader(response.Body, 1025))
-	if err != nil {
-		t.Fatal(err)
-	}
-	_ = response.Body.Close()
-	if response.StatusCode != http.StatusUpgradeRequired ||
-		len(body) == 0 ||
-		len(body) > 1024 ||
-		!bytes.Contains(
-			body,
-			[]byte(`"reasonCode":"responses_websocket_unsupported"`),
-		) ||
-		len(fixture.exchanges.Requests()) != 0 ||
-		fixture.original.Count() != 0 {
-		t.Fatalf(
-			"WebSocket response status=%d body=%s Exchanges=%d original=%d",
-			response.StatusCode,
-			body,
-			len(fixture.exchanges.Requests()),
-			fixture.original.Count(),
-		)
+	for _, path := range []string{
+		"/v1/responses",
+		"/backend-api/codex/responses",
+	} {
+		path := path
+		t.Run(path, func(t *testing.T) {
+			t.Parallel()
+
+			// The operation catalog owns this response. It must not depend on
+			// exact release evidence because current publisher-signed Codex
+			// builds are intentionally admitted without frozen build features.
+			fixture := newGenericResponsesProxyFixture(t)
+			defer fixture.Close(t)
+			secured := fixture.ConnectTLS(
+				t,
+				fixture.grant.ProxyCapability.Value(),
+				"api.openai.com:443",
+				"api.openai.com",
+			)
+			defer secured.Close()
+			response := writeInnerRequest(t, secured, &http.Request{
+				Method: http.MethodGet,
+				URL:    mustURL(t, path),
+				Host:   "api.openai.com:443",
+				Header: http.Header{
+					"Connection":            []string{"keep-alive, Upgrade"},
+					"Upgrade":               []string{"websocket"},
+					"Sec-Websocket-Version": []string{"13"},
+				},
+			})
+			body, err := io.ReadAll(io.LimitReader(response.Body, 1025))
+			if err != nil {
+				t.Fatal(err)
+			}
+			_ = response.Body.Close()
+			if response.StatusCode != http.StatusUpgradeRequired ||
+				len(body) == 0 ||
+				len(body) > 1024 ||
+				!bytes.Contains(
+					body,
+					[]byte(`"reasonCode":"responses_websocket_unsupported"`),
+				) ||
+				len(fixture.exchanges.Requests()) != 0 ||
+				fixture.original.Count() != 0 {
+				t.Fatalf(
+					"WebSocket response status=%d body=%s Exchanges=%d original=%d",
+					response.StatusCode,
+					body,
+					len(fixture.exchanges.Requests()),
+					fixture.original.Count(),
+				)
+			}
+		})
 	}
 }
 
-func TestLoopbackProxyDoesNotApplyFixedFallbackToGenericClient(
+func TestLoopbackProxyKeepsUnknownWebSocketPathsFailClosed(
 	t *testing.T,
 ) {
 	t.Parallel()
@@ -544,7 +616,7 @@ func TestLoopbackProxyDoesNotApplyFixedFallbackToGenericClient(
 	defer secured.Close()
 	response := writeInnerRequest(t, secured, &http.Request{
 		Method: http.MethodGet,
-		URL:    mustURL(t, "/v1/responses"),
+		URL:    mustURL(t, "/backend-api/codex/not-responses"),
 		Host:   "api.openai.com:443",
 		Header: http.Header{
 			"Connection": []string{"Upgrade"},
@@ -611,7 +683,7 @@ func TestLoopbackProxyDispatchesExactResponsesHTTPWithTypedEvidence(
 	if response.StatusCode != http.StatusOK ||
 		string(body) != `{"result":"proxied"}` ||
 		len(requests) != 1 ||
-		requests[0].AccessID() != fixture.accessID ||
+		requests[0].RequestPlan().EnvironmentID() != fixture.environment.ID ||
 		requests[0].ReplayClass() != exchange.ReplayGenerationCostOnly ||
 		string(requests[0].Body()) != requestBody {
 		t.Fatalf(
@@ -631,7 +703,7 @@ func TestLoopbackProxyDispatchesExactResponsesHTTPWithTypedEvidence(
 	}
 }
 
-func TestLoopbackProxyKeepsFrozenResponsesEndpointAcrossProviderPlanAdvance(
+func TestLoopbackProxyKeepsLaunchRevisionAfterEnvironmentPublish(
 	t *testing.T,
 ) {
 	t.Parallel()
@@ -646,22 +718,14 @@ func TestLoopbackProxyKeepsFrozenResponsesEndpointAcrossProviderPlanAdvance(
 	)
 	defer secured.Close()
 
-	advancedProjection, _ := testProjectionForDialectRevision(
+	advanced := testEnvironmentForDialectRevision(
 		t,
-		fixture.authority,
-		access.DialectOpenAIResponses,
+		protocolspec.DialectOpenAIResponses,
+		fixture.environment.ID.String(),
 		2,
-		"gpt-provider-revision-two",
+		1,
 	)
-	origin, err := access.NewClientOrigin("https://api.openai.com:443")
-	if err != nil {
-		t.Fatal(err)
-	}
-	advanced, err := advancedProjection.ResolveClientOrigin(origin)
-	if err != nil {
-		t.Fatal(err)
-	}
-	fixture.ingress.Advance(advanced)
+	fixture.publishEnvironment(t, advanced)
 
 	const requestBody = `{"model":"client","input":"hello","stream":false}`
 	response := writeInnerRequest(t, secured, &http.Request{
@@ -678,19 +742,16 @@ func TestLoopbackProxyKeepsFrozenResponsesEndpointAcrossProviderPlanAdvance(
 	}
 	_ = response.Body.Close()
 	requests := fixture.exchanges.Requests()
+	_, hasAdvancedRoute := requests[0].RequestPlan().UpstreamRoute()
 	if response.StatusCode != http.StatusOK ||
 		string(body) != `{"result":"proxied"}` ||
 		len(requests) != 1 ||
-		requests[0].IngressBinding().AccessRevision() != 1 ||
-		advanced.AccessRevision() != 2 ||
-		requests[0].IngressBinding().AgentEndpointID() !=
-			advanced.AgentEndpointID() ||
-		requests[0].IngressBinding().ClientOrigin() !=
-			advanced.ClientOrigin() ||
-		requests[0].IngressBinding().ClientDialect() !=
-			advanced.ClientDialect() {
+		requests[0].RequestPlan().EnvironmentID() != fixture.environment.ID ||
+		requests[0].RequestPlan().EnvironmentRevision() != fixture.environment.Revision ||
+		hasAdvancedRoute ||
+		!requests[0].RequestPlan().PreservesOriginalDestination() {
 		t.Fatalf(
-			"provider-plan advance status=%d body=%s request=%+v current=%+v",
+			"frozen Environment status=%d body=%s request=%+v published=%+v",
 			response.StatusCode,
 			body,
 			requests,
@@ -727,7 +788,7 @@ func TestLoopbackProxyRejectsSNIMismatchAndDrainsHijackedConnections(
 		t.Fatal("SNI mismatch completed TLS handshake")
 	}
 	_ = wrongSNI.Close()
-	ingressID, err := capturerun.IngressProfileID(fixture.grant.Run.ID)
+	ingressID, err := capturerun.AdmissionRef(fixture.grant.Run.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -747,11 +808,11 @@ func TestLoopbackProxyRejectsSNIMismatchAndDrainsHijackedConnections(
 		if len(page.Items) == 1 &&
 			page.Items[0].Phase == connectionevent.PhaseFailed {
 			failed := page.Items[0]
-			if failed.AccessID != fixture.accessID.String() ||
-				failed.AccessName == "" ||
-				failed.AgentEndpointID == "" ||
+			if failed.EnvironmentID != fixture.environment.ID ||
+				failed.EnvironmentName == "" ||
+				failed.ClientEndpointID != fixture.environment.ClientEndpoints[0].ID ||
 				failed.Decryption != connectionevent.DecryptionMITM {
-				t.Fatalf("failed handshake lost its Access relation: %+v", failed)
+				t.Fatalf("failed handshake lost its Environment relation: %+v", failed)
 			}
 			break
 		}
@@ -783,7 +844,7 @@ func TestLoopbackProxyRejectsSNIMismatchAndDrainsHijackedConnections(
 	_ = open.Close()
 }
 
-func TestLoopbackProxyFailsClosedWhenEndpointIsRevokedBeforeClientHello(
+func TestLoopbackProxyKeepsPreClientHelloConnectionOnPublishedRevision(
 	t *testing.T,
 ) {
 	t.Parallel()
@@ -799,7 +860,14 @@ func TestLoopbackProxyFailsClosedWhenEndpointIsRevokedBeforeClientHello(
 		t.Fatalf("CONNECT status = %d", response.StatusCode)
 	}
 	_ = response.Body.Close()
-	fixture.ingress.Revoke()
+	revisionTwo := testEnvironmentForDialectRevision(
+		t,
+		fixture.clientDialect,
+		fixture.environment.ID.String(),
+		2,
+		2,
+	)
+	fixture.publishEnvironment(t, revisionTwo)
 	pool := x509.NewCertPool()
 	if !pool.AppendCertsFromPEM(
 		fixture.authority.Certificate().CertificatePEM(),
@@ -811,16 +879,16 @@ func TestLoopbackProxyFailsClosedWhenEndpointIsRevokedBeforeClientHello(
 		ServerName: "api.anthropic.com",
 		MinVersion: tls.VersionTLS12,
 	})
-	if err := secured.Handshake(); err == nil {
-		t.Fatal("revoked endpoint completed a new TLS handshake")
+	if err := secured.Handshake(); err != nil {
+		t.Fatalf("frozen Capture connection handshake: %v", err)
 	}
 	_ = secured.Close()
 	if len(fixture.exchanges.Requests()) != 0 || fixture.original.Count() != 0 {
-		t.Fatal("revoked pre-ClientHello connection reached a data plane")
+		t.Fatal("obsolete pre-ClientHello connection reached a data plane")
 	}
 }
 
-func TestLoopbackProxyRevalidatesEndpointOnEveryPersistentConnectionRequest(
+func TestLoopbackProxyNewConnectionInRunningCaptureKeepsLaunchRevision(
 	t *testing.T,
 ) {
 	t.Parallel()
@@ -846,7 +914,6 @@ func TestLoopbackProxyRevalidatesEndpointOnEveryPersistentConnectionRequest(
 	} {
 		test := test
 		t.Run(test.name, func(t *testing.T) {
-			t.Parallel()
 			fixture := test.fixture(t)
 			defer fixture.Close(t)
 			host := strings.TrimSuffix(test.authority, ":443")
@@ -856,10 +923,24 @@ func TestLoopbackProxyRevalidatesEndpointOnEveryPersistentConnectionRequest(
 				test.authority,
 				host,
 			)
-			defer secured.Close()
+			incompatible := testEnvironmentForDialectRevision(
+				t,
+				fixture.clientDialect,
+				fixture.environment.ID.String(),
+				2,
+				2,
+			)
+			fixture.publishEnvironment(t, incompatible)
+			_ = secured.Close()
 
-			fixture.ingress.Revoke()
-			response := writeInnerRequest(t, secured, &http.Request{
+			reconnected := fixture.ConnectTLS(
+				t,
+				fixture.grant.ProxyCapability.Value(),
+				test.authority,
+				host,
+			)
+			defer reconnected.Close()
+			response := writeInnerRequest(t, reconnected, &http.Request{
 				Method: http.MethodPost,
 				URL:    mustURL(t, test.path),
 				Host:   test.authority,
@@ -874,28 +955,25 @@ func TestLoopbackProxyRevalidatesEndpointOnEveryPersistentConnectionRequest(
 				t.Fatal(err)
 			}
 			_ = response.Body.Close()
-			if response.StatusCode != http.StatusMisdirectedRequest ||
-				!bytes.Contains(
-					body,
-					[]byte(`"reasonCode":"agent_endpoint_changed"`),
-				) ||
-				!response.Close {
+			requests := fixture.exchanges.Requests()
+			if response.StatusCode != http.StatusOK ||
+				string(body) != `{"result":"proxied"}` ||
+				len(requests) != 1 ||
+				requests[0].RequestPlan().EnvironmentID() != fixture.environment.ID ||
+				requests[0].RequestPlan().EnvironmentRevision() != fixture.environment.Revision {
 				t.Fatalf(
-					"revoked endpoint response status=%d close=%v body=%s",
+					"reconnected response status=%d close=%v body=%s requests=%+v",
 					response.StatusCode,
 					response.Close,
 					body,
+					requests,
 				)
-			}
-			if len(fixture.exchanges.Requests()) != 0 ||
-				fixture.original.Count() != 0 {
-				t.Fatal("revoked persistent connection reached a data plane")
 			}
 		})
 	}
 }
 
-func TestLoopbackProxyPinsAccessUsageForTheWholeInnerRequest(t *testing.T) {
+func TestLoopbackProxyPinsEnvironmentRequestPlanForTheWholeInnerRequest(t *testing.T) {
 	t.Parallel()
 
 	fixture := newProxyFixture(t)
@@ -936,12 +1014,22 @@ func TestLoopbackProxyPinsAccessUsageForTheWholeInnerRequest(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("inner request did not reach the blocked Exchange")
 	}
-	if active := fixture.ingress.activeRequests.Load(); active != 1 {
-		t.Fatalf("active Access request leases = %d, want 1", active)
+	requests := fixture.exchanges.Requests()
+	if len(requests) != 1 ||
+		requests[0].RequestPlan().EnvironmentID() != fixture.environment.ID {
+		t.Fatalf("blocked request plan = %+v", requests)
 	}
-	fixture.ingress.CloseRequestAdmission()
-	if active := fixture.ingress.activeRequests.Load(); active != 1 {
-		t.Fatalf("closing admission released an active request: %d", active)
+	next := testEnvironmentForDialectRevision(
+		t,
+		protocolspec.DialectAnthropicMessages,
+		fixture.environment.ID.String(),
+		2,
+		1,
+	)
+	fixture.publishEnvironment(t, next)
+	requests = fixture.exchanges.Requests()
+	if requests[0].RequestPlan().EnvironmentID() != fixture.environment.ID {
+		t.Fatalf("in-flight request plan changed after switch: %+v", requests[0].RequestPlan())
 	}
 	releaseExchange()
 	result := <-completed
@@ -949,13 +1037,6 @@ func TestLoopbackProxyPinsAccessUsageForTheWholeInnerRequest(t *testing.T) {
 		t.Fatal(result.err)
 	}
 	_ = result.response.Body.Close()
-	deadline := time.Now().Add(time.Second)
-	for fixture.ingress.activeRequests.Load() != 0 {
-		if time.Now().After(deadline) {
-			t.Fatal("Access request lease outlived the completed response")
-		}
-		runtime.Gosched()
-	}
 
 	response := writeInnerRequest(t, secured, &http.Request{
 		Method: http.MethodPost,
@@ -972,44 +1053,107 @@ func TestLoopbackProxyPinsAccessUsageForTheWholeInnerRequest(t *testing.T) {
 		t.Fatal(err)
 	}
 	_ = response.Body.Close()
-	if response.StatusCode != http.StatusMisdirectedRequest ||
-		!response.Close ||
-		!bytes.Contains(body, []byte(`"reasonCode":"agent_endpoint_changed"`)) ||
-		len(fixture.exchanges.Requests()) != 1 {
+	requests = fixture.exchanges.Requests()
+	if response.StatusCode != http.StatusOK ||
+		string(body) != `{"result":"proxied"}` ||
+		len(requests) != 2 ||
+		requests[1].RequestPlan().EnvironmentID() != fixture.environment.ID ||
+		requests[1].RequestPlan().EnvironmentRevision() != fixture.environment.Revision {
 		t.Fatalf(
-			"closed admission status=%d close=%t body=%s exchanges=%d",
+			"post-publish request status=%d close=%t body=%s requests=%+v",
 			response.StatusCode,
 			response.Close,
 			body,
-			len(fixture.exchanges.Requests()),
+			requests,
 		)
 	}
 }
 
 type proxyFixture struct {
-	listener    net.Listener
-	server      *http.Server
-	handler     *loopbackproxy.Handler
-	store       *runtimepersistence.Store
-	runs        *capturerun.Manager
-	manuals     *manualcapture.Manager
-	grant       capturerun.LaunchGrant
-	authority   *localca.Authority
-	exchanges   *exchangeRecorder
-	original    *originalRecorder
-	ingress     *revocableIngress
-	accessID    access.AccessID
-	connections *connectionevent.Manager
-	egress      egressaudit.Repository
-	approvals   *toolapproval.Authority
-	rules       *connectionpolicy.Manager
+	listener      net.Listener
+	server        *http.Server
+	handler       *loopbackproxy.Handler
+	store         *runtimepersistence.Store
+	runs          *capturerun.Manager
+	manuals       *manualcapture.Manager
+	grant         capturerun.LaunchGrant
+	capture       captureidentity.Reference
+	authority     *localca.Authority
+	environments  *proxyEnvironmentResolver
+	assignments   *captureassignment.Manager
+	compiler      environment.Compiler
+	clientDialect protocolspec.Dialect
+	environment   environment.Environment
+	exchanges     *exchangeRecorder
+	original      *originalRecorder
+	connections   *connectionevent.Manager
+	egress        egressaudit.Repository
+	approvals     *toolapproval.Authority
+	rules         *connectionpolicy.Manager
+}
+
+type proxyEnvironmentResolver struct {
+	*environment.AtomicProjection
+	mu      sync.Mutex
+	history map[environment.EnvironmentID]map[environment.Revision]environment.EnvironmentSnapshot
+}
+
+func newProxyEnvironmentResolver(
+	projection *environment.AtomicProjection,
+	snapshots ...environment.EnvironmentSnapshot,
+) *proxyEnvironmentResolver {
+	resolver := &proxyEnvironmentResolver{
+		AtomicProjection: projection,
+		history:          make(map[environment.EnvironmentID]map[environment.Revision]environment.EnvironmentSnapshot),
+	}
+	resolver.remember(snapshots...)
+	return resolver
+}
+
+func (resolver *proxyEnvironmentResolver) remember(snapshots ...environment.EnvironmentSnapshot) {
+	resolver.mu.Lock()
+	defer resolver.mu.Unlock()
+	for _, snapshot := range snapshots {
+		if resolver.history[snapshot.ID()] == nil {
+			resolver.history[snapshot.ID()] = make(map[environment.Revision]environment.EnvironmentSnapshot)
+		}
+		resolver.history[snapshot.ID()][snapshot.Revision()] = snapshot
+	}
+}
+
+func (resolver *proxyEnvironmentResolver) Publish(snapshot environment.EnvironmentSnapshot) error {
+	if err := resolver.AtomicProjection.Publish(snapshot); err != nil {
+		return err
+	}
+	resolver.remember(snapshot)
+	return nil
+}
+
+func (resolver *proxyEnvironmentResolver) ResolveRevision(
+	ctx context.Context,
+	id environment.EnvironmentID,
+	revision environment.Revision,
+) (environment.EnvironmentSnapshot, error) {
+	if ctx == nil {
+		return environment.EnvironmentSnapshot{}, environment.ErrInvalidEnvironment
+	}
+	if err := ctx.Err(); err != nil {
+		return environment.EnvironmentSnapshot{}, err
+	}
+	resolver.mu.Lock()
+	defer resolver.mu.Unlock()
+	snapshot, exists := resolver.history[id][revision]
+	if !exists {
+		return environment.EnvironmentSnapshot{}, environment.ErrEnvironmentNotFound
+	}
+	return snapshot, nil
 }
 
 func newProxyFixture(t *testing.T) *proxyFixture {
 	t.Helper()
 	return newProxyFixtureForDialect(
 		t,
-		access.DialectAnthropicMessages,
+		protocolspec.DialectAnthropicMessages,
 		nil,
 	)
 }
@@ -1019,7 +1163,7 @@ func newResponsesProxyFixture(t *testing.T) *proxyFixture {
 	adapter := fixedCodexAdapterEvidence()
 	return newProxyFixtureForDialect(
 		t,
-		access.DialectOpenAIResponses,
+		protocolspec.DialectOpenAIResponses,
 		&adapter,
 	)
 }
@@ -1028,14 +1172,13 @@ func newGenericResponsesProxyFixture(t *testing.T) *proxyFixture {
 	t.Helper()
 	return newProxyFixtureForDialect(
 		t,
-		access.DialectOpenAIResponses,
+		protocolspec.DialectOpenAIResponses,
 		nil,
 	)
 }
 
 // newProxyFixtureWithPolicy exercises a specific rule set. The default fixture
-// allows every connection so the existing suite keeps testing what it was
-// written to test; production ships a deny default.
+// uses the same Monitor mode a fresh production installation uses.
 func newProxyFixtureWithPolicy(
 	t *testing.T,
 	policy connectionpolicy.Snapshot,
@@ -1043,7 +1186,7 @@ func newProxyFixtureWithPolicy(
 	t.Helper()
 	return newProxyFixtureForDialectWithPolicy(
 		t,
-		access.DialectAnthropicMessages,
+		protocolspec.DialectAnthropicMessages,
 		nil,
 		policy,
 	)
@@ -1054,23 +1197,14 @@ func allowEverythingTestPolicy(t *testing.T) connectionpolicy.Snapshot {
 
 	set := connectionpolicy.Snapshot{
 		Revision: 1,
-		Rules: []connectionpolicy.Rule{{
-			ID:       "test-allow-all",
-			Decision: connectionpolicy.DecisionAllow,
-			Match:    connectionpolicy.MatchAny(),
-		}},
-		Default: connectionpolicy.Rule{
-			ID:       "test-default-deny",
-			Decision: connectionpolicy.DecisionDeny,
-			Match:    connectionpolicy.MatchAny(),
-		},
+		Mode:     connectionpolicy.ModeMonitor,
 	}
 	return set
 }
 
 func newProxyFixtureForDialect(
 	t *testing.T,
-	clientDialect access.Dialect,
+	clientDialect protocolspec.Dialect,
 	adapter *clientadapter.Evidence,
 ) *proxyFixture {
 	t.Helper()
@@ -1084,9 +1218,42 @@ func newProxyFixtureForDialect(
 
 func newProxyFixtureForDialectWithPolicy(
 	t *testing.T,
-	clientDialect access.Dialect,
+	clientDialect protocolspec.Dialect,
 	adapter *clientadapter.Evidence,
 	policy connectionpolicy.Snapshot,
+) *proxyFixture {
+	return newProxyFixtureForDialectWithPolicyAndRawEvidence(
+		t,
+		clientDialect,
+		adapter,
+		policy,
+		nil,
+		"",
+	)
+}
+
+func newProxyFixtureWithRawEvidence(
+	t *testing.T,
+	raw rawevidence.RequestRecorder,
+) *proxyFixture {
+	t.Helper()
+	return newProxyFixtureForDialectWithPolicyAndRawEvidence(
+		t,
+		protocolspec.DialectAnthropicMessages,
+		nil,
+		allowEverythingTestPolicy(t),
+		raw,
+		"",
+	)
+}
+
+func newProxyFixtureForDialectWithPolicyAndRawEvidence(
+	t *testing.T,
+	clientDialect protocolspec.Dialect,
+	adapter *clientadapter.Evidence,
+	policy connectionpolicy.Snapshot,
+	raw rawevidence.RequestRecorder,
+	assignmentEnvironmentID environment.EnvironmentID,
 ) *proxyFixture {
 	t.Helper()
 	directory := t.TempDir()
@@ -1134,18 +1301,54 @@ func newProxyFixtureForDialectWithPolicy(
 	if err != nil {
 		t.Fatal(err)
 	}
-	projection, accessID := testProjectionForDialect(
-		t,
-		authority,
-		clientDialect,
+	capture, err := captureidentity.New(
+		captureidentity.KindManagedRun,
+		grant.Run.ID,
 	)
-	ingress := &revocableIngress{delegate: projection}
-	operations, err := operationcatalog.BuiltIn()
 	if err != nil {
 		t.Fatal(err)
 	}
-	paths, err := pathcapability.NewCatalog(operations.Definitions())
+	compiler := testEnvironmentCompiler(t, clientDialect)
+	aggregate := testEnvironmentForDialectRevision(
+		t,
+		clientDialect,
+		"environment-proxy",
+		1,
+		1,
+	)
+	snapshot, err := compiler.Compile(aggregate)
 	if err != nil {
+		t.Fatal(err)
+	}
+	system, err := compiler.CompileSystemTransparent()
+	if err != nil {
+		t.Fatal(err)
+	}
+	projection := environment.NewAtomicProjection()
+	if err := projection.Restore(system, []environment.EnvironmentSnapshot{snapshot}); err != nil {
+		t.Fatal(err)
+	}
+	resolver := newProxyEnvironmentResolver(projection, system, snapshot)
+	assignments, err := captureassignment.NewManager(captureassignment.Options{
+		Repository:   store.CaptureAssignmentRepository(),
+		Environments: resolver,
+		Activity:     proxyCaptureActivity{},
+		Clock:        captureassignment.SystemClock{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if assignmentEnvironmentID == "" {
+		assignmentEnvironmentID = snapshot.ID()
+	}
+	if _, err := assignments.Create(
+		context.Background(),
+		captureassignment.CreateCommand{
+			Capture:       capture,
+			EnvironmentID: assignmentEnvironmentID,
+			Source:        captureassignment.SourceLaunch,
+		},
+	); err != nil {
 		t.Fatal(err)
 	}
 	exchanges := &exchangeRecorder{}
@@ -1163,7 +1366,7 @@ func newProxyFixtureForDialectWithPolicy(
 		context.Background(),
 		connectionpolicy.ManagerOptions{
 			Repository: store.ConnectionRuleRepository(),
-			Clock:      productruntime.SystemClock{},
+			Clock:      toolapproval.SystemClock{},
 			Shipped:    policy,
 		},
 	)
@@ -1174,7 +1377,7 @@ func newProxyFixtureForDialectWithPolicy(
 		context.Background(),
 		toolapproval.Options{
 			Repository: store.ToolApprovalRepository(),
-			Clock:      productruntime.SystemClock{},
+			Clock:      toolapproval.SystemClock{},
 			Random:     rand.Reader,
 			Config:     toolapproval.DefaultConfig(),
 			Remembered: rules,
@@ -1190,9 +1393,7 @@ func newProxyFixtureForDialectWithPolicy(
 	handler, err := loopbackproxy.New(loopbackproxy.Options{
 		OwnerContext:     context.Background(),
 		Admissions:       admissions,
-		Ingress:          ingress,
-		AccessRequests:   ingress,
-		Paths:            paths,
+		Assignments:      assignments,
 		Exchanges:        exchanges,
 		Original:         original,
 		Certificates:     authority,
@@ -1201,6 +1402,7 @@ func newProxyFixtureForDialectWithPolicy(
 		Approvals:        approvals,
 		BlindTunnels:     newTestBlindTunnels(t),
 		EgressAudit:      store.EgressAttemptRepository(),
+		RawEvidence:      raw,
 		ExchangeIDs:      loopbackproxy.NewCryptographicExchangeIDSource(),
 		HandshakeTimeout: time.Second,
 	})
@@ -1216,23 +1418,23 @@ func newProxyFixtureForDialectWithPolicy(
 		_ = server.Serve(listener)
 	}()
 	return &proxyFixture{
-		listener:    listener,
-		server:      server,
-		handler:     handler,
-		store:       store,
-		runs:        runs,
-		manuals:     manuals,
-		grant:       grant,
-		authority:   authority,
-		exchanges:   exchanges,
-		original:    original,
-		ingress:     ingress,
-		accessID:    accessID,
-		connections: connections,
-		egress:      store.EgressAttemptRepository(),
-		approvals:   approvals,
-		rules:       rules,
+		listener: listener, server: server, handler: handler, store: store,
+		runs: runs, manuals: manuals, grant: grant, capture: capture,
+		authority: authority, environments: resolver, assignments: assignments,
+		compiler: compiler, clientDialect: clientDialect, environment: aggregate,
+		exchanges: exchanges, original: original,
+		connections: connections, egress: store.EgressAttemptRepository(),
+		approvals: approvals, rules: rules,
 	}
+}
+
+type proxyCaptureActivity struct{}
+
+func (proxyCaptureActivity) Active(
+	context.Context,
+	captureidentity.Reference,
+) (bool, error) {
+	return true, nil
 }
 
 func fixedCodexAdapterEvidence() clientadapter.Evidence {
@@ -1243,135 +1445,9 @@ func fixedCodexAdapterEvidence() clientadapter.Evidence {
 		CatalogRevision: 1,
 		InstallShape:    clientadapter.InstallNPMWrapperNativeChild,
 		ReleaseSHA256:   "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-		LaunchRecipe:    clientadapter.LaunchSSLCertFile,
+		LaunchRecipe:    clientadapter.LaunchCodexResponsesHTTP,
 		Features:        clientadapter.FeatureResponsesWebSocketHTTPFallback,
 	}
-}
-
-type revocableIngress struct {
-	delegate               loopbackproxy.IngressAuthority
-	revoked                atomic.Bool
-	requestAdmissionClosed atomic.Bool
-	activeRequests         atomic.Int64
-	mu                     sync.RWMutex
-	current                *access.IngressBinding
-	protocols              []access.ApplicationProtocol
-}
-
-func (ingress *revocableIngress) ActiveAccessPlans() (
-	[]access.AccessPlanSnapshot,
-	error,
-) {
-	return ingress.delegate.ActiveAccessPlans()
-}
-
-func (ingress *revocableIngress) AdmitRequest(
-	ctx context.Context,
-	binding access.IngressBinding,
-) (access.RequestUse, error) {
-	if ctx == nil {
-		return nil, errors.New("request context is nil")
-	}
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	if err := binding.Validate(); err != nil {
-		return nil, err
-	}
-	if ingress.requestAdmissionClosed.Load() {
-		return nil, access.ErrAccessRequestAdmissionClosed
-	}
-	ingress.activeRequests.Add(1)
-	return &trackedRequestUse{release: func() {
-		ingress.activeRequests.Add(-1)
-	}}, nil
-}
-
-func (ingress *revocableIngress) CloseRequestAdmission() {
-	ingress.requestAdmissionClosed.Store(true)
-}
-
-type trackedRequestUse struct {
-	once    sync.Once
-	release func()
-}
-
-func (use *trackedRequestUse) Release() {
-	if use == nil {
-		return
-	}
-	use.once.Do(use.release)
-}
-
-func (ingress *revocableIngress) ResolveDownstreamProtocols(
-	binding access.IngressBinding,
-) ([]access.ApplicationProtocol, error) {
-	if ingress.revoked.Load() {
-		return nil, access.ErrAgentEndpointNotConfigured
-	}
-	ingress.mu.RLock()
-	if ingress.protocols != nil {
-		protocols := append(
-			[]access.ApplicationProtocol(nil),
-			ingress.protocols...,
-		)
-		ingress.mu.RUnlock()
-		return protocols, nil
-	}
-	ingress.mu.RUnlock()
-	return ingress.delegate.ResolveDownstreamProtocols(binding)
-}
-
-func (ingress *revocableIngress) SetProtocols(
-	protocols []access.ApplicationProtocol,
-) {
-	ingress.mu.Lock()
-	defer ingress.mu.Unlock()
-	ingress.protocols = append(
-		[]access.ApplicationProtocol(nil),
-		protocols...,
-	)
-}
-
-func (ingress *revocableIngress) AdmitLeaf(
-	intent access.LeafIssuanceIntent,
-) (access.LeafIssuanceAdmission, error) {
-	if ingress.revoked.Load() {
-		return access.LeafIssuanceAdmission{},
-			access.ErrLeafIssuanceUnauthorized
-	}
-	return ingress.delegate.AdmitLeaf(intent)
-}
-
-func (ingress *revocableIngress) ResolveClientOrigin(
-	origin access.ClientOrigin,
-) (access.IngressBinding, error) {
-	if ingress.revoked.Load() {
-		return access.IngressBinding{}, access.ErrAgentEndpointNotConfigured
-	}
-	ingress.mu.RLock()
-	current := ingress.current
-	if current != nil {
-		binding := *current
-		ingress.mu.RUnlock()
-		if binding.ClientOrigin() == origin {
-			return binding, nil
-		}
-		return access.IngressBinding{}, access.ErrAgentEndpointNotConfigured
-	}
-	ingress.mu.RUnlock()
-	return ingress.delegate.ResolveClientOrigin(origin)
-}
-
-func (ingress *revocableIngress) Revoke() {
-	ingress.revoked.Store(true)
-}
-
-func (ingress *revocableIngress) Advance(binding access.IngressBinding) {
-	ingress.mu.Lock()
-	defer ingress.mu.Unlock()
-	copy := binding
-	ingress.current = &copy
 }
 
 func (fixture *proxyFixture) Connect(
@@ -1452,6 +1528,9 @@ func (fixture *proxyFixture) Close(t *testing.T) {
 	}
 	if err := fixture.connections.Shutdown(ctx); err != nil {
 		t.Errorf("shutdown ConnectionEvent manager: %v", err)
+	}
+	if err := fixture.assignments.Shutdown(ctx); err != nil {
+		t.Errorf("shutdown Capture assignment manager: %v", err)
 	}
 	if err := fixture.runs.Shutdown(ctx); err != nil {
 		t.Errorf("shutdown CaptureRun manager: %v", err)
@@ -1547,9 +1626,9 @@ func (recorder *exchangeRecorder) Execute(
 		return exchange.Result{}, err
 	}
 	return exchange.Result{
-		Outcome:             exchange.AttemptSucceeded,
-		RouteHost:           "relay.example.test",
-		CredentialBindingID: "account-proxy",
+		Outcome:   exchange.AttemptSucceeded,
+		RouteHost: "relay.example.test",
+		AccountID: "account-proxy",
 	}, nil
 }
 
@@ -1611,201 +1690,105 @@ func (recorder *originalRecorder) Count() int {
 	return recorder.count
 }
 
-func testProjection(
+func testEnvironmentCompiler(
 	t *testing.T,
-	authority *localca.Authority,
-) (*access.AtomicSnapshotProjection, access.AccessID) {
+	clientDialect protocolspec.Dialect,
+) environment.Compiler {
 	t.Helper()
-	return testProjectionForDialect(
-		t,
-		authority,
-		access.DialectAnthropicMessages,
-	)
-}
-
-func testProjectionForDialect(
-	t *testing.T,
-	authority *localca.Authority,
-	clientDialect access.Dialect,
-) (*access.AtomicSnapshotProjection, access.AccessID) {
-	t.Helper()
-	return testProjectionForDialectRevision(
-		t,
-		authority,
-		clientDialect,
-		1,
-		"gpt-4.1-mini",
-	)
-}
-
-func testProjectionForDialectRevision(
-	t *testing.T,
-	authority *localca.Authority,
-	clientDialect access.Dialect,
-	revision access.Revision,
-	modelValue string,
-) (*access.AtomicSnapshotProjection, access.AccessID) {
-	t.Helper()
-	accessID, _ := access.NewAccessID("access-proxy")
-	endpointID, _ := access.NewAgentEndpointID("endpoint-proxy")
-	profileID, _ := access.NewEndpointProfileID("profile-proxy")
-	targetID, _ := access.NewProviderTargetID("target-proxy")
-	accountID, _ := access.NewAccountBindingID("account-proxy")
-	routeID, _ := access.NewRouteSetID("route-proxy")
-	egressID, _ := access.NewEgressPolicyID("egress-proxy")
-	clientOriginValue := "https://api.anthropic.com:443"
-	codecPairID := anthropicchat.CodecPairID
-	codecRevision := access.Revision(anthropicchat.CodecRevision)
-	if clientDialect == access.DialectOpenAIResponses {
-		clientOriginValue = "https://api.openai.com:443"
-		codecPairID = responseschat.CodecPairID
-		codecRevision = access.Revision(responseschat.CodecRevision)
-	}
-	clientOrigin, _ := access.NewClientOrigin(clientOriginValue)
-	providerOrigin, _ := access.NewProviderOrigin("https://api.openai.com:443/v1")
-	model, _ := access.NewModelName(modelValue)
-	secret, _ := access.NewSecretRef("secret://provider/proxy")
-	codecID, _ := access.NewCodecPairID(codecPairID)
 	operations, err := operationcatalog.BuiltIn()
 	if err != nil {
 		t.Fatal(err)
 	}
-	catalog, err := access.NewCatalog(access.CatalogOptions{
-		Capabilities: access.PlanCapabilities{
-			MaxEndpointProfiles: 2,
-			MaxAccountBindings:  1,
-			MaxRouteSets:        1,
-		},
-		ClientOperations: operations.Definitions(),
-		CodecPairs: []access.CodecPairDefinition{{
-			ID:              codecID,
-			Revision:        codecRevision,
-			ClientDialect:   clientDialect,
-			ProviderDialect: access.DialectOpenAIChat,
-			ClientOperationIDs: operations.SemanticOperationIDs(
-				clientDialect,
-			),
-			RequiredCapabilities: []access.ProviderCapability{
-				access.ProviderCapabilityMessages,
-				access.ProviderCapabilityStreaming,
-				access.ProviderCapabilityToolCalls,
+	codecPairs := make([]protocolspec.CodecPairDefinition, 0, 2)
+	for _, dialect := range []protocolspec.Dialect{
+		protocolspec.DialectAnthropicMessages,
+		protocolspec.DialectOpenAIResponses,
+	} {
+		codecID, err := protocolspec.NewCodecPairID(
+			"test.loopback." + string(dialect),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		codecPairs = append(codecPairs, protocolspec.CodecPairDefinition{
+			ID: codecID, Revision: 1,
+			ClientDialect:      dialect,
+			ProviderDialect:    dialect,
+			ClientOperationIDs: operations.SemanticOperationIDs(dialect),
+			RequiredCapabilities: []protocolspec.ProviderCapability{
+				protocolspec.ProviderCapabilityMessages,
+				protocolspec.ProviderCapabilityStreaming,
+				protocolspec.ProviderCapabilityToolCalls,
 			},
-		}},
-		AuthDrivers: []access.AuthDriverDefinition{{
-			Ref:      access.StaticHeaderAuthDriverRef(),
-			Revision: 1,
-		}},
-		EgressModes: []access.EgressModeDefinition{{
-			Mode:     access.EgressModeDirect,
-			Revision: 1,
-		}},
-		PluginPlanModes: []access.PluginPlanModeDefinition{{
-			Mode:     access.PluginPlanModePassThrough,
-			Revision: 1,
-		}},
-		ModelPolicyModes: []access.ModelPolicyModeDefinition{{
-			Mode:     access.ModelPolicyModeFixed,
-			Revision: 1,
-		}},
-		TransportProfiles:    access.BuiltInTransportFingerprintDefinitions(),
-		UpstreamWireProfiles: access.BuiltInUpstreamWireProfileDefinitions(),
-	})
-	if err != nil {
-		t.Fatal(err)
+		})
 	}
-	compiler, err := access.NewCompiler(catalog)
-	if err != nil {
-		t.Fatal(err)
-	}
-	aggregate := access.Aggregate{
-		Binding: access.AccessBinding{
-			ID:                accessID,
-			Revision:          revision,
-			Name:              "Proxy Access",
-			Status:            access.AccessStatusEnabled,
-			AgentEndpointID:   endpointID,
-			DefaultRouteSetID: routeID,
-			ProfileIDs:        []access.EndpointProfileID{profileID},
-			EgressPolicyID:    egressID,
-		},
-		AgentEndpoint: access.AgentEndpoint{
-			ID:            endpointID,
-			Revision:      1,
-			AccessID:      accessID,
-			ClientOrigin:  clientOrigin,
-			ClientDialect: clientDialect,
-		},
-		Profiles: []access.EndpointProfile{{
-			ID:                      profileID,
-			Revision:                revision,
-			AccessID:                accessID,
-			Kind:                    access.EndpointProfileManaged,
-			CredentialSource:        access.CredentialSourceManagedAccount,
-			ProcessingMode:          access.ProfileProcessingManaged,
-			Name:                    "OpenAI",
-			BackendDialect:          access.DialectOpenAIChat,
-			TargetID:                targetID,
-			UpstreamWireProfileRef:  access.FollowClientUpstreamWireProfileRef(),
-			DefaultModelPolicy:      access.ModelPolicy{Revision: revision, Mode: access.ModelPolicyModeFixed, FixedModel: model},
-			AccountBindingIDs:       []access.AccountBindingID{accountID},
-			DefaultAccountBindingID: accountID,
-		}},
-		ProviderTargets: []access.ProviderTarget{{
-			ID:           targetID,
-			Revision:     revision,
-			AccessID:     accessID,
-			ProfileID:    profileID,
-			Origin:       providerOrigin,
-			Protocol:     access.DialectOpenAIChat,
-			Capabilities: []access.ProviderCapability{access.ProviderCapabilityMessages, access.ProviderCapabilityStreaming, access.ProviderCapabilityToolCalls},
-		}},
-		AccountBindings: []access.ProviderAccountBinding{{
-			ID:            accountID,
-			Revision:      revision,
-			AccessID:      accessID,
-			ProfileID:     profileID,
-			Label:         "Primary",
-			SecretRef:     secret,
-			AuthDriverRef: access.StaticHeaderAuthDriverRef(),
-			Enabled:       true,
-		}},
-		RouteSets: []access.RouteSet{{
-			ID:                  routeID,
-			Revision:            revision,
-			AccessID:            accessID,
-			CandidateProfileIDs: []access.EndpointProfileID{profileID},
-		}},
-		EgressPolicy: access.AccessEgressPolicy{
-			ID:       egressID,
-			Revision: revision,
-			AccessID: accessID,
-			Mode:     access.EgressModeDirect,
-		},
-		PluginPlan: access.PluginPlan{
-			Revision: revision,
-			AccessID: accessID,
-			Mode:     access.PluginPlanModePassThrough,
-		},
-	}
-	aggregate, err = access.AttachOriginalPassthrough(aggregate)
-	if err != nil {
-		t.Fatal(err)
-	}
-	plan, err := compiler.Compile(aggregate)
-	if err != nil {
-		t.Fatal(err)
-	}
-	projection, err := access.NewSnapshotProjection(
-		authority.Identity().Revision(),
-		authority,
+	protocols, err := protocolspec.NewCatalog(
+		operations.Definitions(),
+		codecPairs,
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := projection.Restore([]access.AccessPlanSnapshot{plan}); err != nil {
+	wires, err := wireprofile.BuiltInCatalog()
+	if err != nil {
 		t.Fatal(err)
 	}
-	return projection, accessID
+	compiler, err := environment.NewCompiler(nil, nil, protocols, wires)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return compiler
+}
+
+func testEnvironmentForDialectRevision(
+	t *testing.T,
+	clientDialect protocolspec.Dialect,
+	environmentID string,
+	revision environment.Revision,
+	adapterRevision environment.Revision,
+) environment.Environment {
+	t.Helper()
+	clientOriginValue := "https://api.anthropic.com:443"
+	clientProtocol := environment.ClientProtocolAnthropicMessages
+	if clientDialect == protocolspec.DialectOpenAIResponses {
+		clientOriginValue = "https://api.openai.com:443"
+		clientProtocol = environment.ClientProtocolOpenAIResponses
+	}
+	clientOrigin, err := originidentity.ParseClientOrigin(clientOriginValue)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return environment.Environment{
+		ID: environment.EnvironmentID(environmentID), Name: "Proxy Environment",
+		State: environment.StateActive, Revision: revision,
+		ContentRecording: environment.DefaultContentRecordingPolicy(),
+		ClientEndpoints: []environment.ClientEndpoint{{
+			ID: "endpoint-proxy", Revision: 1, ClientOrigin: clientOrigin,
+			ProtocolPlans: []environment.ClientProtocolPlan{{
+				ID: "plan-proxy", Revision: 1, ClientProtocol: clientProtocol,
+				ClientAdapterPolicy: environment.ClientAdapterPolicy{
+					ID: "adapter-proxy", Revision: adapterRevision,
+				},
+				Destination:   environment.DestinationPlan{Kind: environment.DestinationKindOriginal},
+				EgressProfile: egressprofile.Direct(),
+			}},
+		}},
+	}
+}
+
+func (fixture *proxyFixture) publishEnvironment(
+	t *testing.T,
+	aggregate environment.Environment,
+) environment.EnvironmentSnapshot {
+	t.Helper()
+	snapshot, err := fixture.compiler.Compile(aggregate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := fixture.environments.Publish(snapshot); err != nil {
+		t.Fatal(err)
+	}
+	return snapshot
 }
 
 // blindTunnelFixture pairs a started coordinator with the production dialer so

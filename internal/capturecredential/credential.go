@@ -1,6 +1,6 @@
 // Package capturecredential defines the closed wire shape of proxy
 // capabilities. Its type tag selects an authentication authority only; it
-// carries no Access, Profile, route, account, model, machine, or workspace
+// carries no Environment, route, account, model, machine, or workspace
 // metadata.
 package capturecredential
 

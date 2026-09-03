@@ -14,15 +14,21 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/vibe-agi/vibermate/internal/agentconversation"
 	"github.com/vibe-agi/vibermate/internal/capturecontrol"
 	"github.com/vibe-agi/vibermate/internal/capturegrant"
 	"github.com/vibe-agi/vibermate/internal/clientadapter"
 	"github.com/vibe-agi/vibermate/internal/controlprincipal"
+	"github.com/vibe-agi/vibermate/internal/conversationprojection"
 	"github.com/vibe-agi/vibermate/internal/desktopbootstrap"
 	"github.com/vibe-agi/vibermate/internal/desktopcontrol"
+	"github.com/vibe-agi/vibermate/internal/desktoptrust"
 	"github.com/vibe-agi/vibermate/internal/instanceguard"
+	"github.com/vibe-agi/vibermate/internal/localca"
 	"github.com/vibe-agi/vibermate/internal/localdiscovery"
+	"github.com/vibe-agi/vibermate/internal/modelcatalog"
 	"github.com/vibe-agi/vibermate/internal/productruntime"
+	"github.com/vibe-agi/vibermate/internal/serverhost"
 )
 
 const capabilityBytes = 32
@@ -83,6 +89,7 @@ func (state *readiness) Ready() bool {
 // Host owns one complete Desktop generation.
 type Host struct {
 	runtime              *productruntime.Runtime
+	rootTrust            *desktoptrust.Manager
 	guard                *instanceguard.Guard
 	discovery            *localdiscovery.File
 	bootstrap            *desktopbootstrap.Authority
@@ -91,6 +98,7 @@ type Host struct {
 	readiness            *readiness
 	controlServer        *http.Server
 	proxyServer          *http.Server
+	remoteServer         *serverhost.Host
 	control              *trackedListener
 	proxy                *trackedListener
 	appSession           AppSession
@@ -156,6 +164,11 @@ func Start(ctx context.Context, options Options) (*Host, error) {
 			rollback.run(rollbackContext),
 		)
 	}
+	if dataDirectory := options.Runtime.Paths.DataDirectory(); dataDirectory != "" {
+		if err := localca.ApplyPendingRootReset(ctx, dataDirectory); err != nil {
+			return fail("local Root reset", err)
+		}
+	}
 	discovery, err := localdiscovery.NewPublisher(
 		options.Paths.DiscoveryPath(),
 		options.Runtime.Clock,
@@ -195,6 +208,48 @@ func Start(ctx context.Context, options Options) (*Host, error) {
 		return fail("ProductRuntime", err)
 	}
 	rollback.register("ProductRuntime", runtime.Shutdown)
+	rootTrust, err := desktoptrust.NewOptionalProduction(
+		desktoptrust.ProductionOptions{
+			OwnerContext: ctx,
+			Root:         runtime,
+			Clock:        options.Runtime.Clock,
+			ResetRequest: func(_ context.Context, identity localca.RootIdentity) error {
+				return localca.RequestRootReset(
+					options.Runtime.Paths.DataDirectory(),
+					identity,
+				)
+			},
+			ReplaceAdmission: func(ctx context.Context) (func(), error) {
+				return beginRootReplacement(ctx, runtime)
+			},
+		},
+	)
+	if err != nil {
+		return fail("Desktop system trust", err)
+	}
+	if rootTrust != nil {
+		rollback.register("Desktop system trust", rootTrust.Shutdown)
+	}
+	var remoteServer *serverhost.Host
+	if options.RemoteServerEnabled {
+		remoteOptions := serverhost.DefaultAttachOptions(
+			runtime,
+			options.Runtime.Paths.DataDirectory(),
+			options.Runtime.Clock,
+			random,
+		)
+		remoteOptions.ListenAddress = options.RemoteServerListenAddress
+		remoteOptions.Transport = options.RemoteServerTransport
+		remoteOptions.ManagementUIRoot = options.RemoteServerManagementUIRoot
+		remoteOptions.CaptureRunLifetime = options.CaptureRunLifetime
+		remoteOptions.ShutdownTimeout = options.ShutdownTimeout
+		remoteOptions.ResolveLocalIdentities = true
+		remoteServer, err = serverhost.Attach(ctx, remoteOptions)
+		if err != nil {
+			return fail("remote Runtime Server", err)
+		}
+		rollback.register("remote Runtime Server", remoteServer.Shutdown)
+	}
 
 	proxyListener, err := listenLoopback(ctx, options.ProxyListenAddress)
 	if err != nil {
@@ -266,12 +321,12 @@ func Start(ctx context.Context, options Options) (*Host, error) {
 	if err != nil {
 		return fail("CaptureRun workspace adapter", err)
 	}
-	captureAuthorities, err := capturegrant.NewRouteAwareAuthorityResolver(
-		runtime,
-		runtime.WorkspaceRoutes(),
+	captureAuthorities, err := capturegrant.NewEnvironmentAuthorityResolver(
+		runtime.CaptureAssignments(),
+		runtime.EnvironmentResolver(),
 	)
 	if err != nil {
-		return fail("CaptureRun route authority", err)
+		return fail("Capture Environment authority", err)
 	}
 	grantIssuer, err := capturegrant.New(capturegrant.Options{
 		Runs:           runtime.CaptureRuns(),
@@ -288,6 +343,7 @@ func Start(ctx context.Context, options Options) (*Host, error) {
 		// a recognized client the Root, so both questions reach a person the
 		// same way and appear in the same place.
 		ClientRootApprovals: runtime.ClientRootApprovals(),
+		ProxyDelivery:       capturegrant.ProxyDeliveryLocalListener,
 	})
 	if err != nil {
 		return fail("capture grant issuer", err)
@@ -324,23 +380,70 @@ func Start(ctx context.Context, options Options) (*Host, error) {
 		return fail("App capability authority", err)
 	}
 	ready := &readiness{runtime: runtime}
+	identityResolvers := map[string]agentconversation.ClientIdentityResolver{}
+	if claudeRoot, rootErr := agentconversation.DefaultClaudeProjectsRoot(); rootErr == nil {
+		if resolver, resolverErr := agentconversation.NewClaudeIdentityResolver(claudeRoot); resolverErr == nil {
+			identityResolvers["claude"] = resolver
+		}
+	}
+	if codexRoot, rootErr := agentconversation.DefaultCodexSessionsRoot(); rootErr == nil {
+		if resolver, resolverErr := agentconversation.NewCodexIdentityResolver(codexRoot); resolverErr == nil {
+			identityResolvers["codex"] = resolver
+		}
+	}
+	conversationIndexer, err := conversationprojection.New(conversationprojection.Options{
+		Activities:  runtime.Activities(),
+		Contents:    runtime.ExchangeContents(),
+		CaptureRuns: runtime.CaptureRunReader(),
+		Identities:  runtime.ConversationIdentities(),
+		Writer:      runtime.ConversationProjectionWriter(),
+		Resolvers:   identityResolvers,
+	})
+	if err != nil {
+		return fail("Agent Conversation projection", err)
+	}
+	modelMetadata, err := modelcatalog.NewModelsDev(modelcatalog.ModelsDevOptions{
+		Transport: runtime,
+		Clock:     options.Runtime.Clock,
+	})
+	if err != nil {
+		return fail("models.dev metadata directory", err)
+	}
+	models, err := modelcatalog.New(modelcatalog.Options{
+		Endpoints:   runtime.UpstreamEndpoints(),
+		Credentials: runtime.ProviderAccounts(),
+		Transport:   runtime,
+		Clock:       options.Runtime.Clock,
+	})
+	if err != nil {
+		return fail("upstream model catalog", err)
+	}
 	application, err := desktopcontrol.New(desktopcontrol.Options{
-		Readiness:       ready,
-		Status:          runtime,
-		Accesses:        runtime.AccessWriter(),
-		AccessDeletion:  runtime.AccessDeleter(),
-		AccessCatalog:   runtime.AccessCatalog(),
-		Resolver:        runtime.SnapshotResolver(),
-		Credentials:     runtime.Credentials(),
-		Activities:      runtime.Activities(),
-		Connections:     runtime.ConnectionEvents(),
-		Egress:          runtime.EgressAttempts(),
-		Approvals:       runtime.ToolApprovals(),
-		Offline:         runtime,
-		ConnectionRules: runtime.ConnectionRules(),
-		CaptureRuns:     runtime.CaptureRunReader(),
-		WorkspaceRoutes: runtime.WorkspaceRoutes(),
-		Clock:           options.Runtime.Clock,
+		Readiness:           ready,
+		Status:              runtime,
+		Environments:        runtime.Environments(),
+		Assignments:         runtime.CaptureAssignments(),
+		Activities:          runtime.Activities(),
+		ConversationIndexer: conversationIndexer,
+		Contents:            runtime.ExchangeContents(),
+		Connections:         runtime.ConnectionEvents(),
+		Egress:              runtime.EgressAttempts(),
+		Approvals:           runtime.ToolApprovals(),
+		Endpoints:           runtime.UpstreamEndpoints(),
+		Models:              models,
+		ClientModels:        modelMetadata,
+		Accounts:            runtime.ProviderAccounts(),
+		CodeLibrary:         runtime.CodeLibrary(),
+		EgressProfiles:      runtime.EgressProfiles(),
+		RawEvidence:         runtime.RawEvidence(),
+		Offline:             runtime,
+		ConnectionRules:     runtime.ConnectionRules(),
+		CaptureRuns:         runtime.CaptureRunReader(),
+		ManualCaptures:      runtime.ManualCaptures(),
+		Archive:             runtime.EvidenceArchive(),
+		ArchiveBarrier:      runtime.EvidenceArchiveBarrier(),
+		RootTrust:           rootTrust,
+		Clock:               options.Runtime.Clock,
 	})
 	if err != nil {
 		return fail("App control routes", err)
@@ -365,21 +468,29 @@ func Start(ctx context.Context, options Options) (*Host, error) {
 		CLIControl:       captureHandler,
 		ManualCaptures:   manualCaptureHandler,
 		DesktopPrincipal: desktopPrincipal,
+		ServerManagement: func() http.Handler {
+			if remoteServer == nil {
+				return nil
+			}
+			return remoteServer.ManagementHandler()
+		}(),
 	})
 	if err != nil {
 		return fail("control router", err)
 	}
 
 	host := &Host{
-		runtime:    runtime,
-		guard:      guard,
-		discovery:  discovery,
-		bootstrap:  bootstrapAuthority,
-		router:     router,
-		readiness:  ready,
-		control:    controlTracked,
-		proxy:      proxyTracked,
-		appSession: appSession,
+		runtime:      runtime,
+		rootTrust:    rootTrust,
+		remoteServer: remoteServer,
+		guard:        guard,
+		discovery:    discovery,
+		bootstrap:    bootstrapAuthority,
+		router:       router,
+		readiness:    ready,
+		control:      controlTracked,
+		proxy:        proxyTracked,
+		appSession:   appSession,
 		descriptor: desktopbootstrap.Descriptor{
 			Schema:         desktopbootstrap.DescriptorSchema,
 			InstanceID:     runtime.Status().InstanceID,
@@ -512,6 +623,13 @@ func (host *Host) Runtime() *productruntime.Runtime {
 	return host.runtime
 }
 
+func (host *Host) RemoteServerStatus() serverhost.Status {
+	if host == nil || host.remoteServer == nil {
+		return serverhost.Status{}
+	}
+	return host.remoteServer.Status()
+}
+
 func (host *Host) DiscoveryPath() string {
 	if host == nil || host.discovery == nil {
 		return ""
@@ -589,6 +707,14 @@ func (host *Host) executeShutdown() {
 	}
 	if err := stopControlServer(ctx, host.controlServer, host.control); err != nil {
 		shutdownErr = errors.Join(shutdownErr, fmt.Errorf("stop control server: %w", err))
+	}
+	if host.remoteServer != nil {
+		if err := host.remoteServer.Shutdown(ctx); err != nil {
+			shutdownErr = errors.Join(
+				shutdownErr,
+				fmt.Errorf("stop remote Runtime Server: %w", err),
+			)
+		}
 	}
 	if err := host.runtime.Shutdown(ctx); err != nil {
 		shutdownErr = errors.Join(shutdownErr, fmt.Errorf("stop ProductRuntime: %w", err))

@@ -56,9 +56,9 @@ func TestEgressSamplesDescribeWhatTheRuntimeSends(t *testing.T) {
 		Caller:       egressaudit.CallerCore,
 		TargetOrigin: "https://api.anthropic.com:443",
 		Decision: egressaudit.DecisionRef{
-			PolicyID:       "access-work",
+			PolicyID:       "environment-work",
 			PolicyRevision: 4,
-			Authority:      egressaudit.AuthorityAccess,
+			Authority:      egressaudit.AuthorityEnvironment,
 			RuleID:         "anthropic-direct",
 			ProxyID:        "direct",
 		},

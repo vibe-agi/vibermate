@@ -1,6 +1,6 @@
 // Package manualcapture owns durable, revocable proxy capabilities for
 // independently launched command-line and desktop applications. It records
-// ingress attribution only; it cannot select an Access, Profile, route,
+// ingress attribution only; it cannot select an Environment, route,
 // account, model, plugin, or provider credential.
 package manualcapture
 
@@ -171,7 +171,7 @@ func (digest CredentialDigest) Valid() bool {
 }
 
 // DurableRecord is the complete SQLite authority. It stores only a
-// domain-separated credential digest. IngressProfileID is deliberately absent
+// domain-separated credential digest. AdmissionRef is deliberately absent
 // because it is derived as manual-capture/<ID>.
 type DurableRecord struct {
 	ID                  ID
@@ -225,7 +225,7 @@ func (record DurableRecord) Validate() error {
 
 type View struct {
 	ID                 string             `json:"id"`
-	IngressProfileID   string             `json:"ingressProfileId"`
+	AdmissionRef       string             `json:"admissionRef"`
 	DisplayName        string             `json:"displayName"`
 	ClientClass        ClientClass        `json:"clientClass"`
 	Lifetime           Lifetime           `json:"lifetime"`
@@ -241,7 +241,7 @@ type View struct {
 func ViewOf(record DurableRecord) View {
 	view := View{
 		ID:                 record.ID.String(),
-		IngressProfileID:   "manual-capture/" + record.ID.String(),
+		AdmissionRef:       "manual-capture/" + record.ID.String(),
 		DisplayName:        record.DisplayName,
 		ClientClass:        record.ClientClass,
 		Lifetime:           record.Lifetime,
@@ -339,8 +339,30 @@ type Recovery struct {
 }
 
 type PageRequest struct {
-	Owner OwnerScope
-	Limit int
+	Owner  OwnerScope
+	Limit  int
+	Cursor *PageCursor
+}
+
+// PageCursor is the stable position of the last ManualCapture returned by a
+// running-first, most-recent-first catalog. It is owner-scoped by PageRequest;
+// no credential or bearer authority is encoded in it.
+type PageCursor struct {
+	Running            bool
+	UpdatedAt          time.Time
+	AfterID            string
+	IncludeAtUpdatedAt bool
+}
+
+func (cursor PageCursor) Valid() bool {
+	validID := cursor.AfterID == ""
+	if !validID {
+		_, err := ParseID(cursor.AfterID)
+		validID = err == nil
+	}
+	return !cursor.UpdatedAt.IsZero() &&
+		cursor.UpdatedAt.Equal(cursor.UpdatedAt.UTC().Truncate(time.Millisecond)) &&
+		validID && (cursor.IncludeAtUpdatedAt || cursor.AfterID == "")
 }
 
 func (request PageRequest) Normalized() PageRequest {
@@ -358,6 +380,7 @@ type Page struct {
 }
 
 type Repository interface {
+	ActivityReader
 	Create(context.Context, DurableRecord) error
 	Rotate(
 		context.Context,
@@ -378,6 +401,20 @@ type Repository interface {
 	Get(context.Context, OwnerScope, ID, time.Time) (DurableRecord, error)
 	List(context.Context, PageRequest, time.Time) ([]DurableRecord, error)
 	Recover(context.Context, time.Time) (Recovery, error)
+}
+
+// ActivityReader is the narrow internal lifecycle projection used when
+// Environment impact is computed. Owner-scoped control reads remain on the
+// Controller interface.
+type ActivityReader interface {
+	Active(context.Context, ID, time.Time) (bool, error)
+}
+
+// GlobalActivityReader is the installation-wide lifecycle projection used by
+// operations, such as Root replacement, that affect every Capture owner.
+// Owner-scoped catalog data remains unavailable through this seam.
+type GlobalActivityReader interface {
+	ActiveCount(context.Context) (int, error)
 }
 
 type Controller interface {

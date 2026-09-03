@@ -26,15 +26,16 @@ import (
 	lru "github.com/hashicorp/golang-lru/v2"
 	"golang.org/x/sync/singleflight"
 
-	"github.com/vibe-agi/vibermate/internal/access"
+	"github.com/vibe-agi/vibermate/internal/captureassignment"
 	"github.com/vibe-agi/vibermate/internal/certidentity"
+	"github.com/vibe-agi/vibermate/internal/environment"
+	"github.com/vibe-agi/vibermate/internal/originidentity"
 )
 
 const (
 	rootKeyFile                  = "root-key.pem"
 	rootCertFile                 = "root-certificate.pem"
 	rootManifestFile             = "root-manifest.json"
-	manifestSchemaV1             = "vibermate-local-root-v1"
 	manifestSchemaV2             = "vibermate-local-root-v2"
 	rootLifetime                 = 10 * 365 * 24 * time.Hour
 	leafLifetime                 = 24 * time.Hour
@@ -51,6 +52,7 @@ var (
 	ErrLeafRequestInvalid     = errors.New("leaf issuance request is invalid")
 	ErrLeafGenerationFailed   = errors.New("leaf generation failed")
 	ErrLeafGenerationTimedOut = errors.New("leaf generation timed out")
+	ErrRootResetFailed        = errors.New("local Root reset failed")
 )
 
 type RootRevision = certidentity.RootRevision
@@ -147,6 +149,17 @@ func (certificate RootCertificate) CertificatePEM() []byte {
 	return bytes.Clone(certificate.certificatePEM)
 }
 
+// CertificateDER returns the one public Root certificate without exposing its
+// filesystem path or any signing capability.
+func (certificate RootCertificate) CertificateDER() []byte {
+	block, rest := pem.Decode(certificate.certificatePEM)
+	if block == nil || block.Type != "CERTIFICATE" ||
+		len(block.Bytes) == 0 || len(bytes.TrimSpace(rest)) != 0 {
+		return nil
+	}
+	return bytes.Clone(block.Bytes)
+}
+
 func (certificate RootCertificate) Path() string {
 	return certificate.path
 }
@@ -169,34 +182,37 @@ type tlsCertificate struct {
 }
 
 type leafCacheKey struct {
-	rootRevision     RootRevision
-	accessID         access.AccessID
-	endpointID       access.AgentEndpointID
-	endpointRevision access.Revision
-	clientOrigin     access.ClientOrigin
-	sanKind          certidentity.SANKind
-	sanValue         string
-	algorithm        LeafKeyAlgorithm
+	rootRevision        RootRevision
+	environmentID       environment.EnvironmentID
+	environmentRevision environment.Revision
+	endpointID          environment.ClientEndpointID
+	endpointRevision    environment.Revision
+	clientOrigin        originidentity.ClientOrigin
+	sanKind             certidentity.SANKind
+	sanValue            string
+	algorithm           LeafKeyAlgorithm
 }
 
-func leafKey(request access.LeafIssuanceRequest) leafCacheKey {
+func leafKey(request captureassignment.LeafIssuanceRequest) leafCacheKey {
 	return leafCacheKey{
-		rootRevision:     request.RootRevision(),
-		accessID:         request.AccessID(),
-		endpointID:       request.AgentEndpointID(),
-		endpointRevision: request.AgentEndpointRevision(),
-		clientOrigin:     request.ClientOrigin(),
-		sanKind:          request.SAN().Kind(),
-		sanValue:         request.SAN().Value(),
-		algorithm:        request.Algorithm(),
+		rootRevision:        request.RootRevision(),
+		environmentID:       request.EnvironmentID(),
+		environmentRevision: request.EnvironmentRevision(),
+		endpointID:          request.ClientEndpointID(),
+		endpointRevision:    request.ClientEndpointRevision(),
+		clientOrigin:        request.ClientOrigin(),
+		sanKind:             request.SAN().Kind(),
+		sanValue:            request.SAN().Value(),
+		algorithm:           request.Algorithm(),
 	}
 }
 
 func (key leafCacheKey) flightKey() string {
 	return fmt.Sprintf(
-		"%d\x00%s\x00%s\x00%d\x00%s\x00%s\x00%s\x00%s",
+		"%d\x00%s\x00%d\x00%s\x00%d\x00%s\x00%s\x00%s\x00%s",
 		key.rootRevision,
-		key.accessID.String(),
+		key.environmentID.String(),
+		key.environmentRevision,
 		key.endpointID.String(),
 		key.endpointRevision,
 		key.clientOrigin.String(),
@@ -207,7 +223,7 @@ func (key leafCacheKey) flightKey() string {
 }
 
 type leafGenerator interface {
-	Generate(context.Context, access.LeafIssuanceRequest) (tlsCertificate, error)
+	Generate(context.Context, captureassignment.LeafIssuanceRequest) (tlsCertificate, error)
 }
 
 type cryptoLeafGenerator struct {
@@ -220,7 +236,7 @@ type cryptoLeafGenerator struct {
 
 func (generator *cryptoLeafGenerator) Generate(
 	ctx context.Context,
-	request access.LeafIssuanceRequest,
+	request captureassignment.LeafIssuanceRequest,
 ) (tlsCertificate, error) {
 	if ctx == nil || generator == nil || generator.clock == nil ||
 		generator.random == nil || generator.rootKey == nil ||
@@ -341,13 +357,6 @@ type Authority struct {
 	changed             chan struct{}
 }
 
-var _ access.LeafCacheInvalidator = (*Authority)(nil)
-
-type rootManifestV1 struct {
-	Schema      string `json:"schema"`
-	Fingerprint string `json:"fingerprint"`
-}
-
 type rootManifestV2 struct {
 	Schema            string       `json:"schema"`
 	Revision          RootRevision `json:"revision"`
@@ -355,21 +364,12 @@ type rootManifestV2 struct {
 }
 
 func Open(ctx context.Context, options Options) (*Authority, error) {
-	return openWithFileOperations(ctx, options, systemAtomicFileOperations{})
-}
-
-func openWithFileOperations(
-	ctx context.Context,
-	options Options,
-	operations atomicFileOperations,
-) (*Authority, error) {
 	if ctx == nil || options.OwnerContext == nil ||
 		options.Directory == "" ||
 		!filepath.IsAbs(options.Directory) ||
 		filepath.Clean(options.Directory) != options.Directory ||
 		options.Clock == nil || options.Random == nil ||
-		options.LeafCacheCapacity <= 0 || options.GenerationTimeout <= 0 ||
-		operations == nil {
+		options.LeafCacheCapacity <= 0 || options.GenerationTimeout <= 0 {
 		return nil, ErrInvalidOptions
 	}
 	if err := ctx.Err(); err != nil {
@@ -384,7 +384,6 @@ func openWithFileOperations(
 	key, certificate, identity, delivery, err := loadOrCreateRoot(
 		ctx,
 		options,
-		operations,
 	)
 	if err != nil {
 		return nil, err
@@ -432,7 +431,7 @@ func (authority *Authority) Certificate() RootCertificate {
 // owned certificate. A request value by itself is never accepted.
 func (authority *Authority) Issue(
 	ctx context.Context,
-	admission access.LeafIssuanceAdmission,
+	admission captureassignment.LeafIssuanceAdmission,
 ) (tls.Certificate, error) {
 	if ctx == nil {
 		return tls.Certificate{}, errors.New("leaf issuance context is nil")
@@ -511,11 +510,11 @@ func (authority *Authority) beginFlightWaiter() func() {
 }
 
 func (authority *Authority) validateRequest(
-	request access.LeafIssuanceRequest,
+	request captureassignment.LeafIssuanceRequest,
 ) error {
 	if authority == nil || request.RootRevision() != authority.identity.revision ||
 		request.SAN().Kind() != certidentity.SANKindDNS ||
-		request.SAN().Value() != request.ClientOrigin().TLSServerName() ||
+		request.SAN().Value() != request.ClientOrigin().Host() ||
 		request.Algorithm() != LeafKeyAlgorithmECDSAP256 {
 		return ErrLeafRequestInvalid
 	}
@@ -546,7 +545,7 @@ func (authority *Authority) cached(key leafCacheKey) (cachedLeaf, bool) {
 func (authority *Authority) cacheGenerated(
 	key leafCacheKey,
 	generated tlsCertificate,
-	admission access.LeafIssuanceAdmission,
+	admission captureassignment.LeafIssuanceAdmission,
 ) {
 	authority.cacheMu.Lock()
 	defer authority.cacheMu.Unlock()
@@ -558,29 +557,6 @@ func (authority *Authority) cacheGenerated(
 		certificate: generated,
 		notAfter:    generated.leaf.NotAfter,
 	})
-}
-
-// InvalidateLeafCache removes obsolete derived certificates. Active Access
-// projection state remains the sole authority for future admissions.
-func (authority *Authority) InvalidateLeafCache(
-	invalidation access.LeafCacheInvalidation,
-) {
-	if authority == nil {
-		return
-	}
-	authority.cacheMu.Lock()
-	defer authority.cacheMu.Unlock()
-	if authority.cache == nil {
-		return
-	}
-	for _, key := range authority.cache.Keys() {
-		if key.accessID == invalidation.AccessID() &&
-			key.endpointID == invalidation.AgentEndpointID() &&
-			key.endpointRevision == invalidation.AgentEndpointRevision() &&
-			key.clientOrigin == invalidation.ClientOrigin() {
-			authority.cache.Remove(key)
-		}
-	}
 }
 
 func (authority *Authority) beginWaiter() (func(), error) {
@@ -652,7 +628,7 @@ func (authority *Authority) notifyStateChangedLocked() {
 func generateLeafSafely(
 	ctx context.Context,
 	generator leafGenerator,
-	request access.LeafIssuanceRequest,
+	request captureassignment.LeafIssuanceRequest,
 ) (certificate tlsCertificate, err error) {
 	defer func() {
 		if recovered := recover(); recovered != nil {
@@ -720,7 +696,6 @@ func (authority *Authority) Shutdown(ctx context.Context) error {
 func loadOrCreateRoot(
 	ctx context.Context,
 	options Options,
-	operations atomicFileOperations,
 ) (*ecdsa.PrivateKey, *x509.Certificate, RootIdentity, RootCertificate, error) {
 	keyPath := filepath.Join(options.Directory, rootKeyFile)
 	certPath := filepath.Join(options.Directory, rootCertFile)
@@ -758,7 +733,6 @@ func loadOrCreateRoot(
 			keyPath,
 			certPath,
 			manifestPath,
-			operations,
 		)
 	}
 	return createRoot(ctx, options, keyPath, certPath, manifestPath)
@@ -770,6 +744,10 @@ func createRoot(
 	keyPath, certPath, manifestPath string,
 ) (*ecdsa.PrivateKey, *x509.Certificate, RootIdentity, RootCertificate, error) {
 	if err := ctx.Err(); err != nil {
+		return nil, nil, RootIdentity{}, RootCertificate{}, err
+	}
+	revision, resetRequestPath, err := rootRevisionForCreate(options.Directory)
+	if err != nil {
 		return nil, nil, RootIdentity{}, RootCertificate{}, err
 	}
 	key, err := ecdsa.GenerateKey(elliptic.P256(), options.Random)
@@ -827,7 +805,7 @@ func createRoot(
 	if err != nil {
 		return nil, nil, RootIdentity{}, RootCertificate{}, err
 	}
-	identity := rootIdentity(certificate, digest, certidentity.InitialRootRevision)
+	identity := rootIdentity(certificate, digest, revision)
 	keyDER, err := x509.MarshalPKCS8PrivateKey(key)
 	if err != nil {
 		return nil, nil, RootIdentity{}, RootCertificate{}, fmt.Errorf(
@@ -841,17 +819,44 @@ func createRoot(
 	if err != nil {
 		return nil, nil, RootIdentity{}, RootCertificate{}, err
 	}
+	createdPaths := make([]string, 0, 3)
+	committed := false
+	defer func() {
+		if committed {
+			return
+		}
+		for _, created := range createdPaths {
+			_ = os.Remove(created)
+		}
+	}()
 	if err := writeExclusive(keyPath, keyPEM, 0o600); err != nil {
 		return nil, nil, RootIdentity{}, RootCertificate{}, err
 	}
+	createdPaths = append(createdPaths, keyPath)
 	if err := writeExclusive(certPath, certPEM, 0o600); err != nil {
 		return nil, nil, RootIdentity{}, RootCertificate{}, err
 	}
+	createdPaths = append(createdPaths, certPath)
 	if err := writeExclusive(manifestPath, manifest, 0o600); err != nil {
 		return nil, nil, RootIdentity{}, RootCertificate{}, err
 	}
+	createdPaths = append(createdPaths, manifestPath)
 	if err := syncDirectory(options.Directory); err != nil {
 		return nil, nil, RootIdentity{}, RootCertificate{}, err
+	}
+	if resetRequestPath != "" {
+		if err := os.Remove(resetRequestPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return nil, nil, RootIdentity{}, RootCertificate{}, fmt.Errorf(
+				"complete local Root reset: %w",
+				err,
+			)
+		}
+		committed = true
+		if err := syncDirectory(filepath.Dir(resetRequestPath)); err != nil {
+			return nil, nil, RootIdentity{}, RootCertificate{}, err
+		}
+	} else {
+		committed = true
 	}
 	return key, certificate, identity, RootCertificate{
 		certificatePEM: bytes.Clone(certPEM),
@@ -862,7 +867,6 @@ func createRoot(
 func loadRoot(
 	now time.Time,
 	keyPath, certPath, manifestPath string,
-	operations atomicFileOperations,
 ) (*ecdsa.PrivateKey, *x509.Certificate, RootIdentity, RootCertificate, error) {
 	for _, path := range []string{keyPath, certPath, manifestPath} {
 		if err := requirePrivateRegularFile(path); err != nil {
@@ -896,23 +900,11 @@ func loadRoot(
 	if err != nil {
 		return nil, nil, RootIdentity{}, RootCertificate{}, err
 	}
-	revision, migrate, err := decodeRootManifest(manifestBytes, digest)
+	revision, err := decodeRootManifest(manifestBytes, digest)
 	if err != nil {
 		return nil, nil, RootIdentity{}, RootCertificate{}, err
 	}
 	identity := rootIdentity(certificate, digest, revision)
-	if migrate {
-		manifest, encodeErr := encodeManifestV2(identity)
-		if encodeErr != nil {
-			return nil, nil, RootIdentity{}, RootCertificate{}, encodeErr
-		}
-		if err := replacePrivateAtomic(operations, manifestPath, manifest); err != nil {
-			return nil, nil, RootIdentity{}, RootCertificate{}, fmt.Errorf(
-				"migrate local Root manifest: %w",
-				err,
-			)
-		}
-	}
 	return key, certificate, identity, RootCertificate{
 		certificatePEM: bytes.Clone(certPEM),
 		path:           certPath,
@@ -951,45 +943,18 @@ func encodeManifestV2(identity RootIdentity) ([]byte, error) {
 func decodeRootManifest(
 	encoded []byte,
 	digest RootDigest,
-) (RootRevision, bool, error) {
-	var envelope struct {
-		Schema string `json:"schema"`
-	}
-	if err := json.Unmarshal(encoded, &envelope); err != nil {
-		return 0, false, fmt.Errorf(
-			"%w: decode manifest schema: %v",
-			ErrRootStateInvalid,
-			err,
-		)
-	}
-	switch envelope.Schema {
-	case manifestSchemaV1:
-		var manifest rootManifestV1
-		if err := decodeStrictJSON(encoded, &manifest); err != nil ||
-			manifest.Fingerprint != digest.String() {
-			return 0, false, fmt.Errorf(
-				"%w: v1 manifest does not match certificate",
-				ErrRootStateInvalid,
-			)
-		}
-		return certidentity.InitialRootRevision, true, nil
-	case manifestSchemaV2:
-		var manifest rootManifestV2
-		if err := decodeStrictJSON(encoded, &manifest); err != nil ||
-			!manifest.Revision.Valid() ||
-			manifest.CertificateSHA256 != digest.String() {
-			return 0, false, fmt.Errorf(
-				"%w: v2 manifest does not match certificate",
-				ErrRootStateInvalid,
-			)
-		}
-		return manifest.Revision, false, nil
-	default:
-		return 0, false, fmt.Errorf(
-			"%w: unsupported manifest schema",
+) (RootRevision, error) {
+	var manifest rootManifestV2
+	if err := decodeStrictJSON(encoded, &manifest); err != nil ||
+		manifest.Schema != manifestSchemaV2 ||
+		!manifest.Revision.Valid() ||
+		manifest.CertificateSHA256 != digest.String() {
+		return 0, fmt.Errorf(
+			"%w: manifest does not match certificate",
 			ErrRootStateInvalid,
 		)
 	}
+	return manifest.Revision, nil
 }
 
 func decodeStrictJSON(encoded []byte, destination any) error {

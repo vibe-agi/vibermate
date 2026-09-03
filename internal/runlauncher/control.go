@@ -9,11 +9,13 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/vibe-agi/vibermate/internal/capturecontrol"
+	"github.com/vibe-agi/vibermate/internal/desktopcontrol"
 	"github.com/vibe-agi/vibermate/internal/localdiscovery"
 	"github.com/vibe-agi/vibermate/internal/loopbackclient"
 )
@@ -34,9 +36,88 @@ func (failure *ControlFailure) Error() string {
 }
 
 type controlClient struct {
-	origin     string
-	credential string
-	httpClient *loopbackclient.Client
+	origin      string
+	credential  string
+	httpClient  requestDoer
+	closeHTTP   func()
+	description string
+}
+
+type requestDoer interface {
+	Do(*http.Request) (*http.Response, error)
+}
+
+type RuntimeInspection struct {
+	Origin     string
+	ProcessID  int
+	Ready      bool
+	APIVersion string
+	State      string
+	Host       string
+	Storage    string
+}
+
+func InspectLocal(
+	ctx context.Context,
+	discovery Discovery,
+	timeout time.Duration,
+) (RuntimeInspection, error) {
+	if ctx == nil || discovery == nil || timeout <= 0 {
+		return RuntimeInspection{}, errors.New("local Runtime inspection is incomplete")
+	}
+	session, err := discovery.Load()
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) || errors.Is(err, localdiscovery.ErrExpired) {
+			return RuntimeInspection{}, fmt.Errorf("%w: %v", ErrRuntimeUnavailable, err)
+		}
+		return RuntimeInspection{}, fmt.Errorf("load local control discovery: %w", err)
+	}
+	client, err := newControlClient(session, timeout)
+	if err != nil {
+		return RuntimeInspection{}, fmt.Errorf("construct local control client: %w", err)
+	}
+	defer client.close()
+	var response desktopcontrol.StatusResponse
+	if err := client.jsonRequest(
+		ctx,
+		http.MethodGet,
+		"/api/v1/status",
+		client.credential,
+		"",
+		nil,
+		http.StatusOK,
+		&response,
+	); err != nil {
+		return RuntimeInspection{}, fmt.Errorf("%w: %v", ErrRuntimeUnavailable, err)
+	}
+	if response.Generation != session.InstanceID ||
+		response.Runtime.InstanceID != session.InstanceID ||
+		response.APIVersion != "v1" ||
+		response.StatusKey != "runtime.state."+string(response.Runtime.State) ||
+		response.Runtime.StartedAt.IsZero() {
+		return RuntimeInspection{}, errors.New("local Runtime status is invalid")
+	}
+	switch response.Runtime.State {
+	case "starting", "initialized", "degraded", "stopping", "stopped", "stop_failed":
+	default:
+		return RuntimeInspection{}, errors.New("local Runtime state is invalid")
+	}
+	switch response.Runtime.Host {
+	case "desktop", "server":
+	default:
+		return RuntimeInspection{}, errors.New("local Runtime host is invalid")
+	}
+	switch response.Runtime.Storage {
+	case "healthy", "unavailable":
+	default:
+		return RuntimeInspection{}, errors.New("local Runtime storage state is invalid")
+	}
+	return RuntimeInspection{
+		Origin: session.BaseURL, ProcessID: session.ProcessID,
+		Ready: response.Ready, APIVersion: response.APIVersion,
+		State: string(response.Runtime.State), Host: string(response.Runtime.Host),
+		Storage: string(response.Runtime.Storage),
+	}, nil
 }
 
 func newControlClient(
@@ -52,15 +133,36 @@ func newControlClient(
 		return nil, errors.New("local control credential is missing")
 	}
 	return &controlClient{
-		origin:     session.BaseURL,
-		credential: session.ControlCredential,
-		httpClient: client,
+		origin:      session.BaseURL,
+		credential:  session.ControlCredential,
+		httpClient:  client,
+		closeHTTP:   client.Close,
+		description: "local",
+	}, nil
+}
+
+func newRemoteControlClient(
+	origin string,
+	credential string,
+	client requestDoer,
+	closeHTTP func(),
+) (*controlClient, error) {
+	parsed, err := url.Parse(origin)
+	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") ||
+		parsed.Host == "" ||
+		parsed.User != nil || parsed.Path != "" || parsed.RawQuery != "" ||
+		parsed.Fragment != "" || credential == "" || client == nil || closeHTTP == nil {
+		return nil, errors.New("remote control session is invalid")
+	}
+	return &controlClient{
+		origin: origin, credential: credential, httpClient: client,
+		closeHTTP: closeHTTP, description: "remote",
 	}, nil
 }
 
 func (client *controlClient) close() {
-	if client != nil && client.httpClient != nil {
-		client.httpClient.Close()
+	if client != nil && client.closeHTTP != nil {
+		client.closeHTTP()
 	}
 }
 
@@ -144,13 +246,13 @@ func (client *controlClient) jsonRequest(
 	output any,
 ) error {
 	if client == nil || ctx == nil {
-		return errors.New("local control client and context are required")
+		return errors.New("control client and context are required")
 	}
 	var body io.Reader
 	if input != nil {
 		encoded, err := json.Marshal(input)
 		if err != nil {
-			return fmt.Errorf("encode local control request: %w", err)
+			return fmt.Errorf("encode %s control request: %w", client.description, err)
 		}
 		body = bytes.NewReader(encoded)
 	}
@@ -175,7 +277,7 @@ func (client *controlClient) jsonRequest(
 	}
 	response, err := client.httpClient.Do(request)
 	if err != nil {
-		return fmt.Errorf("call local control API: %w", err)
+		return fmt.Errorf("call %s control API: %w", client.description, err)
 	}
 	defer response.Body.Close()
 	payload, err := io.ReadAll(io.LimitReader(
@@ -183,28 +285,28 @@ func (client *controlClient) jsonRequest(
 		maxControlResponseBytes+1,
 	))
 	if err != nil {
-		return fmt.Errorf("read local control response: %w", err)
+		return fmt.Errorf("read %s control response: %w", client.description, err)
 	}
 	if len(payload) > maxControlResponseBytes {
-		return errors.New("local control response exceeds the size limit")
+		return fmt.Errorf("%s control response exceeds the size limit", client.description)
 	}
 	if response.StatusCode != wantStatus {
 		return decodeControlFailure(response.StatusCode, payload)
 	}
 	if output == nil {
 		if len(bytes.TrimSpace(payload)) != 0 {
-			return errors.New("local control response body is unexpected")
+			return fmt.Errorf("%s control response body is unexpected", client.description)
 		}
 		return nil
 	}
 	decoder := json.NewDecoder(bytes.NewReader(payload))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(output); err != nil {
-		return fmt.Errorf("decode local control response: %w", err)
+		return fmt.Errorf("decode %s control response: %w", client.description, err)
 	}
 	var trailing any
 	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
-		return errors.New("local control response contains trailing JSON")
+		return fmt.Errorf("%s control response contains trailing JSON", client.description)
 	}
 	return nil
 }

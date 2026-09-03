@@ -1,5 +1,5 @@
 # Deterministic CI runs module and generation drift, structural checks, unit
-# tests, race tests, contract tests, vet, and govulncheck. It does not run real
+# tests, browser tests, race tests, contract tests, vet, and govulncheck. It does not run real
 # Agent/provider traffic, the opt-in packaged-app acceptance sequence, platform
 # Root or proxy changes, signing, installers, long-duration soak, or
 # external-version drift. Those gates require a frozen macOS arm64 artifact and
@@ -9,8 +9,6 @@ name: validation
 on:
   pull_request:
   push:
-    branches:
-      - main
 
 permissions:
   contents: read
@@ -31,7 +29,6 @@ jobs:
       - name: Verify generated files
         run: |
           go generate ./...
-          node ui/desktop/scripts/sync-generated.mjs --check
           git diff --exit-code
       - name: Verify module files
         run: go mod tidy -diff
@@ -51,6 +48,8 @@ jobs:
           go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.7
           node --test .github/check-action-pins.test.mjs
           node .github/check-action-pins.mjs
+      - name: Verify Flutter distribution and macOS release tooling
+        run: node --test ui/flutter_app/tool/desktop_build_manifest.test.mjs tool/macos-release/*.test.mjs
 
   unit:
     needs: generated-structural
@@ -89,9 +88,6 @@ jobs:
           cache: true
       - name: Run runtime, protocol, egress, host, and persistence contracts
         run: |
-          go test -count=1 ./internal/access
-          go test -count=1 ./internal/accessapply
-          go test -count=1 ./internal/accesscredential
           go test -count=1 ./internal/activity
           go test -count=1 ./internal/productruntime
           go test -count=1 ./internal/hostcontract
@@ -129,6 +125,7 @@ jobs:
   desktop:
     needs: generated-structural
     runs-on: macos-14
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
@@ -136,50 +133,80 @@ jobs:
           go-version-file: go.mod
           check-latest: false
           cache: true
-      - uses: pnpm/action-setup@a15d269cd4658e1107c09f1fabf4cbd7bd1f308a # v4.4.0
-        with:
-          version: 10.33.2
-      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
-        with:
-          node-version: 22.23.1
-          cache: pnpm
-          cache-dependency-path: ui/desktop/pnpm-lock.yaml
-      - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0 # 1.88.0
-        with:
-          components: rustfmt, clippy
-          targets: aarch64-apple-darwin,x86_64-apple-darwin
-      - name: Verify Desktop UI
+      - name: Install the pinned Flutter SDK
+        shell: bash
         run: |
-          pnpm --dir ui/desktop install --frozen-lockfile
-          pnpm --dir ui/desktop check
-          pnpm --dir ui/desktop exec playwright install chromium
-          pnpm --dir ui/desktop check:browser
-      - name: Scan Desktop production dependencies
-        run: pnpm --dir ui/desktop audit --prod --audit-level high
-      - name: Verify Desktop native shell
+          set -euo pipefail
+          flutter_root="${RUNNER_TEMP}/vibermate-flutter-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          ui/flutter_app/tool/install_ci_flutter.sh "${flutter_root}"
+          printf '%s/bin\n' "${flutter_root}" >> "${GITHUB_PATH}"
+          printf 'FLUTTER_ROOT=%s\n' "${flutter_root}" >> "${GITHUB_ENV}"
+      - name: Verify Flutter workbench and contracts
+        shell: bash
+        working-directory: ui/flutter_app
         run: |
-          pnpm --dir ui/desktop prepare:desktop
-          pnpm --dir ui/desktop prepare:sidecars:distribution
-          cargo fmt --manifest-path ui/desktop/src-tauri/Cargo.toml --check
-          cargo clippy --locked --all-targets --manifest-path ui/desktop/src-tauri/Cargo.toml -- -D warnings
-          cargo test --locked --manifest-path ui/desktop/src-tauri/Cargo.toml
-          cargo check --locked --manifest-path ui/desktop/src-tauri/Cargo.toml --target aarch64-apple-darwin
-          cargo check --locked --manifest-path ui/desktop/src-tauri/Cargo.toml --target x86_64-apple-darwin
-      - name: Scan Desktop Rust dependencies
+          set -euo pipefail
+          tool/verify_flutter_sdk.sh
+          flutter pub get
+          flutter analyze
+          flutter test
+          flutter pub deps --no-dev --style=compact
+      - name: Verify native macOS preference boundary
+        shell: bash
+        working-directory: ui/flutter_app
         run: |
-          cargo install cargo-audit --version 0.22.2 --locked
-          for target in aarch64-apple-darwin x86_64-apple-darwin; do
-            if ! target_glib="$(cargo tree --locked --manifest-path ui/desktop/src-tauri/Cargo.toml --target "$target" -i glib)"; then
-              echo "could not inspect glib reachability in $target"
-              exit 1
-            fi
-            if [ -n "$target_glib" ]; then
-              echo "RUSTSEC-2024-0429 is reachable in $target"
-              exit 1
-            fi
-          done
-          cargo audit --file ui/desktop/src-tauri/Cargo.lock --target-arch aarch64 --target-os macos --deny unsound --ignore RUSTSEC-2024-0429
-          cargo audit --file ui/desktop/src-tauri/Cargo.lock --target-arch x86_64 --target-os macos --deny unsound --ignore RUSTSEC-2024-0429
+          set -euo pipefail
+          xcodebuild test -quiet \
+            -workspace macos/Runner.xcworkspace \
+            -scheme Runner \
+            -configuration Debug \
+            -destination 'platform=macOS' \
+            CODE_SIGNING_ALLOWED=NO
+      - name: Build and verify the packaged Flutter App
+        shell: bash
+        run: |
+          set -euo pipefail
+          ui/flutter_app/tool/build_macos_app.sh live
+          ui/flutter_app/tool/verify_macos_app.sh \
+            "${GITHUB_WORKSPACE}/dist/ViberMate.app" \
+            live
+      - name: Exercise the exact packaged daemon and CLI
+        shell: bash
+        working-directory: ui/flutter_app
+        env:
+          VIBERMATE_LIVE_TEST_DAEMON: ${{ github.workspace }}/dist/ViberMate.app/Contents/MacOS/vibermated
+          VIBERMATE_LIVE_TEST_COMMAND: ${{ github.workspace }}/dist/ViberMate.app/Contents/MacOS/vibermate
+          VIBERMATE_LIVE_TEST_APP: ${{ github.workspace }}/dist/ViberMate.app
+        run: |
+          set -euo pipefail
+          flutter test test/live_runtime_test.dart
+          go test -count=1 ../../cmd/vibermate-acceptance
+          git diff --exit-code
+
+  web:
+    needs: generated-structural
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Install the pinned Flutter SDK
+        shell: bash
+        run: |
+          set -euo pipefail
+          flutter_root="${RUNNER_TEMP}/vibermate-flutter-web-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          ui/flutter_app/tool/install_ci_flutter.sh "${flutter_root}" web
+          printf '%s/bin\n' "${flutter_root}" >> "${GITHUB_PATH}"
+          printf 'FLUTTER_ROOT=%s\n' "${flutter_root}" >> "${GITHUB_ENV}"
+      - name: Test and build the browser workbench
+        shell: bash
+        working-directory: ui/flutter_app
+        run: |
+          set -euo pipefail
+          tool/verify_flutter_sdk.sh
+          flutter pub get
+          flutter test --platform chrome
+          flutter build web --release
+          git diff --exit-code
 
   vulnerability:
     needs: generated-structural

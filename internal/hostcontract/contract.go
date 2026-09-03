@@ -58,6 +58,7 @@ func Server() Contract {
 		kind:                 KindServer,
 		managementAuth:       AuthenticationWebSession,
 		proxyAuth:            AuthenticationProxyClient,
+		supportsCaptureRuns:  true,
 		supportsWebSessions:  true,
 		supportsProxyClients: true,
 	}

@@ -14,8 +14,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/vibe-agi/vibermate/internal/access"
-	"github.com/vibe-agi/vibermate/internal/capturecontrol"
 	"github.com/vibe-agi/vibermate/internal/desktopbootstrap"
 	"github.com/vibe-agi/vibermate/internal/desktopcontrol"
 	"github.com/vibe-agi/vibermate/internal/desktophost"
@@ -27,104 +25,9 @@ import (
 	"github.com/vibe-agi/vibermate/internal/productruntime"
 	"github.com/vibe-agi/vibermate/internal/runlauncher"
 	"github.com/vibe-agi/vibermate/internal/secretstore"
+	"github.com/vibe-agi/vibermate/internal/servercontrol"
 	"github.com/vibe-agi/vibermate/internal/toolapproval"
 )
-
-func TestHostCaptureGrantSeparatesOriginalAndManagedCredentialBootstrap(
-	t *testing.T,
-) {
-	for _, testCase := range []struct {
-		name        string
-		useOriginal bool
-		wantManaged bool
-	}{
-		{name: "current login", useOriginal: true, wantManaged: false},
-		{name: "managed provider", useOriginal: false, wantManaged: true},
-	} {
-		t.Run(testCase.name, func(t *testing.T) {
-			root := t.TempDir()
-			paths := newHostPaths(t, filepath.Join(root, "cache"))
-			host := startHost(t, hostOptions(t, paths, filepath.Join(root, "data")))
-			defer shutdownHost(t, host)
-
-			accessID, err := access.NewAccessID("capture-authority")
-			if err != nil {
-				t.Fatal(err)
-			}
-			aggregate := liveAgentAccess(
-				t,
-				accessID,
-				"https://provider.example.test:443/v1",
-				"example-model",
-			)
-			if testCase.useOriginal {
-				aggregate.RouteSets[0].CandidateProfileIDs =
-					[]access.EndpointProfileID{access.OriginalPassthroughProfileID()}
-			}
-			result, err := host.Runtime().AccessWriter().WriteAccess(
-				context.Background(),
-				access.WriteCommand{ExpectedRevision: 0, Aggregate: aggregate},
-			)
-			if err != nil || result.Outcome != access.WriteOutcomeCommitted {
-				t.Fatalf("write Access result=%+v err=%v", result, err)
-			}
-
-			discovery, err := localdiscovery.NewFile(
-				paths.DiscoveryPath(),
-				productruntime.SystemClock{},
-			)
-			if err != nil {
-				t.Fatal(err)
-			}
-			session, err := discovery.Load()
-			if err != nil {
-				t.Fatal(err)
-			}
-			body, err := json.Marshal(capturecontrol.CreateRequest{
-				CWD:            root,
-				Command:        []string{"/bin/sh", "-c", "exit 0"},
-				ExecutablePath: "/bin/sh",
-			})
-			if err != nil {
-				t.Fatal(err)
-			}
-			request, err := http.NewRequest(
-				http.MethodPost,
-				session.BaseURL+"/api/v1/capture-runs",
-				strings.NewReader(string(body)),
-			)
-			if err != nil {
-				t.Fatal(err)
-			}
-			request.Header.Set("Authorization", "Bearer "+session.ControlCredential)
-			request.Header.Set("Content-Type", "application/json")
-			response, err := (&http.Client{Timeout: 5 * time.Second}).Do(request)
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer response.Body.Close()
-			if response.StatusCode != http.StatusCreated {
-				payload, _ := io.ReadAll(response.Body)
-				t.Fatalf("CaptureRun status=%d body=%s", response.StatusCode, payload)
-			}
-			var grant capturecontrol.LaunchGrant
-			if err := json.NewDecoder(response.Body).Decode(&grant); err != nil {
-				t.Fatal(err)
-			}
-			if got := grant.ProtectedAuthorities; len(got) != 1 ||
-				got[0] != "api.anthropic.com:443" {
-				t.Fatalf("protected authorities = %v", got)
-			}
-			if got := len(grant.ManagedCredentialAuthorities); (got == 1) != testCase.wantManaged {
-				t.Fatalf(
-					"managed credential authorities=%v wantManaged=%t",
-					grant.ManagedCredentialAuthorities,
-					testCase.wantManaged,
-				)
-			}
-		})
-	}
-}
 
 func TestHostPublishesReadyGenerationAndRunsCapturedChildOverRealSockets(
 	t *testing.T,
@@ -183,7 +86,7 @@ func TestHostPublishesReadyGenerationAndRunsCapturedChildOverRealSockets(
 		http.MethodGet,
 		"/api/v1/status",
 		app.ReadToken,
-		"tauri://localhost",
+		"vibermate://desktop",
 	)
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
@@ -213,7 +116,10 @@ func TestHostPublishesReadyGenerationAndRunsCapturedChildOverRealSockets(
 		t.Fatal(err)
 	}
 	runContext, cancelRun := context.WithTimeout(context.Background(), 10*time.Second)
-	exitCode, err := launcher.Run(runContext, []string{"/bin/sh", "-c", "exit 0"})
+	exitCode, err := launcher.Run(
+		runContext,
+		transparentLaunch("/bin/sh", "-c", "exit 0"),
+	)
 	cancelRun()
 	if err != nil || exitCode != 0 {
 		t.Fatalf("captured child exitCode=%d error=%v", exitCode, err)
@@ -243,13 +149,138 @@ func TestHostPublishesReadyGenerationAndRunsCapturedChildOverRealSockets(
 	}
 }
 
+func TestMacHostSharesOneRuntimeWithItsRemoteServerBoundary(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	paths := newHostPaths(t, filepath.Join(root, "cache"))
+	options := hostOptions(t, paths, filepath.Join(root, "data"))
+	options.RemoteServerEnabled = true
+	options.RemoteServerListenAddress = "127.0.0.1:0"
+	host := startHost(t, options)
+	remote := host.RemoteServerStatus()
+	if !remote.Ready || remote.InstanceID != host.Status().InstanceID ||
+		remote.ListenAddress == "" || remote.Scheme != "http" ||
+		remote.TLSFingerprint != "" {
+		t.Fatalf("remote Server status = %+v", remote)
+	}
+
+	response := controlRequest(
+		t,
+		host.AppSession().BaseURL,
+		http.MethodGet,
+		servercontrol.ServerAccessPath,
+		host.AppSession().ReadToken,
+		"vibermate://desktop",
+	)
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("local Server access status = %d", response.StatusCode)
+	}
+	var access servercontrol.ServerAccess
+	if err := json.NewDecoder(response.Body).Decode(&access); err != nil {
+		t.Fatal(err)
+	}
+	if access.Schema != servercontrol.ServerAccessSchema ||
+		access.Transport != "http" ||
+		access.Authentication != servercontrol.RuntimeUserPasswordAuthentication {
+		t.Fatalf("local Server access = %+v", access)
+	}
+	createPayload, err := json.Marshal(servercontrol.RuntimeUserCreate{
+		Schema:   servercontrol.RuntimeUserCreateSchema,
+		Username: "mac-client", Password: "test-mac-client-password",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	createRequest, err := http.NewRequest(
+		http.MethodPost,
+		host.AppSession().BaseURL+servercontrol.RuntimeUsersPath,
+		strings.NewReader(string(createPayload)),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	createRequest.Header.Set("Origin", "vibermate://desktop")
+	createRequest.Header.Set("Sec-Fetch-Site", "cross-site")
+	createRequest.Header.Set("Sec-Fetch-Mode", "cors")
+	createRequest.Header.Set("Sec-Fetch-Dest", "empty")
+	createRequest.Header.Set("Content-Type", "application/json")
+	createRequest.Header.Set(
+		"Authorization",
+		"Bearer "+host.AppSession().WriteToken,
+	)
+	// Password hashing is deliberately expensive and the race detector runs
+	// packages concurrently in CI, so this end-to-end boundary needs a workload
+	// budget rather than the shorter control-read budget below.
+	createResponse, err := (&http.Client{Timeout: 15 * time.Second}).Do(
+		createRequest,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer createResponse.Body.Close()
+	if createResponse.StatusCode != http.StatusCreated {
+		t.Fatalf("local Runtime User create status = %d", createResponse.StatusCode)
+	}
+
+	remoteTransport := &http.Transport{Proxy: nil}
+	defer remoteTransport.CloseIdleConnections()
+	loginPayload, err := json.Marshal(servercontrol.RuntimeUserLogin{
+		Schema:   servercontrol.RuntimeUserLoginSchema,
+		Username: "mac-client", Password: "test-mac-client-password",
+		MachineID:  "uRmbW_GvQ7LZ9poYHh0aC8W3vQoJ0lZB7iK2s6xQfEk",
+		DeviceName: "mac-remote-client",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	loginRequest, err := http.NewRequest(
+		http.MethodPost,
+		"http://"+remote.ListenAddress+servercontrol.RuntimeUserSessionPath,
+		strings.NewReader(string(loginPayload)),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	loginRequest.Header.Set("Content-Type", "application/json")
+	loginResponse, err := (&http.Client{
+		Transport: remoteTransport,
+		Timeout:   15 * time.Second,
+	}).Do(loginRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer loginResponse.Body.Close()
+	if loginResponse.StatusCode != http.StatusCreated {
+		t.Fatalf("remote Runtime User login status = %d", loginResponse.StatusCode)
+	}
+
+	shutdownHost(t, host)
+}
+
+func TestMacHostRejectsPlaintextRemoteServerOutsideLoopback(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	paths := newHostPaths(t, filepath.Join(root, "cache"))
+	options := hostOptions(t, paths, filepath.Join(root, "data"))
+	options.RemoteServerEnabled = true
+	options.RemoteServerListenAddress = "0.0.0.0:0"
+	host, err := desktophost.Start(context.Background(), options)
+	if err == nil {
+		shutdownHost(t, host)
+		t.Fatal("Desktop Host exposed its plaintext remote Server outside loopback")
+	}
+}
+
 func TestHostUsesOnlyTheExplicitWebviewOrigin(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()
 	paths := newHostPaths(t, filepath.Join(root, "cache"))
 	options := hostOptions(t, paths, filepath.Join(root, "data"))
-	options.AllowedOrigins = []string{"http://127.0.0.1:1420"}
+	options.AllowedOrigins = []string{"https://desktop.test"}
 	host := startHost(t, options)
 	defer shutdownHost(t, host)
 
@@ -259,7 +290,7 @@ func TestHostUsesOnlyTheExplicitWebviewOrigin(t *testing.T) {
 		http.MethodGet,
 		"/api/v1/status",
 		host.AppSession().ReadToken,
-		"http://127.0.0.1:1420",
+		"https://desktop.test",
 	)
 	_ = accepted.Body.Close()
 	if accepted.StatusCode != http.StatusOK {
@@ -271,7 +302,7 @@ func TestHostUsesOnlyTheExplicitWebviewOrigin(t *testing.T) {
 		http.MethodGet,
 		"/api/v1/status",
 		host.AppSession().ReadToken,
-		"tauri://localhost",
+		"vibermate://desktop",
 	)
 	_ = rejected.Body.Close()
 	if rejected.StatusCode != http.StatusForbidden {
@@ -508,7 +539,7 @@ func hostOptions(
 		Paths:          runtimePaths,
 		Host:           hostcontract.Desktop(),
 		OfflineHold:    gate,
-		Secrets:        unavailableSecrets{},
+		Secrets:        seededSecrets{},
 		Approvals:      toolapproval.DefaultConfig(),
 		ExchangeHold:   exchange.DefaultHoldPolicy(),
 		Clock:          productruntime.SystemClock{},
@@ -586,32 +617,52 @@ func reserveAddress(t *testing.T) string {
 	return address
 }
 
-type unavailableSecrets struct{}
+type seededSecrets struct{}
 
-func (unavailableSecrets) Read(
-	context.Context,
-	secretstore.Reference,
+func (seededSecrets) Read(
+	_ context.Context,
+	reference secretstore.Reference,
 ) (*secretstore.Value, error) {
+	if reference.String() == "secret://runtime/client-annotation-signing-v1" {
+		return secretstore.NewValue([]byte("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"))
+	}
 	return nil, secretstore.ErrNotFound
 }
 
-func (unavailableSecrets) Inspect(
-	context.Context,
-	secretstore.Reference,
+func (seededSecrets) ReadAtRevision(
+	ctx context.Context,
+	reference secretstore.Reference,
+	revision secretstore.Revision,
+) (*secretstore.Value, error) {
+	if reference.String() == "secret://runtime/client-annotation-signing-v1" && revision != 1 {
+		return nil, secretstore.ErrRevisionConflict
+	}
+	return seededSecrets{}.Read(ctx, reference)
+}
+
+func (seededSecrets) Inspect(
+	_ context.Context,
+	reference secretstore.Reference,
 ) (secretstore.Metadata, error) {
+	if reference.String() == "secret://runtime/client-annotation-signing-v1" {
+		return secretstore.Metadata{State: secretstore.StateConfigured, Revision: 1}, nil
+	}
 	return secretstore.Metadata{State: secretstore.StateMissing}, nil
 }
 
-func (unavailableSecrets) Replace(
+func (seededSecrets) Replace(
 	context.Context,
 	secretstore.ReplaceCommand,
 ) (secretstore.Metadata, error) {
 	return secretstore.Metadata{}, secretstore.ErrReadOnly
 }
 
-func (unavailableSecrets) Delete(
-	context.Context,
-	secretstore.Reference,
+func (seededSecrets) Delete(
+	_ context.Context,
+	reference secretstore.Reference,
 ) error {
+	if reference.String() == "secret://runtime/client-annotation-signing-v1" {
+		return secretstore.ErrReadOnly
+	}
 	return secretstore.ErrNotFound
 }

@@ -51,14 +51,14 @@ func (revision AdapterRevision) Valid() bool {
 type LaunchRecipe string
 
 const (
-	LaunchGeneric      LaunchRecipe = "generic_http_proxy"
-	LaunchNodeEnvProxy LaunchRecipe = "node_env_proxy"
-	LaunchSSLCertFile  LaunchRecipe = "ssl_cert_file"
+	LaunchGeneric            LaunchRecipe = "generic_http_proxy"
+	LaunchNodeEnvProxy       LaunchRecipe = "node_env_proxy"
+	LaunchCodexResponsesHTTP LaunchRecipe = "codex_responses_http"
 )
 
 func (recipe LaunchRecipe) Valid() bool {
 	switch recipe {
-	case LaunchGeneric, LaunchNodeEnvProxy, LaunchSSLCertFile:
+	case LaunchGeneric, LaunchNodeEnvProxy, LaunchCodexResponsesHTTP:
 		return true
 	default:
 		return false
@@ -66,7 +66,7 @@ func (recipe LaunchRecipe) Valid() bool {
 }
 
 func (recipe LaunchRecipe) RequiresRoot() bool {
-	return recipe == LaunchNodeEnvProxy || recipe == LaunchSSLCertFile
+	return recipe == LaunchNodeEnvProxy || recipe == LaunchCodexResponsesHTTP
 }
 
 type InstallShape string
@@ -113,10 +113,16 @@ const (
 	// ViberMate Exchange runtime. Without it, a failure after the Hold envelope
 	// is committed can become a second, independently billable client request.
 	FeatureCoreOwnedStreamingFallback
+	// FeatureStructuredWorkspaceTools proves that this exact client release's
+	// built-in Read/Glob/Grep/Write/Edit/NotebookEdit names and argument
+	// semantics match the Core workspace classifier. It does not cover shell,
+	// MCP, plugin, or arbitrary custom tools.
+	FeatureStructuredWorkspaceTools
 )
 
 const knownFeatures = FeatureResponsesWebSocketHTTPFallback |
-	FeatureCoreOwnedStreamingFallback
+	FeatureCoreOwnedStreamingFallback |
+	FeatureStructuredWorkspaceTools
 
 func (features Feature) valid() bool {
 	return features&^knownFeatures == 0
@@ -1020,7 +1026,8 @@ func ClaudeCode221220DarwinARM64() Release {
 			SHA256: "8addc857f3fe64d5a0368af9ee50321b50afb4a6918ba3ef018ab84f5dbbe081",
 		}},
 		LaunchRecipe: LaunchNodeEnvProxy,
-		Features:     FeatureCoreOwnedStreamingFallback,
+		Features: FeatureCoreOwnedStreamingFallback |
+			FeatureStructuredWorkspaceTools,
 	}
 }
 
@@ -1060,7 +1067,7 @@ func CodexCLI01450DarwinARM64() Release {
 				SHA256:       "1da3f4e0e96028b8a771814293c3033dafd1971f943f6c7e79b0897fe705f590",
 			},
 		},
-		LaunchRecipe: LaunchSSLCertFile,
+		LaunchRecipe: LaunchCodexResponsesHTTP,
 		Features:     FeatureResponsesWebSocketHTTPFallback,
 	}
 }

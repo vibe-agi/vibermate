@@ -12,7 +12,7 @@ import (
 
 func TestWriteReportPublishesPrivateRedactedEvidence(t *testing.T) {
 	t.Parallel()
-	if reportSchema != "vibermate.m0-assembly-acceptance/v6" {
+	if reportSchema != "vibermate.m0-assembly-acceptance/v7" {
 		t.Fatalf("report schema = %q", reportSchema)
 	}
 
@@ -28,7 +28,7 @@ func TestWriteReportPublishesPrivateRedactedEvidence(t *testing.T) {
 		CatalogRevision: 1,
 		InstallShape:    clientadapter.InstallNPMWrapperNativeChild,
 		ReleaseSHA256:   "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-		LaunchRecipe:    clientadapter.LaunchSSLCertFile,
+		LaunchRecipe:    clientadapter.LaunchCodexResponsesHTTP,
 		Features: clientadapter.
 			FeatureResponsesWebSocketHTTPFallback,
 	}); err != nil {

@@ -107,7 +107,7 @@ func (manager *Manager) Replace(
 	ctx context.Context,
 	expectedRevision uint64,
 	rules []Rule,
-	fallback Rule,
+	mode Mode,
 ) (Snapshot, error) {
 	manager.mu.Lock()
 	defer manager.mu.Unlock()
@@ -117,7 +117,7 @@ func (manager *Manager) Replace(
 	proposed := Snapshot{
 		Revision: manager.current.Revision + 1,
 		Rules:    rules,
-		Default:  fallback,
+		Mode:     mode,
 	}
 	compiled, err := proposed.Compile()
 	if err != nil {

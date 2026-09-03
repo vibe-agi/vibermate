@@ -2,6 +2,8 @@ package desktophost_test
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"fmt"
 	"io"
 	"net"
@@ -22,18 +24,119 @@ import (
 )
 
 const (
-	childMarkerEnvironment = "VIBERMATE_TEST_CHILD_FETCH"
-	childSuccessMarker     = "reached"
+	childMarkerEnvironment  = "VIBERMATE_TEST_CHILD_FETCH"
+	childManagedEnvironment = "VIBERMATE_TEST_CHILD_MANAGED"
+	childManagedFailure     = "VIBERMATE_TEST_CHILD_MANAGED_FAILURE"
+	childSuccessMarker      = "reached"
 )
 
 // TestMain lets this test binary act as its own captured child, so the test
 // needs no external tool and still exercises a real process through the real
 // launcher.
 func TestMain(m *testing.M) {
+	if os.Getenv(childManagedEnvironment) != "" {
+		os.Exit(runCapturedManagedRequest())
+	}
 	if target := os.Getenv(childMarkerEnvironment); target != "" {
 		os.Exit(runCapturedChildFetch(target))
 	}
 	os.Exit(m.Run())
+}
+
+// runCapturedManagedRequest is the fixed test client used by the production
+// composition test. It deliberately presents ambient and per-request client
+// credentials: the managed route must remove every one of them and apply the
+// selected ProviderAccount only at the final provider boundary.
+func runCapturedManagedRequest() int {
+	expectFailure := os.Getenv(childManagedFailure) != ""
+	if os.Getenv("ANTHROPIC_API_KEY") != "" ||
+		os.Getenv("ANTHROPIC_AUTH_TOKEN") != "vibermate-local-proxy" ||
+		os.Getenv("CLAUDE_CODE_OAUTH_TOKEN") != "" {
+		fmt.Fprintln(os.Stderr, "child: ambient client credentials were retained")
+		return 1
+	}
+	proxyURL := os.Getenv("HTTPS_PROXY")
+	rootPath := os.Getenv("NODE_EXTRA_CA_CERTS")
+	if proxyURL == "" || rootPath == "" {
+		fmt.Fprintln(os.Stderr, "child: managed launch environment is incomplete")
+		return 1
+	}
+	parsedProxy, err := url.Parse(proxyURL)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "child proxy URL:", err)
+		return 1
+	}
+	rootPEM, err := os.ReadFile(rootPath)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "child root:", err)
+		return 1
+	}
+	roots := x509.NewCertPool()
+	if !roots.AppendCertsFromPEM(rootPEM) {
+		fmt.Fprintln(os.Stderr, "child: managed Root is invalid")
+		return 1
+	}
+	transport := &http.Transport{
+		Proxy:             http.ProxyURL(parsedProxy),
+		ForceAttemptHTTP2: false,
+		TLSClientConfig: &tls.Config{
+			MinVersion: tls.VersionTLS12,
+			RootCAs:    roots,
+		},
+	}
+	defer transport.CloseIdleConnections()
+	request, err := http.NewRequest(
+		http.MethodPost,
+		"https://api.anthropic.com/v1/messages",
+		strings.NewReader(`{"model":"claude-test","max_tokens":32,"messages":[{"role":"user","content":"managed route"}]}`),
+	)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "child request:", err)
+		return 1
+	}
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Authorization", "Bearer client-request-secret")
+	request.Header.Set("X-Api-Key", "client-request-key")
+	request.Header.Set("Api-Key", "client-request-alias")
+	request.Header.Set("Cookie", "session=client-cookie")
+	response, err := (&http.Client{
+		Transport: transport,
+		Timeout:   15 * time.Second,
+	}).Do(request)
+	if err != nil {
+		if expectFailure {
+			return 0
+		}
+		fmt.Fprintln(os.Stderr, "child managed request:", err)
+		return 1
+	}
+	defer response.Body.Close()
+	body, readErr := io.ReadAll(response.Body)
+	if expectFailure {
+		if readErr == nil && response.StatusCode >= http.StatusBadRequest {
+			return 0
+		}
+		fmt.Fprintf(
+			os.Stderr,
+			"child managed request unexpectedly succeeded: status=%d body=%q err=%v\n",
+			response.StatusCode,
+			body,
+			readErr,
+		)
+		return 1
+	}
+	if readErr != nil || response.StatusCode != http.StatusOK ||
+		!strings.Contains(string(body), "managed reached") {
+		fmt.Fprintf(
+			os.Stderr,
+			"child managed response: status=%d body=%q err=%v\n",
+			response.StatusCode,
+			body,
+			readErr,
+		)
+		return 1
+	}
+	return 0
 }
 
 // runCapturedChildFetch fetches through the proxy variables the launcher
@@ -114,10 +217,8 @@ func TestCapturedChildReachesANonModelHost(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// The released default asks about a host nobody has decided on, so an
-	// unattended run reaches nothing until somebody says what it may reach.
-	// That is the product's behaviour, not a detail of this test: what an
-	// agent is allowed to connect to is a decision about the installation.
+	// A scoped rule still overrides Monitor mode, and its exact target is
+	// recorded as the reason the connection was allowed.
 	probeHost, probePort := splitProbeAuthority(t, listener.Addr().String())
 	rules := host.Runtime().ConnectionRules()
 	if _, err := rules.Replace(
@@ -129,7 +230,7 @@ func TestCapturedChildReachesANonModelHost(t *testing.T) {
 			Decision: connectionpolicy.DecisionAllow,
 			Match:    connectionpolicy.MatchExactHostPort(probeHost, probePort),
 		}},
-		rules.Current().Default,
+		rules.Current().Mode,
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -156,7 +257,7 @@ func TestCapturedChildReachesANonModelHost(t *testing.T) {
 		20*time.Second,
 	)
 	defer cancelRun()
-	exitCode, err := launcher.Run(runContext, []string{os.Args[0]})
+	exitCode, err := launcher.Run(runContext, transparentLaunch(os.Args[0]))
 	if err != nil || exitCode != 0 {
 		t.Fatalf(
 			"a captured child could not reach a non-model host: exit=%d err=%v",

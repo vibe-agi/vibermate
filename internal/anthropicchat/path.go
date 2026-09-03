@@ -4,18 +4,18 @@ import (
 	"context"
 	"net/http"
 
-	"github.com/vibe-agi/vibermate/internal/access"
 	"github.com/vibe-agi/vibermate/internal/operationcatalog"
 	"github.com/vibe-agi/vibermate/internal/protocolcore"
 	"github.com/vibe-agi/vibermate/internal/protocolpath"
+	"github.com/vibe-agi/vibermate/internal/protocolspec"
 )
 
 type clientCodec struct {
 	codec *Codec
 }
 
-func (clientCodec) Dialect() access.Dialect {
-	return access.DialectAnthropicMessages
+func (clientCodec) Dialect() protocolspec.Dialect {
+	return protocolspec.DialectAnthropicMessages
 }
 
 func (codec clientCodec) DecodeRequest(
@@ -36,8 +36,8 @@ type backendCodec struct {
 	codec *Codec
 }
 
-func (backendCodec) Dialect() access.Dialect {
-	return access.DialectOpenAIChat
+func (backendCodec) Dialect() protocolspec.Dialect {
+	return protocolspec.DialectOpenAIChat
 }
 
 func (codec backendCodec) EncodeRequest(
@@ -113,11 +113,11 @@ func NewProtocolPath(options Options) (*protocolpath.Path, error) {
 	if err != nil {
 		return nil, err
 	}
-	identifier, err := access.NewCodecPairID(CodecPairID)
+	identifier, err := protocolspec.NewCodecPairID(CodecPairID)
 	if err != nil {
 		return nil, err
 	}
-	operationID, err := access.NewClientOperationID(
+	operationID, err := protocolspec.NewClientOperationID(
 		operationcatalog.AnthropicMessagesCreateID,
 	)
 	if err != nil {
@@ -125,8 +125,8 @@ func NewProtocolPath(options Options) (*protocolpath.Path, error) {
 	}
 	return protocolpath.New(protocolpath.Options{
 		ID:                 identifier,
-		Revision:           access.Revision(CodecRevision),
-		ClientOperationIDs: []access.ClientOperationID{operationID},
+		Revision:           protocolspec.Revision(CodecRevision),
+		ClientOperationIDs: []protocolspec.ClientOperationID{operationID},
 		Client:             clientCodec{codec: codec},
 		Backend:            backendCodec{codec: codec},
 		Streaming:          streamingBridge{codec: codec},

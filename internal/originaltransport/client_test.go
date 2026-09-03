@@ -10,9 +10,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/vibe-agi/vibermate/internal/access"
+	"github.com/vibe-agi/vibermate/internal/egressnetwork"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
 	"github.com/vibe-agi/vibermate/internal/originaltransport"
+	"github.com/vibe-agi/vibermate/internal/originidentity"
+	"github.com/vibe-agi/vibermate/internal/protocolspec"
 )
 
 func TestOriginalTransportPinsClientOriginAndStripsProxyCredentials(
@@ -36,7 +38,7 @@ func TestOriginalTransportPinsClientOriginAndStripsProxyCredentials(
 		t.Fatal(err)
 	}
 	defer shutdownClient(t, client)
-	origin, err := access.NewClientOrigin("https://api.anthropic.com:443")
+	origin, err := originidentity.ParseClientOrigin("https://api.anthropic.com:443")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -56,9 +58,16 @@ func TestOriginalTransportPinsClientOriginAndStripsProxyCredentials(
 		RawQuery:     "page=1",
 		Headers:      headers,
 		Body:         body,
-		PayloadClass: access.OperationPayloadControl,
+		PayloadClass: protocolspec.OperationPayloadControl,
 		ConnectionID: "connection-test",
 		ParentID:     "original-request-test",
+		EgressPolicy: egressnetwork.Policy{
+			Proxy: egressnetwork.ProxyPolicy{
+				Kind:     egressnetwork.ProxySOCKS5,
+				Endpoint: "proxy.example:1080",
+			},
+			Resolver: egressnetwork.ResolverPolicy{Kind: egressnetwork.ResolverSystem},
+		},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -80,8 +89,8 @@ func TestOriginalTransportPinsClientOriginAndStripsProxyCredentials(
 		t.Fatalf("response body = %q", data)
 	}
 	sent := transport.Request()
-	if sent.URL.String() != "https://api.anthropic.com:443/v1/unknown?page=1" ||
-		sent.Host != "api.anthropic.com:443" {
+	if sent.URL.String() != origin.String()+"/v1/unknown?page=1" ||
+		sent.Host != origin.HTTPAuthority() {
 		t.Fatalf("outbound target URL=%q Host=%q", sent.URL, sent.Host)
 	}
 	if sent.Header.Get("Authorization") != "" {
@@ -98,12 +107,16 @@ func TestOriginalTransportPinsClientOriginAndStripsProxyCredentials(
 	if string(transport.Body()) != `{"value":1}` {
 		t.Fatalf("outbound body = %q", transport.Body())
 	}
+	if transport.Policy() != request.EgressPolicy() {
+		t.Fatalf("outbound EgressPolicy = %#v", transport.Policy())
+	}
 	acquire := coordinator.Request()
 	if acquire.Target.Kind != offlinehold.EgressOpaque ||
 		acquire.Target.TargetRef != origin.String() ||
 		acquire.Target.NetworkOrigin != origin.String() ||
 		acquire.Target.HTTPAuthority != origin.HTTPAuthority() ||
-		acquire.Target.TLSServerName != origin.TLSServerName() ||
+		acquire.Target.TLSServerName != origin.Host() ||
+		acquire.Target.EgressPolicy != request.EgressPolicy() ||
 		acquire.SizeBytes != int64(len(`{"value":1}`)) {
 		t.Fatalf("egress acquire = %+v", acquire)
 	}
@@ -166,7 +179,7 @@ func originalRequest(
 	kind offlinehold.EgressKind,
 ) originaltransport.Request {
 	t.Helper()
-	origin, err := access.NewClientOrigin("https://api.anthropic.com:443")
+	origin, err := originidentity.ParseClientOrigin("https://api.anthropic.com:443")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -176,7 +189,7 @@ func originalRequest(
 		Origin:       origin,
 		Method:       http.MethodGet,
 		Path:         "/v1/status",
-		PayloadClass: access.OperationPayloadControl,
+		PayloadClass: protocolspec.OperationPayloadControl,
 		ConnectionID: "connection-test",
 		ParentID:     "original-request-test",
 	})
@@ -257,10 +270,12 @@ type roundTripper struct {
 	request  *http.Request
 	headers  http.Header
 	body     []byte
+	policy   egressnetwork.Policy
 }
 
 func (transport *roundTripper) RoundTrip(
 	request *http.Request,
+	policy egressnetwork.Policy,
 ) (*http.Response, error) {
 	data, err := io.ReadAll(request.Body)
 	if err != nil {
@@ -270,6 +285,7 @@ func (transport *roundTripper) RoundTrip(
 	transport.request = request
 	transport.headers = request.Header.Clone()
 	transport.body = bytes.Clone(data)
+	transport.policy = policy
 	transport.mu.Unlock()
 	return transport.response, nil
 }
@@ -290,6 +306,12 @@ func (transport *roundTripper) Body() []byte {
 	transport.mu.Lock()
 	defer transport.mu.Unlock()
 	return bytes.Clone(transport.body)
+}
+
+func (transport *roundTripper) Policy() egressnetwork.Policy {
+	transport.mu.Lock()
+	defer transport.mu.Unlock()
+	return transport.policy
 }
 
 type blockingBody struct {

@@ -5,6 +5,8 @@ package offlinehold
 import (
 	"context"
 	"time"
+
+	"github.com/vibe-agi/vibermate/internal/egressnetwork"
 )
 
 // EgressKind identifies every approved class of external network activity.
@@ -111,6 +113,7 @@ type ProbeTransportKind string
 const (
 	ProbeTransportStrictTLS         ProbeTransportKind = "strict_tls"
 	ProbeTransportLoopbackCleartext ProbeTransportKind = "loopback_cleartext"
+	ProbeTransportPrivateCleartext  ProbeTransportKind = "private_cleartext"
 	// ProbeTransportTCP belongs to blind tunnelling. A tunnel forwards bytes
 	// it never interprets, so reachability is all it can establish: there is
 	// no TLS server name to verify and no protocol to speak.
@@ -118,14 +121,15 @@ const (
 )
 
 type ProbeTarget struct {
-	Kind           EgressKind
-	Transport      ProbeTransportKind
-	TargetRef      string
-	NetworkOrigin  string
-	HTTPAuthority  string
-	TLSServerName  string
-	AccessRevision uint64
-	PlanHash       string
+	Kind          EgressKind
+	Transport     ProbeTransportKind
+	TargetRef     string
+	NetworkOrigin string
+	HTTPAuthority string
+	TLSServerName string
+	PlanRevision  uint64
+	PlanDigest    string
+	EgressPolicy  egressnetwork.Policy
 }
 
 func (target ProbeTarget) Validate() error {

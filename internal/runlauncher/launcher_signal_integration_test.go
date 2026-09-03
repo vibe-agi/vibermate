@@ -55,7 +55,7 @@ while :; do sleep 1; done
 		proxy:           capability(0x62),
 		run:             capability(0x63),
 		expectedCommand: []string{"codex"},
-		recipe:          clientadapter.LaunchSSLCertFile,
+		recipe:          clientadapter.LaunchCodexResponsesHTTP,
 		recognition:     clientadapter.RecognitionVerified,
 		adapter: &capturecontrol.ClientLaunchAdapterView{
 			ClientAdapterView: capturecontrol.ClientAdapterView{
@@ -66,7 +66,7 @@ while :; do sleep 1; done
 				Source: capturecontrol.
 					ClientAdapterSourcePrelaunchDigestCatalog,
 				InstallShape: clientadapter.InstallNPMWrapperNativeChild,
-				LaunchRecipe: clientadapter.LaunchSSLCertFile,
+				LaunchRecipe: clientadapter.LaunchCodexResponsesHTTP,
 			},
 			StreamingFallbackPolicy: clientadapter.
 				StreamingFallbackClientDefault,
@@ -116,7 +116,7 @@ while :; do sleep 1; done
 	}
 	finished := make(chan launcherOutcome, 1)
 	go func() {
-		code, runErr := launcher.Run(context.Background(), []string{"codex"})
+		code, runErr := launcher.Run(context.Background(), transparentLaunch("codex"))
 		finished <- launcherOutcome{code: code, err: runErr}
 	}()
 	waitForChildReady(

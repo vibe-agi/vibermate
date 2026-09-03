@@ -10,6 +10,7 @@ import (
 
 	"github.com/vibe-agi/vibermate/internal/capturerun"
 	"github.com/vibe-agi/vibermate/internal/clientadapter"
+	"github.com/vibe-agi/vibermate/internal/runtimeuser"
 	"github.com/vibe-agi/vibermate/internal/workspaceidentity"
 )
 
@@ -20,6 +21,15 @@ const captureRunColumns = `
 	cwd,
 	canonical_executable_path,
 	local_user_label,
+	home_directory,
+	operating_system,
+	operating_system_version,
+	architecture,
+	time_zone,
+	runtime_user_id,
+	runtime_username,
+	login_session_id,
+	device_name,
 	machine_id,
 	machine_registration_revision,
 	workspace_id,
@@ -83,6 +93,15 @@ func (repository *captureRunRepository) Create(
 		     cwd,
 		     canonical_executable_path,
 		     local_user_label,
+		     home_directory,
+		     operating_system,
+		     operating_system_version,
+		     architecture,
+		     time_zone,
+		     runtime_user_id,
+		     runtime_username,
+		     login_session_id,
+		     device_name,
 		     machine_id,
 		     machine_registration_revision,
 		     workspace_id,
@@ -105,13 +124,22 @@ func (repository *captureRunRepository) Create(
 		     expires_at_unix_ms,
 		     updated_at_unix_ms
 		 )
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		record.ID,
 		record.ProxyCapabilityHash[:],
 		record.ControlCapabilityHash[:],
 		record.CWD,
 		record.CanonicalExecutablePath,
-		record.LocalUserLabel,
+		record.Runtime.LocalUserName,
+		record.Runtime.HomeDirectory,
+		record.Runtime.OperatingSystem,
+		record.Runtime.OperatingSystemVersion,
+		record.Runtime.Architecture,
+		record.Runtime.TimeZone,
+		nullableText(string(record.RuntimeUserID)),
+		nullableText(record.RuntimeUsername),
+		nullableText(string(record.LoginSessionID)),
+		nullableText(record.DeviceName),
 		record.MachineID.String(),
 		int64(record.MachineRegistrationRevision),
 		record.WorkspaceID.String(),
@@ -433,6 +461,8 @@ func scanCaptureRun(scanner captureRunScanner) (capturerun.DurableRecord, error)
 		machineID, workspaceID              string
 		workspaceLabel, workspaceEvidence   string
 		machineRevision, derivationRevision int64
+		runtimeUserID, runtimeUsername      sql.NullString
+		loginSessionID, deviceName          sql.NullString
 	)
 	if err := scanner.Scan(
 		&record.ID,
@@ -440,7 +470,16 @@ func scanCaptureRun(scanner captureRunScanner) (capturerun.DurableRecord, error)
 		&controlHash,
 		&record.CWD,
 		&record.CanonicalExecutablePath,
-		&record.LocalUserLabel,
+		&record.Runtime.LocalUserName,
+		&record.Runtime.HomeDirectory,
+		&record.Runtime.OperatingSystem,
+		&record.Runtime.OperatingSystemVersion,
+		&record.Runtime.Architecture,
+		&record.Runtime.TimeZone,
+		&runtimeUserID,
+		&runtimeUsername,
+		&loginSessionID,
+		&deviceName,
 		&machineID,
 		&machineRevision,
 		&workspaceID,
@@ -475,6 +514,19 @@ func scanCaptureRun(scanner captureRunScanner) (capturerun.DurableRecord, error)
 	copy(record.ControlCapabilityHash[:], controlHash)
 	record.Observation = capturerun.Observation(observation)
 	record.Recognition = clientadapter.Recognition(recognition)
+	if runtimeUserID.Valid != runtimeUsername.Valid ||
+		runtimeUserID.Valid != loginSessionID.Valid ||
+		runtimeUserID.Valid != deviceName.Valid {
+		return capturerun.DurableRecord{}, errors.New(
+			"CaptureRun Runtime User attribution is incomplete",
+		)
+	}
+	if runtimeUserID.Valid {
+		record.RuntimeUserID = runtimeuser.UserID(runtimeUserID.String)
+		record.RuntimeUsername = runtimeUsername.String
+		record.LoginSessionID = runtimeuser.LoginSessionID(loginSessionID.String)
+		record.DeviceName = deviceName.String
+	}
 	if machineRevision < 0 || derivationRevision < 0 {
 		return capturerun.DurableRecord{}, errors.New(
 			"CaptureRun workspace identity revision is invalid",
@@ -545,6 +597,13 @@ func scanCaptureRun(scanner captureRunScanner) (capturerun.DurableRecord, error)
 	return record, nil
 }
 
+func nullableText(value string) any {
+	if value == "" {
+		return nil
+	}
+	return value
+}
+
 func captureRunAdapterColumns(
 	evidence *clientadapter.Evidence,
 ) (
@@ -577,19 +636,49 @@ func (repository *captureRunRepository) List(
 	request capturerun.PageRequest,
 ) (capturerun.Page, error) {
 	request = request.Normalized()
+	if request.Cursor != nil && !request.Cursor.Valid() {
+		return capturerun.Page{}, capturerun.ErrInvalidRequest
+	}
 	operation, finish, err := repository.operations.begin(ctx)
 	if err != nil {
 		return capturerun.Page{}, err
 	}
 	defer finish()
-	rows, err := repository.database.QueryContext(
-		operation,
-		`SELECT `+captureRunColumns+`
-		 FROM capture_runs
-		 ORDER BY created_at_unix_ms DESC, run_id DESC
-		 LIMIT ?`,
-		request.Limit,
-	)
+	const runningRank = `CASE WHEN state IN ('created', 'attached') THEN 0 ELSE 1 END`
+	query := `SELECT ` + captureRunColumns + `
+		 FROM capture_runs`
+	arguments := make([]any, 0, 7)
+	if cursor := request.Cursor; cursor != nil {
+		cursorRank := 1
+		if cursor.Running {
+			cursorRank = 0
+		}
+		includeBoundary := 0
+		if cursor.IncludeAtUpdatedAt {
+			includeBoundary = 1
+		}
+		updatedAt := toUnixMillis(cursor.UpdatedAt)
+		query += `
+		 WHERE (` + runningRank + ` > ?)
+		    OR (` + runningRank + ` = ? AND (
+		      updated_at_unix_ms < ?
+		      OR (? = 1 AND updated_at_unix_ms = ? AND run_id > ?)
+		    ))`
+		arguments = append(
+			arguments,
+			cursorRank,
+			cursorRank,
+			updatedAt,
+			includeBoundary,
+			updatedAt,
+			cursor.AfterID,
+		)
+	}
+	query += `
+		 ORDER BY ` + runningRank + ` ASC, updated_at_unix_ms DESC, run_id ASC
+		 LIMIT ?`
+	arguments = append(arguments, request.Limit)
+	rows, err := repository.database.QueryContext(operation, query, arguments...)
 	if err != nil {
 		return capturerun.Page{}, fmt.Errorf("list CaptureRuns: %w", err)
 	}
@@ -633,4 +722,40 @@ func (repository *captureRunRepository) Get(
 		return capturerun.View{}, fmt.Errorf("get CaptureRun: %w", err)
 	}
 	return capturerun.ViewOf(record), nil
+}
+
+func (repository *captureRunRepository) Active(
+	ctx context.Context,
+	runID string,
+	now time.Time,
+) (bool, error) {
+	if runID == "" || now.IsZero() {
+		return false, capturerun.ErrInvalidRequest
+	}
+	operation, finish, err := repository.operations.begin(ctx)
+	if err != nil {
+		return false, err
+	}
+	defer finish()
+	var state capturerun.State
+	var expiresAtUnixMillis int64
+	err = repository.database.QueryRowContext(
+		operation,
+		`SELECT state, expires_at_unix_ms FROM capture_runs WHERE run_id = ?`,
+		runID,
+	).Scan(&state, &expiresAtUnixMillis)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, capturerun.ErrNotFound
+	}
+	if err != nil {
+		return false, fmt.Errorf("read CaptureRun activity: %w", err)
+	}
+	switch state {
+	case capturerun.StateCreated, capturerun.StateAttached:
+		return expiresAtUnixMillis > toUnixMillis(now), nil
+	case capturerun.StateFinished, capturerun.StateRevoked, capturerun.StateExpired:
+		return false, nil
+	default:
+		return false, capturerun.ErrInvalidRequest
+	}
 }

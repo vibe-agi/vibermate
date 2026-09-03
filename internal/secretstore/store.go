@@ -189,8 +189,14 @@ func (value *Value) Destroy() {
 
 // Reader returns a fresh process-memory value for each read. Implementations
 // must never include secret bytes in errors.
+//
+// ReadAtRevision is the data-plane read seam. The returned bytes and the
+// compared revision must come from one physical store observation; composing
+// Inspect followed by Read does not satisfy this contract because a credential
+// can rotate between those calls.
 type Reader interface {
 	Read(context.Context, Reference) (*Value, error)
+	ReadAtRevision(context.Context, Reference, Revision) (*Value, error)
 }
 
 // ReplaceCommand performs CAS against the revision stored by the physical

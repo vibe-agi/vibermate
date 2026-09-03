@@ -7,22 +7,27 @@ import (
 	"maps"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
 	"time"
 
 	"github.com/vibe-agi/vibermate/internal/acceptancereport"
-	"github.com/vibe-agi/vibermate/internal/access"
 	"github.com/vibe-agi/vibermate/internal/activity"
+	"github.com/vibe-agi/vibermate/internal/captureassignment"
+	"github.com/vibe-agi/vibermate/internal/captureidentity"
 	"github.com/vibe-agi/vibermate/internal/clientadapter"
 	"github.com/vibe-agi/vibermate/internal/connectionevent"
+	"github.com/vibe-agi/vibermate/internal/connectionpolicy"
 	"github.com/vibe-agi/vibermate/internal/desktopcontrol"
+	"github.com/vibe-agi/vibermate/internal/egressaudit"
+	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/exchange"
 	"github.com/vibe-agi/vibermate/internal/instanceguard"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
+	"github.com/vibe-agi/vibermate/internal/originidentity"
 	"github.com/vibe-agi/vibermate/internal/runtimepath"
-	"github.com/vibe-agi/vibermate/internal/secretstore"
 	"github.com/vibe-agi/vibermate/internal/toolapproval"
 )
 
@@ -59,12 +64,6 @@ func runAcceptance(
 		checkPassed,
 		"App bundle and acceptance artifacts share one clean Git source identity",
 	)
-	phases, isolateErr := splitAcceptancePhases(config)
-	if isolateErr != nil {
-		return fail("deterministic-secret-reference", isolateErr)
-	}
-	config = phases.deterministic
-
 	adapterEvidence, err := verifyFixedClient(ctx, config)
 	if err != nil {
 		return fail("fixed-client-identity", err)
@@ -135,7 +134,7 @@ func runAcceptance(
 	report.add(
 		"packaged-main-navigation-cold-restore",
 		checkPassed,
-		"two fresh packaged main-window launches restored one non-default private locator, atomically persisted Router mount state, and flushed it on exit",
+		"two fresh packaged main-window launches restored one non-default closed workbench preference set, repaired a stale selection, and atomically flushed the last validated state on exit",
 	)
 
 	dataDirectory := config.dataDirectory
@@ -187,507 +186,407 @@ func runAcceptance(
 		checkPassed,
 		"packaged daemon published a ready Desktop generation",
 	)
-	applied, status, problem, err := first.control.applyAccess(ctx, config, 0)
+	published, status, problem, err := first.control.publishInitialEnvironment(ctx, config, 0, nil)
 	if err != nil ||
 		status != http.StatusOK ||
 		problem.ReasonCode != "" ||
-		applied.Outcome != access.WriteOutcomeCommitted ||
-		applied.Revision != 1 ||
-		applied.ApplicationState != desktopcontrol.AccessApplicationStateActive ||
-		len(applied.PlanHash) != 64 {
+		published.Publish.Outcome != environment.CommitOutcomeCommitted ||
+		published.Publish.Environment.Revision != 1 ||
+		!canonicalSHA256(published.Publish.Environment.Digest) {
 		return fail(
-			"access-apply",
+			"environment-publish",
 			fmt.Errorf(
 				"status=%d reason=%s result=%+v err=%w",
 				status,
 				problem.ReasonCode,
-				applied,
+				published,
 				err,
 			),
 		)
 	}
 	report.add(
-		"access-apply",
+		"environment-publish",
 		checkPassed,
-		"revision 1 executable Access committed and published",
+		"Environment draft revision 1 was impact-previewed and atomically published as revision 1",
 	)
-	if err := configureAcceptanceConnectionPolicy(
-		ctx,
-		first.control,
-		config,
-	); err != nil {
-		return fail("fixed-client-connection-policy", err)
-	}
-	report.add(
-		"fixed-client-connection-policy",
-		checkPassed,
-		"an explicit exact-host-and-port rule admitted only the fixed client origin; the default remained ask",
-	)
-	firstAudit, err := openExchangeAuditReader(ctx, dataDirectory)
-	if err != nil {
-		return fail("fixed-client-ingress-preflight", err)
-	}
-	defer firstAudit.Close()
-	preflight, err := runHeldIngressPreflight(ctx, config, first, firstAudit)
-	if err != nil {
-		return fail("fixed-client-ingress-preflight", err)
-	}
-	report.add(
-		"fixed-client-ingress-preflight",
-		checkPassed,
-		"fixed client crossed its exact ingress and controlled-egress boundary; queuedKinds="+preflight.queuedKinds,
-	)
-	if client.ID == acceptanceClientCodexCLI {
-		fallbackDetail, err := preflight.codexHTTPFallback.reportDetail()
-		if err != nil {
-			return fail(
-				"fixed-codex-http-fallback",
-				err,
-			)
+	{
+		assignmentEvidence, assignmentErr := exerciseCaptureEnvironmentAssignment(
+			ctx,
+			config,
+			first.control,
+		)
+		if assignmentErr != nil {
+			return fail("capture-environment-assignment", assignmentErr)
 		}
 		report.add(
-			"fixed-codex-http-fallback",
+			"capture-environment-assignment",
 			checkPassed,
-			fallbackDetail,
+			"the packaged launcher created one managed Capture with an explicit launch-scoped Environment assignment",
 		)
-	}
-	report.add(
-		"fixed-client-provider-fail-closed",
-		checkPassed,
-		"the subsequent provider request failed before transport at the missing credential boundary; reason="+preflight.providerReason,
-	)
-	connectionID, err := waitForClientConnectionAudit(
-		ctx,
-		first.control,
-		config,
-		preflight.connectionBaseline,
-		15*time.Second,
-	)
-	if err != nil {
-		return fail("fixed-client-connection-audit", err)
-	}
-	report.add(
-		"fixed-client-connection-audit",
-		checkPassed,
-		"durable MITM ConnectionEvent bound the verified fixed client to the explicit exact-host-and-port rule without request-level provider facts; connectionId="+connectionID,
-	)
-	stopContext, stopCancel := context.WithTimeout(ctx, 30*time.Second)
-	err = first.stopGracefully(stopContext)
-	stopCancel()
-	firstStopped = true
-	if err != nil {
-		return fail("daemon-sigint", err)
-	}
-	if err := firstAudit.Close(); err != nil {
-		return fail("sqlite-reopen", err)
-	}
-	if err := requireReopenedExchangeAudit(
-		ctx,
-		dataDirectory,
-		nil,
-		preflight.providerFailure,
-	); err != nil {
-		return fail("sqlite-reopen", err)
-	}
-	removed, err := discoveryRemoved(layout.CLIControlRecord)
-	if err != nil || !removed {
-		return fail(
-			"daemon-sigint",
-			errors.New("graceful daemon exit left owned discovery"),
-		)
-	}
-	report.add(
-		"daemon-sigint",
-		checkPassed,
-		"SIGINT drained the Host and removed owned discovery",
-	)
-
-	second, err := startDaemon(
-		ctx,
-		config,
-		layout.AppCacheDirectory,
-		dataDirectory,
-	)
-	if err != nil {
-		return fail("sqlite-reopen", err)
-	}
-	secondStopped := false
-	defer func() {
-		if !secondStopped {
-			stopContext, stopCancel := context.WithTimeout(
-				context.Background(),
-				10*time.Second,
-			)
-			_ = second.stopGracefully(stopContext)
-			stopCancel()
-		}
-	}()
-	if second.descriptor.InstanceID == first.descriptor.InstanceID {
-		return fail(
-			"sqlite-reopen",
-			errors.New("restarted daemon reused its runtime incarnation"),
-		)
-	}
-	if err := requireRecoveredAccess(ctx, second.control, config); err != nil {
-		return fail("sqlite-reopen", err)
-	}
-	if err := requireReopenedExchangeAudit(
-		ctx,
-		dataDirectory,
-		second.control,
-		preflight.providerFailure,
-	); err != nil {
-		return fail("sqlite-reopen", err)
-	}
-	report.add(
-		"sqlite-reopen",
-		checkPassed,
-		"new incarnation recovered Access revision 1 and the exact committed Exchange failure from SQLite",
-	)
-	heldAgent, err := queueHeldIngressForDaemonKill(
-		ctx,
-		config,
-		second,
-	)
-	if err != nil {
-		return fail("daemon-sigkill-active-request", err)
-	}
-	heldRunFinished := false
-	defer func() {
-		if !heldRunFinished {
-			_ = heldAgent.run.signalInterrupt()
-			waitContext, cancelWait := context.WithTimeout(
-				context.Background(),
-				10*time.Second,
-			)
-			_, _ = heldAgent.run.wait(waitContext)
-			cancelWait()
-		}
-		_ = os.RemoveAll(heldAgent.workingDirectory)
-	}()
-	killContext, killCancel := context.WithTimeout(ctx, 10*time.Second)
-	secondStopped = true
-	err = second.kill(killContext)
-	killCancel()
-	if err != nil {
-		return fail("daemon-sigkill-active-request", err)
-	}
-	agentExitContext, cancelAgentExit := context.WithTimeout(
-		ctx,
-		45*time.Second,
-	)
-	_, err = heldAgent.run.wait(agentExitContext)
-	cancelAgentExit()
-	heldRunFinished = true
-	if err != nil {
-		return fail("daemon-sigkill-active-request", err)
-	}
-	_, _, _, markerSeen := heldAgent.run.evidence()
-	if markerSeen {
-		return fail(
-			"daemon-sigkill-active-request",
-			errors.New("killed held request produced a completion marker"),
-		)
-	}
-	_ = os.RemoveAll(heldAgent.workingDirectory)
-	report.add(
-		"daemon-sigkill-active-request",
-		checkPassed,
-		"SIGKILL terminated a held fixed-client request without an upstream send or completion marker; queuedKinds="+heldAgent.queuedKinds,
-	)
-
-	third, err := startDaemon(
-		ctx,
-		config,
-		layout.AppCacheDirectory,
-		dataDirectory,
-	)
-	if err != nil {
-		return fail("daemon-sigkill", err)
-	}
-	thirdStopped := false
-	defer func() {
-		if !thirdStopped {
-			stopContext, stopCancel := context.WithTimeout(
-				context.Background(),
-				10*time.Second,
-			)
-			_ = third.stopGracefully(stopContext)
-			stopCancel()
-		}
-	}()
-	if third.descriptor.InstanceID == second.descriptor.InstanceID {
-		return fail(
-			"daemon-sigkill",
-			errors.New("post-kill daemon reused its runtime incarnation"),
-		)
-	}
-	if err := requireRecoveredAccess(ctx, third.control, config); err != nil {
-		return fail("daemon-sigkill", err)
-	}
-	offlineSnapshot, err := third.control.offline(ctx)
-	if err != nil {
-		return fail("daemon-sigkill", err)
-	}
-	if err := requireSettledOfflineState(offlineSnapshot); err != nil {
-		return fail("daemon-sigkill", err)
-	}
-	if err := requireReopenedExchangeAudit(
-		ctx,
-		dataDirectory,
-		third.control,
-		preflight.providerFailure,
-	); err != nil {
-		return fail("daemon-sigkill", err)
-	}
-	report.add(
-		"daemon-sigkill",
-		checkPassed,
-		"post-kill generation recovered SQLite Access with no resurrected egress queue",
-	)
-	if err := requireRecoveredConnectionAudit(
-		ctx,
-		third.control,
-		heldAgent.connectionID,
-	); err != nil {
-		return fail("daemon-sigkill-connection-recovery", err)
-	}
-	report.add(
-		"daemon-sigkill-connection-recovery",
-		checkPassed,
-		"the restarted generation durably closed the interrupted ConnectionEvent with daemon_restarted",
-	)
-
-	if config.deterministicOnly {
-		stopContext, stopCancel = context.WithTimeout(ctx, 30*time.Second)
-		err = third.stopGracefully(stopContext)
+		stopContext, stopCancel := context.WithTimeout(ctx, 30*time.Second)
+		stopErr := first.stopGracefully(stopContext)
 		stopCancel()
-		thirdStopped = true
-		if err != nil {
-			return fail("deterministic-shutdown", err)
+		firstStopped = true
+		if stopErr != nil {
+			return fail("daemon-sigint", stopErr)
+		}
+		removed, removeErr := discoveryRemoved(layout.CLIControlRecord)
+		if removeErr != nil || !removed {
+			return fail(
+				"daemon-sigint",
+				errors.New("graceful daemon exit left owned discovery"),
+			)
 		}
 		report.add(
-			"deterministic-shutdown",
+			"daemon-sigint",
 			checkPassed,
-			"deterministic acceptance generation drained",
+			"SIGINT drained the Host and removed owned discovery",
 		)
-		if err := requireCurrentCheckContract(
-			report,
-			acceptancereport.ModeDeterministic,
+
+		restarted, restartErr := startDaemon(
+			ctx,
+			config,
+			layout.AppCacheDirectory,
+			dataDirectory,
+		)
+		if restartErr != nil {
+			return fail("environment-recovery", restartErr)
+		}
+		restartedStopped := false
+		defer func() {
+			if !restartedStopped {
+				stopContext, stopCancel := context.WithTimeout(
+					context.Background(),
+					10*time.Second,
+				)
+				_ = restarted.stopGracefully(stopContext)
+				stopCancel()
+			}
+		}()
+		if restarted.descriptor.InstanceID == first.descriptor.InstanceID {
+			return fail(
+				"environment-recovery",
+				errors.New("restarted daemon reused its runtime incarnation"),
+			)
+		}
+		if recoveryErr := requireRecoveredEnvironment(
+			ctx,
+			restarted.control,
+			config,
+		); recoveryErr != nil {
+			return fail("environment-recovery", recoveryErr)
+		}
+		report.add(
+			"environment-recovery",
+			checkPassed,
+			"a new daemon incarnation recovered the published Environment revision and digest from SQLite",
+		)
+		if recoveryErr := requireRecoveredCaptureAssignment(
+			ctx,
+			restarted.control,
+			assignmentEvidence,
+		); recoveryErr != nil {
+			return fail("capture-assignment-recovery", recoveryErr)
+		}
+		report.add(
+			"capture-assignment-recovery",
+			checkPassed,
+			"the new daemon incarnation recovered the exact launch-scoped Capture assignment from SQLite",
+		)
+		stopContext, stopCancel = context.WithTimeout(ctx, 30*time.Second)
+		stopErr = restarted.stopGracefully(stopContext)
+		stopCancel()
+		restartedStopped = true
+		if stopErr != nil {
+			return fail("deterministic-shutdown", stopErr)
+		}
+		if config.deterministicOnly {
+			report.add(
+				"deterministic-shutdown",
+				checkPassed,
+				"deterministic Environment acceptance generation drained",
+			)
+			if contractErr := requireCurrentCheckContract(
+				report,
+				acceptancereport.ModeDeterministic,
+			); contractErr != nil {
+				return fail("acceptance-report-contract", contractErr)
+			}
+			return report, nil
+		}
+		report.add(
+			"deterministic-phase-shutdown",
+			checkPassed,
+			"the deterministic Environment generation drained before credentialed state was created",
+		)
+
+		credentialedDirectory, directoryErr := os.MkdirTemp(
+			"",
+			"vibermate-credentialed-assembly-*",
+		)
+		if directoryErr != nil {
+			return fail("credentialed-private-data-directory", directoryErr)
+		}
+		if directoryErr = privateDirectory(credentialedDirectory); directoryErr != nil {
+			return fail("credentialed-private-data-directory", directoryErr)
+		}
+		if !config.keepData {
+			defer cleanTemporaryData(credentialedDirectory)
+		}
+		report.add(
+			"credentialed-private-data-directory",
+			checkPassed,
+			"credentialed acceptance uses a second private runtime data directory",
+		)
+		credential, credentialErr := readPrivateCredential(config.anthropicKeyPath)
+		if credentialErr != nil {
+			return fail("provider-account", credentialErr)
+		}
+		defer credential.Destroy()
+		credentialed, credentialedErr := startDaemon(
+			ctx,
+			config,
+			layout.AppCacheDirectory,
+			credentialedDirectory,
+		)
+		if credentialedErr != nil {
+			return fail("credentialed-daemon-start", credentialedErr)
+		}
+		credentialedStopped := false
+		defer func() {
+			if !credentialedStopped {
+				stopContext, stopCancel := context.WithTimeout(
+					context.Background(),
+					10*time.Second,
+				)
+				_ = credentialed.stopGracefully(stopContext)
+				stopCancel()
+			}
+		}()
+		account, accountErr := credentialed.control.createAnthropicAccount(
+			ctx,
+			credential,
+		)
+		credential.Destroy()
+		if accountErr != nil {
+			return fail("provider-account", accountErr)
+		}
+		report.add(
+			"provider-account",
+			checkPassed,
+			"the private control plane stored one Anthropic credential without returning it and published account revision 1 / credential epoch 1",
+		)
+		credentialedPublished, credentialedStatus, credentialedProblem, credentialedErr :=
+			credentialed.control.publishInitialEnvironment(ctx, config, 0, &account)
+		if credentialedErr != nil ||
+			credentialedStatus != http.StatusOK ||
+			credentialedProblem.ReasonCode != "" ||
+			credentialedPublished.Publish.Outcome != environment.CommitOutcomeCommitted ||
+			credentialedPublished.Publish.Environment.Revision != 1 ||
+			!canonicalSHA256(credentialedPublished.Publish.Environment.Digest) {
+			return fail(
+				"credentialed-environment-publish",
+				fmt.Errorf(
+					"status=%d reason=%s result=%+v err=%w",
+					credentialedStatus,
+					credentialedProblem.ReasonCode,
+					credentialedPublished,
+					credentialedErr,
+				),
+			)
+		}
+		report.add(
+			"credentialed-environment-publish",
+			checkPassed,
+			"the credentialed runtime independently previewed and published Environment revision 1",
+		)
+		if _, assignmentErr = exerciseCaptureEnvironmentAssignment(
+			ctx,
+			config,
+			credentialed.control,
+		); assignmentErr != nil {
+			return fail("credentialed-capture-environment-assignment", assignmentErr)
+		}
+		report.add(
+			"credentialed-capture-environment-assignment",
+			checkPassed,
+			"the credentialed runtime independently persisted the launch-scoped Environment assignment",
+		)
+		if err := configureAcceptanceConnectionPolicy(
+			ctx,
+			credentialed.control,
+			config,
 		); err != nil {
-			return fail("acceptance-report-contract", err)
+			return fail("credentialed-managed-request", err)
+		}
+		audit, auditErr := openExchangeAuditReader(ctx, credentialedDirectory)
+		if auditErr != nil {
+			return fail("credentialed-managed-request", auditErr)
+		}
+		baseline, baselineErr := audit.latestSequence(ctx)
+		if baselineErr != nil {
+			_ = audit.Close()
+			return fail("credentialed-managed-request", baselineErr)
+		}
+		if err := runNormalReply(ctx, config, credentialed, audit); err != nil {
+			_ = audit.Close()
+			return fail("credentialed-managed-request", err)
+		}
+		report.add(
+			"credentialed-managed-request",
+			checkPassed,
+			"the fixed Claude client completed through the managed Anthropic route",
+		)
+		firstExchange, evidenceErr := waitForManagedReplyEvidence(
+			ctx,
+			audit,
+			credentialed.control,
+			config,
+			baseline,
+			account,
+			credentialedPublished.Publish.Environment,
+			15*time.Second,
+		)
+		if closeErr := audit.Close(); evidenceErr == nil {
+			evidenceErr = closeErr
+		}
+		if evidenceErr != nil {
+			return fail("credentialed-managed-evidence", evidenceErr)
+		}
+		report.add(
+			"credentialed-managed-evidence",
+			checkPassed,
+			"frozen Environment, route, account revision, credential epoch, usage, and one terminal provider Attempt agree",
+		)
+		stopContext, stopCancel = context.WithTimeout(ctx, 30*time.Second)
+		stopErr = credentialed.stopGracefully(stopContext)
+		stopCancel()
+		credentialedStopped = true
+		if stopErr != nil {
+			return fail("credentialed-recovery", stopErr)
+		}
+		credentialedRestarted, restartErr := startDaemon(
+			ctx,
+			config,
+			layout.AppCacheDirectory,
+			credentialedDirectory,
+		)
+		if restartErr != nil {
+			return fail("credentialed-recovery", restartErr)
+		}
+		credentialedRestartedStopped := false
+		defer func() {
+			if !credentialedRestartedStopped {
+				stopContext, stopCancel := context.WithTimeout(
+					context.Background(),
+					10*time.Second,
+				)
+				_ = credentialedRestarted.stopGracefully(stopContext)
+				stopCancel()
+			}
+		}()
+		recoveredAccount, recoveryErr := credentialedRestarted.control.providerAccount(
+			ctx,
+			account.ID,
+		)
+		if recoveryErr != nil {
+			return fail("credentialed-recovery", recoveryErr)
+		}
+		if !providerAccountResponsesEqual(recoveredAccount, account) {
+			return fail(
+				"credentialed-recovery",
+				fmt.Errorf(
+					"recovered account differs: got=%+v want=%+v",
+					recoveredAccount,
+					account,
+				),
+			)
+		}
+		if recoveryErr = requireRecoveredEnvironment(
+			ctx,
+			credentialedRestarted.control,
+			config,
+		); recoveryErr != nil {
+			return fail("credentialed-recovery", recoveryErr)
+		}
+		report.add(
+			"credentialed-recovery",
+			checkPassed,
+			"a fresh daemon recovered the exact managed Environment and ready account from SQLite and the private file SecretStore",
+		)
+		reopenedAudit, reopenErr := openExchangeAuditReader(ctx, credentialedDirectory)
+		if reopenErr != nil {
+			return fail("credentialed-recovered-request", reopenErr)
+		}
+		restartBaseline, baselineErr := reopenedAudit.latestSequence(ctx)
+		if baselineErr == nil {
+			baselineErr = requireExchangeAuditRecord(
+				ctx,
+				reopenedAudit,
+				firstExchange,
+			)
+		}
+		if baselineErr != nil {
+			_ = reopenedAudit.Close()
+			return fail("credentialed-recovered-request", baselineErr)
+		}
+		if err := runNormalReply(
+			ctx,
+			config,
+			credentialedRestarted,
+			reopenedAudit,
+		); err != nil {
+			_ = reopenedAudit.Close()
+			return fail("credentialed-recovered-request", err)
+		}
+		_, evidenceErr = waitForManagedReplyEvidence(
+			ctx,
+			reopenedAudit,
+			credentialedRestarted.control,
+			config,
+			restartBaseline,
+			recoveredAccount,
+			credentialedPublished.Publish.Environment,
+			15*time.Second,
+		)
+		if closeErr := reopenedAudit.Close(); evidenceErr == nil {
+			evidenceErr = closeErr
+		}
+		if evidenceErr != nil {
+			return fail("credentialed-recovered-request", evidenceErr)
+		}
+		report.add(
+			"credentialed-recovered-request",
+			checkPassed,
+			"the reopened packaged runtime completed a second request with the same frozen managed authority",
+		)
+		stopContext, stopCancel = context.WithTimeout(ctx, 30*time.Second)
+		stopErr = credentialedRestarted.stopGracefully(stopContext)
+		stopCancel()
+		credentialedRestartedStopped = true
+		if stopErr != nil {
+			return fail("final-shutdown", stopErr)
+		}
+		report.add(
+			"final-shutdown",
+			checkPassed,
+			"the credentialed Environment generation drained after recovered provider traffic",
+		)
+		if contractErr := requireCurrentCheckContract(
+			report,
+			acceptancereport.ModeCredentialed,
+		); contractErr != nil {
+			return fail("acceptance-report-contract", contractErr)
 		}
 		return report, nil
 	}
-	stopContext, stopCancel = context.WithTimeout(ctx, 30*time.Second)
-	err = third.stopGracefully(stopContext)
-	stopCancel()
-	thirdStopped = true
-	if err != nil {
-		return fail("deterministic-phase-shutdown", err)
-	}
-	report.add(
-		"deterministic-phase-shutdown",
-		checkPassed,
-		"the isolated deterministic generation drained before credentialed state was created",
-	)
-
-	credentialedDataDirectory, err := os.MkdirTemp(
-		"",
-		"vibermate-credentialed-assembly-*",
-	)
-	if err != nil {
-		return fail("credentialed-private-data-directory", err)
-	}
-	if err := privateDirectory(credentialedDataDirectory); err != nil {
-		return fail("credentialed-private-data-directory", err)
-	}
-	if !config.keepData {
-		defer cleanTemporaryData(credentialedDataDirectory)
-	}
-	report.add(
-		"credentialed-private-data-directory",
-		checkPassed,
-		"credentialed acceptance uses a second private runtime data directory",
-	)
-
-	config = phases.credentialed
-	credentialed, err := startDaemon(
-		ctx,
-		config,
-		layout.AppCacheDirectory,
-		credentialedDataDirectory,
-	)
-	if err != nil {
-		return fail("credentialed-daemon-start", err)
-	}
-	credentialedStopped := false
-	defer func() {
-		if !credentialedStopped {
-			stopContext, stopCancel := context.WithTimeout(
-				context.Background(),
-				10*time.Second,
-			)
-			_ = credentialed.stopGracefully(stopContext)
-			stopCancel()
-		}
-	}()
-	credentialedApplied, credentialedStatus, credentialedProblem, credentialedErr :=
-		credentialed.control.applyAccess(ctx, config, 0)
-	if credentialedErr != nil ||
-		credentialedStatus != http.StatusOK ||
-		credentialedProblem.ReasonCode != "" ||
-		credentialedApplied.Outcome != access.WriteOutcomeCommitted ||
-		credentialedApplied.Revision != 1 ||
-		credentialedApplied.ApplicationState != desktopcontrol.AccessApplicationStateActive ||
-		len(credentialedApplied.PlanHash) != 64 {
-		return fail(
-			"credentialed-access-apply",
-			fmt.Errorf(
-				"status=%d reason=%s result=%+v err=%w",
-				credentialedStatus,
-				credentialedProblem.ReasonCode,
-				credentialedApplied,
-				credentialedErr,
-			),
-		)
-	}
-	if err := configureAcceptanceConnectionPolicy(
-		ctx,
-		credentialed.control,
-		config,
-	); err != nil {
-		return fail("credentialed-connection-policy", err)
-	}
-	report.add(
-		"credentialed-access-apply",
-		checkPassed,
-		"revision 1 created an isolated credentialed Access without exposing the logical reference or secret value",
-	)
-	credential, err := credentialed.control.credential(ctx, config)
-	if err != nil ||
-		credential.SecretState != secretstore.StateConfigured ||
-		credential.SecretRevision == 0 {
-		report.add(
-			"provider-secret",
-			checkBlocked,
-			"active credential is missing or unreadable by the current App identity",
-		)
-		return report, &blockedError{
-			reason: "save the active provider credential through the current ViberMate App",
-		}
-	}
-	report.add(
-		"provider-secret",
-		checkPassed,
-		"active credential metadata is configured without reading its value",
-	)
-	credentialedAudit, err := openExchangeAuditReader(
-		ctx,
-		credentialedDataDirectory,
-	)
-	if err != nil {
-		return fail("normal-streaming-reply", err)
-	}
-	defer credentialedAudit.Close()
-
-	if err := runNormalReply(
-		ctx,
-		config,
-		credentialed,
-		credentialedAudit,
-	); err != nil {
-		return fail("normal-streaming-reply", err)
-	}
-	report.add(
-		"normal-streaming-reply",
-		checkPassed,
-		"fixed "+client.ReportLabel+
-			" completed an unheld streamed provider reply",
-	)
-	if client.ID == acceptanceClientCodexCLI {
-		if err := runCodexResume(
-			ctx,
-			config,
-			credentialed,
-			credentialedAudit,
-		); err != nil {
-			return fail("fixed-codex-exec-resume", err)
-		}
-		report.add(
-			"fixed-codex-exec-resume",
-			checkPassed,
-			"two successful Exchanges retained one private Codex thread identity across exec resume",
-		)
-	}
-	toolEvidence, err := runToolApproval(ctx, config, credentialed)
-	if err != nil {
-		return fail("tool-approval", err)
-	}
-	toolDetail, err := toolEvidence.reportDetail()
-	if err != nil {
-		return fail("tool-approval", err)
-	}
-	report.add(
-		"tool-approval",
-		checkPassed,
-		toolDetail,
-	)
-	streamingEvidence, err := runHeldStreaming(ctx, config, credentialed)
-	if err != nil {
-		return fail("planned-hold-streaming", err)
-	}
-	streamingDetail, err := streamingEvidence.reportDetail()
-	if err != nil {
-		return fail("planned-hold-streaming", err)
-	}
-	report.add(
-		"planned-hold-streaming",
-		checkPassed,
-		streamingDetail,
-	)
-	if err := runAgentInterrupt(ctx, config, credentialed); err != nil {
-		return fail("agent-sigint", err)
-	}
-	report.add(
-		"agent-sigint",
-		checkPassed,
-		"captured "+client.ReportLabel+
-			" SIGINT canceled an active streamed Exchange",
-	)
-	if client.ID == acceptanceClientCodexCLI {
-		report.add(
-			"fixed-codex-http-scope",
-			checkPassed,
-			"evidence covers bounded WebSocket rejection and Responses HTTP fallback; it does not prove successful Responses WebSocket semantics or TUI interaction",
-		)
-	}
-	stopContext, stopCancel = context.WithTimeout(ctx, 30*time.Second)
-	err = credentialed.stopGracefully(stopContext)
-	stopCancel()
-	credentialedStopped = true
-	if err != nil {
-		return fail("final-shutdown", err)
-	}
-	report.add(
-		"final-shutdown",
-		checkPassed,
-		"credentialed assembly generation drained cleanly",
-	)
-	if err := requireCurrentCheckContract(
-		report,
-		acceptancereport.ModeCredentialed,
-	); err != nil {
-		return fail("acceptance-report-contract", err)
-	}
-	return report, nil
 }
 
 func requireCurrentCheckContract(
 	report acceptanceReport,
 	mode acceptancereport.Mode,
 ) error {
-	if report.Schema != acceptancereport.SchemaV6 {
+	if report.Schema != acceptancereport.SchemaV7 {
 		return errors.New("acceptance report producer schema is not current")
 	}
 	required, err := acceptancereport.RequiredCheckIDs(
@@ -711,38 +610,6 @@ func requireCurrentCheckContract(
 		}
 	}
 	return nil
-}
-
-type acceptancePhases struct {
-	deterministic config
-	credentialed  config
-}
-
-func splitAcceptancePhases(input config) (acceptancePhases, error) {
-	deterministic, err := isolateDeterministicSecret(input)
-	if err != nil {
-		return acceptancePhases{}, err
-	}
-	return acceptancePhases{
-		deterministic: deterministic,
-		credentialed:  input,
-	}, nil
-}
-
-func isolateDeterministicSecret(input config) (config, error) {
-	suffix, err := idempotencyKey()
-	if err != nil {
-		return config{}, err
-	}
-	reference := "secret://provider/m0-assembly-" + suffix
-	if _, err := secretstore.ParseReference(reference); err != nil {
-		return config{}, fmt.Errorf(
-			"construct deterministic missing secret reference: %w",
-			err,
-		)
-	}
-	input.secretRef = reference
-	return input, nil
 }
 
 const acceptanceConnectionRuleID = "acceptance.allow-client-origin"
@@ -773,7 +640,7 @@ func configureAcceptanceConnectionPolicy(
 	}
 	if replaced.Revision != current.Revision+1 ||
 		!slices.Equal(replaced.Rules, input.Rules) ||
-		replaced.Default != input.Default {
+		replaced.Mode != input.Mode {
 		return fmt.Errorf(
 			"connection rule replacement was not exact: %+v",
 			replaced,
@@ -788,10 +655,7 @@ func acceptanceConnectionRuleSet(
 ) (desktopcontrol.ConnectionRuleSetInput, error) {
 	if current.Revision == 0 ||
 		len(current.Rules) != 0 ||
-		current.Default.Decision != "ask" ||
-		current.Default.Match != "any" ||
-		current.Default.Host != "" ||
-		current.Default.Port != 0 {
+		current.Mode != string(connectionpolicy.ModeMonitor) {
 		return desktopcontrol.ConnectionRuleSetInput{}, fmt.Errorf(
 			"acceptance requires a fresh fail-closed connection rule set: %+v",
 			current,
@@ -801,7 +665,7 @@ func acceptanceConnectionRuleSet(
 	if err != nil {
 		return desktopcontrol.ConnectionRuleSetInput{}, err
 	}
-	origin, err := access.NewClientOrigin(client.ClientOrigin)
+	origin, err := originidentity.ParseClientOrigin(client.ClientOrigin)
 	if err != nil {
 		return desktopcontrol.ConnectionRuleSetInput{}, err
 	}
@@ -811,10 +675,10 @@ func acceptanceConnectionRuleSet(
 			Priority: 100,
 			Decision: "allow",
 			Match:    "exact_host_port",
-			Host:     origin.TLSServerName(),
+			Host:     origin.Host(),
 			Port:     origin.Port(),
 		}},
-		Default: current.Default,
+		Mode: string(connectionpolicy.ModeAskUnknown),
 	}, nil
 }
 
@@ -861,21 +725,158 @@ func verifyFixedClient(
 	return *detection.Evidence, nil
 }
 
-func requireRecoveredAccess(
+func requireRecoveredEnvironment(
 	ctx context.Context,
 	control *controlClient,
 	config config,
 ) error {
-	_, status, problem, err := control.applyAccess(ctx, config, 0)
+	id, err := environment.NewEnvironmentID(config.environmentID)
 	if err != nil {
 		return err
 	}
-	if status != http.StatusConflict ||
-		problem.ReasonCode != "revision_conflict" {
+	view, err := control.environment(ctx, id)
+	if err != nil {
+		return err
+	}
+	if view.ID != id || view.Revision != 1 || !canonicalSHA256(view.Digest) {
+		return fmt.Errorf("recovered Environment is inconsistent: %+v", view)
+	}
+	return nil
+}
+
+type captureAssignmentEvidence struct {
+	Capture    captureidentity.Reference
+	Assignment desktopcontrol.CaptureAssignmentResponse
+}
+
+func exerciseCaptureEnvironmentAssignment(
+	ctx context.Context,
+	config config,
+	control *controlClient,
+) (captureAssignmentEvidence, error) {
+	if ctx == nil || control == nil {
+		return captureAssignmentEvidence{}, errors.New(
+			"Capture assignment probe dependencies are required",
+		)
+	}
+	client, err := selectedAcceptanceClient(config)
+	if err != nil {
+		return captureAssignmentEvidence{}, err
+	}
+	before, err := control.captures(ctx)
+	if err != nil {
+		return captureAssignmentEvidence{}, err
+	}
+	known := make(map[string]struct{}, len(before.Items))
+	for _, item := range before.Items {
+		known[item.Key] = struct{}{}
+	}
+	workingDirectory, err := os.MkdirTemp("", "vibermate-capture-assignment-*")
+	if err != nil {
+		return captureAssignmentEvidence{}, err
+	}
+	defer os.RemoveAll(workingDirectory)
+	if err := privateDirectory(workingDirectory); err != nil {
+		return captureAssignmentEvidence{}, err
+	}
+	stateDirectory, err := agentStateDirectory(client.ID, workingDirectory)
+	if err != nil {
+		return captureAssignmentEvidence{}, err
+	}
+	if err := privateDirectory(stateDirectory); err != nil {
+		return captureAssignmentEvidence{}, err
+	}
+	processEnvironment, err := clientAcceptanceEnvironment(
+		client.ID,
+		os.Environ(),
+		stateDirectory,
+	)
+	if err != nil {
+		return captureAssignmentEvidence{}, err
+	}
+	probeContext, cancel := context.WithTimeout(ctx, 45*time.Second)
+	defer cancel()
+	command := exec.CommandContext(
+		probeContext,
+		config.launcherPath,
+		"run",
+		"--env",
+		config.environmentID,
+		"--",
+		client.ExecutablePath,
+		"--version",
+	)
+	command.Dir = workingDirectory
+	command.Env = processEnvironment
+	if err := command.Run(); err != nil {
+		return captureAssignmentEvidence{}, fmt.Errorf(
+			"run fixed-client Capture assignment probe: %w",
+			err,
+		)
+	}
+	after, err := control.captures(ctx)
+	if err != nil {
+		return captureAssignmentEvidence{}, err
+	}
+	var selected *desktopcontrol.CaptureResponse
+	for index := range after.Items {
+		item := &after.Items[index]
+		if _, existed := known[item.Key]; existed ||
+			item.Kind != captureidentity.KindManagedRun || item.ManagedRun == nil {
+			continue
+		}
+		if selected != nil {
+			return captureAssignmentEvidence{}, errors.New(
+				"Capture assignment probe created more than one managed run",
+			)
+		}
+		selected = item
+	}
+	if selected == nil {
+		return captureAssignmentEvidence{}, errors.New(
+			"Capture assignment probe did not create a managed run",
+		)
+	}
+	reference, err := captureidentity.ParseKey(selected.Key)
+	if err != nil {
+		return captureAssignmentEvidence{}, err
+	}
+	assignment, err := control.captureAssignment(ctx, reference)
+	if err != nil {
+		return captureAssignmentEvidence{}, err
+	}
+	if assignment.CaptureKey != reference.Key() ||
+		assignment.CaptureID != reference.ID ||
+		assignment.CaptureKind != captureidentity.KindManagedRun ||
+		assignment.EnvironmentID.String() != config.environmentID ||
+		assignment.Revision != 1 ||
+		assignment.Source != captureassignment.SourceLaunch ||
+		assignment.UpdatedAt.IsZero() {
+		return captureAssignmentEvidence{}, fmt.Errorf(
+			"Capture assignment probe returned inconsistent evidence: %+v",
+			assignment,
+		)
+	}
+	return captureAssignmentEvidence{Capture: reference, Assignment: assignment}, nil
+}
+
+func requireRecoveredCaptureAssignment(
+	ctx context.Context,
+	control *controlClient,
+	evidence captureAssignmentEvidence,
+) error {
+	if evidence.Capture.Validate() != nil || evidence.Assignment.Revision == 0 {
+		return errors.New("recovered Capture assignment expectation is invalid")
+	}
+	recovered, err := control.captureAssignment(ctx, evidence.Capture)
+	if err != nil {
+		return err
+	}
+	if recovered != evidence.Assignment {
 		return fmt.Errorf(
-			"recovered Access CAS status=%d reason=%s",
-			status,
-			problem.ReasonCode,
+			"recovered Capture assignment differs: got=%+v want=%+v",
+			recovered,
+			evidence.Assignment,
 		)
 	}
 	return nil
@@ -927,7 +928,7 @@ func requireCanonicalExchangeSummary(
 			if summary.ID != expected.ExchangeID {
 				continue
 			}
-			if summary.Access.ID != expected.AccessID ||
+			if summary.Environment.ID != expected.EnvironmentID ||
 				summary.Status != string(expected.Status) {
 				return fmt.Errorf(
 					"canonical Exchange summary does not match its committed audit: %+v",
@@ -1158,7 +1159,7 @@ func runHeldIngressPreflight(
 	failure, err := waitForExchangeFailureAfter(
 		ctx,
 		audit,
-		config.accessID,
+		config.environmentID,
 		activityBaseline,
 		exchange.ReasonProviderCredentialUnavailable,
 		45*time.Second,
@@ -1209,7 +1210,7 @@ func runHeldIngressPreflight(
 	if err := requireOnlyExchangeFailureAfter(
 		ctx,
 		audit,
-		config.accessID,
+		config.environmentID,
 		activityBaseline,
 		exchange.ReasonProviderCredentialUnavailable,
 		failure,
@@ -1798,7 +1799,7 @@ func runNormalReply(
 		reasonCode, activityErr := latestExchangeFailure(
 			ctx,
 			audit,
-			config.accessID,
+			config.environmentID,
 		)
 		if activityErr == nil && reasonCode != "" {
 			return fmt.Errorf(
@@ -1823,6 +1824,121 @@ func runNormalReply(
 		return fmt.Errorf("normal reply evidence: %w", err)
 	}
 	return waitForOfflineSettlement(ctx, generation.control, 10*time.Second)
+}
+
+func waitForManagedReplyEvidence(
+	ctx context.Context,
+	audit *exchangeAuditReader,
+	control *controlClient,
+	config config,
+	after int64,
+	account desktopcontrol.ProviderAccountResponse,
+	published desktopcontrol.EnvironmentResponse,
+	limit time.Duration,
+) (exchangeAuditRecord, error) {
+	if ctx == nil || audit == nil || control == nil || after < 0 ||
+		len(published.ClientEndpoints) != 1 ||
+		len(published.ClientEndpoints[0].ProtocolPlans) != 1 ||
+		len(published.ClientEndpoints[0].ProtocolPlans[0].Destination.Upstream.Routes) != 1 {
+		return exchangeAuditRecord{}, errors.New(
+			"managed reply evidence dependencies are incomplete",
+		)
+	}
+	plan := published.ClientEndpoints[0].ProtocolPlans[0]
+	route := plan.Destination.Upstream.Routes[0]
+	waitContext, cancel := context.WithTimeout(ctx, limit)
+	defer cancel()
+	ticker := time.NewTicker(50 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		records, err := audit.terminalsAfter(
+			waitContext,
+			config.environmentID,
+			after,
+		)
+		if err != nil {
+			return exchangeAuditRecord{}, err
+		}
+		for _, record := range records {
+			if record.Status != activity.StatusSucceeded {
+				return exchangeAuditRecord{}, fmt.Errorf(
+					"managed route produced terminal %s reason=%s",
+					record.Status,
+					record.ReasonCode,
+				)
+			}
+			detail, err := control.exchange(waitContext, record.ExchangeID)
+			if err != nil {
+				return exchangeAuditRecord{}, err
+			}
+			if !exchangeContainsMarker(detail, "VIBEMATE_NORMAL_OK") {
+				continue
+			}
+			if detail.Status != string(activity.StatusSucceeded) ||
+				detail.Environment.ID != config.environmentID ||
+				detail.Environment.Revision != uint64(published.Revision) ||
+				detail.Environment.Digest != published.Digest ||
+				detail.Environment.ClientEndpointID != published.ClientEndpoints[0].ID.String() ||
+				detail.Environment.ClientEndpointRevision != uint64(published.ClientEndpoints[0].Revision) ||
+				detail.Environment.ProtocolPlanID != plan.ID.String() ||
+				detail.Environment.ProtocolPlanRevision != uint64(plan.Revision) ||
+				detail.Environment.RouteID != route.ID.String() ||
+				detail.Environment.RouteRevision != uint64(route.Revision) ||
+				detail.Environment.AccountID != account.ID ||
+				detail.Environment.AccountRevision != account.Revision ||
+				detail.Environment.CredentialEpoch != account.CredentialEpoch ||
+				detail.ProcessingTrace.Result != string(activity.StatusSucceeded) ||
+				len(detail.ProcessingTrace.PluginRunIDs) != 0 ||
+				len(detail.ProcessingTrace.Attempts) != 1 {
+				return exchangeAuditRecord{}, errors.New(
+					"managed Exchange frozen evidence is inconsistent",
+				)
+			}
+			attempt := detail.ProcessingTrace.Attempts[0]
+			if attempt.Purpose != egressaudit.PurposeProviderAttempt ||
+				attempt.TargetOrigin != route.ProviderTarget.Origin.String() ||
+				attempt.Decision.Authority != egressaudit.AuthorityEnvironment ||
+				attempt.Parent.ExchangeID != record.ExchangeID ||
+				!attempt.Terminal || attempt.Outcome != egressaudit.OutcomeCompleted ||
+				attempt.ErrorClass != "" || attempt.BytesOut <= 0 || attempt.BytesIn <= 0 ||
+				attempt.CompletedAt == nil {
+				return exchangeAuditRecord{}, errors.New(
+					"managed provider Attempt evidence is inconsistent",
+				)
+			}
+			if detail.Content.Response == nil ||
+				!detail.Content.Response.Usage.Output.Known ||
+				detail.Content.Response.Usage.Output.Tokens <= 0 {
+				return exchangeAuditRecord{}, errors.New(
+					"managed provider usage evidence is unavailable",
+				)
+			}
+			return record, nil
+		}
+		select {
+		case <-ticker.C:
+		case <-waitContext.Done():
+			return exchangeAuditRecord{}, fmt.Errorf(
+				"managed reply evidence did not arrive: %w",
+				waitContext.Err(),
+			)
+		}
+	}
+}
+
+func exchangeContainsMarker(
+	detail desktopcontrol.ExchangeDetail,
+	marker string,
+) bool {
+	if detail.Content.Response == nil || marker == "" {
+		return false
+	}
+	for _, block := range detail.Content.Response.Blocks {
+		if strings.Contains(block.Text, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 func requireSuccessfulAgentEvidence(
@@ -1860,9 +1976,9 @@ func requireSuccessfulAgentEvidence(
 func latestExchangeFailure(
 	ctx context.Context,
 	audit *exchangeAuditReader,
-	accessID string,
+	environmentID string,
 ) (string, error) {
-	record, exists, err := audit.latestFailure(ctx, accessID)
+	record, exists, err := audit.latestFailure(ctx, environmentID)
 	if err != nil {
 		return "", err
 	}
@@ -1874,13 +1990,13 @@ func latestExchangeFailure(
 
 func successfulExchangeSubjectsAfter(
 	records []exchangeAuditRecord,
-	accessID string,
+	environmentID string,
 	after int64,
 ) []string {
 	matches := make([]exchangeAuditRecord, 0, len(records))
 	for _, record := range records {
 		if record.Sequence <= after ||
-			record.AccessID != accessID ||
+			record.EnvironmentID != environmentID ||
 			record.Status != activity.StatusSucceeded ||
 			record.ExchangeID == "" {
 			continue
@@ -1913,7 +2029,7 @@ func waitForSuccessfulExchangesAfter(
 	ctx context.Context,
 	audit *exchangeAuditReader,
 	control *controlClient,
-	accessID string,
+	environmentID string,
 	after int64,
 	expected int,
 	limit time.Duration,
@@ -1929,7 +2045,7 @@ func waitForSuccessfulExchangesAfter(
 	for {
 		records, err := audit.terminalsAfter(
 			waitContext,
-			accessID,
+			environmentID,
 			after,
 		)
 		if err != nil {
@@ -1937,7 +2053,7 @@ func waitForSuccessfulExchangesAfter(
 		}
 		observed = len(successfulExchangeSubjectsAfter(
 			records,
-			accessID,
+			environmentID,
 			after,
 		))
 		if len(records) > observed {
@@ -2065,7 +2181,7 @@ func runCodexResume(
 		ctx,
 		audit,
 		generation.control,
-		config.accessID,
+		config.environmentID,
 		activityBaseline,
 		2,
 		15*time.Second,
@@ -2144,7 +2260,7 @@ func waitForResponsesHTTPFallbackAudit(
 	if client.ID != acceptanceClientCodexCLI {
 		return errors.New("Responses HTTP fallback requires fixed Codex")
 	}
-	clientOrigin, err := access.NewClientOrigin(client.ClientOrigin)
+	clientOrigin, err := originidentity.ParseClientOrigin(client.ClientOrigin)
 	if err != nil {
 		return err
 	}
@@ -2175,10 +2291,10 @@ func waitForResponsesHTTPFallbackAudit(
 
 func responsesHTTPFallbackAuditReady(
 	records []connectionevent.Record,
-	clientOrigin access.ClientOrigin,
+	clientOrigin originidentity.ClientOrigin,
 ) (bool, error) {
 	authority := clientOrigin.EndpointAuthority()
-	host := clientOrigin.TLSServerName()
+	host := clientOrigin.Host()
 	if authority == "" || host == "" {
 		return false, errors.New("fallback client origin is invalid")
 	}
@@ -2341,7 +2457,7 @@ func waitForClientConnectionAudit(
 	if err != nil {
 		return "", err
 	}
-	clientOrigin, err := access.NewClientOrigin(client.ClientOrigin)
+	clientOrigin, err := originidentity.ParseClientOrigin(client.ClientOrigin)
 	if err != nil {
 		return "", err
 	}
@@ -2366,7 +2482,7 @@ func waitForClientConnectionAudit(
 		}
 		seen := make(map[string]struct{})
 		for _, record := range records {
-			if record.RequestedHost != clientOrigin.TLSServerName() {
+			if record.RequestedHost != clientOrigin.Host() {
 				continue
 			}
 			if _, exists := seen[record.ConnectionID]; exists {
@@ -2408,7 +2524,7 @@ func waitForClientConnectionAudit(
 
 func clientConnectionAuditReady(
 	timeline connectionevent.Timeline,
-	clientOrigin access.ClientOrigin,
+	clientOrigin originidentity.ClientOrigin,
 ) (bool, error) {
 	if len(timeline.Events) == 0 {
 		return false, errors.New("client ConnectionEvent timeline is empty")
@@ -2451,7 +2567,7 @@ func clientConnectionAuditReady(
 
 func activeClientConnectionAuditReady(
 	timeline connectionevent.Timeline,
-	clientOrigin access.ClientOrigin,
+	clientOrigin originidentity.ClientOrigin,
 ) (bool, error) {
 	if len(timeline.Events) == 0 {
 		return false, nil
@@ -2486,7 +2602,7 @@ func activeClientConnectionAuditReady(
 
 func validateClientConnectionAudit(
 	timeline connectionevent.Timeline,
-	clientOrigin access.ClientOrigin,
+	clientOrigin originidentity.ClientOrigin,
 ) error {
 	if len(timeline.Events) == 0 {
 		return errors.New("client ConnectionEvent timeline is empty")
@@ -2497,7 +2613,7 @@ func validateClientConnectionAudit(
 		first.SourceConfidence != connectionevent.SourceConfidenceUnknown ||
 		first.IngressID != "" ||
 		first.SourceLabel != "" ||
-		first.RequestedHost != clientOrigin.TLSServerName() ||
+		first.RequestedHost != clientOrigin.Host() ||
 		first.Port != clientOrigin.Port() ||
 		first.ObservedSNI != "" ||
 		first.RouteHost != "" ||
@@ -2516,7 +2632,7 @@ func validateClientConnectionAudit(
 			first,
 		)
 	}
-	expectedHost := clientOrigin.TLSServerName()
+	expectedHost := clientOrigin.Host()
 	expectedIngress := ""
 	expectedSource := ""
 	previousSequence := int64(0)
@@ -2543,8 +2659,8 @@ func validateClientConnectionAudit(
 			record.RuleID != acceptanceConnectionRuleID ||
 			record.RouteHost != expectedHost ||
 			record.CredentialBindingID != "" ||
-			record.EgressScope != connectionevent.EgressScopeAccess ||
-			record.EgressSource != connectionevent.EgressSourceAccessDefault ||
+			record.EgressScope != connectionevent.EgressScopeEnvironment ||
+			record.EgressSource != connectionevent.EgressSourceEnvironmentDefault ||
 			record.EgressRuleID != "" ||
 			record.EgressSelectorRunID != "" ||
 			record.EgressProxyID != "" ||
@@ -2589,7 +2705,7 @@ func waitForActiveConnectionAudit(
 	if err != nil {
 		return "", err
 	}
-	clientOrigin, err := access.NewClientOrigin(client.ClientOrigin)
+	clientOrigin, err := originidentity.ParseClientOrigin(client.ClientOrigin)
 	if err != nil {
 		return "", err
 	}
@@ -2614,7 +2730,7 @@ func waitForActiveConnectionAudit(
 		}
 		seen := make(map[string]struct{})
 		for _, record := range records {
-			if record.RequestedHost != clientOrigin.TLSServerName() {
+			if record.RequestedHost != clientOrigin.Host() {
 				continue
 			}
 			if _, exists := seen[record.ConnectionID]; exists {
@@ -2773,7 +2889,7 @@ func connectionRecordTerminal(record connectionevent.Record) bool {
 func waitForExchangeFailureAfter(
 	ctx context.Context,
 	audit *exchangeAuditReader,
-	accessID string,
+	environmentID string,
 	after int64,
 	expected exchange.ReasonCode,
 	limit time.Duration,
@@ -2785,7 +2901,7 @@ func waitForExchangeFailureAfter(
 	for {
 		records, err := audit.terminalsAfter(
 			waitContext,
-			accessID,
+			environmentID,
 			after,
 		)
 		if err != nil {
@@ -2793,7 +2909,7 @@ func waitForExchangeFailureAfter(
 		}
 		latest, exists, err := singleExpectedExchangeFailure(
 			records,
-			accessID,
+			environmentID,
 			expected,
 		)
 		if err != nil {
@@ -2815,10 +2931,10 @@ func waitForExchangeFailureAfter(
 
 func singleExpectedExchangeFailure(
 	records []exchangeAuditRecord,
-	accessID string,
+	environmentID string,
 	expected exchange.ReasonCode,
 ) (exchangeAuditRecord, bool, error) {
-	if accessID == "" || expected == "" {
+	if environmentID == "" || expected == "" {
 		return exchangeAuditRecord{}, false, errors.New(
 			"expected Exchange failure is incomplete",
 		)
@@ -2833,7 +2949,7 @@ func singleExpectedExchangeFailure(
 		)
 	}
 	record := records[0]
-	if record.AccessID != accessID ||
+	if record.EnvironmentID != environmentID ||
 		record.Status != activity.StatusFailed ||
 		record.ReasonCode != string(expected) {
 		return exchangeAuditRecord{}, false, fmt.Errorf(
@@ -2847,18 +2963,18 @@ func singleExpectedExchangeFailure(
 func requireOnlyExchangeFailureAfter(
 	ctx context.Context,
 	audit *exchangeAuditReader,
-	accessID string,
+	environmentID string,
 	after int64,
 	expectedReason exchange.ReasonCode,
 	expectedRecord exchangeAuditRecord,
 ) error {
-	records, err := audit.terminalsAfter(ctx, accessID, after)
+	records, err := audit.terminalsAfter(ctx, environmentID, after)
 	if err != nil {
 		return err
 	}
 	record, exists, err := singleExpectedExchangeFailure(
 		records,
-		accessID,
+		environmentID,
 		expectedReason,
 	)
 	if err != nil {
@@ -3228,7 +3344,7 @@ func runToolApproval(
 		generation.control,
 		run,
 		baselineApprovals,
-		config.accessID,
+		config.environmentID,
 		spec.toolName,
 	)
 	if err != nil {
@@ -3294,7 +3410,7 @@ func runToolApproval(
 			generation.control,
 			run,
 			knownApprovals,
-			config.accessID,
+			config.environmentID,
 			spec.toolName,
 		)
 		deniedFollowups = followups
@@ -3499,7 +3615,7 @@ func waitForToolApproval(
 	control *controlClient,
 	run *agentRun,
 	baseline map[string]struct{},
-	accessID string,
+	environmentID string,
 	toolName string,
 ) (toolapproval.View, error) {
 	ticker := time.NewTicker(50 * time.Millisecond)
@@ -3512,7 +3628,7 @@ func waitForToolApproval(
 		approval, found, err := selectToolApproval(
 			page,
 			baseline,
-			accessID,
+			environmentID,
 			toolName,
 		)
 		if err != nil {
@@ -3534,7 +3650,7 @@ func waitForToolApproval(
 func selectToolApproval(
 	page toolapproval.Page,
 	baseline map[string]struct{},
-	accessID string,
+	environmentID string,
 	toolName string,
 ) (toolapproval.View, bool, error) {
 	items := append([]toolapproval.View(nil), page.Items...)
@@ -3544,13 +3660,14 @@ func selectToolApproval(
 	for _, approval := range items {
 		if _, existed := baseline[approval.ID]; existed ||
 			approval.Kind != string(toolapproval.KindToolIntent) ||
-			approval.AccessID != accessID {
+			approval.EnvironmentID != environmentID {
 			continue
 		}
 		if approval.State != toolapproval.StatePending ||
 			approval.ExchangeID == "" ||
-			approval.PlanRevision == 0 ||
-			len(approval.PlanHash) != 64 {
+			approval.EnvironmentRevision == 0 ||
+			!canonicalSHA256(approval.EnvironmentDigest) ||
+			approval.RouteRevision == 0 {
 			return toolapproval.View{}, false, errors.New(
 				"new tool approval is missing its active request binding",
 			)
@@ -3573,7 +3690,7 @@ func waitForToolCompletion(
 	control *controlClient,
 	run *agentRun,
 	known map[string]struct{},
-	accessID string,
+	environmentID string,
 	toolName string,
 ) (int, int, error) {
 	ticker := time.NewTicker(50 * time.Millisecond)
@@ -3587,7 +3704,7 @@ func waitForToolCompletion(
 		approval, found, err := selectToolApproval(
 			page,
 			known,
-			accessID,
+			environmentID,
 			toolName,
 		)
 		if err != nil {

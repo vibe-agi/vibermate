@@ -34,8 +34,8 @@ const (
 	FailureRuntimeUnavailable     FailureReason = "runtime_unavailable"
 	FailureRuntimeAlreadyActive   FailureReason = "runtime_already_active"
 	FailureSecretStoreUnavailable FailureReason = "secret_store_unavailable"
-	FailureStorageSchemaNewer     FailureReason = "storage_schema_newer"
 	FailureStorageUnavailable     FailureReason = "storage_unavailable"
+	FailureRootResetFailed        FailureReason = "root_reset_failed"
 )
 
 // Failure is the only startup diagnosis that crosses the native pipe. It is a
@@ -58,8 +58,8 @@ func (failure Failure) Validate() error {
 	case FailureRuntimeUnavailable,
 		FailureRuntimeAlreadyActive,
 		FailureSecretStoreUnavailable,
-		FailureStorageSchemaNewer,
-		FailureStorageUnavailable:
+		FailureStorageUnavailable,
+		FailureRootResetFailed:
 		return nil
 	default:
 		return errors.New("Desktop bootstrap failure is invalid")

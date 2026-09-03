@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/vibe-agi/vibermate/internal/controlprincipal"
+	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/proxyclient"
 )
 
@@ -51,7 +52,7 @@ func testProxyClientPolicy(t *testing.T) proxyclient.BindingPolicy {
 	t.Helper()
 	policy, err := proxyclient.NewBindingPolicy(
 		[]string{"agent-endpoints"},
-		[]string{"profile-primary"},
+		[]environment.EnvironmentID{"environment-primary"},
 		"quota-default",
 		[]controlprincipal.GrantKind{
 			controlprincipal.GrantCaptureRun,

@@ -8,18 +8,10 @@ import (
 )
 
 var (
-	ErrSchemaNotInitialized   = errors.New("schema is not initialized")
-	ErrSchemaNewerThanBinary  = errors.New("database schema is newer than this binary")
 	ErrSchemaBaselineMismatch = errors.New("database was created from an unsupported development baseline")
-	ErrSchemaRevisionMismatch = errors.New(
-		"database schema revision does not match embedded migrations",
-	)
 )
 
 // SchemaState is an immutable view of the durable schema authority.
-//
-// Revision is derived only from the applied goose migration version. The
-// application schema does not maintain a duplicate revision counter.
 type SchemaState struct {
 	Revision      int64
 	Identity      string
@@ -27,10 +19,10 @@ type SchemaState struct {
 	InitializedAt string
 }
 
-// currentSchemaIdentity distinguishes this single unreleased clean baseline
-// from every earlier development database that happened to use goose version
-// 1. It is a format identity, not a product or migration revision.
-const currentSchemaIdentity = "vibermate-runtime-clean-baseline"
+const (
+	currentSchemaIdentity = "vibermate-runtime-clean-baseline"
+	currentSchemaRevision = int64(1)
+)
 
 // DatabaseSettings records connection invariants that must hold on every
 // SQLite connection used by the runtime.
@@ -40,8 +32,8 @@ type DatabaseSettings struct {
 	BusyTimeoutMillis int64
 }
 
-// SchemaStateReader reads migration state for runtime initialization. It is
-// intentionally distinct from the Access aggregate SnapshotResolver.
+// SchemaStateReader reads schema state for runtime initialization. It is
+// intentionally distinct from the Environment aggregate SnapshotResolver.
 type SchemaStateReader interface {
 	ReadSchemaState(context.Context) (SchemaState, error)
 }
@@ -84,11 +76,12 @@ func (r *Repository) ReadSchemaState(ctx context.Context) (SchemaState, error) {
 	var state SchemaState
 	if err := transaction.QueryRowContext(
 		operationContext,
-		`SELECT schema_identity, schema_source_sha256, initialized_at
+		`SELECT schema_identity, schema_revision, schema_source_sha256, initialized_at
 		 FROM runtime_metadata
 		 WHERE singleton = 1`,
 	).Scan(
 		&state.Identity,
+		&state.Revision,
 		&state.SourceSHA256,
 		&state.InitializedAt,
 	); err != nil {
@@ -101,6 +94,13 @@ func (r *Repository) ReadSchemaState(ctx context.Context) (SchemaState, error) {
 			state.Identity,
 		)
 	}
+	if state.Revision != currentSchemaRevision {
+		return SchemaState{}, fmt.Errorf(
+			"%w: revision %d",
+			ErrSchemaBaselineMismatch,
+			state.Revision,
+		)
+	}
 	if state.SourceSHA256 != r.expectedSchemaSourceSHA256 {
 		return SchemaState{}, fmt.Errorf(
 			"%w: source digest %q",
@@ -108,19 +108,6 @@ func (r *Repository) ReadSchemaState(ctx context.Context) (SchemaState, error) {
 			state.SourceSHA256,
 		)
 	}
-
-	if err := transaction.QueryRowContext(
-		operationContext,
-		`SELECT COALESCE(MAX(version_id), 0)
-		 FROM goose_db_version
-		 WHERE is_applied = 1`,
-	).Scan(&state.Revision); err != nil {
-		return SchemaState{}, fmt.Errorf("read migration revision: %w", err)
-	}
-	if state.Revision <= 0 {
-		return SchemaState{}, ErrSchemaNotInitialized
-	}
-
 	if err := transaction.Commit(); err != nil {
 		return SchemaState{}, fmt.Errorf("commit schema state transaction: %w", err)
 	}

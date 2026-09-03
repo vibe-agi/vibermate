@@ -73,6 +73,39 @@ func TestAModelledRequestReportsNoUnknownField(t *testing.T) {
 	}
 }
 
+func TestCitationsDroppedByCrossDialectTranslationAreDeclared(t *testing.T) {
+	t.Parallel()
+
+	codec, err := anthropicchat.New(anthropicchat.DefaultOptions())
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := []byte(`{
+		"model":"claude-3-5-sonnet",
+		"max_tokens":64,
+		"messages":[
+			{"role":"assistant","content":[
+				{"type":"text","text":"first answer","citations":[]}
+			]},
+			{"role":"user","content":[{"type":"text","text":"follow up"}]}
+		]
+	}`)
+	_, report, err := codec.DecodeClientRequest(body)
+	if err != nil {
+		t.Fatalf("cited text history was refused: %v", err)
+	}
+	found := false
+	for _, notice := range report.Notices() {
+		if notice.Code == protocolcore.NoticeCitationsNotForwarded &&
+			notice.Path == "$.messages[0].content[0].citations" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("citation loss was not declared: %+v", report.Notices())
+	}
+}
+
 // A duplicate name is still a malformed request, not an unknown field.
 func TestADuplicateFieldIsStillRefused(t *testing.T) {
 	t.Parallel()

@@ -11,9 +11,11 @@ import (
 	"time"
 
 	"github.com/vibe-agi/vibermate/internal/capturecredential"
+	"github.com/vibe-agi/vibermate/internal/evidencearchive"
 )
 
 const (
+	manualCaptureIDPrefix  = "manual."
 	manualCaptureIDBytes   = 20
 	createCollisionRetries = 3
 	proxyDigestDomain      = "vibermate:manual-capture:proxy:v1:"
@@ -38,6 +40,19 @@ type Options struct {
 	Clock                Clock
 	Random               io.Reader
 	MaxTemporaryLifetime time.Duration
+	EvidenceBarrier      EvidenceBarrier
+	ArchiveBarrier       evidencearchive.CaptureCreationBarrier
+}
+
+// TerminalEvidence owns a prepared ManualCapture evidence boundary.
+type TerminalEvidence interface {
+	Commit()
+	Abort()
+}
+
+// EvidenceBarrier drains active requests before explicit revocation commits.
+type EvidenceBarrier interface {
+	PrepareManualCapture(context.Context, string) (TerminalEvidence, error)
 }
 
 func DefaultOptions(repository Repository) Options {
@@ -46,6 +61,7 @@ func DefaultOptions(repository Repository) Options {
 		Clock:                SystemClock{},
 		Random:               rand.Reader,
 		MaxTemporaryLifetime: MaximumTemporaryLifetime,
+		ArchiveBarrier:       evidencearchive.NewBarrier(),
 	}
 }
 
@@ -54,6 +70,8 @@ type Manager struct {
 	clock                Clock
 	random               io.Reader
 	maxTemporaryLifetime time.Duration
+	evidenceBarrier      EvidenceBarrier
+	archiveBarrier       evidencearchive.CaptureCreationBarrier
 	lifecycle            *lifecycleGate
 	recovery             Recovery
 }
@@ -63,7 +81,8 @@ func NewManager(ctx context.Context, options Options) (*Manager, error) {
 		return nil, fmt.Errorf("%w: startup context is nil", ErrInvalidCommand)
 	}
 	if options.Repository == nil || options.Clock == nil || options.Random == nil ||
-		options.MaxTemporaryLifetime < MinimumTemporaryLifetime {
+		options.MaxTemporaryLifetime < MinimumTemporaryLifetime ||
+		options.ArchiveBarrier == nil {
 		return nil, fmt.Errorf("%w: Manager dependencies are incomplete", ErrInvalidCommand)
 	}
 	now := canonicalTime(options.Clock.Now())
@@ -76,6 +95,8 @@ func NewManager(ctx context.Context, options Options) (*Manager, error) {
 		clock:                options.Clock,
 		random:               options.Random,
 		maxTemporaryLifetime: options.MaxTemporaryLifetime,
+		evidenceBarrier:      options.EvidenceBarrier,
+		archiveBarrier:       options.ArchiveBarrier,
 		lifecycle:            newLifecycleGate(),
 		recovery:             recovery,
 	}, nil
@@ -86,6 +107,22 @@ func (manager *Manager) Recovery() Recovery {
 		return Recovery{}
 	}
 	return manager.recovery
+}
+
+func (manager *Manager) ActiveCount(ctx context.Context) (int, error) {
+	if manager == nil {
+		return 0, ErrRuntimeStopping
+	}
+	operation, finish, err := manager.lifecycle.begin(ctx)
+	if err != nil {
+		return 0, err
+	}
+	defer finish()
+	recovery, err := manager.repository.Recover(operation, manager.now())
+	if err != nil {
+		return 0, fmt.Errorf("reconcile active ManualCaptures: %w", err)
+	}
+	return recovery.ActiveCount, nil
 }
 
 func (manager *Manager) Create(
@@ -103,13 +140,17 @@ func (manager *Manager) Create(
 		return Grant{}, err
 	}
 	defer finish()
+	archiveRelease, err := manager.archiveBarrier.BeginCaptureCreation(operation)
+	if err != nil {
+		return Grant{}, fmt.Errorf("enter Capture creation archive barrier: %w", err)
+	}
+	defer archiveRelease()
 
 	for attempt := 0; attempt < createCollisionRetries; attempt++ {
-		idValue, randomErr := randomValue(manager.random, manualCaptureIDBytes)
+		id, randomErr := newManualCaptureID(manager.random)
 		if randomErr != nil {
 			return Grant{}, fmt.Errorf("generate ManualCapture ID: %w", randomErr)
 		}
-		id, _ := ParseID(idValue)
 		credentialValue, randomErr := randomProxyCredential(manager.random)
 		if randomErr != nil {
 			return Grant{}, fmt.Errorf("generate ManualCapture credential: %w", randomErr)
@@ -200,6 +241,16 @@ func (manager *Manager) Revoke(
 		return View{}, err
 	}
 	defer finish()
+	var terminal TerminalEvidence
+	if manager.evidenceBarrier != nil {
+		terminal, err = manager.evidenceBarrier.PrepareManualCapture(
+			operation,
+			command.ID.String(),
+		)
+		if err != nil {
+			return View{}, fmt.Errorf("prepare ManualCapture evidence: %w", err)
+		}
+	}
 	record, err := manager.repository.Revoke(
 		operation,
 		command.Owner,
@@ -208,7 +259,13 @@ func (manager *Manager) Revoke(
 		manager.now(),
 	)
 	if err != nil {
+		if terminal != nil {
+			terminal.Abort()
+		}
 		return View{}, err
+	}
+	if terminal != nil {
+		terminal.Commit()
 	}
 	return ViewOf(record), nil
 }
@@ -282,7 +339,8 @@ func (manager *Manager) List(
 		return Page{}, ErrRuntimeStopping
 	}
 	request = request.Normalized()
-	if !request.Owner.Valid() {
+	if !request.Owner.Valid() ||
+		(request.Cursor != nil && !request.Cursor.Valid()) {
 		return Page{}, ErrInvalidCommand
 	}
 	operation, finish, err := manager.lifecycle.begin(ctx)
@@ -365,6 +423,14 @@ func randomValue(source io.Reader, size int) (string, error) {
 		return "", err
 	}
 	return base64.RawURLEncoding.EncodeToString(data), nil
+}
+
+func newManualCaptureID(source io.Reader) (ID, error) {
+	value, err := randomValue(source, manualCaptureIDBytes)
+	if err != nil {
+		return ID{}, err
+	}
+	return ParseID(manualCaptureIDPrefix + value)
 }
 
 func randomProxyCredential(source io.Reader) (string, error) {

@@ -18,18 +18,18 @@ import (
 
 const (
 	macOSSecurityExecutable = "/usr/bin/security"
-	macOSSystemKeychain     = "/Library/Keychains/System.keychain"
+	viberMateRootCommonName = "ViberMate Local Root"
 	maxCommandOutputBytes   = 64 << 10
 	maxFixtureCertificates  = 256
 	maxFixtureTrustEntries  = 256
-	trustFixtureSchemaV1    = "vibermate-macos-admin-trust-fixture-v1"
+	trustFixtureSchemaV1    = "vibermate-macos-user-trust-fixture-v1"
 )
 
 type CommandKind string
 
 const (
 	CommandInspectExactPresence CommandKind = "inspect_exact_presence"
-	CommandInspectAdminTrust    CommandKind = "inspect_admin_trust"
+	CommandInspectUserTrust     CommandKind = "inspect_user_trust"
 	CommandEnsureExactTrust     CommandKind = "ensure_exact_trust"
 	CommandRemoveExactTrust     CommandKind = "remove_exact_trust"
 	CommandDeleteExactObject    CommandKind = "delete_exact_object"
@@ -55,6 +55,13 @@ func (spec CommandSpec) Arguments() []string {
 	return append([]string(nil), spec.arguments...)
 }
 
+// Valid reports whether this command was constructed by the bounded macOS
+// adapter. Production executors may use this check without gaining access to
+// the command's mutable internals.
+func (spec CommandSpec) Valid() bool {
+	return spec.valid()
+}
+
 func (spec CommandSpec) valid() bool {
 	if spec.executable != macOSSecurityExecutable || len(spec.arguments) == 0 {
 		return false
@@ -64,38 +71,35 @@ func (spec CommandSpec) valid() bool {
 		return slicesEqual(spec.arguments, []string{
 			"find-certificate",
 			"-a",
+			"-c",
+			viberMateRootCommonName,
 			"-p",
-			macOSSystemKeychain,
 		})
-	case CommandInspectAdminTrust:
+	case CommandInspectUserTrust:
 		return slicesEqual(
 			spec.arguments,
-			[]string{"dump-trust-settings", "-d"},
-		)
+			[]string{"dump-trust-settings"},
+		) || (len(spec.arguments) == 2 &&
+			spec.arguments[0] == "trust-settings-export" &&
+			validTrustSettingsArtifactPath(spec.arguments[1]))
 	case CommandEnsureExactTrust:
-		return len(spec.arguments) == 9 &&
-			slicesEqual(spec.arguments[:8], []string{
+		return len(spec.arguments) == 6 &&
+			slicesEqual(spec.arguments[:5], []string{
 				"add-trusted-cert",
-				"-d",
 				"-r",
 				"trustRoot",
 				"-p",
 				"ssl",
-				"-k",
-				macOSSystemKeychain,
-			}) && validCertificateArtifactPath(spec.arguments[8])
+			}) && validCertificateArtifactPath(spec.arguments[5])
 	case CommandRemoveExactTrust:
-		return len(spec.arguments) == 3 &&
-			slicesEqual(
-				spec.arguments[:2],
-				[]string{"remove-trusted-cert", "-d"},
-			) && validCertificateArtifactPath(spec.arguments[2])
+		return len(spec.arguments) == 2 &&
+			spec.arguments[0] == "remove-trusted-cert" &&
+			validCertificateArtifactPath(spec.arguments[1])
 	case CommandDeleteExactObject:
-		return len(spec.arguments) == 4 &&
+		return len(spec.arguments) == 3 &&
 			spec.arguments[0] == "delete-certificate" &&
 			spec.arguments[1] == "-Z" &&
-			validUpperSHA256(spec.arguments[2]) &&
-			spec.arguments[3] == macOSSystemKeychain
+			validUpperSHA256(spec.arguments[2])
 	default:
 		return false
 	}
@@ -119,6 +123,15 @@ func validCertificateArtifactPath(path string) bool {
 		string(os.PathSeparator),
 	) + string(os.PathSeparator)
 	return filepath.IsAbs(path) && filepath.Base(path) == "root.cer" &&
+		strings.HasPrefix(filepath.Dir(path)+string(os.PathSeparator), temporaryRoot)
+}
+
+func validTrustSettingsArtifactPath(path string) bool {
+	temporaryRoot := strings.TrimRight(
+		os.TempDir(),
+		string(os.PathSeparator),
+	) + string(os.PathSeparator)
+	return filepath.IsAbs(path) && filepath.Base(path) == "user-trust.plist" &&
 		strings.HasPrefix(filepath.Dir(path)+string(os.PathSeparator), temporaryRoot)
 }
 
@@ -197,29 +210,51 @@ type CommandExecutor interface {
 }
 
 // MacOSAdapter maps fixed typed operations to bounded security command shapes.
-// Its observation grammar is fixture-backed and is not live-platform evidence.
+// Construction fixes whether observations came from deterministic fixtures or
+// the production security executable.
 type MacOSAdapter struct {
 	executor CommandExecutor
+	evidence EvidenceRevision
 }
 
 func NewMacOSAdapter(executor CommandExecutor) (*MacOSAdapter, error) {
 	if executor == nil {
 		return nil, ErrCommandInvalid
 	}
-	return &MacOSAdapter{executor: executor}, nil
+	return &MacOSAdapter{
+		executor: executor,
+		evidence: EvidenceRevisionMacOSFixtureV1,
+	}, nil
+}
+
+func NewProductionMacOSAdapter(executor CommandExecutor) (*MacOSAdapter, error) {
+	adapter, err := NewMacOSAdapter(executor)
+	if err != nil {
+		return nil, err
+	}
+	adapter.evidence = EvidenceRevisionMacOSSecurityV2
+	return adapter, nil
 }
 
 func (adapter *MacOSAdapter) inspect(
 	ctx context.Context,
 	root publicRoot,
 ) (Observation, error) {
+	evidence := EvidenceRevisionMacOSFixtureV1
+	if adapter != nil && adapter.evidence.valid() {
+		evidence = adapter.evidence
+	}
 	unknown := newObservation(
 		root,
 		ExactPresenceUnknown,
 		TrustDecisionUnknown,
-		EvidenceRevisionMacOSFixtureV1,
+		evidence,
 	)
 	if adapter == nil || adapter.executor == nil || ctx == nil || !root.valid() {
+		return unknown, ErrObservationUnknown
+	}
+	certificate, err := x509.ParseCertificate(root.certificateDER)
+	if err != nil || certificate.Subject.CommonName != viberMateRootCommonName {
 		return unknown, ErrObservationUnknown
 	}
 	presenceResult, err := adapter.run(ctx, CommandSpec{
@@ -228,8 +263,9 @@ func (adapter *MacOSAdapter) inspect(
 		arguments: []string{
 			"find-certificate",
 			"-a",
+			"-c",
+			viberMateRootCommonName,
 			"-p",
-			macOSSystemKeychain,
 		},
 	})
 	if err != nil || presenceResult.outcome != CommandOutcomeSucceeded {
@@ -242,18 +278,7 @@ func (adapter *MacOSAdapter) inspect(
 	if err != nil {
 		return unknown, errors.Join(ErrObservationUnknown, err)
 	}
-	trustResult, err := adapter.run(ctx, CommandSpec{
-		kind:       CommandInspectAdminTrust,
-		executable: macOSSecurityExecutable,
-		arguments:  []string{"dump-trust-settings", "-d"},
-	})
-	if err != nil || trustResult.outcome != CommandOutcomeSucceeded {
-		return unknown, errors.Join(ErrObservationUnknown, err)
-	}
-	decision, err := parseFixtureTrustDecision(
-		trustResult.stdout,
-		root.identity.Digest().String(),
-	)
+	decision, err := adapter.inspectTrustDecision(ctx, root)
 	if err != nil {
 		return unknown, errors.Join(ErrObservationUnknown, err)
 	}
@@ -261,12 +286,114 @@ func (adapter *MacOSAdapter) inspect(
 		root,
 		presence,
 		decision,
-		EvidenceRevisionMacOSFixtureV1,
+		adapter.evidence,
 	)
 	if !observation.Valid() {
 		return unknown, ErrObservationUnknown
 	}
 	return observation, nil
+}
+
+func (adapter *MacOSAdapter) inspectTrustDecision(
+	ctx context.Context,
+	root publicRoot,
+) (TrustDecision, error) {
+	if adapter == nil || ctx == nil || !root.valid() {
+		return TrustDecisionUnknown, ErrObservationUnknown
+	}
+	if adapter.evidence != EvidenceRevisionMacOSSecurityV2 {
+		result, err := adapter.run(ctx, CommandSpec{
+			kind:       CommandInspectUserTrust,
+			executable: macOSSecurityExecutable,
+			arguments:  []string{"dump-trust-settings"},
+		})
+		if err != nil || result.outcome != CommandOutcomeSucceeded {
+			return TrustDecisionUnknown, errors.Join(ErrObservationUnknown, err)
+		}
+		return parseTrustDecision(result.stdout, root)
+	}
+
+	path, cleanup, err := prepareTrustSettingsExport()
+	if err != nil {
+		return TrustDecisionUnknown, err
+	}
+	defer cleanup()
+	result, err := adapter.run(ctx, CommandSpec{
+		kind:       CommandInspectUserTrust,
+		executable: macOSSecurityExecutable,
+		arguments:  []string{"trust-settings-export", path},
+	})
+	if err == nil && trustSettingsExportIsEmpty(result) {
+		return TrustDecisionUntrusted, nil
+	}
+	if err != nil || result.outcome != CommandOutcomeSucceeded {
+		return TrustDecisionUnknown, errors.Join(ErrObservationUnknown, err)
+	}
+	exported, err := readTrustSettingsExport(path)
+	if err != nil {
+		return TrustDecisionUnknown, err
+	}
+	return parseMacOSExportTrustDecision(exported, root)
+}
+
+func trustSettingsExportIsEmpty(result CommandResult) bool {
+	return result.valid() && result.outcome == CommandOutcomeFailed &&
+		len(result.stdout) == 0 &&
+		string(result.stderr) ==
+			"SecTrustSettingsCreateExternalRepresentation: No Trust Settings were found.\n"
+}
+
+func prepareTrustSettingsExport() (string, func(), error) {
+	directory, err := os.MkdirTemp("", "vibermate-user-trust-")
+	if err != nil {
+		return "", nil, ErrCommandInvalid
+	}
+	cleanup := func() {
+		_ = os.RemoveAll(directory)
+	}
+	if err := os.Chmod(directory, 0o700); err != nil {
+		cleanup()
+		return "", nil, ErrCommandInvalid
+	}
+	return filepath.Join(directory, "user-trust.plist"), cleanup, nil
+}
+
+func readTrustSettingsExport(path string) ([]byte, error) {
+	if !validTrustSettingsArtifactPath(path) {
+		return nil, ErrObservationUnknown
+	}
+	info, err := os.Lstat(path)
+	if err != nil || info.Mode()&os.ModeSymlink != 0 ||
+		!info.Mode().IsRegular() || info.Mode().Perm() != 0o600 ||
+		info.Size() <= 0 || info.Size() > maxTrustSettingsExportBytes {
+		return nil, errors.Join(ErrObservationUnknown, err)
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, errors.Join(ErrObservationUnknown, err)
+	}
+	defer file.Close()
+	value, err := io.ReadAll(io.LimitReader(file, maxTrustSettingsExportBytes+1))
+	if err != nil || len(value) == 0 || len(value) > maxTrustSettingsExportBytes {
+		return nil, errors.Join(ErrObservationUnknown, err)
+	}
+	return value, nil
+}
+
+// parseTrustDecision accepts only the deterministic JSON grammar used by unit
+// fixtures. Production uses the exact-certificate-keyed XML export parser.
+func parseTrustDecision(output []byte, root publicRoot) (TrustDecision, error) {
+	if len(output) == 0 || len(output) > maxCommandOutputBytes || !root.valid() {
+		return TrustDecisionUnknown, ErrObservationUnknown
+	}
+	trimmed := bytes.TrimSpace(output)
+	if len(trimmed) == 0 || trimmed[0] != '{' {
+		return TrustDecisionUnknown, ErrObservationUnknown
+	}
+	return parseFixtureTrustDecision(
+		trimmed,
+		root.identity.Digest().String(),
+	)
 }
 
 func (adapter *MacOSAdapter) mutate(
@@ -287,7 +414,7 @@ func (adapter *MacOSAdapter) mutate(
 		err     error
 	)
 	switch step {
-	case StepEnsureExactCertificateAndAdminTrust:
+	case StepEnsureExactCertificateAndUserTrust:
 		var path string
 		path, cleanup, err = materializeCertificate(root)
 		if err == nil {
@@ -296,25 +423,22 @@ func (adapter *MacOSAdapter) mutate(
 				executable: macOSSecurityExecutable,
 				arguments: []string{
 					"add-trusted-cert",
-					"-d",
 					"-r",
 					"trustRoot",
 					"-p",
 					"ssl",
-					"-k",
-					macOSSystemKeychain,
 					path,
 				},
 			}
 		}
-	case StepRemoveExactAdminTrustSettings:
+	case StepRemoveExactUserTrustSettings:
 		var path string
 		path, cleanup, err = materializeCertificate(root)
 		if err == nil {
 			spec = CommandSpec{
 				kind:       CommandRemoveExactTrust,
 				executable: macOSSecurityExecutable,
-				arguments:  []string{"remove-trusted-cert", "-d", path},
+				arguments:  []string{"remove-trusted-cert", path},
 			}
 		}
 	case StepDeleteExactCertificate:
@@ -325,7 +449,6 @@ func (adapter *MacOSAdapter) mutate(
 				"delete-certificate",
 				"-Z",
 				strings.ToUpper(root.identity.Digest().String()),
-				macOSSystemKeychain,
 			},
 		}
 	}

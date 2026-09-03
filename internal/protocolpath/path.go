@@ -1,4 +1,4 @@
-// Package protocolpath defines the typed boundary between one immutable Access
+// Package protocolpath defines the typed boundary between one immutable Environment
 // codec plan and the two trusted wire edges that execute it. It owns no
 // transport, routing, credentials, listener, or global codec registry.
 package protocolpath
@@ -11,12 +11,12 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/vibe-agi/vibermate/internal/access"
 	"github.com/vibe-agi/vibermate/internal/protocolcore"
+	"github.com/vibe-agi/vibermate/internal/protocolspec"
 )
 
 type ClientCodec interface {
-	Dialect() access.Dialect
+	Dialect() protocolspec.Dialect
 	DecodeRequest(
 		[]byte,
 	) (protocolcore.Request, protocolcore.TranslationReport, error)
@@ -27,7 +27,7 @@ type ClientCodec interface {
 }
 
 type BackendCodec interface {
-	Dialect() access.Dialect
+	Dialect() protocolspec.Dialect
 	EncodeRequest(
 		protocolcore.Request,
 	) (ProviderRequest, protocolcore.TranslationReport, error)
@@ -131,9 +131,9 @@ type StreamingBridge interface {
 }
 
 type Options struct {
-	ID                 access.CodecPairID
-	Revision           access.Revision
-	ClientOperationIDs []access.ClientOperationID
+	ID                 protocolspec.CodecPairID
+	Revision           protocolspec.Revision
+	ClientOperationIDs []protocolspec.ClientOperationID
 	Client             ClientCodec
 	Backend            BackendCodec
 	Streaming          StreamingBridge
@@ -142,9 +142,9 @@ type Options struct {
 // Path is one immutable, explicitly assembled codec capability. It contains
 // two independent wire edges joined by protocolcore IR and no string registry.
 type Path struct {
-	id         access.CodecPairID
-	revision   access.Revision
-	operations []access.ClientOperationID
+	id         protocolspec.CodecPairID
+	revision   protocolspec.Revision
+	operations []protocolspec.ClientOperationID
 	client     ClientCodec
 	backend    BackendCodec
 	streaming  StreamingBridge
@@ -234,7 +234,7 @@ func (path *Path) Streaming() StreamingBridge {
 	return path.streaming
 }
 
-func (path *Path) ClientOperationIDs() []access.ClientOperationID {
+func (path *Path) ClientOperationIDs() []protocolspec.ClientOperationID {
 	if path == nil {
 		return nil
 	}
@@ -242,7 +242,7 @@ func (path *Path) ClientOperationIDs() []access.ClientOperationID {
 }
 
 func (path *Path) SupportsClientOperation(
-	operationID access.ClientOperationID,
+	operationID protocolspec.ClientOperationID,
 ) bool {
 	if path == nil || operationID.String() == "" {
 		return false
@@ -250,19 +250,19 @@ func (path *Path) SupportsClientOperation(
 	return slices.Contains(path.operations, operationID)
 }
 
-func (path *Path) ValidatePlan(plan access.CodecPlan) error {
+func (path *Path) ValidatePlan(plan protocolspec.CodecPlan) error {
 	if path == nil ||
 		plan.ID() != path.id ||
 		plan.Revision() != path.revision ||
 		plan.ClientDialect() != path.client.Dialect() ||
 		plan.ProviderDialect() != path.backend.Dialect() {
-		return errors.New("active Access codec plan is unsupported")
+		return errors.New("active Environment codec plan is unsupported")
 	}
 	planOperations := plan.ClientOperations()
 	if len(planOperations) != len(path.operations) {
-		return errors.New("active Access client operations are unsupported")
+		return errors.New("active Environment client operations are unsupported")
 	}
-	operationIDs := make([]access.ClientOperationID, len(planOperations))
+	operationIDs := make([]protocolspec.ClientOperationID, len(planOperations))
 	for index, operation := range planOperations {
 		operationIDs[index] = operation.ID()
 	}
@@ -270,7 +270,7 @@ func (path *Path) ValidatePlan(plan access.CodecPlan) error {
 		return operationIDs[left].String() < operationIDs[right].String()
 	})
 	if !slices.Equal(operationIDs, path.operations) {
-		return errors.New("active Access client operations are unsupported")
+		return errors.New("active Environment client operations are unsupported")
 	}
 	return nil
 }
@@ -303,8 +303,8 @@ func NewSelector(paths ...*Path) (*Selector, error) {
 }
 
 func (selector *Selector) Select(
-	plan access.CodecPlan,
-	operationID access.ClientOperationID,
+	plan protocolspec.CodecPlan,
+	operationID protocolspec.ClientOperationID,
 ) (*Path, error) {
 	if selector == nil || operationID.String() == "" {
 		return nil, errors.New("protocol path selection input is invalid")
@@ -315,10 +315,10 @@ func (selector *Selector) Select(
 		}
 		if !path.SupportsClientOperation(operationID) {
 			return nil, errors.New(
-				"active Access client operation is unsupported",
+				"active Environment client operation is unsupported",
 			)
 		}
 		return path, nil
 	}
-	return nil, errors.New("active Access codec plan is unsupported")
+	return nil, errors.New("active Environment codec plan is unsupported")
 }

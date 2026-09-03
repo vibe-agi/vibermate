@@ -348,19 +348,20 @@ func newSessionFixture(
 	application, err := desktopcontrol.New(desktopcontrol.Options{
 		Readiness:       readyState(true),
 		Status:          runtime,
-		Accesses:        runtime.AccessWriter(),
-		AccessDeletion:  runtime.AccessDeleter(),
+		Environments:    runtime.Environments(),
+		Assignments:     runtime.CaptureAssignments(),
 		Clock:           desktopcontrol.SystemClock{},
-		AccessCatalog:   runtime.AccessCatalog(),
-		Resolver:        runtime.SnapshotResolver(),
-		Credentials:     runtime.Credentials(),
 		Activities:      runtime.Activities(),
+		Contents:        runtime.ExchangeContents(),
 		Connections:     runtime.ConnectionEvents(),
 		Egress:          runtime.EgressAttempts(),
 		Approvals:       runtime.ToolApprovals(),
+		Endpoints:       runtime.UpstreamEndpoints(),
+		Accounts:        runtime.ProviderAccounts(),
 		Offline:         runtime,
 		ConnectionRules: runtime.ConnectionRules(),
 		CaptureRuns:     runtime.CaptureRunReader(),
+		ManualCaptures:  runtime.ManualCaptures(),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -368,7 +369,7 @@ func newSessionFixture(
 	const authority = "127.0.0.1:43138"
 	router, err := desktopcontrol.NewRouter(desktopcontrol.RouterOptions{
 		Authority:      authority,
-		AllowedOrigins: []string{"tauri://localhost"},
+		AllowedOrigins: []string{"vibermate://desktop"},
 		Authenticator:  authenticator,
 		Application:    application,
 		Bootstrap:      emptyBootstrap(),

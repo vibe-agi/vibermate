@@ -66,6 +66,7 @@ func (store *KeychainStore) copyItem(
 ) ([]byte, secretstore.Revision, error) {
 	query := store.query(reference)
 	defer C.CFRelease(C.CFTypeRef(query))
+	preventAuthenticationUI(query)
 	C.vibermateDictionarySet(query, C.kSecMatchLimit, C.CFTypeRef(C.kSecMatchLimitOne))
 	C.vibermateDictionarySet(query, C.kSecReturnAttributes, C.CFTypeRef(C.kCFBooleanTrue))
 	if withData {
@@ -127,6 +128,7 @@ func (store *KeychainStore) updateItem(
 ) error {
 	query := store.query(reference)
 	defer C.CFRelease(C.CFTypeRef(query))
+	preventAuthenticationUI(query)
 	expected := cfData(encodeRevision(expectedRevision))
 	defer C.CFRelease(C.CFTypeRef(expected))
 	// kSecAttrGeneric is part of the search dictionary, so SecItemUpdate only
@@ -156,6 +158,19 @@ func (store *KeychainStore) updateItem(
 		return secretstore.ErrRevisionConflict
 	}
 	return keychainError(status)
+}
+
+// preventAuthenticationUI makes every background Keychain query fail with a
+// typed store error instead of presenting (or waiting forever behind) an OS
+// authentication dialog. ViberMate's sidecar has no interactive UI surface;
+// the desktop control plane can report and repair an unavailable secret, but a
+// secret lookup must never stall unrelated proxy traffic.
+func preventAuthenticationUI(query C.CFMutableDictionaryRef) {
+	C.vibermateDictionarySet(
+		query,
+		C.kSecUseAuthenticationUI,
+		C.CFTypeRef(C.kSecUseAuthenticationUIFail),
+	)
 }
 
 func revisionFrom(attributes C.CFDictionaryRef) (secretstore.Revision, error) {

@@ -18,6 +18,19 @@ import (
 	"github.com/vibe-agi/vibermate/internal/localca"
 )
 
+func TestMacOSCurrentUserTargetUsesOnlyTheCurrentLoginScope(t *testing.T) {
+	target := MacOSCurrentUserTarget()
+	if target.TrustSettingsDomain() != TrustSettingsDomainUser {
+		t.Fatalf("unexpected trust domain: %q", target.TrustSettingsDomain())
+	}
+	if target.CertificateKeychain() != CertificateKeychainUserSearchList {
+		t.Fatalf("unexpected certificate search scope: %q", target.CertificateKeychain())
+	}
+	if target.Usage() != TrustUsageServerTLS || !target.valid() {
+		t.Fatalf("unexpected current-user target: %+v", target)
+	}
+}
+
 type mutableRootSource struct {
 	mu   sync.Mutex
 	root publicRoot
@@ -136,7 +149,7 @@ func (executor *machineExecutor) Execute(
 			output = append(output, certificatePEM(der)...)
 		}
 		return commandResult(CommandOutcomeSucceeded, output), nil
-	case CommandInspectAdminTrust:
+	case CommandInspectUserTrust:
 		if invalidTrust {
 			return commandResult(CommandOutcomeSucceeded, []byte(`{"schema":"unknown"}`)), nil
 		}
@@ -191,28 +204,24 @@ func (executor *machineExecutor) checkMutationSpec(spec CommandSpec) {
 	var artifactPath string
 	switch spec.kind {
 	case CommandEnsureExactTrust:
-		if len(arguments) == 9 &&
-			slices.Equal(arguments[:8], []string{
+		if len(arguments) == 6 &&
+			slices.Equal(arguments[:5], []string{
 				"add-trusted-cert",
-				"-d",
 				"-r",
 				"trustRoot",
 				"-p",
 				"ssl",
-				"-k",
-				macOSSystemKeychain,
 			}) {
-			artifactPath = arguments[8]
+			artifactPath = arguments[5]
 		}
 	case CommandRemoveExactTrust:
-		if len(arguments) == 3 {
-			artifactPath = arguments[2]
+		if len(arguments) == 2 {
+			artifactPath = arguments[1]
 		}
 	case CommandDeleteExactObject:
-		if len(arguments) != 4 || arguments[0] != "delete-certificate" ||
+		if len(arguments) != 3 || arguments[0] != "delete-certificate" ||
 			arguments[1] != "-Z" ||
-			arguments[2] != strings.ToUpper(executor.root.identity.Digest().String()) ||
-			arguments[3] != macOSSystemKeychain {
+			arguments[2] != strings.ToUpper(executor.root.identity.Digest().String()) {
 			executor.mu.Lock()
 			executor.artifactError = errors.New("delete command is not exact")
 			executor.mu.Unlock()
@@ -380,7 +389,7 @@ func TestPlanTruthTableAndImmutableCopies(t *testing.T) {
 				decision: TrustDecisionUntrusted,
 			},
 			steps: []Step{
-				StepEnsureExactCertificateAndAdminTrust,
+				StepEnsureExactCertificateAndUserTrust,
 				StepInspectExactRoot,
 			},
 			desired: machineState{ExactPresencePresent, TrustDecisionTrusted},
@@ -402,7 +411,7 @@ func TestPlanTruthTableAndImmutableCopies(t *testing.T) {
 				decision: TrustDecisionUntrusted,
 			},
 			steps: []Step{
-				StepEnsureExactCertificateAndAdminTrust,
+				StepEnsureExactCertificateAndUserTrust,
 				StepInspectExactRoot,
 			},
 			desired: machineState{ExactPresencePresent, TrustDecisionTrusted},
@@ -415,7 +424,7 @@ func TestPlanTruthTableAndImmutableCopies(t *testing.T) {
 				decision: TrustDecisionTrusted,
 			},
 			steps: []Step{
-				StepRemoveExactAdminTrustSettings,
+				StepRemoveExactUserTrustSettings,
 				StepInspectExactRoot,
 				StepDeleteExactCertificate,
 				StepInspectExactRoot,

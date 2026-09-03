@@ -9,10 +9,12 @@ import (
 	"io"
 	"net/url"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
 	"github.com/vibe-agi/vibermate/internal/capturecontrol"
+	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/localdiscovery"
 	"github.com/vibe-agi/vibermate/internal/manualcapture"
 	"github.com/vibe-agi/vibermate/internal/manualcaptureclient"
@@ -29,12 +31,13 @@ const (
 )
 
 type captureCreateConfig struct {
-	name         string
-	clientClass  manualcapture.ClientClass
-	lifetime     manualcapture.Lifetime
-	expiresIn    time.Duration
-	yes          bool
-	outputFormat string
+	environmentID environment.EnvironmentID
+	name          string
+	clientClass   manualcapture.ClientClass
+	lifetime      manualcapture.Lifetime
+	expiresIn     time.Duration
+	yes           bool
+	outputFormat  string
 }
 
 type durationFlag struct {
@@ -97,7 +100,7 @@ func executeCapture(
 		context.Background(),
 		15*time.Second,
 	)
-	captureContext, err := client.Context(contextRequest)
+	captureContext, err := client.Context(contextRequest, config.environmentID)
 	cancelContext()
 	if err != nil {
 		return 1, keyCaptureContextFailed
@@ -132,6 +135,7 @@ func executeCapture(
 		15*time.Second,
 	)
 	result, err := client.Create(createRequest, capturecontrol.ManualCaptureCreateRequest{
+		EnvironmentID:     config.environmentID.String(),
 		DisplayName:       config.name,
 		ClientClass:       config.clientClass,
 		Lifetime:          config.lifetime,
@@ -148,7 +152,11 @@ func executeCapture(
 	}
 	grant := result.Grant
 	if grant.ProxyAddress != captureContext.ProxyAddress ||
-		grant.Root != captureContext.Root {
+		grant.EnvironmentID != captureContext.EnvironmentID ||
+		grant.LaunchAuthorityDigest != captureContext.LaunchAuthorityDigest ||
+		!slices.Equal(grant.ProtectedAuthorities, captureContext.ProtectedAuthorities) ||
+		!slices.Equal(grant.ManagedAuthorities, captureContext.ManagedAuthorities) ||
+		!sameRootDelivery(grant.Root, captureContext.Root) {
 		return 1, keyCaptureOutcomeUnknown
 	}
 	if err := renderCaptureGrant(
@@ -170,6 +178,7 @@ func parseCaptureCreate(arguments []string) (captureCreateConfig, error) {
 	flags := flag.NewFlagSet("capture create", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 	name := flags.String("name", "", "")
+	environmentValue := flags.String("env", "", "")
 	clientClass := flags.String("client", "cli", "")
 	untilRevoked := flags.Bool("until-revoked", false, "")
 	yes := flags.Bool("yes", false, "")
@@ -179,6 +188,10 @@ func parseCaptureCreate(arguments []string) (captureCreateConfig, error) {
 	if err := flags.Parse(arguments); err != nil || len(flags.Args()) != 0 ||
 		strings.TrimSpace(*name) != *name || *name == "" {
 		return captureCreateConfig{}, errors.New("capture create arguments are invalid")
+	}
+	environmentID, err := environment.NewEnvironmentID(*environmentValue)
+	if err != nil {
+		return captureCreateConfig{}, errors.New("capture Environment is invalid")
 	}
 	class := manualcapture.ClientClass(strings.ReplaceAll(*clientClass, "-", "_"))
 	if !class.Valid() || (*outputFormat != "human" && *outputFormat != "shell") {
@@ -202,12 +215,13 @@ func parseCaptureCreate(arguments []string) (captureCreateConfig, error) {
 		return captureCreateConfig{}, errors.New("capture lifetime is invalid")
 	}
 	return captureCreateConfig{
-		name:         *name,
-		clientClass:  class,
-		lifetime:     lifetime,
-		expiresIn:    duration,
-		yes:          *yes,
-		outputFormat: *outputFormat,
+		environmentID: environmentID,
+		name:          *name,
+		clientClass:   class,
+		lifetime:      lifetime,
+		expiresIn:     duration,
+		yes:           *yes,
+		outputFormat:  *outputFormat,
 	}, nil
 }
 
@@ -234,13 +248,15 @@ func renderCaptureReview(
 		}
 		lifetime = translated
 	}
+	rootFingerprint, rootPath := captureRootFacts(catalogs, locale, context.Root)
 	message, err := catalogs.Render(locale, "cli.capture.review", map[string]string{
 		"name":            config.name,
+		"environment":     context.EnvironmentID,
 		"clientClass":     clientClass,
 		"lifetime":        lifetime,
 		"proxyAddress":    context.ProxyAddress,
-		"rootFingerprint": context.Root.Fingerprint,
-		"rootPath":        context.Root.PEMPath,
+		"rootFingerprint": rootFingerprint,
+		"rootPath":        rootPath,
 	})
 	if err != nil {
 		return err
@@ -281,12 +297,17 @@ func renderCaptureGrant(
 		return err
 	}
 	if format == "shell" {
-		for _, entry := range [][2]string{
+		entries := [][2]string{
 			{"HTTPS_PROXY", proxyURL},
 			{"HTTP_PROXY", proxyURL},
-			{"NODE_EXTRA_CA_CERTS", grant.Root.PEMPath},
-			{"SSL_CERT_FILE", grant.Root.PEMPath},
-		} {
+		}
+		if grant.Root != nil {
+			entries = append(entries,
+				[2]string{"NODE_EXTRA_CA_CERTS", grant.Root.PEMPath},
+				[2]string{"SSL_CERT_FILE", grant.Root.PEMPath},
+			)
+		}
+		for _, entry := range entries {
 			if _, err := fmt.Fprintf(
 				output,
 				"export %s=%s\n",
@@ -298,16 +319,42 @@ func renderCaptureGrant(
 		}
 		return nil
 	}
+	rootPath := ""
+	if grant.Root != nil {
+		rootPath = grant.Root.PEMPath
+	} else {
+		rootPath, _ = catalogs.Render(locale, "cli.capture.noRoot", nil)
+	}
 	message, err := catalogs.Render(locale, "cli.capture.created", map[string]string{
-		"captureId": grant.Capture.ID,
-		"proxyUrl":  proxyURL,
-		"rootPath":  grant.Root.PEMPath,
+		"captureId":   grant.Capture.ID,
+		"environment": grant.EnvironmentID,
+		"proxyUrl":    proxyURL,
+		"rootPath":    rootPath,
 	})
 	if err != nil {
 		return err
 	}
 	_, err = fmt.Fprintln(output, message)
 	return err
+}
+
+func sameRootDelivery(left, right *capturecontrol.RootPublicDelivery) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return *left == *right
+}
+
+func captureRootFacts(
+	catalogs *locales.Catalogs,
+	locale locales.Locale,
+	root *capturecontrol.RootPublicDelivery,
+) (string, string) {
+	if root != nil {
+		return root.Fingerprint, root.PEMPath
+	}
+	value, _ := catalogs.Render(locale, "cli.capture.noRoot", nil)
+	return value, value
 }
 
 func proxyURLWithCredential(

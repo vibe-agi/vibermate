@@ -10,7 +10,7 @@ import (
 	"time"
 
 	utls "github.com/refraction-networking/utls"
-	"github.com/vibe-agi/vibermate/internal/access"
+	"github.com/vibe-agi/vibermate/internal/wireprofile"
 )
 
 const defaultTLSHandshakeTimeout = 10 * time.Second
@@ -63,7 +63,7 @@ type ConnectRequest struct {
 	Network       string
 	Address       string
 	TLSServerName string
-	Plan          access.CompiledTransportFingerprintPlan
+	Plan          wireprofile.CompiledTransportFingerprintPlan
 	Observation   Observation
 }
 
@@ -96,7 +96,7 @@ func (connector *Connector) Connect(
 	requested := request.Plan.Requested()
 	evidence := newEvidence(requested, request.Observation)
 	templates := append(
-		[]access.TransportFingerprintTemplate{requested},
+		[]wireprofile.TransportFingerprintTemplate{requested},
 		request.Plan.Fallbacks()...,
 	)
 	if err := validateTemplates(templates); err != nil {
@@ -114,7 +114,7 @@ func (connector *Connector) Connect(
 			fallbackReason = FallbackClientHelloUnsupported
 		}
 		switch template.Source() {
-		case access.TransportFingerprintObservedClient:
+		case wireprofile.TransportFingerprintObservedClient:
 			spec, offered, reason, err := prepareObservedSpec(
 				request.Observation,
 				template,
@@ -147,7 +147,7 @@ func (connector *Connector) Connect(
 				)
 			}
 			fallbackReason = FallbackObservedTLSHandshakeRejected
-		case access.TransportFingerprintCaptured:
+		case wireprofile.TransportFingerprintCaptured:
 			spec, offered, err := prepareCapturedSpec(
 				template,
 				request.TLSServerName,
@@ -179,7 +179,7 @@ func (connector *Connector) Connect(
 				)
 			}
 			fallbackReason = FallbackCapturedTLSHandshakeRejected
-		case access.TransportFingerprintStandard:
+		case wireprofile.TransportFingerprintStandard:
 			offered := templateALPN(template)
 			connection, negotiated, err := connector.connectStandard(
 				ctx,
@@ -215,7 +215,7 @@ func (connector *Connector) Connect(
 }
 
 func validateTemplates(
-	templates []access.TransportFingerprintTemplate,
+	templates []wireprofile.TransportFingerprintTemplate,
 ) error {
 	if len(templates) == 0 {
 		return ErrTransportPlanInvalid
@@ -224,18 +224,18 @@ func validateTemplates(
 	for _, template := range templates {
 		if template.Ref().String() == "" ||
 			template.Revision() == 0 ||
-			(template.HTTPTransport() != access.HTTPTransportHTTP1 &&
-				template.HTTPTransport() != access.HTTPTransportHTTP2) {
+			(template.HTTPTransport() != wireprofile.HTTPTransportHTTP1 &&
+				template.HTTPTransport() != wireprofile.HTTPTransportHTTP2) {
 			return ErrTransportPlanInvalid
 		}
 		switch template.Source() {
-		case access.TransportFingerprintObservedClient,
-			access.TransportFingerprintStandard:
+		case wireprofile.TransportFingerprintObservedClient,
+			wireprofile.TransportFingerprintStandard:
 			if template.Preset() != "" {
 				return ErrTransportPlanInvalid
 			}
-		case access.TransportFingerprintCaptured:
-			if template.Preset() != access.TransportFingerprintPresetClaudeCodeH1 {
+		case wireprofile.TransportFingerprintCaptured:
+			if template.Preset() != wireprofile.TransportFingerprintPresetClaudeCodeH1 {
 				return ErrTransportPlanInvalid
 			}
 		default:
@@ -249,9 +249,9 @@ func validateTemplates(
 		if len(alpn) == 0 {
 			return ErrTransportPlanInvalid
 		}
-		expectedALPN := string(access.ApplicationProtocolHTTP1)
-		if template.HTTPTransport() == access.HTTPTransportHTTP2 {
-			expectedALPN = string(access.ApplicationProtocolHTTP2)
+		expectedALPN := string(wireprofile.ApplicationProtocolHTTP1)
+		if template.HTTPTransport() == wireprofile.HTTPTransportHTTP2 {
+			expectedALPN = string(wireprofile.ApplicationProtocolHTTP2)
 		}
 		if !slices.Equal(alpn, []string{expectedALPN}) {
 			return ErrTransportPlanInvalid
@@ -261,14 +261,14 @@ func validateTemplates(
 }
 
 func prepareCapturedSpec(
-	template access.TransportFingerprintTemplate,
+	template wireprofile.TransportFingerprintTemplate,
 	serverName string,
 ) (*utls.ClientHelloSpec, []string, error) {
-	if template.Preset() != access.TransportFingerprintPresetClaudeCodeH1 {
+	if template.Preset() != wireprofile.TransportFingerprintPresetClaudeCodeH1 {
 		return nil, nil, errors.New("captured ClientHello preset is unsupported")
 	}
 	offered := templateALPN(template)
-	if !slices.Equal(offered, []string{string(access.ApplicationProtocolHTTP1)}) {
+	if !slices.Equal(offered, []string{string(wireprofile.ApplicationProtocolHTTP1)}) {
 		return nil, nil, errors.New("captured ClientHello ALPN policy is invalid")
 	}
 	return claudeCodeH1ClientHelloSpec(serverName), offered, nil
@@ -324,7 +324,7 @@ func claudeCodeH1ClientHelloSpec(serverName string) *utls.ClientHelloSpec {
 
 func prepareObservedSpec(
 	observation Observation,
-	template access.TransportFingerprintTemplate,
+	template wireprofile.TransportFingerprintTemplate,
 	serverName string,
 ) (*utls.ClientHelloSpec, []string, FallbackReason, error) {
 	if !observation.valid {
@@ -573,7 +573,7 @@ func strictVerificationFailure(err error) bool {
 }
 
 func templateALPN(
-	template access.TransportFingerprintTemplate,
+	template wireprofile.TransportFingerprintTemplate,
 ) []string {
 	protocols := template.ALPN()
 	result := make([]string, len(protocols))

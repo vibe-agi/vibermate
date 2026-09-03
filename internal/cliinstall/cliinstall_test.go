@@ -127,6 +127,60 @@ func TestManagedLinkInstallRefreshAndRemove(t *testing.T) {
 	assertOnlyNames(t, filepath.Dir(fixture.spec.ReceiptPath))
 }
 
+func TestInspectKeepsManagedLinkCurrentWhenMacOSRenumbersDevice(t *testing.T) {
+	requireManagedLinkTestPlatform(t)
+	fixture := newLinkFixture(t)
+	manager := NewLinkManager(func() time.Time { return fixture.installedAt })
+	installed, err := manager.Install(fixture.spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recordReceiptAfterDeviceRenumbering(t, fixture.spec.ReceiptPath, installed)
+
+	observation, err := manager.Inspect(fixture.spec)
+	if err != nil || observation.State != StateCurrent {
+		t.Fatalf("Inspect = %+v, %v", observation, err)
+	}
+
+	if err := writeExecutable(
+		fixture.spec.SourcePath,
+		"#!/bin/sh\nexit 1\n",
+	); err != nil {
+		t.Fatal(err)
+	}
+	fixture.spec.Version = "0.2.0"
+	observation, err = manager.Inspect(fixture.spec)
+	if err != nil || observation.State != StateSourceUpdated {
+		t.Fatalf("Inspect after app update = %+v, %v", observation, err)
+	}
+	manager.now = func() time.Time { return fixture.installedAt.Add(time.Hour) }
+	if _, err := manager.AcknowledgeUpdate(
+		fixture.spec,
+		installed.SourceSHA256,
+	); err != nil {
+		t.Fatal(err)
+	}
+	assertCurrent(t, manager, fixture.spec)
+}
+
+func TestRemoveKeepsOwnershipWhenMacOSRenumbersDevice(t *testing.T) {
+	requireManagedLinkTestPlatform(t)
+	fixture := newLinkFixture(t)
+	manager := NewLinkManager(func() time.Time { return fixture.installedAt })
+	installed, err := manager.Install(fixture.spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recordReceiptAfterDeviceRenumbering(t, fixture.spec.ReceiptPath, installed)
+
+	result, err := manager.Remove(fixture.spec)
+	if err != nil || result.State != RemoveRemoved {
+		t.Fatalf("Remove = %+v, %v", result, err)
+	}
+	assertMissing(t, fixture.spec.TargetPath)
+	assertMissing(t, fixture.spec.ReceiptPath)
+}
+
 func TestUserCommandOwnsOneUserLocalTerminalEntry(t *testing.T) {
 	requireManagedLinkTestPlatform(t)
 	realRoot, err := filepath.EvalSymlinks(t.TempDir())
@@ -198,6 +252,81 @@ func TestUserCommandOwnsOneUserLocalTerminalEntry(t *testing.T) {
 	if err != nil || observation.State != StateNotInstalled {
 		t.Fatalf("removed observation = %+v, %v", observation, err)
 	}
+}
+
+func TestUserCommandRepairsAStaleRecordAfterTheAppMoves(t *testing.T) {
+	requireManagedLinkTestPlatform(t)
+	realRoot, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	home := filepath.Join(realRoot, "home")
+	configuration := filepath.Join(realRoot, "configuration")
+	if err := os.MkdirAll(home, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	packagedCommand := func(appName string) string {
+		return filepath.Join(
+			realRoot,
+			appName+".app",
+			"Contents",
+			"MacOS",
+			"vibermate",
+		)
+	}
+	oldSource := packagedCommand("OldViberMate")
+	currentSource := packagedCommand("ViberMate")
+	for _, source := range []string{oldSource, currentSource} {
+		if err := os.MkdirAll(filepath.Dir(source), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := writeExecutable(source, "#!/bin/sh\nexit 0\n"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	oldCommand, err := NewUserCommand(
+		oldSource,
+		home,
+		configuration,
+		"0.1.0",
+		nil,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := oldCommand.Install(); err != nil {
+		t.Fatal(err)
+	}
+	target := oldCommand.Spec().TargetPath
+	if err := os.Remove(target); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Dir(target)); err != nil {
+		t.Fatal(err)
+	}
+
+	currentCommand, err := NewUserCommand(
+		currentSource,
+		home,
+		configuration,
+		"0.2.0",
+		nil,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	observation, err := currentCommand.Inspect()
+	if err != nil || observation.State != StateTargetMissing {
+		t.Fatalf("Inspect = %+v, %v", observation, err)
+	}
+	if _, err := currentCommand.Repair(); err != nil {
+		t.Fatal(err)
+	}
+	observation, err = currentCommand.Inspect()
+	if err != nil || observation.State != StateCurrent {
+		t.Fatalf("repaired observation = %+v, %v", observation, err)
+	}
+	assertLinkDestination(t, target, currentSource)
 }
 
 func TestUserCommandCanonicalizesAnExistingManagedSourceLink(t *testing.T) {
@@ -698,6 +827,79 @@ func TestMissingTargetCanForgetOnlyItsPrivateRecord(t *testing.T) {
 	assertMissing(t, fixture.spec.ReceiptPath)
 }
 
+func TestMissingTargetRecordFromPreviousAppLocationCanBeRepaired(t *testing.T) {
+	requireManagedLinkTestPlatform(t)
+	fixture := newLinkFixture(t)
+	manager := NewLinkManager(nil)
+	if _, err := manager.Install(fixture.spec); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(fixture.spec.TargetPath); err != nil {
+		t.Fatal(err)
+	}
+
+	current := fixture.spec
+	current.SourcePath = filepath.Join(
+		fixture.root,
+		"CurrentViberMate.app",
+		"Contents",
+		"MacOS",
+		"vibermate",
+	)
+	if err := os.MkdirAll(filepath.Dir(current.SourcePath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeExecutable(current.SourcePath, "#!/bin/sh\nexit 0\n"); err != nil {
+		t.Fatal(err)
+	}
+
+	observation, err := manager.Inspect(current)
+	if err != nil || observation.State != StateTargetMissing || observation.Receipt == nil {
+		t.Fatalf("Inspect = %+v, %v", observation, err)
+	}
+	if observation.Receipt.SourcePath != fixture.spec.SourcePath {
+		t.Fatalf("stale record source = %q", observation.Receipt.SourcePath)
+	}
+	removed, err := manager.Remove(current)
+	if err != nil || removed.State != RemoveMissing {
+		t.Fatalf("Remove = %+v, %v", removed, err)
+	}
+	if _, err := manager.Install(current); err != nil {
+		t.Fatal(err)
+	}
+	assertCurrent(t, manager, current)
+	assertLinkDestination(t, current.TargetPath, current.SourcePath)
+}
+
+func TestMissingTargetNeverClaimsARecordForAnotherTerminalEntry(t *testing.T) {
+	requireManagedLinkTestPlatform(t)
+	fixture := newLinkFixture(t)
+	manager := NewLinkManager(nil)
+	other := fixture.spec
+	other.TargetPath = filepath.Join(fixture.root, "other-bin", "vibermate")
+	if err := os.MkdirAll(filepath.Dir(other.TargetPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.Install(other); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(other.TargetPath); err != nil {
+		t.Fatal(err)
+	}
+
+	observation, err := manager.Inspect(fixture.spec)
+	if err != nil || observation.State != StateConflict {
+		t.Fatalf("Inspect = %+v, %v", observation, err)
+	}
+	removed, err := manager.Remove(fixture.spec)
+	if err != nil || removed.State != RemoveConflict {
+		t.Fatalf("Remove = %+v, %v", removed, err)
+	}
+	if _, err := os.Lstat(fixture.spec.ReceiptPath); err != nil {
+		t.Fatalf("record for another target was removed: %v", err)
+	}
+}
+
 func TestOwnedLinkCanBeRemovedAfterAppLocationDisappears(t *testing.T) {
 	requireManagedLinkTestPlatform(t)
 	fixture := newLinkFixture(t)
@@ -1063,6 +1265,30 @@ func writeExecutable(path, content string) error {
 		return err
 	}
 	return os.Chmod(path, 0o700)
+}
+
+func recordReceiptAfterDeviceRenumbering(
+	t *testing.T,
+	path string,
+	receipt Receipt,
+) {
+	t.Helper()
+	identityParts := strings.Split(receipt.TargetIdentity, ":")
+	if len(identityParts) != 2 {
+		t.Fatalf("installed target identity = %q", receipt.TargetIdentity)
+	}
+	renumberedDevice := "ffffffffffffffff"
+	if identityParts[0] == renumberedDevice {
+		renumberedDevice = "eeeeeeeeeeeeeeee"
+	}
+	receipt.TargetIdentity = renumberedDevice + ":" + identityParts[1]
+	record, err := marshalReceipt(receipt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, record, 0o600); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func assertCurrent(t *testing.T, manager *LinkManager, spec LinkSpec) {

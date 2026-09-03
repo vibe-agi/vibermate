@@ -22,8 +22,8 @@ func TestVerifyFileAcceptsKnownGoodFixedClientFixtures(t *testing.T) {
 		version string
 		checks  int
 	}{
-		{id: "claude-code", version: "2.1.220", checks: 18},
-		{id: "codex-cli", version: "0.145.0", checks: 19},
+		{id: "claude-code", version: "2.1.220", checks: 13},
+		{id: "codex-cli", version: "0.145.0", checks: 13},
 	} {
 		client := client
 		t.Run(client.id, func(t *testing.T) {
@@ -111,84 +111,27 @@ func TestVerifyFileRejectsBytesChangedAfterReportCreation(t *testing.T) {
 	})
 }
 
-func TestVerifyFileAcceptsHistoricalV5CheckContract(t *testing.T) {
-	t.Parallel()
-	for _, client := range []struct {
-		id      string
-		version string
-		checks  int
-	}{
-		{id: "claude-code", version: "2.1.220", checks: 17},
-		{id: "codex-cli", version: "0.145.0", checks: 18},
-	} {
-		client := client
-		t.Run(client.id, func(t *testing.T) {
-			t.Parallel()
-			report, expected := validFixture(t, client.id, client.version)
-			report.Schema = SchemaV5
-			report.Provenance.Build.ManifestSchema =
-				DesktopBuildManifestSchemaV1
-			delete(
-				report.Provenance.Build.ConfigurationSHA256,
-				"rust-toolchain.toml",
-			)
-			expected.Schema = SchemaV5
-			checks := make([]Check, 0, len(report.Checks)-1)
-			for _, check := range report.Checks {
-				if check.ID != "packaged-main-navigation-cold-restore" {
-					checks = append(checks, check)
-				}
-			}
-			report.Checks = checks
-			if len(report.Checks) != client.checks {
-				t.Fatalf("v5 fixture checks = %d, want %d", len(report.Checks), client.checks)
-			}
-
-			if err := VerifyFile(writeFixture(t, report), expected); err != nil {
-				t.Fatalf("VerifyFile(v5) error = %v", err)
-			}
-		})
-	}
-}
-
-func TestVerifyFileRejectsHistoricalV1BuildManifestInV6Report(t *testing.T) {
+func TestVerifyFileRejectsRetiredBuildManifest(t *testing.T) {
 	t.Parallel()
 
 	report, expected := validFixture(t, "claude-code", "2.1.220")
-	report.Provenance.Build.ManifestSchema = DesktopBuildManifestSchemaV1
+	report.Provenance.Build.ManifestSchema = "vibermate.desktop-build/v1"
 	delete(
 		report.Provenance.Build.ConfigurationSHA256,
-		"rust-toolchain.toml",
+		"ui/flutter_app/pubspec.lock",
 	)
 	if err := VerifyFile(writeFixture(t, report), expected); err == nil {
-		t.Fatal("VerifyFile accepted a v6 report with a v1 build manifest")
+		t.Fatal("VerifyFile accepted a retired Desktop build manifest")
 	}
 }
 
-func TestVerifyFileRejectsV5ReportWithV6CheckSet(t *testing.T) {
+func TestVerifyFileRejectsRetiredReportSchema(t *testing.T) {
 	t.Parallel()
 	report, expected := validFixture(t, "claude-code", "2.1.220")
-	report.Schema = SchemaV5
-	expected.Schema = SchemaV5
-	if err := VerifyFile(writeFixture(t, report), expected); err == nil {
-		t.Fatal("VerifyFile(v5) accepted the v6 check set")
-	}
-}
-
-func TestVerifyFileRejectsSchemaDowngradeFromCurrentExpectation(t *testing.T) {
-	t.Parallel()
-	report, expected := validFixture(t, "claude-code", "2.1.220")
-	report.Schema = SchemaV5
-	checks := make([]Check, 0, len(report.Checks)-1)
-	for _, check := range report.Checks {
-		if check.ID != "packaged-main-navigation-cold-restore" {
-			checks = append(checks, check)
-		}
-	}
-	report.Checks = checks
+	report.Schema = "vibermate.m0-assembly-acceptance/v5"
 	err := VerifyFile(writeFixture(t, report), expected)
 	if err == nil || !strings.Contains(err.Error(), "schema differs") {
-		t.Fatalf("VerifyFile(v6 expectation) downgrade error = %v", err)
+		t.Fatalf("VerifyFile retired-schema error = %v", err)
 	}
 }
 
@@ -364,7 +307,7 @@ func TestVerifyFileRejectsTypedMutations(t *testing.T) {
 		{
 			name: "adapter launch recipe drift",
 			mutate: func(report *Report, _ *Expectations) {
-				report.Client.Adapter.LaunchRecipe = clientadapter.LaunchSSLCertFile
+				report.Client.Adapter.LaunchRecipe = clientadapter.LaunchCodexResponsesHTTP
 			},
 		},
 		{
@@ -386,27 +329,9 @@ func TestVerifyFileRejectsTypedMutations(t *testing.T) {
 			},
 		},
 		{
-			name: "invalid access ID",
+			name: "invalid Environment ID",
 			mutate: func(report *Report, _ *Expectations) {
-				report.Provenance.Configuration.AccessID = " has spaces "
-			},
-		},
-		{
-			name: "invalid provider origin",
-			mutate: func(report *Report, _ *Expectations) {
-				report.Provenance.Configuration.ProviderOrigin = "file:///tmp/provider"
-			},
-		},
-		{
-			name: "remote cleartext provider origin",
-			mutate: func(report *Report, _ *Expectations) {
-				report.Provenance.Configuration.ProviderOrigin = "http://api.example.com/v1"
-			},
-		},
-		{
-			name: "blank provider model",
-			mutate: func(report *Report, _ *Expectations) {
-				report.Provenance.Configuration.ProviderModel = ""
+				report.Provenance.Configuration.EnvironmentID = " has spaces "
 			},
 		},
 		{
@@ -555,32 +480,28 @@ func TestVerifyFileRejectsTypedMutations(t *testing.T) {
 			},
 		},
 		{
-			name: "runtime Node toolchain drift",
+			name: "runtime Flutter toolchain drift",
 			mutate: func(report *Report, _ *Expectations) {
-				report.Provenance.Toolchains.Node = "v23.0.0"
+				report.Provenance.Toolchains.Flutter = "Flutter 99.0.0 (bad)"
 			},
 		},
 		{
-			name: "runtime Rust host drift",
+			name: "runtime Dart toolchain drift",
 			mutate: func(report *Report, _ *Expectations) {
-				report.Provenance.Toolchains.Rustc = strings.ReplaceAll(
-					report.Provenance.Toolchains.Rustc,
-					ExpectedBuildTarget,
-					"x86_64-apple-darwin",
-				)
+				report.Provenance.Toolchains.Dart = "Dart 99.0.0"
 			},
 		},
 		{
 			name: "build and runtime toolchain continuity drift",
 			mutate: func(report *Report, _ *Expectations) {
-				report.Provenance.Toolchains.Cargo =
-					"cargo 1.88.0 (different-build 2026-01-01)"
+				report.Provenance.Toolchains.Xcode =
+					"Xcode 16.3\nBuild version different"
 			},
 		},
 		{
 			name: "wrong build manifest schema",
 			mutate: func(report *Report, _ *Expectations) {
-				report.Provenance.Build.ManifestSchema = "vibermate.desktop-build/v3"
+				report.Provenance.Build.ManifestSchema = "vibermate.desktop-build/v2"
 			},
 		},
 		{
@@ -602,17 +523,17 @@ func TestVerifyFileRejectsTypedMutations(t *testing.T) {
 			},
 		},
 		{
-			name: "Desktop Tauri toolchain drift",
+			name: "Desktop Flutter toolchain drift",
 			mutate: func(report *Report, _ *Expectations) {
-				report.Provenance.Build.Toolchains.Tauri = "tauri-cli 2.12.0"
+				report.Provenance.Build.Toolchains.Flutter = "Flutter 99.0.0 (bad)"
 			},
 		},
 		{
-			name: "missing Rust declaration digest",
+			name: "missing Flutter lockfile digest",
 			mutate: func(report *Report, _ *Expectations) {
 				delete(
 					report.Provenance.Build.ConfigurationSHA256,
-					"rust-toolchain.toml",
+					"ui/flutter_app/pubspec.lock",
 				)
 			},
 		},
@@ -718,12 +639,23 @@ func TestVerifyFileRejectsUnknownDuplicateMalformedAndTrailingJSON(t *testing.T)
 			},
 		},
 		{
+			name: "retired access ID field",
+			mutate: func(input []byte) []byte {
+				return bytes.Replace(
+					input,
+					[]byte(`"environmentId":"assembly-001"`),
+					[]byte(`"accessId":"assembly-001"`),
+					1,
+				)
+			},
+		},
+		{
 			name: "duplicate JSON field",
 			mutate: func(input []byte) []byte {
 				return bytes.Replace(
 					input,
 					[]byte(`"schema":`),
-					[]byte(`"schema":"`+SchemaV6+`","schema":`),
+					[]byte(`"schema":"`+SchemaV7+`","schema":`),
 					1,
 				)
 			},
@@ -873,6 +805,55 @@ func TestRequiredCheckIDsReturnsAnIsolatedCopy(t *testing.T) {
 	if !foundNavigationRestore {
 		t.Fatal("RequiredCheckIDs() omitted the current navigation restore proof")
 	}
+	seen := make(map[string]bool, len(second))
+	for _, id := range second {
+		seen[id] = true
+	}
+	for _, id := range []string{
+		"environment-publish",
+		"capture-environment-assignment",
+		"environment-recovery",
+		"capture-assignment-recovery",
+	} {
+		if !seen[id] {
+			t.Fatalf("RequiredCheckIDs() omitted %q", id)
+		}
+	}
+	for _, id := range []string{
+		"access-apply",
+		"credentialed-access-apply",
+		"provider-secret",
+	} {
+		if seen[id] {
+			t.Fatalf("RequiredCheckIDs() retained retired check %q", id)
+		}
+	}
+	credentialed, err := RequiredCheckIDs(
+		ModeCredentialed,
+		"claude-code",
+		"2.1.220",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	credentialedSeen := make(map[string]bool, len(credentialed))
+	for _, id := range credentialed {
+		credentialedSeen[id] = true
+	}
+	for _, id := range []string{
+		"credentialed-environment-publish",
+		"credentialed-capture-environment-assignment",
+		"provider-account",
+	} {
+		if !credentialedSeen[id] {
+			t.Fatalf("credentialed RequiredCheckIDs() omitted %q", id)
+		}
+	}
+	for _, id := range []string{"credentialed-access-apply", "provider-secret"} {
+		if credentialedSeen[id] {
+			t.Fatalf("credentialed RequiredCheckIDs() retained retired check %q", id)
+		}
+	}
 }
 
 func TestVerifyFileRequiresAnExplicitMatchingCredentialedMode(t *testing.T) {
@@ -909,10 +890,10 @@ func TestVerifyFileRequiresAnExplicitMatchingCredentialedMode(t *testing.T) {
 	}
 
 	expected.Mode = ModeCredentialed
-	expected.Schema = SchemaV5
+	expected.Schema = "vibermate.m0-assembly-acceptance/v5"
 	expected.Artifacts = ArtifactCoordinates{}
 	if err := VerifyFile(writeFixture(t, report), expected); err == nil {
-		t.Fatal("VerifyFile() accepted credentialed evidence under historical v5")
+		t.Fatal("VerifyFile() accepted credentialed evidence under a retired schema")
 	}
 }
 
@@ -955,13 +936,19 @@ func validFixture(
 		t.Fatal(err)
 	}
 	artifactPaths := map[string]string{
-		"acceptance":             filepath.Join(root, "vibermate-acceptance"),
+		"acceptance": filepath.Join(root, "vibermate-acceptance"),
+		"app-framework": filepath.Join(
+			bundle, "Contents", "Frameworks", "App.framework", "Versions", "A", "App",
+		),
 		"client-entrypoint":      filepath.Join(root, "client"),
 		"daemon":                 filepath.Join(macOSDirectory, "vibermated"),
 		"desktop-app-bundle":     bundle,
 		"desktop-app-executable": filepath.Join(macOSDirectory, "vibermate-desktop"),
 		"desktop-build-manifest": filepath.Join(resourcesDirectory, "vibermate-build-manifest.json"),
-		"launcher":               filepath.Join(macOSDirectory, "vibermate"),
+		"flutter-macos-framework": filepath.Join(
+			bundle, "Contents", "Frameworks", "FlutterMacOS.framework", "Versions", "A", "FlutterMacOS",
+		),
+		"launcher": filepath.Join(macOSDirectory, "vibermate"),
 	}
 	for role, path := range artifactPaths {
 		if role == "desktop-app-bundle" || role == "desktop-build-manifest" {
@@ -988,11 +975,10 @@ func validFixture(
 	}
 	revision, commitTime := initializeGitFixture(t, sourceRoot)
 	runtimeToolchains := ToolchainProvenance{
-		Go:    "go version go1.25.12 darwin/arm64",
-		Node:  ExpectedNodeVersion,
-		Rustc: "rustc 1.88.0 (fixture 2026-01-01)\nbinary: rustc\nhost: aarch64-apple-darwin\nrelease: 1.88.0",
-		Cargo: "cargo 1.88.0 (fixture 2026-01-01)",
-		PNPM:  ExpectedPNPMVersion,
+		Go:      "go version go1.25.13 darwin/arm64",
+		Flutter: expectedFlutterToolchain(),
+		Dart:    "Dart " + ExpectedDartVersion,
+		Xcode:   ExpectedXcodeVersion,
 	}
 	source := SourceProvenance{
 		VCS:        "git",
@@ -1001,9 +987,8 @@ func validFixture(
 		Dirty:      false,
 	}
 	buildTools := DesktopBuildToolchains{
-		Go: runtimeToolchains.Go, Node: runtimeToolchains.Node,
-		Rustc: runtimeToolchains.Rustc, Cargo: runtimeToolchains.Cargo,
-		PNPM: runtimeToolchains.PNPM, Tauri: ExpectedTauriVersion,
+		Go: runtimeToolchains.Go, Flutter: runtimeToolchains.Flutter,
+		Dart: runtimeToolchains.Dart, Xcode: runtimeToolchains.Xcode,
 	}
 	daemon, err := DigestArtifact("daemon", artifactPaths["daemon"])
 	if err != nil {
@@ -1013,18 +998,31 @@ func validFixture(
 	if err != nil {
 		t.Fatal(err)
 	}
+	appFramework, err := DigestArtifact("app-framework", artifactPaths["app-framework"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	flutterFramework, err := DigestArtifact(
+		"flutter-macos-framework",
+		artifactPaths["flutter-macos-framework"],
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
 	manifest := desktopBuildManifest{
-		Schema: DesktopBuildManifestSchemaV2,
+		Schema: DesktopBuildManifestSchemaV3,
 		Source: source,
 		Profiles: desktopBuildProfiles{
 			Desktop: "release", Sidecars: "development",
-			Target: ExpectedBuildTarget,
+			Target: ExpectedBuildTarget, Toolkit: "flutter",
 		},
 		Toolchains:          buildTools,
 		ConfigurationSHA256: configurationDigests,
-		SidecarSHA256: map[string]string{
-			"vibermated": daemon.SHA256,
-			"vibermate":  launcher.SHA256,
+		NestedCodeSHA256: map[string]string{
+			"app-framework":           appFramework.SHA256,
+			"flutter-macos-framework": flutterFramework.SHA256,
+			"vibermated":              daemon.SHA256,
+			"vibermate":               launcher.SHA256,
 		},
 	}
 	manifestPayload, err := json.MarshalIndent(manifest, "", "  ")
@@ -1051,7 +1049,7 @@ func validFixture(
 		artifacts[index] = evidence
 	}
 	report := Report{
-		Schema:       SchemaV6,
+		Schema:       SchemaV7,
 		StartedAt:    time.Date(2026, 8, 2, 10, 0, 0, 0, time.UTC),
 		FinishedAt:   time.Date(2026, 8, 2, 10, 1, 0, 0, time.UTC),
 		Platform:     ExpectedPlatform,
@@ -1068,6 +1066,7 @@ func validFixture(
 				DesktopProfile:      "release",
 				SidecarProfile:      "development",
 				Target:              ExpectedBuildTarget,
+				Toolkit:             "flutter",
 				Toolchains:          buildTools,
 				ConfigurationSHA256: configurationDigests,
 				GoBuildVersions: map[string]string{
@@ -1085,9 +1084,7 @@ func validFixture(
 				DeterministicOnly: true,
 				ClientID:          clientID,
 				ClientVersion:     clientVersion,
-				AccessID:          "assembly-001",
-				ProviderOrigin:    "http://127.0.0.1:23333/v1",
-				ProviderModel:     "dashscope:glm-5",
+				EnvironmentID:     "assembly-001",
 				Timeout:           "8m0s",
 			},
 		},
@@ -1096,7 +1093,7 @@ func validFixture(
 	}
 	return report, Expectations{
 		Mode:   ModeDeterministic,
-		Schema: SchemaV6, Revision: revision,
+		Schema: SchemaV7, Revision: revision,
 		ClientID: clientID, ClientVersion: clientVersion,
 		Artifacts: ArtifactCoordinates{
 			SourceRoot:           sourceRoot,

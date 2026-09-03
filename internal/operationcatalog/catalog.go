@@ -1,5 +1,5 @@
 // Package operationcatalog owns the explicit, versioned client API operation
-// definitions used by both Access compilation and ingress path
+// definitions used by both Environment compilation and ingress path
 // classification. It owns no codec implementation, transport, or registry.
 package operationcatalog
 
@@ -8,7 +8,7 @@ import (
 	"net/http"
 	"slices"
 
-	"github.com/vibe-agi/vibermate/internal/access"
+	"github.com/vibe-agi/vibermate/internal/protocolspec"
 )
 
 const (
@@ -38,25 +38,26 @@ const (
 
 	// Observed operations in the Codex ChatGPT-login shape. Classifying by
 	// host alone would send this control plane into the model pipeline.
-	OpenAICodexResponsesCreateID = "openai-codex-responses-create"
-	OpenAICodexModelsProbeID     = "openai-codex-models-probe"
-	OpenAIPluginsFeaturedProbeID = "openai-plugins-featured-probe"
-	OpenAIPluginsInstalledID     = "openai-ps-plugins-installed-probe"
-	OpenAIPluginsListID          = "openai-ps-plugins-list-probe"
-	OpenAIPluginsSuggestedID     = "openai-ps-plugins-suggested-probe"
+	OpenAICodexResponsesCreateID               = "openai-codex-responses-create"
+	OpenAICodexResponsesWebSocketUnsupportedID = "openai-codex-responses-websocket-unsupported"
+	OpenAICodexModelsProbeID                   = "openai-codex-models-probe"
+	OpenAIPluginsFeaturedProbeID               = "openai-plugins-featured-probe"
+	OpenAIPluginsInstalledID                   = "openai-ps-plugins-installed-probe"
+	OpenAIPluginsListID                        = "openai-ps-plugins-list-probe"
+	OpenAIPluginsSuggestedID                   = "openai-ps-plugins-suggested-probe"
 
 	MaxJSONBodyBytes   = 16 << 20
 	MaxOpaqueBodyBytes = 16 << 20
 )
 
 type Catalog struct {
-	definitions []access.ClientOperationDefinition
+	definitions []protocolspec.ClientOperationDefinition
 }
 
 func BuiltIn() (Catalog, error) {
-	var definitions []access.ClientOperationDefinition
-	add := func(options access.ClientOperationOptions) error {
-		definition, err := access.NewClientOperationDefinition(options)
+	var definitions []protocolspec.ClientOperationDefinition
+	add := func(options protocolspec.ClientOperationOptions) error {
+		definition, err := protocolspec.NewClientOperationDefinition(options)
 		if err != nil {
 			return err
 		}
@@ -65,36 +66,36 @@ func BuiltIn() (Catalog, error) {
 	}
 	semantic := func(
 		id string,
-		dialect access.Dialect,
+		dialect protocolspec.Dialect,
 		path string,
-		feature access.CodecFeature,
+		feature protocolspec.CodecFeature,
 		queries []string,
 	) error {
-		identifier, err := access.NewClientOperationID(id)
+		identifier, err := protocolspec.NewClientOperationID(id)
 		if err != nil {
 			return err
 		}
-		return add(access.ClientOperationOptions{
+		return add(protocolspec.ClientOperationOptions{
 			ID:             identifier,
 			Revision:       1,
 			ClientDialect:  dialect,
 			Methods:        []string{http.MethodPost},
 			PathPattern:    path,
-			PathMatch:      access.ClientOperationPathExact,
-			Kind:           access.ClientOperationSemantic,
-			Transport:      access.ClientOperationTransportHTTP,
-			BodyKind:       access.ClientOperationBodyJSON,
-			ReplayClass:    access.ClientReplayGenerationCostOnly,
+			PathMatch:      protocolspec.ClientOperationPathExact,
+			Kind:           protocolspec.ClientOperationSemantic,
+			Transport:      protocolspec.ClientOperationTransportHTTP,
+			BodyKind:       protocolspec.ClientOperationBodyJSON,
+			ReplayClass:    protocolspec.ClientReplayGenerationCostOnly,
 			CodecFeature:   feature,
 			MaxBodyBytes:   MaxJSONBodyBytes,
 			AllowedQueries: queries,
-			PayloadClass:   access.OperationPayloadClientSemantic,
+			PayloadClass:   protocolspec.OperationPayloadClientSemantic,
 			EgressBearing:  true,
 		})
 	}
 	if err := semantic(
 		AnthropicMessagesCreateID,
-		access.DialectAnthropicMessages,
+		protocolspec.DialectAnthropicMessages,
 		"/v1/messages",
 		"messages",
 		[]string{"beta=true"},
@@ -104,27 +105,28 @@ func BuiltIn() (Catalog, error) {
 	if err := addOperation(
 		add,
 		AnthropicMessagesCountTokensID,
-		access.DialectAnthropicMessages,
+		protocolspec.DialectAnthropicMessages,
 		[]string{http.MethodPost},
 		"/v1/messages/count_tokens",
-		access.ClientOperationPathExact,
-		access.ClientOperationAuxiliary,
-		access.ClientOperationBodyJSON,
-		access.ClientReplaySafe,
+		protocolspec.ClientOperationPathExact,
+		protocolspec.ClientOperationAuxiliary,
+		protocolspec.ClientOperationBodyJSON,
+		protocolspec.ClientReplaySafe,
 		"token_count",
 		MaxJSONBodyBytes,
 		[]string{"beta=true"},
+		nil,
 		// The request body is the complete messages, system text, and tool
 		// schema, so it can never be forwarded to the original origin with the
 		// client's own credentials.
-		access.OperationPayloadClientSemantic,
+		protocolspec.OperationPayloadClientSemantic,
 		true,
 	); err != nil {
 		return Catalog{}, err
 	}
 	if err := semantic(
 		OpenAIResponsesCreateID,
-		access.DialectOpenAIResponses,
+		protocolspec.DialectOpenAIResponses,
 		"/v1/responses",
 		"responses",
 		nil,
@@ -133,7 +135,7 @@ func BuiltIn() (Catalog, error) {
 	}
 	if err := semantic(
 		OpenAICodexResponsesCreateID,
-		access.DialectOpenAIResponses,
+		protocolspec.DialectOpenAIResponses,
 		"/backend-api/codex/responses",
 		"responses",
 		nil,
@@ -144,55 +146,93 @@ func BuiltIn() (Catalog, error) {
 	// absent: they carry a request body and nothing verifies it holds no
 	// prompt or tool data, so declaring them control would assert exactly
 	// that. They stay unclassified and fail closed.
+	//
+	// Each of these admits query values, so each is control rather than none:
+	// the class is written into EgressAttempt as durable evidence, and none
+	// would record that the outbound request carried nothing from the client.
 	for _, probe := range []struct {
-		id   string
-		path string
+		id               string
+		path             string
+		allowedQueryKeys []string
+		payloadClass     protocolspec.OperationPayloadClass
 	}{
-		{OpenAICodexModelsProbeID, "/backend-api/codex/models"},
-		{OpenAIPluginsFeaturedProbeID, "/backend-api/plugins/featured"},
-		{OpenAIPluginsInstalledID, "/backend-api/ps/plugins/installed"},
-		{OpenAIPluginsListID, "/backend-api/ps/plugins/list"},
-		{OpenAIPluginsSuggestedID, "/backend-api/ps/plugins/suggested"},
+		{
+			OpenAICodexModelsProbeID,
+			"/backend-api/codex/models",
+			[]string{"client_version"},
+			protocolspec.OperationPayloadControl,
+		},
+		{
+			OpenAIPluginsFeaturedProbeID,
+			"/backend-api/plugins/featured",
+			[]string{"platform"},
+			protocolspec.OperationPayloadControl,
+		},
+		{
+			OpenAIPluginsInstalledID,
+			"/backend-api/ps/plugins/installed",
+			[]string{"includeDownloadUrls", "scope"},
+			protocolspec.OperationPayloadControl,
+		},
+		{
+			OpenAIPluginsListID,
+			"/backend-api/ps/plugins/list",
+			[]string{"limit", "pageToken", "scope"},
+			protocolspec.OperationPayloadControl,
+		},
+		{
+			OpenAIPluginsSuggestedID,
+			"/backend-api/ps/plugins/suggested",
+			[]string{"scope"},
+			protocolspec.OperationPayloadControl,
+		},
 	} {
 		if err := addOperation(
 			add,
 			probe.id,
-			access.DialectOpenAIResponses,
+			protocolspec.DialectOpenAIResponses,
 			[]string{http.MethodGet},
 			probe.path,
-			access.ClientOperationPathExact,
-			access.ClientOperationOpaque,
-			access.ClientOperationBodyNone,
-			access.ClientReplaySafe,
+			protocolspec.ClientOperationPathExact,
+			protocolspec.ClientOperationOpaque,
+			protocolspec.ClientOperationBodyNone,
+			protocolspec.ClientReplaySafe,
 			"",
 			0,
 			nil,
-			access.OperationPayloadNone,
+			probe.allowedQueryKeys,
+			probe.payloadClass,
 			true,
 		); err != nil {
 			return Catalog{}, err
 		}
 	}
-	webSocketID, err := access.NewClientOperationID(
-		OpenAIResponsesWebSocketUnsupportedID,
-	)
-	if err != nil {
-		return Catalog{}, err
-	}
-	if err := add(access.ClientOperationOptions{
-		ID:            webSocketID,
-		Revision:      1,
-		ClientDialect: access.DialectOpenAIResponses,
-		Methods:       []string{http.MethodGet},
-		PathPattern:   "/v1/responses",
-		PathMatch:     access.ClientOperationPathExact,
-		Kind:          access.ClientOperationUnsupported,
-		Transport:     access.ClientOperationTransportWebSocket,
-		BodyKind:      access.ClientOperationBodyNone,
-		ReplayClass:   access.ClientReplayNonReplayable,
-		PayloadClass:  access.OperationPayloadNone,
-	}); err != nil {
-		return Catalog{}, err
+	for _, unsupported := range []struct {
+		id   string
+		path string
+	}{
+		{OpenAIResponsesWebSocketUnsupportedID, "/v1/responses"},
+		{OpenAICodexResponsesWebSocketUnsupportedID, "/backend-api/codex/responses"},
+	} {
+		webSocketID, err := protocolspec.NewClientOperationID(unsupported.id)
+		if err != nil {
+			return Catalog{}, err
+		}
+		if err := add(protocolspec.ClientOperationOptions{
+			ID:            webSocketID,
+			Revision:      1,
+			ClientDialect: protocolspec.DialectOpenAIResponses,
+			Methods:       []string{http.MethodGet},
+			PathPattern:   unsupported.path,
+			PathMatch:     protocolspec.ClientOperationPathExact,
+			Kind:          protocolspec.ClientOperationUnsupported,
+			Transport:     protocolspec.ClientOperationTransportWebSocket,
+			BodyKind:      protocolspec.ClientOperationBodyNone,
+			ReplayClass:   protocolspec.ClientReplayNonReplayable,
+			PayloadClass:  protocolspec.OperationPayloadNone,
+		}); err != nil {
+			return Catalog{}, err
+		}
 	}
 
 	// These carry no request body at all, so they are proven no-payload probes
@@ -222,17 +262,18 @@ func BuiltIn() (Catalog, error) {
 		if err := addOperation(
 			add,
 			probe.id,
-			access.DialectAnthropicMessages,
+			protocolspec.DialectAnthropicMessages,
 			probe.methods,
 			probe.path,
-			access.ClientOperationPathExact,
-			access.ClientOperationOpaque,
-			access.ClientOperationBodyNone,
-			access.ClientReplaySafe,
+			protocolspec.ClientOperationPathExact,
+			protocolspec.ClientOperationOpaque,
+			protocolspec.ClientOperationBodyNone,
+			protocolspec.ClientReplaySafe,
 			"",
 			0,
 			nil,
-			access.OperationPayloadNone,
+			nil,
+			protocolspec.OperationPayloadNone,
 			true,
 		); err != nil {
 			return Catalog{}, err
@@ -247,22 +288,22 @@ func BuiltIn() (Catalog, error) {
 		add,
 		OpenAIResponsesManagementID,
 		"/v1/responses",
-		access.OperationPayloadClientData,
+		protocolspec.OperationPayloadClientData,
 	); err != nil {
 		return Catalog{}, err
 	}
 	for _, unsupported := range []struct {
 		id           string
 		path         string
-		payloadClass access.OperationPayloadClass
+		payloadClass protocolspec.OperationPayloadClass
 	}{
-		{OpenAIFilesUnsupportedID, "/v1/files", access.OperationPayloadClientData},
-		{OpenAIUploadsUnsupportedID, "/v1/uploads", access.OperationPayloadClientData},
-		{OpenAIBatchesUnsupportedID, "/v1/batches", access.OperationPayloadClientData},
-		{OpenAIAudioUnsupportedID, "/v1/audio", access.OperationPayloadClientData},
-		{OpenAIImagesUnsupportedID, "/v1/images", access.OperationPayloadClientData},
-		{OpenAIVideosUnsupportedID, "/v1/videos", access.OperationPayloadClientData},
-		{OpenAIRealtimeUnsupportedID, "/v1/realtime", access.OperationPayloadClientData},
+		{OpenAIFilesUnsupportedID, "/v1/files", protocolspec.OperationPayloadClientData},
+		{OpenAIUploadsUnsupportedID, "/v1/uploads", protocolspec.OperationPayloadClientData},
+		{OpenAIBatchesUnsupportedID, "/v1/batches", protocolspec.OperationPayloadClientData},
+		{OpenAIAudioUnsupportedID, "/v1/audio", protocolspec.OperationPayloadClientData},
+		{OpenAIImagesUnsupportedID, "/v1/images", protocolspec.OperationPayloadClientData},
+		{OpenAIVideosUnsupportedID, "/v1/videos", protocolspec.OperationPayloadClientData},
+		{OpenAIRealtimeUnsupportedID, "/v1/realtime", protocolspec.OperationPayloadClientData},
 	} {
 		if err := addUnsupportedPrefix(
 			add,
@@ -276,11 +317,11 @@ func BuiltIn() (Catalog, error) {
 	for _, unsupported := range []struct {
 		id           string
 		path         string
-		payloadClass access.OperationPayloadClass
+		payloadClass protocolspec.OperationPayloadClass
 	}{
-		{OpenAIChatUnsupportedID, "/v1/chat/completions", access.OperationPayloadClientSemantic},
-		{OpenAICompletionsUnsupportedID, "/v1/completions", access.OperationPayloadClientSemantic},
-		{OpenAIEmbeddingsUnsupportedID, "/v1/embeddings", access.OperationPayloadClientSemantic},
+		{OpenAIChatUnsupportedID, "/v1/chat/completions", protocolspec.OperationPayloadClientSemantic},
+		{OpenAICompletionsUnsupportedID, "/v1/completions", protocolspec.OperationPayloadClientSemantic},
+		{OpenAIEmbeddingsUnsupportedID, "/v1/embeddings", protocolspec.OperationPayloadClientSemantic},
 	} {
 		if err := addUnsupportedExact(
 			add,
@@ -295,54 +336,56 @@ func BuiltIn() (Catalog, error) {
 }
 
 func addOperation(
-	add func(access.ClientOperationOptions) error,
+	add func(protocolspec.ClientOperationOptions) error,
 	id string,
-	dialect access.Dialect,
+	dialect protocolspec.Dialect,
 	methods []string,
 	path string,
-	match access.ClientOperationPathMatch,
-	kind access.ClientOperationKind,
-	bodyKind access.ClientOperationBodyKind,
-	replay access.ClientReplayClass,
-	feature access.CodecFeature,
+	match protocolspec.ClientOperationPathMatch,
+	kind protocolspec.ClientOperationKind,
+	bodyKind protocolspec.ClientOperationBodyKind,
+	replay protocolspec.ClientReplayClass,
+	feature protocolspec.CodecFeature,
 	maxBodyBytes int64,
 	queries []string,
-	payloadClass access.OperationPayloadClass,
+	queryKeys []string,
+	payloadClass protocolspec.OperationPayloadClass,
 	egressBearing bool,
 ) error {
-	identifier, err := access.NewClientOperationID(id)
+	identifier, err := protocolspec.NewClientOperationID(id)
 	if err != nil {
 		return err
 	}
-	return add(access.ClientOperationOptions{
-		ID:             identifier,
-		Revision:       1,
-		ClientDialect:  dialect,
-		Methods:        methods,
-		PathPattern:    path,
-		PathMatch:      match,
-		Kind:           kind,
-		Transport:      access.ClientOperationTransportHTTP,
-		BodyKind:       bodyKind,
-		ReplayClass:    replay,
-		CodecFeature:   feature,
-		MaxBodyBytes:   maxBodyBytes,
-		AllowedQueries: queries,
-		PayloadClass:   payloadClass,
-		EgressBearing:  egressBearing,
+	return add(protocolspec.ClientOperationOptions{
+		ID:               identifier,
+		Revision:         1,
+		ClientDialect:    dialect,
+		Methods:          methods,
+		PathPattern:      path,
+		PathMatch:        match,
+		Kind:             kind,
+		Transport:        protocolspec.ClientOperationTransportHTTP,
+		BodyKind:         bodyKind,
+		ReplayClass:      replay,
+		CodecFeature:     feature,
+		MaxBodyBytes:     maxBodyBytes,
+		AllowedQueries:   queries,
+		AllowedQueryKeys: queryKeys,
+		PayloadClass:     payloadClass,
+		EgressBearing:    egressBearing,
 	})
 }
 
 func addUnsupportedPrefix(
-	add func(access.ClientOperationOptions) error,
+	add func(protocolspec.ClientOperationOptions) error,
 	id string,
 	path string,
-	payloadClass access.OperationPayloadClass,
+	payloadClass protocolspec.OperationPayloadClass,
 ) error {
 	return addOperation(
 		add,
 		id,
-		access.DialectOpenAIResponses,
+		protocolspec.DialectOpenAIResponses,
 		[]string{
 			http.MethodDelete,
 			http.MethodGet,
@@ -351,12 +394,13 @@ func addUnsupportedPrefix(
 			http.MethodPut,
 		},
 		path,
-		access.ClientOperationPathPrefix,
-		access.ClientOperationUnsupported,
-		access.ClientOperationBodyBytes,
-		access.ClientReplayNonReplayable,
+		protocolspec.ClientOperationPathPrefix,
+		protocolspec.ClientOperationUnsupported,
+		protocolspec.ClientOperationBodyBytes,
+		protocolspec.ClientReplayNonReplayable,
 		"",
 		MaxJSONBodyBytes,
+		nil,
 		nil,
 		payloadClass,
 		false,
@@ -364,23 +408,24 @@ func addUnsupportedPrefix(
 }
 
 func addUnsupportedExact(
-	add func(access.ClientOperationOptions) error,
+	add func(protocolspec.ClientOperationOptions) error,
 	id string,
 	path string,
-	payloadClass access.OperationPayloadClass,
+	payloadClass protocolspec.OperationPayloadClass,
 ) error {
 	return addOperation(
 		add,
 		id,
-		access.DialectOpenAIResponses,
+		protocolspec.DialectOpenAIResponses,
 		[]string{http.MethodPost},
 		path,
-		access.ClientOperationPathExact,
-		access.ClientOperationUnsupported,
-		access.ClientOperationBodyJSON,
-		access.ClientReplayNonReplayable,
+		protocolspec.ClientOperationPathExact,
+		protocolspec.ClientOperationUnsupported,
+		protocolspec.ClientOperationBodyJSON,
+		protocolspec.ClientReplayNonReplayable,
 		"",
 		MaxJSONBodyBytes,
+		nil,
 		nil,
 		payloadClass,
 		false,
@@ -388,12 +433,12 @@ func addUnsupportedExact(
 }
 
 func newCatalog(
-	definitions []access.ClientOperationDefinition,
+	definitions []protocolspec.ClientOperationDefinition,
 ) (Catalog, error) {
 	if len(definitions) == 0 {
 		return Catalog{}, errors.New("operation catalog is empty")
 	}
-	seen := make(map[access.ClientOperationID]struct{}, len(definitions))
+	seen := make(map[protocolspec.ClientOperationID]struct{}, len(definitions))
 	for _, definition := range definitions {
 		if err := definition.Validate(); err != nil {
 			return Catalog{}, err
@@ -406,17 +451,17 @@ func newCatalog(
 	return Catalog{definitions: slices.Clone(definitions)}, nil
 }
 
-func (catalog Catalog) Definitions() []access.ClientOperationDefinition {
+func (catalog Catalog) Definitions() []protocolspec.ClientOperationDefinition {
 	return slices.Clone(catalog.definitions)
 }
 
 func (catalog Catalog) SemanticOperationIDs(
-	dialect access.Dialect,
-) []access.ClientOperationID {
-	var identifiers []access.ClientOperationID
+	dialect protocolspec.Dialect,
+) []protocolspec.ClientOperationID {
+	var identifiers []protocolspec.ClientOperationID
 	for _, definition := range catalog.definitions {
 		if definition.ClientDialect() == dialect &&
-			definition.Kind() == access.ClientOperationSemantic {
+			definition.Kind() == protocolspec.ClientOperationSemantic {
 			identifiers = append(identifiers, definition.ID())
 		}
 	}
