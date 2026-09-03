@@ -82,6 +82,18 @@ export const macOSDistributionPolicy = Object.freeze({
       signingPath: "Contents/MacOS/vibermated",
     }),
   }),
+  // Apple may report a signed bundle entry point in addition to its canonical
+  // executable. Validation maps each admitted alias back to one code object and
+  // requires every reported cdhash for that object and architecture to agree.
+  notaryTicketAliases: Object.freeze({
+    "app-framework": Object.freeze([
+      "Contents/Frameworks/App.framework/Versions/Current",
+    ]),
+    "flutter-macos-framework": Object.freeze([
+      "Contents/Frameworks/FlutterMacOS.framework/Versions/Current",
+    ]),
+    "vibermate-desktop": Object.freeze(["."]),
+  }),
   executableNames: Object.freeze([
     "vibermate",
     "vibermate-desktop",
@@ -863,18 +875,28 @@ export function validateNotarySubmitResult(value) {
 }
 
 function validateNotaryTicketContents(value, archiveFilename) {
-  const expectedTickets = new Set([`${archiveFilename}\0`]);
-  for (const codeObject of Object.values(macOSDistributionPolicy.codeObjects)) {
+  const requiredTickets = new Set([`${archiveFilename}\0`]);
+  const admittedTickets = new Map([[`${archiveFilename}\0`, "disk-image\0"]]);
+  const appPrefix = `${archiveFilename}/${macOSDistributionPolicy.appBundleName}`;
+  for (const [name, codeObject] of Object.entries(
+    macOSDistributionPolicy.codeObjects,
+  )) {
     for (const architecture of macOSDistributionPolicy.architectures) {
-      expectedTickets.add(
-        `${archiveFilename}/${macOSDistributionPolicy.appBundleName}/${codeObject.relativePath}\0${architecture}`,
-      );
+      const canonicalIdentity = `${name}\0${architecture}`;
+      const requiredPath = `${appPrefix}/${codeObject.relativePath}`;
+      requiredTickets.add(`${requiredPath}\0${architecture}`);
+      admittedTickets.set(`${requiredPath}\0${architecture}`, canonicalIdentity);
+      for (const alias of macOSDistributionPolicy.notaryTicketAliases[name] ?? []) {
+        const aliasPath = alias === "." ? appPrefix : `${appPrefix}/${alias}`;
+        admittedTickets.set(`${aliasPath}\0${architecture}`, canonicalIdentity);
+      }
     }
   }
-  if (!Array.isArray(value) || value.length !== expectedTickets.size) {
+  if (!Array.isArray(value) || value.length < requiredTickets.size) {
     throw new Error("The Apple notary log ticket contents are invalid");
   }
   const actualTickets = new Set();
+  const codeDirectoryHashes = new Map();
   for (const [index, ticket] of value.entries()) {
     const label = `Apple notary log ticket ${index}`;
     requirePlainObject(ticket, label);
@@ -901,15 +923,18 @@ function validateNotaryTicketContents(value, archiveFilename) {
       }
     }
     const ticketIdentity = `${ticket.path}\0${hasArchitecture ? ticket.arch : ""}`;
-    if (
-      !expectedTickets.has(ticketIdentity) ||
-      actualTickets.has(ticketIdentity)
-    ) {
-      throw new Error(`${label} is not an expected unique code-directory ticket`);
+    const canonicalIdentity = admittedTickets.get(ticketIdentity);
+    if (canonicalIdentity === undefined) {
+      throw new Error(`${label} is not an expected code-directory ticket`);
     }
+    const observedHash = codeDirectoryHashes.get(canonicalIdentity);
+    if (observedHash !== undefined && observedHash !== ticket.cdhash) {
+      throw new Error(`${label} conflicts with another ticket for the same code object`);
+    }
+    codeDirectoryHashes.set(canonicalIdentity, ticket.cdhash);
     actualTickets.add(ticketIdentity);
   }
-  if (actualTickets.size !== expectedTickets.size) {
+  if ([...requiredTickets].some((ticket) => !actualTickets.has(ticket))) {
     throw new Error(
       "The Apple notary log does not ticket every embedded executable slice",
     );

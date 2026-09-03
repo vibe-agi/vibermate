@@ -105,6 +105,45 @@ function acceptedTicketContents() {
   return tickets;
 }
 
+function appleObservedTicketContents() {
+  const canonical = acceptedTicketContents();
+  const ticketFor = (relativePath, architecture) => {
+    const ticket = canonical.find(
+      (candidate) =>
+        candidate.path === `${archiveFilename}/ViberMate.app/${relativePath}` &&
+        candidate.arch === architecture,
+    );
+    assert.ok(ticket);
+    return ticket;
+  };
+  const aliases = [];
+  for (const architecture of macOSDistributionPolicy.architectures) {
+    for (const [alias, relativePath] of [
+      ["ViberMate.app", "Contents/MacOS/vibermate-desktop"],
+      [
+        "ViberMate.app/Contents/Frameworks/App.framework/Versions/Current",
+        "Contents/Frameworks/App.framework/Versions/A/App",
+      ],
+      [
+        "ViberMate.app/Contents/Frameworks/FlutterMacOS.framework/Versions/Current",
+        "Contents/Frameworks/FlutterMacOS.framework/Versions/A/FlutterMacOS",
+      ],
+    ]) {
+      aliases.push({
+        ...ticketFor(relativePath, architecture),
+        path: `${archiveFilename}/${alias}`,
+      });
+    }
+  }
+  const repeatedScans = macOSDistributionPolicy.architectures.flatMap(
+    (architecture) => [
+      { ...ticketFor("Contents/MacOS/vibermate", architecture) },
+      { ...ticketFor("Contents/MacOS/vibermated", architecture) },
+    ],
+  );
+  return [canonical[0], ...aliases, ...canonical.slice(1), ...repeatedScans];
+}
+
 function acceptedNotaryLog(overrides = {}) {
   return {
     logFormatVersion: 1,
@@ -309,6 +348,38 @@ test("DMG log must ticket every Flutter and Go Universal code object", () => {
   assert.throws(() =>
     validateNotaryLog(
       acceptedNotaryLog({ ticketContents: duplicateTickets }),
+      { archiveFilename, preStapleSHA256, submissionID },
+    ),
+  );
+});
+
+test("Apple notary log admits known bundle aliases and repeated scan tickets", () => {
+  assert.doesNotThrow(() =>
+    validateNotaryLog(
+      acceptedNotaryLog({ ticketContents: appleObservedTicketContents() }),
+      { archiveFilename, preStapleSHA256, submissionID },
+    ),
+  );
+});
+
+test("Apple notary log rejects unknown aliases and conflicting repeated tickets", () => {
+  const unknownAlias = appleObservedTicketContents();
+  unknownAlias[1] = {
+    ...unknownAlias[1],
+    path: `${archiveFilename}/ViberMate.app/Contents/Frameworks/Unknown.framework/Versions/Current`,
+  };
+  assert.throws(() =>
+    validateNotaryLog(
+      acceptedNotaryLog({ ticketContents: unknownAlias }),
+      { archiveFilename, preStapleSHA256, submissionID },
+    ),
+  );
+
+  const conflictingAlias = appleObservedTicketContents();
+  conflictingAlias[1] = { ...conflictingAlias[1], cdhash: "3".repeat(40) };
+  assert.throws(() =>
+    validateNotaryLog(
+      acceptedNotaryLog({ ticketContents: conflictingAlias }),
       { archiveFilename, preStapleSHA256, submissionID },
     ),
   );
