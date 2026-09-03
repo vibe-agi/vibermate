@@ -362,6 +362,10 @@ test("Apple notary log admits known bundle aliases and repeated scan tickets", (
   );
 });
 
+test("notarization evidence counts every Universal code directory", () => {
+  assert.equal(macOSDistributionPolicy.notaryTicketedCodeDirectoryCount, 10);
+});
+
 test("Apple notary log rejects unknown aliases and conflicting repeated tickets", () => {
   const unknownAlias = appleObservedTicketContents();
   unknownAlias[1] = {

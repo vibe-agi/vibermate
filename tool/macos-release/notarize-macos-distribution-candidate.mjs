@@ -433,7 +433,8 @@ async function main() {
       statusCode: notarization.verifiedLog.statusCode,
       submissionID: notarization.submission.id,
       submitSHA256: await sha256File(submitPath),
-      ticketedCodeDirectories: 6,
+      ticketedCodeDirectories:
+        macOSDistributionPolicy.notaryTicketedCodeDirectoryCount,
     },
     tools: await readToolVersions(),
   };

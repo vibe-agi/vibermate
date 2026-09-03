@@ -881,21 +881,18 @@ async function readSigningEvidence() {
   });
 }
 
-export async function verifySignedMacOSDistributionCandidate(
-  expectedTeamID = process.env.VIBERMATE_APPLE_TEAM_ID,
+export function requireSignedCandidateMatchesSigningEvidence(
+  recorded,
+  candidate,
   { expectedPreStapleSHA256 } = {},
 ) {
-  const candidate = await inspectSignedMacOSDistributionCandidateCore(expectedTeamID);
-  const evidence = await readSigningEvidence();
-  const recorded = evidence.value;
   if (
     recorded.candidate.sourceRevision !== candidate.sourceRevision ||
     recorded.candidate.toolingRevision !== candidate.toolingRevision ||
     recorded.candidate.buildManifestSHA256 !== candidate.manifestSHA256 ||
     recorded.candidate.signedApplicationTreeSHA256 !== candidate.applicationTreeSHA256 ||
     recorded.codeSigning.certificateSHA256 !== candidate.certificateSHA256 ||
-    recorded.codeSigning.teamIdentifier !== candidate.teamIdentifier ||
-    JSON.stringify(recorded.tools) !== JSON.stringify(candidate.tools)
+    recorded.codeSigning.teamIdentifier !== candidate.teamIdentifier
   ) {
     throw new Error("The signed candidate does not match its trusted signing evidence");
   }
@@ -916,6 +913,21 @@ export async function verifySignedMacOSDistributionCandidate(
   } else if (recorded.candidate.diskImageSHA256 !== expectedPreStapleSHA256) {
     throw new Error("The stapled DMG is not bound to the submitted pre-staple digest");
   }
+}
+
+export async function verifySignedMacOSDistributionCandidate(
+  expectedTeamID = process.env.VIBERMATE_APPLE_TEAM_ID,
+  { expectedPreStapleSHA256 } = {},
+) {
+  const candidate = await inspectSignedMacOSDistributionCandidateCore(expectedTeamID);
+  const evidence = await readSigningEvidence();
+  const recorded = evidence.value;
+  // The evidence records and validates the signing job's admitted toolchain.
+  // candidate.tools records this verifier's separately admitted toolchain; a
+  // GitHub runner image may receive a macOS patch between those two jobs.
+  requireSignedCandidateMatchesSigningEvidence(recorded, candidate, {
+    expectedPreStapleSHA256,
+  });
   return Object.freeze({
     ...candidate,
     signingEvidenceSHA256: evidence.digest,

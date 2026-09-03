@@ -108,6 +108,7 @@ export const macOSDistributionPolicy = Object.freeze({
   notaryEvidenceFilename: "notarization-evidence.json",
   notaryLogFilename: "apple-notary-log.json",
   notarySubmitFilename: "apple-notary-submit.json",
+  notaryTicketedCodeDirectoryCount: 10,
   releaseRelativeDirectory:
     "ui/flutter_app/build/distribution/universal-apple-darwin/release",
   signingEvidenceFilename: "signing-transformation.json",
@@ -1187,7 +1188,8 @@ export function validateNotarizationEvidence(value) {
     value.notarization.outsideApplicationStapled !== false ||
     value.notarization.status !== "Accepted" ||
     value.notarization.statusCode !== 0 ||
-    value.notarization.ticketedCodeDirectories !== 10
+    value.notarization.ticketedCodeDirectories !==
+      macOSDistributionPolicy.notaryTicketedCodeDirectoryCount
   ) {
     throw new Error("macOS Apple notarization evidence is invalid");
   }
