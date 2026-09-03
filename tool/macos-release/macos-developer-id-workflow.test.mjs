@@ -16,6 +16,13 @@ const workflow = await readFile(
   resolve(repositoryDirectory, ".github/workflows/macos-developer-id-candidate.yml"),
   "utf8",
 );
+const distributionBuilder = await readFile(
+  resolve(
+    repositoryDirectory,
+    "ui/flutter_app/tool/build_macos_distribution.sh",
+  ),
+  "utf8",
+);
 const unsignedStart = workflow.indexOf("\n  unsigned:\n");
 const evidenceStart = workflow.indexOf("\n  r0_evidence:\n");
 const signStart = workflow.indexOf("\n  sign:\n");
@@ -43,6 +50,25 @@ test("unsigned candidate build uses only the pinned Flutter desktop toolchain", 
     unsignedJob,
     /pnpm|rust-toolchain|exec tauri|src-tauri|candidate\/ui\/desktop/u,
   );
+});
+
+test("Universal CGO slices compile against the admitted macOS SDK", () => {
+  assert.match(
+    distributionBuilder,
+    /xcrun --sdk macosx --show-sdk-path/u,
+  );
+  assert.match(distributionBuilder, /test -d "\$\{macos_sdk_root\}"/u);
+  assert.match(
+    distributionBuilder,
+    /SDKROOT="\$\{macos_sdk_root\}"/u,
+  );
+  for (const flag of ["CGO_CFLAGS", "CGO_CXXFLAGS", "CGO_LDFLAGS"]) {
+    assert.ok(
+      distributionBuilder.includes(
+        `${flag}="-arch \${clang_architecture} -isysroot \${macos_sdk_root} `,
+      ),
+    );
+  }
 });
 
 test("workflow admits only the default workflow SHA and an ancestor candidate", () => {
