@@ -48,6 +48,7 @@ check-flutter:
 	cd ui/flutter_app && flutter test
 
 check-flutter-macos: check-flutter
+	cd ui/flutter_app && flutter build macos --debug --config-only
 	cd ui/flutter_app && xcodebuild test -quiet -workspace macos/Runner.xcworkspace -scheme Runner -configuration Debug -destination 'platform=macOS' CODE_SIGNING_ALLOWED=NO
 	ui/flutter_app/tool/build_macos_app.sh live
 	cd ui/flutter_app && VIBERMATE_LIVE_TEST_DAEMON="$(CURDIR)/dist/ViberMate.app/Contents/MacOS/vibermated" VIBERMATE_LIVE_TEST_COMMAND="$(CURDIR)/dist/ViberMate.app/Contents/MacOS/vibermate" flutter test test/live_runtime_test.dart

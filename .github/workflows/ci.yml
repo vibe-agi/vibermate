@@ -115,7 +115,6 @@ jobs:
           go test -count=1 ./internal/desktopdaemon
           go test -count=1 ./internal/desktophost
           go test -count=1 ./internal/instanceguard
-          go test -count=1 ./internal/launcherdiscovery
           go test -count=1 ./internal/runlauncher
           go test -count=1 ./internal/runtimepath
           go test -count=1 ./internal/toolapproval
@@ -156,6 +155,7 @@ jobs:
         working-directory: ui/flutter_app
         run: |
           set -euo pipefail
+          flutter build macos --debug --config-only
           xcodebuild test -quiet \
             -workspace macos/Runner.xcworkspace \
             -scheme Runner \

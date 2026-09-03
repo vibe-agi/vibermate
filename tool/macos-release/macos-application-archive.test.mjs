@@ -73,8 +73,15 @@ test("closed App archive round-trips only the fixed Flutter framework links", as
   await createMacOSApplicationArchive(source, archive);
   const restored = resolve(directory, "restored", "ViberMate.app");
   await extractMacOSApplicationArchive(archive, restored);
+  const sourceLedger = await applicationTreeLedger(source);
+  const symbolicLinks = sourceLedger.filter((entry) => entry.type === "symlink");
+  assert.equal(symbolicLinks.length, 3);
+  assert.deepEqual(
+    symbolicLinks.map((entry) => entry.mode),
+    [0o755, 0o755, 0o755],
+  );
   validateTreeLedgerEquality(
-    await applicationTreeLedger(source),
+    sourceLedger,
     await applicationTreeLedger(restored),
   );
   assert.equal(

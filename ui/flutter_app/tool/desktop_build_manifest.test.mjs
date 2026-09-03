@@ -4,6 +4,7 @@ import {
   flutterDesktopBuildConfigurationNames,
   flutterDesktopBuildManifestSchema,
   flutterDesktopNestedCode,
+  normalizeFlutterToolchains,
   validateFlutterDesktopBuildManifest,
 } from "./desktop_build_manifest.mjs";
 
@@ -108,4 +109,32 @@ test("manifest requires every Flutter configuration and nested code digest", () 
   const invalidDigest = manifest();
   invalidDigest.nestedCodeSHA256.vibermate = "not-a-digest";
   assert.throws(() => validateFlutterDesktopBuildManifest(invalidDigest));
+});
+
+test("exact Flutter revision is authoritative across installation channels", () => {
+  const expectedVersion = "3.41.5";
+  const expectedRevision = "c".repeat(40);
+  const machine = {
+    frameworkVersion: expectedVersion,
+    frameworkRevision: expectedRevision,
+    dartSdkVersion: "3.11.3",
+    channel: "[user-branch]",
+  };
+
+  assert.deepEqual(
+    normalizeFlutterToolchains(machine, {
+      expectedVersion,
+      expectedRevision,
+    }),
+    {
+      dart: "Dart 3.11.3",
+      flutter: `Flutter ${expectedVersion} (${expectedRevision})`,
+    },
+  );
+  assert.throws(() =>
+    normalizeFlutterToolchains(
+      { ...machine, frameworkRevision: "d".repeat(40) },
+      { expectedVersion, expectedRevision },
+    ),
+  );
 });

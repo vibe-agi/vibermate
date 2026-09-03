@@ -284,6 +284,25 @@ type commandResources struct {
 }
 
 func parseArguments(arguments []string) (commandConfig, commandResources, error) {
+	config, err := parseCommandConfig(arguments)
+	if err != nil {
+		return commandConfig{}, commandResources{}, err
+	}
+	bootstrap := os.NewFile(uintptr(config.bootstrapFD), "vibermate-bootstrap")
+	parentLifetime := os.NewFile(
+		uintptr(config.parentLifetimeFD),
+		"vibermate-parent-lifetime",
+	)
+	if bootstrap == nil || parentLifetime == nil {
+		return commandConfig{}, commandResources{}, errors.New("inherited file descriptor is unavailable")
+	}
+	return config, commandResources{
+		bootstrap:      bootstrap,
+		parentLifetime: parentLifetime,
+	}, nil
+}
+
+func parseCommandConfig(arguments []string) (commandConfig, error) {
 	var config commandConfig
 	remoteServerListenSet := false
 	for _, argument := range arguments {
@@ -299,14 +318,14 @@ func parseArguments(arguments []string) (commandConfig, commandResources, error)
 			raw := strings.TrimPrefix(argument, "--bootstrap-fd=")
 			descriptor, err := strconv.Atoi(raw)
 			if err != nil || descriptor < 1 {
-				return commandConfig{}, commandResources{}, errors.New("bootstrap file descriptor is invalid")
+				return commandConfig{}, errors.New("bootstrap file descriptor is invalid")
 			}
 			config.bootstrapFD = descriptor
 		case strings.HasPrefix(argument, "--parent-lifetime-fd="):
 			raw := strings.TrimPrefix(argument, "--parent-lifetime-fd=")
 			descriptor, err := strconv.Atoi(raw)
 			if err != nil || descriptor != 0 {
-				return commandConfig{}, commandResources{}, errors.New("parent lifetime file descriptor is invalid")
+				return commandConfig{}, errors.New("parent lifetime file descriptor is invalid")
 			}
 			config.parentLifetimeFD = descriptor
 			config.parentLifetimeSet = true
@@ -317,7 +336,7 @@ func parseArguments(arguments []string) (commandConfig, commandResources, error)
 			)
 		case strings.HasPrefix(argument, "--remote-server-listen="):
 			if remoteServerListenSet {
-				return commandConfig{}, commandResources{}, errors.New(
+				return commandConfig{}, errors.New(
 					"remote Server listen address may only be specified once",
 				)
 			}
@@ -327,7 +346,7 @@ func parseArguments(arguments []string) (commandConfig, commandResources, error)
 				"--remote-server-listen=",
 			)
 		default:
-			return commandConfig{}, commandResources{}, errors.New("vibermated received an unsupported argument")
+			return commandConfig{}, errors.New("vibermated received an unsupported argument")
 		}
 	}
 	if config.appCacheDirectory == "" ||
@@ -335,7 +354,7 @@ func parseArguments(arguments []string) (commandConfig, commandResources, error)
 		config.webviewOrigin != "vibermate://desktop" ||
 		config.bootstrapFD == 0 ||
 		!config.parentLifetimeSet {
-		return commandConfig{}, commandResources{}, errors.New(
+		return commandConfig{}, errors.New(
 			"vibermated requires app cache, data, Webview origin, bootstrap, and parent lifetime descriptors",
 		)
 	}
@@ -349,25 +368,14 @@ func parseArguments(arguments []string) (commandConfig, commandResources, error)
 	remoteIP := net.ParseIP(remoteHost)
 	if remoteErr != nil || remoteHost == "" || remotePort == "" ||
 		remotePortErr != nil || remotePortNumber > 65535 {
-		return commandConfig{}, commandResources{}, errors.New(
+		return commandConfig{}, errors.New(
 			"remote Server listen address is invalid",
 		)
 	}
 	if remoteIP == nil || !remoteIP.IsLoopback() {
-		return commandConfig{}, commandResources{}, errors.New(
+		return commandConfig{}, errors.New(
 			"Desktop remote Server HTTP must use literal loopback",
 		)
 	}
-	bootstrap := os.NewFile(uintptr(config.bootstrapFD), "vibermate-bootstrap")
-	parentLifetime := os.NewFile(
-		uintptr(config.parentLifetimeFD),
-		"vibermate-parent-lifetime",
-	)
-	if bootstrap == nil || parentLifetime == nil {
-		return commandConfig{}, commandResources{}, errors.New("inherited file descriptor is unavailable")
-	}
-	return config, commandResources{
-		bootstrap:      bootstrap,
-		parentLifetime: parentLifetime,
-	}, nil
+	return config, nil
 }
