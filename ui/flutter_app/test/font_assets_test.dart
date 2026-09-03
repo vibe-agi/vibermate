@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -23,5 +24,9 @@ void main() {
         isTrue,
       );
     },
+    // The Chrome test harness does not serve its generated FontManifest.json;
+    // the desktop Flutter test and both release builds remain the authoritative
+    // package-byte checks for this shared application bundle.
+    skip: kIsWeb,
   );
 }
