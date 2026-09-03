@@ -272,7 +272,6 @@ func Start(ctx context.Context, options Options) (*Host, error) {
 	controlBaseURL := "http://" + controlTracked.Addr().String()
 
 	now := options.Runtime.Clock.Now().UTC()
-	discoveryExpiresAt := now.Add(options.CLIControlDiscoveryTTL)
 	bootstrapExpiresAt := now.Add(options.BootstrapTTL)
 	appExpiresAt := now.Add(options.AppSessionTTL)
 	appSession := AppSession{
@@ -544,15 +543,7 @@ func Start(ctx context.Context, options Options) (*Host, error) {
 		return stopHTTPServer(shutdownContext, host.controlServer, controlTracked)
 	})
 
-	session := localdiscovery.Session{
-		Schema:            localdiscovery.Schema,
-		InstanceID:        host.instanceID,
-		ProcessID:         host.processID,
-		BaseURL:           controlBaseURL,
-		ControlCredential: cliControlCredential,
-		ExpiresAt:         discoveryExpiresAt,
-	}
-	if err := discovery.Publish(session); err != nil {
+	if err := host.publishFreshCLIControlDiscovery(); err != nil {
 		host.closing.Store(true)
 		router.BeginShutdown()
 		return fail("local control discovery publication", err)
