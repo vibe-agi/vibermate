@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -15,7 +16,14 @@ import (
 func TestRecognitionTellsAnUnknownProgramFromAnUncatalogedVersion(t *testing.T) {
 	t.Parallel()
 
-	verifier, err := NewReleaseVerifier(BuiltInCatalog())
+	knownRelease := CodexCLI01450DarwinARM64()
+	knownRelease.OperatingSystem = runtime.GOOS
+	knownRelease.Architecture = runtime.GOARCH
+	catalog, err := NewCatalog(1, []Release{knownRelease})
+	if err != nil {
+		t.Fatal(err)
+	}
+	verifier, err := NewReleaseVerifier(catalog)
 	if err != nil {
 		t.Fatal(err)
 	}
