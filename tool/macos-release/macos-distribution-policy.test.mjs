@@ -176,6 +176,15 @@ test("application metadata and Mach-O inventory are fixed", () => {
     validateInfoPlist({
       bundleExecutable: "vibermate-desktop",
       bundleIdentifier: "io.vibermate.desktop",
+      bundleVersion: "1",
+      minimumSystemVersion: "14.0",
+      shortVersion: "0.1.0",
+    }),
+  );
+  assert.throws(() =>
+    validateInfoPlist({
+      bundleExecutable: "vibermate-desktop",
+      bundleIdentifier: "io.vibermate.desktop",
       bundleVersion: "0.1.0",
       minimumSystemVersion: "14.0",
       shortVersion: "0.1.0",
@@ -185,7 +194,7 @@ test("application metadata and Mach-O inventory are fixed", () => {
     validateInfoPlist({
       bundleExecutable: "vibermate-desktop",
       bundleIdentifier: "io.example.desktop",
-      bundleVersion: "0.1.0",
+      bundleVersion: "1",
       minimumSystemVersion: "14.0",
       shortVersion: "0.1.0",
     }),

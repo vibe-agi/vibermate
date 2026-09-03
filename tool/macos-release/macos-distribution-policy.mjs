@@ -26,6 +26,7 @@ const signingConfigurationNames = new Set([
 
 export const macOSDistributionPolicy = Object.freeze({
   appBundleName: "ViberMate.app",
+  appBuildNumber: "1",
   appIdentifier: "io.vibermate.desktop",
   appVersion: "0.1.0",
   allowedApplicationSymlinks: Object.freeze({
@@ -446,7 +447,7 @@ export function validateInfoPlist(values) {
   if (
     values.bundleExecutable !== "vibermate-desktop" ||
     values.bundleIdentifier !== macOSDistributionPolicy.appIdentifier ||
-    values.bundleVersion !== macOSDistributionPolicy.appVersion ||
+    values.bundleVersion !== macOSDistributionPolicy.appBuildNumber ||
     values.shortVersion !== macOSDistributionPolicy.appVersion ||
     values.minimumSystemVersion !==
       macOSDistributionPolicy.minimumSystemVersion
