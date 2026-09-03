@@ -146,4 +146,5 @@ make check-flutter-macos
 - 源代码编译通过，不等于已经获得 Developer ID 签名、Apple 公证和
   Gatekeeper 认可。
 
+发现疑似漏洞时，请通过[私密安全渠道](SECURITY.md)报告。
 ViberMate 使用 [Apache License 2.0](LICENSE)。
