@@ -17,6 +17,7 @@ void main() {
       final copy = AppCopy.forLanguage(AppLanguage.simplifiedChinese);
       TrafficTransformPolicy? saved;
       TrafficTransformPolicy? tested;
+      MessageTransformTestSample? testedSample;
 
       await tester.pumpWidget(
         MaterialApp(
@@ -43,6 +44,7 @@ void main() {
                                   sample,
                                 }) async {
                                   tested = policy;
+                                  testedSample = sample;
                                   return const MessageTransformTestResult(
                                     wireProtocol: 'anthropic_messages',
                                     requestBefore: MessageTransformTestRequest(
@@ -111,6 +113,10 @@ void main() {
       expect(find.text('基于 r3 的草稿 · Anthropic Messages'), findsOneWidget);
       expect(find.text('消息变换'), findsNothing);
       expect(find.text('同一轮次上下文'), findsOneWidget);
+      expect(
+        find.byKey(const Key('environment-transform-sample-plan-a')),
+        findsOneWidget,
+      );
 
       await tester.enterText(
         find.byKey(const Key('environment-transform-request-plan-a')),
@@ -131,6 +137,9 @@ void main() {
       await tester.pumpAndSettle();
       expect(tested?.requestJavaScript, contains('request.body'));
       expect(tested?.responseJavaScript, contains('response.headers'));
+      expect(testedSample?.request.path, '/v1/messages');
+      expect(testedSample?.runtime?.userName, 'example-user');
+      expect(testedSample?.runtime?.workspaceLabel, 'example');
       expect(
         find.byKey(const Key('environment-transform-request-diff')),
         findsOneWidget,
@@ -207,10 +216,12 @@ void main() {
   testWidgets('captured sample is edited locally before the sample Turn runs', (
     tester,
   ) async {
+    await tester.binding.setSurfaceSize(const Size(390, 760));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
     final copy = AppCopy.forLanguage(AppLanguage.english);
     MessageTransformTestSample? testedSample;
-    const initialSample = MessageTransformTestSample(
-      request: MessageTransformTestRequest(
+    final initialSample = MessageTransformTestSample(
+      request: const MessageTransformTestRequest(
         method: 'POST',
         path: '/v1/messages',
         headers: {
@@ -218,13 +229,24 @@ void main() {
         },
         body: '{"prompt":"/Users/jack/private"}',
       ),
-      response: MessageTransformTestResponse(
+      response: const MessageTransformTestResponse(
         statusCode: 200,
         streaming: false,
         headers: {
           'content-type': ['application/json'],
         },
         body: '{"text":"/Users/guest/private"}',
+      ),
+      runtime: MessageTransformTestRuntime(
+        userName: 'jack',
+        homeDirectory: '/Users/jack',
+        operatingSystem: 'darwin',
+        operatingSystemVersion: '15.0',
+        architecture: 'arm64',
+        timeZone: 'Etc/UTC',
+        workspaceRoot: '/Users/jack/private',
+        workspaceLabel: 'private',
+        turnStartedAt: DateTime.utc(2026, 1, 2, 3, 4, 5),
       ),
     );
 
@@ -312,6 +334,30 @@ void main() {
       '{"text":"/Users/guest/private"}',
     );
     await tester.tap(
+      find.byKey(const Key('environment-transform-sample-tab-runtime')),
+    );
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const Key('environment-transform-sample-runtime-user-name')),
+      'guest',
+    );
+    await tester.enterText(
+      find.byKey(
+        const Key('environment-transform-sample-runtime-home-directory'),
+      ),
+      '/Users/guest',
+    );
+    await tester.enterText(
+      find.byKey(
+        const Key('environment-transform-sample-runtime-workspace-root'),
+      ),
+      '/workspace/project',
+    );
+    await tester.enterText(
+      find.byKey(const Key('environment-transform-sample-runtime-time-zone')),
+      'Asia/Singapore',
+    );
+    await tester.tap(
       find.byKey(const Key('environment-transform-sample-save')),
     );
     await tester.pumpAndSettle();
@@ -324,8 +370,121 @@ void main() {
     expect(testedSample?.request.body, isNot(contains('/Users/jack')));
     expect(testedSample?.request.headers['x-user'], ['guest']);
     expect(testedSample?.response.body, contains('/Users/guest'));
+    expect(testedSample?.runtime?.userName, 'guest');
+    expect(testedSample?.runtime?.homeDirectory, '/Users/guest');
+    expect(testedSample?.runtime?.workspaceRoot, '/workspace/project');
+    expect(testedSample?.runtime?.timeZone, 'Asia/Singapore');
     expect(tester.takeException(), isNull);
   });
+
+  testWidgets(
+    'user can replace built-in inputs with one real captured Exchange',
+    (tester) async {
+      final copy = AppCopy.forLanguage(AppLanguage.english);
+      MessageTransformTestSample? testedSample;
+      String? testedProtocol;
+      final captured = CapturedMessageTransformSample(
+        exchangeId: 'exchange-real-42',
+        wireProtocol: 'openai_responses',
+        sample: MessageTransformTestSample(
+          request: const MessageTransformTestRequest(
+            method: 'POST',
+            path: '/v1/responses',
+            headers: {
+              'content-type': ['application/json'],
+            },
+            body: '{"input":"the real conversation"}',
+          ),
+          response: const MessageTransformTestResponse(
+            statusCode: 200,
+            streaming: false,
+            headers: {
+              'content-type': ['application/json'],
+            },
+            body: '{"output_text":"the real answer"}',
+          ),
+          runtime: MessageTransformTestRuntime(
+            userName: 'mira',
+            homeDirectory: '/Users/mira',
+            operatingSystem: 'darwin',
+            operatingSystemVersion: '26.0',
+            architecture: 'arm64',
+            timeZone: 'Asia/Singapore',
+            workspaceRoot: '/Users/mira/Code/vibermate',
+            workspaceLabel: 'vibermate',
+            turnStartedAt: DateTime.utc(2026, 9, 1, 2, 3, 4),
+          ),
+        ),
+      );
+
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: ViberTheme.light(),
+          home: MessageTransformEditorDialog(
+            planId: 'real-capture',
+            displayName: 'Real capture test',
+            wireProtocol: 'anthropic_messages',
+            initial: const TrafficTransformPolicy.disabled(),
+            copy: copy,
+            pickCapturedSample: () async => captured,
+            testTransform:
+                ({required wireProtocol, required policy, sample}) async {
+                  testedProtocol = wireProtocol;
+                  testedSample = sample;
+                  return MessageTransformTestResult(
+                    wireProtocol: wireProtocol,
+                    requestBefore: sample!.request,
+                    requestAfter: sample.request,
+                    responseBefore: sample.response,
+                    responseAfter: sample.response,
+                  );
+                },
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(
+        find.byKey(const Key('environment-transform-sample-real-capture')),
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('Built-in example data'), findsOneWidget);
+
+      await tester.tap(
+        find.byKey(const Key('environment-transform-sample-pick-captured')),
+      );
+      await tester.pumpAndSettle();
+      expect(find.textContaining('exchange-real-42'), findsOneWidget);
+      expect(
+        tester
+            .widget<TextField>(
+              find.byKey(
+                const Key('environment-transform-sample-request-body'),
+              ),
+            )
+            .controller
+            ?.text,
+        contains('the real conversation'),
+      );
+
+      await tester.tap(
+        find.byKey(const Key('environment-transform-sample-save')),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(
+        find.byKey(const Key('environment-transform-test-real-capture')),
+      );
+      await tester.pumpAndSettle();
+
+      expect(testedProtocol, 'openai_responses');
+      expect(testedSample?.request.body, contains('the real conversation'));
+      expect(testedSample?.response.body, contains('the real answer'));
+      expect(testedSample?.runtime?.userName, 'mira');
+      expect(find.text('Test passed'), findsOneWidget);
+      expect(find.text('Sample Turn passed'), findsNothing);
+      expect(tester.takeException(), isNull);
+    },
+  );
 
   testWidgets('failed sample names the safe server stage and error code', (
     tester,

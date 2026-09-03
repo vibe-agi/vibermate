@@ -41,6 +41,11 @@ func TestUnifiedCaptureCatalogKeepsSameRawIDInBothKinds(t *testing.T) {
 		managed.Body.Bytes(),
 		`"kind":"managed_run"`,
 		`"managedRun":`,
+		`"homeDirectory":"/Users/mira"`,
+		`"operatingSystem":"darwin"`,
+		`"operatingSystemVersion":"26.0"`,
+		`"architecture":"arm64"`,
+		`"timeZone":"Asia/Singapore"`,
 		`"recognition":"verified"`,
 		`"clientAdapter":{"id":"claude-code","revision":1,"version":"2.1.220"`,
 	)
@@ -219,6 +224,11 @@ func unifiedCaptureApplication(t *testing.T, assignments captureassignment.Contr
 			ID: "same-id", ExecutableLabel: "claude", CWD: "/workspace", State: capturerun.StateFinished,
 			Observation: capturerun.ObservationObserved, CreatedAt: now, UpdatedAt: now,
 			ExpiresAt: now.Add(time.Hour), CatalogRevision: 1,
+			Runtime: capturerun.RuntimeMetadata{
+				LocalUserName: "mira", HomeDirectory: "/Users/mira",
+				OperatingSystem: "darwin", OperatingSystemVersion: "26.0",
+				Architecture: "arm64", TimeZone: "Asia/Singapore",
+			},
 			Recognition: clientadapter.RecognitionVerified,
 			Adapter: &clientadapter.Evidence{
 				ID: "claude-code", Revision: 1, Version: "2.1.220", CatalogRevision: 1,

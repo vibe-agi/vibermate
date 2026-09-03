@@ -1,3 +1,6 @@
+@TestOn('vm')
+library;
+
 import 'dart:convert';
 import 'dart:io';
 
@@ -12,6 +15,113 @@ import 'package:vibermate_app/preview/preview_control_api.dart';
 import 'runtime_usage_fixture.dart';
 
 void main() {
+  test(
+    'HTTP API reads exact Root material and schedules revisioned replacement',
+    () async {
+      final requests = <({String method, String path, String? match})>[];
+      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      addTearDown(() => server.close(force: true));
+      final rootDer = utf8.encode('test Root DER');
+      final rootFingerprint = crypto.sha256.convert(rootDer).toString();
+      final status = <String, Object?>{
+        'rootRevision': 2,
+        'fingerprint': rootFingerprint,
+        'algorithm': 'ecdsa-p256',
+        'notBefore': '2026-01-01T00:00:00.000Z',
+        'notAfter': '2036-01-01T00:00:00.000Z',
+        'rootValid': true,
+        'certificatePresence': 'absent',
+        'trustDecision': 'untrusted',
+        'evidenceRevision': 'macos-security-v2',
+        'observedAt': '2026-09-02T00:00:00.000Z',
+        'available': true,
+      };
+      server.listen((request) async {
+        request.response.headers.contentType = ContentType.json;
+        if (request.uri.path == '/api/v1/auth/sessions/current') {
+          await request.drain<void>();
+          request.response.write(
+            jsonEncode({
+              'schema': 'vibermate-app-session-state-v1',
+              'revision': 1,
+              'expiresAt': DateTime.now()
+                  .toUtc()
+                  .add(const Duration(hours: 1))
+                  .toIso8601String(),
+            }),
+          );
+        } else if (request.uri.path == '/api/v1/platform/root-ca') {
+          requests.add((
+            method: request.method,
+            path: request.uri.path,
+            match: request.headers.value('if-match'),
+          ));
+          await request.drain<void>();
+          request.response.write(jsonEncode(status));
+        } else if (request.uri.path == '/api/v1/platform/root-ca/material') {
+          requests.add((
+            method: request.method,
+            path: request.uri.path,
+            match: request.headers.value('if-match'),
+          ));
+          await request.drain<void>();
+          request.response.write(
+            jsonEncode({
+              'rootRevision': 2,
+              'fingerprint': rootFingerprint,
+              'certificateDerBase64': base64.encode(rootDer),
+            }),
+          );
+        } else if (request.uri.path ==
+            '/api/v1/platform/root-ca/actions/replace') {
+          requests.add((
+            method: request.method,
+            path: request.uri.path,
+            match: request.headers.value('if-match'),
+          ));
+          await request.drain<void>();
+          request.response.write(
+            jsonEncode({
+              'status': status,
+              'resultStatus': 'applied',
+              'reason': 'applied',
+              'completed': false,
+              'restartRequired': true,
+            }),
+          );
+        } else {
+          request.response.statusCode = HttpStatus.notFound;
+        }
+        await request.response.close();
+      });
+      final api = await HttpControlApi.connect(
+        DesktopSession(
+          baseUrl: Uri.parse('http://127.0.0.1:${server.port}'),
+          readToken: List.filled(43, 'R').join(),
+          writeToken: List.filled(43, 'W').join(),
+          instanceId: 'instance-test',
+          expiresAt: DateTime.now().toUtc().add(const Duration(hours: 1)),
+        ),
+      );
+      addTearDown(api.close);
+
+      final current = await api.rootCA();
+      final material = await api.rootCAMaterial(current);
+      final replace = await api.replaceRootCA(current);
+
+      expect(material.certificateDer, rootDer);
+      expect(replace.restartRequired, isTrue);
+      expect(replace.completed, isFalse);
+      expect(requests.map((request) => '${request.method} ${request.path}'), [
+        'GET /api/v1/platform/root-ca',
+        'GET /api/v1/platform/root-ca/material',
+        'POST /api/v1/platform/root-ca/actions/replace',
+      ]);
+      expect(requests[1].match, isNull);
+      expect(requests[2].match, '2');
+    },
+  );
+
   test(
     'HTTP API explicitly applies the latest Environment to a Capture',
     () async {
@@ -251,8 +361,8 @@ void main() {
       responseJavaScript: 'response.headers["x-response"] = "yes";',
     );
 
-    const sample = MessageTransformTestSample(
-      request: MessageTransformTestRequest(
+    final sample = MessageTransformTestSample(
+      request: const MessageTransformTestRequest(
         method: 'POST',
         path: '/v1/messages',
         headers: {
@@ -260,7 +370,7 @@ void main() {
         },
         body: '{"model":"captured"}',
       ),
-      response: MessageTransformTestResponse(
+      response: const MessageTransformTestResponse(
         statusCode: 200,
         streaming: true,
         headers: {
@@ -268,6 +378,7 @@ void main() {
         },
         body: '{"type":"message"}',
       ),
+      runtime: MessageTransformTestRuntime.example(),
     );
     final result = await api.testMessageTransform(
       wireProtocol: 'anthropic_messages',

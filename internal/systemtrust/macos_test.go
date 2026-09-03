@@ -37,19 +37,16 @@ func TestMacOSAdapterUsesOnlyFixedCommandShapesAndCleansArtifacts(t *testing.T) 
 		}
 		arguments := call.Arguments()
 		if call.Kind() == CommandEnsureExactTrust {
-			if len(arguments) != 9 || !slices.Equal(arguments[:8], []string{
+			if len(arguments) != 6 || !slices.Equal(arguments[:5], []string{
 				"add-trusted-cert",
-				"-d",
 				"-r",
 				"trustRoot",
 				"-p",
 				"ssl",
-				"-k",
-				macOSSystemKeychain,
 			}) {
 				t.Fatalf("unexpected install arguments: %v", arguments)
 			}
-			artifactPath = arguments[8]
+			artifactPath = arguments[5]
 			arguments[0] = "injected"
 			if call.Arguments()[0] != "add-trusted-cert" {
 				t.Fatal("command arguments were mutable through their getter")
@@ -163,10 +160,10 @@ func TestMacOSFixtureTrustParserRejectsUnboundedOrAmbiguousEvidence(t *testing.T
 		output []byte
 	}{
 		{name: "unknown schema", output: []byte(`{"schema":"future","complete":true,"entries":[]}`)},
-		{name: "incomplete", output: []byte(`{"schema":"vibermate-macos-admin-trust-fixture-v1","complete":false,"entries":[]}`)},
-		{name: "unknown field", output: []byte(`{"schema":"vibermate-macos-admin-trust-fixture-v1","complete":true,"entries":[],"extra":true}`)},
+		{name: "incomplete", output: []byte(`{"schema":"vibermate-macos-user-trust-fixture-v1","complete":false,"entries":[]}`)},
+		{name: "unknown field", output: []byte(`{"schema":"vibermate-macos-user-trust-fixture-v1","complete":true,"entries":[],"extra":true}`)},
 		{name: "trailing value", output: append(encode(valid), []byte(` {}`)...)},
-		{name: "duplicate field", output: []byte(`{"schema":"vibermate-macos-admin-trust-fixture-v1","schema":"vibermate-macos-admin-trust-fixture-v1","complete":true,"entries":[]}`)},
+		{name: "duplicate field", output: []byte(`{"schema":"vibermate-macos-user-trust-fixture-v1","schema":"vibermate-macos-user-trust-fixture-v1","complete":true,"entries":[]}`)},
 		{
 			name: "non hexadecimal digest",
 			output: encode(trustFixture{
@@ -268,7 +265,7 @@ func TestCoordinatorEnforcesCommandDeadlineAndStillReconciles(t *testing.T) {
 	mutationIndex := slices.Index(calls, CommandEnsureExactTrust)
 	if mutationIndex < 0 || mutationIndex+2 >= len(calls) ||
 		calls[mutationIndex+1] != CommandInspectExactPresence ||
-		calls[mutationIndex+2] != CommandInspectAdminTrust {
+		calls[mutationIndex+2] != CommandInspectUserTrust {
 		t.Fatalf("timeout skipped reconciliation: %v", calls)
 	}
 }

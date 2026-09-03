@@ -934,6 +934,7 @@ type captureRuntime interface {
 	capturerun.Controller
 	capturerun.Reader
 	capturerun.ProxyAuthorizer
+	capturerun.GlobalActivityReader
 	BeginShutdown()
 	Drain(context.Context) error
 	Shutdown(context.Context) error
@@ -962,6 +963,7 @@ type manualCaptureBuildRequest struct {
 type manualCaptureRuntime interface {
 	manualcapture.Controller
 	manualcapture.ProxyAuthorizer
+	manualcapture.GlobalActivityReader
 	BeginShutdown()
 	Drain(context.Context) error
 	Shutdown(context.Context) error

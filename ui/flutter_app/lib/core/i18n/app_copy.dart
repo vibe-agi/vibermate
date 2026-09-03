@@ -242,6 +242,16 @@ final class AppCopy {
     'bootstrap.live': 'Starting local traffic runtime…',
     'bootstrap.sidecar_unavailable':
         'ViberMate is incomplete. Reinstall or rebuild the App.',
+    'bootstrap.failure.runtime_unavailable':
+        'The local traffic runtime could not start. Retry; no retained evidence was changed.',
+    'bootstrap.failure.runtime_already_active':
+        'Another ViberMate window is already running. Close it, then retry.',
+    'bootstrap.failure.secret_store_unavailable':
+        'The local credential store is unavailable. Unlock this Mac, then retry.',
+    'bootstrap.failure.storage_unavailable':
+        'ViberMate cannot open its local data. Check free space and folder permissions, then retry.',
+    'bootstrap.failure.root_reset_failed':
+        'Root replacement could not recover safely. Retry once. If it repeats, quit ViberMate; in Keychain Access → login → Certificates remove ViberMate Local Root entries, move ~/Library/Application Support/io.vibermate.desktop/local-ca and ~/Library/Application Support/io.vibermate.desktop/root-reset-request.json to Trash, then reopen ViberMate. Captured evidence is kept.',
     'server.login.title': 'Connect to this Runtime Server',
     'server.login.target': 'Server · {server}',
     'server.login.access_key': 'Admin access key',
@@ -643,28 +653,47 @@ final class AppCopy {
     'environment.transform.sandbox':
         'Bounded sandbox · no network, files, clock, or random source',
     'environment.transform.bytes': '{count} B / 65536 B',
-    'environment.transform.test': 'Run sample Turn',
-    'environment.transform.test.passed': 'Sample Turn passed',
+    'environment.transform.test': 'Run test',
+    'environment.transform.test.passed': 'Test passed',
     'environment.transform.diff.request': 'Request · before → after',
     'environment.transform.diff.response': 'Response · before → after',
     'environment.transform.diff.unchanged': 'No changes',
     'environment.transform.test.failed':
-        'The sample Turn failed. Review this stage and try again.',
+        'The test failed. Review this stage and try again.',
     'environment.transform.test.unavailable':
-        'The sample Turn could not run. Check the Runtime Server connection and try again.',
+        'The test could not run. Check the Runtime Server connection and try again.',
     'environment.transform.invalid':
         'JavaScript must be valid UTF-8 text no larger than 64 KiB per stage.',
-    'environment.transform.sample.edit': 'Edit test sample',
-    'environment.transform.sample.title': 'Local test sample',
+    'environment.transform.sample.edit': 'Test inputs',
+    'environment.transform.sample.summary': 'Test inputs · {path} · {user}',
+    'environment.transform.sample.title': 'Test inputs',
     'environment.transform.sample.local_detail':
-        'Edit this private copy before testing. Retained raw evidence is unchanged.',
+        'Edit this private copy before running the test. Nothing here is saved or published.',
+    'environment.transform.sample.source.built_in': 'Built-in example data',
+    'environment.transform.sample.source.captured':
+        'Real captured Exchange · {exchange}',
+    'environment.transform.sample.pick_captured': 'Choose real record',
     'environment.transform.sample.headers': 'Headers · JSON',
     'environment.transform.sample.body': 'Body',
     'environment.transform.sample.status': 'Status',
     'environment.transform.sample.streaming': 'Streaming response',
+    'environment.transform.sample.runtime': 'Runtime',
+    'environment.transform.sample.runtime.detail':
+        'These values are exposed to this test as runtime.*. They do not read or change your machine.',
+    'environment.transform.sample.runtime.user_name': 'Local user name',
+    'environment.transform.sample.runtime.home_directory': 'Home directory',
+    'environment.transform.sample.runtime.workspace_root': 'Workspace root',
+    'environment.transform.sample.runtime.workspace_label': 'Workspace label',
+    'environment.transform.sample.runtime.os': 'Operating system',
+    'environment.transform.sample.runtime.os_version':
+        'Operating system version',
+    'environment.transform.sample.runtime.architecture': 'Architecture',
+    'environment.transform.sample.runtime.time_zone': 'Time zone',
+    'environment.transform.sample.runtime.turn_started_at':
+        'Turn started at · ISO 8601',
     'environment.transform.sample.invalid':
-        'Enter valid bounded headers, Body, and response status.',
-    'environment.transform.sample.save': 'Use sample',
+        'Enter valid bounded request, response, and Runtime values.',
+    'environment.transform.sample.save': 'Use test inputs',
     'code_library.title': 'Script library',
     'code_library.subtitle':
         'Publish reusable message transforms and account selection rules',
@@ -706,9 +735,12 @@ final class AppCopy {
     'code_library.starter.response_model': 'Show actual response model',
     'code_library.starters.title': 'Built-in examples',
     'code_library.starters.detail':
-        'Read the code now. Using an example makes an editable copy; nothing is published until you save it.',
+        'Preview the complete code before deciding. Creating from an example makes an editable copy; nothing is published until you save it.',
     'code_library.starters.blank_action': 'Start blank',
+    'code_library.starters.view': 'View code',
     'code_library.starters.use': 'Create from example',
+    'code_library.starters.preview.detail':
+        'Try this built-in code locally. Edits and test results are discarded unless you create a copy.',
     'code_library.starter.local_identity.detail':
         'Replace the local user, home, and Workspace path before upload, then restore them in this Turn\'s response.',
     'code_library.starter.block_secrets.detail':
@@ -731,7 +763,7 @@ final class AppCopy {
         'The current published revision and both stages appear here.',
     'code_library.test_protocol': 'Test format',
     'code_library.test_protocol.detail':
-        'Only selects the built-in request and response used by Run sample Turn. It does not bind this code to a protocol.',
+        'Selects the format for test inputs. It does not bind this code to a protocol.',
     'code_library.edit_publish': 'Edit for new revision',
     'code_library.create_publish': 'Create and publish',
     'code_library.publish_revision': 'Publish new revision',
@@ -739,6 +771,19 @@ final class AppCopy {
     'code_library.sample.captured':
         'Local sample from {exchange} · {protocol}. Edit before testing; raw evidence is unchanged.',
     'code_library.sample.clear': 'Discard local sample',
+    'code_library.sample.picker.title': 'Choose a real conversation record',
+    'code_library.sample.picker.detail':
+        'Choose a Capture and Conversation, then one exact API call. Its request, response, and Runtime are copied locally for this test.',
+    'code_library.sample.picker.capture': 'Capture',
+    'code_library.sample.picker.conversation': 'Conversation',
+    'code_library.sample.picker.calls': 'Captured API calls',
+    'code_library.sample.picker.unnamed_conversation': 'Unnamed conversation',
+    'code_library.sample.picker.empty_captures':
+        'No captured conversations yet. Run Claude or Codex through ViberMate first.',
+    'code_library.sample.picker.empty_calls':
+        'This Conversation has no captured API calls yet.',
+    'code_library.sample.picker.unavailable':
+        'This API call has no complete retained request and response to test.',
     'account_selector.editor.title': 'Account selection rule',
     'account_selector.editor.subtitle':
         'Choose one frozen upstream account for each Turn.',
@@ -1142,6 +1187,58 @@ final class AppCopy {
         'before anything is written. Request and response bodies, tool '
         'arguments and query strings are stored as sent, so a secret written '
         'into a prompt is retained.',
+    'settings.root_ca.title': 'Local Root Certificate',
+    'settings.root_ca.detail':
+        'Claude and Codex launches receive this certificate directly. Other clients can install and trust this exact Root for the current macOS user here.',
+    'settings.root_ca.status.trusted': 'Installed and trusted',
+    'settings.root_ca.status.needs_trust': 'Installed, not trusted',
+    'settings.root_ca.status.not_installed': 'Generated, not installed',
+    'settings.root_ca.status.unknown': 'Trust status unavailable',
+    'settings.root_ca.fingerprint': 'SHA-256 fingerprint',
+    'settings.root_ca.validity': 'Valid {from} → {to}',
+    'settings.root_ca.private_key':
+        'The private key stays in ViberMate local storage and is never exported.',
+    'settings.root_ca.install': 'Install and trust',
+    'settings.root_ca.trust': 'Trust certificate',
+    'settings.root_ca.remove': 'Removal steps',
+    'settings.root_ca.replace': 'Replace certificate',
+    'settings.root_ca.replace_and_restart': 'Replace and restart',
+    'settings.root_ca.restart': 'Restart ViberMate',
+    'settings.root_ca.retry': 'Check again',
+    'settings.root_ca.replace.title': 'Replace the certificate and restart?',
+    'settings.root_ca.replace.detail':
+        'The current certificate is absent. ViberMate will schedule a new local Root for the next restart. Existing evidence is kept; trust the new certificate separately if another client needs it.',
+    'settings.root_ca.confirm': 'Continue',
+    'settings.root_ca.guide.remove':
+        'Open Keychain Access → login → Certificates. Match “ViberMate Local Root” against the SHA-256 fingerprint above and delete only that entry. Then return here and check again.',
+    'settings.root_ca.guide.replace':
+        'Before replacement, open Keychain Access → login → Certificates, match and delete the current “ViberMate Local Root”, then return and check again. Once it is absent, choose Replace certificate again.',
+    'settings.root_ca.guide.check': 'Check again',
+    'settings.root_ca.install.cancelled':
+        'macOS authorization was cancelled. The certificate may be present but is not trusted; retry when ready.',
+    'settings.root_ca.install.denied':
+        "macOS could not update the current user's certificate store. Unlock this Mac, then retry.",
+    'settings.root_ca.install.failed':
+        'The current certificate could not be installed and trusted. No different certificate was used; check again, then retry.',
+    'settings.root_ca.install.not_confirmed':
+        'macOS returned without a trusted result for this exact certificate. Check again, then retry.',
+    'settings.root_ca.updated': 'Root certificate trust updated.',
+    'settings.root_ca.restart_required':
+        'The old certificate is no longer trusted. Restart ViberMate to create a new one.',
+    'settings.root_ca.load_failed':
+        'ViberMate could not read the macOS trust status. Try again; no trust setting was changed.',
+    'settings.root_ca.load_recovery':
+        'If retry still fails, reopen ViberMate before changing anything in Keychain Access.',
+    'settings.root_ca.recovery':
+        'If retry still fails, open Keychain Access → login → Certificates, inspect “ViberMate Local Root” against the SHA-256 fingerprint shown here, remove only that matching entry, then reopen ViberMate.',
+    'settings.root_ca.active_captures':
+        'Stop all running and manual captures before replacing the Root Certificate.',
+    'settings.root_ca.conflict':
+        'The Root state changed or another trust action is still running. Check again, then retry.',
+    'settings.root_ca.unavailable':
+        'Root certificate trust management is available only on the local macOS Desktop.',
+    'settings.root_ca.copy_fingerprint': 'Copy fingerprint',
+    'settings.root_ca.copied': 'Fingerprint copied',
     'settings.runtime': 'Runtime source',
     'settings.preview': 'Deterministic Preview data',
     'settings.live': 'Local ViberMate runtime',
@@ -1615,6 +1712,14 @@ final class AppCopy {
     'bootstrap.preview': '正在准备 Preview 证据…',
     'bootstrap.live': '正在启动本地流量运行时…',
     'bootstrap.sidecar_unavailable': 'ViberMate 安装不完整。请重新安装或重新构建 App。',
+    'bootstrap.failure.runtime_unavailable': '本地流量运行时无法启动。请重试；已保存的证据未被修改。',
+    'bootstrap.failure.runtime_already_active':
+        '已有一个 ViberMate 窗口正在运行。请先关闭它，再重试。',
+    'bootstrap.failure.secret_store_unavailable': '无法使用本机凭据存储。请先解锁这台 Mac，再重试。',
+    'bootstrap.failure.storage_unavailable':
+        'ViberMate 无法打开本机数据。请检查磁盘空间与目录权限，再重试。',
+    'bootstrap.failure.root_reset_failed':
+        '根证书更换无法安全恢复。请先重试一次；若仍失败，请退出 ViberMate，在“钥匙串访问”→“登录”钥匙串→“证书”中移除 ViberMate Local Root，再将 ~/Library/Application Support/io.vibermate.desktop/local-ca 与 ~/Library/Application Support/io.vibermate.desktop/root-reset-request.json 移到废纸篓，然后重新打开 ViberMate。已捕获的证据会保留。',
     'server.login.title': '连接到这台 Runtime Server',
     'server.login.target': '服务器 · {server}',
     'server.login.access_key': '管理员访问密钥',
@@ -1963,23 +2068,41 @@ final class AppCopy {
     'environment.transform.editor.hint': '// 留空表示此阶段不修改',
     'environment.transform.sandbox': '有界沙箱 · 无网络、文件、时钟或随机源',
     'environment.transform.bytes': '{count} B / 65536 B',
-    'environment.transform.test': '运行测试样例',
-    'environment.transform.test.passed': '测试样例通过',
+    'environment.transform.test': '运行测试',
+    'environment.transform.test.passed': '测试通过',
     'environment.transform.diff.request': '请求 · 修改前 → 修改后',
     'environment.transform.diff.response': '响应 · 修改前 → 修改后',
     'environment.transform.diff.unchanged': '没有变化',
-    'environment.transform.test.failed': '测试样例执行失败，请检查当前阶段后重试。',
-    'environment.transform.test.unavailable': '无法运行测试样例，请检查运行时服务连接后重试。',
+    'environment.transform.test.failed': '测试执行失败，请检查当前阶段后重试。',
+    'environment.transform.test.unavailable': '无法运行测试，请检查运行时服务连接后重试。',
     'environment.transform.invalid': '每个阶段必须是不超过 64 KiB 的有效 UTF-8 JavaScript。',
-    'environment.transform.sample.edit': '编辑测试样本',
-    'environment.transform.sample.title': '本地测试样本',
-    'environment.transform.sample.local_detail': '测试前可编辑这份私有副本；保留的原始证据不会改变。',
+    'environment.transform.sample.edit': '测试输入',
+    'environment.transform.sample.summary': '测试输入 · {path} · {user}',
+    'environment.transform.sample.title': '测试输入',
+    'environment.transform.sample.local_detail': '运行测试前可编辑这份私有副本；这里的内容不会保存或发布。',
+    'environment.transform.sample.source.built_in': '内置示例数据',
+    'environment.transform.sample.source.captured':
+        '真实记录 · Exchange {exchange}',
+    'environment.transform.sample.pick_captured': '选择真实记录',
     'environment.transform.sample.headers': 'Headers · JSON',
     'environment.transform.sample.body': 'Body',
     'environment.transform.sample.status': '状态码',
     'environment.transform.sample.streaming': '流式响应',
-    'environment.transform.sample.invalid': '请输入合法且有界的 Header、Body 与响应状态码。',
-    'environment.transform.sample.save': '使用样本',
+    'environment.transform.sample.runtime': 'Runtime',
+    'environment.transform.sample.runtime.detail':
+        '这些值只在本次测试中作为 runtime.* 注入，不会读取或修改你的机器。',
+    'environment.transform.sample.runtime.user_name': '本机用户名',
+    'environment.transform.sample.runtime.home_directory': '用户主目录',
+    'environment.transform.sample.runtime.workspace_root': '工作区路径',
+    'environment.transform.sample.runtime.workspace_label': '工作区名称',
+    'environment.transform.sample.runtime.os': '操作系统',
+    'environment.transform.sample.runtime.os_version': '操作系统版本',
+    'environment.transform.sample.runtime.architecture': '系统架构',
+    'environment.transform.sample.runtime.time_zone': '时区',
+    'environment.transform.sample.runtime.turn_started_at':
+        'Turn 开始时间 · ISO 8601',
+    'environment.transform.sample.invalid': '请输入合法且有界的请求、响应与 Runtime 值。',
+    'environment.transform.sample.save': '使用测试输入',
     'code_library.title': '脚本库',
     'code_library.subtitle': '发布可复用的消息变换与账号选择规则',
     'code_library.error.load': '无法读取脚本库，已发布版本没有改变。请重试。',
@@ -2014,9 +2137,12 @@ final class AppCopy {
     'code_library.starter.workspace_rules': '按工作区应用规则',
     'code_library.starter.response_model': '显示实际响应模型',
     'code_library.starters.title': '内置示例',
-    'code_library.starters.detail': '代码直接可见；使用后会生成可编辑副本，保存前不会发布。',
+    'code_library.starters.detail': '先查看完整代码，再决定是否使用；新建后得到可编辑副本，保存前不会发布。',
     'code_library.starters.blank_action': '从空白开始',
+    'code_library.starters.view': '查看代码',
     'code_library.starters.use': '以此新建',
+    'code_library.starters.preview.detail':
+        '可在本地修改并运行测试；关闭后丢弃改动和结果，只有以此新建才会保留代码。',
     'code_library.starter.local_identity.detail':
         '发送前替换本机用户名、主目录和工作区路径，再在本轮响应中还原。',
     'code_library.starter.block_secrets.detail': '请求含私钥标记或可识别的访问令牌前缀时，在本地直接停止。',
@@ -2034,8 +2160,7 @@ final class AppCopy {
     'code_library.select': '选择一个变换',
     'code_library.select.detail': '这里显示当前已发布修订及请求、响应两个阶段。',
     'code_library.test_protocol': '测试格式',
-    'code_library.test_protocol.detail':
-        '仅选择“运行测试样例”使用的内置请求与响应，不会把这段代码绑定到某个协议。',
+    'code_library.test_protocol.detail': '选择测试输入的格式，不会把这段代码绑定到某个协议。',
     'code_library.edit_publish': '编辑新版本',
     'code_library.create_publish': '新建并发布',
     'code_library.publish_revision': '发布新版本',
@@ -2043,6 +2168,17 @@ final class AppCopy {
     'code_library.sample.captured':
         '本地样本来自 {exchange} · {protocol}。测试前可编辑；原始证据保持不变。',
     'code_library.sample.clear': '丢弃本地样本',
+    'code_library.sample.picker.title': '选择真实对话记录',
+    'code_library.sample.picker.detail':
+        '先选择 Capture 与 Conversation，再选择一次精确的 API 调用；其请求、响应和 Runtime 会复制到本地用于本次测试。',
+    'code_library.sample.picker.capture': 'Capture',
+    'code_library.sample.picker.conversation': 'Conversation',
+    'code_library.sample.picker.calls': '已捕获的 API 调用',
+    'code_library.sample.picker.unnamed_conversation': '未命名对话',
+    'code_library.sample.picker.empty_captures':
+        '还没有真实对话记录。请先让 Claude 或 Codex 通过 ViberMate 运行。',
+    'code_library.sample.picker.empty_calls': '这个 Conversation 还没有捕获到 API 调用。',
+    'code_library.sample.picker.unavailable': '这次 API 调用没有完整留存的请求与响应，无法用于测试。',
     'account_selector.editor.title': '账号选择规则',
     'account_selector.editor.subtitle': '每轮从冻结的上游账号中选择一个。',
     'account_selector.editor.scope': '只读请求、运行时与账号元数据 · 返回一个精确账号 ID · 失败即停止',
@@ -2378,6 +2514,50 @@ final class AppCopy {
     'settings.storage.credentials':
         '凭证头的值（Authorization、API key、Cookie）在写入之前就已移除。'
         '请求与响应正文、工具参数和 query 按原样保存——写进 prompt 的密钥会被保留。',
+    'settings.root_ca.title': '本机根证书',
+    'settings.root_ca.detail':
+        'Claude 与 Codex 启动时会直接获得当前证书；其他客户端可在这里为当前 macOS 登录用户安装并信任这张根证书。',
+    'settings.root_ca.status.trusted': '已安装并信任',
+    'settings.root_ca.status.needs_trust': '已安装，尚未信任',
+    'settings.root_ca.status.not_installed': '已生成，尚未安装',
+    'settings.root_ca.status.unknown': '无法读取信任状态',
+    'settings.root_ca.fingerprint': 'SHA-256 指纹',
+    'settings.root_ca.validity': '有效期 {from} → {to}',
+    'settings.root_ca.private_key': '私钥仅保存在本机 ViberMate 存储中，永不导出。',
+    'settings.root_ca.install': '安装并信任',
+    'settings.root_ca.trust': '信任证书',
+    'settings.root_ca.remove': '查看移除步骤',
+    'settings.root_ca.replace': '更换证书',
+    'settings.root_ca.replace_and_restart': '更换并重启',
+    'settings.root_ca.restart': '重新启动 ViberMate',
+    'settings.root_ca.retry': '重新检查',
+    'settings.root_ca.replace.title': '更换证书并重新启动？',
+    'settings.root_ca.replace.detail':
+        '已确认当前证书不存在。ViberMate 将安排在下次重启时生成新的本机根证书；已有证据会保留，其他客户端如有需要，需另行信任新证书。',
+    'settings.root_ca.confirm': '继续',
+    'settings.root_ca.guide.remove':
+        '在“钥匙串访问”中打开“登录”钥匙串→“证书”，用上方 SHA-256 指纹核对“ViberMate Local Root”，仅删除匹配项；然后回到这里重新检查。',
+    'settings.root_ca.guide.replace':
+        '更换前，请在“钥匙串访问”→“登录”钥匙串→“证书”中核对并删除当前“ViberMate Local Root”，回到这里重新检查；确认已移除后，再次选择“更换证书”。',
+    'settings.root_ca.guide.check': '重新检查',
+    'settings.root_ca.install.cancelled':
+        '已取消 macOS 授权。证书可能已导入但尚未信任；准备好后可再次尝试。',
+    'settings.root_ca.install.denied': 'macOS 无法更新当前用户的证书存储。请先解锁这台 Mac，再重试。',
+    'settings.root_ca.install.failed':
+        '未能安装并信任当前证书；ViberMate 没有改用其他证书。请重新检查后再试。',
+    'settings.root_ca.install.not_confirmed':
+        'macOS 返回后，仍未确认这张精确证书已受信任。请重新检查后再试。',
+    'settings.root_ca.updated': '本机根证书信任状态已更新。',
+    'settings.root_ca.restart_required': '旧证书已不再受信。请重新启动 ViberMate 以生成新证书。',
+    'settings.root_ca.load_failed': '无法读取 macOS 信任状态。请重试；本次未修改系统信任设置。',
+    'settings.root_ca.load_recovery': '若重试仍失败，请先重新打开 ViberMate，不要直接修改钥匙串。',
+    'settings.root_ca.recovery':
+        '若重试仍失败，请打开“钥匙串访问”→“登录”钥匙串→“证书”，用此处显示的 SHA-256 指纹核对“ViberMate Local Root”，仅移除匹配项，再重新打开 ViberMate。',
+    'settings.root_ca.active_captures': '更换根证书前，请先停止所有运行中与手动 Capture。',
+    'settings.root_ca.conflict': '根证书状态已变化，或另一项信任操作仍在进行。请重新检查后再试。',
+    'settings.root_ca.unavailable': '根证书信任管理仅在本机 macOS Desktop 上可用。',
+    'settings.root_ca.copy_fingerprint': '复制指纹',
+    'settings.root_ca.copied': '指纹已复制',
     'settings.runtime': '运行时来源',
     'settings.preview': '确定性预览数据',
     'settings.live': '本地 ViberMate 运行时',

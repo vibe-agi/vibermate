@@ -72,7 +72,10 @@ type barrierCheckingRepository struct {
 	sawBarrier bool
 }
 
-type successfulCreateRepository struct{}
+type successfulCreateRepository struct {
+	recovery     Recovery
+	recoverCalls int
+}
 
 func (*successfulCreateRepository) Create(
 	context.Context,
@@ -127,12 +130,27 @@ func (*successfulCreateRepository) List(
 	return nil, errors.New("unexpected List")
 }
 
-func (*successfulCreateRepository) Recover(context.Context, time.Time) (Recovery, error) {
-	return Recovery{}, nil
+func (repository *successfulCreateRepository) Recover(context.Context, time.Time) (Recovery, error) {
+	repository.recoverCalls++
+	return repository.recovery, nil
 }
 
 func (*successfulCreateRepository) Active(context.Context, ID, time.Time) (bool, error) {
 	return false, errors.New("unexpected Active")
+}
+
+func TestActiveCountReconcilesEveryOwnerWithoutExposingTheirCatalogs(t *testing.T) {
+	t.Parallel()
+	repository := &successfulCreateRepository{}
+	manager, err := NewManager(context.Background(), DefaultOptions(repository))
+	if err != nil {
+		t.Fatal(err)
+	}
+	repository.recovery = Recovery{ActiveCount: 3}
+	count, err := manager.ActiveCount(context.Background())
+	if err != nil || count != 3 || repository.recoverCalls != 2 {
+		t.Fatalf("active count=%d calls=%d error=%v", count, repository.recoverCalls, err)
+	}
 }
 
 func (repository *barrierCheckingRepository) Create(

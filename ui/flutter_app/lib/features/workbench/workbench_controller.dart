@@ -6,11 +6,14 @@ import 'package:flutter/foundation.dart';
 
 import '../../core/api/control_api.dart';
 import '../../core/api/control_models.dart';
+import '../../core/bootstrap/root_trust_installer.dart';
 import '../../core/bootstrap/terminal_command.dart';
 import '../../core/preferences/workbench_preferences.dart';
 
 export '../../core/preferences/workbench_preferences.dart'
     show AppLanguage, WorkbenchSection, WorkbenchTheme;
+
+enum RootCAGuideIntent { remove, replace }
 
 final class WorkbenchController extends ChangeNotifier {
   static const _exchangeDetailCacheLimit = 64;
@@ -24,7 +27,10 @@ final class WorkbenchController extends ChangeNotifier {
     required Future<void> Function() closeRuntime,
     this.serverManagement = false,
     this.terminalManagement = true,
+    this.rootTrustManagement = false,
+    RootTrustInstaller? rootTrustInstaller,
     this.runtimeTarget = 'This Mac',
+    Future<void> Function()? restartRuntime,
     WorkbenchPreferences initialPreferences = const WorkbenchPreferences(),
     WorkbenchPreferencesStore preferencesStore =
         const DiscardWorkbenchPreferencesStore(),
@@ -34,7 +40,9 @@ final class WorkbenchController extends ChangeNotifier {
     DateTime Function()? clock,
   }) : _api = api,
        _terminalCommands = terminalCommands,
+       _rootTrustInstaller = rootTrustInstaller,
        _closeRuntime = closeRuntime,
+       _restartRuntime = restartRuntime,
        _clock = clock ?? DateTime.now,
        _preferencesStore = preferencesStore,
        _preferencesWritable = preferencesWritable,
@@ -56,7 +64,9 @@ final class WorkbenchController extends ChangeNotifier {
 
   final ControlApi _api;
   final TerminalCommandService _terminalCommands;
+  final RootTrustInstaller? _rootTrustInstaller;
   final Future<void> Function() _closeRuntime;
+  final Future<void> Function()? _restartRuntime;
   final DateTime Function() _clock;
   final WorkbenchPreferencesStore _preferencesStore;
   final bool _preferencesWritable;
@@ -64,6 +74,7 @@ final class WorkbenchController extends ChangeNotifier {
   final bool previewMode;
   final bool serverManagement;
   final bool terminalManagement;
+  final bool rootTrustManagement;
   final String runtimeTarget;
 
   String get runtimeConnectTarget =>
@@ -82,6 +93,8 @@ final class WorkbenchController extends ChangeNotifier {
   RuntimeServerAccess? serverAccess;
   List<RuntimeUser>? runtimeUsers;
   RuntimeUsageReport? runtimeUsage;
+  RootCAStatus? rootCAStatus;
+  RootCAGuideIntent? rootCAGuideIntent;
   CapturedMessageTransformSample? capturedMessageTransformSample;
   int usageRangeDays = 30;
   WorkbenchSection section;
@@ -107,6 +120,7 @@ final class WorkbenchController extends ChangeNotifier {
   String? terminalCommandError;
   String? terminalCommandNotice;
   String? serverManagementError;
+  String? rootCAError;
   String? approvalAttentionError;
   bool loading = true;
   bool detailLoading = false;
@@ -123,6 +137,9 @@ final class WorkbenchController extends ChangeNotifier {
   bool terminalCommandMutating = false;
   bool serverManagementLoading = false;
   bool runtimeUserMutating = false;
+  bool rootCALoading = false;
+  bool rootCAMutating = false;
+  bool rootCARestartRequired = false;
   bool pendingApprovalsLoading = false;
   int _dashboardGeneration = 0;
   int _selectionGeneration = 0;
@@ -460,6 +477,162 @@ final class WorkbenchController extends ChangeNotifier {
     );
   }
 
+  Future<void> refreshRootCA({bool quiet = false}) async {
+    if (_disposed || !rootTrustManagement || rootCALoading || rootCAMutating) {
+      return;
+    }
+    if (!quiet) {
+      rootCALoading = true;
+      rootCAError = null;
+      notifyListeners();
+    }
+    try {
+      final status = await _api.rootCA();
+      if (_disposed) return;
+      rootCAStatus = status;
+      final guideIntent = rootCAGuideIntent;
+      if (guideIntent != null && status.certificatePresent == 'absent') {
+        rootCAGuideIntent = null;
+      }
+      rootCAError = null;
+      rootCALoading = false;
+      notifyListeners();
+    } catch (error) {
+      if (_disposed || quiet) return;
+      rootCALoading = false;
+      rootCAError = _describeError(error);
+      notifyListeners();
+    }
+  }
+
+  Future<bool> installAndTrustRootCA() => _installAndTrustRootCA();
+
+  Future<bool> openRootCARemovalGuide() =>
+      _showRootCAGuide(RootCAGuideIntent.remove);
+
+  Future<bool> replaceRootCA() async {
+    final current = rootCAStatus;
+    if (current != null && current.certificatePresent != 'absent') {
+      return _showRootCAGuide(RootCAGuideIntent.replace);
+    }
+    final accepted = await _applyRootCAAction(
+      (status) => _api.replaceRootCA(status),
+    );
+    if (accepted && rootCARestartRequired && _restartRuntime != null) {
+      await restartForRootReset();
+    }
+    return accepted;
+  }
+
+  Future<bool> _showRootCAGuide(RootCAGuideIntent intent) async {
+    if (_disposed ||
+        rootCAStatus == null ||
+        rootCAMutating ||
+        rootCARestartRequired) {
+      return false;
+    }
+    rootCAError = null;
+    operationNotice = null;
+    rootCAGuideIntent = intent;
+    notifyListeners();
+    return true;
+  }
+
+  Future<bool> _installAndTrustRootCA() async {
+    final current = rootCAStatus;
+    final installer = _rootTrustInstaller;
+    if (_disposed ||
+        current == null ||
+        installer == null ||
+        rootCAMutating ||
+        rootCARestartRequired) {
+      return false;
+    }
+    rootCAMutating = true;
+    rootCAError = null;
+    operationNotice = null;
+    notifyListeners();
+    try {
+      final material = await _api.rootCAMaterial(current);
+      await installer.install(material);
+      if (_disposed) return false;
+      final observed = await _api.rootCA();
+      if (_disposed) return false;
+      rootCAStatus = observed;
+      rootCAMutating = false;
+      if (observed.rootRevision != current.rootRevision ||
+          observed.fingerprint != current.fingerprint ||
+          !observed.installed) {
+        rootCAError = 'root_trust_install_not_confirmed';
+        notifyListeners();
+        return false;
+      }
+      rootCAGuideIntent = null;
+      operationNotice = 'root_ca_updated';
+      notifyListeners();
+      return true;
+    } catch (error) {
+      if (_disposed) return false;
+      try {
+        rootCAStatus = await _api.rootCA();
+      } on Object {
+        // Preserve the installation failure as the actionable primary error.
+      }
+      if (_disposed) return false;
+      rootCAMutating = false;
+      rootCAError = switch (error) {
+        RootTrustInstallerException exception =>
+          'root_trust_install_${exception.failure.name}',
+        _ => _describeError(error),
+      };
+      notifyListeners();
+      return false;
+    }
+  }
+
+  Future<void> restartForRootReset() async {
+    final restart = _restartRuntime;
+    if (_disposed || restart == null) return;
+    await restart();
+  }
+
+  Future<bool> _applyRootCAAction(
+    Future<RootCAActionResult> Function(RootCAStatus current) call,
+  ) async {
+    final current = rootCAStatus;
+    if (_disposed ||
+        current == null ||
+        rootCAMutating ||
+        rootCARestartRequired) {
+      return false;
+    }
+    rootCAMutating = true;
+    rootCAError = null;
+    operationNotice = null;
+    notifyListeners();
+    try {
+      final result = await call(current);
+      if (_disposed) return false;
+      rootCAStatus = result.status;
+      rootCAMutating = false;
+      rootCARestartRequired = result.restartRequired;
+      final accepted = result.completed || result.restartRequired;
+      operationNotice = accepted
+          ? result.restartRequired
+                ? 'root_ca_restart_required'
+                : 'root_ca_updated'
+          : null;
+      notifyListeners();
+      return accepted;
+    } catch (error) {
+      if (_disposed) return false;
+      rootCAMutating = false;
+      rootCAError = _describeError(error);
+      notifyListeners();
+      return false;
+    }
+  }
+
   Future<void> refresh({bool selectDefaults = false}) async {
     if (_disposed || inventoryMutating) return;
     final generation = ++_dashboardGeneration;
@@ -484,6 +657,9 @@ final class WorkbenchController extends ChangeNotifier {
         if (serverManagement) await refreshServerManagement();
         if (section == WorkbenchSection.settings && terminalManagement) {
           await refreshTerminalCommand();
+        }
+        if (section == WorkbenchSection.settings && rootTrustManagement) {
+          await refreshRootCA();
         }
       }
     } catch (error) {
@@ -604,6 +780,11 @@ final class WorkbenchController extends ChangeNotifier {
       }
       if (terminalManagement && terminalCommand == null) {
         unawaited(refreshTerminalCommand());
+      }
+      if (value == WorkbenchSection.settings &&
+          rootTrustManagement &&
+          rootCAStatus == null) {
+        unawaited(refreshRootCA());
       }
     }
   }
@@ -1039,13 +1220,31 @@ final class WorkbenchController extends ChangeNotifier {
   }
 
   Future<bool> copyMessageTransformSample(String exchangeId) async {
+    final activity = selectedActivities
+        .where((value) => value.id == exchangeId)
+        .firstOrNull;
+    final captured = await loadMessageTransformSample(
+      exchangeId,
+      activity: activity,
+    );
+    if (captured == null) return false;
+    capturedMessageTransformSample = captured;
+    section = WorkbenchSection.codeLibrary;
+    notifyListeners();
+    return true;
+  }
+
+  Future<CapturedMessageTransformSample?> loadMessageTransformSample(
+    String exchangeId, {
+    ActivityRecord? activity,
+  }) async {
     final page = await loadRawEvidence(exchangeId);
-    if (page == null) return false;
+    if (page == null) return null;
     final pair = _messageTransformSamplePair(page);
     if (pair == null) {
       _rawEvidenceErrors[exchangeId] = 'message_transform_sample_unavailable';
       notifyListeners();
-      return false;
+      return null;
     }
     RevealedRawEvidence? requestReveal;
     RevealedRawEvidence? responseReveal;
@@ -1056,23 +1255,43 @@ final class WorkbenchController extends ChangeNotifier {
       ]);
       requestReveal = revealed[0];
       responseReveal = revealed[1];
-      capturedMessageTransformSample =
-          CapturedMessageTransformSample.fromRawEvidence(
-            request: requestReveal,
-            response: responseReveal,
-          );
+      final captured = CapturedMessageTransformSample.fromRawEvidence(
+        request: requestReveal,
+        response: responseReveal,
+        runtime: _messageTransformRuntime(activity),
+      );
       _rawEvidenceErrors.remove(exchangeId);
-      section = WorkbenchSection.codeLibrary;
       notifyListeners();
-      return true;
+      return captured;
     } on Object catch (error) {
       _rawEvidenceErrors[exchangeId] = _describeError(error);
       notifyListeners();
-      return false;
+      return null;
     } finally {
       requestReveal?.body.fillRange(0, requestReveal.body.length, 0);
       responseReveal?.body.fillRange(0, responseReveal.body.length, 0);
     }
+  }
+
+  MessageTransformTestRuntime? _messageTransformRuntime(
+    ActivityRecord? activity,
+  ) {
+    if (activity == null) return null;
+    final run = data?.captures
+        .where((value) => value.captureRunId == activity.captureRunId)
+        .firstOrNull
+        ?.managedRun;
+    return MessageTransformTestRuntime(
+      userName: run?.localUserLabel ?? '',
+      homeDirectory: run?.homeDirectory ?? '',
+      operatingSystem: run?.operatingSystem ?? '',
+      operatingSystemVersion: run?.operatingSystemVersion ?? '',
+      architecture: run?.architecture ?? '',
+      timeZone: run?.timeZone ?? '',
+      workspaceRoot: run?.cwd ?? '',
+      workspaceLabel: run?.workspaceLabel ?? '',
+      turnStartedAt: activity.occurredAt,
+    );
   }
 
   bool canCopyMessageTransformSample(String exchangeId) =>

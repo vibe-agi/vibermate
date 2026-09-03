@@ -2,11 +2,70 @@ package desktopcontrol
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/vibe-agi/vibermate/internal/messagetransform"
 )
+
+func TestMessageTransformSampleUsesProvidedRuntimeMetadata(t *testing.T) {
+	t.Parallel()
+
+	input := MessageTransformTestInput{
+		WireProtocol: transformProtocolAnthropicMessages,
+		Sample: &MessageTransformTestSample{
+			Request: MessageTransformTestRequest{
+				Method: "POST", Path: "/v1/messages",
+				Headers: map[string][]string{"Content-Type": {"application/json"}},
+				Body:    `{}`,
+			},
+			Response: MessageTransformTestResponse{
+				StatusCode: 200,
+				Headers:    map[string][]string{"Content-Type": {"application/json"}},
+				Body:       `{}`,
+			},
+			Runtime: &MessageTransformTestRuntime{
+				UserName: "jack", HomeDirectory: "/Users/jack",
+				OperatingSystem: "darwin", OperatingSystemVersion: "26.0",
+				Architecture: "arm64", TimeZone: "Asia/Singapore",
+				WorkspaceRoot: "/Users/jack/Code/vibermate", WorkspaceLabel: "vibermate",
+				TurnStartedAt: time.Date(2026, 9, 1, 12, 34, 56, 0, time.UTC),
+			},
+		},
+		Policy: messagetransform.Policy{RequestJavaScript: `
+			request.body = JSON.stringify({
+				user: runtime.user,
+				device: runtime.device,
+				workspace: runtime.workspace,
+				turn: runtime.turn
+			});
+		`},
+	}
+	payload, err := json.Marshal(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded MessageTransformTestInput
+	if err := decodeStrictJSON(payload, &decoded); err != nil {
+		t.Fatalf("decodeStrictJSON() error = %v", err)
+	}
+	result, err := runMessageTransformSample(context.Background(), decoded)
+	if err != nil {
+		t.Fatalf("runMessageTransformSample() error = %v", err)
+	}
+	for _, value := range []string{
+		`"name":"jack"`, `"homeDirectory":"/Users/jack"`,
+		`"operatingSystemVersion":"26.0"`, `"timeZone":"Asia/Singapore"`,
+		`"root":"/Users/jack/Code/vibermate"`, `"label":"vibermate"`,
+		`"startedAt":"2026-09-01T12:34:56Z"`,
+	} {
+		if !strings.Contains(result.RequestAfter.Body, value) {
+			t.Fatalf("request after = %s, want %s", result.RequestAfter.Body, value)
+		}
+	}
+}
 
 func TestMessageTransformSampleReturnsAllFourWireSnapshots(t *testing.T) {
 	t.Parallel()

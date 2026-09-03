@@ -246,8 +246,11 @@ type View struct {
 	CWD             string `json:"cwd"`
 	// CanonicalExecutablePath is Desktop-local read-only diagnostic evidence.
 	// Launcher and Server projections deliberately do not serialize it.
-	CanonicalExecutablePath     string                     `json:"-"`
-	LocalUserLabel              string                     `json:"localUserLabel,omitempty"`
+	CanonicalExecutablePath string `json:"-"`
+	LocalUserLabel          string `json:"localUserLabel,omitempty"`
+	// Runtime remains Desktop-local display evidence. It is never serialized by
+	// the launcher-facing View itself; Desktop control chooses the exact fields.
+	Runtime                     RuntimeMetadata            `json:"-"`
 	RuntimeUserID               runtimeuser.UserID         `json:"runtimeUserId,omitempty"`
 	RuntimeUsername             string                     `json:"runtimeUsername,omitempty"`
 	LoginSessionID              runtimeuser.LoginSessionID `json:"loginSessionId,omitempty"`
@@ -293,6 +296,7 @@ func ViewOf(record DurableRecord) View {
 		CWD:                         record.CWD,
 		CanonicalExecutablePath:     record.CanonicalExecutablePath,
 		LocalUserLabel:              record.Runtime.LocalUserName,
+		Runtime:                     record.Runtime,
 		RuntimeUserID:               record.RuntimeUserID,
 		RuntimeUsername:             record.RuntimeUsername,
 		LoginSessionID:              record.LoginSessionID,
@@ -610,6 +614,12 @@ type Repository interface {
 // cannot obtain this unscoped storage read.
 type ActivityReader interface {
 	Active(context.Context, string, time.Time) (bool, error)
+}
+
+// GlobalActivityReader is the installation-wide lifecycle projection for
+// operations that affect every CaptureRun without exposing their catalog.
+type GlobalActivityReader interface {
+	ActiveCount(context.Context) (int, error)
 }
 
 // PageRequest bounds a read of the run list.

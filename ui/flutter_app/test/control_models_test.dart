@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:crypto/crypto.dart' as crypto;
 import 'package:flutter_test/flutter_test.dart';
@@ -9,6 +10,113 @@ import 'package:vibermate_app/preview/preview_control_api.dart';
 import 'runtime_usage_fixture.dart';
 
 void main() {
+  test('Root CA material is bound to its advertised SHA-256 identity', () {
+    final der = Uint8List.fromList([0x30, 0x03, 0x01, 0x02, 0x03]);
+    final fingerprint = crypto.sha256.convert(der).toString();
+    final material = RootCAMaterial.fromJson({
+      'rootRevision': 4,
+      'fingerprint': fingerprint,
+      'certificateDerBase64': base64.encode(der),
+    }, 'rootMaterial');
+    expect(material.rootRevision, 4);
+    expect(material.fingerprint, fingerprint);
+    expect(material.certificateDer, der);
+    final mutableCopy = material.certificateDer;
+    mutableCopy[0] = 0;
+    expect(material.certificateDer, der);
+
+    expect(
+      () => RootCAMaterial.fromJson({
+        'rootRevision': 4,
+        'fingerprint': List.filled(64, 'a').join(),
+        'certificateDerBase64': base64.encode(der),
+      }, 'rootMaterial'),
+      throwsA(isA<ControlContractException>()),
+    );
+  });
+
+  test('Root CA status keeps certificate presence separate from trust', () {
+    final status = RootCAStatus.fromJson({
+      'rootRevision': 3,
+      'fingerprint': List.filled(64, 'a').join(),
+      'algorithm': 'ecdsa-p256',
+      'notBefore': '2026-01-01T00:00:00.000Z',
+      'notAfter': '2036-01-01T00:00:00.000Z',
+      'rootValid': true,
+      'certificatePresence': 'present',
+      'trustDecision': 'untrusted',
+      'evidenceRevision': 'macos-fixture-v1',
+      'observedAt': '2026-09-02T00:00:00.000Z',
+      'available': true,
+    }, 'rootCA');
+
+    expect(status.rootRevision, 3);
+    expect(status.certificatePresent, 'present');
+    expect(status.trustDecision, 'untrusted');
+    expect(status.installed, isFalse);
+    expect(status.needsTrust, isTrue);
+    expect(
+      () => RootCAStatus.fromJson({
+        'rootRevision': 1,
+        'fingerprint': 'bad',
+        'algorithm': 'ecdsa-p256',
+        'notBefore': '2026-01-01T00:00:00.000Z',
+        'notAfter': '2036-01-01T00:00:00.000Z',
+        'rootValid': true,
+        'certificatePresence': 'present',
+        'trustDecision': 'trusted',
+        'observedAt': '2026-09-02T00:00:00.000Z',
+        'available': true,
+      }, 'rootCA'),
+      throwsA(isA<ControlContractException>()),
+    );
+  });
+
+  test('Root replacement result requires an absent old certificate', () {
+    final status = {
+      'rootRevision': 1,
+      'fingerprint': List.filled(64, 'b').join(),
+      'algorithm': 'ecdsa-p256',
+      'notBefore': '2026-01-01T00:00:00.000Z',
+      'notAfter': '2036-01-01T00:00:00.000Z',
+      'rootValid': true,
+      'certificatePresence': 'present',
+      'trustDecision': 'untrusted',
+      'observedAt': '2026-09-02T00:00:00.000Z',
+      'available': true,
+    };
+    expect(
+      () => RootCAActionResult.fromJson({
+        'status': status,
+        'resultStatus': 'applied',
+        'reason': 'applied',
+        'completed': false,
+        'restartRequired': true,
+      }, 'replace'),
+      throwsA(isA<ControlContractException>()),
+    );
+    final absent = Map<String, Object?>.from(status)
+      ..['certificatePresence'] = 'absent';
+    final result = RootCAActionResult.fromJson({
+      'status': absent,
+      'resultStatus': 'applied',
+      'reason': 'applied',
+      'completed': false,
+      'restartRequired': true,
+    }, 'replace');
+    expect(result.restartRequired, isTrue);
+    expect(
+      () => RootCAActionResult.fromJson({
+        'status': absent,
+        'resultStatus': 'needs_manual',
+        'reason': 'postcondition_mismatch',
+        'completed': false,
+        'restartRequired': false,
+      }, 'replace'),
+      throwsA(isA<ControlContractException>()),
+    );
+  });
+
   test(
     'Capture assignment separates launch and applied Environment revisions',
     () {
@@ -326,6 +434,11 @@ void main() {
           'cwd': '/Users/mira/Code/vibermate',
           'canonicalExecutablePath': '/usr/local/bin/claude',
           'localUserLabel': 'mira',
+          'homeDirectory': '/Users/mira',
+          'operatingSystem': 'darwin',
+          'operatingSystemVersion': '26.0',
+          'architecture': 'arm64',
+          'timeZone': 'Asia/Singapore',
           'runtimeUserId': 'user.remote',
           'runtimeUsername': 'alice',
           'loginSessionId': 'login.remote',
@@ -358,6 +471,11 @@ void main() {
       expect(record.managedRun!.workspaceEvidence, 'registered_companion');
       expect(record.managedRun!.runtimeUserId, 'user.remote');
       expect(record.managedRun!.runtimeUsername, 'alice');
+      expect(record.managedRun!.homeDirectory, '/Users/mira');
+      expect(record.managedRun!.operatingSystem, 'darwin');
+      expect(record.managedRun!.operatingSystemVersion, '26.0');
+      expect(record.managedRun!.architecture, 'arm64');
+      expect(record.managedRun!.timeZone, 'Asia/Singapore');
       expect(record.managedRun!.deviceName, 'MacBook Pro');
       expect(record.managedRun!.clientAdapter?.version, '2.1.220');
       expect(record.managedRun!.clientAdapter?.id, 'claude-code');
@@ -373,6 +491,17 @@ void main() {
           'canonicalExecutablePath': '/usr/local/bin/claude',
           'machineId': machineId,
           'recognition': 'verified',
+          'expiresAt': '2026-08-10T10:00:00.000Z',
+        }, 'managedRun'),
+        throwsA(isA<ControlContractException>()),
+      );
+      expect(
+        () => ManagedRunSummary.fromJson({
+          'executableLabel': 'claude',
+          'cwd': '/Users/mira/Code/vibermate',
+          'canonicalExecutablePath': '/usr/local/bin/claude',
+          'homeDirectory': 'Users/mira',
+          'recognition': 'unknown',
           'expiresAt': '2026-08-10T10:00:00.000Z',
         }, 'managedRun'),
         throwsA(isA<ControlContractException>()),

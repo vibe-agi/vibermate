@@ -11,6 +11,21 @@ import 'provider_origin.dart';
 abstract interface class ControlApi {
   Future<DashboardData> loadDashboard();
 
+  /// Reads the current local Root CA and the operating-system trust state.
+  /// Remote/server implementations may reject this Desktop-only capability.
+  Future<RootCAStatus> rootCA() =>
+      Future<RootCAStatus>.error(UnsupportedError('root CA is unavailable'));
+
+  Future<RootCAMaterial> rootCAMaterial(RootCAStatus current) =>
+      Future<RootCAMaterial>.error(
+        UnsupportedError('root CA material is unavailable'),
+      );
+
+  Future<RootCAActionResult> replaceRootCA(RootCAStatus current) =>
+      Future<RootCAActionResult>.error(
+        UnsupportedError('root CA replacement is unavailable'),
+      );
+
   Future<CapturePage> captures({String? cursor, int limit = 50});
 
   Future<OfflineHoldSnapshot> enterOfflineHold(OfflineHoldSnapshot current);
@@ -368,6 +383,56 @@ final class HttpControlApi implements ControlApi {
         (item, path) => ProviderAccount.fromJson(item, path),
       ),
     );
+  }
+
+  @override
+  Future<RootCAStatus> rootCA() async => RootCAStatus.fromJson(
+    await _read(
+      '/api/v1/platform/root-ca',
+      responseTimeout: const Duration(seconds: 15),
+    ),
+    'rootCA',
+  );
+
+  @override
+  Future<RootCAMaterial> rootCAMaterial(RootCAStatus current) async {
+    _validateRootCAAction(current);
+    final material = RootCAMaterial.fromJson(
+      await _read(
+        '/api/v1/platform/root-ca/material',
+        responseTimeout: const Duration(seconds: 15),
+      ),
+      'rootCAMaterial',
+    );
+    if (material.rootRevision != current.rootRevision ||
+        material.fingerprint != current.fingerprint) {
+      throw const ControlContractException('root CA material is stale');
+    }
+    return material;
+  }
+
+  @override
+  Future<RootCAActionResult> replaceRootCA(RootCAStatus current) async {
+    _validateRootCAAction(current);
+    return RootCAActionResult.fromJson(
+      await _mutation(
+        'POST',
+        '/api/v1/platform/root-ca/actions/replace',
+        expectedRevision: current.rootRevision,
+        responseTimeout: const Duration(minutes: 5),
+      ),
+      'rootCAReplace',
+    );
+  }
+
+  static void _validateRootCAAction(RootCAStatus current) {
+    if (current.rootRevision < 1 ||
+        current.fingerprint.length != 64 ||
+        !current.rootValid) {
+      throw const ControlContractException(
+        'root CA action authority is invalid',
+      );
+    }
   }
 
   @override

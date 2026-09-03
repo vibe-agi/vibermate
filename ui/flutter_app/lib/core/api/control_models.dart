@@ -1434,6 +1434,235 @@ final class RuntimeStatus {
   bool get healthy => ready && state == 'initialized' && storage == 'healthy';
 }
 
+/// Digest-bound public certificate material for the native macOS guide.
+final class RootCAMaterial {
+  RootCAMaterial._({
+    required this.rootRevision,
+    required this.fingerprint,
+    required Uint8List certificateDer,
+  }) : _certificateDer = Uint8List.fromList(certificateDer);
+
+  factory RootCAMaterial.fromJson(Object? json, String path) {
+    final value = requireObject(json, path);
+    requireFields(
+      value,
+      path,
+      required: const {'rootRevision', 'fingerprint', 'certificateDerBase64'},
+    );
+    final revision = requireInteger(value, 'rootRevision', path, minimum: 1);
+    final fingerprint = requireString(value, 'fingerprint', path);
+    final encoded = requireString(value, 'certificateDerBase64', path);
+    Uint8List certificateDer;
+    try {
+      certificateDer = base64Decode(encoded);
+    } on FormatException {
+      throw ControlContractException('$path certificate is invalid');
+    }
+    if (!_digestPattern.hasMatch(fingerprint) ||
+        certificateDer.isEmpty ||
+        certificateDer.length > 64 * 1024 ||
+        base64Encode(certificateDer) != encoded ||
+        crypto.sha256.convert(certificateDer).toString() != fingerprint) {
+      throw ControlContractException('$path certificate is invalid');
+    }
+    return RootCAMaterial._(
+      rootRevision: revision,
+      fingerprint: fingerprint,
+      certificateDer: certificateDer,
+    );
+  }
+
+  final int rootRevision;
+  final String fingerprint;
+  final Uint8List _certificateDer;
+
+  Uint8List get certificateDer => Uint8List.fromList(_certificateDer);
+
+  String get certificateDerBase64 => base64Encode(_certificateDer);
+}
+
+/// Public, non-secret Root CA state. Certificate presence and OS trust are
+/// deliberately separate axes: an object can exist without being trusted.
+final class RootCAStatus {
+  const RootCAStatus({
+    required this.rootRevision,
+    required this.fingerprint,
+    required this.algorithm,
+    required this.notBefore,
+    required this.notAfter,
+    required this.rootValid,
+    required this.certificatePresent,
+    required this.trustDecision,
+    required this.evidenceRevision,
+    required this.observedAt,
+    required this.available,
+    required this.reason,
+  });
+
+  factory RootCAStatus.fromJson(Object? json, String path) {
+    final value = requireObject(json, path);
+    requireFields(
+      value,
+      path,
+      required: {
+        'rootRevision',
+        'fingerprint',
+        'algorithm',
+        'notBefore',
+        'notAfter',
+        'rootValid',
+        'certificatePresence',
+        'trustDecision',
+        'observedAt',
+        'available',
+      },
+      optional: const {'evidenceRevision', 'reason'},
+    );
+    final rootRevision = requireInteger(
+      value,
+      'rootRevision',
+      path,
+      minimum: 1,
+    );
+    final fingerprint = requireString(value, 'fingerprint', path);
+    final notBefore = requireTimestamp(value, 'notBefore', path);
+    final notAfter = requireTimestamp(value, 'notAfter', path);
+    final certificatePresent = requireString(
+      value,
+      'certificatePresence',
+      path,
+    );
+    final trustDecision = requireString(value, 'trustDecision', path);
+    final evidenceRevision = optionalString(value, 'evidenceRevision', path);
+    final reason = optionalString(value, 'reason', path);
+    final rootValid = requireBoolean(value, 'rootValid', path);
+    final available = requireBoolean(value, 'available', path);
+    if (!_digestPattern.hasMatch(fingerprint) ||
+        requireString(value, 'algorithm', path) != 'ecdsa-p256' ||
+        !notAfter.isAfter(notBefore) ||
+        !const {'present', 'absent', 'unknown'}.contains(certificatePresent) ||
+        !const {'trusted', 'untrusted', 'unknown'}.contains(trustDecision) ||
+        (certificatePresent == 'absent' && trustDecision == 'trusted') ||
+        (available &&
+            (!rootValid ||
+                certificatePresent == 'unknown' ||
+                trustDecision == 'unknown')) ||
+        (evidenceRevision != null && evidenceRevision.isEmpty) ||
+        (reason != null && reason.length > 128)) {
+      throw ControlContractException('$path is invalid');
+    }
+    return RootCAStatus(
+      rootRevision: rootRevision,
+      fingerprint: fingerprint,
+      algorithm: 'ecdsa-p256',
+      notBefore: notBefore,
+      notAfter: notAfter,
+      rootValid: rootValid,
+      certificatePresent: certificatePresent,
+      trustDecision: trustDecision,
+      evidenceRevision: evidenceRevision,
+      observedAt: requireTimestamp(value, 'observedAt', path),
+      available: available,
+      reason: reason,
+    );
+  }
+
+  final int rootRevision;
+  final String fingerprint;
+  final String algorithm;
+  final DateTime notBefore;
+  final DateTime notAfter;
+  final bool rootValid;
+  final String certificatePresent;
+  final String trustDecision;
+  final String? evidenceRevision;
+  final DateTime observedAt;
+  final bool available;
+  final String? reason;
+
+  bool get installed =>
+      available &&
+      certificatePresent == 'present' &&
+      trustDecision == 'trusted';
+
+  bool get needsTrust =>
+      available &&
+      certificatePresent == 'present' &&
+      trustDecision != 'trusted';
+
+  RootCAStatus copyWith({
+    String? certificatePresent,
+    String? trustDecision,
+    bool? available,
+    String? reason,
+    bool clearReason = false,
+  }) => RootCAStatus(
+    rootRevision: rootRevision,
+    fingerprint: fingerprint,
+    algorithm: algorithm,
+    notBefore: notBefore,
+    notAfter: notAfter,
+    rootValid: rootValid,
+    certificatePresent: certificatePresent ?? this.certificatePresent,
+    trustDecision: trustDecision ?? this.trustDecision,
+    evidenceRevision: evidenceRevision,
+    observedAt: observedAt,
+    available: available ?? this.available,
+    reason: clearReason ? null : reason ?? this.reason,
+  );
+}
+
+final class RootCAActionResult {
+  const RootCAActionResult({
+    required this.status,
+    required this.resultStatus,
+    required this.reason,
+    required this.completed,
+    required this.restartRequired,
+  });
+
+  factory RootCAActionResult.fromJson(Object? json, String path) {
+    final value = requireObject(json, path);
+    requireFields(
+      value,
+      path,
+      required: const {
+        'status',
+        'resultStatus',
+        'reason',
+        'completed',
+        'restartRequired',
+      },
+    );
+    final resultStatus = requireString(value, 'resultStatus', path);
+    final reason = requireString(value, 'reason', path);
+    final completed = requireBoolean(value, 'completed', path);
+    final restartRequired = requireBoolean(value, 'restartRequired', path);
+    final status = RootCAStatus.fromJson(value['status'], '$path.status');
+    if (resultStatus != 'applied' ||
+        reason != 'applied' ||
+        completed ||
+        !restartRequired ||
+        status.certificatePresent != 'absent' ||
+        status.trustDecision != 'untrusted') {
+      throw ControlContractException('$path restart state is invalid');
+    }
+    return RootCAActionResult(
+      status: status,
+      resultStatus: resultStatus,
+      reason: reason,
+      completed: completed,
+      restartRequired: restartRequired,
+    );
+  }
+
+  final RootCAStatus status;
+  final String resultStatus;
+  final String reason;
+  final bool completed;
+  final bool restartRequired;
+}
+
 final class UpstreamEndpoint {
   const UpstreamEndpoint({
     required this.id,
@@ -2888,18 +3117,115 @@ final class MessageTransformTestResponse {
   };
 }
 
+final class MessageTransformTestRuntime {
+  const MessageTransformTestRuntime({
+    required this.userName,
+    required this.homeDirectory,
+    required this.operatingSystem,
+    required this.operatingSystemVersion,
+    required this.architecture,
+    required this.timeZone,
+    required this.workspaceRoot,
+    required this.workspaceLabel,
+    required this.turnStartedAt,
+  });
+
+  final String userName;
+  final String homeDirectory;
+  final String operatingSystem;
+  final String operatingSystemVersion;
+  final String architecture;
+  final String timeZone;
+  final String workspaceRoot;
+  final String workspaceLabel;
+  final DateTime turnStartedAt;
+
+  factory MessageTransformTestRuntime.example() => MessageTransformTestRuntime(
+    userName: 'example-user',
+    homeDirectory: '/Users/example-user',
+    operatingSystem: 'darwin',
+    operatingSystemVersion: '15.0',
+    architecture: 'arm64',
+    timeZone: 'Etc/UTC',
+    workspaceRoot: '/Users/example-user/Code/example',
+    workspaceLabel: 'example',
+    turnStartedAt: DateTime.utc(2026, 1, 2, 3, 4, 5),
+  );
+
+  JsonObject toJson() => {
+    'userName': userName,
+    'homeDirectory': homeDirectory,
+    'operatingSystem': operatingSystem,
+    'operatingSystemVersion': operatingSystemVersion,
+    'architecture': architecture,
+    'timeZone': timeZone,
+    'workspaceRoot': workspaceRoot,
+    'workspaceLabel': workspaceLabel,
+    'turnStartedAt': turnStartedAt.toUtc().toIso8601String(),
+  };
+}
+
 final class MessageTransformTestSample {
   const MessageTransformTestSample({
     required this.request,
     required this.response,
+    this.runtime,
   });
 
   final MessageTransformTestRequest request;
   final MessageTransformTestResponse response;
+  final MessageTransformTestRuntime? runtime;
+
+  factory MessageTransformTestSample.example(String wireProtocol) {
+    final path = switch (wireProtocol) {
+      'anthropic_messages' => '/v1/messages',
+      'openai_responses' => '/v1/responses',
+      'openai_chat' => '/v1/chat/completions',
+      _ => throw ArgumentError.value(wireProtocol, 'wireProtocol'),
+    };
+    final requestBody = switch (wireProtocol) {
+      'anthropic_messages' =>
+        '{"model":"claude-sample","max_tokens":64,"messages":[{"role":"user","content":"Hello from ViberMate"}]}',
+      'openai_responses' =>
+        '{"model":"gpt-sample","input":"Hello from ViberMate","stream":false}',
+      _ =>
+        '{"model":"gpt-sample","messages":[{"role":"user","content":"Hello from ViberMate"}],"stream":false}',
+    };
+    final responseBody = switch (wireProtocol) {
+      'anthropic_messages' =>
+        '{"id":"msg_sample","type":"message","role":"assistant","model":"claude-sample","content":[{"type":"text","text":"Sample response"}],"stop_reason":"end_turn","stop_sequence":null,"usage":{"input_tokens":8,"output_tokens":3}}',
+      'openai_responses' =>
+        '{"id":"resp_sample","object":"response","status":"completed","model":"gpt-sample","output":[{"id":"msg_sample","type":"message","role":"assistant","status":"completed","content":[{"type":"output_text","text":"Sample response","annotations":[]}]}],"usage":{"input_tokens":8,"output_tokens":3,"total_tokens":11}}',
+      _ =>
+        '{"id":"chatcmpl_sample","object":"chat.completion","model":"gpt-sample","choices":[{"index":0,"message":{"role":"assistant","content":"Sample response"},"finish_reason":"stop"}],"usage":{"prompt_tokens":8,"completion_tokens":3,"total_tokens":11}}',
+    };
+    return MessageTransformTestSample(
+      request: MessageTransformTestRequest(
+        method: 'POST',
+        path: path,
+        headers: {
+          'content-type': ['application/json'],
+          if (wireProtocol == 'anthropic_messages')
+            'anthropic-version': ['2023-06-01'],
+        },
+        body: requestBody,
+      ),
+      response: MessageTransformTestResponse(
+        statusCode: 200,
+        streaming: false,
+        headers: const {
+          'content-type': ['application/json'],
+        },
+        body: responseBody,
+      ),
+      runtime: MessageTransformTestRuntime.example(),
+    );
+  }
 
   JsonObject toJson() => {
     'request': request.toJson(),
     'response': response.toJson(),
+    if (runtime != null) 'runtime': runtime!.toJson(),
   };
 }
 
@@ -2913,6 +3239,7 @@ final class CapturedMessageTransformSample {
   factory CapturedMessageTransformSample.fromRawEvidence({
     required RevealedRawEvidence request,
     required RevealedRawEvidence response,
+    MessageTransformTestRuntime? runtime,
   }) {
     final requestEnvelope = request.envelope;
     final responseEnvelope = response.envelope;
@@ -2972,6 +3299,17 @@ final class CapturedMessageTransformSample {
         'headers': _transformSampleHeaders(response.headers),
         'body': responseBody,
       }, r'$.sample.response'),
+      runtime: MessageTransformTestRuntime(
+        userName: runtime?.userName ?? '',
+        homeDirectory: runtime?.homeDirectory ?? '',
+        operatingSystem: runtime?.operatingSystem ?? '',
+        operatingSystemVersion: runtime?.operatingSystemVersion ?? '',
+        architecture: runtime?.architecture ?? '',
+        timeZone: runtime?.timeZone ?? '',
+        workspaceRoot: runtime?.workspaceRoot ?? '',
+        workspaceLabel: runtime?.workspaceLabel ?? '',
+        turnStartedAt: requestEnvelope.observedAt,
+      ),
     );
     return CapturedMessageTransformSample(
       exchangeId: requestEnvelope.exchangeId,
@@ -4655,6 +4993,11 @@ final class ManagedRunSummary {
     required this.recognition,
     required this.expiresAt,
     this.localUserLabel,
+    this.homeDirectory,
+    this.operatingSystem,
+    this.operatingSystemVersion,
+    this.architecture,
+    this.timeZone,
     this.runtimeUserId,
     this.runtimeUsername,
     this.loginSessionId,
@@ -4684,6 +5027,11 @@ final class ManagedRunSummary {
       },
       optional: const {
         'localUserLabel',
+        'homeDirectory',
+        'operatingSystem',
+        'operatingSystemVersion',
+        'architecture',
+        'timeZone',
         'runtimeUserId',
         'runtimeUsername',
         'loginSessionId',
@@ -4708,6 +5056,15 @@ final class ManagedRunSummary {
     );
     final recognition = requireString(value, 'recognition', path);
     final localUserLabel = optionalString(value, 'localUserLabel', path);
+    final homeDirectory = optionalString(value, 'homeDirectory', path);
+    final operatingSystem = optionalString(value, 'operatingSystem', path);
+    final operatingSystemVersion = optionalString(
+      value,
+      'operatingSystemVersion',
+      path,
+    );
+    final architecture = optionalString(value, 'architecture', path);
+    final timeZone = optionalString(value, 'timeZone', path);
     final runtimeUserId = optionalString(value, 'runtimeUserId', path);
     final runtimeUsername = optionalString(value, 'runtimeUsername', path);
     final loginSessionId = optionalString(value, 'loginSessionId', path);
@@ -4764,6 +5121,15 @@ final class ManagedRunSummary {
         ((recognition == 'verified') != (clientAdapter != null)) ||
         (localUserLabel != null &&
             !_validDisplayLabel(localUserLabel, maximumBytes: 128)) ||
+        (homeDirectory != null && !_validCleanAbsolutePath(homeDirectory)) ||
+        (operatingSystem != null &&
+            !_validDisplayLabel(operatingSystem, maximumBytes: 64)) ||
+        (operatingSystemVersion != null &&
+            !_validDisplayLabel(operatingSystemVersion)) ||
+        (architecture != null &&
+            !_validDisplayLabel(architecture, maximumBytes: 64)) ||
+        (timeZone != null &&
+            !_validDisplayLabel(timeZone, maximumBytes: 128)) ||
         (runtimeAttribution.any((item) => item != null) !=
             hasRuntimeAttribution) ||
         (deviceName != null &&
@@ -4786,6 +5152,11 @@ final class ManagedRunSummary {
       recognition: recognition,
       expiresAt: requireTimestamp(value, 'expiresAt', path),
       localUserLabel: localUserLabel,
+      homeDirectory: homeDirectory,
+      operatingSystem: operatingSystem,
+      operatingSystemVersion: operatingSystemVersion,
+      architecture: architecture,
+      timeZone: timeZone,
       runtimeUserId: runtimeUserId,
       runtimeUsername: runtimeUsername,
       loginSessionId: loginSessionId,
@@ -4808,6 +5179,11 @@ final class ManagedRunSummary {
   final String recognition;
   final DateTime expiresAt;
   final String? localUserLabel;
+  final String? homeDirectory;
+  final String? operatingSystem;
+  final String? operatingSystemVersion;
+  final String? architecture;
+  final String? timeZone;
   final String? runtimeUserId;
   final String? runtimeUsername;
   final String? loginSessionId;

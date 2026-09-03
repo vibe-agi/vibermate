@@ -61,7 +61,7 @@ func DefaultOptions(
 		AppSessionReplayTTL:       defaultAppSessionReplayTTL,
 		CaptureRunLifetime:        defaultCaptureRunLifetime,
 		ShutdownTimeout:           defaultShutdownTimeout,
-		RemoteServerListenAddress: "0.0.0.0:9666",
+		RemoteServerListenAddress: "127.0.0.1:9666",
 		RemoteServerTransport:     serverhost.TransportOptions{Mode: serverhost.TransportHTTP},
 	}
 }
@@ -104,6 +104,15 @@ func (options Options) validate() error {
 	if options.RemoteServerEnabled {
 		if err := validateRemoteServerAddress(options.RemoteServerListenAddress); err != nil {
 			return err
+		}
+		if options.RemoteServerTransport.Mode == serverhost.TransportHTTP {
+			host, _, _ := net.SplitHostPort(options.RemoteServerListenAddress)
+			address := net.ParseIP(host)
+			if address == nil || !address.IsLoopback() {
+				return errors.New(
+					"Desktop plaintext remote Server must use literal loopback",
+				)
+			}
 		}
 		if !options.RemoteServerTransport.Valid() ||
 			(options.RemoteServerManagementUIRoot != "" &&

@@ -127,6 +127,60 @@ func TestManagedLinkInstallRefreshAndRemove(t *testing.T) {
 	assertOnlyNames(t, filepath.Dir(fixture.spec.ReceiptPath))
 }
 
+func TestInspectKeepsManagedLinkCurrentWhenMacOSRenumbersDevice(t *testing.T) {
+	requireManagedLinkTestPlatform(t)
+	fixture := newLinkFixture(t)
+	manager := NewLinkManager(func() time.Time { return fixture.installedAt })
+	installed, err := manager.Install(fixture.spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recordReceiptAfterDeviceRenumbering(t, fixture.spec.ReceiptPath, installed)
+
+	observation, err := manager.Inspect(fixture.spec)
+	if err != nil || observation.State != StateCurrent {
+		t.Fatalf("Inspect = %+v, %v", observation, err)
+	}
+
+	if err := writeExecutable(
+		fixture.spec.SourcePath,
+		"#!/bin/sh\nexit 1\n",
+	); err != nil {
+		t.Fatal(err)
+	}
+	fixture.spec.Version = "0.2.0"
+	observation, err = manager.Inspect(fixture.spec)
+	if err != nil || observation.State != StateSourceUpdated {
+		t.Fatalf("Inspect after app update = %+v, %v", observation, err)
+	}
+	manager.now = func() time.Time { return fixture.installedAt.Add(time.Hour) }
+	if _, err := manager.AcknowledgeUpdate(
+		fixture.spec,
+		installed.SourceSHA256,
+	); err != nil {
+		t.Fatal(err)
+	}
+	assertCurrent(t, manager, fixture.spec)
+}
+
+func TestRemoveKeepsOwnershipWhenMacOSRenumbersDevice(t *testing.T) {
+	requireManagedLinkTestPlatform(t)
+	fixture := newLinkFixture(t)
+	manager := NewLinkManager(func() time.Time { return fixture.installedAt })
+	installed, err := manager.Install(fixture.spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recordReceiptAfterDeviceRenumbering(t, fixture.spec.ReceiptPath, installed)
+
+	result, err := manager.Remove(fixture.spec)
+	if err != nil || result.State != RemoveRemoved {
+		t.Fatalf("Remove = %+v, %v", result, err)
+	}
+	assertMissing(t, fixture.spec.TargetPath)
+	assertMissing(t, fixture.spec.ReceiptPath)
+}
+
 func TestUserCommandOwnsOneUserLocalTerminalEntry(t *testing.T) {
 	requireManagedLinkTestPlatform(t)
 	realRoot, err := filepath.EvalSymlinks(t.TempDir())
@@ -1211,6 +1265,30 @@ func writeExecutable(path, content string) error {
 		return err
 	}
 	return os.Chmod(path, 0o700)
+}
+
+func recordReceiptAfterDeviceRenumbering(
+	t *testing.T,
+	path string,
+	receipt Receipt,
+) {
+	t.Helper()
+	identityParts := strings.Split(receipt.TargetIdentity, ":")
+	if len(identityParts) != 2 {
+		t.Fatalf("installed target identity = %q", receipt.TargetIdentity)
+	}
+	renumberedDevice := "ffffffffffffffff"
+	if identityParts[0] == renumberedDevice {
+		renumberedDevice = "eeeeeeeeeeeeeeee"
+	}
+	receipt.TargetIdentity = renumberedDevice + ":" + identityParts[1]
+	record, err := marshalReceipt(receipt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, record, 0o600); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func assertCurrent(t *testing.T, manager *LinkManager, spec LinkSpec) {

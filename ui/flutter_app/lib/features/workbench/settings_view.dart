@@ -350,6 +350,10 @@ final class _GeneralSettingsPane extends StatelessWidget {
         const SizedBox(height: 9),
         _ManagedRunGuide(copy: copy, status: controller.terminalCommand),
       ],
+      if (controller.rootTrustManagement) ...[
+        const SizedBox(height: 14),
+        _RootCASettingsPanel(controller: controller, copy: copy),
+      ],
       const SizedBox(height: 18),
       _StorageDisclosure(copy: copy, controller: controller),
       const SizedBox(height: 18),
@@ -373,6 +377,480 @@ final class _GeneralSettingsPane extends StatelessWidget {
           ),
         ],
       ),
+    ],
+  );
+}
+
+final class _RootCASettingsPanel extends StatefulWidget {
+  const _RootCASettingsPanel({required this.controller, required this.copy});
+
+  final WorkbenchController controller;
+  final AppCopy copy;
+
+  @override
+  State<_RootCASettingsPanel> createState() => _RootCASettingsPanelState();
+}
+
+final class _RootCASettingsPanelState extends State<_RootCASettingsPanel> {
+  String? _copied;
+
+  WorkbenchController get controller => widget.controller;
+  AppCopy get copy => widget.copy;
+
+  @override
+  Widget build(BuildContext context) {
+    final status = controller.rootCAStatus;
+    final localDesktop = controller.rootTrustManagement;
+    return Container(
+      key: const Key('root-ca-settings-panel'),
+      padding: const EdgeInsets.fromLTRB(12, 11, 12, 12),
+      decoration: BoxDecoration(
+        color: context.viberColors.panelRaised,
+        border: Border.all(color: context.viberColors.dividerSoft),
+        borderRadius: ViberMetrics.surfaceRadius,
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Icon(
+                Icons.verified_user_outlined,
+                size: 18,
+                color: context.viberColors.route,
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      copy('settings.root_ca.title'),
+                      style: Theme.of(context).textTheme.titleSmall,
+                    ),
+                    const SizedBox(height: 3),
+                    Text(
+                      copy('settings.root_ca.detail'),
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          if (!localDesktop)
+            InlineNotice(
+              message: copy('settings.root_ca.unavailable'),
+              error: false,
+            )
+          else if (controller.rootCALoading && status == null)
+            CompactLoadingMessage(label: copy('common.loading'))
+          else if (status == null)
+            _RootCAUnavailable(
+              message: copy('settings.root_ca.load_failed'),
+              recovery: copy('settings.root_ca.load_recovery'),
+              retryLabel: copy('settings.root_ca.retry'),
+              onRetry: () => unawaited(controller.refreshRootCA()),
+            )
+          else
+            _RootCAStatusBody(
+              status: status,
+              copy: copy,
+              copied: _copied,
+              mutating: controller.rootCAMutating || controller.rootCALoading,
+              error: controller.rootCAError,
+              onCopy: _copyFingerprint,
+              onInstall: () => unawaited(controller.installAndTrustRootCA()),
+              onRemove: () => unawaited(controller.openRootCARemovalGuide()),
+              onReplace: _confirmReplace,
+              onRestart: () => unawaited(controller.restartForRootReset()),
+              restartRequired: controller.rootCARestartRequired,
+              guideIntent: controller.rootCAGuideIntent,
+              canReplace: controller.runningCaptures.isEmpty,
+              onRetry: () => unawaited(controller.refreshRootCA()),
+            ),
+          if (controller.operationNotice == 'root_ca_updated') ...[
+            const SizedBox(height: 8),
+            Text(
+              copy('settings.root_ca.updated'),
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                color: context.viberColors.verified,
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Future<void> _copyFingerprint(String value) async {
+    try {
+      await Clipboard.setData(ClipboardData(text: value));
+      if (!mounted) return;
+      setState(() => _copied = value);
+    } on Object {
+      if (!mounted) return;
+      setState(() => _copied = null);
+    }
+  }
+
+  Future<void> _confirmReplace() async {
+    if (controller.rootCAStatus?.certificatePresent != 'absent') {
+      await controller.replaceRootCA();
+      return;
+    }
+    await _confirmAction(
+      title: copy('settings.root_ca.replace.title'),
+      detail: copy('settings.root_ca.replace.detail'),
+      actionLabel: copy('settings.root_ca.confirm'),
+      action: controller.replaceRootCA,
+    );
+  }
+
+  Future<void> _confirmAction({
+    required String title,
+    required String detail,
+    required String actionLabel,
+    required Future<bool> Function() action,
+  }) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        key: const Key('root-ca-confirmation'),
+        title: Text(title),
+        content: Text(detail),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: Text(copy('common.cancel')),
+          ),
+          FilledButton(
+            key: const Key('root-ca-confirm-action'),
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: Text(actionLabel),
+          ),
+        ],
+      ),
+    );
+    if (confirmed == true && mounted) await action();
+  }
+}
+
+final class _RootCAUnavailable extends StatelessWidget {
+  const _RootCAUnavailable({
+    required this.message,
+    required this.recovery,
+    required this.retryLabel,
+    required this.onRetry,
+  });
+
+  final String message;
+  final String recovery;
+  final String retryLabel;
+  final VoidCallback onRetry;
+
+  @override
+  Widget build(BuildContext context) => Column(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      InlineNotice(message: message, error: true),
+      const SizedBox(height: 6),
+      Text(recovery, style: Theme.of(context).textTheme.bodySmall),
+      const SizedBox(height: 8),
+      OutlinedButton.icon(
+        key: const Key('root-ca-retry'),
+        onPressed: onRetry,
+        icon: const Icon(Icons.refresh, size: 15),
+        label: Text(retryLabel),
+      ),
+    ],
+  );
+}
+
+final class _RootCAStatusBody extends StatelessWidget {
+  const _RootCAStatusBody({
+    required this.status,
+    required this.copy,
+    required this.copied,
+    required this.mutating,
+    required this.error,
+    required this.onCopy,
+    required this.onInstall,
+    required this.onRemove,
+    required this.onReplace,
+    required this.onRestart,
+    required this.restartRequired,
+    required this.guideIntent,
+    required this.canReplace,
+    required this.onRetry,
+  });
+
+  final RootCAStatus status;
+  final AppCopy copy;
+  final String? copied;
+  final bool mutating;
+  final String? error;
+  final ValueChanged<String> onCopy;
+  final VoidCallback onInstall;
+  final VoidCallback onRemove;
+  final VoidCallback onReplace;
+  final VoidCallback onRestart;
+  final bool restartRequired;
+  final RootCAGuideIntent? guideIntent;
+  final bool canReplace;
+  final VoidCallback onRetry;
+
+  @override
+  Widget build(BuildContext context) {
+    final statusColor = status.installed
+        ? context.viberColors.verified
+        : status.available
+        ? context.viberColors.warning
+        : context.viberColors.danger;
+    final statusLabel = status.installed
+        ? copy('settings.root_ca.status.trusted')
+        : !status.available
+        ? copy('settings.root_ca.status.unknown')
+        : status.certificatePresent == 'absent'
+        ? copy('settings.root_ca.status.not_installed')
+        : copy('settings.root_ca.status.needs_trust');
+    final replaceLabel = copy(
+      status.certificatePresent == 'absent'
+          ? 'settings.root_ca.replace_and_restart'
+          : 'settings.root_ca.replace',
+    );
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Icon(Icons.circle, size: 10, color: statusColor),
+            const SizedBox(width: 7),
+            Expanded(
+              child: Text(
+                statusLabel,
+                style: Theme.of(
+                  context,
+                ).textTheme.labelLarge?.copyWith(color: statusColor),
+              ),
+            ),
+            IconButton(
+              key: const Key('root-ca-retry'),
+              onPressed: mutating ? null : onRetry,
+              tooltip: copy('settings.root_ca.retry'),
+              icon: const Icon(Icons.refresh, size: 16),
+            ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        _RootCAFact(
+          label: copy('settings.root_ca.fingerprint'),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                child: Text(
+                  status.fingerprint,
+                  style: monoStyle.copyWith(
+                    fontSize: ViberType.micro,
+                    color: context.viberColors.textMuted,
+                  ),
+                ),
+              ),
+              IconButton(
+                key: const Key('root-ca-copy-fingerprint'),
+                onPressed: mutating ? null : () => onCopy(status.fingerprint),
+                tooltip: copy('settings.root_ca.copy_fingerprint'),
+                icon: const Icon(Icons.copy, size: 15),
+                constraints: const BoxConstraints.tightFor(
+                  width: ViberMetrics.controlHeight,
+                  height: ViberMetrics.controlHeight,
+                ),
+                padding: EdgeInsets.zero,
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 6),
+        Text(
+          copy.format('settings.root_ca.validity', {
+            'from': _rootCADate(status.notBefore),
+            'to': _rootCADate(status.notAfter),
+          }),
+          style: Theme.of(
+            context,
+          ).textTheme.bodySmall?.copyWith(color: context.viberColors.textMuted),
+        ),
+        const SizedBox(height: 3),
+        Text(
+          copy('settings.root_ca.private_key'),
+          style: Theme.of(
+            context,
+          ).textTheme.bodySmall?.copyWith(color: context.viberColors.textMuted),
+        ),
+        if (status.available) ...[
+          const SizedBox(height: 9),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              if (!restartRequired && status.installed)
+                OutlinedButton.icon(
+                  key: const Key('root-ca-remove'),
+                  onPressed: mutating ? null : onRemove,
+                  icon: const Icon(Icons.remove_circle_outline, size: 15),
+                  label: Text(copy('settings.root_ca.remove')),
+                )
+              else if (!restartRequired)
+                FilledButton.icon(
+                  key: const Key('root-ca-install'),
+                  onPressed: mutating ? null : onInstall,
+                  icon: mutating
+                      ? const SizedBox.square(
+                          dimension: 15,
+                          child: CircularProgressIndicator(strokeWidth: 1.5),
+                        )
+                      : const Icon(Icons.verified_user_outlined, size: 15),
+                  label: Text(
+                    copy(
+                      status.certificatePresent == 'present'
+                          ? 'settings.root_ca.trust'
+                          : 'settings.root_ca.install',
+                    ),
+                  ),
+                ),
+              if (!restartRequired)
+                Tooltip(
+                  message: canReplace
+                      ? replaceLabel
+                      : copy('settings.root_ca.active_captures'),
+                  child: OutlinedButton.icon(
+                    key: const Key('root-ca-replace'),
+                    onPressed: mutating || !canReplace ? null : onReplace,
+                    icon: const Icon(Icons.autorenew, size: 15),
+                    label: Text(replaceLabel),
+                  ),
+                ),
+            ],
+          ),
+          if (!restartRequired && !canReplace) ...[
+            const SizedBox(height: 6),
+            Text(
+              copy('settings.root_ca.active_captures'),
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                color: context.viberColors.textMuted,
+              ),
+            ),
+          ],
+          if (restartRequired) ...[
+            const SizedBox(height: 8),
+            InlineNotice(
+              message: copy('settings.root_ca.restart_required'),
+              error: false,
+            ),
+            const SizedBox(height: 8),
+            FilledButton.icon(
+              key: const Key('root-ca-restart'),
+              onPressed: mutating ? null : onRestart,
+              icon: const Icon(Icons.restart_alt, size: 15),
+              label: Text(copy('settings.root_ca.restart')),
+            ),
+          ],
+        ],
+        if (!restartRequired && guideIntent != null) ...[
+          const SizedBox(height: 8),
+          InlineNotice(
+            message: _rootCAGuideMessage(copy, guideIntent!),
+            error: false,
+          ),
+          const SizedBox(height: 8),
+          OutlinedButton.icon(
+            key: const Key('root-ca-guide-check'),
+            onPressed: mutating ? null : onRetry,
+            icon: const Icon(Icons.refresh, size: 15),
+            label: Text(copy('settings.root_ca.guide.check')),
+          ),
+        ],
+        if (copied == status.fingerprint) ...[
+          const SizedBox(height: 6),
+          Text(
+            copy('settings.root_ca.copied'),
+            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+              color: context.viberColors.verified,
+            ),
+          ),
+        ],
+        if (!status.available) ...[
+          const SizedBox(height: 6),
+          Text(
+            copy('settings.root_ca.recovery'),
+            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+              color: context.viberColors.textMuted,
+            ),
+          ),
+        ],
+        if (error != null) ...[
+          const SizedBox(height: 8),
+          InlineNotice(message: _rootCAErrorMessage(copy, error!), error: true),
+        ],
+      ],
+    );
+  }
+
+  String _rootCADate(DateTime value) {
+    final local = value.toLocal();
+    return '${local.year.toString().padLeft(4, '0')}-'
+        '${local.month.toString().padLeft(2, '0')}-'
+        '${local.day.toString().padLeft(2, '0')}';
+  }
+}
+
+String _rootCAErrorMessage(AppCopy copy, String error) {
+  if (error.contains('root_trust_install_not_confirmed')) {
+    return copy('settings.root_ca.install.not_confirmed');
+  }
+  if (error.contains('root_trust_install_userCancelled')) {
+    return copy('settings.root_ca.install.cancelled');
+  }
+  if (error.contains('root_trust_install_permissionDenied')) {
+    return copy('settings.root_ca.install.denied');
+  }
+  if (error.contains('root_trust_install_')) {
+    return copy('settings.root_ca.install.failed');
+  }
+  if (error.contains('root_reset_active_captures')) {
+    return copy('settings.root_ca.active_captures');
+  }
+  if (error.contains('root_reset_requires_removal')) {
+    return copy('settings.root_ca.guide.replace');
+  }
+  if (error.contains('root_trust_conflict')) {
+    return copy('settings.root_ca.conflict');
+  }
+  return copy('settings.root_ca.recovery');
+}
+
+String _rootCAGuideMessage(AppCopy copy, RootCAGuideIntent intent) =>
+    switch (intent) {
+      RootCAGuideIntent.remove => copy('settings.root_ca.guide.remove'),
+      RootCAGuideIntent.replace => copy('settings.root_ca.guide.replace'),
+    };
+
+final class _RootCAFact extends StatelessWidget {
+  const _RootCAFact({required this.label, required this.child});
+
+  final String label;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) => Column(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      Text(label, style: Theme.of(context).textTheme.labelMedium),
+      const SizedBox(height: 3),
+      child,
     ],
   );
 }

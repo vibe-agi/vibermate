@@ -767,11 +767,35 @@ func (r *Runtime) CaptureRuns() capturerun.Controller {
 	return r.captureRuns
 }
 
+// CaptureRunActivity exposes only an installation-wide active count for
+// lifecycle operations that affect all managed Captures.
+func (r *Runtime) CaptureRunActivity() capturerun.GlobalActivityReader {
+	return r.captureRuns
+}
+
 // ManualCaptures returns the runtime-owned durable manual capture authority.
 // It has no HTTP exposure until a Host composes an authenticated control
 // adapter through the shared capture-grant issuer.
 func (r *Runtime) ManualCaptures() manualcapture.Controller {
 	return r.manualCaptures
+}
+
+// ManualCaptureActivity exposes only an installation-wide active count for
+// lifecycle operations that affect all local and remote Capture owners.
+func (r *Runtime) ManualCaptureActivity() manualcapture.GlobalActivityReader {
+	return r.manualCaptures
+}
+
+// BeginCaptureMaintenance excludes every Capture creation until release.
+// Existing Captures remain visible so the caller can check them while holding
+// the same admission boundary.
+func (r *Runtime) BeginCaptureMaintenance(
+	ctx context.Context,
+) (func(), error) {
+	if r == nil || r.archiveBarrier == nil || ctx == nil {
+		return nil, evidencearchive.ErrBarrierUnavailable
+	}
+	return r.archiveBarrier.BeginClear(ctx)
 }
 
 // WorkspaceIdentity resolves local working directories into opaque,

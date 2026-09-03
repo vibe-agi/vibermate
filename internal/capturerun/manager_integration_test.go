@@ -62,6 +62,38 @@ func TestCaptureRunCreateHoldsTheArchiveBarrierUntilPersistenceCompletes(
 	}
 }
 
+func TestCaptureRunActiveCountReconcilesWithoutExposingTheCatalog(t *testing.T) {
+	t.Parallel()
+	store := openStore(t, filepath.Join(t.TempDir(), "runtime.db"))
+	defer shutdownStore(t, store)
+	clock := newClock(time.Date(2026, 9, 2, 4, 5, 6, 0, time.UTC))
+	manager := newManager(t, store, clock)
+	grant, err := manager.Create(context.Background(), capturerun.CreateCommand{
+		CWD:                     filepath.Join(t.TempDir(), "workspace"),
+		CanonicalExecutablePath: filepath.Join(t.TempDir(), "bin", "codex"),
+		ExecutableLabel:         "codex",
+		Lifetime:                time.Minute,
+		CatalogRevision:         1,
+		Workspace:               testWorkspaceScope(t),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count, err := manager.ActiveCount(context.Background()); err != nil || count != 1 {
+		t.Fatalf("active count=%d error=%v", count, err)
+	}
+	if err := manager.Finish(
+		context.Background(),
+		grant.Run.ID,
+		grant.ControlCapability,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if count, err := manager.ActiveCount(context.Background()); err != nil || count != 0 {
+		t.Fatalf("finished count=%d error=%v", count, err)
+	}
+}
+
 type recordingCaptureCreationBarrier struct {
 	active   int
 	calls    int
@@ -155,6 +187,10 @@ func TestCaptureRunPersistsVerifiedAdapterEvidenceWithProxyCapability(
 		t.Fatal(err)
 	}
 	assertCodexEvidence(t, recovered)
+	view, err := second.GetRun(context.Background(), grant.Run.ID)
+	if err != nil || view.Runtime != recovered.Runtime {
+		t.Fatalf("CaptureRun runtime view = %+v, %v", view.Runtime, err)
+	}
 }
 
 func TestCaptureRunFreezesRuntimeUsernameAcrossStoreReopen(t *testing.T) {

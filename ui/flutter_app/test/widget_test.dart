@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:vibermate_app/app/vibermate_app.dart';
 import 'package:vibermate_app/core/bootstrap/platform_runtime.dart';
@@ -19,6 +20,7 @@ void main() {
         ),
       );
     },
+    skip: kIsWeb,
   );
 
   testWidgets('Preview workbench starts with real capture hierarchy', (
@@ -88,4 +90,34 @@ void main() {
       }
     },
   );
+
+  testWidgets('Root reset startup failure has bilingual recovery guidance', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(390, 760));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    for (final scenario in const [
+      (chinese: false, text: 'Root replacement could not recover safely.'),
+      (chinese: true, text: '根证书更换无法安全恢复。'),
+    ]) {
+      await tester.pumpWidget(
+        ViberMateApp(
+          previewMode: false,
+          preferChinese: scenario.chinese,
+          preferencesStore: MemoryWorkbenchPreferencesStore(),
+          runtimeConnector: ({String? accessKey}) async {
+            throw const RuntimeConnectionException('root_reset_failed');
+          },
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.textContaining(scenario.text), findsOneWidget);
+      expect(find.textContaining('root_reset_failed'), findsNothing);
+      expect(find.byIcon(Icons.refresh), findsOneWidget);
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox.shrink());
+      await tester.pump();
+    }
+  });
 }

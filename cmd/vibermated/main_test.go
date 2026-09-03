@@ -158,6 +158,44 @@ func TestParseArgumentsAcceptsFlutterDesktopOrigin(t *testing.T) {
 	}
 }
 
+func TestParseArgumentsDefaultsDesktopRemoteServerToLoopback(t *testing.T) {
+	t.Parallel()
+
+	config, resources, err := parseArguments([]string{
+		"--app-cache-dir=/tmp/cache",
+		"--data-dir=/tmp/data",
+		"--webview-origin=vibermate://desktop",
+		"--bootstrap-fd=1",
+		"--parent-lifetime-fd=0",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resources.bootstrap.Close()
+	defer resources.parentLifetime.Close()
+	if config.remoteServerListenAddress != "127.0.0.1:9666" {
+		t.Fatalf(
+			"default remote Server listen address = %q, want loopback",
+			config.remoteServerListenAddress,
+		)
+	}
+}
+
+func TestParseArgumentsRejectsPlaintextDesktopRemoteServerOutsideLoopback(t *testing.T) {
+	t.Parallel()
+
+	if _, _, err := parseArguments([]string{
+		"--app-cache-dir=/tmp/cache",
+		"--data-dir=/tmp/data",
+		"--webview-origin=vibermate://desktop",
+		"--bootstrap-fd=1",
+		"--parent-lifetime-fd=0",
+		"--remote-server-listen=0.0.0.0:9666",
+	}); err == nil {
+		t.Fatal("Desktop remote Server accepted plaintext non-loopback exposure")
+	}
+}
+
 func TestParseArgumentsRejectsInvalidRemoteServerListenAddress(t *testing.T) {
 	t.Parallel()
 
@@ -197,6 +235,29 @@ func TestParseServerArgumentsAcceptsHeadlessHTTPConfiguration(t *testing.T) {
 		config.webRoot != filepath.Join(data, "web") ||
 		config.transport.Mode != serverhost.TransportHTTP {
 		t.Fatalf("config = %+v", config)
+	}
+}
+
+func TestParseServerArgumentsDefaultsHeadlessHTTPToLoopback(t *testing.T) {
+	t.Parallel()
+
+	config, err := parseServerArguments(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.listenAddress != "127.0.0.1:9666" ||
+		config.transport.Mode != serverhost.TransportHTTP {
+		t.Fatalf("default Server config = %+v, want loopback HTTP", config)
+	}
+}
+
+func TestParseServerArgumentsRequiresExplicitHTTPForNonLoopback(t *testing.T) {
+	t.Parallel()
+
+	if _, err := parseServerArguments([]string{
+		"--listen", "0.0.0.0:9666",
+	}); err == nil {
+		t.Fatal("implicit plaintext non-loopback Server exposure was accepted")
 	}
 }
 

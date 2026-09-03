@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:vibermate_app/core/design/workbench_window_appearance.dart';
@@ -166,7 +167,7 @@ void main() {
       () => store.write('{"arbitrary":true}'),
       throwsA(isA<WorkbenchPreferencesException>()),
     );
-  });
+  }, skip: kIsWeb);
 
   test('window appearance channel sends the closed theme value', () async {
     TestWidgetsFlutterBinding.ensureInitialized();
@@ -188,5 +189,5 @@ void main() {
     await appearance.apply(WorkbenchTheme.light);
     await appearance.apply(WorkbenchTheme.dark);
     expect(observed, ['system', 'light', 'dark']);
-  });
+  }, skip: kIsWeb);
 }

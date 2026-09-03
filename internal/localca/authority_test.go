@@ -3,10 +3,12 @@ package localca
 import (
 	"context"
 	"crypto/ecdsa"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/pem"
 	"errors"
+	"fmt"
 	"net"
 	"os"
 	"path/filepath"
@@ -172,6 +174,26 @@ func TestRootIdentityDoesNotIncludeCertificateDeliveryPath(t *testing.T) {
 			second.Identity(),
 			second.Certificate().Path(),
 		)
+	}
+}
+
+func TestRootCertificateExportsDefensiveDERBoundToItsIdentity(t *testing.T) {
+	t.Parallel()
+	authority := openAuthority(t, filepath.Join(t.TempDir(), "ca"), nil)
+	defer shutdownAuthority(t, authority)
+
+	der := authority.Certificate().CertificateDER()
+	certificate, err := x509.ParseCertificate(der)
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest := sha256.Sum256(certificate.Raw)
+	if got := fmt.Sprintf("%x", digest); got != authority.Identity().Digest().String() {
+		t.Fatalf("DER digest=%s identity=%s", got, authority.Identity().Digest().String())
+	}
+	der[0] ^= 0xff
+	if _, err := x509.ParseCertificate(authority.Certificate().CertificateDER()); err != nil {
+		t.Fatalf("caller mutated Root delivery material: %v", err)
 	}
 }
 

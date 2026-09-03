@@ -43,6 +43,19 @@ type MessageTransformTestResponse struct {
 type MessageTransformTestSample struct {
 	Request  MessageTransformTestRequest  `json:"request"`
 	Response MessageTransformTestResponse `json:"response"`
+	Runtime  *MessageTransformTestRuntime `json:"runtime,omitempty"`
+}
+
+type MessageTransformTestRuntime struct {
+	UserName               string    `json:"userName"`
+	HomeDirectory          string    `json:"homeDirectory"`
+	OperatingSystem        string    `json:"operatingSystem"`
+	OperatingSystemVersion string    `json:"operatingSystemVersion"`
+	Architecture           string    `json:"architecture"`
+	TimeZone               string    `json:"timeZone"`
+	WorkspaceRoot          string    `json:"workspaceRoot"`
+	WorkspaceLabel         string    `json:"workspaceLabel"`
+	TurnStartedAt          time.Time `json:"turnStartedAt"`
 }
 
 type MessageTransformTestResult struct {
@@ -120,14 +133,12 @@ func runMessageTransformSample(
 		return MessageTransformTestResult{}, err
 	}
 	defer annotations.Destroy()
+	runtime := defaultMessageTransformTestRuntime()
+	if input.Sample != nil && input.Sample.Runtime != nil {
+		runtime = *input.Sample.Runtime
+	}
 	turn, err := pipeline.NewTurnWithOptions(messagetransform.TurnOptions{
-		Metadata: messagetransform.RuntimeMetadata{
-			LocalUserName: "example-user", HomeDirectory: "/Users/example-user",
-			OperatingSystem: "darwin", OperatingSystemVersion: "15.0",
-			Architecture: "arm64", TimeZone: "Etc/UTC",
-			WorkspaceRoot: "/Users/example-user/Code/example", WorkspaceLabel: "example",
-			TurnStartedAt: time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC),
-		},
+		Metadata:    runtime.metadata(),
 		Annotations: annotations,
 	})
 	if err != nil {
@@ -148,6 +159,27 @@ func runMessageTransformSample(
 		ResponseBefore: messageTransformTestResponse(response),
 		ResponseAfter:  messageTransformTestResponse(responseOutput),
 	}, nil
+}
+
+func defaultMessageTransformTestRuntime() MessageTransformTestRuntime {
+	return MessageTransformTestRuntime{
+		UserName: "example-user", HomeDirectory: "/Users/example-user",
+		OperatingSystem: "darwin", OperatingSystemVersion: "15.0",
+		Architecture: "arm64", TimeZone: "Etc/UTC",
+		WorkspaceRoot: "/Users/example-user/Code/example", WorkspaceLabel: "example",
+		TurnStartedAt: time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC),
+	}
+}
+
+func (runtime MessageTransformTestRuntime) metadata() messagetransform.RuntimeMetadata {
+	return messagetransform.RuntimeMetadata{
+		LocalUserName: runtime.UserName, HomeDirectory: runtime.HomeDirectory,
+		OperatingSystem:        runtime.OperatingSystem,
+		OperatingSystemVersion: runtime.OperatingSystemVersion,
+		Architecture:           runtime.Architecture, TimeZone: runtime.TimeZone,
+		WorkspaceRoot: runtime.WorkspaceRoot, WorkspaceLabel: runtime.WorkspaceLabel,
+		TurnStartedAt: runtime.TurnStartedAt,
+	}
 }
 
 func resolveMessageTransformSample(

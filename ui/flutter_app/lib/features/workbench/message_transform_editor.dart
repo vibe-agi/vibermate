@@ -18,6 +18,9 @@ typedef MessageTransformTestCallback =
       MessageTransformTestSample? sample,
     });
 
+typedef CapturedMessageTransformSamplePicker =
+    Future<CapturedMessageTransformSample?> Function();
+
 typedef CodeLibraryLoader = Future<CodeLibraryCatalog> Function();
 
 /// Selects the ordered, immutable Transform revisions frozen by one protocol.
@@ -429,7 +432,11 @@ final class MessageTransformEditorDialog extends StatefulWidget {
     this.initialSample,
     this.baseRevision,
     this.onTestWireProtocolChanged,
+    this.sampleForWireProtocol,
+    this.pickCapturedSample,
+    this.initialSampleExchangeId,
     this.primaryActionLabel,
+    this.headerDetail,
     super.key,
   });
 
@@ -442,7 +449,12 @@ final class MessageTransformEditorDialog extends StatefulWidget {
   final MessageTransformTestSample? initialSample;
   final int? baseRevision;
   final ValueChanged<String>? onTestWireProtocolChanged;
+  final MessageTransformTestSample Function(String wireProtocol)?
+  sampleForWireProtocol;
+  final CapturedMessageTransformSamplePicker? pickCapturedSample;
+  final String? initialSampleExchangeId;
   final String? primaryActionLabel;
+  final String? headerDetail;
 
   @override
   State<MessageTransformEditorDialog> createState() =>
@@ -457,7 +469,9 @@ final class _MessageTransformEditorDialogState
   late final JavaScriptEditingController _response;
   late String _wireProtocol;
   late MessageTransformTestSample? _sample;
+  late String? _sampleExchangeId;
   final Map<String, MessageTransformTestSample?> _samplesByProtocol = {};
+  final Map<String, String?> _sampleExchangeIdsByProtocol = {};
   MessageTransformTestResult? _result;
   bool _testing = false;
   String? _error;
@@ -475,8 +489,12 @@ final class _MessageTransformEditorDialogState
       text: widget.initial.responseJavaScript,
     );
     _wireProtocol = widget.wireProtocol;
-    _sample = widget.initialSample;
+    _sample = _withDefaultRuntime(
+      widget.initialSample ?? MessageTransformTestSample.example(_wireProtocol),
+    );
+    _sampleExchangeId = widget.initialSampleExchangeId;
     _samplesByProtocol[_wireProtocol] = _sample;
+    _sampleExchangeIdsByProtocol[_wireProtocol] = _sampleExchangeId;
   }
 
   @override
@@ -614,9 +632,10 @@ final class _MessageTransformEditorDialogState
                   style: Theme.of(context).textTheme.headlineSmall,
                 ),
                 Text(
-                  '${widget.baseRevision == null ? copy('environment.transform.draft.new') : copy.format('environment.transform.draft.revision', {'revision': widget.baseRevision!})} · ${_protocolLabel(copy, _wireProtocol)}',
+                  widget.headerDetail ??
+                      '${widget.baseRevision == null ? copy('environment.transform.draft.new') : copy.format('environment.transform.draft.revision', {'revision': widget.baseRevision!})} · ${_protocolLabel(copy, _wireProtocol)}',
                   key: Key('environment-transform-subtitle-${widget.planId}'),
-                  maxLines: 1,
+                  maxLines: widget.headerDetail == null ? 1 : 2,
                   overflow: TextOverflow.ellipsis,
                   style: Theme.of(context).textTheme.bodySmall?.copyWith(
                     color: context.viberColors.textMuted,
@@ -672,7 +691,14 @@ final class _MessageTransformEditorDialogState
               key: Key('environment-transform-sample-${widget.planId}'),
               onPressed: _testing ? null : () => unawaited(_editSample()),
               icon: const Icon(Icons.science_outlined, size: 14),
-              label: Text(copy('environment.transform.sample.edit')),
+              label: Text(
+                copy.format('environment.transform.sample.summary', {
+                  'path': _sample!.request.path,
+                  'user': _sample!.runtime!.userName,
+                }),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
               style: OutlinedButton.styleFrom(
                 visualDensity: VisualDensity.compact,
               ),
@@ -685,20 +711,28 @@ final class _MessageTransformEditorDialogState
   Future<void> _editSample() async {
     final current = _sample;
     if (current == null) return;
-    final edited = await showDialog<MessageTransformTestSample>(
+    final edited = await showDialog<_MessageTransformSampleEdit>(
       context: context,
       builder: (context) => _MessageTransformSampleDialog(
         planId: widget.planId,
         initial: current,
+        initialWireProtocol: _wireProtocol,
+        initialExchangeId: _sampleExchangeId,
+        pickCapturedSample: widget.pickCapturedSample,
         copy: copy,
       ),
     );
     if (edited != null && mounted) {
       setState(() {
-        _sample = edited;
+        _wireProtocol = edited.wireProtocol;
+        _sample = edited.sample;
+        _sampleExchangeId = edited.exchangeId;
+        _samplesByProtocol[_wireProtocol] = _sample;
+        _sampleExchangeIdsByProtocol[_wireProtocol] = _sampleExchangeId;
         _result = null;
         _error = null;
       });
+      widget.onTestWireProtocolChanged?.call(_wireProtocol);
     }
   }
 
@@ -745,8 +779,15 @@ final class _MessageTransformEditorDialogState
     if (value == _wireProtocol) return;
     setState(() {
       _samplesByProtocol[_wireProtocol] = _sample;
+      _sampleExchangeIdsByProtocol[_wireProtocol] = _sampleExchangeId;
       _wireProtocol = value;
-      _sample = _samplesByProtocol[value];
+      _sample =
+          _samplesByProtocol[value] ??
+          _withDefaultRuntime(
+            widget.sampleForWireProtocol?.call(value) ??
+                MessageTransformTestSample.example(value),
+          );
+      _sampleExchangeId = _sampleExchangeIdsByProtocol[value];
       _result = null;
       _error = null;
     });
@@ -875,15 +916,32 @@ final class _TestProtocolMenu extends StatelessWidget {
   );
 }
 
+MessageTransformTestSample _withDefaultRuntime(
+  MessageTransformTestSample sample,
+) {
+  if (sample.runtime != null) return sample;
+  return MessageTransformTestSample(
+    request: sample.request,
+    response: sample.response,
+    runtime: MessageTransformTestRuntime.example(),
+  );
+}
+
 final class _MessageTransformSampleDialog extends StatefulWidget {
   const _MessageTransformSampleDialog({
     required this.planId,
     required this.initial,
+    required this.initialWireProtocol,
+    required this.initialExchangeId,
+    required this.pickCapturedSample,
     required this.copy,
   });
 
   final String planId;
   final MessageTransformTestSample initial;
+  final String initialWireProtocol;
+  final String? initialExchangeId;
+  final CapturedMessageTransformSamplePicker? pickCapturedSample;
   final AppCopy copy;
 
   @override
@@ -898,7 +956,21 @@ final class _MessageTransformSampleDialogState
   late final TextEditingController _responseHeaders;
   late final TextEditingController _responseBody;
   late final TextEditingController _status;
+  late final TextEditingController _userName;
+  late final TextEditingController _homeDirectory;
+  late final TextEditingController _operatingSystem;
+  late final TextEditingController _operatingSystemVersion;
+  late final TextEditingController _architecture;
+  late final TextEditingController _timeZone;
+  late final TextEditingController _workspaceRoot;
+  late final TextEditingController _workspaceLabel;
+  late final TextEditingController _turnStartedAt;
+  late String _method;
+  late String _path;
+  late String _wireProtocol;
+  late String? _exchangeId;
   late bool _streaming;
+  bool _loadingCaptured = false;
   bool _invalid = false;
 
   AppCopy get copy => widget.copy;
@@ -906,6 +978,10 @@ final class _MessageTransformSampleDialogState
   @override
   void initState() {
     super.initState();
+    _method = widget.initial.request.method;
+    _path = widget.initial.request.path;
+    _wireProtocol = widget.initialWireProtocol;
+    _exchangeId = widget.initialExchangeId;
     const encoder = JsonEncoder.withIndent('  ');
     _requestHeaders = TextEditingController(
       text: encoder.convert(widget.initial.request.headers),
@@ -918,6 +994,21 @@ final class _MessageTransformSampleDialogState
     _status = TextEditingController(
       text: widget.initial.response.statusCode.toString(),
     );
+    final runtime =
+        widget.initial.runtime ?? MessageTransformTestRuntime.example();
+    _userName = TextEditingController(text: runtime.userName);
+    _homeDirectory = TextEditingController(text: runtime.homeDirectory);
+    _operatingSystem = TextEditingController(text: runtime.operatingSystem);
+    _operatingSystemVersion = TextEditingController(
+      text: runtime.operatingSystemVersion,
+    );
+    _architecture = TextEditingController(text: runtime.architecture);
+    _timeZone = TextEditingController(text: runtime.timeZone);
+    _workspaceRoot = TextEditingController(text: runtime.workspaceRoot);
+    _workspaceLabel = TextEditingController(text: runtime.workspaceLabel);
+    _turnStartedAt = TextEditingController(
+      text: runtime.turnStartedAt.toUtc().toIso8601String(),
+    );
     _streaming = widget.initial.response.streaming;
   }
 
@@ -928,6 +1019,15 @@ final class _MessageTransformSampleDialogState
     _responseHeaders.dispose();
     _responseBody.dispose();
     _status.dispose();
+    _userName.dispose();
+    _homeDirectory.dispose();
+    _operatingSystem.dispose();
+    _operatingSystemVersion.dispose();
+    _architecture.dispose();
+    _timeZone.dispose();
+    _workspaceRoot.dispose();
+    _workspaceLabel.dispose();
+    _turnStartedAt.dispose();
     super.dispose();
   }
 
@@ -942,7 +1042,7 @@ final class _MessageTransformSampleDialogState
         width: math.max(280, math.min(720, viewport.width - 48)),
         height: math.max(420, math.min(620, viewport.height - 48)),
         child: DefaultTabController(
-          length: 2,
+          length: 3,
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
@@ -979,6 +1079,53 @@ final class _MessageTransformSampleDialogState
                 ),
               ),
               const Divider(height: 1),
+              Container(
+                key: const Key('environment-transform-sample-source'),
+                color: context.viberColors.panelRaised.withValues(alpha: 0.5),
+                padding: const EdgeInsets.fromLTRB(14, 7, 10, 7),
+                child: Row(
+                  children: [
+                    Icon(
+                      _exchangeId == null
+                          ? Icons.auto_awesome_outlined
+                          : Icons.history_rounded,
+                      size: 15,
+                      color: context.viberColors.textMuted,
+                    ),
+                    const SizedBox(width: 7),
+                    Expanded(
+                      child: Text(
+                        _exchangeId == null
+                            ? copy(
+                                'environment.transform.sample.source.built_in',
+                              )
+                            : copy.format(
+                                'environment.transform.sample.source.captured',
+                                {'exchange': _exchangeId!},
+                              ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                    ),
+                    if (widget.pickCapturedSample != null)
+                      TextButton.icon(
+                        key: const Key(
+                          'environment-transform-sample-pick-captured',
+                        ),
+                        onPressed: _loadingCaptured
+                            ? null
+                            : () => unawaited(_pickCaptured()),
+                        icon: _loadingCaptured
+                            ? const CompactProgressIndicator()
+                            : const Icon(Icons.history_rounded, size: 15),
+                        label: Text(
+                          copy('environment.transform.sample.pick_captured'),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
               TabBar(
                 tabs: [
                   Tab(
@@ -989,11 +1136,19 @@ final class _MessageTransformSampleDialogState
                     key: const Key('environment-transform-sample-tab-response'),
                     text: copy('environment.transform.response'),
                   ),
+                  Tab(
+                    key: const Key('environment-transform-sample-tab-runtime'),
+                    text: copy('environment.transform.sample.runtime'),
+                  ),
                 ],
               ),
               Expanded(
                 child: TabBarView(
-                  children: [_requestPane(context), _responsePane(context)],
+                  children: [
+                    _requestPane(context),
+                    _responsePane(context),
+                    _runtimePane(context),
+                  ],
                 ),
               ),
               if (_invalid)
@@ -1035,7 +1190,7 @@ final class _MessageTransformSampleDialogState
     padding: const EdgeInsets.all(14),
     children: [
       SelectableText(
-        '${widget.initial.request.method} ${widget.initial.request.path}',
+        '$_method $_path',
         style: monoStyle.copyWith(color: context.viberColors.textMuted),
       ),
       const SizedBox(height: 10),
@@ -1100,6 +1255,90 @@ final class _MessageTransformSampleDialogState
     ],
   );
 
+  Widget _runtimePane(BuildContext context) => LayoutBuilder(
+    builder: (context, constraints) {
+      final available = constraints.maxWidth - 28;
+      final fieldWidth = available >= 560 ? (available - 10) / 2 : available;
+      final fields = [
+        (
+          key: 'user-name',
+          controller: _userName,
+          label: copy('environment.transform.sample.runtime.user_name'),
+        ),
+        (
+          key: 'home-directory',
+          controller: _homeDirectory,
+          label: copy('environment.transform.sample.runtime.home_directory'),
+        ),
+        (
+          key: 'workspace-root',
+          controller: _workspaceRoot,
+          label: copy('environment.transform.sample.runtime.workspace_root'),
+        ),
+        (
+          key: 'workspace-label',
+          controller: _workspaceLabel,
+          label: copy('environment.transform.sample.runtime.workspace_label'),
+        ),
+        (
+          key: 'operating-system',
+          controller: _operatingSystem,
+          label: copy('environment.transform.sample.runtime.os'),
+        ),
+        (
+          key: 'operating-system-version',
+          controller: _operatingSystemVersion,
+          label: copy('environment.transform.sample.runtime.os_version'),
+        ),
+        (
+          key: 'architecture',
+          controller: _architecture,
+          label: copy('environment.transform.sample.runtime.architecture'),
+        ),
+        (
+          key: 'time-zone',
+          controller: _timeZone,
+          label: copy('environment.transform.sample.runtime.time_zone'),
+        ),
+        (
+          key: 'turn-started-at',
+          controller: _turnStartedAt,
+          label: copy('environment.transform.sample.runtime.turn_started_at'),
+        ),
+      ];
+      return ListView(
+        padding: const EdgeInsets.all(14),
+        children: [
+          Text(
+            copy('environment.transform.sample.runtime.detail'),
+            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+              color: context.viberColors.textMuted,
+            ),
+          ),
+          const SizedBox(height: 12),
+          Wrap(
+            spacing: 10,
+            runSpacing: 10,
+            children: [
+              for (final field in fields)
+                SizedBox(
+                  width: fieldWidth,
+                  child: TextField(
+                    key: Key(
+                      'environment-transform-sample-runtime-${field.key}',
+                    ),
+                    controller: field.controller,
+                    style: monoStyle,
+                    decoration: InputDecoration(labelText: field.label),
+                  ),
+                ),
+            ],
+          ),
+        ],
+      );
+    },
+  );
+
   Widget _sampleTextField({
     required Key key,
     required TextEditingController controller,
@@ -1114,12 +1353,53 @@ final class _MessageTransformSampleDialogState
     decoration: InputDecoration(labelText: label, alignLabelWithHint: true),
   );
 
+  Future<void> _pickCaptured() async {
+    final pick = widget.pickCapturedSample;
+    if (pick == null) return;
+    setState(() => _loadingCaptured = true);
+    try {
+      final captured = await pick();
+      if (captured == null || !mounted) return;
+      _replace(captured.sample);
+      setState(() {
+        _wireProtocol = captured.wireProtocol;
+        _exchangeId = captured.exchangeId;
+        _invalid = false;
+      });
+    } finally {
+      if (mounted) setState(() => _loadingCaptured = false);
+    }
+  }
+
+  void _replace(MessageTransformTestSample sample) {
+    const encoder = JsonEncoder.withIndent('  ');
+    final runtime = sample.runtime ?? MessageTransformTestRuntime.example();
+    _method = sample.request.method;
+    _path = sample.request.path;
+    _requestHeaders.text = encoder.convert(sample.request.headers);
+    _requestBody.text = sample.request.body;
+    _responseHeaders.text = encoder.convert(sample.response.headers);
+    _responseBody.text = sample.response.body;
+    _status.text = sample.response.statusCode.toString();
+    _streaming = sample.response.streaming;
+    _userName.text = runtime.userName;
+    _homeDirectory.text = runtime.homeDirectory;
+    _operatingSystem.text = runtime.operatingSystem;
+    _operatingSystemVersion.text = runtime.operatingSystemVersion;
+    _architecture.text = runtime.architecture;
+    _timeZone.text = runtime.timeZone;
+    _workspaceRoot.text = runtime.workspaceRoot;
+    _workspaceLabel.text = runtime.workspaceLabel;
+    _turnStartedAt.text = runtime.turnStartedAt.toUtc().toIso8601String();
+  }
+
   void _save() {
     try {
+      final turnStartedAt = DateTime.parse(_turnStartedAt.text).toUtc();
       final sample = MessageTransformTestSample(
         request: MessageTransformTestRequest.fromJson({
-          'method': widget.initial.request.method,
-          'path': widget.initial.request.path,
+          'method': _method,
+          'path': _path,
           'headers': jsonDecode(_requestHeaders.text),
           'body': _requestBody.text,
         }, r'$.sample.request'),
@@ -1129,12 +1409,41 @@ final class _MessageTransformSampleDialogState
           'headers': jsonDecode(_responseHeaders.text),
           'body': _responseBody.text,
         }, r'$.sample.response'),
+        runtime: MessageTransformTestRuntime(
+          userName: _userName.text,
+          homeDirectory: _homeDirectory.text,
+          operatingSystem: _operatingSystem.text,
+          operatingSystemVersion: _operatingSystemVersion.text,
+          architecture: _architecture.text,
+          timeZone: _timeZone.text,
+          workspaceRoot: _workspaceRoot.text,
+          workspaceLabel: _workspaceLabel.text,
+          turnStartedAt: turnStartedAt,
+        ),
       );
-      Navigator.of(context).pop(sample);
+      Navigator.of(context).pop(
+        _MessageTransformSampleEdit(
+          sample: sample,
+          wireProtocol: _wireProtocol,
+          exchangeId: _exchangeId,
+        ),
+      );
     } on Object {
       setState(() => _invalid = true);
     }
   }
+}
+
+final class _MessageTransformSampleEdit {
+  const _MessageTransformSampleEdit({
+    required this.sample,
+    required this.wireProtocol,
+    required this.exchangeId,
+  });
+
+  final MessageTransformTestSample sample;
+  final String wireProtocol;
+  final String? exchangeId;
 }
 
 final class _ScriptPane extends StatefulWidget {

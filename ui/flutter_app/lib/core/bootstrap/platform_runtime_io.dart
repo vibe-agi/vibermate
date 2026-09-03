@@ -1,5 +1,8 @@
+import 'dart:io' show Platform;
+
 import 'desktop_runtime.dart';
 import 'runtime_connection.dart';
+import 'root_trust_installer.dart';
 import 'terminal_command.dart';
 
 const bool platformRuntimeRequiresLogin = false;
@@ -19,7 +22,9 @@ Future<RuntimeConnection> connectPlatformRuntime({
     if (error.message == 'Packaged Desktop sidecar is unavailable') {
       throw const RuntimeConnectionException('desktop_sidecar_unavailable');
     }
-    rethrow;
+    throw RuntimeConnectionException(
+      error.reason ?? 'desktop_runtime_unavailable',
+    );
   }
   return RuntimeConnection(
     api: runtime.api,
@@ -28,6 +33,8 @@ Future<RuntimeConnection> connectPlatformRuntime({
     isClosed: () => runtime.isClosed,
     serverManagement: true,
     terminalManagement: true,
+    rootTrustManagement: Platform.isMacOS,
+    rootTrustInstaller: const PlatformRootTrustInstaller(),
     // The authoritative connectable IP arrives from /api/v1/server/access.
     // Until then, show a neutral local label instead of advertising a .local
     // hostname that may not resolve from another machine.

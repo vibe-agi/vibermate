@@ -134,6 +134,12 @@ func TestProductionOptionsUsesExplicitSecretStoreFactory(t *testing.T) {
 		got[0] != "vibermate://desktop" {
 		t.Fatalf("allowed origins = %v", got)
 	}
+	if options.Host.RemoteServerListenAddress != "127.0.0.1:9666" {
+		t.Fatalf(
+			"default remote Server listen address = %q, want loopback",
+			options.Host.RemoteServerListenAddress,
+		)
+	}
 
 	if _, err := desktopdaemon.ProductionOptions(
 		context.Background(),

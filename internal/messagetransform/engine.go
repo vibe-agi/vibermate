@@ -586,23 +586,23 @@ func (turn *Turn) apply(
 		runtime.Interrupt(context.Cause(executionContext))
 		close(interruptDone)
 	})
-	_, callErr := function(goja.Undefined(), messageValue, contextValue, runtimeValue)
+	output, contextOutput, stageErr := executeAndExportStage(
+		runtime,
+		function,
+		messageValue,
+		contextValue,
+		runtimeValue,
+		input,
+		turn.program.limits,
+		stage,
+	)
 	if !stopContext() {
 		<-interruptDone
 	}
 	cancelExecution()
 	runtime.ClearInterrupt()
-	if callErr != nil {
-		return scriptMessage{}, classifyRuntimeError(stage, callErr)
-	}
-
-	output, err := exportMessage(runtime, messageValue, input, turn.program.limits)
-	if err != nil {
-		return scriptMessage{}, fmt.Errorf("%w: %s: %v", ErrInvalidOutput, stage, err)
-	}
-	contextOutput, err := exportContext(runtime, contextValue, turn.program.limits)
-	if err != nil {
-		return scriptMessage{}, fmt.Errorf("%w: %s Context: %v", ErrInvalidOutput, stage, err)
+	if stageErr != nil {
+		return scriptMessage{}, stageErr
 	}
 	turn.context = contextOutput
 	if stage == "request" {
@@ -611,6 +611,53 @@ func (turn *Turn) apply(
 		turn.requestOutput = cloneScriptMessage(output)
 	}
 	return output, nil
+}
+
+func executeAndExportStage(
+	runtime *goja.Runtime,
+	function goja.Callable,
+	messageValue goja.Value,
+	contextValue goja.Value,
+	runtimeValue goja.Value,
+	input scriptMessage,
+	limits Limits,
+	stage string,
+) (output scriptMessage, contextOutput []byte, err error) {
+	defer func() {
+		recovered := recover()
+		if recovered == nil {
+			return
+		}
+		runtimeErr, ok := recovered.(error)
+		if !ok {
+			panic(recovered)
+		}
+		switch runtimeErr.(type) {
+		case *goja.Exception, *goja.InterruptedError, *goja.StackOverflowError:
+			output = scriptMessage{}
+			contextOutput = nil
+			err = classifyRuntimeError(stage, runtimeErr)
+		default:
+			panic(recovered)
+		}
+	}()
+	if _, callErr := function(
+		goja.Undefined(),
+		messageValue,
+		contextValue,
+		runtimeValue,
+	); callErr != nil {
+		return scriptMessage{}, nil, classifyRuntimeError(stage, callErr)
+	}
+	output, err = exportMessage(runtime, messageValue, input, limits)
+	if err != nil {
+		return scriptMessage{}, nil, fmt.Errorf("%w: %s: %v", ErrInvalidOutput, stage, err)
+	}
+	contextOutput, err = exportContext(runtime, contextValue, limits)
+	if err != nil {
+		return scriptMessage{}, nil, fmt.Errorf("%w: %s Context: %v", ErrInvalidOutput, stage, err)
+	}
+	return output, contextOutput, nil
 }
 
 func installRuntimeCapabilities(

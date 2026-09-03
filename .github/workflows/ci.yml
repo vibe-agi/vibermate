@@ -1,5 +1,5 @@
 # Deterministic CI runs module and generation drift, structural checks, unit
-# tests, race tests, contract tests, vet, and govulncheck. It does not run real
+# tests, browser tests, race tests, contract tests, vet, and govulncheck. It does not run real
 # Agent/provider traffic, the opt-in packaged-app acceptance sequence, platform
 # Root or proxy changes, signing, installers, long-duration soak, or
 # external-version drift. Those gates require a frozen macOS arm64 artifact and
@@ -9,8 +9,6 @@ name: validation
 on:
   pull_request:
   push:
-    branches:
-      - main
 
 permissions:
   contents: read
@@ -183,6 +181,31 @@ jobs:
           set -euo pipefail
           flutter test test/live_runtime_test.dart
           go test -count=1 ../../cmd/vibermate-acceptance
+          git diff --exit-code
+
+  web:
+    needs: generated-structural
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Install the pinned Flutter SDK
+        shell: bash
+        run: |
+          set -euo pipefail
+          flutter_root="${RUNNER_TEMP}/vibermate-flutter-web-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          ui/flutter_app/tool/install_ci_flutter.sh "${flutter_root}" web
+          printf '%s/bin\n' "${flutter_root}" >> "${GITHUB_PATH}"
+          printf 'FLUTTER_ROOT=%s\n' "${flutter_root}" >> "${GITHUB_ENV}"
+      - name: Test and build the browser workbench
+        shell: bash
+        working-directory: ui/flutter_app
+        run: |
+          set -euo pipefail
+          tool/verify_flutter_sdk.sh
+          flutter pub get
+          flutter test --platform chrome
+          flutter build web --release
           git diff --exit-code
 
   vulnerability:

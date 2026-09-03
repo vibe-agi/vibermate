@@ -594,7 +594,10 @@ func desktopOpenArguments(
 		"-F",
 		"-W",
 		"--env",
-		"HOME=" + homeDirectory,
+		// Foundation honors CFFIXED_USER_HOME for application data and
+		// preferences while Security.framework retains the real login HOME and
+		// its unlocked Keychain session.
+		"CFFIXED_USER_HOME=" + homeDirectory,
 		appPath,
 	}
 }

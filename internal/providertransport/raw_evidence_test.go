@@ -44,10 +44,12 @@ func TestProviderRawEvidenceCapturesAuthenticatedEgressAndBoundedResponse(
 		Transport: &roundTripperStub{response: &http.Response{
 			StatusCode: http.StatusOK,
 			Header: http.Header{
-				"Content-Type": []string{"application/json"},
-				"X-Repeated":   []string{"first", "second"},
+				"Content-Type":   []string{"application/json"},
+				"X-Relay-Tenant": []string{"private-team-a"},
+				"X-Repeated":     []string{"first", "second"},
 			},
-			Body: io.NopCloser(strings.NewReader(responsePayload)),
+			Body:    io.NopCloser(strings.NewReader(responsePayload)),
+			Trailer: http.Header{"X-Relay-Tenant": []string{"private-team-a"}},
 		}},
 	})
 	if err != nil {
@@ -115,6 +117,12 @@ func TestProviderRawEvidenceCapturesAuthenticatedEgressAndBoundedResponse(
 		!slices.Equal(
 			providerResponse.Headers.Values("X-Repeated"),
 			[]string{"first", "second"},
+		) ||
+		providerResponse.Headers.Get("X-Relay-Tenant") != "private-team-a" ||
+		providerResponse.Trailers.Get("X-Relay-Tenant") != "private-team-a" ||
+		!slices.Equal(
+			providerResponse.ProtectedHeaderNames,
+			[]string{"Authorization", "X-Relay-Tenant"},
 		) {
 		t.Fatalf("provider response observation = %+v", providerResponse)
 	}

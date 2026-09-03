@@ -17,6 +17,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/exchange"
 	"github.com/vibe-agi/vibermate/internal/hostcontract"
 	"github.com/vibe-agi/vibermate/internal/instanceguard"
+	"github.com/vibe-agi/vibermate/internal/localca"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
 	"github.com/vibe-agi/vibermate/internal/productruntime"
 	"github.com/vibe-agi/vibermate/internal/runtimepersistence"
@@ -171,6 +172,8 @@ func classifyStartupFailure(err error) desktopbootstrap.Failure {
 	switch {
 	case errors.Is(err, instanceguard.ErrAlreadyOwned):
 		reason = desktopbootstrap.FailureRuntimeAlreadyActive
+	case errors.Is(err, localca.ErrRootResetFailed):
+		reason = desktopbootstrap.FailureRootResetFailed
 	case errors.Is(err, runtimepersistence.ErrInvalidDatabasePath),
 		errors.Is(err, runtimepersistence.ErrSchemaBaselineMismatch):
 		reason = desktopbootstrap.FailureStorageUnavailable

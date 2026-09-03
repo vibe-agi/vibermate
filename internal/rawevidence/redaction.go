@@ -78,17 +78,37 @@ func (redactor Redactor) protectedField(
 // names measure a credential's budget; they never carry one.
 func NameIsCredential(name string) bool {
 	normalized := strings.ToLower(name)
-	if strings.Contains(normalized, "ratelimit") ||
-		strings.Contains(normalized, "rate-limit") {
-		return false
-	}
-	return normalized == "authorization" ||
+	if normalized == "authorization" ||
 		normalized == "proxy-authorization" ||
 		normalized == "cookie" || normalized == "set-cookie" ||
 		strings.Contains(normalized, "api-key") ||
 		strings.Contains(normalized, "apikey") ||
-		strings.Contains(normalized, "token") ||
 		strings.Contains(normalized, "secret") ||
 		strings.Contains(normalized, "password") ||
-		strings.Contains(normalized, "credential")
+		strings.Contains(normalized, "credential") ||
+		strings.Contains(normalized, "access-token") ||
+		strings.Contains(normalized, "auth-token") {
+		return true
+	}
+	if rateLimitMeasurementName(normalized) {
+		return false
+	}
+	return strings.Contains(normalized, "token")
+}
+
+func rateLimitMeasurementName(normalized string) bool {
+	if !strings.Contains(normalized, "ratelimit") &&
+		!strings.Contains(normalized, "rate-limit") {
+		return false
+	}
+	remainder := strings.ReplaceAll(normalized, "rate-limit", "")
+	remainder = strings.ReplaceAll(remainder, "ratelimit", "")
+	for _, marker := range []string{
+		"limit", "remaining", "reset", "used", "usage", "retry-after",
+	} {
+		if strings.Contains(remainder, marker) {
+			return true
+		}
+	}
+	return false
 }

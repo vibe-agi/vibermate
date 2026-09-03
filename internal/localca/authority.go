@@ -52,6 +52,7 @@ var (
 	ErrLeafRequestInvalid     = errors.New("leaf issuance request is invalid")
 	ErrLeafGenerationFailed   = errors.New("leaf generation failed")
 	ErrLeafGenerationTimedOut = errors.New("leaf generation timed out")
+	ErrRootResetFailed        = errors.New("local Root reset failed")
 )
 
 type RootRevision = certidentity.RootRevision
@@ -146,6 +147,17 @@ type RootCertificate struct {
 
 func (certificate RootCertificate) CertificatePEM() []byte {
 	return bytes.Clone(certificate.certificatePEM)
+}
+
+// CertificateDER returns the one public Root certificate without exposing its
+// filesystem path or any signing capability.
+func (certificate RootCertificate) CertificateDER() []byte {
+	block, rest := pem.Decode(certificate.certificatePEM)
+	if block == nil || block.Type != "CERTIFICATE" ||
+		len(block.Bytes) == 0 || len(bytes.TrimSpace(rest)) != 0 {
+		return nil
+	}
+	return bytes.Clone(block.Bytes)
 }
 
 func (certificate RootCertificate) Path() string {
@@ -734,6 +746,10 @@ func createRoot(
 	if err := ctx.Err(); err != nil {
 		return nil, nil, RootIdentity{}, RootCertificate{}, err
 	}
+	revision, resetRequestPath, err := rootRevisionForCreate(options.Directory)
+	if err != nil {
+		return nil, nil, RootIdentity{}, RootCertificate{}, err
+	}
 	key, err := ecdsa.GenerateKey(elliptic.P256(), options.Random)
 	if err != nil {
 		return nil, nil, RootIdentity{}, RootCertificate{}, fmt.Errorf(
@@ -789,7 +805,7 @@ func createRoot(
 	if err != nil {
 		return nil, nil, RootIdentity{}, RootCertificate{}, err
 	}
-	identity := rootIdentity(certificate, digest, certidentity.InitialRootRevision)
+	identity := rootIdentity(certificate, digest, revision)
 	keyDER, err := x509.MarshalPKCS8PrivateKey(key)
 	if err != nil {
 		return nil, nil, RootIdentity{}, RootCertificate{}, fmt.Errorf(
@@ -803,17 +819,44 @@ func createRoot(
 	if err != nil {
 		return nil, nil, RootIdentity{}, RootCertificate{}, err
 	}
+	createdPaths := make([]string, 0, 3)
+	committed := false
+	defer func() {
+		if committed {
+			return
+		}
+		for _, created := range createdPaths {
+			_ = os.Remove(created)
+		}
+	}()
 	if err := writeExclusive(keyPath, keyPEM, 0o600); err != nil {
 		return nil, nil, RootIdentity{}, RootCertificate{}, err
 	}
+	createdPaths = append(createdPaths, keyPath)
 	if err := writeExclusive(certPath, certPEM, 0o600); err != nil {
 		return nil, nil, RootIdentity{}, RootCertificate{}, err
 	}
+	createdPaths = append(createdPaths, certPath)
 	if err := writeExclusive(manifestPath, manifest, 0o600); err != nil {
 		return nil, nil, RootIdentity{}, RootCertificate{}, err
 	}
+	createdPaths = append(createdPaths, manifestPath)
 	if err := syncDirectory(options.Directory); err != nil {
 		return nil, nil, RootIdentity{}, RootCertificate{}, err
+	}
+	if resetRequestPath != "" {
+		if err := os.Remove(resetRequestPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return nil, nil, RootIdentity{}, RootCertificate{}, fmt.Errorf(
+				"complete local Root reset: %w",
+				err,
+			)
+		}
+		committed = true
+		if err := syncDirectory(filepath.Dir(resetRequestPath)); err != nil {
+			return nil, nil, RootIdentity{}, RootCertificate{}, err
+		}
+	} else {
+		committed = true
 	}
 	return key, certificate, identity, RootCertificate{
 		certificatePEM: bytes.Clone(certPEM),

@@ -16,7 +16,10 @@ String platformRuntimeTargetLabel() =>
 bool platformRuntimeUsesPlaintext() =>
     !RuntimeServerLocation.fromPageUri(Uri.base).encrypted;
 
-Future<RuntimeConnection> connectPlatformRuntime({String? accessKey}) async {
+Future<RuntimeConnection> connectPlatformRuntime({
+  String? accessKey,
+  String? daemonPath,
+}) async {
   final current = Uri.base;
   final location = RuntimeServerLocation.fromPageUri(current);
   if (accessKey == null || accessKey.isEmpty) {
@@ -104,6 +107,7 @@ Future<RuntimeConnection> connectPlatformRuntime({String? accessKey}) async {
       isClosed: () => false,
       serverManagement: true,
       terminalManagement: false,
+      rootTrustManagement: false,
       targetLabel: location.displayLabel,
     );
   } on RuntimeLoginRequired {

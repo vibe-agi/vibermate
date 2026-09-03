@@ -237,6 +237,7 @@ void main() {
     addTearDown(() => tester.binding.setSurfaceSize(null));
     final store = MemoryWorkbenchPreferencesStore(
       encoded: const WorkbenchPreferences(
+        theme: WorkbenchTheme.light,
         section: WorkbenchSection.routes,
       ).encode(),
     );

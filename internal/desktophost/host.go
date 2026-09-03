@@ -22,7 +22,9 @@ import (
 	"github.com/vibe-agi/vibermate/internal/conversationprojection"
 	"github.com/vibe-agi/vibermate/internal/desktopbootstrap"
 	"github.com/vibe-agi/vibermate/internal/desktopcontrol"
+	"github.com/vibe-agi/vibermate/internal/desktoptrust"
 	"github.com/vibe-agi/vibermate/internal/instanceguard"
+	"github.com/vibe-agi/vibermate/internal/localca"
 	"github.com/vibe-agi/vibermate/internal/localdiscovery"
 	"github.com/vibe-agi/vibermate/internal/modelcatalog"
 	"github.com/vibe-agi/vibermate/internal/productruntime"
@@ -87,6 +89,7 @@ func (state *readiness) Ready() bool {
 // Host owns one complete Desktop generation.
 type Host struct {
 	runtime              *productruntime.Runtime
+	rootTrust            *desktoptrust.Manager
 	guard                *instanceguard.Guard
 	discovery            *localdiscovery.File
 	bootstrap            *desktopbootstrap.Authority
@@ -161,6 +164,11 @@ func Start(ctx context.Context, options Options) (*Host, error) {
 			rollback.run(rollbackContext),
 		)
 	}
+	if dataDirectory := options.Runtime.Paths.DataDirectory(); dataDirectory != "" {
+		if err := localca.ApplyPendingRootReset(ctx, dataDirectory); err != nil {
+			return fail("local Root reset", err)
+		}
+	}
 	discovery, err := localdiscovery.NewPublisher(
 		options.Paths.DiscoveryPath(),
 		options.Runtime.Clock,
@@ -200,6 +208,28 @@ func Start(ctx context.Context, options Options) (*Host, error) {
 		return fail("ProductRuntime", err)
 	}
 	rollback.register("ProductRuntime", runtime.Shutdown)
+	rootTrust, err := desktoptrust.NewOptionalProduction(
+		desktoptrust.ProductionOptions{
+			OwnerContext: ctx,
+			Root:         runtime,
+			Clock:        options.Runtime.Clock,
+			ResetRequest: func(_ context.Context, identity localca.RootIdentity) error {
+				return localca.RequestRootReset(
+					options.Runtime.Paths.DataDirectory(),
+					identity,
+				)
+			},
+			ReplaceAdmission: func(ctx context.Context) (func(), error) {
+				return beginRootReplacement(ctx, runtime)
+			},
+		},
+	)
+	if err != nil {
+		return fail("Desktop system trust", err)
+	}
+	if rootTrust != nil {
+		rollback.register("Desktop system trust", rootTrust.Shutdown)
+	}
 	var remoteServer *serverhost.Host
 	if options.RemoteServerEnabled {
 		remoteOptions := serverhost.DefaultAttachOptions(
@@ -412,6 +442,7 @@ func Start(ctx context.Context, options Options) (*Host, error) {
 		ManualCaptures:      runtime.ManualCaptures(),
 		Archive:             runtime.EvidenceArchive(),
 		ArchiveBarrier:      runtime.EvidenceArchiveBarrier(),
+		RootTrust:           rootTrust,
 		Clock:               options.Runtime.Clock,
 	})
 	if err != nil {
@@ -450,6 +481,7 @@ func Start(ctx context.Context, options Options) (*Host, error) {
 
 	host := &Host{
 		runtime:      runtime,
+		rootTrust:    rootTrust,
 		remoteServer: remoteServer,
 		guard:        guard,
 		discovery:    discovery,

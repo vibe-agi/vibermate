@@ -177,6 +177,7 @@ func CheckRetiredProductAuthority(repositoryRoot string) []Violation {
 	const rule = "retired-product-authority"
 	currentFiles := map[string]struct{}{
 		"README.md":                {},
+		"README.zh-CN.md":          {},
 		"PLAN.md":                  {},
 		"docs/m0-acceptance.md":    {},
 		"docs/module-map.md":       {},
@@ -526,17 +527,18 @@ func dispatchKindName(expression ast.Expr) string {
 	}
 }
 
-// CheckSystemTrustBoundary protects the fixture-only trust-operation shape:
-// production composition cannot import it, the package cannot acquire a live
-// process runner or concrete command executor, mutation command literals stay
-// in the one bounded macOS adapter, and the exact capability namespace cannot
-// appear in user-facing production surfaces.
+// CheckSystemTrustBoundary protects the system-trust operation shape:
+// platform-neutral planning stays free of process execution, while the one
+// explicitly named Desktop adapter may own the live runner. Mutation command
+// literals remain in the bounded macOS adapter, and the exact capability
+// namespace cannot appear in user-facing production surfaces.
 func CheckSystemTrustBoundary(repositoryRoot string) []Violation {
 	const (
-		systemTrustImport = "github.com/vibe-agi/vibermate/internal/systemtrust"
-		systemTrustRoot   = "internal/systemtrust"
-		adapterPath       = "internal/systemtrust/macos.go"
-		checkerPath       = "internal/repositorycheck/check.go"
+		systemTrustImport     = "github.com/vibe-agi/vibermate/internal/systemtrust"
+		systemTrustRoot       = "internal/systemtrust"
+		productionAdapterRoot = "internal/desktoptrust"
+		adapterPath           = "internal/systemtrust/macos.go"
+		checkerPath           = "internal/repositorycheck/check.go"
 	)
 	mutationCommands := map[string]struct{}{
 		"add-trusted-cert":    {},
@@ -610,11 +612,14 @@ func CheckSystemTrustBoundary(repositoryRoot string) []Violation {
 		}
 		insideSystemTrust := relative == systemTrustRoot ||
 			strings.HasPrefix(relative, systemTrustRoot+"/")
+		insideProductionAdapter := relative == productionAdapterRoot ||
+			strings.HasPrefix(relative, productionAdapterRoot+"/")
 		for _, imported := range parsed.Imports {
 			importPath := strings.Trim(imported.Path.Value, `"`)
 			position := fileSet.Position(imported.Pos())
 			switch {
-			case importPath == systemTrustImport && !insideSystemTrust:
+			case importPath == systemTrustImport &&
+				!insideSystemTrust && !insideProductionAdapter:
 				violations = append(violations, Violation{
 					Rule:    "system-trust-composition",
 					Path:    relative,
@@ -1565,6 +1570,7 @@ func CheckAtRestEncryptionAbsence(repositoryRoot string) []Violation {
 	const rule = "at-rest-encryption"
 	surfaceFiles := map[string]struct{}{
 		"README.md":          {},
+		"README.zh-CN.md":    {},
 		"PLAN.md":            {},
 		"locales/en-US.json": {},
 		"locales/zh-CN.json": {},

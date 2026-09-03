@@ -22,6 +22,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/capturerun"
 	"github.com/vibe-agi/vibermate/internal/codelibrary"
 	"github.com/vibe-agi/vibermate/internal/connectionevent"
+	"github.com/vibe-agi/vibermate/internal/desktoptrust"
 	"github.com/vibe-agi/vibermate/internal/egressaudit"
 	"github.com/vibe-agi/vibermate/internal/egressprofile"
 	"github.com/vibe-agi/vibermate/internal/environment"
@@ -85,6 +86,13 @@ const (
 	ReasonEgressProfileNotFound              ReasonCode = "egress_profile_not_found"
 	ReasonEgressProfileConflict              ReasonCode = "egress_profile_conflict"
 	ReasonEgressProfileUnavailable           ReasonCode = "egress_profile_unavailable"
+	ReasonRootTrustUnavailable               ReasonCode = "root_trust_unavailable"
+	ReasonRootTrustUnsupported               ReasonCode = "root_trust_unsupported"
+	ReasonRootTrustPermissionDenied          ReasonCode = "root_trust_permission_denied"
+	ReasonRootTrustUserCancelled             ReasonCode = "root_trust_user_cancelled"
+	ReasonRootTrustConflict                  ReasonCode = "root_trust_conflict"
+	ReasonRootResetActiveCaptures            ReasonCode = "root_reset_active_captures"
+	ReasonRootResetRequiresRemoval           ReasonCode = "root_reset_requires_removal"
 )
 
 type StatusReader interface {
@@ -146,6 +154,7 @@ type Options struct {
 	ManualCaptures manualcapture.Controller
 	Archive        resourcedeletion.Archive
 	ArchiveBarrier evidencearchive.ClearBarrier
+	RootTrust      desktoptrust.Controller
 	Clock          Clock
 }
 
@@ -172,6 +181,7 @@ type Handler struct {
 	connectionRules ConnectionRuleController
 	archive         resourcedeletion.Archive
 	archiveBarrier  evidencearchive.ClearBarrier
+	rootTrust       desktoptrust.Controller
 	captureRuns     capturerun.Reader
 	manualCaptures  manualcapture.Controller
 	clock           Clock
@@ -232,6 +242,7 @@ func New(options Options) (*Handler, error) {
 		connectionRules:     options.ConnectionRules,
 		archive:             options.Archive,
 		archiveBarrier:      options.ArchiveBarrier,
+		rootTrust:           options.RootTrust,
 		captureRuns:         options.CaptureRuns,
 		manualCaptures:      options.ManualCaptures,
 		clock:               options.Clock,
@@ -239,6 +250,17 @@ func New(options Options) (*Handler, error) {
 		mux:                 http.NewServeMux(),
 	}
 	handler.mux.HandleFunc("GET /api/v1/status", handler.getStatus)
+	if handler.rootTrust != nil {
+		handler.mux.HandleFunc("GET /api/v1/platform/root-ca", handler.getRootCA)
+		handler.mux.HandleFunc(
+			"GET /api/v1/platform/root-ca/material",
+			handler.getRootCAMaterial,
+		)
+		handler.mux.HandleFunc(
+			"POST /api/v1/platform/root-ca/actions/replace",
+			handler.replaceRootCA,
+		)
+	}
 	handler.mux.HandleFunc("GET /api/v1/offline-hold", handler.getOfflineHold)
 	handler.mux.HandleFunc(
 		"POST /api/v1/offline-hold/actions/enter",

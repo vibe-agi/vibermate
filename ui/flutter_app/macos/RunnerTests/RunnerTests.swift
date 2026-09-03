@@ -1,5 +1,7 @@
 import Cocoa
+import CryptoKit
 import FlutterMacOS
+import Security
 import XCTest
 @testable import ViberMate
 
@@ -136,6 +138,105 @@ final class RunnerTests: XCTestCase {
         .appendingPathComponent(WorkbenchPreferencesBridge.fileName)
         .path
     )
+  }
+
+  func testFixedUserHomeIsolatesPreferencesWithoutReplacingLoginHome() throws {
+    let fixedHome = temporaryDirectory.appendingPathComponent("fixed", isDirectory: true)
+    let bridge = try WorkbenchPreferencesBridge(environment: [
+      "HOME": "/Users/login-owner",
+      "CFFIXED_USER_HOME": fixedHome.path,
+    ])
+    XCTAssertEqual(
+      bridge.stateURL.path,
+      fixedHome
+        .appendingPathComponent("Library/Application Support", isDirectory: true)
+        .appendingPathComponent("io.vibermate.desktop", isDirectory: true)
+        .appendingPathComponent("ui-state", isDirectory: true)
+        .appendingPathComponent(WorkbenchPreferencesBridge.fileName)
+        .path
+    )
+  }
+
+  func testFixedUserHomeFailsClosedInsteadOfFallingBackToLoginHome() throws {
+    for invalid in ["relative", "/", "/private/tmp/../tmp"] {
+      XCTAssertThrowsError(
+        try WorkbenchPreferencesBridge(environment: [
+          "HOME": temporaryDirectory.path,
+          "CFFIXED_USER_HOME": invalid,
+        ])
+      )
+    }
+  }
+
+  func testRootTrustInstallerReceivesOnlyDigestBoundPublicMaterial() throws {
+    let certificate = Data([0x30, 0x03, 0x01, 0x02, 0x03])
+    let fingerprint = SHA256.hash(data: certificate)
+      .map { String(format: "%02x", $0) }
+      .joined()
+    var installed: Data?
+    let installer = RootTrustInstaller(installOperation: { material in
+      installed = material
+      return errSecSuccess
+    })
+
+    try installer.install([
+      "schema": "vibermate-root-trust-install/v1",
+      "rootRevision": 7,
+      "fingerprint": fingerprint,
+      "certificateDerBase64": certificate.base64EncodedString(),
+    ])
+
+    XCTAssertEqual(installed, certificate)
+  }
+
+  func testRootTrustInstallerRejectsUnboundOrExtendedInput() throws {
+    var installs = 0
+    let installer = RootTrustInstaller(installOperation: { _ in
+      installs += 1
+      return errSecSuccess
+    })
+    let certificate = Data([0x30, 0x01, 0x00])
+    let base = [
+      "schema": "vibermate-root-trust-install/v1",
+      "rootRevision": 1,
+      "fingerprint": String(repeating: "a", count: 64),
+      "certificateDerBase64": certificate.base64EncodedString(),
+    ] as [String: Any]
+    XCTAssertThrowsError(try installer.install(base))
+    var extended = base
+    extended["path"] = "/tmp/foreign.cer"
+    XCTAssertThrowsError(try installer.install(extended))
+    XCTAssertEqual(installs, 0)
+  }
+
+  func testRootTrustInstallerClassifiesAuthorizationOutcomes() throws {
+    let certificate = Data([0x30, 0x01, 0x00])
+    let fingerprint = SHA256.hash(data: certificate)
+      .map { String(format: "%02x", $0) }
+      .joined()
+    let payload = [
+      "schema": "vibermate-root-trust-install/v1",
+      "rootRevision": 1,
+      "fingerprint": fingerprint,
+      "certificateDerBase64": certificate.base64EncodedString(),
+    ] as [String: Any]
+    for fixture in [
+      (errSecUserCanceled, RootTrustInstaller.Failure.userCancelled),
+      (errAuthorizationCanceled, RootTrustInstaller.Failure.userCancelled),
+      (errSecAuthFailed, RootTrustInstaller.Failure.permissionDenied),
+      (errAuthorizationDenied, RootTrustInstaller.Failure.permissionDenied),
+      (errSecWrPerm, RootTrustInstaller.Failure.permissionDenied),
+      (OSStatus(-25337), RootTrustInstaller.Failure.permissionDenied),
+      (errSecIO, RootTrustInstaller.Failure.installFailed),
+    ] {
+      let installer = RootTrustInstaller(installOperation: { _ in fixture.0 })
+      XCTAssertThrowsError(try installer.install(payload)) { error in
+        guard let observed = error as? RootTrustInstaller.Failure else {
+          return XCTFail("unexpected Root trust error: \(error)")
+        }
+        XCTAssertEqual(observed, fixture.1)
+      }
+    }
   }
 
   private func inode(_ url: URL) throws -> UInt64 {

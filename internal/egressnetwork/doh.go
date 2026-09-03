@@ -18,7 +18,10 @@ import (
 	"golang.org/x/net/dns/dnsmessage"
 )
 
-const maximumDNSMessageBytes = 65535
+const (
+	maximumDNSMessageBytes   = 65535
+	defaultDoHRequestTimeout = 15 * time.Second
+)
 
 type dohResolver struct {
 	endpoint string
@@ -53,6 +56,7 @@ func newDoHResolver(
 		endpoint: canonical,
 		client: &http.Client{
 			Transport: transport,
+			Timeout:   defaultDoHRequestTimeout,
 			CheckRedirect: func(*http.Request, []*http.Request) error {
 				return http.ErrUseLastResponse
 			},

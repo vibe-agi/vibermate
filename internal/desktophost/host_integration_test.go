@@ -210,7 +210,10 @@ func TestMacHostSharesOneRuntimeWithItsRemoteServerBoundary(t *testing.T) {
 		"Authorization",
 		"Bearer "+host.AppSession().WriteToken,
 	)
-	createResponse, err := (&http.Client{Timeout: 5 * time.Second}).Do(
+	// Password hashing is deliberately expensive and the race detector runs
+	// packages concurrently in CI, so this end-to-end boundary needs a workload
+	// budget rather than the shorter control-read budget below.
+	createResponse, err := (&http.Client{Timeout: 15 * time.Second}).Do(
 		createRequest,
 	)
 	if err != nil {
@@ -243,7 +246,7 @@ func TestMacHostSharesOneRuntimeWithItsRemoteServerBoundary(t *testing.T) {
 	loginRequest.Header.Set("Content-Type", "application/json")
 	loginResponse, err := (&http.Client{
 		Transport: remoteTransport,
-		Timeout:   5 * time.Second,
+		Timeout:   15 * time.Second,
 	}).Do(loginRequest)
 	if err != nil {
 		t.Fatal(err)
@@ -254,6 +257,21 @@ func TestMacHostSharesOneRuntimeWithItsRemoteServerBoundary(t *testing.T) {
 	}
 
 	shutdownHost(t, host)
+}
+
+func TestMacHostRejectsPlaintextRemoteServerOutsideLoopback(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	paths := newHostPaths(t, filepath.Join(root, "cache"))
+	options := hostOptions(t, paths, filepath.Join(root, "data"))
+	options.RemoteServerEnabled = true
+	options.RemoteServerListenAddress = "0.0.0.0:0"
+	host, err := desktophost.Start(context.Background(), options)
+	if err == nil {
+		shutdownHost(t, host)
+		t.Fatal("Desktop Host exposed its plaintext remote Server outside loopback")
+	}
 }
 
 func TestHostUsesOnlyTheExplicitWebviewOrigin(t *testing.T) {

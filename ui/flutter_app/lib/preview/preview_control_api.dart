@@ -62,6 +62,11 @@ final class PreviewControlApi implements ControlApi {
           ),
           expiresAt: _now.add(const Duration(hours: 1)),
           localUserLabel: 'mira',
+          homeDirectory: '/Users/mira',
+          operatingSystem: 'darwin',
+          operatingSystemVersion: '26.0',
+          architecture: 'arm64',
+          timeZone: 'Asia/Singapore',
           machineId: _previewMachineId,
           machineRegistrationRevision: 1,
           workspaceId: index < 4 ? _previewWorkspaceId : _identity(9 + index),
@@ -156,6 +161,12 @@ final class PreviewControlApi implements ControlApi {
   static final _contextToken = 'ctx_${List.filled(43, 'C').join()}';
   static const _previewDigest =
       'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+  static final _previewRootDER = Uint8List.fromList(
+    utf8.encode('ViberMate deterministic Preview Root certificate'),
+  );
+  static final _previewRootFingerprint = crypto.sha256
+      .convert(_previewRootDER)
+      .toString();
 
   final Map<String, CaptureRecord> _captures = {};
   final Map<String, CaptureAssignment> _assignments = {};
@@ -197,6 +208,20 @@ final class PreviewControlApi implements ControlApi {
     authentication: 'runtime_user_password',
     sessionPolicy: 'reusable_until_logout_disable_or_expiry',
     targets: ['192.168.1.44:9666'],
+  );
+  RootCAStatus _rootCAStatus = RootCAStatus(
+    rootRevision: 1,
+    fingerprint: _previewRootFingerprint,
+    algorithm: 'ecdsa-p256',
+    notBefore: DateTime.utc(2026, 8, 10),
+    notAfter: DateTime.utc(2036, 8, 7),
+    rootValid: true,
+    certificatePresent: 'absent',
+    trustDecision: 'untrusted',
+    evidenceRevision: 'macos-fixture-v1',
+    observedAt: _now,
+    available: true,
+    reason: null,
   );
   final List<RuntimeUser> _runtimeUsers = [
     RuntimeUser(
@@ -692,6 +717,72 @@ final class PreviewControlApi implements ControlApi {
       endpoints: List.unmodifiable(_endpoints),
       accounts: List.unmodifiable(_accounts),
     );
+  }
+
+  @override
+  Future<RootCAStatus> rootCA() async {
+    _requireOpen();
+    return _rootCAStatus;
+  }
+
+  @override
+  Future<RootCAMaterial> rootCAMaterial(RootCAStatus current) async {
+    _requireOpen();
+    _validateRootCARevision(current);
+    return RootCAMaterial.fromJson({
+      'rootRevision': _rootCAStatus.rootRevision,
+      'fingerprint': _rootCAStatus.fingerprint,
+      'certificateDerBase64': base64Encode(_previewRootDER),
+    }, 'rootCAMaterial');
+  }
+
+  void setRootTrustForPreview({required bool installed}) {
+    _requireOpen();
+    _rootCAStatus = _rootCAStatus.copyWith(
+      certificatePresent: installed ? 'present' : 'absent',
+      trustDecision: installed ? 'trusted' : 'untrusted',
+      clearReason: true,
+    );
+  }
+
+  @override
+  Future<RootCAActionResult> replaceRootCA(RootCAStatus current) async {
+    _requireOpen();
+    _validateRootCARevision(current);
+    if (_captures.values.any((capture) => capture.running)) {
+      throw const ControlProblem(
+        status: 409,
+        reasonCode: 'root_reset_active_captures',
+        messageKey: 'error.root_reset_active_captures',
+      );
+    }
+    if (_rootCAStatus.certificatePresent != 'absent' ||
+        _rootCAStatus.trustDecision != 'untrusted') {
+      throw const ControlProblem(
+        status: 409,
+        reasonCode: 'root_reset_requires_removal',
+        messageKey: 'error.root_reset_requires_removal',
+      );
+    }
+    _rootCAStatus = _rootCAStatus.copyWith(
+      certificatePresent: 'absent',
+      trustDecision: 'untrusted',
+      clearReason: true,
+    );
+    return RootCAActionResult(
+      status: _rootCAStatus,
+      resultStatus: 'applied',
+      reason: 'applied',
+      completed: false,
+      restartRequired: true,
+    );
+  }
+
+  void _validateRootCARevision(RootCAStatus current) {
+    if (current.rootRevision != _rootCAStatus.rootRevision ||
+        current.fingerprint != _rootCAStatus.fingerprint) {
+      throw const ControlContractException('root CA revision is stale');
+    }
   }
 
   @override

@@ -14,6 +14,8 @@ import '../features/workbench/workbench_controller.dart';
 import '../features/workbench/workbench_shell.dart';
 import '../preview/preview_control_api.dart';
 import '../preview/preview_terminal_command.dart';
+import '../core/bootstrap/root_trust_installer_contract.dart';
+import '../preview/preview_root_trust_installer.dart';
 
 typedef RuntimeConnector =
     Future<RuntimeConnection> Function({String? accessKey});
@@ -165,6 +167,7 @@ final class _RuntimeBootstrapState extends State<_RuntimeBootstrap> {
       final ControlApi api;
       final TerminalCommandService terminalCommands;
       final Future<void> Function() closeRuntime;
+      final RootTrustInstaller? rootTrustInstaller;
       final preferencesStore = widget.preferencesStore;
       final loadedPreferences = widget.loadedPreferences;
       RuntimeConnection? liveRuntime;
@@ -173,12 +176,14 @@ final class _RuntimeBootstrapState extends State<_RuntimeBootstrap> {
         api = preview;
         terminalCommands = PreviewTerminalCommandService();
         closeRuntime = preview.close;
+        rootTrustInstaller = PreviewRootTrustInstaller(preview);
       } else {
         final runtime = await widget.runtimeConnector(accessKey: accessKey);
         liveRuntime = runtime;
         api = runtime.api;
         terminalCommands = runtime.terminalCommands;
         closeRuntime = runtime.close;
+        rootTrustInstaller = runtime.rootTrustInstaller;
       }
       if (!mounted || attempt != _attempt) {
         await closeRuntime();
@@ -190,8 +195,28 @@ final class _RuntimeBootstrapState extends State<_RuntimeBootstrap> {
         previewMode: widget.previewMode,
         serverManagement: liveRuntime?.serverManagement ?? false,
         terminalManagement: liveRuntime?.terminalManagement ?? true,
+        rootTrustManagement:
+            liveRuntime?.rootTrustManagement ?? widget.previewMode,
+        rootTrustInstaller: rootTrustInstaller,
         runtimeTarget: liveRuntime?.targetLabel ?? platformRuntimeTargetLabel(),
         closeRuntime: closeRuntime,
+        restartRuntime: () async {
+          // Invalidate the old watcher before asking the daemon to drain; the
+          // next generation is intentionally started with a fresh attempt.
+          _attempt += 1;
+          final previous = _controller;
+          if (mounted) {
+            setState(() {
+              _controller = null;
+              _starting = true;
+              _failure = null;
+            });
+          }
+          previous?.dispose();
+          await closeRuntime();
+          if (!mounted) return;
+          await _start();
+        },
         initialPreferences: loadedPreferences.value,
         preferencesStore: preferencesStore,
         preferencesWritable: loadedPreferences.writable,
@@ -310,7 +335,7 @@ final class _RuntimeBootstrapState extends State<_RuntimeBootstrap> {
                   Text(
                     sidecarUnavailable
                         ? copy('bootstrap.sidecar_unavailable')
-                        : _failure.toString(),
+                        : _bootstrapFailureMessage(copy, _failure),
                     textAlign: TextAlign.center,
                     style: Theme.of(context).textTheme.bodySmall,
                   ),
@@ -329,6 +354,24 @@ final class _RuntimeBootstrapState extends State<_RuntimeBootstrap> {
       ),
     );
   }
+}
+
+String _bootstrapFailureMessage(AppCopy copy, Object? failure) {
+  if (failure is RuntimeConnectionException) {
+    return switch (failure.message) {
+      'runtime_unavailable' => copy('bootstrap.failure.runtime_unavailable'),
+      'runtime_already_active' => copy(
+        'bootstrap.failure.runtime_already_active',
+      ),
+      'secret_store_unavailable' => copy(
+        'bootstrap.failure.secret_store_unavailable',
+      ),
+      'storage_unavailable' => copy('bootstrap.failure.storage_unavailable'),
+      'root_reset_failed' => copy('bootstrap.failure.root_reset_failed'),
+      _ => copy('bootstrap.failure.runtime_unavailable'),
+    };
+  }
+  return copy('bootstrap.failure.runtime_unavailable');
 }
 
 final class RuntimeServerLoginView extends StatelessWidget {

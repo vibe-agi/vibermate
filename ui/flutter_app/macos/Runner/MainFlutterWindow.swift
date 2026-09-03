@@ -1,6 +1,8 @@
 import Cocoa
+import CryptoKit
 import Darwin
 import FlutterMacOS
+import Security
 
 enum WorkbenchWindowTheme: String {
   case system
@@ -38,10 +40,14 @@ enum WorkbenchWindowTheme: String {
 
 class MainFlutterWindow: NSWindow {
   private static let preferencesChannelName = "io.vibermate.desktop/preferences"
+  private static let rootTrustInstallerChannelName =
+    "io.vibermate.desktop/root-trust-installer"
   private static let frameAutosaveName = "ViberMateMainWindow"
 
   private var preferencesChannel: FlutterMethodChannel?
   private var preferencesBridge: WorkbenchPreferencesBridge?
+  private var rootTrustInstallerChannel: FlutterMethodChannel?
+  private var rootTrustInstaller: RootTrustInstaller?
 
   override func awakeFromNib() {
     let flutterViewController = FlutterViewController()
@@ -71,6 +77,16 @@ class MainFlutterWindow: NSWindow {
       self?.handlePreferences(call: call, result: result)
     }
     self.preferencesChannel = channel
+
+    rootTrustInstaller = RootTrustInstaller()
+    let rootInstallerChannel = FlutterMethodChannel(
+      name: Self.rootTrustInstallerChannelName,
+      binaryMessenger: flutterViewController.engine.binaryMessenger
+    )
+    rootInstallerChannel.setMethodCallHandler { [weak self] call, result in
+      self?.handleRootTrustInstaller(call: call, result: result)
+    }
+    self.rootTrustInstallerChannel = rootInstallerChannel
 
     super.awakeFromNib()
     self.sharingType = .readOnly
@@ -125,6 +141,32 @@ class MainFlutterWindow: NSWindow {
     FlutterError(code: code, message: message, details: nil)
   }
 
+  private func handleRootTrustInstaller(
+    call: FlutterMethodCall,
+    result: @escaping FlutterResult
+  ) {
+    guard call.method == "installRootCertificate" else {
+      result(FlutterMethodNotImplemented)
+      return
+    }
+    guard let rootTrustInstaller else {
+      result(preferencesError("unavailable", "Root trust installer is unavailable"))
+      return
+    }
+    do {
+      try rootTrustInstaller.install(call.arguments)
+      result(nil)
+    } catch RootTrustInstaller.Failure.invalidPayload {
+      result(preferencesError("invalid_arguments", "Root certificate material is invalid"))
+    } catch RootTrustInstaller.Failure.userCancelled {
+      result(preferencesError("user_cancelled", "macOS authorization was cancelled"))
+    } catch RootTrustInstaller.Failure.permissionDenied {
+      result(preferencesError("permission_denied", "macOS authorization was denied"))
+    } catch {
+      result(preferencesError("install_failed", "Root certificate trust could not be changed"))
+    }
+  }
+
   private func applyWindowTheme(_ theme: WorkbenchWindowTheme) {
     theme.apply(to: self)
   }
@@ -167,8 +209,10 @@ final class WorkbenchPreferencesBridge {
   convenience init(
     environment: [String: String] = ProcessInfo.processInfo.environment
   ) throws {
-    guard let home = environment["HOME"],
+    let selectedHome = environment["CFFIXED_USER_HOME"] ?? environment["HOME"]
+    guard let home = selectedHome,
           home.hasPrefix("/"),
+          home != "/",
           URL(fileURLWithPath: home, isDirectory: true).standardizedFileURL.path == home else {
       throw Failure.invalidState
     }
@@ -405,5 +449,107 @@ final class WorkbenchPreferencesBridge {
 
   private static func matchesResource(_ value: String) -> Bool {
     value.range(of: resourcePattern, options: .regularExpression) != nil
+  }
+}
+
+final class RootTrustInstaller {
+  enum Failure: Error, Equatable {
+    case invalidPayload
+    case userCancelled
+    case permissionDenied
+    case installFailed
+  }
+
+  private static let schema = "vibermate-root-trust-install/v1"
+  private static let fields: Set<String> = [
+    "schema", "rootRevision", "fingerprint", "certificateDerBase64",
+  ]
+  private static let fingerprintPattern = "^[0-9a-f]{64}$"
+  private static let maximumCertificateBytes = 64 * 1_024
+  private let installOperation: (Data) -> OSStatus
+
+  convenience init() {
+    self.init(installOperation: Self.installIntoCurrentUserTrust)
+  }
+
+  init(installOperation: @escaping (Data) -> OSStatus) {
+    self.installOperation = installOperation
+  }
+
+  func install(_ arguments: Any?) throws {
+    let certificate = try Self.certificate(arguments)
+    switch installOperation(certificate) {
+    case errSecSuccess:
+      return
+    case errSecUserCanceled, errAuthorizationCanceled:
+      throw Failure.userCancelled
+    case errSecAuthFailed, errSecInteractionNotAllowed, errSecReadOnly,
+         errSecWrPerm, errAuthorizationDenied, -25337:
+      throw Failure.permissionDenied
+    default:
+      throw Failure.installFailed
+    }
+  }
+
+  private static func certificate(
+    _ arguments: Any?
+  ) throws -> Data {
+    guard let payload = arguments as? [String: Any],
+          Set(payload.keys) == fields,
+          payload["schema"] as? String == schema,
+          let revisionValue = payload["rootRevision"] as? NSNumber,
+          CFGetTypeID(revisionValue) != CFBooleanGetTypeID(),
+          revisionValue.doubleValue.isFinite,
+          revisionValue.int64Value >= 1,
+          revisionValue.doubleValue == Double(revisionValue.int64Value),
+          let fingerprint = payload["fingerprint"] as? String,
+          fingerprint.range(
+            of: fingerprintPattern,
+            options: .regularExpression
+          ) != nil,
+          let encoded = payload["certificateDerBase64"] as? String,
+          encoded.utf8.count <= maximumCertificateBytes * 2,
+          let der = Data(base64Encoded: encoded),
+          !der.isEmpty,
+          der.count <= maximumCertificateBytes,
+          der.base64EncodedString() == encoded else {
+      throw Failure.invalidPayload
+    }
+    let digest = SHA256.hash(data: der)
+      .map { String(format: "%02x", $0) }
+      .joined()
+    guard digest == fingerprint else { throw Failure.invalidPayload }
+    return der
+  }
+
+  private static func installIntoCurrentUserTrust(_ der: Data) -> OSStatus {
+    guard let certificate = SecCertificateCreateWithData(nil, der as CFData) else {
+      return errSecDecode
+    }
+    // SecItemAdd without an explicit keychain writes to this login's default
+    // keychain. It deliberately avoids the privileged System.keychain path,
+    // which a regular foreground application cannot modify directly.
+    let addStatus = SecItemAdd([
+      kSecClass: kSecClassCertificate,
+      kSecValueRef: certificate,
+    ] as CFDictionary, nil)
+    guard addStatus == errSecSuccess || addStatus == errSecDuplicateItem else {
+      return addStatus
+    }
+    let serverTLSPolicy = SecPolicyCreateSSL(true, nil)
+    let trustSettings = [[
+      kSecTrustSettingsPolicy: serverTLSPolicy,
+      kSecTrustSettingsResult: NSNumber(
+        value: SecTrustSettingsResult.trustRoot.rawValue
+      ),
+    ]] as CFArray
+    // The trust applies only to the current macOS login and only to Server TLS.
+    // No helper, shell, administrator credential, or system-wide mutation is
+    // needed; the read-side observation verifies this same user trust domain.
+    return SecTrustSettingsSetTrustSettings(
+      certificate,
+      .user,
+      trustSettings
+    )
   }
 }

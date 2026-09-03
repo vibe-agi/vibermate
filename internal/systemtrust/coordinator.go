@@ -76,6 +76,46 @@ func NewCoordinator(
 	return coordinator, nil
 }
 
+// Observe returns one bounded, read-only snapshot of the current Root and the
+// fixed macOS trust target. It never plans or mutates an operation; callers can
+// use the returned unknown axes to render an honest degraded state.
+func (coordinator *Coordinator) Observe(
+	ctx context.Context,
+) (Observation, error) {
+	if coordinator == nil || ctx == nil {
+		return Observation{}, ErrInvalidOperation
+	}
+	finish, err := coordinator.beginPlan()
+	if err != nil {
+		return Observation{}, err
+	}
+	defer finish()
+	operationContext, cancel, stopCaller := linkedContext(
+		coordinator.ownerContext,
+		ctx,
+	)
+	defer cancel(nil)
+	defer stopCaller()
+	if err := operationContext.Err(); err != nil {
+		return Observation{}, context.Cause(operationContext)
+	}
+	root, err := coordinator.source.currentPublicRoot(operationContext)
+	if err != nil || !root.valid() {
+		return Observation{}, errors.Join(ErrCurrentRootInvalid, err)
+	}
+	observation, observeErr := coordinator.inspect(operationContext, root)
+	if err := ctx.Err(); err != nil {
+		return observation, context.Cause(ctx)
+	}
+	if err := operationContext.Err(); err != nil {
+		return observation, context.Cause(operationContext)
+	}
+	if observeErr != nil || !observation.Valid() {
+		return observation, errors.Join(ErrObservationUnknown, observeErr)
+	}
+	return observation, nil
+}
+
 func (coordinator *Coordinator) Plan(
 	ctx context.Context,
 	operation Operation,
@@ -410,7 +450,7 @@ func observationSatisfies(current, desired Observation) bool {
 }
 
 func canContinue(steps []Step, index int, observed Observation) bool {
-	if index+2 >= len(steps) || steps[index] != StepRemoveExactAdminTrustSettings ||
+	if index+2 >= len(steps) || steps[index] != StepRemoveExactUserTrustSettings ||
 		steps[index+1] != StepInspectExactRoot ||
 		steps[index+2] != StepDeleteExactCertificate {
 		return false

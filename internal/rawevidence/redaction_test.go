@@ -258,6 +258,23 @@ func TestRateLimitEvidenceSurvivesRedaction(t *testing.T) {
 	}
 }
 
+func TestExplicitCredentialMarkerWinsInsideRateLimitName(t *testing.T) {
+	t.Parallel()
+
+	for _, name := range []string{
+		"X-RateLimit-Api-Key",
+		"X-Ratelimit-Secret",
+		"Rate-Limit-Password",
+		"X-RateLimit-Credential",
+		"X-RateLimit-Access-Token",
+		"X-RateLimit-Token",
+	} {
+		if !NameIsCredential(name) {
+			t.Errorf("%s was not treated as a credential", name)
+		}
+	}
+}
+
 // An envelope that stored no payload redacted nothing. Reporting field names for
 // it is a claim about work that never happened, in a product whose thesis is that
 // evidence says what it is.

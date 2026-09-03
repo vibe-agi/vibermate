@@ -109,6 +109,22 @@ func (manager *Manager) Recovery() Recovery {
 	return manager.recovery
 }
 
+func (manager *Manager) ActiveCount(ctx context.Context) (int, error) {
+	if manager == nil {
+		return 0, ErrRuntimeStopping
+	}
+	operation, finish, err := manager.lifecycle.begin(ctx)
+	if err != nil {
+		return 0, err
+	}
+	defer finish()
+	recovery, err := manager.repository.Recover(operation, manager.now())
+	if err != nil {
+		return 0, fmt.Errorf("reconcile active ManualCaptures: %w", err)
+	}
+	return recovery.ActiveCount, nil
+}
+
 func (manager *Manager) Create(
 	ctx context.Context,
 	command CreateCommand,

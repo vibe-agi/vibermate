@@ -410,6 +410,13 @@ type ActivityReader interface {
 	Active(context.Context, ID, time.Time) (bool, error)
 }
 
+// GlobalActivityReader is the installation-wide lifecycle projection used by
+// operations, such as Root replacement, that affect every Capture owner.
+// Owner-scoped catalog data remains unavailable through this seam.
+type GlobalActivityReader interface {
+	ActiveCount(context.Context) (int, error)
+}
+
 type Controller interface {
 	Create(context.Context, CreateCommand) (Grant, error)
 	Rotate(context.Context, RotateCommand) (Grant, error)

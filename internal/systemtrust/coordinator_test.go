@@ -123,7 +123,7 @@ func TestCoordinatorExecutesTypedStepsAndReinspectsEachMutation(t *testing.T) {
 				mutations = append(mutations, kind)
 				if index+2 >= len(calls) ||
 					calls[index+1] != CommandInspectExactPresence ||
-					calls[index+2] != CommandInspectAdminTrust {
+					calls[index+2] != CommandInspectUserTrust {
 					t.Fatalf("mutation %s was not immediately reinspected: %v", kind, calls)
 				}
 			}
@@ -423,7 +423,7 @@ func (executor *planCancellationExecutor) Execute(
 	ctx context.Context,
 	spec CommandSpec,
 ) (CommandResult, error) {
-	if spec.Kind() != CommandInspectAdminTrust {
+	if spec.Kind() != CommandInspectUserTrust {
 		return executor.delegate.Execute(ctx, spec)
 	}
 	executor.once.Do(func() { close(executor.entered) })
@@ -571,9 +571,9 @@ func TestCallerCancellationBetweenPreinspectionAndMutationRunsNoCommand(
 	}
 	if calls := executor.callKinds(); !slices.Equal(calls, []CommandKind{
 		CommandInspectExactPresence,
-		CommandInspectAdminTrust,
+		CommandInspectUserTrust,
 		CommandInspectExactPresence,
-		CommandInspectAdminTrust,
+		CommandInspectUserTrust,
 	}) {
 		t.Fatalf("pre-mutation cancellation ran a command or reconciliation: %v", calls)
 	}
@@ -638,9 +638,9 @@ func TestOwnerCancellationBetweenPreinspectionAndMutationRunsNoCommand(
 	}
 	if calls := executor.callKinds(); !slices.Equal(calls, []CommandKind{
 		CommandInspectExactPresence,
-		CommandInspectAdminTrust,
+		CommandInspectUserTrust,
 		CommandInspectExactPresence,
-		CommandInspectAdminTrust,
+		CommandInspectUserTrust,
 	}) {
 		t.Fatalf("pre-mutation owner cancellation ran a command or reconciliation: %v", calls)
 	}
@@ -684,7 +684,7 @@ func TestCallerCancellationTriggersIndependentReconciliation(t *testing.T) {
 	mutationIndex := slices.Index(calls, CommandEnsureExactTrust)
 	if mutationIndex < 0 || mutationIndex+2 >= len(calls) ||
 		calls[mutationIndex+1] != CommandInspectExactPresence ||
-		calls[mutationIndex+2] != CommandInspectAdminTrust {
+		calls[mutationIndex+2] != CommandInspectUserTrust {
 		t.Fatalf("caller cancellation skipped independent reconciliation: %v", calls)
 	}
 }
@@ -990,7 +990,6 @@ func TestOperationResultAndErrorDoNotExposeCommandEvidence(t *testing.T) {
 	combined := fmt.Sprintf("%+v %v", result, err)
 	for _, forbidden := range []string{
 		macOSSecurityExecutable,
-		macOSSystemKeychain,
 		"add-trusted-cert",
 		"root.cer",
 		string(root.certificateDER),

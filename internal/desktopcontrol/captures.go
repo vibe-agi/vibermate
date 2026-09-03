@@ -57,6 +57,11 @@ type ManagedRunResponse struct {
 	CWD                         string                            `json:"cwd"`
 	CanonicalExecutablePath     string                            `json:"canonicalExecutablePath"`
 	LocalUserLabel              string                            `json:"localUserLabel,omitempty"`
+	HomeDirectory               string                            `json:"homeDirectory,omitempty"`
+	OperatingSystem             string                            `json:"operatingSystem,omitempty"`
+	OperatingSystemVersion      string                            `json:"operatingSystemVersion,omitempty"`
+	Architecture                string                            `json:"architecture,omitempty"`
+	TimeZone                    string                            `json:"timeZone,omitempty"`
 	MachineID                   string                            `json:"machineId,omitempty"`
 	MachineRegistrationRevision uint64                            `json:"machineRegistrationRevision,omitempty"`
 	WorkspaceID                 string                            `json:"workspaceId,omitempty"`
@@ -106,8 +111,14 @@ func captureRunResponseOf(view capturerun.View) CaptureResponse {
 		Observation: string(view.Observation), CreatedAt: view.CreatedAt, UpdatedAt: view.UpdatedAt,
 		ManagedRun: &ManagedRunResponse{
 			ExecutableLabel: view.ExecutableLabel, CWD: view.CWD,
-			CanonicalExecutablePath: view.CanonicalExecutablePath,
-			LocalUserLabel:          view.LocalUserLabel, MachineID: view.MachineID,
+			CanonicalExecutablePath:     view.CanonicalExecutablePath,
+			LocalUserLabel:              view.LocalUserLabel,
+			HomeDirectory:               view.Runtime.HomeDirectory,
+			OperatingSystem:             view.Runtime.OperatingSystem,
+			OperatingSystemVersion:      view.Runtime.OperatingSystemVersion,
+			Architecture:                view.Runtime.Architecture,
+			TimeZone:                    view.Runtime.TimeZone,
+			MachineID:                   view.MachineID,
 			MachineRegistrationRevision: view.MachineRegistrationRevision,
 			WorkspaceID:                 view.WorkspaceID, WorkspaceLabel: view.WorkspaceLabel,
 			WorkspaceEvidence:           string(view.WorkspaceEvidence),

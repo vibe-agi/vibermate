@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"sort"
 	"strings"
@@ -202,7 +203,11 @@ func ParseMaterial(encoded []byte) (Material, error) {
 	decoder := json.NewDecoder(bytes.NewReader(encoded))
 	decoder.DisallowUnknownFields()
 	var wire materialWire
-	if err := decoder.Decode(&wire); err != nil || decoder.Decode(&struct{}{}) == nil ||
+	if err := decoder.Decode(&wire); err != nil {
+		return Material{}, ErrInvalidAuthentication
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) ||
 		wire.Version != materialVersion {
 		return Material{}, ErrInvalidAuthentication
 	}

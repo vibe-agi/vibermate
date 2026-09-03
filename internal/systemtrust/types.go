@@ -64,28 +64,28 @@ func (decision TrustDecision) valid() bool {
 
 type TrustSettingsDomain string
 
-const TrustSettingsDomainAdmin TrustSettingsDomain = "admin"
+const TrustSettingsDomainUser TrustSettingsDomain = "user"
 
 type CertificateKeychain string
 
-const CertificateKeychainSystem CertificateKeychain = "system"
+const CertificateKeychainUserSearchList CertificateKeychain = "user_search_list"
 
 type TrustUsage string
 
 const TrustUsageServerTLS TrustUsage = "server_tls"
 
-// TargetScope separates the writable admin trust-settings domain from the
-// System.keychain certificate-object location.
+// TargetScope separates the current user's trust-settings domain from the
+// keychain search scope used to locate the exact certificate object.
 type TargetScope struct {
 	domain   TrustSettingsDomain
 	keychain CertificateKeychain
 	usage    TrustUsage
 }
 
-func MacOSSystemTarget() TargetScope {
+func MacOSCurrentUserTarget() TargetScope {
 	return TargetScope{
-		domain:   TrustSettingsDomainAdmin,
-		keychain: CertificateKeychainSystem,
+		domain:   TrustSettingsDomainUser,
+		keychain: CertificateKeychainUserSearchList,
 		usage:    TrustUsageServerTLS,
 	}
 }
@@ -103,17 +103,21 @@ func (scope TargetScope) Usage() TrustUsage {
 }
 
 func (scope TargetScope) valid() bool {
-	return scope == MacOSSystemTarget()
+	return scope == MacOSCurrentUserTarget()
 }
 
 // EvidenceRevision identifies one bounded observation grammar. It is not an
 // operating-system version or a claim that live platform behavior is verified.
 type EvidenceRevision string
 
-const EvidenceRevisionMacOSFixtureV1 EvidenceRevision = "macos-fixture-v1"
+const (
+	EvidenceRevisionMacOSFixtureV1  EvidenceRevision = "macos-fixture-v1"
+	EvidenceRevisionMacOSSecurityV2 EvidenceRevision = "macos-security-v2"
+)
 
 func (revision EvidenceRevision) valid() bool {
-	return revision == EvidenceRevisionMacOSFixtureV1
+	return revision == EvidenceRevisionMacOSFixtureV1 ||
+		revision == EvidenceRevisionMacOSSecurityV2
 }
 
 // Observation binds both independent state axes to the exact current Root and
@@ -136,7 +140,7 @@ func newObservation(
 	return Observation{
 		rootRevision: root.identity.Revision(),
 		rootDigest:   root.identity.Digest(),
-		target:       MacOSSystemTarget(),
+		target:       MacOSCurrentUserTarget(),
 		presence:     presence,
 		decision:     decision,
 		evidence:     evidence,
@@ -201,16 +205,16 @@ func (operation Operation) valid() bool {
 type Step string
 
 const (
-	StepEnsureExactCertificateAndAdminTrust Step = "ensure_exact_certificate_and_admin_trust"
-	StepRemoveExactAdminTrustSettings       Step = "remove_exact_admin_trust_settings"
-	StepDeleteExactCertificate              Step = "delete_exact_certificate"
-	StepInspectExactRoot                    Step = "inspect_exact_root"
+	StepEnsureExactCertificateAndUserTrust Step = "ensure_exact_certificate_and_user_trust"
+	StepRemoveExactUserTrustSettings       Step = "remove_exact_user_trust_settings"
+	StepDeleteExactCertificate             Step = "delete_exact_certificate"
+	StepInspectExactRoot                   Step = "inspect_exact_root"
 )
 
 func (step Step) mutation() bool {
 	switch step {
-	case StepEnsureExactCertificateAndAdminTrust,
-		StepRemoveExactAdminTrustSettings,
+	case StepEnsureExactCertificateAndUserTrust,
+		StepRemoveExactUserTrustSettings,
 		StepDeleteExactCertificate:
 		return true
 	default:

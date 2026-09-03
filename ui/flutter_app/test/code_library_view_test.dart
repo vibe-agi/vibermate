@@ -119,7 +119,9 @@ void main() {
       selectors: 'Account selection rules',
       createTransform: 'New message transform',
       createSelector: 'New account selection rule',
+      viewCode: 'View code',
       createFromExample: 'Create from example',
+      dismiss: 'Dismiss',
     ),
     (
       language: AppLanguage.simplifiedChinese,
@@ -128,7 +130,9 @@ void main() {
       selectors: '账号选择规则',
       createTransform: '新建消息变换',
       createSelector: '新建账号选择规则',
+      viewCode: '查看代码',
       createFromExample: '以此新建',
+      dismiss: '关闭',
     ),
   ]) {
     testWidgets(
@@ -162,7 +166,14 @@ void main() {
         expect(find.text(languageCase.title), findsOneWidget);
         expect(find.text(languageCase.transforms), findsOneWidget);
         expect(find.text(languageCase.selectors), findsOneWidget);
-        expect(find.text(languageCase.createFromExample), findsNWidgets(7));
+        expect(find.text(languageCase.viewCode), findsNWidgets(7));
+        await tester.tap(
+          find.byKey(const Key('code-library-starter-localIdentity')),
+        );
+        await tester.pumpAndSettle();
+        expect(find.text(languageCase.createFromExample), findsOneWidget);
+        await tester.tap(find.byTooltip(languageCase.dismiss));
+        await tester.pumpAndSettle();
         await tester.tap(find.byKey(const Key('code-library-add')));
         await tester.pumpAndSettle();
         expect(find.text(languageCase.createTransform), findsOneWidget);
@@ -171,7 +182,7 @@ void main() {
         await tester.pumpAndSettle();
         await tester.tap(find.text(languageCase.selectors));
         await tester.pumpAndSettle();
-        expect(find.text(languageCase.createFromExample), findsOneWidget);
+        expect(find.text(languageCase.viewCode), findsOneWidget);
         expect(tester.takeException(), isNull);
       },
     );
@@ -378,6 +389,12 @@ void main() {
         find.byKey(const Key('code-library-starter-localIdentity')),
       );
       await tester.pumpAndSettle();
+      await tester.tap(
+        find.byKey(
+          const Key('environment-transform-save-starter-preview-localIdentity'),
+        ),
+      );
+      await tester.pumpAndSettle();
       await tester.tap(find.byKey(const Key('code-library-transform-next')));
       await tester.pumpAndSettle();
 
@@ -430,7 +447,7 @@ void main() {
     },
   );
 
-  testWidgets('empty Code Library exposes editable built-in examples', (
+  testWidgets('built-in code can be inspected before creating a copy', (
     tester,
   ) async {
     await tester.binding.setSurfaceSize(const Size(390, 760));
@@ -473,11 +490,116 @@ void main() {
     expect(find.textContaining('runtime.user.homeDirectory'), findsOneWidget);
     expect((await api.codeLibrary()).transforms, isEmpty);
 
+    await tester.tap(find.byKey(const Key('code-library-starter-blank')));
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const Key('code-library-starter-preview-blank')),
+      findsNothing,
+    );
+    expect(find.text('New message transform'), findsOneWidget);
+    expect(
+      find.byKey(const Key('code-library-transform-name')),
+      findsOneWidget,
+    );
+    await tester.tap(find.text('Cancel'));
+    await tester.pumpAndSettle();
+
     await tester.tap(
       find.byKey(const Key('code-library-starter-localIdentity')),
     );
     await tester.pumpAndSettle();
+    expect(
+      find.byKey(const Key('message-transform-editor-page')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(
+        const Key(
+          'environment-transform-request-starter-preview-localIdentity',
+        ),
+      ),
+      findsOneWidget,
+    );
+    expect(
+      find.text(
+        'Try this built-in code locally. Edits and test results are discarded unless you create a copy.',
+      ),
+      findsOneWidget,
+    );
+    await tester.tap(
+      find.byKey(
+        const Key('environment-transform-sample-starter-preview-localIdentity'),
+      ),
+    );
+    await tester.pumpAndSettle();
+    final starterSampleBody = tester.widget<TextField>(
+      find.byKey(const Key('environment-transform-sample-request-body')),
+    );
+    expect(starterSampleBody.controller?.text, contains('/Users/example-user'));
+    await tester.tap(
+      find.byKey(const Key('environment-transform-sample-tab-runtime')),
+    );
+    await tester.pumpAndSettle();
+    final starterRuntimeUser = tester.widget<TextField>(
+      find.byKey(const Key('environment-transform-sample-runtime-user-name')),
+    );
+    expect(starterRuntimeUser.controller?.text, 'example-user');
+    await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(
+        const Key(
+          'environment-transform-request-starter-preview-localIdentity',
+        ),
+      ),
+      '${localIdentityContract.request}\n// local experiment',
+    );
+    expect(
+      find.byKey(
+        const Key('environment-transform-test-starter-preview-localIdentity'),
+      ),
+      findsOneWidget,
+    );
+    expect(find.byKey(const Key('code-library-transform-name')), findsNothing);
+    expect((await api.codeLibrary()).transforms, isEmpty);
+
+    await tester.tap(find.byTooltip('Dismiss'));
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find.byKey(const Key('code-library-starter-localIdentity')),
+    );
+    await tester.pumpAndSettle();
+    final reopenedRequest = tester.widget<TextField>(
+      find.byKey(
+        const Key(
+          'environment-transform-request-starter-preview-localIdentity',
+        ),
+      ),
+    );
+    expect(reopenedRequest.controller?.text, localIdentityContract.request);
+    await tester.enterText(
+      find.byKey(
+        const Key(
+          'environment-transform-request-starter-preview-localIdentity',
+        ),
+      ),
+      '${localIdentityContract.request}\n// local experiment',
+    );
+    await tester.tap(
+      find.byKey(
+        const Key('environment-transform-save-starter-preview-localIdentity'),
+      ),
+    );
+    await tester.pumpAndSettle();
     expect(find.text('New collection'), findsNothing);
+    expect(
+      find.byKey(const Key('code-library-transform-protocol')),
+      findsNothing,
+    );
+    expect(
+      find.byKey(const Key('code-library-transform-starter')),
+      findsNothing,
+    );
 
     final name = tester.widget<TextField>(
       find.byKey(const Key('code-library-transform-name')),
@@ -495,8 +617,105 @@ void main() {
       find.byKey(const Key('environment-transform-request-new-transform')),
     );
     expect(request.controller?.text, contains('runtime.user.homeDirectory'));
+    expect(request.controller?.text, contains('// local experiment'));
     expect(tester.takeException(), isNull);
   });
+
+  testWidgets(
+    'built-in preview can import a real captured conversation Exchange',
+    (tester) async {
+      await tester.binding.setSurfaceSize(const Size(1000, 760));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      final api = PreviewControlApi();
+      final controller = WorkbenchController(
+        api: api,
+        terminalCommands: PreviewTerminalCommandService(),
+        previewMode: true,
+        closeRuntime: api.close,
+      );
+      addTearDown(controller.dispose);
+      await controller.initialize();
+      await controller.selectCapture('managed_run:run-1');
+
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: ViberTheme.light(),
+          home: Scaffold(
+            body: CodeLibraryView(
+              controller: controller,
+              copy: AppCopy.forLanguage(AppLanguage.english),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(
+        find.byKey(const Key('code-library-starter-localIdentity')),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(
+        find.byKey(
+          const Key(
+            'environment-transform-sample-starter-preview-localIdentity',
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(
+        find.byKey(const Key('environment-transform-sample-pick-captured')),
+      );
+      await tester.pump();
+
+      expect(
+        find.byKey(const Key('code-library-captured-exchange-picker')),
+        findsOneWidget,
+      );
+      expect(find.text('Choose a real conversation record'), findsOneWidget);
+      await tester.tap(find.byKey(const Key('code-library-sample-capture')));
+      await tester.pump(const Duration(milliseconds: 300));
+      await tester.tap(find.text('Codex').first);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 50));
+      await tester.tap(
+        find.byKey(const Key('code-library-real-exchange-run-2-exchange-24')),
+      );
+      await tester.pumpAndSettle();
+
+      expect(
+        find.byKey(const Key('code-library-captured-exchange-picker')),
+        findsNothing,
+      );
+      expect(find.textContaining('run-2-exchange-24'), findsOneWidget);
+      expect(
+        tester
+            .widget<TextField>(
+              find.byKey(
+                const Key('environment-transform-sample-request-body'),
+              ),
+            )
+            .controller
+            ?.text,
+        contains('claude-sonnet-4-5'),
+      );
+      await tester.tap(
+        find.byKey(const Key('environment-transform-sample-tab-runtime')),
+      );
+      await tester.pumpAndSettle();
+      expect(
+        tester
+            .widget<TextField>(
+              find.byKey(
+                const Key('environment-transform-sample-runtime-user-name'),
+              ),
+            )
+            .controller
+            ?.text,
+        'mira',
+      );
+      expect(tester.takeException(), isNull);
+      controller.dispose();
+    },
+  );
 
   testWidgets('390px Code Library publishes a new immutable revision', (
     tester,
@@ -600,7 +819,7 @@ void main() {
     expect(find.text('Test format · Anthropic Messages'), findsOneWidget);
     expect(
       find.byTooltip(
-        'Only selects the built-in request and response used by Run sample Turn. It does not bind this code to a protocol.',
+        'Selects the format for test inputs. It does not bind this code to a protocol.',
       ),
       findsOneWidget,
     );
@@ -927,6 +1146,15 @@ selection.accountId = accountByLogin[runtime.login.username];''',
     );
     await tester.ensureVisible(loginStarter);
     await tester.tap(loginStarter);
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const Key('account-selector-editor-page')),
+      findsOneWidget,
+    );
+    expect(find.byKey(const Key('code-library-selector-name')), findsNothing);
+    await tester.tap(
+      find.byKey(const Key('account-selector-save-starter-preview-loginUser')),
+    );
     await tester.pumpAndSettle();
     expect(tester.takeException(), isNull, reason: 'selector naming layout');
     expect(find.text('New collection'), findsNothing);

@@ -181,7 +181,7 @@ func runServer(arguments []string) {
 
 func parseServerArguments(arguments []string) (serverCommandConfig, error) {
 	config := serverCommandConfig{
-		listenAddress: "0.0.0.0:9666",
+		listenAddress: "127.0.0.1:9666",
 		transport:     serverhost.TransportOptions{Mode: serverhost.TransportHTTP},
 	}
 	seen := make(map[string]struct{})
@@ -237,8 +237,17 @@ func parseServerArguments(arguments []string) (serverCommandConfig, error) {
 		!validServerTransport(config.transport) {
 		return serverCommandConfig{}, errors.New("vibermated server configuration is invalid")
 	}
-	if _, _, err := net.SplitHostPort(config.listenAddress); err != nil {
+	listenHost, _, err := net.SplitHostPort(config.listenAddress)
+	if err != nil {
 		return serverCommandConfig{}, errors.New("vibermated server listen address is invalid")
+	}
+	_, transportExplicit := seen["--transport"]
+	listenIP := net.ParseIP(listenHost)
+	if config.transport.Mode == serverhost.TransportHTTP &&
+		(listenIP == nil || !listenIP.IsLoopback()) && !transportExplicit {
+		return serverCommandConfig{}, errors.New(
+			"non-loopback HTTP requires explicit --transport http",
+		)
 	}
 	return config, nil
 }
@@ -331,16 +340,22 @@ func parseArguments(arguments []string) (commandConfig, commandResources, error)
 		)
 	}
 	if !remoteServerListenSet {
-		config.remoteServerListenAddress = "0.0.0.0:9666"
+		config.remoteServerListenAddress = "127.0.0.1:9666"
 	}
 	remoteHost, remotePort, remoteErr := net.SplitHostPort(
 		config.remoteServerListenAddress,
 	)
 	remotePortNumber, remotePortErr := strconv.ParseUint(remotePort, 10, 16)
+	remoteIP := net.ParseIP(remoteHost)
 	if remoteErr != nil || remoteHost == "" || remotePort == "" ||
 		remotePortErr != nil || remotePortNumber > 65535 {
 		return commandConfig{}, commandResources{}, errors.New(
 			"remote Server listen address is invalid",
+		)
+	}
+	if remoteIP == nil || !remoteIP.IsLoopback() {
+		return commandConfig{}, commandResources{}, errors.New(
+			"Desktop remote Server HTTP must use literal loopback",
 		)
 	}
 	bootstrap := os.NewFile(uintptr(config.bootstrapFD), "vibermate-bootstrap")

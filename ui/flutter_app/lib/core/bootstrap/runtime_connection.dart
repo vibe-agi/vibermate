@@ -1,4 +1,5 @@
 import '../api/control_api.dart';
+import 'root_trust_installer_contract.dart';
 import 'terminal_command_contract.dart';
 
 final class RuntimeLoginRequired implements Exception {
@@ -63,7 +64,9 @@ final class RuntimeConnection {
     required this.isClosed,
     required this.serverManagement,
     required this.terminalManagement,
+    required this.rootTrustManagement,
     required this.targetLabel,
+    this.rootTrustInstaller,
     this.exitCode,
   });
 
@@ -73,6 +76,8 @@ final class RuntimeConnection {
   final bool Function() isClosed;
   final bool serverManagement;
   final bool terminalManagement;
+  final bool rootTrustManagement;
   final String targetLabel;
+  final RootTrustInstaller? rootTrustInstaller;
   final Future<int>? exitCode;
 }

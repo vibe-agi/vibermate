@@ -16,7 +16,7 @@ import (
 
 const testDesktopPreferencesEnvironmentID = "test.environment"
 
-func TestPackagedDesktopInvocationUsesIsolatedHome(t *testing.T) {
+func TestPackagedDesktopInvocationIsolatesAppDataWithoutReplacingLoginHome(t *testing.T) {
 	t.Parallel()
 
 	arguments := desktopOpenArguments(
@@ -25,9 +25,12 @@ func TestPackagedDesktopInvocationUsesIsolatedHome(t *testing.T) {
 	)
 	if !slices.Contains(
 		arguments,
-		"HOME=/private/tmp/vibermate-home",
+		"CFFIXED_USER_HOME=/private/tmp/vibermate-home",
 	) {
 		t.Fatalf("Desktop open arguments = %v", arguments)
+	}
+	if slices.Contains(arguments, "HOME=/private/tmp/vibermate-home") {
+		t.Fatalf("Desktop invocation replaced the login HOME: %v", arguments)
 	}
 	if !slices.Contains(arguments, "-F") {
 		t.Fatalf("Desktop open arguments do not disable saved-window restore: %v", arguments)

@@ -223,7 +223,13 @@ final class DesktopRuntime {
     String? dataDirectory,
     String? homeDirectory,
   }) async {
-    final home = homeDirectory ?? Platform.environment['HOME'];
+    // Packaged acceptance uses Foundation's standard fixed-user-home override
+    // to isolate App data without replacing the login HOME required by the
+    // macOS Keychain. Production launches normally have no such override.
+    final home =
+        homeDirectory ??
+        Platform.environment['CFFIXED_USER_HOME'] ??
+        Platform.environment['HOME'];
     if (home == null || !Directory(home).isAbsolute) {
       throw const DesktopRuntimeException(
         'macOS home directory is unavailable',

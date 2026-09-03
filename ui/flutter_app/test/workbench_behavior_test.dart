@@ -473,18 +473,18 @@ void main() {
       findsOneWidget,
     );
     final scaffoldContext = tester.element(find.byType(Scaffold).first);
-    expect(
-      Theme.of(scaffoldContext).focusColor,
-      isNot(ViberColors.light.selection),
-    );
     final theme = Theme.of(scaffoldContext);
+    final colors = theme.brightness == Brightness.dark
+        ? ViberColors.dark
+        : ViberColors.light;
+    expect(theme.focusColor, isNot(colors.selection));
     final focusedSide = theme.outlinedButtonTheme.style?.side?.resolve({
       WidgetState.focused,
     });
     final restingSide = theme.outlinedButtonTheme.style?.side?.resolve({});
-    expect(focusedSide?.color, ViberColors.light.focus);
+    expect(focusedSide?.color, colors.focus);
     expect(focusedSide?.width, 1.5);
-    expect(restingSide?.color, ViberColors.light.divider);
+    expect(restingSide?.color, colors.divider);
 
     await tester.sendKeyDownEvent(LogicalKeyboardKey.metaLeft);
     await tester.sendKeyEvent(LogicalKeyboardKey.digit3);

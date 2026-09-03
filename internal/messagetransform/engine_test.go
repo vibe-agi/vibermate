@@ -173,6 +173,77 @@ func TestExecutionStopsAtTheProgramLimitWithoutACallerDeadline(t *testing.T) {
 	}
 }
 
+func TestExecutionLimitIncludesExportedRequestGetters(t *testing.T) {
+	limits := DefaultLimits()
+	limits.MaximumExecutionDuration = 10 * time.Millisecond
+	program, err := Compile(Policy{RequestJavaScript: `
+		Object.defineProperty(request, "body", {
+			get: function () { for (;;) {} },
+		});
+	`}, limits)
+	if err != nil {
+		t.Fatalf("Compile(export getter) error = %v", err)
+	}
+	finished := make(chan error, 1)
+	go func() {
+		_, applyErr := program.NewTurn().ApplyRequest(
+			context.Background(),
+			RequestMessage{
+				Method: http.MethodPost, Path: "/v1/messages",
+				Headers: make(http.Header), Body: []byte(`{}`),
+			},
+		)
+		finished <- applyErr
+	}()
+	select {
+	case applyErr := <-finished:
+		if !errors.Is(applyErr, ErrExecutionFailed) {
+			t.Fatalf(
+				"ApplyRequest(export getter) error = %v, want ErrExecutionFailed",
+				applyErr,
+			)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("ApplyRequest(export getter) exceeded the execution limit")
+	}
+}
+
+func TestExportedGetterExceptionFailsClosedWithoutPanic(t *testing.T) {
+	program, err := Compile(Policy{RequestJavaScript: `
+		Object.defineProperty(context, "derived", {
+			enumerable: true,
+			get: function () { throw new Error("message-derived secret"); },
+		});
+	`}, DefaultLimits())
+	if err != nil {
+		t.Fatalf("Compile(Context export getter) error = %v", err)
+	}
+	var applyErr error
+	var recovered any
+	func() {
+		defer func() { recovered = recover() }()
+		_, applyErr = program.NewTurn().ApplyRequest(
+			context.Background(),
+			RequestMessage{
+				Method: http.MethodPost, Path: "/v1/messages",
+				Headers: make(http.Header), Body: []byte(`{}`),
+			},
+		)
+	}()
+	if recovered != nil {
+		t.Fatalf("ApplyRequest(Context export getter) panicked with %T", recovered)
+	}
+	if !errors.Is(applyErr, ErrExecutionFailed) {
+		t.Fatalf(
+			"ApplyRequest(Context export getter) error = %v, want ErrExecutionFailed",
+			applyErr,
+		)
+	}
+	if strings.Contains(applyErr.Error(), "message-derived secret") {
+		t.Fatalf("ApplyRequest(Context export getter) leaked exception text: %v", applyErr)
+	}
+}
+
 func TestPipelineTurnExposesOneTrustedRuntimeSnapshotToBothStages(t *testing.T) {
 	t.Parallel()
 

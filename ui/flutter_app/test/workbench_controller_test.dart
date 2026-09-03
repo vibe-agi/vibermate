@@ -4,12 +4,72 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:vibermate_app/core/api/control_api.dart';
 import 'package:vibermate_app/core/api/control_models.dart';
 import 'package:vibermate_app/core/bootstrap/terminal_command.dart';
+import 'package:vibermate_app/core/bootstrap/root_trust_installer.dart';
 import 'package:vibermate_app/core/preferences/workbench_preferences.dart';
 import 'package:vibermate_app/features/workbench/workbench_controller.dart';
 import 'package:vibermate_app/preview/preview_control_api.dart';
 import 'package:vibermate_app/preview/preview_terminal_command.dart';
 
 void main() {
+  test(
+    'Root trust install uses exact material and reconciles success',
+    () async {
+      final api = PreviewControlApi(seedCaptures: false);
+      final installer = _RecordingRootTrustInstaller(
+        () => api.setRootTrustForPreview(installed: true),
+      );
+      final controller = WorkbenchController(
+        api: api,
+        terminalCommands: PreviewTerminalCommandService(),
+        previewMode: true,
+        closeRuntime: api.close,
+        rootTrustManagement: true,
+        rootTrustInstaller: installer,
+      );
+      addTearDown(controller.dispose);
+
+      await controller.refreshRootCA();
+      expect(controller.rootCAStatus?.certificatePresent, 'absent');
+      expect(await controller.installAndTrustRootCA(), isTrue);
+      expect(installer.installed, hasLength(1));
+      expect(
+        installer.installed.single.fingerprint,
+        controller.rootCAStatus?.fingerprint,
+      );
+      expect(controller.rootCAStatus?.installed, isTrue);
+      expect(controller.rootCAGuideIntent, isNull);
+    },
+  );
+
+  test(
+    'an imported but untrusted Root safely retries the same installer',
+    () async {
+      final api = PreviewControlApi(seedCaptures: false);
+      final installer = _RecordingRootTrustInstaller(
+        () => api.setRootTrustForPreview(installed: true),
+      );
+      final controller = WorkbenchController(
+        api: api,
+        terminalCommands: PreviewTerminalCommandService(),
+        previewMode: true,
+        closeRuntime: api.close,
+        rootTrustManagement: true,
+        rootTrustInstaller: installer,
+      );
+      addTearDown(controller.dispose);
+
+      api.setRootTrustForPreview(installed: true);
+      await controller.refreshRootCA();
+      controller.rootCAStatus = controller.rootCAStatus!.copyWith(
+        trustDecision: 'untrusted',
+      );
+
+      expect(await controller.installAndTrustRootCA(), isTrue);
+      expect(installer.installed, hasLength(1));
+      expect(controller.rootCAStatus?.installed, isTrue);
+    },
+  );
+
   testWidgets('usage loads on demand and is not rebuilt by polling', (
     tester,
   ) async {
@@ -236,6 +296,49 @@ void main() {
         controller.capturedMessageTransformSample?.sample.request.body,
         contains('claude-sonnet-4-5'),
       );
+    },
+  );
+
+  test(
+    'real Transform inputs load locally with frozen Capture runtime metadata',
+    () async {
+      final api = PreviewControlApi();
+      final controller = WorkbenchController(
+        api: api,
+        terminalCommands: PreviewTerminalCommandService(),
+        previewMode: true,
+        closeRuntime: api.close,
+      );
+      addTearDown(controller.dispose);
+
+      await controller.initialize();
+      await controller.selectCapture('managed_run:run-1');
+      final activity = controller.selectedActivities.first;
+      final originalSection = controller.section;
+
+      final captured = await controller.loadMessageTransformSample(
+        activity.id,
+        activity: activity,
+      );
+
+      expect(captured?.exchangeId, activity.id);
+      expect(captured?.sample.request.body, contains('claude-sonnet-4-5'));
+      expect(captured?.sample.response.body, contains('sample'));
+      expect(captured?.sample.runtime?.userName, 'mira');
+      expect(captured?.sample.runtime?.homeDirectory, '/Users/mira');
+      expect(
+        captured?.sample.runtime?.workspaceRoot,
+        '/Users/mira/Code/vibermate',
+      );
+      expect(captured?.sample.runtime?.workspaceLabel, 'vibermate');
+      expect(captured?.sample.runtime?.operatingSystem, 'darwin');
+      expect(captured?.sample.runtime?.timeZone, 'Asia/Singapore');
+      expect(
+        captured?.sample.runtime?.turnStartedAt,
+        DateTime.utc(2026, 8, 10, 9, 41, 56, 1),
+      );
+      expect(controller.section, originalSection);
+      expect(controller.capturedMessageTransformSample, isNull);
     },
   );
 
@@ -896,6 +999,19 @@ void main() {
     await controller.codeLibrary(refresh: true);
     expect(api.codeLibraryCalls, 3);
   });
+}
+
+final class _RecordingRootTrustInstaller implements RootTrustInstaller {
+  _RecordingRootTrustInstaller(this.onInstall);
+
+  final void Function() onInstall;
+  final List<RootCAMaterial> installed = [];
+
+  @override
+  Future<void> install(RootCAMaterial material) async {
+    installed.add(material);
+    onInstall();
+  }
 }
 
 final class _CodeLibraryTrackingApi implements ControlApi {

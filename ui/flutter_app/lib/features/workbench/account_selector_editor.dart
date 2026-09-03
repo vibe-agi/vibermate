@@ -24,6 +24,7 @@ final class AccountSelectorEditorDialog extends StatefulWidget {
     required this.copy,
     required this.testSelector,
     this.primaryActionLabel,
+    this.headerDetail,
     super.key,
   });
 
@@ -32,6 +33,7 @@ final class AccountSelectorEditorDialog extends StatefulWidget {
   final AppCopy copy;
   final AccountSelectorTestCallback testSelector;
   final String? primaryActionLabel;
+  final String? headerDetail;
 
   @override
   State<AccountSelectorEditorDialog> createState() =>
@@ -175,7 +177,7 @@ final class _AccountSelectorEditorDialogState
                 style: Theme.of(context).textTheme.titleLarge,
               ),
               Text(
-                copy('account_selector.editor.subtitle'),
+                widget.headerDetail ?? copy('account_selector.editor.subtitle'),
                 style: Theme.of(context).textTheme.bodySmall,
               ),
             ],

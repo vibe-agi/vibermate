@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -185,8 +186,8 @@ final class _CodeLibraryViewState extends State<CodeLibraryView> {
         copy: copy,
         wireProtocol: _testWireProtocol,
         enabled: !_mutating,
-        onUse: (starter) =>
-            unawaited(_createTransform(initialStarter: starter)),
+        onStartBlank: () => unawaited(_createTransform()),
+        onUse: (starter) => unawaited(_previewTransformStarter(starter)),
       );
     }
     return LayoutBuilder(
@@ -229,8 +230,7 @@ final class _CodeLibraryViewState extends State<CodeLibraryView> {
       return _AccountSelectorStarterGallery(
         copy: copy,
         enabled: !_mutating,
-        onUse: (starter) =>
-            unawaited(_createAccountSelector(initialStarter: starter)),
+        onUse: (starter) => unawaited(_previewAccountSelectorStarter(starter)),
       );
     }
     return LayoutBuilder(
@@ -281,8 +281,65 @@ final class _CodeLibraryViewState extends State<CodeLibraryView> {
     return _catalog;
   }
 
+  Future<void> _previewTransformStarter(_TransformStarter starter) async {
+    final policy = await Navigator.of(context).push<TrafficTransformPolicy>(
+      MaterialPageRoute(
+        builder: (context) => MessageTransformEditorDialog(
+          planId: 'starter-preview-${starter.name}',
+          displayName: _starterLabel(copy, starter),
+          wireProtocol: _testWireProtocol,
+          initial: _starterPolicy(starter, _testWireProtocol),
+          initialSample:
+              _capturedSampleFor(_testWireProtocol) ??
+              _starterTestSample(starter, _testWireProtocol),
+          initialSampleExchangeId: _capturedFor(_testWireProtocol)?.exchangeId,
+          copy: copy,
+          testTransform: widget.controller.testMessageTransform,
+          pickCapturedSample: _pickCapturedSample,
+          onTestWireProtocolChanged: _rememberTestWireProtocol,
+          sampleForWireProtocol: (wireProtocol) =>
+              _starterTestSample(starter, wireProtocol),
+          primaryActionLabel: copy('code_library.starters.use'),
+          headerDetail: copy('code_library.starters.preview.detail'),
+        ),
+      ),
+    );
+    if (policy != null && mounted) {
+      await _createTransform(
+        initialStarter: starter,
+        starterLocked: true,
+        initialPolicy: policy,
+      );
+    }
+  }
+
+  Future<void> _previewAccountSelectorStarter(
+    _AccountSelectorStarter starter,
+  ) async {
+    final policy = await Navigator.of(context).push<AccountSelectorPolicy>(
+      MaterialPageRoute(
+        builder: (context) => AccountSelectorEditorDialog(
+          selectorId: 'starter-preview-${starter.name}',
+          initial: _accountSelectorStarterPolicy(starter),
+          copy: copy,
+          testSelector: widget.controller.testAccountSelector,
+          primaryActionLabel: copy('code_library.starters.use'),
+          headerDetail: copy('code_library.starters.preview.detail'),
+        ),
+      ),
+    );
+    if (policy != null && mounted) {
+      await _createAccountSelector(
+        initialStarter: starter,
+        initialPolicy: policy,
+      );
+    }
+  }
+
   Future<void> _createTransform({
     _TransformStarter initialStarter = _TransformStarter.blank,
+    bool starterLocked = false,
+    TrafficTransformPolicy? initialPolicy,
   }) async {
     final catalog = await _ensureCollection();
     if (!mounted) return;
@@ -293,8 +350,11 @@ final class _CodeLibraryViewState extends State<CodeLibraryView> {
       builder: (context) => _TransformDraftDialog(
         collections: availableCatalog.collections,
         initialWireProtocol:
-            widget.controller.capturedMessageTransformSample?.wireProtocol,
+            widget.controller.capturedMessageTransformSample?.wireProtocol ??
+            _testWireProtocol,
         initialStarter: initialStarter,
+        starterLocked: starterLocked,
+        initialPolicy: initialPolicy,
         copy: copy,
       ),
     );
@@ -307,8 +367,10 @@ final class _CodeLibraryViewState extends State<CodeLibraryView> {
           wireProtocol: draft.wireProtocol,
           initial: draft.policy,
           initialSample: _capturedSampleFor(draft.wireProtocol),
+          initialSampleExchangeId: _capturedFor(draft.wireProtocol)?.exchangeId,
           copy: copy,
           testTransform: widget.controller.testMessageTransform,
+          pickCapturedSample: _pickCapturedSample,
           onTestWireProtocolChanged: _rememberTestWireProtocol,
           primaryActionLabel: copy('code_library.create_publish'),
         ),
@@ -337,8 +399,10 @@ final class _CodeLibraryViewState extends State<CodeLibraryView> {
           wireProtocol: _testWireProtocol,
           initial: current.policy,
           initialSample: _capturedSampleFor(_testWireProtocol),
+          initialSampleExchangeId: _capturedFor(_testWireProtocol)?.exchangeId,
           copy: copy,
           testTransform: widget.controller.testMessageTransform,
+          pickCapturedSample: _pickCapturedSample,
           onTestWireProtocolChanged: _rememberTestWireProtocol,
           primaryActionLabel: copy('code_library.publish_revision'),
         ),
@@ -358,6 +422,7 @@ final class _CodeLibraryViewState extends State<CodeLibraryView> {
 
   Future<void> _createAccountSelector({
     _AccountSelectorStarter initialStarter = _AccountSelectorStarter.loginUser,
+    AccountSelectorPolicy? initialPolicy,
   }) async {
     final catalog = await _ensureCollection();
     if (!mounted) return;
@@ -375,7 +440,8 @@ final class _CodeLibraryViewState extends State<CodeLibraryView> {
       MaterialPageRoute(
         builder: (context) => AccountSelectorEditorDialog(
           selectorId: 'new-selector',
-          initial: _accountSelectorStarterPolicy(initialStarter),
+          initial:
+              initialPolicy ?? _accountSelectorStarterPolicy(initialStarter),
           copy: copy,
           testSelector: widget.controller.testAccountSelector,
           primaryActionLabel: copy('code_library.create_publish'),
@@ -422,9 +488,22 @@ final class _CodeLibraryViewState extends State<CodeLibraryView> {
   }
 
   MessageTransformTestSample? _capturedSampleFor(String wireProtocol) {
-    final captured = widget.controller.capturedMessageTransformSample;
-    return captured?.wireProtocol == wireProtocol ? captured?.sample : null;
+    return _capturedFor(wireProtocol)?.sample;
   }
+
+  CapturedMessageTransformSample? _capturedFor(String wireProtocol) {
+    final captured = widget.controller.capturedMessageTransformSample;
+    return captured?.wireProtocol == wireProtocol ? captured : null;
+  }
+
+  Future<CapturedMessageTransformSample?> _pickCapturedSample() =>
+      showDialog<CapturedMessageTransformSample>(
+        context: context,
+        builder: (context) => _CapturedExchangePickerDialog(
+          controller: widget.controller,
+          copy: copy,
+        ),
+      );
 
   void _rememberTestWireProtocol(String value) {
     if (mounted && value != _testWireProtocol) {
@@ -450,6 +529,278 @@ final class _CodeLibraryViewState extends State<CodeLibraryView> {
     } finally {
       if (mounted) setState(() => _mutating = false);
     }
+  }
+}
+
+final class _CapturedExchangePickerDialog extends StatefulWidget {
+  const _CapturedExchangePickerDialog({
+    required this.controller,
+    required this.copy,
+  });
+
+  final WorkbenchController controller;
+  final AppCopy copy;
+
+  @override
+  State<_CapturedExchangePickerDialog> createState() =>
+      _CapturedExchangePickerDialogState();
+}
+
+final class _CapturedExchangePickerDialogState
+    extends State<_CapturedExchangePickerDialog> {
+  String? _loadingExchangeId;
+  String? _error;
+
+  @override
+  Widget build(BuildContext context) {
+    final viewport = MediaQuery.sizeOf(context);
+    return Dialog(
+      insetPadding: const EdgeInsets.all(24),
+      clipBehavior: Clip.antiAlias,
+      child: SizedBox(
+        key: const Key('code-library-captured-exchange-picker'),
+        width: math.max(280, math.min(720, viewport.width - 48)),
+        height: math.max(420, math.min(620, viewport.height - 48)),
+        child: AnimatedBuilder(
+          animation: widget.controller,
+          builder: (context, _) => _content(context),
+        ),
+      ),
+    );
+  }
+
+  Widget _content(BuildContext context) {
+    final copy = widget.copy;
+    final controller = widget.controller;
+    final captures = [
+      ...controller.runningCaptures,
+      ...controller.historicalCaptures,
+    ];
+    final conversations = controller.captureConversations;
+    final activities = [...controller.selectedActivities]
+      ..sort((left, right) => right.occurredAt.compareTo(left.occurredAt));
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 14, 8, 10),
+          child: Row(
+            children: [
+              Icon(
+                Icons.history_rounded,
+                size: 19,
+                color: context.viberColors.route,
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      copy('code_library.sample.picker.title'),
+                      style: Theme.of(context).textTheme.titleLarge,
+                    ),
+                    Text(
+                      copy('code_library.sample.picker.detail'),
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: context.viberColors.textMuted,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              IconButton(
+                tooltip: copy('common.dismiss'),
+                onPressed: _loadingExchangeId == null
+                    ? () => Navigator.of(context).pop()
+                    : null,
+                icon: const Icon(Icons.close, size: 18),
+              ),
+            ],
+          ),
+        ),
+        const Divider(height: 1),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(14, 12, 14, 10),
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              final capture = _captureField(captures);
+              final conversation = _conversationField(conversations);
+              if (constraints.maxWidth < 560) {
+                return Column(
+                  children: [capture, const SizedBox(height: 10), conversation],
+                );
+              }
+              return Row(
+                children: [
+                  Expanded(child: capture),
+                  const SizedBox(width: 10),
+                  Expanded(child: conversation),
+                ],
+              );
+            },
+          ),
+        ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+          child: Text(
+            copy('code_library.sample.picker.calls'),
+            style: Theme.of(context).textTheme.titleSmall,
+          ),
+        ),
+        if (_error case final error?)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+            child: Text(
+              error,
+              key: const Key('code-library-captured-exchange-error'),
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                color: context.viberColors.danger,
+              ),
+            ),
+          ),
+        Expanded(
+          child: controller.captureActivitiesLoading
+              ? const Center(child: CompactProgressIndicator())
+              : activities.isEmpty
+              ? Center(
+                  child: Padding(
+                    padding: const EdgeInsets.all(24),
+                    child: Text(
+                      captures.isEmpty
+                          ? copy('code_library.sample.picker.empty_captures')
+                          : copy('code_library.sample.picker.empty_calls'),
+                      textAlign: TextAlign.center,
+                      style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                        color: context.viberColors.textMuted,
+                      ),
+                    ),
+                  ),
+                )
+              : ListView.separated(
+                  padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+                  itemCount: activities.length,
+                  separatorBuilder: (_, _) => const SizedBox(height: 6),
+                  itemBuilder: (context, index) =>
+                      _activityTile(context, activities[index]),
+                ),
+        ),
+      ],
+    );
+  }
+
+  Widget _captureField(List<CaptureRecord> captures) =>
+      DropdownButtonFormField<String>(
+        key: const Key('code-library-sample-capture'),
+        initialValue: widget.controller.selectedCaptureKey,
+        isExpanded: true,
+        decoration: InputDecoration(
+          labelText: widget.copy('code_library.sample.picker.capture'),
+        ),
+        items: [
+          for (final capture in captures)
+            DropdownMenuItem(
+              value: capture.key,
+              child: Text(
+                capture.displayName,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+        ],
+        onChanged: _loadingExchangeId == null
+            ? (value) {
+                if (value != null) {
+                  setState(() => _error = null);
+                  unawaited(widget.controller.selectCapture(value));
+                }
+              }
+            : null,
+      );
+
+  Widget _conversationField(List<ConversationSummary> conversations) =>
+      DropdownButtonFormField<String>(
+        key: const Key('code-library-sample-conversation'),
+        initialValue: widget.controller.selectedCaptureConversationKey,
+        isExpanded: true,
+        decoration: InputDecoration(
+          labelText: widget.copy('code_library.sample.picker.conversation'),
+        ),
+        items: [
+          for (final conversation in conversations)
+            DropdownMenuItem(
+              value: conversation.key,
+              child: Text(
+                conversation.conversation.displayName ??
+                    widget.copy(
+                      'code_library.sample.picker.unnamed_conversation',
+                    ),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+        ],
+        onChanged: _loadingExchangeId == null
+            ? (value) {
+                if (value != null) {
+                  setState(() => _error = null);
+                  unawaited(widget.controller.selectCaptureConversation(value));
+                }
+              }
+            : null,
+      );
+
+  Widget _activityTile(BuildContext context, ActivityRecord activity) {
+    final loading = _loadingExchangeId == activity.id;
+    final preview = activity.requestPreview?.text;
+    return Material(
+      color: context.viberColors.panelRaised.withValues(alpha: 0.42),
+      borderRadius: ViberMetrics.controlRadius,
+      child: ListTile(
+        key: Key('code-library-real-exchange-${activity.id}'),
+        enabled: _loadingExchangeId == null,
+        dense: true,
+        leading: const Icon(Icons.chat_bubble_outline_rounded, size: 17),
+        title: Text(
+          preview == null || preview.isEmpty ? activity.title : preview,
+          maxLines: 2,
+          overflow: TextOverflow.ellipsis,
+        ),
+        subtitle: Text(
+          '${activity.sourceName} · ${activity.occurredAt.toLocal().toIso8601String()}',
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+        ),
+        trailing: loading
+            ? const CompactProgressIndicator()
+            : const Icon(Icons.chevron_right_rounded, size: 18),
+        onTap: _loadingExchangeId == null
+            ? () => unawaited(_select(activity))
+            : null,
+      ),
+    );
+  }
+
+  Future<void> _select(ActivityRecord activity) async {
+    setState(() {
+      _loadingExchangeId = activity.id;
+      _error = null;
+    });
+    final captured = await widget.controller.loadMessageTransformSample(
+      activity.id,
+      activity: activity,
+    );
+    if (!mounted) return;
+    if (captured != null) {
+      Navigator.of(context).pop(captured);
+      return;
+    }
+    setState(() {
+      _loadingExchangeId = null;
+      _error = widget.copy('code_library.sample.picker.unavailable');
+    });
   }
 }
 
@@ -567,12 +918,14 @@ final class _StarterGallery extends StatelessWidget {
     required this.copy,
     required this.wireProtocol,
     required this.enabled,
+    required this.onStartBlank,
     required this.onUse,
   });
 
   final AppCopy copy;
   final String wireProtocol;
   final bool enabled;
+  final VoidCallback onStartBlank;
   final ValueChanged<_TransformStarter> onUse;
 
   @override
@@ -611,9 +964,7 @@ final class _StarterGallery extends StatelessWidget {
                 ),
                 TextButton.icon(
                   key: const Key('code-library-starter-blank'),
-                  onPressed: enabled
-                      ? () => onUse(_TransformStarter.blank)
-                      : null,
+                  onPressed: enabled ? onStartBlank : null,
                   icon: const Icon(Icons.add_rounded, size: 16),
                   label: Text(copy('code_library.starters.blank_action')),
                 ),
@@ -694,7 +1045,7 @@ final class _StarterCard extends StatelessWidget {
       source: source,
       sourceKey: Key('code-library-starter-source-${starter.name}'),
       actionKey: Key('code-library-starter-${starter.name}'),
-      actionLabel: copy('code_library.starters.use'),
+      actionLabel: copy('code_library.starters.view'),
       enabled: enabled,
       onUse: onUse,
     );
@@ -750,7 +1101,7 @@ final class _AccountSelectorStarterGallery extends StatelessWidget {
                     actionKey: Key(
                       'code-library-selector-starter-${starter.name}',
                     ),
-                    actionLabel: copy('code_library.starters.use'),
+                    actionLabel: copy('code_library.starters.view'),
                     enabled: enabled,
                     onUse: () => onUse(starter),
                   ),
@@ -1384,12 +1735,16 @@ final class _TransformDraftDialog extends StatefulWidget {
     required this.collections,
     required this.initialWireProtocol,
     this.initialStarter = _TransformStarter.blank,
+    this.starterLocked = false,
+    this.initialPolicy,
     required this.copy,
   });
 
   final List<CodeLibraryCollection> collections;
   final String? initialWireProtocol;
   final _TransformStarter initialStarter;
+  final bool starterLocked;
+  final TrafficTransformPolicy? initialPolicy;
   final AppCopy copy;
 
   @override
@@ -1456,51 +1811,53 @@ final class _TransformDraftDialogState extends State<_TransformDraftDialog> {
               },
             ),
           ],
-          const SizedBox(height: 10),
-          DropdownButtonFormField<String>(
-            key: const Key('code-library-transform-protocol'),
-            initialValue: _wireProtocol,
-            isExpanded: true,
-            decoration: InputDecoration(
-              labelText: widget.copy('code_library.starter.protocol'),
-            ),
-            items: const [
-              DropdownMenuItem(
-                value: 'anthropic_messages',
-                child: Text('Anthropic Messages'),
+          if (!widget.starterLocked) ...[
+            const SizedBox(height: 10),
+            DropdownButtonFormField<String>(
+              key: const Key('code-library-transform-protocol'),
+              initialValue: _wireProtocol,
+              isExpanded: true,
+              decoration: InputDecoration(
+                labelText: widget.copy('code_library.starter.protocol'),
               ),
-              DropdownMenuItem(
-                value: 'openai_responses',
-                child: Text('OpenAI Responses'),
-              ),
-              DropdownMenuItem(
-                value: 'openai_chat',
-                child: Text('OpenAI Chat'),
-              ),
-            ],
-            onChanged: (value) {
-              if (value != null) setState(() => _wireProtocol = value);
-            },
-          ),
-          const SizedBox(height: 10),
-          DropdownButtonFormField<_TransformStarter>(
-            key: const Key('code-library-transform-starter'),
-            initialValue: _starter,
-            isExpanded: true,
-            decoration: InputDecoration(
-              labelText: widget.copy('code_library.starter'),
-            ),
-            items: [
-              for (final starter in _TransformStarter.values)
+              items: const [
                 DropdownMenuItem(
-                  value: starter,
-                  child: Text(_starterLabel(widget.copy, starter)),
+                  value: 'anthropic_messages',
+                  child: Text('Anthropic Messages'),
                 ),
-            ],
-            onChanged: (value) {
-              if (value != null) setState(() => _starter = value);
-            },
-          ),
+                DropdownMenuItem(
+                  value: 'openai_responses',
+                  child: Text('OpenAI Responses'),
+                ),
+                DropdownMenuItem(
+                  value: 'openai_chat',
+                  child: Text('OpenAI Chat'),
+                ),
+              ],
+              onChanged: (value) {
+                if (value != null) setState(() => _wireProtocol = value);
+              },
+            ),
+            const SizedBox(height: 10),
+            DropdownButtonFormField<_TransformStarter>(
+              key: const Key('code-library-transform-starter'),
+              initialValue: _starter,
+              isExpanded: true,
+              decoration: InputDecoration(
+                labelText: widget.copy('code_library.starter'),
+              ),
+              items: [
+                for (final starter in _TransformStarter.values)
+                  DropdownMenuItem(
+                    value: starter,
+                    child: Text(_starterLabel(widget.copy, starter)),
+                  ),
+              ],
+              onChanged: (value) {
+                if (value != null) setState(() => _starter = value);
+              },
+            ),
+          ],
         ],
       ),
     ),
@@ -1519,7 +1876,9 @@ final class _TransformDraftDialogState extends State<_TransformDraftDialog> {
               collectionId: _collectionId,
               displayName: displayName,
               wireProtocol: _wireProtocol,
-              policy: _starterPolicy(_starter, _wireProtocol),
+              policy:
+                  widget.initialPolicy ??
+                  _starterPolicy(_starter, _wireProtocol),
             ),
           );
         },
@@ -1628,6 +1987,50 @@ TrafficTransformPolicy _starterPolicy(
     responseJavaScript: _responseModelStarter(wireProtocol),
   ),
 };
+
+MessageTransformTestSample _starterTestSample(
+  _TransformStarter starter,
+  String wireProtocol,
+) {
+  final sample = MessageTransformTestSample.example(wireProtocol);
+  return switch (starter) {
+    _TransformStarter.localIdentity => MessageTransformTestSample(
+      request: MessageTransformTestRequest(
+        method: sample.request.method,
+        path: sample.request.path,
+        headers: sample.request.headers,
+        body:
+            '{"home":"/Users/example-user","workspace":"/Users/example-user/Code/example","user":"example-user"}',
+      ),
+      response: MessageTransformTestResponse(
+        statusCode: sample.response.statusCode,
+        streaming: false,
+        headers: sample.response.headers,
+        body:
+            '{"home":"/Users/guest","workspace":"/workspace/project","user":"vibermate-user"}',
+      ),
+      runtime: sample.runtime,
+    ),
+    _TransformStarter.privateContacts => MessageTransformTestSample(
+      request: MessageTransformTestRequest(
+        method: sample.request.method,
+        path: sample.request.path,
+        headers: sample.request.headers,
+        body:
+            '{"message":"email alice@example.com from 10.0.0.8; public 8.8.8.8"}',
+      ),
+      response: MessageTransformTestResponse(
+        statusCode: sample.response.statusCode,
+        streaming: false,
+        headers: sample.response.headers,
+        body:
+            '{"message":"redacted-email-1@example.invalid from 192.0.2.2; public 8.8.8.8"}',
+      ),
+      runtime: sample.runtime,
+    ),
+    _ => sample,
+  };
+}
 
 const _localIdentityRequest = r'''const candidates = [
   [runtime.workspace.root, "/workspace/project"],

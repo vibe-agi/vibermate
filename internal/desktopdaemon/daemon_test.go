@@ -13,6 +13,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/desktopbootstrap"
 	"github.com/vibe-agi/vibermate/internal/desktophost"
 	"github.com/vibe-agi/vibermate/internal/instanceguard"
+	"github.com/vibe-agi/vibermate/internal/localca"
 	"github.com/vibe-agi/vibermate/internal/runtimepersistence"
 )
 
@@ -38,6 +39,11 @@ func TestStartupFailureClassificationIsClosed(t *testing.T) {
 			name:   "invalid storage",
 			err:    runtimepersistence.ErrInvalidDatabasePath,
 			reason: desktopbootstrap.FailureStorageUnavailable,
+		},
+		{
+			name:   "invalid Root reset",
+			err:    errors.Join(errors.New("wrapped"), localca.ErrRootResetFailed),
+			reason: desktopbootstrap.FailureRootResetFailed,
 		},
 		{
 			name:   "unknown runtime",

@@ -401,6 +401,7 @@ func (client *Client) Do(
 					rawContext,
 					request,
 					response,
+					evidence.ProtectedHeaderNames,
 				)
 			}
 			rawErr = response.Body.Close()
@@ -443,6 +444,7 @@ func (client *Client) Do(
 			rawContext,
 			request,
 			response,
+			evidence.ProtectedHeaderNames,
 		)
 	}
 	if response.StatusCode >= 300 && response.StatusCode <= 399 {
@@ -485,25 +487,27 @@ func (client *Client) rawResponseBody(
 	rawContext rawevidence.Context,
 	request *http.Request,
 	response *http.Response,
+	protectedHeaderNames []string,
 ) io.ReadCloser {
 	maximumBodyBytes := client.rawBodyBytes
 	if rawContext.Recording != rawevidence.RecordingFull {
 		maximumBodyBytes = 0
 	}
 	return newRawResponseBody(rawResponseBodyOptions{
-		Source:           response.Body,
-		Observer:         client.raw,
-		Timeout:          client.rawTimeout,
-		MaximumBodyBytes: maximumBodyBytes,
-		Context:          rawContext,
-		StatusCode:       response.StatusCode,
-		Scheme:           request.URL.Scheme,
-		Authority:        request.Host,
-		Path:             request.URL.EscapedPath(),
-		RawQuery:         request.URL.RawQuery,
-		Headers:          response.Header.Clone(),
-		Trailers:         func() http.Header { return response.Trailer.Clone() },
-		ReportFailure:    client.reportRawEvidenceFailure,
+		Source:               response.Body,
+		Observer:             client.raw,
+		Timeout:              client.rawTimeout,
+		MaximumBodyBytes:     maximumBodyBytes,
+		Context:              rawContext,
+		StatusCode:           response.StatusCode,
+		Scheme:               request.URL.Scheme,
+		Authority:            request.Host,
+		Path:                 request.URL.EscapedPath(),
+		RawQuery:             request.URL.RawQuery,
+		Headers:              response.Header.Clone(),
+		ProtectedHeaderNames: append([]string(nil), protectedHeaderNames...),
+		Trailers:             func() http.Header { return response.Trailer.Clone() },
+		ReportFailure:        client.reportRawEvidenceFailure,
 	})
 }
 
@@ -550,19 +554,20 @@ func (client *Client) reportRawEvidenceFailure(err error) {
 }
 
 type rawResponseBodyOptions struct {
-	Source           io.ReadCloser
-	Observer         rawevidence.Observer
-	Timeout          time.Duration
-	MaximumBodyBytes int
-	Context          rawevidence.Context
-	StatusCode       int
-	Scheme           string
-	Authority        string
-	Path             string
-	RawQuery         string
-	Headers          http.Header
-	Trailers         func() http.Header
-	ReportFailure    func(error)
+	Source               io.ReadCloser
+	Observer             rawevidence.Observer
+	Timeout              time.Duration
+	MaximumBodyBytes     int
+	Context              rawevidence.Context
+	StatusCode           int
+	Scheme               string
+	Authority            string
+	Path                 string
+	RawQuery             string
+	Headers              http.Header
+	ProtectedHeaderNames []string
+	Trailers             func() http.Header
+	ReportFailure        func(error)
 }
 
 type rawResponseBody struct {
@@ -667,15 +672,19 @@ func (body *rawResponseBody) finalize(terminalErr error) error {
 		_, body.observeErr = body.options.Observer.Observe(
 			operation,
 			rawevidence.Observation{
-				Context:             body.options.Context,
-				Layer:               rawevidence.LayerProviderResponse,
-				StatusCode:          body.options.StatusCode,
-				Scheme:              body.options.Scheme,
-				Authority:           body.options.Authority,
-				Path:                body.options.Path,
-				RawQuery:            body.options.RawQuery,
-				Headers:             body.options.Headers.Clone(),
-				Trailers:            trailers,
+				Context:    body.options.Context,
+				Layer:      rawevidence.LayerProviderResponse,
+				StatusCode: body.options.StatusCode,
+				Scheme:     body.options.Scheme,
+				Authority:  body.options.Authority,
+				Path:       body.options.Path,
+				RawQuery:   body.options.RawQuery,
+				Headers:    body.options.Headers.Clone(),
+				Trailers:   trailers,
+				ProtectedHeaderNames: append(
+					[]string(nil),
+					body.options.ProtectedHeaderNames...,
+				),
 				Body:                retained,
 				TotalBodyBytes:      total,
 				BodySHA256:          digest,

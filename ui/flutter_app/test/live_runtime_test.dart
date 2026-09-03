@@ -1,3 +1,6 @@
+@TestOn('vm')
+library;
+
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -33,6 +36,18 @@ void main() {
         expect(dashboard.status.healthy, isTrue);
         expect(dashboard.status.instanceId, isNotEmpty);
         expect(dashboard.environments, isNotEmpty);
+        final initialRoot = await runtime.api.rootCA();
+        expect(initialRoot.rootValid, isTrue);
+        expect(initialRoot.available, isTrue);
+        expect(initialRoot.certificatePresent, 'absent');
+        expect(initialRoot.trustDecision, 'untrusted');
+        expect(initialRoot.evidenceRevision, 'macos-security-v2');
+        final initialRootMaterial = await runtime.api.rootCAMaterial(
+          initialRoot,
+        );
+        expect(initialRootMaterial.rootRevision, initialRoot.rootRevision);
+        expect(initialRootMaterial.fingerprint, initialRoot.fingerprint);
+        expect(initialRootMaterial.certificateDer, isNotEmpty);
         final network = await runtime.api.loadNetwork();
         expect(network.rules.revision, greaterThan(0));
         expect(const {
@@ -354,6 +369,26 @@ void main() {
         );
         expect(revokedManual.state, 'revoked');
         expect(revokedManual.stateTag, isNot(rotatedManual.stateTag));
+
+        // The Root belongs to this fresh temporary runtime and was proven
+        // absent above, so this exercises restart-bound replacement without
+        // changing the machine's trust store.
+        final replacement = await runtime.api.replaceRootCA(initialRoot);
+        expect(replacement.completed, isFalse);
+        expect(replacement.restartRequired, isTrue);
+        expect(replacement.status.certificatePresent, 'absent');
+        await runtime.close();
+        runtime = await DesktopRuntime.start(
+          daemonPath: daemonPath,
+          cacheDirectory: '${root.path}/cache',
+          dataDirectory: '${root.path}/data',
+          remoteServerListenAddress: '127.0.0.1:0',
+        );
+        final replacedRoot = await runtime.api.rootCA();
+        expect(replacedRoot.rootRevision, initialRoot.rootRevision + 1);
+        expect(replacedRoot.fingerprint, isNot(initialRoot.fingerprint));
+        expect(replacedRoot.certificatePresent, 'absent');
+        expect(replacedRoot.trustDecision, 'untrusted');
       } finally {
         await runtime?.close();
         if (await root.exists()) await root.delete(recursive: true);
@@ -362,7 +397,7 @@ void main() {
     skip: daemonPath == null
         ? 'Set VIBERMATE_LIVE_TEST_DAEMON to an absolute vibermated path.'
         : false,
-    timeout: const Timeout(Duration(minutes: 2)),
+    timeout: const Timeout(Duration(minutes: 3)),
   );
 
   test(
@@ -407,17 +442,14 @@ void main() {
                 expect(result.requestAfter.body, contains('/Users/guest'));
                 expect(
                   result.requestAfter.body,
-                  isNot(contains('/Users/example-user')),
+                  isNot(contains('/Users/jack')),
                 );
                 expect(
                   result.requestAfter.body,
                   contains('/workspace/project'),
                 );
                 expect(result.requestAfter.body, contains('vibermate-user'));
-                expect(
-                  result.responseAfter.body,
-                  contains('/Users/example-user'),
-                );
+                expect(result.responseAfter.body, contains('/Users/jack'));
                 expect(
                   result.responseAfter.body,
                   isNot(contains('/Users/guest')),
@@ -735,7 +767,7 @@ MessageTransformTestSample _localIdentitySample(
       'content-type': ['application/json'],
     },
     body:
-        '{"home":"/Users/example-user","workspace":"/Users/example-user/Code/example","user":"example-user"}',
+        '{"home":"/Users/jack","workspace":"/Users/jack/Code/vibermate","user":"jack"}',
   ),
   response: const MessageTransformTestResponse(
     statusCode: 200,
@@ -745,6 +777,17 @@ MessageTransformTestSample _localIdentitySample(
     },
     body:
         '{"home":"/Users/guest","workspace":"/workspace/project","user":"vibermate-user"}',
+  ),
+  runtime: MessageTransformTestRuntime(
+    userName: 'jack',
+    homeDirectory: '/Users/jack',
+    operatingSystem: 'darwin',
+    operatingSystemVersion: '26.0',
+    architecture: 'arm64',
+    timeZone: 'Asia/Singapore',
+    workspaceRoot: '/Users/jack/Code/vibermate',
+    workspaceLabel: 'vibermate',
+    turnStartedAt: DateTime.utc(2026, 9, 1, 12, 34, 56),
   ),
 );
 

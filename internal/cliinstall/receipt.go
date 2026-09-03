@@ -58,8 +58,8 @@ type LinkSpec struct {
 }
 
 // Receipt is the private ownership record. TargetIdentity binds removal to the
-// exact symbolic-link filesystem object created by Install, including when a
-// different link later points to the same source text.
+// symbolic-link file ID created by Install while tolerating macOS mount-device
+// renumbering; a different link that points to the same source remains unowned.
 type Receipt struct {
 	Schema         string    `json:"schema"`
 	Owner          Owner     `json:"owner"`
@@ -165,7 +165,7 @@ func (manager *LinkManager) Inspect(spec LinkSpec) (Observation, error) {
 			Detail:  "the terminal command now points to a different application location",
 		}, nil
 	}
-	if target.metadata.identity != receipt.TargetIdentity {
+	if !sameManagedTargetIdentity(receipt.TargetIdentity, target.metadata.identity) {
 		return Observation{
 			State:   StateConflict,
 			Receipt: cloneReceipt(receipt),
@@ -803,7 +803,7 @@ func quarantineLink(
 		return nil, err
 	}
 	if current.metadata.kind != entrySymlink ||
-		current.metadata.identity != identity ||
+		!sameManagedTargetIdentity(identity, current.metadata.identity) ||
 		current.destination != destination {
 		return nil, errNotOwned
 	}
@@ -821,7 +821,8 @@ func quarantineLink(
 		moved:     quarantineName,
 	}
 	moved, inspectErr := inspectTargetEntry(directory, quarantineName)
-	if inspectErr != nil || moved.metadata.identity != identity ||
+	if inspectErr != nil ||
+		!sameManagedTargetIdentity(identity, moved.metadata.identity) ||
 		moved.destination != destination {
 		restoreErr := quarantine.restore()
 		return nil, errors.Join(errNotOwned, inspectErr, restoreErr)
@@ -1232,6 +1233,23 @@ func receiptOwnsTarget(receipt Receipt, spec LinkSpec) bool {
 	return receipt.TargetPath == spec.TargetPath &&
 		receipt.Owner == OwnerDesktopApp &&
 		receipt.Method == MethodManagedSymlink
+}
+
+// Darwin's st_dev identifies the current mount, not the persistent volume.
+// macOS may therefore renumber it after a reboot while preserving the file ID
+// (st_ino) of the exact same symbolic link. SourcePath, TargetPath, entry kind,
+// and link destination are checked separately before this comparison.
+func sameManagedTargetIdentity(recorded, current string) bool {
+	if recorded == current {
+		return true
+	}
+	if runtime.GOOS != "darwin" ||
+		!validFileIdentity(recorded) || !validFileIdentity(current) {
+		return false
+	}
+	recordedParts := strings.Split(recorded, ":")
+	currentParts := strings.Split(current, ":")
+	return recordedParts[1] == currentParts[1]
 }
 
 func sameReceipt(left, right Receipt) bool {
