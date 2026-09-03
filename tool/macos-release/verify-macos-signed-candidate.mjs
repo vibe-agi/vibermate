@@ -223,6 +223,16 @@ async function requireCanonicalPath(path, expectedType, label) {
   return metadata;
 }
 
+export async function createCanonicalTemporaryDirectory(
+  prefix,
+  parentDirectory = tmpdir(),
+) {
+  const canonicalParent = await realpath(parentDirectory);
+  const directory = await mkdtemp(resolve(canonicalParent, prefix));
+  await requireCanonicalPath(directory, "directory", "temporary directory");
+  return directory;
+}
+
 async function resolveUnsignedApplicationPath() {
   await requireCanonicalPath(appDirectory, "directory", "macOS app directory");
   const entries = await readdir(appDirectory, { withFileTypes: true });
@@ -532,8 +542,8 @@ function inspectCodeSignature(
 }
 
 async function signingCertificateSHA256(path, label) {
-  const temporaryDirectory = await mkdtemp(
-    resolve(tmpdir(), "vibermate-signing-certificate-"),
+  const temporaryDirectory = await createCanonicalTemporaryDirectory(
+    "vibermate-signing-certificate-",
   );
   try {
     const prefix = resolve(temporaryDirectory, "certificate");
