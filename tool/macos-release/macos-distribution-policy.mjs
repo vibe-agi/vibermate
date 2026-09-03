@@ -1032,15 +1032,19 @@ export function validateGatekeeperAssessment(
   requireAppleTeamID(expectedTeamID);
   requireNonemptyString(source, label, 1 << 20);
   const lines = source.split(/\r?\n/u).map((line) => line.trim());
+  // spctl does not emit origin on every admitted macOS release. The preceding
+  // codesign inspection binds every code object to the Team ID; if Gatekeeper
+  // also reports an origin, it must agree with that independently proven ID.
+  const originLines = lines.filter((line) => line.startsWith("origin="));
+  const expectedOrigin = new RegExp(
+    `^origin=Developer ID Application: .+ \\(${expectedTeamID}\\)$`,
+    "u",
+  );
   if (
     !lines.some((line) => line.endsWith(": accepted")) ||
     !lines.includes("source=Notarized Developer ID") ||
-    !lines.some((line) =>
-      new RegExp(
-        `^origin=Developer ID Application: .+ \\(${expectedTeamID}\\)$`,
-        "u",
-      ).test(line),
-    )
+    originLines.length > 1 ||
+    originLines.some((line) => !expectedOrigin.test(line))
   ) {
     throw new Error(`${label} is not an accepted Notarized Developer ID`);
   }
