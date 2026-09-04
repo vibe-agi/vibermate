@@ -64,6 +64,33 @@ jobs:
       - run: go test ./...
       - run: go vet ./...
 
+  linux-client-compatibility:
+    needs: generated-structural
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: go.mod
+          check-latest: false
+          cache: true
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: 22.23.1
+      - name: Install and verify the exact supported Linux clients
+        shell: bash
+        run: |
+          set -euo pipefail
+          prefix="${RUNNER_TEMP}/vibermate-official-clients-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          npm install --prefix "${prefix}" \
+            @anthropic-ai/claude-code@2.1.220 \
+            @openai/codex@0.145.0
+          VIBERMATE_OFFICIAL_CLAUDE="${prefix}/node_modules/.bin/claude" \
+          VIBERMATE_OFFICIAL_CODEX="${prefix}/node_modules/.bin/codex" \
+            go test -count=1 -run '^TestOfficialInstalledClientPackagesMatchTheBuiltInCatalog$' \
+              ./internal/clientadapter
+
   race:
     needs: generated-structural
     runs-on: ubuntu-latest
@@ -189,6 +216,11 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: go.mod
+          check-latest: false
+          cache: true
       - name: Install the pinned Flutter SDK
         shell: bash
         run: |
@@ -206,6 +238,12 @@ jobs:
           flutter pub get
           flutter test --platform chrome
           flutter build web --release
+          version="$(awk '$1 == "version:" { print $2 }' pubspec.yaml)"
+          version="${version%%+*}"
+          ../../tool/linux-release/build-linux-distributions.sh \
+            "${version}" build/web ../../dist/linux-ci
+          ../../tool/linux-release/verify-linux-distributions.sh \
+            "${version}" ../../dist/linux-ci
           git diff --exit-code
 
   vulnerability:

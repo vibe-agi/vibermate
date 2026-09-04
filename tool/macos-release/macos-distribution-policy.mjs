@@ -26,9 +26,9 @@ const signingConfigurationNames = new Set([
 
 export const macOSDistributionPolicy = Object.freeze({
   appBundleName: "ViberMate.app",
-  appBuildNumber: "1",
+  appBuildNumber: "2",
   appIdentifier: "io.vibermate.desktop",
-  appVersion: "0.1.0",
+  appVersion: "0.1.1",
   allowedApplicationSymlinks: Object.freeze({
     "Contents/Frameworks/App.framework/App": "Versions/Current/App",
     "Contents/Frameworks/App.framework/Resources":
@@ -42,7 +42,7 @@ export const macOSDistributionPolicy = Object.freeze({
   }),
   architectures: Object.freeze(["arm64", "x86_64"]),
   developerDirectory: "/Applications/Xcode_16.2.app/Contents/Developer",
-  diskImageFilename: "ViberMate_0.1.0_universal.dmg",
+  diskImageFilename: "ViberMate_0.1.1_universal.dmg",
   diskImageIdentifier: "io.vibermate.desktop.dmg",
   evidenceSchema: "vibermate.macos-distribution-notarization/v1",
   lipoIdentity: "Apple lipo (version unavailable; SHA-256 bound)",
@@ -777,7 +777,7 @@ export function validateSigningTransformationEvidence(value) {
   const expectedApp =
     `${macOSDistributionPolicy.releaseRelativeDirectory}/bundle/macos/ViberMate.app`;
   const expectedDMG =
-    `${macOSDistributionPolicy.releaseRelativeDirectory}/bundle/dmg/ViberMate_0.1.0_universal.dmg`;
+    `${macOSDistributionPolicy.releaseRelativeDirectory}/bundle/dmg/${macOSDistributionPolicy.diskImageFilename}`;
   if (
     value.schema !== macOSDistributionPolicy.signingEvidenceSchema ||
     typeof value.createdAt !== "string" ||

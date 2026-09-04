@@ -97,23 +97,17 @@ void main() {
     await tester.pump();
     expect(api.usageCalls, 1);
     expect(api.usageQueries.single.toQueryParameters(), {
-      'from': '2026-07-27',
+      'from': '2025-08-26',
       'until': '2026-08-26',
       'timeZone': 'UTC',
     });
 
-    await controller.selectUsageRangeDays(90);
-    expect(api.usageCalls, 2);
-    expect(api.usageQueries.last.toQueryParameters(), {
-      'from': '2026-05-28',
-      'until': '2026-08-26',
-      'timeZone': 'UTC',
-    });
-    expect(controller.runtimeUsage?.period.from, '2026-05-28');
+    expect(controller.usageRangeDays, 365);
+    expect(controller.runtimeUsage?.period.from, '2025-08-26');
 
     await tester.pump(const Duration(seconds: 11));
     await tester.pump();
-    expect(api.usageCalls, 2);
+    expect(api.usageCalls, 1);
     controller.dispose();
   });
 

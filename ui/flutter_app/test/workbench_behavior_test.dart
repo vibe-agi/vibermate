@@ -973,6 +973,8 @@ void main() {
     await tester.tap(find.byKey(const Key('settings-tab-users')));
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('server-runtime-access')), findsOneWidget);
+    expect(find.text('http://192.168.1.44:9666/'), findsOneWidget);
+    expect(find.text('Manage this Runtime in a browser'), findsOneWidget);
     expect(find.text('Terminal command'), findsNothing);
     expect(
       find.text('vibermate login --server 192.168.1.44:9666'),
@@ -1184,18 +1186,20 @@ void main() {
     expect(find.byKey(const Key('usage-active-runs')), findsOneWidget);
     expect(find.byKey(const Key('usage-input-tokens')), findsOneWidget);
     expect(find.byKey(const Key('usage-output-tokens')), findsOneWidget);
-    expect(find.byKey(const Key('usage-range-30')), findsOneWidget);
-    expect(find.byKey(const Key('usage-range-90')), findsOneWidget);
-    expect(find.byKey(const Key('usage-range-365')), findsOneWidget);
+    expect(find.byKey(const Key('usage-range-30')), findsNothing);
+    expect(find.byKey(const Key('usage-range-90')), findsNothing);
+    expect(find.byKey(const Key('usage-range-365')), findsNothing);
     expect(find.byKey(const Key('usage-team-heatmap')), findsOneWidget);
     expect(
       find.byKey(const Key('usage-team-day-month-2026-08')),
       findsOneWidget,
     );
+    expect(controller.usageRangeDays, 365);
     expect(
-      tester.getTopLeft(find.byKey(const Key('usage-team-day-2026-08-24'))).dx,
-      lessThan(180),
-      reason: 'A short heatmap should start near its weekday axis.',
+      DateTime.parse(
+        controller.runtimeUsage!.period.until,
+      ).difference(DateTime.parse(controller.runtimeUsage!.period.from)).inDays,
+      365,
     );
     final callsMetric = find.byKey(const Key('usage-metric-api-calls'));
     final tokensMetric = find.byKey(const Key('usage-metric-tokens'));
@@ -1219,15 +1223,6 @@ void main() {
     await tester.tap(find.byKey(const Key('usage-metric-tokens')));
     await tester.pump();
     expect(cellSemantics('2026-08-25'), contains('incomplete evidence'));
-    await tester.tap(find.byKey(const Key('usage-range-365')));
-    await tester.pumpAndSettle();
-    expect(controller.usageRangeDays, 365);
-    expect(
-      DateTime.parse(
-        controller.runtimeUsage!.period.until,
-      ).difference(DateTime.parse(controller.runtimeUsage!.period.from)).inDays,
-      365,
-    );
     expect(
       find.byKey(const Key('usage-team-day-month-2026-01')),
       findsOneWidget,

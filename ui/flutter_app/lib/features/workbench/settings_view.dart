@@ -991,6 +991,34 @@ final class _ServerAccessPanelState extends State<_ServerAccessPanel> {
                         error: true,
                       ),
                     ],
+                    if (access != null) ...[
+                      const SizedBox(height: 10),
+                      Divider(
+                        height: 1,
+                        color: context.viberColors.dividerSoft,
+                      ),
+                      const SizedBox(height: 9),
+                      Text(
+                        copy('server.web.title'),
+                        style: Theme.of(context).textTheme.labelLarge,
+                      ),
+                      const SizedBox(height: 3),
+                      Text(
+                        copy('server.web.detail'),
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: context.viberColors.textMuted,
+                        ),
+                      ),
+                      const SizedBox(height: 7),
+                      _RunCommand(
+                        client: 'Web',
+                        command: controller.runtimeWebURL,
+                        copyLabel: copy('server.web.copy'),
+                        enabled: true,
+                        onCopy: () =>
+                            _copyCommand('Web', controller.runtimeWebURL),
+                      ),
+                    ],
                     const SizedBox(height: 10),
                     Divider(height: 1, color: context.viberColors.dividerSoft),
                     const SizedBox(height: 9),

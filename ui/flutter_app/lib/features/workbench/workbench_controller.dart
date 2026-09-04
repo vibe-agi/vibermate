@@ -80,6 +80,9 @@ final class WorkbenchController extends ChangeNotifier {
   String get runtimeConnectTarget =>
       serverAccess?.preferredTarget ?? runtimeTarget;
 
+  String get runtimeWebURL =>
+      '${serverAccess?.transport ?? 'http'}://$runtimeConnectTarget/';
+
   DashboardData? data;
   NetworkData? networkData;
   List<ApprovalRecord>? pendingApprovals;
@@ -96,7 +99,7 @@ final class WorkbenchController extends ChangeNotifier {
   RootCAStatus? rootCAStatus;
   RootCAGuideIntent? rootCAGuideIntent;
   CapturedMessageTransformSample? capturedMessageTransformSample;
-  int usageRangeDays = 30;
+  final int usageRangeDays = 365;
   WorkbenchSection section;
   AppLanguage language;
   WorkbenchTheme theme;
@@ -822,34 +825,6 @@ final class WorkbenchController extends ChangeNotifier {
       notifyListeners();
     } catch (error) {
       if (_disposed || quiet) return;
-      serverManagementLoading = false;
-      serverManagementError = _describeError(error);
-      notifyListeners();
-    }
-  }
-
-  Future<void> selectUsageRangeDays(int days) async {
-    if (_disposed ||
-        !serverManagement ||
-        serverManagementLoading ||
-        !const {30, 90, 365}.contains(days) ||
-        (usageRangeDays == days && runtimeUsage != null)) {
-      return;
-    }
-    final previousDays = usageRangeDays;
-    usageRangeDays = days;
-    serverManagementLoading = true;
-    serverManagementError = null;
-    notifyListeners();
-    try {
-      final report = await _api.runtimeUsage(_usageQuery());
-      if (_disposed) return;
-      runtimeUsage = report;
-      serverManagementLoading = false;
-      notifyListeners();
-    } catch (error) {
-      if (_disposed) return;
-      usageRangeDays = previousDays;
       serverManagementLoading = false;
       serverManagementError = _describeError(error);
       notifyListeners();

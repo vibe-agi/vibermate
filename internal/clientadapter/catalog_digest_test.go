@@ -20,6 +20,7 @@ import (
 // must add a new revision rather than rewriting that public meaning.
 var knownCatalogDigests = map[uint64]string{
 	1: "YB0uXijGhI25aflCKCNRJz93KaNx6zkcpLRathIU_lc",
+	2: "YdpxfC8Npf6JvnCb-Z5v_-_iilRwfwntFxcM-aiPNWY",
 }
 
 func TestTheCatalogCannotChangeWithoutItsRevision(t *testing.T) {

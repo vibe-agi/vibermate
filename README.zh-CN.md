@@ -1,159 +1,123 @@
 # ViberMate
 
-[English](README.md) | [简体中文](README.zh-CN.md)
+[English](README.md) · [简体中文](README.zh-CN.md) · [官网](https://vibe-agi.github.io/zh/products/vibermate/)
 
-**看清并控制 Claude Code 和 Codex CLI 如何连接 AI 服务。**
+**看清并控制 Claude Code 和 Codex CLI 的网络边界。**
 
-ViberMate 是一款在 macOS 本地运行的 AI 编程代理管理工具。通过
-ViberMate 启动代理后，你可以查看它的请求、选择请求去向、应用简单的
-JavaScript 规则，并在本机保留可审计的运行记录。
+ViberMate 可以捕获代理对话、控制请求去向、执行小型 JavaScript 规则，并保留
+可审计的运行记录。它不会替代你的代理或 AI 服务商。
 
-> **发布状态：**经过 Developer ID 签名和 Apple 公证的通用 macOS App
-> [ViberMate 0.1.0](https://github.com/vibe-agi/vibermate/releases/tag/v0.1.0)
-> 已经可以安装。这是早期 0.x 预览版，不代表已经达到 GA 稳定性承诺。
+![ViberMate 对话捕获界面](https://vibe-agi.github.io/images/vibermate/capture-timeline-2400.webp)
 
-## 它能做什么？
+## 选择使用方式
 
-- 正常运行 Claude Code 或 Codex CLI，同时查看每次捕获的对话。
-- 保持原来的服务连接，或者把请求转发到指定的 Endpoint 和账号。
-- 在请求离开 Mac 之前隐藏本机用户名和路径。
-- 查看内置 JavaScript 示例，修改后用一个样例 Turn 测试，确认效果再发布。
-- 用 JavaScript 选择 Endpoint 账号，包括根据登录 ViberMate 的用户名选择。
-- 需要安全断网时，用“断网保护”暂停新的网络操作。
+| 方式 | 适合场景 | 支持平台 |
+| --- | --- | --- |
+| **macOS App** | 一套完整的本机工作台，已经包含 Runtime | macOS 14+（Apple 芯片与 Intel） |
+| **Runtime Server + Web** | 通过浏览器管理、由一个或多个人共同使用 | Linux x86-64 与 ARM64 |
+| **`vibermate` 命令** | 通过本机或远程 Runtime 启动 Claude、Codex | macOS 与 Linux |
 
-ViberMate 不是 AI 服务商，也不会替代 Claude Code 或 Codex。使用前仍需安装
-相应的代理 CLI，并确保它本身能够登录服务商账号。
+ViberMate 没有独立的“团队版”。同一个 Runtime 天然支持多个 Runtime User、
+彼此独立的登录会话、按用户记录的 Capture，以及共享的管理视图。一个人可直接
+使用，多人时为每个人或设备创建账号即可。
 
-## 第一次使用
+## macOS App：第一次捕获
 
-### 1. 安装 ViberMate
-
-ViberMate 需要 macOS 14 或更高版本。使用 Homebrew 安装已签名的 App：
+安装并打开 ViberMate：
 
 ```sh
 brew install --cask vibe-agi/tap/vibermate
 ```
 
-安装完成后，从“应用程序”中打开 ViberMate。你也可以直接下载
-[`ViberMate_0.1.0_universal.dmg`](https://github.com/vibe-agi/vibermate/releases/download/v0.1.0/ViberMate_0.1.0_universal.dmg)，
-再把 App 拖入“应用程序”。
-
-以后升级或卸载 App，可以执行：
-
-```sh
-brew upgrade --cask vibermate
-brew uninstall --cask vibermate
-```
-
-卸载 App 时会保留 ViberMate 的设置和运行数据。
-
-### 2. 安装终端命令
-
-1. 打开 ViberMate。
-2. 进入 **设置 → 常规 → 终端命令**。
-3. 点击 **设置终端命令**。
-
-ViberMate 会创建 `~/.local/bin/vibermate`，不会修改你的 Shell 配置文件，
-也不会覆盖一个无法确认由自己管理的同名命令。
-
-如果终端提示 `command not found`，可以把示例中的 `vibermate` 换成
-`~/.local/bin/vibermate`，或者把 `~/.local/bin` 加入 Shell 的 `PATH`。
-
-### 3. 启动代理
-
-在项目目录中打开终端，执行下面任意一条命令：
+进入 **设置 → 常规 → 终端命令**，点击 **设置终端命令**。然后在项目目录执行：
 
 ```sh
 vibermate run -- claude
-```
-
-```sh
+# 或者
 vibermate run -- codex
 ```
 
-第一次使用不需要先创建 Environment。内置的透明模式会保留代理原来的请求
-地址、账号、凭据和模型。
+回到 App，就能看到新的 Capture。第一次使用不需要先配置 Traffic Policy；
+透明捕获会保留代理原来的服务商、账号和模型。
 
-### 4. 回到 ViberMate 查看
+App 也会在同一台 Mac 上提供浏览器管理界面。地址可从
+**设置 → 团队接入 → 网页与客户端接入**复制。
 
-新运行会显示为一个 Capture。打开它即可查看对话、请求、响应、工具活动、
-用量和连接结果。需要结束时，仍然在终端按 `Ctrl+C`。
+## Linux Server + Web
 
-准备好使用自己的路由或 JavaScript 规则后，再创建 Environment 并明确选择：
+从[最新版本](https://github.com/vibe-agi/vibermate/releases/latest)下载
+`linux_x86_64` 或 `linux_arm64` 压缩包，使用 `SHA256SUMS-linux` 校验并解压。
+压缩包内已经包含 `vibermated`、`vibermate` 和相邻的 `vibermate-web` 网页界面。
 
-```sh
-vibermate run --env work -- claude
-```
-
-## 我需要安装证书吗？
-
-通常不需要。通过 `vibermate run` 启动的 Claude Code 和 Codex 进程会直接收到
-本次运行需要的 ViberMate 证书。
-
-只有其他应用必须依赖 macOS 系统信任时，才需要进入
-**设置 → 常规 → 本机根证书**安装。ViberMate 会显示准确的 SHA-256 指纹，
-并且只为当前 macOS 用户添加信任。私钥始终保留在 ViberMate 的本地数据目录。
-
-存在正在运行的 Capture 时，ViberMate 不允许替换证书。删除和恢复说明始终
-要求按指纹确认准确的 ViberMate 证书，不会让你误删其他证书。
-
-## 界面中的五个常用词
-
-| 名称 | 简单解释 |
-| --- | --- |
-| **Capture（捕获）** | 一次由 ViberMate 管理的代理运行，或一个手动连接的应用。 |
-| **Environment（环境）** | 一组可复用的路由、账号、网络和 JavaScript 规则。 |
-| **Endpoint（上游服务）** | AI 请求最终发送到的服务地址。 |
-| **Account（账号）** | 只属于某一个 Endpoint 的凭据。 |
-| **Message transform（消息变换）** | 上传前修改请求、显示前修改响应的 JavaScript。 |
-
-Capture 启动时会冻结当时的 Environment。之后编辑或发布 Environment 只影响
-新的 Capture，不会改变已经进行中的请求。
-
-## 数据与隐私
-
-- ViberMate 在本机运行，但 AI 请求仍会发送到你选择的服务商或 Endpoint。
-- 运行证据保存在本地 SQLite 数据库中。数据库**没有做应用层静态加密**，
-  依赖 macOS 用户账号和本地文件权限保护。
-- 新 Environment 默认保存经过脱敏的完整内容，保留 30 天。你也可以只记录
-  元数据，或者关闭内容记录。
-- 服务商凭据不会进入 Environment 快照和运行证据。你在提示词中主动输入的
-  文字仍然属于内容；除非确实希望发送给所选服务商，否则不要在提示词中粘贴
-  密钥。
-- 消息变换 JavaScript 不能访问网络、文件、时钟或随机源。脚本超时或失败会
-  停止请求，不会悄悄绕过规则继续发送。
-
-## 从源代码构建
-
-这一部分面向开发者。需要 macOS 14 或更高版本、Xcode、Go 1.25.13，以及
-仓库锁定的 Flutter 3.41.5 SDK。
+在局域网启动加密的 Runtime：
 
 ```sh
-git clone https://github.com/vibe-agi/vibermate.git
-cd vibermate
-make build-flutter-app
-open dist/ViberMate.app
+./vibermated server \
+  --listen 0.0.0.0:9666 \
+  --transport self_signed_tls
 ```
 
-本机构建的 App 只是 ad-hoc 签名，不是可公开分发的安装包。主要验证命令是：
+启动后输出的第一行 JSON 包含浏览器地址、TLS 指纹和
+`adminAccessKeyPath`。打开地址，读取该文件中的所有者密钥，用它进入 Web
+工作台。浏览器会提示自签名证书警告；继续前请核对页面显示的指纹。
+
+多人长期使用时，建议换成大家已经信任的 TLS 证书：
 
 ```sh
-make check
-make check-flutter-macos
+./vibermated server \
+  --listen 0.0.0.0:9666 \
+  --transport tls_files \
+  --tls-cert /绝对路径/fullchain.pem \
+  --tls-key /绝对路径/private-key.pem
 ```
 
-想了解实现细节，可以查看[运行时模块地图](docs/module-map.md)和主要的
-[架构决策记录](docs/adr)。
+在 **设置 → 团队接入** 中，为每个人或设备创建 Runtime User。每台开发机只需
+用对应的用户名和密码登录一次：
 
-## 当前边界
+```sh
+vibermate login --server 192.0.2.10:9666
+vibermate run --server 192.0.2.10:9666 -- claude
+# 或：vibermate run --server 192.0.2.10:9666 -- codex
+```
 
-- 当前发布目标是 macOS 14 或更高版本。
-- 内置语义解析覆盖受支持 Claude 和 Codex 路径使用的 Anthropic Messages
-  与 OpenAI Responses 流量。
-- 目前不承诺公网 Server 加固、自动更新、插件，以及任意客户端的广泛兼容。
-- Homebrew 与 GitHub Release 提供的安装包已经过 Developer ID 签名、Apple
-  公证和 Gatekeeper 验证。本地从源代码构建的 App 仅使用 ad-hoc 签名，
-  不是同一个分发产物。
+所有者密钥只用于浏览器管理；Runtime User 密码供 `vibermate` 命令登录。
+不要把所有者密钥发给代理用户。
 
-发现疑似漏洞时，请通过[私密安全渠道](SECURITY.md)报告。
-ViberMate 使用 [Apache License 2.0](LICENSE)。
+![ViberMate 团队用量](https://vibe-agi.github.io/images/vibermate/team-insights-2400.webp)
+
+## 证书，不再靠猜
+
+- ViberMate 会把本地根证书直接交给它启动的 Claude、Codex 进程，因此 Linux
+  不需要修改系统 CA。
+- 在 macOS 上，只有其他客户端必须依赖系统信任时，才需要在
+  **设置 → 常规 → 本机根证书**中安装。
+- 用于检查代理流量的 Runtime 根证书，与浏览器访问远程 Server 时使用的 TLS
+  证书，是两件不同的东西。
+- 有 Capture 正在运行时不能替换根证书。安装、替换和删除时，界面都会显示
+  需要核对的准确 SHA-256 指纹。
+
+## 可以控制什么
+
+- 查看对话、请求、响应、工具活动、Token 证据和网络决策。
+- 保持代理原来的请求去向，或改用另一个上游服务和账号。
+- 先查看、修改和测试内置 JavaScript 变换，确认效果后再发布。
+- 根据已经登录的 ViberMate 用户名选择上游账号。
+- 断开设备或 Runtime 前，先暂停新的外部网络操作。
+
+![ViberMate 脚本库](https://vibe-agi.github.io/images/vibermate/script-library-2400.webp)
+
+## 数据与当前边界
+
+- AI 流量仍会发往你选择的服务商或上游服务。
+- ViberMate 不会加密证据数据库；请保护主机账号和文件系统。记录范围和保留
+  时间可以配置。
+- 服务商凭据不会进入策略快照和证据，但主动写进提示词的文字仍然属于内容。
+- 变换 JavaScript 无法访问网络、文件、时钟或随机源；执行失败会停止请求，
+  不会静默绕过规则。
+- 当前仍是早期 `0.x` 版本，暂不承诺公网加固部署、自动更新、插件和任意客户端
+  兼容。
+
+遇到安装问题可运行 `vibermate doctor`。实现细节见[运行时模块地图](docs/module-map.md)
+和[架构决策](docs/adr)。疑似漏洞请通过 [SECURITY.md](SECURITY.md) 私密报告。
+
+使用 Apache-2.0 许可证。

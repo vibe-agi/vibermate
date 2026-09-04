@@ -251,6 +251,23 @@ func (catalog Catalog) Revision() CatalogRevision {
 // release. It does not verify an executable; callers use it to compare evidence
 // that a Verifier already produced with the catalog entry they selected.
 func (catalog Catalog) ExpectedEvidence(id, version string) (Evidence, bool) {
+	return catalog.ExpectedEvidenceForPlatform(
+		id,
+		version,
+		runtime.GOOS,
+		runtime.GOARCH,
+	)
+}
+
+// ExpectedEvidenceForPlatform returns the frozen evidence for one exact
+// client release on one platform. A version may legitimately have different
+// artifacts on macOS and Linux, so the platform is part of the identity.
+func (catalog Catalog) ExpectedEvidenceForPlatform(
+	id string,
+	version string,
+	operatingSystem string,
+	architecture string,
+) (Evidence, bool) {
 	normalized, err := NewCatalogWithSigners(
 		catalog.revision,
 		catalog.releases,
@@ -260,7 +277,10 @@ func (catalog Catalog) ExpectedEvidence(id, version string) (Evidence, bool) {
 		return Evidence{}, false
 	}
 	for _, release := range normalized.releases {
-		if release.ID != id || release.Version != version {
+		if release.ID != id ||
+			release.Version != version ||
+			release.OperatingSystem != operatingSystem ||
+			release.Architecture != architecture {
 			continue
 		}
 		return Evidence{
@@ -1012,18 +1032,60 @@ func writeDigestUint(writer io.Writer, value uint64) {
 // ClaudeCode221220DarwinARM64 returns one fixed compatibility release. Version
 // output is never executed as part of verification.
 func ClaudeCode221220DarwinARM64() Release {
+	return claudeCode221220Release(
+		"darwin",
+		"arm64",
+		"8addc857f3fe64d5a0368af9ee50321b50afb4a6918ba3ef018ab84f5dbbe081",
+	)
+}
+
+// ClaudeCode221220DarwinAMD64 returns the Intel macOS release installed by the
+// official npm package.
+func ClaudeCode221220DarwinAMD64() Release {
+	return claudeCode221220Release(
+		"darwin",
+		"amd64",
+		"dca7be0aa7d3d924836d440e0c6d8e3d47ef3c8e61fa5809b54b9017170ce2f3",
+	)
+}
+
+// ClaudeCode221220LinuxAMD64 returns the glibc x86-64 release installed by the
+// official npm package.
+func ClaudeCode221220LinuxAMD64() Release {
+	return claudeCode221220Release(
+		"linux",
+		"amd64",
+		"674f61f20ff306f3100cf9200e4c36c4b70278b5bef2884549819b942a89c863",
+	)
+}
+
+// ClaudeCode221220LinuxARM64 returns the glibc ARM64 release installed by the
+// official npm package.
+func ClaudeCode221220LinuxARM64() Release {
+	return claudeCode221220Release(
+		"linux",
+		"arm64",
+		"159e4a51d796f3bf14677577100f7efb845611b1ceaf0c30cbd8d4650d942185",
+	)
+}
+
+func claudeCode221220Release(
+	operatingSystem string,
+	architecture string,
+	entrypointSHA256 string,
+) Release {
 	return Release{
 		ID:              "claude-code",
 		Revision:        1,
 		Version:         "2.1.220",
-		OperatingSystem: "darwin",
-		Architecture:    "arm64",
+		OperatingSystem: operatingSystem,
+		Architecture:    architecture,
 		InstallShape:    InstallNativeSingleBinary,
 		InvocationLabel: "claude",
 		ArtifactRoot:    ".",
 		Artifacts: []Artifact{{
 			Role:   ArtifactEntrypoint,
-			SHA256: "8addc857f3fe64d5a0368af9ee50321b50afb4a6918ba3ef018ab84f5dbbe081",
+			SHA256: entrypointSHA256,
 		}},
 		LaunchRecipe: LaunchNodeEnvProxy,
 		Features: FeatureCoreOwnedStreamingFallback |
@@ -1034,16 +1096,72 @@ func ClaudeCode221220DarwinARM64() Release {
 // CodexCLI01450DarwinARM64 returns the compound release whose HTTP fallback,
 // Root input, and wire behavior were verified by the fixed client matrix.
 func CodexCLI01450DarwinARM64() Release {
+	return codexCLI01450Release(
+		"darwin",
+		"arm64",
+		"codex-darwin-arm64",
+		"aarch64-apple-darwin",
+		"da204207716d61f06a70d96dd66e9b6c0728a3bdf8f696f31026549d47667a98",
+		"1da3f4e0e96028b8a771814293c3033dafd1971f943f6c7e79b0897fe705f590",
+	)
+}
+
+// CodexCLI01450DarwinAMD64 returns the Intel macOS compound npm release.
+func CodexCLI01450DarwinAMD64() Release {
+	return codexCLI01450Release(
+		"darwin",
+		"amd64",
+		"codex-darwin-x64",
+		"x86_64-apple-darwin",
+		"975bec05112b59b789762dddb6a573b1564c187a91cbb8e12f43311c0794148a",
+		"6db9193ce2c9a8cef2b5482612cde24202a4329dfc34f4687a036d5d7da619af",
+	)
+}
+
+// CodexCLI01450LinuxAMD64 returns the x86-64 Linux compound npm release.
+func CodexCLI01450LinuxAMD64() Release {
+	return codexCLI01450Release(
+		"linux",
+		"amd64",
+		"codex-linux-x64",
+		"x86_64-unknown-linux-musl",
+		"84f3243fd73f23dc27effde18f96db6ed0a939448299a14d594022e6341f0fd5",
+		"a2a05dafaa1acb002a45eaec0a462de5b13694fcfcd7bc43305f14781ce7be14",
+	)
+}
+
+// CodexCLI01450LinuxARM64 returns the ARM64 Linux compound npm release.
+func CodexCLI01450LinuxARM64() Release {
+	return codexCLI01450Release(
+		"linux",
+		"arm64",
+		"codex-linux-arm64",
+		"aarch64-unknown-linux-musl",
+		"755fa8c48bdaf0f2ad4edfb74bb56fd2d633b70beabec94938a8f8ef501e5c7b",
+		"57d79900fe95df2ab854adf581a28ec46d7442f07445032d86453a44b577dced",
+	)
+}
+
+func codexCLI01450Release(
+	operatingSystem string,
+	architecture string,
+	platformPackageDirectory string,
+	platformTriple string,
+	platformPackageSHA256 string,
+	nativeChildSHA256 string,
+) Release {
 	return Release{
 		ID:                      "codex-cli",
 		Revision:                1,
 		Version:                 "0.145.0",
-		OperatingSystem:         "darwin",
-		Architecture:            "arm64",
+		OperatingSystem:         operatingSystem,
+		Architecture:            architecture,
 		InstallShape:            InstallNPMWrapperNativeChild,
 		InvocationLabel:         "codex",
 		CanonicalEntrypointName: "codex.js",
-		ArtifactRoot:            "..",
+		// npm installs the platform package beside @openai/codex inside the
+		// same @openai scope directory, not in codex/node_modules.
+		ArtifactRoot: "../..",
 		Artifacts: []Artifact{
 			{
 				Role:   ArtifactEntrypoint,
@@ -1057,14 +1175,14 @@ func CodexCLI01450DarwinARM64() Release {
 			},
 			{
 				Role:         ArtifactPlatformPackageMetadata,
-				RelativePath: "../node_modules/@openai/codex-darwin-arm64/package.json",
-				SHA256:       "da204207716d61f06a70d96dd66e9b6c0728a3bdf8f696f31026549d47667a98",
+				RelativePath: "../../" + platformPackageDirectory + "/package.json",
+				SHA256:       platformPackageSHA256,
 				MaxBytes:     1 << 20,
 			},
 			{
 				Role:         ArtifactNativeChild,
-				RelativePath: "../node_modules/@openai/codex-darwin-arm64/vendor/aarch64-apple-darwin/bin/codex",
-				SHA256:       "1da3f4e0e96028b8a771814293c3033dafd1971f943f6c7e79b0897fe705f590",
+				RelativePath: "../../" + platformPackageDirectory + "/vendor/" + platformTriple + "/bin/codex",
+				SHA256:       nativeChildSHA256,
 			},
 		},
 		LaunchRecipe: LaunchCodexResponsesHTTP,
@@ -1080,10 +1198,16 @@ func CodexCLI01450DarwinARM64() Release {
 // empty or partially active catalog.
 func BuiltInCatalog() Catalog {
 	return Catalog{
-		revision: 1,
+		revision: 2,
 		releases: []Release{
 			ClaudeCode221220DarwinARM64(),
+			ClaudeCode221220DarwinAMD64(),
+			ClaudeCode221220LinuxAMD64(),
+			ClaudeCode221220LinuxARM64(),
 			CodexCLI01450DarwinARM64(),
+			CodexCLI01450DarwinAMD64(),
+			CodexCLI01450LinuxAMD64(),
+			CodexCLI01450LinuxARM64(),
 		},
 		signers: []Signer{
 			ClaudeCodeSignerDarwin(),

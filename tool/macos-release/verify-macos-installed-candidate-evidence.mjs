@@ -34,7 +34,7 @@ const expectedInputEntries = Object.freeze([
   ".vibermate-private/signing/signing-transformation.json",
   "bundle",
   "bundle/dmg",
-  "bundle/dmg/ViberMate_0.1.0_universal.dmg",
+  `bundle/dmg/${macOSDistributionPolicy.diskImageFilename}`,
 ]);
 const forbiddenConfigurationNames = new Set([
   "API_PRIVATE_KEYS_DIR",
@@ -527,7 +527,7 @@ export async function verifyMacOSInstalledCandidateEvidence(
   );
   const diskImagePath = resolve(
     inputDirectory,
-    "bundle/dmg/ViberMate_0.1.0_universal.dmg",
+    `bundle/dmg/${macOSDistributionPolicy.diskImageFilename}`,
   );
   const [signing, notarization, submit, log] = await Promise.all([
     readJSON(signingPath, "signing transformation evidence"),

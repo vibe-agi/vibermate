@@ -411,9 +411,7 @@ func newCompoundFixture(t *testing.T) compoundFixture {
 	packageRoot := filepath.Join(root, "lib", "node_modules", "@openai", "codex")
 	entrypoint := filepath.Join(packageRoot, "bin", "codex.js")
 	platformRoot := filepath.Join(
-		packageRoot,
-		"node_modules",
-		"@openai",
+		filepath.Dir(packageRoot),
 		"codex-darwin-arm64",
 	)
 	native := filepath.Join(
@@ -479,7 +477,7 @@ func (fixture compoundFixture) release() clientadapter.Release {
 		InstallShape:            clientadapter.InstallNPMWrapperNativeChild,
 		InvocationLabel:         "codex",
 		CanonicalEntrypointName: "codex.js",
-		ArtifactRoot:            "..",
+		ArtifactRoot:            "../..",
 		Artifacts: []clientadapter.Artifact{
 			{
 				Role:   clientadapter.ArtifactEntrypoint,
@@ -492,12 +490,12 @@ func (fixture compoundFixture) release() clientadapter.Release {
 			},
 			{
 				Role:         clientadapter.ArtifactPlatformPackageMetadata,
-				RelativePath: "../node_modules/@openai/codex-darwin-arm64/package.json",
+				RelativePath: "../../codex-darwin-arm64/package.json",
 				SHA256:       digest(fixture.contents["platform-package"]),
 			},
 			{
 				Role:         clientadapter.ArtifactNativeChild,
-				RelativePath: "../node_modules/@openai/codex-darwin-arm64/vendor/aarch64-apple-darwin/bin/codex",
+				RelativePath: "../../codex-darwin-arm64/vendor/aarch64-apple-darwin/bin/codex",
 				SHA256:       digest(fixture.contents["native-child"]),
 			},
 		},

@@ -37,11 +37,8 @@ func (catalog Catalog) ValidateCompanionAttestation(
 			detection.Evidence == nil || detection.Signer != nil {
 			return Detection{}, ErrInvalidCompanionAttestation
 		}
-		expected, release, found := normalized.expectedRelease(
-			detection.Evidence.ID,
-			detection.Evidence.Version,
-		)
-		if !found || expected != *detection.Evidence ||
+		release, found := normalized.expectedRelease(*detection.Evidence)
+		if !found ||
 			release.InvocationLabel != detection.ExecutableLabel {
 			return Detection{}, ErrInvalidCompanionAttestation
 		}
@@ -76,14 +73,13 @@ func (catalog Catalog) ValidateCompanionAttestation(
 }
 
 func (catalog Catalog) expectedRelease(
-	id string,
-	version string,
-) (Evidence, Release, bool) {
+	evidence Evidence,
+) (Release, bool) {
 	for _, release := range catalog.releases {
-		if release.ID != id || release.Version != version {
+		if release.ID != evidence.ID || release.Version != evidence.Version {
 			continue
 		}
-		return Evidence{
+		expected := Evidence{
 			ID:              release.ID,
 			Revision:        release.Revision,
 			Version:         release.Version,
@@ -92,9 +88,12 @@ func (catalog Catalog) expectedRelease(
 			ReleaseSHA256:   releaseEvidenceDigest(release),
 			LaunchRecipe:    release.LaunchRecipe,
 			Features:        release.Features,
-		}, release, true
+		}
+		if expected == evidence {
+			return release, true
+		}
 	}
-	return Evidence{}, Release{}, false
+	return Release{}, false
 }
 
 func (catalog Catalog) knowsInvocationLabel(label string) bool {

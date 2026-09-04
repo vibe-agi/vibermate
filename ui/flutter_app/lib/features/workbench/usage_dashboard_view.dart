@@ -74,9 +74,6 @@ final class _UsageDashboardViewState extends State<UsageDashboardView> {
               copy: copy,
               refreshing: controller.serverManagementLoading,
               onRefresh: () => unawaited(controller.refreshServerManagement()),
-              rangeDays: controller.usageRangeDays,
-              onRangeChanged: (days) =>
-                  unawaited(controller.selectUsageRangeDays(days)),
               activityMetric: _activityMetric,
               onActivityMetricChanged: (value) => setState(() {
                 _activityMetric = value;
@@ -175,8 +172,6 @@ final class _UsageReportBody extends StatelessWidget {
     required this.copy,
     required this.refreshing,
     required this.onRefresh,
-    required this.rangeDays,
-    required this.onRangeChanged,
     required this.activityMetric,
     required this.onActivityMetricChanged,
     required this.onSelectUser,
@@ -190,8 +185,6 @@ final class _UsageReportBody extends StatelessWidget {
   final AppCopy copy;
   final bool refreshing;
   final VoidCallback onRefresh;
-  final int rangeDays;
-  final ValueChanged<int> onRangeChanged;
   final _ActivityMetric activityMetric;
   final ValueChanged<_ActivityMetric> onActivityMetricChanged;
   final ValueChanged<String> onSelectUser;
@@ -211,8 +204,6 @@ final class _UsageReportBody extends StatelessWidget {
           copy: copy,
           refreshing: refreshing,
           onRefresh: onRefresh,
-          rangeDays: rangeDays,
-          onRangeChanged: onRangeChanged,
         ),
         if (report.truncated) ...[
           const SizedBox(height: ViberSpacing.md),
@@ -263,178 +254,51 @@ final class _ReportScope extends StatelessWidget {
     required this.copy,
     required this.refreshing,
     required this.onRefresh,
-    required this.rangeDays,
-    required this.onRangeChanged,
   });
 
   final RuntimeUsageReport report;
   final AppCopy copy;
   final bool refreshing;
   final VoidCallback onRefresh;
-  final int rangeDays;
-  final ValueChanged<int> onRangeChanged;
 
   @override
-  Widget build(BuildContext context) => LayoutBuilder(
-    builder: (context, constraints) {
-      final heading = Row(
-        children: [
-          Icon(
-            Icons.inventory_2_outlined,
-            size: 16,
-            color: context.viberColors.route,
-          ),
-          const SizedBox(width: ViberSpacing.sm),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  copy('usage.scope.retained'),
-                  style: Theme.of(context).textTheme.labelLarge,
-                ),
-                Text(
-                  '${_periodLabel(report.period)} · '
-                  '${copy.format('usage.generated', {'time': _timestamp(report.generatedAt)})}',
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                    color: context.viberColors.textMuted,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          IconButton(
-            key: const Key('usage-refresh'),
-            onPressed: refreshing ? null : onRefresh,
-            tooltip: copy('status.refresh'),
-            icon: refreshing
-                ? const CompactProgressIndicator()
-                : const Icon(Icons.refresh, size: 16),
-          ),
-        ],
-      );
-      final selector = _UsageRangeSelector(
-        selectedDays: rangeDays,
-        enabled: !refreshing,
-        copy: copy,
-        onChanged: onRangeChanged,
-      );
-      if (constraints.maxWidth < 560) {
-        return Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
+  Widget build(BuildContext context) => Row(
+    children: [
+      Icon(
+        Icons.inventory_2_outlined,
+        size: 16,
+        color: context.viberColors.route,
+      ),
+      const SizedBox(width: ViberSpacing.sm),
+      Expanded(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            heading,
-            const SizedBox(height: ViberSpacing.sm),
-            Align(alignment: Alignment.centerRight, child: selector),
-          ],
-        );
-      }
-      return Row(
-        children: [
-          Expanded(child: heading),
-          const SizedBox(width: ViberSpacing.lg),
-          selector,
-        ],
-      );
-    },
-  );
-}
-
-final class _UsageRangeSelector extends StatelessWidget {
-  const _UsageRangeSelector({
-    required this.selectedDays,
-    required this.enabled,
-    required this.copy,
-    required this.onChanged,
-  });
-
-  final int selectedDays;
-  final bool enabled;
-  final AppCopy copy;
-  final ValueChanged<int> onChanged;
-
-  @override
-  Widget build(BuildContext context) => Container(
-    decoration: BoxDecoration(
-      color: context.viberColors.panelRaised,
-      border: Border.all(color: context.viberColors.dividerSoft),
-      borderRadius: ViberMetrics.controlRadius,
-    ),
-    clipBehavior: Clip.antiAlias,
-    child: Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        _UsageRangeButton(
-          key: const Key('usage-range-30'),
-          label: copy('usage.range.30'),
-          selected: selectedDays == 30,
-          onPressed: enabled ? () => onChanged(30) : null,
-        ),
-        _UsageRangeButton(
-          key: const Key('usage-range-90'),
-          label: copy('usage.range.90'),
-          selected: selectedDays == 90,
-          onPressed: enabled ? () => onChanged(90) : null,
-        ),
-        _UsageRangeButton(
-          key: const Key('usage-range-365'),
-          label: copy('usage.range.365'),
-          selected: selectedDays == 365,
-          onPressed: enabled ? () => onChanged(365) : null,
-        ),
-      ],
-    ),
-  );
-}
-
-final class _UsageRangeButton extends StatelessWidget {
-  const _UsageRangeButton({
-    required this.label,
-    required this.selected,
-    required this.onPressed,
-    super.key,
-  });
-
-  final String label;
-  final bool selected;
-  final VoidCallback? onPressed;
-
-  @override
-  Widget build(BuildContext context) => Semantics(
-    selected: selected,
-    button: true,
-    child: Material(
-      color: selected ? context.viberColors.selection : Colors.transparent,
-      child: InkWell(
-        onTap: onPressed,
-        child: Container(
-          constraints: const BoxConstraints(minWidth: 52, minHeight: 30),
-          alignment: Alignment.center,
-          padding: const EdgeInsets.symmetric(horizontal: ViberSpacing.sm),
-          decoration: BoxDecoration(
-            border: Border(
-              bottom: BorderSide(
-                width: 2,
-                color: selected
-                    ? context.viberColors.selectionStrong
-                    : Colors.transparent,
+            Text(
+              copy('usage.scope.retained'),
+              style: Theme.of(context).textTheme.labelLarge,
+            ),
+            Text(
+              '${_periodLabel(report.period)} · '
+              '${copy.format('usage.generated', {'time': _timestamp(report.generatedAt)})}',
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                color: context.viberColors.textMuted,
               ),
             ),
-          ),
-          child: Text(
-            label,
-            style: Theme.of(context).textTheme.labelSmall?.copyWith(
-              color: selected
-                  ? context.viberColors.route
-                  : context.viberColors.textMuted,
-              fontWeight: selected ? FontWeight.w600 : FontWeight.w500,
-            ),
-          ),
+          ],
         ),
       ),
-    ),
+      IconButton(
+        key: const Key('usage-refresh'),
+        onPressed: refreshing ? null : onRefresh,
+        tooltip: copy('status.refresh'),
+        icon: refreshing
+            ? const CompactProgressIndicator()
+            : const Icon(Icons.refresh, size: 16),
+      ),
+    ],
   );
 }
 

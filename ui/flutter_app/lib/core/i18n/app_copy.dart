@@ -1150,9 +1150,9 @@ final class AppCopy {
     'settings.subtitle':
         'Local runtime, Terminal entry and operator preferences',
     'settings.subtitle.server':
-        'Remote Server access, evidence and operator preferences',
+        'Web workbench, client access, evidence and operator preferences',
     'settings.tab.general': 'General',
-    'settings.tab.users': 'User management',
+    'settings.tab.users': 'Team access',
     'settings.tab.proxy': 'Network exits',
     'settings.egress.title': 'Network exit profiles',
     'settings.egress.detail':
@@ -1243,9 +1243,9 @@ final class AppCopy {
     'settings.preview': 'Deterministic Preview data',
     'settings.live': 'Local ViberMate runtime',
     'settings.remote': 'Runtime Server · {target}',
-    'server.access.title': 'Remote client access',
+    'server.access.title': 'Web & client access',
     'server.access.description':
-        'Create a runtime user on this Server. A client logs in once, then ViberMate captures its managed Claude and Codex traffic here.',
+        'This is one multi-user Runtime. Manage it in a browser, then give each person a Runtime User for Claude or Codex access.',
     'server.access.loading': 'Reading Server access…',
     'server.access.transport.http': 'HTTP',
     'server.access.transport.https': 'TLS',
@@ -1255,6 +1255,10 @@ final class AppCopy {
     'server.access.session.detail':
         'The client can start later runs without returning to this App. Logout, disabling the runtime user, or session expiry removes access.',
     'server.access.error': 'Could not read or change Server access: {detail}',
+    'server.web.title': 'Manage this Runtime in a browser',
+    'server.web.detail':
+        'Open this URL, then sign in with the owner admin access key stored on the Server machine. Runtime User passwords are for CLI clients, not this admin page.',
+    'server.web.copy': 'Copy Web workbench URL',
     'server.users.title': 'Runtime users',
     'server.users.description':
         'Each person or client machine signs in with its own account.',
@@ -1299,11 +1303,8 @@ final class AppCopy {
         'Runtime user activity projected from retained Agent traffic evidence',
     'usage.loading': 'Reading retained usage evidence…',
     'usage.unavailable': 'Usage evidence is unavailable',
-    'usage.scope.retained': 'Current retention window · cumulative evidence',
+    'usage.scope.retained': 'Past 365 days · retained evidence',
     'usage.generated': 'Projected at {time}',
-    'usage.range.30': '30 days',
-    'usage.range.90': '90 days',
-    'usage.range.365': '1 year',
     'usage.activity.team.title': 'Team activity evidence',
     'usage.activity.team.detail':
         'Daily retained Agent API calls across runtime users; select Token to inspect declared usage.',
@@ -2485,9 +2486,9 @@ final class AppCopy {
     'network.rules.validation.port': '请输入 1 至 65535 的端口。',
     'settings.title': '设置',
     'settings.subtitle': '本地运行时、终端入口与操作偏好',
-    'settings.subtitle.server': '远程 Server 用户、证据与操作偏好',
+    'settings.subtitle.server': '网页工作台、客户端接入、证据与操作偏好',
     'settings.tab.general': '常规',
-    'settings.tab.users': '用户管理',
+    'settings.tab.users': '团队接入',
     'settings.tab.proxy': '代理',
     'settings.egress.title': '网络出口方案',
     'settings.egress.detail': '统一发布可复用的 SOCKS5 与 DNS 选择；流量策略冻结所选的精确版本。',
@@ -2562,9 +2563,9 @@ final class AppCopy {
     'settings.preview': '确定性预览数据',
     'settings.live': '本地 ViberMate 运行时',
     'settings.remote': 'Runtime Server · {target}',
-    'server.access.title': '远程客户端访问',
+    'server.access.title': '网页与客户端接入',
     'server.access.description':
-        '在这台 Server 上创建运行用户。客户端登录一次后，ViberMate 会在这里捕获其托管的 Claude 与 Codex 流量。',
+        '这是一套原生支持多人的 Runtime。你可以在浏览器中管理它，再为每个人创建独立的 Claude 或 Codex 运行用户。',
     'server.access.loading': '正在读取 Server 访问方式…',
     'server.access.transport.http': 'HTTP',
     'server.access.transport.https': 'TLS',
@@ -2574,6 +2575,10 @@ final class AppCopy {
     'server.access.session.detail':
         '客户端后续启动无需再回到 App 操作；登出、停用运行用户或会话到期后才会失去访问权限。',
     'server.access.error': '无法读取或修改 Server 访问设置：{detail}',
+    'server.web.title': '在浏览器中管理这套 Runtime',
+    'server.web.detail':
+        '打开此地址，并使用保存在 Server 机器上的所有者管理密钥登录。运行用户密码只用于 CLI 客户端，不能登录管理页面。',
+    'server.web.copy': '复制网页工作台地址',
     'server.users.title': '运行用户',
     'server.users.description': '每个人或客户端机器使用自己的账号登录。',
     'server.users.authentication': '用户名与密码 · 可复用登录会话',
@@ -2609,11 +2614,8 @@ final class AppCopy {
     'usage.subtitle': '基于已保留 Agent 流量证据统计每个运行用户的实际使用',
     'usage.loading': '正在读取已保留的用量证据…',
     'usage.unavailable': '当前无法读取用量证据',
-    'usage.scope.retained': '当前保留期 · 累计证据',
+    'usage.scope.retained': '近 365 天 · 已保留证据',
     'usage.generated': '生成于 {time}',
-    'usage.range.30': '近 30 天',
-    'usage.range.90': '近 90 天',
-    'usage.range.365': '近一年',
     'usage.activity.team.title': '团队活动证据',
     'usage.activity.team.detail':
         '按天汇总运行用户的已保留 Agent API 调用；切换 Token 可查看协议声明的用量。',

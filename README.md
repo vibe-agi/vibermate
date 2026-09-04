@@ -1,170 +1,134 @@
 # ViberMate
 
-[English](README.md) | [简体中文](README.zh-CN.md)
+[English](README.md) · [简体中文](README.zh-CN.md) · [Website](https://vibe-agi.github.io/products/vibermate/)
 
-**See and control how Claude Code and Codex CLI connect to AI services.**
+**See and control the network boundary around Claude Code and Codex CLI.**
 
-ViberMate is a local macOS app for people who use AI coding agents. Start an
-agent through ViberMate and you can see its requests, choose where they go,
-apply small JavaScript rules, and keep an auditable local record.
+ViberMate captures agent conversations, routes requests, applies small
+JavaScript rules, and keeps an auditable record. It does not replace your agent
+or AI provider.
 
-> **Release status:** [ViberMate 0.1.0](https://github.com/vibe-agi/vibermate/releases/tag/v0.1.0)
-> is available as a Developer ID-signed, Apple-notarized universal macOS App.
-> It is an early 0.x preview, not a general-availability stability promise.
+![ViberMate capture timeline](https://vibe-agi.github.io/images/vibermate/capture-timeline-2400.webp)
 
-## What can I do with it?
+## Choose how to run it
 
-- Run Claude Code or Codex CLI normally while seeing each captured conversation.
-- Keep the original provider connection, or route a request to a configured
-  endpoint and account.
-- Hide local usernames and paths before a request leaves your Mac.
-- Use built-in JavaScript examples, edit them, and test them against a sample
-  Turn before publishing.
-- Select an endpoint account with a JavaScript rule, including the name of the
-  ViberMate user who logged in.
-- Pause new network work with Offline Hold when you need to disconnect safely.
+| Experience | Best for | Runs on |
+| --- | --- | --- |
+| **macOS App** | A complete local workbench with the Runtime included | macOS 14+ (Apple silicon and Intel) |
+| **Runtime Server + Web** | A browser-managed Runtime used by one or many people | Linux x86-64 and ARM64 |
+| **`vibermate` command** | Starting Claude or Codex through either Runtime | macOS and Linux |
 
-ViberMate is not an AI provider and does not replace Claude Code or Codex. The
-agent CLI must already be installed and able to sign in to its provider.
+There is no separate “team edition.” One Runtime already supports multiple
+Runtime Users, isolated login sessions, per-user captures, and a shared admin
+view. Use it alone or create an account for each person or device.
 
-## First run
+## macOS App: first capture
 
-### 1. Install ViberMate
-
-ViberMate requires macOS 14 or later. Install the signed App with Homebrew:
+Install and open ViberMate:
 
 ```sh
 brew install --cask vibe-agi/tap/vibermate
 ```
 
-Then open ViberMate from Applications. You can also download
-[`ViberMate_0.1.0_universal.dmg`](https://github.com/vibe-agi/vibermate/releases/download/v0.1.0/ViberMate_0.1.0_universal.dmg)
-and drag the App into Applications.
-
-To upgrade or remove the App later:
-
-```sh
-brew upgrade --cask vibermate
-brew uninstall --cask vibermate
-```
-
-Uninstalling preserves your ViberMate settings and runtime data.
-
-### 2. Add the Terminal command
-
-1. Open ViberMate.
-2. Open **Settings → General → Terminal command**.
-3. Choose **Set up command**.
-
-ViberMate creates `~/.local/bin/vibermate`. It does not edit your shell profile
-or replace a command it cannot prove it owns.
-
-If your shell says `command not found`, run the same examples with
-`~/.local/bin/vibermate` or add `~/.local/bin` to your shell's `PATH`.
-
-### 3. Start an agent
-
-Open a Terminal in your project and run one of these commands:
+In **Settings → General → Terminal command**, choose **Set up command**. Then,
+from your project directory:
 
 ```sh
 vibermate run -- claude
-```
-
-```sh
+# or
 vibermate run -- codex
 ```
 
-You do not need to create an Environment first. The built-in transparent mode
-keeps the agent's original destination, account, credentials, and model.
+Return to the App to inspect the new Capture. You can start without configuring
+a Traffic Policy; transparent capture preserves the agent's existing provider,
+account, and model.
 
-### 4. Return to ViberMate
+The App also exposes its management UI to a browser on the same Mac. Copy the
+address shown under **Settings → Team access → Web & client access**.
 
-The new run appears as a Capture. Open it to inspect conversations, requests,
-responses, tool activity, usage, and connection results. Stop the agent as
-usual with `Ctrl+C`.
+## Linux Server + Web
 
-When you are ready to apply your own routing or JavaScript rules, create an
-Environment and launch it explicitly:
+Download the `linux_x86_64` or `linux_arm64` archive from the
+[latest release](https://github.com/vibe-agi/vibermate/releases/latest), verify
+it with `SHA256SUMS-linux`, and extract it. The archive contains `vibermated`,
+`vibermate`, and the adjacent `vibermate-web` UI.
 
-```sh
-vibermate run --env work -- claude
-```
-
-## Do I need to install a certificate?
-
-Usually, no. Claude Code and Codex processes started with `vibermate run`
-receive the ViberMate certificate directly for that process.
-
-Install the certificate from **Settings → General → Local Root Certificate**
-only when another application relies on the macOS trust store. ViberMate shows
-the exact SHA-256 fingerprint and installs trust only for the current macOS
-user. The private key stays in ViberMate's local data directory.
-
-Certificate replacement is disabled while a Capture is running. Removal and
-recovery instructions always identify the exact ViberMate certificate rather
-than asking you to delete an unrelated certificate.
-
-## Five words used in the app
-
-| Word | Plain meaning |
-| --- | --- |
-| **Capture** | One managed agent run, or one manually connected application. |
-| **Environment** | A reusable set of routing, account, network, and JavaScript rules. |
-| **Endpoint** | The upstream AI service address. |
-| **Account** | One credential belonging to one Endpoint. |
-| **Message transform** | JavaScript that changes a request before upload or a response before display. |
-
-An Environment is frozen when a Capture starts. Editing or publishing it
-affects future Captures, not a request that is already in progress.
-
-## Data and privacy
-
-- ViberMate runs locally, but your AI requests still go to the provider or
-  endpoint you selected.
-- The local SQLite evidence database is **not encrypted** by ViberMate. It
-  relies on your macOS account and local file permissions.
-- New Environments default to redacted full-content evidence retained for 30
-  days. You can choose metadata-only recording or turn content recording off.
-- Provider credentials are kept outside Environment snapshots and evidence.
-  Text you type into a prompt is still content, so do not paste a secret unless
-  you intend to send it to the selected provider.
-- Message-transform JavaScript has no network, file, clock, or random access.
-  A bounded execution failure stops the request instead of silently bypassing
-  the rule.
-
-## Build from source
-
-This path is for contributors. It requires macOS 14 or later, Xcode, Go
-1.25.13, and the repository-pinned Flutter 3.41.5 SDK.
+Start an encrypted Runtime on your network:
 
 ```sh
-git clone https://github.com/vibe-agi/vibermate.git
-cd vibermate
-make build-flutter-app
-open dist/ViberMate.app
+./vibermated server \
+  --listen 0.0.0.0:9666 \
+  --transport self_signed_tls
 ```
 
-The local App is ad-hoc signed and is not a public distribution build. Run the
-main validation gates with:
+The first JSON line contains the browser address, TLS fingerprint, and
+`adminAccessKeyPath`. Open the address, read the owner key from that file, and
+use it to enter the Web workbench. A browser will warn about the self-signed
+server certificate; check the displayed fingerprint before continuing.
+
+For a shared production network, provide a certificate already trusted by your
+users instead:
 
 ```sh
-make check
-make check-flutter-macos
+./vibermated server \
+  --listen 0.0.0.0:9666 \
+  --transport tls_files \
+  --tls-cert /absolute/path/fullchain.pem \
+  --tls-key /absolute/path/private-key.pem
 ```
 
-Implementation details live in the [runtime module map](docs/module-map.md),
-and the most important design decisions live in [docs/adr](docs/adr).
+In **Settings → Team access**, create a Runtime User for each person or device.
+On each developer machine, use the matching username and password once:
 
-## Current boundaries
+```sh
+vibermate login --server 192.0.2.10:9666
+vibermate run --server 192.0.2.10:9666 -- claude
+# or: vibermate run --server 192.0.2.10:9666 -- codex
+```
 
-- The current release target is macOS 14 or later.
-- Built-in semantic inspection covers Anthropic Messages and OpenAI Responses
-  traffic used by the supported Claude and Codex paths.
-- A hardened public-Internet Server, automatic updates, plugins, and broad
-  arbitrary-client compatibility are not claimed yet.
-- The Homebrew and GitHub Release build is Developer ID-signed, notarized, and
-  Gatekeeper-approved. A local source build is ad-hoc signed and is not the
-  same distribution artifact.
+The owner key is for browser administration. Runtime User passwords are for
+the `vibermate` command; do not share the owner key with agent users.
 
-Report suspected vulnerabilities through the [private security channel](SECURITY.md).
-ViberMate is licensed under the [Apache License 2.0](LICENSE).
+![ViberMate team insights](https://vibe-agi.github.io/images/vibermate/team-insights-2400.webp)
+
+## Certificates, without guesswork
+
+- Managed Claude and Codex processes receive ViberMate's local Root directly
+  for that process. Linux does not need a system-wide CA installation.
+- On macOS, install the Root from **Settings → General → Local Root
+  Certificate** only for other clients that depend on macOS system trust.
+- The Runtime Root used to inspect agent traffic is separate from the TLS
+  certificate used to open a remote Server in a browser.
+- Root replacement is disabled while captures are running. The UI shows the
+  exact SHA-256 fingerprint for install, replacement, and removal.
+
+## What you can control
+
+- Inspect conversations, requests, responses, tool activity, token evidence,
+  and network decisions.
+- Keep an agent's original destination or route it through another upstream
+  service and account.
+- Preview, edit, and test built-in JavaScript transforms before publishing.
+- Select an upstream account from the authenticated ViberMate login name.
+- Hold new external work before disconnecting a machine or Runtime.
+
+![ViberMate script library](https://vibe-agi.github.io/images/vibermate/script-library-2400.webp)
+
+## Data and current boundaries
+
+- AI traffic still goes to the provider or upstream service you choose.
+- The evidence database is not encrypted by ViberMate; protect the host account
+  and filesystem. Recording and retention are configurable.
+- Provider credentials are kept out of policy snapshots and evidence, but text
+  deliberately placed in a prompt remains prompt content.
+- Transform JavaScript has no network, file, clock, or random access. A failure
+  stops the request instead of silently bypassing the rule.
+- This is an early `0.x` release. A hardened public-Internet deployment,
+  automatic updates, plugins, and arbitrary-client compatibility are not yet
+  claimed.
+
+Run `vibermate doctor` when setup fails. For implementation details, see the
+[runtime module map](docs/module-map.md) and [architecture decisions](docs/adr).
+Report suspected vulnerabilities through [SECURITY.md](SECURITY.md).
+
+Apache-2.0 licensed.

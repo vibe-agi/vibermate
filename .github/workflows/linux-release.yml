@@ -1,0 +1,101 @@
+name: linux release
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing GitHub Release tag to build and attach
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: linux-release-${{ inputs.release_tag }}
+  cancel-in-progress: false
+
+jobs:
+  build-verify-publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      REQUESTED_TAG: ${{ inputs.release_tag }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ inputs.release_tag }}
+          fetch-depth: 0
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: go.mod
+          check-latest: false
+          cache: true
+      - name: Install the pinned Flutter SDK
+        shell: bash
+        run: |
+          set -euo pipefail
+          flutter_root="${RUNNER_TEMP}/vibermate-flutter-linux-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          ui/flutter_app/tool/install_ci_flutter.sh "${flutter_root}" web
+          printf '%s/bin\n' "${flutter_root}" >> "${GITHUB_PATH}"
+          printf 'FLUTTER_ROOT=%s\n' "${flutter_root}" >> "${GITHUB_ENV}"
+      - name: Validate release identity
+        id: release
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ ! "${REQUESTED_TAG}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "release_tag must be vMAJOR.MINOR.PATCH" >&2
+            exit 64
+          fi
+          package_version="$(awk '$1 == "version:" { print $2 }' ui/flutter_app/pubspec.yaml)"
+          version="${package_version%%+*}"
+          if [[ "${REQUESTED_TAG}" != "v${version}" ]]; then
+            echo "release tag does not match the packaged version" >&2
+            exit 65
+          fi
+          if [[ "$(git rev-list -n 1 "${REQUESTED_TAG}")" != "$(git rev-parse HEAD)" ]]; then
+            echo "checked-out source does not match the release tag" >&2
+            exit 65
+          fi
+          git diff --exit-code
+          git diff --cached --exit-code
+          printf 'version=%s\n' "${version}" >> "${GITHUB_OUTPUT}"
+      - name: Build browser workbench
+        shell: bash
+        working-directory: ui/flutter_app
+        run: |
+          set -euo pipefail
+          tool/verify_flutter_sdk.sh
+          flutter pub get
+          flutter build web --release
+      - name: Build and verify Linux distributions
+        shell: bash
+        run: |
+          set -euo pipefail
+          tool/linux-release/build-linux-distributions.sh \
+            "${{ steps.release.outputs.version }}" \
+            ui/flutter_app/build/web \
+            dist/linux-release
+          tool/linux-release/verify-linux-distributions.sh \
+            "${{ steps.release.outputs.version }}" \
+            dist/linux-release
+          git diff --exit-code
+      - name: Retain verified Linux distributions
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ViberMate-${{ steps.release.outputs.version }}-linux
+          path: dist/linux-release/*
+          if-no-files-found: error
+          retention-days: 14
+      - name: Attach distributions to the existing release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release view "${REQUESTED_TAG}" --repo "${GITHUB_REPOSITORY}" >/dev/null
+          gh release upload "${REQUESTED_TAG}" \
+            dist/linux-release/ViberMate_*.tar.gz \
+            dist/linux-release/SHA256SUMS-linux \
+            --repo "${GITHUB_REPOSITORY}"
