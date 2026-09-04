@@ -386,12 +386,14 @@ func TestHostRejectsSecondGenerationWithoutChangingFirstDiscovery(t *testing.T) 
 }
 
 func TestHostRefreshesDiscoveryWithoutRotatingControlCredential(t *testing.T) {
-	t.Parallel()
-
 	root := t.TempDir()
 	paths := newHostPaths(t, filepath.Join(root, "cache"))
 	options := hostOptions(t, paths, filepath.Join(root, "data"))
-	options.CLIControlDiscoveryTTL = 300 * time.Millisecond
+	// The initial publication must remain valid while a loaded CI runner starts
+	// the complete Host. Keep this much shorter than production while leaving
+	// enough headroom that the test observes the refresh rather than scheduler
+	// contention.
+	options.CLIControlDiscoveryTTL = 2 * time.Second
 	host := startHost(t, options)
 	defer shutdownHost(t, host)
 	sessionFile, err := localdiscovery.NewFile(
@@ -405,7 +407,7 @@ func TestHostRefreshesDiscoveryWithoutRotatingControlCredential(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(10 * time.Second)
 	var refreshed localdiscovery.Session
 	for time.Now().Before(deadline) {
 		current, loadErr := sessionFile.Load()
