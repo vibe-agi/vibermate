@@ -3,6 +3,7 @@ package hostsecret
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"time"
 
@@ -11,10 +12,10 @@ import (
 
 const (
 	// A host call still inside the delegate after this long is treated as
-	// wedged. It is set far above any plausible user interaction because a
-	// Keychain read can legitimately block on a Touch ID prompt; a call that has
-	// not returned in half a minute is stuck or abandoned, not being answered.
-	defaultHostCallWedgeAfter = 30 * time.Second
+	// wedged. Native stores are deliberately non-interactive: five seconds is
+	// generous for an unlocked local credential store, while still letting the
+	// App explain an unavailable store instead of hanging at launch.
+	defaultHostCallWedgeAfter = 5 * time.Second
 	// Stepping past a wedged call permanently costs the goroutine and the OS
 	// thread its cgo call pinned, so the budget is finite and never reclaimed.
 	// It exists because the alternative — refusing to step past — made the first
@@ -22,17 +23,18 @@ const (
 	defaultMaxWedgedHostCalls = 4
 )
 
-// ErrHostSecretsUnresponsive reports that the host secret API stopped returning
-// and the lane has spent its budget for abandoning stuck calls. It is the
-// `unavailable` secret state of design 06 §4.1 reaching a caller as an error,
-// rather than each caller discovering it as its own deadline.
-var ErrHostSecretsUnresponsive = errors.New(
-	"host SecretStore is not responding",
+// ErrHostSecretsUnresponsive reports that the host secret API passed its
+// responsiveness bound. It is the `unavailable` secret state of design 06
+// §4.1 reaching a caller as an error, rather than each caller discovering the
+// same wedged host boundary as its own unrelated deadline.
+var ErrHostSecretsUnresponsive = fmt.Errorf(
+	"host SecretStore is not responding: %w",
+	secretstore.ErrUnavailable,
 )
 
-// hostCallLane admits one caller at a time into a delegate that may never
-// return, and can step past an occupant that has stopped responding a bounded
-// number of times.
+// hostCallLane admits one current caller at a time into a delegate that may
+// never return. It can abandon a stopped occupant and admit one replacement a
+// bounded number of times; abandoned OS calls may still physically remain.
 type hostCallLane struct {
 	permits    chan struct{}
 	wedgeAfter time.Duration
@@ -40,6 +42,16 @@ type hostCallLane struct {
 	mu        sync.Mutex
 	minted    int
 	maxWedged int
+	holder    *hostCallLease
+}
+
+// hostCallLease ties one consumed permit to the exact delegate call that owns
+// it. Once the lane steps past that call, its eventual late return must not put
+// an obsolete second permit back into the lane.
+type hostCallLease struct {
+	lane      *hostCallLane
+	abandoned bool
+	released  bool
 }
 
 func newHostCallLane(wedgeAfter time.Duration, maxWedged int) *hostCallLane {
@@ -54,48 +66,87 @@ func newHostCallLane(wedgeAfter time.Duration, maxWedged int) *hostCallLane {
 
 // enter blocks until this caller may run the delegate, its context ends, or the
 // lane is judged unresponsive.
-func (lane *hostCallLane) enter(ctx context.Context) error {
+func (lane *hostCallLane) enter(ctx context.Context) (*hostCallLease, error) {
 	select {
 	case <-lane.permits:
-		return nil
+		return lane.hold(), nil
 	default:
 	}
+	observed := lane.current()
 	timer := time.NewTimer(lane.wedgeAfter)
 	defer timer.Stop()
 	select {
 	case <-lane.permits:
-		return nil
+		return lane.hold(), nil
 	case <-ctx.Done():
-		return ctx.Err()
+		return nil, ctx.Err()
 	case <-timer.C:
 	}
-	if !lane.mintReplacement() {
-		return ErrHostSecretsUnresponsive
+	// Only step past the call that made this caller wait. If that call returned
+	// at the deadline and another one acquired the lane, do not mistake the new
+	// call for the old wedge.
+	if observed == nil || !observed.abandon() {
+		return nil, ErrHostSecretsUnresponsive
 	}
 	select {
 	case <-lane.permits:
-		return nil
+		return lane.hold(), nil
 	case <-ctx.Done():
-		return ctx.Err()
+		return nil, ctx.Err()
 	}
 }
 
-// leave returns the permit. A call that was already stepped past may still
-// return much later; the buffer has room for every permit the lane can mint, so
-// the hand-back never blocks and simply restores capacity.
-func (lane *hostCallLane) leave() {
+func (lane *hostCallLane) current() *hostCallLease {
+	lane.mu.Lock()
+	defer lane.mu.Unlock()
+	return lane.holder
+}
+
+func (lane *hostCallLane) hold() *hostCallLease {
+	lane.mu.Lock()
+	defer lane.mu.Unlock()
+	lease := &hostCallLease{lane: lane}
+	lane.holder = lease
+	return lease
+}
+
+func (lease *hostCallLease) release() {
+	if lease == nil || lease.lane == nil {
+		return
+	}
+	lane := lease.lane
+	lane.mu.Lock()
+	defer lane.mu.Unlock()
+	if lease.released {
+		return
+	}
+	lease.released = true
+	if lease.abandoned || lane.holder != lease {
+		return
+	}
+	lane.holder = nil
 	select {
 	case lane.permits <- struct{}{}:
 	default:
 	}
 }
 
-func (lane *hostCallLane) mintReplacement() bool {
-	lane.mu.Lock()
-	defer lane.mu.Unlock()
-	if lane.minted >= lane.maxWedged {
+func (lease *hostCallLease) abandon() bool {
+	if lease == nil || lease.lane == nil {
 		return false
 	}
+	return lease.lane.abandon(lease)
+}
+
+func (lane *hostCallLane) abandon(expected *hostCallLease) bool {
+	lane.mu.Lock()
+	defer lane.mu.Unlock()
+	if expected == nil || lane.holder == nil || lane.holder != expected ||
+		lane.holder.released || lane.holder.abandoned || lane.minted >= lane.maxWedged {
+		return false
+	}
+	lane.holder.abandoned = true
+	lane.holder = nil
 	lane.minted++
 	lane.permits <- struct{}{}
 	return true
@@ -191,20 +242,25 @@ func (store *contextBoundReadStore) read(
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	if err := store.reads.enter(ctx); err != nil {
+	lease, err := store.reads.enter(ctx)
+	if err != nil {
 		return nil, err
 	}
+	callContext, cancelCall := context.WithCancel(ctx)
+	defer cancelCall()
 	// Unbuffered on purpose: the hand-off must be a rendezvous so the goroutine
 	// learns that the caller gave up and can destroy a secret nothing will read.
 	result := make(chan contextBoundReadResult)
 	go func() {
-		defer store.reads.leave()
+		defer lease.release()
 		var value *secretstore.Value
 		var err error
 		if pinned {
-			value, err = store.Store.ReadAtRevision(ctx, reference, expected)
+			value, err = store.Store.ReadAtRevision(
+				callContext, reference, expected,
+			)
 		} else {
-			value, err = store.Store.Read(ctx, reference)
+			value, err = store.Store.Read(callContext, reference)
 		}
 		if err != nil && value != nil {
 			value.Destroy()
@@ -212,13 +268,15 @@ func (store *contextBoundReadStore) read(
 		}
 		select {
 		case result <- contextBoundReadResult{value: value, err: err}:
-		case <-ctx.Done():
+		case <-callContext.Done():
 			// The caller gave up. Nothing else can reach this value.
 			if value != nil {
 				value.Destroy()
 			}
 		}
 	}()
+	timer := time.NewTimer(store.reads.wedgeAfter)
+	defer timer.Stop()
 	select {
 	case outcome := <-result:
 		if err := ctx.Err(); err != nil {
@@ -230,6 +288,13 @@ func (store *contextBoundReadStore) read(
 		return outcome.value, outcome.err
 	case <-ctx.Done():
 		return nil, ctx.Err()
+	case <-timer.C:
+		// The accepted call itself is wedged. Make one bounded replacement
+		// available to later callers before returning the host-level failure.
+		// The delegate may ignore cancellation, but cancelCall ensures a value it
+		// eventually returns is destroyed instead of blocking on the rendezvous.
+		lease.abandon()
+		return nil, ErrHostSecretsUnresponsive
 	}
 }
 
@@ -245,18 +310,23 @@ func (store *contextBoundReadStore) Inspect(
 	if err := ctx.Err(); err != nil {
 		return secretstore.Metadata{}, err
 	}
-	if err := store.inspections.enter(ctx); err != nil {
+	lease, err := store.inspections.enter(ctx)
+	if err != nil {
 		return secretstore.Metadata{}, err
 	}
+	callContext, cancelCall := context.WithCancel(ctx)
+	defer cancelCall()
 	result := make(chan contextBoundInspectResult)
 	go func() {
-		defer store.inspections.leave()
-		metadata, err := store.Store.Inspect(ctx, reference)
+		defer lease.release()
+		metadata, err := store.Store.Inspect(callContext, reference)
 		select {
 		case result <- contextBoundInspectResult{metadata: metadata, err: err}:
-		case <-ctx.Done():
+		case <-callContext.Done():
 		}
 	}()
+	timer := time.NewTimer(store.inspections.wedgeAfter)
+	defer timer.Stop()
 	select {
 	case outcome := <-result:
 		if err := ctx.Err(); err != nil {
@@ -265,5 +335,8 @@ func (store *contextBoundReadStore) Inspect(
 		return outcome.metadata, outcome.err
 	case <-ctx.Done():
 		return secretstore.Metadata{}, ctx.Err()
+	case <-timer.C:
+		lease.abandon()
+		return secretstore.Metadata{}, ErrHostSecretsUnresponsive
 	}
 }

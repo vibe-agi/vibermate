@@ -11,6 +11,49 @@ final class RuntimeLoginRequired implements Exception {
   String toString() => reason;
 }
 
+enum RuntimeLoginMode { signIn, setup, recover }
+
+final class RuntimeLoginAttempt {
+  const RuntimeLoginAttempt.signIn({
+    required this.username,
+    required this.password,
+  }) : mode = RuntimeLoginMode.signIn,
+       recoveryKey = '';
+
+  const RuntimeLoginAttempt.setup({
+    required this.recoveryKey,
+    required this.username,
+    required this.password,
+  }) : mode = RuntimeLoginMode.setup;
+
+  const RuntimeLoginAttempt.recover({
+    required this.recoveryKey,
+    required this.password,
+  }) : mode = RuntimeLoginMode.recover,
+       username = '';
+
+  final RuntimeLoginMode mode;
+  final String recoveryKey;
+  final String username;
+  final String password;
+}
+
+enum RuntimeWebRole { owner, member }
+
+final class RuntimeWebPrincipal {
+  const RuntimeWebPrincipal({
+    required this.id,
+    required this.username,
+    required this.role,
+  });
+
+  final String id;
+  final String username;
+  final RuntimeWebRole role;
+
+  bool get owner => role == RuntimeWebRole.owner;
+}
+
 final class RuntimeConnectionException implements Exception {
   const RuntimeConnectionException(this.message);
 
@@ -68,6 +111,10 @@ final class RuntimeConnection {
     required this.targetLabel,
     this.rootTrustInstaller,
     this.exitCode,
+    this.webSessionEnded,
+    this.webPrincipal,
+    this.changePassword,
+    this.signOut,
   });
 
   final ControlApi api;
@@ -80,4 +127,9 @@ final class RuntimeConnection {
   final String targetLabel;
   final RootTrustInstaller? rootTrustInstaller;
   final Future<int>? exitCode;
+  final Future<void>? webSessionEnded;
+  final RuntimeWebPrincipal? webPrincipal;
+  final Future<void> Function(String currentPassword, String newPassword)?
+  changePassword;
+  final Future<void> Function()? signOut;
 }

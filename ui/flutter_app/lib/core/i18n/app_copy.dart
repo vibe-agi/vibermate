@@ -247,34 +247,86 @@ final class AppCopy {
     'bootstrap.failure.runtime_already_active':
         'Another ViberMate window is already running. Close it, then retry.',
     'bootstrap.failure.secret_store_unavailable':
-        'The local credential store is unavailable. Unlock this Mac, then retry.',
+        'ViberMate could not read the macOS Keychain. Unlock this Mac and retry. If this repeats after running a development build, quit ViberMate; open Keychain Access, search for io.vibermate.desktop, delete only those password items, then reopen. Captures stay; saved provider credentials and the local Root must be set up again.',
     'bootstrap.failure.storage_unavailable':
         'ViberMate cannot open its local data. Check free space and folder permissions, then retry.',
     'bootstrap.failure.root_reset_failed':
         'Root replacement could not recover safely. Retry once. If it repeats, quit ViberMate; in Keychain Access → login → Certificates remove ViberMate Local Root entries, move ~/Library/Application Support/io.vibermate.desktop/local-ca and ~/Library/Application Support/io.vibermate.desktop/root-reset-request.json to Trash, then reopen ViberMate. Captured evidence is kept.',
     'server.login.title': 'Connect to this Runtime Server',
     'server.login.target': 'Server · {server}',
-    'server.login.access_key': 'Admin access key',
-    'server.login.access_key.hint': 'Paste the 43-character key',
-    'server.login.key_help':
-        'On the Server machine, read the owner-only admin-access-key file shown when vibermated starts. The browser does not save this key.',
+    'server.login.detail':
+        'Sign in with the personal account your Runtime owner created for you.',
+    'server.login.setup.title': 'Set up this Runtime Server',
+    'server.login.setup.detail':
+        'Create the first owner account. There is no default administrator password. This account manages the Runtime and can also run Claude or Codex.',
+    'server.login.recovery.title': 'Recover the owner account',
+    'server.login.recovery.detail':
+        'Use the current recovery key from the Server machine to set a new owner password.',
+    'server.login.username': 'Username',
+    'server.login.username_help': '3–64 letters, numbers, . _ or -',
+    'server.login.password': 'Password',
+    'server.login.new_password': 'New password',
+    'server.login.confirm_password': 'Confirm password',
+    'server.login.recovery_key': 'Server recovery key',
+    'server.login.recovery_help':
+        'On the Server machine, run: vibermated server recovery-key. Do not share this key with team members.',
+    'server.login.forgot': 'Forgot owner password?',
+    'server.login.back': 'Back to sign in',
+    'server.login.setup.action': 'Create owner',
+    'server.login.recovery.action': 'Reset password',
     'server.login.http_warning':
-        'HTTP is allowed, but this login key, management traffic, and captured evidence are not encrypted in transit. Use HTTPS outside a trusted private network.',
-    'server.login.show_key': 'Show access key',
-    'server.login.hide_key': 'Hide access key',
+        'HTTP is allowed, but login credentials, management traffic, and captured evidence are not encrypted in transit. Use HTTPS outside a trusted private network.',
+    'server.login.show_key': 'Show recovery key',
+    'server.login.hide_key': 'Hide recovery key',
     'server.login.connect': 'Connect',
-    'server.login.error.access_key_invalid':
-        'This access key has the wrong format. Copy the complete key from the Server machine.',
-    'server.login.error.access_key_rejected':
-        'The Server did not accept this access key. Check that it came from this Server.',
     'server.login.error.server_transport_unsupported':
         'Open this workbench from the Runtime Server HTTP or HTTPS address.',
-    'server.login.error.admin_login_response_invalid':
-        'The Server returned an invalid management session.',
     'server.login.error.admin_login_unavailable':
         'The Runtime Server could not create a management session. Check that it is still running.',
     'server.login.error.unavailable':
         'The Runtime Server could not be reached. Check its address and selected HTTP/HTTPS transport.',
+    'server.login.error.credentials_rejected':
+        'The username or password is incorrect, or this account is disabled.',
+    'server.login.error.credentials_invalid':
+        'Enter a valid username and a password with at least 8 characters.',
+    'server.login.error.setup_invalid':
+        'Check the recovery key, username, and password, then try again.',
+    'server.login.error.setup_changed':
+        'Another owner completed setup. Sign in with an account from this Runtime.',
+    'server.login.error.recovery_rejected':
+        'The recovery key is not current. Read it again on the Server machine.',
+    'server.login.error.recovery_invalid':
+        'Enter the current recovery key and matching new passwords.',
+    'server.login.error.web_auth_unavailable':
+        'The Runtime Server could not report its sign-in state.',
+    'server.login.error.web_auth_response_invalid':
+        'The Runtime Server returned an invalid sign-in state.',
+    'server.login.error.web_login_unavailable':
+        'The Runtime Server could not sign in right now. Try again.',
+    'server.login.error.web_session_response_invalid':
+        'The Runtime Server returned an invalid sign-in session.',
+    'server.login.error.session_expired': 'Your session ended. Sign in again.',
+    'server.login.error.rate_limited':
+        'Too many sign-in attempts. Wait a moment, then try again.',
+    'account.menu': 'Account',
+    'account.role.owner': 'Owner',
+    'account.role.member': 'Member',
+    'account.change_password': 'Change password',
+    'account.sign_out': 'Sign out',
+    'account.password.title': 'Change your password',
+    'account.password.current': 'Current password',
+    'account.password.new': 'New password',
+    'account.password.confirm': 'Confirm new password',
+    'account.password.show': 'Show passwords',
+    'account.password.hide': 'Hide passwords',
+    'account.password.error.current_password_rejected':
+        'The current password is incorrect.',
+    'account.password.error.new_password_invalid':
+        'Use a password with at least 8 characters.',
+    'account.password.error.session_expired':
+        'Your session ended. Sign in again.',
+    'account.password.error.unavailable':
+        'The password could not be changed. Try again.',
     'flow.capture': 'Capture',
     'flow.environment': 'Traffic policy',
     'flow.endpoint': 'Upstream service',
@@ -1257,7 +1309,7 @@ final class AppCopy {
     'server.access.error': 'Could not read or change Server access: {detail}',
     'server.web.title': 'Manage this Runtime in a browser',
     'server.web.detail':
-        'Open this URL, then sign in with the owner admin access key stored on the Server machine. Runtime User passwords are for CLI clients, not this admin page.',
+        'Open this URL and sign in with your personal Runtime User account. The owner sees management; each member sees only their own retained usage.',
     'server.web.copy': 'Copy Web workbench URL',
     'server.users.title': 'Runtime users',
     'server.users.description':
@@ -1266,16 +1318,22 @@ final class AppCopy {
         'Username and password · reusable login session',
     'server.users.loading': 'Reading runtime users…',
     'server.users.empty':
-        'No runtime user can connect yet. Create the first account to continue.',
+        'Start here: create the Server owner. There is no default administrator password. This first account can manage members in the App and Web workbench.',
+    'server.users.add_owner': 'Create owner',
     'server.users.add': 'Add user',
     'server.users.state.active': 'Active',
     'server.users.state.disabled': 'Disabled',
+    'server.users.owner': 'Server owner · cannot be disabled here',
+    'server.users.dialog.owner_title': 'Create Server owner',
+    'server.users.dialog.owner_detail':
+        'This first account administers the Runtime in the browser and can also sign in from the CLI. Choose a personal username and a unique password.',
     'server.users.dialog.title': 'Create runtime user',
     'server.users.dialog.detail':
         'Give these credentials to the intended user through a secure channel.',
     'server.users.dialog.username': 'Username',
     'server.users.dialog.password': 'Password',
     'server.users.dialog.password_help': 'At least 8 characters',
+    'server.users.dialog.create_owner': 'Create owner',
     'server.users.dialog.create': 'Create user',
     'server.users.dialog.validation':
         'Enter a username and a password with at least 8 characters.',
@@ -1285,6 +1343,15 @@ final class AppCopy {
     'server.users.disable.detail':
         '{username} will be signed out and cannot start another run.',
     'server.users.disable.action': 'Disable',
+    'server.users.password.title': 'Reset member password',
+    'server.users.password.detail':
+        'Set a temporary password for {username}. All of this member’s CLI and Web sessions will be signed out.',
+    'server.users.password.owner_title': 'Reset owner password',
+    'server.users.password.owner_detail':
+        'Set a new password for {username} from this trusted local App. All existing CLI and Web sessions will be signed out.',
+    'server.users.password.action': 'Reset password',
+    'server.users.password.error':
+        'The password could not be reset. Check the account state and try again.',
     'server.usage.truncated':
         'This report reached its safety limit. The visible totals are partial.',
     'server.usage.no_traffic': 'No captured Agent traffic yet',
@@ -1385,6 +1452,16 @@ final class AppCopy {
         '{runs} Captures · {calls} calls · {succeeded} succeeded · {failed} failed',
     'usage.empty':
         'Create a runtime user, then capture Agent traffic to populate this report.',
+    'usage.empty.action': 'Create runtime user',
+    'usage.personal.nav': 'My activity',
+    'usage.personal.title': 'My activity',
+    'usage.personal.subtitle':
+        'Your own retained Claude and Codex traffic evidence on this Runtime',
+    'usage.personal.captures': 'My Captures',
+    'usage.personal.active': '{count} running now',
+    'usage.personal.succeeded': '{count} succeeded',
+    'usage.personal.empty':
+        'No retained Agent traffic is linked to this account yet. Sign in from the CLI, then start a managed Claude or Codex run.',
     'server.login.command.title': '1. Sign in on the client machine',
     'server.login.command.detail':
         'Run once, then enter the runtime user username and password.',
@@ -1716,32 +1793,71 @@ final class AppCopy {
     'bootstrap.failure.runtime_unavailable': '本地流量运行时无法启动。请重试；已保存的证据未被修改。',
     'bootstrap.failure.runtime_already_active':
         '已有一个 ViberMate 窗口正在运行。请先关闭它，再重试。',
-    'bootstrap.failure.secret_store_unavailable': '无法使用本机凭据存储。请先解锁这台 Mac，再重试。',
+    'bootstrap.failure.secret_store_unavailable':
+        'ViberMate 无法读取 macOS 钥匙串。请解锁 Mac 后重试。如果你曾运行开发版且问题重复出现，请退出 ViberMate，打开“钥匙串访问”，搜索 io.vibermate.desktop，只删除这些密码项目，然后重开。Capture 会保留；已保存的服务商凭据和本机根证书需要重新设置。',
     'bootstrap.failure.storage_unavailable':
         'ViberMate 无法打开本机数据。请检查磁盘空间与目录权限，再重试。',
     'bootstrap.failure.root_reset_failed':
         '根证书更换无法安全恢复。请先重试一次；若仍失败，请退出 ViberMate，在“钥匙串访问”→“登录”钥匙串→“证书”中移除 ViberMate Local Root，再将 ~/Library/Application Support/io.vibermate.desktop/local-ca 与 ~/Library/Application Support/io.vibermate.desktop/root-reset-request.json 移到废纸篓，然后重新打开 ViberMate。已捕获的证据会保留。',
     'server.login.title': '连接到这台 Runtime Server',
     'server.login.target': '服务器 · {server}',
-    'server.login.access_key': '管理员访问密钥',
-    'server.login.access_key.hint': '粘贴 43 位完整密钥',
-    'server.login.key_help':
-        '请在 Server 机器上读取 vibermated 启动时提示的 admin-access-key 文件。该文件仅当前系统用户可读，浏览器不会保存密钥。',
+    'server.login.detail': '使用 Runtime 所有者为你创建的个人账号登录。',
+    'server.login.setup.title': '初始化这台 Runtime Server',
+    'server.login.setup.detail':
+        '创建第一个所有者账号。系统没有默认管理员密码；这个账号既能管理 Runtime，也能运行 Claude 或 Codex。',
+    'server.login.recovery.title': '找回所有者账号',
+    'server.login.recovery.detail': '使用 Server 机器上的当前恢复密钥，为所有者设置新密码。',
+    'server.login.username': '用户名',
+    'server.login.username_help': '3–64 位字母、数字、. _ 或 -',
+    'server.login.password': '密码',
+    'server.login.new_password': '新密码',
+    'server.login.confirm_password': '再次输入密码',
+    'server.login.recovery_key': 'Server 恢复密钥',
+    'server.login.recovery_help':
+        '请在 Server 机器运行：vibermated server recovery-key。不要把这个密钥交给团队成员。',
+    'server.login.forgot': '忘记所有者密码？',
+    'server.login.back': '返回登录',
+    'server.login.setup.action': '创建所有者',
+    'server.login.recovery.action': '重置密码',
     'server.login.http_warning':
-        '当前允许使用 HTTP，但登录密钥、管理流量和抓包证据在传输中均未加密。离开可信私网时请使用 HTTPS。',
-    'server.login.show_key': '显示访问密钥',
-    'server.login.hide_key': '隐藏访问密钥',
+        '当前允许使用 HTTP，但登录凭据、管理流量和抓包证据在传输中均未加密。离开可信私网时请使用 HTTPS。',
+    'server.login.show_key': '显示恢复密钥',
+    'server.login.hide_key': '隐藏恢复密钥',
     'server.login.connect': '连接',
-    'server.login.error.access_key_invalid': '密钥格式不完整，请从 Server 机器重新复制完整内容。',
-    'server.login.error.access_key_rejected':
-        'Server 未接受该密钥，请确认它来自当前这台 Server。',
     'server.login.error.server_transport_unsupported':
         '请从 Runtime Server 的 HTTP 或 HTTPS 地址打开此工作台。',
-    'server.login.error.admin_login_response_invalid': 'Server 返回了无效的管理会话。',
     'server.login.error.admin_login_unavailable':
         'Runtime Server 无法创建管理会话，请确认服务仍在运行。',
     'server.login.error.unavailable':
         '无法连接 Runtime Server，请检查地址以及选择的 HTTP/HTTPS 传输方式。',
+    'server.login.error.credentials_rejected': '用户名或密码不正确，或者该账号已被停用。',
+    'server.login.error.credentials_invalid': '请输入有效用户名，以及至少 8 个字符的密码。',
+    'server.login.error.setup_invalid': '请检查恢复密钥、用户名和密码，然后重试。',
+    'server.login.error.setup_changed': '另一位所有者已完成初始化，请改用这台 Runtime 的账号登录。',
+    'server.login.error.recovery_rejected': '恢复密钥已不是当前值，请回到 Server 机器重新读取。',
+    'server.login.error.recovery_invalid': '请输入当前恢复密钥，并确保两次新密码一致。',
+    'server.login.error.web_auth_unavailable': 'Runtime Server 暂时无法返回登录状态。',
+    'server.login.error.web_auth_response_invalid': 'Runtime Server 返回的登录状态无效。',
+    'server.login.error.web_login_unavailable': 'Runtime Server 暂时无法登录，请重试。',
+    'server.login.error.web_session_response_invalid':
+        'Runtime Server 返回了无效的登录会话。',
+    'server.login.error.session_expired': '登录已过期，请重新登录。',
+    'server.login.error.rate_limited': '登录尝试过多，请稍后再试。',
+    'account.menu': '账号',
+    'account.role.owner': '所有者',
+    'account.role.member': '成员',
+    'account.change_password': '修改密码',
+    'account.sign_out': '退出登录',
+    'account.password.title': '修改你的密码',
+    'account.password.current': '当前密码',
+    'account.password.new': '新密码',
+    'account.password.confirm': '再次输入新密码',
+    'account.password.show': '显示密码',
+    'account.password.hide': '隐藏密码',
+    'account.password.error.current_password_rejected': '当前密码不正确。',
+    'account.password.error.new_password_invalid': '请使用至少 8 个字符的密码。',
+    'account.password.error.session_expired': '登录已过期，请重新登录。',
+    'account.password.error.unavailable': '暂时无法修改密码，请重试。',
     'flow.capture': '运行记录',
     'flow.environment': '流量策略',
     'flow.endpoint': '上游服务',
@@ -2576,22 +2692,28 @@ final class AppCopy {
         '客户端后续启动无需再回到 App 操作；登出、停用运行用户或会话到期后才会失去访问权限。',
     'server.access.error': '无法读取或修改 Server 访问设置：{detail}',
     'server.web.title': '在浏览器中管理这套 Runtime',
-    'server.web.detail':
-        '打开此地址，并使用保存在 Server 机器上的所有者管理密钥登录。运行用户密码只用于 CLI 客户端，不能登录管理页面。',
+    'server.web.detail': '打开此地址并使用个人运行用户账号登录。所有者可以管理 Runtime；每位成员只能看到自己的已保留用量。',
     'server.web.copy': '复制网页工作台地址',
     'server.users.title': '运行用户',
     'server.users.description': '每个人或客户端机器使用自己的账号登录。',
     'server.users.authentication': '用户名与密码 · 可复用登录会话',
     'server.users.loading': '正在读取运行用户…',
-    'server.users.empty': '当前没有可登录的运行用户。请先创建第一个账号。',
+    'server.users.empty':
+        '从这里开始：创建 Server 所有者。系统没有默认管理员密码；第一个账号可在 App 和网页工作台中管理成员。',
+    'server.users.add_owner': '创建所有者',
     'server.users.add': '添加用户',
     'server.users.state.active': '可用',
     'server.users.state.disabled': '已停用',
+    'server.users.owner': 'Server 所有者 · 不能在这里停用',
+    'server.users.dialog.owner_title': '创建 Server 所有者',
+    'server.users.dialog.owner_detail':
+        '第一个账号用于在浏览器中管理这套 Runtime，也可以从命令行登录。请使用个人用户名和独立密码。',
     'server.users.dialog.title': '创建运行用户',
     'server.users.dialog.detail': '请通过安全渠道把登录信息交给对应用户。',
     'server.users.dialog.username': '用户名',
     'server.users.dialog.password': '密码',
     'server.users.dialog.password_help': '至少 8 个字符',
+    'server.users.dialog.create_owner': '创建所有者',
     'server.users.dialog.create': '创建用户',
     'server.users.dialog.validation': '请输入用户名和至少 8 个字符的密码。',
     'server.users.dialog.error': '无法创建运行用户：{detail}',
@@ -2599,6 +2721,13 @@ final class AppCopy {
     'server.users.disable.title': '停用这个运行用户？',
     'server.users.disable.detail': '{username} 会立即退出，且不能再启动新的运行。',
     'server.users.disable.action': '停用',
+    'server.users.password.title': '重置成员密码',
+    'server.users.password.detail': '为 {username} 设置临时密码。该成员已有的 CLI 与网页会话都会退出。',
+    'server.users.password.owner_title': '重置所有者密码',
+    'server.users.password.owner_detail':
+        '从这个受信任的本机 App 为 {username} 设置新密码。已有的 CLI 与网页会话都会退出。',
+    'server.users.password.action': '重置密码',
+    'server.users.password.error': '无法重置密码，请检查账号状态后重试。',
     'server.usage.truncated': '统计已达到安全上限；当前显示的是部分总量。',
     'server.usage.no_traffic': '尚未捕获到 Agent 流量',
     'server.usage.workspace.unknown': '客户端未报告工作区',
@@ -2689,6 +2818,15 @@ final class AppCopy {
     'usage.session.metrics':
         '{runs} 条运行记录 · {calls} 次调用 · 成功 {succeeded} · 失败 {failed}',
     'usage.empty': '创建运行用户并捕获 Agent 流量后，这里会显示报表。',
+    'usage.empty.action': '创建运行用户',
+    'usage.personal.nav': '我的活动',
+    'usage.personal.title': '我的活动',
+    'usage.personal.subtitle': '这台 Runtime 中只属于你的 Claude 与 Codex 已保留流量证据',
+    'usage.personal.captures': '我的运行记录',
+    'usage.personal.active': '当前运行 {count} 条',
+    'usage.personal.succeeded': '成功 {count} 次',
+    'usage.personal.empty':
+        '这个账号还没有关联到已保留的 Agent 流量。请先在 CLI 登录，再启动一次托管的 Claude 或 Codex 运行。',
     'server.login.command.title': '1. 在客户端机器登录',
     'server.login.command.detail': '只需运行一次，然后输入运行用户的用户名与密码。',
     'server.login.command.client': '登录',

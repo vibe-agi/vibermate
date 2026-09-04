@@ -114,9 +114,9 @@ listen_address="$(jq -er '
   select(.ready == true and .scheme == "http" and .managementUi == true)
   | .listenAddress
 ' "${status_file}")"
-admin_key_path="$(jq -er '.adminAccessKeyPath' "${status_file}")"
-if [[ "$(stat -c '%a' "${admin_key_path}")" != "600" ]]; then
-  echo "packaged Runtime Server admin key permissions are not owner-only" >&2
+recovery_key_path="$(jq -er '.recoveryKeyPath' "${status_file}")"
+if [[ "$(stat -c '%a' "${recovery_key_path}")" != "600" ]]; then
+  echo "packaged Runtime Server recovery key permissions are not owner-only" >&2
   exit 70
 fi
 curl --fail --silent --show-error "http://${listen_address}/" >/dev/null

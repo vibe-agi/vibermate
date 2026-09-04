@@ -7,6 +7,7 @@ import {
   diskImageCreationArguments,
   signingCommandArguments,
 } from "./bundle-macos-distribution-candidate.mjs";
+import { macOSDistributionPolicy } from "./macos-distribution-policy.mjs";
 
 const repositoryDirectory = resolve(
   dirname(fileURLToPath(import.meta.url)),
@@ -40,6 +41,17 @@ const notaryJob = workflow.slice(notaryStart, installedEvidenceStart);
 const installedEvidenceJob = workflow.slice(installedEvidenceStart);
 const protectedJobs = `${signJob}\n${notaryJob}`;
 const unsignedJob = workflow.slice(unsignedStart, evidenceStart);
+
+test("workflow uses the exact current distribution filename", () => {
+  const filenames =
+    workflow.match(/ViberMate_\d+\.\d+\.\d+_universal\.dmg/gu) ?? [];
+  assert.ok(filenames.length > 0);
+  assert.ok(
+    filenames.every(
+      (filename) => filename === macOSDistributionPolicy.diskImageFilename,
+    ),
+  );
+});
 
 test("unsigned candidate build uses only the pinned Flutter desktop toolchain", () => {
   assert.ok(unsignedStart > 0 && evidenceStart > unsignedStart);

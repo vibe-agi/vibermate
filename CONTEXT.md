@@ -17,8 +17,20 @@ A ViberMate Host reachable at an explicit host and port. Selecting it chooses wh
 _Avoid_: Upstream Endpoint, Environment, provider server
 
 **Runtime User**:
-A person authorized by a Runtime Server to create Captures and own their usage evidence. A Runtime User is never an upstream authentication Account.
+A person authorized by a Runtime Server to create Captures, own their usage evidence, and sign in to their personal Web workbench. A Runtime User is never an upstream authentication Account.
 _Avoid_: Account, Provider Account, machine, client
+
+**Server Owner**:
+The one Runtime User authorized to configure a Runtime Server and manage its other Runtime Users. Local App control acts with owner authority without turning the macOS login into a Runtime User.
+_Avoid_: default admin, shared admin, Provider Account
+
+**Web Session**:
+A revocable Runtime Server authority issued after a Runtime User signs in to the Web workbench. Its scope follows that user's role and it is distinct from the Login Session used to launch Agent clients.
+_Avoid_: access key, Login Session, browser token
+
+**Recovery Key**:
+An owner-only secret readable on the Runtime Server machine and accepted only to create or recover the Server Owner. It is never a normal Web or Agent login credential.
+_Avoid_: admin password, Web login, Session Token
 
 **Local User**:
 The operating-system account observed on a Client Device. A Local User may help redact machine-local paths but is never the authenticated Runtime User.

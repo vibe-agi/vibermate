@@ -7,6 +7,7 @@ import 'package:flutter/foundation.dart';
 import '../../core/api/control_api.dart';
 import '../../core/api/control_models.dart';
 import '../../core/bootstrap/root_trust_installer.dart';
+import '../../core/bootstrap/runtime_connection.dart';
 import '../../core/bootstrap/terminal_command.dart';
 import '../../core/preferences/workbench_preferences.dart';
 
@@ -38,6 +39,9 @@ final class WorkbenchController extends ChangeNotifier {
     WorkbenchPreferencesIssue? initialPreferencesIssue,
     ValueChanged<WorkbenchTheme>? onThemeChanged,
     DateTime Function()? clock,
+    this.webPrincipal,
+    this.onSignOut,
+    this.changeWebPassword,
   }) : _api = api,
        _terminalCommands = terminalCommands,
        _rootTrustInstaller = rootTrustInstaller,
@@ -76,6 +80,10 @@ final class WorkbenchController extends ChangeNotifier {
   final bool terminalManagement;
   final bool rootTrustManagement;
   final String runtimeTarget;
+  final RuntimeWebPrincipal? webPrincipal;
+  final Future<void> Function()? onSignOut;
+  final Future<void> Function(String currentPassword, String newPassword)?
+  changeWebPassword;
 
   String get runtimeConnectTarget =>
       serverAccess?.preferredTarget ?? runtimeTarget;
@@ -163,6 +171,8 @@ final class WorkbenchController extends ChangeNotifier {
   final Map<String, ClientModelCatalog> _clientModelCatalogs = {};
   Future<CodeLibraryCatalog>? _codeLibraryCatalog;
   int _rawEvidenceGeneration = 0;
+
+  int settingsTab = 0;
   Timer? _poller;
   bool _pollInFlight = false;
   bool _disposed = false;
@@ -792,6 +802,24 @@ final class WorkbenchController extends ChangeNotifier {
     }
   }
 
+  void selectSettingsTab(int value) {
+    final maximum = serverManagement ? 2 : 1;
+    if (value < 0 || value > maximum || settingsTab == value) return;
+    settingsTab = value;
+    notifyListeners();
+  }
+
+  void openRuntimeUsersSettings() {
+    if (!serverManagement) return;
+    settingsTab = 1;
+    section = WorkbenchSection.settings;
+    operationNotice = null;
+    notifyListeners();
+    if (runtimeUsers == null || serverAccess == null) {
+      unawaited(refreshServerManagement());
+    }
+  }
+
   Future<void> refreshServerManagement({bool quiet = false}) async {
     if (_disposed ||
         !serverManagement ||
@@ -902,6 +930,36 @@ final class WorkbenchController extends ChangeNotifier {
       if (_disposed) return false;
       serverManagementError = _describeError(error);
       runtimeUserMutating = false;
+      notifyListeners();
+      return false;
+    }
+  }
+
+  Future<bool> replaceRuntimeUserPassword({
+    required String userId,
+    required String password,
+  }) async {
+    if (_disposed || !serverManagement || runtimeUserMutating) return false;
+    runtimeUserMutating = true;
+    serverManagementError = null;
+    notifyListeners();
+    try {
+      final updated = await _api.replaceRuntimeUserPassword(
+        userId: userId,
+        password: password,
+      );
+      if (_disposed) return false;
+      runtimeUsers = List<RuntimeUser>.unmodifiable([
+        for (final user in runtimeUsers ?? const <RuntimeUser>[])
+          if (user.id == updated.id) updated else user,
+      ]);
+      runtimeUserMutating = false;
+      notifyListeners();
+      return true;
+    } catch (error) {
+      if (_disposed) return false;
+      runtimeUserMutating = false;
+      serverManagementError = _describeError(error);
       notifyListeners();
       return false;
     }

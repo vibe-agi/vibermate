@@ -278,6 +278,85 @@ func (store *blockingInspectStore) inspectCount() int {
 	return store.inspections
 }
 
+// A caller with no deadline is the normal ProductRuntime startup path. The
+// host boundary, rather than every caller, must therefore put an upper bound on
+// a Security.framework call that never returns.
+func TestContextBoundReadStoreBoundsTheFirstWedgedHostCall(t *testing.T) {
+	t.Parallel()
+
+	reference, err := secretstore.ParseReference("secret://test/first-wedge")
+	if err != nil {
+		t.Fatal(err)
+	}
+	delegate := newBlockingReadStore()
+	defer close(delegate.release)
+	store := newContextBoundReadStoreWithLimits(delegate, 10*time.Millisecond, 1)
+
+	done := make(chan error, 1)
+	go func() {
+		value, readErr := store.Read(context.Background(), reference)
+		if value != nil {
+			value.Destroy()
+		}
+		done <- readErr
+	}()
+	select {
+	case readErr := <-done:
+		if !errors.Is(readErr, ErrHostSecretsUnresponsive) ||
+			!errors.Is(readErr, secretstore.ErrUnavailable) {
+			t.Fatalf("first read error = %v, want host unavailable", readErr)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("first host read remained blocked past the host-call bound")
+	}
+}
+
+func TestContextBoundReadStoreBoundsTheFirstWedgedHostInspection(t *testing.T) {
+	t.Parallel()
+
+	reference, err := secretstore.ParseReference("secret://test/first-inspection-wedge")
+	if err != nil {
+		t.Fatal(err)
+	}
+	delegate := newBlockingInspectStore()
+	defer close(delegate.release)
+	store := newContextBoundReadStoreWithLimits(delegate, 10*time.Millisecond, 1)
+
+	done := make(chan error, 1)
+	go func() {
+		_, inspectErr := store.Inspect(context.Background(), reference)
+		done <- inspectErr
+	}()
+	select {
+	case inspectErr := <-done:
+		if !errors.Is(inspectErr, ErrHostSecretsUnresponsive) {
+			t.Fatalf("first inspect error = %v, want host unavailable", inspectErr)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("first host inspection remained blocked past the host-call bound")
+	}
+}
+
+func TestHostCallLaneLateReturnDoesNotWidenConcurrency(t *testing.T) {
+	t.Parallel()
+
+	lane := newHostCallLane(time.Second, 1)
+	lease, err := lane.enter(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !lease.abandon() {
+		t.Fatal("failed to step past the occupied host-call lane")
+	}
+	// The original host call eventually returns after it was stepped past. Its
+	// obsolete permit must not join the replacement permit and permanently turn
+	// a serialized host boundary into a two-call lane.
+	lease.release()
+	if available := len(lane.permits); available != 1 {
+		t.Fatalf("available host-call permits = %d, want 1", available)
+	}
+}
+
 // One host call that never returns must not disable credential reads for the
 // rest of the process. Serializing the lane is the right protection against an
 // unbounded pile-up of pinned OS threads, but with no way past a wedged call it

@@ -43,12 +43,12 @@ fi
   cd "${flutter_directory}"
   flutter build web \
     --release \
-    --build-name=0.1.1 \
-    --build-number=2
+    --build-name=0.1.2 \
+    --build-number=3
   flutter build macos \
     --release \
-    --build-name=0.1.1 \
-    --build-number=2
+    --build-name=0.1.2 \
+    --build-number=3
 )
 
 source_app="${flutter_directory}/build/macos/Build/Products/Release/ViberMate.app"

@@ -3,9 +3,11 @@
 package hostsecret
 
 /*
-#cgo LDFLAGS: -framework CoreFoundation -framework Security
+#cgo LDFLAGS: -framework CoreFoundation -framework LocalAuthentication -framework Security
 #include <CoreFoundation/CoreFoundation.h>
 #include <Security/Security.h>
+
+void vibermatePreventAuthenticationUI(CFMutableDictionaryRef query);
 
 // vibermateDictionarySet keeps the CoreFoundation types on the C side. Going
 // through unsafe.Pointer in Go would be a conversion from a uintptr-shaped
@@ -166,11 +168,16 @@ func (store *KeychainStore) updateItem(
 // the desktop control plane can report and repair an unavailable secret, but a
 // secret lookup must never stall unrelated proxy traffic.
 func preventAuthenticationUI(query C.CFMutableDictionaryRef) {
+	// kSecUseAuthenticationUIFail is retained as a compatibility fallback, but
+	// Apple deprecated it in favour of a non-interactive LAContext. Supplying
+	// both keeps older macOS releases fail-closed while preventing a headless
+	// sidecar from waiting behind an authorization prompt on current releases.
 	C.vibermateDictionarySet(
 		query,
 		C.kSecUseAuthenticationUI,
 		C.CFTypeRef(C.kSecUseAuthenticationUIFail),
 	)
+	C.vibermatePreventAuthenticationUI(query)
 }
 
 func revisionFrom(attributes C.CFDictionaryRef) (secretstore.Revision, error) {

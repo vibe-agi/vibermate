@@ -29,7 +29,7 @@ import {
 
 const teamID = "A1B2C3D4E5";
 const submissionID = "12345678-1234-4abc-8def-1234567890ab";
-const archiveFilename = "ViberMate_0.1.1_universal.dmg";
+const archiveFilename = "ViberMate_0.1.2_universal.dmg";
 const preStapleSHA256 = "a".repeat(64);
 
 function admittedAppleTools() {
@@ -215,27 +215,27 @@ test("application metadata and Mach-O inventory are fixed", () => {
     validateInfoPlist({
       bundleExecutable: "vibermate-desktop",
       bundleIdentifier: "io.vibermate.desktop",
-      bundleVersion: "2",
+      bundleVersion: "3",
       minimumSystemVersion: "14.0",
-      shortVersion: "0.1.1",
+      shortVersion: "0.1.2",
     }),
   );
   assert.throws(() =>
     validateInfoPlist({
       bundleExecutable: "vibermate-desktop",
       bundleIdentifier: "io.vibermate.desktop",
-      bundleVersion: "0.1.1",
+      bundleVersion: "0.1.2",
       minimumSystemVersion: "14.0",
-      shortVersion: "0.1.1",
+      shortVersion: "0.1.2",
     }),
   );
   assert.throws(() =>
     validateInfoPlist({
       bundleExecutable: "vibermate-desktop",
       bundleIdentifier: "io.example.desktop",
-      bundleVersion: "2",
+      bundleVersion: "3",
       minimumSystemVersion: "14.0",
-      shortVersion: "0.1.1",
+      shortVersion: "0.1.2",
     }),
   );
   assert.doesNotThrow(() =>
@@ -681,7 +681,7 @@ test("private evidence has a closed secret-free schema", () => {
       sourceRevision: "4".repeat(40),
       toolingRevision: "8".repeat(40),
       unsignedArchiveSHA256: "9".repeat(64),
-      version: "0.1.1",
+      version: "0.1.2",
     },
     codeSigning: {
       certificateSHA256: "5".repeat(64),

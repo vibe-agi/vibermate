@@ -184,12 +184,33 @@ type sessionAccumulator struct {
 }
 
 func (projector *Projector) Report(ctx context.Context, query Query) (Report, error) {
+	return projector.report(ctx, query, "")
+}
+
+func (projector *Projector) report(
+	ctx context.Context,
+	query Query,
+	selectedUserID runtimeuser.UserID,
+) (Report, error) {
 	if projector == nil || ctx == nil || !query.valid() {
 		return Report{}, errors.New("Runtime usage request is invalid")
 	}
 	users, err := projector.options.Users.List(ctx)
 	if err != nil {
 		return Report{}, err
+	}
+	if selectedUserID != "" {
+		selected := make([]runtimeuser.User, 0, 1)
+		for _, user := range users {
+			if user.ID == selectedUserID {
+				selected = append(selected, user)
+				break
+			}
+		}
+		if len(selected) == 0 {
+			return Report{}, errors.New("Runtime usage user is unavailable")
+		}
+		users = selected
 	}
 	sort.Slice(users, func(i, j int) bool { return users[i].Username < users[j].Username })
 	accumulators := make(map[runtimeuser.UserID]*userAccumulator, len(users))
@@ -278,6 +299,19 @@ func (projector *Projector) Report(ctx context.Context, query Query) (Report, er
 		report.Truncated = report.Truncated || trimmed
 	}
 	return report, nil
+}
+
+// ReportForUser returns the same evidence semantics as Report while ensuring
+// that no other Runtime User identity or aggregate leaves the module.
+func (projector *Projector) ReportForUser(
+	ctx context.Context,
+	query Query,
+	userID runtimeuser.UserID,
+) (Report, error) {
+	if !userID.Valid() {
+		return Report{}, errors.New("Runtime usage user is invalid")
+	}
+	return projector.report(ctx, query, userID)
 }
 
 func userUsageLess(left, right UserUsage) bool {

@@ -45,13 +45,13 @@ func (reader *synchronizedReader) Read(destination []byte) (int, error) {
 }
 
 type Status struct {
-	Ready              bool   `json:"ready"`
-	InstanceID         string `json:"instanceId"`
-	ListenAddress      string `json:"listenAddress"`
-	Scheme             string `json:"scheme"`
-	TLSFingerprint     string `json:"tlsFingerprint"`
-	AdminAccessKeyPath string `json:"adminAccessKeyPath"`
-	ManagementUI       bool   `json:"managementUi"`
+	Ready           bool   `json:"ready"`
+	InstanceID      string `json:"instanceId"`
+	ListenAddress   string `json:"listenAddress"`
+	Scheme          string `json:"scheme"`
+	TLSFingerprint  string `json:"tlsFingerprint"`
+	RecoveryKeyPath string `json:"recoveryKeyPath"`
+	ManagementUI    bool   `json:"managementUi"`
 }
 
 type Host struct {
@@ -241,7 +241,28 @@ func startAttached(
 		return nil, err
 	}
 	runtimeUsers, err := servercontrol.NewRuntimeUsers(servercontrol.RuntimeUsersOptions{
-		Users: runtime.RuntimeUsers(), Usage: usage,
+		Users: runtime.RuntimeUsers(), Usage: usage, Sessions: admin,
+	})
+	if err != nil {
+		return nil, err
+	}
+	localRuntimeUsers, err := servercontrol.NewRuntimeUsers(servercontrol.RuntimeUsersOptions{
+		Users: runtime.RuntimeUsers(), Usage: usage, Sessions: admin,
+		AllowOwnerPasswordReset: true,
+	})
+	if err != nil {
+		return nil, err
+	}
+	webSessions, err := servercontrol.NewWebSessions(servercontrol.WebSessionsOptions{
+		InstanceID: runtime.Status().InstanceID,
+		Users:      runtime.RuntimeUsers(),
+		Sessions:   admin,
+	})
+	if err != nil {
+		return nil, err
+	}
+	webSelf, err := servercontrol.NewWebSelf(servercontrol.WebSelfOptions{
+		Sessions: admin, Usage: usage,
 	})
 	if err != nil {
 		return nil, err
@@ -276,7 +297,7 @@ func startAttached(
 		return nil, err
 	}
 	localManagement := serverManagementRouter{
-		access: serverAccess, runtimeUsers: runtimeUsers,
+		access: serverAccess, runtimeUsers: localRuntimeUsers,
 	}
 	host := &Host{
 		runtime: runtime, admin: admin,
@@ -295,6 +316,7 @@ func startAttached(
 			userSessions: userSessions, runtimeUsers: runtimeUsers, access: serverAccess,
 			capture: capture, proxy: runtime.ProxyHandler(),
 			adminSessions: adminSessions, admin: admin,
+			webSessions: webSessions, webSelf: webSelf,
 			application: application, managementUI: managementUI,
 		},
 		ReadHeaderTimeout: 10 * time.Second,
@@ -321,13 +343,13 @@ func (host *Host) Status() Status {
 		return Status{}
 	}
 	return Status{
-		Ready:              host.runtime.Status().State == productruntime.RuntimeStateInitialized,
-		InstanceID:         host.runtime.Status().InstanceID,
-		ListenAddress:      host.address,
-		Scheme:             host.scheme,
-		TLSFingerprint:     host.fingerprint,
-		AdminAccessKeyPath: host.admin.AccessKeyPath(),
-		ManagementUI:       host.managementUI,
+		Ready:           host.runtime.Status().State == productruntime.RuntimeStateInitialized,
+		InstanceID:      host.runtime.Status().InstanceID,
+		ListenAddress:   host.address,
+		Scheme:          host.scheme,
+		TLSFingerprint:  host.fingerprint,
+		RecoveryKeyPath: host.admin.AccessKeyPath(),
+		ManagementUI:    host.managementUI,
 	}
 }
 

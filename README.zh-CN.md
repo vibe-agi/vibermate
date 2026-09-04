@@ -21,6 +21,16 @@ ViberMate 没有独立的“团队版”。同一个 Runtime 天然支持多个 
 彼此独立的登录会话、按用户记录的 Capture，以及共享的管理视图。一个人可直接
 使用，多人时为每个人或设备创建账号即可。
 
+| 使用者 | 登录体验 |
+| --- | --- |
+| 本机 macOS App | 无需登录；App 直接管理自己的本机 Runtime |
+| 浏览器中的 Server 所有者 | 个人用户名和密码；完整工作台 |
+| 浏览器中的团队成员 | 个人用户名和密码；仅自己的用量和密码 |
+| 终端中的 Claude 或 Codex | 使用同一组个人用户名和密码，只需输入一次 |
+
+ViberMate 不提供共享或默认的 `admin/admin`。短期登录 token 只是内部实现，
+普通用户不需要复制或理解它。
+
 ## macOS App：第一次捕获
 
 安装并打开 ViberMate：
@@ -40,8 +50,9 @@ vibermate run -- codex
 回到 App，就能看到新的 Capture。第一次使用不需要先配置 Traffic Policy；
 透明捕获会保留代理原来的服务商、账号和模型。
 
-App 也会在同一台 Mac 上提供浏览器管理界面。地址可从
-**设置 → 团队接入 → 网页与客户端接入**复制。
+正常使用 App 不需要创建账号。需要从浏览器打开或与团队共享时，进入
+**设置 → 团队接入**，点击 **创建所有者**，再复制网页工作台地址。第一个账号
+是所有者，之后创建的是成员。
 
 ## Linux Server + Web
 
@@ -57,9 +68,16 @@ App 也会在同一台 Mac 上提供浏览器管理界面。地址可从
   --transport self_signed_tls
 ```
 
-启动后输出的第一行 JSON 包含浏览器地址、TLS 指纹和
-`adminAccessKeyPath`。打开地址，读取该文件中的所有者密钥，用它进入 Web
-工作台。浏览器会提示自签名证书警告；继续前请核对页面显示的指纹。
+启动后输出的第一行 JSON 包含浏览器地址和 TLS 指纹。请在 Server 机器上打印
+一次性初始化/恢复密钥：
+
+```sh
+./vibermated server recovery-key
+```
+
+打开浏览器地址，输入该密钥，并创建你的个人所有者用户名和密码。浏览器会提示
+自签名证书警告；继续前请核对页面显示的指纹。如果启动 Server 时指定了
+`--data-dir`，这里也要传入同一个绝对目录。
 
 多人长期使用时，建议换成大家已经信任的 TLS 证书：
 
@@ -71,8 +89,8 @@ App 也会在同一台 Mac 上提供浏览器管理界面。地址可从
   --tls-key /绝对路径/private-key.pem
 ```
 
-在 **设置 → 团队接入** 中，为每个人或设备创建 Runtime User。每台开发机只需
-用对应的用户名和密码登录一次：
+所有者可在 **设置 → 团队接入** 中为每个人创建账号。同一个账号既能登录网页，
+也能用于 CLI。每台开发机只需登录一次：
 
 ```sh
 vibermate login --server 192.0.2.10:9666
@@ -80,8 +98,10 @@ vibermate run --server 192.0.2.10:9666 -- claude
 # 或：vibermate run --server 192.0.2.10:9666 -- codex
 ```
 
-所有者密钥只用于浏览器管理；Runtime User 密码供 `vibermate` 命令登录。
-不要把所有者密钥发给代理用户。
+每个人都能从网页右上角修改自己的密码；所有者可以重置成员密码。本机 App
+还可在 **设置 → 团队接入** 中重置自己的所有者密码。如果是无界面的 Server，
+请在 Server 本机运行 `vibermated server recovery-key`，再点击
+**忘记所有者密码？**。恢复成功后，该密钥会自动轮换。
 
 ![ViberMate 团队用量](https://vibe-agi.github.io/images/vibermate/team-insights-2400.webp)
 

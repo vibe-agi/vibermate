@@ -139,6 +139,88 @@ func (manager *Manager) Login(
 	}, nil
 }
 
+// VerifyCredentials authenticates a person without issuing a Login Session.
+// Browser-facing adapters use it before minting their separately scoped Web
+// Session, so a browser credential never gains Capture creation authority.
+func (manager *Manager) VerifyCredentials(
+	ctx context.Context,
+	username string,
+	passwordInput []byte,
+) (User, error) {
+	if manager == nil || ctx == nil {
+		return User{}, ErrInvalidOptions
+	}
+	canonical := canonicalUsername(username)
+	password := append([]byte(nil), passwordInput...)
+	defer clear(password)
+	if canonical == "" || !validPassword(password) {
+		return User{}, ErrInvalidCredentials
+	}
+	record, found, err := manager.repository.FindUserByUsername(ctx, canonical)
+	if err != nil {
+		return User{}, fmt.Errorf("find Runtime User: %w", err)
+	}
+	if !found {
+		consumeInvalidLoginCost(password)
+		return User{}, ErrInvalidCredentials
+	}
+	if record.Validate() != nil || record.User.State != StateActive ||
+		!verifyPassword(password, record.PasswordHash) {
+		return User{}, ErrInvalidCredentials
+	}
+	return record.User, nil
+}
+
+// User returns one Runtime User without projecting password material.
+func (manager *Manager) User(ctx context.Context, id UserID) (User, error) {
+	if manager == nil || ctx == nil || !id.Valid() {
+		return User{}, ErrInvalidUser
+	}
+	record, found, err := manager.repository.FindUserByID(ctx, id)
+	if err != nil {
+		return User{}, fmt.Errorf("find Runtime User: %w", err)
+	}
+	if !found || record.Validate() != nil {
+		return User{}, ErrInvalidUser
+	}
+	return record.User, nil
+}
+
+// ReplacePassword changes one Runtime User password and revokes every Login
+// Session in the same durable transaction. Callers must authenticate and
+// authorize the person before crossing this interface.
+func (manager *Manager) ReplacePassword(
+	ctx context.Context,
+	id UserID,
+	passwordInput []byte,
+) (User, error) {
+	if manager == nil || ctx == nil || !id.Valid() {
+		return User{}, ErrInvalidUser
+	}
+	password := append([]byte(nil), passwordInput...)
+	defer clear(password)
+	if !validPassword(password) {
+		return User{}, ErrInvalidUser
+	}
+	passwordHash, err := manager.passwordHash(password)
+	if err != nil {
+		return User{}, err
+	}
+	record, found, err := manager.repository.ReplacePassword(
+		ctx,
+		id,
+		passwordHash,
+		canonicalTime(manager.clock.Now()),
+	)
+	if err != nil {
+		return User{}, fmt.Errorf("replace Runtime User password: %w", err)
+	}
+	if !found || record.Validate() != nil {
+		return User{}, ErrInvalidUser
+	}
+	return record.User, nil
+}
+
 func (manager *Manager) List(ctx context.Context) ([]User, error) {
 	if manager == nil || ctx == nil {
 		return nil, ErrInvalidOptions

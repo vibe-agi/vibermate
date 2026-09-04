@@ -139,13 +139,21 @@ func newRuntimeUsersHandler(
 		t.Fatal(err)
 	}
 	handler, err := servercontrol.NewRuntimeUsers(servercontrol.RuntimeUsersOptions{
-		Users: users, Usage: usage,
+		Users: users, Usage: usage, Sessions: noopRuntimeUserWebSessions{},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	return handler
 }
+
+type noopRuntimeUserWebSessions struct{}
+
+func (noopRuntimeUserWebSessions) IsOwner(runtimeuser.UserID) bool { return false }
+func (noopRuntimeUserWebSessions) EnsureOwner(runtimeuser.UserID) (bool, error) {
+	return true, nil
+}
+func (noopRuntimeUserWebSessions) RevokeUserSessions(runtimeuser.UserID) {}
 
 type serverUsageClock struct{ now time.Time }
 

@@ -158,6 +158,11 @@ abstract interface class ControlApi {
 
   Future<RuntimeUser> disableRuntimeUser(String userId);
 
+  Future<RuntimeUser> replaceRuntimeUserPassword({
+    required String userId,
+    required String password,
+  });
+
   /// Discovers model IDs accepted by exactly one upstream Endpoint. A forced
   /// refresh bypasses the daemon's short-lived Endpoint + Account cache.
   Future<UpstreamModelCatalog> upstreamModels(
@@ -306,8 +311,12 @@ final class HttpControlApi implements ControlApi {
     this._client, {
     required bool browserManagedHeaders,
     required bool renewable,
+    required bool selfScoped,
+    required void Function()? onSessionInvalidated,
   }) : _browserManagedHeaders = browserManagedHeaders,
-       _renewable = renewable;
+       _renewable = renewable,
+       _selfScoped = selfScoped,
+       _onSessionInvalidated = onSessionInvalidated;
 
   static const _origin = 'vibermate://desktop';
   static const _maximumResponseBytes = 2 * 1024 * 1024;
@@ -327,12 +336,16 @@ final class HttpControlApi implements ControlApi {
     http.Client? client,
     bool browserManagedHeaders = false,
     bool inspectSession = true,
+    bool selfScoped = false,
+    void Function()? onSessionInvalidated,
   }) async {
     final api = HttpControlApi._(
       session,
       client ?? http.Client(),
       browserManagedHeaders: browserManagedHeaders,
       renewable: inspectSession,
+      selfScoped: selfScoped,
+      onSessionInvalidated: onSessionInvalidated,
     );
     if (inspectSession) {
       await api._inspectSession();
@@ -346,10 +359,25 @@ final class HttpControlApi implements ControlApi {
   final http.Client _client;
   final bool _browserManagedHeaders;
   final bool _renewable;
+  final bool _selfScoped;
+  final void Function()? _onSessionInvalidated;
   int _sessionRevision = 1;
   DateTime? _renewAt;
   Future<void>? _renewal;
   bool _closed = false;
+  bool _sessionInvalidated = false;
+
+  void replaceSession(DesktopSession session) {
+    if (_closed || session.instanceId != _session.instanceId) {
+      throw const ControlContractException(
+        'Replacement Web Session does not match this Runtime',
+      );
+    }
+    _session = session;
+    _renewAt = session.expiresAt;
+    _sessionRevision += 1;
+    _sessionInvalidated = false;
+  }
 
   @override
   Future<DashboardData> loadDashboard() async {
@@ -1061,7 +1089,9 @@ final class HttpControlApi implements ControlApi {
   @override
   Future<RuntimeUsageReport> runtimeUsage(RuntimeUsageQuery query) async {
     final uri = Uri(
-      path: '/api/v1/server/runtime-users/usage',
+      path: _selfScoped
+          ? '/api/v1/server/me/usage'
+          : '/api/v1/server/runtime-users/usage',
       queryParameters: query.toQueryParameters(),
     );
     return RuntimeUsageReport.fromJson(
@@ -1123,6 +1153,35 @@ final class HttpControlApi implements ControlApi {
     if (updated.id != userId || updated.active) {
       throw const ControlContractException(
         'disabled Runtime User is inconsistent',
+      );
+    }
+    return updated;
+  }
+
+  @override
+  Future<RuntimeUser> replaceRuntimeUserPassword({
+    required String userId,
+    required String password,
+  }) async {
+    if (userId.isEmpty || password.length < 8) {
+      throw const ControlContractException(
+        'Runtime User password replacement is invalid',
+      );
+    }
+    final updated = RuntimeUser.fromJson(
+      await _command(
+        'PATCH',
+        '/api/v1/server/runtime-users/${Uri.encodeComponent(userId)}/password',
+        body: {
+          'schema': 'vibermate-runtime-user-password-v1',
+          'password': password,
+        },
+      ),
+      'runtimeUser',
+    );
+    if (updated.id != userId || !updated.active) {
+      throw const ControlContractException(
+        'updated Runtime User is inconsistent',
       );
     }
     return updated;
@@ -1723,6 +1782,7 @@ final class HttpControlApi implements ControlApi {
     final renewAt = _renewAt;
     if (renewAt == null || DateTime.now().toUtc().isBefore(renewAt)) return;
     if (!_renewable) {
+      _notifySessionInvalidated();
       throw const ControlProblem(
         status: 401,
         reasonCode: 'server_admin_session_expired',
@@ -1834,6 +1894,7 @@ final class HttpControlApi implements ControlApi {
       responseTimeout,
       maximumResponseBytes,
     );
+    if (response.statusCode == 401) _notifySessionInvalidated();
     final payload = bytes.isEmpty ? null : _decodeJson(bytes);
     if (response.statusCode != expectedStatus) {
       throw _problem(response.statusCode, payload);
@@ -1992,6 +2053,17 @@ final class HttpControlApi implements ControlApi {
 
   void _requireOpen() {
     if (_closed) throw StateError('Control API is closed');
+  }
+
+  void _notifySessionInvalidated() {
+    if (_sessionInvalidated) return;
+    _sessionInvalidated = true;
+    try {
+      _onSessionInvalidated?.call();
+    } on Object {
+      // Session invalidation must preserve the original control failure even
+      // when a presentation-layer observer has already been disposed.
+    }
   }
 
   @override

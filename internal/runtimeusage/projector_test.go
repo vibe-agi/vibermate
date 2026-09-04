@@ -2,6 +2,7 @@ package runtimeusage_test
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"math"
 	"slices"
@@ -15,6 +16,46 @@ import (
 	"github.com/vibe-agi/vibermate/internal/runtimeusage"
 	"github.com/vibe-agi/vibermate/internal/runtimeuser"
 )
+
+func TestProjectorScopesPersonalUsageBeforeTheTeamRankingLimit(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 8, 24, 1, 2, 3, 0, time.UTC)
+	users := make([]runtimeuser.User, 201)
+	for index := range users {
+		rawID := make([]byte, 20)
+		rawID[18] = byte(index >> 8)
+		rawID[19] = byte(index)
+		users[index] = runtimeuser.User{
+			ID: runtimeuser.UserID(
+				"user." + base64.RawURLEncoding.EncodeToString(rawID),
+			),
+			Username: fmt.Sprintf("user-%03d", index),
+			State:    runtimeuser.StateActive, CreatedAt: now, UpdatedAt: now,
+		}
+	}
+	target := users[len(users)-1]
+	projector, err := runtimeusage.New(runtimeusage.Options{
+		Users: usersOf(users...), Runs: fakeRuns{}, Activities: fakeActivities{},
+		Contents:   fakeContents{items: map[string]exchangecontent.Record{}},
+		Identities: fakeIdentities{items: map[string]agentconversation.ClientIdentity{}},
+		Clock:      fixedClock{now: now},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := projector.ReportForUser(
+		context.Background(), queryAround(t, now), target.ID,
+	)
+	if err != nil {
+		t.Fatalf("ReportForUser() error = %v", err)
+	}
+	if report.Truncated || len(report.Users) != 1 ||
+		report.Users[0].UserID != target.ID || report.Users[0].Username != target.Username ||
+		len(report.Days) != 0 {
+		t.Fatalf("personal report = %#v", report)
+	}
+}
 
 func TestProjectorContinuesAfterAFullCaptureRunPage(t *testing.T) {
 	t.Parallel()

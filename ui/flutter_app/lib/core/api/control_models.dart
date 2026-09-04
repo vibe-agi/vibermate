@@ -132,6 +132,7 @@ final class RuntimeUser {
     required this.state,
     required this.createdAt,
     required this.updatedAt,
+    this.role = 'member',
   });
 
   factory RuntimeUser.fromJson(Object? json, String path) {
@@ -140,6 +141,7 @@ final class RuntimeUser {
       value,
       path,
       required: const {'id', 'username', 'state', 'createdAt', 'updatedAt'},
+      optional: const {'role'},
     );
     final state = requireString(value, 'state', path);
     if (!const {'active', 'disabled'}.contains(state)) {
@@ -147,6 +149,10 @@ final class RuntimeUser {
     }
     final createdAt = requireTimestamp(value, 'createdAt', path);
     final updatedAt = requireTimestamp(value, 'updatedAt', path);
+    final role = optionalString(value, 'role', path) ?? 'member';
+    if (!const {'owner', 'member'}.contains(role)) {
+      throw ControlContractException('$path.role is unsupported');
+    }
     if (updatedAt.isBefore(createdAt)) {
       throw ControlContractException('$path timestamps are inconsistent');
     }
@@ -156,6 +162,7 @@ final class RuntimeUser {
       state: state,
       createdAt: createdAt,
       updatedAt: updatedAt,
+      role: role,
     );
   }
 
@@ -164,9 +171,17 @@ final class RuntimeUser {
   final String state;
   final DateTime createdAt;
   final DateTime updatedAt;
+  final String role;
 
   bool get active => state == 'active';
+  bool get owner => role == 'owner';
 }
+
+/// Mirrors the Runtime Server's public username grammar for immediate form
+/// feedback. The Server remains authoritative and canonicalizes ASCII letters
+/// to lowercase when it creates or verifies an account.
+bool validRuntimeUsernameInput(String value) =>
+    RegExp(r'^[A-Za-z0-9._-]{3,64}$').hasMatch(value.trim());
 
 final class RuntimeUsageQuery {
   const RuntimeUsageQuery({

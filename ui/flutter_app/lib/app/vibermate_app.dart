@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../core/api/control_api.dart';
+import '../core/api/control_models.dart';
 import '../core/bootstrap/platform_runtime.dart';
 import '../core/bootstrap/terminal_command.dart';
 import '../core/design/viber_theme.dart';
@@ -12,13 +13,14 @@ import '../core/i18n/app_copy.dart';
 import '../core/preferences/workbench_preferences.dart';
 import '../features/workbench/workbench_controller.dart';
 import '../features/workbench/workbench_shell.dart';
+import '../features/account/member_portal.dart';
 import '../preview/preview_control_api.dart';
 import '../preview/preview_terminal_command.dart';
 import '../core/bootstrap/root_trust_installer_contract.dart';
 import '../preview/preview_root_trust_installer.dart';
 
 typedef RuntimeConnector =
-    Future<RuntimeConnection> Function({String? accessKey});
+    Future<RuntimeConnection> Function({RuntimeLoginAttempt? login});
 
 final class ViberMateApp extends StatefulWidget {
   const ViberMateApp({
@@ -143,12 +145,18 @@ final class _RuntimeBootstrap extends StatefulWidget {
 
 final class _RuntimeBootstrapState extends State<_RuntimeBootstrap> {
   WorkbenchController? _controller;
+  RuntimeConnection? _runtime;
   Object? _failure;
   bool _starting = true;
   bool _loginRequired = false;
-  bool _accessKeyVisible = false;
+  RuntimeLoginMode _loginMode = RuntimeLoginMode.signIn;
+  bool _passwordVisible = false;
+  bool _recoveryKeyVisible = false;
   int _attempt = 0;
-  final TextEditingController _accessKey = TextEditingController();
+  final TextEditingController _username = TextEditingController();
+  final TextEditingController _password = TextEditingController();
+  final TextEditingController _confirmPassword = TextEditingController();
+  final TextEditingController _recoveryKey = TextEditingController();
 
   @override
   void initState() {
@@ -156,7 +164,7 @@ final class _RuntimeBootstrapState extends State<_RuntimeBootstrap> {
     unawaited(_start());
   }
 
-  Future<void> _start({String? accessKey}) async {
+  Future<void> _start({RuntimeLoginAttempt? login}) async {
     final attempt = ++_attempt;
     setState(() {
       _starting = true;
@@ -178,7 +186,7 @@ final class _RuntimeBootstrapState extends State<_RuntimeBootstrap> {
         closeRuntime = preview.close;
         rootTrustInstaller = PreviewRootTrustInstaller(preview);
       } else {
-        final runtime = await widget.runtimeConnector(accessKey: accessKey);
+        final runtime = await widget.runtimeConnector(login: login);
         liveRuntime = runtime;
         api = runtime.api;
         terminalCommands = runtime.terminalCommands;
@@ -187,6 +195,17 @@ final class _RuntimeBootstrapState extends State<_RuntimeBootstrap> {
       }
       if (!mounted || attempt != _attempt) {
         await closeRuntime();
+        return;
+      }
+      _runtime = liveRuntime;
+      if (liveRuntime?.webPrincipal?.role == RuntimeWebRole.member) {
+        setState(() {
+          _starting = false;
+        });
+        _password.clear();
+        _confirmPassword.clear();
+        _recoveryKey.clear();
+        unawaited(_watchRuntime(liveRuntime!, attempt));
         return;
       }
       final controller = WorkbenchController(
@@ -222,12 +241,17 @@ final class _RuntimeBootstrapState extends State<_RuntimeBootstrap> {
         preferencesWritable: loadedPreferences.writable,
         initialPreferencesIssue: loadedPreferences.issue,
         onThemeChanged: widget.onThemeChanged,
+        webPrincipal: liveRuntime?.webPrincipal,
+        onSignOut: liveRuntime?.signOut == null ? null : _signOut,
+        changeWebPassword: liveRuntime?.changePassword,
       );
       setState(() {
         _controller = controller;
         _starting = false;
       });
-      _accessKey.clear();
+      _password.clear();
+      _confirmPassword.clear();
+      _recoveryKey.clear();
       if (liveRuntime != null) {
         unawaited(_watchRuntime(liveRuntime, attempt));
       }
@@ -236,7 +260,22 @@ final class _RuntimeBootstrapState extends State<_RuntimeBootstrap> {
       if (!mounted || attempt != _attempt) return;
       setState(() {
         _loginRequired = true;
-        _failure = error.reason == 'access_key_required' ? null : error;
+        if (error.reason == 'setup_required') {
+          _loginMode = RuntimeLoginMode.setup;
+        } else if (error.reason == 'setup_changed') {
+          _loginMode = RuntimeLoginMode.signIn;
+        } else if (error.reason.startsWith('recovery_')) {
+          _loginMode = RuntimeLoginMode.recover;
+        } else {
+          _loginMode = RuntimeLoginMode.signIn;
+        }
+        _failure =
+            const {
+              'setup_required',
+              'credentials_required',
+            }.contains(error.reason)
+            ? null
+            : error;
         _starting = false;
       });
     } catch (error) {
@@ -250,22 +289,105 @@ final class _RuntimeBootstrapState extends State<_RuntimeBootstrap> {
 
   Future<void> _watchRuntime(RuntimeConnection runtime, int attempt) async {
     final exitCode = runtime.exitCode;
-    if (exitCode == null) return;
-    await exitCode;
+    final webSessionEnded = runtime.webSessionEnded;
+    final endings = <Future<bool>>[
+      if (exitCode != null) exitCode.then((_) => false),
+      if (webSessionEnded != null) webSessionEnded.then((_) => true),
+    ];
+    if (endings.isEmpty) return;
+    final signedOutByServer = await Future.any(endings);
     if (!mounted || attempt != _attempt || runtime.isClosed()) return;
     final controller = _controller;
+    if (signedOutByServer) {
+      _attempt += 1;
+      setState(() {
+        _controller = null;
+        _runtime = null;
+        _loginRequired = true;
+        _loginMode = RuntimeLoginMode.signIn;
+        _failure = const RuntimeLoginRequired('session_expired');
+        _starting = false;
+      });
+      controller?.dispose();
+      await runtime.close();
+      return;
+    }
     setState(() {
       _controller = null;
+      _runtime = null;
       _failure = const RuntimeConnectionException('daemon_exited');
       _starting = false;
     });
     controller?.dispose();
   }
 
+  void _setLoginMode(RuntimeLoginMode value) {
+    if (_loginMode == value) return;
+    setState(() {
+      _loginMode = value;
+      _failure = null;
+      _password.clear();
+      _confirmPassword.clear();
+      if (value == RuntimeLoginMode.signIn) _recoveryKey.clear();
+    });
+  }
+
+  void _submitLogin() {
+    final password = _password.text;
+    final attempt = switch (_loginMode) {
+      RuntimeLoginMode.signIn => RuntimeLoginAttempt.signIn(
+        username: _username.text.trim(),
+        password: password,
+      ),
+      RuntimeLoginMode.setup => RuntimeLoginAttempt.setup(
+        recoveryKey: _recoveryKey.text.trim(),
+        username: _username.text.trim(),
+        password: password,
+      ),
+      RuntimeLoginMode.recover => RuntimeLoginAttempt.recover(
+        recoveryKey: _recoveryKey.text.trim(),
+        password: password,
+      ),
+    };
+    unawaited(_start(login: attempt));
+  }
+
+  Future<void> _signOut() async {
+    final runtime = _runtime;
+    if (runtime == null) return;
+    _attempt += 1;
+    final controller = _controller;
+    setState(() {
+      _controller = null;
+      _runtime = null;
+      _starting = true;
+      _failure = null;
+    });
+    try {
+      if (runtime.signOut case final signOut?) {
+        await signOut();
+      } else {
+        await runtime.close();
+      }
+    } on Object {
+      // A local sign-out still forgets the in-memory browser capability. The
+      // short-lived Server copy expires independently if the network vanished.
+    }
+    controller?.dispose();
+    if (!mounted) return;
+    await _start();
+  }
+
   @override
   void dispose() {
     _attempt += 1;
-    _accessKey.dispose();
+    final runtime = _runtime;
+    _runtime = null;
+    if (runtime != null) unawaited(runtime.close());
+    _username.dispose();
+    _password.dispose();
+    _confirmPassword.dispose();
+    _recoveryKey.dispose();
     _controller?.dispose();
     super.dispose();
   }
@@ -279,18 +401,31 @@ final class _RuntimeBootstrapState extends State<_RuntimeBootstrap> {
     );
     final controller = _controller;
     if (controller != null) return WorkbenchShell(controller: controller);
+    final runtime = _runtime;
+    if (runtime?.webPrincipal?.role == RuntimeWebRole.member) {
+      return MemberPortal(runtime: runtime!, copy: copy, onSignOut: _signOut);
+    }
     if (_loginRequired) {
       return RuntimeServerLoginView(
         copy: copy,
         target: platformRuntimeTargetLabel(),
         plaintextTransport: platformRuntimeUsesPlaintext(),
-        accessKey: _accessKey,
-        accessKeyVisible: _accessKeyVisible,
+        mode: _loginMode,
+        username: _username,
+        password: _password,
+        confirmPassword: _confirmPassword,
+        recoveryKey: _recoveryKey,
+        passwordVisible: _passwordVisible,
+        recoveryKeyVisible: _recoveryKeyVisible,
         failure: _failure,
-        onVisibilityChanged: () {
-          setState(() => _accessKeyVisible = !_accessKeyVisible);
+        onPasswordVisibilityChanged: () {
+          setState(() => _passwordVisible = !_passwordVisible);
         },
-        onConnect: () => _start(accessKey: _accessKey.text.trim()),
+        onRecoveryKeyVisibilityChanged: () {
+          setState(() => _recoveryKeyVisible = !_recoveryKeyVisible);
+        },
+        onModeChanged: _setLoginMode,
+        onConnect: _submitLogin,
       );
     }
     final sidecarUnavailable =
@@ -380,26 +515,42 @@ final class RuntimeServerLoginView extends StatelessWidget {
     required this.copy,
     required this.target,
     required this.plaintextTransport,
-    required this.accessKey,
-    required this.accessKeyVisible,
+    required this.mode,
+    required this.username,
+    required this.password,
+    required this.confirmPassword,
+    required this.recoveryKey,
+    required this.passwordVisible,
+    required this.recoveryKeyVisible,
     required this.failure,
-    required this.onVisibilityChanged,
+    required this.onPasswordVisibilityChanged,
+    required this.onRecoveryKeyVisibilityChanged,
+    required this.onModeChanged,
     required this.onConnect,
   });
 
   final AppCopy copy;
   final String target;
   final bool plaintextTransport;
-  final TextEditingController accessKey;
-  final bool accessKeyVisible;
+  final RuntimeLoginMode mode;
+  final TextEditingController username;
+  final TextEditingController password;
+  final TextEditingController confirmPassword;
+  final TextEditingController recoveryKey;
+  final bool passwordVisible;
+  final bool recoveryKeyVisible;
   final Object? failure;
-  final VoidCallback onVisibilityChanged;
+  final VoidCallback onPasswordVisibilityChanged;
+  final VoidCallback onRecoveryKeyVisibilityChanged;
+  final ValueChanged<RuntimeLoginMode> onModeChanged;
   final VoidCallback onConnect;
 
   @override
   Widget build(BuildContext context) {
     final colors = context.viberColors;
     final failureCopy = _failureCopy();
+    final setup = mode == RuntimeLoginMode.setup;
+    final recovery = mode == RuntimeLoginMode.recover;
     return Scaffold(
       backgroundColor: colors.canvas,
       body: SafeArea(
@@ -414,162 +565,324 @@ final class RuntimeServerLoginView extends StatelessWidget {
                   border: Border.all(color: colors.divider),
                   borderRadius: ViberMetrics.dialogRadius,
                 ),
-                child: IntrinsicHeight(
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                child: ClipRRect(
+                  borderRadius: ViberMetrics.dialogRadius,
+                  child: Stack(
                     children: [
-                      Container(
+                      Positioned(
+                        left: 0,
+                        top: 0,
+                        bottom: 0,
                         width: 6,
-                        decoration: BoxDecoration(
-                          color: colors.route,
-                          borderRadius: const BorderRadius.horizontal(
-                            left: Radius.circular(9),
-                          ),
-                        ),
+                        child: ColoredBox(color: colors.route),
                       ),
-                      Expanded(
-                        child: Padding(
-                          padding: const EdgeInsets.fromLTRB(26, 24, 26, 26),
-                          child: Column(
-                            mainAxisSize: MainAxisSize.min,
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              const ViberMateMark(size: 36, framed: true),
-                              const SizedBox(height: 18),
-                              Text(
-                                copy('server.login.title'),
-                                style: Theme.of(
-                                  context,
-                                ).textTheme.headlineLarge,
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(26, 24, 26, 26),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const ViberMateMark(size: 36, framed: true),
+                            const SizedBox(height: 18),
+                            Text(
+                              copy(
+                                setup
+                                    ? 'server.login.setup.title'
+                                    : recovery
+                                    ? 'server.login.recovery.title'
+                                    : 'server.login.title',
                               ),
-                              const SizedBox(height: 6),
-                              Text(
-                                copy.format('server.login.target', {
-                                  'server': target,
-                                }),
-                                style: Theme.of(context).textTheme.bodyMedium,
-                              ),
-                              if (plaintextTransport) ...[
-                                const SizedBox(height: 12),
-                                Container(
-                                  key: const Key('server-login-http-warning'),
-                                  padding: const EdgeInsets.all(10),
-                                  decoration: BoxDecoration(
-                                    color: colors.warning.withValues(
-                                      alpha: 0.1,
-                                    ),
-                                    border: Border(
-                                      left: BorderSide(
-                                        color: colors.warning,
-                                        width: 3,
-                                      ),
-                                    ),
-                                  ),
-                                  child: Row(
-                                    crossAxisAlignment:
-                                        CrossAxisAlignment.start,
-                                    children: [
-                                      Icon(
-                                        Icons.lock_open_outlined,
-                                        size: 17,
-                                        color: colors.warning,
-                                      ),
-                                      const SizedBox(width: 8),
-                                      Expanded(
-                                        child: Text(
-                                          copy('server.login.http_warning'),
-                                          style: Theme.of(
-                                            context,
-                                          ).textTheme.bodySmall,
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                              ],
-                              const SizedBox(height: 18),
-                              TextField(
-                                controller: accessKey,
-                                obscureText: !accessKeyVisible,
-                                autocorrect: false,
-                                enableSuggestions: false,
-                                autofocus: true,
-                                onSubmitted: (_) => onConnect(),
-                                decoration: InputDecoration(
-                                  labelText: copy('server.login.access_key'),
-                                  hintText: copy(
-                                    'server.login.access_key.hint',
-                                  ),
-                                  suffixIcon: IconButton(
-                                    tooltip: copy(
-                                      accessKeyVisible
-                                          ? 'server.login.hide_key'
-                                          : 'server.login.show_key',
-                                    ),
-                                    onPressed: onVisibilityChanged,
-                                    icon: Icon(
-                                      accessKeyVisible
-                                          ? Icons.visibility_off_outlined
-                                          : Icons.visibility_outlined,
+                              style: Theme.of(context).textTheme.headlineLarge,
+                            ),
+                            const SizedBox(height: 6),
+                            Text(
+                              copy.format('server.login.target', {
+                                'server': target,
+                              }),
+                              style: Theme.of(context).textTheme.bodyMedium,
+                            ),
+                            if (plaintextTransport) ...[
+                              const SizedBox(height: 12),
+                              Container(
+                                key: const Key('server-login-http-warning'),
+                                padding: const EdgeInsets.all(10),
+                                decoration: BoxDecoration(
+                                  color: colors.warning.withValues(alpha: 0.1),
+                                  border: Border(
+                                    left: BorderSide(
+                                      color: colors.warning,
+                                      width: 3,
                                     ),
                                   ),
                                 ),
-                              ),
-                              const SizedBox(height: 8),
-                              Text(
-                                copy('server.login.key_help'),
-                                style: Theme.of(context).textTheme.bodySmall
-                                    ?.copyWith(color: colors.textMuted),
-                              ),
-                              if (failureCopy != null) ...[
-                                const SizedBox(height: 14),
-                                DecoratedBox(
-                                  decoration: BoxDecoration(
-                                    color: colors.danger.withValues(
-                                      alpha: 0.08,
+                                child: Row(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Icon(
+                                      Icons.lock_open_outlined,
+                                      size: 17,
+                                      color: colors.warning,
                                     ),
-                                    border: Border(
-                                      left: BorderSide(
-                                        color: colors.danger,
-                                        width: 3,
+                                    const SizedBox(width: 8),
+                                    Expanded(
+                                      child: Text(
+                                        copy('server.login.http_warning'),
+                                        style: Theme.of(
+                                          context,
+                                        ).textTheme.bodySmall,
                                       ),
                                     ),
-                                  ),
-                                  child: Padding(
-                                    padding: const EdgeInsets.all(10),
-                                    child: Row(
-                                      children: [
-                                        Icon(
-                                          Icons.error_outline,
-                                          size: 17,
-                                          color: colors.danger,
-                                        ),
-                                        const SizedBox(width: 8),
-                                        Expanded(child: Text(failureCopy)),
-                                      ],
-                                    ),
-                                  ),
-                                ),
-                              ],
-                              const SizedBox(height: 20),
-                              Align(
-                                alignment: Alignment.centerRight,
-                                child: ValueListenableBuilder<TextEditingValue>(
-                                  valueListenable: accessKey,
-                                  builder: (context, value, _) =>
-                                      FilledButton.icon(
-                                        onPressed: value.text.trim().isEmpty
-                                            ? null
-                                            : onConnect,
-                                        icon: const Icon(Icons.login, size: 17),
-                                        label: Text(
-                                          copy('server.login.connect'),
-                                        ),
-                                      ),
+                                  ],
                                 ),
                               ),
                             ],
-                          ),
+                            const SizedBox(height: 18),
+                            Text(
+                              copy(
+                                setup
+                                    ? 'server.login.setup.detail'
+                                    : recovery
+                                    ? 'server.login.recovery.detail'
+                                    : 'server.login.detail',
+                              ),
+                              style: Theme.of(context).textTheme.bodySmall
+                                  ?.copyWith(color: colors.textMuted),
+                            ),
+                            const SizedBox(height: 14),
+                            AutofillGroup(
+                              child: Column(
+                                children: [
+                                  if (setup || recovery) ...[
+                                    TextField(
+                                      key: const Key('server-recovery-key'),
+                                      controller: recoveryKey,
+                                      obscureText: !recoveryKeyVisible,
+                                      autocorrect: false,
+                                      enableSuggestions: false,
+                                      autofocus: true,
+                                      decoration: InputDecoration(
+                                        labelText: copy(
+                                          'server.login.recovery_key',
+                                        ),
+                                        suffixIcon: IconButton(
+                                          tooltip: copy(
+                                            recoveryKeyVisible
+                                                ? 'server.login.hide_key'
+                                                : 'server.login.show_key',
+                                          ),
+                                          onPressed:
+                                              onRecoveryKeyVisibilityChanged,
+                                          icon: Icon(
+                                            recoveryKeyVisible
+                                                ? Icons.visibility_off_outlined
+                                                : Icons.visibility_outlined,
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                    const SizedBox(height: 7),
+                                    Align(
+                                      alignment: Alignment.centerLeft,
+                                      child: Text(
+                                        copy('server.login.recovery_help'),
+                                        style: Theme.of(context)
+                                            .textTheme
+                                            .bodySmall
+                                            ?.copyWith(color: colors.textMuted),
+                                      ),
+                                    ),
+                                    const SizedBox(height: 12),
+                                  ],
+                                  if (!recovery) ...[
+                                    TextField(
+                                      key: const Key('server-username'),
+                                      controller: username,
+                                      autofocus: !setup,
+                                      autocorrect: false,
+                                      enableSuggestions: false,
+                                      autofillHints: const [
+                                        AutofillHints.username,
+                                      ],
+                                      textInputAction: TextInputAction.next,
+                                      decoration: InputDecoration(
+                                        labelText: copy(
+                                          'server.login.username',
+                                        ),
+                                        helperText: copy(
+                                          'server.login.username_help',
+                                        ),
+                                      ),
+                                    ),
+                                    const SizedBox(height: 12),
+                                  ],
+                                  TextField(
+                                    key: const Key('server-password'),
+                                    controller: password,
+                                    obscureText: !passwordVisible,
+                                    autocorrect: false,
+                                    enableSuggestions: false,
+                                    autofillHints: [
+                                      setup || recovery
+                                          ? AutofillHints.newPassword
+                                          : AutofillHints.password,
+                                    ],
+                                    textInputAction: setup || recovery
+                                        ? TextInputAction.next
+                                        : TextInputAction.done,
+                                    onSubmitted: setup || recovery
+                                        ? null
+                                        : (_) {
+                                            if (_complete) onConnect();
+                                          },
+                                    decoration: InputDecoration(
+                                      labelText: copy(
+                                        setup || recovery
+                                            ? 'server.login.new_password'
+                                            : 'server.login.password',
+                                      ),
+                                      suffixIcon: IconButton(
+                                        tooltip: copy(
+                                          passwordVisible
+                                              ? 'account.password.hide'
+                                              : 'account.password.show',
+                                        ),
+                                        onPressed: onPasswordVisibilityChanged,
+                                        icon: Icon(
+                                          passwordVisible
+                                              ? Icons.visibility_off_outlined
+                                              : Icons.visibility_outlined,
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                  if (setup || recovery) ...[
+                                    const SizedBox(height: 12),
+                                    TextField(
+                                      key: const Key('server-confirm-password'),
+                                      controller: confirmPassword,
+                                      obscureText: !passwordVisible,
+                                      autocorrect: false,
+                                      enableSuggestions: false,
+                                      autofillHints: const [
+                                        AutofillHints.newPassword,
+                                      ],
+                                      textInputAction: TextInputAction.done,
+                                      onSubmitted: (_) {
+                                        if (_complete) onConnect();
+                                      },
+                                      decoration: InputDecoration(
+                                        labelText: copy(
+                                          'server.login.confirm_password',
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ],
+                              ),
+                            ),
+                            if (failureCopy != null) ...[
+                              const SizedBox(height: 14),
+                              DecoratedBox(
+                                decoration: BoxDecoration(
+                                  color: colors.danger.withValues(alpha: 0.08),
+                                  border: Border(
+                                    left: BorderSide(
+                                      color: colors.danger,
+                                      width: 3,
+                                    ),
+                                  ),
+                                ),
+                                child: Padding(
+                                  padding: const EdgeInsets.all(10),
+                                  child: Row(
+                                    children: [
+                                      Icon(
+                                        Icons.error_outline,
+                                        size: 17,
+                                        color: colors.danger,
+                                      ),
+                                      const SizedBox(width: 8),
+                                      Expanded(child: Text(failureCopy)),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                            ],
+                            const SizedBox(height: 16),
+                            LayoutBuilder(
+                              builder: (context, constraints) {
+                                final secondary = !setup
+                                    ? TextButton(
+                                        key: const Key('server-login-mode'),
+                                        onPressed: () => onModeChanged(
+                                          recovery
+                                              ? RuntimeLoginMode.signIn
+                                              : RuntimeLoginMode.recover,
+                                        ),
+                                        child: Text(
+                                          copy(
+                                            recovery
+                                                ? 'server.login.back'
+                                                : 'server.login.forgot',
+                                          ),
+                                        ),
+                                      )
+                                    : null;
+                                final primary = ListenableBuilder(
+                                  listenable: Listenable.merge([
+                                    username,
+                                    password,
+                                    confirmPassword,
+                                    recoveryKey,
+                                  ]),
+                                  builder: (context, _) => FilledButton.icon(
+                                    key: const Key('server-login-submit'),
+                                    onPressed: _complete ? onConnect : null,
+                                    icon: Icon(
+                                      setup
+                                          ? Icons.person_add_alt_1
+                                          : recovery
+                                          ? Icons.restart_alt
+                                          : Icons.login,
+                                      size: 17,
+                                    ),
+                                    label: Text(
+                                      copy(
+                                        setup
+                                            ? 'server.login.setup.action'
+                                            : recovery
+                                            ? 'server.login.recovery.action'
+                                            : 'server.login.connect',
+                                      ),
+                                    ),
+                                  ),
+                                );
+                                if (constraints.maxWidth < 330) {
+                                  return Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.stretch,
+                                    children: [
+                                      primary,
+                                      if (secondary != null) ...[
+                                        const SizedBox(height: 6),
+                                        Align(
+                                          alignment: Alignment.centerLeft,
+                                          child: secondary,
+                                        ),
+                                      ],
+                                    ],
+                                  );
+                                }
+                                return Row(
+                                  children: [
+                                    ?secondary,
+                                    const Spacer(),
+                                    primary,
+                                  ],
+                                );
+                              },
+                            ),
+                          ],
                         ),
                       ),
                     ],
@@ -581,6 +894,23 @@ final class RuntimeServerLoginView extends StatelessWidget {
         ),
       ),
     );
+  }
+
+  bool get _complete {
+    final validPassword = password.text.length >= 8;
+    return switch (mode) {
+      RuntimeLoginMode.signIn =>
+        validRuntimeUsernameInput(username.text) && validPassword,
+      RuntimeLoginMode.setup =>
+        recoveryKey.text.trim().isNotEmpty &&
+            validRuntimeUsernameInput(username.text) &&
+            validPassword &&
+            password.text == confirmPassword.text,
+      RuntimeLoginMode.recover =>
+        recoveryKey.text.trim().isNotEmpty &&
+            validPassword &&
+            password.text == confirmPassword.text,
+    };
   }
 
   String? _failureCopy() {

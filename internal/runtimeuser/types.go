@@ -116,8 +116,10 @@ func (record SessionRecord) Validate() error {
 type Repository interface {
 	CreateUser(context.Context, UserRecord) error
 	FindUserByUsername(context.Context, string) (UserRecord, bool, error)
+	FindUserByID(context.Context, UserID) (UserRecord, bool, error)
 	ListUsers(context.Context) ([]UserRecord, error)
 	SetUserState(context.Context, UserID, State, time.Time) (UserRecord, bool, error)
+	ReplacePassword(context.Context, UserID, string, time.Time) (UserRecord, bool, error)
 	CreateSession(context.Context, SessionRecord) error
 	FindSession(context.Context, SessionDigest) (SessionRecord, UserRecord, bool, error)
 	RevokeSession(context.Context, SessionDigest, time.Time) (bool, error)
@@ -191,6 +193,11 @@ func validPassword(password []byte) bool {
 	return len(password) >= minPasswordBytes && len(password) <= maxPasswordBytes &&
 		utf8.Valid(password)
 }
+
+// ValidPassword reports whether a password satisfies the public Runtime User
+// wire contract. It does not assess password strength beyond the enforced
+// length and UTF-8 bounds.
+func ValidPassword(password []byte) bool { return validPassword(password) }
 
 func validDeviceName(value string) bool {
 	if value == "" || len(value) > maxDeviceNameBytes || !utf8.ValidString(value) ||

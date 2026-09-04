@@ -23,7 +23,9 @@ final class SettingsView extends StatelessWidget {
   Widget build(BuildContext context) {
     final server = controller.serverManagement;
     return DefaultTabController(
+      key: ValueKey('settings-tab-${controller.settingsTab}'),
       length: server ? 3 : 2,
+      initialIndex: controller.settingsTab,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -41,6 +43,7 @@ final class SettingsView extends StatelessWidget {
                 isScrollable: true,
                 tabAlignment: TabAlignment.start,
                 dividerHeight: 0,
+                onTap: controller.selectSettingsTab,
                 tabs: [
                   Tab(
                     key: const Key('settings-tab-general'),
@@ -892,6 +895,7 @@ final class _ServerAccessPanelState extends State<_ServerAccessPanel> {
     final copy = widget.copy;
     final access = controller.serverAccess;
     final users = controller.runtimeUsers;
+    final firstOwner = users != null && !users.any((user) => user.owner);
     return Container(
       key: const Key('server-runtime-access'),
       clipBehavior: Clip.antiAlias,
@@ -1044,13 +1048,21 @@ final class _ServerAccessPanelState extends State<_ServerAccessPanel> {
                           ),
                         ),
                         const SizedBox(width: 8),
-                        OutlinedButton.icon(
+                        (firstOwner ? FilledButton.icon : OutlinedButton.icon)(
                           key: const Key('runtime-user-add'),
                           onPressed: controller.runtimeUserMutating
                               ? null
-                              : _showCreateRuntimeUserDialog,
+                              : () => _showCreateRuntimeUserDialog(
+                                  firstOwner: firstOwner,
+                                ),
                           icon: const Icon(Icons.person_add_alt_1, size: 15),
-                          label: Text(copy('server.users.add')),
+                          label: Text(
+                            copy(
+                              firstOwner
+                                  ? 'server.users.add_owner'
+                                  : 'server.users.add',
+                            ),
+                          ),
                         ),
                       ],
                     ),
@@ -1065,12 +1077,7 @@ final class _ServerAccessPanelState extends State<_ServerAccessPanel> {
                         label: Text(copy('common.retry')),
                       )
                     else if (users.isEmpty)
-                      Text(
-                        copy('server.users.empty'),
-                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                          color: context.viberColors.textMuted,
-                        ),
-                      )
+                      InlineNotice(message: copy('server.users.empty'))
                     else
                       Column(
                         children: [
@@ -1079,7 +1086,14 @@ final class _ServerAccessPanelState extends State<_ServerAccessPanel> {
                               user: user,
                               copy: copy,
                               disabling: controller.runtimeUserMutating,
-                              onDisable: user.active
+                              owner: user.owner,
+                              onReset:
+                                  user.active &&
+                                      (!user.owner ||
+                                          controller.webPrincipal == null)
+                                  ? () => _showResetRuntimeUserDialog(user)
+                                  : null,
+                              onDisable: user.active && !user.owner
                                   ? () => _confirmDisableRuntimeUser(user)
                                   : null,
                             ),
@@ -1193,12 +1207,13 @@ final class _ServerAccessPanelState extends State<_ServerAccessPanel> {
     }
   }
 
-  Future<void> _showCreateRuntimeUserDialog() async {
+  Future<void> _showCreateRuntimeUserDialog({required bool firstOwner}) async {
     await showDialog<void>(
       context: context,
       builder: (_) => _CreateRuntimeUserDialog(
         controller: widget.controller,
         copy: widget.copy,
+        firstOwner: firstOwner,
       ),
     );
   }
@@ -1229,16 +1244,29 @@ final class _ServerAccessPanelState extends State<_ServerAccessPanel> {
       await widget.controller.disableRuntimeUser(user.id);
     }
   }
+
+  Future<void> _showResetRuntimeUserDialog(RuntimeUser user) async {
+    await showDialog<void>(
+      context: context,
+      builder: (_) => _ResetRuntimeUserPasswordDialog(
+        controller: widget.controller,
+        copy: widget.copy,
+        user: user,
+      ),
+    );
+  }
 }
 
 final class _CreateRuntimeUserDialog extends StatefulWidget {
   const _CreateRuntimeUserDialog({
     required this.controller,
     required this.copy,
+    required this.firstOwner,
   });
 
   final WorkbenchController controller;
   final AppCopy copy;
+  final bool firstOwner;
 
   @override
   State<_CreateRuntimeUserDialog> createState() =>
@@ -1249,16 +1277,20 @@ final class _CreateRuntimeUserDialogState
     extends State<_CreateRuntimeUserDialog> {
   final _username = TextEditingController();
   final _password = TextEditingController();
+  final _confirmPassword = TextEditingController();
   bool _busy = false;
   String? _error;
 
   bool get _complete =>
-      _username.text.trim().isNotEmpty && _password.text.length >= 8;
+      validRuntimeUsernameInput(_username.text) &&
+      _password.text.length >= 8 &&
+      (!widget.firstOwner || _password.text == _confirmPassword.text);
 
   @override
   void dispose() {
     _username.dispose();
     _password.dispose();
+    _confirmPassword.dispose();
     super.dispose();
   }
 
@@ -1266,14 +1298,26 @@ final class _CreateRuntimeUserDialogState
   Widget build(BuildContext context) {
     return AlertDialog(
       key: const Key('runtime-user-dialog'),
-      title: Text(widget.copy('server.users.dialog.title')),
+      title: Text(
+        widget.copy(
+          widget.firstOwner
+              ? 'server.users.dialog.owner_title'
+              : 'server.users.dialog.title',
+        ),
+      ),
       content: ConstrainedBox(
         constraints: const BoxConstraints(maxWidth: 420),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(widget.copy('server.users.dialog.detail')),
+            Text(
+              widget.copy(
+                widget.firstOwner
+                    ? 'server.users.dialog.owner_detail'
+                    : 'server.users.dialog.detail',
+              ),
+            ),
             const SizedBox(height: 12),
             TextField(
               key: const Key('runtime-user-username'),
@@ -1285,6 +1329,7 @@ final class _CreateRuntimeUserDialogState
               textInputAction: TextInputAction.next,
               decoration: InputDecoration(
                 labelText: widget.copy('server.users.dialog.username'),
+                helperText: widget.copy('server.login.username_help'),
               ),
               onChanged: (_) => setState(() => _error = null),
             ),
@@ -1296,16 +1341,37 @@ final class _CreateRuntimeUserDialogState
               obscureText: true,
               autocorrect: false,
               enableSuggestions: false,
-              textInputAction: TextInputAction.done,
+              textInputAction: widget.firstOwner
+                  ? TextInputAction.next
+                  : TextInputAction.done,
               decoration: InputDecoration(
                 labelText: widget.copy('server.users.dialog.password'),
                 helperText: widget.copy('server.users.dialog.password_help'),
               ),
               onChanged: (_) => setState(() => _error = null),
-              onSubmitted: _complete && !_busy
+              onSubmitted: !widget.firstOwner && _complete && !_busy
                   ? (_) => unawaited(_submit())
                   : null,
             ),
+            if (widget.firstOwner) ...[
+              const SizedBox(height: 10),
+              TextField(
+                key: const Key('runtime-user-confirm-password'),
+                controller: _confirmPassword,
+                enabled: !_busy,
+                obscureText: true,
+                autocorrect: false,
+                enableSuggestions: false,
+                textInputAction: TextInputAction.done,
+                decoration: InputDecoration(
+                  labelText: widget.copy('server.login.confirm_password'),
+                ),
+                onChanged: (_) => setState(() => _error = null),
+                onSubmitted: _complete && !_busy
+                    ? (_) => unawaited(_submit())
+                    : null,
+              ),
+            ],
             if (_error case final error?) ...[
               const SizedBox(height: 10),
               InlineNotice(message: error, error: true),
@@ -1323,7 +1389,13 @@ final class _CreateRuntimeUserDialogState
           onPressed: !_complete || _busy ? null : () => unawaited(_submit()),
           child: _busy
               ? const CompactProgressIndicator()
-              : Text(widget.copy('server.users.dialog.create')),
+              : Text(
+                  widget.copy(
+                    widget.firstOwner
+                        ? 'server.users.dialog.create_owner'
+                        : 'server.users.dialog.create',
+                  ),
+                ),
         ),
       ],
     );
@@ -1351,6 +1423,149 @@ final class _CreateRuntimeUserDialogState
             widget.controller.serverManagementError ??
             widget.copy('server.users.dialog.unknown'),
       });
+    });
+  }
+}
+
+final class _ResetRuntimeUserPasswordDialog extends StatefulWidget {
+  const _ResetRuntimeUserPasswordDialog({
+    required this.controller,
+    required this.copy,
+    required this.user,
+  });
+
+  final WorkbenchController controller;
+  final AppCopy copy;
+  final RuntimeUser user;
+
+  @override
+  State<_ResetRuntimeUserPasswordDialog> createState() =>
+      _ResetRuntimeUserPasswordDialogState();
+}
+
+final class _ResetRuntimeUserPasswordDialogState
+    extends State<_ResetRuntimeUserPasswordDialog> {
+  final _password = TextEditingController();
+  final _confirm = TextEditingController();
+  bool _visible = false;
+  bool _busy = false;
+  String? _error;
+
+  bool get _complete =>
+      _password.text.length >= 8 && _password.text == _confirm.text;
+
+  @override
+  void dispose() {
+    _password.dispose();
+    _confirm.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => AlertDialog(
+    key: const Key('runtime-user-password-dialog'),
+    title: Text(
+      widget.copy(
+        widget.user.owner
+            ? 'server.users.password.owner_title'
+            : 'server.users.password.title',
+      ),
+    ),
+    content: ConstrainedBox(
+      constraints: const BoxConstraints(maxWidth: 420),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            widget.copy.format(
+              widget.user.owner
+                  ? 'server.users.password.owner_detail'
+                  : 'server.users.password.detail',
+              {'username': widget.user.username},
+            ),
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            key: const Key('runtime-user-new-password'),
+            controller: _password,
+            autofocus: true,
+            enabled: !_busy,
+            obscureText: !_visible,
+            autocorrect: false,
+            enableSuggestions: false,
+            autofillHints: const [AutofillHints.newPassword],
+            decoration: InputDecoration(
+              labelText: widget.copy('account.password.new'),
+              suffixIcon: IconButton(
+                onPressed: () => setState(() => _visible = !_visible),
+                icon: Icon(
+                  _visible
+                      ? Icons.visibility_off_outlined
+                      : Icons.visibility_outlined,
+                ),
+              ),
+            ),
+            onChanged: (_) => setState(() => _error = null),
+          ),
+          const SizedBox(height: 10),
+          TextField(
+            key: const Key('runtime-user-confirm-password'),
+            controller: _confirm,
+            enabled: !_busy,
+            obscureText: !_visible,
+            autocorrect: false,
+            enableSuggestions: false,
+            autofillHints: const [AutofillHints.newPassword],
+            decoration: InputDecoration(
+              labelText: widget.copy('account.password.confirm'),
+            ),
+            onChanged: (_) => setState(() => _error = null),
+            onSubmitted: _complete ? (_) => unawaited(_submit()) : null,
+          ),
+          if (_error case final error?) ...[
+            const SizedBox(height: 10),
+            InlineNotice(message: error, error: true),
+          ],
+        ],
+      ),
+    ),
+    actions: [
+      TextButton(
+        onPressed: _busy ? null : () => Navigator.of(context).pop(),
+        child: Text(widget.copy('common.cancel')),
+      ),
+      ListenableBuilder(
+        listenable: Listenable.merge([_password, _confirm]),
+        builder: (context, _) => FilledButton(
+          key: const Key('runtime-user-password-save'),
+          onPressed: _busy || !_complete ? null : () => unawaited(_submit()),
+          child: _busy
+              ? const CompactProgressIndicator()
+              : Text(widget.copy('server.users.password.action')),
+        ),
+      ),
+    ],
+  );
+
+  Future<void> _submit() async {
+    if (!_complete || _busy) return;
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
+    final changed = await widget.controller.replaceRuntimeUserPassword(
+      userId: widget.user.id,
+      password: _password.text,
+    );
+    if (!mounted) return;
+    if (changed) {
+      Navigator.of(context).pop();
+      return;
+    }
+    setState(() {
+      _busy = false;
+      _error = widget.copy('server.users.password.error');
     });
   }
 }
@@ -1424,12 +1639,16 @@ final class _RuntimeUserRow extends StatelessWidget {
     required this.user,
     required this.copy,
     required this.disabling,
+    required this.owner,
+    required this.onReset,
     required this.onDisable,
   });
 
   final RuntimeUser user;
   final AppCopy copy;
   final bool disabling;
+  final bool owner;
+  final VoidCallback? onReset;
   final VoidCallback? onDisable;
 
   @override
@@ -1465,6 +1684,15 @@ final class _RuntimeUserRow extends StatelessWidget {
                       overflow: TextOverflow.ellipsis,
                       style: Theme.of(context).textTheme.bodyMedium,
                     ),
+                    if (owner) ...[
+                      const SizedBox(height: 2),
+                      Text(
+                        copy('server.users.owner'),
+                        style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                          color: context.viberColors.route,
+                        ),
+                      ),
+                    ],
                     const SizedBox(height: 2),
                     Text(
                       copy('server.users.authentication'),
@@ -1490,6 +1718,20 @@ final class _RuntimeUserRow extends StatelessWidget {
                       : context.viberColors.textFaint,
                 ),
               ),
+              if (onReset != null) ...[
+                const SizedBox(width: 3),
+                IconButton(
+                  key: Key('runtime-user-reset-${user.id}'),
+                  onPressed: disabling ? null : onReset,
+                  tooltip: copy('server.users.password.action'),
+                  icon: const Icon(Icons.password_outlined, size: 15),
+                  constraints: const BoxConstraints.tightFor(
+                    width: ViberMetrics.controlHeight,
+                    height: ViberMetrics.controlHeight,
+                  ),
+                  padding: EdgeInsets.zero,
+                ),
+              ],
               if (onDisable != null) ...[
                 const SizedBox(width: 6),
                 IconButton(

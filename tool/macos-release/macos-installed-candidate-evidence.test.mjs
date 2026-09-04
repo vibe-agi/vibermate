@@ -30,7 +30,7 @@ function installedReport() {
       buildManifestSHA256: "2".repeat(64),
       bundleIdentifier: "io.vibermate.desktop",
       certificateSHA256: "3".repeat(64),
-      diskImageFilename: "ViberMate_0.1.1_universal.dmg",
+      diskImageFilename: "ViberMate_0.1.2_universal.dmg",
       diskImageSHA256: "4".repeat(64),
       minimumSystemVersion: "14.0",
       notarizationEvidenceSHA256: "5".repeat(64),
@@ -38,7 +38,7 @@ function installedReport() {
       sourceRevision: candidateRevision,
       teamIdentifier,
       toolingRevision,
-      version: "0.1.1",
+      version: "0.1.2",
     },
     installation: {
       appRemovedAfterVerification: true,

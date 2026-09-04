@@ -25,6 +25,8 @@ type router struct {
 	capture       http.Handler
 	proxy         http.Handler
 	adminSessions http.Handler
+	webSessions   http.Handler
+	webSelf       http.Handler
 	admin         *serveradmin.Authority
 	application   *desktopcontrol.Handler
 	managementUI  http.Handler
@@ -42,6 +44,23 @@ func (handler router) ServeHTTP(writer http.ResponseWriter, request *http.Reques
 	releaseDeadlines := boundOrdinaryRequest(writer, time.Now())
 	defer releaseDeadlines()
 	switch {
+	case request.URL.Path == servercontrol.WebAuthPath ||
+		request.URL.Path == servercontrol.WebSetupPath ||
+		request.URL.Path == servercontrol.WebSessionPath ||
+		request.URL.Path == servercontrol.WebCurrentSessionPath ||
+		request.URL.Path == servercontrol.WebPasswordPath ||
+		request.URL.Path == servercontrol.WebRecoveryPath:
+		if !validAdminTransport(request, handler.scheme) || handler.webSessions == nil {
+			serverProblem(writer, http.StatusForbidden, "server_web_transport_rejected")
+			return
+		}
+		handler.webSessions.ServeHTTP(writer, request)
+	case request.URL.Path == servercontrol.WebSelfUsagePath:
+		if !validAdminTransport(request, handler.scheme) || handler.webSelf == nil {
+			serverProblem(writer, http.StatusForbidden, "server_web_transport_rejected")
+			return
+		}
+		handler.webSelf.ServeHTTP(writer, request)
 	case request.URL.Path == servercontrol.RuntimeUserSessionPath ||
 		request.URL.Path == servercontrol.RuntimeUserCurrentSessionPath:
 		handler.userSessions.ServeHTTP(writer, request)

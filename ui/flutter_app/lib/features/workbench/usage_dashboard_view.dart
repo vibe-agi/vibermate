@@ -84,6 +84,7 @@ final class _UsageDashboardViewState extends State<UsageDashboardView> {
               onUserQueryChanged: (value) => setState(() {
                 _userQuery = value;
               }),
+              onCreateUser: controller.openRuntimeUsersSettings,
             ),
           },
         ),
@@ -109,6 +110,182 @@ final class _UsageDashboardViewState extends State<UsageDashboardView> {
       );
     });
   }
+}
+
+/// Member-facing projection. The Server has already scoped [report] to the
+/// signed-in Runtime User; this view deliberately contains no team ranking or
+/// management affordance.
+final class PersonalUsageDashboard extends StatefulWidget {
+  const PersonalUsageDashboard({
+    required this.report,
+    required this.loading,
+    required this.error,
+    required this.onRefresh,
+    required this.copy,
+    super.key,
+  });
+
+  final RuntimeUsageReport? report;
+  final bool loading;
+  final String? error;
+  final VoidCallback onRefresh;
+  final AppCopy copy;
+
+  @override
+  State<PersonalUsageDashboard> createState() => _PersonalUsageDashboardState();
+}
+
+final class _PersonalUsageDashboardState extends State<PersonalUsageDashboard> {
+  _ActivityMetric _metric = _ActivityMetric.agentApiCalls;
+
+  @override
+  Widget build(BuildContext context) {
+    final report = widget.report;
+    return Column(
+      key: const Key('personal-usage-dashboard'),
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        PageHeading(
+          title: widget.copy('usage.personal.title'),
+          subtitle: widget.copy('usage.personal.subtitle'),
+        ),
+        const Divider(height: 1),
+        Expanded(
+          child: report == null
+              ? widget.loading
+                    ? Center(
+                        child: CompactLoadingMessage(
+                          label: widget.copy('usage.loading'),
+                        ),
+                      )
+                    : _UsageUnavailable(
+                        copy: widget.copy,
+                        detail: widget.error,
+                        onRetry: widget.onRefresh,
+                      )
+              : _body(report),
+        ),
+      ],
+    );
+  }
+
+  Widget _body(RuntimeUsageReport report) {
+    final user = report.users.firstOrNull;
+    return SingleChildScrollView(
+      key: const Key('personal-usage-scroll'),
+      padding: const EdgeInsets.fromLTRB(14, 12, 14, 24),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          _ReportScope(
+            report: report,
+            copy: widget.copy,
+            refreshing: widget.loading,
+            onRefresh: widget.onRefresh,
+          ),
+          if (report.truncated) ...[
+            const SizedBox(height: ViberSpacing.md),
+            InlineNotice(message: widget.copy('server.usage.truncated')),
+          ],
+          const SizedBox(height: ViberSpacing.lg),
+          if (user == null)
+            _PersonalUsageEmpty(copy: widget.copy)
+          else ...[
+            _PersonalOverview(user: user, copy: widget.copy),
+            const SizedBox(height: ViberSpacing.lg),
+            SegmentedButton<_ActivityMetric>(
+              segments: [
+                ButtonSegment(
+                  value: _ActivityMetric.agentApiCalls,
+                  label: Text(widget.copy('usage.activity.metric.api_calls')),
+                ),
+                ButtonSegment(
+                  value: _ActivityMetric.tokens,
+                  label: Text(widget.copy('usage.activity.metric.tokens')),
+                ),
+              ],
+              selected: {_metric},
+              showSelectedIcon: false,
+              onSelectionChanged: (value) => setState(() {
+                _metric = value.single;
+              }),
+            ),
+            const SizedBox(height: ViberSpacing.md),
+            _UserEvidence(
+              user: user,
+              period: report.period,
+              metric: _metric,
+              copy: widget.copy,
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+final class _PersonalOverview extends StatelessWidget {
+  const _PersonalOverview({required this.user, required this.copy});
+
+  final RuntimeUserUsage user;
+  final AppCopy copy;
+
+  @override
+  Widget build(BuildContext context) => LayoutBuilder(
+    builder: (context, constraints) {
+      final columns = constraints.maxWidth >= 760 ? 4 : 2;
+      final width =
+          (constraints.maxWidth - ViberSpacing.md * (columns - 1)) / columns;
+      return Wrap(
+        spacing: ViberSpacing.md,
+        runSpacing: ViberSpacing.md,
+        children: [
+          _OverviewCard(
+            width: width,
+            icon: Icons.podcasts_outlined,
+            label: copy('usage.personal.captures'),
+            value: _integer(user.captureRuns),
+            detail: copy.format('usage.personal.active', {
+              'count': '${user.activeRuns}',
+            }),
+          ),
+          _OverviewCard(
+            width: width,
+            icon: Icons.forum_outlined,
+            label: copy('usage.metric.api_calls'),
+            value: _integer(user.agentApiCalls),
+            detail: copy.format('usage.personal.succeeded', {
+              'count': '${user.succeeded}',
+            }),
+          ),
+          _OverviewCard(
+            width: width,
+            icon: Icons.input,
+            label: copy('usage.metric.input'),
+            value: _tokenLabel(user.tokens.inputUncached),
+            detail: copy('usage.metric.protocol_declared'),
+          ),
+          _OverviewCard(
+            width: width,
+            icon: Icons.output,
+            label: copy('usage.metric.output'),
+            value: _tokenLabel(user.tokens.output),
+            detail: copy('usage.metric.protocol_declared'),
+          ),
+        ],
+      );
+    },
+  );
+}
+
+final class _PersonalUsageEmpty extends StatelessWidget {
+  const _PersonalUsageEmpty({required this.copy});
+
+  final AppCopy copy;
+
+  @override
+  Widget build(BuildContext context) =>
+      InlineNotice(message: copy('usage.personal.empty'));
 }
 
 final class _UsageUnavailable extends StatelessWidget {
@@ -178,6 +355,7 @@ final class _UsageReportBody extends StatelessWidget {
     required this.detailKey,
     required this.userQuery,
     required this.onUserQueryChanged,
+    required this.onCreateUser,
   });
 
   final RuntimeUsageReport report;
@@ -191,6 +369,7 @@ final class _UsageReportBody extends StatelessWidget {
   final Key detailKey;
   final String userQuery;
   final ValueChanged<String> onUserQueryChanged;
+  final VoidCallback onCreateUser;
 
   @override
   Widget build(BuildContext context) => SingleChildScrollView(
@@ -220,7 +399,7 @@ final class _UsageReportBody extends StatelessWidget {
         ),
         const SizedBox(height: ViberSpacing.xl),
         if (report.users.isEmpty)
-          _EmptyUsage(copy: copy)
+          _EmptyUsage(copy: copy, onCreateUser: onCreateUser)
         else ...[
           _UserLedger(
             users: _rankedUsers(report.users),
@@ -2171,9 +2350,10 @@ final class _EvidenceEmpty extends StatelessWidget {
 }
 
 final class _EmptyUsage extends StatelessWidget {
-  const _EmptyUsage({required this.copy});
+  const _EmptyUsage({required this.copy, required this.onCreateUser});
 
   final AppCopy copy;
+  final VoidCallback onCreateUser;
 
   @override
   Widget build(BuildContext context) => Container(
@@ -2192,9 +2372,21 @@ final class _EmptyUsage extends StatelessWidget {
         ),
         const SizedBox(width: ViberSpacing.md),
         Expanded(
-          child: Text(
-            copy('usage.empty'),
-            style: Theme.of(context).textTheme.bodyMedium,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                copy('usage.empty'),
+                style: Theme.of(context).textTheme.bodyMedium,
+              ),
+              const SizedBox(height: ViberSpacing.sm),
+              OutlinedButton.icon(
+                key: const Key('usage-create-runtime-user'),
+                onPressed: onCreateUser,
+                icon: const Icon(Icons.person_add_alt_1, size: 16),
+                label: Text(copy('usage.empty.action')),
+              ),
+            ],
           ),
         ),
       ],

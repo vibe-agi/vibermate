@@ -292,3 +292,27 @@ func TestParseServerArgumentsRejectsRemovedClientAdmissionFlag(t *testing.T) {
 		t.Fatal("unsupported admission policy was accepted")
 	}
 }
+
+func TestParseRecoveryKeyArgumentsUsesTheServerDataDirectory(t *testing.T) {
+	t.Parallel()
+
+	root := filepath.Join(t.TempDir(), "server-data")
+	for _, arguments := range [][]string{{"--data-dir", root}, {"--data-dir=" + root}} {
+		resolved, err := parseRecoveryKeyArguments(arguments)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if resolved != root {
+			t.Fatalf("recovery data directory = %q, want %q", resolved, root)
+		}
+	}
+	for _, arguments := range [][]string{
+		{"--listen", "127.0.0.1:9666"},
+		{"--data-dir", root, "--data-dir", root},
+		{"--data-dir", "relative"},
+	} {
+		if _, err := parseRecoveryKeyArguments(arguments); err == nil {
+			t.Fatalf("parseRecoveryKeyArguments(%v) succeeded", arguments)
+		}
+	}
+}

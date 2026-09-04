@@ -22,6 +22,16 @@ There is no separate “team edition.” One Runtime already supports multiple
 Runtime Users, isolated login sessions, per-user captures, and a shared admin
 view. Use it alone or create an account for each person or device.
 
+| Who is using it | Sign-in experience |
+| --- | --- |
+| Local macOS App | No sign-in; the App controls its own local Runtime |
+| Server owner in a browser | Personal username and password; full workbench |
+| Team member in a browser | Personal username and password; own usage and password |
+| Claude or Codex from Terminal | The same personal username and password, entered once |
+
+ViberMate has no shared or default `admin/admin` credential. Login tokens are
+short-lived implementation details and are not something people need to copy.
+
 ## macOS App: first capture
 
 Install and open ViberMate:
@@ -43,8 +53,10 @@ Return to the App to inspect the new Capture. You can start without configuring
 a Traffic Policy; transparent capture preserves the agent's existing provider,
 account, and model.
 
-The App also exposes its management UI to a browser on the same Mac. Copy the
-address shown under **Settings → Team access → Web & client access**.
+You do not need an account for normal App use. To open this Runtime in a browser
+or share it, go to **Settings → Team access**, choose **Create owner**, then copy
+the Web workbench address. The first account is the owner; later accounts are
+members.
 
 ## Linux Server + Web
 
@@ -61,10 +73,18 @@ Start an encrypted Runtime on your network:
   --transport self_signed_tls
 ```
 
-The first JSON line contains the browser address, TLS fingerprint, and
-`adminAccessKeyPath`. Open the address, read the owner key from that file, and
-use it to enter the Web workbench. A browser will warn about the self-signed
-server certificate; check the displayed fingerprint before continuing.
+The first JSON line contains the browser address and TLS fingerprint. On the
+Server machine, print the one-use setup/recovery key:
+
+```sh
+./vibermated server recovery-key
+```
+
+Open the browser address, enter that key, and create your personal owner
+username and password. A browser will warn about the self-signed server
+certificate; check the displayed fingerprint before continuing. If you start
+the Server with `--data-dir`, pass that same absolute directory to the
+`recovery-key` command.
 
 For a shared production network, provide a certificate already trusted by your
 users instead:
@@ -77,8 +97,9 @@ users instead:
   --tls-key /absolute/path/private-key.pem
 ```
 
-In **Settings → Team access**, create a Runtime User for each person or device.
-On each developer machine, use the matching username and password once:
+In **Settings → Team access**, the owner creates an account for each person. The
+same account works in the browser and CLI. On each developer machine, sign in
+once:
 
 ```sh
 vibermate login --server 192.0.2.10:9666
@@ -86,8 +107,11 @@ vibermate run --server 192.0.2.10:9666 -- claude
 # or: vibermate run --server 192.0.2.10:9666 -- codex
 ```
 
-The owner key is for browser administration. Runtime User passwords are for
-the `vibermate` command; do not share the owner key with agent users.
+Each person can change their own password from the browser account menu. The
+owner can reset a member password. The local App can also reset its owner's
+password under **Settings → Team access**. For a headless Server, run
+`vibermated server recovery-key` locally and use **Forgot owner password?**;
+the recovery key rotates after use.
 
 ![ViberMate team insights](https://vibe-agi.github.io/images/vibermate/team-insights-2400.webp)
 

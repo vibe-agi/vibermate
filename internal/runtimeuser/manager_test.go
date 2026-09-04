@@ -142,6 +142,63 @@ func TestDisablingRuntimeUserRevokesEveryLoginSession(t *testing.T) {
 	}
 }
 
+func TestReplacingPasswordRevokesLoginSessionsAndChangesVerification(t *testing.T) {
+	t.Parallel()
+	clock := fixedClock{now: time.Date(2026, 8, 24, 10, 0, 0, 0, time.UTC)}
+	repository := newMemoryRepository()
+	manager, err := New(Options{
+		Repository: repository, Clock: &clock,
+		Random:          bytes.NewReader(bytes.Repeat([]byte{0x63}, 1024)),
+		SessionLifetime: 8 * time.Hour,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, err := manager.Create(context.Background(), CreateCommand{
+		Username: "alice", Password: []byte("old-test-password"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	machineID, _ := workspaceidentity.ParseMachineID(
+		base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x25}, 32)),
+	)
+	session, err := manager.Login(context.Background(), LoginCommand{
+		Username: "alice", Password: []byte("old-test-password"),
+		MachineID: machineID, DeviceName: "Test device",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if verified, err := manager.VerifyCredentials(
+		context.Background(), "alice", []byte("old-test-password"),
+	); err != nil || verified != created {
+		t.Fatalf("VerifyCredentials() = %#v, %v", verified, err)
+	}
+	clock.now = clock.now.Add(time.Minute)
+	updated, err := manager.ReplacePassword(
+		context.Background(), created.ID, []byte("new-test-password"),
+	)
+	if err != nil || !updated.UpdatedAt.Equal(clock.now) {
+		t.Fatalf("ReplacePassword() = %#v, %v", updated, err)
+	}
+	if _, err := manager.VerifyCredentials(
+		context.Background(), "alice", []byte("old-test-password"),
+	); !errors.Is(err, ErrInvalidCredentials) {
+		t.Fatalf("old password verification error = %v", err)
+	}
+	if _, err := manager.VerifyCredentials(
+		context.Background(), "alice", []byte("new-test-password"),
+	); err != nil {
+		t.Fatalf("new password verification error = %v", err)
+	}
+	if _, err := manager.Authenticate(
+		context.Background(), session.Token.Value(),
+	); !errors.Is(err, ErrInvalidSession) {
+		t.Fatalf("old session authentication error = %v", err)
+	}
+}
+
 type fixedClock struct{ now time.Time }
 
 func (clock fixedClock) Now() time.Time { return clock.now }
@@ -183,6 +240,14 @@ func (repository *memoryRepository) FindUserByUsername(
 	return repository.usersByID[id], true, nil
 }
 
+func (repository *memoryRepository) FindUserByID(
+	_ context.Context,
+	id UserID,
+) (UserRecord, bool, error) {
+	record, exists := repository.usersByID[id]
+	return record, exists, nil
+}
+
 func (repository *memoryRepository) ListUsers(
 	_ context.Context,
 ) ([]UserRecord, error) {
@@ -212,6 +277,28 @@ func (repository *memoryRepository) SetUserState(
 				session.RevokedAt = updatedAt
 				repository.sessionsByToken[digest] = session
 			}
+		}
+	}
+	return record, true, nil
+}
+
+func (repository *memoryRepository) ReplacePassword(
+	_ context.Context,
+	id UserID,
+	passwordHash string,
+	updatedAt time.Time,
+) (UserRecord, bool, error) {
+	record, exists := repository.usersByID[id]
+	if !exists {
+		return UserRecord{}, false, nil
+	}
+	record.PasswordHash = passwordHash
+	record.User.UpdatedAt = updatedAt
+	repository.usersByID[id] = record
+	for digest, session := range repository.sessionsByToken {
+		if session.UserID == id && session.RevokedAt.IsZero() {
+			session.RevokedAt = updatedAt
+			repository.sessionsByToken[digest] = session
 		}
 	}
 	return record, true, nil

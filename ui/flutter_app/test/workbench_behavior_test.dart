@@ -6,6 +6,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:vibermate_app/app/vibermate_app.dart';
 import 'package:vibermate_app/core/api/control_api.dart';
 import 'package:vibermate_app/core/api/control_models.dart';
+import 'package:vibermate_app/core/bootstrap/runtime_connection.dart';
 import 'package:vibermate_app/core/bootstrap/terminal_command.dart';
 import 'package:vibermate_app/core/design/viber_theme.dart';
 import 'package:vibermate_app/core/design/workbench_widgets.dart';
@@ -938,6 +939,102 @@ void main() {
     },
   );
 
+  testWidgets('Team access makes the first Server owner an explicit step', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(900, 700));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final api = PreviewControlApi(seedRuntimeUsers: false);
+    final controller = WorkbenchController(
+      api: api,
+      terminalCommands: PreviewTerminalCommandService(),
+      previewMode: false,
+      serverManagement: true,
+      terminalManagement: false,
+      runtimeTarget: 'server.local:9666',
+      closeRuntime: api.close,
+      initialPreferences: const WorkbenchPreferences(
+        section: WorkbenchSection.settings,
+      ),
+    );
+    addTearDown(controller.dispose);
+    await controller.initialize();
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: ViberTheme.light(),
+        home: WorkbenchShell(controller: controller),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const Key('settings-tab-users')));
+    await tester.pumpAndSettle();
+    expect(find.text('Create owner'), findsOneWidget);
+    expect(
+      find.textContaining('no default administrator password'),
+      findsOneWidget,
+    );
+
+    await tester.tap(find.byKey(const Key('runtime-user-add')));
+    await tester.pumpAndSettle();
+    expect(find.text('Create Server owner'), findsOneWidget);
+    expect(
+      find.textContaining('first account administers the Runtime'),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(
+        of: find.byKey(const Key('runtime-user-dialog')),
+        matching: find.text('Create owner'),
+      ),
+      findsOneWidget,
+    );
+    await tester.enterText(
+      find.byKey(const Key('runtime-user-username')),
+      'first-owner',
+    );
+    await tester.enterText(
+      find.byKey(const Key('runtime-user-password')),
+      'test-password',
+    );
+    expect(
+      tester
+          .widget<FilledButton>(find.byKey(const Key('runtime-user-create')))
+          .onPressed,
+      isNull,
+    );
+    await tester.enterText(
+      find.byKey(const Key('runtime-user-confirm-password')),
+      'test-password',
+    );
+    await tester.pump();
+    await tester.enterText(
+      find.byKey(const Key('runtime-user-username')),
+      'ab',
+    );
+    await tester.pump();
+    expect(
+      tester
+          .widget<FilledButton>(find.byKey(const Key('runtime-user-create')))
+          .onPressed,
+      isNull,
+    );
+    await tester.enterText(
+      find.byKey(const Key('runtime-user-username')),
+      'first-owner',
+    );
+    await tester.pump();
+    await tester.tap(find.byKey(const Key('runtime-user-create')));
+    await tester.pumpAndSettle();
+    expect(controller.runtimeUsers?.single.owner, isTrue);
+    expect(find.textContaining('Server owner'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+
+    controller.dispose();
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pump();
+  });
+
   testWidgets('390px Settings gives Runtime User management its own tab', (
     tester,
   ) async {
@@ -996,6 +1093,28 @@ void main() {
       find.byKey(const Key('runtime-user-row-user.preview.alice')),
       findsOneWidget,
     );
+    final resetOwner = find.byKey(
+      const Key('runtime-user-reset-user.preview.alice'),
+    );
+    expect(controller.webPrincipal, isNull);
+    expect(controller.runtimeUserMutating, isFalse);
+    expect(controller.runtimeUsers?.single.active, isTrue);
+    final userScroll = find.descendant(
+      of: find.byKey(const Key('runtime-users-settings-scroll')),
+      matching: find.byType(Scrollable),
+    );
+    await tester.scrollUntilVisible(
+      resetOwner,
+      -180,
+      scrollable: userScroll.first,
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(resetOwner);
+    await tester.pumpAndSettle();
+    expect(find.text('Reset owner password'), findsOneWidget);
+    expect(find.textContaining('trusted local App'), findsOneWidget);
+    await tester.tap(find.text('Cancel'));
+    await tester.pumpAndSettle();
     expect(find.text('18 turns'), findsNothing);
 
     final add = find.byKey(const Key('runtime-user-add'));
@@ -1029,6 +1148,56 @@ void main() {
       contains('bob'),
     );
     expect(find.text('bob'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+
+    controller.dispose();
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pump();
+  });
+
+  testWidgets('Web owner must verify or recover their own password', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(900, 700));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final api = PreviewControlApi();
+    final controller = WorkbenchController(
+      api: api,
+      terminalCommands: PreviewTerminalCommandService(),
+      previewMode: false,
+      serverManagement: true,
+      terminalManagement: false,
+      runtimeTarget: 'https://runtime.example.test:9666',
+      webPrincipal: const RuntimeWebPrincipal(
+        id: 'user.preview.alice',
+        username: 'alice',
+        role: RuntimeWebRole.owner,
+      ),
+      closeRuntime: api.close,
+      initialPreferences: const WorkbenchPreferences(
+        section: WorkbenchSection.settings,
+      ),
+    );
+    addTearDown(controller.dispose);
+    await controller.initialize();
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: ViberTheme.light(),
+        home: WorkbenchShell(controller: controller),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const Key('settings-tab-users')));
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const Key('runtime-user-row-user.preview.alice')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const Key('runtime-user-reset-user.preview.alice')),
+      findsNothing,
+    );
     expect(tester.takeException(), isNull);
 
     controller.dispose();
@@ -1136,6 +1305,51 @@ void main() {
     expect(updated.revision, 2);
     expect(await api.egressProfileRevision(created.id, 1), created);
     expect(find.textContaining('团队代理 2 · r2'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+
+    controller.dispose();
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pump();
+  });
+
+  testWidgets('empty team insights leads directly to owner setup', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(900, 700));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final api = PreviewControlApi(seedRuntimeUsers: false);
+    final controller = WorkbenchController(
+      api: api,
+      terminalCommands: PreviewTerminalCommandService(),
+      previewMode: false,
+      serverManagement: true,
+      terminalManagement: false,
+      runtimeTarget: 'server.local:9666',
+      closeRuntime: api.close,
+      initialPreferences: const WorkbenchPreferences(
+        section: WorkbenchSection.usage,
+      ),
+    );
+    addTearDown(controller.dispose);
+    await controller.initialize();
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: ViberTheme.light(),
+        home: WorkbenchShell(controller: controller),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final createUser = find.byKey(const Key('usage-create-runtime-user'));
+    expect(createUser, findsOneWidget);
+    await tester.ensureVisible(createUser);
+    await tester.pumpAndSettle();
+    await tester.tap(createUser);
+    await tester.pumpAndSettle();
+    expect(controller.section, WorkbenchSection.settings);
+    expect(controller.settingsTab, 1);
+    expect(find.byKey(const Key('server-runtime-access')), findsOneWidget);
+    expect(find.text('Create owner'), findsOneWidget);
     expect(tester.takeException(), isNull);
 
     controller.dispose();

@@ -11,11 +11,13 @@ final class PreviewControlApi implements ControlApi {
     int dashboardCaptureLimit = 50,
     ControlProblem? upstreamModelFailure,
     bool seedCaptures = true,
+    bool seedRuntimeUsers = true,
   }) : _dashboardCaptureLimit = dashboardCaptureLimit,
        _upstreamModelFailure = upstreamModelFailure {
     if (dashboardCaptureLimit < 1 || dashboardCaptureLimit > 199) {
       throw ArgumentError.value(dashboardCaptureLimit, 'dashboardCaptureLimit');
     }
+    if (!seedRuntimeUsers) _runtimeUsers.clear();
     _environments = _initialEnvironments();
     for (final environment in _environments) {
       _environmentHistory[_environmentRevisionKey(
@@ -228,6 +230,7 @@ final class PreviewControlApi implements ControlApi {
       id: 'user.preview.alice',
       username: 'alice',
       state: 'active',
+      role: 'owner',
       createdAt: DateTime.utc(2026, 8, 24, 9),
       updatedAt: DateTime.utc(2026, 8, 24, 9),
     ),
@@ -2723,10 +2726,12 @@ final class PreviewControlApi implements ControlApi {
       );
     }
     final now = DateTime.now().toUtc();
+    final role = _runtimeUsers.any((user) => user.owner) ? 'member' : 'owner';
     final created = RuntimeUser(
       id: 'user.preview.${_runtimeUsers.length + 1}',
       username: username,
       state: 'active',
+      role: role,
       createdAt: now,
       updatedAt: now,
     );
@@ -2755,6 +2760,39 @@ final class PreviewControlApi implements ControlApi {
     );
     _runtimeUsers[index] = disabled;
     return disabled;
+  }
+
+  @override
+  Future<RuntimeUser> replaceRuntimeUserPassword({
+    required String userId,
+    required String password,
+  }) async {
+    _requireOpen();
+    final index = _runtimeUsers.indexWhere((user) => user.id == userId);
+    if (index < 0 || password.length < 8) {
+      throw const ControlProblem(
+        status: 422,
+        reasonCode: 'invalid_runtime_user_password',
+        messageKey: 'error.invalid_runtime_user_password',
+      );
+    }
+    final current = _runtimeUsers[index];
+    if (!current.active) {
+      throw const ControlProblem(
+        status: 409,
+        reasonCode: 'runtime_user_disabled',
+        messageKey: 'error.runtime_user_disabled',
+      );
+    }
+    final updated = RuntimeUser(
+      id: current.id,
+      username: current.username,
+      state: current.state,
+      createdAt: current.createdAt,
+      updatedAt: DateTime.now().toUtc(),
+    );
+    _runtimeUsers[index] = updated;
+    return updated;
   }
 
   @override

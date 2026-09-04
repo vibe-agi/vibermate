@@ -87,6 +87,35 @@ func (repository *runtimeUserRepository) FindUserByUsername(
 	return record, true, nil
 }
 
+func (repository *runtimeUserRepository) FindUserByID(
+	ctx context.Context,
+	id runtimeuser.UserID,
+) (runtimeuser.UserRecord, bool, error) {
+	if !id.Valid() {
+		return runtimeuser.UserRecord{}, false, runtimeuser.ErrInvalidUser
+	}
+	operation, finish, err := repository.operations.begin(ctx)
+	if err != nil {
+		return runtimeuser.UserRecord{}, false, err
+	}
+	defer finish()
+	record, err := scanRuntimeUser(repository.database.QueryRowContext(
+		operation,
+		`SELECT user_id, username, password_hash, state,
+		        created_at_unix_ms, updated_at_unix_ms
+		   FROM runtime_users
+		  WHERE user_id = ?`,
+		string(id),
+	))
+	if errors.Is(err, sql.ErrNoRows) {
+		return runtimeuser.UserRecord{}, false, nil
+	}
+	if err != nil {
+		return runtimeuser.UserRecord{}, false, fmt.Errorf("find Runtime User: %w", err)
+	}
+	return record, true, nil
+}
+
 func (repository *runtimeUserRepository) ListUsers(
 	ctx context.Context,
 ) ([]runtimeuser.UserRecord, error) {
@@ -181,6 +210,72 @@ func (repository *runtimeUserRepository) SetUserState(
 	}
 	if err := transaction.Commit(); err != nil {
 		return runtimeuser.UserRecord{}, false, fmt.Errorf("commit Runtime User state update: %w", err)
+	}
+	return record, true, nil
+}
+
+func (repository *runtimeUserRepository) ReplacePassword(
+	ctx context.Context,
+	id runtimeuser.UserID,
+	passwordHash string,
+	updatedAt time.Time,
+) (runtimeuser.UserRecord, bool, error) {
+	if !id.Valid() || passwordHash == "" {
+		return runtimeuser.UserRecord{}, false, runtimeuser.ErrInvalidUser
+	}
+	operation, finish, err := repository.operations.begin(ctx)
+	if err != nil {
+		return runtimeuser.UserRecord{}, false, err
+	}
+	defer finish()
+	transaction, err := repository.database.BeginTx(operation, nil)
+	if err != nil {
+		return runtimeuser.UserRecord{}, false, fmt.Errorf("begin Runtime User password replacement: %w", err)
+	}
+	defer func() { _ = transaction.Rollback() }()
+	result, err := transaction.ExecContext(
+		operation,
+		`UPDATE runtime_users
+		    SET password_hash = ?, updated_at_unix_ms = ?
+		  WHERE user_id = ?`,
+		passwordHash,
+		toUnixMillis(updatedAt),
+		string(id),
+	)
+	if err != nil {
+		return runtimeuser.UserRecord{}, false, fmt.Errorf("replace Runtime User password: %w", err)
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return runtimeuser.UserRecord{}, false, fmt.Errorf("read Runtime User password replacement: %w", err)
+	}
+	if affected == 0 {
+		return runtimeuser.UserRecord{}, false, nil
+	}
+	if _, err := transaction.ExecContext(
+		operation,
+		`UPDATE runtime_user_login_sessions
+		    SET revoked_at_unix_ms = COALESCE(revoked_at_unix_ms, ?)
+		  WHERE user_id = ?`,
+		toUnixMillis(updatedAt),
+		string(id),
+	); err != nil {
+		return runtimeuser.UserRecord{}, false,
+			fmt.Errorf("revoke Runtime User sessions after password replacement: %w", err)
+	}
+	record, err := scanRuntimeUser(transaction.QueryRowContext(
+		operation,
+		`SELECT user_id, username, password_hash, state,
+		        created_at_unix_ms, updated_at_unix_ms
+		   FROM runtime_users
+		  WHERE user_id = ?`,
+		string(id),
+	))
+	if err != nil {
+		return runtimeuser.UserRecord{}, false, fmt.Errorf("read Runtime User after password replacement: %w", err)
+	}
+	if err := transaction.Commit(); err != nil {
+		return runtimeuser.UserRecord{}, false, fmt.Errorf("commit Runtime User password replacement: %w", err)
 	}
 	return record, true, nil
 }

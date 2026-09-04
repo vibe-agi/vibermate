@@ -33,6 +33,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/runlauncher"
 	"github.com/vibe-agi/vibermate/internal/runtimeusage"
 	"github.com/vibe-agi/vibermate/internal/runtimeuser"
+	"github.com/vibe-agi/vibermate/internal/serveradmin"
 	"github.com/vibe-agi/vibermate/internal/serverconnection"
 	"github.com/vibe-agi/vibermate/internal/servercontrol"
 	"github.com/vibe-agi/vibermate/internal/serverhost"
@@ -191,7 +192,7 @@ func TestServerHostAuthenticatesServerCreatedRuntimeUserOverExplicitHTTP(t *test
 		// Login Session ID and the authenticated device label frozen at login.
 		t.Fatalf("Capture Run attribution = %#v", view)
 	}
-	adminKey, err := os.ReadFile(host.Status().AdminAccessKeyPath)
+	adminKey, err := os.ReadFile(host.Status().RecoveryKeyPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -302,7 +303,7 @@ func TestServerAdminCreatesRuntimeUserWithoutExposingPasswordMaterial(t *testing
 	host := startServer(t, root)
 	defer shutdownServer(t, host)
 	status := host.Status()
-	keyPayload, err := os.ReadFile(status.AdminAccessKeyPath)
+	keyPayload, err := os.ReadFile(status.RecoveryKeyPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -352,8 +353,48 @@ func TestServerAdminCreatesRuntimeUserWithoutExposingPasswordMaterial(t *testing
 	if err := json.Unmarshal(payload, &created); err != nil {
 		t.Fatal(err)
 	}
-	if created.Username != "alice" || created.State != string(runtimeuser.StateActive) {
+	if created.Username != "alice" || created.State != string(runtimeuser.StateActive) ||
+		created.Role != string(serveradmin.RoleOwner) {
 		t.Fatalf("Runtime User create = %#v", created)
+	}
+	staleRequest, err := http.NewRequest(
+		http.MethodGet,
+		"https://"+status.ListenAddress+servercontrol.RuntimeUsersPath,
+		nil,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	staleRequest.Header.Set("Authorization", "Bearer "+admin.ReadToken)
+	stale, err := client.Do(staleRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stale.Body.Close()
+	if stale.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("pre-owner management session survived with status %d", stale.StatusCode)
+	}
+	ownerLogin := postJSON(
+		t,
+		client,
+		"https://"+status.ListenAddress+servercontrol.WebSessionPath,
+		"",
+		servercontrol.WebLogin{
+			Schema: servercontrol.WebLoginSchema, Username: "alice",
+			Password: "test-admin-created-password",
+		},
+	)
+	defer ownerLogin.Body.Close()
+	if ownerLogin.StatusCode != http.StatusCreated {
+		body, _ := io.ReadAll(ownerLogin.Body)
+		t.Fatalf("owner Web login status=%d body=%s", ownerLogin.StatusCode, body)
+	}
+	var ownerSession servercontrol.WebSession
+	if err := json.NewDecoder(ownerLogin.Body).Decode(&ownerSession); err != nil {
+		t.Fatal(err)
+	}
+	if ownerSession.Principal.Role != string(serveradmin.RoleOwner) {
+		t.Fatalf("owner Web session = %#v", ownerSession)
 	}
 	listRequest, err := http.NewRequest(
 		http.MethodGet,
@@ -363,7 +404,7 @@ func TestServerAdminCreatesRuntimeUserWithoutExposingPasswordMaterial(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	listRequest.Header.Set("Authorization", "Bearer "+admin.ReadToken)
+	listRequest.Header.Set("Authorization", "Bearer "+ownerSession.ReadToken)
 	list, err := client.Do(listRequest)
 	if err != nil {
 		t.Fatal(err)
@@ -382,7 +423,7 @@ func TestServerAdminCreatesRuntimeUserWithoutExposingPasswordMaterial(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	usageRequest.Header.Set("Authorization", "Bearer "+admin.ReadToken)
+	usageRequest.Header.Set("Authorization", "Bearer "+ownerSession.ReadToken)
 	usageResponse, err := client.Do(usageRequest)
 	if err != nil {
 		t.Fatal(err)
@@ -401,12 +442,34 @@ func TestServerAdminCreatesRuntimeUserWithoutExposingPasswordMaterial(t *testing
 		usage.Users[0].AgentAPICalls != 0 {
 		t.Fatalf("Runtime User usage = %#v", usage)
 	}
+	createMember := postJSON(
+		t,
+		client,
+		"https://"+status.ListenAddress+servercontrol.RuntimeUsersPath,
+		ownerSession.WriteToken,
+		servercontrol.RuntimeUserCreate{
+			Schema:   servercontrol.RuntimeUserCreateSchema,
+			Username: "bob", Password: "test-disabled-user-password",
+		},
+	)
+	defer createMember.Body.Close()
+	if createMember.StatusCode != http.StatusCreated {
+		body, _ := io.ReadAll(createMember.Body)
+		t.Fatalf("member create status=%d body=%s", createMember.StatusCode, body)
+	}
+	var removable servercontrol.RuntimeUserAdminView
+	if err := json.NewDecoder(createMember.Body).Decode(&removable); err != nil {
+		t.Fatal(err)
+	}
+	if removable.Role != string(serveradmin.RoleMember) {
+		t.Fatalf("second Runtime User role = %q", removable.Role)
+	}
 	disable := sendJSON(
 		t,
 		client,
 		http.MethodPatch,
-		"https://"+status.ListenAddress+servercontrol.RuntimeUsersPath+"/"+url.PathEscape(created.ID),
-		admin.WriteToken,
+		"https://"+status.ListenAddress+servercontrol.RuntimeUsersPath+"/"+url.PathEscape(removable.ID),
+		ownerSession.WriteToken,
 		servercontrol.RuntimeUserUpdate{
 			Schema: servercontrol.RuntimeUserUpdateSchema,
 			State:  string(runtimeuser.StateDisabled),
@@ -421,7 +484,7 @@ func TestServerAdminCreatesRuntimeUserWithoutExposingPasswordMaterial(t *testing
 	if err := json.NewDecoder(disable.Body).Decode(&disabled); err != nil {
 		t.Fatal(err)
 	}
-	if disabled.ID != created.ID || disabled.State != string(runtimeuser.StateDisabled) {
+	if disabled.ID != removable.ID || disabled.State != string(runtimeuser.StateDisabled) {
 		t.Fatalf("Runtime User disable = %#v", disabled)
 	}
 	denied := postJSON(
@@ -430,8 +493,8 @@ func TestServerAdminCreatesRuntimeUserWithoutExposingPasswordMaterial(t *testing
 		"https://"+status.ListenAddress+servercontrol.RuntimeUserSessionPath,
 		"",
 		servercontrol.RuntimeUserLogin{
-			Schema: servercontrol.RuntimeUserLoginSchema, Username: "alice",
-			Password:   "test-admin-created-password",
+			Schema: servercontrol.RuntimeUserLoginSchema, Username: "bob",
+			Password:   "test-disabled-user-password",
 			MachineID:  "uRmbW_GvQ7LZ9poYHh0aC8W3vQoJ0lZB7iK2s6xQfEk",
 			DeviceName: "disabled-user-test",
 		},
@@ -441,13 +504,102 @@ func TestServerAdminCreatesRuntimeUserWithoutExposingPasswordMaterial(t *testing
 		body, _ := io.ReadAll(denied.Body)
 		t.Fatalf("disabled Runtime User login status=%d body=%s", denied.StatusCode, body)
 	}
+	remoteOwnerReset := sendJSON(
+		t,
+		client,
+		http.MethodPatch,
+		"https://"+status.ListenAddress+servercontrol.RuntimeUsersPath+"/"+
+			url.PathEscape(created.ID)+"/password",
+		ownerSession.WriteToken,
+		servercontrol.RuntimeUserPassword{
+			Schema:   servercontrol.RuntimeUserPasswordSchema,
+			Password: "test-remote-owner-password",
+		},
+	)
+	defer remoteOwnerReset.Body.Close()
+	if remoteOwnerReset.StatusCode != http.StatusConflict {
+		body, _ := io.ReadAll(remoteOwnerReset.Body)
+		t.Fatalf("remote owner reset status=%d body=%s", remoteOwnerReset.StatusCode, body)
+	}
+	localPassword, err := json.Marshal(servercontrol.RuntimeUserPassword{
+		Schema:   servercontrol.RuntimeUserPasswordSchema,
+		Password: "test-local-owner-password",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	localRequest := httptest.NewRequest(
+		http.MethodPatch,
+		servercontrol.RuntimeUsersPath+"/"+url.PathEscape(created.ID)+"/password",
+		bytes.NewReader(localPassword),
+	)
+	localRequest.Header.Set("Content-Type", "application/json")
+	localResponse := httptest.NewRecorder()
+	host.ManagementHandler().ServeHTTP(localResponse, localRequest)
+	if localResponse.Code != http.StatusOK {
+		t.Fatalf("local owner reset status=%d body=%s", localResponse.Code, localResponse.Body.String())
+	}
+	staleOwnerRequest, err := http.NewRequest(
+		http.MethodGet,
+		"https://"+status.ListenAddress+servercontrol.RuntimeUsersPath,
+		nil,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	staleOwnerRequest.Header.Set("Authorization", "Bearer "+ownerSession.ReadToken)
+	staleOwner, err := client.Do(staleOwnerRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer staleOwner.Body.Close()
+	if staleOwner.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("owner Web session survived password reset with status %d", staleOwner.StatusCode)
+	}
+	oldPasswordLogin := postJSON(
+		t,
+		client,
+		"https://"+status.ListenAddress+servercontrol.WebSessionPath,
+		"",
+		servercontrol.WebLogin{
+			Schema: servercontrol.WebLoginSchema, Username: "alice",
+			Password: "test-admin-created-password",
+		},
+	)
+	defer oldPasswordLogin.Body.Close()
+	if oldPasswordLogin.StatusCode != http.StatusUnauthorized {
+		body, _ := io.ReadAll(oldPasswordLogin.Body)
+		t.Fatalf("old owner password login status=%d body=%s", oldPasswordLogin.StatusCode, body)
+	}
+	newPasswordLogin := postJSON(
+		t,
+		client,
+		"https://"+status.ListenAddress+servercontrol.WebSessionPath,
+		"",
+		servercontrol.WebLogin{
+			Schema: servercontrol.WebLoginSchema, Username: "alice",
+			Password: "test-local-owner-password",
+		},
+	)
+	defer newPasswordLogin.Body.Close()
+	if newPasswordLogin.StatusCode != http.StatusCreated {
+		body, _ := io.ReadAll(newPasswordLogin.Body)
+		t.Fatalf("new owner password login status=%d body=%s", newPasswordLogin.StatusCode, body)
+	}
+	var replacementSession servercontrol.WebSession
+	if err := json.NewDecoder(newPasswordLogin.Body).Decode(&replacementSession); err != nil {
+		t.Fatal(err)
+	}
+	if replacementSession.Principal.Role != string(serveradmin.RoleOwner) {
+		t.Fatalf("replacement owner Web session = %#v", replacementSession)
+	}
 }
 
 func TestServerAdminReadsRuntimeUserAccessContractOverTLS(t *testing.T) {
 	root := t.TempDir()
 	host := startServer(t, root)
 	status := host.Status()
-	keyPayload, err := os.ReadFile(status.AdminAccessKeyPath)
+	keyPayload, err := os.ReadFile(status.RecoveryKeyPath)
 	if err != nil {
 		shutdownServer(t, host)
 		t.Fatal(err)
@@ -862,7 +1014,7 @@ func TestRuntimeUserCustomClaudeHTTPOriginProducesExchangeAndUsage(t *testing.T)
 		t.Fatalf("Capture activities = %#v", page.Items)
 	}
 
-	adminKey, err := os.ReadFile(host.Status().AdminAccessKeyPath)
+	adminKey, err := os.ReadFile(host.Status().RecoveryKeyPath)
 	if err != nil {
 		t.Fatal(err)
 	}

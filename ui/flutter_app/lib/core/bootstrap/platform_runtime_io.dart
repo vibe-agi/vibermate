@@ -12,7 +12,7 @@ String platformRuntimeTargetLabel() => 'This Mac';
 bool platformRuntimeUsesPlaintext() => false;
 
 Future<RuntimeConnection> connectPlatformRuntime({
-  String? accessKey,
+  RuntimeLoginAttempt? login,
   String? daemonPath,
 }) async {
   final DesktopRuntime runtime;

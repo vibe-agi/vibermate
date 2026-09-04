@@ -73,7 +73,7 @@ void main() {
             previewMode: false,
             preferChinese: scenario.chinese,
             preferencesStore: MemoryWorkbenchPreferencesStore(),
-            runtimeConnector: ({String? accessKey}) async {
+            runtimeConnector: ({RuntimeLoginAttempt? login}) async {
               throw const RuntimeConnectionException(
                 'desktop_sidecar_unavailable',
               );
@@ -105,7 +105,7 @@ void main() {
           previewMode: false,
           preferChinese: scenario.chinese,
           preferencesStore: MemoryWorkbenchPreferencesStore(),
-          runtimeConnector: ({String? accessKey}) async {
+          runtimeConnector: ({RuntimeLoginAttempt? login}) async {
             throw const RuntimeConnectionException('root_reset_failed');
           },
         ),
@@ -114,6 +114,48 @@ void main() {
 
       expect(find.textContaining(scenario.text), findsOneWidget);
       expect(find.textContaining('root_reset_failed'), findsNothing);
+      expect(find.byIcon(Icons.refresh), findsOneWidget);
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox.shrink());
+      await tester.pump();
+    }
+  });
+
+  testWidgets('Keychain startup failure has bounded bilingual recovery steps', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(390, 760));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    for (final scenario in const [
+      (
+        chinese: false,
+        action: 'Keychain Access',
+        scope: 'io.vibermate.desktop',
+        retained: 'Captures stay',
+      ),
+      (
+        chinese: true,
+        action: '钥匙串访问',
+        scope: 'io.vibermate.desktop',
+        retained: 'Capture 会保留',
+      ),
+    ]) {
+      await tester.pumpWidget(
+        ViberMateApp(
+          previewMode: false,
+          preferChinese: scenario.chinese,
+          preferencesStore: MemoryWorkbenchPreferencesStore(),
+          runtimeConnector: ({RuntimeLoginAttempt? login}) async {
+            throw const RuntimeConnectionException('secret_store_unavailable');
+          },
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.textContaining(scenario.action), findsOneWidget);
+      expect(find.textContaining(scenario.scope), findsOneWidget);
+      expect(find.textContaining(scenario.retained), findsOneWidget);
+      expect(find.textContaining('secret_store_unavailable'), findsNothing);
       expect(find.byIcon(Icons.refresh), findsOneWidget);
       expect(tester.takeException(), isNull);
       await tester.pumpWidget(const SizedBox.shrink());

@@ -7,6 +7,7 @@ import '../../core/design/viber_theme.dart';
 import '../../core/design/vibermate_mark.dart';
 import '../../core/design/workbench_widgets.dart';
 import '../../core/i18n/app_copy.dart';
+import '../account/web_account_controls.dart';
 import 'captures_view.dart';
 import 'code_library_view.dart';
 import 'endpoints_view.dart';
@@ -191,6 +192,15 @@ final class _TitleBar extends StatelessWidget {
                 ),
               ],
               const Spacer(),
+              if (controller.webPrincipal case final principal?) ...[
+                WebAccountButton(
+                  principal: principal,
+                  copy: copy,
+                  onChangePassword: controller.changeWebPassword,
+                  onSignOut: controller.onSignOut,
+                ),
+                const SizedBox(width: ViberSpacing.sm),
+              ],
               if (controller.previewMode) ...[
                 if (compact)
                   Tooltip(

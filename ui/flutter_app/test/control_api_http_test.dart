@@ -741,6 +741,22 @@ void main() {
           }),
         );
       } else if (request.method == 'PATCH' &&
+          request.uri.path ==
+              '/api/v1/server/runtime-users/user.test/password') {
+        final body = Map<String, Object?>.from(
+          jsonDecode(await utf8.decoder.bind(request).join()) as Map,
+        );
+        bodies.add(body);
+        request.response.write(
+          jsonEncode({
+            'id': 'user.test',
+            'username': 'alice',
+            'state': 'active',
+            'createdAt': '2026-08-24T12:00:00.000Z',
+            'updatedAt': '2026-08-24T13:15:00.000Z',
+          }),
+        );
+      } else if (request.method == 'PATCH' &&
           request.uri.path == '/api/v1/server/runtime-users/user.test') {
         final body = Map<String, Object?>.from(
           jsonDecode(await utf8.decoder.bind(request).join()) as Map,
@@ -799,6 +815,11 @@ void main() {
       password: 'test-password',
     );
     expect(created.username, 'bob');
+    final passwordChanged = await api.replaceRuntimeUserPassword(
+      userId: users.single.id,
+      password: 'replacement-password',
+    );
+    expect(passwordChanged.active, isTrue);
     final disabled = await api.disableRuntimeUser(users.single.id);
     expect(disabled.active, isFalse);
     expect(bodies, [
@@ -807,6 +828,10 @@ void main() {
         'username': 'bob',
         'password': 'test-password',
       },
+      {
+        'schema': 'vibermate-runtime-user-password-v1',
+        'password': 'replacement-password',
+      },
       {'schema': 'vibermate-runtime-user-update-v1', 'state': 'disabled'},
     ]);
     expect(requests.map((request) => request.path), [
@@ -814,6 +839,7 @@ void main() {
       '/api/v1/server/runtime-users',
       '/api/v1/server/runtime-users/usage',
       '/api/v1/server/runtime-users',
+      '/api/v1/server/runtime-users/user.test/password',
       '/api/v1/server/runtime-users/user.test',
     ]);
     expect(requests[2].queryParameters, {
@@ -1785,6 +1811,49 @@ void main() {
     );
     expect(requests, hasLength(requestCount));
   });
+
+  test(
+    'non-renewable Web Session reports server revocation exactly once',
+    () async {
+      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      addTearDown(() => server.close(force: true));
+      server.listen((request) async {
+        await request.drain<void>();
+        request.response
+          ..statusCode = HttpStatus.unauthorized
+          ..headers.contentType = ContentType.json
+          ..write('{}');
+        await request.response.close();
+      });
+      var invalidations = 0;
+      final api = await HttpControlApi.connect(
+        DesktopSession(
+          baseUrl: Uri.parse('http://127.0.0.1:${server.port}'),
+          readToken: List.filled(43, 'R').join(),
+          writeToken: List.filled(43, 'W').join(),
+          instanceId: 'instance-test',
+          expiresAt: DateTime.now().toUtc().add(const Duration(hours: 1)),
+        ),
+        inspectSession: false,
+        onSessionInvalidated: () => invalidations += 1,
+      );
+      addTearDown(api.close);
+
+      for (var attempt = 0; attempt < 2; attempt += 1) {
+        await expectLater(
+          api.runtimeUsers(),
+          throwsA(
+            isA<ControlProblem>().having(
+              (problem) => problem.status,
+              'status',
+              HttpStatus.unauthorized,
+            ),
+          ),
+        );
+      }
+      expect(invalidations, 1);
+    },
+  );
 }
 
 Map<String, Object?> _captureAssignmentJson({required int revision}) => {

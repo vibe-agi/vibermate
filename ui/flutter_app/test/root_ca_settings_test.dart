@@ -321,7 +321,7 @@ void main() {
             language: AppLanguage.simplifiedChinese,
           ).encode(),
         ),
-        runtimeConnector: ({String? accessKey}) async {
+        runtimeConnector: ({RuntimeLoginAttempt? login}) async {
           connections += 1;
           final generation = connections;
           final api = PreviewControlApi(seedCaptures: false);

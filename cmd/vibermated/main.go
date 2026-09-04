@@ -15,12 +15,17 @@ import (
 
 	"github.com/vibe-agi/vibermate/internal/desktopdaemon"
 	"github.com/vibe-agi/vibermate/internal/hostsecret"
+	"github.com/vibe-agi/vibermate/internal/serveradmin"
 	"github.com/vibe-agi/vibermate/internal/serverdaemon"
 	"github.com/vibe-agi/vibermate/internal/serverhost"
 )
 
 func main() {
 	if len(os.Args) > 1 && os.Args[1] == "server" {
+		if len(os.Args) > 2 && os.Args[2] == "recovery-key" {
+			runServerRecoveryKey(os.Args[3:])
+			return
+		}
 		runServer(os.Args[2:])
 		return
 	}
@@ -79,6 +84,53 @@ func main() {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
+}
+
+func runServerRecoveryKey(arguments []string) {
+	dataDirectory, err := parseRecoveryKeyArguments(arguments)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(2)
+	}
+	key, err := serveradmin.ReadRecoveryKey(filepath.Join(dataDirectory, "server-admin"))
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "Runtime Server recovery key is unavailable; start the Server once first")
+		os.Exit(1)
+	}
+	fmt.Fprintln(os.Stdout, key)
+}
+
+func parseRecoveryKeyArguments(arguments []string) (string, error) {
+	var dataDirectory string
+	for index := 0; index < len(arguments); index++ {
+		name, value, inline := strings.Cut(arguments[index], "=")
+		if name != "--data-dir" || dataDirectory != "" {
+			return "", errors.New("vibermated server recovery-key accepts only one --data-dir")
+		}
+		if !inline {
+			index++
+			if index >= len(arguments) {
+				return "", errors.New("--data-dir requires a value")
+			}
+			value = arguments[index]
+		}
+		dataDirectory = value
+	}
+	if dataDirectory == "" {
+		return defaultServerDataDirectory()
+	}
+	if !filepath.IsAbs(dataDirectory) || filepath.Clean(dataDirectory) != dataDirectory {
+		return "", errors.New("Runtime Server data directory is invalid")
+	}
+	return dataDirectory, nil
+}
+
+func defaultServerDataDirectory() (string, error) {
+	root, err := os.UserConfigDir()
+	if err != nil || root == "" {
+		return "", errors.New("default Runtime Server data directory is unavailable")
+	}
+	return filepath.Join(root, "io.vibermate.server"), nil
 }
 
 func packagedManagementUIRoot(executable string) (string, error) {
@@ -224,11 +276,11 @@ func parseServerArguments(arguments []string) (serverCommandConfig, error) {
 		}
 	}
 	if config.dataDirectory == "" {
-		root, err := os.UserConfigDir()
-		if err != nil || root == "" {
-			return serverCommandConfig{}, errors.New("default Runtime Server data directory is unavailable")
+		var defaultErr error
+		config.dataDirectory, defaultErr = defaultServerDataDirectory()
+		if defaultErr != nil {
+			return serverCommandConfig{}, defaultErr
 		}
-		config.dataDirectory = filepath.Join(root, "io.vibermate.server")
 	}
 	if !filepath.IsAbs(config.dataDirectory) ||
 		filepath.Clean(config.dataDirectory) != config.dataDirectory ||

@@ -391,7 +391,7 @@ void main() {
         expect(replacedRoot.trustDecision, 'untrusted');
       } finally {
         await runtime?.close();
-        if (await root.exists()) await root.delete(recursive: true);
+        await _deleteTemporaryDirectory(root);
       }
     },
     skip: daemonPath == null
@@ -622,7 +622,7 @@ void main() {
         fail('$phase failed: $error\n$stackTrace');
       } finally {
         await runtime?.close();
-        if (await root.exists()) await root.delete(recursive: true);
+        await _deleteTemporaryDirectory(root);
       }
     },
     skip: daemonPath == null
@@ -706,7 +706,7 @@ void main() {
         );
       } finally {
         await runtime?.close();
-        if (await home.exists()) await home.delete(recursive: true);
+        await _deleteTemporaryDirectory(home);
       }
     },
     skip: daemonPath == null || commandPath == null
@@ -740,7 +740,7 @@ void main() {
         expect(runtime.isClosed, isTrue);
       } finally {
         await runtime?.close();
-        if (await root.exists()) await root.delete(recursive: true);
+        await _deleteTemporaryDirectory(root);
       }
     },
     skip: daemonPath == null
@@ -748,6 +748,16 @@ void main() {
         : false,
     timeout: const Timeout(Duration(seconds: 30)),
   );
+}
+
+Future<void> _deleteTemporaryDirectory(Directory directory) async {
+  try {
+    await directory.delete(recursive: true);
+  } on FileSystemException catch (error) {
+    // A daemon shutdown and a test timeout can race while unwinding. Cleanup
+    // stays idempotent so it never hides the actual failed assertion.
+    if (error.osError?.errorCode != 2) rethrow;
+  }
 }
 
 String _protocolPath(String protocol) => switch (protocol) {
