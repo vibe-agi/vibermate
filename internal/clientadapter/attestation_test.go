@@ -15,7 +15,12 @@ func TestCatalogAcceptsOnlyAnExactCompanionAttestation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	evidence, ok := catalog.ExpectedEvidence(release.ID, release.Version)
+	evidence, ok := catalog.ExpectedEvidenceForPlatform(
+		release.ID,
+		release.Version,
+		release.OperatingSystem,
+		release.Architecture,
+	)
 	if !ok {
 		t.Fatal("expected evidence is missing")
 	}
