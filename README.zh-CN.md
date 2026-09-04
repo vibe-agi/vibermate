@@ -8,10 +8,9 @@ ViberMate 是一款在 macOS 本地运行的 AI 编程代理管理工具。通�
 ViberMate 启动代理后，你可以查看它的请求、选择请求去向、应用简单的
 JavaScript 规则，并在本机保留可审计的运行记录。
 
-> **发布状态：**源代码已经公开，但第一个经过 Developer ID 签名和 Apple
-> 公证的安装包尚未发布。请先查看
-> [Releases 页面](https://github.com/vibe-agi/vibermate/releases)。在出现正式版本之前，
-> 从本仓库自行构建的 App 都只是开发预览版，请不要转发给其他人安装。
+> **发布状态：**经过 Developer ID 签名和 Apple 公证的通用 macOS App
+> [ViberMate 0.1.0](https://github.com/vibe-agi/vibermate/releases/tag/v0.1.0)
+> 已经可以安装。这是早期 0.x 预览版，不代表已经达到 GA 稳定性承诺。
 
 ## 它能做什么？
 
@@ -29,15 +28,24 @@ ViberMate 不是 AI 服务商，也不会替代 Claude Code 或 Codex。使用�
 
 ### 1. 安装 ViberMate
 
-签名安装包仍在准备中。第一个公开版本发布后，计划使用下面的 Homebrew
-命令安装：
+ViberMate 需要 macOS 14 或更高版本。使用 Homebrew 安装已签名的 App：
 
 ```sh
 brew install --cask vibe-agi/tap/vibermate
 ```
 
-在 Releases 页面和本节明确公布签名版本之前，这条命令可能无法使用。
-开发者目前可以[从源代码构建](#从源代码构建)。
+安装完成后，从“应用程序”中打开 ViberMate。你也可以直接下载
+[`ViberMate_0.1.0_universal.dmg`](https://github.com/vibe-agi/vibermate/releases/download/v0.1.0/ViberMate_0.1.0_universal.dmg)，
+再把 App 拖入“应用程序”。
+
+以后升级或卸载 App，可以执行：
+
+```sh
+brew upgrade --cask vibermate
+brew uninstall --cask vibermate
+```
+
+卸载 App 时会保留 ViberMate 的设置和运行数据。
 
 ### 2. 安装终端命令
 
@@ -143,8 +151,9 @@ make check-flutter-macos
 - 内置语义解析覆盖受支持 Claude 和 Codex 路径使用的 Anthropic Messages
   与 OpenAI Responses 流量。
 - 目前不承诺公网 Server 加固、自动更新、插件，以及任意客户端的广泛兼容。
-- 源代码编译通过，不等于已经获得 Developer ID 签名、Apple 公证和
-  Gatekeeper 认可。
+- Homebrew 与 GitHub Release 提供的安装包已经过 Developer ID 签名、Apple
+  公证和 Gatekeeper 验证。本地从源代码构建的 App 仅使用 ad-hoc 签名，
+  不是同一个分发产物。
 
 发现疑似漏洞时，请通过[私密安全渠道](SECURITY.md)报告。
 ViberMate 使用 [Apache License 2.0](LICENSE)。
