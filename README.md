@@ -8,10 +8,9 @@ ViberMate is a local macOS app for people who use AI coding agents. Start an
 agent through ViberMate and you can see its requests, choose where they go,
 apply small JavaScript rules, and keep an auditable local record.
 
-> **Release status:** the source is public, but the first Developer ID-signed
-> and notarized download has not been published yet. Until it appears on the
-> [Releases page](https://github.com/vibe-agi/vibermate/releases), builds from
-> this repository are developer previews and should not be redistributed.
+> **Release status:** [ViberMate 0.1.0](https://github.com/vibe-agi/vibermate/releases/tag/v0.1.0)
+> is available as a Developer ID-signed, Apple-notarized universal macOS App.
+> It is an early 0.x preview, not a general-availability stability promise.
 
 ## What can I do with it?
 
@@ -32,16 +31,24 @@ agent CLI must already be installed and able to sign in to its provider.
 
 ### 1. Install ViberMate
 
-A signed installer is still being prepared. After the first public release,
-the intended Homebrew command is:
+ViberMate requires macOS 14 or later. Install the signed App with Homebrew:
 
 ```sh
 brew install --cask vibe-agi/tap/vibermate
 ```
 
-Do not expect that command to work until the Releases page and this section
-announce a signed version. Developers can [build from source](#build-from-source)
-in the meantime.
+Then open ViberMate from Applications. You can also download
+[`ViberMate_0.1.0_universal.dmg`](https://github.com/vibe-agi/vibermate/releases/download/v0.1.0/ViberMate_0.1.0_universal.dmg)
+and drag the App into Applications.
+
+To upgrade or remove the App later:
+
+```sh
+brew upgrade --cask vibermate
+brew uninstall --cask vibermate
+```
+
+Uninstalling preserves your ViberMate settings and runtime data.
 
 ### 2. Add the Terminal command
 
@@ -155,8 +162,9 @@ and the most important design decisions live in [docs/adr](docs/adr).
   traffic used by the supported Claude and Codex paths.
 - A hardened public-Internet Server, automatic updates, plugins, and broad
   arbitrary-client compatibility are not claimed yet.
-- A passing source build is not the same as a Developer ID-signed, notarized,
-  Gatekeeper-approved release.
+- The Homebrew and GitHub Release build is Developer ID-signed, notarized, and
+  Gatekeeper-approved. A local source build is ad-hoc signed and is not the
+  same distribution artifact.
 
 Report suspected vulnerabilities through the [private security channel](SECURITY.md).
 ViberMate is licensed under the [Apache License 2.0](LICENSE).
