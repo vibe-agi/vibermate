@@ -41,14 +41,9 @@ if [[ -n "$(git -C "${repository_root}" status --porcelain=v1 --untracked-files=
 fi
 (
   cd "${flutter_directory}"
-  flutter build web \
-    --release \
-    --build-name=0.1.2 \
-    --build-number=3
-  flutter build macos \
-    --release \
-    --build-name=0.1.2 \
-    --build-number=3
+  # Use pubspec.yaml for both products, just like local builds.
+  flutter build web --release
+  flutter build macos --release
 )
 
 source_app="${flutter_directory}/build/macos/Build/Products/Release/ViberMate.app"

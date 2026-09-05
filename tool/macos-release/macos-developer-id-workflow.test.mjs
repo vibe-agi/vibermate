@@ -53,6 +53,19 @@ test("workflow uses the exact current distribution filename", () => {
   );
 });
 
+test("distribution builds use the pubspec version admitted by release policy", async () => {
+  const pubspec = await readFile(
+    resolve(repositoryDirectory, "ui/flutter_app/pubspec.yaml"),
+    "utf8",
+  );
+  const version = pubspec.match(/^version: (\d+\.\d+\.\d+)\+(\d+)$/mu);
+  assert.deepEqual(version?.slice(1), [
+    macOSDistributionPolicy.appVersion,
+    macOSDistributionPolicy.appBuildNumber,
+  ]);
+  assert.doesNotMatch(distributionBuilder, /--build-(?:name|number)/u);
+});
+
 test("unsigned candidate build uses only the pinned Flutter desktop toolchain", () => {
   assert.ok(unsignedStart > 0 && evidenceStart > unsignedStart);
   assert.match(unsignedJob, /candidate\/ui\/flutter_app\/tool\/install_ci_flutter\.sh/u);
