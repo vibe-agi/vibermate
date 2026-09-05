@@ -39,7 +39,7 @@ ViberMate 不提供共享或默认的 `admin/admin`。短期登录 token 只是�
 brew install --cask vibe-agi/tap/vibermate
 ```
 
-进入 **设置 → 常规 → 终端命令**，点击 **设置终端命令**。然后在项目目录执行：
+进入 **设置 → 接入与启动 → 终端命令**，点击 **设置终端命令**。然后在项目目录执行：
 
 ```sh
 vibermate run -- claude
@@ -51,7 +51,7 @@ vibermate run -- codex
 透明捕获会保留代理原来的服务商、账号和模型。
 
 正常使用 App 不需要创建账号。需要从浏览器打开或与团队共享时，进入
-**设置 → 团队接入**，点击 **创建所有者**，再复制网页工作台地址。第一个账号
+**设置 → 接入与启动**，点击 **创建所有者**，再复制网页工作台地址。第一个账号
 是所有者，之后创建的是成员。
 
 ## Linux Server + Web
@@ -89,17 +89,19 @@ vibermate run -- codex
   --tls-key /绝对路径/private-key.pem
 ```
 
-所有者可在 **设置 → 团队接入** 中为每个人创建账号。同一个账号既能登录网页，
+所有者可在 **设置 → 接入与启动** 中为每个人创建账号。同一个账号既能登录网页，
 也能用于 CLI。每台开发机只需登录一次：
 
 ```sh
-vibermate login --server 192.0.2.10:9666
-vibermate run --server 192.0.2.10:9666 -- claude
-# 或：vibermate run --server 192.0.2.10:9666 -- codex
+vibermate login --server https://your-server.example:9666
+vibermate run --server https://your-server.example:9666 -- claude
+# 或：vibermate run --server https://your-server.example:9666 -- codex
 ```
 
+请将示例地址替换为你在浏览器中打开的 HTTPS 地址。
+
 每个人都能从网页右上角修改自己的密码；所有者可以重置成员密码。本机 App
-还可在 **设置 → 团队接入** 中重置自己的所有者密码。如果是无界面的 Server，
+还可在 **设置 → 接入与启动** 中重置自己的所有者密码。如果是无界面的 Server，
 请在 Server 本机运行 `vibermated server recovery-key`，再点击
 **忘记所有者密码？**。恢复成功后，该密钥会自动轮换。
 
@@ -110,7 +112,7 @@ vibermate run --server 192.0.2.10:9666 -- claude
 - ViberMate 会把本地根证书直接交给它启动的 Claude、Codex 进程，因此 Linux
   不需要修改系统 CA。
 - 在 macOS 上，只有其他客户端必须依赖系统信任时，才需要在
-  **设置 → 常规 → 本机根证书**中安装。
+  **设置 → 安全与数据 → 本机根证书**中安装。
 - 用于检查代理流量的 Runtime 根证书，与浏览器访问远程 Server 时使用的 TLS
   证书，是两件不同的东西。
 - 有 Capture 正在运行时不能替换根证书。安装、替换和删除时，界面都会显示

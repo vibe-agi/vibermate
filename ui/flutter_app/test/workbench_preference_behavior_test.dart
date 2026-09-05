@@ -159,8 +159,9 @@ void main() {
       );
       await _pumpUntil(tester, find.text('设置'));
 
-      expect(find.text('本地运行时、终端入口与操作偏好'), findsOneWidget);
-      expect(find.byKey(const Key('offline-settings-panel')), findsOneWidget);
+      expect(find.text('管理这套 Runtime 的偏好、接入、安全与网络行为'), findsOneWidget);
+      expect(find.text('工作台偏好'), findsOneWidget);
+      expect(find.byKey(const Key('settings-tab-safety')), findsOneWidget);
       expect(find.text('自动'), findsOneWidget);
       final app = tester.widget<MaterialApp>(find.byType(MaterialApp));
       expect(app.themeMode, ThemeMode.dark);

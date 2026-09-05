@@ -2,6 +2,7 @@ package serveradmin
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"errors"
 	"os"
@@ -38,10 +39,10 @@ func TestAccessKeyMintsSeparateShortLivedAdminCapabilities(t *testing.T) {
 		t.Fatal(err)
 	}
 	if session.ReadToken.Value() == session.WriteToken.Value() ||
-		!authority.Authorize(session.ReadToken.Value(), ScopeRead) ||
-		!authority.Authorize(session.WriteToken.Value(), ScopeWrite) ||
-		authority.Authorize(session.ReadToken.Value(), ScopeWrite) ||
-		authority.Authorize(session.WriteToken.Value(), ScopeRead) {
+		!authority.Authorize(context.Background(), session.ReadToken.Value(), ScopeRead) ||
+		!authority.Authorize(context.Background(), session.WriteToken.Value(), ScopeWrite) ||
+		authority.Authorize(context.Background(), session.ReadToken.Value(), ScopeWrite) ||
+		authority.Authorize(context.Background(), session.WriteToken.Value(), ScopeRead) {
 		t.Fatal("admin capabilities did not preserve exact scopes")
 	}
 	if strings.Contains(session.ReadToken.String(), session.ReadToken.Value()) ||
@@ -49,8 +50,8 @@ func TestAccessKeyMintsSeparateShortLivedAdminCapabilities(t *testing.T) {
 		t.Fatal("admin credential formatting exposed a capability")
 	}
 	clock.now = session.ExpiresAt
-	if authority.Authorize(session.ReadToken.Value(), ScopeRead) ||
-		authority.Authorize(session.WriteToken.Value(), ScopeWrite) {
+	if authority.Authorize(context.Background(), session.ReadToken.Value(), ScopeRead) ||
+		authority.Authorize(context.Background(), session.WriteToken.Value(), ScopeWrite) {
 		t.Fatal("expired admin session remained authorized")
 	}
 }
@@ -122,6 +123,15 @@ func TestClaimedOwnerAndMemberReceiveDistinctWebAuthority(t *testing.T) {
 	recoveryKey := strings.TrimSpace(string(recoveryPayload))
 	owner := testUser(0x51, "alice")
 	member := testUser(0x52, "bob")
+	authority.lookupUser = func(_ context.Context, id runtimeuser.UserID) (runtimeuser.User, error) {
+		if id == owner.ID {
+			return owner, nil
+		}
+		if id == member.ID {
+			return member, nil
+		}
+		return runtimeuser.User{}, runtimeuser.ErrInvalidUser
+	}
 	if err := authority.ClaimOwner(recoveryKey, owner.ID); err != nil {
 		t.Fatal(err)
 	}
@@ -131,11 +141,11 @@ func TestClaimedOwnerAndMemberReceiveDistinctWebAuthority(t *testing.T) {
 	if _, err := authority.Login(recoveryKey); !errors.Is(err, ErrUnauthorized) {
 		t.Fatalf("configured recovery key minted a normal session: %v", err)
 	}
-	ownerSession, err := authority.LoginUser(owner)
+	ownerSession, err := authority.LoginUser(context.Background(), owner)
 	if err != nil {
 		t.Fatal(err)
 	}
-	memberSession, err := authority.LoginUser(member)
+	memberSession, err := authority.LoginUser(context.Background(), member)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -143,16 +153,16 @@ func TestClaimedOwnerAndMemberReceiveDistinctWebAuthority(t *testing.T) {
 		memberSession.Principal.Role != RoleMember {
 		t.Fatalf("roles = %q, %q", ownerSession.Principal.Role, memberSession.Principal.Role)
 	}
-	if !authority.Authorize(ownerSession.ReadToken.Value(), ScopeRead) ||
-		authority.Authorize(memberSession.ReadToken.Value(), ScopeRead) {
+	if !authority.Authorize(context.Background(), ownerSession.ReadToken.Value(), ScopeRead) ||
+		authority.Authorize(context.Background(), memberSession.ReadToken.Value(), ScopeRead) {
 		t.Fatal("owner-only management authority was not preserved")
 	}
-	principal, valid := authority.Authenticate(memberSession.ReadToken.Value(), ScopeRead)
+	principal, valid := authority.Authenticate(context.Background(), memberSession.ReadToken.Value(), ScopeRead)
 	if !valid || principal.UserID != member.ID || principal.Username != "bob" {
 		t.Fatalf("member principal = %#v, %v", principal, valid)
 	}
 	authority.RevokeUserSessions(member.ID)
-	if _, valid := authority.Authenticate(memberSession.ReadToken.Value(), ScopeRead); valid {
+	if _, valid := authority.Authenticate(context.Background(), memberSession.ReadToken.Value(), ScopeRead); valid {
 		t.Fatal("revoked member Web Session remained valid")
 	}
 }

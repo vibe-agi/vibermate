@@ -9,6 +9,9 @@ repository_root="$(cd "${flutter_directory}/../.." && pwd)"
 distribution_directory="${repository_root}/dist"
 verify_app="${script_directory}/verify_macos_app.sh"
 
+# Keep local builds compatible with the same baseline as distribution builds.
+export MACOSX_DEPLOYMENT_TARGET=14.0
+
 "${script_directory}/verify_flutter_sdk.sh"
 
 case "${mode}" in
@@ -36,6 +39,10 @@ if [[ "${mode}" == "preview" ]]; then
 else
   (
     cd "${repository_root}"
+    export CGO_ENABLED=1
+    export CGO_CFLAGS="${CGO_CFLAGS:-} -mmacosx-version-min=14.0"
+    export CGO_CXXFLAGS="${CGO_CXXFLAGS:-} -mmacosx-version-min=14.0"
+    export CGO_LDFLAGS="${CGO_LDFLAGS:-} -mmacosx-version-min=14.0"
     go build -buildvcs=true -trimpath -tags vibermate_native_secrets \
       -o "${flutter_directory}/build/vibermate" \
       ./cmd/vibermate

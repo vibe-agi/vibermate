@@ -51,6 +51,28 @@ final class _AccountSelectorEditorDialogState
   AccountSelectorTestResult? _result;
   String? _error;
   bool _testing = false;
+  int _editRevision = 0;
+  late (String, String, String, String, String, String) _lastInputs;
+
+  (String, String, String, String, String, String) get _inputs => (
+    _source.text,
+    _accounts.text,
+    _loginUsername.text,
+    _workspace.text,
+    _model.text,
+    _protocol,
+  );
+
+  void _inputsChanged() {
+    final inputs = _inputs;
+    if (inputs == _lastInputs) return;
+    setState(() {
+      _lastInputs = inputs;
+      _editRevision++;
+      _result = null;
+      _error = null;
+    });
+  }
 
   AppCopy get copy => widget.copy;
 
@@ -66,6 +88,16 @@ final class _AccountSelectorEditorDialogState
     _loginUsername = TextEditingController(text: 'alice');
     _workspace = TextEditingController(text: 'work');
     _model = TextEditingController(text: 'claude-sonnet-4-5');
+    _lastInputs = _inputs;
+    for (final controller in [
+      _source,
+      _accounts,
+      _loginUsername,
+      _workspace,
+      _model,
+    ]) {
+      controller.addListener(_inputsChanged);
+    }
   }
 
   @override
@@ -396,7 +428,10 @@ final class _AccountSelectorEditorDialogState
       DropdownMenuItem(value: 'openai_chat', child: Text('OpenAI Chat')),
     ],
     onChanged: (value) {
-      if (value != null) setState(() => _protocol = value);
+      if (value != null) {
+        _protocol = value;
+        _inputsChanged();
+      }
     },
   );
 
@@ -510,6 +545,7 @@ final class _AccountSelectorEditorDialogState
   }
 
   Future<void> _run() async {
+    final revision = _editRevision;
     setState(() {
       _testing = true;
       _result = null;
@@ -520,9 +556,13 @@ final class _AccountSelectorEditorDialogState
         policy: _policy(),
         sample: _sampleValue(),
       );
-      if (mounted) setState(() => _result = result);
+      if (mounted && revision == _editRevision) {
+        setState(() => _result = result);
+      }
     } on Object catch (error) {
-      if (mounted) setState(() => _error = _testError(error));
+      if (mounted && revision == _editRevision) {
+        setState(() => _error = _testError(error));
+      }
     } finally {
       if (mounted) setState(() => _testing = false);
     }

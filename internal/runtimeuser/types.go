@@ -58,6 +58,8 @@ type User struct {
 	Username  string    `json:"username"`
 	State     State     `json:"state"`
 	CreatedAt time.Time `json:"createdAt"`
+	// UpdatedAt is also the credential revision. Repositories must advance it
+	// on every password/state change, even within the same clock tick.
 	UpdatedAt time.Time `json:"updatedAt"`
 }
 
@@ -119,8 +121,8 @@ type Repository interface {
 	FindUserByID(context.Context, UserID) (UserRecord, bool, error)
 	ListUsers(context.Context) ([]UserRecord, error)
 	SetUserState(context.Context, UserID, State, time.Time) (UserRecord, bool, error)
-	ReplacePassword(context.Context, UserID, string, time.Time) (UserRecord, bool, error)
-	CreateSession(context.Context, SessionRecord) error
+	ReplacePassword(context.Context, UserID, string, time.Time, time.Time) (UserRecord, bool, error)
+	CreateSession(context.Context, SessionRecord, time.Time) error
 	FindSession(context.Context, SessionDigest) (SessionRecord, UserRecord, bool, error)
 	RevokeSession(context.Context, SessionDigest, time.Time) (bool, error)
 }

@@ -37,6 +37,7 @@ type WebUserAuthority interface {
 	VerifyCredentials(context.Context, string, []byte) (runtimeuser.User, error)
 	User(context.Context, runtimeuser.UserID) (runtimeuser.User, error)
 	ReplacePassword(context.Context, runtimeuser.UserID, []byte) (runtimeuser.User, error)
+	ChangePassword(context.Context, runtimeuser.User, []byte) (runtimeuser.User, error)
 }
 
 type WebSessionsOptions struct {
@@ -187,7 +188,7 @@ func (handler *WebSessionsHandler) setup(writer http.ResponseWriter, request *ht
 		writeProblem(writer, http.StatusServiceUnavailable, "web_setup_unavailable")
 		return
 	}
-	session, err := handler.sessions.LoginUser(user)
+	session, err := handler.sessions.LoginUser(request.Context(), user)
 	if err != nil {
 		writeProblem(writer, http.StatusServiceUnavailable, "web_login_unavailable")
 		return
@@ -223,7 +224,7 @@ func (handler *WebSessionsHandler) login(writer http.ResponseWriter, request *ht
 		writeProblem(writer, http.StatusServiceUnavailable, "web_login_unavailable")
 		return
 	}
-	session, err := handler.sessions.LoginUser(user)
+	session, err := handler.sessions.LoginUser(request.Context(), user)
 	if err != nil {
 		writeProblem(writer, http.StatusServiceUnavailable, "web_login_unavailable")
 		return
@@ -279,8 +280,12 @@ func (handler *WebSessionsHandler) changePassword(writer http.ResponseWriter, re
 		writeProblem(writer, http.StatusUnauthorized, "web_current_password_rejected")
 		return
 	}
-	updated, err := handler.users.ReplacePassword(request.Context(), principal.UserID, next)
+	updated, err := handler.users.ChangePassword(request.Context(), verified, next)
 	if err != nil {
+		if errors.Is(err, runtimeuser.ErrInvalidCredentials) {
+			writeProblem(writer, http.StatusUnauthorized, "web_current_password_rejected")
+			return
+		}
 		if errors.Is(err, runtimeuser.ErrInvalidUser) {
 			writeProblem(writer, http.StatusUnprocessableEntity, "invalid_web_password")
 			return
@@ -289,7 +294,7 @@ func (handler *WebSessionsHandler) changePassword(writer http.ResponseWriter, re
 		return
 	}
 	handler.sessions.RevokeUserSessions(principal.UserID)
-	session, err := handler.sessions.LoginUser(updated)
+	session, err := handler.sessions.LoginUser(request.Context(), updated)
 	if err != nil {
 		writeProblem(writer, http.StatusServiceUnavailable, "web_login_unavailable")
 		return
@@ -337,7 +342,7 @@ func (handler *WebSessionsHandler) recover(writer http.ResponseWriter, request *
 		return
 	}
 	handler.sessions.RevokeUserSessions(ownerID)
-	session, err := handler.sessions.LoginUser(updated)
+	session, err := handler.sessions.LoginUser(request.Context(), updated)
 	if err != nil {
 		writeProblem(writer, http.StatusServiceUnavailable, "web_login_unavailable")
 		return
@@ -393,7 +398,7 @@ func takeWebPrincipal(
 	if !valid {
 		return serveradmin.Principal{}, false
 	}
-	return authority.Authenticate(token, scope)
+	return authority.Authenticate(request.Context(), token, scope)
 }
 
 func writeWebSession(writer http.ResponseWriter, instanceID string, session serveradmin.Session) {

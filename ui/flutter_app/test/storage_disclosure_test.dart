@@ -15,14 +15,13 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    await tester.tap(find.byIcon(Icons.settings_outlined).first);
-    await tester.pumpAndSettle();
+    await _openSafetySettings(tester);
 
     final panel = find.byKey(const Key('storage-disclosure-panel'));
     await tester.scrollUntilVisible(
       panel,
       240,
-      scrollable: find.byType(Scrollable).last,
+      scrollable: _safetyScrollable(),
     );
     expect(panel, findsOneWidget);
     expect(
@@ -45,14 +44,13 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      await tester.tap(find.byIcon(Icons.settings_outlined).first);
-      await tester.pumpAndSettle();
+      await _openSafetySettings(tester);
 
       final panel = find.byKey(const Key('storage-disclosure-panel'));
       await tester.scrollUntilVisible(
         panel,
         240,
-        scrollable: find.byType(Scrollable).last,
+        scrollable: _safetyScrollable(),
       );
       expect(
         find.textContaining('stored as sent'),
@@ -70,14 +68,13 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    await tester.tap(find.byIcon(Icons.settings_outlined).first);
-    await tester.pumpAndSettle();
+    await _openSafetySettings(tester);
 
     final panel = find.byKey(const Key('storage-disclosure-panel'));
     await tester.scrollUntilVisible(
       panel,
       240,
-      scrollable: find.byType(Scrollable).last,
+      scrollable: _safetyScrollable(),
     );
     expect(panel, findsOneWidget);
     expect(find.textContaining('未加密'), findsOneWidget);
@@ -100,17 +97,33 @@ void main() {
           ViberMateApp(previewMode: true, preferChinese: chinese),
         );
         await tester.pumpAndSettle();
-        await tester.tap(find.byIcon(Icons.settings_outlined).first);
-        await tester.pumpAndSettle();
+        await _openSafetySettings(tester);
 
         final panel = find.byKey(const Key('storage-disclosure-panel'));
         await tester.scrollUntilVisible(
           panel,
           240,
-          scrollable: find.byType(Scrollable).last,
+          scrollable: _safetyScrollable(),
         );
         expect(panel, findsOneWidget);
       });
     }
   }
 }
+
+Future<void> _openSafetySettings(WidgetTester tester) async {
+  await tester.tap(find.byIcon(Icons.settings_outlined).first);
+  await tester.pumpAndSettle();
+  final tab = find.byKey(const Key('settings-tab-safety'));
+  await tester.ensureVisible(tab);
+  await tester.pumpAndSettle();
+  await tester.tap(tab);
+  await tester.pumpAndSettle();
+}
+
+Finder _safetyScrollable() => find
+    .descendant(
+      of: find.byKey(const Key('settings-safety-scroll')),
+      matching: find.byType(Scrollable),
+    )
+    .first;

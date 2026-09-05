@@ -2740,7 +2740,10 @@ final class PreviewControlApi implements ControlApi {
   }
 
   @override
-  Future<RuntimeUser> disableRuntimeUser(String userId) async {
+  Future<RuntimeUser> setRuntimeUserEnabled(
+    String userId, {
+    required bool enabled,
+  }) async {
     _requireOpen();
     final index = _runtimeUsers.indexWhere((user) => user.id == userId);
     if (index < 0) {
@@ -2751,15 +2754,16 @@ final class PreviewControlApi implements ControlApi {
       );
     }
     final current = _runtimeUsers[index];
-    final disabled = RuntimeUser(
+    final updated = RuntimeUser(
       id: current.id,
       username: current.username,
-      state: 'disabled',
+      state: enabled ? 'active' : 'disabled',
+      role: current.role,
       createdAt: current.createdAt,
       updatedAt: DateTime.now().toUtc(),
     );
-    _runtimeUsers[index] = disabled;
-    return disabled;
+    _runtimeUsers[index] = updated;
+    return updated;
   }
 
   @override

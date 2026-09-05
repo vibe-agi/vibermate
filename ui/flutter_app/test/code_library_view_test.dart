@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -536,6 +538,10 @@ void main() {
       find.byKey(const Key('environment-transform-sample-request-body')),
     );
     expect(starterSampleBody.controller?.text, contains('/Users/example-user'));
+    final sampleRequest =
+        jsonDecode(starterSampleBody.controller!.text) as Map<String, dynamic>;
+    expect(sampleRequest['messages'], isList);
+    expect(sampleRequest.containsKey('home'), isFalse);
     await tester.tap(
       find.byKey(const Key('environment-transform-sample-tab-runtime')),
     );
@@ -1008,6 +1014,12 @@ void main() {
       expect(observed?.runtime.workspaceLabel, 'blue-workspace');
       expect(observed?.request.clientProtocol, 'anthropic_messages');
       expect(find.text('Selected account.blue'), findsOneWidget);
+      await tester.enterText(
+        find.byKey(const Key('account-selector-sample-accounts')),
+        'account.red',
+      );
+      await tester.pump();
+      expect(find.text('Selected account.blue'), findsNothing);
       expect(tester.takeException(), isNull);
     },
   );

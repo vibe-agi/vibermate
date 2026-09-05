@@ -40,7 +40,7 @@ Install and open ViberMate:
 brew install --cask vibe-agi/tap/vibermate
 ```
 
-In **Settings → General → Terminal command**, choose **Set up command**. Then,
+In **Settings → Access & launch → Terminal command**, choose **Set up command**. Then,
 from your project directory:
 
 ```sh
@@ -54,7 +54,7 @@ a Traffic Policy; transparent capture preserves the agent's existing provider,
 account, and model.
 
 You do not need an account for normal App use. To open this Runtime in a browser
-or share it, go to **Settings → Team access**, choose **Create owner**, then copy
+or share it, go to **Settings → Access & launch**, choose **Create owner**, then copy
 the Web workbench address. The first account is the owner; later accounts are
 members.
 
@@ -97,19 +97,21 @@ users instead:
   --tls-key /absolute/path/private-key.pem
 ```
 
-In **Settings → Team access**, the owner creates an account for each person. The
+In **Settings → Access & launch**, the owner creates an account for each person. The
 same account works in the browser and CLI. On each developer machine, sign in
 once:
 
 ```sh
-vibermate login --server 192.0.2.10:9666
-vibermate run --server 192.0.2.10:9666 -- claude
-# or: vibermate run --server 192.0.2.10:9666 -- codex
+vibermate login --server https://your-server.example:9666
+vibermate run --server https://your-server.example:9666 -- claude
+# or: vibermate run --server https://your-server.example:9666 -- codex
 ```
+
+Replace the example address with the HTTPS address you opened in the browser.
 
 Each person can change their own password from the browser account menu. The
 owner can reset a member password. The local App can also reset its owner's
-password under **Settings → Team access**. For a headless Server, run
+password under **Settings → Access & launch**. For a headless Server, run
 `vibermated server recovery-key` locally and use **Forgot owner password?**;
 the recovery key rotates after use.
 
@@ -119,7 +121,7 @@ the recovery key rotates after use.
 
 - Managed Claude and Codex processes receive ViberMate's local Root directly
   for that process. Linux does not need a system-wide CA installation.
-- On macOS, install the Root from **Settings → General → Local Root
+- On macOS, install the Root from **Settings → Safety & data → Local Root
   Certificate** only for other clients that depend on macOS system trust.
 - The Runtime Root used to inspect agent traffic is separate from the TLS
   certificate used to open a remote Server in a browser.

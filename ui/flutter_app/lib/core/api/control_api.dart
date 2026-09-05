@@ -156,7 +156,10 @@ abstract interface class ControlApi {
     required String password,
   });
 
-  Future<RuntimeUser> disableRuntimeUser(String userId);
+  Future<RuntimeUser> setRuntimeUserEnabled(
+    String userId, {
+    required bool enabled,
+  });
 
   Future<RuntimeUser> replaceRuntimeUserPassword({
     required String userId,
@@ -1135,7 +1138,10 @@ final class HttpControlApi implements ControlApi {
   }
 
   @override
-  Future<RuntimeUser> disableRuntimeUser(String userId) async {
+  Future<RuntimeUser> setRuntimeUserEnabled(
+    String userId, {
+    required bool enabled,
+  }) async {
     if (userId.isEmpty) {
       throw const ControlContractException('Runtime User ID is empty');
     }
@@ -1145,14 +1151,14 @@ final class HttpControlApi implements ControlApi {
         '/api/v1/server/runtime-users/${Uri.encodeComponent(userId)}',
         body: {
           'schema': 'vibermate-runtime-user-update-v1',
-          'state': 'disabled',
+          'state': enabled ? 'active' : 'disabled',
         },
       ),
       'runtimeUser',
     );
-    if (updated.id != userId || updated.active) {
+    if (updated.id != userId || updated.active != enabled) {
       throw const ControlContractException(
-        'disabled Runtime User is inconsistent',
+        'updated Runtime User is inconsistent',
       );
     }
     return updated;

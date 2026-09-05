@@ -564,7 +564,7 @@ jobs:
           name: ${{ steps.artifact_name.outputs.name }}
           path: |
             ${{ runner.temp }}/vibermate-signed-${{ github.run_id }}-${{ github.run_attempt }}/ViberMate.signed.app.vma
-            ${{ runner.temp }}/vibermate-signed-${{ github.run_id }}-${{ github.run_attempt }}/ViberMate_0.1.2_universal.dmg
+            ${{ runner.temp }}/vibermate-signed-${{ github.run_id }}-${{ github.run_attempt }}/ViberMate_0.1.3_universal.dmg
             ${{ runner.temp }}/vibermate-signed-${{ github.run_id }}-${{ github.run_attempt }}/signing-transformation.json
             ${{ runner.temp }}/vibermate-signed-${{ github.run_id }}-${{ github.run_attempt }}/vibermate-macos-signed.sha256
           if-no-files-found: error
@@ -700,7 +700,7 @@ jobs:
             test "$(/usr/bin/stat -f '%Lp' "${evidence_directory}/${name}")" = "600"
           done
           test -f "${release_directory}/.vibermate-private/signing/signing-transformation.json"
-          test -f "${release_directory}/bundle/dmg/ViberMate_0.1.2_universal.dmg"
+          test -f "${release_directory}/bundle/dmg/ViberMate_0.1.3_universal.dmg"
 
       - name: Upload the stapled DMG and exact evidence files
         if: ${{ steps.notarize_candidate.outcome == 'success' && steps.credential_cleanup.outcome == 'success' }}
@@ -708,7 +708,7 @@ jobs:
         with:
           name: ${{ env.NOTARIZED_ARTIFACT_NAME }}
           path: |
-            ui/flutter_app/build/distribution/universal-apple-darwin/release/bundle/dmg/ViberMate_0.1.2_universal.dmg
+            ui/flutter_app/build/distribution/universal-apple-darwin/release/bundle/dmg/ViberMate_0.1.3_universal.dmg
             ui/flutter_app/build/distribution/universal-apple-darwin/release/.vibermate-private/signing/signing-transformation.json
             ui/flutter_app/build/distribution/universal-apple-darwin/release/.vibermate-private/notarization/apple-notary-submit.json
             ui/flutter_app/build/distribution/universal-apple-darwin/release/.vibermate-private/notarization/apple-notary-log.json

@@ -171,7 +171,7 @@ func (repository *runtimeUserRepository) SetUserState(
 	result, err := transaction.ExecContext(
 		operation,
 		`UPDATE runtime_users
-		    SET state = ?, updated_at_unix_ms = ?
+		    SET state = ?, updated_at_unix_ms = MAX(updated_at_unix_ms + 1, ?)
 		  WHERE user_id = ?`,
 		string(state), toUnixMillis(updatedAt), string(id),
 	)
@@ -189,7 +189,7 @@ func (repository *runtimeUserRepository) SetUserState(
 		if _, err := transaction.ExecContext(
 			operation,
 			`UPDATE runtime_user_login_sessions
-			    SET revoked_at_unix_ms = COALESCE(revoked_at_unix_ms, ?)
+			    SET revoked_at_unix_ms = COALESCE(revoked_at_unix_ms, MAX(created_at_unix_ms, ?))
 			  WHERE user_id = ?`,
 			toUnixMillis(updatedAt), string(id),
 		); err != nil {
@@ -219,6 +219,7 @@ func (repository *runtimeUserRepository) ReplacePassword(
 	id runtimeuser.UserID,
 	passwordHash string,
 	updatedAt time.Time,
+	expected time.Time,
 ) (runtimeuser.UserRecord, bool, error) {
 	if !id.Valid() || passwordHash == "" {
 		return runtimeuser.UserRecord{}, false, runtimeuser.ErrInvalidUser
@@ -236,11 +237,12 @@ func (repository *runtimeUserRepository) ReplacePassword(
 	result, err := transaction.ExecContext(
 		operation,
 		`UPDATE runtime_users
-		    SET password_hash = ?, updated_at_unix_ms = ?
-		  WHERE user_id = ?`,
+		    SET password_hash = ?, updated_at_unix_ms = MAX(updated_at_unix_ms + 1, ?)
+		  WHERE user_id = ? AND (? OR (updated_at_unix_ms = ? AND state = 'active'))`,
 		passwordHash,
 		toUnixMillis(updatedAt),
 		string(id),
+		expected.IsZero(), toUnixMillis(expected),
 	)
 	if err != nil {
 		return runtimeuser.UserRecord{}, false, fmt.Errorf("replace Runtime User password: %w", err)
@@ -255,7 +257,7 @@ func (repository *runtimeUserRepository) ReplacePassword(
 	if _, err := transaction.ExecContext(
 		operation,
 		`UPDATE runtime_user_login_sessions
-		    SET revoked_at_unix_ms = COALESCE(revoked_at_unix_ms, ?)
+		    SET revoked_at_unix_ms = COALESCE(revoked_at_unix_ms, MAX(created_at_unix_ms, ?))
 		  WHERE user_id = ?`,
 		toUnixMillis(updatedAt),
 		string(id),
@@ -283,6 +285,7 @@ func (repository *runtimeUserRepository) ReplacePassword(
 func (repository *runtimeUserRepository) CreateSession(
 	ctx context.Context,
 	record runtimeuser.SessionRecord,
+	expected time.Time,
 ) error {
 	if record.Validate() != nil {
 		return runtimeuser.ErrInvalidSession
@@ -292,18 +295,26 @@ func (repository *runtimeUserRepository) CreateSession(
 		return err
 	}
 	defer finish()
-	_, err = repository.database.ExecContext(
+	result, err := repository.database.ExecContext(
 		operation,
 		`INSERT INTO runtime_user_login_sessions (
 		     session_id, user_id, token_digest, machine_id, device_name,
 		     created_at_unix_ms, expires_at_unix_ms, revoked_at_unix_ms
-		 ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL)`,
+		 ) SELECT ?, ?, ?, ?, ?, ?, ?, NULL
+		   FROM runtime_users
+		  WHERE user_id = ? AND state = 'active' AND updated_at_unix_ms = ?`,
 		record.ID, string(record.UserID), record.TokenDigest[:],
 		record.MachineID.String(), record.DeviceName,
 		toUnixMillis(record.CreatedAt), toUnixMillis(record.ExpiresAt),
+		string(record.UserID), toUnixMillis(expected),
 	)
 	if err != nil {
 		return fmt.Errorf("insert Runtime User Login Session: %w", err)
+	}
+	if affected, err := result.RowsAffected(); err != nil {
+		return err
+	} else if affected != 1 {
+		return runtimeuser.ErrInvalidCredentials
 	}
 	return nil
 }
@@ -394,7 +405,7 @@ func (repository *runtimeUserRepository) RevokeSession(
 	result, err := repository.database.ExecContext(
 		operation,
 		`UPDATE runtime_user_login_sessions
-		    SET revoked_at_unix_ms = ?
+		    SET revoked_at_unix_ms = MAX(created_at_unix_ms, ?)
 		  WHERE token_digest = ? AND revoked_at_unix_ms IS NULL`,
 		toUnixMillis(revokedAt), digest[:],
 	)

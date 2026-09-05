@@ -16,6 +16,7 @@ import {
 import { tmpdir } from "node:os";
 import { basename, dirname, relative, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { verifyMacOSBuildVersions } from "../../ui/flutter_app/tool/verify_macos_build_versions.mjs";
 import {
   macOSDistributionPolicy,
   parseClosedJSONObject,
@@ -602,6 +603,7 @@ export async function inspectSignedMacOSApplicationAtPath(
     await signingCertificateSHA256(appPath, "ViberMate.app"),
   );
   for (const [name, path] of Object.entries(executablePaths)) {
+    verifyMacOSBuildVersions(path);
     validateLipoArchitectures(
       runTool(
         toolchain.paths.lipo,
@@ -673,6 +675,7 @@ export async function inspectUnsignedMacOSDistributionCandidate() {
   const executablePaths = await inspectMachOPaths(appPath, ledger);
   inspectUnsignedCodeObject(appPath, "ViberMate.app");
   for (const [name, path] of Object.entries(executablePaths)) {
+    verifyMacOSBuildVersions(path);
     validateLipoArchitectures(
       runTool(toolchain.paths.lipo, ["-archs", path], `${name} architecture inspection`)
         .stdout,

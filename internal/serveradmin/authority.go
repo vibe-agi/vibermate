@@ -4,6 +4,7 @@
 package serveradmin
 
 import (
+	"context"
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/base64"
@@ -24,6 +25,7 @@ const (
 	OwnerFileName     = "owner-user-id"
 	credentialBytes   = 32
 	maxSessions       = 128
+	maxUserSessions   = 8
 	accessDomain      = "vibermate:server-admin-access:v1:"
 	readDomain        = "vibermate:server-admin-session:read:v1:"
 	writeDomain       = "vibermate:server-admin-session:write:v1:"
@@ -72,6 +74,7 @@ type Options struct {
 	Clock           Clock
 	Random          io.Reader
 	SessionLifetime time.Duration
+	LookupUser      func(context.Context, runtimeuser.UserID) (runtimeuser.User, error)
 }
 
 // Credential intentionally redacts itself in every formatting path. Value is
@@ -91,13 +94,16 @@ type Session struct {
 }
 
 type sessionRecord struct {
-	scope     Scope
-	expiresAt time.Time
-	principal Principal
-	sessionID [sha256.Size]byte
+	scope         Scope
+	expiresAt     time.Time
+	principal     Principal
+	sessionID     [sha256.Size]byte
+	userUpdatedAt time.Time
 }
 
 type Authority struct {
+	// ponytail: serialize the bounded session map and its user lookup; revisit
+	// only if measured management-request contention warrants finer locking.
 	mu            sync.Mutex
 	accessKeyPath string
 	ownerPath     string
@@ -107,6 +113,7 @@ type Authority struct {
 	random        io.Reader
 	lifetime      time.Duration
 	sessions      map[[sha256.Size]byte]sessionRecord
+	lookupUser    func(context.Context, runtimeuser.UserID) (runtimeuser.User, error)
 }
 
 func Open(options Options) (*Authority, error) {
@@ -142,6 +149,7 @@ func Open(options Options) (*Authority, error) {
 		random:        options.Random,
 		lifetime:      options.SessionLifetime,
 		sessions:      make(map[[sha256.Size]byte]sessionRecord),
+		lookupUser:    options.LookupUser,
 	}, nil
 }
 
@@ -265,18 +273,22 @@ func (authority *Authority) Login(accessKey string) (Session, error) {
 		subtle.ConstantTimeCompare(candidate[:], authority.accessDigest[:]) != 1 {
 		return Session{}, ErrUnauthorized
 	}
-	return authority.issueLocked(Principal{}, true)
+	return authority.issueLocked(Principal{}, true, time.Time{})
 }
 
 // LoginUser mints a browser-only Web Session after a network adapter has
 // verified the Runtime User's password under its rate limit.
-func (authority *Authority) LoginUser(user runtimeuser.User) (Session, error) {
-	if authority == nil || user.Validate() != nil || user.State != runtimeuser.StateActive {
+func (authority *Authority) LoginUser(ctx context.Context, user runtimeuser.User) (Session, error) {
+	if authority == nil || ctx == nil || authority.lookupUser == nil || user.Validate() != nil || user.State != runtimeuser.StateActive {
 		return Session{}, ErrUnauthorized
 	}
 	authority.mu.Lock()
 	defer authority.mu.Unlock()
 	if !authority.ownerID.Valid() {
+		return Session{}, ErrUnauthorized
+	}
+	current, err := authority.lookupUser(ctx, user.ID)
+	if err != nil || current.Validate() != nil || current.ID != user.ID || current.State != runtimeuser.StateActive || !current.UpdatedAt.Equal(user.UpdatedAt) {
 		return Session{}, ErrUnauthorized
 	}
 	role := RoleMember
@@ -285,15 +297,30 @@ func (authority *Authority) LoginUser(user runtimeuser.User) (Session, error) {
 	}
 	return authority.issueLocked(Principal{
 		UserID: user.ID, Username: user.Username, Role: role,
-	}, false)
+	}, false, user.UpdatedAt)
 }
 
 func (authority *Authority) issueLocked(
 	principal Principal,
 	legacyOwner bool,
+	userUpdatedAt time.Time,
 ) (Session, error) {
 	now := authority.clock.Now().UTC()
 	authority.removeExpired(now)
+	// Bound abandoned logins per person, without signing out other people.
+	count := 0
+	var oldest sessionRecord
+	for _, record := range authority.sessions {
+		if record.scope == ScopeRead && record.principal.UserID == principal.UserID {
+			count++
+			if oldest.expiresAt.IsZero() || record.expiresAt.Before(oldest.expiresAt) {
+				oldest = record
+			}
+		}
+	}
+	if count >= maxUserSessions {
+		authority.revokeSessionLocked(oldest.sessionID)
+	}
 	if len(authority.sessions) > (maxSessions-1)*2 {
 		return Session{}, ErrSessionCapacity
 	}
@@ -324,11 +351,11 @@ func (authority *Authority) issueLocked(
 	}
 	authority.sessions[readDigest] = sessionRecord{
 		scope: ScopeRead, expiresAt: expiresAt, principal: storedPrincipal,
-		sessionID: sessionID,
+		sessionID: sessionID, userUpdatedAt: userUpdatedAt,
 	}
 	authority.sessions[writeDigest] = sessionRecord{
 		scope: ScopeWrite, expiresAt: expiresAt, principal: storedPrincipal,
-		sessionID: sessionID,
+		sessionID: sessionID, userUpdatedAt: userUpdatedAt,
 	}
 	return Session{
 		ReadToken: Credential{value: read}, WriteToken: Credential{value: write},
@@ -336,16 +363,17 @@ func (authority *Authority) issueLocked(
 	}, nil
 }
 
-func (authority *Authority) Authorize(value string, scope Scope) bool {
-	principal, valid := authority.Authenticate(value, scope)
+func (authority *Authority) Authorize(ctx context.Context, value string, scope Scope) bool {
+	principal, valid := authority.Authenticate(ctx, value, scope)
 	return valid && principal.Role == RoleOwner
 }
 
 func (authority *Authority) Authenticate(
+	ctx context.Context,
 	value string,
 	scope Scope,
 ) (Principal, bool) {
-	if authority == nil || !scope.Valid() || !validCredential(value) {
+	if authority == nil || ctx == nil || !scope.Valid() || !validCredential(value) {
 		return Principal{}, false
 	}
 	digest := sessionDigest(scope, value)
@@ -356,6 +384,16 @@ func (authority *Authority) Authenticate(
 	if !found || record.scope != scope || !now.Before(record.expiresAt) {
 		delete(authority.sessions, digest)
 		return Principal{}, false
+	}
+	if record.principal.UserID.Valid() {
+		if authority.lookupUser == nil {
+			return Principal{}, false
+		}
+		user, err := authority.lookupUser(ctx, record.principal.UserID)
+		if err != nil || user.Validate() != nil || user.ID != record.principal.UserID || user.State != runtimeuser.StateActive || !user.UpdatedAt.Equal(record.userUpdatedAt) {
+			authority.revokeSessionLocked(record.sessionID)
+			return Principal{}, false
+		}
 	}
 	return record.principal, true
 }
@@ -382,15 +420,19 @@ func (authority *Authority) Revoke(value string) bool {
 	for _, scope := range []Scope{ScopeRead, ScopeWrite} {
 		digest := sessionDigest(scope, value)
 		if record, found := authority.sessions[digest]; found {
-			for candidate, paired := range authority.sessions {
-				if paired.sessionID == record.sessionID {
-					delete(authority.sessions, candidate)
-				}
-			}
+			authority.revokeSessionLocked(record.sessionID)
 			return true
 		}
 	}
 	return false
+}
+
+func (authority *Authority) revokeSessionLocked(id [sha256.Size]byte) {
+	for digest, record := range authority.sessions {
+		if record.sessionID == id {
+			delete(authority.sessions, digest)
+		}
+	}
 }
 
 // ReadRecoveryKey returns the owner-only local recovery material for a CLI

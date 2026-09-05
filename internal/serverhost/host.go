@@ -172,6 +172,7 @@ func startAttached(
 		Clock:           options.Clock,
 		Random:          options.SecurityRandom,
 		SessionLifetime: options.AdminSessionLifetime,
+		LookupUser:      options.Runtime.RuntimeUsers().User,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("open Runtime Server admin authority: %w", err)

@@ -1991,46 +1991,25 @@ TrafficTransformPolicy _starterPolicy(
 MessageTransformTestSample _starterTestSample(
   _TransformStarter starter,
   String wireProtocol,
-) {
-  final sample = MessageTransformTestSample.example(wireProtocol);
-  return switch (starter) {
-    _TransformStarter.localIdentity => MessageTransformTestSample(
-      request: MessageTransformTestRequest(
-        method: sample.request.method,
-        path: sample.request.path,
-        headers: sample.request.headers,
-        body:
-            '{"home":"/Users/example-user","workspace":"/Users/example-user/Code/example","user":"example-user"}',
-      ),
-      response: MessageTransformTestResponse(
-        statusCode: sample.response.statusCode,
-        streaming: false,
-        headers: sample.response.headers,
-        body:
-            '{"home":"/Users/guest","workspace":"/workspace/project","user":"vibermate-user"}',
-      ),
-      runtime: sample.runtime,
-    ),
-    _TransformStarter.privateContacts => MessageTransformTestSample(
-      request: MessageTransformTestRequest(
-        method: sample.request.method,
-        path: sample.request.path,
-        headers: sample.request.headers,
-        body:
-            '{"message":"email alice@example.com from 10.0.0.8; public 8.8.8.8"}',
-      ),
-      response: MessageTransformTestResponse(
-        statusCode: sample.response.statusCode,
-        streaming: false,
-        headers: sample.response.headers,
-        body:
-            '{"message":"redacted-email-1@example.invalid from 192.0.2.2; public 8.8.8.8"}',
-      ),
-      runtime: sample.runtime,
-    ),
-    _ => sample,
-  };
-}
+) => switch (starter) {
+  _TransformStarter.localIdentity => MessageTransformTestSample.example(
+    wireProtocol,
+    userMessage:
+        'My username is example-user. My home is /Users/example-user '
+        'and my project is /Users/example-user/Code/example. Where should I put the config?',
+    assistantMessage:
+        'For vibermate-user, put the project config in /workspace/project '
+        'or the user config in /Users/guest.',
+  ),
+  _TransformStarter.privateContacts => MessageTransformTestSample.example(
+    wireProtocol,
+    userMessage:
+        'Email alice@example.com from 10.0.0.8; public DNS is 8.8.8.8.',
+    assistantMessage:
+        'Contact redacted-email-1@example.invalid from 192.0.2.2; public DNS is 8.8.8.8.',
+  ),
+  _ => MessageTransformTestSample.example(wireProtocol),
+};
 
 const _localIdentityRequest = r'''const candidates = [
   [runtime.workspace.root, "/workspace/project"],

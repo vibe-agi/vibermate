@@ -475,6 +475,19 @@ final class _MessageTransformEditorDialogState
   MessageTransformTestResult? _result;
   bool _testing = false;
   String? _error;
+  late (String, String) _lastSource;
+  int _editRevision = 0;
+
+  void _sourceChanged() {
+    final source = (_request.text, _response.text);
+    if (source == _lastSource) return;
+    setState(() {
+      _lastSource = source;
+      _editRevision++;
+      _result = null;
+      _error = null;
+    });
+  }
 
   AppCopy get copy => widget.copy;
 
@@ -495,6 +508,9 @@ final class _MessageTransformEditorDialogState
     _sampleExchangeId = widget.initialSampleExchangeId;
     _samplesByProtocol[_wireProtocol] = _sample;
     _sampleExchangeIdsByProtocol[_wireProtocol] = _sampleExchangeId;
+    _lastSource = (_request.text, _response.text);
+    _request.addListener(_sourceChanged);
+    _response.addListener(_sourceChanged);
   }
 
   @override
@@ -812,6 +828,7 @@ final class _MessageTransformEditorDialogState
   Future<void> _runTest() async {
     final policy = _policy();
     if (policy == null) return;
+    final revision = _editRevision;
     setState(() {
       _testing = true;
       _result = null;
@@ -823,10 +840,10 @@ final class _MessageTransformEditorDialogState
         policy: policy,
         sample: _sample,
       );
-      if (!mounted) return;
+      if (!mounted || revision != _editRevision) return;
       setState(() => _result = result);
     } on Object catch (error) {
-      if (!mounted) return;
+      if (!mounted || revision != _editRevision) return;
       setState(() => _error = _testError(error));
     } finally {
       if (mounted) setState(() => _testing = false);

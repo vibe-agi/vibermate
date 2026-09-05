@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { validateMacOSBuildVersions } from "./verify_macos_build_versions.mjs";
 import {
   flutterDesktopBuildConfigurationNames,
   flutterDesktopBuildManifestSchema,
@@ -10,6 +11,18 @@ import {
 
 const digest = "a".repeat(64);
 const revision = "b".repeat(40);
+
+test("every Mach-O slice supports macOS 14 regardless of the build SDK", () => {
+  const slice = (minimum, platform = "MACOS") =>
+    `  cmd LC_BUILD_VERSION\n platform ${platform}\n    minos ${minimum}\n      sdk 27.0\n`;
+  assert.doesNotThrow(() => validateMacOSBuildVersions(slice("14.0"), 1, "daemon"));
+  assert.doesNotThrow(() => validateMacOSBuildVersions(slice("10.15") + slice("11.0"), 2, "Flutter"));
+  for (const source of [slice("27.0"), slice("26.0"), slice("14.1"), slice("14.0.1"), slice("14.0", "IOS"), ""]) {
+    assert.throws(() => validateMacOSBuildVersions(source, 1, "daemon"));
+  }
+  assert.throws(() => validateMacOSBuildVersions(slice("14.0") + slice("27.0"), 2, "universal"));
+  assert.throws(() => validateMacOSBuildVersions(slice("14.0"), 2, "missing slice"));
+});
 
 function manifest(overrides = {}) {
   return {

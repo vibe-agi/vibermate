@@ -59,6 +59,15 @@ type captureRunRepository struct {
 	operations *operationGate
 }
 
+// Local captures have no login identity. Remote captures must retain the exact
+// active user/session grant; their own heartbeat cannot extend that authority.
+const captureRunIdentityActive = `(runtime_user_id IS NULL OR EXISTS (
+	SELECT 1 FROM runtime_user_login_sessions s JOIN runtime_users u ON u.user_id = s.user_id
+	 WHERE s.session_id = capture_runs.login_session_id
+	   AND u.user_id = capture_runs.runtime_user_id AND u.state = 'active'
+	   AND s.revoked_at_unix_ms IS NULL AND s.expires_at_unix_ms > ?
+))`
+
 var _ capturerun.Repository = (*captureRunRepository)(nil)
 
 func newCaptureRunRepository(
@@ -84,7 +93,7 @@ func (repository *captureRunRepository) Create(
 		releaseDigest, launchRecipe, features := captureRunAdapterColumns(
 		record.Adapter,
 	)
-	_, err = repository.database.ExecContext(
+	result, err := repository.database.ExecContext(
 		operation,
 		`INSERT INTO capture_runs (
 		     run_id,
@@ -124,7 +133,12 @@ func (repository *captureRunRepository) Create(
 		     expires_at_unix_ms,
 		     updated_at_unix_ms
 		 )
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		 SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+		 WHERE ? IS NULL OR EXISTS (
+		   SELECT 1 FROM runtime_user_login_sessions s JOIN runtime_users u ON u.user_id = s.user_id
+		    WHERE s.session_id = ? AND u.user_id = ? AND u.state = 'active'
+		      AND s.revoked_at_unix_ms IS NULL AND s.expires_at_unix_ms > ?
+		 )`,
 		record.ID,
 		record.ProxyCapabilityHash[:],
 		record.ControlCapabilityHash[:],
@@ -161,9 +175,16 @@ func (repository *captureRunRepository) Create(
 		toUnixMillis(record.CreatedAt),
 		toUnixMillis(record.ExpiresAt),
 		toUnixMillis(record.UpdatedAt),
+		nullableText(string(record.RuntimeUserID)), string(record.LoginSessionID),
+		string(record.RuntimeUserID), toUnixMillis(record.CreatedAt),
 	)
 	if err != nil {
 		return fmt.Errorf("insert CaptureRun: %w", err)
+	}
+	if affected, err := result.RowsAffected(); err != nil {
+		return err
+	} else if affected != 1 {
+		return capturerun.ErrCapabilityRejected
 	}
 	return nil
 }
@@ -184,8 +205,9 @@ func (repository *captureRunRepository) AuthorizeProxy(
 		 FROM capture_runs
 		 WHERE proxy_capability_hash = ?
 		   AND state IN ('created', 'attached')
-		   AND expires_at_unix_ms > ?`,
+		   AND expires_at_unix_ms > ? AND `+captureRunIdentityActive,
 		digest[:],
+		toUnixMillis(now),
 		toUnixMillis(now),
 	))
 	if errors.Is(err, sql.ErrNoRows) {
@@ -244,13 +266,14 @@ func (repository *captureRunRepository) Attach(
 		   AND control_capability_hash = ?
 		   AND state IN ('created', 'attached')
 		   AND expires_at_unix_ms > ?
-		   AND (process_id = 0 OR process_id = ?)`,
+		   AND (process_id = 0 OR process_id = ?) AND `+captureRunIdentityActive,
 		processID,
 		toUnixMillis(now),
 		runID,
 		digest[:],
 		toUnixMillis(now),
 		processID,
+		toUnixMillis(now),
 	)
 }
 
@@ -270,11 +293,12 @@ func (repository *captureRunRepository) Heartbeat(
 		 WHERE run_id = ?
 		   AND control_capability_hash = ?
 		   AND state = 'attached'
-		   AND expires_at_unix_ms > ?`,
+		   AND expires_at_unix_ms > ? AND `+captureRunIdentityActive,
 		toUnixMillis(expiresAt),
 		toUnixMillis(now),
 		runID,
 		digest[:],
+		toUnixMillis(now),
 		toUnixMillis(now),
 	)
 }

@@ -3,8 +3,11 @@ package desktopdaemon_test
 import (
 	"context"
 	"crypto/rand"
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"io"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -17,9 +20,77 @@ import (
 	"github.com/vibe-agi/vibermate/internal/instanceguard"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
 	"github.com/vibe-agi/vibermate/internal/productruntime"
+	"github.com/vibe-agi/vibermate/internal/runtimepersistence"
 	"github.com/vibe-agi/vibermate/internal/secretstore"
+	"github.com/vibe-agi/vibermate/internal/serverdaemon"
+	"github.com/vibe-agi/vibermate/internal/serverhost"
 	"github.com/vibe-agi/vibermate/internal/toolapproval"
 )
+
+func TestDaemonsPreserveUnsupportedDatabaseInsteadOfStartingEmpty(t *testing.T) {
+	for _, mode := range []string{"desktop", "server"} {
+		t.Run(mode, func(t *testing.T) {
+			t.Parallel()
+			root := t.TempDir()
+			if err := os.Chmod(root, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			paths, err := productruntime.NewRuntimePaths(root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			database, err := sql.Open("sqlite", paths.DatabasePath())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := database.Exec(`CREATE TABLE old_data(value TEXT); INSERT INTO old_data VALUES ('keep me')`); err != nil {
+				t.Fatal(err)
+			}
+			if err := database.Close(); err != nil {
+				t.Fatal(err)
+			}
+			before, err := os.Stat(paths.DatabasePath())
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			factory := &secretFactoryFixture{store: seededSecrets{}}
+			if mode == "desktop" {
+				options, optionErr := desktopdaemon.ProductionOptions(ctx, filepath.Join(root, "cache"), root, "vibermate://desktop", io.Discard, factory)
+				if optionErr != nil {
+					t.Fatal(optionErr)
+				}
+				err = desktopdaemon.Run(ctx, options)
+			} else {
+				options, optionErr := serverdaemon.ProductionOptions(ctx, root, "127.0.0.1:0", "", serverhost.TransportOptions{Mode: serverhost.TransportSelfSignedTLS}, factory, io.Discard)
+				if optionErr != nil {
+					t.Fatal(optionErr)
+				}
+				err = serverdaemon.Run(ctx, options)
+			}
+			if !errors.Is(err, runtimepersistence.ErrSchemaBaselineMismatch) {
+				t.Fatalf("startup error = %v, want unsupported schema", err)
+			}
+			after, err := os.Stat(paths.DatabasePath())
+			if err != nil || !os.SameFile(before, after) {
+				t.Fatalf("startup replaced the database: %v", err)
+			}
+			if _, err := os.Stat(filepath.Join(root, "development-backups")); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("startup silently archived user data: %v", err)
+			}
+			database, err = sql.Open("sqlite", paths.DatabasePath())
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer database.Close()
+			var value string
+			if err := database.QueryRow(`SELECT value FROM old_data`).Scan(&value); err != nil || value != "keep me" {
+				t.Fatalf("original data unavailable: value=%q err=%v", value, err)
+			}
+		})
+	}
+}
 
 func TestDaemonPublishesBootstrapThenParentEOFReleasesGeneration(t *testing.T) {
 	t.Parallel()

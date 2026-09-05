@@ -3191,7 +3191,11 @@ final class MessageTransformTestSample {
   final MessageTransformTestResponse response;
   final MessageTransformTestRuntime? runtime;
 
-  factory MessageTransformTestSample.example(String wireProtocol) {
+  factory MessageTransformTestSample.example(
+    String wireProtocol, {
+    String userMessage = 'Hello from ViberMate',
+    String assistantMessage = 'Sample response',
+  }) {
     final path = switch (wireProtocol) {
       'anthropic_messages' => '/v1/messages',
       'openai_responses' => '/v1/responses',
@@ -3223,7 +3227,10 @@ final class MessageTransformTestSample {
           if (wireProtocol == 'anthropic_messages')
             'anthropic-version': ['2023-06-01'],
         },
-        body: requestBody,
+        body: requestBody.replaceFirst(
+          jsonEncode('Hello from ViberMate'),
+          jsonEncode(userMessage),
+        ),
       ),
       response: MessageTransformTestResponse(
         statusCode: 200,
@@ -3231,7 +3238,10 @@ final class MessageTransformTestSample {
         headers: const {
           'content-type': ['application/json'],
         },
-        body: responseBody,
+        body: responseBody.replaceFirst(
+          jsonEncode('Sample response'),
+          jsonEncode(assistantMessage),
+        ),
       ),
       runtime: MessageTransformTestRuntime.example(),
     );

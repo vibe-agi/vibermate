@@ -820,7 +820,10 @@ void main() {
       password: 'replacement-password',
     );
     expect(passwordChanged.active, isTrue);
-    final disabled = await api.disableRuntimeUser(users.single.id);
+    final disabled = await api.setRuntimeUserEnabled(
+      users.single.id,
+      enabled: false,
+    );
     expect(disabled.active, isFalse);
     expect(bodies, [
       {

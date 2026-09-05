@@ -114,17 +114,6 @@ func Run(ctx context.Context, options Options) error {
 		return fmt.Errorf("write native-shell bootstrap progress: %w", err)
 	}
 	host, err := desktophost.Start(ctx, options.Host)
-	if errors.Is(err, runtimepersistence.ErrSchemaBaselineMismatch) {
-		_, archiveErr := runtimepersistence.ArchiveUnsupportedDevelopmentDatabase(
-			options.Host.Runtime.Paths.DatabasePath(),
-			time.Now().UTC(),
-		)
-		if archiveErr == nil {
-			host, err = desktophost.Start(ctx, options.Host)
-		} else {
-			err = errors.Join(err, archiveErr)
-		}
-	}
 	if err != nil {
 		failure := classifyStartupFailure(err)
 		if writeErr := encoder.Encode(failure); writeErr != nil {

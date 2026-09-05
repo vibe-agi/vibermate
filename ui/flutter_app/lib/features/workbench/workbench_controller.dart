@@ -88,8 +88,19 @@ final class WorkbenchController extends ChangeNotifier {
   String get runtimeConnectTarget =>
       serverAccess?.preferredTarget ?? runtimeTarget;
 
-  String get runtimeWebURL =>
-      '${serverAccess?.transport ?? 'http'}://$runtimeConnectTarget/';
+  String get runtimeServerURL {
+    // In a browser, keep the origin the user actually connected to, including
+    // HTTPS at a reverse proxy. The server may only know its private listener.
+    final page = Uri.tryParse(runtimeTarget);
+    if (page != null &&
+        (page.scheme == 'http' || page.scheme == 'https') &&
+        page.host.isNotEmpty) {
+      return page.origin;
+    }
+    return '${serverAccess?.transport ?? 'http'}://$runtimeConnectTarget';
+  }
+
+  String get runtimeWebURL => '$runtimeServerURL/';
 
   DashboardData? data;
   NetworkData? networkData;
@@ -803,7 +814,7 @@ final class WorkbenchController extends ChangeNotifier {
   }
 
   void selectSettingsTab(int value) {
-    final maximum = serverManagement ? 2 : 1;
+    final maximum = serverManagement || terminalManagement ? 3 : 2;
     if (value < 0 || value > maximum || settingsTab == value) return;
     settingsTab = value;
     notifyListeners();
@@ -817,6 +828,20 @@ final class WorkbenchController extends ChangeNotifier {
     notifyListeners();
     if (runtimeUsers == null || serverAccess == null) {
       unawaited(refreshServerManagement());
+    }
+  }
+
+  void openTerminalSettings() {
+    if (!terminalManagement) {
+      openRuntimeUsersSettings();
+      return;
+    }
+    settingsTab = 1;
+    section = WorkbenchSection.settings;
+    operationNotice = null;
+    notifyListeners();
+    if (terminalCommand == null) {
+      unawaited(refreshTerminalCommand());
     }
   }
 
@@ -910,17 +935,23 @@ final class WorkbenchController extends ChangeNotifier {
     }
   }
 
-  Future<bool> disableRuntimeUser(String userId) async {
+  Future<bool> setRuntimeUserEnabled(
+    String userId, {
+    required bool enabled,
+  }) async {
     if (_disposed || !serverManagement || runtimeUserMutating) return false;
     runtimeUserMutating = true;
     serverManagementError = null;
     notifyListeners();
     try {
-      final disabled = await _api.disableRuntimeUser(userId);
+      final updated = await _api.setRuntimeUserEnabled(
+        userId,
+        enabled: enabled,
+      );
       if (_disposed) return false;
       runtimeUsers = List<RuntimeUser>.unmodifiable([
         for (final user in runtimeUsers ?? const <RuntimeUser>[])
-          if (user.id == userId) disabled else user,
+          if (user.id == userId) updated else user,
       ]);
       runtimeUserMutating = false;
       notifyListeners();

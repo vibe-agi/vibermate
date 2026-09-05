@@ -186,7 +186,7 @@ func (handler *RuntimeUsersHandler) update(
 	decoder := json.NewDecoder(bytes.NewReader(payload))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&input); err != nil ||
-		input.Schema != RuntimeUserUpdateSchema || input.State != string(runtimeuser.StateDisabled) {
+		input.Schema != RuntimeUserUpdateSchema || (input.State != string(runtimeuser.StateDisabled) && input.State != string(runtimeuser.StateActive)) {
 		writeProblem(writer, http.StatusUnprocessableEntity, "invalid_runtime_user_update")
 		return
 	}
@@ -195,7 +195,12 @@ func (handler *RuntimeUsersHandler) update(
 		writeProblem(writer, http.StatusUnprocessableEntity, "invalid_runtime_user_update")
 		return
 	}
-	updated, err := handler.users.Disable(request.Context(), id)
+	var updated runtimeuser.User
+	if input.State == string(runtimeuser.StateActive) {
+		updated, err = handler.users.Enable(request.Context(), id)
+	} else {
+		updated, err = handler.users.Disable(request.Context(), id)
+	}
 	if err != nil {
 		if errors.Is(err, runtimeuser.ErrInvalidUser) {
 			writeProblem(writer, http.StatusNotFound, "runtime_user_not_found")

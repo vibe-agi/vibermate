@@ -151,7 +151,7 @@ func (handler router) authorizeAdmin(request *http.Request, scope serveradmin.Sc
 		return false
 	}
 	value, found := strings.CutPrefix(values[0], "Bearer ")
-	return found && handler.admin.Authorize(value, scope)
+	return found && handler.admin.Authorize(request.Context(), value, scope)
 }
 
 func runtimeUsersScope(method string) serveradmin.Scope {

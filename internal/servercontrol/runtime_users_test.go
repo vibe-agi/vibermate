@@ -90,6 +90,35 @@ func TestRuntimeUsageHTTPRejectsAmbiguousOrInvalidWindows(t *testing.T) {
 	}
 }
 
+func TestRuntimeUserHTTPEnablesTheSameDisabledAccount(t *testing.T) {
+	handler := newRuntimeUsersHandler(t, &recordingRuntimeUsage{})
+	created := webRequest(t, handler, http.MethodPost, servercontrol.RuntimeUsersPath, map[string]any{
+		"schema": servercontrol.RuntimeUserCreateSchema, "username": "member", "password": "test-member-password",
+	}, "")
+	if created.Code != http.StatusCreated {
+		t.Fatalf("create = %d", created.Code)
+	}
+	var user servercontrol.RuntimeUserAdminView
+	if err := json.Unmarshal(created.Body.Bytes(), &user); err != nil {
+		t.Fatal(err)
+	}
+	for _, state := range []string{"disabled", "active"} {
+		response := webRequest(t, handler, http.MethodPatch, servercontrol.RuntimeUsersPath+"/"+user.ID, map[string]any{
+			"schema": servercontrol.RuntimeUserUpdateSchema, "state": state,
+		}, "")
+		if response.Code != http.StatusOK {
+			t.Fatalf("%s = %d", state, response.Code)
+		}
+		var updated servercontrol.RuntimeUserAdminView
+		if err := json.Unmarshal(response.Body.Bytes(), &updated); err != nil {
+			t.Fatal(err)
+		}
+		if updated.ID != user.ID || updated.Username != user.Username || updated.State != state {
+			t.Fatalf("account changed: %+v", updated)
+		}
+	}
+}
+
 type recordingRuntimeUsage struct {
 	calls  int
 	period runtimeusage.Period

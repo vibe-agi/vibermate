@@ -13,7 +13,6 @@ import (
 	"github.com/vibe-agi/vibermate/internal/hostcontract"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
 	"github.com/vibe-agi/vibermate/internal/productruntime"
-	"github.com/vibe-agi/vibermate/internal/runtimepersistence"
 	"github.com/vibe-agi/vibermate/internal/secretstore"
 	"github.com/vibe-agi/vibermate/internal/serverhost"
 	"github.com/vibe-agi/vibermate/internal/toolapproval"
@@ -67,16 +66,6 @@ func Run(ctx context.Context, options Options) error {
 		return errors.New("Server daemon options are incomplete")
 	}
 	host, err := serverhost.Start(ctx, options.Host)
-	if errors.Is(err, runtimepersistence.ErrSchemaBaselineMismatch) {
-		_, archiveErr := runtimepersistence.ArchiveUnsupportedDevelopmentDatabase(
-			options.Host.Runtime.Paths.DatabasePath(), time.Now().UTC(),
-		)
-		if archiveErr == nil {
-			host, err = serverhost.Start(ctx, options.Host)
-		} else {
-			err = errors.Join(err, archiveErr)
-		}
-	}
 	if err != nil {
 		return err
 	}

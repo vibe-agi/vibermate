@@ -1,3 +1,6 @@
+import 'dart:async';
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -9,6 +12,96 @@ import 'package:vibermate_app/features/workbench/message_transform_editor.dart';
 import 'package:vibermate_app/features/workbench/workbench_controller.dart';
 
 void main() {
+  for (final protocol in [
+    'anthropic_messages',
+    'openai_responses',
+    'openai_chat',
+  ]) {
+    test(
+      '$protocol examples keep conversation envelopes and escape message text',
+      () {
+        const message = 'Hello "quoted" user\nsecond line';
+        final sample = MessageTransformTestSample.example(
+          protocol,
+          userMessage: message,
+          assistantMessage: message,
+        );
+        final request = jsonDecode(sample.request.body) as Map<String, dynamic>;
+        final response =
+            jsonDecode(sample.response.body) as Map<String, dynamic>;
+        expect(request['model'], isNotEmpty);
+        expect(
+          request.containsKey(
+            protocol == 'openai_responses' ? 'input' : 'messages',
+          ),
+          isTrue,
+        );
+        expect(
+          response.containsKey(switch (protocol) {
+            'anthropic_messages' => 'content',
+            'openai_responses' => 'output',
+            _ => 'choices',
+          }),
+          isTrue,
+        );
+        expect(sample.request.body, contains(jsonEncode(message)));
+        expect(sample.response.body, contains(jsonEncode(message)));
+      },
+    );
+  }
+
+  testWidgets('editing code invalidates completed and in-flight test results', (
+    tester,
+  ) async {
+    var pending = Completer<MessageTransformTestResult>();
+    final sample = MessageTransformTestSample.example('anthropic_messages');
+    final result = MessageTransformTestResult(
+      wireProtocol: 'anthropic_messages',
+      requestBefore: sample.request,
+      requestAfter: sample.request,
+      responseBefore: sample.response,
+      responseAfter: sample.response,
+    );
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: ViberTheme.light(),
+        home: MessageTransformEditorDialog(
+          planId: 'stale',
+          displayName: 'Test',
+          wireProtocol: 'anthropic_messages',
+          initial: const TrafficTransformPolicy(
+            requestJavaScript: 'request.body = request.body;',
+            responseJavaScript: '',
+          ),
+          copy: AppCopy.forLanguage(AppLanguage.english),
+          testTransform: ({required wireProtocol, required policy, sample}) =>
+              pending.future,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    final source = find.byKey(const Key('environment-transform-request-stale'));
+    final run = find.byKey(const Key('environment-transform-test-stale'));
+    await tester.tap(run);
+    await tester.pump();
+    await tester.enterText(source, 'request.body += " ";');
+    pending.complete(result);
+    await tester.pumpAndSettle();
+    expect(find.text('Test passed'), findsNothing);
+    pending = Completer<MessageTransformTestResult>();
+    await tester.tap(run);
+    pending.complete(result);
+    await tester.pumpAndSettle();
+    expect(find.text('Test passed'), findsOneWidget);
+    tester.widget<TextField>(source).controller!.selection =
+        const TextSelection.collapsed(offset: 1);
+    await tester.pump();
+    expect(find.text('Test passed'), findsOneWidget);
+    await tester.enterText(source, 'request.body += "changed";');
+    await tester.pump();
+    expect(find.text('Test passed'), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
   testWidgets(
     '390px editor keeps request and response scripts in one tested Turn',
     (tester) async {

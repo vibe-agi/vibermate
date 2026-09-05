@@ -93,6 +93,7 @@ final class AppCopy {
     'capture.empty.detail':
         'Start Codex or Claude through ViberMate from Terminal.',
     'capture.empty.action': 'Open Terminal setup',
+    'capture.empty.web.action': 'Open access and launch guide',
     'capture.load_more': 'Load older captures',
     'capture.select': 'Select a Capture to inspect its evidence.',
     'capture.managed': 'Managed run',
@@ -249,7 +250,7 @@ final class AppCopy {
     'bootstrap.failure.secret_store_unavailable':
         'ViberMate could not read the macOS Keychain. Unlock this Mac and retry. If this repeats after running a development build, quit ViberMate; open Keychain Access, search for io.vibermate.desktop, delete only those password items, then reopen. Captures stay; saved provider credentials and the local Root must be set up again.',
     'bootstrap.failure.storage_unavailable':
-        'ViberMate cannot open its local data. Check free space and folder permissions, then retry.',
+        'ViberMate cannot open its local data. No database was replaced. Check free space and folder permissions. If this started after changing versions, keep the data directory and use the previous compatible version.',
     'bootstrap.failure.root_reset_failed':
         'Root replacement could not recover safely. Retry once. If it repeats, quit ViberMate; in Keychain Access → login → Certificates remove ViberMate Local Root entries, move ~/Library/Application Support/io.vibermate.desktop/local-ca and ~/Library/Application Support/io.vibermate.desktop/root-reset-request.json to Trash, then reopen ViberMate. Captured evidence is kept.',
     'server.login.title': 'Connect to this Runtime Server',
@@ -1200,12 +1201,32 @@ final class AppCopy {
     'network.rules.validation.port': 'Enter a port from 1 through 65535.',
     'settings.title': 'Settings',
     'settings.subtitle':
-        'Local runtime, Terminal entry and operator preferences',
+        'Preferences, access, safety and network behavior for this Runtime',
     'settings.subtitle.server':
-        'Web workbench, client access, evidence and operator preferences',
+        'Preferences, team access, safety and network behavior for this Runtime',
     'settings.tab.general': 'General',
+    'settings.tab.preferences': 'Preferences',
+    'settings.tab.access': 'Access & launch',
+    'settings.tab.safety': 'Safety & data',
     'settings.tab.users': 'Team access',
     'settings.tab.proxy': 'Network exits',
+    'settings.preferences.title': 'Workbench preferences',
+    'settings.preferences.detail':
+        'These choices affect this workbench only; they do not change captured traffic or team accounts.',
+    'settings.access.title': 'Access & launch',
+    'settings.access.detail.server':
+        'Set up this Mac, browser access and individual Runtime User accounts from one place.',
+    'settings.access.detail.local':
+        'Set up the Terminal entry used to start managed Claude and Codex runs.',
+    'settings.access.local.title': 'On this Mac',
+    'settings.access.local.detail':
+        'Install or repair the local Terminal command, then copy a managed launch command.',
+    'settings.access.team.title': 'Browser & team',
+    'settings.access.team.detail':
+        'Share the workbench address and give every person their own account.',
+    'settings.safety.title': 'Safety & data',
+    'settings.safety.detail':
+        'Control the offline boundary, HTTPS trust and retained evidence for this Runtime.',
     'settings.egress.title': 'Network exit profiles',
     'settings.egress.detail':
         'Publish reusable SOCKS5 and DNS choices. Traffic policies freeze an exact revision.',
@@ -1343,6 +1364,7 @@ final class AppCopy {
     'server.users.disable.detail':
         '{username} will be signed out and cannot start another run.',
     'server.users.disable.action': 'Disable',
+    'server.users.enable.action': 'Enable · sign in again to reconnect',
     'server.users.password.title': 'Reset member password',
     'server.users.password.detail':
         'Set a temporary password for {username}. All of this member’s CLI and Web sessions will be signed out.',
@@ -1661,6 +1683,7 @@ final class AppCopy {
     'capture.empty': '还没有运行记录。',
     'capture.empty.detail': '先从终端通过 ViberMate 启动 Codex 或 Claude。',
     'capture.empty.action': '打开终端设置',
+    'capture.empty.web.action': '打开接入与启动指南',
     'capture.load_more': '加载更早的运行记录',
     'capture.select': '请选择一条运行记录以检查其证据。',
     'capture.managed': '托管运行',
@@ -1796,7 +1819,7 @@ final class AppCopy {
     'bootstrap.failure.secret_store_unavailable':
         'ViberMate 无法读取 macOS 钥匙串。请解锁 Mac 后重试。如果你曾运行开发版且问题重复出现，请退出 ViberMate，打开“钥匙串访问”，搜索 io.vibermate.desktop，只删除这些密码项目，然后重开。Capture 会保留；已保存的服务商凭据和本机根证书需要重新设置。',
     'bootstrap.failure.storage_unavailable':
-        'ViberMate 无法打开本机数据。请检查磁盘空间与目录权限，再重试。',
+        'ViberMate 无法打开本机数据，数据库未被替换。请检查磁盘空间与目录权限。如果发生在更换版本后，请保留数据目录，并使用之前兼容的版本。',
     'bootstrap.failure.root_reset_failed':
         '根证书更换无法安全恢复。请先重试一次；若仍失败，请退出 ViberMate，在“钥匙串访问”→“登录”钥匙串→“证书”中移除 ViberMate Local Root，再将 ~/Library/Application Support/io.vibermate.desktop/local-ca 与 ~/Library/Application Support/io.vibermate.desktop/root-reset-request.json 移到废纸篓，然后重新打开 ViberMate。已捕获的证据会保留。',
     'server.login.title': '连接到这台 Runtime Server',
@@ -2601,11 +2624,25 @@ final class AppCopy {
     'network.rules.validation.host': '请输入不含通配符和末尾点号的精确小写主机名。',
     'network.rules.validation.port': '请输入 1 至 65535 的端口。',
     'settings.title': '设置',
-    'settings.subtitle': '本地运行时、终端入口与操作偏好',
-    'settings.subtitle.server': '网页工作台、客户端接入、证据与操作偏好',
+    'settings.subtitle': '管理这套 Runtime 的偏好、接入、安全与网络行为',
+    'settings.subtitle.server': '管理这套 Runtime 的偏好、团队接入、安全与网络行为',
     'settings.tab.general': '常规',
+    'settings.tab.preferences': '偏好设置',
+    'settings.tab.access': '接入与启动',
+    'settings.tab.safety': '安全与数据',
     'settings.tab.users': '团队接入',
-    'settings.tab.proxy': '代理',
+    'settings.tab.proxy': '网络出口',
+    'settings.preferences.title': '工作台偏好',
+    'settings.preferences.detail': '这里只改变当前工作台的显示方式，不会修改捕获流量或团队账号。',
+    'settings.access.title': '接入与启动',
+    'settings.access.detail.server': '在一个地方设置本机终端、网页访问与每位成员的 Runtime 账号。',
+    'settings.access.detail.local': '设置用于启动 Claude 与 Codex 托管运行的终端入口。',
+    'settings.access.local.title': '这台电脑',
+    'settings.access.local.detail': '安装或修复本机终端命令，然后复制托管启动命令。',
+    'settings.access.team.title': '网页与团队',
+    'settings.access.team.detail': '分享工作台地址，并为每个人建立独立账号。',
+    'settings.safety.title': '安全与数据',
+    'settings.safety.detail': '管理这套 Runtime 的断网边界、HTTPS 信任与证据留存。',
     'settings.egress.title': '网络出口方案',
     'settings.egress.detail': '统一发布可复用的 SOCKS5 与 DNS 选择；流量策略冻结所选的精确版本。',
     'settings.egress.add': '新建网络出口方案',
@@ -2721,6 +2758,7 @@ final class AppCopy {
     'server.users.disable.title': '停用这个运行用户？',
     'server.users.disable.detail': '{username} 会立即退出，且不能再启动新的运行。',
     'server.users.disable.action': '停用',
+    'server.users.enable.action': '启用 · 重新登录后可接入',
     'server.users.password.title': '重置成员密码',
     'server.users.password.detail': '为 {username} 设置临时密码。该成员已有的 CLI 与网页会话都会退出。',
     'server.users.password.owner_title': '重置所有者密码',

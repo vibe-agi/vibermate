@@ -269,6 +269,9 @@ func (repository *memoryRepository) SetUserState(
 		return UserRecord{}, false, nil
 	}
 	record.User.State = state
+	if !updatedAt.After(record.User.UpdatedAt) {
+		updatedAt = record.User.UpdatedAt.Add(time.Millisecond)
+	}
 	record.User.UpdatedAt = updatedAt
 	repository.usersByID[id] = record
 	if state == StateDisabled {
@@ -287,12 +290,16 @@ func (repository *memoryRepository) ReplacePassword(
 	id UserID,
 	passwordHash string,
 	updatedAt time.Time,
+	expected time.Time,
 ) (UserRecord, bool, error) {
 	record, exists := repository.usersByID[id]
-	if !exists {
+	if !exists || (!expected.IsZero() && (!record.User.UpdatedAt.Equal(expected) || record.User.State != StateActive)) {
 		return UserRecord{}, false, nil
 	}
 	record.PasswordHash = passwordHash
+	if !updatedAt.After(record.User.UpdatedAt) {
+		updatedAt = record.User.UpdatedAt.Add(time.Millisecond)
+	}
 	record.User.UpdatedAt = updatedAt
 	repository.usersByID[id] = record
 	for digest, session := range repository.sessionsByToken {
@@ -307,7 +314,12 @@ func (repository *memoryRepository) ReplacePassword(
 func (repository *memoryRepository) CreateSession(
 	_ context.Context,
 	record SessionRecord,
+	expected time.Time,
 ) error {
+	user, found := repository.usersByID[record.UserID]
+	if !found || user.User.State != StateActive || !user.User.UpdatedAt.Equal(expected) {
+		return ErrInvalidCredentials
+	}
 	if _, exists := repository.sessionsByToken[record.TokenDigest]; exists {
 		return errors.New("duplicate test session")
 	}

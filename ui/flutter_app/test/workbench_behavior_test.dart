@@ -106,6 +106,49 @@ double paintedFormSurfaceHeight(WidgetTester tester, Finder field) {
 void main() {
   WidgetController.hitTestWarningShouldBeFatal = true;
 
+  test('connection commands preserve HTTPS and the browser origin', () {
+    for (final scenario in const [
+      (
+        target: 'This Mac',
+        transport: 'https',
+        expected: 'https://192.168.1.44:9666',
+      ),
+      (
+        target: 'This Mac',
+        transport: 'http',
+        expected: 'http://192.168.1.44:9666',
+      ),
+      (
+        target: 'https://team.example:8443',
+        transport: 'http',
+        expected: 'https://team.example:8443',
+      ),
+      (
+        target: 'https://[2001:db8::1]:9666',
+        transport: 'https',
+        expected: 'https://[2001:db8::1]:9666',
+      ),
+    ]) {
+      final api = PreviewControlApi();
+      final controller = WorkbenchController(
+        api: api,
+        terminalCommands: PreviewTerminalCommandService(),
+        previewMode: false,
+        closeRuntime: api.close,
+        runtimeTarget: scenario.target,
+      );
+      controller.serverAccess = RuntimeServerAccess(
+        transport: scenario.transport,
+        authentication: 'runtime_user_password',
+        sessionPolicy: 'reusable_until_logout_disable_or_expiry',
+        targets: const ['192.168.1.44:9666'],
+      );
+      expect(controller.runtimeServerURL, scenario.expected);
+      expect(controller.runtimeWebURL, '${scenario.expected}/');
+      controller.dispose();
+    }
+  });
+
   testWidgets('desktop select keeps popup rows compact and aligned', (
     tester,
   ) async {
@@ -345,6 +388,7 @@ void main() {
         empty: 'No captures yet.',
         detail: 'Start Codex or Claude through ViberMate from Terminal.',
         settings: 'Terminal command',
+        web: false,
       ),
       (
         size: Size(390, 760),
@@ -352,6 +396,23 @@ void main() {
         empty: '还没有运行记录。',
         detail: '先从终端通过 ViberMate 启动 Codex 或 Claude。',
         settings: '终端命令',
+        web: false,
+      ),
+      (
+        size: Size(1180, 760),
+        language: AppLanguage.english,
+        empty: 'No captures yet.',
+        detail: 'Start Codex or Claude through ViberMate from Terminal.',
+        settings: 'Web & client access',
+        web: true,
+      ),
+      (
+        size: Size(390, 760),
+        language: AppLanguage.simplifiedChinese,
+        empty: '还没有运行记录。',
+        detail: '先从终端通过 ViberMate 启动 Codex 或 Claude。',
+        settings: '网页与客户端接入',
+        web: true,
       ),
     ]) {
       await tester.binding.setSurfaceSize(scenario.size);
@@ -362,6 +423,8 @@ void main() {
         previewMode: false,
         closeRuntime: api.close,
         initialPreferences: WorkbenchPreferences(language: scenario.language),
+        serverManagement: scenario.web,
+        terminalManagement: !scenario.web,
       );
       await controller.initialize();
       await tester.pumpWidget(
@@ -683,6 +746,7 @@ void main() {
 
     await tester.tap(find.byIcon(Icons.settings_outlined).first);
     await tester.pumpAndSettle();
+    await _openSettingsTab(tester, const Key('settings-tab-safety'));
     expect(find.byKey(const Key('offline-settings-panel')), findsOneWidget);
     expect(find.text('断网保护'), findsOneWidget);
     expect(find.text('联网运行'), findsOneWidget);
@@ -729,6 +793,7 @@ void main() {
 
       await tester.tap(find.byIcon(Icons.settings_outlined).first);
       await tester.pumpAndSettle();
+      await _openSettingsTab(tester, const Key('settings-tab-access'));
       final panel = find.byKey(const Key('terminal-command-panel'));
       expect(panel, findsOneWidget);
       await tester.ensureVisible(panel);
@@ -779,7 +844,7 @@ void main() {
         -120,
         scrollable: find
             .descendant(
-              of: find.byKey(const Key('settings-scroll')),
+              of: find.byKey(const Key('settings-access-scroll')),
               matching: find.byType(Scrollable),
             )
             .first,
@@ -790,16 +855,14 @@ void main() {
       expect(find.text('Claude command copied'), findsOneWidget);
 
       final remove = find.byKey(const Key('terminal-command-remove'));
-      await tester.tap(find.byKey(const Key('settings-tab-proxy')));
-      await tester.pumpAndSettle();
-      await tester.tap(find.byKey(const Key('settings-tab-general')));
-      await tester.pumpAndSettle();
+      await _openSettingsTab(tester, const Key('settings-tab-proxy'));
+      await _openSettingsTab(tester, const Key('settings-tab-access'));
       await tester.scrollUntilVisible(
         remove,
         -120,
         scrollable: find
             .descendant(
-              of: find.byKey(const Key('settings-scroll')),
+              of: find.byKey(const Key('settings-access-scroll')),
               matching: find.byType(Scrollable),
             )
             .first,
@@ -832,6 +895,7 @@ void main() {
 
     await tester.tap(find.byIcon(Icons.settings_outlined).first);
     await tester.pumpAndSettle();
+    await _openSettingsTab(tester, const Key('settings-tab-access'));
     final panel = find.byKey(const Key('terminal-command-panel'));
     await tester.ensureVisible(panel);
     expect(find.text('终端命令'), findsOneWidget);
@@ -888,6 +952,7 @@ void main() {
         ),
       );
       await tester.pumpAndSettle();
+      await _openSettingsTab(tester, const Key('settings-tab-access'));
 
       final panel = find.byKey(const Key('terminal-command-panel'));
       await tester.ensureVisible(panel);
@@ -967,8 +1032,7 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    await tester.tap(find.byKey(const Key('settings-tab-users')));
-    await tester.pumpAndSettle();
+    await _openSettingsTab(tester, const Key('settings-tab-access'));
     expect(find.text('Create owner'), findsOneWidget);
     expect(
       find.textContaining('no default administrator password'),
@@ -1035,7 +1099,7 @@ void main() {
     await tester.pump();
   });
 
-  testWidgets('390px Settings gives Runtime User management its own tab', (
+  testWidgets('390px Settings keeps Runtime Users in the Access tab', (
     tester,
   ) async {
     await tester.binding.setSurfaceSize(const Size(390, 760));
@@ -1065,24 +1129,24 @@ void main() {
 
     expect(tester.takeException(), isNull);
     expect(find.byKey(const Key('settings-tab-general')), findsOneWidget);
-    expect(find.byKey(const Key('settings-tab-users')), findsOneWidget);
+    expect(find.byKey(const Key('settings-tab-access')), findsOneWidget);
+    expect(find.byKey(const Key('settings-tab-safety')), findsOneWidget);
     expect(find.byKey(const Key('server-runtime-access')), findsNothing);
-    await tester.tap(find.byKey(const Key('settings-tab-users')));
-    await tester.pumpAndSettle();
+    await _openSettingsTab(tester, const Key('settings-tab-access'));
     expect(find.byKey(const Key('server-runtime-access')), findsOneWidget);
     expect(find.text('http://192.168.1.44:9666/'), findsOneWidget);
     expect(find.text('Manage this Runtime in a browser'), findsOneWidget);
     expect(find.text('Terminal command'), findsNothing);
     expect(
-      find.text('vibermate login --server 192.168.1.44:9666'),
+      find.text('vibermate login --server http://192.168.1.44:9666'),
       findsOneWidget,
     );
     expect(
-      find.text('vibermate run --server 192.168.1.44:9666 -- codex'),
+      find.text('vibermate run --server http://192.168.1.44:9666 -- codex'),
       findsOneWidget,
     );
     final command = tester.widget<Text>(
-      find.text('vibermate run --server 192.168.1.44:9666 -- codex'),
+      find.text('vibermate run --server http://192.168.1.44:9666 -- codex'),
     );
     expect(command.maxLines, isNot(1));
     expect(command.overflow, isNot(TextOverflow.ellipsis));
@@ -1100,7 +1164,7 @@ void main() {
     expect(controller.runtimeUserMutating, isFalse);
     expect(controller.runtimeUsers?.single.active, isTrue);
     final userScroll = find.descendant(
-      of: find.byKey(const Key('runtime-users-settings-scroll')),
+      of: find.byKey(const Key('settings-access-scroll')),
       matching: find.byType(Scrollable),
     );
     await tester.scrollUntilVisible(
@@ -1119,7 +1183,7 @@ void main() {
 
     final add = find.byKey(const Key('runtime-user-add'));
     await tester.drag(
-      find.byKey(const Key('runtime-users-settings-scroll')),
+      find.byKey(const Key('settings-access-scroll')),
       const Offset(0, -220),
     );
     await tester.pumpAndSettle();
@@ -1188,8 +1252,7 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    await tester.tap(find.byKey(const Key('settings-tab-users')));
-    await tester.pumpAndSettle();
+    await _openSettingsTab(tester, const Key('settings-tab-access'));
     expect(
       find.byKey(const Key('runtime-user-row-user.preview.alice')),
       findsOneWidget,
@@ -1233,8 +1296,7 @@ void main() {
 
     expect(find.byKey(const Key('settings-tab-general')), findsOneWidget);
     expect(find.byKey(const Key('settings-tab-proxy')), findsOneWidget);
-    await tester.tap(find.byKey(const Key('settings-tab-proxy')));
-    await tester.pumpAndSettle();
+    await _openSettingsTab(tester, const Key('settings-tab-proxy'));
     expect(find.text('网络出口方案'), findsOneWidget);
     expect(
       find.byKey(const Key('egress-profile-row-profile.direct')),
@@ -5522,6 +5584,14 @@ void main() {
     await tester.pumpWidget(const SizedBox.shrink());
     await tester.pump();
   });
+}
+
+Future<void> _openSettingsTab(WidgetTester tester, Key key) async {
+  final tab = find.byKey(key);
+  await tester.ensureVisible(tab);
+  await tester.pumpAndSettle();
+  await tester.tap(tab);
+  await tester.pumpAndSettle();
 }
 
 Future<void> _openNetwork(WidgetTester tester) async {

@@ -263,10 +263,15 @@ final class _CaptureMaster extends StatelessWidget {
                     detail: copy('capture.empty.detail'),
                     action: TextButton.icon(
                       key: const Key('capture-empty-open-terminal-settings'),
-                      onPressed: () =>
-                          controller.selectSection(WorkbenchSection.settings),
+                      onPressed: controller.openTerminalSettings,
                       icon: const Icon(Icons.terminal, size: 15),
-                      label: Text(copy('capture.empty.action')),
+                      label: Text(
+                        copy(
+                          controller.terminalManagement
+                              ? 'capture.empty.action'
+                              : 'capture.empty.web.action',
+                        ),
+                      ),
                     ),
                   )
                 : ListView(

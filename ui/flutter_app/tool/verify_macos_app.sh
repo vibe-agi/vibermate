@@ -60,6 +60,21 @@ if [[ ! -x "${app_executable}" ]]; then
   exit 70
 fi
 
+if [[ "$(/usr/libexec/PlistBuddy -c 'Print :LSMinimumSystemVersion' "${app}/Contents/Info.plist")" != "14.0" ]]; then
+  echo "App must declare the supported macOS 14.0 baseline" >&2
+  exit 70
+fi
+script_directory="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+code_paths=(
+  "${app_executable}"
+  "${app}/Contents/Frameworks/App.framework/Versions/A/App"
+  "${app}/Contents/Frameworks/FlutterMacOS.framework/Versions/A/FlutterMacOS"
+)
+if [[ "${mode}" == "live" ]]; then
+  code_paths+=("${macos_directory}/vibermate" "${macos_directory}/vibermated")
+fi
+node "${script_directory}/verify_macos_build_versions.mjs" "${code_paths[@]}"
+
 if [[ "${mode}" == "live" ]]; then
   cli_executable="${macos_directory}/vibermate"
   daemon_executable="${macos_directory}/vibermated"

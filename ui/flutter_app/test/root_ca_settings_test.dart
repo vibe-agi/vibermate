@@ -388,9 +388,16 @@ final class _FailingRootTrustInstaller implements RootTrustInstaller {
 }
 
 Future<void> _revealInSettings(WidgetTester tester, Finder target) async {
+  if (target.evaluate().isEmpty) {
+    final safetyTab = find.byKey(const Key('settings-tab-safety'));
+    await tester.ensureVisible(safetyTab);
+    await tester.pumpAndSettle();
+    await tester.tap(safetyTab);
+    await tester.pumpAndSettle();
+  }
   final scrollable = find
       .descendant(
-        of: find.byKey(const Key('settings-scroll')),
+        of: find.byKey(const Key('settings-safety-scroll')),
         matching: find.byType(Scrollable),
       )
       .first;

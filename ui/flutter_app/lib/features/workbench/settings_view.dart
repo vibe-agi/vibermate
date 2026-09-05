@@ -21,10 +21,10 @@ final class SettingsView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final server = controller.serverManagement;
+    final access = controller.serverManagement || controller.terminalManagement;
     return DefaultTabController(
       key: ValueKey('settings-tab-${controller.settingsTab}'),
-      length: server ? 3 : 2,
+      length: access ? 4 : 3,
       initialIndex: controller.settingsTab,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -32,7 +32,9 @@ final class SettingsView extends StatelessWidget {
           PageHeading(
             title: copy('settings.title'),
             subtitle: copy(
-              server ? 'settings.subtitle.server' : 'settings.subtitle',
+              controller.serverManagement
+                  ? 'settings.subtitle.server'
+                  : 'settings.subtitle',
             ),
           ),
           Material(
@@ -44,19 +46,27 @@ final class SettingsView extends StatelessWidget {
                 tabAlignment: TabAlignment.start,
                 dividerHeight: 0,
                 onTap: controller.selectSettingsTab,
-                tabs: [
-                  Tab(
+                tabs: <Widget>[
+                  _SettingsTab(
                     key: const Key('settings-tab-general'),
-                    text: copy('settings.tab.general'),
+                    icon: Icons.tune,
+                    label: copy('settings.tab.preferences'),
                   ),
-                  if (server)
-                    Tab(
-                      key: const Key('settings-tab-users'),
-                      text: copy('settings.tab.users'),
+                  if (access)
+                    _SettingsTab(
+                      key: const Key('settings-tab-access'),
+                      icon: Icons.link,
+                      label: copy('settings.tab.access'),
                     ),
-                  Tab(
+                  _SettingsTab(
+                    key: const Key('settings-tab-safety'),
+                    icon: Icons.shield_outlined,
+                    label: copy('settings.tab.safety'),
+                  ),
+                  _SettingsTab(
                     key: const Key('settings-tab-proxy'),
-                    text: copy('settings.tab.proxy'),
+                    icon: Icons.alt_route,
+                    label: copy('settings.tab.proxy'),
                   ),
                 ],
               ),
@@ -67,8 +77,9 @@ final class SettingsView extends StatelessWidget {
             child: TabBarView(
               children: [
                 _GeneralSettingsPane(controller: controller, copy: copy),
-                if (server)
-                  _RuntimeUsersSettingsPane(controller: controller, copy: copy),
+                if (access)
+                  _AccessSettingsPane(controller: controller, copy: copy),
+                _SafetyDataSettingsPane(controller: controller, copy: copy),
                 _EgressProfilesSettingsPane(controller: controller, copy: copy),
               ],
             ),
@@ -77,6 +88,131 @@ final class SettingsView extends StatelessWidget {
       ),
     );
   }
+}
+
+final class _SettingsTab extends StatelessWidget {
+  const _SettingsTab({required this.icon, required this.label, super.key});
+
+  final IconData icon;
+  final String label;
+
+  @override
+  Widget build(BuildContext context) => Tab(
+    height: ViberMetrics.toolbarHeight,
+    child: Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [Icon(icon, size: 15), const SizedBox(width: 6), Text(label)],
+    ),
+  );
+}
+
+final class _SettingsPaneLayout extends StatelessWidget {
+  const _SettingsPaneLayout({required this.scrollKey, required this.children});
+
+  final Key scrollKey;
+  final List<Widget> children;
+
+  @override
+  Widget build(BuildContext context) => ListView(
+    key: scrollKey,
+    padding: const EdgeInsets.fromLTRB(14, 14, 14, 24),
+    children: [
+      Align(
+        alignment: Alignment.topCenter,
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 1080),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: children,
+          ),
+        ),
+      ),
+    ],
+  );
+}
+
+final class _SettingsPaneHeader extends StatelessWidget {
+  const _SettingsPaneHeader({
+    required this.icon,
+    required this.title,
+    required this.detail,
+    this.trailing,
+  });
+
+  final IconData icon;
+  final String title;
+  final String detail;
+  final Widget? trailing;
+
+  @override
+  Widget build(BuildContext context) => Row(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      Container(
+        width: ViberMetrics.controlHeight,
+        height: ViberMetrics.controlHeight,
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          color: context.viberColors.route.withValues(alpha: 0.09),
+          border: Border.all(
+            color: context.viberColors.route.withValues(alpha: 0.28),
+          ),
+          borderRadius: ViberMetrics.controlRadius,
+        ),
+        child: Icon(icon, size: 16, color: context.viberColors.route),
+      ),
+      const SizedBox(width: 10),
+      Expanded(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(title, style: Theme.of(context).textTheme.titleMedium),
+            const SizedBox(height: 2),
+            Text(
+              detail,
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                color: context.viberColors.textMuted,
+              ),
+            ),
+          ],
+        ),
+      ),
+      if (trailing case final action?) ...[const SizedBox(width: 12), action],
+    ],
+  );
+}
+
+final class _SettingsSurface extends StatelessWidget {
+  const _SettingsSurface({required this.child, this.accent = false, super.key});
+
+  final Widget child;
+  final bool accent;
+
+  @override
+  Widget build(BuildContext context) => Container(
+    clipBehavior: Clip.antiAlias,
+    decoration: BoxDecoration(
+      color: context.viberColors.panelRaised,
+      border: Border.all(color: context.viberColors.dividerSoft),
+      borderRadius: ViberMetrics.surfaceRadius,
+    ),
+    child: Stack(
+      children: [
+        Padding(
+          padding: EdgeInsets.fromLTRB(accent ? 16 : 12, 11, 12, 12),
+          child: child,
+        ),
+        if (accent)
+          Positioned(
+            left: 0,
+            top: 0,
+            bottom: 0,
+            width: 4,
+            child: ColoredBox(color: context.viberColors.route),
+          ),
+      ],
+    ),
+  );
 }
 
 final class _EgressProfilesSettingsPane extends StatefulWidget {
@@ -132,39 +268,21 @@ final class _EgressProfilesSettingsPaneState
   }
 
   @override
-  Widget build(BuildContext context) => ListView(
-    key: const Key('egress-profiles-settings-scroll'),
-    padding: const EdgeInsets.fromLTRB(14, 12, 14, 20),
+  Widget build(BuildContext context) => _SettingsPaneLayout(
+    scrollKey: const Key('egress-profiles-settings-scroll'),
     children: [
-      Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  copy('settings.egress.title'),
-                  style: Theme.of(context).textTheme.titleMedium,
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  copy('settings.egress.detail'),
-                  style: Theme.of(context).textTheme.bodySmall,
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(width: 10),
-          FilledButton.icon(
-            key: const Key('egress-profile-add'),
-            onPressed: _saving ? null : () => unawaited(_edit()),
-            icon: const Icon(Icons.add, size: 15),
-            label: Text(copy('settings.egress.add')),
-          ),
-        ],
+      _SettingsPaneHeader(
+        icon: Icons.alt_route,
+        title: copy('settings.egress.title'),
+        detail: copy('settings.egress.detail'),
+        trailing: FilledButton.icon(
+          key: const Key('egress-profile-add'),
+          onPressed: _saving ? null : () => unawaited(_edit()),
+          icon: const Icon(Icons.add, size: 15),
+          label: Text(copy('settings.egress.add')),
+        ),
       ),
-      const SizedBox(height: 12),
+      const SizedBox(height: 14),
       if (_loading)
         const Center(
           child: Padding(
@@ -282,10 +400,15 @@ final class _GeneralSettingsPane extends StatelessWidget {
   final AppCopy copy;
 
   @override
-  Widget build(BuildContext context) => ListView(
-    key: const Key('settings-scroll'),
-    padding: const EdgeInsets.fromLTRB(14, 12, 14, 20),
+  Widget build(BuildContext context) => _SettingsPaneLayout(
+    scrollKey: const Key('settings-scroll'),
     children: [
+      _SettingsPaneHeader(
+        icon: Icons.tune,
+        title: copy('settings.preferences.title'),
+        detail: copy('settings.preferences.detail'),
+      ),
+      const SizedBox(height: 14),
       if (controller.preferenceWarning case final warning?) ...[
         InlineNotice(
           key: const Key('preferences-warning'),
@@ -294,91 +417,183 @@ final class _GeneralSettingsPane extends StatelessWidget {
         ),
         const SizedBox(height: 10),
       ],
-      Wrap(
-        spacing: 28,
-        runSpacing: 12,
-        children: [
-          _PreferenceControl(
-            label: copy('settings.appearance'),
-            child: CompactSegmentedControl<WorkbenchTheme>(
-              key: const Key('settings-theme'),
-              segments: [
-                CompactSegment(
-                  value: WorkbenchTheme.system,
-                  label: copy('settings.auto'),
-                ),
-                CompactSegment(
-                  value: WorkbenchTheme.light,
-                  label: copy('settings.light'),
-                ),
-                CompactSegment(
-                  value: WorkbenchTheme.dark,
-                  label: copy('settings.dark'),
-                ),
-              ],
-              minSegmentWidth: 42,
-              expanded: true,
-              selected: controller.theme,
-              onSelected: controller.setTheme,
+      _SettingsSurface(
+        accent: true,
+        child: Wrap(
+          spacing: 28,
+          runSpacing: 12,
+          children: [
+            _PreferenceControl(
+              label: copy('settings.appearance'),
+              child: CompactSegmentedControl<WorkbenchTheme>(
+                key: const Key('settings-theme'),
+                segments: [
+                  CompactSegment(
+                    value: WorkbenchTheme.system,
+                    label: copy('settings.auto'),
+                  ),
+                  CompactSegment(
+                    value: WorkbenchTheme.light,
+                    label: copy('settings.light'),
+                  ),
+                  CompactSegment(
+                    value: WorkbenchTheme.dark,
+                    label: copy('settings.dark'),
+                  ),
+                ],
+                minSegmentWidth: 42,
+                expanded: true,
+                selected: controller.theme,
+                onSelected: controller.setTheme,
+              ),
             ),
-          ),
-          _PreferenceControl(
-            label: copy('settings.language'),
-            child: CompactSegmentedControl<AppLanguage>(
-              key: const Key('settings-language'),
-              segments: [
-                CompactSegment(
-                  value: AppLanguage.english,
-                  label: copy('settings.english'),
-                ),
-                CompactSegment(
-                  value: AppLanguage.simplifiedChinese,
-                  label: copy('settings.chinese'),
-                ),
-              ],
-              expanded: true,
-              selected: controller.language,
-              onSelected: controller.setLanguage,
+            _PreferenceControl(
+              label: copy('settings.language'),
+              child: CompactSegmentedControl<AppLanguage>(
+                key: const Key('settings-language'),
+                segments: [
+                  CompactSegment(
+                    value: AppLanguage.english,
+                    label: copy('settings.english'),
+                  ),
+                  CompactSegment(
+                    value: AppLanguage.simplifiedChinese,
+                    label: copy('settings.chinese'),
+                  ),
+                ],
+                expanded: true,
+                selected: controller.language,
+                onSelected: controller.setLanguage,
+              ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
-      const SizedBox(height: 14),
-      const Divider(height: 1),
-      const SizedBox(height: 14),
-      OfflineHoldSettingsPanel(controller: controller, copy: copy),
+      const SizedBox(height: 12),
+      _SettingsSurface(
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Icon(Icons.memory, size: 17, color: context.viberColors.route),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    copy('settings.runtime'),
+                    style: Theme.of(context).textTheme.labelLarge,
+                  ),
+                  const SizedBox(height: 3),
+                  Text(
+                    controller.previewMode
+                        ? copy('settings.preview')
+                        : controller.serverManagement
+                        ? copy.format('settings.remote', {
+                            'target': controller.runtimeConnectTarget,
+                          })
+                        : copy('settings.live'),
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: context.viberColors.textMuted,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    ],
+  );
+}
+
+final class _AccessSettingsPane extends StatelessWidget {
+  const _AccessSettingsPane({required this.controller, required this.copy});
+
+  final WorkbenchController controller;
+  final AppCopy copy;
+
+  @override
+  Widget build(BuildContext context) => _SettingsPaneLayout(
+    scrollKey: const Key('settings-access-scroll'),
+    children: [
+      _SettingsPaneHeader(
+        icon: Icons.link,
+        title: copy('settings.access.title'),
+        detail: copy(
+          controller.serverManagement
+              ? 'settings.access.detail.server'
+              : 'settings.access.detail.local',
+        ),
+      ),
       if (controller.terminalManagement) ...[
         const SizedBox(height: 14),
+        _SettingsGroupLabel(
+          title: copy('settings.access.local.title'),
+          detail: copy('settings.access.local.detail'),
+        ),
+        const SizedBox(height: 8),
         _TerminalCommandPanel(controller: controller, copy: copy),
         const SizedBox(height: 9),
         _ManagedRunGuide(copy: copy, status: controller.terminalCommand),
       ],
+      if (controller.serverManagement) ...[
+        const SizedBox(height: 16),
+        _SettingsGroupLabel(
+          title: copy('settings.access.team.title'),
+          detail: copy('settings.access.team.detail'),
+        ),
+        const SizedBox(height: 8),
+        _ServerAccessPanel(controller: controller, copy: copy),
+      ],
+    ],
+  );
+}
+
+final class _SafetyDataSettingsPane extends StatelessWidget {
+  const _SafetyDataSettingsPane({required this.controller, required this.copy});
+
+  final WorkbenchController controller;
+  final AppCopy copy;
+
+  @override
+  Widget build(BuildContext context) => _SettingsPaneLayout(
+    scrollKey: const Key('settings-safety-scroll'),
+    children: [
+      _SettingsPaneHeader(
+        icon: Icons.shield_outlined,
+        title: copy('settings.safety.title'),
+        detail: copy('settings.safety.detail'),
+      ),
+      const SizedBox(height: 14),
+      OfflineHoldSettingsPanel(controller: controller, copy: copy),
       if (controller.rootTrustManagement) ...[
-        const SizedBox(height: 14),
+        const SizedBox(height: 12),
         _RootCASettingsPanel(controller: controller, copy: copy),
       ],
-      const SizedBox(height: 18),
+      const SizedBox(height: 12),
       _StorageDisclosure(copy: copy, controller: controller),
-      const SizedBox(height: 18),
-      _SettingsLabel(copy('settings.runtime')),
-      const SizedBox(height: 7),
-      Row(
-        children: [
-          Icon(Icons.memory, size: 15, color: context.viberColors.route),
-          const SizedBox(width: 7),
-          Expanded(
-            child: Text(
-              controller.previewMode
-                  ? copy('settings.preview')
-                  : controller.serverManagement
-                  ? copy.format('settings.remote', {
-                      'target': controller.runtimeConnectTarget,
-                    })
-                  : copy('settings.live'),
-              style: Theme.of(context).textTheme.bodyMedium,
-            ),
-          ),
-        ],
+    ],
+  );
+}
+
+final class _SettingsGroupLabel extends StatelessWidget {
+  const _SettingsGroupLabel({required this.title, required this.detail});
+
+  final String title;
+  final String detail;
+
+  @override
+  Widget build(BuildContext context) => Column(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      Text(title, style: Theme.of(context).textTheme.titleSmall),
+      const SizedBox(height: 2),
+      Text(
+        detail,
+        style: Theme.of(
+          context,
+        ).textTheme.bodySmall?.copyWith(color: context.viberColors.textMuted),
       ),
     ],
   );
@@ -858,23 +1073,6 @@ final class _RootCAFact extends StatelessWidget {
   );
 }
 
-final class _RuntimeUsersSettingsPane extends StatelessWidget {
-  const _RuntimeUsersSettingsPane({
-    required this.controller,
-    required this.copy,
-  });
-
-  final WorkbenchController controller;
-  final AppCopy copy;
-
-  @override
-  Widget build(BuildContext context) => ListView(
-    key: const Key('runtime-users-settings-scroll'),
-    padding: const EdgeInsets.fromLTRB(14, 12, 14, 20),
-    children: [_ServerAccessPanel(controller: controller, copy: copy)],
-  );
-}
-
 final class _ServerAccessPanel extends StatefulWidget {
   const _ServerAccessPanel({required this.controller, required this.copy});
 
@@ -896,296 +1094,351 @@ final class _ServerAccessPanelState extends State<_ServerAccessPanel> {
     final access = controller.serverAccess;
     final users = controller.runtimeUsers;
     final firstOwner = users != null && !users.any((user) => user.owner);
-    return Container(
+    return Column(
       key: const Key('server-runtime-access'),
-      clipBehavior: Clip.antiAlias,
-      decoration: BoxDecoration(
-        color: context.viberColors.panelRaised,
-        border: Border.all(color: context.viberColors.dividerSoft),
-        borderRadius: ViberMetrics.surfaceRadius,
-      ),
-      child: IntrinsicHeight(
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Container(width: 4, color: context.viberColors.route),
-            Expanded(
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(12, 11, 12, 12),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
+      children: [
+        _runtimeUsersCard(
+          context,
+          controller: controller,
+          copy: copy,
+          users: users,
+          firstOwner: firstOwner,
+        ),
+        const SizedBox(height: 10),
+        Container(
+          clipBehavior: Clip.antiAlias,
+          decoration: BoxDecoration(
+            color: context.viberColors.panelRaised,
+            border: Border.all(color: context.viberColors.dividerSoft),
+            borderRadius: ViberMetrics.surfaceRadius,
+          ),
+          child: IntrinsicHeight(
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Container(width: 4, color: context.viberColors.route),
+                Expanded(
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(12, 11, 12, 12),
+                    child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Icon(
-                          Icons.dns_outlined,
-                          size: 17,
-                          color: context.viberColors.route,
-                        ),
-                        const SizedBox(width: 7),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                copy('server.access.title'),
-                                style: Theme.of(context).textTheme.titleSmall,
-                              ),
-                              const SizedBox(height: 2),
-                              SelectableText(
-                                controller.runtimeConnectTarget,
-                                style: monoStyle.copyWith(
-                                  fontSize: ViberType.micro,
-                                  color: context.viberColors.textMuted,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                        if (access != null) ...[
-                          const SizedBox(width: 8),
-                          _AccessTransportBadge(
-                            label: copy(
-                              access.encrypted
-                                  ? 'server.access.transport.https'
-                                  : 'server.access.transport.http',
+                        Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Icon(
+                              Icons.dns_outlined,
+                              size: 17,
+                              color: context.viberColors.route,
                             ),
-                            encrypted: access.encrypted,
-                          ),
-                        ],
-                      ],
-                    ),
-                    const SizedBox(height: 5),
-                    Text(
-                      copy('server.access.description'),
-                      style: Theme.of(context).textTheme.bodySmall,
-                    ),
-                    const SizedBox(height: 9),
-                    if (controller.serverManagementLoading && access == null)
-                      CompactLoadingMessage(
-                        label: copy('server.access.loading'),
-                      )
-                    else if (access != null) ...[
-                      if (!access.encrypted) ...[
-                        InlineNotice(
-                          message: copy('server.access.http_warning'),
-                          error: true,
-                        ),
-                        const SizedBox(height: 8),
-                      ],
-                      _ServerAccessFact(
-                        icon: Icons.login,
-                        title: copy('server.access.session.title'),
-                        detail: copy('server.access.session.detail'),
-                      ),
-                    ] else
-                      OutlinedButton.icon(
-                        onPressed: () =>
-                            unawaited(controller.refreshServerManagement()),
-                        icon: const Icon(Icons.refresh, size: 15),
-                        label: Text(copy('common.retry')),
-                      ),
-                    if (controller.serverManagementError case final error?) ...[
-                      const SizedBox(height: 8),
-                      InlineNotice(
-                        message: copy.format('server.access.error', {
-                          'detail': error,
-                        }),
-                        error: true,
-                      ),
-                    ],
-                    if (access != null) ...[
-                      const SizedBox(height: 10),
-                      Divider(
-                        height: 1,
-                        color: context.viberColors.dividerSoft,
-                      ),
-                      const SizedBox(height: 9),
-                      Text(
-                        copy('server.web.title'),
-                        style: Theme.of(context).textTheme.labelLarge,
-                      ),
-                      const SizedBox(height: 3),
-                      Text(
-                        copy('server.web.detail'),
-                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                          color: context.viberColors.textMuted,
-                        ),
-                      ),
-                      const SizedBox(height: 7),
-                      _RunCommand(
-                        client: 'Web',
-                        command: controller.runtimeWebURL,
-                        copyLabel: copy('server.web.copy'),
-                        enabled: true,
-                        onCopy: () =>
-                            _copyCommand('Web', controller.runtimeWebURL),
-                      ),
-                    ],
-                    const SizedBox(height: 10),
-                    Divider(height: 1, color: context.viberColors.dividerSoft),
-                    const SizedBox(height: 9),
-                    Row(
-                      children: [
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                copy('server.users.title'),
-                                style: Theme.of(context).textTheme.labelLarge,
-                              ),
-                              const SizedBox(height: 2),
-                              Text(
-                                copy('server.users.description'),
-                                style: Theme.of(context).textTheme.bodySmall
-                                    ?.copyWith(
+                            const SizedBox(width: 7),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    copy('server.access.title'),
+                                    style: Theme.of(
+                                      context,
+                                    ).textTheme.titleSmall,
+                                  ),
+                                  const SizedBox(height: 2),
+                                  SelectableText(
+                                    controller.runtimeConnectTarget,
+                                    style: monoStyle.copyWith(
+                                      fontSize: ViberType.micro,
                                       color: context.viberColors.textMuted,
                                     ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            if (access != null) ...[
+                              const SizedBox(width: 8),
+                              _AccessTransportBadge(
+                                label: copy(
+                                  access.encrypted
+                                      ? 'server.access.transport.https'
+                                      : 'server.access.transport.http',
+                                ),
+                                encrypted: access.encrypted,
                               ),
                             ],
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-                        (firstOwner ? FilledButton.icon : OutlinedButton.icon)(
-                          key: const Key('runtime-user-add'),
-                          onPressed: controller.runtimeUserMutating
-                              ? null
-                              : () => _showCreateRuntimeUserDialog(
-                                  firstOwner: firstOwner,
-                                ),
-                          icon: const Icon(Icons.person_add_alt_1, size: 15),
-                          label: Text(
-                            copy(
-                              firstOwner
-                                  ? 'server.users.add_owner'
-                                  : 'server.users.add',
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 8),
-                    if (controller.serverManagementLoading && users == null)
-                      CompactLoadingMessage(label: copy('server.users.loading'))
-                    else if (users == null)
-                      OutlinedButton.icon(
-                        onPressed: () =>
-                            unawaited(controller.refreshServerManagement()),
-                        icon: const Icon(Icons.refresh, size: 15),
-                        label: Text(copy('common.retry')),
-                      )
-                    else if (users.isEmpty)
-                      InlineNotice(message: copy('server.users.empty'))
-                    else
-                      Column(
-                        children: [
-                          for (final user in users) ...[
-                            _RuntimeUserRow(
-                              user: user,
-                              copy: copy,
-                              disabling: controller.runtimeUserMutating,
-                              owner: user.owner,
-                              onReset:
-                                  user.active &&
-                                      (!user.owner ||
-                                          controller.webPrincipal == null)
-                                  ? () => _showResetRuntimeUserDialog(user)
-                                  : null,
-                              onDisable: user.active && !user.owner
-                                  ? () => _confirmDisableRuntimeUser(user)
-                                  : null,
-                            ),
-                            if (user != users.last) const SizedBox(height: 6),
                           ],
-                        ],
-                      ),
-                    const SizedBox(height: 10),
-                    Divider(height: 1, color: context.viberColors.dividerSoft),
-                    const SizedBox(height: 9),
-                    Text(
-                      copy('server.login.command.title'),
-                      style: Theme.of(context).textTheme.labelLarge,
-                    ),
-                    const SizedBox(height: 3),
-                    Text(
-                      copy('server.login.command.detail'),
-                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                        color: context.viberColors.textMuted,
-                      ),
-                    ),
-                    const SizedBox(height: 7),
-                    _RunCommand(
-                      client: copy('server.login.command.client'),
-                      command:
-                          'vibermate login --server ${controller.runtimeConnectTarget}',
-                      copyLabel: copy('server.login.command.copy'),
-                      enabled: access != null,
-                      onCopy: () => _copyCommand(
-                        copy('server.login.command.client'),
-                        'vibermate login --server ${controller.runtimeConnectTarget}',
-                      ),
-                    ),
-                    const SizedBox(height: 10),
-                    Text(
-                      copy('server.run.title'),
-                      style: Theme.of(context).textTheme.labelLarge,
-                    ),
-                    const SizedBox(height: 3),
-                    Text(
-                      copy('server.run.detail'),
-                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                        color: context.viberColors.textMuted,
-                      ),
-                    ),
-                    const SizedBox(height: 7),
-                    Column(
-                      children: [
-                        for (final (index, client) in const [
-                          'claude',
-                          'codex',
-                        ].indexed) ...[
-                          _RunCommand(
-                            client: client == 'claude' ? 'Claude' : 'Codex',
-                            command:
-                                'vibermate run --server ${controller.runtimeConnectTarget} -- $client',
-                            copyLabel: copy.format('terminal.run.copy', {
-                              'client': client == 'claude' ? 'Claude' : 'Codex',
-                            }),
-                            enabled: access != null,
-                            onCopy: () => _copyCommand(
-                              client == 'claude' ? 'Claude' : 'Codex',
-                              'vibermate run --server ${controller.runtimeConnectTarget} -- $client',
+                        ),
+                        const SizedBox(height: 5),
+                        Text(
+                          copy('server.access.description'),
+                          style: Theme.of(context).textTheme.bodySmall,
+                        ),
+                        const SizedBox(height: 9),
+                        if (controller.serverManagementLoading &&
+                            access == null)
+                          CompactLoadingMessage(
+                            label: copy('server.access.loading'),
+                          )
+                        else if (access != null) ...[
+                          if (!access.encrypted) ...[
+                            InlineNotice(
+                              message: copy('server.access.http_warning'),
+                              error: true,
                             ),
+                            const SizedBox(height: 8),
+                          ],
+                          _ServerAccessFact(
+                            icon: Icons.login,
+                            title: copy('server.access.session.title'),
+                            detail: copy('server.access.session.detail'),
                           ),
-                          if (index == 0) const SizedBox(height: 7),
+                        ] else
+                          OutlinedButton.icon(
+                            onPressed: () =>
+                                unawaited(controller.refreshServerManagement()),
+                            icon: const Icon(Icons.refresh, size: 15),
+                            label: Text(copy('common.retry')),
+                          ),
+                        if (controller.serverManagementError
+                            case final error?) ...[
+                          const SizedBox(height: 8),
+                          InlineNotice(
+                            message: copy.format('server.access.error', {
+                              'detail': error,
+                            }),
+                            error: true,
+                          ),
+                        ],
+                        if (access != null) ...[
+                          const SizedBox(height: 10),
+                          Divider(
+                            height: 1,
+                            color: context.viberColors.dividerSoft,
+                          ),
+                          const SizedBox(height: 9),
+                          Text(
+                            copy('server.web.title'),
+                            style: Theme.of(context).textTheme.labelLarge,
+                          ),
+                          const SizedBox(height: 3),
+                          Text(
+                            copy('server.web.detail'),
+                            style: Theme.of(context).textTheme.bodySmall
+                                ?.copyWith(
+                                  color: context.viberColors.textMuted,
+                                ),
+                          ),
+                          const SizedBox(height: 7),
+                          _RunCommand(
+                            client: 'Web',
+                            command: controller.runtimeWebURL,
+                            copyLabel: copy('server.web.copy'),
+                            enabled: true,
+                            onCopy: () =>
+                                _copyCommand('Web', controller.runtimeWebURL),
+                          ),
+                        ],
+                        const SizedBox(height: 10),
+                        Divider(
+                          height: 1,
+                          color: context.viberColors.dividerSoft,
+                        ),
+                        const SizedBox(height: 9),
+                        Text(
+                          copy('server.login.command.title'),
+                          style: Theme.of(context).textTheme.labelLarge,
+                        ),
+                        const SizedBox(height: 3),
+                        Text(
+                          copy('server.login.command.detail'),
+                          style: Theme.of(context).textTheme.bodySmall
+                              ?.copyWith(color: context.viberColors.textMuted),
+                        ),
+                        const SizedBox(height: 7),
+                        _RunCommand(
+                          client: copy('server.login.command.client'),
+                          command:
+                              'vibermate login --server ${controller.runtimeServerURL}',
+                          copyLabel: copy('server.login.command.copy'),
+                          enabled: access != null,
+                          onCopy: () => _copyCommand(
+                            copy('server.login.command.client'),
+                            'vibermate login --server ${controller.runtimeServerURL}',
+                          ),
+                        ),
+                        const SizedBox(height: 10),
+                        Text(
+                          copy('server.run.title'),
+                          style: Theme.of(context).textTheme.labelLarge,
+                        ),
+                        const SizedBox(height: 3),
+                        Text(
+                          copy('server.run.detail'),
+                          style: Theme.of(context).textTheme.bodySmall
+                              ?.copyWith(color: context.viberColors.textMuted),
+                        ),
+                        const SizedBox(height: 7),
+                        Column(
+                          children: [
+                            for (final (index, client) in const [
+                              'claude',
+                              'codex',
+                            ].indexed) ...[
+                              _RunCommand(
+                                client: client == 'claude' ? 'Claude' : 'Codex',
+                                command:
+                                    'vibermate run --server ${controller.runtimeServerURL} -- $client',
+                                copyLabel: copy.format('terminal.run.copy', {
+                                  'client': client == 'claude'
+                                      ? 'Claude'
+                                      : 'Codex',
+                                }),
+                                enabled: access != null,
+                                onCopy: () => _copyCommand(
+                                  client == 'claude' ? 'Claude' : 'Codex',
+                                  'vibermate run --server ${controller.runtimeServerURL} -- $client',
+                                ),
+                              ),
+                              if (index == 0) const SizedBox(height: 7),
+                            ],
+                          ],
+                        ),
+                        if (_copiedClient case final client?) ...[
+                          const SizedBox(height: 6),
+                          Text(
+                            copy.format('terminal.run.copied', {
+                              'client': client,
+                            }),
+                            style: Theme.of(context).textTheme.bodySmall
+                                ?.copyWith(color: context.viberColors.verified),
+                          ),
+                        ] else if (_copyFailed) ...[
+                          const SizedBox(height: 6),
+                          Text(
+                            copy('terminal.run.copy_failed'),
+                            style: Theme.of(context).textTheme.bodySmall
+                                ?.copyWith(color: context.viberColors.danger),
+                          ),
                         ],
                       ],
                     ),
-                    if (_copiedClient case final client?) ...[
-                      const SizedBox(height: 6),
-                      Text(
-                        copy.format('terminal.run.copied', {'client': client}),
-                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                          color: context.viberColors.verified,
-                        ),
-                      ),
-                    ] else if (_copyFailed) ...[
-                      const SizedBox(height: 6),
-                      Text(
-                        copy('terminal.run.copy_failed'),
-                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                          color: context.viberColors.danger,
-                        ),
-                      ),
-                    ],
-                  ],
+                  ),
                 ),
-              ),
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _runtimeUsersCard(
+    BuildContext context, {
+    required WorkbenchController controller,
+    required AppCopy copy,
+    required List<RuntimeUser>? users,
+    required bool firstOwner,
+  }) {
+    final heading = Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Icon(
+              Icons.group_outlined,
+              size: 17,
+              color: context.viberColors.route,
+            ),
+            const SizedBox(width: 7),
+            Text(
+              copy('server.users.title'),
+              style: Theme.of(context).textTheme.titleSmall,
             ),
           ],
         ),
+        const SizedBox(height: 3),
+        Text(
+          copy('server.users.description'),
+          style: Theme.of(
+            context,
+          ).textTheme.bodySmall?.copyWith(color: context.viberColors.textMuted),
+        ),
+      ],
+    );
+    final add = (firstOwner ? FilledButton.icon : OutlinedButton.icon)(
+      key: const Key('runtime-user-add'),
+      onPressed: controller.runtimeUserMutating
+          ? null
+          : () => _showCreateRuntimeUserDialog(firstOwner: firstOwner),
+      icon: const Icon(Icons.person_add_alt_1, size: 15),
+      label: Text(
+        copy(firstOwner ? 'server.users.add_owner' : 'server.users.add'),
+      ),
+    );
+    return _SettingsSurface(
+      key: const Key('runtime-users-panel'),
+      accent: firstOwner,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          LayoutBuilder(
+            builder: (context, constraints) {
+              if (constraints.maxWidth < 560) {
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    heading,
+                    const SizedBox(height: 8),
+                    Align(alignment: Alignment.centerLeft, child: add),
+                  ],
+                );
+              }
+              return Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Expanded(child: heading),
+                  const SizedBox(width: 12),
+                  add,
+                ],
+              );
+            },
+          ),
+          const SizedBox(height: 9),
+          if (controller.serverManagementLoading && users == null)
+            CompactLoadingMessage(label: copy('server.users.loading'))
+          else if (users == null)
+            Align(
+              alignment: Alignment.centerLeft,
+              child: OutlinedButton.icon(
+                onPressed: () =>
+                    unawaited(controller.refreshServerManagement()),
+                icon: const Icon(Icons.refresh, size: 15),
+                label: Text(copy('common.retry')),
+              ),
+            )
+          else if (users.isEmpty)
+            InlineNotice(message: copy('server.users.empty'))
+          else
+            Column(
+              children: [
+                for (final user in users) ...[
+                  _RuntimeUserRow(
+                    user: user,
+                    copy: copy,
+                    disabling: controller.runtimeUserMutating,
+                    owner: user.owner,
+                    onReset:
+                        user.active &&
+                            (!user.owner || controller.webPrincipal == null)
+                        ? () => _showResetRuntimeUserDialog(user)
+                        : null,
+                    onDisable: !user.owner
+                        ? () => _confirmDisableRuntimeUser(user)
+                        : null,
+                  ),
+                  if (user != users.last) const SizedBox(height: 6),
+                ],
+              ],
+            ),
+        ],
       ),
     );
   }
@@ -1219,6 +1472,10 @@ final class _ServerAccessPanelState extends State<_ServerAccessPanel> {
   }
 
   Future<void> _confirmDisableRuntimeUser(RuntimeUser user) async {
+    if (!user.active) {
+      await widget.controller.setRuntimeUserEnabled(user.id, enabled: true);
+      return;
+    }
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (dialogContext) => AlertDialog(
@@ -1241,7 +1498,7 @@ final class _ServerAccessPanelState extends State<_ServerAccessPanel> {
       ),
     );
     if (confirmed == true) {
-      await widget.controller.disableRuntimeUser(user.id);
+      await widget.controller.setRuntimeUserEnabled(user.id, enabled: false);
     }
   }
 
@@ -1736,8 +1993,15 @@ final class _RuntimeUserRow extends StatelessWidget {
                 const SizedBox(width: 6),
                 IconButton(
                   onPressed: disabling ? null : onDisable,
-                  tooltip: copy('server.users.disable.action'),
-                  icon: const Icon(Icons.block, size: 15),
+                  tooltip: copy(
+                    user.active
+                        ? 'server.users.disable.action'
+                        : 'server.users.enable.action',
+                  ),
+                  icon: Icon(
+                    user.active ? Icons.block : Icons.person_add_alt_1_outlined,
+                    size: 15,
+                  ),
                   constraints: const BoxConstraints.tightFor(
                     width: ViberMetrics.controlHeight,
                     height: ViberMetrics.controlHeight,
@@ -1959,53 +2223,65 @@ final class _StorageDisclosure extends StatelessWidget {
     final body = Theme.of(
       context,
     ).textTheme.bodyMedium?.copyWith(color: context.viberColors.textMuted);
-    return Column(
+    return _SettingsSurface(
       key: const Key('storage-disclosure-panel'),
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        _SettingsLabel(copy('settings.storage')),
-        const SizedBox(height: 7),
-        for (final line in const [
-          'settings.storage.not_encrypted',
-          'settings.storage.credentials',
-          'settings.storage.location',
-          'settings.storage.retention',
-        ]) ...[Text(copy(line), style: body), const SizedBox(height: 5)],
-        const SizedBox(height: 7),
-        // Design 06 section 8.2 makes clearing a distinct, deliberate and
-        // confirmable action rather than a side effect of stopping or
-        // uninstalling, which is why it lives here behind its own confirmation
-        // instead of anywhere a user could reach it by accident.
-        Align(
-          alignment: Alignment.centerLeft,
-          child: OutlinedButton.icon(
-            key: const Key('storage-clear-archive'),
-            onPressed: () async {
-              final outcome = await showDialog<DeletionOutcome>(
-                context: context,
-                builder: (_) => DeletionConfirmation(
-                  copy: copy,
-                  title: copy('deletion.archive.title'),
-                  subject: copy('settings.storage'),
-                  consequence: copy('deletion.archive.consequence'),
-                  onConfirm: () async {
-                    final result = await controller.clearEvidence();
-                    if (result == null) {
-                      throw StateError(
-                        controller.inventoryError ?? 'archive clear failed',
-                      );
-                    }
-                    return result;
-                  },
-                ),
-              );
-              if (outcome == null) return;
-            },
-            icon: const Icon(Icons.delete_sweep_outlined, size: 15),
-            label: Text(copy('deletion.archive.title')),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(
+                Icons.storage_outlined,
+                size: 17,
+                color: context.viberColors.route,
+              ),
+              const SizedBox(width: 8),
+              _SettingsLabel(copy('settings.storage')),
+            ],
           ),
-        ),
-      ],
+          const SizedBox(height: 8),
+          for (final line in const [
+            'settings.storage.not_encrypted',
+            'settings.storage.credentials',
+            'settings.storage.location',
+            'settings.storage.retention',
+          ]) ...[Text(copy(line), style: body), const SizedBox(height: 5)],
+          const SizedBox(height: 7),
+          // Design 06 section 8.2 makes clearing a distinct, deliberate and
+          // confirmable action rather than a side effect of stopping or
+          // uninstalling, which is why it lives here behind its own confirmation
+          // instead of anywhere a user could reach it by accident.
+          Align(
+            alignment: Alignment.centerLeft,
+            child: OutlinedButton.icon(
+              key: const Key('storage-clear-archive'),
+              onPressed: () async {
+                final outcome = await showDialog<DeletionOutcome>(
+                  context: context,
+                  builder: (_) => DeletionConfirmation(
+                    copy: copy,
+                    title: copy('deletion.archive.title'),
+                    subject: copy('settings.storage'),
+                    consequence: copy('deletion.archive.consequence'),
+                    onConfirm: () async {
+                      final result = await controller.clearEvidence();
+                      if (result == null) {
+                        throw StateError(
+                          controller.inventoryError ?? 'archive clear failed',
+                        );
+                      }
+                      return result;
+                    },
+                  ),
+                );
+                if (outcome == null) return;
+              },
+              icon: const Icon(Icons.delete_sweep_outlined, size: 15),
+              label: Text(copy('deletion.archive.title')),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

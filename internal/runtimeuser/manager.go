@@ -129,7 +129,7 @@ func (manager *Manager) Login(
 	if sessionRecord.Validate() != nil {
 		return LoginSession{}, ErrInvalidSession
 	}
-	if err := manager.repository.CreateSession(ctx, sessionRecord); err != nil {
+	if err := manager.repository.CreateSession(ctx, sessionRecord, record.User.UpdatedAt); err != nil {
 		return LoginSession{}, fmt.Errorf("create Runtime User Login Session: %w", err)
 	}
 	return LoginSession{
@@ -194,6 +194,19 @@ func (manager *Manager) ReplacePassword(
 	id UserID,
 	passwordInput []byte,
 ) (User, error) {
+	return manager.replacePassword(ctx, id, passwordInput, time.Time{})
+}
+
+// ChangePassword requires the exact credential revision just authenticated by
+// the caller. A concurrent reset or disable cannot be undone by an old login.
+func (manager *Manager) ChangePassword(ctx context.Context, verified User, password []byte) (User, error) {
+	if verified.Validate() != nil || verified.State != StateActive {
+		return User{}, ErrInvalidCredentials
+	}
+	return manager.replacePassword(ctx, verified.ID, password, verified.UpdatedAt)
+}
+
+func (manager *Manager) replacePassword(ctx context.Context, id UserID, passwordInput []byte, expected time.Time) (User, error) {
 	if manager == nil || ctx == nil || !id.Valid() {
 		return User{}, ErrInvalidUser
 	}
@@ -211,9 +224,13 @@ func (manager *Manager) ReplacePassword(
 		id,
 		passwordHash,
 		canonicalTime(manager.clock.Now()),
+		expected,
 	)
 	if err != nil {
 		return User{}, fmt.Errorf("replace Runtime User password: %w", err)
+	}
+	if !found && !expected.IsZero() {
+		return User{}, ErrInvalidCredentials
 	}
 	if !found || record.Validate() != nil {
 		return User{}, ErrInvalidUser
@@ -240,17 +257,25 @@ func (manager *Manager) List(ctx context.Context) ([]User, error) {
 }
 
 func (manager *Manager) Disable(ctx context.Context, id UserID) (User, error) {
+	return manager.setState(ctx, id, StateDisabled)
+}
+
+func (manager *Manager) Enable(ctx context.Context, id UserID) (User, error) {
+	return manager.setState(ctx, id, StateActive)
+}
+
+func (manager *Manager) setState(ctx context.Context, id UserID, state State) (User, error) {
 	if manager == nil || ctx == nil || !id.Valid() {
 		return User{}, ErrInvalidUser
 	}
 	record, found, err := manager.repository.SetUserState(
 		ctx,
 		id,
-		StateDisabled,
+		state,
 		canonicalTime(manager.clock.Now()),
 	)
 	if err != nil {
-		return User{}, fmt.Errorf("disable Runtime User: %w", err)
+		return User{}, fmt.Errorf("update Runtime User state: %w", err)
 	}
 	if !found || record.Validate() != nil {
 		return User{}, ErrInvalidUser
