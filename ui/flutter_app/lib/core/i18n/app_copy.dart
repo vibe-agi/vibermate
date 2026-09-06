@@ -518,6 +518,15 @@ final class AppCopy {
     'exchange.raw.layer.client_downstream': 'ViberMate → Client',
     'exchange.raw.state.captured': 'Retained',
     'exchange.raw.state.truncated': 'Prefix retained',
+    'exchange.raw.bytes_observed': '{bytes} observed',
+    'exchange.raw.prefix.recording_limit':
+        'The response was read to the end. Only a body prefix was saved because of the recording limit.',
+    'exchange.raw.prefix.closed_early':
+        'The response was closed before the end. Only the bytes already read are available here, not the full response.',
+    'exchange.raw.prefix.read_failed':
+        'Reading the response failed. Only the bytes read before the failure are available here.',
+    'exchange.raw.prefix.incomplete':
+        'Only a body prefix was saved. The remaining bytes are not available here.',
     'exchange.raw.state.metadata_only': 'Metadata only',
     'exchange.raw.state.unavailable': 'Unavailable',
     'environment.title': 'Traffic policies',
@@ -2079,6 +2088,11 @@ final class AppCopy {
     'exchange.raw.layer.client_downstream': 'ViberMate → 客户端',
     'exchange.raw.state.captured': '已保留',
     'exchange.raw.state.truncated': '保留前缀',
+    'exchange.raw.bytes_observed': '已观测 {bytes}',
+    'exchange.raw.prefix.recording_limit': '响应已读取至结尾；由于记录大小上限，这里只保存了正文前缀。',
+    'exchange.raw.prefix.closed_early': '响应在读取完之前被关闭。这里只保留了关闭前已读取的字节，不是完整响应。',
+    'exchange.raw.prefix.read_failed': '读取响应失败。这里只保留了失败前已读取的字节。',
+    'exchange.raw.prefix.incomplete': '这里只保存了正文前缀，其余字节不可用。',
     'exchange.raw.state.metadata_only': '仅元数据',
     'exchange.raw.state.unavailable': '不可用',
     'environment.title': '流量策略',

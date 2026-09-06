@@ -26,6 +26,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
 	"github.com/vibe-agi/vibermate/internal/protocolcore"
 	"github.com/vibe-agi/vibermate/internal/protocolpath"
+	"github.com/vibe-agi/vibermate/internal/protocolspec"
 	"github.com/vibe-agi/vibermate/internal/providerauth"
 	"github.com/vibe-agi/vibermate/internal/providertransport"
 	"github.com/vibe-agi/vibermate/internal/rawevidence"
@@ -568,6 +569,12 @@ func (pipeline *Pipeline) executeCandidate(
 		return newFailure(ReasonProviderRequestInvalid, request.exchangeID, 0, err)
 	}
 	headers := encodedProvider.Headers()
+	if credential.mode == providerauth.CredentialManaged {
+		for name, values := range nativeChatGPTProtocolHeaders(request, selection) {
+			headers[name] = values
+		}
+		refreshChatGPTRoutingHint(headers, request.body, encodedProvider.Body())
+	}
 	if credential.mode == providerauth.CredentialClientPassthrough {
 		original, available := request.OriginalHeaders()
 		if !available {
@@ -596,6 +603,10 @@ func (pipeline *Pipeline) executeCandidate(
 	)
 	if err != nil {
 		return newFailure(ReasonMessageTransformFailed, request.exchangeID, 0, err)
+	}
+	if selection.codecPlan.ProviderDialect() == protocolspec.DialectOpenAIResponses &&
+		upstreamendpoint.IsChatGPTCodexOrigin(selection.target.Origin()) {
+		refreshChatGPTRoutingHint(transformedHeaders, encodedProvider.Body(), transformedBody)
 	}
 	frozenRequest, err := pipeline.newProviderRequest(
 		request,
@@ -1620,9 +1631,7 @@ func (pipeline *Pipeline) executeOriginal(
 	defer response.Body.Close()
 	ledger.RecordUpstreamResponse()
 	mode := ResponseModeJSON
-	responseContentType := response.Header.Get("Content-Type")
-	if contentTypeMatches(responseContentType, "text/event-stream") ||
-		(responseContentType == "" && decodedContent != nil && decodedContent.Stream) {
+	if responseIsEventStream(response.Header, decodedContent != nil && decodedContent.Stream) {
 		// The Codex ChatGPT transport currently omits Content-Type while returning
 		// a Responses event stream. Only use the already-validated semantic
 		// request as a fallback when the header is absent; an explicit response
@@ -2408,10 +2417,9 @@ func (pipeline *Pipeline) executeStream(
 				failure,
 			)
 		}
-		if !contentTypeMatches(
-			response.Header.Get("Content-Type"),
-			"text/event-stream",
-		) {
+		if !responseIsEventStream(response.Header,
+			selection.codecPlan.ProviderDialect() == protocolspec.DialectOpenAIResponses &&
+				isNativeChatGPTResponses(frozenRequest)) {
 			failure := newProviderContentTypeFailure(
 				request.exchangeID,
 				statusCode,

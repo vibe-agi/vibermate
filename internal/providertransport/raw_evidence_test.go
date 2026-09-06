@@ -1,6 +1,7 @@
 package providertransport
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/sha256"
@@ -14,6 +15,40 @@ import (
 
 	"github.com/vibe-agi/vibermate/internal/rawevidence"
 )
+
+func TestProviderRequestEvidenceMatchesSerializedContentLength(t *testing.T) {
+	for _, test := range []struct {
+		method string
+		body   string
+	}{
+		{http.MethodPost, "payload"}, {http.MethodGet, "payload"},
+		{http.MethodPost, ""}, {http.MethodPut, ""}, {http.MethodPatch, ""},
+		{http.MethodGet, ""}, {http.MethodDelete, ""},
+	} {
+		t.Run(test.method+"/"+test.body, func(t *testing.T) {
+			request, err := http.NewRequest(test.method, "https://provider.example/test", strings.NewReader(test.body))
+			if err != nil {
+				t.Fatal(err)
+			}
+			evidence := providerRequestEvidenceHeaders(request)
+			if request.Header.Get("Content-Length") != "" {
+				t.Fatal("evidence mutated the request")
+			}
+			var wire bytes.Buffer
+			if err := request.Write(&wire); err != nil {
+				t.Fatal(err)
+			}
+			parsed, err := http.ReadRequest(bufio.NewReader(&wire))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer parsed.Body.Close()
+			if evidence.Get("Content-Length") != parsed.Header.Get("Content-Length") {
+				t.Fatalf("evidence content length = %q, wire = %q", evidence.Get("Content-Length"), parsed.Header.Get("Content-Length"))
+			}
+		})
+	}
+}
 
 func TestProviderRawEvidenceCapturesAuthenticatedEgressAndBoundedResponse(
 	t *testing.T,

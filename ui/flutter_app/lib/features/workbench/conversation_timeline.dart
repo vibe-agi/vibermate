@@ -2011,7 +2011,14 @@ final class _RawEnvelopeRow extends StatelessWidget {
                                   color: context.viberColors.textMuted,
                                 ),
                           ),
-                          Text(_bytes(envelope.bodyBytes), style: monoStyle),
+                          Text(
+                            envelope.payloadState == 'truncated'
+                                ? copy.format('exchange.raw.bytes_observed', {
+                                    'bytes': _bytes(envelope.bodyBytes),
+                                  })
+                                : _bytes(envelope.bodyBytes),
+                            style: monoStyle,
+                          ),
                         ],
                       ),
                       if (target.isNotEmpty)
@@ -2060,6 +2067,17 @@ final class _RawEnvelopeRow extends StatelessWidget {
               ],
             ),
           ),
+          if (_rawPrefixExplanation(envelope, copy) case final explanation?)
+            Padding(
+              key: Key('raw-prefix-notice-${envelope.envelopeId}'),
+              padding: const EdgeInsets.fromLTRB(8, 0, 8, 8),
+              child: InlineNotice(
+                message: explanation,
+                error:
+                    envelope.payloadReason == 'response_closed_before_eof' ||
+                    envelope.payloadReason == 'response_read_failed',
+              ),
+            ),
           if (revealed != null) ...[
             Divider(height: 1, color: context.viberColors.dividerSoft),
             _RevealedRawPayload(value: revealed!, copy: copy),
@@ -2068,6 +2086,17 @@ final class _RawEnvelopeRow extends StatelessWidget {
       ),
     );
   }
+}
+
+String? _rawPrefixExplanation(RawEvidenceEnvelope envelope, AppCopy copy) {
+  if (envelope.payloadState != 'truncated') return null;
+  final suffix = switch (envelope.payloadReason) {
+    'response_payload_limit' => 'recording_limit',
+    'response_closed_before_eof' => 'closed_early',
+    'response_read_failed' => 'read_failed',
+    _ => 'incomplete',
+  };
+  return copy('exchange.raw.prefix.$suffix');
 }
 
 final class _RevealedRawPayload extends StatelessWidget {
@@ -2207,6 +2236,11 @@ String _rawEvidenceClipboardText(RevealedRawEvidence value, AppCopy copy) {
       ..writeln()
       ..writeln(copy('exchange.raw.trailers'))
       ..writeln(_rawFieldsText(value.trailers));
+  }
+  if (_rawPrefixExplanation(value.envelope, copy) case final explanation?) {
+    buffer
+      ..writeln()
+      ..writeln(explanation);
   }
   buffer
     ..writeln()

@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -364,7 +365,7 @@ func (client *Client) Do(
 			Authority:            request.Host,
 			Path:                 request.URL.EscapedPath(),
 			RawQuery:             request.URL.RawQuery,
-			Headers:              request.Header.Clone(),
+			Headers:              providerRequestEvidenceHeaders(request),
 			ProtectedHeaderNames: append([]string(nil), evidence.ProtectedHeaderNames...),
 			Body:                 frozen.body,
 			Complete:             true,
@@ -774,6 +775,18 @@ func (client *Client) finish(operation *clientOperation, _ error) {
 func (client *Client) signalLocked() {
 	close(client.changed)
 	client.changed = make(chan struct{})
+}
+
+// net/http stores Content-Length separately from Header and serializes it on
+// send. Include that transport-owned field in the logical HTTP evidence without
+// adding a second authority to the outgoing request's Header map.
+func providerRequestEvidenceHeaders(request *http.Request) http.Header {
+	headers := request.Header.Clone()
+	if request.ContentLength > 0 || (request.ContentLength == 0 &&
+		(request.Method == http.MethodPost || request.Method == http.MethodPut || request.Method == http.MethodPatch)) {
+		headers.Set("Content-Length", strconv.FormatInt(request.ContentLength, 10))
+	}
+	return headers
 }
 
 func prepareProviderHeaders(
