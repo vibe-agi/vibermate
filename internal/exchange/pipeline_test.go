@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"testing/iotest"
 	"time"
 
 	"github.com/vibe-agi/vibermate/internal/accountselector"
@@ -654,7 +655,7 @@ func TestLocalIncrementalEvidenceNeverTruncatesTheUpstreamRequest(t *testing.T) 
 	}
 }
 
-func TestDisabledContentRecordingCreatesNoConversationEvidence(t *testing.T) {
+func TestDisabledContentRecordingRunsTransformsWithoutConversationOrRawEvidence(t *testing.T) {
 	plan := mustEnvironmentRequestPlan(t, testPlanOptions{
 		destination:    environment.DestinationKindUpstream,
 		providerOrigin: "https://provider.example/v1",
@@ -666,30 +667,54 @@ func TestDisabledContentRecordingCreatesNoConversationEvidence(t *testing.T) {
 		recording: environment.ContentRecordingPolicy{
 			Mode: environment.ContentRecordingOff,
 		},
+		transform: messagetransform.Policy{
+			RequestJavaScript:  `context.marker = "executed"; request.headers["x-transform-request"] = context.marker;`,
+			ResponseJavaScript: `response.headers["x-transform-response"] = context.marker;`,
+		},
 	})
 	content := &contentObserverDouble{}
+	provider := &providerDouble{results: []providerResult{{
+		response: jsonResponse(http.StatusOK, completeProviderResponse("gpt-provider")),
+	}}}
 	pipeline := newTestPipelineWithContentObserver(
 		t,
 		newAccountAuthority(t, testAccount{id: "account.primary", revision: 3, epoch: 7}),
-		&providerDouble{results: []providerResult{{
-			response: jsonResponse(http.StatusOK, completeProviderResponse("gpt-provider")),
-		}}},
+		provider,
 		approvedDecisions(),
 		&attemptObserverDouble{},
 		content,
 	)
+	raw := &rawObserverDouble{}
+	pipeline.rawEvidence = raw
 	defer shutdownPipeline(t, pipeline)
+	downstream := &downstreamRecorder{}
 
 	result, err := pipeline.Execute(
 		context.Background(),
 		mustClientRequest(t, "exchange-no-content", plan, completeClientRequest()),
-		&downstreamRecorder{},
+		downstream,
 	)
 	if err != nil || result.Outcome != AttemptSucceeded {
 		t.Fatalf("Execute() = %+v, %v", result, err)
 	}
 	if _, ok := content.latest(); ok {
 		t.Fatal("recording-off Environment emitted conversation evidence")
+	}
+	if len(raw.snapshot()) != 0 {
+		t.Fatal("recording-off Environment emitted raw transform evidence")
+	}
+	requests := provider.requestsSnapshot()
+	if len(requests) != 1 || requests[0].Headers().Get("X-Transform-Request") != "executed" {
+		t.Fatal("recording-off skipped the request transform")
+	}
+	rawContext, ok := requests[0].RawEvidenceContext()
+	if !ok || rawContext.Recording != rawevidence.RecordingOff {
+		t.Fatal("recording-off was not carried to the provider transport")
+	}
+	envelopes := downstream.envelopesSnapshot()
+	if len(envelopes) != 1 || envelopes[0].Headers().Get("X-Transform-Response") != "executed" ||
+		!bytes.Contains(downstream.bytesSnapshot(), []byte("Done.")) {
+		t.Fatal("recording-off skipped the response transform or delivery")
 	}
 }
 
@@ -800,12 +825,13 @@ func TestOriginalDestinationPreservesClientEnvelopeAndResponse(t *testing.T) {
 	}
 }
 
-func TestOriginalDestinationTransformsCompleteMessagesWithoutExposingCredentials(t *testing.T) {
+func TestOriginalDestinationTransformsWithoutRecordingOrExposingCredentials(t *testing.T) {
 	plan := mustEnvironmentRequestPlan(t, testPlanOptions{
 		destination:    environment.DestinationKindOriginal,
 		providerOrigin: "https://api.anthropic.com",
 		backend:        protocolspec.DialectAnthropicMessages,
 		modelMode:      environment.ModelModePassthrough,
+		recording:      environment.ContentRecordingPolicy{Mode: environment.ContentRecordingOff},
 		transform: messagetransform.Policy{
 			RequestJavaScript: `
 				if (request.headers.authorization !== undefined || request.headers["x-api-key"] !== undefined) {
@@ -838,7 +864,10 @@ func TestOriginalDestinationTransformsCompleteMessagesWithoutExposingCredentials
 		},
 		Body: io.NopCloser(bytes.NewReader(responseBody)),
 	}}}}
-	pipeline := newTestPipeline(t, nil, provider, approvedDecisions(), &attemptObserverDouble{})
+	content := &contentObserverDouble{}
+	pipeline := newTestPipelineWithContentObserver(t, nil, provider, approvedDecisions(), &attemptObserverDouble{}, content)
+	raw := &rawObserverDouble{}
+	pipeline.rawEvidence = raw
 	defer shutdownPipeline(t, pipeline)
 	downstream := &downstreamRecorder{}
 	_, err := pipeline.Execute(
@@ -867,6 +896,9 @@ func TestOriginalDestinationTransformsCompleteMessagesWithoutExposingCredentials
 	}
 	if !bytes.Contains(downstream.bytesSnapshot(), []byte("transformed:claude-client-alias")) {
 		t.Fatalf("transformed original response = %s", downstream.bytesSnapshot())
+	}
+	if _, recorded := content.latest(); recorded || len(raw.snapshot()) != 0 {
+		t.Fatal("recording-off original destination retained conversation or raw transform evidence")
 	}
 	envelopes := downstream.envelopesSnapshot()
 	if len(envelopes) != 1 ||
@@ -1083,6 +1115,74 @@ func TestOriginalDestinationTransformsCompressedSSEAsLogicalMessages(t *testing.
 		envelopes[0].Headers().Get("Content-Encoding") != "" ||
 		envelopes[0].Headers().Get("X-Stream-Transform") != "gzip-decoded" {
 		t.Fatalf("transformed stream envelope = %#v", envelopes)
+	}
+}
+
+func TestInterruptedResponseReportsConsistentOutcomeAndReason(t *testing.T) {
+	for _, test := range []struct {
+		name        string
+		upstream    bool
+		stream      bool
+		transform   bool
+		readErr     error
+		wantOutcome AttemptOutcome
+		wantReason  ReasonCode
+	}{
+		{name: "original complete", readErr: context.Canceled, wantOutcome: AttemptCanceled, wantReason: ReasonExchangeCanceled},
+		{name: "original stream", stream: true, readErr: context.Canceled, wantOutcome: AttemptCanceled, wantReason: ReasonExchangeCanceled},
+		{name: "transformed original complete", transform: true, readErr: context.Canceled, wantOutcome: AttemptCanceled, wantReason: ReasonExchangeCanceled},
+		{name: "transformed original stream", stream: true, transform: true, readErr: context.Canceled, wantOutcome: AttemptCanceled, wantReason: ReasonExchangeCanceled},
+		{name: "managed complete", upstream: true, readErr: context.Canceled, wantOutcome: AttemptCanceled, wantReason: ReasonExchangeCanceled},
+		{name: "managed stream", upstream: true, stream: true, readErr: context.Canceled, wantOutcome: AttemptCanceled, wantReason: ReasonExchangeCanceled},
+		{name: "deadline", readErr: context.DeadlineExceeded, wantOutcome: AttemptCanceled, wantReason: ReasonExchangeCanceled},
+		{name: "broken response is not cancellation", readErr: io.ErrUnexpectedEOF, wantOutcome: AttemptFailed, wantReason: ReasonProviderResponseInvalid},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			options := testPlanOptions{
+				destination: environment.DestinationKindOriginal,
+				modelMode:   environment.ModelModePassthrough,
+			}
+			account := testAccount{id: "account.primary", revision: 3, epoch: 7}
+			if test.upstream {
+				options.destination = environment.DestinationKindUpstream
+				options.providerOrigin = "https://provider.example/v1"
+				options.backend = protocolspec.DialectOpenAIChat
+				options.modelMode = environment.ModelModeMap
+				options.mappedModel = "gpt-provider"
+				options.accounts = []testAccount{account}
+				options.preferred = account.id
+			}
+			if test.transform {
+				options.transform.ResponseJavaScript = `response.headers["x-transform"] = "applied";`
+			}
+			body := completeClientRequest()
+			contentType := "application/json"
+			if test.stream {
+				body = streamingClientRequest()
+				contentType = "text/event-stream"
+			}
+			provider := &providerDouble{results: []providerResult{{response: &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": {contentType}},
+				Body:       io.NopCloser(iotest.ErrReader(test.readErr)),
+			}}}}
+			observer := &attemptObserverDouble{}
+			pipeline := newTestPipeline(t, newAccountAuthority(t, account), provider, approvedDecisions(), observer)
+			defer shutdownPipeline(t, pipeline)
+			request := mustClientRequestWithOptions(
+				t, "exchange-interrupted", mustEnvironmentRequestPlan(t, options), body,
+				WithOriginalHeaders(http.Header{"X-Api-Key": {"client-owned"}}),
+			)
+			result, err := pipeline.Execute(context.Background(), request, &downstreamRecorder{})
+			if result.Outcome != test.wantOutcome || ReasonOf(err) != test.wantReason || !errors.Is(err, test.readErr) {
+				t.Fatalf("Execute() = %+v, %v; want %s / %s", result, err, test.wantOutcome, test.wantReason)
+			}
+			observations := observer.snapshot()
+			if len(observations) != 1 || observations[0].Outcome != test.wantOutcome ||
+				observations[0].ReasonCode != test.wantReason || observations[0].ProviderStatus != http.StatusOK {
+				t.Fatalf("persisted outcome/reason disagrees with the result: %+v", observations)
+			}
+		})
 	}
 }
 

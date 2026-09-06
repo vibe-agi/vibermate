@@ -248,6 +248,8 @@ func TestLaunchFailureKeyDistinguishesEnvironmentSelection(t *testing.T) {
 	}{
 		{err: runlauncher.ErrEnvironmentNotFound, want: keyEnvironmentMissing},
 		{err: runlauncher.ErrEnvironmentUnavailable, want: keyEnvironmentDown},
+		{err: runlauncher.ErrClientTargetNotConfigured, want: keyClientTargetNotConfigured},
+		{err: runlauncher.ErrClientTargetInvalid, want: keyClientTargetInvalid},
 		{err: runlauncher.ErrRuntimeUnavailable, want: keyRuntimeUnavailable},
 		{err: runlauncher.ErrRemoteLoginRequired, want: keyRemoteLoginRequired},
 		{err: runlauncher.ErrRemoteRuntimeUnavailable, want: keyRemoteRuntimeUnavailable},

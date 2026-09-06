@@ -171,6 +171,7 @@ type manualAuthorities struct {
 func (authority manualAuthorities) Review(
 	context.Context,
 	environment.EnvironmentID,
+	clienttarget.Profile,
 ) (CaptureAuthorityReview, error) {
 	set, err := NewCaptureAuthoritySet(authority.assignment)
 	if err != nil {
@@ -452,6 +453,7 @@ type sequencedManualAuthorities struct {
 func (authority *sequencedManualAuthorities) Review(
 	context.Context,
 	environment.EnvironmentID,
+	clienttarget.Profile,
 ) (CaptureAuthorityReview, error) {
 	authority.mu.Lock()
 	defer authority.mu.Unlock()

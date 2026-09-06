@@ -538,6 +538,7 @@ final class _CaptureDetail extends StatelessWidget {
         .firstOrNull;
     final selector = accountPolicy?.selector;
     final accountAuthority = switch (accountPolicy?.mode) {
+      _ when assignment == null => copy('capture.assignment.missing'),
       'fixed' =>
         account?.displayName ??
             frozenFixedAccount?.displayName ??
@@ -599,6 +600,12 @@ final class _CaptureDetail extends StatelessWidget {
           Expanded(
             child: controller.detailLoading
                 ? const Center(child: CompactProgressIndicator())
+                : controller.selectedCaptureLaunchIncomplete
+                ? CenteredMessage(
+                    icon: Icons.error_outline,
+                    title: copy('capture.launch_incomplete'),
+                    detail: copy('capture.launch_incomplete.detail'),
+                  )
                 : _CaptureConversationWorkspace(
                     controller: controller,
                     copy: copy,

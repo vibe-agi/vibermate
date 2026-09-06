@@ -111,6 +111,7 @@ final class WorkbenchController extends ChangeNotifier {
   EnvironmentImpact? reviewedEnvironmentImpact;
   EnvironmentRecord? historicalEnvironment;
   CaptureAssignment? selectedAssignment;
+  bool selectedCaptureLaunchIncomplete = false;
   TerminalCommandStatus? terminalCommand;
   RuntimeServerAccess? serverAccess;
   List<RuntimeUser>? runtimeUsers;
@@ -1889,6 +1890,7 @@ final class WorkbenchController extends ChangeNotifier {
   void _resetCaptureDetail() {
     _selectionGeneration += 1;
     selectedAssignment = null;
+    selectedCaptureLaunchIncomplete = false;
     selectedCaptureConversations = null;
     selectedCaptureConversationKey = null;
     selectedCapturePage = null;
@@ -2316,7 +2318,7 @@ final class WorkbenchController extends ChangeNotifier {
     }
     try {
       final values = await Future.wait<Object?>([
-        _api.captureAssignment(capture.key),
+        _loadCaptureAssignment(capture),
         _captureConversationPage(capture, limit: 200),
       ]);
       if (_disposed ||
@@ -2324,7 +2326,8 @@ final class WorkbenchController extends ChangeNotifier {
           selectedCaptureKey != capture.key) {
         return;
       }
-      selectedAssignment = values[0]! as CaptureAssignment;
+      selectedAssignment = values[0] as CaptureAssignment?;
+      selectedCaptureLaunchIncomplete = selectedAssignment == null;
       final conversationPage = values[1]! as ConversationPage;
       selectedCaptureConversations = conversationPage;
       final available = captureConversations;
@@ -2382,6 +2385,26 @@ final class WorkbenchController extends ChangeNotifier {
       detailLoading = false;
       errorMessage = _describeError(error);
       notifyListeners();
+    }
+  }
+
+  Future<CaptureAssignment?> _loadCaptureAssignment(
+    CaptureRecord capture,
+  ) async {
+    try {
+      return await _api.captureAssignment(capture.key);
+    } on ControlProblem catch (error) {
+      // A failed pre-launch assignment in older runtimes left a finished run
+      // with no child or traffic. Other missing assignments remain errors.
+      if (error.status == 404 &&
+          error.reasonCode == 'capture_assignment_not_found' &&
+          !capture.isManual &&
+          !capture.running &&
+          capture.managedRun?.processId == null &&
+          capture.observation == 'waiting_for_traffic') {
+        return null;
+      }
+      rethrow;
     }
   }
 

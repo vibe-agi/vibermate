@@ -30,6 +30,8 @@ const (
 	keyLaunchFailed               = "cli.error.launchFailed"
 	keyEnvironmentMissing         = "cli.error.environmentNotFound"
 	keyEnvironmentDown            = "cli.error.environmentUnavailable"
+	keyClientTargetNotConfigured  = "cli.error.clientTargetNotConfigured"
+	keyClientTargetInvalid        = "cli.error.clientTargetInvalid"
 	keyRemoteLoginRequired        = "cli.error.remoteLoginRequired"
 	keyRemoteRuntimeUnavailable   = "cli.error.remoteRuntimeUnavailable"
 	reasonCatalogMissing          = "locale_catalog_unavailable"
@@ -222,6 +224,12 @@ func executeContext(
 }
 
 func launchFailureKey(err error) string {
+	if errors.Is(err, runlauncher.ErrClientTargetNotConfigured) {
+		return keyClientTargetNotConfigured
+	}
+	if errors.Is(err, runlauncher.ErrClientTargetInvalid) {
+		return keyClientTargetInvalid
+	}
 	if errors.Is(err, runlauncher.ErrRuntimeUnavailable) {
 		return keyRuntimeUnavailable
 	}

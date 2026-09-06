@@ -55,6 +55,8 @@ var (
 	ErrCapturePreparationTimedOut = errors.New("Capture preparation timed out")
 	ErrEnvironmentNotFound        = errors.New("selected Environment is not configured")
 	ErrEnvironmentUnavailable     = errors.New("selected Environment is unavailable")
+	ErrClientTargetNotConfigured  = errors.New("client destination is not configured in the selected traffic policy")
+	ErrClientTargetInvalid        = errors.New("client base URL is invalid")
 	ErrRemoteLoginRequired        = errors.New("remote Runtime Server login is required")
 	ErrRemoteRuntimeUnavailable   = errors.New("remote Runtime Server is unavailable")
 )
@@ -444,6 +446,10 @@ func classifyCreateFailure(err error) error {
 	var failure *ControlFailure
 	if errors.As(err, &failure) {
 		switch failure.ReasonCode {
+		case capturecontrol.ReasonClientTargetNotConfigured:
+			return fmt.Errorf("%w: %w", ErrClientTargetNotConfigured, failure)
+		case capturecontrol.ReasonClientTargetInvalid:
+			return fmt.Errorf("%w: %w", ErrClientTargetInvalid, failure)
 		case capturecontrol.ReasonEnvironmentNotFound:
 			return fmt.Errorf("%w: %w", ErrEnvironmentNotFound, failure)
 		case capturecontrol.ReasonEnvironmentUnavailable:

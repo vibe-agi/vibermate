@@ -96,6 +96,10 @@ final class AppCopy {
     'capture.empty.web.action': 'Open access and launch guide',
     'capture.load_more': 'Load older captures',
     'capture.select': 'Select a Capture to inspect its evidence.',
+    'capture.assignment.missing': 'No traffic policy attached',
+    'capture.launch_incomplete': 'Launch did not complete',
+    'capture.launch_incomplete.detail':
+        'No traffic policy was attached and no traffic was recorded. Check the launch error in Terminal, correct the policy if needed, then run the command again. You can delete this empty record.',
     'capture.managed': 'Managed run',
     'capture.manual': 'Manual capture',
     'capture.source.managed.short': 'vibermate run',
@@ -372,7 +376,7 @@ final class AppCopy {
     'capture.conversation_collapse_branch': 'Collapse conversation branch',
     'conversations.turn_count': '{count} Turns',
     'exchange.content.not_recorded':
-        'Semantic content was not recorded for this Exchange; frozen routing and attempt evidence remains available.',
+        'No saved conversation content is available. Check this Exchange\'s frozen recording policy and request status; routing and attempt details remain available.',
     'exchange.environment.frozen':
         '{environment} · frozen traffic policy r{revision}',
     'exchange.model.requested': 'Requested',
@@ -526,6 +530,8 @@ final class AppCopy {
     'environment.clients': 'Client endpoints',
     'environment.client_target': 'Client target',
     'environment.mapping.client': 'Client protocol & origin',
+    'environment.mapping.codex_login_hint':
+        'Codex: ChatGPT login uses chatgpt.com; API key uses api.openai.com. Add both flows if you use both login methods.',
     'environment.mapping.upstream': 'Upstream service',
     'environment.mapping.accounts': 'Available accounts',
     'environment.routes': '{count} upstream routes',
@@ -572,10 +578,10 @@ final class AppCopy {
     'environment.edit.scope': 'Review the impact, then publish a new revision.',
     'environment.edit.identity': 'Identity',
     'environment.tab.traffic': 'Traffic routing',
-    'environment.tab.runtime': 'Runtime & evidence',
+    'environment.tab.runtime': 'Content recording & runtime',
     'environment.edit.policy': 'Recording & tool safety',
     'environment.edit.policy.detail':
-        'Controls evidence and tool execution; it does not choose the traffic destination.',
+        'Content recording controls what is saved, not routing or script execution. Tool handling is configured separately.',
     'environment.edit.routes': 'Requests · from and to',
     'environment.edit.routes.detail':
         'For each client protocol and origin, keep its original destination or send requests to an upstream service using one of that service\'s accounts.',
@@ -593,6 +599,12 @@ final class AppCopy {
     'environment.recording.full': 'Record full content',
     'environment.recording.metadata_only': 'Metadata only',
     'environment.recording.off': 'Do not record content',
+    'environment.recording.full.detail':
+        'Saves conversation bodies and Raw HTTP evidence for inspection.',
+    'environment.recording.metadata_only.detail':
+        'No conversation or Raw HTTP bodies are saved. Keeps metadata and available model and Token usage.',
+    'environment.recording.off.detail':
+        'Keeps basic activity and status only, with no conversation or Raw HTTP records. Model and Token statistics are unavailable. Existing history is unchanged.',
     'environment.recording.retention': 'Retention',
     'environment.recording.days': 'days',
     'environment.launch.label': 'Child process environment',
@@ -1686,6 +1698,10 @@ final class AppCopy {
     'capture.empty.web.action': '打开接入与启动指南',
     'capture.load_more': '加载更早的运行记录',
     'capture.select': '请选择一条运行记录以检查其证据。',
+    'capture.assignment.missing': '未绑定流量策略',
+    'capture.launch_incomplete': '启动未完成',
+    'capture.launch_incomplete.detail':
+        '本次启动未绑定流量策略，也没有记录到流量。请查看终端中的启动错误，按需修正策略后重新运行命令。此空记录可以删除。',
     'capture.managed': '托管运行',
     'capture.manual': '手动捕获',
     'capture.source.managed.short': 'vibermate run',
@@ -1920,7 +1936,8 @@ final class AppCopy {
     'capture.conversation_expand_branch': '展开对话分支',
     'capture.conversation_collapse_branch': '收起对话分支',
     'conversations.turn_count': '{count} 轮',
-    'exchange.content.not_recorded': '此次 Agent 调用未记录语义内容；冻结的路由与上游尝试证据仍可检查。',
+    'exchange.content.not_recorded':
+        '没有可用的已保存对话内容。请查看本次调用的冻结记录策略与请求状态；路由和尝试详情仍可检查。',
     'exchange.environment.frozen': '{environment} · 冻结流量策略 r{revision}',
     'exchange.model.requested': '请求模型',
     'exchange.model.effective': '实际模型',
@@ -2065,6 +2082,8 @@ final class AppCopy {
     'environment.clients': '客户端入口',
     'environment.client_target': '客户端目标',
     'environment.mapping.client': '客户端协议与入口',
+    'environment.mapping.codex_login_hint':
+        'Codex 使用 ChatGPT 登录时选择 chatgpt.com；使用 API Key 时选择 api.openai.com。两种登录方式都使用时，请分别添加这两个入口。',
     'environment.mapping.upstream': '上游服务',
     'environment.mapping.accounts': '可用账号',
     'environment.routes': '{count} 条上游路由',
@@ -2100,9 +2119,9 @@ final class AppCopy {
     'environment.edit.scope': '先检查影响，再发布新修订。',
     'environment.edit.identity': '身份',
     'environment.tab.traffic': '流量路由',
-    'environment.tab.runtime': '运行与记录',
+    'environment.tab.runtime': '内容记录与运行',
     'environment.edit.policy': '记录与工具安全',
-    'environment.edit.policy.detail': '只控制证据记录与工具执行；不决定模型流量去向。',
+    'environment.edit.policy.detail': '内容记录只控制保存哪些数据，不影响路由和脚本执行。工具处理方式单独配置。',
     'environment.edit.routes': '请求来源与去向',
     'environment.edit.routes.detail':
         '每种客户端协议和入口都可以保留原始目标，或把请求发往上游服务，并使用该服务所属的账号。',
@@ -2119,6 +2138,11 @@ final class AppCopy {
     'environment.recording.full': '记录完整内容',
     'environment.recording.metadata_only': '仅元数据',
     'environment.recording.off': '不记录内容',
+    'environment.recording.full.detail': '保存对话正文与原始 HTTP 证据，供后续查看。',
+    'environment.recording.metadata_only.detail':
+        '不保存对话或原始 HTTP 正文；保留元数据，以及可用的模型和 Token 用量。',
+    'environment.recording.off.detail':
+        '仅保留基本运行状态，不保存对话或原始 HTTP 记录；无法统计模型和 Token 用量。已有历史不会删除。',
     'environment.recording.retention': '保留时间',
     'environment.recording.days': '天',
     'environment.launch.label': '子进程环境变量',

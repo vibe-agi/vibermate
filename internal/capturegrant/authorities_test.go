@@ -3,6 +3,7 @@ package capturegrant
 import (
 	"context"
 	"errors"
+	"slices"
 	"testing"
 	"time"
 
@@ -104,6 +105,56 @@ func TestEnvironmentAuthorityResolverCreatesTypedCaptureAssignment(t *testing.T)
 		set.AuthorityDigest() != assignment.LaunchAuthority.Digest() ||
 		set.LaunchEnvironment().SetEnv["TEAM_CONTEXT"] != "team-a" {
 		t.Fatalf("create=%+v set=%+v", assignments.create, set)
+	}
+}
+
+func TestLaunchReviewChecksClientDestinationBeforeAssignment(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct {
+		name   string
+		origin string
+		client string
+		facts  clienttarget.EnvironmentFacts
+		want   error
+	}{
+		{"ChatGPT login needs its own flow", "https://api.openai.com", "codex-cli", clienttarget.EnvironmentFacts{}, captureassignment.ErrClientTargetNotConfigured},
+		{"API key matches OpenAI API", "https://api.openai.com", "codex-cli", clienttarget.EnvironmentFacts{OpenAIAPIKeyPresent: true}, nil},
+		{"ChatGPT login matches ChatGPT", "https://chatgpt.com", "codex-cli", clienttarget.EnvironmentFacts{}, nil},
+		{"invalid base URL", "https://api.openai.com", "codex-cli", clienttarget.EnvironmentFacts{CodexBaseURL: "https://user:password@example.invalid"}, clienttarget.ErrInvalidTarget},
+		{"generic client has no inferred target", "https://api.openai.com", "", clienttarget.EnvironmentFacts{}, nil},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			policy := systemEnvironmentSnapshot(t).Aggregate()
+			policy.ID, policy.Name = "inspect", "inspect"
+			policy.ClientEndpoints = slices.DeleteFunc(policy.ClientEndpoints, func(endpoint environment.ClientEndpoint) bool {
+				return endpoint.ClientOrigin.String() != test.origin
+			})
+			snapshot, err := manualEnvironmentCompiler(t).Compile(policy)
+			if err != nil {
+				t.Fatal(err)
+			}
+			assignments := &recordingCaptureAssignmentAuthority{}
+			resolver, err := NewEnvironmentAuthorityResolver(assignments, &manualSnapshotResolver{
+				snapshots: map[environment.EnvironmentID]environment.EnvironmentSnapshot{"inspect": snapshot},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			profile, err := clienttarget.NewProfile(test.client, test.facts)
+			if err != nil {
+				t.Fatal(err)
+			}
+			review, err := resolver.Review(context.Background(), "inspect", profile)
+			if !errors.Is(err, test.want) {
+				t.Fatalf("review error = %v, want %v", err, test.want)
+			}
+			if assignments.create.Capture.ID != "" {
+				t.Fatal("preflight wrote an assignment")
+			}
+			if err == nil && (len(review.ManagedCredentialAuthorities()) != 0 || !slices.Equal(review.ProtectedAuthorities(), []string{snapshot.ClientEndpoints()[0].ClientOrigin().EndpointAuthority()})) {
+				t.Fatalf("original destination authority changed: protected=%v managed=%v", review.ProtectedAuthorities(), review.ManagedCredentialAuthorities())
+			}
+		})
 	}
 }
 

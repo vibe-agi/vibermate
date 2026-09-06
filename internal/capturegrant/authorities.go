@@ -84,6 +84,7 @@ type CaptureAuthorityResolver interface {
 	Review(
 		context.Context,
 		environment.EnvironmentID,
+		clienttarget.Profile,
 	) (CaptureAuthorityReview, error)
 	AssignAndResolve(
 		context.Context,
@@ -157,6 +158,7 @@ func (review CaptureAuthorityReview) ManagedCredentialAuthorities() []string {
 func (resolver *environmentAuthorityResolver) Review(
 	ctx context.Context,
 	environmentID environment.EnvironmentID,
+	profile clienttarget.Profile,
 ) (CaptureAuthorityReview, error) {
 	if resolver == nil || resolver.environments == nil || ctx == nil {
 		return CaptureAuthorityReview{}, errors.New("Capture Environment review is unavailable")
@@ -168,7 +170,7 @@ func (resolver *environmentAuthorityResolver) Review(
 	if err != nil {
 		return CaptureAuthorityReview{}, err
 	}
-	boundary, err := environment.NewLaunchAuthorityBoundary(snapshot)
+	boundary, _, err := captureassignment.LaunchAuthorityForClient(snapshot, profile)
 	if err != nil {
 		return CaptureAuthorityReview{}, err
 	}

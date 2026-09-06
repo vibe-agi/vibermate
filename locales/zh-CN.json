@@ -1,5 +1,7 @@
 {
   "cli.error.launchFailed": "无法启动临时捕获命令。",
+  "cli.error.clientTargetNotConfigured": "所选流量策略未包含此客户端的目标地址。请在 ViberMate 的「流量策略」中编辑所选策略，添加对应的客户端来源并发布。Codex 使用 ChatGPT 登录时，选择「OpenAI Responses · chatgpt.com」；使用 API Key 时，选择「OpenAI Responses · api.openai.com」。保留「原始服务」即可沿用客户端自己的登录。命令尚未启动。",
+  "cli.error.clientTargetInvalid": "客户端的 Base URL 无效。请检查 CODEX_BASE_URL、OPENAI_BASE_URL 或 ANTHROPIC_BASE_URL，以及所选流量策略中的覆盖值。请使用不含用户名、密码、查询参数或片段的 HTTP(S) 地址。命令尚未启动。",
   "cli.error.capturePreparationTimedOut": "ViberMate 未能及时完成本次抓包准备。请检查桌面应用中是否有待处理的客户端信任决定，然后重试；命令尚未启动。",
   "cli.error.environmentNotFound": "所选工作环境不存在。请先在 ViberMate 中创建并发布，或省略 --env 以使用透明捕获。",
   "cli.error.environmentUnavailable": "所选工作环境已停用或不可用。请先在 ViberMate 中启用或修复后再试。",

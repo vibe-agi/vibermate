@@ -8,7 +8,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -274,42 +273,56 @@ func TestCaptureControlOmittedEnvironmentAlwaysCapturesOriginalDestination(t *te
 	}
 }
 
-func TestCaptureControlRejectsMissingEnvironmentBeforeCreatingRun(t *testing.T) {
+func TestCaptureControlRejectsInvalidLaunchBeforeCreatingRun(t *testing.T) {
 	t.Parallel()
-	assignCalled := false
-	fixture := newFixture(t, func(options *capturegrant.Options) {
-		options.Authorities = missingEnvironmentAuthorities{
-			assignCalled: &assignCalled,
-		}
-	})
-	defer fixture.Close(t)
+	for _, test := range []struct {
+		name   string
+		err    error
+		status int
+		reason capturecontrol.ReasonCode
+	}{
+		{"missing environment", environment.ErrEnvironmentNotFound, http.StatusNotFound, capturecontrol.ReasonEnvironmentNotFound},
+		{"client target not configured", captureassignment.ErrClientTargetNotConfigured, http.StatusUnprocessableEntity, capturecontrol.ReasonClientTargetNotConfigured},
+		{"invalid client target", clienttarget.ErrInvalidTarget, http.StatusUnprocessableEntity, capturecontrol.ReasonClientTargetInvalid},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			assignCalled := false
+			fixture := newFixture(t, func(options *capturegrant.Options) {
+				options.Authorities = rejectedLaunchAuthorities{
+					assignCalled: &assignCalled,
+					reviewErr:    test.err,
+				}
+			})
+			defer fixture.Close(t)
 
-	response := fixture.DoJSON(
-		t,
-		http.MethodPost,
-		"/api/v1/capture-runs",
-		fixture.controlCredential,
-		"",
-		capturecontrol.CreateRequest{
-			EnvironmentID:  "missing",
-			CWD:            fixture.workspace,
-			Command:        []string{"claude"},
-			ExecutablePath: fixture.executable,
-		},
-	)
-	if response.Code != http.StatusNotFound ||
-		!bytes.Contains(response.Body.Bytes(), []byte(`"code":"environment_not_found"`)) {
-		t.Fatalf("missing Environment status=%d body=%s", response.Code, response.Body.Bytes())
-	}
-	if assignCalled {
-		t.Fatal("missing Environment reached assignment linearization")
-	}
-	page, err := fixture.runs.ListRuns(
-		context.Background(),
-		capturerun.PageRequest{Limit: 10},
-	)
-	if err != nil || len(page.Items) != 0 {
-		t.Fatalf("missing Environment created CaptureRun page=%+v err=%v", page, err)
+			response := fixture.DoJSON(
+				t,
+				http.MethodPost,
+				"/api/v1/capture-runs",
+				fixture.controlCredential,
+				"",
+				capturecontrol.CreateRequest{
+					EnvironmentID:  "missing",
+					CWD:            fixture.workspace,
+					Command:        []string{"claude"},
+					ExecutablePath: fixture.executable,
+				},
+			)
+			if response.Code != test.status ||
+				!bytes.Contains(response.Body.Bytes(), []byte(`"code":"`+string(test.reason)+`"`)) {
+				t.Fatalf("rejected launch status=%d body=%s", response.Code, response.Body.Bytes())
+			}
+			if assignCalled {
+				t.Fatal("rejected launch reached assignment linearization")
+			}
+			page, err := fixture.runs.ListRuns(
+				context.Background(),
+				capturerun.PageRequest{Limit: 10},
+			)
+			if err != nil || len(page.Items) != 0 {
+				t.Fatalf("rejected launch created CaptureRun page=%+v err=%v", page, err)
+			}
+		})
 	}
 }
 
@@ -1024,6 +1037,7 @@ type fixedAuthorities []string
 func (authorities fixedAuthorities) Review(
 	_ context.Context,
 	environmentID environment.EnvironmentID,
+	_ clienttarget.Profile,
 ) (capturegrant.CaptureAuthorityReview, error) {
 	set, err := authorities.authoritySet(
 		captureidentity.Reference{Kind: captureidentity.KindManagedRun, ID: "review"},
@@ -1114,8 +1128,9 @@ func (resolver inspectingFailingAuthorities) AssignAndResolve(
 func (resolver inspectingFailingAuthorities) Review(
 	ctx context.Context,
 	environmentID environment.EnvironmentID,
+	profile clienttarget.Profile,
 ) (capturegrant.CaptureAuthorityReview, error) {
-	return (fixedAuthorities{"api.anthropic.com:443"}).Review(ctx, environmentID)
+	return (fixedAuthorities{"api.anthropic.com:443"}).Review(ctx, environmentID, profile)
 }
 
 func (resolver inspectingFailingAuthorities) Resolve(
@@ -1125,21 +1140,20 @@ func (resolver inspectingFailingAuthorities) Resolve(
 	return capturegrant.CaptureAuthoritySet{}, errors.New("injected authority resolution failure")
 }
 
-type missingEnvironmentAuthorities struct {
+type rejectedLaunchAuthorities struct {
 	assignCalled *bool
+	reviewErr    error
 }
 
-func (resolver missingEnvironmentAuthorities) Review(
+func (resolver rejectedLaunchAuthorities) Review(
 	context.Context,
 	environment.EnvironmentID,
+	clienttarget.Profile,
 ) (capturegrant.CaptureAuthorityReview, error) {
-	return capturegrant.CaptureAuthorityReview{}, fmt.Errorf(
-		"%w: test Environment",
-		environment.ErrEnvironmentNotFound,
-	)
+	return capturegrant.CaptureAuthorityReview{}, resolver.reviewErr
 }
 
-func (resolver missingEnvironmentAuthorities) AssignAndResolve(
+func (resolver rejectedLaunchAuthorities) AssignAndResolve(
 	context.Context,
 	captureidentity.Reference,
 	environment.EnvironmentID,
@@ -1150,7 +1164,7 @@ func (resolver missingEnvironmentAuthorities) AssignAndResolve(
 	return capturegrant.CaptureAuthoritySet{}, errors.New("unexpected assignment")
 }
 
-func (resolver missingEnvironmentAuthorities) Resolve(
+func (resolver rejectedLaunchAuthorities) Resolve(
 	context.Context,
 	captureidentity.Reference,
 ) (capturegrant.CaptureAuthoritySet, error) {

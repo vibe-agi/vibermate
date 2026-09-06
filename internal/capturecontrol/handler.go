@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/vibe-agi/vibermate/internal/captureassignment"
 	"github.com/vibe-agi/vibermate/internal/capturegrant"
 	"github.com/vibe-agi/vibermate/internal/capturerun"
 	"github.com/vibe-agi/vibermate/internal/clienttarget"
@@ -45,6 +46,8 @@ const (
 	ReasonRunCapabilityRejected        ReasonCode = "run_capability_rejected"
 	ReasonInvalidProcess               ReasonCode = "invalid_process_attachment"
 	ReasonInvalidRoute                 ReasonCode = "control_route_not_found"
+	ReasonClientTargetNotConfigured    ReasonCode = "client_target_not_configured"
+	ReasonClientTargetInvalid          ReasonCode = "client_target_invalid"
 )
 
 type PrincipalAuthenticator interface {
@@ -397,6 +400,10 @@ func (handler *Handler) writeIssueFailure(
 	err error,
 ) {
 	switch {
+	case errors.Is(err, captureassignment.ErrClientTargetNotConfigured):
+		writeProblem(writer, http.StatusUnprocessableEntity, ReasonClientTargetNotConfigured)
+	case errors.Is(err, clienttarget.ErrInvalidTarget):
+		writeProblem(writer, http.StatusUnprocessableEntity, ReasonClientTargetInvalid)
 	case errors.Is(err, capturegrant.ErrPrincipalUnauthorized):
 		writeProblem(writer, http.StatusForbidden, ReasonCaptureGrantNotAllowed)
 	case errors.Is(err, capturegrant.ErrInvalidCaptureRun):

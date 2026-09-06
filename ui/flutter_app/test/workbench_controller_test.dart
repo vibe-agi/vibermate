@@ -1,16 +1,139 @@
 import 'dart:async';
 
+import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:vibermate_app/core/api/control_api.dart';
 import 'package:vibermate_app/core/api/control_models.dart';
 import 'package:vibermate_app/core/bootstrap/terminal_command.dart';
 import 'package:vibermate_app/core/bootstrap/root_trust_installer.dart';
 import 'package:vibermate_app/core/preferences/workbench_preferences.dart';
+import 'package:vibermate_app/core/design/viber_theme.dart';
 import 'package:vibermate_app/features/workbench/workbench_controller.dart';
+import 'package:vibermate_app/features/workbench/workbench_shell.dart';
 import 'package:vibermate_app/preview/preview_control_api.dart';
 import 'package:vibermate_app/preview/preview_terminal_command.dart';
 
 void main() {
+  for (final scenario in [
+    (
+      status: 404,
+      reason: 'capture_assignment_not_found',
+      state: 'finished',
+      observed: false,
+      incomplete: true,
+    ),
+    (
+      status: 503,
+      reason: 'capture_assignment_unavailable',
+      state: 'finished',
+      observed: false,
+      incomplete: false,
+    ),
+    (
+      status: 404,
+      reason: 'capture_not_found',
+      state: 'finished',
+      observed: false,
+      incomplete: false,
+    ),
+    (
+      status: 404,
+      reason: 'capture_assignment_not_found',
+      state: 'created',
+      observed: false,
+      incomplete: false,
+    ),
+    (
+      status: 404,
+      reason: 'capture_assignment_not_found',
+      state: 'finished',
+      observed: true,
+      incomplete: false,
+    ),
+  ]) {
+    testWidgets('unassigned Capture: $scenario', (tester) async {
+      await tester.binding.setSurfaceSize(const Size(1180, 760));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      final fixture = PreviewControlApi();
+      final api = _AssignmentFailureApi(
+        fixture,
+        ControlProblem(
+          status: scenario.status,
+          reasonCode: scenario.reason,
+          messageKey: 'error.${scenario.reason}',
+        ),
+      );
+      final controller = WorkbenchController(
+        api: api,
+        terminalCommands: PreviewTerminalCommandService(),
+        previewMode: true,
+        closeRuntime: fixture.close,
+      );
+      addTearDown(controller.dispose);
+      final dashboard = await fixture.loadDashboard();
+      final now = DateTime.utc(2026, 9, 6);
+      final capture = CaptureRecord(
+        key: 'managed_run:failed-run',
+        id: 'failed-run',
+        kind: 'managed_run',
+        displayName: 'codex',
+        state: scenario.state,
+        observation: scenario.observed ? 'observed' : 'waiting_for_traffic',
+        createdAt: now,
+        updatedAt: now,
+        managedRun: ManagedRunSummary(
+          executableLabel: 'codex',
+          cwd: '/workspace/project',
+          canonicalExecutablePath: '/usr/local/bin/codex',
+          recognition: 'recognized',
+          expiresAt: now.add(const Duration(hours: 1)),
+          firstObservedAt: scenario.observed ? now : null,
+        ),
+      );
+      controller.data = DashboardData(
+        status: dashboard.status,
+        captures: [capture, ...dashboard.captures],
+        captureNextCursor: null,
+        environments: dashboard.environments,
+        endpoints: dashboard.endpoints,
+        accounts: dashboard.accounts,
+      );
+      controller.loading = false;
+      await controller.selectCapture(capture.key);
+      expect(controller.selectedCaptureLaunchIncomplete, scenario.incomplete);
+      expect(controller.detailLoading, isFalse);
+      if (scenario.incomplete) {
+        expect(controller.errorMessage, isNull);
+        expect(controller.selectedCapturePage?.items, isEmpty);
+        await tester.pumpWidget(
+          MaterialApp(
+            theme: ViberTheme.light(),
+            home: WorkbenchShell(controller: controller),
+          ),
+        );
+        await tester.pumpAndSettle();
+        expect(find.text('Launch did not complete'), findsOneWidget);
+        expect(find.text('No traffic policy attached'), findsOneWidget);
+        expect(
+          find.textContaining('capture_assignment_not_found'),
+          findsNothing,
+        );
+        expect(find.text('Client passthrough'), findsNothing);
+        expect(tester.takeException(), isNull);
+      } else {
+        expect(
+          controller.errorMessage,
+          '${scenario.reason} (${scenario.status})',
+        );
+      }
+      await controller.selectCapture('managed_run:run-1');
+      expect(controller.selectedCaptureLaunchIncomplete, isFalse);
+      expect(controller.selectedAssignment, isNotNull);
+      expect(controller.errorMessage, isNull);
+      await tester.pumpWidget(const SizedBox.shrink());
+    });
+  }
+
   test(
     'Root trust install uses exact material and reconciles success',
     () async {
@@ -1095,6 +1218,17 @@ final class _UsageTrackingApi implements ControlApi {
   @override
   dynamic noSuchMethod(Invocation invocation) =>
       throw UnsupportedError('${invocation.memberName}');
+}
+
+final class _AssignmentFailureApi extends _UsageTrackingApi {
+  _AssignmentFailureApi(super.delegate, this.failure);
+  final ControlProblem failure;
+
+  @override
+  Future<CaptureAssignment> captureAssignment(String captureKey) async {
+    if (captureKey == 'managed_run:failed-run') throw failure;
+    return super.captureAssignment(captureKey);
+  }
 }
 
 final class _BlockingPollApi implements ControlApi {

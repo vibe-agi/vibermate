@@ -3802,6 +3802,10 @@ void main() {
       await tester.pumpAndSettle();
       await tester.tap(find.text('Metadata only').last);
       await tester.pumpAndSettle();
+      expect(
+        find.textContaining('No conversation or Raw HTTP bodies are saved.'),
+        findsOneWidget,
+      );
       final trafficTab = find.byKey(const Key('environment-tab-traffic'));
       await tester.ensureVisible(trafficTab);
       await tester.pumpAndSettle();
@@ -4713,6 +4717,20 @@ void main() {
       findsOneWidget,
     );
     expect(find.byKey(const Key('environment-launch-edit')), findsOneWidget);
+    expect(find.text('内容记录与运行'), findsOneWidget);
+    expect(find.textContaining('不影响路由和脚本执行'), findsOneWidget);
+    final recording = find.byKey(const Key('environment-create-recording'));
+    await tester.ensureVisible(recording);
+    await tester.tap(recording);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('不记录内容').last);
+    await tester.pumpAndSettle();
+    expect(find.textContaining('无法统计模型和 Token 用量'), findsOneWidget);
+    expect(find.byKey(const Key('environment-create-retention')), findsNothing);
+    expect(tester.takeException(), isNull);
+    await tester.ensureVisible(
+      find.byKey(const Key('environment-tab-traffic')),
+    );
     await tester.tap(find.byKey(const Key('environment-tab-traffic')));
     await tester.pumpAndSettle();
     final clientFlow = find.byKey(const Key('environment-client-plan-target'));
@@ -4752,6 +4770,15 @@ void main() {
       findsNothing,
       reason: 'OpenAI Chat is an upstream backend, not a proven client edge.',
     );
+    await tester.tap(find.text('https://chatgpt.com').last);
+    await tester.pumpAndSettle();
+    expect(
+      find.textContaining('Codex 使用 ChatGPT 登录时选择 chatgpt.com'),
+      findsOneWidget,
+    );
+    expect(tester.takeException(), isNull);
+    await tester.tap(clientFlow);
+    await tester.pumpAndSettle();
     final anthropicOption = find.text('https://api.anthropic.com').last;
     expect(anthropicOption.hitTestable(), findsOneWidget);
     await tester.tap(anthropicOption);
@@ -4811,6 +4838,20 @@ void main() {
     await tester.tap(review);
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('environment-create-impact')), findsOneWidget);
+    expect(tester.takeException(), isNull);
+
+    await tester.tap(find.byKey(const Key('environment-create-publish')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('environment-edit')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('environment-tab-runtime')));
+    await tester.pumpAndSettle();
+    final savedRecording = tester.widget<CompactSelectField<String>>(
+      find.byKey(const Key('environment-editor-recording')),
+    );
+    expect(savedRecording.initialValue, 'off');
+    expect(find.textContaining('无法统计模型和 Token 用量'), findsOneWidget);
+    expect(find.byKey(const Key('environment-editor-retention')), findsNothing);
     expect(tester.takeException(), isNull);
 
     await tester.pumpWidget(const SizedBox.shrink());

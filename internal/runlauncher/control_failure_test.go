@@ -20,6 +20,18 @@ func TestClassifyCreateFailurePreservesTypedEnvironmentSelection(t *testing.T) {
 		want   error
 	}{
 		{
+			name:   "client destination missing",
+			reason: capturecontrol.ReasonClientTargetNotConfigured,
+			status: http.StatusUnprocessableEntity,
+			want:   ErrClientTargetNotConfigured,
+		},
+		{
+			name:   "invalid client base URL",
+			reason: capturecontrol.ReasonClientTargetInvalid,
+			status: http.StatusUnprocessableEntity,
+			want:   ErrClientTargetInvalid,
+		},
+		{
 			name:   "missing",
 			reason: capturecontrol.ReasonEnvironmentNotFound,
 			status: http.StatusNotFound,

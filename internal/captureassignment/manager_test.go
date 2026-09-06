@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/vibe-agi/vibermate/internal/captureidentity"
+	"github.com/vibe-agi/vibermate/internal/clienttarget"
 	"github.com/vibe-agi/vibermate/internal/egressprofile"
 	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/operationcatalog"
@@ -16,6 +17,29 @@ import (
 	"github.com/vibe-agi/vibermate/internal/protocolspec"
 	"github.com/vibe-agi/vibermate/internal/wireprofile"
 )
+
+func TestClientTargetMismatchIsActionableAndDoesNotWriteAssignment(t *testing.T) {
+	t.Parallel()
+	repository := newMemoryRepository()
+	policy := environmentFixture(t, "inspect", "adapter.shared")
+	policy.ClientEndpoints[0].ClientOrigin = mustOrigin(t, "https://api.openai.com")
+	policy.ClientEndpoints[0].ProtocolPlans[0].ClientProtocol = environment.ClientProtocolOpenAIResponses
+	policy.ClientEndpoints[0].ProtocolPlans[0].Destination = environment.DestinationPlan{Kind: environment.DestinationKindOriginal}
+	profile, err := clienttarget.NewProfile("codex-cli", clienttarget.EnvironmentFacts{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager := newTestManager(t, repository, newRevisionResolver(t, policy))
+	_, _, err = manager.CreateForLaunch(context.Background(), CreateCommand{
+		Capture: testCapture(), EnvironmentID: "inspect", Source: SourceLaunch, ClientProfile: profile,
+	})
+	if !errors.Is(err, ErrClientTargetNotConfigured) {
+		t.Fatalf("want actionable client target mismatch, got %v", err)
+	}
+	if len(repository.assignments) != 0 {
+		t.Fatal("mismatched launch persisted an assignment")
+	}
+}
 
 func TestCaptureKeepsFrozenEnvironmentRevisionAfterPublish(t *testing.T) {
 	t.Parallel()
@@ -499,6 +523,10 @@ func environmentCompiler(t *testing.T) environment.Compiler {
 	if err != nil {
 		t.Fatal(err)
 	}
+	responsesPairID, err := protocolspec.NewCodecPairID("test.openai.passthrough")
+	if err != nil {
+		t.Fatal(err)
+	}
 	protocols, err := protocolspec.NewCatalog(
 		operations.Definitions(),
 		[]protocolspec.CodecPairDefinition{{
@@ -506,6 +534,16 @@ func environmentCompiler(t *testing.T) environment.Compiler {
 			ClientDialect:      protocolspec.DialectAnthropicMessages,
 			ProviderDialect:    protocolspec.DialectAnthropicMessages,
 			ClientOperationIDs: operations.SemanticOperationIDs(protocolspec.DialectAnthropicMessages),
+			RequiredCapabilities: []protocolspec.ProviderCapability{
+				protocolspec.ProviderCapabilityMessages,
+				protocolspec.ProviderCapabilityStreaming,
+				protocolspec.ProviderCapabilityToolCalls,
+			},
+		}, {
+			ID: responsesPairID, Revision: 1,
+			ClientDialect:      protocolspec.DialectOpenAIResponses,
+			ProviderDialect:    protocolspec.DialectOpenAIResponses,
+			ClientOperationIDs: operations.SemanticOperationIDs(protocolspec.DialectOpenAIResponses),
 			RequiredCapabilities: []protocolspec.ProviderCapability{
 				protocolspec.ProviderCapabilityMessages,
 				protocolspec.ProviderCapabilityStreaming,

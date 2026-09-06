@@ -284,7 +284,7 @@ func (issuer *Issuer) GetManualCaptureContext(
 	if err != nil {
 		return ManualCaptureContext{}, err
 	}
-	review, err := issuer.authorities.Review(ctx, environmentID)
+	review, err := issuer.authorities.Review(ctx, environmentID, clienttarget.Profile{})
 	if err != nil {
 		return ManualCaptureContext{}, ErrProjectionUnavailable
 	}
@@ -305,7 +305,7 @@ func (issuer *Issuer) IssueManualCapture(
 		request.ConfirmationToken == "" {
 		return ManualCaptureGrant{}, ErrInvalidManualCapture
 	}
-	review, err := issuer.authorities.Review(ctx, request.EnvironmentID)
+	review, err := issuer.authorities.Review(ctx, request.EnvironmentID, clienttarget.Profile{})
 	if err != nil {
 		return ManualCaptureGrant{}, ErrProjectionUnavailable
 	}
@@ -696,11 +696,11 @@ func (issuer *Issuer) IssueCaptureRun(
 		selectedEnvironment = environment.SystemTransparentID
 		assignmentSource = captureassignment.SourceSystemTransparent
 	}
-	// Reject a missing or disabled explicit Environment before creating
+	// Reject a missing/disabled Environment or an unmatched client destination before creating
 	// a durable CaptureRun. This review is intentionally not authorization: the
 	// later AssignAndResolve call remains the sole linearization point and must
 	// re-check the same Environment while freezing the launch boundary.
-	if _, reviewErr := issuer.authorities.Review(ctx, selectedEnvironment); reviewErr != nil {
+	if _, reviewErr := issuer.authorities.Review(ctx, selectedEnvironment, profile); reviewErr != nil {
 		return CaptureRunGrant{}, classifyEnvironmentSelectionError(reviewErr)
 	}
 	var runtimeUserID runtimeuser.UserID
@@ -896,6 +896,8 @@ func classifyEnvironmentSelectionError(err error) error {
 		return fmt.Errorf("%w: %w", ErrEnvironmentNotFound, err)
 	case errors.Is(err, environment.ErrEnvironmentDisabled):
 		return fmt.Errorf("%w: %w", ErrEnvironmentUnavailable, err)
+	case errors.Is(err, captureassignment.ErrClientTargetNotConfigured), errors.Is(err, clienttarget.ErrInvalidTarget):
+		return err
 	default:
 		return fmt.Errorf("%w: %w", ErrProjectionUnavailable, err)
 	}

@@ -22,17 +22,18 @@ const (
 )
 
 var (
-	ErrInvalidAssignment      = errors.New("Capture Environment assignment is invalid")
-	ErrAssignmentNotFound     = errors.New("Capture Environment assignment is not configured")
-	ErrAssignmentConflict     = errors.New("Capture Environment assignment revision conflict")
-	ErrAssignmentIncompatible = errors.New("Capture Environment assignment is incompatible with an open connection")
-	ErrAssignmentUnavailable  = errors.New("Capture Environment assignment is unavailable")
-	ErrRuntimeStopping        = errors.New("Capture Environment assignment runtime is stopping")
-	ErrOperationInProgress    = errors.New("Capture Environment assignment operation is in progress")
-	ErrConnectionNotFound     = errors.New("Capture connection is not registered")
-	ErrReconnectUnavailable   = errors.New("Capture connection cannot be closed safely")
-	ErrWriteNotCommitted      = errors.New("Capture Environment assignment write was not committed")
-	ErrCommitOutcomeUnknown   = errors.New("Capture Environment assignment commit outcome is unknown")
+	ErrInvalidAssignment         = errors.New("Capture Environment assignment is invalid")
+	ErrClientTargetNotConfigured = errors.New("client destination has no matching flow in the selected traffic policy")
+	ErrAssignmentNotFound        = errors.New("Capture Environment assignment is not configured")
+	ErrAssignmentConflict        = errors.New("Capture Environment assignment revision conflict")
+	ErrAssignmentIncompatible    = errors.New("Capture Environment assignment is incompatible with an open connection")
+	ErrAssignmentUnavailable     = errors.New("Capture Environment assignment is unavailable")
+	ErrRuntimeStopping           = errors.New("Capture Environment assignment runtime is stopping")
+	ErrOperationInProgress       = errors.New("Capture Environment assignment operation is in progress")
+	ErrConnectionNotFound        = errors.New("Capture connection is not registered")
+	ErrReconnectUnavailable      = errors.New("Capture connection cannot be closed safely")
+	ErrWriteNotCommitted         = errors.New("Capture Environment assignment write was not committed")
+	ErrCommitOutcomeUnknown      = errors.New("Capture Environment assignment commit outcome is unknown")
 )
 
 type Revision uint64
@@ -130,6 +131,29 @@ type CreateCommand struct {
 	EnvironmentID environment.EnvironmentID
 	Source        Source
 	ClientProfile clienttarget.Profile
+}
+
+// LaunchAuthorityForClient is shared by preflight and the final, frozen
+// assignment write. A known configuration mismatch must be detected before a
+// durable CaptureRun is created, and must be rechecked when the policy freezes.
+func LaunchAuthorityForClient(snapshot environment.EnvironmentSnapshot, profile clienttarget.Profile) (environment.LaunchAuthorityBoundary, clienttarget.Target, error) {
+	boundary, err := environment.NewLaunchAuthorityBoundary(snapshot)
+	if err != nil {
+		return boundary, clienttarget.Target{}, err
+	}
+	launchEnvironment := snapshot.LaunchEnvironment()
+	target, available, err := profile.Resolve(launchEnvironment.SetEnv, launchEnvironment.DeleteEnv)
+	if err != nil {
+		return environment.LaunchAuthorityBoundary{}, clienttarget.Target{}, err
+	}
+	if !available {
+		return boundary, target, nil
+	}
+	if _, exists := snapshot.LookupClientOrigin(target.CanonicalOrigin()); !exists {
+		return environment.LaunchAuthorityBoundary{}, clienttarget.Target{}, ErrClientTargetNotConfigured
+	}
+	boundary, err = environment.NewLaunchAuthorityBoundaryForClientTarget(snapshot, target.CanonicalOrigin(), target.ActualOrigin())
+	return boundary, target, err
 }
 
 // Controller is the control-plane authority for one Capture's current

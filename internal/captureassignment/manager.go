@@ -124,21 +124,7 @@ func (manager *Manager) CreateForLaunch(
 		return Assignment{}, environment.LaunchEnvironmentPolicy{}, err
 	}
 	launchEnvironment := snapshot.LaunchEnvironment()
-	clientTarget, targetAvailable, err := command.ClientProfile.Resolve(
-		launchEnvironment.SetEnv,
-		launchEnvironment.DeleteEnv,
-	)
-	if err != nil {
-		return Assignment{}, environment.LaunchEnvironmentPolicy{}, ErrInvalidAssignment
-	}
-	launchAuthority, err := environment.NewLaunchAuthorityBoundary(snapshot)
-	if targetAvailable {
-		launchAuthority, err = environment.NewLaunchAuthorityBoundaryForClientTarget(
-			snapshot,
-			clientTarget.CanonicalOrigin(),
-			clientTarget.ActualOrigin(),
-		)
-	}
+	launchAuthority, clientTarget, err := LaunchAuthorityForClient(snapshot, command.ClientProfile)
 	if err != nil {
 		return Assignment{}, environment.LaunchEnvironmentPolicy{}, err
 	}

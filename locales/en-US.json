@@ -1,5 +1,7 @@
 {
   "cli.error.launchFailed": "The captured command could not be started.",
+  "cli.error.clientTargetNotConfigured": "The selected traffic policy does not include this client's destination. In ViberMate, open Traffic policies, edit the selected policy, add the matching client origin, and publish it. For Codex: ChatGPT login uses OpenAI Responses · chatgpt.com; API key uses OpenAI Responses · api.openai.com. Choose Original service to keep the client's own login. The command was not started.",
+  "cli.error.clientTargetInvalid": "The client base URL is invalid. Check CODEX_BASE_URL, OPENAI_BASE_URL, or ANTHROPIC_BASE_URL, including overrides in the selected traffic policy. Use an HTTP(S) URL without a username, password, query, or fragment. The command was not started.",
   "cli.error.capturePreparationTimedOut": "ViberMate could not finish preparing this capture in time. Check the desktop app for a pending client-trust decision, then try again; the command was not started.",
   "cli.error.environmentNotFound": "The selected Environment does not exist. Create and publish it in ViberMate, or omit --env for transparent capture.",
   "cli.error.environmentUnavailable": "The selected Environment is disabled or unavailable. Enable or repair it in ViberMate before trying again.",

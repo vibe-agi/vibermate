@@ -294,8 +294,17 @@ func (pipeline *Pipeline) Execute(
 			result.Outcome = AttemptAborted
 		case errors.Is(err, context.Canceled) ||
 			errors.Is(err, context.DeadlineExceeded) ||
+			errors.Is(err, ErrRuntimeStopping) ||
 			errors.Is(context.Cause(operationContext), ErrRuntimeStopping):
 			result.Outcome = AttemptCanceled
+			// Body readers can wrap cancellation as a response/commit failure.
+			// Keep the persisted reason consistent with the terminal outcome.
+			reason := ReasonExchangeCanceled
+			if errors.Is(err, ErrRuntimeStopping) ||
+				errors.Is(context.Cause(operationContext), ErrRuntimeStopping) {
+				reason = ReasonExchangeRuntimeStopping
+			}
+			err = newFailure(reason, request.exchangeID, ProviderStatusOf(err), err)
 		}
 		return result, err
 	}

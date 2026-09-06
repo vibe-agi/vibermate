@@ -1380,6 +1380,9 @@ final class _NewEnvironmentDialogState extends State<_NewEnvironmentDialog> {
                                         label: copy(
                                           'environment.recording.mode',
                                         ),
+                                        detail: copy(
+                                          'environment.recording.$_recordingMode.detail',
+                                        ),
                                         child: CompactSelectField<String>(
                                           key: const Key(
                                             'environment-create-recording',
@@ -1786,6 +1789,9 @@ final class _EnvironmentEditorDialogState
                                       CompactLabeledControl(
                                         label: copy(
                                           'environment.recording.mode',
+                                        ),
+                                        detail: copy(
+                                          'environment.recording.$_recordingMode.detail',
                                         ),
                                         child: CompactSelectField<String>(
                                           key: const Key(
@@ -2522,6 +2528,9 @@ final class _EnvironmentEndpointAdderState
                 final compact = constraints.maxWidth < 470;
                 final targetField = CompactLabeledControl(
                   label: widget.copy('environment.mapping.client'),
+                  detail: effectiveTarget?.clientProtocol == 'openai_responses'
+                      ? widget.copy('environment.mapping.codex_login_hint')
+                      : null,
                   child: CompactSelectField<String>(
                     key: const Key('environment-client-plan-target'),
                     initialValue: effectiveTarget?.key,
