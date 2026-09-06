@@ -35,6 +35,7 @@ type runtimeFetchSpec struct {
 	targetRef    string
 	target       Target
 	relativePath string
+	rawQuery     string
 	credential   providerauth.Lease
 }
 
@@ -67,7 +68,8 @@ func (client *Client) FetchEndpointModels(
 		purpose:      egressaudit.PurposeUpstreamModelDiscovery,
 		targetRef:    endpoint.ID.String(),
 		target:       target,
-		relativePath: endpointModelsPath(target.BasePath()),
+		relativePath: upstreamendpoint.ModelsPath(endpoint.Origin),
+		rawQuery:     upstreamendpoint.ModelsQuery(endpoint.Origin),
 		credential:   credential,
 	})
 }
@@ -152,9 +154,10 @@ func (client *Client) fetchRuntimeJSON(
 	}
 
 	requestURL := url.URL{
-		Scheme: spec.target.Origin().Scheme(),
-		Host:   spec.target.HTTPAuthority(),
-		Path:   spec.relativePath,
+		Scheme:   spec.target.Origin().Scheme(),
+		Host:     spec.target.HTTPAuthority(),
+		Path:     spec.relativePath,
+		RawQuery: spec.rawQuery,
 	}
 	request, err := http.NewRequestWithContext(
 		operationContext,
@@ -359,14 +362,6 @@ func (client *Client) beginRuntimeAudit(
 		)
 	}
 	return attempt, nil
-}
-
-func endpointModelsPath(basePath string) string {
-	basePath = strings.TrimSuffix(basePath, "/")
-	if strings.HasSuffix(basePath, "/v1") {
-		return basePath + "/models"
-	}
-	return basePath + "/v1/models"
 }
 
 func standardRuntimeTransportPlan() (

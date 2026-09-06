@@ -193,12 +193,13 @@ type endpointCatalog struct {
 }
 
 type endpointModel struct {
-	ID              string `json:"id"`
-	DisplayName     string `json:"display_name"`
-	OwnedBy         string `json:"owned_by"`
-	MaxModelLength  int64  `json:"max_model_len"`
-	ContextWindow   int64  `json:"context_window"`
-	MaxOutputTokens int64  `json:"max_output_tokens"`
+	ID              string          `json:"id"`
+	Slug            json.RawMessage `json:"slug"`
+	DisplayName     string          `json:"display_name"`
+	OwnedBy         string          `json:"owned_by"`
+	MaxModelLength  int64           `json:"max_model_len"`
+	ContextWindow   int64           `json:"context_window"`
+	MaxOutputTokens int64           `json:"max_output_tokens"`
 }
 
 func (service *Service) discoverEndpoint(
@@ -234,6 +235,14 @@ func (service *Service) discoverEndpoint(
 	models := make([]Model, 0, len(items))
 	seen := make(map[string]struct{}, len(items))
 	for _, item := range items {
+		// Codex's ChatGPT catalog advertises the request model as "slug";
+		// standard OpenAI-compatible catalogs advertise "id". Do not apply this
+		// provider-specific interpretation to unrelated endpoint catalogs.
+		if upstreamendpoint.IsChatGPTCodexOrigin(endpoint.Origin) && item.ID == "" {
+			if err := json.Unmarshal(item.Slug, &item.ID); err != nil {
+				return nil, ErrInvalidCatalog
+			}
+		}
 		if !validModelID(item.ID) || !validModelName(item.DisplayName) ||
 			!validModelName(item.OwnedBy) || item.MaxModelLength < 0 || item.ContextWindow < 0 ||
 			item.MaxOutputTokens < 0 {

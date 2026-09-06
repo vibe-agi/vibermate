@@ -206,6 +206,48 @@ func TestFetchModelsDevUsesTheFixedMetadataOriginAndRuntimePurpose(t *testing.T)
 	}
 }
 
+func TestFetchChatGPTModelsUsesNativeCatalogAndSelectedAccount(t *testing.T) {
+	t.Parallel()
+	for _, origin := range []string{
+		"https://chatgpt.com", "https://chatgpt.com/backend-api", "https://chatgpt.com/backend-api/codex",
+	} {
+		t.Run(origin, func(t *testing.T) {
+			gate := newStartedGate(t)
+			audit := &runtimeAuditRecorder{}
+			transport := &runtimeTransportStub{
+				audit:    audit,
+				response: &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"models":[{"slug":"test-model"}]}`))},
+			}
+			token := fakeChatGPTToken(`{"https://api.openai.com/auth":{"chatgpt_account_id":"selected-account"}}`)
+			secrets := testSecretReader(t, token)
+			client := newRuntimeFetchClientWithSecret(t, gate, transport, audit, secrets.value)
+			endpoint := testDiscoveryEndpoint(t, origin)
+			response, err := client.FetchEndpointModels(context.Background(), endpoint, testRuntimeDiscoveryCredential(t, endpoint.RealmID))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer response.Body.Close()
+			if _, err := io.Copy(io.Discard, response.Body); err != nil {
+				t.Fatal(err)
+			}
+			request := transport.lastRequest()
+			if request.URL.String() != "https://chatgpt.com/backend-api/codex/models?client_version=0.147.0" || request.Method != http.MethodGet {
+				t.Fatalf("model catalog request = %s %s", request.Method, request.URL)
+			}
+			if request.Header.Get("Authorization") != "Bearer "+token || request.Header.Get(chatGPTAccountHeader) != "selected-account" {
+				t.Fatal("model discovery did not use the selected account credential and identity")
+			}
+			started, terminal := audit.attempts()
+			if !transport.auditWasPresent() || started.Purpose() != egressaudit.PurposeUpstreamModelDiscovery || terminal.Outcome() != egressaudit.OutcomeCompleted {
+				t.Fatal("native catalog request bypassed runtime egress audit")
+			}
+			if snapshot := gate.Snapshot(); snapshot.ActiveActions != 0 || snapshot.ActiveEgress != 0 {
+				t.Fatal("native catalog request did not release its egress lease")
+			}
+		})
+	}
+}
+
 type runtimeFetchResult struct {
 	response *http.Response
 	err      error

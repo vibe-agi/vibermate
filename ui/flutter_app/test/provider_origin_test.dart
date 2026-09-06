@@ -2,6 +2,33 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:vibermate_app/core/api/provider_origin.dart';
 
 void main() {
+  test(
+    'model discovery URL follows the selected service, not just Responses',
+    () {
+      for (final origin in [
+        'https://chatgpt.com',
+        'https://chatgpt.com/backend-api',
+        'https://chatgpt.com/backend-api/codex',
+      ]) {
+        expect(isChatGPTCodexOrigin(Uri.parse(origin)), isTrue);
+        expect(
+          upstreamModelsUrl(Uri.parse(origin)),
+          'https://chatgpt.com/backend-api/codex/models?client_version=0.147.0',
+        );
+      }
+      for (final entry in {
+        'https://api.openai.com': 'https://api.openai.com/v1/models',
+        'https://relay.example/api/v1': 'https://relay.example/api/v1/models',
+        'https://chatgpt.com.example': 'https://chatgpt.com.example/v1/models',
+        'https://chatgpt.com:8443': 'https://chatgpt.com:8443/v1/models',
+        'https://chatgpt.com/other': 'https://chatgpt.com/other/v1/models',
+      }.entries) {
+        expect(isChatGPTCodexOrigin(Uri.parse(entry.key)), isFalse);
+        expect(upstreamModelsUrl(Uri.parse(entry.key)), entry.value);
+      }
+    },
+  );
+
   test('provider origin accepts private HTTP and canonical HTTPS', () {
     expect(isCanonicalProviderOrigin('http://spark-2a59:8888'), isTrue);
     expect(isCanonicalProviderOrigin('http://127.0.0.1:8888'), isTrue);

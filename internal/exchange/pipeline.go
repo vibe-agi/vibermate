@@ -30,6 +30,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/providertransport"
 	"github.com/vibe-agi/vibermate/internal/rawevidence"
 	"github.com/vibe-agi/vibermate/internal/secretstore"
+	"github.com/vibe-agi/vibermate/internal/upstreamendpoint"
 )
 
 const (
@@ -582,11 +583,14 @@ func (pipeline *Pipeline) executeCandidate(
 		}
 		headers = original
 	}
+	providerPath := upstreamendpoint.ProviderRelativePath(
+		selection.target.Origin(), encodedProvider.RelativePath(),
+	)
 	transformedHeaders, transformedBody, transformInput, err := applyRequestMessageTransform(
 		ctx,
 		transformTurn,
 		encodedProvider.Method(),
-		"/"+strings.TrimPrefix(encodedProvider.RelativePath(), "/"),
+		"/"+strings.TrimPrefix(providerPath, "/"),
 		headers,
 		encodedProvider.Body(),
 	)
@@ -599,7 +603,7 @@ func (pipeline *Pipeline) executeCandidate(
 		credential,
 		action,
 		encodedProvider.Method(),
-		encodedProvider.RelativePath(),
+		providerPath,
 		"",
 		transformedHeaders,
 		transformedBody,

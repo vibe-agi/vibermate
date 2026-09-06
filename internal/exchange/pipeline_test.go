@@ -2262,6 +2262,7 @@ func TestShutdownCancelsAndDrainsActiveFrozenRequest(t *testing.T) {
 
 type testPlanOptions struct {
 	clientProtocol     environment.ClientProtocol
+	chatGPTClient      bool
 	downstreamProtocol wireprofile.ApplicationProtocol
 	destination        environment.DestinationKind
 	providerOrigin     string
@@ -2300,6 +2301,10 @@ func mustEnvironmentRequestPlan(t *testing.T, options testPlanOptions) environme
 	if clientProtocol == environment.ClientProtocolOpenAIResponses {
 		clientOriginValue = "https://api.openai.com"
 		requestPath = "/v1/responses"
+		if options.chatGPTClient {
+			clientOriginValue = "https://chatgpt.com"
+			requestPath = "/backend-api/codex/responses"
+		}
 	}
 	clientOrigin := mustClientOrigin(t, clientOriginValue)
 	realm := "realm.provider"

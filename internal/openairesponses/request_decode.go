@@ -485,7 +485,11 @@ func decodeRequestProtocolEvidence(
 			var carrier struct {
 				InternalMetadata json.RawMessage `json:"internal_chat_message_metadata_passthrough,omitempty"`
 			}
-			if err := json.Unmarshal(raw, &carrier); err != nil || !rawPresent(carrier.InternalMetadata) {
+			if err := json.Unmarshal(raw, &carrier); err != nil || len(carrier.InternalMetadata) == 0 {
+				continue
+			}
+			if !rawPresent(carrier.InternalMetadata) {
+				delete(byName, "openai_responses.turn_id")
 				continue
 			}
 			var metadata internalMessageMetadataWire
@@ -494,6 +498,12 @@ func decodeRequestProtocolEvidence(
 					fmt.Sprintf("$.input[%d].internal_chat_message_metadata_passthrough", index),
 					err,
 				)
+			}
+			// An untagged current item is not evidence of the preceding turn.
+			// These optional inspection identifiers do not authorize forwarding.
+			if metadata.TurnID == "" {
+				delete(byName, "openai_responses.turn_id")
+				continue
 			}
 			if err := validateBoundedString(
 				metadata.TurnID,
@@ -1198,9 +1208,14 @@ func decodeInternalMessageMetadata(
 	if err := decodeClientWire(raw, &wire, compatible); err != nil {
 		return protocolcore.TranslationReport{}, invalidClient(path, err)
 	}
-	if err := validateBoundedString(wire.TurnID, 512, false); err != nil {
-		return protocolcore.TranslationReport{},
-			invalidClient(path+".turn_id", err)
+	// Same-dialect forwarding retains the source metadata. Missing/null/empty
+	// turn IDs mean that the inspection view cannot establish a turn identity;
+	// they must not prevent an otherwise valid provider request from being sent.
+	if wire.TurnID != "" || !compatible {
+		if err := validateBoundedString(wire.TurnID, 512, false); err != nil {
+			return protocolcore.TranslationReport{},
+				invalidClient(path+".turn_id", err)
+		}
 	}
 	return notice(
 		protocolcore.NoticeInternalMessageMetadataNotForwarded,

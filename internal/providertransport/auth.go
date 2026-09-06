@@ -8,6 +8,7 @@ import (
 
 	"github.com/vibe-agi/vibermate/internal/providerauth"
 	"github.com/vibe-agi/vibermate/internal/secretstore"
+	"github.com/vibe-agi/vibermate/internal/upstreamendpoint"
 )
 
 type CredentialEvidence struct {
@@ -150,11 +151,32 @@ func (authenticator *StaticBearerAuthenticator) Apply(
 		return CredentialEvidence{}, err
 	}
 	request.Header.Set("Authorization", "Bearer "+string(secret))
+	protected := protectedHeaderNames("Authorization", material.HeaderPolicy())
+	if upstreamendpoint.IsChatGPTCodexOrigin(target.Origin()) {
+		// The account identity must come from this selected credential epoch,
+		// never from the client's previous login. An explicit account-owned
+		// header policy (including Delete) takes precedence over token metadata.
+		policy := material.HeaderPolicy()
+		explicit := false
+		for _, assignment := range policy.Set {
+			explicit = explicit || assignment.Name == chatGPTAccountHeader
+		}
+		for _, name := range policy.Delete {
+			explicit = explicit || name == chatGPTAccountHeader
+		}
+		if !explicit {
+			if accountID := chatGPTAccountID(secret); accountID != "" {
+				request.Header.Set(chatGPTAccountHeader, accountID)
+				protected = append(protected, chatGPTAccountHeader)
+				sort.Strings(protected)
+			}
+		}
+	}
 	return CredentialEvidence{
 		DriverRef:            authenticator.Ref().String(),
 		HeaderName:           "authorization",
 		SecretRead:           true,
-		ProtectedHeaderNames: protectedHeaderNames("Authorization", material.HeaderPolicy()),
+		ProtectedHeaderNames: protected,
 	}, nil
 }
 
@@ -192,6 +214,7 @@ func stripProviderCredentialHeaders(header http.Header) {
 		"Cookie",
 		"X-Api-Key",
 		"Api-Key",
+		chatGPTAccountHeader,
 	} {
 		header.Del(name)
 	}

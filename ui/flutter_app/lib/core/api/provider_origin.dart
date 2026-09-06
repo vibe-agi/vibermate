@@ -57,6 +57,34 @@ bool isCanonicalProviderOrigin(String value) {
 bool isCleartextProviderOrigin(String value) =>
     Uri.tryParse(value)?.scheme == 'http';
 
+/// Mirrors the service path boundary in internal/upstreamendpoint/paths.go.
+/// A Responses-compatible relay is not implicitly the ChatGPT Codex service.
+bool isChatGPTCodexOrigin(Uri origin) =>
+    origin.scheme == 'https' &&
+    origin.host == 'chatgpt.com' &&
+    origin.port == 443 &&
+    const {'', '/backend-api', '/backend-api/codex'}.contains(origin.path);
+
+/// The actual discovery address used by the runtime, not an inferred /v1 API.
+String upstreamModelsUrl(Uri origin) {
+  if (isChatGPTCodexOrigin(origin)) {
+    return origin
+        .replace(
+          path: '/backend-api/codex/models',
+          // Adapter catalog compatibility, not the installed client version.
+          query: 'client_version=0.147.0',
+        )
+        .toString();
+  }
+  var path = origin.path;
+  while (path.endsWith('/')) {
+    path = path.substring(0, path.length - 1);
+  }
+  return origin
+      .replace(path: path.endsWith('/v1') ? '$path/models' : '$path/v1/models')
+      .toString();
+}
+
 // Returns null for a DNS name, true for a private/local literal, and false for
 // a public or malformed IP literal. Peer resolution remains a daemon concern.
 bool? _privateCleartextLiteral(String host) {

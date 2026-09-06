@@ -925,6 +925,8 @@ final class AppCopy {
         'This account sends X-Api-Key. If this relay requires Authorization: Bearer, create or select a Bearer token account under this upstream service.',
     'environment.model.auth_hint.bearer_token':
         'This account sends Authorization: Bearer. Verify that the credential is current and the upstream service accepts Bearer authentication.',
+    'environment.model.auth_hint.chatgpt':
+        'ChatGPT requires a current ChatGPT access token, not an OpenAI API key. The account ID must belong to that token. Stored tokens are not refreshed automatically; replace expired credentials in Upstream services.',
     'environment.destination.label': 'Send to',
     'environment.destination.original': 'Original destination',
     'environment.destination.original.short': 'Original service',
@@ -996,6 +998,8 @@ final class AppCopy {
     'routes.account.transport.bearer_token': 'Authorization: Bearer',
     'routes.account.api_key': 'API key',
     'routes.account.bearer_token': 'Bearer token',
+    'routes.account.chatgpt_hint':
+        'Use a ChatGPT access token, not an OpenAI API key. ViberMate reads the account ID from this token when available. For opaque tokens, set ChatGPT-Account-Id below to the matching account ID. Stored tokens are not refreshed automatically; replace them when they expire.',
     'routes.account.secret_boundary':
         'The secret is sent once to the local runtime and stored by its secret store. It is never returned in account responses.',
     'routes.account.headers.auth_owned':
@@ -2402,6 +2406,8 @@ final class AppCopy {
         '此账号发送 X-Api-Key。若该中转站要求 Authorization: Bearer，请在此上游服务下新建或选择 Bearer Token 账号。',
     'environment.model.auth_hint.bearer_token':
         '此账号发送 Authorization: Bearer。请确认凭据仍有效，且上游服务接受 Bearer 鉴权。',
+    'environment.model.auth_hint.chatgpt':
+        'ChatGPT 需要有效的 ChatGPT 访问令牌，不是 OpenAI API Key；账号 ID 必须与令牌匹配。已保存的令牌不会自动刷新，过期后请在「上游服务」中替换凭据。',
     'environment.destination.label': '发往',
     'environment.destination.original': '直连原始目标',
     'environment.destination.original.short': '原服务',
@@ -2464,6 +2470,8 @@ final class AppCopy {
     'routes.account.transport.bearer_token': 'Authorization: Bearer',
     'routes.account.api_key': 'API Key',
     'routes.account.bearer_token': 'Bearer Token',
+    'routes.account.chatgpt_hint':
+        '请使用 ChatGPT 访问令牌，而不是 OpenAI API Key。ViberMate 会从此令牌中读取可用的账号 ID；若令牌无法解析，请在下方设置与令牌匹配的 ChatGPT-Account-Id Header。已保存的令牌不会自动刷新，过期后需替换。',
     'routes.account.secret_boundary': '凭据只会发送一次给本机运行时并由其密钥存储保存；账号响应绝不会将其返回。',
     'routes.account.headers.auth_owned': '{transport} 始终由凭据类型提供，不能在这里覆盖。',
     'routes.account.headers.replace_warning':

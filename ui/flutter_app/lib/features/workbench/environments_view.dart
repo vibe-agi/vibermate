@@ -7,6 +7,7 @@ import 'package:flutter/services.dart';
 
 import '../../core/api/control_api.dart';
 import '../../core/api/control_models.dart';
+import '../../core/api/provider_origin.dart';
 import '../../core/design/viber_theme.dart';
 import 'deletion_dialog.dart';
 import '../../core/design/workbench_widgets.dart';
@@ -3616,7 +3617,13 @@ final class _ModelMappingsDialogState extends State<_ModelMappingsDialog> {
     final endpointName = widget.endpoint?.displayName ?? widget.endpointId;
     final endpointModelsUrl = widget.endpoint == null
         ? widget.endpointId
-        : _endpointModelsUrl(widget.endpoint!.origin);
+        : upstreamModelsUrl(widget.endpoint!.origin);
+    final authHintKey =
+        widget.endpoint != null &&
+            isChatGPTCodexOrigin(widget.endpoint!.origin) &&
+            widget.account?.kind == 'bearer_token'
+        ? 'environment.model.auth_hint.chatgpt'
+        : 'environment.model.auth_hint.${widget.account?.kind}';
     final accountAuthority = widget.account == null
         ? copy('environment.model.account_missing_authority')
         : copy.format('environment.model.account_authority', {
@@ -3753,7 +3760,7 @@ final class _ModelMappingsDialogState extends State<_ModelMappingsDialog> {
                   Padding(
                     padding: const EdgeInsets.only(top: 3),
                     child: Text(
-                      '${copy('environment.model.auth_hint.${widget.account!.kind}')} ${copy('environment.model.manual_available')}',
+                      '${copy(authHintKey)} ${copy('environment.model.manual_available')}',
                       style: Theme.of(context).textTheme.bodySmall,
                     ),
                   ),
@@ -4264,19 +4271,6 @@ final class _CatalogModelField extends StatelessWidget {
       );
     },
   );
-}
-
-String _endpointModelsUrl(Uri origin) {
-  var path = origin.path;
-  while (path.length > 1 && path.endsWith('/')) {
-    path = path.substring(0, path.length - 1);
-  }
-  final modelsPath = path.endsWith('/v1')
-      ? '$path/models'
-      : '${path == '/' ? '' : path}/v1/models';
-  return origin
-      .replace(path: modelsPath, query: null, fragment: null)
-      .toString();
 }
 
 final class _RouteEditorAuthority extends StatelessWidget {

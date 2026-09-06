@@ -1004,6 +1004,15 @@ final class _AccountEditorDialogState extends State<_AccountEditorDialog> {
                   ),
                 ),
                 const SizedBox(height: 10),
+                if (_kind == 'bearer_token' &&
+                    isChatGPTCodexOrigin(widget.endpoint.origin)) ...[
+                  Text(
+                    copy('routes.account.chatgpt_hint'),
+                    key: const Key('account-editor-chatgpt-hint'),
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                  const SizedBox(height: 10),
+                ],
                 Text(
                   copy('routes.account.secret_boundary'),
                   style: Theme.of(context).textTheme.bodySmall,

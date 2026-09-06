@@ -1748,7 +1748,7 @@ final class UpstreamEndpoint {
 /// One opaque model ID advertised by a particular upstream Endpoint.
 ///
 /// This is availability evidence, not a provider taxonomy. The ID is retained
-/// exactly as returned by `Endpoint + /v1/models`.
+/// exactly as returned by the Endpoint's own model catalog.
 final class UpstreamModel {
   const UpstreamModel({
     required this.id,
