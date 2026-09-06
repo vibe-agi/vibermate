@@ -263,7 +263,7 @@ final class _CaptureMaster extends StatelessWidget {
                     detail: copy('capture.empty.detail'),
                     action: TextButton.icon(
                       key: const Key('capture-empty-open-terminal-settings'),
-                      onPressed: controller.openTerminalSettings,
+                      onPressed: controller.openAccessSettings,
                       icon: const Icon(Icons.terminal, size: 15),
                       label: Text(
                         copy(
@@ -970,7 +970,6 @@ final class _CaptureConversationSelector extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       key: const Key('capture-conversation-selector'),
-      height: 38,
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
       decoration: BoxDecoration(
         color: context.viberColors.panel,
@@ -984,26 +983,26 @@ final class _CaptureConversationSelector extends StatelessWidget {
           ),
           const SizedBox(width: 8),
           Expanded(
-            child: CompactSelectField<String>(
-              key: ValueKey('capture-conversation-select:$selectedKey'),
-              initialValue: selectedKey,
-              isExpanded: true,
-              items: [
-                for (final entry in conversations.indexed)
-                  DropdownMenuItem(
-                    value: entry.$2.value.key,
-                    child: Text(
-                      '${entry.$2.depth == 0 ? '' : '${'  ' * entry.$2.depth}\u21b3 '}'
-                      '${_captureConversationTitle(copy, entry.$2.value, entry.$1)}  ·  '
-                      '${copy.format('conversations.turn_count', {'count': entry.$2.value.turnCount})}',
+            child: Semantics(
+              label: copy('capture.conversation_select'),
+              child: CompactSelectField<String>(
+                key: ValueKey('capture-conversation-select:$selectedKey'),
+                initialValue: selectedKey,
+                isExpanded: true,
+                items: [
+                  for (final entry in conversations.indexed)
+                    DropdownMenuItem(
+                      value: entry.$2.value.key,
+                      child: Text(
+                        '${entry.$2.depth == 0 ? '' : '${'  ' * entry.$2.depth}\u21b3 '}'
+                        '${_captureConversationTitle(copy, entry.$2.value, entry.$1)}  ·  '
+                        '${copy.format('conversations.turn_count', {'count': entry.$2.value.turnCount})}',
+                      ),
                     ),
-                  ),
-              ],
-              onChanged: (value) {
-                if (value != null) onSelected(value);
-              },
-              decoration: InputDecoration(
-                labelText: copy('capture.conversation_select'),
+                ],
+                onChanged: (value) {
+                  if (value != null) onSelected(value);
+                },
               ),
             ),
           ),
@@ -1520,7 +1519,10 @@ final class _CaptureContext extends StatelessWidget {
       padding: const EdgeInsets.fromLTRB(14, 8, 14, 7),
       child: LayoutBuilder(
         builder: (context, constraints) {
-          final compact = constraints.maxWidth < 520;
+          // Manual Captures have multiple longer actions. Give their Wrap the
+          // full pane width instead of letting an unbounded Row crowd out the
+          // Capture identity.
+          final compact = constraints.maxWidth < 520 || capture.isManual;
           final canManage =
               capture.isManual && capture.running && !confirmRevoke;
           final revokeButton = OutlinedButton.icon(

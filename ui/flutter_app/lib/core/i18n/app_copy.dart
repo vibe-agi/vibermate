@@ -1220,14 +1220,14 @@ final class AppCopy {
     'settings.tab.preferences': 'Preferences',
     'settings.tab.access': 'Access & launch',
     'settings.tab.safety': 'Safety & data',
-    'settings.tab.users': 'Team access',
+    'settings.tab.users': 'User management',
     'settings.tab.proxy': 'Network exits',
     'settings.preferences.title': 'Workbench preferences',
     'settings.preferences.detail':
         'These choices affect this workbench only; they do not change captured traffic or team accounts.',
     'settings.access.title': 'Access & launch',
     'settings.access.detail.server':
-        'Set up this Mac, browser access and individual Runtime User accounts from one place.',
+        'Set up Terminal commands and browser or client connections. Accounts are managed in User management.',
     'settings.access.detail.local':
         'Set up the Terminal entry used to start managed Claude and Codex runs.',
     'settings.access.local.title': 'On this Mac',
@@ -1235,7 +1235,7 @@ final class AppCopy {
         'Install or repair the local Terminal command, then copy a managed launch command.',
     'settings.access.team.title': 'Browser & team',
     'settings.access.team.detail':
-        'Share the workbench address and give every person their own account.',
+        'Create accounts in User management, then share the workbench address and connection commands.',
     'settings.safety.title': 'Safety & data',
     'settings.safety.detail':
         'Control the offline boundary, HTTPS trust and retained evidence for this Runtime.',
@@ -1346,7 +1346,9 @@ final class AppCopy {
     'server.web.copy': 'Copy Web workbench URL',
     'server.users.title': 'Runtime users',
     'server.users.description':
-        'Each person or client machine signs in with its own account.',
+        'Create accounts, reset passwords and manage access. Each person signs in with their own account.',
+    'server.users.connection_guide': 'View connection instructions',
+    'server.users.error': 'Could not load or update users: {detail}',
     'server.users.authentication':
         'Username and password · reusable login session',
     'server.users.loading': 'Reading runtime users…',
@@ -2654,17 +2656,17 @@ final class AppCopy {
     'settings.tab.preferences': '偏好设置',
     'settings.tab.access': '接入与启动',
     'settings.tab.safety': '安全与数据',
-    'settings.tab.users': '团队接入',
+    'settings.tab.users': '用户管理',
     'settings.tab.proxy': '网络出口',
     'settings.preferences.title': '工作台偏好',
     'settings.preferences.detail': '这里只改变当前工作台的显示方式，不会修改捕获流量或团队账号。',
     'settings.access.title': '接入与启动',
-    'settings.access.detail.server': '在一个地方设置本机终端、网页访问与每位成员的 Runtime 账号。',
+    'settings.access.detail.server': '设置终端命令、网页与客户端连接；账号请在「用户管理」中维护。',
     'settings.access.detail.local': '设置用于启动 Claude 与 Codex 托管运行的终端入口。',
     'settings.access.local.title': '这台电脑',
     'settings.access.local.detail': '安装或修复本机终端命令，然后复制托管启动命令。',
     'settings.access.team.title': '网页与团队',
-    'settings.access.team.detail': '分享工作台地址，并为每个人建立独立账号。',
+    'settings.access.team.detail': '先在「用户管理」中创建账号，再分享工作台地址和连接命令。',
     'settings.safety.title': '安全与数据',
     'settings.safety.detail': '管理这套 Runtime 的断网边界、HTTPS 信任与证据留存。',
     'settings.egress.title': '网络出口方案',
@@ -2756,7 +2758,9 @@ final class AppCopy {
     'server.web.detail': '打开此地址并使用个人运行用户账号登录。所有者可以管理 Runtime；每位成员只能看到自己的已保留用量。',
     'server.web.copy': '复制网页工作台地址',
     'server.users.title': '运行用户',
-    'server.users.description': '每个人或客户端机器使用自己的账号登录。',
+    'server.users.description': '创建账号、重置密码和管理访问权限。每个人使用自己的账号登录。',
+    'server.users.connection_guide': '查看接入说明',
+    'server.users.error': '无法读取或更新用户：{detail}',
     'server.users.authentication': '用户名与密码 · 可复用登录会话',
     'server.users.loading': '正在读取运行用户…',
     'server.users.empty':

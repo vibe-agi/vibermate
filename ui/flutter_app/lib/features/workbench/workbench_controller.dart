@@ -815,7 +815,9 @@ final class WorkbenchController extends ChangeNotifier {
   }
 
   void selectSettingsTab(int value) {
-    final maximum = serverManagement || terminalManagement ? 3 : 2;
+    final maximum =
+        (serverManagement || terminalManagement ? 3 : 2) +
+        (serverManagement ? 1 : 0);
     if (value < 0 || value > maximum || settingsTab == value) return;
     settingsTab = value;
     notifyListeners();
@@ -823,7 +825,7 @@ final class WorkbenchController extends ChangeNotifier {
 
   void openRuntimeUsersSettings() {
     if (!serverManagement) return;
-    settingsTab = 1;
+    settingsTab = 2;
     section = WorkbenchSection.settings;
     operationNotice = null;
     notifyListeners();
@@ -832,17 +834,17 @@ final class WorkbenchController extends ChangeNotifier {
     }
   }
 
-  void openTerminalSettings() {
-    if (!terminalManagement) {
-      openRuntimeUsersSettings();
-      return;
-    }
+  void openAccessSettings() {
+    if (!terminalManagement && !serverManagement) return;
     settingsTab = 1;
     section = WorkbenchSection.settings;
     operationNotice = null;
     notifyListeners();
-    if (terminalCommand == null) {
+    if (terminalManagement && terminalCommand == null) {
       unawaited(refreshTerminalCommand());
+    }
+    if (serverManagement && (runtimeUsers == null || serverAccess == null)) {
+      unawaited(refreshServerManagement());
     }
   }
 

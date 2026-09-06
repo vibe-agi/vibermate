@@ -2461,11 +2461,15 @@ final class _MessageCardState extends State<_MessageCard> {
                         ),
                       ),
                       if (!_expanded) ...[
-                        Text(
-                          copy.format('exchange.system.collapsed', {
-                            'size': _bytes(size),
-                          }),
-                          style: Theme.of(context).textTheme.bodySmall,
+                        Flexible(
+                          child: Text(
+                            copy.format('exchange.system.collapsed', {
+                              'size': _bytes(size),
+                            }),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: Theme.of(context).textTheme.bodySmall,
+                          ),
                         ),
                         const SizedBox(width: 6),
                       ],
@@ -3057,22 +3061,32 @@ final class _ContentBlockView extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Row(
+            Wrap(
+              alignment: WrapAlignment.spaceBetween,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              spacing: 8,
+              runSpacing: 3,
               children: [
-                Icon(
-                  multiAgent
-                      ? Icons.account_tree_outlined
-                      : Icons.build_outlined,
-                  size: 13,
-                  color: context.viberColors.warning,
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      multiAgent
+                          ? Icons.account_tree_outlined
+                          : Icons.build_outlined,
+                      size: 13,
+                      color: context.viberColors.warning,
+                    ),
+                    const SizedBox(width: 5),
+                    Flexible(
+                      child: Text(
+                        multiAgent
+                            ? copy('exchange.agent.action.${block.toolName}')
+                            : (block.toolName ?? copy('exchange.tool.unknown')),
+                      ),
+                    ),
+                  ],
                 ),
-                const SizedBox(width: 5),
-                Text(
-                  multiAgent
-                      ? copy('exchange.agent.action.${block.toolName}')
-                      : (block.toolName ?? copy('exchange.tool.unknown')),
-                ),
-                const Spacer(),
                 Text(block.callId ?? '—', style: monoStyle),
               ],
             ),

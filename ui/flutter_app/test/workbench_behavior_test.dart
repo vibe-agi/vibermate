@@ -1004,7 +1004,7 @@ void main() {
     },
   );
 
-  testWidgets('Team access makes the first Server owner an explicit step', (
+  testWidgets('User management makes the first Server owner an explicit step', (
     tester,
   ) async {
     await tester.binding.setSurfaceSize(const Size(900, 700));
@@ -1032,7 +1032,8 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    await _openSettingsTab(tester, const Key('settings-tab-access'));
+    await _openSettingsTab(tester, const Key('settings-tab-users'));
+    expect(find.byKey(const Key('server-runtime-access')), findsNothing);
     expect(find.text('Create owner'), findsOneWidget);
     expect(
       find.textContaining('no default administrator password'),
@@ -1099,7 +1100,7 @@ void main() {
     await tester.pump();
   });
 
-  testWidgets('390px Settings keeps Runtime Users in the Access tab', (
+  testWidgets('390px Settings separates Runtime Users from Access commands', (
     tester,
   ) async {
     await tester.binding.setSurfaceSize(const Size(390, 760));
@@ -1130,6 +1131,7 @@ void main() {
     expect(tester.takeException(), isNull);
     expect(find.byKey(const Key('settings-tab-general')), findsOneWidget);
     expect(find.byKey(const Key('settings-tab-access')), findsOneWidget);
+    expect(find.byKey(const Key('settings-tab-users')), findsOneWidget);
     expect(find.byKey(const Key('settings-tab-safety')), findsOneWidget);
     expect(find.byKey(const Key('server-runtime-access')), findsNothing);
     await _openSettingsTab(tester, const Key('settings-tab-access'));
@@ -1153,6 +1155,10 @@ void main() {
     expect(controller.serverAccess?.requiresRuntimeUserLogin, isTrue);
     expect(controller.runtimeUsers?.single.username, 'alice');
     expect(controller.runtimeUsage, isNull);
+    expect(find.byKey(const Key('runtime-users-panel')), findsNothing);
+    await _openSettingsTab(tester, const Key('settings-tab-users'));
+    expect(find.byKey(const Key('server-runtime-access')), findsNothing);
+    expect(find.text('Terminal command'), findsNothing);
     expect(
       find.byKey(const Key('runtime-user-row-user.preview.alice')),
       findsOneWidget,
@@ -1164,7 +1170,7 @@ void main() {
     expect(controller.runtimeUserMutating, isFalse);
     expect(controller.runtimeUsers?.single.active, isTrue);
     final userScroll = find.descendant(
-      of: find.byKey(const Key('settings-access-scroll')),
+      of: find.byKey(const Key('settings-users-scroll')),
       matching: find.byType(Scrollable),
     );
     await tester.scrollUntilVisible(
@@ -1183,7 +1189,7 @@ void main() {
 
     final add = find.byKey(const Key('runtime-user-add'));
     await tester.drag(
-      find.byKey(const Key('settings-access-scroll')),
+      find.byKey(const Key('settings-users-scroll')),
       const Offset(0, -220),
     );
     await tester.pumpAndSettle();
@@ -1252,7 +1258,7 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    await _openSettingsTab(tester, const Key('settings-tab-access'));
+    await _openSettingsTab(tester, const Key('settings-tab-users'));
     expect(
       find.byKey(const Key('runtime-user-row-user.preview.alice')),
       findsOneWidget,
@@ -1409,8 +1415,9 @@ void main() {
     await tester.tap(createUser);
     await tester.pumpAndSettle();
     expect(controller.section, WorkbenchSection.settings);
-    expect(controller.settingsTab, 1);
-    expect(find.byKey(const Key('server-runtime-access')), findsOneWidget);
+    expect(controller.settingsTab, 2);
+    expect(find.byKey(const Key('server-runtime-access')), findsNothing);
+    expect(find.byKey(const Key('runtime-users-panel')), findsOneWidget);
     expect(find.text('Create owner'), findsOneWidget);
     expect(tester.takeException(), isNull);
 
@@ -2771,6 +2778,7 @@ void main() {
       const Key('conversation-turn-run-1-exchange-224'),
     );
     await tester.ensureVisible(latest);
+    await tester.pumpAndSettle();
     await tester.tap(latest);
     await tester.pumpAndSettle();
 

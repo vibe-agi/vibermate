@@ -581,7 +581,19 @@ final class _CompactSelectFieldState<T> extends State<CompactSelectField<T>> {
             final menuWidth = constraints.hasBoundedWidth
                 ? constraints.maxWidth
                 : null;
-            final menuHeight = (widget.items.length * widget.menuItemHeight + 4)
+            final menuTextStyle =
+                Theme.of(context).textTheme.bodySmall?.copyWith(
+                  color: context.viberColors.text,
+                  fontWeight: FontWeight.w400,
+                ) ??
+                const TextStyle();
+            final menuFontSize = menuTextStyle.fontSize ?? ViberType.supporting;
+            final menuScale =
+                (MediaQuery.textScalerOf(context).scale(menuFontSize) /
+                        menuFontSize)
+                    .clamp(1.0, double.infinity);
+            final menuItemHeight = widget.menuItemHeight * menuScale;
+            final menuHeight = (widget.items.length * menuItemHeight + 4)
                 .clamp(32.0, 240.0)
                 .toDouble();
             return MenuAnchor(
@@ -610,10 +622,10 @@ final class _CompactSelectFieldState<T> extends State<CompactSelectField<T>> {
                         context.viberColors.text,
                       ),
                       minimumSize: WidgetStatePropertyAll(
-                        Size(0, widget.menuItemHeight),
+                        Size(0, menuItemHeight),
                       ),
                       maximumSize: WidgetStatePropertyAll(
-                        Size(double.infinity, widget.menuItemHeight),
+                        Size(double.infinity, menuItemHeight),
                       ),
                     ),
                     onPressed: enabled && item.enabled
@@ -635,12 +647,7 @@ final class _CompactSelectFieldState<T> extends State<CompactSelectField<T>> {
                           : null,
                     ),
                     child: DefaultTextStyle(
-                      style:
-                          Theme.of(context).textTheme.bodySmall?.copyWith(
-                            color: context.viberColors.text,
-                            fontWeight: FontWeight.w400,
-                          ) ??
-                          const TextStyle(),
+                      style: menuTextStyle,
                       maxLines: widget.menuMaxLines,
                       overflow: TextOverflow.ellipsis,
                       child: item.child,
@@ -671,8 +678,8 @@ final class _CompactSelectFieldState<T> extends State<CompactSelectField<T>> {
                       isFocused: active,
                       decoration: widget.decoration.copyWith(
                         isDense: true,
-                        constraints: const BoxConstraints.tightFor(
-                          height: ViberMetrics.controlHeight,
+                        constraints: const BoxConstraints(
+                          minHeight: ViberMetrics.controlHeight,
                         ),
                         enabled: enabled,
                         errorText:

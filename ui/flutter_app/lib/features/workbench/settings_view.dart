@@ -24,7 +24,7 @@ final class SettingsView extends StatelessWidget {
     final access = controller.serverManagement || controller.terminalManagement;
     return DefaultTabController(
       key: ValueKey('settings-tab-${controller.settingsTab}'),
-      length: access ? 4 : 3,
+      length: (access ? 4 : 3) + (controller.serverManagement ? 1 : 0),
       initialIndex: controller.settingsTab,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -58,6 +58,12 @@ final class SettingsView extends StatelessWidget {
                       icon: Icons.link,
                       label: copy('settings.tab.access'),
                     ),
+                  if (controller.serverManagement)
+                    _SettingsTab(
+                      key: const Key('settings-tab-users'),
+                      icon: Icons.group_outlined,
+                      label: copy('settings.tab.users'),
+                    ),
                   _SettingsTab(
                     key: const Key('settings-tab-safety'),
                     icon: Icons.shield_outlined,
@@ -79,6 +85,8 @@ final class SettingsView extends StatelessWidget {
                 _GeneralSettingsPane(controller: controller, copy: copy),
                 if (access)
                   _AccessSettingsPane(controller: controller, copy: copy),
+                if (controller.serverManagement)
+                  _UsersSettingsPane(controller: controller, copy: copy),
                 _SafetyDataSettingsPane(controller: controller, copy: copy),
                 _EgressProfilesSettingsPane(controller: controller, copy: copy),
               ],
@@ -118,7 +126,7 @@ final class _SettingsPaneLayout extends StatelessWidget {
     padding: const EdgeInsets.fromLTRB(14, 14, 14, 24),
     children: [
       Align(
-        alignment: Alignment.topCenter,
+        alignment: Alignment.topLeft,
         child: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 1080),
           child: Column(
@@ -544,8 +552,43 @@ final class _AccessSettingsPane extends StatelessWidget {
           detail: copy('settings.access.team.detail'),
         ),
         const SizedBox(height: 8),
+        Align(
+          alignment: Alignment.centerLeft,
+          child: OutlinedButton.icon(
+            key: const Key('settings-access-manage-users'),
+            onPressed: controller.openRuntimeUsersSettings,
+            icon: const Icon(Icons.group_outlined, size: 15),
+            label: Text(copy('settings.tab.users')),
+          ),
+        ),
+        const SizedBox(height: 8),
         _ServerAccessPanel(controller: controller, copy: copy),
       ],
+    ],
+  );
+}
+
+final class _UsersSettingsPane extends StatelessWidget {
+  const _UsersSettingsPane({required this.controller, required this.copy});
+
+  final WorkbenchController controller;
+  final AppCopy copy;
+
+  @override
+  Widget build(BuildContext context) => _SettingsPaneLayout(
+    scrollKey: const Key('settings-users-scroll'),
+    children: [
+      _RuntimeUsersPanel(controller: controller, copy: copy),
+      const SizedBox(height: 10),
+      Align(
+        alignment: Alignment.centerLeft,
+        child: OutlinedButton.icon(
+          key: const Key('settings-users-open-access'),
+          onPressed: controller.openAccessSettings,
+          icon: const Icon(Icons.link, size: 15),
+          label: Text(copy('server.users.connection_guide')),
+        ),
+      ),
     ],
   );
 }
@@ -1092,19 +1135,9 @@ final class _ServerAccessPanelState extends State<_ServerAccessPanel> {
     final controller = widget.controller;
     final copy = widget.copy;
     final access = controller.serverAccess;
-    final users = controller.runtimeUsers;
-    final firstOwner = users != null && !users.any((user) => user.owner);
     return Column(
       key: const Key('server-runtime-access'),
       children: [
-        _runtimeUsersCard(
-          context,
-          controller: controller,
-          copy: copy,
-          users: users,
-          firstOwner: firstOwner,
-        ),
-        const SizedBox(height: 10),
         Container(
           clipBehavior: Clip.antiAlias,
           decoration: BoxDecoration(
@@ -1330,13 +1363,41 @@ final class _ServerAccessPanelState extends State<_ServerAccessPanel> {
     );
   }
 
-  Widget _runtimeUsersCard(
-    BuildContext context, {
-    required WorkbenchController controller,
-    required AppCopy copy,
-    required List<RuntimeUser>? users,
-    required bool firstOwner,
-  }) {
+  Future<void> _copyCommand(String client, String command) async {
+    try {
+      await Clipboard.setData(ClipboardData(text: command));
+      if (!mounted) return;
+      setState(() {
+        _copiedClient = client;
+        _copyFailed = false;
+      });
+    } on Object {
+      if (!mounted) return;
+      setState(() {
+        _copiedClient = null;
+        _copyFailed = true;
+      });
+    }
+  }
+}
+
+final class _RuntimeUsersPanel extends StatefulWidget {
+  const _RuntimeUsersPanel({required this.controller, required this.copy});
+
+  final WorkbenchController controller;
+  final AppCopy copy;
+
+  @override
+  State<_RuntimeUsersPanel> createState() => _RuntimeUsersPanelState();
+}
+
+final class _RuntimeUsersPanelState extends State<_RuntimeUsersPanel> {
+  @override
+  Widget build(BuildContext context) {
+    final controller = widget.controller;
+    final copy = widget.copy;
+    final users = controller.runtimeUsers;
+    final firstOwner = users != null && !users.any((user) => user.owner);
     final heading = Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -1349,7 +1410,7 @@ final class _ServerAccessPanelState extends State<_ServerAccessPanel> {
             ),
             const SizedBox(width: 7),
             Text(
-              copy('server.users.title'),
+              copy('settings.tab.users'),
               style: Theme.of(context).textTheme.titleSmall,
             ),
           ],
@@ -1365,7 +1426,7 @@ final class _ServerAccessPanelState extends State<_ServerAccessPanel> {
     );
     final add = (firstOwner ? FilledButton.icon : OutlinedButton.icon)(
       key: const Key('runtime-user-add'),
-      onPressed: controller.runtimeUserMutating
+      onPressed: controller.runtimeUserMutating || users == null
           ? null
           : () => _showCreateRuntimeUserDialog(firstOwner: firstOwner),
       icon: const Icon(Icons.person_add_alt_1, size: 15),
@@ -1438,26 +1499,16 @@ final class _ServerAccessPanelState extends State<_ServerAccessPanel> {
                 ],
               ],
             ),
+          if (controller.serverManagementError case final error?) ...[
+            const SizedBox(height: 8),
+            InlineNotice(
+              message: copy.format('server.users.error', {'detail': error}),
+              error: true,
+            ),
+          ],
         ],
       ),
     );
-  }
-
-  Future<void> _copyCommand(String client, String command) async {
-    try {
-      await Clipboard.setData(ClipboardData(text: command));
-      if (!mounted) return;
-      setState(() {
-        _copiedClient = client;
-        _copyFailed = false;
-      });
-    } on Object {
-      if (!mounted) return;
-      setState(() {
-        _copiedClient = null;
-        _copyFailed = true;
-      });
-    }
   }
 
   Future<void> _showCreateRuntimeUserDialog({required bool firstOwner}) async {
