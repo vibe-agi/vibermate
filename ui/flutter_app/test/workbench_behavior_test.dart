@@ -919,7 +919,7 @@ void main() {
   });
 
   testWidgets(
-    '390px missing Terminal link offers one safe repair and hides diagnostics',
+    '390px startup repairs an owned Terminal link and hides diagnostics',
     (tester) async {
       await tester.binding.setSurfaceSize(const Size(390, 760));
       addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -956,46 +956,15 @@ void main() {
 
       final panel = find.byKey(const Key('terminal-command-panel'));
       await tester.ensureVisible(panel);
-      expect(find.text('需要修复'), findsOneWidget);
-      expect(find.text('一键修复'), findsOneWidget);
-      expect(find.byKey(const Key('terminal-command-remove')), findsNothing);
+      expect(find.text('需要修复'), findsNothing);
+      expect(find.text('一键修复'), findsNothing);
+      expect(find.byKey(const Key('terminal-command-remove')), findsOneWidget);
       expect(find.text(rawDiagnostic), findsNothing);
-
-      final details = find.byKey(const Key('terminal-command-details-toggle'));
-      await tester.scrollUntilVisible(
-        details,
-        120,
-        scrollable: find.byType(Scrollable).last,
-      );
-      await tester.pumpAndSettle();
-      await tester.tap(details);
-      await tester.pumpAndSettle();
-      expect(
-        find.byKey(const Key('terminal-command-technical-details')),
-        findsOneWidget,
-      );
-      expect(find.text(rawDiagnostic), findsOneWidget);
-
-      final repair = find.byKey(const Key('terminal-command-repair'));
-      await tester.scrollUntilVisible(
-        repair,
-        -120,
-        scrollable: find.byType(Scrollable).last,
-      );
-      await tester.pumpAndSettle();
-      await tester.tap(repair);
-      await tester.pumpAndSettle();
-      expect(find.text('修复终端命令？'), findsOneWidget);
-      expect(find.textContaining('不会替换任何现有对象'), findsOneWidget);
-      await tester.tap(
-        find.byKey(const Key('terminal-command-confirm-action')),
-      );
-      await tester.pumpAndSettle();
       expect(
         find.descendant(of: panel, matching: find.text('可用')),
         findsOneWidget,
       );
-      expect(find.text('终端命令已修复，可以使用。'), findsOneWidget);
+      expect(find.text('已自动修复原有的终端命令链接。'), findsOneWidget);
       expect(tester.takeException(), isNull);
 
       controller.dispose();

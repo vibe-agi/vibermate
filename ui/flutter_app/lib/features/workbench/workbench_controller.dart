@@ -486,6 +486,8 @@ final class WorkbenchController extends ChangeNotifier {
   Future<void> initialize() async {
     await refresh();
     if (_disposed) return;
+    if (terminalManagement) await _maintainTerminalCommand();
+    if (_disposed) return;
     final environmentId = selectedEnvironmentId;
     final revision = selectedEnvironmentRevision;
     if (environmentId != null && revision != null) {
@@ -1020,6 +1022,34 @@ final class WorkbenchController extends ChangeNotifier {
     }
   }
 
+  // Once per App startup, maintain only an existing receipt-owned link.
+  // Never install a new command or replace a package-manager/user-owned file.
+  Future<void> _maintainTerminalCommand() async {
+    await refreshTerminalCommand();
+    if (_disposed) return;
+    final current = terminalCommand;
+    final operation = current?.canRefresh == true
+        ? TerminalCommandOperation.refresh
+        : current?.canRepair == true
+        ? TerminalCommandOperation.repair
+        : null;
+    if (operation == null) {
+      if (current != null &&
+          !current.canInstall &&
+          current.state != TerminalCommandState.current) {
+        terminalCommandNotice = 'terminal.attention';
+        notifyListeners();
+      }
+      return;
+    }
+    if (await changeTerminalCommand(operation)) {
+      terminalCommandNotice = operation == TerminalCommandOperation.refresh
+          ? 'terminal.notice.auto_refreshed'
+          : 'terminal.notice.auto_repaired';
+      notifyListeners();
+    }
+  }
+
   Future<void> refreshPendingApprovals({bool quiet = false}) async {
     if (_disposed || pendingApprovalsLoading || networkMutating) return;
     if (!quiet) {
@@ -1284,6 +1314,23 @@ final class WorkbenchController extends ChangeNotifier {
       notifyListeners();
       return null;
     }
+  }
+
+  Future<String> revealRawHeader({
+    required String envelopeId,
+    required String name,
+  }) async {
+    final generation = _rawEvidenceGeneration;
+    final value = await _api.revealRawHeader(
+      envelopeId: envelopeId,
+      name: name,
+    );
+    if (_disposed || generation != _rawEvidenceGeneration) {
+      throw const ControlContractException(
+        'Raw header view is no longer active',
+      );
+    }
+    return value;
   }
 
   Future<bool> copyMessageTransformSample(String exchangeId) async {

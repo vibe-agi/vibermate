@@ -1632,6 +1632,7 @@ final class _CaptureContext extends StatelessWidget {
                               'capture-client-compatibility-${capture.key}',
                             ),
                             managed: managed,
+                            conversations: conversations,
                             copy: copy,
                           ),
                         ],
@@ -1836,16 +1837,39 @@ final class _CaptureSummaryLine extends StatelessWidget {
 final class _CaptureClientCompatibility extends StatelessWidget {
   const _CaptureClientCompatibility({
     required this.managed,
+    required this.conversations,
     required this.copy,
     super.key,
   });
 
   final ManagedRunSummary managed;
+  final List<ConversationSummary> conversations;
   final AppCopy copy;
 
   @override
   Widget build(BuildContext context) {
     final adapter = managed.clientAdapter;
+    final reportedVersions = conversations
+        .expand(
+          (value) =>
+              value.conversation.clientIdentity?.attributes ??
+              const <AgentClientEvidenceValue>[],
+        )
+        .where((value) => value.name == 'codex.cli_version')
+        .map((value) => value.value)
+        .where(
+          (value) =>
+              RegExp(r'^\d+\.\d+\.\d+(?:[-+][A-Za-z0-9.-]+)?$').hasMatch(value),
+        )
+        .toSet();
+    final reported = reportedVersions.length == 1
+        ? reportedVersions.single
+        : null;
+    final version =
+        adapter?.version ??
+        (reported == null
+            ? copy('capture.client.version_unreported')
+            : '$reported · ${copy('capture.client.version_reported')}');
     final status = copy('capture.client.compatibility.${managed.recognition}');
     final verified = managed.recognition == 'verified';
     final color = verified
@@ -1854,7 +1878,7 @@ final class _CaptureClientCompatibility extends StatelessWidget {
         ? context.viberColors.textMuted
         : context.viberColors.warning;
     return Tooltip(
-      message: status,
+      message: '$status. ${copy('capture.client.version_help')}',
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
@@ -1864,9 +1888,13 @@ final class _CaptureClientCompatibility extends StatelessWidget {
             color: color,
           ),
           const SizedBox(width: 4),
-          Text(
-            adapter?.version ?? copy('capture.client.version_unknown'),
-            style: monoStyle.copyWith(color: context.viberColors.textMuted),
+          Flexible(
+            child: Text(
+              version,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: monoStyle.copyWith(color: context.viberColors.textMuted),
+            ),
           ),
           const SizedBox(width: 6),
           Flexible(

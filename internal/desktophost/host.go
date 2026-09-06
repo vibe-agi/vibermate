@@ -338,9 +338,8 @@ func Start(ctx context.Context, options Options) (*Host, error) {
 		Root:           runtime.LocalRootCertificate(),
 		RunLifetime:    options.CaptureRunLifetime,
 		Workspaces:     workspaceResolver,
-		// The same authority that asks about a connection asks about handing
-		// a recognized client the Root, so both questions reach a person the
-		// same way and appear in the same place.
+		// Authenticated local runs authorize their scoped process-local CA
+		// delivery; network and tool approvals remain independent of that grant.
 		ClientRootApprovals: runtime.ClientRootApprovals(),
 		ProxyDelivery:       capturegrant.ProxyDeliveryLocalListener,
 	})

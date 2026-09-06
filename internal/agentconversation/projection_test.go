@@ -180,6 +180,7 @@ func TestClientIdentityFromProtocolEvidenceRetainsCodexSession(t *testing.T) {
 	observedAt := time.Date(2026, 8, 23, 15, 12, 38, 0, time.UTC)
 	identity, found := agentconversation.ClientIdentityFromProtocolEvidence(
 		[]protocolcore.ProtocolEvidenceValue{
+			{Name: "codex.cli_version", Value: "0.153.4"},
 			{Name: "openai_responses.session_id", Value: "session-1"},
 			{Name: "openai_responses.thread_id", Value: "thread-1"},
 			{Name: "openai_responses.turn_id", Value: "turn-2"},
@@ -196,6 +197,14 @@ func TestClientIdentityFromProtocolEvidenceRetainsCodexSession(t *testing.T) {
 		identity.Source != agentconversation.ClientIdentitySourceProtocolEvidence ||
 		len(identity.ProtocolIDs) != 3 {
 		t.Fatalf("Codex protocol identity = %#v", identity)
+	}
+	if len(identity.Attributes) != 1 || identity.Attributes[0].Name != "codex.cli_version" || identity.Attributes[0].Value != "0.153.4" {
+		t.Fatalf("client-reported version not retained as display metadata: %#v", identity.Attributes)
+	}
+	if _, found := agentconversation.ClientIdentityFromProtocolEvidence(
+		[]protocolcore.ProtocolEvidenceValue{{Name: "codex.cli_version", Value: "0.153.4"}}, "", observedAt,
+	); found {
+		t.Fatal("a version header alone must not invent a client session")
 	}
 }
 

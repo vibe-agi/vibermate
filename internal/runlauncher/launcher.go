@@ -248,11 +248,8 @@ func (launcher *Launcher) Run(
 		launcher.finishBestEffort(control, grant)
 		return 1, err
 	}
-	// A catalogued client at a version this build has no evidence for is
-	// launched without a trust root, on purpose: the catalog is versioned
-	// evidence and an update must not silently widen what may be decrypted.
-	// It will fail its handshake, so it is told why here rather than being
-	// left with a transport error nobody can explain.
+	// Explain a missing compatible launch recipe without implying that a
+	// publisher-recognized launch is an exact catalogued release.
 	launcher.warnUnverified(grant)
 	environment, err := buildEnvironment(
 		launcher.config.BaseEnvironment,
@@ -409,8 +406,7 @@ func (launcher *Launcher) announceCapturePreparation() {
 		return
 	}
 	_, _ = fmt.Fprintln(launcher.config.Stderr,
-		"vibermate: preparing Capture in the Desktop App; decide any client "+
-			"trust request in the App before network traffic can start.")
+		"vibermate: preparing Capture in the Desktop App. Network and tool approvals still follow your traffic policy.")
 }
 
 func (launcher *Launcher) announceRemoteTrust(connection *remoteConnection) {

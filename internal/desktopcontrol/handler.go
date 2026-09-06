@@ -346,6 +346,7 @@ func New(options Options) (*Handler, error) {
 			"POST /api/v1/raw-evidence/{envelopeId}/actions/reveal",
 			handler.revealRawEvidence,
 		)
+		handler.mux.HandleFunc("POST /api/v1/raw-evidence/{envelopeId}/actions/reveal-header", handler.revealRawHeader)
 	}
 	handler.mux.HandleFunc("GET /api/v1/connections", handler.listConnections)
 	handler.mux.HandleFunc(

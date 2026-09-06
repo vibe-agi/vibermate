@@ -3,12 +3,14 @@ package desktopcontrol
 import (
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
 	"slices"
 	"time"
 
+	"github.com/vibe-agi/vibermate/internal/providerauth"
 	"github.com/vibe-agi/vibermate/internal/rawevidence"
 )
 
@@ -89,6 +91,43 @@ type rawRevealResponse struct {
 	Trailers   []rawevidence.HeaderField `json:"trailers"`
 	BodyBase64 string                    `json:"bodyBase64"`
 	Frames     []rawevidence.Frame       `json:"frames"`
+}
+
+func (handler *Handler) revealRawHeader(writer http.ResponseWriter, request *http.Request) {
+	var input struct {
+		HeaderName string `json:"headerName"`
+	}
+	decoder := json.NewDecoder(http.MaxBytesReader(writer, request.Body, 1024))
+	decoder.DisallowUnknownFields()
+	if request.URL.RawQuery != "" || decoder.Decode(&input) != nil {
+		writeProblem(writer, http.StatusUnprocessableEntity, ReasonInvalidRequest)
+		return
+	}
+	var trailing any
+	if decoder.Decode(&trailing) != io.EOF {
+		writeProblem(writer, http.StatusUnprocessableEntity, ReasonInvalidRequest)
+		return
+	}
+	command := rawevidence.HeaderRevealRequest{
+		RevealRequest: rawevidence.RevealRequest{EnvelopeID: request.PathValue("envelopeId"), ActorID: "desktop-app:" + handler.status.Status().InstanceID},
+		Name:          input.HeaderName,
+	}
+	if command.Validate() != nil {
+		writeProblem(writer, http.StatusUnprocessableEntity, ReasonInvalidRequest)
+		return
+	}
+	revealer, revealOK := handler.rawEvidence.(rawevidence.HeaderRevealer)
+	source, sourceOK := handler.accounts.(providerauth.HeaderReader)
+	if !revealOK || !sourceOK {
+		writeProblem(writer, http.StatusGone, ReasonRawEvidenceUnavailable)
+		return
+	}
+	result, err := revealer.RevealHeader(request.Context(), command, source)
+	if err != nil {
+		writeProblem(writer, http.StatusGone, ReasonRawEvidenceUnavailable)
+		return
+	}
+	writeJSON(writer, http.StatusOK, result)
 }
 
 func (handler *Handler) listRawEvidence(

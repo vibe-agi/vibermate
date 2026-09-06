@@ -126,6 +126,7 @@ func ClientIdentityFromProtocolEvidence(
 	}
 	fields := make(map[string]string, 6)
 	protocolIDs := make([]ClientEvidenceValue, 0, 6)
+	attributes := make([]ClientEvidenceValue, 0, 1)
 	client := ""
 	assignClient := func(value string) bool {
 		if client != "" && client != value {
@@ -136,6 +137,11 @@ func ClientIdentityFromProtocolEvidence(
 	}
 	for _, value := range values {
 		switch value.Name {
+		case "codex.cli_version":
+			// Client-reported display metadata never establishes a verified
+			// release or grants version-specific adapter behaviour.
+			attributes = append(attributes, ClientEvidenceValue{Name: value.Name, Value: value.Value})
+			continue
 		case "claude.agent_id", "claude.parent_agent_id", "claude.session_id":
 			if !assignClient("claude") {
 				return ClientIdentity{}, false
@@ -174,6 +180,9 @@ func ClientIdentityFromProtocolEvidence(
 		Confidence:         "exact",
 		ObservedAt:         observedAt.UTC().Truncate(time.Millisecond),
 		ProtocolIDs:        protocolIDs,
+	}
+	if client == "codex" {
+		identity.Attributes = attributes
 	}
 	if client == "claude" && providerResponseID != "" {
 		identity.ProviderMessageID = providerResponseID

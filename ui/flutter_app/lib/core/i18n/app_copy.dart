@@ -111,6 +111,10 @@ final class AppCopy {
     'capture.state.revoked': 'Revoked',
     'capture.state.expired': 'Expired',
     'capture.client.version_unknown': 'Version unknown',
+    'capture.client.version_unreported': 'Client version not reported',
+    'capture.client.version_reported': 'client-reported',
+    'capture.client.version_help':
+        'This is the Agent client version, not the ViberMate Terminal command. A reported version does not verify a release.',
     'capture.client.compatibility.verified': 'Exact release verified',
     'capture.client.compatibility.recognized':
         'Publisher verified · release not cataloged',
@@ -176,7 +180,7 @@ final class AppCopy {
     'capture.session': 'View Session',
     'capture.session_scope':
         'Filters evidence only; does not switch the client session.',
-    'capture.session_unavailable': 'Session unavailable',
+    'capture.session_unavailable': 'Requests without session identity',
     'capture.conversation_main': 'Main',
     'capture.conversation_subagent': 'subagent · {time}',
     'capture.conversation_pending': 'Current request · {time}',
@@ -500,6 +504,13 @@ final class AppCopy {
     'exchange.raw.hide': 'Hide revealed bytes',
     'exchange.raw.redacted_credentials': 'Credential values removed: {fields}',
     'exchange.raw.headers': 'Headers',
+    'exchange.raw.header_reveal': 'Reveal historical account overwrite',
+    'exchange.raw.header_reveal_help':
+        'Eye: verify and show the account overwrite for up to 60 seconds. Copies stay redacted.',
+    'exchange.raw.header_not_retained':
+        'Redacted header originals were not retained in this evidence.',
+    'exchange.raw.header_unavailable':
+        'Original unavailable: not an account overwrite, credential replaced/deleted, or historical fingerprint no longer matches.',
     'exchange.raw.trailers': 'Trailers',
     'exchange.raw.body': 'Body',
     'exchange.raw.frames': 'Stream frames',
@@ -1592,6 +1603,12 @@ final class AppCopy {
         'A changed or unowned file is refused. Conversation and traffic evidence are unaffected.',
     'terminal.notice.installed': 'Terminal command installed.',
     'terminal.notice.refreshed': 'Terminal command update acknowledged.',
+    'terminal.notice.auto_refreshed':
+        'Terminal command is synced with this App update. New runs use the updated command.',
+    'terminal.notice.auto_repaired':
+        'The existing Terminal command link was repaired automatically.',
+    'terminal.attention':
+        'Check Terminal command in Settings → Access & launch.',
     'terminal.notice.repaired': 'Terminal command repaired and ready.',
     'terminal.notice.removed': 'Owned Terminal command removed.',
     'terminal.error.unavailable':
@@ -1728,6 +1745,10 @@ final class AppCopy {
     'capture.state.revoked': '已撤销',
     'capture.state.expired': '已过期',
     'capture.client.version_unknown': '版本未知',
+    'capture.client.version_unreported': '客户端未报告版本',
+    'capture.client.version_reported': '客户端自报',
+    'capture.client.version_help':
+        '这是 Agent 客户端版本，不是 ViberMate 终端命令版本。客户端自报版本不代表发行版本已验证。',
     'capture.client.compatibility.verified': '精确版本已验证',
     'capture.client.compatibility.recognized': '发布者已验证 · 版本未收录',
     'capture.client.compatibility.unverified': '已知客户端 · 版本未验证',
@@ -1782,7 +1803,7 @@ final class AppCopy {
     'capture.conversation_select': '对话',
     'capture.session': '查看客户端会话',
     'capture.session_scope': '仅过滤证据，不会切换客户端会话。',
-    'capture.session_unavailable': '客户端会话不可用',
+    'capture.session_unavailable': '未识别会话的请求',
     'capture.conversation_main': '主对话',
     'capture.conversation_subagent': 'subagent · {time}',
     'capture.conversation_pending': '当前请求 · {time}',
@@ -2071,6 +2092,10 @@ final class AppCopy {
     'exchange.raw.hide': '隐藏原文',
     'exchange.raw.redacted_credentials': '已移除凭证值：{fields}',
     'exchange.raw.headers': 'Headers',
+    'exchange.raw.header_reveal': '查看历史账号覆盖值',
+    'exchange.raw.header_reveal_help': '眼睛：核对并临时显示账号覆盖值，60 秒后隐藏。复制仍保持脱敏。',
+    'exchange.raw.header_not_retained': '这些脱敏 Header 的原值未保存在此证据中。',
+    'exchange.raw.header_unavailable': '无法恢复原值：不是账号覆盖值、凭据已替换或删除，或与历史指纹不匹配。',
     'exchange.raw.trailers': 'Trailers',
     'exchange.raw.body': 'Body',
     'exchange.raw.frames': '流式帧',
@@ -2979,6 +3004,9 @@ final class AppCopy {
     'terminal.confirm.boundary': '已变化或无归属的文件会被拒绝；对话与流量证据不受影响。',
     'terminal.notice.installed': '终端命令已安装。',
     'terminal.notice.refreshed': '已确认终端命令更新。',
+    'terminal.notice.auto_refreshed': '终端命令已随 App 更新同步。新启动的运行将使用更新后的命令。',
+    'terminal.notice.auto_repaired': '已自动修复原有的终端命令链接。',
+    'terminal.attention': '请在「设置 → 接入与启动」检查终端命令。',
     'terminal.notice.repaired': '终端命令已修复，可以使用。',
     'terminal.notice.removed': '已移除本 App 所有的终端命令。',
     'terminal.error.unavailable': 'App 内的 vibermate 命令不可用。',

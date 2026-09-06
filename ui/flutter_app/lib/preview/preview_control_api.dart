@@ -7,6 +7,16 @@ import '../core/api/control_api.dart';
 import '../core/api/control_models.dart';
 
 final class PreviewControlApi implements ControlApi {
+  @override
+  Future<String> revealRawHeader({
+    required String envelopeId,
+    required String name,
+  }) async {
+    throw const ControlContractException(
+      'No retained overwrite value in preview evidence',
+    );
+  }
+
   PreviewControlApi({
     int dashboardCaptureLimit = 50,
     ControlProblem? upstreamModelFailure,

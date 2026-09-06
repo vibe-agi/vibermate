@@ -127,6 +127,30 @@ final class WorkbenchShell extends StatelessWidget {
     };
     return Column(
       children: [
+        if (controller.terminalManagement &&
+            controller.section != WorkbenchSection.settings) ...[
+          if (controller.terminalCommandNotice case final notice?)
+            InlineNotice(
+              message: copy(notice),
+              actionLabel: notice == 'terminal.attention'
+                  ? copy('settings.title')
+                  : null,
+              onAction: notice == 'terminal.attention'
+                  ? controller.openAccessSettings
+                  : null,
+              onDismiss: controller.clearTerminalCommandMessage,
+              dismissLabel: copy('common.dismiss'),
+            ),
+          if (controller.terminalCommandError case final error?)
+            InlineNotice(
+              message: '${copy('terminal.attention')} ${copy(error)}',
+              actionLabel: copy('settings.title'),
+              onAction: controller.openAccessSettings,
+              error: true,
+              onDismiss: controller.clearTerminalCommandMessage,
+              dismissLabel: copy('common.dismiss'),
+            ),
+        ],
         if (controller.section != WorkbenchSection.settings) ...[
           _TaskNavigation(controller: controller, copy: copy),
           const Divider(height: 1),

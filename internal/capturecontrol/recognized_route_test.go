@@ -116,12 +116,18 @@ func (authorities *recordingEnvironmentAuthorities) AssignAndResolve(
 	)
 }
 
-type fixedApprover struct{ allow bool }
+type fixedApprover struct {
+	allow bool
+	calls *int
+}
 
 func (approver fixedApprover) AskClientRoot(
 	_ context.Context,
 	_ toolapproval.ClientRootAskRequest,
 ) (toolapproval.ClientRootAskOutcome, error) {
+	if approver.calls != nil {
+		*approver.calls++
+	}
 	return toolapproval.ClientRootAskOutcome{Allowed: approver.allow}, nil
 }
 
@@ -135,10 +141,9 @@ func (approver *countingApprover) AskClientRoot(
 	return toolapproval.ClientRootAskOutcome{Allowed: true}, nil
 }
 
-// The grant is where the decision becomes an effect, so this is what has to
-// distinguish an allow from a deny. Asserting only that the ask returns false
-// would leave a route that ignores the answer passing.
-func TestTheGrantCarriesTheRootOnlyWhenARecognizedClientWasAllowed(t *testing.T) {
+// Local CLI authentication and an explicit run replace the redundant Root
+// prompt, but do not replace publisher verification or release evidence.
+func TestAuthenticatedLocalRunDoesNotNeedASecondRootApproval(t *testing.T) {
 	t.Parallel()
 
 	for _, testCase := range []struct {
@@ -152,20 +157,24 @@ func TestTheGrantCarriesTheRootOnlyWhenARecognizedClientWasAllowed(t *testing.T)
 		wantRoot:  true,
 		wantRecip: clientadapter.LaunchNodeEnvProxy,
 	}, {
-		name:      "denied",
+		name:      "no additional approval",
 		allow:     false,
-		wantRoot:  false,
-		wantRecip: clientadapter.LaunchGeneric,
+		wantRoot:  true,
+		wantRecip: clientadapter.LaunchNodeEnvProxy,
 	}} {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
 
+			calls := 0
 			fixture := newFixture(t, func(options *capturegrant.Options) {
 				options.Verifier = recognizingVerifier{}
-				options.ClientRootApprovals = fixedApprover{allow: testCase.allow}
+				options.ClientRootApprovals = fixedApprover{allow: testCase.allow, calls: &calls}
 			})
 
 			grant := fixture.createRun(t)
+			if calls != 0 {
+				t.Fatal("explicit local run asked for a redundant Root approval")
+			}
 			if (grant.RootPEMPath != "") != testCase.wantRoot {
 				t.Fatalf(
 					"rootPemPath=%q with allow=%v",
@@ -190,7 +199,7 @@ func TestTheGrantCarriesTheRootOnlyWhenARecognizedClientWasAllowed(t *testing.T)
 			if err := grant.Validate(); err != nil {
 				t.Fatalf("the grant this route produced is not launchable: %v", err)
 			}
-			if testCase.allow {
+			if testCase.wantRoot {
 				if grant.Signer == nil {
 					t.Fatal("an allowed recognized grant carried no signer evidence")
 				}

@@ -1068,7 +1068,7 @@ func (handler *Handler) serveSemantic(
 			exchange.WithClientHelloObservation(observation),
 		)
 	}
-	if evidence := clientProtocolEvidenceFromHeaders(request.Header); len(evidence) != 0 {
+	if evidence := clientProtocolEvidenceFromHeaders(request.Header, plan.ProtocolPlan().ClientDialect()); len(evidence) != 0 {
 		requestOptions = append(
 			requestOptions,
 			exchange.WithClientProtocolEvidence(evidence),
@@ -1194,14 +1194,23 @@ func (handler *Handler) serveSemantic(
 // the exact wire envelope for operator inspection.
 func clientProtocolEvidenceFromHeaders(
 	headers http.Header,
+	dialect protocolspec.Dialect,
 ) []protocolcore.ProtocolEvidenceValue {
-	specs := [...]struct {
+	type headerSpec struct {
 		header string
 		name   string
-	}{
+	}
+	specs := []headerSpec{
 		{header: "X-Claude-Code-Agent-Id", name: "claude.agent_id"},
 		{header: "X-Claude-Code-Parent-Agent-Id", name: "claude.parent_agent_id"},
 		{header: "X-Claude-Code-Session-Id", name: "claude.session_id"},
+	}
+	if dialect == protocolspec.DialectOpenAIResponses {
+		specs = []headerSpec{
+			{header: "Version", name: "codex.cli_version"},
+			{header: "Session-Id", name: "openai_responses.session_id"},
+			{header: "Thread-Id", name: "openai_responses.thread_id"},
+		}
 	}
 	values := make([]protocolcore.ProtocolEvidenceValue, 0, len(specs))
 	for _, spec := range specs {

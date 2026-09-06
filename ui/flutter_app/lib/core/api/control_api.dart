@@ -141,6 +141,11 @@ abstract interface class ControlApi {
 
   Future<RevealedRawEvidence> revealRawEvidence({required String envelopeId});
 
+  Future<String> revealRawHeader({
+    required String envelopeId,
+    required String name,
+  });
+
   Future<NetworkData> loadNetwork();
 
   Future<List<ApprovalRecord>> pendingApprovals();
@@ -1039,6 +1044,43 @@ final class HttpControlApi implements ControlApi {
       );
     }
     return records;
+  }
+
+  @override
+  Future<String> revealRawHeader({
+    required String envelopeId,
+    required String name,
+  }) async {
+    if (!_validRawEvidenceIdentity(envelopeId) ||
+        name.length > 256 ||
+        !RegExp(r"^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$").hasMatch(name)) {
+      throw const ControlContractException('Raw header reveal is invalid');
+    }
+    await _ensureFreshSession();
+    final response = await _send(
+      'POST',
+      '/api/v1/raw-evidence/${Uri.encodeComponent(envelopeId)}/actions/reveal-header',
+      token: _session.writeToken,
+      body: {'headerName': name},
+      expectedStatus: 200,
+      maximumResponseBytes: 128 * 1024,
+    );
+    final payload = requireObject(response.payload, 'rawHeader');
+    requireFields(
+      payload,
+      'rawHeader',
+      required: const {'envelopeId', 'name', 'value'},
+    );
+    final value = requireStringValue(payload, 'value', 'rawHeader');
+    if (response.headers.value('cache-control') != 'no-store' ||
+        payload['envelopeId'] != envelopeId ||
+        requireString(payload, 'name', 'rawHeader').toLowerCase() !=
+            name.toLowerCase() ||
+        utf8.encode(value).length > 16 * 1024 ||
+        RegExp(r'[\u0000\r\n]').hasMatch(value)) {
+      throw const ControlContractException('Raw header reveal is inconsistent');
+    }
+    return value;
   }
 
   @override

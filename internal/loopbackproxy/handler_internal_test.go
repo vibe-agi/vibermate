@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/vibe-agi/vibermate/internal/protocolcore"
+	"github.com/vibe-agi/vibermate/internal/protocolspec"
 )
 
 type invalidCountResponseWriter struct {
@@ -48,7 +49,7 @@ func TestClientProtocolEvidenceFromHeadersIsExactAndCanonical(t *testing.T) {
 		"X-Claude-Code-Session-Id":      []string{"session-1"},
 		"Authorization":                 []string{"Bearer must-not-cross"},
 	}
-	got := clientProtocolEvidenceFromHeaders(headers)
+	got := clientProtocolEvidenceFromHeaders(headers, protocolspec.DialectAnthropicMessages)
 	want := []protocolcore.ProtocolEvidenceValue{
 		{Name: "claude.agent_id", Value: "agent-1"},
 		{Name: "claude.parent_agent_id", Value: "parent-1"},
@@ -60,7 +61,7 @@ func TestClientProtocolEvidenceFromHeadersIsExactAndCanonical(t *testing.T) {
 
 	headers["X-Claude-Code-Agent-Id"] = []string{"agent-1", "agent-2"}
 	headers["X-Claude-Code-Session-Id"] = []string{" session-1"}
-	got = clientProtocolEvidenceFromHeaders(headers)
+	got = clientProtocolEvidenceFromHeaders(headers, protocolspec.DialectAnthropicMessages)
 	want = []protocolcore.ProtocolEvidenceValue{
 		{Name: "claude.parent_agent_id", Value: "parent-1"},
 	}
@@ -82,4 +83,26 @@ func equalProtocolEvidence(
 		}
 	}
 	return true
+}
+
+func TestCodexHeadersKeepSessionAndReportedVersionWithoutDecodingBody(t *testing.T) {
+	headers := http.Header{
+		"Session-Id": {"session-1"}, "Thread-Id": {"thread-1"},
+		"Version": {"0.153.4"}, "Authorization": {"Bearer private"},
+	}
+	want := []protocolcore.ProtocolEvidenceValue{
+		{Name: "codex.cli_version", Value: "0.153.4"},
+		{Name: "openai_responses.session_id", Value: "session-1"},
+		{Name: "openai_responses.thread_id", Value: "thread-1"},
+	}
+	if got := clientProtocolEvidenceFromHeaders(headers, protocolspec.DialectOpenAIResponses); !equalProtocolEvidence(got, want) {
+		t.Fatalf("Codex identity headers = %#v", got)
+	}
+	if got := clientProtocolEvidenceFromHeaders(headers, protocolspec.DialectAnthropicMessages); len(got) != 0 {
+		t.Fatalf("generic headers invented a different client identity: %#v", got)
+	}
+	headers["Session-Id"] = []string{"first", "second"}
+	if got := clientProtocolEvidenceFromHeaders(headers, protocolspec.DialectOpenAIResponses); len(got) != 2 {
+		t.Fatalf("ambiguous session header accepted: %#v", got)
+	}
 }

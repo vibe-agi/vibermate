@@ -199,3 +199,26 @@ func (reader *rawEvidenceReaderFixture) Statistics() rawevidence.Statistics {
 }
 
 var _ rawevidence.Reader = (*rawEvidenceReaderFixture)(nil)
+
+func TestRawHeaderRevealRequiresWriteAuthorityAndClosedInput(t *testing.T) {
+	fixture := newAuditFixtureWithRawEvidence(t, &rawEvidenceReaderFixture{})
+	path := "/api/v1/raw-evidence/raw-envelope-1/actions/reveal-header"
+	for _, test := range []struct {
+		token, body, suffix string
+		want                int
+	}{
+		{fixture.readToken, `{"headerName":"User-Agent"}`, "", http.StatusUnauthorized},
+		{fixture.writeToken, `{"headerName":"User-Agent","value":"injected"}`, "", http.StatusUnprocessableEntity},
+		{fixture.writeToken, `{"headerName":"User-Agent"}{}`, "", http.StatusUnprocessableEntity},
+		{fixture.writeToken, `{"headerName":"User-Agent"}`, "?value=injected", http.StatusUnprocessableEntity},
+		{fixture.writeToken, `{"headerName":"User-Agent"}`, "", http.StatusGone},
+	} {
+		response := doRequest(t, fixture.router, fixture.authority, http.MethodPost, path+test.suffix, test.token, []byte(test.body))
+		if response.Code != test.want {
+			t.Fatalf("response=%d want=%d body=%s", response.Code, test.want, response.Body)
+		}
+		if strings.Contains(response.Body.String(), "injected") {
+			t.Fatal("request values reflected in errors")
+		}
+	}
+}

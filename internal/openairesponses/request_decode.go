@@ -357,7 +357,7 @@ func (codec *Codec) decodeClientRequest(
 		return protocolcore.Request{}, report, err
 	}
 	report = report.Merge(reasoningReport)
-	verbosity, textReport, err := decodeText(wire.Text)
+	verbosity, textReport, err := decodeText(wire.Text, !strictRoot)
 	if err != nil {
 		return protocolcore.Request{}, report, err
 	}
@@ -1858,6 +1858,7 @@ func decodeReasoning(
 
 func decodeText(
 	raw json.RawMessage,
+	compatible bool,
 ) (protocolcore.TextVerbosity, protocolcore.TranslationReport, error) {
 	if !rawPresent(raw) {
 		return "", protocolcore.TranslationReport{}, nil
@@ -1868,11 +1869,9 @@ func decodeText(
 			invalidClient("$.text", err)
 	}
 	if rawPresent(wire.Format) {
-		return "", protocolcore.TranslationReport{},
-			invalidClient(
-				"$.text.format",
-				errors.New("Responses text format is unsupported"),
-			)
+		if err := validateTextFormat(wire.Format, compatible); err != nil {
+			return "", protocolcore.TranslationReport{}, invalidClient("$.text.format", err)
+		}
 	}
 	verbosity := protocolcore.TextVerbosity(wire.Verbosity)
 	report := protocolcore.TranslationReport{}
@@ -1883,6 +1882,47 @@ func decodeText(
 		)
 	}
 	return verbosity, report, nil
+}
+
+// Structured output is a provider contract, not decoration. Same-dialect
+// forwarding preserves the original schema; a translating path must not
+// silently discard it and return unconstrained text instead.
+func validateTextFormat(raw json.RawMessage, compatible bool) error {
+	var format struct {
+		Type        string          `json:"type"`
+		Name        string          `json:"name,omitempty"`
+		Description *string         `json:"description,omitempty"`
+		Schema      json.RawMessage `json:"schema,omitempty"`
+		Strict      *bool           `json:"strict,omitempty"`
+	}
+	if err := decodeStrict(raw, &format); err != nil {
+		return err
+	}
+	switch format.Type {
+	case "text", "json_object":
+		if format.Name != "" || format.Description != nil || len(format.Schema) != 0 || format.Strict != nil {
+			return errors.New("Responses text format contains incompatible fields")
+		}
+	case "json_schema":
+		if len(format.Name) == 0 || len(format.Name) > 64 {
+			return errors.New("Responses text schema name is invalid")
+		}
+		for _, character := range format.Name {
+			if !(character >= 'a' && character <= 'z' || character >= 'A' && character <= 'Z' || character >= '0' && character <= '9' || character == '_' || character == '-') {
+				return errors.New("Responses text schema name is invalid")
+			}
+		}
+		var schema map[string]json.RawMessage
+		if err := json.Unmarshal(format.Schema, &schema); err != nil || schema == nil {
+			return errors.New("Responses text schema must be an object")
+		}
+	default:
+		return errors.New("Responses text format is unsupported")
+	}
+	if !compatible && format.Type != "text" {
+		return errors.New("Responses structured output requires a same-dialect route")
+	}
+	return nil
 }
 
 func decodeInclude(

@@ -62,7 +62,7 @@ func TestProviderRawEvidenceCapturesAuthenticatedEgressAndBoundedResponse(
 		testSecretReaderWithPolicy(
 			t,
 			"provider-token",
-			map[string]string{"X-Relay-Tenant": "private-team-a"},
+			map[string]string{"X-Relay-Tenant": "private-team-a", "User-Agent": "account-overwrite-agent"},
 			nil,
 		),
 	)
@@ -128,13 +128,14 @@ func TestProviderRawEvidenceCapturesAuthenticatedEgressAndBoundedResponse(
 	if egress.Layer != rawevidence.LayerProviderEgress ||
 		egress.Headers.Get("Authorization") != "Bearer provider-token" ||
 		egress.Headers.Get("X-Relay-Tenant") != "private-team-a" ||
+		egress.Headers.Get("User-Agent") != "account-overwrite-agent" ||
 		egress.Headers.Get("X-Client") != "kept" ||
 		!bytes.Equal(egress.Body, requestBody) || !egress.Complete {
 		t.Fatalf("provider egress observation = %+v", egress)
 	}
 	if !slices.Equal(
 		egress.ProtectedHeaderNames,
-		[]string{"Authorization", "X-Relay-Tenant"},
+		[]string{"Authorization", "User-Agent", "X-Relay-Tenant"},
 	) {
 		t.Fatalf("protected Header names = %v", egress.ProtectedHeaderNames)
 	}
@@ -157,7 +158,7 @@ func TestProviderRawEvidenceCapturesAuthenticatedEgressAndBoundedResponse(
 		providerResponse.Trailers.Get("X-Relay-Tenant") != "private-team-a" ||
 		!slices.Equal(
 			providerResponse.ProtectedHeaderNames,
-			[]string{"Authorization", "X-Relay-Tenant"},
+			[]string{"Authorization", "User-Agent", "X-Relay-Tenant"},
 		) {
 		t.Fatalf("provider response observation = %+v", providerResponse)
 	}

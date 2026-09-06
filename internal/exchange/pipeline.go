@@ -1149,6 +1149,12 @@ func terminalConversationRef(
 		decodedRequest = captured.request
 		decodedResponse = captured.response
 	}
+	// A rejected body does not erase independently validated ingress session
+	// identifiers. Keep the terminal failure in the same session as its start.
+	if decodedRequest == nil && len(request.ClientProtocolEvidence()) != 0 {
+		identity := protocolcore.Request{ProtocolEvidence: request.ClientProtocolEvidence()}
+		decodedRequest = &identity
+	}
 	ref, err := agentconversation.Project(agentconversation.ProjectionInput{
 		CaptureRunID:      captureRunID,
 		ExchangeID:        request.exchangeID,

@@ -329,10 +329,11 @@ func (client *Client) Do(
 			)
 		}
 	}
-	if err := validateUpstreamWireHeaders(
+	if err := finalizeAuthenticatedUserAgent(
 		request.Header,
 		frozen.wireVariant,
 		frozen.clientUserAgent,
+		evidence.userAgentMutation,
 	); err != nil {
 		stripProtectedCredentialHeaders(request.Header, evidence.ProtectedHeaderNames)
 		return nil, Evidence{}, err
@@ -898,6 +899,28 @@ func validateUpstreamWireHeaders(
 		return errors.New("upstream User-Agent policy is unsupported")
 	}
 	return nil
+}
+
+// Wire-profile UA is the default. A credential-epoch-owned Set/Delete is an
+// explicit final override, not an arbitrary AuthDriver mutation. Keep net/http
+// from synthesizing a User-Agent after an explicit Delete.
+func finalizeAuthenticatedUserAgent(headers http.Header, variant wireprofile.CompiledUpstreamWireVariant, clientUserAgent string, mutation accountUserAgentMutation) error {
+	values, keys := headerValuesFold(headers, "User-Agent")
+	switch mutation {
+	case accountUserAgentSet:
+		if keys != 1 || len(values) != 1 {
+			return errors.New("account User-Agent overwrite is inconsistent")
+		}
+		return nil
+	case accountUserAgentDelete:
+		if keys != 0 {
+			return errors.New("account User-Agent deletion is inconsistent")
+		}
+		headers["User-Agent"] = nil
+		return nil
+	default:
+		return validateUpstreamWireHeaders(headers, variant, clientUserAgent)
+	}
 }
 
 func headerValuesFold(headers http.Header, name string) ([]string, int) {

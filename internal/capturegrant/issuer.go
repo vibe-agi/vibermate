@@ -797,7 +797,12 @@ func (issuer *Issuer) IssueCaptureRun(
 		if detection.Recognition == clientadapter.RecognitionRecognized &&
 			detection.Signer != nil {
 			evidence := *detection.Signer
-			allowed := principal.Kind() == controlprincipal.KindEnrolledClient ||
+			// An authenticated local CLI invocation is already an explicit
+			// request to capture this command. Publisher verification, workspace
+			// proof and the frozen protected authorities still apply; no second
+			// desktop approval is needed merely to supply its process-local CA.
+			allowed := principal.Kind() == controlprincipal.KindLocalCLI ||
+				principal.Kind() == controlprincipal.KindEnrolledClient ||
 				principal.Kind() == controlprincipal.KindRuntimeUser
 			var askErr error
 			if !allowed {

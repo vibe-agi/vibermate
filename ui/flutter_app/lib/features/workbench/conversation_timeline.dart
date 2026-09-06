@@ -15,6 +15,7 @@ import '../../core/design/viber_theme.dart';
 import '../../core/design/workbench_widgets.dart';
 import '../../core/i18n/app_copy.dart';
 import 'workbench_controller.dart';
+import 'raw_header_reveal.dart';
 
 final class EvidenceConversationTimeline extends StatefulWidget {
   const EvidenceConversationTimeline({
@@ -1712,6 +1713,7 @@ final class _RawEvidenceDisclosureState extends State<_RawEvidenceDisclosure> {
   bool _revealing = false;
   bool _copyingSample = false;
   bool _copiedDiagnostic = false;
+  int _revealGeneration = 0;
   RevealedRawEvidence? _revealed;
 
   @override
@@ -1733,6 +1735,8 @@ final class _RawEvidenceDisclosureState extends State<_RawEvidenceDisclosure> {
   }
 
   void _clearRevealed() {
+    _revealGeneration++;
+    _revealing = false;
     final body = _revealed?.body;
     if (body != null) body.fillRange(0, body.length, 0);
     _revealed = null;
@@ -1749,12 +1753,13 @@ final class _RawEvidenceDisclosureState extends State<_RawEvidenceDisclosure> {
   }
 
   Future<void> _reveal(RawEvidenceEnvelope envelope) async {
+    final generation = ++_revealGeneration;
     setState(() => _revealing = true);
     final revealed = await widget.controller.revealRawEvidence(
       exchangeId: widget.exchangeId,
       envelopeId: envelope.envelopeId,
     );
-    if (!mounted) {
+    if (!mounted || generation != _revealGeneration || !_expanded) {
       revealed?.body.fillRange(0, revealed.body.length, 0);
       return;
     }
@@ -1937,6 +1942,14 @@ final class _RawEvidenceDisclosureState extends State<_RawEvidenceDisclosure> {
               copy: copy,
               onReveal: () => _reveal(envelope),
               onHide: () => setState(_clearRevealed),
+              onHeaderReveal:
+                  envelope.layer == 'provider_egress' &&
+                      envelope.accountId != null
+                  ? (name) => widget.controller.revealRawHeader(
+                      envelopeId: envelope.envelopeId,
+                      name: name,
+                    )
+                  : null,
             ),
             if (envelope != page.items.last) const SizedBox(height: 5),
           ],
@@ -1954,6 +1967,7 @@ final class _RawEnvelopeRow extends StatelessWidget {
     required this.copy,
     required this.onReveal,
     required this.onHide,
+    required this.onHeaderReveal,
   });
 
   final RawEvidenceEnvelope envelope;
@@ -1962,6 +1976,7 @@ final class _RawEnvelopeRow extends StatelessWidget {
   final AppCopy copy;
   final VoidCallback onReveal;
   final VoidCallback onHide;
+  final Future<String> Function(String name)? onHeaderReveal;
 
   @override
   Widget build(BuildContext context) {
@@ -2080,7 +2095,11 @@ final class _RawEnvelopeRow extends StatelessWidget {
             ),
           if (revealed != null) ...[
             Divider(height: 1, color: context.viberColors.dividerSoft),
-            _RevealedRawPayload(value: revealed!, copy: copy),
+            _RevealedRawPayload(
+              value: revealed!,
+              copy: copy,
+              onHeaderReveal: onHeaderReveal,
+            ),
           ],
         ],
       ),
@@ -2100,10 +2119,15 @@ String? _rawPrefixExplanation(RawEvidenceEnvelope envelope, AppCopy copy) {
 }
 
 final class _RevealedRawPayload extends StatelessWidget {
-  const _RevealedRawPayload({required this.value, required this.copy});
+  const _RevealedRawPayload({
+    required this.value,
+    required this.copy,
+    this.onHeaderReveal,
+  });
 
   final RevealedRawEvidence value;
   final AppCopy copy;
+  final Future<String> Function(String name)? onHeaderReveal;
 
   @override
   Widget build(BuildContext context) {
@@ -2121,6 +2145,9 @@ final class _RevealedRawPayload extends StatelessWidget {
                 child: _RawFields(
                   title: copy('exchange.raw.headers'),
                   fields: value.headers,
+                  envelopeId: value.envelope.envelopeId,
+                  onHeaderReveal: onHeaderReveal,
+                  copy: copy,
                 ),
               ),
               const SizedBox(width: 6),
@@ -2133,6 +2160,15 @@ final class _RevealedRawPayload extends StatelessWidget {
               ),
             ],
           ),
+          if (value.headers.any((field) => field.redacted.isNotEmpty))
+            Text(
+              copy(
+                onHeaderReveal == null
+                    ? 'exchange.raw.header_not_retained'
+                    : 'exchange.raw.header_reveal_help',
+              ),
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
           if (value.trailers.isNotEmpty) ...[
             const SizedBox(height: 7),
             _RawFields(
@@ -2190,10 +2226,19 @@ final class _RevealedRawPayload extends StatelessWidget {
 }
 
 final class _RawFields extends StatelessWidget {
-  const _RawFields({required this.title, required this.fields});
+  const _RawFields({
+    required this.title,
+    required this.fields,
+    this.envelopeId,
+    this.onHeaderReveal,
+    this.copy,
+  });
 
   final String title;
   final List<RawHeaderField> fields;
+  final String? envelopeId;
+  final Future<String> Function(String name)? onHeaderReveal;
+  final AppCopy? copy;
 
   @override
   Widget build(BuildContext context) => Column(
@@ -2201,7 +2246,21 @@ final class _RawFields extends StatelessWidget {
     children: [
       Text(title, style: Theme.of(context).textTheme.labelMedium),
       const SizedBox(height: 2),
-      SelectableText(_rawFieldsText(fields), style: monoStyle),
+      if (onHeaderReveal == null)
+        SelectableText(_rawFieldsText(fields), style: monoStyle)
+      else
+        for (final field in fields)
+          if (field.redacted.isNotEmpty)
+            RawHeaderReveal(
+              key: ValueKey('$envelopeId:${field.name}'),
+              identity: '$envelopeId:${field.name}',
+              name: field.name,
+              redactedText: _rawFieldLines(field).join('\n'),
+              reveal: () => onHeaderReveal!(field.name),
+              copy: copy!,
+            )
+          else
+            SelectableText(_rawFieldLines(field).join('\n'), style: monoStyle),
     ],
   );
 }

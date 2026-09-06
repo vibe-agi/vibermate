@@ -357,7 +357,7 @@ func TestLauncherBoundsCaptureRunCreation(t *testing.T) {
 		}
 		if !strings.Contains(
 			stderr.String(),
-			"decide any client trust request in the App",
+			"Network and tool approvals still follow your traffic policy",
 		) {
 			t.Fatalf("stalled create had no actionable progress: %q", stderr.String())
 		}

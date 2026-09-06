@@ -16,6 +16,31 @@ type CredentialEvidence struct {
 	HeaderName           string
 	SecretRead           bool
 	ProtectedHeaderNames []string
+	// Only the built-in credential readers can attest to this explicit
+	// account-owned override. It carries no value into transport diagnostics.
+	userAgentMutation accountUserAgentMutation
+}
+
+type accountUserAgentMutation uint8
+
+const (
+	accountUserAgentUnchanged accountUserAgentMutation = iota
+	accountUserAgentSet
+	accountUserAgentDelete
+)
+
+func userAgentMutationOf(policy providerauth.HeaderPolicy) accountUserAgentMutation {
+	for _, assignment := range policy.Set {
+		if assignment.Name == "User-Agent" {
+			return accountUserAgentSet
+		}
+	}
+	for _, name := range policy.Delete {
+		if name == "User-Agent" {
+			return accountUserAgentDelete
+		}
+	}
+	return accountUserAgentUnchanged
 }
 
 type Authenticator interface {
@@ -108,6 +133,7 @@ func (authenticator *AnthropicAPIKeyAuthenticator) Apply(
 		HeaderName:           "x-api-key",
 		SecretRead:           true,
 		ProtectedHeaderNames: protectedHeaderNames("X-Api-Key", material.HeaderPolicy()),
+		userAgentMutation:    userAgentMutationOf(material.HeaderPolicy()),
 	}, nil
 }
 
@@ -177,6 +203,7 @@ func (authenticator *StaticBearerAuthenticator) Apply(
 		HeaderName:           "authorization",
 		SecretRead:           true,
 		ProtectedHeaderNames: protected,
+		userAgentMutation:    userAgentMutationOf(material.HeaderPolicy()),
 	}, nil
 }
 
