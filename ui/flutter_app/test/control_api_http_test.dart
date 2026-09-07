@@ -1744,6 +1744,7 @@ void main() {
         );
       } else if (request.uri.path ==
           '/api/v1/raw-evidence/$envelopeId/actions/reveal') {
+        expect(request.uri.queryParameters, {'bodyView': 'decoded'});
         request.response.headers.set(
           HttpHeaders.cacheControlHeader,
           'no-store',

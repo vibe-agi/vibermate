@@ -6767,6 +6767,44 @@ final class RawFrame {
   final int length;
 }
 
+/// Transient decoded bytes for reading only; never substitute these for the
+/// evidence body, its digest, original headers, or stream frame offsets.
+final class RawDecodedBody {
+  const RawDecodedBody({required this.state, required this.body});
+
+  factory RawDecodedBody.fromJson(Object? json, String path) {
+    final value = requireObject(json, path);
+    requireFields(value, path, required: const {'state', 'bodyBase64'});
+    final state = requireString(value, 'state', path);
+    final encoded = requireStringValue(value, 'bodyBase64', path);
+    if (!const {
+          'decoded',
+          'incomplete',
+          'unsupported_encoding',
+          'invalid_compression',
+          'size_limit',
+        }.contains(state) ||
+        encoded.length > (((4 * 1024 * 1024 + 2) ~/ 3) * 4)) {
+      throw ControlContractException('$path decoded body view is invalid');
+    }
+    late final Uint8List body;
+    try {
+      body = Uint8List.fromList(base64.decode(encoded));
+    } on FormatException {
+      throw ControlContractException('$path.bodyBase64 is invalid');
+    }
+    if (body.length > 4 * 1024 * 1024 ||
+        base64.encode(body) != encoded ||
+        (state != 'decoded' && body.isNotEmpty)) {
+      throw ControlContractException('$path decoded body is inconsistent');
+    }
+    return RawDecodedBody(state: state, body: body);
+  }
+
+  final String state;
+  final Uint8List body;
+}
+
 final class RevealedRawEvidence {
   const RevealedRawEvidence({
     required this.envelope,
@@ -6774,6 +6812,7 @@ final class RevealedRawEvidence {
     required this.trailers,
     required this.body,
     required this.frames,
+    this.decodedBody,
   });
 
   factory RevealedRawEvidence.fromJson(
@@ -6792,6 +6831,7 @@ final class RevealedRawEvidence {
         'bodyBase64',
         'frames',
       },
+      optional: const {'decodedBody'},
     );
     final envelope = RawEvidenceEnvelope.fromJson(
       value['envelope'],
@@ -6846,12 +6886,23 @@ final class RevealedRawEvidence {
           ),
         )
         .toList(growable: false);
+    final decodedBody = value['decodedBody'] == null
+        ? null
+        : RawDecodedBody.fromJson(value['decodedBody'], '$path.decodedBody');
+    if (decodedBody != null &&
+        ((envelope.contentEncoding?.trim().isEmpty ?? true) ||
+            envelope.contentEncoding!.trim().toLowerCase() == 'identity' ||
+            (decodedBody.state == 'decoded' &&
+                envelope.payloadState != 'captured'))) {
+      throw ControlContractException('$path decoded view contradicts evidence');
+    }
     return RevealedRawEvidence(
       envelope: envelope,
       headers: headers,
       trailers: trailers,
       body: body,
       frames: frames,
+      decodedBody: decodedBody,
     );
   }
 
@@ -6860,6 +6911,13 @@ final class RevealedRawEvidence {
   final List<RawHeaderField> trailers;
   final Uint8List body;
   final List<RawFrame> frames;
+  final RawDecodedBody? decodedBody;
+
+  void clearBody() {
+    body.fillRange(0, body.length, 0);
+    final decoded = decodedBody?.body;
+    decoded?.fillRange(0, decoded.length, 0);
+  }
 }
 
 List<RawHeaderField> _rawHeaderFields(Object? json, String path) {

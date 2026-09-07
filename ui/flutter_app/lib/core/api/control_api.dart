@@ -1002,7 +1002,7 @@ final class HttpControlApi implements ControlApi {
     await _ensureFreshSession();
     final response = await _send(
       'POST',
-      '/api/v1/raw-evidence/${Uri.encodeComponent(envelopeId)}/actions/reveal',
+      '/api/v1/raw-evidence/${Uri.encodeComponent(envelopeId)}/actions/reveal?bodyView=decoded',
       token: _session.writeToken,
       expectedStatus: 200,
       maximumResponseBytes: _maximumRawRevealResponseBytes,

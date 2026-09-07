@@ -29,6 +29,8 @@ func TestOriginalCompressedRequestPreservesWireAndRecordsContent(t *testing.T) {
 					policy.RequestJavaScript = `
 						const payload = JSON.parse(request.body);
 						if (payload.input[0].content !== "hello") throw new Error("not logical JSON");
+						payload.input[0].content = "\u811a\u672c\u5df2\u66ff\u6362\u6b63\u6587";
+						request.body = JSON.stringify(payload);
 						request.headers["x-request-script"] = "ran";
 					`
 				}
@@ -61,7 +63,9 @@ func TestOriginalCompressedRequestPreservesWireAndRecordsContent(t *testing.T) {
 					t.Fatal("original request did not preserve client authentication")
 				}
 				if stage == "request" {
-					if outbound[0].Headers().Get("Content-Encoding") != "" || !bytes.Equal(outbound[0].Body(), logical) ||
+					var rewritten struct{ Input []struct{ Content string } }
+					if outbound[0].Headers().Get("Content-Encoding") != "" || outbound[0].Headers().Get("Content-Length") != "" ||
+						json.Unmarshal(outbound[0].Body(), &rewritten) != nil || len(rewritten.Input) != 1 || rewritten.Input[0].Content != "\u811a\u672c\u5df2\u66ff\u6362\u6b63\u6587" ||
 						outbound[0].Headers().Get("X-Request-Script") != "ran" {
 						t.Fatal("request script did not receive/emit the logical representation")
 					}
@@ -102,7 +106,10 @@ func TestCompressedRequestSelectsAccountMapsModelAndRunsScript(t *testing.T) {
 					`},
 				},
 				transform: messagetransform.Policy{RequestJavaScript: `
-					if (JSON.parse(request.body).model !== "mapped-model") throw new Error("mapping missing");
+					const payload = JSON.parse(request.body);
+					if (payload.model !== "mapped-model") throw new Error("mapping missing");
+					payload.messages[0].content = "\u811a\u672c\u5df2\u66ff\u6362\u6b63\u6587";
+					request.body = JSON.stringify(payload);
 					request.headers["x-script-ran"] = "yes";
 				`},
 			})
@@ -124,9 +131,16 @@ func TestCompressedRequestSelectsAccountMapsModelAndRunsScript(t *testing.T) {
 				outbound[0].Headers().Get("X-Script-Ran") != "yes" {
 				t.Fatal("logical request did not reach the provider script")
 			}
-			var body struct{ Model string }
-			if json.Unmarshal(outbound[0].Body(), &body) != nil || body.Model != "mapped-model" {
-				t.Fatal("compressed request lost its model mapping")
+			var body struct {
+				Model    string
+				Messages []struct{ Content string }
+			}
+			if json.Unmarshal(outbound[0].Body(), &body) != nil || body.Model != "mapped-model" ||
+				len(body.Messages) != 1 || body.Messages[0].Content != "\u811a\u672c\u5df2\u66ff\u6362\u6b63\u6587" {
+				t.Fatal("compressed request lost its model mapping or rewritten body")
+			}
+			if !bytes.Equal(wire, compressedRequestFixture(t, encoding, logical)) {
+				t.Fatal("request script changed compressed ingress evidence")
 			}
 			observation, ok := content.latest()
 			if !ok || observation.Response == nil || observation.Request.RequestedModel != "codex-client-alias" {

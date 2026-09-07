@@ -1565,6 +1565,82 @@ void main() {
     },
   );
 
+  test('Decoded reading view keeps wire bytes and is cleared with them', () {
+    final json = _rawRevealJson();
+    (json['envelope']! as Map<String, Object?>)['contentEncoding'] = 'zstd';
+    json['decodedBody'] = {
+      'state': 'decoded',
+      'bodyBase64': base64.encode(utf8.encode('解压后的正文')),
+    };
+    final reveal = RevealedRawEvidence.fromJson(
+      json,
+      'rawReveal',
+      expectedEnvelopeId: 'raw-test',
+    );
+    expect(utf8.decode(reveal.body), 'hello');
+    expect(utf8.decode(reveal.decodedBody!.body), '解压后的正文');
+    expect(reveal.envelope.bodyBytes, 5);
+    expect(reveal.frames.single.length, 5);
+    reveal.clearBody();
+    expect(reveal.body.every((byte) => byte == 0), isTrue);
+    expect(reveal.decodedBody!.body.every((byte) => byte == 0), isTrue);
+  });
+
+  test(
+    'Decoded view rejects contradictory states and retains legacy support',
+    () {
+      expect(
+        RevealedRawEvidence.fromJson(
+          _rawRevealJson(),
+          'rawReveal',
+          expectedEnvelopeId: 'raw-test',
+        ).decodedBody,
+        isNull,
+      );
+      for (final state in [
+        'incomplete',
+        'invalid_compression',
+        'size_limit',
+        'unsupported_encoding',
+      ]) {
+        expect(
+          RawDecodedBody.fromJson({
+            'state': state,
+            'bodyBase64': '',
+          }, 'view').body,
+          isEmpty,
+        );
+        expect(
+          () => RawDecodedBody.fromJson({
+            'state': state,
+            'bodyBase64': 'aGVsbG8=',
+          }, 'view'),
+          throwsA(isA<ControlContractException>()),
+        );
+      }
+      for (final invalid in [
+        {'state': 'unknown', 'bodyBase64': ''},
+        {'state': 'decoded', 'bodyBase64': '!'},
+        {'state': 'decoded', 'bodyBase64': List.filled(5592412, 'A').join()},
+      ]) {
+        expect(
+          () => RawDecodedBody.fromJson(invalid, 'view'),
+          throwsA(isA<ControlContractException>()),
+        );
+      }
+      final contradictory = _rawRevealJson();
+      contradictory['decodedBody'] = {'state': 'decoded', 'bodyBase64': ''};
+      expect(
+        () => RevealedRawEvidence.fromJson(
+          contradictory,
+          'rawReveal',
+          expectedEnvelopeId: 'raw-test',
+        ),
+        throwsA(isA<ControlContractException>()),
+      );
+    },
+  );
+
   test('Raw reveal presents a redacted credential field without its value', () {
     final json = _rawRevealJson();
     (json['headers']! as List<Object?>).add({

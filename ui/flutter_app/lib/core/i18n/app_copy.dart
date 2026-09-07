@@ -517,8 +517,31 @@ final class AppCopy {
     'exchange.raw.body.empty': 'Empty body',
     'exchange.raw.body.base64': 'Binary body · Base64',
     'exchange.raw.body.compressed': 'Compressed body · {encoding} · Base64',
-    'exchange.raw.body.compressed_help':
-        'These are the original compressed HTTP bytes, shown as Base64—not corrupted text. Read decoded conversation content above when content recording is enabled and the request can be parsed.',
+    'exchange.raw.body.show_original': 'Original bytes',
+    'exchange.raw.body.hide_original': 'Hide original bytes',
+    'exchange.raw.body.copy': 'Copy body',
+    'exchange.raw.body.auto_decoded': 'Decompressed · {encoding}',
+    'exchange.raw.body.original_help':
+        'Original HTTP body. Compressed or binary bytes are represented as Base64; headers, byte counts and frame offsets remain unchanged.',
+    'exchange.raw.body.binary_help':
+        'This body contains binary data, not readable text. You can inspect its original bytes in HTTP details.',
+    'exchange.raw.technical.show': 'HTTP details',
+    'exchange.raw.technical.hide': 'Hide HTTP details',
+    'exchange.raw.copy_record': 'Copy original HTTP record',
+    'exchange.raw.body.decoded_help':
+        'Decompressed for reading only. Headers, byte counts and frame offsets still describe the original HTTP message.',
+    'exchange.raw.frames.original_offsets':
+        'Stream frames · original byte offsets',
+    'exchange.raw.body.decode.incomplete':
+        'Only a prefix of the compressed body was retained; it cannot be reliably decompressed. The original bytes are still available in HTTP details.',
+    'exchange.raw.body.decode.invalid_compression':
+        'The retained bytes could not be decompressed using their Content-Encoding. You can inspect the original bytes in HTTP details.',
+    'exchange.raw.body.decode.unsupported_encoding':
+        'This compression format is not supported for reading yet. You can inspect the original bytes in HTTP details.',
+    'exchange.raw.body.decode.size_limit':
+        'Decompression exceeded the 4 MiB reading limit. The original compressed bytes are still available in HTTP details.',
+    'exchange.raw.body.decode.decoder_unavailable':
+        'This Runtime did not provide a decoded view. Update the Runtime to read compressed bodies here, or inspect the original bytes in HTTP details.',
     'exchange.raw.recovery':
         'A previous writer ended uncleanly; at most {ms} ms of the newest raw evidence may be absent.',
     'exchange.raw.copy_transform_sample': 'Copy exact Turn to test sample',
@@ -2102,13 +2125,34 @@ final class AppCopy {
     'exchange.raw.header_not_retained': '这些脱敏 Header 的原值未保存在此证据中。',
     'exchange.raw.header_unavailable': '无法恢复原值：不是账号覆盖值、凭据已替换或删除，或与历史指纹不匹配。',
     'exchange.raw.trailers': 'Trailers',
-    'exchange.raw.body': 'Body',
+    'exchange.raw.body': '正文',
     'exchange.raw.frames': '流式帧',
-    'exchange.raw.body.empty': '空 Body',
+    'exchange.raw.body.empty': '正文为空',
     'exchange.raw.body.base64': '二进制 Body · Base64',
     'exchange.raw.body.compressed': '压缩 Body · {encoding} · Base64',
-    'exchange.raw.body.compressed_help':
-        '这里保留的是原始 HTTP 压缩字节，以 Base64 展示，并非文字乱码。开启内容记录且请求可解析时，可在上方查看解压后的对话内容。',
+    'exchange.raw.body.show_original': '原始字节',
+    'exchange.raw.body.hide_original': '收起原始字节',
+    'exchange.raw.body.copy': '复制正文',
+    'exchange.raw.body.auto_decoded': '已解压 · {encoding}',
+    'exchange.raw.body.original_help':
+        '原始 HTTP Body。压缩或二进制字节以 Base64 表示；Header、字节数和流式帧偏移保持原样。',
+    'exchange.raw.body.binary_help':
+        '此 Body 是二进制数据，无法作为文字阅读。可在 HTTP 技术详情中查看原始字节。',
+    'exchange.raw.technical.show': 'HTTP 技术详情',
+    'exchange.raw.technical.hide': '收起 HTTP 技术详情',
+    'exchange.raw.copy_record': '复制原始 HTTP 记录',
+    'exchange.raw.body.decoded_help': '仅为阅读解压。Header、字节数和流式帧偏移仍对应原始 HTTP 消息。',
+    'exchange.raw.frames.original_offsets': '流式帧 · 原始字节偏移',
+    'exchange.raw.body.decode.incomplete':
+        '只保留了压缩正文的前缀，无法可靠解压。仍可在 HTTP 技术详情中查看原始字节。',
+    'exchange.raw.body.decode.invalid_compression':
+        '无法按 Content-Encoding 解压已保留的数据。可展开 HTTP 技术详情检查原始字节。',
+    'exchange.raw.body.decode.unsupported_encoding':
+        '暂不支持解压此压缩格式。仍可在 HTTP 技术详情中查看原始字节。',
+    'exchange.raw.body.decode.size_limit':
+        '解压结果超过 4 MiB 阅读上限。仍可在 HTTP 技术详情中查看原始压缩字节。',
+    'exchange.raw.body.decode.decoder_unavailable':
+        '当前 Runtime 未提供解压视图，请更新 Runtime 后在此阅读正文；也可展开 HTTP 技术详情查看原始字节。',
     'exchange.raw.recovery': '上次写入器未正常结束；最新原始证据最多可能缺失 {ms} 毫秒。',
     'exchange.raw.copy_transform_sample': '复制本轮原始数据为测试样本',
     'exchange.raw.copy_redacted_diagnostic': '复制脱敏诊断',

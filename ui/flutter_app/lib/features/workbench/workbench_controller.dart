@@ -1303,7 +1303,7 @@ final class WorkbenchController extends ChangeNotifier {
     try {
       final revealed = await _api.revealRawEvidence(envelopeId: envelopeId);
       if (_disposed) {
-        revealed.body.fillRange(0, revealed.body.length, 0);
+        revealed.clearBody();
         return null;
       }
       return revealed;
@@ -1381,8 +1381,8 @@ final class WorkbenchController extends ChangeNotifier {
       notifyListeners();
       return null;
     } finally {
-      requestReveal?.body.fillRange(0, requestReveal.body.length, 0);
-      responseReveal?.body.fillRange(0, responseReveal.body.length, 0);
+      requestReveal?.clearBody();
+      responseReveal?.clearBody();
     }
   }
 

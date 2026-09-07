@@ -1737,8 +1737,7 @@ final class _RawEvidenceDisclosureState extends State<_RawEvidenceDisclosure> {
   void _clearRevealed() {
     _revealGeneration++;
     _revealing = false;
-    final body = _revealed?.body;
-    if (body != null) body.fillRange(0, body.length, 0);
+    _revealed?.clearBody();
     _revealed = null;
   }
 
@@ -1760,7 +1759,7 @@ final class _RawEvidenceDisclosureState extends State<_RawEvidenceDisclosure> {
       envelopeId: envelope.envelopeId,
     );
     if (!mounted || generation != _revealGeneration || !_expanded) {
-      revealed?.body.fillRange(0, revealed.body.length, 0);
+      revealed?.clearBody();
       return;
     }
     setState(() {
@@ -2118,7 +2117,7 @@ String? _rawPrefixExplanation(RawEvidenceEnvelope envelope, AppCopy copy) {
   return copy('exchange.raw.prefix.$suffix');
 }
 
-final class _RevealedRawPayload extends StatelessWidget {
+final class _RevealedRawPayload extends StatefulWidget {
   const _RevealedRawPayload({
     required this.value,
     required this.copy,
@@ -2130,102 +2129,246 @@ final class _RevealedRawPayload extends StatelessWidget {
   final Future<String> Function(String name)? onHeaderReveal;
 
   @override
+  State<_RevealedRawPayload> createState() => _RevealedRawPayloadState();
+}
+
+final class _RevealedRawPayloadState extends State<_RevealedRawPayload> {
+  bool _technical = false;
+  bool _showOriginal = false;
+  late ({String value, bool binary, bool decoded}) _readingBody;
+  ({String value, bool binary, bool decoded})? _originalBody;
+
+  @override
+  void initState() {
+    super.initState();
+    _readingBody = _rawTextBody(widget.value);
+  }
+
+  @override
+  void didUpdateWidget(covariant _RevealedRawPayload oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.value != widget.value) {
+      _technical = false;
+      _showOriginal = false;
+      _originalBody = null;
+      _readingBody = _rawTextBody(widget.value);
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final textBody = _rawTextBody(value);
+    final value = widget.value;
+    final copy = widget.copy;
+    final onHeaderReveal = widget.onHeaderReveal;
+    final textBody = _readingBody;
+    final encoding = _rawContentEncoding(value);
+    final originalBody = _showOriginal
+        ? (_originalBody ??= _rawTextBody(value, original: true))
+        : null;
     return Padding(
       key: Key('raw-revealed-${value.envelope.envelopeId}'),
       padding: const EdgeInsets.all(8),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
+          Wrap(
+            spacing: 12,
+            runSpacing: 4,
+            crossAxisAlignment: WrapCrossAlignment.center,
             children: [
-              Expanded(
-                child: _RawFields(
-                  title: copy('exchange.raw.headers'),
-                  fields: value.headers,
-                  envelopeId: value.envelope.envelopeId,
-                  onHeaderReveal: onHeaderReveal,
-                  copy: copy,
+              Text(
+                copy('exchange.raw.body'),
+                style: Theme.of(context).textTheme.labelMedium,
+              ),
+              if (textBody.decoded)
+                Tooltip(
+                  message: copy('exchange.raw.body.decoded_help'),
+                  child: Text(
+                    copy.format('exchange.raw.body.auto_decoded', {
+                      'encoding': encoding,
+                    }),
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: context.viberColors.textMuted,
+                    ),
+                  ),
                 ),
-              ),
-              const SizedBox(width: 6),
-              _CopyValueButton(
-                key: Key('copy-raw-${value.envelope.envelopeId}'),
-                tooltip: copy.format('common.copy', {
-                  'field': copy('exchange.raw.value'),
-                }),
-                value: () => _rawEvidenceClipboardText(value, copy),
-              ),
+              if (!textBody.binary)
+                _CopyValueButton(
+                  key: Key('copy-raw-body-${value.envelope.envelopeId}'),
+                  label: copy('exchange.raw.body.copy'),
+                  tooltip: copy('exchange.raw.body.copy'),
+                  value: () => textBody.value,
+                ),
             ],
           ),
-          if (value.headers.any((field) => field.redacted.isNotEmpty))
-            Text(
-              copy(
-                onHeaderReveal == null
-                    ? 'exchange.raw.header_not_retained'
-                    : 'exchange.raw.header_reveal_help',
-              ),
-              style: Theme.of(context).textTheme.bodySmall,
+          const SizedBox(height: 3),
+          if (!textBody.binary)
+            _RawBodyText(text: textBody.value, copy: copy)
+          else ...[
+            InlineNotice(
+              message: encoding.isNotEmpty && !textBody.decoded
+                  ? _rawBodyExplanation(value, copy)
+                  : copy('exchange.raw.body.binary_help'),
             ),
-          if (value.trailers.isNotEmpty) ...[
-            const SizedBox(height: 7),
-            _RawFields(
-              title: copy('exchange.raw.trailers'),
-              fields: value.trailers,
+            TextButton.icon(
+              key: Key('raw-body-fallback-${value.envelope.envelopeId}'),
+              onPressed: () => setState(() {
+                _technical = true;
+                _showOriginal = true;
+              }),
+              icon: const Icon(Icons.code, size: 14),
+              label: Text(copy('exchange.raw.body.show_original')),
             ),
           ],
-          const SizedBox(height: 7),
-          Text(
-            _rawBodyLabel(value, textBody.binary, copy),
-            style: Theme.of(context).textTheme.labelMedium,
-          ),
-          if (textBody.binary && _rawContentEncoding(value).isNotEmpty)
-            Text(
-              copy('exchange.raw.body.compressed_help'),
-              style: Theme.of(context).textTheme.bodySmall,
-            ),
-          const SizedBox(height: 3),
-          Container(
-            width: double.infinity,
-            constraints: const BoxConstraints(maxHeight: 260),
-            padding: const EdgeInsets.all(7),
-            decoration: BoxDecoration(
-              color: context.viberColors.input,
-              border: Border.all(color: context.viberColors.dividerSoft),
-              borderRadius: ViberMetrics.controlRadius,
-            ),
-            child: SingleChildScrollView(
-              child: SelectableText(
-                textBody.value.isEmpty
-                    ? copy('exchange.raw.body.empty')
-                    : textBody.value,
-                style: monoStyle,
+          const SizedBox(height: 6),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: TextButton.icon(
+              key: Key('raw-technical-${value.envelope.envelopeId}'),
+              onPressed: () => setState(() {
+                _technical = !_technical;
+                if (!_technical) {
+                  _showOriginal = false;
+                  _originalBody = null;
+                }
+              }),
+              icon: Icon(
+                _technical ? Icons.expand_less : Icons.chevron_right,
+                size: 14,
+              ),
+              label: Text(
+                copy(
+                  _technical
+                      ? 'exchange.raw.technical.hide'
+                      : 'exchange.raw.technical.show',
+                ),
               ),
             ),
           ),
-          if (value.frames.isNotEmpty) ...[
-            const SizedBox(height: 7),
-            Text(
-              copy('exchange.raw.frames'),
-              style: Theme.of(context).textTheme.labelMedium,
+          if (_technical) ...[
+            Divider(height: 12, color: context.viberColors.dividerSoft),
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(
+                  child: _RawFields(
+                    title: copy('exchange.raw.headers'),
+                    fields: value.headers,
+                    envelopeId: value.envelope.envelopeId,
+                    onHeaderReveal: onHeaderReveal,
+                    copy: copy,
+                  ),
+                ),
+                const SizedBox(width: 6),
+                _CopyValueButton(
+                  key: Key('copy-raw-${value.envelope.envelopeId}'),
+                  tooltip: copy('exchange.raw.copy_record'),
+                  value: () => _rawEvidenceClipboardText(value, copy),
+                ),
+              ],
             ),
-            const SizedBox(height: 2),
-            SelectableText(
-              value.frames
-                  .map(
-                    (frame) =>
-                        '${frame.kind}  ${frame.offset}..${frame.offset + frame.length}',
-                  )
-                  .join('\n'),
-              style: monoStyle,
-            ),
+            if (value.headers.any((field) => field.redacted.isNotEmpty))
+              Text(
+                copy(
+                  onHeaderReveal == null
+                      ? 'exchange.raw.header_not_retained'
+                      : 'exchange.raw.header_reveal_help',
+                ),
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+            if (value.trailers.isNotEmpty) ...[
+              const SizedBox(height: 7),
+              _RawFields(
+                title: copy('exchange.raw.trailers'),
+                fields: value.trailers,
+              ),
+            ],
+            if (encoding.isNotEmpty || textBody.binary) ...[
+              Align(
+                alignment: Alignment.centerLeft,
+                child: TextButton.icon(
+                  key: Key('raw-body-toggle-${value.envelope.envelopeId}'),
+                  onPressed: () => setState(() {
+                    _showOriginal = !_showOriginal;
+                    if (!_showOriginal) _originalBody = null;
+                  }),
+                  icon: Icon(
+                    _showOriginal ? Icons.expand_less : Icons.code,
+                    size: 14,
+                  ),
+                  label: Text(
+                    copy(
+                      _showOriginal
+                          ? 'exchange.raw.body.hide_original'
+                          : 'exchange.raw.body.show_original',
+                    ),
+                  ),
+                ),
+              ),
+              if (originalBody != null) ...[
+                Text(
+                  _rawBodyLabel(value, originalBody.binary, copy),
+                  style: Theme.of(context).textTheme.labelMedium,
+                ),
+                Text(
+                  copy('exchange.raw.body.original_help'),
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+                const SizedBox(height: 4),
+                _RawBodyText(text: originalBody.value, copy: copy),
+              ],
+            ],
+            if (value.frames.isNotEmpty) ...[
+              const SizedBox(height: 7),
+              Text(
+                copy(
+                  encoding.isNotEmpty
+                      ? 'exchange.raw.frames.original_offsets'
+                      : 'exchange.raw.frames',
+                ),
+                style: Theme.of(context).textTheme.labelMedium,
+              ),
+              const SizedBox(height: 2),
+              SelectableText(
+                value.frames
+                    .map(
+                      (frame) =>
+                          '${frame.kind}  ${frame.offset}..${frame.offset + frame.length}',
+                    )
+                    .join('\n'),
+                style: monoStyle,
+              ),
+            ],
           ],
         ],
       ),
     );
   }
+}
+
+final class _RawBodyText extends StatelessWidget {
+  const _RawBodyText({required this.text, required this.copy});
+
+  final String text;
+  final AppCopy copy;
+
+  @override
+  Widget build(BuildContext context) => Container(
+    width: double.infinity,
+    constraints: const BoxConstraints(maxHeight: 360),
+    padding: const EdgeInsets.all(8),
+    decoration: BoxDecoration(
+      color: context.viberColors.input,
+      border: Border.all(color: context.viberColors.dividerSoft),
+      borderRadius: ViberMetrics.controlRadius,
+    ),
+    child: SingleChildScrollView(
+      child: SelectableText(
+        text.isEmpty ? copy('exchange.raw.body.empty') : text,
+        style: monoStyle,
+      ),
+    ),
+  );
 }
 
 final class _RawFields extends StatelessWidget {
@@ -2289,7 +2432,7 @@ Iterable<String> _rawFieldLines(RawHeaderField field) {
 }
 
 String _rawEvidenceClipboardText(RevealedRawEvidence value, AppCopy copy) {
-  final body = _rawTextBody(value);
+  final body = _rawTextBody(value, original: true);
   final buffer = StringBuffer()
     ..writeln(copy('exchange.raw.headers'))
     ..writeln(_rawFieldsText(value.headers));
@@ -2306,13 +2449,22 @@ String _rawEvidenceClipboardText(RevealedRawEvidence value, AppCopy copy) {
   }
   buffer
     ..writeln()
-    ..writeln(_rawBodyLabel(value, body.binary, copy))
-    ..write(body.value);
+    ..writeln(_rawBodyLabel(value, body.binary, copy));
+  if (_rawContentEncoding(value).isNotEmpty) {
+    buffer.writeln(copy('exchange.raw.body.original_help'));
+  }
+  buffer.write(body.value);
   if (value.frames.isNotEmpty) {
     buffer
       ..writeln()
       ..writeln()
-      ..writeln(copy('exchange.raw.frames'))
+      ..writeln(
+        copy(
+          _rawContentEncoding(value).isNotEmpty
+              ? 'exchange.raw.frames.original_offsets'
+              : 'exchange.raw.frames',
+        ),
+      )
       ..write(
         value.frames
             .map(
@@ -2441,25 +2593,44 @@ String _rawBodyLabel(RevealedRawEvidence value, bool binary, AppCopy copy) {
       : copy.format('exchange.raw.body.compressed', {'encoding': encoding});
 }
 
-({String value, bool binary}) _rawTextBody(RevealedRawEvidence value) {
-  if (value.body.isEmpty) return (value: '', binary: false);
-  if (_rawContentEncoding(value).isNotEmpty) {
-    return (value: base64.encode(value.body), binary: true);
+String _rawBodyExplanation(RevealedRawEvidence value, AppCopy copy) {
+  final state = value.decodedBody?.state ?? 'decoder_unavailable';
+  return copy('exchange.raw.body.decode.$state');
+}
+
+({String value, bool binary, bool decoded}) _rawTextBody(
+  RevealedRawEvidence value, {
+  bool original = false,
+}) {
+  final decoded = !original && value.decodedBody?.state == 'decoded';
+  final bytes = decoded ? value.decodedBody!.body : value.body;
+  if (!decoded && _rawContentEncoding(value).isNotEmpty) {
+    return (
+      value: original ? base64.encode(bytes) : '',
+      binary: true,
+      decoded: false,
+    );
   }
   try {
-    final decoded = utf8.decode(value.body, allowMalformed: false);
-    final hasBinaryControls = decoded.runes.any(
+    final text = utf8.decode(bytes, allowMalformed: false);
+    final hasBinaryControls = text.runes.any(
       (character) =>
           character < 0x20 &&
           character != 0x09 &&
           character != 0x0a &&
           character != 0x0d,
     );
-    if (!hasBinaryControls) return (value: decoded, binary: false);
+    if (!hasBinaryControls) {
+      return (value: text, binary: false, decoded: decoded);
+    }
   } on FormatException {
     // Preserve arbitrary bodies as exact Base64 rather than replacing bytes.
   }
-  return (value: base64.encode(value.body), binary: true);
+  return (
+    value: original ? base64.encode(bytes) : '',
+    binary: true,
+    decoded: decoded,
+  );
 }
 
 String _rawTarget(RawEvidenceEnvelope envelope) {
@@ -2816,11 +2987,13 @@ final class _CopyValueButton extends StatefulWidget {
   const _CopyValueButton({
     required this.tooltip,
     required this.value,
+    this.label,
     super.key,
   });
 
   final String tooltip;
   final String Function() value;
+  final String? label;
 
   @override
   State<_CopyValueButton> createState() => _CopyValueButtonState();
@@ -2847,22 +3020,28 @@ final class _CopyValueButtonState extends State<_CopyValueButton> {
   }
 
   @override
-  Widget build(BuildContext context) => IconButton(
-    tooltip: widget.tooltip,
-    onPressed: _copy,
-    style: IconButton.styleFrom(
-      minimumSize: const Size.square(24),
-      maximumSize: const Size.square(24),
-      padding: EdgeInsets.zero,
-    ),
-    icon: Icon(
-      _copied ? Icons.check : Icons.content_copy,
-      size: 12,
-      color: _copied
-          ? context.viberColors.verified
-          : context.viberColors.textMuted,
-    ),
-  );
+  Widget build(BuildContext context) => widget.label != null
+      ? TextButton.icon(
+          onPressed: _copy,
+          icon: Icon(_copied ? Icons.check : Icons.content_copy, size: 14),
+          label: Text(widget.label!),
+        )
+      : IconButton(
+          tooltip: widget.tooltip,
+          onPressed: _copy,
+          style: IconButton.styleFrom(
+            minimumSize: const Size.square(24),
+            maximumSize: const Size.square(24),
+            padding: EdgeInsets.zero,
+          ),
+          icon: Icon(
+            _copied ? Icons.check : Icons.content_copy,
+            size: 12,
+            color: _copied
+                ? context.viberColors.verified
+                : context.viberColors.textMuted,
+          ),
+        );
 }
 
 const _defaultVisibleContentLines = 15;

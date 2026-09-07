@@ -2171,6 +2171,12 @@ void main() {
         const Key('raw-revealed-raw-preview-run-1-exchange-222'),
       );
       expect(rawPayload, findsOneWidget);
+      final rawTechnical = find.byKey(
+        const Key('raw-technical-raw-preview-run-1-exchange-222'),
+      );
+      await tester.ensureVisible(rawTechnical);
+      await tester.tap(rawTechnical);
+      await tester.pumpAndSettle();
       expect(
         find.descendant(
           of: rawPayload,

@@ -1,6 +1,7 @@
 package desktopcontrol_test
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
@@ -11,8 +12,59 @@ import (
 	"testing"
 	"time"
 
+	"github.com/klauspost/compress/zstd"
 	"github.com/vibe-agi/vibermate/internal/rawevidence"
 )
+
+func TestRawEvidenceDecodedViewIsOptInAuditedAndPreservesWire(t *testing.T) {
+	logical := []byte("{\"input\":\"\u4f60\u597d\",\"stream\":true}")
+	encoder, err := zstd.NewWriter(nil, zstd.WithEncoderConcurrency(1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer encoder.Close()
+	wire := encoder.EncodeAll(logical, nil)
+	reader := &rawEvidenceReaderFixture{
+		metadata: []rawevidence.EnvelopeMetadata{{
+			EnvelopeID: "raw-envelope-1", ExchangeID: "exchange-1",
+			Layer: rawevidence.LayerClientIngress, ScopeKind: rawevidence.ScopeManagedRun,
+			ContentType: "application/json", ContentEncoding: "zstd",
+			BodyBytes: int64(len(wire)), BodySHA256: sha256.Sum256(wire),
+			PayloadState: rawevidence.PayloadCaptured, DigestScope: rawevidence.DigestFull,
+		}},
+		payload: rawevidence.Payload{
+			Body: wire, Headers: []rawevidence.HeaderField{{Name: "Content-Encoding", Values: []string{"zstd"}}},
+		},
+	}
+	fixture := newAuditFixtureWithRawEvidence(t, reader)
+	path := "/api/v1/raw-evidence/raw-envelope-1/actions/reveal"
+	for _, suffix := range []string{"?bodyView=decoded&extra=x", "?bodyView=decoded&bodyView=decoded", "?bodyView=other", "?bodyView=%zz"} {
+		response := doRequest(t, fixture.router, fixture.authority, http.MethodPost, path+suffix, fixture.writeToken, nil)
+		if response.Code != http.StatusUnprocessableEntity || len(reader.requests) != 0 {
+			t.Fatalf("invalid view query: %s returned %d", suffix, response.Code)
+		}
+	}
+	denied := doRequest(t, fixture.router, fixture.authority, http.MethodPost, path+"?bodyView=decoded", fixture.readToken, nil)
+	if denied.Code != http.StatusUnauthorized || len(reader.requests) != 0 {
+		t.Fatal("decoded content bypassed reveal authority")
+	}
+	legacy := rawRevealRequest(t, fixture, fixture.writeToken, nil)
+	if legacy.Code != http.StatusOK || strings.Contains(legacy.Body.String(), "decodedBody") {
+		t.Fatal("legacy reveal response changed shape")
+	}
+	response := doRequest(t, fixture.router, fixture.authority, http.MethodPost, path+"?bodyView=decoded", fixture.writeToken, nil)
+	var payload struct {
+		Body        []byte                      `json:"bodyBase64"`
+		DecodedBody rawevidence.DecodedBodyView `json:"decodedBody"`
+		Headers     []rawevidence.HeaderField   `json:"headers"`
+	}
+	if response.Code != http.StatusOK || response.Header().Get("Cache-Control") != "no-store" ||
+		json.Unmarshal(response.Body.Bytes(), &payload) != nil ||
+		payload.DecodedBody.State != "decoded" || !bytes.Equal(payload.DecodedBody.Body, logical) ||
+		!bytes.Equal(payload.Body, wire) || payload.Headers[0].Values[0] != "zstd" || len(reader.requests) != 2 {
+		t.Fatalf("decoded view lost wire evidence, authorization, or audit: %s", response.Body)
+	}
+}
 
 func TestRawEvidenceMetadataAndAuditedRevealContract(t *testing.T) {
 	t.Parallel()

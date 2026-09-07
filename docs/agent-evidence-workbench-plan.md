@@ -181,6 +181,37 @@ honestly preserve original header casing or the inter-field wire order, so the
 UI and export contract must not label those normalized headers as byte-exact
 wire bytes. A pre-parser byte tap is a separate later capability.
 
+### Compressed bodies: reading versus transformation
+
+After explicit reveal, App and Web put a transient decoded reading view first
+for complete `zstd` and `gzip` bodies. The body is directly readable and its
+Copy body action copies exactly that text. HTTP details start collapsed and
+contain original headers, trailers and stream offsets, with a separate
+expander for compressed/binary bytes. Expanding the originals does not replace
+or hide the readable body. Copy original HTTP record always uses original
+bytes (Base64 when compressed/binary), retains header redaction and labels
+the representation. Header reveal remains separately authorized. Byte counts,
+digests and offsets continue to describe the recorded HTTP message.
+
+Decoded bytes are not persisted and are discarded with the revealed body on
+hide, navigation or disposal. The UI caches text only for the active reveal
+and computes an original Base64 view only when requested, not on every build.
+
+The authorized reveal accepts `?bodyView=decoded`; only opted-in responses can
+include `decodedBody`. Legacy responses retain their closed shape. Reading
+decompression has a 4 MiB output limit and bounded decoder memory. Incomplete,
+invalid, oversized or unsupported compressed bodies show an explicit reason
+instead of a Base64 dump. Users can still expand the original bytes; incomplete
+evidence is never silently presented as complete text.
+
+This display path is independent of live scripts. Request scripts already
+receive decoded logical body text. After a rewrite, ViberMate sends identity
+bytes, removes stale compression/framing/representation validators and lets
+the HTTP transport compute the length. Original-destination traffic without a
+rewrite preserves its compressed wire body. These semantics are covered for
+both gzip and zstd, including actual body replacement, managed account/model
+selection and unchanged ingress evidence.
+
 ### Secret and retention policy
 
 - Secret-bearing headers and bodies are never written as plaintext SQLite

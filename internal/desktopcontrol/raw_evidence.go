@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"net/url"
 	"slices"
 	"time"
 
@@ -86,11 +87,12 @@ type rawEvidenceStatisticsReader interface {
 }
 
 type rawRevealResponse struct {
-	Envelope   rawEvidenceEnvelopeView   `json:"envelope"`
-	Headers    []rawevidence.HeaderField `json:"headers"`
-	Trailers   []rawevidence.HeaderField `json:"trailers"`
-	BodyBase64 string                    `json:"bodyBase64"`
-	Frames     []rawevidence.Frame       `json:"frames"`
+	Envelope    rawEvidenceEnvelopeView      `json:"envelope"`
+	Headers     []rawevidence.HeaderField    `json:"headers"`
+	Trailers    []rawevidence.HeaderField    `json:"trailers"`
+	BodyBase64  string                       `json:"bodyBase64"`
+	Frames      []rawevidence.Frame          `json:"frames"`
+	DecodedBody *rawevidence.DecodedBodyView `json:"decodedBody,omitempty"`
 }
 
 func (handler *Handler) revealRawHeader(writer http.ResponseWriter, request *http.Request) {
@@ -185,6 +187,12 @@ func (handler *Handler) revealRawEvidence(
 	writer http.ResponseWriter,
 	request *http.Request,
 ) {
+	query, queryErr := url.ParseQuery(request.URL.RawQuery)
+	if queryErr != nil || (len(query) != 0 &&
+		(len(query) != 1 || len(query["bodyView"]) != 1 || query.Get("bodyView") != "decoded")) {
+		writeProblem(writer, http.StatusUnprocessableEntity, ReasonInvalidRequest)
+		return
+	}
 	if request.Body != nil {
 		body, err := io.ReadAll(io.LimitReader(request.Body, 2))
 		if err != nil || len(body) != 0 {
@@ -212,12 +220,22 @@ func (handler *Handler) revealRawEvidence(
 		writeProblem(writer, http.StatusServiceUnavailable, ReasonRawEvidenceUnavailable)
 		return
 	}
+	var decodedBody *rawevidence.DecodedBodyView
+	// Opt-in keeps the closed reveal contract compatible with older clients.
+	// Both the Desktop App and Web use this authorized reveal path.
+	if query.Get("bodyView") == "decoded" {
+		decodedBody = rawevidence.DecodeBodyForDisplay(revealed)
+		if decodedBody != nil {
+			defer clear(decodedBody.Body)
+		}
+	}
 	writeJSON(writer, http.StatusOK, rawRevealResponse{
-		Envelope:   rawEvidenceViewOf(revealed.Metadata),
-		Headers:    rawHeaderFields(revealed.Payload.Headers),
-		Trailers:   rawHeaderFields(revealed.Payload.Trailers),
-		BodyBase64: base64.StdEncoding.EncodeToString(revealed.Payload.Body),
-		Frames:     rawFrames(revealed.Payload.Frames),
+		Envelope:    rawEvidenceViewOf(revealed.Metadata),
+		Headers:     rawHeaderFields(revealed.Payload.Headers),
+		Trailers:    rawHeaderFields(revealed.Payload.Trailers),
+		BodyBase64:  base64.StdEncoding.EncodeToString(revealed.Payload.Body),
+		Frames:      rawFrames(revealed.Payload.Frames),
+		DecodedBody: decodedBody,
 	})
 }
 
