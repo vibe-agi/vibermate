@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/klauspost/compress/zstd"
 	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/messagetransform"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
@@ -34,10 +35,14 @@ func TestManagedChatGPTHTTPStreamWithoutContentType(t *testing.T) {
 		name      string
 		recording environment.ContentRecordingMode
 		rawLimit  int
+		encoding  string
 	}{
-		{"full response retained", environment.ContentRecordingFull, 0},
-		{"retention cap does not truncate delivery", environment.ContentRecordingFull, 64 << 10},
-		{"recording off", environment.ContentRecordingOff, 0},
+		{"full response retained", environment.ContentRecordingFull, 0, ""},
+		{"retention cap does not truncate delivery", environment.ContentRecordingFull, 64 << 10, ""},
+		{"recording off", environment.ContentRecordingOff, 0, ""},
+		{"zstd request", environment.ContentRecordingFull, 0, "zstd"},
+		{"gzip request", environment.ContentRecordingFull, 0, "gzip"},
+		{"zstd request recording off", environment.ContentRecordingOff, 0, "zstd"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			wire := chatGPTLargeStream(t)
@@ -132,6 +137,10 @@ func TestManagedChatGPTHTTPStreamWithoutContentType(t *testing.T) {
 
 			body := []byte(`{"model":"codex-client-alias","stream":true,"store":false,"input":[{"type":"message","role":"user","content":"hello"}]}`)
 			headers := chatGPTClientHeaderFixture()
+			if test.encoding != "" {
+				body = compressedRequestFixture(t, test.encoding, body)
+				headers.Set("Content-Encoding", test.encoding)
+			}
 			headers.Set("Content-Length", "999999") // must be recomputed, never copied.
 			downstream := &downstreamRecorder{}
 			result, err := pipeline.Execute(context.Background(), mustClientRequestWithOptions(t,
@@ -163,7 +172,7 @@ func TestManagedChatGPTHTTPStreamWithoutContentType(t *testing.T) {
 					t.Errorf("outgoing %s did not preserve protocol / selected account policy", name)
 				}
 			}
-			for _, name := range []string{"Cookie", "X-Codex-Turn-State", "X-OpenAI-Subagent", "X-Private-Client"} {
+			for _, name := range []string{"Cookie", "X-Codex-Turn-State", "X-OpenAI-Subagent", "X-Private-Client", "Content-Encoding"} {
 				if outbound.Header.Get(name) != "" {
 					t.Errorf("outgoing %s leaked client state or bypassed Delete", name)
 				}
@@ -217,6 +226,16 @@ func TestManagedChatGPTHTTPStreamWithoutContentType(t *testing.T) {
 			}
 		})
 	}
+}
+
+func zstdRequestFixture(t *testing.T, body []byte) []byte {
+	t.Helper()
+	writer, err := zstd.NewWriter(nil, zstd.WithEncoderConcurrency(1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer writer.Close()
+	return writer.EncodeAll(body, nil)
 }
 
 func TestManagedChatGPTStreamMediaTypeBoundary(t *testing.T) {

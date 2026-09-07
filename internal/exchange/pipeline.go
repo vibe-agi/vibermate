@@ -229,11 +229,25 @@ func (pipeline *Pipeline) Execute(
 	}
 	defer pipeline.finish(active)
 	defer action.Release()
-	pipeline.observeStart(request)
+	logicalBody, contentErr := logicalClientRequestBody(request)
+	pipeline.observeStart(request, logicalBody)
+	if contentErr != nil && !selection.original {
+		return result, newFailure(
+			ReasonInvalidExchangeRequest,
+			request.exchangeID,
+			0,
+			protocolcore.NewFailure(
+				protocolcore.ReasonInvalidClientRequest,
+				"$.headers.content_encoding",
+				errors.New("request Content-Encoding could not be decoded within the request limit"),
+			),
+		)
+	}
 	startedAt := pipeline.now().UTC()
 	candidate, err := pipeline.selectCredentialCandidate(
 		operationContext,
 		request,
+		logicalBody,
 		selection,
 		startedAt,
 	)
@@ -276,6 +290,7 @@ func (pipeline *Pipeline) Execute(
 		err = pipeline.executeCandidate(
 			operationContext,
 			request,
+			logicalBody,
 			selection,
 			material,
 			action,
@@ -317,6 +332,7 @@ func (pipeline *Pipeline) Execute(
 func (pipeline *Pipeline) selectCredentialCandidate(
 	ctx context.Context,
 	request ClientRequest,
+	logicalBody []byte,
 	selection frozenSelection,
 	startedAt time.Time,
 ) (credentialCandidate, error) {
@@ -358,14 +374,14 @@ func (pipeline *Pipeline) selectCredentialCandidate(
 				err,
 			)
 		}
-		decoded, _, err := protocolPath.Client().DecodeRequest(request.body)
+		decoded, _, err := protocolPath.Client().DecodeRequest(logicalBody)
 		if err != nil {
 			reason := ReasonInvalidExchangeRequest
 			if protocolcore.ReasonOf(err) == protocolcore.ReasonUnsupportedClientInput {
 				reason = ReasonUnsupportedClientInput
 			}
 			failure := newFailure(reason, request.exchangeID, 0, err)
-			failure.ClientField = classifyClientRequestField(request.body, err)
+			failure.ClientField = classifyClientRequestField(logicalBody, err)
 			return credentialCandidate{}, failure
 		}
 		turn, err := policy.NewSelectorTurn(accountSelectorRuntimeMetadata(request, startedAt))
@@ -379,7 +395,7 @@ func (pipeline *Pipeline) selectCredentialCandidate(
 		}
 		selected, err := turn.Select(ctx, accountselector.Request{
 			Method: request.operation.Method(), Path: request.operation.Path(),
-			Headers: request.protocolHeaders(), Body: request.body,
+			Headers: request.protocolHeaders(), Body: logicalBody,
 			ClientProtocol: string(selection.codecPlan.ClientDialect()),
 			RequestedModel: decoded.RequestedModel,
 		})
@@ -437,6 +453,7 @@ func accountSelectorRuntimeMetadata(
 func (pipeline *Pipeline) executeCandidate(
 	ctx context.Context,
 	request ClientRequest,
+	logicalBody []byte,
 	selection frozenSelection,
 	credential credentialMaterial,
 	action *offlinehold.ActionLease,
@@ -492,15 +509,11 @@ func (pipeline *Pipeline) executeCandidate(
 		pipeline.observeMessageTransformRequest(ctx, frozenRequest, transformInput)
 		var contentPath *protocolpath.Path
 		var decodedContent *protocolcore.Request
-		contentBody, contentErr := decodeBoundedContent(
-			request.body,
-			headers.Get("Content-Encoding"),
-		)
 		if candidatePath, selectErr := pipeline.protocolPaths.Select(
 			selection.codecPlan,
 			request.operation.id,
-		); selectErr == nil && contentErr == nil {
-			if decoded, _, decodeErr := candidatePath.Client().DecodeRequest(contentBody); decodeErr == nil {
+		); selectErr == nil && logicalBody != nil {
+			if decoded, _, decodeErr := candidatePath.Client().DecodeRequest(logicalBody); decodeErr == nil {
 				decoded = mergeClientProtocolEvidence(
 					decoded,
 					request.ClientProtocolEvidence(),
@@ -535,7 +548,7 @@ func (pipeline *Pipeline) executeCandidate(
 	if err != nil {
 		return newFailure(ReasonEnvironmentPlanInvalid, request.exchangeID, 0, err)
 	}
-	decoded, clientRequestReport, err := protocolPath.Client().DecodeRequest(request.body)
+	decoded, clientRequestReport, err := protocolPath.Client().DecodeRequest(logicalBody)
 	result.Translation = result.Translation.Merge(clientRequestReport)
 	if err != nil {
 		reason := ReasonInvalidExchangeRequest
@@ -543,7 +556,7 @@ func (pipeline *Pipeline) executeCandidate(
 			reason = ReasonUnsupportedClientInput
 		}
 		failure := newFailure(reason, request.exchangeID, 0, err)
-		failure.ClientField = classifyClientRequestField(request.body, err)
+		failure.ClientField = classifyClientRequestField(logicalBody, err)
 		return failure
 	}
 	if mappedModel, mapped := selection.mappedModel(decoded.RequestedModel); mapped {
@@ -561,7 +574,7 @@ func (pipeline *Pipeline) executeCandidate(
 	pipeline.observeRequest(request, captured)
 	encodedProvider, backendRequestReport, err := protocolPath.EncodeProviderRequest(
 		decoded,
-		request.body,
+		logicalBody,
 		request.protocolHeaders(),
 	)
 	result.Translation = result.Translation.Merge(backendRequestReport)
@@ -573,7 +586,7 @@ func (pipeline *Pipeline) executeCandidate(
 		for name, values := range nativeChatGPTProtocolHeaders(request, selection) {
 			headers[name] = values
 		}
-		refreshChatGPTRoutingHint(headers, request.body, encodedProvider.Body())
+		refreshChatGPTRoutingHint(headers, logicalBody, encodedProvider.Body())
 	}
 	if credential.mode == providerauth.CredentialClientPassthrough {
 		original, available := request.OriginalHeaders()
@@ -653,6 +666,21 @@ func (pipeline *Pipeline) executeCandidate(
 	)
 }
 
+// Decode once for selectors, codecs and semantic evidence. The ClientRequest
+// itself remains the original wire representation: Original Destination and
+// ingress Raw evidence must not silently acquire an identity-encoded body.
+func logicalClientRequestBody(request ClientRequest) ([]byte, error) {
+	encoding := strings.Join(request.originalHeaders.Values("Content-Encoding"), ",")
+	body, err := decodeBoundedContent(request.body, encoding)
+	if err != nil {
+		return nil, err
+	}
+	if len(body) == 0 || int64(len(body)) > request.plan.Operation().MaxBodyBytes() {
+		return nil, errors.New("decoded client request exceeds its operation limit")
+	}
+	return body, nil
+}
+
 // decodeBoundedContent exposes one bounded logical HTTP representation to
 // protocol evidence and message transforms. Callers decide whether the exact
 // compressed bytes continue over their transport boundary.
@@ -674,6 +702,7 @@ func decodeBoundedContent(body []byte, contentEncoding string) ([]byte, error) {
 	case "zstd":
 		reader, err := zstd.NewReader(
 			bytes.NewReader(body),
+			zstd.WithDecoderConcurrency(1),
 			zstd.WithDecoderMaxMemory(maxCompleteResponseBytes),
 		)
 		if err != nil {
@@ -1017,7 +1046,7 @@ func (pipeline *Pipeline) observeAttempt(
 	_ = pipeline.observer.ObserveTerminal(ctx, observation)
 }
 
-func (pipeline *Pipeline) observeStart(request ClientRequest) {
+func (pipeline *Pipeline) observeStart(request ClientRequest, body []byte) {
 	if pipeline == nil || pipeline.observer == nil {
 		return
 	}
@@ -1029,15 +1058,6 @@ func (pipeline *Pipeline) observeStart(request ClientRequest) {
 	conversation := agentconversation.Ref{}
 	evidence := request.ClientProtocolEvidence()
 	semanticRequest := protocolcore.Request{ProtocolEvidence: evidence}
-	body := request.body
-	if headers, available := request.OriginalHeaders(); available {
-		if decodedBody, decodeErr := decodeBoundedContent(
-			request.body,
-			headers.Get("Content-Encoding"),
-		); decodeErr == nil {
-			body = decodedBody
-		}
-	}
 	if protocolPath, selectErr := pipeline.protocolPaths.Select(
 		plan.CodecPlan(),
 		request.operation.id,
