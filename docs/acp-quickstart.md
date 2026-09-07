@@ -97,6 +97,10 @@ is self-reported and is not a release-signature assertion.
 
 - No connection: open the matching App or log in to the matching remote Server.
   Both the command and Runtime must be from the ACP build.
+- For a locally ad-hoc-signed build, start the App normally before running
+  direct daemon acceptance tests. This Mac reproduced a Keychain startup failure
+  in `flutter_tester` that was absent in the actual App launch path. Do not
+  delete credentials or weaken Keychain access to work around a test failure.
 - Executable not found: use an absolute path and give npm adapters a Node PATH.
 - Agent login required: complete the Agent's auth in the editor. This is separate
   from ViberMate login. Terminal auth preserves a real TTY and appended args/env.
