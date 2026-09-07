@@ -516,6 +516,9 @@ final class AppCopy {
     'exchange.raw.frames': 'Stream frames',
     'exchange.raw.body.empty': 'Empty body',
     'exchange.raw.body.base64': 'Binary body · Base64',
+    'exchange.raw.body.compressed': 'Compressed body · {encoding} · Base64',
+    'exchange.raw.body.compressed_help':
+        'These are the original compressed HTTP bytes, shown as Base64—not corrupted text. Read decoded conversation content above when content recording is enabled and the request can be parsed.',
     'exchange.raw.recovery':
         'A previous writer ended uncleanly; at most {ms} ms of the newest raw evidence may be absent.',
     'exchange.raw.copy_transform_sample': 'Copy exact Turn to test sample',
@@ -901,11 +904,13 @@ final class AppCopy {
     'environment.model.mapping_count': '{count} mappings',
     'environment.model.dialog.title': 'Model mappings',
     'environment.model.dialog.scope':
-        'Map request-side model IDs to opaque IDs advertised by {endpoint}.',
-    'environment.model.request_catalog': 'Current client request models',
-    'environment.model.upstream_catalog': 'Upstream service models',
+        'Map exact requested model IDs to models at {endpoint}.',
+    'environment.model.request_catalog': 'Request model references',
+    'environment.model.upstream_catalog': 'Selected account models',
     'environment.model.request_authority':
-        'A follows this client protocol only; it does not limit the protocols supported by the upstream service.',
+        'Suggestions only · not this client’s available models',
+    'environment.model.catalog_sources':
+        'A is a models.dev reference catalog; B is returned by the selected upstream account. Their counts can differ. Missing a model? Refresh B or enter its exact ID manually; listing is not required for mapping.',
     'environment.model.account_authority':
         'Account: {account} · {kind} · {transport}',
     'environment.model.account_missing_authority':
@@ -2101,6 +2106,9 @@ final class AppCopy {
     'exchange.raw.frames': '流式帧',
     'exchange.raw.body.empty': '空 Body',
     'exchange.raw.body.base64': '二进制 Body · Base64',
+    'exchange.raw.body.compressed': '压缩 Body · {encoding} · Base64',
+    'exchange.raw.body.compressed_help':
+        '这里保留的是原始 HTTP 压缩字节，以 Base64 展示，并非文字乱码。开启内容记录且请求可解析时，可在上方查看解压后的对话内容。',
     'exchange.raw.recovery': '上次写入器未正常结束；最新原始证据最多可能缺失 {ms} 毫秒。',
     'exchange.raw.copy_transform_sample': '复制本轮原始数据为测试样本',
     'exchange.raw.copy_redacted_diagnostic': '复制脱敏诊断',
@@ -2412,9 +2420,11 @@ final class AppCopy {
     'environment.model.mapping_count': '{count} 条映射',
     'environment.model.dialog.title': '模型映射',
     'environment.model.dialog.scope': '将请求侧模型 ID 精确映射到 {endpoint} 声明的不透明模型 ID。',
-    'environment.model.request_catalog': '当前客户端流量的请求模型',
-    'environment.model.upstream_catalog': '上游模型',
-    'environment.model.request_authority': 'A 仅跟随当前客户端协议；不限制上游服务支持的协议。',
+    'environment.model.request_catalog': '请求模型参考目录',
+    'environment.model.upstream_catalog': '所选账号的上游模型',
+    'environment.model.request_authority': '仅供输入参考 · 不代表当前客户端可用模型',
+    'environment.model.catalog_sources':
+        'A 来自 models.dev 参考目录；B 由所选上游账号返回，两边数量可以不同。找不到模型？可刷新 B 或手动输入精确 ID；模型无需列在候选中也能映射。',
     'environment.model.account_authority':
         '账号：{account} · {kind} · {transport}',
     'environment.model.account_missing_authority': '账号：未选择 · 实时探测已停用',

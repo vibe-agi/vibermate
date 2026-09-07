@@ -3552,7 +3552,10 @@ final class _ModelMappingsDialogState extends State<_ModelMappingsDialog> {
       setState(() => _upstreamCatalog = catalog);
     } catch (error) {
       if (!mounted) return;
-      setState(() => _upstreamLoadError = error);
+      setState(() {
+        _upstreamLoadError = error;
+        _upstreamCatalog = null;
+      });
     } finally {
       if (mounted) setState(() => _upstreamLoading = false);
     }
@@ -3743,6 +3746,12 @@ final class _ModelMappingsDialogState extends State<_ModelMappingsDialog> {
                     ],
                   );
                 },
+              ),
+              const SizedBox(height: 6),
+              Text(
+                copy('environment.model.catalog_sources'),
+                key: const Key('environment-model-catalog-explanation'),
+                style: Theme.of(context).textTheme.bodySmall,
               ),
               if (_clientLoadError != null || _upstreamLoadError != null) ...[
                 const SizedBox(height: 6),
@@ -4164,7 +4173,7 @@ final class _ModelMappingEditor extends StatelessWidget {
   }
 }
 
-final class _CatalogModelField extends StatelessWidget {
+final class _CatalogModelField extends StatefulWidget {
   const _CatalogModelField({
     required this.fieldKey,
     required this.optionKeyPrefix,
@@ -4184,12 +4193,68 @@ final class _CatalogModelField extends StatelessWidget {
   final ValueChanged<String> onChanged;
 
   @override
+  State<_CatalogModelField> createState() => _CatalogModelFieldState();
+}
+
+final class _CatalogModelFieldState extends State<_CatalogModelField> {
+  late final _CatalogEditingController _controller;
+  FocusNode _focusNode = FocusNode();
+  int _catalogRevision = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = _CatalogEditingController(text: widget.initialValue);
+  }
+
+  @override
+  void didUpdateWidget(covariant _CatalogModelField oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    final old = oldWidget.options;
+    final current = widget.options;
+    if (old.length == current.length &&
+        old.indexed.every(
+          (entry) =>
+              entry.$2.id == current[entry.$1].id &&
+              entry.$2.label == current[entry.$1].label &&
+              entry.$2.detail == current[entry.$1].detail,
+        )) {
+      return;
+    }
+    // RawAutocomplete caches suggestions by field text, not catalog contents.
+    // Recreate that cache after discovery/refresh, then seed it from the current
+    // editing value once its listener is attached. Preserve text and selection,
+    // and transfer focus to the fresh field without generating an input edit.
+    final previousFocus = _focusNode;
+    final restoreFocus = previousFocus.hasFocus;
+    _focusNode = FocusNode();
+    _catalogRevision += 1;
+    final revision = _catalogRevision;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      previousFocus.dispose();
+      if (mounted && revision == _catalogRevision && restoreFocus) {
+        _focusNode.requestFocus();
+        _controller.catalogChanged();
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    _focusNode.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) => Autocomplete<_CatalogModelChoice>(
-    initialValue: TextEditingValue(text: initialValue),
+    key: ValueKey(_catalogRevision),
+    textEditingController: _controller,
+    focusNode: _focusNode,
     displayStringForOption: (option) => option.id,
     optionsBuilder: (value) {
       final query = value.text.trim().toLowerCase();
-      return options
+      return widget.options
           .where(
             (option) =>
                 query.isEmpty ||
@@ -4199,16 +4264,19 @@ final class _CatalogModelField extends StatelessWidget {
           )
           .take(80);
     },
-    onSelected: (option) => onChanged(option.id),
+    onSelected: (option) => widget.onChanged(option.id),
     fieldViewBuilder: (context, controller, focusNode, onSubmitted) =>
         TextField(
-          key: fieldKey,
+          key: widget.fieldKey,
           controller: controller,
           focusNode: focusNode,
-          onChanged: onChanged,
+          onChanged: widget.onChanged,
           onSubmitted: (_) => onSubmitted(),
           style: monoStyle,
-          decoration: InputDecoration(labelText: label, hintText: hint),
+          decoration: InputDecoration(
+            labelText: widget.label,
+            hintText: widget.hint,
+          ),
         ),
     optionsViewBuilder: (context, onSelected, visibleOptions) {
       final values = visibleOptions.toList(growable: false);
@@ -4234,7 +4302,7 @@ final class _CatalogModelField extends StatelessWidget {
                 final option = values[index];
                 return InkWell(
                   key: Key(
-                    'environment-model-$optionKeyPrefix-option-${option.id}',
+                    'environment-model-${widget.optionKeyPrefix}-option-${option.id}',
                   ),
                   onTap: () => onSelected(option),
                   child: Padding(
@@ -4271,6 +4339,14 @@ final class _CatalogModelField extends StatelessWidget {
       );
     },
   );
+}
+
+final class _CatalogEditingController extends TextEditingController {
+  _CatalogEditingController({super.text});
+
+  // A new suggestion catalog is a dependency change even when the editing
+  // value is identical. Only notify after the fresh Autocomplete has mounted.
+  void catalogChanged() => notifyListeners();
 }
 
 final class _RouteEditorAuthority extends StatelessWidget {

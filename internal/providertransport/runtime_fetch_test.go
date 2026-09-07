@@ -231,7 +231,7 @@ func TestFetchChatGPTModelsUsesNativeCatalogAndSelectedAccount(t *testing.T) {
 				t.Fatal(err)
 			}
 			request := transport.lastRequest()
-			if request.URL.String() != "https://chatgpt.com/backend-api/codex/models?client_version=0.147.0" || request.Method != http.MethodGet {
+			if request.URL.String() != "https://chatgpt.com/backend-api/codex/models?client_version=0.153.4" || request.Method != http.MethodGet {
 				t.Fatalf("model catalog request = %s %s", request.Method, request.URL)
 			}
 			if request.Header.Get("Authorization") != "Bearer "+token || request.Header.Get(chatGPTAccountHeader) != "selected-account" {
@@ -243,6 +243,53 @@ func TestFetchChatGPTModelsUsesNativeCatalogAndSelectedAccount(t *testing.T) {
 			}
 			if snapshot := gate.Snapshot(); snapshot.ActiveActions != 0 || snapshot.ActiveEgress != 0 {
 				t.Fatal("native catalog request did not release its egress lease")
+			}
+		})
+	}
+}
+
+func TestFetchChatGPTModelsNegotiatesAfterAccountOverrides(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct {
+		name    string
+		headers map[string]string
+		want    string
+	}{
+		{"UA override", map[string]string{"User-Agent": "codex-tui/0.160.2 (Mac OS; arm64)"}, "0.160.2"},
+		{"Version override wins", map[string]string{"User-Agent": "codex-tui/0.160.2", "Version": "0.161.0"}, "0.161.0"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			material, err := providerauth.NewMaterial("catalog-test-token", test.headers, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer material.Destroy()
+			encoded, err := material.MarshalBinary()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer clear(encoded)
+			gate := newStartedGate(t)
+			audit := &runtimeAuditRecorder{}
+			transport := &runtimeTransportStub{
+				audit:    audit,
+				response: &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"models":[]}`))},
+			}
+			client := newRuntimeFetchClientWithSecret(t, gate, transport, audit, encoded)
+			endpoint := testDiscoveryEndpoint(t, "https://chatgpt.com")
+			response, err := client.FetchEndpointModels(context.Background(), endpoint, testRuntimeDiscoveryCredential(t, endpoint.RealmID))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer response.Body.Close()
+			request := transport.lastRequest()
+			if request.URL.RawQuery != "client_version="+test.want {
+				t.Fatalf("discovery ignored account version override: %s", request.URL.RawQuery)
+			}
+			for name, value := range test.headers {
+				if request.Header.Get(name) != value {
+					t.Fatalf("discovery changed account header %s", name)
+				}
 			}
 		})
 	}

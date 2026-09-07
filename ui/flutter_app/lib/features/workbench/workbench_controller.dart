@@ -247,10 +247,9 @@ final class WorkbenchController extends ChangeNotifier {
     bool refresh = false,
   }) async {
     final key = _upstreamModelCatalogKey(endpointId, accountId);
-    if (!refresh) {
-      final cached = _upstreamModelCatalogs[key];
-      if (cached != null) return cached;
-    }
+    // The server cache is TTL-, endpoint-, account-revision- and credential-
+    // epoch-bound. Keep a last-known snapshot for display while loading, but
+    // never let an unbounded UI cache bypass those availability checks.
     final catalog = await _api.upstreamModels(
       endpointId,
       accountId: accountId,

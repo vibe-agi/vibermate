@@ -2178,11 +2178,14 @@ final class _RevealedRawPayload extends StatelessWidget {
           ],
           const SizedBox(height: 7),
           Text(
-            textBody.binary
-                ? copy('exchange.raw.body.base64')
-                : copy('exchange.raw.body'),
+            _rawBodyLabel(value, textBody.binary, copy),
             style: Theme.of(context).textTheme.labelMedium,
           ),
+          if (textBody.binary && _rawContentEncoding(value).isNotEmpty)
+            Text(
+              copy('exchange.raw.body.compressed_help'),
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
           const SizedBox(height: 3),
           Container(
             width: double.infinity,
@@ -2303,11 +2306,7 @@ String _rawEvidenceClipboardText(RevealedRawEvidence value, AppCopy copy) {
   }
   buffer
     ..writeln()
-    ..writeln(
-      body.binary
-          ? copy('exchange.raw.body.base64')
-          : copy('exchange.raw.body'),
-    )
+    ..writeln(_rawBodyLabel(value, body.binary, copy))
     ..write(body.value);
   if (value.frames.isNotEmpty) {
     buffer
@@ -2429,8 +2428,24 @@ String _redactedDiagnosticText(ExchangeDetail detail, RawEvidencePage page) =>
       },
     });
 
+String _rawContentEncoding(RevealedRawEvidence value) {
+  final encoding = value.envelope.contentEncoding?.trim().toLowerCase() ?? '';
+  return encoding == 'identity' ? '' : encoding;
+}
+
+String _rawBodyLabel(RevealedRawEvidence value, bool binary, AppCopy copy) {
+  if (!binary) return copy('exchange.raw.body');
+  final encoding = _rawContentEncoding(value);
+  return encoding.isEmpty
+      ? copy('exchange.raw.body.base64')
+      : copy.format('exchange.raw.body.compressed', {'encoding': encoding});
+}
+
 ({String value, bool binary}) _rawTextBody(RevealedRawEvidence value) {
   if (value.body.isEmpty) return (value: '', binary: false);
+  if (_rawContentEncoding(value).isNotEmpty) {
+    return (value: base64.encode(value.body), binary: true);
+  }
   try {
     final decoded = utf8.decode(value.body, allowMalformed: false);
     final hasBinaryControls = decoded.runes.any(

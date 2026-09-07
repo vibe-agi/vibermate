@@ -1,6 +1,8 @@
 package upstreamendpoint
 
 import (
+	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/vibe-agi/vibermate/internal/originidentity"
@@ -9,7 +11,7 @@ import (
 // chatGPTCatalogClientVersion is the catalog compatibility contract used by
 // this adapter (also covered by the Codex control-plane fixtures), not a claim
 // about the user's installed CLI version. Catalog discovery has no client run.
-const chatGPTCatalogClientVersion = "0.147.0"
+const chatGPTCatalogClientVersion = "0.153.4"
 
 // IsChatGPTCodexOrigin identifies the Codex service, not every endpoint that
 // happens to speak Responses. It never changes the credential's origin/realm.
@@ -48,11 +50,51 @@ func ModelsPath(origin originidentity.ProviderOrigin) string {
 	return basePath + "/v1/models"
 }
 
-// ModelsQuery negotiates the Codex catalog shape without forwarding any
-// client-supplied query parameters or account metadata.
-func ModelsQuery(origin originidentity.ProviderOrigin) string {
-	if IsChatGPTCodexOrigin(origin) {
-		return "client_version=" + chatGPTCatalogClientVersion
+// ModelsQuery negotiates the Codex catalog with the account's final outbound
+// headers, after authentication and account overrides. Codex sends its version
+// in this query, independently of User-Agent. A fixed older query can therefore
+// hide newer models even when an account explicitly selects a newer client UA.
+// Only a bounded numeric version is copied; no arbitrary header values, client
+// run metadata, or queries enter the discovery URL.
+func ModelsQuery(origin originidentity.ProviderOrigin, headers http.Header) string {
+	if !IsChatGPTCodexOrigin(origin) {
+		return ""
 	}
-	return ""
+	version := catalogNumericVersion(headers.Get("Version"))
+	if version == "" {
+		product, _, _ := strings.Cut(headers.Get("User-Agent"), " ")
+		name, value, _ := strings.Cut(product, "/")
+		switch name {
+		case "codex", "codex-tui", "codex_cli_rs":
+			version = catalogNumericVersion(value)
+		}
+	}
+	if version == "" {
+		version = chatGPTCatalogClientVersion
+	}
+	return "client_version=" + version
+}
+
+func catalogNumericVersion(value string) string {
+	if len(value) == 0 || len(value) > 64 {
+		return ""
+	}
+	// Like Codex's client_version_to_whole, exclude prerelease/build labels.
+	value, _, _ = strings.Cut(value, "-")
+	value, _, _ = strings.Cut(value, "+")
+	parts := strings.Split(value, ".")
+	if len(parts) != 3 {
+		return ""
+	}
+	for index, part := range parts {
+		if part == "" || strings.IndexFunc(part, func(r rune) bool { return r < '0' || r > '9' }) >= 0 {
+			return ""
+		}
+		number, err := strconv.ParseUint(part, 10, 32)
+		if err != nil {
+			return ""
+		}
+		parts[index] = strconv.FormatUint(number, 10)
+	}
+	return strings.Join(parts, ".")
 }

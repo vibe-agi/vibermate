@@ -21,6 +21,7 @@ func TestDiscoverChatGPTModelSlugsAreEndpointOwned(t *testing.T) {
 	}{
 		{"native slugs", "https://chatgpt.com", `{"models":[{"slug":"model-b","display_name":"Model B"},{"slug":"model-a"}]}`, []string{"model-a", "model-b"}},
 		{"native base path", "https://chatgpt.com/backend-api/codex", `{"models":[{"slug":"model-a"}]}`, []string{"model-a"}},
+		{"new models are not filtered by local metadata or API visibility", "https://chatgpt.com", `{"models":[{"slug":"gpt-6-astra","display_name":"GPT-6-Astra","supported_in_api":false,"visibility":"list","minimal_client_version":[0,153,0]},{"slug":"gpt-5.6-luna"}]}`, []string{"gpt-5.6-luna", "gpt-6-astra"}},
 		{"standard API ids", "https://api.openai.com", `{"data":[{"id":"model-a"}]}`, []string{"model-a"}},
 		{"standard API ignores unrelated slug metadata", "https://api.openai.com", `{"data":[{"id":"model-a","slug":{"unrelated":42}}]}`, []string{"model-a"}},
 		{"no invented relay ids", "https://relay.example", `{"models":[{"slug":"model-a"}]}`, nil},

@@ -504,6 +504,28 @@ func TestSystemTransparentInterceptsKnownAgentAPIsAndPreservesOriginalDestinatio
 	}
 }
 
+func TestOpenAIAPIAndChatGPTRequireTheirOwnClientOrigins(t *testing.T) {
+	t.Parallel()
+	for _, origin := range []string{"https://api.openai.com", "https://chatgpt.com"} {
+		t.Run(origin, func(t *testing.T) {
+			value := fixture(t, "explicit-codex", mustOrigin(t, origin))
+			value.ClientEndpoints[0].ProtocolPlans = value.ClientEndpoints[0].ProtocolPlans[1:]
+			value.ClientEndpoints[0].ProtocolPlans[0].Destination = DestinationPlan{Kind: DestinationKindOriginal}
+			snapshot := mustCompile(t, value)
+			for _, requested := range []string{"https://api.openai.com", "https://chatgpt.com"} {
+				binding, err := snapshot.BeginConnection(mustOrigin(t, requested))
+				want := ConnectionModeBlind
+				if requested == origin {
+					want = ConnectionModeSemantic
+				}
+				if err != nil || binding.Mode != want {
+					t.Fatalf("configured %s, requested %s: mode=%s, error=%v", origin, requested, binding.Mode, err)
+				}
+			}
+		})
+	}
+}
+
 func TestModelMappingsAreCanonicalAndCompiledWithoutAliasing(t *testing.T) {
 	t.Parallel()
 	value := fixture(t, "work", mustOrigin(t, "https://relay.example"))

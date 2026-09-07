@@ -75,16 +75,16 @@ func applyRequestMessageTransform(
 			}
 			return logicalHeaders, cleaned, input, nil
 		}
-		cleaned, changed, err := turn.StripRequestAnnotations(body)
+		logicalHeaders, logicalBody, err := logicalTransformInput(headers, body)
+		if err != nil {
+			return nil, nil, messagetransform.RequestMessage{}, err
+		}
+		cleaned, changed, err := turn.StripRequestAnnotations(logicalBody)
 		if err != nil {
 			return nil, nil, messagetransform.RequestMessage{}, err
 		}
 		if !changed {
 			return headers.Clone(), bytes.Clone(body), messagetransform.RequestMessage{}, nil
-		}
-		logicalHeaders, _, err := logicalTransformInput(headers, body)
-		if err != nil {
-			return nil, nil, messagetransform.RequestMessage{}, err
 		}
 		return logicalHeaders, cleaned, messagetransform.RequestMessage{}, nil
 	}
