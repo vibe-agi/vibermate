@@ -58,6 +58,15 @@ then verify the user's exact Cursor integration separately. Preserve Cursor's
 blocking `cursor/ask_question` and `cursor/create_plan` requests as well as its
 notifications; extensions are not limited to names beginning with `_`.
 
+The [focused Cursor research](../research/2026-09-07-cursor-acp-integration.md)
+also records native registry launch paths, Zed's agent-ID-dependent model picker,
+host environment precedence, and documented proxy support. Editor configuration
+must wrap the actual executable rather than rely on a shell alias. Preserve the
+editor's effective environment and project launch directory for ACP-only
+observation; apply proxy/CA changes only for explicitly selected, verified HTTP
+capabilities. A process has one launch policy: different simultaneous session
+policies require separate processes, not per-session mutations of process env.
+
 ## Implemented: transport foundation
 
 `internal/acpbridge.Relay` has one narrow responsibility: copy both directions
