@@ -48,6 +48,18 @@ _Avoid_: Client Session, Capture, Provider session
 A managed Capture created for one launched client process. It freezes the Runtime User, Client Device, Workspace, and Environment authority used by every Exchange it observes.
 _Avoid_: Client Session, Conversation, login
 
+**ACP Connection**:
+One editor-to-Agent protocol connection owned by a Capture Run. It may carry multiple native ACP Sessions; observing it alone does not establish interception of the Agent's model-service traffic.
+_Avoid_: Login Session, Account, HTTP connection
+
+**ACP Session**:
+An Agent-confirmed native session within an ACP Connection. A resumed session keeps its opaque Agent identity; its reported working directory is a claim, not Workspace authority.
+_Avoid_: Capture Run, temporary Account, Workspace
+
+**ACP Prompt**:
+One observed editor prompt and its Agent-reported outcome in an ACP Session. Loading historical messages is not a fresh prompt, and a prompt does not establish an Agent API Call or token usage.
+_Avoid_: Exchange, billing event, HTTP Turn
+
 **Client Flow**:
 One exact client-facing origin and Client Protocol handled by an Environment, together with the Destination Plan for that traffic.
 _Avoid_: Endpoint, Route, provider protocol

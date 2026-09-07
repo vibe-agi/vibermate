@@ -8,6 +8,7 @@ import '../../core/design/viber_theme.dart';
 import '../../core/design/workbench_widgets.dart';
 import '../../core/i18n/app_copy.dart';
 import 'offline_hold_view.dart';
+import 'acp_setup.dart';
 import '../../core/api/control_models.dart';
 import 'deletion_dialog.dart';
 import 'egress_profile_editor.dart';
@@ -545,6 +546,16 @@ final class _AccessSettingsPane extends StatelessWidget {
         const SizedBox(height: 9),
         _ManagedRunGuide(copy: copy, status: controller.terminalCommand),
       ],
+      const SizedBox(height: 16),
+      ACPSetupGuide(
+        copy: copy,
+        program:
+            controller.terminalCommand?.targetPath ??
+            '/absolute/path/to/vibermate',
+        serverURL: controller.terminalManagement
+            ? ''
+            : controller.runtimeServerURL,
+      ),
       if (controller.serverManagement) ...[
         const SizedBox(height: 16),
         _SettingsGroupLabel(

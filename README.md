@@ -58,6 +58,14 @@ or share it, go to **Settings → User management** and choose **Create owner**.
 Then copy the Web workbench address from **Settings → Access & launch**.
 The first account is the owner; later accounts are members.
 
+## ACP editors (development branch)
+
+The `feat/acp-integration` build adds `vibermate acp -- <ACP agent executable>`
+with App/Web session visibility and opt-in text retention. It reuses existing
+Codex/Claude ACP adapters and preserves the editor's env, login and permissions.
+This is ACP-only observation, not HTTP account overwrite or model routing.
+It is not in the v0.1.9 Homebrew release. Follow the [ACP setup guide](docs/acp-quickstart.md).
+
 ## Linux Server + Web
 
 Download the `linux_x86_64` or `linux_arm64` archive from the

@@ -217,6 +217,7 @@ func startAttached(
 		return nil, err
 	}
 	capture, err := capturecontrol.New(capturecontrol.Options{
+		ACP:        runtime.ACPObservations(),
 		Runs:       runtime.CaptureRuns(),
 		Principals: runtimeUserAuthenticator{users: runtime.RuntimeUsers()}, Issuer: issuer,
 		Manual: manual, RunLifetime: options.CaptureRunLifetime,

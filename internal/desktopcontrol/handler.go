@@ -16,9 +16,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/vibe-agi/vibermate/internal/acpobservation"
 	"github.com/vibe-agi/vibermate/internal/activity"
 	"github.com/vibe-agi/vibermate/internal/agentconversation"
 	"github.com/vibe-agi/vibermate/internal/captureassignment"
+	"github.com/vibe-agi/vibermate/internal/captureidentity"
 	"github.com/vibe-agi/vibermate/internal/capturerun"
 	"github.com/vibe-agi/vibermate/internal/codelibrary"
 	"github.com/vibe-agi/vibermate/internal/connectionevent"
@@ -127,6 +129,7 @@ type ConversationIndexer interface {
 }
 
 type Options struct {
+	ACP                 *acpobservation.Manager
 	Readiness           ReadinessReader
 	Status              StatusReader
 	Environments        environment.Controller
@@ -159,6 +162,7 @@ type Options struct {
 }
 
 type Handler struct {
+	acp                 *acpobservation.Manager
 	readiness           ReadinessReader
 	status              StatusReader
 	environments        environment.Controller
@@ -221,6 +225,7 @@ func New(options Options) (*Handler, error) {
 		return nil, errors.New("Desktop control dependencies are incomplete")
 	}
 	handler := &Handler{
+		acp:                 options.ACP,
 		readiness:           options.Readiness,
 		status:              options.Status,
 		environments:        options.Environments,
@@ -271,6 +276,25 @@ func New(options Options) (*Handler, error) {
 		handler.resumeOfflineHold,
 	)
 	handler.mux.HandleFunc("GET /api/v1/environments", handler.listEnvironments)
+	if options.ACP != nil {
+		handler.mux.HandleFunc("GET /api/v1/captures/{captureKey}/acp", func(writer http.ResponseWriter, request *http.Request) {
+			reference, err := captureidentity.ParseKey(request.PathValue("captureKey"))
+			if err != nil || reference.Kind != captureidentity.KindManagedRun {
+				writeProblem(writer, http.StatusNotFound, ReasonCaptureNotFound)
+				return
+			}
+			record, err := options.ACP.Read(request.Context(), reference.ID)
+			if errors.Is(err, acpobservation.ErrNotFound) {
+				writeProblem(writer, http.StatusNotFound, "acp_observation_not_found")
+				return
+			}
+			if err != nil {
+				writeProblem(writer, http.StatusServiceUnavailable, "acp_observation_unavailable")
+				return
+			}
+			writeJSON(writer, http.StatusOK, record)
+		})
+	}
 	handler.mux.HandleFunc(
 		"POST /api/v1/message-transforms/actions/test",
 		handler.testMessageTransform,

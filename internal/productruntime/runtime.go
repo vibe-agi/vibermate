@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/vibe-agi/vibermate/internal/acpobservation"
 	"github.com/vibe-agi/vibermate/internal/activity"
 	"github.com/vibe-agi/vibermate/internal/blindtunnel"
 	"github.com/vibe-agi/vibermate/internal/captureadmission"
@@ -46,6 +47,7 @@ var ErrInvalidBuildResult = errors.New("invalid runtime build result")
 
 // Runtime owns every successfully constructed production component.
 type Runtime struct {
+	acpObservations    *acpobservation.Manager
 	status             *statusTracker
 	schemaReader       runtimepersistence.SchemaStateReader
 	environments       environmentRuntime
@@ -690,6 +692,10 @@ func startWithBuilders(
 		proxy.BeginShutdown()
 		return nil
 	})
+	acpObservations, err := acpobservation.NewManager(storageResult.store.ACPObservations(), captureRuns, assignments, environments, options.Clock)
+	if err != nil {
+		return fail("ACP observations", err)
+	}
 	pending = cleanupStack{}
 
 	finalState, err := storageResult.store.SchemaStateReader().ReadSchemaState(ctx)
@@ -698,6 +704,7 @@ func startWithBuilders(
 	}
 	tracker.commitInitialized(finalState.Revision)
 	return &Runtime{
+		acpObservations:    acpObservations,
 		status:             tracker,
 		schemaReader:       storageResult.store.SchemaStateReader(),
 		environments:       environments,
@@ -762,6 +769,8 @@ func (r *Runtime) ExchangeExecutor() exchange.Executor {
 func (r *Runtime) CaptureRunReader() capturerun.Reader {
 	return r.captureRuns
 }
+
+func (r *Runtime) ACPObservations() *acpobservation.Manager { return r.acpObservations }
 
 func (r *Runtime) CaptureRuns() capturerun.Controller {
 	return r.captureRuns

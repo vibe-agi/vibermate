@@ -351,6 +351,7 @@ func Start(ctx context.Context, options Options) (*Host, error) {
 		return fail("ManualCapture control routes", err)
 	}
 	captureHandler, err := capturecontrol.New(capturecontrol.Options{
+		ACP:         runtime.ACPObservations(),
 		Runs:        runtime.CaptureRuns(),
 		Principals:  cliControl,
 		Issuer:      grantIssuer,
@@ -417,6 +418,7 @@ func Start(ctx context.Context, options Options) (*Host, error) {
 		return fail("upstream model catalog", err)
 	}
 	application, err := desktopcontrol.New(desktopcontrol.Options{
+		ACP:                 runtime.ACPObservations(),
 		Readiness:           ready,
 		Status:              runtime,
 		Environments:        runtime.Environments(),

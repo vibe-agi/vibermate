@@ -306,7 +306,7 @@ func (launcher *Launcher) Run(
 		},
 	); err != nil {
 		cancelChild(errors.New("CaptureRun attachment failed"))
-		_ = child.Wait()
+		_ = waitChild(child, launcher.config.TerminationTimeout)
 		restoreTerminal()
 		launcher.finishBestEffort(control, grant)
 		return 1, fmt.Errorf("attach captured process: %w", err)
@@ -314,7 +314,7 @@ func (launcher *Launcher) Run(
 
 	waitResult := make(chan error, 1)
 	go func() {
-		waitResult <- child.Wait()
+		waitResult <- waitChild(child, launcher.config.TerminationTimeout)
 	}()
 	heartbeatContext, stopHeartbeat := context.WithCancelCause(
 		context.Background(),
@@ -690,6 +690,14 @@ func childExit(waitErr error) (int, error) {
 		return signaledExitCode(exitError), nil
 	}
 	return 1, fmt.Errorf("wait for captured process: %w", waitErr)
+}
+
+func waitChild(child *exec.Cmd, timeout time.Duration) error {
+	waitErr := child.Wait()
+	if err := finishChildGroup(child.Process, timeout); err != nil {
+		return err
+	}
+	return waitErr
 }
 
 var _ Discovery = (*localdiscovery.File)(nil)

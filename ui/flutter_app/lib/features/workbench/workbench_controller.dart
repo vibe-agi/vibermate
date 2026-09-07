@@ -5,6 +5,7 @@ import 'dart:math';
 import 'package:flutter/foundation.dart';
 
 import '../../core/api/control_api.dart';
+import '../../core/api/acp_models.dart';
 import '../../core/api/control_models.dart';
 import '../../core/bootstrap/root_trust_installer.dart';
 import '../../core/bootstrap/runtime_connection.dart';
@@ -112,6 +113,7 @@ final class WorkbenchController extends ChangeNotifier {
   EnvironmentRecord? historicalEnvironment;
   CaptureAssignment? selectedAssignment;
   bool selectedCaptureLaunchIncomplete = false;
+  ACPRecord? selectedACP;
   TerminalCommandStatus? terminalCommand;
   RuntimeServerAccess? serverAccess;
   List<RuntimeUser>? runtimeUsers;
@@ -1939,6 +1941,7 @@ final class WorkbenchController extends ChangeNotifier {
     _selectionGeneration += 1;
     selectedAssignment = null;
     selectedCaptureLaunchIncomplete = false;
+    selectedACP = null;
     selectedCaptureConversations = null;
     selectedCaptureConversationKey = null;
     selectedCapturePage = null;
@@ -2368,6 +2371,10 @@ final class WorkbenchController extends ChangeNotifier {
       final values = await Future.wait<Object?>([
         _loadCaptureAssignment(capture),
         _captureConversationPage(capture, limit: 200),
+        if (!capture.isManual && _api is ACPObservationApi)
+          (_api as ACPObservationApi).acpObservation(capture.key)
+        else
+          Future<ACPRecord?>.value(),
       ]);
       if (_disposed ||
           generation != _selectionGeneration ||
@@ -2375,6 +2382,7 @@ final class WorkbenchController extends ChangeNotifier {
         return;
       }
       selectedAssignment = values[0] as CaptureAssignment?;
+      selectedACP = values[2] as ACPRecord?;
       selectedCaptureLaunchIncomplete = selectedAssignment == null;
       final conversationPage = values[1]! as ConversationPage;
       selectedCaptureConversations = conversationPage;

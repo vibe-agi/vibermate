@@ -1,239 +1,120 @@
-# ACP integration: research and first implementation slice
+# ACP integration: usable observation milestone
 
-Date: 2026-09-07. Branch: `feat/acp-integration`, based on published `v0.1.8`
-(`c41bc857143cba8287ce15ffd7d2e0cbb6bb05b0`).
+Date: 2026-09-07. Branch: `feat/acp-integration`. Published v0.1.9 source
+`3420aed6a6eb97d67b31bae64752419d6c362280` is merged at
+`e854571e8c68d32a61ea2123ec0a6e14b2aece22`. The released main worktree and older
+`feat/acp-stdio` prototype are not changed by this implementation.
 
-Status: ecosystem research and the opaque transport foundation are implemented.
-**There is no public `vibermate acp` command, ACP server persistence, or ACP App/Web
-view in this slice.** The foundation is not yet composed into the launcher. This
-document is an implementation plan, not a compatibility or release announcement.
+## Shipped in the development build
 
-The existing uncommitted `feat/acp-stdio` worktree remains untouched. Its custom
-observer and ACP flags are research input only; they have not been merged into
-this branch or the released HTTP capture path.
+The public command is `vibermate acp [--server URL] [--record-content] -- <agent>
+[args...]`. An ACP editor starts ViberMate, and ViberMate starts the existing
+adapter. Use the [setup guide](../acp-quickstart.md), or Settings -> Access &
+launch -> Connect an ACP editor, to generate Zed/JetBrains configuration.
 
-## Product direction
+This milestone is **ACP observation only**, not HTTP interception/enforcement.
+`--env` is rejected. No proxy, CA, provider credential, HTTP account overwrite,
+model mapping, script, network rule, or launch-environment overlay is injected.
+The editor retains auth, permissions, filesystem/terminal requests and effective
+env/argv/cwd. No alias, shell, automatic adapter download, or temporary user is
+created. The existing `vibermate run` HTTP path remains separate.
 
-An ACP-capable editor starts ViberMate; ViberMate starts the user's existing ACP
-agent and relays its stdio protocol. The editor keeps its native chat, files,
-terminal, permission prompts, and agent login. ViberMate adds runtime attribution,
-optional evidence, and explicitly supported traffic policy without becoming
-another Codex/Claude adapter.
+## Research and reuse
 
-Do not create a temporary Runtime User for each editor process or workspace.
-Reuse the existing authenticated local App or remote Runtime User login. Provider
-authentication remains between the ACP client and agent, distinct from ViberMate
-management access. Never prompt for a ViberMate password on ACP protocol stdin.
+- [Ecosystem survey](../research/2026-09-07-acp-ecosystem.md): 24 repositories,
+  primary specifications, release activity, license, CI/test and advisory checks.
+- [Bridge patterns](../research/2026-09-07-acp-bridge-patterns.md): pinned source
+  and tests, including official Rust SDK proxy/conductor lifecycle patterns.
+- [Cursor integration](../research/2026-09-07-cursor-acp-integration.md): Cursor
+  CLI `agent acp` is an Agent, not evidence that Cursor desktop hosts arbitrary
+  external ACP Agents. Initial config targets use documented Zed/JetBrains flows.
+- [Published-adapter acceptance](../research/2026-09-07-acp-acceptance.md):
+  Codex ACP 1.10.0 (isolated Codex 0.153.3) and Claude ACP 0.75.1, Node 22.23.2.
 
-The wrapper can be launched from any directory. Its launch directory is only a
-process fact: each ACP session can claim a different workspace. An ACP session
-ID is not an account, a credential, or proof of workspace authority.
+Reuse the active `agentclientprotocol/codex-acp` and
+`agentclientprotocol/claude-agent-acp` adapters; do not duplicate their protocol,
+tool, model, history or login implementations. The Go bridge remains an opaque
+byte relay, not a typed decode/re-encode protocol endpoint. Stable wire v1 and
+SDK release numbers are distinct. Unknown extensions still pass unchanged.
 
-## Research and reuse decisions
+## Module boundaries
 
-The [ecosystem survey](../research/2026-09-07-acp-ecosystem.md) covers 24 repositories,
-primary specifications, editor documentation, licenses, release activity, tests,
-CI, and public advisory checks. The [bridge-pattern review](../research/2026-09-07-acp-bridge-patterns.md)
-pins the source and regression tests relevant to this implementation. These are
-dated evidence snapshots, not a claim that every ACP project has been audited.
+| Module | Owned behavior |
+| --- | --- |
+| `internal/acpbridge` | Fixed-buffer duplex relay, half-close/drain, backpressure, complete byte preservation and payload-free failures. |
+| `internal/runlauncher` | Exact effective invocation, owned cancellable duplicate stdio, separate unretained stderr, PID attachment, signals, bounded group cleanup/reaping, heartbeat and final snapshot/finish. Real TTY invocations bypass registration and observation for terminal auth. |
+| `internal/acpobservation` | Bounded projection of confirmed native sessions, fresh prompts, visible text opt-in, tool notification counts, auth-required status and self-reported version. Owns immutable recording authority, not transport or HTTP usage. |
+| `internal/runtimepersistence` | Additive digest-checked ACP extension, live-parent and Runtime User revocation checks, monotonic/idempotent final snapshot storage, retention purge on ACP operations and cascade on Capture deletion. |
+| `internal/capturecontrol` | Live run-capability scoped start/observe actions; malformed/oversized publication is rejected without private diagnostics. |
+| `internal/desktopcontrol` | Owner-only ACP read and batch connection markers in Capture listings. No prompt content is loaded to label a list. Shared by App and Server Web. |
+| `ui/flutter_app` | ACP-only Capture display and units, session selection, version provenance, auth/recording/completeness notices, optional text and bilingual editor setup. No fake HTTP turn counts or policy picker on ACP. |
 
-| Responsibility | Selection | Reason and boundary |
-| --- | --- | --- |
-| Codex ↔ ACP adaptation | Active `agentclientprotocol/codex-acp` | Reuse its Codex App Server integration, auth, tools, history, and extensions. The old `zed-industries/codex-acp` is archived; do not build on it. |
-| Claude ↔ ACP adaptation | `agentclientprotocol/claude-agent-acp` | Reuse its Claude Agent SDK integration and terminal-auth support. Maintained by the ACP organization, not a claim that Anthropic maintains the adapter. |
-| Lifecycle and semantic proxy patterns | Official `agentclientprotocol/rust-sdk` | Reference its existing proxy/conductor, duplex shutdown, descendant cleanup, and ordering tests. Do not port the whole Rust SDK to Go. |
-| ViberMate's first transport layer | Go standard-library byte relay | No ACP SDK is necessary to forward opaque streams. Preserve future fields, vendor extensions, original IDs, and serialization exactly. |
-| Later Go protocol endpoint/observer | Re-evaluate `coder/acp-go-sdk`, `Tangerg/acp`, and `spachava753/acp-sdk` | Coder has a longer track record but an older schema and a 10 MiB line reader. Tangerg has newer stable-schema and cross-platform test evidence but a short, concentrated maintenance history. Spachava's unstable schema and inherited MCP lineage need care. No dependency selected yet. |
+See [ADR 0010](../adr/0010-observe-acp-without-inferring-http-authority.md) and
+[domain language](../../CONTEXT.md). A session directory is a claim, never file
+authority. Native IDs are connection-scoped and never globally merged. History
+replay is not a fresh prompt; opposite-direction request IDs are independent.
+“Agent returned” means the RPC returned, not that upstream model execution
+succeeded. Auth/permission payloads, thought chunks, raw errors and stderr never
+enter snapshots. Metadata-only is the default; content opt-in still obeys the
+exact frozen launch revision. Observation limits never truncate protocol traffic.
 
-The stable wire protocol is version `1`; schema/SDK release numbers are separate.
-Do not introduce the draft v2 proxy protocol simply because an SDK's release is
-named v2. The Go SDKs' typed decode/re-encode paths are not byte-transparent
-forwarders; some also log malformed payloads. A future observer's parse budget
-must never become a forwarding limit.
+Limits per connection: 1 MiB observed frame, 64 sessions, 256 prompts, 128 KiB
+visible text and 768 KiB encoded snapshot. Escaping counts toward the encoded
+budget. Limit overflow is explicitly incomplete. Expired snapshots are purged on
+subsequent ACP reads/writes/list operations; the small connection marker remains.
+Deleting a Capture removes its observation. No idle periodic purge is claimed.
 
-Cursor's documented `agent acp` makes **Cursor CLI an ACP agent**. It does not
-prove that the Cursor editor can host arbitrary external ACP agents. Initial GUI
-acceptance should use the documented external-agent flows in Zed and JetBrains,
-then verify the user's exact Cursor integration separately. Preserve Cursor's
-blocking `cursor/ask_question` and `cursor/create_plan` requests as well as its
-notifications; extensions are not limited to names beginning with `_`.
+## Verification evidence
 
-The [focused Cursor research](../research/2026-09-07-cursor-acp-integration.md)
-also records native registry launch paths, Zed's agent-ID-dependent model picker,
-host environment precedence, and documented proxy support. Editor configuration
-must wrap the actual executable rather than rely on a shell alias. Preserve the
-editor's effective environment and project launch directory for ACP-only
-observation; apply proxy/CA changes only for explicitly selected, verified HTTP
-capabilities. A process has one launch policy: different simultaneous session
-policies require separate processes, not per-session mutations of process env.
+- Race-enabled relay/process fixtures: CRLF, fragmented and non-UTF-8 bytes,
+  frames above 10 MiB, reverse permissions, same-valued IDs, unknown extensions,
+  EOF/final drain, blocked GUI stdin, large stderr, delayed nonzero exit,
+  cancellation, TERM/KILL escalation and descendants after wrapper exit.
+- Actual macOS pseudo-TTY fixture preserves terminal auth and appended args.
+  A signal during PID attachment is retained and forwarded; failed attachment
+  kills and reaps the child before returning.
+- Observer fixtures: multiple sessions, load replay, error sanitization,
+  auth-required boundaries, metadata-only/full, UTF-8 and JSON expansion limits,
+  interrupted requests, immutable snapshots and invalid durable revisions.
+- Real DesktopHost/SQLite/HTTP/child end-to-end flow: register, attach,
+  initialize, session/new, prompt, editor permission round trip, text response,
+  EOF, durable final record and finished Capture. Both content modes tested.
+- Real remote Host path over HTTP and pinned HTTPS: saved Runtime User login,
+  device/workspace attribution, unchanged Agent env, owner-only Web reads.
+- Authority/storage: wrong and cross-run capabilities, proxy vs control scope,
+  pre-attach non-mutating authorization, content-upgrade rejection, final/stale
+  revision rejection, logout/disabled-user fencing, v0.1.9 baseline upgrade,
+  reopen/expiry/delete cascade, unfamiliar extension rejection without reset.
+- Published adapters through the actual registered launcher in a network-disabled
+  Linux ARM64 container: initialize, Codex unauthenticated auth-required boundary,
+  Claude native session, EOF/exit and persisted final version/session evidence.
+  No provider request, real credential or editor settings were used.
+- Flutter widget tests: English/Chinese, 390/1100 px, session switching,
+  metadata-only display and exact Zed/JetBrains/remote/Cursor CLI config arrays.
+- Packaged CLI -> actual native-secret daemon -> Dart API -> WorkbenchController
+  passed with content both off and on. All seven packaged Dart live tests passed
+  in serial and parallel reruns; the actual packaged App launch/relaunch gate
+  also passed. `check-flutter-macos` includes the ACP tests and runs packaged
+  suites sequentially. One earlier run concurrent with other native acceptance
+  returned two `secret_store_unavailable` startup failures; they did not recur in
+  the standalone reruns. This is retained as a native startup reliability
+  observation, not represented as a diagnosed or fixed Keychain defect.
 
-## Implemented: transport foundation
+Repository gates: `go test ./...`, `go test -race ./...`, `go vet ./...`,
+`make check-format check-dependencies check-structural`, `flutter analyze`,
+`flutter test`, Linux/Windows cross-builds, packaged macOS/Web build and the
+opt-in live tests. Build outputs remain in this worktree's `dist`; no Homebrew,
+GitHub release or mainline mutation is part of this milestone. The final full Go
+race suite and Flutter analyzer passed; 374 ordinary Flutter tests passed, while
+the seven packaged tests require their explicit opt-in paths and are verified
+separately rather than silently counted as ordinary test coverage.
 
-`internal/acpbridge.Relay` has one narrow responsibility: copy both directions
-between two endpoints, using two fixed 32 KiB buffers. It does not parse JSON,
-rewrite capabilities or IDs, answer permissions, log payloads, or retain content.
-It does not open a listener or launch a child.
+## Remaining acceptance, not implied by these tests
 
-Ownership is explicit: after validating arguments, the relay owns four independent
-closeable stream halves. Closing a half must interrupt its pending I/O. Borrowed
-terminal handles and arbitrary readers whose `Close` cannot unblock `Read` do not
-satisfy the contract. The future launcher adapter must supply suitable handles;
-passing `os.Stdin` directly is not that implementation.
-
-Client EOF half-closes agent input and drains final agent output. Agent EOF
-unblocks idle client input; if already-read input cannot be delivered, the result
-is an explicit payload-free incomplete-transfer failure. Cancellation/I/O failure
-closes owned streams and joins both pumps. Graceful output-close failures are
-reported. Byte counters count destination acceptance, not prompts, successful
-model calls, or billing usage.
-
-The caller still owns child stderr, context deadlines, process groups, exit
-status, and reaping. Neither this package nor its real-child test establishes a
-production process supervisor. Error strings are safe; unwrapped I/O causes can
-contain private data and must not be logged. Nothing diagnostic belongs on ACP
-stdout. Child stderr is not inherently safe to persist either.
-
-Current synthetic tests cover:
-
-- Both directions, reverse permission/file requests, same-valued opposite-direction
-  IDs, unknown fields/methods, Cursor extensions, and load/resume/cancel envelopes.
-- Exact bytes: CRLF, fragments, non-UTF-8, an unterminated message, and an 11 MiB
-  frame beyond the inspected Coder SDK's limit. These are transport tests, not
-  claims of semantic implementation of the methods inside the envelopes.
-- EOF half-close/final drain; idle reader cancellation; backpressure in either
-  direction; partial delivery interrupted by agent EOF; short writes and close
-  failures; private-error suppression; pre-cancelled ownership and invalid input.
-- A synthetic real child whose final stdout drains, stderr stays separate, and
-  process is reaped, including assertion-failure cleanup.
-
-No new dependency, account, persistence schema, HTTP policy bypass, content store,
-or UI surface is introduced in this slice.
-
-## Next slice: launcher and interactive authentication
-
-Planned syntax, **not currently available**:
-
-```text
-vibermate acp -- codex-acp
-vibermate acp -- claude-agent-acp
-vibermate acp -- agent acp
-```
-
-Use argv directly, never an implicit shell. Everything after `--` belongs to the
-child, including flags appended by an editor's authentication flow. Resolve the
-configured executable and preserve its argument order, environment, directory,
-exit code, and signals. Do not silently download or upgrade an agent adapter;
-compatibility acceptance pins the adapter version separately.
-
-Deepen the existing `internal/runlauncher` process seam. Its current Unix group
-signal forwarding and foreground-terminal support are useful, but its
-`exec.Cmd.WaitDelay` fallback kills only the direct process. ACP acceptance also
-needs bounded whole-group escalation and descendant cleanup when a launcher
-wrapper exits before its grandchildren. A process group is cleanup containment,
-not a sandbox against a process deliberately escaping it.
-
-The supervisor must:
-
-1. Own child start, cancellable input handles, stderr forwarding, group signals,
-   exit observation, grace periods, and one final reap. Avoid a blocked goroutine
-   reading borrowed GUI stdin after child exit.
-2. On client EOF, drain the child for a bounded grace period; on premature stdout
-   EOF, preserve already delivered output, report undelivered input, and still
-   collect the actual child exit status. A relay's success is not process success.
-3. Treat `session/cancel` and `$/cancel_request` as protocol traffic, not process
-   signals that kill sibling sessions.
-4. Keep ordinary `vibermate run` behavior unchanged and regression-test it.
-5. Give terminal-auth invocations real interactive stdio/TTY with no transcript
-   observation. Standard auth appends advertised args to the configured command,
-   overlays env, waits for exit zero, and then reconnects. Claude's `--cli auth
-   login --claudeai` is one reference, not a universal magic-flag detector.
-
-There is a source conflict: the current normative terminal-auth specification
-says to append args; the registry's authentication guide still says to replace
-them. Validate actual editor implementations/versions. Legacy auth descriptors
-can also name another executable and bypass the wrapper. Do not hide these
-differences by rewriting arbitrary authentication messages or credentials.
-
-Before exposing a managed `acp` command, settle its runtime registration contract
-with the following slice. An unregistered relay must never be displayed as a
-managed/retained Capture or imply HTTP traffic-policy enforcement.
-
-## Following slice: session observation and Runtime ownership
-
-Design the ACP domain boundary before reusing the old prototype's ACP boolean or
-creating server rows. In particular, do not omit Capture assignments, root checks,
-or Environment validation merely to fit ACP into an HTTP-only issuance path.
-
-Keep separate identities for runtime principal, device, wrapper connection
-generation, native agent session, and request initiator/ID. Track successful
-new/load/resume/fork results rather than interpreting every notification as a new
-session. The same native session may reconnect through another process; multiple
-sessions may coexist in one process. Agent-reported workspace roots are claims
-with provenance, not a mutation of a frozen Capture workspace or automatic file
-authorization. Update the domain model/ADR only when those invariants are settled.
-
-A separate bounded observer may read copies after successful forwarding. It must
-never block the protocol behind server persistence, drop bytes from forwarding,
-or log unknown/malformed bodies. On oversized frames, queue pressure, or unsupported
-semantics, mark observation incomplete/unavailable; do not fabricate a complete
-conversation. Pending correlation, session count, and parse memory all need limits.
-
-`session/load` replays history before its response. `session/resume` restores
-without replay. Replayed updates are not new usage. An ACP prompt can contain
-multiple model exchanges and tools; HTTP evidence can include internal/title
-requests. Do not duplicate usage across layers or correlate by content/time
-similarity. Only expose cross-layer links supported by exact evidence.
-
-## Following slice: App/Web, policy, and retention
-
-Keep local personal launch low-friction through existing local ownership checks;
-remote/team launches use an existing authenticated Runtime User. Do not create a
-second ACP account or token system. Agent tool approval remains in the editor
-unless a separately designed, explicit ViberMate policy adds a decision boundary.
-
-Separate three capabilities in UI and docs: ACP session visibility, ACP content
-retention, and HTTP model-traffic capture/routing. Stdio forwarding does not prove
-that a child honors proxy/CA settings or supports managed account replacement.
-Validate each pinned adapter's HTTP behavior before offering that control.
-
-Content retention is server-owned and independent of forwarding. Default the new
-observer to metadata-only until policy is explicit. With content disabled, do not
-serialize/enqueue prompts, tool arguments, auth metadata, or raw frames for later
-disposal. Preserve honest bounded status/counters where policy allows. Never enable
-`APP_SERVER_LOGS` or `CLAUDE_AGENT_LOGS` as an implicit recorder. This controls
-ViberMate retention, not the upstream agent's own native history files.
-
-The eventual UI must show agent/session/workspace provenance, reconnect/load
-state, permission waiting, observation completeness, and failed process startup
-without dummy sessions. Reuse the account and client-access pages; provide
-copyable editor configurations and a connection check only once the command and
-those specific GUI versions have passed acceptance.
-
-## Delivery gates
-
-| Gate | Required evidence | Current state |
-| --- | --- | --- |
-| Research selection | Pinned primary-source survey, activity/license/CI checks, source-level bridge patterns | Done; reports linked above. No third-party code executed. |
-| Opaque transport | Exact-byte, bounded-buffer, EOF, backpressure, cancellation, privacy, and real-child fixture tests | Implemented; race-tested repeatedly. Not composed into CLI. |
-| Production launcher | Group teardown/grandchildren, final nonzero exit, GUI stdin still open, huge unterminated stderr, actual TTY login, argv/env and cancellation | Pending. |
-| Runtime/session authority | Multi-workspace claims, owner isolation, authenticated registration/reconnect, restart/reopen, retention-off, replay/correlation and unknown states | Pending design and implementation. |
-| App/Web experience | Setup/configuration, meaningful session status, account separation, bilingual/accessibility tests | Pending. |
-| Real interoperability | Pinned Codex/Claude adapters with Zed/JetBrains; Cursor's exact role; permissions, tools, images, multi-session, resume, auth and proxy behavior | Pending; synthetic transport tests are not substitute evidence. |
-| Release | macOS/Linux acceptance, unchanged HTTP capture tests, actual feature UI/CLI support, documented limitations | Not a release candidate. No mainline merge or package publication in this slice. |
-
-Run `go test -race ./internal/acpbridge` for the new boundary; run `go test ./...`,
-`go vet ./...`, and `make check-format check-dependencies check-structural` for
-repository regression checks. Later stages add their own tests before changing
-this table's status. Real provider/GUI tests are opt-in and must not reuse or log
-personal credentials from the development environment.
-
-## Local verification of this slice
-
-On 2026-09-07, the macOS development environment passed `go test ./...`,
-`go test -race ./...`, `go vet ./...`, and
-`make check-format check-dependencies check-structural`.
-The ACP suite additionally passed 20 consecutive race-enabled runs and
-`go test -race -cover ./internal/acpbridge` (94.3% statement coverage).
-`GOOS=linux GOARCH=amd64 go build ./...` passed; that is cross-compilation,
-not a Linux runtime or GUI acceptance test. No real agent/provider, editor,
-Flutter UI, installer, or release acceptance is claimed by these results.
+Actual GUI builds plus an explicitly authorized provider account are required
+to certify editor login, live prompts/tools/images, rejection/cancel/resume,
+multi-session interaction, and per-editor terminal-auth variants. Some legacy
+auth descriptors name a separate executable; the wrapper preserves them rather
+than claiming to capture that independent process. Cursor desktop external-agent
+hosting and HTTP proxy/CA/account substitution require their own evidence.
+These are not certified by protocol fixtures or isolated adapter initialization.

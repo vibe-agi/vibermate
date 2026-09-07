@@ -60,6 +60,7 @@ func New(options Options) (*desktopcontrol.Handler, error) {
 		return nil, err
 	}
 	return desktopcontrol.New(desktopcontrol.Options{
+		ACP:       options.Runtime.ACPObservations(),
 		Readiness: options.Readiness, Status: options.Runtime,
 		Environments: options.Runtime.Environments(), Assignments: options.Runtime.CaptureAssignments(),
 		Activities: options.Runtime.Activities(), ConversationIndexer: indexer,
