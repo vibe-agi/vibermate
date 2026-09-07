@@ -4270,6 +4270,9 @@ final class _CatalogModelFieldState extends State<_CatalogModelField> {
           key: widget.fieldKey,
           controller: controller,
           focusNode: focusNode,
+          // Automatic select-all on focus would overwrite the search prefix
+          // with the next keystroke after an asynchronous catalog refresh.
+          selectAllOnFocus: false,
           onChanged: widget.onChanged,
           onSubmitted: (_) => onSubmitted(),
           style: monoStyle,
