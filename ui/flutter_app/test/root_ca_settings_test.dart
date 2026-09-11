@@ -34,28 +34,28 @@ void main() {
             language: AppLanguage.english,
             title: 'Local Root Certificate',
             delivery:
-                'Claude and Codex launches receive this certificate directly. Other clients can install and trust this exact Root for the current macOS user here.',
+                'This Runtime’s managed HTTPS and authorized AI-traffic proxy certificates share one Root. Supported, recognized client launches receive it directly. Other clients can install and trust this exact Root for the current macOS user here.',
           ),
           (
             theme: ViberTheme.dark(),
             language: AppLanguage.english,
             title: 'Local Root Certificate',
             delivery:
-                'Claude and Codex launches receive this certificate directly. Other clients can install and trust this exact Root for the current macOS user here.',
+                'This Runtime’s managed HTTPS and authorized AI-traffic proxy certificates share one Root. Supported, recognized client launches receive it directly. Other clients can install and trust this exact Root for the current macOS user here.',
           ),
           (
             theme: ViberTheme.light(),
             language: AppLanguage.simplifiedChinese,
             title: '本机根证书',
             delivery:
-                'Claude 与 Codex 启动时会直接获得当前证书；其他客户端可在这里为当前 macOS 登录用户安装并信任这张根证书。',
+                '当前 Runtime 的内置 HTTPS 与授权 AI 流量代理共用这张根证书。受支持且已识别的客户端启动时会直接获得它；其他客户端可在这里为当前 macOS 登录用户安装并信任。',
           ),
           (
             theme: ViberTheme.dark(),
             language: AppLanguage.simplifiedChinese,
             title: '本机根证书',
             delivery:
-                'Claude 与 Codex 启动时会直接获得当前证书；其他客户端可在这里为当前 macOS 登录用户安装并信任这张根证书。',
+                '当前 Runtime 的内置 HTTPS 与授权 AI 流量代理共用这张根证书。受支持且已识别的客户端启动时会直接获得它；其他客户端可在这里为当前 macOS 登录用户安装并信任。',
           ),
         ]) {
       final api = PreviewControlApi(seedCaptures: false);

@@ -23,11 +23,30 @@ func TestConnectorWireServiceObservesOnlyTheAllowedMITMShapeChanges(
 	t *testing.T,
 ) {
 	t.Parallel()
+	for _, alpn := range [][]string{{"h2", "http/1.1"}, nil} {
+		name := "with_alpn"
+		if len(alpn) == 0 {
+			name = "without_alpn"
+		}
+		t.Run(name, func(t *testing.T) {
+			testConnectorWireService(t, alpn)
+		})
+	}
+}
+
+func testConnectorWireService(t *testing.T, clientALPN []string) {
+	t.Helper()
+	var upstreamALPN []string
+	var negotiatedALPN string
+	if len(clientALPN) != 0 {
+		upstreamALPN = []string{"http/1.1"}
+		negotiatedALPN = "http/1.1"
+	}
 
 	downstream := captureGoClientHello(
 		t,
 		"agent.example",
-		[]string{"h2", "http/1.1"},
+		clientALPN,
 	)
 	roots, serverConfig := testTLSAuthority(t)
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
@@ -176,8 +195,8 @@ func TestConnectorWireServiceObservesOnlyTheAllowedMITMShapeChanges(
 			upstream.ExtensionOrder(),
 		)
 	}
-	if !slices.Equal(downstream.OfferedALPN(), []string{"h2", "http/1.1"}) ||
-		!slices.Equal(upstream.OfferedALPN(), []string{"http/1.1"}) ||
+	if !slices.Equal(downstream.OfferedALPN(), clientALPN) ||
+		!slices.Equal(upstream.OfferedALPN(), upstreamALPN) ||
 		clientHelloServerName(t, upstream.fingerprintRecord) != "example.com" ||
 		bytes.Equal(
 			clientHelloRandom(t, downstream.fingerprintRecord),
@@ -192,9 +211,10 @@ func TestConnectorWireServiceObservesOnlyTheAllowedMITMShapeChanges(
 	if evidence.Requested().Ref != wireprofile.TransportProfileObservedClientH1Value ||
 		evidence.Effective().Ref != wireprofile.TransportProfileObservedClientH1Value ||
 		evidence.UsedFallback() ||
-		!slices.Equal(evidence.ClientOfferedALPN(), []string{"h2", "http/1.1"}) ||
-		!slices.Equal(evidence.UpstreamOfferedALPN(), []string{"http/1.1"}) ||
-		evidence.UpstreamNegotiatedALPN() != "http/1.1" {
+		!slices.Equal(evidence.ClientOfferedALPN(), clientALPN) ||
+		!slices.Equal(evidence.UpstreamOfferedALPN(), upstreamALPN) ||
+		evidence.UpstreamNegotiatedALPN() != negotiatedALPN ||
+		evidence.HTTPTransport() != wireprofile.HTTPTransportHTTP1 {
 		t.Fatalf("wire transport evidence = %+v", evidence)
 	}
 }
@@ -669,6 +689,15 @@ func testTransportPlanWithWire(
 	wireProfileRef string,
 ) wireprofile.CompiledTransportFingerprintPlan {
 	t.Helper()
+	return testTransportPlanForProtocol(t, wireProfileRef, wireprofile.ApplicationProtocolHTTP1)
+}
+
+func testTransportPlanForProtocol(
+	t *testing.T,
+	wireProfileRef string,
+	protocol wireprofile.ApplicationProtocol,
+) wireprofile.CompiledTransportFingerprintPlan {
+	t.Helper()
 	catalog, err := wireprofile.BuiltInCatalog()
 	if err != nil {
 		t.Fatal(err)
@@ -681,9 +710,9 @@ func testTransportPlanWithWire(
 	if err != nil {
 		t.Fatal(err)
 	}
-	variant, available := profile.Variant(wireprofile.ApplicationProtocolHTTP1)
+	variant, available := profile.Variant(protocol)
 	if !available {
-		t.Fatal("compiled wire profile has no HTTP/1.1 variant")
+		t.Fatalf("compiled wire profile has no %s variant", protocol)
 	}
 	return variant.TransportFingerprintPlan()
 }

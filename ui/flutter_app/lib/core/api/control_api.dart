@@ -152,6 +152,17 @@ abstract interface class ControlApi {
 
   Future<RuntimeServerAccess> serverAccess();
 
+  Future<RuntimeServerCertificate> serverCertificate();
+
+  Future<RuntimeServerCertificate> stageServerCertificate(
+    RuntimeServerCertificate current,
+    List<String> hosts,
+  );
+
+  Future<RuntimeServerCertificate> applyServerCertificate(
+    RuntimeServerCertificate current,
+  );
+
   Future<List<RuntimeUser>> runtimeUsers();
 
   Future<RuntimeUsageReport> runtimeUsage(RuntimeUsageQuery query);
@@ -1105,6 +1116,55 @@ final class HttpControlApi implements ControlApi {
         await _read('/api/v1/server/access'),
         'serverAccess',
       );
+
+  @override
+  Future<RuntimeServerCertificate> serverCertificate() async =>
+      RuntimeServerCertificate.fromJson(
+        await _read(
+          '/api/v1/server/certificate',
+          maximumResponseBytes: 8 * 1024 * 1024,
+        ),
+        'serverCertificate',
+      );
+
+  @override
+  Future<RuntimeServerCertificate> stageServerCertificate(
+    RuntimeServerCertificate current,
+    List<String> hosts,
+  ) async => RuntimeServerCertificate.fromJson(
+    await _command(
+      'POST',
+      '/api/v1/server/certificate/stage',
+      body: {
+        'schema': 'vibermate-server-certificate-stage-v1',
+        'hosts': hosts,
+        'expectedFingerprint': current.fingerprint,
+        'expectedPendingFingerprint': current.pending?.fingerprint ?? '',
+      },
+    ),
+    'serverCertificate',
+  );
+
+  @override
+  Future<RuntimeServerCertificate> applyServerCertificate(
+    RuntimeServerCertificate current,
+  ) async {
+    if (current.pending == null) {
+      throw StateError('no pending server certificate');
+    }
+    return RuntimeServerCertificate.fromJson(
+      await _command(
+        'POST',
+        '/api/v1/server/certificate/apply',
+        body: {
+          'schema': 'vibermate-server-certificate-apply-v1',
+          'expectedFingerprint': current.fingerprint,
+          'pendingFingerprint': current.pending!.fingerprint,
+        },
+      ),
+      'serverCertificate',
+    );
+  }
 
   @override
   Future<List<RuntimeUser>> runtimeUsers() async {

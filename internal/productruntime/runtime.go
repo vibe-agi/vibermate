@@ -3,6 +3,7 @@ package productruntime
 
 import (
 	"context"
+	"crypto/ecdsa"
 	"errors"
 	"fmt"
 	"net"
@@ -939,6 +940,12 @@ func (r *Runtime) LocalRootIdentity() localca.RootIdentity {
 // path is not part of Root identity or signing authorization.
 func (r *Runtime) LocalRootCertificate() localca.RootCertificate {
 	return r.localCA.Certificate()
+}
+
+// SignServerCertificate is used only by an attached host's owner-authorized
+// TLS identity manager. The shared Root key remains inside localca.
+func (r *Runtime) SignServerCertificate(ctx context.Context, publicKey *ecdsa.PublicKey, hosts []string) ([]byte, error) {
+	return r.localCA.SignServerCertificate(ctx, publicKey, hosts)
 }
 
 // ProxyHandler returns the fully composed CONNECT/MITM handler. A Host must

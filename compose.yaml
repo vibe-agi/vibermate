@@ -1,0 +1,43 @@
+name: vibermate
+
+services:
+  vibermate:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: local
+    image: vibermate-runtime:0.1.10-local
+    container_name: vibermate-runtime
+    init: true
+    restart: unless-stopped
+    stop_grace_period: 35s
+    command:
+      - server
+      - --listen
+      - 0.0.0.0:9666
+      - --data-dir
+      - /data
+      - --web-root
+      - /opt/vibermate/vibermate-web
+      - --transport
+      - self_signed_tls
+    ports:
+      - "${VIBERMATE_BIND_ADDRESS:-127.0.0.1}:${VIBERMATE_PORT:-9666}:9666"
+    volumes:
+      - runtime-data:/data
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  runtime-data:
+    name: vibermate-runtime-data

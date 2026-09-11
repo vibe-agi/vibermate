@@ -1291,6 +1291,77 @@ final class AppCopy {
     'settings.safety.title': 'Safety & data',
     'settings.safety.detail':
         'Control the offline boundary, HTTPS trust and retained evidence for this Runtime.',
+    'settings.server_certificate.title': 'Server HTTPS certificate',
+    'settings.server_certificate.detail':
+        'Manage the Server HTTPS certificate and download public trust certificates. The CA panel below describes their scope; downloads never include private keys.',
+    'settings.server_certificate.hosts': 'Valid addresses',
+    'settings.server_certificate.fingerprint': 'SHA-256 fingerprint',
+    'settings.server_certificate.expires': 'Expires (UTC)',
+    'settings.server_certificate.guide':
+        'Compare this fingerprint with the Server startup or latest certificate-apply log. Connect using one of the listed addresses. Clients pinning this certificate must update their pin after a certificate change.',
+    'settings.server_certificate.download': 'Download HTTPS certificate',
+    'settings.server_certificate.ca_title': 'Unified Runtime Root CA',
+    'settings.server_certificate.legacy_ca_title': 'Legacy HTTPS-only CA',
+    'settings.server_certificate.legacy_ca_download': 'Download HTTPS CA',
+    'settings.server_certificate.legacy_ca_detail':
+        'This older Server still has a separate HTTPS CA. Upgrade the Server to use one Root for HTTPS and AI traffic. This certificate alone does not establish AI-proxy trust.',
+    'settings.server_certificate.ca_detail':
+        'One persistent Root signs both this Runtime’s managed HTTPS certificates and its authorized AI-traffic proxy certificates. Compare its fingerprint with caFingerprint in the startup log before trusting it. The public download is vibermate-ca.crt; it matches this Runtime’s previous traffic CA. Different Runtime instances still have different Roots.',
+    'settings.server_certificate.ca_download': 'Download Root CA',
+    'settings.server_certificate.ca_active':
+        'The active certificate is signed by this CA. Clients using CA trust can keep the same CA when server addresses change; the URL must still match the server certificate. Clients using a fixed leaf fingerprint, including the current ViberMate CLI, must update their pin.',
+    'settings.server_certificate.ca_migration':
+        'The active HTTPS certificate is not signed by this current Root (it may be self-signed or use a previous CA). Download and trust this Root, then generate and apply a new server certificate below. Upgrading preserves the active certificate; fixed-fingerprint clients must also update their pin.',
+    'settings.server_certificate.refresh': 'Refresh certificate',
+    'settings.server_certificate.http':
+        'This Server uses HTTP and has no HTTPS certificate. Enable TLS in the deployment configuration first.',
+    'settings.server_certificate.load_error':
+        'The Server certificate could not be loaded. Check that the Server supports certificate downloads, then refresh.',
+    'settings.server_certificate.save_error':
+        'The certificate could not be saved. Try again from the Server web workbench.',
+    'settings.server_certificate.saved':
+        'Certificate export requested. Importing and trusting it is a separate client step.',
+    'settings.server_certificate.active': 'Currently active certificate',
+    'settings.server_certificate.input_label': 'Server IPs / DNS names',
+    'settings.server_certificate.input_example':
+        'Example: 192.168.1.20, vibermate.example.test',
+    'settings.server_certificate.input_help':
+        'Enter the server host addresses clients actually use, separated by commas or newlines; no URL or port. Up to 32 addresses. localhost and loopback IPs are always retained. Saved in the data volume, not .env. This does not change Docker port publishing.',
+    'settings.server_certificate.stage': 'Generate pending certificate',
+    'settings.server_certificate.pending':
+        'Pending certificate — not yet active',
+    'settings.server_certificate.pending_help':
+        'The active certificate is unchanged. Download and configure client trust before applying. Generating again replaces this pending certificate.',
+    'settings.server_certificate.pending_ca_help':
+        'This candidate is signed by the Root shown above. Trust it before applying; clients already trusting this Runtime’s unified Root need no CA update. Fixed-fingerprint clients still need the candidate fingerprint. Generating again replaces only the pending HTTPS certificate, not the Root.',
+    'settings.server_certificate.pending_download':
+        'Download pending certificate',
+    'settings.server_certificate.apply': 'Apply and load now',
+    'settings.server_certificate.confirm_title':
+        'Apply the new HTTPS certificate?',
+    'settings.server_certificate.confirm_detail':
+        'This changes the server identity for all clients. New TLS connections use the new certificate without restarting Docker; clients trusting only the old certificate or fingerprint will fail to reconnect. Keep the current access address in the new certificate.',
+    'settings.server_certificate.confirm_trust':
+        'I have prepared client trust / fingerprint updates and understand the connection impact.',
+    'settings.server_certificate.cancel': 'Cancel',
+    'settings.server_certificate.dirty':
+        'Addresses have changed. Generate a new pending certificate before applying.',
+    'settings.server_certificate.external':
+        'This certificate is not managed online. Operator-supplied TLS files remain read-only; older servers may require an upgrade.',
+    'settings.server_certificate.applied':
+        'Certificate applied and loaded without restarting. Reconnecting clients need the signing CA (for CA-issued certificates), explicit certificate trust, or an updated certificate pin, according to their verification mode.',
+    'settings.server_certificate.ca_changed':
+        'This pending certificate uses a previous CA. Generate a new candidate signed by the current Root before applying.',
+    'settings.server_certificate.conflict':
+        'Certificate settings changed in another session. Refresh, then generate or apply again.',
+    'settings.server_certificate.invalid_hosts':
+        'Enter up to 32 valid IPs / DNS names, without a URL, port, wildcard or 0.0.0.0.',
+    'settings.server_certificate.access_host_missing':
+        'The new certificate must include the address currently used to access this workbench. Add it and generate again.',
+    'settings.server_certificate.stage_error':
+        'The certificate could not be generated or persisted. The active certificate has not been changed by this request.',
+    'settings.server_certificate.apply_unknown':
+        'Application could not be confirmed. Do not assume it failed: configure trust for the downloaded candidate, refresh and compare fingerprints. You can still download the pending certificate shown here.',
     'settings.egress.title': 'Network exit profiles',
     'settings.egress.detail':
         'Publish reusable SOCKS5 and DNS choices. Traffic policies freeze an exact revision.',
@@ -1326,7 +1397,7 @@ final class AppCopy {
         'into a prompt is retained.',
     'settings.root_ca.title': 'Local Root Certificate',
     'settings.root_ca.detail':
-        'Claude and Codex launches receive this certificate directly. Other clients can install and trust this exact Root for the current macOS user here.',
+        'This Runtime’s managed HTTPS and authorized AI-traffic proxy certificates share one Root. Supported, recognized client launches receive it directly. Other clients can install and trust this exact Root for the current macOS user here.',
     'settings.root_ca.status.trusted': 'Installed and trusted',
     'settings.root_ca.status.needs_trust': 'Installed, not trusted',
     'settings.root_ca.status.not_installed': 'Generated, not installed',
@@ -1344,7 +1415,7 @@ final class AppCopy {
     'settings.root_ca.retry': 'Check again',
     'settings.root_ca.replace.title': 'Replace the certificate and restart?',
     'settings.root_ca.replace.detail':
-        'The current certificate is absent. ViberMate will schedule a new local Root for the next restart. Existing evidence is kept; trust the new certificate separately if another client needs it.',
+        'The current certificate is absent. ViberMate will schedule a new Runtime Root for the next restart. This changes both HTTPS and AI-proxy trust. Existing HTTPS leaves stay active until you generate and apply replacements; clients must trust the new Root and update fixed leaf pins as needed. Evidence is kept.',
     'settings.root_ca.confirm': 'Continue',
     'settings.root_ca.guide.remove':
         'Open Keychain Access → login → Certificates. Match “ViberMate Local Root” against the SHA-256 fingerprint above and delete only that entry. Then return here and check again.',
@@ -2770,6 +2841,67 @@ final class AppCopy {
     'settings.access.team.detail': '先在「用户管理」中创建账号，再分享工作台地址和连接命令。',
     'settings.safety.title': '安全与数据',
     'settings.safety.detail': '管理这套 Runtime 的断网边界、HTTPS 信任与证据留存。',
+    'settings.server_certificate.title': '服务端 HTTPS 证书',
+    'settings.server_certificate.detail':
+        '管理服务端 HTTPS 证书并下载公开信任证书。根证书的适用范围见下方 CA 说明；下载文件不包含私钥。',
+    'settings.server_certificate.hosts': '适用地址',
+    'settings.server_certificate.fingerprint': 'SHA-256 指纹',
+    'settings.server_certificate.expires': '有效期至（UTC）',
+    'settings.server_certificate.guide':
+        '请核对指纹与服务端启动日志或最近一次证书应用日志一致。连接地址须在上述列表内；固定此证书指纹的客户端，在证书更换后仍需更新指纹。',
+    'settings.server_certificate.download': '下载 HTTPS 证书',
+    'settings.server_certificate.ca_title': '统一 Runtime Root CA',
+    'settings.server_certificate.legacy_ca_title': '旧版 HTTPS 专用 CA',
+    'settings.server_certificate.legacy_ca_download': '下载 HTTPS CA',
+    'settings.server_certificate.legacy_ca_detail':
+        '这台旧版服务端仍使用独立的 HTTPS CA。升级服务端后才能统一 HTTPS 与 AI 流量的根证书；当前下载的这张证书不能用于信任 AI 流量代理。',
+    'settings.server_certificate.ca_detail':
+        '同一张持久化 Root CA，同时签发当前 Runtime 的内置 HTTPS 证书和授权 AI 流量代理证书。请核对指纹与启动日志中的 caFingerprint 一致后再信任。下载文件为 vibermate-ca.crt，与本 Runtime 原来的流量 CA 内容一致，不含私钥。不同 Runtime 实例仍有各自的根证书。',
+    'settings.server_certificate.ca_download': '下载统一 Root CA',
+    'settings.server_certificate.ca_active':
+        '当前证书已由此 CA 签发。使用 CA 信任的客户端，后续修改服务端地址时可继续使用同一份 CA；连接地址仍须匹配服务端证书。固定叶证书指纹的客户端（包括当前 ViberMate CLI）仍需更新指纹。',
+    'settings.server_certificate.ca_migration':
+        '当前 HTTPS 证书尚未由这张 Root CA 签发，可能是自签名证书或由旧 CA 签发。请先下载并信任当前 Root CA，再生成并应用新的服务端证书。升级会保留当前证书；固定叶证书指纹的客户端还需更新指纹。',
+    'settings.server_certificate.refresh': '刷新证书',
+    'settings.server_certificate.http':
+        '当前服务使用 HTTP，没有 HTTPS 证书。请先在部署配置中启用 TLS。',
+    'settings.server_certificate.load_error': '无法读取服务端证书。请确认服务端支持证书下载，然后刷新重试。',
+    'settings.server_certificate.save_error': '证书保存失败，请重试或使用服务端 Web 工作台下载。',
+    'settings.server_certificate.saved': '已发起证书导出；仍需在客户端导入并设置信任。',
+    'settings.server_certificate.active': '当前生效证书',
+    'settings.server_certificate.input_label': '服务端 IP / 域名',
+    'settings.server_certificate.input_example':
+        '示例：192.168.1.20, vibermate.example.test',
+    'settings.server_certificate.input_help':
+        '填写客户端实际访问的服务端宿主机 IP / 域名，用逗号或换行分隔，不含协议或端口，最多 32 个。始终保留 localhost 和回环地址。配置保存在数据卷中，不使用 .env；此操作不会修改 Docker 端口映射。',
+    'settings.server_certificate.stage': '生成待生效证书',
+    'settings.server_certificate.pending': '待生效证书 · 尚未应用',
+    'settings.server_certificate.pending_help':
+        '当前证书尚未改变。请先下载并在客户端配置信任，再点击应用。再次生成会替换这份待生效证书。',
+    'settings.server_certificate.pending_ca_help':
+        '此待生效证书由上方 Root CA 签发。请先信任再应用；已信任当前 Runtime 统一根证书的客户端无需重复导入 CA。固定指纹的客户端仍需更新为此证书指纹。再次生成仅替换 HTTPS 证书，不更换 Root CA。',
+    'settings.server_certificate.pending_download': '下载待生效证书',
+    'settings.server_certificate.apply': '应用并立即加载',
+    'settings.server_certificate.confirm_title': '应用新的 HTTPS 证书？',
+    'settings.server_certificate.confirm_detail':
+        '此操作影响所有客户端。无需重启 Docker，新建 TLS 连接会使用新证书；仅信任旧证书或固定旧指纹的客户端将无法重新连接。新证书必须包含当前工作台的访问地址。',
+    'settings.server_certificate.confirm_trust': '我已准备好客户端信任 / 指纹更新，并了解对连接的影响。',
+    'settings.server_certificate.cancel': '取消',
+    'settings.server_certificate.dirty': '地址已修改，请重新生成待生效证书后再应用。',
+    'settings.server_certificate.external':
+        '当前证书不支持在线管理。外部 TLS 文件保持只读；旧版服务端可能需要升级。',
+    'settings.server_certificate.applied':
+        '新证书已应用并在线加载，无需重启。客户端须按其校验方式信任签发 CA（适用于 CA 签发的证书）、显式信任此证书，或更新固定指纹。',
+    'settings.server_certificate.ca_changed':
+        '这份待生效证书仍由旧 CA 签发，请重新生成当前 Root CA 签发的证书后再应用。',
+    'settings.server_certificate.conflict': '证书配置已被其他会话修改。请刷新后重新生成或应用。',
+    'settings.server_certificate.invalid_hosts':
+        '请填写最多 32 个有效 IP / 域名，不含协议、端口、通配符或 0.0.0.0。',
+    'settings.server_certificate.access_host_missing':
+        '新证书必须包含当前工作台的访问地址。请补充该地址并重新生成。',
+    'settings.server_certificate.stage_error': '证书生成或保存失败。本次请求没有改变当前生效证书。',
+    'settings.server_certificate.apply_unknown':
+        '尚未确认应用结果，请勿直接认定失败。请信任已下载的待生效证书，再刷新核对指纹；仍可下载这里展示的待生效证书。',
     'settings.egress.title': '网络出口方案',
     'settings.egress.detail': '统一发布可复用的 SOCKS5 与 DNS 选择；流量策略冻结所选的精确版本。',
     'settings.egress.add': '新建网络出口方案',
@@ -2797,7 +2929,7 @@ final class AppCopy {
         '请求与响应正文、工具参数和 query 按原样保存——写进 prompt 的密钥会被保留。',
     'settings.root_ca.title': '本机根证书',
     'settings.root_ca.detail':
-        'Claude 与 Codex 启动时会直接获得当前证书；其他客户端可在这里为当前 macOS 登录用户安装并信任这张根证书。',
+        '当前 Runtime 的内置 HTTPS 与授权 AI 流量代理共用这张根证书。受支持且已识别的客户端启动时会直接获得它；其他客户端可在这里为当前 macOS 登录用户安装并信任。',
     'settings.root_ca.status.trusted': '已安装并信任',
     'settings.root_ca.status.needs_trust': '已安装，尚未信任',
     'settings.root_ca.status.not_installed': '已生成，尚未安装',
@@ -2814,7 +2946,7 @@ final class AppCopy {
     'settings.root_ca.retry': '重新检查',
     'settings.root_ca.replace.title': '更换证书并重新启动？',
     'settings.root_ca.replace.detail':
-        '已确认当前证书不存在。ViberMate 将安排在下次重启时生成新的本机根证书；已有证据会保留，其他客户端如有需要，需另行信任新证书。',
+        '已确认当前证书不存在。下次重启将生成新的 Runtime Root CA，同时影响 HTTPS 和 AI 流量代理的信任。现有 HTTPS 证书会保留，须重新生成并应用；客户端需信任新根证书，并按需更新固定叶证书指纹。已有证据会保留。',
     'settings.root_ca.confirm': '继续',
     'settings.root_ca.guide.remove':
         '在“钥匙串访问”中打开“登录”钥匙串→“证书”，用上方 SHA-256 指纹核对“ViberMate Local Root”，仅删除匹配项；然后回到这里重新检查。',

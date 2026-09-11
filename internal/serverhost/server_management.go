@@ -12,6 +12,7 @@ import (
 // Server router; this adapter only dispatches the already-authorized request.
 type serverManagementRouter struct {
 	access       http.Handler
+	certificate  http.Handler
 	runtimeUsers http.Handler
 }
 
@@ -26,6 +27,8 @@ func (router serverManagementRouter) ServeHTTP(
 	switch {
 	case request.URL.Path == servercontrol.ServerAccessPath:
 		router.access.ServeHTTP(writer, request)
+	case servercontrol.ServerCertificateRoute(request.URL.Path) && router.certificate != nil:
+		router.certificate.ServeHTTP(writer, request)
 	case request.URL.Path == servercontrol.RuntimeUsersPath ||
 		strings.HasPrefix(request.URL.Path, servercontrol.RuntimeUsersPath+"/"):
 		router.runtimeUsers.ServeHTTP(writer, request)

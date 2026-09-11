@@ -3,6 +3,7 @@ import CryptoKit
 import Darwin
 import FlutterMacOS
 import Security
+import UniformTypeIdentifiers
 
 enum WorkbenchWindowTheme: String {
   case system
@@ -48,6 +49,7 @@ class MainFlutterWindow: NSWindow {
   private var preferencesBridge: WorkbenchPreferencesBridge?
   private var rootTrustInstallerChannel: FlutterMethodChannel?
   private var rootTrustInstaller: RootTrustInstaller?
+  private var publicCertificateChannel: FlutterMethodChannel?
 
   override func awakeFromNib() {
     let flutterViewController = FlutterViewController()
@@ -87,6 +89,15 @@ class MainFlutterWindow: NSWindow {
       self?.handleRootTrustInstaller(call: call, result: result)
     }
     self.rootTrustInstallerChannel = rootInstallerChannel
+
+    let certificateChannel = FlutterMethodChannel(
+      name: "io.vibermate.desktop/public-certificate",
+      binaryMessenger: flutterViewController.engine.binaryMessenger
+    )
+    certificateChannel.setMethodCallHandler { [weak self] call, result in
+      self?.handlePublicCertificate(call: call, result: result)
+    }
+    self.publicCertificateChannel = certificateChannel
 
     super.awakeFromNib()
     self.sharingType = .readOnly
@@ -169,6 +180,54 @@ class MainFlutterWindow: NSWindow {
 
   private func applyWindowTheme(_ theme: WorkbenchWindowTheme) {
     theme.apply(to: self)
+  }
+
+  private func handlePublicCertificate(call: FlutterMethodCall, result: @escaping FlutterResult) {
+    guard call.method == "saveServerCertificate" else {
+      result(FlutterMethodNotImplemented)
+      return
+    }
+    guard let arguments = call.arguments as? [String: Any],
+          Set(arguments.keys).isSubset(of: ["certificatePem", "fileName"]),
+          let fileName = (arguments["fileName"] ?? "vibermate-server.crt") as? String,
+          ["vibermate-server.crt", "vibermate-server-ca.crt", "vibermate-ca.crt"].contains(fileName),
+          let pem = arguments["certificatePem"] as? String,
+          pem.utf8.count <= 6 * 1024 * 1024,
+          let expression = try? NSRegularExpression(
+            pattern: "-----BEGIN CERTIFICATE-----\\r?\\n([A-Za-z0-9+/=\\r\\n]+)-----END CERTIFICATE-----"
+          ) else {
+      result(preferencesError("invalid_arguments", "Public certificate is invalid"))
+      return
+    }
+    let fullRange = NSRange(pem.startIndex..<pem.endIndex, in: pem)
+    let matches = expression.matches(in: pem, range: fullRange)
+    let remainder = expression.stringByReplacingMatches(in: pem, range: fullRange, withTemplate: "")
+    guard !matches.isEmpty, remainder.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+          matches.allSatisfy({ match in
+            guard let range = Range(match.range(at: 1), in: pem),
+                  let data = Data(base64Encoded: String(pem[range]), options: .ignoreUnknownCharacters)
+            else { return false }
+            return SecCertificateCreateWithData(nil, data as CFData) != nil
+          }) else {
+      result(preferencesError("invalid_arguments", "Only public X.509 certificates can be exported"))
+      return
+    }
+    let panel = NSSavePanel()
+    panel.nameFieldStringValue = fileName
+    panel.allowedContentTypes = [UTType(filenameExtension: "crt") ?? .data]
+    panel.canCreateDirectories = true
+    panel.beginSheetModal(for: self) { response in
+      guard response == .OK, let url = panel.url else {
+        result(false)
+        return
+      }
+      do {
+        try pem.write(to: url, atomically: true, encoding: .utf8)
+        result(true)
+      } catch {
+        result(FlutterError(code: "write_failed", message: "Certificate could not be saved", details: nil))
+      }
+    }
   }
 
   func prepareForApplicationTermination() throws {

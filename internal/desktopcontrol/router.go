@@ -228,6 +228,7 @@ func (router *Router) ServeHTTP(
 
 func serverManagementPath(path string) bool {
 	return path == servercontrol.ServerAccessPath ||
+		servercontrol.ServerCertificateRoute(path) ||
 		path == servercontrol.RuntimeUsersPath ||
 		strings.HasPrefix(path, servercontrol.RuntimeUsersPath+"/")
 }

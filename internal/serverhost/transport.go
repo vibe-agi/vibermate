@@ -2,12 +2,15 @@ package serverhost
 
 import (
 	"context"
+	"crypto/ecdsa"
 	"errors"
 	"io"
+	"log"
 	"net"
 	"path/filepath"
 	"time"
 
+	"github.com/vibe-agi/vibermate/internal/productruntime"
 	"github.com/vibe-agi/vibermate/internal/serveridentity"
 )
 
@@ -23,11 +26,21 @@ type TransportOptions struct {
 	Mode            TransportMode
 	CertificateFile string
 	PrivateKeyFile  string
+	// TLSHosts seeds a new identity only; persisted UI settings win on restart.
+	TLSHosts []string
 }
 
 func (options TransportOptions) Valid() bool { return options.validate() == nil }
 
 func (options TransportOptions) validate() error {
+	if len(options.TLSHosts) != 0 {
+		if options.Mode != TransportSelfSignedTLS {
+			return errors.New("TLS hosts apply only to self_signed_tls transport")
+		}
+		if _, err := serveridentity.NormalizeHosts(options.TLSHosts); err != nil {
+			return err
+		}
+	}
 	switch options.Mode {
 	case TransportHTTP, TransportSelfSignedTLS:
 		if options.CertificateFile != "" || options.PrivateKeyFile != "" {
@@ -54,6 +67,18 @@ type preparedTransport struct {
 	listener    net.Listener
 	scheme      string
 	fingerprint string
+	identity    serveridentity.Identity
+	manager     *serveridentity.Manager
+}
+
+type runtimeCertificateAuthority struct{ runtime *productruntime.Runtime }
+
+func (ca runtimeCertificateAuthority) CertificatePEM() []byte {
+	return ca.runtime.LocalRootCertificate().CertificatePEM()
+}
+
+func (ca runtimeCertificateAuthority) SignServerCertificate(ctx context.Context, key *ecdsa.PublicKey, hosts []string) ([]byte, error) {
+	return ca.runtime.SignServerCertificate(ctx, key, hosts)
 }
 
 func prepareTransport(
@@ -62,7 +87,8 @@ func prepareTransport(
 	options TransportOptions,
 	dataDirectory string,
 	random io.Reader,
-	now time.Time,
+	now func() time.Time,
+	issuer serveridentity.CertificateAuthority,
 ) (preparedTransport, error) {
 	if ctx == nil || listener == nil || options.validate() != nil {
 		return preparedTransport{}, errors.New("Runtime Server transport is invalid")
@@ -72,21 +98,27 @@ func prepareTransport(
 	}
 	var (
 		identity serveridentity.Identity
+		manager  *serveridentity.Manager
 		err      error
 	)
 	if options.Mode == TransportTLSFiles {
 		identity, err = serveridentity.OpenFiles(
 			options.CertificateFile,
 			options.PrivateKeyFile,
-			now,
+			now(),
 		)
 	} else {
-		identity, err = serveridentity.Open(
+		manager, err = serveridentity.OpenManager(
 			ctx,
 			filepath.Join(dataDirectory, "server-transport"),
 			random,
 			now,
+			issuer,
+			options.TLSHosts...,
 		)
+		if err == nil {
+			identity = manager.Current()
+		}
 	}
 	if err != nil {
 		return preparedTransport{}, err
@@ -95,9 +127,16 @@ func prepareTransport(
 	if err != nil {
 		return preparedTransport{}, err
 	}
+	tlsListener := newTLSListener(listener, certificate)
+	if manager != nil {
+		tlsListener = newManagedTLSListener(listener, manager)
+		log.Printf("runtime_root_ca_loaded scope=https_and_traffic caFingerprint=%s", manager.Authority().Fingerprint)
+	}
 	return preparedTransport{
-		listener:    newTLSListener(listener, certificate),
+		listener:    tlsListener,
 		scheme:      "https",
 		fingerprint: identity.Fingerprint(),
+		identity:    identity,
+		manager:     manager,
 	}, nil
 }

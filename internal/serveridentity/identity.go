@@ -1,7 +1,6 @@
 // Package serveridentity owns the persistent TLS identity of one ViberMate
-// Runtime Server. It is deliberately separate from the interception Root CA:
-// trusting the Server transport never grants authority to mint upstream leaf
-// certificates, and replacing one identity cannot silently replace the other.
+// Runtime Server. Managed leaves use the ProductRuntime's shared Root CA;
+// this package owns only listener keys and never stores a second signing key.
 package serveridentity
 
 import (
@@ -38,9 +37,10 @@ const (
 var ErrInvalidIdentity = errors.New("Runtime Server TLS identity is invalid")
 
 type document struct {
-	Schema         string `json:"schema"`
-	CertificatePEM string `json:"certificatePem"`
-	PrivateKeyPEM  string `json:"privateKeyPem"`
+	Schema               string `json:"schema"`
+	CertificatePEM       string `json:"certificatePem"`
+	PrivateKeyPEM        string `json:"privateKeyPem"`
+	IssuerCertificatePEM string `json:"issuerCertificatePem,omitempty"`
 }
 
 type Identity struct {
@@ -48,12 +48,16 @@ type Identity struct {
 	fingerprint string
 }
 
-func Open(ctx context.Context, dataDirectory string, random io.Reader, now time.Time) (Identity, error) {
+func Open(ctx context.Context, dataDirectory string, random io.Reader, now time.Time, hosts ...string) (Identity, error) {
 	if ctx == nil || dataDirectory == "" || !filepath.IsAbs(dataDirectory) ||
 		filepath.Clean(dataDirectory) != dataDirectory || random == nil || now.IsZero() {
 		return Identity{}, ErrInvalidIdentity
 	}
 	if err := ctx.Err(); err != nil {
+		return Identity{}, err
+	}
+	names, err := NormalizeHosts(hosts)
+	if err != nil {
 		return Identity{}, err
 	}
 	if err := os.MkdirAll(dataDirectory, 0o700); err != nil {
@@ -64,13 +68,21 @@ func Open(ctx context.Context, dataDirectory string, random io.Reader, now time.
 	}
 	path := filepath.Join(dataDirectory, identityName)
 	payload, err := os.ReadFile(path)
+	var previous []byte
 	switch {
 	case err == nil:
-		return parseDocument(payload, now.UTC())
+		identity, parseErr := parseDocument(payload, now.UTC())
+		if parseErr != nil {
+			return Identity{}, parseErr
+		}
+		if identityMatchesHosts(identity, names) {
+			return identity, nil
+		}
+		previous = payload
 	case !errors.Is(err, os.ErrNotExist):
 		return Identity{}, fmt.Errorf("read Runtime Server TLS identity: %w", err)
 	}
-	doc, identity, err := createDocument(random, now.UTC())
+	doc, identity, err := createDocument(random, now.UTC(), hosts...)
 	if err != nil {
 		return Identity{}, err
 	}
@@ -101,6 +113,11 @@ func Open(ctx context.Context, dataDirectory string, random io.Reader, now time.
 	}
 	if err := temporary.Close(); err != nil {
 		return Identity{}, err
+	}
+	if len(previous) != 0 {
+		if err := preservePreviousIdentity(path+".previous", previous); err != nil {
+			return Identity{}, fmt.Errorf("preserve previous Runtime Server identity: %w", err)
+		}
 	}
 	if err := os.Rename(temporaryPath, path); err != nil {
 		if errors.Is(err, os.ErrExist) {
@@ -167,12 +184,29 @@ func (identity Identity) Certificate() (tls.Certificate, error) {
 
 func (identity Identity) Fingerprint() string { return identity.fingerprint }
 
+// CertificatePEM exports only the public chain loaded by the active listener.
+func (identity Identity) CertificatePEM() []byte {
+	var public bytes.Buffer
+	for _, der := range identity.certificate.Certificate {
+		_ = pem.Encode(&public, &pem.Block{Type: "CERTIFICATE", Bytes: der})
+	}
+	return public.Bytes()
+}
+
 func (identity Identity) Valid() bool {
 	return len(identity.certificate.Certificate) >= 1 &&
 		identity.certificate.PrivateKey != nil && len(identity.fingerprint) == sha256.Size*2
 }
 
-func createDocument(source io.Reader, now time.Time) (document, Identity, error) {
+func createDocument(source io.Reader, now time.Time, hosts ...string) (document, Identity, error) {
+	return createLeafDocument(context.Background(), source, now, nil, hosts...)
+}
+
+func createLeafDocument(ctx context.Context, source io.Reader, now time.Time, ca *authority, hosts ...string) (document, Identity, error) {
+	names, err := NormalizeHosts(hosts)
+	if err != nil {
+		return document{}, Identity{}, err
+	}
 	key, err := ecdsa.GenerateKey(elliptic.P256(), source)
 	if err != nil {
 		return document{}, Identity{}, fmt.Errorf("generate Runtime Server TLS key: %w", err)
@@ -186,16 +220,30 @@ func createDocument(source io.Reader, now time.Time) (document, Identity, error)
 		serial.SetInt64(1)
 	}
 	template := &x509.Certificate{
-		SerialNumber: serial,
-		Subject:      pkix.Name{CommonName: "ViberMate Runtime Server"},
-		NotBefore:    now.Add(-5 * time.Minute),
-		NotAfter:     now.Add(10 * 365 * 24 * time.Hour),
-		KeyUsage:     x509.KeyUsageDigitalSignature,
-		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
-		DNSNames:     []string{"localhost"},
-		IPAddresses:  []net.IP{net.ParseIP("127.0.0.1"), net.ParseIP("::1")},
+		SerialNumber:          serial,
+		Subject:               pkix.Name{CommonName: "ViberMate Runtime Server"},
+		NotBefore:             now.Add(-5 * time.Minute),
+		NotAfter:              now.Add(10 * 365 * 24 * time.Hour),
+		KeyUsage:              x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		BasicConstraintsValid: true,
 	}
-	der, err := x509.CreateCertificate(source, template, template, &key.PublicKey, key)
+	for _, name := range names {
+		if address := net.ParseIP(name); address != nil {
+			template.IPAddresses = append(template.IPAddresses, address)
+		} else {
+			template.DNSNames = append(template.DNSNames, name)
+		}
+	}
+	var der []byte
+	if ca != nil {
+		if err := ca.validate(now); err != nil {
+			return document{}, Identity{}, err
+		}
+		der, err = ca.issuer.SignServerCertificate(ctx, &key.PublicKey, hosts)
+	} else {
+		der, err = x509.CreateCertificate(source, template, template, &key.PublicKey, key)
+	}
 	if err != nil {
 		return document{}, Identity{}, fmt.Errorf("create Runtime Server TLS certificate: %w", err)
 	}
@@ -203,25 +251,39 @@ func createDocument(source io.Reader, now time.Time) (document, Identity, error)
 	if err != nil {
 		return document{}, Identity{}, err
 	}
+	defer clear(privateDER)
 	certificatePEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
 	privatePEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: privateDER})
+	defer clear(privatePEM)
 	doc := document{
 		Schema:         identitySchema,
 		CertificatePEM: string(certificatePEM),
 		PrivateKeyPEM:  string(privatePEM),
 	}
+	if ca != nil {
+		doc.IssuerCertificatePEM = string(ca.public.CertificatePEM)
+	}
 	identity, err := parseDocument(mustJSON(doc), now)
+	if err == nil && ca != nil {
+		if !ca.signs(identity) || !identityMatchesHosts(identity, names) {
+			return document{}, Identity{}, ErrInvalidAuthority
+		}
+	}
 	return doc, identity, err
 }
 
 func parseDocument(payload []byte, now time.Time) (Identity, error) {
+	return parseIdentityDocument(payload, now, identitySchema)
+}
+
+func parseIdentityDocument(payload []byte, now time.Time, schema string) (Identity, error) {
 	if len(payload) == 0 || len(payload) > maxIdentitySize {
 		return Identity{}, ErrInvalidIdentity
 	}
 	var doc document
 	decoder := json.NewDecoder(bytes.NewReader(payload))
 	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&doc); err != nil || doc.Schema != identitySchema {
+	if err := decoder.Decode(&doc); err != nil || doc.Schema != schema {
 		return Identity{}, ErrInvalidIdentity
 	}
 	var trailing any

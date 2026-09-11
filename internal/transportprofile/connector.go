@@ -104,14 +104,13 @@ func (connector *Connector) Connect(
 	}
 
 	var failures []error
-	fallbackReason := FallbackNone
 	for index, template := range templates {
 		evidence.fallbackChain = append(
 			evidence.fallbackChain,
 			profileEvidence(template),
 		)
-		if index > 0 && fallbackReason == FallbackNone {
-			fallbackReason = FallbackClientHelloUnsupported
+		if index > 0 && evidence.fallbackReason == FallbackNone {
+			evidence.fallbackReason = FallbackClientHelloUnsupported
 		}
 		switch template.Source() {
 		case wireprofile.TransportFingerprintObservedClient:
@@ -122,7 +121,7 @@ func (connector *Connector) Connect(
 			)
 			if err != nil {
 				failures = append(failures, err)
-				fallbackReason = reason
+				evidence.fallbackReason = reason
 				continue
 			}
 			connection, negotiated, err := connector.connectCustom(
@@ -130,23 +129,23 @@ func (connector *Connector) Connect(
 				request,
 				spec,
 				offered,
+				template.HTTPTransport(),
 			)
 			if err == nil {
 				evidence.effective = profileEvidence(template)
-				evidence.fallbackReason = fallbackReason
 				evidence.upstreamOfferedALPN = offered
 				evidence.upstreamNegotiatedALPN = negotiated
 				evidence.httpTransport = template.HTTPTransport()
 				return connection, evidence, nil
 			}
 			failures = append(failures, err)
+			evidence.fallbackReason = FallbackObservedTLSHandshakeRejected
 			if strictVerificationFailure(err) || ctx.Err() != nil {
 				return nil, evidence, errors.Join(
 					ErrNoTransportProfile,
 					errors.Join(failures...),
 				)
 			}
-			fallbackReason = FallbackObservedTLSHandshakeRejected
 		case wireprofile.TransportFingerprintCaptured:
 			spec, offered, err := prepareCapturedSpec(
 				template,
@@ -154,7 +153,7 @@ func (connector *Connector) Connect(
 			)
 			if err != nil {
 				failures = append(failures, err)
-				fallbackReason = FallbackClientHelloUnsupported
+				evidence.fallbackReason = FallbackClientHelloUnsupported
 				continue
 			}
 			connection, negotiated, err := connector.connectCustom(
@@ -162,23 +161,23 @@ func (connector *Connector) Connect(
 				request,
 				spec,
 				offered,
+				template.HTTPTransport(),
 			)
 			if err == nil {
 				evidence.effective = profileEvidence(template)
-				evidence.fallbackReason = fallbackReason
 				evidence.upstreamOfferedALPN = slices.Clone(offered)
 				evidence.upstreamNegotiatedALPN = negotiated
 				evidence.httpTransport = template.HTTPTransport()
 				return connection, evidence, nil
 			}
 			failures = append(failures, err)
+			evidence.fallbackReason = FallbackCapturedTLSHandshakeRejected
 			if strictVerificationFailure(err) || ctx.Err() != nil {
 				return nil, evidence, errors.Join(
 					ErrNoTransportProfile,
 					errors.Join(failures...),
 				)
 			}
-			fallbackReason = FallbackCapturedTLSHandshakeRejected
 		case wireprofile.TransportFingerprintStandard:
 			offered := templateALPN(template)
 			connection, negotiated, err := connector.connectStandard(
@@ -188,13 +187,13 @@ func (connector *Connector) Connect(
 			)
 			if err == nil {
 				evidence.effective = profileEvidence(template)
-				evidence.fallbackReason = fallbackReason
 				evidence.upstreamOfferedALPN = slices.Clone(offered)
 				evidence.upstreamNegotiatedALPN = negotiated
 				evidence.httpTransport = template.HTTPTransport()
 				return connection, evidence, nil
 			}
 			failures = append(failures, err)
+			evidence.fallbackReason = FallbackStandardTLSHandshakeRejected
 			if strictVerificationFailure(err) || ctx.Err() != nil {
 				return nil, evidence, errors.Join(
 					ErrNoTransportProfile,
@@ -347,7 +346,14 @@ func prepareObservedSpec(
 	}
 	allowed := templateALPN(template)
 	offered := intersectALPN(observation.offeredALPN, allowed)
-	if len(offered) == 0 {
+	// Like the downstream listener, an HTTP/1.1 plan accepts a valid client
+	// that omits ALPN. Preserve the absence of the extension rather than
+	// inventing a protocol offer. An incompatible offer is not the same as
+	// an absent offer, and an HTTP/2 plan must still explicitly negotiate h2.
+	implicitHTTP1 := len(observation.offeredALPN) == 0 &&
+		template.HTTPTransport() == wireprofile.HTTPTransportHTTP1 &&
+		slices.Equal(allowed, []string{string(wireprofile.ApplicationProtocolHTTP1)})
+	if len(offered) == 0 && !implicitHTTP1 {
 		return nil, nil, FallbackApplicationProtocolMissing,
 			errors.New("observed ClientHello has no supported ALPN")
 	}
@@ -391,9 +397,13 @@ func prepareObservedSpec(
 			sanitized = append(sanitized, extension)
 		}
 	}
-	if !hasSNI || !hasALPN {
+	if !hasSNI {
 		return nil, nil, FallbackClientHelloUnsupported,
-			errors.New("observed ClientHello lacks SNI or ALPN")
+			errors.New("observed ClientHello lacks SNI")
+	}
+	if hasALPN != (len(offered) != 0) {
+		return nil, nil, FallbackClientHelloUnsupported,
+			errors.New("observed ClientHello ALPN extension is inconsistent")
 	}
 	spec.Extensions = sanitized
 	spec.GetSessionID = nil
@@ -462,6 +472,7 @@ func (connector *Connector) connectCustom(
 	request ConnectRequest,
 	spec *utls.ClientHelloSpec,
 	alpn []string,
+	httpTransport wireprofile.HTTPTransportKind,
 ) (net.Conn, string, error) {
 	raw, err := connector.dialer.DialContext(
 		ctx,
@@ -491,7 +502,11 @@ func (connector *Connector) connectCustom(
 		return nil, "", err
 	}
 	negotiated := secured.ConnectionState().NegotiatedProtocol
-	if len(alpn) != 1 || negotiated != alpn[0] {
+	protocolMatches := len(alpn) == 1 && negotiated == alpn[0]
+	if httpTransport == wireprofile.HTTPTransportHTTP1 && len(alpn) == 0 {
+		protocolMatches = negotiated == ""
+	}
+	if !protocolMatches {
 		_ = secured.Close()
 		return nil, negotiated, errors.New(
 			"upstream TLS negotiated an unexpected application protocol",

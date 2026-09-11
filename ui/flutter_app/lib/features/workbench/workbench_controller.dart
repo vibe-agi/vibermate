@@ -7,6 +7,7 @@ import 'package:flutter/foundation.dart';
 import '../../core/api/control_api.dart';
 import '../../core/api/control_models.dart';
 import '../../core/bootstrap/root_trust_installer.dart';
+import '../../core/bootstrap/public_certificate_exporter.dart';
 import '../../core/bootstrap/runtime_connection.dart';
 import '../../core/bootstrap/terminal_command.dart';
 import '../../core/preferences/workbench_preferences.dart';
@@ -30,6 +31,8 @@ final class WorkbenchController extends ChangeNotifier {
     this.terminalManagement = true,
     this.rootTrustManagement = false,
     RootTrustInstaller? rootTrustInstaller,
+    PublicCertificateExporter certificateExporter =
+        const PlatformPublicCertificateExporter(),
     this.runtimeTarget = 'This Mac',
     Future<void> Function()? restartRuntime,
     WorkbenchPreferences initialPreferences = const WorkbenchPreferences(),
@@ -45,6 +48,7 @@ final class WorkbenchController extends ChangeNotifier {
   }) : _api = api,
        _terminalCommands = terminalCommands,
        _rootTrustInstaller = rootTrustInstaller,
+       _certificateExporter = certificateExporter,
        _closeRuntime = closeRuntime,
        _restartRuntime = restartRuntime,
        _clock = clock ?? DateTime.now,
@@ -69,6 +73,7 @@ final class WorkbenchController extends ChangeNotifier {
   final ControlApi _api;
   final TerminalCommandService _terminalCommands;
   final RootTrustInstaller? _rootTrustInstaller;
+  final PublicCertificateExporter _certificateExporter;
   final Future<void> Function() _closeRuntime;
   final Future<void> Function()? _restartRuntime;
   final DateTime Function() _clock;
@@ -101,6 +106,21 @@ final class WorkbenchController extends ChangeNotifier {
   }
 
   String get runtimeWebURL => '$runtimeServerURL/';
+
+  Future<RuntimeServerCertificate> loadServerCertificate() =>
+      _api.serverCertificate();
+
+  Future<bool> saveServerCertificate(PublicCertificate certificate) =>
+      _certificateExporter.save(certificate);
+
+  Future<RuntimeServerCertificate> stageServerCertificate(
+    RuntimeServerCertificate current,
+    List<String> hosts,
+  ) => _api.stageServerCertificate(current, hosts);
+
+  Future<RuntimeServerCertificate> applyServerCertificate(
+    RuntimeServerCertificate current,
+  ) => _api.applyServerCertificate(current);
 
   DashboardData? data;
   NetworkData? networkData;

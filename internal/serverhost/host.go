@@ -24,6 +24,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/runtimeusage"
 	"github.com/vibe-agi/vibermate/internal/serveradmin"
 	"github.com/vibe-agi/vibermate/internal/servercontrol"
+	"github.com/vibe-agi/vibermate/internal/serveridentity"
 )
 
 type synchronizedReader struct {
@@ -55,18 +56,19 @@ type Status struct {
 }
 
 type Host struct {
-	runtime        *productruntime.Runtime
-	admin          *serveradmin.Authority
-	guard          *instanceguard.Guard
-	listener       net.Listener
-	server         *http.Server
-	address        string
-	scheme         string
-	fingerprint    string
-	shutdown       time.Duration
-	managementUI   bool
-	ownsRuntime    bool
-	managementHTTP http.Handler
+	runtime            *productruntime.Runtime
+	admin              *serveradmin.Authority
+	guard              *instanceguard.Guard
+	listener           net.Listener
+	server             *http.Server
+	address            string
+	scheme             string
+	fingerprint        string
+	certificateManager *serveridentity.Manager
+	shutdown           time.Duration
+	managementUI       bool
+	ownsRuntime        bool
+	managementHTTP     http.Handler
 
 	done       chan struct{}
 	shutdownMu sync.Mutex
@@ -280,7 +282,8 @@ func startAttached(
 		options.Transport,
 		options.DataDirectory,
 		options.SecurityRandom,
-		options.Clock.Now().UTC(),
+		options.Clock.Now,
+		runtimeCertificateAuthority{runtime: runtime},
 	)
 	if err != nil {
 		return nil, err
@@ -300,22 +303,32 @@ func startAttached(
 	localManagement := serverManagementRouter{
 		access: serverAccess, runtimeUsers: localRuntimeUsers,
 	}
+	serverCertificate, err := servercontrol.NewServerCertificate(string(options.Transport.Mode), transport.identity)
+	if err == nil && transport.manager != nil {
+		serverCertificate = servercontrol.NewManagedServerCertificate(transport.manager)
+	}
+	if err != nil {
+		return nil, err
+	}
+	localManagement.certificate = serverCertificate
 	host := &Host{
 		runtime: runtime, admin: admin,
 		guard:    guard,
 		listener: transport.listener, address: listener.Addr().String(),
 		scheme: transport.scheme, fingerprint: transport.fingerprint,
-		shutdown:       options.ShutdownTimeout,
-		managementUI:   managementUI != nil,
-		ownsRuntime:    ownsRuntime,
-		managementHTTP: localManagement,
-		done:           make(chan struct{}),
+		certificateManager: transport.manager,
+		shutdown:           options.ShutdownTimeout,
+		managementUI:       managementUI != nil,
+		ownsRuntime:        ownsRuntime,
+		managementHTTP:     localManagement,
+		done:               make(chan struct{}),
 	}
 	host.server = &http.Server{
 		Handler: router{
 			scheme:       transport.scheme,
 			userSessions: userSessions, runtimeUsers: runtimeUsers, access: serverAccess,
-			capture: capture, proxy: runtime.ProxyHandler(),
+			certificate: serverCertificate,
+			capture:     capture, proxy: runtime.ProxyHandler(),
 			adminSessions: adminSessions, admin: admin,
 			webSessions: webSessions, webSelf: webSelf,
 			application: application, managementUI: managementUI,
@@ -343,12 +356,16 @@ func (host *Host) Status() Status {
 	if host == nil || host.runtime == nil {
 		return Status{}
 	}
+	fingerprint := host.fingerprint
+	if host.certificateManager != nil {
+		fingerprint = host.certificateManager.Current().Fingerprint()
+	}
 	return Status{
 		Ready:           host.runtime.Status().State == productruntime.RuntimeStateInitialized,
 		InstanceID:      host.runtime.Status().InstanceID,
 		ListenAddress:   host.address,
 		Scheme:          host.scheme,
-		TLSFingerprint:  host.fingerprint,
+		TLSFingerprint:  fingerprint,
 		RecoveryKeyPath: host.admin.AccessKeyPath(),
 		ManagementUI:    host.managementUI,
 	}

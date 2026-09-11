@@ -2,6 +2,7 @@ package productruntime
 
 import (
 	"context"
+	"crypto/ecdsa"
 	"errors"
 	"fmt"
 	"io"
@@ -991,6 +992,7 @@ type localCABuildRequest struct {
 type localCARuntime interface {
 	loopbackproxy.CertificateAuthority
 	Certificate() localca.RootCertificate
+	SignServerCertificate(context.Context, *ecdsa.PublicKey, []string) ([]byte, error)
 	Shutdown(context.Context) error
 }
 

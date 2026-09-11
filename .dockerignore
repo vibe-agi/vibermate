@@ -1,0 +1,6 @@
+# Release-based image: never send source, credentials, or runtime data to Docker.
+**
+!Dockerfile
+!dist/
+!dist/docker/
+!dist/docker/**

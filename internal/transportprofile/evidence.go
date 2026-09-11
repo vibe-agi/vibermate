@@ -15,6 +15,7 @@ const (
 	FallbackApplicationProtocolMissing   FallbackReason = "application_protocol_unavailable"
 	FallbackObservedTLSHandshakeRejected FallbackReason = "observed_tls_handshake_rejected"
 	FallbackCapturedTLSHandshakeRejected FallbackReason = "captured_tls_handshake_rejected"
+	FallbackStandardTLSHandshakeRejected FallbackReason = "standard_tls_handshake_rejected"
 )
 
 type ProfileEvidence struct {
@@ -49,12 +50,14 @@ func (evidence Evidence) FallbackChain() []ProfileEvidence {
 	return slices.Clone(evidence.fallbackChain)
 }
 
+// FallbackReason also retains the final candidate's redacted failure reason
+// when no profile succeeds. Its presence alone does not imply a fallback ran.
 func (evidence Evidence) FallbackReason() FallbackReason {
 	return evidence.fallbackReason
 }
 
 func (evidence Evidence) UsedFallback() bool {
-	return evidence.fallbackReason != FallbackNone
+	return len(evidence.fallbackChain) > 1
 }
 
 func (evidence Evidence) ClientOfferedALPN() []string {
