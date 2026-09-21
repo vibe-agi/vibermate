@@ -11,10 +11,7 @@ final class PlatformPublicCertificateExporter
   const PlatformPublicCertificateExporter();
 
   @override
-  Future<bool> save(PublicCertificate certificate) async {
-    if (!certificate.available) {
-      throw StateError('server certificate unavailable');
-    }
+  Future<bool> save(RuntimeRootCertificate certificate) async {
     final blob = web.Blob(
       [certificate.certificatePem.toJS].toJS,
       web.BlobPropertyBag(type: 'application/x-pem-file'),

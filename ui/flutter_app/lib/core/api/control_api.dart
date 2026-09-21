@@ -152,16 +152,7 @@ abstract interface class ControlApi {
 
   Future<RuntimeServerAccess> serverAccess();
 
-  Future<RuntimeServerCertificate> serverCertificate();
-
-  Future<RuntimeServerCertificate> stageServerCertificate(
-    RuntimeServerCertificate current,
-    List<String> hosts,
-  );
-
-  Future<RuntimeServerCertificate> applyServerCertificate(
-    RuntimeServerCertificate current,
-  );
+  Future<RuntimeRootCertificate> runtimeRootCA();
 
   Future<List<RuntimeUser>> runtimeUsers();
 
@@ -1118,53 +1109,11 @@ final class HttpControlApi implements ControlApi {
       );
 
   @override
-  Future<RuntimeServerCertificate> serverCertificate() async =>
-      RuntimeServerCertificate.fromJson(
-        await _read(
-          '/api/v1/server/certificate',
-          maximumResponseBytes: 8 * 1024 * 1024,
-        ),
-        'serverCertificate',
+  Future<RuntimeRootCertificate> runtimeRootCA() async =>
+      RuntimeRootCertificate.fromJson(
+        await _read('/api/v1/server/root-ca', maximumResponseBytes: 128 * 1024),
+        'runtimeRootCA',
       );
-
-  @override
-  Future<RuntimeServerCertificate> stageServerCertificate(
-    RuntimeServerCertificate current,
-    List<String> hosts,
-  ) async => RuntimeServerCertificate.fromJson(
-    await _command(
-      'POST',
-      '/api/v1/server/certificate/stage',
-      body: {
-        'schema': 'vibermate-server-certificate-stage-v1',
-        'hosts': hosts,
-        'expectedFingerprint': current.fingerprint,
-        'expectedPendingFingerprint': current.pending?.fingerprint ?? '',
-      },
-    ),
-    'serverCertificate',
-  );
-
-  @override
-  Future<RuntimeServerCertificate> applyServerCertificate(
-    RuntimeServerCertificate current,
-  ) async {
-    if (current.pending == null) {
-      throw StateError('no pending server certificate');
-    }
-    return RuntimeServerCertificate.fromJson(
-      await _command(
-        'POST',
-        '/api/v1/server/certificate/apply',
-        body: {
-          'schema': 'vibermate-server-certificate-apply-v1',
-          'expectedFingerprint': current.fingerprint,
-          'pendingFingerprint': current.pending!.fingerprint,
-        },
-      ),
-      'serverCertificate',
-    );
-  }
 
   @override
   Future<List<RuntimeUser>> runtimeUsers() async {

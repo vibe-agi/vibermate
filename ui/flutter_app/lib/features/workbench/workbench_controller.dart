@@ -107,20 +107,10 @@ final class WorkbenchController extends ChangeNotifier {
 
   String get runtimeWebURL => '$runtimeServerURL/';
 
-  Future<RuntimeServerCertificate> loadServerCertificate() =>
-      _api.serverCertificate();
+  Future<RuntimeRootCertificate> loadRuntimeRootCA() => _api.runtimeRootCA();
 
-  Future<bool> saveServerCertificate(PublicCertificate certificate) =>
+  Future<bool> saveRuntimeRootCA(RuntimeRootCertificate certificate) =>
       _certificateExporter.save(certificate);
-
-  Future<RuntimeServerCertificate> stageServerCertificate(
-    RuntimeServerCertificate current,
-    List<String> hosts,
-  ) => _api.stageServerCertificate(current, hosts);
-
-  Future<RuntimeServerCertificate> applyServerCertificate(
-    RuntimeServerCertificate current,
-  ) => _api.applyServerCertificate(current);
 
   DashboardData? data;
   NetworkData? networkData;

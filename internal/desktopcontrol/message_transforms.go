@@ -148,6 +148,9 @@ func runMessageTransformSample(
 	if err != nil {
 		return MessageTransformTestResult{}, err
 	}
+	if _, err := messagetransform.RequestUserAgentOverride(request.Headers, requestOutput.Headers); err != nil {
+		return MessageTransformTestResult{}, err
+	}
 	responseOutput, err := applyMessageTransformTestResponse(ctx, turn, response)
 	if err != nil {
 		return MessageTransformTestResult{}, err
@@ -196,14 +199,14 @@ func resolveMessageTransformSample(
 			errors.New("wire protocol sample is invalid")
 	}
 	return messagetransform.RequestMessage{
-			Method: input.Sample.Request.Method, Path: input.Sample.Request.Path,
-			Headers: input.Sample.Request.Headers.Clone(), Body: []byte(input.Sample.Request.Body),
-		}, messagetransform.ResponseMessage{
-			StatusCode: input.Sample.Response.StatusCode,
-			Streaming:  input.Sample.Response.Streaming,
-			Headers:    input.Sample.Response.Headers.Clone(),
-			Body:       []byte(input.Sample.Response.Body),
-		}, nil
+		Method: input.Sample.Request.Method, Path: input.Sample.Request.Path,
+		Headers: input.Sample.Request.Headers.Clone(), Body: []byte(input.Sample.Request.Body),
+	}, messagetransform.ResponseMessage{
+		StatusCode: input.Sample.Response.StatusCode,
+		Streaming:  input.Sample.Response.Streaming,
+		Headers:    input.Sample.Response.Headers.Clone(),
+		Body:       []byte(input.Sample.Response.Body),
+	}, nil
 }
 
 func transformProtocolPath(protocol string) (string, bool) {
@@ -254,21 +257,41 @@ func applyMessageTransformTestResponse(
 	if len(events) == 0 {
 		return messagetransform.ResponseMessage{}, errors.New("streaming sample contains no SSE event")
 	}
+	logicalHeaders := input.Headers.Clone()
+	if turn.HasResponse() {
+		// SSE samples contain the decoded, logical stream, just like the input
+		// to exchange.newStreamMessageTransformer. Drop the upstream encoding,
+		// framing and validators before the first event, even if only a later
+		// event changes its body. Keep the original sample snapshot untouched.
+		for name := range logicalHeaders {
+			switch strings.ToLower(name) {
+			case "content-encoding", "content-length", "content-md5", "digest", "etag", "transfer-encoding":
+				delete(logicalHeaders, name)
+			}
+		}
+	}
 	var body bytes.Buffer
 	var headers http.Header
+	headersReady := false
 	for _, event := range events {
 		transformed := messagetransform.ResponseMessage{
 			StatusCode: input.StatusCode, Streaming: true, EventName: event.Name,
-			Headers: input.Headers.Clone(), Body: bytes.Clone(event.Data),
+			Headers: logicalHeaders.Clone(), Body: bytes.Clone(event.Data),
 		}
-		if !bytes.Equal(bytes.TrimSpace(event.Data), []byte("[DONE]")) {
+		if bytes.Equal(bytes.TrimSpace(event.Data), []byte("[DONE]")) && headersReady {
+			// Like the live stream transformer, a terminal marker inherits the
+			// established response headers; it does not run JavaScript or reset
+			// headers to the original, potentially lower-case input map.
+			transformed.Headers = headers.Clone()
+		} else if !bytes.Equal(bytes.TrimSpace(event.Data), []byte("[DONE]")) {
 			transformed, err = turn.ApplyResponse(ctx, transformed)
 			if err != nil {
 				return messagetransform.ResponseMessage{}, err
 			}
 		}
-		if headers == nil {
+		if !headersReady {
 			headers = transformed.Headers.Clone()
+			headersReady = true
 		} else if !messageTransformTestHeadersEqual(headers, transformed.Headers) {
 			return messagetransform.ResponseMessage{}, errors.New(
 				"streaming response transform changed Headers after the first event",
@@ -291,12 +314,25 @@ func messageTransformTestHeadersEqual(left, right http.Header) bool {
 	if len(left) != len(right) {
 		return false
 	}
-	for name, values := range left {
-		if !slices.Equal(values, right.Values(name)) {
+	// JSON input need not use Go's canonical header spelling. Compare names
+	// case-insensitively, preserving value order and rejecting ambiguous keys.
+	remaining := make(http.Header, len(right))
+	for name, values := range right {
+		canonical := http.CanonicalHeaderKey(name)
+		if _, duplicate := remaining[canonical]; duplicate {
 			return false
 		}
+		remaining[canonical] = values
 	}
-	return true
+	for name, values := range left {
+		canonical := http.CanonicalHeaderKey(name)
+		other, exists := remaining[canonical]
+		if !exists || !slices.Equal(values, other) {
+			return false
+		}
+		delete(remaining, canonical)
+	}
+	return len(remaining) == 0
 }
 
 func messageTransformSample(
@@ -308,37 +344,37 @@ func messageTransformSample(
 		requestHeaders := headers.Clone()
 		requestHeaders.Set("Anthropic-Version", "2023-06-01")
 		return messagetransform.RequestMessage{
-				Method:  http.MethodPost,
-				Path:    "/v1/messages",
-				Headers: requestHeaders,
-				Body:    []byte(`{"model":"claude-sample","max_tokens":64,"messages":[{"role":"user","content":"Hello from ViberMate"}]}`),
-			}, messagetransform.ResponseMessage{
-				StatusCode: http.StatusOK,
-				Headers:    headers.Clone(),
-				Body:       []byte(`{"id":"msg_sample","type":"message","role":"assistant","model":"claude-sample","content":[{"type":"text","text":"Sample response"}],"stop_reason":"end_turn","stop_sequence":null,"usage":{"input_tokens":8,"output_tokens":3}}`),
-			}, nil
+			Method:  http.MethodPost,
+			Path:    "/v1/messages",
+			Headers: requestHeaders,
+			Body:    []byte(`{"model":"claude-sample","max_tokens":64,"messages":[{"role":"user","content":"Hello from ViberMate"}]}`),
+		}, messagetransform.ResponseMessage{
+			StatusCode: http.StatusOK,
+			Headers:    headers.Clone(),
+			Body:       []byte(`{"id":"msg_sample","type":"message","role":"assistant","model":"claude-sample","content":[{"type":"text","text":"Sample response"}],"stop_reason":"end_turn","stop_sequence":null,"usage":{"input_tokens":8,"output_tokens":3}}`),
+		}, nil
 	case transformProtocolOpenAIResponses:
 		return messagetransform.RequestMessage{
-				Method:  http.MethodPost,
-				Path:    "/v1/responses",
-				Headers: headers.Clone(),
-				Body:    []byte(`{"model":"gpt-sample","input":"Hello from ViberMate","stream":false}`),
-			}, messagetransform.ResponseMessage{
-				StatusCode: http.StatusOK,
-				Headers:    headers.Clone(),
-				Body:       []byte(`{"id":"resp_sample","object":"response","status":"completed","model":"gpt-sample","output":[{"id":"msg_sample","type":"message","role":"assistant","status":"completed","content":[{"type":"output_text","text":"Sample response","annotations":[]}]}],"usage":{"input_tokens":8,"output_tokens":3,"total_tokens":11}}`),
-			}, nil
+			Method:  http.MethodPost,
+			Path:    "/v1/responses",
+			Headers: headers.Clone(),
+			Body:    []byte(`{"model":"gpt-sample","input":"Hello from ViberMate","stream":false}`),
+		}, messagetransform.ResponseMessage{
+			StatusCode: http.StatusOK,
+			Headers:    headers.Clone(),
+			Body:       []byte(`{"id":"resp_sample","object":"response","status":"completed","model":"gpt-sample","output":[{"id":"msg_sample","type":"message","role":"assistant","status":"completed","content":[{"type":"output_text","text":"Sample response","annotations":[]}]}],"usage":{"input_tokens":8,"output_tokens":3,"total_tokens":11}}`),
+		}, nil
 	case transformProtocolOpenAIChat:
 		return messagetransform.RequestMessage{
-				Method:  http.MethodPost,
-				Path:    "/v1/chat/completions",
-				Headers: headers.Clone(),
-				Body:    []byte(`{"model":"gpt-sample","messages":[{"role":"user","content":"Hello from ViberMate"}],"stream":false}`),
-			}, messagetransform.ResponseMessage{
-				StatusCode: http.StatusOK,
-				Headers:    headers.Clone(),
-				Body:       []byte(`{"id":"chatcmpl_sample","object":"chat.completion","model":"gpt-sample","choices":[{"index":0,"message":{"role":"assistant","content":"Sample response"},"finish_reason":"stop"}],"usage":{"prompt_tokens":8,"completion_tokens":3,"total_tokens":11}}`),
-			}, nil
+			Method:  http.MethodPost,
+			Path:    "/v1/chat/completions",
+			Headers: headers.Clone(),
+			Body:    []byte(`{"model":"gpt-sample","messages":[{"role":"user","content":"Hello from ViberMate"}],"stream":false}`),
+		}, messagetransform.ResponseMessage{
+			StatusCode: http.StatusOK,
+			Headers:    headers.Clone(),
+			Body:       []byte(`{"id":"chatcmpl_sample","object":"chat.completion","model":"gpt-sample","choices":[{"index":0,"message":{"role":"assistant","content":"Sample response"},"finish_reason":"stop"}],"usage":{"prompt_tokens":8,"completion_tokens":3,"total_tokens":11}}`),
+		}, nil
 	default:
 		return messagetransform.RequestMessage{}, messagetransform.ResponseMessage{},
 			errors.New("wire protocol has no transform sample")

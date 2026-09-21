@@ -117,11 +117,11 @@ func legacySelfSigned(identity Identity) bool {
 		cert.CheckSignature(cert.SignatureAlgorithm, cert.RawTBSCertificate, cert.Signature) == nil
 }
 
-// migrateAuthority preserves active/pending leaf fingerprints. Public issuer
+// migrateAuthority preserves the active leaf fingerprint. Public issuer
 // provenance lets an explicitly reset Runtime Root coexist with the old HTTPS
-// leaf until the owner prepares trust and applies a replacement. It does not
+// leaf until the operator replaces the transport identity. It does not
 // authorize the old Root for new issuance or for traffic.
-func (manager *Manager) migrateAuthority(active, pending *storedIdentity) error {
+func (manager *Manager) migrateAuthority(active *storedIdentity) error {
 	legacyPath := filepath.Join(manager.directory, authorityName)
 	legacy, err := readStoredDocument(legacyPath, manager.now(), authoritySchema)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -134,35 +134,24 @@ func (manager *Manager) migrateAuthority(active, pending *storedIdentity) error 
 			return err
 		}
 	}
-	type migration struct {
-		name   string
-		stored *storedIdentity
-	}
-	var updates []migration
-	for _, item := range []migration{{identityName, active}, {pendingIdentityName, pending}} {
-		stored := item.stored
-		if stored == nil {
-			continue
-		}
-		if stored.doc.IssuerCertificatePEM != "" {
-			root, err := parseRootCertificate([]byte(stored.doc.IssuerCertificatePEM), manager.now())
-			if err != nil || !certificateSignedBy(stored.identity, root) {
+	needsProvenance := false
+	if active != nil {
+		if active.doc.IssuerCertificatePEM != "" {
+			root, err := parseRootCertificate([]byte(active.doc.IssuerCertificatePEM), manager.now())
+			if err != nil || !certificateSignedBy(active.identity, root) {
 				return ErrInvalidAuthority
 			}
-			continue
+		} else if !legacySelfSigned(active.identity) {
+			switch {
+			case manager.ca.signs(active.identity):
+				active.doc.IssuerCertificatePEM = string(manager.ca.public.CertificatePEM)
+			case certificateSignedBy(active.identity, legacyRoot):
+				active.doc.IssuerCertificatePEM = string(legacy.identity.CertificatePEM())
+			default:
+				return ErrInvalidAuthority
+			}
+			needsProvenance = true
 		}
-		if legacySelfSigned(stored.identity) {
-			continue
-		}
-		switch {
-		case manager.ca.signs(stored.identity):
-			stored.doc.IssuerCertificatePEM = string(manager.ca.public.CertificatePEM)
-		case certificateSignedBy(stored.identity, legacyRoot):
-			stored.doc.IssuerCertificatePEM = string(legacy.identity.CertificatePEM())
-		default:
-			return ErrInvalidAuthority
-		}
-		updates = append(updates, item)
 	}
 	retired := legacyPath + ".retired"
 	if legacy != nil {
@@ -174,11 +163,11 @@ func (manager *Manager) migrateAuthority(active, pending *storedIdentity) error 
 			return err
 		}
 	}
-	for _, item := range updates {
-		if err := manager.backupBeforeMigration(item.name); err != nil {
+	if needsProvenance {
+		if err := manager.backupBeforeMigration(identityName); err != nil {
 			return err
 		}
-		if err := manager.persist(item.name, item.stored.doc); err != nil {
+		if err := manager.persist(identityName, active.doc); err != nil {
 			return err
 		}
 	}

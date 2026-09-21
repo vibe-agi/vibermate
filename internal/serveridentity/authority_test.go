@@ -47,11 +47,11 @@ func openManagerForTest(t *testing.T, ctx context.Context, directory string, ran
 	return OpenManager(ctx, directory, random, now, testRootAuthority(t, directory, now), hosts...)
 }
 
-func TestUnifiedRootIsPersistentAndSignsAddressChanges(t *testing.T) {
+func TestUnifiedRootIsPersistentAndSignsStartupAddresses(t *testing.T) {
 	t.Parallel()
 	ctx, directory := context.Background(), t.TempDir()
 	rootAuthority := testRootAuthority(t, directory, time.Now)
-	manager, err := OpenManager(ctx, directory, rand.Reader, time.Now, rootAuthority)
+	manager, err := OpenManager(ctx, directory, rand.Reader, time.Now, rootAuthority, "192.168.1.20", "192.168.1.30", "runtime.example.test")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -92,22 +92,14 @@ func TestUnifiedRootIsPersistentAndSignsAddressChanges(t *testing.T) {
 		}
 	}
 	verify(manager.Current(), "localhost")
+	initial := manager.Current().Fingerprint()
 	for _, host := range []string{"192.168.1.20", "192.168.1.30", "runtime.example.test"} {
-		old := manager.Current()
-		pending, err := manager.Stage(ctx, []string{host}, old.Fingerprint(), "")
-		if err != nil {
-			t.Fatal(err)
-		}
-		verify(pending, host)
-		if _, err := manager.Apply(ctx, old.Fingerprint(), pending.Fingerprint(), "localhost"); err != nil {
-			t.Fatal(err)
-		}
 		manager, err = OpenManager(ctx, directory, rand.Reader, time.Now, rootAuthority)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if manager.Authority().Fingerprint != ca.Fingerprint {
-			t.Fatal("address change replaced the Root")
+		if manager.Authority().Fingerprint != ca.Fingerprint || manager.Current().Fingerprint() != initial {
+			t.Fatal("restart replaced the Root or HTTPS identity")
 		}
 		verify(manager.Current(), host)
 	}
@@ -120,7 +112,7 @@ func TestUnifiedRootIsPersistentAndSignsAddressChanges(t *testing.T) {
 	}
 }
 
-func TestUnifiedRootUpgradePreservesLegacySelfSignedActiveAndPending(t *testing.T) {
+func TestUnifiedRootUpgradePreservesLegacySelfSignedActiveAndIgnoresPending(t *testing.T) {
 	t.Parallel()
 	ctx, directory := context.Background(), t.TempDir()
 	old, err := Open(ctx, directory, rand.Reader, time.Now(), "192.168.1.20")
@@ -132,30 +124,22 @@ func TestUnifiedRootUpgradePreservesLegacySelfSignedActiveAndPending(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(directory, pendingIdentityName), mustJSON(doc), 0600); err != nil {
+	pendingPayload := mustJSON(doc)
+	if err := os.WriteFile(filepath.Join(directory, legacyPendingIdentityName), pendingPayload, 0600); err != nil {
 		t.Fatal(err)
 	}
 	manager, err := openManagerForTest(t, ctx, directory, rand.Reader, time.Now)
 	if err != nil {
 		t.Fatal(err)
 	}
-	active, pending := manager.Snapshot()
+	active := manager.Current()
 	after, _ := os.ReadFile(filepath.Join(directory, identityName))
-	if !bytes.Equal(before, after) || active.Fingerprint() != old.Fingerprint() || pending.Fingerprint() != legacyPending.Fingerprint() {
+	pendingAfter, err := os.ReadFile(filepath.Join(directory, legacyPendingIdentityName))
+	if err != nil || !bytes.Equal(pendingPayload, pendingAfter) || !bytes.Equal(before, after) || active.Fingerprint() != old.Fingerprint() || active.Fingerprint() == legacyPending.Fingerprint() {
 		t.Fatal("upgrade rotated TLS without confirmation")
 	}
-	if manager.IssuedByAuthority(active) || manager.IssuedByAuthority(pending) {
+	if manager.IssuedByAuthority(active) {
 		t.Fatal("legacy leaf claimed as unified")
-	}
-	if _, err := manager.Apply(ctx, active.Fingerprint(), pending.Fingerprint(), "localhost"); !errors.Is(err, ErrCertificateCAChanged) {
-		t.Fatal("old pending identity applied")
-	}
-	candidate, err := manager.Stage(ctx, []string{"192.168.1.30"}, active.Fingerprint(), pending.Fingerprint())
-	if err != nil || !manager.IssuedByAuthority(candidate) {
-		t.Fatalf("migration: %v", err)
-	}
-	if manager.Current().Fingerprint() != old.Fingerprint() {
-		t.Fatal("staging rotated TLS")
 	}
 }
 
@@ -232,16 +216,18 @@ func TestUnifiedRootMigratesTwoCAInstallationAndRetiresOldKey(t *testing.T) {
 	ctx, directory := context.Background(), t.TempDir()
 	legacy := legacyCAFixture(t, directory)
 	active := writeLegacyLeaf(t, directory, identityName, legacy)
-	pending := writeLegacyLeaf(t, directory, pendingIdentityName, legacy)
+	writeLegacyLeaf(t, directory, legacyPendingIdentityName, legacy)
+	pendingBefore, _ := os.ReadFile(filepath.Join(directory, legacyPendingIdentityName))
 	originalCA, _ := os.ReadFile(filepath.Join(directory, authorityName))
 	root := testRootAuthority(t, directory, time.Now)
 	manager, err := OpenManager(ctx, directory, rand.Reader, time.Now, root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	current, staged := manager.Snapshot()
-	if current.Fingerprint() != active.Fingerprint() || staged.Fingerprint() != pending.Fingerprint() {
-		t.Fatal("migration changed a leaf fingerprint")
+	current := manager.Current()
+	pendingAfter, err := os.ReadFile(filepath.Join(directory, legacyPendingIdentityName))
+	if err != nil || current.Fingerprint() != active.Fingerprint() || !bytes.Equal(pendingBefore, pendingAfter) {
+		t.Fatal("migration changed the active identity or historical pending file")
 	}
 	if !bytes.Equal(manager.Authority().CertificatePEM, root.CertificatePEM()) || manager.IssuedByAuthority(current) {
 		t.Fatal("old CA still active")
@@ -261,19 +247,8 @@ func TestUnifiedRootMigratesTwoCAInstallationAndRetiresOldKey(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := manager.Apply(ctx, active.Fingerprint(), pending.Fingerprint(), "localhost"); !errors.Is(err, ErrCertificateCAChanged) {
-		t.Fatal("old candidate accepted")
-	}
-	candidate, err := manager.Stage(ctx, []string{"192.168.1.20"}, active.Fingerprint(), pending.Fingerprint())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := manager.Apply(ctx, active.Fingerprint(), candidate.Fingerprint(), "localhost"); err != nil {
-		t.Fatal(err)
-	}
-	manager, err = OpenManager(ctx, directory, rand.Reader, time.Now, root)
-	if err != nil || !manager.IssuedByAuthority(manager.Current()) {
-		t.Fatalf("unified restart: %v", err)
+	if manager.Current().Fingerprint() != active.Fingerprint() || manager.IssuedByAuthority(manager.Current()) {
+		t.Fatal("restart replaced the legacy HTTPS identity")
 	}
 }
 
@@ -315,7 +290,7 @@ func TestUnifiedRootMigrationRejectsInvalidLegacyIssuer(t *testing.T) {
 	}
 }
 
-func TestUnifiedRootReplacementRequiresRegeneratingPendingCertificate(t *testing.T) {
+func TestUnifiedRootReplacementDoesNotRotateExistingHTTPSIdentity(t *testing.T) {
 	directory := t.TempDir()
 	ctx := context.Background()
 	first := testRootAuthority(t, directory, time.Now)
@@ -324,10 +299,6 @@ func TestUnifiedRootReplacementRequiresRegeneratingPendingCertificate(t *testing
 		t.Fatal(err)
 	}
 	active := manager.Current()
-	pending, err := manager.Stage(ctx, []string{"192.168.1.20"}, active.Fingerprint(), "")
-	if err != nil {
-		t.Fatal(err)
-	}
 	replacement := testRootAuthority(t, t.TempDir(), time.Now)
 	manager, err = OpenManager(ctx, directory, rand.Reader, time.Now, replacement)
 	if err != nil {
@@ -336,12 +307,8 @@ func TestUnifiedRootReplacementRequiresRegeneratingPendingCertificate(t *testing
 	if manager.Current().Fingerprint() != active.Fingerprint() || manager.IssuedByAuthority(active) {
 		t.Fatal("Root replacement silently switched HTTPS")
 	}
-	if _, err := manager.Apply(ctx, active.Fingerprint(), pending.Fingerprint(), "localhost"); !errors.Is(err, ErrCertificateCAChanged) {
-		t.Fatal("stale Root candidate applied")
-	}
-	next, err := manager.Stage(ctx, []string{"192.168.1.20"}, active.Fingerprint(), pending.Fingerprint())
-	if err != nil || !manager.IssuedByAuthority(next) {
-		t.Fatalf("new Root signing: %v", err)
+	if manager.Authority().Fingerprint != replacement.Identity().Fingerprint() {
+		t.Fatal("export still exposes a retired Root")
 	}
 }
 
@@ -353,7 +320,7 @@ func TestUnifiedRootDoesNotIssueBeyondItsValidity(t *testing.T) {
 		t.Fatal(err)
 	}
 	now = manager.Authority().NotAfter.Add(-time.Hour)
-	leaf, err := manager.Stage(context.Background(), nil, manager.Current().Fingerprint(), "")
+	_, leaf, err := createLeafDocument(context.Background(), rand.Reader, now, manager.ca)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -361,7 +328,7 @@ func TestUnifiedRootDoesNotIssueBeyondItsValidity(t *testing.T) {
 		t.Fatal("leaf outlives Root")
 	}
 	now = manager.Authority().NotAfter.Add(time.Second)
-	if _, err := manager.Stage(context.Background(), nil, manager.Current().Fingerprint(), leaf.Fingerprint()); !errors.Is(err, ErrInvalidAuthority) {
+	if _, _, err := createLeafDocument(context.Background(), rand.Reader, now, manager.ca); !errors.Is(err, ErrInvalidAuthority) {
 		t.Fatalf("expired Root: %v", err)
 	}
 }

@@ -11,11 +11,8 @@ final class PlatformPublicCertificateExporter
   );
 
   @override
-  Future<bool> save(PublicCertificate certificate) async {
-    if (!certificate.available) {
-      throw StateError('server certificate unavailable');
-    }
-    return await _channel.invokeMethod<bool>('saveServerCertificate', {
+  Future<bool> save(RuntimeRootCertificate certificate) async {
+    return await _channel.invokeMethod<bool>('saveRuntimeRootCA', {
           'certificatePem': certificate.certificatePem,
           'fileName': certificate.fileName,
         }) ??

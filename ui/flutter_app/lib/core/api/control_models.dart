@@ -7,23 +7,15 @@ import 'provider_origin.dart';
 
 typedef JsonObject = Map<String, Object?>;
 
-abstract interface class PublicCertificate {
-  bool get available;
-  String get certificatePem;
-  String get fingerprint;
-  String get fileName;
-}
-
-final class RuntimeServerCA implements PublicCertificate {
-  const RuntimeServerCA({
+final class RuntimeRootCertificate {
+  const RuntimeRootCertificate({
     required this.certificatePem,
     required this.fingerprint,
     required this.notBefore,
     required this.notAfter,
-    this.unified = true,
   });
 
-  factory RuntimeServerCA.fromJson(Object? json, String path) {
+  factory RuntimeRootCertificate.fromJson(Object? json, String path) {
     final value = requireObject(json, path);
     requireFields(
       value,
@@ -36,227 +28,49 @@ final class RuntimeServerCA implements PublicCertificate {
         'notAfter',
       },
     );
-    if (value['schema'] != 'vibermate-runtime-root-ca-v1' &&
-        value['schema'] != 'vibermate-server-https-ca-v1') {
-      throw ControlContractException('$path HTTPS CA schema is invalid');
+    if (value['schema'] != 'vibermate-runtime-root-ca-v1') {
+      throw ControlContractException('$path Runtime Root CA schema is invalid');
     }
     final pem = requireString(value, 'certificatePem', path);
     final fingerprint = requireString(value, 'fingerprint', path);
-    _validatePublicCertificate(pem, fingerprint, path, single: true);
+    final pattern = RegExp(
+      r'-----BEGIN CERTIFICATE-----\r?\n([A-Za-z0-9+/=\r\n]+)-----END CERTIFICATE-----',
+    );
+    final blocks = pattern.allMatches(pem).toList();
+    if (pem.length > 64 * 1024 ||
+        blocks.length != 1 ||
+        pem.replaceAll(pattern, '').trim().isNotEmpty ||
+        !RegExp(r'^[a-f0-9]{64}$').hasMatch(fingerprint)) {
+      throw ControlContractException('$path public Root CA is invalid');
+    }
+    try {
+      final der = base64Decode(blocks.single[1]!.replaceAll(RegExp(r'\s'), ''));
+      if (der.isEmpty || crypto.sha256.convert(der).toString() != fingerprint) {
+        throw const FormatException('certificate fingerprint mismatch');
+      }
+    } on FormatException {
+      throw ControlContractException(
+        '$path Root CA fingerprint is inconsistent',
+      );
+    }
     final before = DateTime.tryParse(requireString(value, 'notBefore', path));
     final after = DateTime.tryParse(requireString(value, 'notAfter', path));
     if (before == null || after == null || !after.isAfter(before)) {
-      throw ControlContractException('$path HTTPS CA validity is invalid');
+      throw ControlContractException('$path Root CA validity is invalid');
     }
-    return RuntimeServerCA(
+    return RuntimeRootCertificate(
       certificatePem: pem,
       fingerprint: fingerprint,
       notBefore: before,
       notAfter: after,
-      unified: value['schema'] == 'vibermate-runtime-root-ca-v1',
     );
   }
 
-  @override
-  bool get available => true;
-  @override
   final String certificatePem;
-  @override
   final String fingerprint;
   final DateTime notBefore;
   final DateTime notAfter;
-  final bool unified;
-  @override
-  String get fileName =>
-      unified ? 'vibermate-ca.crt' : 'vibermate-server-ca.crt';
-}
-
-void _validatePublicCertificate(
-  String pem,
-  String fingerprint,
-  String path, {
-  bool single = false,
-}) {
-  final pattern = RegExp(
-    r'-----BEGIN CERTIFICATE-----\r?\n([A-Za-z0-9+/=\r\n]+)-----END CERTIFICATE-----',
-  );
-  final blocks = pattern.allMatches(pem).toList();
-  if (pem.length > 6 * 1024 * 1024 ||
-      blocks.isEmpty ||
-      (single && blocks.length != 1) ||
-      pem.replaceAll(pattern, '').trim().isNotEmpty ||
-      !RegExp(r'^[a-f0-9]{64}$').hasMatch(fingerprint)) {
-    throw ControlContractException('$path public certificate is invalid');
-  }
-  try {
-    final chain = blocks
-        .map((block) => base64Decode(block[1]!.replaceAll(RegExp(r'\s'), '')))
-        .toList();
-    if (chain.any((der) => der.isEmpty) ||
-        crypto.sha256.convert(chain.first).toString() != fingerprint) {
-      throw const FormatException('certificate fingerprint mismatch');
-    }
-  } on FormatException {
-    throw ControlContractException(
-      '$path certificate fingerprint is inconsistent',
-    );
-  }
-}
-
-final class RuntimeServerCertificate implements PublicCertificate {
-  const RuntimeServerCertificate({
-    required this.available,
-    required this.mode,
-    this.certificatePem = '',
-    this.fingerprint = '',
-    this.dnsNames = const [],
-    this.ipAddresses = const [],
-    this.notBefore,
-    this.notAfter,
-    this.managed = false,
-    this.pending,
-    this.ca,
-    this.issuedByCA = false,
-  });
-
-  factory RuntimeServerCertificate.fromJson(
-    Object? json,
-    String path, {
-    bool allowPending = true,
-  }) {
-    final value = requireObject(json, path);
-    requireFields(
-      value,
-      path,
-      required: const {'schema', 'available', 'mode'},
-      optional: const {
-        'certificatePem',
-        'fingerprint',
-        'dnsNames',
-        'ipAddresses',
-        'notBefore',
-        'notAfter',
-        'managed',
-        'pending',
-        'ca',
-        'issuedByCA',
-      },
-    );
-    if (value['schema'] != 'vibermate-server-certificate-v1' ||
-        value['available'] is! bool) {
-      throw ControlContractException('$path certificate schema is invalid');
-    }
-    final mode = requireString(value, 'mode', path);
-    if ((value.containsKey('managed') && value['managed'] is! bool) ||
-        (value.containsKey('issuedByCA') && value['issuedByCA'] is! bool) ||
-        (!allowPending &&
-            (value.containsKey('pending') ||
-                value.containsKey('ca') ||
-                value['managed'] == true))) {
-      throw ControlContractException(
-        '$path certificate management state is invalid',
-      );
-    }
-    final managed = value['managed'] == true;
-    final issuedByCA = value['issuedByCA'] == true;
-    if ((managed && mode != 'self_signed_tls') ||
-        (issuedByCA && mode != 'self_signed_tls') ||
-        ((value['pending'] != null || value['ca'] != null) && !managed)) {
-      throw ControlContractException(
-        '$path pending certificate is inconsistent',
-      );
-    }
-    if (value['available'] == false) {
-      if (mode != 'http' || value.length != 3) {
-        throw ControlContractException(
-          '$path unavailable certificate is inconsistent',
-        );
-      }
-      return const RuntimeServerCertificate(available: false, mode: 'http');
-    }
-    final pem = requireString(value, 'certificatePem', path);
-    final fingerprint = requireString(value, 'fingerprint', path);
-    if (!const {'self_signed_tls', 'tls_files'}.contains(mode)) {
-      throw ControlContractException('$path public certificate is invalid');
-    }
-    _validatePublicCertificate(pem, fingerprint, path);
-    List<String> names(String key) {
-      final raw = value[key] == null
-          ? const <Object?>[]
-          : requireList(value[key], '$path.$key');
-      if (raw.length > 10000 ||
-          raw.any(
-            (item) => item is! String || item.isEmpty || item.length > 253,
-          )) {
-        throw ControlContractException('$path.$key is invalid');
-      }
-      return List<String>.unmodifiable(raw.cast<String>());
-    }
-
-    final notBefore = DateTime.tryParse(
-      requireString(value, 'notBefore', path),
-    );
-    final notAfter = DateTime.tryParse(requireString(value, 'notAfter', path));
-    if (notBefore == null || notAfter == null || !notAfter.isAfter(notBefore)) {
-      throw ControlContractException('$path certificate validity is invalid');
-    }
-    final pending = value['pending'] == null
-        ? null
-        : RuntimeServerCertificate.fromJson(
-            value['pending'],
-            '$path.pending',
-            allowPending: false,
-          );
-    final ca = value['ca'] == null
-        ? null
-        : RuntimeServerCA.fromJson(value['ca'], '$path.ca');
-    if ((allowPending && issuedByCA && ca == null) ||
-        (pending?.issuedByCA == true && ca == null) ||
-        (ca != null &&
-            (ca.fingerprint == fingerprint ||
-                ca.fingerprint == pending?.fingerprint))) {
-      throw ControlContractException('$path HTTPS CA relationship is invalid');
-    }
-    if (pending != null &&
-        (!pending.available ||
-            pending.mode != mode ||
-            pending.fingerprint == fingerprint)) {
-      throw ControlContractException('$path pending certificate is invalid');
-    }
-    return RuntimeServerCertificate(
-      available: true,
-      mode: mode,
-      certificatePem: pem,
-      fingerprint: fingerprint,
-      dnsNames: names('dnsNames'),
-      ipAddresses: names('ipAddresses'),
-      notBefore: notBefore,
-      notAfter: notAfter,
-      managed: managed,
-      pending: pending,
-      ca: ca,
-      issuedByCA: issuedByCA,
-    );
-  }
-
-  @override
-  final bool available;
-  final String mode;
-  @override
-  final String certificatePem;
-  @override
-  final String fingerprint;
-  final List<String> dnsNames;
-  final List<String> ipAddresses;
-  final DateTime? notBefore;
-  final DateTime? notAfter;
-  final bool managed;
-  final RuntimeServerCertificate? pending;
-  final RuntimeServerCA? ca;
-  final bool issuedByCA;
-  @override
-  String get fileName => 'vibermate-server.crt';
-  List<String> get hosts => [...dnsNames, ...ipAddresses];
+  String get fileName => 'vibermate-ca.crt';
 }
 
 const upstreamBackendProtocols = <String>[
@@ -3710,10 +3524,27 @@ Map<String, List<String>> _requireTransformHeaders(Object? json, String path) {
 
 String _requireTransformBody(JsonObject value, String key, String path) {
   final body = requireStringValue(value, key, path);
-  if (utf8.encode(body).length > 16 << 20 || body.runes.contains(0xfffd)) {
+  if (_hasUnpairedSurrogate(body) || utf8.encode(body).length > 16 << 20) {
     throw ControlContractException('$path.$key exceeds its limit');
   }
   return body;
+}
+
+// Literal U+FFFD is valid content. Inspect UTF-16 code units instead of rejecting
+// that scalar or relying on an encoder that replaces malformed surrogates.
+bool _hasUnpairedSurrogate(String value) {
+  for (var index = 0; index < value.length; index++) {
+    final unit = value.codeUnitAt(index);
+    if (unit >= 0xd800 && unit <= 0xdbff) {
+      index++;
+      if (index == value.length) return true;
+      final low = value.codeUnitAt(index);
+      if (low < 0xdc00 || low > 0xdfff) return true;
+    } else if (unit >= 0xdc00 && unit <= 0xdfff) {
+      return true;
+    }
+  }
+  return false;
 }
 
 bool _validBoundedHttpHeaderValue(String value) {

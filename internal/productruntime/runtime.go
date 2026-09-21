@@ -942,8 +942,8 @@ func (r *Runtime) LocalRootCertificate() localca.RootCertificate {
 	return r.localCA.Certificate()
 }
 
-// SignServerCertificate is used only by an attached host's owner-authorized
-// TLS identity manager. The shared Root key remains inside localca.
+// SignServerCertificate initializes an attached host's TLS identity at startup.
+// It is not exposed as a management API. The shared Root key remains in localca.
 func (r *Runtime) SignServerCertificate(ctx context.Context, publicKey *ecdsa.PublicKey, hosts []string) ([]byte, error) {
 	return r.localCA.SignServerCertificate(ctx, publicKey, hosts)
 }

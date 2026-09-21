@@ -2431,25 +2431,10 @@ final class PreviewControlApi implements ControlApi {
   }
 
   @override
-  Future<RuntimeServerCertificate> serverCertificate() async {
+  Future<RuntimeRootCertificate> runtimeRootCA() async {
     _requireOpen();
-    return const RuntimeServerCertificate(available: false, mode: 'http');
+    throw UnsupportedError('preview Runtime Root CA unavailable');
   }
-
-  @override
-  Future<RuntimeServerCertificate> stageServerCertificate(
-    RuntimeServerCertificate current,
-    List<String> hosts,
-  ) => Future.error(
-    UnsupportedError('preview certificate management unavailable'),
-  );
-
-  @override
-  Future<RuntimeServerCertificate> applyServerCertificate(
-    RuntimeServerCertificate current,
-  ) => Future.error(
-    UnsupportedError('preview certificate management unavailable'),
-  );
 
   @override
   Future<List<RuntimeUser>> runtimeUsers() async {

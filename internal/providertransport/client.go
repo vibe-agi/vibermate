@@ -306,6 +306,7 @@ func (client *Client) Do(
 		request.Header,
 		frozen.wireVariant,
 		frozen.clientUserAgent,
+		frozen.messageTransformUserAgent,
 	); err != nil {
 		return nil, Evidence{}, err
 	}
@@ -333,6 +334,7 @@ func (client *Client) Do(
 		request.Header,
 		frozen.wireVariant,
 		frozen.clientUserAgent,
+		frozen.messageTransformUserAgent,
 		evidence.userAgentMutation,
 	); err != nil {
 		stripProtectedCredentialHeaders(request.Header, evidence.ProtectedHeaderNames)
@@ -838,73 +840,74 @@ func applyUpstreamWireHeaders(
 	headers http.Header,
 	variant wireprofile.CompiledUpstreamWireVariant,
 	clientUserAgent string,
+	transformedUserAgent *string,
 ) error {
 	if headers == nil {
 		return errors.New("provider headers are nil")
 	}
-	values, keys := headerValuesFold(headers, "User-Agent")
+	_, keys := headerValuesFold(headers, "User-Agent")
 	if keys != 0 {
 		return errors.New("provider codec conflicts with the upstream User-Agent policy")
 	}
-	switch variant.UserAgentPolicy() {
-	case wireprofile.UserAgentPolicyOmit:
+	value, err := upstreamUserAgent(variant, clientUserAgent, transformedUserAgent)
+	if err != nil {
+		return err
+	}
+	if value == "" {
 		// net/http otherwise synthesizes its own default value when the key is
 		// absent. A present nil slice is the explicit wire-level omission.
 		headers["User-Agent"] = nil
+	} else {
+		headers["User-Agent"] = []string{value}
+	}
+	return nil
+}
+
+func upstreamUserAgent(variant wireprofile.CompiledUpstreamWireVariant, clientUserAgent string, transformedUserAgent *string) (string, error) {
+	if transformedUserAgent != nil {
+		return *transformedUserAgent, nil
+	}
+	switch variant.UserAgentPolicy() {
+	case wireprofile.UserAgentPolicyOmit:
+		return "", nil
 	case wireprofile.UserAgentPolicyFollowClient:
-		if clientUserAgent == "" {
-			headers["User-Agent"] = nil
-		} else {
-			headers["User-Agent"] = []string{clientUserAgent}
-		}
+		return clientUserAgent, nil
 	case wireprofile.UserAgentPolicyConstant:
 		if variant.SemanticUserAgent() == "" {
-			return errors.New("upstream User-Agent profile is incomplete")
+			return "", errors.New("upstream User-Agent profile is incomplete")
 		}
-		headers["User-Agent"] = []string{variant.SemanticUserAgent()}
+		return variant.SemanticUserAgent(), nil
 	default:
-		return errors.New("upstream User-Agent policy is unsupported")
+		return "", errors.New("upstream User-Agent policy is unsupported")
 	}
-	_ = values
-	return nil
 }
 
 func validateUpstreamWireHeaders(
 	headers http.Header,
 	variant wireprofile.CompiledUpstreamWireVariant,
 	clientUserAgent string,
+	transformedUserAgent *string,
 ) error {
 	values, keys := headerValuesFold(headers, "User-Agent")
 	if keys != 1 {
 		return errors.New("AuthDriver changed the upstream User-Agent identity")
 	}
-	switch variant.UserAgentPolicy() {
-	case wireprofile.UserAgentPolicyOmit:
-		if len(values) != 0 {
-			return errors.New("AuthDriver changed the upstream User-Agent identity")
-		}
-	case wireprofile.UserAgentPolicyFollowClient:
-		if clientUserAgent == "" {
-			if len(values) != 0 {
-				return errors.New("AuthDriver changed the upstream User-Agent identity")
-			}
-		} else if len(values) != 1 || values[0] != clientUserAgent {
-			return errors.New("AuthDriver changed the upstream User-Agent identity")
-		}
-	case wireprofile.UserAgentPolicyConstant:
-		if len(values) != 1 || values[0] != variant.SemanticUserAgent() {
-			return errors.New("AuthDriver changed the upstream User-Agent identity")
-		}
-	default:
-		return errors.New("upstream User-Agent policy is unsupported")
+	expected, err := upstreamUserAgent(variant, clientUserAgent, transformedUserAgent)
+	if err != nil {
+		return err
+	}
+	if (expected == "" && len(values) != 0) ||
+		(expected != "" && (len(values) != 1 || values[0] != expected)) {
+		return errors.New("AuthDriver changed the upstream User-Agent identity")
 	}
 	return nil
 }
 
-// Wire-profile UA is the default. A credential-epoch-owned Set/Delete is an
-// explicit final override, not an arbitrary AuthDriver mutation. Keep net/http
+// Wire-profile UA is the default; an explicit request transform edit follows.
+// A credential-epoch-owned Set/Delete is an explicit final override, not an
+// arbitrary AuthDriver mutation. Keep net/http
 // from synthesizing a User-Agent after an explicit Delete.
-func finalizeAuthenticatedUserAgent(headers http.Header, variant wireprofile.CompiledUpstreamWireVariant, clientUserAgent string, mutation accountUserAgentMutation) error {
+func finalizeAuthenticatedUserAgent(headers http.Header, variant wireprofile.CompiledUpstreamWireVariant, clientUserAgent string, transformedUserAgent *string, mutation accountUserAgentMutation) error {
 	values, keys := headerValuesFold(headers, "User-Agent")
 	switch mutation {
 	case accountUserAgentSet:
@@ -919,7 +922,7 @@ func finalizeAuthenticatedUserAgent(headers http.Header, variant wireprofile.Com
 		headers["User-Agent"] = nil
 		return nil
 	default:
-		return validateUpstreamWireHeaders(headers, variant, clientUserAgent)
+		return validateUpstreamWireHeaders(headers, variant, clientUserAgent, transformedUserAgent)
 	}
 }
 

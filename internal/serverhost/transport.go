@@ -5,7 +5,6 @@ import (
 	"crypto/ecdsa"
 	"errors"
 	"io"
-	"log"
 	"net"
 	"path/filepath"
 	"time"
@@ -26,7 +25,7 @@ type TransportOptions struct {
 	Mode            TransportMode
 	CertificateFile string
 	PrivateKeyFile  string
-	// TLSHosts seeds a new identity only; persisted UI settings win on restart.
+	// TLSHosts seeds a new identity only; persisted addresses win on restart.
 	TLSHosts []string
 }
 
@@ -67,8 +66,6 @@ type preparedTransport struct {
 	listener    net.Listener
 	scheme      string
 	fingerprint string
-	identity    serveridentity.Identity
-	manager     *serveridentity.Manager
 }
 
 type runtimeCertificateAuthority struct{ runtime *productruntime.Runtime }
@@ -128,15 +125,9 @@ func prepareTransport(
 		return preparedTransport{}, err
 	}
 	tlsListener := newTLSListener(listener, certificate)
-	if manager != nil {
-		tlsListener = newManagedTLSListener(listener, manager)
-		log.Printf("runtime_root_ca_loaded scope=https_and_traffic caFingerprint=%s", manager.Authority().Fingerprint)
-	}
 	return preparedTransport{
 		listener:    tlsListener,
 		scheme:      "https",
 		fingerprint: identity.Fingerprint(),
-		identity:    identity,
-		manager:     manager,
 	}, nil
 }

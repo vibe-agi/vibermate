@@ -183,16 +183,16 @@ class MainFlutterWindow: NSWindow {
   }
 
   private func handlePublicCertificate(call: FlutterMethodCall, result: @escaping FlutterResult) {
-    guard call.method == "saveServerCertificate" else {
+    guard call.method == "saveRuntimeRootCA" else {
       result(FlutterMethodNotImplemented)
       return
     }
     guard let arguments = call.arguments as? [String: Any],
           Set(arguments.keys).isSubset(of: ["certificatePem", "fileName"]),
-          let fileName = (arguments["fileName"] ?? "vibermate-server.crt") as? String,
-          ["vibermate-server.crt", "vibermate-server-ca.crt", "vibermate-ca.crt"].contains(fileName),
+          let fileName = (arguments["fileName"] ?? "vibermate-ca.crt") as? String,
+          fileName == "vibermate-ca.crt",
           let pem = arguments["certificatePem"] as? String,
-          pem.utf8.count <= 6 * 1024 * 1024,
+          pem.utf8.count <= 64 * 1024,
           let expression = try? NSRegularExpression(
             pattern: "-----BEGIN CERTIFICATE-----\\r?\\n([A-Za-z0-9+/=\\r\\n]+)-----END CERTIFICATE-----"
           ) else {
@@ -202,7 +202,7 @@ class MainFlutterWindow: NSWindow {
     let fullRange = NSRange(pem.startIndex..<pem.endIndex, in: pem)
     let matches = expression.matches(in: pem, range: fullRange)
     let remainder = expression.stringByReplacingMatches(in: pem, range: fullRange, withTemplate: "")
-    guard !matches.isEmpty, remainder.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+    guard matches.count == 1, remainder.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
           matches.allSatisfy({ match in
             guard let range = Range(match.range(at: 1), in: pem),
                   let data = Data(base64Encoded: String(pem[range]), options: .ignoreUnknownCharacters)

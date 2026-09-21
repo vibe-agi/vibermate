@@ -29,7 +29,7 @@ docker compose logs --tail=50 vibermate
 默认配置的浏览器地址为 **https://localhost:9666**。全新数据卷首次启动生成一套统一 Runtime
 Root CA，同时用于签发 Server HTTPS 证书和授权 AI 流量代理的域名证书。浏览器在信任
 该 CA 前会提示证书警告。核对服务端证书的 SHA-256 指纹与启动日志中的 `tlsFingerprint`
-一致后继续；统一根指纹见 `runtime_root_ca_loaded scope=https_and_traffic caFingerprint=...`。
+一致后继续；统一根指纹见 `runtime_root_ca_loaded caFingerprint=...`。
 客户端只需信任这一套 Root CA，但仍须正常验证叶证书的访问地址和有效期。
 
 取得初始化/恢复密钥：
@@ -41,85 +41,74 @@ docker compose exec vibermate /opt/vibermate/vibermated server recovery-key --da
 在网页输入密钥，自行设置所有者用户名和密码。此密钥属于敏感信息，不要写入镜像、
 Compose 或提交到仓库。所有者设置完成后可在工作台添加上游账号、发布 Environment。
 
-## 服务端证书 IP / 域名配置
+## 统一 Runtime Root CA
 
-证书地址现在由管理员在 **设置 → 安全与数据 → 服务端 HTTPS 证书** 中管理，
-不使用 `.env`。Compose 不再传入 `VIBERMATE_TLS_HOSTS`。
+**设置 → 安全与数据 → 统一 Runtime Root CA** 只显示根证书的指纹、有效期，
+并提供“下载统一 Root CA”按钮。下载文件为 `vibermate-ca.crt`（PEM 格式），
+仅含一张公开根证书，不含私钥，也不是根证书与叶证书的打包文件。
 
-1. 在“服务端 IP / 域名”填写客户端 URL 实际使用的宿主机地址，例如
-   `192.168.1.20, vibermate.example.test`，不是客户端或容器内部 IP。
-   支持逗号或换行分隔的最多 32 个地址，不填写协议或端口；域名需能解析到宿主机。
-2. 点击“生成待生效证书”。此时当前证书保持不变，页面单独显示待生效证书和指纹。
-   再次生成将替换待生效证书；多个管理页面通过指纹比较避免相互覆盖。
-3. 点击“下载统一 Root CA”，得到 `vibermate-ca.crt`（PEM，只有一张根证书，不是证书包），
-   核对页面指纹与启动日志 `runtime_root_ca_loaded ... caFingerprint=...` 一致后，在客户端配置信任。
-   已信任同一 CA 的客户端不必重复导入。固定叶证书指纹的客户端仍需更新指纹；
-   可另用“下载待生效证书”保存 `vibermate-server.crt`。仅下载文件不会自动安装信任。
-4. 点击“应用并立即加载”，确认对所有客户端连接的影响。后端先持久化再在线切换，
-   不重启容器；已建立的 TLS 连接可继续使用，新连接按客户端信任策略验证新证书。
+核对页面指纹与服务端启动日志 `runtime_root_ca_loaded caFingerprint=...` 一致后，
+在客户端导入并信任。下载不会自动安装信任，也不会绕过浏览器首次连接的 TLS 校验。
+这里统一的是签发根；HTTPS 叶证书与 AI 流量域名叶证书仍是不同的证书。
 
-**已有数据卷的升级沿用原流量 Root CA，不重新生成根证书，也不自动切换当前 HTTPS 证书。**
-原来从本 Runtime 导出的 `vibermate-traffic-ca.pem` 与新的 `vibermate-ca.crt` 内容及指纹一致，
-不需要因为改名而重复信任。原 `vibermate-server-ca.crt` 是已退役的 HTTPS 专用 CA，不能替代
-统一根证书。不同 Runtime / 数据卷（例如 macOS 本地 Runtime 与 Docker）仍有不同的根。
+网页不再展示或下载 HTTPS 叶证书，也不再提供 IP / 域名输入、生成待生效证书、
+应用证书或在线热切换。对应的旧 API 已移除，不能通过直接调用接口继续换证。
+保留的只读接口是 `GET /api/v1/server/root-ca`，使用管理 read token，返回
+`vibermate-runtime-root-ca-v1`：公开 `certificatePem`、`fingerprint`、
+`notBefore` 和 `notAfter`，不返回 HTTPS 身份或待生效状态。
 
-如果页面提示当前 HTTPS 尚未由统一根签发（旧自签名证书、旧 HTTPS CA 或更换根之前的证书），
-先信任统一根，再重新生成并应用 HTTPS 证书。旧 CA 签发的待生效证书会保留供核对，但禁止
-直接应用，必须重新生成。迁移或重置 Root 不会跳过 CLI 固定叶指纹校验；指纹更新须经客户端
-操作者核对。这里统一的是签发根，HTTPS 叶证书和流量域名叶证书仍各不相同。
+### 已有部署与证书持久化
 
-服务始终保留 `localhost`、`127.0.0.1` 和 `::1`，用于本机连接与健康检查；应用时还会
-检查新证书覆盖当前管理页面的访问地址。外部 TLS 文件模式不允许网页修改或签发。
-如果响应丢失，不能直接认定应用失败：先配置信任，再刷新并核对指纹；该页面仍允许
-下载已经取得的待生效证书。重新生成和应用均需要 Server Owner 的 write 权限。
+**升级不会更换正在使用的 Root CA 或 HTTPS 叶证书，也不会删除数据卷中的证书文件。**
+当前数据卷已有的 HTTPS 地址（SAN）、私钥和指纹会继续使用，重启时不会被默认地址覆盖。
+旧版 `server-tls-pending.json` 不再读取或应用，原文件保留不动，避免破坏回滚材料。
 
-配置与证书均在命名数据卷的 `/data/server-transport/` 中：
+统一 Root 的唯一持久化来源为 `/data/local-ca/`：
 
-- `server-tls-identity.json`：当前证书、地址清单（证书 SAN）与私钥。
-- `server-tls-ca.json.retired`：旧部署迁移后保留的 HTTPS 专用 CA 备份（包含旧私钥）。
-  新版本不再用它签名，也不会在新安装中创建 `server-tls-ca.json`。
-- `*.before-unified-root`：为迁移旧 CA 签发身份而保存的原格式身份备份。旧二进制不认识
-  新的 `issuerCertificatePem` 字段；回滚时应恢复迁移前的完整数据卷，不能仅更换镜像。
-- `server-tls-pending.json`：待生效证书和私钥。应用后可能保留相同内容，启动时会识别为
-  已应用，不再次显示为待生效。这使写入后进程意外退出不会回退证书。
-- `server-tls-identity.json.previous`：最近一次应用前的身份，供服务器侧恢复。
+- `root-certificate.pem`：公开根证书，也是下载内容的来源。
+- `root-key.pem`：Root 签名私钥，不能提供给客户端。
+- `root-manifest.json`：根证书身份与修订。
 
-这些身份和备份文件权限均为 `0600`，包含私钥，**不是提供给客户端的下载文件**。重启或重建容器
-会复用数据卷中的身份，不被启动默认值覆盖。为兼容已有 CLI，`--tls-hosts` 仅在尚无身份
-的首次启动时作为初始地址；本 Compose 已不使用该参数。
+`/data/server-transport/server-tls-identity.json` 保留 HTTPS 叶证书、SAN 与叶私钥。
+历史 `server-tls-ca.json.retired`、`*.before-unified-root`、
+`server-tls-identity.json.previous` 可能包含旧私钥，必须和完整数据卷一起保护。
+新部署不会创建独立 HTTPS CA、待生效文件或在线换证备份。
 
-统一 Root 的唯一持久化来源为 `/data/local-ca/`：`root-certificate.pem` 是公开根证书，
-`root-key.pem` 是签名私钥，`root-manifest.json` 记录身份和修订。HTTPS 模块只保留自己的
-叶证书私钥，通过 Runtime 的受限签发接口生成证书，不复制或另存 Root 私钥。
+从同一 Runtime 导出的旧 `vibermate-traffic-ca.pem` 与 `vibermate-ca.crt`
+内容及指纹相同，不需要因为文件改名重复信任。不同 Runtime / 数据卷（例如 macOS
+本地 Runtime 与 Docker Runtime）仍有不同的根，不能互相替代。
 
-“下载 HTTPS 证书”仍下载当前生效身份的公开部分，不包含私钥。
-“下载统一 Root CA”只下载一张公开根证书，可同时用于标准 HTTPS CA 验证和 AI 流量代理信任。
-核对相应指纹后，可在支持标准 CA 校验的客户端中指定 CA 文件，例如在生成并应用新证书后：
+### HTTPS 地址与部署配置
+
+HTTPS 服务本身仍保留。全新数据卷启动时，会自动用统一 Root 签发内置 HTTPS 叶证书，
+默认覆盖 `localhost`、`127.0.0.1` 和 `::1`。需要其他地址时，可由部署者在首次启动
+的命令参数中提供 `--tls-hosts 192.168.1.20,vibermate.example.test`；
+此参数只初始化尚不存在的身份，不会修改已有证书。本 Compose 默认没有设置该参数。
+
+证书中的地址必须是客户端 URL 实际使用的服务端宿主机 IP / 域名，
+不是容器内部 IP 或客户端自身 IP。域名还须正确解析到宿主机。
+CA 信任不能解决 SAN 不匹配、DNS、端口映射或防火墙问题。
+
+对于已由统一 Root 签发并覆盖访问地址的服务，可验证：
 
 ```sh
-curl --cacert ./vibermate-ca.crt https://192.168.1.20:9667/api/v1/server/web-auth
+curl --cacert ./vibermate-ca.crt https://localhost:9667/api/v1/server/web-auth
 ```
 
-CA 信任不能解决证书地址不匹配、DNS 解析、端口未发布或防火墙问题。
-建议将 CA 信任限制在需要连接此 Runtime 的客户端；只有确认信任本服务的 CA 管理者后，
-才将其导入系统信任库。当前 ViberMate CLI 仍固定首次连接的叶证书指纹，导入 CA
-不会绕过其固定指纹检查；本功能不修改 CLI 的信任边界。
+若已有 HTTPS 身份是历史自签名证书或由旧 CA 签发，下载当前 Root 不会改变它的签发链；
+仍需对应的既有信任，或由部署者维护 TLS 身份。网页已没有迁移/换证入口。
+固定叶证书指纹的客户端仍须在叶证书变更后核对并更新指纹；导入 CA 不会绕过固定指纹检查。
 
-统一 Root 有效期为 10 年，HTTPS 叶证书为 1 年，流量域名叶证书为 24 小时，均不超过
-根证书的有效期。HTTPS 叶证书到期前须重新生成并应用；当前没有自动 HTTPS 续期。
-更换 Root 同时影响 HTTPS 和流量代理信任。macOS 原有“更换根证书”流程会在重启时
-换根；旧 HTTPS 身份暂时保留，之后须重新生成并应用，旧待生效证书不得直接沿用。
-下载不包含任何私钥，也不会自动安装信任；始终备份完整数据卷。
-接口 `GET /api/v1/server/certificate` 使用管理 read token，返回当前身份、可选 pending 身份、
-统一 `ca` 公开证书（schema：`vibermate-runtime-root-ca-v1`）及 `issuedByCA` 状态；
-`POST /api/v1/server/certificate/stage` 与 `/apply` 使用管理 write token。
-HTTP 模式明确返回无证书，不允许在线签发。
-首次访问工作台仍需先由操作者建立信任；下载按钮不会绕过浏览器的首次 TLS 校验。
+使用 `tls_files` 模式时，由部署者管理 SAN、签发链和续期，并通过
+`--tls-cert` / `--tls-key` 指定外部文件，重启后加载。不要同时使用 `--tls-hosts`。
+页面下载的仍是本 Runtime 的 Root CA，可用于其授权 AI 流量代理；
+它不自动信任由其他机构签发的外部 HTTPS 证书，外部 HTTPS 的 CA 应从对应签发机构取得。
+HTTP 模式也可以下载 Runtime Root CA，但下载不会把 HTTP 服务切换为 HTTPS。
 
-使用 `tls_files` 模式时由操作者管理 SAN 和证书续期，不设置 `--tls-hosts`；下载入口同样
-导出当前已加载的公开证书链，不提供统一 Root 下载按钮；其 HTTPS CA 应从签发机构取得，
-该显式外部证书模式不受内置统一签发管理。
-更新文件后重启才会加载新证书。
+统一 Root 有效期为 10 年，内置 HTTPS 叶证书为 1 年，流量域名叶证书为 24 小时，
+均不超过 Root 有效期。当前没有自动 HTTPS 续期；叶证书到期前须由部署者维护并重启服务。
+更换 Root 会影响 HTTPS 和流量代理信任；macOS 原有更换根证书流程仍保留，但不会
+自动重签已有 HTTPS 身份。始终备份完整数据卷，不要仅为刷新页面而删除证书或私钥。
 
 ## 客户端接入
 
@@ -172,9 +161,9 @@ docker compose up -d --wait
 
 ## 局域网或 Ubuntu 主机
 
-本配置默认只发布到宿主机回环地址。证书页面不会修改 Docker 网络配置或获取 Docker socket。
-如果要开放到指定的内网/VPN 网卡，先在页面生成并应用覆盖该地址的证书，再在 `.env`
-设置端口绑定（证书地址不放在 `.env`）：
+本配置默认只发布到宿主机回环地址。Root CA 下载页面不会修改 Docker 网络配置或获取 Docker socket。
+如果要开放到指定的内网/VPN 网卡，先按上文部署配置准备覆盖该地址的 HTTPS 证书，再在 `.env`
+设置端口绑定（此设置不会改变证书地址）：
 
 ```dotenv
 VIBERMATE_BIND_ADDRESS=192.168.1.10

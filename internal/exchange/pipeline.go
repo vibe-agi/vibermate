@@ -502,6 +502,7 @@ func (pipeline *Pipeline) executeCandidate(
 			request.operation.RawQuery(),
 			transformedHeaders,
 			transformedBody,
+			transformInput,
 		)
 		if err != nil {
 			return newFailure(ReasonProviderRequestInvalid, request.exchangeID, 0, err)
@@ -631,6 +632,7 @@ func (pipeline *Pipeline) executeCandidate(
 		"",
 		transformedHeaders,
 		transformedBody,
+		transformInput,
 	)
 	if err != nil {
 		return newFailure(ReasonProviderRequestInvalid, request.exchangeID, 0, err)
@@ -726,7 +728,16 @@ func (pipeline *Pipeline) newProviderRequest(
 	rawQuery string,
 	headers http.Header,
 	body []byte,
+	transformInput messagetransform.RequestMessage,
 ) (providertransport.Request, error) {
+	var transformedUserAgent *string
+	if transformInput.Method != "" {
+		var err error
+		headers, transformedUserAgent, err = separateMessageTransformUserAgent(transformInput.Headers, headers)
+		if err != nil {
+			return providertransport.Request{}, err
+		}
+	}
 	attemptID, err := pipeline.attemptIDs.NewAttemptID()
 	if err != nil {
 		return providertransport.Request{}, err
@@ -755,8 +766,9 @@ func (pipeline *Pipeline) newProviderRequest(
 		Headers: headers, Body: body, CredentialMode: credential.mode,
 		WireProfile: selection.wireProfile, ClientProtocol: request.ClientHTTPProtocol(),
 		ClientUserAgent: request.ClientUserAgent(), ClientHello: clientHello,
-		EgressPolicy: request.RequestPlan().EgressPolicy(),
-		RawEvidence:  rawEvidence,
+		MessageTransformUserAgent: transformedUserAgent,
+		EgressPolicy:              request.RequestPlan().EgressPolicy(),
+		RawEvidence:               rawEvidence,
 	}
 	if credential.mode == providerauth.CredentialClientPassthrough {
 		options.PassthroughOrigin = selection.target.Origin()
