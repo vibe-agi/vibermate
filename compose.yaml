@@ -1,0 +1,49 @@
+name: vibermate-local
+
+services:
+  vibermate:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: local
+    image: ${VIBERMATE_IMAGE:-vibermate-runtime:0.1.10-local}
+    pull_policy: never
+    init: true
+    restart: unless-stopped
+    stop_grace_period: 35s
+    command:
+      - server
+      - --listen
+      - 0.0.0.0:9666
+      - --data-dir
+      - /data
+      - --web-root
+      - /opt/vibermate/vibermate-web
+      - --transport
+      - http
+    ports:
+      - "127.0.0.1:${VIBERMATE_PORT:-9666}:9666"
+    volumes:
+      - runtime-data:/data
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "--show-error", "--max-time", "5", "http://127.0.0.1:9666/api/v1/server/web-auth"]
+      interval: 30s
+      timeout: 6s
+      start_period: 15s
+      retries: 3
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  runtime-data:
+    name: ${VIBERMATE_LOCAL_DATA_VOLUME:-vibermate-local-data}

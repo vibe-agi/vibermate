@@ -728,10 +728,11 @@ func exportMessage(
 	if bodyValue == nil || bodyValue.ExportType() != reflect.TypeFor[string]() {
 		return scriptMessage{}, errors.New("Body must remain a string")
 	}
-	body := []byte(bodyValue.String())
-	if len(body) > limits.MaximumBodyBytes || !utf8.Valid(body) || strings.ContainsRune(string(body), unicode.ReplacementChar) {
+	bodyText := bodyValue.String()
+	if len(bodyText) > limits.MaximumBodyBytes || !validScriptString(bodyValue, bodyText) {
 		return scriptMessage{}, errors.New("Body is not bounded UTF-8")
 	}
+	body := []byte(bodyText)
 	headersValue := object.Get("headers")
 	if headersValue == nil || goja.IsNull(headersValue) || goja.IsUndefined(headersValue) {
 		return scriptMessage{}, errors.New("Headers must remain an object")
@@ -749,6 +750,40 @@ func exportMessage(
 		Streaming: input.Streaming, EventName: input.EventName,
 		Headers: headers, Body: body,
 	}, nil
+}
+
+// Goja converts unpaired UTF-16 surrogates to U+FFFD when exporting a string.
+// Check the original code units when that character occurs, so literal U+FFFD
+// remains valid while lossy conversion still fails closed. Most strings need
+// no UTF-16 scan.
+func validScriptString(value goja.Value, exported string) bool {
+	if !utf8.ValidString(exported) {
+		return false
+	}
+	if !strings.ContainsRune(exported, unicode.ReplacementChar) {
+		return true
+	}
+	text, ok := value.(goja.String)
+	if !ok {
+		return false
+	}
+	for index, length := 0, text.Length(); index < length; index++ {
+		unit := text.CharAt(index)
+		switch {
+		case unit >= 0xd800 && unit <= 0xdbff:
+			index++
+			if index == length {
+				return false
+			}
+			low := text.CharAt(index)
+			if low < 0xdc00 || low > 0xdfff {
+				return false
+			}
+		case unit >= 0xdc00 && unit <= 0xdfff:
+			return false
+		}
+	}
+	return true
 }
 
 func normalizeInputHeaders(input http.Header, limits Limits) (map[string][]string, error) {
@@ -921,7 +956,7 @@ func exportJSONValue(
 	exported := value.Export()
 	switch candidate := exported.(type) {
 	case string:
-		if !utf8.ValidString(candidate) || strings.ContainsRune(candidate, unicode.ReplacementChar) {
+		if !validScriptString(value, candidate) {
 			return nil, errors.New("Context contains invalid UTF-8")
 		}
 		return candidate, nil

@@ -2431,6 +2431,12 @@ final class PreviewControlApi implements ControlApi {
   }
 
   @override
+  Future<RuntimeRootCertificate> runtimeRootCA() async {
+    _requireOpen();
+    throw UnsupportedError('preview Runtime Root CA unavailable');
+  }
+
+  @override
   Future<List<RuntimeUser>> runtimeUsers() async {
     _requireOpen();
     return List.unmodifiable(_runtimeUsers);

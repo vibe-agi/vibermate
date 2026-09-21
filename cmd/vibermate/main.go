@@ -169,6 +169,23 @@ func executeContext(
 			ctx, logout, stateDirectory, displayName, commandClock{}, rand.Reader, stdout,
 		)
 	}
+	if len(arguments) > 0 && arguments[0] == "trust" {
+		trust, err := parseTrust(arguments)
+		if err != nil {
+			return 2, keyTrustUsage
+		}
+		stateDirectory, pathErr := clientpath.DefaultRemoteStateDirectory()
+		if pathErr != nil {
+			return 1, keyRuntimePath
+		}
+		return executeRemoteTrust(
+			ctx,
+			trust,
+			stateDirectory,
+			commandClock{},
+			stdout,
+		)
+	}
 	run, err := parseRun(arguments)
 	if err != nil {
 		return 2, keyUsage

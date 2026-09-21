@@ -54,36 +54,54 @@ vibermate run -- codex
 **设置 → 用户管理**，点击 **创建所有者**，再到 **设置 → 接入与启动** 复制网页
 工作台地址。第一个账号是所有者，之后创建的是成员。
 
-## Linux Server + Web
+## 独立 Server + Web（原生进程或容器）
+
+不用 Docker 也可以运行完整 Web 工作台。先区分“只在本机使用”和“其他设备接入”，
+原生进程与容器共享同一账号体系和证书规则。见[统一部署指南](docs/deployment.md)和
+[Docker 配置](docs/docker.md)。
 
 从[最新版本](https://github.com/vibe-agi/vibermate/releases/latest)下载
 `linux_x86_64` 或 `linux_arm64` 压缩包，使用 `SHA256SUMS-linux` 校验并解压。
 压缩包内已经包含 `vibermated`、`vibermate` 和相邻的 `vibermate-web` 网页界面。
 
-在局域网启动加密的 Runtime：
+个人只在本机使用，不需要域名或证书：
 
 ```sh
-./vibermated server \
-  --listen 0.0.0.0:9666 \
-  --transport self_signed_tls
+./vibermated server
 ```
 
-启动后输出的第一行 JSON 包含浏览器地址和 TLS 指纹。请在 Server 机器上打印
-一次性初始化/恢复密钥：
+打开 **http://127.0.0.1:9666**，默认仅本机可连接。如果端口被占用，加上
+`--listen 127.0.0.1:9667`，浏览器和 CLI 都使用新端口。在 Server 机器的另一个终端
+读取一次性初始化/恢复密钥：
 
 ```sh
 ./vibermated server recovery-key
 ```
 
-打开浏览器地址，输入该密钥，并创建你的个人所有者用户名和密码。浏览器会提示
-自签名证书警告；继续前请核对页面显示的指纹。如果启动 Server 时指定了
-`--data-dir`，这里也要传入同一个绝对目录。
+在浏览器输入该密钥，并创建你的个人所有者用户名和密码。如果启动 Server 时指定了
+`--data-dir`，这里也要传入同一个绝对目录。之后显式连接这个 Server：
 
-多人长期使用时，建议换成大家已经信任的 TLS 证书：
+```sh
+vibermate login --server http://127.0.0.1:9666
+vibermate run --server http://127.0.0.1:9666 -- codex
+```
+
+**原生 Web 即使就在本机，也需要 `--server`**；不带它的本地启动连接 App。
+默认 System Transparent 不保存对话正文；需要记录时发布自定义流量策略并用
+`--env` 选中它。
+
+需要其他设备连接（包括个人远程服务器）时，明确选择一种 HTTPS 路径：
+
+- 没有公网域名：使用 ViberMate 私有 CA，配合 hosts 名称或直接签发 IP 证书；
+- 有公网域名：由内置能力自动申请、续期并热加载公共证书；
+- 已有公共/企业证书：挂载证书文件。
+
+已有证书的示例：
 
 ```sh
 ./vibermated server \
   --listen 0.0.0.0:9666 \
+  --access-address runtime.example.com:9666 \
   --transport tls_files \
   --tls-cert /绝对路径/fullchain.pem \
   --tls-key /绝对路径/private-key.pem
@@ -98,7 +116,11 @@ vibermate run --server https://your-server.example:9666 -- claude
 # 或：vibermate run --server https://your-server.example:9666 -- codex
 ```
 
-请将示例地址替换为你在浏览器中打开的 HTTPS 地址。
+请将示例地址替换为浏览器打开的准确 HTTPS 地址。CLI 会优先使用系统 PKI，因此公共
+证书正常续期不会改变服务器身份。私有 CA 部署应在服务器本机通过
+`vibermated server ca-certificate` 导出公开 CA，带外核对指纹后再安装。已有精确叶
+指纹可用 `vibermate trust --server <URL> --system-roots` 显式迁移。完整命令和信任
+边界见[统一部署指南](docs/deployment.md)。
 
 每个人都能从网页右上角修改自己的密码；所有者可以重置成员密码。本机 App
 还可在 **设置 → 用户管理** 中重置自己的所有者密码。如果是无界面的 Server，
@@ -113,8 +135,8 @@ vibermate run --server https://your-server.example:9666 -- claude
   不需要修改系统 CA。
 - 在 macOS 上，只有其他客户端必须依赖系统信任时，才需要在
   **设置 → 安全与数据 → 本机根证书**中安装。
-- 用于检查代理流量的 Runtime 根证书，与浏览器访问远程 Server 时使用的 TLS
-  证书，是两件不同的东西。
+- 公共/企业 Server HTTPS 与 AI 流量检查相互独立；明确启用的私有 CA Server 模式
+  会共用 Runtime CA，因此只能在受管设备上信任。
 - 有 Capture 正在运行时不能替换根证书。安装、替换和删除时，界面都会显示
   需要核对的准确 SHA-256 指纹。
 

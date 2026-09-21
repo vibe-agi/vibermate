@@ -23,6 +23,33 @@ import (
 
 func TestStrictTransportPreservesHTTP2AcrossTheProviderBoundary(t *testing.T) {
 	t.Parallel()
+	testStrictTransportStreaming(t, wireprofile.ApplicationProtocolHTTP2, []string{"h2", "http/1.1"})
+}
+
+func TestStrictTransportStreamsHTTP1WithoutALPN(t *testing.T) {
+	t.Parallel()
+	testStrictTransportStreaming(t, wireprofile.ApplicationProtocolHTTP1, nil)
+}
+
+func TestStrictTransportStreamsHTTP1WithALPN(t *testing.T) {
+	t.Parallel()
+	testStrictTransportStreaming(t, wireprofile.ApplicationProtocolHTTP1, []string{"http/1.1"})
+}
+
+func testStrictTransportStreaming(t *testing.T, protocol wireprofile.ApplicationProtocol, clientALPN []string) {
+	t.Helper()
+	wantMajor := 1
+	wantTransport := wireprofile.HTTPTransportHTTP1
+	if protocol == wireprofile.ApplicationProtocolHTTP2 {
+		wantMajor = 2
+		wantTransport = wireprofile.HTTPTransportHTTP2
+	}
+	var upstreamALPN []string
+	var negotiatedALPN string
+	if len(clientALPN) != 0 {
+		upstreamALPN = []string{string(protocol)}
+		negotiatedALPN = string(protocol)
+	}
 
 	const firstChunk = `{"chunk":1}`
 	const secondChunk = `{"chunk":2}`
@@ -55,10 +82,10 @@ func TestStrictTransportPreservesHTTP2AcrossTheProviderBoundary(t *testing.T) {
 		<-releaseSecond
 		_, _ = writer.Write([]byte(secondChunk))
 	}))
-	server.EnableHTTP2 = true
+	server.EnableHTTP2 = protocol == wireprofile.ApplicationProtocolHTTP2
 	server.TLS = &tls.Config{
 		MinVersion: tls.VersionTLS12,
-		NextProtos: []string{string(wireprofile.ApplicationProtocolHTTP2)},
+		NextProtos: []string{string(protocol)},
 	}
 	server.StartTLS()
 	defer server.Close()
@@ -90,9 +117,9 @@ func TestStrictTransportPreservesHTTP2AcrossTheProviderBoundary(t *testing.T) {
 	}
 	defer shutdownClient(t, client)
 
-	observation := captureHTTP2ClientHello(t)
+	observation := captureTransportClientHello(t, clientALPN)
 	observation, err = observation.WithDownstreamNegotiatedALPN(
-		string(wireprofile.ApplicationProtocolHTTP2),
+		negotiatedALPN,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -129,7 +156,7 @@ func TestStrictTransportPreservesHTTP2AcrossTheProviderBoundary(t *testing.T) {
 		SecretRef:       secretRef,
 		AuthDriverRef:   providerauth.StaticHeaderDriverRef(),
 		WireProfile:     plan.wireProfile,
-		ClientProtocol:  wireprofile.ApplicationProtocolHTTP2,
+		ClientProtocol:  protocol,
 		ClientUserAgent: "h2-client/1.0",
 		ClientHello:     observation,
 	})
@@ -138,59 +165,61 @@ func TestStrictTransportPreservesHTTP2AcrossTheProviderBoundary(t *testing.T) {
 	}
 	response, evidence, err := client.Do(context.Background(), request)
 	if err != nil {
-		t.Fatalf("send HTTP/2 provider request: %v", err)
+		t.Fatalf("send %s provider request: %v", protocol, err)
 	}
 	select {
 	case <-firstFlushed:
 	case <-time.After(time.Second):
-		t.Fatal("provider did not flush the first HTTP/2 response chunk")
+		t.Fatal("provider did not flush the first response chunk")
 	}
 	first := make([]byte, len(firstChunk))
 	if _, err := io.ReadFull(response.Body, first); err != nil {
-		t.Fatalf("read first HTTP/2 provider response chunk: %v", err)
+		t.Fatalf("read first provider response chunk: %v", err)
 	}
 	if string(first) != firstChunk {
-		t.Fatalf("first HTTP/2 response chunk = %q", first)
+		t.Fatalf("first response chunk = %q", first)
 	}
 	releaseOnce.Do(func() { close(releaseSecond) })
 	rest, err := io.ReadAll(response.Body)
 	if err != nil {
-		t.Fatalf("read remaining HTTP/2 provider response: %v", err)
+		t.Fatalf("read remaining provider response: %v", err)
 	}
 	if string(rest) != secondChunk {
-		t.Fatalf("remaining HTTP/2 response = %q", rest)
+		t.Fatalf("remaining response = %q", rest)
 	}
 	if err := response.Body.Close(); err != nil {
-		t.Fatalf("close HTTP/2 provider response: %v", err)
+		t.Fatalf("close provider response: %v", err)
 	}
 	wantAuthority := net.JoinHostPort("example.com", strconv.Itoa(port))
 	select {
 	case got := <-observed:
-		if got.protocol != 2 || got.host != wantAuthority ||
+		if got.protocol != wantMajor || got.host != wantAuthority ||
 			got.userAgent != "h2-client/1.0" {
 			t.Fatalf("provider observed = %+v", got)
 		}
 	case <-time.After(time.Second):
-		t.Fatal("provider did not observe the HTTP/2 request")
+		t.Fatal("provider did not observe the request")
 	}
-	if evidence.Presentation.ClientProtocol != wireprofile.ApplicationProtocolHTTP2 ||
-		evidence.Presentation.UpstreamProtocol != wireprofile.ApplicationProtocolHTTP2 ||
-		evidence.Transport.HTTPTransport() != wireprofile.HTTPTransportHTTP2 ||
-		evidence.Transport.DownstreamNegotiatedALPN() != "h2" ||
+	if evidence.Presentation.ClientProtocol != protocol ||
+		evidence.Presentation.UpstreamProtocol != protocol ||
+		evidence.Transport.HTTPTransport() != wantTransport ||
+		evidence.Transport.DownstreamNegotiatedALPN() != negotiatedALPN ||
 		!slices.Equal(
 			evidence.Transport.ClientOfferedALPN(),
-			[]string{"h2", "http/1.1"},
+			clientALPN,
 		) ||
 		!slices.Equal(
 			evidence.Transport.UpstreamOfferedALPN(),
-			[]string{"h2"},
+			upstreamALPN,
 		) ||
-		evidence.Transport.UpstreamNegotiatedALPN() != "h2" {
-		t.Fatalf("HTTP/2 evidence = %+v", evidence)
+		evidence.Transport.UpstreamNegotiatedALPN() != negotiatedALPN ||
+		evidence.Transport.Effective().Ref == "" ||
+		evidence.Transport.UsedFallback() {
+		t.Fatalf("transport evidence = %+v", evidence)
 	}
 }
 
-func captureHTTP2ClientHello(t *testing.T) transportprofile.Observation {
+func captureTransportClientHello(t *testing.T, alpn []string) transportprofile.Observation {
 	t.Helper()
 	clientSide, serverSide := net.Pipe()
 	clientDone := make(chan error, 1)
@@ -198,10 +227,7 @@ func captureHTTP2ClientHello(t *testing.T) transportprofile.Observation {
 		secured := tls.Client(clientSide, &tls.Config{
 			MinVersion: tls.VersionTLS12,
 			ServerName: "client.example",
-			NextProtos: []string{
-				string(wireprofile.ApplicationProtocolHTTP2),
-				string(wireprofile.ApplicationProtocolHTTP1),
-			},
+			NextProtos: alpn,
 		})
 		clientDone <- secured.Handshake()
 	}()
@@ -220,7 +246,7 @@ func captureHTTP2ClientHello(t *testing.T) transportprofile.Observation {
 	select {
 	case <-clientDone:
 	case <-time.After(time.Second):
-		t.Fatal("test HTTP/2 ClientHello did not stop")
+		t.Fatal("test ClientHello did not stop")
 	}
 	return observation
 }

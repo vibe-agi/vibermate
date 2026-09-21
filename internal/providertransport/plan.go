@@ -320,6 +320,10 @@ type RequestOptions struct {
 	// this outbound. It contains no secret bytes and is optional only for
 	// callers that do not install a Raw observer (primarily focused tests).
 	RawEvidence *rawevidence.Context
+	// MessageTransformUserAgent is an explicit, pre-authentication edit made by
+	// an authorized request transform. Nil preserves the wire-profile default;
+	// an empty value suppresses User-Agent. Account header policy still runs last.
+	MessageTransformUserAgent *string
 }
 
 // Request is a frozen provider representation. Its URL, authority, body,
@@ -351,6 +355,8 @@ type Request struct {
 	clientHello     transportprofile.Observation
 	egressPolicy    egressnetwork.Policy
 	rawEvidence     *rawevidence.Context
+
+	messageTransformUserAgent *string
 }
 
 // WirePresentationEvidence is the redacted product-level presentation chosen
@@ -524,6 +530,17 @@ func NewRequest(options RequestOptions) (Request, error) {
 		!validPresentationUserAgent(options.ClientUserAgent) {
 		return Request{}, errors.New("provider client User-Agent is invalid")
 	}
+	var messageTransformUserAgent *string
+	if options.MessageTransformUserAgent != nil {
+		value := *options.MessageTransformUserAgent
+		if value != "" && !validPresentationUserAgent(value) {
+			return Request{}, errors.New("message transform User-Agent is invalid")
+		}
+		if _, keys := headerValuesFold(options.Headers, "User-Agent"); keys != 0 {
+			return Request{}, errors.New("message transform User-Agent has conflicting authorities")
+		}
+		messageTransformUserAgent = &value
+	}
 	var rawEvidence *rawevidence.Context
 	if options.RawEvidence != nil {
 		candidate := *options.RawEvidence
@@ -612,6 +629,8 @@ func NewRequest(options RequestOptions) (Request, error) {
 		clientHello:     options.ClientHello,
 		egressPolicy:    egressPolicy,
 		rawEvidence:     rawEvidence,
+
+		messageTransformUserAgent: messageTransformUserAgent,
 	}, nil
 }
 

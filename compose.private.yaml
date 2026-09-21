@@ -1,0 +1,44 @@
+# Private HTTPS for a LAN/VPN without a public domain. ViberMate signs the
+# listener leaf with this Runtime's private CA. Install that CA only on managed
+# clients; use the exact DNS name or IP in VIBERMATE_ACCESS_ADDRESS.
+name: vibermate-private
+
+services:
+  vibermate:
+    image: ${VIBERMATE_IMAGE:-vibermate-runtime:0.1.10-local}
+    pull_policy: never
+    init: true
+    restart: unless-stopped
+    stop_grace_period: 35s
+    command:
+      - server
+      - --listen
+      - 0.0.0.0:9666
+      - --access-address
+      - ${VIBERMATE_ACCESS_ADDRESS:?Set the exact client-facing host:port in .env.private}
+      - --data-dir
+      - /data
+      - --web-root
+      - /opt/vibermate/vibermate-web
+      - --transport
+      - private_ca_tls
+    ports:
+      - "${VIBERMATE_PRIVATE_BIND_ADDRESS:?Set the host interface in .env.private}:${VIBERMATE_PORT:-9666}:9666"
+    volumes:
+      - runtime-data:/data
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  runtime-data:
+    name: ${VIBERMATE_PRIVATE_DATA_VOLUME:-vibermate-private-data}

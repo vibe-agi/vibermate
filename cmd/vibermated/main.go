@@ -12,18 +12,30 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/vibe-agi/vibermate/internal/desktopdaemon"
 	"github.com/vibe-agi/vibermate/internal/hostsecret"
+	"github.com/vibe-agi/vibermate/internal/localca"
 	"github.com/vibe-agi/vibermate/internal/serveradmin"
+	"github.com/vibe-agi/vibermate/internal/serverconnection"
 	"github.com/vibe-agi/vibermate/internal/serverdaemon"
 	"github.com/vibe-agi/vibermate/internal/serverhost"
+	"github.com/vibe-agi/vibermate/internal/serveridentity"
 )
 
 func main() {
 	if len(os.Args) > 1 && os.Args[1] == "server" {
 		if len(os.Args) > 2 && os.Args[2] == "recovery-key" {
 			runServerRecoveryKey(os.Args[3:])
+			return
+		}
+		if len(os.Args) > 2 && os.Args[2] == "ca-certificate" {
+			runServerCACertificate(os.Args[3:])
+			return
+		}
+		if len(os.Args) == 3 && (os.Args[2] == "--help" || os.Args[2] == "-h") {
+			fmt.Fprint(os.Stdout, serverHelp)
 			return
 		}
 		runServer(os.Args[2:])
@@ -86,6 +98,29 @@ func main() {
 	}
 }
 
+const serverHelp = `Run a ViberMate Runtime Server and Web workbench.
+
+Local on this computer (no domain or certificate):
+  vibermated server
+
+Private HTTPS for a managed LAN/VPN DNS name or IP:
+  vibermated server --listen 0.0.0.0:9666 \
+    --access-address vibermate.home.arpa:9666 --transport private_ca_tls
+
+Automatic public HTTPS (public TCP 443 must reach the listener):
+  vibermated server --listen 0.0.0.0:443 \
+    --access-address runtime.example.com:443 --transport automatic_tls \
+    --acme-agree-terms --acme-email admin@example.com \
+    --acme-challenge tls_alpn_01
+
+Server-local bootstrap commands:
+  vibermated server recovery-key [--data-dir /absolute/path]
+  vibermated server ca-certificate [--data-dir /absolute/path]
+
+See docs/deployment.md for existing certificate files, containers, port
+forwarding, private-CA trust and security boundaries.
+`
+
 func runServerRecoveryKey(arguments []string) {
 	dataDirectory, err := parseRecoveryKeyArguments(arguments)
 	if err != nil {
@@ -100,12 +135,40 @@ func runServerRecoveryKey(arguments []string) {
 	fmt.Fprintln(os.Stdout, key)
 }
 
+func runServerCACertificate(arguments []string) {
+	dataDirectory, err := parseServerDataDirectoryArguments(
+		arguments, "ca-certificate",
+	)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(2)
+	}
+	certificate, err := localca.ReadRootCertificate(
+		filepath.Join(dataDirectory, "local-ca"), time.Now().UTC(),
+	)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "Runtime Server CA certificate is unavailable; start the Server once first")
+		os.Exit(1)
+	}
+	if _, err := os.Stdout.Write(certificate.CertificatePEM()); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+}
+
 func parseRecoveryKeyArguments(arguments []string) (string, error) {
+	return parseServerDataDirectoryArguments(arguments, "recovery-key")
+}
+
+func parseServerDataDirectoryArguments(
+	arguments []string,
+	command string,
+) (string, error) {
 	var dataDirectory string
 	for index := 0; index < len(arguments); index++ {
 		name, value, inline := strings.Cut(arguments[index], "=")
 		if name != "--data-dir" || dataDirectory != "" {
-			return "", errors.New("vibermated server recovery-key accepts only one --data-dir")
+			return "", errors.New("vibermated server " + command + " accepts only one --data-dir")
 		}
 		if !inline {
 			index++
@@ -179,6 +242,7 @@ func directManagementUIRoot(root string, optional bool) (string, error) {
 type serverCommandConfig struct {
 	dataDirectory string
 	listenAddress string
+	accessAddress string
 	webRoot       string
 	transport     serverhost.TransportOptions
 }
@@ -225,6 +289,7 @@ func runServer(arguments []string) {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
+	options.Host.AccessAddress = config.accessAddress
 	if err := serverdaemon.Run(ctx, options); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
@@ -241,8 +306,10 @@ func parseServerArguments(arguments []string) (serverCommandConfig, error) {
 		argument := arguments[index]
 		name, value, hasInline := strings.Cut(argument, "=")
 		switch name {
-		case "--data-dir", "--listen", "--web-root",
-			"--transport", "--tls-cert", "--tls-key":
+		case "--data-dir", "--listen", "--access-address", "--web-root",
+			"--transport", "--tls-cert", "--tls-key", "--tls-hosts",
+			"--acme-email", "--acme-challenge", "--acme-http-port", "--acme-ca",
+			"--acme-agree-terms":
 		default:
 			return serverCommandConfig{}, errors.New("vibermated server received an unsupported argument")
 		}
@@ -250,7 +317,14 @@ func parseServerArguments(arguments []string) (serverCommandConfig, error) {
 			return serverCommandConfig{}, errors.New(name + " may only be specified once")
 		}
 		seen[name] = struct{}{}
-		if !hasInline {
+		if name == "--acme-agree-terms" {
+			if hasInline && value != "true" {
+				return serverCommandConfig{}, errors.New(
+					"--acme-agree-terms does not accept a value other than true",
+				)
+			}
+			value = "true"
+		} else if !hasInline {
 			index++
 			if index >= len(arguments) {
 				return serverCommandConfig{}, errors.New(name + " requires a value")
@@ -265,6 +339,8 @@ func parseServerArguments(arguments []string) (serverCommandConfig, error) {
 			config.dataDirectory = value
 		case "--listen":
 			config.listenAddress = value
+		case "--access-address":
+			config.accessAddress = value
 		case "--web-root":
 			config.webRoot = value
 		case "--transport":
@@ -273,6 +349,22 @@ func parseServerArguments(arguments []string) (serverCommandConfig, error) {
 			config.transport.CertificateFile = value
 		case "--tls-key":
 			config.transport.PrivateKeyFile = value
+		case "--tls-hosts":
+			config.transport.TLSHosts = strings.Split(value, ",")
+		case "--acme-email":
+			config.transport.Automatic.ContactEmail = value
+		case "--acme-challenge":
+			config.transport.Automatic.Challenge = serveridentity.AutomaticChallenge(value)
+		case "--acme-http-port":
+			port, parseErr := strconv.Atoi(value)
+			if parseErr != nil {
+				return serverCommandConfig{}, errors.New("--acme-http-port is invalid")
+			}
+			config.transport.Automatic.HTTPChallengePort = port
+		case "--acme-ca":
+			config.transport.Automatic.CA = value
+		case "--acme-agree-terms":
+			config.transport.Automatic.TermsAgreed = true
 		}
 	}
 	if config.dataDirectory == "" {
@@ -285,9 +377,44 @@ func parseServerArguments(arguments []string) (serverCommandConfig, error) {
 	if !filepath.IsAbs(config.dataDirectory) ||
 		filepath.Clean(config.dataDirectory) != config.dataDirectory ||
 		(config.webRoot != "" && (!filepath.IsAbs(config.webRoot) ||
-			filepath.Clean(config.webRoot) != config.webRoot)) ||
-		!validServerTransport(config.transport) {
+			filepath.Clean(config.webRoot) != config.webRoot)) {
 		return serverCommandConfig{}, errors.New("vibermated server configuration is invalid")
+	}
+	if config.accessAddress != "" {
+		address, addressErr := serverconnection.ParseAddress(config.accessAddress)
+		if addressErr != nil || address.String() != config.accessAddress {
+			return serverCommandConfig{}, errors.New(
+				"vibermated server access address is invalid",
+			)
+		}
+	}
+	if config.transport.Mode == serverhost.TransportAutomaticTLS {
+		accessHost, _, splitErr := net.SplitHostPort(config.accessAddress)
+		if splitErr != nil {
+			return serverCommandConfig{}, errors.New(
+				"automatic HTTPS requires --access-address with a public DNS name",
+			)
+		}
+		config.transport.Automatic.ServerName = accessHost
+		if config.transport.Automatic.Challenge == "" {
+			config.transport.Automatic.Challenge = serveridentity.AutomaticChallengeHTTP01
+		}
+		if config.transport.Automatic.Challenge == serveridentity.AutomaticChallengeHTTP01 {
+			if _, configured := seen["--acme-http-port"]; !configured {
+				config.transport.Automatic.HTTPChallengePort = 80
+			}
+		}
+	}
+	if (config.transport.Mode == serverhost.TransportPrivateCATLS ||
+		config.transport.Mode == serverhost.TransportSelfSignedTLS) &&
+		len(config.transport.TLSHosts) == 0 && config.accessAddress != "" {
+		accessHost, _, splitErr := net.SplitHostPort(config.accessAddress)
+		if splitErr == nil {
+			config.transport.TLSHosts = []string{accessHost}
+		}
+	}
+	if !validServerTransport(config.transport) {
+		return serverCommandConfig{}, errors.New("vibermated server transport is invalid")
 	}
 	listenHost, _, err := net.SplitHostPort(config.listenAddress)
 	if err != nil {
@@ -305,19 +432,7 @@ func parseServerArguments(arguments []string) (serverCommandConfig, error) {
 }
 
 func validServerTransport(transport serverhost.TransportOptions) bool {
-	switch transport.Mode {
-	case serverhost.TransportHTTP, serverhost.TransportSelfSignedTLS:
-		return transport.CertificateFile == "" && transport.PrivateKeyFile == ""
-	case serverhost.TransportTLSFiles:
-		return transport.CertificateFile != "" && transport.PrivateKeyFile != "" &&
-			filepath.IsAbs(transport.CertificateFile) &&
-			filepath.Clean(transport.CertificateFile) == transport.CertificateFile &&
-			filepath.IsAbs(transport.PrivateKeyFile) &&
-			filepath.Clean(transport.PrivateKeyFile) == transport.PrivateKeyFile &&
-			transport.CertificateFile != transport.PrivateKeyFile
-	default:
-		return false
-	}
+	return transport.Valid()
 }
 
 type commandConfig struct {

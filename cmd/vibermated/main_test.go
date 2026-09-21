@@ -3,9 +3,11 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/vibe-agi/vibermate/internal/serverhost"
+	"github.com/vibe-agi/vibermate/internal/serveridentity"
 )
 
 func TestParseArgumentsRequiresExplicitHostPathsAndPipe(t *testing.T) {
@@ -234,6 +236,72 @@ func TestParseServerArgumentsAcceptsHeadlessHTTPConfiguration(t *testing.T) {
 	}
 }
 
+func TestParseServerArgumentsAcceptsAnExplicitAccessAddress(t *testing.T) {
+	t.Parallel()
+	config, err := parseServerArguments([]string{
+		"--transport", "private_ca_tls",
+		"--access-address", "runtime.example.com:443",
+		"--tls-hosts", "runtime.example.com",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.accessAddress != "runtime.example.com:443" ||
+		config.transport.Mode != serverhost.TransportPrivateCATLS {
+		t.Fatalf("config = %+v", config)
+	}
+}
+
+func TestParseServerArgumentsBuildsAutomaticHTTPSFromOnePublicAddress(t *testing.T) {
+	t.Parallel()
+	config, err := parseServerArguments([]string{
+		"--listen", "0.0.0.0:9666",
+		"--access-address", "runtime.example.com:443",
+		"--transport", "automatic_tls",
+		"--acme-agree-terms",
+		"--acme-email", "owner@example.com",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy := config.transport.Automatic
+	if config.transport.Mode != serverhost.TransportAutomaticTLS ||
+		policy.ServerName != "runtime.example.com" ||
+		policy.Challenge != serveridentity.AutomaticChallengeHTTP01 ||
+		policy.HTTPChallengePort != 80 || !policy.TermsAgreed {
+		t.Fatalf("automatic config = %+v", config)
+	}
+
+	tlsALPN, err := parseServerArguments([]string{
+		"--access-address=runtime.example.com:443",
+		"--transport=automatic_tls",
+		"--acme-challenge=tls_alpn_01",
+		"--acme-agree-terms=true",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tlsALPN.transport.Automatic.Challenge !=
+		serveridentity.AutomaticChallengeTLSALPN01 ||
+		tlsALPN.transport.Automatic.HTTPChallengePort != 0 {
+		t.Fatalf("TLS-ALPN config = %+v", tlsALPN)
+	}
+}
+
+func TestParseServerArgumentsRejectsUnsafeAutomaticHTTPS(t *testing.T) {
+	t.Parallel()
+	for _, arguments := range [][]string{
+		{"--transport", "automatic_tls", "--acme-agree-terms"},
+		{"--transport", "automatic_tls", "--access-address", "runtime.example.com:443"},
+		{"--transport", "automatic_tls", "--access-address", "192.0.2.10:443", "--acme-agree-terms"},
+		{"--transport", "automatic_tls", "--access-address", "runtime.example.com:443", "--acme-agree-terms", "--acme-challenge", "tls_alpn_01", "--acme-http-port", "8080"},
+	} {
+		if _, err := parseServerArguments(arguments); err == nil {
+			t.Fatalf("unsafe automatic HTTPS was accepted: %v", arguments)
+		}
+	}
+}
+
 func TestParseServerArgumentsDefaultsHeadlessHTTPToLoopback(t *testing.T) {
 	t.Parallel()
 
@@ -283,6 +351,26 @@ func TestParseServerArgumentsRequiresBothCertificateFilesForManagedTLS(t *testin
 	}
 }
 
+func TestParseServerArgumentsAcceptsExplicitCertificateHosts(t *testing.T) {
+	t.Parallel()
+	config, err := parseServerArguments([]string{
+		"--transport", "self_signed_tls", "--tls-hosts", "192.168.1.20,vibermate.example.test",
+	})
+	if err != nil || len(config.transport.TLSHosts) != 2 {
+		t.Fatalf("configured hosts were not accepted: %v", err)
+	}
+	for _, args := range [][]string{
+		{"--tls-hosts", "192.168.1.20"},
+		{"--transport", "self_signed_tls", "--tls-hosts", "https://192.168.1.20:9667"},
+		{"--transport", "self_signed_tls", "--tls-hosts", "0.0.0.0"},
+		{"--transport", "self_signed_tls", "--tls-hosts", "192.168.1.20,"},
+	} {
+		if _, err := parseServerArguments(args); err == nil {
+			t.Fatalf("invalid certificate host configuration was accepted: %v", args)
+		}
+	}
+}
+
 func TestParseServerArgumentsRejectsRemovedClientAdmissionFlag(t *testing.T) {
 	t.Parallel()
 
@@ -313,6 +401,34 @@ func TestParseRecoveryKeyArgumentsUsesTheServerDataDirectory(t *testing.T) {
 	} {
 		if _, err := parseRecoveryKeyArguments(arguments); err == nil {
 			t.Fatalf("parseRecoveryKeyArguments(%v) succeeded", arguments)
+		}
+	}
+}
+
+func TestServerHelpCoversTheThreeRemoteCertificatePaths(t *testing.T) {
+	t.Parallel()
+	for _, value := range []string{
+		"private_ca_tls",
+		"automatic_tls",
+		"ca-certificate",
+		"docs/deployment.md",
+	} {
+		if !strings.Contains(serverHelp, value) {
+			t.Fatalf("server help does not contain %q", value)
+		}
+	}
+}
+
+func TestParseCACertificateArgumentsUsesTheServerDataDirectory(t *testing.T) {
+	t.Parallel()
+	root := filepath.Join(t.TempDir(), "server-data")
+	for _, arguments := range [][]string{{"--data-dir", root}, {"--data-dir=" + root}} {
+		resolved, err := parseServerDataDirectoryArguments(arguments, "ca-certificate")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if resolved != root {
+			t.Fatalf("CA data directory = %q, want %q", resolved, root)
 		}
 	}
 }

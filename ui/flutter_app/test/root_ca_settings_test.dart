@@ -34,28 +34,28 @@ void main() {
             language: AppLanguage.english,
             title: 'Local Root Certificate',
             delivery:
-                'Claude and Codex launches receive this certificate directly. Other clients can install and trust this exact Root for the current macOS user here.',
+                'This Proxy CA is for captured AI connections. Supported managed runs receive scoped trust automatically; using the browser needs no installation. The controls below manage optional trust for other clients on this Mac, not an externally issued server certificate.',
           ),
           (
             theme: ViberTheme.dark(),
             language: AppLanguage.english,
             title: 'Local Root Certificate',
             delivery:
-                'Claude and Codex launches receive this certificate directly. Other clients can install and trust this exact Root for the current macOS user here.',
+                'This Proxy CA is for captured AI connections. Supported managed runs receive scoped trust automatically; using the browser needs no installation. The controls below manage optional trust for other clients on this Mac, not an externally issued server certificate.',
           ),
           (
             theme: ViberTheme.light(),
             language: AppLanguage.simplifiedChinese,
             title: '本机根证书',
             delivery:
-                'Claude 与 Codex 启动时会直接获得当前证书；其他客户端可在这里为当前 macOS 登录用户安装并信任这张根证书。',
+                '这张代理 CA 用于捕获 AI 连接。受支持的托管启动会自动获得进程级信任，使用网页无需安装。下方操作仅为这台 Mac 上的其他客户端管理可选的系统信任，不会改变外部机构签发的服务器证书。',
           ),
           (
             theme: ViberTheme.dark(),
             language: AppLanguage.simplifiedChinese,
             title: '本机根证书',
             delivery:
-                'Claude 与 Codex 启动时会直接获得当前证书；其他客户端可在这里为当前 macOS 登录用户安装并信任这张根证书。',
+                '这张代理 CA 用于捕获 AI 连接。受支持的托管启动会自动获得进程级信任，使用网页无需安装。下方操作仅为这台 Mac 上的其他客户端管理可选的系统信任，不会改变外部机构签发的服务器证书。',
           ),
         ]) {
       final api = PreviewControlApi(seedCaptures: false);

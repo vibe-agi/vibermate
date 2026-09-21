@@ -1,6 +1,7 @@
 package serverhost
 
 import (
+	"net"
 	"net/netip"
 	"reflect"
 	"testing"
@@ -42,5 +43,52 @@ func TestRuntimeConnectTargetsKeepAnExplicitListenIPAndBracketIPv6(t *testing.T)
 		if !reflect.DeepEqual(targets, test.want) {
 			t.Fatalf("runtimeConnectTargets(%q) = %#v, want %#v", test.listen, targets, test.want)
 		}
+	}
+}
+
+func TestRuntimeAccessTargetsPreferAnExplicitPublicAddress(t *testing.T) {
+	t.Parallel()
+	targets, err := runtimeAccessTargets(
+		"0.0.0.0:9666",
+		"runtime.example.com:443",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"runtime.example.com:443"}
+	if !reflect.DeepEqual(targets, want) {
+		t.Fatalf("targets = %#v, want %#v", targets, want)
+	}
+}
+
+func TestPrivateCATransportDerivesCertificateIdentityFromAccessAddress(t *testing.T) {
+	t.Parallel()
+	for _, address := range []string{
+		"vibermate.home.arpa:9666",
+		"192.168.1.20:9666",
+		"[fd00::20]:9666",
+	} {
+		options, err := (TransportOptions{Mode: TransportPrivateCATLS}).
+			forAccessAddress(address)
+		if err != nil {
+			t.Fatal(err)
+		}
+		host, _, _ := net.SplitHostPort(address)
+		if len(options.TLSHosts) != 1 || options.TLSHosts[0] != host {
+			t.Fatalf("%s TLS hosts = %#v", address, options.TLSHosts)
+		}
+	}
+}
+
+func TestPrivateCATransportKeepsExplicitCertificateIdentities(t *testing.T) {
+	t.Parallel()
+	options, err := (TransportOptions{
+		Mode: TransportPrivateCATLS, TLSHosts: []string{"explicit.home.arpa"},
+	}).forAccessAddress("another.home.arpa:9666")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(options.TLSHosts) != 1 || options.TLSHosts[0] != "explicit.home.arpa" {
+		t.Fatalf("TLS hosts = %#v", options.TLSHosts)
 	}
 }

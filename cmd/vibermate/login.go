@@ -21,6 +21,8 @@ const (
 	keyLoginHTTPWarning = "cli.login.httpWarning"
 	keyLogoutUsage      = "cli.usage.logout"
 	keyLogoutFailed     = "cli.error.logoutFailed"
+	keyTrustUsage       = "cli.usage.trust"
+	keyTrustFailed      = "cli.error.trustFailed"
 
 	maxLoginInputBytes = 2 << 10
 )
@@ -28,6 +30,24 @@ const (
 type loginConfig struct {
 	server      serverconnection.Target
 	environment []string
+}
+
+type trustConfig struct {
+	server serverconnection.Target
+}
+
+func parseTrust(arguments []string) (trustConfig, error) {
+	if len(arguments) != 4 || arguments[0] != "trust" ||
+		arguments[1] != "--server" || arguments[3] != "--system-roots" {
+		return trustConfig{}, errors.New(
+			"trust requires --server https://host:port --system-roots",
+		)
+	}
+	target, err := serverconnection.ParseTarget(arguments[2])
+	if err != nil || target.Transport() != serverconnection.TransportHTTPS {
+		return trustConfig{}, errors.New("trust requires an HTTPS Runtime Server")
+	}
+	return trustConfig{server: target}, nil
 }
 
 func parseLogin(arguments []string) (loginConfig, error) {
@@ -135,6 +155,38 @@ func executeRemoteLogout(
 		return 1, keyLogoutFailed
 	}
 	_, _ = fmt.Fprintf(stdout, "Logged out from %s.\n", config.server.Origin())
+	return 0, ""
+}
+
+func executeRemoteTrust(
+	ctx context.Context,
+	config trustConfig,
+	stateDirectory string,
+	clock runlauncher.RemoteClock,
+	stdout io.Writer,
+) (int, string) {
+	if ctx == nil || !config.server.Valid() || stateDirectory == "" ||
+		clock == nil || stdout == nil {
+		return 1, keyTrustFailed
+	}
+	trustContext, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	fingerprint, err := runlauncher.TrustRemoteSystemRoots(
+		trustContext,
+		config.server,
+		stateDirectory,
+		clock,
+		15*time.Second,
+	)
+	if err != nil {
+		return 1, keyTrustFailed
+	}
+	_, _ = fmt.Fprintf(
+		stdout,
+		"Verified %s with system roots and migrated its saved trust (SHA-256 %s).\n",
+		config.server.Origin(),
+		fingerprint,
+	)
 	return 0, ""
 }
 

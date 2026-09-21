@@ -7,6 +7,72 @@ import 'provider_origin.dart';
 
 typedef JsonObject = Map<String, Object?>;
 
+final class RuntimeRootCertificate {
+  const RuntimeRootCertificate({
+    required this.certificatePem,
+    required this.fingerprint,
+    required this.notBefore,
+    required this.notAfter,
+  });
+
+  factory RuntimeRootCertificate.fromJson(Object? json, String path) {
+    final value = requireObject(json, path);
+    requireFields(
+      value,
+      path,
+      required: const {
+        'schema',
+        'certificatePem',
+        'fingerprint',
+        'notBefore',
+        'notAfter',
+      },
+    );
+    if (value['schema'] != 'vibermate-runtime-root-ca-v1') {
+      throw ControlContractException('$path Runtime Root CA schema is invalid');
+    }
+    final pem = requireString(value, 'certificatePem', path);
+    final fingerprint = requireString(value, 'fingerprint', path);
+    final pattern = RegExp(
+      r'-----BEGIN CERTIFICATE-----\r?\n([A-Za-z0-9+/=\r\n]+)-----END CERTIFICATE-----',
+    );
+    final blocks = pattern.allMatches(pem).toList();
+    if (pem.length > 64 * 1024 ||
+        blocks.length != 1 ||
+        pem.replaceAll(pattern, '').trim().isNotEmpty ||
+        !RegExp(r'^[a-f0-9]{64}$').hasMatch(fingerprint)) {
+      throw ControlContractException('$path public Root CA is invalid');
+    }
+    try {
+      final der = base64Decode(blocks.single[1]!.replaceAll(RegExp(r'\s'), ''));
+      if (der.isEmpty || crypto.sha256.convert(der).toString() != fingerprint) {
+        throw const FormatException('certificate fingerprint mismatch');
+      }
+    } on FormatException {
+      throw ControlContractException(
+        '$path Root CA fingerprint is inconsistent',
+      );
+    }
+    final before = DateTime.tryParse(requireString(value, 'notBefore', path));
+    final after = DateTime.tryParse(requireString(value, 'notAfter', path));
+    if (before == null || after == null || !after.isAfter(before)) {
+      throw ControlContractException('$path Root CA validity is invalid');
+    }
+    return RuntimeRootCertificate(
+      certificatePem: pem,
+      fingerprint: fingerprint,
+      notBefore: before,
+      notAfter: after,
+    );
+  }
+
+  final String certificatePem;
+  final String fingerprint;
+  final DateTime notBefore;
+  final DateTime notAfter;
+  String get fileName => 'vibermate-proxy-ca.crt';
+}
+
 const upstreamBackendProtocols = <String>[
   'anthropic_messages',
   'openai_responses',
@@ -38,10 +104,12 @@ final class RuntimeServerAccess {
     required this.authentication,
     required this.sessionPolicy,
     required this.targets,
+    this.tls = const RuntimeServerTLS(mode: 'unknown', state: 'unavailable'),
   });
 
   factory RuntimeServerAccess.fromJson(Object? json, String path) {
     final value = requireObject(json, path);
+    final schema = requireString(value, 'schema', path);
     requireFields(
       value,
       path,
@@ -51,15 +119,17 @@ final class RuntimeServerAccess {
         'authentication',
         'sessionPolicy',
         'targets',
+        'tls',
       },
     );
-    if (requireString(value, 'schema', path) != 'vibermate-server-access-v2') {
+    if (schema != 'vibermate-server-access-v1') {
       throw ControlContractException('$path schema is unsupported');
     }
     final transport = requireString(value, 'transport', path);
     final authentication = requireString(value, 'authentication', path);
     final sessionPolicy = requireString(value, 'sessionPolicy', path);
     final rawTargets = requireList(value['targets'], '$path.targets');
+    final tls = RuntimeServerTLS.fromJson(value['tls'], '$path.tls');
     final targets = <String>[];
     for (final (index, item) in rawTargets.indexed) {
       if (item is! String || item.isEmpty) {
@@ -73,7 +143,8 @@ final class RuntimeServerAccess {
         targets.isEmpty ||
         targets.length > 32 ||
         targets.toSet().length != targets.length ||
-        !targets.every(_validRuntimeServerTarget)) {
+        !targets.every(_validRuntimeServerTarget) ||
+        !tls.validForTransport(transport)) {
       throw ControlContractException('$path access contract is unsupported');
     }
     return RuntimeServerAccess(
@@ -81,6 +152,7 @@ final class RuntimeServerAccess {
       authentication: authentication,
       sessionPolicy: sessionPolicy,
       targets: List.unmodifiable(targets),
+      tls: tls,
     );
   }
 
@@ -88,6 +160,7 @@ final class RuntimeServerAccess {
   final String authentication;
   final String sessionPolicy;
   final List<String> targets;
+  final RuntimeServerTLS tls;
 
   String get preferredTarget => targets.first;
 
@@ -97,7 +170,144 @@ final class RuntimeServerAccess {
       authentication == 'runtime_user_password';
 }
 
+final class RuntimeServerTLS {
+  const RuntimeServerTLS({
+    required this.mode,
+    required this.state,
+    this.serverName,
+    this.challenge,
+    this.fingerprint,
+    this.issuer,
+    this.notBefore,
+    this.notAfter,
+    this.lastError,
+  });
+
+  factory RuntimeServerTLS.fromJson(Object? json, String path) {
+    final value = requireObject(json, path);
+    requireFields(
+      value,
+      path,
+      required: const {'mode', 'state'},
+      optional: const {
+        'serverName',
+        'challenge',
+        'fingerprint',
+        'issuer',
+        'notBefore',
+        'notAfter',
+        'lastError',
+      },
+    );
+    final mode = requireString(value, 'mode', path);
+    final state = requireString(value, 'state', path);
+    final serverName = optionalString(value, 'serverName', path);
+    final challenge = optionalString(value, 'challenge', path);
+    final fingerprint = optionalString(value, 'fingerprint', path);
+    final issuer = optionalString(value, 'issuer', path);
+    final notBefore = optionalString(value, 'notBefore', path);
+    final notAfter = optionalString(value, 'notAfter', path);
+    final lastError = optionalString(value, 'lastError', path);
+    if (!const {
+          'http',
+          'private_ca_tls',
+          'self_signed_tls',
+          'tls_files',
+          'automatic_tls',
+          'unknown',
+        }.contains(mode) ||
+        !const {
+          'disabled',
+          'unavailable',
+          'pending',
+          'ready',
+          'renewing',
+          'renewal_failed',
+        }.contains(state) ||
+        (challenge != null &&
+            !const {'http_01', 'tls_alpn_01'}.contains(challenge)) ||
+        (fingerprint != null &&
+            !RegExp(r'^[a-f0-9]{64}$').hasMatch(fingerprint)) ||
+        !_validTLSRange(notBefore, notAfter)) {
+      throw ControlContractException('$path TLS status is unsupported');
+    }
+    return RuntimeServerTLS(
+      mode: mode,
+      state: state,
+      serverName: serverName,
+      challenge: challenge,
+      fingerprint: fingerprint,
+      issuer: issuer,
+      notBefore: notBefore,
+      notAfter: notAfter,
+      lastError: lastError,
+    );
+  }
+
+  final String mode;
+  final String state;
+  final String? serverName;
+  final String? challenge;
+  final String? fingerprint;
+  final String? issuer;
+  final String? notBefore;
+  final String? notAfter;
+  final String? lastError;
+
+  bool validForTransport(String transport) {
+    if (transport == 'http') {
+      return mode == 'http' &&
+          state == 'disabled' &&
+          serverName == null &&
+          challenge == null &&
+          fingerprint == null &&
+          issuer == null &&
+          notBefore == null &&
+          notAfter == null &&
+          lastError == null;
+    }
+    return switch (mode) {
+      'private_ca_tls' || 'self_signed_tls' || 'tls_files' =>
+        state == 'ready' &&
+            serverName == null &&
+            challenge == null &&
+            fingerprint != null &&
+            lastError == null,
+      'automatic_tls' =>
+        serverName != null &&
+            challenge != null &&
+            switch (state) {
+              'pending' => fingerprint == null && lastError == null,
+              'ready' || 'renewing' => fingerprint != null && lastError == null,
+              'renewal_failed' => lastError != null,
+              _ => false,
+            },
+      'unknown' =>
+        state == 'unavailable' &&
+            serverName == null &&
+            challenge == null &&
+            fingerprint == null &&
+            issuer == null &&
+            notBefore == null &&
+            notAfter == null &&
+            lastError == null,
+      _ => false,
+    };
+  }
+}
+
+bool _validTLSRange(String? notBefore, String? notAfter) {
+  if (notBefore == null && notAfter == null) return true;
+  if (notBefore == null || notAfter == null) return false;
+  final before = DateTime.tryParse(notBefore);
+  final after = DateTime.tryParse(notAfter);
+  return before != null && after != null && after.isAfter(before);
+}
+
 bool _validRuntimeServerTarget(String value) {
+  if (value.isEmpty || value.length > 512 || value.trim() != value) {
+    return false;
+  }
   final uri = Uri.tryParse('http://$value');
   if (uri == null ||
       !uri.hasPort ||
@@ -120,9 +330,29 @@ bool _validRuntimeServerTarget(String value) {
             parsed <= 255 &&
             part == '$parsed';
       })) {
-    return true;
+    return value == '$host:${uri.port}';
   }
-  return host.contains(':') && RegExp(r'^[0-9A-Fa-f:.]+$').hasMatch(host);
+  if (host.contains(':')) {
+    return RegExp(r'^[0-9A-Fa-f:.]+$').hasMatch(host) &&
+        value == '[${host.toLowerCase()}]:${uri.port}';
+  }
+  if (host.length > 253 ||
+      host.startsWith('.') ||
+      host.endsWith('.') ||
+      host.contains('..') ||
+      value != '$host:${uri.port}') {
+    return false;
+  }
+  return host
+      .split('.')
+      .every(
+        (label) =>
+            label.isNotEmpty &&
+            label.length <= 63 &&
+            !label.startsWith('-') &&
+            !label.endsWith('-') &&
+            RegExp(r'^[a-z0-9-]+$').hasMatch(label),
+      );
 }
 
 final class RuntimeUser {
@@ -3458,10 +3688,27 @@ Map<String, List<String>> _requireTransformHeaders(Object? json, String path) {
 
 String _requireTransformBody(JsonObject value, String key, String path) {
   final body = requireStringValue(value, key, path);
-  if (utf8.encode(body).length > 16 << 20 || body.runes.contains(0xfffd)) {
+  if (_hasUnpairedSurrogate(body) || utf8.encode(body).length > 16 << 20) {
     throw ControlContractException('$path.$key exceeds its limit');
   }
   return body;
+}
+
+// Literal U+FFFD is valid content. Inspect UTF-16 code units instead of rejecting
+// that scalar or relying on an encoder that replaces malformed surrogates.
+bool _hasUnpairedSurrogate(String value) {
+  for (var index = 0; index < value.length; index++) {
+    final unit = value.codeUnitAt(index);
+    if (unit >= 0xd800 && unit <= 0xdbff) {
+      index++;
+      if (index == value.length) return true;
+      final low = value.codeUnitAt(index);
+      if (low < 0xdc00 || low > 0xdfff) return true;
+    } else if (unit >= 0xdc00 && unit <= 0xdfff) {
+      return true;
+    }
+  }
+  return false;
 }
 
 bool _validBoundedHttpHeaderValue(String value) {

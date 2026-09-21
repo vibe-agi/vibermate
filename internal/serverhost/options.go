@@ -11,6 +11,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/clientadapter"
 	"github.com/vibe-agi/vibermate/internal/hostcontract"
 	"github.com/vibe-agi/vibermate/internal/productruntime"
+	"github.com/vibe-agi/vibermate/internal/serverconnection"
 )
 
 const (
@@ -22,6 +23,7 @@ const (
 type Options struct {
 	Runtime              productruntime.Options
 	ListenAddress        string
+	AccessAddress        string
 	Transport            TransportOptions
 	ManagementUIRoot     string
 	ClientCatalog        clientadapter.Catalog
@@ -37,6 +39,7 @@ type AttachOptions struct {
 	Runtime                *productruntime.Runtime
 	DataDirectory          string
 	ListenAddress          string
+	AccessAddress          string
 	Transport              TransportOptions
 	ManagementUIRoot       string
 	ClientCatalog          clientadapter.Catalog
@@ -52,7 +55,7 @@ func DefaultOptions(runtimeOptions productruntime.Options) Options {
 	return Options{
 		Runtime:              runtimeOptions,
 		ListenAddress:        "0.0.0.0:9666",
-		Transport:            TransportOptions{Mode: TransportSelfSignedTLS},
+		Transport:            TransportOptions{Mode: TransportPrivateCATLS},
 		ClientCatalog:        clientadapter.BuiltInCatalog(),
 		AdminSessionLifetime: defaultAdminSessionLifetime,
 		CaptureRunLifetime:   defaultCaptureRunLifetime,
@@ -69,7 +72,7 @@ func DefaultAttachOptions(
 	return AttachOptions{
 		Runtime: runtime, DataDirectory: dataDirectory,
 		ListenAddress:        "0.0.0.0:9666",
-		Transport:            TransportOptions{Mode: TransportSelfSignedTLS},
+		Transport:            TransportOptions{Mode: TransportPrivateCATLS},
 		ClientCatalog:        clientadapter.BuiltInCatalog(),
 		AdminSessionLifetime: defaultAdminSessionLifetime,
 		CaptureRunLifetime:   defaultCaptureRunLifetime,
@@ -86,7 +89,7 @@ func (options Options) validate() error {
 		return errors.New("Runtime Server Host policy is incomplete")
 	}
 	return validateNetworkPolicy(
-		options.ListenAddress, options.Transport, options.ManagementUIRoot,
+		options.ListenAddress, options.AccessAddress, options.Transport, options.ManagementUIRoot,
 		options.ClientCatalog, options.AdminSessionLifetime,
 		options.CaptureRunLifetime, options.ShutdownTimeout,
 	)
@@ -99,7 +102,7 @@ func (options AttachOptions) validate() error {
 		return errors.New("attached Runtime Server dependencies are incomplete")
 	}
 	return validateNetworkPolicy(
-		options.ListenAddress, options.Transport, options.ManagementUIRoot,
+		options.ListenAddress, options.AccessAddress, options.Transport, options.ManagementUIRoot,
 		options.ClientCatalog, options.AdminSessionLifetime,
 		options.CaptureRunLifetime, options.ShutdownTimeout,
 	)
@@ -107,6 +110,7 @@ func (options AttachOptions) validate() error {
 
 func validateNetworkPolicy(
 	listenAddress string,
+	accessAddress string,
 	transport TransportOptions,
 	managementUIRoot string,
 	clientCatalog clientadapter.Catalog,
@@ -123,6 +127,21 @@ func validateNetworkPolicy(
 		(!filepath.IsAbs(managementUIRoot) ||
 			filepath.Clean(managementUIRoot) != managementUIRoot) {
 		return errors.New("Runtime Server Web root is invalid")
+	}
+	if accessAddress != "" {
+		address, err := serverconnection.ParseAddress(accessAddress)
+		if err != nil || address.String() != accessAddress {
+			return errors.New("Runtime Server access address is invalid")
+		}
+	}
+	if transport.Mode == TransportAutomaticTLS {
+		if accessAddress == "" {
+			return errors.New("automatic HTTPS requires an explicit Runtime Server access address")
+		}
+		accessHost, _, err := net.SplitHostPort(accessAddress)
+		if err != nil || accessHost != transport.Automatic.ServerName {
+			return errors.New("automatic HTTPS Server name must match the access address")
+		}
 	}
 	host, portText, err := net.SplitHostPort(listenAddress)
 	if err != nil || host == "" || portText == "" {

@@ -1279,18 +1279,107 @@ final class AppCopy {
         'These choices affect this workbench only; they do not change captured traffic or team accounts.',
     'settings.access.title': 'Access & launch',
     'settings.access.detail.server':
-        'Set up Terminal commands and browser or client connections. Accounts are managed in User management.',
+        'Connect an Agent from your computer. If you only need the browser, you are already connected.',
     'settings.access.detail.local':
         'Set up the Terminal entry used to start managed Claude and Codex runs.',
     'settings.access.local.title': 'On this Mac',
     'settings.access.local.detail':
         'Install or repair the local Terminal command, then copy a managed launch command.',
-    'settings.access.team.title': 'Browser & team',
+    'settings.access.local.no_account':
+        'Local App runs do not need a Web account, domain or browser certificate.',
+    'settings.access.team.title': 'Browser or another device',
+    'settings.access.team.optional':
+        'Optional for local App use. Expand for the Web address and remote login steps.',
     'settings.access.team.detail':
         'Create accounts in User management, then share the workbench address and connection commands.',
     'settings.safety.title': 'Safety & data',
     'settings.safety.detail':
-        'Control the offline boundary, HTTPS trust and retained evidence for this Runtime.',
+        'Server connections, AI traffic inspection and stored data are separate controls.',
+    'settings.server_connection.title': 'Server connection',
+    'settings.server_connection.detail':
+        'This connection carries browser access and CLI traffic to ViberMate, not requests to an AI provider.',
+    'settings.server_connection.unknown':
+        'The connection address is not available yet. No certificate trust has been checked.',
+    'settings.server_connection.local_http':
+        'This loopback address is for this computer. HTTP is not encrypted; keep the published port local or use a trusted tunnel. The address alone does not prove other interfaces are closed.',
+    'settings.server_connection.remote_http':
+        'This remote address uses unencrypted HTTP. Configure HTTPS before sending passwords or captured traffic across an untrusted network.',
+    'settings.server_connection.https':
+        'The address uses HTTPS. Trust in its server certificate is separate from the AI traffic inspection certificate below.',
+    'settings.server_connection.automatic_ready':
+        'Automatic HTTPS is active. ViberMate stores, renews and hot-loads this public certificate.',
+    'settings.server_connection.automatic_pending':
+        'Automatic HTTPS is waiting for its first certificate. Check that the selected challenge port reaches this Runtime.',
+    'settings.server_connection.automatic_renewing':
+        'Automatic HTTPS is renewing the certificate. Existing HTTPS remains available while the current certificate is valid.',
+    'settings.server_connection.automatic_failed':
+        'Automatic certificate renewal failed. Existing HTTPS may continue until expiry; open details and fix the validation error now.',
+    'settings.server_connection.private_ca':
+        'HTTPS uses a certificate issued by this Runtime\'s private CA. Trust that CA on each managed client, and access the exact DNS name or IP shown in the certificate.',
+    'settings.server_connection.tls_files':
+        'HTTPS uses a certificate supplied by the deployment owner. Renewal and replacement are managed outside ViberMate.',
+    'settings.server_connection.advanced': 'Connection and deployment details',
+    'settings.server_connection.source.browser':
+        'Address source: the origin used to open this workbench. Container-internal addresses do not replace it.',
+    'settings.server_connection.source.server':
+        'Address source: the Runtime Server. Use an address reachable from the client computer.',
+    'settings.server_connection.deployment':
+        'The connected HTTPS endpoint may be an external gateway or trusted tunnel. Its certificate lifecycle is not reported by this Runtime.',
+    'settings.server_connection.deployment.http':
+        'HTTP has no server certificate. Keep loopback deployments local; use one of the HTTPS modes before remote access.',
+    'settings.server_connection.deployment.automatic_tls':
+        'ViberMate obtains and renews this public certificate. The configured public DNS name must resolve here and the selected ACME challenge port must be reachable.',
+    'settings.server_connection.deployment.private_ca_tls':
+        'Without a public domain, use the certificate IP directly or map its DNS name to this server in each client\'s hosts file. This mode currently uses the same private CA as inspected AI traffic, so install it only on managed devices.',
+    'settings.server_connection.deployment.self_signed_tls':
+        'This legacy private-CA mode uses the same trust requirements as private CA HTTPS. Migrate the deployment name when convenient; the saved identity remains intact.',
+    'settings.server_connection.deployment.tls_files':
+        'The deployment owner supplies the full certificate chain and private key. Replace and reload them according to that issuer\'s renewal process.',
+    'settings.server_connection.deployment.unknown':
+        'ViberMate cannot identify this HTTPS certificate source. Verify the deployment configuration before sharing the address.',
+    'settings.server_connection.tls.mode': 'Certificate source',
+    'settings.server_connection.tls.mode.http': 'No TLS',
+    'settings.server_connection.tls.mode.automatic_tls':
+        'Automatic public HTTPS',
+    'settings.server_connection.tls.mode.private_ca_tls':
+        'ViberMate private CA',
+    'settings.server_connection.tls.mode.self_signed_tls':
+        'ViberMate private CA (legacy name)',
+    'settings.server_connection.tls.mode.tls_files':
+        'Provided certificate files',
+    'settings.server_connection.tls.mode.unknown': 'Unknown',
+    'settings.server_connection.tls.state': 'Certificate state',
+    'settings.server_connection.tls.state.disabled': 'Disabled',
+    'settings.server_connection.tls.state.unavailable': 'Unavailable',
+    'settings.server_connection.tls.state.pending': 'Waiting for certificate',
+    'settings.server_connection.tls.state.ready': 'Ready',
+    'settings.server_connection.tls.state.renewing': 'Renewing',
+    'settings.server_connection.tls.state.renewal_failed': 'Renewal failed',
+    'settings.server_connection.tls.name': 'Certificate name',
+    'settings.server_connection.tls.challenge': 'Validation method',
+    'settings.server_connection.tls.challenge.http_01': 'HTTP-01 (port 80)',
+    'settings.server_connection.tls.challenge.tls_alpn_01':
+        'TLS-ALPN-01 (port 443)',
+    'settings.server_connection.tls.issuer': 'Issuer',
+    'settings.server_connection.tls.expires': 'Expires',
+    'settings.server_connection.tls.fingerprint': 'Leaf SHA-256 fingerprint',
+    'settings.server_connection.tls.error': 'Last certificate error',
+    'settings.runtime_ca.title': 'AI traffic inspection certificate (Proxy CA)',
+    'settings.runtime_ca.detail':
+        'Used for AI destinations captured by this Runtime. Supported managed runs receive scoped trust automatically. Browser-only users do not need to install it.',
+    'settings.runtime_ca.fingerprint': 'SHA-256 fingerprint',
+    'settings.runtime_ca.expires': 'Expires (UTC)',
+    'settings.runtime_ca.guide':
+        'For manual clients, compare this fingerprint with caFingerprint in the server startup log before trusting vibermate-proxy-ca.crt. The file contains one public certificate, never a private key. It does not trust an externally issued server certificate. Existing built-in HTTPS deployments may also use this issuer; changing the CA can affect them.',
+    'settings.runtime_ca.manual': 'Manual client setup and certificate details',
+    'settings.runtime_ca.download': 'Download proxy certificate',
+    'settings.runtime_ca.refresh': 'Refresh proxy certificate',
+    'settings.runtime_ca.load_error':
+        'The Runtime Root CA could not be loaded. Check that the Server supports Root CA downloads, then refresh.',
+    'settings.runtime_ca.save_error':
+        'The Root CA could not be downloaded or saved. Refresh and try again.',
+    'settings.runtime_ca.saved':
+        'Root CA export requested. Importing and trusting it is a separate client step.',
     'settings.egress.title': 'Network exit profiles',
     'settings.egress.detail':
         'Publish reusable SOCKS5 and DNS choices. Traffic policies freeze an exact revision.',
@@ -1326,7 +1415,7 @@ final class AppCopy {
         'into a prompt is retained.',
     'settings.root_ca.title': 'Local Root Certificate',
     'settings.root_ca.detail':
-        'Claude and Codex launches receive this certificate directly. Other clients can install and trust this exact Root for the current macOS user here.',
+        'This Proxy CA is for captured AI connections. Supported managed runs receive scoped trust automatically; using the browser needs no installation. The controls below manage optional trust for other clients on this Mac, not an externally issued server certificate.',
     'settings.root_ca.status.trusted': 'Installed and trusted',
     'settings.root_ca.status.needs_trust': 'Installed, not trusted',
     'settings.root_ca.status.not_installed': 'Generated, not installed',
@@ -1344,7 +1433,7 @@ final class AppCopy {
     'settings.root_ca.retry': 'Check again',
     'settings.root_ca.replace.title': 'Replace the certificate and restart?',
     'settings.root_ca.replace.detail':
-        'The current certificate is absent. ViberMate will schedule a new local Root for the next restart. Existing evidence is kept; trust the new certificate separately if another client needs it.',
+        'ViberMate will schedule a new Proxy CA for the next restart. Manual clients must trust it again. Existing built-in HTTPS may share the old issuer and needs separate trust maintenance; externally issued HTTPS certificates are not replaced. Evidence is kept.',
     'settings.root_ca.confirm': 'Continue',
     'settings.root_ca.guide.remove':
         'Open Keychain Access → login → Certificates. Match “ViberMate Local Root” against the SHA-256 fingerprint above and delete only that entry. Then return here and check again.',
@@ -1382,12 +1471,12 @@ final class AppCopy {
     'settings.remote': 'Runtime Server · {target}',
     'server.access.title': 'Web & client access',
     'server.access.description':
-        'This is one multi-user Runtime. Manage it in a browser, then give each person a Runtime User for Claude or Codex access.',
+        'Use your personal Runtime username and password. Install the vibermate CLI and your Agent on the client computer before running these commands.',
     'server.access.loading': 'Reading Server access…',
     'server.access.transport.http': 'HTTP',
     'server.access.transport.https': 'TLS',
     'server.access.http_warning':
-        'This Server uses HTTP. Login credentials and captured traffic are not encrypted between client and Server. Use it only on a trusted private network.',
+        'This remote address uses unencrypted HTTP. Configure HTTPS or a trusted tunnel before sending passwords or captured traffic across an untrusted network.',
     'server.access.session.title': 'One login, reusable session',
     'server.access.session.detail':
         'The client can start later runs without returning to this App. Logout, disabling the runtime user, or session expiry removes access.',
@@ -2762,14 +2851,95 @@ final class AppCopy {
     'settings.preferences.title': '工作台偏好',
     'settings.preferences.detail': '这里只改变当前工作台的显示方式，不会修改捕获流量或团队账号。',
     'settings.access.title': '接入与启动',
-    'settings.access.detail.server': '设置终端命令、网页与客户端连接；账号请在「用户管理」中维护。',
+    'settings.access.detail.server': '从你的电脑接入 Agent；如果只使用网页，你已经完成连接。',
     'settings.access.detail.local': '设置用于启动 Claude 与 Codex 托管运行的终端入口。',
     'settings.access.local.title': '这台电脑',
     'settings.access.local.detail': '安装或修复本机终端命令，然后复制托管启动命令。',
-    'settings.access.team.title': '网页与团队',
+    'settings.access.local.no_account': '本机 App 启动不需要网页账号、域名或浏览器证书。',
+    'settings.access.team.title': '从浏览器或其他设备接入',
+    'settings.access.team.optional': '本机使用可跳过。展开后可查看网页地址和远程登录步骤。',
     'settings.access.team.detail': '先在「用户管理」中创建账号，再分享工作台地址和连接命令。',
     'settings.safety.title': '安全与数据',
-    'settings.safety.detail': '管理这套 Runtime 的断网边界、HTTPS 信任与证据留存。',
+    'settings.safety.detail': '服务器连接、AI 流量检查和数据留存分别管理，互不混淆。',
+    'settings.server_connection.title': '连接到服务器',
+    'settings.server_connection.detail':
+        '保护浏览器和 CLI 到 ViberMate 的连接，不是到 AI 服务商的连接。',
+    'settings.server_connection.unknown': '连接地址暂不可用，尚未检查任何证书信任。',
+    'settings.server_connection.local_http':
+        '这是本机回环地址。HTTP 不加密，请仅向本机发布端口或使用可信隧道；仅凭这个地址不能确定其他网卡未开放。',
+    'settings.server_connection.remote_http':
+        '此远程地址使用未加密的 HTTP。通过不可信网络传输密码或捕获流量前，请先配置 HTTPS。',
+    'settings.server_connection.https':
+        '当前地址使用 HTTPS。其服务器证书的信任，与下方 AI 流量检查证书的信任分别配置。',
+    'settings.server_connection.automatic_ready':
+        '自动 HTTPS 已启用。ViberMate 会保存、续期并热加载这张公共证书。',
+    'settings.server_connection.automatic_pending':
+        '自动 HTTPS 正在等待首张证书。请确认所选验证端口能够访问到当前 Runtime。',
+    'settings.server_connection.automatic_renewing':
+        '自动 HTTPS 正在续期。当前证书仍有效时，已有 HTTPS 可继续使用。',
+    'settings.server_connection.automatic_failed':
+        '自动证书续期失败。到期前 HTTPS 可能仍可使用；请展开详情并立即修复验证错误。',
+    'settings.server_connection.private_ca':
+        'HTTPS 使用当前 Runtime 私有 CA 签发的证书。请仅在受管客户端信任该 CA，并使用证书中的准确域名或 IP 访问。',
+    'settings.server_connection.tls_files':
+        'HTTPS 使用部署者提供的证书；续期和替换由 ViberMate 外部负责。',
+    'settings.server_connection.advanced': '连接与部署详情',
+    'settings.server_connection.source.browser':
+        '地址来源：打开当前工作台使用的地址，不会替换为容器内部地址。',
+    'settings.server_connection.source.server':
+        '地址来源：Runtime 服务端。请使用客户端电脑能访问的地址。',
+    'settings.server_connection.deployment':
+        '当前 HTTPS 入口可能来自外部网关或可信隧道，Runtime 无法报告其证书生命周期。',
+    'settings.server_connection.deployment.http':
+        'HTTP 没有服务器证书。本机部署请保持回环访问；远程访问前请选择一种 HTTPS 模式。',
+    'settings.server_connection.deployment.automatic_tls':
+        'ViberMate 会申请并续期公共证书。配置的公网域名必须解析到这里，所选 ACME 验证端口也必须可达。',
+    'settings.server_connection.deployment.private_ca_tls':
+        '没有公网域名时，可直接使用证书中的 IP，或在各客户端 hosts 文件中把证书域名映射到服务器。此模式目前与 AI 流量检查共用私有 CA，只应安装到受管设备。',
+    'settings.server_connection.deployment.self_signed_tls':
+        '这是私有 CA HTTPS 的旧名称，信任要求相同；方便时可更新部署参数，已保存的身份不会因此轮换。',
+    'settings.server_connection.deployment.tls_files':
+        '部署者提供完整证书链和私钥，并按签发机构的续期流程完成替换与重载。',
+    'settings.server_connection.deployment.unknown':
+        'ViberMate 无法识别此 HTTPS 证书来源。分享地址前请核对部署配置。',
+    'settings.server_connection.tls.mode': '证书来源',
+    'settings.server_connection.tls.mode.http': '未启用 TLS',
+    'settings.server_connection.tls.mode.automatic_tls': '自动公共 HTTPS',
+    'settings.server_connection.tls.mode.private_ca_tls': 'ViberMate 私有 CA',
+    'settings.server_connection.tls.mode.self_signed_tls':
+        'ViberMate 私有 CA（旧名称）',
+    'settings.server_connection.tls.mode.tls_files': '部署者提供的证书文件',
+    'settings.server_connection.tls.mode.unknown': '未知',
+    'settings.server_connection.tls.state': '证书状态',
+    'settings.server_connection.tls.state.disabled': '未启用',
+    'settings.server_connection.tls.state.unavailable': '不可用',
+    'settings.server_connection.tls.state.pending': '等待证书',
+    'settings.server_connection.tls.state.ready': '就绪',
+    'settings.server_connection.tls.state.renewing': '正在续期',
+    'settings.server_connection.tls.state.renewal_failed': '续期失败',
+    'settings.server_connection.tls.name': '证书名称',
+    'settings.server_connection.tls.challenge': '验证方式',
+    'settings.server_connection.tls.challenge.http_01': 'HTTP-01（80 端口）',
+    'settings.server_connection.tls.challenge.tls_alpn_01':
+        'TLS-ALPN-01（443 端口）',
+    'settings.server_connection.tls.issuer': '签发机构',
+    'settings.server_connection.tls.expires': '有效期至',
+    'settings.server_connection.tls.fingerprint': '叶证书 SHA-256 指纹',
+    'settings.server_connection.tls.error': '最近一次证书错误',
+    'settings.runtime_ca.title': 'AI 流量检查证书（代理 CA）',
+    'settings.runtime_ca.detail':
+        '用于检查经过当前 Runtime 的 AI 流量。受支持的托管启动会自动获得进程级信任；只用网页无需安装。',
+    'settings.runtime_ca.fingerprint': 'SHA-256 指纹',
+    'settings.runtime_ca.expires': '有效期至（UTC）',
+    'settings.runtime_ca.guide':
+        '手动接入客户端时，请先与服务端启动日志中的 caFingerprint 核对，再信任 vibermate-proxy-ca.crt。文件只含一张公开证书，不含私钥；不能用于信任外部机构签发的服务器证书。已有内置 HTTPS 部署也可能使用此签发机构，更换 CA 会影响其信任。',
+    'settings.runtime_ca.manual': '手动接入与证书详情',
+    'settings.runtime_ca.download': '下载代理证书',
+    'settings.runtime_ca.refresh': '刷新代理证书',
+    'settings.runtime_ca.load_error':
+        '无法读取 Runtime Root CA。请确认服务端支持根证书下载，然后刷新重试。',
+    'settings.runtime_ca.save_error': 'Root CA 下载或保存失败，请刷新后重试。',
+    'settings.runtime_ca.saved': '已发起 Root CA 导出；仍需在客户端导入并设置信任。',
     'settings.egress.title': '网络出口方案',
     'settings.egress.detail': '统一发布可复用的 SOCKS5 与 DNS 选择；流量策略冻结所选的精确版本。',
     'settings.egress.add': '新建网络出口方案',
@@ -2797,7 +2967,7 @@ final class AppCopy {
         '请求与响应正文、工具参数和 query 按原样保存——写进 prompt 的密钥会被保留。',
     'settings.root_ca.title': '本机根证书',
     'settings.root_ca.detail':
-        'Claude 与 Codex 启动时会直接获得当前证书；其他客户端可在这里为当前 macOS 登录用户安装并信任这张根证书。',
+        '这张代理 CA 用于捕获 AI 连接。受支持的托管启动会自动获得进程级信任，使用网页无需安装。下方操作仅为这台 Mac 上的其他客户端管理可选的系统信任，不会改变外部机构签发的服务器证书。',
     'settings.root_ca.status.trusted': '已安装并信任',
     'settings.root_ca.status.needs_trust': '已安装，尚未信任',
     'settings.root_ca.status.not_installed': '已生成，尚未安装',
@@ -2814,7 +2984,7 @@ final class AppCopy {
     'settings.root_ca.retry': '重新检查',
     'settings.root_ca.replace.title': '更换证书并重新启动？',
     'settings.root_ca.replace.detail':
-        '已确认当前证书不存在。ViberMate 将安排在下次重启时生成新的本机根证书；已有证据会保留，其他客户端如有需要，需另行信任新证书。',
+        '下次重启将生成新的代理 CA，手动接入的客户端需要重新信任。已有内置 HTTPS 可能共用旧签发机构，需要单独维护信任；外部机构签发的 HTTPS 证书不会被替换。已有证据会保留。',
     'settings.root_ca.confirm': '继续',
     'settings.root_ca.guide.remove':
         '在“钥匙串访问”中打开“登录”钥匙串→“证书”，用上方 SHA-256 指纹核对“ViberMate Local Root”，仅删除匹配项；然后回到这里重新检查。',
@@ -2845,12 +3015,12 @@ final class AppCopy {
     'settings.remote': 'Runtime Server · {target}',
     'server.access.title': '网页与客户端接入',
     'server.access.description':
-        '这是一套原生支持多人的 Runtime。你可以在浏览器中管理它，再为每个人创建独立的 Claude 或 Codex 运行用户。',
+        '使用你的个人运行用户账号和密码。执行下列命令前，请先在客户端电脑上安装 vibermate CLI 和要使用的 Agent。',
     'server.access.loading': '正在读取 Server 访问方式…',
     'server.access.transport.http': 'HTTP',
     'server.access.transport.https': 'TLS',
     'server.access.http_warning':
-        '这台 Server 使用 HTTP，客户端与 Server 之间的登录凭证和捕获流量不会加密。请只在可信私网中使用。',
+        '此远程地址使用未加密的 HTTP。通过不可信网络传输密码或捕获流量前，请先配置 HTTPS 或可信隧道。',
     'server.access.session.title': '登录一次，后续复用',
     'server.access.session.detail':
         '客户端后续启动无需再回到 App 操作；登出、停用运行用户或会话到期后才会失去访问权限。',

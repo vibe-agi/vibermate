@@ -1,5 +1,8 @@
 # Environment-first Production Vertical
 
+This is the historical foundation plan. The current deployment/settings work is
+tracked in [Runtime setup and trust experience](docs/plans/2026-09-21-runtime-setup-and-trust.md).
+
 Status: managed Anthropic first-use vertical frozen; deterministic packaged evidence passed
 
 ## Goal

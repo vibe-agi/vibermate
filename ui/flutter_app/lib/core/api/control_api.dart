@@ -152,6 +152,8 @@ abstract interface class ControlApi {
 
   Future<RuntimeServerAccess> serverAccess();
 
+  Future<RuntimeRootCertificate> runtimeRootCA();
+
   Future<List<RuntimeUser>> runtimeUsers();
 
   Future<RuntimeUsageReport> runtimeUsage(RuntimeUsageQuery query);
@@ -1104,6 +1106,13 @@ final class HttpControlApi implements ControlApi {
       RuntimeServerAccess.fromJson(
         await _read('/api/v1/server/access'),
         'serverAccess',
+      );
+
+  @override
+  Future<RuntimeRootCertificate> runtimeRootCA() async =>
+      RuntimeRootCertificate.fromJson(
+        await _read('/api/v1/server/root-ca', maximumResponseBytes: 128 * 1024),
+        'runtimeRootCA',
       );
 
   @override

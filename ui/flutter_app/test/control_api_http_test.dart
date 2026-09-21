@@ -696,11 +696,12 @@ void main() {
         await request.drain<void>();
         request.response.write(
           jsonEncode({
-            'schema': 'vibermate-server-access-v2',
+            'schema': 'vibermate-server-access-v1',
             'transport': 'http',
             'authentication': 'runtime_user_password',
             'sessionPolicy': 'reusable_until_logout_disable_or_expiry',
             'targets': ['192.168.1.44:9666'],
+            'tls': {'mode': 'http', 'state': 'disabled'},
           }),
         );
       } else if (request.method == 'GET' &&

@@ -1,0 +1,48 @@
+# Caddy-style automatic public HTTPS embedded in ViberMate. Public DNS must
+# resolve to this host and public TCP 443 must reach container port 9666.
+name: vibermate-public
+
+services:
+  vibermate:
+    image: ${VIBERMATE_IMAGE:-vibermate-runtime:0.1.10-local}
+    pull_policy: never
+    init: true
+    restart: unless-stopped
+    stop_grace_period: 35s
+    command:
+      - server
+      - --listen
+      - 0.0.0.0:9666
+      - --access-address
+      - ${VIBERMATE_PUBLIC_HOST:?Set the public DNS name in .env.public}:443
+      - --data-dir
+      - /data
+      - --web-root
+      - /opt/vibermate/vibermate-web
+      - --transport
+      - automatic_tls
+      - --acme-agree-terms
+      - --acme-email
+      - ${VIBERMATE_ACME_EMAIL:?Set the certificate contact email in .env.public}
+      - --acme-challenge
+      - tls_alpn_01
+    ports:
+      - "${VIBERMATE_PUBLIC_BIND_ADDRESS:-0.0.0.0}:443:9666"
+    volumes:
+      - runtime-data:/data
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  runtime-data:
+    name: ${VIBERMATE_PUBLIC_DATA_VOLUME:-vibermate-public-data}
