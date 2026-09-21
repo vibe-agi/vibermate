@@ -16,6 +16,18 @@ _Avoid_: Provider, Session, workspace default
 A ViberMate Host reachable at an explicit host and port. Selecting it chooses where Capture control, policy, evidence, and proxy traffic run; it does not select or mutate an Environment, Route, Account, or model.
 _Avoid_: Upstream Endpoint, Environment, provider server
 
+**Server HTTPS Identity**:
+The certificate identity presented when a person or client connects to the Runtime Server itself. Its names belong to that server's access addresses, not to the AI destinations captured through it.
+_Avoid_: Proxy CA, intercepted host certificate, universal Runtime certificate
+
+**Proxy CA**:
+The Runtime-owned authority that signs authorized AI destination certificates inside intercepted connections. Trusting it enables inspection of those destinations; it does not establish trust in an independently issued Server HTTPS Identity.
+_Avoid_: Server certificate, browser certificate, universal Runtime CA
+
+**Server Access Address**:
+An explicit client-reachable URL for connecting to a Runtime Server. It is distinct from the server's listening socket, a container's internal address, and an upstream AI destination.
+_Avoid_: bind address, upstream origin, certificate name
+
 **Runtime User**:
 A person authorized by a Runtime Server to create Captures, own their usage evidence, and sign in to their personal Web workbench. A Runtime User is never an upstream authentication Account.
 _Avoid_: Account, Provider Account, machine, client
