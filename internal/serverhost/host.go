@@ -9,7 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"net"
 	"net/http"
 	"path/filepath"
@@ -334,7 +333,6 @@ func startAttached(
 	rootCA := servercontrol.NewRuntimeRootCA(func() []byte {
 		return runtime.LocalRootCertificate().CertificatePEM()
 	})
-	log.Printf("runtime_root_ca_loaded caFingerprint=%s", runtime.LocalRootIdentity().Fingerprint())
 	localManagement.rootCA = rootCA
 	host := &Host{
 		runtime: runtime, admin: admin,
