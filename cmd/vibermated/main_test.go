@@ -283,6 +283,26 @@ func TestParseServerArgumentsRequiresBothCertificateFilesForManagedTLS(t *testin
 	}
 }
 
+func TestParseServerArgumentsAcceptsExplicitCertificateHosts(t *testing.T) {
+	t.Parallel()
+	config, err := parseServerArguments([]string{
+		"--transport", "self_signed_tls", "--tls-hosts", "192.168.1.20,vibermate.example.test",
+	})
+	if err != nil || len(config.transport.TLSHosts) != 2 {
+		t.Fatalf("configured hosts were not accepted: %v", err)
+	}
+	for _, args := range [][]string{
+		{"--tls-hosts", "192.168.1.20"},
+		{"--transport", "self_signed_tls", "--tls-hosts", "https://192.168.1.20:9667"},
+		{"--transport", "self_signed_tls", "--tls-hosts", "0.0.0.0"},
+		{"--transport", "self_signed_tls", "--tls-hosts", "192.168.1.20,"},
+	} {
+		if _, err := parseServerArguments(args); err == nil {
+			t.Fatalf("invalid certificate host configuration was accepted: %v", args)
+		}
+	}
+}
+
 func TestParseServerArgumentsRejectsRemovedClientAdmissionFlag(t *testing.T) {
 	t.Parallel()
 

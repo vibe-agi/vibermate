@@ -8,6 +8,7 @@ import '../../core/design/viber_theme.dart';
 import '../../core/design/workbench_widgets.dart';
 import '../../core/i18n/app_copy.dart';
 import 'offline_hold_view.dart';
+import 'runtime_root_ca_panel.dart';
 import '../../core/api/control_models.dart';
 import 'deletion_dialog.dart';
 import 'egress_profile_editor.dart';
@@ -610,6 +611,10 @@ final class _SafetyDataSettingsPane extends StatelessWidget {
       ),
       const SizedBox(height: 14),
       OfflineHoldSettingsPanel(controller: controller, copy: copy),
+      if (controller.serverManagement) ...[
+        const SizedBox(height: 12),
+        RuntimeRootCAPanel(controller: controller, copy: copy),
+      ],
       if (controller.rootTrustManagement) ...[
         const SizedBox(height: 12),
         _RootCASettingsPanel(controller: controller, copy: copy),

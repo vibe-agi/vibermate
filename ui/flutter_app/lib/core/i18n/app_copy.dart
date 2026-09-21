@@ -1291,6 +1291,21 @@ final class AppCopy {
     'settings.safety.title': 'Safety & data',
     'settings.safety.detail':
         'Control the offline boundary, HTTPS trust and retained evidence for this Runtime.',
+    'settings.runtime_ca.title': 'Unified Runtime Root CA',
+    'settings.runtime_ca.detail':
+        'This persistent Root signs this Runtime’s authorized AI-traffic proxy certificates and newly initialized built-in HTTPS certificates. Downloads contain only one public Root CA, never private keys. Different Runtime instances have different Roots.',
+    'settings.runtime_ca.fingerprint': 'SHA-256 fingerprint',
+    'settings.runtime_ca.expires': 'Expires (UTC)',
+    'settings.runtime_ca.guide':
+        'Compare the fingerprint with caFingerprint in the Runtime startup log before trusting vibermate-ca.crt on clients. HTTPS still requires a matching server address and a certificate issued by this Root. External TLS certificates and older identities may use a different issuer; configure their trust separately.',
+    'settings.runtime_ca.download': 'Download Root CA',
+    'settings.runtime_ca.refresh': 'Refresh Root CA',
+    'settings.runtime_ca.load_error':
+        'The Runtime Root CA could not be loaded. Check that the Server supports Root CA downloads, then refresh.',
+    'settings.runtime_ca.save_error':
+        'The Root CA could not be downloaded or saved. Refresh and try again.',
+    'settings.runtime_ca.saved':
+        'Root CA export requested. Importing and trusting it is a separate client step.',
     'settings.egress.title': 'Network exit profiles',
     'settings.egress.detail':
         'Publish reusable SOCKS5 and DNS choices. Traffic policies freeze an exact revision.',
@@ -1326,7 +1341,7 @@ final class AppCopy {
         'into a prompt is retained.',
     'settings.root_ca.title': 'Local Root Certificate',
     'settings.root_ca.detail':
-        'Claude and Codex launches receive this certificate directly. Other clients can install and trust this exact Root for the current macOS user here.',
+        'This Runtime’s managed HTTPS and authorized AI-traffic proxy certificates share one Root. Supported, recognized client launches receive it directly. Other clients can install and trust this exact Root for the current macOS user here.',
     'settings.root_ca.status.trusted': 'Installed and trusted',
     'settings.root_ca.status.needs_trust': 'Installed, not trusted',
     'settings.root_ca.status.not_installed': 'Generated, not installed',
@@ -1344,7 +1359,7 @@ final class AppCopy {
     'settings.root_ca.retry': 'Check again',
     'settings.root_ca.replace.title': 'Replace the certificate and restart?',
     'settings.root_ca.replace.detail':
-        'The current certificate is absent. ViberMate will schedule a new local Root for the next restart. Existing evidence is kept; trust the new certificate separately if another client needs it.',
+        'The current certificate is absent. ViberMate will schedule a new Runtime Root for the next restart. This changes both HTTPS and AI-proxy trust. Existing HTTPS leaves stay active until you generate and apply replacements; clients must trust the new Root and update fixed leaf pins as needed. Evidence is kept.',
     'settings.root_ca.confirm': 'Continue',
     'settings.root_ca.guide.remove':
         'Open Keychain Access → login → Certificates. Match “ViberMate Local Root” against the SHA-256 fingerprint above and delete only that entry. Then return here and check again.',
@@ -2770,6 +2785,19 @@ final class AppCopy {
     'settings.access.team.detail': '先在「用户管理」中创建账号，再分享工作台地址和连接命令。',
     'settings.safety.title': '安全与数据',
     'settings.safety.detail': '管理这套 Runtime 的断网边界、HTTPS 信任与证据留存。',
+    'settings.runtime_ca.title': '统一 Runtime Root CA',
+    'settings.runtime_ca.detail':
+        '这张持久化 Root CA 用于签发当前 Runtime 的授权 AI 流量代理证书，以及新初始化的内置 HTTPS 证书。下载文件只包含一张公开根证书，不含私钥。不同 Runtime 实例有各自的根证书。',
+    'settings.runtime_ca.fingerprint': 'SHA-256 指纹',
+    'settings.runtime_ca.expires': '有效期至（UTC）',
+    'settings.runtime_ca.guide':
+        '请核对指纹与 Runtime 启动日志中的 caFingerprint 一致后，在客户端信任 vibermate-ca.crt。HTTPS 连接仍要求服务端地址匹配，且证书由此 Root 签发。外部 TLS 证书或历史证书可能使用其他签发机构，需单独配置对应的信任。',
+    'settings.runtime_ca.download': '下载统一 Root CA',
+    'settings.runtime_ca.refresh': '刷新 Root CA',
+    'settings.runtime_ca.load_error':
+        '无法读取 Runtime Root CA。请确认服务端支持根证书下载，然后刷新重试。',
+    'settings.runtime_ca.save_error': 'Root CA 下载或保存失败，请刷新后重试。',
+    'settings.runtime_ca.saved': '已发起 Root CA 导出；仍需在客户端导入并设置信任。',
     'settings.egress.title': '网络出口方案',
     'settings.egress.detail': '统一发布可复用的 SOCKS5 与 DNS 选择；流量策略冻结所选的精确版本。',
     'settings.egress.add': '新建网络出口方案',
@@ -2797,7 +2825,7 @@ final class AppCopy {
         '请求与响应正文、工具参数和 query 按原样保存——写进 prompt 的密钥会被保留。',
     'settings.root_ca.title': '本机根证书',
     'settings.root_ca.detail':
-        'Claude 与 Codex 启动时会直接获得当前证书；其他客户端可在这里为当前 macOS 登录用户安装并信任这张根证书。',
+        '当前 Runtime 的内置 HTTPS 与授权 AI 流量代理共用这张根证书。受支持且已识别的客户端启动时会直接获得它；其他客户端可在这里为当前 macOS 登录用户安装并信任。',
     'settings.root_ca.status.trusted': '已安装并信任',
     'settings.root_ca.status.needs_trust': '已安装，尚未信任',
     'settings.root_ca.status.not_installed': '已生成，尚未安装',
@@ -2814,7 +2842,7 @@ final class AppCopy {
     'settings.root_ca.retry': '重新检查',
     'settings.root_ca.replace.title': '更换证书并重新启动？',
     'settings.root_ca.replace.detail':
-        '已确认当前证书不存在。ViberMate 将安排在下次重启时生成新的本机根证书；已有证据会保留，其他客户端如有需要，需另行信任新证书。',
+        '已确认当前证书不存在。下次重启将生成新的 Runtime Root CA，同时影响 HTTPS 和 AI 流量代理的信任。现有 HTTPS 证书会保留，须重新生成并应用；客户端需信任新根证书，并按需更新固定叶证书指纹。已有证据会保留。',
     'settings.root_ca.confirm': '继续',
     'settings.root_ca.guide.remove':
         '在“钥匙串访问”中打开“登录”钥匙串→“证书”，用上方 SHA-256 指纹核对“ViberMate Local Root”，仅删除匹配项；然后回到这里重新检查。',

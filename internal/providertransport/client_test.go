@@ -533,6 +533,7 @@ func TestFollowClientUserAgentPolicyPreservesTheObservedValue(t *testing.T) {
 		headers,
 		variant,
 		clientUserAgent,
+		nil,
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -543,6 +544,7 @@ func TestFollowClientUserAgentPolicyPreservesTheObservedValue(t *testing.T) {
 		headers,
 		variant,
 		clientUserAgent,
+		nil,
 	); err != nil {
 		t.Fatal(err)
 	}

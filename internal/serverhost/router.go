@@ -22,6 +22,7 @@ type router struct {
 	userSessions  http.Handler
 	runtimeUsers  http.Handler
 	access        http.Handler
+	rootCA        http.Handler
 	capture       http.Handler
 	proxy         http.Handler
 	adminSessions http.Handler
@@ -85,6 +86,17 @@ func (handler router) ServeHTTP(writer http.ResponseWriter, request *http.Reques
 			return
 		}
 		handler.access.ServeHTTP(writer, request)
+	case request.URL.Path == servercontrol.RuntimeRootCAPath:
+		if !validAdminTransport(request, handler.scheme) ||
+			!handler.authorizeAdmin(request, serveradmin.ScopeRead) {
+			serverProblem(writer, http.StatusUnauthorized, "server_admin_unauthorized")
+			return
+		}
+		if handler.rootCA == nil {
+			serverProblem(writer, http.StatusNotFound, "server_route_not_found")
+			return
+		}
+		handler.rootCA.ServeHTTP(writer, request)
 	case request.URL.Path == "/api/v1/capture-runs" ||
 		strings.HasPrefix(request.URL.Path, "/api/v1/capture-runs/"):
 		handler.capture.ServeHTTP(writer, request)

@@ -1,5 +1,6 @@
-// Package localca owns one persistent installation Root and revision-authorized
-// leaf issuance. It never installs trust into an operating system; that
+// Package localca owns the installation's single persistent Root, authorized
+// traffic leaf issuance and Runtime Server HTTPS signing. It never installs
+// trust into an operating system; that
 // user-authorized Host action is a separate boundary.
 package localca
 
@@ -343,6 +344,7 @@ type Authority struct {
 	certificate         RootCertificate
 	clock               Clock
 	generator           leafGenerator
+	serverSigner        *cryptoLeafGenerator
 	cache               *lru.Cache[leafCacheKey, cachedLeaf]
 	flights             singleflight.Group
 	ownerContext        context.Context
@@ -393,16 +395,15 @@ func Open(ctx context.Context, options Options) (*Authority, error) {
 		return nil, fmt.Errorf("construct leaf cache: %w", err)
 	}
 	ownerContext, cancelOwner := context.WithCancelCause(options.OwnerContext)
+	generator := &cryptoLeafGenerator{
+		clock: options.Clock, random: options.Random, rootKey: key, rootCert: certificate,
+	}
 	return &Authority{
-		identity:    identity,
-		certificate: delivery,
-		clock:       options.Clock,
-		generator: &cryptoLeafGenerator{
-			clock:    options.Clock,
-			random:   options.Random,
-			rootKey:  key,
-			rootCert: certificate,
-		},
+		identity:          identity,
+		certificate:       delivery,
+		clock:             options.Clock,
+		generator:         generator,
+		serverSigner:      generator,
 		cache:             cache,
 		ownerContext:      ownerContext,
 		cancelOwner:       cancelOwner,
@@ -677,6 +678,7 @@ func (authority *Authority) Shutdown(ctx context.Context) error {
 
 			authority.stateMu.Lock()
 			authority.generator = nil
+			authority.serverSigner = nil
 			authority.drained = true
 			authority.finalizing = false
 			authority.notifyStateChangedLocked()

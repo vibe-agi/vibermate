@@ -1,1 +1,10 @@
 /dist/
+/.env
+
+# Local acceptance artifacts may contain machine paths, image IDs, or
+# deployment fingerprints. Keep the reproducible tests, not their output.
+javascript/**/*ACCEPTANCE-*.md
+javascript/**/*RESULTS-*.json
+javascript/**/*ROUND-*.md
+javascript/**/TEST-REPORT-*.md
+javascript/**/REVIEW-FIXES-*.md

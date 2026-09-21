@@ -7,6 +7,72 @@ import 'provider_origin.dart';
 
 typedef JsonObject = Map<String, Object?>;
 
+final class RuntimeRootCertificate {
+  const RuntimeRootCertificate({
+    required this.certificatePem,
+    required this.fingerprint,
+    required this.notBefore,
+    required this.notAfter,
+  });
+
+  factory RuntimeRootCertificate.fromJson(Object? json, String path) {
+    final value = requireObject(json, path);
+    requireFields(
+      value,
+      path,
+      required: const {
+        'schema',
+        'certificatePem',
+        'fingerprint',
+        'notBefore',
+        'notAfter',
+      },
+    );
+    if (value['schema'] != 'vibermate-runtime-root-ca-v1') {
+      throw ControlContractException('$path Runtime Root CA schema is invalid');
+    }
+    final pem = requireString(value, 'certificatePem', path);
+    final fingerprint = requireString(value, 'fingerprint', path);
+    final pattern = RegExp(
+      r'-----BEGIN CERTIFICATE-----\r?\n([A-Za-z0-9+/=\r\n]+)-----END CERTIFICATE-----',
+    );
+    final blocks = pattern.allMatches(pem).toList();
+    if (pem.length > 64 * 1024 ||
+        blocks.length != 1 ||
+        pem.replaceAll(pattern, '').trim().isNotEmpty ||
+        !RegExp(r'^[a-f0-9]{64}$').hasMatch(fingerprint)) {
+      throw ControlContractException('$path public Root CA is invalid');
+    }
+    try {
+      final der = base64Decode(blocks.single[1]!.replaceAll(RegExp(r'\s'), ''));
+      if (der.isEmpty || crypto.sha256.convert(der).toString() != fingerprint) {
+        throw const FormatException('certificate fingerprint mismatch');
+      }
+    } on FormatException {
+      throw ControlContractException(
+        '$path Root CA fingerprint is inconsistent',
+      );
+    }
+    final before = DateTime.tryParse(requireString(value, 'notBefore', path));
+    final after = DateTime.tryParse(requireString(value, 'notAfter', path));
+    if (before == null || after == null || !after.isAfter(before)) {
+      throw ControlContractException('$path Root CA validity is invalid');
+    }
+    return RuntimeRootCertificate(
+      certificatePem: pem,
+      fingerprint: fingerprint,
+      notBefore: before,
+      notAfter: after,
+    );
+  }
+
+  final String certificatePem;
+  final String fingerprint;
+  final DateTime notBefore;
+  final DateTime notAfter;
+  String get fileName => 'vibermate-ca.crt';
+}
+
 const upstreamBackendProtocols = <String>[
   'anthropic_messages',
   'openai_responses',
@@ -3458,10 +3524,27 @@ Map<String, List<String>> _requireTransformHeaders(Object? json, String path) {
 
 String _requireTransformBody(JsonObject value, String key, String path) {
   final body = requireStringValue(value, key, path);
-  if (utf8.encode(body).length > 16 << 20 || body.runes.contains(0xfffd)) {
+  if (_hasUnpairedSurrogate(body) || utf8.encode(body).length > 16 << 20) {
     throw ControlContractException('$path.$key exceeds its limit');
   }
   return body;
+}
+
+// Literal U+FFFD is valid content. Inspect UTF-16 code units instead of rejecting
+// that scalar or relying on an encoder that replaces malformed surrogates.
+bool _hasUnpairedSurrogate(String value) {
+  for (var index = 0; index < value.length; index++) {
+    final unit = value.codeUnitAt(index);
+    if (unit >= 0xd800 && unit <= 0xdbff) {
+      index++;
+      if (index == value.length) return true;
+      final low = value.codeUnitAt(index);
+      if (low < 0xdc00 || low > 0xdfff) return true;
+    } else if (unit >= 0xdc00 && unit <= 0xdfff) {
+      return true;
+    }
+  }
+  return false;
 }
 
 bool _validBoundedHttpHeaderValue(String value) {

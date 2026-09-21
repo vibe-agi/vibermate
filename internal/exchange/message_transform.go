@@ -107,8 +107,31 @@ func applyRequestMessageTransform(
 	if err != nil {
 		return nil, nil, messagetransform.RequestMessage{}, err
 	}
+	if _, _, err := separateMessageTransformUserAgent(input.Headers, transformed.Headers); err != nil {
+		return nil, nil, messagetransform.RequestMessage{}, err
+	}
 	restoreCredentialHeaders(transformed.Headers, protected)
 	return transformed.Headers, transformed.Body, input, nil
+}
+
+// Only an actual edit to the transform input can override the separately owned
+// wire-profile User-Agent. A no-op/body-only transform must not promote the raw
+// client's header to an override. Keep the original observation unchanged.
+func separateMessageTransformUserAgent(before, after http.Header) (http.Header, *string, error) {
+	value, err := messagetransform.RequestUserAgentOverride(before, after)
+	if err != nil {
+		return nil, nil, err
+	}
+	if value == nil {
+		return after, nil, nil
+	}
+	headers := after.Clone()
+	for name := range headers {
+		if strings.EqualFold(name, "User-Agent") {
+			delete(headers, name)
+		}
+	}
+	return headers, value, nil
 }
 
 func applyResponseMessageTransform(

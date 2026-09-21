@@ -242,7 +242,7 @@ func parseServerArguments(arguments []string) (serverCommandConfig, error) {
 		name, value, hasInline := strings.Cut(argument, "=")
 		switch name {
 		case "--data-dir", "--listen", "--web-root",
-			"--transport", "--tls-cert", "--tls-key":
+			"--transport", "--tls-cert", "--tls-key", "--tls-hosts":
 		default:
 			return serverCommandConfig{}, errors.New("vibermated server received an unsupported argument")
 		}
@@ -273,6 +273,8 @@ func parseServerArguments(arguments []string) (serverCommandConfig, error) {
 			config.transport.CertificateFile = value
 		case "--tls-key":
 			config.transport.PrivateKeyFile = value
+		case "--tls-hosts":
+			config.transport.TLSHosts = strings.Split(value, ",")
 		}
 	}
 	if config.dataDirectory == "" {
@@ -305,19 +307,7 @@ func parseServerArguments(arguments []string) (serverCommandConfig, error) {
 }
 
 func validServerTransport(transport serverhost.TransportOptions) bool {
-	switch transport.Mode {
-	case serverhost.TransportHTTP, serverhost.TransportSelfSignedTLS:
-		return transport.CertificateFile == "" && transport.PrivateKeyFile == ""
-	case serverhost.TransportTLSFiles:
-		return transport.CertificateFile != "" && transport.PrivateKeyFile != "" &&
-			filepath.IsAbs(transport.CertificateFile) &&
-			filepath.Clean(transport.CertificateFile) == transport.CertificateFile &&
-			filepath.IsAbs(transport.PrivateKeyFile) &&
-			filepath.Clean(transport.PrivateKeyFile) == transport.PrivateKeyFile &&
-			transport.CertificateFile != transport.PrivateKeyFile
-	default:
-		return false
-	}
+	return transport.Valid()
 }
 
 type commandConfig struct {

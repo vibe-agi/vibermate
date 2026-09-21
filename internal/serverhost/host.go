@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"path/filepath"
@@ -280,7 +281,8 @@ func startAttached(
 		options.Transport,
 		options.DataDirectory,
 		options.SecurityRandom,
-		options.Clock.Now().UTC(),
+		options.Clock.Now,
+		runtimeCertificateAuthority{runtime: runtime},
 	)
 	if err != nil {
 		return nil, err
@@ -300,6 +302,11 @@ func startAttached(
 	localManagement := serverManagementRouter{
 		access: serverAccess, runtimeUsers: localRuntimeUsers,
 	}
+	rootCA := servercontrol.NewRuntimeRootCA(func() []byte {
+		return runtime.LocalRootCertificate().CertificatePEM()
+	})
+	log.Printf("runtime_root_ca_loaded caFingerprint=%s", runtime.LocalRootIdentity().Fingerprint())
+	localManagement.rootCA = rootCA
 	host := &Host{
 		runtime: runtime, admin: admin,
 		guard:    guard,
@@ -315,6 +322,7 @@ func startAttached(
 		Handler: router{
 			scheme:       transport.scheme,
 			userSessions: userSessions, runtimeUsers: runtimeUsers, access: serverAccess,
+			rootCA:  rootCA,
 			capture: capture, proxy: runtime.ProxyHandler(),
 			adminSessions: adminSessions, admin: admin,
 			webSessions: webSessions, webSelf: webSelf,
