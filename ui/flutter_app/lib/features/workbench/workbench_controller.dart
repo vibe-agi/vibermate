@@ -1641,6 +1641,7 @@ final class WorkbenchController extends ChangeNotifier {
     required String displayName,
     required String kind,
     required String secret,
+    String codexAuthJson = '',
     required ProviderAccountHeaderPolicy headerPolicy,
   }) async {
     final current = data;
@@ -1657,6 +1658,7 @@ final class WorkbenchController extends ChangeNotifier {
       final provider = switch (kind) {
         'anthropic_api_key' => 'anthropic',
         'bearer_token' => 'bearer',
+        'codex_oauth' => 'codex',
         _ => 'account',
       };
       final created = await _api.createProviderAccount(
@@ -1665,6 +1667,7 @@ final class WorkbenchController extends ChangeNotifier {
         upstreamEndpointId: endpoint.id,
         kind: kind,
         secret: secret,
+        codexAuthJson: codexAuthJson,
         headerPolicy: headerPolicy,
       );
       if (_disposed) return null;
@@ -1687,6 +1690,7 @@ final class WorkbenchController extends ChangeNotifier {
   Future<ProviderAccount?> replaceProviderAccountCredential({
     required ProviderAccount account,
     required String secret,
+    String codexAuthJson = '',
     required ProviderAccountHeaderPolicy headerPolicy,
   }) async {
     final current = data;
@@ -1699,6 +1703,7 @@ final class WorkbenchController extends ChangeNotifier {
       final updated = await _api.replaceProviderAccountCredential(
         account: account,
         secret: secret,
+        codexAuthJson: codexAuthJson,
         headerPolicy: headerPolicy,
       );
       if (_disposed) return null;

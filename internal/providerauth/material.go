@@ -116,23 +116,29 @@ func (policy HeaderPolicy) ValidateForDriver(driver DriverRef) error {
 	if err := policy.Validate(); err != nil {
 		return err
 	}
-	var primary string
+	var protected []string
 	switch driver {
 	case StaticHeaderDriverRef():
-		primary = "Authorization"
+		protected = []string{"Authorization"}
 	case AnthropicAPIKeyDriverRef():
-		primary = "X-Api-Key"
+		protected = []string{"X-Api-Key"}
+	case CodexOAuthDriverRef():
+		protected = []string{"Authorization", "Chatgpt-Account-Id", "X-Openai-Fedramp"}
 	default:
 		return ErrInvalidAuthentication
 	}
 	for _, assignment := range policy.Set {
-		if strings.EqualFold(assignment.Name, primary) {
-			return ErrInvalidAuthentication
+		for _, name := range protected {
+			if strings.EqualFold(assignment.Name, name) {
+				return ErrInvalidAuthentication
+			}
 		}
 	}
 	for _, name := range policy.Delete {
-		if strings.EqualFold(name, primary) {
-			return ErrInvalidAuthentication
+		for _, protectedName := range protected {
+			if strings.EqualFold(name, protectedName) {
+				return ErrInvalidAuthentication
+			}
 		}
 	}
 	return nil

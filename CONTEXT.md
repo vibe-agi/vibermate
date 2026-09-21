@@ -80,6 +80,10 @@ _Avoid_: Provider, Account, Route
 One authentication and outbound Header authority belonging to exactly one Upstream Endpoint. Its secret-bearing values remain protected while its exact Header names and mutation rules are explicit.
 _Avoid_: Client Session, provider, credential string
 
+**OAuth Account Connection**:
+One Account credential lifecycle whose access token, rotating refresh token, provider account identity, and provider routing flags are stored and replaced as one versioned secret snapshot. ViberMate is the sole refresh owner while the connection is active; an imported provider file is one-time bootstrap input, not shared live state.
+_Avoid_: Login Session, Web Session, synced auth file, bearer string
+
 **Account Header Policy**:
 The exact Header deletions and assignments applied to every Endpoint request authenticated by one Account. Authentication presets are protected assignments within this policy, not provider inference.
 _Avoid_: Custom auth, request script, Endpoint headers

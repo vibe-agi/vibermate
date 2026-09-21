@@ -1020,6 +1020,7 @@ final class AppCopy {
     'routes.protocol.openai_chat': 'OpenAI Chat',
     'routes.credentials.ready': 'Credential ready',
     'routes.credentials.unavailable': 'Credential unavailable',
+    'routes.credentials.reconnect_required': 'Reconnect required',
     'routes.credentials.epoch': 'Credential version {epoch}',
     'routes.update_credential': 'Replace credential',
     'routes.delete_account': 'Delete upstream account',
@@ -1042,10 +1043,23 @@ final class AppCopy {
     'routes.account.kind': 'Credential type',
     'routes.account.kind.anthropic_api_key': 'Anthropic API key',
     'routes.account.kind.bearer_token': 'Bearer token',
+    'routes.account.kind.codex_oauth': 'Codex account (OAuth)',
     'routes.account.transport.anthropic_api_key': 'X-Api-Key',
     'routes.account.transport.bearer_token': 'Authorization: Bearer',
+    'routes.account.transport.codex_oauth':
+        'Managed OAuth + ChatGPT account ID',
     'routes.account.api_key': 'API key',
     'routes.account.bearer_token': 'Bearer token',
+    'routes.account.codex_auth_json': 'Codex auth.json',
+    'routes.account.codex_auth_json_hint':
+        'Paste the complete contents of ~/.codex/auth.json. ViberMate imports the account identity and rotating OAuth credentials.',
+    'routes.account.codex_ownership':
+        'Import transfers refresh ownership to ViberMate. Do not keep this same token set active in another Codex installation; two refresh owners can invalidate each other.',
+    'routes.account.paste': 'Paste from clipboard',
+    'routes.account.codex_profile': 'Account {account} · Plan {plan}',
+    'routes.account.oauth_state.ready': 'Refresh managed',
+    'routes.account.oauth_state.refresh_due': 'Refresh due',
+    'routes.account.oauth_state.reconnect_required': 'Reconnect required',
     'routes.account.chatgpt_hint':
         'Use a ChatGPT access token, not an OpenAI API key. ViberMate reads the account ID from this token when available. For opaque tokens, set ChatGPT-Account-Id below to the matching account ID. Stored tokens are not refreshed automatically; replace them when they expire.',
     'routes.account.secret_boundary':
@@ -1081,6 +1095,8 @@ final class AppCopy {
         '{environment} r{revision} · route {route}',
     'routes.account.delete.more': '{count} more references were not returned.',
     'routes.validation.required': 'Enter a value.',
+    'routes.validation.codex_auth_json':
+        'Paste a valid Codex ChatGPT auth.json file.',
     'routes.validation.origin':
         'Enter an exact HTTPS URL or trusted local/private HTTP URL without a path, query, fragment, or explicit default port.',
     'routes.validation.secret':
@@ -2628,6 +2644,7 @@ final class AppCopy {
     'routes.protocol.openai_chat': 'OpenAI Chat',
     'routes.credentials.ready': '凭据就绪',
     'routes.credentials.unavailable': '凭据不可用',
+    'routes.credentials.reconnect_required': '需要重新连接',
     'routes.credentials.epoch': '凭据版本 {epoch}',
     'routes.update_credential': '替换凭据',
     'routes.delete_account': '删除账号',
@@ -2648,10 +2665,22 @@ final class AppCopy {
     'routes.account.kind': '凭据类型',
     'routes.account.kind.anthropic_api_key': 'Anthropic API Key',
     'routes.account.kind.bearer_token': 'Bearer Token',
+    'routes.account.kind.codex_oauth': 'Codex 账号（OAuth）',
     'routes.account.transport.anthropic_api_key': 'X-Api-Key',
     'routes.account.transport.bearer_token': 'Authorization: Bearer',
+    'routes.account.transport.codex_oauth': '托管 OAuth + ChatGPT 账号 ID',
     'routes.account.api_key': 'API Key',
     'routes.account.bearer_token': 'Bearer Token',
+    'routes.account.codex_auth_json': 'Codex auth.json',
+    'routes.account.codex_auth_json_hint':
+        '粘贴 ~/.codex/auth.json 的完整内容。ViberMate 会导入账号身份和可轮换的 OAuth 凭据。',
+    'routes.account.codex_ownership':
+        '导入后将由 ViberMate 负责刷新。请勿让另一份 Codex 安装继续使用同一组 Token；两个刷新方可能令彼此的凭据失效。',
+    'routes.account.paste': '从剪贴板粘贴',
+    'routes.account.codex_profile': '账号 {account} · 套餐 {plan}',
+    'routes.account.oauth_state.ready': '已托管刷新',
+    'routes.account.oauth_state.refresh_due': '等待刷新',
+    'routes.account.oauth_state.reconnect_required': '需要重新连接',
     'routes.account.chatgpt_hint':
         '请使用 ChatGPT 访问令牌，而不是 OpenAI API Key。ViberMate 会从此令牌中读取可用的账号 ID；若令牌无法解析，请在下方设置与令牌匹配的 ChatGPT-Account-Id Header。已保存的令牌不会自动刷新，过期后需替换。',
     'routes.account.secret_boundary': '凭据只会发送一次给本机运行时并由其密钥存储保存；账号响应绝不会将其返回。',
@@ -2679,6 +2708,7 @@ final class AppCopy {
     'routes.account.delete.reference': '{environment} r{revision} · 路由 {route}',
     'routes.account.delete.more': '另有 {count} 条引用未返回。',
     'routes.validation.required': '请输入内容。',
+    'routes.validation.codex_auth_json': '请粘贴有效的 Codex ChatGPT auth.json 文件内容。',
     'routes.validation.origin':
         '请输入不含路径、查询、片段或显式默认端口的精确 HTTPS 地址，或受信任的本机/私网 HTTP 地址。',
     'routes.validation.secret': '请输入不含换行或空字符的凭据。',

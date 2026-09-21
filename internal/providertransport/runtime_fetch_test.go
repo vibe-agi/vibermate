@@ -1,6 +1,7 @@
 package providertransport
 
 import (
+	"bytes"
 	"context"
 	"io"
 	"net/http"
@@ -9,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/vibe-agi/vibermate/internal/codexoauth"
 	"github.com/vibe-agi/vibermate/internal/egressaudit"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
 	"github.com/vibe-agi/vibermate/internal/originidentity"
@@ -18,6 +20,52 @@ import (
 	"github.com/vibe-agi/vibermate/internal/transportprofile"
 	"github.com/vibe-agi/vibermate/internal/upstreamendpoint"
 )
+
+func TestCodexOAuthRefreshUsesFixedAuditedRuntimeEgress(t *testing.T) {
+	t.Parallel()
+	gate := newStartedGate(t)
+	audit := &runtimeAuditRecorder{}
+	transport := &runtimeTransportStub{
+		audit: audit,
+		response: &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(`{"access_token":"rotated"}`)),
+		},
+	}
+	client := newRuntimeFetchClient(t, gate, transport, audit)
+	payload := []byte(`{"grant_type":"refresh_token","refresh_token":"secret"}`)
+	request, err := http.NewRequestWithContext(
+		context.Background(), http.MethodPost, codexoauth.TokenURL, bytes.NewReader(payload),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("Content-Type", "application/json")
+	response, err := client.DoCodexOAuthTokenRequest(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := io.Copy(io.Discard, response.Body); err != nil {
+		t.Fatal(err)
+	}
+	outbound := transport.lastRequest()
+	body, err := io.ReadAll(outbound.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if outbound.Method != http.MethodPost || outbound.URL.String() != codexoauth.TokenURL ||
+		outbound.Host != "auth.openai.com" || !bytes.Equal(body, payload) {
+		t.Fatalf("refresh egress = %s %s host=%s body=%q", outbound.Method, outbound.URL, outbound.Host, body)
+	}
+	started, terminal := audit.attempts()
+	if !transport.auditWasPresent() || started.Purpose() != egressaudit.PurposeCredentialRefresh ||
+		started.PayloadClass() != egressaudit.PayloadRuntime ||
+		terminal.Outcome() != egressaudit.OutcomeCompleted ||
+		terminal.BytesOut() != int64(len(payload)) {
+		t.Fatalf("refresh audit start=%+v terminal=%+v", started, terminal)
+	}
+}
 
 func TestFetchEndpointModelsHonorsHoldAuditsAndReleasesItsAction(t *testing.T) {
 	t.Parallel()
@@ -329,11 +377,15 @@ func (transport *runtimeTransportStub) RoundTrip(
 	request *http.Request,
 	_ TransportDispatch,
 ) (*http.Response, transportprofile.Evidence, error) {
+	body, _ := io.ReadAll(request.Body)
+	_ = request.Body.Close()
+	request.Body = io.NopCloser(bytes.NewReader(body))
 	transport.mu.Lock()
 	defer transport.mu.Unlock()
 	transport.calls++
 	transport.audited = transport.audit.appendCount() == 1
 	transport.request = request.Clone(context.Background())
+	transport.request.Body = io.NopCloser(bytes.NewReader(body))
 	transport.request.Header = request.Header.Clone()
 	transport.request.Host = request.Host
 	return transport.response, transportprofile.Evidence{}, nil

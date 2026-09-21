@@ -61,6 +61,7 @@ func TestPurposeAndAuthorityMustAgree(t *testing.T) {
 		egressaudit.PurposeProviderAttempt:        egressaudit.AuthorityEnvironment,
 		egressaudit.PurposeUpstreamModelDiscovery: egressaudit.AuthorityRuntime,
 		egressaudit.PurposeModelMetadataDirectory: egressaudit.AuthorityRuntime,
+		egressaudit.PurposeCredentialRefresh:      egressaudit.AuthorityRuntime,
 		egressaudit.PurposeRouteOperation:         egressaudit.AuthorityEnvironment,
 		egressaudit.PurposeOriginalOrigin:         egressaudit.AuthorityNetwork,
 		egressaudit.PurposeAgentProbe:             egressaudit.AuthorityNetwork,

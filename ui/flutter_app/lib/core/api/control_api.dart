@@ -198,12 +198,14 @@ abstract interface class ControlApi {
     required String upstreamEndpointId,
     required String kind,
     required String secret,
+    String codexAuthJson = '',
     required ProviderAccountHeaderPolicy headerPolicy,
   });
 
   Future<ProviderAccount> replaceProviderAccountCredential({
     required ProviderAccount account,
     required String secret,
+    String codexAuthJson = '',
     required ProviderAccountHeaderPolicy headerPolicy,
   });
 
@@ -1341,14 +1343,21 @@ final class HttpControlApi implements ControlApi {
     required String upstreamEndpointId,
     required String kind,
     required String secret,
+    String codexAuthJson = '',
     required ProviderAccountHeaderPolicy headerPolicy,
   }) async {
     headerPolicy.validate(accountKind: kind);
     if (!_validResourceId(id) ||
         !_validDisplayLabel(displayName) ||
         !_validResourceId(upstreamEndpointId) ||
-        !const {'anthropic_api_key', 'bearer_token'}.contains(kind) ||
-        !_validSecret(secret)) {
+        !const {
+          'anthropic_api_key',
+          'bearer_token',
+          'codex_oauth',
+        }.contains(kind) ||
+        (kind == 'codex_oauth'
+            ? secret.isNotEmpty || !_validCodexAuthJSON(codexAuthJson)
+            : !_validSecret(secret) || codexAuthJson.isNotEmpty)) {
       throw const ControlContractException('Provider Account input is invalid');
     }
     final payload = await _mutation(
@@ -1361,7 +1370,10 @@ final class HttpControlApi implements ControlApi {
         'displayName': displayName,
         'upstreamEndpointId': upstreamEndpointId,
         'kind': kind,
-        'secret': secret,
+        if (kind == 'codex_oauth')
+          'codexAuthJson': codexAuthJson
+        else
+          'secret': secret,
         ...headerPolicy.toJson(),
       },
     );
@@ -1382,10 +1394,14 @@ final class HttpControlApi implements ControlApi {
   Future<ProviderAccount> replaceProviderAccountCredential({
     required ProviderAccount account,
     required String secret,
+    String codexAuthJson = '',
     required ProviderAccountHeaderPolicy headerPolicy,
   }) async {
     headerPolicy.validate(accountKind: account.kind);
-    if (!_validResourceId(account.id) || !_validSecret(secret)) {
+    if (!_validResourceId(account.id) ||
+        (account.kind == 'codex_oauth'
+            ? secret.isNotEmpty || !_validCodexAuthJSON(codexAuthJson)
+            : !_validSecret(secret) || codexAuthJson.isNotEmpty)) {
       throw const ControlContractException(
         'Provider Account credential input is invalid',
       );
@@ -1394,7 +1410,13 @@ final class HttpControlApi implements ControlApi {
       'PUT',
       '/api/v1/provider-accounts/${Uri.encodeComponent(account.id)}/credential',
       expectedRevision: account.credentialEpoch,
-      body: {'secret': secret, ...headerPolicy.toJson()},
+      body: {
+        if (account.kind == 'codex_oauth')
+          'codexAuthJson': codexAuthJson
+        else
+          'secret': secret,
+        ...headerPolicy.toJson(),
+      },
     );
     final updated = ProviderAccount.fromJson(payload, 'providerAccount');
     if (updated.id != account.id ||
@@ -2071,6 +2093,42 @@ final class HttpControlApi implements ControlApi {
       value.isNotEmpty &&
       utf8.encode(value).length <= 64 * 1024 &&
       !value.contains(RegExp(r'[\u0000\r\n]'));
+
+  static bool _validCodexAuthJSON(String value) {
+    if (value.isEmpty ||
+        utf8.encode(value).length > 32 * 1024 ||
+        value.contains('\u0000')) {
+      return false;
+    }
+    try {
+      final decoded = jsonDecode(value);
+      if (decoded is! Map) return false;
+      final object = Map<String, Object?>.from(decoded);
+      final tokens = object['tokens'];
+      if (object['auth_mode'] != 'chatgpt' || tokens is! Map) return false;
+      final tokenObject = Map<String, Object?>.from(tokens);
+      final accountId = tokenObject['account_id'];
+      final apiKey = object['OPENAI_API_KEY'];
+      final lastRefreshValue = object['last_refresh'];
+      final lastRefresh = lastRefreshValue is String
+          ? DateTime.tryParse(lastRefreshValue)
+          : null;
+      return tokenObject['id_token'] is String &&
+          (tokenObject['id_token']! as String).isNotEmpty &&
+          tokenObject['access_token'] is String &&
+          (tokenObject['access_token']! as String).isNotEmpty &&
+          tokenObject['refresh_token'] is String &&
+          (tokenObject['refresh_token']! as String).isNotEmpty &&
+          (accountId == null || accountId is String) &&
+          (apiKey == null || apiKey == '') &&
+          lastRefresh != null &&
+          lastRefresh.isUtc;
+    } on FormatException {
+      return false;
+    } on TypeError {
+      return false;
+    }
+  }
 
   static bool _validManualStateTag(String value) =>
       RegExp(r'^"mc_[A-Za-z0-9_-]{43}"$').hasMatch(value);

@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"sort"
 
+	"github.com/vibe-agi/vibermate/internal/codexoauth"
 	"github.com/vibe-agi/vibermate/internal/providerauth"
 	"github.com/vibe-agi/vibermate/internal/secretstore"
 	"github.com/vibe-agi/vibermate/internal/upstreamendpoint"
@@ -75,6 +76,96 @@ func NewStaticBearerAuthenticator(
 // the selected header cannot be inferred from a provider hostname.
 type AnthropicAPIKeyAuthenticator struct {
 	secrets secretstore.Reader
+}
+
+type CodexOAuthAuthenticator struct {
+	secrets secretstore.Reader
+}
+
+var _ Authenticator = (*CodexOAuthAuthenticator)(nil)
+
+func NewCodexOAuthAuthenticator(
+	secrets secretstore.Reader,
+) (*CodexOAuthAuthenticator, error) {
+	if secrets == nil {
+		return nil, errors.New("secret reader is nil")
+	}
+	return &CodexOAuthAuthenticator{secrets: secrets}, nil
+}
+
+func (*CodexOAuthAuthenticator) Ref() providerauth.DriverRef {
+	return providerauth.CodexOAuthDriverRef()
+}
+
+func (authenticator *CodexOAuthAuthenticator) Apply(
+	ctx context.Context,
+	request *http.Request,
+	reference secretstore.Reference,
+	revision secretstore.Revision,
+	target Target,
+) (CredentialEvidence, error) {
+	if ctx == nil || request == nil || request.URL == nil {
+		return CredentialEvidence{}, errors.New("final provider request is missing")
+	}
+	if err := target.validateRequestIdentity(request); err != nil {
+		return CredentialEvidence{}, err
+	}
+	if !upstreamendpoint.IsChatGPTCodexOrigin(target.Origin()) {
+		return CredentialEvidence{}, errors.New("Codex OAuth requires the ChatGPT Endpoint")
+	}
+	value, err := authenticator.secrets.ReadAtRevision(ctx, reference, revision)
+	value, err = secretstore.ValidateReaderResult(value, err)
+	if err != nil {
+		return CredentialEvidence{}, err
+	}
+	defer value.Destroy()
+	encoded, err := value.CopyBytes()
+	if err != nil {
+		return CredentialEvidence{}, err
+	}
+	defer clear(encoded)
+	material, err := providerauth.ParseMaterial(encoded)
+	if err != nil {
+		return CredentialEvidence{}, err
+	}
+	defer material.Destroy()
+	policy := material.HeaderPolicy()
+	if err := policy.ValidateForDriver(authenticator.Ref()); err != nil {
+		return CredentialEvidence{}, err
+	}
+	credentialBytes := material.CredentialBytes()
+	defer clear(credentialBytes)
+	credential, err := codexoauth.ParseCredential(credentialBytes)
+	if err != nil {
+		return CredentialEvidence{}, err
+	}
+	defer credential.Destroy()
+	authorization, err := credential.Authorization()
+	if err != nil {
+		return CredentialEvidence{}, err
+	}
+	defer authorization.Destroy()
+	accessToken := authorization.AccessTokenBytes()
+	defer clear(accessToken)
+	stripProviderCredentialHeaders(request.Header)
+	if err := policy.Apply(request.Header); err != nil {
+		return CredentialEvidence{}, err
+	}
+	request.Header.Set("Authorization", "Bearer "+string(accessToken))
+	request.Header.Set(chatGPTAccountHeader, authorization.AccountID())
+	if authorization.FedRAMP() {
+		request.Header.Set("X-OpenAI-FedRAMP", "true")
+	}
+	protected := protectedHeaderNames("Authorization", policy)
+	protected = append(protected, chatGPTAccountHeader, "X-Openai-Fedramp")
+	sort.Strings(protected)
+	return CredentialEvidence{
+		DriverRef:            authenticator.Ref().String(),
+		HeaderName:           "authorization",
+		SecretRead:           true,
+		ProtectedHeaderNames: protected,
+		userAgentMutation:    userAgentMutationOf(policy),
+	}, nil
 }
 
 var _ Authenticator = (*AnthropicAPIKeyAuthenticator)(nil)
@@ -242,6 +333,7 @@ func stripProviderCredentialHeaders(header http.Header) {
 		"X-Api-Key",
 		"Api-Key",
 		chatGPTAccountHeader,
+		"X-OpenAI-FedRAMP",
 	} {
 		header.Del(name)
 	}

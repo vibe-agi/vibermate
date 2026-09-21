@@ -2295,6 +2295,52 @@ bool _validOpaqueModelId(String value) =>
 bool _validOptionalCatalogText(String value, {required int maximumBytes}) =>
     value.isEmpty || _validCatalogText(value, maximumBytes: maximumBytes);
 
+final class CodexOAuthAccount {
+  const CodexOAuthAccount({
+    required this.chatgptAccountId,
+    required this.email,
+    required this.userId,
+    required this.planType,
+    required this.fedRamp,
+    required this.expiresAt,
+    required this.lastRefresh,
+    required this.state,
+  });
+
+  factory CodexOAuthAccount.fromJson(Object? json, String path) {
+    final value = requireObject(json, path);
+    requireFields(
+      value,
+      path,
+      required: const {'chatgptAccountId', 'fedRamp', 'lastRefresh', 'state'},
+      optional: const {'email', 'userId', 'planType', 'expiresAt'},
+    );
+    final state = requireString(value, 'state', path);
+    if (!const {'ready', 'refresh_due', 'reconnect_required'}.contains(state)) {
+      throw ControlContractException('$path.state is invalid');
+    }
+    return CodexOAuthAccount(
+      chatgptAccountId: requireString(value, 'chatgptAccountId', path),
+      email: optionalString(value, 'email', path),
+      userId: optionalString(value, 'userId', path),
+      planType: optionalString(value, 'planType', path),
+      fedRamp: requireBoolean(value, 'fedRamp', path),
+      expiresAt: optionalTimestamp(value, 'expiresAt', path),
+      lastRefresh: requireTimestamp(value, 'lastRefresh', path),
+      state: state,
+    );
+  }
+
+  final String chatgptAccountId;
+  final String? email;
+  final String? userId;
+  final String? planType;
+  final bool fedRamp;
+  final DateTime? expiresAt;
+  final DateTime lastRefresh;
+  final String state;
+}
+
 final class ProviderAccount {
   const ProviderAccount({
     required this.id,
@@ -2308,6 +2354,7 @@ final class ProviderAccount {
     required this.credentialEpoch,
     required this.setHeaderNames,
     required this.deleteHeaderNames,
+    this.codexOAuth,
   });
 
   factory ProviderAccount.fromJson(Object? json, String path) {
@@ -2328,6 +2375,7 @@ final class ProviderAccount {
         'setHeaderNames',
         'deleteHeaderNames',
       },
+      optional: const {'codexOAuth'},
     );
     final credentialState = requireString(value, 'credentialState', path);
     final credentialEpoch = requireInteger(value, 'credentialEpoch', path);
@@ -2361,11 +2409,23 @@ final class ProviderAccount {
         allHeaderNames.toSet().length != allHeaderNames.length) {
       throw ControlContractException('$path Header policy is inconsistent');
     }
+    final kind = requireString(value, 'kind', path);
+    final codexOAuth = value['codexOAuth'] == null
+        ? null
+        : CodexOAuthAccount.fromJson(value['codexOAuth'], '$path.codexOAuth');
+    if ((kind == 'codex_oauth' &&
+            credentialState == 'ready' &&
+            codexOAuth == null) ||
+        (kind != 'codex_oauth' && codexOAuth != null)) {
+      throw ControlContractException(
+        '$path Codex OAuth identity is inconsistent with the Account kind',
+      );
+    }
     return ProviderAccount(
       id: requireString(value, 'id', path),
       displayName: requireString(value, 'displayName', path),
       upstreamEndpointId: requireString(value, 'upstreamEndpointId', path),
-      kind: requireString(value, 'kind', path),
+      kind: kind,
       realmId: requireString(value, 'realmId', path),
       state: requireString(value, 'state', path),
       revision: requireInteger(value, 'revision', path, minimum: 1),
@@ -2373,6 +2433,7 @@ final class ProviderAccount {
       credentialEpoch: credentialEpoch,
       setHeaderNames: List.unmodifiable(setHeaderNames),
       deleteHeaderNames: List.unmodifiable(deleteHeaderNames),
+      codexOAuth: codexOAuth,
     );
   }
 
@@ -2387,8 +2448,12 @@ final class ProviderAccount {
   final int credentialEpoch;
   final List<String> setHeaderNames;
   final List<String> deleteHeaderNames;
+  final CodexOAuthAccount? codexOAuth;
 
-  bool get usable => state == 'active' && credentialState == 'ready';
+  bool get usable =>
+      state == 'active' &&
+      credentialState == 'ready' &&
+      codexOAuth?.state != 'reconnect_required';
 }
 
 final _providerHeaderNamePattern = RegExp(r"^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$");
@@ -2457,14 +2522,19 @@ final class ProviderAccountHeaderPolicy {
     for (final name in deleteHeaders) {
       _validateInputName(name, seen);
     }
-    final primary = switch (accountKind) {
-      'anthropic_api_key' => 'x-api-key',
-      'bearer_token' => 'authorization',
+    final protected = switch (accountKind) {
+      'anthropic_api_key' => const {'x-api-key'},
+      'bearer_token' => const {'authorization'},
+      'codex_oauth' => const {
+        'authorization',
+        'chatgpt-account-id',
+        'x-openai-fedramp',
+      },
       _ => throw const ControlContractException(
         'Provider Account kind is invalid',
       ),
     };
-    if (seen.contains(primary)) {
+    if (seen.any(protected.contains)) {
       throw const ControlContractException(
         'Provider Account authentication Header is driver-owned',
       );

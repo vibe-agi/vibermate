@@ -1,6 +1,8 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../../core/api/control_models.dart';
 import '../../core/api/provider_origin.dart';
@@ -488,7 +490,10 @@ final class _AccountRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final credentialLabel = account.usable
+    final oauth = account.codexOAuth;
+    final credentialLabel = oauth != null
+        ? copy('routes.account.oauth_state.${oauth.state}')
+        : account.usable
         ? copy('routes.credentials.ready')
         : copy('routes.credentials.unavailable');
     final kindLabel = _localizedCopy(copy, 'routes.account.kind', account.kind);
@@ -501,6 +506,9 @@ final class _AccountRow extends StatelessWidget {
       'set': account.setHeaderNames.length,
       'delete': account.deleteHeaderNames.length,
     });
+    final identitySummary = oauth == null
+        ? null
+        : [oauth.email ?? oauth.chatgptAccountId, ?oauth.planType].join(' · ');
     final compactActions = Row(
       mainAxisSize: MainAxisSize.min,
       children: [
@@ -551,7 +559,7 @@ final class _AccountRow extends StatelessWidget {
                   ),
                   const SizedBox(height: 4),
                   Text(
-                    '$kindLabel  ·  $transportLabel  ·  $headerSummary  ·  ${copy.format('routes.credentials.epoch', {'epoch': account.credentialEpoch})}',
+                    '${identitySummary == null ? kindLabel : '$kindLabel  ·  $identitySummary'}  ·  $transportLabel  ·  $headerSummary  ·  ${copy.format('routes.credentials.epoch', {'epoch': account.credentialEpoch})}',
                     style: monoStyle,
                   ),
                 ],
@@ -583,7 +591,7 @@ final class _AccountRow extends StatelessWidget {
                       style: Theme.of(context).textTheme.titleSmall,
                     ),
                     Text(
-                      '$kindLabel · $transportLabel · $headerSummary',
+                      '${identitySummary == null ? kindLabel : '$kindLabel · $identitySummary'} · $transportLabel · $headerSummary',
                       overflow: TextOverflow.ellipsis,
                       style: Theme.of(context).textTheme.bodySmall,
                     ),
@@ -881,8 +889,10 @@ final class _AccountEditorDialogState extends State<_AccountEditorDialog> {
   late final AccountHeaderPolicyDraft _headers;
   bool _submitted = false;
   bool _headerInvalid = false;
+  bool _revealCodexAuthJSON = false;
 
   bool get _replacing => widget.account != null;
+  bool get _codexOAuth => _kind == 'codex_oauth';
 
   @override
   void initState() {
@@ -952,7 +962,11 @@ final class _AccountEditorDialogState extends State<_AccountEditorDialog> {
                             child: Text(copy('routes.account.kind.$kind')),
                           ),
                       ],
-                      onChanged: (value) => setState(() => _kind = value!),
+                      onChanged: (value) => setState(() {
+                        _kind = value!;
+                        _secret.clear();
+                        _headerInvalid = false;
+                      }),
                     ),
                   ),
                   const SizedBox(height: 4),
@@ -980,31 +994,83 @@ final class _AccountEditorDialogState extends State<_AccountEditorDialog> {
                   ),
                   const SizedBox(height: 8),
                 ],
-                CompactLabeledControl(
-                  label: copy(
-                    _kind == 'bearer_token'
-                        ? 'routes.account.bearer_token'
-                        : 'routes.account.api_key',
+                if (_replacing && _codexOAuth) ...[
+                  _CodexOAuthIdentityCard(
+                    account: widget.account!.codexOAuth,
+                    copy: copy,
                   ),
-                  child: TextFormField(
-                    key: const Key('account-editor-secret'),
-                    controller: _secret,
-                    autofocus: _replacing,
-                    obscureText: true,
-                    autocorrect: false,
-                    enableSuggestions: false,
-                    textAlignVertical: TextAlignVertical.center,
-                    decoration: const InputDecoration(),
-                    validator: (value) =>
-                        value == null ||
-                            value.isEmpty ||
-                            value.contains(RegExp(r'[\u0000\r\n]'))
-                        ? copy('routes.validation.secret')
-                        : null,
+                  const SizedBox(height: 10),
+                ],
+                if (_codexOAuth) ...[
+                  CompactLabeledControl(
+                    label: copy('routes.account.codex_auth_json'),
+                    detail: copy('routes.account.codex_auth_json_hint'),
+                    child: TextFormField(
+                      key: const Key('account-editor-codex-auth-json'),
+                      controller: _secret,
+                      autofocus: _replacing,
+                      obscureText: !_revealCodexAuthJSON,
+                      obscuringCharacter: '•',
+                      minLines: _revealCodexAuthJSON ? 5 : 1,
+                      maxLines: _revealCodexAuthJSON ? 9 : 1,
+                      autocorrect: false,
+                      enableSuggestions: false,
+                      style: monoStyle,
+                      decoration: InputDecoration(
+                        alignLabelWithHint: true,
+                        suffixIcon: IconButton(
+                          tooltip: copy(
+                            _revealCodexAuthJSON
+                                ? 'common.hide_secret'
+                                : 'common.show_secret',
+                          ),
+                          onPressed: () => setState(
+                            () => _revealCodexAuthJSON = !_revealCodexAuthJSON,
+                          ),
+                          icon: Icon(
+                            _revealCodexAuthJSON
+                                ? Icons.visibility_off_outlined
+                                : Icons.visibility_outlined,
+                          ),
+                        ),
+                      ),
+                      validator: _validateCodexAuthJSON,
+                    ),
                   ),
-                ),
+                  const SizedBox(height: 10),
+                  InlineNotice(
+                    key: const Key('account-editor-codex-ownership'),
+                    message: copy('routes.account.codex_ownership'),
+                    actionLabel: copy('routes.account.paste'),
+                    onAction: _pasteCodexAuthJSON,
+                  ),
+                ] else
+                  CompactLabeledControl(
+                    label: copy(
+                      _kind == 'bearer_token'
+                          ? 'routes.account.bearer_token'
+                          : 'routes.account.api_key',
+                    ),
+                    child: TextFormField(
+                      key: const Key('account-editor-secret'),
+                      controller: _secret,
+                      autofocus: _replacing,
+                      obscureText: true,
+                      autocorrect: false,
+                      enableSuggestions: false,
+                      textAlignVertical: TextAlignVertical.center,
+                      decoration: const InputDecoration(),
+                      validator: (value) =>
+                          value == null ||
+                              value.isEmpty ||
+                              value.contains(RegExp(r'[\u0000\r\n]'))
+                          ? copy('routes.validation.secret')
+                          : null,
+                    ),
+                  ),
                 const SizedBox(height: 10),
-                if (_kind == 'bearer_token' &&
+                if (!_codexOAuth &&
+                    _kind == 'bearer_token' &&
                     isChatGPTCodexOrigin(widget.endpoint.origin)) ...[
                   Text(
                     copy('routes.account.chatgpt_hint'),
@@ -1086,14 +1152,16 @@ final class _AccountEditorDialogState extends State<_AccountEditorDialog> {
     final result = _replacing
         ? await widget.controller.replaceProviderAccountCredential(
             account: widget.account!,
-            secret: secret,
+            secret: _codexOAuth ? '' : secret,
+            codexAuthJson: _codexOAuth ? secret : '',
             headerPolicy: headerPolicy,
           )
         : await widget.controller.createProviderAccount(
             endpoint: widget.endpoint,
             displayName: _name.text,
             kind: _kind,
-            secret: secret,
+            secret: _codexOAuth ? '' : secret,
+            codexAuthJson: _codexOAuth ? secret : '',
             headerPolicy: headerPolicy,
           );
     _secret.clear();
@@ -1104,6 +1172,106 @@ final class _AccountEditorDialogState extends State<_AccountEditorDialog> {
     } else {
       setState(() {});
     }
+  }
+
+  String? _validateCodexAuthJSON(String? raw) {
+    if (raw == null || raw.isEmpty || utf8.encode(raw).length > 32 * 1024) {
+      return widget.copy('routes.validation.codex_auth_json');
+    }
+    try {
+      final value = jsonDecode(raw);
+      if (value is! Map || value['auth_mode'] != 'chatgpt') {
+        return widget.copy('routes.validation.codex_auth_json');
+      }
+      final tokens = value['tokens'];
+      final apiKey = value['OPENAI_API_KEY'];
+      final lastRefreshValue = value['last_refresh'];
+      final lastRefresh = lastRefreshValue is String
+          ? DateTime.tryParse(lastRefreshValue)
+          : null;
+      if (tokens is! Map ||
+          tokens['id_token'] is! String ||
+          (tokens['id_token'] as String).isEmpty ||
+          tokens['access_token'] is! String ||
+          (tokens['access_token'] as String).isEmpty ||
+          tokens['refresh_token'] is! String ||
+          (tokens['refresh_token'] as String).isEmpty ||
+          (tokens['account_id'] != null && tokens['account_id'] is! String) ||
+          (apiKey != null && apiKey != '') ||
+          lastRefresh == null ||
+          !lastRefresh.isUtc) {
+        return widget.copy('routes.validation.codex_auth_json');
+      }
+      return null;
+    } on FormatException {
+      return widget.copy('routes.validation.codex_auth_json');
+    }
+  }
+
+  Future<void> _pasteCodexAuthJSON() async {
+    final value = await Clipboard.getData('text/plain');
+    if (!mounted || value?.text == null) return;
+    setState(() => _secret.text = value!.text!);
+  }
+}
+
+final class _CodexOAuthIdentityCard extends StatelessWidget {
+  const _CodexOAuthIdentityCard({required this.account, required this.copy});
+
+  final CodexOAuthAccount? account;
+  final AppCopy copy;
+
+  @override
+  Widget build(BuildContext context) {
+    final value = account;
+    if (value == null) return const SizedBox.shrink();
+    final title = value.email ?? value.chatgptAccountId;
+    final state = copy('routes.account.oauth_state.${value.state}');
+    return Container(
+      key: const Key('account-editor-codex-profile'),
+      width: double.infinity,
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: context.viberColors.panelRaised,
+        border: Border.all(color: context.viberColors.divider),
+        borderRadius: ViberMetrics.controlRadius,
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(
+                Icons.account_circle_outlined,
+                size: 18,
+                color: context.viberColors.verified,
+              ),
+              const SizedBox(width: 7),
+              Expanded(
+                child: Text(
+                  title,
+                  style: Theme.of(context).textTheme.titleSmall,
+                ),
+              ),
+              InlineStatus(
+                label: state,
+                color: value.state == 'reconnect_required'
+                    ? context.viberColors.danger
+                    : context.viberColors.verified,
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Text(
+            copy.format('routes.account.codex_profile', {
+              'account': value.chatgptAccountId,
+              'plan': value.planType ?? '—',
+            }),
+            style: monoStyle,
+          ),
+        ],
+      ),
+    );
   }
 }
 

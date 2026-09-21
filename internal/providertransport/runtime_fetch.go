@@ -11,7 +11,9 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 
+	"github.com/vibe-agi/vibermate/internal/codexoauth"
 	"github.com/vibe-agi/vibermate/internal/egressaudit"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
 	"github.com/vibe-agi/vibermate/internal/originidentity"
@@ -36,7 +38,39 @@ type runtimeFetchSpec struct {
 	target       Target
 	relativePath string
 	credential   providerauth.Lease
+	method       string
+	body         []byte
+	contentType  string
 }
+
+// clearingRequestBody gives the transport its own copy of a Runtime-owned
+// request body and erases that copy when the RoundTripper releases it. A
+// transport may close a request body after RoundTrip returns, so the caller's
+// stack defer is not a safe lifetime boundary for refresh-token bytes.
+type clearingRequestBody struct {
+	reader *bytes.Reader
+	value  []byte
+	once   sync.Once
+}
+
+func newClearingRequestBody(value []byte) *clearingRequestBody {
+	cloned := bytes.Clone(value)
+	return &clearingRequestBody{reader: bytes.NewReader(cloned), value: cloned}
+}
+
+func (body *clearingRequestBody) Read(destination []byte) (int, error) {
+	return body.reader.Read(destination)
+}
+
+func (body *clearingRequestBody) Close() error {
+	body.once.Do(func() {
+		clear(body.value)
+		body.value = nil
+	})
+	return nil
+}
+
+var _ io.ReadCloser = (*clearingRequestBody)(nil)
 
 // FetchEndpointModels discovers the models that this exact Endpoint says are
 // available. Metadata catalogs are deliberately not consulted here: they can
@@ -91,6 +125,41 @@ func (client *Client) FetchModelsDev(ctx context.Context) (*http.Response, error
 	})
 }
 
+// DoCodexOAuthTokenRequest sends only the fixed Codex OAuth token exchange
+// through the runtime's mandatory Hold, strict transport, and body-free audit
+// boundary. The refresh token is never emitted as Raw evidence.
+func (client *Client) DoCodexOAuthTokenRequest(request *http.Request) (*http.Response, error) {
+	if request == nil || request.URL == nil || request.Body == nil ||
+		request.Method != http.MethodPost || request.URL.String() != codexoauth.TokenURL ||
+		request.Header.Get("Content-Type") != "application/json" {
+		return nil, errors.New("Codex OAuth token request is invalid")
+	}
+	body, err := io.ReadAll(io.LimitReader(request.Body, 64<<10+1))
+	closeErr := request.Body.Close()
+	if err != nil || closeErr != nil || len(body) == 0 || len(body) > 64<<10 {
+		clear(body)
+		return nil, errors.New("Codex OAuth token request body is invalid")
+	}
+	defer clear(body)
+	origin, err := originidentity.ParseProviderOrigin("https://auth.openai.com")
+	if err != nil {
+		return nil, fmt.Errorf("construct Codex OAuth origin: %w", err)
+	}
+	target, err := NewTarget(origin)
+	if err != nil {
+		return nil, fmt.Errorf("construct Codex OAuth target: %w", err)
+	}
+	return client.fetchRuntimeJSON(request.Context(), runtimeFetchSpec{
+		purpose:      egressaudit.PurposeCredentialRefresh,
+		targetRef:    "runtime.codex-oauth",
+		target:       target,
+		relativePath: "/oauth/token",
+		method:       http.MethodPost,
+		body:         body,
+		contentType:  "application/json",
+	})
+}
+
 func (client *Client) fetchRuntimeJSON(
 	ctx context.Context,
 	spec runtimeFetchSpec,
@@ -103,6 +172,9 @@ func (client *Client) fetchRuntimeJSON(
 	}
 	if err := spec.target.validate(); err != nil {
 		return nil, err
+	}
+	if spec.method == "" {
+		spec.method = http.MethodGet
 	}
 	actionID, requestID, attemptID, err := client.runtimeFetchIDs(ctx)
 	if err != nil {
@@ -140,7 +212,7 @@ func (client *Client) fetchRuntimeJSON(
 			RequestID: requestID,
 			Action:    action,
 			Target:    probeTarget,
-			SizeBytes: 0,
+			SizeBytes: int64(len(spec.body)),
 		},
 	)
 	if err != nil {
@@ -156,18 +228,33 @@ func (client *Client) fetchRuntimeJSON(
 		Host:   spec.target.HTTPAuthority(),
 		Path:   spec.relativePath,
 	}
+	var requestBody io.Reader = bytes.NewReader(nil)
+	var sensitiveBody *clearingRequestBody
+	if len(spec.body) != 0 {
+		sensitiveBody = newClearingRequestBody(spec.body)
+		requestBody = sensitiveBody
+	}
+	transportOwnsBody := false
+	defer func() {
+		if sensitiveBody != nil && !transportOwnsBody {
+			_ = sensitiveBody.Close()
+		}
+	}()
 	request, err := http.NewRequestWithContext(
 		operationContext,
-		http.MethodGet,
+		spec.method,
 		requestURL.String(),
-		bytes.NewReader(nil),
+		requestBody,
 	)
 	if err != nil {
 		return nil, err
 	}
 	request.Host = spec.target.HTTPAuthority()
 	request.Header.Set("Accept", "application/json")
-	request.ContentLength = 0
+	if spec.contentType != "" {
+		request.Header.Set("Content-Type", spec.contentType)
+	}
+	request.ContentLength = int64(len(spec.body))
 	if spec.credential != nil {
 		account, hasAccount := spec.credential.Account()
 		authenticator, supported := client.authenticators[spec.credential.Driver()]
@@ -197,6 +284,7 @@ func (client *Client) fetchRuntimeJSON(
 	if err != nil {
 		return nil, err
 	}
+	transportOwnsBody = true
 	response, _, err := client.transport.RoundTrip(
 		request,
 		TransportDispatch{target: spec.target, plan: client.runtimePlan},
@@ -221,7 +309,7 @@ func (client *Client) fetchRuntimeJSON(
 			attempt,
 			egressaudit.OutcomeFailed,
 			"incomplete_response",
-			0,
+			int64(len(spec.body)),
 			0,
 		)
 		return nil, errors.New("runtime transport returned an incomplete response")
@@ -254,7 +342,7 @@ func (client *Client) fetchRuntimeJSON(
 				attempt,
 				outcome,
 				errorClass,
-				0,
+				int64(len(spec.body)),
 				counted.count(),
 			)
 			client.finish(operation, terminalErr)
@@ -301,6 +389,7 @@ func (client *Client) runtimeProbeTarget(
 		spec.targetRef,
 		spec.target.Origin().String(),
 		spec.relativePath,
+		spec.method,
 		requested.Ref().String(),
 		fmt.Sprintf("%d", requested.Revision()),
 	}, "\x00")))

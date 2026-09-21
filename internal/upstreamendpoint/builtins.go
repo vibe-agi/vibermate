@@ -38,7 +38,9 @@ func BuiltInCommands() ([]CreateCommand, error) {
 		{
 			id: ChatGPTOfficialID, name: "ChatGPT", origin: "https://chatgpt.com",
 			realm: "openai.chatgpt", protocols: []string{"openai_responses"},
-			drivers: []providerauth.DriverRef{providerauth.StaticHeaderDriverRef()},
+			drivers: []providerauth.DriverRef{
+				providerauth.StaticHeaderDriverRef(), providerauth.CodexOAuthDriverRef(),
+			},
 		},
 	}
 	commands := make([]CreateCommand, 0, len(definitions))

@@ -34,6 +34,7 @@ type Manager struct {
 	accounts   map[ID]Account
 	clock      Clock
 	deletion   environment.AccountDeletionGuard
+	preparer   CredentialPreparer
 	active     map[ID]uint64
 	operations map[ID]accountOperation
 	epochs     map[ID]secretstore.Revision
@@ -85,9 +86,25 @@ func BuiltInRealms() []Realm {
 			},
 			Drivers: []providerauth.DriverRef{
 				providerauth.StaticHeaderDriverRef(),
+				providerauth.CodexOAuthDriverRef(),
 			},
 		},
 	}
+}
+
+// BindCredentialPreparer completes runtime composition for rotating drivers.
+// Static credentials never invoke it.
+func (manager *Manager) BindCredentialPreparer(preparer CredentialPreparer) error {
+	if manager == nil || preparer == nil {
+		return ErrPreparationUnavailable
+	}
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+	if manager.closing || manager.preparer != nil {
+		return ErrPreparationUnavailable
+	}
+	manager.preparer = preparer
+	return nil
 }
 
 func NewManager(
@@ -626,6 +643,25 @@ func (manager *Manager) acquire(
 			return nil, ErrCredentialMissing
 		}
 		credentialEpoch = metadata.Revision
+		manager.observeCredentialEpoch(account.ID, credentialEpoch)
+	}
+	if account.Driver == providerauth.CodexOAuthDriverRef() {
+		manager.mu.RLock()
+		preparer := manager.preparer
+		manager.mu.RUnlock()
+		if preparer == nil {
+			return nil, ErrPreparationUnavailable
+		}
+		prepared, err := preparer.Prepare(
+			ctx, account.Driver, account.SecretRef, credentialEpoch,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("prepare ProviderAccount credential: %w", err)
+		}
+		if prepared < credentialEpoch || prepared > secretstore.MaxRevision {
+			return nil, ErrCredentialMissing
+		}
+		credentialEpoch = prepared
 		manager.observeCredentialEpoch(account.ID, credentialEpoch)
 	}
 	releaseOnError = false

@@ -416,6 +416,7 @@ type providerBuildRequest struct {
 
 type providerRuntime interface {
 	exchange.Provider
+	DoCodexOAuthTokenRequest(*http.Request) (*http.Response, error)
 	FetchEndpointModels(
 		context.Context,
 		upstreamendpoint.Endpoint,
@@ -440,11 +441,18 @@ func buildProvider(
 	if err != nil {
 		return nil, fmt.Errorf("build Anthropic API-key AuthDriver: %w", err)
 	}
+	codexOAuthAuthenticator, err := providertransport.NewCodexOAuthAuthenticator(
+		request.secrets,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("build Codex OAuth AuthDriver: %w", err)
+	}
 	return providertransport.NewProductionClientWithAuthenticators(
 		request.coordinator,
 		[]providertransport.Authenticator{
 			bearerAuthenticator,
 			anthropicAuthenticator,
+			codexOAuthAuthenticator,
 		},
 		providertransport.DefaultTransportTimeouts(),
 		request.instanceIDs,

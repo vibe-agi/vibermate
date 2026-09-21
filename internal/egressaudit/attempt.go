@@ -29,6 +29,7 @@ const (
 	PurposeProviderAttempt        EgressPurpose = "provider_attempt"
 	PurposeUpstreamModelDiscovery EgressPurpose = "upstream_model_discovery"
 	PurposeModelMetadataDirectory EgressPurpose = "model_metadata_directory"
+	PurposeCredentialRefresh      EgressPurpose = "credential_refresh"
 	PurposeRouteOperation         EgressPurpose = "route_operation"
 	PurposeOriginalOrigin         EgressPurpose = "original_origin"
 	PurposeAgentProbe             EgressPurpose = "agent_probe"
@@ -48,6 +49,7 @@ func Purposes() []EgressPurpose {
 		PurposeProviderAttempt,
 		PurposeUpstreamModelDiscovery,
 		PurposeModelMetadataDirectory,
+		PurposeCredentialRefresh,
 		PurposeRouteOperation,
 		PurposeOriginalOrigin,
 		PurposeAgentProbe,
@@ -81,6 +83,7 @@ func AuthorityForPurpose(
 	case PurposeOriginalOrigin, PurposeAgentProbe, PurposeBlindTunnel:
 		return AuthorityNetwork, nil
 	case PurposeUpstreamModelDiscovery, PurposeModelMetadataDirectory,
+		PurposeCredentialRefresh,
 		PurposeAuxiliaryLLM, PurposeLanguageTransform,
 		PurposePluginCatalogSync, PurposePluginArtifactFetch, PurposeUpdate:
 		return AuthorityRuntime, nil
@@ -366,6 +369,7 @@ func validatePayloadClass(
 			)
 		}
 	case PurposeUpstreamModelDiscovery, PurposeModelMetadataDirectory,
+		PurposeCredentialRefresh,
 		PurposeAuxiliaryLLM, PurposeLanguageTransform,
 		PurposePluginCatalogSync, PurposePluginArtifactFetch, PurposeUpdate:
 		if class != PayloadRuntime {
@@ -446,6 +450,7 @@ func validateParent(
 		}
 		return requireConnection()
 	case PurposeUpstreamModelDiscovery, PurposeModelMetadataDirectory,
+		PurposeCredentialRefresh,
 		PurposeAuxiliaryLLM, PurposeLanguageTransform,
 		PurposePluginCatalogSync, PurposePluginArtifactFetch, PurposeUpdate:
 		if parent.Kind != ParentRuntimeAction || parent.ExchangeID != "" {

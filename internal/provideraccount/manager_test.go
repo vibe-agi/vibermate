@@ -174,6 +174,87 @@ func TestBuiltInAnthropicRealmAcceptsStaticClaudeOAuthCredential(t *testing.T) {
 	}
 }
 
+func TestManagerPreparesCodexOAuthBeforeFreezingCredentialLease(t *testing.T) {
+	t.Parallel()
+	repository := &memoryRepository{accounts: make(map[ID]Account)}
+	secrets := newMemorySecrets()
+	manager, err := NewManager(
+		context.Background(), repository, secrets, testEndpoints(t), BuiltInRealms(),
+		fixedClock{now: time.Unix(1_786_200_000, 0).UTC()},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	material, err := providerauth.NewMaterial("managed-codex-oauth", nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := material.MarshalBinary()
+	material.Destroy()
+	if err != nil {
+		t.Fatal(err)
+	}
+	value, err := secretstore.NewValue(encoded)
+	clear(encoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer value.Destroy()
+	view, err := manager.Create(context.Background(), CreateCommand{
+		ID: "codex-work", DisplayName: "Codex Work",
+		UpstreamEndpointID: upstreamendpoint.ChatGPTOfficialID,
+		Driver:             providerauth.CodexOAuthDriverRef(), Secret: value,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	preparer := &rotatingCredentialPreparer{secrets: secrets, replacement: value}
+	if err := manager.BindCredentialPreparer(preparer); err != nil {
+		t.Fatal(err)
+	}
+	endpoint, exists := testEndpoints(t).LookupEndpoint(upstreamendpoint.ChatGPTOfficialID.String())
+	if !exists {
+		t.Fatal("ChatGPT Endpoint is missing")
+	}
+	lease, err := manager.AcquireEndpointCredential(context.Background(), view.Account.ID, endpoint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lease.Release()
+	account, ok := lease.Account()
+	if !ok || account.CredentialEpoch != 2 ||
+		lease.Driver() != providerauth.CodexOAuthDriverRef() {
+		t.Fatalf("prepared lease = %+v driver=%s", account, lease.Driver().String())
+	}
+	if preparer.calls != 1 || preparer.receivedRevision != 1 {
+		t.Fatalf("preparer calls=%d revision=%d", preparer.calls, preparer.receivedRevision)
+	}
+}
+
+type rotatingCredentialPreparer struct {
+	secrets          secretstore.Store
+	replacement      *secretstore.Value
+	calls            int
+	receivedRevision secretstore.Revision
+}
+
+func (preparer *rotatingCredentialPreparer) Prepare(
+	ctx context.Context,
+	driver providerauth.DriverRef,
+	reference secretstore.Reference,
+	revision secretstore.Revision,
+) (secretstore.Revision, error) {
+	preparer.calls++
+	preparer.receivedRevision = revision
+	if driver != providerauth.CodexOAuthDriverRef() {
+		return 0, errors.New("unexpected driver")
+	}
+	metadata, err := preparer.secrets.Replace(ctx, secretstore.ReplaceCommand{
+		Reference: reference, ExpectedRevision: revision, Value: preparer.replacement,
+	})
+	return metadata.Revision, err
+}
+
 func TestManagerDeletesOnlyAnUnreferencedInactiveAccount(t *testing.T) {
 	t.Parallel()
 	repository := &memoryRepository{accounts: make(map[ID]Account)}

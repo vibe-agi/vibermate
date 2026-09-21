@@ -18,6 +18,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/capturerun"
 	"github.com/vibe-agi/vibermate/internal/clientannotation"
 	"github.com/vibe-agi/vibermate/internal/codelibrary"
+	"github.com/vibe-agi/vibermate/internal/codexoauth"
 	"github.com/vibe-agi/vibermate/internal/connectionevent"
 	"github.com/vibe-agi/vibermate/internal/connectionpolicy"
 	"github.com/vibe-agi/vibermate/internal/egressaudit"
@@ -61,6 +62,7 @@ type Runtime struct {
 	egressCompletion   *runtimeEgressRepository
 	endpoints          *upstreamendpoint.Manager
 	accounts           *provideraccount.Manager
+	codexOAuth         *codexoauth.Manager
 	codeLibrary        *codelibrary.Manager
 	egressProfiles     *egressprofile.Manager
 	runtimeUsers       *runtimeuser.Manager
@@ -522,6 +524,17 @@ func startWithBuilders(
 		)
 	}
 	pending.register("provider transport", provider.Shutdown)
+	codexOAuth, err := codexoauth.NewManager(codexoauth.Options{
+		Secrets: options.Secrets,
+		Client:  codexOAuthHTTPClient{provider: provider},
+		Clock:   options.Clock,
+	})
+	if err != nil {
+		return fail("Codex OAuth credential manager", err)
+	}
+	if err := accounts.BindCredentialPreparer(codexOAuth); err != nil {
+		return fail("ProviderAccount credential preparation authority", err)
+	}
 
 	original, err := buildOriginal(originalBuildRequest{
 		coordinator: options.OfflineHold,
@@ -713,6 +726,7 @@ func startWithBuilders(
 		egressCompletion:   runtimeEgress,
 		endpoints:          endpoints,
 		accounts:           accounts,
+		codexOAuth:         codexOAuth,
 		codeLibrary:        codeLibrary,
 		egressProfiles:     egressProfiles,
 		runtimeUsers:       runtimeUsers,
@@ -873,6 +887,12 @@ func (r *Runtime) EgressAttempts() egressaudit.Reader {
 // through this interface.
 func (r *Runtime) ProviderAccounts() provideraccount.Controller {
 	return r.accounts
+}
+
+// CodexOAuthAccounts exposes only safe managed-account inspection. Token bytes
+// remain in the Host-selected SecretStore.
+func (r *Runtime) CodexOAuthAccounts() codexoauth.Inspector {
+	return r.codexOAuth
 }
 
 // CodeLibrary returns the published immutable Transform revision authority.

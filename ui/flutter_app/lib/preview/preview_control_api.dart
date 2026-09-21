@@ -404,6 +404,17 @@ final class PreviewControlApi implements ControlApi {
       revision: 1,
     ),
     UpstreamEndpoint(
+      id: 'target.codex.official',
+      displayName: 'ChatGPT',
+      origin: Uri.parse('https://chatgpt.com'),
+      realmId: 'openai.chatgpt',
+      backendProtocols: const ['openai_responses'],
+      capabilities: const ['messages', 'streaming', 'tool_calls'],
+      accountKinds: const ['codex_oauth', 'bearer_token'],
+      state: 'active',
+      revision: 1,
+    ),
+    UpstreamEndpoint(
       id: 'target.orbit.relay',
       displayName: 'Orbit Relay · Tokyo',
       origin: Uri.parse('https://tokyo.orbitrelay.example'),
@@ -1549,6 +1560,7 @@ final class PreviewControlApi implements ControlApi {
     required String upstreamEndpointId,
     required String kind,
     required String secret,
+    String codexAuthJson = '',
     required ProviderAccountHeaderPolicy headerPolicy,
   }) async {
     _requireOpen();
@@ -1561,6 +1573,14 @@ final class PreviewControlApi implements ControlApi {
         status: 404,
         reasonCode: 'upstream_endpoint_not_found',
         messageKey: 'error.upstream_endpoint_not_found',
+      );
+    }
+    if ((kind == 'codex_oauth' &&
+            (secret.isNotEmpty || codexAuthJson.isEmpty)) ||
+        (kind != 'codex_oauth' &&
+            (secret.isEmpty || codexAuthJson.isNotEmpty))) {
+      throw const ControlContractException(
+        'Provider Account credential input is invalid',
       );
     }
     if (_accounts.any((account) => account.id == id)) {
@@ -1583,6 +1603,9 @@ final class PreviewControlApi implements ControlApi {
       setHeaderNames: headerPolicy.setHeaders.keys.toList(growable: false)
         ..sort(),
       deleteHeaderNames: [...headerPolicy.deleteHeaders]..sort(),
+      codexOAuth: kind == 'codex_oauth'
+          ? _previewCodexOAuth(codexAuthJson)
+          : null,
     );
     _accounts.add(account);
     return account;
@@ -1592,10 +1615,19 @@ final class PreviewControlApi implements ControlApi {
   Future<ProviderAccount> replaceProviderAccountCredential({
     required ProviderAccount account,
     required String secret,
+    String codexAuthJson = '',
     required ProviderAccountHeaderPolicy headerPolicy,
   }) async {
     _requireOpen();
     headerPolicy.validate(accountKind: account.kind);
+    if ((account.kind == 'codex_oauth' &&
+            (secret.isNotEmpty || codexAuthJson.isEmpty)) ||
+        (account.kind != 'codex_oauth' &&
+            (secret.isEmpty || codexAuthJson.isNotEmpty))) {
+      throw const ControlContractException(
+        'Provider Account credential input is invalid',
+      );
+    }
     final index = _accounts.indexWhere(
       (candidate) => candidate.id == account.id,
     );
@@ -1627,6 +1659,9 @@ final class PreviewControlApi implements ControlApi {
       setHeaderNames: headerPolicy.setHeaders.keys.toList(growable: false)
         ..sort(),
       deleteHeaderNames: [...headerPolicy.deleteHeaders]..sort(),
+      codexOAuth: current.kind == 'codex_oauth'
+          ? _previewCodexOAuth(codexAuthJson)
+          : null,
     );
     _accounts[index] = updated;
     return updated;
@@ -3579,5 +3614,58 @@ Evidence line 16''';
   @override
   Future<void> close() async {
     _closed = true;
+  }
+}
+
+CodexOAuthAccount _previewCodexOAuth(String authJSON) {
+  try {
+    final value = Map<String, Object?>.from(jsonDecode(authJSON) as Map);
+    final tokens = Map<String, Object?>.from(value['tokens']! as Map);
+    final selectedAccountID = tokens['account_id'];
+    final accountID =
+        selectedAccountID is String && selectedAccountID.isNotEmpty
+        ? selectedAccountID
+        : _previewJWTAccountID(tokens['id_token']) ??
+              _previewJWTAccountID(tokens['access_token']);
+    final lastRefresh = DateTime.tryParse(value['last_refresh']! as String);
+    if (value['auth_mode'] != 'chatgpt' ||
+        accountID == null ||
+        accountID.isEmpty ||
+        lastRefresh == null ||
+        !lastRefresh.isUtc) {
+      throw const FormatException();
+    }
+    return CodexOAuthAccount(
+      chatgptAccountId: accountID,
+      email: null,
+      userId: null,
+      planType: null,
+      fedRamp: false,
+      expiresAt: null,
+      lastRefresh: lastRefresh,
+      state: 'ready',
+    );
+  } on Object {
+    throw const ControlContractException(
+      'Codex OAuth auth.json input is invalid',
+    );
+  }
+}
+
+String? _previewJWTAccountID(Object? token) {
+  if (token is! String) return null;
+  final parts = token.split('.');
+  if (parts.length != 3 || parts.any((part) => part.isEmpty)) return null;
+  try {
+    final payload = jsonDecode(
+      utf8.decode(base64Url.decode(base64Url.normalize(parts[1]))),
+    );
+    if (payload is! Map) return null;
+    final auth = payload['https://api.openai.com/auth'];
+    if (auth is! Map) return null;
+    final accountID = auth['chatgpt_account_id'];
+    return accountID is String && accountID.isNotEmpty ? accountID : null;
+  } on Object {
+    return null;
   }
 }

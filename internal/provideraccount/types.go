@@ -23,17 +23,18 @@ const (
 )
 
 var (
-	ErrInvalidAccount      = errors.New("ProviderAccount is invalid")
-	ErrAccountNotFound     = errors.New("ProviderAccount was not found")
-	ErrRevisionConflict    = errors.New("ProviderAccount revision conflicts with the expected revision")
-	ErrAccountDisabled     = errors.New("ProviderAccount is disabled")
-	ErrEndpointMismatch    = errors.New("ProviderAccount does not belong to the requested UpstreamEndpoint")
-	ErrRealmMismatch       = errors.New("ProviderAccount does not belong to the requested realm")
-	ErrCredentialMissing   = errors.New("ProviderAccount credential is unavailable")
-	ErrAccountInUse        = errors.New("ProviderAccount is referenced by a published Environment")
-	ErrOperationInProgress = errors.New("ProviderAccount has another operation in progress")
-	ErrDeletionUnavailable = errors.New("ProviderAccount deletion authority is unavailable")
-	ErrManagerClosing      = errors.New("ProviderAccount manager is closing")
+	ErrInvalidAccount         = errors.New("ProviderAccount is invalid")
+	ErrAccountNotFound        = errors.New("ProviderAccount was not found")
+	ErrRevisionConflict       = errors.New("ProviderAccount revision conflicts with the expected revision")
+	ErrAccountDisabled        = errors.New("ProviderAccount is disabled")
+	ErrEndpointMismatch       = errors.New("ProviderAccount does not belong to the requested UpstreamEndpoint")
+	ErrRealmMismatch          = errors.New("ProviderAccount does not belong to the requested realm")
+	ErrCredentialMissing      = errors.New("ProviderAccount credential is unavailable")
+	ErrAccountInUse           = errors.New("ProviderAccount is referenced by a published Environment")
+	ErrOperationInProgress    = errors.New("ProviderAccount has another operation in progress")
+	ErrDeletionUnavailable    = errors.New("ProviderAccount deletion authority is unavailable")
+	ErrPreparationUnavailable = errors.New("ProviderAccount credential preparation authority is unavailable")
+	ErrManagerClosing         = errors.New("ProviderAccount manager is closing")
 )
 
 type ID string
@@ -241,6 +242,18 @@ type Controller interface {
 		ID,
 		upstreamendpoint.Endpoint,
 	) (providerauth.Lease, error)
+}
+
+// CredentialPreparer rotates a dynamic credential, when necessary, before an
+// AccountRef freezes the credential epoch used by one attempt. Implementations
+// own provider-specific I/O; ProviderAccount owns only the resulting lease.
+type CredentialPreparer interface {
+	Prepare(
+		context.Context,
+		providerauth.DriverRef,
+		secretstore.Reference,
+		secretstore.Revision,
+	) (secretstore.Revision, error)
 }
 
 func secretReference(id ID) (secretstore.Reference, error) {

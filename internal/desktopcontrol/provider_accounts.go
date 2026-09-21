@@ -2,11 +2,14 @@ package desktopcontrol
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"errors"
 	"net/http"
 	"strconv"
+	"time"
 
+	"github.com/vibe-agi/vibermate/internal/codexoauth"
 	"github.com/vibe-agi/vibermate/internal/provideraccount"
 	"github.com/vibe-agi/vibermate/internal/providerauth"
 	"github.com/vibe-agi/vibermate/internal/secretstore"
@@ -18,7 +21,19 @@ type ProviderAccountKind string
 const (
 	ProviderAccountKindAnthropicAPIKey ProviderAccountKind = "anthropic_api_key"
 	ProviderAccountKindBearerToken     ProviderAccountKind = "bearer_token"
+	ProviderAccountKindCodexOAuth      ProviderAccountKind = "codex_oauth"
 )
+
+type CodexOAuthResponse struct {
+	ChatGPTAccountID string           `json:"chatgptAccountId"`
+	Email            string           `json:"email,omitempty"`
+	UserID           string           `json:"userId,omitempty"`
+	PlanType         string           `json:"planType,omitempty"`
+	FedRAMP          bool             `json:"fedRamp"`
+	ExpiresAt        string           `json:"expiresAt,omitempty"`
+	LastRefresh      string           `json:"lastRefresh"`
+	State            codexoauth.State `json:"state"`
+}
 
 type ProviderAccountResponse struct {
 	ID                 string                      `json:"id"`
@@ -32,6 +47,7 @@ type ProviderAccountResponse struct {
 	CredentialEpoch    uint64                      `json:"credentialEpoch"`
 	SetHeaderNames     []string                    `json:"setHeaderNames"`
 	DeleteHeaderNames  []string                    `json:"deleteHeaderNames"`
+	CodexOAuth         *CodexOAuthResponse         `json:"codexOAuth,omitempty"`
 }
 
 type ProviderAccountPage struct {
@@ -44,12 +60,14 @@ type ProviderAccountCreateInput struct {
 	UpstreamEndpointID string              `json:"upstreamEndpointId"`
 	Kind               ProviderAccountKind `json:"kind"`
 	Secret             string              `json:"secret"`
+	CodexAuthJSON      string              `json:"codexAuthJson"`
 	SetHeaders         map[string]string   `json:"setHeaders"`
 	DeleteHeaders      []string            `json:"deleteHeaders"`
 }
 
 type ProviderAccountCredentialInput struct {
 	Secret        string            `json:"secret"`
+	CodexAuthJSON string            `json:"codexAuthJson"`
 	SetHeaders    map[string]string `json:"setHeaders"`
 	DeleteHeaders []string          `json:"deleteHeaders"`
 }
@@ -82,7 +100,7 @@ func (handler *Handler) listProviderAccounts(writer http.ResponseWriter, request
 	}
 	page := ProviderAccountPage{Items: make([]ProviderAccountResponse, len(views))}
 	for index, view := range views {
-		response, responseErr := providerAccountResponseOf(view)
+		response, responseErr := handler.providerAccountResponse(request.Context(), view)
 		if responseErr != nil {
 			writeProblem(writer, http.StatusServiceUnavailable, ReasonProviderAccountUnavailable)
 			return
@@ -108,7 +126,7 @@ func (handler *Handler) getProviderAccount(writer http.ResponseWriter, request *
 		writeProblem(writer, spec.status, spec.reason)
 		return
 	}
-	response, err := providerAccountResponseOf(view)
+	response, err := handler.providerAccountResponse(request.Context(), view)
 	if err != nil {
 		writeProblem(writer, http.StatusServiceUnavailable, ReasonProviderAccountUnavailable)
 		return
@@ -129,11 +147,14 @@ func (handler *Handler) createProviderAccount(writer http.ResponseWriter, reques
 	endpointID, endpointErr := upstreamendpoint.NewID(input.UpstreamEndpointID)
 	driver, kindErr := providerAccountKindAuthority(input.Kind)
 	secret, secretErr := providerAccountCredentialValue(
+		driver,
 		input.Secret,
+		input.CodexAuthJSON,
 		input.SetHeaders,
 		input.DeleteHeaders,
 	)
 	input.Secret = ""
+	input.CodexAuthJSON = ""
 	clearHeaderValues(input.SetHeaders)
 	input.SetHeaders = nil
 	input.DeleteHeaders = nil
@@ -156,7 +177,7 @@ func (handler *Handler) createProviderAccount(writer http.ResponseWriter, reques
 		if createErr != nil {
 			return problemResponse(classifyProviderAccountError(createErr))
 		}
-		result, responseErr := providerAccountResponseOf(view)
+		result, responseErr := handler.providerAccountResponse(request.Context(), view)
 		if responseErr != nil {
 			return problemResponse(problemSpec{status: http.StatusServiceUnavailable, reason: ReasonProviderAccountUnavailable})
 		}
@@ -180,12 +201,21 @@ func (handler *Handler) replaceProviderAccountCredential(writer http.ResponseWri
 		writeProblem(writer, http.StatusUnprocessableEntity, ReasonInvalidRequest)
 		return
 	}
+	current, currentErr := handler.accounts.Get(request.Context(), id)
+	if currentErr != nil {
+		spec := classifyProviderAccountError(currentErr)
+		writeProblem(writer, spec.status, spec.reason)
+		return
+	}
 	secret, secretErr := providerAccountCredentialValue(
+		current.Account.Driver,
 		input.Secret,
+		input.CodexAuthJSON,
 		input.SetHeaders,
 		input.DeleteHeaders,
 	)
 	input.Secret = ""
+	input.CodexAuthJSON = ""
 	clearHeaderValues(input.SetHeaders)
 	input.SetHeaders = nil
 	input.DeleteHeaders = nil
@@ -205,7 +235,7 @@ func (handler *Handler) replaceProviderAccountCredential(writer http.ResponseWri
 		if replaceErr != nil {
 			return problemResponse(classifyProviderAccountError(replaceErr))
 		}
-		result, responseErr := providerAccountResponseOf(view)
+		result, responseErr := handler.providerAccountResponse(request.Context(), view)
 		if responseErr != nil {
 			return problemResponse(problemSpec{status: http.StatusServiceUnavailable, reason: ReasonProviderAccountUnavailable})
 		}
@@ -280,16 +310,83 @@ func providerAccountResponseOf(view provideraccount.View) (ProviderAccountRespon
 	}, nil
 }
 
+func (handler *Handler) providerAccountResponse(
+	ctx context.Context,
+	view provideraccount.View,
+) (ProviderAccountResponse, error) {
+	response, err := providerAccountResponseOf(view)
+	if err != nil || view.Account.Driver != providerauth.CodexOAuthDriverRef() {
+		return response, err
+	}
+	if handler.codexOAuth == nil {
+		return ProviderAccountResponse{}, codexoauth.ErrRefreshUnavailable
+	}
+	if view.Health.State != provideraccount.HealthReady {
+		return response, nil
+	}
+	oauth, err := handler.codexOAuth.Inspect(
+		ctx,
+		view.Account.SecretRef,
+		secretstore.Revision(view.Health.CredentialEpoch),
+	)
+	if err != nil {
+		return ProviderAccountResponse{}, err
+	}
+	profile := oauth.Profile
+	projection := &CodexOAuthResponse{
+		ChatGPTAccountID: profile.AccountID,
+		Email:            profile.Email, UserID: profile.UserID, PlanType: profile.PlanType,
+		FedRAMP:     profile.FedRAMP,
+		LastRefresh: profile.LastRefresh.UTC().Format(time.RFC3339Nano),
+		State:       oauth.State,
+	}
+	if !profile.ExpiresAt.IsZero() {
+		projection.ExpiresAt = profile.ExpiresAt.UTC().Format(time.RFC3339Nano)
+	}
+	response.CodexOAuth = projection
+	return response, nil
+}
+
 func providerAccountCredentialValue(
+	driver providerauth.DriverRef,
 	credential string,
+	codexAuthJSON string,
 	setHeaders map[string]string,
 	deleteHeaders []string,
 ) (*secretstore.Value, error) {
+	switch driver {
+	case providerauth.CodexOAuthDriverRef():
+		if credential != "" || codexAuthJSON == "" {
+			return nil, provideraccount.ErrInvalidAccount
+		}
+		encodedImport := []byte(codexAuthJSON)
+		defer clear(encodedImport)
+		imported, err := codexoauth.ImportAuthJSON(encodedImport)
+		if err != nil {
+			return nil, err
+		}
+		defer imported.Destroy()
+		encodedCredential, err := imported.MarshalBinary()
+		if err != nil {
+			return nil, err
+		}
+		defer clear(encodedCredential)
+		credential = string(encodedCredential)
+	case providerauth.StaticHeaderDriverRef(), providerauth.AnthropicAPIKeyDriverRef():
+		if credential == "" || codexAuthJSON != "" {
+			return nil, provideraccount.ErrInvalidAccount
+		}
+	default:
+		return nil, provideraccount.ErrInvalidAccount
+	}
 	material, err := providerauth.NewMaterial(credential, setHeaders, deleteHeaders)
 	if err != nil {
 		return nil, err
 	}
 	defer material.Destroy()
+	if err := material.HeaderPolicy().ValidateForDriver(driver); err != nil {
+		return nil, err
+	}
 	encoded, err := material.MarshalBinary()
 	if err != nil {
 		return nil, err
@@ -310,6 +407,8 @@ func providerAccountKindAuthority(kind ProviderAccountKind) (providerauth.Driver
 		return providerauth.AnthropicAPIKeyDriverRef(), nil
 	case ProviderAccountKindBearerToken:
 		return providerauth.StaticHeaderDriverRef(), nil
+	case ProviderAccountKindCodexOAuth:
+		return providerauth.CodexOAuthDriverRef(), nil
 	default:
 		return providerauth.DriverRef{}, provideraccount.ErrInvalidAccount
 	}
@@ -321,6 +420,8 @@ func providerAccountKindOf(account provideraccount.Account) (ProviderAccountKind
 		return ProviderAccountKindAnthropicAPIKey, nil
 	case account.Driver == providerauth.StaticHeaderDriverRef():
 		return ProviderAccountKindBearerToken, nil
+	case account.Driver == providerauth.CodexOAuthDriverRef():
+		return ProviderAccountKindCodexOAuth, nil
 	default:
 		return "", provideraccount.ErrInvalidAccount
 	}

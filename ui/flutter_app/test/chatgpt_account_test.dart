@@ -84,4 +84,74 @@ void main() {
       });
     }
   }
+
+  testWidgets('Codex OAuth import is distinct and shows only safe identity', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1100, 900));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final api = PreviewControlApi();
+    addTearDown(api.close);
+    const authJSON =
+        '{"auth_mode":"chatgpt","tokens":{"id_token":"id-private","access_token":"access-private","refresh_token":"refresh-private","account_id":"workspace-42"},"last_refresh":"2026-09-21T11:00:00Z"}';
+    await api.createProviderAccount(
+      id: 'account.codex.work',
+      displayName: 'Codex Work',
+      upstreamEndpointId: 'target.codex.official',
+      kind: 'codex_oauth',
+      secret: '',
+      codexAuthJson: authJSON,
+      headerPolicy: const ProviderAccountHeaderPolicy(),
+    );
+    final controller = WorkbenchController(
+      api: api,
+      terminalCommands: PreviewTerminalCommandService(),
+      previewMode: true,
+      closeRuntime: api.close,
+    );
+    addTearDown(controller.dispose);
+    await controller.initialize();
+    controller.selectEndpoint('target.codex.official');
+    final copy = AppCopy.forLanguage(AppLanguage.english);
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: ViberTheme.dark(),
+        home: Scaffold(
+          body: EndpointsView(controller: controller, copy: copy),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const Key('accounts-add')));
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const Key('account-editor-codex-auth-json')),
+      findsOneWidget,
+    );
+    expect(find.byKey(const Key('account-editor-secret')), findsNothing);
+    expect(
+      find.byKey(const Key('account-editor-codex-ownership')),
+      findsOneWidget,
+    );
+    expect(find.text('refresh-private'), findsNothing);
+    await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+    await tester.pumpAndSettle();
+
+    await tester.tap(
+      find.byKey(const Key('account-update-account.codex.work')),
+    );
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const Key('account-editor-codex-profile')),
+      findsOneWidget,
+    );
+    expect(find.textContaining('workspace-42'), findsWidgets);
+    expect(find.text('access-private'), findsNothing);
+    expect(find.text('refresh-private'), findsNothing);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pump();
+    controller.dispose();
+  });
 }

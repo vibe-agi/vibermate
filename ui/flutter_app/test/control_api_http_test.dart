@@ -277,6 +277,102 @@ void main() {
     },
   );
 
+  test(
+    'HTTP API imports Codex OAuth without using the generic secret field',
+    () async {
+      final bodies = <Map<String, Object?>>[];
+      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      addTearDown(() => server.close(force: true));
+      server.listen((request) async {
+        request.response.headers.contentType = ContentType.json;
+        if (request.method == 'GET' &&
+            request.uri.path == '/api/v1/auth/sessions/current') {
+          await request.drain<void>();
+          request.response.write(
+            jsonEncode({
+              'schema': 'vibermate-app-session-state-v1',
+              'revision': 1,
+              'expiresAt': DateTime.now()
+                  .toUtc()
+                  .add(const Duration(hours: 1))
+                  .toIso8601String(),
+            }),
+          );
+        } else if ((request.method == 'POST' || request.method == 'PUT') &&
+            request.uri.path.startsWith('/api/v1/provider-accounts')) {
+          final body = Map<String, Object?>.from(
+            jsonDecode(await utf8.decoder.bind(request).join()) as Map,
+          );
+          bodies.add(body);
+          request.response.statusCode = request.method == 'POST' ? 201 : 200;
+          request.response.write(
+            jsonEncode({
+              'id': 'account.codex',
+              'displayName': 'Codex Work',
+              'upstreamEndpointId': 'target.codex.official',
+              'kind': 'codex_oauth',
+              'realmId': 'openai.chatgpt',
+              'state': 'active',
+              'revision': 1,
+              'credentialState': 'ready',
+              'credentialEpoch': request.method == 'POST' ? 1 : 2,
+              'setHeaderNames': <String>[],
+              'deleteHeaderNames': <String>[],
+              'codexOAuth': {
+                'chatgptAccountId': 'workspace-42',
+                'email': 'engineer@example.com',
+                'planType': 'team',
+                'fedRamp': false,
+                'lastRefresh': '2026-09-21T11:00:00.000Z',
+                'state': 'ready',
+              },
+            }),
+          );
+        } else {
+          await request.drain<void>();
+          request.response.statusCode = HttpStatus.notFound;
+        }
+        await request.response.close();
+      });
+
+      final api = await HttpControlApi.connect(
+        DesktopSession(
+          baseUrl: Uri.parse('http://127.0.0.1:${server.port}'),
+          readToken: List.filled(43, 'R').join(),
+          writeToken: List.filled(43, 'W').join(),
+          instanceId: 'instance-test',
+          expiresAt: DateTime.now().toUtc().add(const Duration(hours: 1)),
+        ),
+      );
+      addTearDown(api.close);
+      const authJSON =
+          '{"auth_mode":"chatgpt","tokens":{"id_token":"id","access_token":"access","refresh_token":"refresh","account_id":null},"last_refresh":"2026-09-21T11:00:00Z"}';
+      final created = await api.createProviderAccount(
+        id: 'account.codex',
+        displayName: 'Codex Work',
+        upstreamEndpointId: 'target.codex.official',
+        kind: 'codex_oauth',
+        secret: '',
+        codexAuthJson: authJSON,
+        headerPolicy: const ProviderAccountHeaderPolicy(),
+      );
+      final replaced = await api.replaceProviderAccountCredential(
+        account: created,
+        secret: '',
+        codexAuthJson: authJSON,
+        headerPolicy: const ProviderAccountHeaderPolicy(),
+      );
+
+      expect(bodies, hasLength(2));
+      for (final body in bodies) {
+        expect(body['codexAuthJson'], authJSON);
+        expect(body, isNot(contains('secret')));
+      }
+      expect(replaced.codexOAuth?.email, 'engineer@example.com');
+      expect(replaced.credentialEpoch, 2);
+    },
+  );
+
   test('HTTP API tests one complete message-transform Turn', () async {
     Map<String, Object?>? received;
     final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);

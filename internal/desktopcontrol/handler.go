@@ -21,6 +21,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/captureassignment"
 	"github.com/vibe-agi/vibermate/internal/capturerun"
 	"github.com/vibe-agi/vibermate/internal/codelibrary"
+	"github.com/vibe-agi/vibermate/internal/codexoauth"
 	"github.com/vibe-agi/vibermate/internal/connectionevent"
 	"github.com/vibe-agi/vibermate/internal/desktoptrust"
 	"github.com/vibe-agi/vibermate/internal/egressaudit"
@@ -139,6 +140,7 @@ type Options struct {
 	Approvals           toolapproval.Controller
 	Endpoints           upstreamendpoint.Controller
 	Accounts            provideraccount.Controller
+	CodexOAuth          codexoauth.Inspector
 	CodeLibrary         codelibrary.Controller
 	EgressProfiles      egressprofile.Controller
 	Models              modelcatalog.Reader
@@ -171,6 +173,7 @@ type Handler struct {
 	approvals           toolapproval.Controller
 	endpoints           upstreamendpoint.Controller
 	accounts            provideraccount.Controller
+	codexOAuth          codexoauth.Inspector
 	codeLibrary         codelibrary.Controller
 	egressProfiles      egressprofile.Controller
 	models              modelcatalog.Reader
@@ -233,6 +236,7 @@ func New(options Options) (*Handler, error) {
 		approvals:           options.Approvals,
 		endpoints:           options.Endpoints,
 		accounts:            options.Accounts,
+		codexOAuth:          options.CodexOAuth,
 		codeLibrary:         options.CodeLibrary,
 		egressProfiles:      options.EgressProfiles,
 		models:              options.Models,
