@@ -70,7 +70,7 @@ final class RuntimeRootCertificate {
   final String fingerprint;
   final DateTime notBefore;
   final DateTime notAfter;
-  String get fileName => 'vibermate-ca.crt';
+  String get fileName => 'vibermate-proxy-ca.crt';
 }
 
 const upstreamBackendProtocols = <String>[

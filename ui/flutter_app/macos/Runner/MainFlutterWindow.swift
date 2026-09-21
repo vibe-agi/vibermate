@@ -189,8 +189,8 @@ class MainFlutterWindow: NSWindow {
     }
     guard let arguments = call.arguments as? [String: Any],
           Set(arguments.keys).isSubset(of: ["certificatePem", "fileName"]),
-          let fileName = (arguments["fileName"] ?? "vibermate-ca.crt") as? String,
-          fileName == "vibermate-ca.crt",
+          let fileName = (arguments["fileName"] ?? "vibermate-proxy-ca.crt") as? String,
+          fileName == "vibermate-proxy-ca.crt",
           let pem = arguments["certificatePem"] as? String,
           pem.utf8.count <= 64 * 1024,
           let expression = try? NSRegularExpression(

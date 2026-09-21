@@ -13,15 +13,21 @@ Organize setup around the task a person wants to complete, not around the transp
 
 Do not add a global "beginner/expert" switch, an all-in-one certificate wizard, another layer of nested settings tabs, or a shared default `admin/admin` account. Progressive disclosure uses the same underlying configuration for everyone.
 
-## Three deployment journeys
+## Deployment and access are separate dimensions
+
+Cover App, native standalone Web, and container Web. Independently distinguish this-computer access from access across devices. Personal versus team determines account workflows, not whether transport encryption is needed. Container detection must not change authentication, certificate purpose, or which settings tabs exist.
+
+The native process and container run the same Server/Web contract. They differ in process supervision, file paths/permissions, and network binding/port publication. In particular, the native CLI already defaults to loopback HTTP; do not add a certificate requirement for this local path.
 
 | Deployment | First successful action | Address / encryption | Accounts | Certificate task |
 | --- | --- | --- | --- | --- |
 | Personal App | Open App, install/repair terminal command if needed, copy a managed run command | Existing local App control; no domain prompt | No Runtime User needed for local App control | Managed launcher supplies scoped Proxy CA trust when inspection is enabled; no silent global trust installation |
+| Personal native Web on this computer | Unpack Server and adjacent Web assets, run `vibermated server`, create owner in browser | Default `http://127.0.0.1:9666`; no domain/certificate required | Machine-local recovery proof, then username/password | Proxy CA persists in the selected data directory; no browser CA installation |
 | Personal Docker on this computer | Start the explicit local profile, open the displayed loopback URL, create owner, copy login/run | `http://127.0.0.1:9666`; host-published loopback only | Owner setup via server-machine recovery proof, then username/password | No browser CA installation; Proxy CA persists in the data volume |
+| Team / remote native Web | Service operator supplies reachable HTTPS address and server certificate; creates owner/members | Native TLS or verified L4 passthrough; fixed service account and data directory | Each person has their own Runtime User | Same independent server certificate and Proxy CA as container deployment; paths are host paths |
 | Team Docker | Admin supplies reachable HTTPS address and server certificate, creates owner/members, shares address | Native TLS or verified L4 passthrough; domain/IP must match certificate SAN | Each person has their own Runtime User; owner-only management | External Server HTTPS Identity and Runtime Proxy CA remain separate |
 
-"Personal" does not mean all HTTP is safe. A Docker host on another computer is remote, even for one person. Offer an SSH/VPN tunnel to a loopback endpoint or an explicitly trusted HTTPS deployment. Never recommend bypassing browser warnings as normal onboarding.
+"Personal" does not mean all HTTP is safe. A native process or Docker host on another computer is remote, even for one person. Offer an authenticated encrypted tunnel to a loopback endpoint or an explicitly trusted HTTPS deployment. Never recommend bypassing browser warnings as normal onboarding. The step-by-step operator entry point is [Deployment guide](../deployment.md), with Docker-specific mechanics kept in [Docker deployment](../docker.md).
 
 Docker's host port restriction is not an application authentication rule: NAT may give local callers a bridge address, and other containers on a shared network may reach the service. Keep owner setup authenticated, isolate the Compose network, document supported Docker versions, and do not grant owner authority based on `RemoteAddr`.
 
@@ -73,13 +79,15 @@ Share this Runtime                      [copy address] [Manage users: owner only
 > Connection details and troubleshooting
 ```
 
-The guide must say that `vibermate run --server ...` reaches Docker/remote Runtime; a bare local `vibermate run` targets the App. An Environment is still selected explicitly by `--env`; deployment never silently changes traffic policy, account or model. Explain that the transparent default does not record conversation bodies; link to Traffic policies when recording is desired.
+The guide must say that `vibermate run --server ...` reaches the standalone Runtime, including native Web on this computer; a bare local `vibermate run` targets the App. An Environment is still selected explicitly by `--env`; deployment never silently changes traffic policy, account or model. Explain that the transparent default does not record conversation bodies; link to Traffic policies when recording is desired.
 
 One task section has one primary action. Keep technical details out of the first screen: no PEM, SAN lists, fingerprints, container IP enumeration or every possible CLI flag. Commands remain selectable, keyboard-copyable and horizontally scrollable without clipping.
 
 ### Safety page: two distinct certificate summaries
 
 ```text
+Offline controls                        keep the emergency pause action first
+
 Server connection                       HTTP local / HTTPS / status unavailable
 Protects the browser and CLI connection to this Runtime.
 Address: https://runtime.example.com
@@ -91,7 +99,7 @@ Managed runs receive scoped trust automatically; browser-only users need no CA.
 > Manual client setup                   [Download proxy CA] fingerprint, expiry
 > Advanced certificate operations       owner only, explicit impact confirmation
 
-Data and recording / Offline controls   existing behavior, grouped separately
+Data and recording                      existing behavior, grouped separately
 ```
 
 Show one Proxy CA section, not a Web export card plus a second App certificate card describing the same root. Keep native App trust/rotation controls when available, but distinguish optional global OS trust from managed process trust. Download name: `vibermate-proxy-ca.crt`; do not change existing API schema or saved certificate bytes just to rename a UI concept.
@@ -128,10 +136,10 @@ Acceptance includes 390px and wide windows, both themes and languages, 200% text
 
 | Setting | Owner / where edited | What UI shows |
 | --- | --- | --- |
-| Bind interface and port | Deployment flags / Compose | Read-only listening configuration; never a suggested client URL |
+| Bind interface and port | Native process/service flags or Compose | Read-only listening configuration; never a suggested client URL |
 | Server Access Address | Explicit deployment URL, falling back to verified connected origin when appropriate | Copyable address with provenance; no container IP substitution |
 | Server TLS certificate and key | Deployment files / server identity module | Source, covered names, validity, fingerprint; never private key bytes |
-| Proxy CA | Runtime data volume and controlled rotation API | Purpose, fingerprint, public export; no CA private key |
+| Proxy CA | Runtime data directory (container volume when applicable) and controlled rotation API | Purpose, fingerprint, public export; no CA private key |
 | Runtime User | Runtime auth authority | Users page and personal account actions |
 | Environment / Account / model | Traffic policy and upstream settings | Links only from the connection guide |
 
@@ -151,6 +159,7 @@ An external certificate for `proxy.example.com` on connection 1 is correct. It w
 
 - Preserve the original volume, Proxy CA, HTTPS identity and client pins. Keep existing experimental shared-issuer installations working; do not enforce a CA migration on upgrade.
 - The new explicit local Docker profile may use HTTP; selecting it is not an automatic downgrade of the existing HTTPS Compose deployment.
+- Native upgrades retain the service account, absolute data directory and Web assets; starting under another OS user must not be presented as a migrated Runtime. A working-directory change is not a change of identity. Do not run two Server processes against one data directory.
 - Public/enterprise HTTPS certificates are not reissued by the Proxy CA. External certificate files are operator-owned, readable by the Runtime UID, and must satisfy the existing private-key permissions rules.
 - Leaf renewal should not force Proxy CA replacement. Proxy CA rotation must not masquerade as server TLS renewal. Existing shared-root installations need explicit impact disclosure until fully separated.
 - The current CLI exact-leaf first-use pinning is not public PKI validation. Implement a deliberate trust-mode and migration contract before claiming seamless public-certificate renewal. Never silently erase a pin or retry insecurely.
@@ -189,6 +198,7 @@ Only after the relevant gates below pass, merge the verified integration candida
 ### Behavior
 
 - Fresh App reaches a local managed run without creating a Runtime User, configuring a domain or installing a global certificate.
+- Fresh native Web uses loopback HTTP by default, discovers adjacent Web assets, requires machine-local owner setup proof, and preserves users and Proxy CA across process restart. Native and Docker Web use the same authenticated setup/login/export assertions.
 - Fresh local Docker publishes only host loopback, serves HTTP, persists its Proxy CA, requires owner setup proof, and produces a working explicit `--server` command. Restart/rebuild preserves users, trust and evidence.
 - Existing HTTPS Compose config remains HTTPS when adopting this branch; the local profile is an explicit choice.
 - Team test uses external Server certificate A and independent Proxy CA B. Outer TLS presents A; inner CONNECT presents an AI-host leaf signed by B; upstream TLS remains strictly verified.
@@ -204,13 +214,62 @@ Only after the relevant gates below pass, merge the verified integration candida
 - 390px, normal desktop and wide layouts pass in English/Chinese and dark/light themes, including long addresses and error messages.
 - Go unit/integration/race tests, vet, formatting and repository checks pass.
 - Flutter analyzer, unit/widget tests, browser tests and build pass; native host build is checked when native export changes are included.
-- Compose rendering and real local-container startup are checked. Public-team/real-upstream checks are reported separately from fixtures; no simulated "all tested" claim.
+- Compose rendering, real local-container startup and real native-process startup are checked independently. Public-team/real-upstream checks are reported separately from fixtures; no simulated "all tested" claim.
 
 ## Evidence and known baseline gaps
 
 At PR head `1508c437`, the earlier review passed all Go tests, targeted transport/identity/transform race tests, the no-ALPN diagnostic, Flutter analysis, 422 Flutter tests (5 live-runtime skips), and 40 browser tests. These are contribution-baseline results, not acceptance of later integration edits.
 
 Known baseline failures: Go formatting in `internal/desktopcontrol/message_transforms.go`; English-source gate on six Unicode test fixtures; stale certificate-settings instructions in `.env.example`. Known design gaps: exact-leaf CLI pins for all HTTPS, IP-only advertised targets, no TLS certificate auto-renew/reload, and shared-root wording that is incorrect for externally issued HTTPS certificates.
+
+### Integration checkpoint — 2026-09-21
+
+PR head `1508c437` was merged locally as `515074e` on the integration branch;
+the primary branch is unchanged. This is not a GitHub PR merge or a release.
+
+Implemented in this checkpoint:
+
+- Task-based settings destinations share a typed definition. App-local launch
+  guidance stays first; optional browser/remote instructions fold away. User
+  management stays in its own destination.
+- One connection projection supplies displayed addresses, commands and HTTP/HTTPS
+  state. A connected Web origin takes precedence over internal container IPs;
+  missing discovery does not generate a fictitious command.
+- Server HTTPS and Proxy CA explanations are separate. Native App trust controls
+  and Web CA export no longer produce duplicate CA cards. Manual public-CA
+  details are folded; export errors remain visible. No TLS trust is inferred
+  merely from an HTTPS URL.
+- Explicit local and team Compose examples preserve the old HTTPS deployment.
+  The common deployment guide and both README entry points cover native Web as
+  well as Docker, including native loopback defaults, adjacent Web assets and
+  consistent data directories for service accounts.
+- Formatting and Unicode fixture source checks pass without reducing the test
+  cases or changing their Unicode values.
+
+Verification of this checkpoint (distinct from the PR baseline above):
+
+| Check | Result |
+| --- | --- |
+| `go test ./...`, `go vet ./...`, repository and formatting checks | Passed |
+| Race tests: transportprofile, providertransport, serveridentity, localca, serverhost, messagetransform | Passed |
+| Flutter analyzer and full unit/widget suite | Passed; 444 tests, 5 live-runtime skips |
+| Chrome: connection guide, settings navigation, CA export | 61 passed |
+| Flutter release Web build and debug macOS App build | Passed |
+| Compose configuration assertions | 3 passed |
+| Current-source Linux ARM64 container image | Built as isolated `vibermate-runtime:setup-experience-test` |
+| Real native process and real container setup smoke | Both passed; common assertions cover Web assets, wrong-key/unauthenticated rejection, owner setup, public CA export and restart persistence |
+
+The smoke harnesses use disposable private data, do not read existing Runtime
+credentials, and remove only their own temporary process/container/volume/files.
+The container test re-reads its random published port after restart; that port
+is not an identity or an assumption that the user keeps the same mapping.
+
+Still pending before stable promotion: explicit advertised-address configuration,
+actual server-certificate metadata and renewal UX, deliberate public/private/pinned
+CLI trust migration, and external-server-certificate/inner-Proxy-CA lifecycle
+acceptance. The real-public-upstream and credentialed client flows were not run
+by these setup smoke tests. Do not mark all behavior gates above complete or
+merge to the primary branch on the strength of local setup tests alone.
 
 ## Primary references
 

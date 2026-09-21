@@ -58,36 +58,49 @@ or share it, go to **Settings → User management** and choose **Create owner**.
 Then copy the Web workbench address from **Settings → Access & launch**.
 The first account is the owner; later accounts are members.
 
-## Linux Server + Web
+## Standalone Server + Web (with or without Docker)
+
+Native and container deployments use the same Web workbench and account model.
+Choose **this-computer access** or **access from other devices** first; installing
+Docker does not change which certificates or accounts you need. See the
+[deployment guide](docs/deployment.md) and [Docker configurations](docs/docker.md).
 
 Download the `linux_x86_64` or `linux_arm64` archive from the
 [latest release](https://github.com/vibe-agi/vibermate/releases/latest), verify
 it with `SHA256SUMS-linux`, and extract it. The archive contains `vibermated`,
 `vibermate`, and the adjacent `vibermate-web` UI.
 
-Start an encrypted Runtime on your network:
+For personal use on this computer, no domain or certificate is needed:
 
 ```sh
-./vibermated server \
-  --listen 0.0.0.0:9666 \
-  --transport self_signed_tls
+./vibermated server
 ```
 
-The first JSON line contains the browser address and TLS fingerprint. On the
-Server machine, print the one-use setup/recovery key:
+Open **http://127.0.0.1:9666**. The default listens only on this computer.
+If the port is occupied, add `--listen 127.0.0.1:9667` and use that port in the
+browser and CLI. In another terminal on the Server machine, read the one-use
+setup/recovery key:
 
 ```sh
 ./vibermated server recovery-key
 ```
 
-Open the browser address, enter that key, and create your personal owner
-username and password. A browser will warn about the self-signed server
-certificate; check the displayed fingerprint before continuing. If you start
-the Server with `--data-dir`, pass that same absolute directory to the
-`recovery-key` command.
+Enter that key in the browser and create your personal owner username and
+password. If you start the Server with `--data-dir`, pass that same absolute
+directory to the `recovery-key` command. Then connect the CLI explicitly:
 
-For a shared production network, provide a certificate already trusted by your
-users instead:
+```sh
+vibermate login --server http://127.0.0.1:9666
+vibermate run --server http://127.0.0.1:9666 -- codex
+```
+
+Even a native Web Server on this computer needs `--server`; a bare local
+`vibermate run` connects to the App. The System Transparent policy does not
+retain conversation bodies; publish a recording policy and select it with
+`--env` when you need content capture.
+
+For other devices (including a personal remote Server), configure HTTPS using
+a certificate covering your actual domain/IP. For example:
 
 ```sh
 ./vibermated server \
@@ -108,6 +121,10 @@ vibermate run --server https://your-server.example:9666 -- claude
 ```
 
 Replace the example address with the HTTPS address you opened in the browser.
+The current CLI uses first-use leaf-certificate pinning, not standard public
+PKI validation; verify identity through a trusted channel. Certificate-renewal
+and explicit trust-mode improvements are pending on the integration branch.
+Do not clear saved pins or disable validation to suppress a mismatch.
 
 Each person can change their own password from the browser account menu. The
 owner can reset a member password. The local App can also reset its owner's

@@ -54,32 +54,44 @@ vibermate run -- codex
 **设置 → 用户管理**，点击 **创建所有者**，再到 **设置 → 接入与启动** 复制网页
 工作台地址。第一个账号是所有者，之后创建的是成员。
 
-## Linux Server + Web
+## 独立 Server + Web（原生进程或容器）
+
+不用 Docker 也可以运行完整 Web 工作台。先区分“只在本机使用”和“其他设备接入”，
+原生进程与容器共享同一账号体系和证书规则。见[统一部署指南](docs/deployment.md)和
+[Docker 配置](docs/docker.md)。
 
 从[最新版本](https://github.com/vibe-agi/vibermate/releases/latest)下载
 `linux_x86_64` 或 `linux_arm64` 压缩包，使用 `SHA256SUMS-linux` 校验并解压。
 压缩包内已经包含 `vibermated`、`vibermate` 和相邻的 `vibermate-web` 网页界面。
 
-在局域网启动加密的 Runtime：
+个人只在本机使用，不需要域名或证书：
 
 ```sh
-./vibermated server \
-  --listen 0.0.0.0:9666 \
-  --transport self_signed_tls
+./vibermated server
 ```
 
-启动后输出的第一行 JSON 包含浏览器地址和 TLS 指纹。请在 Server 机器上打印
-一次性初始化/恢复密钥：
+打开 **http://127.0.0.1:9666**，默认仅本机可连接。如果端口被占用，加上
+`--listen 127.0.0.1:9667`，浏览器和 CLI 都使用新端口。在 Server 机器的另一个终端
+读取一次性初始化/恢复密钥：
 
 ```sh
 ./vibermated server recovery-key
 ```
 
-打开浏览器地址，输入该密钥，并创建你的个人所有者用户名和密码。浏览器会提示
-自签名证书警告；继续前请核对页面显示的指纹。如果启动 Server 时指定了
-`--data-dir`，这里也要传入同一个绝对目录。
+在浏览器输入该密钥，并创建你的个人所有者用户名和密码。如果启动 Server 时指定了
+`--data-dir`，这里也要传入同一个绝对目录。之后显式连接这个 Server：
 
-多人长期使用时，建议换成大家已经信任的 TLS 证书：
+```sh
+vibermate login --server http://127.0.0.1:9666
+vibermate run --server http://127.0.0.1:9666 -- codex
+```
+
+**原生 Web 即使就在本机，也需要 `--server`**；不带它的本地启动连接 App。
+默认 System Transparent 不保存对话正文；需要记录时发布自定义流量策略并用
+`--env` 选中它。
+
+需要其他设备连接（包括个人远程服务器）时，配置覆盖实际访问域名/IP 的 HTTPS
+服务器证书，例如：
 
 ```sh
 ./vibermated server \
@@ -99,6 +111,9 @@ vibermate run --server https://your-server.example:9666 -- claude
 ```
 
 请将示例地址替换为你在浏览器中打开的 HTTPS 地址。
+当前 CLI 仍使用首次叶证书指纹固定机制，并非标准公共 PKI 验证；首次接入需要通过
+可信渠道核对身份。证书续期和明确的信任模式仍在集成分支优化，不能删除已有指纹
+或关闭校验来消除身份变化提示。
 
 每个人都能从网页右上角修改自己的密码；所有者可以重置成员密码。本机 App
 还可在 **设置 → 用户管理** 中重置自己的所有者密码。如果是无界面的 Server，

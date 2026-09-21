@@ -12,6 +12,7 @@ import 'runtime_root_ca_panel.dart';
 import '../../core/api/control_models.dart';
 import 'deletion_dialog.dart';
 import 'egress_profile_editor.dart';
+import 'runtime_connection_guide.dart';
 import 'workbench_controller.dart';
 
 final class SettingsView extends StatelessWidget {
@@ -22,10 +23,10 @@ final class SettingsView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final access = controller.serverManagement || controller.terminalManagement;
+    final destinations = controller.settingsDestinations;
     return DefaultTabController(
       key: ValueKey('settings-tab-${controller.settingsTab}'),
-      length: (access ? 4 : 3) + (controller.serverManagement ? 1 : 0),
+      length: destinations.length,
       initialIndex: controller.settingsTab,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -48,33 +49,34 @@ final class SettingsView extends StatelessWidget {
                 dividerHeight: 0,
                 onTap: controller.selectSettingsTab,
                 tabs: <Widget>[
-                  _SettingsTab(
-                    key: const Key('settings-tab-general'),
-                    icon: Icons.tune,
-                    label: copy('settings.tab.preferences'),
-                  ),
-                  if (access)
-                    _SettingsTab(
-                      key: const Key('settings-tab-access'),
-                      icon: Icons.link,
-                      label: copy('settings.tab.access'),
-                    ),
-                  if (controller.serverManagement)
-                    _SettingsTab(
-                      key: const Key('settings-tab-users'),
-                      icon: Icons.group_outlined,
-                      label: copy('settings.tab.users'),
-                    ),
-                  _SettingsTab(
-                    key: const Key('settings-tab-safety'),
-                    icon: Icons.shield_outlined,
-                    label: copy('settings.tab.safety'),
-                  ),
-                  _SettingsTab(
-                    key: const Key('settings-tab-proxy'),
-                    icon: Icons.alt_route,
-                    label: copy('settings.tab.proxy'),
-                  ),
+                  for (final destination in destinations)
+                    switch (destination) {
+                      SettingsDestination.preferences => _SettingsTab(
+                        key: const Key('settings-tab-general'),
+                        icon: Icons.tune,
+                        label: copy('settings.tab.preferences'),
+                      ),
+                      SettingsDestination.access => _SettingsTab(
+                        key: const Key('settings-tab-access'),
+                        icon: Icons.link,
+                        label: copy('settings.tab.access'),
+                      ),
+                      SettingsDestination.users => _SettingsTab(
+                        key: const Key('settings-tab-users'),
+                        icon: Icons.group_outlined,
+                        label: copy('settings.tab.users'),
+                      ),
+                      SettingsDestination.safety => _SettingsTab(
+                        key: const Key('settings-tab-safety'),
+                        icon: Icons.shield_outlined,
+                        label: copy('settings.tab.safety'),
+                      ),
+                      SettingsDestination.networkExits => _SettingsTab(
+                        key: const Key('settings-tab-proxy'),
+                        icon: Icons.alt_route,
+                        label: copy('settings.tab.proxy'),
+                      ),
+                    },
                 ],
               ),
             ),
@@ -83,13 +85,30 @@ final class SettingsView extends StatelessWidget {
           Expanded(
             child: TabBarView(
               children: [
-                _GeneralSettingsPane(controller: controller, copy: copy),
-                if (access)
-                  _AccessSettingsPane(controller: controller, copy: copy),
-                if (controller.serverManagement)
-                  _UsersSettingsPane(controller: controller, copy: copy),
-                _SafetyDataSettingsPane(controller: controller, copy: copy),
-                _EgressProfilesSettingsPane(controller: controller, copy: copy),
+                for (final destination in destinations)
+                  switch (destination) {
+                    SettingsDestination.preferences => _GeneralSettingsPane(
+                      controller: controller,
+                      copy: copy,
+                    ),
+                    SettingsDestination.access => _AccessSettingsPane(
+                      controller: controller,
+                      copy: copy,
+                    ),
+                    SettingsDestination.users => _UsersSettingsPane(
+                      controller: controller,
+                      copy: copy,
+                    ),
+                    SettingsDestination.safety => _SafetyDataSettingsPane(
+                      controller: controller,
+                      copy: copy,
+                    ),
+                    SettingsDestination.networkExits =>
+                      _EgressProfilesSettingsPane(
+                        controller: controller,
+                        copy: copy,
+                      ),
+                  },
               ],
             ),
           ),
@@ -530,9 +549,9 @@ final class _AccessSettingsPane extends StatelessWidget {
         icon: Icons.link,
         title: copy('settings.access.title'),
         detail: copy(
-          controller.serverManagement
-              ? 'settings.access.detail.server'
-              : 'settings.access.detail.local',
+          controller.terminalManagement
+              ? 'settings.access.detail.local'
+              : 'settings.access.detail.server',
         ),
       ),
       if (controller.terminalManagement) ...[
@@ -545,14 +564,44 @@ final class _AccessSettingsPane extends StatelessWidget {
         _TerminalCommandPanel(controller: controller, copy: copy),
         const SizedBox(height: 9),
         _ManagedRunGuide(copy: copy, status: controller.terminalCommand),
-      ],
-      if (controller.serverManagement) ...[
-        const SizedBox(height: 16),
-        _SettingsGroupLabel(
-          title: copy('settings.access.team.title'),
-          detail: copy('settings.access.team.detail'),
-        ),
         const SizedBox(height: 8),
+        Text(
+          copy('settings.access.local.no_account'),
+          style: Theme.of(context).textTheme.bodySmall,
+        ),
+      ],
+      if (controller.serverManagement || controller.webPrincipal != null) ...[
+        const SizedBox(height: 16),
+        if (controller.terminalManagement)
+          ExpansionTile(
+            key: ValueKey(
+              'settings-remote-guide-${controller.remoteConnectionGuideRequested}',
+            ),
+            initiallyExpanded: controller.remoteConnectionGuideRequested,
+            tilePadding: EdgeInsets.zero,
+            childrenPadding: EdgeInsets.zero,
+            title: Text(copy('settings.access.team.title')),
+            subtitle: Text(copy('settings.access.team.optional')),
+            children: [_RemoteAccessGuide(controller: controller, copy: copy)],
+          )
+        else
+          _RemoteAccessGuide(controller: controller, copy: copy),
+      ],
+    ],
+  );
+}
+
+final class _RemoteAccessGuide extends StatelessWidget {
+  const _RemoteAccessGuide({required this.controller, required this.copy});
+
+  final WorkbenchController controller;
+  final AppCopy copy;
+
+  @override
+  Widget build(BuildContext context) => Column(
+    crossAxisAlignment: CrossAxisAlignment.stretch,
+    children: [
+      if (controller.serverManagement) ...[
         Align(
           alignment: Alignment.centerLeft,
           child: OutlinedButton.icon(
@@ -563,8 +612,8 @@ final class _AccessSettingsPane extends StatelessWidget {
           ),
         ),
         const SizedBox(height: 8),
-        _ServerAccessPanel(controller: controller, copy: copy),
       ],
+      _ServerAccessPanel(controller: controller, copy: copy),
     ],
   );
 }
@@ -611,18 +660,89 @@ final class _SafetyDataSettingsPane extends StatelessWidget {
       ),
       const SizedBox(height: 14),
       OfflineHoldSettingsPanel(controller: controller, copy: copy),
-      if (controller.serverManagement) ...[
+      const SizedBox(height: 12),
+      if (controller.accessSettingsAvailable) ...[
+        _ServerConnectionSettingsPanel(controller: controller, copy: copy),
         const SizedBox(height: 12),
-        RuntimeRootCAPanel(controller: controller, copy: copy),
       ],
       if (controller.rootTrustManagement) ...[
-        const SizedBox(height: 12),
         _RootCASettingsPanel(controller: controller, copy: copy),
+        const SizedBox(height: 12),
+      ] else if (controller.serverManagement) ...[
+        RuntimeRootCAPanel(controller: controller, copy: copy),
+        const SizedBox(height: 12),
       ],
-      const SizedBox(height: 12),
       _StorageDisclosure(copy: copy, controller: controller),
     ],
   );
+}
+
+final class _ServerConnectionSettingsPanel extends StatelessWidget {
+  const _ServerConnectionSettingsPanel({
+    required this.controller,
+    required this.copy,
+  });
+
+  final WorkbenchController controller;
+  final AppCopy copy;
+
+  @override
+  Widget build(BuildContext context) {
+    final guide = controller.connectionGuide;
+    final status = switch (guide.security) {
+      ServerConnectionSecurity.unavailable => 'unknown',
+      ServerConnectionSecurity.loopbackHttp => 'local_http',
+      ServerConnectionSecurity.remoteHttp => 'remote_http',
+      ServerConnectionSecurity.https => 'https',
+    };
+    return _SettingsSurface(
+      key: const Key('server-connection-settings-panel'),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            copy('settings.server_connection.title'),
+            style: Theme.of(context).textTheme.titleSmall,
+          ),
+          const SizedBox(height: 5),
+          Text(
+            copy('settings.server_connection.detail'),
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
+          const SizedBox(height: 8),
+          if (guide.serverURL case final url?)
+            SelectableText(url, style: monoStyle),
+          const SizedBox(height: 5),
+          InlineNotice(
+            message: copy('settings.server_connection.$status'),
+            error: guide.security == ServerConnectionSecurity.remoteHttp,
+          ),
+          if (guide.available)
+            ExpansionTile(
+              key: const Key('server-connection-details'),
+              tilePadding: EdgeInsets.zero,
+              childrenPadding: EdgeInsets.zero,
+              title: Text(copy('settings.server_connection.advanced')),
+              children: [
+                Text(
+                  copy(
+                    guide.usesConnectedOrigin
+                        ? 'settings.server_connection.source.browser'
+                        : 'settings.server_connection.source.server',
+                  ),
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  copy('settings.server_connection.deployment'),
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+              ],
+            ),
+        ],
+      ),
+    );
+  }
 }
 
 final class _SettingsGroupLabel extends StatelessWidget {
@@ -1140,6 +1260,35 @@ final class _ServerAccessPanelState extends State<_ServerAccessPanel> {
     final controller = widget.controller;
     final copy = widget.copy;
     final access = controller.serverAccess;
+    final guide = controller.connectionGuide;
+    if (!guide.available) {
+      return _SettingsSurface(
+        key: const Key('server-runtime-access'),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              copy('server.access.title'),
+              style: Theme.of(context).textTheme.titleSmall,
+            ),
+            const SizedBox(height: 8),
+            if (controller.serverManagementLoading)
+              CompactLoadingMessage(label: copy('server.access.loading'))
+            else ...[
+              InlineNotice(message: copy('settings.server_connection.unknown')),
+              if (controller.serverManagement)
+                OutlinedButton.icon(
+                  onPressed: () =>
+                      unawaited(controller.refreshServerManagement()),
+                  icon: const Icon(Icons.refresh, size: 15),
+                  label: Text(copy('common.retry')),
+                ),
+            ],
+          ],
+        ),
+      );
+    }
+    final encrypted = guide.security == ServerConnectionSecurity.https;
     return Column(
       key: const Key('server-runtime-access'),
       children: [
@@ -1191,15 +1340,15 @@ final class _ServerAccessPanelState extends State<_ServerAccessPanel> {
                                 ],
                               ),
                             ),
-                            if (access != null) ...[
+                            if (guide.available) ...[
                               const SizedBox(width: 8),
                               _AccessTransportBadge(
                                 label: copy(
-                                  access.encrypted
+                                  encrypted
                                       ? 'server.access.transport.https'
                                       : 'server.access.transport.http',
                                 ),
-                                encrypted: access.encrypted,
+                                encrypted: encrypted,
                               ),
                             ],
                           ],
@@ -1215,11 +1364,18 @@ final class _ServerAccessPanelState extends State<_ServerAccessPanel> {
                           CompactLoadingMessage(
                             label: copy('server.access.loading'),
                           )
-                        else if (access != null) ...[
-                          if (!access.encrypted) ...[
+                        else if (guide.available) ...[
+                          if (!encrypted) ...[
                             InlineNotice(
-                              message: copy('server.access.http_warning'),
-                              error: true,
+                              message: copy(
+                                guide.security ==
+                                        ServerConnectionSecurity.loopbackHttp
+                                    ? 'settings.server_connection.local_http'
+                                    : 'server.access.http_warning',
+                              ),
+                              error:
+                                  guide.security ==
+                                  ServerConnectionSecurity.remoteHttp,
                             ),
                             const SizedBox(height: 8),
                           ],
@@ -1245,7 +1401,7 @@ final class _ServerAccessPanelState extends State<_ServerAccessPanel> {
                             error: true,
                           ),
                         ],
-                        if (access != null) ...[
+                        if (guide.available) ...[
                           const SizedBox(height: 10),
                           Divider(
                             height: 1,
@@ -1296,7 +1452,7 @@ final class _ServerAccessPanelState extends State<_ServerAccessPanel> {
                           command:
                               'vibermate login --server ${controller.runtimeServerURL}',
                           copyLabel: copy('server.login.command.copy'),
-                          enabled: access != null,
+                          enabled: guide.available,
                           onCopy: () => _copyCommand(
                             copy('server.login.command.client'),
                             'vibermate login --server ${controller.runtimeServerURL}',
@@ -1329,7 +1485,7 @@ final class _ServerAccessPanelState extends State<_ServerAccessPanel> {
                                       ? 'Claude'
                                       : 'Codex',
                                 }),
-                                enabled: access != null,
+                                enabled: guide.available,
                                 onCopy: () => _copyCommand(
                                   client == 'claude' ? 'Claude' : 'Codex',
                                   'vibermate run --server ${controller.runtimeServerURL} -- $client',

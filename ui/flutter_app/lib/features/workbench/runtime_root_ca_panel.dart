@@ -122,27 +122,36 @@ final class _RuntimeRootCAPanelState extends State<RuntimeRootCAPanel> {
           const SizedBox(height: 10),
           if (_loading) const CompactProgressIndicator(),
           if (!_loading && certificate != null) ...[
-            Text(copy('settings.runtime_ca.fingerprint'), style: textStyle),
-            SelectableText(
-              certificate.fingerprint,
-              key: const Key('runtime-root-ca-fingerprint'),
-              style: textStyle,
-            ),
-            const SizedBox(height: 6),
-            Text(
-              '${copy('settings.runtime_ca.expires')}: ${certificate.notAfter.toUtc().toIso8601String()}',
-              style: textStyle,
-            ),
-            const SizedBox(height: 8),
-            Text(copy('settings.runtime_ca.guide'), style: textStyle),
-            const SizedBox(height: 10),
-            OutlinedButton.icon(
-              key: const Key('runtime-root-ca-download'),
-              onPressed: _saving ? null : _save,
-              icon: _saving
-                  ? const CompactProgressIndicator()
-                  : const Icon(Icons.download_outlined, size: 16),
-              label: Text(copy('settings.runtime_ca.download')),
+            ExpansionTile(
+              key: const Key('runtime-root-ca-manual-details'),
+              tilePadding: EdgeInsets.zero,
+              childrenPadding: EdgeInsets.zero,
+              title: Text(copy('settings.runtime_ca.manual')),
+              expandedCrossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(copy('settings.runtime_ca.fingerprint'), style: textStyle),
+                SelectableText(
+                  certificate.fingerprint,
+                  key: const Key('runtime-root-ca-fingerprint'),
+                  style: textStyle,
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  '${copy('settings.runtime_ca.expires')}: ${certificate.notAfter.toUtc().toIso8601String()}',
+                  style: textStyle,
+                ),
+                const SizedBox(height: 8),
+                Text(copy('settings.runtime_ca.guide'), style: textStyle),
+                const SizedBox(height: 10),
+                OutlinedButton.icon(
+                  key: const Key('runtime-root-ca-download'),
+                  onPressed: _saving ? null : _save,
+                  icon: _saving
+                      ? const CompactProgressIndicator()
+                      : const Icon(Icons.download_outlined, size: 16),
+                  label: Text(copy('settings.runtime_ca.download')),
+                ),
+              ],
             ),
           ],
           if (_error != null) ...[

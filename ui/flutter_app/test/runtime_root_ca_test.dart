@@ -35,10 +35,10 @@ Map<String, Object?> caPayload({int seed = 0}) {
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
-  test('Root contract accepts exactly one unified public CA', () {
+  test('Root contract accepts exactly one public Proxy CA', () {
     final valid = caPayload();
     final ca = RuntimeRootCertificate.fromJson(valid, 'rootCA');
-    expect(ca.fileName, 'vibermate-ca.crt');
+    expect(ca.fileName, 'vibermate-proxy-ca.crt');
     expect(ca.fingerprint, valid['fingerprint']);
     expect(ca.notBefore, DateTime.utc(2026));
     expect(ca.notAfter, DateTime.utc(2036));
@@ -108,7 +108,7 @@ void main() {
       calls.map((call) => call.arguments),
       everyElement({
         'certificatePem': ca.certificatePem,
-        'fileName': 'vibermate-ca.crt',
+        'fileName': 'vibermate-proxy-ca.crt',
       }),
     );
   });
@@ -140,7 +140,7 @@ void main() {
       }),
     );
     addTearDown(api.close);
-    expect((await api.runtimeRootCA()).fileName, 'vibermate-ca.crt');
+    expect((await api.runtimeRootCA()).fileName, 'vibermate-proxy-ca.crt');
     expect(calls, 1);
   });
 
@@ -160,6 +160,12 @@ void main() {
           await tester.pumpWidget(_panel(controller, copy, dark: dark));
           await tester.pumpAndSettle();
           expect(find.text(copy('settings.runtime_ca.title')), findsOneWidget);
+          expect(find.text(api.certificate.fingerprint), findsNothing);
+          expect(
+            find.byKey(const Key('runtime-root-ca-download')),
+            findsNothing,
+          );
+          await _expandManual(tester);
           expect(find.text(api.certificate.fingerprint), findsOneWidget);
           expect(find.textContaining('2036-01-01'), findsOneWidget);
           expect(find.byType(TextField), findsNothing);
@@ -182,7 +188,7 @@ void main() {
             exporter.saved.single.certificatePem,
             api.certificate.certificatePem,
           );
-          expect(exporter.saved.single.fileName, 'vibermate-ca.crt');
+          expect(exporter.saved.single.fileName, 'vibermate-proxy-ca.crt');
           expect(
             api.calls,
             2,
@@ -210,6 +216,7 @@ void main() {
     api.fail = false;
     await tester.tap(find.byKey(const Key('runtime-root-ca-refresh')));
     await tester.pumpAndSettle();
+    await _expandManual(tester);
     expect(find.text(api.certificate.fingerprint), findsOneWidget);
     api.fail = true;
     await tester.tap(find.byKey(const Key('runtime-root-ca-download')));
@@ -233,6 +240,7 @@ void main() {
       final copy = AppCopy.forLanguage(AppLanguage.english);
       await tester.pumpWidget(_panel(controller, copy));
       await tester.pumpAndSettle();
+      await _expandManual(tester);
       final original = api.certificate.fingerprint;
       api.certificate = RuntimeRootCertificate.fromJson(
         caPayload(seed: 1),
@@ -270,6 +278,7 @@ void main() {
         _panel(controller, AppCopy.forLanguage(AppLanguage.english)),
       );
       await tester.pumpAndSettle();
+      await _expandManual(tester);
       final completion = Completer<RuntimeRootCertificate>();
       api.pending = completion.future;
       final button = find.byKey(const Key('runtime-root-ca-download'));
@@ -308,6 +317,15 @@ void main() {
     expect(tester.takeException(), isNull);
     expect(exporter.saved, isEmpty);
   });
+}
+
+Future<void> _expandManual(WidgetTester tester) async {
+  final details = find.byKey(const Key('runtime-root-ca-manual-details'));
+  await tester.ensureVisible(details);
+  await tester.tap(details);
+  await tester.pumpAndSettle();
+  await tester.ensureVisible(find.byKey(const Key('runtime-root-ca-download')));
+  await tester.pumpAndSettle();
 }
 
 Widget _panel(

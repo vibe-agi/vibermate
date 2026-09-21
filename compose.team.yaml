@@ -1,0 +1,59 @@
+# Native HTTPS with operator-provided server identity. No HTTP reverse proxy
+# assumption and no automatic public exposure or certificate issuance.
+name: vibermate-team
+
+services:
+  vibermate:
+    image: ${VIBERMATE_IMAGE:-vibermate-runtime:0.1.10-local}
+    pull_policy: never
+    init: true
+    restart: unless-stopped
+    stop_grace_period: 35s
+    command:
+      - server
+      - --listen
+      - 0.0.0.0:9666
+      - --data-dir
+      - /data
+      - --web-root
+      - /opt/vibermate/vibermate-web
+      - --transport
+      - tls_files
+      - --tls-cert
+      - /certs/fullchain.pem
+      - --tls-key
+      - /certs/privkey.pem
+    ports:
+      - "${VIBERMATE_TEAM_BIND_ADDRESS:?Set the host interface in .env.team}:${VIBERMATE_PORT:-9666}:9666"
+    volumes:
+      - runtime-data:/data
+      - type: bind
+        source: ${VIBERMATE_TLS_CERT_FILE:?Set the absolute certificate file path in .env.team}
+        target: /certs/fullchain.pem
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${VIBERMATE_TLS_KEY_FILE:?Set the absolute private key file path in .env.team}
+        target: /certs/privkey.pem
+        read_only: true
+        bind:
+          create_host_path: false
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    # The image's loopback-only liveness check skips identity validation.
+    # It is not a browser trust or upstream connectivity test.
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  runtime-data:
+    name: vibermate-team-data

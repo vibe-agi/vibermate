@@ -34,28 +34,28 @@ void main() {
             language: AppLanguage.english,
             title: 'Local Root Certificate',
             delivery:
-                'This Runtime’s managed HTTPS and authorized AI-traffic proxy certificates share one Root. Supported, recognized client launches receive it directly. Other clients can install and trust this exact Root for the current macOS user here.',
+                'This Proxy CA is for captured AI connections. Supported managed runs receive scoped trust automatically; using the browser needs no installation. The controls below manage optional trust for other clients on this Mac, not an externally issued server certificate.',
           ),
           (
             theme: ViberTheme.dark(),
             language: AppLanguage.english,
             title: 'Local Root Certificate',
             delivery:
-                'This Runtime’s managed HTTPS and authorized AI-traffic proxy certificates share one Root. Supported, recognized client launches receive it directly. Other clients can install and trust this exact Root for the current macOS user here.',
+                'This Proxy CA is for captured AI connections. Supported managed runs receive scoped trust automatically; using the browser needs no installation. The controls below manage optional trust for other clients on this Mac, not an externally issued server certificate.',
           ),
           (
             theme: ViberTheme.light(),
             language: AppLanguage.simplifiedChinese,
             title: '本机根证书',
             delivery:
-                '当前 Runtime 的内置 HTTPS 与授权 AI 流量代理共用这张根证书。受支持且已识别的客户端启动时会直接获得它；其他客户端可在这里为当前 macOS 登录用户安装并信任。',
+                '这张代理 CA 用于捕获 AI 连接。受支持的托管启动会自动获得进程级信任，使用网页无需安装。下方操作仅为这台 Mac 上的其他客户端管理可选的系统信任，不会改变外部机构签发的服务器证书。',
           ),
           (
             theme: ViberTheme.dark(),
             language: AppLanguage.simplifiedChinese,
             title: '本机根证书',
             delivery:
-                '当前 Runtime 的内置 HTTPS 与授权 AI 流量代理共用这张根证书。受支持且已识别的客户端启动时会直接获得它；其他客户端可在这里为当前 macOS 登录用户安装并信任。',
+                '这张代理 CA 用于捕获 AI 连接。受支持的托管启动会自动获得进程级信任，使用网页无需安装。下方操作仅为这台 Mac 上的其他客户端管理可选的系统信任，不会改变外部机构签发的服务器证书。',
           ),
         ]) {
       final api = PreviewControlApi(seedCaptures: false);

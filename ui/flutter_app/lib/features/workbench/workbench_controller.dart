@@ -11,6 +11,7 @@ import '../../core/bootstrap/public_certificate_exporter.dart';
 import '../../core/bootstrap/runtime_connection.dart';
 import '../../core/bootstrap/terminal_command.dart';
 import '../../core/preferences/workbench_preferences.dart';
+import 'runtime_connection_guide.dart';
 
 export '../../core/preferences/workbench_preferences.dart'
     show AppLanguage, WorkbenchSection, WorkbenchTheme;
@@ -90,22 +91,28 @@ final class WorkbenchController extends ChangeNotifier {
   final Future<void> Function(String currentPassword, String newPassword)?
   changeWebPassword;
 
+  RuntimeConnectionGuide get connectionGuide => RuntimeConnectionGuide(
+    connectedTarget: runtimeTarget,
+    advertised: serverAccess,
+  );
+
   String get runtimeConnectTarget =>
-      serverAccess?.preferredTarget ?? runtimeTarget;
+      connectionGuide.address?.authority ?? runtimeTarget;
+  String get runtimeServerURL => connectionGuide.serverURL ?? '';
+  String get runtimeWebURL => connectionGuide.webURL ?? '';
 
-  String get runtimeServerURL {
-    // In a browser, keep the origin the user actually connected to, including
-    // HTTPS at a reverse proxy. The server may only know its private listener.
-    final page = Uri.tryParse(runtimeTarget);
-    if (page != null &&
-        (page.scheme == 'http' || page.scheme == 'https') &&
-        page.host.isNotEmpty) {
-      return page.origin;
-    }
-    return '${serverAccess?.transport ?? 'http'}://$runtimeConnectTarget';
-  }
+  bool get accessSettingsAvailable =>
+      serverManagement || terminalManagement || webPrincipal != null;
 
-  String get runtimeWebURL => '$runtimeServerURL/';
+  List<SettingsDestination> get settingsDestinations => [
+    SettingsDestination.preferences,
+    if (accessSettingsAvailable) SettingsDestination.access,
+    if (serverManagement) SettingsDestination.users,
+    SettingsDestination.safety,
+    SettingsDestination.networkExits,
+  ];
+
+  bool remoteConnectionGuideRequested = false;
 
   Future<RuntimeRootCertificate> loadRuntimeRootCA() => _api.runtimeRootCA();
 
@@ -826,17 +833,18 @@ final class WorkbenchController extends ChangeNotifier {
   }
 
   void selectSettingsTab(int value) {
-    final maximum =
-        (serverManagement || terminalManagement ? 3 : 2) +
-        (serverManagement ? 1 : 0);
-    if (value < 0 || value > maximum || settingsTab == value) return;
+    if (value < 0 ||
+        value >= settingsDestinations.length ||
+        settingsTab == value) {
+      return;
+    }
     settingsTab = value;
     notifyListeners();
   }
 
   void openRuntimeUsersSettings() {
     if (!serverManagement) return;
-    settingsTab = 2;
+    settingsTab = settingsDestinations.indexOf(SettingsDestination.users);
     section = WorkbenchSection.settings;
     operationNotice = null;
     notifyListeners();
@@ -846,8 +854,9 @@ final class WorkbenchController extends ChangeNotifier {
   }
 
   void openAccessSettings() {
-    if (!terminalManagement && !serverManagement) return;
-    settingsTab = 1;
+    if (!accessSettingsAvailable) return;
+    settingsTab = settingsDestinations.indexOf(SettingsDestination.access);
+    remoteConnectionGuideRequested = true;
     section = WorkbenchSection.settings;
     operationNotice = null;
     notifyListeners();

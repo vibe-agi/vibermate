@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:vibermate_app/core/design/workbench_widgets.dart';
 import 'package:vibermate_app/core/design/viber_theme.dart';
 import 'package:vibermate_app/core/preferences/workbench_preferences.dart';
 import 'package:vibermate_app/features/workbench/settings_view.dart';
@@ -21,6 +22,8 @@ Future<WorkbenchController> mountSettings(
   required bool terminal,
   bool chinese = false,
   bool dark = false,
+  bool rootTrust = false,
+  String target = 'This Mac',
   PreviewControlApi? api,
 }) async {
   final runtime = api ?? PreviewControlApi();
@@ -30,6 +33,8 @@ Future<WorkbenchController> mountSettings(
     previewMode: false,
     serverManagement: server,
     terminalManagement: terminal,
+    rootTrustManagement: rootTrust,
+    runtimeTarget: target,
     closeRuntime: runtime.close,
     initialPreferences: WorkbenchPreferences(
       section: WorkbenchSection.settings,
@@ -137,6 +142,11 @@ void main() {
           dark: dark,
         );
         await tapVisible(tester, find.byKey(const Key('settings-tab-access')));
+        expect(find.byKey(const Key('server-runtime-access')), findsNothing);
+        await tapVisible(
+          tester,
+          find.byKey(const ValueKey('settings-remote-guide-false')),
+        );
         await tapVisible(
           tester,
           find.byKey(const Key('settings-access-manage-users')),
@@ -189,6 +199,108 @@ void main() {
       expect(panel.left, closeTo(scroll.left + 14, 0.01));
       expect(panel.width, lessThanOrEqualTo(1080));
     }
+    expect(tester.takeException(), isNull);
+    controller.dispose();
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets('Web guide uses its connected DNS origin and HTTPS state', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(390, 900));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final controller = await mountSettings(
+      tester,
+      server: true,
+      terminal: false,
+      target: 'https://runtime.example.test:8443',
+    );
+    await tapVisible(tester, find.byKey(const Key('settings-tab-access')));
+    expect(
+      find.text('vibermate login --server https://runtime.example.test:8443'),
+      findsOneWidget,
+    );
+    expect(find.text('https://runtime.example.test:8443/'), findsOneWidget);
+    expect(find.text('TLS'), findsOneWidget);
+    expect(find.text('HTTP'), findsNothing);
+    expect(find.byKey(const Key('terminal-command-panel')), findsNothing);
+    expect(find.byKey(const Key('runtime-users-panel')), findsNothing);
+    expect(tester.takeException(), isNull);
+    controller.dispose();
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  for (final rootTrust in [false, true]) {
+    testWidgets('Safety separates HTTPS from one Proxy CA panel ($rootTrust)', (
+      tester,
+    ) async {
+      await tester.binding.setSurfaceSize(const Size(390, 900));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      final controller = await mountSettings(
+        tester,
+        server: true,
+        terminal: rootTrust,
+        rootTrust: rootTrust,
+        target: 'https://runtime.example.test:9666',
+      );
+      await tapVisible(tester, find.byKey(const Key('settings-tab-safety')));
+      expect(
+        find.byKey(const Key('server-connection-settings-panel')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const Key('root-ca-settings-panel')),
+        rootTrust ? findsOneWidget : findsNothing,
+      );
+      expect(
+        find.byKey(const Key('runtime-root-ca-settings-panel')),
+        rootTrust ? findsNothing : findsOneWidget,
+      );
+      expect(find.byKey(const Key('runtime-root-ca-download')), findsNothing);
+      expect(tester.takeException(), isNull);
+      controller.dispose();
+      await tester.pumpWidget(const SizedBox.shrink());
+    });
+  }
+
+  for (final local in [false, true]) {
+    testWidgets('HTTP warning matches address scope ($local)', (tester) async {
+      await tester.binding.setSurfaceSize(const Size(390, 900));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      final controller = await mountSettings(
+        tester,
+        server: true,
+        terminal: false,
+        target: local ? 'http://127.0.0.1:9666' : 'http://192.0.2.10:9666',
+      );
+      await tapVisible(tester, find.byKey(const Key('settings-tab-access')));
+      final notices = tester.widgetList<InlineNotice>(
+        find.descendant(
+          of: find.byKey(const Key('server-runtime-access')),
+          matching: find.byType(InlineNotice),
+        ),
+      );
+      expect(notices, hasLength(1));
+      expect(notices.single.error, !local);
+      expect(tester.takeException(), isNull);
+      controller.dispose();
+      await tester.pumpWidget(const SizedBox.shrink());
+    });
+  }
+
+  testWidgets('Missing access data does not display made-up commands', (
+    tester,
+  ) async {
+    final controller = await mountSettings(
+      tester,
+      server: true,
+      terminal: false,
+    );
+    controller.serverAccess = null;
+    await tapVisible(tester, find.byKey(const Key('settings-tab-access')));
+    expect(find.textContaining('vibermate login --server'), findsNothing);
+    expect(find.textContaining('http://This Mac'), findsNothing);
+    expect(find.text('Retry'), findsOneWidget);
     expect(tester.takeException(), isNull);
     controller.dispose();
     await tester.pumpWidget(const SizedBox.shrink());
