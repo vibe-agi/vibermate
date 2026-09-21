@@ -6,11 +6,27 @@ import (
 	"net/netip"
 	"slices"
 	"strings"
+
+	"github.com/vibe-agi/vibermate/internal/serverconnection"
 )
 
 type runtimeInterfaceAddress struct {
 	name    string
 	address netip.Addr
+}
+
+func runtimeAccessTargets(
+	listenAddress string,
+	advertisedAddress string,
+) ([]string, error) {
+	if advertisedAddress != "" {
+		address, err := serverconnection.ParseAddress(advertisedAddress)
+		if err != nil {
+			return nil, errors.New("Runtime Server access address is invalid")
+		}
+		return []string{address.String()}, nil
+	}
+	return discoverRuntimeConnectTargets(listenAddress)
 }
 
 func discoverRuntimeConnectTargets(listenAddress string) ([]string, error) {

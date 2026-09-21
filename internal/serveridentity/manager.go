@@ -10,6 +10,8 @@ import (
 	"time"
 )
 
+const managedIdentityRenewalWindow = 30 * 24 * time.Hour
+
 type storedIdentity struct {
 	doc      document
 	identity Identity
@@ -46,10 +48,9 @@ func OpenManager(ctx context.Context, directory string, random io.Reader, now fu
 		return nil, err
 	}
 	manager := &Manager{directory: directory, now: now}
-	if active == nil {
-		if _, err := NormalizeHosts(bootstrapHosts); err != nil {
-			return nil, err
-		}
+	requestedHosts, err := NormalizeHosts(bootstrapHosts)
+	if err != nil {
+		return nil, err
 	}
 	manager.ca, err = newAuthority(issuer, now())
 	if err != nil {
@@ -70,6 +71,37 @@ func OpenManager(ctx context.Context, directory string, random io.Reader, now fu
 			return nil, err
 		}
 		active = &storedIdentity{doc: doc, identity: identity}
+	} else if manager.ca.signs(active.identity) {
+		reconcileHosts := len(bootstrapHosts) != 0 &&
+			!identityMatchesHosts(active.identity, requestedHosts)
+		renew := !manager.now().Add(managedIdentityRenewalWindow).
+			Before(active.identity.certificate.Leaf.NotAfter)
+		if reconcileHosts || renew {
+			hosts := requestedHosts
+			if !reconcileHosts {
+				hosts = identityHosts(active.identity)
+			}
+			doc, identity, err := createLeafDocument(
+				ctx, random, manager.now().UTC(), manager.ca, hosts...,
+			)
+			if err != nil {
+				return nil, err
+			}
+			previous, err := json.Marshal(active.doc)
+			if err != nil {
+				return nil, err
+			}
+			defer clear(previous)
+			if err := preservePreviousIdentity(
+				filepath.Join(directory, identityName+".previous"), previous,
+			); err != nil {
+				return nil, err
+			}
+			if err := manager.persist(identityName, doc); err != nil {
+				return nil, err
+			}
+			active = &storedIdentity{doc: doc, identity: identity}
+		}
 	}
 	manager.active = active.identity
 	return manager, nil

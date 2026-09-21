@@ -315,6 +315,28 @@ func TestParseLogoutRequiresOneExactServer(t *testing.T) {
 	}
 }
 
+func TestParseTrustRequiresHTTPSAndExplicitSystemRoots(t *testing.T) {
+	t.Parallel()
+	parsed, err := parseTrust([]string{
+		"trust", "--server", "https://runtime.example.test:9666", "--system-roots",
+	})
+	if err != nil || parsed.server.Origin() != "https://runtime.example.test:9666" {
+		t.Fatalf("parseTrust() = %+v, %v", parsed, err)
+	}
+	for _, arguments := range [][]string{
+		nil,
+		{"trust"},
+		{"trust", "--server", "runtime.example.test:9666", "--system-roots"},
+		{"trust", "--server", "http://runtime.example.test:9666", "--system-roots"},
+		{"trust", "--server", "https://runtime.example.test:9666"},
+		{"trust", "--server", "https://runtime.example.test:9666", "--forget"},
+	} {
+		if _, err := parseTrust(arguments); err == nil {
+			t.Fatalf("parseTrust(%v) succeeded", arguments)
+		}
+	}
+}
+
 func TestRemoteLoginCommandPromptsAndPersistsWithoutEchoingSecrets(t *testing.T) {
 	t.Parallel()
 

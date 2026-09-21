@@ -42,6 +42,39 @@ type RemoteInspection struct {
 	Encrypted  bool
 }
 
+func TrustRemoteSystemRoots(
+	ctx context.Context,
+	target serverconnection.Target,
+	stateDirectory string,
+	clock RemoteClock,
+	timeout time.Duration,
+) (string, error) {
+	if ctx == nil || !target.Valid() ||
+		target.Transport() != serverconnection.TransportHTTPS ||
+		stateDirectory == "" || !filepath.IsAbs(stateDirectory) ||
+		filepath.Clean(stateDirectory) != stateDirectory || clock == nil ||
+		timeout <= 0 {
+		return "", errors.New("remote Runtime trust migration is incomplete")
+	}
+	fingerprint, err := servertransport.ProbeSystemTrust(
+		ctx,
+		servertransport.SystemTrustProbeOptions{
+			Target: target, Clock: clock, Timeout: timeout,
+		},
+	)
+	if err != nil {
+		return "", fmt.Errorf("verify Runtime Server with system roots: %w", err)
+	}
+	trust, err := serverconnection.OpenPinStore(filepath.Join(stateDirectory, "trust"))
+	if err != nil {
+		return "", err
+	}
+	if err := trust.UseSystemRoots(target.Address()); err != nil {
+		return "", err
+	}
+	return fingerprint, nil
+}
+
 func InspectRemote(
 	ctx context.Context,
 	target serverconnection.Target,

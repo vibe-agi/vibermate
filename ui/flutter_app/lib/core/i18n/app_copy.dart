@@ -1306,13 +1306,64 @@ final class AppCopy {
         'This remote address uses unencrypted HTTP. Configure HTTPS before sending passwords or captured traffic across an untrusted network.',
     'settings.server_connection.https':
         'The address uses HTTPS. Trust in its server certificate is separate from the AI traffic inspection certificate below.',
+    'settings.server_connection.automatic_ready':
+        'Automatic HTTPS is active. ViberMate stores, renews and hot-loads this public certificate.',
+    'settings.server_connection.automatic_pending':
+        'Automatic HTTPS is waiting for its first certificate. Check that the selected challenge port reaches this Runtime.',
+    'settings.server_connection.automatic_renewing':
+        'Automatic HTTPS is renewing the certificate. Existing HTTPS remains available while the current certificate is valid.',
+    'settings.server_connection.automatic_failed':
+        'Automatic certificate renewal failed. Existing HTTPS may continue until expiry; open details and fix the validation error now.',
+    'settings.server_connection.private_ca':
+        'HTTPS uses a certificate issued by this Runtime\'s private CA. Trust that CA on each managed client, and access the exact DNS name or IP shown in the certificate.',
+    'settings.server_connection.tls_files':
+        'HTTPS uses a certificate supplied by the deployment owner. Renewal and replacement are managed outside ViberMate.',
     'settings.server_connection.advanced': 'Connection and deployment details',
     'settings.server_connection.source.browser':
         'Address source: the origin used to open this workbench. Container-internal addresses do not replace it.',
     'settings.server_connection.source.server':
         'Address source: the Runtime Server. Use an address reachable from the client computer.',
     'settings.server_connection.deployment':
-        'Server HTTPS is configured by deployment flags and certificate files, not by downloading the Proxy CA. External certificate files require a server restart (or container recreation for replaced file mounts). This page does not issue or renew server certificates.',
+        'The connected HTTPS endpoint may be an external gateway or trusted tunnel. Its certificate lifecycle is not reported by this Runtime.',
+    'settings.server_connection.deployment.http':
+        'HTTP has no server certificate. Keep loopback deployments local; use one of the HTTPS modes before remote access.',
+    'settings.server_connection.deployment.automatic_tls':
+        'ViberMate obtains and renews this public certificate. The configured public DNS name must resolve here and the selected ACME challenge port must be reachable.',
+    'settings.server_connection.deployment.private_ca_tls':
+        'Without a public domain, use the certificate IP directly or map its DNS name to this server in each client\'s hosts file. This mode currently uses the same private CA as inspected AI traffic, so install it only on managed devices.',
+    'settings.server_connection.deployment.self_signed_tls':
+        'This legacy private-CA mode uses the same trust requirements as private CA HTTPS. Migrate the deployment name when convenient; the saved identity remains intact.',
+    'settings.server_connection.deployment.tls_files':
+        'The deployment owner supplies the full certificate chain and private key. Replace and reload them according to that issuer\'s renewal process.',
+    'settings.server_connection.deployment.unknown':
+        'ViberMate cannot identify this HTTPS certificate source. Verify the deployment configuration before sharing the address.',
+    'settings.server_connection.tls.mode': 'Certificate source',
+    'settings.server_connection.tls.mode.http': 'No TLS',
+    'settings.server_connection.tls.mode.automatic_tls':
+        'Automatic public HTTPS',
+    'settings.server_connection.tls.mode.private_ca_tls':
+        'ViberMate private CA',
+    'settings.server_connection.tls.mode.self_signed_tls':
+        'ViberMate private CA (legacy name)',
+    'settings.server_connection.tls.mode.tls_files':
+        'Provided certificate files',
+    'settings.server_connection.tls.mode.unknown': 'Unknown',
+    'settings.server_connection.tls.state': 'Certificate state',
+    'settings.server_connection.tls.state.disabled': 'Disabled',
+    'settings.server_connection.tls.state.unavailable': 'Unavailable',
+    'settings.server_connection.tls.state.pending': 'Waiting for certificate',
+    'settings.server_connection.tls.state.ready': 'Ready',
+    'settings.server_connection.tls.state.renewing': 'Renewing',
+    'settings.server_connection.tls.state.renewal_failed': 'Renewal failed',
+    'settings.server_connection.tls.name': 'Certificate name',
+    'settings.server_connection.tls.challenge': 'Validation method',
+    'settings.server_connection.tls.challenge.http_01': 'HTTP-01 (port 80)',
+    'settings.server_connection.tls.challenge.tls_alpn_01':
+        'TLS-ALPN-01 (port 443)',
+    'settings.server_connection.tls.issuer': 'Issuer',
+    'settings.server_connection.tls.expires': 'Expires',
+    'settings.server_connection.tls.fingerprint': 'Leaf SHA-256 fingerprint',
+    'settings.server_connection.tls.error': 'Last certificate error',
     'settings.runtime_ca.title': 'AI traffic inspection certificate (Proxy CA)',
     'settings.runtime_ca.detail':
         'Used for AI destinations captured by this Runtime. Supported managed runs receive scoped trust automatically. Browser-only users do not need to install it.',
@@ -2820,13 +2871,61 @@ final class AppCopy {
         '此远程地址使用未加密的 HTTP。通过不可信网络传输密码或捕获流量前，请先配置 HTTPS。',
     'settings.server_connection.https':
         '当前地址使用 HTTPS。其服务器证书的信任，与下方 AI 流量检查证书的信任分别配置。',
+    'settings.server_connection.automatic_ready':
+        '自动 HTTPS 已启用。ViberMate 会保存、续期并热加载这张公共证书。',
+    'settings.server_connection.automatic_pending':
+        '自动 HTTPS 正在等待首张证书。请确认所选验证端口能够访问到当前 Runtime。',
+    'settings.server_connection.automatic_renewing':
+        '自动 HTTPS 正在续期。当前证书仍有效时，已有 HTTPS 可继续使用。',
+    'settings.server_connection.automatic_failed':
+        '自动证书续期失败。到期前 HTTPS 可能仍可使用；请展开详情并立即修复验证错误。',
+    'settings.server_connection.private_ca':
+        'HTTPS 使用当前 Runtime 私有 CA 签发的证书。请仅在受管客户端信任该 CA，并使用证书中的准确域名或 IP 访问。',
+    'settings.server_connection.tls_files':
+        'HTTPS 使用部署者提供的证书；续期和替换由 ViberMate 外部负责。',
     'settings.server_connection.advanced': '连接与部署详情',
     'settings.server_connection.source.browser':
         '地址来源：打开当前工作台使用的地址，不会替换为容器内部地址。',
     'settings.server_connection.source.server':
         '地址来源：Runtime 服务端。请使用客户端电脑能访问的地址。',
     'settings.server_connection.deployment':
-        '服务器 HTTPS 通过部署参数和证书文件配置，下载代理 CA 不会修改它。外部证书更新后需重启服务；替换挂载文件时需重建容器。此页面不会签发或续期服务器证书。',
+        '当前 HTTPS 入口可能来自外部网关或可信隧道，Runtime 无法报告其证书生命周期。',
+    'settings.server_connection.deployment.http':
+        'HTTP 没有服务器证书。本机部署请保持回环访问；远程访问前请选择一种 HTTPS 模式。',
+    'settings.server_connection.deployment.automatic_tls':
+        'ViberMate 会申请并续期公共证书。配置的公网域名必须解析到这里，所选 ACME 验证端口也必须可达。',
+    'settings.server_connection.deployment.private_ca_tls':
+        '没有公网域名时，可直接使用证书中的 IP，或在各客户端 hosts 文件中把证书域名映射到服务器。此模式目前与 AI 流量检查共用私有 CA，只应安装到受管设备。',
+    'settings.server_connection.deployment.self_signed_tls':
+        '这是私有 CA HTTPS 的旧名称，信任要求相同；方便时可更新部署参数，已保存的身份不会因此轮换。',
+    'settings.server_connection.deployment.tls_files':
+        '部署者提供完整证书链和私钥，并按签发机构的续期流程完成替换与重载。',
+    'settings.server_connection.deployment.unknown':
+        'ViberMate 无法识别此 HTTPS 证书来源。分享地址前请核对部署配置。',
+    'settings.server_connection.tls.mode': '证书来源',
+    'settings.server_connection.tls.mode.http': '未启用 TLS',
+    'settings.server_connection.tls.mode.automatic_tls': '自动公共 HTTPS',
+    'settings.server_connection.tls.mode.private_ca_tls': 'ViberMate 私有 CA',
+    'settings.server_connection.tls.mode.self_signed_tls':
+        'ViberMate 私有 CA（旧名称）',
+    'settings.server_connection.tls.mode.tls_files': '部署者提供的证书文件',
+    'settings.server_connection.tls.mode.unknown': '未知',
+    'settings.server_connection.tls.state': '证书状态',
+    'settings.server_connection.tls.state.disabled': '未启用',
+    'settings.server_connection.tls.state.unavailable': '不可用',
+    'settings.server_connection.tls.state.pending': '等待证书',
+    'settings.server_connection.tls.state.ready': '就绪',
+    'settings.server_connection.tls.state.renewing': '正在续期',
+    'settings.server_connection.tls.state.renewal_failed': '续期失败',
+    'settings.server_connection.tls.name': '证书名称',
+    'settings.server_connection.tls.challenge': '验证方式',
+    'settings.server_connection.tls.challenge.http_01': 'HTTP-01（80 端口）',
+    'settings.server_connection.tls.challenge.tls_alpn_01':
+        'TLS-ALPN-01（443 端口）',
+    'settings.server_connection.tls.issuer': '签发机构',
+    'settings.server_connection.tls.expires': '有效期至',
+    'settings.server_connection.tls.fingerprint': '叶证书 SHA-256 指纹',
+    'settings.server_connection.tls.error': '最近一次证书错误',
     'settings.runtime_ca.title': 'AI 流量检查证书（代理 CA）',
     'settings.runtime_ca.detail':
         '用于检查经过当前 Runtime 的 AI 流量。受支持的托管启动会自动获得进程级信任；只用网页无需安装。',

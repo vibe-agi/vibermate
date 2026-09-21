@@ -17,16 +17,20 @@ func NormalizeHosts(hosts []string) ([]string, error) {
 }
 
 func identityMatchesHosts(identity Identity, names []string) bool {
+	return slices.Equal(identityHosts(identity), names)
+}
+
+func identityHosts(identity Identity) []string {
 	leaf := identity.certificate.Leaf
 	if leaf == nil {
-		return false
+		return nil
 	}
 	actual := slices.Clone(leaf.DNSNames)
 	for _, address := range leaf.IPAddresses {
 		actual = append(actual, address.String())
 	}
 	slices.Sort(actual)
-	return slices.Equal(slices.Compact(actual), names)
+	return slices.Compact(actual)
 }
 
 func preservePreviousIdentity(path string, payload []byte) error {

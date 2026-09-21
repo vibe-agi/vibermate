@@ -689,12 +689,21 @@ final class _ServerConnectionSettingsPanel extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final guide = controller.connectionGuide;
+    final access = controller.serverAccess;
+    final tls =
+        guide.security == ServerConnectionSecurity.https &&
+            access?.transport == 'https'
+        ? access!.tls
+        : null;
     final status = switch (guide.security) {
       ServerConnectionSecurity.unavailable => 'unknown',
       ServerConnectionSecurity.loopbackHttp => 'local_http',
       ServerConnectionSecurity.remoteHttp => 'remote_http',
-      ServerConnectionSecurity.https => 'https',
+      ServerConnectionSecurity.https => _tlsNotice(tls),
     };
+    final connectionError =
+        guide.security == ServerConnectionSecurity.remoteHttp ||
+        tls?.state == 'renewal_failed';
     return _SettingsSurface(
       key: const Key('server-connection-settings-panel'),
       child: Column(
@@ -715,7 +724,7 @@ final class _ServerConnectionSettingsPanel extends StatelessWidget {
           const SizedBox(height: 5),
           InlineNotice(
             message: copy('settings.server_connection.$status'),
-            error: guide.security == ServerConnectionSecurity.remoteHttp,
+            error: connectionError,
           ),
           if (guide.available)
             ExpansionTile(
@@ -734,11 +743,99 @@ final class _ServerConnectionSettingsPanel extends StatelessWidget {
                 ),
                 const SizedBox(height: 6),
                 Text(
-                  copy('settings.server_connection.deployment'),
+                  copy(
+                    tls == null
+                        ? 'settings.server_connection.deployment'
+                        : 'settings.server_connection.deployment.${tls.mode}',
+                  ),
                   style: Theme.of(context).textTheme.bodySmall,
                 ),
+                if (tls case final status?) ...[
+                  const SizedBox(height: 8),
+                  _ServerTLSDetails(status: status, copy: copy),
+                ],
               ],
             ),
+        ],
+      ),
+    );
+  }
+
+  static String _tlsNotice(RuntimeServerTLS? tls) {
+    if (tls == null) return 'https';
+    if (tls.state == 'renewal_failed') return 'automatic_failed';
+    if (tls.mode == 'automatic_tls') {
+      return switch (tls.state) {
+        'pending' => 'automatic_pending',
+        'renewing' => 'automatic_renewing',
+        'ready' => 'automatic_ready',
+        _ => 'https',
+      };
+    }
+    return switch (tls.mode) {
+      'private_ca_tls' || 'self_signed_tls' => 'private_ca',
+      'tls_files' => 'tls_files',
+      _ => 'https',
+    };
+  }
+}
+
+final class _ServerTLSDetails extends StatelessWidget {
+  const _ServerTLSDetails({required this.status, required this.copy});
+
+  final RuntimeServerTLS status;
+  final AppCopy copy;
+
+  @override
+  Widget build(BuildContext context) {
+    final facts = <(String, String)>[
+      (
+        copy('settings.server_connection.tls.mode'),
+        copy('settings.server_connection.tls.mode.${status.mode}'),
+      ),
+      (
+        copy('settings.server_connection.tls.state'),
+        copy('settings.server_connection.tls.state.${status.state}'),
+      ),
+      if (status.serverName case final value?)
+        (copy('settings.server_connection.tls.name'), value),
+      if (status.challenge case final value?)
+        (
+          copy('settings.server_connection.tls.challenge'),
+          copy('settings.server_connection.tls.challenge.$value'),
+        ),
+      if (status.issuer case final value?)
+        (copy('settings.server_connection.tls.issuer'), value),
+      if (status.notAfter case final value?)
+        (copy('settings.server_connection.tls.expires'), value),
+      if (status.fingerprint case final value?)
+        (copy('settings.server_connection.tls.fingerprint'), value),
+      if (status.lastError case final value?)
+        (copy('settings.server_connection.tls.error'), value),
+    ];
+    return Container(
+      key: const Key('server-tls-details'),
+      width: double.infinity,
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: context.viberColors.panel,
+        border: Border.all(color: context.viberColors.dividerSoft),
+        borderRadius: ViberMetrics.controlRadius,
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          for (var index = 0; index < facts.length; index++) ...[
+            Text(
+              facts[index].$1,
+              style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                color: context.viberColors.textMuted,
+              ),
+            ),
+            const SizedBox(height: 1),
+            SelectableText(facts[index].$2, style: monoStyle),
+            if (index != facts.length - 1) const SizedBox(height: 7),
+          ],
         ],
       ),
     );

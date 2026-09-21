@@ -145,46 +145,52 @@ void main() {
     'Runtime Server access states one reusable Runtime User login model',
     () {
       final access = RuntimeServerAccess.fromJson({
-        'schema': 'vibermate-server-access-v2',
+        'schema': 'vibermate-server-access-v1',
         'transport': 'http',
         'authentication': 'runtime_user_password',
         'sessionPolicy': 'reusable_until_logout_disable_or_expiry',
-        'targets': ['192.168.1.44:9666', '[fd00::8]:9666'],
+        'targets': ['server.local:9666', '192.168.1.44:9666', '[fd00::8]:9666'],
+        'tls': {'mode': 'http', 'state': 'disabled'},
       }, 'serverAccess');
 
       expect(access.transport, 'http');
       expect(access.encrypted, isFalse);
       expect(access.requiresRuntimeUserLogin, isTrue);
-      expect(access.preferredTarget, '192.168.1.44:9666');
+      expect(access.preferredTarget, 'server.local:9666');
+      expect(access.tls.state, 'disabled');
 
       for (final invalid in <Map<String, Object?>>[
         {
-          'schema': 'vibermate-server-access-v2',
+          'schema': 'vibermate-server-access-v1',
           'transport': 'ftp',
           'authentication': 'runtime_user_password',
           'sessionPolicy': 'reusable_until_logout_disable_or_expiry',
           'targets': ['192.168.1.44:9666'],
+          'tls': {'mode': 'http', 'state': 'disabled'},
         },
         {
-          'schema': 'vibermate-server-access-v2',
+          'schema': 'vibermate-server-access-v1',
           'transport': 'https',
           'authentication': 'anonymous',
           'sessionPolicy': 'reusable_until_logout_disable_or_expiry',
           'targets': ['192.168.1.44:9666'],
+          'tls': {'mode': 'automatic_tls', 'state': 'ready'},
         },
         {
-          'schema': 'vibermate-server-access-v2',
+          'schema': 'vibermate-server-access-v1',
           'transport': 'https',
           'authentication': 'runtime_user_password',
           'sessionPolicy': 'per_run_approval',
           'targets': ['192.168.1.44:9666'],
+          'tls': {'mode': 'automatic_tls', 'state': 'ready'},
         },
         {
-          'schema': 'vibermate-server-access-v2',
+          'schema': 'vibermate-server-access-v1',
           'transport': 'https',
           'authentication': 'runtime_user_password',
           'sessionPolicy': 'reusable_until_logout_disable_or_expiry',
-          'targets': ['server.local:9666'],
+          'targets': ['Server.Local:9666'],
+          'tls': {'mode': 'automatic_tls', 'state': 'ready'},
         },
       ]) {
         expect(
@@ -194,6 +200,30 @@ void main() {
       }
     },
   );
+
+  test('Runtime Server access reports automatic TLS lifecycle', () {
+    final access = RuntimeServerAccess.fromJson({
+      'schema': 'vibermate-server-access-v1',
+      'transport': 'https',
+      'authentication': 'runtime_user_password',
+      'sessionPolicy': 'reusable_until_logout_disable_or_expiry',
+      'targets': ['runtime.example.com:443'],
+      'tls': {
+        'mode': 'automatic_tls',
+        'state': 'renewing',
+        'serverName': 'runtime.example.com',
+        'challenge': 'http_01',
+        'fingerprint': List.filled(64, 'a').join(),
+        'issuer': 'Example CA',
+        'notBefore': '2026-09-01T00:00:00Z',
+        'notAfter': '2026-12-01T00:00:00Z',
+      },
+    }, 'serverAccess');
+
+    expect(access.tls.mode, 'automatic_tls');
+    expect(access.tls.state, 'renewing');
+    expect(access.tls.serverName, 'runtime.example.com');
+  });
 
   test(
     'Runtime User projection excludes password material and validates state',

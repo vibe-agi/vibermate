@@ -5,8 +5,10 @@ package servertransport
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/hex"
 	"errors"
 	"net"
 	"net/http"
@@ -26,6 +28,10 @@ type Options struct {
 	TrustDirectory string
 	Clock          Clock
 	Timeout        time.Duration
+	// RootCAs is nil in production so the platform trust store remains
+	// authoritative. Tests and explicitly scoped private-PKI callers may provide
+	// a pool without weakening hostname or validity verification.
+	RootCAs *x509.CertPool
 }
 
 type Transport struct {
@@ -38,6 +44,66 @@ type Transport struct {
 	verificationMu sync.Mutex
 	firstUse       bool
 	fingerprint    string
+	trustMode      serverconnection.TrustMode
+}
+
+type SystemTrustProbeOptions struct {
+	Target  serverconnection.Target
+	Clock   Clock
+	Timeout time.Duration
+	RootCAs *x509.CertPool
+}
+
+// ProbeSystemTrust performs a normal PKI handshake without consulting or
+// mutating the legacy leaf-pin store. Callers use it before deliberately
+// migrating one exact pin to renewable system-root trust.
+func ProbeSystemTrust(
+	ctx context.Context,
+	options SystemTrustProbeOptions,
+) (string, error) {
+	if ctx == nil || !options.Target.Valid() ||
+		options.Target.Transport() != serverconnection.TransportHTTPS ||
+		options.Clock == nil || options.Timeout <= 0 {
+		return "", errors.New("Runtime Server system trust probe is incomplete")
+	}
+	host, _, err := net.SplitHostPort(options.Target.Address().String())
+	if err != nil {
+		return "", serverconnection.ErrInvalidAddress
+	}
+	networkDialer := &net.Dialer{
+		Timeout: min(options.Timeout, 5*time.Second), KeepAlive: 15 * time.Second,
+	}
+	tlsDialer := &tls.Dialer{
+		NetDialer: networkDialer,
+		Config: &tls.Config{
+			MinVersion: tls.VersionTLS13,
+			NextProtos: []string{"http/1.1"},
+			ServerName: host,
+			RootCAs:    options.RootCAs,
+			Time:       func() time.Time { return options.Clock.Now().UTC() },
+		},
+	}
+	probeContext, cancel := context.WithTimeout(ctx, options.Timeout)
+	defer cancel()
+	connection, err := tlsDialer.DialContext(
+		probeContext,
+		"tcp",
+		options.Target.Address().String(),
+	)
+	if err != nil {
+		return "", err
+	}
+	defer connection.Close()
+	tlsConnection, ok := connection.(*tls.Conn)
+	if !ok {
+		return "", errors.New("Runtime Server system trust probe did not negotiate TLS")
+	}
+	peers := tlsConnection.ConnectionState().PeerCertificates
+	if len(peers) == 0 {
+		return "", serverconnection.ErrInvalidCertificate
+	}
+	digest := sha256.Sum256(peers[0].Raw)
+	return hex.EncodeToString(digest[:]), nil
 }
 
 func Open(options Options) (*Transport, error) {
@@ -67,10 +133,11 @@ func Open(options Options) (*Transport, error) {
 				rawCertificates [][]byte,
 				_ [][]*x509.Certificate,
 			) error {
-				verified, verifyErr := pins.Verify(
+				verified, verifyErr := pins.VerifyPeer(
 					options.Target.Address(),
 					rawCertificates,
 					options.Clock.Now().UTC(),
+					options.RootCAs,
 				)
 				if verifyErr != nil {
 					return verifyErr
@@ -78,6 +145,7 @@ func Open(options Options) (*Transport, error) {
 				result.verificationMu.Lock()
 				result.firstUse = result.firstUse || verified.FirstUse
 				result.fingerprint = verified.Fingerprint
+				result.trustMode = verified.Mode
 				result.verificationMu.Unlock()
 				return nil
 			},
@@ -141,6 +209,15 @@ func (transport *Transport) Trust() (bool, string) {
 	transport.verificationMu.Lock()
 	defer transport.verificationMu.Unlock()
 	return transport.firstUse, transport.fingerprint
+}
+
+func (transport *Transport) TrustMode() serverconnection.TrustMode {
+	if transport == nil {
+		return ""
+	}
+	transport.verificationMu.Lock()
+	defer transport.verificationMu.Unlock()
+	return transport.trustMode
 }
 
 func (transport *Transport) Close() {

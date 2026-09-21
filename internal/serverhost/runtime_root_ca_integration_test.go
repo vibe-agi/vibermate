@@ -156,6 +156,38 @@ func TestRuntimeRootCAEstablishesStrictHTTPSForConfiguredHosts(t *testing.T) {
 	}
 }
 
+func TestPrivateCAAccessAddressBecomesTheServerCertificateIdentity(t *testing.T) {
+	for _, access := range []string{
+		"vibermate.home.arpa:9666",
+		"192.168.1.20:9666",
+	} {
+		t.Run(access, func(t *testing.T) {
+			root := t.TempDir()
+			options := serverOptions(t, root)
+			options.AccessAddress = access
+			options.Transport.TLSHosts = nil
+			host, err := serverhost.Start(context.Background(), options)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer shutdownServer(t, host)
+			rootPEM, err := os.ReadFile(
+				filepath.Join(root, "data", "local-ca", "root-certificate.pem"),
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			client := strictRootCAClient(t, string(rootPEM), host.Status().ListenAddress)
+			accessHost, _, _ := net.SplitHostPort(access)
+			response, err := client.Get("https://" + accessHost + servercontrol.WebAuthPath)
+			if err != nil {
+				t.Fatalf("access identity %s: %v", accessHost, err)
+			}
+			response.Body.Close()
+		})
+	}
+}
+
 func TestRemovedCertificateRoutesCannotChangePersistedHTTPS(t *testing.T) {
 	root := t.TempDir()
 	options := serverOptions(t, root)
@@ -218,18 +250,18 @@ func TestRemovedCertificateRoutesCannotChangePersistedHTTPS(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer shutdownServer(t, restarted)
-	if restarted.Status().TLSFingerprint != initial.TLSFingerprint {
-		t.Fatal("restart changed the existing certificate")
+	if restarted.Status().TLSFingerprint == initial.TLSFingerprint {
+		t.Fatal("explicit startup address change did not reissue the leaf certificate")
 	}
 	strict := strictRootCAClient(t, exported.CertificatePEM, restarted.Status().ListenAddress)
-	verified, err := strict.Get("https://192.168.1.20" + servercontrol.WebAuthPath)
+	verified, err := strict.Get("https://192.168.1.30" + servercontrol.WebAuthPath)
 	if err != nil {
-		t.Fatalf("existing CA trust or addresses changed on restart: %v", err)
+		t.Fatalf("existing CA trust did not accept the deliberately reissued leaf: %v", err)
 	}
 	verified.Body.Close()
-	if mismatch, err := strict.Get("https://192.168.1.30" + servercontrol.WebAuthPath); err == nil {
+	if mismatch, err := strict.Get("https://192.168.1.20" + servercontrol.WebAuthPath); err == nil {
 		mismatch.Body.Close()
-		t.Fatal("bootstrap hosts overwrote the existing SAN")
+		t.Fatal("retired access address remained in the replacement leaf")
 	}
 	restartSession := rootCATestSession(t, client, restarted)
 	if current := readRuntimeRootCA(t, client, "https://"+restarted.Status().ListenAddress, restartSession.ReadToken); current != exported {
@@ -245,6 +277,7 @@ func TestRuntimeRootCAExportDoesNotDependOnHTTPSTransport(t *testing.T) {
 			options.Transport.Mode = mode
 			var external serveridentity.Identity
 			if mode == serverhost.TransportTLSFiles {
+				options.AccessAddress = "localhost:9666"
 				var err error
 				external, err = serveridentity.Open(context.Background(), t.TempDir(), rand.Reader, time.Now())
 				if err != nil {

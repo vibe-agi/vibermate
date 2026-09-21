@@ -28,7 +28,7 @@ func TestManagedCertificateStartupAndRestartPreserveIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	restarted, err := OpenManager(ctx, directory, rand.Reader, time.Now, root, "another.example.test")
+	restarted, err := OpenManager(ctx, directory, rand.Reader, time.Now, root, "192.168.1.20", "runtime.example.test")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -45,9 +45,6 @@ func TestManagedCertificateStartupAndRestartPreserveIdentity(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if certificate.Leaf.VerifyHostname("another.example.test") == nil {
-		t.Fatal("bootstrap hosts changed an existing certificate")
-	}
 	info, err := os.Stat(filepath.Join(directory, identityName))
 	if err != nil || info.Mode().Perm() != 0600 {
 		t.Fatal("identity permissions are not private")
@@ -56,6 +53,45 @@ func TestManagedCertificateStartupAndRestartPreserveIdentity(t *testing.T) {
 		if _, err := os.Stat(filepath.Join(directory, name)); !errors.Is(err, os.ErrNotExist) {
 			t.Fatalf("startup created obsolete file %s", name)
 		}
+	}
+}
+
+func TestManagedCertificateReissuesForAnExplicitAccessAddressChange(t *testing.T) {
+	t.Parallel()
+	ctx, directory := context.Background(), t.TempDir()
+	root := testRootAuthority(t, directory, time.Now)
+	manager, err := OpenManager(
+		ctx, directory, rand.Reader, time.Now, root, "old.runtime.test",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	initial := manager.Current()
+	before, err := os.ReadFile(filepath.Join(directory, identityName))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	restarted, err := OpenManager(
+		ctx, directory, rand.Reader, time.Now, root, "new.runtime.test",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	current := restarted.Current()
+	certificate, err := current.Certificate()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current.Fingerprint() == initial.Fingerprint() ||
+		certificate.Leaf.VerifyHostname("new.runtime.test") != nil ||
+		certificate.Leaf.VerifyHostname("old.runtime.test") == nil ||
+		!restarted.IssuedByAuthority(current) {
+		t.Fatal("changed access address did not receive one new Root-issued leaf")
+	}
+	backup, err := os.ReadFile(filepath.Join(directory, identityName+".previous"))
+	if err != nil || !bytes.Equal(backup, before) {
+		t.Fatal("previous HTTPS identity was not preserved")
 	}
 }
 

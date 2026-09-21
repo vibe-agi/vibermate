@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:vibermate_app/core/design/workbench_widgets.dart';
 import 'package:vibermate_app/core/design/viber_theme.dart';
+import 'package:vibermate_app/core/api/control_models.dart';
 import 'package:vibermate_app/core/preferences/workbench_preferences.dart';
 import 'package:vibermate_app/features/workbench/settings_view.dart';
 import 'package:vibermate_app/features/workbench/workbench_controller.dart';
@@ -262,6 +263,46 @@ void main() {
       await tester.pumpWidget(const SizedBox.shrink());
     });
   }
+
+  testWidgets('Safety reports automatic HTTPS lifecycle without another tab', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(390, 900));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final controller = await mountSettings(
+      tester,
+      server: true,
+      terminal: false,
+      target: 'https://runtime.example.test:9666',
+    );
+    controller.serverAccess = const RuntimeServerAccess(
+      transport: 'https',
+      authentication: 'runtime_user_password',
+      sessionPolicy: 'reusable_until_logout_disable_or_expiry',
+      targets: ['runtime.example.test:9666'],
+      tls: RuntimeServerTLS(
+        mode: 'automatic_tls',
+        state: 'renewing',
+        serverName: 'runtime.example.test',
+        challenge: 'tls_alpn_01',
+        issuer: 'Example Public CA',
+        notAfter: '2026-12-01T00:00:00Z',
+      ),
+    );
+    await tapVisible(tester, find.byKey(const Key('settings-tab-safety')));
+    expect(find.textContaining('renewing the certificate'), findsOneWidget);
+    await tapVisible(
+      tester,
+      find.byKey(const Key('server-connection-details')),
+    );
+    expect(find.byKey(const Key('server-tls-details')), findsOneWidget);
+    expect(find.text('Automatic public HTTPS'), findsOneWidget);
+    expect(find.text('TLS-ALPN-01 (port 443)'), findsOneWidget);
+    expect(find.text('Example Public CA'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+    controller.dispose();
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
 
   for (final local in [false, true]) {
     testWidgets('HTTP warning matches address scope ($local)', (tester) async {

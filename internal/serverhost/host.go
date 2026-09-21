@@ -51,6 +51,14 @@ type Status struct {
 	ListenAddress   string `json:"listenAddress"`
 	Scheme          string `json:"scheme"`
 	TLSFingerprint  string `json:"tlsFingerprint"`
+	TLSMode         string `json:"tlsMode"`
+	TLSState        string `json:"tlsState"`
+	TLSServerName   string `json:"tlsServerName,omitempty"`
+	TLSChallenge    string `json:"tlsChallenge,omitempty"`
+	TLSIssuer       string `json:"tlsIssuer,omitempty"`
+	TLSNotBefore    string `json:"tlsNotBefore,omitempty"`
+	TLSNotAfter     string `json:"tlsNotAfter,omitempty"`
+	TLSError        string `json:"tlsError,omitempty"`
 	RecoveryKeyPath string `json:"recoveryKeyPath"`
 	ManagementUI    bool   `json:"managementUi"`
 }
@@ -63,7 +71,8 @@ type Host struct {
 	server         *http.Server
 	address        string
 	scheme         string
-	fingerprint    string
+	tlsStatus      func() transportTLSStatus
+	transportClose func()
 	shutdown       time.Duration
 	managementUI   bool
 	ownsRuntime    bool
@@ -107,6 +116,7 @@ func Start(ctx context.Context, options Options) (*Host, error) {
 		random,
 	)
 	attached.ListenAddress = options.ListenAddress
+	attached.AccessAddress = options.AccessAddress
 	attached.Transport = options.Transport
 	attached.ManagementUIRoot = options.ManagementUIRoot
 	attached.ClientCatalog = options.ClientCatalog
@@ -279,6 +289,7 @@ func startAttached(
 		ctx,
 		listener,
 		options.Transport,
+		options.AccessAddress,
 		options.DataDirectory,
 		options.SecurityRandom,
 		options.Clock.Now,
@@ -287,13 +298,31 @@ func startAttached(
 	if err != nil {
 		return nil, err
 	}
-	connectTargets, err := discoverRuntimeConnectTargets(listener.Addr().String())
+	defer func() {
+		if !started && transport.close != nil {
+			transport.close()
+		}
+	}()
+	connectTargets, err := runtimeAccessTargets(
+		listener.Addr().String(),
+		options.AccessAddress,
+	)
 	if err != nil {
 		return nil, err
 	}
 	serverAccess, err := servercontrol.NewServerAccess(
 		servercontrol.ServerAccessOptions{
 			Transport: transport.scheme, Targets: connectTargets,
+			TLS: func() servercontrol.ServerTLS {
+				status := transport.status()
+				return servercontrol.ServerTLS{
+					Mode: string(status.mode), State: status.state,
+					ServerName: status.serverName, Challenge: status.challenge,
+					Fingerprint: status.fingerprint, Issuer: status.issuer,
+					NotBefore: status.notBefore, NotAfter: status.notAfter,
+					LastError: status.lastError,
+				}
+			},
 		},
 	)
 	if err != nil {
@@ -311,7 +340,8 @@ func startAttached(
 		runtime: runtime, admin: admin,
 		guard:    guard,
 		listener: transport.listener, address: listener.Addr().String(),
-		scheme: transport.scheme, fingerprint: transport.fingerprint,
+		scheme: transport.scheme, tlsStatus: transport.status,
+		transportClose: transport.close,
 		shutdown:       options.ShutdownTimeout,
 		managementUI:   managementUI != nil,
 		ownsRuntime:    ownsRuntime,
@@ -351,12 +381,24 @@ func (host *Host) Status() Status {
 	if host == nil || host.runtime == nil {
 		return Status{}
 	}
+	tlsStatus := transportTLSStatus{}
+	if host.tlsStatus != nil {
+		tlsStatus = host.tlsStatus()
+	}
 	return Status{
 		Ready:           host.runtime.Status().State == productruntime.RuntimeStateInitialized,
 		InstanceID:      host.runtime.Status().InstanceID,
 		ListenAddress:   host.address,
 		Scheme:          host.scheme,
-		TLSFingerprint:  host.fingerprint,
+		TLSFingerprint:  tlsStatus.fingerprint,
+		TLSMode:         string(tlsStatus.mode),
+		TLSState:        tlsStatus.state,
+		TLSServerName:   tlsStatus.serverName,
+		TLSChallenge:    tlsStatus.challenge,
+		TLSIssuer:       tlsStatus.issuer,
+		TLSNotBefore:    tlsStatus.notBefore,
+		TLSNotAfter:     tlsStatus.notAfter,
+		TLSError:        tlsStatus.lastError,
 		RecoveryKeyPath: host.admin.AccessKeyPath(),
 		ManagementUI:    host.managementUI,
 	}
@@ -426,6 +468,9 @@ func (host *Host) Shutdown(ctx context.Context) error {
 	attemptErr := errors.Join(serverErr, host.Failure(), runtimeErr)
 	if !serverStopped || !runtimeStopped {
 		return attemptErr
+	}
+	if host.transportClose != nil {
+		host.transportClose()
 	}
 
 	host.closeErr = errors.Join(attemptErr, host.guard.Release())
