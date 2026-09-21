@@ -46,7 +46,7 @@ func TestClientMetadataScriptReachesProviderWire(t *testing.T) {
 		{name: "account final override", managed: true, accountOverride: true, script: string(source), wantUA: "account-fixture/2.0"},
 		{name: "passthrough multiple rejected", script: `request.headers["user-agent"] = ["a", "b"];`, invalid: true},
 		{name: "managed multiple rejected", managed: true, script: `request.headers["user-agent"] = ["a", "b"];`, invalid: true},
-		{name: "non-ASCII rejected", managed: true, script: `request.headers["user-agent"] = "客户端";`, invalid: true},
+		{name: "non-ASCII rejected", managed: true, script: `request.headers["user-agent"] = "\u5ba2\u6237\u7aef";`, invalid: true},
 		{name: "too long rejected", managed: true, script: `request.headers["user-agent"] = "a".repeat(513);`, invalid: true},
 		{name: "injection rejected", script: `request.headers["user-agent"] = "agent\r\nX-Injected: yes";`, invalid: true},
 	} {

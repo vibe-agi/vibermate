@@ -38,7 +38,7 @@ func TestRequestFreezesAndValidatesTransformedUserAgent(t *testing.T) {
 	if request.messageTransformUserAgent == nil || *request.messageTransformUserAgent != "script-agent/1.0" || request.clientUserAgent != "test-client/1.0" {
 		t.Fatal("override aliases caller memory or replaced original observation")
 	}
-	for _, value := range []string{"bad\r\nInjected: value", "bad\tvalue", "non-ascii-客户端", strings.Repeat("x", 513)} {
+	for _, value := range []string{"bad\r\nInjected: value", "bad\tvalue", "non-ascii-\u5ba2\u6237\u7aef", strings.Repeat("x", 513)} {
 		options.MessageTransformUserAgent = &value
 		if _, err := NewRequest(options); err == nil {
 			t.Fatal("invalid transformed UA accepted")

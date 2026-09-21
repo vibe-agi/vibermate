@@ -19,7 +19,7 @@ func TestMessageTransformTestEndpointValidatesUserAgent(t *testing.T) {
 			valid        bool
 		}{
 			{"multiple", `request.headers["user-agent"] = ["a", "b"];`, false},
-			{"unicode", `request.headers["user-agent"] = "客户端";`, false},
+			{"unicode", `request.headers["user-agent"] = "\u5ba2\u6237\u7aef";`, false},
 			{"oversize", `request.headers["user-agent"] = "a".repeat(513);`, false},
 			{"tab", `request.headers["user-agent"] = "a\tb";`, false},
 			{"injection", `request.headers["user-agent"] = "agent\r\nX-Test: value";`, false},

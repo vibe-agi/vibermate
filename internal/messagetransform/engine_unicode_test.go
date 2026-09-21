@@ -11,7 +11,7 @@ import (
 
 func TestTurnPreservesValidUnicodeBody(t *testing.T) {
 	t.Parallel()
-	for _, body := range []string{"�", "中文 � 🙂", "\ufffd\ufffd", "\U00010000\U0010ffff"} {
+	for _, body := range []string{"\ufffd", "\u4e2d\u6587 \ufffd \U0001f642", "\ufffd\ufffd", "\U00010000\U0010ffff"} {
 		for _, saveContext := range []bool{false, true} {
 			t.Run(body+map[bool]string{false: "/headers-only", true: "/context"}[saveContext], func(t *testing.T) {
 				requestScript := `request.headers["x-test"] = "changed";`

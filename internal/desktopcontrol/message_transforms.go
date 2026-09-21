@@ -199,14 +199,14 @@ func resolveMessageTransformSample(
 			errors.New("wire protocol sample is invalid")
 	}
 	return messagetransform.RequestMessage{
-		Method: input.Sample.Request.Method, Path: input.Sample.Request.Path,
-		Headers: input.Sample.Request.Headers.Clone(), Body: []byte(input.Sample.Request.Body),
-	}, messagetransform.ResponseMessage{
-		StatusCode: input.Sample.Response.StatusCode,
-		Streaming:  input.Sample.Response.Streaming,
-		Headers:    input.Sample.Response.Headers.Clone(),
-		Body:       []byte(input.Sample.Response.Body),
-	}, nil
+			Method: input.Sample.Request.Method, Path: input.Sample.Request.Path,
+			Headers: input.Sample.Request.Headers.Clone(), Body: []byte(input.Sample.Request.Body),
+		}, messagetransform.ResponseMessage{
+			StatusCode: input.Sample.Response.StatusCode,
+			Streaming:  input.Sample.Response.Streaming,
+			Headers:    input.Sample.Response.Headers.Clone(),
+			Body:       []byte(input.Sample.Response.Body),
+		}, nil
 }
 
 func transformProtocolPath(protocol string) (string, bool) {
@@ -344,37 +344,37 @@ func messageTransformSample(
 		requestHeaders := headers.Clone()
 		requestHeaders.Set("Anthropic-Version", "2023-06-01")
 		return messagetransform.RequestMessage{
-			Method:  http.MethodPost,
-			Path:    "/v1/messages",
-			Headers: requestHeaders,
-			Body:    []byte(`{"model":"claude-sample","max_tokens":64,"messages":[{"role":"user","content":"Hello from ViberMate"}]}`),
-		}, messagetransform.ResponseMessage{
-			StatusCode: http.StatusOK,
-			Headers:    headers.Clone(),
-			Body:       []byte(`{"id":"msg_sample","type":"message","role":"assistant","model":"claude-sample","content":[{"type":"text","text":"Sample response"}],"stop_reason":"end_turn","stop_sequence":null,"usage":{"input_tokens":8,"output_tokens":3}}`),
-		}, nil
+				Method:  http.MethodPost,
+				Path:    "/v1/messages",
+				Headers: requestHeaders,
+				Body:    []byte(`{"model":"claude-sample","max_tokens":64,"messages":[{"role":"user","content":"Hello from ViberMate"}]}`),
+			}, messagetransform.ResponseMessage{
+				StatusCode: http.StatusOK,
+				Headers:    headers.Clone(),
+				Body:       []byte(`{"id":"msg_sample","type":"message","role":"assistant","model":"claude-sample","content":[{"type":"text","text":"Sample response"}],"stop_reason":"end_turn","stop_sequence":null,"usage":{"input_tokens":8,"output_tokens":3}}`),
+			}, nil
 	case transformProtocolOpenAIResponses:
 		return messagetransform.RequestMessage{
-			Method:  http.MethodPost,
-			Path:    "/v1/responses",
-			Headers: headers.Clone(),
-			Body:    []byte(`{"model":"gpt-sample","input":"Hello from ViberMate","stream":false}`),
-		}, messagetransform.ResponseMessage{
-			StatusCode: http.StatusOK,
-			Headers:    headers.Clone(),
-			Body:       []byte(`{"id":"resp_sample","object":"response","status":"completed","model":"gpt-sample","output":[{"id":"msg_sample","type":"message","role":"assistant","status":"completed","content":[{"type":"output_text","text":"Sample response","annotations":[]}]}],"usage":{"input_tokens":8,"output_tokens":3,"total_tokens":11}}`),
-		}, nil
+				Method:  http.MethodPost,
+				Path:    "/v1/responses",
+				Headers: headers.Clone(),
+				Body:    []byte(`{"model":"gpt-sample","input":"Hello from ViberMate","stream":false}`),
+			}, messagetransform.ResponseMessage{
+				StatusCode: http.StatusOK,
+				Headers:    headers.Clone(),
+				Body:       []byte(`{"id":"resp_sample","object":"response","status":"completed","model":"gpt-sample","output":[{"id":"msg_sample","type":"message","role":"assistant","status":"completed","content":[{"type":"output_text","text":"Sample response","annotations":[]}]}],"usage":{"input_tokens":8,"output_tokens":3,"total_tokens":11}}`),
+			}, nil
 	case transformProtocolOpenAIChat:
 		return messagetransform.RequestMessage{
-			Method:  http.MethodPost,
-			Path:    "/v1/chat/completions",
-			Headers: headers.Clone(),
-			Body:    []byte(`{"model":"gpt-sample","messages":[{"role":"user","content":"Hello from ViberMate"}],"stream":false}`),
-		}, messagetransform.ResponseMessage{
-			StatusCode: http.StatusOK,
-			Headers:    headers.Clone(),
-			Body:       []byte(`{"id":"chatcmpl_sample","object":"chat.completion","model":"gpt-sample","choices":[{"index":0,"message":{"role":"assistant","content":"Sample response"},"finish_reason":"stop"}],"usage":{"prompt_tokens":8,"completion_tokens":3,"total_tokens":11}}`),
-		}, nil
+				Method:  http.MethodPost,
+				Path:    "/v1/chat/completions",
+				Headers: headers.Clone(),
+				Body:    []byte(`{"model":"gpt-sample","messages":[{"role":"user","content":"Hello from ViberMate"}],"stream":false}`),
+			}, messagetransform.ResponseMessage{
+				StatusCode: http.StatusOK,
+				Headers:    headers.Clone(),
+				Body:       []byte(`{"id":"chatcmpl_sample","object":"chat.completion","model":"gpt-sample","choices":[{"index":0,"message":{"role":"assistant","content":"Sample response"},"finish_reason":"stop"}],"usage":{"prompt_tokens":8,"completion_tokens":3,"total_tokens":11}}`),
+			}, nil
 	default:
 		return messagetransform.RequestMessage{}, messagetransform.ResponseMessage{},
 			errors.New("wire protocol has no transform sample")

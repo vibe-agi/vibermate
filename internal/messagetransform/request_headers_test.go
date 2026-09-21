@@ -19,7 +19,7 @@ func TestRequestUserAgentOverride(t *testing.T) {
 	}{
 		{name: "absent"},
 		{name: "unchanged casing", before: http.Header{"user-agent": {"original"}}, after: http.Header{"UsEr-AgEnT": {"original"}}},
-		{name: "unchanged Unicode is not an override", before: http.Header{"User-Agent": {"客户端"}}, after: http.Header{"User-Agent": {"客户端"}}},
+		{name: "unchanged Unicode is not an override", before: http.Header{"User-Agent": {"\u5ba2\u6237\u7aef"}}, after: http.Header{"User-Agent": {"\u5ba2\u6237\u7aef"}}},
 		{name: "unchanged multiple is not an override", before: http.Header{"User-Agent": {"a", "b"}}, after: http.Header{"User-Agent": {"a", "b"}}},
 		{name: "added", after: http.Header{"User-Agent": {"test/1.0"}}, want: value("test/1.0")},
 		{name: "replaced", before: http.Header{"User-Agent": {"original"}}, after: http.Header{"User-Agent": {"edited"}}, want: value("edited")},
@@ -30,7 +30,7 @@ func TestRequestUserAgentOverride(t *testing.T) {
 		{name: "oversize", after: http.Header{"User-Agent": {strings.Repeat("x", 513)}}, invalid: true},
 		{name: "multiple", after: http.Header{"User-Agent": {"a", "b"}}, invalid: true},
 		{name: "case collision", after: http.Header{"User-Agent": {"a"}, "user-agent": {"b"}}, invalid: true},
-		{name: "non ASCII", after: http.Header{"User-Agent": {"客户端"}}, invalid: true},
+		{name: "non ASCII", after: http.Header{"User-Agent": {"\u5ba2\u6237\u7aef"}}, invalid: true},
 		{name: "tab", after: http.Header{"User-Agent": {"test\tagent"}}, invalid: true},
 		{name: "newline", after: http.Header{"User-Agent": {"test\r\nX-Test: bad"}}, invalid: true},
 		{name: "delete control", after: http.Header{"User-Agent": {"test\x7f"}}, invalid: true},
