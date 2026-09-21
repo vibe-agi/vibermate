@@ -1,6 +1,6 @@
-# Explicit new local installation; does not downgrade compose.yaml or reuse
-# its data volume. Build the image with tool/docker/build-local.sh first.
-name: vibermate-local
+# Caddy-style automatic public HTTPS embedded in ViberMate. Public DNS must
+# resolve to this host and public TCP 443 must reach container port 9666.
+name: vibermate-public
 
 services:
   vibermate:
@@ -13,15 +13,21 @@ services:
       - server
       - --listen
       - 0.0.0.0:9666
+      - --access-address
+      - ${VIBERMATE_PUBLIC_HOST:?Set the public DNS name in .env.public}:443
       - --data-dir
       - /data
       - --web-root
       - /opt/vibermate/vibermate-web
       - --transport
-      - http
-    # Deliberately not configurable to a LAN interface in this HTTP profile.
+      - automatic_tls
+      - --acme-agree-terms
+      - --acme-email
+      - ${VIBERMATE_ACME_EMAIL:?Set the certificate contact email in .env.public}
+      - --acme-challenge
+      - tls_alpn_01
     ports:
-      - "127.0.0.1:${VIBERMATE_PORT:-9666}:9666"
+      - "${VIBERMATE_PUBLIC_BIND_ADDRESS:-0.0.0.0}:443:9666"
     volumes:
       - runtime-data:/data
     read_only: true
@@ -31,12 +37,6 @@ services:
       - ALL
     security_opt:
       - no-new-privileges:true
-    healthcheck:
-      test: ["CMD", "curl", "--fail", "--silent", "--show-error", "--max-time", "5", "http://127.0.0.1:9666/api/v1/server/web-auth"]
-      interval: 30s
-      timeout: 6s
-      start_period: 15s
-      retries: 3
     logging:
       driver: json-file
       options:
@@ -45,4 +45,4 @@ services:
 
 volumes:
   runtime-data:
-    name: ${VIBERMATE_LOCAL_DATA_VOLUME:-vibermate-local-data}
+    name: ${VIBERMATE_PUBLIC_DATA_VOLUME:-vibermate-public-data}

@@ -13,6 +13,8 @@ services:
       - server
       - --listen
       - 0.0.0.0:9666
+      - --access-address
+      - ${VIBERMATE_TEAM_ACCESS_ADDRESS:?Set the exact client-facing host:port in .env.team}
       - --data-dir
       - /data
       - --web-root
@@ -56,4 +58,4 @@ services:
 
 volumes:
   runtime-data:
-    name: vibermate-team-data
+    name: ${VIBERMATE_TEAM_DATA_VOLUME:-vibermate-team-data}

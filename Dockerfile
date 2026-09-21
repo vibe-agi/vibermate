@@ -51,13 +51,13 @@ STOPSIGNAL SIGTERM
 
 # This checks the local HTTPS control listener. It does not send provider
 # requests or claim that an upstream model is healthy. The default listener
-# uses a self-signed certificate, so only this in-container probe skips PKI.
+# uses a private-CA certificate, so only this in-container probe skips PKI.
 HEALTHCHECK --interval=30s --timeout=6s --start-period=15s --retries=3 \
   CMD curl --fail --silent --show-error --insecure --max-time 5 \
       https://127.0.0.1:9666/api/v1/server/web-auth >/dev/null || exit 1
 
 ENTRYPOINT ["/opt/vibermate/vibermated"]
-CMD ["server", "--listen", "0.0.0.0:9666", "--data-dir", "/data", "--web-root", "/opt/vibermate/vibermate-web", "--transport", "self_signed_tls"]
+CMD ["server", "--listen", "0.0.0.0:9666", "--data-dir", "/data", "--web-root", "/opt/vibermate/vibermate-web", "--transport", "private_ca_tls"]
 
 FROM runtime AS local
 ARG VIBERMATE_SOURCE_REVISION=unknown

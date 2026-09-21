@@ -1,6 +1,8 @@
 # Runtime setup and trust experience
 
-Status: integration plan; not a claim that all features below have shipped.
+Status: integration implementation; public automatic HTTPS, private-CA DNS/IP
+identity, explicit access addresses and TLS status are implemented on the
+integration branch. DNS-01 and a real public-CA staging gate remain open.
 
 Stable base: `m1/root-leaf-foundation` at `1adc765` (v0.1.10).
 Integration branch: `feat/runtime-setup-experience`.
@@ -24,8 +26,8 @@ The native process and container run the same Server/Web contract. They differ i
 | Personal App | Open App, install/repair terminal command if needed, copy a managed run command | Existing local App control; no domain prompt | No Runtime User needed for local App control | Managed launcher supplies scoped Proxy CA trust when inspection is enabled; no silent global trust installation |
 | Personal native Web on this computer | Unpack Server and adjacent Web assets, run `vibermated server`, create owner in browser | Default `http://127.0.0.1:9666`; no domain/certificate required | Machine-local recovery proof, then username/password | Proxy CA persists in the selected data directory; no browser CA installation |
 | Personal Docker on this computer | Start the explicit local profile, open the displayed loopback URL, create owner, copy login/run | `http://127.0.0.1:9666`; host-published loopback only | Owner setup via server-machine recovery proof, then username/password | No browser CA installation; Proxy CA persists in the data volume |
-| Team / remote native Web | Service operator supplies a reachable HTTPS address, chooses automatic HTTPS (planned) or existing certificate files, creates owner/members | Native TLS or verified L4 passthrough; fixed service account and data directory | Each person has their own Runtime User | Same independent server certificate and Proxy CA as container deployment; paths are host paths |
-| Team Docker | Admin supplies a reachable HTTPS address, chooses automatic HTTPS (planned) or existing certificate files, creates owner/members, shares address | Native TLS or verified L4 passthrough; domain/IP must match certificate SAN | Each person has their own Runtime User; owner-only management | Automatic or external Server HTTPS Identity and Runtime Proxy CA remain separate |
+| Team / remote native Web | Service operator supplies a reachable HTTPS address, chooses automatic HTTPS, private CA, or existing certificate files, creates owner/members | Native TLS or verified L4 passthrough; fixed service account and data directory | Each person has their own Runtime User | Public/external Server identity is independent; private-CA mode explicitly shares the Runtime CA and discloses that wider trust scope |
+| Team Docker | Admin chooses the private, public-auto, or supplied-certificate Compose profile and shares its canonical address | Native TLS or verified L4 passthrough; DNS/IP must match certificate SAN | Each person has their own Runtime User; owner-only management | Automatic, private and external sources have separate truthful lifecycle states |
 
 "Personal" does not mean all HTTP is safe. A native process or Docker host on another computer is remote, even for one person. Offer an authenticated encrypted tunnel to a loopback endpoint or an explicitly trusted HTTPS deployment. Never recommend bypassing browser warnings as normal onboarding. The step-by-step operator entry point is [Deployment guide](../deployment.md), with Docker-specific mechanics kept in [Docker deployment](../docker.md).
 
@@ -167,7 +169,7 @@ An external certificate for `proxy.example.com` on connection 1 is correct. It w
 - First private-HTTPS trust cannot be obtained securely by blindly downloading a CA over that same untrusted connection. Provide machine-local export and out-of-band fingerprint verification, then authenticate normally.
 - No automatic OS-wide trust installation, warning bypass, ACME account creation or public exposure as part of updating the App.
 
-### Automatic server HTTPS — added requirement, not implemented yet
+### Automatic server HTTPS — initial implementation
 
 Native Web and container Web must offer the same Caddy-like certificate
 acquisition and renewal capability. This automates **Server HTTPS Identity**,
@@ -206,9 +208,8 @@ ACME names. Public-IP issuance is a separate, issuer/client-dependent capability
 not a blanket impossibility or a promise in the initial domain-based workflow.
 [Challenge requirements](https://letsencrypt.org/docs/challenge-types/).
 
-**Implementation direction.** Prefer an embedded mature Go certificate manager
-such as Caddy's CertMagic; confirm dependency/version and lifecycle compatibility
-before implementation. Do not implement an ACME client from scratch or make
+**Implemented direction.** The Server embeds Caddy's CertMagic behind the
+server-identity seam; it does not implement a new ACME client or make
 ordinary Caddy HTTP reverse-proxying the only deployment route. The existing
 native listener must still carry both management HTTP and authenticated CONNECT.
 Compare candidates and verified constraints in the
@@ -254,10 +255,13 @@ track the active identity, not remain the startup certificate forever.
 - Deployment-owned configuration remains authoritative. The Web page shows a
   truthful read-only status/source until an authenticated persisted configuration
   and rollback contract exists; no nonfunctional Enable or Apply controls.
-- Runtime offline/network policy needs an explicit control-plane treatment for
-  CA and DNS operations before implementation: target restrictions, audit,
-  cancellation, and understandable renewal-paused/expiry warnings. Certificate
-  maintenance must not invisibly bypass a user's offline controls.
+- Runtime Offline protection pauses Agent/provider traffic; it is not a host
+  firewall and does not pause Server-identity maintenance. Automatic HTTPS may
+  therefore contact only its explicitly configured ACME directory for the one
+  configured Server name while Offline protection is active. Issuance and
+  renewal state remains visible in Server status and process/container logs. A
+  future global network kill switch must be a separate control that explains
+  the certificate-expiry consequence instead of silently inheriting this one.
 - Migration of CLI HTTPS trust is a prerequisite for exposing managed renewal:
   public PKI verifies chain, name and validity; private issuers require explicit
   trust. Existing leaf pins stay meaningful until an authenticated, deliberate
@@ -307,7 +311,7 @@ Only after the relevant gates below pass, merge the verified integration candida
 - Fresh App reaches a local managed run without creating a Runtime User, configuring a domain or installing a global certificate.
 - Fresh native Web uses loopback HTTP by default, discovers adjacent Web assets, requires machine-local owner setup proof, and preserves users and Proxy CA across process restart. Native and Docker Web use the same authenticated setup/login/export assertions.
 - Fresh local Docker publishes only host loopback, serves HTTP, persists its Proxy CA, requires owner setup proof, and produces a working explicit `--server` command. Restart/rebuild preserves users, trust and evidence.
-- Existing HTTPS Compose config remains HTTPS when adopting this branch; the local profile is an explicit choice.
+- The unreleased Compose surface has one default local profile and three explicit remote profiles: private CA, automatic public HTTPS and supplied certificate files.
 - Team test uses external Server certificate A and independent Proxy CA B. Outer TLS presents A; inner CONNECT presents an AI-host leaf signed by B; upstream TLS remains strictly verified.
 - Wrong server name, expired server cert, unknown private issuer, wrong Proxy CA, invalid upstream cert, unauthorized export and unauthorized setup all fail at the right boundary with useful errors.
 - Renew A under an already trusted issuer without rotating B or unexpectedly breaking public-PKI clients; preserve explicit legacy-pin behavior until the user authorizes migration.
@@ -320,8 +324,9 @@ Only after the relevant gates below pass, merge the verified integration candida
   fails. ACME state survives container recreation and Proxy CA fingerprint stays
   unchanged. Staging-issued certificates are never labeled browser-trusted.
 - Challenge-only HTTP/ALPN endpoints never expose login, owner setup, account
-  material or generic management routes; offline control cancels/disallows new
-  CA/DNS work according to the explicit maintenance policy.
+  material or generic management routes. Agent Offline protection continues to
+  block Agent/provider traffic without interrupting bounded certificate
+  maintenance for the configured Server identity.
 - Browser-only users do not install B. Members cannot enumerate other users or mutate deployment settings. No secrets appear in copied instructions or error reports.
 - Actual observed-ClientHello-without-ALPN fixture reaches the dialer and succeeds against a valid HTTP/1.1 fixture; invalid upstream certificates still fail.
 

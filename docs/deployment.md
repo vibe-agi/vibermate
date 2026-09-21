@@ -1,145 +1,185 @@
-# 选择部署方式与接入方式
+# 部署与 HTTPS：先选场景
 
-先回答两个问题：**运行在哪里？谁要连接？** 是否使用容器只影响启动、路径和端口映射，
-不会改变账号体系或证书用途。页面不会因为 Docker / 原生进程再增加一层 tab。
+先回答“谁要从哪里连接”，不用先理解 CA、SAN 或容器网络。App、原生 Web 和容器 Web
+使用同一个 Runtime、账号体系和证书边界。
 
-| 场景 | 最短路径 | 域名与证书 |
+| 场景 | 推荐入口 | 地址与证书 |
 | --- | --- | --- |
-| 本机 App | 打开 App → 设置终端命令 → `vibermate run -- codex` | 本地托管启动不要求域名、Web 账号或全局安装 CA |
-| 本机原生 Web | 解压发布包 → `./vibermated server` → 浏览器创建所有者 | 默认本机 HTTP，不需要域名或服务器证书 |
-| 本机容器 Web | [本机 Compose 配置](docker.md#个人本机容器无需域名或证书) → 浏览器创建所有者 | 固定发布到本机回环 HTTP，不需要域名或服务器证书 |
-| 其他电脑连接原生 Web | 管理员配置原生 HTTPS → 创建用户 → 分享地址 | 使用覆盖实际访问域名或 IP 的服务器证书 |
-| 其他电脑连接容器 Web | [团队 Compose 配置](docker.md#团队自己的域名和服务器证书) → 同样的账号流程 | 和原生 Web 相同；证书通过只读文件挂载 |
+| 个人 App | 打开 App，安装终端命令，运行 `vibermate run -- codex` | 不需要网页账号、域名或全局安装 CA |
+| 同一台电脑的原生 Web | `vibermated server` | `http://127.0.0.1:9666`，不需要证书 |
+| 同一台电脑的容器 Web | `compose.yaml` | 固定发布到宿主机回环 HTTP |
+| 私网/VPN，没有公网域名 | `private_ca_tls` 或 `compose.private.yaml` | ViberMate 私有 CA；可用 hosts 名称或 IP 证书 |
+| 有公网域名，希望自动维护 | `automatic_tls` 或 `compose.public.yaml` | 自动申请、续期并热加载公共证书 |
+| 已有公共/企业证书 | `tls_files` 或 `compose.team.yaml` | 部署者提供完整证书链和私钥 |
 
-个人放在另一台机器上的服务也属于“其他电脑连接”。不要因为只有一个用户就向网络开放
-明文登录。只有浏览器需求时，登录后直接使用工作台，不需要 CLI 或代理 CA。
+“个人使用”不代表远程 HTTP 安全。只要浏览器或 CLI 跨设备连接，就选择一种 HTTPS
+模式，或使用经过身份验证的可信隧道。不要把 `0.0.0.0`、容器的 `172.x` 地址或证书
+警告页发给用户。
 
-## 本机原生 Web：无需 Docker
+## 三条连接，三种信任
 
-从发布页下载并校验适配平台的 Server 包。Linux 发布包包含 `vibermated`、`vibermate`
-和 `vibermate-web` 目录，保持它们相邻。以下命令从解压目录运行：
+1. 浏览器/CLI → ViberMate：由本页配置的 **服务器 HTTPS 证书**保护。
+2. Agent → 被检查的 AI 域名：由 **AI 流量检查 CA（Proxy CA）**签发目标域名叶证书。
+3. Runtime → 真正的 AI 服务商：严格验证服务商自己的证书，并使用选定网络出口。
+
+公共自动证书和部署者证书与 Proxy CA 完全不同。`private_ca_tls` 是一个明确的例外：
+为了让无公网域名的受管设备少维护一套根，它目前使用同一个 ViberMate 私有 CA 签发
+Runtime 服务器叶证书。因此把该 CA 加入系统信任会同时信任这台 Runtime 的流量检查
+能力，只应安装到受管设备，不应公开分发。
+
+## 本机原生 Web
+
+从发布包目录运行：
 
 ```sh
 ./vibermated server
 ```
 
-默认只监听 **http://127.0.0.1:9666**，不会自动对局域网开放。在这台电脑的浏览器打开
-该地址。在另一个终端读取初始化密钥：
+打开 <http://127.0.0.1:9666>。默认仅监听回环地址。端口冲突时使用
+`--listen 127.0.0.1:9667`，浏览器与 CLI 一起改端口。另开一个终端读取初始化/恢复密钥：
 
 ```sh
 ./vibermated server recovery-key
 ```
 
-输入网页初始化表单，设置自己的所有者用户名和密码。密钥只用于首次初始化和所有者
-恢复，使用后轮换；不需要每次登录都输入，也不能分享给普通成员。没有默认密码。
-
-如果 9666 被 App 或其他服务占用：
-
-```sh
-./vibermated server --listen 127.0.0.1:9667
-```
-
-浏览器和客户端都改用同一个新端口。不要为解决端口冲突改成 `0.0.0.0`。
-
-网页初始化完成后，在装有 `vibermate` 和 Codex/Claude 的客户端终端运行：
+在网页创建所有者账号。没有默认 `admin/admin`。若启动时指定了 `--data-dir`，所有
+服务器本地命令都要使用同一个绝对目录。CLI 显式连接独立 Server：
 
 ```sh
 vibermate login --server http://127.0.0.1:9666
-vibermate doctor --server http://127.0.0.1:9666
 vibermate run --server http://127.0.0.1:9666 -- codex
 ```
 
-**原生 Web 即使就在本机，也要带 `--server`**；不带它的本地启动走 App。
-默认 System Transparent 透明转发，不保存对话正文。需要记录时在「流量策略」发布策略，
-再使用 `--env <策略ID>`；部署方式不会自动选择上游账号或模型。
+不带 `--server` 的本地 `vibermate run` 连接 App。System Transparent 默认不保留
+对话正文；需要内容时发布流量策略，并用 `--env <策略ID>` 选择。
 
-### 数据和后台运行
+## 私网 HTTPS：没有公网域名
 
-默认数据在当前操作系统用户的配置目录下的 `io.vibermate.server` 中；不是启动时的
-工作目录。需要固定位置时指定 `--data-dir /绝对路径`，恢复密钥命令也使用同一路径。
-自定义 Web 资源位置使用 `--web-root /绝对路径/vibermate-web`。
+### 方案 A：自定义名称 + hosts 文件
 
-使用服务管理器启动时，保持同一个非特权运行用户、绝对数据目录和资源路径。升级时
-更新二进制及相邻 Web 资源，保留数据目录。不要因为切换运行用户造成新建空 Runtime，
-也不要同时启动两个进程访问同一份数据。容器的 `/data` 卷对应的就是这份目录。
-
-## 原生 Web：其他设备或团队接入
-
-准备实际可访问的地址，以及覆盖该域名/IP、客户端认可的服务器证书。域名不是必须项，
-但证书必须匹配访问的名字或 IP；不能把监听地址 `0.0.0.0` 发给用户。
-
-以下为管理员配置示例，路径和网卡需要替换为自己的实际值：
+选择稳定、仅内部使用的名称，例如 `vibermate.home.arpa`：
 
 ```sh
 ./vibermated server \
-  --data-dir /absolute/path/runtime-data \
-  --listen 192.168.1.20:9666 \
+  --listen 0.0.0.0:9666 \
+  --access-address vibermate.home.arpa:9666 \
+  --transport private_ca_tls
+```
+
+在每台客户端的 hosts 文件加入实际服务器地址，例如：
+
+```text
+192.168.1.20  vibermate.home.arpa
+```
+
+Unix/macOS 文件为 `/etc/hosts`；Windows 为
+`C:\Windows\System32\drivers\etc\hosts`。浏览器与 CLI 都使用
+`https://vibermate.home.arpa:9666`，不要改回 IP，否则名称校验会失败。
+
+### 方案 B：直接使用 IP
+
+IP 稳定时无需 hosts 文件：
+
+```sh
+./vibermated server \
+  --listen 0.0.0.0:9666 \
+  --access-address 192.168.1.20:9666 \
+  --transport private_ca_tls
+```
+
+证书会包含 IP SAN，客户端使用 `https://192.168.1.20:9666`。不要把 DHCP 地址当成
+稳定身份；地址变化后更新 `--access-address` 并重启，ViberMate 会用同一 CA 重签
+叶证书，已正确信任 CA 的客户端不需要重新安装根。
+
+### 安全地取得并信任 CA
+
+先启动一次 Server，再在服务器本机执行：
+
+```sh
+./vibermated server ca-certificate > vibermate-private-ca.crt
+openssl x509 -in vibermate-private-ca.crt -noout -fingerprint -sha256
+```
+
+将指纹与启动日志中的 `caFingerprint` 通过独立可信渠道核对，再把公开证书导入每台
+受管客户端的系统/浏览器信任库。该命令只读取公开证书，不打开或导出 CA 私钥。
+不要先忽略浏览器警告，再从同一个未信任页面下载 CA；那不能建立安全的首次信任。
+
+CLI 会优先使用系统根验证。旧的精确叶指纹记录可在 CA 已安装后显式迁移：
+
+```sh
+vibermate trust --server https://vibermate.home.arpa:9666 --system-roots
+```
+
+## 自动公共 HTTPS
+
+初始实现支持一个可公开签发的 DNS 名称、HTTP-01 或 TLS-ALPN-01，不支持私网名称、
+IP、通配符或 DNS-01。ViberMate 使用 CertMagic 管理证书状态，证书持久化在数据目录的
+`server-https` 中，续期成功后热加载，不需要替换 Proxy CA。
+
+最简单的原生部署让公网 TCP 443 转发到进程监听端口（示例为 8443）：
+
+```sh
+./vibermated server \
+  --listen 0.0.0.0:8443 \
+  --access-address runtime.example.com:443 \
+  --transport automatic_tls \
+  --acme-agree-terms \
+  --acme-email admin@example.com \
+  --acme-challenge tls_alpn_01
+```
+
+公网 DNS 必须先解析到该服务器，公网 443 必须原样到达监听端口。若直接监听 443，
+请用服务管理器授予最小的低端口绑定能力，不要以 root 运行整个 Runtime。
+
+HTTP-01 可用于公网 80 转发到一个非特权内部端口：增加
+`--acme-challenge http_01 --acme-http-port 8080`，并让公网 80 转发到本机 8080。
+`--access-address` 仍是用户实际打开的 HTTPS 地址。启动命令明确同意签发机构条款，并会
+把域名和可选联系邮箱发送给所选 CA；自定义 ACME 目录可用专家参数 `--acme-ca`。
+
+证书正在申请、续期或失败时，「设置 → 安全与数据 → 连接到服务器」会显示真实状态和
+错误。TLS-ALPN 首次申请是异步的，进程已启动不等于证书已经可用。
+
+## 使用已有证书
+
+证书必须覆盖 `--access-address` 中的准确域名/IP；不匹配时 Server 拒绝启动：
+
+```sh
+./vibermated server \
+  --listen 0.0.0.0:9666 \
+  --access-address runtime.example.com:9666 \
   --transport tls_files \
   --tls-cert /absolute/path/fullchain.pem \
   --tls-key /absolute/path/privkey.pem
 ```
 
-证书/密钥必须是普通文件而非符号链接；私钥仅运行用户可读（`0600`）。在服务器上
-使用同一 `--data-dir` 读取恢复密钥，在实际 HTTPS 地址初始化所有者，再从「用户管理」
-创建成员。客户端统一使用该地址：
+证书和密钥必须是普通文件，私钥仅运行用户可读（`0600`）。ViberMate 不复制或改写
+这些文件；当前在替换后需要重启服务。使用 Caddy/Nginx 等外部入口时，普通 HTTP
+反向代理不一定支持同端口的认证 CONNECT；需验证四层透传，不能只验证网页能打开。
+
+## 账号与页面
+
+- 「接入与启动」只回答如何登录和启动；不会混入用户表或证书私钥。
+- 「用户管理」创建、重置、停用 Runtime 用户；上游服务账号在另一套配置中。
+- 「安全与数据」分别显示服务器连接证书、Proxy CA、数据留存。阻断错误不折叠，
+  签发者、指纹、验证方式等专家信息放在详情中。
+
+每个人使用自己的账号登录网页和 CLI。密码可自行修改，所有者可重置成员密码。恢复
+密钥只在服务器本机读取，使用后轮换，不能分享给成员。
+
+## 诊断与验证
+
+查看所有服务器参数和三条最短示例：
 
 ```sh
-vibermate login --server https://runtime.example.com:9666
-vibermate run --server https://runtime.example.com:9666 -- codex
+./vibermated server --help
 ```
 
-服务器证书更新后需要重启进程；当前不提供自动续期或热加载。
-**当前 CLI 仍使用首次叶证书指纹固定机制，不等于标准公共 PKI 验证**，首次应通过可信
-渠道核对身份；续期兼容和明确的公有/私有信任模式还在集成分支优化。不能通过删除
-信任记录或关闭验证来消除报错，也不能把“HTTPS”状态当成“所有客户端已经信任”。
-
-没有域名、证书但需要访问远程个人服务器时，可以由熟悉部署的人配置经过身份验证的
-加密隧道，把远端回环端口映射到客户端回环端口；浏览器和 CLI 使用本地映射地址。
-服务本身仍保持回环绑定。不要默认建议忽略浏览器证书警告。
-
-同一 Runtime 端口还处理 CONNECT。普通 HTTP 反向代理不能自动替代这条路径；当前
-管理路由拒绝转发身份头。需要网关时验证四层透传，不应直接套用网站反代配置。
-
-## 页面怎么找
-
-- **接入与启动**：本机 App 显示终端管理和启动命令；Web 显示当前连接地址与登录/启动
-  指引。跨设备操作在 App 中默认折叠。原生和容器 Web 使用同一个页面。
-- **用户管理**：创建、重置和停用 Runtime 用户；不是上游服务的账号管理。
-- **安全与数据**：服务器连接、AI 流量检查证书、数据保留分别说明。手动证书细节折叠，
-  错误与需要处理的状态不能藏起来。
-- **网络出口**：Runtime 如何连接上游；不是客户端连入 Runtime 的地址。
-
-服务器 HTTPS 证书保护“浏览器/CLI → Runtime”；代理 CA 为 CONNECT 内的 AI 目标
-签发证书。**自己的域名使用自己的服务器证书是正确的，代理 CA 不用替换它。**
-托管启动自动给 Agent 子进程提供所需的代理信任；只用网页不需要下载代理 CA。
-
-## 自动 HTTPS：已纳入后续实现，当前尚未提供
-
-原生 Web 和容器 Web 将共用自动申请、续期和加载服务器证书的能力。普通部署只需要
-设置实际访问域名，按提示完成验证条件并确认启用；DNS 验证、私有签发机构等选项放进
-高级设置。入口仍在「安全与数据 → 连接到服务器」，不新增一层证书 tab。
-
-它只管理浏览器/CLI 连入 Runtime 的 HTTPS，**不会更换或公开代理 CA 私钥**。
-本机使用继续不要求域名；已有企业证书仍可自行提供。验证要求必须讲清楚：例如
-HTTP 验证需要公网 80 端口可达，TLS 验证需要 443，DNS 验证则需要域名控制权和
-可用于自动续期的 DNS 接入，不能保证任意内网名称都能申请公共证书。
-
-“自动”应包括证书持久化、提前续期、加载新证书而不中断已有连接、失败提示及重试，
-也必须解决当前 CLI 固定叶证书指纹与续期不兼容的问题。
-**当前命令和 Compose 模板不会自动申请证书**；请勿添加尚未实现的 ACME 参数。
-实现与验收条件见[自动 HTTPS 规划](plans/2026-09-21-runtime-setup-and-trust.md#automatic-server-https--added-requirement-not-implemented-yet)。
-
-## 验证边界
-
-实现与待办见 [接入与信任规划](plans/2026-09-21-runtime-setup-and-trust.md)。
-本地启动的冒烟验证使用临时目录/独立数据卷，不读取现有用户数据：
+本地冒烟测试使用临时数据，不读取现有用户数据：
 
 ```sh
-# 先按项目工具链构建 Web；原生检查自行构建当前 Server
 node tool/server/smoke-native.mjs
-# 先按 Docker 指南构建当前镜像
 node tool/docker/smoke-local.mjs
 ```
 
-二者共用首次初始化、未授权拒绝、公开 CA 导出、重启后登录与 CA 保留检查。
-这些检查不等于已验证真实公网证书续期或所有客户端的上游请求。
+真实公共 ACME 仍需在拥有可控 DNS/端口的预发布环境验收；单元测试不会向公共 CA
+申请证书。容器具体命令、数据卷与回滚见 [Docker 部署](docker.md)。

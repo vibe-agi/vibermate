@@ -33,7 +33,7 @@ async function docker(args) {
 
 const compose = (...args) => docker([
   'compose', '--env-file', '.env.example', '-p', project,
-  '-f', 'compose.local.yaml', ...args,
+  '-f', 'compose.yaml', ...args,
 ]);
 
 await docker(['image', 'inspect', env.VIBERMATE_IMAGE, '--format', '{{.Id}}']);

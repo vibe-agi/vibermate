@@ -90,12 +90,18 @@ vibermate run --server http://127.0.0.1:9666 -- codex
 默认 System Transparent 不保存对话正文；需要记录时发布自定义流量策略并用
 `--env` 选中它。
 
-需要其他设备连接（包括个人远程服务器）时，配置覆盖实际访问域名/IP 的 HTTPS
-服务器证书，例如：
+需要其他设备连接（包括个人远程服务器）时，明确选择一种 HTTPS 路径：
+
+- 没有公网域名：使用 ViberMate 私有 CA，配合 hosts 名称或直接签发 IP 证书；
+- 有公网域名：由内置能力自动申请、续期并热加载公共证书；
+- 已有公共/企业证书：挂载证书文件。
+
+已有证书的示例：
 
 ```sh
 ./vibermated server \
   --listen 0.0.0.0:9666 \
+  --access-address runtime.example.com:9666 \
   --transport tls_files \
   --tls-cert /绝对路径/fullchain.pem \
   --tls-key /绝对路径/private-key.pem
@@ -110,10 +116,11 @@ vibermate run --server https://your-server.example:9666 -- claude
 # 或：vibermate run --server https://your-server.example:9666 -- codex
 ```
 
-请将示例地址替换为你在浏览器中打开的 HTTPS 地址。
-当前 CLI 仍使用首次叶证书指纹固定机制，并非标准公共 PKI 验证；首次接入需要通过
-可信渠道核对身份。证书续期和明确的信任模式仍在集成分支优化，不能删除已有指纹
-或关闭校验来消除身份变化提示。
+请将示例地址替换为浏览器打开的准确 HTTPS 地址。CLI 会优先使用系统 PKI，因此公共
+证书正常续期不会改变服务器身份。私有 CA 部署应在服务器本机通过
+`vibermated server ca-certificate` 导出公开 CA，带外核对指纹后再安装。已有精确叶
+指纹可用 `vibermate trust --server <URL> --system-roots` 显式迁移。完整命令和信任
+边界见[统一部署指南](docs/deployment.md)。
 
 每个人都能从网页右上角修改自己的密码；所有者可以重置成员密码。本机 App
 还可在 **设置 → 用户管理** 中重置自己的所有者密码。如果是无界面的 Server，
@@ -128,8 +135,8 @@ vibermate run --server https://your-server.example:9666 -- claude
   不需要修改系统 CA。
 - 在 macOS 上，只有其他客户端必须依赖系统信任时，才需要在
   **设置 → 安全与数据 → 本机根证书**中安装。
-- 用于检查代理流量的 Runtime 根证书，与浏览器访问远程 Server 时使用的 TLS
-  证书，是两件不同的东西。
+- 公共/企业 Server HTTPS 与 AI 流量检查相互独立；明确启用的私有 CA Server 模式
+  会共用 Runtime CA，因此只能在受管设备上信任。
 - 有 Capture 正在运行时不能替换根证书。安装、替换和删除时，界面都会显示
   需要核对的准确 SHA-256 指纹。
 

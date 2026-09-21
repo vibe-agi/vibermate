@@ -99,12 +99,19 @@ Even a native Web Server on this computer needs `--server`; a bare local
 retain conversation bodies; publish a recording policy and select it with
 `--env` when you need content capture.
 
-For other devices (including a personal remote Server), configure HTTPS using
-a certificate covering your actual domain/IP. For example:
+For other devices (including a personal remote Server), choose one explicit
+HTTPS path:
+
+- no public domain: ViberMate private CA with a hosts-file DNS name or IP;
+- public domain: embedded automatic issuance and renewal;
+- existing public/enterprise certificate files.
+
+For an existing certificate:
 
 ```sh
 ./vibermated server \
   --listen 0.0.0.0:9666 \
+  --access-address runtime.example.com:9666 \
   --transport tls_files \
   --tls-cert /absolute/path/fullchain.pem \
   --tls-key /absolute/path/private-key.pem
@@ -120,11 +127,13 @@ vibermate run --server https://your-server.example:9666 -- claude
 # or: vibermate run --server https://your-server.example:9666 -- codex
 ```
 
-Replace the example address with the HTTPS address you opened in the browser.
-The current CLI uses first-use leaf-certificate pinning, not standard public
-PKI validation; verify identity through a trusted channel. Certificate-renewal
-and explicit trust-mode improvements are pending on the integration branch.
-Do not clear saved pins or disable validation to suppress a mismatch.
+Replace the example address with the exact HTTPS address opened in the browser.
+The CLI uses normal system PKI when available, so public certificate renewal
+does not change server identity. Private CA deployments export the public CA
+locally with `vibermated server ca-certificate`; verify its fingerprint out of
+band before installing it. A legacy exact-leaf pin can be deliberately migrated
+with `vibermate trust --server <URL> --system-roots`. See the
+[deployment guide](docs/deployment.md) for the complete commands and trust model.
 
 Each person can change their own password from the browser account menu. The
 owner can reset a member password. The local App can also reset its owner's
@@ -140,8 +149,9 @@ the recovery key rotates after use.
   for that process. Linux does not need a system-wide CA installation.
 - On macOS, install the Root from **Settings → Safety & data → Local Root
   Certificate** only for other clients that depend on macOS system trust.
-- The Runtime Root used to inspect agent traffic is separate from the TLS
-  certificate used to open a remote Server in a browser.
+- Public/enterprise Server HTTPS is separate from AI traffic inspection. The
+  opt-in private-CA Server mode intentionally uses the Runtime CA too, and must
+  be trusted only on managed devices.
 - Root replacement is disabled while captures are running. The UI shows the
   exact SHA-256 fingerprint for install, replacement, and removal.
 
