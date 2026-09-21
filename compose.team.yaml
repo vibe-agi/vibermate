@@ -4,7 +4,7 @@ name: vibermate-team
 
 services:
   vibermate:
-    image: ${VIBERMATE_IMAGE:-vibermate-runtime:0.1.10-local}
+    image: ${VIBERMATE_IMAGE:-vibermate-runtime:0.1.11-local}
     pull_policy: never
     init: true
     restart: unless-stopped
