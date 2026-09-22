@@ -178,17 +178,29 @@ jobs:
           flutter test
           flutter pub deps --no-dev --style=compact
       - name: Verify native macOS preference boundary
+        timeout-minutes: 5
         shell: bash
         working-directory: ui/flutter_app
         run: |
           set -euo pipefail
           flutter build macos --debug --config-only
-          xcodebuild test -quiet \
+          xcodebuild test \
             -workspace macos/Runner.xcworkspace \
             -scheme Runner \
             -configuration Debug \
             -destination 'platform=macOS' \
+            -resultBundlePath "${RUNNER_TEMP}/vibermate-native-tests.xcresult" \
             CODE_SIGNING_ALLOWED=NO
+      - name: Retain native test diagnostics on failure
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: native-test-diagnostics-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/vibermate-native-tests.xcresult
+            ~/Library/Logs/DiagnosticReports/*
+          if-no-files-found: warn
+          retention-days: 3
       - name: Build and verify the packaged Flutter App
         shell: bash
         run: |
