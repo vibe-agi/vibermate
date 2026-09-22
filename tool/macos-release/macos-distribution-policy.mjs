@@ -124,6 +124,12 @@ export const macOSDistributionPolicy = Object.freeze({
       "Contents/Frameworks/url_launcher_macos.framework/Versions/Current",
     ]),
   }),
+  // These signed privacy resources have no executable architecture. Apple
+  // reports a bundle ticket (arch: null) and a separate Info.plist ticket.
+  notaryResourceBundles: Object.freeze([
+    "Contents/Frameworks/file_selector_macos.framework/Versions/A/Resources/file_selector_macos_privacy.bundle",
+    "Contents/Frameworks/url_launcher_macos.framework/Versions/A/Resources/url_launcher_macos_privacy.bundle",
+  ]),
   executableNames: Object.freeze([
     "vibermate",
     "vibermate-desktop",
@@ -909,6 +915,17 @@ function validateNotaryTicketContents(value, archiveFilename) {
   const requiredTickets = new Set([`${archiveFilename}\0`]);
   const admittedTickets = new Map([[`${archiveFilename}\0`, "disk-image\0"]]);
   const appPrefix = `${archiveFilename}/${macOSDistributionPolicy.appBundleName}`;
+  const resourcePaths = new Set(
+    macOSDistributionPolicy.notaryResourceBundles.flatMap((bundle) => [
+      `${appPrefix}/${bundle}`,
+      `${appPrefix}/${bundle}/Contents/Info.plist`,
+    ]),
+  );
+  for (const path of resourcePaths) {
+    const identity = `${path}\0`;
+    requiredTickets.add(identity);
+    admittedTickets.set(identity, `resource\0${path}`);
+  }
   for (const [name, codeObject] of Object.entries(
     macOSDistributionPolicy.codeObjects,
   )) {
@@ -948,12 +965,16 @@ function validateNotaryTicketContents(value, archiveFilename) {
     ) {
       throw new Error(`${label} is invalid`);
     }
-    if (hasArchitecture) {
+    if (resourcePaths.has(ticketPath)) {
+      if (hasArchitecture && ticket.arch !== null) {
+        throw new Error(`${label} gives a privacy resource an architecture`);
+      }
+    } else if (hasArchitecture) {
       if (!macOSDistributionPolicy.architectures.includes(ticket.arch)) {
         throw new Error(`${label} has an unexpected architecture`);
       }
     }
-    const ticketIdentity = `${ticket.path}\0${hasArchitecture ? ticket.arch : ""}`;
+    const ticketIdentity = `${ticketPath}\0${ticket.arch ?? ""}`;
     const canonicalIdentity = admittedTickets.get(ticketIdentity);
     if (canonicalIdentity === undefined) {
       throw new Error(`${label} is not an expected code-directory ticket`);
@@ -967,7 +988,7 @@ function validateNotaryTicketContents(value, archiveFilename) {
   }
   if ([...requiredTickets].some((ticket) => !actualTickets.has(ticket))) {
     throw new Error(
-      "The Apple notary log does not ticket every embedded executable slice",
+      "The Apple notary log does not ticket every embedded executable slice and privacy resource",
     );
   }
 }

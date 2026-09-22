@@ -32,6 +32,20 @@ const submissionID = "12345678-1234-4abc-8def-1234567890ab";
 const archiveFilename = "ViberMate_0.1.12_universal.dmg";
 const preStapleSHA256 = "a".repeat(64);
 
+function privacyResourceTickets() {
+  return ["file_selector_macos", "url_launcher_macos"].flatMap((plugin) => {
+    const path = `${archiveFilename}/ViberMate.app/Contents/Frameworks/${plugin}.framework/Versions/A/Resources/${plugin}_privacy.bundle`;
+    return [
+      { path, digestAlgorithm: "SHA-256", cdhash: "4".repeat(40), arch: null },
+      {
+        path: `${path}/Contents/Info.plist`,
+        digestAlgorithm: "SHA-256",
+        cdhash: "5".repeat(40),
+      },
+    ];
+  });
+}
+
 function admittedAppleTools() {
   const toolPaths = {
     clang:
@@ -91,6 +105,7 @@ function acceptedTicketContents() {
       digestAlgorithm: "SHA-256",
       cdhash: "1".repeat(40),
     },
+    ...privacyResourceTickets(),
   ];
   for (const codeObject of Object.values(macOSDistributionPolicy.codeObjects)) {
     for (const architecture of macOSDistributionPolicy.architectures) {
@@ -372,6 +387,79 @@ test("Apple notary log admits known bundle aliases and repeated scan tickets", (
 
 test("notarization evidence counts every Universal code directory", () => {
   assert.equal(macOSDistributionPolicy.notaryTicketedCodeDirectoryCount, 14);
+});
+
+test("privacy resource tickets accept null or omitted architecture", () => {
+  const ticketContents = appleObservedTicketContents().map((ticket) => {
+    if (ticket.arch !== null) return ticket;
+    const { arch, ...withoutArchitecture } = ticket;
+    return withoutArchitecture;
+  });
+  assert.doesNotThrow(() =>
+    validateNotaryLog(
+      acceptedNotaryLog({ ticketContents }),
+      { archiveFilename, preStapleSHA256, submissionID },
+    ),
+  );
+});
+
+test("every known privacy bundle and plist must be ticketed", () => {
+  for (const resource of privacyResourceTickets()) {
+    assert.throws(() =>
+      validateNotaryLog(
+        acceptedNotaryLog({
+          ticketContents: appleObservedTicketContents().filter(
+            (ticket) => ticket.path !== resource.path,
+          ),
+        }),
+        { archiveFilename, preStapleSHA256, submissionID },
+      ),
+    );
+  }
+});
+
+test("architecture-free resource tickets do not admit arbitrary paths or architectures", () => {
+  const resource = privacyResourceTickets()[0];
+  for (const extra of [
+    { ...resource, arch: "arm64" },
+    { ...resource, path: `${resource.path}/unexpected` },
+    { ...resource, path: resource.path.replace("Versions/A/", "Versions/Current/") },
+    { ...resource, path: resource.path.replace("/Resources/", "/Resources/../") },
+    { ...resource, cdhash: "6".repeat(40) },
+    { ...resource, digestAlgorithm: "SHA-1" },
+  ]) {
+    assert.throws(() =>
+      validateNotaryLog(
+        acceptedNotaryLog({ ticketContents: [...appleObservedTicketContents(), extra] }),
+        { archiveFilename, preStapleSHA256, submissionID },
+      ),
+    );
+  }
+});
+
+test("executables still require their exact architecture and DMGs omit it", () => {
+  for (const arch of [null, undefined, "arm64e", ""]) {
+    const ticketContents = acceptedTicketContents().map((ticket) => {
+      if (!ticket.path.endsWith("/Contents/MacOS/vibermated")) return ticket;
+      const changed = { ...ticket, arch };
+      if (arch === undefined) delete changed.arch;
+      return changed;
+    });
+    assert.throws(() =>
+      validateNotaryLog(
+        acceptedNotaryLog({ ticketContents }),
+        { archiveFilename, preStapleSHA256, submissionID },
+      ),
+    );
+  }
+  const ticketContents = acceptedTicketContents();
+  ticketContents[0].arch = null;
+  assert.throws(() =>
+    validateNotaryLog(
+      acceptedNotaryLog({ ticketContents }),
+      { archiveFilename, preStapleSHA256, submissionID },
+    ),
+  );
 });
 
 test("Apple notary log rejects unknown aliases and conflicting repeated tickets", () => {
