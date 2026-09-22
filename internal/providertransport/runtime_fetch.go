@@ -41,6 +41,7 @@ type runtimeFetchSpec struct {
 	method       string
 	body         []byte
 	contentType  string
+	captured     *capturedAccountRead
 }
 
 // clearingRequestBody gives the transport its own copy of a Runtime-owned
@@ -131,7 +132,8 @@ func (client *Client) FetchModelsDev(ctx context.Context) (*http.Response, error
 func (client *Client) DoCodexOAuthTokenRequest(request *http.Request) (*http.Response, error) {
 	if request == nil || request.URL == nil || request.Body == nil ||
 		request.Method != http.MethodPost || request.URL.String() != codexoauth.TokenURL ||
-		request.Header.Get("Content-Type") != "application/json" {
+		(request.Header.Get("Content-Type") != "application/json" &&
+			request.Header.Get("Content-Type") != "application/x-www-form-urlencoded") {
 		return nil, errors.New("Codex OAuth token request is invalid")
 	}
 	body, err := io.ReadAll(io.LimitReader(request.Body, 64<<10+1))
@@ -156,7 +158,7 @@ func (client *Client) DoCodexOAuthTokenRequest(request *http.Request) (*http.Res
 		relativePath: "/oauth/token",
 		method:       http.MethodPost,
 		body:         body,
-		contentType:  "application/json",
+		contentType:  request.Header.Get("Content-Type"),
 	})
 }
 
@@ -285,10 +287,11 @@ func (client *Client) fetchRuntimeJSON(
 		return nil, err
 	}
 	transportOwnsBody = true
-	response, _, err := client.transport.RoundTrip(
-		request,
-		TransportDispatch{target: spec.target, plan: client.runtimePlan},
-	)
+	dispatch := TransportDispatch{target: spec.target, plan: client.runtimePlan}
+	if spec.captured != nil {
+		dispatch.egressPolicy = spec.captured.plan.EgressPolicy()
+	}
+	response, _, err := client.transport.RoundTrip(request, dispatch)
 	if err != nil {
 		if response != nil && response.Body != nil {
 			_ = response.Body.Close()
@@ -403,6 +406,11 @@ func (client *Client) runtimeProbeTarget(
 		PlanRevision:  uint64(requested.Revision()),
 		PlanDigest:    hex.EncodeToString(digest[:]),
 	}
+	if spec.captured != nil {
+		target.EgressPolicy = spec.captured.plan.EgressPolicy()
+		target.PlanDigest = spec.captured.plan.EnvironmentDigest().String()
+		target.PlanRevision = uint64(spec.captured.plan.EnvironmentRevision())
+	}
 	if err := target.Validate(); err != nil {
 		return offlinehold.ProbeTarget{}, fmt.Errorf(
 			"construct runtime probe target: %w",
@@ -425,7 +433,7 @@ func (client *Client) beginRuntimeAudit(
 	if err != nil {
 		return egressaudit.Attempt{}, err
 	}
-	attempt, err := egressaudit.New(egressaudit.NewInput{
+	input := egressaudit.NewInput{
 		ID:           attemptID,
 		Purpose:      spec.purpose,
 		PayloadClass: egressaudit.PayloadRuntime,
@@ -437,7 +445,20 @@ func (client *Client) beginRuntimeAudit(
 		TargetOrigin: spec.target.Origin().String(),
 		Decision:     egressaudit.BuiltInDirectDecision(authority),
 		StartedAt:    client.clock(),
-	})
+	}
+	if spec.captured != nil {
+		plan := spec.captured.plan
+		route, _, err := plan.AccountReadTarget()
+		if err != nil {
+			return egressaudit.Attempt{}, err
+		}
+		input.ConnectionID = spec.captured.connectionID
+		input.PayloadClass = egressaudit.PayloadControl
+		input.Parent = egressaudit.ParentRef{Kind: egressaudit.ParentClientOperation, ID: spec.captured.operationID}
+		input.Decision = egressaudit.DecisionRef{PolicyID: string(plan.EnvironmentID()), PolicyRevision: uint64(plan.EnvironmentRevision()),
+			Authority: egressaudit.AuthorityEnvironment, RuleID: string(route.ID()), ProxyID: string(plan.EgressProfile().ID)}
+	}
+	attempt, err := egressaudit.New(input)
 	if err != nil {
 		return egressaudit.Attempt{}, fmt.Errorf(
 			"construct runtime EgressAttempt: %w",

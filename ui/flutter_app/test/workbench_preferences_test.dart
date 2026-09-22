@@ -97,6 +97,17 @@ void main() {
     );
   });
 
+  test('Upstream accounts restore as an independent destination', () {
+    const accounts = WorkbenchPreferences(
+      section: WorkbenchSection.providerAccounts,
+    );
+    expect(WorkbenchPreferences.decode(accounts.encode()), accounts);
+    expect(
+      WorkbenchSection.fromWire('provider_accounts'),
+      WorkbenchSection.providerAccounts,
+    );
+  });
+
   test('future schema is distinguished so an older app preserves it', () {
     final payload = jsonDecode(complete.encode()) as Map<String, Object?>;
     expect(

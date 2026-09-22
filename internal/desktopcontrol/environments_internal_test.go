@@ -12,9 +12,13 @@ func TestAccountSelectorAuthorityIncludesOnlyReadyAccountsOnTheExactRoute(t *tes
 	route := environment.UpstreamRoute{ProviderTarget: environment.ProviderTarget{
 		ID: "endpoint.work", RealmID: "realm.work",
 	}}
+	associations, err := provideraccount.NewEndpointAssociations([]upstreamendpoint.ID{"endpoint.work"})
+	if err != nil {
+		t.Fatal(err)
+	}
 	view := provideraccount.View{
 		Account: provideraccount.Account{
-			ID: "account.work", UpstreamEndpointID: upstreamendpoint.ID("endpoint.work"),
+			ID: "account.work", Associations: associations,
 			RealmID: "realm.work", State: provideraccount.StateActive,
 		},
 		Health: provideraccount.Health{State: provideraccount.HealthReady, CredentialEpoch: 1},

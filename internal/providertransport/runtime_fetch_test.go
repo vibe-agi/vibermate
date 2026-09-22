@@ -21,49 +21,57 @@ import (
 	"github.com/vibe-agi/vibermate/internal/upstreamendpoint"
 )
 
-func TestCodexOAuthRefreshUsesFixedAuditedRuntimeEgress(t *testing.T) {
+func TestCodexOAuthTokenGrantsUseFixedAuditedRuntimeEgress(t *testing.T) {
 	t.Parallel()
-	gate := newStartedGate(t)
-	audit := &runtimeAuditRecorder{}
-	transport := &runtimeTransportStub{
-		audit: audit,
-		response: &http.Response{
-			StatusCode: http.StatusOK,
-			Header:     http.Header{"Content-Type": []string{"application/json"}},
-			Body:       io.NopCloser(strings.NewReader(`{"access_token":"rotated"}`)),
-		},
-	}
-	client := newRuntimeFetchClient(t, gate, transport, audit)
-	payload := []byte(`{"grant_type":"refresh_token","refresh_token":"secret"}`)
-	request, err := http.NewRequestWithContext(
-		context.Background(), http.MethodPost, codexoauth.TokenURL, bytes.NewReader(payload),
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	request.Header.Set("Content-Type", "application/json")
-	response, err := client.DoCodexOAuthTokenRequest(request)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := io.Copy(io.Discard, response.Body); err != nil {
-		t.Fatal(err)
-	}
-	outbound := transport.lastRequest()
-	body, err := io.ReadAll(outbound.Body)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if outbound.Method != http.MethodPost || outbound.URL.String() != codexoauth.TokenURL ||
-		outbound.Host != "auth.openai.com" || !bytes.Equal(body, payload) {
-		t.Fatalf("refresh egress = %s %s host=%s body=%q", outbound.Method, outbound.URL, outbound.Host, body)
-	}
-	started, terminal := audit.attempts()
-	if !transport.auditWasPresent() || started.Purpose() != egressaudit.PurposeCredentialRefresh ||
-		started.PayloadClass() != egressaudit.PayloadRuntime ||
-		terminal.Outcome() != egressaudit.OutcomeCompleted ||
-		terminal.BytesOut() != int64(len(payload)) {
-		t.Fatalf("refresh audit start=%+v terminal=%+v", started, terminal)
+	for _, grant := range []struct{ name, contentType, body string }{
+		{"refresh", "application/json", `{"grant_type":"refresh_token","refresh_token":"secret"}`},
+		{"authorization_code", "application/x-www-form-urlencoded", "grant_type=authorization_code&code=synthetic-code&code_verifier=synthetic-verifier"},
+	} {
+		t.Run(grant.name, func(t *testing.T) {
+			gate := newStartedGate(t)
+			audit := &runtimeAuditRecorder{}
+			transport := &runtimeTransportStub{
+				audit: audit,
+				response: &http.Response{
+					StatusCode: http.StatusOK,
+					Header:     http.Header{"Content-Type": []string{"application/json"}},
+					Body:       io.NopCloser(strings.NewReader(`{"access_token":"rotated"}`)),
+				},
+			}
+			client := newRuntimeFetchClient(t, gate, transport, audit)
+			payload := []byte(grant.body)
+			request, err := http.NewRequestWithContext(
+				context.Background(), http.MethodPost, codexoauth.TokenURL, bytes.NewReader(payload),
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			request.Header.Set("Content-Type", grant.contentType)
+			response, err := client.DoCodexOAuthTokenRequest(request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := io.Copy(io.Discard, response.Body); err != nil {
+				t.Fatal(err)
+			}
+			defer response.Body.Close()
+			outbound := transport.lastRequest()
+			body, err := io.ReadAll(outbound.Body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if outbound.Method != http.MethodPost || outbound.URL.String() != codexoauth.TokenURL ||
+				outbound.Host != "auth.openai.com" || !bytes.Equal(body, payload) || outbound.Header.Get("Content-Type") != grant.contentType {
+				t.Fatalf("refresh egress = %s %s host=%s body=%q", outbound.Method, outbound.URL, outbound.Host, body)
+			}
+			started, terminal := audit.attempts()
+			if !transport.auditWasPresent() || started.Purpose() != egressaudit.PurposeCredentialRefresh ||
+				started.PayloadClass() != egressaudit.PayloadRuntime ||
+				terminal.Outcome() != egressaudit.OutcomeCompleted ||
+				terminal.BytesOut() != int64(len(payload)) {
+				t.Fatalf("refresh audit start=%+v terminal=%+v", started, terminal)
+			}
+		})
 	}
 }
 

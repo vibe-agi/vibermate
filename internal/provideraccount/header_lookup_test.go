@@ -35,7 +35,7 @@ func TestOverwriteReadbackIsEpochBoundAndCannotReadPrimaryCredential(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	lookup := providerauth.HeaderLookup{AccountID: view.Account.ID.String(), AccountRevision: 1, CredentialEpoch: 1, UpstreamEndpointID: view.Account.UpstreamEndpointID.String(), UpstreamEndpointRevision: 1, Name: "user-agent"}
+	lookup := providerauth.HeaderLookup{AccountID: view.Account.ID.String(), AccountRevision: 1, CredentialEpoch: 1, UpstreamEndpointID: view.Account.Associations.IDs()[0].String(), UpstreamEndpointRevision: 1, Name: "user-agent"}
 	if value, err := manager.ReadOverwriteHeader(ctx, lookup); err != nil || value != "account-agent" {
 		t.Fatalf("overwrite=%q err=%v", value, err)
 	}

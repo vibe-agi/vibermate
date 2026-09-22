@@ -42,7 +42,7 @@ func TestManagerCreatesListsAndRotatesManagedSecretWithoutExposingIt(t *testing.
 		view.Health.State != HealthReady || view.Health.CredentialEpoch != 1 {
 		t.Fatalf("created ProviderAccount = %+v", view)
 	}
-	descriptor, exists := manager.LookupAccount("anthropic-work")
+	descriptor, exists := manager.LookupAccount("anthropic-work", upstreamendpoint.AnthropicOfficialID.String())
 	if !exists || !descriptor.Active || descriptor.RealmID != "anthropic.official" ||
 		descriptor.Revision != 1 {
 		t.Fatalf("Environment account descriptor = %+v exists=%t", descriptor, exists)
@@ -117,7 +117,7 @@ func TestManagerRecoversMissingCredentialFailClosed(t *testing.T) {
 	now := time.Unix(1_786_200_000, 0).UTC()
 	account := Account{
 		ID: "anthropic-work", DisplayName: "Anthropic Work",
-		UpstreamEndpointID: upstreamendpoint.AnthropicOfficialID, RealmID: "anthropic.official",
+		Origin: testEndpoints(t)[upstreamendpoint.AnthropicOfficialID].Origin, AssociationRevision: 1, RealmID: "anthropic.official",
 		Driver: providerauth.AnthropicAPIKeyDriverRef(), SecretRef: reference,
 		State: StateActive, Revision: 1, CreatedAt: now, UpdatedAt: now,
 	}
@@ -136,7 +136,7 @@ func TestManagerRecoversMissingCredentialFailClosed(t *testing.T) {
 	if err := manager.Shutdown(context.Background()); err != nil {
 		t.Fatalf("shutdown manager: %v", err)
 	}
-	if _, ok := manager.LookupAccount(account.ID.String()); ok {
+	if _, ok := manager.LookupAccount(account.ID.String(), upstreamendpoint.AnthropicOfficialID.String()); ok {
 		t.Fatal("closing ProviderAccount manager remained an Environment catalog authority")
 	}
 	if _, err := manager.List(context.Background()); !errors.Is(err, ErrManagerClosing) {
@@ -365,7 +365,7 @@ func TestManagerCreateDoesNotHoldTheAccountAuthorityLockDuringRepositoryWrite(
 
 	lookupDone := make(chan bool, 1)
 	go func() {
-		_, exists := manager.LookupAccount("unrelated-account")
+		_, exists := manager.LookupAccount("unrelated-account", upstreamendpoint.AnthropicOfficialID.String())
 		lookupDone <- exists
 	}()
 	select {
@@ -449,7 +449,7 @@ func TestManagerReplaceDoesNotHoldTheAccountAuthorityLockDuringSecretWrite(
 
 	lookupDone := make(chan bool, 1)
 	go func() {
-		_, exists := manager.LookupAccount(view.Account.ID.String())
+		_, exists := manager.LookupAccount(view.Account.ID.String(), upstreamendpoint.AnthropicOfficialID.String())
 		lookupDone <- exists
 	}()
 	select {
@@ -535,8 +535,9 @@ func TestManagerCredentialReplacementReservesTheAccountFromNewLeases(
 		id:                       view.Account.ID,
 		accountRevision:          view.Account.Revision,
 		realmID:                  view.Account.RealmID,
-		upstreamEndpointID:       view.Account.UpstreamEndpointID.String(),
+		upstreamEndpointID:       view.Account.Associations.IDs()[0].String(),
 		upstreamEndpointRevision: 1,
+		upstreamEndpointOrigin:   view.Account.Origin,
 	})
 	if lease != nil {
 		lease.Release()
@@ -616,7 +617,7 @@ func TestManagerDeletionDoesNotHoldTheAccountAuthorityLockDuringSecretInspection
 
 	lookupDone := make(chan bool, 1)
 	go func() {
-		_, exists := manager.LookupAccount(view.Account.ID.String())
+		_, exists := manager.LookupAccount(view.Account.ID.String(), upstreamendpoint.AnthropicOfficialID.String())
 		lookupDone <- exists
 	}()
 	select {
@@ -704,8 +705,9 @@ func TestManagerAcquireDoesNotHoldTheAccountAuthorityLockDuringSecretInspection(
 			id:                       view.Account.ID,
 			accountRevision:          view.Account.Revision,
 			realmID:                  view.Account.RealmID,
-			upstreamEndpointID:       view.Account.UpstreamEndpointID.String(),
+			upstreamEndpointID:       view.Account.Associations.IDs()[0].String(),
 			upstreamEndpointRevision: 1,
+			upstreamEndpointOrigin:   view.Account.Origin,
 		})
 		acquireDone <- acquireResult{lease: lease, err: acquireErr}
 	}()
@@ -717,7 +719,7 @@ func TestManagerAcquireDoesNotHoldTheAccountAuthorityLockDuringSecretInspection(
 
 	lookupDone := make(chan bool, 1)
 	go func() {
-		_, exists := manager.LookupAccount(view.Account.ID.String())
+		_, exists := manager.LookupAccount(view.Account.ID.String(), upstreamendpoint.AnthropicOfficialID.String())
 		lookupDone <- exists
 	}()
 	select {
@@ -780,8 +782,9 @@ func TestManagerLeasePinsCredentialEpochAcrossSecretRotation(t *testing.T) {
 		id:                       view.Account.ID,
 		accountRevision:          view.Account.Revision,
 		realmID:                  view.Account.RealmID,
-		upstreamEndpointID:       view.Account.UpstreamEndpointID.String(),
+		upstreamEndpointID:       view.Account.Associations.IDs()[0].String(),
 		upstreamEndpointRevision: 1,
+		upstreamEndpointOrigin:   view.Account.Origin,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -858,8 +861,9 @@ func TestManagerAcquireUsesObservedCredentialEpochWithoutAnotherInspection(t *te
 		id:                       view.Account.ID,
 		accountRevision:          view.Account.Revision,
 		realmID:                  view.Account.RealmID,
-		upstreamEndpointID:       view.Account.UpstreamEndpointID.String(),
+		upstreamEndpointID:       view.Account.Associations.IDs()[0].String(),
 		upstreamEndpointRevision: 1,
+		upstreamEndpointOrigin:   view.Account.Origin,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -917,8 +921,9 @@ func TestManagerAcquireInspectsCredentialOnlyOnceAfterRecovery(t *testing.T) {
 		id:                       view.Account.ID,
 		accountRevision:          view.Account.Revision,
 		realmID:                  view.Account.RealmID,
-		upstreamEndpointID:       view.Account.UpstreamEndpointID.String(),
+		upstreamEndpointID:       view.Account.Associations.IDs()[0].String(),
 		upstreamEndpointRevision: 1,
+		upstreamEndpointOrigin:   view.Account.Origin,
 	}
 	before := secrets.inspectCount()
 	first, err := recovered.acquire(t.Context(), scope)
@@ -999,8 +1004,9 @@ func TestManagerShutdownDrainsAdmittedCredentialInspection(t *testing.T) {
 			id:                       view.Account.ID,
 			accountRevision:          view.Account.Revision,
 			realmID:                  view.Account.RealmID,
-			upstreamEndpointID:       view.Account.UpstreamEndpointID.String(),
+			upstreamEndpointID:       view.Account.Associations.IDs()[0].String(),
 			upstreamEndpointRevision: 1,
+			upstreamEndpointOrigin:   view.Account.Origin,
 		})
 		acquireDone <- acquireResult{lease: lease, err: acquireErr}
 	}()
@@ -1044,6 +1050,10 @@ type deletionGuard struct {
 	callbacks  int
 }
 
+func (guard *deletionGuard) GuardAccountAssociationRemoval(ctx context.Context, id string, _ string, update func() error) ([]environment.AccountReference, error) {
+	return guard.GuardAccountDeletion(ctx, id, update)
+}
+
 func (guard *deletionGuard) GuardAccountDeletion(
 	_ context.Context,
 	_ string,
@@ -1061,6 +1071,17 @@ type fixedClock struct{ now time.Time }
 func (clock fixedClock) Now() time.Time { return clock.now }
 
 type endpointCatalog map[upstreamendpoint.ID]upstreamendpoint.Endpoint
+
+func (catalog endpointCatalog) GuardAccountLink(ctx context.Context, id upstreamendpoint.ID, link func(upstreamendpoint.Endpoint) error) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	endpoint, exists := catalog.LookupEndpoint(id.String())
+	if !exists || endpoint.State != upstreamendpoint.StateActive {
+		return upstreamendpoint.ErrEndpointNotFound
+	}
+	return link(endpoint)
+}
 
 func (catalog endpointCatalog) LookupEndpoint(rawID string) (upstreamendpoint.Endpoint, bool) {
 	id, err := upstreamendpoint.NewID(rawID)
@@ -1124,6 +1145,28 @@ func (repository *memoryRepository) LoadAll(context.Context) ([]Account, error) 
 		result = append(result, account)
 	}
 	return result, nil
+}
+
+func (repository *memoryRepository) WriteAssociations(_ context.Context, expected uint64, candidate Account) (CommitResult, error) {
+	repository.mu.Lock()
+	defer repository.mu.Unlock()
+	current, exists := repository.accounts[candidate.ID]
+	if !exists || current.AssociationRevision != expected || current.Revision != candidate.Revision {
+		return CommitResult{Outcome: CommitConflict, Account: current, Actual: current.AssociationRevision}, nil
+	}
+	repository.accounts[candidate.ID] = candidate
+	return CommitResult{Outcome: CommitCommitted, Account: candidate, Actual: candidate.AssociationRevision}, nil
+}
+
+func (repository *memoryRepository) WriteNote(_ context.Context, expected uint64, candidate Account) (CommitResult, error) {
+	repository.mu.Lock()
+	defer repository.mu.Unlock()
+	current, exists := repository.accounts[candidate.ID]
+	if !exists || current.NoteRevision != expected || current.Revision != candidate.Revision || current.AssociationRevision != candidate.AssociationRevision {
+		return CommitResult{Outcome: CommitConflict, Account: current, Actual: current.NoteRevision}, nil
+	}
+	repository.accounts[candidate.ID] = candidate
+	return CommitResult{Outcome: CommitCommitted, Account: candidate, Actual: candidate.NoteRevision}, nil
 }
 
 func (repository *memoryRepository) Load(_ context.Context, id ID) (Account, bool, error) {

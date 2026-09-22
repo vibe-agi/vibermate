@@ -28,6 +28,7 @@ type EgressPurpose string
 const (
 	PurposeProviderAttempt        EgressPurpose = "provider_attempt"
 	PurposeUpstreamModelDiscovery EgressPurpose = "upstream_model_discovery"
+	PurposeUpstreamAccountRead    EgressPurpose = "upstream_account_read"
 	PurposeModelMetadataDirectory EgressPurpose = "model_metadata_directory"
 	PurposeCredentialRefresh      EgressPurpose = "credential_refresh"
 	PurposeRouteOperation         EgressPurpose = "route_operation"
@@ -48,6 +49,7 @@ func Purposes() []EgressPurpose {
 	return []EgressPurpose{
 		PurposeProviderAttempt,
 		PurposeUpstreamModelDiscovery,
+		PurposeUpstreamAccountRead,
 		PurposeModelMetadataDirectory,
 		PurposeCredentialRefresh,
 		PurposeRouteOperation,
@@ -82,7 +84,7 @@ func AuthorityForPurpose(
 		return AuthorityEnvironment, nil
 	case PurposeOriginalOrigin, PurposeAgentProbe, PurposeBlindTunnel:
 		return AuthorityNetwork, nil
-	case PurposeUpstreamModelDiscovery, PurposeModelMetadataDirectory,
+	case PurposeUpstreamModelDiscovery, PurposeUpstreamAccountRead, PurposeModelMetadataDirectory,
 		PurposeCredentialRefresh,
 		PurposeAuxiliaryLLM, PurposeLanguageTransform,
 		PurposePluginCatalogSync, PurposePluginArtifactFetch, PurposeUpdate:
@@ -368,7 +370,7 @@ func validatePayloadClass(
 				class,
 			)
 		}
-	case PurposeUpstreamModelDiscovery, PurposeModelMetadataDirectory,
+	case PurposeUpstreamModelDiscovery, PurposeUpstreamAccountRead, PurposeModelMetadataDirectory,
 		PurposeCredentialRefresh,
 		PurposeAuxiliaryLLM, PurposeLanguageTransform,
 		PurposePluginCatalogSync, PurposePluginArtifactFetch, PurposeUpdate:
@@ -449,7 +451,7 @@ func validateParent(
 			)
 		}
 		return requireConnection()
-	case PurposeUpstreamModelDiscovery, PurposeModelMetadataDirectory,
+	case PurposeUpstreamModelDiscovery, PurposeUpstreamAccountRead, PurposeModelMetadataDirectory,
 		PurposeCredentialRefresh,
 		PurposeAuxiliaryLLM, PurposeLanguageTransform,
 		PurposePluginCatalogSync, PurposePluginArtifactFetch, PurposeUpdate:

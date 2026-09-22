@@ -115,9 +115,12 @@ const (
 type ClientOperationKind string
 
 const (
-	ClientOperationSemantic    ClientOperationKind = "semantic"
-	ClientOperationAuxiliary   ClientOperationKind = "auxiliary"
-	ClientOperationOpaque      ClientOperationKind = "opaque"
+	ClientOperationSemantic  ClientOperationKind = "semantic"
+	ClientOperationAuxiliary ClientOperationKind = "auxiliary"
+	ClientOperationOpaque    ClientOperationKind = "opaque"
+	// AccountRead is an explicit, bodyless service-account query. Unlike an
+	// opaque probe it follows the frozen Route's managed authentication.
+	ClientOperationAccountRead ClientOperationKind = "account_read"
 	ClientOperationUnsupported ClientOperationKind = "unsupported"
 )
 
@@ -314,6 +317,14 @@ func (definition ClientOperationDefinition) Validate() error {
 		if definition.pathMatch != ClientOperationPathExact {
 			return ErrInvalidSpecification
 		}
+	case ClientOperationAccountRead:
+		if definition.pathMatch != ClientOperationPathExact ||
+			len(definition.methods) != 1 || definition.methods[0] != "GET" ||
+			definition.bodyKind != ClientOperationBodyNone ||
+			definition.replayClass != ClientReplaySafe || !definition.egressBearing ||
+			definition.payloadClass != OperationPayloadControl {
+			return ErrInvalidSpecification
+		}
 	case ClientOperationAuxiliary, ClientOperationOpaque, ClientOperationUnsupported:
 	default:
 		return ErrInvalidSpecification
@@ -358,7 +369,7 @@ func (definition ClientOperationDefinition) Validate() error {
 		if definition.codecFeature == "" || definition.kind == ClientOperationSemantic && !definition.egressBearing {
 			return ErrInvalidSpecification
 		}
-	case ClientOperationOpaque, ClientOperationUnsupported:
+	case ClientOperationOpaque, ClientOperationUnsupported, ClientOperationAccountRead:
 		if definition.codecFeature != "" {
 			return ErrInvalidSpecification
 		}

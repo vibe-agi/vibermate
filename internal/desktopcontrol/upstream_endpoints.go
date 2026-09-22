@@ -251,6 +251,9 @@ func upstreamEndpointCreateCommand(
 		}
 	}
 	drivers := []providerauth.DriverRef{providerauth.StaticHeaderDriverRef()}
+	if upstreamendpoint.IsChatGPTCodexOrigin(origin) && slices.Contains(protocols, openAIResponses) {
+		drivers = append(drivers, providerauth.CodexOAuthDriverRef())
+	}
 	if _, supportsAnthropic := seen[anthropicMessages]; supportsAnthropic {
 		drivers = append([]providerauth.DriverRef{providerauth.AnthropicAPIKeyDriverRef()}, drivers...)
 	}

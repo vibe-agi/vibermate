@@ -7,11 +7,21 @@ import (
 	"testing"
 	"time"
 
+	"github.com/vibe-agi/vibermate/internal/originidentity"
 	"github.com/vibe-agi/vibermate/internal/provideraccount"
 	"github.com/vibe-agi/vibermate/internal/providerauth"
 	"github.com/vibe-agi/vibermate/internal/secretstore"
 	"github.com/vibe-agi/vibermate/internal/upstreamendpoint"
 )
+
+func providerTestOrigin(t *testing.T) originidentity.ProviderOrigin {
+	t.Helper()
+	origin, err := originidentity.ParseProviderOrigin("https://api.anthropic.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return origin
+}
 
 func TestProviderAccountRepositoryCASAndReopenWithoutSecretBytes(t *testing.T) {
 	t.Parallel()
@@ -25,7 +35,7 @@ func TestProviderAccountRepositoryCASAndReopenWithoutSecretBytes(t *testing.T) {
 	now := time.Unix(1_786_200_000, 0).UTC()
 	account := provideraccount.Account{
 		ID: "anthropic-work", DisplayName: "Anthropic Work",
-		UpstreamEndpointID: upstreamendpoint.AnthropicOfficialID, RealmID: "anthropic.official",
+		Origin: providerTestOrigin(t), AssociationRevision: 1, RealmID: "anthropic.official",
 		Driver: providerauth.AnthropicAPIKeyDriverRef(), SecretRef: reference,
 		State: provideraccount.StateActive, Revision: 1,
 		CreatedAt: now, UpdatedAt: now,
@@ -68,7 +78,7 @@ func TestProviderAccountRepositoryDeleteCASPersistsAcrossReopen(t *testing.T) {
 	now := time.Unix(1_786_200_000, 0).UTC()
 	account := provideraccount.Account{
 		ID: "unused", DisplayName: "Unused",
-		UpstreamEndpointID: upstreamendpoint.AnthropicOfficialID, RealmID: "anthropic.official",
+		Origin: providerTestOrigin(t), AssociationRevision: 1, RealmID: "anthropic.official",
 		Driver: providerauth.AnthropicAPIKeyDriverRef(), SecretRef: reference,
 		State: provideraccount.StateActive, Revision: 1, CreatedAt: now, UpdatedAt: now,
 	}

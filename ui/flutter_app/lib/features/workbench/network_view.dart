@@ -32,7 +32,8 @@ final class _NetworkViewState extends State<NetworkView> {
       children: [
         PageHeading(
           title: copy('network.title'),
-          subtitle: copy('network.subtitle'),
+          help: copy('network.subtitle'),
+          dismissHelpLabel: copy('common.dismiss'),
         ),
         const Divider(height: 1),
         _NetworkTabs(
@@ -1152,13 +1153,10 @@ final class _EgressPaneState extends State<_EgressPane> {
             SectionLabel(
               label: copy('network.egress.title'),
               count: query.isEmpty ? page.items.length : visible.length,
-              trailing: Tooltip(
+              trailing: ContextHelpButton(
+                title: copy('network.egress.title'),
                 message: copy('network.egress.detail'),
-                child: Icon(
-                  Icons.info_outline,
-                  size: 14,
-                  color: context.viberColors.textFaint,
-                ),
+                dismissLabel: copy('common.dismiss'),
               ),
             ),
             _EvidenceFilterField(

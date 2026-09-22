@@ -29,13 +29,15 @@ var (
 )
 
 type Profile struct {
-	AccountID   string
-	Email       string
-	UserID      string
-	PlanType    string
-	FedRAMP     bool
-	ExpiresAt   time.Time
-	LastRefresh time.Time
+	AccountID       string
+	Email           string
+	UserID          string
+	PlanType        string
+	FedRAMP         bool
+	IssuedAt        time.Time
+	AuthenticatedAt time.Time
+	ExpiresAt       time.Time
+	LastRefresh     time.Time
 }
 
 type Credential struct {
@@ -70,9 +72,11 @@ type credentialWire struct {
 }
 
 type jwtClaims struct {
-	ExpiresAt int64  `json:"exp"`
-	Email     string `json:"email"`
-	Profile   struct {
+	IssuedAt        int64  `json:"iat"`
+	AuthenticatedAt int64  `json:"auth_time"`
+	ExpiresAt       int64  `json:"exp"`
+	Email           string `json:"email"`
+	Profile         struct {
 		Email string `json:"email"`
 	} `json:"https://api.openai.com/profile"`
 	Auth struct {
@@ -196,28 +200,54 @@ func (credential *Credential) Profile() Profile {
 	if credential == nil {
 		return Profile{}
 	}
-	profile := Profile{AccountID: credential.accountID, LastRefresh: credential.lastRefresh}
-	accessClaims, accessOK := parseJWTClaims(credential.accessToken)
+	profile := accessTokenProfile(credential.accessToken)
+	profile.AccountID = credential.accountID
+	profile.LastRefresh = credential.lastRefresh
 	idClaims, idOK := parseJWTClaims(credential.idToken)
-	if idOK || accessOK {
+	if idOK {
 		profile.Email = firstSafeClaim(
 			idClaims.Email, idClaims.Profile.Email,
-			accessClaims.Email, accessClaims.Profile.Email,
+			profile.Email,
 		)
 		profile.UserID = firstSafeClaim(
 			idClaims.Auth.UserID, idClaims.Auth.LegacyUser,
-			accessClaims.Auth.UserID, accessClaims.Auth.LegacyUser,
+			profile.UserID,
 		)
-		profile.PlanType = firstSafeClaim(idClaims.Auth.PlanType, accessClaims.Auth.PlanType)
-		profile.FedRAMP = idClaims.Auth.FedRAMP || accessClaims.Auth.FedRAMP
-	}
-	if accessOK && accessClaims.ExpiresAt > 0 {
-		expiresAt := time.Unix(accessClaims.ExpiresAt, 0).UTC()
-		if year := expiresAt.Year(); year >= 1970 && year <= 9999 {
-			profile.ExpiresAt = expiresAt
+		profile.PlanType = firstSafeClaim(idClaims.Auth.PlanType, profile.PlanType)
+		profile.FedRAMP = idClaims.Auth.FedRAMP || profile.FedRAMP
+		if authenticatedAt := claimTime(idClaims.AuthenticatedAt); !authenticatedAt.IsZero() {
+			profile.AuthenticatedAt = authenticatedAt
 		}
 	}
 	return profile
+}
+
+// accessTokenProfile projects only allowlisted, unverified JWT claims. It never
+// turns opaque tokens or malformed metadata into an authentication failure.
+func accessTokenProfile(token []byte) Profile {
+	claims, ok := parseJWTClaims(token)
+	if !ok {
+		return Profile{}
+	}
+	return Profile{
+		AccountID:       firstSafeClaim(claims.Auth.AccountID),
+		Email:           firstSafeClaim(claims.Email, claims.Profile.Email),
+		UserID:          firstSafeClaim(claims.Auth.UserID, claims.Auth.LegacyUser),
+		PlanType:        firstSafeClaim(claims.Auth.PlanType),
+		FedRAMP:         claims.Auth.FedRAMP,
+		IssuedAt:        claimTime(claims.IssuedAt),
+		AuthenticatedAt: claimTime(claims.AuthenticatedAt),
+		ExpiresAt:       claimTime(claims.ExpiresAt),
+	}
+}
+
+func claimTime(seconds int64) time.Time {
+	// Keep display timestamps within RFC 3339's range. Missing/invalid auth_time
+	// stays absent: iat is a token's issue time, not the user's sign-in time.
+	if seconds <= 0 || seconds > 253402300799 {
+		return time.Time{}
+	}
+	return time.Unix(seconds, 0).UTC()
 }
 
 type Authorization struct {
@@ -284,6 +314,9 @@ func (credential *Credential) Destroy() {
 }
 
 func parseJWTClaims(token []byte) (jwtClaims, bool) {
+	if len(token) == 0 || len(token) > maxTokenBytes {
+		return jwtClaims{}, false
+	}
 	parts := bytes.Split(token, []byte("."))
 	if len(parts) != 3 || len(parts[0]) == 0 || len(parts[1]) == 0 || len(parts[2]) == 0 {
 		return jwtClaims{}, false

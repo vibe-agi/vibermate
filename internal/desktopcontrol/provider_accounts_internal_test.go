@@ -6,13 +6,17 @@ import (
 	"time"
 
 	"github.com/vibe-agi/vibermate/internal/codexoauth"
+	"github.com/vibe-agi/vibermate/internal/originidentity"
 	"github.com/vibe-agi/vibermate/internal/provideraccount"
 	"github.com/vibe-agi/vibermate/internal/providerauth"
 	"github.com/vibe-agi/vibermate/internal/secretstore"
-	"github.com/vibe-agi/vibermate/internal/upstreamendpoint"
 )
 
 type rejectingCodexOAuthInspector struct{}
+
+func (rejectingCodexOAuthInspector) InspectAccessToken(context.Context, secretstore.Reference, secretstore.Revision) (codexoauth.Profile, error) {
+	panic("unavailable credentials must not be inspected")
+}
 
 func (rejectingCodexOAuthInspector) Inspect(
 	context.Context,
@@ -29,13 +33,17 @@ func TestUnavailableCodexOAuthAccountRemainsListable(t *testing.T) {
 		t.Fatal(err)
 	}
 	now := time.Date(2026, 9, 21, 10, 0, 0, 0, time.UTC)
+	origin, err := originidentity.ParseProviderOrigin("https://chatgpt.com")
+	if err != nil {
+		t.Fatal(err)
+	}
 	handler := &Handler{codexOAuth: rejectingCodexOAuthInspector{}}
 	response, err := handler.providerAccountResponse(context.Background(), provideraccount.View{
 		Account: provideraccount.Account{
 			ID: "codex-unavailable", DisplayName: "Codex unavailable",
-			UpstreamEndpointID: upstreamendpoint.ChatGPTOfficialID,
-			RealmID:            "openai.chatgpt",
-			Driver:             providerauth.CodexOAuthDriverRef(), SecretRef: reference,
+			Origin: origin, AssociationRevision: 1,
+			RealmID: "openai.chatgpt",
+			Driver:  providerauth.CodexOAuthDriverRef(), SecretRef: reference,
 			State: provideraccount.StateActive, Revision: 1,
 			CreatedAt: now, UpdatedAt: now,
 		},

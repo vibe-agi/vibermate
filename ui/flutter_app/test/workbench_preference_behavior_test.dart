@@ -159,7 +159,17 @@ void main() {
       );
       await _pumpUntil(tester, find.text('设置'));
 
+      expect(find.text('管理这套 Runtime 的偏好、接入、安全与网络行为'), findsNothing);
+      await tester.tap(find.byTooltip('设置'));
+      await tester.pumpAndSettle();
       expect(find.text('管理这套 Runtime 的偏好、接入、安全与网络行为'), findsOneWidget);
+      await tester.tap(
+        find.descendant(
+          of: find.byType(AlertDialog),
+          matching: find.byType(TextButton),
+        ),
+      );
+      await tester.pumpAndSettle();
       expect(find.text('工作台偏好'), findsOneWidget);
       expect(find.byKey(const Key('settings-tab-safety')), findsOneWidget);
       expect(find.text('自动'), findsOneWidget);

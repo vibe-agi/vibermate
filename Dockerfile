@@ -8,7 +8,7 @@ ARG VIBERMATE_SOURCE_REVISION=unknown
 RUN apk add --no-cache ca-certificates curl
 
 LABEL org.opencontainers.image.title="ViberMate Runtime Server" \
-      org.opencontainers.image.version="0.1.11" \
+      org.opencontainers.image.version="0.1.12" \
       org.opencontainers.image.source="https://github.com/vibe-agi/vibermate" \
       org.opencontainers.image.revision="${VIBERMATE_SOURCE_REVISION}" \
       org.opencontainers.image.licenses="Apache-2.0"
@@ -37,5 +37,5 @@ ENTRYPOINT ["/opt/vibermate/vibermated"]
 CMD ["server", "--listen", "0.0.0.0:9666", "--data-dir", "/data", "--web-root", "/opt/vibermate/vibermate-web", "--transport", "private_ca_tls"]
 
 FROM runtime AS local
-LABEL org.opencontainers.image.version="0.1.11-local" \
+LABEL org.opencontainers.image.version="0.1.12-local" \
       io.vibermate.source="working-tree"

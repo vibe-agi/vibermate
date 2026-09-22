@@ -67,6 +67,7 @@ type Inspector interface {
 		secretstore.Reference,
 		secretstore.Revision,
 	) (View, error)
+	InspectAccessToken(context.Context, secretstore.Reference, secretstore.Revision) (Profile, error)
 }
 
 type Manager struct {
@@ -130,11 +131,57 @@ func (manager *Manager) Inspect(
 	return View{Profile: credential.Profile(), State: state}, nil
 }
 
+// InspectAccessToken decodes display metadata for a manually managed ChatGPT
+// Bearer token at one exact credential epoch. It does not validate, refresh or
+// otherwise change the credential, and never returns the token itself.
+func (manager *Manager) InspectAccessToken(
+	ctx context.Context,
+	reference secretstore.Reference,
+	revision secretstore.Revision,
+) (Profile, error) {
+	if manager == nil || ctx == nil || reference.String() == "" || revision == 0 || revision > secretstore.MaxRevision {
+		return Profile{}, ErrInvalidCredential
+	}
+	material, err := manager.readMaterial(ctx, reference, revision)
+	if err != nil {
+		return Profile{}, err
+	}
+	defer material.Destroy()
+	if err := material.HeaderPolicy().ValidateForDriver(providerauth.StaticHeaderDriverRef()); err != nil {
+		return Profile{}, err
+	}
+	token := material.CredentialBytes()
+	defer clear(token)
+	return accessTokenProfile(token), nil
+}
+
 func (manager *Manager) Prepare(
 	ctx context.Context,
 	driver providerauth.DriverRef,
 	reference secretstore.Reference,
 	revision secretstore.Revision,
+) (secretstore.Revision, error) {
+	return manager.prepare(ctx, driver, reference, revision, false)
+}
+
+// Refresh forces a refresh of one credential epoch even if its access token is
+// still valid. It shares rotation/singleflight with automatic preparation, but
+// never reports a transient failure as a successful manual refresh.
+func (manager *Manager) Refresh(
+	ctx context.Context,
+	driver providerauth.DriverRef,
+	reference secretstore.Reference,
+	revision secretstore.Revision,
+) (secretstore.Revision, error) {
+	return manager.prepare(ctx, driver, reference, revision, true)
+}
+
+func (manager *Manager) prepare(
+	ctx context.Context,
+	driver providerauth.DriverRef,
+	reference secretstore.Reference,
+	revision secretstore.Revision,
+	force bool,
 ) (secretstore.Revision, error) {
 	if manager == nil || ctx == nil || driver != providerauth.CodexOAuthDriverRef() ||
 		reference.String() == "" || revision == 0 || revision > secretstore.MaxRevision {
@@ -152,8 +199,8 @@ func (manager *Manager) Prepare(
 		credential.Destroy()
 		return 0, ErrReconnectRequired
 	}
-	needsRefresh := credential.needsRefresh(now)
-	usableAfterTransientFailure := credential.accessUsableAt(now)
+	needsRefresh := force || credential.needsRefresh(now)
+	usableAfterTransientFailure := !force && credential.accessUsableAt(now)
 	credential.Destroy()
 	if !needsRefresh {
 		return revision, nil
@@ -166,7 +213,7 @@ func (manager *Manager) Prepare(
 	result := manager.refreshes.DoChan(key.flightKey(), func() (any, error) {
 		operation, cancel := context.WithTimeout(context.WithoutCancel(ctx), manager.refreshTimeout)
 		defer cancel()
-		rotated, refreshErr := manager.refresh(operation, reference, revision)
+		rotated, refreshErr := manager.refresh(operation, reference, revision, force)
 		if errors.Is(refreshErr, ErrReconnectRequired) {
 			manager.rememberPermanent(key, refreshErr)
 		}
@@ -194,6 +241,7 @@ func (manager *Manager) refresh(
 	ctx context.Context,
 	reference secretstore.Reference,
 	revision secretstore.Revision,
+	force bool,
 ) (secretstore.Revision, error) {
 	credential, policy, err := manager.readCredential(ctx, reference, revision)
 	if err != nil {
@@ -203,7 +251,7 @@ func (manager *Manager) refresh(
 		return 0, err
 	}
 	defer credential.Destroy()
-	if !credential.needsRefresh(manager.clock.Now().UTC()) {
+	if !force && !credential.needsRefresh(manager.clock.Now().UTC()) {
 		return revision, nil
 	}
 	rotated, err := manager.exchange(ctx, credential)
@@ -365,18 +413,7 @@ func (manager *Manager) readCredential(
 	reference secretstore.Reference,
 	revision secretstore.Revision,
 ) (*Credential, providerauth.HeaderPolicy, error) {
-	value, err := manager.secrets.ReadAtRevision(ctx, reference, revision)
-	value, err = secretstore.ValidateReaderResult(value, err)
-	if err != nil {
-		return nil, providerauth.HeaderPolicy{}, err
-	}
-	defer value.Destroy()
-	encoded, err := value.CopyBytes()
-	if err != nil {
-		return nil, providerauth.HeaderPolicy{}, err
-	}
-	defer clear(encoded)
-	material, err := providerauth.ParseMaterial(encoded)
+	material, err := manager.readMaterial(ctx, reference, revision)
 	if err != nil {
 		return nil, providerauth.HeaderPolicy{}, err
 	}
@@ -388,6 +425,25 @@ func (manager *Manager) readCredential(
 		return nil, providerauth.HeaderPolicy{}, err
 	}
 	return credential, material.HeaderPolicy(), nil
+}
+
+func (manager *Manager) readMaterial(
+	ctx context.Context,
+	reference secretstore.Reference,
+	revision secretstore.Revision,
+) (providerauth.Material, error) {
+	value, err := manager.secrets.ReadAtRevision(ctx, reference, revision)
+	value, err = secretstore.ValidateReaderResult(value, err)
+	if err != nil {
+		return providerauth.Material{}, err
+	}
+	defer value.Destroy()
+	encoded, err := value.CopyBytes()
+	if err != nil {
+		return providerauth.Material{}, err
+	}
+	defer clear(encoded)
+	return providerauth.ParseMaterial(encoded)
 }
 
 func (manager *Manager) currentPreparedRevision(

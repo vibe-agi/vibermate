@@ -4,7 +4,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:vibermate_app/core/api/control_models.dart';
 import 'package:vibermate_app/core/design/viber_theme.dart';
 import 'package:vibermate_app/core/i18n/app_copy.dart';
-import 'package:vibermate_app/features/workbench/endpoints_view.dart';
+import 'package:vibermate_app/features/workbench/provider_accounts_view.dart';
 import 'package:vibermate_app/features/workbench/workbench_controller.dart';
 import 'package:vibermate_app/preview/preview_control_api.dart';
 import 'package:vibermate_app/preview/preview_terminal_command.dart';
@@ -49,16 +49,30 @@ void main() {
           MaterialApp(
             theme: ViberTheme.dark(),
             home: Scaffold(
-              body: EndpointsView(controller: controller, copy: copy),
+              body: ProviderAccountsView(controller: controller, copy: copy),
             ),
           ),
         );
         await tester.pumpAndSettle();
-        for (final action in ['accounts-add', 'account-update-account.test']) {
+        await tester.enterText(
+          find.byKey(const Key('provider-accounts-search')),
+          'Test account',
+        );
+        await tester.pumpAndSettle();
+        for (final action in [
+          'provider-accounts-add',
+          'account-update-account.test',
+        ]) {
           final button = find.byKey(Key(action));
           await tester.ensureVisible(button);
+          await tester.pumpAndSettle();
           await tester.tap(button);
           await tester.pumpAndSettle();
+          if (isChatGPT && action == 'provider-accounts-add') {
+            expect(find.byKey(const Key('codex-oauth-start')), findsOneWidget);
+            await tester.tap(find.byKey(const Key('account-entry-manual')));
+            await tester.pumpAndSettle();
+          }
           expect(
             find.byKey(const Key('account-editor-chatgpt-hint')),
             isChatGPT ? findsOneWidget : findsNothing,
@@ -117,14 +131,21 @@ void main() {
       MaterialApp(
         theme: ViberTheme.dark(),
         home: Scaffold(
-          body: EndpointsView(controller: controller, copy: copy),
+          body: ProviderAccountsView(controller: controller, copy: copy),
         ),
       ),
     );
     await tester.pumpAndSettle();
 
-    await tester.tap(find.byKey(const Key('accounts-add')));
+    await tester.tap(find.byKey(const Key('provider-accounts-add')));
     await tester.pumpAndSettle();
+    expect(find.byKey(const Key('codex-oauth-start')), findsOneWidget);
+    await tester.tap(find.byKey(const Key('account-entry-import')));
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const Key('account-editor-load-auth-json')),
+      findsOneWidget,
+    );
     expect(
       find.byKey(const Key('account-editor-codex-auth-json')),
       findsOneWidget,

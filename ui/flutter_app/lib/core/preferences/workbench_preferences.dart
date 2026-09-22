@@ -7,6 +7,7 @@ enum WorkbenchSection {
   captures('captures'),
   environments('environments'),
   routes('routes'),
+  providerAccounts('provider_accounts'),
   network('network'),
   codeLibrary('code_library'),
   settings('settings');

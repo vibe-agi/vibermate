@@ -222,7 +222,9 @@ void main() {
             jsonEncode({
               'id': 'account.headers',
               'displayName': 'Header Account',
-              'upstreamEndpointId': 'target.headers',
+              'credentialOrigin': 'https://api.anthropic.com',
+              'linkedEndpointIds': ['target.headers'],
+              'associationRevision': 1,
               'kind': 'bearer_token',
               'realmId': 'target.headers',
               'state': 'active',
@@ -309,7 +311,9 @@ void main() {
             jsonEncode({
               'id': 'account.codex',
               'displayName': 'Codex Work',
-              'upstreamEndpointId': 'target.codex.official',
+              'credentialOrigin': 'https://chatgpt.com',
+              'linkedEndpointIds': ['target.codex.official'],
+              'associationRevision': 1,
               'kind': 'codex_oauth',
               'realmId': 'openai.chatgpt',
               'state': 'active',

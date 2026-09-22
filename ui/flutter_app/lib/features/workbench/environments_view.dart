@@ -47,7 +47,8 @@ final class _EnvironmentsViewState extends State<EnvironmentsView> {
       children: [
         PageHeading(
           title: copy('environment.title'),
-          subtitle: copy('environment.subtitle'),
+          help: copy('environment.subtitle'),
+          dismissHelpLabel: copy('common.dismiss'),
           trailing: FilledButton.icon(
             key: const Key('environment-create'),
             onPressed: controller.environmentMutating
@@ -777,7 +778,7 @@ final class _RouteAuthorityRow extends StatelessWidget {
         .whereType<ProviderAccount>()
         .toList(growable: false);
     final invalid = candidates
-        .where((account) => account.upstreamEndpointId != route.endpointId)
+        .where((account) => !account.isLinkedTo(route.endpointId))
         .toList();
     return LayoutBuilder(
       builder: (context, constraints) {
@@ -844,7 +845,7 @@ final class _RouteAuthorityRow extends StatelessWidget {
             for (final account in candidates)
               StatusPill(
                 label: account.displayName,
-                color: account.upstreamEndpointId == route.endpointId
+                color: account.isLinkedTo(route.endpointId)
                     ? context.viberColors.verified
                     : context.viberColors.danger,
                 icon: Icons.key_outlined,
@@ -1307,6 +1308,22 @@ final class _NewEnvironmentDialogState extends State<_NewEnvironmentDialog> {
                                                         const [],
                                                   );
                                             }),
+                                        onHistoryChanged:
+                                            (
+                                              plan,
+                                              route,
+                                              allowed,
+                                            ) => setState(() {
+                                              _clientEndpoints =
+                                                  assignEnvironmentRouteAccountHistory(
+                                                    endpoints: _clientEndpoints,
+                                                    clientEndpointId:
+                                                        endpoint.id,
+                                                    protocolPlanId: plan.id,
+                                                    routeId: route.id,
+                                                    allowed: allowed,
+                                                  );
+                                            }),
                                         onModelChanged:
                                             (
                                               plan,
@@ -1672,11 +1689,6 @@ final class _EnvironmentEditorDialogState
                           mainAxisSize: MainAxisSize.min,
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Text(
-                              copy('environment.edit.scope'),
-                              style: Theme.of(context).textTheme.bodySmall,
-                            ),
-                            const SizedBox(height: 9),
                             _EditorSectionLabel(
                               label: copy('environment.edit.identity'),
                             ),
@@ -2022,6 +2034,22 @@ final class _EnvironmentEditorDialogState
                                                             .data
                                                             ?.accounts ??
                                                         const [],
+                                                  );
+                                            }),
+                                        onHistoryChanged:
+                                            (
+                                              plan,
+                                              route,
+                                              allowed,
+                                            ) => setState(() {
+                                              _clientEndpoints =
+                                                  assignEnvironmentRouteAccountHistory(
+                                                    endpoints: _clientEndpoints,
+                                                    clientEndpointId:
+                                                        endpoint.id,
+                                                    protocolPlanId: plan.id,
+                                                    routeId: route.id,
+                                                    allowed: allowed,
                                                   );
                                             }),
                                         onModelChanged:
@@ -2483,8 +2511,7 @@ final class _EnvironmentEndpointAdderState
         ? const <ProviderAccount>[]
         : widget.accounts
               .where(
-                (account) =>
-                    account.upstreamEndpointId == selected.id && account.usable,
+                (account) => account.isLinkedTo(selected.id) && account.usable,
               )
               .toList(growable: false);
     final canAdd =
@@ -2674,7 +2701,7 @@ final class _EnvironmentEndpointAdderState
                             );
                             final accounts = widget.accounts.where(
                               (account) =>
-                                  account.upstreamEndpointId == endpoint.id &&
+                                  account.isLinkedTo(endpoint.id) &&
                                   account.usable,
                             );
                             setState(() {
@@ -3011,6 +3038,7 @@ final class _EnvironmentEndpointEditor extends StatelessWidget {
     required this.onTransformChanged,
     required this.onAccountChanged,
     required this.onModelChanged,
+    required this.onHistoryChanged,
   });
 
   final WorkbenchController controller;
@@ -3025,6 +3053,8 @@ final class _EnvironmentEndpointEditor extends StatelessWidget {
   final _ProtocolTransformChanged onTransformChanged;
   final _RouteAccountChanged onAccountChanged;
   final _RouteModelChanged onModelChanged;
+  final void Function(EnvironmentProtocolPlan, EnvironmentRoute, bool)
+  onHistoryChanged;
 
   @override
   Widget build(BuildContext context) {
@@ -3129,6 +3159,8 @@ final class _EnvironmentEndpointEditor extends StatelessWidget {
                             onAccountChanged(plan, route, account),
                         onModelChanged: (mappings) =>
                             onModelChanged(plan, route, mappings),
+                        onHistoryChanged: (allowed) =>
+                            onHistoryChanged(plan, route, allowed),
                       ),
                 ],
               ),
@@ -3187,6 +3219,7 @@ final class _RouteAccountEditor extends StatelessWidget {
     required this.enabled,
     required this.onChanged,
     required this.onModelChanged,
+    required this.onHistoryChanged,
   });
 
   final WorkbenchController controller;
@@ -3198,12 +3231,13 @@ final class _RouteAccountEditor extends StatelessWidget {
   final bool enabled;
   final ValueChanged<RouteAccountPolicy> onChanged;
   final ValueChanged<List<EnvironmentModelMapping>> onModelChanged;
+  final ValueChanged<bool> onHistoryChanged;
 
   @override
   Widget build(BuildContext context) {
     final owned =
         accounts
-            .where((account) => account.upstreamEndpointId == route.endpointId)
+            .where((account) => account.isLinkedTo(route.endpointId))
             .toList(growable: false)
           ..sort(
             (left, right) => left.displayName.compareTo(right.displayName),
@@ -3386,26 +3420,56 @@ final class _RouteAccountEditor extends StatelessWidget {
               ),
             ),
           );
-          if (compact) {
-            return Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                authority,
-                const SizedBox(height: 7),
-                accountControl,
-                const SizedBox(height: 7),
-                modelSelector,
-              ],
-            );
-          }
-          return Row(
+          final controls = compact
+              ? Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    authority,
+                    const SizedBox(height: 7),
+                    accountControl,
+                    const SizedBox(height: 7),
+                    modelSelector,
+                  ],
+                )
+              : Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(flex: 4, child: authority),
+                    const SizedBox(width: 10),
+                    Expanded(flex: 4, child: accountControl),
+                    const SizedBox(width: 10),
+                    Expanded(flex: 4, child: modelSelector),
+                  ],
+                );
+          return Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Expanded(flex: 4, child: authority),
-              const SizedBox(width: 10),
-              Expanded(flex: 4, child: accountControl),
-              const SizedBox(width: 10),
-              Expanded(flex: 4, child: modelSelector),
+              controls,
+              if (isChatGPTCodexOrigin(route.endpointOrigin)) ...[
+                const SizedBox(height: 12),
+                Text(
+                  copy('environment.account_history.scope'),
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+                if (route.accountPolicy.mode == 'fixed')
+                  CheckboxListTile(
+                    key: Key('environment-route-account-history-${route.id}'),
+                    contentPadding: EdgeInsets.zero,
+                    controlAffinity: ListTileControlAffinity.leading,
+                    dense: true,
+                    title: Text(copy('environment.account_history.allow')),
+                    subtitle: Text(copy('environment.account_history.detail')),
+                    value: route.allowAccountHistory,
+                    onChanged: enabled
+                        ? (value) => onHistoryChanged(value ?? false)
+                        : null,
+                  )
+                else
+                  Text(
+                    copy('environment.account_history.ambiguous'),
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+              ],
             ],
           );
         },

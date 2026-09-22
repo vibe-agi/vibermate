@@ -51,10 +51,27 @@ type ConnectionBinding struct {
 }
 
 func (compiler Compiler) Compile(input Environment) (EnvironmentSnapshot, error) {
-	return compiler.compile(input, false)
+	return compiler.compile(input, compileCandidate)
 }
 
-func (compiler Compiler) compile(input Environment, system bool) (EnvironmentSnapshot, error) {
+// Restore rebuilds a published revision read from the Repository, not an
+// untrusted draft. Catalog edits cannot rewrite or invalidate frozen evidence.
+// Structural and executable-plan validation still run; credential availability
+// and the current account grant are checked when an attempt acquires its lease.
+func (compiler Compiler) Restore(input Environment) (EnvironmentSnapshot, error) {
+	return compiler.compile(input, compilePublished)
+}
+
+type compilationKind uint8
+
+const (
+	compileCandidate compilationKind = iota
+	compilePublished
+	compileSystem
+)
+
+func (compiler Compiler) compile(input Environment, kind compilationKind) (EnvironmentSnapshot, error) {
+	system := kind == compileSystem
 	var normalized Environment
 	var err error
 	if system {
@@ -65,8 +82,10 @@ func (compiler Compiler) compile(input Environment, system bool) (EnvironmentSna
 	if err != nil {
 		return EnvironmentSnapshot{}, err
 	}
-	if err := validateAccounts(normalized, compiler.accounts); err != nil {
-		return EnvironmentSnapshot{}, err
+	if kind == compileCandidate {
+		if err := compiler.validateReferences(normalized); err != nil {
+			return EnvironmentSnapshot{}, err
+		}
 	}
 	compiled, compiledOrigins, err := compileExecution(compiler, normalized)
 	if err != nil {
@@ -103,7 +122,7 @@ func (compiler Compiler) CompileSystemTransparent() (EnvironmentSnapshot, error)
 	if err != nil {
 		return EnvironmentSnapshot{}, err
 	}
-	return compiler.compile(definition, true)
+	return compiler.compile(definition, compileSystem)
 }
 
 func systemTransparentDefinition() (Environment, error) {

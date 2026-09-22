@@ -1916,6 +1916,9 @@ selection.accountId = request.requestedModel === "claude-client-alias"
 	if len(providerRequests) != 1 {
 		t.Fatalf("provider attempts = %d", len(providerRequests))
 	}
+	if leaseRequests[0].UpstreamEndpointOrigin() != providerRequests[0].Target().Origin() {
+		t.Fatal("account lease was not bound to the frozen provider destination")
+	}
 	for _, request := range providerRequests {
 		if request.Provenance().RouteID().String() != "route.primary" ||
 			request.Provenance().RouteRevision() != 6 {
@@ -2285,7 +2288,7 @@ type testAccount struct {
 
 type testAccountCatalog map[string]environment.AccountDescriptor
 
-func (catalog testAccountCatalog) LookupAccount(id string) (environment.AccountDescriptor, bool) {
+func (catalog testAccountCatalog) LookupAccount(id string, _ string) (environment.AccountDescriptor, bool) {
 	account, ok := catalog[id]
 	return account, ok
 }

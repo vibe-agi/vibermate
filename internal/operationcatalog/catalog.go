@@ -9,6 +9,7 @@ import (
 	"slices"
 
 	"github.com/vibe-agi/vibermate/internal/protocolspec"
+	"github.com/vibe-agi/vibermate/internal/upstreamservice"
 )
 
 const (
@@ -329,6 +330,11 @@ func BuiltIn() (Catalog, error) {
 			unsupported.path,
 			unsupported.payloadClass,
 		); err != nil {
+			return Catalog{}, err
+		}
+	}
+	for _, options := range upstreamservice.AccountOperations() {
+		if err := add(options); err != nil {
 			return Catalog{}, err
 		}
 	}

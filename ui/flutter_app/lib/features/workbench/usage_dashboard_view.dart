@@ -55,7 +55,8 @@ final class _UsageDashboardViewState extends State<UsageDashboardView> {
       children: [
         PageHeading(
           title: copy('usage.title'),
-          subtitle: copy('usage.subtitle'),
+          help: copy('usage.subtitle'),
+          dismissHelpLabel: copy('common.dismiss'),
         ),
         const Divider(height: 1),
         Expanded(
@@ -147,7 +148,8 @@ final class _PersonalUsageDashboardState extends State<PersonalUsageDashboard> {
       children: [
         PageHeading(
           title: widget.copy('usage.personal.title'),
-          subtitle: widget.copy('usage.personal.subtitle'),
+          help: widget.copy('usage.personal.subtitle'),
+          dismissHelpLabel: widget.copy('common.dismiss'),
         ),
         const Divider(height: 1),
         Expanded(

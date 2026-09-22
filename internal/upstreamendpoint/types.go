@@ -1,6 +1,6 @@
-// Package upstreamendpoint owns reusable upstream service endpoints. A
-// ProviderAccount belongs to exactly one Endpoint; protocol compatibility is
-// never sufficient authority to move credentials between Endpoints.
+// Package upstreamendpoint owns reusable upstream service configurations.
+// Accounts have a separate lifecycle; explicit compatible links authorize
+// credential use. Protocol compatibility alone never grants that authority.
 package upstreamendpoint
 
 import (
@@ -166,6 +166,9 @@ type CreateCommand struct {
 
 type Catalog interface {
 	LookupEndpoint(string) (Endpoint, bool)
+	// GuardAccountLink keeps the target active until an explicit account grant
+	// is committed. The callback must not re-enter this catalog.
+	GuardAccountLink(context.Context, ID, func(Endpoint) error) error
 }
 
 type Controller interface {

@@ -25,7 +25,7 @@ function config(file, overrides = {}) {
       ...process.env,
       VIBERMATE_BIND_ADDRESS: '127.0.0.1',
       VIBERMATE_PORT: '9666',
-      VIBERMATE_IMAGE: 'vibermate-runtime:0.1.11-local',
+      VIBERMATE_IMAGE: 'vibermate-runtime:0.1.12-local',
       VIBERMATE_LOCAL_DATA_VOLUME: 'vibermate-local-data',
       VIBERMATE_ACCESS_ADDRESS: 'vibermate.home.arpa:9666',
       VIBERMATE_PRIVATE_BIND_ADDRESS: '192.0.2.20',

@@ -31,6 +31,7 @@ func TestProviderAccountControlImportsCodexOAuthWithoutReturningTokens(t *testin
 	}
 	now := time.Now().UTC().Truncate(time.Second)
 	accessToken := controlJWT(t, map[string]any{
+		"iat": now.Unix(), "auth_time": now.Add(-time.Hour).Unix(),
 		"exp":   now.Add(time.Hour).Unix(),
 		"email": "engineer@example.com",
 		"https://api.openai.com/auth": map[string]any{
@@ -78,6 +79,12 @@ func TestProviderAccountControlImportsCodexOAuthWithoutReturningTokens(t *testin
 		profile["email"] != "engineer@example.com" || profile["userId"] != "user-42" ||
 		profile["planType"] != "team" || profile["state"] != "ready" {
 		t.Fatalf("Codex OAuth profile = %#v", profile)
+	}
+	info, ok := response["tokenInfo"].(map[string]any)
+	if !ok || info["issuedAt"] != now.Format(time.RFC3339Nano) ||
+		info["authenticatedAt"] != now.Add(-time.Hour).Format(time.RFC3339Nano) ||
+		info["expiresAt"] != now.Add(time.Hour).Format(time.RFC3339Nano) {
+		t.Fatalf("OAuth token display metadata = %#v", info)
 	}
 	got := environmentRequest(
 		t, application, http.MethodGet, "/api/v1/provider-accounts/codex-work", 0, "", nil,

@@ -35,19 +35,36 @@ type CodexOAuthResponse struct {
 	State            codexoauth.State `json:"state"`
 }
 
+// ProviderTokenInfoResponse contains display-only JWT claims, not verified
+// identity or credential health. Never add raw claims or token bytes here.
+type ProviderTokenInfoResponse struct {
+	ChatGPTAccountID string `json:"chatgptAccountId,omitempty"`
+	Email            string `json:"email,omitempty"`
+	UserID           string `json:"userId,omitempty"`
+	PlanType         string `json:"planType,omitempty"`
+	IssuedAt         string `json:"issuedAt,omitempty"`
+	AuthenticatedAt  string `json:"authenticatedAt,omitempty"`
+	ExpiresAt        string `json:"expiresAt,omitempty"`
+}
+
 type ProviderAccountResponse struct {
-	ID                 string                      `json:"id"`
-	DisplayName        string                      `json:"displayName"`
-	UpstreamEndpointID string                      `json:"upstreamEndpointId"`
-	Kind               ProviderAccountKind         `json:"kind"`
-	RealmID            string                      `json:"realmId"`
-	State              provideraccount.State       `json:"state"`
-	Revision           uint64                      `json:"revision"`
-	CredentialState    provideraccount.HealthState `json:"credentialState"`
-	CredentialEpoch    uint64                      `json:"credentialEpoch"`
-	SetHeaderNames     []string                    `json:"setHeaderNames"`
-	DeleteHeaderNames  []string                    `json:"deleteHeaderNames"`
-	CodexOAuth         *CodexOAuthResponse         `json:"codexOAuth,omitempty"`
+	ID                  string                      `json:"id"`
+	DisplayName         string                      `json:"displayName"`
+	Note                string                      `json:"note"`
+	NoteRevision        uint64                      `json:"noteRevision"`
+	CredentialOrigin    string                      `json:"credentialOrigin"`
+	LinkedEndpointIDs   []upstreamendpoint.ID       `json:"linkedEndpointIds"`
+	AssociationRevision uint64                      `json:"associationRevision"`
+	Kind                ProviderAccountKind         `json:"kind"`
+	RealmID             string                      `json:"realmId"`
+	State               provideraccount.State       `json:"state"`
+	Revision            uint64                      `json:"revision"`
+	CredentialState     provideraccount.HealthState `json:"credentialState"`
+	CredentialEpoch     uint64                      `json:"credentialEpoch"`
+	SetHeaderNames      []string                    `json:"setHeaderNames"`
+	DeleteHeaderNames   []string                    `json:"deleteHeaderNames"`
+	CodexOAuth          *CodexOAuthResponse         `json:"codexOAuth,omitempty"`
+	TokenInfo           *ProviderTokenInfoResponse  `json:"tokenInfo,omitempty"`
 }
 
 type ProviderAccountPage struct {
@@ -58,6 +75,7 @@ type ProviderAccountCreateInput struct {
 	ID                 string              `json:"id"`
 	DisplayName        string              `json:"displayName"`
 	UpstreamEndpointID string              `json:"upstreamEndpointId"`
+	Unlinked           bool                `json:"unlinked"`
 	Kind               ProviderAccountKind `json:"kind"`
 	Secret             string              `json:"secret"`
 	CodexAuthJSON      string              `json:"codexAuthJson"`
@@ -171,7 +189,7 @@ func (handler *Handler) createProviderAccount(writer http.ResponseWriter, reques
 	}, []byte{0}))
 	response, err := handler.idempotent.execute(request.Context(), key, fingerprint, func() cachedResponse {
 		view, createErr := handler.accounts.Create(request.Context(), provideraccount.CreateCommand{
-			ID: id, DisplayName: input.DisplayName, UpstreamEndpointID: endpointID,
+			ID: id, DisplayName: input.DisplayName, UpstreamEndpointID: endpointID, Unlinked: input.Unlinked,
 			Driver: driver, Secret: secret,
 		})
 		if createErr != nil {
@@ -298,8 +316,9 @@ func providerAccountResponseOf(view provideraccount.View) (ProviderAccountRespon
 	}
 	return ProviderAccountResponse{
 		ID: view.Account.ID.String(), DisplayName: view.Account.DisplayName,
-		UpstreamEndpointID: view.Account.UpstreamEndpointID.String(),
-		Kind:               kind, RealmID: view.Account.RealmID, State: view.Account.State,
+		Note: view.Account.Note, NoteRevision: view.Account.NoteRevision,
+		CredentialOrigin: view.Account.Origin.String(), LinkedEndpointIDs: view.Account.Associations.IDs(), AssociationRevision: view.Account.AssociationRevision,
+		Kind: kind, RealmID: view.Account.RealmID, State: view.Account.State,
 		Revision: view.Account.Revision, CredentialState: view.Health.State,
 		CredentialEpoch: view.Health.CredentialEpoch,
 		SetHeaderNames:  append([]string{}, view.SetHeaderNames...),
@@ -315,14 +334,24 @@ func (handler *Handler) providerAccountResponse(
 	view provideraccount.View,
 ) (ProviderAccountResponse, error) {
 	response, err := providerAccountResponseOf(view)
-	if err != nil || view.Account.Driver != providerauth.CodexOAuthDriverRef() {
+	if err != nil || view.Health.State != provideraccount.HealthReady {
 		return response, err
+	}
+	if view.Account.Driver == providerauth.StaticHeaderDriverRef() &&
+		upstreamendpoint.IsChatGPTCodexOrigin(view.Account.Origin) && handler.codexOAuth != nil {
+		profile, inspectErr := handler.codexOAuth.InspectAccessToken(ctx, view.Account.SecretRef, secretstore.Revision(view.Health.CredentialEpoch))
+		if inspectErr == nil {
+			response.TokenInfo = providerTokenInfoResponseOf(profile)
+		}
+		// Display metadata is optional; an opaque token or a concurrent credential
+		// update must not make an otherwise readable account disappear.
+		return response, nil
+	}
+	if view.Account.Driver != providerauth.CodexOAuthDriverRef() {
+		return response, nil
 	}
 	if handler.codexOAuth == nil {
 		return ProviderAccountResponse{}, codexoauth.ErrRefreshUnavailable
-	}
-	if view.Health.State != provideraccount.HealthReady {
-		return response, nil
 	}
 	oauth, err := handler.codexOAuth.Inspect(
 		ctx,
@@ -344,7 +373,28 @@ func (handler *Handler) providerAccountResponse(
 		projection.ExpiresAt = profile.ExpiresAt.UTC().Format(time.RFC3339Nano)
 	}
 	response.CodexOAuth = projection
+	response.TokenInfo = providerTokenInfoResponseOf(profile)
 	return response, nil
+}
+
+func providerTokenInfoResponseOf(profile codexoauth.Profile) *ProviderTokenInfoResponse {
+	projection := ProviderTokenInfoResponse{
+		ChatGPTAccountID: profile.AccountID, Email: profile.Email,
+		UserID: profile.UserID, PlanType: profile.PlanType,
+	}
+	if !profile.IssuedAt.IsZero() {
+		projection.IssuedAt = profile.IssuedAt.UTC().Format(time.RFC3339Nano)
+	}
+	if !profile.AuthenticatedAt.IsZero() {
+		projection.AuthenticatedAt = profile.AuthenticatedAt.UTC().Format(time.RFC3339Nano)
+	}
+	if !profile.ExpiresAt.IsZero() {
+		projection.ExpiresAt = profile.ExpiresAt.UTC().Format(time.RFC3339Nano)
+	}
+	if projection == (ProviderTokenInfoResponse{}) {
+		return nil
+	}
+	return &projection
 }
 
 func providerAccountCredentialValue(
@@ -437,7 +487,7 @@ func classifyProviderAccountError(err error) problemSpec {
 		return problemSpec{status: http.StatusConflict, reason: ReasonProviderAccountConflict}
 	case errors.Is(err, provideraccount.ErrAccountInUse):
 		return problemSpec{status: http.StatusConflict, reason: ReasonProviderAccountInUse}
-	case errors.Is(err, provideraccount.ErrInvalidAccount):
+	case errors.Is(err, provideraccount.ErrInvalidAccount), errors.Is(err, provideraccount.ErrEndpointMismatch):
 		return problemSpec{status: http.StatusUnprocessableEntity, reason: ReasonInvalidRequest}
 	case errors.Is(err, upstreamendpoint.ErrEndpointNotFound):
 		return problemSpec{status: http.StatusNotFound, reason: ReasonUpstreamEndpointNotFound}

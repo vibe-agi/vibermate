@@ -5,12 +5,14 @@ package provideraccount
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"time"
 	"unicode"
 	"unicode/utf8"
 
 	"github.com/vibe-agi/vibermate/internal/environment"
+	"github.com/vibe-agi/vibermate/internal/originidentity"
 	"github.com/vibe-agi/vibermate/internal/providerauth"
 	"github.com/vibe-agi/vibermate/internal/secretstore"
 	"github.com/vibe-agi/vibermate/internal/upstreamendpoint"
@@ -19,6 +21,7 @@ import (
 const (
 	MaxIdentityBytes    = 128
 	MaxDisplayNameBytes = 256
+	MaxNoteCharacters   = 256
 	MaxRevision         = uint64(1<<63 - 1)
 )
 
@@ -27,7 +30,7 @@ var (
 	ErrAccountNotFound        = errors.New("ProviderAccount was not found")
 	ErrRevisionConflict       = errors.New("ProviderAccount revision conflicts with the expected revision")
 	ErrAccountDisabled        = errors.New("ProviderAccount is disabled")
-	ErrEndpointMismatch       = errors.New("ProviderAccount does not belong to the requested UpstreamEndpoint")
+	ErrEndpointMismatch       = errors.New("ProviderAccount is not authorized for the requested UpstreamEndpoint")
 	ErrRealmMismatch          = errors.New("ProviderAccount does not belong to the requested realm")
 	ErrCredentialMissing      = errors.New("ProviderAccount credential is unavailable")
 	ErrAccountInUse           = errors.New("ProviderAccount is referenced by a published Environment")
@@ -93,24 +96,28 @@ func (realm Realm) Validate() error {
 }
 
 type Account struct {
-	ID                 ID
-	DisplayName        string
-	UpstreamEndpointID upstreamendpoint.ID
-	RealmID            string
-	Driver             providerauth.DriverRef
-	SecretRef          secretstore.Reference
-	State              State
-	Revision           uint64
-	CreatedAt          time.Time
-	UpdatedAt          time.Time
+	ID                  ID
+	DisplayName         string
+	Note                string
+	NoteRevision        uint64
+	Origin              originidentity.ProviderOrigin
+	Associations        EndpointAssociations
+	AssociationRevision uint64
+	RealmID             string
+	Driver              providerauth.DriverRef
+	SecretRef           secretstore.Reference
+	State               State
+	Revision            uint64
+	CreatedAt           time.Time
+	UpdatedAt           time.Time
 }
 
 func (account Account) Validate() error {
 	parsedID, err := NewID(account.ID.String())
-	parsedEndpointID, endpointErr := upstreamendpoint.NewID(account.UpstreamEndpointID.String())
 	if err != nil || parsedID != account.ID ||
-		endpointErr != nil || parsedEndpointID != account.UpstreamEndpointID ||
+		account.Origin.Validate() != nil || account.AssociationRevision == 0 || account.AssociationRevision > MaxRevision ||
 		!validDisplayName(account.DisplayName) ||
+		!ValidNote(account.Note) || account.NoteRevision > MaxRevision || (account.Note != "" && account.NoteRevision == 0) ||
 		!validIdentity(account.RealmID) ||
 		!account.State.Valid() ||
 		account.Revision == 0 || account.Revision > MaxRevision ||
@@ -130,6 +137,10 @@ func (account Account) Validate() error {
 	return nil
 }
 
+func (account Account) CompatibleEndpoint(endpoint upstreamendpoint.Endpoint) bool {
+	return account.Origin == endpoint.Origin && slices.Contains(endpoint.Drivers, account.Driver)
+}
+
 func (account Account) Descriptor(
 	realm Realm,
 	endpoint upstreamendpoint.Endpoint,
@@ -137,9 +148,9 @@ func (account Account) Descriptor(
 	return environment.AccountDescriptor{
 		ID: account.ID.String(), Revision: environment.Revision(account.Revision),
 		DisplayName:              account.DisplayName,
-		UpstreamEndpointID:       account.UpstreamEndpointID.String(),
+		UpstreamEndpointID:       endpoint.ID.String(),
 		UpstreamEndpointRevision: environment.Revision(endpoint.Revision),
-		RealmID:                  account.RealmID, Active: account.State == StateActive && endpoint.State == upstreamendpoint.StateActive,
+		RealmID:                  endpoint.RealmID, Active: account.State == StateActive && endpoint.State == upstreamendpoint.StateActive,
 		BackendProtocols: append([]string(nil), realm.BackendProtocols...),
 	}
 }
@@ -204,15 +215,21 @@ type Repository interface {
 	LoadAll(context.Context) ([]Account, error)
 	Load(context.Context, ID) (Account, bool, error)
 	Write(context.Context, uint64, Account) (CommitResult, error)
+	WriteAssociations(context.Context, uint64, Account) (CommitResult, error)
+	WriteNote(context.Context, uint64, Account) (CommitResult, error)
 	Delete(context.Context, ID, uint64) (CommitResult, error)
 }
 
 type CreateCommand struct {
-	ID                 ID
-	DisplayName        string
+	ID          ID
+	DisplayName string
+	// UpstreamEndpointID selects the credential's origin and authentication
+	// realm at creation. It is not an owner retained by the stored Account.
 	UpstreamEndpointID upstreamendpoint.ID
-	Driver             providerauth.DriverRef
-	Secret             *secretstore.Value
+	// Unlinked imports a credential scope without authorizing any profile.
+	Unlinked bool
+	Driver   providerauth.DriverRef
+	Secret   *secretstore.Value
 }
 
 type ReplaceSecretCommand struct {
@@ -235,7 +252,10 @@ type Controller interface {
 	List(context.Context) ([]View, error)
 	Get(context.Context, ID) (View, error)
 	Create(context.Context, CreateCommand) (View, error)
+	SetAssociation(context.Context, AssociationCommand) (View, error)
+	SetNote(context.Context, NoteCommand) (View, error)
 	ReplaceSecret(context.Context, ReplaceSecretCommand) (View, error)
+	RefreshCredential(context.Context, ID, uint64) (View, error)
 	Delete(context.Context, DeleteCommand) (DeleteResult, error)
 	AcquireEndpointCredential(
 		context.Context,
@@ -254,6 +274,12 @@ type CredentialPreparer interface {
 		secretstore.Reference,
 		secretstore.Revision,
 	) (secretstore.Revision, error)
+}
+
+// CredentialRefresher is the explicit user-initiated rotation capability of a
+// dynamic credential preparer. Secret material never crosses this interface.
+type CredentialRefresher interface {
+	Refresh(context.Context, providerauth.DriverRef, secretstore.Reference, secretstore.Revision) (secretstore.Revision, error)
 }
 
 func secretReference(id ID) (secretstore.Reference, error) {

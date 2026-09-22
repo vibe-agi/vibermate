@@ -28,6 +28,7 @@ func (manager *Manager) ReadOverwriteHeader(ctx context.Context, lookup provider
 	lease, err := manager.acquire(ctx, accountLeaseScope{
 		id: id, accountRevision: lookup.AccountRevision, realmID: account.RealmID,
 		upstreamEndpointID: lookup.UpstreamEndpointID, upstreamEndpointRevision: lookup.UpstreamEndpointRevision,
+		upstreamEndpointOrigin: account.Origin,
 	})
 	if err != nil {
 		return "", err

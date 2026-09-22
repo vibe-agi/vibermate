@@ -413,7 +413,9 @@ func providerAccountResponsesEqual(
 ) bool {
 	return left.ID == right.ID &&
 		left.DisplayName == right.DisplayName &&
-		left.UpstreamEndpointID == right.UpstreamEndpointID &&
+		left.CredentialOrigin == right.CredentialOrigin &&
+		left.AssociationRevision == right.AssociationRevision &&
+		slices.Equal(left.LinkedEndpointIDs, right.LinkedEndpointIDs) &&
 		left.Kind == right.Kind &&
 		left.RealmID == right.RealmID &&
 		left.State == right.State &&
@@ -1041,6 +1043,7 @@ func assemblyEnvironment(
 	}
 	if account != nil {
 		if account.Kind != desktopcontrol.ProviderAccountKindAnthropicAPIKey ||
+			len(account.LinkedEndpointIDs) != 1 ||
 			account.RealmID != "anthropic.official" ||
 			account.State != provideraccount.StateActive ||
 			account.Revision == 0 ||
@@ -1077,7 +1080,7 @@ func assemblyEnvironment(
 				Routes: []environment.UpstreamRoute{{
 					ID: routeID, Revision: revision,
 					ProviderTarget: environment.ProviderTarget{
-						ID: account.UpstreamEndpointID, Revision: revision, Origin: providerOrigin,
+						ID: account.LinkedEndpointIDs[0].String(), Revision: revision, Origin: providerOrigin,
 						RealmID: "acceptance.realm", Capabilities: []protocolspec.ProviderCapability{
 							protocolspec.ProviderCapabilityMessages,
 							protocolspec.ProviderCapabilityStreaming,

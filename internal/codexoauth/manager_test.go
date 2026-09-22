@@ -231,7 +231,7 @@ func TestManagerPrepareRefreshesNearExpiryAndAtomicallyRotatesMaterial(t *testin
 	}
 }
 
-func TestManagerPrepareCoalescesConcurrentRefreshes(t *testing.T) {
+func TestManagerPrepareCoalescesConcurrentAutomaticAndManualRefreshes(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 9, 21, 10, 0, 0, 0, time.UTC)
 	accountID := "account-work"
@@ -265,9 +265,13 @@ func TestManagerPrepareCoalescesConcurrentRefreshes(t *testing.T) {
 		revision secretstore.Revision
 		err      error
 	}, 2)
-	for range 2 {
+	for index := range 2 {
 		go func() {
-			revision, prepareErr := manager.Prepare(
+			prepare := manager.Prepare
+			if index == 1 {
+				prepare = manager.Refresh
+			}
+			revision, prepareErr := prepare(
 				context.Background(), providerauth.CodexOAuthDriverRef(), reference, 1,
 			)
 			results <- struct {

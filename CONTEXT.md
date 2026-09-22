@@ -77,8 +77,12 @@ A user-declared upstream origin and set of accepted protocols. Its name, domain,
 _Avoid_: Provider, Account, Route
 
 **Account**:
-One authentication and outbound Header authority belonging to exactly one Upstream Endpoint. Its secret-bearing values remain protected while its exact Header names and mutation rules are explicit.
+One independently managed authentication and outbound Header authority scoped to an explicit upstream origin. It can be stored without any Account Links and reused by multiple compatible Upstream Endpoints without duplicating credentials.
 _Avoid_: Client Session, provider, credential string
+
+**Account Link**:
+An explicit permission for one Upstream Endpoint to use one compatible Account. Removing a link does not delete the Account or affect its other links; an origin or protocol match alone never grants this permission.
+_Avoid_: Account copy, Account ownership, credential rotation
 
 **OAuth Account Connection**:
 One Account credential lifecycle whose access token, rotating refresh token, provider account identity, and provider routing flags are stored and replaced as one versioned secret snapshot. ViberMate is the sole refresh owner while the connection is active; an imported provider file is one-time bootstrap input, not shared live state.
@@ -88,12 +92,24 @@ _Avoid_: Login Session, Web Session, synced auth file, bearer string
 The exact Header deletions and assignments applied to every Endpoint request authenticated by one Account. Authentication presets are protected assignments within this policy, not provider inference.
 _Avoid_: Custom auth, request script, Endpoint headers
 
+**Account Read**:
+A declared, read-only upstream service operation executed for one explicitly authorized Account. A captured client needs one unambiguous frozen Route and fixed Account; an owner may inspect an independent Account without creating a profile link. It is not a model Turn or an instruction to rerun an Account Selector.
+_Avoid_: Generic proxy GET, global current account, model usage
+
+**Account Observation**:
+Allowlisted facts returned by an Account Read, qualified by Account, credential epoch, upstream origin, service adapter revision, and observation time. Upstream quota, upstream historical usage, local ViberMate usage, and a client's local login identity remain distinct sources; absent facts do not mean zero.
+_Avoid_: Billing record, verified local identity, aggregate account balance
+
+**Account History Permission**:
+An explicit permission frozen into an Upstream Route to share account-wide historical usage with a captured client. Permission to generate or inspect current quota does not imply this grant. The owner management surface has its own authority and does not grant a Capture access by inspecting an Account.
+_Avoid_: Content Recording Policy, Account Link, automatic quota refresh
+
 **Upstream Route**:
 An explicit destination through one Upstream Endpoint, one backend protocol, and one Account Selection Policy. A Route may contain exact Model Mappings.
 _Avoid_: Endpoint, Client Flow, inferred provider
 
 **Account Selection Policy**:
-The closed choice on one Upstream Route between one fixed Account and one published Account Selector. Every selectable Account belongs to that Route's Upstream Endpoint and is frozen with the Environment revision.
+The closed choice on one Upstream Route between one fixed Account and one published Account Selector. Every selectable Account is explicitly linked to that Route's Upstream Endpoint and is frozen with the Environment revision.
 _Avoid_: Failover, credential rotation, global account switch
 
 **Account Selector**:

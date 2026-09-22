@@ -10,6 +10,24 @@ import (
 	"github.com/vibe-agi/vibermate/internal/egressaudit"
 )
 
+// This tests the persistence taxonomy, not the per-purpose parent/payload
+// relationships (which New and Restore validate separately). No newly
+// registered outbound may fail at the SQL enum boundary before it can dial.
+func TestSQLiteAcceptsEveryDeclaredEgressPurpose(t *testing.T) {
+	store := openTestStore(t, filepath.Join(t.TempDir(), "runtime.db"))
+	if _, err := store.EgressAttemptRepository().Append(context.Background(), providerAttempt(t, "purpose-catalog")); err != nil {
+		t.Fatal(err)
+	}
+	for _, purpose := range egressaudit.Purposes() {
+		if _, err := store.database.ExecContext(context.Background(), `UPDATE runtime_egress_attempts SET purpose = ? WHERE attempt_id = 'purpose-catalog'`, purpose); err != nil {
+			t.Errorf("declared purpose %q cannot be audited: %v", purpose, err)
+		}
+	}
+	if _, err := store.database.ExecContext(context.Background(), `UPDATE runtime_egress_attempts SET purpose = 'invented'`); err == nil {
+		t.Fatal("unknown purpose accepted")
+	}
+}
+
 func providerAttempt(t *testing.T, id string) egressaudit.Attempt {
 	t.Helper()
 

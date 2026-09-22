@@ -5,6 +5,7 @@ import 'dart:math';
 import 'package:flutter/foundation.dart';
 
 import '../../core/api/control_api.dart';
+import '../../core/api/account_facts_models.dart';
 import '../../core/api/control_models.dart';
 import '../../core/bootstrap/root_trust_installer.dart';
 import '../../core/bootstrap/public_certificate_exporter.dart';
@@ -19,6 +20,21 @@ export '../../core/preferences/workbench_preferences.dart'
 enum RootCAGuideIntent { remove, replace }
 
 final class WorkbenchController extends ChangeNotifier {
+  Future<AccountFacts> accountFacts(
+    ProviderAccount account, {
+    bool history = false,
+  }) async {
+    final facts = await _api.accountFacts(account.id, history: history);
+    if (facts.accountId != account.id ||
+        facts.origin != account.credentialOrigin ||
+        facts.credentialEpoch < account.credentialEpoch) {
+      throw const ControlContractException(
+        'account facts do not match the selected credential scope',
+      );
+    }
+    return facts;
+  }
+
   static const _exchangeDetailCacheLimit = 64;
   static const _fullExchangeDetailCacheLimit = 2;
   static const _captureConversationPageCacheLimit = 24;
@@ -1665,6 +1681,7 @@ final class WorkbenchController extends ChangeNotifier {
         id: 'account.$provider.${_newUuid()}',
         displayName: displayName.trim(),
         upstreamEndpointId: endpoint.id,
+        unlinked: true,
         kind: kind,
         secret: secret,
         codexAuthJson: codexAuthJson,
@@ -1684,6 +1701,170 @@ final class WorkbenchController extends ChangeNotifier {
       inventoryError = _describeError(error);
       notifyListeners();
       return null;
+    }
+  }
+
+  Future<ProviderAccount?> setProviderAccountNote(
+    ProviderAccount account,
+    String note,
+  ) async {
+    if (data == null || inventoryMutating) return null;
+    // A dashboard request started before this edit must not replace the newly
+    // saved note with its older snapshot after the mutation finishes.
+    ++_dashboardGeneration;
+    captureDirectoryLoading = false;
+    inventoryMutating = true;
+    inventoryError = null;
+    inventoryNotice = null;
+    notifyListeners();
+    try {
+      final updated = await _api.setProviderAccountNote(account, note);
+      if (_disposed || data == null) return null;
+      data = _dashboardWith(
+        data!,
+        accounts: [
+          for (final candidate in data!.accounts)
+            if (candidate.id == updated.id) updated else candidate,
+        ],
+      );
+      return updated;
+    } catch (error) {
+      if (error is ControlProblem && error.status == 409) {
+        // Keep the mutation guard while loading the competing edit. The normal
+        // dashboard refresh deliberately skips work during inventory mutations.
+        try {
+          final latest = await _api.loadDashboard();
+          if (!_disposed && data != null) {
+            data = _dashboardWith(data!, accounts: latest.accounts);
+          }
+        } catch (_) {
+          // The editor still owns its unsaved draft if the reload also fails.
+        }
+        if (!_disposed) inventoryError = 'provider_accounts.note.conflict';
+      } else if (!_disposed) {
+        inventoryError = 'provider_accounts.note.failed';
+      }
+      return null;
+    } finally {
+      if (!_disposed) {
+        inventoryMutating = false;
+        notifyListeners();
+      }
+    }
+  }
+
+  Future<bool> setProviderAccountAssociation({
+    required ProviderAccount account,
+    required UpstreamEndpoint endpoint,
+    required bool linked,
+  }) async {
+    if (data == null || inventoryMutating) return false;
+    inventoryMutating = true;
+    inventoryError = null;
+    inventoryNotice = null;
+    notifyListeners();
+    try {
+      final updated = await _api.setProviderAccountAssociation(
+        account: account,
+        endpoint: endpoint,
+        linked: linked,
+      );
+      if (_disposed || data == null) return false;
+      data = _dashboardWith(
+        data!,
+        accounts: [
+          for (final candidate in data!.accounts)
+            if (candidate.id == updated.id) updated else candidate,
+        ],
+      );
+      inventoryNotice = linked ? 'account_linked' : 'account_unlinked';
+      return true;
+    } catch (error) {
+      if (!_disposed) inventoryError = _describeError(error);
+      return false;
+    } finally {
+      if (!_disposed) {
+        inventoryMutating = false;
+        notifyListeners();
+      }
+    }
+  }
+
+  Future<CodexLogin> startCodexLogin({
+    required UpstreamEndpoint endpoint,
+    required String displayName,
+    required String callbackMode,
+  }) => _api.startCodexLogin(
+    accountId: 'account.codex.${_newUuid()}',
+    upstreamEndpointId: endpoint.id,
+    displayName: displayName.trim(),
+    callbackMode: callbackMode,
+  );
+
+  Future<CodexLogin> codexLoginStatus(String loginId) =>
+      _api.codexLoginStatus(loginId);
+  Future<CodexLogin> completeCodexLogin(String loginId, String callbackUrl) =>
+      _api.completeCodexLogin(loginId, callbackUrl);
+  Future<void> cancelCodexLogin(String loginId) =>
+      _api.cancelCodexLogin(loginId);
+
+  String? refreshingProviderAccountId;
+
+  Future<ProviderAccount?> refreshProviderAccountCredential(
+    ProviderAccount account,
+  ) async {
+    if (data == null ||
+        inventoryMutating ||
+        account.kind != 'codex_oauth' ||
+        !account.usable) {
+      return null;
+    }
+    inventoryMutating = true;
+    refreshingProviderAccountId = account.id;
+    inventoryError = null;
+    inventoryNotice = null;
+    notifyListeners();
+    try {
+      final updated = await _api.refreshProviderAccountCredential(account);
+      if (_disposed) return null;
+      final current = data!;
+      data = _dashboardWith(
+        current,
+        accounts: current.accounts
+            .map(
+              (candidate) => candidate.id == updated.id ? updated : candidate,
+            )
+            .toList(growable: false),
+      );
+      inventoryNotice = 'credential_refreshed';
+      return updated;
+    } catch (error) {
+      if (_disposed) return null;
+      inventoryError = switch (error) {
+        ControlProblem(reasonCode: 'credential_reconnect_required') =>
+          'provider_accounts.refresh.reconnect',
+        ControlProblem(reasonCode: 'provider_account_conflict') =>
+          'provider_accounts.refresh.conflict',
+        _ => 'provider_accounts.refresh.failed',
+      };
+      // Permanent refresh failures can advance the stored reconnect state.
+      // Reconcile safe account metadata, without reading quota or history.
+      try {
+        final refreshed = await _api.loadDashboard();
+        if (!_disposed) {
+          data = refreshed;
+          _repairDashboardSelections(refreshed);
+        }
+      } catch (_) {
+        /* Keep the refresh error if reconciliation also fails. */
+      }
+      return null;
+    } finally {
+      if (!_disposed) {
+        inventoryMutating = false;
+        refreshingProviderAccountId = null;
+        notifyListeners();
+      }
     }
   }
 

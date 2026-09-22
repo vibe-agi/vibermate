@@ -11,6 +11,7 @@ import (
 
 	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/exchange"
+	"github.com/vibe-agi/vibermate/internal/originidentity"
 	"github.com/vibe-agi/vibermate/internal/providerauth"
 	"github.com/vibe-agi/vibermate/internal/secretstore"
 	"github.com/vibe-agi/vibermate/internal/upstreamendpoint"
@@ -49,6 +50,9 @@ const (
 	accountOperationCreate accountOperation = iota + 1
 	accountOperationReplaceSecret
 	accountOperationDelete
+	accountOperationAssociation
+	accountOperationRefresh
+	accountOperationNote
 )
 
 var (
@@ -175,7 +179,7 @@ func (manager *Manager) BindDeletionGuard(guard environment.AccountDeletionGuard
 	return nil
 }
 
-func (manager *Manager) LookupAccount(value string) (environment.AccountDescriptor, bool) {
+func (manager *Manager) LookupAccount(value string, endpointID string) (environment.AccountDescriptor, bool) {
 	if manager == nil {
 		return environment.AccountDescriptor{}, false
 	}
@@ -192,12 +196,12 @@ func (manager *Manager) LookupAccount(value string) (environment.AccountDescript
 	if !exists {
 		return environment.AccountDescriptor{}, false
 	}
-	endpoint, exists := manager.endpoints.LookupEndpoint(account.UpstreamEndpointID.String())
-	if !exists {
+	endpoint, exists := manager.endpoints.LookupEndpoint(endpointID)
+	if !exists || !account.Associations.Contains(endpoint.ID) || !account.CompatibleEndpoint(endpoint) {
 		return environment.AccountDescriptor{}, false
 	}
 	realm, exists := realmForEndpoint(endpoint, manager.realms)
-	if !exists || realm.ID != account.RealmID {
+	if !exists {
 		return environment.AccountDescriptor{}, false
 	}
 	return account.Descriptor(realm, endpoint), true
@@ -261,9 +265,22 @@ func (manager *Manager) Create(ctx context.Context, command CreateCommand) (View
 	}
 	account := Account{
 		ID: command.ID, DisplayName: command.DisplayName,
-		UpstreamEndpointID: command.UpstreamEndpointID, RealmID: endpoint.RealmID,
+		Origin: endpoint.Origin, RealmID: endpoint.RealmID, AssociationRevision: 1,
 		Driver: command.Driver, SecretRef: reference, State: StateActive,
 		Revision: 1, CreatedAt: now, UpdatedAt: now,
+	}
+	if !account.CompatibleEndpoint(endpoint) {
+		return View{}, ErrEndpointMismatch
+	}
+	realm, validRealm := realmForEndpoint(endpoint, manager.realms)
+	if !validRealm || !slices.Contains(realm.Drivers, account.Driver) {
+		return View{}, ErrRealmMismatch
+	}
+	if !command.Unlinked {
+		account.Associations, err = NewEndpointAssociations([]upstreamendpoint.ID{endpoint.ID})
+		if err != nil {
+			return View{}, err
+		}
 	}
 	if err := validateForEndpoint(account, manager.endpoints, manager.realms); err != nil {
 		return View{}, err
@@ -522,7 +539,8 @@ func (manager *Manager) Acquire(
 	request exchange.AccountLeaseRequest,
 ) (providerauth.Lease, error) {
 	if ctx == nil || request.AccountRevision() == 0 || request.RealmID() == "" ||
-		request.UpstreamEndpointID() == "" || request.UpstreamEndpointRevision() == 0 {
+		request.UpstreamEndpointID() == "" || request.UpstreamEndpointRevision() == 0 ||
+		request.UpstreamEndpointOrigin().Validate() != nil {
 		return nil, ErrInvalidAccount
 	}
 	id, err := NewID(request.AccountID())
@@ -535,6 +553,7 @@ func (manager *Manager) Acquire(
 		realmID:                  request.RealmID(),
 		upstreamEndpointID:       request.UpstreamEndpointID(),
 		upstreamEndpointRevision: uint64(request.UpstreamEndpointRevision()),
+		upstreamEndpointOrigin:   request.UpstreamEndpointOrigin(),
 	})
 }
 
@@ -565,24 +584,27 @@ func (manager *Manager) AcquireEndpointCredential(
 	if !exists {
 		return nil, ErrAccountNotFound
 	}
-	if account.UpstreamEndpointID != endpoint.ID {
+	if !account.Associations.Contains(endpoint.ID) || !account.CompatibleEndpoint(endpoint) {
 		return nil, ErrEndpointMismatch
 	}
 	return manager.acquire(ctx, accountLeaseScope{
 		id:                       account.ID,
 		accountRevision:          account.Revision,
-		realmID:                  account.RealmID,
+		realmID:                  endpoint.RealmID,
 		upstreamEndpointID:       endpoint.ID.String(),
 		upstreamEndpointRevision: endpoint.Revision,
+		upstreamEndpointOrigin:   endpoint.Origin,
 	})
 }
 
 type accountLeaseScope struct {
+	ownerRead                bool
 	id                       ID
 	accountRevision          uint64
 	realmID                  string
 	upstreamEndpointID       string
 	upstreamEndpointRevision uint64
+	upstreamEndpointOrigin   originidentity.ProviderOrigin
 }
 
 func (manager *Manager) acquire(
@@ -594,7 +616,9 @@ func (manager *Manager) acquire(
 		manager.mu.Unlock()
 		return nil, ErrManagerClosing
 	}
-	if _, exists := manager.operations[scope.id]; exists {
+	// Annotation writes do not change the credential or routing authority. New
+	// requests can keep acquiring it while the note is being persisted.
+	if operation, exists := manager.operations[scope.id]; exists && operation != accountOperationNote {
 		manager.mu.Unlock()
 		return nil, ErrOperationInProgress
 	}
@@ -607,11 +631,15 @@ func (manager *Manager) acquire(
 		manager.mu.Unlock()
 		return nil, ErrAccountDisabled
 	}
-	if account.UpstreamEndpointID.String() != scope.upstreamEndpointID {
+	if !scope.ownerRead && !account.Associations.Contains(upstreamendpoint.ID(scope.upstreamEndpointID)) {
 		manager.mu.Unlock()
 		return nil, ErrEndpointMismatch
 	}
-	if account.RealmID != scope.realmID || account.Revision != scope.accountRevision {
+	if account.Revision != scope.accountRevision {
+		manager.mu.Unlock()
+		return nil, ErrRealmMismatch
+	}
+	if scope.ownerRead && (account.Origin != scope.upstreamEndpointOrigin || account.RealmID != scope.realmID) {
 		manager.mu.Unlock()
 		return nil, ErrRealmMismatch
 	}
@@ -628,10 +656,17 @@ func (manager *Manager) acquire(
 	}()
 
 	endpoint, endpointExists := manager.endpoints.LookupEndpoint(
-		account.UpstreamEndpointID.String(),
+		scope.upstreamEndpointID,
 	)
-	if !endpointExists || endpoint.State != upstreamendpoint.StateActive ||
-		endpoint.Revision != scope.upstreamEndpointRevision {
+	// A published route keeps its original profile revision when the runtime
+	// adds an authentication capability. Never retarget it: the live endpoint
+	// must still authorize this account at the exact frozen origin and realm.
+	// Future revisions, revoked links, disabled endpoints and removed drivers
+	// remain closed; account identity and credential epoch stay independently
+	// revision-bound above and below this check.
+	if !scope.ownerRead && (!endpointExists || endpoint.State != upstreamendpoint.StateActive ||
+		endpoint.Revision < scope.upstreamEndpointRevision || endpoint.RealmID != scope.realmID ||
+		endpoint.Origin != scope.upstreamEndpointOrigin || !account.CompatibleEndpoint(endpoint)) {
 		return nil, ErrEndpointMismatch
 	}
 	if credentialEpoch == 0 {
@@ -668,7 +703,7 @@ func (manager *Manager) acquire(
 	return &lease{
 		account: providerauth.AccountRef{
 			ID: account.ID.String(), Revision: account.Revision,
-			CredentialEpoch: uint64(credentialEpoch), RealmID: account.RealmID,
+			CredentialEpoch: uint64(credentialEpoch), RealmID: scope.realmID,
 		},
 		driver:  account.Driver,
 		secret:  account.SecretRef,
@@ -872,15 +907,15 @@ func validateForEndpoint(
 	if err := account.Validate(); err != nil {
 		return err
 	}
-	endpoint, exists := endpoints.LookupEndpoint(account.UpstreamEndpointID.String())
-	if !exists || endpoint.State != upstreamendpoint.StateActive ||
-		endpoint.RealmID != account.RealmID || !slices.Contains(endpoint.Drivers, account.Driver) {
-		return ErrInvalidAccount
-	}
-	realm, exists := realmForEndpoint(endpoint, realms)
-	if !exists || !slices.Contains(realm.Drivers, account.Driver) ||
-		!sameStrings(realm.BackendProtocols, endpoint.BackendProtocols) {
-		return ErrInvalidAccount
+	for _, id := range account.Associations.IDs() {
+		endpoint, exists := endpoints.LookupEndpoint(id.String())
+		if !exists || !account.CompatibleEndpoint(endpoint) {
+			return ErrInvalidAccount
+		}
+		realm, exists := realmForEndpoint(endpoint, realms)
+		if !exists || !slices.Contains(realm.Drivers, account.Driver) || !sameStrings(realm.BackendProtocols, endpoint.BackendProtocols) {
+			return ErrInvalidAccount
+		}
 	}
 	return nil
 }

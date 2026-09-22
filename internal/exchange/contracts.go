@@ -24,6 +24,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/clientannotation"
 	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
+	"github.com/vibe-agi/vibermate/internal/originidentity"
 	"github.com/vibe-agi/vibermate/internal/protocolcore"
 	"github.com/vibe-agi/vibermate/internal/protocolpath"
 	"github.com/vibe-agi/vibermate/internal/protocolspec"
@@ -1014,6 +1015,7 @@ type AccountLeaseRequest struct {
 	routeRevision            environment.Revision
 	upstreamEndpointID       string
 	upstreamEndpointRevision environment.Revision
+	upstreamEndpointOrigin   originidentity.ProviderOrigin
 	accountID                string
 	accountRevision          environment.Revision
 	realmID                  string
@@ -1045,6 +1047,10 @@ func (request AccountLeaseRequest) UpstreamEndpointID() string {
 
 func (request AccountLeaseRequest) UpstreamEndpointRevision() environment.Revision {
 	return request.upstreamEndpointRevision
+}
+
+func (request AccountLeaseRequest) UpstreamEndpointOrigin() originidentity.ProviderOrigin {
+	return request.upstreamEndpointOrigin
 }
 
 func (request AccountLeaseRequest) AccountID() string {

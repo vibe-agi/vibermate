@@ -105,9 +105,10 @@ final class _RuntimeRootCAPanelState extends State<RuntimeRootCAPanel> {
               ),
               const SizedBox(width: 8),
               Expanded(
-                child: Text(
-                  copy('settings.runtime_ca.title'),
-                  style: Theme.of(context).textTheme.titleSmall,
+                child: ContextHelpHeading(
+                  title: copy('settings.runtime_ca.title'),
+                  message: copy('settings.runtime_ca.detail'),
+                  dismissLabel: copy('common.dismiss'),
                 ),
               ),
               IconButton(
@@ -118,7 +119,7 @@ final class _RuntimeRootCAPanelState extends State<RuntimeRootCAPanel> {
               ),
             ],
           ),
-          Text(copy('settings.runtime_ca.detail'), style: textStyle),
+          Text(copy('settings.root_ca.scope'), style: textStyle),
           const SizedBox(height: 10),
           if (_loading) const CompactProgressIndicator(),
           if (!_loading && certificate != null) ...[

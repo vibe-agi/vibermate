@@ -24,6 +24,7 @@ var (
 	ErrClientProtocolAmbiguous  = errors.New("request matches more than one Environment client protocol")
 	ErrRouteOutsideRouteSet     = errors.New("route is outside the frozen RouteSet")
 	ErrUnsupportedPluginBinding = errors.New("plugin bindings are not executable in this runtime slice")
+	ErrAccountReadAmbiguous     = errors.New("account read requires one fixed account on one frozen route")
 )
 
 type ProtocolCatalog interface {
@@ -111,14 +112,15 @@ func (policy CompiledAccountPolicy) NewSelectorTurn(
 }
 
 type CompiledRoutePlan struct {
-	id            UpstreamRouteID
-	revision      Revision
-	target        ProviderTarget
-	backend       protocolspec.Dialect
-	codec         protocolspec.CodecPlan
-	accountPolicy CompiledAccountPolicy
-	modelPolicy   ModelPolicy
-	wireProfile   wireprofile.CompiledUpstreamWireProfile
+	id                  UpstreamRouteID
+	revision            Revision
+	target              ProviderTarget
+	backend             protocolspec.Dialect
+	codec               protocolspec.CodecPlan
+	accountPolicy       CompiledAccountPolicy
+	allowAccountHistory bool
+	modelPolicy         ModelPolicy
+	wireProfile         wireprofile.CompiledUpstreamWireProfile
 }
 
 func (route CompiledRoutePlan) ID() UpstreamRouteID                   { return route.id }
@@ -128,6 +130,8 @@ func (route CompiledRoutePlan) CodecPlan() protocolspec.CodecPlan     { return r
 func (route CompiledRoutePlan) AccountPolicy() CompiledAccountPolicy {
 	return cloneCompiledAccountPolicy(route.accountPolicy)
 }
+
+func (route CompiledRoutePlan) AllowsAccountHistory() bool { return route.allowAccountHistory }
 
 // ResolveModelMapping applies this compiled Route's exact requested-model
 // mapping without exposing the control-plane policy representation to the
@@ -294,6 +298,29 @@ func (plan RequestPlan) UpstreamRoute() (CompiledRoutePlan, bool) {
 		return CompiledRoutePlan{}, false
 	}
 	return cloneCompiledRoute(*plan.upstreamRoute), true
+}
+
+// AccountReadTarget never runs a Turn selector or guesses from a recent
+// Exchange. A control query can precede the first generation entirely.
+func (plan RequestPlan) AccountReadTarget() (CompiledRoutePlan, CompiledAccountReference, error) {
+	if plan.EnvironmentID() == "" || plan.EnvironmentRevision() == 0 ||
+		plan.Operation().Validate() != nil || plan.Operation().Kind() != protocolspec.ClientOperationAccountRead ||
+		!plan.UsesUpstreamDestination() {
+		return CompiledRoutePlan{}, CompiledAccountReference{}, ErrAccountReadAmbiguous
+	}
+	set, ok := plan.ProtocolPlan().UpstreamRouteSet()
+	if !ok || len(set.CandidateRouteIDs()) != 1 {
+		return CompiledRoutePlan{}, CompiledAccountReference{}, ErrAccountReadAmbiguous
+	}
+	route, ok := plan.UpstreamRoute()
+	if !ok {
+		return CompiledRoutePlan{}, CompiledAccountReference{}, ErrAccountReadAmbiguous
+	}
+	account, ok := route.AccountPolicy().FixedAccount()
+	if !ok {
+		return CompiledRoutePlan{}, CompiledAccountReference{}, ErrAccountReadAmbiguous
+	}
+	return route, account, nil
 }
 func (plan RequestPlan) WireVariant() wireprofile.CompiledUpstreamWireVariant {
 	return plan.wireVariant
@@ -484,11 +511,6 @@ func compileRoute(
 	if err != nil {
 		return CompiledRoutePlan{}, fmt.Errorf("compile route %q: %w", route.ID, err)
 	}
-	if compiler.endpoints != nil {
-		if err := validateUpstreamEndpointSnapshot(compiler.endpoints, route); err != nil {
-			return CompiledRoutePlan{}, err
-		}
-	}
 	codec, err := compiler.protocols.Resolve(client, backend)
 	if err != nil {
 		return CompiledRoutePlan{}, fmt.Errorf("compile route %q codec: %w", route.ID, err)
@@ -506,7 +528,7 @@ func compileRoute(
 	if err != nil {
 		return CompiledRoutePlan{}, fmt.Errorf("compile route %q wire profile: %w", route.ID, err)
 	}
-	accountPolicy, err := compileAccountPolicy(compiler.accounts, route)
+	accountPolicy, err := compileAccountPolicy(route)
 	if err != nil {
 		return CompiledRoutePlan{}, err
 	}
@@ -514,27 +536,21 @@ func compileRoute(
 		id: route.ID, revision: route.Revision,
 		target: cloneProviderTarget(route.ProviderTarget), backend: backend,
 		codec: codec, accountPolicy: accountPolicy, modelPolicy: cloneModelPolicy(route.ModelPolicy),
-		wireProfile: compiledWire,
+		allowAccountHistory: route.AllowAccountHistory,
+		wireProfile:         compiledWire,
 	}, nil
 }
 
-func compileAccountPolicy(catalog AccountCatalog, route UpstreamRoute) (CompiledAccountPolicy, error) {
+func compileAccountPolicy(route UpstreamRoute) (CompiledAccountPolicy, error) {
 	policy := route.AccountPolicy
 	compiled := CompiledAccountPolicy{revision: policy.Revision, mode: policy.Mode}
-	if catalog == nil {
-		return CompiledAccountPolicy{}, fmt.Errorf("%w: upstream route %q has no account catalog", ErrInvalidEnvironment, route.ID)
-	}
 	for _, frozen := range policy.Accounts {
-		account, exists := catalog.LookupAccount(frozen.ID)
-		if !exists || account.Revision != frozen.Revision || account.DisplayName != frozen.DisplayName {
-			return CompiledAccountPolicy{}, fmt.Errorf("%w: managed account %q disappeared", ErrInvalidEnvironment, frozen.ID)
-		}
 		compiled.accounts = append(compiled.accounts, CompiledAccountReference{
-			ID: account.ID, Revision: account.Revision,
-			DisplayName:              account.DisplayName,
-			UpstreamEndpointID:       account.UpstreamEndpointID,
-			UpstreamEndpointRevision: account.UpstreamEndpointRevision,
-			RealmID:                  account.RealmID,
+			ID: frozen.ID, Revision: frozen.Revision,
+			DisplayName:              frozen.DisplayName,
+			UpstreamEndpointID:       route.ProviderTarget.ID,
+			UpstreamEndpointRevision: route.ProviderTarget.Revision,
+			RealmID:                  route.ProviderTarget.RealmID,
 		})
 	}
 	switch policy.Mode {
@@ -561,6 +577,26 @@ func compileAccountPolicy(catalog AccountCatalog, route UpstreamRoute) (Compiled
 		return CompiledAccountPolicy{}, ErrInvalidEnvironment
 	}
 	return compiled, nil
+}
+
+// Candidate admission uses the live catalogs. Execution compilation, including
+// recovery, uses only the values frozen in the validated aggregate.
+func (compiler Compiler) validateReferences(aggregate Environment) error {
+	if err := validateAccounts(aggregate, compiler.accounts); err != nil {
+		return err
+	}
+	if compiler.endpoints != nil {
+		for _, endpoint := range aggregate.ClientEndpoints {
+			for _, plan := range endpoint.ProtocolPlans {
+				for _, route := range destinationRoutes(plan.Destination) {
+					if err := validateUpstreamEndpointSnapshot(compiler.endpoints, route); err != nil {
+						return err
+					}
+				}
+			}
+		}
+	}
+	return nil
 }
 
 func validateUpstreamEndpointSnapshot(

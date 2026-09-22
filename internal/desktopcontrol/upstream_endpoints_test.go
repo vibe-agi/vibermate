@@ -97,7 +97,7 @@ func TestUpstreamEndpointControlOwnsTheAccountBoundary(t *testing.T) {
 	if account.Code != http.StatusCreated {
 		t.Fatalf("account status=%d body=%s", account.Code, account.Body.Bytes())
 	}
-	assertJSONString(t, account.Body.Bytes(), "upstreamEndpointId", "target.team.anthropic")
+	assertJSONString(t, account.Body.Bytes(), "credentialOrigin", "https://relay.example.com")
 }
 
 func TestUpstreamEndpointControlAllowsOneOriginAcrossExplicitProtocols(t *testing.T) {
@@ -241,7 +241,7 @@ func TestUpstreamEndpointControlCreatesOneExplicitMultiProtocolRealm(t *testing.
 	if account.Code != http.StatusCreated {
 		t.Fatalf("create multi-protocol Account status=%d body=%s", account.Code, account.Body.Bytes())
 	}
-	assertJSONString(t, account.Body.Bytes(), "upstreamEndpointId", "target.shared.multi")
+	assertJSONString(t, account.Body.Bytes(), "credentialOrigin", "http://127.0.0.1:23333")
 	assertJSONString(t, account.Body.Bytes(), "realmId", "target.shared.multi")
 }
 

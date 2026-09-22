@@ -550,7 +550,7 @@ final class _CaptureDetail extends StatelessWidget {
     final accountMatches =
         route == null ||
         route.accountPolicy.mode == 'javascript' ||
-        account != null && account.upstreamEndpointId == endpoint?.id;
+        account != null && endpoint != null && account.isLinkedTo(endpoint.id);
     final notice = controller.operationNotice;
     return ColoredBox(
       color: context.viberColors.canvas,
@@ -900,6 +900,41 @@ final class _CaptureSessionSelector extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final field = CompactSelectField<String>(
+      key: ValueKey('capture-session-select:$selectedKey'),
+      initialValue: selectedKey,
+      isExpanded: true,
+      items: [
+        for (final session in sessions)
+          DropdownMenuItem(
+            key: Key('capture-session-option-${session.key}'),
+            value: session.key,
+            child: Text(
+              _captureSessionTitle(copy, session),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+      ],
+      onChanged: sessions.length < 2
+          ? null
+          : (value) {
+              if (value != null) onSelected(value);
+            },
+    );
+    final label = Text(
+      copy('capture.session'),
+      style: Theme.of(
+        context,
+      ).textTheme.labelSmall?.copyWith(color: context.viberColors.textMuted),
+    );
+    final help = ContextHelpButton(
+      key: const Key('capture-session-help'),
+      tooltip: copy('capture.session_scope'),
+      title: copy('capture.session'),
+      message: copy('capture.session_scope'),
+      dismissLabel: copy('common.dismiss'),
+    );
     return Container(
       key: const Key('capture-session-selector'),
       padding: const EdgeInsets.fromLTRB(8, 6, 8, 7),
@@ -907,47 +942,34 @@ final class _CaptureSessionSelector extends StatelessWidget {
         color: context.viberColors.panel,
         border: Border(bottom: BorderSide(color: context.viberColors.divider)),
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            copy('capture.session'),
-            style: Theme.of(context).textTheme.labelSmall?.copyWith(
-              color: context.viberColors.textMuted,
-            ),
-          ),
-          const SizedBox(height: 2),
-          Text(
-            copy('capture.session_scope'),
-            style: Theme.of(context).textTheme.bodySmall?.copyWith(
-              color: context.viberColors.textFaint,
-              height: 1.2,
-            ),
-          ),
-          const SizedBox(height: 4),
-          CompactSelectField<String>(
-            key: ValueKey('capture-session-select:$selectedKey'),
-            initialValue: selectedKey,
-            isExpanded: true,
-            items: [
-              for (final session in sessions)
-                DropdownMenuItem(
-                  key: Key('capture-session-option-${session.key}'),
-                  value: session.key,
-                  child: Text(
-                    _captureSessionTitle(copy, session),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final scale = MediaQuery.textScalerOf(context).scale(1);
+          if (constraints.maxWidth < 520 * scale) {
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Row(
+                  children: [
+                    Expanded(child: label),
+                    help,
+                  ],
                 ),
+                const SizedBox(height: 2),
+                field,
+              ],
+            );
+          }
+          return Row(
+            children: [
+              label,
+              const SizedBox(width: 10),
+              Expanded(child: field),
+              const SizedBox(width: 4),
+              help,
             ],
-            onChanged: sessions.length < 2
-                ? null
-                : (value) {
-                    if (value != null) onSelected(value);
-                  },
-          ),
-        ],
+          );
+        },
       ),
     );
   }

@@ -4,6 +4,99 @@ import 'package:vibermate_app/features/workbench/environment_editing.dart';
 import 'package:vibermate_app/preview/preview_control_api.dart';
 
 void main() {
+  test(
+    'account history grant is explicit, revisioned and survives model edits',
+    () async {
+      final api = PreviewControlApi();
+      addTearDown(api.close);
+      final work = (await api.loadDashboard()).environments.firstWhere(
+        (value) => value.id == 'work',
+      );
+      final endpoint = work.clientEndpoints.first;
+      final plan = endpoint.protocolPlans.first;
+      final route = plan.routes.first;
+      expect(route.allowAccountHistory, isFalse);
+      final updated = assignEnvironmentRouteAccountHistory(
+        endpoints: work.clientEndpoints,
+        clientEndpointId: endpoint.id,
+        protocolPlanId: plan.id,
+        routeId: route.id,
+        allowed: true,
+      );
+      final next = updated.first.protocolPlans.first.routes.first;
+      expect(next.allowAccountHistory, isTrue);
+      expect(next.revision, route.revision + 1);
+      expect(next.accountPolicy.revision, route.accountPolicy.revision);
+      final parsed = EnvironmentRoute.fromJson(next.toJson(), 'route');
+      expect(parsed.allowAccountHistory, isTrue);
+      final mapped = assignEnvironmentRouteModelMappings(
+        endpoints: updated,
+        clientEndpointId: endpoint.id,
+        protocolPlanId: plan.id,
+        routeId: route.id,
+        mappings: const [
+          EnvironmentModelMapping(requestedModel: 'one', upstreamModel: 'two'),
+        ],
+      );
+      expect(
+        mapped.first.protocolPlans.first.routes.first.allowAccountHistory,
+        isTrue,
+      );
+      final normalized = normalizeEnvironmentDraftRevisions(
+        base: work.clientEndpoints,
+        edited: mapped,
+      );
+      expect(
+        normalized.first.protocolPlans.first.routes.first.allowAccountHistory,
+        isTrue,
+      );
+      expect(
+        normalized.first.protocolPlans.first.routes.first.revision,
+        route.revision + 1,
+      );
+      final accounts = (await api.loadDashboard()).accounts;
+      final original = accounts.firstWhere(
+        (account) => account.id == route.accountPolicy.fixedAccountId,
+      );
+      final second = await api.createProviderAccount(
+        id: 'account.history-other',
+        displayName: 'Other account',
+        upstreamEndpointId: route.endpointId,
+        kind: original.kind,
+        secret: 'synthetic-credential',
+        headerPolicy: const ProviderAccountHeaderPolicy(),
+      );
+      final changed = assignEnvironmentRouteAccountPolicy(
+        endpoints: normalized,
+        clientEndpointId: endpoint.id,
+        protocolPlanId: plan.id,
+        routeId: route.id,
+        policy: fixedRouteAccountPolicy(second),
+        availableAccounts: [...accounts, second],
+      );
+      expect(
+        changed.first.protocolPlans.first.routes.first.allowAccountHistory,
+        isFalse,
+      );
+      final revoked = assignEnvironmentRouteAccountHistory(
+        endpoints: normalized,
+        clientEndpointId: endpoint.id,
+        protocolPlanId: plan.id,
+        routeId: route.id,
+        allowed: false,
+      );
+      expect(
+        revoked.first.protocolPlans.first.routes.first.allowAccountHistory,
+        isFalse,
+      );
+      expect(
+        revoked.first.protocolPlans.first.routes.first.toJson().containsKey(
+          'allowAccountHistory',
+        ),
+        isFalse,
+      );
+    },
+  );
   test('egress profile selection advances only its protocol path', () async {
     final api = PreviewControlApi();
     addTearDown(api.close);
@@ -734,9 +827,7 @@ void main() {
       );
       final owned = dashboard.accounts
           .where(
-            (account) =>
-                account.upstreamEndpointId == route.endpointId &&
-                account.usable,
+            (account) => account.isLinkedTo(route.endpointId) && account.usable,
           )
           .toList(growable: false);
       final selector = CodeLibraryAccountSelectorRevision(
@@ -788,7 +879,7 @@ void main() {
       expect(saved.revision, route.accountPolicy.revision + 1);
 
       final foreign = dashboard.accounts.firstWhere(
-        (account) => account.upstreamEndpointId != route.endpointId,
+        (account) => !account.isLinkedTo(route.endpointId),
       );
       expect(
         () => assignEnvironmentRouteAccountPolicy(
@@ -826,10 +917,7 @@ void main() {
         (candidate) => candidate.id == 'target.anthropic.official',
       );
       final owned = dashboard.accounts
-          .where(
-            (account) =>
-                account.upstreamEndpointId == endpoint.id && account.usable,
-          )
+          .where((account) => account.isLinkedTo(endpoint.id) && account.usable)
           .toList(growable: false);
       final selector = CodeLibraryAccountSelectorRevision(
         id: 'selector.workspace',

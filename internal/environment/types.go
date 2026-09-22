@@ -308,9 +308,11 @@ type UpstreamRoute struct {
 	ProviderTarget  ProviderTarget     `json:"providerTarget"`
 	BackendProtocol string             `json:"backendProtocol"`
 	AccountPolicy   RouteAccountPolicy `json:"accountPolicy"`
-	ModelPolicy     ModelPolicy        `json:"modelPolicy"`
-	WireProfileRef  string             `json:"wireProfileRef"`
-	PluginBindings  []PluginBinding    `json:"pluginBindings"`
+	// Account-wide historical activity is a separate grant from model use.
+	AllowAccountHistory bool            `json:"allowAccountHistory,omitempty"`
+	ModelPolicy         ModelPolicy     `json:"modelPolicy"`
+	WireProfileRef      string          `json:"wireProfileRef"`
+	PluginBindings      []PluginBinding `json:"pluginBindings"`
 }
 
 type RouteAccountPolicy struct {
@@ -406,5 +408,5 @@ type AccountDescriptor struct {
 }
 
 type AccountCatalog interface {
-	LookupAccount(string) (AccountDescriptor, bool)
+	LookupAccount(string, string) (AccountDescriptor, bool)
 }

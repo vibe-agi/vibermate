@@ -41,7 +41,8 @@ final class _LaunchEnvironmentEditorButtonState
   Widget build(BuildContext context) {
     return CompactLabeledControl(
       label: widget.copy('environment.launch.label'),
-      detail: widget.copy('environment.launch.detail'),
+      help: widget.copy('environment.launch.detail'),
+      dismissHelpLabel: widget.copy('common.dismiss'),
       child: SizedBox(
         width: double.infinity,
         height: ViberMetrics.controlHeight,

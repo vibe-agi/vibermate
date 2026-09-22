@@ -163,7 +163,13 @@ func (handler router) authorizeAdmin(request *http.Request, scope serveradmin.Sc
 		return false
 	}
 	value, found := strings.CutPrefix(values[0], "Bearer ")
-	return found && handler.admin.Authorize(request.Context(), value, scope)
+	if !found || !handler.admin.Authorize(request.Context(), value, scope) {
+		return false
+	}
+	if scope == serveradmin.ScopeWrite {
+		*request = *request.WithContext(desktopcontrol.WithOAuthSession(request.Context(), value))
+	}
+	return true
 }
 
 func runtimeUsersScope(method string) serveradmin.Scope {

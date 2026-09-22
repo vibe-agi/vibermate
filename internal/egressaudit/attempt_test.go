@@ -60,6 +60,7 @@ func TestPurposeAndAuthorityMustAgree(t *testing.T) {
 	expected := map[egressaudit.EgressPurpose]egressaudit.PolicyAuthorityKind{
 		egressaudit.PurposeProviderAttempt:        egressaudit.AuthorityEnvironment,
 		egressaudit.PurposeUpstreamModelDiscovery: egressaudit.AuthorityRuntime,
+		egressaudit.PurposeUpstreamAccountRead:    egressaudit.AuthorityRuntime,
 		egressaudit.PurposeModelMetadataDirectory: egressaudit.AuthorityRuntime,
 		egressaudit.PurposeCredentialRefresh:      egressaudit.AuthorityRuntime,
 		egressaudit.PurposeRouteOperation:         egressaudit.AuthorityEnvironment,

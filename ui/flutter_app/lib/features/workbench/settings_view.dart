@@ -33,11 +33,12 @@ final class SettingsView extends StatelessWidget {
         children: [
           PageHeading(
             title: copy('settings.title'),
-            subtitle: copy(
+            help: copy(
               controller.serverManagement
                   ? 'settings.subtitle.server'
                   : 'settings.subtitle',
             ),
+            dismissHelpLabel: copy('common.dismiss'),
           ),
           Material(
             color: context.viberColors.panel,
@@ -164,12 +165,14 @@ final class _SettingsPaneHeader extends StatelessWidget {
     required this.icon,
     required this.title,
     required this.detail,
+    required this.dismissHelpLabel,
     this.trailing,
   });
 
   final IconData icon;
   final String title;
   final String detail;
+  final String dismissHelpLabel;
   final Widget? trailing;
 
   @override
@@ -191,18 +194,11 @@ final class _SettingsPaneHeader extends StatelessWidget {
       ),
       const SizedBox(width: 10),
       Expanded(
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(title, style: Theme.of(context).textTheme.titleMedium),
-            const SizedBox(height: 2),
-            Text(
-              detail,
-              style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                color: context.viberColors.textMuted,
-              ),
-            ),
-          ],
+        child: ContextHelpHeading(
+          title: title,
+          message: detail,
+          dismissLabel: dismissHelpLabel,
+          style: Theme.of(context).textTheme.titleMedium,
         ),
       ),
       if (trailing case final action?) ...[const SizedBox(width: 12), action],
@@ -303,6 +299,7 @@ final class _EgressProfilesSettingsPaneState
         icon: Icons.alt_route,
         title: copy('settings.egress.title'),
         detail: copy('settings.egress.detail'),
+        dismissHelpLabel: copy('common.dismiss'),
         trailing: FilledButton.icon(
           key: const Key('egress-profile-add'),
           onPressed: _saving ? null : () => unawaited(_edit()),
@@ -435,6 +432,7 @@ final class _GeneralSettingsPane extends StatelessWidget {
         icon: Icons.tune,
         title: copy('settings.preferences.title'),
         detail: copy('settings.preferences.detail'),
+        dismissHelpLabel: copy('common.dismiss'),
       ),
       const SizedBox(height: 14),
       if (controller.preferenceWarning case final warning?) ...[
@@ -553,12 +551,13 @@ final class _AccessSettingsPane extends StatelessWidget {
               ? 'settings.access.detail.local'
               : 'settings.access.detail.server',
         ),
+        dismissHelpLabel: copy('common.dismiss'),
       ),
       if (controller.terminalManagement) ...[
         const SizedBox(height: 14),
-        _SettingsGroupLabel(
-          title: copy('settings.access.local.title'),
-          detail: copy('settings.access.local.detail'),
+        Text(
+          copy('settings.access.local.title'),
+          style: Theme.of(context).textTheme.titleSmall,
         ),
         const SizedBox(height: 8),
         _TerminalCommandPanel(controller: controller, copy: copy),
@@ -657,6 +656,7 @@ final class _SafetyDataSettingsPane extends StatelessWidget {
         icon: Icons.shield_outlined,
         title: copy('settings.safety.title'),
         detail: copy('settings.safety.detail'),
+        dismissHelpLabel: copy('common.dismiss'),
       ),
       const SizedBox(height: 14),
       OfflineHoldSettingsPanel(controller: controller, copy: copy),
@@ -709,14 +709,10 @@ final class _ServerConnectionSettingsPanel extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
-            copy('settings.server_connection.title'),
-            style: Theme.of(context).textTheme.titleSmall,
-          ),
-          const SizedBox(height: 5),
-          Text(
-            copy('settings.server_connection.detail'),
-            style: Theme.of(context).textTheme.bodySmall,
+          ContextHelpHeading(
+            title: copy('settings.server_connection.title'),
+            message: copy('settings.server_connection.detail'),
+            dismissLabel: copy('common.dismiss'),
           ),
           const SizedBox(height: 8),
           if (guide.serverURL case final url?)
@@ -842,28 +838,6 @@ final class _ServerTLSDetails extends StatelessWidget {
   }
 }
 
-final class _SettingsGroupLabel extends StatelessWidget {
-  const _SettingsGroupLabel({required this.title, required this.detail});
-
-  final String title;
-  final String detail;
-
-  @override
-  Widget build(BuildContext context) => Column(
-    crossAxisAlignment: CrossAxisAlignment.start,
-    children: [
-      Text(title, style: Theme.of(context).textTheme.titleSmall),
-      const SizedBox(height: 2),
-      Text(
-        detail,
-        style: Theme.of(
-          context,
-        ).textTheme.bodySmall?.copyWith(color: context.viberColors.textMuted),
-      ),
-    ],
-  );
-}
-
 final class _RootCASettingsPanel extends StatefulWidget {
   const _RootCASettingsPanel({required this.controller, required this.copy});
 
@@ -905,19 +879,10 @@ final class _RootCASettingsPanelState extends State<_RootCASettingsPanel> {
               ),
               const SizedBox(width: 8),
               Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      copy('settings.root_ca.title'),
-                      style: Theme.of(context).textTheme.titleSmall,
-                    ),
-                    const SizedBox(height: 3),
-                    Text(
-                      copy('settings.root_ca.detail'),
-                      style: Theme.of(context).textTheme.bodySmall,
-                    ),
-                  ],
+                child: ContextHelpHeading(
+                  title: copy('settings.root_ca.title'),
+                  message: copy('settings.root_ca.detail'),
+                  dismissLabel: copy('common.dismiss'),
                 ),
               ),
             ],
@@ -1437,6 +1402,11 @@ final class _ServerAccessPanelState extends State<_ServerAccessPanel> {
                                 ],
                               ),
                             ),
+                            ContextHelpButton(
+                              title: copy('server.access.title'),
+                              message: copy('server.access.description'),
+                              dismissLabel: copy('common.dismiss'),
+                            ),
                             if (guide.available) ...[
                               const SizedBox(width: 8),
                               _AccessTransportBadge(
@@ -1449,11 +1419,6 @@ final class _ServerAccessPanelState extends State<_ServerAccessPanel> {
                               ),
                             ],
                           ],
-                        ),
-                        const SizedBox(height: 5),
-                        Text(
-                          copy('server.access.description'),
-                          style: Theme.of(context).textTheme.bodySmall,
                         ),
                         const SizedBox(height: 9),
                         if (controller.serverManagementLoading &&
@@ -1656,29 +1621,16 @@ final class _RuntimeUsersPanelState extends State<_RuntimeUsersPanel> {
     final copy = widget.copy;
     final users = controller.runtimeUsers;
     final firstOwner = users != null && !users.any((user) => user.owner);
-    final heading = Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
+    final heading = Row(
       children: [
-        Row(
-          children: [
-            Icon(
-              Icons.group_outlined,
-              size: 17,
-              color: context.viberColors.route,
-            ),
-            const SizedBox(width: 7),
-            Text(
-              copy('settings.tab.users'),
-              style: Theme.of(context).textTheme.titleSmall,
-            ),
-          ],
-        ),
-        const SizedBox(height: 3),
-        Text(
-          copy('server.users.description'),
-          style: Theme.of(
-            context,
-          ).textTheme.bodySmall?.copyWith(color: context.viberColors.textMuted),
+        Icon(Icons.group_outlined, size: 17, color: context.viberColors.route),
+        const SizedBox(width: 7),
+        Expanded(
+          child: ContextHelpHeading(
+            title: copy('settings.tab.users'),
+            message: copy('server.users.description'),
+            dismissLabel: copy('common.dismiss'),
+          ),
         ),
       ],
     );
@@ -2366,9 +2318,10 @@ final class _ManagedRunGuideState extends State<_ManagedRunGuide> {
               ),
               const SizedBox(width: 6),
               Expanded(
-                child: Text(
-                  copy('terminal.run.title'),
-                  style: Theme.of(context).textTheme.titleSmall,
+                child: ContextHelpHeading(
+                  title: copy('terminal.run.title'),
+                  message: copy('terminal.run.detail'),
+                  dismissLabel: copy('common.dismiss'),
                 ),
               ),
               if (_copied case final value?)
@@ -2393,13 +2346,13 @@ final class _ManagedRunGuideState extends State<_ManagedRunGuide> {
                 ),
             ],
           ),
-          const SizedBox(height: 4),
-          Text(
-            copy(
-              enabled ? 'terminal.run.detail' : 'terminal.run.install_first',
+          if (!enabled) ...[
+            const SizedBox(height: 4),
+            Text(
+              copy('terminal.run.install_first'),
+              style: Theme.of(context).textTheme.bodySmall,
             ),
-            style: Theme.of(context).textTheme.bodySmall,
-          ),
+          ],
           const SizedBox(height: 7),
           Wrap(
             spacing: 7,
@@ -2676,14 +2629,11 @@ final class _TerminalCommandPanel extends StatelessWidget {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(
-                        copy('terminal.title'),
+                      ContextHelpHeading(
+                        title: copy('terminal.title'),
+                        message: copy('terminal.description'),
+                        dismissLabel: copy('common.dismiss'),
                         style: Theme.of(context).textTheme.titleMedium,
-                      ),
-                      const SizedBox(height: 2),
-                      Text(
-                        copy('terminal.description'),
-                        style: Theme.of(context).textTheme.bodySmall,
                       ),
                     ],
                   ),

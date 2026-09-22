@@ -50,6 +50,7 @@ class MainFlutterWindow: NSWindow {
   private var rootTrustInstallerChannel: FlutterMethodChannel?
   private var rootTrustInstaller: RootTrustInstaller?
   private var publicCertificateChannel: FlutterMethodChannel?
+  private var restoreSizeAfterFullScreen = false
 
   override func awakeFromNib() {
     let flutterViewController = FlutterViewController()
@@ -59,12 +60,21 @@ class MainFlutterWindow: NSWindow {
 
     self.title = "ViberMate"
     self.titleVisibility = .hidden
-    self.minSize = NSSize(width: 390, height: 620)
-    if !self.setFrameUsingName(Self.frameAutosaveName) {
-      self.setContentSize(NSSize(width: 1180, height: 760))
-      self.center()
+    self.minSize = WorkbenchWindowGeometry.minimumFrameSize
+    if self.setFrameUsingName(Self.frameAutosaveName) {
+      fitWindowToScreens()
+    } else {
+      restoreRecommendedWindowSize(nil)
     }
     self.setFrameAutosaveName(Self.frameAutosaveName)
+    NotificationCenter.default.addObserver(
+      self, selector: #selector(screenGeometryChanged(_:)),
+      name: NSApplication.didChangeScreenParametersNotification, object: nil
+    )
+    NotificationCenter.default.addObserver(
+      self, selector: #selector(didExitFullScreen(_:)),
+      name: NSWindow.didExitFullScreenNotification, object: self
+    )
 
     RegisterGeneratedPlugins(registry: flutterViewController)
     preferencesBridge = try? WorkbenchPreferencesBridge()
@@ -101,6 +111,67 @@ class MainFlutterWindow: NSWindow {
 
     super.awakeFromNib()
     self.sharingType = .readOnly
+  }
+
+  deinit {
+    NotificationCenter.default.removeObserver(self)
+  }
+
+  @IBAction func restoreRecommendedWindowSize(_ sender: Any?) {
+    if styleMask.contains(.fullScreen) {
+      restoreSizeAfterFullScreen = true
+      toggleFullScreen(sender)
+      return
+    }
+    guard let visible = (screen ?? NSScreen.main)?.visibleFrame else {
+      setContentSize(WorkbenchWindowGeometry.recommendedContentSize)
+      center()
+      return
+    }
+    let preferred = recommendedFrame(in: visible)
+    updateMinimumSize(for: preferred.size)
+    setFrame(preferred, display: true)
+    if !frameAutosaveName.isEmpty { saveFrame(usingName: frameAutosaveName) }
+  }
+
+  private func recommendedFrame(in visible: NSRect) -> NSRect {
+    let content = contentRect(forFrameRect: frame)
+    return WorkbenchWindowGeometry.recommendedFrame(
+      in: visible,
+      chrome: NSSize(width: frame.width - content.width, height: frame.height - content.height)
+    )
+  }
+
+  private func updateMinimumSize(for available: NSSize) {
+    minSize = NSSize(
+      width: min(WorkbenchWindowGeometry.minimumFrameSize.width, available.width),
+      height: min(WorkbenchWindowGeometry.minimumFrameSize.height, available.height)
+    )
+  }
+
+  private func fitWindowToScreens() {
+    guard !styleMask.contains(.fullScreen),
+          let visible = (screen ?? NSScreen.main)?.visibleFrame else { return }
+    updateMinimumSize(for: recommendedFrame(in: visible).size)
+    let fitted = WorkbenchWindowGeometry.fittedFrame(
+      frame, visibleFrames: NSScreen.screens.map(\.visibleFrame), fallback: visible
+    )
+    if fitted != frame { setFrame(fitted, display: true) }
+  }
+
+  @objc private func screenGeometryChanged(_ notification: Notification) {
+    // Only a display configuration change needs correction. Observing each
+    // window's screen change would snap a window mid-drag between displays.
+    DispatchQueue.main.async { [weak self] in self?.fitWindowToScreens() }
+  }
+
+  @objc private func didExitFullScreen(_ notification: Notification) {
+    if restoreSizeAfterFullScreen {
+      restoreSizeAfterFullScreen = false
+      restoreRecommendedWindowSize(nil)
+    } else {
+      fitWindowToScreens()
+    }
   }
 
   private func handlePreferences(call: FlutterMethodCall, result: @escaping FlutterResult) {
@@ -460,7 +531,7 @@ final class WorkbenchPreferencesBridge {
     }
     let observedFields = Set(payload.keys)
     let activeSections: Set<String> = [
-      "captures", "environments", "routes", "network", "settings",
+      "captures", "environments", "routes", "provider_accounts", "network", "settings",
     ]
     guard fields.isSubset(of: observedFields),
           observedFields.isSubset(of: fields),
