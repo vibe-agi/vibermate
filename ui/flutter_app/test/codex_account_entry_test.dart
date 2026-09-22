@@ -351,12 +351,24 @@ void main() {
       Uint8List.fromList(utf8.encode(raw)),
       name: 'auth.json',
     );
-    await tester.tap(find.byKey(const Key('account-editor-load-auth-json')));
-    await tester.pumpAndSettle();
-    expect(picker.requestedTypes!.single.extensions, ['json']);
     final field = tester.widget<TextFormField>(
       find.byKey(const Key('account-editor-codex-auth-json')),
     );
+    await tester.tap(find.byKey(const Key('account-editor-load-auth-json')));
+    // Browser FileReader uses real events while widget continuations use the
+    // fake clock. Advance both until import finishes, with a bounded wait.
+    for (
+      var attempt = 0;
+      attempt < 100 && field.controller!.text != raw;
+      attempt++
+    ) {
+      await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 50)),
+      );
+      await tester.pump();
+    }
+    await tester.pumpAndSettle();
+    expect(picker.requestedTypes!.single.extensions, ['json']);
     expect(field.controller!.text, raw);
     final editable = tester.widget<EditableText>(
       find.descendant(
