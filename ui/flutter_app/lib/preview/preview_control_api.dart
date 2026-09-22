@@ -4,9 +4,56 @@ import 'dart:typed_data';
 import 'package:crypto/crypto.dart' as crypto;
 
 import '../core/api/control_api.dart';
+import '../core/api/account_facts_models.dart';
 import '../core/api/control_models.dart';
+import '../core/api/provider_origin.dart';
 
 final class PreviewControlApi implements ControlApi {
+  @override
+  Future<AccountFacts> accountFacts(
+    String accountId, {
+    bool history = false,
+  }) async {
+    final account = _accounts.firstWhere((value) => value.id == accountId);
+    return AccountFacts.fromJson({
+      'accountId': account.id,
+      'credentialEpoch': account.credentialEpoch,
+      'origin': account.credentialOrigin,
+      'adapterId': 'chatgpt-codex',
+      'adapterRevision': 1,
+      'observedAt': DateTime.now().toUtc().toIso8601String(),
+      'state': 'known',
+      if (!history) 'planType': 'pro',
+      'limits': history
+          ? <Object?>[]
+          : [
+              {
+                'id': 'codex',
+                'allowed': true,
+                'limitReached': false,
+                'primary': {
+                  'usedPercent': 25,
+                  'windowSeconds': 18000,
+                  'resetAfterSeconds': 3600,
+                  'resetAt':
+                      DateTime.now()
+                          .toUtc()
+                          .add(const Duration(hours: 1))
+                          .millisecondsSinceEpoch ~/
+                      1000,
+                },
+              },
+            ],
+      if (history)
+        'history': {
+          'lifetimeTokens': 1200,
+          'peakDailyTokens': 300,
+          'daily': <Object?>[],
+          'partial': false,
+        },
+    });
+  }
+
   @override
   Future<String> revealRawHeader({
     required String envelopeId,
@@ -404,6 +451,17 @@ final class PreviewControlApi implements ControlApi {
       revision: 1,
     ),
     UpstreamEndpoint(
+      id: 'target.codex.official',
+      displayName: 'ChatGPT',
+      origin: Uri.parse('https://chatgpt.com'),
+      realmId: 'openai.chatgpt',
+      backendProtocols: const ['openai_responses'],
+      capabilities: const ['messages', 'streaming', 'tool_calls'],
+      accountKinds: const ['codex_oauth', 'bearer_token'],
+      state: 'active',
+      revision: 1,
+    ),
+    UpstreamEndpoint(
       id: 'target.orbit.relay',
       displayName: 'Orbit Relay · Tokyo',
       origin: Uri.parse('https://tokyo.orbitrelay.example'),
@@ -420,7 +478,8 @@ final class PreviewControlApi implements ControlApi {
     ProviderAccount(
       id: 'anthropic-work',
       displayName: 'Anthropic · Work',
-      upstreamEndpointId: 'target.anthropic.official',
+      credentialOrigin: 'https://api.anthropic.com',
+      linkedEndpointIds: const ['target.anthropic.official'],
       kind: 'anthropic_api_key',
       realmId: 'anthropic.official',
       state: 'active',
@@ -433,7 +492,8 @@ final class PreviewControlApi implements ControlApi {
     ProviderAccount(
       id: 'anthropic-lab',
       displayName: 'Anthropic · Lab',
-      upstreamEndpointId: 'target.anthropic.official',
+      credentialOrigin: 'https://api.anthropic.com',
+      linkedEndpointIds: const ['target.anthropic.official'],
       kind: 'anthropic_api_key',
       realmId: 'anthropic.official',
       state: 'active',
@@ -446,7 +506,8 @@ final class PreviewControlApi implements ControlApi {
     ProviderAccount(
       id: 'openai-work',
       displayName: 'OpenAI · Work',
-      upstreamEndpointId: 'target.openai.official',
+      credentialOrigin: 'https://api.openai.com',
+      linkedEndpointIds: const ['target.openai.official'],
       kind: 'bearer_token',
       realmId: 'openai.platform',
       state: 'active',
@@ -459,7 +520,8 @@ final class PreviewControlApi implements ControlApi {
     ProviderAccount(
       id: 'orbit-team',
       displayName: 'Orbit · Team Pool',
-      upstreamEndpointId: 'target.orbit.relay',
+      credentialOrigin: 'https://tokyo.orbitrelay.example',
+      linkedEndpointIds: const ['target.orbit.relay'],
       kind: 'anthropic_api_key',
       realmId: 'relay.orbit.tokyo',
       state: 'active',
@@ -1442,7 +1504,7 @@ final class PreviewControlApi implements ControlApi {
         messageKey: 'error.provider_account_not_found',
       );
     }
-    if (!account.usable || account.upstreamEndpointId != endpoint.id) {
+    if (!account.usable || !account.isLinkedTo(endpoint.id)) {
       throw const ControlProblem(
         status: 409,
         reasonCode: 'provider_account_conflict',
@@ -1534,6 +1596,9 @@ final class PreviewControlApi implements ControlApi {
       capabilities: const ['messages', 'streaming', 'tool_calls'],
       accountKinds: anthropic
           ? const ['anthropic_api_key', 'bearer_token']
+          : isChatGPTCodexOrigin(Uri.parse(origin)) &&
+                protocols.contains('openai_responses')
+          ? const ['codex_oauth', 'bearer_token']
           : const ['bearer_token'],
       state: 'active',
       revision: 1,
@@ -1547,8 +1612,10 @@ final class PreviewControlApi implements ControlApi {
     required String id,
     required String displayName,
     required String upstreamEndpointId,
+    bool unlinked = false,
     required String kind,
     required String secret,
+    String codexAuthJson = '',
     required ProviderAccountHeaderPolicy headerPolicy,
   }) async {
     _requireOpen();
@@ -1563,6 +1630,14 @@ final class PreviewControlApi implements ControlApi {
         messageKey: 'error.upstream_endpoint_not_found',
       );
     }
+    if ((kind == 'codex_oauth' &&
+            (secret.isNotEmpty || codexAuthJson.isEmpty)) ||
+        (kind != 'codex_oauth' &&
+            (secret.isEmpty || codexAuthJson.isNotEmpty))) {
+      throw const ControlContractException(
+        'Provider Account credential input is invalid',
+      );
+    }
     if (_accounts.any((account) => account.id == id)) {
       throw const ControlProblem(
         status: 409,
@@ -1573,7 +1648,8 @@ final class PreviewControlApi implements ControlApi {
     final account = ProviderAccount(
       id: id,
       displayName: displayName,
-      upstreamEndpointId: upstreamEndpointId,
+      credentialOrigin: endpoint.origin.toString(),
+      linkedEndpointIds: unlinked ? const [] : [upstreamEndpointId],
       kind: kind,
       realmId: endpoint.realmId,
       state: 'active',
@@ -1583,19 +1659,143 @@ final class PreviewControlApi implements ControlApi {
       setHeaderNames: headerPolicy.setHeaders.keys.toList(growable: false)
         ..sort(),
       deleteHeaderNames: [...headerPolicy.deleteHeaders]..sort(),
+      codexOAuth: kind == 'codex_oauth'
+          ? _previewCodexOAuth(codexAuthJson)
+          : null,
     );
     _accounts.add(account);
     return account;
+  }
+
+  final _codexLogins = <String, CodexLogin>{};
+  final _codexLoginTargets =
+      <String, ({String id, String endpoint, String name})>{};
+
+  @override
+  Future<CodexLogin> startCodexLogin({
+    required String accountId,
+    required String upstreamEndpointId,
+    required String displayName,
+    required String callbackMode,
+  }) async {
+    _requireOpen();
+    final endpoint = _endpoints.singleWhere(
+      (endpoint) => endpoint.id == upstreamEndpointId,
+    );
+    if (!endpoint.accountKinds.contains('codex_oauth')) {
+      throw const ControlContractException(
+        'OAuth is unavailable for this service',
+      );
+    }
+    final id = 'preview_${_codexLogins.length}'.padRight(43, '0');
+    final view = CodexLogin(
+      id: id,
+      state: 'pending',
+      callbackMode: 'manual',
+      authorizationUrl: Uri.https('auth.openai.com', '/oauth/authorize', {
+        'state': id,
+        'code_challenge_method': 'S256',
+        'code_challenge': id,
+        'redirect_uri': 'http://localhost:1455/auth/callback',
+      }).toString(),
+      expiresAt: DateTime.now().toUtc().add(const Duration(minutes: 15)),
+    );
+    _codexLogins[id] = view;
+    _codexLoginTargets[id] = (
+      id: accountId,
+      endpoint: upstreamEndpointId,
+      name: displayName,
+    );
+    return view;
+  }
+
+  @override
+  Future<CodexLogin> codexLoginStatus(String loginId) async {
+    _requireOpen();
+    return _codexLogins[loginId]!;
+  }
+
+  @override
+  Future<CodexLogin> completeCodexLogin(
+    String loginId,
+    String callbackUrl,
+  ) async {
+    _requireOpen();
+    final current = _codexLogins[loginId]!;
+    if (!current.active) return current;
+    final callback = Uri.tryParse(callbackUrl);
+    if (callback == null ||
+        callback.origin != 'http://localhost:1455' ||
+        callback.path != '/auth/callback' ||
+        callback.queryParameters['state'] != loginId ||
+        (callback.queryParameters['code'] ?? '').isEmpty) {
+      throw const ControlProblem(
+        status: 422,
+        reasonCode: 'invalid_control_request',
+        messageKey: 'error.invalid_control_request',
+      );
+    }
+    final target = _codexLoginTargets[loginId]!;
+    await createProviderAccount(
+      id: target.id,
+      displayName: target.name.isEmpty ? 'Codex · Preview' : target.name,
+      upstreamEndpointId: target.endpoint,
+      unlinked: true,
+      kind: 'codex_oauth',
+      secret: '',
+      headerPolicy: const ProviderAccountHeaderPolicy(),
+      codexAuthJson: jsonEncode({
+        'auth_mode': 'chatgpt',
+        'tokens': {
+          'account_id': 'workspace-preview',
+          'id_token': 'synthetic-id',
+          'access_token': 'synthetic-access',
+          'refresh_token': 'synthetic-refresh',
+        },
+        'last_refresh': DateTime.now().toUtc().toIso8601String(),
+      }),
+    );
+    return _codexLogins[loginId] = CodexLogin(
+      id: loginId,
+      state: 'completed',
+      callbackMode: current.callbackMode,
+      authorizationUrl: '',
+      expiresAt: current.expiresAt,
+      accountId: target.id,
+    );
+  }
+
+  @override
+  Future<void> cancelCodexLogin(String loginId) async {
+    _requireOpen();
+    final current = _codexLogins[loginId];
+    if (current == null || !current.active) return;
+    _codexLogins[loginId] = CodexLogin(
+      id: loginId,
+      state: 'cancelled',
+      callbackMode: current.callbackMode,
+      authorizationUrl: '',
+      expiresAt: current.expiresAt,
+    );
   }
 
   @override
   Future<ProviderAccount> replaceProviderAccountCredential({
     required ProviderAccount account,
     required String secret,
+    String codexAuthJson = '',
     required ProviderAccountHeaderPolicy headerPolicy,
   }) async {
     _requireOpen();
     headerPolicy.validate(accountKind: account.kind);
+    if ((account.kind == 'codex_oauth' &&
+            (secret.isNotEmpty || codexAuthJson.isEmpty)) ||
+        (account.kind != 'codex_oauth' &&
+            (secret.isEmpty || codexAuthJson.isNotEmpty))) {
+      throw const ControlContractException(
+        'Provider Account credential input is invalid',
+      );
+    }
     final index = _accounts.indexWhere(
       (candidate) => candidate.id == account.id,
     );
@@ -1617,16 +1817,151 @@ final class PreviewControlApi implements ControlApi {
     final updated = ProviderAccount(
       id: current.id,
       displayName: current.displayName,
-      upstreamEndpointId: current.upstreamEndpointId,
+      note: current.note,
+      noteRevision: current.noteRevision,
+      credentialOrigin: current.credentialOrigin,
+      linkedEndpointIds: current.linkedEndpointIds,
+      associationRevision: current.associationRevision,
       kind: current.kind,
       realmId: current.realmId,
       state: current.state,
-      revision: current.revision + 1,
+      revision: current.revision,
       credentialState: 'ready',
       credentialEpoch: current.credentialEpoch + 1,
       setHeaderNames: headerPolicy.setHeaders.keys.toList(growable: false)
         ..sort(),
       deleteHeaderNames: [...headerPolicy.deleteHeaders]..sort(),
+      codexOAuth: current.kind == 'codex_oauth'
+          ? _previewCodexOAuth(codexAuthJson)
+          : null,
+    );
+    _accounts[index] = updated;
+    return updated;
+  }
+
+  @override
+  Future<ProviderAccount> refreshProviderAccountCredential(
+    ProviderAccount account,
+  ) async {
+    _requireOpen();
+    final index = _accounts.indexWhere((item) => item.id == account.id);
+    if (index < 0 || account.kind != 'codex_oauth') {
+      throw const ControlContractException(
+        'This credential cannot be refreshed',
+      );
+    }
+    final current = _accounts[index];
+    if (current.credentialEpoch != account.credentialEpoch) {
+      throw const ControlProblem(
+        status: 409,
+        reasonCode: 'provider_account_conflict',
+        messageKey: 'error.provider_account_conflict',
+      );
+    }
+    final oauth = current.codexOAuth!;
+    final updated = ProviderAccount(
+      id: current.id,
+      displayName: current.displayName,
+      note: current.note,
+      noteRevision: current.noteRevision,
+      credentialOrigin: current.credentialOrigin,
+      linkedEndpointIds: current.linkedEndpointIds,
+      associationRevision: current.associationRevision,
+      kind: current.kind,
+      realmId: current.realmId,
+      state: current.state,
+      revision: current.revision,
+      credentialState: 'ready',
+      credentialEpoch: current.credentialEpoch + 1,
+      setHeaderNames: current.setHeaderNames,
+      deleteHeaderNames: current.deleteHeaderNames,
+      codexOAuth: CodexOAuthAccount(
+        chatgptAccountId: oauth.chatgptAccountId,
+        email: oauth.email,
+        userId: oauth.userId,
+        planType: oauth.planType,
+        fedRamp: oauth.fedRamp,
+        expiresAt: _now.add(const Duration(hours: 1)),
+        lastRefresh: _now,
+        state: 'ready',
+      ),
+    );
+    _accounts[index] = updated;
+    return updated;
+  }
+
+  @override
+  Future<ProviderAccount> setProviderAccountNote(
+    ProviderAccount account,
+    String note,
+  ) async {
+    _requireOpen();
+    note = note.trim();
+    if (!validProviderAccountNote(note)) {
+      throw const ControlContractException('Provider Account note is invalid');
+    }
+    final index = _accounts.indexWhere((value) => value.id == account.id);
+    if (index < 0 || _accounts[index].noteRevision != account.noteRevision) {
+      throw const ControlProblem(
+        status: 409,
+        reasonCode: 'provider_account_conflict',
+        messageKey: 'error.provider_account_conflict',
+      );
+    }
+    final current = _accounts[index];
+    final updated = current.withNote(
+      note,
+      current.noteRevision + (note == current.note ? 0 : 1),
+    );
+    _accounts[index] = updated;
+    return updated;
+  }
+
+  @override
+  Future<ProviderAccount> setProviderAccountAssociation({
+    required ProviderAccount account,
+    required UpstreamEndpoint endpoint,
+    required bool linked,
+  }) async {
+    _requireOpen();
+    final index = _accounts.indexWhere((value) => value.id == account.id);
+    if (index < 0 ||
+        _accounts[index].associationRevision != account.associationRevision ||
+        linked && !account.canLinkTo(endpoint)) {
+      throw const ControlProblem(
+        status: 409,
+        reasonCode: 'provider_account_conflict',
+        messageKey: 'error.provider_account_conflict',
+      );
+    }
+    final current = _accounts[index];
+    if (current.isLinkedTo(endpoint.id) == linked) return current;
+    if (!linked &&
+        _environments.any(
+          (environment) => environment.routes.any(
+            (route) =>
+                route.endpointId == endpoint.id &&
+                route.accountPolicy.accounts.any(
+                  (value) => value.id == account.id,
+                ),
+          ),
+        )) {
+      throw const ControlProblem(
+        status: 409,
+        reasonCode: 'provider_account_in_use',
+        messageKey: 'error.provider_account_in_use',
+      );
+    }
+    final ids = [...current.linkedEndpointIds];
+    if (linked) {
+      ids.add(endpoint.id);
+    } else {
+      ids.remove(endpoint.id);
+    }
+    ids.sort();
+    final updated = current.withAssociations(
+      ids,
+      current.associationRevision + 1,
     );
     _accounts[index] = updated;
     return updated;
@@ -3579,5 +3914,58 @@ Evidence line 16''';
   @override
   Future<void> close() async {
     _closed = true;
+  }
+}
+
+CodexOAuthAccount _previewCodexOAuth(String authJSON) {
+  try {
+    final value = Map<String, Object?>.from(jsonDecode(authJSON) as Map);
+    final tokens = Map<String, Object?>.from(value['tokens']! as Map);
+    final selectedAccountID = tokens['account_id'];
+    final accountID =
+        selectedAccountID is String && selectedAccountID.isNotEmpty
+        ? selectedAccountID
+        : _previewJWTAccountID(tokens['id_token']) ??
+              _previewJWTAccountID(tokens['access_token']);
+    final lastRefresh = DateTime.tryParse(value['last_refresh']! as String);
+    if (value['auth_mode'] != 'chatgpt' ||
+        accountID == null ||
+        accountID.isEmpty ||
+        lastRefresh == null ||
+        !lastRefresh.isUtc) {
+      throw const FormatException();
+    }
+    return CodexOAuthAccount(
+      chatgptAccountId: accountID,
+      email: null,
+      userId: null,
+      planType: null,
+      fedRamp: false,
+      expiresAt: null,
+      lastRefresh: lastRefresh,
+      state: 'ready',
+    );
+  } on Object {
+    throw const ControlContractException(
+      'Codex OAuth auth.json input is invalid',
+    );
+  }
+}
+
+String? _previewJWTAccountID(Object? token) {
+  if (token is! String) return null;
+  final parts = token.split('.');
+  if (parts.length != 3 || parts.any((part) => part.isEmpty)) return null;
+  try {
+    final payload = jsonDecode(
+      utf8.decode(base64Url.decode(base64Url.normalize(parts[1]))),
+    );
+    if (payload is! Map) return null;
+    final auth = payload['https://api.openai.com/auth'];
+    if (auth is! Map) return null;
+    final accountID = auth['chatgpt_account_id'];
+    return accountID is String && accountID.isNotEmpty ? accountID : null;
+  } on Object {
+    return null;
   }
 }

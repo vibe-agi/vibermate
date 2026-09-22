@@ -13,7 +13,7 @@ const volume = `${project}-data`;
 const root = fileURLToPath(new URL('../../', import.meta.url));
 const env = {
   ...process.env,
-  VIBERMATE_IMAGE: process.env.VIBERMATE_IMAGE ?? 'vibermate-runtime:0.1.11-local',
+  VIBERMATE_IMAGE: process.env.VIBERMATE_IMAGE ?? 'vibermate-runtime:0.1.12-local',
   VIBERMATE_PORT: '0',
   VIBERMATE_BIND_ADDRESS: '0.0.0.0', // The HTTP template must ignore this.
   VIBERMATE_LOCAL_DATA_VOLUME: volume,

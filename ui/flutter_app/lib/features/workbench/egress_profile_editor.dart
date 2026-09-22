@@ -33,7 +33,8 @@ final class EgressProfileButton extends StatelessWidget {
     padding: const EdgeInsets.fromLTRB(9, 8, 9, 9),
     child: CompactLabeledControl(
       label: copy('environment.egress.label'),
-      detail: copy('environment.egress.profile.detail'),
+      help: copy('environment.egress.profile.detail'),
+      dismissHelpLabel: copy('common.dismiss'),
       child: SizedBox(
         width: double.infinity,
         height: ViberMetrics.controlHeight,

@@ -314,25 +314,40 @@ final class CompactLabeledControl extends StatelessWidget {
     required this.label,
     required this.child,
     this.detail,
+    this.help,
+    this.dismissHelpLabel,
     super.key,
-  });
+  }) : assert((help == null) == (dismissHelpLabel == null));
 
   final String label;
   final Widget child;
   final String? detail;
+  final String? help;
+  final String? dismissHelpLabel;
 
   @override
   Widget build(BuildContext context) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(
-          label,
-          style: Theme.of(context).textTheme.labelMedium?.copyWith(
-            color: context.viberColors.textMuted,
-            letterSpacing: 0.1,
+        if (help case final explanation?)
+          ContextHelpHeading(
+            title: label,
+            message: explanation,
+            dismissLabel: dismissHelpLabel!,
+            style: Theme.of(context).textTheme.labelMedium?.copyWith(
+              color: context.viberColors.textMuted,
+              letterSpacing: 0.1,
+            ),
+          )
+        else
+          Text(
+            label,
+            style: Theme.of(context).textTheme.labelMedium?.copyWith(
+              color: context.viberColors.textMuted,
+              letterSpacing: 0.1,
+            ),
           ),
-        ),
         const SizedBox(height: ViberSpacing.xs),
         child,
         if (detail case final value?) ...[
@@ -853,16 +868,98 @@ final class SectionLabel extends StatelessWidget {
   }
 }
 
+/// On-demand explanation, never a container for errors or action consequences.
+/// A real button and dialog make help available to mouse, keyboard and touch.
+final class ContextHelpButton extends StatelessWidget {
+  const ContextHelpButton({
+    required this.title,
+    required this.message,
+    required this.dismissLabel,
+    this.tooltip,
+    super.key,
+  });
+
+  final String title;
+  final String message;
+  final String dismissLabel;
+  final String? tooltip;
+
+  @override
+  Widget build(BuildContext context) => IconButton(
+    tooltip: tooltip ?? title,
+    icon: Icon(
+      Icons.info_outline,
+      size: 15,
+      color: context.viberColors.textMuted,
+    ),
+    constraints: const BoxConstraints.tightFor(width: 30, height: 30),
+    padding: EdgeInsets.zero,
+    onPressed: () => showDialog<void>(
+      context: context,
+      builder: (context) => AlertDialog(
+        constraints: const BoxConstraints(maxWidth: 560),
+        insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
+        scrollable: true,
+        title: Text(title),
+        content: SelectionArea(child: Text(message)),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: Text(dismissLabel),
+          ),
+        ],
+      ),
+    ),
+  );
+}
+
+/// A title with optional background explanation. Keep operational state and
+/// consequential warnings in the page body, outside this disclosure.
+final class ContextHelpHeading extends StatelessWidget {
+  const ContextHelpHeading({
+    required this.title,
+    required this.message,
+    required this.dismissLabel,
+    this.style,
+    super.key,
+  });
+
+  final String title;
+  final String message;
+  final String dismissLabel;
+  final TextStyle? style;
+
+  @override
+  Widget build(BuildContext context) => Row(
+    children: [
+      Flexible(
+        child: Text(
+          title,
+          style: style ?? Theme.of(context).textTheme.titleSmall,
+        ),
+      ),
+      const SizedBox(width: 4),
+      ContextHelpButton(
+        title: title,
+        message: message,
+        dismissLabel: dismissLabel,
+      ),
+    ],
+  );
+}
+
 final class PageHeading extends StatelessWidget {
   const PageHeading({
     required this.title,
-    required this.subtitle,
+    required this.help,
+    required this.dismissHelpLabel,
     this.trailing,
     super.key,
   });
 
   final String title;
-  final String subtitle;
+  final String help;
+  final String dismissHelpLabel;
   final Widget? trailing;
 
   @override
@@ -873,40 +970,48 @@ final class PageHeading extends StatelessWidget {
         final titleStyle = compact
             ? Theme.of(context).textTheme.headlineSmall?.copyWith(fontSize: 16)
             : Theme.of(context).textTheme.headlineLarge;
+        final heading = Row(
+          children: [
+            Flexible(
+              child: Text(
+                title,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: titleStyle,
+              ),
+            ),
+            const SizedBox(width: ViberSpacing.xs),
+            ContextHelpButton(
+              title: title,
+              message: help,
+              dismissLabel: dismissHelpLabel,
+            ),
+          ],
+        );
         return Padding(
           padding: EdgeInsets.symmetric(
             horizontal: ViberSpacing.lg,
             vertical: compact ? ViberSpacing.sm : ViberSpacing.md,
           ),
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Expanded(
-                child: Column(
+          child: compact && trailing != null
+              ? Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(
-                      title,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: titleStyle,
-                    ),
-                    const SizedBox(height: ViberSpacing.xs),
-                    Text(
-                      subtitle,
-                      maxLines: compact ? 2 : 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: Theme.of(context).textTheme.bodySmall,
-                    ),
+                    heading,
+                    const SizedBox(height: ViberSpacing.sm),
+                    trailing!,
+                  ],
+                )
+              : Row(
+                  crossAxisAlignment: CrossAxisAlignment.center,
+                  children: [
+                    Expanded(child: heading),
+                    if (trailing case final action?) ...[
+                      const SizedBox(width: ViberSpacing.md),
+                      action,
+                    ],
                   ],
                 ),
-              ),
-              if (trailing case final action?) ...[
-                const SizedBox(width: ViberSpacing.md),
-                action,
-              ],
-            ],
-          ),
         );
       },
     );

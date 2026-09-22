@@ -78,6 +78,7 @@ type AccountReference struct {
 // writes and publication. A caller may delete only inside the callback and
 // only when the returned reference set is empty.
 type AccountDeletionGuard interface {
+	GuardAccountAssociationRemoval(context.Context, string, string, func() error) ([]AccountReference, error)
 	GuardAccountDeletion(
 		context.Context,
 		string,
@@ -129,7 +130,7 @@ func NewManager(ctx context.Context, repository Repository, compiler Compiler, p
 	}
 	snapshots := make([]EnvironmentSnapshot, 0, len(aggregates))
 	for _, aggregate := range aggregates {
-		snapshot, compileErr := compiler.Compile(aggregate)
+		snapshot, compileErr := compiler.Restore(aggregate)
 		if compileErr != nil {
 			return nil, fmt.Errorf("%w: recover environmentId=%q: %w", ErrInvalidRepositoryState, aggregate.ID, compileErr)
 		}
@@ -167,6 +168,15 @@ func (manager *Manager) GuardAccountDeletion(
 	accountID string,
 	deleteAccount func() error,
 ) ([]AccountReference, error) {
+	return manager.GuardAccountAssociationRemoval(ctx, accountID, "", deleteAccount)
+}
+
+func (manager *Manager) GuardAccountAssociationRemoval(
+	ctx context.Context,
+	accountID string,
+	endpointID string,
+	deleteAccount func() error,
+) ([]AccountReference, error) {
 	if ctx == nil || validateID("ProviderAccount ID", accountID) != nil || deleteAccount == nil {
 		return nil, ErrInvalidEnvironment
 	}
@@ -181,6 +191,9 @@ func (manager *Manager) GuardAccountDeletion(
 		for _, endpoint := range aggregate.ClientEndpoints {
 			for _, plan := range endpoint.ProtocolPlans {
 				for _, route := range destinationRoutes(plan.Destination) {
+					if endpointID != "" && route.ProviderTarget.ID != endpointID {
+						continue
+					}
 					if !slices.ContainsFunc(route.AccountPolicy.Accounts, func(candidate RouteAccountReference) bool {
 						return candidate.ID == accountID
 					}) {
@@ -291,7 +304,7 @@ func (manager *Manager) List(ctx context.Context) ([]EnvironmentSnapshot, error)
 	snapshots := make([]EnvironmentSnapshot, 0, len(aggregates)+1)
 	snapshots = append(snapshots, manager.system.clone())
 	for _, aggregate := range aggregates {
-		snapshot, compileErr := manager.compiler.Compile(aggregate)
+		snapshot, compileErr := manager.compiler.Restore(aggregate)
 		if compileErr != nil {
 			return nil, fmt.Errorf("%w: read environmentId=%q: %w", ErrInvalidRepositoryState, aggregate.ID, compileErr)
 		}
@@ -320,7 +333,7 @@ func (manager *Manager) Get(ctx context.Context, id EnvironmentID) (EnvironmentS
 	if !exists {
 		return EnvironmentSnapshot{}, fmt.Errorf("%w: environmentId=%q", ErrEnvironmentNotFound, id)
 	}
-	return manager.compiler.Compile(aggregate)
+	return manager.compiler.Restore(aggregate)
 }
 
 func (manager *Manager) GetDraft(ctx context.Context, id EnvironmentID) (Draft, error) {
@@ -355,7 +368,7 @@ func (manager *Manager) GetRevision(ctx context.Context, id EnvironmentID, revis
 	if !exists {
 		return EnvironmentSnapshot{}, fmt.Errorf("%w: environmentId=%q revision=%d", ErrEnvironmentNotFound, id, revision)
 	}
-	return manager.compiler.Compile(aggregate)
+	return manager.compiler.Restore(aggregate)
 }
 
 func (manager *Manager) SaveDraft(ctx context.Context, command DraftCommand) (Draft, error) {

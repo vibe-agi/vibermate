@@ -14,6 +14,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/egressprofile"
 	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/provideraccount"
+	"github.com/vibe-agi/vibermate/internal/upstreamendpoint"
 )
 
 type EnvironmentListResponse struct {
@@ -455,8 +456,8 @@ func accountBelongsToRoute(
 	account := view.Account
 	return account.State == provideraccount.StateActive &&
 		view.Health.State == provideraccount.HealthReady &&
-		account.UpstreamEndpointID.String() == route.ProviderTarget.ID &&
-		account.RealmID == route.ProviderTarget.RealmID
+		account.Origin == route.ProviderTarget.Origin &&
+		account.Associations.Contains(upstreamendpoint.ID(route.ProviderTarget.ID))
 }
 
 func classifyEnvironmentAccountPolicyError(err error) problemSpec {

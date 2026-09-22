@@ -28,7 +28,9 @@ type EgressPurpose string
 const (
 	PurposeProviderAttempt        EgressPurpose = "provider_attempt"
 	PurposeUpstreamModelDiscovery EgressPurpose = "upstream_model_discovery"
+	PurposeUpstreamAccountRead    EgressPurpose = "upstream_account_read"
 	PurposeModelMetadataDirectory EgressPurpose = "model_metadata_directory"
+	PurposeCredentialRefresh      EgressPurpose = "credential_refresh"
 	PurposeRouteOperation         EgressPurpose = "route_operation"
 	PurposeOriginalOrigin         EgressPurpose = "original_origin"
 	PurposeAgentProbe             EgressPurpose = "agent_probe"
@@ -47,7 +49,9 @@ func Purposes() []EgressPurpose {
 	return []EgressPurpose{
 		PurposeProviderAttempt,
 		PurposeUpstreamModelDiscovery,
+		PurposeUpstreamAccountRead,
 		PurposeModelMetadataDirectory,
+		PurposeCredentialRefresh,
 		PurposeRouteOperation,
 		PurposeOriginalOrigin,
 		PurposeAgentProbe,
@@ -80,7 +84,8 @@ func AuthorityForPurpose(
 		return AuthorityEnvironment, nil
 	case PurposeOriginalOrigin, PurposeAgentProbe, PurposeBlindTunnel:
 		return AuthorityNetwork, nil
-	case PurposeUpstreamModelDiscovery, PurposeModelMetadataDirectory,
+	case PurposeUpstreamModelDiscovery, PurposeUpstreamAccountRead, PurposeModelMetadataDirectory,
+		PurposeCredentialRefresh,
 		PurposeAuxiliaryLLM, PurposeLanguageTransform,
 		PurposePluginCatalogSync, PurposePluginArtifactFetch, PurposeUpdate:
 		return AuthorityRuntime, nil
@@ -365,7 +370,8 @@ func validatePayloadClass(
 				class,
 			)
 		}
-	case PurposeUpstreamModelDiscovery, PurposeModelMetadataDirectory,
+	case PurposeUpstreamModelDiscovery, PurposeUpstreamAccountRead, PurposeModelMetadataDirectory,
+		PurposeCredentialRefresh,
 		PurposeAuxiliaryLLM, PurposeLanguageTransform,
 		PurposePluginCatalogSync, PurposePluginArtifactFetch, PurposeUpdate:
 		if class != PayloadRuntime {
@@ -445,7 +451,8 @@ func validateParent(
 			)
 		}
 		return requireConnection()
-	case PurposeUpstreamModelDiscovery, PurposeModelMetadataDirectory,
+	case PurposeUpstreamModelDiscovery, PurposeUpstreamAccountRead, PurposeModelMetadataDirectory,
+		PurposeCredentialRefresh,
 		PurposeAuxiliaryLLM, PurposeLanguageTransform,
 		PurposePluginCatalogSync, PurposePluginArtifactFetch, PurposeUpdate:
 		if parent.Kind != ParentRuntimeAction || parent.ExchangeID != "" {

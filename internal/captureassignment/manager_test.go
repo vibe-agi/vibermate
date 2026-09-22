@@ -567,7 +567,7 @@ func environmentCompiler(t *testing.T) environment.Compiler {
 
 type captureAssignmentAccountCatalog struct{}
 
-func (captureAssignmentAccountCatalog) LookupAccount(id string) (environment.AccountDescriptor, bool) {
+func (captureAssignmentAccountCatalog) LookupAccount(id string, _ string) (environment.AccountDescriptor, bool) {
 	if id != "account.default" {
 		return environment.AccountDescriptor{}, false
 	}

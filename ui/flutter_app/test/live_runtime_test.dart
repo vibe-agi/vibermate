@@ -1,6 +1,7 @@
 @TestOn('vm')
 library;
 
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -36,6 +37,73 @@ void main() {
         expect(dashboard.status.healthy, isTrue);
         expect(dashboard.status.instanceId, isNotEmpty);
         expect(dashboard.environments, isNotEmpty);
+        final chatgpt = dashboard.endpoints.singleWhere(
+          (endpoint) => endpoint.id == 'target.codex.official',
+        );
+        expect(chatgpt.accountKinds, contains('codex_oauth'));
+        // Exercise packaged host wiring without contacting the real issuer or
+        // touching the user's own Codex credentials.
+        final login = await runtime.api.startCodexLogin(
+          accountId: 'account.flutter.login-$runSuffix',
+          upstreamEndpointId: chatgpt.id,
+          displayName: '',
+          callbackMode: 'manual',
+        );
+        expect(login.state, 'pending');
+        expect(Uri.parse(login.authorizationUrl).host, 'auth.openai.com');
+        expect((await runtime.api.codexLoginStatus(login.id)).state, 'pending');
+        await runtime.api.cancelCodexLogin(login.id);
+        expect(
+          (await runtime.api.codexLoginStatus(login.id)).state,
+          'cancelled',
+        );
+        final claims = base64Url
+            .encode(
+              utf8.encode(
+                jsonEncode({
+                  'email': 'synthetic-login@example.com',
+                  'exp':
+                      DateTime.now()
+                          .add(const Duration(hours: 1))
+                          .millisecondsSinceEpoch ~/
+                      1000,
+                  'https://api.openai.com/auth': {
+                    'chatgpt_account_id': 'workspace-live-synthetic',
+                    'chatgpt_plan_type': 'pro',
+                  },
+                }),
+              ),
+            )
+            .replaceAll('=', '');
+        final syntheticJWT = 'eyJhbGciOiJub25lIn0.$claims.synthetic';
+        final imported = await runtime.api.createProviderAccount(
+          id: 'account.flutter.codex-$runSuffix',
+          displayName: 'Synthetic Codex import',
+          upstreamEndpointId: chatgpt.id,
+          unlinked: true,
+          kind: 'codex_oauth',
+          secret: '',
+          codexAuthJson: jsonEncode({
+            'auth_mode': 'chatgpt',
+            'OPENAI_API_KEY': null,
+            'tokens': {
+              'id_token': syntheticJWT,
+              'access_token': syntheticJWT,
+              'refresh_token': 'synthetic-live-refresh',
+              'account_id': 'workspace-live-synthetic',
+            },
+            'last_refresh': DateTime.now().toUtc().toIso8601String(),
+          }),
+          headerPolicy: const ProviderAccountHeaderPolicy(),
+        );
+        expect(imported.codexOAuth?.email, 'synthetic-login@example.com');
+        expect(imported.codexOAuth?.planType, 'pro');
+        expect(
+          imported.codexOAuth?.chatgptAccountId,
+          'workspace-live-synthetic',
+        );
+        expect(imported.linkedEndpointIds, isEmpty);
+        await runtime.api.deleteProviderAccount(imported);
         final initialRoot = await runtime.api.rootCA();
         expect(initialRoot.rootValid, isTrue);
         expect(initialRoot.available, isTrue);
@@ -132,22 +200,53 @@ void main() {
           'openai_responses',
           'openai_chat',
         ]);
-        final account = await runtime.api.createProviderAccount(
+        final independentAccount = await runtime.api.createProviderAccount(
           id: 'account.flutter.live-$runSuffix',
           displayName: 'Flutter live Account',
           upstreamEndpointId: endpoint.id,
+          unlinked: true,
           kind: 'anthropic_api_key',
           secret: 'flutter-live-secret-one',
           headerPolicy: const ProviderAccountHeaderPolicy(),
         );
-        expect(account.upstreamEndpointId, endpoint.id);
+        expect(independentAccount.linkedEndpointIds, isEmpty);
+        final account = await runtime.api.setProviderAccountAssociation(
+          account: independentAccount,
+          endpoint: endpoint,
+          linked: true,
+        );
+        expect(account.linkedEndpointIds, [endpoint.id]);
         expect(account.credentialEpoch, 1);
-        final rotated = await runtime.api.replaceProviderAccountCredential(
+        final anotherProfile = await runtime.api.createUpstreamEndpoint(
+          id: 'target.flutter.shared-$runSuffix',
+          displayName: 'Shared credential profile',
+          origin: endpoint.origin.toString(),
+          backendProtocols: endpoint.backendProtocols,
+        );
+        final shared = await runtime.api.setProviderAccountAssociation(
           account: account,
+          endpoint: anotherProfile,
+          linked: true,
+        );
+        expect(
+          shared.linkedEndpointIds,
+          unorderedEquals([endpoint.id, anotherProfile.id]),
+        );
+        expect(shared.revision, account.revision);
+        expect(shared.credentialEpoch, account.credentialEpoch);
+        final unlinked = await runtime.api.setProviderAccountAssociation(
+          account: shared,
+          endpoint: endpoint,
+          linked: false,
+        );
+        expect(unlinked.linkedEndpointIds, [anotherProfile.id]);
+        final rotated = await runtime.api.replaceProviderAccountCredential(
+          account: unlinked,
           secret: 'flutter-live-secret-two',
           headerPolicy: const ProviderAccountHeaderPolicy(),
         );
         expect(rotated.credentialEpoch, 2);
+        expect(rotated.linkedEndpointIds, [anotherProfile.id]);
         final deleted = await runtime.api.deleteProviderAccount(rotated);
         expect(deleted.deleted, isTrue);
         expect(deleted.references, isEmpty);
@@ -219,6 +318,20 @@ void main() {
         );
         expect(blockedDelete.deleted, isFalse);
         expect(blockedDelete.references, hasLength(2));
+        await expectLater(
+          runtime.api.setProviderAccountAssociation(
+            account: routeAccount,
+            endpoint: endpoint,
+            linked: false,
+          ),
+          throwsA(
+            isA<ControlProblem>().having(
+              (problem) => problem.reasonCode,
+              'reason',
+              'provider_account_in_use',
+            ),
+          ),
+        );
         expect(
           blockedDelete.references.map((reference) => reference.environmentId),
           everyElement(routedEnvironmentId),

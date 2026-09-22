@@ -936,6 +936,10 @@ func validFixture(
 		t.Fatal(err)
 	}
 	artifactPaths := map[string]string{
+		"file-selector-framework": filepath.Join(bundle,
+			"Contents", "Frameworks", "file_selector_macos.framework", "Versions", "A", "file_selector_macos"),
+		"url-launcher-framework": filepath.Join(bundle,
+			"Contents", "Frameworks", "url_launcher_macos.framework", "Versions", "A", "url_launcher_macos"),
 		"acceptance": filepath.Join(root, "vibermate-acceptance"),
 		"app-framework": filepath.Join(
 			bundle, "Contents", "Frameworks", "App.framework", "Versions", "A", "App",
@@ -1009,6 +1013,14 @@ func validFixture(
 	if err != nil {
 		t.Fatal(err)
 	}
+	fileSelector, err := DigestArtifact("file-selector-framework", artifactPaths["file-selector-framework"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	urlLauncher, err := DigestArtifact("url-launcher-framework", artifactPaths["url-launcher-framework"])
+	if err != nil {
+		t.Fatal(err)
+	}
 	manifest := desktopBuildManifest{
 		Schema: DesktopBuildManifestSchemaV3,
 		Source: source,
@@ -1020,7 +1032,9 @@ func validFixture(
 		ConfigurationSHA256: configurationDigests,
 		NestedCodeSHA256: map[string]string{
 			"app-framework":           appFramework.SHA256,
+			"file-selector-framework": fileSelector.SHA256,
 			"flutter-macos-framework": flutterFramework.SHA256,
+			"url-launcher-framework":  urlLauncher.SHA256,
 			"vibermated":              daemon.SHA256,
 			"vibermate":               launcher.SHA256,
 		},

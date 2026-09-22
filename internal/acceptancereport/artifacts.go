@@ -466,12 +466,18 @@ func expectedArtifactPaths(
 			"FlutterMacOS.framework", "Versions", "A", "FlutterMacOS",
 		),
 		"launcher": filepath.Join(macOSDirectory, "vibermate"),
+		"file-selector-framework": filepath.Join(frameworksDirectory,
+			"file_selector_macos.framework", "Versions", "A", "file_selector_macos"),
+		"url-launcher-framework": filepath.Join(frameworksDirectory,
+			"url_launcher_macos.framework", "Versions", "A", "url_launcher_macos"),
 	}
 	for _, role := range []string{
 		"app-framework",
 		"daemon",
 		"desktop-app-executable",
 		"flutter-macos-framework",
+		"file-selector-framework",
+		"url-launcher-framework",
 		"launcher",
 	} {
 		path, err := directExecutable(paths[role], role)
@@ -591,7 +597,9 @@ func verifyDesktopBuildManifest(
 	}
 	wanted := map[string]string{
 		"app-framework":           artifacts["app-framework"].SHA256,
+		"file-selector-framework": artifacts["file-selector-framework"].SHA256,
 		"flutter-macos-framework": artifacts["flutter-macos-framework"].SHA256,
+		"url-launcher-framework":  artifacts["url-launcher-framework"].SHA256,
 		"vibermate":               artifacts["launcher"].SHA256,
 		"vibermated":              artifacts["daemon"].SHA256,
 	}

@@ -17,6 +17,7 @@ const (
 
 	StaticHeaderDriverValue    = "static_header"
 	AnthropicAPIKeyDriverValue = "anthropic_api_key"
+	CodexOAuthDriverValue      = "codex_oauth"
 )
 
 var ErrInvalidAuthentication = errors.New("provider authentication is invalid")
@@ -34,6 +35,7 @@ func (ref DriverRef) String() string { return ref.value }
 
 func StaticHeaderDriverRef() DriverRef    { return DriverRef{value: StaticHeaderDriverValue} }
 func AnthropicAPIKeyDriverRef() DriverRef { return DriverRef{value: AnthropicAPIKeyDriverValue} }
+func CodexOAuthDriverRef() DriverRef      { return DriverRef{value: CodexOAuthDriverValue} }
 
 type CredentialMode string
 

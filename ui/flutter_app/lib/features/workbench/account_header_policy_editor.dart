@@ -89,9 +89,11 @@ final class _AccountHeaderPolicyEditorState
 
   @override
   Widget build(BuildContext context) {
-    final primary = widget.accountKind == 'bearer_token'
-        ? 'Authorization: Bearer'
-        : 'X-Api-Key';
+    final primary = switch (widget.accountKind) {
+      'bearer_token' => 'Authorization: Bearer',
+      'codex_oauth' => 'Authorization + ChatGPT-Account-Id',
+      _ => 'X-Api-Key',
+    };
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [

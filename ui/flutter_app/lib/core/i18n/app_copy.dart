@@ -75,6 +75,175 @@ final class AppCopy {
     'nav.captures': 'Captures',
     'nav.environments': 'Traffic policies',
     'nav.routes': 'Upstream services',
+    'nav.provider_accounts': 'Upstream accounts',
+    'provider_accounts.title': 'Upstream accounts',
+    'provider_accounts.refresh.action': 'Refresh OAuth credential',
+    'provider_accounts.refresh.failed':
+        'Could not confirm credential refresh. Check the network and account status before trying again.',
+    'provider_accounts.refresh.conflict':
+        'The credential changed or another operation is running. Check the account and try again.',
+    'provider_accounts.refresh.reconnect':
+        'This authorization can no longer be refreshed. Sign in again or import a new authorization file.',
+    'notice.inventory.credential_refreshed':
+        'OAuth credential refreshed. Account details have been updated.',
+    'account_facts.query_quota': 'Check upstream quota',
+    'account_facts.refresh_quota': 'Refresh upstream quota',
+    'account_facts.query_history': 'View account history',
+    'account_facts.refresh_history': 'Refresh account history',
+    'account_facts.quota_title': 'Codex quota',
+    'account_facts.history_title': 'Account history',
+    'account_facts.quota_hint':
+        'Check this account’s available quota on demand.',
+    'account_facts.history_hint':
+        'Query account-wide totals, including usage outside ViberMate.',
+    'account_facts.history_source': 'Account-wide totals · Not ViberMate usage',
+    'account_facts.observed': 'Observed {time} (local time)',
+    'account_facts.updated': 'Fetched {time}',
+    'account_facts.window_title': '{duration} limit',
+    'account_facts.window_unknown': 'Quota window',
+    'account_facts.used': 'used',
+    'account_facts.reset_short': 'Resets {time}',
+    'account_facts.lifetime_label': 'Lifetime tokens',
+    'account_facts.lifetime_exact': 'Lifetime tokens: {tokens}',
+    'account_facts.peak_daily': 'Peak daily tokens',
+    'account_facts.streak_days': 'Active streak · days',
+    'account_facts.loading': 'Reading upstream data…',
+    'account_facts.stale': 'Older snapshot · Refresh to check current data.',
+    'account_facts.unavailable': 'The upstream did not provide this data.',
+    'account_facts.limit_reached': 'Limit reached',
+    'account_facts.not_allowed': 'Currently unavailable for this account',
+    'account_facts.days': '{count} days',
+    'account_facts.hours': '{count} hours',
+    'account_facts.minutes': '{count} minutes',
+    'account_facts.seconds': '{count} seconds',
+    'environment.account_history.scope':
+        'Codex quota queries follow a single fixed account. The CLI’s local login identity is unchanged.',
+    'environment.account_history.allow':
+        'Allow CLI to read this account’s history',
+    'environment.account_history.detail':
+        'Shares account-wide historical usage, beyond this Capture. Off by default; changing accounts clears this permission.',
+    'environment.account_history.ambiguous':
+        'Account queries need one fixed route and account. Dynamic selection cannot identify an account before a turn.',
+    'account_facts.resets': 'Resets {time} (local time)',
+    'account_facts.no_windows':
+        'The upstream did not provide quota windows. This does not mean 0% used.',
+    'account_facts.unknown': 'Not provided',
+    'account_facts.unlimited': 'Unlimited',
+    'account_facts.credits': 'Credits: {balance}',
+    'account_facts.as_of': 'Upstream statistics as of {time}',
+    'account_facts.partial':
+        'The upstream reports incomplete historical statistics.',
+    'account_facts.failed':
+        'Could not read upstream account data. Check the credential and network, then retry.',
+    'account_facts.failed_stale':
+        'Refresh failed · Showing the last successful snapshot.',
+    'provider_accounts.subtitle':
+        'Manage AI service credentials in one place; select accounts in your traffic configuration.',
+    'provider_accounts.search': 'Search accounts, notes, email or service',
+    'provider_accounts.note.add': 'Add note',
+    'provider_accounts.note.edit': 'Edit note',
+    'provider_accounts.note.title': 'Account note',
+    'provider_accounts.note.hint': 'Purpose, project or owner',
+    'provider_accounts.note.scope':
+        'For account management only; never sent upstream. Do not enter secrets.',
+    'provider_accounts.note.invalid': 'Use up to 256 characters on one line.',
+    'provider_accounts.note.failed':
+        'Could not save the note. Your draft is kept; try again.',
+    'provider_accounts.note.conflict':
+        'This account changed elsewhere. Nothing was overwritten. Copy your draft before closing and reopening the editor.',
+    'provider_accounts.empty': 'Add your first upstream account',
+    'provider_accounts.no_results': 'No accounts match your search',
+    'provider_accounts.service': 'Credential service',
+    'provider_accounts.clear_search': 'Clear search',
+    'provider_accounts.token.details': 'Token details',
+    'provider_accounts.token.hide': 'Hide token details',
+    'provider_accounts.token.email': 'Email',
+    'provider_accounts.token.plan': 'Plan',
+    'provider_accounts.token.plan_summary': 'Plan: {plan}',
+    'provider_accounts.token.authenticated': 'Signed in (auth_time)',
+    'provider_accounts.token.issued': 'Token issued (iat)',
+    'provider_accounts.token.expires': 'Token expires (exp)',
+    'provider_accounts.token.refreshed': 'Last refreshed',
+    'provider_accounts.token.account': 'ChatGPT account ID',
+    'provider_accounts.token.user': 'User ID',
+    'provider_accounts.token.expiry_summary': 'Expires: {time}',
+    'provider_accounts.token.expired_summary': 'Token expired: {time}',
+    'provider_accounts.token.not_provided': 'Not provided by the token',
+    'provider_accounts.token.unverified':
+        'Details come from token claims or saved authorization data. JWT signatures are not verified, and these details do not confirm current sign-in status. Token issue time is not sign-in time.',
+    'provider_accounts.token.manual':
+        'Manually added tokens do not refresh automatically. Replace the token when it expires, or add an account using OAuth.',
+    'provider_accounts.unlinked':
+        'Not linked · Choose a service to use this account',
+    'provider_accounts.link': 'Link account',
+    'provider_accounts.linked': 'Linked accounts',
+    'provider_accounts.none_linked': 'No accounts linked to this service',
+    'provider_accounts.link_hint':
+        'Link an existing account below. Compatible accounts appear first; linking reuses their credentials without copying them.',
+    'provider_accounts.link_empty':
+        'No upstream accounts yet. Open Manage accounts to add one, then return here to link it.',
+    'provider_accounts.already_linked': 'Already linked',
+    'provider_accounts.link_unavailable': 'Cannot link',
+    'provider_accounts.link_origin_mismatch':
+        'This account is for a different service address.',
+    'provider_accounts.link_kind_mismatch':
+        'This service does not support the account’s authentication type.',
+    'provider_accounts.link_service_inactive':
+        'Enable this service before linking an account.',
+    'provider_accounts.manage': 'Manage accounts',
+    'provider_accounts.entry.oauth': 'OAuth login',
+    'provider_accounts.entry.import': 'Import auth file',
+    'provider_accounts.entry.manual': 'Manual entry',
+    'provider_accounts.import.choose_file': 'Choose auth.json file',
+    'provider_accounts.import.failed':
+        'Could not import this file. Choose a Codex ChatGPT auth.json file no larger than 32 KiB, or paste its contents.',
+    'provider_accounts.oauth.name':
+        'Account name (optional; defaults to email)',
+    'provider_accounts.oauth.hint':
+        'Sign in to Codex in your browser. ViberMate saves the account securely and refreshes its tokens automatically. Your existing Codex login is not changed.',
+    'provider_accounts.oauth.start': 'Start Codex login',
+    'provider_accounts.oauth.open': 'Open login page',
+    'provider_accounts.oauth.copy': 'Copy login link',
+    'provider_accounts.oauth.callback': 'Callback URL',
+    'provider_accounts.oauth.submit': 'Submit callback URL',
+    'provider_accounts.oauth.cancel': 'Cancel login',
+    'provider_accounts.oauth.pending':
+        'Open the login page or copy the link to sign in with your chosen browser.',
+    'provider_accounts.oauth.exchanging': 'Saving your account securely…',
+    'provider_accounts.oauth.manual_hint':
+        'After signing in, the browser redirects to localhost. If that page cannot open, copy its full URL from the address bar and submit it below. No server domain or public callback is needed.',
+    'provider_accounts.oauth.loopback_hint':
+        'This App will receive the callback automatically. If it does not return, paste the full localhost callback URL below.',
+    'provider_accounts.oauth.unsupported':
+        'No active service supports Codex authorization. Add or enable a ChatGPT service, or use Manual entry for other services.',
+    'provider_accounts.oauth.start_failed':
+        'Could not start Codex login. Check the runtime connection and try again.',
+    'provider_accounts.oauth.open_failed':
+        'Could not open the browser. Copy the login link and open it yourself.',
+    'provider_accounts.oauth.status_failed':
+        'Could not check login status. Check the runtime connection; you can cancel and retry.',
+    'provider_accounts.oauth.callback_invalid':
+        'The callback could not be accepted. Copy the full localhost URL from this login, including code and state, then retry.',
+    'provider_accounts.oauth.login_denied':
+        'Authorization was not granted. Start a new login to try again.',
+    'provider_accounts.oauth.login_exchange_failed':
+        'Could not exchange the authorization code. Check the runtime’s network access and start a new login.',
+    'provider_accounts.oauth.login_account_save_failed':
+        'Authorization finished, but the account could not be saved. Check the service and credential store, then start a new login.',
+    'provider_accounts.oauth.login_expired':
+        'This login or management session has expired. Start a new login.',
+    'error.codex_login_not_found':
+        'This Codex login is unavailable or expired.',
+    'error.codex_login_busy': 'This Codex login is already saving the account.',
+    'error.codex_login_capacity':
+        'Too many Codex logins are pending. Cancel one or wait for it to expire.',
+    'provider_accounts.unlink': 'Unlink account',
+    'provider_accounts.unlink_hint':
+        'The account and its credentials will be kept. If a traffic policy still uses this link, update that policy before unlinking.',
+    'notice.inventory.account_linked':
+        'Account linked. It can now be selected in this service’s traffic policies.',
+    'notice.inventory.account_unlinked':
+        'Account unlinked. Its credentials and other service links are unchanged.',
     'nav.network': 'Connections',
     'nav.code_library': 'Script library',
     'nav.settings': 'Settings',
@@ -200,7 +369,7 @@ final class AppCopy {
     'deletion.more_holders': 'and {count} more',
     'deletion.holder.running_capture': 'Running Capture',
     'deletion.holder.environment_route': 'Traffic policy route',
-    'deletion.holder.owned_account': 'Upstream account it owns',
+    'deletion.holder.owned_account': 'Linked upstream account',
     'deletion.environment.title': 'Delete this traffic policy?',
     'deletion.environment.consequence':
         'It stops being available for new runs. Evidence already recorded '
@@ -621,7 +790,6 @@ final class AppCopy {
     'environment.endpoint.account_required':
         'Create a ready account for this upstream service before routing to it.',
     'environment.edit.title': 'Edit {name}',
-    'environment.edit.scope': 'Review the impact, then publish a new revision.',
     'environment.edit.identity': 'Identity',
     'environment.tab.traffic': 'Traffic routing',
     'environment.tab.runtime': 'Content recording & runtime',
@@ -673,11 +841,11 @@ final class AppCopy {
         'Use a unique environment variable name that is not runtime-owned.',
     'environment.account': 'Account selection',
     'environment.account.owner':
-        'Only accounts belonging to this upstream service are listed.',
+        'Only accounts explicitly linked to this upstream service are listed.',
     'environment.account.client':
         'Use client credential · same upstream service',
     'environment.account.none':
-        'No ready account belongs to this upstream service.',
+        'No ready account is linked to this upstream service.',
     'environment.account.unavailable': 'unavailable',
     'environment.account.no_candidate': 'No candidate account',
     'environment.account.fixed': 'Fixed account',
@@ -859,13 +1027,13 @@ final class AppCopy {
     'code_library.starter.private_contacts.detail':
         'Replace email addresses and private IPv4 addresses before upload, then restore them in the response.',
     'code_library.starter.turn_time.detail':
-        'Add a signed Turn timestamp that ViberMate removes before the next request.',
+        'Add a signed Turn timestamp to plain-text replies; skip structured JSON output. Removed before the next request.',
     'code_library.starter.reply_language.detail':
         'Ask for Simplified Chinese by default while preserving an explicit language request from the user.',
     'code_library.starter.workspace_rules.detail':
         'Append an exact rule selected by the frozen Workspace label; unknown Workspaces stay unchanged.',
     'code_library.starter.response_model.detail':
-        'Show the provider response model as a signed note that is removed before the next request.',
+        'Show the response model as a signed note in plain-text replies; skip structured JSON output. Removed before the next request.',
     'code_library.empty': 'No code yet',
     'code_library.empty.detail':
         'Create and publish a message transform or account selection rule from an example.',
@@ -979,14 +1147,14 @@ final class AppCopy {
     'environment.destination.original': 'Original destination',
     'environment.destination.original.short': 'Original service',
     'environment.destination.original.detail':
-        'ViberMate still captures it; send to the client’s original service with its original credential.',
+        'Capture traffic; keep the original service and credentials.',
     'environment.destination.choose_first':
         'Choose where requests come from, then choose where to send them.',
     'environment.destination.original.action': 'Use original destination',
     'environment.destination.upstream': 'Selected upstream',
     'environment.destination.upstream.short': 'Upstream service',
     'environment.destination.upstream.detail':
-        'Send through a selected upstream service using an account owned by it.',
+        'Send through a selected upstream service using a linked account.',
     'environment.account.required': 'Upstream account required',
     'environment.validation.name':
         'Enter a name without leading or trailing spaces.',
@@ -1007,19 +1175,21 @@ final class AppCopy {
         'Traffic policy published from the reviewed draft and impact boundary.',
     'routes.title': 'Upstream services',
     'routes.subtitle':
-        'Manage service addresses and the credentials that belong to each one',
+        'Configure service addresses and protocols, then link existing accounts',
     'routes.add_endpoint': 'Add upstream service',
     'routes.add_account': 'Add upstream account',
     'routes.select_endpoint': 'Select an upstream service.',
     'routes.accounts': '{count} accounts',
     'routes.no_accounts': 'No accounts yet',
-    'routes.no_accounts.detail': 'Upstream accounts belong to this service.',
+    'routes.no_accounts.detail':
+        'Link existing accounts from the upstream account registry.',
     'routes.protocols': 'Protocols',
     'routes.protocol.anthropic_messages': 'Anthropic Messages',
     'routes.protocol.openai_responses': 'OpenAI Responses',
     'routes.protocol.openai_chat': 'OpenAI Chat',
     'routes.credentials.ready': 'Credential ready',
     'routes.credentials.unavailable': 'Credential unavailable',
+    'routes.credentials.reconnect_required': 'Reconnect required',
     'routes.credentials.epoch': 'Credential version {epoch}',
     'routes.update_credential': 'Replace credential',
     'routes.delete_account': 'Delete upstream account',
@@ -1031,23 +1201,36 @@ final class AppCopy {
     'routes.endpoint.protocol.detail.openai_responses': 'POST /v1/responses',
     'routes.endpoint.protocol.detail.openai_chat': 'POST /v1/chat/completions',
     'routes.endpoint.boundary':
-        'Upstream accounts created here belong only to this service. Services are not interchangeable credential buckets.',
+        'Configure the destination and supported protocols here. Create credentials in Upstream accounts, then link compatible accounts to this service.',
     'routes.endpoint.cleartext_warning':
         'HTTP is limited to local or private-network peers. Conversations and credentials are sent without transport encryption.',
     'routes.validation.protocol': 'Choose at least one upstream protocol.',
     'routes.endpoint.create.action': 'Create upstream service',
-    'routes.account.create.title': 'Add an account to this upstream service',
+    'routes.account.create.title': 'Add upstream account',
     'routes.account.replace.title': 'Replace credential · {name}',
     'routes.account.name': 'Upstream account name',
     'routes.account.kind': 'Credential type',
     'routes.account.kind.anthropic_api_key': 'Anthropic API key',
     'routes.account.kind.bearer_token': 'Bearer token',
+    'routes.account.kind.codex_oauth': 'Codex account (OAuth)',
     'routes.account.transport.anthropic_api_key': 'X-Api-Key',
     'routes.account.transport.bearer_token': 'Authorization: Bearer',
+    'routes.account.transport.codex_oauth':
+        'Managed OAuth + ChatGPT account ID',
     'routes.account.api_key': 'API key',
     'routes.account.bearer_token': 'Bearer token',
+    'routes.account.codex_auth_json': 'Codex auth.json',
+    'routes.account.codex_auth_json_hint':
+        'Paste the complete contents of ~/.codex/auth.json. ViberMate imports the account identity and rotating OAuth credentials.',
+    'routes.account.codex_ownership':
+        'Import transfers refresh ownership to ViberMate. Do not keep this same token set active in another Codex installation; two refresh owners can invalidate each other.',
+    'routes.account.paste': 'Paste from clipboard',
+    'routes.account.codex_profile': 'Account {account} · Plan {plan}',
+    'routes.account.oauth_state.ready': 'Refresh managed',
+    'routes.account.oauth_state.refresh_due': 'Refresh due',
+    'routes.account.oauth_state.reconnect_required': 'Reconnect required',
     'routes.account.chatgpt_hint':
-        'Use a ChatGPT access token, not an OpenAI API key. ViberMate reads the account ID from this token when available. For opaque tokens, set ChatGPT-Account-Id below to the matching account ID. Stored tokens are not refreshed automatically; replace them when they expire.',
+        'Use a ChatGPT access token, not an API key. The account ID is read from the token; if unavailable, set the matching ChatGPT-Account-Id below. Manually entered tokens must be replaced when they expire.',
     'routes.account.secret_boundary':
         'The secret is sent once to the local runtime and stored by its secret store. It is never returned in account responses.',
     'routes.account.headers.auth_owned':
@@ -1069,7 +1252,7 @@ final class AppCopy {
     'routes.account.headers.validation':
         'Enter a valid, non-transport Header rule.',
     'routes.account.headers.summary': 'Set {set} · Delete {delete}',
-    'routes.account.create.action': 'Connect account',
+    'routes.account.create.action': 'Save account',
     'routes.account.replace.action': 'Replace credential',
     'routes.account.delete.title': 'Delete {name}?',
     'routes.account.delete.detail':
@@ -1081,6 +1264,8 @@ final class AppCopy {
         '{environment} r{revision} · route {route}',
     'routes.account.delete.more': '{count} more references were not returned.',
     'routes.validation.required': 'Enter a value.',
+    'routes.validation.codex_auth_json':
+        'Paste a valid Codex ChatGPT auth.json file.',
     'routes.validation.origin':
         'Enter an exact HTTPS URL or trusted local/private HTTP URL without a path, query, fragment, or explicit default port.',
     'routes.validation.secret':
@@ -1189,6 +1374,7 @@ final class AppCopy {
     'network.value.caller.core': 'ViberMate runtime',
     'network.value.purpose.provider_attempt': 'Provider request',
     'network.value.purpose.route_operation': 'Route operation',
+    'network.value.purpose.upstream_account_read': 'Upstream account query',
     'network.value.purpose.blind_tunnel': 'Blind tunnel',
     'network.value.authority.environment': 'Traffic policy',
     'network.value.authority.network': 'Network',
@@ -1283,8 +1469,6 @@ final class AppCopy {
     'settings.access.detail.local':
         'Set up the Terminal entry used to start managed Claude and Codex runs.',
     'settings.access.local.title': 'On this Mac',
-    'settings.access.local.detail':
-        'Install or repair the local Terminal command, then copy a managed launch command.',
     'settings.access.local.no_account':
         'Local App runs do not need a Web account, domain or browser certificate.',
     'settings.access.team.title': 'Browser or another device',
@@ -1305,9 +1489,9 @@ final class AppCopy {
     'settings.server_connection.remote_http':
         'This remote address uses unencrypted HTTP. Configure HTTPS before sending passwords or captured traffic across an untrusted network.',
     'settings.server_connection.https':
-        'The address uses HTTPS. Trust in its server certificate is separate from the AI traffic inspection certificate below.',
+        'HTTPS is enabled. Server certificate trust is separate from AI traffic inspection trust.',
     'settings.server_connection.automatic_ready':
-        'Automatic HTTPS is active. ViberMate stores, renews and hot-loads this public certificate.',
+        'Automatic HTTPS is active. Certificates renew automatically.',
     'settings.server_connection.automatic_pending':
         'Automatic HTTPS is waiting for its first certificate. Check that the selected challenge port reaches this Runtime.',
     'settings.server_connection.automatic_renewing':
@@ -1400,8 +1584,7 @@ final class AppCopy {
     'settings.dark': 'Dark',
     'settings.storage': 'Evidence storage',
     'settings.storage.not_encrypted':
-        'The runtime database is not encrypted at rest. It relies on your user '
-        "account's file permissions, and ViberMate never claims otherwise.",
+        'The runtime database is not encrypted at rest. Only your user account’s file permissions protect it.',
     'settings.storage.location':
         'Conversation and Raw HTTP evidence are written to this machine\'s '
         'ViberMate application support directory.',
@@ -1416,6 +1599,8 @@ final class AppCopy {
     'settings.root_ca.title': 'Local Root Certificate',
     'settings.root_ca.detail':
         'This Proxy CA is for captured AI connections. Supported managed runs receive scoped trust automatically; using the browser needs no installation. The controls below manage optional trust for other clients on this Mac, not an externally issued server certificate.',
+    'settings.root_ca.scope':
+        'Managed launches configure process-level trust for supported clients.',
     'settings.root_ca.status.trusted': 'Installed and trusted',
     'settings.root_ca.status.needs_trust': 'Installed, not trusted',
     'settings.root_ca.status.not_installed': 'Generated, not installed',
@@ -1788,10 +1973,10 @@ final class AppCopy {
         'Decision applied. Waiting work was refused.',
     'notice.network.rules_saved': 'Connection rule set saved atomically.',
     'notice.inventory.endpoint_created':
-        'Upstream service created. Upstream accounts can now be added to it.',
+        'Upstream service created. Link existing accounts to use them here.',
     'notice.inventory.account_created':
-        'Account connected. Use it when a traffic policy sends requests to this service.',
-    'notice.inventory.account_created.action': 'Go to traffic policies',
+        'Upstream account saved. Link it to a compatible service before using it in a traffic policy.',
+    'notice.inventory.account_created.action': 'Link to an upstream service',
     'notice.inventory.credential_replaced':
         'Credential replaced with its previous epoch as the CAS boundary.',
     'notice.inventory.account_deleted':
@@ -1828,6 +2013,140 @@ final class AppCopy {
     'nav.captures': '运行记录',
     'nav.environments': '流量策略',
     'nav.routes': '上游服务',
+    'nav.provider_accounts': '上游账号',
+    'provider_accounts.title': '上游账号',
+    'provider_accounts.refresh.action': '刷新 OAuth 凭据',
+    'provider_accounts.refresh.failed': '未能确认凭据刷新成功，请检查网络及账号状态后重试。',
+    'provider_accounts.refresh.conflict': '凭据已变化或有其他操作正在进行，请核对账号后重试。',
+    'provider_accounts.refresh.reconnect': '此授权已无法刷新，请重新登录或导入新的授权文件。',
+    'notice.inventory.credential_refreshed': 'OAuth 凭据已刷新，账号资料已更新。',
+    'account_facts.query_quota': '查询上游额度',
+    'account_facts.refresh_quota': '刷新上游额度',
+    'account_facts.query_history': '查看账号历史用量',
+    'account_facts.refresh_history': '刷新账号历史用量',
+    'account_facts.quota_title': 'Codex 额度',
+    'account_facts.history_title': '历史用量',
+    'account_facts.quota_hint': '按需查询此账号的可用额度。',
+    'account_facts.history_hint': '按需查询账号总用量，包含 ViberMate 以外的使用。',
+    'account_facts.history_source': '账号总用量 · 非 ViberMate 使用统计',
+    'account_facts.observed': '采集于 {time}（本地时间）',
+    'account_facts.updated': '采集于 {time}',
+    'account_facts.window_title': '{duration}额度',
+    'account_facts.window_unknown': '额度窗口',
+    'account_facts.used': '已用',
+    'account_facts.reset_short': '{time} 重置',
+    'account_facts.lifetime_label': '累计 Token',
+    'account_facts.lifetime_exact': '累计 Token：{tokens}',
+    'account_facts.peak_daily': '单日最高 Token',
+    'account_facts.streak_days': '连续活跃天数',
+    'account_facts.loading': '正在读取上游数据…',
+    'account_facts.stale': '上次记录 · 请刷新以查看最新数据。',
+    'account_facts.unavailable': '上游暂未提供此项数据。',
+    'account_facts.limit_reached': '已达限额',
+    'account_facts.not_allowed': '此账号当前不可用',
+    'account_facts.days': '{count} 天',
+    'account_facts.hours': '{count} 小时',
+    'account_facts.minutes': '{count} 分钟',
+    'account_facts.seconds': '{count} 秒',
+    'environment.account_history.scope': 'Codex 额度查询跟随唯一的固定账号；CLI 的本地登录身份不会改变。',
+    'environment.account_history.allow': '允许 CLI 读取此账号的历史用量',
+    'environment.account_history.detail':
+        '包含本次 Capture 以外的账号历史。默认关闭；更换账号后需重新授权。',
+    'environment.account_history.ambiguous':
+        '账号查询需要唯一的固定路由和账号。动态选择无法在调用开始前确定账号。',
+    'account_facts.resets': '重置时间 {time}（本地时间）',
+    'account_facts.no_windows': '上游未提供额度窗口，不代表用量为 0%。',
+    'account_facts.unknown': '未提供',
+    'account_facts.unlimited': '无限制',
+    'account_facts.credits': '积分余额：{balance}',
+    'account_facts.as_of': '上游统计截至 {time}',
+    'account_facts.partial': '上游报告历史统计暂不完整。',
+    'account_facts.failed': '暂时无法读取上游账号数据，请检查凭据与网络后重试。',
+    'account_facts.failed_stale': '刷新失败 · 已保留上次成功采集的数据。',
+    'provider_accounts.subtitle': '集中管理 AI 服务凭据，在流量配置中选择使用的账号。',
+    'provider_accounts.search': '搜索账号、备注、邮箱或服务',
+    'provider_accounts.note.add': '添加备注',
+    'provider_accounts.note.edit': '编辑备注',
+    'provider_accounts.note.title': '账号备注',
+    'provider_accounts.note.hint': '用途、项目或负责人',
+    'provider_accounts.note.scope': '仅用于账号管理，不会发送给上游。请勿填写密钥。',
+    'provider_accounts.note.invalid': '请填写不超过 256 字的单行备注。',
+    'provider_accounts.note.failed': '备注未能保存，草稿已保留，请重试。',
+    'provider_accounts.note.conflict': '账号已在别处更新，未覆盖。请先保留当前输入，再关闭并重新编辑。',
+    'provider_accounts.empty': '添加第一个上游账号',
+    'provider_accounts.no_results': '没有匹配的账号，请调整搜索内容',
+    'provider_accounts.service': '凭据适用服务',
+    'provider_accounts.clear_search': '清空搜索',
+    'provider_accounts.token.details': '令牌详情',
+    'provider_accounts.token.hide': '收起令牌详情',
+    'provider_accounts.token.email': '邮箱',
+    'provider_accounts.token.plan': '套餐',
+    'provider_accounts.token.plan_summary': '套餐：{plan}',
+    'provider_accounts.token.authenticated': '登录时间（auth_time）',
+    'provider_accounts.token.issued': '令牌签发时间（iat）',
+    'provider_accounts.token.expires': '令牌到期时间（exp）',
+    'provider_accounts.token.refreshed': '上次刷新',
+    'provider_accounts.token.account': 'ChatGPT 账号 ID',
+    'provider_accounts.token.user': '用户 ID',
+    'provider_accounts.token.expiry_summary': '到期：{time}',
+    'provider_accounts.token.expired_summary': '令牌已过期：{time}',
+    'provider_accounts.token.not_provided': '令牌未提供',
+    'provider_accounts.token.unverified':
+        '这些信息来自令牌或已保存的授权资料，仅供参考；JWT 签名未验证，不代表账号当前的登录状态。签发时间不等于登录时间。',
+    'provider_accounts.token.manual': '手动添加的令牌不会自动刷新，过期后需替换令牌，或通过 OAuth 添加账号。',
+    'provider_accounts.unlinked': '尚未关联 · 前往上游服务选择使用此账号',
+    'provider_accounts.link': '关联账号',
+    'provider_accounts.linked': '已关联账号',
+    'provider_accounts.none_linked': '此服务尚未关联账号',
+    'provider_accounts.link_hint': '从下方选择已有账号，兼容的账号优先显示。关联会复用同一份凭据，不会复制账号。',
+    'provider_accounts.link_empty': '还没有上游账号。请点击「管理账号」添加，再回到此处关联。',
+    'provider_accounts.already_linked': '已关联',
+    'provider_accounts.link_unavailable': '不可关联',
+    'provider_accounts.link_origin_mismatch': '账号的适用地址与此服务不同。',
+    'provider_accounts.link_kind_mismatch': '此服务不支持该账号的认证类型。',
+    'provider_accounts.link_service_inactive': '请先启用此服务，再关联账号。',
+    'provider_accounts.manage': '管理账号',
+    'provider_accounts.entry.oauth': 'OAuth 登录',
+    'provider_accounts.entry.import': '导入授权文件',
+    'provider_accounts.entry.manual': '手动填写',
+    'provider_accounts.import.choose_file': '选择 auth.json 文件',
+    'provider_accounts.import.failed':
+        '无法导入此文件。请选择不超过 32 KiB 的 Codex ChatGPT auth.json 文件，或直接粘贴文件内容。',
+    'provider_accounts.oauth.name': '账号名称（可选，默认使用邮箱）',
+    'provider_accounts.oauth.hint':
+        '在浏览器中登录 Codex，ViberMate 会安全保存账号并自动刷新令牌，不会修改你原来的 Codex 登录。',
+    'provider_accounts.oauth.start': '开始 Codex 登录',
+    'provider_accounts.oauth.open': '打开登录页',
+    'provider_accounts.oauth.copy': '复制授权链接',
+    'provider_accounts.oauth.callback': '回调 URL',
+    'provider_accounts.oauth.submit': '提交回调 URL',
+    'provider_accounts.oauth.cancel': '取消登录',
+    'provider_accounts.oauth.pending': '请打开登录页，或复制授权链接到你选择的浏览器中登录。',
+    'provider_accounts.oauth.exchanging': '正在安全保存账号…',
+    'provider_accounts.oauth.manual_hint':
+        '登录后浏览器会跳转到 localhost。如果该页面无法打开，请从地址栏复制完整 URL 并提交到下方，无需为服务器配置域名或公网回调。',
+    'provider_accounts.oauth.loopback_hint':
+        'App 会自动接收登录回调；如果没有自动返回，可在下方粘贴完整的 localhost 回调 URL。',
+    'provider_accounts.oauth.unsupported':
+        '暂无支持 Codex 授权的可用服务。请先添加或启用 ChatGPT 服务；其他服务请使用「手动填写」。',
+    'provider_accounts.oauth.start_failed': '无法开始 Codex 登录，请检查运行时连接后重试。',
+    'provider_accounts.oauth.open_failed': '无法打开浏览器，请复制授权链接后自行打开。',
+    'provider_accounts.oauth.status_failed': '暂时无法获取登录状态，请检查运行时连接，也可以取消后重试。',
+    'provider_accounts.oauth.callback_invalid':
+        '无法接受此回调。请复制本次登录的完整 localhost URL，包含 code 和 state，然后重试。',
+    'provider_accounts.oauth.login_denied': '未完成授权，请重新开始登录。',
+    'provider_accounts.oauth.login_exchange_failed':
+        '授权码兑换失败，请检查运行时的网络连接，然后重新开始登录。',
+    'provider_accounts.oauth.login_account_save_failed':
+        '授权已完成，但账号未能保存。请检查服务及凭据存储，再重新开始登录。',
+    'provider_accounts.oauth.login_expired': '本次登录或管理会话已过期，请重新开始登录。',
+    'error.codex_login_not_found': '本次 Codex 登录不存在或已过期。',
+    'error.codex_login_busy': '正在保存 Codex 账号，请稍候。',
+    'error.codex_login_capacity': '待完成的 Codex 登录过多，请取消一个或等待过期。',
+    'provider_accounts.unlink': '解除关联',
+    'provider_accounts.unlink_hint': '账号及其凭据会保留。如果流量策略仍使用此关联，请先调整对应策略，再解除关联。',
+    'notice.inventory.account_linked': '账号已关联，现在可在此服务的流量策略中选择。',
+    'notice.inventory.account_unlinked': '已解除关联，账号凭据及其他服务的关联不受影响。',
     'nav.network': '连接',
     'nav.code_library': '脚本库',
     'nav.settings': '设置',
@@ -1939,7 +2258,7 @@ final class AppCopy {
     'deletion.more_holders': '另有 {count} 项',
     'deletion.holder.running_capture': '运行中的记录',
     'deletion.holder.environment_route': '流量策略路由',
-    'deletion.holder.owned_account': '它拥有的账号',
+    'deletion.holder.owned_account': '已关联的上游账号',
     'deletion.environment.title': '删除这个流量策略？',
     'deletion.environment.consequence': '它将不再可用于新的运行。已记录的证据仍保留每轮实际使用的修订版本。',
     'deletion.endpoint.title': '删除这个上游服务？',
@@ -2283,7 +2602,7 @@ final class AppCopy {
     'environment.system_managed': '内置 · 只读',
     'environment.route.default': '默认',
     'environment.route.fallback': '候选',
-    'environment.account.invalid': '该账号不属于所选上游服务。',
+    'environment.account.invalid': '该账号尚未关联到所选上游服务，或地址与认证类型不兼容。',
     'environment.create': '新建流量策略',
     'environment.create.title': '新建流量策略',
     'environment.create.scope': '默认仅抓包并按原地址转发；也可以选择请求来自哪里、发往哪里。',
@@ -2302,7 +2621,6 @@ final class AppCopy {
     'environment.endpoint.routes': '{count} 条路由',
     'environment.endpoint.account_required': '请先为此上游服务创建可用账号，再将流量路由到这里。',
     'environment.edit.title': '编辑 {name}',
-    'environment.edit.scope': '先检查影响，再发布新修订。',
     'environment.edit.identity': '身份',
     'environment.tab.traffic': '流量路由',
     'environment.tab.runtime': '内容记录与运行',
@@ -2310,7 +2628,7 @@ final class AppCopy {
     'environment.edit.policy.detail': '内容记录只控制保存哪些数据，不影响路由和脚本执行。工具处理方式单独配置。',
     'environment.edit.routes': '请求来源与去向',
     'environment.edit.routes.detail':
-        '每种客户端协议和入口都可以保留原始目标，或把请求发往上游服务，并使用该服务所属的账号。',
+        '每种客户端协议和入口都可以保留原始目标，或把请求发往上游服务，并使用该服务已关联的账号。',
     'environment.edit.routes.empty': '仅抓包 · 请求保持原样转发。',
     'environment.field.name': '流量策略名称',
     'environment.field.state': '运行状态',
@@ -2345,7 +2663,7 @@ final class AppCopy {
     'environment.launch.value': '值',
     'environment.launch.validation': '请输入唯一且不由运行时保留的环境变量名。',
     'environment.account': '账号选择方式',
-    'environment.account.owner': '这里只列出属于该上游服务的账号。',
+    'environment.account.owner': '这里只列出已明确关联到该上游服务的账号。',
     'environment.account.client': '使用客户端凭据 · 仅限同一上游服务',
     'environment.account.none': '该上游服务下没有可用账号。',
     'environment.account.unavailable': '不可用',
@@ -2499,12 +2817,12 @@ final class AppCopy {
     'code_library.starter.private_contacts.detail':
         '发送前替换邮箱和内网 IPv4 地址，再在响应中还原。',
     'code_library.starter.turn_time.detail':
-        '加入带签名的轮次时间；ViberMate 会在下一次请求前自动移除。',
+        '在普通文本回复中加入带签名的轮次时间；跳过结构化 JSON 输出，下次请求前自动移除。',
     'code_library.starter.reply_language.detail':
         '默认要求使用简体中文回复，但尊重用户明确指定的其他语言。',
     'code_library.starter.workspace_rules.detail': '按冻结的工作区名称追加精确规则；未知工作区保持原样。',
     'code_library.starter.response_model.detail':
-        '用带签名的注解显示供应商实际返回的模型；下次请求前自动移除。',
+        '在普通文本回复中注明实际返回的模型；跳过结构化 JSON 输出，下次请求前自动移除。',
     'code_library.empty': '还没有代码',
     'code_library.empty.detail': '从示例新建并发布消息变换或账号选择规则。',
     'code_library.select': '选择一个变换',
@@ -2593,13 +2911,12 @@ final class AppCopy {
     'environment.destination.label': '发往',
     'environment.destination.original': '直连原始目标',
     'environment.destination.original.short': '原服务',
-    'environment.destination.original.detail':
-        'ViberMate 仍会抓包；请求发往客户端原本的服务，并沿用原凭据。',
+    'environment.destination.original.detail': '保留捕获，沿用原服务与凭据。',
     'environment.destination.choose_first': '先选择请求来自哪里，再选择发往哪里。',
     'environment.destination.original.action': '使用原始目标',
     'environment.destination.upstream': '指定上游',
     'environment.destination.upstream.short': '上游服务',
-    'environment.destination.upstream.detail': '请求改发到所选上游服务，并使用属于该服务的账号。',
+    'environment.destination.upstream.detail': '请求改发到所选上游服务，并使用已关联的账号。',
     'environment.account.required': '必须选择上游账号',
     'environment.validation.name': '请输入不含首尾空格的名称。',
     'environment.validation.retention': '请输入 1–3650 天。',
@@ -2615,19 +2932,20 @@ final class AppCopy {
     'environment.impact.more': '另有 {count} 条运行记录',
     'notice.environment.published': '流量策略已按检查过的草稿与影响边界发布。',
     'routes.title': '上游服务',
-    'routes.subtitle': '管理服务地址，以及只属于该服务的凭据',
+    'routes.subtitle': '配置服务地址与协议，并关联已有账号',
     'routes.add_endpoint': '添加上游服务',
     'routes.add_account': '添加账号',
     'routes.select_endpoint': '请选择一个上游服务。',
     'routes.accounts': '{count} 个账号',
     'routes.no_accounts': '暂无账号',
-    'routes.no_accounts.detail': '账号只属于此上游服务。',
+    'routes.no_accounts.detail': '从上游账号库中选择要关联的账号。',
     'routes.protocols': '协议',
     'routes.protocol.anthropic_messages': 'Anthropic Messages',
     'routes.protocol.openai_responses': 'OpenAI Responses',
     'routes.protocol.openai_chat': 'OpenAI Chat',
     'routes.credentials.ready': '凭据就绪',
     'routes.credentials.unavailable': '凭据不可用',
+    'routes.credentials.reconnect_required': '需要重新连接',
     'routes.credentials.epoch': '凭据版本 {epoch}',
     'routes.update_credential': '替换凭据',
     'routes.delete_account': '删除账号',
@@ -2638,22 +2956,35 @@ final class AppCopy {
     'routes.endpoint.protocol.detail.anthropic_messages': 'POST /v1/messages',
     'routes.endpoint.protocol.detail.openai_responses': 'POST /v1/responses',
     'routes.endpoint.protocol.detail.openai_chat': 'POST /v1/chat/completions',
-    'routes.endpoint.boundary': '在这里创建的账号只属于此上游服务；上游服务不是可互换的凭据容器。',
+    'routes.endpoint.boundary':
+        '这里配置服务地址与支持的协议。凭据在「上游账号」中统一添加，再关联地址和认证类型兼容的账号。',
     'routes.endpoint.cleartext_warning': 'HTTP 仅允许连接本机或私网对端；对话与凭据将以明文传输。',
     'routes.validation.protocol': '请至少选择一种上游协议。',
     'routes.endpoint.create.action': '创建上游服务',
-    'routes.account.create.title': '为此上游服务添加账号',
+    'routes.account.create.title': '添加上游账号',
     'routes.account.replace.title': '替换凭据 · {name}',
     'routes.account.name': '账号名称',
     'routes.account.kind': '凭据类型',
     'routes.account.kind.anthropic_api_key': 'Anthropic API Key',
     'routes.account.kind.bearer_token': 'Bearer Token',
+    'routes.account.kind.codex_oauth': 'Codex 账号（OAuth）',
     'routes.account.transport.anthropic_api_key': 'X-Api-Key',
     'routes.account.transport.bearer_token': 'Authorization: Bearer',
+    'routes.account.transport.codex_oauth': '托管 OAuth + ChatGPT 账号 ID',
     'routes.account.api_key': 'API Key',
     'routes.account.bearer_token': 'Bearer Token',
+    'routes.account.codex_auth_json': 'Codex auth.json',
+    'routes.account.codex_auth_json_hint':
+        '粘贴 ~/.codex/auth.json 的完整内容。ViberMate 会导入账号身份和可轮换的 OAuth 凭据。',
+    'routes.account.codex_ownership':
+        '导入后将由 ViberMate 负责刷新。请勿让另一份 Codex 安装继续使用同一组 Token；两个刷新方可能令彼此的凭据失效。',
+    'routes.account.paste': '从剪贴板粘贴',
+    'routes.account.codex_profile': '账号 {account} · 套餐 {plan}',
+    'routes.account.oauth_state.ready': '已托管刷新',
+    'routes.account.oauth_state.refresh_due': '等待刷新',
+    'routes.account.oauth_state.reconnect_required': '需要重新连接',
     'routes.account.chatgpt_hint':
-        '请使用 ChatGPT 访问令牌，而不是 OpenAI API Key。ViberMate 会从此令牌中读取可用的账号 ID；若令牌无法解析，请在下方设置与令牌匹配的 ChatGPT-Account-Id Header。已保存的令牌不会自动刷新，过期后需替换。',
+        '请使用 ChatGPT 访问令牌，而非 API Key。账号 ID 会从令牌中读取；无法读取时，请在下方设置匹配的 ChatGPT-Account-Id。手动填写的令牌过期后需自行替换。',
     'routes.account.secret_boundary': '凭据只会发送一次给本机运行时并由其密钥存储保存；账号响应绝不会将其返回。',
     'routes.account.headers.auth_owned': '{transport} 始终由凭据类型提供，不能在这里覆盖。',
     'routes.account.headers.replace_warning':
@@ -2670,7 +3001,7 @@ final class AppCopy {
     'routes.account.headers.value': 'Header 值',
     'routes.account.headers.validation': '请输入有效且非传输层保留的 Header 规则。',
     'routes.account.headers.summary': '设置 {set} · 删除 {delete}',
-    'routes.account.create.action': '连接账号',
+    'routes.account.create.action': '保存账号',
     'routes.account.replace.action': '替换凭据',
     'routes.account.delete.title': '删除 {name}？',
     'routes.account.delete.detail': '仅当没有流量策略路由引用时，才会删除账号及其凭据；已捕获证据不会被删除。',
@@ -2679,6 +3010,7 @@ final class AppCopy {
     'routes.account.delete.reference': '{environment} r{revision} · 路由 {route}',
     'routes.account.delete.more': '另有 {count} 条引用未返回。',
     'routes.validation.required': '请输入内容。',
+    'routes.validation.codex_auth_json': '请粘贴有效的 Codex ChatGPT auth.json 文件内容。',
     'routes.validation.origin':
         '请输入不含路径、查询、片段或显式默认端口的精确 HTTPS 地址，或受信任的本机/私网 HTTP 地址。',
     'routes.validation.secret': '请输入不含换行或空字符的凭据。',
@@ -2774,6 +3106,7 @@ final class AppCopy {
     'network.value.caller.core': 'ViberMate 运行时',
     'network.value.purpose.provider_attempt': '服务商请求',
     'network.value.purpose.route_operation': '路由操作',
+    'network.value.purpose.upstream_account_read': '上游账号查询',
     'network.value.purpose.blind_tunnel': '盲隧道',
     'network.value.authority.environment': '流量策略',
     'network.value.authority.network': '网络',
@@ -2854,7 +3187,6 @@ final class AppCopy {
     'settings.access.detail.server': '从你的电脑接入 Agent；如果只使用网页，你已经完成连接。',
     'settings.access.detail.local': '设置用于启动 Claude 与 Codex 托管运行的终端入口。',
     'settings.access.local.title': '这台电脑',
-    'settings.access.local.detail': '安装或修复本机终端命令，然后复制托管启动命令。',
     'settings.access.local.no_account': '本机 App 启动不需要网页账号、域名或浏览器证书。',
     'settings.access.team.title': '从浏览器或其他设备接入',
     'settings.access.team.optional': '本机使用可跳过。展开后可查看网页地址和远程登录步骤。',
@@ -2869,10 +3201,8 @@ final class AppCopy {
         '这是本机回环地址。HTTP 不加密，请仅向本机发布端口或使用可信隧道；仅凭这个地址不能确定其他网卡未开放。',
     'settings.server_connection.remote_http':
         '此远程地址使用未加密的 HTTP。通过不可信网络传输密码或捕获流量前，请先配置 HTTPS。',
-    'settings.server_connection.https':
-        '当前地址使用 HTTPS。其服务器证书的信任，与下方 AI 流量检查证书的信任分别配置。',
-    'settings.server_connection.automatic_ready':
-        '自动 HTTPS 已启用。ViberMate 会保存、续期并热加载这张公共证书。',
+    'settings.server_connection.https': '已启用 HTTPS；服务器连接与 AI 流量检查分别管理。',
+    'settings.server_connection.automatic_ready': '已启用自动 HTTPS，证书将自动续期。',
     'settings.server_connection.automatic_pending':
         '自动 HTTPS 正在等待首张证书。请确认所选验证端口能够访问到当前 Runtime。',
     'settings.server_connection.automatic_renewing':
@@ -2958,8 +3288,7 @@ final class AppCopy {
     'settings.light': '亮色',
     'settings.dark': '暗色',
     'settings.storage': '证据存储',
-    'settings.storage.not_encrypted':
-        '运行时数据库在静态时未加密，仅依赖当前用户账户的文件权限；ViberMate 不会声称相反的事。',
+    'settings.storage.not_encrypted': '运行时数据库未加密，仅由当前用户的文件权限保护。',
     'settings.storage.location': '对话与 Raw HTTP 证据写入本机 ViberMate 应用支持目录。',
     'settings.storage.retention': '新建流量策略默认保留全文证据 30 天。记录模式与保留期由各自的流量策略管理。',
     'settings.storage.credentials':
@@ -2968,6 +3297,7 @@ final class AppCopy {
     'settings.root_ca.title': '本机根证书',
     'settings.root_ca.detail':
         '这张代理 CA 用于捕获 AI 连接。受支持的托管启动会自动获得进程级信任，使用网页无需安装。下方操作仅为这台 Mac 上的其他客户端管理可选的系统信任，不会改变外部机构签发的服务器证书。',
+    'settings.root_ca.scope': '托管启动会自动配置受支持客户端的进程级信任。',
     'settings.root_ca.status.trusted': '已安装并信任',
     'settings.root_ca.status.needs_trust': '已安装，尚未信任',
     'settings.root_ca.status.not_installed': '已生成，尚未安装',
@@ -3283,9 +3613,9 @@ final class AppCopy {
     'notice.network.approval_allowed': '决定已生效；等待中的工作获准继续。',
     'notice.network.approval_denied': '决定已生效；等待中的工作已被拒绝。',
     'notice.network.rules_saved': '连接规则集已原子保存。',
-    'notice.inventory.endpoint_created': '上游服务已创建；现在可以在这里添加账号。',
-    'notice.inventory.account_created': '账号已连接。流量策略将请求发往该服务时，可以使用这个账号。',
-    'notice.inventory.account_created.action': '前往流量策略',
+    'notice.inventory.endpoint_created': '上游服务已创建；现在可以关联已有账号。',
+    'notice.inventory.account_created': '上游账号已保存。先关联到适用的上游服务，再在流量策略中选择使用。',
+    'notice.inventory.account_created.action': '关联到上游服务',
     'notice.inventory.credential_replaced':
         '凭据已使用上一 credential epoch 作为 CAS 边界完成替换。',
     'notice.inventory.account_deleted': '账号与凭据已删除；捕获证据未被移除。',

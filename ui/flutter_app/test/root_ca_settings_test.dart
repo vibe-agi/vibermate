@@ -84,6 +84,9 @@ void main() {
         find.byKey(const Key('root-ca-settings-panel')),
       );
       expect(find.text(fixture.title), findsOneWidget);
+      expect(find.text(fixture.delivery), findsNothing);
+      await tester.tap(find.byTooltip(fixture.title));
+      await tester.pumpAndSettle();
       expect(find.text(fixture.delivery), findsOneWidget);
       expect(tester.takeException(), isNull);
       await tester.pumpWidget(const SizedBox.shrink());

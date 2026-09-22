@@ -99,7 +99,8 @@ final class _CodeLibraryViewState extends State<CodeLibraryView> {
       children: [
         PageHeading(
           title: copy('code_library.title'),
-          subtitle: copy('code_library.subtitle'),
+          help: copy('code_library.subtitle'),
+          dismissHelpLabel: copy('common.dismiss'),
           trailing: PopupMenuButton<_LibraryAction>(
             key: const Key('code-library-add'),
             tooltip: copy('common.add'),
@@ -945,21 +946,11 @@ final class _StarterGallery extends StatelessWidget {
               children: [
                 ConstrainedBox(
                   constraints: const BoxConstraints(maxWidth: 720),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        copy('code_library.starters.title'),
-                        style: Theme.of(context).textTheme.titleLarge,
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        copy('code_library.starters.detail'),
-                        style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                          color: context.viberColors.textMuted,
-                        ),
-                      ),
-                    ],
+                  child: ContextHelpHeading(
+                    title: copy('code_library.starters.title'),
+                    message: copy('code_library.starters.detail'),
+                    dismissLabel: copy('common.dismiss'),
+                    style: Theme.of(context).textTheme.titleLarge,
                   ),
                 ),
                 TextButton.icon(
@@ -1072,16 +1063,11 @@ final class _AccountSelectorStarterGallery extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Text(
-              copy('code_library.selector.starters.title'),
+            ContextHelpHeading(
+              title: copy('code_library.selector.starters.title'),
+              message: copy('code_library.selector.starters.detail'),
+              dismissLabel: copy('common.dismiss'),
               style: Theme.of(context).textTheme.titleLarge,
-            ),
-            const SizedBox(height: 4),
-            Text(
-              copy('code_library.selector.starters.detail'),
-              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                color: context.viberColors.textMuted,
-              ),
             ),
             const SizedBox(height: 16),
             _ExampleGrid(
@@ -1970,9 +1956,8 @@ TrafficTransformPolicy _starterPolicy(
     requestJavaScript: _privateContactsRequest,
     responseJavaScript: _restoreRedactionsResponse,
   ),
-  _TransformStarter.turnTime => TrafficTransformPolicy(
-    requestJavaScript: '',
-    responseJavaScript: _turnTimeStarter(wireProtocol),
+  _TransformStarter.turnTime => _annotationPolicy(
+    _turnTimeStarter(wireProtocol),
   ),
   _TransformStarter.replyLanguage => TrafficTransformPolicy(
     requestJavaScript: _replyLanguageStarter(wireProtocol),
@@ -1982,11 +1967,31 @@ TrafficTransformPolicy _starterPolicy(
     requestJavaScript: _workspaceRulesStarter(wireProtocol),
     responseJavaScript: '',
   ),
-  _TransformStarter.responseModel => TrafficTransformPolicy(
-    requestJavaScript: '',
-    responseJavaScript: _responseModelStarter(wireProtocol),
+  _TransformStarter.responseModel => _annotationPolicy(
+    _responseModelStarter(wireProtocol),
   ),
 };
+
+// A title/task/schema request is a machine-readable result, not display prose.
+// Store only this formatting decision, never account data or credentials.
+const _responseAnnotationRequest = r'''const payload = JSON.parse(request.body);
+const formats = [
+  payload.text && payload.text.format,
+  payload.response_format,
+  payload.output_config && payload.output_config.format,
+  payload.output_format,
+];
+context.vibermateStructuredOutput = formats.some(function (format) {
+  return format != null && format.type !== "text";
+});''';
+
+TrafficTransformPolicy _annotationPolicy(
+  String responseScript,
+) => TrafficTransformPolicy(
+  requestJavaScript: _responseAnnotationRequest,
+  responseJavaScript:
+      'if (context.vibermateStructuredOutput === false) {\n$responseScript\n}',
+);
 
 MessageTransformTestSample _starterTestSample(
   _TransformStarter starter,

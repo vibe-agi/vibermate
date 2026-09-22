@@ -47,7 +47,8 @@ final class MessageTransformPipelineButton extends StatelessWidget {
       padding: const EdgeInsets.fromLTRB(9, 8, 9, 9),
       child: CompactLabeledControl(
         label: copy('environment.transform.label'),
-        detail: copy('environment.transform.detail'),
+        help: copy('environment.transform.detail'),
+        dismissHelpLabel: copy('common.dismiss'),
         child: SizedBox(
           width: double.infinity,
           height: ViberMetrics.controlHeight,

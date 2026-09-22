@@ -2,13 +2,94 @@ package providertransport
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
+	"slices"
 	"testing"
+	"time"
 
+	"github.com/vibe-agi/vibermate/internal/codexoauth"
+	"github.com/vibe-agi/vibermate/internal/originidentity"
 	"github.com/vibe-agi/vibermate/internal/providerauth"
 	"github.com/vibe-agi/vibermate/internal/secretstore"
 )
+
+func TestCodexOAuthAuthenticatorAtomicallyBindsAccessTokenAndAccount(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 9, 21, 10, 0, 0, 0, time.UTC)
+	accessToken := fakeChatGPTToken(`{"exp":1789988400,"https://api.openai.com/auth":{"chatgpt_account_id":"selected-account","chatgpt_account_is_fedramp":true}}`)
+	authJSON, err := json.Marshal(map[string]any{
+		"auth_mode": "chatgpt", "OPENAI_API_KEY": nil,
+		"tokens": map[string]string{
+			"id_token": accessToken, "access_token": accessToken,
+			"refresh_token": "refresh-secret", "account_id": "selected-account",
+		},
+		"last_refresh": now.Format(time.RFC3339Nano),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	credential, err := codexoauth.ImportAuthJSON(authJSON)
+	clear(authJSON)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer credential.Destroy()
+	encoded, err := credential.MarshalBinary()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clear(encoded)
+	secrets := testSecretReaderWithPolicy(
+		t, string(encoded), map[string]string{"User-Agent": "managed-codex"}, nil,
+	)
+	authenticator, err := NewCodexOAuthAuthenticator(secrets)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, err := http.NewRequest(
+		http.MethodPost, "https://chatgpt.com/backend-api/codex/responses", nil,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Host = "chatgpt.com"
+	request.Header.Set("Authorization", "Bearer client-token")
+	request.Header.Set(chatGPTAccountHeader, "client-account")
+	request.Header.Set("X-OpenAI-FedRAMP", "false")
+	request.Header.Set("Cookie", "client-session")
+	reference, err := secretstore.ParseReference("secret://provider/codex-oauth")
+	if err != nil {
+		t.Fatal(err)
+	}
+	origin, err := originidentity.ParseProviderOrigin("https://chatgpt.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	evidence, err := authenticator.Apply(
+		context.Background(), request, reference, 9, targetFromProviderOrigin(origin),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if request.Header.Get("Authorization") != "Bearer "+accessToken ||
+		request.Header.Get(chatGPTAccountHeader) != "selected-account" ||
+		request.Header.Get("X-OpenAI-FedRAMP") != "true" ||
+		request.Header.Get("Cookie") != "" || request.Header.Get("User-Agent") != "managed-codex" {
+		t.Fatalf("Codex OAuth headers = %#v", request.Header)
+	}
+	for _, name := range []string{"Authorization", chatGPTAccountHeader, "X-Openai-Fedramp"} {
+		if !slices.Contains(evidence.ProtectedHeaderNames, name) {
+			t.Fatalf("protected headers = %#v, missing %s", evidence.ProtectedHeaderNames, name)
+		}
+	}
+	if evidence.DriverRef != providerauth.CodexOAuthDriverRef().String() ||
+		evidence.HeaderName != "authorization" || !evidence.SecretRead ||
+		secrets.lastExpectedRevision() != 9 {
+		t.Fatalf("credential evidence = %+v revision=%d", evidence, secrets.lastExpectedRevision())
+	}
+}
 
 func TestAnthropicAPIKeyAuthenticatorUsesDedicatedHeader(t *testing.T) {
 	t.Parallel()

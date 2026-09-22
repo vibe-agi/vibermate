@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/vibe-agi/vibermate/internal/accountoperation"
 	"github.com/vibe-agi/vibermate/internal/activity"
 	"github.com/vibe-agi/vibermate/internal/blindtunnel"
 	"github.com/vibe-agi/vibermate/internal/captureadmission"
@@ -18,6 +19,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/capturerun"
 	"github.com/vibe-agi/vibermate/internal/clientannotation"
 	"github.com/vibe-agi/vibermate/internal/codelibrary"
+	"github.com/vibe-agi/vibermate/internal/codexoauth"
 	"github.com/vibe-agi/vibermate/internal/connectionevent"
 	"github.com/vibe-agi/vibermate/internal/connectionpolicy"
 	"github.com/vibe-agi/vibermate/internal/egressaudit"
@@ -61,6 +63,9 @@ type Runtime struct {
 	egressCompletion   *runtimeEgressRepository
 	endpoints          *upstreamendpoint.Manager
 	accounts           *provideraccount.Manager
+	accountReads       *accountoperation.Reader
+	codexOAuth         *codexoauth.Manager
+	codexLogins        *codexoauth.LoginManager
 	codeLibrary        *codelibrary.Manager
 	egressProfiles     *egressprofile.Manager
 	runtimeUsers       *runtimeuser.Manager
@@ -522,6 +527,25 @@ func startWithBuilders(
 		)
 	}
 	pending.register("provider transport", provider.Shutdown)
+	codexOAuth, err := codexoauth.NewManager(codexoauth.Options{
+		Secrets: options.Secrets,
+		Client:  codexOAuthHTTPClient{provider: provider},
+		Clock:   options.Clock,
+	})
+	if err != nil {
+		return fail("Codex OAuth credential manager", err)
+	}
+	if err := accounts.BindCredentialPreparer(codexOAuth); err != nil {
+		return fail("ProviderAccount credential preparation authority", err)
+	}
+	codexLogins, err := codexoauth.NewLoginManager(codexoauth.LoginOptions{
+		Client: codexOAuthHTTPClient{provider: provider}, Clock: options.Clock,
+		Persist: persistCodexLogin(accounts),
+	})
+	if err != nil {
+		return fail("Codex OAuth login manager", err)
+	}
+	pending.register("Codex OAuth login manager", codexLogins.Shutdown)
 
 	original, err := buildOriginal(originalBuildRequest{
 		coordinator: options.OfflineHold,
@@ -621,12 +645,17 @@ func startWithBuilders(
 	if err != nil {
 		return fail("blind tunnel dialer", err)
 	}
+	accountReads, err := accountoperation.New(accountoperation.Options{Accounts: accounts, Transport: provider, Clock: options.Clock.Now})
+	if err != nil {
+		return fail("account operation reader", err)
+	}
 	proxy, err := buildProxy(proxyBuildRequest{
 		ownerContext: ownerContext,
 		admissions:   captureAdmissions,
 		assignments:  assignments,
 		exchanges:    exchanges,
 		original:     original,
+		accountReads: accountReads,
 		certificates: certificateAuthority,
 		connections:  connections,
 		policy:       connectionRules.Source(),
@@ -713,6 +742,9 @@ func startWithBuilders(
 		egressCompletion:   runtimeEgress,
 		endpoints:          endpoints,
 		accounts:           accounts,
+		accountReads:       accountReads,
+		codexOAuth:         codexOAuth,
+		codexLogins:        codexLogins,
 		codeLibrary:        codeLibrary,
 		egressProfiles:     egressProfiles,
 		runtimeUsers:       runtimeUsers,
@@ -873,6 +905,18 @@ func (r *Runtime) EgressAttempts() egressaudit.Reader {
 // through this interface.
 func (r *Runtime) ProviderAccounts() provideraccount.Controller {
 	return r.accounts
+}
+
+func (r *Runtime) AccountReads() *accountoperation.Reader { return r.accountReads }
+
+// CodexOAuthAccounts exposes only safe managed-account inspection. Token bytes
+// remain in the Host-selected SecretStore.
+func (r *Runtime) CodexOAuthAccounts() codexoauth.Inspector {
+	return r.codexOAuth
+}
+
+func (r *Runtime) CodexOAuthLogins() codexoauth.LoginController {
+	return r.codexLogins
 }
 
 // CodeLibrary returns the published immutable Transform revision authority.

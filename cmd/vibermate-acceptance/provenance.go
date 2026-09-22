@@ -143,6 +143,16 @@ func collectAcceptanceProvenance(
 			),
 		},
 		{role: "daemon", path: config.daemonPath},
+		{
+			role: "file-selector-framework",
+			path: filepath.Join(config.desktopAppPath,
+				"Contents", "Frameworks", "file_selector_macos.framework", "Versions", "A", "file_selector_macos"),
+		},
+		{
+			role: "url-launcher-framework",
+			path: filepath.Join(config.desktopAppPath,
+				"Contents", "Frameworks", "url_launcher_macos.framework", "Versions", "A", "url_launcher_macos"),
+		},
 		{role: "launcher", path: config.launcherPath},
 		{role: "acceptance", path: acceptancePath},
 		{role: "client-entrypoint", path: clientPath},
@@ -314,7 +324,9 @@ func validateDesktopBuildManifest(
 	}
 	wantedNestedCode := map[string]string{
 		"app-framework":           artifactDigests["app-framework"],
+		"file-selector-framework": artifactDigests["file-selector-framework"],
 		"flutter-macos-framework": artifactDigests["flutter-macos-framework"],
+		"url-launcher-framework":  artifactDigests["url-launcher-framework"],
 		"vibermate":               artifactDigests["launcher"],
 		"vibermated":              artifactDigests["daemon"],
 	}

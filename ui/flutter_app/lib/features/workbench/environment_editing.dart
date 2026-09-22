@@ -875,7 +875,7 @@ void _validateRouteAccountPolicy({
         .firstOrNull;
     return account != null &&
         account.revision == reference.revision &&
-        account.upstreamEndpointId == endpointId &&
+        account.isLinkedTo(endpointId) &&
         account.usable;
   });
   if ((!fixed && !scripted) ||
@@ -887,6 +887,41 @@ void _validateRouteAccountPolicy({
       'Account authority contains an Account that is not a ready child of Route Endpoint $endpointId',
     );
   }
+}
+
+/// History is account-wide private data, independent of generation and quota.
+/// Publishing this change freezes the permission into the route revision.
+List<EnvironmentClientEndpoint> assignEnvironmentRouteAccountHistory({
+  required List<EnvironmentClientEndpoint> endpoints,
+  required String clientEndpointId,
+  required String protocolPlanId,
+  required String routeId,
+  required bool allowed,
+}) {
+  var found = false;
+  final edited = endpoints
+      .map((endpoint) {
+        if (endpoint.id != clientEndpointId) return endpoint;
+        final json = endpoint.toJson();
+        for (final plan in json['protocolPlans']! as List) {
+          if (plan['id'] != protocolPlanId) continue;
+          final upstream = plan['destination']['upstream'];
+          if (upstream == null) continue;
+          for (final route in upstream['routes'] as List) {
+            if (route['id'] != routeId) continue;
+            found = true;
+            if (allowed) {
+              route['allowAccountHistory'] = true;
+            } else {
+              route.remove('allowAccountHistory');
+            }
+          }
+        }
+        return EnvironmentClientEndpoint.fromJson(json, 'clientEndpoint');
+      })
+      .toList(growable: false);
+  if (!found) throw StateError('Environment route was not found');
+  return normalizeEnvironmentDraftRevisions(base: endpoints, edited: edited);
 }
 
 /// Replaces the exact request-model to upstream-model mappings for one Route.
@@ -957,6 +992,7 @@ List<EnvironmentClientEndpoint> assignEnvironmentRouteModelMappings({
                       providerTarget: route.providerTarget,
                       backendProtocol: route.backendProtocol,
                       accountPolicy: route.accountPolicy,
+                      allowAccountHistory: route.allowAccountHistory,
                       modelPolicy: EnvironmentModelPolicy(
                         revision: route.modelPolicy.revision + 1,
                         mode: desiredMode,
@@ -1196,6 +1232,7 @@ EnvironmentRoute _normalizeRoute(
       providerTarget: edited.providerTarget,
       backendProtocol: edited.backendProtocol,
       accountPolicy: edited.accountPolicy.copyWith(revision: 1),
+      allowAccountHistory: edited.allowAccountHistory,
       modelPolicy: EnvironmentModelPolicy(
         revision: 1,
         mode: edited.modelPolicy.mode,
@@ -1228,6 +1265,7 @@ EnvironmentRoute _normalizeRoute(
     providerTarget: edited.providerTarget,
     backendProtocol: edited.backendProtocol,
     accountPolicy: accountPolicy,
+    allowAccountHistory: edited.allowAccountHistory,
     modelPolicy: modelPolicy,
     wireProfileRef: edited.wireProfileRef,
     pluginBindings: bindings,
@@ -1239,6 +1277,7 @@ EnvironmentRoute _normalizeRoute(
     providerTarget: candidate.providerTarget,
     backendProtocol: candidate.backendProtocol,
     accountPolicy: candidate.accountPolicy,
+    allowAccountHistory: candidate.allowAccountHistory,
     modelPolicy: candidate.modelPolicy,
     wireProfileRef: candidate.wireProfileRef,
     pluginBindings: candidate.pluginBindings,

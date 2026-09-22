@@ -686,7 +686,9 @@ export async function inspectUnsignedMacOSDistributionCandidate() {
   const executableSHA256 = await digestMap(executablePaths);
   for (const name of [
     "app-framework",
+    "file-selector-framework",
     "flutter-macos-framework",
+    "url-launcher-framework",
     "vibermate",
     "vibermated",
   ]) {

@@ -150,7 +150,7 @@ func (resolver historicalEnvironmentResolver) ResolveRevision(
 			revision,
 		)
 	}
-	return resolver.compiler.Compile(aggregate)
+	return resolver.compiler.Restore(aggregate)
 }
 
 func buildEnvironment(
@@ -416,6 +416,8 @@ type providerBuildRequest struct {
 
 type providerRuntime interface {
 	exchange.Provider
+	ReadAccount(context.Context, providertransport.AccountReadRequest) (*http.Response, error)
+	DoCodexOAuthTokenRequest(*http.Request) (*http.Response, error)
 	FetchEndpointModels(
 		context.Context,
 		upstreamendpoint.Endpoint,
@@ -440,11 +442,18 @@ func buildProvider(
 	if err != nil {
 		return nil, fmt.Errorf("build Anthropic API-key AuthDriver: %w", err)
 	}
+	codexOAuthAuthenticator, err := providertransport.NewCodexOAuthAuthenticator(
+		request.secrets,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("build Codex OAuth AuthDriver: %w", err)
+	}
 	return providertransport.NewProductionClientWithAuthenticators(
 		request.coordinator,
 		[]providertransport.Authenticator{
 			bearerAuthenticator,
 			anthropicAuthenticator,
+			codexOAuthAuthenticator,
 		},
 		providertransport.DefaultTransportTimeouts(),
 		request.instanceIDs,
@@ -1012,6 +1021,7 @@ type proxyBuildRequest struct {
 	assignments  loopbackproxy.CaptureAssignmentAuthority
 	exchanges    exchange.Executor
 	original     loopbackproxy.OriginalClient
+	accountReads loopbackproxy.CapturedAccountReader
 	certificates loopbackproxy.CertificateAuthority
 	connections  connectionevent.Runtime
 	policy       connectionpolicy.Source
@@ -1038,6 +1048,7 @@ func buildProxy(
 		Assignments:  request.assignments,
 		Exchanges:    request.exchanges,
 		Original:     request.original,
+		AccountReads: request.accountReads,
 		Certificates: request.certificates,
 		Connections:  request.connections,
 		Policy:       request.policy,

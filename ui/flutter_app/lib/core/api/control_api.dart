@@ -6,9 +6,11 @@ import 'dart:typed_data';
 import 'package:http/http.dart' as http;
 
 import 'control_models.dart';
+import 'account_facts_models.dart';
 import 'provider_origin.dart';
 
 abstract interface class ControlApi {
+  Future<AccountFacts> accountFacts(String accountId, {bool history = false});
   Future<DashboardData> loadDashboard();
 
   /// Reads the current local Root CA and the operating-system trust state.
@@ -196,14 +198,42 @@ abstract interface class ControlApi {
     required String id,
     required String displayName,
     required String upstreamEndpointId,
+    bool unlinked = false,
     required String kind,
     required String secret,
+    String codexAuthJson = '',
     required ProviderAccountHeaderPolicy headerPolicy,
   });
+
+  Future<ProviderAccount> setProviderAccountAssociation({
+    required ProviderAccount account,
+    required UpstreamEndpoint endpoint,
+    required bool linked,
+  });
+
+  Future<CodexLogin> startCodexLogin({
+    required String accountId,
+    required String upstreamEndpointId,
+    required String displayName,
+    required String callbackMode,
+  });
+  Future<CodexLogin> codexLoginStatus(String loginId);
+  Future<CodexLogin> completeCodexLogin(String loginId, String callbackUrl);
+  Future<void> cancelCodexLogin(String loginId);
+
+  Future<ProviderAccount> refreshProviderAccountCredential(
+    ProviderAccount account,
+  );
+
+  Future<ProviderAccount> setProviderAccountNote(
+    ProviderAccount account,
+    String note,
+  );
 
   Future<ProviderAccount> replaceProviderAccountCredential({
     required ProviderAccount account,
     required String secret,
+    String codexAuthJson = '',
     required ProviderAccountHeaderPolicy headerPolicy,
   });
 
@@ -211,7 +241,7 @@ abstract interface class ControlApi {
   Future<DeletionOutcome> deleteEnvironment(String environmentId);
 
   /// Retires an upstream Endpoint. Refused while a published route names it or
-  /// it still owns an Account.
+  /// an Account is still linked to it.
   Future<DeletionOutcome> deleteUpstreamEndpoint(String endpointId);
 
   /// Deletes a Capture and every piece of evidence scoped to it. Refused while
@@ -316,6 +346,29 @@ final class ControlProblem implements Exception {
 }
 
 final class HttpControlApi implements ControlApi {
+  @override
+  Future<AccountFacts> accountFacts(
+    String accountId, {
+    bool history = false,
+  }) async {
+    if (!_validResourceId(accountId)) {
+      throw const ControlContractException('account ID is invalid');
+    }
+    final facts = AccountFacts.fromJson(
+      await _command(
+        'GET',
+        '/api/v1/provider-accounts/${Uri.encodeComponent(accountId)}/account-facts?kind=${history ? 'history' : 'quota'}',
+        responseTimeout: _modelDiscoveryTimeout,
+      ),
+    );
+    if (facts.accountId != accountId) {
+      throw const ControlContractException(
+        'account facts belong to another account',
+      );
+    }
+    return facts;
+  }
+
   HttpControlApi._(
     this._session,
     this._client, {
@@ -1339,16 +1392,24 @@ final class HttpControlApi implements ControlApi {
     required String id,
     required String displayName,
     required String upstreamEndpointId,
+    bool unlinked = false,
     required String kind,
     required String secret,
+    String codexAuthJson = '',
     required ProviderAccountHeaderPolicy headerPolicy,
   }) async {
     headerPolicy.validate(accountKind: kind);
     if (!_validResourceId(id) ||
         !_validDisplayLabel(displayName) ||
         !_validResourceId(upstreamEndpointId) ||
-        !const {'anthropic_api_key', 'bearer_token'}.contains(kind) ||
-        !_validSecret(secret)) {
+        !const {
+          'anthropic_api_key',
+          'bearer_token',
+          'codex_oauth',
+        }.contains(kind) ||
+        (kind == 'codex_oauth'
+            ? secret.isNotEmpty || !_validCodexAuthJSON(codexAuthJson)
+            : !_validSecret(secret) || codexAuthJson.isNotEmpty)) {
       throw const ControlContractException('Provider Account input is invalid');
     }
     final payload = await _mutation(
@@ -1360,14 +1421,20 @@ final class HttpControlApi implements ControlApi {
         'id': id,
         'displayName': displayName,
         'upstreamEndpointId': upstreamEndpointId,
+        'unlinked': unlinked,
         'kind': kind,
-        'secret': secret,
+        if (kind == 'codex_oauth')
+          'codexAuthJson': codexAuthJson
+        else
+          'secret': secret,
         ...headerPolicy.toJson(),
       },
     );
     final created = ProviderAccount.fromJson(payload, 'providerAccount');
     if (created.id != id ||
-        created.upstreamEndpointId != upstreamEndpointId ||
+        (unlinked
+            ? created.linkedEndpointIds.isNotEmpty
+            : !created.isLinkedTo(upstreamEndpointId)) ||
         created.kind != kind ||
         created.credentialState != 'ready' ||
         created.credentialEpoch != 1) {
@@ -1379,13 +1446,97 @@ final class HttpControlApi implements ControlApi {
   }
 
   @override
+  Future<CodexLogin> startCodexLogin({
+    required String accountId,
+    required String upstreamEndpointId,
+    required String displayName,
+    required String callbackMode,
+  }) async {
+    if (!_validResourceId(accountId) ||
+        !_validResourceId(upstreamEndpointId) ||
+        utf8.encode(displayName).length > 256 ||
+        !const {'loopback', 'manual'}.contains(callbackMode)) {
+      throw const ControlContractException('Codex login input is invalid');
+    }
+    return CodexLogin.fromJson(
+      await _mutation(
+        'POST',
+        '/api/v1/codex-oauth/logins',
+        expectedRevision: 0,
+        expectedStatus: 201,
+        body: {
+          'accountId': accountId,
+          'upstreamEndpointId': upstreamEndpointId,
+          'displayName': displayName,
+          'callbackMode': callbackMode,
+        },
+      ),
+    );
+  }
+
+  String _codexLoginPath(String loginId) {
+    if (!RegExp(r'^[A-Za-z0-9_-]{43}$').hasMatch(loginId)) {
+      throw const ControlContractException('Codex login ID is invalid');
+    }
+    return '/api/v1/codex-oauth/logins/$loginId';
+  }
+
+  @override
+  Future<CodexLogin> codexLoginStatus(String loginId) async {
+    final view = CodexLogin.fromJson(
+      await _command('GET', _codexLoginPath(loginId)),
+    );
+    if (view.id != loginId) {
+      throw const ControlContractException('Codex login ID changed');
+    }
+    return view;
+  }
+
+  @override
+  Future<CodexLogin> completeCodexLogin(
+    String loginId,
+    String callbackUrl,
+  ) async {
+    if (utf8.encode(callbackUrl).length > 16 * 1024) {
+      throw const ControlContractException('Codex callback is too large');
+    }
+    final view = CodexLogin.fromJson(
+      await _mutation(
+        'POST',
+        '${_codexLoginPath(loginId)}/callback',
+        expectedRevision: 0,
+        body: {'callbackUrl': callbackUrl},
+        responseTimeout: const Duration(seconds: 30),
+      ),
+    );
+    if (view.id != loginId) {
+      throw const ControlContractException('Codex login ID changed');
+    }
+    return view;
+  }
+
+  @override
+  Future<void> cancelCodexLogin(String loginId) async {
+    await _mutation(
+      'DELETE',
+      _codexLoginPath(loginId),
+      expectedRevision: 0,
+      expectedStatus: 204,
+    );
+  }
+
+  @override
   Future<ProviderAccount> replaceProviderAccountCredential({
     required ProviderAccount account,
     required String secret,
+    String codexAuthJson = '',
     required ProviderAccountHeaderPolicy headerPolicy,
   }) async {
     headerPolicy.validate(accountKind: account.kind);
-    if (!_validResourceId(account.id) || !_validSecret(secret)) {
+    if (!_validResourceId(account.id) ||
+        (account.kind == 'codex_oauth'
+            ? secret.isNotEmpty || !_validCodexAuthJSON(codexAuthJson)
+            : !_validSecret(secret) || codexAuthJson.isNotEmpty)) {
       throw const ControlContractException(
         'Provider Account credential input is invalid',
       );
@@ -1394,16 +1545,124 @@ final class HttpControlApi implements ControlApi {
       'PUT',
       '/api/v1/provider-accounts/${Uri.encodeComponent(account.id)}/credential',
       expectedRevision: account.credentialEpoch,
-      body: {'secret': secret, ...headerPolicy.toJson()},
+      body: {
+        if (account.kind == 'codex_oauth')
+          'codexAuthJson': codexAuthJson
+        else
+          'secret': secret,
+        ...headerPolicy.toJson(),
+      },
     );
     final updated = ProviderAccount.fromJson(payload, 'providerAccount');
     if (updated.id != account.id ||
-        updated.upstreamEndpointId != account.upstreamEndpointId ||
+        updated.credentialOrigin != account.credentialOrigin ||
         updated.kind != account.kind ||
         updated.credentialState != 'ready' ||
         updated.credentialEpoch != account.credentialEpoch + 1) {
       throw const ControlContractException(
         'Provider Account credential response is inconsistent',
+      );
+    }
+    return updated;
+  }
+
+  @override
+  Future<ProviderAccount> refreshProviderAccountCredential(
+    ProviderAccount account,
+  ) async {
+    if (!_validResourceId(account.id) ||
+        account.kind != 'codex_oauth' ||
+        !account.usable) {
+      throw const ControlContractException(
+        'This credential cannot be refreshed',
+      );
+    }
+    final payload = await _mutation(
+      'POST',
+      '/api/v1/provider-accounts/${account.id}/credential/refresh',
+      expectedRevision: account.credentialEpoch,
+      responseTimeout: _modelDiscoveryTimeout,
+    );
+    final updated = ProviderAccount.fromJson(payload, 'providerAccount');
+    if (updated.id != account.id ||
+        updated.credentialOrigin != account.credentialOrigin ||
+        updated.kind != account.kind ||
+        updated.credentialState != 'ready' ||
+        updated.credentialEpoch <= account.credentialEpoch ||
+        updated.codexOAuth?.chatgptAccountId !=
+            account.codexOAuth?.chatgptAccountId) {
+      throw const ControlContractException(
+        'Refreshed credential response is inconsistent',
+      );
+    }
+    return updated;
+  }
+
+  @override
+  Future<ProviderAccount> setProviderAccountNote(
+    ProviderAccount account,
+    String note,
+  ) async {
+    note = note.trim();
+    if (!_validResourceId(account.id) || !validProviderAccountNote(note)) {
+      throw const ControlContractException('Provider Account note is invalid');
+    }
+    final payload = await _mutation(
+      'PUT',
+      '/api/v1/provider-accounts/${Uri.encodeComponent(account.id)}/note',
+      expectedRevision: account.noteRevision,
+      body: {'note': note},
+    );
+    final updated = ProviderAccount.fromJson(payload, 'providerAccount');
+    if (updated.id != account.id ||
+        updated.note != note ||
+        updated.noteRevision !=
+            account.noteRevision + (note == account.note ? 0 : 1) ||
+        updated.revision != account.revision ||
+        updated.kind != account.kind ||
+        updated.credentialOrigin != account.credentialOrigin) {
+      throw const ControlContractException(
+        'Provider Account note response is inconsistent',
+      );
+    }
+    return updated;
+  }
+
+  @override
+  Future<ProviderAccount> setProviderAccountAssociation({
+    required ProviderAccount account,
+    required UpstreamEndpoint endpoint,
+    required bool linked,
+  }) async {
+    if (!_validResourceId(account.id) ||
+        !_validResourceId(endpoint.id) ||
+        linked && !account.canLinkTo(endpoint)) {
+      throw const ControlContractException(
+        'Account association is incompatible',
+      );
+    }
+    final payload = await _mutation(
+      'PUT',
+      '/api/v1/provider-accounts/${Uri.encodeComponent(account.id)}/associations/${Uri.encodeComponent(endpoint.id)}',
+      expectedRevision: account.associationRevision,
+      body: {'linked': linked},
+    );
+    final updated = ProviderAccount.fromJson(payload, 'providerAccount');
+    final expectedLinks = {...account.linkedEndpointIds};
+    linked ? expectedLinks.add(endpoint.id) : expectedLinks.remove(endpoint.id);
+    if (updated.id != account.id ||
+        updated.credentialOrigin != account.credentialOrigin ||
+        updated.kind != account.kind ||
+        updated.revision != account.revision ||
+        updated.realmId != account.realmId ||
+        updated.linkedEndpointIds.length != expectedLinks.length ||
+        !updated.linkedEndpointIds.every(expectedLinks.contains) ||
+        updated.isLinkedTo(endpoint.id) != linked ||
+        updated.associationRevision !=
+            account.associationRevision +
+                (account.isLinkedTo(endpoint.id) == linked ? 0 : 1)) {
+      throw const ControlContractException(
+        'Account association response is inconsistent',
       );
     }
     return updated;
@@ -1790,6 +2049,7 @@ final class HttpControlApi implements ControlApi {
     String path, {
     Object? body,
     int expectedStatus = 200,
+    Duration responseTimeout = _requestTimeout,
   }) async {
     await _ensureFreshSession();
     return (await _send(
@@ -1798,6 +2058,7 @@ final class HttpControlApi implements ControlApi {
       token: _session.writeToken,
       expectedStatus: expectedStatus,
       body: body,
+      responseTimeout: responseTimeout,
       headers: {'Idempotency-Key': _newCapability()},
     )).payload;
   }
@@ -2071,6 +2332,42 @@ final class HttpControlApi implements ControlApi {
       value.isNotEmpty &&
       utf8.encode(value).length <= 64 * 1024 &&
       !value.contains(RegExp(r'[\u0000\r\n]'));
+
+  static bool _validCodexAuthJSON(String value) {
+    if (value.isEmpty ||
+        utf8.encode(value).length > 32 * 1024 ||
+        value.contains('\u0000')) {
+      return false;
+    }
+    try {
+      final decoded = jsonDecode(value);
+      if (decoded is! Map) return false;
+      final object = Map<String, Object?>.from(decoded);
+      final tokens = object['tokens'];
+      if (object['auth_mode'] != 'chatgpt' || tokens is! Map) return false;
+      final tokenObject = Map<String, Object?>.from(tokens);
+      final accountId = tokenObject['account_id'];
+      final apiKey = object['OPENAI_API_KEY'];
+      final lastRefreshValue = object['last_refresh'];
+      final lastRefresh = lastRefreshValue is String
+          ? DateTime.tryParse(lastRefreshValue)
+          : null;
+      return tokenObject['id_token'] is String &&
+          (tokenObject['id_token']! as String).isNotEmpty &&
+          tokenObject['access_token'] is String &&
+          (tokenObject['access_token']! as String).isNotEmpty &&
+          tokenObject['refresh_token'] is String &&
+          (tokenObject['refresh_token']! as String).isNotEmpty &&
+          (accountId == null || accountId is String) &&
+          (apiKey == null || apiKey == '') &&
+          lastRefresh != null &&
+          lastRefresh.isUtc;
+    } on FormatException {
+      return false;
+    } on TypeError {
+      return false;
+    }
+  }
 
   static bool _validManualStateTag(String value) =>
       RegExp(r'^"mc_[A-Za-z0-9_-]{43}"$').hasMatch(value);

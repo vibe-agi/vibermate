@@ -54,14 +54,18 @@ var desktopBuildConfigurationNames = []string{
 
 var desktopNestedCodeNames = []string{
 	"app-framework",
+	"file-selector-framework",
 	"flutter-macos-framework",
+	"url-launcher-framework",
 	"vibermate",
 	"vibermated",
 }
 
 var desktopNestedCodePayloadPaths = map[string]string{
-	"dist/App.framework/App":                   "app-framework",
-	"dist/FlutterMacOS.framework/FlutterMacOS": "flutter-macos-framework",
+	"dist/App.framework/App":                                 "app-framework",
+	"dist/FlutterMacOS.framework/FlutterMacOS":               "flutter-macos-framework",
+	"dist/file_selector_macos.framework/file_selector_macos": "file-selector-framework",
+	"dist/url_launcher_macos.framework/url_launcher_macos":   "url-launcher-framework",
 	"vibermate":  "vibermate",
 	"vibermated": "vibermated",
 }

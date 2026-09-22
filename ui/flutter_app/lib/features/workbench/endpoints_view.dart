@@ -8,7 +8,7 @@ import '../../core/design/viber_theme.dart';
 import 'deletion_dialog.dart';
 import '../../core/design/workbench_widgets.dart';
 import '../../core/i18n/app_copy.dart';
-import 'account_header_policy_editor.dart';
+import 'provider_account_links.dart';
 import 'workbench_controller.dart';
 
 final class EndpointsView extends StatefulWidget {
@@ -36,7 +36,8 @@ final class _EndpointsViewState extends State<EndpointsView> {
       children: [
         PageHeading(
           title: copy('routes.title'),
-          subtitle: copy('routes.subtitle'),
+          help: copy('routes.subtitle'),
+          dismissHelpLabel: copy('common.dismiss'),
           trailing: FilledButton.icon(
             key: const Key('endpoints-add'),
             onPressed: controller.inventoryMutating
@@ -48,16 +49,10 @@ final class _EndpointsViewState extends State<EndpointsView> {
         ),
         const Divider(height: 1),
         if (controller.inventoryError case final error?)
-          InlineNotice(message: error, error: true),
+          InlineNotice(message: copy.maybe(error) ?? error, error: true),
         if (controller.inventoryNotice case final notice?)
           InlineNotice(
             message: copy('notice.inventory.$notice'),
-            actionLabel: notice == 'account_created'
-                ? copy('notice.inventory.account_created.action')
-                : null,
-            onAction: notice == 'account_created'
-                ? () => controller.selectSection(WorkbenchSection.environments)
-                : null,
             onDismiss: controller.clearInventoryNotice,
             dismissLabel: copy('common.dismiss'),
           ),
@@ -79,13 +74,20 @@ final class _EndpointsViewState extends State<EndpointsView> {
                 compact: compact,
                 copy: copy,
                 busy: controller.inventoryMutating,
-                onAddAccount: (endpoint) =>
-                    _openAccountEditor(context, endpoint),
-                onReplaceCredential: (endpoint, account) =>
-                    _openAccountEditor(context, endpoint, account: account),
+                onLinkAccount: (endpoint) =>
+                    _openAccountLinker(context, endpoint),
+                onManageAccount: () =>
+                    controller.selectSection(WorkbenchSection.providerAccounts),
                 onDeleteEndpoint: () => _confirmDeleteEndpoint(context),
-                onDeleteAccount: (account) =>
-                    _openDeleteAccount(context, account),
+                onUnlinkAccount: (endpoint, account) => unawaited(
+                  showAccountUnlinkConfirmation(
+                    context,
+                    controller: controller,
+                    endpoint: endpoint,
+                    account: account,
+                    copy: copy,
+                  ),
+                ),
               );
               if (compact) {
                 return Column(
@@ -122,33 +124,14 @@ final class _EndpointsViewState extends State<EndpointsView> {
     );
   }
 
-  void _openAccountEditor(
-    BuildContext context,
-    UpstreamEndpoint endpoint, {
-    ProviderAccount? account,
-  }) {
+  void _openAccountLinker(BuildContext context, UpstreamEndpoint endpoint) {
+    widget.controller.clearInventoryNotice();
     unawaited(
-      showDialog<void>(
-        context: context,
-        builder: (context) => _AccountEditorDialog(
-          controller: widget.controller,
-          endpoint: endpoint,
-          account: account,
-          copy: widget.copy,
-        ),
-      ),
-    );
-  }
-
-  void _openDeleteAccount(BuildContext context, ProviderAccount account) {
-    unawaited(
-      showDialog<void>(
-        context: context,
-        builder: (context) => _DeleteAccountDialog(
-          controller: widget.controller,
-          account: account,
-          copy: widget.copy,
-        ),
+      showEndpointAccountLinker(
+        context,
+        controller: widget.controller,
+        endpoint: endpoint,
+        copy: widget.copy,
       ),
     );
   }
@@ -214,7 +197,7 @@ final class _EndpointDirectory extends StatelessWidget {
         itemBuilder: (context, index) {
           final endpoint = endpoints[index];
           final count = accounts
-              .where((account) => account.upstreamEndpointId == endpoint.id)
+              .where((account) => account.isLinkedTo(endpoint.id))
               .length;
           final selected = endpoint.id == selectedId;
           return Semantics(
@@ -231,7 +214,9 @@ final class _EndpointDirectory extends StatelessWidget {
                 onTap: () => onSelected(endpoint.id),
                 child: Container(
                   width: horizontal ? 215 : null,
-                  height: horizontal ? null : 68,
+                  constraints: horizontal
+                      ? null
+                      : const BoxConstraints(minHeight: 68),
                   margin: horizontal
                       ? const EdgeInsets.only(right: 7)
                       : EdgeInsets.zero,
@@ -307,9 +292,9 @@ final class _EndpointDetail extends StatelessWidget {
     required this.compact,
     required this.copy,
     required this.busy,
-    required this.onAddAccount,
-    required this.onReplaceCredential,
-    required this.onDeleteAccount,
+    required this.onLinkAccount,
+    required this.onManageAccount,
+    required this.onUnlinkAccount,
     required this.onDeleteEndpoint,
   });
 
@@ -318,9 +303,9 @@ final class _EndpointDetail extends StatelessWidget {
   final bool compact;
   final AppCopy copy;
   final bool busy;
-  final ValueChanged<UpstreamEndpoint> onAddAccount;
-  final void Function(UpstreamEndpoint, ProviderAccount) onReplaceCredential;
-  final ValueChanged<ProviderAccount> onDeleteAccount;
+  final ValueChanged<UpstreamEndpoint> onLinkAccount;
+  final VoidCallback onManageAccount;
+  final void Function(UpstreamEndpoint, ProviderAccount) onUnlinkAccount;
   final VoidCallback onDeleteEndpoint;
 
   @override
@@ -332,8 +317,8 @@ final class _EndpointDetail extends StatelessWidget {
         title: copy('routes.select_endpoint'),
       );
     }
-    final ownedAccounts = accounts
-        .where((account) => account.upstreamEndpointId == value.id)
+    final linkedAccounts = accounts
+        .where((account) => account.isLinkedTo(value.id))
         .toList(growable: false);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -406,12 +391,12 @@ final class _EndpointDetail extends StatelessWidget {
                   Align(
                     alignment: Alignment.topRight,
                     child: OutlinedButton.icon(
-                      key: const Key('accounts-add'),
+                      key: const Key('accounts-link'),
                       onPressed: value.state == 'active' && !busy
-                          ? () => onAddAccount(value)
+                          ? () => onLinkAccount(value)
                           : null,
                       icon: const Icon(Icons.add, size: 13),
-                      label: Text(copy('routes.add_account')),
+                      label: Text(copy('provider_accounts.link')),
                     ),
                   ),
                 ],
@@ -432,186 +417,41 @@ final class _EndpointDetail extends StatelessWidget {
           ),
         ),
         const Divider(height: 1),
-        SectionLabel(label: copy('flow.account'), count: ownedAccounts.length),
+        SectionLabel(
+          label: copy('provider_accounts.linked'),
+          count: linkedAccounts.length,
+        ),
         const Divider(height: 1),
         Expanded(
-          child: ownedAccounts.isEmpty
+          child: linkedAccounts.isEmpty
               ? CenteredMessage(
                   icon: Icons.key_off_outlined,
-                  title: copy('routes.no_accounts'),
+                  title: copy('provider_accounts.none_linked'),
                   action: OutlinedButton.icon(
-                    key: const Key('accounts-empty-add'),
+                    key: const Key('accounts-empty-link'),
                     onPressed: value.state == 'active' && !busy
-                        ? () => onAddAccount(value)
+                        ? () => onLinkAccount(value)
                         : null,
                     icon: const Icon(Icons.add, size: 14),
-                    label: Text(copy('routes.add_account')),
+                    label: Text(copy('provider_accounts.link')),
                   ),
                 )
               : ListView.separated(
                   padding: const EdgeInsets.only(bottom: 16),
-                  itemCount: ownedAccounts.length,
+                  itemCount: linkedAccounts.length,
                   separatorBuilder: (context, index) =>
                       const Divider(height: 1),
-                  itemBuilder: (context, index) => _AccountRow(
-                    account: ownedAccounts[index],
-                    compact: compact,
+                  itemBuilder: (context, index) => LinkedProviderAccountRow(
+                    account: linkedAccounts[index],
                     copy: copy,
                     busy: busy,
-                    onReplace: () =>
-                        onReplaceCredential(value, ownedAccounts[index]),
-                    onDelete: () => onDeleteAccount(ownedAccounts[index]),
+                    onManage: onManageAccount,
+                    onUnlink: () =>
+                        onUnlinkAccount(value, linkedAccounts[index]),
                   ),
                 ),
         ),
       ],
-    );
-  }
-}
-
-final class _AccountRow extends StatelessWidget {
-  const _AccountRow({
-    required this.account,
-    required this.compact,
-    required this.copy,
-    required this.busy,
-    required this.onReplace,
-    required this.onDelete,
-  });
-
-  final ProviderAccount account;
-  final bool compact;
-  final AppCopy copy;
-  final bool busy;
-  final VoidCallback onReplace;
-  final VoidCallback onDelete;
-
-  @override
-  Widget build(BuildContext context) {
-    final credentialLabel = account.usable
-        ? copy('routes.credentials.ready')
-        : copy('routes.credentials.unavailable');
-    final kindLabel = _localizedCopy(copy, 'routes.account.kind', account.kind);
-    final transportLabel = _localizedCopy(
-      copy,
-      'routes.account.transport',
-      account.kind,
-    );
-    final headerSummary = copy.format('routes.account.headers.summary', {
-      'set': account.setHeaderNames.length,
-      'delete': account.deleteHeaderNames.length,
-    });
-    final compactActions = Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        IconButton(
-          key: Key('account-update-${account.id}'),
-          onPressed: busy ? null : onReplace,
-          tooltip: copy('routes.update_credential'),
-          icon: const Icon(Icons.key_outlined, size: 15),
-        ),
-        IconButton(
-          key: Key('account-delete-${account.id}'),
-          onPressed: busy ? null : onDelete,
-          tooltip: copy('routes.delete_account'),
-          icon: Icon(
-            Icons.delete_outline,
-            size: 15,
-            color: context.viberColors.danger,
-          ),
-        ),
-      ],
-    );
-    if (compact) {
-      return Padding(
-        padding: const EdgeInsets.fromLTRB(13, 9, 5, 9),
-        child: Row(
-          children: [
-            Icon(Icons.key, size: 14, color: context.viberColors.verified),
-            const SizedBox(width: 7),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      Expanded(
-                        child: Text(
-                          account.displayName,
-                          style: Theme.of(context).textTheme.titleSmall,
-                        ),
-                      ),
-                      InlineStatus(
-                        label: credentialLabel,
-                        color: account.usable
-                            ? context.viberColors.verified
-                            : context.viberColors.danger,
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    '$kindLabel  ·  $transportLabel  ·  $headerSummary  ·  ${copy.format('routes.credentials.epoch', {'epoch': account.credentialEpoch})}',
-                    style: monoStyle,
-                  ),
-                ],
-              ),
-            ),
-            compactActions,
-          ],
-        ),
-      );
-    }
-    return SizedBox(
-      height: 44,
-      child: Padding(
-        padding: const EdgeInsets.only(left: 14, right: 5),
-        child: Row(
-          children: [
-            Icon(Icons.key, size: 14, color: context.viberColors.verified),
-            const SizedBox(width: 8),
-            Expanded(
-              child: Tooltip(
-                message: account.id,
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      account.displayName,
-                      overflow: TextOverflow.ellipsis,
-                      style: Theme.of(context).textTheme.titleSmall,
-                    ),
-                    Text(
-                      '$kindLabel · $transportLabel · $headerSummary',
-                      overflow: TextOverflow.ellipsis,
-                      style: Theme.of(context).textTheme.bodySmall,
-                    ),
-                  ],
-                ),
-              ),
-            ),
-            const SizedBox(width: 10),
-            SizedBox(
-              width: 76,
-              child: Text(
-                copy.format('routes.credentials.epoch', {
-                  'epoch': '${account.credentialEpoch}',
-                }),
-                style: monoStyle,
-              ),
-            ),
-            InlineStatus(
-              label: credentialLabel,
-              color: account.usable
-                  ? context.viberColors.verified
-                  : context.viberColors.danger,
-            ),
-            const SizedBox(width: 4),
-            compactActions,
-          ],
-        ),
-      ),
     );
   }
 }
@@ -853,449 +693,6 @@ final class _EndpointEditorDialogState extends State<_EndpointEditorDialog> {
     } else {
       setState(() {});
     }
-  }
-}
-
-final class _AccountEditorDialog extends StatefulWidget {
-  const _AccountEditorDialog({
-    required this.controller,
-    required this.endpoint,
-    required this.account,
-    required this.copy,
-  });
-
-  final WorkbenchController controller;
-  final UpstreamEndpoint endpoint;
-  final ProviderAccount? account;
-  final AppCopy copy;
-
-  @override
-  State<_AccountEditorDialog> createState() => _AccountEditorDialogState();
-}
-
-final class _AccountEditorDialogState extends State<_AccountEditorDialog> {
-  final _formKey = GlobalKey<FormState>();
-  late final TextEditingController _name;
-  final _secret = TextEditingController();
-  late String _kind;
-  late final AccountHeaderPolicyDraft _headers;
-  bool _submitted = false;
-  bool _headerInvalid = false;
-
-  bool get _replacing => widget.account != null;
-
-  @override
-  void initState() {
-    super.initState();
-    _name = TextEditingController(text: widget.account?.displayName ?? '');
-    _kind = widget.account?.kind ?? widget.endpoint.accountKinds.first;
-    _headers = AccountHeaderPolicyDraft(
-      existingSetHeaderNames: widget.account?.setHeaderNames ?? const [],
-      initialDeleteHeaderNames: widget.account?.deleteHeaderNames ?? const [],
-    );
-  }
-
-  @override
-  void dispose() {
-    _secret.clear();
-    _secret.dispose();
-    _name.dispose();
-    _headers.clearSensitiveValues();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final copy = widget.copy;
-    return AlertDialog(
-      constraints: const BoxConstraints(
-        maxWidth: ViberMetrics.dialogStandardWidth + ViberSpacing.xl * 2,
-      ),
-      insetPadding: ViberDialogInsets.inset,
-      titlePadding: ViberDialogInsets.title,
-      contentPadding: ViberDialogInsets.content,
-      actionsPadding: ViberDialogInsets.actions,
-      title: Text(
-        _replacing
-            ? copy.format('routes.account.replace.title', {
-                'name': widget.account!.displayName,
-              })
-            : copy('routes.account.create.title'),
-      ),
-      content: SizedBox(
-        key: const Key('account-editor-frame'),
-        width: ViberMetrics.dialogStandardWidth,
-        child: Form(
-          key: _formKey,
-          child: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                _AuthorityLine(
-                  icon: Icons.hub_outlined,
-                  label: widget.endpoint.displayName,
-                  detail: widget.endpoint.origin.toString(),
-                ),
-                const SizedBox(height: 8),
-                if (!_replacing) ...[
-                  CompactLabeledControl(
-                    label: copy('routes.account.kind'),
-                    child: CompactSelectField<String>(
-                      key: const Key('account-editor-kind'),
-                      initialValue: _kind,
-                      isExpanded: true,
-                      items: [
-                        for (final kind in widget.endpoint.accountKinds)
-                          DropdownMenuItem(
-                            value: kind,
-                            child: Text(copy('routes.account.kind.$kind')),
-                          ),
-                      ],
-                      onChanged: (value) => setState(() => _kind = value!),
-                    ),
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    copy('routes.account.transport.$_kind'),
-                    key: const Key('account-editor-auth-transport'),
-                    style: monoStyle.copyWith(
-                      color: context.viberColors.textMuted,
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  CompactLabeledControl(
-                    label: copy('routes.account.name'),
-                    child: TextFormField(
-                      key: const Key('account-editor-name'),
-                      controller: _name,
-                      maxLength: 256,
-                      textAlignVertical: TextAlignVertical.center,
-                      decoration: const InputDecoration(counterText: ''),
-                      validator: (value) =>
-                          value == null || value.trim().isEmpty
-                          ? copy('routes.validation.required')
-                          : null,
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                ],
-                CompactLabeledControl(
-                  label: copy(
-                    _kind == 'bearer_token'
-                        ? 'routes.account.bearer_token'
-                        : 'routes.account.api_key',
-                  ),
-                  child: TextFormField(
-                    key: const Key('account-editor-secret'),
-                    controller: _secret,
-                    autofocus: _replacing,
-                    obscureText: true,
-                    autocorrect: false,
-                    enableSuggestions: false,
-                    textAlignVertical: TextAlignVertical.center,
-                    decoration: const InputDecoration(),
-                    validator: (value) =>
-                        value == null ||
-                            value.isEmpty ||
-                            value.contains(RegExp(r'[\u0000\r\n]'))
-                        ? copy('routes.validation.secret')
-                        : null,
-                  ),
-                ),
-                const SizedBox(height: 10),
-                if (_kind == 'bearer_token' &&
-                    isChatGPTCodexOrigin(widget.endpoint.origin)) ...[
-                  Text(
-                    copy('routes.account.chatgpt_hint'),
-                    key: const Key('account-editor-chatgpt-hint'),
-                    style: Theme.of(context).textTheme.bodySmall,
-                  ),
-                  const SizedBox(height: 10),
-                ],
-                Text(
-                  copy('routes.account.secret_boundary'),
-                  style: Theme.of(context).textTheme.bodySmall,
-                ),
-                const SizedBox(height: 10),
-                const Divider(height: 1),
-                const SizedBox(height: 9),
-                AccountHeaderPolicyEditor(
-                  accountKind: _kind,
-                  draft: _headers,
-                  copy: copy,
-                  enabled: !widget.controller.inventoryMutating,
-                ),
-                if (_headerInvalid) ...[
-                  const SizedBox(height: 9),
-                  InlineNotice(
-                    message: copy('routes.account.headers.validation'),
-                    error: true,
-                  ),
-                ],
-                if (_submitted && widget.controller.inventoryError != null) ...[
-                  const SizedBox(height: 9),
-                  InlineNotice(
-                    message: widget.controller.inventoryError!,
-                    error: true,
-                  ),
-                ],
-              ],
-            ),
-          ),
-        ),
-      ),
-      actions: [
-        TextButton(
-          onPressed: widget.controller.inventoryMutating
-              ? null
-              : () => Navigator.pop(context),
-          child: Text(copy('common.cancel')),
-        ),
-        FilledButton(
-          key: const Key('account-editor-save'),
-          onPressed: widget.controller.inventoryMutating ? null : _submit,
-          child: widget.controller.inventoryMutating
-              ? const SizedBox.square(
-                  dimension: 13,
-                  child: CircularProgressIndicator(strokeWidth: 1.5),
-                )
-              : Text(
-                  copy(
-                    _replacing
-                        ? 'routes.account.replace.action'
-                        : 'routes.account.create.action',
-                  ),
-                ),
-        ),
-      ],
-    );
-  }
-
-  Future<void> _submit() async {
-    if (!_formKey.currentState!.validate()) return;
-    late final ProviderAccountHeaderPolicy headerPolicy;
-    try {
-      headerPolicy = _headers.build(accountKind: _kind);
-    } on ControlContractException {
-      setState(() => _headerInvalid = true);
-      return;
-    }
-    setState(() => _submitted = true);
-    final secret = _secret.text;
-    final result = _replacing
-        ? await widget.controller.replaceProviderAccountCredential(
-            account: widget.account!,
-            secret: secret,
-            headerPolicy: headerPolicy,
-          )
-        : await widget.controller.createProviderAccount(
-            endpoint: widget.endpoint,
-            displayName: _name.text,
-            kind: _kind,
-            secret: secret,
-            headerPolicy: headerPolicy,
-          );
-    _secret.clear();
-    _headers.clearSensitiveValues();
-    if (!mounted) return;
-    if (result != null) {
-      Navigator.pop(context);
-    } else {
-      setState(() {});
-    }
-  }
-}
-
-final class _DeleteAccountDialog extends StatefulWidget {
-  const _DeleteAccountDialog({
-    required this.controller,
-    required this.account,
-    required this.copy,
-  });
-
-  final WorkbenchController controller;
-  final ProviderAccount account;
-  final AppCopy copy;
-
-  @override
-  State<_DeleteAccountDialog> createState() => _DeleteAccountDialogState();
-}
-
-final class _DeleteAccountDialogState extends State<_DeleteAccountDialog> {
-  ProviderAccountDeleteResult? _blocked;
-  bool _submitted = false;
-
-  @override
-  Widget build(BuildContext context) {
-    final copy = widget.copy;
-    final blocked = _blocked;
-    return AlertDialog(
-      title: Text(
-        copy.format('routes.account.delete.title', {
-          'name': widget.account.displayName,
-        }),
-      ),
-      content: SizedBox(
-        width: 440,
-        child: SingleChildScrollView(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text(
-                copy('routes.account.delete.detail'),
-                style: Theme.of(context).textTheme.bodyMedium,
-              ),
-              const SizedBox(height: 8),
-              Text(
-                '${widget.account.id}  ·  ${copy.format('routes.credentials.epoch', {'epoch': widget.account.credentialEpoch})}',
-                style: monoStyle,
-              ),
-              if (blocked != null) ...[
-                const SizedBox(height: 10),
-                Container(
-                  width: double.infinity,
-                  padding: const EdgeInsets.all(9),
-                  decoration: BoxDecoration(
-                    color: context.viberColors.danger.withValues(alpha: 0.08),
-                    border: Border.all(
-                      color: context.viberColors.danger.withValues(alpha: 0.35),
-                    ),
-                    borderRadius: ViberMetrics.surfaceRadius,
-                  ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        copy('routes.account.delete.blocked'),
-                        style: Theme.of(context).textTheme.titleSmall,
-                      ),
-                      const SizedBox(height: 5),
-                      for (final reference in blocked.references)
-                        Padding(
-                          padding: const EdgeInsets.only(bottom: 4),
-                          child: Text(
-                            copy.format('routes.account.delete.reference', {
-                              'environment': reference.environmentName,
-                              'revision': reference.environmentRevision,
-                              'route': reference.routeId,
-                            }),
-                            style: monoStyle,
-                          ),
-                        ),
-                      if (blocked.referenceCount > blocked.references.length)
-                        Text(
-                          copy.format('routes.account.delete.more', {
-                            'count':
-                                blocked.referenceCount -
-                                blocked.references.length,
-                          }),
-                          style: Theme.of(context).textTheme.bodySmall,
-                        ),
-                    ],
-                  ),
-                ),
-              ],
-              if (_submitted &&
-                  blocked == null &&
-                  widget.controller.inventoryError != null) ...[
-                const SizedBox(height: 9),
-                InlineNotice(
-                  message: widget.controller.inventoryError!,
-                  error: true,
-                ),
-              ],
-            ],
-          ),
-        ),
-      ),
-      actions: [
-        TextButton(
-          onPressed: widget.controller.inventoryMutating
-              ? null
-              : () => Navigator.pop(context),
-          child: Text(
-            blocked == null ? copy('common.cancel') : copy('common.confirm'),
-          ),
-        ),
-        if (blocked == null)
-          FilledButton(
-            key: const Key('account-delete-confirm'),
-            onPressed: widget.controller.inventoryMutating ? null : _delete,
-            style: FilledButton.styleFrom(
-              backgroundColor: context.viberColors.danger,
-            ),
-            child: widget.controller.inventoryMutating
-                ? const SizedBox.square(
-                    dimension: 13,
-                    child: CircularProgressIndicator(strokeWidth: 1.5),
-                  )
-                : Text(copy('routes.account.delete.action')),
-          ),
-      ],
-    );
-  }
-
-  Future<void> _delete() async {
-    setState(() => _submitted = true);
-    final result = await widget.controller.deleteProviderAccount(
-      widget.account,
-    );
-    if (!mounted || result == null) {
-      if (mounted) setState(() {});
-      return;
-    }
-    if (result.deleted) {
-      Navigator.pop(context);
-    } else {
-      setState(() => _blocked = result);
-    }
-  }
-}
-
-final class _AuthorityLine extends StatelessWidget {
-  const _AuthorityLine({
-    required this.icon,
-    required this.label,
-    required this.detail,
-  });
-
-  final IconData icon;
-  final String label;
-  final String detail;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.symmetric(vertical: 2),
-      child: Row(
-        children: [
-          Icon(icon, size: 15, color: context.viberColors.route),
-          const SizedBox(width: 7),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  label,
-                  style: Theme.of(
-                    context,
-                  ).textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w500),
-                ),
-                Text(
-                  detail,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: monoStyle,
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
   }
 }
 

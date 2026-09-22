@@ -7,10 +7,10 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/vibe-agi/vibermate/internal/originidentity"
 	"github.com/vibe-agi/vibermate/internal/provideraccount"
 	"github.com/vibe-agi/vibermate/internal/providerauth"
 	"github.com/vibe-agi/vibermate/internal/secretstore"
-	"github.com/vibe-agi/vibermate/internal/upstreamendpoint"
 )
 
 type providerAccountRepository struct {
@@ -21,6 +21,14 @@ type providerAccountRepository struct {
 }
 
 var _ provideraccount.Repository = (*providerAccountRepository)(nil)
+
+type accountWriteKind uint8
+
+const (
+	accountWriteIdentity accountWriteKind = iota
+	accountWriteAssociations
+	accountWriteNote
+)
 
 func newProviderAccountRepository(
 	database *sql.DB,
@@ -44,9 +52,9 @@ func (repository *providerAccountRepository) LoadAll(
 	defer permit.finish()
 	rows, err := repository.database.QueryContext(
 		permit.context,
-		`SELECT account_id, display_name, upstream_endpoint_id, realm_id, driver_ref,
+		`SELECT account_id, display_name, credential_origin, endpoint_associations, association_revision, realm_id, driver_ref,
 		        secret_reference, state, revision,
-		        created_at_unix_ms, updated_at_unix_ms
+		        created_at_unix_ms, updated_at_unix_ms, note, note_revision
 		 FROM provider_accounts ORDER BY account_id`,
 	)
 	if err != nil {
@@ -87,8 +95,29 @@ func (repository *providerAccountRepository) Write(
 	expected uint64,
 	candidate provideraccount.Account,
 ) (provideraccount.CommitResult, error) {
+	return repository.write(ctx, expected, candidate, accountWriteIdentity)
+}
+
+func (repository *providerAccountRepository) WriteAssociations(ctx context.Context, expected uint64, candidate provideraccount.Account) (provideraccount.CommitResult, error) {
+	return repository.write(ctx, expected, candidate, accountWriteAssociations)
+}
+
+func (repository *providerAccountRepository) WriteNote(ctx context.Context, expected uint64, candidate provideraccount.Account) (provideraccount.CommitResult, error) {
+	return repository.write(ctx, expected, candidate, accountWriteNote)
+}
+
+func (repository *providerAccountRepository) write(ctx context.Context, expected uint64, candidate provideraccount.Account, kind accountWriteKind) (provideraccount.CommitResult, error) {
+	revision := func(account provideraccount.Account) uint64 {
+		if kind == accountWriteAssociations {
+			return account.AssociationRevision
+		}
+		if kind == accountWriteNote {
+			return account.NoteRevision
+		}
+		return account.Revision
+	}
 	if candidate.Validate() != nil || expected >= provideraccount.MaxRevision ||
-		candidate.Revision != expected+1 {
+		revision(candidate) != expected+1 {
 		return provideraccount.CommitResult{Outcome: provideraccount.CommitNotCommitted},
 			provideraccount.ErrInvalidAccount
 	}
@@ -104,30 +133,38 @@ func (repository *providerAccountRepository) Write(
 	}
 	defer func() { _ = transaction.Rollback() }()
 	var result sql.Result
-	if expected == 0 {
+	if kind == accountWriteNote {
+		result, err = transaction.ExecContext(permit.context,
+			`UPDATE provider_accounts SET note = ?, note_revision = ?, updated_at_unix_ms = ? WHERE account_id = ? AND note_revision = ? AND revision = ? AND association_revision = ?`,
+			candidate.Note, int64(candidate.NoteRevision), candidate.UpdatedAt.UnixMilli(), candidate.ID.String(), int64(expected), int64(candidate.Revision), int64(candidate.AssociationRevision))
+	} else if kind == accountWriteAssociations {
+		result, err = transaction.ExecContext(permit.context,
+			`UPDATE provider_accounts SET endpoint_associations = ?, association_revision = ?, updated_at_unix_ms = ? WHERE account_id = ? AND association_revision = ? AND revision = ? AND note_revision = ?`,
+			candidate.Associations.String(), int64(candidate.AssociationRevision), candidate.UpdatedAt.UnixMilli(), candidate.ID.String(), int64(expected), int64(candidate.Revision), int64(candidate.NoteRevision))
+	} else if expected == 0 {
 		result, err = transaction.ExecContext(
 			permit.context,
 			`INSERT INTO provider_accounts(
-			   account_id, display_name, upstream_endpoint_id, realm_id, driver_ref,
+			   account_id, display_name, credential_origin, endpoint_associations, association_revision, realm_id, driver_ref,
 			   secret_reference, state, revision,
-			   created_at_unix_ms, updated_at_unix_ms
-			 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			   created_at_unix_ms, updated_at_unix_ms, note, note_revision
+			  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			 ON CONFLICT(account_id) DO NOTHING`,
-			candidate.ID.String(), candidate.DisplayName, candidate.UpstreamEndpointID.String(), candidate.RealmID,
+			candidate.ID.String(), candidate.DisplayName, candidate.Origin.String(), candidate.Associations.String(), int64(candidate.AssociationRevision), candidate.RealmID,
 			candidate.Driver.String(), candidate.SecretRef.String(), string(candidate.State),
-			int64(candidate.Revision), candidate.CreatedAt.UnixMilli(), candidate.UpdatedAt.UnixMilli(),
+			int64(candidate.Revision), candidate.CreatedAt.UnixMilli(), candidate.UpdatedAt.UnixMilli(), candidate.Note, int64(candidate.NoteRevision),
 		)
 	} else {
 		result, err = transaction.ExecContext(
 			permit.context,
 			`UPDATE provider_accounts
-			 SET display_name = ?, upstream_endpoint_id = ?, realm_id = ?, driver_ref = ?, secret_reference = ?,
+			 SET display_name = ?, credential_origin = ?, endpoint_associations = ?, association_revision = ?, realm_id = ?, driver_ref = ?, secret_reference = ?,
 			     state = ?, revision = ?, updated_at_unix_ms = ?
-			 WHERE account_id = ? AND revision = ? AND created_at_unix_ms = ?`,
-			candidate.DisplayName, candidate.UpstreamEndpointID.String(), candidate.RealmID, candidate.Driver.String(),
+			 WHERE account_id = ? AND revision = ? AND created_at_unix_ms = ? AND note_revision = ?`,
+			candidate.DisplayName, candidate.Origin.String(), candidate.Associations.String(), int64(candidate.AssociationRevision), candidate.RealmID, candidate.Driver.String(),
 			candidate.SecretRef.String(), string(candidate.State), int64(candidate.Revision),
 			candidate.UpdatedAt.UnixMilli(), candidate.ID.String(), int64(expected),
-			candidate.CreatedAt.UnixMilli(),
+			candidate.CreatedAt.UnixMilli(), int64(candidate.NoteRevision),
 		)
 	}
 	if err != nil {
@@ -145,7 +182,7 @@ func (repository *providerAccountRepository) Write(
 		}
 		actual := uint64(0)
 		if exists {
-			actual = current.Revision
+			actual = revision(current)
 		}
 		return provideraccount.CommitResult{
 			Outcome: provideraccount.CommitConflict, Account: current, Actual: actual,
@@ -155,7 +192,7 @@ func (repository *providerAccountRepository) Write(
 	if commitErr == nil {
 		return provideraccount.CommitResult{
 			Outcome: provideraccount.CommitCommitted,
-			Account: candidate, Actual: candidate.Revision,
+			Account: candidate, Actual: revision(candidate),
 		}, nil
 	}
 	_ = transaction.Rollback()
@@ -176,18 +213,18 @@ func (repository *providerAccountRepository) Write(
 	if exists && current == candidate {
 		return provideraccount.CommitResult{
 			Outcome: provideraccount.CommitCommitted,
-			Account: current, Actual: current.Revision,
+			Account: current, Actual: revision(current),
 		}, nil
 	}
-	if (!exists && expected == 0) || (exists && current.Revision == expected) {
+	if (!exists && expected == 0) || (exists && revision(current) == expected) {
 		return provideraccount.CommitResult{
 			Outcome: provideraccount.CommitNotCommitted,
-			Account: current, Actual: current.Revision,
+			Account: current, Actual: revision(current),
 		}, commitErr
 	}
 	return provideraccount.CommitResult{
 		Outcome: provideraccount.CommitIndeterminate,
-		Account: current, Actual: current.Revision,
+		Account: current, Actual: revision(current),
 	}, commitErr
 }
 
@@ -273,9 +310,9 @@ func loadProviderAccount(
 ) (provideraccount.Account, bool, error) {
 	account, err := scanProviderAccount(query.QueryRowContext(
 		ctx,
-		`SELECT account_id, display_name, upstream_endpoint_id, realm_id, driver_ref,
+		`SELECT account_id, display_name, credential_origin, endpoint_associations, association_revision, realm_id, driver_ref,
 		        secret_reference, state, revision,
-		        created_at_unix_ms, updated_at_unix_ms
+		        created_at_unix_ms, updated_at_unix_ms, note, note_revision
 		 FROM provider_accounts WHERE account_id = ?`,
 		id.String(),
 	))
@@ -289,24 +326,27 @@ func loadProviderAccount(
 }
 
 func scanProviderAccount(row providerAccountRow) (provideraccount.Account, error) {
-	var id, displayName, endpointID, realmID, driverValue, secretValue, state string
+	var id, displayName, originValue, associationsValue, realmID, driverValue, secretValue, state string
+	var associationRevision, noteRevision int64
+	var note string
 	var revision, createdAt, updatedAt int64
 	if err := row.Scan(
-		&id, &displayName, &endpointID, &realmID, &driverValue,
-		&secretValue, &state, &revision, &createdAt, &updatedAt,
+		&id, &displayName, &originValue, &associationsValue, &associationRevision, &realmID, &driverValue,
+		&secretValue, &state, &revision, &createdAt, &updatedAt, &note, &noteRevision,
 	); err != nil {
 		return provideraccount.Account{}, err
 	}
 	parsedID, idErr := provideraccount.NewID(id)
-	parsedEndpointID, endpointErr := upstreamendpoint.NewID(endpointID)
+	origin, originErr := originidentity.ParseProviderOrigin(originValue)
+	associations, associationErr := provideraccount.ParseEndpointAssociations(associationsValue)
 	driver, driverErr := providerauth.NewDriverRef(driverValue)
 	secret, secretErr := secretstore.ParseReference(secretValue)
-	if idErr != nil || endpointErr != nil || driverErr != nil || secretErr != nil ||
+	if idErr != nil || originErr != nil || associationErr != nil || associationRevision <= 0 || driverErr != nil || secretErr != nil ||
 		revision <= 0 || createdAt <= 0 || updatedAt < createdAt {
 		return provideraccount.Account{}, provideraccount.ErrInvalidAccount
 	}
 	account := provideraccount.Account{
-		ID: parsedID, DisplayName: displayName, UpstreamEndpointID: parsedEndpointID, RealmID: realmID,
+		ID: parsedID, DisplayName: displayName, Note: note, NoteRevision: uint64(noteRevision), Origin: origin, Associations: associations, AssociationRevision: uint64(associationRevision), RealmID: realmID,
 		Driver: driver, SecretRef: secret, State: provideraccount.State(state),
 		Revision: uint64(revision), CreatedAt: time.UnixMilli(createdAt).UTC(),
 		UpdatedAt: time.UnixMilli(updatedAt).UTC(),

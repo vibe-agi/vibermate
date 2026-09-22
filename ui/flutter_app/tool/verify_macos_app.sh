@@ -69,6 +69,8 @@ code_paths=(
   "${app_executable}"
   "${app}/Contents/Frameworks/App.framework/Versions/A/App"
   "${app}/Contents/Frameworks/FlutterMacOS.framework/Versions/A/FlutterMacOS"
+  "${app}/Contents/Frameworks/file_selector_macos.framework/Versions/A/file_selector_macos"
+  "${app}/Contents/Frameworks/url_launcher_macos.framework/Versions/A/url_launcher_macos"
 )
 if [[ "${mode}" == "live" ]]; then
   code_paths+=("${macos_directory}/vibermate" "${macos_directory}/vibermated")

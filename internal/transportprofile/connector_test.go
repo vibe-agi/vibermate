@@ -521,6 +521,68 @@ func TestConnectorHandshakeCancellationConverges(t *testing.T) {
 	}
 }
 
+func TestHandshakePreservesCancellationAtEveryBoundary(t *testing.T) {
+	t.Parallel()
+	for _, stage := range []string{"before", "set-deadline", "handshake", "clear-deadline"} {
+		t.Run(stage, func(t *testing.T) {
+			ctx, cancel := context.WithCancelCause(context.Background())
+			defer cancel(nil)
+			cause := errors.New("request canceled")
+			client, server := net.Pipe()
+			defer client.Close()
+			defer server.Close()
+			if stage == "before" {
+				cancel(cause)
+				_ = server.Close()
+			}
+			raw := deadlineHookConn{Conn: client, setDeadline: func(deadline time.Time) error {
+				if (stage == "set-deadline" && !deadline.IsZero()) ||
+					(stage == "clear-deadline" && deadline.IsZero()) {
+					cancel(cause)
+					return io.ErrClosedPipe
+				}
+				return client.SetDeadline(deadline)
+			}}
+			connector := &Connector{handshakeTimeout: time.Minute}
+			err := connector.handshake(ctx, raw, func(context.Context) error {
+				if stage == "handshake" {
+					cancel(cause)
+					return io.ErrClosedPipe
+				}
+				return nil
+			})
+			if !errors.Is(err, cause) {
+				t.Fatalf("handshake error = %v, want cancellation cause", err)
+			}
+		})
+	}
+}
+
+func TestHandshakeDoesNotTurnCleanupIntoCancellation(t *testing.T) {
+	t.Parallel()
+	for _, handshakeErr := range []error{nil, io.ErrUnexpectedEOF} {
+		client, server := net.Pipe()
+		connector := &Connector{handshakeTimeout: time.Minute}
+		err := connector.handshake(context.Background(), client, func(context.Context) error {
+			return handshakeErr
+		})
+		_ = client.Close()
+		_ = server.Close()
+		if !errors.Is(err, handshakeErr) {
+			t.Fatalf("handshake error = %v, want %v", err, handshakeErr)
+		}
+	}
+}
+
+type deadlineHookConn struct {
+	net.Conn
+	setDeadline func(time.Time) error
+}
+
+func (conn deadlineHookConn) SetDeadline(deadline time.Time) error {
+	return conn.setDeadline(deadline)
+}
+
 func captureGoClientHello(
 	t *testing.T,
 	serverName string,

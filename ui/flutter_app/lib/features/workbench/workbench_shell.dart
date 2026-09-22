@@ -14,6 +14,7 @@ import 'endpoints_view.dart';
 import 'environments_view.dart';
 import 'network_view.dart';
 import 'offline_hold_view.dart';
+import 'provider_accounts_view.dart';
 import 'settings_view.dart';
 import 'usage_dashboard_view.dart';
 import 'workbench_controller.dart';
@@ -109,6 +110,10 @@ final class WorkbenchShell extends StatelessWidget {
         copy: copy,
       ),
       WorkbenchSection.routes => EndpointsView(
+        controller: controller,
+        copy: copy,
+      ),
+      WorkbenchSection.providerAccounts => ProviderAccountsView(
         controller: controller,
         copy: copy,
       ),
@@ -418,6 +423,7 @@ _WorkbenchArea _areaFor(WorkbenchSection section) => switch (section) {
   WorkbenchSection.usage => _WorkbenchArea.insights,
   WorkbenchSection.environments ||
   WorkbenchSection.routes ||
+  WorkbenchSection.providerAccounts ||
   WorkbenchSection.codeLibrary ||
   WorkbenchSection.settings => _WorkbenchArea.configuration,
 };
@@ -456,6 +462,12 @@ final class _TaskNavigation extends StatelessWidget {
           'environments',
         ),
         (WorkbenchSection.routes, Icons.hub_outlined, 'nav.routes', 'routes'),
+        (
+          WorkbenchSection.providerAccounts,
+          Icons.key_outlined,
+          'nav.provider_accounts',
+          'provider-accounts',
+        ),
         (
           WorkbenchSection.codeLibrary,
           Icons.data_object_rounded,

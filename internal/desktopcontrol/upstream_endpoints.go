@@ -251,6 +251,9 @@ func upstreamEndpointCreateCommand(
 		}
 	}
 	drivers := []providerauth.DriverRef{providerauth.StaticHeaderDriverRef()}
+	if upstreamendpoint.IsChatGPTCodexOrigin(origin) && slices.Contains(protocols, openAIResponses) {
+		drivers = append(drivers, providerauth.CodexOAuthDriverRef())
+	}
 	if _, supportsAnthropic := seen[anthropicMessages]; supportsAnthropic {
 		drivers = append([]providerauth.DriverRef{providerauth.AnthropicAPIKeyDriverRef()}, drivers...)
 	}
@@ -279,7 +282,10 @@ func upstreamEndpointResponseOf(endpoint upstreamendpoint.Endpoint) (UpstreamEnd
 }
 
 func endpointAccountKinds(endpoint upstreamendpoint.Endpoint) []ProviderAccountKind {
-	kinds := make([]ProviderAccountKind, 0, 2)
+	kinds := make([]ProviderAccountKind, 0, 3)
+	if slices.Contains(endpoint.Drivers, providerauth.CodexOAuthDriverRef()) {
+		kinds = append(kinds, ProviderAccountKindCodexOAuth)
+	}
 	if slices.Contains(endpoint.Drivers, providerauth.AnthropicAPIKeyDriverRef()) {
 		kinds = append(kinds, ProviderAccountKindAnthropicAPIKey)
 	}

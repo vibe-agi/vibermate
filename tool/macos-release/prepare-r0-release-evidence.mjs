@@ -2049,7 +2049,9 @@ export async function prepareR0ReleaseEvidence(
     );
     for (const [name, relativePath] of Object.entries({
       "app-framework": "App.framework/App",
+      "file-selector-framework": "file_selector_macos.framework/file_selector_macos",
       "flutter-macos-framework": "FlutterMacOS.framework/FlutterMacOS",
+      "url-launcher-framework": "url_launcher_macos.framework/url_launcher_macos",
     })) {
       const staged = await inspectRelativePath(
         join(payloadRoot, "dist"),

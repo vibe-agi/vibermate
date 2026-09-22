@@ -664,7 +664,7 @@ func validateAccounts(aggregate Environment, catalog AccountCatalog) error {
 					return fmt.Errorf("%w: upstream route %q has no account catalog", ErrInvalidEnvironment, route.ID)
 				}
 				for _, frozen := range policy.Accounts {
-					account, exists := catalog.LookupAccount(frozen.ID)
+					account, exists := catalog.LookupAccount(frozen.ID, route.ProviderTarget.ID)
 					if !exists || !account.Active || account.ID != frozen.ID ||
 						account.Revision != frozen.Revision || account.DisplayName != frozen.DisplayName ||
 						account.UpstreamEndpointID != route.ProviderTarget.ID ||

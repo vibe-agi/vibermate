@@ -21,6 +21,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/captureassignment"
 	"github.com/vibe-agi/vibermate/internal/capturerun"
 	"github.com/vibe-agi/vibermate/internal/codelibrary"
+	"github.com/vibe-agi/vibermate/internal/codexoauth"
 	"github.com/vibe-agi/vibermate/internal/connectionevent"
 	"github.com/vibe-agi/vibermate/internal/desktoptrust"
 	"github.com/vibe-agi/vibermate/internal/egressaudit"
@@ -73,6 +74,11 @@ const (
 	ReasonProviderAccountConflict            ReasonCode = "provider_account_conflict"
 	ReasonProviderAccountInUse               ReasonCode = "provider_account_in_use"
 	ReasonProviderAccountUnavailable         ReasonCode = "provider_account_unavailable"
+	ReasonCredentialRefreshFailed            ReasonCode = "credential_refresh_failed"
+	ReasonCredentialReconnectRequired        ReasonCode = "credential_reconnect_required"
+	ReasonCodexLoginNotFound                 ReasonCode = "codex_login_not_found"
+	ReasonCodexLoginBusy                     ReasonCode = "codex_login_busy"
+	ReasonCodexLoginCapacity                 ReasonCode = "codex_login_capacity"
 	ReasonRawEvidenceNotFound                ReasonCode = "raw_evidence_not_found"
 	ReasonRawEvidenceUnavailable             ReasonCode = "raw_evidence_unavailable"
 	ReasonModelCatalogUnavailable            ReasonCode = "model_catalog_unavailable"
@@ -139,6 +145,9 @@ type Options struct {
 	Approvals           toolapproval.Controller
 	Endpoints           upstreamendpoint.Controller
 	Accounts            provideraccount.Controller
+	AccountReads        OwnedAccountReader
+	CodexOAuth          codexoauth.Inspector
+	CodexLogins         codexoauth.LoginController
 	CodeLibrary         codelibrary.Controller
 	EgressProfiles      egressprofile.Controller
 	Models              modelcatalog.Reader
@@ -171,6 +180,9 @@ type Handler struct {
 	approvals           toolapproval.Controller
 	endpoints           upstreamendpoint.Controller
 	accounts            provideraccount.Controller
+	accountReads        OwnedAccountReader
+	codexOAuth          codexoauth.Inspector
+	codexLogins         codexoauth.LoginController
 	codeLibrary         codelibrary.Controller
 	egressProfiles      egressprofile.Controller
 	models              modelcatalog.Reader
@@ -233,6 +245,9 @@ func New(options Options) (*Handler, error) {
 		approvals:           options.Approvals,
 		endpoints:           options.Endpoints,
 		accounts:            options.Accounts,
+		accountReads:        options.AccountReads,
+		codexOAuth:          options.CodexOAuth,
+		codexLogins:         options.CodexLogins,
 		codeLibrary:         options.CodeLibrary,
 		egressProfiles:      options.EgressProfiles,
 		models:              options.Models,
@@ -250,6 +265,10 @@ func New(options Options) (*Handler, error) {
 		mux:                 http.NewServeMux(),
 	}
 	handler.mux.HandleFunc("GET /api/v1/status", handler.getStatus)
+	handler.mux.HandleFunc("POST "+CodexLoginPath, handler.startCodexLogin)
+	handler.mux.HandleFunc("GET "+CodexLoginPath+"/{loginId}", handler.getCodexLogin)
+	handler.mux.HandleFunc("POST "+CodexLoginPath+"/{loginId}/callback", handler.completeCodexLogin)
+	handler.mux.HandleFunc("DELETE "+CodexLoginPath+"/{loginId}", handler.cancelCodexLogin)
 	if handler.rootTrust != nil {
 		handler.mux.HandleFunc("GET /api/v1/platform/root-ca", handler.getRootCA)
 		handler.mux.HandleFunc(
@@ -319,12 +338,16 @@ func New(options Options) (*Handler, error) {
 	handler.mux.HandleFunc("GET /api/v1/provider-accounts", handler.listProviderAccounts)
 	handler.mux.HandleFunc("POST /api/v1/provider-accounts", handler.createProviderAccount)
 	handler.mux.HandleFunc("GET /api/v1/provider-accounts/{accountId}", handler.getProviderAccount)
+	handler.mux.HandleFunc("PUT /api/v1/provider-accounts/{accountId}/note", handler.setProviderAccountNote)
+	handler.mux.HandleFunc("GET /api/v1/provider-accounts/{accountId}/account-facts", handler.getAccountFacts)
 	handler.mux.HandleFunc("DELETE /api/v1/provider-accounts/{accountId}", handler.deleteProviderAccount)
 	handler.mux.HandleFunc("DELETE /api/v1/environments/{environmentId}", handler.deleteEnvironment)
 	handler.mux.HandleFunc("DELETE /api/v1/upstream-endpoints/{endpointId}", handler.deleteUpstreamEndpoint)
 	handler.mux.HandleFunc("DELETE /api/v1/captures/{captureKey}", handler.deleteCapture)
 	handler.mux.HandleFunc("POST /api/v1/evidence/actions/clear", handler.clearArchive)
 	handler.mux.HandleFunc("PUT /api/v1/provider-accounts/{accountId}/credential", handler.replaceProviderAccountCredential)
+	handler.mux.HandleFunc("POST /api/v1/provider-accounts/{accountId}/credential/refresh", handler.refreshProviderAccountCredential)
+	handler.mux.HandleFunc("PUT /api/v1/provider-accounts/{accountId}/associations/{endpointId}", handler.setProviderAccountAssociation)
 	handler.mux.HandleFunc("GET /api/v1/environments/{environmentId}", handler.getEnvironment)
 	handler.mux.HandleFunc("GET /api/v1/environments/{environmentId}/draft", handler.getEnvironmentDraft)
 	handler.mux.HandleFunc("PUT /api/v1/environments/{environmentId}/draft", handler.putEnvironmentDraft)
@@ -436,6 +459,14 @@ func (handler *Handler) ServeHTTP(
 func (handler *Handler) RequiredScope(request *http.Request) Scope {
 	if request == nil {
 		return ""
+	}
+	if strings.HasPrefix(request.URL.Path, "/api/v1/provider-accounts/") && strings.HasSuffix(request.URL.Path, "/account-facts") {
+		return ScopeWrite
+	}
+	// Login links contain state: reading them also requires the initiating
+	// write session, never a read-only management token.
+	if request.URL.Path == CodexLoginPath || strings.HasPrefix(request.URL.Path, CodexLoginPath+"/") {
+		return ScopeWrite
 	}
 	switch {
 	case request.Method == http.MethodGet:

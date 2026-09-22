@@ -158,7 +158,9 @@ export function signingCommandArguments(kind, identity, keychainPath, path) {
   if (
     ![
       "app-framework",
+      "file-selector-framework",
       "flutter-macos-framework",
+      "url-launcher-framework",
       "vibermate",
       "vibermated",
     ].includes(kind) ||
@@ -299,7 +301,9 @@ async function main() {
 
   for (const name of [
     "app-framework",
+    "file-selector-framework",
     "flutter-macos-framework",
+    "url-launcher-framework",
     "vibermate",
     "vibermated",
   ]) {

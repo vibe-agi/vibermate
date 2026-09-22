@@ -109,6 +109,51 @@ func endpointManager(t *testing.T) (*Manager, *memoryEndpointRepository, ID) {
 	return manager, repository, command.ID
 }
 
+func TestAccountLinkCommitFencesConcurrentEndpointRetirement(t *testing.T) {
+	t.Parallel()
+	manager, _, id := endpointManager(t)
+	ctx := context.Background()
+	entered, commit := make(chan struct{}), make(chan struct{})
+	linkDone := make(chan error, 1)
+	linked := false // GuardAccountLink and Delete hold the same endpoint lock.
+	go func() {
+		linkDone <- manager.GuardAccountLink(ctx, id, func(endpoint Endpoint) error {
+			close(entered)
+			<-commit
+			linked = true
+			return nil
+		})
+	}()
+	<-entered
+	deleteDone := make(chan error, 1)
+	go func() {
+		_, err := manager.Delete(ctx, id, func(context.Context, ID) ([]resourcedeletion.Holder, error) {
+			if !linked {
+				return nil, errors.New("endpoint retired before the link committed")
+			}
+			return []resourcedeletion.Holder{holder(resourcedeletion.KindOwnedAccount, "shared-account")}, nil
+		})
+		deleteDone <- err
+	}()
+	close(commit)
+	if err := <-linkDone; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-deleteDone; err != nil {
+		t.Fatal(err)
+	}
+	if _, present := manager.LookupEndpoint(id.String()); !present {
+		t.Fatal("retired a newly linked endpoint")
+	}
+	linked = false
+	if _, err := manager.Delete(ctx, id); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.GuardAccountLink(ctx, id, func(Endpoint) error { t.Fatal("granted a retired profile"); return nil }); !errors.Is(err, ErrEndpointNotFound) {
+		t.Fatalf("retired grant=%v", err)
+	}
+}
+
 func holder(kind resourcedeletion.Kind, id string) resourcedeletion.Holder {
 	return resourcedeletion.Holder{Kind: kind, ID: id, Label: "holder " + id}
 }

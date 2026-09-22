@@ -372,7 +372,7 @@ func runtimeEnvironmentCompiler(t *testing.T) environment.Compiler {
 
 type runtimeAccountCatalog struct{}
 
-func (runtimeAccountCatalog) LookupAccount(id string) (environment.AccountDescriptor, bool) {
+func (runtimeAccountCatalog) LookupAccount(id string, _ string) (environment.AccountDescriptor, bool) {
 	if id != "account.runtime" {
 		return environment.AccountDescriptor{}, false
 	}

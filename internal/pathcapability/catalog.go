@@ -22,6 +22,7 @@ const (
 	KindSemantic    Kind = "semantic"
 	KindAuxiliary   Kind = "auxiliary"
 	KindOpaque      Kind = "opaque"
+	KindAccountRead Kind = "account_read"
 	KindUnsupported Kind = "unsupported"
 )
 
@@ -339,6 +340,8 @@ func pathKind(kind protocolspec.ClientOperationKind) (Kind, error) {
 		return KindAuxiliary, nil
 	case protocolspec.ClientOperationOpaque:
 		return KindOpaque, nil
+	case protocolspec.ClientOperationAccountRead:
+		return KindAccountRead, nil
 	case protocolspec.ClientOperationUnsupported:
 		return KindUnsupported, nil
 	default:

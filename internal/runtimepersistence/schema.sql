@@ -378,8 +378,11 @@ CREATE TABLE "provider_accounts"(
   CHECK(length(CAST(account_id AS BLOB)) BETWEEN 1 AND 128),
   display_name TEXT NOT NULL
   CHECK(length(CAST(display_name AS BLOB)) BETWEEN 1 AND 256),
-  upstream_endpoint_id TEXT NOT NULL
-  REFERENCES upstream_endpoints(endpoint_id),
+  credential_origin TEXT NOT NULL,
+  endpoint_associations TEXT NOT NULL CHECK(json_valid(endpoint_associations)),
+  association_revision INTEGER NOT NULL CHECK(association_revision BETWEEN 1 AND 9223372036854775807),
+  note TEXT NOT NULL DEFAULT '' CHECK(length(note) <= 256),
+  note_revision INTEGER NOT NULL DEFAULT 0 CHECK(note_revision BETWEEN 0 AND 9223372036854775807),
   realm_id TEXT NOT NULL
   CHECK(length(CAST(realm_id AS BLOB)) BETWEEN 1 AND 128),
   driver_ref TEXT NOT NULL
@@ -609,6 +612,8 @@ CREATE TABLE runtime_egress_attempts(
   purpose TEXT NOT NULL
   CHECK(purpose IN('provider_attempt',
 'upstream_model_discovery',
+'upstream_account_read',
+'credential_refresh',
 'model_metadata_directory',
 'route_operation',
 'original_origin',
@@ -1077,8 +1082,8 @@ ON manual_captures(
   updated_at_unix_ms DESC,
   capture_id ASC
 );
-CREATE INDEX provider_accounts_endpoint_state
-ON provider_accounts(upstream_endpoint_id, state, account_id);
+CREATE INDEX provider_accounts_origin_state
+ON provider_accounts(credential_origin, state, account_id);
 CREATE INDEX runtime_activities_exchange_capture_run_latest
 ON runtime_activities(capture_run_id, sequence DESC)
 WHERE kind IN('exchange.started', 'exchange.completed')

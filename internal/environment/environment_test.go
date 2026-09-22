@@ -822,6 +822,18 @@ func TestAccountDeletionGuardReturnsPublishedRouteReferencesBeforeDeleting(t *te
 		t.Fatalf("account deletion references = %+v deleted=%t", references, deleted)
 	}
 
+	// A use through one service does not hold unrelated links of this account.
+	endpointID := candidate.ClientEndpoints[0].ProtocolPlans[0].Destination.Upstream.Routes[0].ProviderTarget.ID
+	references, err = manager.GuardAccountAssociationRemoval(context.Background(), "account.work", endpointID, func() error { deleted = true; return nil })
+	if err != nil || deleted || len(references) == 0 {
+		t.Fatalf("referenced association guard: refs=%+v deleted=%t err=%v", references, deleted, err)
+	}
+	references, err = manager.GuardAccountAssociationRemoval(context.Background(), "account.work", "unused.profile", func() error { deleted = true; return nil })
+	if err != nil || !deleted || len(references) != 0 {
+		t.Fatalf("unreferenced association guard: refs=%+v deleted=%t err=%v", references, deleted, err)
+	}
+	deleted = false
+
 	for endpointIndex := range candidate.ClientEndpoints {
 		for planIndex := range candidate.ClientEndpoints[endpointIndex].ProtocolPlans {
 			candidate.ClientEndpoints[endpointIndex].ProtocolPlans[planIndex].Destination =
@@ -1339,7 +1351,7 @@ func TestProjectionConcurrentReadersAndWriters(t *testing.T) {
 
 type accountCatalog map[string]AccountDescriptor
 
-func (catalog accountCatalog) LookupAccount(id string) (AccountDescriptor, bool) {
+func (catalog accountCatalog) LookupAccount(id string, _ string) (AccountDescriptor, bool) {
 	value, ok := catalog[id]
 	return value, ok
 }

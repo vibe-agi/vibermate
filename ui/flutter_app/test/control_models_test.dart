@@ -544,7 +544,9 @@ void main() {
       () => ProviderAccount.fromJson({
         'id': 'account.test',
         'displayName': 'Test',
-        'upstreamEndpointId': 'target.test',
+        'credentialOrigin': 'https://api.anthropic.com',
+        'linkedEndpointIds': ['target.test'],
+        'associationRevision': 1,
         'kind': 'anthropic_api_key',
         'realmId': 'anthropic.test',
         'state': 'active',
@@ -559,11 +561,72 @@ void main() {
     );
   });
 
+  test('Codex OAuth Account exposes only safe identity and refresh state', () {
+    final account = ProviderAccount.fromJson({
+      'id': 'account.codex.work',
+      'displayName': 'Codex Work',
+      'credentialOrigin': 'https://chatgpt.com',
+      'linkedEndpointIds': ['target.codex.official'],
+      'associationRevision': 1,
+      'kind': 'codex_oauth',
+      'realmId': 'openai.chatgpt',
+      'state': 'active',
+      'revision': 1,
+      'credentialState': 'ready',
+      'credentialEpoch': 4,
+      'setHeaderNames': <String>[],
+      'deleteHeaderNames': <String>[],
+      'codexOAuth': {
+        'chatgptAccountId': 'workspace-42',
+        'email': 'engineer@example.com',
+        'userId': 'user-42',
+        'planType': 'team',
+        'fedRamp': false,
+        'expiresAt': '2026-09-21T12:00:00.000Z',
+        'lastRefresh': '2026-09-21T11:00:00.000Z',
+        'state': 'ready',
+      },
+    }, 'providerAccount');
+
+    expect(account.codexOAuth?.chatgptAccountId, 'workspace-42');
+    expect(account.codexOAuth?.email, 'engineer@example.com');
+    expect(account.codexOAuth?.planType, 'team');
+    expect(account.codexOAuth?.state, 'ready');
+    expect(account.codexOAuth?.expiresAt, DateTime.utc(2026, 9, 21, 12));
+    expect(
+      () => ProviderAccount.fromJson({
+        'id': 'account.codex.bad',
+        'displayName': 'Codex Bad',
+        'credentialOrigin': 'https://chatgpt.com',
+        'linkedEndpointIds': ['target.codex.official'],
+        'associationRevision': 1,
+        'kind': 'codex_oauth',
+        'realmId': 'openai.chatgpt',
+        'state': 'active',
+        'revision': 1,
+        'credentialState': 'ready',
+        'credentialEpoch': 1,
+        'setHeaderNames': <String>[],
+        'deleteHeaderNames': <String>[],
+        'codexOAuth': {
+          'chatgptAccountId': 'workspace-42',
+          'fedRamp': false,
+          'lastRefresh': '2026-09-21T11:00:00.000Z',
+          'state': 'ready',
+          'refreshToken': 'must-not-cross-response-boundary',
+        },
+      }, 'providerAccount'),
+      throwsA(isA<ControlContractException>()),
+    );
+  });
+
   test('credential-missing Account has an explicit zero epoch', () {
     final account = ProviderAccount.fromJson({
       'id': 'account.missing',
       'displayName': 'Missing',
-      'upstreamEndpointId': 'target.test',
+      'credentialOrigin': 'https://api.anthropic.com',
+      'linkedEndpointIds': ['target.test'],
+      'associationRevision': 1,
       'kind': 'bearer_token',
       'realmId': 'openai.test',
       'state': 'active',
@@ -586,7 +649,9 @@ void main() {
       final account = ProviderAccount.fromJson({
         'id': 'account.headers',
         'displayName': 'Headers',
-        'upstreamEndpointId': 'target.test',
+        'credentialOrigin': 'https://api.anthropic.com',
+        'linkedEndpointIds': ['target.test'],
+        'associationRevision': 1,
         'kind': 'bearer_token',
         'realmId': 'relay.test',
         'state': 'active',
@@ -603,7 +668,9 @@ void main() {
         () => ProviderAccount.fromJson({
           'id': 'account.headers',
           'displayName': 'Headers',
-          'upstreamEndpointId': 'target.test',
+          'credentialOrigin': 'https://api.anthropic.com',
+          'linkedEndpointIds': ['target.test'],
+          'associationRevision': 1,
           'kind': 'bearer_token',
           'realmId': 'relay.test',
           'state': 'active',

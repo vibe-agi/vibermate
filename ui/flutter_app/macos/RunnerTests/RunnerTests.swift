@@ -85,6 +85,15 @@ final class RunnerTests: XCTestCase {
     XCTAssertEqual(try bridge.read(), historical)
   }
 
+  func testIndependentUpstreamAccountsSectionPersists() throws {
+    let bridge = try WorkbenchPreferencesBridge(directory: temporaryDirectory)
+    let accounts = validPreferences(section: "provider_accounts", language: "zh-CN")
+    try bridge.write(accounts)
+    try bridge.close()
+    let reopened = try WorkbenchPreferencesBridge(directory: temporaryDirectory)
+    XCTAssertEqual(try reopened.read(), accounts)
+  }
+
   func testPreferencesBridgeRefusesASymbolicLinkWithoutReplacingItsTarget() throws {
     try FileManager.default.createDirectory(
       at: temporaryDirectory,

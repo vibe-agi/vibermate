@@ -2,13 +2,262 @@ package desktopcontrol_test
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"slices"
+	"strconv"
 	"testing"
+	"time"
 
 	"github.com/vibe-agi/vibermate/internal/desktopcontrol"
 )
+
+func TestProviderAccountControlImportsCodexOAuthWithoutReturningTokens(t *testing.T) {
+	t.Parallel()
+	runtime := startRuntime(t)
+	defer shutdownRuntime(t, runtime)
+	application, err := desktopcontrol.New(desktopcontrol.Options{
+		Readiness: readyState(true), Status: runtime,
+		Environments: runtime.Environments(), Assignments: runtime.CaptureAssignments(),
+		Activities: runtime.Activities(), Contents: runtime.ExchangeContents(), Connections: runtime.ConnectionEvents(),
+		Egress: runtime.EgressAttempts(), Approvals: runtime.ToolApprovals(),
+		Endpoints: runtime.UpstreamEndpoints(), Accounts: runtime.ProviderAccounts(),
+		CodexOAuth: runtime.CodexOAuthAccounts(), Offline: runtime,
+		ManualCaptures: runtime.ManualCaptures(), Clock: desktopcontrol.SystemClock{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC().Truncate(time.Second)
+	accessToken := controlJWT(t, map[string]any{
+		"iat": now.Unix(), "auth_time": now.Add(-time.Hour).Unix(),
+		"exp":   now.Add(time.Hour).Unix(),
+		"email": "engineer@example.com",
+		"https://api.openai.com/auth": map[string]any{
+			"chatgpt_account_id": "chatgpt-workspace",
+			"chatgpt_user_id":    "user-42",
+			"chatgpt_plan_type":  "team",
+		},
+	})
+	authJSON, err := json.Marshal(map[string]any{
+		"auth_mode": "chatgpt", "OPENAI_API_KEY": nil,
+		"tokens": map[string]string{
+			"id_token": accessToken, "access_token": accessToken,
+			"refresh_token": "refresh-private-sentinel", "account_id": "chatgpt-workspace",
+		},
+		"last_refresh": now.Format(time.RFC3339Nano),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := json.Marshal(map[string]any{
+		"id": "codex-work", "displayName": "Codex Work",
+		"upstreamEndpointId": "target.codex.official", "kind": "codex_oauth",
+		"codexAuthJson": string(authJSON),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	created := environmentRequest(
+		t, application, http.MethodPost, "/api/v1/provider-accounts", 0,
+		"provider-account-codex-oauth-0001", body,
+	)
+	if created.Code != http.StatusCreated {
+		t.Fatalf("create status=%d body=%s", created.Code, created.Body.Bytes())
+	}
+	for _, secret := range []string{accessToken, "refresh-private-sentinel"} {
+		assertProviderAccountResponseSafe(t, created.Body.Bytes(), secret)
+	}
+	assertJSONString(t, created.Body.Bytes(), "kind", "codex_oauth")
+	var response map[string]any
+	if json.Unmarshal(created.Body.Bytes(), &response) != nil {
+		t.Fatal("decode Codex OAuth account response")
+	}
+	profile, ok := response["codexOAuth"].(map[string]any)
+	if !ok || profile["chatgptAccountId"] != "chatgpt-workspace" ||
+		profile["email"] != "engineer@example.com" || profile["userId"] != "user-42" ||
+		profile["planType"] != "team" || profile["state"] != "ready" {
+		t.Fatalf("Codex OAuth profile = %#v", profile)
+	}
+	info, ok := response["tokenInfo"].(map[string]any)
+	if !ok || info["issuedAt"] != now.Format(time.RFC3339Nano) ||
+		info["authenticatedAt"] != now.Add(-time.Hour).Format(time.RFC3339Nano) ||
+		info["expiresAt"] != now.Add(time.Hour).Format(time.RFC3339Nano) {
+		t.Fatalf("OAuth token display metadata = %#v", info)
+	}
+	got := environmentRequest(
+		t, application, http.MethodGet, "/api/v1/provider-accounts/codex-work", 0, "", nil,
+	)
+	if got.Code != http.StatusOK || !bytes.Contains(got.Body.Bytes(), []byte(`"chatgptAccountId":"chatgpt-workspace"`)) {
+		t.Fatalf("GET Codex OAuth status=%d body=%s", got.Code, got.Body.Bytes())
+	}
+}
+
+func controlJWT(t *testing.T, claims map[string]any) string {
+	t.Helper()
+	header, err := json.Marshal(map[string]string{"alg": "none", "typ": "JWT"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload, err := json.Marshal(claims)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encode := base64.RawURLEncoding.EncodeToString
+	return encode(header) + "." + encode(payload) + ".signature"
+}
+
+func controlCodexAuthJSON(
+	t *testing.T,
+	now time.Time,
+	accountID string,
+	email string,
+	accessToken string,
+	refreshToken string,
+) string {
+	t.Helper()
+	if accessToken == "" {
+		accessToken = controlJWT(t, map[string]any{
+			"exp": now.Add(time.Hour).Unix(), "email": email,
+			"https://api.openai.com/auth": map[string]any{
+				"chatgpt_account_id": accountID,
+				"chatgpt_user_id":    "user-managed",
+				"chatgpt_plan_type":  "team",
+			},
+		})
+	}
+	encoded, err := json.Marshal(map[string]any{
+		"auth_mode": "chatgpt", "OPENAI_API_KEY": nil,
+		"tokens": map[string]string{
+			"id_token": accessToken, "access_token": accessToken,
+			"refresh_token": refreshToken, "account_id": accountID,
+		},
+		"last_refresh": now.UTC().Format(time.RFC3339Nano),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(encoded)
+}
+
+func TestProviderAccountControlKeepsCodexOAuthInputDistinctAndProtected(t *testing.T) {
+	t.Parallel()
+	runtime := startRuntime(t)
+	defer shutdownRuntime(t, runtime)
+	application, err := desktopcontrol.New(desktopcontrol.Options{
+		Readiness: readyState(true), Status: runtime,
+		Environments: runtime.Environments(), Assignments: runtime.CaptureAssignments(),
+		Activities: runtime.Activities(), Contents: runtime.ExchangeContents(), Connections: runtime.ConnectionEvents(),
+		Egress: runtime.EgressAttempts(), Approvals: runtime.ToolApprovals(),
+		Endpoints: runtime.UpstreamEndpoints(), Accounts: runtime.ProviderAccounts(),
+		CodexOAuth: runtime.CodexOAuthAccounts(), Offline: runtime,
+		ManualCaptures: runtime.ManualCaptures(), Clock: desktopcontrol.SystemClock{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	authJSON := controlCodexAuthJSON(
+		t, time.Now(), "workspace-protected", "protected@example.com", "", "refresh-protected",
+	)
+	tests := []struct {
+		name string
+		body map[string]any
+	}{
+		{
+			name: "OAuth requires valid auth json",
+			body: map[string]any{"kind": "codex_oauth", "codexAuthJson": "not-json"},
+		},
+		{
+			name: "OAuth rejects generic secret",
+			body: map[string]any{"kind": "codex_oauth", "secret": "ambiguous", "codexAuthJson": authJSON},
+		},
+		{
+			name: "static account rejects auth json",
+			body: map[string]any{"kind": "bearer_token", "secret": "static", "codexAuthJson": authJSON},
+		},
+		{
+			name: "OAuth owns Authorization",
+			body: map[string]any{"kind": "codex_oauth", "codexAuthJson": authJSON, "setHeaders": map[string]string{"Authorization": "forged"}},
+		},
+		{
+			name: "OAuth owns ChatGPT account identity",
+			body: map[string]any{"kind": "codex_oauth", "codexAuthJson": authJSON, "deleteHeaders": []string{"Chatgpt-Account-Id"}},
+		},
+	}
+	for index, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			test.body["id"] = "codex-invalid-" + strconv.Itoa(index)
+			test.body["displayName"] = "Invalid Codex OAuth"
+			test.body["upstreamEndpointId"] = "target.codex.official"
+			body, marshalErr := json.Marshal(test.body)
+			if marshalErr != nil {
+				t.Fatal(marshalErr)
+			}
+			response := environmentRequest(
+				t, application, http.MethodPost, "/api/v1/provider-accounts", 0,
+				"codex-invalid-create-000"+strconv.Itoa(index), body,
+			)
+			if response.Code != http.StatusUnprocessableEntity {
+				t.Fatalf("create status=%d body=%s", response.Code, response.Body.Bytes())
+			}
+			assertProviderAccountResponseSafe(t, response.Body.Bytes(), authJSON)
+		})
+	}
+}
+
+func TestProviderAccountControlReimportsCodexOAuthAtomically(t *testing.T) {
+	t.Parallel()
+	runtime := startRuntime(t)
+	defer shutdownRuntime(t, runtime)
+	application, err := desktopcontrol.New(desktopcontrol.Options{
+		Readiness: readyState(true), Status: runtime,
+		Environments: runtime.Environments(), Assignments: runtime.CaptureAssignments(),
+		Activities: runtime.Activities(), Contents: runtime.ExchangeContents(), Connections: runtime.ConnectionEvents(),
+		Egress: runtime.EgressAttempts(), Approvals: runtime.ToolApprovals(),
+		Endpoints: runtime.UpstreamEndpoints(), Accounts: runtime.ProviderAccounts(),
+		CodexOAuth: runtime.CodexOAuthAccounts(), Offline: runtime,
+		ManualCaptures: runtime.ManualCaptures(), Clock: desktopcontrol.SystemClock{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC().Truncate(time.Second)
+	first := controlCodexAuthJSON(t, now, "workspace-reimport", "old@example.com", "", "refresh-old")
+	createBody, _ := json.Marshal(map[string]any{
+		"id": "codex-reimport", "displayName": "Codex reimport",
+		"upstreamEndpointId": "target.codex.official", "kind": "codex_oauth",
+		"codexAuthJson": first,
+	})
+	created := environmentRequest(
+		t, application, http.MethodPost, "/api/v1/provider-accounts", 0,
+		"codex-reimport-create-0001", createBody,
+	)
+	if created.Code != http.StatusCreated {
+		t.Fatalf("create status=%d body=%s", created.Code, created.Body.Bytes())
+	}
+	second := controlCodexAuthJSON(t, now.Add(time.Minute), "workspace-reimport", "new@example.com", "", "refresh-new")
+	replaceBody, _ := json.Marshal(map[string]string{"codexAuthJson": second})
+	replaced := environmentRequest(
+		t, application, http.MethodPut, "/api/v1/provider-accounts/codex-reimport/credential", 1,
+		"codex-reimport-replace-0001", replaceBody,
+	)
+	if replaced.Code != http.StatusOK {
+		t.Fatalf("replace status=%d body=%s", replaced.Code, replaced.Body.Bytes())
+	}
+	assertJSONNumber(t, replaced.Body.Bytes(), "credentialEpoch", 2)
+	for _, secret := range []string{first, second, "refresh-old", "refresh-new"} {
+		assertProviderAccountResponseSafe(t, replaced.Body.Bytes(), secret)
+	}
+	var response desktopcontrol.ProviderAccountResponse
+	if err := json.Unmarshal(replaced.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if response.CodexOAuth == nil || response.CodexOAuth.Email != "new@example.com" ||
+		response.CodexOAuth.ChatGPTAccountID != "workspace-reimport" {
+		t.Fatalf("reimported Codex OAuth profile = %#v", response.CodexOAuth)
+	}
+}
 
 func TestProviderAccountControlStoresCredentialWithoutReturningItAndCompilesManagedEnvironment(
 	t *testing.T,

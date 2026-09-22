@@ -159,7 +159,7 @@ func (handler *Handler) ownedAccountHolders(
 	}
 	holders := make([]resourcedeletion.Holder, 0)
 	for _, view := range views {
-		if view.Account.UpstreamEndpointID != id {
+		if !view.Account.Associations.Contains(id) {
 			continue
 		}
 		holders = append(holders, resourcedeletion.Holder{

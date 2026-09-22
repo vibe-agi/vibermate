@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"sync"
 	"time"
@@ -57,6 +58,30 @@ func NewManager(
 		if _, duplicate := manager.endpoints[endpoint.ID]; duplicate {
 			return nil, ErrInvalidEndpoint
 		}
+		// Supported authentication is runtime capability, not a user-maintained
+		// allowlist. Recovered ChatGPT services must gain the shipped OAuth
+		// adapter too, instead of remaining permanently Bearer-only.
+		if IsChatGPTCodexOrigin(endpoint.Origin) && slices.Contains(endpoint.BackendProtocols, "openai_responses") &&
+			!slices.Contains(endpoint.Drivers, providerauth.CodexOAuthDriverRef()) {
+			previous := endpoint.Revision
+			previousUpdate := endpoint.UpdatedAt
+			endpoint.Revision++
+			endpoint.Drivers = append(endpoint.Drivers, providerauth.CodexOAuthDriverRef())
+			endpoint.UpdatedAt = clock.Now().UTC()
+			if endpoint.UpdatedAt.Before(previousUpdate) {
+				endpoint.UpdatedAt = previousUpdate
+			}
+			if endpoint.Validate() != nil {
+				return nil, ErrInvalidEndpoint
+			}
+			result, err := repository.Write(ctx, previous, endpoint)
+			if err != nil {
+				return nil, fmt.Errorf("update ChatGPT authentication capability: %w", err)
+			}
+			if result.Outcome != CommitCommitted || !result.Endpoint.Equal(endpoint) {
+				return nil, ErrRevisionConflict
+			}
+		}
 		manager.endpoints[endpoint.ID] = endpoint.Clone()
 	}
 	for _, command := range builtIns {
@@ -85,6 +110,25 @@ func (manager *Manager) LookupEndpoint(value string) (Endpoint, bool) {
 	}
 	endpoint, exists := manager.endpoints[id]
 	return endpoint.Clone(), exists
+}
+
+func (manager *Manager) GuardAccountLink(ctx context.Context, id ID, link func(Endpoint) error) error {
+	if manager == nil || ctx == nil || link == nil || !validID(id.String()) {
+		return ErrInvalidEndpoint
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	manager.mu.RLock()
+	defer manager.mu.RUnlock()
+	if manager.closing {
+		return ErrManagerClosing
+	}
+	endpoint, exists := manager.endpoints[id]
+	if !exists || endpoint.State != StateActive {
+		return ErrEndpointNotFound
+	}
+	return link(endpoint.Clone())
 }
 
 func (manager *Manager) List(ctx context.Context) ([]Endpoint, error) {
@@ -183,7 +227,7 @@ func (manager *Manager) Shutdown(_ context.Context) error {
 
 // HolderLookup reports what would break if an Endpoint went away. The holders
 // live outside this package — published Environment routes and the Accounts
-// this Endpoint owns — so they arrive as lookups rather than as dependencies.
+// linked to this Endpoint — so they arrive as lookups rather than as dependencies.
 type HolderLookup func(context.Context, ID) ([]resourcedeletion.Holder, error)
 
 // Delete retires an Endpoint once nothing depends on it.

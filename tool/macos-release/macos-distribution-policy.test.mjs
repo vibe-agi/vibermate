@@ -29,7 +29,7 @@ import {
 
 const teamID = "A1B2C3D4E5";
 const submissionID = "12345678-1234-4abc-8def-1234567890ab";
-const archiveFilename = "ViberMate_0.1.11_universal.dmg";
+const archiveFilename = "ViberMate_0.1.12_universal.dmg";
 const preStapleSHA256 = "a".repeat(64);
 
 function admittedAppleTools() {
@@ -128,6 +128,14 @@ function appleObservedTicketContents() {
         "ViberMate.app/Contents/Frameworks/FlutterMacOS.framework/Versions/Current",
         "Contents/Frameworks/FlutterMacOS.framework/Versions/A/FlutterMacOS",
       ],
+      [
+        "ViberMate.app/Contents/Frameworks/file_selector_macos.framework/Versions/Current",
+        "Contents/Frameworks/file_selector_macos.framework/Versions/A/file_selector_macos",
+      ],
+      [
+        "ViberMate.app/Contents/Frameworks/url_launcher_macos.framework/Versions/Current",
+        "Contents/Frameworks/url_launcher_macos.framework/Versions/A/url_launcher_macos",
+      ],
     ]) {
       aliases.push({
         ...ticketFor(relativePath, architecture),
@@ -215,27 +223,27 @@ test("application metadata and Mach-O inventory are fixed", () => {
     validateInfoPlist({
       bundleExecutable: "vibermate-desktop",
       bundleIdentifier: "io.vibermate.desktop",
-      bundleVersion: "12",
+      bundleVersion: "13",
       minimumSystemVersion: "14.0",
-      shortVersion: "0.1.11",
+      shortVersion: "0.1.12",
     }),
   );
   assert.throws(() =>
     validateInfoPlist({
       bundleExecutable: "vibermate-desktop",
       bundleIdentifier: "io.vibermate.desktop",
-      bundleVersion: "0.1.11",
+      bundleVersion: "0.1.12",
       minimumSystemVersion: "14.0",
-      shortVersion: "0.1.11",
+      shortVersion: "0.1.12",
     }),
   );
   assert.throws(() =>
     validateInfoPlist({
       bundleExecutable: "vibermate-desktop",
       bundleIdentifier: "io.example.desktop",
-      bundleVersion: "12",
+      bundleVersion: "13",
       minimumSystemVersion: "14.0",
-      shortVersion: "0.1.11",
+      shortVersion: "0.1.12",
     }),
   );
   assert.doesNotThrow(() =>
@@ -363,7 +371,7 @@ test("Apple notary log admits known bundle aliases and repeated scan tickets", (
 });
 
 test("notarization evidence counts every Universal code directory", () => {
-  assert.equal(macOSDistributionPolicy.notaryTicketedCodeDirectoryCount, 10);
+  assert.equal(macOSDistributionPolicy.notaryTicketedCodeDirectoryCount, 14);
 });
 
 test("Apple notary log rejects unknown aliases and conflicting repeated tickets", () => {
@@ -420,7 +428,9 @@ test("embedded build manifest is clean distribution provenance", () => {
     ),
     nestedCodeSHA256: {
       "app-framework": "8".repeat(64),
+      "file-selector-framework": "c".repeat(64),
       "flutter-macos-framework": "9".repeat(64),
+      "url-launcher-framework": "d".repeat(64),
       vibermate: "a".repeat(64),
       vibermated: "b".repeat(64),
     },
@@ -551,7 +561,9 @@ test("signing evidence binds the hostile archive to both App ledgers", () => {
       signedApplicationTreeSHA256: "3".repeat(64),
       signedExecutableSHA256: {
         "app-framework": "1".repeat(64),
+        "file-selector-framework": "d".repeat(64),
         "flutter-macos-framework": "2".repeat(64),
+        "url-launcher-framework": "e".repeat(64),
         vibermate: "4".repeat(64),
         "vibermate-desktop": "5".repeat(64),
         vibermated: "6".repeat(64),
@@ -563,7 +575,9 @@ test("signing evidence binds the hostile archive to both App ledgers", () => {
       unsignedArchiveSHA256: "9".repeat(64),
       unsignedExecutableSHA256: {
         "app-framework": "7".repeat(64),
+        "file-selector-framework": "1".repeat(64),
         "flutter-macos-framework": "8".repeat(64),
+        "url-launcher-framework": "2".repeat(64),
         vibermate: "a".repeat(64),
         "vibermate-desktop": "b".repeat(64),
         vibermated: "c".repeat(64),
@@ -681,7 +695,7 @@ test("private evidence has a closed secret-free schema", () => {
       sourceRevision: "4".repeat(40),
       toolingRevision: "8".repeat(40),
       unsignedArchiveSHA256: "9".repeat(64),
-      version: "0.1.11",
+      version: "0.1.12",
     },
     codeSigning: {
       certificateSHA256: "5".repeat(64),
@@ -699,7 +713,7 @@ test("private evidence has a closed secret-free schema", () => {
       statusCode: 0,
       submissionID,
       submitSHA256: "a".repeat(64),
-      ticketedCodeDirectories: 10,
+      ticketedCodeDirectories: 14,
     },
     tools: {
       ...admittedAppleTools(),

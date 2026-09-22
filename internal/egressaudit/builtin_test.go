@@ -35,7 +35,9 @@ func TestEveryPurposeMapsToAHoldKind(t *testing.T) {
 	expected := map[egressaudit.EgressPurpose]offlinehold.EgressKind{
 		egressaudit.PurposeProviderAttempt:        offlinehold.EgressProvider,
 		egressaudit.PurposeUpstreamModelDiscovery: offlinehold.EgressProvider,
+		egressaudit.PurposeUpstreamAccountRead:    offlinehold.EgressAuxiliary,
 		egressaudit.PurposeModelMetadataDirectory: offlinehold.EgressAuxiliary,
+		egressaudit.PurposeCredentialRefresh:      offlinehold.EgressAuxiliary,
 		egressaudit.PurposeRouteOperation:         offlinehold.EgressAuxiliary,
 		egressaudit.PurposeOriginalOrigin:         offlinehold.EgressOpaque,
 		egressaudit.PurposeAgentProbe:             offlinehold.EgressAuxiliary,

@@ -27,6 +27,7 @@ import (
 
 	"golang.org/x/net/http2"
 
+	"github.com/vibe-agi/vibermate/internal/accountoperation"
 	"github.com/vibe-agi/vibermate/internal/blindtunnel"
 	"github.com/vibe-agi/vibermate/internal/captureadmission"
 	"github.com/vibe-agi/vibermate/internal/captureassignment"
@@ -46,6 +47,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/rawevidence"
 	"github.com/vibe-agi/vibermate/internal/ssewire"
 	"github.com/vibe-agi/vibermate/internal/transportprofile"
+	"github.com/vibe-agi/vibermate/internal/upstreamservice"
 	"github.com/vibe-agi/vibermate/internal/wireprofile"
 )
 
@@ -169,6 +171,7 @@ type Options struct {
 	Assignments  CaptureAssignmentAuthority
 	Exchanges    exchange.Executor
 	Original     OriginalClient
+	AccountReads CapturedAccountReader
 	Certificates CertificateAuthority
 	Connections  ConnectionJournal
 	// Policy decides every proxied connection before any dial, DNS
@@ -208,6 +211,7 @@ type Handler struct {
 	assignments  CaptureAssignmentAuthority
 	exchanges    exchange.Executor
 	original     OriginalClient
+	accountReads CapturedAccountReader
 	certificates CertificateAuthority
 	connections  ConnectionJournal
 	policy       connectionpolicy.Source
@@ -266,6 +270,7 @@ func New(options Options) (*Handler, error) {
 		assignments:  options.Assignments,
 		exchanges:    options.Exchanges,
 		original:     options.Original,
+		accountReads: options.AccountReads,
 		certificates: options.Certificates,
 		connections:  options.Connections,
 		policy:       options.Policy,
@@ -990,9 +995,45 @@ func (handler *Handler) serveInner(
 			exchangeID,
 			body,
 		)
+	case protocolspec.ClientOperationAccountRead:
+		handler.serveAccountRead(writer, request, plan, audit.ID(), exchangeID)
 	default:
 		writeReason(writer, http.StatusUnprocessableEntity, ReasonPathUnsupported, "")
 	}
+}
+
+type CapturedAccountReader interface {
+	ReadCaptured(context.Context, environment.RequestPlan, accountoperation.Source) (accountoperation.Result, error)
+}
+
+func (handler *Handler) serveAccountRead(writer http.ResponseWriter, request *http.Request, plan environment.RequestPlan, connectionID, operationID string) {
+	if plan.PreservesOriginalDestination() {
+		handler.forwardToOriginalOrigin(writer, request, plan, offlinehold.EgressAuxiliary, plan.Operation().PayloadClass(), connectionID, operationID, nil)
+		return
+	}
+	if handler.accountReads == nil {
+		writeReason(writer, http.StatusServiceUnavailable, "account_read_unavailable", "")
+		return
+	}
+	result, err := handler.accountReads.ReadCaptured(request.Context(), plan, accountoperation.Source{ConnectionID: connectionID, OperationID: operationID})
+	if err != nil {
+		status, reason := http.StatusBadGateway, ReasonCode("account_read_unavailable")
+		if errors.Is(err, environment.ErrAccountReadAmbiguous) {
+			status, reason = http.StatusUnprocessableEntity, "account_read_ambiguous"
+		}
+		if errors.Is(err, upstreamservice.ErrHistoryDenied) {
+			status, reason = http.StatusForbidden, "account_history_not_allowed"
+		}
+		if errors.Is(err, upstreamservice.ErrUnsupported) {
+			status, reason = http.StatusUnprocessableEntity, "account_read_unsupported"
+		}
+		writeReason(writer, status, reason, "")
+		return
+	}
+	writer.Header().Set("Content-Type", "application/json")
+	writer.Header().Set("Cache-Control", "no-store")
+	writer.WriteHeader(http.StatusOK)
+	_, _ = writer.Write(result.Body)
 }
 
 func rawEvidenceScope(

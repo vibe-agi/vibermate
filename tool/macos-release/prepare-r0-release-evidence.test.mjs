@@ -147,7 +147,7 @@ async function fixture(t) {
   );
   await writeFixtureFile(
     join(repositoryRoot, "ui/flutter_app/pubspec.yaml"),
-    "name: vibermate_app\nversion: 0.1.11+12\nenvironment:\n  sdk: ^3.11.3\n",
+    "name: vibermate_app\nversion: 0.1.12+13\nenvironment:\n  sdk: ^3.11.3\n",
   );
   await writeFixtureFile(
     join(repositoryRoot, "LICENSE"),
@@ -207,6 +207,18 @@ async function fixture(t) {
   await writeFixtureFile(daemonPath, daemonPayload, 0o755);
   const appFrameworkPayload = Buffer.from("universal App framework\n");
   const flutterFrameworkPayload = Buffer.from("universal FlutterMacOS framework\n");
+  const fileSelectorPayload = Buffer.from("universal file selector framework\n");
+  const urlLauncherPayload = Buffer.from("universal URL launcher framework\n");
+  await writeFixtureFile(
+    join(distPath, "file_selector_macos.framework/file_selector_macos"),
+    fileSelectorPayload,
+    0o755,
+  );
+  await writeFixtureFile(
+    join(distPath, "url_launcher_macos.framework/url_launcher_macos"),
+    urlLauncherPayload,
+    0o755,
+  );
   await writeFixtureFile(
     join(distPath, "App.framework/App"),
     appFrameworkPayload,
@@ -254,7 +266,9 @@ async function fixture(t) {
     configurationSHA256,
     nestedCodeSHA256: {
       "app-framework": sha256(appFrameworkPayload),
+      "file-selector-framework": sha256(fileSelectorPayload),
       "flutter-macos-framework": sha256(flutterFrameworkPayload),
+      "url-launcher-framework": sha256(urlLauncherPayload),
       vibermate: sha256(launcherPayload),
       vibermated: sha256(daemonPayload),
     },
@@ -321,6 +335,13 @@ async function externalInputRoot(value) {
       join(value.distPath, "FlutterMacOS.framework/Resources/icudtl.dat"),
     ),
   );
+  for (const plugin of ["file_selector_macos", "url_launcher_macos"]) {
+    await writeFixtureFile(
+      join(root, `dist/${plugin}.framework/${plugin}`),
+      await readFile(join(value.distPath, `${plugin}.framework/${plugin}`)),
+      0o755,
+    );
+  }
   return root;
 }
 
@@ -421,7 +442,7 @@ test("source-traceability preparer (R0) stages a deterministic verifier-ready ev
       ["alpha-library", "1.2.3"],
       ["beta-library", "2.0.0"],
       ["version-unknown-library", "NOASSERTION"],
-      ["vibermate", "0.1.11"],
+      ["vibermate", "0.1.12"],
     ],
   );
   assert.equal(
@@ -878,6 +899,21 @@ test("source-traceability preparer (R0) rejects dirty source and wrong revisions
 });
 
 test("source-traceability preparer (R0) binds build-manifest configuration and nested-code digests", async (t) => {
+  for (const plugin of ["file_selector_macos", "url_launcher_macos"]) {
+    await t.test(`${plugin} nested-code digest`, async (t) => {
+      const value = await fixture(t);
+      await writeFixtureFile(
+        join(value.distPath, `${plugin}.framework/${plugin}`),
+        "changed native plugin bytes\n",
+        0o755,
+      );
+      await assert.rejects(
+        prepareR0ReleaseEvidence(preparationOptions(value), preparationDependencies()),
+        /bytes do not match Desktop nested-code provenance/u,
+      );
+      await assertAbsent(value.artifactRoot);
+    });
+  }
   await t.test("configuration digest", async (t) => {
     const value = await fixture(t);
     const unbound = {

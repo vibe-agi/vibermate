@@ -16,7 +16,7 @@
 bash tool/docker/build-local.sh
 ```
 
-脚本构建 Server、CLI 和 Web，生成 `vibermate-runtime:0.1.11-local`。Flutter 不在
+脚本构建 Server、CLI 和 Web，生成 `vibermate-runtime:0.1.12-local`。Flutter 不在
 `PATH` 时，将 `VIBERMATE_FLUTTER_BIN` 设为绝对路径。模板使用 `pull_policy: never`，
 不会把旧的远程镜像伪装成当前代码。
 

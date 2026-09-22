@@ -518,9 +518,13 @@ func cliManifest(t *testing.T, artifactRoot, revision string) releasemanifest.Ma
 	}
 	appFrameworkPayload := []byte("universal App framework\n")
 	flutterFrameworkPayload := []byte("universal FlutterMacOS framework\n")
+	fileSelectorPayload := []byte("universal file selector framework\n")
+	urlLauncherPayload := []byte("universal URL launcher framework\n")
 	nestedCode := map[string]string{
 		"app-framework":           cliSHA256(appFrameworkPayload),
+		"file-selector-framework": cliSHA256(fileSelectorPayload),
 		"flutter-macos-framework": cliSHA256(flutterFrameworkPayload),
+		"url-launcher-framework":  cliSHA256(urlLauncherPayload),
 		"vibermate":               cliSHA256(sidecarPayloads["vibermate"]),
 		"vibermated":              cliSHA256(sidecarPayloads["vibermated"]),
 	}
@@ -570,6 +574,8 @@ func cliManifest(t *testing.T, artifactRoot, revision string) releasemanifest.Ma
 	writeCLIPayloadFile(t, artifactRoot, "vibermated", sidecarPayloads["vibermated"], 0o755)
 	writeCLIPayloadFile(t, artifactRoot, "dist/App.framework/App", appFrameworkPayload, 0o755)
 	writeCLIPayloadFile(t, artifactRoot, "dist/FlutterMacOS.framework/FlutterMacOS", flutterFrameworkPayload, 0o755)
+	writeCLIPayloadFile(t, artifactRoot, "dist/file_selector_macos.framework/file_selector_macos", fileSelectorPayload, 0o755)
+	writeCLIPayloadFile(t, artifactRoot, "dist/url_launcher_macos.framework/url_launcher_macos", urlLauncherPayload, 0o755)
 	writeCLIPayloadFile(t, artifactRoot, "vibermate-build-manifest.json", desktopPayload, 0o644)
 	writeCLIPayloadFile(t, artifactRoot, "LICENSE", licensePayload, 0o644)
 	writeCLIPayloadFile(t, artifactRoot, "dist/index.html", distPayload, 0o644)
@@ -586,7 +592,11 @@ func cliManifest(t *testing.T, artifactRoot, revision string) releasemanifest.Ma
 			cliLedgerFileEntry("dist/App.framework/App", appFrameworkPayload, 0o755),
 			{"mode": 0o755, "path": "dist/FlutterMacOS.framework", "type": "directory"},
 			cliLedgerFileEntry("dist/FlutterMacOS.framework/FlutterMacOS", flutterFrameworkPayload, 0o755),
+			{"mode": 0o755, "path": "dist/file_selector_macos.framework", "type": "directory"},
+			cliLedgerFileEntry("dist/file_selector_macos.framework/file_selector_macos", fileSelectorPayload, 0o755),
 			cliLedgerFileEntry("dist/index.html", distPayload, 0o644),
+			{"mode": 0o755, "path": "dist/url_launcher_macos.framework", "type": "directory"},
+			cliLedgerFileEntry("dist/url_launcher_macos.framework/url_launcher_macos", urlLauncherPayload, 0o755),
 			cliLedgerFileEntry("vibermate", sidecarPayloads["vibermate"], 0o755),
 			cliLedgerFileEntry("vibermate-build-manifest.json", desktopPayload, 0o644),
 			cliLedgerFileEntry("vibermate-desktop", mainPayload, 0o755),

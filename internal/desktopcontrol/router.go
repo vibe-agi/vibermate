@@ -219,10 +219,17 @@ func (router *Router) ServeHTTP(
 		return
 	}
 	scope := router.application.RequiredScope(request)
+	// Authorize consumes the bearer header. Preserve it only in this trusted
+	// boundary long enough to derive the non-secret login-session binding.
+	credential := request.Header.Get("Authorization")
 	if scope == "" || !router.authenticator.Authorize(request, scope) {
 		writeProblem(writer, http.StatusUnauthorized, ReasonUnauthorized)
 		return
 	}
+	if scope == ScopeWrite {
+		request = request.WithContext(WithOAuthSession(request.Context(), credential))
+	}
+	credential = ""
 	router.application.ServeHTTP(writer, request)
 }
 

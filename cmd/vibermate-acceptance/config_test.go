@@ -8,6 +8,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/desktopcontrol"
 	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/provideraccount"
+	"github.com/vibe-agi/vibermate/internal/upstreamendpoint"
 )
 
 func TestAppBundlePathRequiresPackagedMembers(t *testing.T) {
@@ -165,9 +166,10 @@ func TestAcceptanceManagedEnvironmentFreezesOneReadyAnthropicAccount(t *testing.
 	configured.claudePath = "/fixed/claude"
 	account := desktopcontrol.ProviderAccountResponse{
 		ID: acceptanceManagedAccountID, DisplayName: "Anthropic acceptance",
-		UpstreamEndpointID: "acceptance.target",
-		Kind:               desktopcontrol.ProviderAccountKindAnthropicAPIKey,
-		RealmID:            "anthropic.official", State: provideraccount.StateActive,
+		LinkedEndpointIDs: []upstreamendpoint.ID{"acceptance.target"},
+		CredentialOrigin:  "https://api.anthropic.com", AssociationRevision: 1,
+		Kind:    desktopcontrol.ProviderAccountKindAnthropicAPIKey,
+		RealmID: "anthropic.official", State: provideraccount.StateActive,
 		Revision: 1, CredentialState: provideraccount.HealthReady,
 		CredentialEpoch: 1,
 	}

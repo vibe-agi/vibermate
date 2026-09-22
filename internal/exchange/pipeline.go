@@ -978,6 +978,7 @@ func (pipeline *Pipeline) acquireCredential(
 		routeRevision:            selection.routeRevision,
 		upstreamEndpointID:       candidate.account.UpstreamEndpointID,
 		upstreamEndpointRevision: candidate.account.UpstreamEndpointRevision,
+		upstreamEndpointOrigin:   selection.target.Origin(),
 		accountID:                candidate.account.ID,
 		accountRevision:          candidate.account.Revision,
 		realmID:                  candidate.account.RealmID,

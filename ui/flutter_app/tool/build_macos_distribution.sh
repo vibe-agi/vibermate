@@ -157,7 +157,9 @@ for code_path in \
   "${app_bundle}/Contents/MacOS/vibermate" \
   "${app_bundle}/Contents/MacOS/vibermated" \
   "${app_bundle}/Contents/Frameworks/App.framework/Versions/A/App" \
-  "${app_bundle}/Contents/Frameworks/FlutterMacOS.framework/Versions/A/FlutterMacOS"; do
+  "${app_bundle}/Contents/Frameworks/FlutterMacOS.framework/Versions/A/FlutterMacOS" \
+  "${app_bundle}/Contents/Frameworks/file_selector_macos.framework/Versions/A/file_selector_macos" \
+  "${app_bundle}/Contents/Frameworks/url_launcher_macos.framework/Versions/A/url_launcher_macos"; do
   architectures="$(lipo -archs "${code_path}")"
   if [[ "${architectures}" != "x86_64 arm64" &&
     "${architectures}" != "arm64 x86_64" ]]; then
@@ -190,6 +192,15 @@ ditto --norsrc --noextattr --noacl --noqtn -X \
 ditto --norsrc --noextattr --noacl --noqtn -X \
   "${app_bundle}/Contents/Frameworks/FlutterMacOS.framework/Versions/A/Resources" \
   "${r0_directory}/FlutterMacOS.framework/Resources"
+for plugin in file_selector_macos url_launcher_macos; do
+  mkdir -p "${r0_directory}/${plugin}.framework"
+  /usr/bin/install -m 0755 \
+    "${app_bundle}/Contents/Frameworks/${plugin}.framework/Versions/A/${plugin}" \
+    "${r0_directory}/${plugin}.framework/${plugin}"
+  ditto --norsrc --noextattr --noacl --noqtn -X \
+    "${app_bundle}/Contents/Frameworks/${plugin}.framework/Versions/A/Resources" \
+    "${r0_directory}/${plugin}.framework/Resources"
+done
 if [[ -n "$(find "${r0_directory}" -type l -print -quit)" ]]; then
   echo "R0 Flutter runtime input contains a symbolic link" >&2
   exit 70

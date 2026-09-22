@@ -70,6 +70,7 @@ type compatibilityAccountCatalog map[string]environment.AccountDescriptor
 
 func (catalog compatibilityAccountCatalog) LookupAccount(
 	id string,
+	_ string,
 ) (environment.AccountDescriptor, bool) {
 	account, found := catalog[id]
 	return account, found

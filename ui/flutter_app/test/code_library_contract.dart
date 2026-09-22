@@ -1,5 +1,30 @@
 typedef TransformSourceContract = ({String request, String response});
 
+const structuredOutputGuard = r'''const payload = JSON.parse(request.body);
+const formats = [
+  payload.text && payload.text.format,
+  payload.response_format,
+  payload.output_config && payload.output_config.format,
+  payload.output_format,
+];
+context.vibermateStructuredOutput = formats.some(function (format) {
+  return format != null && format.type !== "text";
+});''';
+
+final transformSourceContracts = <String, Map<String, TransformSourceContract>>{
+  for (final starter in _unguardedTransformSourceContracts.entries)
+    starter.key: {
+      for (final protocol in starter.value.entries)
+        protocol.key: const {'turnTime', 'responseModel'}.contains(starter.key)
+            ? (
+                request: structuredOutputGuard,
+                response:
+                    'if (context.vibermateStructuredOutput === false) {\n${protocol.value.response}\n}',
+              )
+            : protocol.value,
+    },
+};
+
 const localIdentityContract = (
   request: r'''const candidates = [
   [runtime.workspace.root, "/workspace/project"],
@@ -64,26 +89,27 @@ const restoreRedactionsResponse = r'''if (Array.isArray(context.redactions)) {
   }
 }''';
 
-const transformSourceContracts = <String, Map<String, TransformSourceContract>>{
-  'localIdentity': {
-    'anthropic_messages': localIdentityContract,
-    'openai_responses': localIdentityContract,
-    'openai_chat': localIdentityContract,
-  },
-  'blockSecrets': {
-    'anthropic_messages': blockSecretsContract,
-    'openai_responses': blockSecretsContract,
-    'openai_chat': blockSecretsContract,
-  },
-  'privateContacts': {
-    'anthropic_messages': privateContactsContract,
-    'openai_responses': privateContactsContract,
-    'openai_chat': privateContactsContract,
-  },
-  'turnTime': {
-    'anthropic_messages': (
-      request: '',
-      response: r'''const payload = JSON.parse(response.body);
+const _unguardedTransformSourceContracts =
+    <String, Map<String, TransformSourceContract>>{
+      'localIdentity': {
+        'anthropic_messages': localIdentityContract,
+        'openai_responses': localIdentityContract,
+        'openai_chat': localIdentityContract,
+      },
+      'blockSecrets': {
+        'anthropic_messages': blockSecretsContract,
+        'openai_responses': blockSecretsContract,
+        'openai_chat': blockSecretsContract,
+      },
+      'privateContacts': {
+        'anthropic_messages': privateContactsContract,
+        'openai_responses': privateContactsContract,
+        'openai_chat': privateContactsContract,
+      },
+      'turnTime': {
+        'anthropic_messages': (
+          request: '',
+          response: r'''const payload = JSON.parse(response.body);
 if (response.streaming && !context.turnTimeShown && payload.type === "content_block_delta" && payload.delta && payload.delta.type === "text_delta") {
   const label = runtime.turn.startedAt + (runtime.device.timeZone ? " · " + runtime.device.timeZone : "");
   payload.delta.text = runtime.annotations.create("turn-time", label) + "\n" + payload.delta.text;
@@ -95,10 +121,10 @@ if (response.streaming && !context.turnTimeShown && payload.type === "content_bl
   });
 }
 response.body = JSON.stringify(payload);''',
-    ),
-    'openai_responses': (
-      request: '',
-      response: r'''const payload = JSON.parse(response.body);
+        ),
+        'openai_responses': (
+          request: '',
+          response: r'''const payload = JSON.parse(response.body);
 if (response.streaming && !context.turnTimeShown && payload.type === "response.output_text.delta" && typeof payload.delta === "string") {
   const label = runtime.turn.startedAt + (runtime.device.timeZone ? " · " + runtime.device.timeZone : "");
   payload.delta = runtime.annotations.create("turn-time", label) + "\n" + payload.delta;
@@ -119,10 +145,10 @@ if (response.streaming && !context.turnTimeShown && payload.type === "response.o
   }
 }
 response.body = JSON.stringify(payload);''',
-    ),
-    'openai_chat': (
-      request: '',
-      response: r'''const payload = JSON.parse(response.body);
+        ),
+        'openai_chat': (
+          request: '',
+          response: r'''const payload = JSON.parse(response.body);
 const choice = Array.isArray(payload.choices) ? payload.choices[0] : undefined;
 if (response.streaming && !context.turnTimeShown && choice && choice.delta && typeof choice.delta.content === "string") {
   const label = runtime.turn.startedAt + (runtime.device.timeZone ? " · " + runtime.device.timeZone : "");
@@ -133,11 +159,11 @@ if (response.streaming && !context.turnTimeShown && choice && choice.delta && ty
   choice.message.content = runtime.annotations.create("turn-time", label) + "\n" + choice.message.content;
 }
 response.body = JSON.stringify(payload);''',
-    ),
-  },
-  'replyLanguage': {
-    'anthropic_messages': (
-      request: r'''const payload = JSON.parse(request.body);
+        ),
+      },
+      'replyLanguage': {
+        'anthropic_messages': (
+          request: r'''const payload = JSON.parse(request.body);
 const guidance = "Reply in Simplified Chinese unless the user explicitly requests another language.";
 if (typeof payload.system === "string") {
   payload.system += "\n\n" + guidance;
@@ -147,19 +173,19 @@ if (typeof payload.system === "string") {
   payload.system = guidance;
 }
 request.body = JSON.stringify(payload);''',
-      response: '',
-    ),
-    'openai_responses': (
-      request: r'''const payload = JSON.parse(request.body);
+          response: '',
+        ),
+        'openai_responses': (
+          request: r'''const payload = JSON.parse(request.body);
 const guidance = "Reply in Simplified Chinese unless the user explicitly requests another language.";
 payload.instructions = typeof payload.instructions === "string"
   ? payload.instructions + "\n\n" + guidance
   : guidance;
 request.body = JSON.stringify(payload);''',
-      response: '',
-    ),
-    'openai_chat': (
-      request: r'''const payload = JSON.parse(request.body);
+          response: '',
+        ),
+        'openai_chat': (
+          request: r'''const payload = JSON.parse(request.body);
 const guidance = "Reply in Simplified Chinese unless the user explicitly requests another language.";
 let message;
 if (Array.isArray(payload.messages)) {
@@ -178,12 +204,12 @@ if (message && typeof message.content === "string") {
   payload.messages.unshift({role: "developer", content: guidance});
 }
 request.body = JSON.stringify(payload);''',
-      response: '',
-    ),
-  },
-  'workspaceRules': {
-    'anthropic_messages': (
-      request: r'''const payload = JSON.parse(request.body);
+          response: '',
+        ),
+      },
+      'workspaceRules': {
+        'anthropic_messages': (
+          request: r'''const payload = JSON.parse(request.body);
 const rules = {
   "example": "Treat workspace details as confidential and do not repeat secrets.",
   "work": "Treat workspace details as confidential and do not repeat secrets.",
@@ -200,10 +226,10 @@ if (guidance) {
   }
   request.body = JSON.stringify(payload);
 }''',
-      response: '',
-    ),
-    'openai_responses': (
-      request: r'''const payload = JSON.parse(request.body);
+          response: '',
+        ),
+        'openai_responses': (
+          request: r'''const payload = JSON.parse(request.body);
 const rules = {
   "example": "Treat workspace details as confidential and do not repeat secrets.",
   "work": "Treat workspace details as confidential and do not repeat secrets.",
@@ -216,10 +242,10 @@ if (guidance) {
     : guidance;
   request.body = JSON.stringify(payload);
 }''',
-      response: '',
-    ),
-    'openai_chat': (
-      request: r'''const payload = JSON.parse(request.body);
+          response: '',
+        ),
+        'openai_chat': (
+          request: r'''const payload = JSON.parse(request.body);
 const rules = {
   "example": "Treat workspace details as confidential and do not repeat secrets.",
   "work": "Treat workspace details as confidential and do not repeat secrets.",
@@ -245,13 +271,13 @@ if (guidance) {
   }
   request.body = JSON.stringify(payload);
 }''',
-      response: '',
-    ),
-  },
-  'responseModel': {
-    'anthropic_messages': (
-      request: '',
-      response: r'''const payload = JSON.parse(response.body);
+          response: '',
+        ),
+      },
+      'responseModel': {
+        'anthropic_messages': (
+          request: '',
+          response: r'''const payload = JSON.parse(response.body);
 if (payload.type === "message_start" && payload.message && typeof payload.message.model === "string") {
   context.responseModel = payload.message.model;
 }
@@ -266,10 +292,10 @@ if (response.streaming && !context.responseModelShown && context.responseModel &
   });
 }
 response.body = JSON.stringify(payload);''',
-    ),
-    'openai_responses': (
-      request: '',
-      response: r'''const payload = JSON.parse(response.body);
+        ),
+        'openai_responses': (
+          request: '',
+          response: r'''const payload = JSON.parse(response.body);
 if (typeof payload.model === "string") context.responseModel = payload.model;
 if (payload.response && typeof payload.response.model === "string") {
   context.responseModel = payload.response.model;
@@ -292,10 +318,10 @@ if (response.streaming && !context.responseModelShown && context.responseModel &
   }
 }
 response.body = JSON.stringify(payload);''',
-    ),
-    'openai_chat': (
-      request: '',
-      response: r'''const payload = JSON.parse(response.body);
+        ),
+        'openai_chat': (
+          request: '',
+          response: r'''const payload = JSON.parse(response.body);
 if (typeof payload.model === "string") context.responseModel = payload.model;
 const choice = Array.isArray(payload.choices) ? payload.choices[0] : undefined;
 if (response.streaming && !context.responseModelShown && context.responseModel && choice && choice.delta && typeof choice.delta.content === "string") {
@@ -305,9 +331,9 @@ if (response.streaming && !context.responseModelShown && context.responseModel &
   choice.message.content = runtime.annotations.create("response-model", context.responseModel) + "\n" + choice.message.content;
 }
 response.body = JSON.stringify(payload);''',
-    ),
-  },
-};
+        ),
+      },
+    };
 
 const accountSelectorSourceContracts = <String, String>{
   'loginUser': r'''const accountByLogin = {

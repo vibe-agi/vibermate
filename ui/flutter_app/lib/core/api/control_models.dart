@@ -2295,11 +2295,213 @@ bool _validOpaqueModelId(String value) =>
 bool _validOptionalCatalogText(String value, {required int maximumBytes}) =>
     value.isEmpty || _validCatalogText(value, maximumBytes: maximumBytes);
 
+/// Allowlisted, unverified JWT metadata. This is never authentication authority.
+final class ProviderTokenInfo {
+  const ProviderTokenInfo({
+    this.chatgptAccountId,
+    this.email,
+    this.userId,
+    this.planType,
+    this.issuedAt,
+    this.authenticatedAt,
+    this.expiresAt,
+  });
+
+  factory ProviderTokenInfo.fromJson(Object? json, String path) {
+    final value = requireObject(json, path);
+    requireFields(
+      value,
+      path,
+      required: const {},
+      optional: const {
+        'chatgptAccountId',
+        'email',
+        'userId',
+        'planType',
+        'issuedAt',
+        'authenticatedAt',
+        'expiresAt',
+      },
+    );
+    String? claim(String key) {
+      final text = optionalString(value, key, path);
+      if (text != null && !_validCatalogText(text, maximumBytes: 512)) {
+        throw ControlContractException('$path.$key is invalid');
+      }
+      return text;
+    }
+
+    return ProviderTokenInfo(
+      chatgptAccountId: claim('chatgptAccountId'),
+      email: claim('email'),
+      userId: claim('userId'),
+      planType: claim('planType'),
+      issuedAt: optionalTimestamp(value, 'issuedAt', path),
+      authenticatedAt: optionalTimestamp(value, 'authenticatedAt', path),
+      expiresAt: optionalTimestamp(value, 'expiresAt', path),
+    );
+  }
+
+  final String? chatgptAccountId;
+  final String? email;
+  final String? userId;
+  final String? planType;
+  final DateTime? issuedAt;
+  final DateTime? authenticatedAt;
+  final DateTime? expiresAt;
+}
+
+final class CodexOAuthAccount {
+  const CodexOAuthAccount({
+    required this.chatgptAccountId,
+    required this.email,
+    required this.userId,
+    required this.planType,
+    required this.fedRamp,
+    required this.expiresAt,
+    required this.lastRefresh,
+    required this.state,
+  });
+
+  factory CodexOAuthAccount.fromJson(Object? json, String path) {
+    final value = requireObject(json, path);
+    requireFields(
+      value,
+      path,
+      required: const {'chatgptAccountId', 'fedRamp', 'lastRefresh', 'state'},
+      optional: const {'email', 'userId', 'planType', 'expiresAt'},
+    );
+    final state = requireString(value, 'state', path);
+    if (!const {'ready', 'refresh_due', 'reconnect_required'}.contains(state)) {
+      throw ControlContractException('$path.state is invalid');
+    }
+    return CodexOAuthAccount(
+      chatgptAccountId: requireString(value, 'chatgptAccountId', path),
+      email: optionalString(value, 'email', path),
+      userId: optionalString(value, 'userId', path),
+      planType: optionalString(value, 'planType', path),
+      fedRamp: requireBoolean(value, 'fedRamp', path),
+      expiresAt: optionalTimestamp(value, 'expiresAt', path),
+      lastRefresh: requireTimestamp(value, 'lastRefresh', path),
+      state: state,
+    );
+  }
+
+  final String chatgptAccountId;
+  final String? email;
+  final String? userId;
+  final String? planType;
+  final bool fedRamp;
+  final DateTime? expiresAt;
+  final DateTime lastRefresh;
+  final String state;
+}
+
+final class CodexLogin {
+  const CodexLogin({
+    required this.id,
+    required this.state,
+    required this.callbackMode,
+    required this.authorizationUrl,
+    required this.expiresAt,
+    this.accountId,
+    this.reason,
+  });
+
+  factory CodexLogin.fromJson(Object? json) {
+    const path = 'codexLogin';
+    final value = requireObject(json, path);
+    requireFields(
+      value,
+      path,
+      required: const {
+        'id',
+        'state',
+        'callbackMode',
+        'authorizationUrl',
+        'expiresAt',
+      },
+      optional: const {'accountId', 'reason'},
+    );
+    final id = requireString(value, 'id', path);
+    final state = requireString(value, 'state', path);
+    final mode = requireString(value, 'callbackMode', path);
+    final rawUrl = value['authorizationUrl'];
+    final accountId = value['accountId'];
+    final reason = value['reason'];
+    if (!RegExp(r'^[A-Za-z0-9_-]{43}$').hasMatch(id) ||
+        !const {
+          'pending',
+          'exchanging',
+          'completed',
+          'failed',
+          'expired',
+          'cancelled',
+        }.contains(state) ||
+        !const {'loopback', 'manual'}.contains(mode) ||
+        rawUrl is! String ||
+        (reason != null &&
+            !const {
+              'login_denied',
+              'login_exchange_failed',
+              'login_account_save_failed',
+              'login_expired',
+            }.contains(reason)) ||
+        (state == 'completed'
+            ? accountId is! String ||
+                  !RegExp(r'^[a-z0-9][a-z0-9._-]{0,127}$').hasMatch(accountId)
+            : accountId != null)) {
+      throw const ControlContractException('Codex login response is invalid');
+    }
+    if (state == 'pending') {
+      final url = Uri.tryParse(rawUrl);
+      if (url == null ||
+          url.scheme != 'https' ||
+          url.host != 'auth.openai.com' ||
+          url.hasPort ||
+          url.userInfo.isNotEmpty ||
+          url.path != '/oauth/authorize' ||
+          url.hasFragment ||
+          url.queryParameters['code_challenge_method'] != 'S256') {
+        throw const ControlContractException(
+          'Codex authorization URL is invalid',
+        );
+      }
+    } else if (rawUrl.isNotEmpty) {
+      throw const ControlContractException(
+        'Finished Codex login retained an authorization URL',
+      );
+    }
+    return CodexLogin(
+      id: id,
+      state: state,
+      callbackMode: mode,
+      authorizationUrl: rawUrl,
+      expiresAt: requireTimestamp(value, 'expiresAt', path),
+      accountId: accountId as String?,
+      reason: reason as String?,
+    );
+  }
+
+  final String id;
+  final String state;
+  final String callbackMode;
+  final String authorizationUrl;
+  final DateTime expiresAt;
+  final String? accountId;
+  final String? reason;
+  bool get active => state == 'pending' || state == 'exchanging';
+}
+
 final class ProviderAccount {
   const ProviderAccount({
     required this.id,
     required this.displayName,
-    required this.upstreamEndpointId,
+    this.note = '',
+    this.noteRevision = 0,
+    required this.credentialOrigin,
+    required this.linkedEndpointIds,
+    this.associationRevision = 1,
     required this.kind,
     required this.realmId,
     required this.state,
@@ -2308,6 +2510,8 @@ final class ProviderAccount {
     required this.credentialEpoch,
     required this.setHeaderNames,
     required this.deleteHeaderNames,
+    this.codexOAuth,
+    this.tokenInfo,
   });
 
   factory ProviderAccount.fromJson(Object? json, String path) {
@@ -2318,7 +2522,9 @@ final class ProviderAccount {
       required: const {
         'id',
         'displayName',
-        'upstreamEndpointId',
+        'credentialOrigin',
+        'linkedEndpointIds',
+        'associationRevision',
         'kind',
         'realmId',
         'state',
@@ -2328,7 +2534,18 @@ final class ProviderAccount {
         'setHeaderNames',
         'deleteHeaderNames',
       },
+      optional: const {'codexOAuth', 'tokenInfo', 'note', 'noteRevision'},
     );
+    final note = value.containsKey('note')
+        ? requireStringValue(value, 'note', path)
+        : '';
+    final noteRevision = value.containsKey('noteRevision')
+        ? requireInteger(value, 'noteRevision', path)
+        : 0;
+    if (!validProviderAccountNote(note) ||
+        (note.isNotEmpty && noteRevision == 0)) {
+      throw ControlContractException('$path account note is invalid');
+    }
     final credentialState = requireString(value, 'credentialState', path);
     final credentialEpoch = requireInteger(value, 'credentialEpoch', path);
     if (!const {
@@ -2361,11 +2578,44 @@ final class ProviderAccount {
         allHeaderNames.toSet().length != allHeaderNames.length) {
       throw ControlContractException('$path Header policy is inconsistent');
     }
+    final kind = requireString(value, 'kind', path);
+    final codexOAuth = value['codexOAuth'] == null
+        ? null
+        : CodexOAuthAccount.fromJson(value['codexOAuth'], '$path.codexOAuth');
+    if ((kind == 'codex_oauth' &&
+            credentialState == 'ready' &&
+            codexOAuth == null) ||
+        (kind != 'codex_oauth' && codexOAuth != null)) {
+      throw ControlContractException(
+        '$path Codex OAuth identity is inconsistent with the Account kind',
+      );
+    }
+    final credentialOrigin = requireString(value, 'credentialOrigin', path);
+    final links = requireStringList(value, 'linkedEndpointIds', path);
+    if (!isCanonicalProviderOrigin(credentialOrigin) ||
+        links.length > 128 ||
+        links.toSet().length != links.length ||
+        links.any(
+          (id) => !RegExp(r'^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$').hasMatch(id),
+        )) {
+      throw ControlContractException(
+        '$path credential origin or account links are invalid',
+      );
+    }
     return ProviderAccount(
       id: requireString(value, 'id', path),
       displayName: requireString(value, 'displayName', path),
-      upstreamEndpointId: requireString(value, 'upstreamEndpointId', path),
-      kind: requireString(value, 'kind', path),
+      note: note,
+      noteRevision: noteRevision,
+      credentialOrigin: credentialOrigin,
+      linkedEndpointIds: List.unmodifiable(links),
+      associationRevision: requireInteger(
+        value,
+        'associationRevision',
+        path,
+        minimum: 1,
+      ),
+      kind: kind,
       realmId: requireString(value, 'realmId', path),
       state: requireString(value, 'state', path),
       revision: requireInteger(value, 'revision', path, minimum: 1),
@@ -2373,12 +2623,20 @@ final class ProviderAccount {
       credentialEpoch: credentialEpoch,
       setHeaderNames: List.unmodifiable(setHeaderNames),
       deleteHeaderNames: List.unmodifiable(deleteHeaderNames),
+      codexOAuth: codexOAuth,
+      tokenInfo: value['tokenInfo'] == null
+          ? null
+          : ProviderTokenInfo.fromJson(value['tokenInfo'], '$path.tokenInfo'),
     );
   }
 
   final String id;
   final String displayName;
-  final String upstreamEndpointId;
+  final String note;
+  final int noteRevision;
+  final String credentialOrigin;
+  final List<String> linkedEndpointIds;
+  final int associationRevision;
   final String kind;
   final String realmId;
   final String state;
@@ -2387,9 +2645,74 @@ final class ProviderAccount {
   final int credentialEpoch;
   final List<String> setHeaderNames;
   final List<String> deleteHeaderNames;
+  final CodexOAuthAccount? codexOAuth;
+  final ProviderTokenInfo? tokenInfo;
 
-  bool get usable => state == 'active' && credentialState == 'ready';
+  bool isLinkedTo(String endpointId) => linkedEndpointIds.contains(endpointId);
+
+  bool canLinkTo(UpstreamEndpoint endpoint) =>
+      credentialOrigin == endpoint.origin.toString() &&
+      endpoint.accountKinds.contains(kind) &&
+      endpoint.state == 'active';
+
+  ProviderAccount withAssociations(List<String> ids, int revision) =>
+      ProviderAccount(
+        id: id,
+        displayName: displayName,
+        note: note,
+        noteRevision: noteRevision,
+        credentialOrigin: credentialOrigin,
+        linkedEndpointIds: List.unmodifiable(ids),
+        associationRevision: revision,
+        kind: kind,
+        realmId: realmId,
+        state: state,
+        revision: this.revision,
+        credentialState: credentialState,
+        credentialEpoch: credentialEpoch,
+        setHeaderNames: setHeaderNames,
+        deleteHeaderNames: deleteHeaderNames,
+        codexOAuth: codexOAuth,
+        tokenInfo: tokenInfo,
+      );
+
+  ProviderAccount withNote(String note, int noteRevision) => ProviderAccount(
+    id: id,
+    displayName: displayName,
+    note: note,
+    noteRevision: noteRevision,
+    credentialOrigin: credentialOrigin,
+    linkedEndpointIds: linkedEndpointIds,
+    associationRevision: associationRevision,
+    kind: kind,
+    realmId: realmId,
+    state: state,
+    revision: revision,
+    credentialState: credentialState,
+    credentialEpoch: credentialEpoch,
+    setHeaderNames: setHeaderNames,
+    deleteHeaderNames: deleteHeaderNames,
+    codexOAuth: codexOAuth,
+    tokenInfo: tokenInfo,
+  );
+
+  bool get usable =>
+      state == 'active' &&
+      credentialState == 'ready' &&
+      codexOAuth?.state != 'reconnect_required';
 }
+
+const maxProviderAccountNoteCharacters = 256;
+
+bool validProviderAccountNote(String note) =>
+    note.trim() == note &&
+    note.runes.length <= maxProviderAccountNoteCharacters &&
+    !note.runes.any(
+      (value) =>
+          value < 32 ||
+          (value >= 127 && value <= 159) ||
+          (value >= 0xd800 && value <= 0xdfff),
+    );
 
 final _providerHeaderNamePattern = RegExp(r"^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$");
 
@@ -2457,14 +2780,19 @@ final class ProviderAccountHeaderPolicy {
     for (final name in deleteHeaders) {
       _validateInputName(name, seen);
     }
-    final primary = switch (accountKind) {
-      'anthropic_api_key' => 'x-api-key',
-      'bearer_token' => 'authorization',
+    final protected = switch (accountKind) {
+      'anthropic_api_key' => const {'x-api-key'},
+      'bearer_token' => const {'authorization'},
+      'codex_oauth' => const {
+        'authorization',
+        'chatgpt-account-id',
+        'x-openai-fedramp',
+      },
       _ => throw const ControlContractException(
         'Provider Account kind is invalid',
       ),
     };
-    if (seen.contains(primary)) {
+    if (seen.any(protected.contains)) {
       throw const ControlContractException(
         'Provider Account authentication Header is driver-owned',
       );
@@ -4191,6 +4519,7 @@ final class EnvironmentRoute {
     required this.modelPolicy,
     required this.wireProfileRef,
     required this.pluginBindings,
+    this.allowAccountHistory = false,
   });
 
   factory EnvironmentRoute.fromJson(Object? json, String path) {
@@ -4208,6 +4537,7 @@ final class EnvironmentRoute {
         'wireProfileRef',
         'pluginBindings',
       },
+      optional: const {'allowAccountHistory'},
     );
     final bindings =
         requireList(value['pluginBindings'], '$path.pluginBindings').indexed
@@ -4239,6 +4569,9 @@ final class EnvironmentRoute {
       ),
       wireProfileRef: _requireResourceId(value, 'wireProfileRef', path),
       pluginBindings: List.unmodifiable(bindings),
+      allowAccountHistory: value.containsKey('allowAccountHistory')
+          ? requireBoolean(value, 'allowAccountHistory', path)
+          : false,
     );
   }
 
@@ -4250,21 +4583,25 @@ final class EnvironmentRoute {
   final EnvironmentModelPolicy modelPolicy;
   final String wireProfileRef;
   final List<EnvironmentPluginBinding> pluginBindings;
+  final bool allowAccountHistory;
 
   String get endpointId => providerTarget.id;
   Uri get endpointOrigin => providerTarget.origin;
 
-  EnvironmentRoute copyWith({RouteAccountPolicy? accountPolicy}) =>
-      EnvironmentRoute(
-        id: id,
-        revision: revision,
-        providerTarget: providerTarget,
-        backendProtocol: backendProtocol,
-        accountPolicy: accountPolicy ?? this.accountPolicy,
-        modelPolicy: modelPolicy,
-        wireProfileRef: wireProfileRef,
-        pluginBindings: pluginBindings,
-      );
+  EnvironmentRoute copyWith({
+    RouteAccountPolicy? accountPolicy,
+    bool? allowAccountHistory,
+  }) => EnvironmentRoute(
+    id: id,
+    revision: revision,
+    providerTarget: providerTarget,
+    backendProtocol: backendProtocol,
+    accountPolicy: accountPolicy ?? this.accountPolicy,
+    modelPolicy: modelPolicy,
+    wireProfileRef: wireProfileRef,
+    pluginBindings: pluginBindings,
+    allowAccountHistory: allowAccountHistory ?? this.allowAccountHistory,
+  );
 
   JsonObject toJson() => {
     'id': id,
@@ -4272,6 +4609,7 @@ final class EnvironmentRoute {
     'providerTarget': providerTarget.toJson(),
     'backendProtocol': backendProtocol,
     'accountPolicy': accountPolicy.toJson(),
+    if (allowAccountHistory) 'allowAccountHistory': true,
     'modelPolicy': modelPolicy.toJson(),
     'wireProfileRef': wireProfileRef,
     'pluginBindings': pluginBindings
