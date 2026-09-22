@@ -5,14 +5,18 @@ import 'dart:math';
 import 'package:flutter/foundation.dart';
 
 import '../../core/api/control_api.dart';
+import '../../core/api/launch_environment_snapshot.dart';
+import '../../core/api/control_failure.dart';
 import '../../core/api/account_facts_models.dart';
 import '../../core/api/control_models.dart';
+import '../../core/api/runtime_storage.dart';
 import '../../core/bootstrap/root_trust_installer.dart';
 import '../../core/bootstrap/public_certificate_exporter.dart';
 import '../../core/bootstrap/runtime_connection.dart';
 import '../../core/bootstrap/terminal_command.dart';
 import '../../core/preferences/workbench_preferences.dart';
 import 'runtime_connection_guide.dart';
+import 'environment_editing.dart';
 
 export '../../core/preferences/workbench_preferences.dart'
     show AppLanguage, WorkbenchSection, WorkbenchTheme;
@@ -52,6 +56,9 @@ final class WorkbenchController extends ChangeNotifier {
         const PlatformPublicCertificateExporter(),
     this.runtimeTarget = 'This Mac',
     Future<void> Function()? restartRuntime,
+    this.chooseStorageDirectory,
+    this.moveStorage,
+    this.storageMoveNotice,
     WorkbenchPreferences initialPreferences = const WorkbenchPreferences(),
     WorkbenchPreferencesStore preferencesStore =
         const DiscardWorkbenchPreferencesStore(),
@@ -88,11 +95,19 @@ final class WorkbenchController extends ChangeNotifier {
        preferenceWarning = initialPreferencesIssue?.copyKey;
 
   final ControlApi _api;
+
+  Future<List<LaunchEnvironmentSnapshot>> launchEnvironmentSnapshots() =>
+      _api.launchEnvironmentSnapshots();
   final TerminalCommandService _terminalCommands;
   final RootTrustInstaller? _rootTrustInstaller;
   final PublicCertificateExporter _certificateExporter;
   final Future<void> Function() _closeRuntime;
   final Future<void> Function()? _restartRuntime;
+  final Future<String?> Function()? chooseStorageDirectory;
+  final Future<void> Function(String target)? moveStorage;
+  String? storageMoveNotice;
+  String? storageMoveFailure;
+  bool storageMoving = false;
   final DateTime Function() _clock;
   final WorkbenchPreferencesStore _preferencesStore;
   final bool _preferencesWritable;
@@ -150,6 +165,9 @@ final class WorkbenchController extends ChangeNotifier {
   List<RuntimeUser>? runtimeUsers;
   RuntimeUsageReport? runtimeUsage;
   RootCAStatus? rootCAStatus;
+  RuntimeStorageLocation? storageLocation;
+  bool storageLocationLoading = false;
+  bool storageLocationFailed = false;
   RootCAGuideIntent? rootCAGuideIntent;
   CapturedMessageTransformSample? capturedMessageTransformSample;
   final int usageRangeDays = 365;
@@ -168,8 +186,10 @@ final class WorkbenchController extends ChangeNotifier {
   String? captureDirectoryError;
   String? networkNotice;
   String? inventoryError;
+  String? inventoryErrorDiagnostic;
   String? inventoryNotice;
   String? environmentError;
+  String? environmentErrorDiagnostic;
   String? environmentNotice;
   String? offlineError;
   String? offlineNotice;
@@ -219,7 +239,10 @@ final class WorkbenchController extends ChangeNotifier {
 
   int settingsTab = 0;
   Timer? _poller;
+  Timer? _evidencePoller;
   bool _pollInFlight = false;
+  bool _evidencePollInFlight = false;
+  int _captureDetailLoads = 0;
   bool _disposed = false;
   WorkbenchPreferences? _desiredPreferences;
   WorkbenchPreferences? _pendingPreferences;
@@ -534,6 +557,18 @@ final class WorkbenchController extends ChangeNotifier {
       const Duration(seconds: 5),
       (_) => unawaited(_poll()),
     );
+    // Follow the visible live conversation independently of slow inventory
+    // reads. This bounded point query never reloads accounts or credentials.
+    _evidencePoller = Timer.periodic(
+      const Duration(seconds: 1),
+      (_) => unawaited(_pollSelectedEvidence()),
+    );
+    if (storageMoveNotice != null) {
+      selectSection(WorkbenchSection.settings);
+      selectSettingsTab(
+        settingsDestinations.indexOf(SettingsDestination.safety),
+      );
+    }
   }
 
   Future<void> refreshRootCA({bool quiet = false}) async {
@@ -693,7 +728,7 @@ final class WorkbenchController extends ChangeNotifier {
   }
 
   Future<void> refresh({bool selectDefaults = false}) async {
-    if (_disposed || inventoryMutating) return;
+    if (_disposed || inventoryMutating || environmentMutating) return;
     final generation = ++_dashboardGeneration;
     if (data == null) loading = true;
     errorMessage = null;
@@ -756,7 +791,11 @@ final class WorkbenchController extends ChangeNotifier {
         await refreshPendingApprovals(quiet: true);
       }
       final capture = selectedCapture;
-      if (capture != null) await _loadCaptureDetail(capture, quiet: true);
+      if (section == WorkbenchSection.captures &&
+          capture != null &&
+          !_evidencePollInFlight) {
+        await _loadCaptureDetail(capture, quiet: true);
+      }
       if (section == WorkbenchSection.network) {
         await _refreshNetwork(quiet: true);
       }
@@ -775,12 +814,82 @@ final class WorkbenchController extends ChangeNotifier {
     }
   }
 
+  Future<void> _pollSelectedEvidence() async {
+    final capture = selectedCapture;
+    if (_disposed ||
+        section != WorkbenchSection.captures ||
+        capture == null ||
+        _evidencePollInFlight ||
+        _captureDetailLoads != 0 ||
+        loading ||
+        detailLoading ||
+        captureActivitiesLoading ||
+        inventoryMutating ||
+        environmentMutating ||
+        (!capture.running &&
+            !selectedActivities.any((item) => item.status == 'pending'))) {
+      return;
+    }
+    _evidencePollInFlight = true;
+    final generation = _selectionGeneration;
+    final conversationKey = selectedCaptureConversationKey;
+    try {
+      if (conversationKey == null) {
+        await _loadCaptureDetail(capture, quiet: true);
+        return;
+      }
+      final latest = await _captureActivityPage(
+        capture,
+        conversationId: conversationKey,
+        limit: 100,
+      );
+      if (_disposed ||
+          generation != _selectionGeneration ||
+          capture.key != selectedCaptureKey ||
+          conversationKey != selectedCaptureConversationKey) {
+        return;
+      }
+      if (latest.items.isEmpty) {
+        // A pending Exchange can acquire its native Conversation on completion.
+        // Resolve that identity before replacing a useful visible timeline.
+        await _loadCaptureDetail(capture, quiet: true);
+        return;
+      }
+      final current = selectedCapturePage;
+      if (current != null &&
+          current.nextCursor == latest.nextCursor &&
+          current.items.length == latest.items.length &&
+          current.items.indexed.every((entry) {
+            final other = latest.items[entry.$1];
+            return entry.$2.id == other.id &&
+                entry.$2.occurredAt == other.occurredAt &&
+                entry.$2.reasonCode == other.reasonCode &&
+                entry.$2.status == other.status;
+          })) {
+        return;
+      }
+      selectedCapturePage = _reconcileCaptureConversationPage(current, latest);
+      _cacheCaptureConversationPage(
+        capture.key,
+        conversationKey,
+        selectedCapturePage!,
+      );
+      notifyListeners();
+    } catch (_) {
+      // Background failure retains readable evidence. Explicit refresh exposes
+      // errors, and the ordinary directory poll repairs changed identities.
+    } finally {
+      _evidencePollInFlight = false;
+    }
+  }
+
   Future<void> loadMoreCaptures() async {
     final current = data;
     final cursor = current?.captureNextCursor;
     if (_disposed ||
         loading ||
         inventoryMutating ||
+        environmentMutating ||
         current == null ||
         cursor == null ||
         captureDirectoryLoading) {
@@ -856,6 +965,69 @@ final class WorkbenchController extends ChangeNotifier {
     }
     settingsTab = value;
     notifyListeners();
+    if (settingsDestinations[value] == SettingsDestination.safety &&
+        storageLocation == null) {
+      unawaited(refreshStorageLocation());
+    }
+  }
+
+  Future<void> refreshStorageLocation() async {
+    if (_disposed || storageLocationLoading) return;
+    storageLocationLoading = true;
+    storageLocationFailed = false;
+    notifyListeners();
+    try {
+      final location = await _api.storageLocation();
+      if (_disposed) return;
+      storageLocation = location;
+    } catch (_) {
+      if (_disposed) return;
+      storageLocationFailed = true;
+    } finally {
+      if (!_disposed) {
+        storageLocationLoading = false;
+        notifyListeners();
+      }
+    }
+  }
+
+  Future<void> relocateStorage(String target) async {
+    if (_disposed || storageMoving || moveStorage == null) return;
+    storageMoving = true;
+    storageMoveFailure = null;
+    storageMoveNotice = null;
+    notifyListeners();
+    try {
+      await moveStorage!(target);
+    } catch (error) {
+      if (_disposed) return;
+      storageMoveFailure = storageMoveErrorKey(error);
+    } finally {
+      if (!_disposed) {
+        storageMoving = false;
+        notifyListeners();
+      }
+    }
+  }
+
+  Future<String?> pickStorageDirectory() async {
+    if (_disposed || storageMoving || chooseStorageDirectory == null) {
+      return null;
+    }
+    try {
+      return await chooseStorageDirectory!();
+    } catch (_) {
+      if (!_disposed) {
+        storageMoveFailure = 'settings.storage.picker_failed';
+        notifyListeners();
+      }
+      return null;
+    }
+  }
+
+  static String storageMoveErrorKey(Object error) {
+    final code = error.toString();
+    return 'settings.storage.${const {'storage_target_invalid', 'storage_in_use', 'storage_copy_failed', 'storage_validation_failed', 'storage_settings_invalid'}.contains(code) ? code : 'storage_copy_failed'}';
   }
 
   void openRuntimeUsersSettings() {
@@ -1622,11 +1794,7 @@ final class WorkbenchController extends ChangeNotifier {
     required List<String> backendProtocols,
   }) async {
     final current = data;
-    if (current == null || inventoryMutating) return null;
-    inventoryMutating = true;
-    inventoryError = null;
-    inventoryNotice = null;
-    notifyListeners();
+    if (current == null || !_beginInventoryMutation()) return null;
     try {
       final created = await _api.createUpstreamEndpoint(
         id: 'target.custom.${_newUuid()}',
@@ -1646,7 +1814,7 @@ final class WorkbenchController extends ChangeNotifier {
     } catch (error) {
       if (_disposed) return null;
       inventoryMutating = false;
-      inventoryError = _describeError(error);
+      _setInventoryError(error);
       notifyListeners();
       return null;
     }
@@ -1662,14 +1830,10 @@ final class WorkbenchController extends ChangeNotifier {
   }) async {
     final current = data;
     if (current == null ||
-        inventoryMutating ||
-        !endpoint.accountKinds.contains(kind)) {
+        !endpoint.accountKinds.contains(kind) ||
+        !_beginInventoryMutation()) {
       return null;
     }
-    inventoryMutating = true;
-    inventoryError = null;
-    inventoryNotice = null;
-    notifyListeners();
     try {
       final provider = switch (kind) {
         'anthropic_api_key' => 'anthropic',
@@ -1698,7 +1862,7 @@ final class WorkbenchController extends ChangeNotifier {
     } catch (error) {
       if (_disposed) return null;
       inventoryMutating = false;
-      inventoryError = _describeError(error);
+      _setInventoryError(error);
       notifyListeners();
       return null;
     }
@@ -1708,15 +1872,7 @@ final class WorkbenchController extends ChangeNotifier {
     ProviderAccount account,
     String note,
   ) async {
-    if (data == null || inventoryMutating) return null;
-    // A dashboard request started before this edit must not replace the newly
-    // saved note with its older snapshot after the mutation finishes.
-    ++_dashboardGeneration;
-    captureDirectoryLoading = false;
-    inventoryMutating = true;
-    inventoryError = null;
-    inventoryNotice = null;
-    notifyListeners();
+    if (!_beginInventoryMutation()) return null;
     try {
       final updated = await _api.setProviderAccountNote(account, note);
       if (_disposed || data == null) return null;
@@ -1758,14 +1914,14 @@ final class WorkbenchController extends ChangeNotifier {
     required UpstreamEndpoint endpoint,
     required bool linked,
   }) async {
-    if (data == null || inventoryMutating) return false;
-    inventoryMutating = true;
-    inventoryError = null;
-    inventoryNotice = null;
-    notifyListeners();
+    if (!_beginInventoryMutation()) return false;
     try {
       final updated = await _api.setProviderAccountAssociation(
-        account: account,
+        account:
+            data!.accounts
+                .where((value) => value.id == account.id)
+                .firstOrNull ??
+            account,
         endpoint: endpoint,
         linked: linked,
       );
@@ -1780,7 +1936,8 @@ final class WorkbenchController extends ChangeNotifier {
       inventoryNotice = linked ? 'account_linked' : 'account_unlinked';
       return true;
     } catch (error) {
-      if (!_disposed) inventoryError = _describeError(error);
+      await _reconcileAccountConflict(error);
+      if (!_disposed) _setInventoryError(error);
       return false;
     } finally {
       if (!_disposed) {
@@ -1814,15 +1971,12 @@ final class WorkbenchController extends ChangeNotifier {
     ProviderAccount account,
   ) async {
     if (data == null ||
-        inventoryMutating ||
         account.kind != 'codex_oauth' ||
-        !account.usable) {
+        !account.usable ||
+        !_beginInventoryMutation()) {
       return null;
     }
-    inventoryMutating = true;
     refreshingProviderAccountId = account.id;
-    inventoryError = null;
-    inventoryNotice = null;
     notifyListeners();
     try {
       final updated = await _api.refreshProviderAccountCredential(account);
@@ -1840,13 +1994,11 @@ final class WorkbenchController extends ChangeNotifier {
       return updated;
     } catch (error) {
       if (_disposed) return null;
-      inventoryError = switch (error) {
-        ControlProblem(reasonCode: 'credential_reconnect_required') =>
-          'provider_accounts.refresh.reconnect',
-        ControlProblem(reasonCode: 'provider_account_conflict') =>
-          'provider_accounts.refresh.conflict',
-        _ => 'provider_accounts.refresh.failed',
-      };
+      _setInventoryError(error);
+      if (error is ControlProblem &&
+          error.reasonCode == 'provider_account_conflict') {
+        inventoryError = 'provider_accounts.refresh.conflict';
+      }
       // Permanent refresh failures can advance the stored reconnect state.
       // Reconcile safe account metadata, without reading quota or history.
       try {
@@ -1875,11 +2027,7 @@ final class WorkbenchController extends ChangeNotifier {
     required ProviderAccountHeaderPolicy headerPolicy,
   }) async {
     final current = data;
-    if (current == null || inventoryMutating) return null;
-    inventoryMutating = true;
-    inventoryError = null;
-    inventoryNotice = null;
-    notifyListeners();
+    if (current == null || !_beginInventoryMutation()) return null;
     try {
       final updated = await _api.replaceProviderAccountCredential(
         account: account,
@@ -1899,7 +2047,7 @@ final class WorkbenchController extends ChangeNotifier {
     } catch (error) {
       if (_disposed) return null;
       inventoryMutating = false;
-      inventoryError = _describeError(error);
+      _setInventoryError(error);
       notifyListeners();
       return null;
     }
@@ -1909,11 +2057,7 @@ final class WorkbenchController extends ChangeNotifier {
     ProviderAccount account,
   ) async {
     final current = data;
-    if (current == null || inventoryMutating) return null;
-    inventoryMutating = true;
-    inventoryError = null;
-    inventoryNotice = null;
-    notifyListeners();
+    if (current == null || !_beginInventoryMutation()) return null;
     try {
       final result = await _api.deleteProviderAccount(account);
       if (_disposed) return null;
@@ -1932,7 +2076,7 @@ final class WorkbenchController extends ChangeNotifier {
     } catch (error) {
       if (_disposed) return null;
       inventoryMutating = false;
-      inventoryError = _describeError(error);
+      _setInventoryError(error);
       notifyListeners();
       return null;
     }
@@ -2047,13 +2191,8 @@ final class WorkbenchController extends ChangeNotifier {
     bool reloadCaptureDetail = false,
   }) async {
     final current = data;
-    if (current == null || inventoryMutating) return null;
-    final generation = ++_dashboardGeneration;
-    captureDirectoryLoading = false;
-    inventoryMutating = true;
-    inventoryError = null;
-    inventoryNotice = null;
-    notifyListeners();
+    if (current == null || !_beginInventoryMutation()) return null;
+    final generation = _dashboardGeneration;
     try {
       final outcome = await call();
       if (_disposed || generation != _dashboardGeneration) return null;
@@ -2072,7 +2211,8 @@ final class WorkbenchController extends ChangeNotifier {
           if (_disposed || generation != _dashboardGeneration) return outcome;
           // The deletion is already authoritative. Keep the local projection
           // honest and surface only the failed reconciliation.
-          inventoryError = _describeError(error);
+          _setInventoryError(error);
+          inventoryError = 'error.deleted_refresh_failed';
         }
       }
       inventoryMutating = false;
@@ -2085,7 +2225,7 @@ final class WorkbenchController extends ChangeNotifier {
     } catch (error) {
       if (_disposed) return null;
       inventoryMutating = false;
-      inventoryError = _describeError(error);
+      _setInventoryError(error);
       notifyListeners();
       return null;
     }
@@ -2287,7 +2427,7 @@ final class WorkbenchController extends ChangeNotifier {
         return null;
       }
       environmentRevisionLoading = false;
-      environmentError = _describeError(error);
+      _setEnvironmentError(error);
       notifyListeners();
       return null;
     }
@@ -2309,10 +2449,12 @@ final class WorkbenchController extends ChangeNotifier {
   }
 
   Future<EnvironmentImpact?> reviewSelectedEnvironment(
-    EnvironmentDraftInput candidate,
-  ) async {
-    final environment = selectedEnvironment;
+    EnvironmentDraftInput candidate, {
+    EnvironmentRecord? baseEnvironment,
+  }) async {
+    final environment = baseEnvironment ?? selectedEnvironment;
     if (environment == null ||
+        environment.id != selectedEnvironmentId ||
         selectedEnvironmentRevision != null ||
         environment.systemOwned ||
         environmentMutating) {
@@ -2321,6 +2463,7 @@ final class WorkbenchController extends ChangeNotifier {
     return _reviewEnvironmentDraft(
       environmentId: environment.id,
       expectedBaseRevision: environment.revision,
+      baseClientEndpoints: environment.clientEndpoints,
       candidate: candidate,
       requireCurrentSelection: true,
     );
@@ -2332,6 +2475,7 @@ final class WorkbenchController extends ChangeNotifier {
   ) => _reviewEnvironmentDraft(
     environmentId: environmentId,
     expectedBaseRevision: 0,
+    baseClientEndpoints: const [],
     candidate: candidate,
     requireCurrentSelection: false,
   );
@@ -2339,17 +2483,22 @@ final class WorkbenchController extends ChangeNotifier {
   Future<EnvironmentImpact?> _reviewEnvironmentDraft({
     required String environmentId,
     required int expectedBaseRevision,
+    required List<EnvironmentClientEndpoint> baseClientEndpoints,
     required EnvironmentDraftInput candidate,
     required bool requireCurrentSelection,
   }) async {
-    if (environmentMutating) return null;
-    environmentMutating = true;
-    environmentError = null;
+    if (!_beginEnvironmentMutation()) return null;
     environmentNotice = null;
     reviewedEnvironmentDraft = null;
     reviewedEnvironmentImpact = null;
     notifyListeners();
     try {
+      final preparedEndpoints = prepareEnvironmentDraftEndpoints(
+        base: baseClientEndpoints,
+        edited: candidate.clientEndpoints,
+        upstreamEndpoints: data?.endpoints ?? const [],
+        availableAccounts: data?.accounts ?? const [],
+      );
       var expectedDraftRevision = 0;
       try {
         final existing = await _api.environmentDraft(environmentId);
@@ -2370,7 +2519,10 @@ final class WorkbenchController extends ChangeNotifier {
       final draft = await _api.saveEnvironmentDraft(
         environmentId: environmentId,
         expectedBaseRevision: expectedBaseRevision,
-        input: candidate.withExpectedDraftRevision(expectedDraftRevision),
+        input: candidate.copyWith(
+          expectedDraftRevision: expectedDraftRevision,
+          clientEndpoints: preparedEndpoints,
+        ),
       );
       final impact = await _api.previewEnvironmentDraft(
         environmentId,
@@ -2401,7 +2553,7 @@ final class WorkbenchController extends ChangeNotifier {
         return null;
       }
       environmentMutating = false;
-      environmentError = _describeError(error);
+      _setEnvironmentError(error);
       notifyListeners();
       return null;
     }
@@ -2419,8 +2571,7 @@ final class WorkbenchController extends ChangeNotifier {
         draft.draftRevision != impact.draftRevision) {
       return null;
     }
-    environmentMutating = true;
-    environmentError = null;
+    if (!_beginEnvironmentMutation()) return null;
     notifyListeners();
     try {
       final result = await _api.publishEnvironmentDraft(
@@ -2452,7 +2603,7 @@ final class WorkbenchController extends ChangeNotifier {
     } catch (error) {
       if (_disposed) return null;
       environmentMutating = false;
-      environmentError = _describeError(error);
+      _setEnvironmentError(error);
       notifyListeners();
       return null;
     }
@@ -2559,7 +2710,8 @@ final class WorkbenchController extends ChangeNotifier {
     CaptureRecord capture, {
     bool quiet = false,
   }) async {
-    if (quiet && captureActivitiesLoading) return;
+    if (quiet && (captureActivitiesLoading || _captureDetailLoads != 0)) return;
+    _captureDetailLoads += 1;
     final generation = ++_selectionGeneration;
     final currentPage = selectedCapturePage;
     final currentConversationKey = selectedCaptureConversationKey;
@@ -2638,6 +2790,8 @@ final class WorkbenchController extends ChangeNotifier {
       detailLoading = false;
       errorMessage = _describeError(error);
       notifyListeners();
+    } finally {
+      _captureDetailLoads -= 1;
     }
   }
 
@@ -2939,10 +3093,91 @@ final class WorkbenchController extends ChangeNotifier {
 
   String _describeError(Object error) {
     return switch (error) {
+      EnvironmentUpstreamReferenceException() =>
+        'error.environment_upstream_changed',
+      ControlProblem(reasonCode: 'environment_upstream_stale') =>
+        'error.environment_upstream_stale',
       ControlProblem problem => '${problem.reasonCode} (${problem.status})',
       ControlContractException contract => contract.message,
       _ => error.toString(),
     };
+  }
+
+  bool _beginInventoryMutation() {
+    if (_disposed || data == null || inventoryMutating || environmentMutating) {
+      return false;
+    }
+    _invalidateDashboardReads();
+    inventoryMutating = true;
+    inventoryError = null;
+    inventoryErrorDiagnostic = null;
+    inventoryNotice = null;
+    notifyListeners();
+    return true;
+  }
+
+  bool _beginEnvironmentMutation() {
+    if (_disposed || data == null || inventoryMutating || environmentMutating) {
+      return false;
+    }
+    _invalidateDashboardReads();
+    environmentMutating = true;
+    environmentError = null;
+    environmentErrorDiagnostic = null;
+    return true;
+  }
+
+  void _invalidateDashboardReads() {
+    // Reads started before a write cannot roll back the successful local result.
+    ++_dashboardGeneration;
+    loading = false;
+    captureDirectoryLoading = false;
+  }
+
+  ControlFailure get inventoryFailure => ControlFailure(
+    inventoryError ?? 'error.control_result_unknown',
+    inventoryErrorDiagnostic,
+  );
+
+  void _setInventoryError(Object error) {
+    final failure = ControlFailure.from(error);
+    inventoryError = failure.messageKey;
+    inventoryErrorDiagnostic = failure.diagnostic;
+  }
+
+  Future<void> _reconcileAccountConflict(Object error) async {
+    if (error is! ControlProblem ||
+        error.reasonCode != 'provider_account_conflict') {
+      return;
+    }
+    try {
+      final latest = await _api.loadDashboard();
+      if (!_disposed && data != null) {
+        data = _dashboardWith(
+          data!,
+          accounts: latest.accounts,
+          endpoints: latest.endpoints,
+        );
+      }
+    } catch (_) {
+      // Preserve the failed operation and the user's draft if refresh also fails.
+    }
+  }
+
+  void _setEnvironmentError(Object error) {
+    final failure = switch (error) {
+      EnvironmentUpstreamReferenceException() => const ControlFailure(
+        'error.environment_upstream_changed',
+        'environment_upstream_incompatible',
+      ),
+      EnvironmentAccountSelectionException() => const ControlFailure(
+        'error.account_selection_empty',
+        'environment_account_selection_empty',
+      ),
+      _ => ControlFailure.from(error),
+    };
+    environmentError = failure.messageKey;
+    environmentErrorDiagnostic = failure.diagnostic;
   }
 
   String _terminalCommandError(Object error) => switch (error) {
@@ -3011,6 +3246,7 @@ final class WorkbenchController extends ChangeNotifier {
     if (_disposed) return;
     _disposed = true;
     _poller?.cancel();
+    _evidencePoller?.cancel();
     unawaited(_flushPreferencesAndCloseRuntime());
     super.dispose();
   }

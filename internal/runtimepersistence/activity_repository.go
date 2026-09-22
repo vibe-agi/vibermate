@@ -202,62 +202,17 @@ func (repository *activityRepository) ListExchanges(
 	if err := request.Validate(); err != nil {
 		return activity.Page{}, err
 	}
-	hasOccurrenceWindow := 0
-	var occurredAtOrAfterUnixMS, occurredBeforeUnixMS int64
-	if !request.OccurredAtOrAfter.IsZero() {
-		hasOccurrenceWindow = 1
-		occurredAtOrAfterUnixMS = request.OccurredAtOrAfter.UnixMilli()
-		occurredBeforeUnixMS = request.OccurredBefore.UnixMilli()
-	}
-	return repository.list(
-		ctx,
-		request,
-		`WITH ranked AS (
-		   SELECT
-		     sequence,
-		     activity_id,
-		     occurred_at_unix_ms,
-		     kind,
-		     environment_id,
-		     environment_revision,
-		     environment_digest,
-		     client_endpoint_id,
-		     client_endpoint_revision,
-		     protocol_plan_id,
-		     protocol_plan_revision,
-		     route_id,
-		     route_revision,
-		     account_id,
-		     account_revision,
-		     credential_epoch,
-		     subject_id,
-		     status,
-		     reason_code,
-		     source_kind,
-		     source_display_name,
-		     source_recognition,
-		     capture_run_id,
-		     manual_capture_id,
-		     connection_id,
-		     conversation_projection_id,
-		     conversation_display_name,
-		     conversation_kind,
-		     conversation_evidence,
-		     conversation_actor,
-		     provider_status,
-		     provider_field,
-		     client_field,
-		     client_path,
-		     transport_evidence_json,
-		     ROW_NUMBER() OVER (
-		       PARTITION BY subject_id
-		       ORDER BY CASE kind WHEN 'exchange.completed' THEN 0 ELSE 1 END,
-		                sequence DESC
-		     ) AS exchange_rank
-		   FROM runtime_activities
-		  WHERE kind IN ('exchange.started', 'exchange.completed')
-		 )
-		 SELECT
+	query, arguments := exchangePageQuery(request)
+	return repository.list(ctx, request, query, true, arguments...)
+}
+
+// Filter candidates through the existing scope/sequence indexes, then probe
+// the subject index for a better lifecycle record. Ranking the entire archive
+// before filtering made even a one-conversation read proportional to history.
+// The winner probe deliberately ignores scope, time and cursor: an old start
+// must never reappear after its completion moves to another page/conversation.
+func exchangePageQuery(request activity.PageRequest) (string, []any) {
+	query := `SELECT
 		     sequence, activity_id, occurred_at_unix_ms, kind,
 		     environment_id, environment_revision, environment_digest,
 		     client_endpoint_id, client_endpoint_revision,
@@ -271,34 +226,37 @@ func (repository *activityRepository) ListExchanges(
 		     conversation_kind, conversation_evidence, conversation_actor,
 		     provider_status, provider_field, client_field, client_path,
 		     transport_evidence_json
-		 FROM ranked
-		 WHERE exchange_rank = 1
-		   AND (? = '' OR capture_run_id = ?)
-		   AND (? = '' OR manual_capture_id = ?)
-		   AND (? = '' OR environment_id = ?)
-		   AND (? = '' OR conversation_projection_id = ?)
-		   AND (? = 0 OR occurred_at_unix_ms >= ?)
-		   AND (? = 0 OR occurred_at_unix_ms < ?)
-		   AND (? = 0 OR sequence < ?)
-		 ORDER BY sequence DESC
-		 LIMIT ?`,
-		true,
-		request.CaptureRunID,
-		request.CaptureRunID,
-		request.ManualCaptureID,
-		request.ManualCaptureID,
-		request.EnvironmentID,
-		request.EnvironmentID,
-		request.ConversationProjectionID,
-		request.ConversationProjectionID,
-		hasOccurrenceWindow,
-		occurredAtOrAfterUnixMS,
-		hasOccurrenceWindow,
-		occurredBeforeUnixMS,
-		request.BeforeSequence,
-		request.BeforeSequence,
-		request.Limit+1,
-	)
+		 FROM runtime_activities AS candidate
+		 WHERE kind IN ('exchange.started', 'exchange.completed')`
+	arguments := []any{}
+	for _, filter := range []struct{ column, value string }{
+		{"capture_run_id", request.CaptureRunID},
+		{"manual_capture_id", request.ManualCaptureID},
+		{"environment_id", request.EnvironmentID},
+		{"conversation_projection_id", request.ConversationProjectionID},
+	} {
+		if filter.value != "" {
+			// The non-empty predicate also makes SQLite's partial index usable.
+			query += " AND " + filter.column + " <> '' AND " + filter.column + " = ?"
+			arguments = append(arguments, filter.value)
+		}
+	}
+	if !request.OccurredAtOrAfter.IsZero() {
+		query += " AND occurred_at_unix_ms >= ? AND occurred_at_unix_ms < ?"
+		arguments = append(arguments, request.OccurredAtOrAfter.UnixMilli(), request.OccurredBefore.UnixMilli())
+	}
+	if request.BeforeSequence != 0 {
+		query += " AND sequence < ?"
+		arguments = append(arguments, request.BeforeSequence)
+	}
+	query += ` AND NOT EXISTS (
+		SELECT 1 FROM runtime_activities AS winner
+		WHERE winner.kind IN ('exchange.started', 'exchange.completed')
+		  AND winner.subject_id = candidate.subject_id
+		  AND ((winner.kind = 'exchange.completed' AND candidate.kind = 'exchange.started')
+		       OR (winner.kind = candidate.kind AND winner.sequence > candidate.sequence))
+	) ORDER BY sequence DESC LIMIT ?`
+	return query, append(arguments, request.Limit+1)
 }
 
 func (repository *activityRepository) GetExchange(

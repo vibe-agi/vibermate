@@ -7,6 +7,7 @@ import '../api/control_api.dart';
 import '../api/control_models.dart';
 import 'desktop_daemon_environment.dart';
 import 'desktop_daemon_lifecycle.dart';
+import 'desktop_storage.dart';
 
 final class DesktopRuntimeException implements Exception {
   const DesktopRuntimeException(this.message, {this.reason});
@@ -19,8 +20,15 @@ final class DesktopRuntimeException implements Exception {
 }
 
 final class DesktopRuntime {
-  DesktopRuntime._({required this.api, required Process daemon})
-    : _daemon = daemon;
+  DesktopRuntime._({
+    required this.api,
+    required Process daemon,
+    required this.executable,
+    required this.cacheDirectory,
+    required this.dataDirectory,
+    required this.storage,
+    this.storageNotice,
+  }) : _daemon = daemon;
 
   static const _maximumBootstrapBytes = 16 * 1024;
   static const _flutterOrigin = 'vibermate://desktop';
@@ -28,6 +36,12 @@ final class DesktopRuntime {
 
   final ControlApi api;
   final Process _daemon;
+  final String executable;
+  final String cacheDirectory;
+  final String dataDirectory;
+  final DesktopStorage? storage;
+  final String? storageNotice;
+  Future<void>? _closeFuture;
   bool _closed = false;
 
   bool get isClosed => _closed;
@@ -49,9 +63,62 @@ final class DesktopRuntime {
       dataDirectory: dataDirectory,
       homeDirectory: homeDirectory,
     );
+    final selection = paths.selection;
+    try {
+      final runtime = await _launch(
+        executable,
+        paths.cache,
+        paths.data,
+        storage: paths.storage,
+        remoteServerListenAddress: remoteServerListenAddress,
+      );
+      if (selection?.previous != null) {
+        try {
+          await paths.storage!.save(DesktopStorageSelection(paths.data));
+        } catch (_) {
+          await runtime.close();
+          rethrow;
+        }
+      }
+      return runtime;
+    } catch (error) {
+      if (error is DesktopRuntimeException &&
+          error.reason == 'runtime_already_active') {
+        rethrow;
+      }
+      final previous = selection?.previous;
+      if (previous == null) rethrow;
+      // This fallback is only for an UNCOMMITTED migration. A missing external
+      // volume on later launches must not silently fork the user's history.
+      if (!await File('$previous/runtime.db').exists()) rethrow;
+      await paths.storage!.save(DesktopStorageSelection(previous));
+      return _launch(
+        executable,
+        paths.cache,
+        previous,
+        storage: paths.storage,
+        remoteServerListenAddress: remoteServerListenAddress,
+        storageNotice: 'settings.storage.rolled_back',
+      );
+    }
+  }
+
+  static Future<DesktopRuntime> _launch(
+    String executable,
+    String cache,
+    String data, {
+    DesktopStorage? storage,
+    String? remoteServerListenAddress,
+    String? storageNotice,
+  }) async {
+    if (storage != null &&
+        await storage.settings.exists() &&
+        !await File('$data/runtime.db').exists()) {
+      throw const DesktopStorageFailure('storage_location_unavailable');
+    }
     final arguments = <String>[
-      '--app-cache-dir=${paths.cache}',
-      '--data-dir=${paths.data}',
+      '--app-cache-dir=$cache',
+      '--data-dir=$data',
       '--webview-origin=$_flutterOrigin',
       '--parent-lifetime-fd=0',
       '--bootstrap-fd=1',
@@ -109,10 +176,19 @@ final class DesktopRuntime {
       }
       final session = await _exchangeSession(validated);
       final api = await HttpControlApi.connect(session);
-      return DesktopRuntime._(api: api, daemon: process);
+      return DesktopRuntime._(
+        api: api,
+        daemon: process,
+        executable: executable,
+        cacheDirectory: cache,
+        dataDirectory: data,
+        storage: storage,
+        storageNotice: storageNotice,
+      );
     } catch (_) {
-      await process.stdin.close();
-      process.kill(ProcessSignal.sigterm);
+      await const DesktopDaemonLifecycle.production().close(
+        _IODesktopDaemonProcess(process),
+      );
       rethrow;
     }
   }
@@ -221,7 +297,15 @@ final class DesktopRuntime {
     return file.resolveSymbolicLinks();
   }
 
-  static Future<({String cache, String data})> _runtimePaths({
+  static Future<
+    ({
+      String cache,
+      String data,
+      DesktopStorage? storage,
+      DesktopStorageSelection? selection,
+    })
+  >
+  _runtimePaths({
     String? cacheDirectory,
     String? dataDirectory,
     String? homeDirectory,
@@ -241,29 +325,102 @@ final class DesktopRuntime {
     final cache = Directory(
       cacheDirectory ?? '$home/Library/Caches/$applicationId',
     );
-    final data = Directory(
-      dataDirectory ?? '$home/Library/Application Support/$applicationId',
-    );
+    final defaultData = '$home/Library/Application Support/$applicationId';
+    final storage = dataDirectory == null ? DesktopStorage(defaultData) : null;
+    final selection = await storage?.read();
+    final data = Directory(dataDirectory ?? selection!.directory);
     if (!cache.isAbsolute || !data.isAbsolute) {
       throw const DesktopRuntimeException(
         'Desktop runtime paths must be absolute',
       );
     }
     await cache.create(recursive: true);
-    await data.create(recursive: true);
+    if (dataDirectory != null ||
+        (selection?.directory == defaultData &&
+            !await storage!.settings.exists())) {
+      await data.create(recursive: true);
+    }
     return (
       cache: await cache.resolveSymbolicLinks(),
-      data: await data.resolveSymbolicLinks(),
+      data: await data.exists() ? await data.resolveSymbolicLinks() : data.path,
+      storage: storage,
+      selection: selection,
     );
   }
 
-  Future<void> close() async {
+  Future<void> prepareStorageMove(String target) async {
+    if (storage == null) {
+      throw const DesktopStorageFailure('storage_target_invalid');
+    }
+    await DesktopStorage.validateTarget(dataDirectory, target);
+    final dashboard = await api.loadDashboard();
+    final wasOnline = dashboard.status.offlineHold.canEnter;
+    final hold = wasOnline
+        ? await api.enterOfflineHold(dashboard.status.offlineHold)
+        : dashboard.status.offlineHold;
+    try {
+      if (hold.state != 'held' ||
+          hold.activeActions != 0 ||
+          hold.activeEgress != 0) {
+        throw const DesktopStorageFailure('storage_in_use');
+      }
+      String? cursor;
+      do {
+        final page = await api.captures(cursor: cursor, limit: 100);
+        if (page.items.any((capture) => capture.running)) {
+          throw const DesktopStorageFailure('storage_in_use');
+        }
+        cursor = page.nextCursor;
+      } while (cursor != null);
+    } catch (_) {
+      if (wasOnline) await api.resumeOfflineHold(hold);
+      rethrow;
+    }
+  }
+
+  Future<void> moveStorage(String target) async {
+    await close();
+    final result = await Process.run(
+      executable,
+      [
+        'move-data',
+        '--source=$dataDirectory',
+        '--target=$target',
+        '--app-cache-dir=$cacheDirectory',
+      ],
+      includeParentEnvironment: false,
+      environment: desktopDaemonEnvironment(Platform.environment),
+    );
+    if (result.exitCode != 0) {
+      final code = result.stderr.toString().trim();
+      throw DesktopStorageFailure(
+        const {
+              'storage_target_invalid',
+              'storage_in_use',
+              'storage_copy_failed',
+              'storage_validation_failed',
+            }.contains(code)
+            ? code
+            : 'storage_copy_failed',
+      );
+    }
+    await storage!.save(
+      DesktopStorageSelection(target, previous: dataDirectory),
+    );
+  }
+
+  Future<void> close() => _closeFuture ??= _close();
+
+  Future<void> _close() async {
     if (_closed) return;
     _closed = true;
-    await api.close();
-    await const DesktopDaemonLifecycle.production().close(
-      _IODesktopDaemonProcess(_daemon),
-    );
+    try {
+      await api.close();
+    } finally {
+      await const DesktopDaemonLifecycle.production().close(
+        _IODesktopDaemonProcess(_daemon),
+      );
+    }
   }
 }
 

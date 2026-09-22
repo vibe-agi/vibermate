@@ -665,6 +665,10 @@ func validateAccounts(aggregate Environment, catalog AccountCatalog) error {
 				}
 				for _, frozen := range policy.Accounts {
 					account, exists := catalog.LookupAccount(frozen.ID, route.ProviderTarget.ID)
+					if exists && account.UpstreamEndpointID == route.ProviderTarget.ID &&
+						account.UpstreamEndpointRevision != route.ProviderTarget.Revision {
+						return fmt.Errorf("%w: route %q", ErrUpstreamEndpointStale, route.ID)
+					}
 					if !exists || !account.Active || account.ID != frozen.ID ||
 						account.Revision != frozen.Revision || account.DisplayName != frozen.DisplayName ||
 						account.UpstreamEndpointID != route.ProviderTarget.ID ||

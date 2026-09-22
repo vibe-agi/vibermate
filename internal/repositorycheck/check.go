@@ -732,9 +732,12 @@ func CheckDesktopFrontendBoundary(repositoryRoot string) []Violation {
 		return nil
 	}
 	allowedIO := map[string]struct{}{
-		"ui/flutter_app/lib/main.dart":                               {},
-		"ui/flutter_app/lib/core/api/control_api.dart":               {},
-		"ui/flutter_app/lib/core/bootstrap/desktop_runtime.dart":     {},
+		"ui/flutter_app/lib/main.dart":                           {},
+		"ui/flutter_app/lib/core/api/control_api.dart":           {},
+		"ui/flutter_app/lib/core/bootstrap/desktop_runtime.dart": {},
+		// Filesystem-only adapter for the movable data-directory selection.
+		// Network and process access remain forbidden here.
+		"ui/flutter_app/lib/core/bootstrap/desktop_storage.dart":     {},
 		"ui/flutter_app/lib/core/bootstrap/platform_runtime_io.dart": {},
 		"ui/flutter_app/lib/core/bootstrap/terminal_command.dart":    {},
 		"ui/flutter_app/lib/core/bootstrap/terminal_command_io.dart": {},

@@ -4471,12 +4471,15 @@ final class RouteAccountPolicy {
   final CodeLibraryAccountSelectorRevision? selector;
   final List<RouteAccountReference> accounts;
 
-  RouteAccountPolicy copyWith({int? revision}) => RouteAccountPolicy(
+  RouteAccountPolicy copyWith({
+    int? revision,
+    List<RouteAccountReference>? accounts,
+  }) => RouteAccountPolicy(
     revision: revision ?? this.revision,
     mode: mode,
     fixedAccountId: fixedAccountId,
     selector: selector,
-    accounts: accounts,
+    accounts: accounts ?? this.accounts,
   );
 
   JsonObject toJson() => {
@@ -4891,6 +4894,8 @@ final class EnvironmentClientEndpoint {
 /// revision. Runtime routing, trust, proxy, and credential variables remain
 /// launcher-owned and cannot be overridden here.
 final class EnvironmentLaunchPolicy {
+  static bool validName(String name) => _validLaunchEnvironmentName(name);
+  static bool managedName(String name) => _reservedLaunchEnvironmentName(name);
   const EnvironmentLaunchPolicy({
     required this.setEnv,
     required this.deleteEnv,
@@ -5274,18 +5279,20 @@ final class EnvironmentDraftInput {
   final EnvironmentLaunchPolicy launchEnvironment;
   final EnvironmentPolicySet policySet;
 
-  EnvironmentDraftInput withExpectedDraftRevision(int revision) =>
-      EnvironmentDraftInput(
-        expectedDraftRevision: revision,
-        name: name,
-        state: state,
-        clientEndpoints: clientEndpoints,
-        pluginBindings: pluginBindings,
-        budgetPolicy: budgetPolicy,
-        contentRecording: contentRecording,
-        launchEnvironment: launchEnvironment,
-        policySet: policySet,
-      );
+  EnvironmentDraftInput copyWith({
+    int? expectedDraftRevision,
+    List<EnvironmentClientEndpoint>? clientEndpoints,
+  }) => EnvironmentDraftInput(
+    expectedDraftRevision: expectedDraftRevision ?? this.expectedDraftRevision,
+    name: name,
+    state: state,
+    clientEndpoints: clientEndpoints ?? this.clientEndpoints,
+    pluginBindings: pluginBindings,
+    budgetPolicy: budgetPolicy,
+    contentRecording: contentRecording,
+    launchEnvironment: launchEnvironment,
+    policySet: policySet,
+  );
 
   void validateFor(String environmentId, int expectedBaseRevision) {
     if (!_resourceIdPattern.hasMatch(environmentId) ||

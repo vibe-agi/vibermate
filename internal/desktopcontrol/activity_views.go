@@ -761,10 +761,9 @@ func (handler *Handler) getExchange(writer http.ResponseWriter, request *http.Re
 		return
 	}
 	if handler.conversationIndexer != nil {
-		handler.refreshConversationIndex(request.Context(), activity.ConversationIndexRequest{
-			Limit:        1,
-			CaptureRunID: record.CaptureRunID,
-		})
+		// Detail is a point read, not a request to rescan a whole Capture (or
+		// the entire archive for an unassigned Exchange). Identity can return
+		// persisted or exact wire evidence without visiting client-local logs.
 		identity, identityErr := handler.conversationIndexer.Identity(
 			request.Context(),
 			record.SubjectID,

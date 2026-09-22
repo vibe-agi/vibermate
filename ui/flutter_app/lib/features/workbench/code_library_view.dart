@@ -692,65 +692,68 @@ final class _CapturedExchangePickerDialogState
     );
   }
 
-  Widget _captureField(List<CaptureRecord> captures) =>
-      DropdownButtonFormField<String>(
-        key: const Key('code-library-sample-capture'),
-        initialValue: widget.controller.selectedCaptureKey,
-        isExpanded: true,
-        decoration: InputDecoration(
-          labelText: widget.copy('code_library.sample.picker.capture'),
-        ),
-        items: [
-          for (final capture in captures)
-            DropdownMenuItem(
-              value: capture.key,
-              child: Text(
-                capture.displayName,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-              ),
+  Widget _captureField(List<CaptureRecord> captures) => CompactLabeledControl(
+    label: widget.copy('code_library.sample.picker.capture'),
+    child: DropdownButtonFormField<String>(
+      key: const Key('code-library-sample-capture'),
+      initialValue: widget.controller.selectedCaptureKey,
+      isExpanded: true,
+      decoration: InputDecoration(),
+      items: [
+        for (final capture in captures)
+          DropdownMenuItem(
+            value: capture.key,
+            child: Text(
+              capture.displayName,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
             ),
-        ],
-        onChanged: _loadingExchangeId == null
-            ? (value) {
-                if (value != null) {
-                  setState(() => _error = null);
-                  unawaited(widget.controller.selectCapture(value));
-                }
+          ),
+      ],
+      onChanged: _loadingExchangeId == null
+          ? (value) {
+              if (value != null) {
+                setState(() => _error = null);
+                unawaited(widget.controller.selectCapture(value));
               }
-            : null,
-      );
+            }
+          : null,
+    ),
+  );
 
   Widget _conversationField(List<ConversationSummary> conversations) =>
-      DropdownButtonFormField<String>(
-        key: const Key('code-library-sample-conversation'),
-        initialValue: widget.controller.selectedCaptureConversationKey,
-        isExpanded: true,
-        decoration: InputDecoration(
-          labelText: widget.copy('code_library.sample.picker.conversation'),
-        ),
-        items: [
-          for (final conversation in conversations)
-            DropdownMenuItem(
-              value: conversation.key,
-              child: Text(
-                conversation.conversation.displayName ??
-                    widget.copy(
-                      'code_library.sample.picker.unnamed_conversation',
-                    ),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
+      CompactLabeledControl(
+        label: widget.copy('code_library.sample.picker.conversation'),
+        child: DropdownButtonFormField<String>(
+          key: const Key('code-library-sample-conversation'),
+          initialValue: widget.controller.selectedCaptureConversationKey,
+          isExpanded: true,
+          decoration: InputDecoration(),
+          items: [
+            for (final conversation in conversations)
+              DropdownMenuItem(
+                value: conversation.key,
+                child: Text(
+                  conversation.conversation.displayName ??
+                      widget.copy(
+                        'code_library.sample.picker.unnamed_conversation',
+                      ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
               ),
-            ),
-        ],
-        onChanged: _loadingExchangeId == null
-            ? (value) {
-                if (value != null) {
-                  setState(() => _error = null);
-                  unawaited(widget.controller.selectCaptureConversation(value));
+          ],
+          onChanged: _loadingExchangeId == null
+              ? (value) {
+                  if (value != null) {
+                    setState(() => _error = null);
+                    unawaited(
+                      widget.controller.selectCaptureConversation(value),
+                    );
+                  }
                 }
-              }
-            : null,
+              : null,
+        ),
       );
 
   Widget _activityTile(BuildContext context, ActivityRecord activity) {
@@ -1635,33 +1638,35 @@ final class _AccountSelectorDraftDialogState
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          TextField(
-            key: const Key('code-library-selector-name'),
-            controller: _name,
-            autofocus: true,
-            decoration: InputDecoration(
-              labelText: widget.copy('code_library.name'),
+          CompactLabeledControl(
+            label: widget.copy('code_library.name'),
+            child: TextField(
+              key: const Key('code-library-selector-name'),
+              controller: _name,
+              autofocus: true,
+              decoration: InputDecoration(),
+              onSubmitted: (_) => _next(),
             ),
-            onSubmitted: (_) => _next(),
           ),
           if (widget.collections.length > 1) ...[
             const SizedBox(height: 10),
-            DropdownButtonFormField<String>(
-              initialValue: _collectionId,
-              isExpanded: true,
-              decoration: InputDecoration(
-                labelText: widget.copy('code_library.collection'),
+            CompactLabeledControl(
+              label: widget.copy('code_library.collection'),
+              child: DropdownButtonFormField<String>(
+                initialValue: _collectionId,
+                isExpanded: true,
+                decoration: InputDecoration(),
+                items: [
+                  for (final collection in widget.collections)
+                    DropdownMenuItem(
+                      value: collection.id,
+                      child: Text(collection.displayName),
+                    ),
+                ],
+                onChanged: (value) {
+                  if (value != null) setState(() => _collectionId = value);
+                },
               ),
-              items: [
-                for (final collection in widget.collections)
-                  DropdownMenuItem(
-                    value: collection.id,
-                    child: Text(collection.displayName),
-                  ),
-              ],
-              onChanged: (value) {
-                if (value != null) setState(() => _collectionId = value);
-              },
             ),
           ],
         ],
@@ -1769,79 +1774,83 @@ final class _TransformDraftDialogState extends State<_TransformDraftDialog> {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          TextField(
-            key: const Key('code-library-transform-name'),
-            controller: _name,
-            autofocus: true,
-            decoration: InputDecoration(
-              labelText: widget.copy('code_library.name'),
+          CompactLabeledControl(
+            label: widget.copy('code_library.name'),
+            child: TextField(
+              key: const Key('code-library-transform-name'),
+              controller: _name,
+              autofocus: true,
+              decoration: InputDecoration(),
             ),
           ),
           if (widget.collections.length > 1) ...[
             const SizedBox(height: 10),
-            DropdownButtonFormField<String>(
-              initialValue: _collectionId,
-              isExpanded: true,
-              decoration: InputDecoration(
-                labelText: widget.copy('code_library.collection'),
+            CompactLabeledControl(
+              label: widget.copy('code_library.collection'),
+              child: DropdownButtonFormField<String>(
+                initialValue: _collectionId,
+                isExpanded: true,
+                decoration: InputDecoration(),
+                items: [
+                  for (final collection in widget.collections)
+                    DropdownMenuItem(
+                      value: collection.id,
+                      child: Text(collection.displayName),
+                    ),
+                ],
+                onChanged: (value) {
+                  if (value != null) setState(() => _collectionId = value);
+                },
               ),
-              items: [
-                for (final collection in widget.collections)
-                  DropdownMenuItem(
-                    value: collection.id,
-                    child: Text(collection.displayName),
-                  ),
-              ],
-              onChanged: (value) {
-                if (value != null) setState(() => _collectionId = value);
-              },
             ),
           ],
           if (!widget.starterLocked) ...[
             const SizedBox(height: 10),
-            DropdownButtonFormField<String>(
-              key: const Key('code-library-transform-protocol'),
-              initialValue: _wireProtocol,
-              isExpanded: true,
-              decoration: InputDecoration(
-                labelText: widget.copy('code_library.starter.protocol'),
+            CompactLabeledControl(
+              label: widget.copy('code_library.starter.protocol'),
+              child: DropdownButtonFormField<String>(
+                key: const Key('code-library-transform-protocol'),
+                initialValue: _wireProtocol,
+                isExpanded: true,
+                decoration: InputDecoration(),
+                items: const [
+                  DropdownMenuItem(
+                    value: 'anthropic_messages',
+                    child: Text('Anthropic Messages'),
+                  ),
+                  DropdownMenuItem(
+                    value: 'openai_responses',
+                    child: Text('OpenAI Responses'),
+                  ),
+                  DropdownMenuItem(
+                    value: 'openai_chat',
+                    child: Text('OpenAI Chat'),
+                  ),
+                ],
+                onChanged: (value) {
+                  if (value != null) setState(() => _wireProtocol = value);
+                },
               ),
-              items: const [
-                DropdownMenuItem(
-                  value: 'anthropic_messages',
-                  child: Text('Anthropic Messages'),
-                ),
-                DropdownMenuItem(
-                  value: 'openai_responses',
-                  child: Text('OpenAI Responses'),
-                ),
-                DropdownMenuItem(
-                  value: 'openai_chat',
-                  child: Text('OpenAI Chat'),
-                ),
-              ],
-              onChanged: (value) {
-                if (value != null) setState(() => _wireProtocol = value);
-              },
             ),
             const SizedBox(height: 10),
-            DropdownButtonFormField<_TransformStarter>(
-              key: const Key('code-library-transform-starter'),
-              initialValue: _starter,
-              isExpanded: true,
-              decoration: InputDecoration(
-                labelText: widget.copy('code_library.starter'),
+            CompactLabeledControl(
+              label: widget.copy('code_library.starter'),
+              child: DropdownButtonFormField<_TransformStarter>(
+                key: const Key('code-library-transform-starter'),
+                initialValue: _starter,
+                isExpanded: true,
+                decoration: InputDecoration(),
+                items: [
+                  for (final starter in _TransformStarter.values)
+                    DropdownMenuItem(
+                      value: starter,
+                      child: Text(_starterLabel(widget.copy, starter)),
+                    ),
+                ],
+                onChanged: (value) {
+                  if (value != null) setState(() => _starter = value);
+                },
               ),
-              items: [
-                for (final starter in _TransformStarter.values)
-                  DropdownMenuItem(
-                    value: starter,
-                    child: Text(_starterLabel(widget.copy, starter)),
-                  ),
-              ],
-              onChanged: (value) {
-                if (value != null) setState(() => _starter = value);
-              },
             ),
           ],
         ],

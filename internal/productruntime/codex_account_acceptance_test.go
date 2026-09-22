@@ -12,6 +12,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/vibe-agi/vibermate/internal/providerauth"
 )
 
 // Opt-in: VIBERMATE_CODEX_ACCEPTANCE=/absolute/path/to/codex go test
@@ -25,7 +27,7 @@ func TestInstalledCodexReadsManagedAccount(t *testing.T) {
 	if !filepath.IsAbs(binary) {
 		t.Fatal("acceptance CLI path must be absolute")
 	}
-	f := newAccountReadFixture(t)
+	f := newAccountReadFixtureWithDriver(t, providerauth.CodexOAuthDriverRef())
 	f.aggregate.ClientEndpoints[0].ProtocolPlans[0].Destination.Upstream.Routes[0].AllowAccountHistory = true
 	proxyURL := f.serveProxy(t)
 	directory := t.TempDir()
@@ -102,6 +104,10 @@ func TestInstalledCodexReadsManagedAccount(t *testing.T) {
 	quota := rpc("account/rateLimits/read", nil)
 	if !bytes.Contains(quota, []byte(`"usedPercent":25`)) {
 		t.Fatal("native CLI did not project the managed B quota")
+	}
+	quota = rpc("account/rateLimits/read", map[string]bool{"supportsLunaReserve": true, "excludeResetCreditDetails": false})
+	if !bytes.Contains(quota, []byte(`"usedPercent":25`)) {
+		t.Fatal("native TUI refresh did not project the managed B quota")
 	}
 	history := rpc("account/usage/read", nil)
 	if !bytes.Contains(history, []byte("1200")) {

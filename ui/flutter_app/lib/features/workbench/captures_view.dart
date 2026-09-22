@@ -148,9 +148,7 @@ final class _CapturesViewState extends State<CapturesView> {
           onConfirm: () async {
             final result = await widget.controller.deleteCapture(capture.key);
             if (result == null) {
-              throw StateError(
-                widget.controller.inventoryError ?? 'capture delete failed',
-              );
+              throw widget.controller.inventoryFailure;
             }
             return result;
           },
@@ -2240,98 +2238,107 @@ final class _ManualCaptureCreateDialogState
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                TextFormField(
-                  key: const Key('manual-capture-name'),
-                  controller: _name,
-                  autofocus: true,
-                  maxLength: 256,
-                  decoration: InputDecoration(
-                    labelText: copy('capture.manual.name'),
-                    hintText: copy('capture.manual.name.placeholder'),
-                    counterText: '',
+                CompactLabeledControl(
+                  label: copy('capture.manual.name'),
+                  child: TextFormField(
+                    key: const Key('manual-capture-name'),
+                    controller: _name,
+                    autofocus: true,
+                    maxLength: 256,
+                    decoration: InputDecoration(
+                      hintText: copy('capture.manual.name.placeholder'),
+                      counterText: '',
+                    ),
+                    validator: (value) => value == null || value.trim().isEmpty
+                        ? copy('routes.validation.required')
+                        : null,
                   ),
-                  validator: (value) => value == null || value.trim().isEmpty
-                      ? copy('routes.validation.required')
-                      : null,
                 ),
                 const SizedBox(height: 7),
-                CompactSelectField<String>(
-                  key: const Key('manual-capture-environment'),
-                  initialValue: _environmentId,
-                  decoration: InputDecoration(
-                    labelText: copy('capture.environment'),
-                  ),
-                  items: [
-                    for (final environment in environments)
-                      DropdownMenuItem(
-                        value: environment.id,
-                        child: Text(environment.name),
-                      ),
-                  ],
-                  onChanged: widget.controller.mutating
-                      ? null
-                      : (value) {
-                          setState(() {
-                            _environmentId = value!;
-                            _context = null;
-                            _loadingContext = true;
-                            _submitted = false;
-                          });
-                          unawaited(_loadContext());
-                        },
-                ),
-                const SizedBox(height: 9),
-                CompactSelectField<String>(
-                  initialValue: _clientClass,
-                  decoration: InputDecoration(
-                    labelText: copy('capture.manual.client_class'),
-                  ),
-                  items: [
-                    for (final value in const ['desktop_app', 'cli', 'other'])
-                      DropdownMenuItem(
-                        value: value,
-                        child: Text(copy('capture.manual.client_class.$value')),
-                      ),
-                  ],
-                  onChanged: widget.controller.mutating
-                      ? null
-                      : (value) => setState(() => _clientClass = value!),
-                ),
-                const SizedBox(height: 9),
-                CompactSelectField<String>(
-                  initialValue: _lifetime,
-                  decoration: InputDecoration(
-                    labelText: copy('capture.manual.lifetime'),
-                  ),
-                  items: [
-                    for (final value in const ['until_revoked', 'temporary'])
-                      DropdownMenuItem(
-                        value: value,
-                        child: Text(copy('capture.manual.lifetime.$value')),
-                      ),
-                  ],
-                  onChanged: widget.controller.mutating
-                      ? null
-                      : (value) => setState(() => _lifetime = value!),
-                ),
-                if (_lifetime == 'temporary' && _context != null) ...[
-                  const SizedBox(height: 9),
-                  CompactSelectField<int>(
-                    key: const Key('manual-capture-duration'),
-                    initialValue: _temporarySeconds,
-                    decoration: InputDecoration(
-                      labelText: copy('capture.manual.duration'),
-                    ),
+                CompactLabeledControl(
+                  label: copy('capture.environment'),
+                  child: CompactSelectField<String>(
+                    key: const Key('manual-capture-environment'),
+                    initialValue: _environmentId,
+                    decoration: InputDecoration(),
                     items: [
-                      for (final seconds in _durationOptions(_context!))
+                      for (final environment in environments)
                         DropdownMenuItem(
-                          value: seconds,
-                          child: Text(_durationLabel(seconds, copy)),
+                          value: environment.id,
+                          child: Text(environment.name),
                         ),
                     ],
                     onChanged: widget.controller.mutating
                         ? null
-                        : (value) => setState(() => _temporarySeconds = value!),
+                        : (value) {
+                            setState(() {
+                              _environmentId = value!;
+                              _context = null;
+                              _loadingContext = true;
+                              _submitted = false;
+                            });
+                            unawaited(_loadContext());
+                          },
+                  ),
+                ),
+                const SizedBox(height: 9),
+                CompactLabeledControl(
+                  label: copy('capture.manual.client_class'),
+                  child: CompactSelectField<String>(
+                    initialValue: _clientClass,
+                    decoration: InputDecoration(),
+                    items: [
+                      for (final value in const ['desktop_app', 'cli', 'other'])
+                        DropdownMenuItem(
+                          value: value,
+                          child: Text(
+                            copy('capture.manual.client_class.$value'),
+                          ),
+                        ),
+                    ],
+                    onChanged: widget.controller.mutating
+                        ? null
+                        : (value) => setState(() => _clientClass = value!),
+                  ),
+                ),
+                const SizedBox(height: 9),
+                CompactLabeledControl(
+                  label: copy('capture.manual.lifetime'),
+                  child: CompactSelectField<String>(
+                    initialValue: _lifetime,
+                    decoration: InputDecoration(),
+                    items: [
+                      for (final value in const ['until_revoked', 'temporary'])
+                        DropdownMenuItem(
+                          value: value,
+                          child: Text(copy('capture.manual.lifetime.$value')),
+                        ),
+                    ],
+                    onChanged: widget.controller.mutating
+                        ? null
+                        : (value) => setState(() => _lifetime = value!),
+                  ),
+                ),
+                if (_lifetime == 'temporary' && _context != null) ...[
+                  const SizedBox(height: 9),
+                  CompactLabeledControl(
+                    label: copy('capture.manual.duration'),
+                    child: CompactSelectField<int>(
+                      key: const Key('manual-capture-duration'),
+                      initialValue: _temporarySeconds,
+                      decoration: InputDecoration(),
+                      items: [
+                        for (final seconds in _durationOptions(_context!))
+                          DropdownMenuItem(
+                            value: seconds,
+                            child: Text(_durationLabel(seconds, copy)),
+                          ),
+                      ],
+                      onChanged: widget.controller.mutating
+                          ? null
+                          : (value) =>
+                                setState(() => _temporarySeconds = value!),
+                    ),
                   ),
                 ],
                 const SizedBox(height: 11),

@@ -351,11 +351,12 @@ func Start(ctx context.Context, options Options) (*Host, error) {
 		return fail("ManualCapture control routes", err)
 	}
 	captureHandler, err := capturecontrol.New(capturecontrol.Options{
-		Runs:        runtime.CaptureRuns(),
-		Principals:  cliControl,
-		Issuer:      grantIssuer,
-		Manual:      manualCaptureHandler,
-		RunLifetime: options.CaptureRunLifetime,
+		LaunchSnapshots: runtime.LaunchSnapshots(),
+		Runs:            runtime.CaptureRuns(),
+		Principals:      cliControl,
+		Issuer:          grantIssuer,
+		Manual:          manualCaptureHandler,
+		RunLifetime:     options.CaptureRunLifetime,
 	})
 	if err != nil {
 		return fail("capture control routes", err)
@@ -417,6 +418,7 @@ func Start(ctx context.Context, options Options) (*Host, error) {
 		return fail("upstream model catalog", err)
 	}
 	application, err := desktopcontrol.New(desktopcontrol.Options{
+		Storage:             runtime,
 		Readiness:           ready,
 		Status:              runtime,
 		Environments:        runtime.Environments(),

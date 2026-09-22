@@ -5,6 +5,7 @@ import '../../core/design/viber_theme.dart';
 import '../../core/design/workbench_widgets.dart';
 import '../../core/i18n/app_copy.dart';
 import 'workbench_controller.dart';
+import 'control_failure_notice.dart';
 
 Future<void> showEndpointAccountLinker(
   BuildContext context, {
@@ -121,7 +122,11 @@ final class _AccountLinkDialogState extends State<_AccountLinkDialog> {
               ),
             ),
             if (controller.inventoryError case final error?)
-              InlineNotice(message: copy.maybe(error) ?? error, error: true),
+              ControlFailureNotice(
+                message: error,
+                copy: copy,
+                diagnostic: controller.inventoryErrorDiagnostic,
+              ),
             const SizedBox(height: 12),
             Flexible(
               child: candidates.isEmpty
@@ -357,7 +362,11 @@ Future<void> showAccountUnlinkConfirmation(
             const SizedBox(height: 12),
             Text(copy('provider_accounts.unlink_hint')),
             if (controller.inventoryError case final error?)
-              InlineNotice(message: copy.maybe(error) ?? error, error: true),
+              ControlFailureNotice(
+                message: error,
+                copy: copy,
+                diagnostic: controller.inventoryErrorDiagnostic,
+              ),
           ],
         ),
         actions: [

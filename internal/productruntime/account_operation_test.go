@@ -15,6 +15,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/accountoperation"
 	"github.com/vibe-agi/vibermate/internal/accountselector"
 	"github.com/vibe-agi/vibermate/internal/codelibrary"
+	"github.com/vibe-agi/vibermate/internal/codexoauth"
 	"github.com/vibe-agi/vibermate/internal/egressaudit"
 	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/hostcontract"
@@ -61,6 +62,11 @@ type accountReadFixture struct {
 
 func newAccountReadFixture(t *testing.T) accountReadFixture {
 	t.Helper()
+	return newAccountReadFixtureWithDriver(t, providerauth.StaticHeaderDriverRef())
+}
+
+func newAccountReadFixtureWithDriver(t *testing.T, driver providerauth.DriverRef) accountReadFixture {
+	t.Helper()
 	ctx := context.Background()
 	gate, err := offlinehold.New(offlinehold.Config{MaxHeldRequests: 8, MaxHeldBytes: 1 << 20, MaxHoldDuration: time.Second, ReleaseConcurrency: 2})
 	if err != nil {
@@ -69,8 +75,22 @@ func newAccountReadFixture(t *testing.T) accountReadFixture {
 	options := testOptions(t, hostcontract.Desktop(), gate)
 	runtime := startTestRuntime(t, options)
 	t.Cleanup(func() { shutdownRuntime(t, runtime) })
-	token := "eyJhbGciOiJub25lIn0." + base64.RawURLEncoding.EncodeToString([]byte(`{"https://api.openai.com/auth":{"chatgpt_account_id":"workspace-B"}}`)) + ".synthetic"
-	material, err := providerauth.NewMaterial(token, nil, nil)
+	token := "eyJhbGciOiJub25lIn0." + base64.RawURLEncoding.EncodeToString([]byte(fmt.Sprintf(`{"exp":%d,"https://api.openai.com/auth":{"chatgpt_account_id":"workspace-B"}}`, time.Now().Add(time.Hour).Unix()))) + ".synthetic"
+	credentialBytes := token
+	if driver == providerauth.CodexOAuthDriverRef() {
+		credential, err := codexoauth.ImportAuthJSON([]byte(fmt.Sprintf(`{"auth_mode":"chatgpt","tokens":{"access_token":%q,"id_token":%q,"refresh_token":"synthetic-refresh-B","account_id":"workspace-B"},"last_refresh":%q}`, token, token, time.Now().UTC().Format(time.RFC3339Nano))))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer credential.Destroy()
+		payload, err := credential.MarshalBinary()
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer clear(payload)
+		credentialBytes = string(payload)
+	}
+	material, err := providerauth.NewMaterial(credentialBytes, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -87,7 +107,7 @@ func newAccountReadFixture(t *testing.T) accountReadFixture {
 	defer secret.Destroy()
 	view, err := runtime.accounts.Create(ctx, provideraccount.CreateCommand{
 		ID: "managed-b", DisplayName: "Managed B", UpstreamEndpointID: upstreamendpoint.ChatGPTOfficialID,
-		Driver: providerauth.StaticHeaderDriverRef(), Secret: secret,
+		Driver: driver, Secret: secret,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -121,7 +141,11 @@ func newAccountReadFixture(t *testing.T) accountReadFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	transport, err := providertransport.NewClient(providertransport.ClientOptions{Coordinator: gate, Authenticator: auth, Transport: wire, InstanceIDs: options.InstanceIDs, Audit: runtime.egressCompletion})
+	oauth, err := providertransport.NewCodexOAuthAuthenticator(options.Secrets)
+	if err != nil {
+		t.Fatal(err)
+	}
+	transport, err := providertransport.NewClient(providertransport.ClientOptions{Coordinator: gate, Authenticators: []providertransport.Authenticator{auth, oauth}, Transport: wire, InstanceIDs: options.InstanceIDs, Audit: runtime.egressCompletion})
 	if err != nil {
 		t.Fatal(err)
 	}

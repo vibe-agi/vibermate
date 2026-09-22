@@ -1054,6 +1054,98 @@ void _validateModelId(String value, String name) {
   }
 }
 
+final class EnvironmentUpstreamReferenceException implements Exception {
+  const EnvironmentUpstreamReferenceException(this.endpointId);
+
+  final String endpointId;
+}
+
+final class EnvironmentAccountSelectionException implements Exception {
+  const EnvironmentAccountSelectionException();
+}
+
+/// Prepares a new draft against the current service catalog, without rewriting
+/// the published base. A capability-only service update can advance its frozen
+/// reference; a changed destination or lost capability needs an explicit choice.
+List<EnvironmentClientEndpoint> prepareEnvironmentDraftEndpoints({
+  required List<EnvironmentClientEndpoint> base,
+  required List<EnvironmentClientEndpoint> edited,
+  required List<UpstreamEndpoint> upstreamEndpoints,
+  required List<ProviderAccount> availableAccounts,
+}) {
+  final current = {
+    for (final endpoint in upstreamEndpoints) endpoint.id: endpoint,
+  };
+  final refreshed = edited
+      .map((endpoint) {
+        final json = endpoint.toJson();
+        for (final plan in json['protocolPlans']! as List) {
+          final upstream = plan['destination']['upstream'];
+          if (upstream == null) continue;
+          for (final route in upstream['routes'] as List) {
+            final frozen = EnvironmentProviderTarget.fromJson(
+              route['providerTarget'],
+              'providerTarget',
+            );
+            final service = current[frozen.id];
+            if (service == null ||
+                service.state != 'active' ||
+                service.revision < frozen.revision ||
+                service.origin != frozen.origin ||
+                service.realmId != frozen.realmId ||
+                !service.backendProtocols.contains(route['backendProtocol']) ||
+                !frozen.capabilities.every(service.capabilities.contains)) {
+              throw EnvironmentUpstreamReferenceException(frozen.id);
+            }
+            route['providerTarget'] = EnvironmentProviderTarget(
+              id: service.id,
+              revision: service.revision,
+              origin: service.origin,
+              realmId: service.realmId,
+              capabilities: [...service.capabilities]..sort(),
+            ).toJson();
+            final policy = RouteAccountPolicy.fromJson(
+              route['accountPolicy'],
+              'accountPolicy',
+            );
+            if (policy.mode == 'javascript') {
+              // The server resolves the selector's eligible accounts again.
+              // Prepare the same authority before normalizing child revisions.
+              final eligible =
+                  availableAccounts
+                      .where(
+                        (account) =>
+                            account.usable &&
+                            account.isLinkedTo(service.id) &&
+                            account.credentialOrigin ==
+                                service.origin.toString(),
+                      )
+                      .toList()
+                    ..sort((a, b) => a.id.compareTo(b.id));
+              if (eligible.isEmpty) {
+                throw const EnvironmentAccountSelectionException();
+              }
+              route['accountPolicy'] = policy
+                  .copyWith(
+                    accounts: [
+                      for (final account in eligible)
+                        RouteAccountReference(
+                          id: account.id,
+                          revision: account.revision,
+                          displayName: account.displayName,
+                        ),
+                    ],
+                  )
+                  .toJson();
+            }
+          }
+        }
+        return EnvironmentClientEndpoint.fromJson(json, 'clientEndpoint');
+      })
+      .toList(growable: false);
+  return normalizeEnvironmentDraftRevisions(base: base, edited: refreshed);
+}
+
 /// Rebuilds an edited Environment graph against its published base so every
 /// changed authority advances exactly once, regardless of how many local UI
 /// gestures produced the candidate.

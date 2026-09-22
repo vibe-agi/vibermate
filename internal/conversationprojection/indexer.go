@@ -100,7 +100,7 @@ func (indexer *Indexer) Reindex(
 		case !errors.Is(identityErr, activity.ErrExchangeNotFound):
 			return identityErr
 		}
-		content, contentErr := indexer.contents.Get(ctx, record.SubjectID)
+		content, contentErr := indexer.contents.GetConversationEvidence(ctx, record.SubjectID)
 		if errors.Is(contentErr, exchangecontent.ErrNotFound) {
 			if storedProtocolIdentity != nil &&
 				storedProtocolIdentity.ProviderResponseID != "" {
@@ -120,22 +120,15 @@ func (indexer *Indexer) Reindex(
 		if contentErr != nil {
 			return contentErr
 		}
-		responseID := ""
-		responseEvidence := []protocolcore.ProtocolEvidenceValue(nil)
-		if content.Response != nil {
-			responseID = content.Response.ID
-			responseEvidence = append(
-				responseEvidence,
-				content.Response.ProtocolEvidence...,
-			)
-		}
+		responseID := content.ResponseID
+		responseEvidence := content.ResponseProtocolEvidence
 		if storedProtocolIdentity == nil {
 			// Exact wire identifiers make the Conversation usable immediately,
 			// before the Agent client flushes its append-only local session log.
 			// Persist them outside transcript retention; PutConversationIdentity
 			// later allows only a structurally consistent local-state deepening.
 			if networkIdentity, found := agentconversation.ClientIdentityFromProtocolEvidence(
-				content.Request.ProtocolEvidence,
+				content.RequestProtocolEvidence,
 				responseID,
 				record.OccurredAt,
 			); found {
@@ -159,7 +152,7 @@ func (indexer *Indexer) Reindex(
 		}
 		protocolEvidence := append(
 			[]protocolcore.ProtocolEvidenceValue(nil),
-			content.Request.ProtocolEvidence...,
+			content.RequestProtocolEvidence...,
 		)
 		if len(protocolEvidence) == 0 && storedProtocolIdentity != nil {
 			protocolEvidence = protocolEvidenceFromIdentity(
@@ -262,20 +255,16 @@ func (indexer *Indexer) Identity(
 	if err == nil || !errors.Is(err, activity.ErrExchangeNotFound) {
 		return identity, err
 	}
-	content, contentErr := indexer.contents.Get(ctx, exchangeID)
+	content, contentErr := indexer.contents.GetConversationEvidence(ctx, exchangeID)
 	if errors.Is(contentErr, exchangecontent.ErrNotFound) {
 		return agentconversation.ClientIdentity{}, activity.ErrExchangeNotFound
 	}
 	if contentErr != nil {
 		return agentconversation.ClientIdentity{}, contentErr
 	}
-	responseID := ""
-	if content.Response != nil {
-		responseID = content.Response.ID
-	}
 	identity, found := agentconversation.ClientIdentityFromProtocolEvidence(
-		content.Request.ProtocolEvidence,
-		responseID,
+		content.RequestProtocolEvidence,
+		content.ResponseID,
 		content.RecordedAt,
 	)
 	if !found {

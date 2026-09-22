@@ -51,6 +51,43 @@ final class AppCopy {
   }
 
   static const _en = <String, String>{
+    'error.account_selection_empty':
+        'No usable accounts are linked to this service. Link a ready account under Upstream services, then review the policy again.',
+    'error.deleted_refresh_failed':
+        'Deleted successfully, but the list could not be refreshed. Refresh the page; there is no need to delete it again.',
+    'error.diagnostic_details': 'Diagnostic details',
+    'error.account_scope_mismatch':
+        'This account is not linked to the service, or its address or sign-in type does not match. Check the linked accounts under Upstream services.',
+    'error.account_in_use':
+        'This account is still used by a traffic policy or an active request. Update the affected policies and wait for requests to finish before unlinking or deleting it.',
+    'error.account_busy':
+        'Another operation is updating this account. Wait a moment and try again.',
+    'error.account_conflict':
+        'The account changed before this edit was saved. Refresh the account information and try again.',
+    'error.account_disabled':
+        'This account is disabled. Select an active account before continuing.',
+    'error.account_credential_unavailable':
+        'The account credential is unavailable. Check its status under Upstream accounts, then try again.',
+    'error.account_not_found':
+        'This account no longer exists. Refresh the page and select another account.',
+    'error.upstream_not_found':
+        'This upstream service no longer exists. Refresh the page and select another service.',
+    'error.configuration_conflict':
+        'The configuration changed before this edit was saved. Refresh the page and review your changes again.',
+    'error.policy_review_stale':
+        'This policy review is no longer current. Review the draft again before publishing.',
+    'error.configuration_invalid':
+        'These settings could not be accepted. Check the selected service, account and required fields, then try again.',
+    'error.control_session_expired':
+        'The management session is no longer authorized. Reconnect to the runtime or sign in again.',
+    'error.control_result_unknown':
+        'The operation could not be confirmed. Check the connection and refresh the page to see whether it took effect before trying again.',
+    'error.control_contract':
+        'The configuration or runtime response could not be understood. Check the inputs and that the app and runtime versions match, then refresh and try again.',
+    'error.environment_upstream_stale':
+        'The upstream service was updated. Refresh the page, then review and publish the policy again.',
+    'error.environment_upstream_changed':
+        'An upstream service has changed or is unavailable. Refresh the page and reselect the service before publishing.',
     'app.name': 'ViberMate',
     'app.subtitle': 'Agent traffic runtime',
     'status.ready': 'Ready',
@@ -117,9 +154,9 @@ final class AppCopy {
     'account_facts.minutes': '{count} minutes',
     'account_facts.seconds': '{count} seconds',
     'environment.account_history.scope':
-        'Codex quota queries follow a single fixed account. The CLI’s local login identity is unchanged.',
+        'With one fixed route/account, /status quota follows that account; Account still shows the CLI’s local login.',
     'environment.account_history.allow':
-        'Allow CLI to read this account’s history',
+        'Allow /usage to read this account’s history',
     'environment.account_history.detail':
         'Shares account-wide historical usage, beyond this Capture. Off by default; changing accounts clears this permission.',
     'environment.account_history.ambiguous':
@@ -788,7 +825,7 @@ final class AppCopy {
     'environment.endpoint.remove': 'Remove upstream service from draft',
     'environment.endpoint.routes': '{count} routes',
     'environment.endpoint.account_required':
-        'Create a ready account for this upstream service before routing to it.',
+        'Link a ready account in Upstream services before routing to this service.',
     'environment.edit.title': 'Edit {name}',
     'environment.edit.identity': 'Identity',
     'environment.tab.traffic': 'Traffic routing',
@@ -822,6 +859,52 @@ final class AppCopy {
     'environment.recording.retention': 'Retention',
     'environment.recording.days': 'days',
     'environment.launch.label': 'Child process environment',
+    'environment.launch.block_tab': 'Do not pass to Agent',
+    'environment.launch.set_tab': 'Add / override',
+    'environment.launch.source': 'Launch snapshot',
+    'environment.launch.local': 'Local CLI',
+    'environment.launch.remote': 'Remote CLI',
+    'environment.launch.refresh': 'Refresh snapshots',
+    'environment.launch.source_help':
+        'Only names are collected from the actual launching terminal; values stay there. Refresh loads the latest snapshot, not the current terminal environment. Run through ViberMate again to update it. Snapshots are kept in memory until the runtime stops.',
+    'environment.launch.empty_snapshot':
+        'No launch snapshot yet. Start an Agent with vibermate run, then refresh. You can also add names below.',
+    'environment.launch.load_failed':
+        'Could not load snapshots. Retry, or edit rules by name; existing rules are unchanged.',
+    'environment.launch.search': 'Search variable names',
+    'environment.launch.all': 'All',
+    'environment.launch.sensitive': 'Possible credentials',
+    'environment.launch.selected': 'Selected',
+    'environment.launch.select_sensitive': 'Select possible credentials',
+    'environment.launch.inherit':
+        'Unchecked variables still inherit from the launching terminal.',
+    'environment.launch.names_only': 'Values stay in the terminal',
+    'environment.launch.missing': 'Not in this snapshot · rule retained',
+    'environment.launch.ordinary': 'Ordinary variable',
+    'environment.launch.essential': 'May affect tool execution',
+    'environment.launch.essential_warning':
+        'Blocking PATH, HOME or other tool settings may stop commands or change where tools find their configuration.',
+    'environment.launch.manual': 'Add a blocking rule by name',
+    'environment.launch.managed': 'Runtime-managed · read only',
+    'environment.launch.managed_error':
+        'This variable is managed by ViberMate. Configure credentials, routing or trust in their respective settings.',
+    'environment.launch.name_error':
+        'Use letters, numbers and underscores; start with a letter or underscore (up to 128 characters).',
+    'environment.launch.conflict_error':
+        'This name is already used in another rule. Remove that rule first.',
+    'environment.launch.limit_error':
+        'A policy can have up to 128 environment rules.',
+    'environment.launch.save': 'Apply to policy',
+    'environment.launch.effective':
+        'After publishing, applies to new launches only. System environment is unchanged.',
+    'environment.launch.security':
+        'Filters inherited variables, not file or network access: this is not a sandbox. Name-based credential detection is only a hint; new or unrecognized secrets are not blocked automatically. Runtime-managed variables are handled by routing and credential policy.',
+    'environment.launch.truncated':
+        'The snapshot is partial. You can still add rules for missing names.',
+    'environment.launch.no_matches': 'No matching variables',
+    'environment.launch.set_help':
+        'These values are saved as policy settings. Use Upstream accounts for account credentials.',
+    'environment.launch.blocked_count': '{count} blocked',
     'environment.launch.detail':
         'Applied by vibermate run before the Agent starts.',
     'environment.launch.summary': 'Set {set} · Delete {delete}',
@@ -840,6 +923,11 @@ final class AppCopy {
     'environment.launch.validation':
         'Use a unique environment variable name that is not runtime-owned.',
     'environment.account': 'Account selection',
+    'environment.account.select_service': 'Select an upstream service first',
+    'environment.account.choose': 'Select an account or rule',
+    'environment.account.no_links': 'No linked accounts',
+    'environment.account.selection_lost': 'Unlinked or deleted',
+    'environment.account.disabled': 'Disabled',
     'environment.account.owner':
         'Only accounts explicitly linked to this upstream service are listed.',
     'environment.account.client':
@@ -1223,7 +1311,7 @@ final class AppCopy {
     'routes.account.codex_auth_json_hint':
         'Paste the complete contents of ~/.codex/auth.json. ViberMate imports the account identity and rotating OAuth credentials.',
     'routes.account.codex_ownership':
-        'Import transfers refresh ownership to ViberMate. Do not keep this same token set active in another Codex installation; two refresh owners can invalidate each other.',
+        'After saving, stop using this auth.json and its copies in the original Codex client or other tools. ViberMate manages automatic and manual refresh; the original file is not updated. Sharing these credentials can cause refresh conflicts and sign-in failures.',
     'routes.account.paste': 'Paste from clipboard',
     'routes.account.codex_profile': 'Account {account} · Plan {plan}',
     'routes.account.oauth_state.ready': 'Refresh managed',
@@ -1586,8 +1674,39 @@ final class AppCopy {
     'settings.storage.not_encrypted':
         'The runtime database is not encrypted at rest. Only your user account’s file permissions protect it.',
     'settings.storage.location':
-        'Conversation and Raw HTTP evidence are written to this machine\'s '
-        'ViberMate application support directory.',
+        'SQLite stores conversations, Raw HTTP evidence and configuration on the connected Runtime’s machine.',
+    'settings.storage.directory': 'Data directory',
+    'settings.storage.change': 'Change location',
+    'settings.storage.picker_failed':
+        'Could not open the folder picker. Check the App’s file-access permission and try again.',
+    'settings.storage.new_directory': 'New data directory',
+    'settings.storage.move_confirm': 'Move and restart',
+    'settings.storage.moving': 'Moving data…',
+    'settings.storage.move_confirmation':
+        'Creates a ViberMate folder at this location. Copies and verifies all data, then restarts the runtime. Stop running captures first. The original folder is kept as a backup; it will not receive new records. macOS Keychain credentials stay on this Mac.',
+    'settings.storage.moved':
+        'Storage location changed. The original folder is kept as a backup.',
+    'settings.storage.rolled_back':
+        'The new location could not start. Restored the original location; no source data was deleted.',
+    'settings.storage.storage_target_invalid':
+        'Choose a different local folder without a ViberMate subfolder, outside the current data directory.',
+    'settings.storage.storage_in_use':
+        'Data is in use. Stop running captures and wait for active operations to finish, then try again.',
+    'settings.storage.storage_copy_failed':
+        'Could not finish moving data. The original location remains in use. Check free space and permissions; an incomplete copy may remain at the destination.',
+    'settings.storage.storage_validation_failed':
+        'The copied database failed validation. The original location remains in use; the copy was not selected.',
+    'settings.storage.storage_settings_invalid':
+        'The storage-location setting could not be read or saved. Check permissions on the App support directory; existing data was not removed.',
+    'settings.storage.storage_location_unavailable':
+        'The selected data directory is unavailable. Reconnect its disk or restore the directory and retry. No empty database has been created.',
+    'settings.storage.database': 'SQLite database',
+    'settings.storage.location_failed':
+        'Storage location could not be read. Retry after checking the Runtime connection.',
+    'settings.storage.move_hint':
+        'Move the whole data directory only after stopping the Runtime; do not copy an open database on its own.',
+    'settings.storage.server_path':
+        'Server deployments choose this directory with --data-dir; containers must also mount persistent storage. This is not a folder on your browser’s machine.',
     'settings.storage.retention':
         'New traffic policies keep full-content evidence for 30 days. Recording '
         'mode and retention are owned by each traffic policy.',
@@ -1989,6 +2108,26 @@ final class AppCopy {
   };
 
   static const _zh = <String, String>{
+    'error.account_selection_empty':
+        '此上游服务没有可用的关联账号。请先在「上游服务」中关联凭据就绪的账号，再检查策略。',
+    'error.deleted_refresh_failed': '已删除，但列表暂时未能刷新。请刷新页面，无需再次删除。',
+    'error.diagnostic_details': '诊断信息',
+    'error.account_scope_mismatch': '账号尚未关联到此服务，或适用地址、认证类型不匹配。请在「上游服务」中检查关联账号。',
+    'error.account_in_use': '账号仍被流量策略或进行中的请求使用，暂不能解除关联或删除。请先调整相关策略，并等待请求结束。',
+    'error.account_busy': '账号正在处理另一项操作，请稍后重试。',
+    'error.account_conflict': '账号信息已更新，本次修改未保存。请刷新账号信息后重试。',
+    'error.account_disabled': '此账号已停用，请选择可用账号后继续。',
+    'error.account_credential_unavailable': '账号凭据暂不可用。请在「上游账号」中检查凭据状态后重试。',
+    'error.account_not_found': '此账号已不存在。请刷新页面，重新选择账号。',
+    'error.upstream_not_found': '此上游服务已不存在。请刷新页面，重新选择服务。',
+    'error.configuration_conflict': '配置已被其他操作更新，本次修改未保存。请刷新页面后重新检查修改内容。',
+    'error.policy_review_stale': '本次策略检查已失效。请重新检查草稿，再发布策略。',
+    'error.configuration_invalid': '设置未通过校验。请检查所选服务、账号和必填项后重试。',
+    'error.control_session_expired': '管理会话已失效。请重新连接运行时，或重新登录管理页面。',
+    'error.control_result_unknown': '未能确认操作结果。请检查连接，并刷新页面确认是否已生效后再重试。',
+    'error.control_contract': '配置或运行时返回的数据不符合预期。请检查输入，确认 App 与运行时版本一致后刷新重试。',
+    'error.environment_upstream_stale': '上游服务已更新。请刷新页面后，重新检查并发布策略。',
+    'error.environment_upstream_changed': '上游服务已变更或不可用。请刷新页面，重新选择该服务后再发布。',
     'app.name': 'ViberMate',
     'app.subtitle': 'Agent 流量运行时',
     'status.ready': '就绪',
@@ -2048,8 +2187,9 @@ final class AppCopy {
     'account_facts.hours': '{count} 小时',
     'account_facts.minutes': '{count} 分钟',
     'account_facts.seconds': '{count} 秒',
-    'environment.account_history.scope': 'Codex 额度查询跟随唯一的固定账号；CLI 的本地登录身份不会改变。',
-    'environment.account_history.allow': '允许 CLI 读取此账号的历史用量',
+    'environment.account_history.scope':
+        '仅单路由固定账号支持 /status 额度同步；Account 仍显示 CLI 本地登录身份。',
+    'environment.account_history.allow': '允许 /usage 读取此账号的历史用量',
     'environment.account_history.detail':
         '包含本次 Capture 以外的账号历史。默认关闭；更换账号后需重新授权。',
     'environment.account_history.ambiguous':
@@ -2619,7 +2759,7 @@ final class AppCopy {
     'environment.endpoint.pending': '此上游服务尚未添加到所选客户端流量。',
     'environment.endpoint.remove': '从草稿移除上游服务',
     'environment.endpoint.routes': '{count} 条路由',
-    'environment.endpoint.account_required': '请先为此上游服务创建可用账号，再将流量路由到这里。',
+    'environment.endpoint.account_required': '请先在「上游服务」中关联可用账号，再配置此路由。',
     'environment.edit.title': '编辑 {name}',
     'environment.edit.identity': '身份',
     'environment.tab.traffic': '流量路由',
@@ -2650,6 +2790,43 @@ final class AppCopy {
     'environment.recording.retention': '保留时间',
     'environment.recording.days': '天',
     'environment.launch.label': '子进程环境变量',
+    'environment.launch.block_tab': '不传给 Agent',
+    'environment.launch.set_tab': '添加 / 覆盖',
+    'environment.launch.source': '启动快照',
+    'environment.launch.local': '本机 CLI',
+    'environment.launch.remote': '远程 CLI',
+    'environment.launch.refresh': '刷新快照',
+    'environment.launch.source_help':
+        '仅采集实际启动终端的变量名，值留在终端。刷新会读取最新快照，不会实时读取终端；通过 ViberMate 再启动一次即可更新。快照仅在运行时内存中保留。',
+    'environment.launch.empty_snapshot':
+        '暂无启动快照。通过 vibermate run 启动一次 Agent 后刷新，也可直接在下方添加变量名。',
+    'environment.launch.load_failed': '快照加载失败。可重试或按名称编辑规则，现有规则不受影响。',
+    'environment.launch.search': '搜索变量名',
+    'environment.launch.all': '全部',
+    'environment.launch.sensitive': '疑似凭据',
+    'environment.launch.selected': '已勾选',
+    'environment.launch.select_sensitive': '勾选疑似凭据',
+    'environment.launch.inherit': '未勾选的变量仍会从启动终端继承。',
+    'environment.launch.names_only': '值留在启动终端',
+    'environment.launch.missing': '不在此快照中 · 规则保留',
+    'environment.launch.ordinary': '普通变量',
+    'environment.launch.essential': '可能影响工具运行',
+    'environment.launch.essential_warning':
+        '屏蔽 PATH、HOME 等变量可能导致命令不可用，或改变工具读取配置的位置。',
+    'environment.launch.manual': '按名称添加屏蔽规则',
+    'environment.launch.managed': '运行时管理 · 不可编辑',
+    'environment.launch.managed_error': '此变量由 ViberMate 管理，请在账号、路由或信任设置中配置。',
+    'environment.launch.name_error': '变量名只接受字母、数字和下划线，不能以数字开头，最多 128 个字符。',
+    'environment.launch.conflict_error': '此变量名已用于其他规则，请先移除原规则。',
+    'environment.launch.limit_error': '环境变量规则最多 128 条。',
+    'environment.launch.save': '应用到策略',
+    'environment.launch.effective': '发布策略后，下次启动生效；不修改系统环境。',
+    'environment.launch.security':
+        '这里只过滤子进程继承的变量，不限制文件或网络访问，并非沙箱。疑似凭据仅按名称识别，未识别或新增的密钥不会自动屏蔽。运行时管理的变量由路由和凭据策略处理。',
+    'environment.launch.truncated': '快照不完整，仍可按名称添加未列出的变量。',
+    'environment.launch.no_matches': '没有匹配的变量',
+    'environment.launch.set_help': '此处填写的值会保存到策略中，并非密钥存储；账号凭据请在「上游账号」中管理。',
+    'environment.launch.blocked_count': '已屏蔽 {count} 项',
     'environment.launch.detail': '由 vibermate run 在 Agent 启动前应用。',
     'environment.launch.summary': '设置 {set} · 删除 {delete}',
     'environment.launch.dialog.title': '子进程环境变量',
@@ -2663,6 +2840,11 @@ final class AppCopy {
     'environment.launch.value': '值',
     'environment.launch.validation': '请输入唯一且不由运行时保留的环境变量名。',
     'environment.account': '账号选择方式',
+    'environment.account.select_service': '请先选择上游服务',
+    'environment.account.choose': '请选择账号或规则',
+    'environment.account.no_links': '尚未关联账号',
+    'environment.account.selection_lost': '已取消关联或删除',
+    'environment.account.disabled': '已停用',
     'environment.account.owner': '这里只列出已明确关联到该上游服务的账号。',
     'environment.account.client': '使用客户端凭据 · 仅限同一上游服务',
     'environment.account.none': '该上游服务下没有可用账号。',
@@ -2977,7 +3159,7 @@ final class AppCopy {
     'routes.account.codex_auth_json_hint':
         '粘贴 ~/.codex/auth.json 的完整内容。ViberMate 会导入账号身份和可轮换的 OAuth 凭据。',
     'routes.account.codex_ownership':
-        '导入后将由 ViberMate 负责刷新。请勿让另一份 Codex 安装继续使用同一组 Token；两个刷新方可能令彼此的凭据失效。',
+        '保存后，请停止在原 Codex 或其他工具中使用这份 auth.json 及其副本。ViberMate 会接管自动和手动刷新，不会回写原文件；继续共用可能导致刷新冲突、登录失效。',
     'routes.account.paste': '从剪贴板粘贴',
     'routes.account.codex_profile': '账号 {account} · 套餐 {plan}',
     'routes.account.oauth_state.ready': '已托管刷新',
@@ -3289,7 +3471,33 @@ final class AppCopy {
     'settings.dark': '暗色',
     'settings.storage': '证据存储',
     'settings.storage.not_encrypted': '运行时数据库未加密，仅由当前用户的文件权限保护。',
-    'settings.storage.location': '对话与 Raw HTTP 证据写入本机 ViberMate 应用支持目录。',
+    'settings.storage.location':
+        '对话、Raw HTTP 证据与配置保存在所连接 Runtime 的 SQLite 数据库中。',
+    'settings.storage.directory': '数据目录',
+    'settings.storage.change': '更改位置',
+    'settings.storage.picker_failed': '无法打开文件夹选择器。请检查 App 的文件访问权限后重试。',
+    'settings.storage.new_directory': '新数据目录',
+    'settings.storage.move_confirm': '迁移并重启',
+    'settings.storage.moving': '正在迁移…',
+    'settings.storage.move_confirmation':
+        '在所选位置新建 ViberMate 文件夹，复制并校验全部数据后重启 Runtime。请先停止运行中的 Capture。旧目录保留为备份，不再写入新记录；macOS 钥匙串中的凭证仍留在本机。',
+    'settings.storage.moved': '存储位置已更改，旧目录已保留为备份。',
+    'settings.storage.rolled_back': '新位置启动失败，已恢复使用原目录；原始数据未删除。',
+    'settings.storage.storage_target_invalid':
+        '请选择当前数据目录以外的本地文件夹，且其中不能已有 ViberMate 子文件夹。',
+    'settings.storage.storage_in_use': '数据仍在使用中。请停止运行中的 Capture，等待其他操作结束后重试。',
+    'settings.storage.storage_copy_failed':
+        '迁移未完成，仍使用原目录。请检查剩余空间和目录权限；目标位置可能留有未完成的副本。',
+    'settings.storage.storage_validation_failed': '副本未通过数据库校验，仍使用原目录，未切换到副本。',
+    'settings.storage.storage_settings_invalid':
+        '无法读取或保存存储位置设置。请检查 App 支持目录的权限；已有数据未删除。',
+    'settings.storage.storage_location_unavailable':
+        '指定的数据目录不可用。请重新连接磁盘或恢复目录后重试；未创建空数据库。',
+    'settings.storage.database': 'SQLite 数据库',
+    'settings.storage.location_failed': '无法读取存储位置。请检查 Runtime 连接后重试。',
+    'settings.storage.move_hint': '迁移前请先停止 Runtime，并保留整个数据目录；不要单独复制正在使用的数据库。',
+    'settings.storage.server_path':
+        '服务端通过 --data-dir 指定此目录；容器还需挂载持久化卷。这里不是浏览器所在电脑的目录。',
     'settings.storage.retention': '新建流量策略默认保留全文证据 30 天。记录模式与保留期由各自的流量策略管理。',
     'settings.storage.credentials':
         '凭证头的值（Authorization、API key、Cookie）在写入之前就已移除。'

@@ -10,6 +10,7 @@ import '../../core/api/control_models.dart';
 import '../../core/api/provider_origin.dart';
 import '../../core/design/viber_theme.dart';
 import 'deletion_dialog.dart';
+import 'control_failure_notice.dart';
 import '../../core/design/workbench_widgets.dart';
 import '../../core/i18n/app_copy.dart';
 import 'environment_editing.dart';
@@ -60,7 +61,11 @@ final class _EnvironmentsViewState extends State<EnvironmentsView> {
         ),
         const Divider(height: 1),
         if (controller.environmentError case final error?)
-          InlineNotice(message: error, error: true),
+          ControlFailureNotice(
+            message: error,
+            copy: copy,
+            diagnostic: controller.environmentErrorDiagnostic,
+          ),
         if (controller.environmentNotice case final notice?)
           InlineNotice(
             message: copy('notice.$notice'),
@@ -542,9 +547,7 @@ void _confirmDeleteEnvironment(
         onConfirm: () async {
           final result = await controller.deleteEnvironment(environment.id);
           if (result == null) {
-            throw StateError(
-              controller.inventoryError ?? 'environment delete failed',
-            );
+            throw controller.inventoryFailure;
           }
           return result;
         },
@@ -1469,6 +1472,9 @@ final class _NewEnvironmentDialogState extends State<_NewEnvironmentDialog> {
                                   const SizedBox(height: 8),
                                   LaunchEnvironmentEditorButton(
                                     policy: _launchEnvironment,
+                                    loadSnapshots: widget
+                                        .controller
+                                        .launchEnvironmentSnapshots,
                                     copy: copy,
                                     enabled:
                                         !widget.controller.environmentMutating,
@@ -1482,9 +1488,12 @@ final class _NewEnvironmentDialogState extends State<_NewEnvironmentDialog> {
                             if (_submitted &&
                                 widget.controller.environmentError != null) ...[
                               const SizedBox(height: 9),
-                              InlineNotice(
+                              ControlFailureNotice(
                                 message: widget.controller.environmentError!,
-                                error: true,
+                                copy: copy,
+                                diagnostic: widget
+                                    .controller
+                                    .environmentErrorDiagnostic,
                               ),
                             ],
                           ],
@@ -1539,17 +1548,13 @@ final class _NewEnvironmentDialogState extends State<_NewEnvironmentDialog> {
     final retentionDays = _recordingMode == 'off'
         ? 0
         : int.parse(_retention.text);
-    final normalizedEndpoints = normalizeEnvironmentDraftRevisions(
-      base: const [],
-      edited: _clientEndpoints,
-    );
     final impact = await widget.controller.reviewNewEnvironment(
       environmentId,
       EnvironmentDraftInput(
         expectedDraftRevision: 0,
         name: _name.text,
         state: 'active',
-        clientEndpoints: normalizedEndpoints,
+        clientEndpoints: _clientEndpoints,
         pluginBindings: const [],
         budgetPolicy: const EnvironmentBudgetPolicy(id: '', revision: 0),
         contentRecording: EnvironmentContentRecordingPolicy(
@@ -1874,6 +1879,9 @@ final class _EnvironmentEditorDialogState
                                   const SizedBox(height: 8),
                                   LaunchEnvironmentEditorButton(
                                     policy: _launchEnvironment,
+                                    loadSnapshots: widget
+                                        .controller
+                                        .launchEnvironmentSnapshots,
                                     copy: copy,
                                     enabled:
                                         !widget.controller.environmentMutating,
@@ -2075,9 +2083,12 @@ final class _EnvironmentEditorDialogState
                             if (_submitted &&
                                 widget.controller.environmentError != null) ...[
                               const SizedBox(height: 10),
-                              InlineNotice(
+                              ControlFailureNotice(
                                 message: widget.controller.environmentError!,
-                                error: true,
+                                copy: copy,
+                                diagnostic: widget
+                                    .controller
+                                    .environmentErrorDiagnostic,
                               ),
                             ],
                           ],
@@ -2141,17 +2152,13 @@ final class _EnvironmentEditorDialogState
     final retentionDays = _recordingMode == 'off'
         ? 0
         : int.parse(_retention.text);
-    final normalizedEndpoints = normalizeEnvironmentDraftRevisions(
-      base: widget.environment.clientEndpoints,
-      edited: _clientEndpoints,
-    );
     await widget.controller.reviewSelectedEnvironment(
       EnvironmentDraftInput.fromEnvironment(
         widget.environment,
         expectedDraftRevision: 0,
         name: _name.text,
         state: _state,
-        clientEndpoints: normalizedEndpoints,
+        clientEndpoints: _clientEndpoints,
         contentRecording: EnvironmentContentRecordingPolicy(
           mode: _recordingMode,
           retentionDays: retentionDays,
@@ -2159,6 +2166,7 @@ final class _EnvironmentEditorDialogState
         launchEnvironment: _launchEnvironment,
         policySet: EnvironmentPolicySet(toolMode: _toolMode),
       ),
+      baseEnvironment: widget.environment,
     );
     if (mounted) setState(() {});
   }
@@ -2507,13 +2515,14 @@ final class _EnvironmentEndpointAdderState
     final selected = available
         .where((endpoint) => endpoint.id == _endpointId)
         .firstOrNull;
-    final owned = selected == null
+    final linked = selected == null
         ? const <ProviderAccount>[]
         : widget.accounts
-              .where(
-                (account) => account.isLinkedTo(selected.id) && account.usable,
-              )
+              .where((account) => account.isLinkedTo(selected.id))
               .toList(growable: false);
+    final owned = linked
+        .where((account) => account.usable)
+        .toList(growable: false);
     final canAdd =
         selected != null &&
         _accountPolicy != null &&
@@ -2760,13 +2769,37 @@ final class _EnvironmentEndpointAdderState
                           'environment-endpoint-account-${selected?.id ?? 'none'}',
                         ),
                         initialValue: currentToken,
+                        placeholder: widget.copy(
+                          selected == null
+                              ? 'environment.account.select_service'
+                              : linked.isEmpty
+                              ? 'environment.account.no_links'
+                              : owned.isEmpty
+                              ? 'environment.account.none'
+                              : 'environment.account.choose',
+                        ),
                         isExpanded: true,
                         items: [
-                          for (final account in owned)
+                          if (currentPolicy?.mode == 'fixed' &&
+                              !linked.any(
+                                (account) =>
+                                    account.id == currentPolicy!.fixedAccountId,
+                              ))
+                            DropdownMenuItem(
+                              value: currentToken,
+                              enabled: false,
+                              child: Text(
+                                widget.copy(
+                                  'environment.account.selection_lost',
+                                ),
+                              ),
+                            ),
+                          for (final account in linked)
                             DropdownMenuItem(
                               value: fixedToken(account.id),
+                              enabled: account.usable,
                               child: Text(
-                                '${widget.copy('environment.account.fixed')} · ${account.displayName}',
+                                _routeAccountLabel(account, widget.copy),
                                 overflow: TextOverflow.ellipsis,
                               ),
                             ),
@@ -2780,7 +2813,8 @@ final class _EnvironmentEndpointAdderState
                               ),
                             ),
                         ],
-                        onChanged: !widget.enabled || selected == null
+                        onChanged:
+                            !widget.enabled || selected == null || owned.isEmpty
                             ? null
                             : (value) {
                                 if (value == null) return;
@@ -3208,6 +3242,17 @@ final class _OriginalDestinationEditorRow extends StatelessWidget {
   );
 }
 
+String _routeAccountLabel(ProviderAccount account, AppCopy copy) {
+  final status = account.usable
+      ? ''
+      : account.codexOAuth?.state == 'reconnect_required'
+      ? copy('routes.account.oauth_state.reconnect_required')
+      : account.state != 'active'
+      ? copy('environment.account.disabled')
+      : copy('routes.credentials.unavailable');
+  return '${copy('environment.account.fixed')} · ${account.displayName}${status.isEmpty ? '' : ' · $status'}';
+}
+
 final class _RouteAccountEditor extends StatelessWidget {
   const _RouteAccountEditor({
     required this.controller,
@@ -3305,20 +3350,23 @@ final class _RouteAccountEditor extends StatelessWidget {
                     'environment-route-account-${route.id}-$currentToken',
                   ),
                   initialValue: currentToken,
+                  placeholder: copy('environment.account.no_links'),
                   isExpanded: true,
                   items: [
                     if (!currentItemExists && currentId.isNotEmpty)
                       DropdownMenuItem(
                         value: fixedToken(currentId),
                         enabled: false,
-                        child: Text(currentId),
+                        child: Text(
+                          '${copy('environment.account.fixed')} · ${route.accountPolicy.accounts.where((account) => account.id == currentId).firstOrNull?.displayName ?? currentId} · ${copy('environment.account.selection_lost')}',
+                        ),
                       ),
                     for (final account in owned)
                       DropdownMenuItem(
                         value: fixedToken(account.id),
                         enabled: account.usable,
                         child: Text(
-                          '${copy('environment.account.fixed')} · ${account.displayName}${account.usable ? '' : ' · ${copy('environment.account.unavailable')}'}',
+                          _routeAccountLabel(account, copy),
                           overflow: TextOverflow.ellipsis,
                         ),
                       ),
@@ -3452,17 +3500,12 @@ final class _RouteAccountEditor extends StatelessWidget {
                   style: Theme.of(context).textTheme.bodySmall,
                 ),
                 if (route.accountPolicy.mode == 'fixed')
-                  CheckboxListTile(
+                  CompactCheckboxField(
                     key: Key('environment-route-account-history-${route.id}'),
-                    contentPadding: EdgeInsets.zero,
-                    controlAffinity: ListTileControlAffinity.leading,
-                    dense: true,
-                    title: Text(copy('environment.account_history.allow')),
-                    subtitle: Text(copy('environment.account_history.detail')),
+                    label: copy('environment.account_history.allow'),
+                    description: copy('environment.account_history.detail'),
                     value: route.allowAccountHistory,
-                    onChanged: enabled
-                        ? (value) => onHistoryChanged(value ?? false)
-                        : null,
+                    onChanged: enabled ? onHistoryChanged : null,
                   )
                 else
                   Text(
@@ -4330,19 +4373,19 @@ final class _CatalogModelFieldState extends State<_CatalogModelField> {
     },
     onSelected: (option) => widget.onChanged(option.id),
     fieldViewBuilder: (context, controller, focusNode, onSubmitted) =>
-        TextField(
-          key: widget.fieldKey,
-          controller: controller,
-          focusNode: focusNode,
-          // Automatic select-all on focus would overwrite the search prefix
-          // with the next keystroke after an asynchronous catalog refresh.
-          selectAllOnFocus: false,
-          onChanged: widget.onChanged,
-          onSubmitted: (_) => onSubmitted(),
-          style: monoStyle,
-          decoration: InputDecoration(
-            labelText: widget.label,
-            hintText: widget.hint,
+        CompactLabeledControl(
+          label: widget.label,
+          child: TextField(
+            key: widget.fieldKey,
+            controller: controller,
+            focusNode: focusNode,
+            // Automatic select-all on focus would overwrite the search prefix
+            // with the next keystroke after an asynchronous catalog refresh.
+            selectAllOnFocus: false,
+            onChanged: widget.onChanged,
+            onSubmitted: (_) => onSubmitted(),
+            style: monoStyle,
+            decoration: InputDecoration(hintText: widget.hint),
           ),
         ),
     optionsViewBuilder: (context, onSelected, visibleOptions) {

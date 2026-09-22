@@ -1,8 +1,81 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:vibermate_app/app/vibermate_app.dart';
+import 'package:vibermate_app/core/bootstrap/runtime_connection.dart';
+import 'package:vibermate_app/core/preferences/workbench_preferences.dart';
+import 'package:vibermate_app/preview/preview_control_api.dart';
+import 'package:vibermate_app/preview/preview_terminal_command.dart';
 
 void main() {
+  testWidgets(
+    'local storage change previews its target and requires confirmation',
+    (tester) async {
+      final calls = <String>[];
+      await tester.pumpWidget(
+        ViberMateApp(
+          previewMode: false,
+          preferChinese: false,
+          preferencesStore: const DiscardWorkbenchPreferencesStore(),
+          runtimeConnector: ({login}) async {
+            final api = PreviewControlApi();
+            return RuntimeConnection(
+              api: api,
+              terminalCommands: PreviewTerminalCommandService(),
+              close: api.close,
+              isClosed: () => false,
+              serverManagement: false,
+              terminalManagement: true,
+              rootTrustManagement: false,
+              targetLabel: 'Test Mac',
+              chooseStorageDirectory: () async =>
+                  '/Volumes/Local disk/ViberMate',
+              prepareStorageMove: (path) async {
+                calls.add('prepare:$path');
+              },
+              moveStorage: (path) async {
+                calls.add('move:$path');
+              },
+            );
+          },
+        ),
+      );
+      await tester.pumpAndSettle();
+      await _openSafetySettings(tester);
+      await tester.pumpAndSettle();
+      final change = find.byKey(const Key('storage-change-directory'));
+      await tester.scrollUntilVisible(
+        change,
+        240,
+        scrollable: _safetyScrollable(),
+      );
+      await tester.pumpAndSettle();
+      await tester.ensureVisible(change);
+      await tester.pumpAndSettle();
+      await tester.tap(change);
+      await tester.pumpAndSettle();
+      expect(find.text('/Volumes/Local disk/ViberMate'), findsOneWidget);
+      expect(find.textContaining('original folder is kept'), findsOneWidget);
+      await tester.tap(find.widgetWithText(TextButton, 'Cancel'));
+      await tester.pumpAndSettle();
+      expect(calls, isEmpty);
+      await tester.tap(change);
+      await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(FilledButton, 'Move and restart'));
+      await tester.pumpAndSettle();
+      expect(calls, [
+        'prepare:/Volumes/Local disk/ViberMate',
+        'move:/Volumes/Local disk/ViberMate',
+      ]);
+      expect(
+        find.text(
+          'Storage location changed. The original folder is kept as a backup.',
+        ),
+        findsOneWidget,
+      );
+      await tester.pumpWidget(const SizedBox.shrink());
+    },
+  );
+
   // INV-STORE-DISCLOSED is a release gate: the recording mode, the location,
   // the retention period and the absence of at-rest database encryption must be
   // visible in Settings. A product that quietly stores plaintext is no more
@@ -24,6 +97,17 @@ void main() {
       scrollable: _safetyScrollable(),
     );
     expect(panel, findsOneWidget);
+    expect(
+      find.text('/Users/mira/Library/Application Support/io.vibermate.desktop'),
+      findsOneWidget,
+    );
+    expect(
+      find.text(
+        '/Users/mira/Library/Application Support/io.vibermate.desktop/runtime.db',
+      ),
+      findsOneWidget,
+    );
+    expect(find.byTooltip('Copy Data directory'), findsOneWidget);
     expect(
       find.textContaining('not encrypted at rest'),
       findsOneWidget,

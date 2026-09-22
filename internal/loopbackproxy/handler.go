@@ -1485,6 +1485,8 @@ func replayClassOf(class protocolspec.ClientReplayClass) exchange.ReplayClass {
 
 func protocolReasonCode(err error) string {
 	switch {
+	case errors.Is(err, captureassignment.ErrClientTargetPathNotAllowed):
+		return "client_target_path_not_allowed"
 	case errors.Is(err, protocolspec.ErrInvalidRequestTarget):
 		return "invalid_request_target"
 	case errors.Is(err, protocolspec.ErrOperationContractMismatch):

@@ -28,6 +28,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/evidencearchive"
 	"github.com/vibe-agi/vibermate/internal/exchange"
 	"github.com/vibe-agi/vibermate/internal/exchangecontent"
+	"github.com/vibe-agi/vibermate/internal/launchsnapshot"
 	"github.com/vibe-agi/vibermate/internal/localca"
 	"github.com/vibe-agi/vibermate/internal/manualcapture"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
@@ -37,6 +38,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/providertransport"
 	"github.com/vibe-agi/vibermate/internal/rawevidence"
 	"github.com/vibe-agi/vibermate/internal/resourcedeletion"
+	"github.com/vibe-agi/vibermate/internal/runtimedata"
 	"github.com/vibe-agi/vibermate/internal/runtimepersistence"
 	"github.com/vibe-agi/vibermate/internal/runtimeuser"
 	"github.com/vibe-agi/vibermate/internal/toolapproval"
@@ -49,6 +51,8 @@ var ErrInvalidBuildResult = errors.New("invalid runtime build result")
 
 // Runtime owns every successfully constructed production component.
 type Runtime struct {
+	launchSnapshots    launchsnapshot.Store
+	paths              RuntimePaths
 	status             *statusTracker
 	schemaReader       runtimepersistence.SchemaStateReader
 	environments       environmentRuntime
@@ -165,6 +169,11 @@ func startWithBuilders(
 		return nil, startupErr
 	}
 
+	dataGuard, err := runtimedata.Acquire(options.Paths.DataDirectory())
+	if err != nil {
+		return fail("data directory ownership", err)
+	}
+	cleanups.register("data directory ownership", func(context.Context) error { return dataGuard.Release() })
 	storageResult, err := buildStorage(ctx, storageBuildRequest{
 		databasePath: options.Paths.DatabasePath(),
 	})
@@ -728,6 +737,7 @@ func startWithBuilders(
 	}
 	tracker.commitInitialized(finalState.Revision)
 	return &Runtime{
+		paths:              options.Paths,
 		status:             tracker,
 		schemaReader:       storageResult.store.SchemaStateReader(),
 		environments:       environments,
@@ -798,6 +808,10 @@ func (r *Runtime) CaptureRunReader() capturerun.Reader {
 
 func (r *Runtime) CaptureRuns() capturerun.Controller {
 	return r.captureRuns
+}
+
+func (r *Runtime) LaunchSnapshots() *launchsnapshot.Store {
+	return &r.launchSnapshots
 }
 
 // CaptureRunActivity exposes only an installation-wide active count for

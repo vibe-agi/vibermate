@@ -391,6 +391,32 @@ func TestProviderAccountControlStoresCredentialWithoutReturningItAndCompilesMana
 	}
 	assertProviderAccountResponseSafe(t, published.Body.Bytes(), secret)
 
+	var frozenDraft desktopcontrol.EnvironmentDraftResponse
+	if err := json.Unmarshal(managedDraft.Body.Bytes(), &frozenDraft); err != nil {
+		t.Fatal(err)
+	}
+	frozen := frozenDraft.Candidate
+	frozen.ClientEndpoints[0].Revision++
+	plan := &frozen.ClientEndpoints[0].ProtocolPlans[0]
+	plan.Revision++
+	plan.Destination.Upstream.Routes[0].Revision++
+	plan.Destination.Upstream.Routes[0].ProviderTarget.Revision++
+	staleBody, err := json.Marshal(desktopcontrol.EnvironmentDraftInput{
+		Name: frozen.Name, State: frozen.State, ClientEndpoints: frozen.ClientEndpoints,
+		PluginBindings: frozen.PluginBindings, BudgetPolicy: frozen.BudgetPolicy,
+		ContentRecording: frozen.ContentRecording, LaunchEnvironment: frozen.LaunchEnvironment,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stale := environmentRequest(t, application, http.MethodPut,
+		"/api/v1/environments/managed-work/draft", 1, "managed-environment-stale-service", staleBody)
+	if stale.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("stale service status=%d body=%s", stale.Code, stale.Body.Bytes())
+	}
+	assertJSONString(t, stale.Body.Bytes(), "code", "environment_upstream_stale")
+	assertProviderAccountResponseSafe(t, stale.Body.Bytes(), secret)
+
 	blocked := environmentRequest(
 		t,
 		application,

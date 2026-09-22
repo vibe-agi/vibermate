@@ -29,6 +29,7 @@ const (
 
 var (
 	ErrInvalidEnvironment     = errors.New("Environment is invalid")
+	ErrUpstreamEndpointStale  = fmt.Errorf("%w: upstream service revision changed", ErrInvalidEnvironment)
 	ErrInvalidTransition      = errors.New("Environment transition is invalid")
 	ErrEnvironmentNotFound    = errors.New("Environment is not configured")
 	ErrEnvironmentDisabled    = errors.New("Environment is disabled")

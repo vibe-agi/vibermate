@@ -607,6 +607,9 @@ func validateUpstreamEndpointSnapshot(
 		return fmt.Errorf("%w: managed route %q has no UpstreamEndpoint catalog", ErrInvalidEnvironment, route.ID)
 	}
 	endpoint, exists := catalog.LookupEndpoint(route.ProviderTarget.ID)
+	if exists && endpoint.Revision != uint64(route.ProviderTarget.Revision) {
+		return fmt.Errorf("%w: route %q", ErrUpstreamEndpointStale, route.ID)
+	}
 	if !exists || endpoint.State != upstreamendpoint.StateActive ||
 		endpoint.Revision != uint64(route.ProviderTarget.Revision) ||
 		endpoint.Origin != route.ProviderTarget.Origin ||

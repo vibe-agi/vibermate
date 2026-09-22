@@ -341,15 +341,17 @@ final class CompactLabeledControl extends StatelessWidget {
             ),
           )
         else
-          Text(
-            label,
-            style: Theme.of(context).textTheme.labelMedium?.copyWith(
-              color: context.viberColors.textMuted,
-              letterSpacing: 0.1,
+          ExcludeSemantics(
+            child: Text(
+              label,
+              style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                color: context.viberColors.textMuted,
+                letterSpacing: 0.1,
+              ),
             ),
           ),
         const SizedBox(height: ViberSpacing.xs),
-        child,
+        Semantics(label: label, child: child),
         if (detail case final value?) ...[
           const SizedBox(height: ViberSpacing.xs),
           Text(value, style: Theme.of(context).textTheme.bodySmall),
@@ -443,6 +445,94 @@ final class ResponsiveFormGrid extends StatelessWidget {
           ],
         );
       },
+    );
+  }
+}
+
+/// A quiet, wrapping permission row with a full-row pointer target. Only the
+/// checkbox's painted mark is reduced; its native focus and keyboard behavior
+/// and the disclosure beside it remain available.
+final class CompactCheckboxField extends StatelessWidget {
+  const CompactCheckboxField({
+    required this.value,
+    required this.label,
+    required this.description,
+    required this.onChanged,
+    super.key,
+  });
+
+  final bool value;
+  final String label;
+  final String description;
+  final ValueChanged<bool>? onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.viberColors;
+    return MergeSemantics(
+      child: InkWell(
+        canRequestFocus: false,
+        borderRadius: ViberMetrics.controlRadius,
+        onTap: onChanged == null ? null : () => onChanged!(!value),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: ViberSpacing.xs),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              SizedBox.square(
+                dimension: 32,
+                child: Transform.scale(
+                  scale: 16 / 18,
+                  child: Checkbox(
+                    value: value,
+                    onChanged: onChanged == null
+                        ? null
+                        : (selected) => onChanged!(selected ?? false),
+                    side: WidgetStateBorderSide.resolveWith((states) {
+                      if (states.contains(WidgetState.selected)) {
+                        return BorderSide.none;
+                      }
+                      return BorderSide(
+                        color: states.contains(WidgetState.disabled)
+                            ? colors.divider
+                            : colors.textFaint,
+                        width: 1.25,
+                      );
+                    }),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(2),
+                    ),
+                    visualDensity: VisualDensity.compact,
+                    materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  ),
+                ),
+              ),
+              const SizedBox(width: ViberSpacing.xs),
+              Expanded(
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 6),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        label,
+                        style: Theme.of(context).textTheme.bodyMedium,
+                      ),
+                      const SizedBox(height: ViberSpacing.xs),
+                      Text(
+                        description,
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: colors.textMuted,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }
@@ -544,6 +634,7 @@ final class CompactSelectField<T> extends StatefulWidget {
     this.menuMaxLines = 1,
     this.selectedItemBuilder,
     this.validator,
+    this.placeholder,
     super.key,
   });
 
@@ -557,6 +648,7 @@ final class CompactSelectField<T> extends StatefulWidget {
   final Widget Function(BuildContext context, DropdownMenuItem<T> selectedItem)?
   selectedItemBuilder;
   final FormFieldValidator<T>? validator;
+  final String? placeholder;
 
   @override
   State<CompactSelectField<T>> createState() => _CompactSelectFieldState<T>();
@@ -587,7 +679,9 @@ final class _CompactSelectFieldState<T> extends State<CompactSelectField<T>> {
       initialValue: _value,
       validator: widget.validator,
       builder: (field) {
-        final enabled = widget.onChanged != null && widget.items.isNotEmpty;
+        final enabled =
+            widget.onChanged != null &&
+            widget.items.any((item) => item.enabled);
         final selected = widget.items
             .where((item) => item.value == field.value)
             .firstOrNull;
@@ -689,7 +783,7 @@ final class _CompactSelectFieldState<T> extends State<CompactSelectField<T>> {
                     hoverColor: Colors.transparent,
                     borderRadius: ViberMetrics.controlRadius,
                     child: InputDecorator(
-                      isEmpty: selected == null,
+                      isEmpty: selected == null && widget.placeholder == null,
                       isFocused: active,
                       decoration: widget.decoration.copyWith(
                         isDense: true,
@@ -721,7 +815,15 @@ final class _CompactSelectFieldState<T> extends State<CompactSelectField<T>> {
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         child: selected == null
-                            ? const SizedBox.shrink()
+                            ? widget.placeholder == null &&
+                                      widget.decoration.hintText != null
+                                  ? const SizedBox.shrink()
+                                  : Text(
+                                      widget.placeholder ?? '—',
+                                      style: TextStyle(
+                                        color: context.viberColors.textMuted,
+                                      ),
+                                    )
                             : widget.selectedItemBuilder?.call(
                                     context,
                                     selected,

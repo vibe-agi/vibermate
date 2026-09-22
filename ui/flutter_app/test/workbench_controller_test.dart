@@ -9,6 +9,7 @@ import 'package:vibermate_app/core/bootstrap/root_trust_installer.dart';
 import 'package:vibermate_app/core/preferences/workbench_preferences.dart';
 import 'package:vibermate_app/core/design/viber_theme.dart';
 import 'package:vibermate_app/features/workbench/workbench_controller.dart';
+import 'package:vibermate_app/features/workbench/environment_editing.dart';
 import 'package:vibermate_app/features/workbench/workbench_shell.dart';
 import 'package:vibermate_app/preview/preview_control_api.dart';
 import 'package:vibermate_app/preview/preview_terminal_command.dart';
@@ -255,6 +256,77 @@ void main() {
 
     api.completePolls();
     await tester.pump();
+    controller.dispose();
+  });
+
+  testWidgets('visible evidence refreshes before the inventory poll', (
+    tester,
+  ) async {
+    final fixture = PreviewControlApi();
+    final api = _LiveEvidenceApi(fixture);
+    final controller = WorkbenchController(
+      api: api,
+      terminalCommands: PreviewTerminalCommandService(),
+      previewMode: true,
+      closeRuntime: fixture.close,
+      terminalManagement: false,
+    );
+    await controller.initialize();
+    await controller.selectCapture('managed_run:run-1');
+    final visibleCount = controller.selectedActivities.length;
+    expect(visibleCount, greaterThan(0));
+    api.hideNewest = false;
+    final inventoryCalls = api.dashboardCalls;
+    final directoryCalls = api.conversationCalls;
+
+    await tester.pump(const Duration(seconds: 1));
+    await tester.pump();
+    expect(controller.selectedActivities.length, visibleCount + 1);
+    expect(api.dashboardCalls, inventoryCalls);
+    expect(api.conversationCalls, directoryCalls);
+    expect(controller.detailLoading, isFalse);
+    expect(controller.captureActivitiesLoading, isFalse);
+
+    final requests = api.activityCalls;
+    controller.selectSection(WorkbenchSection.environments);
+    await tester.pump(const Duration(seconds: 6));
+    expect(
+      api.activityCalls,
+      requests,
+      reason: 'hidden timelines do not fast-poll or load with inventory polls',
+    );
+    expect(api.conversationCalls, directoryCalls);
+    controller.dispose();
+  });
+
+  testWidgets('live evidence reads coalesce and ignore stale selections', (
+    tester,
+  ) async {
+    final fixture = PreviewControlApi();
+    final api = _LiveEvidenceApi(fixture);
+    final controller = WorkbenchController(
+      api: api,
+      terminalCommands: PreviewTerminalCommandService(),
+      previewMode: true,
+      closeRuntime: fixture.close,
+      terminalManagement: false,
+    );
+    await controller.initialize();
+    await controller.selectCapture('managed_run:run-1');
+    final gate = Completer<void>();
+    api.gate = gate.future;
+    final requests = api.activityCalls;
+    await tester.pump(const Duration(seconds: 1));
+    await tester.pump(const Duration(seconds: 2));
+    expect(api.activityCalls, requests + 1);
+
+    api.gate = null;
+    await controller.selectCapture('managed_run:run-2');
+    final selected = controller.selectedCapturePage;
+    gate.complete();
+    await tester.pump();
+    expect(controller.selectedCapturePage, same(selected));
+    expect(controller.selectedCaptureKey, 'managed_run:run-2');
     controller.dispose();
   });
 
@@ -796,6 +868,85 @@ void main() {
     },
   );
 
+  test(
+    'Environment review refreshes upstream revisions without changing history',
+    () async {
+      final api = PreviewControlApi();
+      final controller = WorkbenchController(
+        api: api,
+        terminalCommands: PreviewTerminalCommandService(),
+        previewMode: true,
+        closeRuntime: api.close,
+      );
+      addTearDown(controller.dispose);
+      await controller.initialize();
+      controller.selectEnvironment('work');
+      final current = controller.selectedEnvironment!;
+      final before = current.clientEndpoints.first;
+      final plan = before.protocolPlans.first;
+      final route = plan.routes.first;
+      final account = await api.createProviderAccount(
+        id: 'account.replacement',
+        displayName: 'Replacement',
+        upstreamEndpointId: route.endpointId,
+        kind: 'bearer_token',
+        secret: 'synthetic-test-token',
+        headerPolicy: const ProviderAccountHeaderPolicy(),
+      );
+      final dashboard = await api.loadDashboard();
+      controller.data = DashboardData(
+        status: dashboard.status,
+        captures: dashboard.captures,
+        captureNextCursor: dashboard.captureNextCursor,
+        environments: dashboard.environments,
+        accounts: dashboard.accounts,
+        endpoints: [
+          for (final endpoint in dashboard.endpoints)
+            UpstreamEndpoint(
+              id: endpoint.id,
+              displayName: endpoint.displayName,
+              origin: endpoint.origin,
+              realmId: endpoint.realmId,
+              backendProtocols: endpoint.backendProtocols,
+              capabilities: endpoint.capabilities,
+              accountKinds: endpoint.accountKinds,
+              state: endpoint.state,
+              revision: endpoint.revision + 1,
+            ),
+        ],
+      );
+      final edited = assignEnvironmentRouteAccount(
+        endpoints: current.clientEndpoints,
+        clientEndpointId: before.id,
+        protocolPlanId: plan.id,
+        routeId: route.id,
+        account: account,
+      );
+      final impact = await controller.reviewSelectedEnvironment(
+        EnvironmentDraftInput.fromEnvironment(
+          current,
+          expectedDraftRevision: 0,
+          clientEndpoints: edited,
+        ),
+      );
+      expect(impact, isNotNull, reason: controller.environmentError);
+      final candidate = controller.reviewedEnvironmentDraft!.candidate;
+      final next = candidate.clientEndpoints.first;
+      final nextRoute = next.protocolPlans.first.routes.first;
+      expect(
+        nextRoute.providerTarget.revision,
+        route.providerTarget.revision + 1,
+      );
+      expect(nextRoute.accountPolicy.fixedAccountId, account.id);
+      expect(nextRoute.revision, route.revision + 1);
+      expect(next.protocolPlans.first.revision, plan.revision + 1);
+      expect(next.revision, before.revision + 1);
+      expect(route.providerTarget.revision, 1);
+      expect(controller.selectedEnvironment!.digest, current.digest);
+      expect(controller.selectedEnvironment!.revision, current.revision);
+    },
+  );
+
   test('Environment review freezes impact before CAS publish', () async {
     final api = PreviewControlApi();
     final controller = WorkbenchController(
@@ -880,7 +1031,11 @@ void main() {
       ),
     );
     expect(impact, isNull);
-    expect(controller.environmentError, 'revision_conflict (409)');
+    expect(controller.environmentError, 'error.configuration_conflict');
+    expect(
+      controller.environmentErrorDiagnostic,
+      'revision_conflict · HTTP 409',
+    );
     expect(controller.selectedEnvironment!.revision, 7);
   });
 
@@ -957,10 +1112,7 @@ void main() {
 
       expect(result, isNull);
       expect(controller.historicalEnvironment, isNull);
-      expect(
-        controller.environmentError,
-        'Frozen Environment digest does not match the stored revision',
-      );
+      expect(controller.environmentError, 'error.control_contract');
       expect(controller.selectedEnvironmentRevision, 7);
     },
   );
@@ -1218,6 +1370,65 @@ final class _UsageTrackingApi implements ControlApi {
   @override
   dynamic noSuchMethod(Invocation invocation) =>
       throw UnsupportedError('${invocation.memberName}');
+}
+
+final class _LiveEvidenceApi extends _UsageTrackingApi {
+  _LiveEvidenceApi(super.delegate);
+
+  bool hideNewest = true;
+  int dashboardCalls = 0;
+  int conversationCalls = 0;
+  int activityCalls = 0;
+  Future<void>? gate;
+
+  @override
+  Future<DashboardData> loadDashboard() {
+    dashboardCalls++;
+    return super.loadDashboard();
+  }
+
+  @override
+  Future<ConversationPage> conversations({
+    String? cursor,
+    int limit = 50,
+    String? captureRunId,
+    String? manualCaptureId,
+  }) {
+    conversationCalls++;
+    return super.conversations(
+      cursor: cursor,
+      limit: limit,
+      captureRunId: captureRunId,
+      manualCaptureId: manualCaptureId,
+    );
+  }
+
+  @override
+  Future<ActivityPage> activities({
+    String? cursor,
+    int limit = 50,
+    String? captureRunId,
+    String? manualCaptureId,
+    String? environmentId,
+    String? conversationId,
+  }) async {
+    activityCalls++;
+    final page = await super.activities(
+      cursor: cursor,
+      limit: limit,
+      captureRunId: captureRunId,
+      manualCaptureId: manualCaptureId,
+      environmentId: environmentId,
+      conversationId: conversationId,
+    );
+    await gate;
+    return hideNewest
+        ? ActivityPage(
+            items: page.items.skip(1).toList(),
+            nextCursor: page.nextCursor,
+          )
+        : page;
+  }
 }
 
 final class _AssignmentFailureApi extends _UsageTrackingApi {

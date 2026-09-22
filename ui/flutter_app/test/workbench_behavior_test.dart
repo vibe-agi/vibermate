@@ -4545,6 +4545,8 @@ void main() {
     await tester.tap(launch);
     await tester.pumpAndSettle();
 
+    await tester.tap(find.byKey(const Key('environment-launch-tab-1')));
+    await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('environment-launch-add-set')));
     await tester.pumpAndSettle();
     await tester.enterText(
@@ -4555,8 +4557,11 @@ void main() {
       find.byKey(const Key('environment-launch-set-value-0')),
       'research',
     );
-    await tester.tap(find.byKey(const Key('environment-launch-add-delete')));
+    await tester.tap(find.byKey(const Key('environment-launch-tab-0')));
     await tester.pumpAndSettle();
+    await tester.ensureVisible(
+      find.byKey(const Key('environment-launch-delete-name-0')),
+    );
     await tester.enterText(
       find.byKey(const Key('environment-launch-delete-name-0')),
       'OLD_CONTEXT',

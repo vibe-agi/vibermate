@@ -8,8 +8,12 @@ import 'package:http/http.dart' as http;
 import 'control_models.dart';
 import 'account_facts_models.dart';
 import 'provider_origin.dart';
+import 'runtime_storage.dart';
+import 'launch_environment_snapshot.dart';
 
 abstract interface class ControlApi {
+  Future<List<LaunchEnvironmentSnapshot>> launchEnvironmentSnapshots();
+  Future<RuntimeStorageLocation> storageLocation();
   Future<AccountFacts> accountFacts(String accountId, {bool history = false});
   Future<DashboardData> loadDashboard();
 
@@ -475,6 +479,16 @@ final class HttpControlApi implements ControlApi {
       ),
     );
   }
+
+  @override
+  Future<RuntimeStorageLocation> storageLocation() async =>
+      RuntimeStorageLocation.fromJson(await _read('/api/v1/storage'));
+
+  @override
+  Future<List<LaunchEnvironmentSnapshot>> launchEnvironmentSnapshots() async =>
+      LaunchEnvironmentSnapshot.parseList(
+        await _read('/api/v1/launch-environment/snapshots'),
+      );
 
   @override
   Future<RootCAStatus> rootCA() async => RootCAStatus.fromJson(

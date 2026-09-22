@@ -1234,12 +1234,13 @@ final class _MessageTransformSampleDialogState
       Row(
         children: [
           Expanded(
-            child: TextField(
-              key: const Key('environment-transform-sample-response-status'),
-              controller: _status,
-              keyboardType: TextInputType.number,
-              decoration: InputDecoration(
-                labelText: copy('environment.transform.sample.status'),
+            child: CompactLabeledControl(
+              label: copy('environment.transform.sample.status'),
+              child: TextField(
+                key: const Key('environment-transform-sample-response-status'),
+                controller: _status,
+                keyboardType: TextInputType.number,
+                decoration: InputDecoration(),
               ),
             ),
           ),
@@ -1341,13 +1342,16 @@ final class _MessageTransformSampleDialogState
               for (final field in fields)
                 SizedBox(
                   width: fieldWidth,
-                  child: TextField(
-                    key: Key(
-                      'environment-transform-sample-runtime-${field.key}',
+                  child: CompactLabeledControl(
+                    label: field.label,
+                    child: TextField(
+                      key: Key(
+                        'environment-transform-sample-runtime-${field.key}',
+                      ),
+                      controller: field.controller,
+                      style: monoStyle,
+                      decoration: InputDecoration(),
                     ),
-                    controller: field.controller,
-                    style: monoStyle,
-                    decoration: InputDecoration(labelText: field.label),
                   ),
                 ),
             ],
@@ -1362,13 +1366,16 @@ final class _MessageTransformSampleDialogState
     required TextEditingController controller,
     required String label,
     required int lines,
-  }) => TextField(
-    key: key,
-    controller: controller,
-    minLines: lines,
-    maxLines: lines,
-    style: monoStyle,
-    decoration: InputDecoration(labelText: label, alignLabelWithHint: true),
+  }) => CompactLabeledControl(
+    label: label,
+    child: TextField(
+      key: key,
+      controller: controller,
+      minLines: lines,
+      maxLines: lines,
+      style: monoStyle,
+      decoration: InputDecoration(alignLabelWithHint: true),
+    ),
   );
 
   Future<void> _pickCaptured() async {

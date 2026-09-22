@@ -484,10 +484,16 @@ func classifyProviderAccountError(err error) problemSpec {
 	case errors.Is(err, provideraccount.ErrRevisionConflict):
 		return problemSpec{status: http.StatusConflict, reason: ReasonProviderAccountConflict}
 	case errors.Is(err, provideraccount.ErrOperationInProgress):
-		return problemSpec{status: http.StatusConflict, reason: ReasonProviderAccountConflict}
+		return problemSpec{status: http.StatusConflict, reason: "provider_account_busy"}
+	case errors.Is(err, provideraccount.ErrAccountDisabled):
+		return problemSpec{status: http.StatusConflict, reason: "provider_account_disabled"}
+	case errors.Is(err, provideraccount.ErrCredentialMissing):
+		return problemSpec{status: http.StatusUnprocessableEntity, reason: "provider_account_credential_unavailable"}
 	case errors.Is(err, provideraccount.ErrAccountInUse):
 		return problemSpec{status: http.StatusConflict, reason: ReasonProviderAccountInUse}
-	case errors.Is(err, provideraccount.ErrInvalidAccount), errors.Is(err, provideraccount.ErrEndpointMismatch):
+	case errors.Is(err, provideraccount.ErrEndpointMismatch):
+		return problemSpec{status: http.StatusUnprocessableEntity, reason: "provider_account_scope_mismatch"}
+	case errors.Is(err, provideraccount.ErrInvalidAccount):
 		return problemSpec{status: http.StatusUnprocessableEntity, reason: ReasonInvalidRequest}
 	case errors.Is(err, upstreamendpoint.ErrEndpointNotFound):
 		return problemSpec{status: http.StatusNotFound, reason: ReasonUpstreamEndpointNotFound}

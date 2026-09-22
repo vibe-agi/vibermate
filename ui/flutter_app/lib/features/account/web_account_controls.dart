@@ -222,25 +222,29 @@ final class _PasswordDialogState extends State<_PasswordDialog> {
     required String label,
     required Iterable<String> hints,
     bool autofocus = false,
-  }) => TextField(
-    key: key,
-    controller: controller,
-    enabled: !_busy,
-    autofocus: autofocus,
-    obscureText: !_visible,
-    autocorrect: false,
-    enableSuggestions: false,
-    autofillHints: hints,
-    onChanged: (_) => setState(() => _error = null),
-    decoration: InputDecoration(
-      labelText: label,
-      suffixIcon: IconButton(
-        tooltip: widget.copy(
-          _visible ? 'account.password.hide' : 'account.password.show',
-        ),
-        onPressed: () => setState(() => _visible = !_visible),
-        icon: Icon(
-          _visible ? Icons.visibility_off_outlined : Icons.visibility_outlined,
+  }) => CompactLabeledControl(
+    label: label,
+    child: TextField(
+      key: key,
+      controller: controller,
+      enabled: !_busy,
+      autofocus: autofocus,
+      obscureText: !_visible,
+      autocorrect: false,
+      enableSuggestions: false,
+      autofillHints: hints,
+      onChanged: (_) => setState(() => _error = null),
+      decoration: InputDecoration(
+        suffixIcon: IconButton(
+          tooltip: widget.copy(
+            _visible ? 'account.password.hide' : 'account.password.show',
+          ),
+          onPressed: () => setState(() => _visible = !_visible),
+          icon: Icon(
+            _visible
+                ? Icons.visibility_off_outlined
+                : Icons.visibility_outlined,
+          ),
         ),
       ),
     ),

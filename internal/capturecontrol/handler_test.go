@@ -26,6 +26,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/clienttarget"
 	"github.com/vibe-agi/vibermate/internal/controlprincipal"
 	"github.com/vibe-agi/vibermate/internal/environment"
+	"github.com/vibe-agi/vibermate/internal/launchsnapshot"
 	"github.com/vibe-agi/vibermate/internal/localca"
 	"github.com/vibe-agi/vibermate/internal/manualcapture"
 	"github.com/vibe-agi/vibermate/internal/runtimepersistence"
@@ -776,6 +777,7 @@ func TestCaptureControlUsesTransparentGenericLaunchWithoutProtectedAuthorities(
 }
 
 type fixture struct {
+	snapshots         *launchsnapshot.Store
 	handler           *capturecontrol.Handler
 	store             *runtimepersistence.Store
 	runs              *capturerun.Manager
@@ -932,17 +934,20 @@ func newFixture(t *testing.T, overrides ...fixtureOverride) *fixture {
 	if err != nil {
 		t.Fatal(err)
 	}
+	snapshots := &launchsnapshot.Store{}
 	handler, err := capturecontrol.New(capturecontrol.Options{
-		Runs:        runs,
-		Principals:  principals,
-		Issuer:      issuer,
-		Manual:      manualHandler,
-		RunLifetime: 2 * time.Minute,
+		LaunchSnapshots: snapshots,
+		Runs:            runs,
+		Principals:      principals,
+		Issuer:          issuer,
+		Manual:          manualHandler,
+		RunLifetime:     2 * time.Minute,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	return &fixture{
+		snapshots:         snapshots,
 		handler:           handler,
 		store:             store,
 		runs:              runs,

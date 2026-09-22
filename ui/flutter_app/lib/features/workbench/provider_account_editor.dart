@@ -13,6 +13,7 @@ import '../../core/i18n/app_copy.dart';
 import 'account_header_policy_editor.dart';
 import 'codex_oauth_login_panel.dart';
 import 'workbench_controller.dart';
+import 'control_failure_notice.dart';
 
 Future<void> showProviderAccountEditor(
   BuildContext context, {
@@ -566,6 +567,11 @@ final class _AccountEditorDialogState extends State<_AccountEditorDialog> {
                     const SizedBox(height: 10),
                   ],
                   if (_codexOAuth) ...[
+                    InlineNotice(
+                      key: const Key('account-editor-codex-ownership'),
+                      message: copy('routes.account.codex_ownership'),
+                    ),
+                    const SizedBox(height: 10),
                     Wrap(
                       spacing: 8,
                       runSpacing: 8,
@@ -625,11 +631,6 @@ final class _AccountEditorDialogState extends State<_AccountEditorDialog> {
                         validator: _validateCodexAuthJSON,
                       ),
                     ),
-                    const SizedBox(height: 10),
-                    InlineNotice(
-                      key: const Key('account-editor-codex-ownership'),
-                      message: copy('routes.account.codex_ownership'),
-                    ),
                   ] else
                     CompactLabeledControl(
                       label: copy(
@@ -688,9 +689,10 @@ final class _AccountEditorDialogState extends State<_AccountEditorDialog> {
                 ],
                 if (_submitted && widget.controller.inventoryError != null) ...[
                   const SizedBox(height: 9),
-                  InlineNotice(
+                  ControlFailureNotice(
                     message: widget.controller.inventoryError!,
-                    error: true,
+                    copy: copy,
+                    diagnostic: widget.controller.inventoryErrorDiagnostic,
                   ),
                 ],
               ],
@@ -1030,9 +1032,10 @@ final class _DeleteAccountDialogState extends State<_DeleteAccountDialog> {
                   blocked == null &&
                   widget.controller.inventoryError != null) ...[
                 const SizedBox(height: 9),
-                InlineNotice(
+                ControlFailureNotice(
                   message: widget.controller.inventoryError!,
-                  error: true,
+                  copy: copy,
+                  diagnostic: widget.controller.inventoryErrorDiagnostic,
                 ),
               ],
             ],

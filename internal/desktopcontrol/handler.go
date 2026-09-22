@@ -29,6 +29,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/evidencearchive"
 	"github.com/vibe-agi/vibermate/internal/exchangecontent"
+	"github.com/vibe-agi/vibermate/internal/launchsnapshot"
 	"github.com/vibe-agi/vibermate/internal/manualcapture"
 	"github.com/vibe-agi/vibermate/internal/modelcatalog"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
@@ -63,6 +64,7 @@ const (
 	ReasonExchangeNotFound                   ReasonCode = "exchange_not_found"
 	ReasonEnvironmentSystemOwned             ReasonCode = "environment_system_owned"
 	ReasonEnvironmentPreviewStale            ReasonCode = "environment_preview_stale"
+	ReasonEnvironmentUpstreamStale           ReasonCode = "environment_upstream_stale"
 	ReasonCaptureNotFound                    ReasonCode = "capture_not_found"
 	ReasonCaptureAssignmentNotFound          ReasonCode = "capture_assignment_not_found"
 	ReasonCaptureUnavailable                 ReasonCode = "capture_unavailable"
@@ -109,6 +111,10 @@ type ReadinessReader interface {
 	Ready() bool
 }
 
+type StorageLocationReader interface {
+	StorageLocation() productruntime.StorageLocation
+}
+
 // SystemClock is available to standalone control-contract tests and tools.
 // Product composition passes its single runtime Clock instead.
 type SystemClock struct{}
@@ -133,6 +139,8 @@ type ConversationIndexer interface {
 }
 
 type Options struct {
+	LaunchSnapshots     *launchsnapshot.Store
+	Storage             StorageLocationReader
 	Readiness           ReadinessReader
 	Status              StatusReader
 	Environments        environment.Controller
@@ -168,6 +176,8 @@ type Options struct {
 }
 
 type Handler struct {
+	launchSnapshots     *launchsnapshot.Store
+	storage             StorageLocationReader
 	readiness           ReadinessReader
 	status              StatusReader
 	environments        environment.Controller
@@ -233,6 +243,8 @@ func New(options Options) (*Handler, error) {
 		return nil, errors.New("Desktop control dependencies are incomplete")
 	}
 	handler := &Handler{
+		launchSnapshots:     options.LaunchSnapshots,
+		storage:             options.Storage,
 		readiness:           options.Readiness,
 		status:              options.Status,
 		environments:        options.Environments,
@@ -265,6 +277,9 @@ func New(options Options) (*Handler, error) {
 		mux:                 http.NewServeMux(),
 	}
 	handler.mux.HandleFunc("GET /api/v1/status", handler.getStatus)
+	handler.mux.HandleFunc("GET /api/v1/storage", handler.getStorageLocation)
+	handler.mux.HandleFunc("GET /api/v1/launch-environment/snapshots", handler.listLaunchSnapshots)
+	handler.mux.HandleFunc("/api/v1/storage", handler.invalidRoute)
 	handler.mux.HandleFunc("POST "+CodexLoginPath, handler.startCodexLogin)
 	handler.mux.HandleFunc("GET "+CodexLoginPath+"/{loginId}", handler.getCodexLogin)
 	handler.mux.HandleFunc("POST "+CodexLoginPath+"/{loginId}/callback", handler.completeCodexLogin)
@@ -588,11 +603,17 @@ func (handler *Handler) listActivities(
 		writeProblem(writer, http.StatusUnprocessableEntity, ReasonInvalidRequest)
 		return
 	}
-	handler.refreshConversationIndex(request.Context(), activity.ConversationIndexRequest{
-		Limit:           1,
-		CaptureRunID:    query.captureRunID,
-		ManualCaptureID: query.manualCaptureID,
-	})
+	// An exact Conversation already has a durable projection. Refreshing it
+	// with an empty Capture ID would scan every retained run, including local
+	// Agent logs, before returning this one timeline. The Conversation directory
+	// owns identity enrichment; exact timeline reads consume its projection.
+	if query.conversationID == "" {
+		handler.refreshConversationIndex(request.Context(), activity.ConversationIndexRequest{
+			Limit:           1,
+			CaptureRunID:    query.captureRunID,
+			ManualCaptureID: query.manualCaptureID,
+		})
+	}
 	page, err := handler.activities.ListExchanges(
 		request.Context(),
 		activity.PageRequest{
@@ -1028,6 +1049,11 @@ type problemSpec struct {
 
 func classifyEnvironmentError(err error) problemSpec {
 	switch {
+	case errors.Is(err, environment.ErrUpstreamEndpointStale):
+		return problemSpec{
+			status: http.StatusUnprocessableEntity,
+			reason: ReasonEnvironmentUpstreamStale,
+		}
 	case errors.Is(err, environment.ErrEnvironmentNotFound):
 		return problemSpec{
 			status: http.StatusNotFound,

@@ -7,8 +7,20 @@ import '../core/api/control_api.dart';
 import '../core/api/account_facts_models.dart';
 import '../core/api/control_models.dart';
 import '../core/api/provider_origin.dart';
+import '../core/api/runtime_storage.dart';
 
 final class PreviewControlApi implements ControlApi {
+  @override
+  launchEnvironmentSnapshots() async => const [];
+  @override
+  Future<RuntimeStorageLocation>
+  storageLocation() async => const RuntimeStorageLocation(
+    dataDirectory:
+        '/Users/mira/Library/Application Support/io.vibermate.desktop',
+    databasePath:
+        '/Users/mira/Library/Application Support/io.vibermate.desktop/runtime.db',
+  );
+
   @override
   Future<AccountFacts> accountFacts(
     String accountId, {

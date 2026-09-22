@@ -184,6 +184,11 @@ func (repository *repositoryDouble) Get(_ context.Context, exchangeID string, no
 	return record.Clone(), nil
 }
 
+func (repository *repositoryDouble) GetConversationEvidence(ctx context.Context, exchangeID string, now time.Time) (ConversationEvidence, error) {
+	record, err := repository.Get(ctx, exchangeID, now)
+	return record.ConversationEvidence(), err
+}
+
 func (repository *repositoryDouble) GetProjection(
 	_ context.Context,
 	exchangeID string,

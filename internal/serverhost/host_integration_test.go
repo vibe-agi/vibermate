@@ -716,10 +716,27 @@ func TestRemoteLauncherRunsChildWithoutLocalDesktopDaemon(t *testing.T) {
 	if !login.FirstUse || login.TLSFingerprint == "" {
 		t.Fatalf("first encrypted login trust = %#v", login)
 	}
+	manager := host.Runtime().Environments()
+	candidate := environment.Environment{
+		ID: "filtered-env", Name: "Filtered environment", Revision: 1, State: environment.StateActive,
+		ContentRecording:  environment.ContentRecordingPolicy{Mode: environment.ContentRecordingFull, RetentionDays: 30},
+		LaunchEnvironment: environment.LaunchEnvironmentPolicy{DeleteEnv: []string{"GH_TOKEN"}, SetEnv: map[string]string{"TEAM_CONTEXT": "research"}},
+	}
+	draft, err := manager.SaveDraft(context.Background(), environment.DraftCommand{Candidate: candidate})
+	if err != nil {
+		t.Fatal(err)
+	}
+	preview, err := manager.Preview(context.Background(), candidate.ID, draft.Revision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.Publish(context.Background(), preview); err != nil {
+		t.Fatal(err)
+	}
 	var firstLog strings.Builder
 	launcher, err := runlauncher.New(runlauncher.Config{
 		Remote:          &remoteConfig,
-		BaseEnvironment: []string{"PATH=/usr/bin:/bin"},
+		BaseEnvironment: []string{"PATH=/usr/bin:/bin", "GH_TOKEN=synthetic-private-canary", "LANG=C", "TEAM_CONTEXT=original"},
 		Stdin:           strings.NewReader(""), Stdout: io.Discard, Stderr: &firstLog,
 		Getwd:          func() (string, error) { return workspace, nil },
 		ControlTimeout: 2 * time.Second, CreateTimeout: 10 * time.Second,
@@ -730,12 +747,21 @@ func TestRemoteLauncherRunsChildWithoutLocalDesktopDaemon(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	exitCode, err := launcher.Run(ctx, runlauncher.LaunchRequest{
-		EnvironmentID: environment.SystemTransparentID,
-		Command:       []string{"/bin/sh", "-c", "exit 0"},
+		EnvironmentID: candidate.ID,
+		Command:       []string{"/bin/sh", "-c", `test -z "${GH_TOKEN+x}" && test "$LANG" = C && test "$TEAM_CONTEXT" = research`},
 	})
 	cancel()
 	if err != nil || exitCode != 0 {
 		t.Fatalf("remote child exit=%d error=%v log=%s", exitCode, err, firstLog.String())
+	}
+	snapshots := host.Runtime().LaunchSnapshots().List()
+	if len(snapshots) != 1 || !snapshots[0].Remote || snapshots[0].DeviceName != "integration-client" ||
+		strings.Join(snapshots[0].Inventory.Names, ",") != "GH_TOKEN,LANG,PATH,TEAM_CONTEXT" {
+		t.Fatalf("remote launch snapshot is not the actual pre-filter environment: %+v", snapshots)
+	}
+	wire, _ := json.Marshal(snapshots)
+	if bytes.Contains(wire, []byte("synthetic-private-canary")) {
+		t.Fatal("snapshot leaked a value")
 	}
 }
 

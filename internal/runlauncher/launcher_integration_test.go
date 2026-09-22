@@ -509,6 +509,9 @@ func (fixture *controlFixture) ServeHTTP(
 		}
 		var input capturecontrol.CreateRequest
 		decodeRequest(fixture.t, request, &input)
+		if input.EnvironmentInventory == nil || input.EnvironmentInventory.Validate() != nil {
+			fixture.t.Error("launcher did not send a bounded name-only inventory")
+		}
 		expectedEnvironment := fixture.expectedEnvironment
 		if expectedEnvironment == "" {
 			expectedEnvironment = environment.SystemTransparentID.String()

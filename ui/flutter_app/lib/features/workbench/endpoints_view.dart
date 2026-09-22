@@ -6,6 +6,7 @@ import '../../core/api/control_models.dart';
 import '../../core/api/provider_origin.dart';
 import '../../core/design/viber_theme.dart';
 import 'deletion_dialog.dart';
+import 'control_failure_notice.dart';
 import '../../core/design/workbench_widgets.dart';
 import '../../core/i18n/app_copy.dart';
 import 'provider_account_links.dart';
@@ -49,7 +50,11 @@ final class _EndpointsViewState extends State<EndpointsView> {
         ),
         const Divider(height: 1),
         if (controller.inventoryError case final error?)
-          InlineNotice(message: copy.maybe(error) ?? error, error: true),
+          ControlFailureNotice(
+            message: error,
+            copy: copy,
+            diagnostic: controller.inventoryErrorDiagnostic,
+          ),
         if (controller.inventoryNotice case final notice?)
           InlineNotice(
             message: copy('notice.inventory.$notice'),
@@ -154,9 +159,7 @@ final class _EndpointsViewState extends State<EndpointsView> {
               endpoint.id,
             );
             if (result == null) {
-              throw StateError(
-                widget.controller.inventoryError ?? 'endpoint delete failed',
-              );
+              throw widget.controller.inventoryFailure;
             }
             return result;
           },
@@ -646,9 +649,10 @@ final class _EndpointEditorDialogState extends State<_EndpointEditorDialog> {
                 ),
                 if (_submitted && widget.controller.inventoryError != null) ...[
                   const SizedBox(height: 9),
-                  InlineNotice(
+                  ControlFailureNotice(
                     message: widget.controller.inventoryError!,
-                    error: true,
+                    copy: copy,
+                    diagnostic: widget.controller.inventoryErrorDiagnostic,
                   ),
                 ],
               ],

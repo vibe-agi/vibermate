@@ -101,6 +101,37 @@ Future<WorkbenchController> _openEditor(
 }
 
 void main() {
+  testWidgets('file and clipboard imports warn before credential entry', (
+    tester,
+  ) async {
+    final controller = await _openEditor(
+      tester,
+      1180,
+      AppLanguage.simplifiedChinese,
+    );
+    await tester.tap(find.byKey(const Key('account-entry-import')));
+    await tester.pumpAndSettle();
+    final warning = find.byKey(const Key('account-editor-codex-ownership'));
+    expect(warning, findsOneWidget);
+    expect(
+      find.textContaining('请停止在原 Codex 或其他工具中使用这份 auth.json 及其副本'),
+      findsOneWidget,
+    );
+    for (final key in [
+      'account-editor-load-auth-json',
+      'account-editor-paste-auth-json',
+    ]) {
+      expect(
+        tester.getRect(warning).bottom,
+        lessThanOrEqualTo(tester.getRect(find.byKey(Key(key))).top),
+      );
+    }
+    await tester.tap(find.byKey(const Key('account-entry-manual')));
+    await tester.pumpAndSettle();
+    expect(warning, findsNothing);
+    controller.dispose();
+  });
+
   if (_reviewDirectory != null && Platform.isMacOS) {
     setUpAll(() async {
       for (final family in [

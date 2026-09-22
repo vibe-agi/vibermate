@@ -18,6 +18,7 @@ func (SystemClock) Now() time.Time { return time.Now().UTC() }
 type Repository interface {
 	Put(context.Context, Record) error
 	Get(context.Context, string, time.Time) (Record, error)
+	GetConversationEvidence(context.Context, string, time.Time) (ConversationEvidence, error)
 	GetProjection(context.Context, string, time.Time, RequestView) (Projection, error)
 	RequestPreviews(context.Context, []string, time.Time) (map[string]RequestPreview, error)
 	PurgeExpired(context.Context, time.Time) (uint64, error)
@@ -29,6 +30,7 @@ type Recorder interface {
 
 type Reader interface {
 	Get(context.Context, string) (Record, error)
+	GetConversationEvidence(context.Context, string) (ConversationEvidence, error)
 	GetProjection(context.Context, string, RequestView) (Projection, error)
 	RequestPreviews(context.Context, []string) (map[string]RequestPreview, error)
 }

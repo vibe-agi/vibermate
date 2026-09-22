@@ -514,7 +514,7 @@ func transcriptContentRecordFixture(
 	return record
 }
 
-func contentRecordFixture(t *testing.T, exchangeID string, recordedAt time.Time) exchangecontent.Record {
+func contentRecordFixture(t testing.TB, exchangeID string, recordedAt time.Time) exchangecontent.Record {
 	t.Helper()
 	block, err := protocolcore.NewTextBlock("hello")
 	if err != nil {

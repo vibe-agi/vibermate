@@ -9,6 +9,7 @@ import '../core/bootstrap/terminal_command.dart';
 import '../core/design/viber_theme.dart';
 import '../core/design/vibermate_mark.dart';
 import '../core/design/workbench_window_appearance.dart';
+import '../core/design/workbench_widgets.dart';
 import '../core/i18n/app_copy.dart';
 import '../core/preferences/workbench_preferences.dart';
 import '../features/workbench/workbench_controller.dart';
@@ -147,6 +148,8 @@ final class _RuntimeBootstrapState extends State<_RuntimeBootstrap> {
   WorkbenchController? _controller;
   RuntimeConnection? _runtime;
   Object? _failure;
+  String? _storageNotice;
+  bool _storageMoving = false;
   bool _starting = true;
   bool _loginRequired = false;
   RuntimeLoginMode _loginMode = RuntimeLoginMode.signIn;
@@ -219,6 +222,36 @@ final class _RuntimeBootstrapState extends State<_RuntimeBootstrap> {
         rootTrustInstaller: rootTrustInstaller,
         runtimeTarget: liveRuntime?.targetLabel ?? platformRuntimeTargetLabel(),
         closeRuntime: closeRuntime,
+        chooseStorageDirectory: liveRuntime?.chooseStorageDirectory,
+        storageMoveNotice: liveRuntime?.storageNotice ?? _storageNotice,
+        moveStorage: liveRuntime?.moveStorage == null
+            ? null
+            : (target) async {
+                final runtime = liveRuntime!;
+                await runtime.prepareStorageMove!(target);
+                _attempt += 1;
+                final previous = _controller;
+                if (mounted) {
+                  setState(() {
+                    _controller = null;
+                    _starting = true;
+                    _failure = null;
+                    _storageMoving = true;
+                  });
+                }
+                try {
+                  await runtime.moveStorage!(target);
+                  _storageNotice = 'settings.storage.moved';
+                } catch (error) {
+                  _storageNotice = WorkbenchController.storageMoveErrorKey(
+                    error,
+                  );
+                } finally {
+                  _storageMoving = false;
+                  previous?.dispose();
+                  if (mounted) await _start();
+                }
+              },
         restartRuntime: () async {
           // Invalidate the old watcher before asking the daemon to drain; the
           // next generation is intentionally started with a fresh attempt.
@@ -249,6 +282,7 @@ final class _RuntimeBootstrapState extends State<_RuntimeBootstrap> {
         _controller = controller;
         _starting = false;
       });
+      _storageNotice = null;
       _password.clear();
       _confirmPassword.clear();
       _recoveryKey.clear();
@@ -455,7 +489,9 @@ final class _RuntimeBootstrapState extends State<_RuntimeBootstrap> {
                   ),
                   const SizedBox(height: 10),
                   Text(
-                    widget.previewMode
+                    _storageMoving
+                        ? copy('settings.storage.moving')
+                        : widget.previewMode
                         ? copy('bootstrap.preview')
                         : copy('bootstrap.live'),
                     style: Theme.of(context).textTheme.bodySmall,
@@ -502,6 +538,12 @@ String _bootstrapFailureMessage(AppCopy copy, Object? failure) {
         'bootstrap.failure.secret_store_unavailable',
       ),
       'storage_unavailable' => copy('bootstrap.failure.storage_unavailable'),
+      'storage_location_unavailable' => copy(
+        'settings.storage.storage_location_unavailable',
+      ),
+      'storage_settings_invalid' => copy(
+        'settings.storage.storage_settings_invalid',
+      ),
       'root_reset_failed' => copy('bootstrap.failure.root_reset_failed'),
       _ => copy('bootstrap.failure.runtime_unavailable'),
     };
@@ -653,29 +695,30 @@ final class RuntimeServerLoginView extends StatelessWidget {
                               child: Column(
                                 children: [
                                   if (setup || recovery) ...[
-                                    TextField(
-                                      key: const Key('server-recovery-key'),
-                                      controller: recoveryKey,
-                                      obscureText: !recoveryKeyVisible,
-                                      autocorrect: false,
-                                      enableSuggestions: false,
-                                      autofocus: true,
-                                      decoration: InputDecoration(
-                                        labelText: copy(
-                                          'server.login.recovery_key',
-                                        ),
-                                        suffixIcon: IconButton(
-                                          tooltip: copy(
-                                            recoveryKeyVisible
-                                                ? 'server.login.hide_key'
-                                                : 'server.login.show_key',
-                                          ),
-                                          onPressed:
-                                              onRecoveryKeyVisibilityChanged,
-                                          icon: Icon(
-                                            recoveryKeyVisible
-                                                ? Icons.visibility_off_outlined
-                                                : Icons.visibility_outlined,
+                                    CompactLabeledControl(
+                                      label: copy('server.login.recovery_key'),
+                                      child: TextField(
+                                        key: const Key('server-recovery-key'),
+                                        controller: recoveryKey,
+                                        obscureText: !recoveryKeyVisible,
+                                        autocorrect: false,
+                                        enableSuggestions: false,
+                                        autofocus: true,
+                                        decoration: InputDecoration(
+                                          suffixIcon: IconButton(
+                                            tooltip: copy(
+                                              recoveryKeyVisible
+                                                  ? 'server.login.hide_key'
+                                                  : 'server.login.show_key',
+                                            ),
+                                            onPressed:
+                                                onRecoveryKeyVisibilityChanged,
+                                            icon: Icon(
+                                              recoveryKeyVisible
+                                                  ? Icons
+                                                        .visibility_off_outlined
+                                                  : Icons.visibility_outlined,
+                                            ),
                                           ),
                                         ),
                                       ),
@@ -694,86 +737,92 @@ final class RuntimeServerLoginView extends StatelessWidget {
                                     const SizedBox(height: 12),
                                   ],
                                   if (!recovery) ...[
-                                    TextField(
-                                      key: const Key('server-username'),
-                                      controller: username,
-                                      autofocus: !setup,
-                                      autocorrect: false,
-                                      enableSuggestions: false,
-                                      autofillHints: const [
-                                        AutofillHints.username,
-                                      ],
-                                      textInputAction: TextInputAction.next,
-                                      decoration: InputDecoration(
-                                        labelText: copy(
-                                          'server.login.username',
-                                        ),
-                                        helperText: copy(
-                                          'server.login.username_help',
+                                    CompactLabeledControl(
+                                      label: copy('server.login.username'),
+                                      child: TextField(
+                                        key: const Key('server-username'),
+                                        controller: username,
+                                        autofocus: !setup,
+                                        autocorrect: false,
+                                        enableSuggestions: false,
+                                        autofillHints: const [
+                                          AutofillHints.username,
+                                        ],
+                                        textInputAction: TextInputAction.next,
+                                        decoration: InputDecoration(
+                                          helperText: copy(
+                                            'server.login.username_help',
+                                          ),
                                         ),
                                       ),
                                     ),
                                     const SizedBox(height: 12),
                                   ],
-                                  TextField(
-                                    key: const Key('server-password'),
-                                    controller: password,
-                                    obscureText: !passwordVisible,
-                                    autocorrect: false,
-                                    enableSuggestions: false,
-                                    autofillHints: [
+                                  CompactLabeledControl(
+                                    label: copy(
                                       setup || recovery
-                                          ? AutofillHints.newPassword
-                                          : AutofillHints.password,
-                                    ],
-                                    textInputAction: setup || recovery
-                                        ? TextInputAction.next
-                                        : TextInputAction.done,
-                                    onSubmitted: setup || recovery
-                                        ? null
-                                        : (_) {
-                                            if (_complete) onConnect();
-                                          },
-                                    decoration: InputDecoration(
-                                      labelText: copy(
+                                          ? 'server.login.new_password'
+                                          : 'server.login.password',
+                                    ),
+                                    child: TextField(
+                                      key: const Key('server-password'),
+                                      controller: password,
+                                      obscureText: !passwordVisible,
+                                      autocorrect: false,
+                                      enableSuggestions: false,
+                                      autofillHints: [
                                         setup || recovery
-                                            ? 'server.login.new_password'
-                                            : 'server.login.password',
-                                      ),
-                                      suffixIcon: IconButton(
-                                        tooltip: copy(
-                                          passwordVisible
-                                              ? 'account.password.hide'
-                                              : 'account.password.show',
-                                        ),
-                                        onPressed: onPasswordVisibilityChanged,
-                                        icon: Icon(
-                                          passwordVisible
-                                              ? Icons.visibility_off_outlined
-                                              : Icons.visibility_outlined,
+                                            ? AutofillHints.newPassword
+                                            : AutofillHints.password,
+                                      ],
+                                      textInputAction: setup || recovery
+                                          ? TextInputAction.next
+                                          : TextInputAction.done,
+                                      onSubmitted: setup || recovery
+                                          ? null
+                                          : (_) {
+                                              if (_complete) onConnect();
+                                            },
+                                      decoration: InputDecoration(
+                                        suffixIcon: IconButton(
+                                          tooltip: copy(
+                                            passwordVisible
+                                                ? 'account.password.hide'
+                                                : 'account.password.show',
+                                          ),
+                                          onPressed:
+                                              onPasswordVisibilityChanged,
+                                          icon: Icon(
+                                            passwordVisible
+                                                ? Icons.visibility_off_outlined
+                                                : Icons.visibility_outlined,
+                                          ),
                                         ),
                                       ),
                                     ),
                                   ),
                                   if (setup || recovery) ...[
                                     const SizedBox(height: 12),
-                                    TextField(
-                                      key: const Key('server-confirm-password'),
-                                      controller: confirmPassword,
-                                      obscureText: !passwordVisible,
-                                      autocorrect: false,
-                                      enableSuggestions: false,
-                                      autofillHints: const [
-                                        AutofillHints.newPassword,
-                                      ],
-                                      textInputAction: TextInputAction.done,
-                                      onSubmitted: (_) {
-                                        if (_complete) onConnect();
-                                      },
-                                      decoration: InputDecoration(
-                                        labelText: copy(
-                                          'server.login.confirm_password',
+                                    CompactLabeledControl(
+                                      label: copy(
+                                        'server.login.confirm_password',
+                                      ),
+                                      child: TextField(
+                                        key: const Key(
+                                          'server-confirm-password',
                                         ),
+                                        controller: confirmPassword,
+                                        obscureText: !passwordVisible,
+                                        autocorrect: false,
+                                        enableSuggestions: false,
+                                        autofillHints: const [
+                                          AutofillHints.newPassword,
+                                        ],
+                                        textInputAction: TextInputAction.done,
+                                        onSubmitted: (_) {
+                                          if (_complete) onConnect();
+                                        },
+                                        decoration: InputDecoration(),
                                       ),
                                     ),
                                   ],

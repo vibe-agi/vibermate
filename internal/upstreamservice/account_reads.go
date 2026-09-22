@@ -57,6 +57,28 @@ func AccountOperations() []protocolspec.ClientOperationOptions {
 	return []protocolspec.ClientOperationOptions{quota, history}
 }
 
+// AllowsClientRead recognizes service-owned account reads outside the client's
+// model API base path. It does not grant an account lease or history access;
+// the frozen route and the reader still enforce those independently. Only an
+// exact registered request on the adapter's official client target qualifies.
+// Custom Base URLs must retain their configured path scope.
+func AllowsClientRead(base originidentity.ProviderOrigin, canonical originidentity.ClientOrigin, request protocolspec.RequestTarget) bool {
+	if base.Validate() != nil || canonical.Validate() != nil ||
+		base.String() != "https://chatgpt.com/backend-api/codex" || canonical.String() != "https://chatgpt.com" {
+		return false
+	}
+	for _, contract := range AccountOperations() {
+		operation, err := protocolspec.NewClientOperationDefinition(contract)
+		if err != nil || operation.Kind() != protocolspec.ClientOperationAccountRead {
+			continue
+		}
+		if matched, _, err := operation.Match(request); err == nil && matched {
+			return true
+		}
+	}
+	return false
+}
+
 func ResolveRead(origin originidentity.ProviderOrigin, id string) (Read, error) {
 	if !upstreamendpoint.IsChatGPTCodexOrigin(origin) {
 		return Read{}, ErrUnsupported

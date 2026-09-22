@@ -20,6 +20,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/clientadapter"
 	"github.com/vibe-agi/vibermate/internal/clienttarget"
 	"github.com/vibe-agi/vibermate/internal/environment"
+	"github.com/vibe-agi/vibermate/internal/launchsnapshot"
 	"github.com/vibe-agi/vibermate/internal/localdiscovery"
 	"github.com/vibe-agi/vibermate/internal/serverconnection"
 )
@@ -166,11 +167,13 @@ func (launcher *Launcher) Run(
 	if err != nil {
 		return 1, err
 	}
+	inventory := launchsnapshot.Collect(launcher.config.BaseEnvironment)
 	createRequest := capturecontrol.CreateRequest{
-		EnvironmentID:  request.EnvironmentID.String(),
-		CWD:            cwd,
-		Command:        append([]string(nil), command...),
-		ExecutablePath: executable,
+		EnvironmentInventory: &inventory,
+		EnvironmentID:        request.EnvironmentID.String(),
+		CWD:                  cwd,
+		Command:              append([]string(nil), command...),
+		ExecutablePath:       executable,
 		RuntimeMetadata: runtimeMetadata(
 			launcher.config.BaseEnvironment,
 		),

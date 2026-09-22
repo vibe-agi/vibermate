@@ -817,6 +817,52 @@ func TestEnvironmentDraftPublishesOneAccountAcrossExplicitEndpointProtocols(t *t
 	if got := finalEnvironment.ClientEndpoints[1].ProtocolPlans[0].EgressProfile.Policy; got != wantOpenAIEgress {
 		t.Fatalf("reopened OpenAI egress policy = %#v, want %#v", got, wantOpenAIEgress)
 	}
+
+	// A newly linked account changes selector authority even when the user only
+	// edits the policy's name. The UI must normalize revisions after refreshing
+	// that authority; the control boundary must still reject unversioned changes.
+	additional := environmentRequest(t, application, http.MethodPost,
+		"/api/v1/provider-accounts", 0, "provider-account-cherry-additional-0001",
+		[]byte(`{"id":"account.cherry.additional","displayName":"Additional","upstreamEndpointId":"target.cherry.anthropic","kind":"bearer_token","secret":"synthetic-additional"}`))
+	if additional.Code != http.StatusCreated {
+		t.Fatalf("additional account status=%d body=%s", additional.Code, additional.Body.Bytes())
+	}
+	updateInput.ClientEndpoints = finalEnvironment.ClientEndpoints
+	updateInput.Name = "Selector with newly linked account"
+	selectorBody, err := json.Marshal(updateInput)
+	if err != nil {
+		t.Fatal(err)
+	}
+	staleSelector := environmentRequest(t, application, http.MethodPut,
+		"/api/v1/environments/cherry-mapped/draft", uint64(finalEnvironment.Revision),
+		"environment-selector-links-stale-0001", selectorBody)
+	if staleSelector.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("unversioned selector account changes status=%d body=%s", staleSelector.Code, staleSelector.Body.Bytes())
+	}
+	selectorEndpoint := &updateInput.ClientEndpoints[0]
+	selectorPlan := &selectorEndpoint.ProtocolPlans[0]
+	selectorRoute := &selectorPlan.Destination.Upstream.Routes[0]
+	selectorEndpoint.Revision++
+	selectorPlan.Revision++
+	selectorRoute.Revision++
+	selectorRoute.AccountPolicy.Revision++
+	selectorBody, err = json.Marshal(updateInput)
+	if err != nil {
+		t.Fatal(err)
+	}
+	preparedSelector := environmentRequest(t, application, http.MethodPut,
+		"/api/v1/environments/cherry-mapped/draft", uint64(finalEnvironment.Revision),
+		"environment-selector-links-prepared-0001", selectorBody)
+	if preparedSelector.Code != http.StatusOK {
+		t.Fatalf("prepared selector status=%d body=%s", preparedSelector.Code, preparedSelector.Body.Bytes())
+	}
+	var selectorDraft desktopcontrol.EnvironmentDraftResponse
+	if err := json.Unmarshal(preparedSelector.Body.Bytes(), &selectorDraft); err != nil {
+		t.Fatal(err)
+	}
+	if got := selectorDraft.Candidate.ClientEndpoints[0].ProtocolPlans[0].Destination.Upstream.Routes[0].AccountPolicy.Accounts; len(got) != 2 {
+		t.Fatalf("new draft did not freeze both linked accounts: %+v", got)
+	}
 }
 
 func TestActivityRouteFiltersAndReturnsFrozenEnvironmentReferences(t *testing.T) {

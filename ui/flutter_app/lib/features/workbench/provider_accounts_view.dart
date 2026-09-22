@@ -11,6 +11,7 @@ import 'provider_account_note_editor.dart';
 import 'provider_account_token_details.dart';
 import 'provider_account_facts.dart';
 import 'workbench_controller.dart';
+import 'control_failure_notice.dart';
 
 /// The one place for managing upstream credentials. Service configuration
 /// screens navigate here instead of hosting another credential editor.
@@ -85,7 +86,11 @@ final class _ProviderAccountsViewState extends State<ProviderAccountsView> {
         ),
         const Divider(height: 1),
         if (controller.inventoryError case final error?)
-          InlineNotice(message: copy.maybe(error) ?? error, error: true),
+          ControlFailureNotice(
+            message: error,
+            copy: copy,
+            diagnostic: controller.inventoryErrorDiagnostic,
+          ),
         if (controller.inventoryNotice case final notice?)
           LayoutBuilder(
             builder: (context, constraints) => InlineNotice(

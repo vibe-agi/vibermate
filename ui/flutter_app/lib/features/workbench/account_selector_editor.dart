@@ -343,32 +343,36 @@ final class _AccountSelectorEditorDialogState
       LayoutBuilder(
         builder: (context, constraints) {
           final fields = <Widget>[
-            TextField(
-              key: const Key('account-selector-sample-accounts'),
-              controller: _accounts,
-              decoration: InputDecoration(
-                labelText: copy('account_selector.sample.accounts'),
+            CompactLabeledControl(
+              label: copy('account_selector.sample.accounts'),
+              child: TextField(
+                key: const Key('account-selector-sample-accounts'),
+                controller: _accounts,
+                decoration: InputDecoration(),
               ),
             ),
-            TextField(
-              key: const Key('account-selector-sample-user'),
-              controller: _loginUsername,
-              decoration: InputDecoration(
-                labelText: copy('account_selector.sample.user'),
+            CompactLabeledControl(
+              label: copy('account_selector.sample.user'),
+              child: TextField(
+                key: const Key('account-selector-sample-user'),
+                controller: _loginUsername,
+                decoration: InputDecoration(),
               ),
             ),
-            TextField(
-              key: const Key('account-selector-sample-workspace'),
-              controller: _workspace,
-              decoration: InputDecoration(
-                labelText: copy('account_selector.sample.workspace'),
+            CompactLabeledControl(
+              label: copy('account_selector.sample.workspace'),
+              child: TextField(
+                key: const Key('account-selector-sample-workspace'),
+                controller: _workspace,
+                decoration: InputDecoration(),
               ),
             ),
-            TextField(
-              key: const Key('account-selector-sample-model'),
-              controller: _model,
-              decoration: InputDecoration(
-                labelText: copy('account_selector.sample.model'),
+            CompactLabeledControl(
+              label: copy('account_selector.sample.model'),
+              child: TextField(
+                key: const Key('account-selector-sample-model'),
+                controller: _model,
+                decoration: InputDecoration(),
               ),
             ),
           ];
@@ -409,30 +413,31 @@ final class _AccountSelectorEditorDialogState
     ],
   );
 
-  Widget _protocolField() => DropdownButtonFormField<String>(
-    key: const Key('account-selector-sample-protocol'),
-    initialValue: _protocol,
-    isExpanded: true,
-    decoration: InputDecoration(
-      labelText: copy('account_selector.sample.protocol'),
+  Widget _protocolField() => CompactLabeledControl(
+    label: copy('account_selector.sample.protocol'),
+    child: DropdownButtonFormField<String>(
+      key: const Key('account-selector-sample-protocol'),
+      initialValue: _protocol,
+      isExpanded: true,
+      decoration: InputDecoration(),
+      items: const [
+        DropdownMenuItem(
+          value: 'anthropic_messages',
+          child: Text('Anthropic Messages'),
+        ),
+        DropdownMenuItem(
+          value: 'openai_responses',
+          child: Text('OpenAI Responses'),
+        ),
+        DropdownMenuItem(value: 'openai_chat', child: Text('OpenAI Chat')),
+      ],
+      onChanged: (value) {
+        if (value != null) {
+          _protocol = value;
+          _inputsChanged();
+        }
+      },
     ),
-    items: const [
-      DropdownMenuItem(
-        value: 'anthropic_messages',
-        child: Text('Anthropic Messages'),
-      ),
-      DropdownMenuItem(
-        value: 'openai_responses',
-        child: Text('OpenAI Responses'),
-      ),
-      DropdownMenuItem(value: 'openai_chat', child: Text('OpenAI Chat')),
-    ],
-    onChanged: (value) {
-      if (value != null) {
-        _protocol = value;
-        _inputsChanged();
-      }
-    },
   );
 
   Widget _actions(BuildContext context) => Padding(

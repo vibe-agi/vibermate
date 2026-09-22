@@ -9,6 +9,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/captureidentity"
 	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/originidentity"
+	"github.com/vibe-agi/vibermate/internal/upstreamservice"
 )
 
 type Options struct {
@@ -535,9 +536,10 @@ func (manager *Manager) BeginRequest(
 	if assignment.ClientTarget.Available() &&
 		assignment.ClientTarget.MatchesTransport(connection.binding.ProviderOrigin) &&
 		assignment.ClientTarget.CanonicalOrigin() == connection.binding.ClientOrigin &&
-		!assignment.ClientTarget.ContainsPath(facts.Target.Path) {
+		!assignment.ClientTarget.ContainsPath(facts.Target.Path) &&
+		!upstreamservice.AllowsClientRead(assignment.ClientTarget.ActualOrigin(), assignment.ClientTarget.CanonicalOrigin(), facts.Target) {
 		release()
-		return nil, environment.ErrClientProtocolNotMatched
+		return nil, errors.Join(environment.ErrClientProtocolNotMatched, ErrClientTargetPathNotAllowed)
 	}
 	plan, err := snapshot.ResolveConnectionRequest(connection.binding, facts)
 	if err != nil {

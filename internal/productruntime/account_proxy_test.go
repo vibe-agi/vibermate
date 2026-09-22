@@ -18,13 +18,17 @@ import (
 	"github.com/vibe-agi/vibermate/internal/captureassignment"
 	"github.com/vibe-agi/vibermate/internal/captureidentity"
 	"github.com/vibe-agi/vibermate/internal/capturerun"
+	"github.com/vibe-agi/vibermate/internal/clienttarget"
 	"github.com/vibe-agi/vibermate/internal/connectionpolicy"
 	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/originaltransport"
+	"github.com/vibe-agi/vibermate/internal/providerauth"
 )
 
 // Uses the production proxy, CA, capture assignment and account runtime, with
 // synthetic accounts and the same external provider boundary as the reader test.
+// Use the launcher's ClientProfile too: a bare Capture omits the client's model
+// API base-path scope and cannot catch failures in native /status or /usage.
 func (f accountReadFixture) serveProxy(t *testing.T) *url.URL {
 	t.Helper()
 	ctx := context.Background()
@@ -51,10 +55,18 @@ func (f accountReadFixture) serveProxy(t *testing.T) *url.URL {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := f.runtime.assignments.Create(ctx, captureassignment.CreateCommand{
-		Capture: capture, EnvironmentID: f.aggregate.ID, Source: captureassignment.SourceLaunch,
-	}); err != nil {
+	profile, err := clienttarget.NewProfile("codex-cli", clienttarget.EnvironmentFacts{})
+	if err != nil {
 		t.Fatal(err)
+	}
+	assignment, _, err := f.runtime.assignments.CreateForLaunch(ctx, captureassignment.CreateCommand{
+		Capture: capture, EnvironmentID: f.aggregate.ID, Source: captureassignment.SourceLaunch, ClientProfile: profile,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if assignment.ClientTarget.ActualOrigin().String() != "https://chatgpt.com/backend-api/codex" {
+		t.Fatal("fixture lost the native Codex launch target and its model API base path")
 	}
 	admissions, err := captureadmission.NewAuthorizer(f.runtime.captureRuns, f.runtime.manualCaptures)
 	if err != nil {
@@ -104,20 +116,35 @@ func (accountFixtureOriginal) Do(context.Context, originaltransport.Request) (*h
 }
 
 func TestManagedAccountQueriesThroughCONNECT(t *testing.T) {
-	for _, historyAllowed := range []bool{false, true} {
-		name := "history_denied"
-		if historyAllowed {
-			name = "history_allowed"
-		}
-		t.Run(name, func(t *testing.T) {
-			f := newAccountReadFixture(t)
+	for _, test := range []struct {
+		name           string
+		historyAllowed bool
+		http2          bool
+		oauth          bool
+	}{
+		{name: "history_denied"},
+		{name: "history_allowed", historyAllowed: true},
+		{name: "http2_history_denied", http2: true},
+		{name: "http2_history_allowed", historyAllowed: true, http2: true},
+		{name: "oauth_history_denied", oauth: true},
+		{name: "oauth_history_allowed", historyAllowed: true, oauth: true},
+		{name: "http2_oauth_history_denied", http2: true, oauth: true},
+		{name: "http2_oauth_history_allowed", historyAllowed: true, http2: true, oauth: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			historyAllowed := test.historyAllowed
+			driver := providerauth.StaticHeaderDriverRef()
+			if test.oauth {
+				driver = providerauth.CodexOAuthDriverRef()
+			}
+			f := newAccountReadFixtureWithDriver(t, driver)
 			f.aggregate.ClientEndpoints[0].ProtocolPlans[0].Destination.Upstream.Routes[0].AllowAccountHistory = historyAllowed
 			proxyURL := f.serveProxy(t)
 			roots := x509.NewCertPool()
 			if !roots.AppendCertsFromPEM(f.runtime.LocalRootCertificate().CertificatePEM()) {
 				t.Fatal("fixture CA invalid")
 			}
-			transport := &http.Transport{Proxy: http.ProxyURL(proxyURL), TLSClientConfig: &tls.Config{RootCAs: roots, MinVersion: tls.VersionTLS12}}
+			transport := &http.Transport{Proxy: http.ProxyURL(proxyURL), TLSClientConfig: &tls.Config{RootCAs: roots, MinVersion: tls.VersionTLS12}, ForceAttemptHTTP2: test.http2}
 			defer transport.CloseIdleConnections()
 			client := &http.Client{Transport: transport, Timeout: 4 * time.Second}
 			send := func(method, path string) (int, string, http.Header) {
@@ -130,6 +157,9 @@ func TestManagedAccountQueriesThroughCONNECT(t *testing.T) {
 					t.Fatal(err)
 				}
 				defer response.Body.Close()
+				if test.http2 && response.ProtoMajor != 2 {
+					t.Fatal("account query did not negotiate HTTP/2")
+				}
 				body, err := io.ReadAll(response.Body)
 				if err != nil {
 					t.Fatal(err)
@@ -154,9 +184,17 @@ func TestManagedAccountQueriesThroughCONNECT(t *testing.T) {
 			if status != expected || historyAllowed && !strings.Contains(body, "1200") {
 				t.Fatalf("history scope: status %d", status)
 			}
-			status, _, _ = send("POST", "/backend-api/wham/rate-limit-reset-credits/consume")
-			if status < 400 {
-				t.Fatal("account write was admitted")
+			for _, rejected := range []struct{ method, path string }{
+				{"POST", "/backend-api/wham/rate-limit-reset-credits/consume"},
+				{"GET", "/backend-api/wham/rate-limit-reset-credits"},
+				{"GET", "/backend-api/wham/usage/other"},
+				{"GET", "/backend-api/wham/usage?account_id=other"},
+				{"POST", "/v1/responses"},
+			} {
+				status, body, _ = send(rejected.method, rejected.path)
+				if status != http.StatusUnprocessableEntity || !strings.Contains(body, "client_target_path_not_allowed") {
+					t.Fatalf("client target scope did not reject %s %s precisely: status %d", rejected.method, rejected.path, status)
+				}
 			}
 			f.wire.mu.Lock()
 			defer f.wire.mu.Unlock()

@@ -395,8 +395,10 @@ func (handler *Handler) resolvePublishedAccountPolicies(
 						return environment.ErrInvalidEnvironment
 					}
 					for _, view := range accounts {
-						if view.Account.ID.String() == policy.FixedAccountID &&
-							accountBelongsToRoute(view, *route) {
+						if view.Account.ID.String() == policy.FixedAccountID {
+							if err := routeAccountError(view, *route); err != nil {
+								return err
+							}
 							policy.Accounts = []environment.RouteAccountReference{{
 								ID:          view.Account.ID.String(),
 								Revision:    environment.Revision(view.Account.Revision),
@@ -406,7 +408,7 @@ func (handler *Handler) resolvePublishedAccountPolicies(
 						}
 					}
 					if len(policy.Accounts) != 1 {
-						return provideraccount.ErrInvalidAccount
+						return provideraccount.ErrAccountNotFound
 					}
 				case environment.AccountSelectionJavaScript:
 					if policy.FixedAccountID != "" || policy.Selector == nil || handler.codeLibrary == nil {
@@ -453,11 +455,22 @@ func accountBelongsToRoute(
 	view provideraccount.View,
 	route environment.UpstreamRoute,
 ) bool {
+	return routeAccountError(view, route) == nil
+}
+
+func routeAccountError(view provideraccount.View, route environment.UpstreamRoute) error {
 	account := view.Account
-	return account.State == provideraccount.StateActive &&
-		view.Health.State == provideraccount.HealthReady &&
-		account.Origin == route.ProviderTarget.Origin &&
-		account.Associations.Contains(upstreamendpoint.ID(route.ProviderTarget.ID))
+	if account.State != provideraccount.StateActive {
+		return provideraccount.ErrAccountDisabled
+	}
+	if account.Origin != route.ProviderTarget.Origin ||
+		!account.Associations.Contains(upstreamendpoint.ID(route.ProviderTarget.ID)) {
+		return provideraccount.ErrEndpointMismatch
+	}
+	if view.Health.State != provideraccount.HealthReady {
+		return provideraccount.ErrCredentialMissing
+	}
+	return nil
 }
 
 func classifyEnvironmentAccountPolicyError(err error) problemSpec {
@@ -469,6 +482,9 @@ func classifyEnvironmentAccountPolicyError(err error) problemSpec {
 		return classifyCodeLibraryError(err)
 	case errors.Is(err, provideraccount.ErrInvalidAccount),
 		errors.Is(err, provideraccount.ErrAccountNotFound),
+		errors.Is(err, provideraccount.ErrEndpointMismatch),
+		errors.Is(err, provideraccount.ErrAccountDisabled),
+		errors.Is(err, provideraccount.ErrCredentialMissing),
 		errors.Is(err, provideraccount.ErrManagerClosing):
 		return classifyProviderAccountError(err)
 	default:

@@ -115,6 +115,10 @@ final class RuntimeConnection {
     this.webPrincipal,
     this.changePassword,
     this.signOut,
+    this.chooseStorageDirectory,
+    this.prepareStorageMove,
+    this.moveStorage,
+    this.storageNotice,
   });
 
   final ControlApi api;
@@ -132,4 +136,8 @@ final class RuntimeConnection {
   final Future<void> Function(String currentPassword, String newPassword)?
   changePassword;
   final Future<void> Function()? signOut;
+  final Future<String?> Function()? chooseStorageDirectory;
+  final Future<void> Function(String target)? prepareStorageMove;
+  final Future<void> Function(String target)? moveStorage;
+  final String? storageNotice;
 }

@@ -20,6 +20,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/clienttarget"
 	"github.com/vibe-agi/vibermate/internal/controlprincipal"
 	"github.com/vibe-agi/vibermate/internal/environment"
+	"github.com/vibe-agi/vibermate/internal/launchsnapshot"
 )
 
 const (
@@ -63,30 +64,33 @@ type CaptureRunIssuer interface {
 }
 
 type Options struct {
-	Runs        capturerun.Controller
-	Principals  PrincipalAuthenticator
-	Issuer      CaptureRunIssuer
-	Manual      *ManualHandler
-	RunLifetime time.Duration
+	LaunchSnapshots *launchsnapshot.Store
+	Runs            capturerun.Controller
+	Principals      PrincipalAuthenticator
+	Issuer          CaptureRunIssuer
+	Manual          *ManualHandler
+	RunLifetime     time.Duration
 }
 
 type Handler struct {
-	runs        capturerun.Controller
-	principals  PrincipalAuthenticator
-	issuer      CaptureRunIssuer
-	manual      *ManualHandler
-	runLifetime time.Duration
-	mux         *http.ServeMux
+	launchSnapshots *launchsnapshot.Store
+	runs            capturerun.Controller
+	principals      PrincipalAuthenticator
+	issuer          CaptureRunIssuer
+	manual          *ManualHandler
+	runLifetime     time.Duration
+	mux             *http.ServeMux
 }
 
 type CreateRequest struct {
-	EnvironmentID     string                     `json:"environmentId"`
-	CWD               string                     `json:"cwd"`
-	Command           []string                   `json:"command"`
-	ExecutablePath    string                     `json:"executablePath"`
-	RuntimeMetadata   ClientRuntimeMetadataInput `json:"runtimeMetadata"`
-	ClientEnvironment *ClientEnvironmentInput    `json:"clientEnvironment,omitempty"`
-	Companion         *CompanionAttestationInput `json:"companion,omitempty"`
+	EnvironmentInventory *launchsnapshot.Inventory  `json:"environmentInventory,omitempty"`
+	EnvironmentID        string                     `json:"environmentId"`
+	CWD                  string                     `json:"cwd"`
+	Command              []string                   `json:"command"`
+	ExecutablePath       string                     `json:"executablePath"`
+	RuntimeMetadata      ClientRuntimeMetadataInput `json:"runtimeMetadata"`
+	ClientEnvironment    *ClientEnvironmentInput    `json:"clientEnvironment,omitempty"`
+	Companion            *CompanionAttestationInput `json:"companion,omitempty"`
 }
 
 type ClientRuntimeMetadataInput struct {
@@ -148,12 +152,13 @@ func New(options Options) (*Handler, error) {
 		return nil, errors.New("CaptureRun control dependencies are incomplete")
 	}
 	handler := &Handler{
-		runs:        options.Runs,
-		principals:  options.Principals,
-		issuer:      options.Issuer,
-		manual:      options.Manual,
-		runLifetime: options.RunLifetime,
-		mux:         http.NewServeMux(),
+		launchSnapshots: options.LaunchSnapshots,
+		runs:            options.Runs,
+		principals:      options.Principals,
+		issuer:          options.Issuer,
+		manual:          options.Manual,
+		runLifetime:     options.RunLifetime,
+		mux:             http.NewServeMux(),
 	}
 	handler.mux.HandleFunc("POST /api/v1/capture-runs", handler.create)
 	handler.mux.HandleFunc(
@@ -227,6 +232,10 @@ func (handler *Handler) create(
 		writeProblem(writer, http.StatusUnprocessableEntity, ReasonInvalidCaptureRun)
 		return
 	}
+	if input.EnvironmentInventory != nil && input.EnvironmentInventory.Validate() != nil {
+		writeProblem(writer, http.StatusUnprocessableEntity, ReasonInvalidCaptureRun)
+		return
+	}
 	var environmentID environment.EnvironmentID
 	if input.EnvironmentID != "" {
 		var err error
@@ -269,6 +278,9 @@ func (handler *Handler) create(
 		return
 	}
 	runView := CaptureRunViewOf(grant.Run.Run)
+	if handler.launchSnapshots != nil && input.EnvironmentInventory != nil {
+		handler.launchSnapshots.Record(grant.Run.Run, *input.EnvironmentInventory)
+	}
 	writeJSON(writer, http.StatusCreated, LaunchGrant{
 		Run:                  runView,
 		CatalogRevision:      grant.CatalogRevision,

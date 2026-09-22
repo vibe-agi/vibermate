@@ -119,16 +119,18 @@ final class _CodexOAuthLoginPanelState extends State<CodexOAuthLoginPanel> {
             style: Theme.of(context).textTheme.bodySmall,
           ),
           const SizedBox(height: 8),
-          TextField(
-            key: const Key('codex-oauth-callback'),
-            controller: _callback,
-            enabled: !_busy && login.state == 'pending',
-            obscureText: true,
-            autocorrect: false,
-            enableSuggestions: false,
-            decoration: InputDecoration(
-              labelText: copy('provider_accounts.oauth.callback'),
-              hintText: 'http://localhost:1455/auth/callback?code=…&state=…',
+          CompactLabeledControl(
+            label: copy('provider_accounts.oauth.callback'),
+            child: TextField(
+              key: const Key('codex-oauth-callback'),
+              controller: _callback,
+              enabled: !_busy && login.state == 'pending',
+              obscureText: true,
+              autocorrect: false,
+              enableSuggestions: false,
+              decoration: InputDecoration(
+                hintText: 'http://localhost:1455/auth/callback?code=…&state=…',
+              ),
             ),
           ),
           const SizedBox(height: 8),

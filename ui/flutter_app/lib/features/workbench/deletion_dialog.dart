@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
 
+import '../../core/api/control_failure.dart';
 import '../../core/api/control_models.dart';
 import '../../core/design/viber_theme.dart';
 import '../../core/i18n/app_copy.dart';
+import 'control_failure_notice.dart';
 
 /// The one confirmation every destructive action in the workbench goes through.
 ///
@@ -40,7 +42,7 @@ final class DeletionConfirmation extends StatefulWidget {
 class _DeletionConfirmationState extends State<DeletionConfirmation> {
   bool _running = false;
   DeletionOutcome? _refused;
-  String? _error;
+  ControlFailure? _error;
 
   Future<void> _confirm() async {
     setState(() {
@@ -63,7 +65,7 @@ class _DeletionConfirmationState extends State<DeletionConfirmation> {
       if (!mounted) return;
       setState(() {
         _running = false;
-        _error = error.toString();
+        _error = ControlFailure.from(error);
       });
     }
   }
@@ -136,12 +138,11 @@ class _DeletionConfirmationState extends State<DeletionConfirmation> {
             ],
             if (_error != null) ...[
               const SizedBox(height: ViberSpacing.sm),
-              Text(
-                _error!,
+              ControlFailureNotice(
                 key: const Key('deletion-error'),
-                style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                  color: context.viberColors.danger,
-                ),
+                message: _error!.messageKey,
+                diagnostic: _error!.diagnostic,
+                copy: copy,
               ),
             ],
           ],

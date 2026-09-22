@@ -677,6 +677,41 @@ func TestGraphValidationRejectsUnsafeIdentityAndReferences(t *testing.T) {
 	}
 }
 
+func TestStaleUpstreamReferenceIsDiagnosableWithoutRewritingFrozenEvidence(t *testing.T) {
+	t.Parallel()
+	previous := fixture(t, "work", mustOrigin(t, "https://relay.example"))
+	accounts := accountCatalogFor(previous)
+	oldRoute := previous.ClientEndpoints[0].ProtocolPlans[0].Destination.Upstream.Routes[0]
+	account := accounts[oldRoute.AccountPolicy.FixedAccountID]
+	account.UpstreamEndpointRevision++
+	accounts[account.ID] = account
+	compiler := testCompiler(t, accounts)
+	if _, err := compiler.Compile(previous); !errors.Is(err, ErrUpstreamEndpointStale) || !errors.Is(err, ErrInvalidEnvironment) {
+		t.Fatalf("stale service reference error = %v", err)
+	}
+	// Historical evidence still resolves the exact frozen target, not the live catalog.
+	if _, err := compiler.Restore(previous); err != nil {
+		t.Fatalf("restore frozen evidence: %v", err)
+	}
+	candidate := previous.Clone()
+	candidate.Revision++
+	candidate.ClientEndpoints[0].Revision++
+	plan := &candidate.ClientEndpoints[0].ProtocolPlans[0]
+	plan.Revision++
+	route := &plan.Destination.Upstream.Routes[0]
+	route.Revision++
+	route.ProviderTarget.Revision = account.UpstreamEndpointRevision
+	if err := ValidateTransition(previous, candidate); err != nil {
+		t.Fatalf("refresh transition: %v", err)
+	}
+	if _, err := compiler.Compile(candidate); err != nil {
+		t.Fatalf("compile refreshed service: %v", err)
+	}
+	if previous.ClientEndpoints[0].ProtocolPlans[0].Destination.Upstream.Routes[0].ProviderTarget.Revision != oldRoute.ProviderTarget.Revision {
+		t.Fatal("preparing a new draft rewrote frozen evidence")
+	}
+}
+
 func TestAccountCompatibilityAndMutableAliasesFailClosed(t *testing.T) {
 	t.Parallel()
 	candidate := fixture(t, "work", mustOrigin(t, "https://relay.example"))

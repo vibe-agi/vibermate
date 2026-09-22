@@ -1837,57 +1837,62 @@ final class _CreateRuntimeUserDialogState
               ),
             ),
             const SizedBox(height: 12),
-            TextField(
-              key: const Key('runtime-user-username'),
-              controller: _username,
-              enabled: !_busy,
-              autofocus: true,
-              autocorrect: false,
-              enableSuggestions: false,
-              textInputAction: TextInputAction.next,
-              decoration: InputDecoration(
-                labelText: widget.copy('server.users.dialog.username'),
-                helperText: widget.copy('server.login.username_help'),
+            CompactLabeledControl(
+              label: widget.copy('server.users.dialog.username'),
+              child: TextField(
+                key: const Key('runtime-user-username'),
+                controller: _username,
+                enabled: !_busy,
+                autofocus: true,
+                autocorrect: false,
+                enableSuggestions: false,
+                textInputAction: TextInputAction.next,
+                decoration: InputDecoration(
+                  helperText: widget.copy('server.login.username_help'),
+                ),
+                onChanged: (_) => setState(() => _error = null),
               ),
-              onChanged: (_) => setState(() => _error = null),
             ),
             const SizedBox(height: 10),
-            TextField(
-              key: const Key('runtime-user-password'),
-              controller: _password,
-              enabled: !_busy,
-              obscureText: true,
-              autocorrect: false,
-              enableSuggestions: false,
-              textInputAction: widget.firstOwner
-                  ? TextInputAction.next
-                  : TextInputAction.done,
-              decoration: InputDecoration(
-                labelText: widget.copy('server.users.dialog.password'),
-                helperText: widget.copy('server.users.dialog.password_help'),
-              ),
-              onChanged: (_) => setState(() => _error = null),
-              onSubmitted: !widget.firstOwner && _complete && !_busy
-                  ? (_) => unawaited(_submit())
-                  : null,
-            ),
-            if (widget.firstOwner) ...[
-              const SizedBox(height: 10),
-              TextField(
-                key: const Key('runtime-user-confirm-password'),
-                controller: _confirmPassword,
+            CompactLabeledControl(
+              label: widget.copy('server.users.dialog.password'),
+              child: TextField(
+                key: const Key('runtime-user-password'),
+                controller: _password,
                 enabled: !_busy,
                 obscureText: true,
                 autocorrect: false,
                 enableSuggestions: false,
-                textInputAction: TextInputAction.done,
+                textInputAction: widget.firstOwner
+                    ? TextInputAction.next
+                    : TextInputAction.done,
                 decoration: InputDecoration(
-                  labelText: widget.copy('server.login.confirm_password'),
+                  helperText: widget.copy('server.users.dialog.password_help'),
                 ),
                 onChanged: (_) => setState(() => _error = null),
-                onSubmitted: _complete && !_busy
+                onSubmitted: !widget.firstOwner && _complete && !_busy
                     ? (_) => unawaited(_submit())
                     : null,
+              ),
+            ),
+            if (widget.firstOwner) ...[
+              const SizedBox(height: 10),
+              CompactLabeledControl(
+                label: widget.copy('server.login.confirm_password'),
+                child: TextField(
+                  key: const Key('runtime-user-confirm-password'),
+                  controller: _confirmPassword,
+                  enabled: !_busy,
+                  obscureText: true,
+                  autocorrect: false,
+                  enableSuggestions: false,
+                  textInputAction: TextInputAction.done,
+                  decoration: InputDecoration(),
+                  onChanged: (_) => setState(() => _error = null),
+                  onSubmitted: _complete && !_busy
+                      ? (_) => unawaited(_submit())
+                      : null,
+                ),
               ),
             ],
             if (_error case final error?) ...[
@@ -2004,42 +2009,45 @@ final class _ResetRuntimeUserPasswordDialogState
             ),
           ),
           const SizedBox(height: 12),
-          TextField(
-            key: const Key('runtime-user-new-password'),
-            controller: _password,
-            autofocus: true,
-            enabled: !_busy,
-            obscureText: !_visible,
-            autocorrect: false,
-            enableSuggestions: false,
-            autofillHints: const [AutofillHints.newPassword],
-            decoration: InputDecoration(
-              labelText: widget.copy('account.password.new'),
-              suffixIcon: IconButton(
-                onPressed: () => setState(() => _visible = !_visible),
-                icon: Icon(
-                  _visible
-                      ? Icons.visibility_off_outlined
-                      : Icons.visibility_outlined,
+          CompactLabeledControl(
+            label: widget.copy('account.password.new'),
+            child: TextField(
+              key: const Key('runtime-user-new-password'),
+              controller: _password,
+              autofocus: true,
+              enabled: !_busy,
+              obscureText: !_visible,
+              autocorrect: false,
+              enableSuggestions: false,
+              autofillHints: const [AutofillHints.newPassword],
+              decoration: InputDecoration(
+                suffixIcon: IconButton(
+                  onPressed: () => setState(() => _visible = !_visible),
+                  icon: Icon(
+                    _visible
+                        ? Icons.visibility_off_outlined
+                        : Icons.visibility_outlined,
+                  ),
                 ),
               ),
+              onChanged: (_) => setState(() => _error = null),
             ),
-            onChanged: (_) => setState(() => _error = null),
           ),
           const SizedBox(height: 10),
-          TextField(
-            key: const Key('runtime-user-confirm-password'),
-            controller: _confirm,
-            enabled: !_busy,
-            obscureText: !_visible,
-            autocorrect: false,
-            enableSuggestions: false,
-            autofillHints: const [AutofillHints.newPassword],
-            decoration: InputDecoration(
-              labelText: widget.copy('account.password.confirm'),
+          CompactLabeledControl(
+            label: widget.copy('account.password.confirm'),
+            child: TextField(
+              key: const Key('runtime-user-confirm-password'),
+              controller: _confirm,
+              enabled: !_busy,
+              obscureText: !_visible,
+              autocorrect: false,
+              enableSuggestions: false,
+              autofillHints: const [AutofillHints.newPassword],
+              decoration: InputDecoration(),
+              onChanged: (_) => setState(() => _error = null),
+              onSubmitted: _complete ? (_) => unawaited(_submit()) : null,
             ),
-            onChanged: (_) => setState(() => _error = null),
-            onSubmitted: _complete ? (_) => unawaited(_submit()) : null,
           ),
           if (_error case final error?) ...[
             const SizedBox(height: 10),
@@ -2499,9 +2507,87 @@ final class _StorageDisclosure extends StatelessWidget {
               ),
               const SizedBox(width: 8),
               _SettingsLabel(copy('settings.storage')),
+              const Spacer(),
+              ContextHelpButton(
+                message: copy('settings.storage.move_hint'),
+                title: copy('settings.storage'),
+                dismissLabel: copy('common.dismiss'),
+              ),
             ],
           ),
           const SizedBox(height: 8),
+          if (controller.storageLocation case final location?) ...[
+            for (final entry in [
+              (copy('settings.storage.directory'), location.dataDirectory),
+              (copy('settings.storage.database'), location.databasePath),
+            ]) ...[
+              Text(entry.$1, style: Theme.of(context).textTheme.bodySmall),
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Expanded(
+                    child: SelectableText(
+                      entry.$2,
+                      style: monoStyle.copyWith(fontSize: ViberType.supporting),
+                    ),
+                  ),
+                  IconButton(
+                    tooltip: copy.format('common.copy', {'field': entry.$1}),
+                    onPressed: () =>
+                        Clipboard.setData(ClipboardData(text: entry.$2)),
+                    icon: const Icon(Icons.copy_outlined, size: 14),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+            ],
+          ] else if (controller.storageLocationFailed)
+            Wrap(
+              crossAxisAlignment: WrapCrossAlignment.center,
+              spacing: 8,
+              children: [
+                Text(copy('settings.storage.location_failed'), style: body),
+                TextButton(
+                  onPressed: controller.refreshStorageLocation,
+                  child: Text(copy('common.retry')),
+                ),
+              ],
+            )
+          else
+            const CompactProgressIndicator(),
+          if (!controller.terminalManagement && !controller.previewMode) ...[
+            Text(copy('settings.storage.server_path'), style: body),
+            const SizedBox(height: 8),
+          ],
+          if (controller.moveStorage != null &&
+              controller.chooseStorageDirectory != null) ...[
+            Align(
+              alignment: Alignment.centerLeft,
+              child: TextButton.icon(
+                key: const Key('storage-change-directory'),
+                onPressed:
+                    controller.storageMoving ||
+                        controller.storageLocation == null
+                    ? null
+                    : () => _chooseStorage(context),
+                icon: const Icon(Icons.drive_file_move_outline, size: 16),
+                label: Text(
+                  copy(
+                    controller.storageMoving
+                        ? 'settings.storage.moving'
+                        : 'settings.storage.change',
+                  ),
+                ),
+              ),
+            ),
+            if (controller.storageMoveFailure ?? controller.storageMoveNotice
+                case final message?)
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 8),
+                child: Text(copy(message), style: body),
+              ),
+            const SizedBox(height: 8),
+          ],
           for (final line in const [
             'settings.storage.not_encrypted',
             'settings.storage.credentials',
@@ -2528,9 +2614,7 @@ final class _StorageDisclosure extends StatelessWidget {
                     onConfirm: () async {
                       final result = await controller.clearEvidence();
                       if (result == null) {
-                        throw StateError(
-                          controller.inventoryError ?? 'archive clear failed',
-                        );
+                        throw controller.inventoryFailure;
                       }
                       return result;
                     },
@@ -2545,6 +2629,47 @@ final class _StorageDisclosure extends StatelessWidget {
         ],
       ),
     );
+  }
+
+  Future<void> _chooseStorage(BuildContext context) async {
+    final target = await controller.pickStorageDirectory();
+    if (target == null || !context.mounted) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(copy('settings.storage.change')),
+        content: SizedBox(
+          width: 520,
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  copy('settings.storage.new_directory'),
+                  style: Theme.of(context).textTheme.labelLarge,
+                ),
+                const SizedBox(height: 6),
+                SelectableText(target, style: monoStyle),
+                const SizedBox(height: 18),
+                Text(copy('settings.storage.move_confirmation')),
+              ],
+            ),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: Text(copy('common.cancel')),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: Text(copy('settings.storage.move_confirm')),
+          ),
+        ],
+      ),
+    );
+    if (confirmed == true) await controller.relocateStorage(target);
   }
 }
 
