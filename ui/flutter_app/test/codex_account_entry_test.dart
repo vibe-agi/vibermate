@@ -3,6 +3,7 @@ import 'dart:io';
 import 'dart:ui' as ui;
 
 import 'package:file_selector_platform_interface/file_selector_platform_interface.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
@@ -15,7 +16,9 @@ import 'package:vibermate_app/features/workbench/workbench_controller.dart';
 import 'package:vibermate_app/preview/preview_control_api.dart';
 import 'package:vibermate_app/preview/preview_terminal_command.dart';
 
-final _reviewDirectory = Platform.environment['VIBERMATE_UI_REVIEW_DIR'];
+final _reviewDirectory = kIsWeb
+    ? null
+    : Platform.environment['VIBERMATE_UI_REVIEW_DIR'];
 final _reviewKey = GlobalKey();
 
 Future<void> _review(WidgetTester tester, String name) async {

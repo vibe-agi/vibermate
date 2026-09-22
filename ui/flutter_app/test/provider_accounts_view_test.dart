@@ -1,6 +1,7 @@
 import 'dart:io';
 import 'dart:ui' as ui;
 
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
@@ -15,7 +16,9 @@ import 'package:vibermate_app/preview/preview_terminal_command.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
-  final reviewDirectory = Platform.environment['VIBERMATE_UI_REVIEW_DIR'];
+  final reviewDirectory = kIsWeb
+      ? null
+      : Platform.environment['VIBERMATE_UI_REVIEW_DIR'];
   if (reviewDirectory != null && Platform.isMacOS) {
     setUpAll(() async {
       for (final font in {

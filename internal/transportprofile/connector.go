@@ -556,21 +556,31 @@ func (connector *Connector) handshake(
 	ctx context.Context,
 	raw net.Conn,
 	handshake func(context.Context) error,
-) error {
+) (err error) {
 	handshakeContext, cancel := context.WithTimeout(
 		ctx,
 		connector.handshakeTimeout,
 	)
-	defer cancel()
+	defer func() {
+		// Socket closure can race both deadline setup and child-context
+		// cancellation. Preserve the caller's cause at every return boundary,
+		// before our own cleanup cancels the handshake context.
+		if cause := context.Cause(ctx); cause != nil {
+			err = cause
+		} else if cause := context.Cause(handshakeContext); cause != nil {
+			err = cause
+		}
+		cancel()
+	}()
+	if err := handshakeContext.Err(); err != nil {
+		return err
+	}
 	if deadline, ok := handshakeContext.Deadline(); ok {
 		if err := raw.SetDeadline(deadline); err != nil {
 			return err
 		}
 	}
 	if err := handshake(handshakeContext); err != nil {
-		if handshakeContext.Err() != nil {
-			return context.Cause(handshakeContext)
-		}
 		return err
 	}
 	return raw.SetDeadline(time.Time{})
