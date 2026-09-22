@@ -184,11 +184,14 @@ jobs:
         run: |
           set -euo pipefail
           flutter build macos --debug --config-only
+          # These tests share one App host. Xcode 15 can hang while cancelling
+          # a spare parallel Flutter host after all test classes have passed.
           xcodebuild test \
             -workspace macos/Runner.xcworkspace \
             -scheme Runner \
             -configuration Debug \
             -destination 'platform=macOS' \
+            -parallel-testing-enabled NO \
             -resultBundlePath "${RUNNER_TEMP}/vibermate-native-tests.xcresult" \
             CODE_SIGNING_ALLOWED=NO
       - name: Retain native test diagnostics on failure
