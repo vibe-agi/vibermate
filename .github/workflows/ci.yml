@@ -167,6 +167,8 @@ jobs:
           ui/flutter_app/tool/install_ci_flutter.sh "${flutter_root}"
           printf '%s/bin\n' "${flutter_root}" >> "${GITHUB_PATH}"
           printf 'FLUTTER_ROOT=%s\n' "${flutter_root}" >> "${GITHUB_ENV}"
+      - name: Install the locked CocoaPods version
+        run: bash ui/flutter_app/tool/install_ci_cocoapods.sh
       - name: Verify Flutter workbench and contracts
         shell: bash
         working-directory: ui/flutter_app
