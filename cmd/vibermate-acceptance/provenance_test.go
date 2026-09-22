@@ -200,13 +200,17 @@ func TestDesktopBuildManifestBindsSourceSidecarsAndConfiguration(
 		},
 		NestedCodeSHA256: map[string]string{
 			"app-framework":           strings.Repeat("d", 64),
+			"file-selector-framework": strings.Repeat("8", 64),
 			"flutter-macos-framework": strings.Repeat("e", 64),
+			"url-launcher-framework":  strings.Repeat("9", 64),
 			"vibermated":              strings.Repeat("b", 64),
 			"vibermate":               strings.Repeat("c", 64),
 		},
 	}
 	artifacts := []artifactProvenance{
 		{Role: "app-framework", SHA256: strings.Repeat("d", 64)},
+		{Role: "file-selector-framework", SHA256: strings.Repeat("8", 64)},
+		{Role: "url-launcher-framework", SHA256: strings.Repeat("9", 64)},
 		{Role: "daemon", SHA256: strings.Repeat("b", 64)},
 		{Role: "flutter-macos-framework", SHA256: strings.Repeat("e", 64)},
 		{Role: "launcher", SHA256: strings.Repeat("c", 64)},

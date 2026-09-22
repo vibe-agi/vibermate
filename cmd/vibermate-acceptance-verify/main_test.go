@@ -243,8 +243,10 @@ func validCLIReport(t *testing.T) acceptancereport.Report {
 		"desktop-app-bundle",
 		"desktop-app-executable",
 		"desktop-build-manifest",
+		"file-selector-framework",
 		"flutter-macos-framework",
 		"launcher",
+		"url-launcher-framework",
 	}
 	root := t.TempDir()
 	sourceRoot := filepath.Join(root, "source")
@@ -261,6 +263,10 @@ func validCLIReport(t *testing.T) acceptancereport.Report {
 		t.Fatal(err)
 	}
 	artifactPaths := map[string]string{
+		"file-selector-framework": filepath.Join(bundle,
+			"Contents", "Frameworks", "file_selector_macos.framework", "Versions", "A", "file_selector_macos"),
+		"url-launcher-framework": filepath.Join(bundle,
+			"Contents", "Frameworks", "url_launcher_macos.framework", "Versions", "A", "url_launcher_macos"),
 		"acceptance": filepath.Join(root, "vibermate-acceptance"),
 		"app-framework": filepath.Join(
 			bundle, "Contents", "Frameworks", "App.framework", "Versions", "A", "App",
@@ -358,6 +364,14 @@ func validCLIReport(t *testing.T) acceptancereport.Report {
 	if err != nil {
 		t.Fatal(err)
 	}
+	fileSelector, err := acceptancereport.DigestArtifact("file-selector-framework", artifactPaths["file-selector-framework"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	urlLauncher, err := acceptancereport.DigestArtifact("url-launcher-framework", artifactPaths["url-launcher-framework"])
+	if err != nil {
+		t.Fatal(err)
+	}
 	manifestPayload, err := json.MarshalIndent(cliBuildManifest{
 		Schema: acceptancereport.DesktopBuildManifestSchemaV3,
 		Source: source,
@@ -369,7 +383,9 @@ func validCLIReport(t *testing.T) acceptancereport.Report {
 		ConfigurationSHA256: configurationDigests,
 		NestedCodeSHA256: map[string]string{
 			"app-framework":           appFramework.SHA256,
+			"file-selector-framework": fileSelector.SHA256,
 			"flutter-macos-framework": flutterFramework.SHA256,
+			"url-launcher-framework":  urlLauncher.SHA256,
 			"vibermated":              daemon.SHA256,
 			"vibermate":               launcher.SHA256,
 		},

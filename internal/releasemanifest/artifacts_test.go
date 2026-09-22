@@ -609,9 +609,13 @@ func writeSemanticArtifacts(t *testing.T, root string, manifest *Manifest) {
 	}
 	appFrameworkPayload := []byte("universal App framework\n")
 	flutterFrameworkPayload := []byte("universal FlutterMacOS framework\n")
+	fileSelectorPayload := []byte("universal file selector framework\n")
+	urlLauncherPayload := []byte("universal URL launcher framework\n")
 	nestedCode := map[string]string{
 		"app-framework":           payloadSHA256(appFrameworkPayload),
+		"file-selector-framework": payloadSHA256(fileSelectorPayload),
 		"flutter-macos-framework": payloadSHA256(flutterFrameworkPayload),
+		"url-launcher-framework":  payloadSHA256(urlLauncherPayload),
 		"vibermate":               payloadSHA256(sidecarPayloads["vibermate"]),
 		"vibermated":              payloadSHA256(sidecarPayloads["vibermated"]),
 	}
@@ -666,6 +670,8 @@ func writeSemanticArtifacts(t *testing.T, root string, manifest *Manifest) {
 	writePayloadFixtureFile(t, root, "vibermated", sidecarPayloads["vibermated"], 0o755)
 	writePayloadFixtureFile(t, root, "dist/App.framework/App", appFrameworkPayload, 0o755)
 	writePayloadFixtureFile(t, root, "dist/FlutterMacOS.framework/FlutterMacOS", flutterFrameworkPayload, 0o755)
+	writePayloadFixtureFile(t, root, "dist/file_selector_macos.framework/file_selector_macos", fileSelectorPayload, 0o755)
+	writePayloadFixtureFile(t, root, "dist/url_launcher_macos.framework/url_launcher_macos", urlLauncherPayload, 0o755)
 	writePayloadFixtureFile(t, root, "vibermate-build-manifest.json", desktopPayload, 0o644)
 	writePayloadFixtureFile(t, root, "LICENSE", licensePayload, 0o644)
 	writePayloadFixtureFile(t, root, "dist/index.html", distPayload, 0o644)
@@ -682,7 +688,11 @@ func writeSemanticArtifacts(t *testing.T, root string, manifest *Manifest) {
 			fixtureFileLedgerEntry("dist/App.framework/App", appFrameworkPayload, 0o755),
 			fixtureDirectoryLedgerEntry("dist/FlutterMacOS.framework", 0o755),
 			fixtureFileLedgerEntry("dist/FlutterMacOS.framework/FlutterMacOS", flutterFrameworkPayload, 0o755),
+			fixtureDirectoryLedgerEntry("dist/file_selector_macos.framework", 0o755),
+			fixtureFileLedgerEntry("dist/file_selector_macos.framework/file_selector_macos", fileSelectorPayload, 0o755),
 			fixtureFileLedgerEntry("dist/index.html", distPayload, 0o644),
+			fixtureDirectoryLedgerEntry("dist/url_launcher_macos.framework", 0o755),
+			fixtureFileLedgerEntry("dist/url_launcher_macos.framework/url_launcher_macos", urlLauncherPayload, 0o755),
 			fixtureFileLedgerEntry("vibermate", sidecarPayloads["vibermate"], 0o755),
 			fixtureFileLedgerEntry("vibermate-build-manifest.json", desktopPayload, 0o644),
 			fixtureFileLedgerEntry("vibermate-desktop", mainPayload, 0o755),

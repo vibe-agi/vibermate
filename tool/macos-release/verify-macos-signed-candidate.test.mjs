@@ -24,7 +24,9 @@ function signingEvidenceFixture() {
       signedApplicationTreeSHA256: digest("3"),
       signedExecutableSHA256: {
         "app-framework": digest("4"),
+        "file-selector-framework": digest("d"),
         "flutter-macos-framework": digest("5"),
+        "url-launcher-framework": digest("e"),
         vibermate: digest("6"),
         "vibermate-desktop": digest("7"),
         vibermated: digest("8"),

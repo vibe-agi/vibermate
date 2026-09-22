@@ -40,8 +40,12 @@ export const flutterDesktopBuildConfigurationNames = Object.freeze([
 export const flutterDesktopNestedCode = Object.freeze({
   "app-framework":
     "Contents/Frameworks/App.framework/Versions/A/App",
+  "file-selector-framework":
+    "Contents/Frameworks/file_selector_macos.framework/Versions/A/file_selector_macos",
   "flutter-macos-framework":
     "Contents/Frameworks/FlutterMacOS.framework/Versions/A/FlutterMacOS",
+  "url-launcher-framework":
+    "Contents/Frameworks/url_launcher_macos.framework/Versions/A/url_launcher_macos",
   vibermate: "Contents/MacOS/vibermate",
   vibermated: "Contents/MacOS/vibermated",
 });

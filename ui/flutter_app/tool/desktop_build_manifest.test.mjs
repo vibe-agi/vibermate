@@ -64,7 +64,9 @@ test("v3 is a closed Flutter-only build contract", () => {
   );
   assert.deepEqual(Object.keys(flutterDesktopNestedCode).sort(), [
     "app-framework",
+    "file-selector-framework",
     "flutter-macos-framework",
+    "url-launcher-framework",
     "vibermate",
     "vibermated",
   ]);

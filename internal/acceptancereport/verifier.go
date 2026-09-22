@@ -32,8 +32,10 @@ var (
 		"desktop-app-bundle",
 		"desktop-app-executable",
 		"desktop-build-manifest",
+		"file-selector-framework",
 		"flutter-macos-framework",
 		"launcher",
+		"url-launcher-framework",
 	}
 	requiredConfigurationDigests = []string{
 		"go.mod",
@@ -548,6 +550,10 @@ func verifyArtifacts(artifacts []ArtifactProvenance) error {
 		return errors.New("report Desktop App bundle path is invalid")
 	}
 	requiredMembers := map[string]string{
+		"file-selector-framework": filepath.Join(bundle,
+			"Contents", "Frameworks", "file_selector_macos.framework", "Versions", "A", "file_selector_macos"),
+		"url-launcher-framework": filepath.Join(bundle,
+			"Contents", "Frameworks", "url_launcher_macos.framework", "Versions", "A", "url_launcher_macos"),
 		"app-framework": filepath.Join(
 			bundle,
 			"Contents", "Frameworks", "App.framework", "Versions", "A", "App",

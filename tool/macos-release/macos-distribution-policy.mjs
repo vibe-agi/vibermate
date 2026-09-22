@@ -39,6 +39,16 @@ export const macOSDistributionPolicy = Object.freeze({
     "Contents/Frameworks/FlutterMacOS.framework/Resources":
       "Versions/Current/Resources",
     "Contents/Frameworks/FlutterMacOS.framework/Versions/Current": "A",
+    "Contents/Frameworks/file_selector_macos.framework/file_selector_macos":
+      "Versions/Current/file_selector_macos",
+    "Contents/Frameworks/file_selector_macos.framework/Resources":
+      "Versions/Current/Resources",
+    "Contents/Frameworks/file_selector_macos.framework/Versions/Current": "A",
+    "Contents/Frameworks/url_launcher_macos.framework/url_launcher_macos":
+      "Versions/Current/url_launcher_macos",
+    "Contents/Frameworks/url_launcher_macos.framework/Resources":
+      "Versions/Current/Resources",
+    "Contents/Frameworks/url_launcher_macos.framework/Versions/Current": "A",
   }),
   architectures: Object.freeze(["arm64", "x86_64"]),
   developerDirectory: "/Applications/Xcode_16.2.app/Contents/Developer",
@@ -48,7 +58,9 @@ export const macOSDistributionPolicy = Object.freeze({
   lipoIdentity: "Apple lipo (version unavailable; SHA-256 bound)",
   codeObjectNames: Object.freeze([
     "app-framework",
+    "file-selector-framework",
     "flutter-macos-framework",
+    "url-launcher-framework",
     "vibermate",
     "vibermate-desktop",
     "vibermated",
@@ -65,6 +77,18 @@ export const macOSDistributionPolicy = Object.freeze({
       relativePath:
         "Contents/Frameworks/FlutterMacOS.framework/Versions/A/FlutterMacOS",
       signingPath: "Contents/Frameworks/FlutterMacOS.framework",
+    }),
+    "file-selector-framework": Object.freeze({
+      identifier: "org.cocoapods.file-selector-macos",
+      relativePath:
+        "Contents/Frameworks/file_selector_macos.framework/Versions/A/file_selector_macos",
+      signingPath: "Contents/Frameworks/file_selector_macos.framework",
+    }),
+    "url-launcher-framework": Object.freeze({
+      identifier: "org.cocoapods.url-launcher-macos",
+      relativePath:
+        "Contents/Frameworks/url_launcher_macos.framework/Versions/A/url_launcher_macos",
+      signingPath: "Contents/Frameworks/url_launcher_macos.framework",
     }),
     vibermate: Object.freeze({
       identifier: "io.vibermate.desktop.vibermate",
@@ -93,6 +117,12 @@ export const macOSDistributionPolicy = Object.freeze({
       "Contents/Frameworks/FlutterMacOS.framework/Versions/Current",
     ]),
     "vibermate-desktop": Object.freeze(["."]),
+    "file-selector-framework": Object.freeze([
+      "Contents/Frameworks/file_selector_macos.framework/Versions/Current",
+    ]),
+    "url-launcher-framework": Object.freeze([
+      "Contents/Frameworks/url_launcher_macos.framework/Versions/Current",
+    ]),
   }),
   executableNames: Object.freeze([
     "vibermate",
@@ -108,7 +138,7 @@ export const macOSDistributionPolicy = Object.freeze({
   notaryEvidenceFilename: "notarization-evidence.json",
   notaryLogFilename: "apple-notary-log.json",
   notarySubmitFilename: "apple-notary-submit.json",
-  notaryTicketedCodeDirectoryCount: 10,
+  notaryTicketedCodeDirectoryCount: 14,
   releaseRelativeDirectory:
     "ui/flutter_app/build/distribution/universal-apple-darwin/release",
   signingEvidenceFilename: "signing-transformation.json",
