@@ -851,18 +851,35 @@ final class WorkbenchController extends ChangeNotifier
     final generation = _selectionGeneration;
     final conversationKey = selectedCaptureConversationKey;
     try {
-      if (conversationKey == null) {
-        // An empty Capture needs only a one-record probe. Reloading its
-        // assignment and Conversation directory every second made an idle
-        // manual proxy generate two unnecessary requests per tick.
+      if (conversationKey == null || capture.isManual) {
+        // A manual Capture can receive independent Exchanges after its first.
+        // Probe the newest Activity without reloading its directory each tick.
         final latest = await _captureActivityPage(capture, limit: 1);
-        if (latest.items.isNotEmpty &&
-            !_disposed &&
-            generation == _selectionGeneration &&
-            capture.key == selectedCaptureKey) {
-          await _loadCaptureDetail(capture, quiet: true);
+        if (_disposed ||
+            generation != _selectionGeneration ||
+            capture.key != selectedCaptureKey ||
+            conversationKey != selectedCaptureConversationKey) {
+          return;
         }
-        return;
+        final newest = captureConversations.firstOrNull;
+        final observed = latest.items.firstOrNull;
+        if (observed != null &&
+            (newest == null ||
+                observed.id != newest.latest.id ||
+                observed.occurredAt != newest.latest.occurredAt ||
+                observed.reasonCode != newest.latest.reasonCode ||
+                observed.status != newest.latest.status)) {
+          await _loadCaptureDetail(
+            capture,
+            quiet: true,
+            followLatest: capture.isManual && conversationKey == newest?.key,
+          );
+          return;
+        }
+        if (conversationKey == null ||
+            !selectedActivities.any((item) => item.status == 'pending')) {
+          return;
+        }
       }
       final latest = await _captureActivityPage(
         capture,
@@ -2701,6 +2718,7 @@ final class WorkbenchController extends ChangeNotifier
   Future<void> _loadCaptureDetail(
     CaptureRecord capture, {
     bool quiet = false,
+    bool followLatest = false,
   }) async {
     if (quiet && (captureActivitiesLoading || _captureDetailLoads != 0)) return;
     _captureDetailLoads += 1;
@@ -2728,7 +2746,9 @@ final class WorkbenchController extends ChangeNotifier
       final conversationPage = values[1]! as ConversationPage;
       selectedCaptureConversations = conversationPage;
       final available = captureConversations;
-      if (!available.any(
+      if (followLatest && available.isNotEmpty) {
+        selectedCaptureConversationKey = available.first.key;
+      } else if (!available.any(
         (value) => value.key == selectedCaptureConversationKey,
       )) {
         final migrated =

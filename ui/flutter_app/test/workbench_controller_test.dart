@@ -335,6 +335,71 @@ void main() {
     },
   );
 
+  testWidgets('manual Capture notices a second independent Exchange', (
+    tester,
+  ) async {
+    final fixture = PreviewControlApi();
+    final api = _GrowingManualApi(fixture);
+    final controller = WorkbenchController(
+      api: api,
+      terminalCommands: PreviewTerminalCommandService(),
+      previewMode: true,
+      closeRuntime: fixture.close,
+      terminalManagement: false,
+    );
+    await controller.initialize();
+    await controller.selectCapture('manual_capture:manual-figma');
+    final oldLatest = controller.captureConversations.first;
+    final oldCount = controller.captureConversations.length;
+    expect(controller.selectedCaptureConversationKey, oldLatest.key);
+    final directoryCalls = api.directoryCalls;
+
+    await tester.pump(const Duration(seconds: 1));
+    await tester.pump();
+    expect(api.directoryCalls, directoryCalls);
+    expect(api.unscopedCalls, greaterThan(0));
+
+    api.newestVisible = true;
+    await tester.pump(const Duration(seconds: 1));
+    await tester.pump();
+    expect(controller.captureConversations.length, oldCount + 1);
+    expect(controller.captureConversations.first.key, isNot(oldLatest.key));
+    expect(
+      controller.selectedCaptureConversationKey,
+      controller.captureConversations.first.key,
+    );
+    expect(
+      controller.selectedActivities.first.id,
+      controller.captureConversations.first.latest.id,
+    );
+    controller.dispose();
+  });
+
+  testWidgets('manual Capture keeps an older Exchange selected', (
+    tester,
+  ) async {
+    final fixture = PreviewControlApi();
+    final api = _GrowingManualApi(fixture);
+    final controller = WorkbenchController(
+      api: api,
+      terminalCommands: PreviewTerminalCommandService(),
+      previewMode: true,
+      closeRuntime: fixture.close,
+      terminalManagement: false,
+    );
+    await controller.initialize();
+    await controller.selectCapture('manual_capture:manual-figma');
+    final older = controller.captureConversations[1];
+    await controller.selectCaptureConversation(older.key);
+    api.newestVisible = true;
+
+    await tester.pump(const Duration(seconds: 1));
+    await tester.pump();
+    expect(controller.captureConversations.first.key, isNot(older.key));
+    expect(controller.selectedCaptureConversationKey, older.key);
+    controller.dispose();
+  });
+
   testWidgets('hidden workbench pauses polling and catches up on resume', (
     tester,
   ) async {
@@ -1498,6 +1563,70 @@ final class _IdleCaptureApi extends _UsageTrackingApi {
       if (!revealEvidence) {
         return Future.value(const ActivityPage(items: [], nextCursor: null));
       }
+    }
+    return super.activities(
+      cursor: cursor,
+      limit: limit,
+      captureRunId: captureRunId,
+      manualCaptureId: manualCaptureId,
+      environmentId: environmentId,
+      conversationId: conversationId,
+    );
+  }
+}
+
+final class _GrowingManualApi extends _UsageTrackingApi {
+  _GrowingManualApi(super.delegate);
+
+  bool newestVisible = false;
+  int directoryCalls = 0;
+  int unscopedCalls = 0;
+
+  @override
+  Future<ConversationPage> conversations({
+    String? cursor,
+    int limit = 50,
+    String? captureRunId,
+    String? manualCaptureId,
+  }) async {
+    final page = await super.conversations(
+      cursor: cursor,
+      limit: limit,
+      captureRunId: captureRunId,
+      manualCaptureId: manualCaptureId,
+    );
+    if (manualCaptureId != 'manual-figma') return page;
+    directoryCalls++;
+    return newestVisible
+        ? page
+        : ConversationPage(
+            items: page.items.skip(1).toList(),
+            nextCursor: page.nextCursor,
+          );
+  }
+
+  @override
+  Future<ActivityPage> activities({
+    String? cursor,
+    int limit = 50,
+    String? captureRunId,
+    String? manualCaptureId,
+    String? environmentId,
+    String? conversationId,
+  }) async {
+    if (manualCaptureId == 'manual-figma' && conversationId == null) {
+      unscopedCalls++;
+      final page = await super.activities(
+        cursor: cursor,
+        limit: newestVisible ? limit : limit + 1,
+        manualCaptureId: manualCaptureId,
+      );
+      return newestVisible
+          ? page
+          : ActivityPage(
+              items: page.items.skip(1).take(limit).toList(),
+              nextCursor: page.nextCursor,
+            );
     }
     return super.activities(
       cursor: cursor,

@@ -197,3 +197,29 @@ Conversation 和时间线；5 秒总览刷新不再与运行中 Capture 的快�
 控制器还在 Flutter 生命周期报告 `hidden`、`paused` 或 `detached` 时暂停两组定时
 轮询，恢复 `resumed` 时立即读取最新状态。Widget 测试用生命周期事件验证隐藏期间
 零新增请求、恢复后补拉；真实浏览器后台标签是否正确发出该事件仍待有头浏览器验收。
+
+### 本机 Web：请求完成到新 Exchange 可见（2026-09-25，探索性）
+
+在 macOS/arm64、Apple M5 Max、Chrome 153、Flutter 3.41.5 release Web 构建中，
+以隔离数据目录启动原生 Server，并把合成 Anthropic 请求经手动代理的 CONNECT/TLS
+送往本机合成 Provider。Playwright 登录 Web 后保持同一运行中的手动 Capture 可见。
+计时从客户端收到完整 HTTP 响应开始，到浏览器可访问性树出现该请求的唯一标记并
+完成下一帧为止；**不包含 Provider 等待时间**。每组连续发送 12 条短请求、1 条约
+9 KiB、1 条约 151 KiB 的请求。短请求剔除首次样本后报告 11 次 warm p50/p95：
+
+| Web API 路径 | 短请求 warm p50 / p95 | 9 KiB 单次 | 151 KiB 单次 |
+| --- | ---: | ---: | ---: |
+| 本机直连 | 798 / 1,292 ms | 1,288 ms | 803 ms |
+| 浏览器 API 人为增加 80 ms 延迟 | 811 / 1,294 ms | 1,292 ms | 799 ms |
+
+这项小样本的主要等待来自 1 秒可见证据轮询周期；80 ms 是浏览器侧注入的延迟，
+**不等于实测远程部署**。大正文在此只验证默认折叠视图，新建 Exchange 的展开全文
+另由上面的 Flutter/Chrome 合成渲染测试覆盖。这里没有把浏览器可访问性树的出现
+冒称为 GPU paint 时间，也没有分离证据提交、索引、各 API 和 Flutter 解码的耗时，
+因此 Task 1 的真实 App、远程 Web 与完整分段验收仍未完成。
+
+本次浏览器路径还发现一个实际可见性错误：手动 Capture 有首条 Exchange 后只轮询
+已选中的 Conversation，后续独立 Exchange 在持久层已存在，却要手动刷新才显示。
+现在每秒轻量探测该 Capture 的最新 Activity；仅在顶端记录变化时更新目录。正在
+查看最新项的用户会跟随新 Exchange，查看旧项的用户保留原选择。Widget 回归固定
+这两种行为，并检查无变化时不会重新读取 Conversation 目录。
