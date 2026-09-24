@@ -3536,7 +3536,12 @@ final class _ContentBlockView extends StatelessWidget {
           : context.viberColors.text,
       height: 1.35,
     );
-    final segments = _splitAfterFencedBlocks(block.text ?? '');
+    final source = block.text ?? '';
+    // Large Base64/JWT-like tokens have no Markdown structure; native text
+    // keeps their exact selectable bytes without the costly inline layout.
+    if (source.length > 32 * 1024 && _longPlainToken.hasMatch(source)) {
+      return SelectableText(source, style: bodyStyle);
+    }
     Widget markdown(String data, int index) => MarkdownBody(
       key: ValueKey('markdown-${block.kind}-${block.originalSize}-$index'),
       data: data,
@@ -3581,6 +3586,36 @@ final class _ContentBlockView extends StatelessWidget {
         blockSpacing: 7,
       ),
     );
+    String? paragraphBreak;
+    if (source.length > 32 * 1024) {
+      if (source.contains('\n\n')) {
+        paragraphBreak = '\n\n';
+      } else if (source.contains('\r\n\r\n')) {
+        paragraphBreak = '\r\n\r\n';
+      }
+    }
+    // ponytail: only independent prose is virtualized; add a block-aware
+    // virtualizer if profiling shows structured Markdown over 32 KiB is common.
+    if (paragraphBreak != null && !_markdownBlockBoundary.hasMatch(source)) {
+      final chunks = _splitLongMarkdownParagraphs(source, paragraphBreak);
+      if (chunks.length > 1) {
+        return SizedBox(
+          height: math.min(420, MediaQuery.sizeOf(context).height * 0.6),
+          child: ListView.builder(
+            key: Key('long-markdown-$id'),
+            primary: false,
+            itemCount: chunks.length,
+            itemBuilder: (context, index) => Padding(
+              padding: EdgeInsets.only(
+                bottom: index + 1 < chunks.length ? 7 : 0,
+              ),
+              child: markdown(chunks[index], index),
+            ),
+          ),
+        );
+      }
+    }
+    final segments = _splitAfterFencedBlocks(source);
     if (segments.length == 1) return markdown(segments.single, 0);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -3592,6 +3627,28 @@ final class _ContentBlockView extends StatelessWidget {
       ],
     );
   }
+}
+
+final _longPlainToken = RegExp(r'^[A-Za-z0-9][A-Za-z0-9_+/=.-]*[A-Za-z0-9=]$');
+final _markdownBlockBoundary = RegExp(
+  r'^(?:[ \t]+\S|[ \t]{0,3}(?:#|>|<|\[|[-+*] |\d+[.)] |```|~~~))',
+  multiLine: true,
+);
+
+List<String> _splitLongMarkdownParagraphs(String source, String separator) {
+  final paragraphs = source.split(separator);
+  final chunks = <String>[];
+  var buffer = StringBuffer();
+  for (final (index, paragraph) in paragraphs.indexed) {
+    buffer.write(paragraph);
+    if (index + 1 < paragraphs.length) buffer.write(separator);
+    if (buffer.length >= 8 * 1024 && index + 1 < paragraphs.length) {
+      chunks.add(buffer.toString());
+      buffer = StringBuffer();
+    }
+  }
+  if (buffer.isNotEmpty) chunks.add(buffer.toString());
+  return chunks;
 }
 
 final class _ReasoningBlockView extends StatefulWidget {

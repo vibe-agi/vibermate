@@ -253,7 +253,8 @@ try {
         setTimeout(resolve, (index * 371) % 1000));
       const marker = 'SYNTHETIC_PERF_' + label + '_' + String(index).padStart(3, '0');
       const prompt = index === shortSamples ? marker + 'x'.repeat(9_472)
-        : index === shortSamples + 1 ? marker + 'x'.repeat(151_552) : marker;
+        : index === shortSamples + 1
+          ? marker + 'x'.repeat(151_552) + '_TAIL_SENTINEL' : marker;
       await send(grant, rootCA.certificatePem, prompt);
       const completed = performance.now();
       try {
@@ -283,6 +284,33 @@ try {
         selectedApiFinishMs: selected == null ? null : selected.finished - completed,
         selectedApiToVisibleMs: selected == null ? null : visible - selected.finished });
     }
+    async function expandCurrent() {
+      const expand = page.locator('flt-semantics[role="button"]')
+        .filter({ hasText: 'Show all content' }).last();
+      await expand.waitFor();
+      const started = performance.now();
+      await expand.click();
+      await page.evaluate(() => new Promise(requestAnimationFrame));
+      const elapsed = performance.now() - started;
+      await page.mouse.move(800, 600);
+      await page.mouse.wheel(0, 200_000);
+      await page.locator('flt-semantics[role="button"]')
+        .filter({ hasText: 'Show first 15 lines' }).last()
+        .waitFor({ timeout: 30_000 });
+      return elapsed;
+    }
+    const expandToVisibleMs = await expandCurrent();
+    const paragraphMarker = 'SYNTHETIC_PERF_' + label + '_PARAGRAPHS';
+    const paragraphPrompt = paragraphMarker + '\n\n' +
+      Array(4096).fill('Synthetic **paragraph** and `code`.\n\n').join('') +
+      'TAIL_SENTINEL';
+    await send(grant, rootCA.certificatePem, paragraphPrompt);
+    const paragraphCompleted = performance.now();
+    await page.locator('flt-semantics[role="button"][aria-label*="' + paragraphMarker + '"]')
+      .first().waitFor({ timeout: 5_000 });
+    await page.evaluate(() => new Promise(requestAnimationFrame));
+    const paragraphEndToVisibleMs = performance.now() - paragraphCompleted;
+    const paragraphExpandToVisibleMs = await expandCurrent();
     await page.close();
     const warm = values.slice(1, shortSamples);
     return { label, latencyMs, samples: values.length,
@@ -291,7 +319,9 @@ try {
       directoryFinish: stats(warm, 'directoryFinishMs'),
       selectedApiFinish: stats(warm, 'selectedApiFinishMs'),
       selectedApiToVisible: stats(warm, 'selectedApiToVisibleMs'),
-      long9k: values[shortSamples], long151k: values[shortSamples + 1] };
+      long9k: values[shortSamples], long151k: values[shortSamples + 1],
+      expandToVisibleMs, paragraphBytes: paragraphPrompt.length,
+      paragraphEndToVisibleMs, paragraphExpandToVisibleMs };
   }
 
   const local = await measure(0, 'local');

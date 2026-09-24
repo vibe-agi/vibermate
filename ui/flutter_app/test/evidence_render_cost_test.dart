@@ -77,6 +77,14 @@ void main() {
       await tester.tap(toggle);
       await tester.pumpAndSettle();
       expect(_renderedText(tester).contains('TAIL_SENTINEL'), isTrue);
+      if (kind == 'text') {
+        expect(
+          tester
+              .widgetList<MarkdownBody>(find.byType(MarkdownBody))
+              .any((widget) => widget.data.contains('TAIL_SENTINEL')),
+          isTrue,
+        );
+      }
       await tester.ensureVisible(toggle);
       await tester.pumpAndSettle();
       await tester.tap(toggle);
@@ -106,6 +114,77 @@ void main() {
     expect(
       find.byKey(Key('toggle-long-response-${activity.id}-0')),
       findsNothing,
+    );
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('large plain token keeps its exact selectable text', (
+    tester,
+  ) async {
+    final fixture = PreviewControlApi();
+    addTearDown(fixture.close);
+    final activity = (await fixture.activities(
+      captureRunId: 'run-1',
+    )).items.firstWhere((value) => value.status == 'succeeded');
+    final base = await fixture.exchange(activity.id);
+    final source = '${List.filled(40 * 1024, 'x').join()}_TAIL_SENTINEL';
+    final controller = _controller(_withResponse(base, 'text', source));
+    addTearDown(controller.dispose);
+    await controller.loadExchangeDetail(activity.id);
+    await tester.pumpWidget(_timeline(controller, activity));
+    await tester.pumpAndSettle();
+    final toggle = find.byKey(Key('toggle-long-response-${activity.id}-0'));
+    await tester.tap(toggle);
+    await tester.pumpAndSettle();
+    expect(
+      tester
+          .widgetList<SelectableText>(find.byType(SelectableText))
+          .any((widget) => widget.data == source),
+      isTrue,
+    );
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('large Markdown prose remains selectable through its tail', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(390, 760));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final fixture = PreviewControlApi();
+    addTearDown(fixture.close);
+    final activity = (await fixture.activities(
+      captureRunId: 'run-1',
+    )).items.firstWhere((value) => value.status == 'succeeded');
+    final base = await fixture.exchange(activity.id);
+    final source =
+        '${List.filled(1024, 'Synthetic **paragraph** and `code`.\n\n').join()}TAIL_SENTINEL';
+    final controller = _controller(_withResponse(base, 'text', source));
+    addTearDown(controller.dispose);
+    await controller.loadExchangeDetail(activity.id);
+    await tester.pumpWidget(_timeline(controller, activity));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(Key('toggle-long-response-${activity.id}-0')));
+    await tester.pumpAndSettle();
+    final viewer = find.byKey(Key('long-markdown-response-${activity.id}-0'));
+    expect(viewer, findsOneWidget);
+    final scrollable = find
+        .descendant(of: viewer, matching: find.byType(Scrollable))
+        .first;
+    for (
+      var index = 0;
+      index < 10 && !_renderedText(tester).contains('TAIL_SENTINEL');
+      index++
+    ) {
+      final position = tester.state<ScrollableState>(scrollable).position;
+      position.jumpTo(position.maxScrollExtent);
+      await tester.pumpAndSettle();
+    }
+    expect(_renderedText(tester).contains('TAIL_SENTINEL'), isTrue);
+    expect(
+      tester
+          .widgetList<MarkdownBody>(find.byType(MarkdownBody))
+          .every((widget) => widget.selectable),
+      isTrue,
     );
     expect(tester.takeException(), isNull);
   });
@@ -146,6 +225,95 @@ void main() {
         'EVIDENCE_RENDER_BASELINE ${jsonEncode({'renderer': kIsWeb ? 'chrome-test' : 'flutter-tester', 'mode': 'debug', 'viewport': '1180x760', 'synthetic': true, 'sourceBytes': utf8.encode(text).length, 'firstMountUs': elapsed.first, 'warmP50Us': warm[(warm.length * .5).ceil() - 1], 'warmP95Us': warm[(warm.length * .95).ceil() - 1], 'samples': elapsed.length, 'renderedCodeUnits': renderedSizes.last})}',
       );
     }
+  }, skip: !measure);
+
+  final expansionCases = {
+    'unbroken': '${List.filled(151552, 'x').join()}TAIL_SENTINEL',
+    'fenced': '```text\n${List.filled(151552, 'x').join()}TAIL_SENTINEL\n```',
+    'paragraphs':
+        '${List.filled(4096, 'Synthetic **paragraph** and `code`.\n\n').join()}TAIL_SENTINEL',
+  };
+  for (final entry in expansionCases.entries) {
+    testWidgets('${entry.key} 151 KiB expansion baseline', (tester) async {
+      await tester.binding.setSurfaceSize(const Size(1180, 760));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      final fixture = PreviewControlApi();
+      addTearDown(fixture.close);
+      final activity = (await fixture.activities(
+        captureRunId: 'run-1',
+      )).items.firstWhere((value) => value.status == 'succeeded');
+      final base = await fixture.exchange(activity.id);
+      final source = entry.value;
+      final controller = _controller(_withResponse(base, 'text', source));
+      addTearDown(controller.dispose);
+      await controller.loadExchangeDetail(activity.id);
+      await tester.pumpWidget(_timeline(controller, activity));
+      await tester.pumpAndSettle();
+      final toggle = find.byKey(Key('toggle-long-response-${activity.id}-0'));
+      await tester.ensureVisible(toggle);
+      final watch = Stopwatch()..start();
+      await tester.tap(toggle);
+      await tester.pumpAndSettle();
+      watch.stop();
+      if (kIsWeb && entry.key != 'fenced') {
+        // A generous guard catches the measured 17–34 s regression without
+        // turning a synthetic debug run into a product latency promise.
+        expect(watch.elapsed, lessThan(const Duration(seconds: 5)));
+      }
+      if (entry.key == 'fenced') {
+        expect(
+          find.byKey(Key('long-markdown-response-${activity.id}-0')),
+          findsNothing,
+        );
+      }
+      if (entry.key == 'paragraphs') {
+        final viewer = find.byKey(
+          Key('long-markdown-response-${activity.id}-0'),
+        );
+        expect(viewer, findsOneWidget);
+        final scrollable = find.descendant(
+          of: viewer,
+          matching: find.byType(Scrollable),
+        );
+        for (
+          var index = 0;
+          index < 10 && !_renderedText(tester).contains('TAIL_SENTINEL');
+          index++
+        ) {
+          final position = tester
+              .state<ScrollableState>(scrollable.first)
+              .position;
+          position.jumpTo(position.maxScrollExtent);
+          await tester.pumpAndSettle();
+        }
+      }
+      expect(_renderedText(tester).contains('TAIL_SENTINEL'), isTrue);
+      // ignore: avoid_print
+      print(
+        'EVIDENCE_EXPAND_BASELINE ${jsonEncode({'renderer': kIsWeb ? 'chrome-test' : 'flutter-tester', 'shape': entry.key, 'sourceBytes': utf8.encode(source).length, 'expandUs': watch.elapsedMicroseconds})}',
+      );
+    }, skip: !measure);
+  }
+
+  testWidgets('unbroken 151 KiB plain text baseline', (tester) async {
+    await tester.binding.setSurfaceSize(const Size(1180, 760));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final source = '${List.filled(151552, 'x').join()}TAIL_SENTINEL';
+    final watch = Stopwatch()..start();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SizedBox(width: 1000, child: SelectableText(source)),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    watch.stop();
+    expect(find.byType(SelectableText), findsOneWidget);
+    // ignore: avoid_print
+    print(
+      'PLAIN_TEXT_BASELINE ${jsonEncode({'renderer': kIsWeb ? 'chrome-test' : 'flutter-tester', 'sourceBytes': utf8.encode(source).length, 'mountUs': watch.elapsedMicroseconds})}',
+    );
   }, skip: !measure);
 }
 

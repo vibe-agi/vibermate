@@ -152,8 +152,8 @@ flutter test --platform chrome test/evidence_render_cost_test.dart \
 
 151 KiB 折叠挂载的 warm p50 从约 10.1 秒降至约 56 毫秒；第二次优化后运行测得
 47 毫秒。常规 Widget 回归检查正文、Thinking 的折叠预览、展开后全文和再折叠；原
-`ExchangeDetail` 文本不截断。展开全文仍需排版全部 Markdown，不能把折叠态数字当作
-全文加载数字。两组数值都包含 debug/test 开销，**不等于发布 App 或浏览器用户实际
+`ExchangeDetail` 文本不截断。当时展开全文仍需排版全部 Markdown，不能把折叠态数字
+当作全文加载数字。两组数值都包含 debug/test 开销，**不等于发布 App 或浏览器用户实际
 等待时间**。Chrome 基线、真实 App/Server 的 HTTP 解码和渲染阶段串联、远程 RTT
 以及更稳定的回归阈值尚待补齐；不改变正文保留或完整性校验。
 
@@ -205,7 +205,8 @@ Conversation 和时间线；5 秒总览刷新不再与运行中 Capture 的快�
 送往本机合成 Provider。Playwright 登录 Web 后保持同一运行中的手动 Capture 可见。
 计时从客户端收到完整 HTTP 响应开始，到浏览器可访问性树出现该请求的唯一标记并
 完成下一帧为止；**不包含 Provider 等待时间**。每组发送 24 条短请求、1 条约
-9 KiB、1 条约 151 KiB 的请求，请求前按固定序列错峰，避免与 1 秒轮询持续同相。
+9 KiB、1 条约 151 KiB 的连续文本与 1 条约 151 KiB 的 Markdown 段落；请求前按
+固定序列错峰，避免与 1 秒轮询持续同相。
 短请求剔除首次样本后报告 23 次 warm p50/p95：
 
 | Web API 路径 | 短请求 warm p50 / p95 | 9 KiB 单次 | 151 KiB 单次 |
@@ -241,6 +242,37 @@ VIBERMATE_PLAYWRIGHT_MODULE=/absolute/path/to/node_modules/playwright \
 这里没有把浏览器可访问性树出现冒称为 GPU paint 时间，也没有分离证据提交、
 索引和 Flutter 解码的耗时，因此 Task 1 的真实 App、远程 Web 与完整分段验收
 仍未完成。
+
+### 超大正文展开（2026-09-25）
+
+上面的折叠态基线掩盖了全文展开的另一处瓶颈。同一 Chrome debug Widget 测试中，
+151,565 B 连续文本原需 33.63 秒展开；151,565 B / 4,096 段 Markdown 原需
+17.36 秒。151,577 B 的围栏代码块原已能在 0.26 秒展开。先比较原生
+`SelectableText`（同样的连续文本挂载约 0.96 秒），再按内容形态做窄修复：
+
+| 正文形态 | 修改前展开 | 修改后展开 |
+| --- | ---: | ---: |
+| 151 KiB 连续纯文本 | 33.63 秒 | 0.43 秒 |
+| 151 KiB 独立 Markdown 段落 | 17.36 秒 | 0.43 秒 |
+| 151 KiB 围栏代码块 | — | 0.26 秒（原路径，无需改动） |
+
+超长、没有 Markdown 结构的 ASCII 单串（例如 Base64/JWT）用原生可选中文本显示，
+源文与复制内容保持完整。超长独立段落仍保留内联 Markdown，但在一个有界的滚动
+区域按约 8 KiB 的段落边界逐段构建；列表、引用、围栏等跨段落结构仍走原路径，
+避免错误重排。常规回归检查完整末尾可滚动到达、文本可选中、普通 Markdown 仍
+按原样渲染。它不是对任意超长结构化 Markdown 的性能保证。
+
+同一原生 Server + release Web + Playwright 合成路径中，修改前连续文本点击展开
+在本机/注入延迟两组各约 33–36 秒；修改后重复观测为约 0.20–0.36 秒。
+多段 Markdown 修改后在两组浏览器样本中约 0.14–0.35 秒；这是点击到下一帧的
+单次样本，不是 p95 或 GPU paint 指标。用户滚动后可见合成正文末尾；测试运行器
+同时检查全量原文仍在证据中。复现展开 Widget 基线：
+
+```sh
+cd ui/flutter_app
+flutter test --platform chrome test/evidence_render_cost_test.dart \
+  --dart-define=VIBERMATE_PERFORMANCE=true --reporter expanded
+```
 
 本次浏览器路径还发现一个实际可见性错误：手动 Capture 有首条 Exchange 后只轮询
 已选中的 Conversation，后续独立 Exchange 在持久层已存在，却要手动刷新才显示。
