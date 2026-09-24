@@ -60,6 +60,10 @@ _Avoid_: Client Session, Capture, Provider session
 A managed Capture created for one launched client process. It freezes the Runtime User, Client Device, Workspace, and Environment authority used by every Exchange it observes.
 _Avoid_: Client Session, Conversation, login
 
+**Manual Proxy Login**:
+An owner-created Capture authority for a client that connects to ViberMate with a dedicated, revocable proxy credential. It is separate from the owner's Web Session and freezes the selected Environment without asserting a verified client or Workspace identity.
+_Avoid_: Web login, Login Session, shared proxy password
+
 **Client Flow**:
 One exact client-facing origin and Client Protocol handled by an Environment, together with the Destination Plan for that traffic.
 _Avoid_: Endpoint, Route, provider protocol
@@ -99,6 +103,10 @@ _Avoid_: Generic proxy GET, global current account, model usage
 **Account Observation**:
 Allowlisted facts returned by an Account Read, qualified by Account, credential epoch, upstream origin, service adapter revision, and observation time. Upstream quota, upstream historical usage, local ViberMate usage, and a client's local login identity remain distinct sources; absent facts do not mean zero.
 _Avoid_: Billing record, verified local identity, aggregate account balance
+
+**Banked Codex Reset**:
+One provider-issued, individually identified opportunity to reset eligible Codex usage windows. It is distinct from purchased usage credits, the scheduled limit reset, and a paid immediate reset; consuming it is an explicit owner action on one managed OAuth Account.
+_Avoid_: Credit balance, refresh token, automatic quota refresh
 
 **Account History Permission**:
 An explicit permission frozen into an Upstream Route to share account-wide historical usage with a captured client. Permission to generate or inspect current quota does not imply this grant. The owner management surface has its own authority and does not grant a Capture access by inspecting an Account.
@@ -147,6 +155,18 @@ _Avoid_: Capture, request session
 **Conversation**:
 One ordered dialogue stream inside a Client Session, belonging either to the main Agent or to one explicitly identified Subagent.
 _Avoid_: Session, Exchange
+
+**Knowledge Collection**:
+An explicitly shared or private set of reviewed Knowledge Documents owned by one Runtime. Its membership and visibility are independent of a Client Session, Capture, or local Workspace identity.
+_Avoid_: Workspace, Environment, automatic team archive
+
+**Knowledge Document**:
+A versioned, reviewed account of a decision, solution, or reusable finding drawn from one or more Conversations. It has its own visibility and retention after publication; an unreviewed draft is not a published document.
+_Avoid_: Conversation transcript, Raw HTTP, model summary
+
+**Knowledge Citation**:
+An exact reference from a Knowledge Document to the retained Turn or Exchange evidence supporting one claim. It can become unavailable when the source expires or is deleted; it never reconstructs absent evidence.
+_Avoid_: Prompt similarity, inferred source, permanent source copy
 
 **Session Continuity**:
 When an upstream execution target changes, the next model receives the portable prior conversation: instructions, user and Assistant messages, and completed tool calls and results. Provider-private reasoning, caches, and encrypted state remain evidence but are not part of this guarantee.

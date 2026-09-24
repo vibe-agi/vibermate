@@ -29,6 +29,7 @@ const (
 	PurposeProviderAttempt        EgressPurpose = "provider_attempt"
 	PurposeUpstreamModelDiscovery EgressPurpose = "upstream_model_discovery"
 	PurposeUpstreamAccountRead    EgressPurpose = "upstream_account_read"
+	PurposeUpstreamAccountAction  EgressPurpose = "upstream_account_action"
 	PurposeModelMetadataDirectory EgressPurpose = "model_metadata_directory"
 	PurposeCredentialRefresh      EgressPurpose = "credential_refresh"
 	PurposeRouteOperation         EgressPurpose = "route_operation"
@@ -50,6 +51,7 @@ func Purposes() []EgressPurpose {
 		PurposeProviderAttempt,
 		PurposeUpstreamModelDiscovery,
 		PurposeUpstreamAccountRead,
+		PurposeUpstreamAccountAction,
 		PurposeModelMetadataDirectory,
 		PurposeCredentialRefresh,
 		PurposeRouteOperation,
@@ -84,7 +86,7 @@ func AuthorityForPurpose(
 		return AuthorityEnvironment, nil
 	case PurposeOriginalOrigin, PurposeAgentProbe, PurposeBlindTunnel:
 		return AuthorityNetwork, nil
-	case PurposeUpstreamModelDiscovery, PurposeUpstreamAccountRead, PurposeModelMetadataDirectory,
+	case PurposeUpstreamModelDiscovery, PurposeUpstreamAccountRead, PurposeUpstreamAccountAction, PurposeModelMetadataDirectory,
 		PurposeCredentialRefresh,
 		PurposeAuxiliaryLLM, PurposeLanguageTransform,
 		PurposePluginCatalogSync, PurposePluginArtifactFetch, PurposeUpdate:
@@ -370,7 +372,7 @@ func validatePayloadClass(
 				class,
 			)
 		}
-	case PurposeUpstreamModelDiscovery, PurposeUpstreamAccountRead, PurposeModelMetadataDirectory,
+	case PurposeUpstreamModelDiscovery, PurposeUpstreamAccountRead, PurposeUpstreamAccountAction, PurposeModelMetadataDirectory,
 		PurposeCredentialRefresh,
 		PurposeAuxiliaryLLM, PurposeLanguageTransform,
 		PurposePluginCatalogSync, PurposePluginArtifactFetch, PurposeUpdate:
@@ -451,7 +453,7 @@ func validateParent(
 			)
 		}
 		return requireConnection()
-	case PurposeUpstreamModelDiscovery, PurposeUpstreamAccountRead, PurposeModelMetadataDirectory,
+	case PurposeUpstreamModelDiscovery, PurposeUpstreamAccountRead, PurposeUpstreamAccountAction, PurposeModelMetadataDirectory,
 		PurposeCredentialRefresh,
 		PurposeAuxiliaryLLM, PurposeLanguageTransform,
 		PurposePluginCatalogSync, PurposePluginArtifactFetch, PurposeUpdate:

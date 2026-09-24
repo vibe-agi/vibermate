@@ -7,6 +7,19 @@
 ViberMate 可以捕获代理对话、控制请求去向、执行小型 JavaScript 规则，并保留
 可审计的运行记录。它不会替代你的代理或 AI 服务商。
 
+## 许可证
+
+本项目按照 GNU Affero General Public License v3.0（AGPLv3）提供。对于希望在
+AGPLv3 条款之外使用软件的组织，也可以联系作者获取商业许可。
+
+- [AGPLv3 正文](LICENSE)
+- [商业许可与专业服务](COMMERCIAL.md)
+
+## 商业支持
+
+项目作者提供架构咨询、定制开发、企业集成、部署和生产环境支持，详情见
+[COMMERCIAL.md](COMMERCIAL.md)。
+
 ![ViberMate 对话捕获界面](https://vibe-agi.github.io/images/vibermate/capture-timeline-2400.webp)
 
 ## 选择使用方式
@@ -163,5 +176,3 @@ vibermate run --server https://your-server.example:9666 -- claude
 
 遇到安装问题可运行 `vibermate doctor`。实现细节见[运行时模块地图](docs/module-map.md)
 和[架构决策](docs/adr)。疑似漏洞请通过 [SECURITY.md](SECURITY.md) 私密报告。
-
-使用 Apache-2.0 许可证。

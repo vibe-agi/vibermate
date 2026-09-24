@@ -229,6 +229,11 @@ abstract interface class ControlApi {
     ProviderAccount account,
   );
 
+  Future<AccountResetRedemption> redeemAccountResetCredit(
+    ProviderAccount account,
+    String creditId,
+  );
+
   Future<ProviderAccount> setProviderAccountNote(
     ProviderAccount account,
     String note,
@@ -1610,6 +1615,42 @@ final class HttpControlApi implements ControlApi {
       );
     }
     return updated;
+  }
+
+  @override
+  Future<AccountResetRedemption> redeemAccountResetCredit(
+    ProviderAccount account,
+    String creditId,
+  ) async {
+    if (!_validResourceId(account.id) ||
+        account.kind != 'codex_oauth' ||
+        !account.usable ||
+        account.revision < 1 ||
+        creditId.isEmpty ||
+        creditId.length > 256 ||
+        creditId.runes.any((value) => value < 32 || value == 127)) {
+      throw const ControlContractException('reset redemption input is invalid');
+    }
+    await _ensureFreshSession();
+    final response = await _send(
+      'POST',
+      '/api/v1/provider-accounts/${Uri.encodeComponent(account.id)}/actions/redeem-reset-credit',
+      token: _session.writeToken,
+      expectedStatus: 200,
+      responseTimeout: _modelDiscoveryTimeout,
+      body: {'creditId': creditId},
+      headers: {
+        'if-match': '${account.revision}',
+        'Idempotency-Key': _newCapability(),
+      },
+    );
+    final result = AccountResetRedemption.fromJson(response.payload);
+    if (result.accountId != account.id ||
+        result.creditId != creditId ||
+        result.credentialEpoch < account.credentialEpoch) {
+      throw const ControlContractException('reset redemption account changed');
+    }
+    return result;
   }
 
   @override

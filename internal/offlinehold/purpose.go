@@ -17,6 +17,7 @@ func KindForPurpose(purpose egressaudit.EgressPurpose) (EgressKind, error) {
 		return EgressOpaque, nil
 	case egressaudit.PurposeRouteOperation, egressaudit.PurposeAgentProbe,
 		egressaudit.PurposeUpstreamAccountRead,
+		egressaudit.PurposeUpstreamAccountAction,
 		egressaudit.PurposeModelMetadataDirectory,
 		egressaudit.PurposeCredentialRefresh,
 		egressaudit.PurposeAuxiliaryLLM, egressaudit.PurposeLanguageTransform:

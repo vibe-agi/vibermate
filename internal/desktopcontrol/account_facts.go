@@ -13,6 +13,7 @@ import (
 
 type OwnedAccountReader interface {
 	ReadOwned(context.Context, provideraccount.ID, string) (accountoperation.Result, error)
+	RedeemOwned(context.Context, provideraccount.ID, uint64, string) (accountoperation.Redemption, error)
 }
 
 func (handler *Handler) getAccountFacts(writer http.ResponseWriter, request *http.Request) {

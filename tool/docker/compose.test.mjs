@@ -11,7 +11,8 @@ test('container image consumes only the current prepared source artifacts', () =
   assert.doesNotMatch(dockerfile, /releases\/download/u);
   assert.doesNotMatch(dockerfile, / AS distribution/u);
   assert.match(dockerfile, /COPY dist\/docker\/ \/opt\/vibermate\//u);
-  assert.match(dockerfile, /org\.opencontainers\.image\.version="0\.1\.11"/u);
+  assert.match(dockerfile, /org\.opencontainers\.image\.version="0\.1\.13"/u);
+  assert.match(dockerfile, /org\.opencontainers\.image\.licenses="AGPL-3\.0-only"/u);
 });
 
 function config(file, overrides = {}) {
@@ -25,7 +26,7 @@ function config(file, overrides = {}) {
       ...process.env,
       VIBERMATE_BIND_ADDRESS: '127.0.0.1',
       VIBERMATE_PORT: '9666',
-      VIBERMATE_IMAGE: 'vibermate-runtime:0.1.12-local',
+      VIBERMATE_IMAGE: 'vibermate-runtime:local',
       VIBERMATE_LOCAL_DATA_VOLUME: 'vibermate-local-data',
       VIBERMATE_ACCESS_ADDRESS: 'vibermate.home.arpa:9666',
       VIBERMATE_PRIVATE_BIND_ADDRESS: '192.0.2.20',
@@ -55,6 +56,7 @@ test('local HTTP cannot inherit a remote bind address or the HTTPS volume', () =
   assert.deepEqual(service.ports.map(p => [p.host_ip, p.published, p.target]), [
     ['127.0.0.1', '19666', 9666],
   ]);
+  assert.equal(service.command[service.command.indexOf('--access-address') + 1], '127.0.0.1:19666');
   assert.equal(service.command.at(-1), 'http');
   assert.equal(service.healthcheck.test.at(-1), 'http://127.0.0.1:9666/api/v1/server/web-auth');
   assert.equal(service.read_only, true);

@@ -1,0 +1,9 @@
+# Scope banked Codex reset redemption to the owner
+
+Status: proposed until the first-phase implementation passes its release gates.
+
+Codex exposes banked rate-limit reset credits separately from usage credits. ViberMate presents the available count and individual credits under the selected managed Codex OAuth Account. The owner must choose an identified, available credit and confirm before consumption. Captured client account reads remain read-only: no client HTTP path, Route, selector, transform, or script receives the consume authority. The action reuses the account's refresh and short-lived credential lease, strict provider transport, Offline Hold, and a separate runtime-owned egress audit purpose. Its response is an allowlisted outcome, not raw upstream JSON.
+
+One ViberMate Account ID and credit ID produce one stable backend redemption UUID across Web sessions and Runtime restarts. The official endpoint accepts an explicit credit ID and `redeem_request_id`; the latter denotes one logical redemption. An ambiguous result is never reported as successful, and retrying the same credit uses the same backend ID. `reset`, `nothing_to_reset`, `no_credit`, and `already_redeemed` remain distinct outcomes. A previously published SQLite schema is upgraded transactionally to admit the new audit purpose while preserving old attempts and their sequence. This narrow owner action supersedes only the earlier blanket exclusion of reset-credit writes in [ADR 0013](0013-scope-account-reads-through-service-adapters.md); its Capture authorization limits remain in force.
+
+Primary source: [Codex backend client operation](https://github.com/openai/codex/blob/main/codex-rs/backend-client/src/client/rate_limit_resets.rs), [Codex account protocol](https://github.com/openai/codex/blob/main/codex-rs/app-server-protocol/src/protocol/v2/account.rs). The implementation does not purchase credits or paid resets.

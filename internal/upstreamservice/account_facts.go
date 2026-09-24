@@ -19,7 +19,26 @@ type Facts struct {
 	UpstreamUserID    string        `json:"upstreamUserId,omitempty"`
 	Limits            []QuotaLimit  `json:"limits"`
 	Credits           *Credits      `json:"credits,omitempty"`
+	RateLimitResets   *ResetCredits `json:"rateLimitResets,omitempty"`
 	History           *UsageHistory `json:"history,omitempty"`
+}
+
+// ResetCredits describes banked limit resets, not spendable usage credits.
+// Missing and zero are different upstream observations.
+type ResetCredits struct {
+	AvailableCount           int64         `json:"availableCount"`
+	ApplicableAvailableCount *int64        `json:"applicableAvailableCount,omitempty"`
+	Details                  []ResetCredit `json:"details"`
+}
+
+type ResetCredit struct {
+	ID          string `json:"id"`
+	ResetType   string `json:"resetType"`
+	Status      string `json:"status"`
+	GrantedAt   string `json:"grantedAt"`
+	ExpiresAt   string `json:"expiresAt,omitempty"`
+	Title       string `json:"title,omitempty"`
+	Description string `json:"description,omitempty"`
 }
 
 type UsageHistory struct {
@@ -75,6 +94,9 @@ func (read Read) Project(body []byte) (Facts, error) {
 	if read.ID() == CodexUsageHistory {
 		return projectCodexHistory(body)
 	}
+	if read.ID() == CodexResetCreditDetails {
+		return projectCodexResetCredits(body)
+	}
 	var payload struct {
 		PlanType   *string     `json:"plan_type"`
 		AccountID  string      `json:"account_id"`
@@ -91,6 +113,10 @@ func (read Read) Project(body []byte) (Facts, error) {
 			Unlimited  *bool   `json:"unlimited"`
 			Balance    *string `json:"balance"`
 		} `json:"credits"`
+		RateLimitResetCredits *struct {
+			AvailableCount           *int64 `json:"available_count"`
+			ApplicableAvailableCount *int64 `json:"applicable_available_count"`
+		} `json:"rate_limit_reset_credits"`
 	}
 	if len(body) > 2<<20 || json.Unmarshal(body, &payload) != nil || payload.PlanType == nil ||
 		!factText(*payload.PlanType, 128) || *payload.PlanType == "" || !factText(payload.AccountID, 256) || !factText(payload.UserID, 256) || len(payload.Additional) > 64 {
@@ -122,7 +148,75 @@ func (read Read) Project(body []byte) (Facts, error) {
 		}
 		facts.Credits = &Credits{HasCredits: *value.HasCredits, Unlimited: *value.Unlimited, Balance: value.Balance}
 	}
+	if resets := payload.RateLimitResetCredits; resets != nil {
+		if resets.AvailableCount == nil || *resets.AvailableCount < 0 ||
+			resets.ApplicableAvailableCount != nil &&
+				(*resets.ApplicableAvailableCount < 0 || *resets.ApplicableAvailableCount > *resets.AvailableCount) {
+			return Facts{}, ErrInvalidResponse
+		}
+		facts.RateLimitResets = &ResetCredits{
+			AvailableCount:           *resets.AvailableCount,
+			ApplicableAvailableCount: resets.ApplicableAvailableCount,
+		}
+	}
 	return facts, nil
+}
+
+func projectCodexResetCredits(body []byte) (Facts, error) {
+	var payload struct {
+		AvailableCount *int64 `json:"available_count"`
+		Credits        []struct {
+			ID          string  `json:"id"`
+			ResetType   string  `json:"reset_type"`
+			Status      string  `json:"status"`
+			GrantedAt   string  `json:"granted_at"`
+			ExpiresAt   *string `json:"expires_at"`
+			Title       *string `json:"title"`
+			Description *string `json:"description"`
+		} `json:"credits"`
+	}
+	if len(body) > 2<<20 || json.Unmarshal(body, &payload) != nil ||
+		payload.AvailableCount == nil || *payload.AvailableCount < 0 ||
+		len(payload.Credits) > 64 {
+		return Facts{}, ErrInvalidResponse
+	}
+	resets := &ResetCredits{AvailableCount: *payload.AvailableCount, Details: make([]ResetCredit, 0, len(payload.Credits))}
+	seen := make(map[string]bool, len(payload.Credits))
+	for _, credit := range payload.Credits {
+		if !factText(credit.ID, 256) || credit.ID == "" || seen[credit.ID] ||
+			!factText(credit.ResetType, 64) || !factText(credit.Status, 64) ||
+			!factText(credit.GrantedAt, 64) || credit.GrantedAt == "" ||
+			!factOptionalText(credit.ExpiresAt, 64) ||
+			!factOptionalText(credit.Title, 256) || !factOptionalText(credit.Description, 512) {
+			return Facts{}, ErrInvalidResponse
+		}
+		if _, err := time.Parse(time.RFC3339, credit.GrantedAt); err != nil {
+			return Facts{}, ErrInvalidResponse
+		}
+		if credit.ExpiresAt != nil && *credit.ExpiresAt != "" {
+			if _, err := time.Parse(time.RFC3339, *credit.ExpiresAt); err != nil {
+				return Facts{}, ErrInvalidResponse
+			}
+		}
+		seen[credit.ID] = true
+		resets.Details = append(resets.Details, ResetCredit{
+			ID: credit.ID, ResetType: credit.ResetType, Status: credit.Status,
+			GrantedAt: credit.GrantedAt, ExpiresAt: optionalFact(credit.ExpiresAt),
+			Title: optionalFact(credit.Title), Description: optionalFact(credit.Description),
+		})
+	}
+	return Facts{Limits: []QuotaLimit{}, RateLimitResets: resets}, nil
+}
+
+func factOptionalText(value *string, maximum int) bool {
+	return value == nil || factText(*value, maximum)
+}
+
+func optionalFact(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
 }
 
 func projectCodexLimit(id, name, model string, value *codexLimit) (QuotaLimit, error) {

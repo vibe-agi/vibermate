@@ -26,6 +26,7 @@ func TestUnreleasedAccountAuditCorrectionPreservesEvidenceAndSequence(t *testing
 			}
 			db := sql.OpenDB(newSQLiteConnector(path, DefaultBusyTimeout))
 			priorSchema := strings.ReplaceAll(schemaSQL, "'upstream_account_read',\n", "")
+			priorSchema = strings.ReplaceAll(priorSchema, "'upstream_account_action',\n", "")
 			priorSchema = strings.Replace(priorSchema, accountNoteColumnsSQL, "", 1)
 			priorSchema = strings.ReplaceAll(priorSchema, "'credential_refresh',\n", "")
 			if fmt.Sprintf("%x", sha256.Sum256([]byte(priorSchema))) != independentAccountDevelopmentDigest {

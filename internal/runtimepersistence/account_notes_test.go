@@ -29,6 +29,7 @@ func TestNotesPreserveAccountsAcrossDevelopmentUpgradeAndRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	prior := strings.Replace(schemaSQL, accountNoteColumnsSQL, "", 1)
+	prior = strings.ReplaceAll(prior, "'upstream_account_action',\n", "")
 	if fmt.Sprintf("%x", sha256.Sum256([]byte(prior))) != accountNotesDevelopmentDigest {
 		t.Fatal("previous baseline fixture drifted")
 	}

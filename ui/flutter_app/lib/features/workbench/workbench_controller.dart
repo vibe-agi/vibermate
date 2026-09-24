@@ -2,7 +2,7 @@ import 'dart:async';
 import 'dart:collection';
 import 'dart:math';
 
-import 'package:flutter/foundation.dart';
+import 'package:flutter/widgets.dart';
 
 import '../../core/api/control_api.dart';
 import '../../core/api/launch_environment_snapshot.dart';
@@ -23,7 +23,18 @@ export '../../core/preferences/workbench_preferences.dart'
 
 enum RootCAGuideIntent { remove, replace }
 
-final class WorkbenchController extends ChangeNotifier {
+final class WorkbenchController extends ChangeNotifier
+    with WidgetsBindingObserver {
+  Future<AccountResetRedemption> redeemAccountResetCredit(
+    ProviderAccount account,
+    AccountResetCredit credit,
+  ) async {
+    if (account.kind != 'codex_oauth' || !account.usable || !credit.available) {
+      throw const ControlContractException('reset credit is unavailable');
+    }
+    return _api.redeemAccountResetCredit(account, credit.id);
+  }
+
   Future<AccountFacts> accountFacts(
     ProviderAccount account, {
     bool history = false,
@@ -41,6 +52,7 @@ final class WorkbenchController extends ChangeNotifier {
 
   static const _exchangeDetailCacheLimit = 64;
   static const _fullExchangeDetailCacheLimit = 2;
+  static const _exchangeDetailCacheByteLimit = 8 * 1024 * 1024;
   static const _captureConversationPageCacheLimit = 24;
 
   WorkbenchController({
@@ -242,6 +254,8 @@ final class WorkbenchController extends ChangeNotifier {
   Timer? _evidencePoller;
   bool _pollInFlight = false;
   bool _evidencePollInFlight = false;
+  bool _pollingVisible = true;
+  bool _observingLifecycle = false;
   int _captureDetailLoads = 0;
   bool _disposed = false;
   WorkbenchPreferences? _desiredPreferences;
@@ -539,6 +553,10 @@ final class WorkbenchController extends ChangeNotifier {
   }
 
   Future<void> initialize() async {
+    if (!_observingLifecycle) {
+      WidgetsFlutterBinding.ensureInitialized().addObserver(this);
+      _observingLifecycle = true;
+    }
     await refresh();
     if (_disposed) return;
     if (terminalManagement) await _maintainTerminalCommand();
@@ -766,6 +784,7 @@ final class WorkbenchController extends ChangeNotifier {
 
   Future<void> _poll() async {
     if (_disposed ||
+        !_pollingVisible ||
         _pollInFlight ||
         loading ||
         captureDirectoryLoading ||
@@ -793,7 +812,9 @@ final class WorkbenchController extends ChangeNotifier {
       final capture = selectedCapture;
       if (section == WorkbenchSection.captures &&
           capture != null &&
-          !_evidencePollInFlight) {
+          !_evidencePollInFlight &&
+          !capture.running &&
+          !selectedActivities.any((item) => item.status == 'pending')) {
         await _loadCaptureDetail(capture, quiet: true);
       }
       if (section == WorkbenchSection.network) {
@@ -817,6 +838,7 @@ final class WorkbenchController extends ChangeNotifier {
   Future<void> _pollSelectedEvidence() async {
     final capture = selectedCapture;
     if (_disposed ||
+        !_pollingVisible ||
         section != WorkbenchSection.captures ||
         capture == null ||
         _evidencePollInFlight ||
@@ -835,7 +857,16 @@ final class WorkbenchController extends ChangeNotifier {
     final conversationKey = selectedCaptureConversationKey;
     try {
       if (conversationKey == null) {
-        await _loadCaptureDetail(capture, quiet: true);
+        // An empty Capture needs only a one-record probe. Reloading its
+        // assignment and Conversation directory every second made an idle
+        // manual proxy generate two unnecessary requests per tick.
+        final latest = await _captureActivityPage(capture, limit: 1);
+        if (latest.items.isNotEmpty &&
+            !_disposed &&
+            generation == _selectionGeneration &&
+            capture.key == selectedCaptureKey) {
+          await _loadCaptureDetail(capture, quiet: true);
+        }
         return;
       }
       final latest = await _captureActivityPage(
@@ -1463,6 +1494,38 @@ final class WorkbenchController extends ChangeNotifier {
     while (_exchangeDetails.length > _exchangeDetailCacheLimit) {
       _exchangeDetails.remove(_exchangeDetails.keys.first);
     }
+    var bytes = _exchangeDetails.values.fold<int>(
+      0,
+      (total, detail) => total + _exchangeDetailBytes(detail),
+    );
+    // Keep the newly loaded item even when one exchange exceeds the budget.
+    while (bytes > _exchangeDetailCacheByteLimit &&
+        _exchangeDetails.length > 1) {
+      final removed = _exchangeDetails.remove(_exchangeDetails.keys.first)!;
+      bytes -= _exchangeDetailBytes(removed);
+    }
+  }
+
+  // ponytail: content-size estimate, not Dart heap size; profile RSS before
+  // adding per-object accounting.
+  static int _exchangeDetailBytes(ExchangeDetail detail) {
+    final content = detail.content;
+    final request = content.request;
+    Iterable<ExchangeContentBlock> blocks() sync* {
+      if (request != null) {
+        yield* request.system;
+        for (final message in request.messages) {
+          yield* message.blocks;
+        }
+      }
+      if (content.response case final response?) yield* response.blocks;
+    }
+
+    return blocks().fold<int>(
+      1024,
+      (total, block) =>
+          total + 256 + max(block.originalSize, block.text?.length ?? 0),
+    );
   }
 
   Future<RawEvidencePage?> loadRawEvidence(
@@ -3245,10 +3308,28 @@ final class WorkbenchController extends ChangeNotifier {
   void dispose() {
     if (_disposed) return;
     _disposed = true;
+    if (_observingLifecycle) {
+      WidgetsBinding.instance.removeObserver(this);
+      _observingLifecycle = false;
+    }
     _poller?.cancel();
     _evidencePoller?.cancel();
+    _invalidateEvidenceCaches();
     unawaited(_flushPreferencesAndCloseRuntime());
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (_disposed) return;
+    if (state == AppLifecycleState.hidden ||
+        state == AppLifecycleState.paused ||
+        state == AppLifecycleState.detached) {
+      _pollingVisible = false;
+    } else if (state == AppLifecycleState.resumed && !_pollingVisible) {
+      _pollingVisible = true;
+      unawaited(refresh());
+    }
   }
 
   Future<void> _flushPreferencesAndCloseRuntime() async {

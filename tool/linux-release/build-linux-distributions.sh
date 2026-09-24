@@ -69,6 +69,8 @@ for target in amd64:x86_64 arm64:arm64; do
   )
   cp -R "${web_root}" "${bundle_root}/vibermate-web"
   cp "${repository_root}/LICENSE" "${bundle_root}/LICENSE"
+  cp "${repository_root}/THIRD_PARTY_LICENSES.md" "${bundle_root}/THIRD_PARTY_LICENSES.md"
+  cp "${repository_root}/LICENSE" "${bundle_root}/vibermate-web/LICENSE"
   chmod 0755 "${bundle_root}/vibermate" "${bundle_root}/vibermated"
   tar \
     --sort=name \

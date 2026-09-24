@@ -212,6 +212,25 @@ final class _CaptureMaster extends StatelessWidget {
     final history = controller.historicalCaptures
         .where(matches)
         .toList(growable: false);
+    final canCreateManual =
+        (controller.webPrincipal == null || controller.webPrincipal!.owner) &&
+        (controller.data?.environments.any(
+              (environment) => environment.state == 'active',
+            ) ??
+            false);
+    final webOwner = controller.webPrincipal?.owner == true && canCreateManual;
+    final accessGuide = TextButton.icon(
+      key: const Key('capture-empty-open-terminal-settings'),
+      onPressed: controller.openAccessSettings,
+      icon: const Icon(Icons.terminal, size: 15),
+      label: Text(
+        copy(
+          controller.terminalManagement
+              ? 'capture.empty.action'
+              : 'capture.empty.web.action',
+        ),
+      ),
+    );
     return ColoredBox(
       color: context.viberColors.panel,
       child: Column(
@@ -237,13 +256,7 @@ final class _CaptureMaster extends StatelessWidget {
                 const SizedBox(width: 4),
                 IconButton(
                   key: const Key('manual-capture-create'),
-                  onPressed:
-                      controller.data?.environments.any(
-                            (environment) => environment.state == 'active',
-                          ) ??
-                          false
-                      ? onCreateManual
-                      : null,
+                  onPressed: canCreateManual ? onCreateManual : null,
                   tooltip: copy('capture.manual.create'),
                   icon: const Icon(Icons.add_link, size: 17),
                 ),
@@ -258,19 +271,27 @@ final class _CaptureMaster extends StatelessWidget {
                 ? CenteredMessage(
                     icon: Icons.filter_alt_off,
                     title: copy('capture.empty'),
-                    detail: copy('capture.empty.detail'),
-                    action: TextButton.icon(
-                      key: const Key('capture-empty-open-terminal-settings'),
-                      onPressed: controller.openAccessSettings,
-                      icon: const Icon(Icons.terminal, size: 15),
-                      label: Text(
-                        copy(
-                          controller.terminalManagement
-                              ? 'capture.empty.action'
-                              : 'capture.empty.web.action',
-                        ),
-                      ),
+                    detail: copy(
+                      webOwner
+                          ? 'capture.empty.web.detail'
+                          : 'capture.empty.detail',
                     ),
+                    action: webOwner
+                        ? Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              FilledButton.icon(
+                                key: const Key('capture-empty-create-manual'),
+                                onPressed: onCreateManual,
+                                icon: const Icon(Icons.add_link, size: 16),
+                                label: Text(
+                                  copy('capture.manual.create.action'),
+                                ),
+                              ),
+                              accessGuide,
+                            ],
+                          )
+                        : accessGuide,
                   )
                 : ListView(
                     children: [
@@ -2213,7 +2234,11 @@ final class _ManualCaptureCreateDialogState
         title: Text(copy('capture.manual.delivery.title')),
         content: SizedBox(
           width: 470,
-          child: _ManualGrantDelivery(grant: created.grant, copy: copy),
+          child: _ManualGrantDelivery(
+            grant: created.grant,
+            controller: widget.controller,
+            copy: copy,
+          ),
         ),
         actions: [
           FilledButton(
@@ -2467,7 +2492,11 @@ final class _ManualCaptureRotateDialogState
         title: Text(copy('capture.manual.delivery.rotated.title')),
         content: SizedBox(
           width: 470,
-          child: _ManualGrantDelivery(grant: rotated.grant, copy: copy),
+          child: _ManualGrantDelivery(
+            grant: rotated.grant,
+            controller: widget.controller,
+            copy: copy,
+          ),
         ),
         actions: [
           FilledButton(
@@ -2590,9 +2619,14 @@ final class _ManualContextReview extends StatelessWidget {
 }
 
 final class _ManualGrantDelivery extends StatefulWidget {
-  const _ManualGrantDelivery({required this.grant, required this.copy});
+  const _ManualGrantDelivery({
+    required this.grant,
+    required this.controller,
+    required this.copy,
+  });
 
   final ManualCaptureGrant grant;
+  final WorkbenchController controller;
   final AppCopy copy;
 
   @override
@@ -2601,13 +2635,16 @@ final class _ManualGrantDelivery extends StatefulWidget {
 
 final class _ManualGrantDeliveryState extends State<_ManualGrantDelivery> {
   String? _copied;
+  String? _rootError;
+  bool _savingRoot = false;
+  bool _savedRoot = false;
 
   @override
   Widget build(BuildContext context) {
     final grant = widget.grant;
     final copy = widget.copy;
+    final proxy = Uri.parse(grant.proxyAddress);
     return Semantics(
-      liveRegion: true,
       container: true,
       child: SingleChildScrollView(
         child: Column(
@@ -2640,14 +2677,56 @@ final class _ManualGrantDeliveryState extends State<_ManualGrantDelivery> {
               }),
               onCopy: () => _copy('password', grant.proxyPassword),
             ),
-            if (grant.root case final root?)
+            if (grant.root case final root? when root.kind == 'local_path')
               _ManualValueRow(
                 label: copy('capture.manual.delivery.root'),
-                value: root.pemPath,
+                value: root.pemPath!,
                 copyTooltip: copy.format('common.copy', {
                   'field': copy('capture.manual.delivery.root'),
                 }),
-                onCopy: () => _copy('root', root.pemPath),
+                onCopy: () => _copy('root', root.pemPath!),
+              ),
+            if (grant.root case final root?
+                when root.kind == 'server_download') ...[
+              const SizedBox(height: 8),
+              Text(
+                copy('capture.manual.delivery.root_server'),
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+              Semantics(
+                label:
+                    '${copy('capture.manual.delivery.fingerprint')}: ${root.derSha256}',
+                child: SelectableText(root.derSha256, style: monoStyle),
+              ),
+              const SizedBox(height: 7),
+              OutlinedButton.icon(
+                key: const Key('manual-capture-download-root'),
+                onPressed: _savingRoot ? null : _downloadRoot,
+                icon: _savingRoot
+                    ? const SizedBox.square(
+                        dimension: 14,
+                        child: CircularProgressIndicator(strokeWidth: 1.5),
+                      )
+                    : const Icon(Icons.download_outlined, size: 16),
+                label: Text(copy('capture.manual.delivery.download_root')),
+              ),
+              if (_savedRoot) Text(copy('capture.manual.delivery.root_saved')),
+              if (_rootError != null)
+                InlineNotice(
+                  message: copy('capture.manual.delivery.$_rootError'),
+                  error: true,
+                ),
+            ],
+            if (grant.proxyAddress.startsWith('https://'))
+              Text(
+                copy('capture.manual.delivery.server_tls'),
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+            if (proxy.scheme == 'http' &&
+                !const {'127.0.0.1', '::1', 'localhost'}.contains(proxy.host))
+              Text(
+                copy('capture.manual.delivery.http_warning'),
+                style: Theme.of(context).textTheme.bodySmall,
               ),
             const SizedBox(height: 7),
             Text(
@@ -2674,6 +2753,29 @@ final class _ManualGrantDeliveryState extends State<_ManualGrantDelivery> {
   Future<void> _copy(String field, String value) async {
     await Clipboard.setData(ClipboardData(text: value));
     if (mounted) setState(() => _copied = field);
+  }
+
+  Future<void> _downloadRoot() async {
+    final root = widget.grant.root;
+    if (root == null || root.kind != 'server_download' || _savingRoot) return;
+    setState(() {
+      _savingRoot = true;
+      _rootError = null;
+      _savedRoot = false;
+    });
+    try {
+      final certificate = await widget.controller.loadRuntimeRootCA();
+      if (certificate.fingerprint != root.derSha256) {
+        if (mounted) setState(() => _rootError = 'root_changed');
+        return;
+      }
+      final saved = await widget.controller.saveRuntimeRootCA(certificate);
+      if (mounted) setState(() => _savedRoot = saved);
+    } catch (_) {
+      if (mounted) setState(() => _rootError = 'root_download_failed');
+    } finally {
+      if (mounted) setState(() => _savingRoot = false);
+    }
   }
 }
 
@@ -2706,10 +2808,13 @@ final class _ManualValueRow extends StatelessWidget {
             child: Text(label, style: Theme.of(context).textTheme.labelMedium),
           ),
           Expanded(
-            child: SelectableText(
-              value,
-              maxLines: 2,
-              style: monoStyle.copyWith(color: context.viberColors.text),
+            child: Semantics(
+              label: '$label: $value',
+              child: SelectableText(
+                value,
+                maxLines: 2,
+                style: monoStyle.copyWith(color: context.viberColors.text),
+              ),
             ),
           ),
           IconButton(

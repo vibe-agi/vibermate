@@ -22,12 +22,14 @@ import (
 	"github.com/vibe-agi/vibermate/internal/activity"
 	"github.com/vibe-agi/vibermate/internal/capturecontrol"
 	"github.com/vibe-agi/vibermate/internal/clientadapter"
+	"github.com/vibe-agi/vibermate/internal/connectionevent"
 	"github.com/vibe-agi/vibermate/internal/connectionpolicy"
 	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/exchange"
 	"github.com/vibe-agi/vibermate/internal/hostcontract"
 	"github.com/vibe-agi/vibermate/internal/hostsecret"
 	"github.com/vibe-agi/vibermate/internal/instanceguard"
+	"github.com/vibe-agi/vibermate/internal/manualcapture"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
 	"github.com/vibe-agi/vibermate/internal/productruntime"
 	"github.com/vibe-agi/vibermate/internal/runlauncher"
@@ -96,6 +98,240 @@ func TestServerHostCanServeTheSameRuntimeAndManagementUIOverExplicitHTTP(t *test
 	if response.StatusCode != http.StatusUnauthorized {
 		payload, _ := io.ReadAll(response.Body)
 		t.Fatalf("HTTP management status=%d body=%s", response.StatusCode, payload)
+	}
+}
+
+func TestServerOwnerWebSessionCanManageManualCapture(t *testing.T) {
+	root := t.TempDir()
+	options := serverOptions(t, root)
+	options.Transport = serverhost.TransportOptions{Mode: serverhost.TransportHTTP}
+	host, err := serverhost.Start(context.Background(), options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer shutdownServer(t, host)
+	key, err := os.ReadFile(host.Status().RecoveryKeyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := &http.Client{Timeout: 10 * time.Second}
+	setup := postJSON(t, client,
+		"http://"+host.Status().ListenAddress+servercontrol.WebSetupPath, "",
+		servercontrol.WebSetup{
+			Schema: servercontrol.WebSetupSchema, RecoveryKey: strings.TrimSpace(string(key)),
+			Username: "owner", Password: "synthetic-owner-password",
+		},
+	)
+	defer setup.Body.Close()
+	if setup.StatusCode != http.StatusCreated {
+		t.Fatalf("Web setup status=%d", setup.StatusCode)
+	}
+	var session servercontrol.WebSession
+	if err := json.NewDecoder(setup.Body).Decode(&session); err != nil {
+		t.Fatal(err)
+	}
+	request, err := http.NewRequest(http.MethodGet,
+		"http://"+host.Status().ListenAddress+"/api/v1/manual-captures/context?environmentId="+environment.SystemTransparentID.String(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("Authorization", "Bearer "+session.ReadToken)
+	response, err := client.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		payload, _ := io.ReadAll(response.Body)
+		t.Fatalf("owner manual Capture context status=%d body=%s", response.StatusCode, payload)
+	}
+	var reviewed capturecontrol.ManualCaptureContext
+	if err := json.NewDecoder(response.Body).Decode(&reviewed); err != nil {
+		t.Fatal(err)
+	}
+	if reviewed.ProxyAddress != "http://"+host.Status().ListenAddress ||
+		reviewed.EnvironmentID != environment.SystemTransparentID.String() ||
+		reviewed.ConfirmationToken == "" {
+		t.Fatalf("owner manual Capture context = %+v", reviewed)
+	}
+	if reviewed.Root == nil || reviewed.Root.Kind != "server_download" || reviewed.Root.PEMPath != "" {
+		t.Fatalf("Web manual Capture disclosed a Server-local Root path: %+v", reviewed.Root)
+	}
+	member, err := host.Runtime().RuntimeUsers().Create(context.Background(), runtimeuser.CreateCommand{
+		Username: "member", Password: []byte("synthetic-member-password"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	memberLogin := postJSON(t, client,
+		"http://"+host.Status().ListenAddress+servercontrol.WebSessionPath, "",
+		servercontrol.WebLogin{
+			Schema: servercontrol.WebLoginSchema, Username: member.Username,
+			Password: "synthetic-member-password",
+		})
+	defer memberLogin.Body.Close()
+	if memberLogin.StatusCode != http.StatusCreated {
+		t.Fatalf("member Web login status=%d", memberLogin.StatusCode)
+	}
+	var memberSession servercontrol.WebSession
+	if err := json.NewDecoder(memberLogin.Body).Decode(&memberSession); err != nil {
+		t.Fatal(err)
+	}
+	deniedRequest, err := http.NewRequest(http.MethodGet, request.URL.String(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deniedRequest.Header.Set("Authorization", "Bearer "+memberSession.ReadToken)
+	denied, err := client.Do(deniedRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	denied.Body.Close()
+	if denied.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("member read owner ManualCapture context status=%d", denied.StatusCode)
+	}
+	wrongScope := postJSON(t, client,
+		"http://"+host.Status().ListenAddress+"/api/v1/manual-captures",
+		session.ReadToken, capturecontrol.ManualCaptureCreateRequest{
+			EnvironmentID: reviewed.EnvironmentID, DisplayName: "not authorized",
+			ClientClass: manualcapture.ClientDesktopApp, Lifetime: manualcapture.LifetimeUntilRevoked,
+			ConfirmationToken: reviewed.ConfirmationToken,
+		})
+	wrongScope.Body.Close()
+	if wrongScope.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("read-only Web capability created ManualCapture with status=%d", wrongScope.StatusCode)
+	}
+	caRequest, err := http.NewRequest(http.MethodGet,
+		"http://"+host.Status().ListenAddress+servercontrol.RuntimeRootCAPath, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	caRequest.Header.Set("Authorization", "Bearer "+session.ReadToken)
+	caResponse, err := client.Do(caRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer caResponse.Body.Close()
+	var certificate servercontrol.RuntimeRootCA
+	if caResponse.StatusCode != http.StatusOK || json.NewDecoder(caResponse.Body).Decode(&certificate) != nil ||
+		certificate.Fingerprint != reviewed.Root.DERSHA256 || !strings.Contains(certificate.CertificatePEM, "BEGIN CERTIFICATE") {
+		t.Fatal("owner could not download the exact reviewed Proxy CA")
+	}
+	base := "http://" + host.Status().ListenAddress + "/api/v1/manual-captures"
+	created := postJSON(t, client, base, session.WriteToken,
+		capturecontrol.ManualCaptureCreateRequest{
+			EnvironmentID: reviewed.EnvironmentID, DisplayName: "synthetic Web proxy",
+			ClientClass: manualcapture.ClientDesktopApp, Lifetime: manualcapture.LifetimeUntilRevoked,
+			ConfirmationToken: reviewed.ConfirmationToken,
+		})
+	defer created.Body.Close()
+	if created.StatusCode != http.StatusCreated {
+		payload, _ := io.ReadAll(created.Body)
+		t.Fatalf("owner manual Capture create status=%d body=%s", created.StatusCode, payload)
+	}
+	var grant capturecontrol.ManualCaptureGrant
+	if err := json.NewDecoder(created.Body).Decode(&grant); err != nil {
+		t.Fatal(err)
+	}
+	if grant.ProxyAddress != reviewed.ProxyAddress || grant.ProxyPassword == "" ||
+		grant.Root == nil || grant.Root.Kind != "server_download" || grant.Root.PEMPath != "" {
+		t.Fatal("created Web proxy login did not preserve the reviewed address and downloadable Root")
+	}
+	origin := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.Header.Get("Proxy-Authorization") != "" {
+			writer.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		_, _ = io.WriteString(writer, "manual-web-proxy-ok")
+	}))
+	defer origin.Close()
+	parsedOrigin, _ := url.Parse(origin.URL)
+	rules := host.Runtime().ConnectionRules()
+	current := rules.Current()
+	if _, err := rules.Replace(context.Background(), current.Revision,
+		[]connectionpolicy.Rule{{
+			ID: "test.manual-web-origin", Priority: 100,
+			Decision: connectionpolicy.DecisionAllow,
+			Match:    connectionpolicy.MatchExactHostPort(parsedOrigin.Hostname(), mustPort(t, parsedOrigin.Port())),
+		}}, current.Mode); err != nil {
+		t.Fatal(err)
+	}
+	useProxy := func(password string) int {
+		proxyURL, err := url.Parse(grant.ProxyAddress)
+		if err != nil {
+			t.Fatal(err)
+		}
+		proxyURL.User = url.UserPassword(grant.ProxyUsername, password)
+		transport := &http.Transport{Proxy: http.ProxyURL(proxyURL)}
+		defer transport.CloseIdleConnections()
+		response, err := (&http.Client{Transport: transport, Timeout: 10 * time.Second}).Get(origin.URL + "/status")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer response.Body.Close()
+		if response.StatusCode == http.StatusOK {
+			body, _ := io.ReadAll(response.Body)
+			if string(body) != "manual-web-proxy-ok" {
+				t.Fatal("manual Web proxy response did not reach the local synthetic origin")
+			}
+		}
+		return response.StatusCode
+	}
+	if status := useProxy(grant.ProxyPassword); status != http.StatusOK {
+		t.Fatalf("issued Web proxy login failed with HTTP %d", status)
+	}
+	connections, err := host.Runtime().ConnectionEvents().List(context.Background(),
+		connectionevent.PageRequest{IngressID: "manual-capture/" + grant.Capture.ID, Limit: 10})
+	if err != nil || len(connections.Items) == 0 {
+		t.Fatalf("manual Web proxy left no Capture connection evidence: %v", err)
+	}
+	rotate, err := http.NewRequest(http.MethodPost,
+		base+"/"+grant.Capture.ID+"/actions/rotate-credential", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rotate.Header.Set("Authorization", "Bearer "+session.WriteToken)
+	rotate.Header.Set("If-Match", created.Header.Get("ETag"))
+	rotatedResponse, err := client.Do(rotate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rotatedResponse.Body.Close()
+	if rotatedResponse.StatusCode != http.StatusOK {
+		payload, _ := io.ReadAll(rotatedResponse.Body)
+		t.Fatalf("owner manual Capture rotation status=%d body=%s", rotatedResponse.StatusCode, payload)
+	}
+	var rotated capturecontrol.ManualCaptureGrant
+	if err := json.NewDecoder(rotatedResponse.Body).Decode(&rotated); err != nil {
+		t.Fatal(err)
+	}
+	if rotated.ProxyPassword == "" || rotated.ProxyPassword == grant.ProxyPassword ||
+		rotated.Root == nil || rotated.Root.Kind != "server_download" {
+		t.Fatal("Web proxy credential rotation did not replace the one-time secret")
+	}
+	if status := useProxy(grant.ProxyPassword); status != http.StatusForbidden {
+		t.Fatalf("rotated Web proxy accepted old credential: HTTP %d", status)
+	}
+	if status := useProxy(rotated.ProxyPassword); status != http.StatusOK {
+		t.Fatalf("rotated Web proxy rejected new credential: HTTP %d", status)
+	}
+	revoke, err := http.NewRequest(http.MethodPost,
+		base+"/"+grant.Capture.ID+"/actions/revoke", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	revoke.Header.Set("Authorization", "Bearer "+session.WriteToken)
+	revoke.Header.Set("If-Match", rotatedResponse.Header.Get("ETag"))
+	revoked, err := client.Do(revoke)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer revoked.Body.Close()
+	if revoked.StatusCode != http.StatusNoContent {
+		t.Fatalf("owner manual Capture revoke status=%d", revoked.StatusCode)
+	}
+	if status := useProxy(rotated.ProxyPassword); status != http.StatusForbidden {
+		t.Fatalf("revoked Web proxy credential still reached upstream: HTTP %d", status)
 	}
 }
 

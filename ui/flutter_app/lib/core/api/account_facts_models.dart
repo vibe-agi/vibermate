@@ -23,6 +23,7 @@ final class AccountFacts {
         'upstreamAccountId',
         'upstreamUserId',
         'credits',
+        'rateLimitResets',
         'history',
       },
     );
@@ -62,6 +63,9 @@ final class AccountFacts {
     credits = value['credits'] == null
         ? null
         : AccountCredits.fromJson(value['credits']);
+    rateLimitResets = value['rateLimitResets'] == null
+        ? null
+        : AccountRateLimitResets.fromJson(value['rateLimitResets']);
     history = value['history'] == null
         ? null
         : AccountHistory.fromJson(value['history']);
@@ -72,7 +76,127 @@ final class AccountFacts {
   late final String? planType, upstreamAccountId, upstreamUserId;
   late final List<AccountQuotaLimit> limits;
   late final AccountCredits? credits;
+  late final AccountRateLimitResets? rateLimitResets;
   late final AccountHistory? history;
+}
+
+final class AccountRateLimitResets {
+  AccountRateLimitResets.fromJson(Object? json) {
+    const path = 'accountRateLimitResets';
+    final value = requireObject(json, path);
+    requireFields(
+      value,
+      path,
+      required: const {'availableCount'},
+      optional: const {'applicableAvailableCount', 'details'},
+    );
+    availableCount = requireInteger(value, 'availableCount', path, minimum: 0);
+    applicableAvailableCount = value['applicableAvailableCount'] == null
+        ? null
+        : requireInteger(value, 'applicableAvailableCount', path, minimum: 0);
+    if (applicableAvailableCount != null &&
+        applicableAvailableCount! > availableCount) {
+      throw const ControlContractException(
+        'applicable resets exceed available resets',
+      );
+    }
+    final rawDetails = value['details'];
+    if (rawDetails == null) {
+      details = null;
+    } else {
+      final items = requireList(rawDetails, '$path.details');
+      if (items.length > 64) {
+        throw const ControlContractException('too many reset-credit details');
+      }
+      details = List.unmodifiable(items.map(AccountResetCredit.fromJson));
+    }
+  }
+
+  late final int availableCount;
+  late final int? applicableAvailableCount;
+  late final List<AccountResetCredit>? details;
+}
+
+final class AccountResetCredit {
+  AccountResetCredit.fromJson(Object? json) {
+    const path = 'accountResetCredit';
+    final value = requireObject(json, path);
+    requireFields(
+      value,
+      path,
+      required: const {'id', 'resetType', 'status', 'grantedAt'},
+      optional: const {'expiresAt', 'title', 'description'},
+    );
+    id = requireString(value, 'id', path);
+    resetType = requireString(value, 'resetType', path);
+    status = requireString(value, 'status', path);
+    grantedAt = requireTimestamp(value, 'grantedAt', path);
+    expiresAt = value['expiresAt'] == null || value['expiresAt'] == ''
+        ? null
+        : requireTimestamp(value, 'expiresAt', path);
+    title = _text(value, 'title', path);
+    description = _text(value, 'description', path);
+    if (id.isEmpty ||
+        id.length > 256 ||
+        resetType.length > 64 ||
+        status.length > 64) {
+      throw const ControlContractException('reset credit identity is invalid');
+    }
+  }
+
+  late final String id, resetType, status;
+  late final DateTime grantedAt;
+  late final DateTime? expiresAt;
+  late final String? title, description;
+
+  bool get available =>
+      resetType == 'codex_rate_limits' &&
+      status == 'available' &&
+      (expiresAt == null || expiresAt!.isAfter(DateTime.now().toUtc()));
+}
+
+final class AccountResetRedemption {
+  AccountResetRedemption.fromJson(Object? json) {
+    const path = 'accountResetRedemption';
+    final value = requireObject(json, path);
+    requireFields(
+      value,
+      path,
+      required: const {
+        'accountId',
+        'credentialEpoch',
+        'creditId',
+        'outcome',
+        'windowsReset',
+      },
+    );
+    accountId = requireString(value, 'accountId', path);
+    credentialEpoch = requireInteger(
+      value,
+      'credentialEpoch',
+      path,
+      minimum: 1,
+    );
+    creditId = requireString(value, 'creditId', path);
+    outcome = requireString(value, 'outcome', path);
+    windowsReset = requireInteger(value, 'windowsReset', path, minimum: 0);
+    if (accountId.isEmpty ||
+        creditId.isEmpty ||
+        windowsReset > 64 ||
+        !const {
+          'reset',
+          'nothing_to_reset',
+          'no_credit',
+          'already_redeemed',
+        }.contains(outcome)) {
+      throw const ControlContractException(
+        'reset redemption response is invalid',
+      );
+    }
+  }
+
+  late final String accountId, creditId, outcome;
+  late final int credentialEpoch, windowsReset;
 }
 
 final class AccountQuotaLimit {

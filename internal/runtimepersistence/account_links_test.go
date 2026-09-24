@@ -78,6 +78,7 @@ func TestOwnedDevelopmentAccountsBecomeLinksWithoutLosingCredentials(t *testing.
 	prior = strings.Replace(prior, accountNoteColumnsSQL, "", 1)
 	priorSchema := strings.Replace(schemaSQL, current, prior, 1)
 	priorSchema = strings.ReplaceAll(priorSchema, "'upstream_account_read',\n", "")
+	priorSchema = strings.ReplaceAll(priorSchema, "'upstream_account_action',\n", "")
 	priorSchema = strings.ReplaceAll(priorSchema, "'credential_refresh',\n", "")
 	priorSchema = strings.Replace(priorSchema, "CREATE INDEX provider_accounts_origin_state\nON provider_accounts(credential_origin, state, account_id);", "CREATE INDEX provider_accounts_endpoint_state\nON provider_accounts(upstream_endpoint_id, state, account_id);", 1)
 	if got := fmt.Sprintf("%x", sha256.Sum256([]byte(priorSchema))); got != ownedAccountDevelopmentDigest {

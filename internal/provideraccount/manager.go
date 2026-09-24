@@ -598,7 +598,7 @@ func (manager *Manager) AcquireEndpointCredential(
 }
 
 type accountLeaseScope struct {
-	ownerRead                bool
+	ownerOperation           bool
 	id                       ID
 	accountRevision          uint64
 	realmID                  string
@@ -631,7 +631,7 @@ func (manager *Manager) acquire(
 		manager.mu.Unlock()
 		return nil, ErrAccountDisabled
 	}
-	if !scope.ownerRead && !account.Associations.Contains(upstreamendpoint.ID(scope.upstreamEndpointID)) {
+	if !scope.ownerOperation && !account.Associations.Contains(upstreamendpoint.ID(scope.upstreamEndpointID)) {
 		manager.mu.Unlock()
 		return nil, ErrEndpointMismatch
 	}
@@ -639,7 +639,7 @@ func (manager *Manager) acquire(
 		manager.mu.Unlock()
 		return nil, ErrRealmMismatch
 	}
-	if scope.ownerRead && (account.Origin != scope.upstreamEndpointOrigin || account.RealmID != scope.realmID) {
+	if scope.ownerOperation && (account.Origin != scope.upstreamEndpointOrigin || account.RealmID != scope.realmID) {
 		manager.mu.Unlock()
 		return nil, ErrRealmMismatch
 	}
@@ -664,7 +664,7 @@ func (manager *Manager) acquire(
 	// Future revisions, revoked links, disabled endpoints and removed drivers
 	// remain closed; account identity and credential epoch stay independently
 	// revision-bound above and below this check.
-	if !scope.ownerRead && (!endpointExists || endpoint.State != upstreamendpoint.StateActive ||
+	if !scope.ownerOperation && (!endpointExists || endpoint.State != upstreamendpoint.StateActive ||
 		endpoint.Revision < scope.upstreamEndpointRevision || endpoint.RealmID != scope.realmID ||
 		endpoint.Origin != scope.upstreamEndpointOrigin || !account.CompatibleEndpoint(endpoint)) {
 		return nil, ErrEndpointMismatch

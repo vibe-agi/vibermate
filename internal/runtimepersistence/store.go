@@ -374,6 +374,9 @@ func initializeSchema(ctx context.Context, database *sql.DB) (string, error) {
 		if err := detachDevelopmentAccounts(ctx, transaction, digest); err != nil {
 			return "", err
 		}
+		if err := widenReleasedAccountAction(ctx, transaction, digest); err != nil {
+			return "", err
+		}
 		if err := transaction.Commit(); err != nil {
 			return "", fmt.Errorf("commit SQLite schema check: %w", err)
 		}

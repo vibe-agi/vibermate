@@ -225,6 +225,7 @@ final class _TitleBar extends StatelessWidget {
                 WebAccountButton(
                   principal: principal,
                   copy: copy,
+                  compact: narrow,
                   onChangePassword: controller.changeWebPassword,
                   onSignOut: controller.onSignOut,
                 ),

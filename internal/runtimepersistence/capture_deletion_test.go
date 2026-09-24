@@ -305,6 +305,22 @@ func TestDeletingACaptureReleasesItsBytesAndLeavesOtherCapturesIntact(t *testing
 	); err != nil {
 		t.Fatalf("kept Capture identity error = %v", err)
 	}
+	if err := store.ConversationIdentityRepository().PutConversationIdentity(
+		context.Background(), "run-doomed-exchange-0", agentconversation.ClientIdentity{
+			Client: "codex", SessionID: "run-doomed-session", SessionResumable: true,
+			ProviderResponseID: "run-doomed-exchange-0",
+			Source:             agentconversation.ClientIdentitySourceProtocolEvidence,
+			Confidence:         "exact", ObservedAt: time.Date(2026, 8, 18, 9, 0, 0, 0, time.UTC),
+		},
+	); !errors.Is(err, activity.ErrExchangeNotFound) {
+		t.Fatalf("late deleted Capture identity error = %v, want ErrExchangeNotFound", err)
+	}
+	var resurrected int
+	if err := store.database.QueryRow(
+		`SELECT COUNT(*) FROM runtime_exchange_agent_identities WHERE exchange_id = 'run-doomed-exchange-0'`,
+	).Scan(&resurrected); err != nil || resurrected != 0 {
+		t.Fatalf("deleted Capture identity resurrected: count=%d err=%v", resurrected, err)
+	}
 }
 
 func TestDeletingAManualCapturePurgesItsFullEvidenceGraph(t *testing.T) {

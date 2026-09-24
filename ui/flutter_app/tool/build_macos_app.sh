@@ -82,6 +82,9 @@ else
   ditto --norsrc --noextattr --noacl --noqtn -X \
     "${web_source}" \
     "${web_destination}"
+  cp "${repository_root}/LICENSE" "${app_bundle}/Contents/Resources/LICENSE"
+  cp "${repository_root}/LICENSE" "${web_destination}/LICENSE"
+  cp "${repository_root}/THIRD_PARTY_LICENSES.md" "${app_bundle}/Contents/Resources/THIRD_PARTY_LICENSES.md"
   if [[ "${app_executable}" -ef "${cli_executable}" ]]; then
     echo "App executable and packaged CLI resolve to the same file" >&2
     exit 70

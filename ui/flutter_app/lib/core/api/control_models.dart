@@ -9128,6 +9128,7 @@ final class NetworkData {
 
 final class ManualCaptureRoot {
   const ManualCaptureRoot({
+    required this.kind,
     required this.derSha256,
     required this.fingerprint,
     required this.pemPath,
@@ -9138,26 +9139,33 @@ final class ManualCaptureRoot {
     requireFields(
       value,
       path,
-      required: const {'kind', 'derSha256', 'fingerprint', 'pemPath'},
+      required: const {'kind', 'derSha256', 'fingerprint'},
+      optional: const {'pemPath'},
     );
+    final kind = requireString(value, 'kind', path);
     final digest = requireString(value, 'derSha256', path);
-    final pemPath = requireString(value, 'pemPath', path);
-    if (requireString(value, 'kind', path) != 'local_path' ||
+    final pemPath = optionalString(value, 'pemPath', path);
+    if (!const {'local_path', 'server_download'}.contains(kind) ||
         !RegExp(r'^[0-9a-f]{64}$').hasMatch(digest) ||
-        !pemPath.startsWith('/') ||
-        pemPath.contains('\u0000')) {
+        (kind == 'local_path'
+            ? pemPath == null ||
+                  !pemPath.startsWith('/') ||
+                  pemPath.contains('\u0000')
+            : pemPath != null)) {
       throw ControlContractException('$path Root evidence is invalid');
     }
     return ManualCaptureRoot(
+      kind: kind,
       derSha256: digest,
       fingerprint: requireString(value, 'fingerprint', path),
       pemPath: pemPath,
     );
   }
 
+  final String kind;
   final String derSha256;
   final String fingerprint;
-  final String pemPath;
+  final String? pemPath;
 }
 
 final class ManualCaptureContext {
@@ -9455,13 +9463,17 @@ final class ManualCaptureGrantStateTag {
 bool _validManualProxyAddress(String value) {
   final parsed = Uri.tryParse(value);
   return parsed != null &&
-      parsed.scheme == 'http' &&
-      parsed.host == '127.0.0.1' &&
+      const {'http', 'https'}.contains(parsed.scheme) &&
+      parsed.host.isNotEmpty &&
+      parsed.host != '0.0.0.0' &&
+      parsed.host != '::' &&
       parsed.hasPort &&
+      parsed.port > 0 &&
       parsed.userInfo.isEmpty &&
-      (parsed.path.isEmpty || parsed.path == '/') &&
+      parsed.path.isEmpty &&
       !parsed.hasQuery &&
-      !parsed.hasFragment;
+      !parsed.hasFragment &&
+      value == '${parsed.scheme}://${parsed.authority}';
 }
 
 final class DashboardData {

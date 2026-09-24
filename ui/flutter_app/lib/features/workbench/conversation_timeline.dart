@@ -3076,6 +3076,20 @@ final class _ContentBlocksView extends StatelessWidget {
           estimatedLines: _estimatedContentLines(
             segment.map((entry) => entry.value),
           ),
+          useBoundedPreview:
+              segment.fold<int>(
+                0,
+                (total, entry) =>
+                    total +
+                    (entry.value.availability == 'recorded'
+                        ? entry.value.originalSize
+                        : 0),
+              ) >
+              8 * 1024,
+          preview: SelectableText(
+            _boundedContentPreview(segment.map((entry) => entry.value)),
+            style: Theme.of(context).textTheme.bodyMedium,
+          ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
@@ -3126,6 +3140,9 @@ final class _ContentBlocksView extends StatelessWidget {
 int _estimatedContentLines(Iterable<ExchangeContentBlock> blocks) {
   var lines = 0;
   for (final block in blocks) {
+    if (block.availability == 'recorded' && block.originalSize > 8 * 1024) {
+      return _defaultVisibleContentLines + 1;
+    }
     final text = switch (block.kind) {
       'tool_call' when block.arguments != null => const JsonEncoder.withIndent(
         '  ',
@@ -3136,13 +3153,45 @@ int _estimatedContentLines(Iterable<ExchangeContentBlock> blocks) {
       lines += 1;
       continue;
     }
-    for (final line in text.split('\n')) {
-      // This is only an admission heuristic. The collapsed viewport itself is
-      // measured in rendered line heights, so Markdown and code stay intact.
-      lines += math.max(1, (line.runes.length / 72).ceil());
+    var column = 0;
+    for (var index = 0; index < text.length; index++) {
+      if (text.codeUnitAt(index) == 10) {
+        lines++;
+        column = 0;
+      } else if (++column == 72) {
+        lines++;
+        column = 0;
+      }
+      if (lines > _defaultVisibleContentLines) return lines;
     }
+    lines++;
+    if (lines > _defaultVisibleContentLines) return lines;
   }
   return lines;
+}
+
+String _boundedContentPreview(Iterable<ExchangeContentBlock> blocks) {
+  const maxCharacters = 4096;
+  final output = StringBuffer();
+  var characters = 0;
+  var lines = 0;
+  for (final block in blocks) {
+    final value = block.kind == 'tool_call'
+        ? (block.toolName ?? '')
+        : (block.text ?? '');
+    if (value.isEmpty) continue;
+    for (final rune in value.runes) {
+      if (characters >= maxCharacters || lines >= _defaultVisibleContentLines) {
+        return output.toString().trimRight();
+      }
+      output.writeCharCode(rune);
+      characters++;
+      if (rune == 10) lines++;
+    }
+    output.writeln();
+    lines++;
+  }
+  return output.toString().trimRight();
 }
 
 final class _ExpandableContentRegion extends StatefulWidget {
@@ -3150,6 +3199,8 @@ final class _ExpandableContentRegion extends StatefulWidget {
     required this.id,
     required this.copy,
     required this.estimatedLines,
+    required this.useBoundedPreview,
+    required this.preview,
     required this.child,
     super.key,
   });
@@ -3160,6 +3211,8 @@ final class _ExpandableContentRegion extends StatefulWidget {
   final String id;
   final AppCopy copy;
   final int estimatedLines;
+  final bool useBoundedPreview;
+  final Widget preview;
   final Widget child;
 
   @override
@@ -3187,7 +3240,10 @@ final class _ExpandableContentRegionState
   Widget build(BuildContext context) {
     final content = !_collapsible || _expanded
         ? widget.child
-        : _HeightLimitedClip(maxHeight: _collapsedHeight, child: widget.child);
+        : _HeightLimitedClip(
+            maxHeight: _collapsedHeight,
+            child: widget.useBoundedPreview ? widget.preview : widget.child,
+          );
     if (!_collapsible) return content;
 
     final label = widget.copy(
@@ -3612,10 +3668,18 @@ final class _ReasoningBlockViewState extends State<_ReasoningBlockView> {
                           ? _HeightLimitedClip(
                               maxHeight: _ExpandableContentRegionState
                                   ._collapsedHeight,
-                              child: _ReasoningEvidenceContents(
-                                blocks: blocks,
-                                copy: copy,
-                              ),
+                              child: visibleSize > 8 * 1024
+                                  ? SelectableText(
+                                      _boundedContentPreview(blocks),
+                                      style: monoStyle.copyWith(
+                                        color: context.viberColors.text,
+                                        height: 1.45,
+                                      ),
+                                    )
+                                  : _ReasoningEvidenceContents(
+                                      blocks: blocks,
+                                      copy: copy,
+                                    ),
                             )
                           : _ReasoningEvidenceContents(
                               blocks: blocks,
@@ -3817,8 +3881,15 @@ final class _FailureNotice extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final titleKey = 'exchange.failure.$result.title';
-    final actionKey = 'exchange.failure.$result.action';
+    final failure = result == 'provider_status_rejected'
+        ? switch (diagnosis?.providerStatus) {
+            401 || 403 => 'provider_status_rejected_auth',
+            429 => 'provider_status_rejected_rate_limit',
+            _ => result,
+          }
+        : result;
+    final titleKey = 'exchange.failure.$failure.title';
+    final actionKey = 'exchange.failure.$failure.action';
     final title =
         copy.maybe(titleKey) ?? copy('exchange.failure.default.title');
     final action =
@@ -3849,10 +3920,30 @@ final class _FailureNotice extends StatelessWidget {
           ),
           const SizedBox(height: 2),
           Text(action),
-          const SizedBox(height: 4),
-          SelectableText(
-            technical,
-            style: monoStyle.copyWith(color: context.viberColors.danger),
+          ExpansionTile(
+            key: Key('exchange-failure-details-$result'),
+            dense: true,
+            visualDensity: VisualDensity.compact,
+            tilePadding: EdgeInsets.zero,
+            childrenPadding: EdgeInsets.zero,
+            title: Text(
+              copy('common.technical_details'),
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+            children: [
+              Align(
+                alignment: Alignment.centerLeft,
+                child: Semantics(
+                  label: technical,
+                  child: SelectableText(
+                    technical,
+                    style: monoStyle.copyWith(
+                      color: context.viberColors.danger,
+                    ),
+                  ),
+                ),
+              ),
+            ],
           ),
         ],
       ),

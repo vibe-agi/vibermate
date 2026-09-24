@@ -11,6 +11,14 @@ import '../core/api/runtime_storage.dart';
 
 final class PreviewControlApi implements ControlApi {
   @override
+  Future<AccountResetRedemption> redeemAccountResetCredit(
+    ProviderAccount account,
+    String creditId,
+  ) async => throw const ControlContractException(
+    'The preview cannot consume an upstream reset credit',
+  );
+
+  @override
   launchEnvironmentSnapshots() async => const [];
   @override
   Future<RuntimeStorageLocation>
@@ -36,6 +44,8 @@ final class PreviewControlApi implements ControlApi {
       'observedAt': DateTime.now().toUtc().toIso8601String(),
       'state': 'known',
       if (!history) 'planType': 'pro',
+      if (!history)
+        'rateLimitResets': {'availableCount': 1, 'applicableAvailableCount': 1},
       'limits': history
           ? <Object?>[]
           : [
@@ -2525,6 +2535,8 @@ final class PreviewControlApi implements ControlApi {
     final count = capture.id == 'run-1' ? 224 : 24;
     final values = List.generate(count, (index) {
       final reasonCode = switch (index) {
+        214 || 215 => 'provider_status_rejected',
+        216 => 'provider_transport_failed',
         217 => 'unsupported_client_input',
         218 => 'provider_response_idle',
         _ => null,
@@ -3578,6 +3590,8 @@ Evidence line 16''';
     final failed = activity.status == 'failed';
     final rejectedBeforeUpstream =
         activity.reasonCode == 'unsupported_client_input';
+    final transportFailure = activity.reasonCode == 'provider_transport_failed';
+    final providerRejected = activity.reasonCode == 'provider_status_rejected';
     final agentTurn = activity.source.displayName == 'Codex' && index >= 20;
     final routeId = activity.routeId ?? '';
     final attempt = EgressAttemptRecord(
@@ -3604,9 +3618,19 @@ Evidence line 16''';
       startedAt: activity.occurredAt,
       terminal: terminal,
       outcome: terminal ? (failed ? 'failed' : 'completed') : null,
-      errorClass: failed ? 'provider_timeout' : null,
+      errorClass: failed
+          ? transportFailure
+                ? 'connection_failed'
+                : providerRejected
+                ? 'provider_status'
+                : 'provider_timeout'
+          : null,
       bytesOut: 420 + index * 7,
-      bytesIn: failed ? 0 : 1280 + index * 17,
+      bytesIn: providerRejected
+          ? 128
+          : failed
+          ? 0
+          : 1280 + index * 17,
       completedAt: terminal
           ? activity.occurredAt.add(const Duration(milliseconds: 840))
           : null,
@@ -3739,6 +3763,20 @@ Evidence line 16''';
               providerField: null,
               clientField: 'messages',
               clientPath: r'$.messages[0].content',
+            )
+          : transportFailure
+          ? const ExchangeDiagnosis(
+              providerStatus: null,
+              providerField: 'upstream',
+              clientField: null,
+              clientPath: null,
+            )
+          : providerRejected
+          ? ExchangeDiagnosis(
+              providerStatus: index == 215 ? 429 : 401,
+              providerField: 'upstream',
+              clientField: null,
+              clientPath: null,
             )
           : failed
           ? const ExchangeDiagnosis(
@@ -3888,6 +3926,7 @@ Evidence line 16''';
       root: protected.isEmpty
           ? null
           : const ManualCaptureRoot(
+              kind: 'local_path',
               derSha256:
                   'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
               fingerprint: 'BB:BB:BB:BB:BB:BB',

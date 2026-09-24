@@ -1058,7 +1058,7 @@ void main() {
   });
 
   test(
-    'Manual Capture context accepts only literal loopback proxy authority',
+    'Manual Capture context accepts an exact proxy origin without a path',
     () {
       final context = ManualCaptureContext.fromJson(
         {
@@ -1090,7 +1090,7 @@ void main() {
         () => ManualCaptureContext.fromJson(
           {
             'confirmationToken': 'ctx_${List.filled(43, 'A').join()}',
-            'proxyAddress': 'http://localhost:43123',
+            'proxyAddress': 'http://localhost:43123/path',
             'environmentId': 'work',
             'environmentRevision': 7,
             'environmentDigest': List.filled(64, 'a').join(),
@@ -1105,6 +1105,36 @@ void main() {
         ),
         throwsA(isA<ControlContractException>()),
       );
+    },
+  );
+
+  test(
+    'Web Manual Capture accepts a canonical server proxy and downloadable Root',
+    () {
+      final context = ManualCaptureContext.fromJson(
+        {
+          'confirmationToken': 'ctx_${List.filled(43, 'A').join()}',
+          'proxyAddress': 'https://vibermate.home.arpa:9666',
+          'environmentId': 'work',
+          'environmentRevision': 7,
+          'environmentDigest': List.filled(64, 'a').join(),
+          'launchAuthorityDigest': List.filled(64, 'b').join(),
+          'protectedAuthorities': ['api.anthropic.com'],
+          'managedCredentialAuthorities': <String>[],
+          'defaultTemporarySeconds': 3600,
+          'maxTemporarySeconds': 86400,
+          'root': {
+            'kind': 'server_download',
+            'derSha256': List.filled(64, 'c').join(),
+            'fingerprint': 'CC:CC',
+          },
+        },
+        'manualCaptureContext',
+        expectedEnvironmentId: 'work',
+      );
+      expect(context.proxyAddress, 'https://vibermate.home.arpa:9666');
+      expect(context.root?.kind, 'server_download');
+      expect(context.root?.pemPath, isNull);
     },
   );
 

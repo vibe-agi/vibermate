@@ -241,6 +241,13 @@ func exchangePageQuery(request activity.PageRequest) (string, []any) {
 			arguments = append(arguments, filter.value)
 		}
 	}
+	if request.WithoutLocalConversationIdentity {
+		query += ` AND NOT EXISTS (
+			SELECT 1 FROM runtime_exchange_agent_identities AS identity
+			WHERE identity.exchange_id = candidate.subject_id
+			  AND identity.evidence_source = 'client_local_state'
+		)`
+	}
 	if !request.OccurredAtOrAfter.IsZero() {
 		query += " AND occurred_at_unix_ms >= ? AND occurred_at_unix_ms < ?"
 		arguments = append(arguments, request.OccurredAtOrAfter.UnixMilli(), request.OccurredBefore.UnixMilli())
@@ -377,6 +384,8 @@ func (repository *activityRepository) PutConversationIdentity(
 		return err
 	}
 	defer finish()
+	// The existence test and insertion must be one SQLite statement: an
+	// asynchronous indexer may finish after Capture deletion has committed.
 	result, err := repository.database.ExecContext(
 		operation,
 		`INSERT INTO runtime_exchange_agent_identities (
@@ -385,7 +394,13 @@ func (repository *activityRepository) PutConversationIdentity(
 		   provider_response_id, provider_message_id,
 		   protocol_ids_json, attributes_json,
 		   evidence_source, confidence, observed_at_unix_ms
-		 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		 ) SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+		   WHERE EXISTS (
+		     SELECT 1 FROM runtime_activities
+		     WHERE subject_id = ? AND kind IN ('exchange.started', 'exchange.completed')
+		   ) OR EXISTS (
+		     SELECT 1 FROM runtime_exchange_contents WHERE exchange_id = ?
+		   )
 		 ON CONFLICT(exchange_id) DO NOTHING`,
 		exchangeID,
 		identity.Client,
@@ -402,6 +417,8 @@ func (repository *activityRepository) PutConversationIdentity(
 		identity.Source,
 		identity.Confidence,
 		toUnixMillis(identity.ObservedAt),
+		exchangeID,
+		exchangeID,
 	)
 	if err != nil {
 		return fmt.Errorf("persist Exchange Agent identity: %w", err)

@@ -229,6 +229,14 @@ func adjacentServerManagementUIRoot(executable string) (string, error) {
 	)
 }
 
+func serverManagementUIRoot(executable string) (string, error) {
+	root, err := packagedManagementUIRoot(executable)
+	if err != nil || root != "" {
+		return root, err
+	}
+	return adjacentServerManagementUIRoot(executable)
+}
+
 func directManagementUIRoot(root string, optional bool) (string, error) {
 	rootInfo, rootErr := os.Lstat(root)
 	if optional && errors.Is(rootErr, os.ErrNotExist) {
@@ -266,7 +274,7 @@ func runServer(arguments []string) {
 			fmt.Fprintln(os.Stderr, executableErr)
 			os.Exit(1)
 		}
-		config.webRoot, err = adjacentServerManagementUIRoot(executable)
+		config.webRoot, err = serverManagementUIRoot(executable)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)

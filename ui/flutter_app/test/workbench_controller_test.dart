@@ -299,6 +299,76 @@ void main() {
     controller.dispose();
   });
 
+  testWidgets(
+    'empty live Capture probes once per tick and loads new evidence',
+    (tester) async {
+      final fixture = PreviewControlApi();
+      final api = _IdleCaptureApi(fixture);
+      final controller = WorkbenchController(
+        api: api,
+        terminalCommands: PreviewTerminalCommandService(),
+        previewMode: true,
+        closeRuntime: fixture.close,
+        terminalManagement: false,
+      );
+      await controller.initialize();
+      await controller.selectCapture('manual_capture:manual-figma');
+      expect(controller.selectedCaptureConversationKey, isNull);
+      final assignments = api.assignmentCalls;
+      final conversations = api.conversationCalls;
+      final activities = api.activityCalls;
+
+      for (var tick = 0; tick < 4; tick++) {
+        await tester.pump(const Duration(seconds: 1));
+        await tester.pump();
+      }
+      expect(api.activityCalls, activities + 4);
+      expect(api.assignmentCalls, assignments);
+      expect(api.conversationCalls, conversations);
+
+      api.revealEvidence = true;
+      await tester.pump(const Duration(seconds: 1));
+      await tester.pump();
+      expect(api.conversationCalls, greaterThan(conversations));
+      expect(controller.selectedCaptureConversations?.items, isNotEmpty);
+      controller.dispose();
+    },
+  );
+
+  testWidgets('hidden workbench pauses polling and catches up on resume', (
+    tester,
+  ) async {
+    final fixture = PreviewControlApi();
+    final api = _LiveEvidenceApi(fixture);
+    final controller = WorkbenchController(
+      api: api,
+      terminalCommands: PreviewTerminalCommandService(),
+      previewMode: true,
+      closeRuntime: fixture.close,
+      terminalManagement: false,
+    );
+    await controller.initialize();
+    await controller.selectCapture('managed_run:run-1');
+    final dashboardCalls = api.dashboardCalls;
+    final activityCalls = api.activityCalls;
+
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.hidden);
+    for (var tick = 0; tick < 6; tick++) {
+      await tester.pump(const Duration(seconds: 1));
+      await tester.pump();
+    }
+    expect(api.dashboardCalls, dashboardCalls);
+    expect(api.activityCalls, activityCalls);
+
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+    await tester.pump();
+    await tester.pump(const Duration(seconds: 1));
+    await tester.pump();
+    expect(api.dashboardCalls, greaterThan(dashboardCalls));
+    expect(api.activityCalls, greaterThan(activityCalls));
+    controller.dispose();
+  });
+
   testWidgets('live evidence reads coalesce and ignore stale selections', (
     tester,
   ) async {
@@ -1428,6 +1498,69 @@ final class _LiveEvidenceApi extends _UsageTrackingApi {
             nextCursor: page.nextCursor,
           )
         : page;
+  }
+}
+
+final class _IdleCaptureApi extends _UsageTrackingApi {
+  _IdleCaptureApi(super.delegate);
+
+  bool revealEvidence = false;
+  int assignmentCalls = 0;
+  int conversationCalls = 0;
+  int activityCalls = 0;
+
+  @override
+  Future<CaptureAssignment> captureAssignment(String captureKey) {
+    if (captureKey == 'manual_capture:manual-figma') assignmentCalls++;
+    return super.captureAssignment(captureKey);
+  }
+
+  @override
+  Future<ConversationPage> conversations({
+    String? cursor,
+    int limit = 50,
+    String? captureRunId,
+    String? manualCaptureId,
+  }) {
+    if (manualCaptureId == 'manual-figma') {
+      conversationCalls++;
+      if (!revealEvidence) {
+        return Future.value(
+          const ConversationPage(items: [], nextCursor: null),
+        );
+      }
+    }
+    return super.conversations(
+      cursor: cursor,
+      limit: limit,
+      captureRunId: captureRunId,
+      manualCaptureId: manualCaptureId,
+    );
+  }
+
+  @override
+  Future<ActivityPage> activities({
+    String? cursor,
+    int limit = 50,
+    String? captureRunId,
+    String? manualCaptureId,
+    String? environmentId,
+    String? conversationId,
+  }) {
+    if (manualCaptureId == 'manual-figma' && conversationId == null) {
+      activityCalls++;
+      if (!revealEvidence) {
+        return Future.value(const ActivityPage(items: [], nextCursor: null));
+      }
+    }
+    return super.activities(
+      cursor: cursor,
+      limit: limit,
+      captureRunId: captureRunId,
+      manualCaptureId: manualCaptureId,
+      environmentId: environmentId,
+      conversationId: conversationId,
+    );
   }
 }
 

@@ -14,6 +14,10 @@ import (
 const CodexRateLimits = "codex-account-rate-limits"
 const CodexUsageHistory = "codex-account-usage-history"
 
+// CodexResetCreditDetails is owner-only. It is not a client operation and is
+// deliberately absent from AccountOperations and AllowsClientRead.
+const CodexResetCreditDetails = "codex-reset-credit-details"
+
 var ErrUnsupported = errors.New("upstream account operation is unsupported")
 var ErrHistoryDenied = errors.New("account history requires explicit route permission")
 
@@ -82,6 +86,9 @@ func AllowsClientRead(base originidentity.ProviderOrigin, canonical originidenti
 func ResolveRead(origin originidentity.ProviderOrigin, id string) (Read, error) {
 	if !upstreamendpoint.IsChatGPTCodexOrigin(origin) {
 		return Read{}, ErrUnsupported
+	}
+	if id == CodexResetCreditDetails {
+		return Read{id: id, path: "/backend-api/wham/rate-limit-reset-credits", origin: origin}, nil
 	}
 	for _, contract := range AccountOperations() {
 		if contract.ID.String() == id {

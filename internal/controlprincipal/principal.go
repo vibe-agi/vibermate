@@ -19,6 +19,7 @@ type Kind string
 
 const (
 	KindDesktopApp     Kind = "desktop_app"
+	KindServerOwner    Kind = "server_owner"
 	KindLocalCLI       Kind = "local_cli"
 	KindRemoteGuest    Kind = "remote_guest"
 	KindEnrolledClient Kind = "enrolled_client"
@@ -27,7 +28,7 @@ const (
 
 func (kind Kind) Valid() bool {
 	switch kind {
-	case KindDesktopApp, KindLocalCLI, KindRemoteGuest, KindEnrolledClient, KindRuntimeUser:
+	case KindDesktopApp, KindServerOwner, KindLocalCLI, KindRemoteGuest, KindEnrolledClient, KindRuntimeUser:
 		return true
 	default:
 		return false
@@ -89,7 +90,7 @@ func New(attributes Attributes) (Principal, error) {
 		return Principal{}, errors.New("control principal is incomplete")
 	}
 	switch attributes.Kind {
-	case KindDesktopApp, KindLocalCLI:
+	case KindDesktopApp, KindServerOwner, KindLocalCLI:
 		if attributes.ProxyClientBindingID != "" ||
 			attributes.MachineRegistrationID != "" || attributes.MachineID != "" ||
 			attributes.DeviceName != "" || attributes.RuntimeUserID != "" ||
@@ -166,7 +167,7 @@ func (principal Principal) Valid() bool {
 		return false
 	}
 	switch principal.kind {
-	case KindDesktopApp, KindLocalCLI:
+	case KindDesktopApp, KindServerOwner, KindLocalCLI:
 		return principal.proxyClientBindingID == "" &&
 			principal.machineRegistrationID == "" && principal.machineID == "" &&
 			principal.deviceName == "" && principal.runtimeUserID == "" &&

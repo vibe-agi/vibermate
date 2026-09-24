@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/vibe-agi/vibermate/internal/activity"
@@ -210,6 +211,10 @@ type Handler struct {
 
 	idempotent *idempotencyCache
 	mux        *http.ServeMux
+	indexMu    sync.Mutex
+	indexing   bool
+	indexScope string
+	indexStart time.Time
 }
 
 type StatusResponse struct {
@@ -355,6 +360,7 @@ func New(options Options) (*Handler, error) {
 	handler.mux.HandleFunc("GET /api/v1/provider-accounts/{accountId}", handler.getProviderAccount)
 	handler.mux.HandleFunc("PUT /api/v1/provider-accounts/{accountId}/note", handler.setProviderAccountNote)
 	handler.mux.HandleFunc("GET /api/v1/provider-accounts/{accountId}/account-facts", handler.getAccountFacts)
+	handler.mux.HandleFunc("POST /api/v1/provider-accounts/{accountId}/actions/redeem-reset-credit", handler.redeemResetCredit)
 	handler.mux.HandleFunc("DELETE /api/v1/provider-accounts/{accountId}", handler.deleteProviderAccount)
 	handler.mux.HandleFunc("DELETE /api/v1/environments/{environmentId}", handler.deleteEnvironment)
 	handler.mux.HandleFunc("DELETE /api/v1/upstream-endpoints/{endpointId}", handler.deleteUpstreamEndpoint)
@@ -607,13 +613,6 @@ func (handler *Handler) listActivities(
 	// with an empty Capture ID would scan every retained run, including local
 	// Agent logs, before returning this one timeline. The Conversation directory
 	// owns identity enrichment; exact timeline reads consume its projection.
-	if query.conversationID == "" {
-		handler.refreshConversationIndex(request.Context(), activity.ConversationIndexRequest{
-			Limit:           1,
-			CaptureRunID:    query.captureRunID,
-			ManualCaptureID: query.manualCaptureID,
-		})
-	}
 	page, err := handler.activities.ListExchanges(
 		request.Context(),
 		activity.PageRequest{
@@ -644,6 +643,13 @@ func (handler *Handler) listActivities(
 	// integrity check and reports the exact evidence failure when it is opened.
 	_ = handler.attachActivityRequestPreviews(request.Context(), &view)
 	writeJSON(writer, http.StatusOK, view)
+	if query.conversationID == "" {
+		handler.scheduleConversationIndex(activity.ConversationIndexRequest{
+			Limit:           1,
+			CaptureRunID:    query.captureRunID,
+			ManualCaptureID: query.manualCaptureID,
+		})
+	}
 }
 
 func (handler *Handler) listConversations(
@@ -681,7 +687,6 @@ func (handler *Handler) listConversations(
 		writeProblem(writer, http.StatusUnprocessableEntity, ReasonInvalidRequest)
 		return
 	}
-	handler.refreshConversationIndex(request.Context(), indexRequest)
 	page, err := handler.activities.ListConversations(
 		request.Context(),
 		indexRequest,
@@ -700,19 +705,42 @@ func (handler *Handler) listConversations(
 		return
 	}
 	writeJSON(writer, http.StatusOK, view)
+	handler.scheduleConversationIndex(indexRequest)
 }
 
-func (handler *Handler) refreshConversationIndex(
-	ctx context.Context,
+func (handler *Handler) scheduleConversationIndex(
 	request activity.ConversationIndexRequest,
 ) {
-	if handler.conversationIndexer == nil || request.Validate() != nil {
+	if handler.conversationIndexer == nil || request.Validate() != nil ||
+		request.ManualCaptureID != "" {
 		return
 	}
+	scope := request.CaptureRunID
+	now := time.Now()
+	handler.indexMu.Lock()
+	if handler.indexing ||
+		(scope == handler.indexScope && now.Sub(handler.indexStart) < 5*time.Second) {
+		handler.indexMu.Unlock()
+		return
+	}
+	handler.indexing = true
+	handler.indexScope = scope
+	handler.indexStart = now
+	handler.indexMu.Unlock()
 	// Client-local state is enrichment rather than Activity authority. A file
 	// being appended, moved, or temporarily unavailable must never turn the
-	// audit journal into a 503 response; unresolved Exchanges remain isolated.
-	_ = handler.conversationIndexer.Reindex(ctx, request)
+	// audit journal into a slow or failed response. Bound the detached work so
+	// a stopped Runtime cannot retain an unbounded client-log scan.
+	go func() {
+		defer func() {
+			handler.indexMu.Lock()
+			handler.indexing = false
+			handler.indexMu.Unlock()
+		}()
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		_ = handler.conversationIndexer.Reindex(ctx, request)
+	}()
 }
 
 func (handler *Handler) attachActivityIdentities(

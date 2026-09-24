@@ -42,44 +42,82 @@ final class SettingsView extends StatelessWidget {
           ),
           Material(
             color: context.viberColors.panel,
-            child: Align(
-              alignment: Alignment.centerLeft,
-              child: TabBar(
-                isScrollable: true,
-                tabAlignment: TabAlignment.start,
-                dividerHeight: 0,
-                onTap: controller.selectSettingsTab,
-                tabs: <Widget>[
-                  for (final destination in destinations)
-                    switch (destination) {
-                      SettingsDestination.preferences => _SettingsTab(
-                        key: const Key('settings-tab-general'),
-                        icon: Icons.tune,
-                        label: copy('settings.tab.preferences'),
+            child: LayoutBuilder(
+              builder: (context, constraints) => constraints.maxWidth < 600
+                  ? Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 12),
+                      child: Semantics(
+                        label: copy('settings.section'),
+                        child: DropdownButtonHideUnderline(
+                          child: DropdownButton<SettingsDestination>(
+                            key: const Key('settings-section-picker'),
+                            isExpanded: true,
+                            value: destinations[controller.settingsTab],
+                            items: [
+                              for (final destination in destinations)
+                                DropdownMenuItem(
+                                  key: Key(
+                                    'settings-option-${destination.name}',
+                                  ),
+                                  value: destination,
+                                  child: Text(
+                                    _settingsDestinationLabel(
+                                      copy,
+                                      destination,
+                                    ),
+                                  ),
+                                ),
+                            ],
+                            onChanged: (destination) {
+                              if (destination != null) {
+                                controller.selectSettingsTab(
+                                  destinations.indexOf(destination),
+                                );
+                              }
+                            },
+                          ),
+                        ),
                       ),
-                      SettingsDestination.access => _SettingsTab(
-                        key: const Key('settings-tab-access'),
-                        icon: Icons.link,
-                        label: copy('settings.tab.access'),
+                    )
+                  : Align(
+                      alignment: Alignment.centerLeft,
+                      child: TabBar(
+                        isScrollable: true,
+                        tabAlignment: TabAlignment.start,
+                        dividerHeight: 0,
+                        onTap: controller.selectSettingsTab,
+                        tabs: <Widget>[
+                          for (final destination in destinations)
+                            switch (destination) {
+                              SettingsDestination.preferences => _SettingsTab(
+                                key: const Key('settings-tab-general'),
+                                icon: Icons.tune,
+                                label: copy('settings.tab.preferences'),
+                              ),
+                              SettingsDestination.access => _SettingsTab(
+                                key: const Key('settings-tab-access'),
+                                icon: Icons.link,
+                                label: copy('settings.tab.access'),
+                              ),
+                              SettingsDestination.users => _SettingsTab(
+                                key: const Key('settings-tab-users'),
+                                icon: Icons.group_outlined,
+                                label: copy('settings.tab.users'),
+                              ),
+                              SettingsDestination.safety => _SettingsTab(
+                                key: const Key('settings-tab-safety'),
+                                icon: Icons.shield_outlined,
+                                label: copy('settings.tab.safety'),
+                              ),
+                              SettingsDestination.networkExits => _SettingsTab(
+                                key: const Key('settings-tab-proxy'),
+                                icon: Icons.alt_route,
+                                label: copy('settings.tab.proxy'),
+                              ),
+                            },
+                        ],
                       ),
-                      SettingsDestination.users => _SettingsTab(
-                        key: const Key('settings-tab-users'),
-                        icon: Icons.group_outlined,
-                        label: copy('settings.tab.users'),
-                      ),
-                      SettingsDestination.safety => _SettingsTab(
-                        key: const Key('settings-tab-safety'),
-                        icon: Icons.shield_outlined,
-                        label: copy('settings.tab.safety'),
-                      ),
-                      SettingsDestination.networkExits => _SettingsTab(
-                        key: const Key('settings-tab-proxy'),
-                        icon: Icons.alt_route,
-                        label: copy('settings.tab.proxy'),
-                      ),
-                    },
-                ],
-              ),
+                    ),
             ),
           ),
           const Divider(height: 1),
@@ -118,6 +156,17 @@ final class SettingsView extends StatelessWidget {
     );
   }
 }
+
+String _settingsDestinationLabel(
+  AppCopy copy,
+  SettingsDestination destination,
+) => copy(switch (destination) {
+  SettingsDestination.preferences => 'settings.tab.preferences',
+  SettingsDestination.access => 'settings.tab.access',
+  SettingsDestination.users => 'settings.tab.users',
+  SettingsDestination.safety => 'settings.tab.safety',
+  SettingsDestination.networkExits => 'settings.tab.proxy',
+});
 
 final class _SettingsTab extends StatelessWidget {
   const _SettingsTab({required this.icon, required this.label, super.key});

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../core/api/account_facts_models.dart';
+import '../../core/api/control_api.dart';
 import '../../core/api/control_models.dart';
 import '../../core/api/provider_origin.dart';
 import '../../core/design/viber_theme.dart';
@@ -35,6 +36,8 @@ final class _ProviderAccountFactsPanelState
     extends State<ProviderAccountFactsPanel> {
   var _quota = _Observation(), _history = _Observation();
   int _generation = 0;
+  bool _redeeming = false;
+  String? _resetNotice;
   AppCopy get copy => widget.copy;
 
   @override
@@ -46,6 +49,8 @@ final class _ProviderAccountFactsPanelState
       _generation++;
       _quota = _Observation();
       _history = _Observation();
+      _resetNotice = null;
+      _redeeming = false;
     }
   }
 
@@ -75,6 +80,129 @@ final class _ProviderAccountFactsPanelState
     }
   }
 
+  Future<void> _chooseReset(AccountRateLimitResets resets) async {
+    if (_redeeming ||
+        _quota.failed ||
+        _quota.loading ||
+        widget.account.kind != 'codex_oauth' ||
+        !widget.account.usable ||
+        resets.applicableAvailableCount == 0) {
+      return;
+    }
+    final eligible =
+        resets.details?.where((credit) => credit.available).toList() ?? [];
+    if (eligible.isEmpty) return;
+    final credit = await showDialog<AccountResetCredit>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(copy('account_facts.reset.choose_title')),
+        content: SizedBox(
+          width: 460,
+          height: (eligible.length * 68.0).clamp(68, 300),
+          child: ListView.builder(
+            itemCount: eligible.length,
+            itemBuilder: (context, index) {
+              final item = eligible[index];
+              return ListTile(
+                title: Text(item.title ?? 'Codex'),
+                subtitle: Text(
+                  item.expiresAt == null
+                      ? copy('account_facts.reset.no_expiry')
+                      : copy.format('account_facts.reset.expires', {
+                          'time': _fullTime(item.expiresAt!),
+                        }),
+                ),
+                onTap: () => Navigator.of(context).pop(item),
+              );
+            },
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: Text(copy('common.cancel')),
+          ),
+        ],
+      ),
+    );
+    if (!mounted || credit == null || !credit.available) return;
+    final selectedAccount = widget.account;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(copy('account_facts.reset.confirm_title')),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(selectedAccount.displayName),
+            const SizedBox(height: 8),
+            Text(credit.title ?? 'Codex'),
+            const SizedBox(height: 12),
+            Text(copy('account_facts.reset.confirm_detail')),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: Text(copy('common.cancel')),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: Text(copy('account_facts.reset.confirm')),
+          ),
+        ],
+      ),
+    );
+    if (!mounted ||
+        confirmed != true ||
+        widget.account.id != selectedAccount.id ||
+        widget.account.revision != selectedAccount.revision ||
+        !credit.available) {
+      return;
+    }
+    final generation = _generation;
+    setState(() {
+      _redeeming = true;
+      _resetNotice = null;
+    });
+    try {
+      final result = await widget.controller.redeemAccountResetCredit(
+        selectedAccount,
+        credit,
+      );
+      if (!mounted || generation != _generation) return;
+      setState(() {
+        _resetNotice = switch (result.outcome) {
+          'reset' => 'account_facts.reset.applied',
+          'already_redeemed' => 'account_facts.reset.already',
+          'nothing_to_reset' => 'account_facts.reset.not_needed',
+          _ => 'account_facts.reset.none',
+        };
+        _quota = _Observation();
+      });
+      await _read();
+    } on ControlProblem catch (error) {
+      if (!mounted || generation != _generation) return;
+      setState(() {
+        _quota = _Observation();
+        _resetNotice = error.reasonCode == 'reset_result_unconfirmed'
+            ? 'account_facts.reset.unconfirmed'
+            : 'account_facts.reset.failed';
+      });
+    } catch (_) {
+      if (!mounted || generation != _generation) return;
+      setState(() {
+        _quota = _Observation();
+        _resetNotice = 'account_facts.reset.unconfirmed';
+      });
+    } finally {
+      if (mounted && generation == _generation) {
+        setState(() => _redeeming = false);
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final origin = Uri.tryParse(widget.account.credentialOrigin);
@@ -93,7 +221,7 @@ final class _ProviderAccountFactsPanelState
             16,
             8,
           ),
-          child: !_quota.started && !_history.started
+          child: !_quota.started && !_history.started && _resetNotice == null
               ? Wrap(
                   spacing: 12,
                   runSpacing: 4,
@@ -239,6 +367,10 @@ final class _ProviderAccountFactsPanelState
             ],
           ),
           const SizedBox(height: 14),
+          if (!history && _resetNotice != null) ...[
+            _notice(context, _resetNotice!),
+            const SizedBox(height: 10),
+          ],
           if (observation.failed || facts?.state == 'stale') ...[
             _notice(
               context,
@@ -342,6 +474,52 @@ final class _ProviderAccountFactsPanelState
                   : credits.balance ?? copy('account_facts.unknown'),
             }),
           ),
+        if (facts.rateLimitResets case final resets?) ...[
+          if (facts.credits != null) const SizedBox(height: 8),
+          _caption(
+            context,
+            copy.format('account_facts.banked_resets', {
+              'count': resets.availableCount,
+            }),
+          ),
+          if (resets.applicableAvailableCount case final applicable?)
+            _caption(
+              context,
+              copy.format('account_facts.applicable_resets', {
+                'count': applicable,
+              }),
+            ),
+          if (resets.availableCount > 0 && widget.account.kind != 'codex_oauth')
+            _caption(context, copy('account_facts.reset.oauth_only'))
+          else if (resets.availableCount > 0 && resets.details == null)
+            _caption(context, copy('account_facts.reset.details_unavailable'))
+          else if (resets.availableCount > 0 &&
+              resets.applicableAvailableCount == 0)
+            _caption(context, copy('account_facts.reset.not_needed'))
+          else if (resets.availableCount > 0 &&
+              resets.details?.any((credit) => credit.available) == false)
+            _caption(context, copy('account_facts.reset.none')),
+          if (resets.availableCount > 0 &&
+              resets.applicableAvailableCount != 0 &&
+              resets.details?.any((credit) => credit.available) == true &&
+              widget.account.kind == 'codex_oauth' &&
+              !widget.controller.previewMode) ...[
+            const SizedBox(height: 6),
+            TextButton.icon(
+              key: Key('account-reset-${widget.account.id}'),
+              onPressed: _redeeming || _quota.failed || _quota.loading
+                  ? null
+                  : () => _chooseReset(resets),
+              icon: _redeeming
+                  ? const SizedBox.square(
+                      dimension: 15,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.restart_alt, size: 16),
+              label: Text(copy('account_facts.reset.choose')),
+            ),
+          ],
+        ],
       ],
     );
   }

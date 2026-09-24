@@ -33,4 +33,6 @@ CGO_ENABLED=0 GOOS=linux GOARCH="${target_arch}" \
     -o dist/docker/vibermate ./cmd/vibermate
 cp -R ui/flutter_app/build/web/. dist/docker/vibermate-web/
 cp LICENSE dist/docker/LICENSE
+cp LICENSE dist/docker/vibermate-web/LICENSE
+cp THIRD_PARTY_LICENSES.md dist/docker/THIRD_PARTY_LICENSES.md
 docker compose build --build-arg "VIBERMATE_SOURCE_REVISION=$(git rev-parse HEAD)"

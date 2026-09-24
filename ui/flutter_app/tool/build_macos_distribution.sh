@@ -144,6 +144,9 @@ fi
 ditto --norsrc --noextattr --noacl --noqtn -X \
   "${web_source}" \
   "${web_destination}"
+/usr/bin/install -m 0644 "${repository_root}/LICENSE" "${app_bundle}/Contents/Resources/LICENSE"
+/usr/bin/install -m 0644 "${repository_root}/LICENSE" "${web_destination}/LICENSE"
+/usr/bin/install -m 0644 "${repository_root}/THIRD_PARTY_LICENSES.md" "${app_bundle}/Contents/Resources/THIRD_PARTY_LICENSES.md"
 
 VIBERMATE_RELEASE_REQUIRE_CLEAN=1 \
   node "${script_directory}/desktop_build_manifest.mjs" \

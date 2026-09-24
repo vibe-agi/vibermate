@@ -14,6 +14,7 @@ import 'package:vibermate_app/core/i18n/app_copy.dart';
 import 'package:vibermate_app/core/preferences/workbench_preferences.dart';
 import 'package:vibermate_app/features/workbench/account_selector_editor.dart';
 import 'package:vibermate_app/features/workbench/conversation_timeline.dart';
+import 'package:vibermate_app/features/workbench/settings_view.dart';
 import 'package:vibermate_app/features/workbench/workbench_controller.dart';
 import 'package:vibermate_app/features/workbench/workbench_shell.dart';
 import 'package:vibermate_app/preview/preview_control_api.dart';
@@ -377,7 +378,7 @@ void main() {
     controller.dispose();
   });
 
-  testWidgets('empty Captures leads a novice to the normal Agent launch path', (
+  testWidgets('empty Captures shows Agent and Web proxy launch paths', (
     tester,
   ) async {
     addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -402,7 +403,8 @@ void main() {
         size: Size(1180, 760),
         language: AppLanguage.english,
         empty: 'No captures yet.',
-        detail: 'Start Codex or Claude through ViberMate from Terminal.',
+        detail:
+            'Start an Agent from Terminal, or create a proxy login for another client.',
         settings: 'Web & client access',
         web: true,
       ),
@@ -410,7 +412,7 @@ void main() {
         size: Size(390, 760),
         language: AppLanguage.simplifiedChinese,
         empty: '还没有运行记录。',
-        detail: '先从终端通过 ViberMate 启动 Codex 或 Claude。',
+        detail: '从终端启动 Agent，或为其他客户端创建专属代理登录。',
         settings: '网页与客户端接入',
         web: true,
       ),
@@ -425,6 +427,13 @@ void main() {
         initialPreferences: WorkbenchPreferences(language: scenario.language),
         serverManagement: scenario.web,
         terminalManagement: !scenario.web,
+        webPrincipal: scenario.web
+            ? const RuntimeWebPrincipal(
+                id: 'user.preview.owner',
+                username: 'owner',
+                role: RuntimeWebRole.owner,
+              )
+            : null,
       );
       await controller.initialize();
       await tester.pumpWidget(
@@ -437,6 +446,16 @@ void main() {
 
       expect(find.text(scenario.empty), findsOneWidget);
       expect(find.text(scenario.detail), findsOneWidget);
+      expect(
+        find.byKey(const Key('capture-empty-create-manual')),
+        scenario.web ? findsOneWidget : findsNothing,
+      );
+      final emptyError = tester.takeException();
+      expect(
+        emptyError,
+        isNull,
+        reason: 'empty Capture ${scenario.size} web=${scenario.web}',
+      );
       final nextAction = find.byKey(
         const Key('capture-empty-open-terminal-settings'),
       );
@@ -446,7 +465,11 @@ void main() {
 
       expect(controller.section, WorkbenchSection.settings);
       expect(find.text(scenario.settings), findsOneWidget);
-      expect(tester.takeException(), isNull);
+      expect(
+        tester.takeException(),
+        isNull,
+        reason: 'access settings ${scenario.size} web=${scenario.web}',
+      );
 
       await tester.pumpWidget(const SizedBox.shrink());
       controller.dispose();
@@ -1098,10 +1121,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(tester.takeException(), isNull);
-    expect(find.byKey(const Key('settings-tab-general')), findsOneWidget);
-    expect(find.byKey(const Key('settings-tab-access')), findsOneWidget);
-    expect(find.byKey(const Key('settings-tab-users')), findsOneWidget);
-    expect(find.byKey(const Key('settings-tab-safety')), findsOneWidget);
+    expect(find.byKey(const Key('settings-section-picker')), findsOneWidget);
     expect(find.byKey(const Key('server-runtime-access')), findsNothing);
     await _openSettingsTab(tester, const Key('settings-tab-access'));
     expect(find.byKey(const Key('server-runtime-access')), findsOneWidget);
@@ -1269,8 +1289,7 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(find.byKey(const Key('settings-tab-general')), findsOneWidget);
-    expect(find.byKey(const Key('settings-tab-proxy')), findsOneWidget);
+    expect(find.byKey(const Key('settings-section-picker')), findsOneWidget);
     await _openSettingsTab(tester, const Key('settings-tab-proxy'));
     expect(find.text('网络出口方案'), findsOneWidget);
     expect(
@@ -2421,6 +2440,14 @@ void main() {
     );
     expect(
       find.textContaining('provider_response_idle · 504 · upstream'),
+      findsNothing,
+    );
+    await tester.tap(
+      find.byKey(const Key('exchange-failure-details-provider_response_idle')),
+    );
+    await tester.pumpAndSettle();
+    expect(
+      find.textContaining('provider_response_idle · 504 · upstream'),
       findsOneWidget,
     );
   });
@@ -2441,7 +2468,106 @@ void main() {
 
     expect(find.text('上游服务未能及时响应。'), findsOneWidget);
     expect(find.text('检查上游服务与网络路径，然后重试 Agent 请求。'), findsOneWidget);
+    expect(find.textContaining('provider_response_idle'), findsNothing);
+    await tester.tap(
+      find.byKey(const Key('exchange-failure-details-provider_response_idle')),
+    );
+    await tester.pumpAndSettle();
     expect(find.textContaining('provider_response_idle'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets(
+    'transport failure names the upstream boundary without blaming proxy',
+    (tester) async {
+      await tester.binding.setSurfaceSize(const Size(1180, 760));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      await tester.pumpWidget(
+        const ViberMateApp(previewMode: true, preferChinese: false),
+      );
+      await tester.pumpAndSettle();
+
+      await openCaptureConversation(tester, capture: 'managed_run:run-1');
+      final turn = find.byKey(
+        const Key('conversation-turn-run-1-exchange-217'),
+      );
+      await ensureTurnVisible(tester, turn);
+      await tester.tap(turn);
+      await tester.pumpAndSettle();
+      expect(
+        find.text('The connection to the upstream service failed.'),
+        findsOneWidget,
+      );
+      expect(
+        find.text(
+          'Open the upstream attempt below to see the recorded failure stage, then check that network path and retry.',
+        ),
+        findsOneWidget,
+      );
+      expect(find.textContaining('provider_transport_failed'), findsNothing);
+      await tester.tap(
+        find.byKey(
+          const Key('exchange-failure-details-provider_transport_failed'),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(
+        find.textContaining('provider_transport_failed · upstream'),
+        findsOneWidget,
+      );
+    },
+  );
+
+  testWidgets('429 explains quota before exposing the provider status code', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1180, 760));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(
+      const ViberMateApp(previewMode: true, preferChinese: false),
+    );
+    await tester.pumpAndSettle();
+
+    await openCaptureConversation(tester, capture: 'managed_run:run-1');
+    final turn = find.byKey(const Key('conversation-turn-run-1-exchange-216'));
+    await ensureTurnVisible(tester, turn);
+    await tester.tap(turn);
+    await tester.pumpAndSettle();
+    expect(find.text('The upstream rate limit was reached.'), findsOneWidget);
+    expect(
+      find.text(
+        'Check this account’s quota or wait for the provider reset before retrying.',
+      ),
+      findsOneWidget,
+    );
+    expect(find.textContaining('provider_status_rejected · 429'), findsNothing);
+    await tester.tap(
+      find.byKey(
+        const Key('exchange-failure-details-provider_status_rejected'),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(
+      find.textContaining('provider_status_rejected · 429 · upstream'),
+      findsOneWidget,
+    );
+  });
+
+  testWidgets('401 explains account access in Chinese', (tester) async {
+    await tester.binding.setSurfaceSize(const Size(390, 760));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(
+      const ViberMateApp(previewMode: true, preferChinese: true),
+    );
+    await tester.pumpAndSettle();
+
+    await openCaptureConversation(tester, capture: 'managed_run:run-1');
+    final turn = find.byKey(const Key('conversation-turn-run-1-exchange-215'));
+    await ensureTurnVisible(tester, turn);
+    await tester.tap(turn);
+    await tester.pumpAndSettle();
+    expect(find.text('上游服务拒绝了本次请求。'), findsOneWidget);
+    expect(find.text('检查所选账号是否有权使用该服务和模型；必要时刷新账号凭据。'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 
@@ -2473,6 +2599,13 @@ void main() {
       ),
       findsOneWidget,
     );
+    expect(find.textContaining('unsupported_client_input'), findsNothing);
+    await tester.tap(
+      find.byKey(
+        const Key('exchange-failure-details-unsupported_client_input'),
+      ),
+    );
+    await tester.pumpAndSettle();
     expect(find.textContaining('unsupported_client_input'), findsOneWidget);
     expect(
       tester
@@ -3856,6 +3989,10 @@ void main() {
         find.byKey(const Key('environment-impact-review')),
         findsOneWidget,
       );
+      expect(find.text('CONFIGURATION TO PUBLISH'), findsOneWidget);
+      expect(find.text('Work reviewed'), findsOneWidget);
+      expect(find.textContaining('Metadata only'), findsOneWidget);
+      expect(find.text('Anthropic · Lab'), findsOneWidget);
       expect(find.text('Future Captures only'), findsWidgets);
       expect(
         find.text('6 RUNNING CAPTURES KEEP THEIR CURRENT REVISION'),
@@ -3874,6 +4011,14 @@ void main() {
         findsOneWidget,
       );
       expect(find.text('Anthropic · Lab'), findsOneWidget);
+
+      await tester.binding.setSurfaceSize(const Size(390, 844));
+      await tester.pumpAndSettle();
+      expect(find.textContaining('Client protocol & origin  →'), findsNothing);
+      expect(find.text('Anthropic · Lab'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+      await tester.binding.setSurfaceSize(const Size(1180, 760));
+      await tester.pumpAndSettle();
 
       await tester.tap(find.byKey(const Key('environment-edit')));
       await tester.pumpAndSettle();
@@ -4706,6 +4851,12 @@ void main() {
     await tester.tap(find.byKey(const Key('environment-create-review')));
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('environment-create-impact')), findsOneWidget);
+    expect(find.text('CONFIGURATION TO PUBLISH'), findsOneWidget);
+    expect(find.text('Local Observe'), findsOneWidget);
+    expect(
+      find.text('Capture-only · Requests are forwarded unchanged.'),
+      findsOneWidget,
+    );
     expect(
       find.text('0 RUNNING CAPTURES KEEP THEIR CURRENT REVISION'),
       findsOneWidget,
@@ -5409,10 +5560,16 @@ void main() {
             .data,
         'Authorization: Bearer',
       );
+      await tester.tap(find.byKey(const Key('account-editor-save')));
+      await tester.pumpAndSettle();
+      expect(find.text('Enter a bearer token.'), findsOneWidget);
       await tester.tap(find.byKey(const Key('account-editor-kind')));
       await tester.pumpAndSettle();
       await tester.tap(find.text('Anthropic API key').last);
       await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('account-editor-save')));
+      await tester.pumpAndSettle();
+      expect(find.text('Enter an API key.'), findsOneWidget);
       await tester.enterText(
         find.byKey(const Key('account-editor-name')),
         'Team Primary',
@@ -5708,6 +5865,31 @@ void main() {
 }
 
 Future<void> _openSettingsTab(WidgetTester tester, Key key) async {
+  final picker = find.byKey(const Key('settings-section-picker'));
+  if (picker.evaluate().isNotEmpty) {
+    final option = switch (key) {
+      const Key('settings-tab-general') => 'preferences',
+      const Key('settings-tab-access') => 'access',
+      const Key('settings-tab-users') => 'users',
+      const Key('settings-tab-safety') => 'safety',
+      const Key('settings-tab-proxy') => 'networkExits',
+      _ => throw StateError('Unknown Settings tab $key'),
+    };
+    await tester.tap(picker);
+    await tester.pumpAndSettle();
+    final label = tester.widget<SettingsView>(find.byType(SettingsView)).copy(
+      switch (option) {
+        'preferences' => 'settings.tab.preferences',
+        'access' => 'settings.tab.access',
+        'users' => 'settings.tab.users',
+        'safety' => 'settings.tab.safety',
+        _ => 'settings.tab.proxy',
+      },
+    );
+    await tester.tap(find.text(label).hitTestable().last);
+    await tester.pumpAndSettle();
+    return;
+  }
   final tab = find.byKey(key);
   await tester.ensureVisible(tab);
   await tester.pumpAndSettle();

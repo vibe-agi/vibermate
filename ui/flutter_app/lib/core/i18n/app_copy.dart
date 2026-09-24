@@ -167,6 +167,29 @@ final class AppCopy {
     'account_facts.unknown': 'Not provided',
     'account_facts.unlimited': 'Unlimited',
     'account_facts.credits': 'Credits: {balance}',
+    'account_facts.banked_resets': 'Banked Codex resets: {count}',
+    'account_facts.applicable_resets': 'Usable now: {count}',
+    'account_facts.reset.choose': 'Use a banked reset',
+    'account_facts.reset.choose_title': 'Choose a Codex reset',
+    'account_facts.reset.confirm_title': 'Use this reset?',
+    'account_facts.reset.confirm_detail':
+        'This consumes one saved reset immediately for the selected account. It may change the next weekly reset date.',
+    'account_facts.reset.confirm': 'Use reset',
+    'account_facts.reset.expires': 'Expires {time}',
+    'account_facts.reset.no_expiry': 'No expiration supplied',
+    'account_facts.reset.applied': 'Reset applied.',
+    'account_facts.reset.already': 'This reset was already applied.',
+    'account_facts.reset.not_needed':
+        'No quota window currently needs a reset.',
+    'account_facts.reset.none': 'This account has no usable reset credit.',
+    'account_facts.reset.unconfirmed':
+        'The reset result is not confirmed. Check current quota before trying again.',
+    'account_facts.reset.failed':
+        'Could not use this reset. Check the account and try again.',
+    'account_facts.reset.details_unavailable':
+        'Reset details are unavailable. Refresh this quota before using one.',
+    'account_facts.reset.oauth_only':
+        'Use a managed Codex OAuth account to redeem a reset here.',
     'account_facts.as_of': 'Upstream statistics as of {time}',
     'account_facts.partial':
         'The upstream reports incomplete historical statistics.',
@@ -298,6 +321,8 @@ final class AppCopy {
     'capture.empty': 'No captures yet.',
     'capture.empty.detail':
         'Start Codex or Claude through ViberMate from Terminal.',
+    'capture.empty.web.detail':
+        'Start an Agent from Terminal, or create a proxy login for another client.',
     'capture.empty.action': 'Open Terminal setup',
     'capture.empty.web.action': 'Open access and launch guide',
     'capture.load_more': 'Load older captures',
@@ -360,6 +385,20 @@ final class AppCopy {
     'capture.manual.delivery.username': 'Username',
     'capture.manual.delivery.password': 'Password',
     'capture.manual.delivery.root': 'Root path',
+    'capture.manual.delivery.root_server':
+        'Trust this Proxy CA on the client device for intercepted AI hosts. Verify its SHA-256 fingerprint before installing.',
+    'capture.manual.delivery.download_root': 'Download Proxy CA',
+    'capture.manual.delivery.fingerprint': 'Proxy CA SHA-256 fingerprint',
+    'capture.manual.delivery.root_saved':
+        'Proxy CA downloaded. Install it on the client device.',
+    'capture.manual.delivery.root_changed':
+        'The Proxy CA changed. Review the current certificate before using this proxy login.',
+    'capture.manual.delivery.root_download_failed':
+        'Could not download the Proxy CA. Check the Server connection and try again.',
+    'capture.manual.delivery.server_tls':
+        'The proxy connection uses the Server HTTPS certificate; the Proxy CA above is for intercepted AI hosts.',
+    'capture.manual.delivery.http_warning':
+        'This HTTP proxy connection is unencrypted. Use it only on a trusted private network.',
     'capture.manual.delivery.evidence':
         'Revoking or rotating this login never deletes captured Conversation or Activity evidence.',
     'capture.manual.delivery.copied': '{field} copied',
@@ -571,6 +610,34 @@ final class AppCopy {
         'Upstream service did not respond in time.',
     'exchange.failure.provider_response_idle.action':
         'Check the upstream service and network path, then retry the Agent request.',
+    'exchange.failure.provider_transport_failed.title':
+        'The connection to the upstream service failed.',
+    'exchange.failure.provider_transport_failed.action':
+        'Open the upstream attempt below to see the recorded failure stage, then check that network path and retry.',
+    'exchange.failure.provider_status_rejected.title':
+        'The upstream service refused this request.',
+    'exchange.failure.provider_status_rejected.action':
+        'Check its HTTP status and the selected account in the upstream attempt before retrying.',
+    'exchange.failure.provider_status_rejected_auth.title':
+        'The upstream service denied this request.',
+    'exchange.failure.provider_status_rejected_auth.action':
+        'Check whether the selected account can access this service and model, then refresh its credential if needed.',
+    'exchange.failure.provider_status_rejected_rate_limit.title':
+        'The upstream rate limit was reached.',
+    'exchange.failure.provider_status_rejected_rate_limit.action':
+        'Check this account’s quota or wait for the provider reset before retrying.',
+    'exchange.failure.provider_credential_unavailable.title':
+        'The selected upstream account has no usable credential.',
+    'exchange.failure.provider_credential_unavailable.action':
+        'Refresh or reconnect that account under Upstream accounts, then retry.',
+    'exchange.failure.account_selector_failed.title':
+        'No usable upstream account was selected.',
+    'exchange.failure.account_selector_failed.action':
+        'Check the route’s linked accounts and account selection rule, then test the rule again.',
+    'exchange.failure.message_transform_failed.title':
+        'A message transform script failed.',
+    'exchange.failure.message_transform_failed.action':
+        'Inspect the script stage below, fix the published rule, then retry.',
     'exchange.failure.unsupported_client_input.title':
         'ViberMate rejected the Agent request before contacting an upstream service.',
     'exchange.failure.unsupported_client_input.action':
@@ -1251,6 +1318,7 @@ final class AppCopy {
     'environment.publish': 'Publish traffic policy',
     'environment.impact.title': 'What changes after publish',
     'environment.impact.future_only': 'Future Captures only',
+    'environment.impact.summary': 'Configuration to publish',
     'environment.impact.description':
         'Publishing never changes a running Capture. Each listed Capture keeps the traffic policy revision it started with; this draft is used only when a new Capture starts.',
     'environment.impact.continuing':
@@ -1352,6 +1420,8 @@ final class AppCopy {
         '{environment} r{revision} · route {route}',
     'routes.account.delete.more': '{count} more references were not returned.',
     'routes.validation.required': 'Enter a value.',
+    'routes.validation.api_key_required': 'Enter an API key.',
+    'routes.validation.bearer_required': 'Enter a bearer token.',
     'routes.validation.codex_auth_json':
         'Paste a valid Codex ChatGPT auth.json file.',
     'routes.validation.origin':
@@ -1538,6 +1608,7 @@ final class AppCopy {
         'Enter an exact lowercase host without a wildcard or trailing dot.',
     'network.rules.validation.port': 'Enter a port from 1 through 65535.',
     'settings.title': 'Settings',
+    'settings.section': 'Settings section',
     'settings.subtitle':
         'Preferences, access, safety and network behavior for this Runtime',
     'settings.subtitle.server':
@@ -2199,6 +2270,23 @@ final class AppCopy {
     'account_facts.unknown': '未提供',
     'account_facts.unlimited': '无限制',
     'account_facts.credits': '积分余额：{balance}',
+    'account_facts.banked_resets': 'Codex 可用额度重置券：{count}',
+    'account_facts.applicable_resets': '当前可使用：{count}',
+    'account_facts.reset.choose': '使用额度重置券',
+    'account_facts.reset.choose_title': '选择 Codex 重置券',
+    'account_facts.reset.confirm_title': '使用这张重置券？',
+    'account_facts.reset.confirm_detail': '将立即为所选账号消耗一张已存重置券，且可能改变下次周额度重置时间。',
+    'account_facts.reset.confirm': '确认使用',
+    'account_facts.reset.expires': '{time} 到期',
+    'account_facts.reset.no_expiry': '上游未提供到期时间',
+    'account_facts.reset.applied': '已使用重置券。',
+    'account_facts.reset.already': '此重置操作已处理。',
+    'account_facts.reset.not_needed': '当前没有需要重置的额度窗口。',
+    'account_facts.reset.none': '此账号没有可使用的重置券。',
+    'account_facts.reset.unconfirmed': '未能确认重置结果。请先查看最新额度，再决定是否重试。',
+    'account_facts.reset.failed': '未能使用重置券，请检查账号状态后重试。',
+    'account_facts.reset.details_unavailable': '未能获取重置券详情。请刷新额度后再使用。',
+    'account_facts.reset.oauth_only': '请使用托管的 Codex OAuth 账号在此使用重置券。',
     'account_facts.as_of': '上游统计截至 {time}',
     'account_facts.partial': '上游报告历史统计暂不完整。',
     'account_facts.failed': '暂时无法读取上游账号数据，请检查凭据与网络后重试。',
@@ -2302,6 +2390,7 @@ final class AppCopy {
     'capture.history': '历史记录',
     'capture.empty': '还没有运行记录。',
     'capture.empty.detail': '先从终端通过 ViberMate 启动 Codex 或 Claude。',
+    'capture.empty.web.detail': '从终端启动 Agent，或为其他客户端创建专属代理登录。',
     'capture.empty.action': '打开终端设置',
     'capture.empty.web.action': '打开接入与启动指南',
     'capture.load_more': '加载更早的运行记录',
@@ -2360,6 +2449,17 @@ final class AppCopy {
     'capture.manual.delivery.username': '用户名',
     'capture.manual.delivery.password': '密码',
     'capture.manual.delivery.root': 'Root 路径',
+    'capture.manual.delivery.root_server':
+        '在客户端设备上信任此 Proxy CA，才能验证被检查的 AI 域名。安装前请核对 SHA-256 指纹。',
+    'capture.manual.delivery.download_root': '下载 Proxy CA',
+    'capture.manual.delivery.fingerprint': 'Proxy CA SHA-256 指纹',
+    'capture.manual.delivery.root_saved': 'Proxy CA 已下载，请在客户端设备上安装并信任。',
+    'capture.manual.delivery.root_changed': 'Proxy CA 已变更。使用此代理登录前，请重新核对当前证书。',
+    'capture.manual.delivery.root_download_failed':
+        '无法下载 Proxy CA。请检查与服务器的连接后重试。',
+    'capture.manual.delivery.server_tls':
+        '代理外层连接使用服务器 HTTPS 证书；上面的 Proxy CA 用于被检查的 AI 域名。',
+    'capture.manual.delivery.http_warning': '此 HTTP 代理连接未加密，只应在可信的私有网络使用。',
     'capture.manual.delivery.evidence': '撤销或轮换登录都不会删除已有的对话与请求记录。',
     'capture.manual.delivery.copied': '已复制{field}',
     'capture.manual.delivery.done': '我已保存这些内容',
@@ -2535,6 +2635,27 @@ final class AppCopy {
     'exchange.failure.provider_response_idle.title': '上游服务未能及时响应。',
     'exchange.failure.provider_response_idle.action':
         '检查上游服务与网络路径，然后重试 Agent 请求。',
+    'exchange.failure.provider_transport_failed.title': '到上游服务的网络连接失败。',
+    'exchange.failure.provider_transport_failed.action':
+        '展开下方上游尝试，查看记录的失败阶段；检查对应网络路径后重试。',
+    'exchange.failure.provider_status_rejected.title': '上游服务拒绝了本次请求。',
+    'exchange.failure.provider_status_rejected.action':
+        '先查看上游尝试中的 HTTP 状态和实际使用的账号，再决定如何重试。',
+    'exchange.failure.provider_status_rejected_auth.title': '上游服务拒绝了本次请求。',
+    'exchange.failure.provider_status_rejected_auth.action':
+        '检查所选账号是否有权使用该服务和模型；必要时刷新账号凭据。',
+    'exchange.failure.provider_status_rejected_rate_limit.title':
+        '上游额度或速率限制已触发。',
+    'exchange.failure.provider_status_rejected_rate_limit.action':
+        '检查该账号的额度，或等待服务商重置后再试。',
+    'exchange.failure.provider_credential_unavailable.title': '所选上游账号没有可用凭据。',
+    'exchange.failure.provider_credential_unavailable.action':
+        '在「上游账号」中刷新或重新连接该账号，然后重试。',
+    'exchange.failure.account_selector_failed.title': '未能选出可用的上游账号。',
+    'exchange.failure.account_selector_failed.action':
+        '检查路由关联的账号和账号选择规则，重新测试规则后再试。',
+    'exchange.failure.message_transform_failed.title': '消息变换脚本执行失败。',
+    'exchange.failure.message_transform_failed.action': '查看下方脚本阶段，修正已发布规则后重试。',
     'exchange.failure.unsupported_client_input.title':
         'ViberMate 在联系上游服务前拒绝了 Agent 请求。',
     'exchange.failure.unsupported_client_input.action': '检查列出的请求字段和客户端协议，然后重试。',
@@ -3106,6 +3227,7 @@ final class AppCopy {
     'environment.publish': '发布流量策略',
     'environment.impact.title': '发布后会改变什么',
     'environment.impact.future_only': '仅用于之后启动的运行记录',
+    'environment.impact.summary': '即将发布的配置',
     'environment.impact.description':
         '发布不会改变正在运行的记录。下列记录会继续使用各自启动时冻结的流量策略版本；此草稿只用于之后新启动的运行记录。',
     'environment.impact.continuing': '{count} 条运行中记录保持当前修订',
@@ -3192,6 +3314,8 @@ final class AppCopy {
     'routes.account.delete.reference': '{environment} r{revision} · 路由 {route}',
     'routes.account.delete.more': '另有 {count} 条引用未返回。',
     'routes.validation.required': '请输入内容。',
+    'routes.validation.api_key_required': '请输入 API Key。',
+    'routes.validation.bearer_required': '请输入 Bearer Token。',
     'routes.validation.codex_auth_json': '请粘贴有效的 Codex ChatGPT auth.json 文件内容。',
     'routes.validation.origin':
         '请输入不含路径、查询、片段或显式默认端口的精确 HTTPS 地址，或受信任的本机/私网 HTTP 地址。',
@@ -3355,6 +3479,7 @@ final class AppCopy {
     'network.rules.validation.host': '请输入不含通配符和末尾点号的精确小写主机名。',
     'network.rules.validation.port': '请输入 1 至 65535 的端口。',
     'settings.title': '设置',
+    'settings.section': '设置分区',
     'settings.subtitle': '管理这套 Runtime 的偏好、接入、安全与网络行为',
     'settings.subtitle.server': '管理这套 Runtime 的偏好、团队接入、安全与网络行为',
     'settings.tab.general': '常规',

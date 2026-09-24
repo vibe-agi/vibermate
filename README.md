@@ -8,6 +8,21 @@ ViberMate captures agent conversations, routes requests, applies small
 JavaScript rules, and keeps an auditable record. It does not replace your agent
 or AI provider.
 
+## License
+
+This project is available under the GNU Affero General Public License v3.0
+(AGPLv3). Commercial licensing is also available for organizations that need
+to use the software outside the terms of the AGPLv3.
+
+- [AGPLv3 license text](LICENSE)
+- [Commercial licensing and professional services](COMMERCIAL.md)
+
+## Commercial Support
+
+The project author provides architecture consulting, customization,
+integration, deployment, and production support. See
+[COMMERCIAL.md](COMMERCIAL.md) for details.
+
 ![ViberMate capture timeline](https://vibe-agi.github.io/images/vibermate/capture-timeline-2400.webp)
 
 ## Choose how to run it
@@ -183,5 +198,3 @@ the recovery key rotates after use.
 Run `vibermate doctor` when setup fails. For implementation details, see the
 [runtime module map](docs/module-map.md) and [architecture decisions](docs/adr).
 Report suspected vulnerabilities through [SECURITY.md](SECURITY.md).
-
-Apache-2.0 licensed.

@@ -7,6 +7,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/vibe-agi/vibermate/internal/capturecontrol"
+	"github.com/vibe-agi/vibermate/internal/controlprincipal"
 	"github.com/vibe-agi/vibermate/internal/desktopcontrol"
 	"github.com/vibe-agi/vibermate/internal/serveradmin"
 	"github.com/vibe-agi/vibermate/internal/servercontrol"
@@ -24,6 +26,8 @@ type router struct {
 	access        http.Handler
 	rootCA        http.Handler
 	capture       http.Handler
+	manual        *capturecontrol.ManualHandler
+	manualOwner   controlprincipal.Principal
 	proxy         http.Handler
 	adminSessions http.Handler
 	webSessions   http.Handler
@@ -100,6 +104,22 @@ func (handler router) ServeHTTP(writer http.ResponseWriter, request *http.Reques
 	case request.URL.Path == "/api/v1/capture-runs" ||
 		strings.HasPrefix(request.URL.Path, "/api/v1/capture-runs/"):
 		handler.capture.ServeHTTP(writer, request)
+	case request.URL.Path == "/api/v1/manual-captures" ||
+		strings.HasPrefix(request.URL.Path, "/api/v1/manual-captures/"):
+		scope := serveradmin.ScopeWrite
+		if request.Method == http.MethodGet {
+			scope = serveradmin.ScopeRead
+		}
+		if !validAdminTransport(request, handler.scheme) ||
+			!handler.authorizeAdmin(request, scope) {
+			serverProblem(writer, http.StatusUnauthorized, "server_admin_unauthorized")
+			return
+		}
+		if handler.manual == nil || !handler.manualOwner.Valid() {
+			serverProblem(writer, http.StatusServiceUnavailable, "manual_capture_unavailable")
+			return
+		}
+		handler.manual.ServeHTTP(writer, request, handler.manualOwner)
 	case strings.HasPrefix(request.URL.Path, "/api/v1/"):
 		if !validAdminTransport(request, handler.scheme) || handler.application == nil {
 			serverProblem(writer, http.StatusForbidden, "server_admin_transport_rejected")

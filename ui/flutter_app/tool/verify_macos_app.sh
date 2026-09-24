@@ -104,6 +104,19 @@ if [[ "${mode}" == "live" ]]; then
     echo "Live bundle Web management UI contains a symbolic link" >&2
     exit 70
   fi
+  repository_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
+  if [[ -L "${app}/Contents/Resources/LICENSE" ||
+    -L "${app}/Contents/Resources/THIRD_PARTY_LICENSES.md" ||
+    -L "${web_root}/LICENSE" ||
+    ! -f "${app}/Contents/Resources/LICENSE" ||
+    ! -f "${app}/Contents/Resources/THIRD_PARTY_LICENSES.md" ||
+    ! -f "${web_root}/LICENSE" ]] ||
+    ! cmp -s "${repository_root}/LICENSE" "${app}/Contents/Resources/LICENSE" ||
+    ! cmp -s "${repository_root}/THIRD_PARTY_LICENSES.md" "${app}/Contents/Resources/THIRD_PARTY_LICENSES.md" ||
+    ! cmp -s "${repository_root}/LICENSE" "${web_root}/LICENSE"; then
+    echo "Live bundle license does not match the repository" >&2
+    exit 70
+  fi
 elif [[ -e "${web_root}" || -L "${web_root}" ]]; then
   echo "Preview bundle unexpectedly contains the Web management UI" >&2
   exit 70

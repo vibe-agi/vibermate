@@ -10,6 +10,7 @@ import 'package:vibermate_app/core/preferences/workbench_preferences.dart';
 import 'package:vibermate_app/app/vibermate_app.dart';
 import 'package:vibermate_app/features/workbench/workbench_controller.dart';
 import 'package:vibermate_app/features/workbench/workbench_shell.dart';
+import 'package:vibermate_app/features/workbench/settings_view.dart';
 import 'package:vibermate_app/preview/preview_control_api.dart';
 import 'package:vibermate_app/preview/preview_root_trust_installer.dart';
 import 'package:vibermate_app/preview/preview_terminal_command.dart';
@@ -392,10 +393,20 @@ final class _FailingRootTrustInstaller implements RootTrustInstaller {
 
 Future<void> _revealInSettings(WidgetTester tester, Finder target) async {
   if (target.evaluate().isEmpty) {
-    final safetyTab = find.byKey(const Key('settings-tab-safety'));
-    await tester.ensureVisible(safetyTab);
-    await tester.pumpAndSettle();
-    await tester.tap(safetyTab);
+    final picker = find.byKey(const Key('settings-section-picker'));
+    if (picker.evaluate().isNotEmpty) {
+      await tester.tap(picker);
+      await tester.pumpAndSettle();
+      final label = tester
+          .widget<SettingsView>(find.byType(SettingsView))
+          .copy('settings.tab.safety');
+      await tester.tap(find.text(label).hitTestable().last);
+    } else {
+      final safetyTab = find.byKey(const Key('settings-tab-safety'));
+      await tester.ensureVisible(safetyTab);
+      await tester.pumpAndSettle();
+      await tester.tap(safetyTab);
+    }
     await tester.pumpAndSettle();
   }
   final scrollable = find
