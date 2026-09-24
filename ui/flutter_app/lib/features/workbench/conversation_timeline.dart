@@ -2111,6 +2111,54 @@ final class _RawEnvelopeRow extends StatelessWidget {
               ],
             ),
           ),
+          if (envelope.layer == 'client_ingress')
+            Padding(
+              key: Key('raw-body-digest-${envelope.envelopeId}'),
+              padding: const EdgeInsets.fromLTRB(27, 0, 8, 7),
+              child: Row(
+                children: [
+                  Icon(
+                    Icons.fingerprint,
+                    size: 14,
+                    color: context.viberColors.textMuted,
+                  ),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          copy(
+                            'exchange.raw.digest.${envelope.bodySha256 == null ? 'unavailable' : envelope.digestScope}',
+                          ),
+                          style: Theme.of(context).textTheme.bodySmall,
+                        ),
+                        if (envelope.bodySha256 case final digest?)
+                          Text(
+                            digest,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: monoStyle.copyWith(
+                              color: context.viberColors.textMuted,
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+                  if (envelope.bodySha256 case final digest?)
+                    _CopyValueButton(
+                      tooltip: copy('exchange.raw.digest.copy'),
+                      value: () => digest,
+                    ),
+                  ContextHelpButton(
+                    key: Key('raw-body-digest-help-${envelope.envelopeId}'),
+                    title: copy('exchange.raw.digest.help_title'),
+                    message: copy('exchange.raw.digest.help'),
+                    dismissLabel: copy('common.dismiss'),
+                  ),
+                ],
+              ),
+            ),
           if (_rawPrefixExplanation(envelope, copy) case final explanation?)
             Padding(
               key: Key('raw-prefix-notice-${envelope.envelopeId}'),
