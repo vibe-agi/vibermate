@@ -52,6 +52,10 @@ _Avoid_: Runtime User, login user, Account
 One machine used by a Runtime User to connect to a Runtime Server. A Client Device supplies machine and workspace evidence but does not independently grant Capture authority.
 _Avoid_: Runtime User, Account, approval
 
+**Client Relay**:
+A transient loopback hop on a Client Device that forwards one managed Agent run to its selected Runtime Server. It is not a device-wide proxy, a local Runtime, or an inspection and evidence authority.
+_Avoid_: Runtime Server, local security gateway, network firewall
+
 **Login Session**:
 A revocable Runtime Server authority issued after a Runtime User authenticates. It may authorize multiple Capture Runs from one Client Device until it expires or is revoked.
 _Avoid_: Client Session, Capture, Provider session
