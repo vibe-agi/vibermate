@@ -188,6 +188,8 @@ the recovery key rotates after use.
   and filesystem. Recording and retention are configurable.
 - Provider credentials are kept out of policy snapshots and evidence, but text
   deliberately placed in a prompt remains prompt content.
+- [Outbound evidence limits](docs/egress-visibility.md) explain what inspected,
+  uninspected, and direct traffic can and cannot prove.
 - Transform JavaScript has no network, file, clock, or random access. A failure
   stops the request instead of silently bypassing the rule.
 - This is an early `0.x` release. A hardened public-Internet deployment,
