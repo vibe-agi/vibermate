@@ -792,7 +792,7 @@ final class AppCopy {
     'exchange.raw.digest.copy': 'Copy Body hash',
     'exchange.raw.digest.help_title': 'What the Body hash proves',
     'exchange.raw.digest.help':
-        'This hash covers HTTP Body bytes received by ViberMate, not Headers or transfer framing. Compare only the same byte representation. Compression, encoding, archives, or application encryption change those bytes; a match cannot establish a local file path. Direct traffic and content inside blind tunnels are not visible here.',
+        'This hash covers HTTP Body bytes received by ViberMate, not Headers or transfer framing. Compare only the same byte representation. Compression, encoding, packaging, or client-side ciphers change those bytes; a match cannot establish a local file path. Direct traffic and content inside blind tunnels are not visible here.',
     'exchange.raw.frames': 'Stream frames',
     'exchange.raw.body.empty': 'Empty body',
     'exchange.raw.body.base64': 'Binary body · Base64',
