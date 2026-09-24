@@ -2354,6 +2354,28 @@ final class PreviewControlApi implements ControlApi {
     return RawEvidencePage(
       items: [
         RawEvidenceEnvelope(
+          envelopeId: 'raw-preview-client-$exchangeId',
+          layer: 'client_ingress',
+          scopeKind: 'managed_run',
+          scopeId: 'run-preview-$exchangeId',
+          exchangeId: exchangeId,
+          observedAt: observed.subtract(const Duration(milliseconds: 1)),
+          expiresAt: observed.add(const Duration(days: 30)),
+          method: 'POST',
+          scheme: 'https',
+          authority: 'api.anthropic.com',
+          path: '/v1/messages',
+          contentType: 'application/json',
+          headerCount: 2,
+          trailerCount: 0,
+          bodyBytes: requestBody.length,
+          bodySha256: crypto.sha256.convert(requestBody).toString(),
+          digestScope: 'full_body',
+          payloadState: 'captured',
+          redactedCredentialFields: const ['Authorization'],
+          revealAvailable: true,
+        ),
+        RawEvidenceEnvelope(
           envelopeId: 'raw-preview-$exchangeId',
           layer: 'provider_egress',
           scopeKind: 'managed_run',
@@ -2431,8 +2453,8 @@ final class PreviewControlApi implements ControlApi {
       ),
       writer: const RawEvidenceWriter(
         state: 'active',
-        admittedRecords: 3,
-        durableWatermark: 3,
+        admittedRecords: 4,
+        durableWatermark: 4,
         queueRecords: 0,
         queueBytes: 0,
         lastFailure: null,
@@ -2448,6 +2470,7 @@ final class PreviewControlApi implements ControlApi {
     _requireOpen();
     const requestPrefix = 'raw-preview-transform-request-';
     const responsePrefix = 'raw-preview-transform-response-';
+    const clientPrefix = 'raw-preview-client-';
     const rawPrefix = 'raw-preview-';
     if (!envelopeId.startsWith(rawPrefix)) {
       throw const ControlProblem(
@@ -2460,6 +2483,8 @@ final class PreviewControlApi implements ControlApi {
         ? envelopeId.substring(requestPrefix.length)
         : envelopeId.startsWith(responsePrefix)
         ? envelopeId.substring(responsePrefix.length)
+        : envelopeId.startsWith(clientPrefix)
+        ? envelopeId.substring(clientPrefix.length)
         : envelopeId.substring(rawPrefix.length);
     final page = await rawEvidence(exchangeId);
     final envelope = page.items.firstWhere(

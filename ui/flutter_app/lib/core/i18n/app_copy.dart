@@ -926,7 +926,7 @@ final class AppCopy {
     'environment.recording.metadata_only': 'Metadata only',
     'environment.recording.off': 'Do not record content',
     'environment.recording.full.detail':
-        'Saves conversation bodies and Raw HTTP evidence for inspection.',
+        'For the retention period below, saves supported Agent request and response bodies plus inspected Raw HTTP boundaries. Uninspected forwarding keeps connection metadata only.',
     'environment.recording.metadata_only.detail':
         'No conversation or Raw HTTP bodies are saved. Keeps metadata and available model and Token usage.',
     'environment.recording.off.detail':
@@ -2880,7 +2880,8 @@ final class AppCopy {
     'environment.recording.full': '记录完整内容',
     'environment.recording.metadata_only': '仅元数据',
     'environment.recording.off': '不记录内容',
-    'environment.recording.full.detail': '保存对话正文与原始 HTTP 证据，供后续查看。',
+    'environment.recording.full.detail':
+        '在下方保留期内保存受支持 Agent 的请求与响应正文，以及已解析边界的原始 HTTP 证据；内容未检查的转发只保留连接元数据。',
     'environment.recording.metadata_only.detail':
         '不保存对话或原始 HTTP 正文；保留元数据，以及可用的模型和 Token 用量。',
     'environment.recording.off.detail':

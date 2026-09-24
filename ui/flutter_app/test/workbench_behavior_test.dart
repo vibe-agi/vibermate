@@ -2150,7 +2150,7 @@ void main() {
       await tester.pumpAndSettle();
       await tester.tap(rawEvidence);
       await tester.pumpAndSettle();
-      expect(find.text('3 boundary messages'), findsOneWidget);
+      expect(find.text('4 boundary messages'), findsOneWidget);
       final rawReveal = find.byKey(
         const Key('raw-reveal-raw-preview-run-1-exchange-222'),
       );
@@ -3088,7 +3088,7 @@ void main() {
     expect(tester.getCenter(rawSection).dy, lessThan(740));
     await tester.tap(rawSection);
     await tester.pumpAndSettle();
-    expect(find.text('3 条边界消息'), findsOneWidget);
+    expect(find.text('4 条边界消息'), findsOneWidget);
     final rawReveal = find.byKey(
       const Key('raw-reveal-raw-preview-run-1-exchange-222'),
     );
