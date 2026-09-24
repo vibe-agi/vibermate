@@ -95,12 +95,24 @@ func TestReindexRepairsFirstThenSkipsStableLocalIdentity(t *testing.T) {
 		!requests[1].WithoutLocalConversationIdentity || identities.projections != 1 {
 		t.Fatalf("first repair then incremental requests=%+v projections=%d", requests, identities.projections)
 	}
+	canceled, cancel := context.WithCancel(ctx)
+	cancel()
+	if err := indexer.Reindex(canceled, request); !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled repair error = %v", err)
+	}
+	if err := indexer.Reindex(ctx, request); err != nil {
+		t.Fatal(err)
+	}
+	if !requests[2].WithoutLocalConversationIdentity ||
+		requests[3].WithoutLocalConversationIdentity || identities.projections != 2 {
+		t.Fatalf("canceled scan skipped repair: requests=%+v projections=%d", requests, identities.projections)
+	}
 	// A fresh Runtime must repair an identity persisted before the previous
 	// process could finish its Conversation projection.
 	if err := newIndexer().Reindex(ctx, request); err != nil {
 		t.Fatal(err)
 	}
-	if requests[2].WithoutLocalConversationIdentity || identities.projections != 2 {
+	if requests[4].WithoutLocalConversationIdentity || identities.projections != 3 {
 		t.Fatalf("restart did not repair persisted identity: requests=%+v projections=%d", requests, identities.projections)
 	}
 
@@ -112,7 +124,7 @@ func TestReindexRepairsFirstThenSkipsStableLocalIdentity(t *testing.T) {
 	if err := failed.Reindex(ctx, request); err != nil {
 		t.Fatal(err)
 	}
-	if requests[3].WithoutLocalConversationIdentity || requests[4].WithoutLocalConversationIdentity {
+	if requests[5].WithoutLocalConversationIdentity || requests[6].WithoutLocalConversationIdentity {
 		t.Fatalf("failed projection incorrectly skipped repair: %+v", requests)
 	}
 }
@@ -183,9 +195,12 @@ func (reader *pagingActivityReader) ListExchanges(_ context.Context, request act
 	return activity.Page{Items: items, NextBeforeSequence: reader.next + 1}, nil
 }
 
-func (reader activityReader) ListExchanges(_ context.Context, request activity.PageRequest) (activity.Page, error) {
+func (reader activityReader) ListExchanges(ctx context.Context, request activity.PageRequest) (activity.Page, error) {
 	if reader.requests != nil {
 		*reader.requests = append(*reader.requests, request)
+	}
+	if err := ctx.Err(); err != nil {
+		return activity.Page{}, err
 	}
 	if reader.skipLocal && request.WithoutLocalConversationIdentity {
 		return activity.Page{Items: []activity.Record{}}, nil
