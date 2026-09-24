@@ -1507,7 +1507,7 @@ final class AppCopy {
         'This filters loaded evidence only. Load more to search older records.',
     'network.egress.title': 'Egress attempts',
     'network.egress.detail':
-        'Shows outbound attempts routed through ViberMate. A missing record does not prove the device made no direct connection. Byte counts do not identify a local file or its path.',
+        'Shows outbound attempts routed through ViberMate. A missing record does not prove the device made no direct connection. Transport byte counts include HTTP framing; they are not file sizes or file-path evidence.',
     'network.egress.empty':
         'ViberMate has not recorded an outbound attempt here. This does not establish that the device made no direct connection.',
     'network.egress.load_more': 'Load more egress attempts',
@@ -1566,7 +1566,7 @@ final class AppCopy {
     'network.fact.decryption': 'Content visibility',
     'network.fact.egress_authority': 'Egress authority',
     'network.fact.egress_source': 'Egress source',
-    'network.fact.bytes': 'Bytes',
+    'network.fact.bytes': 'Transport bytes',
     'network.fact.outcome': 'Outcome',
     'network.fact.error': 'Error',
     'network.fact.parent': 'Parent',
@@ -3357,7 +3357,7 @@ final class AppCopy {
     'network.filter.more_hint': '这里只筛选已加载证据；请加载更多以搜索更早记录。',
     'network.egress.title': '出站尝试',
     'network.egress.detail':
-        '仅展示经过 ViberMate 的对外尝试。没有记录不代表设备没有直连；字节数也无法确定本地文件或路径。',
+        '仅展示经过 ViberMate 的对外尝试。没有记录不代表设备没有直连。传输字节数包含 HTTP 封装，不是文件大小，也无法确定本地路径。',
     'network.egress.empty': 'ViberMate 尚未记录到出站尝试；这不能证明设备没有其他直连。',
     'network.egress.load_more': '加载更多出站尝试',
     'network.egress.caller': '调用方',
@@ -3415,7 +3415,7 @@ final class AppCopy {
     'network.fact.decryption': '内容可见性',
     'network.fact.egress_authority': '出站 Authority',
     'network.fact.egress_source': '出站来源',
-    'network.fact.bytes': '字节',
+    'network.fact.bytes': '传输字节',
     'network.fact.outcome': '结果',
     'network.fact.error': '错误',
     'network.fact.parent': '父级',

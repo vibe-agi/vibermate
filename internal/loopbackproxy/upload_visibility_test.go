@@ -17,11 +17,13 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/klauspost/compress/zstd"
 	"github.com/vibe-agi/vibermate/internal/connectionevent"
+	"github.com/vibe-agi/vibermate/internal/egressaudit"
 )
 
 func TestGenericUploadRepresentationsRemainUninspected(t *testing.T) {
@@ -108,7 +110,7 @@ func TestGenericUploadRepresentationsRemainUninspected(t *testing.T) {
 		Proxy:             http.ProxyURL(proxy),
 		DisableKeepAlives: true,
 	}, Timeout: 5 * time.Second}
-	for _, sample := range []struct {
+	samples := []struct {
 		name, contentType, contentEncoding string
 		body                               []byte
 	}{
@@ -119,7 +121,8 @@ func TestGenericUploadRepresentationsRemainUninspected(t *testing.T) {
 		{"base64", "text/plain", "", []byte(base64.StdEncoding.EncodeToString(canary))},
 		{"zip", "application/zip", "", zipBody.Bytes()},
 		{"client_cipher", "application/octet-stream", "", cipherBody},
-	} {
+	}
+	for _, sample := range samples {
 		t.Run(sample.name, func(t *testing.T) {
 			if (sha256.Sum256(sample.body) == sha256.Sum256(canary)) != (sample.name == "plain") {
 				t.Fatal("transformed request body unexpectedly matches the file digest")
@@ -147,14 +150,44 @@ func TestGenericUploadRepresentationsRemainUninspected(t *testing.T) {
 	if len(observer.snapshot()) != 0 || len(fixture.exchanges.Requests()) != 0 {
 		t.Fatal("generic uploads were misrepresented as inspected HTTP evidence")
 	}
-	page, err := fixture.connections.List(context.Background(), connectionevent.PageRequest{Limit: 100})
-	if err != nil || len(page.Items) == 0 {
-		t.Fatalf("connection evidence missing: records=%d error=%v", len(page.Items), err)
-	}
-	for _, record := range page.Items {
-		if record.Decision == connectionevent.DecisionAllow && record.Decryption != connectionevent.DecryptionBlind {
-			t.Fatalf("generic upload claimed content inspection: %+v", record)
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		connections, connectionErr := fixture.connections.List(context.Background(), connectionevent.PageRequest{Limit: 100})
+		attempts, attemptErr := fixture.egress.List(context.Background(), egressaudit.PageRequest{Limit: 100})
+		if connectionErr != nil || attemptErr != nil {
+			t.Fatalf("read upload evidence: connection=%v egress=%v", connectionErr, attemptErr)
 		}
+		closed := 0
+		for _, record := range connections.Items {
+			if record.Decision == connectionevent.DecisionAllow && record.Decryption != connectionevent.DecryptionBlind {
+				t.Fatalf("generic upload claimed content inspection: %+v", record)
+			}
+			if record.Phase == connectionevent.PhaseClosed {
+				closed++
+				if record.BytesUp < uint64(len(canary)) {
+					t.Fatalf("completed upload counted fewer bytes than its smallest body: %d", record.BytesUp)
+				}
+			}
+		}
+		terminal := 0
+		for _, record := range attempts.Items {
+			if record.Attempt.Terminal() {
+				terminal++
+				if !strings.HasPrefix(record.Attempt.TargetOrigin(), "http://") {
+					t.Fatalf("cleartext upload claimed HTTPS: %q", record.Attempt.TargetOrigin())
+				}
+				if record.Attempt.BytesOut() < int64(len(canary)) {
+					t.Fatalf("completed egress attempt counted fewer bytes than its smallest body: %d", record.Attempt.BytesOut())
+				}
+			}
+		}
+		if closed == len(samples) && terminal == len(samples) {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("terminal upload evidence incomplete: connections=%d attempts=%d", closed, terminal)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 
