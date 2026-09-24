@@ -204,19 +204,43 @@ Conversation 和时间线；5 秒总览刷新不再与运行中 Capture 的快�
 以隔离数据目录启动原生 Server，并把合成 Anthropic 请求经手动代理的 CONNECT/TLS
 送往本机合成 Provider。Playwright 登录 Web 后保持同一运行中的手动 Capture 可见。
 计时从客户端收到完整 HTTP 响应开始，到浏览器可访问性树出现该请求的唯一标记并
-完成下一帧为止；**不包含 Provider 等待时间**。每组连续发送 12 条短请求、1 条约
-9 KiB、1 条约 151 KiB 的请求。短请求剔除首次样本后报告 11 次 warm p50/p95：
+完成下一帧为止；**不包含 Provider 等待时间**。每组发送 24 条短请求、1 条约
+9 KiB、1 条约 151 KiB 的请求，请求前按固定序列错峰，避免与 1 秒轮询持续同相。
+短请求剔除首次样本后报告 23 次 warm p50/p95：
 
 | Web API 路径 | 短请求 warm p50 / p95 | 9 KiB 单次 | 151 KiB 单次 |
 | --- | ---: | ---: | ---: |
-| 本机直连 | 798 / 1,292 ms | 1,288 ms | 803 ms |
-| 浏览器 API 人为增加 80 ms 延迟 | 811 / 1,294 ms | 1,292 ms | 799 ms |
+| 本机直连 | 786 / 1,289 ms | 794 ms | 786 ms |
+| 浏览器每条 API 请求人为增加 80 ms 延迟 | 1,287 / 1,304 ms | 795 ms | 781 ms |
 
-这项小样本的主要等待来自 1 秒可见证据轮询周期；80 ms 是浏览器侧注入的延迟，
-**不等于实测远程部署**。大正文在此只验证默认折叠视图，新建 Exchange 的展开全文
-另由上面的 Flutter/Chrome 合成渲染测试覆盖。这里没有把浏览器可访问性树的出现
-冒称为 GPU paint 时间，也没有分离证据提交、索引、各 API 和 Flutter 解码的耗时，
-因此 Task 1 的真实 App、远程 Web 与完整分段验收仍未完成。
+第二次独立运行的短请求本机 p50/p95 为 791/1,293 ms，注入延迟为
+1,285/1,301 ms；表中大正文仍只是首次运行各一次的样本。
+
+本机短请求的最新 Activity 探测响应完成时间 p50/p95 为 386/816 ms，随后
+Conversation 目录为 391/818 ms，所选 Exchange 的 Activity 响应为 392/819 ms；
+最后一个相关 API 响应到可访问性树出现并完成下一帧为 145/505 ms。这些是相对
+客户端 HTTP 完成时刻的浏览器侧观察，不能据此独立推导数据库提交或索引耗时。
+
+复现：先运行 `flutter build web --release`，安装可供 Node 加载的 Playwright 与
+Chromium，再从仓库根目录运行以下命令。`VIBERMATE_PLAYWRIGHT_MODULE` 填本机
+`node_modules/playwright` 的绝对路径；若已在 Node 模块搜索路径中安装，可省略。
+脚本自行编译 Go Server、建立隔离数据目录和合成 Provider，结束后清理这些临时
+资源；不读取真实账号或证据。
+
+```sh
+VIBERMATE_PLAYWRIGHT_MODULE=/absolute/path/to/node_modules/playwright \
+  VIBERMATE_BROWSER_CHANNEL=chrome \
+  node tool/performance/web-capture-latency.mjs
+```
+
+如使用 Playwright 自带的 Chromium，可省略 `VIBERMATE_BROWSER_CHANNEL`。
+脚本输出首次样本、warm 分位数及每个可观察 API 边界的 JSON。小样本主要受
+1 秒可见证据轮询周期和采样相位影响；80 ms 是浏览器侧逐请求注入的延迟，
+**不等于实测远程部署**，表中大正文也各只有一次观测。大正文在此只验证默认
+折叠视图，新建 Exchange 的展开全文另由上面的 Flutter/Chrome 合成渲染测试覆盖。
+这里没有把浏览器可访问性树出现冒称为 GPU paint 时间，也没有分离证据提交、
+索引和 Flutter 解码的耗时，因此 Task 1 的真实 App、远程 Web 与完整分段验收
+仍未完成。
 
 本次浏览器路径还发现一个实际可见性错误：手动 Capture 有首条 Exchange 后只轮询
 已选中的 Conversation，后续独立 Exchange 在持久层已存在，却要手动刷新才显示。
