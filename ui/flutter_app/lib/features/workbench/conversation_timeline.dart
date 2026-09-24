@@ -1775,11 +1775,37 @@ final class _RawEvidenceDisclosureState extends State<_RawEvidenceDisclosure> {
     if (mounted) setState(() => _copyingSample = false);
   }
 
-  Future<void> _copyDiagnostic(RawEvidencePage page) async {
-    await Clipboard.setData(
-      ClipboardData(text: _redactedDiagnosticText(widget.detail, page)),
+  Future<void> _previewDiagnostic(RawEvidencePage page) async {
+    final report = _redactedDiagnosticText(widget.detail, page);
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        key: Key('redacted-diagnostic-preview-${widget.exchangeId}'),
+        scrollable: true,
+        title: Text(widget.copy('exchange.raw.diagnostic.preview')),
+        content: SizedBox(
+          width: math.min(620, MediaQuery.sizeOf(dialogContext).width - 80),
+          child: SelectableText(report, style: monoStyle),
+        ),
+        actions: [
+          TextButton(
+            key: Key('redacted-diagnostic-cancel-${widget.exchangeId}'),
+            onPressed: () => Navigator.of(dialogContext).pop(),
+            child: Text(widget.copy('common.cancel')),
+          ),
+          FilledButton.icon(
+            key: Key('redacted-diagnostic-copy-${widget.exchangeId}'),
+            onPressed: () async {
+              await Clipboard.setData(ClipboardData(text: report));
+              if (dialogContext.mounted) Navigator.of(dialogContext).pop();
+              if (mounted) setState(() => _copiedDiagnostic = true);
+            },
+            icon: const Icon(Icons.copy, size: 16),
+            label: Text(widget.copy('exchange.raw.diagnostic.copy')),
+          ),
+        ],
+      ),
     );
-    if (mounted) setState(() => _copiedDiagnostic = true);
   }
 
   @override
@@ -1815,13 +1841,17 @@ final class _RawEvidenceDisclosureState extends State<_RawEvidenceDisclosure> {
                       style: Theme.of(context).textTheme.titleSmall,
                     ),
                     if (count != null) ...[
-                      const SizedBox(width: 10),
-                      Text(
-                        copy.format('exchange.raw.summary', {'count': count}),
-                        style: Theme.of(context).textTheme.bodySmall,
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          copy.format('exchange.raw.summary', {'count': count}),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: Theme.of(context).textTheme.bodySmall,
+                        ),
                       ),
-                    ],
-                    const Spacer(),
+                    ] else
+                      const Spacer(),
                     Icon(
                       _expanded
                           ? Icons.keyboard_arrow_up
@@ -1876,8 +1906,8 @@ final class _RawEvidenceDisclosureState extends State<_RawEvidenceDisclosure> {
             runSpacing: 6,
             children: [
               OutlinedButton.icon(
-                key: Key('copy-redacted-diagnostic-${widget.exchangeId}'),
-                onPressed: () => unawaited(_copyDiagnostic(page)),
+                key: Key('preview-redacted-diagnostic-${widget.exchangeId}'),
+                onPressed: () => unawaited(_previewDiagnostic(page)),
                 icon: Icon(
                   _copiedDiagnostic ? Icons.check : Icons.privacy_tip_outlined,
                   size: 15,
@@ -1886,7 +1916,7 @@ final class _RawEvidenceDisclosureState extends State<_RawEvidenceDisclosure> {
                   copy(
                     _copiedDiagnostic
                         ? 'exchange.raw.redacted_diagnostic_copied'
-                        : 'exchange.raw.copy_redacted_diagnostic',
+                        : 'exchange.raw.diagnostic.preview',
                   ),
                 ),
               ),
@@ -2508,12 +2538,7 @@ String _redactedDiagnosticText(ExchangeDetail detail, RawEvidencePage page) =>
         },
         'diagnosis': detail.diagnosis == null
             ? null
-            : {
-                'providerStatus': detail.diagnosis!.providerStatus,
-                'providerField': detail.diagnosis!.providerField,
-                'clientField': detail.diagnosis!.clientField,
-                'clientPath': detail.diagnosis!.clientPath,
-              },
+            : {'providerStatus': detail.diagnosis!.providerStatus},
         'processing': {
           'result': detail.processingTrace.result,
           'egressProxyId': detail.processingTrace.egressProxyId,
@@ -2562,8 +2587,6 @@ String _redactedDiagnosticText(ExchangeDetail detail, RawEvidencePage page) =>
               'observedAt': envelope.observedAt.toUtc().toIso8601String(),
               'method': envelope.method,
               'statusCode': envelope.statusCode,
-              'contentType': envelope.contentType,
-              'contentEncoding': envelope.contentEncoding,
               'representation': envelope.representation,
               'canonicalization': envelope.canonicalization,
               'headerCount': envelope.headerCount,
@@ -3579,6 +3602,11 @@ final class _ReasoningBlockViewState extends State<_ReasoningBlockView> {
       0,
       (total, block) => total + block.originalSize,
     );
+    final plaintextPill = StatusPill(
+      label: copy('exchange.content.plaintext_evidence'),
+      color: tone,
+      icon: Icons.visibility_outlined,
+    );
     return Semantics(
       container: true,
       label: '$title, ${copy('exchange.content.plaintext_evidence')}',
@@ -3615,47 +3643,84 @@ final class _ReasoningBlockViewState extends State<_ReasoningBlockView> {
                       }),
                       child: Padding(
                         padding: const EdgeInsets.fromLTRB(9, 7, 7, 6),
-                        child: Row(
-                          children: [
-                            Icon(
-                              Icons.psychology_alt_outlined,
-                              size: 15,
-                              color: tone,
-                            ),
-                            const SizedBox(width: 6),
-                            Expanded(
-                              child: Text(
-                                title,
-                                style: Theme.of(context).textTheme.labelMedium
-                                    ?.copyWith(
+                        child: LayoutBuilder(
+                          builder: (context, constraints) {
+                            final narrow = constraints.maxWidth < 360;
+                            return Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Row(
+                                  children: [
+                                    Icon(
+                                      Icons.psychology_alt_outlined,
+                                      size: 15,
                                       color: tone,
-                                      fontWeight: FontWeight.w700,
                                     ),
-                              ),
-                            ),
-                            StatusPill(
-                              label: copy(
-                                'exchange.content.plaintext_evidence',
-                              ),
-                              color: tone,
-                              icon: Icons.visibility_outlined,
-                            ),
-                            const SizedBox(width: 7),
-                            Text(
-                              _bytes(visibleSize),
-                              style: monoStyle.copyWith(
-                                color: context.viberColors.textMuted,
-                              ),
-                            ),
-                            const SizedBox(width: 5),
-                            Icon(
-                              _collapsed
-                                  ? Icons.expand_more
-                                  : Icons.expand_less,
-                              size: 16,
-                              color: context.viberColors.textMuted,
-                            ),
-                          ],
+                                    const SizedBox(width: 6),
+                                    Expanded(
+                                      child: Text(
+                                        title,
+                                        style: Theme.of(context)
+                                            .textTheme
+                                            .labelMedium
+                                            ?.copyWith(
+                                              color: tone,
+                                              fontWeight: FontWeight.w700,
+                                            ),
+                                      ),
+                                    ),
+                                    if (!narrow) plaintextPill,
+                                    const SizedBox(width: 7),
+                                    Text(
+                                      _bytes(visibleSize),
+                                      style: monoStyle.copyWith(
+                                        color: context.viberColors.textMuted,
+                                      ),
+                                    ),
+                                    const SizedBox(width: 5),
+                                    Icon(
+                                      _collapsed
+                                          ? Icons.expand_more
+                                          : Icons.expand_less,
+                                      size: 16,
+                                      color: context.viberColors.textMuted,
+                                    ),
+                                  ],
+                                ),
+                                if (narrow)
+                                  Padding(
+                                    padding: const EdgeInsets.only(
+                                      left: 21,
+                                      top: 4,
+                                    ),
+                                    child: Row(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        Icon(
+                                          Icons.visibility_outlined,
+                                          size: 12,
+                                          color: tone,
+                                        ),
+                                        const SizedBox(width: 4),
+                                        Flexible(
+                                          child: Text(
+                                            copy(
+                                              'exchange.content.plaintext_evidence',
+                                            ),
+                                            maxLines: 1,
+                                            overflow: TextOverflow.ellipsis,
+                                            style: Theme.of(context)
+                                                .textTheme
+                                                .bodySmall
+                                                ?.copyWith(color: tone),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                              ],
+                            );
+                          },
                         ),
                       ),
                     ),

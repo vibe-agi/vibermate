@@ -501,7 +501,7 @@ final class AppCopy {
     'bootstrap.failure.runtime_already_active':
         'Another ViberMate window is already running. Close it, then retry.',
     'bootstrap.failure.secret_store_unavailable':
-        'ViberMate could not read the macOS Keychain. Unlock this Mac and retry. If this repeats after running a development build, quit ViberMate; open Keychain Access, search for io.vibermate.desktop, delete only those password items, then reopen. Captures stay; saved provider credentials and the local Root must be set up again.',
+        'ViberMate cannot access the macOS Keychain. Unlock the login keychain in Keychain Access and retry. If you switched between development and installed builds, reopen the signed installed build; they may not share Keychain access. Do not delete Keychain items or local data.',
     'bootstrap.failure.storage_unavailable':
         'ViberMate cannot open its local data. No database was replaced. Check free space and folder permissions. If this started after changing versions, keep the data directory and use the previous compatible version.',
     'bootstrap.failure.root_reset_failed':
@@ -818,7 +818,8 @@ final class AppCopy {
     'exchange.raw.recovery':
         'A previous writer ended uncleanly; at most {ms} ms of the newest raw evidence may be absent.',
     'exchange.raw.copy_transform_sample': 'Copy exact Turn to test sample',
-    'exchange.raw.copy_redacted_diagnostic': 'Copy redacted diagnostic',
+    'exchange.raw.diagnostic.preview': 'Review redacted diagnostic',
+    'exchange.raw.diagnostic.copy': 'Copy diagnostic',
     'exchange.raw.redacted_diagnostic_copied': 'Redacted diagnostic copied',
     'exchange.raw.layer.client_ingress': 'Client → ViberMate',
     'exchange.raw.layer.transform_request_input': 'Transform request input',
@@ -2545,7 +2546,7 @@ final class AppCopy {
     'bootstrap.failure.runtime_already_active':
         '已有一个 ViberMate 窗口正在运行。请先关闭它，再重试。',
     'bootstrap.failure.secret_store_unavailable':
-        'ViberMate 无法读取 macOS 钥匙串。请解锁 Mac 后重试。如果你曾运行开发版且问题重复出现，请退出 ViberMate，打开“钥匙串访问”，搜索 io.vibermate.desktop，只删除这些密码项目，然后重开。Capture 会保留；已保存的服务商凭据和本机根证书需要重新设置。',
+        'ViberMate 无法访问 macOS 钥匙串。请在“钥匙串访问”中解锁“登录”钥匙串并重试。若曾切换开发版与安装版，请重新打开已签名的安装版；两者可能无法共用钥匙串权限。不要删除钥匙串项目或本地数据。',
     'bootstrap.failure.storage_unavailable':
         'ViberMate 无法打开本机数据，数据库未被替换。请检查磁盘空间与目录权限。如果发生在更换版本后，请保留数据目录，并使用之前兼容的版本。',
     'bootstrap.failure.root_reset_failed':
@@ -2824,7 +2825,8 @@ final class AppCopy {
         '当前 Runtime 未提供解压视图，请更新 Runtime 后在此阅读正文；也可展开 HTTP 技术详情查看原始字节。',
     'exchange.raw.recovery': '上次写入器未正常结束；最新原始证据最多可能缺失 {ms} 毫秒。',
     'exchange.raw.copy_transform_sample': '复制本轮原始数据为测试样本',
-    'exchange.raw.copy_redacted_diagnostic': '复制脱敏诊断',
+    'exchange.raw.diagnostic.preview': '预览脱敏诊断',
+    'exchange.raw.diagnostic.copy': '复制诊断',
     'exchange.raw.redacted_diagnostic_copied': '已复制脱敏诊断',
     'exchange.raw.layer.client_ingress': '客户端 → ViberMate',
     'exchange.raw.layer.transform_request_input': '请求脚本输入',

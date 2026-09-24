@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/vibe-agi/vibermate/internal/activity"
 	"github.com/vibe-agi/vibermate/internal/egressaudit"
 )
 
@@ -31,6 +32,18 @@ func TestPublished013AuditUpgradesWithoutLosingRowsOrSequence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	legacyActivity := activity.Record{
+		ID: "released-activity", OccurredAt: time.Now().UTC(),
+		Kind: activity.KindExchangeCompleted, SubjectID: "released-exchange",
+		Status: activity.StatusSucceeded, SourceKind: activity.SourceCaptureRun,
+		SourceDisplayName: "Codex", SourceRecognition: activity.SourceRecognitionConfigured,
+		CaptureRunID: "released-run", ConnectionID: "released-connection",
+	}
+	setFrozenExecutionEvidence(&legacyActivity, "released")
+	previousActivity, err := newActivityRepository(old, newOperationGate()).Append(ctx, legacyActivity)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := old.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -39,6 +52,19 @@ func TestPublished013AuditUpgradesWithoutLosingRowsOrSequence(t *testing.T) {
 	page, err := current.EgressAttemptRepository().List(ctx, egressaudit.PageRequest{Limit: 10})
 	if err != nil || len(page.Items) != 1 || page.Items[0].Attempt.ID() != "released-old" || page.Items[0].Sequence != previous.Sequence {
 		t.Fatalf("published egress row changed during upgrade: %+v, %v", page.Items, err)
+	}
+	retainedActivity, err := current.ActivityRepository().GetExchange(ctx, "released-exchange")
+	if err != nil || retainedActivity.ID != previousActivity.ID || retainedActivity.Sequence != previousActivity.Sequence ||
+		retainedActivity.Conversation == nil || retainedActivity.Conversation.ProjectionID != previousActivity.Conversation.ProjectionID {
+		t.Fatalf("published Conversation record changed during upgrade: %+v, %v", retainedActivity, err)
+	}
+	legacyActivity.ID = "new-activity"
+	legacyActivity.SubjectID = "new-exchange"
+	legacyActivity.ConnectionID = "new-connection"
+	setFrozenExecutionEvidence(&legacyActivity, "new")
+	nextActivity, err := current.ActivityRepository().Append(ctx, legacyActivity)
+	if err != nil || nextActivity.Sequence != previousActivity.Sequence+1 {
+		t.Fatalf("Activity sequence after upgrade = %+v, %v", nextActivity, err)
 	}
 	input := egressaudit.NewInput{
 		ID: "new-reset", Purpose: egressaudit.PurposeUpstreamAccountAction,

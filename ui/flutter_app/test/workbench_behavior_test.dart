@@ -2805,7 +2805,7 @@ void main() {
           null,
         ),
       );
-      await tester.binding.setSurfaceSize(const Size(1180, 760));
+      await tester.binding.setSurfaceSize(const Size(390, 760));
       addTearDown(() => tester.binding.setSurfaceSize(null));
       await tester.pumpWidget(
         const ViberMateApp(previewMode: true, preferChinese: false),
@@ -2825,12 +2825,28 @@ void main() {
       await tester.tap(raw);
       await tester.pumpAndSettle();
 
-      final export = find.byKey(
-        const Key('copy-redacted-diagnostic-run-1-exchange-222'),
+      final preview = find.byKey(
+        const Key('preview-redacted-diagnostic-run-1-exchange-222'),
       );
-      await tester.ensureVisible(export);
-      await tester.tap(export);
-      await tester.pump();
+      await tester.ensureVisible(preview);
+      await tester.tap(preview);
+      await tester.pumpAndSettle();
+      expect(copiedDiagnostic, isNull);
+      expect(
+        find.byKey(const Key('redacted-diagnostic-preview-run-1-exchange-222')),
+        findsOneWidget,
+      );
+      await tester.tap(
+        find.byKey(const Key('redacted-diagnostic-cancel-run-1-exchange-222')),
+      );
+      await tester.pumpAndSettle();
+      expect(copiedDiagnostic, isNull);
+      await tester.tap(preview);
+      await tester.pumpAndSettle();
+      await tester.tap(
+        find.byKey(const Key('redacted-diagnostic-copy-run-1-exchange-222')),
+      );
+      await tester.pumpAndSettle();
 
       final report = jsonDecode(copiedDiagnostic!) as Map<String, Object?>;
       expect(report['schema'], 'vibermate.redacted-diagnostic/v1');
@@ -2845,6 +2861,9 @@ void main() {
       );
       expect(copiedDiagnostic, isNot(contains('/Users/')));
       expect(copiedDiagnostic, isNot(contains('rawQuery')));
+      expect(copiedDiagnostic, isNot(contains('clientPath')));
+      expect(copiedDiagnostic, isNot(contains('contentType')));
+      expect(copiedDiagnostic, isNot(contains('contentEncoding')));
       expect(tester.takeException(), isNull);
 
       await tester.pumpWidget(const SizedBox.shrink());
