@@ -22,5 +22,19 @@ void main() {
     expect(chinese('conversation.exchange'), 'Agent 调用');
     expect(chinese('exchange.attempt.one'), '1 次上游尝试');
     expect(chinese('capture.environment.apply_latest'), '下一轮应用');
+    expect(chinese('network.value.decryption.blind'), '内容未检查');
+    expect(chinese('network.value.payload.opaque_tunnel'), '请求内容未检查');
+  });
+
+  test('blind egress describes inspection, not encryption', () {
+    final english = AppCopy.forLanguage(AppLanguage.english);
+    expect(
+      english('network.value.purpose.blind_tunnel'),
+      'Uninspected forwarding',
+    );
+    expect(
+      english('network.value.payload.opaque_tunnel'),
+      'Payload not inspected',
+    );
   });
 }
