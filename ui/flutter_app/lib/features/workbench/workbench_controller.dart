@@ -203,8 +203,6 @@ final class WorkbenchController extends ChangeNotifier
   String? environmentError;
   String? environmentErrorDiagnostic;
   String? environmentNotice;
-  String? offlineError;
-  String? offlineNotice;
   String? terminalCommandError;
   String? terminalCommandNotice;
   String? serverManagementError;
@@ -220,7 +218,6 @@ final class WorkbenchController extends ChangeNotifier
   bool inventoryMutating = false;
   bool environmentMutating = false;
   bool environmentRevisionLoading = false;
-  bool offlineMutating = false;
   bool terminalCommandLoading = false;
   bool terminalCommandMutating = false;
   bool serverManagementLoading = false;
@@ -478,8 +475,6 @@ final class WorkbenchController extends ChangeNotifier
     displayName: displayName,
     policy: policy,
   );
-
-  OfflineHoldSnapshot? get offlineHold => data?.status.offlineHold;
 
   int? get pendingApprovalCount => pendingApprovals?.length;
 
@@ -1356,72 +1351,6 @@ final class WorkbenchController extends ChangeNotifier
   void clearTerminalCommandMessage() {
     terminalCommandError = null;
     terminalCommandNotice = null;
-    notifyListeners();
-  }
-
-  Future<bool> enterOfflineHold() => _changeOfflineHold(resume: false);
-
-  Future<bool> resumeOfflineHold() => _changeOfflineHold(resume: true);
-
-  Future<bool> _changeOfflineHold({required bool resume}) async {
-    final current = offlineHold;
-    if (_disposed ||
-        offlineMutating ||
-        current == null ||
-        (resume ? !current.canResume : !current.canEnter)) {
-      return false;
-    }
-    offlineMutating = true;
-    offlineError = null;
-    offlineNotice = null;
-    notifyListeners();
-    try {
-      final updated = resume
-          ? await _api.resumeOfflineHold(current)
-          : await _api.enterOfflineHold(current);
-      if (_disposed) return false;
-      final dashboard = data;
-      if (dashboard != null) {
-        data = _dashboardWith(
-          dashboard,
-          status: dashboard.status.withOfflineHold(updated),
-        );
-      }
-      if (resume && updated.state == 'held') {
-        offlineError = updated.lastProbeReason ?? 'probe_failed';
-        offlineMutating = false;
-        notifyListeners();
-        return false;
-      }
-      offlineNotice = resume
-          ? updated.state == 'online'
-                ? 'offline.resumed'
-                : 'offline.releasing'
-          : 'offline.held';
-      offlineMutating = false;
-      notifyListeners();
-      return true;
-    } catch (error) {
-      if (_disposed) return false;
-      final message = _describeError(error);
-      try {
-        final refreshed = await _api.loadDashboard();
-        if (!_disposed) data = refreshed;
-      } catch (_) {
-        // The original mutation error is the useful authority. A failed
-        // reconciliation must not replace it with a generic refresh failure.
-      }
-      if (_disposed) return false;
-      offlineError = message;
-      offlineMutating = false;
-      notifyListeners();
-      return false;
-    }
-  }
-
-  void clearOfflineMessage() {
-    offlineError = null;
-    offlineNotice = null;
     notifyListeners();
   }
 

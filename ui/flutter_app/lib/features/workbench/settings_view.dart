@@ -7,7 +7,6 @@ import '../../core/bootstrap/terminal_command.dart';
 import '../../core/design/viber_theme.dart';
 import '../../core/design/workbench_widgets.dart';
 import '../../core/i18n/app_copy.dart';
-import 'offline_hold_view.dart';
 import 'runtime_root_ca_panel.dart';
 import '../../core/api/control_models.dart';
 import 'deletion_dialog.dart';
@@ -708,8 +707,6 @@ final class _SafetyDataSettingsPane extends StatelessWidget {
         dismissHelpLabel: copy('common.dismiss'),
       ),
       const SizedBox(height: 14),
-      OfflineHoldSettingsPanel(controller: controller, copy: copy),
-      const SizedBox(height: 12),
       if (controller.accessSettingsAvailable) ...[
         _ServerConnectionSettingsPanel(controller: controller, copy: copy),
         const SizedBox(height: 12),

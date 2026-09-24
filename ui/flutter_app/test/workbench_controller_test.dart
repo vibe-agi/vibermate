@@ -828,61 +828,6 @@ void main() {
   );
 
   test(
-    'Offline hold enters and resumes through exact runtime revisions',
-    () async {
-      final api = PreviewControlApi();
-      final controller = WorkbenchController(
-        api: api,
-        terminalCommands: PreviewTerminalCommandService(),
-        previewMode: true,
-        closeRuntime: api.close,
-      );
-      addTearDown(controller.dispose);
-
-      await controller.initialize();
-      expect(controller.offlineHold!.state, 'online');
-      expect(controller.offlineHold!.revision, 1);
-
-      expect(await controller.enterOfflineHold(), isTrue);
-      expect(controller.offlineHold!.state, 'held');
-      expect(controller.offlineHold!.revision, 3);
-      expect(controller.offlineHold!.safeToDisconnect, isTrue);
-      expect(controller.offlineNotice, 'offline.held');
-
-      expect(await controller.resumeOfflineHold(), isTrue);
-      expect(controller.offlineHold!.state, 'online');
-      expect(controller.offlineHold!.revision, 6);
-      expect(controller.offlineHold!.safeToDisconnect, isFalse);
-      expect(controller.offlineNotice, 'offline.resumed');
-    },
-  );
-
-  test(
-    'Offline hold stale CAS reconciles to the current runtime state',
-    () async {
-      final api = PreviewControlApi();
-      final controller = WorkbenchController(
-        api: api,
-        terminalCommands: PreviewTerminalCommandService(),
-        previewMode: true,
-        closeRuntime: api.close,
-      );
-      addTearDown(controller.dispose);
-
-      await controller.initialize();
-      final stale = controller.offlineHold!;
-      final external = await api.enterOfflineHold(stale);
-      expect(external.revision, 3);
-
-      expect(await controller.enterOfflineHold(), isFalse);
-      expect(controller.offlineError, 'revision_conflict (409)');
-      expect(controller.offlineHold!.state, 'held');
-      expect(controller.offlineHold!.revision, external.revision);
-      expect(controller.offlineHold!.safeToDisconnect, isTrue);
-    },
-  );
-
-  test(
     'rule save remains fenced by the revision the draft started from',
     () async {
       final api = PreviewControlApi();

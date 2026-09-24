@@ -120,6 +120,10 @@ func (handler router) ServeHTTP(writer http.ResponseWriter, request *http.Reques
 			return
 		}
 		handler.manual.ServeHTTP(writer, request, handler.manualOwner)
+	case request.URL.Path == "/api/v1/offline-hold" ||
+		strings.HasPrefix(request.URL.Path, "/api/v1/offline-hold/"):
+		// The Runtime-wide Hold must not be controlled through multi-user Web.
+		serverProblem(writer, http.StatusNotFound, "server_route_not_found")
 	case strings.HasPrefix(request.URL.Path, "/api/v1/"):
 		if !validAdminTransport(request, handler.scheme) || handler.application == nil {
 			serverProblem(writer, http.StatusForbidden, "server_admin_transport_rejected")

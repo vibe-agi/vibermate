@@ -13,7 +13,6 @@ import 'code_library_view.dart';
 import 'endpoints_view.dart';
 import 'environments_view.dart';
 import 'network_view.dart';
-import 'offline_hold_view.dart';
 import 'provider_accounts_view.dart';
 import 'settings_view.dart';
 import 'usage_dashboard_view.dart';
@@ -254,12 +253,6 @@ final class _TitleBar extends StatelessWidget {
                   ),
                 const SizedBox(width: ViberSpacing.sm),
               ],
-              OfflineHoldCommand(
-                controller: controller,
-                copy: copy,
-                compact: true,
-              ),
-              const SizedBox(width: ViberSpacing.xs),
               _ApprovalAttention(
                 controller: controller,
                 copy: copy,

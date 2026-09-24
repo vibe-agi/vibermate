@@ -1661,21 +1661,6 @@ final class RuntimeStatus {
   final DateTime? stoppedAt;
   final String? stopReasonCode;
 
-  RuntimeStatus withOfflineHold(OfflineHoldSnapshot value) => RuntimeStatus(
-    ready: ready,
-    state: state,
-    host: host,
-    schemaRevision: schemaRevision,
-    storage: storage,
-    environmentProjection: environmentProjection,
-    unavailableEnvironments: unavailableEnvironments,
-    offlineHold: value,
-    instanceId: instanceId,
-    startedAt: startedAt,
-    stoppedAt: stoppedAt,
-    stopReasonCode: stopReasonCode,
-  );
-
   bool get healthy => ready && state == 'initialized' && storage == 'healthy';
 }
 

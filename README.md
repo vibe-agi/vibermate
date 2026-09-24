@@ -178,7 +178,6 @@ the recovery key rotates after use.
   service and account.
 - Preview, edit, and test built-in JavaScript transforms before publishing.
 - Select an upstream account from the authenticated ViberMate login name.
-- Hold new external work before disconnecting a machine or Runtime.
 
 ![ViberMate script library](https://vibe-agi.github.io/images/vibermate/script-library-2400.webp)
 

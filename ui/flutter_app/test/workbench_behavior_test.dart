@@ -526,14 +526,10 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(find.byKey(const Key('offline-hold-command')), findsOneWidget);
+    expect(find.byKey(const Key('offline-hold-command')), findsNothing);
     expect(find.byKey(const Key('approval-attention')), findsOneWidget);
     expect(find.byIcon(Icons.science_outlined), findsOneWidget);
     expect(find.byIcon(Icons.refresh), findsOneWidget);
-    expect(
-      tester.getSize(find.byKey(const Key('offline-hold-command'))).height,
-      ViberMetrics.controlHeight,
-    );
     expect(
       tester.getSize(find.byKey(const Key('approval-attention'))).height,
       ViberMetrics.controlHeight,
@@ -553,12 +549,6 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.bySemanticsLabel(RegExp(r'^Traffic\s+⌘1$')), findsOneWidget);
-    expect(
-      find.bySemanticsLabel(
-        RegExp(r'^Prepare to disconnect · Online operation$'),
-      ),
-      findsOneWidget,
-    );
     final scaffoldContext = tester.element(find.byType(Scaffold).first);
     final theme = Theme.of(scaffoldContext);
     final colors = theme.brightness == Brightness.dark
@@ -585,63 +575,6 @@ void main() {
     expect(FocusManager.instance.primaryFocus, isNotNull);
     expect(tester.takeException(), isNull);
     semantics.dispose();
-  });
-
-  testWidgets('Offline protection requires review before traffic changes', (
-    tester,
-  ) async {
-    await tester.binding.setSurfaceSize(const Size(1180, 760));
-    addTearDown(() => tester.binding.setSurfaceSize(null));
-    await tester.pumpWidget(
-      const ViberMateApp(previewMode: true, preferChinese: false),
-    );
-    await tester.pumpAndSettle();
-
-    final command = find.byKey(const Key('offline-hold-command'));
-    expect(command, findsOneWidget);
-    expect(
-      find.bySemanticsLabel(
-        RegExp(r'^Prepare to disconnect · Online operation$'),
-      ),
-      findsOneWidget,
-    );
-
-    await tester.tap(command);
-    await tester.pumpAndSettle();
-    expect(find.byKey(const Key('offline-confirmation')), findsOneWidget);
-    expect(find.text('Prepare to disconnect?'), findsOneWidget);
-    expect(find.byKey(const Key('offline-confirm-action')), findsOneWidget);
-    await tester.tap(find.text('Cancel').last);
-    await tester.pumpAndSettle();
-    expect(
-      find.bySemanticsLabel(
-        RegExp(r'^Prepare to disconnect · Online operation$'),
-      ),
-      findsOneWidget,
-    );
-
-    await tester.tap(command);
-    await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const Key('offline-confirm-action')));
-    await tester.pumpAndSettle();
-    expect(
-      find.bySemanticsLabel(RegExp(r'^Resume online · Safe to disconnect$')),
-      findsOneWidget,
-    );
-
-    await tester.tap(command);
-    await tester.pumpAndSettle();
-    expect(find.text('Resume external work?'), findsOneWidget);
-    await tester.tap(find.byKey(const Key('offline-confirm-action')));
-    await tester.pumpAndSettle();
-    expect(
-      find.bySemanticsLabel(
-        RegExp(r'^Prepare to disconnect · Online operation$'),
-      ),
-      findsOneWidget,
-    );
-    await tester.pumpWidget(const SizedBox.shrink());
-    await tester.pump();
   });
 
   testWidgets('workbench navigation is grouped into three user task areas', (
@@ -757,7 +690,7 @@ void main() {
     expect(find.text('Retry'), findsOneWidget);
   });
 
-  testWidgets('390px Chinese Offline protection stays operable', (
+  testWidgets('390px Chinese Safety settings has no Offline Hold control', (
     tester,
   ) async {
     await tester.binding.setSurfaceSize(const Size(390, 760));
@@ -770,18 +703,10 @@ void main() {
     await tester.tap(find.byIcon(Icons.settings_outlined).first);
     await tester.pumpAndSettle();
     await _openSettingsTab(tester, const Key('settings-tab-safety'));
-    expect(find.byKey(const Key('offline-settings-panel')), findsOneWidget);
-    expect(find.text('断网保护'), findsOneWidget);
-    expect(find.text('联网运行'), findsOneWidget);
-    final action = find.byKey(const Key('offline-settings-action'));
-    await tester.ensureVisible(action);
-    await tester.tap(action);
-    await tester.pumpAndSettle();
-    expect(find.text('准备断网？'), findsOneWidget);
-    expect(find.byKey(const Key('offline-confirm-action')), findsOneWidget);
+    expect(find.byKey(const Key('offline-settings-panel')), findsNothing);
+    expect(find.text('断网保护'), findsNothing);
+    expect(find.text('准备断网'), findsNothing);
     expect(tester.takeException(), isNull);
-    await tester.tap(find.text('取消').last);
-    await tester.pumpAndSettle();
 
     await tester.pumpWidget(const SizedBox.shrink());
     await tester.pump();

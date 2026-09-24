@@ -44,6 +44,26 @@ func TestRouterBoundsOrdinaryRequestsButLeavesProxyStreamsLongLived(t *testing.T
 	}
 }
 
+func TestServerRouterDoesNotExposeRuntimeWideOfflineHold(t *testing.T) {
+	t.Parallel()
+	handler := router{scheme: "http"}
+	for _, path := range []string{
+		"/api/v1/offline-hold",
+		"/api/v1/offline-hold/actions/enter",
+		"/api/v1/offline-hold/actions/resume",
+	} {
+		for _, method := range []string{http.MethodGet, http.MethodPost} {
+			response := httptest.NewRecorder()
+			request := httptest.NewRequest(method, path, nil)
+			request.Header.Set("Authorization", "Bearer owner-or-member")
+			handler.ServeHTTP(response, request)
+			if response.Code != http.StatusNotFound {
+				t.Errorf("%s %s: status = %d, want 404", method, path, response.Code)
+			}
+		}
+	}
+}
+
 type deadlineResponseWriter struct {
 	*httptest.ResponseRecorder
 	readDeadlines  []time.Time
