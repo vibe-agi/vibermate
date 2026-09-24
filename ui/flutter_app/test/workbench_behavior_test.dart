@@ -3491,6 +3491,35 @@ void main() {
     await tester.pump();
   });
 
+  testWidgets('blind forwarding does not claim the payload was encrypted', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1180, 760));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(
+      const ViberMateApp(previewMode: true, preferChinese: false),
+    );
+    await tester.pumpAndSettle();
+    await _openNetwork(tester);
+    await tester.tap(find.byKey(const Key('network-tab-connections')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('api.anthropic.com:443').first);
+    await tester.pumpAndSettle();
+
+    final details = find.byKey(
+      const Key('connection-evidence-table-connection-1'),
+    );
+    expect(details, findsOneWidget);
+    expect(
+      find.descendant(
+        of: details,
+        matching: find.text('Content not inspected'),
+      ),
+      findsOneWidget,
+    );
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets(
     'network decisions stay neutral and loaded evidence can be filtered',
     (tester) async {
