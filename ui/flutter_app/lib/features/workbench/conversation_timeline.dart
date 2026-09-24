@@ -1083,6 +1083,15 @@ final class _ExchangeEvidencePanel extends StatelessWidget {
             _FailureNotice(
               diagnosis: detail.diagnosis,
               result: detail.processingTrace.result,
+              providerErrorClass: detail.processingTrace.attempts
+                  .where(
+                    (attempt) =>
+                        attempt.purpose == 'provider_attempt' &&
+                        attempt.terminal &&
+                        attempt.outcome == 'failed',
+                  )
+                  .lastOrNull
+                  ?.errorClass,
               copy: copy,
             ),
           if (content.state == 'not_recorded')
@@ -1202,7 +1211,7 @@ final class _ExchangeEvidencePanel extends StatelessWidget {
               ),
             if (content.response case final response?)
               _ResponseCard(id: activity.id, response: response, copy: copy)
-            else
+            else if (detail.status == 'pending')
               _PendingResponse(copy: copy),
           ],
           const SizedBox(height: 3),
@@ -4042,22 +4051,32 @@ final class _FailureNotice extends StatelessWidget {
   const _FailureNotice({
     required this.diagnosis,
     required this.result,
+    required this.providerErrorClass,
     required this.copy,
   });
 
   final ExchangeDiagnosis? diagnosis;
   final String result;
+  final String? providerErrorClass;
   final AppCopy copy;
 
   @override
   Widget build(BuildContext context) {
-    final failure = result == 'provider_status_rejected'
-        ? switch (diagnosis?.providerStatus) {
-            401 || 403 => 'provider_status_rejected_auth',
-            429 => 'provider_status_rejected_rate_limit',
-            _ => result,
-          }
-        : result;
+    final failure = switch (result) {
+      'provider_status_rejected' => switch (diagnosis?.providerStatus) {
+        401 || 403 => 'provider_status_rejected_auth',
+        429 => 'provider_status_rejected_rate_limit',
+        _ => result,
+      },
+      'provider_transport_failed' => switch (providerErrorClass) {
+        'dns_failed' => 'provider_transport_dns',
+        'tls_verification_failed' => 'provider_transport_tls',
+        'connection_failed' => 'provider_transport_connection',
+        'transport_timeout' => 'provider_transport_timeout',
+        _ => result,
+      },
+      _ => result,
+    };
     final titleKey = 'exchange.failure.$failure.title';
     final actionKey = 'exchange.failure.$failure.action';
     final title =
@@ -4073,6 +4092,8 @@ final class _FailureNotice extends StatelessWidget {
       result,
       if (diagnosis?.providerStatus case final status?) '$status',
       if (location.isNotEmpty) location,
+      if (result == 'provider_transport_failed' && failure != result)
+        providerErrorClass!,
     ].join(' · ');
     return Container(
       width: double.infinity,

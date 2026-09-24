@@ -2403,7 +2403,7 @@ void main() {
   });
 
   testWidgets(
-    'transport failure names the upstream boundary without blaming proxy',
+    'transport failure names the observed connection stage without blaming proxy',
     (tester) async {
       await tester.binding.setSurfaceSize(const Size(1180, 760));
       addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -2420,15 +2420,16 @@ void main() {
       await tester.tap(turn);
       await tester.pumpAndSettle();
       expect(
-        find.text('The connection to the upstream service failed.'),
+        find.text('The outbound connection failed or was interrupted.'),
         findsOneWidget,
       );
       expect(
         find.text(
-          'Open the upstream attempt below to see the recorded failure stage, then check that network path and retry.',
+          'Check the selected network exit, upstream address, and firewall path, then retry.',
         ),
         findsOneWidget,
       );
+      expect(find.text('Waiting for the terminal response…'), findsNothing);
       expect(find.textContaining('provider_transport_failed'), findsNothing);
       await tester.tap(
         find.byKey(
@@ -2440,6 +2441,7 @@ void main() {
         find.textContaining('provider_transport_failed · upstream'),
         findsOneWidget,
       );
+      expect(find.textContaining('connection_failed'), findsOneWidget);
     },
   );
 

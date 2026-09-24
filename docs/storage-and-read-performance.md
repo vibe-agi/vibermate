@@ -235,10 +235,11 @@ VIBERMATE_PLAYWRIGHT_MODULE=/absolute/path/to/node_modules/playwright \
 ```
 
 如使用 Playwright 自带的 Chromium，可省略 `VIBERMATE_BROWSER_CHANNEL`。
-脚本输出首次样本、warm 分位数及每个可观察 API 边界的 JSON。小样本主要受
+脚本输出首次样本、warm 分位数及每个可观察 API 边界的 JSON，另测两种大正文
+展开。末尾关闭合成上游，断言真实 Server 记录的 `provider_transport_failed` /
+`connection_failed` 与浏览器打开失败 Exchange 后的提示一致。小样本主要受
 1 秒可见证据轮询周期和采样相位影响；80 ms 是浏览器侧逐请求注入的延迟，
-**不等于实测远程部署**，表中大正文也各只有一次观测。大正文在此只验证默认
-折叠视图，新建 Exchange 的展开全文另由上面的 Flutter/Chrome 合成渲染测试覆盖。
+**不等于实测远程部署**，表中大正文也各只有一次观测。
 这里没有把浏览器可访问性树出现冒称为 GPU paint 时间，也没有分离证据提交、
 索引和 Flutter 解码的耗时，因此 Task 1 的真实 App、远程 Web 与完整分段验收
 仍未完成。

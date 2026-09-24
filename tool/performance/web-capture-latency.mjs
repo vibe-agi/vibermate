@@ -40,7 +40,7 @@ async function json(response, expected, label) {
   return value;
 }
 
-async function send(grant, rootPEM, marker) {
+async function send(grant, rootPEM, marker, expectSuccess = true) {
   const proxy = new URL(grant.proxyAddress);
   const credential = Buffer.from(grant.proxyUsername + ':' + grant.proxyPassword).toString('base64');
   const tunnel = await new Promise((resolve, reject) => {
@@ -80,7 +80,8 @@ async function send(grant, rootPEM, marker) {
       'Content-Length: ' + Buffer.byteLength(body) + '\r\n' +
       'Connection: close\r\n\r\n' + body);
   });
-  assert.ok(response.startsWith('HTTP/1.1 200 OK'));
+  if (expectSuccess) assert.ok(response.startsWith('HTTP/1.1 200 OK'));
+  return response;
 }
 
 const percentile = (values, fraction) => {
@@ -311,6 +312,51 @@ try {
     await page.evaluate(() => new Promise(requestAnimationFrame));
     const paragraphEndToVisibleMs = performance.now() - paragraphCompleted;
     const paragraphExpandToVisibleMs = await expandCurrent();
+    let failureDiagnosis = null;
+    if (label === 'delayed') {
+      const stoppedProvider = provider;
+      provider = null;
+      stoppedProvider.closeAllConnections();
+      await new Promise(resolve => stoppedProvider.close(resolve));
+      const failureMarker = 'SYNTHETIC_PERF_CONNECTION_FAILURE';
+      await send(grant, rootCA.certificatePem, failureMarker, false);
+      let failed;
+      for (let index = 0; index < 50 && failed == null; index++) {
+        const activities = await json(await fetch(origin + '/api/v1/activities?manualCaptureId=' +
+          grant.capture.id + '&limit=10', {
+          headers: { Origin: origin, Authorization: 'Bearer ' + owner.readToken },
+        }), 200, 'failure activity');
+        failed = activities.items.find(item =>
+          item.requestPreview?.text?.includes(failureMarker) && item.status === 'failed');
+        if (failed == null) await new Promise(resolve => setTimeout(resolve, 100));
+      }
+      assert.ok(failed, 'connection failure was not recorded');
+      assert.equal(failed.reasonCode, 'provider_transport_failed');
+      const detail = await json(await fetch(origin + '/api/v1/exchanges/' +
+        encodeURIComponent(failed.id) + '?contentView=incremental', {
+        headers: { Origin: origin, Authorization: 'Bearer ' + owner.readToken },
+      }), 200, 'failure detail');
+      const attempt = detail.processingTrace.attempts.findLast(item =>
+        item.purpose === 'provider_attempt');
+      assert.equal(attempt?.errorClass, 'connection_failed');
+      const directory = await json(await fetch(origin + '/api/v1/conversations?manualCaptureId=' +
+        grant.capture.id + '&limit=200', {
+        headers: { Origin: origin, Authorization: 'Bearer ' + owner.readToken },
+      }), 200, 'failure directory');
+      assert.equal(directory.items[0]?.conversation?.id, 'exchange:' + failed.id);
+      const failureCard = page.locator('flt-semantics[role="button"][aria-label*="' +
+        failureMarker + '"]').last();
+      await failureCard.waitFor({ timeout: 10_000 });
+      await failureCard.click();
+      const failureNotice = page.locator(
+        'flt-semantics[aria-label*="The outbound connection failed or was interrupted."]',
+      ).last();
+      await failureNotice.waitFor({ timeout: 10_000 });
+      assert.ok(!(await failureNotice.getAttribute('aria-label'))
+        .includes('Waiting for the terminal response'));
+      failureDiagnosis = { reasonCode: failed.reasonCode, errorClass: attempt.errorClass,
+        browserMessageVisible: true };
+    }
     await page.close();
     const warm = values.slice(1, shortSamples);
     return { label, latencyMs, samples: values.length,
@@ -321,7 +367,7 @@ try {
       selectedApiToVisible: stats(warm, 'selectedApiToVisibleMs'),
       long9k: values[shortSamples], long151k: values[shortSamples + 1],
       expandToVisibleMs, paragraphBytes: paragraphPrompt.length,
-      paragraphEndToVisibleMs, paragraphExpandToVisibleMs };
+      paragraphEndToVisibleMs, paragraphExpandToVisibleMs, failureDiagnosis };
   }
 
   const local = await measure(0, 'local');

@@ -611,9 +611,25 @@ final class AppCopy {
     'exchange.failure.provider_response_idle.action':
         'Check the upstream service and network path, then retry the Agent request.',
     'exchange.failure.provider_transport_failed.title':
-        'The connection to the upstream service failed.',
+        'The upstream network request failed; the exact stage is unknown.',
     'exchange.failure.provider_transport_failed.action':
-        'Open the upstream attempt below to see the recorded failure stage, then check that network path and retry.',
+        'Inspect the outbound attempt and selected network exit, then check upstream reachability and retry.',
+    'exchange.failure.provider_transport_dns.title':
+        'Name lookup failed on the outbound path.',
+    'exchange.failure.provider_transport_dns.action':
+        'Check the upstream address and DNS settings of the selected network exit, then retry.',
+    'exchange.failure.provider_transport_tls.title':
+        'TLS certificate verification failed on the outbound path.',
+    'exchange.failure.provider_transport_tls.action':
+        'Check the upstream host and trusted certificate chain; if an exit proxy is used, inspect its certificate. Do not disable verification.',
+    'exchange.failure.provider_transport_connection.title':
+        'The outbound connection failed or was interrupted.',
+    'exchange.failure.provider_transport_connection.action':
+        'Check the selected network exit, upstream address, and firewall path, then retry.',
+    'exchange.failure.provider_transport_timeout.title':
+        'The outbound request timed out.',
+    'exchange.failure.provider_transport_timeout.action':
+        'Check upstream reachability and the selected network exit or proxy, then retry.',
     'exchange.failure.provider_status_rejected.title':
         'The upstream service refused this request.',
     'exchange.failure.provider_status_rejected.action':
@@ -2604,9 +2620,21 @@ final class AppCopy {
     'exchange.failure.provider_response_idle.title': '上游服务未能及时响应。',
     'exchange.failure.provider_response_idle.action':
         '检查上游服务与网络路径，然后重试 Agent 请求。',
-    'exchange.failure.provider_transport_failed.title': '到上游服务的网络连接失败。',
+    'exchange.failure.provider_transport_failed.title': '上游网络请求失败，具体阶段尚未确认。',
     'exchange.failure.provider_transport_failed.action':
-        '展开下方上游尝试，查看记录的失败阶段；检查对应网络路径后重试。',
+        '查看下方外发尝试与所选网络出口，检查上游是否可达后重试。',
+    'exchange.failure.provider_transport_dns.title': '外发路径的域名解析失败。',
+    'exchange.failure.provider_transport_dns.action':
+        '检查上游地址及所选网络出口的 DNS 设置，然后重试。',
+    'exchange.failure.provider_transport_tls.title': '外发路径的 TLS 证书验证失败。',
+    'exchange.failure.provider_transport_tls.action':
+        '核对上游地址和证书信任链；若使用出口代理，还需检查代理证书。不要关闭证书验证。',
+    'exchange.failure.provider_transport_connection.title': '外发连接建立失败或传输中断。',
+    'exchange.failure.provider_transport_connection.action':
+        '检查所选网络出口、上游地址和防火墙路径，然后重试。',
+    'exchange.failure.provider_transport_timeout.title': '外发请求超时。',
+    'exchange.failure.provider_transport_timeout.action':
+        '检查上游是否可达，以及所选网络出口或代理，然后重试。',
     'exchange.failure.provider_status_rejected.title': '上游服务拒绝了本次请求。',
     'exchange.failure.provider_status_rejected.action':
         '先查看上游尝试中的 HTTP 状态和实际使用的账号，再决定如何重试。',
