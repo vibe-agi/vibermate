@@ -25,6 +25,27 @@ import (
 )
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "backup-data" {
+		if err := runBackupData(os.Args[2:]); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
+	if len(os.Args) > 1 && os.Args[1] == "restore-data" {
+		if err := runRestoreData(os.Args[2:]); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
+	if len(os.Args) > 1 && os.Args[1] == "verify-backup" {
+		if err := runVerifyBackup(os.Args[2:]); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
 	if len(os.Args) > 1 && os.Args[1] == "move-data" {
 		if err := runMoveData(os.Args[2:]); err != nil {
 			fmt.Fprintln(os.Stderr, err)
@@ -124,8 +145,14 @@ Server-local bootstrap commands:
   vibermated server recovery-key [--data-dir /absolute/path]
   vibermated server ca-certificate [--data-dir /absolute/path]
 
+Offline data commands (stop the Runtime first):
+  vibermated backup-data --source /absolute/data --target /absolute/new-backup
+  vibermated verify-backup --source /absolute/backup
+  vibermated restore-data --source /absolute/backup --target /absolute/new-data
+
 See docs/deployment.md for existing certificate files, containers, port
-forwarding, private-CA trust and security boundaries.
+forwarding, private-CA trust and security boundaries. See
+docs/backup-and-restore.md for backup scope and credential exclusions.
 `
 
 func runServerRecoveryKey(arguments []string) {

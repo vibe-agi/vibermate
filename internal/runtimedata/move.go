@@ -1,5 +1,6 @@
-// Package runtimedata owns exclusive use and offline relocation of a complete
-// runtime data directory. It never deletes the source or changes App settings.
+// Package runtimedata owns exclusive use, relocation, backup and restore of a
+// stopped Runtime data directory. It never deletes the source or changes App
+// settings.
 package runtimedata
 
 import (
@@ -13,18 +14,22 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/vibe-agi/vibermate/internal/instanceguard"
+	"github.com/vibe-agi/vibermate/internal/runtimepersistence"
 	_ "modernc.org/sqlite"
 )
 
 const lockName = "runtime-data.lock"
 
 var (
-	ErrTarget     = errors.New("storage_target_invalid")
-	ErrBusy       = errors.New("storage_in_use")
-	ErrCopy       = errors.New("storage_copy_failed")
-	ErrValidation = errors.New("storage_validation_failed")
+	ErrTarget             = errors.New("storage_target_invalid")
+	ErrBusy               = errors.New("storage_in_use")
+	ErrCopy               = errors.New("storage_copy_failed")
+	ErrValidation         = errors.New("storage_validation_failed")
+	ErrBackupInvalid      = errors.New("backup_validation_failed")
+	ErrBackupIncompatible = errors.New("backup_incompatible")
 )
 
 // Acquire must outlive every writer, including SQLite and certificate stores.
@@ -53,6 +58,24 @@ func Acquire(directory string) (*instanceguard.Guard, error) {
 // The caller must stop its runtime before calling and only select target after
 // success. WAL is copied too; SHM and kernel lock files are not persistent data.
 func Copy(ctx context.Context, source, target string) error {
+	return copyDataDirectory(ctx, source, target, dataCopyMove, time.Time{})
+}
+
+type dataCopyKind uint8
+
+const (
+	dataCopyMove dataCopyKind = iota
+	dataCopyBackup
+	dataCopyRestore
+)
+
+func copyDataDirectory(
+	ctx context.Context,
+	source string,
+	target string,
+	kind dataCopyKind,
+	createdAt time.Time,
+) error {
 	if ctx == nil || !filepath.IsAbs(source) || !filepath.IsAbs(target) ||
 		filepath.Clean(source) != source || filepath.Clean(target) != target ||
 		source == string(filepath.Separator) || target == string(filepath.Separator) {
@@ -77,15 +100,22 @@ func Copy(ctx context.Context, source, target string) error {
 		return ErrCopy
 	}
 	defer guard.Release()
-	// An attached server can hold its host lock beyond the Runtime lifetime.
-	serverGuard, err := instanceguard.Acquire(filepath.Join(source, "server.lock"))
-	if err != nil {
-		if errors.Is(err, instanceguard.ErrAlreadyOwned) {
-			return ErrBusy
+	if kind != dataCopyRestore {
+		// An attached server can hold its host lock beyond the Runtime lifetime.
+		serverGuard, err := instanceguard.Acquire(filepath.Join(source, "server.lock"))
+		if err != nil {
+			if errors.Is(err, instanceguard.ErrAlreadyOwned) {
+				return ErrBusy
+			}
+			return ErrCopy
 		}
-		return ErrCopy
+		defer serverGuard.Release()
 	}
-	defer serverGuard.Release()
+	if kind == dataCopyRestore {
+		if err := validateBackupLocked(ctx, source); err != nil {
+			return err
+		}
+	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -108,7 +138,10 @@ func Copy(ctx context.Context, source, target string) error {
 		if err != nil || rel == "." {
 			return err
 		}
-		if rel == lockName || rel == "server.lock" || rel == "runtime.db-shm" {
+		if skip, subtree := skipDataCopyEntry(kind, rel, entry); skip {
+			if subtree {
+				return fs.SkipDir
+			}
 			return nil
 		}
 		info, err := entry.Info()
@@ -131,6 +164,24 @@ func Copy(ctx context.Context, source, target string) error {
 	if err := validateDatabase(ctx, filepath.Join(target, "runtime.db")); err != nil {
 		return ErrValidation
 	}
+	if kind != dataCopyMove {
+		state, err := runtimepersistence.ValidateOfflineDatabase(
+			ctx, filepath.Join(target, "runtime.db"),
+		)
+		if err != nil {
+			if errors.Is(err, runtimepersistence.ErrSchemaBaselineMismatch) {
+				return ErrBackupIncompatible
+			}
+			return ErrBackupInvalid
+		}
+		if kind == dataCopyBackup {
+			if err := writeBackupManifest(ctx, target, createdAt, state); err != nil {
+				return err
+			}
+		} else if err := validateRestoredFiles(ctx, source, target); err != nil {
+			return err
+		}
+	}
 	// Flush directory entries before reporting a destination safe to select.
 	if err := filepath.WalkDir(target, func(path string, entry fs.DirEntry, err error) error {
 		if err != nil || !entry.IsDir() {
@@ -152,6 +203,30 @@ func Copy(ctx context.Context, source, target string) error {
 		return ErrCopy
 	}
 	return nil
+}
+
+func skipDataCopyEntry(
+	kind dataCopyKind,
+	rel string,
+	entry fs.DirEntry,
+) (skip bool, subtree bool) {
+	if rel == lockName || rel == "server.lock" || rel == "runtime.db-shm" {
+		return true, entry.IsDir()
+	}
+	if kind == dataCopyBackup &&
+		(dataSecretDirectory(rel, serverSecretDirectory) ||
+			dataSecretDirectory(rel, developmentSecretDirectory)) {
+		return true, entry.IsDir()
+	}
+	if kind == dataCopyRestore && rel == backupManifestName {
+		return true, false
+	}
+	return false, false
+}
+
+func dataSecretDirectory(rel, directory string) bool {
+	return rel == directory ||
+		strings.HasPrefix(rel, directory+string(filepath.Separator))
 }
 
 func within(parent, child string) bool {

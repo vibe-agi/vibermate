@@ -71,6 +71,10 @@ final class WorkbenchController extends ChangeNotifier
     Future<void> Function()? restartRuntime,
     this.chooseStorageDirectory,
     this.moveStorage,
+    this.chooseStorageBackupDirectory,
+    this.backupStorage,
+    this.chooseStorageRestore,
+    this.restoreStorage,
     this.storageMoveNotice,
     WorkbenchPreferences initialPreferences = const WorkbenchPreferences(),
     WorkbenchPreferencesStore preferencesStore =
@@ -118,6 +122,11 @@ final class WorkbenchController extends ChangeNotifier
   final Future<void> Function()? _restartRuntime;
   final Future<String?> Function()? chooseStorageDirectory;
   final Future<void> Function(String target)? moveStorage;
+  final Future<String?> Function()? chooseStorageBackupDirectory;
+  final Future<void> Function(String target)? backupStorage;
+  final Future<StorageRestoreSelection?> Function()? chooseStorageRestore;
+  final Future<void> Function(StorageRestoreSelection selection)?
+  restoreStorage;
   String? storageMoveNotice;
   String? storageMoveFailure;
   bool storageMoving = false;
@@ -1101,13 +1110,31 @@ final class WorkbenchController extends ChangeNotifier
   }
 
   Future<void> relocateStorage(String target) async {
-    if (_disposed || storageMoving || moveStorage == null) return;
+    final action = moveStorage;
+    if (action == null) return;
+    await _runStorageAction(() => action(target));
+  }
+
+  Future<void> createStorageBackup(String target) async {
+    final action = backupStorage;
+    if (action == null) return;
+    await _runStorageAction(() => action(target));
+  }
+
+  Future<void> restoreStorageBackup(StorageRestoreSelection selection) async {
+    final action = restoreStorage;
+    if (action == null) return;
+    await _runStorageAction(() => action(selection));
+  }
+
+  Future<void> _runStorageAction(Future<void> Function() action) async {
+    if (_disposed || storageMoving) return;
     storageMoving = true;
     storageMoveFailure = null;
     storageMoveNotice = null;
     notifyListeners();
     try {
-      await moveStorage!(target);
+      await action();
     } catch (error) {
       if (_disposed) return;
       storageMoveFailure = storageMoveErrorKey(error);
@@ -1120,11 +1147,30 @@ final class WorkbenchController extends ChangeNotifier
   }
 
   Future<String?> pickStorageDirectory() async {
-    if (_disposed || storageMoving || chooseStorageDirectory == null) {
+    return _pickStoragePath(chooseStorageDirectory);
+  }
+
+  Future<String?> pickStorageBackupDirectory() async {
+    return _pickStoragePath(chooseStorageBackupDirectory);
+  }
+
+  Future<StorageRestoreSelection?> pickStorageRestore() async {
+    if (_disposed || storageMoving || chooseStorageRestore == null) return null;
+    try {
+      return await chooseStorageRestore!();
+    } catch (_) {
+      if (!_disposed) {
+        storageMoveFailure = 'settings.storage.picker_failed';
+        notifyListeners();
+      }
       return null;
     }
+  }
+
+  Future<String?> _pickStoragePath(Future<String?> Function()? picker) async {
+    if (_disposed || storageMoving || picker == null) return null;
     try {
-      return await chooseStorageDirectory!();
+      return await picker();
     } catch (_) {
       if (!_disposed) {
         storageMoveFailure = 'settings.storage.picker_failed';
@@ -1136,7 +1182,7 @@ final class WorkbenchController extends ChangeNotifier
 
   static String storageMoveErrorKey(Object error) {
     final code = error.toString();
-    return 'settings.storage.${const {'storage_target_invalid', 'storage_in_use', 'storage_copy_failed', 'storage_validation_failed', 'storage_settings_invalid'}.contains(code) ? code : 'storage_copy_failed'}';
+    return 'settings.storage.${const {'storage_target_invalid', 'storage_in_use', 'storage_copy_failed', 'storage_validation_failed', 'storage_settings_invalid', 'backup_validation_failed', 'backup_incompatible'}.contains(code) ? code : 'storage_copy_failed'}';
   }
 
   void openRuntimeUsersSettings() {

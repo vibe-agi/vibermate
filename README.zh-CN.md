@@ -70,8 +70,8 @@ vibermate run -- codex
 ## 独立 Server + Web（原生进程或容器）
 
 不用 Docker 也可以运行完整 Web 工作台。先区分“只在本机使用”和“其他设备接入”，
-原生进程与容器共享同一账号体系和证书规则。见[统一部署指南](docs/deployment.md)和
-[Docker 配置](docs/docker.md)。
+原生进程与容器共享同一账号体系和证书规则。见[统一部署指南](docs/deployment.md)、
+[备份与恢复指南](docs/backup-and-restore.md)和 [Docker 配置](docs/docker.md)。
 
 从[最新版本](https://github.com/vibe-agi/vibermate/releases/latest)下载
 `linux_x86_64` 或 `linux_arm64` 压缩包，使用 `SHA256SUMS-linux` 校验并解压。

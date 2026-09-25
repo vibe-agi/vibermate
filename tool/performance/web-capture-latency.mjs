@@ -333,13 +333,17 @@ try {
   await storagePanel.waitFor();
   const storageLabel = await storagePanel.getAttribute('aria-label');
   assert.ok(storageLabel?.includes('Checked ') &&
-    storageLabel.includes('not a folder on your browser'),
+    storageLabel.includes('not a folder on your browser') &&
+    storageLabel.includes('Stop the Server before running these commands'),
   'remote storage scope was not visible');
   assert.equal(await trialPage.locator('flt-semantics')
     .filter({ hasText: /^Change location$/ }).count(), 0,
   'remote Web offered a browser-local storage picker');
+  assert.equal(await trialPage.locator('flt-semantics[role="button"]')
+    .filter({ hasText: /^(Create|Restore) backup$/ }).count(), 0,
+  'remote Web offered an App-local backup picker');
   // Let dialog teardown and focus semantics settle before counting idle work.
-  await trialPage.waitForTimeout(2_000);
+  await trialPage.waitForTimeout(3_000);
   const idleResponses = [];
   const idlePending = [];
   trialPage.on('response', response => {
@@ -644,7 +648,7 @@ try {
     storage: { backend: storageSnapshot.backend,
       capacityState: storageSnapshot.capacityState,
       databaseBytes: storageSnapshot.databaseBytes,
-      browserPickerAbsent: true },
+      browserPickerAbsent: true, serverBackupCommandsVisible: true },
     local, delayed, browser: await browser.version(),
     runtime: process.platform + '/' + process.arch }));
 } finally {

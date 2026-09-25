@@ -150,6 +150,7 @@ final class _RuntimeBootstrapState extends State<_RuntimeBootstrap> {
   Object? _failure;
   String? _storageNotice;
   bool _storageMoving = false;
+  String? _storageProgressKey;
   bool _starting = true;
   bool _loginRequired = false;
   RuntimeLoginMode _loginMode = RuntimeLoginMode.signIn;
@@ -226,32 +227,30 @@ final class _RuntimeBootstrapState extends State<_RuntimeBootstrap> {
         storageMoveNotice: liveRuntime?.storageNotice ?? _storageNotice,
         moveStorage: liveRuntime?.moveStorage == null
             ? null
-            : (target) async {
-                final runtime = liveRuntime!;
-                await runtime.prepareStorageMove!(target);
-                _attempt += 1;
-                final previous = _controller;
-                if (mounted) {
-                  setState(() {
-                    _controller = null;
-                    _starting = true;
-                    _failure = null;
-                    _storageMoving = true;
-                  });
-                }
-                try {
-                  await runtime.moveStorage!(target);
-                  _storageNotice = 'settings.storage.moved';
-                } catch (error) {
-                  _storageNotice = WorkbenchController.storageMoveErrorKey(
-                    error,
-                  );
-                } finally {
-                  _storageMoving = false;
-                  previous?.dispose();
-                  if (mounted) await _start();
-                }
-              },
+            : (target) => _runOfflineStorageOperation(
+                prepare: () => liveRuntime!.prepareStorageMove!(target),
+                execute: () => liveRuntime!.moveStorage!(target),
+                progressKey: 'settings.storage.moving',
+                successNotice: 'settings.storage.moved',
+              ),
+        chooseStorageBackupDirectory: liveRuntime?.chooseStorageBackupDirectory,
+        backupStorage: liveRuntime?.backupStorage == null
+            ? null
+            : (target) => _runOfflineStorageOperation(
+                prepare: () => liveRuntime!.prepareStorageBackup!(target),
+                execute: () => liveRuntime!.backupStorage!(target),
+                progressKey: 'settings.storage.backing_up',
+                successNotice: 'settings.storage.backup_created',
+              ),
+        chooseStorageRestore: liveRuntime?.chooseStorageRestore,
+        restoreStorage: liveRuntime?.restoreStorage == null
+            ? null
+            : (selection) => _runOfflineStorageOperation(
+                prepare: () => liveRuntime!.prepareStorageRestore!(selection),
+                execute: () => liveRuntime!.restoreStorage!(selection),
+                progressKey: 'settings.storage.restoring',
+                successNotice: 'settings.storage.restore_completed',
+              ),
         restartRuntime: () async {
           // Invalidate the old watcher before asking the daemon to drain; the
           // next generation is intentionally started with a fresh attempt.
@@ -353,6 +352,37 @@ final class _RuntimeBootstrapState extends State<_RuntimeBootstrap> {
       _starting = false;
     });
     controller?.dispose();
+  }
+
+  Future<void> _runOfflineStorageOperation({
+    required Future<void> Function() prepare,
+    required Future<void> Function() execute,
+    required String progressKey,
+    required String successNotice,
+  }) async {
+    await prepare();
+    _attempt += 1;
+    final previous = _controller;
+    if (mounted) {
+      setState(() {
+        _controller = null;
+        _starting = true;
+        _failure = null;
+        _storageMoving = true;
+        _storageProgressKey = progressKey;
+      });
+    }
+    try {
+      await execute();
+      _storageNotice = successNotice;
+    } catch (error) {
+      _storageNotice = WorkbenchController.storageMoveErrorKey(error);
+    } finally {
+      _storageMoving = false;
+      _storageProgressKey = null;
+      previous?.dispose();
+      if (mounted) await _start();
+    }
   }
 
   void _setLoginMode(RuntimeLoginMode value) {
@@ -490,7 +520,7 @@ final class _RuntimeBootstrapState extends State<_RuntimeBootstrap> {
                   const SizedBox(height: 10),
                   Text(
                     _storageMoving
-                        ? copy('settings.storage.moving')
+                        ? copy(_storageProgressKey ?? 'settings.storage.moving')
                         : widget.previewMode
                         ? copy('bootstrap.preview')
                         : copy('bootstrap.live'),

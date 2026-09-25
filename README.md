@@ -78,7 +78,8 @@ The first account is the owner; later accounts are members.
 Native and container deployments use the same Web workbench and account model.
 Choose **this-computer access** or **access from other devices** first; installing
 Docker does not change which certificates or accounts you need. See the
-[deployment guide](docs/deployment.md) and [Docker configurations](docs/docker.md).
+[deployment guide](docs/deployment.md), [backup and restore guide](docs/backup-and-restore.md),
+and [Docker configurations](docs/docker.md).
 
 Download the `linux_x86_64` or `linux_arm64` archive from the
 [latest release](https://github.com/vibe-agi/vibermate/releases/latest), verify

@@ -77,6 +77,92 @@ void main() {
     },
   );
 
+  testWidgets('local backup and restore disclose scope before restarting', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(390, 900));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final calls = <String>[];
+    await tester.pumpWidget(
+      ViberMateApp(
+        previewMode: false,
+        preferChinese: false,
+        preferencesStore: const DiscardWorkbenchPreferencesStore(),
+        runtimeConnector: ({login}) async {
+          final api = PreviewControlApi();
+          return RuntimeConnection(
+            api: api,
+            terminalCommands: PreviewTerminalCommandService(),
+            close: api.close,
+            isClosed: () => false,
+            serverManagement: false,
+            terminalManagement: true,
+            rootTrustManagement: false,
+            targetLabel: 'Test Mac',
+            chooseStorageBackupDirectory: () async =>
+                '/Volumes/Archive/ViberMate Backup 20260926-120000',
+            prepareStorageBackup: (target) async {
+              calls.add('prepare-backup:$target');
+            },
+            backupStorage: (target) async {
+              calls.add('backup:$target');
+            },
+            chooseStorageRestore: () async => (
+              backup: '/Volumes/Archive/ViberMate Backup 20260926-120000',
+              target:
+                  '/Users/mira/Library/Application Support/io.vibermate.desktop.restored-20260926-121000',
+            ),
+            prepareStorageRestore: (selection) async {
+              calls.add(
+                'prepare-restore:${selection.backup}->${selection.target}',
+              );
+            },
+            restoreStorage: (selection) async {
+              calls.add('restore:${selection.backup}->${selection.target}');
+            },
+          );
+        },
+      ),
+    );
+    await tester.pumpAndSettle();
+    await _openSafetySettings(tester);
+
+    var backup = find.byKey(const Key('storage-create-backup'));
+    await Scrollable.ensureVisible(tester.element(backup), alignment: 0.5);
+    await tester.pumpAndSettle();
+    await tester.tap(backup);
+    await tester.pumpAndSettle();
+    expect(find.text('Create an offline backup?'), findsOneWidget);
+    expect(find.textContaining('Provider/OAuth credentials'), findsOneWidget);
+    await tester.tap(find.widgetWithText(TextButton, 'Cancel'));
+    await tester.pumpAndSettle();
+    expect(calls, isEmpty);
+
+    await tester.tap(backup);
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(FilledButton, 'Create backup'));
+    await tester.pumpAndSettle();
+    expect(calls, [
+      'prepare-backup:/Volumes/Archive/ViberMate Backup 20260926-120000',
+      'backup:/Volumes/Archive/ViberMate Backup 20260926-120000',
+    ]);
+    expect(find.textContaining('Verified backup created'), findsOneWidget);
+
+    final restore = find.byKey(const Key('storage-restore-backup'));
+    await Scrollable.ensureVisible(tester.element(restore), alignment: 0.5);
+    await tester.pumpAndSettle();
+    await tester.tap(restore);
+    await tester.pumpAndSettle();
+    expect(find.text('Restore this backup?'), findsOneWidget);
+    expect(find.textContaining('not overwritten'), findsOneWidget);
+    await tester.tap(find.widgetWithText(FilledButton, 'Verify and restore'));
+    await tester.pumpAndSettle();
+    expect(calls, hasLength(4));
+    expect(calls[2], startsWith('prepare-restore:/Volumes/Archive/'));
+    expect(calls[3], startsWith('restore:/Volumes/Archive/'));
+    expect(find.textContaining('previous directory remains'), findsOneWidget);
+  });
+
   testWidgets(
     'Web storage paths stay server-owned and cannot open a browser picker',
     (tester) async {
@@ -107,8 +193,16 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.byKey(const Key('storage-change-directory')), findsNothing);
+      expect(find.byKey(const Key('storage-create-backup')), findsNothing);
+      expect(find.byKey(const Key('storage-restore-backup')), findsNothing);
       expect(
         find.textContaining('not a folder on your browser'),
+        findsOneWidget,
+      );
+      expect(
+        find.textContaining(
+          "--source='/Users/mira/Library/Application Support",
+        ),
         findsOneWidget,
       );
     },

@@ -353,6 +353,37 @@ final class DesktopRuntime {
       throw const DesktopStorageFailure('storage_target_invalid');
     }
     await DesktopStorage.validateTarget(dataDirectory, target);
+    await _prepareOfflineStorageOperation();
+  }
+
+  Future<void> prepareStorageBackup(String target) async {
+    if (storage == null) {
+      throw const DesktopStorageFailure('storage_target_invalid');
+    }
+    await DesktopStorage.validateTarget(dataDirectory, target);
+    await _prepareOfflineStorageOperation();
+  }
+
+  Future<void> prepareStorageRestore(
+    ({String backup, String target}) selection,
+  ) async {
+    if (storage == null) {
+      throw const DesktopStorageFailure('storage_target_invalid');
+    }
+    await DesktopStorage.validateTarget(dataDirectory, selection.target);
+    final verified = await Process.run(
+      executable,
+      ['verify-backup', '--source=${selection.backup}'],
+      includeParentEnvironment: false,
+      environment: desktopDaemonEnvironment(Platform.environment),
+    );
+    if (verified.exitCode != 0) {
+      throw DesktopStorageFailure(_storageCommandFailure(verified));
+    }
+    await _prepareOfflineStorageOperation();
+  }
+
+  Future<void> _prepareOfflineStorageOperation() async {
     final dashboard = await api.loadDashboard();
     final wasOnline = dashboard.status.offlineHold.canEnter;
     final hold = wasOnline
@@ -380,33 +411,64 @@ final class DesktopRuntime {
 
   Future<void> moveStorage(String target) async {
     await close();
+    await _runStorageCommand('move-data', [
+      '--source=$dataDirectory',
+      '--target=$target',
+      '--app-cache-dir=$cacheDirectory',
+    ]);
+    await storage!.save(
+      DesktopStorageSelection(target, previous: dataDirectory),
+    );
+  }
+
+  Future<void> backupStorage(String target) async {
+    await close();
+    await _runStorageCommand('backup-data', [
+      '--source=$dataDirectory',
+      '--target=$target',
+    ]);
+  }
+
+  Future<void> restoreStorage(
+    ({String backup, String target}) selection,
+  ) async {
+    await close();
+    await _runStorageCommand('restore-data', [
+      '--source=${selection.backup}',
+      '--target=${selection.target}',
+    ]);
+    await storage!.save(
+      DesktopStorageSelection(selection.target, previous: dataDirectory),
+    );
+  }
+
+  Future<void> _runStorageCommand(
+    String command,
+    List<String> arguments,
+  ) async {
     final result = await Process.run(
       executable,
-      [
-        'move-data',
-        '--source=$dataDirectory',
-        '--target=$target',
-        '--app-cache-dir=$cacheDirectory',
-      ],
+      [command, ...arguments],
       includeParentEnvironment: false,
       environment: desktopDaemonEnvironment(Platform.environment),
     );
     if (result.exitCode != 0) {
-      final code = result.stderr.toString().trim();
-      throw DesktopStorageFailure(
-        const {
-              'storage_target_invalid',
-              'storage_in_use',
-              'storage_copy_failed',
-              'storage_validation_failed',
-            }.contains(code)
-            ? code
-            : 'storage_copy_failed',
-      );
+      throw DesktopStorageFailure(_storageCommandFailure(result));
     }
-    await storage!.save(
-      DesktopStorageSelection(target, previous: dataDirectory),
-    );
+  }
+
+  String _storageCommandFailure(ProcessResult result) {
+    final code = result.stderr.toString().trim();
+    return const {
+          'storage_target_invalid',
+          'storage_in_use',
+          'storage_copy_failed',
+          'storage_validation_failed',
+          'backup_validation_failed',
+          'backup_incompatible',
+        }.contains(code)
+        ? code
+        : 'storage_copy_failed';
   }
 
   Future<void> close() => _closeFuture ??= _close();

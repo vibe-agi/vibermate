@@ -2618,27 +2618,50 @@ final class _StorageDisclosure extends StatelessWidget {
           if (!controller.terminalManagement && !controller.previewMode) ...[
             Text(copy('settings.storage.server_path'), style: body),
             const SizedBox(height: 8),
+            if (controller.storageLocation case final location?)
+              _ServerBackupGuide(location: location, copy: copy),
+            const SizedBox(height: 8),
           ],
-          if (controller.moveStorage != null &&
-              controller.chooseStorageDirectory != null) ...[
-            Align(
-              alignment: Alignment.centerLeft,
-              child: TextButton.icon(
-                key: const Key('storage-change-directory'),
-                onPressed:
-                    controller.storageMoving ||
-                        controller.storageLocation == null
-                    ? null
-                    : () => _chooseStorage(context),
-                icon: const Icon(Icons.drive_file_move_outline, size: 16),
-                label: Text(
-                  copy(
-                    controller.storageMoving
-                        ? 'settings.storage.moving'
-                        : 'settings.storage.change',
+          if (controller.moveStorage != null ||
+              controller.backupStorage != null ||
+              controller.restoreStorage != null) ...[
+            Wrap(
+              spacing: 8,
+              runSpacing: 6,
+              children: [
+                if (controller.moveStorage != null &&
+                    controller.chooseStorageDirectory != null)
+                  TextButton.icon(
+                    key: const Key('storage-change-directory'),
+                    onPressed:
+                        controller.storageMoving ||
+                            controller.storageLocation == null
+                        ? null
+                        : () => _chooseStorage(context),
+                    icon: const Icon(Icons.drive_file_move_outline, size: 16),
+                    label: Text(copy('settings.storage.change')),
                   ),
-                ),
-              ),
+                if (controller.backupStorage != null &&
+                    controller.chooseStorageBackupDirectory != null)
+                  TextButton.icon(
+                    key: const Key('storage-create-backup'),
+                    onPressed: controller.storageMoving
+                        ? null
+                        : () => _chooseBackup(context),
+                    icon: const Icon(Icons.archive_outlined, size: 16),
+                    label: Text(copy('settings.storage.backup')),
+                  ),
+                if (controller.restoreStorage != null &&
+                    controller.chooseStorageRestore != null)
+                  TextButton.icon(
+                    key: const Key('storage-restore-backup'),
+                    onPressed: controller.storageMoving
+                        ? null
+                        : () => _chooseRestore(context),
+                    icon: const Icon(Icons.restore_page_outlined, size: 16),
+                    label: Text(copy('settings.storage.restore')),
+                  ),
+              ],
             ),
             if (controller.storageMoveFailure ?? controller.storageMoveNotice
                 case final message?)
@@ -2758,6 +2781,128 @@ final class _StorageDisclosure extends StatelessWidget {
     );
     if (confirmed == true) await controller.relocateStorage(target);
   }
+
+  Future<void> _chooseBackup(BuildContext context) async {
+    final target = await controller.pickStorageBackupDirectory();
+    if (target == null || !context.mounted) return;
+    final confirmed = await _confirmStorageOperation(
+      context,
+      title: copy('settings.storage.backup_title'),
+      paths: [(copy('settings.storage.backup_target'), target)],
+      consequence: copy('settings.storage.backup_confirmation'),
+      action: copy('settings.storage.backup_confirm'),
+    );
+    if (confirmed) await controller.createStorageBackup(target);
+  }
+
+  Future<void> _chooseRestore(BuildContext context) async {
+    final selection = await controller.pickStorageRestore();
+    if (selection == null || !context.mounted) return;
+    final confirmed = await _confirmStorageOperation(
+      context,
+      title: copy('settings.storage.restore_title'),
+      paths: [
+        (copy('settings.storage.restore_source'), selection.backup),
+        (copy('settings.storage.restore_target'), selection.target),
+      ],
+      consequence: copy('settings.storage.restore_confirmation'),
+      action: copy('settings.storage.restore_confirm'),
+    );
+    if (confirmed) await controller.restoreStorageBackup(selection);
+  }
+
+  Future<bool> _confirmStorageOperation(
+    BuildContext context, {
+    required String title,
+    required List<(String, String)> paths,
+    required String consequence,
+    required String action,
+  }) async {
+    return await showDialog<bool>(
+          context: context,
+          builder: (context) => AlertDialog(
+            title: Text(title),
+            content: SizedBox(
+              width: 520,
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    for (final (label, value) in paths) ...[
+                      Text(
+                        label,
+                        style: Theme.of(context).textTheme.labelLarge,
+                      ),
+                      const SizedBox(height: 5),
+                      SelectableText(value, style: monoStyle),
+                      const SizedBox(height: 12),
+                    ],
+                    Text(consequence),
+                  ],
+                ),
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context, false),
+                child: Text(copy('common.cancel')),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.pop(context, true),
+                child: Text(action),
+              ),
+            ],
+          ),
+        ) ??
+        false;
+  }
+}
+
+final class _ServerBackupGuide extends StatelessWidget {
+  const _ServerBackupGuide({required this.location, required this.copy});
+
+  final RuntimeStorageLocation location;
+  final AppCopy copy;
+
+  @override
+  Widget build(BuildContext context) {
+    final backup =
+        'vibermated backup-data --source=${_shellQuote(location.dataDirectory)} '
+        "--target='/absolute/new-backup-directory'";
+    final restore =
+        "vibermated restore-data --source='/absolute/backup-directory' "
+        "--target='/absolute/new-data-directory'";
+    return Column(
+      key: const Key('storage-server-backup-guide'),
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          copy('settings.storage.server_backup'),
+          style: Theme.of(context).textTheme.bodySmall,
+        ),
+        const SizedBox(height: 6),
+        for (final command in [backup, restore])
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(child: SelectableText(command, style: monoStyle)),
+              IconButton(
+                tooltip: copy('settings.storage.copy_command'),
+                onPressed: () =>
+                    Clipboard.setData(ClipboardData(text: command)),
+                icon: const Icon(Icons.copy_outlined, size: 14),
+              ),
+            ],
+          ),
+      ],
+    );
+  }
+}
+
+String _shellQuote(String value) {
+  final escaped = value.replaceAll("'", "'\"'\"'");
+  return "'$escaped'";
 }
 
 final class _StorageCapacity extends StatelessWidget {

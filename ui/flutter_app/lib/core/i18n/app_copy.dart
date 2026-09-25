@@ -1930,10 +1930,32 @@ final class AppCopy {
     'settings.storage.new_directory': 'New data directory',
     'settings.storage.move_confirm': 'Move and restart',
     'settings.storage.moving': 'Moving data…',
+    'settings.storage.backing_up': 'Creating verified backup…',
+    'settings.storage.restoring': 'Verifying and restoring backup…',
     'settings.storage.move_confirmation':
         'Creates a ViberMate folder at this location. Copies and verifies all data, then restarts the runtime. Stop running captures first. The original folder is kept as a backup; it will not receive new records. macOS Keychain credentials stay on this Mac.',
     'settings.storage.moved':
         'Storage location changed. The original folder is kept as a backup.',
+    'settings.storage.backup': 'Create backup',
+    'settings.storage.restore': 'Restore backup',
+    'settings.storage.backup_title': 'Create an offline backup?',
+    'settings.storage.backup_target': 'New backup directory',
+    'settings.storage.backup_confirm': 'Create backup',
+    'settings.storage.backup_confirmation':
+        'ViberMate stops and restarts the local Runtime, then writes a verified directory with a manifest, SQLite data, configuration and the local Proxy CA. Provider/OAuth credentials, macOS Keychain items and external Server TLS files are not exported. The backup contains unencrypted evidence and the Proxy CA private key; protect it accordingly.',
+    'settings.storage.backup_created':
+        'Verified backup created. Provider credentials and external TLS files were not included.',
+    'settings.storage.restore_title': 'Restore this backup?',
+    'settings.storage.restore_source': 'Verified backup',
+    'settings.storage.restore_target': 'New Runtime directory',
+    'settings.storage.restore_confirm': 'Verify and restore',
+    'settings.storage.restore_confirmation':
+        'The manifest, every file hash, SQLite integrity, foreign keys and schema compatibility are checked before a new Runtime directory is created. The current directory is not overwritten and remains the rollback source. On another machine, reconnect provider accounts and configure external Server TLS files again.',
+    'settings.storage.restore_completed':
+        'Backup restored to a new Runtime directory. The previous directory remains available for rollback; reconnect any unavailable credentials.',
+    'settings.storage.server_backup':
+        'Stop the Server before running these commands. Backups include Runtime data and the Proxy CA, but exclude provider credentials and external TLS files.',
+    'settings.storage.copy_command': 'Copy command',
     'settings.storage.rolled_back':
         'The new location could not start. Restored the original location; no source data was deleted.',
     'settings.storage.storage_target_invalid':
@@ -1944,6 +1966,10 @@ final class AppCopy {
         'Could not finish moving data. The original location remains in use. Check free space and permissions; an incomplete copy may remain at the destination.',
     'settings.storage.storage_validation_failed':
         'The copied database failed validation. The original location remains in use; the copy was not selected.',
+    'settings.storage.backup_validation_failed':
+        'The backup manifest, file hashes or database validation failed. Nothing was selected or overwritten; an incomplete new target may remain.',
+    'settings.storage.backup_incompatible':
+        'This backup uses an incompatible Runtime database schema. The current data directory remains in use.',
     'settings.storage.storage_settings_invalid':
         'The storage-location setting could not be read or saved. Check permissions on the App support directory; existing data was not removed.',
     'settings.storage.storage_location_unavailable':
@@ -1979,7 +2005,7 @@ final class AppCopy {
     'settings.storage.location_failed':
         'Storage location could not be read. Retry after checking the Runtime connection.',
     'settings.storage.move_hint':
-        'Move the whole data directory only after stopping the Runtime; do not copy an open database on its own.',
+        'Move, back up or restore only through these verified actions after stopping captures. Never copy an open runtime.db by itself. Backups intentionally exclude provider credentials, Keychain items and external TLS files.',
     'settings.storage.server_path':
         'Server deployments choose this directory with --data-dir; containers must also mount persistent storage. This is not a folder on your browser’s machine.',
     'settings.storage.retention':
@@ -3908,9 +3934,30 @@ final class AppCopy {
     'settings.storage.new_directory': '新数据目录',
     'settings.storage.move_confirm': '迁移并重启',
     'settings.storage.moving': '正在迁移…',
+    'settings.storage.backing_up': '正在创建并校验备份…',
+    'settings.storage.restoring': '正在校验并恢复备份…',
     'settings.storage.move_confirmation':
         '在所选位置新建 ViberMate 文件夹，复制并校验全部数据后重启 Runtime。请先停止运行中的 Capture。旧目录保留为备份，不再写入新记录；macOS 钥匙串中的凭证仍留在本机。',
     'settings.storage.moved': '存储位置已更改，旧目录已保留为备份。',
+    'settings.storage.backup': '创建备份',
+    'settings.storage.restore': '恢复备份',
+    'settings.storage.backup_title': '创建离线备份？',
+    'settings.storage.backup_target': '新备份目录',
+    'settings.storage.backup_confirm': '创建备份',
+    'settings.storage.backup_confirmation':
+        'ViberMate 会停止并重启本机 Runtime，然后写入带 manifest 的可验证目录，包含 SQLite 数据、配置和本地代理 CA。不会导出服务商/OAuth 凭据、macOS 钥匙串项目或外部 Server TLS 文件。备份内含未加密证据和代理 CA 私钥，请妥善保护。',
+    'settings.storage.backup_created': '可验证备份已创建；未包含服务商凭据和外部 TLS 文件。',
+    'settings.storage.restore_title': '恢复这个备份？',
+    'settings.storage.restore_source': '已验证备份',
+    'settings.storage.restore_target': '新 Runtime 目录',
+    'settings.storage.restore_confirm': '校验并恢复',
+    'settings.storage.restore_confirmation':
+        '创建新 Runtime 目录前，会校验 manifest、每个文件的哈希、SQLite 完整性、外键和 schema 兼容性。当前目录不会被覆盖，并继续作为回滚来源。跨机器恢复后，需要重新连接服务商账号并重新配置外部 Server TLS 文件。',
+    'settings.storage.restore_completed':
+        '备份已恢复到新 Runtime 目录；旧目录仍可用于回滚。请重新连接不可用的凭据。',
+    'settings.storage.server_backup':
+        '请先停止 Server，再运行以下命令。备份包含 Runtime 数据和代理 CA，但不包含服务商凭据与外部 TLS 文件。',
+    'settings.storage.copy_command': '复制命令',
     'settings.storage.rolled_back': '新位置启动失败，已恢复使用原目录；原始数据未删除。',
     'settings.storage.storage_target_invalid':
         '请选择当前数据目录以外的本地文件夹，且其中不能已有 ViberMate 子文件夹。',
@@ -3918,6 +3965,10 @@ final class AppCopy {
     'settings.storage.storage_copy_failed':
         '迁移未完成，仍使用原目录。请检查剩余空间和目录权限；目标位置可能留有未完成的副本。',
     'settings.storage.storage_validation_failed': '副本未通过数据库校验，仍使用原目录，未切换到副本。',
+    'settings.storage.backup_validation_failed':
+        '备份的 manifest、文件哈希或数据库校验失败；没有切换或覆盖任何数据，但可能留有未完成的新目标目录。',
+    'settings.storage.backup_incompatible':
+        '该备份使用不兼容的 Runtime 数据库 schema；仍继续使用当前数据目录。',
     'settings.storage.storage_settings_invalid':
         '无法读取或保存存储位置设置。请检查 App 支持目录的权限；已有数据未删除。',
     'settings.storage.storage_location_unavailable':
@@ -3948,7 +3999,8 @@ final class AppCopy {
     'settings.storage.archive_preview':
         '当前快照：{captures} 条运行记录、{exchanges} 条语义调用、{envelopes} 条 Raw HTTP 边界。',
     'settings.storage.location_failed': '无法读取存储位置。请检查 Runtime 连接后重试。',
-    'settings.storage.move_hint': '迁移前请先停止 Runtime，并保留整个数据目录；不要单独复制正在使用的数据库。',
+    'settings.storage.move_hint':
+        '请先停止运行中的 Capture，再使用这里的可验证操作进行迁移、备份或恢复。不要单独复制正在使用的 runtime.db；备份会有意排除服务商凭据、钥匙串项目和外部 TLS 文件。',
     'settings.storage.server_path':
         '服务端通过 --data-dir 指定此目录；容器还需挂载持久化卷。这里不是浏览器所在电脑的目录。',
     'settings.storage.retention': '新建流量策略默认保留全文证据 30 天。记录模式与保留期由各自的流量策略管理。',
