@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -345,6 +346,85 @@ func TestEvidenceReadPerformanceBaseline(t *testing.T) {
 					t.Fatal(err)
 				}
 				t.Logf("EVIDENCE_STORAGE_BASELINE %s", report)
+			}
+			if scenario.activities == 30000 && scenario.messages == 1000 {
+				if err := writer.Shutdown(ctx); err != nil {
+					t.Fatal(err)
+				}
+				var databasePath string
+				if err := store.database.QueryRow(
+					`SELECT file FROM pragma_database_list WHERE name = 'main'`,
+				).Scan(&databasePath); err != nil {
+					t.Fatal(err)
+				}
+				if err := store.Shutdown(ctx); err != nil {
+					t.Fatal(err)
+				}
+				cold := map[string][]int64{
+					"open": {}, "message_list": {}, "identity_metadata": {}, "full_projection": {},
+				}
+				query, args := exchangePageQuery(activity.PageRequest{
+					Limit: 100, ConversationProjectionID: "session-2",
+				})
+				for range 25 {
+					openedAt := time.Now()
+					candidate, err := Open(ctx, Options{
+						DatabasePath: databasePath, BusyTimeout: DefaultBusyTimeout,
+						CommitReconcileTimeout: DefaultCommitReconcileTimeout,
+					})
+					if err != nil {
+						t.Fatal(err)
+					}
+					cold["open"] = append(cold["open"], time.Since(openedAt).Microseconds())
+					for _, step := range []struct {
+						name string
+						run  func() error
+					}{
+						{"message_list", func() error {
+							if len(readSequences(t, candidate, query, args)) == 0 {
+								return errors.New("empty synthetic page")
+							}
+							return nil
+						}},
+						{"identity_metadata", func() error {
+							_, err := candidate.ExchangeContentRepository().GetConversationEvidence(ctx, record.ExchangeID, now)
+							return err
+						}},
+						{"full_projection", func() error {
+							_, err := candidate.ExchangeContentRepository().GetProjection(ctx, record.ExchangeID, now, exchangecontent.RequestViewFull)
+							return err
+						}},
+					} {
+						started := time.Now()
+						if err := step.run(); err != nil {
+							t.Fatal(err)
+						}
+						cold[step.name] = append(cold[step.name], time.Since(started).Microseconds())
+					}
+					if err := candidate.Shutdown(ctx); err != nil {
+						t.Fatal(err)
+					}
+				}
+				for _, values := range cold {
+					slices.Sort(values)
+				}
+				report, err := json.Marshal(map[string]any{
+					"scope":    "synthetic-first-read-after-reopen",
+					"platform": runtime.GOOS + "/" + runtime.GOARCH,
+					"go":       runtime.Version(), "activities": scenario.activities,
+					"messages": scenario.messages, "samples": 25,
+					"osPageCacheEvicted": false,
+					"latencies": map[string]any{
+						"open":              map[string]any{"p50Us": cold["open"][12], "p95Us": cold["open"][23]},
+						"message_list":      map[string]any{"p50Us": cold["message_list"][12], "p95Us": cold["message_list"][23]},
+						"identity_metadata": map[string]any{"p50Us": cold["identity_metadata"][12], "p95Us": cold["identity_metadata"][23]},
+						"full_projection":   map[string]any{"p50Us": cold["full_projection"][12], "p95Us": cold["full_projection"][23]},
+					},
+				})
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Logf("EVIDENCE_COLD_CONNECTION_BASELINE %s", report)
 			}
 		})
 	}

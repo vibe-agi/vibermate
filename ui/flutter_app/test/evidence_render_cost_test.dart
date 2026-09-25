@@ -15,6 +15,42 @@ import 'package:vibermate_app/preview/preview_terminal_command.dart';
 
 void main() {
   const measure = bool.fromEnvironment('VIBERMATE_PERFORMANCE');
+
+  test('synthetic Exchange JSON decode baseline', () {
+    for (final size in [37, 9472, 151552]) {
+      final text = List.filled(size, 'x').join();
+      final encoded = jsonEncode(_exchangePayload(text));
+      final jsonTimes = <int>[];
+      final contractTimes = <int>[];
+      final decoded = jsonDecode(encoded);
+      for (var sample = 0; sample < 25; sample++) {
+        var watch = Stopwatch()..start();
+        final value = jsonDecode(encoded);
+        watch.stop();
+        jsonTimes.add(watch.elapsedMicroseconds);
+        watch = Stopwatch()..start();
+        final detail = ExchangeDetail.fromJson(decoded, 'exchange');
+        watch.stop();
+        contractTimes.add(watch.elapsedMicroseconds);
+        expect(detail.content.response!.blocks.single.text!.length, size);
+        expect(value, isA<Map<String, dynamic>>());
+      }
+      Map<String, int> report(List<int> values) {
+        final warm = values.skip(1).toList()..sort();
+        return {
+          'firstUs': values.first,
+          'warmP50Us': warm[11],
+          'warmP95Us': warm[22],
+        };
+      }
+
+      // ignore: avoid_print
+      print(
+        'EVIDENCE_DECODE_BASELINE ${jsonEncode({'renderer': kIsWeb ? 'chrome-test' : 'flutter-tester', 'mode': 'debug', 'synthetic': true, 'encodedBytes': utf8.encode(encoded).length, 'contentBytes': size, 'samples': 25, 'jsonDecode': report(jsonTimes), 'contractDecode': report(contractTimes)})}',
+      );
+    }
+  }, skip: !measure);
+
   test(
     'exchange detail cache evicts old large evidence by byte budget',
     () async {
@@ -316,6 +352,89 @@ void main() {
     );
   }, skip: !measure);
 }
+
+Map<String, Object?> _exchangePayload(String text) => {
+  'id': 'exchange-performance',
+  'status': 'succeeded',
+  'environment': {
+    'id': 'performance',
+    'revision': 1,
+    'digest': List.filled(64, 'a').join(),
+    'clientEndpointId': 'endpoint.performance',
+    'clientEndpointRevision': 1,
+    'protocolPlanId': 'plan.performance',
+    'protocolPlanRevision': 1,
+    'routeId': 'route.performance',
+    'routeRevision': 1,
+    'accountId': 'account.performance',
+    'accountRevision': 1,
+    'credentialEpoch': 1,
+  },
+  'parentRefs': {'exchangeId': 'exchange-performance'},
+  'processingTrace': {
+    'pluginRunIds': <String>[],
+    'attempts': <Object?>[],
+    'result': 'succeeded',
+  },
+  'content': {
+    'state': 'recorded',
+    'mode': 'full',
+    'recordedAt': '2026-09-25T00:00:00Z',
+    'expiresAt': '2026-10-25T00:00:00Z',
+    'requestProjection': {
+      'view': 'incremental',
+      'relationship': 'checkpoint',
+      'inheritedMessageCount': 0,
+      'totalMessageCount': 1,
+      'fullSnapshotAvailable': false,
+    },
+    'request': {
+      'requestedModel': 'synthetic-model',
+      'effectiveModel': 'synthetic-model',
+      'maxOutputTokens': 16,
+      'stream': false,
+      'system': <Object?>[],
+      'messages': [
+        {
+          'role': 'user',
+          'blocks': [
+            {
+              'kind': 'text',
+              'availability': 'recorded',
+              'text': 'synthetic',
+              'originalSize': 9,
+            },
+          ],
+        },
+      ],
+      'tools': <Object?>[],
+      'protocolEvidence': <Object?>[],
+    },
+    'response': {
+      'id': 'response-performance',
+      'requestedModel': 'synthetic-model',
+      'effectiveModel': 'synthetic-model',
+      'reportedModel': 'synthetic-model',
+      'stopReason': 'end_turn',
+      'blocks': [
+        {
+          'kind': 'text',
+          'availability': 'recorded',
+          'text': text,
+          'originalSize': text.length,
+        },
+      ],
+      'usage': {
+        'inputUncached': {'known': false},
+        'cacheWrite': {'known': false},
+        'cacheRead': {'known': false},
+        'output': {'known': false},
+        'reasoning': {'known': false},
+      },
+      'protocolEvidence': <Object?>[],
+    },
+  },
+};
 
 String _renderedText(WidgetTester tester) => [
   ...tester

@@ -176,6 +176,59 @@ warm p50/p95 为 0.53/0.59 ms；并发 raw writer 时为 0.53/0.63 ms，完整�
 仍不能由这组小样本推出增加只读连接会改善真实页面；保持当前单连接，先完成
 真实 App 与远程 Web 请求到可见帧的分段测量。
 
+同一 30,000 活动 / 1,000 消息 fixture 另对“每次重新打开 SQLite 后的第一次读取”
+采样 25 次。每次关闭并重新建立唯一连接，但**不驱逐操作系统页缓存**，因此这是
+连接冷启动，不是假装测量物理冷盘：
+
+| 连接冷启动环节 | p50 / p95 |
+| --- | ---: |
+| 打开并校验 Store | 2.22 / 2.86 ms |
+| 第一次单会话列表 | 0.90 / 1.21 ms |
+| 第一次身份元数据读取 | 0.11 / 0.14 ms |
+| 第一次 1,000 消息完整投影 | 36.45 / 42.85 ms |
+
+这补齐了可重复的冷 / 热读取分位数，但不支持“SSD 冷读”或跨机器 SLA 的说法。
+测试报告显式输出 `osPageCacheEvicted:false`，防止以后把口径写错。
+
+### 原生 macOS App：请求完成到证据可见（2026-09-25）
+
+使用当前提交构建 `dist/ViberMate.app`，以标准 `CFFIXED_USER_HOME` 隔离 App 数据；
+sidecar 继续使用当前登录会话的 macOS Keychain。仓库已有的打包 App 双启动、状态恢复、
+偏好原子落盘、进程归属及优雅退出验收通过（14.33 秒）。随后在同一隔离 Runtime 中
+创建唯一命名的合成 Endpoint、Account、Environment 和手动 Capture；Provider 只监听
+本机回环地址。测试结束前撤销全部额外 Capture，并从管理接口确认合成 Environment、
+Account、Endpoint 均已删除；临时目录和脚本移入废纸篓。
+
+计时从合成客户端读完下游 HTTP 响应，到原生窗口可访问性树出现唯一请求标记。持续
+选中最新 Exchange 时，20 条 warm 短请求的 p50/p95 为 **617 / 1,012 ms**；约
+9 KiB 和 151 KiB 的折叠正文各一次为 745 ms 和 131 ms。切换到最早 Exchange
+为 617 ms；点击展开 151 KiB 连续文本直到全文末尾进入可访问性树为 1.39 秒。
+这是 release App 的真实 Runtime、代理、SQLite、HTTP 客户端和 Flutter 窗口路径，
+但可访问性出现仍不等同于逐像素 GPU paint。
+
+另一条关联请求的阶段时间如下；所有时间使用同一台机器的壁钟，Provider 等待在客户端
+响应完成之前，不计入后续显示延迟：
+
+| 同一请求阶段 | 相对客户端响应完成 |
+| --- | ---: |
+| 终态 Activity 的 `occurredAt` | -2 ms（时间戳粒度内） |
+| Activity 与 Conversation 目录 API 首次返回该记录 | +13 ms |
+| 所选 Conversation 的 Activity API 返回 | +15 ms |
+| 原生 App 可访问性树出现标记 | +822 ms |
+
+由此可见该样本的证据提交、索引与本机 API 不是主要等待；剩余约 0.8 秒包含 1 秒轻量
+探测相位、JSON 解码、状态更新和 Flutter 布局。为分开后两项，合成 Exchange JSON
+在 Flutter VM debug 中对 151 KiB 正文采样 25 次：`jsonDecode` warm p50/p95
+为 0.158/0.182 ms，Control 模型校验为 0.125/0.168 ms；随后独立 Widget
+挂载 warm p50/p95 为 16.4/18.8 ms。Chrome debug 的微秒钟分辨率较粗，两个
+解码环节 p95 均不超过约 0.1 ms，Widget 挂载 warm p50/p95 为 44.9/50.9 ms。
+这些分段不相加成虚假的精确总和；真实 App 的 1 秒探测仍主导可见延迟。
+
+测量末尾 macOS `footprint` 显示 GUI 当前/进程生命周期峰值约 207/562 MiB，daemon
+约 283/812 MiB；daemon 同时有约 530 MiB 可回收 VM，数据库/WAL 为约
+0.8/4.0 MiB。它们是整个进程在多次可访问性快照和长正文展开后的高水位，不是单次请求
+分配量，也没有足够依据增加 SQLite 连接或设置产品内存 SLA。
+
 ### Web 空闲 Capture 轮询
 
 2026-09-23，在本机原生 HTTP Server、390×760 Playwright Chromium、隔离数据目录中保留
