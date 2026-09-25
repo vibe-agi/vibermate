@@ -6510,6 +6510,252 @@ final class ActivityRequestPreview {
   final bool truncated;
 }
 
+final class EvidenceSearchRequest {
+  const EvidenceSearchRequest({
+    this.query = '',
+    this.environmentId = '',
+    this.accountId = '',
+    this.model = '',
+    this.tool = '',
+    this.status = '',
+    this.reason = '',
+    this.from,
+    this.until,
+    this.cursor,
+    this.limit = 50,
+  });
+
+  final String query;
+  final String environmentId;
+  final String accountId;
+  final String model;
+  final String tool;
+  final String status;
+  final String reason;
+  final DateTime? from;
+  final DateTime? until;
+  final String? cursor;
+  final int limit;
+
+  bool get valid {
+    bool text(String value) =>
+        value.isEmpty ||
+        (value.trim() == value &&
+            utf8.encode(value).length <= 256 &&
+            !_containsControlCharacter(value));
+    final hasFilter =
+        query.isNotEmpty ||
+        environmentId.isNotEmpty ||
+        accountId.isNotEmpty ||
+        model.isNotEmpty ||
+        tool.isNotEmpty ||
+        status.isNotEmpty ||
+        reason.isNotEmpty ||
+        from != null;
+    return hasFilter &&
+        limit > 0 &&
+        limit <= 200 &&
+        text(query) &&
+        (environmentId.isEmpty || _resourceIdPattern.hasMatch(environmentId)) &&
+        (accountId.isEmpty || _resourceIdPattern.hasMatch(accountId)) &&
+        text(model) &&
+        text(tool) &&
+        text(reason) &&
+        const {
+          '',
+          'succeeded',
+          'pending',
+          'failed',
+          'canceled',
+        }.contains(status) &&
+        ((from == null && until == null) ||
+            (from != null &&
+                until != null &&
+                until!.toUtc().isAfter(from!.toUtc())));
+  }
+
+  EvidenceSearchRequest next(String nextCursor) => EvidenceSearchRequest(
+    query: query,
+    environmentId: environmentId,
+    accountId: accountId,
+    model: model,
+    tool: tool,
+    status: status,
+    reason: reason,
+    from: from,
+    until: until,
+    cursor: nextCursor,
+    limit: limit,
+  );
+}
+
+final class EvidenceSearchContext {
+  const EvidenceSearchContext({
+    required this.workspaceId,
+    required this.workspaceLabel,
+    required this.captureLabel,
+    required this.requestedModel,
+    required this.effectiveModel,
+    required this.reportedModel,
+    required this.toolNames,
+    required this.contentAvailable,
+  });
+
+  factory EvidenceSearchContext.fromJson(Object? json, String path) {
+    final value = requireObject(json, path);
+    requireFields(
+      value,
+      path,
+      required: const {'captureLabel', 'toolNames', 'contentAvailable'},
+      optional: const {
+        'workspaceId',
+        'workspaceLabel',
+        'requestedModel',
+        'effectiveModel',
+        'reportedModel',
+      },
+    );
+    final workspaceId = optionalString(value, 'workspaceId', path) ?? '';
+    final workspaceLabel = optionalString(value, 'workspaceLabel', path) ?? '';
+    final captureLabel = requireString(value, 'captureLabel', path);
+    final requestedModel = optionalString(value, 'requestedModel', path) ?? '';
+    final effectiveModel = optionalString(value, 'effectiveModel', path) ?? '';
+    final reportedModel = optionalString(value, 'reportedModel', path) ?? '';
+    final toolNames = requireStringList(value, 'toolNames', path);
+    final contentAvailable = requireBoolean(value, 'contentAvailable', path);
+    if (!_validEvidenceSearchValue(workspaceId, 128) ||
+        (workspaceLabel.isNotEmpty &&
+            !_validDisplayLabel(workspaceLabel, maximumBytes: 120)) ||
+        !_validDisplayLabel(captureLabel) ||
+        !_validEvidenceSearchValue(requestedModel, 512) ||
+        !_validEvidenceSearchValue(effectiveModel, 512) ||
+        !_validEvidenceSearchValue(reportedModel, 512) ||
+        toolNames.length > 256 ||
+        toolNames.toSet().length != toolNames.length ||
+        toolNames.any((name) => !_validCatalogText(name, maximumBytes: 256)) ||
+        (!contentAvailable &&
+            (requestedModel.isNotEmpty ||
+                effectiveModel.isNotEmpty ||
+                reportedModel.isNotEmpty ||
+                toolNames.isNotEmpty))) {
+      throw ControlContractException('$path search context is invalid');
+    }
+    return EvidenceSearchContext(
+      workspaceId: workspaceId,
+      workspaceLabel: workspaceLabel,
+      captureLabel: captureLabel,
+      requestedModel: requestedModel,
+      effectiveModel: effectiveModel,
+      reportedModel: reportedModel,
+      toolNames: List.unmodifiable(toolNames),
+      contentAvailable: contentAvailable,
+    );
+  }
+
+  final String workspaceId;
+  final String workspaceLabel;
+  final String captureLabel;
+  final String requestedModel;
+  final String effectiveModel;
+  final String reportedModel;
+  final List<String> toolNames;
+  final bool contentAvailable;
+}
+
+bool _validEvidenceSearchValue(String value, int maximumBytes) =>
+    utf8.encode(value).length <= maximumBytes &&
+    !value.contains('\uFEFF') &&
+    !_containsControlCharacter(value);
+
+final class EvidenceSearchHit {
+  const EvidenceSearchHit({
+    required this.activity,
+    required this.context,
+    required this.matches,
+  });
+
+  factory EvidenceSearchHit.fromJson(Object? json, String path) {
+    final value = requireObject(json, path);
+    requireFields(
+      value,
+      path,
+      required: const {'activity', 'context', 'matches'},
+    );
+    final matches = requireStringList(value, 'matches', path);
+    const supported = {
+      'workspace',
+      'capture',
+      'conversation',
+      'environment',
+      'account',
+      'model',
+      'tool',
+      'status',
+      'error',
+      'source',
+      'exchange',
+      'time',
+    };
+    if (matches.isEmpty ||
+        matches.length > supported.length ||
+        matches.toSet().length != matches.length ||
+        !matches.every(supported.contains)) {
+      throw ControlContractException('$path search matches are invalid');
+    }
+    return EvidenceSearchHit(
+      activity: ActivityRecord.fromJson(value['activity'], '$path.activity'),
+      context: EvidenceSearchContext.fromJson(
+        value['context'],
+        '$path.context',
+      ),
+      matches: List.unmodifiable(matches),
+    );
+  }
+
+  final ActivityRecord activity;
+  final EvidenceSearchContext context;
+  final List<String> matches;
+}
+
+final class EvidenceSearchPage {
+  const EvidenceSearchPage({required this.items, required this.nextCursor});
+
+  factory EvidenceSearchPage.fromJson(Object? json, String path) {
+    final value = requireObject(json, path);
+    requireFields(
+      value,
+      path,
+      required: const {'items'},
+      optional: const {'nextCursor'},
+    );
+    final items = requireList(value['items'], '$path.items');
+    if (items.length > 200) {
+      throw ControlContractException('$path has too many search results');
+    }
+    final nextCursor = optionalString(value, 'nextCursor', path);
+    if (nextCursor != null &&
+        (nextCursor.isEmpty ||
+            nextCursor.length > 512 ||
+            RegExp(r'\s').hasMatch(nextCursor))) {
+      throw ControlContractException('$path next cursor is invalid');
+    }
+    return EvidenceSearchPage(
+      items: items.indexed
+          .map(
+            (entry) => EvidenceSearchHit.fromJson(
+              entry.$2,
+              '$path.items[${entry.$1}]',
+            ),
+          )
+          .toList(growable: false),
+      nextCursor: nextCursor,
+    );
+  }
+
+  final List<EvidenceSearchHit> items;
+  final String? nextCursor;
+}
+
 final class ActivityRecord {
   const ActivityRecord({
     required this.id,

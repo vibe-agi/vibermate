@@ -390,6 +390,7 @@ func New(options Options) (*Handler, error) {
 	handler.mux.HandleFunc("POST /api/v1/environments/{environmentId}/draft/actions/publish", handler.publishEnvironmentDraft)
 	handler.mux.HandleFunc("GET /api/v1/environments/{environmentId}/revisions/{environmentRevision}", handler.getEnvironmentRevision)
 	handler.mux.HandleFunc("GET /api/v1/activities", handler.listActivities)
+	handler.mux.HandleFunc("GET /api/v1/evidence/search", handler.searchActivities)
 	handler.mux.HandleFunc("GET /api/v1/conversations", handler.listConversations)
 	handler.mux.HandleFunc(
 		"GET /api/v1/exchanges/{exchangeId}",
@@ -447,6 +448,7 @@ func New(options Options) (*Handler, error) {
 		handler.invalidRoute,
 	)
 	handler.mux.HandleFunc("/api/v1/activities", handler.invalidRoute)
+	handler.mux.HandleFunc("/api/v1/evidence/search", handler.invalidRoute)
 	handler.mux.HandleFunc(
 		"/api/v1/exchanges/{exchangeId}",
 		handler.invalidRoute,

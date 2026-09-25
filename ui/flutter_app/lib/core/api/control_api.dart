@@ -133,6 +133,8 @@ abstract interface class ControlApi {
     String? conversationId,
   });
 
+  Future<EvidenceSearchPage> searchEvidence(EvidenceSearchRequest request);
+
   Future<ConversationPage> conversations({
     String? cursor,
     int limit = 50,
@@ -1008,6 +1010,39 @@ final class HttpControlApi implements ControlApi {
       },
     );
     return ActivityPage.fromJson(await _read(uri.toString()), 'activities');
+  }
+
+  @override
+  Future<EvidenceSearchPage> searchEvidence(
+    EvidenceSearchRequest request,
+  ) async {
+    _validatePageRequest(request.cursor, request.limit);
+    if (!request.valid) {
+      throw const ControlContractException('evidence search is invalid');
+    }
+    final uri = Uri(
+      path: '/api/v1/evidence/search',
+      queryParameters: {
+        'limit': '${request.limit}',
+        'cursor': ?request.cursor,
+        if (request.query.isNotEmpty) 'q': request.query,
+        if (request.environmentId.isNotEmpty)
+          'environmentId': request.environmentId,
+        if (request.accountId.isNotEmpty) 'accountId': request.accountId,
+        if (request.model.isNotEmpty) 'model': request.model,
+        if (request.tool.isNotEmpty) 'tool': request.tool,
+        if (request.status.isNotEmpty) 'status': request.status,
+        if (request.reason.isNotEmpty) 'reason': request.reason,
+        if (request.from != null)
+          'from': request.from!.toUtc().toIso8601String(),
+        if (request.until != null)
+          'until': request.until!.toUtc().toIso8601String(),
+      },
+    );
+    return EvidenceSearchPage.fromJson(
+      await _read(uri.toString()),
+      'evidenceSearch',
+    );
   }
 
   @override

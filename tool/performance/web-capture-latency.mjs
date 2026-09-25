@@ -397,7 +397,7 @@ try {
       .filter({ hasText: 'Perf ' + label }).first().waitFor();
 
     const values = [];
-    const shortSamples = 24;
+    const shortSamples = process.env.VIBERMATE_SEARCH_ONLY === '1' ? 1 : 24;
     for (let index = 0; index < shortSamples + 2; index++) {
       if (index > 0) await new Promise(resolve =>
         setTimeout(resolve, (index * 371) % 1000));
@@ -492,6 +492,50 @@ try {
     const structuredEndToVisibleMs = performance.now() - structuredCompleted;
     const structuredExpandToVisibleMs = await expandCurrent();
     await assertRecordedTail(structuredMarker, structuredTail);
+    let evidenceSearch = null;
+    if (label === 'local') {
+      const filters = new URLSearchParams({ accountId: account.id,
+        model: 'claude-sonnet-4-5', status: 'succeeded', limit: '10' });
+      const matches = await json(await fetch(origin + '/api/v1/evidence/search?' + filters, {
+        headers: { Origin: origin, Authorization: 'Bearer ' + owner.readToken },
+      }), 200, 'evidence metadata search');
+      assert.ok(matches.items.length > 0);
+      assert.ok(matches.items.every(item => item.context.contentAvailable &&
+        item.matches.includes('account') && item.matches.includes('model') &&
+        item.matches.includes('status')));
+      const bodyOnly = await json(await fetch(origin + '/api/v1/evidence/search?' +
+        new URLSearchParams({ q: structuredTail, limit: '10' }), {
+        headers: { Origin: origin, Authorization: 'Bearer ' + owner.readToken },
+      }), 200, 'body-excluding evidence search');
+      assert.equal(bodyOnly.items.length, 0);
+      const uiMatches = await json(await fetch(origin + '/api/v1/evidence/search?' +
+        new URLSearchParams({ q: account.id, limit: '10' }), {
+        headers: { Origin: origin, Authorization: 'Bearer ' + owner.readToken },
+      }), 200, 'UI evidence search');
+      assert.ok(uiMatches.items.length > 0);
+      const exact = uiMatches.items[0].activity.id;
+      const searchOpen = page.locator('flt-semantics[role="button"]')
+        .filter({ hasText: /^Search all records$/ }).last();
+      const searchBox = await searchOpen.boundingBox();
+      assert.ok(searchBox, 'search button has no visible bounds');
+      await page.mouse.click(searchBox.x + searchBox.width / 2,
+        searchBox.y + searchBox.height / 2);
+      await page.locator('flt-semantics')
+        .filter({ hasText: /^Search retained history$/ }).last()
+        .waitFor({ timeout: 10_000 });
+      await page.keyboard.type(account.id);
+      await page.locator('flt-semantics[role="button"]')
+        .filter({ hasText: /^Search$/ }).last().click();
+      const result = page.locator('flt-semantics[role="button"]')
+        .filter({ hasText: new RegExp(account.id.replace('.', '\\.')) }).last();
+      await result.waitFor({ timeout: 10_000 });
+      await result.click();
+      await page.locator('flt-semantics').filter({ hasText: /^Search result$/ })
+        .last().waitFor({ timeout: 10_000 });
+      evidenceSearch = { combinedFilters: matches.items.length,
+        bodyMatches: bodyOnly.items.length, exactResult: exact,
+        exactResultVisible: true };
+    }
     let failureDiagnosis = null;
     if (label === 'delayed') {
       const stoppedProvider = provider;
@@ -549,12 +593,13 @@ try {
       expandToVisibleMs, paragraphBytes: paragraphPrompt.length,
       paragraphEndToVisibleMs, paragraphExpandToVisibleMs,
       structuredBytes: structuredPrompt.length, structuredEndToVisibleMs,
-      structuredExpandToVisibleMs, failureDiagnosis };
+      structuredExpandToVisibleMs, evidenceSearch, failureDiagnosis };
   }
 
   const idleOnly = process.env.VIBERMATE_IDLE_ONLY === '1';
+  const searchOnly = process.env.VIBERMATE_SEARCH_ONLY === '1';
   const local = idleOnly ? null : await measure(0, 'local');
-  const delayed = idleOnly ? null : await measure(80, 'delayed');
+  const delayed = idleOnly || searchOnly ? null : await measure(80, 'delayed');
   console.log(JSON.stringify({
     idle,
     dryRun: { publishedRoute: dryRun.result.routeId,

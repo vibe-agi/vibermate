@@ -12,6 +12,7 @@ import '../../core/i18n/app_copy.dart';
 import 'capture_conversation_tree.dart';
 import 'conversation_timeline.dart';
 import 'deletion_dialog.dart';
+import 'evidence_search_dialog.dart';
 import 'workbench_controller.dart';
 
 final class CapturesView extends StatefulWidget {
@@ -47,6 +48,7 @@ final class _CapturesViewState extends State<CapturesView> {
             _filterController.clear();
             _filter = '';
           }),
+          onSearch: () => _openEvidenceSearch(context),
           onCreateManual: () => _openCreateManualCapture(context),
           onSelect: (key) {
             unawaited(widget.controller.selectCapture(key));
@@ -134,6 +136,16 @@ final class _CapturesViewState extends State<CapturesView> {
     );
   }
 
+  void _openEvidenceSearch(BuildContext context) {
+    unawaited(
+      showEvidenceSearchDialog(
+        context,
+        controller: widget.controller,
+        copy: widget.copy,
+      ),
+    );
+  }
+
   void _confirmDeleteCapture(BuildContext context) {
     final capture = widget.controller.selectedCapture;
     if (capture == null) return;
@@ -178,6 +190,7 @@ final class _CaptureMaster extends StatelessWidget {
     required this.filterController,
     required this.onFilter,
     required this.onClearFilter,
+    required this.onSearch,
     required this.onCreateManual,
     required this.onSelect,
   });
@@ -188,6 +201,7 @@ final class _CaptureMaster extends StatelessWidget {
   final TextEditingController filterController;
   final ValueChanged<String> onFilter;
   final VoidCallback onClearFilter;
+  final VoidCallback onSearch;
   final VoidCallback onCreateManual;
   final ValueChanged<String> onSelect;
 
@@ -255,9 +269,26 @@ final class _CaptureMaster extends StatelessWidget {
                 ),
                 const SizedBox(width: 4),
                 IconButton(
+                  key: const Key('evidence-search-open'),
+                  onPressed: onSearch,
+                  tooltip: copy('evidence_search.open'),
+                  constraints: const BoxConstraints.tightFor(
+                    width: ViberMetrics.controlHeight,
+                    height: ViberMetrics.controlHeight,
+                  ),
+                  padding: EdgeInsets.zero,
+                  icon: const Icon(Icons.manage_search, size: 17),
+                ),
+                const SizedBox(width: 2),
+                IconButton(
                   key: const Key('manual-capture-create'),
                   onPressed: canCreateManual ? onCreateManual : null,
                   tooltip: copy('capture.manual.create'),
+                  constraints: const BoxConstraints.tightFor(
+                    width: ViberMetrics.controlHeight,
+                    height: ViberMetrics.controlHeight,
+                  ),
+                  padding: EdgeInsets.zero,
                   icon: const Icon(Icons.add_link, size: 17),
                 ),
               ],
@@ -606,6 +637,13 @@ final class _CaptureDetail extends StatelessWidget {
             ].join('  ·  '),
             masterVisible: masterVisible,
             onToggleMaster: onToggleMaster,
+            onSearch: () => unawaited(
+              showEvidenceSearchDialog(
+                context,
+                controller: controller,
+                copy: copy,
+              ),
+            ),
             onRevoke: () async {
               final success = await controller.revokeSelectedManualCapture();
               if (success) onConfirmRevoke(false);
@@ -1520,6 +1558,7 @@ final class _CaptureContext extends StatelessWidget {
     required this.routeDetail,
     required this.masterVisible,
     required this.onToggleMaster,
+    required this.onSearch,
   });
 
   final CaptureRecord capture;
@@ -1540,6 +1579,7 @@ final class _CaptureContext extends StatelessWidget {
   final String routeDetail;
   final bool masterVisible;
   final VoidCallback? onToggleMaster;
+  final VoidCallback onSearch;
 
   @override
   Widget build(BuildContext context) {
@@ -1640,6 +1680,18 @@ final class _CaptureContext extends StatelessWidget {
                     ),
                     const SizedBox(width: 4),
                   ],
+                  IconButton(
+                    key: const Key('evidence-search-open-detail'),
+                    onPressed: onSearch,
+                    tooltip: copy('evidence_search.open'),
+                    icon: const Icon(Icons.manage_search, size: 17),
+                    constraints: const BoxConstraints.tightFor(
+                      width: 24,
+                      height: 24,
+                    ),
+                    padding: EdgeInsets.zero,
+                  ),
+                  const SizedBox(width: 4),
                   _CaptureGlyph(capture: capture, size: 30, glyphSize: 18),
                   const SizedBox(width: 8),
                   Expanded(

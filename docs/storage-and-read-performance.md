@@ -190,6 +190,30 @@ warm p50/p95 为 0.53/0.59 ms；并发 raw writer 时为 0.53/0.63 ms，完整�
 这补齐了可重复的冷 / 热读取分位数，但不支持“SSD 冷读”或跨机器 SLA 的说法。
 测试报告显式输出 `osPageCacheEvicted:false`，防止以后把口径写错。
 
+### 跨运行记录元数据检索（2026-09-26）
+
+检索只读取已有 Activity 列与仍在保留期内的 Exchange manifest：工作区、Capture、
+对话、流量策略、账号、请求/实际模型、工具名称、状态、错误和时间。它不会扫描或
+解压消息块、原始 HTTP 正文、Header 或工具参数，也不建立一份额外的敏感全文索引。
+模型与工具元数据随 Exchange content 到期而停止命中；账号、状态等 Activity 元数据
+仍按其自身保留/删除边界返回。结果中的正文摘要仅对最终命中的少量 Exchange 调用
+已有、受保留策略约束的 preview 投影。
+
+分页按不可变 Activity sequence 倒序，游标绑定完整筛选条件；换条件复用旧游标会被
+拒绝。当前 Server 只把该入口放在 Owner 工作台，成员与匿名会话不能读取团队检索。
+点击结果先打开精确 Exchange 证据，也可再进入所属 Capture。
+
+在上述 30,000 Activity / 1,000 消息的合成 SQLite 样本上，搜索一个位于较早历史的
+Capture ID 子串，每组 25 次：无并发写入 warm p50/p95 为 **37.9/38.7 ms**；有
+并发 Raw evidence 写入时为 **37.8/42.9 ms**。这是本机存储层样本，不是页面 SLA；
+当前证据不支持增加 FTS、复制正文索引或更换数据库。
+
+同一 release Web + Playwright 合成链路还验证了 Owner 接口与页面：账号 + 模型 +
+成功状态的组合筛选返回 10 条；只存在于约 184 KiB 消息正文末尾的唯一标记返回 0 条；
+页面在 Capture 目录收起时仍能打开“搜索全部记录”，键盘输入账号、选择结果并进入精确
+证据详情。普通成员和匿名会话访问 Owner 检索接口均返回未授权。可用
+`VIBERMATE_SEARCH_ONLY=1 node tool/performance/web-capture-latency.mjs` 复跑精简路径。
+
 ### 原生 macOS App：请求完成到证据可见（2026-09-25）
 
 使用当前提交构建 `dist/ViberMate.app`，以标准 `CFFIXED_USER_HOME` 隔离 App 数据；

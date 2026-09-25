@@ -214,6 +214,33 @@ func TestServerOwnerWebSessionCanManageManualCapture(t *testing.T) {
 	if denied.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("member read owner ManualCapture context status=%d", denied.StatusCode)
 	}
+	searchURL := "http://" + host.Status().ListenAddress +
+		"/api/v1/evidence/search?q=synthetic&limit=10"
+	for _, trial := range []struct {
+		label      string
+		credential string
+		expected   int
+	}{
+		{"owner", session.ReadToken, http.StatusOK},
+		{"member", memberSession.ReadToken, http.StatusUnauthorized},
+		{"anonymous", "", http.StatusUnauthorized},
+	} {
+		searchRequest, requestErr := http.NewRequest(http.MethodGet, searchURL, nil)
+		if requestErr != nil {
+			t.Fatal(requestErr)
+		}
+		if trial.credential != "" {
+			searchRequest.Header.Set("Authorization", "Bearer "+trial.credential)
+		}
+		searchResponse, requestErr := client.Do(searchRequest)
+		if requestErr != nil {
+			t.Fatal(requestErr)
+		}
+		searchResponse.Body.Close()
+		if searchResponse.StatusCode != trial.expected {
+			t.Fatalf("%s evidence search status=%d, want %d", trial.label, searchResponse.StatusCode, trial.expected)
+		}
+	}
 	wrongScope := postJSON(t, client,
 		"http://"+host.Status().ListenAddress+"/api/v1/manual-captures",
 		session.ReadToken, capturecontrol.ManualCaptureCreateRequest{

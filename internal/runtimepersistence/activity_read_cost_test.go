@@ -42,12 +42,14 @@ func activityReadFixture(t testing.TB, size int) *Store {
 	_, err := store.database.Exec(`WITH RECURSIVE n(x) AS (
 	 VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x < ?)
 	 INSERT INTO runtime_activities(activity_id, occurred_at_unix_ms, kind, subject_id,
-	 status, capture_run_id, conversation_projection_id, conversation_kind, conversation_evidence,
+	 status, capture_run_id, connection_id, source_kind, source_display_name,
+	 source_recognition, conversation_projection_id, conversation_kind, conversation_evidence,
 	 environment_id, environment_revision, environment_digest, client_endpoint_id,
 	 client_endpoint_revision, protocol_plan_id, protocol_plan_revision)
 	 SELECT 'a-'||x, 1000+x,
 	 CASE WHEN x%3=0 THEN 'exchange.completed' ELSE 'exchange.started' END,
-	 'exchange-'||(x/3), 'succeeded', 'run-'||(x/30),
+	 'exchange-'||(x/3), 'succeeded', 'run-'||(x/30), 'connection-'||x,
+	 'capture_run', 'codex', 'verified',
 	 CASE WHEN x%3=0 THEN 'session-'||(x/300) ELSE 'pending-'||(x/3) END,
 	 'main', 'explicit_session', 'env', 1, ?, 'endpoint', 1, 'protocol', 1 FROM n`, size, strings.Repeat("a", 64))
 	if err != nil {
@@ -275,6 +277,10 @@ func TestEvidenceReadPerformanceBaseline(t *testing.T) {
 				var peakHeap uint64
 				var peakQueueBytes int64
 				query, args := exchangePageQuery(activity.PageRequest{Limit: 100, ConversationProjectionID: "session-2"})
+				search := activity.SearchRequest{
+					Query:              activity.SearchQuery{Limit: 50, Text: "run-37"},
+					ContentAvailableAt: now.Truncate(time.Millisecond),
+				}
 				for range 25 {
 					for _, step := range []struct {
 						name string
@@ -292,6 +298,13 @@ func TestEvidenceReadPerformanceBaseline(t *testing.T) {
 						}},
 						{"full_projection", func() error {
 							_, err := store.ExchangeContentRepository().GetProjection(ctx, record.ExchangeID, now, exchangecontent.RequestViewFull)
+							return err
+						}},
+						{"metadata_search", func() error {
+							page, err := store.ActivityRepository().SearchExchanges(ctx, search)
+							if err == nil && len(page.Items) == 0 {
+								return fmt.Errorf("empty synthetic search")
+							}
 							return err
 						}},
 					} {

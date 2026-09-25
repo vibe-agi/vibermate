@@ -962,6 +962,7 @@ type Repository interface {
 	List(context.Context, PageRequest) (Page, error)
 	ListExchanges(context.Context, PageRequest) (Page, error)
 	ListConversations(context.Context, ConversationIndexRequest) (ConversationPage, error)
+	SearchExchanges(context.Context, SearchRequest) (SearchPage, error)
 }
 
 // ConversationIdentityRepository retains exact client session/actor/provider
@@ -987,6 +988,7 @@ type Reader interface {
 	List(context.Context, PageRequest) (Page, error)
 	ListExchanges(context.Context, PageRequest) (Page, error)
 	ListConversations(context.Context, ConversationIndexRequest) (ConversationPage, error)
+	Search(context.Context, SearchQuery) (SearchPage, error)
 }
 
 type Runtime interface {

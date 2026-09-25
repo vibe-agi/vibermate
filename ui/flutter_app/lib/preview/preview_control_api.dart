@@ -2266,6 +2266,167 @@ final class PreviewControlApi implements ControlApi {
   }
 
   @override
+  Future<EvidenceSearchPage> searchEvidence(
+    EvidenceSearchRequest request,
+  ) async {
+    _requireOpen();
+    if (!request.valid) {
+      throw const ControlContractException('evidence search is invalid');
+    }
+    final offset = _previewOffset(request.cursor, 'search');
+    final query = request.query.toLowerCase();
+    bool contains(String value, String needle) =>
+        value.toLowerCase().contains(needle.toLowerCase());
+    final values = <EvidenceSearchHit>[];
+    for (final activity in _allPreviewActivities()) {
+      if (activity.occurredAt.isBefore(request.from ?? DateTime.utc(1)) ||
+          !activity.occurredAt.isBefore(
+            request.until ?? DateTime.utc(9999, 12, 31),
+          ) ||
+          (request.environmentId.isNotEmpty &&
+              activity.environmentId != request.environmentId) ||
+          (request.accountId.isNotEmpty &&
+              activity.accountId != request.accountId) ||
+          (request.status.isNotEmpty && activity.status != request.status) ||
+          (request.reason.isNotEmpty &&
+              !contains(activity.reasonCode ?? '', request.reason))) {
+        continue;
+      }
+      final capture = _captures.values
+          .where(
+            (value) =>
+                value.id == activity.captureRunId ||
+                value.id == activity.manualCaptureId,
+          )
+          .firstOrNull;
+      if (capture == null) continue;
+      final detail = await exchange(activity.id);
+      final contentAvailable = detail.content.state == 'recorded';
+      final requestedModel = contentAvailable
+          ? detail.content.request?.requestedModel ?? ''
+          : '';
+      final effectiveModel = contentAvailable
+          ? detail.content.response?.effectiveModel ??
+                detail.content.request?.effectiveModel ??
+                ''
+          : '';
+      final reportedModel = contentAvailable
+          ? detail.content.response?.reportedModel ?? ''
+          : '';
+      final toolNames = contentAvailable
+          ? detail.content.request?.tools
+                    .map((tool) => tool.name)
+                    .toSet()
+                    .toList(growable: false) ??
+                const <String>[]
+          : const <String>[];
+      if (request.model.isNotEmpty &&
+          ![
+            requestedModel,
+            effectiveModel,
+            reportedModel,
+          ].any((value) => contains(value, request.model))) {
+        continue;
+      }
+      if (request.tool.isNotEmpty &&
+          !toolNames.any((value) => contains(value, request.tool))) {
+        continue;
+      }
+      final context = EvidenceSearchContext(
+        workspaceId: capture.managedRun?.workspaceId ?? '',
+        workspaceLabel: capture.managedRun?.workspaceLabel ?? '',
+        captureLabel: capture.displayName,
+        requestedModel: requestedModel,
+        effectiveModel: effectiveModel,
+        reportedModel: reportedModel,
+        toolNames: toolNames,
+        contentAvailable: contentAvailable,
+      );
+      final matches = <String>{};
+      if (request.environmentId.isNotEmpty) matches.add('environment');
+      if (request.accountId.isNotEmpty) matches.add('account');
+      if (request.model.isNotEmpty) matches.add('model');
+      if (request.tool.isNotEmpty) matches.add('tool');
+      if (request.status.isNotEmpty) matches.add('status');
+      if (request.reason.isNotEmpty) matches.add('error');
+      if (request.from != null) matches.add('time');
+      if (query.isNotEmpty) {
+        var textMatched = false;
+        if ([
+          context.workspaceId,
+          context.workspaceLabel,
+        ].any((value) => contains(value, query))) {
+          matches.add('workspace');
+          textMatched = true;
+        }
+        if ([
+          capture.id,
+          context.captureLabel,
+        ].any((value) => contains(value, query))) {
+          matches.add('capture');
+          textMatched = true;
+        }
+        if ([
+          activity.conversation.id,
+          activity.conversation.displayName ?? '',
+        ].any((value) => contains(value, query))) {
+          matches.add('conversation');
+          textMatched = true;
+        }
+        if (contains(activity.environmentId, query)) {
+          matches.add('environment');
+          textMatched = true;
+        }
+        if (contains(activity.accountId ?? '', query)) {
+          matches.add('account');
+          textMatched = true;
+        }
+        if ([
+          requestedModel,
+          effectiveModel,
+          reportedModel,
+        ].any((value) => contains(value, query))) {
+          matches.add('model');
+          textMatched = true;
+        }
+        if (toolNames.any((value) => contains(value, query))) {
+          matches.add('tool');
+          textMatched = true;
+        }
+        if (contains(activity.status, query)) {
+          matches.add('status');
+          textMatched = true;
+        }
+        if (contains(activity.reasonCode ?? '', query)) {
+          matches.add('error');
+          textMatched = true;
+        }
+        if (contains(activity.source.displayName, query)) {
+          matches.add('source');
+          textMatched = true;
+        }
+        if (contains(activity.id, query)) {
+          matches.add('exchange');
+          textMatched = true;
+        }
+        if (!textMatched) continue;
+      }
+      values.add(
+        EvidenceSearchHit(
+          activity: activity,
+          context: context,
+          matches: matches.toList(growable: false),
+        ),
+      );
+    }
+    final end = (offset + request.limit).clamp(0, values.length).toInt();
+    return EvidenceSearchPage(
+      items: values.sublist(offset, end),
+      nextCursor: end < values.length ? 'search-$end' : null,
+    );
+  }
+
+  @override
   Future<ConversationPage> conversations({
     String? cursor,
     int limit = 50,

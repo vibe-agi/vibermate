@@ -1219,6 +1219,30 @@ void main() {
     expect(activity.requestPreview?.kind, 'tool_call');
     expect(activity.requestPreview?.text, 'workspace.read');
 
+    final search = EvidenceSearchPage.fromJson({
+      'items': [
+        {
+          'activity': json,
+          'context': {
+            'workspaceId': 'workspace_test',
+            'workspaceLabel': 'Test workspace',
+            'captureLabel': 'Claude Code',
+            'requestedModel': 'claude-sonnet-4-5',
+            'effectiveModel': 'claude-sonnet-4-5',
+            'reportedModel': 'claude-sonnet-4-5-20260925',
+            'toolNames': ['workspace.read'],
+            'contentAvailable': true,
+          },
+          'matches': ['workspace', 'tool'],
+        },
+      ],
+      'nextCursor': 'AQAAAAAAAAAqYWJjZGVmZ2hpamtsbW5vcA',
+    }, 'search');
+    expect(search.items.single.activity.id, 'exchange-test');
+    expect(search.items.single.context.toolNames, ['workspace.read']);
+    expect(search.items.single.matches, ['workspace', 'tool']);
+    expect(search.nextCursor, isNotEmpty);
+
     final invalidPreview = jsonDecode(jsonEncode(json)) as Map<String, dynamic>;
     invalidPreview['requestPreview'] = {
       'kind': 'reasoning',

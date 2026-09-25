@@ -368,6 +368,9 @@ final class WorkbenchController extends ChangeNotifier
   Future<EnvironmentDryRun> dryRunEnvironment(EnvironmentDryRunInput input) =>
       _api.dryRunEnvironment(input);
 
+  Future<EvidenceSearchPage> searchEvidence(EvidenceSearchRequest request) =>
+      _api.searchEvidence(request);
+
   Future<EnvironmentDraft> environmentDraft(String environmentId) =>
       _api.environmentDraft(environmentId);
 
