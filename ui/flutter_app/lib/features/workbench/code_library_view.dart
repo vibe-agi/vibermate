@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
@@ -9,6 +10,7 @@ import '../../core/design/viber_theme.dart';
 import '../../core/design/workbench_widgets.dart';
 import '../../core/i18n/app_copy.dart';
 import 'account_selector_editor.dart';
+import 'built_in_script_templates.g.dart';
 import 'message_transform_editor.dart';
 import 'workbench_controller.dart';
 
@@ -207,6 +209,11 @@ final class _CodeLibraryViewState extends State<CodeLibraryView> {
           copy: copy,
           enabled: !_mutating,
           onEdit: _selected == null ? null : () => unawaited(_edit(_selected!)),
+          onReviewTemplate: _selected == null
+              ? null
+              : (template) => unawaited(
+                  _edit(_selected!, initialPolicy: template.policy),
+                ),
         );
         if (constraints.maxWidth < 680) {
           return Column(
@@ -392,7 +399,10 @@ final class _CodeLibraryViewState extends State<CodeLibraryView> {
     });
   }
 
-  Future<void> _edit(CodeLibraryTransformRevision current) async {
+  Future<void> _edit(
+    CodeLibraryTransformRevision current, {
+    TrafficTransformPolicy? initialPolicy,
+  }) async {
     final policy = await Navigator.of(context).push<TrafficTransformPolicy>(
       MaterialPageRoute(
         builder: (context) => MessageTransformEditorDialog(
@@ -400,7 +410,7 @@ final class _CodeLibraryViewState extends State<CodeLibraryView> {
           displayName: current.displayName,
           baseRevision: current.revision,
           wireProtocol: _testWireProtocol,
-          initial: current.policy,
+          initial: initialPolicy ?? current.policy,
           initialSample: _capturedSampleFor(_testWireProtocol),
           initialSampleExchangeId: _capturedFor(_testWireProtocol)?.exchangeId,
           copy: copy,
@@ -971,6 +981,7 @@ final class _StarterGallery extends StatelessWidget {
               children: [
                 for (final starter in const [
                   _TransformStarter.localIdentity,
+                  _TransformStarter.clientMetadata,
                   _TransformStarter.blockSecrets,
                   _TransformStarter.privateContacts,
                   _TransformStarter.turnTime,
@@ -1027,6 +1038,7 @@ final class _StarterCard extends StatelessWidget {
     return _ExampleCard(
       icon: switch (starter) {
         _TransformStarter.localIdentity => Icons.visibility_off_outlined,
+        _TransformStarter.clientMetadata => Icons.fingerprint_outlined,
         _TransformStarter.blockSecrets => Icons.key_off_outlined,
         _TransformStarter.privateContacts => Icons.contact_page_outlined,
         _TransformStarter.turnTime => Icons.schedule_outlined,
@@ -1341,12 +1353,14 @@ final class _LibraryDetail extends StatelessWidget {
     required this.copy,
     required this.enabled,
     required this.onEdit,
+    required this.onReviewTemplate,
   });
 
   final CodeLibraryTransformRevision? transform;
   final AppCopy copy;
   final bool enabled;
   final VoidCallback? onEdit;
+  final ValueChanged<_ScriptTemplate>? onReviewTemplate;
 
   @override
   Widget build(BuildContext context) {
@@ -1358,6 +1372,7 @@ final class _LibraryDetail extends StatelessWidget {
         detail: copy('code_library.select.detail'),
       );
     }
+    final template = _matchingScriptTemplate(value.policy);
     return ListView(
       key: Key('code-library-detail-${value.id}'),
       padding: const EdgeInsets.all(14),
@@ -1424,6 +1439,18 @@ final class _LibraryDetail extends StatelessWidget {
           },
         ),
         const SizedBox(height: 14),
+        if (template case final match?) ...[
+          _TemplateStatusCard(
+            current: value.policy,
+            match: match,
+            copy: copy,
+            enabled: enabled,
+            onReview: onReviewTemplate == null
+                ? null
+                : () => onReviewTemplate!(match.template),
+          ),
+          const SizedBox(height: 10),
+        ],
         _SourcePanel(
           title: copy('environment.transform.request'),
           source: value.policy.requestJavaScript,
@@ -1440,6 +1467,342 @@ final class _LibraryDetail extends StatelessWidget {
       ],
     );
   }
+}
+
+final class _TemplateStatusCard extends StatelessWidget {
+  const _TemplateStatusCard({
+    required this.current,
+    required this.match,
+    required this.copy,
+    required this.enabled,
+    required this.onReview,
+  });
+
+  final TrafficTransformPolicy current;
+  final _ScriptTemplateMatch match;
+  final AppCopy copy;
+  final bool enabled;
+  final VoidCallback? onReview;
+
+  @override
+  Widget build(BuildContext context) {
+    final template = match.template;
+    final label = copy(template.labelKey);
+    return Container(
+      key: const Key('code-library-template-status'),
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: context.viberColors.panelRaised,
+        border: Border(
+          left: BorderSide(
+            color: match.current
+                ? context.viberColors.verified
+                : context.viberColors.warning,
+            width: 2,
+          ),
+        ),
+      ),
+      child: Wrap(
+        alignment: WrapAlignment.spaceBetween,
+        crossAxisAlignment: WrapCrossAlignment.center,
+        spacing: 10,
+        runSpacing: 8,
+        children: [
+          ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 620),
+            child: Text(
+              copy.format(
+                match.current
+                    ? 'code_library.template.current'
+                    : 'code_library.template.changed',
+                {
+                  'name': label,
+                  'version': template.version,
+                  'digest': template.digest.substring(0, 12),
+                },
+              ),
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+          ),
+          if (!match.current)
+            OutlinedButton.icon(
+              key: const Key('code-library-template-compare'),
+              onPressed: enabled
+                  ? () => unawaited(
+                      _showTemplateDiff(
+                        context,
+                        current: current,
+                        template: template,
+                        copy: copy,
+                        onReview: onReview,
+                      ),
+                    )
+                  : null,
+              icon: const Icon(Icons.difference_outlined, size: 15),
+              label: Text(copy('code_library.template.compare')),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+Future<void> _showTemplateDiff(
+  BuildContext context, {
+  required TrafficTransformPolicy current,
+  required _ScriptTemplate template,
+  required AppCopy copy,
+  required VoidCallback? onReview,
+}) => showDialog<void>(
+  context: context,
+  builder: (context) => DefaultTabController(
+    length: 2,
+    child: AlertDialog(
+      title: Text(
+        copy.format('code_library.template.compare_title', {
+          'name': copy(template.labelKey),
+          'version': template.version,
+        }),
+      ),
+      content: SizedBox(
+        key: const Key('code-library-template-diff'),
+        width: 840,
+        height: math.min(MediaQuery.sizeOf(context).height * 0.68, 620),
+        child: Column(
+          children: [
+            Text(
+              copy('code_library.template.compare_detail'),
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+            const SizedBox(height: 8),
+            TabBar(
+              tabs: [
+                Tab(text: copy('environment.transform.request')),
+                Tab(text: copy('environment.transform.response')),
+              ],
+            ),
+            Expanded(
+              child: TabBarView(
+                children: [
+                  _TemplateStageDiff(
+                    stage: 'request',
+                    current: current.requestJavaScript,
+                    latest: template.request,
+                    copy: copy,
+                  ),
+                  _TemplateStageDiff(
+                    stage: 'response',
+                    current: current.responseJavaScript,
+                    latest: template.response,
+                    copy: copy,
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: Text(copy('common.dismiss')),
+        ),
+        if (onReview != null)
+          FilledButton(
+            key: const Key('code-library-template-review'),
+            onPressed: () {
+              Navigator.of(context).pop();
+              onReview();
+            },
+            child: Text(copy('code_library.template.review')),
+          ),
+      ],
+    ),
+  ),
+);
+
+final class _TemplateStageDiff extends StatelessWidget {
+  const _TemplateStageDiff({
+    required this.stage,
+    required this.current,
+    required this.latest,
+    required this.copy,
+  });
+
+  final String stage;
+  final String current;
+  final String latest;
+  final AppCopy copy;
+
+  @override
+  Widget build(BuildContext context) {
+    final change = _changedScriptBlock(current, latest);
+    if (change == null) {
+      return CenteredMessage(
+        icon: Icons.check_circle_outline,
+        title: copy('code_library.template.stage_same'),
+      );
+    }
+    return Padding(
+      padding: const EdgeInsets.only(top: 10),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text(
+            copy.format('code_library.template.diff_scope', {
+              'prefix': change.prefix,
+              'suffix': change.suffix,
+            }),
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
+          const SizedBox(height: 8),
+          Expanded(
+            child: LayoutBuilder(
+              builder: (context, constraints) {
+                final before = _TemplateCodePanel(
+                  key: Key('code-library-template-$stage-current'),
+                  title: copy('code_library.template.current_revision'),
+                  line: change.currentLine,
+                  visible: _boundedScriptBlock(change.current),
+                  exact: current,
+                  copy: copy,
+                );
+                final after = _TemplateCodePanel(
+                  key: Key('code-library-template-$stage-latest'),
+                  title: copy('code_library.template.latest'),
+                  line: change.latestLine,
+                  visible: _boundedScriptBlock(change.latest),
+                  exact: latest,
+                  copy: copy,
+                );
+                if (constraints.maxWidth < 620) {
+                  return ListView(
+                    children: [
+                      SizedBox(height: 220, child: before),
+                      const SizedBox(height: 8),
+                      SizedBox(height: 220, child: after),
+                    ],
+                  );
+                }
+                return Row(
+                  children: [
+                    Expanded(child: before),
+                    const SizedBox(width: 8),
+                    Expanded(child: after),
+                  ],
+                );
+              },
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+final class _TemplateCodePanel extends StatelessWidget {
+  const _TemplateCodePanel({
+    required this.title,
+    required this.line,
+    required this.visible,
+    required this.exact,
+    required this.copy,
+    super.key,
+  });
+
+  final String title;
+  final int line;
+  final String visible;
+  final String exact;
+  final AppCopy copy;
+
+  @override
+  Widget build(BuildContext context) => Container(
+    padding: const EdgeInsets.all(10),
+    decoration: BoxDecoration(
+      color: context.viberColors.panelRaised,
+      border: Border.all(color: context.viberColors.divider),
+      borderRadius: ViberMetrics.controlRadius,
+    ),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Row(
+          children: [
+            Expanded(
+              child: Text(
+                copy.format('code_library.template.block_title', {
+                  'title': title,
+                  'line': line,
+                }),
+                style: Theme.of(context).textTheme.labelMedium,
+              ),
+            ),
+            IconButton(
+              tooltip: copy.format('common.copy', {'field': title}),
+              onPressed: () => Clipboard.setData(ClipboardData(text: exact)),
+              icon: const Icon(Icons.copy_outlined, size: 14),
+            ),
+          ],
+        ),
+        Expanded(
+          child: SingleChildScrollView(
+            child: SelectableText(
+              visible.isEmpty ? copy('code_library.no_changes') : visible,
+              style: monoStyle,
+            ),
+          ),
+        ),
+      ],
+    ),
+  );
+}
+
+typedef _ChangedScriptBlock = ({
+  int prefix,
+  int suffix,
+  int currentLine,
+  int latestLine,
+  List<String> current,
+  List<String> latest,
+});
+
+_ChangedScriptBlock? _changedScriptBlock(String current, String latest) {
+  if (current == latest) return null;
+  final before = const LineSplitter().convert(current);
+  final after = const LineSplitter().convert(latest);
+  var prefix = 0;
+  while (prefix < before.length &&
+      prefix < after.length &&
+      before[prefix] == after[prefix]) {
+    prefix++;
+  }
+  var suffix = 0;
+  while (suffix < before.length - prefix &&
+      suffix < after.length - prefix &&
+      before[before.length - suffix - 1] == after[after.length - suffix - 1]) {
+    suffix++;
+  }
+  return (
+    prefix: prefix,
+    suffix: suffix,
+    currentLine: prefix + 1,
+    latestLine: prefix + 1,
+    current: before.sublist(prefix, before.length - suffix),
+    latest: after.sublist(prefix, after.length - suffix),
+  );
+}
+
+String _boundedScriptBlock(List<String> lines) {
+  const maximumLines = 200;
+  const maximumCharacters = 32000;
+  var value = lines.take(maximumLines).join('\n');
+  if (value.length > maximumCharacters) {
+    value = '${value.substring(0, maximumCharacters)}\n…';
+  } else if (lines.length > maximumLines) {
+    value = '$value\n…';
+  }
+  return value;
 }
 
 final class _AccountSelectorDetail extends StatelessWidget {
@@ -1713,6 +2076,7 @@ final class _TransformDraft {
 enum _TransformStarter {
   blank,
   localIdentity,
+  clientMetadata,
   blockSecrets,
   privateContacts,
   turnTime,
@@ -1722,6 +2086,70 @@ enum _TransformStarter {
 }
 
 enum _AccountSelectorStarter { loginUser }
+
+final class _ScriptTemplate {
+  const _ScriptTemplate({
+    required this.id,
+    required this.version,
+    required this.digest,
+    required this.labelKey,
+    required this.request,
+    required this.response,
+    required this.marker,
+  });
+
+  final String id;
+  final String version;
+  final String digest;
+  final String labelKey;
+  final String request;
+  final String response;
+  final String marker;
+
+  TrafficTransformPolicy get policy => TrafficTransformPolicy(
+    requestJavaScript: request,
+    responseJavaScript: response,
+  );
+}
+
+const _scriptTemplates = [
+  _ScriptTemplate(
+    id: 'hide-local-identity',
+    version: builtInHideLocalIdentityVersion,
+    digest: builtInHideLocalIdentityDigest,
+    labelKey: 'code_library.starter.local_identity',
+    request: builtInHideLocalIdentityRequest,
+    response: builtInHideLocalIdentityResponse,
+    marker: 'ViberMate local identity v',
+  ),
+  _ScriptTemplate(
+    id: 'hide-client-metadata',
+    version: builtInHideClientMetadataVersion,
+    digest: builtInHideClientMetadataDigest,
+    labelKey: 'code_library.starter.client_metadata',
+    request: builtInHideClientMetadataRequest,
+    response: '',
+    marker: '客户端元信息替换 v',
+  ),
+];
+
+typedef _ScriptTemplateMatch = ({_ScriptTemplate template, bool current});
+
+_ScriptTemplateMatch? _matchingScriptTemplate(TrafficTransformPolicy policy) {
+  for (final template in _scriptTemplates) {
+    final exact =
+        policy.requestJavaScript == template.request &&
+        policy.responseJavaScript == template.response;
+    final markerBoundary = math.min(policy.requestJavaScript.length, 512);
+    final marked = policy.requestJavaScript
+        .substring(0, markerBoundary)
+        .contains(template.marker);
+    if (exact || marked) {
+      return (template: template, current: exact);
+    }
+  }
+  return null;
+}
 
 final class _TransformDraftDialog extends StatefulWidget {
   const _TransformDraftDialog({
@@ -1891,6 +2319,9 @@ String _starterLabel(AppCopy copy, _TransformStarter starter) =>
       _TransformStarter.localIdentity => copy(
         'code_library.starter.local_identity',
       ),
+      _TransformStarter.clientMetadata => copy(
+        'code_library.starter.client_metadata',
+      ),
       _TransformStarter.blockSecrets => copy(
         'code_library.starter.block_secrets',
       ),
@@ -1913,6 +2344,8 @@ String _starterDetailKey(_TransformStarter starter) => switch (starter) {
   _TransformStarter.blank => 'code_library.empty.detail',
   _TransformStarter.localIdentity =>
     'code_library.starter.local_identity.detail',
+  _TransformStarter.clientMetadata =>
+    'code_library.starter.client_metadata.detail',
   _TransformStarter.blockSecrets => 'code_library.starter.block_secrets.detail',
   _TransformStarter.privateContacts =>
     'code_library.starter.private_contacts.detail',
@@ -1956,8 +2389,12 @@ TrafficTransformPolicy _starterPolicy(
 ) => switch (starter) {
   _TransformStarter.blank => const TrafficTransformPolicy.disabled(),
   _TransformStarter.localIdentity => const TrafficTransformPolicy(
-    requestJavaScript: _localIdentityRequest,
-    responseJavaScript: _restoreRedactionsResponse,
+    requestJavaScript: builtInHideLocalIdentityRequest,
+    responseJavaScript: builtInHideLocalIdentityResponse,
+  ),
+  _TransformStarter.clientMetadata => const TrafficTransformPolicy(
+    requestJavaScript: builtInHideClientMetadataRequest,
+    responseJavaScript: '',
   ),
   _TransformStarter.blockSecrets => const TrafficTransformPolicy(
     requestJavaScript: _blockSecretsRequest,
@@ -2024,25 +2461,11 @@ MessageTransformTestSample _starterTestSample(
     assistantMessage:
         'Contact redacted-email-1@example.invalid from 192.0.2.2; public DNS is 8.8.8.8.',
   ),
+  _TransformStarter.clientMetadata => MessageTransformTestSample.example(
+    wireProtocol,
+  ),
   _ => MessageTransformTestSample.example(wireProtocol),
 };
-
-const _localIdentityRequest = r'''const candidates = [
-  [runtime.workspace.root, "/workspace/project"],
-  [runtime.user.homeDirectory, "/Users/guest"],
-  [runtime.user.name, "vibermate-user"],
-];
-context.redactions = [];
-for (let index = 0; index < candidates.length; index += 1) {
-  const privateValue = candidates[index][0];
-  const publicValue = candidates[index][1];
-  if (!privateValue || privateValue === publicValue) continue;
-  const encodedPrivate = JSON.stringify(privateValue).slice(1, -1);
-  const encodedPublic = JSON.stringify(publicValue).slice(1, -1);
-  if (!request.body.includes(encodedPrivate)) continue;
-  request.body = request.body.split(encodedPrivate).join(encodedPublic);
-  context.redactions.push([encodedPrivate, encodedPublic]);
-}''';
 
 const _blockSecretsRequest =
     r'''const privateKey = /-----BEGIN (?:[A-Z0-9 ]+ )?PRIVATE KEY-----/;

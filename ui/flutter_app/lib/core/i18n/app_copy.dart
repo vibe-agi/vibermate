@@ -1330,6 +1330,7 @@ final class AppCopy {
     'code_library.starter.protocol': 'Starter protocol',
     'code_library.starter.blank': 'Blank',
     'code_library.starter.local_identity': 'Hide local identity',
+    'code_library.starter.client_metadata': 'Replace client metadata',
     'code_library.starter.block_secrets': 'Block secret leakage',
     'code_library.starter.private_contacts': 'Hide email and private IP',
     'code_library.starter.turn_time': 'Show Turn time',
@@ -1338,14 +1339,16 @@ final class AppCopy {
     'code_library.starter.response_model': 'Show actual response model',
     'code_library.starters.title': 'Built-in examples',
     'code_library.starters.detail':
-        'Preview the complete code before deciding. Creating from an example makes an editable copy; nothing is published until you save it.',
+        'Preview and test the complete code before deciding. Tested privacy templates are generated from the same files published under javascript/. Creating from one makes an editable copy; nothing is published until you save it.',
     'code_library.starters.blank_action': 'Start blank',
     'code_library.starters.view': 'View code',
     'code_library.starters.use': 'Create from example',
     'code_library.starters.preview.detail':
         'Try this built-in code locally. Edits and test results are discarded unless you create a copy.',
     'code_library.starter.local_identity.detail':
-        'Replace the local user, home, and Workspace path before upload, then restore them in this Turn\'s response.',
+        'Tested request + response pair. Replaces supported local identity fields and restores editable response fields while preserving schema, IDs, signatures and encrypted continuation data.',
+    'code_library.starter.client_metadata.detail':
+        'Tested request-only template. Replaces allowlisted version, install-ID and User-Agent headers; it never changes credentials, bodies or session IDs. Edit the synthetic defaults before publishing.',
     'code_library.starter.block_secrets.detail':
         'Stop a request locally when it contains a private-key marker or a recognizable access-token prefix.',
     'code_library.starter.private_contacts.detail':
@@ -1358,6 +1361,22 @@ final class AppCopy {
         'Append an exact rule selected by the frozen Workspace label; unknown Workspaces stay unchanged.',
     'code_library.starter.response_model.detail':
         'Show the response model as a signed note in plain-text replies; skip structured JSON output. Removed before the next request.',
+    'code_library.template.current':
+        'Matches tested template {name} {version} · source {digest}.',
+    'code_library.template.changed':
+        'This revision identifies as {name}, but differs from the current tested {version} template ({digest}). Nothing is changed automatically.',
+    'code_library.template.compare': 'Compare template',
+    'code_library.template.compare_title': '{name} {version} changes',
+    'code_library.template.compare_detail':
+        'Only the changed middle block is shown; unchanged leading and trailing lines are counted. Copy uses the exact complete script. Review and test before publishing a new immutable revision.',
+    'code_library.template.stage_same':
+        'This stage already matches the current template.',
+    'code_library.template.diff_scope':
+        '{prefix} unchanged leading lines · {suffix} unchanged trailing lines',
+    'code_library.template.current_revision': 'Published revision',
+    'code_library.template.latest': 'Current tested template',
+    'code_library.template.block_title': '{title} · from line {line}',
+    'code_library.template.review': 'Review and test update',
     'code_library.empty': 'No code yet',
     'code_library.empty.detail':
         'Create and publish a message transform or account selection rule from an example.',
@@ -3423,6 +3442,7 @@ final class AppCopy {
     'code_library.starter.protocol': '示例适用协议',
     'code_library.starter.blank': '空白',
     'code_library.starter.local_identity': '隐藏本机身份',
+    'code_library.starter.client_metadata': '替换客户端元信息',
     'code_library.starter.block_secrets': '阻止密钥泄露',
     'code_library.starter.private_contacts': '隐藏邮箱与内网 IP',
     'code_library.starter.turn_time': '显示轮次时间',
@@ -3430,14 +3450,17 @@ final class AppCopy {
     'code_library.starter.workspace_rules': '按工作区应用规则',
     'code_library.starter.response_model': '显示实际响应模型',
     'code_library.starters.title': '内置示例',
-    'code_library.starters.detail': '先查看完整代码，再决定是否使用；新建后得到可编辑副本，保存前不会发布。',
+    'code_library.starters.detail':
+        '先查看并测试完整代码，再决定是否使用。隐私模板与 javascript/ 目录发布的文件由同一来源生成；新建后得到可编辑副本，保存前不会发布。',
     'code_library.starters.blank_action': '从空白开始',
     'code_library.starters.view': '查看代码',
     'code_library.starters.use': '以此新建',
     'code_library.starters.preview.detail':
         '可在本地修改并运行测试；关闭后丢弃改动和结果，只有以此新建才会保留代码。',
     'code_library.starter.local_identity.detail':
-        '发送前替换本机用户名、主目录和工作区路径，再在本轮响应中还原。',
+        '经过测试的请求＋响应成对模板：替换支持的本机身份字段，并只在可编辑响应字段中还原；保留 schema、ID、签名与加密续接数据。',
+    'code_library.starter.client_metadata.detail':
+        '经过测试的仅请求模板：只替换白名单内的版本、安装 ID 和 User-Agent 头，不改凭据、正文或会话 ID；发布前需修改合成默认值。',
     'code_library.starter.block_secrets.detail': '请求含私钥标记或可识别的访问令牌前缀时，在本地直接停止。',
     'code_library.starter.private_contacts.detail':
         '发送前替换邮箱和内网 IPv4 地址，再在响应中还原。',
@@ -3448,6 +3471,20 @@ final class AppCopy {
     'code_library.starter.workspace_rules.detail': '按冻结的工作区名称追加精确规则；未知工作区保持原样。',
     'code_library.starter.response_model.detail':
         '在普通文本回复中注明实际返回的模型；跳过结构化 JSON 输出，下次请求前自动移除。',
+    'code_library.template.current':
+        '与已测试模板 {name} {version} 一致 · 来源 {digest}。',
+    'code_library.template.changed':
+        '该修订标识为 {name}，但与当前已测试的 {version} 模板（{digest}）不同；不会自动修改。',
+    'code_library.template.compare': '比较模板',
+    'code_library.template.compare_title': '{name} {version} 变更',
+    'code_library.template.compare_detail':
+        '这里只显示中间的变化块，并统计前后未变化的行；复制操作使用完整精确脚本。请先审查并测试，再发布新的不可变修订。',
+    'code_library.template.stage_same': '此阶段已经与当前模板一致。',
+    'code_library.template.diff_scope': '前部 {prefix} 行未变 · 后部 {suffix} 行未变',
+    'code_library.template.current_revision': '已发布修订',
+    'code_library.template.latest': '当前已测试模板',
+    'code_library.template.block_title': '{title} · 从第 {line} 行开始',
+    'code_library.template.review': '审查并测试更新',
     'code_library.empty': '还没有代码',
     'code_library.empty.detail': '从示例新建并发布消息变换或账号选择规则。',
     'code_library.select': '选择一个变换',

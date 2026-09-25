@@ -388,6 +388,16 @@ try {
   };
   assert.equal(idle.semanticMutations.meaningful, 0,
     'unchanged inventory polling rebuilt visible Web semantics');
+  await trialPage.keyboard.press('Meta+3');
+  const scriptLibrary = trialPage.locator(
+    'flt-semantics[aria-label*="Script library"]',
+  ).last();
+  await scriptLibrary.waitFor();
+  await scriptLibrary.click();
+  await trialPage.locator('flt-semantics')
+    .filter({ hasText: 'Hide local identity' }).last().waitFor();
+  await trialPage.locator('flt-semantics')
+    .filter({ hasText: 'Replace client metadata' }).last().waitFor();
   await trialPage.close();
 
   async function measure(latencyMs, label) {
@@ -649,6 +659,7 @@ try {
       capacityState: storageSnapshot.capacityState,
       databaseBytes: storageSnapshot.databaseBytes,
       browserPickerAbsent: true, serverBackupCommandsVisible: true },
+    scripts: { testedTemplatesVisible: true },
     local, delayed, browser: await browser.version(),
     runtime: process.platform + '/' + process.arch }));
 } finally {
