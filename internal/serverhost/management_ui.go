@@ -1,13 +1,16 @@
 package serverhost
 
 import (
+	"compress/gzip"
 	"errors"
 	"fmt"
 	"io/fs"
+	"mime"
 	"net/http"
 	"os"
 	"path"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
@@ -75,6 +78,65 @@ func newManagementUI(root string) (http.Handler, error) {
 		// across releases. Require revalidation for every member so loading a new
 		// index can never execute a cached control client from an older contract.
 		writer.Header().Set("Cache-Control", "no-cache")
+		if clean == "/main.dart.js" {
+			writer.Header().Add("Vary", "Accept-Encoding")
+			if request.Header.Get("Range") == "" &&
+				acceptsGzip(request.Header.Values("Accept-Encoding")) {
+				compressed := &gzipResponseWriter{ResponseWriter: writer}
+				files.ServeHTTP(compressed, request)
+				if compressed.gzip != nil {
+					_ = compressed.gzip.Close()
+				}
+				return
+			}
+		}
 		files.ServeHTTP(writer, request)
 	}), nil
+}
+
+func acceptsGzip(values []string) bool {
+	for _, value := range values {
+		for _, item := range strings.Split(value, ",") {
+			encoding, parameters, err := mime.ParseMediaType(strings.TrimSpace(item))
+			if err != nil || !strings.EqualFold(encoding, "gzip") {
+				continue
+			}
+			if quality, specified := parameters["q"]; specified {
+				value, err := strconv.ParseFloat(quality, 64)
+				if err != nil || !(value > 0 && value <= 1) {
+					continue
+				}
+			}
+			return true
+		}
+	}
+	return false
+}
+
+type gzipResponseWriter struct {
+	http.ResponseWriter
+	gzip   *gzip.Writer
+	status int
+}
+
+func (writer *gzipResponseWriter) WriteHeader(status int) {
+	writer.status = status
+	if status == http.StatusOK {
+		writer.Header().Del("Content-Length")
+		writer.Header().Set("Content-Encoding", "gzip")
+	}
+	writer.ResponseWriter.WriteHeader(status)
+}
+
+func (writer *gzipResponseWriter) Write(body []byte) (int, error) {
+	if writer.status == 0 {
+		writer.WriteHeader(http.StatusOK)
+	}
+	if writer.status != http.StatusOK {
+		return writer.ResponseWriter.Write(body)
+	}
+	if writer.gzip == nil {
+		writer.gzip = gzip.NewWriter(writer.ResponseWriter)
+	}
+	return writer.gzip.Write(body)
 }

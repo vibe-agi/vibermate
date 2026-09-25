@@ -1,10 +1,13 @@
 package serverhost
 
 import (
+	"compress/gzip"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -70,5 +73,72 @@ func TestManagementUIRejectsSymbolicMembers(t *testing.T) {
 
 	if _, err := newManagementUI(root); err == nil {
 		t.Fatal("management UI accepted a symbolic member")
+	}
+}
+
+func TestManagementUICompressesMainBundleWithoutBreakingPlainOrRange(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	body := strings.Repeat("console.log('synthetic');\n", 1000)
+	for name, content := range map[string]string{
+		"index.html": "<!doctype html>", "main.dart.js": body,
+	} {
+		if err := os.WriteFile(filepath.Join(root, name), []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	handler, err := newManagementUI(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodGet, "/main.dart.js", nil)
+	request.Header.Set("Accept-Encoding", "gzip")
+	compressed := httptest.NewRecorder()
+	handler.ServeHTTP(compressed, request)
+	if compressed.Code != http.StatusOK ||
+		compressed.Header().Get("Content-Encoding") != "gzip" ||
+		compressed.Header().Get("Content-Length") != "" ||
+		compressed.Header().Get("Vary") != "Accept-Encoding" {
+		t.Fatalf("compressed response: %d %v", compressed.Code, compressed.Header())
+	}
+	reader, err := gzip.NewReader(compressed.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := io.ReadAll(reader)
+	if err != nil || string(decoded) != body {
+		t.Fatalf("compressed body mismatch: %v", err)
+	}
+	if err := reader.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	request = httptest.NewRequest(http.MethodGet, "/main.dart.js", nil)
+	request.Header.Set("Accept-Encoding", "gzip;q=0.00")
+	plain := httptest.NewRecorder()
+	handler.ServeHTTP(plain, request)
+	if plain.Code != http.StatusOK || plain.Header().Get("Content-Encoding") != "" ||
+		plain.Body.String() != body {
+		t.Fatalf("plain response: %d %v", plain.Code, plain.Header())
+	}
+
+	request = httptest.NewRequest(http.MethodGet, "/main.dart.js", nil)
+	request.Header.Set("Accept-Encoding", "gzip")
+	request.Header.Set("Range", "bytes=0-6")
+	partial := httptest.NewRecorder()
+	handler.ServeHTTP(partial, request)
+	if partial.Code != http.StatusPartialContent ||
+		partial.Header().Get("Content-Encoding") != "" ||
+		partial.Body.String() != body[:7] {
+		t.Fatalf("range response: %d %v", partial.Code, partial.Header())
+	}
+
+	request = httptest.NewRequest(http.MethodHead, "/main.dart.js", nil)
+	request.Header.Set("Accept-Encoding", "gzip")
+	head := httptest.NewRecorder()
+	handler.ServeHTTP(head, request)
+	if head.Code != http.StatusOK || head.Header().Get("Content-Encoding") != "gzip" ||
+		head.Body.Len() != 0 {
+		t.Fatalf("HEAD response: %d %v body=%d", head.Code, head.Header(), head.Body.Len())
 	}
 }
