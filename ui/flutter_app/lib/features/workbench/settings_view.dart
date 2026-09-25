@@ -357,11 +357,9 @@ final class _EgressProfilesSettingsPaneState
       ),
       const SizedBox(height: 14),
       if (_loading)
-        const Center(
-          child: Padding(
-            padding: EdgeInsets.all(28),
-            child: CircularProgressIndicator(),
-          ),
+        Padding(
+          padding: const EdgeInsets.all(28),
+          child: CompactLoadingMessage(label: copy('common.loading')),
         )
       else if (_failed)
         Column(

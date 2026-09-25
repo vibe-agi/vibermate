@@ -176,7 +176,9 @@ final class _CodeLibraryViewState extends State<CodeLibraryView> {
   }
 
   Widget _body(BuildContext context) {
-    if (_loading) return const Center(child: CompactProgressIndicator());
+    if (_loading) {
+      return CompactLoadingMessage(label: copy('common.loading'));
+    }
     final catalog = _catalog;
     if (catalog == null) return const SizedBox.shrink();
     if (_kind == _LibraryKind.accountSelectors) {

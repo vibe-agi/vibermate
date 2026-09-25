@@ -977,7 +977,8 @@ void main() {
       );
 
       expect(saved, isFalse);
-      expect(controller.networkError, 'revision_conflict (409)');
+      expect(controller.networkError, 'error.configuration_conflict');
+      expect(controller.networkErrorDiagnostic, 'revision_conflict · HTTP 409');
       expect(controller.networkData!.rules.revision, external.revision);
       expect(controller.networkData!.rules.rules.single.id, 'external-change');
     },

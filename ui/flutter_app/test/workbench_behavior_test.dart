@@ -14,6 +14,7 @@ import 'package:vibermate_app/core/i18n/app_copy.dart';
 import 'package:vibermate_app/core/preferences/workbench_preferences.dart';
 import 'package:vibermate_app/features/workbench/account_selector_editor.dart';
 import 'package:vibermate_app/features/workbench/conversation_timeline.dart';
+import 'package:vibermate_app/features/workbench/network_view.dart';
 import 'package:vibermate_app/features/workbench/settings_view.dart';
 import 'package:vibermate_app/features/workbench/workbench_controller.dart';
 import 'package:vibermate_app/features/workbench/workbench_shell.dart';
@@ -3404,6 +3405,55 @@ void main() {
       await tester.pump();
     },
   );
+
+  for (final language in AppLanguage.values) {
+    testWidgets('network failure has one retry path at 390px ($language)', (
+      tester,
+    ) async {
+      await tester.binding.setSurfaceSize(const Size(390, 760));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      final api = PreviewControlApi(seedCaptures: false);
+      final controller = WorkbenchController(
+        api: api,
+        terminalCommands: PreviewTerminalCommandService(),
+        previewMode: true,
+        closeRuntime: api.close,
+      );
+      addTearDown(controller.dispose);
+      await controller.initialize();
+      controller.networkData = null;
+      controller.networkLoading = false;
+      controller.networkError = 'error.control_result_unknown';
+      controller.networkErrorDiagnostic = 'control_connection_failed';
+      final copy = AppCopy.forLanguage(language);
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: ViberTheme.dark(),
+          home: Scaffold(
+            body: AnimatedBuilder(
+              animation: controller,
+              builder: (context, _) =>
+                  NetworkView(controller: controller, copy: copy),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text(copy('error.control_result_unknown')), findsOneWidget);
+      expect(find.text('control_connection_failed'), findsNothing);
+      expect(find.byKey(const Key('network-retry')), findsOneWidget);
+      await tester.tap(find.byKey(const Key('network-retry')));
+      await tester.pumpAndSettle();
+
+      expect(controller.networkData, isNotNull);
+      expect(find.text(copy('error.control_result_unknown')), findsNothing);
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox.shrink());
+      controller.dispose();
+      await tester.pump();
+    });
+  }
 
   testWidgets('network evidence uses real cursor pagination', (tester) async {
     await tester.binding.setSurfaceSize(const Size(1180, 760));

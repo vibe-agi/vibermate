@@ -6,6 +6,7 @@ import '../../core/api/control_models.dart';
 import '../../core/design/viber_theme.dart';
 import '../../core/design/workbench_widgets.dart';
 import '../../core/i18n/app_copy.dart';
+import 'control_failure_notice.dart';
 import 'workbench_controller.dart';
 
 enum _NetworkPanel { approvals, connections, egress, rules }
@@ -46,8 +47,12 @@ final class _NetworkViewState extends State<NetworkView> {
           },
         ),
         const Divider(height: 1),
-        if (controller.networkError case final message?)
-          InlineNotice(message: message, error: true),
+        if (data != null && controller.networkError != null)
+          ControlFailureNotice(
+            message: controller.networkError!,
+            diagnostic: controller.networkErrorDiagnostic,
+            copy: copy,
+          ),
         if (controller.networkNotice case final notice?)
           InlineNotice(
             message: copy('notice.$notice'),
@@ -64,24 +69,19 @@ final class _NetworkViewState extends State<NetworkView> {
     final copy = widget.copy;
     if (data == null) {
       if (controller.networkLoading) {
-        return Center(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const CompactProgressIndicator(),
-              const SizedBox(height: 10),
-              Text(
-                copy('common.loading'),
-                style: Theme.of(context).textTheme.bodySmall,
-              ),
-            ],
-          ),
-        );
+        return CompactLoadingMessage(label: copy('common.loading'));
       }
       return CenteredMessage(
         icon: Icons.cloud_off_outlined,
-        title: controller.networkError ?? copy('common.retry'),
-        detail: copy('network.subtitle'),
+        title:
+            copy.maybe(controller.networkError ?? '') ??
+            copy('network.unavailable'),
+        action: OutlinedButton.icon(
+          key: const Key('network-retry'),
+          onPressed: () => unawaited(controller.refreshNetwork()),
+          icon: const Icon(Icons.refresh_rounded, size: 15),
+          label: Text(copy('common.retry')),
+        ),
       );
     }
     return switch (_panel) {

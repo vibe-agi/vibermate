@@ -475,7 +475,7 @@ final class AppCopy {
         'answering; this does not claim erasure from disk snapshots or '
         'backups.',
     'common.back': 'Back',
-    'common.loading': 'Loading runtime evidence…',
+    'common.loading': 'Loading…',
     'common.retry': 'Retry',
     'common.hide_directory': 'Hide list',
     'common.show_directory': 'Show list',
@@ -1513,6 +1513,7 @@ final class AppCopy {
         'Enter a credential without line breaks or null characters.',
     'network.title': 'Connections',
     'network.subtitle': 'Review client access, active connections, and rules',
+    'network.unavailable': 'Network evidence is unavailable.',
     'network.tab.approvals': 'Approvals',
     'network.tab.connections': 'Connections',
     'network.tab.egress': 'Egress',
@@ -2560,7 +2561,7 @@ final class AppCopy {
         '所有运行记录与已记录的证据都会被移除；流量策略、上游服务和账号会保留。'
         '逻辑记录会被删除、查询不再返回它们；但这不声称从磁盘快照或备份介质上抹除。',
     'common.back': '返回',
-    'common.loading': '正在载入运行证据…',
+    'common.loading': '正在加载…',
     'common.retry': '重试',
     'common.hide_directory': '收起列表',
     'common.show_directory': '展开列表',
@@ -3432,6 +3433,7 @@ final class AppCopy {
     'routes.validation.secret': '请输入不含换行或空字符的凭据。',
     'network.title': '连接',
     'network.subtitle': '检查客户端访问、活动连接与网络规则',
+    'network.unavailable': '网络证据暂时不可用。',
     'network.tab.approvals': '审批',
     'network.tab.connections': '连接',
     'network.tab.egress': '出站',

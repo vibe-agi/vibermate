@@ -196,6 +196,7 @@ final class WorkbenchController extends ChangeNotifier
   String? errorMessage;
   String? operationNotice;
   String? networkError;
+  String? networkErrorDiagnostic;
   String? captureDirectoryError;
   String? networkNotice;
   String? inventoryError;
@@ -1651,7 +1652,7 @@ final class WorkbenchController extends ChangeNotifier
     if (_disposed || networkLoading || networkMutating) return;
     if (!quiet) {
       networkLoading = true;
-      networkError = null;
+      _clearNetworkError();
       notifyListeners();
     }
     try {
@@ -1665,7 +1666,7 @@ final class WorkbenchController extends ChangeNotifier
     } catch (error) {
       if (_disposed || quiet) return;
       networkLoading = false;
-      networkError = _describeError(error);
+      _setNetworkError(error);
       notifyListeners();
     }
   }
@@ -1675,7 +1676,7 @@ final class WorkbenchController extends ChangeNotifier
     final cursor = current?.connections.nextCursor;
     if (current == null || cursor == null || networkLoading) return;
     networkLoading = true;
-    networkError = null;
+    _clearNetworkError();
     notifyListeners();
     try {
       final page = await _api.connections(cursor: cursor);
@@ -1694,7 +1695,7 @@ final class WorkbenchController extends ChangeNotifier
     } catch (error) {
       if (_disposed) return;
       networkLoading = false;
-      networkError = _describeError(error);
+      _setNetworkError(error);
       notifyListeners();
     }
   }
@@ -1704,7 +1705,7 @@ final class WorkbenchController extends ChangeNotifier
     final cursor = current?.egressAttempts.nextCursor;
     if (current == null || cursor == null || networkLoading) return;
     networkLoading = true;
-    networkError = null;
+    _clearNetworkError();
     notifyListeners();
     try {
       final page = await _api.egressAttempts(cursor: cursor);
@@ -1723,7 +1724,7 @@ final class WorkbenchController extends ChangeNotifier
     } catch (error) {
       if (_disposed) return;
       networkLoading = false;
-      networkError = _describeError(error);
+      _setNetworkError(error);
       notifyListeners();
     }
   }
@@ -1735,7 +1736,7 @@ final class WorkbenchController extends ChangeNotifier
     final current = networkData;
     if (current == null || networkMutating) return false;
     networkMutating = true;
-    networkError = null;
+    _clearNetworkError();
     networkNotice = null;
     notifyListeners();
     try {
@@ -1764,7 +1765,7 @@ final class WorkbenchController extends ChangeNotifier
     } catch (error) {
       if (_disposed) return false;
       networkMutating = false;
-      networkError = _describeError(error);
+      _setNetworkError(error);
       notifyListeners();
       return false;
     }
@@ -1778,7 +1779,7 @@ final class WorkbenchController extends ChangeNotifier
     final current = networkData;
     if (current == null || networkMutating) return false;
     networkMutating = true;
-    networkError = null;
+    _clearNetworkError();
     networkNotice = null;
     notifyListeners();
     try {
@@ -1804,7 +1805,7 @@ final class WorkbenchController extends ChangeNotifier
     } catch (error) {
       if (_disposed) return false;
       networkMutating = false;
-      networkError = _describeError(error);
+      _setNetworkError(error);
       notifyListeners();
       return false;
     }
@@ -3163,6 +3164,17 @@ final class WorkbenchController extends ChangeNotifier
     inventoryError ?? 'error.control_result_unknown',
     inventoryErrorDiagnostic,
   );
+
+  void _clearNetworkError() {
+    networkError = null;
+    networkErrorDiagnostic = null;
+  }
+
+  void _setNetworkError(Object error) {
+    final failure = ControlFailure.from(error);
+    networkError = failure.messageKey;
+    networkErrorDiagnostic = failure.diagnostic;
+  }
 
   void _setInventoryError(Object error) {
     final failure = ControlFailure.from(error);
