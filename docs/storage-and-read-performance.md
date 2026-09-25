@@ -241,8 +241,8 @@ VIBERMATE_PLAYWRIGHT_MODULE=/absolute/path/to/node_modules/playwright \
 1 秒可见证据轮询周期和采样相位影响；80 ms 是浏览器侧逐请求注入的延迟，
 **不等于实测远程部署**，表中大正文也各只有一次观测。
 这里没有把浏览器可访问性树出现冒称为 GPU paint 时间，也没有分离证据提交、
-索引和 Flutter 解码的耗时，因此 Task 1 的真实 App、远程 Web 与完整分段验收
-仍未完成。
+索引和 Flutter 解码的耗时。此处的本机样本未覆盖真实 App 或远程 Web；
+完整分段验收仍未完成。
 
 ### 真实远程 Web：合成 Capture（2026-09-25，探索性）
 
