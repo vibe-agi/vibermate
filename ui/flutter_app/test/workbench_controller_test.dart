@@ -1062,6 +1062,44 @@ void main() {
     },
   );
 
+  test('account link conflict reloads the revoked association', () async {
+    final api = PreviewControlApi();
+    final controller = WorkbenchController(
+      api: api,
+      terminalCommands: PreviewTerminalCommandService(),
+      previewMode: true,
+      closeRuntime: api.close,
+    );
+    addTearDown(controller.dispose);
+    await controller.initialize();
+    final account = controller.data!.accounts.firstWhere(
+      (value) => value.id == 'anthropic-lab',
+    );
+    final endpoint = controller.data!.endpoints.firstWhere(
+      (value) => account.isLinkedTo(value.id),
+    );
+    final external = await api.setProviderAccountAssociation(
+      account: account,
+      endpoint: endpoint,
+      linked: false,
+    );
+
+    final linked = await controller.setProviderAccountAssociation(
+      account: account,
+      endpoint: endpoint,
+      linked: false,
+    );
+
+    expect(linked, isFalse);
+    expect(controller.inventoryError, 'error.account_conflict');
+    final current = controller.data!.accounts.singleWhere(
+      (value) => value.id == account.id,
+    );
+    expect(current.associationRevision, external.associationRevision);
+    expect(current.isLinkedTo(endpoint.id), isFalse);
+    expect(current.credentialEpoch, account.credentialEpoch);
+  });
+
   test('Environment review freezes impact before CAS publish', () async {
     final api = PreviewControlApi();
     final controller = WorkbenchController(
@@ -1112,6 +1150,46 @@ void main() {
         ),
       ),
     );
+  });
+
+  test('publish conflict preserves the reviewed draft and impact', () async {
+    final api = PreviewControlApi();
+    final controller = WorkbenchController(
+      api: api,
+      terminalCommands: PreviewTerminalCommandService(),
+      previewMode: true,
+      closeRuntime: api.close,
+    );
+    addTearDown(controller.dispose);
+    await controller.initialize();
+    controller.selectEnvironment('work');
+    final current = controller.selectedEnvironment!;
+    final impact = await controller.reviewSelectedEnvironment(
+      EnvironmentDraftInput.fromEnvironment(
+        current,
+        expectedDraftRevision: 0,
+        name: 'Reviewed locally',
+      ),
+    );
+    expect(impact, isNotNull);
+    final reviewed = controller.reviewedEnvironmentDraft!;
+    await api.saveEnvironmentDraft(
+      environmentId: current.id,
+      expectedBaseRevision: current.revision,
+      input: EnvironmentDraftInput.fromEnvironment(
+        current,
+        expectedDraftRevision: reviewed.draftRevision,
+        name: 'Competing edit',
+      ),
+    );
+
+    final published = await controller.publishReviewedEnvironment();
+
+    expect(published, isNull);
+    expect(controller.environmentError, isNotNull);
+    expect(controller.reviewedEnvironmentDraft, same(reviewed));
+    expect(controller.reviewedEnvironmentImpact, same(impact));
+    expect(controller.selectedEnvironment!.revision, current.revision);
   });
 
   test('Environment publish rejects a stale base revision', () async {
