@@ -5499,6 +5499,7 @@ final class EnvironmentDryRunDecision {
     required this.modelMapped,
     required this.networkExitId,
     required this.bodyChanged,
+    required this.protocolChangedTopLevelFields,
     required this.changedHeaderNames,
     required this.changedTopLevelFields,
     required this.unverified,
@@ -5529,6 +5530,7 @@ final class EnvironmentDryRunDecision {
         'providerMethod',
         'providerPath',
         'bodyChanged',
+        'protocolChangedTopLevelFields',
         'changedHeaderNames',
         'changedTopLevelFields',
         'unverified',
@@ -5564,6 +5566,12 @@ final class EnvironmentDryRunDecision {
       modelMapped: requireBoolean(value, 'modelMapped', path),
       networkExitId: requireString(value, 'networkExitId', path),
       bodyChanged: requireBoolean(value, 'bodyChanged', path),
+      protocolChangedTopLevelFields:
+          value['protocolChangedTopLevelFields'] == null
+          ? null
+          : List.unmodifiable(
+              requireStringList(value, 'protocolChangedTopLevelFields', path),
+            ),
       changedHeaderNames: List.unmodifiable(
         requireStringList(value, 'changedHeaderNames', path),
       ),
@@ -5589,6 +5597,7 @@ final class EnvironmentDryRunDecision {
   final bool modelMapped;
   final String networkExitId;
   final bool bodyChanged;
+  final List<String>? protocolChangedTopLevelFields;
   final List<String> changedHeaderNames;
   final List<String>? changedTopLevelFields;
   final List<String> unverified;

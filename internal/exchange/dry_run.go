@@ -22,27 +22,28 @@ import (
 // DryRunResult contains only frozen decision references and changed field names.
 // It never carries a credential, request body, transformed value, or network result.
 type DryRunResult struct {
-	EvaluatedAt           time.Time `json:"evaluatedAt"`
-	EnvironmentID         string    `json:"environmentId"`
-	EnvironmentRevision   uint64    `json:"environmentRevision"`
-	EnvironmentDigest     string    `json:"environmentDigest"`
-	DestinationKind       string    `json:"destinationKind"`
-	ProviderOrigin        string    `json:"providerOrigin"`
-	RouteID               string    `json:"routeId"`
-	RouteRevision         uint64    `json:"routeRevision"`
-	AccountID             string    `json:"accountId"`
-	AccountRevision       uint64    `json:"accountRevision"`
-	RequestedModel        string    `json:"requestedModel"`
-	EffectiveModel        string    `json:"effectiveModel"`
-	ModelMapped           bool      `json:"modelMapped"`
-	NetworkExitID         string    `json:"networkExitId"`
-	NetworkExitRevision   uint64    `json:"networkExitRevision"`
-	ProviderMethod        string    `json:"providerMethod"`
-	ProviderPath          string    `json:"providerPath"`
-	BodyChanged           bool      `json:"bodyChanged"`
-	ChangedHeaderNames    []string  `json:"changedHeaderNames"`
-	ChangedTopLevelFields []string  `json:"changedTopLevelFields"`
-	Unverified            []string  `json:"unverified"`
+	EvaluatedAt                   time.Time `json:"evaluatedAt"`
+	EnvironmentID                 string    `json:"environmentId"`
+	EnvironmentRevision           uint64    `json:"environmentRevision"`
+	EnvironmentDigest             string    `json:"environmentDigest"`
+	DestinationKind               string    `json:"destinationKind"`
+	ProviderOrigin                string    `json:"providerOrigin"`
+	RouteID                       string    `json:"routeId"`
+	RouteRevision                 uint64    `json:"routeRevision"`
+	AccountID                     string    `json:"accountId"`
+	AccountRevision               uint64    `json:"accountRevision"`
+	RequestedModel                string    `json:"requestedModel"`
+	EffectiveModel                string    `json:"effectiveModel"`
+	ModelMapped                   bool      `json:"modelMapped"`
+	NetworkExitID                 string    `json:"networkExitId"`
+	NetworkExitRevision           uint64    `json:"networkExitRevision"`
+	ProviderMethod                string    `json:"providerMethod"`
+	ProviderPath                  string    `json:"providerPath"`
+	BodyChanged                   bool      `json:"bodyChanged"`
+	ProtocolChangedTopLevelFields []string  `json:"protocolChangedTopLevelFields"`
+	ChangedHeaderNames            []string  `json:"changedHeaderNames"`
+	ChangedTopLevelFields         []string  `json:"changedTopLevelFields"`
+	Unverified                    []string  `json:"unverified"`
 
 	bodyDigest [sha256.Size]byte
 }
@@ -144,11 +145,12 @@ func (pipeline *Pipeline) DryRun(ctx context.Context, request ClientRequest) (Dr
 		RequestedModel: requestedModel, EffectiveModel: decoded.EffectiveModel, ModelMapped: mapped,
 		NetworkExitID: profile.ID.String(), NetworkExitRevision: uint64(profile.Revision),
 		ProviderMethod: providerRequest.Method(), ProviderPath: "/" + strings.TrimPrefix(providerPath, "/"),
-		BodyChanged:           !bytes.Equal(providerRequest.Body(), transformedBody),
-		ChangedHeaderNames:    changedHeaderNames(headers, transformedHeaders),
-		ChangedTopLevelFields: changedTopLevelFields(providerRequest.Body(), transformedBody),
-		Unverified:            unverified,
-		bodyDigest:            sha256.Sum256(transformedBody),
+		BodyChanged:                   !bytes.Equal(providerRequest.Body(), transformedBody),
+		ProtocolChangedTopLevelFields: changedTopLevelFields(logicalBody, providerRequest.Body()),
+		ChangedHeaderNames:            changedHeaderNames(headers, transformedHeaders),
+		ChangedTopLevelFields:         changedTopLevelFields(providerRequest.Body(), transformedBody),
+		Unverified:                    unverified,
+		bodyDigest:                    sha256.Sum256(transformedBody),
 	}, nil
 }
 
@@ -196,11 +198,12 @@ func (pipeline *Pipeline) dryRunOriginal(
 		RequestedModel: requestedModel, EffectiveModel: requestedModel,
 		NetworkExitID: profile.ID.String(), NetworkExitRevision: uint64(profile.Revision),
 		ProviderMethod: request.operation.Method(), ProviderPath: request.operation.Path(),
-		BodyChanged:           !bytes.Equal(request.body, transformedBody),
-		ChangedHeaderNames:    changedHeaderNames(headers, transformedHeaders),
-		ChangedTopLevelFields: changedTopLevelFields(request.body, transformedBody),
-		Unverified:            unverified,
-		bodyDigest:            sha256.Sum256(transformedBody),
+		BodyChanged:                   !bytes.Equal(request.body, transformedBody),
+		ProtocolChangedTopLevelFields: []string{},
+		ChangedHeaderNames:            changedHeaderNames(headers, transformedHeaders),
+		ChangedTopLevelFields:         changedTopLevelFields(request.body, transformedBody),
+		Unverified:                    unverified,
+		bodyDigest:                    sha256.Sum256(transformedBody),
 	}, nil
 }
 

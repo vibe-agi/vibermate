@@ -213,9 +213,10 @@ func TestPublishedEnvironmentDryRunExplainsOneSyntheticRequestWithoutRetainingIt
 		PublishedRevision uint64 `json:"publishedRevision"`
 		DraftRevision     uint64 `json:"draftRevision"`
 		Result            struct {
-			EnvironmentRevision uint64 `json:"environmentRevision"`
-			EffectiveModel      string `json:"effectiveModel"`
-			ModelMapped         bool   `json:"modelMapped"`
+			EnvironmentRevision           uint64   `json:"environmentRevision"`
+			EffectiveModel                string   `json:"effectiveModel"`
+			ModelMapped                   bool     `json:"modelMapped"`
+			ProtocolChangedTopLevelFields []string `json:"protocolChangedTopLevelFields"`
 		} `json:"result"`
 	}
 	if err := json.Unmarshal(draftResult.Body.Bytes(), &draftView); err != nil {
@@ -226,6 +227,7 @@ func TestPublishedEnvironmentDryRunExplainsOneSyntheticRequestWithoutRetainingIt
 		draftView.Result.EnvironmentRevision != 2 ||
 		draftView.Result.EffectiveModel != "synthetic-draft-model" ||
 		!draftView.Result.ModelMapped ||
+		!slices.Contains(draftView.Result.ProtocolChangedTopLevelFields, "model") ||
 		bytes.Contains(draftResult.Body.Bytes(), []byte(privateBody)) {
 		t.Fatalf("draft dry run did not explain unpublished mapping: %+v", draftView)
 	}

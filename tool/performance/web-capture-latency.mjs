@@ -271,6 +271,9 @@ try {
   assert.equal(draftDecision.publishedRevision, 1);
   assert.equal(draftDecision.result.effectiveModel, 'synthetic-draft-model');
   assert.equal(draftDecision.result.modelMapped, true);
+  assert.ok(draftDecision.result.protocolChangedTopLevelFields.includes('model'));
+  await trialPage.locator('flt-semantics')
+    .filter({ hasText: 'Protocol and model changes' }).first().waitFor();
   await trialPage.locator('flt-semantics')
     .filter({ hasText: 'This draft is not active' }).first().waitFor();
   await trialPage.locator('flt-semantics')

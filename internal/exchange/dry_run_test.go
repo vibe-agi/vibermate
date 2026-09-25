@@ -51,6 +51,7 @@ func TestDryRunMatchesExecutedFrozenDecisionWithoutSideEffects(t *testing.T) {
 		preview.EffectiveModel != upstreamModel || !preview.ModelMapped ||
 		preview.NetworkExitID != "profile.direct" || preview.ProviderMethod != http.MethodPost ||
 		!preview.BodyChanged || !slices.Contains(preview.ChangedTopLevelFields, "transform_marker") ||
+		!slices.Contains(preview.ProtocolChangedTopLevelFields, "model") ||
 		!slices.Contains(preview.ChangedHeaderNames, "X-Transform-Request") ||
 		!slices.Contains(preview.Unverified, "credential") ||
 		!slices.Contains(preview.Unverified, "runtime_identity") || preview.EvaluatedAt.IsZero() {

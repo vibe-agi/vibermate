@@ -965,6 +965,9 @@ final class AppCopy {
         'Not decoded from this synthetic request',
     'environment.dry_run.egress': 'Network exit',
     'environment.dry_run.changes': 'Request transform changes',
+    'environment.dry_run.protocol_changes': 'Protocol and model changes',
+    'environment.dry_run.protocol_unavailable':
+        'Protocol fields could not be compared.',
     'environment.dry_run.no_changes': 'No Header or top-level JSON changes',
     'environment.dry_run.body_changed':
         'Body changed; no top-level JSON field names changed.',
@@ -2971,6 +2974,8 @@ final class AppCopy {
     'environment.dry_run.model_unavailable': '未能从这条合成请求中解析模型',
     'environment.dry_run.egress': '网络出口',
     'environment.dry_run.changes': '请求脚本改变',
+    'environment.dry_run.protocol_changes': '协议与模型处理改变',
+    'environment.dry_run.protocol_unavailable': '无法比较协议处理后的字段。',
     'environment.dry_run.no_changes': 'Header 和顶层 JSON 字段未变化',
     'environment.dry_run.body_changed': '正文已改变，但顶层 JSON 字段名未变化。',
     'environment.dry_run.fields_unavailable': '无法比较顶层 JSON 字段。',

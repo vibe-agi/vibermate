@@ -539,6 +539,26 @@ final class _DryRunDecisionView extends StatelessWidget {
             value: egressName.isEmpty ? decision.networkExitId : egressName,
           ),
           const Divider(height: 16),
+          if (decision.protocolChangedTopLevelFields case final fields?) ...[
+            if (fields.isNotEmpty) ...[
+              Text(
+                copy('environment.dry_run.protocol_changes'),
+                style: Theme.of(context).textTheme.labelMedium,
+              ),
+              const SizedBox(height: 4),
+              Text(
+                fields.map((field) => 'JSON · $field').join(' · '),
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+              const SizedBox(height: 9),
+            ],
+          ] else ...[
+            Text(
+              copy('environment.dry_run.protocol_unavailable'),
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+            const SizedBox(height: 9),
+          ],
           Text(
             copy('environment.dry_run.changes'),
             style: Theme.of(context).textTheme.labelMedium,
