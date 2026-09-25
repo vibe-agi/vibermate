@@ -125,12 +125,31 @@ func TestManagementUICompressesMainBundleWithoutBreakingPlainOrRange(t *testing.
 	request = httptest.NewRequest(http.MethodGet, "/main.dart.js", nil)
 	request.Header.Set("Accept-Encoding", "gzip")
 	request.Header.Set("Range", "bytes=0-6")
+	compressedRange := httptest.NewRecorder()
+	handler.ServeHTTP(compressedRange, request)
+	if compressedRange.Code != http.StatusOK ||
+		compressedRange.Header().Get("Content-Encoding") != "gzip" ||
+		compressedRange.Header().Get("Accept-Ranges") != "" {
+		t.Fatalf("compressed Range response: %d %v", compressedRange.Code, compressedRange.Header())
+	}
+	reader, err = gzip.NewReader(compressedRange.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err = io.ReadAll(reader)
+	if err != nil || string(decoded) != body {
+		t.Fatalf("compressed Range body mismatch: %v", err)
+	}
+	if err := reader.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	request = httptest.NewRequest(http.MethodGet, "/main.dart.js", nil)
+	request.Header.Set("Range", "bytes=0-6")
 	partial := httptest.NewRecorder()
 	handler.ServeHTTP(partial, request)
-	if partial.Code != http.StatusPartialContent ||
-		partial.Header().Get("Content-Encoding") != "" ||
-		partial.Body.String() != body[:7] {
-		t.Fatalf("range response: %d %v", partial.Code, partial.Header())
+	if partial.Code != http.StatusPartialContent || partial.Body.String() != body[:7] {
+		t.Fatalf("identity Range response: %d %v", partial.Code, partial.Header())
 	}
 
 	request = httptest.NewRequest(http.MethodHead, "/main.dart.js", nil)
@@ -140,5 +159,17 @@ func TestManagementUICompressesMainBundleWithoutBreakingPlainOrRange(t *testing.
 	if head.Code != http.StatusOK || head.Header().Get("Content-Encoding") != "gzip" ||
 		head.Body.Len() != 0 {
 		t.Fatalf("HEAD response: %d %v body=%d", head.Code, head.Header(), head.Body.Len())
+	}
+	info, err := os.Stat(filepath.Join(root, "main.dart.js"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request = httptest.NewRequest(http.MethodGet, "/main.dart.js", nil)
+	request.Header.Set("Accept-Encoding", "gzip")
+	request.Header.Set("If-Modified-Since", info.ModTime().Add(1).UTC().Format(http.TimeFormat))
+	notModified := httptest.NewRecorder()
+	handler.ServeHTTP(notModified, request)
+	if notModified.Code != http.StatusNotModified || notModified.Body.Len() != 0 {
+		t.Fatalf("conditional response: %d %v", notModified.Code, notModified.Header())
 	}
 }

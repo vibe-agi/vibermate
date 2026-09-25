@@ -80,8 +80,16 @@ func newManagementUI(root string) (http.Handler, error) {
 		writer.Header().Set("Cache-Control", "no-cache")
 		if clean == "/main.dart.js" {
 			writer.Header().Add("Vary", "Accept-Encoding")
-			if request.Header.Get("Range") == "" &&
-				acceptsGzip(request.Header.Values("Accept-Encoding")) {
+			if acceptsGzip(request.Header.Values("Accept-Encoding")) {
+				// A byte offset from the compressed representation cannot be
+				// resumed against the uncompressed file.
+				if request.Header.Get("Range") != "" {
+					request = request.Clone(request.Context())
+					request.Header.Del("Range")
+					request.Header.Del("If-Range")
+					request.Header.Del("If-Modified-Since")
+					request.Header.Del("If-None-Match")
+				}
 				compressed := &gzipResponseWriter{ResponseWriter: writer}
 				files.ServeHTTP(compressed, request)
 				if compressed.gzip != nil {
@@ -123,6 +131,7 @@ func (writer *gzipResponseWriter) WriteHeader(status int) {
 	writer.status = status
 	if status == http.StatusOK {
 		writer.Header().Del("Content-Length")
+		writer.Header().Del("Accept-Ranges")
 		writer.Header().Set("Content-Encoding", "gzip")
 	}
 	writer.ResponseWriter.WriteHeader(status)
