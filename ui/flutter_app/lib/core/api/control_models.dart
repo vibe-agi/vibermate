@@ -6083,6 +6083,7 @@ final class CaptureRecord {
     required this.updatedAt,
     this.managedRun,
     this.manualCapture,
+    this.transport,
   });
 
   factory CaptureRecord.fromJson(Object? json, String path) {
@@ -6100,7 +6101,7 @@ final class CaptureRecord {
         'createdAt',
         'updatedAt',
       },
-      optional: const {'managedRun', 'manualCapture'},
+      optional: const {'managedRun', 'manualCapture', 'transport'},
     );
     final kind = requireString(value, 'kind', path);
     final id = _requireResourceId(value, 'id', path);
@@ -6109,7 +6110,10 @@ final class CaptureRecord {
     final observation = requireString(value, 'observation', path);
     final managed = value['managedRun'];
     final manual = value['manualCapture'];
+    final transport = optionalString(value, 'transport', path);
     if ((kind == 'managed_run') != (managed != null) ||
+        (transport != null &&
+            (transport != 'acp_stdio' || kind != 'managed_run')) ||
         (kind == 'manual_capture') != (manual != null) ||
         key != '$kind:$id' ||
         !_validDisplayLabel(requireString(value, 'displayName', path)) ||
@@ -6157,6 +6161,7 @@ final class CaptureRecord {
       updatedAt: updatedAt,
       managedRun: managedSummary,
       manualCapture: manualSummary,
+      transport: transport,
     );
   }
 
@@ -6170,11 +6175,13 @@ final class CaptureRecord {
   final DateTime updatedAt;
   final ManagedRunSummary? managedRun;
   final ManualCaptureSummary? manualCapture;
+  final String? transport;
 
   bool get running => kind == 'managed_run'
       ? state == 'created' || state == 'attached'
       : state == 'active';
   bool get isManual => kind == 'manual_capture';
+  bool get isACP => transport == 'acp_stdio';
   String? get captureRunId => kind == 'managed_run' ? id : null;
 }
 

@@ -51,6 +51,57 @@ final class AppCopy {
   }
 
   static const _en = <String, String>{
+    'acp.transport': 'Editor ↔ Agent · ACP',
+    'acp.boundary':
+        'ACP observation only. The editor owns login and permission decisions. HTTP account replacement, model mapping, scripts, and network rules are not applied by this wrapper.',
+    'acp.reported_identity':
+        'Name and version reported by the Agent during initialization; not release verification.',
+    'acp.counts': '{sessions} ACP sessions · {prompts} prompts',
+    'acp.metadata_only':
+        'Metadata only. Prompt outcomes are retained, but user and assistant text are not saved. To record text for a new connection, add --record-content before -- in the editor command.',
+    'acp.content_recorded':
+        'User and assistant text recording enabled, bounded by the Server policy and observation limits. Authentication, permission payloads, tool inputs/results, stderr, and unknown extensions are never saved.',
+    'acp.recording_off': 'ACP recording is disabled by the Server policy.',
+    'acp.expired':
+        'The retained ACP evidence has expired. This connection marker contains no saved conversation.',
+    'acp.incomplete':
+        'Observation is incomplete. A size limit, interrupted stream, or missing final update can leave gaps; this does not establish the Agent’s model outcome.',
+    'acp.session': 'Agent session',
+    'acp.workspace_claim':
+        'Working directory reported in the ACP session request. It does not change this Capture’s launch workspace or grant file access.',
+    'acp.awaiting_session':
+        'Waiting for the editor to create or load an Agent session. Complete any Agent login in the editor.',
+    'acp.no_session':
+        'No confirmed ACP session was observed. Check the editor’s Agent login and stderr output, then reconnect.',
+    'acp.no_prompts':
+        'No new prompts were observed in this session. Loading history does not count as a new prompt.',
+    'acp.prompt.pending': 'Awaiting Agent result',
+    'acp.prompt.completed': 'Agent returned',
+    'acp.prompt.cancelled': 'Cancelled',
+    'acp.prompt.failed': 'RPC error',
+    'acp.prompt.interrupted': 'Result not observed',
+    'acp.tool_calls': '{count} tool-call notifications',
+    'acp.user': 'You → Agent',
+    'acp.agent': 'Agent → Editor',
+    'acp.setup.title': 'Connect an ACP editor',
+    'acp.login_required':
+        'The Agent reports that login is required. Complete its authentication in the editor, then retry. This is the Agent’s account, not your ViberMate Runtime login.',
+    'acp.setup.detail':
+        'Install an ACP adapter, then make your editor start it through ViberMate. Existing Agent login, permission prompts, and environment stay with the editor.',
+    'acp.setup.program': 'ViberMate executable (absolute path)',
+    'acp.setup.agent_path':
+        'ACP adapter executable (absolute path recommended)',
+    'acp.setup.editor': 'Editor configuration format',
+    'acp.setup.content': 'Save user and assistant text',
+    'acp.setup.server': 'Runtime Server URL (empty = local App)',
+    'acp.setup.copy': 'Copy editor configuration',
+    'acp.setup.copied': 'Configuration copied',
+    'acp.setup.failed':
+        'Could not copy. Select the configuration text and copy it manually.',
+    'acp.setup.help':
+        'Merge this entry into the editor’s agent_servers settings and keep existing environment values. Do not replace the whole settings file. For a remote Server, first run vibermate login --server <same URL> on the editor machine.',
+    'acp.setup.paths':
+        'GUI apps may not inherit your shell PATH. Use absolute paths and include Node in env.PATH for npm adapters; shell aliases do not work. Install the ACP adapter separately.',
     'error.account_selection_empty':
         'No usable accounts are linked to this service. Link a ready account under Upstream services, then review the policy again.',
     'error.deleted_refresh_failed':
@@ -2382,6 +2433,48 @@ final class AppCopy {
   };
 
   static const _zh = <String, String>{
+    'acp.transport': '编辑器 ↔ Agent · ACP',
+    'acp.boundary': '这里只观察 ACP。登录和权限决定仍由编辑器负责；不会应用 HTTP 账号替换、模型映射、脚本或网络规则。',
+    'acp.reported_identity': '名称和版本来自 Agent 初始化时的自报信息，不代表发布版本认证。',
+    'acp.counts': '{sessions} 个 ACP 会话 · {prompts} 个 prompt',
+    'acp.metadata_only':
+        '当前仅记录元数据：保留 prompt 结果状态，不保存用户与助手文本。新连接需要记录文本时，请在编辑器命令的 -- 前加入 --record-content。',
+    'acp.content_recorded':
+        '已开启用户与助手文本记录，受服务端策略和观察大小限制。认证、权限内容、工具输入/结果、stderr 和未知扩展均不保存。',
+    'acp.recording_off': '服务端策略已关闭 ACP 记录。',
+    'acp.expired': 'ACP 证据已过期；此连接标记不包含已保存的对话。',
+    'acp.incomplete': '观察不完整。大小限制、流中断或最终更新缺失可能造成空缺；这不能证明 Agent 的模型执行结果。',
+    'acp.session': 'Agent 会话',
+    'acp.workspace_claim':
+        '工作目录来自 ACP 会话请求的声明，不会修改此 Capture 的启动工作区，也不会授予文件访问权限。',
+    'acp.awaiting_session': '等待编辑器创建或加载 Agent 会话。请在编辑器中完成 Agent 登录。',
+    'acp.no_session': '没有观察到已确认的 ACP 会话。请检查编辑器中的 Agent 登录与 stderr，然后重新连接。',
+    'acp.no_prompts': '此会话中尚未观察到新 prompt。加载历史不计为新 prompt。',
+    'acp.prompt.pending': '等待 Agent 结果',
+    'acp.prompt.completed': 'Agent 已返回',
+    'acp.prompt.cancelled': '已取消',
+    'acp.prompt.failed': 'RPC 错误',
+    'acp.prompt.interrupted': '未观察到结果',
+    'acp.tool_calls': '{count} 条工具调用通知',
+    'acp.user': '你 → Agent',
+    'acp.agent': 'Agent → 编辑器',
+    'acp.setup.title': '接入 ACP 编辑器',
+    'acp.login_required':
+        'Agent 提示需要登录。请在编辑器中完成 Agent 身份验证后重试。这是 Agent 的账号，不是 ViberMate Runtime 登录。',
+    'acp.setup.detail':
+        '安装 ACP 适配器，再让编辑器通过 ViberMate 启动它。Agent 登录、权限提示和环境变量仍由编辑器负责。',
+    'acp.setup.program': 'ViberMate 可执行文件（绝对路径）',
+    'acp.setup.agent_path': 'ACP 适配器可执行文件（推荐绝对路径）',
+    'acp.setup.editor': '编辑器配置格式',
+    'acp.setup.content': '保存用户与助手文本',
+    'acp.setup.server': 'Runtime Server URL（留空使用本地 App）',
+    'acp.setup.copy': '复制编辑器配置',
+    'acp.setup.copied': '配置已复制',
+    'acp.setup.failed': '复制失败。请选中下方配置文本手动复制。',
+    'acp.setup.help':
+        '请把这一项合并到编辑器的 agent_servers 设置，并保留已有环境变量；不要覆盖整个设置文件。远程连接请先在编辑器所在机器执行 vibermate login --server <同一 URL>。',
+    'acp.setup.paths':
+        'GUI 应用可能不继承终端 PATH。请使用绝对路径，并为 npm 适配器在 env.PATH 中包含 Node；不能依赖 alias。ACP 适配器需要单独安装。',
     'error.account_selection_empty':
         '此上游服务没有可用的关联账号。请先在「上游服务」中关联凭据就绪的账号，再检查策略。',
     'error.deleted_refresh_failed': '已删除，但列表暂时未能刷新。请刷新页面，无需再次删除。',

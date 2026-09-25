@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/vibe-agi/vibermate/internal/acpobservation"
 	"github.com/vibe-agi/vibermate/internal/captureassignment"
 	"github.com/vibe-agi/vibermate/internal/capturegrant"
 	"github.com/vibe-agi/vibermate/internal/capturerun"
@@ -65,6 +66,7 @@ type CaptureRunIssuer interface {
 
 type Options struct {
 	LaunchSnapshots *launchsnapshot.Store
+	ACP             *acpobservation.Manager
 	Runs            capturerun.Controller
 	Principals      PrincipalAuthenticator
 	Issuer          CaptureRunIssuer
@@ -74,6 +76,7 @@ type Options struct {
 
 type Handler struct {
 	launchSnapshots *launchsnapshot.Store
+	acp             *acpobservation.Manager
 	runs            capturerun.Controller
 	principals      PrincipalAuthenticator
 	issuer          CaptureRunIssuer
@@ -153,6 +156,7 @@ func New(options Options) (*Handler, error) {
 	}
 	handler := &Handler{
 		launchSnapshots: options.LaunchSnapshots,
+		acp:             options.ACP,
 		runs:            options.Runs,
 		principals:      options.Principals,
 		issuer:          options.Issuer,
@@ -161,6 +165,10 @@ func New(options Options) (*Handler, error) {
 		mux:             http.NewServeMux(),
 	}
 	handler.mux.HandleFunc("POST /api/v1/capture-runs", handler.create)
+	if handler.acp != nil {
+		handler.mux.HandleFunc("POST /api/v1/capture-runs/{runId}/actions/start-acp", handler.startACP)
+		handler.mux.HandleFunc("POST /api/v1/capture-runs/{runId}/actions/observe-acp", handler.observeACP)
+	}
 	handler.mux.HandleFunc(
 		"POST /api/v1/capture-runs/{runId}/actions/attach-process",
 		handler.attach,

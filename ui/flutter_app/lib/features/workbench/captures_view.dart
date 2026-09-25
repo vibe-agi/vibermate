@@ -5,11 +5,13 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../../core/api/control_models.dart';
+import '../../core/api/acp_models.dart';
 import '../../core/design/agent_identity.dart';
 import '../../core/design/viber_theme.dart';
 import '../../core/design/workbench_widgets.dart';
 import '../../core/i18n/app_copy.dart';
 import 'capture_conversation_tree.dart';
+import 'acp_view.dart';
 import 'conversation_timeline.dart';
 import 'deletion_dialog.dart';
 import 'evidence_search_dialog.dart';
@@ -474,7 +476,9 @@ final class _CaptureRow extends StatelessWidget {
                         children: [
                           Expanded(
                             child: Text(
-                              capture.displayName,
+                              capture.isACP
+                                  ? '${capture.displayName} · ACP'
+                                  : capture.displayName,
                               overflow: TextOverflow.ellipsis,
                               style: Theme.of(context).textTheme.titleSmall,
                             ),
@@ -615,6 +619,7 @@ final class _CaptureDetail extends StatelessWidget {
               dismissLabel: copy('common.dismiss'),
             ),
           _CaptureContext(
+            acp: controller.selectedACP,
             capture: capture,
             assignment: assignment,
             environments: controller.data?.environments ?? const [],
@@ -662,6 +667,12 @@ final class _CaptureDetail extends StatelessWidget {
                     icon: Icons.error_outline,
                     title: copy('capture.launch_incomplete'),
                     detail: copy('capture.launch_incomplete.detail'),
+                  )
+                : controller.selectedACP != null
+                ? ACPObservationView(
+                    record: controller.selectedACP!,
+                    copy: copy,
+                    running: capture.running,
                   )
                 : _CaptureConversationWorkspace(
                     controller: controller,
@@ -1540,6 +1551,7 @@ String _clockTime(DateTime timestamp) {
 
 final class _CaptureContext extends StatelessWidget {
   const _CaptureContext({
+    this.acp,
     required this.capture,
     required this.assignment,
     required this.environments,
@@ -1562,6 +1574,7 @@ final class _CaptureContext extends StatelessWidget {
   });
 
   final CaptureRecord capture;
+  final ACPRecord? acp;
   final CaptureAssignment? assignment;
   final List<EnvironmentRecord> environments;
   final List<ConversationSummary> conversations;
@@ -1583,18 +1596,29 @@ final class _CaptureContext extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final source = capture.isManual
+    final source = acp != null || capture.isACP
+        ? 'vibermate acp'
+        : capture.isManual
         ? copy('capture.source.manual.short')
         : copy('capture.source.managed.short');
-    final detail = capture.isManual
+    final detail = acp != null || capture.isACP
+        ? copy('acp.transport')
+        : capture.isManual
         ? copy('capture.source.manual')
         : copy('capture.source.managed');
-    final aggregate = _captureAggregate(
-      copy,
-      conversations,
-      exchangeScoped: capture.isManual,
-      hasEarlier: hasEarlierConversations,
-    );
+    final aggregate = acp != null
+        ? copy.format('acp.counts', {
+            'sessions': acp!.sessions.length,
+            'prompts': acp!.prompts.length,
+          })
+        : capture.isACP
+        ? copy('acp.transport')
+        : _captureAggregate(
+            copy,
+            conversations,
+            exchangeScoped: capture.isManual,
+            hasEarlier: hasEarlierConversations,
+          );
     return Container(
       color: context.viberColors.panel,
       padding: const EdgeInsets.fromLTRB(14, 8, 14, 7),
@@ -1718,13 +1742,15 @@ final class _CaptureContext extends StatelessWidget {
                           aggregate: aggregate,
                           detail: detail,
                         ),
-                        if (capture.managedRun case final managed?) ...[
+                        if (acp == null &&
+                            !capture.isACP &&
+                            capture.managedRun != null) ...[
                           const SizedBox(height: 3),
                           _CaptureClientCompatibility(
                             key: Key(
                               'capture-client-compatibility-${capture.key}',
                             ),
-                            managed: managed,
+                            managed: capture.managedRun!,
                             conversations: conversations,
                             copy: copy,
                           ),
@@ -1743,15 +1769,16 @@ final class _CaptureContext extends StatelessWidget {
                 Align(alignment: Alignment.centerLeft, child: headerActions),
               ],
               const SizedBox(height: 6),
-              _EnvironmentScopeControls(
-                capture: capture,
-                assignment: assignment,
-                environments: environments,
-                copy: copy,
-                routeDetail: routeDetail,
-                mutating: mutating,
-                onApplyLatest: onApplyLatestEnvironment,
-              ),
+              if (acp == null && !capture.isACP)
+                _EnvironmentScopeControls(
+                  capture: capture,
+                  assignment: assignment,
+                  environments: environments,
+                  copy: copy,
+                  routeDetail: routeDetail,
+                  mutating: mutating,
+                  onApplyLatest: onApplyLatestEnvironment,
+                ),
               if (confirmRevoke) ...[
                 const SizedBox(height: 9),
                 Container(

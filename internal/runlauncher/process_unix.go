@@ -79,8 +79,7 @@ func relaySignals(process *os.Process) func() {
 	if process == nil {
 		return func() {}
 	}
-	signals := make(chan os.Signal, 4)
-	signal.Notify(signals, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
+	signals, stopSignals := subscribeChildSignals()
 	done := make(chan struct{})
 	go func() {
 		for {
@@ -98,10 +97,16 @@ func relaySignals(process *os.Process) func() {
 	var once sync.Once
 	return func() {
 		once.Do(func() {
-			signal.Stop(signals)
+			stopSignals()
 			close(done)
 		})
 	}
+}
+
+func subscribeChildSignals() (<-chan os.Signal, func()) {
+	signals := make(chan os.Signal, 4)
+	signal.Notify(signals, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
+	return signals, func() { signal.Stop(signals) }
 }
 
 func signaledExitCode(exit *exec.ExitError) int {
@@ -110,4 +115,39 @@ func signaledExitCode(exit *exec.ExitError) int {
 		return 1
 	}
 	return 128 + int(status.Signal())
+}
+
+// finishChildGroup is called after the direct child is reaped. A wrapper may
+// exit before its descendants and close all protocol pipes; pipe EOF alone is
+// not evidence that its process group ended. Only a group created for our child
+// is eligible here. Groups are lifecycle containment, not a security sandbox.
+func finishChildGroup(process *os.Process, timeout time.Duration) error {
+	if process == nil || process.Pid <= 0 {
+		return nil
+	}
+	err := syscall.Kill(-process.Pid, syscall.SIGTERM)
+	if errors.Is(err, syscall.ESRCH) {
+		return nil
+	}
+	if err != nil {
+		return errors.New("child process group termination failed")
+	}
+	deadline := time.NewTimer(timeout)
+	defer deadline.Stop()
+	tick := time.NewTicker(10 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		select {
+		case <-tick.C:
+			if errors.Is(syscall.Kill(-process.Pid, 0), syscall.ESRCH) {
+				return nil
+			}
+		case <-deadline.C:
+			err := syscall.Kill(-process.Pid, syscall.SIGKILL)
+			if err == nil || errors.Is(err, syscall.ESRCH) {
+				return nil
+			}
+			return errors.New("child process group forced termination failed")
+		}
+	}
 }

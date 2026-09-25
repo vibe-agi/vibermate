@@ -184,6 +184,10 @@ func Open(ctx context.Context, options Options) (*Store, error) {
 		operations.closeAdmission()
 		return fail(fmt.Errorf("read initial schema state: %w", err))
 	}
+	if err := initializeACPSchema(ctx, database); err != nil {
+		operations.closeAdmission()
+		return fail(err)
+	}
 
 	return &Store{
 		databasePath:       options.DatabasePath,

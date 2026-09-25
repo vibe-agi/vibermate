@@ -5,11 +5,16 @@ import 'dart:typed_data';
 
 import 'package:http/http.dart' as http;
 
+import 'acp_models.dart';
 import 'control_models.dart';
 import 'account_facts_models.dart';
 import 'provider_origin.dart';
 import 'runtime_storage.dart';
 import 'launch_environment_snapshot.dart';
+
+abstract interface class ACPObservationApi {
+  Future<ACPRecord?> acpObservation(String captureKey);
+}
 
 abstract interface class ControlApi {
   Future<List<LaunchEnvironmentSnapshot>> launchEnvironmentSnapshots();
@@ -360,7 +365,32 @@ final class ControlProblem implements Exception {
       : 'Control problem $status: $reasonCode — $detail';
 }
 
-final class HttpControlApi implements ControlApi {
+final class HttpControlApi implements ControlApi, ACPObservationApi {
+  @override
+  Future<ACPRecord?> acpObservation(String captureKey) async {
+    try {
+      final payload = await _read(
+        '/api/v1/captures/${Uri.encodeComponent(captureKey)}/acp',
+      );
+      final record = ACPRecord.fromJson(payload);
+      if ('managed_run:${record.runId}' != captureKey) {
+        throw const ControlContractException(
+          'ACP Capture identity is inconsistent',
+        );
+      }
+      return record;
+    } on ControlProblem catch (error) {
+      if (error.status == 404 &&
+          {
+            'acp_observation_not_found',
+            'control_route_not_found',
+          }.contains(error.reasonCode)) {
+        return null;
+      }
+      rethrow;
+    }
+  }
+
   @override
   Future<AccountFacts> accountFacts(
     String accountId, {

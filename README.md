@@ -73,6 +73,16 @@ or share it, go to **Settings → User management** and choose **Create owner**.
 Then copy the Web workbench address from **Settings → Access & launch**.
 The first account is the owner; later accounts are members.
 
+## ACP editors (current source)
+
+`vibermate acp -- <ACP adapter executable>` lets a compatible editor use its
+existing ACP adapter while ViberMate keeps a bounded session/prompt observation.
+The editor and adapter still own login, permissions, tools, provider traffic,
+and native history. ACP observation does not apply HTTP account replacement,
+model mapping, scripts, or network policy. Follow the [ACP setup
+guide](docs/acp-quickstart.md); the [support matrix](docs/capability-support.md)
+states whether this source capability is present in the latest release.
+
 ## Standalone Server + Web (with or without Docker)
 
 Native and container deployments use the same Web workbench and account model.

@@ -8,6 +8,7 @@ import '../../core/bootstrap/terminal_command.dart';
 import '../../core/design/viber_theme.dart';
 import '../../core/design/workbench_widgets.dart';
 import '../../core/i18n/app_copy.dart';
+import 'acp_setup.dart';
 import 'runtime_root_ca_panel.dart';
 import '../../core/api/control_models.dart';
 import 'deletion_dialog.dart';
@@ -616,6 +617,16 @@ final class _AccessSettingsPane extends StatelessWidget {
           style: Theme.of(context).textTheme.bodySmall,
         ),
       ],
+      const SizedBox(height: 16),
+      ACPSetupGuide(
+        copy: copy,
+        program:
+            controller.terminalCommand?.targetPath ??
+            '/absolute/path/to/vibermate',
+        serverURL: controller.terminalManagement
+            ? ''
+            : controller.runtimeServerURL,
+      ),
       if (controller.serverManagement || controller.webPrincipal != null) ...[
         const SizedBox(height: 16),
         if (controller.terminalManagement)
