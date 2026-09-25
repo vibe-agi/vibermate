@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/vibe-agi/vibermate/internal/productbuild"
 	"github.com/vibe-agi/vibermate/internal/serverconnection"
 	"github.com/vibe-agi/vibermate/internal/servercontrol"
 	"github.com/vibe-agi/vibermate/internal/servertransport"
@@ -30,16 +31,18 @@ type RemoteLoginResult struct {
 	ExpiresAt      time.Time
 	FirstUse       bool
 	TLSFingerprint string
+	ProductBuild   string
 }
 
 type RemoteInspection struct {
-	Origin     string
-	InstanceID string
-	APIVersion string
-	UserID     string
-	Username   string
-	SessionID  string
-	Encrypted  bool
+	Origin       string
+	InstanceID   string
+	APIVersion   string
+	ProductBuild string
+	UserID       string
+	Username     string
+	SessionID    string
+	Encrypted    bool
 }
 
 func TrustRemoteSystemRoots(
@@ -126,13 +129,15 @@ func InspectRemote(
 	}
 	if current.Schema != servercontrol.RuntimeUserCurrentSessionSchema ||
 		current.APIVersion != "v1" || current.InstanceID != login.InstanceID() ||
+		!productbuild.Valid(current.ProductBuild) ||
 		current.User.ID != login.UserID() || current.User.Username != login.Username() ||
 		current.SessionID != login.SessionID() {
 		return RemoteInspection{}, ErrRemoteLoginRequired
 	}
 	return RemoteInspection{
 		Origin: target.Origin(), InstanceID: current.InstanceID, APIVersion: current.APIVersion,
-		UserID: current.User.ID, Username: current.User.Username,
+		ProductBuild: current.ProductBuild,
+		UserID:       current.User.ID, Username: current.User.Username,
 		SessionID: current.SessionID,
 		Encrypted: target.Transport() == serverconnection.TransportHTTPS,
 	}, nil
@@ -205,6 +210,7 @@ func LoginRemote(
 	return RemoteLoginResult{
 		Target: config.Target, UserID: session.User.ID, Username: session.User.Username,
 		ExpiresAt: session.ExpiresAt, FirstUse: firstUse, TLSFingerprint: fingerprint,
+		ProductBuild: session.ProductBuild,
 	}, nil
 }
 
@@ -249,6 +255,7 @@ func requestRuntimeUserSession(
 	if err := decoder.Decode(&session); err != nil ||
 		session.Schema != servercontrol.RuntimeUserSessionSchema ||
 		session.InstanceID == "" || session.APIVersion != "v1" ||
+		!productbuild.Valid(session.ProductBuild) ||
 		session.User.ID == "" || session.User.Username == "" ||
 		session.SessionID == "" || session.SessionToken == "" ||
 		!now.Before(session.ExpiresAt) {

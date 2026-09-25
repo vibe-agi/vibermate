@@ -17,25 +17,32 @@ import (
 	"github.com/vibe-agi/vibermate/internal/egressaudit"
 	"github.com/vibe-agi/vibermate/internal/providerauth"
 	"github.com/vibe-agi/vibermate/internal/secretstore"
+	"github.com/vibe-agi/vibermate/internal/transportprofile"
 )
 
 func TestProviderTransportFailureClassNeverCarriesErrorText(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
-		name string
-		err  error
-		want string
+		name     string
+		err      error
+		fallback transportprofile.FallbackReason
+		want     string
 	}{
-		{"dns", &net.DNSError{Err: "private host", Name: "secret.internal"}, transportDNSClass},
-		{"tls", x509.UnknownAuthorityError{Cert: &x509.Certificate{}}, transportTLSClass},
-		{"tls-wrapper", &tls.CertificateVerificationError{Err: errors.New("private certificate")}, transportTLSClass},
-		{"connection", &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("private path")}, transportConnectClass},
-		{"timeout", context.DeadlineExceeded, transportTimeoutClass},
-		{"unknown", errors.New("token=secret"), transportUnknownClass},
+		{"dns", &net.DNSError{Err: "private host", Name: "secret.internal"}, transportprofile.FallbackNone, transportDNSClass},
+		{"tls", x509.UnknownAuthorityError{Cert: &x509.Certificate{}}, transportprofile.FallbackNone, transportTLSClass},
+		{"tls-wrapper", &tls.CertificateVerificationError{Err: errors.New("private certificate")}, transportprofile.FallbackNone, transportTLSClass},
+		{"connection", &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("private path")}, transportprofile.FallbackNone, transportConnectClass},
+		{"timeout", context.DeadlineExceeded, transportprofile.FallbackNone, transportTimeoutClass},
+		{"profile", errors.New("token=secret"), transportprofile.FallbackApplicationProtocolMissing, transportProfileClass},
+		{"handshake", errors.New("token=secret"), transportprofile.FallbackObservedTLSHandshakeRejected, transportHandshakeClass},
+		{"unknown", errors.New("token=secret"), transportprofile.FallbackNone, transportUnknownClass},
 	}
 	for _, item := range cases {
 		t.Run(item.name, func(t *testing.T) {
-			got := transportFailureClass(fmt.Errorf("private detail: %w", item.err))
+			got := transportFailureClass(
+				fmt.Errorf("private detail: %w", item.err),
+				item.fallback,
+			)
 			if got != item.want || strings.Contains(got, "private") || strings.Contains(got, "secret") {
 				t.Fatalf("failure class = %q, want %q", got, item.want)
 			}

@@ -35,6 +35,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/manualcapture"
 	"github.com/vibe-agi/vibermate/internal/modelcatalog"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
+	"github.com/vibe-agi/vibermate/internal/productbuild"
 	"github.com/vibe-agi/vibermate/internal/productruntime"
 	"github.com/vibe-agi/vibermate/internal/provideraccount"
 	"github.com/vibe-agi/vibermate/internal/rawevidence"
@@ -226,11 +227,12 @@ type Handler struct {
 }
 
 type StatusResponse struct {
-	Generation string                       `json:"generation"`
-	Ready      bool                         `json:"ready"`
-	APIVersion string                       `json:"apiVersion"`
-	StatusKey  string                       `json:"statusKey"`
-	Runtime    productruntime.RuntimeStatus `json:"runtime"`
+	Generation   string                       `json:"generation"`
+	Ready        bool                         `json:"ready"`
+	APIVersion   string                       `json:"apiVersion"`
+	ProductBuild string                       `json:"productBuild"`
+	StatusKey    string                       `json:"statusKey"`
+	Runtime      productruntime.RuntimeStatus `json:"runtime"`
 }
 
 type ApprovalDecisionInput struct {
@@ -520,11 +522,12 @@ func (handler *Handler) getStatus(
 ) {
 	status := handler.status.Status()
 	writeJSON(writer, http.StatusOK, StatusResponse{
-		Generation: status.InstanceID,
-		Ready:      handler.readiness.Ready(),
-		APIVersion: "v1",
-		StatusKey:  "runtime.state." + string(status.State),
-		Runtime:    status,
+		Generation:   status.InstanceID,
+		Ready:        handler.readiness.Ready(),
+		APIVersion:   "v1",
+		ProductBuild: productbuild.Label(),
+		StatusKey:    "runtime.state." + string(status.State),
+		Runtime:      status,
 	})
 }
 

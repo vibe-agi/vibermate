@@ -34,14 +34,16 @@ var (
 )
 
 const (
-	responseCanceledClass = "response_canceled"
-	responseTimeoutClass  = "response_timeout"
-	responseFailureClass  = "response_body_failed"
-	transportDNSClass     = "dns_failed"
-	transportTLSClass     = "tls_verification_failed"
-	transportConnectClass = "connection_failed"
-	transportTimeoutClass = "transport_timeout"
-	transportUnknownClass = "transport_failed"
+	responseCanceledClass   = "response_canceled"
+	responseTimeoutClass    = "response_timeout"
+	responseFailureClass    = "response_body_failed"
+	transportDNSClass       = "dns_failed"
+	transportTLSClass       = "tls_verification_failed"
+	transportConnectClass   = "connection_failed"
+	transportTimeoutClass   = "transport_timeout"
+	transportProfileClass   = "transport_profile_failed"
+	transportHandshakeClass = "tls_handshake_failed"
+	transportUnknownClass   = "transport_failed"
 )
 
 type ClientOptions struct {
@@ -427,7 +429,8 @@ func (client *Client) Do(
 		}
 		client.completeAudit(
 			operationContext, record, egressaudit.OutcomeFailed,
-			transportFailureClass(err), int64(len(frozen.body)), 0,
+			transportFailureClass(err, transportEvidence.FallbackReason()),
+			int64(len(frozen.body)), 0,
 		)
 		client.reportRawEvidenceFailure(rawErr)
 		return nil, attemptEvidence, fmt.Errorf("send provider request: %w", err)
@@ -495,7 +498,10 @@ func (client *Client) Do(
 	return response, attemptEvidence, nil
 }
 
-func transportFailureClass(err error) string {
+func transportFailureClass(
+	err error,
+	fallback transportprofile.FallbackReason,
+) string {
 	var dns *net.DNSError
 	if errors.As(err, &dns) {
 		return transportDNSClass
@@ -520,6 +526,16 @@ func transportFailureClass(err error) string {
 	var operation *net.OpError
 	if errors.As(err, &operation) {
 		return transportConnectClass
+	}
+	switch fallback {
+	case transportprofile.FallbackObservationUnavailable,
+		transportprofile.FallbackClientHelloUnsupported,
+		transportprofile.FallbackApplicationProtocolMissing:
+		return transportProfileClass
+	case transportprofile.FallbackObservedTLSHandshakeRejected,
+		transportprofile.FallbackCapturedTLSHandshakeRejected,
+		transportprofile.FallbackStandardTLSHandshakeRejected:
+		return transportHandshakeClass
 	}
 	return transportUnknownClass
 }

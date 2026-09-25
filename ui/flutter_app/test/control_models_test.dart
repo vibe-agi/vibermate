@@ -984,10 +984,11 @@ void main() {
   });
 
   test('Runtime status retains the Offline hold CAS authority', () {
-    final status = RuntimeStatus.fromJson({
+    final json = <String, Object?>{
       'generation': 'instance-test',
       'ready': true,
       'apiVersion': 'v1',
+      'productBuild': 'test-build',
       'statusKey': 'runtime.state.initialized',
       'runtime': {
         'state': 'initialized',
@@ -1014,11 +1015,23 @@ void main() {
         },
         'startedAt': '2026-08-10T00:00:00.000Z',
       },
-    }, expectedInstanceId: 'instance-test');
+    };
+    final status = RuntimeStatus.fromJson(
+      json,
+      expectedInstanceId: 'instance-test',
+    );
 
     expect(status.offlineHold.revision, 4);
     expect(status.offlineHold.activeByKind, {'provider': 1});
+    expect(status.productBuild, 'test-build');
     expect(status.schemaRevision, 1);
+
+    final unsafe = jsonDecode(jsonEncode(json)) as Map<String, dynamic>;
+    unsafe['productBuild'] = 'unsafe\nbuild';
+    expect(
+      () => RuntimeStatus.fromJson(unsafe, expectedInstanceId: 'instance-test'),
+      throwsA(isA<ControlContractException>()),
+    );
   });
 
   test('Runtime status accepts the public Runtime Server host kind', () {
@@ -1026,6 +1039,7 @@ void main() {
       'generation': 'instance-server',
       'ready': true,
       'apiVersion': 'v1',
+      'productBuild': 'test-build',
       'statusKey': 'runtime.state.initialized',
       'runtime': {
         'state': 'initialized',

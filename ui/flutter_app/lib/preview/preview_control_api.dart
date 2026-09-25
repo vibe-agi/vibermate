@@ -802,6 +802,7 @@ final class PreviewControlApi implements ControlApi {
     return DashboardData(
       status: RuntimeStatus(
         ready: true,
+        productBuild: 'preview',
         state: 'initialized',
         host: 'desktop',
         schemaRevision: 1,

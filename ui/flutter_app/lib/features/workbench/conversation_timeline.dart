@@ -1785,7 +1785,11 @@ final class _RawEvidenceDisclosureState extends State<_RawEvidenceDisclosure> {
   }
 
   Future<void> _previewDiagnostic(RawEvidencePage page) async {
-    final report = _redactedDiagnosticText(widget.detail, page);
+    final report = _redactedDiagnosticText(
+      widget.detail,
+      page,
+      widget.controller.data?.status.productBuild ?? 'unavailable',
+    );
     await showDialog<void>(
       context: context,
       builder: (dialogContext) => AlertDialog(
@@ -2564,101 +2568,105 @@ String _rawEvidenceClipboardText(RevealedRawEvidence value, AppCopy copy) {
   return buffer.toString();
 }
 
-String _redactedDiagnosticText(ExchangeDetail detail, RawEvidencePage page) =>
-    const JsonEncoder.withIndent('  ').convert({
-      'schema': 'vibermate.redacted-diagnostic/v1',
-      'redaction': {
-        'omitted': [
-          'message content',
-          'HTTP body',
-          'HTTP header and trailer names and values',
-          'target authority, path, and query',
-          'client session, workspace, and identity attributes',
-        ],
-      },
-      'exchange': {
-        'id': detail.id,
-        'status': detail.status,
-        'environment': {
-          'id': detail.environment.id,
-          'revision': detail.environment.revision,
-          'digest': detail.environment.digest,
-          'clientEndpointId': detail.environment.clientEndpointId,
-          'clientEndpointRevision': detail.environment.clientEndpointRevision,
-          'protocolPlanId': detail.environment.protocolPlanId,
-          'protocolPlanRevision': detail.environment.protocolPlanRevision,
-          'routeId': detail.environment.routeId,
-          'routeRevision': detail.environment.routeRevision,
-          'accountId': detail.environment.accountId,
-          'accountRevision': detail.environment.accountRevision,
-          'credentialEpoch': detail.environment.credentialEpoch,
+String _redactedDiagnosticText(
+  ExchangeDetail detail,
+  RawEvidencePage page,
+  String productBuild,
+) => const JsonEncoder.withIndent('  ').convert({
+  'schema': 'vibermate.redacted-diagnostic/v1',
+  'product': {'build': productBuild},
+  'redaction': {
+    'omitted': [
+      'message content',
+      'HTTP body',
+      'HTTP header and trailer names and values',
+      'target authority, path, and query',
+      'client session, workspace, and identity attributes',
+    ],
+  },
+  'exchange': {
+    'id': detail.id,
+    'status': detail.status,
+    'environment': {
+      'id': detail.environment.id,
+      'revision': detail.environment.revision,
+      'digest': detail.environment.digest,
+      'clientEndpointId': detail.environment.clientEndpointId,
+      'clientEndpointRevision': detail.environment.clientEndpointRevision,
+      'protocolPlanId': detail.environment.protocolPlanId,
+      'protocolPlanRevision': detail.environment.protocolPlanRevision,
+      'routeId': detail.environment.routeId,
+      'routeRevision': detail.environment.routeRevision,
+      'accountId': detail.environment.accountId,
+      'accountRevision': detail.environment.accountRevision,
+      'credentialEpoch': detail.environment.credentialEpoch,
+    },
+    'diagnosis': detail.diagnosis == null
+        ? null
+        : {'providerStatus': detail.diagnosis!.providerStatus},
+    'processing': {
+      'result': detail.processingTrace.result,
+      'egressProxyId': detail.processingTrace.egressProxyId,
+      'pluginRunCount': detail.processingTrace.pluginRunIds.length,
+      'attempts': [
+        for (final attempt in detail.processingTrace.attempts)
+          {
+            'sequence': attempt.sequence,
+            'id': attempt.id,
+            'purpose': attempt.purpose,
+            'payloadClass': attempt.payloadClass,
+            'caller': attempt.caller,
+            'policyId': attempt.policyId,
+            'ruleId': attempt.ruleId,
+            'proxyId': attempt.proxyId,
+            'reusedTransport': attempt.reusedTransport,
+            'startedAt': attempt.startedAt.toUtc().toIso8601String(),
+            'terminal': attempt.terminal,
+            'outcome': attempt.outcome,
+            'errorClass': attempt.errorClass,
+            'bytesOut': attempt.bytesOut,
+            'bytesIn': attempt.bytesIn,
+            'completedAt': attempt.completedAt?.toUtc().toIso8601String(),
+          },
+      ],
+    },
+  },
+  'rawEvidence': {
+    'writer': {
+      'state': page.writer.state,
+      'admittedRecords': page.writer.admittedRecords,
+      'durableWatermark': page.writer.durableWatermark,
+      'queueRecords': page.writer.queueRecords,
+      'queueBytes': page.writer.queueBytes,
+      'maximumUnflushedTimeMs': page.writer.maximumUnflushedTimeMs,
+    },
+    'recovery': {
+      'recoveredUncleanWriters': page.recovery.recoveredUncleanWriters,
+      'purgedExpiredEnvelopes': page.recovery.purgedExpiredEnvelopes,
+      'maximumPossibleLossMs': page.recovery.maximumPossibleLossMs,
+    },
+    'boundaries': [
+      for (final envelope in page.items)
+        {
+          'layer': envelope.layer,
+          'observedAt': envelope.observedAt.toUtc().toIso8601String(),
+          'method': envelope.method,
+          'statusCode': envelope.statusCode,
+          'representation': envelope.representation,
+          'canonicalization': envelope.canonicalization,
+          'headerCount': envelope.headerCount,
+          'trailerCount': envelope.trailerCount,
+          'redactedCredentialFieldCount':
+              envelope.redactedCredentialFields.length,
+          'bodyBytes': envelope.bodyBytes,
+          'bodySha256': envelope.bodySha256,
+          'digestScope': envelope.digestScope,
+          'payloadState': envelope.payloadState,
+          'payloadReason': envelope.payloadReason,
         },
-        'diagnosis': detail.diagnosis == null
-            ? null
-            : {'providerStatus': detail.diagnosis!.providerStatus},
-        'processing': {
-          'result': detail.processingTrace.result,
-          'egressProxyId': detail.processingTrace.egressProxyId,
-          'pluginRunCount': detail.processingTrace.pluginRunIds.length,
-          'attempts': [
-            for (final attempt in detail.processingTrace.attempts)
-              {
-                'sequence': attempt.sequence,
-                'id': attempt.id,
-                'purpose': attempt.purpose,
-                'payloadClass': attempt.payloadClass,
-                'caller': attempt.caller,
-                'policyId': attempt.policyId,
-                'ruleId': attempt.ruleId,
-                'proxyId': attempt.proxyId,
-                'reusedTransport': attempt.reusedTransport,
-                'startedAt': attempt.startedAt.toUtc().toIso8601String(),
-                'terminal': attempt.terminal,
-                'outcome': attempt.outcome,
-                'errorClass': attempt.errorClass,
-                'bytesOut': attempt.bytesOut,
-                'bytesIn': attempt.bytesIn,
-                'completedAt': attempt.completedAt?.toUtc().toIso8601String(),
-              },
-          ],
-        },
-      },
-      'rawEvidence': {
-        'writer': {
-          'state': page.writer.state,
-          'admittedRecords': page.writer.admittedRecords,
-          'durableWatermark': page.writer.durableWatermark,
-          'queueRecords': page.writer.queueRecords,
-          'queueBytes': page.writer.queueBytes,
-          'maximumUnflushedTimeMs': page.writer.maximumUnflushedTimeMs,
-        },
-        'recovery': {
-          'recoveredUncleanWriters': page.recovery.recoveredUncleanWriters,
-          'purgedExpiredEnvelopes': page.recovery.purgedExpiredEnvelopes,
-          'maximumPossibleLossMs': page.recovery.maximumPossibleLossMs,
-        },
-        'boundaries': [
-          for (final envelope in page.items)
-            {
-              'layer': envelope.layer,
-              'observedAt': envelope.observedAt.toUtc().toIso8601String(),
-              'method': envelope.method,
-              'statusCode': envelope.statusCode,
-              'representation': envelope.representation,
-              'canonicalization': envelope.canonicalization,
-              'headerCount': envelope.headerCount,
-              'trailerCount': envelope.trailerCount,
-              'redactedCredentialFieldCount':
-                  envelope.redactedCredentialFields.length,
-              'bodyBytes': envelope.bodyBytes,
-              'bodySha256': envelope.bodySha256,
-              'digestScope': envelope.digestScope,
-              'payloadState': envelope.payloadState,
-              'payloadReason': envelope.payloadReason,
-            },
-        ],
-      },
-    });
+    ],
+  },
+});
 
 String _rawContentEncoding(RevealedRawEvidence value) {
   final encoding = value.envelope.contentEncoding?.trim().toLowerCase() ?? '';
@@ -4033,6 +4041,8 @@ final class _FailureNotice extends StatelessWidget {
       'provider_transport_failed' => switch (providerErrorClass) {
         'dns_failed' => 'provider_transport_dns',
         'tls_verification_failed' => 'provider_transport_tls',
+        'transport_profile_failed' => 'provider_transport_profile',
+        'tls_handshake_failed' => 'provider_transport_handshake',
         'connection_failed' => 'provider_transport_connection',
         'transport_timeout' => 'provider_transport_timeout',
         _ => result,

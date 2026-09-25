@@ -632,6 +632,14 @@ final class AppCopy {
         'TLS certificate verification failed on the outbound path.',
     'exchange.failure.provider_transport_tls.action':
         'Check the upstream host and trusted certificate chain; if an exit proxy is used, inspect its certificate. Do not disable verification.',
+    'exchange.failure.provider_transport_profile.title':
+        'The selected TLS fingerprint could not be prepared for this request.',
+    'exchange.failure.provider_transport_profile.action':
+        'Review the frozen wire profile and captured client TLS evidence, publish a compatible profile, then retry.',
+    'exchange.failure.provider_transport_handshake.title':
+        'The upstream TLS handshake failed before an HTTP response.',
+    'exchange.failure.provider_transport_handshake.action':
+        'Check upstream TLS compatibility and the selected fingerprint, then retry. Do not disable certificate verification.',
     'exchange.failure.provider_transport_connection.title':
         'The outbound connection failed or was interrupted.',
     'exchange.failure.provider_transport_connection.action':
@@ -2685,6 +2693,13 @@ final class AppCopy {
     'exchange.failure.provider_transport_tls.title': '外发路径的 TLS 证书验证失败。',
     'exchange.failure.provider_transport_tls.action':
         '核对上游地址和证书信任链；若使用出口代理，还需检查代理证书。不要关闭证书验证。',
+    'exchange.failure.provider_transport_profile.title': '无法为本次请求准备所选 TLS 指纹。',
+    'exchange.failure.provider_transport_profile.action':
+        '检查冻结的线路配置与已捕获的客户端 TLS 证据，发布兼容配置后重试。',
+    'exchange.failure.provider_transport_handshake.title':
+        '尚未收到 HTTP 响应，上游 TLS 握手已经失败。',
+    'exchange.failure.provider_transport_handshake.action':
+        '检查上游 TLS 兼容性与所选指纹后重试；不要关闭证书验证。',
     'exchange.failure.provider_transport_connection.title': '外发连接建立失败或传输中断。',
     'exchange.failure.provider_transport_connection.action':
         '检查所选网络出口、上游地址和防火墙路径，然后重试。',

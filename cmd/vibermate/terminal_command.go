@@ -3,10 +3,9 @@ package main
 import (
 	"encoding/json"
 	"io"
-	"runtime/debug"
-	"strings"
 
 	"github.com/vibe-agi/vibermate/internal/cliinstall"
+	"github.com/vibe-agi/vibermate/internal/productbuild"
 )
 
 const (
@@ -76,23 +75,5 @@ func executeTerminalCommand(arguments []string, stdout io.Writer) (int, string) 
 }
 
 func packagedTerminalCommandVersion() string {
-	information, ok := debug.ReadBuildInfo()
-	if !ok {
-		return "development"
-	}
-	for _, setting := range information.Settings {
-		if setting.Key == "vcs.revision" && validBuildLabel(setting.Value) {
-			return setting.Value
-		}
-	}
-	if information.Main.Version != "" &&
-		information.Main.Version != "(devel)" &&
-		validBuildLabel(information.Main.Version) {
-		return information.Main.Version
-	}
-	return "development"
-}
-
-func validBuildLabel(value string) bool {
-	return len(value) <= 128 && strings.TrimSpace(value) == value
+	return productbuild.Label()
 }

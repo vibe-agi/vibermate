@@ -77,10 +77,11 @@ func TestStatusAndDoctorVerifyTheRealLocalControlAPI(t *testing.T) {
 		}
 		writer.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(writer).Encode(desktopcontrol.StatusResponse{
-			Generation: instanceID,
-			Ready:      true,
-			APIVersion: "v1",
-			StatusKey:  "runtime.state.initialized",
+			Generation:   instanceID,
+			Ready:        true,
+			APIVersion:   "v1",
+			ProductBuild: "test-build",
+			StatusKey:    "runtime.state.initialized",
 			Runtime: productruntime.RuntimeStatus{
 				State:      productruntime.RuntimeStateInitialized,
 				InstanceID: instanceID,
@@ -159,7 +160,8 @@ func TestStatusAndDoctorVerifyTheRemoteRuntimeUserSession(t *testing.T) {
 		writer.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(writer).Encode(servercontrol.RuntimeUserCurrentSession{
 			Schema: servercontrol.RuntimeUserCurrentSessionSchema, InstanceID: "instance.test",
-			APIVersion: "v1", SessionID: "login.test", MachineID: machineID,
+			APIVersion: "v1", ProductBuild: "test-build",
+			SessionID: "login.test", MachineID: machineID,
 			DeviceName: "test-device",
 			User:       servercontrol.RuntimeUserView{ID: "user.test", Username: "alice"},
 		})
@@ -357,7 +359,8 @@ func TestRemoteLoginCommandPromptsAndPersistsWithoutEchoingSecrets(t *testing.T)
 		writer.WriteHeader(http.StatusCreated)
 		_ = json.NewEncoder(writer).Encode(servercontrol.RuntimeUserSession{
 			Schema: servercontrol.RuntimeUserSessionSchema, InstanceID: "instance.test",
-			APIVersion: "v1", SessionID: "login.test", SessionToken: token,
+			APIVersion: "v1", ProductBuild: "test-build",
+			SessionID: "login.test", SessionToken: token,
 			User:      servercontrol.RuntimeUserView{ID: "user.test", Username: "alice"},
 			ExpiresAt: now.Add(24 * time.Hour),
 		})

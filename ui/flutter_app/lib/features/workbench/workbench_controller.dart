@@ -3267,6 +3267,7 @@ final class WorkbenchController extends ChangeNotifier
     final a = left.offlineHold;
     final b = right.offlineHold;
     return left.ready == right.ready &&
+        left.productBuild == right.productBuild &&
         left.state == right.state &&
         left.host == right.host &&
         left.schemaRevision == right.schemaRevision &&

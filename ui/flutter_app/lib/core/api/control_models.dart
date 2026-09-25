@@ -1489,6 +1489,7 @@ final class OfflineHoldSnapshot {
 final class RuntimeStatus {
   const RuntimeStatus({
     required this.ready,
+    required this.productBuild,
     required this.state,
     required this.host,
     required this.schemaRevision,
@@ -1514,12 +1515,17 @@ final class RuntimeStatus {
         'generation',
         'ready',
         'apiVersion',
+        'productBuild',
         'statusKey',
         'runtime',
       },
     );
     if (requireString(value, 'apiVersion', 'status') != 'v1') {
       throw const ControlContractException('status.apiVersion is unsupported');
+    }
+    final productBuild = requireString(value, 'productBuild', 'status');
+    if (!_validDisplayLabel(productBuild, maximumBytes: 128)) {
+      throw const ControlContractException('status.productBuild is invalid');
     }
     final runtime = requireObject(value['runtime'], 'status.runtime');
     requireFields(
@@ -1625,6 +1631,7 @@ final class RuntimeStatus {
     }
     return RuntimeStatus(
       ready: requireBoolean(value, 'ready', 'status'),
+      productBuild: productBuild,
       state: state,
       host: host,
       schemaRevision: requireInteger(
@@ -1649,6 +1656,7 @@ final class RuntimeStatus {
   }
 
   final bool ready;
+  final String productBuild;
   final String state;
   final String host;
   final int schemaRevision;

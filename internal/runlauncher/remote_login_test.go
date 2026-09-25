@@ -41,7 +41,8 @@ func TestRemoteLoginAuthenticatesAndPersistsExactServerSession(t *testing.T) {
 		writer.WriteHeader(http.StatusCreated)
 		_ = json.NewEncoder(writer).Encode(servercontrol.RuntimeUserSession{
 			Schema: servercontrol.RuntimeUserSessionSchema, InstanceID: "instance.test",
-			APIVersion: "v1", SessionID: "login.test", SessionToken: token,
+			APIVersion: "v1", ProductBuild: "test-build",
+			SessionID: "login.test", SessionToken: token,
 			User:      servercontrol.RuntimeUserView{ID: "user.test", Username: "alice"},
 			ExpiresAt: now.Add(8 * time.Hour),
 		})
@@ -64,6 +65,7 @@ func TestRemoteLoginAuthenticatesAndPersistsExactServerSession(t *testing.T) {
 		t.Fatalf("LoginRemote() error = %v", err)
 	}
 	if result.Username != "alice" || result.Target != target ||
+		result.ProductBuild != "test-build" ||
 		!result.ExpiresAt.Equal(now.Add(8*time.Hour)) {
 		t.Fatalf("LoginRemote() = %#v", result)
 	}
@@ -100,7 +102,8 @@ func TestRemoteLogoutRevokesServerSessionBeforeRemovingLocalCredential(t *testin
 			writer.WriteHeader(http.StatusCreated)
 			_ = json.NewEncoder(writer).Encode(servercontrol.RuntimeUserSession{
 				Schema: servercontrol.RuntimeUserSessionSchema, InstanceID: "instance.test",
-				APIVersion: "v1", SessionID: "login.test", SessionToken: token,
+				APIVersion: "v1", ProductBuild: "test-build",
+				SessionID: "login.test", SessionToken: token,
 				User:      servercontrol.RuntimeUserView{ID: "user.test", Username: "alice"},
 				ExpiresAt: now.Add(8 * time.Hour),
 			})
@@ -159,7 +162,8 @@ func TestInspectRemoteVerifiesTheStoredRuntimeUserSession(t *testing.T) {
 		writer.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(writer).Encode(servercontrol.RuntimeUserCurrentSession{
 			Schema: servercontrol.RuntimeUserCurrentSessionSchema, InstanceID: "instance.test",
-			APIVersion: "v1", SessionID: "login.test", MachineID: machineID,
+			APIVersion: "v1", ProductBuild: "test-build",
+			SessionID: "login.test", MachineID: machineID,
 			DeviceName: "test-device",
 			User:       servercontrol.RuntimeUserView{ID: "user.test", Username: "alice"},
 		})
@@ -193,6 +197,7 @@ func TestInspectRemoteVerifiesTheStoredRuntimeUserSession(t *testing.T) {
 	if inspection.Origin != target.Origin() || inspection.InstanceID != "instance.test" ||
 		inspection.UserID != "user.test" || inspection.Username != "alice" ||
 		inspection.SessionID != "login.test" || inspection.APIVersion != "v1" ||
+		inspection.ProductBuild != "test-build" ||
 		inspection.Encrypted {
 		t.Fatalf("InspectRemote() = %#v", inspection)
 	}

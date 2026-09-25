@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/vibe-agi/vibermate/internal/productbuild"
 	"github.com/vibe-agi/vibermate/internal/runtimepersistence"
 	"github.com/vibe-agi/vibermate/internal/runtimeuser"
 	"github.com/vibe-agi/vibermate/internal/servercontrol"
@@ -95,6 +96,7 @@ func TestRuntimeUserLoginSessionHTTPAuthorizesRepeatedCaptureControl(t *testing.
 	}
 	if session.Schema != servercontrol.RuntimeUserSessionSchema ||
 		session.InstanceID != "instance.test" || session.APIVersion != "v1" ||
+		!productbuild.Valid(session.ProductBuild) ||
 		session.User.ID != string(created.ID) || session.User.Username != "alice" ||
 		session.SessionID == "" || session.SessionToken == "" ||
 		!session.ExpiresAt.Equal(clock.now.Add(8*time.Hour)) {
@@ -128,6 +130,7 @@ func TestRuntimeUserLoginSessionHTTPAuthorizesRepeatedCaptureControl(t *testing.
 	}
 	if currentSession.Schema != servercontrol.RuntimeUserCurrentSessionSchema ||
 		currentSession.InstanceID != "instance.test" || currentSession.APIVersion != "v1" ||
+		currentSession.ProductBuild != session.ProductBuild ||
 		currentSession.User.ID != string(created.ID) || currentSession.User.Username != "alice" ||
 		currentSession.SessionID != session.SessionID || currentSession.MachineID != machineID ||
 		currentSession.DeviceName != "Alice's MacBook" {

@@ -2777,11 +2777,13 @@ void main() {
 
       final report = jsonDecode(copiedDiagnostic!) as Map<String, Object?>;
       expect(report['schema'], 'vibermate.redacted-diagnostic/v1');
+      expect(report['product'], {'build': 'preview'});
       expect(report['exchange'], isA<Map<String, Object?>>());
       expect(report['rawEvidence'], isA<Map<String, Object?>>());
       expect(copiedDiagnostic, contains('bodySha256'));
       expect(copiedDiagnostic, isNot(contains('Authorization')));
       expect(copiedDiagnostic, isNot(contains('Bearer')));
+      expect(copiedDiagnostic, isNot(contains('Cookie')));
       expect(
         copiedDiagnostic,
         isNot(contains('{"model":"claude-sonnet-4-5","stream":true}')),

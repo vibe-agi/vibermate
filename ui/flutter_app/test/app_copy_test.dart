@@ -44,7 +44,14 @@ void main() {
       AppCopy.forLanguage(AppLanguage.simplifiedChinese),
     ]) {
       final unknown = copy('exchange.failure.provider_transport_failed.title');
-      for (final stage in ['dns', 'tls', 'connection', 'timeout']) {
+      for (final stage in [
+        'dns',
+        'tls',
+        'profile',
+        'handshake',
+        'connection',
+        'timeout',
+      ]) {
         final prefix = 'exchange.failure.provider_transport_$stage';
         expect(copy('$prefix.title'), isNot(unknown));
         expect(copy('$prefix.action'), isNotEmpty);
