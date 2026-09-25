@@ -1,8 +1,11 @@
 # ACP adapter acceptance: protocol, authentication, and editor setup
 
+Status: historical adapter research. Current source/editor acceptance is recorded
+in [2026-09-26-acp-editor-acceptance.md](../evidence/2026-09-26-acp-editor-acceptance.md).
+
 Date: 2026-09-07, Asia/Singapore. This supplements the
 [ecosystem survey](2026-09-07-acp-ecosystem.md) and
-[Cursor integration note](2026-09-07-cursor-acp-integration.md). Evidence comprises
+[bridge-pattern review](2026-09-07-acp-bridge-patterns.md). Evidence comprises
 first-party documentation, published adapter source, and the isolated experiments
 below. **These are direct adapter tests, not a completed ViberMate/editor or
 authenticated model acceptance test.** No personal account directories or

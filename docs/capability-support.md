@@ -38,7 +38,7 @@ Source package version: **0.1.13**. Latest published release: **v0.1.13**.
 | `native-cli-identity-rewrite` | Unsupported | Routing an upstream account changes the actual request credentials. It does not rewrite the CLI's local `auth.json`, local profile, or every native `/status` identity field. |
 | `automatic-account-failover` | Unsupported | One request does not silently move between accounts after an authentication or quota failure. |
 | `arbitrary-client-compatibility` | Unsupported | Manual proxy access does not imply semantic parsing, identity attribution, or tested compatibility for every application. |
-| `editor-acp` | Branch-only | ACP observation/routing work remains on `feat/acp-integration`. It is absent from v0.1.13 and from the current stabilization source until the dedicated convergence and real-editor acceptance task lands. |
+| `editor-acp` | Branch-only | The current stabilization source includes bounded ACP observation through App or Server. VS Code 1.139.0 with ACP Client 0.2.0 passed isolated auth/session/prompt/tool/cancel/EOF/reconnect acceptance; Codex ACP 1.13.1 passed its real auth-required boundary. It is not in v0.1.13, and ACP does not inherit HTTP routing/account policy. |
 
 ## Evidence, storage, and extensions
 

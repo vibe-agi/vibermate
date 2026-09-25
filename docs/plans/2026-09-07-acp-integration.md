@@ -1,16 +1,17 @@
 # ACP integration: usable observation milestone
 
-Date: 2026-09-07. Branch: `feat/acp-integration`. Published v0.1.9 source
-`3420aed6a6eb97d67b31bae64752419d6c362280` is merged at
-`e854571e8c68d32a61ea2123ec0a6e14b2aece22`. The released main worktree and older
-`feat/acp-stdio` prototype are not changed by this implementation.
+Date: 2026-09-07; converged into the current stabilization source on 2026-09-26.
+Only the still-applicable relay, observation, Runtime/CLI/UI, and acceptance
+changes were ported; the historical branch was not merged wholesale. The latest
+published v0.1.13 does not contain ACP.
 
-## Shipped in the development build
+## Implemented in current source
 
 The public command is `vibermate acp [--server URL] [--record-content] -- <agent>
 [args...]`. An ACP editor starts ViberMate, and ViberMate starts the existing
 adapter. Use the [setup guide](../acp-quickstart.md), or Settings -> Access &
-launch -> Connect an ACP editor, to generate Zed/JetBrains configuration.
+launch -> Connect an ACP editor, to generate Zed, JetBrains, or VS Code ACP
+Client configuration.
 
 This milestone is **ACP observation only**, not HTTP interception/enforcement.
 `--env` is rejected. No proxy, CA, provider credential, HTTP account overwrite,
@@ -25,9 +26,8 @@ created. The existing `vibermate run` HTTP path remains separate.
   primary specifications, release activity, license, CI/test and advisory checks.
 - [Bridge patterns](../research/2026-09-07-acp-bridge-patterns.md): pinned source
   and tests, including official Rust SDK proxy/conductor lifecycle patterns.
-- [Cursor integration](../research/2026-09-07-cursor-acp-integration.md): Cursor
-  CLI `agent acp` is an Agent, not evidence that Cursor desktop hosts arbitrary
-  external ACP Agents. Initial config targets use documented Zed/JetBrains flows.
+- Cursor CLI `agent acp` is an Agent, not evidence that Cursor desktop hosts
+  arbitrary external ACP Agents.
 - [Published-adapter acceptance](../research/2026-09-07-acp-acceptance.md):
   Codex ACP 1.10.0 (isolated Codex 0.153.3) and Claude ACP 0.75.1, Node 22.23.2.
 
@@ -49,7 +49,7 @@ SDK release numbers are distinct. Unknown extensions still pass unchanged.
 | `internal/desktopcontrol` | Owner-only ACP read and batch connection markers in Capture listings. No prompt content is loaded to label a list. Shared by App and Server Web. |
 | `ui/flutter_app` | ACP-only Capture display and units, session selection, version provenance, auth/recording/completeness notices, optional text and bilingual editor setup. No fake HTTP turn counts or policy picker on ACP. |
 
-See [ADR 0010](../adr/0010-observe-acp-without-inferring-http-authority.md) and
+See [ADR 0017](../adr/0017-observe-acp-without-inferring-http-authority.md) and
 [domain language](../../CONTEXT.md). A session directory is a claim, never file
 authority. Native IDs are connection-scoped and never globally merged. History
 replay is not a fresh prompt; opposite-direction request IDs are independent.
@@ -83,49 +83,35 @@ Deleting a Capture removes its observation. No idle periodic purge is claimed.
   device/workspace attribution, unchanged Agent env, owner-only Web reads.
 - Authority/storage: wrong and cross-run capabilities, proxy vs control scope,
   pre-attach non-mutating authorization, content-upgrade rejection, final/stale
-  revision rejection, logout/disabled-user fencing, v0.1.9 baseline upgrade,
+  revision rejection, logout/disabled-user fencing, released-baseline upgrade,
   reopen/expiry/delete cascade, unfamiliar extension rejection without reset.
 - Published adapters through the actual registered launcher in a network-disabled
   Linux ARM64 container: initialize, Codex unauthenticated auth-required boundary,
   Claude native session, EOF/exit and persisted final version/session evidence.
   No provider request, real credential or editor settings were used.
 - Flutter widget tests: English/Chinese, 390/1100 px, session switching,
-  metadata-only display and exact Zed/JetBrains/remote/Cursor CLI config arrays.
+  metadata-only display and exact Zed/JetBrains/VS Code/remote/Cursor CLI config
+  arrays.
 - Packaged CLI -> actual native-secret daemon -> Dart API -> WorkbenchController
-  passed with content both off and on. All seven packaged Dart live tests passed
-  in serial and parallel reruns; the actual packaged App launch/relaunch gate
-  also passed. A further native gate, `TestPackagedACPThroughDesktopAppLive`,
-  starts the actual App through LaunchServices, runs the packaged CLI with a
-  controlled ACP peer in both recording modes, and verifies finished connections
-  and the expected durable text in only that test's database after App exit.
-  `check-flutter-macos` runs the real App gates before the direct daemon tests.
+  passed with content both off and on after convergence. The acceptance build
+  used the existing link-time-only isolated Keychain service and did not change
+  the production Keychain namespace. The LaunchServices-exclusive native-shell
+  check was not counted on this host because another ViberMate application
+  identity was already running; see the current evidence report.
 
-Local native acceptance has a signing/launch-context caveat: immediately after
-an ad-hoc rebuild, directly spawning the daemon from `flutter_tester` reproduced
-six five-second `secret_store_unavailable` failures, including serial runs.
-Normal App launch/relaunch through LaunchServices succeeded on that same bundle;
-the subsequent seven direct-daemon tests all passed. This matches the prior
-[native Keychain validation boundary](../evidence/2026-09-01-novice-task-walkthrough.md#native-keychain-validation-boundary),
-but is not claimed as a diagnosed or fixed macOS ACL defect. The real App path
-is the acceptance authority; direct daemon tests are supplementary, not a
-replacement for it. No Keychain ACL, existing credential, or production storage
-backend was changed to make the tests pass.
-
-Repository gates: `go test ./...`, `go test -race ./...`, `go vet ./...`,
-`make check-format check-dependencies check-structural`, `flutter analyze`,
-`flutter test`, Linux/Windows cross-builds, packaged macOS/Web build and the
-opt-in live tests. Build outputs remain in this worktree's `dist`; no Homebrew,
-GitHub release or mainline mutation is part of this milestone. The final full Go
-race suite and Flutter analyzer passed; 374 ordinary Flutter tests passed, while
-the seven packaged tests require their explicit opt-in paths and are verified
-separately rather than silently counted as ordinary test coverage.
+Current convergence gates include full Go tests, targeted race tests across the
+ACP/Runtime/Host path, `go vet`, repository checks, Linux/Windows cross-builds,
+Flutter analyze and the full widget suite. The latest ordinary Flutter run
+passed 622 tests with 16 explicit opt-in skips; the two packaged ACP controller
+tests passed separately with their exact daemon/CLI paths. Build outputs remain
+local until the first-stage release gate.
 
 ## Remaining acceptance, not implied by these tests
 
-Actual GUI builds plus an explicitly authorized provider account are required
-to certify editor login, live prompts/tools/images, rejection/cancel/resume,
-multi-session interaction, and per-editor terminal-auth variants. Some legacy
-auth descriptors name a separate executable; the wrapper preserves them rather
-than claiming to capture that independent process. Cursor desktop external-agent
-hosting and HTTP proxy/CA/account substitution require their own evidence.
-These are not certified by protocol fixtures or isolated adapter initialization.
+The [2026-09-26 editor acceptance](../evidence/2026-09-26-acp-editor-acceptance.md)
+closes the isolated real-editor auth/session/message/tool/cancel/EOF/reconnect
+gate for fixed VS Code and adapter versions. An explicitly authorized provider
+account is still required for a paid live prompt/tool result. Zed/JetBrains
+human-click flows, legacy terminal-auth variants, Cursor desktop hosting,
+HTTP proxy/CA/account substitution, and arbitrary editor versions retain their
+own evidence gates.

@@ -1,7 +1,8 @@
-# ACP editor setup (development branch)
+# ACP editor setup (current source)
 
-Use the matching App/Server and CLI built from `feat/acp-integration`. Released
-v0.1.9 does not contain this command. This is ACP observation, **not HTTP traffic
+ViberMate v0.1.13 does not contain this command; use matching App/Server and
+CLI bytes from the current source until a later release includes it. This is
+ACP observation, **not HTTP traffic
 capture or routing**: no account overwrite, model mapping, script, network exit,
 or tool policy from `vibermate run` is applied. The editor still owns login,
 permissions, tools, native history, and provider traffic.
@@ -10,18 +11,18 @@ permissions, tools, native history, and provider traffic.
 
 Build with `make build-flutter-app`, open `dist/ViberMate.app`, and use the CLI
 inside that same bundle while testing. Do not leave a released App running and
-assume it supports the development CLI. No ViberMate account is required locally.
+assume it supports the current-source CLI. No ViberMate account is required locally.
 
 In Settings -> Access & launch -> Connect an ACP editor, choose the editor and
 Agent, enter absolute executable paths, and copy the configuration. Merge only
 the new entry; preserve existing editor settings and environment values.
 
-Install one adapter separately. The versions tested in isolation are:
+Install one adapter separately. The current isolated acceptance versions are:
 
 ```sh
-npm install -g @agentclientprotocol/codex-acp@1.10.0
+npm install -g @agentclientprotocol/codex-acp@1.13.1
 # OR (requires Node 22 or newer)
-npm install -g @agentclientprotocol/claude-agent-acp@0.75.1
+npm install -g @agentclientprotocol/claude-agent-acp@0.81.2
 ```
 
 Do not wrap plain `codex` or `claude` and expect them to become ACP Agents. These
@@ -54,6 +55,12 @@ unchanged; it does not update the user's shell profile or global commands.
 
 Claude uses the same entry with `claude-agent-acp` as the final executable. Cursor
 CLI uses `"args": ["acp", "--", "/absolute/path/to/agent", "acp"]`.
+
+For VS Code, install an ACP client that supports custom stdio Agents. The
+accepted combination is VS Code 1.139.0 with `formulahendry.acp-client` 0.2.0;
+put the same entry under the `acp.agents` setting instead of `agent_servers`.
+The ViberMate setup guide generates this shape directly. Client extensions are
+separate projects with their own update and trust boundary.
 
 ## Remote Runtime
 
@@ -112,10 +119,11 @@ is self-reported and is not a release-signature assertion.
 - No HTTP traffic policies: intentional in ACP-only mode. `--env` is rejected so
   a configured policy cannot appear to be enforced when it is not.
 
-Real published adapters passed isolated initialization, native session or
-auth-required response, EOF, process exit and Runtime persistence. Fixture tests
-also cover prompts, reverse permissions, replay, cancellation, large/fragmented
-bytes and terminal auth. Actual GUI editor login, live model/tool execution and
-each editor's terminal-auth version still need explicit acceptance with an
-authorized test account. See the [acceptance report](research/2026-09-07-acp-acceptance.md)
-and [implementation evidence](plans/2026-09-07-acp-integration.md).
+The fixed VS Code Extension Host completed synthetic login, new session,
+message, tool permission, cancellation, EOF and reconnect through the real
+Runtime. Codex ACP 1.13.1 and Claude Agent ACP 0.81.2 also passed their isolated
+login/session boundaries without provider credentials. A real paid provider
+prompt, Zed/JetBrains human-click login, and arbitrary editor versions remain
+outside this evidence. See the [current editor acceptance](evidence/2026-09-26-acp-editor-acceptance.md),
+[earlier adapter research](research/2026-09-07-acp-acceptance.md), and
+[implementation evidence](plans/2026-09-07-acp-integration.md).

@@ -89,6 +89,7 @@ later source commits and does not prove live provider or editor behavior.
 
 Hardened public-Internet operation, automatic account failover, plugins,
 QualityRun, Language Bridge, arbitrary-client compatibility, and automatic
-updates remain unclaimed. ACP remains branch-only until its integration and
-real-editor acceptance are merged. See the [capability and support
-matrix](capability-support.md) for the release/source distinction.
+updates remain unclaimed. ACP observation is integrated and editor-accepted in
+the current source, but remains branch-only until a release includes it. See the
+[capability and support matrix](capability-support.md) for the release/source
+distinction.

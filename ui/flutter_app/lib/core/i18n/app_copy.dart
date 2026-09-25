@@ -98,8 +98,10 @@ final class AppCopy {
     'acp.setup.copied': 'Configuration copied',
     'acp.setup.failed':
         'Could not copy. Select the configuration text and copy it manually.',
-    'acp.setup.help':
-        'Merge this entry into the editor’s agent_servers settings and keep existing environment values. Do not replace the whole settings file. For a remote Server, first run vibermate login --server <same URL> on the editor machine.',
+    'acp.setup.help.local':
+        'Merge the generated object into the editor’s settings and keep existing environment values. Do not replace the whole settings file.',
+    'acp.setup.help.remote':
+        'Merge the generated object into the editor’s settings and keep existing environment values. Do not replace the whole settings file. On the editor machine, first sign in with vibermate login --server using the same URL.',
     'acp.setup.paths':
         'GUI apps may not inherit your shell PATH. Use absolute paths and include Node in env.PATH for npm adapters; shell aliases do not work. Install the ACP adapter separately.',
     'error.account_selection_empty':
@@ -2471,8 +2473,9 @@ final class AppCopy {
     'acp.setup.copy': '复制编辑器配置',
     'acp.setup.copied': '配置已复制',
     'acp.setup.failed': '复制失败。请选中下方配置文本手动复制。',
-    'acp.setup.help':
-        '请把这一项合并到编辑器的 agent_servers 设置，并保留已有环境变量；不要覆盖整个设置文件。远程连接请先在编辑器所在机器执行 vibermate login --server <同一 URL>。',
+    'acp.setup.help.local': '请把生成的对象合并到编辑器设置中，并保留已有环境变量；不要覆盖整个设置文件。',
+    'acp.setup.help.remote':
+        '请把生成的对象合并到编辑器设置中，并保留已有环境变量；不要覆盖整个设置文件。远程连接时，请先在编辑器所在机器使用同一个 URL 执行 vibermate login --server。',
     'acp.setup.paths':
         'GUI 应用可能不继承终端 PATH。请使用绝对路径，并为 npm 适配器在 env.PATH 中包含 Node；不能依赖 alias。ACP 适配器需要单独安装。',
     'error.account_selection_empty':

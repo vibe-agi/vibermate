@@ -35,8 +35,8 @@ final class _ACPSetupGuideState extends State<ACPSetupGuide> {
     super.dispose();
   }
 
-  String get _configuration => const JsonEncoder.withIndent('  ').convert({
-    'agent_servers': {
+  String get _configuration {
+    final agents = {
       'vibermate-${_kind.toLowerCase().replaceAll(' ', '-')}': {
         if (_editor == 'Zed') 'type': 'custom',
         'command': _program.text.trim(),
@@ -53,8 +53,13 @@ final class _ACPSetupGuideState extends State<ACPSetupGuide> {
         ],
         'env': <String, String>{},
       },
-    },
-  });
+    };
+    return const JsonEncoder.withIndent('  ').convert(
+      _editor == 'VS Code (ACP Client)'
+          ? {'acp.agents': agents}
+          : {'agent_servers': agents},
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -101,7 +106,11 @@ final class _ACPSetupGuideState extends State<ACPSetupGuide> {
                     labelText: copy('acp.setup.editor'),
                   ),
                   items: [
-                    for (final name in ['Zed', 'JetBrains'])
+                    for (final name in [
+                      'Zed',
+                      'JetBrains',
+                      'VS Code (ACP Client)',
+                    ])
                       DropdownMenuItem(value: name, child: Text(name)),
                   ],
                   onChanged: (value) => setState(() => _editor = value!),
@@ -180,7 +189,11 @@ final class _ACPSetupGuideState extends State<ACPSetupGuide> {
           if (_notice != null) Text(copy(_notice!)),
           const SizedBox(height: 8),
           Text(
-            copy('acp.setup.help'),
+            copy(
+              _server.text.trim().isEmpty
+                  ? 'acp.setup.help.local'
+                  : 'acp.setup.help.remote',
+            ),
             style: Theme.of(context).textTheme.bodySmall,
           ),
           const SizedBox(height: 8),

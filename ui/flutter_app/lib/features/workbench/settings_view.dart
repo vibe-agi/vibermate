@@ -617,16 +617,19 @@ final class _AccessSettingsPane extends StatelessWidget {
           style: Theme.of(context).textTheme.bodySmall,
         ),
       ],
-      const SizedBox(height: 16),
-      ACPSetupGuide(
-        copy: copy,
-        program:
-            controller.terminalCommand?.targetPath ??
-            '/absolute/path/to/vibermate',
-        serverURL: controller.terminalManagement
-            ? ''
-            : controller.runtimeServerURL,
-      ),
+      if (controller.terminalManagement ||
+          controller.runtimeServerURL.isNotEmpty) ...[
+        const SizedBox(height: 16),
+        ACPSetupGuide(
+          copy: copy,
+          program:
+              controller.terminalCommand?.targetPath ??
+              '/absolute/path/to/vibermate',
+          serverURL: controller.terminalManagement
+              ? ''
+              : controller.runtimeServerURL,
+        ),
+      ],
       if (controller.serverManagement || controller.webPrincipal != null) ...[
         const SizedBox(height: 16),
         if (controller.terminalManagement)

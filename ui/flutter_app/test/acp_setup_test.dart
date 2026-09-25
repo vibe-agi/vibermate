@@ -30,17 +30,18 @@ void main() {
         ),
       );
       await tester.pumpAndSettle();
-      Map<String, dynamic> config() =>
-          (jsonDecode(
-                    tester
-                        .widget<SelectableText>(
-                          find.byKey(const Key('acp-editor-json')),
-                        )
-                        .data!,
-                  )
-                  as Map<String, dynamic>)['agent_servers']
+      Map<String, dynamic> document() =>
+          jsonDecode(
+                tester
+                    .widget<SelectableText>(
+                      find.byKey(const Key('acp-editor-json')),
+                    )
+                    .data!,
+              )
               as Map<String, dynamic>;
-      expect(config()['vibermate-codex'], {
+      Map<String, dynamic> config(String key) =>
+          document()[key] as Map<String, dynamic>;
+      expect(config('agent_servers')['vibermate-codex'], {
         'type': 'custom',
         'command': '/Applications/My App/vibermate',
         'args': ['acp', '--', 'codex-acp'],
@@ -57,7 +58,7 @@ void main() {
       await tester.ensureVisible(find.byType(SwitchListTile));
       await tester.tap(find.byType(Switch));
       await tester.pumpAndSettle();
-      expect(config()['vibermate-codex']['args'], [
+      expect(config('agent_servers')['vibermate-codex']['args'], [
         'acp',
         '--server',
         'https://runtime.example:9666',
@@ -70,12 +71,32 @@ void main() {
       await tester.pumpAndSettle();
       await tester.tap(find.text('JetBrains').last);
       await tester.pumpAndSettle();
-      expect(config()['vibermate-codex'].containsKey('type'), isFalse);
+      expect(
+        config('agent_servers')['vibermate-codex'].containsKey('type'),
+        isFalse,
+      );
+      await tester.tap(find.text('JetBrains'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('VS Code (ACP Client)').last);
+      await tester.pumpAndSettle();
+      expect(document().containsKey('agent_servers'), isFalse);
+      expect(config('acp.agents')['vibermate-codex'], {
+        'command': '/Applications/My App/vibermate',
+        'args': [
+          'acp',
+          '--server',
+          'https://runtime.example:9666',
+          '--record-content',
+          '--',
+          '/agents/My Agent/codex-acp',
+        ],
+        'env': <String, String>{},
+      });
       await tester.tap(find.text('Codex'));
       await tester.pumpAndSettle();
       await tester.tap(find.text('Cursor CLI').last);
       await tester.pumpAndSettle();
-      expect(config()['vibermate-cursor-cli']['args'], [
+      expect(config('acp.agents')['vibermate-cursor-cli']['args'], [
         'acp',
         '--server',
         'https://runtime.example:9666',
