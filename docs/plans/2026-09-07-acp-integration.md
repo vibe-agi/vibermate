@@ -94,11 +94,22 @@ Deleting a Capture removes its observation. No idle periodic purge is claimed.
 - Packaged CLI -> actual native-secret daemon -> Dart API -> WorkbenchController
   passed with content both off and on. All seven packaged Dart live tests passed
   in serial and parallel reruns; the actual packaged App launch/relaunch gate
-  also passed. `check-flutter-macos` includes the ACP tests and runs packaged
-  suites sequentially. One earlier run concurrent with other native acceptance
-  returned two `secret_store_unavailable` startup failures; they did not recur in
-  the standalone reruns. This is retained as a native startup reliability
-  observation, not represented as a diagnosed or fixed Keychain defect.
+  also passed. A further native gate, `TestPackagedACPThroughDesktopAppLive`,
+  starts the actual App through LaunchServices, runs the packaged CLI with a
+  controlled ACP peer in both recording modes, and verifies finished connections
+  and the expected durable text in only that test's database after App exit.
+  `check-flutter-macos` runs the real App gates before the direct daemon tests.
+
+Local native acceptance has a signing/launch-context caveat: immediately after
+an ad-hoc rebuild, directly spawning the daemon from `flutter_tester` reproduced
+six five-second `secret_store_unavailable` failures, including serial runs.
+Normal App launch/relaunch through LaunchServices succeeded on that same bundle;
+the subsequent seven direct-daemon tests all passed. This matches the prior
+[native Keychain validation boundary](../evidence/2026-09-01-novice-task-walkthrough.md#native-keychain-validation-boundary),
+but is not claimed as a diagnosed or fixed macOS ACL defect. The real App path
+is the acceptance authority; direct daemon tests are supplementary, not a
+replacement for it. No Keychain ACL, existing credential, or production storage
+backend was changed to make the tests pass.
 
 Repository gates: `go test ./...`, `go test -race ./...`, `go vet ./...`,
 `make check-format check-dependencies check-structural`, `flutter analyze`,
