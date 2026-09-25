@@ -77,6 +77,13 @@ final class ProviderAccountRow extends StatelessWidget {
         : account.usable
         ? copy('routes.credentials.ready')
         : copy('routes.credentials.unavailable');
+    final credentialColor = oauth?.state == 'reconnect_required'
+        ? context.viberColors.danger
+        : oauth?.state == 'refresh_due'
+        ? context.viberColors.warning
+        : account.usable
+        ? context.viberColors.verified
+        : context.viberColors.danger;
     final kindLabel = _localizedCopy(copy, 'routes.account.kind', account.kind);
     final transportLabel = _localizedCopy(
       copy,
@@ -153,9 +160,7 @@ final class ProviderAccountRow extends StatelessWidget {
                       const SizedBox(height: 4),
                       InlineStatus(
                         label: credentialLabel,
-                        color: account.usable
-                            ? context.viberColors.verified
-                            : context.viberColors.danger,
+                        color: credentialColor,
                       ),
                     ],
                   ),
@@ -210,12 +215,7 @@ final class ProviderAccountRow extends StatelessWidget {
                 style: monoStyle,
               ),
             ),
-            InlineStatus(
-              label: credentialLabel,
-              color: account.usable
-                  ? context.viberColors.verified
-                  : context.viberColors.danger,
-            ),
+            InlineStatus(label: credentialLabel, color: credentialColor),
             const SizedBox(width: 4),
             compactActions,
           ],

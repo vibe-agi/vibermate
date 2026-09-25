@@ -96,7 +96,7 @@ void main() {
       expect(find.text('6.98B'), findsOneWidget);
       expect(find.text('6,980,410,315 tokens'), findsOneWidget);
       expect(find.text('codex'), findsNothing);
-      expect(find.text('积分余额：0'), findsOneWidget);
+      expect(find.text('积分余额：无可用积分'), findsOneWidget);
       expect(find.text('上游统计截至 2026-09-21'), findsOneWidget);
       expect(
         tester
@@ -146,7 +146,10 @@ void main() {
     tester,
   ) async {
     final api = _FactsApi()
-      ..quota = {'limits': <Object>[]}
+      ..quota = {
+        'limits': <Object>[],
+        'credits': {'hasCredits': true, 'unlimited': false},
+      }
       ..history = {
         'history': {'daily': <Object>[], 'partial': true},
       };
@@ -157,6 +160,7 @@ void main() {
     await _query(tester, history: true);
     expect(find.byType(LinearProgressIndicator), findsNothing);
     expect(find.text('上游未提供额度窗口，不代表用量为 0%。'), findsOneWidget);
+    expect(find.text('积分余额：未提供'), findsOneWidget);
     expect(find.text('—'), findsOneWidget);
     expect(find.text('未提供'), findsOneWidget);
     expect(find.text('上游报告历史统计暂不完整。'), findsOneWidget);

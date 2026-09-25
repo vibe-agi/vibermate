@@ -471,6 +471,8 @@ final class _ProviderAccountFactsPanelState
             copy.format('account_facts.credits', {
               'balance': credits.unlimited
                   ? copy('account_facts.unlimited')
+                  : !credits.hasCredits
+                  ? copy('account_facts.no_credits')
                   : credits.balance ?? copy('account_facts.unknown'),
             }),
           ),

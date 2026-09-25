@@ -228,6 +228,7 @@ final class AppCopy {
     'account_facts.no_windows':
         'The upstream did not provide quota windows. This does not mean 0% used.',
     'account_facts.unknown': 'Not provided',
+    'account_facts.no_credits': 'No credits available',
     'account_facts.unlimited': 'Unlimited',
     'account_facts.credits': 'Credits: {balance}',
     'account_facts.banked_resets': 'Banked Codex resets: {count}',
@@ -2572,6 +2573,7 @@ final class AppCopy {
     'account_facts.resets': '重置时间 {time}（本地时间）',
     'account_facts.no_windows': '上游未提供额度窗口，不代表用量为 0%。',
     'account_facts.unknown': '未提供',
+    'account_facts.no_credits': '无可用积分',
     'account_facts.unlimited': '无限制',
     'account_facts.credits': '积分余额：{balance}',
     'account_facts.banked_resets': 'Codex 可用额度重置券：{count}',
