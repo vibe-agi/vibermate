@@ -14,6 +14,7 @@ import 'control_failure_notice.dart';
 import '../../core/design/workbench_widgets.dart';
 import '../../core/i18n/app_copy.dart';
 import 'environment_editing.dart';
+import 'environment_dry_run_dialog.dart';
 import 'egress_profile_editor.dart';
 import 'launch_environment_editor.dart';
 import 'message_transform_editor.dart';
@@ -440,8 +441,27 @@ final class _EnvironmentDetail extends StatelessWidget {
                       onPressed: onShowCurrent,
                       icon: const Icon(Icons.update, size: 13),
                       label: Text(copy('environment.history.current')),
-                    )
-                  else if (!value.systemOwned)
+                    ),
+                  if (value.clientEndpoints.isNotEmpty &&
+                      !controller.previewMode)
+                    OutlinedButton.icon(
+                      key: const Key('environment-dry-run-open'),
+                      onPressed: controller.environmentMutating
+                          ? null
+                          : () => unawaited(
+                              showDialog<void>(
+                                context: context,
+                                builder: (_) => EnvironmentDryRunDialog(
+                                  controller: controller,
+                                  environment: value,
+                                  copy: copy,
+                                ),
+                              ),
+                            ),
+                      icon: const Icon(Icons.play_arrow_outlined, size: 14),
+                      label: Text(copy('environment.dry_run.open')),
+                    ),
+                  if (!historical && !value.systemOwned)
                     OutlinedButton.icon(
                       key: const Key('environment-edit'),
                       onPressed: controller.environmentMutating
@@ -1510,6 +1530,26 @@ final class _NewEnvironmentDialogState extends State<_NewEnvironmentDialog> {
                         : widget.controller.clearEnvironmentReview,
                     child: Text(copy('common.back')),
                   ),
+                  if (!widget.controller.previewMode)
+                    OutlinedButton.icon(
+                      key: const Key('environment-draft-dry-run-open'),
+                      onPressed: widget.controller.environmentMutating
+                          ? null
+                          : () => unawaited(
+                              showDialog<void>(
+                                context: context,
+                                builder: (_) => EnvironmentDryRunDialog(
+                                  controller: widget.controller,
+                                  environment: draft.candidate,
+                                  reviewedDraft: draft,
+                                  publishedAvailable: false,
+                                  copy: copy,
+                                ),
+                              ),
+                            ),
+                      icon: const Icon(Icons.play_arrow_outlined, size: 14),
+                      label: Text(copy('environment.dry_run.open')),
+                    ),
                   FilledButton.icon(
                     key: const Key('environment-create-publish'),
                     onPressed: widget.controller.environmentMutating
@@ -2112,6 +2152,25 @@ final class _EnvironmentEditorDialogState
                         : widget.controller.clearEnvironmentReview,
                     child: Text(copy('common.back')),
                   ),
+                  if (!widget.controller.previewMode)
+                    OutlinedButton.icon(
+                      key: const Key('environment-draft-dry-run-open'),
+                      onPressed: widget.controller.environmentMutating
+                          ? null
+                          : () => unawaited(
+                              showDialog<void>(
+                                context: context,
+                                builder: (_) => EnvironmentDryRunDialog(
+                                  controller: widget.controller,
+                                  environment: widget.environment,
+                                  reviewedDraft: draft,
+                                  copy: copy,
+                                ),
+                              ),
+                            ),
+                      icon: const Icon(Icons.play_arrow_outlined, size: 14),
+                      label: Text(copy('environment.dry_run.open')),
+                    ),
                   FilledButton.icon(
                     key: const Key('environment-publish'),
                     onPressed: widget.controller.environmentMutating

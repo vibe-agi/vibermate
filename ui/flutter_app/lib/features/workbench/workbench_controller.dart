@@ -363,6 +363,12 @@ final class WorkbenchController extends ChangeNotifier
     required AccountSelectorTestSample sample,
   }) => _api.testAccountSelector(policy: policy, sample: sample);
 
+  Future<EnvironmentDryRun> dryRunEnvironment(EnvironmentDryRunInput input) =>
+      _api.dryRunEnvironment(input);
+
+  Future<EnvironmentDraft> environmentDraft(String environmentId) =>
+      _api.environmentDraft(environmentId);
+
   Future<CodeLibraryCatalog> codeLibrary({bool refresh = false}) {
     if (refresh) _codeLibraryCatalog = null;
     return _codeLibraryCatalog ??= _loadCodeLibrary();

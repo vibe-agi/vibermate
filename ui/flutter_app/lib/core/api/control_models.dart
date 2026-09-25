@@ -5391,6 +5391,209 @@ final class EnvironmentDraft {
   final EnvironmentRecord candidate;
 }
 
+final class EnvironmentDryRunInput {
+  const EnvironmentDryRunInput({
+    required this.environmentId,
+    required this.source,
+    required this.revision,
+    required this.clientOrigin,
+    required this.method,
+    required this.path,
+    this.rawQuery = '',
+    required this.clientProtocol,
+    required this.body,
+  });
+
+  final String environmentId;
+  final String source;
+  final int revision;
+  final String clientOrigin;
+  final String method;
+  final String path;
+  final String rawQuery;
+  final String clientProtocol;
+  final String body;
+
+  JsonObject toJson() => {
+    'source': source,
+    'revision': revision,
+    'clientOrigin': clientOrigin,
+    'method': method,
+    'path': path,
+    if (rawQuery.isNotEmpty) 'rawQuery': rawQuery,
+    'clientProtocol': clientProtocol,
+    'body': body,
+  };
+}
+
+final class EnvironmentDryRun {
+  const EnvironmentDryRun({
+    required this.source,
+    required this.publishedRevision,
+    required this.draftRevision,
+    required this.decision,
+  });
+
+  factory EnvironmentDryRun.fromJson(
+    Object? json,
+    EnvironmentDryRunInput input,
+  ) {
+    const path = 'environmentDryRun';
+    final value = requireObject(json, path);
+    requireFields(
+      value,
+      path,
+      required: const {'schema', 'source', 'publishedRevision', 'result'},
+      optional: const {'draftRevision'},
+    );
+    if (value['schema'] != 'vibermate-environment-dry-run-v1' ||
+        value['source'] != input.source) {
+      throw const ControlContractException(
+        'Environment dry run source changed',
+      );
+    }
+    final publishedRevision = requireInteger(value, 'publishedRevision', path);
+    final draftRevision = optionalInteger(
+      value,
+      'draftRevision',
+      path,
+      minimum: 1,
+    );
+    final decision = EnvironmentDryRunDecision.fromJson(value['result']);
+    if (decision.environmentId != input.environmentId ||
+        (input.source == 'published' &&
+            (publishedRevision != input.revision ||
+                draftRevision != null ||
+                decision.environmentRevision != input.revision)) ||
+        (input.source == 'draft' &&
+            (draftRevision != input.revision ||
+                decision.environmentRevision != publishedRevision + 1))) {
+      throw const ControlContractException(
+        'Environment dry run revision changed',
+      );
+    }
+    return EnvironmentDryRun(
+      source: input.source,
+      publishedRevision: publishedRevision,
+      draftRevision: draftRevision,
+      decision: decision,
+    );
+  }
+
+  final String source;
+  final int publishedRevision;
+  final int? draftRevision;
+  final EnvironmentDryRunDecision decision;
+}
+
+final class EnvironmentDryRunDecision {
+  const EnvironmentDryRunDecision({
+    required this.environmentId,
+    required this.environmentRevision,
+    required this.destinationKind,
+    required this.providerOrigin,
+    required this.routeId,
+    required this.accountId,
+    required this.requestedModel,
+    required this.effectiveModel,
+    required this.modelMapped,
+    required this.networkExitId,
+    required this.bodyChanged,
+    required this.changedHeaderNames,
+    required this.changedTopLevelFields,
+    required this.unverified,
+  });
+
+  factory EnvironmentDryRunDecision.fromJson(Object? json) {
+    const path = 'environmentDryRun.result';
+    final value = requireObject(json, path);
+    requireFields(
+      value,
+      path,
+      required: const {
+        'evaluatedAt',
+        'environmentId',
+        'environmentRevision',
+        'environmentDigest',
+        'destinationKind',
+        'providerOrigin',
+        'routeId',
+        'routeRevision',
+        'accountId',
+        'accountRevision',
+        'requestedModel',
+        'effectiveModel',
+        'modelMapped',
+        'networkExitId',
+        'networkExitRevision',
+        'providerMethod',
+        'providerPath',
+        'bodyChanged',
+        'changedHeaderNames',
+        'changedTopLevelFields',
+        'unverified',
+      },
+    );
+    requireTimestamp(value, 'evaluatedAt', path);
+    _requireDigest(value, 'environmentDigest', path);
+    requireInteger(value, 'routeRevision', path);
+    requireInteger(value, 'accountRevision', path);
+    requireInteger(value, 'networkExitRevision', path);
+    requireString(value, 'providerMethod', path);
+    requireString(value, 'providerPath', path);
+    final kind = requireString(value, 'destinationKind', path);
+    if (!const {'upstream', 'original'}.contains(kind)) {
+      throw const ControlContractException(
+        'Environment dry run destination is invalid',
+      );
+    }
+    return EnvironmentDryRunDecision(
+      environmentId: requireString(value, 'environmentId', path),
+      environmentRevision: requireInteger(
+        value,
+        'environmentRevision',
+        path,
+        minimum: 1,
+      ),
+      destinationKind: kind,
+      providerOrigin: requireString(value, 'providerOrigin', path),
+      routeId: requireStringValue(value, 'routeId', path),
+      accountId: requireStringValue(value, 'accountId', path),
+      requestedModel: requireStringValue(value, 'requestedModel', path),
+      effectiveModel: requireStringValue(value, 'effectiveModel', path),
+      modelMapped: requireBoolean(value, 'modelMapped', path),
+      networkExitId: requireString(value, 'networkExitId', path),
+      bodyChanged: requireBoolean(value, 'bodyChanged', path),
+      changedHeaderNames: List.unmodifiable(
+        requireStringList(value, 'changedHeaderNames', path),
+      ),
+      changedTopLevelFields: value['changedTopLevelFields'] == null
+          ? null
+          : List.unmodifiable(
+              requireStringList(value, 'changedTopLevelFields', path),
+            ),
+      unverified: List.unmodifiable(
+        requireStringList(value, 'unverified', path),
+      ),
+    );
+  }
+
+  final String environmentId;
+  final int environmentRevision;
+  final String destinationKind;
+  final String providerOrigin;
+  final String routeId;
+  final String accountId;
+  final String requestedModel;
+  final String effectiveModel;
+  final bool modelMapped;
+  final String networkExitId;
+  final bool bodyChanged;
+  final List<String> changedHeaderNames;
+  final List<String>? changedTopLevelFields;
+  final List<String> unverified;
+}
+
 final class EnvironmentImpactCapture {
   const EnvironmentImpactCapture({
     required this.captureKind,

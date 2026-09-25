@@ -550,6 +550,7 @@ type exchangeBuildRequest struct {
 
 type exchangeRuntime interface {
 	exchange.Executor
+	DryRun(context.Context, exchange.ClientRequest) (exchange.DryRunResult, error)
 	BeginShutdown()
 	Drain(context.Context) error
 	Shutdown(context.Context) error

@@ -177,6 +177,30 @@ func TestServerOwnerWebSessionCanManageManualCapture(t *testing.T) {
 	if err := json.NewDecoder(memberLogin.Body).Decode(&memberSession); err != nil {
 		t.Fatal(err)
 	}
+	dryRunURL := "http://" + host.Status().ListenAddress +
+		"/api/v1/environments/system_transparent/actions/dry-run"
+	dryRunInput := map[string]any{
+		"source": "published", "revision": 1,
+		"clientOrigin": "https://api.anthropic.com", "method": "POST",
+		"path": "/v1/messages", "clientProtocol": "http/1.1",
+		"body": `{"model":"synthetic-model","max_tokens":16,"messages":[{"role":"user","content":"synthetic"}]}`,
+	}
+	for _, trial := range []struct {
+		label      string
+		credential string
+		expected   int
+	}{
+		{"owner", session.WriteToken, http.StatusOK},
+		{"owner read token", session.ReadToken, http.StatusUnauthorized},
+		{"member", memberSession.WriteToken, http.StatusUnauthorized},
+		{"anonymous", "", http.StatusUnauthorized},
+	} {
+		response := postJSON(t, client, dryRunURL, trial.credential, dryRunInput)
+		response.Body.Close()
+		if response.StatusCode != trial.expected {
+			t.Fatalf("%s Environment dry run status=%d, want %d", trial.label, response.StatusCode, trial.expected)
+		}
+	}
 	deniedRequest, err := http.NewRequest(http.MethodGet, request.URL.String(), nil)
 	if err != nil {
 		t.Fatal(err)

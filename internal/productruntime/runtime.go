@@ -798,6 +798,15 @@ func (r *Runtime) ExchangeExecutor() exchange.Executor {
 	return r.exchanges
 }
 
+// DryRun evaluates a frozen Exchange without acquiring credentials, opening a
+// provider connection, or writing evidence.
+func (r *Runtime) DryRun(ctx context.Context, request exchange.ClientRequest) (exchange.DryRunResult, error) {
+	if r == nil || r.exchanges == nil {
+		return exchange.DryRunResult{}, errors.New("Runtime dry run is unavailable")
+	}
+	return r.exchanges.DryRun(ctx, request)
+}
+
 // CaptureRuns returns the runtime-owned short-lived child attribution
 // controller. It has no HTTP exposure until a Host composes authenticated
 // control routes.

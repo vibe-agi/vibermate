@@ -60,6 +60,7 @@ type Reader interface {
 	List(context.Context) ([]EnvironmentSnapshot, error)
 	Get(context.Context, EnvironmentID) (EnvironmentSnapshot, error)
 	GetDraft(context.Context, EnvironmentID) (Draft, error)
+	GetDraftSnapshot(context.Context, EnvironmentID, Revision) (EnvironmentSnapshot, error)
 	GetRevision(context.Context, EnvironmentID, Revision) (EnvironmentSnapshot, error)
 }
 
@@ -350,6 +351,13 @@ func (manager *Manager) GetDraft(ctx context.Context, id EnvironmentID) (Draft, 
 	return draft.Clone(), nil
 }
 
+// GetDraftSnapshot compiles the exact saved candidate without publishing it.
+// It rejects a draft whose base no longer matches the active Environment.
+func (manager *Manager) GetDraftSnapshot(ctx context.Context, id EnvironmentID, revision Revision) (EnvironmentSnapshot, error) {
+	_, snapshot, err := manager.compiledDraft(ctx, id, revision)
+	return snapshot, err
+}
+
 func (manager *Manager) GetRevision(ctx context.Context, id EnvironmentID, revision Revision) (EnvironmentSnapshot, error) {
 	if ctx == nil || revision == 0 {
 		return EnvironmentSnapshot{}, ErrInvalidEnvironment
@@ -443,29 +451,9 @@ func validateNewChildren(candidate Environment) error {
 }
 
 func (manager *Manager) Preview(ctx context.Context, id EnvironmentID, draftRevision Revision) (ImpactPreview, error) {
-	if ctx == nil || id == SystemTransparentID || draftRevision == 0 {
-		return ImpactPreview{}, ErrInvalidEnvironment
-	}
-	draft, exists, err := manager.repository.LoadDraft(ctx, id)
+	draft, candidate, err := manager.compiledDraft(ctx, id, draftRevision)
 	if err != nil {
 		return ImpactPreview{}, err
-	}
-	if !exists {
-		return ImpactPreview{}, ErrDraftNotFound
-	}
-	if draft.Revision != draftRevision {
-		return ImpactPreview{}, ErrRevisionConflict
-	}
-	candidate, err := manager.compiler.Compile(draft.Candidate)
-	if err != nil || candidate.Digest() != draft.CandidateDigest {
-		return ImpactPreview{}, fmt.Errorf("%w: draft candidate changed", ErrInvalidRepositoryState)
-	}
-	activeAggregate, activeExists, err := manager.repository.LoadActive(ctx, id)
-	if err != nil {
-		return ImpactPreview{}, err
-	}
-	if (activeExists && activeAggregate.Revision != draft.BaseRevision) || (!activeExists && draft.BaseRevision != 0) {
-		return ImpactPreview{}, ErrRevisionConflict
 	}
 	refs := []CaptureReference(nil)
 	if manager.inspector != nil {
@@ -495,6 +483,34 @@ func (manager *Manager) Preview(ctx context.Context, id EnvironmentID, draftRevi
 		EnvironmentID: id, BaseRevision: draft.BaseRevision, DraftRevision: draft.Revision,
 		CandidateDigest: candidate.Digest(), ContinuingCaptures: slices.Clone(refs),
 	}.Clone(), nil
+}
+
+func (manager *Manager) compiledDraft(ctx context.Context, id EnvironmentID, draftRevision Revision) (Draft, EnvironmentSnapshot, error) {
+	if ctx == nil || id == SystemTransparentID || draftRevision == 0 {
+		return Draft{}, EnvironmentSnapshot{}, ErrInvalidEnvironment
+	}
+	draft, exists, err := manager.repository.LoadDraft(ctx, id)
+	if err != nil {
+		return Draft{}, EnvironmentSnapshot{}, err
+	}
+	if !exists {
+		return Draft{}, EnvironmentSnapshot{}, ErrDraftNotFound
+	}
+	if draft.Revision != draftRevision {
+		return Draft{}, EnvironmentSnapshot{}, ErrRevisionConflict
+	}
+	candidate, err := manager.compiler.Compile(draft.Candidate)
+	if err != nil || candidate.Digest() != draft.CandidateDigest {
+		return Draft{}, EnvironmentSnapshot{}, fmt.Errorf("%w: draft candidate changed", ErrInvalidRepositoryState)
+	}
+	activeAggregate, activeExists, err := manager.repository.LoadActive(ctx, id)
+	if err != nil {
+		return Draft{}, EnvironmentSnapshot{}, err
+	}
+	if (activeExists && activeAggregate.Revision != draft.BaseRevision) || (!activeExists && draft.BaseRevision != 0) {
+		return Draft{}, EnvironmentSnapshot{}, ErrRevisionConflict
+	}
+	return draft.Clone(), candidate, nil
 }
 
 func (manager *Manager) Publish(ctx context.Context, preview ImpactPreview) (CommitResult, error) {

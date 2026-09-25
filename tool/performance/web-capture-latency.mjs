@@ -193,6 +193,20 @@ try {
   await json(await fetch(draftURL + '/actions/publish', {
     method: 'POST', headers: headers(origin, owner.writeToken, draft.draftRevision),
   }), 200, 'publish');
+  const revised = structuredClone(candidate);
+  const revisedEndpoint = revised.clientEndpoints[0];
+  const revisedPlan = revisedEndpoint.protocolPlans[0];
+  const revisedRoute = revisedPlan.destination.upstream.routes[0];
+  revisedEndpoint.revision++;
+  revisedPlan.revision++;
+  revisedRoute.revision++;
+  revisedRoute.modelPolicy = { revision: 2, mode: 'map', mappings: [
+    { requestedModel: 'example-model', upstreamModel: 'synthetic-draft-model' },
+  ] };
+  const unpublished = await json(await fetch(draftURL, {
+    method: 'PUT', headers: headers(origin, owner.writeToken, 1),
+    body: JSON.stringify(revised),
+  }), 200, 'unpublished draft');
   const rootCA = await json(await fetch(origin + '/api/v1/server/root-ca', {
     headers: { Origin: origin, Authorization: 'Bearer ' + owner.readToken },
   }), 200, 'root CA');
@@ -201,6 +215,90 @@ try {
       ? { channel: process.env.VIBERMATE_BROWSER_CHANNEL } : {}),
     headless: true,
   });
+
+  const trialPage = await browser.newPage({ viewport: { width: 390, height: 760 } });
+  await trialPage.goto(origin);
+  await trialPage.locator('input#username').waitFor();
+  await trialPage.locator('input#username').fill('playwright-owner');
+  await trialPage.mouse.click(150, 527);
+  await trialPage.keyboard.type(password);
+  const trialLogin = trialPage.waitForResponse(response =>
+    response.url().endsWith('/api/v1/server/web-sessions'));
+  await trialPage.mouse.click(180, 574);
+  assert.equal((await trialLogin).status(), 201);
+  await trialPage.setViewportSize({ width: 1280, height: 800 });
+  await trialPage.locator('flt-semantics-placeholder').evaluate(element => element.click());
+  await trialPage.keyboard.press('Meta+3');
+  await trialPage.locator('flt-semantics[role="button"]')
+    .filter({ hasText: 'Perf fixture, active' }).first().click();
+  const trialOpen = trialPage.locator('flt-semantics[role="button"]')
+    .filter({ hasText: 'Try configuration' }).first();
+  const draftRead = trialPage.waitForResponse(response =>
+    response.url().endsWith('/api/v1/environments/fixture.perf/draft'));
+  await trialOpen.click();
+  assert.equal((await draftRead).status(), 200);
+  await trialPage.evaluate(() => new Promise(requestAnimationFrame));
+  await trialPage.locator('flt-semantics[role="button"]')
+    .filter({ hasText: 'Run preview' }).first().waitFor();
+  const dryRunResponse = trialPage.waitForResponse(response =>
+    response.url().endsWith('/api/v1/environments/fixture.perf/actions/dry-run'));
+  await trialPage.locator('flt-semantics[role="button"]')
+    .filter({ hasText: 'Run preview' }).first().click();
+  const dryRunHTTP = await dryRunResponse;
+  assert.equal(dryRunHTTP.status(), 200);
+  const dryRun = await dryRunHTTP.json();
+  assert.equal(dryRun.source, 'published');
+  assert.equal(dryRun.result.routeId, routeId);
+  assert.equal(dryRun.result.accountId, account.id);
+  assert.equal(dryRun.result.providerOrigin, endpoint.origin);
+  await trialPage.locator('flt-semantics')
+    .filter({ hasText: 'Predicted decision' }).first().waitFor();
+  await trialPage.locator('flt-semantics')
+    .filter({ hasText: 'Not live' }).first().waitFor();
+  await trialPage.locator('flt-semantics[role="button"]')
+    .filter({ hasText: 'Published r1' }).last().click();
+  await trialPage.locator('flt-semantics[role="menuitem"][aria-label*="Draft r' +
+    unpublished.draftRevision + '"]').last().click({ timeout: 10_000 });
+  const draftDryRunResponse = trialPage.waitForResponse(response =>
+    response.url().endsWith('/api/v1/environments/fixture.perf/actions/dry-run'));
+  await trialPage.locator('flt-semantics[role="button"]')
+    .filter({ hasText: 'Run preview' }).first().click();
+  const draftHTTP = await draftDryRunResponse;
+  assert.equal(draftHTTP.status(), 200);
+  const draftDecision = await draftHTTP.json();
+  assert.equal(draftDecision.source, 'draft');
+  assert.equal(draftDecision.draftRevision, unpublished.draftRevision);
+  assert.equal(draftDecision.publishedRevision, 1);
+  assert.equal(draftDecision.result.effectiveModel, 'synthetic-draft-model');
+  assert.equal(draftDecision.result.modelMapped, true);
+  await trialPage.locator('flt-semantics')
+    .filter({ hasText: 'This draft is not active' }).first().waitFor();
+  await trialPage.locator('flt-semantics')
+    .filter({ hasText: 'Predicted decision' }).first().scrollIntoViewIfNeeded();
+  await trialPage.setViewportSize({ width: 390, height: 760 });
+  const narrowRun = await trialPage.locator('flt-semantics[role="button"]')
+    .filter({ hasText: 'Run preview' }).first().boundingBox();
+  assert.ok(narrowRun && narrowRun.x >= 0 && narrowRun.x + narrowRun.width <= 390 &&
+    narrowRun.y >= 0 && narrowRun.y + narrowRun.height <= 760,
+  '390px preview action is outside the viewport');
+  await trialPage.setViewportSize({ width: 1280, height: 800 });
+  await trialPage.locator('flt-semantics[role="button"]')
+    .filter({ hasText: 'Cancel' }).last().click();
+  await trialPage.locator('flt-semantics[role="button"]')
+    .filter({ hasText: 'System Transparent, active' }).last().click({ timeout: 10_000 });
+  await trialPage.locator('flt-semantics[role="button"]')
+    .filter({ hasText: 'Try configuration' }).first().click();
+  const originalDryRunResponse = trialPage.waitForResponse(response =>
+    response.url().endsWith('/api/v1/environments/system_transparent/actions/dry-run'));
+  await trialPage.locator('flt-semantics[role="button"]')
+    .filter({ hasText: 'Run preview' }).first().click();
+  const originalHTTP = await originalDryRunResponse;
+  assert.equal(originalHTTP.status(), 200);
+  const originalDecision = await originalHTTP.json();
+  assert.equal(originalDecision.result.destinationKind, 'original');
+  assert.equal(originalDecision.result.routeId, '');
+  assert.equal(originalDecision.result.accountId, '');
+  await trialPage.close();
 
   async function measure(latencyMs, label) {
     const review = await json(await fetch(
@@ -372,7 +470,12 @@ try {
 
   const local = await measure(0, 'local');
   const delayed = await measure(80, 'delayed');
-  console.log(JSON.stringify({ local, delayed, browser: await browser.version(),
+  console.log(JSON.stringify({
+    dryRun: { publishedRoute: dryRun.result.routeId,
+      draftModel: draftDecision.result.effectiveModel,
+      originalDestination: originalDecision.result.destinationKind,
+      narrowActionVisible: true },
+    local, delayed, browser: await browser.version(),
     runtime: process.platform + '/' + process.arch }));
 } finally {
   if (browser) await browser.close();

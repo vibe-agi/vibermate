@@ -45,6 +45,8 @@ abstract interface class ControlApi {
 
   Future<EnvironmentDraft> environmentDraft(String environmentId);
 
+  Future<EnvironmentDryRun> dryRunEnvironment(EnvironmentDryRunInput input);
+
   Future<EnvironmentDraft> saveEnvironmentDraft({
     required String environmentId,
     required int expectedBaseRevision,
@@ -626,6 +628,27 @@ final class HttpControlApi implements ControlApi {
       'environmentDraft',
       expectedEnvironmentId: environmentId,
     );
+  }
+
+  @override
+  Future<EnvironmentDryRun> dryRunEnvironment(
+    EnvironmentDryRunInput input,
+  ) async {
+    if (!_validResourceId(input.environmentId) ||
+        input.revision < 1 ||
+        !const {'published', 'draft'}.contains(input.source) ||
+        !const {'http/1.1', 'h2'}.contains(input.clientProtocol) ||
+        input.body.isEmpty) {
+      throw const ControlContractException(
+        'Environment dry run input is invalid',
+      );
+    }
+    final result = await _command(
+      'POST',
+      '/api/v1/environments/${Uri.encodeComponent(input.environmentId)}/actions/dry-run',
+      body: input.toJson(),
+    );
+    return EnvironmentDryRun.fromJson(result, input);
   }
 
   @override

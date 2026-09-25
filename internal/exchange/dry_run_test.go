@@ -106,6 +106,52 @@ func TestDryRunUsesPublishedAccountSelectorAndDoesNotLease(t *testing.T) {
 	}
 }
 
+func TestDryRunOriginalDestinationMatchesTheExecutedBodyWithoutInventingAccount(t *testing.T) {
+	plan := mustEnvironmentRequestPlan(t, testPlanOptions{
+		destination:    environment.DestinationKindOriginal,
+		providerOrigin: "https://api.anthropic.com",
+		backend:        protocolspec.DialectAnthropicMessages,
+		modelMode:      environment.ModelModePassthrough,
+		transform: messagetransform.Policy{RequestJavaScript: `
+			const value = JSON.parse(request.body);
+			value.metadata = {previewed: true};
+			request.body = JSON.stringify(value);
+		`},
+	})
+	provider := &providerDouble{results: []providerResult{{
+		response: jsonResponse(http.StatusOK, []byte(`{
+			"id":"msg_original_preview","type":"message","role":"assistant",
+			"model":"claude-client-alias","content":[{"type":"text","text":"synthetic"}],
+			"stop_reason":"end_turn","stop_sequence":null,
+			"usage":{"input_tokens":1,"output_tokens":1}
+		}`)),
+	}}}
+	pipeline := newTestPipeline(t, nil, provider, approvedDecisions(), &attemptObserverDouble{})
+	defer shutdownPipeline(t, pipeline)
+	request := mustClientRequestWithOptions(t, "exchange-original-dry-run", plan,
+		completeClientRequest(), WithOriginalHeaders(http.Header{
+			"Authorization": {"Bearer synthetic-client-secret"},
+		}))
+	preview, err := pipeline.DryRun(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if preview.DestinationKind != "original" || preview.RouteID != "" ||
+		preview.AccountID != "" || !preview.BodyChanged ||
+		!slices.Contains(preview.ChangedTopLevelFields, "metadata") ||
+		provider.callCount() != 0 {
+		t.Fatalf("Original Destination preview = %+v", preview)
+	}
+	if _, err := pipeline.Execute(context.Background(), request, &downstreamRecorder{}); err != nil {
+		t.Fatal(err)
+	}
+	actual := provider.requestsSnapshot()
+	if len(actual) != 1 || preview.bodyDigest != sha256.Sum256(actual[0].Body()) ||
+		actual[0].Headers().Get("Authorization") != "Bearer synthetic-client-secret" {
+		t.Fatal("Original Destination preview diverged from the executed request")
+	}
+}
+
 func TestDryRunReportsUnmatchedModelAndTransformFailureWithoutEgress(t *testing.T) {
 	plan := mustEnvironmentRequestPlan(t, testPlanOptions{
 		destination:    environment.DestinationKindUpstream,

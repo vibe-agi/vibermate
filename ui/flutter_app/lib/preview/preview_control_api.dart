@@ -11,6 +11,12 @@ import '../core/api/runtime_storage.dart';
 
 final class PreviewControlApi implements ControlApi {
   @override
+  Future<EnvironmentDryRun> dryRunEnvironment(EnvironmentDryRunInput input) =>
+      Future<EnvironmentDryRun>.error(
+        UnsupportedError('The design preview does not run traffic policies'),
+      );
+
+  @override
   Future<AccountResetRedemption> redeemAccountResetCredit(
     ProviderAccount account,
     String creditId,

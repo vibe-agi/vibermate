@@ -22,25 +22,27 @@ import (
 // DryRunResult contains only frozen decision references and changed field names.
 // It never carries a credential, request body, transformed value, or network result.
 type DryRunResult struct {
-	EvaluatedAt           time.Time
-	EnvironmentID         string
-	EnvironmentRevision   uint64
-	EnvironmentDigest     string
-	RouteID               string
-	RouteRevision         uint64
-	AccountID             string
-	AccountRevision       uint64
-	RequestedModel        string
-	EffectiveModel        string
-	ModelMapped           bool
-	NetworkExitID         string
-	NetworkExitRevision   uint64
-	ProviderMethod        string
-	ProviderPath          string
-	BodyChanged           bool
-	ChangedHeaderNames    []string
-	ChangedTopLevelFields []string
-	Unverified            []string
+	EvaluatedAt           time.Time `json:"evaluatedAt"`
+	EnvironmentID         string    `json:"environmentId"`
+	EnvironmentRevision   uint64    `json:"environmentRevision"`
+	EnvironmentDigest     string    `json:"environmentDigest"`
+	DestinationKind       string    `json:"destinationKind"`
+	ProviderOrigin        string    `json:"providerOrigin"`
+	RouteID               string    `json:"routeId"`
+	RouteRevision         uint64    `json:"routeRevision"`
+	AccountID             string    `json:"accountId"`
+	AccountRevision       uint64    `json:"accountRevision"`
+	RequestedModel        string    `json:"requestedModel"`
+	EffectiveModel        string    `json:"effectiveModel"`
+	ModelMapped           bool      `json:"modelMapped"`
+	NetworkExitID         string    `json:"networkExitId"`
+	NetworkExitRevision   uint64    `json:"networkExitRevision"`
+	ProviderMethod        string    `json:"providerMethod"`
+	ProviderPath          string    `json:"providerPath"`
+	BodyChanged           bool      `json:"bodyChanged"`
+	ChangedHeaderNames    []string  `json:"changedHeaderNames"`
+	ChangedTopLevelFields []string  `json:"changedTopLevelFields"`
+	Unverified            []string  `json:"unverified"`
 
 	bodyDigest [sha256.Size]byte
 }
@@ -62,20 +64,17 @@ func (pipeline *Pipeline) DryRun(ctx context.Context, request ClientRequest) (Dr
 	if err != nil {
 		return DryRunResult{}, newFailure(ReasonEnvironmentPlanInvalid, request.exchangeID, 0, err)
 	}
-	if selection.original {
-		// ponytail: Original Destination needs its own exact-header preview;
-		// never pretend the managed upstream path describes passthrough traffic.
-		return DryRunResult{}, newFailure(ReasonEnvironmentPlanInvalid, request.exchangeID, 0,
-			errors.New("Original Destination dry run is not implemented"))
-	}
 	if err := validateClientOperation(request.plan, request.operation, request.replayClass); err != nil {
 		return DryRunResult{}, newFailure(ReasonEnvironmentPlanInvalid, request.exchangeID, 0, err)
 	}
 	logicalBody, err := logicalClientRequestBody(request)
-	if err != nil {
+	if err != nil && !selection.original {
 		return DryRunResult{}, newFailure(ReasonInvalidExchangeRequest, request.exchangeID, 0, err)
 	}
 	startedAt := pipeline.now().UTC()
+	if selection.original {
+		return pipeline.dryRunOriginal(ctx, request, selection, logicalBody, startedAt)
+	}
 	candidate, err := pipeline.selectCredentialCandidate(ctx, request, logicalBody, selection, startedAt)
 	if err != nil {
 		return DryRunResult{}, err
@@ -131,7 +130,7 @@ func (pipeline *Pipeline) DryRun(ctx context.Context, request ClientRequest) (Dr
 		refreshChatGPTRoutingHint(transformedHeaders, providerRequest.Body(), transformedBody)
 	}
 	profile := request.plan.EgressProfile()
-	unverified := []string{"credential", "dns", "tls", "quota", "provider_response"}
+	unverified := []string{"account_link", "credential", "dns", "tls", "quota", "provider_response", "runtime_time"}
 	if _, hasAdmission := request.CaptureAdmission(); !hasAdmission {
 		unverified = append(unverified, "runtime_identity")
 	}
@@ -139,7 +138,8 @@ func (pipeline *Pipeline) DryRun(ctx context.Context, request ClientRequest) (Dr
 		EvaluatedAt:   startedAt,
 		EnvironmentID: selection.environmentID.String(), EnvironmentRevision: uint64(selection.environmentRevision),
 		EnvironmentDigest: selection.environmentDigest.String(),
-		RouteID:           selection.routeID.String(), RouteRevision: uint64(selection.routeRevision),
+		DestinationKind:   "upstream", ProviderOrigin: selection.target.Origin().String(),
+		RouteID: selection.routeID.String(), RouteRevision: uint64(selection.routeRevision),
 		AccountID: candidate.account.ID, AccountRevision: uint64(candidate.account.Revision),
 		RequestedModel: requestedModel, EffectiveModel: decoded.EffectiveModel, ModelMapped: mapped,
 		NetworkExitID: profile.ID.String(), NetworkExitRevision: uint64(profile.Revision),
@@ -147,6 +147,58 @@ func (pipeline *Pipeline) DryRun(ctx context.Context, request ClientRequest) (Dr
 		BodyChanged:           !bytes.Equal(providerRequest.Body(), transformedBody),
 		ChangedHeaderNames:    changedHeaderNames(headers, transformedHeaders),
 		ChangedTopLevelFields: changedTopLevelFields(providerRequest.Body(), transformedBody),
+		Unverified:            unverified,
+		bodyDigest:            sha256.Sum256(transformedBody),
+	}, nil
+}
+
+func (pipeline *Pipeline) dryRunOriginal(
+	ctx context.Context,
+	request ClientRequest,
+	selection frozenSelection,
+	logicalBody []byte,
+	startedAt time.Time,
+) (DryRunResult, error) {
+	headers, available := request.OriginalHeaders()
+	if !available {
+		return DryRunResult{}, newFailure(ReasonEnvironmentPlanInvalid, request.exchangeID, 0,
+			errors.New("Original Destination request headers are unavailable"))
+	}
+	turn, err := newMessageTransformTurn(request, pipeline.annotations, startedAt)
+	if err != nil {
+		return DryRunResult{}, newFailure(ReasonMessageTransformFailed, request.exchangeID, 0, err)
+	}
+	transformedHeaders, transformedBody, _, err := applyRequestMessageTransform(
+		ctx, turn, request.operation.Method(), request.operation.Path(), headers, request.body,
+	)
+	if err != nil {
+		return DryRunResult{}, newFailure(ReasonMessageTransformFailed, request.exchangeID, 0, err)
+	}
+	requestedModel := ""
+	unverified := []string{"client_authentication", "client_headers", "dns", "tls", "quota", "provider_response", "runtime_identity", "runtime_time"}
+	if path, selectErr := pipeline.protocolPaths.Select(selection.codecPlan, request.operation.id); selectErr == nil && logicalBody != nil {
+		if decoded, _, decodeErr := path.Client().DecodeRequest(logicalBody); decodeErr == nil {
+			requestedModel = decoded.RequestedModel
+		}
+	}
+	if requestedModel == "" {
+		unverified = append(unverified, "semantic_decode")
+	}
+	if request.operation.RawQuery() != "" {
+		unverified = append(unverified, "raw_query")
+	}
+	profile := request.plan.EgressProfile()
+	return DryRunResult{
+		EvaluatedAt:   startedAt,
+		EnvironmentID: selection.environmentID.String(), EnvironmentRevision: uint64(selection.environmentRevision),
+		EnvironmentDigest: selection.environmentDigest.String(),
+		DestinationKind:   "original", ProviderOrigin: selection.target.Origin().String(),
+		RequestedModel: requestedModel, EffectiveModel: requestedModel,
+		NetworkExitID: profile.ID.String(), NetworkExitRevision: uint64(profile.Revision),
+		ProviderMethod: request.operation.Method(), ProviderPath: request.operation.Path(),
+		BodyChanged:           !bytes.Equal(request.body, transformedBody),
+		ChangedHeaderNames:    changedHeaderNames(headers, transformedHeaders),
+		ChangedTopLevelFields: changedTopLevelFields(request.body, transformedBody),
 		Unverified:            unverified,
 		bodyDigest:            sha256.Sum256(transformedBody),
 	}, nil

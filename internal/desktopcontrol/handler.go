@@ -29,6 +29,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/egressprofile"
 	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/evidencearchive"
+	"github.com/vibe-agi/vibermate/internal/exchange"
 	"github.com/vibe-agi/vibermate/internal/exchangecontent"
 	"github.com/vibe-agi/vibermate/internal/launchsnapshot"
 	"github.com/vibe-agi/vibermate/internal/manualcapture"
@@ -66,6 +67,11 @@ const (
 	ReasonEnvironmentSystemOwned             ReasonCode = "environment_system_owned"
 	ReasonEnvironmentPreviewStale            ReasonCode = "environment_preview_stale"
 	ReasonEnvironmentUpstreamStale           ReasonCode = "environment_upstream_stale"
+	ReasonDryRunFlowNotMatched               ReasonCode = "dry_run_flow_not_matched"
+	ReasonDryRunInputInvalid                 ReasonCode = "dry_run_input_invalid"
+	ReasonDryRunSelectorFailed               ReasonCode = "dry_run_selector_failed"
+	ReasonDryRunTransformFailed              ReasonCode = "dry_run_transform_failed"
+	ReasonDryRunEnvironmentDisabled          ReasonCode = "dry_run_environment_disabled"
 	ReasonCaptureNotFound                    ReasonCode = "capture_not_found"
 	ReasonCaptureAssignmentNotFound          ReasonCode = "capture_assignment_not_found"
 	ReasonCaptureUnavailable                 ReasonCode = "capture_unavailable"
@@ -145,6 +151,7 @@ type Options struct {
 	Readiness           ReadinessReader
 	Status              StatusReader
 	Environments        environment.Controller
+	DryRun              func(context.Context, exchange.ClientRequest) (exchange.DryRunResult, error)
 	Assignments         captureassignment.Controller
 	Activities          activity.Runtime
 	ConversationIndexer ConversationIndexer
@@ -182,6 +189,7 @@ type Handler struct {
 	readiness           ReadinessReader
 	status              StatusReader
 	environments        environment.Controller
+	dryRun              func(context.Context, exchange.ClientRequest) (exchange.DryRunResult, error)
 	assignments         captureassignment.Controller
 	activities          activity.Runtime
 	conversationIndexer ConversationIndexer
@@ -253,6 +261,7 @@ func New(options Options) (*Handler, error) {
 		readiness:           options.Readiness,
 		status:              options.Status,
 		environments:        options.Environments,
+		dryRun:              options.DryRun,
 		assignments:         options.Assignments,
 		activities:          options.Activities,
 		conversationIndexer: options.ConversationIndexer,
@@ -370,6 +379,9 @@ func New(options Options) (*Handler, error) {
 	handler.mux.HandleFunc("POST /api/v1/provider-accounts/{accountId}/credential/refresh", handler.refreshProviderAccountCredential)
 	handler.mux.HandleFunc("PUT /api/v1/provider-accounts/{accountId}/associations/{endpointId}", handler.setProviderAccountAssociation)
 	handler.mux.HandleFunc("GET /api/v1/environments/{environmentId}", handler.getEnvironment)
+	if handler.dryRun != nil {
+		handler.mux.HandleFunc("POST /api/v1/environments/{environmentId}/actions/dry-run", handler.dryRunEnvironment)
+	}
 	handler.mux.HandleFunc("GET /api/v1/environments/{environmentId}/draft", handler.getEnvironmentDraft)
 	handler.mux.HandleFunc("PUT /api/v1/environments/{environmentId}/draft", handler.putEnvironmentDraft)
 	handler.mux.HandleFunc("POST /api/v1/environments/{environmentId}/draft/actions/preview", handler.previewEnvironmentDraft)

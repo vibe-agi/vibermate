@@ -78,6 +78,16 @@ final class AppCopy {
         'This policy review is no longer current. Review the draft again before publishing.',
     'error.configuration_invalid':
         'These settings could not be accepted. Check the selected service, account and required fields, then try again.',
+    'error.dry_run_flow_not_matched':
+        'This request does not match the selected request source. Check its path and protocol.',
+    'error.dry_run_input_invalid':
+        'The synthetic request is not valid for this protocol. Check the JSON body and required fields.',
+    'error.dry_run_environment_disabled':
+        'This version disables the traffic policy. Choose an active version before trying a request.',
+    'error.dry_run_selector_failed':
+        'The account selector could not choose an account. Check its script and candidate accounts.',
+    'error.dry_run_transform_failed':
+        'The request transform failed. Check its script and synthetic input.',
     'error.control_session_expired':
         'The management session is no longer authorized. Reconnect to the runtime or sign in again.',
     'error.control_result_unknown':
@@ -929,6 +939,44 @@ final class AppCopy {
         'For each client protocol and origin, keep its original destination or send requests to an upstream service using one of that service\'s accounts.',
     'environment.edit.routes.empty':
         'Capture-only · Requests are forwarded unchanged.',
+    'environment.dry_run.open': 'Try configuration',
+    'environment.dry_run.title': 'Try this traffic policy',
+    'environment.dry_run.intro':
+        'Evaluate one synthetic request. No provider call or evidence is saved.',
+    'environment.dry_run.source': 'Configuration version',
+    'environment.dry_run.published': 'Published r{revision}',
+    'environment.dry_run.draft': 'Draft r{revision} · not published',
+    'environment.dry_run.draft_scope':
+        'This draft is not active. Running Captures keep their frozen revision.',
+    'environment.dry_run.flow': 'Request source',
+    'environment.dry_run.path': 'Path · optional query',
+    'environment.dry_run.body': 'Synthetic request JSON',
+    'environment.dry_run.body_help':
+        'Use test content. Do not paste credentials or private conversations.',
+    'environment.dry_run.run': 'Run preview',
+    'environment.dry_run.result': 'Predicted decision',
+    'environment.dry_run.destination': 'Destination',
+    'environment.dry_run.original': 'Keep original destination',
+    'environment.dry_run.route': 'Route',
+    'environment.dry_run.account': 'Account',
+    'environment.dry_run.client_auth': 'Client authentication · not checked',
+    'environment.dry_run.model': 'Model',
+    'environment.dry_run.model_unavailable':
+        'Not decoded from this synthetic request',
+    'environment.dry_run.egress': 'Network exit',
+    'environment.dry_run.changes': 'Request transform changes',
+    'environment.dry_run.no_changes': 'No Header or top-level JSON changes',
+    'environment.dry_run.body_changed':
+        'Body changed; no top-level JSON field names changed.',
+    'environment.dry_run.fields_unavailable':
+        'Top-level JSON fields could not be compared.',
+    'environment.dry_run.not_verified':
+        'Not live · account link/credential, runtime identity/time, DNS/TLS, quota and provider response remain unchecked.',
+    'environment.dry_run.not_verified_original':
+        'Not live · client authentication/Headers, runtime identity/time, DNS/TLS and provider response remain unchecked.',
+    'environment.dry_run.no_flow':
+        'Add a request source before trying this policy.',
+    'environment.dry_run.invalid_json': 'Enter a valid JSON request body.',
     'environment.field.name': 'Traffic policy name',
     'environment.field.state': 'Runtime state',
     'environment.state.active': 'Active',
@@ -2179,6 +2227,11 @@ final class AppCopy {
     'error.configuration_conflict': '配置已被其他操作更新，本次修改未保存。请刷新页面后重新检查修改内容。',
     'error.policy_review_stale': '本次策略检查已失效。请重新检查草稿，再发布策略。',
     'error.configuration_invalid': '设置未通过校验。请检查所选服务、账号和必填项后重试。',
+    'error.dry_run_flow_not_matched': '这条请求没有匹配当前请求来源。请检查路径和协议。',
+    'error.dry_run_input_invalid': '合成请求不符合此协议。请检查 JSON 正文及必填字段。',
+    'error.dry_run_environment_disabled': '这个版本已停用流量策略。请选择启用的版本再试跑。',
+    'error.dry_run_selector_failed': '账号选择脚本未能选出账号。请检查脚本及候选账号。',
+    'error.dry_run_transform_failed': '请求转换脚本执行失败。请检查脚本和合成输入。',
     'error.control_session_expired': '管理会话已失效。请重新连接运行时，或重新登录管理页面。',
     'error.control_result_unknown': '未能确认操作结果。请检查连接，并刷新页面确认是否已生效后再重试。',
     'error.control_contract': '配置或运行时返回的数据不符合预期。请检查输入，确认 App 与运行时版本一致后刷新重试。',
@@ -2896,6 +2949,37 @@ final class AppCopy {
     'environment.edit.routes.detail':
         '每种客户端协议和入口都可以保留原始目标，或把请求发往上游服务，并使用该服务已关联的账号。',
     'environment.edit.routes.empty': '仅抓包 · 请求保持原样转发。',
+    'environment.dry_run.open': '试跑配置',
+    'environment.dry_run.title': '试跑这条流量策略',
+    'environment.dry_run.intro': '只计算一条合成请求；不连接上游，也不保存证据。',
+    'environment.dry_run.source': '配置版本',
+    'environment.dry_run.published': '已发布 r{revision}',
+    'environment.dry_run.draft': '草稿 r{revision} · 尚未发布',
+    'environment.dry_run.draft_scope': '草稿尚未生效；已有运行记录继续使用其冻结修订。',
+    'environment.dry_run.flow': '请求来源',
+    'environment.dry_run.path': '路径 · 可含查询参数',
+    'environment.dry_run.body': '合成请求 JSON',
+    'environment.dry_run.body_help': '请用测试内容，不要粘贴凭据或私人对话。',
+    'environment.dry_run.run': '运行试跑',
+    'environment.dry_run.result': '预计决策',
+    'environment.dry_run.destination': '目标',
+    'environment.dry_run.original': '保持原始目标',
+    'environment.dry_run.route': '路由',
+    'environment.dry_run.account': '账号',
+    'environment.dry_run.client_auth': '客户端原有认证 · 未检查',
+    'environment.dry_run.model': '模型',
+    'environment.dry_run.model_unavailable': '未能从这条合成请求中解析模型',
+    'environment.dry_run.egress': '网络出口',
+    'environment.dry_run.changes': '请求脚本改变',
+    'environment.dry_run.no_changes': 'Header 和顶层 JSON 字段未变化',
+    'environment.dry_run.body_changed': '正文已改变，但顶层 JSON 字段名未变化。',
+    'environment.dry_run.fields_unavailable': '无法比较顶层 JSON 字段。',
+    'environment.dry_run.not_verified':
+        '非真实请求；账号关联/凭据、运行时身份/时间、DNS/TLS、额度及上游响应未验证。',
+    'environment.dry_run.not_verified_original':
+        '非真实请求；客户端认证/Header、运行时身份/时间、DNS/TLS 与上游响应未验证。',
+    'environment.dry_run.no_flow': '请先添加请求来源，再试跑这条策略。',
+    'environment.dry_run.invalid_json': '请输入有效的 JSON 请求正文。',
     'environment.field.name': '流量策略名称',
     'environment.field.state': '运行状态',
     'environment.state.active': '启用',
