@@ -159,7 +159,6 @@ vibermate run --server https://your-server.example:9666 -- claude
 - 保持代理原来的请求去向，或改用另一个上游服务和账号。
 - 先查看、修改和测试内置 JavaScript 变换，确认效果后再发布。
 - 根据已经登录的 ViberMate 用户名选择上游账号。
-- 断开设备或 Runtime 前，先暂停新的外部网络操作。
 
 ![ViberMate 脚本库](https://vibe-agi.github.io/images/vibermate/script-library-2400.webp)
 
@@ -174,5 +173,7 @@ vibermate run --server https://your-server.example:9666 -- claude
 - 当前仍是早期 `0.x` 版本，暂不承诺公网加固部署、自动更新、插件和任意客户端
   兼容。
 
-遇到安装问题可运行 `vibermate doctor`。实现细节见[运行时模块地图](docs/module-map.md)
-和[架构决策](docs/adr)。疑似漏洞请通过 [SECURITY.md](SECURITY.md) 私密报告。
+遇到安装问题可运行 `vibermate doctor`。当前能力是否已发布、属于实验性、仅在分支，
+还是尚未支持，见[能力与支持矩阵](docs/capability-support.md)。实现细节见
+[运行时模块地图](docs/module-map.md)和[架构决策](docs/adr)。疑似漏洞请通过
+[SECURITY.md](SECURITY.md) 私密报告。

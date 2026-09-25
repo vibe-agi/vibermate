@@ -1,8 +1,9 @@
 # Environment-first Production Vertical
 
-Status: implemented in the current working tree; final repository and packaged
-evidence gates remain in progress. Architecture authority is ADR-0021 in the
-design repository.
+Status: historical implementation record. Its completion and deferred lists
+describe the 2026-08-07 source snapshot, not the current release. Architecture
+authority remains in the design repository; current product status is in the
+[capability and support matrix](../capability-support.md).
 
 ## Implemented scope
 

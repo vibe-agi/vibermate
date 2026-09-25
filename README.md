@@ -198,5 +198,7 @@ the recovery key rotates after use.
   claimed.
 
 Run `vibermate doctor` when setup fails. For implementation details, see the
-[runtime module map](docs/module-map.md) and [architecture decisions](docs/adr).
-Report suspected vulnerabilities through [SECURITY.md](SECURITY.md).
+[capability and support matrix](docs/capability-support.md),
+[runtime module map](docs/module-map.md), and [architecture decisions](docs/adr).
+The matrix distinguishes released, experimental, branch-only, and unsupported
+work. Report suspected vulnerabilities through [SECURITY.md](SECURITY.md).

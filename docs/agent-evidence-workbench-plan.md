@@ -1,8 +1,10 @@
 # Agent Evidence Workbench Plan
 
-Status: execution plan for the Flutter desktop migration and deep Agent
-protocol validation. This document does not expand any current capability
-claim by itself.
+Status: historical execution record for the Flutter desktop migration and deep
+Agent protocol validation completed through the v0.1.13 baseline. Later source
+work is intentionally not folded back into every checkpoint below. This
+document does not expand any current capability claim; use the [capability and
+support matrix](capability-support.md) for current release status.
 
 ## Outcome
 

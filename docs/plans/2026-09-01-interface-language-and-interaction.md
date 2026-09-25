@@ -1,6 +1,9 @@
 # Interface Language and Interaction
 
-Status: completed
+Status: historical interaction record. The user-visible Offline Hold controls
+described below were later removed; only internal egress admission remains.
+Use the [capability and support matrix](../capability-support.md) for current
+product status.
 Created: 2026-09-01
 Baseline commit: `7e8efc438de3b1417cab5302676e2b36187c0007`
 Working tree: preserve the existing uncommitted novice-usability changes

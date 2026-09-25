@@ -141,6 +141,7 @@ func Check(repositoryRoot string) error {
 	violations = append(violations, CheckAtRestEncryptionAbsence(repositoryRoot)...)
 	violations = append(violations, CheckCredentialClaimScope(repositoryRoot)...)
 	violations = append(violations, CheckFlutterCopyPair(repositoryRoot)...)
+	violations = append(violations, CheckCapabilityDocs(repositoryRoot)...)
 	violations = append(
 		violations,
 		CheckCatalogPair(
