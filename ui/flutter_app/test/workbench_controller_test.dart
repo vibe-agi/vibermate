@@ -629,7 +629,7 @@ void main() {
       expect(controller.rawEvidence(exchangeId), isNull);
 
       final page = await controller.loadRawEvidence(exchangeId);
-      expect(page?.items, hasLength(4));
+      expect(page?.items, hasLength(6));
       expect(page?.items.first.layer, 'client_ingress');
       expect(controller.rawEvidence(exchangeId), same(page));
       expect(controller.rawEvidenceError(exchangeId), isNull);

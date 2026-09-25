@@ -2516,8 +2516,14 @@ final class PreviewControlApi implements ControlApi {
     final requestBody = utf8.encode(
       '{"model":"claude-sonnet-4-5","stream":true}',
     );
+    final providerRequestBody = utf8.encode(
+      '{"model":"claude-sonnet-4-5-20250929","stream":true}',
+    );
     final responseBody = utf8.encode(
       '{"type":"message","content":[{"type":"text","text":"sample"}]}',
+    );
+    final clientResponseBody = utf8.encode(
+      '{"type":"message","content":[{"type":"text","text":"sample (filtered)"}]}',
     );
     return RawEvidencePage(
       items: [
@@ -2562,12 +2568,32 @@ final class PreviewControlApi implements ControlApi {
           contentEncoding: null,
           headerCount: 2,
           trailerCount: 0,
-          bodyBytes: requestBody.length,
-          bodySha256: crypto.sha256.convert(requestBody).toString(),
+          bodyBytes: providerRequestBody.length,
+          bodySha256: crypto.sha256.convert(providerRequestBody).toString(),
           digestScope: 'full_body',
           payloadState: 'captured',
           payloadReason: null,
           redactedCredentialFields: const ['Authorization'],
+          revealAvailable: true,
+        ),
+        RawEvidenceEnvelope(
+          envelopeId: 'raw-preview-provider-response-$exchangeId',
+          layer: 'provider_response',
+          scopeKind: 'managed_run',
+          scopeId: 'run-preview-$exchangeId',
+          exchangeId: exchangeId,
+          attemptId: 'attempt-preview-$exchangeId',
+          observedAt: observed.add(const Duration(milliseconds: 2)),
+          expiresAt: observed.add(const Duration(days: 30)),
+          statusCode: 200,
+          contentType: 'application/json',
+          headerCount: 1,
+          trailerCount: 0,
+          bodyBytes: responseBody.length,
+          bodySha256: crypto.sha256.convert(responseBody).toString(),
+          digestScope: 'full_body',
+          payloadState: 'captured',
+          redactedCredentialFields: const [],
           revealAvailable: true,
         ),
         RawEvidenceEnvelope(
@@ -2587,6 +2613,26 @@ final class PreviewControlApi implements ControlApi {
           trailerCount: 0,
           bodyBytes: requestBody.length,
           bodySha256: crypto.sha256.convert(requestBody).toString(),
+          digestScope: 'full_body',
+          payloadState: 'captured',
+          redactedCredentialFields: const [],
+          revealAvailable: true,
+        ),
+        RawEvidenceEnvelope(
+          envelopeId: 'raw-preview-client-response-$exchangeId',
+          layer: 'client_downstream',
+          scopeKind: 'managed_run',
+          scopeId: 'run-preview-$exchangeId',
+          exchangeId: exchangeId,
+          attemptId: 'attempt-preview-$exchangeId',
+          observedAt: observed.add(const Duration(milliseconds: 3)),
+          expiresAt: observed.add(const Duration(days: 30)),
+          statusCode: 200,
+          contentType: 'application/json',
+          headerCount: 1,
+          trailerCount: 0,
+          bodyBytes: clientResponseBody.length,
+          bodySha256: crypto.sha256.convert(clientResponseBody).toString(),
           digestScope: 'full_body',
           payloadState: 'captured',
           redactedCredentialFields: const [],
@@ -2621,8 +2667,8 @@ final class PreviewControlApi implements ControlApi {
       ),
       writer: const RawEvidenceWriter(
         state: 'active',
-        admittedRecords: 4,
-        durableWatermark: 4,
+        admittedRecords: 6,
+        durableWatermark: 6,
         queueRecords: 0,
         queueBytes: 0,
         lastFailure: null,
@@ -2638,6 +2684,8 @@ final class PreviewControlApi implements ControlApi {
     _requireOpen();
     const requestPrefix = 'raw-preview-transform-request-';
     const responsePrefix = 'raw-preview-transform-response-';
+    const providerResponsePrefix = 'raw-preview-provider-response-';
+    const clientResponsePrefix = 'raw-preview-client-response-';
     const clientPrefix = 'raw-preview-client-';
     const rawPrefix = 'raw-preview-';
     if (!envelopeId.startsWith(rawPrefix)) {
@@ -2651,6 +2699,10 @@ final class PreviewControlApi implements ControlApi {
         ? envelopeId.substring(requestPrefix.length)
         : envelopeId.startsWith(responsePrefix)
         ? envelopeId.substring(responsePrefix.length)
+        : envelopeId.startsWith(providerResponsePrefix)
+        ? envelopeId.substring(providerResponsePrefix.length)
+        : envelopeId.startsWith(clientResponsePrefix)
+        ? envelopeId.substring(clientResponsePrefix.length)
         : envelopeId.startsWith(clientPrefix)
         ? envelopeId.substring(clientPrefix.length)
         : envelopeId.substring(rawPrefix.length);
@@ -2659,7 +2711,17 @@ final class PreviewControlApi implements ControlApi {
       (candidate) => candidate.envelopeId == envelopeId,
     );
     final transformInput = envelope.layer.startsWith('transform_');
-    final responseInput = envelope.layer == 'transform_response_input';
+    final body = switch (envelope.layer) {
+      'provider_egress' =>
+        '{"model":"claude-sonnet-4-5-20250929","stream":true}',
+      'provider_response' =>
+        '{"type":"message","content":[{"type":"text","text":"sample"}]}',
+      'transform_response_input' =>
+        '{"type":"message","content":[{"type":"text","text":"sample"}]}',
+      'client_downstream' =>
+        '{"type":"message","content":[{"type":"text","text":"sample (filtered)"}]}',
+      _ => '{"model":"claude-sonnet-4-5","stream":true}',
+    };
     return RevealedRawEvidence(
       envelope: envelope,
       headers: transformInput
@@ -2692,13 +2754,7 @@ final class PreviewControlApi implements ControlApi {
               ),
             ],
       trailers: const [],
-      body: Uint8List.fromList(
-        utf8.encode(
-          responseInput
-              ? '{"type":"message","content":[{"type":"text","text":"sample"}]}'
-              : '{"model":"claude-sonnet-4-5","stream":true}',
-        ),
-      ),
+      body: Uint8List.fromList(utf8.encode(body)),
       frames: const [],
     );
   }

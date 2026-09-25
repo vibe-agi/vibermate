@@ -16,6 +16,7 @@ import '../../core/design/workbench_widgets.dart';
 import '../../core/i18n/app_copy.dart';
 import 'workbench_controller.dart';
 import 'raw_header_reveal.dart';
+import 'raw_evidence_diff_dialog.dart';
 
 final class EvidenceConversationTimeline extends StatefulWidget {
   const EvidenceConversationTimeline({
@@ -1918,6 +1919,20 @@ final class _RawEvidenceDisclosureState extends State<_RawEvidenceDisclosure> {
             spacing: 6,
             runSpacing: 6,
             children: [
+              OutlinedButton.icon(
+                key: Key('compare-raw-stages-${widget.exchangeId}'),
+                onPressed: () => unawaited(
+                  showRawEvidenceDiffDialog(
+                    context,
+                    controller: widget.controller,
+                    exchangeId: widget.exchangeId,
+                    page: page,
+                    copy: copy,
+                  ),
+                ),
+                icon: const Icon(Icons.difference_outlined, size: 15),
+                label: Text(copy('exchange.raw.diff.open')),
+              ),
               OutlinedButton.icon(
                 key: Key('preview-redacted-diagnostic-${widget.exchangeId}'),
                 onPressed: () => unawaited(_previewDiagnostic(page)),

@@ -2151,7 +2151,7 @@ void main() {
       await tester.pumpAndSettle();
       await tester.tap(rawEvidence);
       await tester.pumpAndSettle();
-      expect(find.text('4 boundary messages'), findsOneWidget);
+      expect(find.text('6 boundary messages'), findsOneWidget);
       final rawReveal = find.byKey(
         const Key('raw-reveal-raw-preview-run-1-exchange-222'),
       );
@@ -2177,7 +2177,7 @@ void main() {
         findsOneWidget,
       );
       expect(
-        find.text('{"model":"claude-sonnet-4-5","stream":true}'),
+        find.text('{"model":"claude-sonnet-4-5-20250929","stream":true}'),
         findsOneWidget,
       );
       final copyRaw = find.byKey(
@@ -2190,8 +2190,49 @@ void main() {
       expect(copiedEvidence, isNot(contains('Bearer')));
       expect(
         copiedEvidence,
-        contains('{"model":"claude-sonnet-4-5","stream":true}'),
+        contains('{"model":"claude-sonnet-4-5-20250929","stream":true}'),
       );
+      final compareStages = find.byKey(
+        const Key('compare-raw-stages-run-1-exchange-222'),
+      );
+      await Scrollable.ensureVisible(
+        tester.element(compareStages),
+        alignment: 0.5,
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(compareStages);
+      await tester.pumpAndSettle();
+      final diffDialog = find.byKey(const Key('raw-evidence-diff-dialog'));
+      expect(diffDialog, findsOneWidget);
+      expect(
+        find.descendant(of: diffDialog, matching: find.text('/body/model')),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(
+          of: diffDialog,
+          matching: find.textContaining('b3b3b3b3'),
+        ),
+        findsNothing,
+      );
+      await tester.tap(
+        find.descendant(of: diffDialog, matching: find.text('Response')),
+      );
+      await tester.pumpAndSettle();
+      expect(
+        find.descendant(
+          of: diffDialog,
+          matching: find.text('/body/content/0/text'),
+        ),
+        findsOneWidget,
+      );
+      await tester.tap(find.byKey(const Key('raw-evidence-diff-copy')));
+      await tester.pump();
+      expect(copiedEvidence, contains('/body/content/0/text'));
+      expect(copiedEvidence, isNot(contains('b3b3b3b3')));
+      expect(copiedEvidence, isNot(contains('Bearer')));
+      await tester.tap(find.text('Dismiss'));
+      await tester.pumpAndSettle();
       expect(
         find.ancestor(
           of: find.text('Continue with the next verified implementation step.'),
@@ -2337,6 +2378,39 @@ void main() {
       await tester.pump();
     },
   );
+
+  testWidgets('390px Chinese raw stage comparison stays readable', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(390, 760));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(
+      const ViberMateApp(previewMode: true, preferChinese: true),
+    );
+    await tester.pumpAndSettle();
+
+    await openCaptureConversation(tester, capture: 'managed_run:run-1');
+    final turn = find.byKey(const Key('conversation-turn-run-1-exchange-222'));
+    await ensureTurnVisible(tester, turn);
+    await tester.tap(turn);
+    await tester.pumpAndSettle();
+    final raw = find.byKey(const Key('exchange-raw-run-1-exchange-222'));
+    await Scrollable.ensureVisible(tester.element(raw), alignment: 0.5);
+    await tester.pumpAndSettle();
+    await tester.tap(raw);
+    await tester.pumpAndSettle();
+    final compare = find.byKey(
+      const Key('compare-raw-stages-run-1-exchange-222'),
+    );
+    await Scrollable.ensureVisible(tester.element(compare), alignment: 0.5);
+    await tester.pumpAndSettle();
+    await tester.tap(compare);
+    await tester.pumpAndSettle();
+
+    expect(find.text('比较请求与响应阶段'), findsOneWidget);
+    expect(find.text('/body/model'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
 
   testWidgets('failed Turn explains the failing boundary and next action', (
     tester,
@@ -3093,7 +3167,7 @@ void main() {
     expect(tester.getCenter(rawSection).dy, lessThan(740));
     await tester.tap(rawSection);
     await tester.pumpAndSettle();
-    expect(find.text('4 条边界消息'), findsOneWidget);
+    expect(find.text('6 条边界消息'), findsOneWidget);
     final rawReveal = find.byKey(
       const Key('raw-reveal-raw-preview-run-1-exchange-222'),
     );
