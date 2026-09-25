@@ -301,6 +301,54 @@ try {
   assert.equal(originalDecision.result.destinationKind, 'original');
   assert.equal(originalDecision.result.routeId, '');
   assert.equal(originalDecision.result.accountId, '');
+  await trialPage.locator('flt-semantics[role="button"]')
+    .filter({ hasText: 'Cancel' }).last().click();
+  // Let dialog teardown and focus semantics settle before counting idle work.
+  await trialPage.waitForTimeout(2_000);
+  const idleResponses = [];
+  const idlePending = [];
+  trialPage.on('response', response => {
+    const url = new URL(response.url());
+    if (url.origin !== origin || !url.pathname.startsWith('/api/v1/')) return;
+    idlePending.push(response.finished().then(async () => {
+      const body = await response.body();
+      idleResponses.push({ path: url.pathname, bytes: body.length });
+    }).catch(() => {}));
+  });
+  await trialPage.evaluate(() => {
+    window.__vibermateIdleMutations = { total: 0, meaningful: 0, kinds: {} };
+    window.__vibermateIdleObserver = new MutationObserver(records => {
+      for (const record of records) {
+        window.__vibermateIdleMutations.total++;
+        const element = record.target.nodeType === Node.ELEMENT_NODE
+          ? record.target : record.target.parentElement;
+        if (!element?.closest?.('flt-semantics') ||
+            (record.type === 'attributes' && record.attributeName === 'style')) continue;
+        window.__vibermateIdleMutations.meaningful++;
+        const kind = record.type + (record.attributeName ? ':' + record.attributeName : '');
+        window.__vibermateIdleMutations.kinds[kind] =
+          (window.__vibermateIdleMutations.kinds[kind] ?? 0) + 1;
+      }
+    });
+    window.__vibermateIdleObserver.observe(
+      document.querySelector('flt-semantics-host') ?? document.documentElement, {
+      attributes: true, childList: true, characterData: true, subtree: true,
+      });
+  });
+  await trialPage.waitForTimeout(11_000);
+  await Promise.all(idlePending);
+  const idleMutations = await trialPage.evaluate(() => {
+    window.__vibermateIdleObserver.disconnect();
+    return window.__vibermateIdleMutations;
+  });
+  const idle = {
+    durationMs: 11_000,
+    requests: idleResponses.length,
+    responseBytes: idleResponses.reduce((sum, item) => sum + item.bytes, 0),
+    semanticMutations: idleMutations,
+  };
+  assert.equal(idle.semanticMutations.meaningful, 0,
+    'unchanged inventory polling rebuilt visible Web semantics');
   await trialPage.close();
 
   async function measure(latencyMs, label) {
@@ -471,9 +519,11 @@ try {
       paragraphEndToVisibleMs, paragraphExpandToVisibleMs, failureDiagnosis };
   }
 
-  const local = await measure(0, 'local');
-  const delayed = await measure(80, 'delayed');
+  const idleOnly = process.env.VIBERMATE_IDLE_ONLY === '1';
+  const local = idleOnly ? null : await measure(0, 'local');
+  const delayed = idleOnly ? null : await measure(80, 'delayed');
   console.log(JSON.stringify({
+    idle,
     dryRun: { publishedRoute: dryRun.result.routeId,
       draftModel: draftDecision.result.effectiveModel,
       originalDestination: originalDecision.result.destinationKind,

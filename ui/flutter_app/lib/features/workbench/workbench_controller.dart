@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:collection';
 import 'dart:math';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
 
 import '../../core/api/control_api.dart';
@@ -804,9 +805,10 @@ final class WorkbenchController extends ChangeNotifier
           inventoryMutating) {
         return;
       }
-      data = _mergePolledDashboard(data, updated);
+      final previous = data;
+      data = _mergePolledDashboard(previous, updated);
       _repairDashboardSelections(data!);
-      notifyListeners();
+      if (!_sameDashboard(previous, data!)) notifyListeners();
       if (section != WorkbenchSection.network) {
         await refreshPendingApprovals(quiet: true);
       }
@@ -1315,10 +1317,15 @@ final class WorkbenchController extends ChangeNotifier
     try {
       final updated = await _api.pendingApprovals();
       if (_disposed) return;
+      final changed = !_sameApprovals(
+        pendingApprovals ?? const <ApprovalRecord>[],
+        updated,
+      );
       pendingApprovals = updated;
+      final clearedError = approvalAttentionError != null;
       approvalAttentionError = null;
       pendingApprovalsLoading = false;
-      notifyListeners();
+      if (!quiet || changed || clearedError) notifyListeners();
     } catch (error) {
       if (_disposed || quiet) return;
       approvalAttentionError = _describeError(error);
@@ -3242,6 +3249,150 @@ final class WorkbenchController extends ChangeNotifier
       endpoints: updated.endpoints,
       accounts: updated.accounts,
     );
+  }
+
+  static bool _sameDashboard(DashboardData? left, DashboardData right) {
+    if (left == null ||
+        left.captureNextCursor != right.captureNextCursor ||
+        !_sameRuntimeStatus(left.status, right.status)) {
+      return false;
+    }
+    return _sameList(left.captures, right.captures, _sameCapture) &&
+        _sameList(left.environments, right.environments, _sameEnvironment) &&
+        _sameList(left.endpoints, right.endpoints, _sameEndpoint) &&
+        _sameList(left.accounts, right.accounts, _sameAccount);
+  }
+
+  static bool _sameRuntimeStatus(RuntimeStatus left, RuntimeStatus right) {
+    final a = left.offlineHold;
+    final b = right.offlineHold;
+    return left.ready == right.ready &&
+        left.state == right.state &&
+        left.host == right.host &&
+        left.schemaRevision == right.schemaRevision &&
+        left.storage == right.storage &&
+        left.environmentProjection == right.environmentProjection &&
+        listEquals(
+          left.unavailableEnvironments,
+          right.unavailableEnvironments,
+        ) &&
+        left.instanceId == right.instanceId &&
+        left.startedAt == right.startedAt &&
+        left.stoppedAt == right.stoppedAt &&
+        left.stopReasonCode == right.stopReasonCode &&
+        a.state == b.state &&
+        a.revision == b.revision &&
+        a.since == b.since &&
+        a.activeActions == b.activeActions &&
+        a.enteringActions == b.enteringActions &&
+        a.activeEgress == b.activeEgress &&
+        a.queuedRequests == b.queuedRequests &&
+        a.heldBytes == b.heldBytes &&
+        a.safeToDisconnect == b.safeToDisconnect &&
+        mapEquals(a.activeByKind, b.activeByKind) &&
+        mapEquals(a.queuedByKind, b.queuedByKind) &&
+        a.lastProbeReason == b.lastProbeReason;
+  }
+
+  static bool _sameCapture(CaptureRecord left, CaptureRecord right) =>
+      left.key == right.key &&
+      left.displayName == right.displayName &&
+      left.state == right.state &&
+      left.observation == right.observation &&
+      left.createdAt == right.createdAt &&
+      left.updatedAt == right.updatedAt;
+
+  static bool _sameEnvironment(
+    EnvironmentRecord left,
+    EnvironmentRecord right,
+  ) =>
+      left.id == right.id &&
+      left.name == right.name &&
+      left.state == right.state &&
+      left.revision == right.revision &&
+      left.digest == right.digest;
+
+  static bool _sameEndpoint(UpstreamEndpoint left, UpstreamEndpoint right) =>
+      left.id == right.id &&
+      left.displayName == right.displayName &&
+      left.origin == right.origin &&
+      left.realmId == right.realmId &&
+      left.state == right.state &&
+      left.revision == right.revision &&
+      listEquals(left.backendProtocols, right.backendProtocols) &&
+      listEquals(left.capabilities, right.capabilities) &&
+      listEquals(left.accountKinds, right.accountKinds);
+
+  static bool _sameAccount(ProviderAccount left, ProviderAccount right) {
+    final a = left.codexOAuth;
+    final b = right.codexOAuth;
+    final ta = left.tokenInfo;
+    final tb = right.tokenInfo;
+    return left.id == right.id &&
+        left.displayName == right.displayName &&
+        left.note == right.note &&
+        left.noteRevision == right.noteRevision &&
+        left.credentialOrigin == right.credentialOrigin &&
+        listEquals(left.linkedEndpointIds, right.linkedEndpointIds) &&
+        left.associationRevision == right.associationRevision &&
+        left.kind == right.kind &&
+        left.realmId == right.realmId &&
+        left.state == right.state &&
+        left.revision == right.revision &&
+        left.credentialState == right.credentialState &&
+        left.credentialEpoch == right.credentialEpoch &&
+        listEquals(left.setHeaderNames, right.setHeaderNames) &&
+        listEquals(left.deleteHeaderNames, right.deleteHeaderNames) &&
+        ((a == null && b == null) ||
+            (a != null &&
+                b != null &&
+                a.chatgptAccountId == b.chatgptAccountId &&
+                a.email == b.email &&
+                a.userId == b.userId &&
+                a.planType == b.planType &&
+                a.fedRamp == b.fedRamp &&
+                a.expiresAt == b.expiresAt &&
+                a.lastRefresh == b.lastRefresh &&
+                a.state == b.state)) &&
+        ((ta == null && tb == null) ||
+            (ta != null &&
+                tb != null &&
+                ta.chatgptAccountId == tb.chatgptAccountId &&
+                ta.email == tb.email &&
+                ta.userId == tb.userId &&
+                ta.planType == tb.planType &&
+                ta.issuedAt == tb.issuedAt &&
+                ta.authenticatedAt == tb.authenticatedAt &&
+                ta.expiresAt == tb.expiresAt));
+  }
+
+  static bool _sameApprovals(
+    List<ApprovalRecord> left,
+    List<ApprovalRecord> right,
+  ) => _sameList(
+    left,
+    right,
+    (a, b) =>
+        a.id == b.id &&
+        a.revision == b.revision &&
+        a.state == b.state &&
+        a.requestCount == b.requestCount &&
+        a.waiterCount == b.waiterCount &&
+        a.expiresAt == b.expiresAt &&
+        a.resolvedAt == b.resolvedAt,
+  );
+
+  static bool _sameList<T>(
+    List<T> left,
+    List<T> right,
+    bool Function(T left, T right) same,
+  ) {
+    if (identical(left, right)) return true;
+    if (left.length != right.length) return false;
+    for (var index = 0; index < left.length; index++) {
+      if (!same(left[index], right[index])) return false;
+    }
+    return true;
   }
 
   static String _newUuid() {

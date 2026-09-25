@@ -259,6 +259,40 @@ void main() {
     controller.dispose();
   });
 
+  testWidgets('unchanged inventory polls do not rebuild the workbench', (
+    tester,
+  ) async {
+    final fixture = PreviewControlApi();
+    final api = _DashboardRevisionApi(fixture);
+    final controller = WorkbenchController(
+      api: api,
+      terminalCommands: PreviewTerminalCommandService(),
+      previewMode: true,
+      closeRuntime: fixture.close,
+      terminalManagement: false,
+      initialPreferences: const WorkbenchPreferences(
+        section: WorkbenchSection.environments,
+      ),
+    );
+    await controller.initialize();
+    expect(controller.data!.accounts, isNotEmpty);
+    var notifications = 0;
+    controller.addListener(() => notifications++);
+
+    await tester.pump(const Duration(seconds: 5));
+    await tester.pump();
+    expect(api.dashboardCalls, 2);
+    expect(notifications, 0);
+
+    api.changeAccount = true;
+    await tester.pump(const Duration(seconds: 5));
+    await tester.pump();
+    expect(api.dashboardCalls, 3);
+    expect(notifications, 1);
+    expect(controller.data!.accounts.first.note, 'changed by poll');
+    controller.dispose();
+  });
+
   testWidgets('visible evidence refreshes before the inventory poll', (
     tester,
   ) async {
@@ -1509,6 +1543,48 @@ final class _LiveEvidenceApi extends _UsageTrackingApi {
             nextCursor: page.nextCursor,
           )
         : page;
+  }
+}
+
+final class _DashboardRevisionApi extends _UsageTrackingApi {
+  _DashboardRevisionApi(super.delegate);
+
+  int dashboardCalls = 0;
+  bool changeAccount = false;
+
+  @override
+  Future<DashboardData> loadDashboard() async {
+    dashboardCalls++;
+    final dashboard = await super.loadDashboard();
+    if (!changeAccount) return dashboard;
+    final account = dashboard.accounts.first;
+    final updated = ProviderAccount(
+      id: account.id,
+      displayName: account.displayName,
+      note: 'changed by poll',
+      noteRevision: account.noteRevision + 1,
+      credentialOrigin: account.credentialOrigin,
+      linkedEndpointIds: account.linkedEndpointIds,
+      associationRevision: account.associationRevision,
+      kind: account.kind,
+      realmId: account.realmId,
+      state: account.state,
+      revision: account.revision,
+      credentialState: account.credentialState,
+      credentialEpoch: account.credentialEpoch,
+      setHeaderNames: account.setHeaderNames,
+      deleteHeaderNames: account.deleteHeaderNames,
+      codexOAuth: account.codexOAuth,
+      tokenInfo: account.tokenInfo,
+    );
+    return DashboardData(
+      status: dashboard.status,
+      captures: dashboard.captures,
+      captureNextCursor: dashboard.captureNextCursor,
+      environments: dashboard.environments,
+      endpoints: dashboard.endpoints,
+      accounts: [updated, ...dashboard.accounts.skip(1)],
+    );
   }
 }
 
