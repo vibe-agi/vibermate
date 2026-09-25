@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:vibermate_app/core/api/control_api.dart';
@@ -181,7 +182,7 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('large Markdown prose remains selectable through its tail', (
+  testWidgets('large Markdown prose keeps exact selectable source', (
     tester,
   ) async {
     await tester.binding.setSurfaceSize(const Size(390, 760));
@@ -218,12 +219,68 @@ void main() {
     expect(_renderedText(tester).contains('TAIL_SENTINEL'), isTrue);
     expect(
       tester
-          .widgetList<MarkdownBody>(find.byType(MarkdownBody))
-          .every((widget) => widget.selectable),
+          .widgetList<SelectableText>(find.byType(SelectableText))
+          .any((widget) => widget.data == source),
       isTrue,
     );
     expect(tester.takeException(), isNull);
   });
+
+  testWidgets(
+    'large structured Markdown is keyboard-expandable through its tail',
+    (tester) async {
+      await tester.binding.setSurfaceSize(const Size(390, 760));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      final fixture = PreviewControlApi();
+      addTearDown(fixture.close);
+      final activity = (await fixture.activities(
+        captureRunId: 'run-1',
+      )).items.firstWhere((value) => value.status == 'succeeded');
+      final base = await fixture.exchange(activity.id);
+      final source =
+          '${List.generate(400, (index) => '## Section $index\n\n- **bold item** with `code`\n- [linked item](https://example.invalid/item)\n\n> quoted evidence line\n\n').join()}TAIL_SENTINEL';
+      final controller = _controller(_withResponse(base, 'text', source));
+      addTearDown(controller.dispose);
+      await controller.loadExchangeDetail(activity.id);
+      await tester.pumpWidget(_timeline(controller, activity));
+      await tester.pumpAndSettle();
+
+      final toggle = find.byKey(Key('toggle-long-response-${activity.id}-0'));
+      final focus = Focus.of(
+        tester.element(
+          find.descendant(of: toggle, matching: find.byType(Text)).first,
+        ),
+      );
+      focus.requestFocus();
+      await tester.pump();
+      expect(focus.hasFocus, isTrue);
+      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      await tester.pumpAndSettle();
+
+      final viewer = find.byKey(Key('long-markdown-response-${activity.id}-0'));
+      expect(viewer, findsOneWidget);
+      final scrollable = find
+          .descendant(of: viewer, matching: find.byType(Scrollable))
+          .first;
+      for (
+        var index = 0;
+        index < 10 && !_renderedText(tester).contains('TAIL_SENTINEL');
+        index++
+      ) {
+        final position = tester.state<ScrollableState>(scrollable).position;
+        position.jumpTo(position.maxScrollExtent);
+        await tester.pumpAndSettle();
+      }
+      expect(_renderedText(tester).contains('TAIL_SENTINEL'), isTrue);
+      expect(
+        tester
+            .widgetList<SelectableText>(find.byType(SelectableText))
+            .any((widget) => widget.data == source),
+        isTrue,
+      );
+      expect(tester.takeException(), isNull);
+    },
+  );
 
   testWidgets('synthetic evidence rendering baseline', (tester) async {
     await tester.binding.setSurfaceSize(const Size(1180, 760));
@@ -268,9 +325,11 @@ void main() {
     'fenced': '```text\n${List.filled(151552, 'x').join()}TAIL_SENTINEL\n```',
     'paragraphs':
         '${List.filled(4096, 'Synthetic **paragraph** and `code`.\n\n').join()}TAIL_SENTINEL',
+    'structured':
+        '${List.generate(1600, (index) => '## Section $index\n\n- **bold item** with `code`\n- [linked item](https://example.invalid/item)\n\n> quoted evidence line\n\n').join()}TAIL_SENTINEL',
   };
   for (final entry in expansionCases.entries) {
-    testWidgets('${entry.key} 151 KiB expansion baseline', (tester) async {
+    testWidgets('${entry.key} long expansion baseline', (tester) async {
       await tester.binding.setSurfaceSize(const Size(1180, 760));
       addTearDown(() => tester.binding.setSurfaceSize(null));
       final fixture = PreviewControlApi();
@@ -302,7 +361,7 @@ void main() {
           findsNothing,
         );
       }
-      if (entry.key == 'paragraphs') {
+      if (entry.key == 'paragraphs' || entry.key == 'structured') {
         final viewer = find.byKey(
           Key('long-markdown-response-${activity.id}-0'),
         );

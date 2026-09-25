@@ -449,11 +449,26 @@ try {
         .waitFor({ timeout: 30_000 });
       return elapsed;
     }
+    async function assertRecordedTail(marker, tail) {
+      const activities = await json(await fetch(origin + '/api/v1/activities?manualCaptureId=' +
+        grant.capture.id + '&limit=50', {
+        headers: { Origin: origin, Authorization: 'Bearer ' + owner.readToken },
+      }), 200, 'long content activities');
+      const activity = activities.items.find(item =>
+        item.requestPreview?.text?.includes(marker));
+      assert.ok(activity, 'long content activity is available');
+      const detail = await json(await fetch(origin + '/api/v1/exchanges/' +
+        encodeURIComponent(activity.id) + '?contentView=incremental', {
+        headers: { Origin: origin, Authorization: 'Bearer ' + owner.readToken },
+      }), 200, 'long content detail');
+      assert.ok(JSON.stringify(detail).includes(tail), 'long content tail is retained');
+    }
     const expandToVisibleMs = await expandCurrent();
     const paragraphMarker = 'SYNTHETIC_PERF_' + label + '_PARAGRAPHS';
+    const paragraphTail = paragraphMarker + '_TAIL_SENTINEL';
     const paragraphPrompt = paragraphMarker + '\n\n' +
       Array(4096).fill('Synthetic **paragraph** and `code`.\n\n').join('') +
-      'TAIL_SENTINEL';
+      paragraphTail;
     await send(grant, rootCA.certificatePem, paragraphPrompt);
     const paragraphCompleted = performance.now();
     await page.locator('flt-semantics[role="button"][aria-label*="' + paragraphMarker + '"]')
@@ -461,6 +476,22 @@ try {
     await page.evaluate(() => new Promise(requestAnimationFrame));
     const paragraphEndToVisibleMs = performance.now() - paragraphCompleted;
     const paragraphExpandToVisibleMs = await expandCurrent();
+    await assertRecordedTail(paragraphMarker, paragraphTail);
+    const structuredMarker = 'SYNTHETIC_PERF_' + label + '_STRUCTURED';
+    const structuredTail = structuredMarker + '_TAIL_SENTINEL';
+    const structuredPrompt = structuredMarker + '\n\n' +
+      Array.from({ length: 1600 }, (_, index) =>
+        '## Section ' + index + '\n\n- **bold item** with `code`\n' +
+        '- [linked item](https://example.invalid/item)\n\n' +
+        '> quoted evidence line\n\n').join('') + structuredTail;
+    await send(grant, rootCA.certificatePem, structuredPrompt);
+    const structuredCompleted = performance.now();
+    await page.locator('flt-semantics[role="button"][aria-label*="' + structuredMarker + '"]')
+      .first().waitFor({ timeout: 5_000 });
+    await page.evaluate(() => new Promise(requestAnimationFrame));
+    const structuredEndToVisibleMs = performance.now() - structuredCompleted;
+    const structuredExpandToVisibleMs = await expandCurrent();
+    await assertRecordedTail(structuredMarker, structuredTail);
     let failureDiagnosis = null;
     if (label === 'delayed') {
       const stoppedProvider = provider;
@@ -516,7 +547,9 @@ try {
       selectedApiToVisible: stats(warm, 'selectedApiToVisibleMs'),
       long9k: values[shortSamples], long151k: values[shortSamples + 1],
       expandToVisibleMs, paragraphBytes: paragraphPrompt.length,
-      paragraphEndToVisibleMs, paragraphExpandToVisibleMs, failureDiagnosis };
+      paragraphEndToVisibleMs, paragraphExpandToVisibleMs,
+      structuredBytes: structuredPrompt.length, structuredEndToVisibleMs,
+      structuredExpandToVisibleMs, failureDiagnosis };
   }
 
   const idleOnly = process.env.VIBERMATE_IDLE_ONLY === '1';
