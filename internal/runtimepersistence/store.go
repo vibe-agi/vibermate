@@ -54,6 +54,7 @@ type Options struct {
 
 // Store owns a SQLite connection pool and its repositories.
 type Store struct {
+	databasePath       string
 	database           *sql.DB
 	repo               *Repository
 	activityRepo       *activityRepository
@@ -185,6 +186,7 @@ func Open(ctx context.Context, options Options) (*Store, error) {
 	}
 
 	return &Store{
+		databasePath:       options.DatabasePath,
 		database:           database,
 		repo:               repository,
 		activityRepo:       activityRepo,

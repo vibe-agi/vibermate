@@ -425,3 +425,29 @@ flutter test --platform chrome test/evidence_render_cost_test.dart \
 现在每秒轻量探测该 Capture 的最新 Activity；仅在顶端记录变化时更新目录。正在
 查看最新项的用户会跟随新 Exchange，查看旧项的用户保留原选择。Widget 回归固定
 这两种行为，并检查无变化时不会重新读取 Conversation 目录。
+
+### 存储容量快照与保留期清理（2026-09-26）
+
+“设置 → 安全与存储”现在按用户打开或手动刷新时读取一次容量快照，不加入轮询。
+快照分别报告主数据库、WAL、证据相关表实际分配的 SQLite 页面、freelist 中可供
+SQLite 后续写入复用的页面，以及 Runtime 所在卷的可用空间。证据页统计读取
+`dbstat` 页面元数据，不解压正文；它不是解压后的正文总量。freelist 页面仍位于
+数据库文件内，因此逻辑删除后文件未必缩小，也不据此声称 SSD 安全擦除。
+
+普通快照只借助到期索引统计已经超过保留期的语义证据和 Raw HTTP 信封。完整存档
+行数只在用户点击“清空证据存档”后按需读取，避免每次打开设置扫描所有证据索引。
+手动清理使用单个事务同时处理两种到期证据及不可达的内容块；未过期证据、运行中
+Capture、配置和正文之外的长期元数据不受影响。清空全存档仍经过原有运行中 Capture
+屏障和幂等控制。
+
+在 Apple M5 Max、本机临时 SQLite、30,000 个各 1 KiB 的合成证据块上，20 次容量
+快照 p50 / p95 为 10.8 / 11.5 ms。2,000 条语义证据的 Go benchmark 为约
+1.32 ms/op。两者均为单机合成样本，不是跨设备 SLA；回归上限只用于显式性能测试。
+复现：
+
+```sh
+VIBERMATE_PERFORMANCE=1 go test ./internal/runtimepersistence \
+  -run '^TestStorageStatisticsLargeDatabasePerformance$' -count=1 -v
+go test ./internal/runtimepersistence -run '^$' \
+  -bench '^BenchmarkStorageStatistics$' -benchtime=20x -count=1
+```

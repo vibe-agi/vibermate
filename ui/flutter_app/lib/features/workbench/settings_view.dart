@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../../core/api/runtime_storage.dart';
 import '../../core/bootstrap/terminal_command.dart';
 import '../../core/design/viber_theme.dart';
 import '../../core/design/workbench_widgets.dart';
@@ -2550,8 +2551,17 @@ final class _StorageDisclosure extends StatelessWidget {
                 color: context.viberColors.route,
               ),
               const SizedBox(width: 8),
-              _SettingsLabel(copy('settings.storage')),
-              const Spacer(),
+              Expanded(child: _SettingsLabel(copy('settings.storage'))),
+              IconButton(
+                key: const Key('storage-refresh'),
+                tooltip: copy('settings.storage.refresh'),
+                onPressed: controller.storageLocationLoading
+                    ? null
+                    : controller.refreshStorageLocation,
+                icon: controller.storageLocationLoading
+                    ? const CompactProgressIndicator()
+                    : const Icon(Icons.refresh, size: 16),
+              ),
               ContextHelpButton(
                 message: copy('settings.storage.move_hint'),
                 title: copy('settings.storage'),
@@ -2585,6 +2595,12 @@ final class _StorageDisclosure extends StatelessWidget {
               ),
               const SizedBox(height: 8),
             ],
+            _StorageCapacity(
+              current: location,
+              previous: controller.previousStorageLocation,
+              copy: copy,
+            ),
+            const SizedBox(height: 10),
           ] else if (controller.storageLocationFailed)
             Wrap(
               crossAxisAlignment: WrapCrossAlignment.center,
@@ -2638,6 +2654,14 @@ final class _StorageDisclosure extends StatelessWidget {
             'settings.storage.location',
             'settings.storage.retention',
           ]) ...[Text(copy(line), style: body), const SizedBox(height: 5)],
+          if (controller.storageLocation case final location?) ...[
+            const SizedBox(height: 7),
+            _StorageCleanup(
+              location: location,
+              controller: controller,
+              copy: copy,
+            ),
+          ],
           const SizedBox(height: 7),
           // Design 06 section 8.2 makes clearing a distinct, deliberate and
           // confirmable action rather than a side effect of stopping or
@@ -2647,32 +2671,51 @@ final class _StorageDisclosure extends StatelessWidget {
             alignment: Alignment.centerLeft,
             child: OutlinedButton.icon(
               key: const Key('storage-clear-archive'),
-              onPressed: () async {
-                final outcome = await showDialog<DeletionOutcome>(
-                  context: context,
-                  builder: (_) => DeletionConfirmation(
-                    copy: copy,
-                    title: copy('deletion.archive.title'),
-                    subject: copy('settings.storage'),
-                    consequence: copy('deletion.archive.consequence'),
-                    onConfirm: () async {
-                      final result = await controller.clearEvidence();
-                      if (result == null) {
-                        throw controller.inventoryFailure;
-                      }
-                      return result;
+              onPressed: controller.storageArchivePreviewLoading
+                  ? null
+                  : () async {
+                      final preview = await controller
+                          .loadEvidenceClearPreview();
+                      if (preview == null || !context.mounted) return;
+                      final outcome = await showDialog<DeletionOutcome>(
+                        context: context,
+                        builder: (_) => DeletionConfirmation(
+                          copy: copy,
+                          title: copy('deletion.archive.title'),
+                          subject: copy('settings.storage'),
+                          consequence: _archiveConsequence(preview),
+                          onConfirm: () async {
+                            final result = await controller.clearEvidence();
+                            if (result == null) {
+                              throw controller.inventoryFailure;
+                            }
+                            return result;
+                          },
+                        ),
+                      );
+                      if (outcome == null) return;
                     },
-                  ),
-                );
-                if (outcome == null) return;
-              },
-              icon: const Icon(Icons.delete_sweep_outlined, size: 15),
+              icon: controller.storageArchivePreviewLoading
+                  ? const CompactProgressIndicator()
+                  : const Icon(Icons.delete_sweep_outlined, size: 15),
               label: Text(copy('deletion.archive.title')),
             ),
           ),
+          if (controller.storageArchivePreviewError case final error?)
+            Text(
+              copy.maybe(error) ?? copy('error.control_result_unknown'),
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                color: context.viberColors.danger,
+              ),
+            ),
         ],
       ),
     );
+  }
+
+  String _archiveConsequence(DeletionReleased preview) {
+    return '${copy('deletion.archive.consequence')}\n\n'
+        '${copy.format('settings.storage.archive_preview', {'captures': preview.captures, 'exchanges': preview.exchanges, 'envelopes': preview.envelopes})}';
   }
 
   Future<void> _chooseStorage(BuildContext context) async {
@@ -2715,6 +2758,185 @@ final class _StorageDisclosure extends StatelessWidget {
     );
     if (confirmed == true) await controller.relocateStorage(target);
   }
+}
+
+final class _StorageCapacity extends StatelessWidget {
+  const _StorageCapacity({
+    required this.current,
+    required this.previous,
+    required this.copy,
+  });
+
+  final RuntimeStorageLocation current;
+  final RuntimeStorageLocation? previous;
+  final AppCopy copy;
+
+  @override
+  Widget build(BuildContext context) {
+    final prior = previous;
+    final delta = prior == null ? null : current.fileBytes - prior.fileBytes;
+    return Column(
+      key: const Key('storage-capacity'),
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        ResponsiveFormGrid(
+          children: [
+            _StorageMetric(
+              label: copy('settings.storage.database_size'),
+              value: _storageBytes(current.databaseBytes),
+            ),
+            _StorageMetric(
+              label: copy('settings.storage.wal_size'),
+              value: _storageBytes(current.walBytes),
+            ),
+            _StorageMetric(
+              label: copy('settings.storage.evidence_size'),
+              value: _storageBytes(current.evidenceBytes),
+            ),
+            _StorageMetric(
+              label: copy('settings.storage.reusable_size'),
+              value: _storageBytes(current.reusableBytes),
+            ),
+          ],
+        ),
+        const SizedBox(height: 7),
+        Text(
+          copy.format('settings.storage.capacity_sample', {
+            'time': _storageTimestamp(current.collectedAt),
+            'available': current.filesystemAvailableBytes == null
+                ? copy('settings.storage.unknown')
+                : _storageBytes(current.filesystemAvailableBytes!),
+            'threshold': _storageBytes(current.lowSpaceThresholdBytes),
+          }),
+          style: Theme.of(context).textTheme.bodySmall,
+        ),
+        if (delta != null && delta != 0)
+          Text(
+            copy.format('settings.storage.growth', {
+              'change': '${delta > 0 ? '+' : '−'}${_storageBytes(delta.abs())}',
+            }),
+            key: const Key('storage-growth'),
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
+        if (current.capacityState == 'low') ...[
+          const SizedBox(height: 7),
+          InlineNotice(
+            message: copy('settings.storage.low_space'),
+            error: true,
+          ),
+        ] else if (current.capacityState == 'unavailable') ...[
+          const SizedBox(height: 7),
+          InlineNotice(message: copy('settings.storage.capacity_unavailable')),
+        ],
+        const SizedBox(height: 5),
+        Text(
+          copy('settings.storage.measurement_scope'),
+          style: Theme.of(
+            context,
+          ).textTheme.bodySmall?.copyWith(color: context.viberColors.textMuted),
+        ),
+      ],
+    );
+  }
+}
+
+final class _StorageMetric extends StatelessWidget {
+  const _StorageMetric({required this.label, required this.value});
+
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) => Semantics(
+    container: true,
+    label: '$label: $value',
+    child: ExcludeSemantics(
+      child: CompactLabeledControl(
+        label: label,
+        child: SelectableText(value, style: monoStyle),
+      ),
+    ),
+  );
+}
+
+final class _StorageCleanup extends StatelessWidget {
+  const _StorageCleanup({
+    required this.location,
+    required this.controller,
+    required this.copy,
+  });
+
+  final RuntimeStorageLocation location;
+  final WorkbenchController controller;
+  final AppCopy copy;
+
+  @override
+  Widget build(BuildContext context) {
+    final preview = location.cleanupPreview;
+    final pending = preview.exchanges + preview.envelopes;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          pending == 0
+              ? copy('settings.storage.cleanup_empty')
+              : copy.format('settings.storage.cleanup_preview', {
+                  'exchanges': preview.exchanges,
+                  'envelopes': preview.envelopes,
+                }),
+          key: const Key('storage-cleanup-preview'),
+          style: Theme.of(context).textTheme.bodySmall,
+        ),
+        if (pending > 0)
+          TextButton.icon(
+            key: const Key('storage-cleanup-expired'),
+            onPressed: controller.storageCleanupRunning
+                ? null
+                : () => showDialog<DeletionOutcome>(
+                    context: context,
+                    builder: (_) => DeletionConfirmation(
+                      copy: copy,
+                      title: copy('settings.storage.cleanup_title'),
+                      subject: copy.format('settings.storage.cleanup_preview', {
+                        'exchanges': preview.exchanges,
+                        'envelopes': preview.envelopes,
+                      }),
+                      consequence: copy('settings.storage.cleanup_consequence'),
+                      confirmLabel: copy('settings.storage.cleanup_action'),
+                      onConfirm: controller.cleanupExpiredEvidence,
+                    ),
+                  ),
+            icon: const Icon(Icons.cleaning_services_outlined, size: 15),
+            label: Text(copy('settings.storage.cleanup_action')),
+          ),
+        if (controller.storageCleanupNotice case final notice?)
+          Text(copy(notice), style: Theme.of(context).textTheme.bodySmall),
+        if (controller.storageCleanupError case final error?)
+          Text(
+            copy.maybe(error) ?? copy('error.control_result_unknown'),
+            style: Theme.of(
+              context,
+            ).textTheme.bodySmall?.copyWith(color: context.viberColors.danger),
+          ),
+      ],
+    );
+  }
+}
+
+String _storageBytes(int value) {
+  if (value < 1024) return '$value B';
+  if (value < 1024 * 1024) return '${(value / 1024).toStringAsFixed(1)} KiB';
+  if (value < 1024 * 1024 * 1024) {
+    return '${(value / (1024 * 1024)).toStringAsFixed(1)} MiB';
+  }
+  return '${(value / (1024 * 1024 * 1024)).toStringAsFixed(1)} GiB';
+}
+
+String _storageTimestamp(DateTime value) {
+  final local = value.toLocal();
+  String two(int number) => number.toString().padLeft(2, '0');
+  return '${local.year}-${two(local.month)}-${two(local.day)} '
+      '${two(local.hour)}:${two(local.minute)}:${two(local.second)}';
 }
 
 final class _SettingsLabel extends StatelessWidget {

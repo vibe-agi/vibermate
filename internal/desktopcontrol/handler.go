@@ -120,7 +120,9 @@ type ReadinessReader interface {
 }
 
 type StorageLocationReader interface {
-	StorageLocation() productruntime.StorageLocation
+	StorageLocation(context.Context) (productruntime.StorageLocation, error)
+	CleanupExpiredStorage(context.Context) (resourcedeletion.Released, error)
+	EvidenceArchivePreview(context.Context) (resourcedeletion.Released, error)
 }
 
 // SystemClock is available to standalone control-contract tests and tools.
@@ -294,6 +296,10 @@ func New(options Options) (*Handler, error) {
 	}
 	handler.mux.HandleFunc("GET /api/v1/status", handler.getStatus)
 	handler.mux.HandleFunc("GET /api/v1/storage", handler.getStorageLocation)
+	handler.mux.HandleFunc(
+		"POST /api/v1/storage/actions/cleanup-expired",
+		handler.cleanupExpiredStorage,
+	)
 	handler.mux.HandleFunc("GET /api/v1/launch-environment/snapshots", handler.listLaunchSnapshots)
 	handler.mux.HandleFunc("/api/v1/storage", handler.invalidRoute)
 	handler.mux.HandleFunc("POST "+CodexLoginPath, handler.startCodexLogin)
@@ -376,6 +382,7 @@ func New(options Options) (*Handler, error) {
 	handler.mux.HandleFunc("DELETE /api/v1/environments/{environmentId}", handler.deleteEnvironment)
 	handler.mux.HandleFunc("DELETE /api/v1/upstream-endpoints/{endpointId}", handler.deleteUpstreamEndpoint)
 	handler.mux.HandleFunc("DELETE /api/v1/captures/{captureKey}", handler.deleteCapture)
+	handler.mux.HandleFunc("GET /api/v1/evidence/actions/clear", handler.previewArchiveClear)
 	handler.mux.HandleFunc("POST /api/v1/evidence/actions/clear", handler.clearArchive)
 	handler.mux.HandleFunc("PUT /api/v1/provider-accounts/{accountId}/credential", handler.replaceProviderAccountCredential)
 	handler.mux.HandleFunc("POST /api/v1/provider-accounts/{accountId}/credential/refresh", handler.refreshProviderAccountCredential)

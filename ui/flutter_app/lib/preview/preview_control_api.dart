@@ -28,12 +28,44 @@ final class PreviewControlApi implements ControlApi {
   launchEnvironmentSnapshots() async => const [];
   @override
   Future<RuntimeStorageLocation>
-  storageLocation() async => const RuntimeStorageLocation(
+  storageLocation() async => RuntimeStorageLocation(
     dataDirectory:
         '/Users/mira/Library/Application Support/io.vibermate.desktop',
     databasePath:
         '/Users/mira/Library/Application Support/io.vibermate.desktop/runtime.db',
+    collectedAt: _now,
+    databaseBytes: 192 << 20,
+    walBytes: 8 << 20,
+    sharedMemoryBytes: 1 << 20,
+    evidenceBytes: 128 << 20,
+    reusableBytes: _expiredStorageCleaned ? 20 << 20 : 16 << 20,
+    filesystemAvailableBytes: 24 << 30,
+    lowSpaceThresholdBytes: 1 << 30,
+    capacityState: 'healthy',
+    cleanupPreview: DeletionReleased(
+      exchanges: _expiredStorageCleaned ? 0 : 3,
+      envelopes: _expiredStorageCleaned ? 0 : 12,
+      activities: 0,
+      connections: 0,
+      attempts: 0,
+      approvals: 0,
+      assignments: 0,
+      captures: 0,
+    ),
   );
+
+  @override
+  Future<DeletionReleased> evidenceClearPreview() async =>
+      const DeletionReleased(
+        exchanges: 744,
+        envelopes: 3055,
+        activities: 795,
+        connections: 148,
+        attempts: 761,
+        approvals: 12,
+        assignments: 20,
+        captures: 20,
+      );
 
   @override
   Future<AccountFacts> accountFacts(
@@ -239,6 +271,7 @@ final class PreviewControlApi implements ControlApi {
 
   final int _dashboardCaptureLimit;
   final ControlProblem? _upstreamModelFailure;
+  bool _expiredStorageCleaned = false;
 
   static final _now = DateTime.utc(2026, 8, 10, 9, 42);
   static String _identity(int byte) =>
@@ -2113,6 +2146,38 @@ final class PreviewControlApi implements ControlApi {
         assignments: 20,
         captures: 20,
       ),
+    );
+  }
+
+  @override
+  Future<DeletionOutcome> cleanupExpiredEvidence() async {
+    final released = _expiredStorageCleaned
+        ? const DeletionReleased(
+            exchanges: 0,
+            envelopes: 0,
+            activities: 0,
+            connections: 0,
+            attempts: 0,
+            approvals: 0,
+            assignments: 0,
+            captures: 0,
+          )
+        : const DeletionReleased(
+            exchanges: 3,
+            envelopes: 12,
+            activities: 0,
+            connections: 0,
+            attempts: 0,
+            approvals: 0,
+            assignments: 0,
+            captures: 0,
+          );
+    _expiredStorageCleaned = true;
+    return DeletionOutcome(
+      deleted: true,
+      holderCount: 0,
+      holders: const [],
+      released: released,
     );
   }
 

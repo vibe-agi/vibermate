@@ -14,6 +14,8 @@ import 'launch_environment_snapshot.dart';
 abstract interface class ControlApi {
   Future<List<LaunchEnvironmentSnapshot>> launchEnvironmentSnapshots();
   Future<RuntimeStorageLocation> storageLocation();
+  Future<DeletionOutcome> cleanupExpiredEvidence();
+  Future<DeletionReleased> evidenceClearPreview();
   Future<AccountFacts> accountFacts(String accountId, {bool history = false});
   Future<DashboardData> loadDashboard();
 
@@ -492,6 +494,24 @@ final class HttpControlApi implements ControlApi {
   @override
   Future<RuntimeStorageLocation> storageLocation() async =>
       RuntimeStorageLocation.fromJson(await _read('/api/v1/storage'));
+
+  @override
+  Future<DeletionOutcome> cleanupExpiredEvidence() async =>
+      DeletionOutcome.fromJson(
+        await _mutation(
+          'POST',
+          '/api/v1/storage/actions/cleanup-expired',
+          expectedRevision: 0,
+        ),
+        'storageCleanup',
+      );
+
+  @override
+  Future<DeletionReleased> evidenceClearPreview() async =>
+      DeletionReleased.fromJson(
+        await _read('/api/v1/evidence/actions/clear'),
+        'evidenceClearPreview',
+      );
 
   @override
   Future<List<LaunchEnvironmentSnapshot>> launchEnvironmentSnapshots() async =>

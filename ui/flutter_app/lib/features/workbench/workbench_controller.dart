@@ -179,8 +179,14 @@ final class WorkbenchController extends ChangeNotifier
   RuntimeUsageReport? runtimeUsage;
   RootCAStatus? rootCAStatus;
   RuntimeStorageLocation? storageLocation;
+  RuntimeStorageLocation? previousStorageLocation;
   bool storageLocationLoading = false;
   bool storageLocationFailed = false;
+  bool storageCleanupRunning = false;
+  bool storageArchivePreviewLoading = false;
+  String? storageCleanupNotice;
+  String? storageCleanupError;
+  String? storageArchivePreviewError;
   RootCAGuideIntent? rootCAGuideIntent;
   CapturedMessageTransformSample? capturedMessageTransformSample;
   final int usageRangeDays = 365;
@@ -1034,6 +1040,7 @@ final class WorkbenchController extends ChangeNotifier
     try {
       final location = await _api.storageLocation();
       if (_disposed) return;
+      previousStorageLocation = storageLocation;
       storageLocation = location;
     } catch (_) {
       if (_disposed) return;
@@ -1041,6 +1048,53 @@ final class WorkbenchController extends ChangeNotifier
     } finally {
       if (!_disposed) {
         storageLocationLoading = false;
+        notifyListeners();
+      }
+    }
+  }
+
+  Future<DeletionOutcome> cleanupExpiredEvidence() async {
+    if (_disposed || storageCleanupRunning) {
+      throw const ControlContractException('storage cleanup is unavailable');
+    }
+    storageCleanupRunning = true;
+    storageCleanupNotice = null;
+    storageCleanupError = null;
+    notifyListeners();
+    try {
+      final outcome = await _api.cleanupExpiredEvidence();
+      if (_disposed) {
+        throw const ControlContractException('storage cleanup is unavailable');
+      }
+      storageCleanupNotice = 'settings.storage.cleanup_complete';
+      await refreshStorageLocation();
+      return outcome;
+    } catch (error) {
+      if (!_disposed) storageCleanupError = _describeError(error);
+      rethrow;
+    } finally {
+      if (!_disposed) {
+        storageCleanupRunning = false;
+        notifyListeners();
+      }
+    }
+  }
+
+  Future<DeletionReleased?> loadEvidenceClearPreview() async {
+    if (_disposed || storageArchivePreviewLoading) return null;
+    storageArchivePreviewLoading = true;
+    storageArchivePreviewError = null;
+    notifyListeners();
+    try {
+      final preview = await _api.evidenceClearPreview();
+      if (_disposed) return null;
+      return preview;
+    } catch (error) {
+      if (!_disposed) storageArchivePreviewError = _describeError(error);
+      return null;
+    } finally {
+      if (!_disposed) {
+        storageArchivePreviewLoading = false;
         notifyListeners();
       }
     }
@@ -2201,6 +2255,7 @@ final class WorkbenchController extends ChangeNotifier
       selectedCaptureKey = null;
       _resetCaptureDetail();
       _invalidateEvidenceCaches();
+      unawaited(refreshStorageLocation());
     },
   );
 

@@ -1949,6 +1949,33 @@ final class AppCopy {
     'settings.storage.storage_location_unavailable':
         'The selected data directory is unavailable. Reconnect its disk or restore the directory and retry. No empty database has been created.',
     'settings.storage.database': 'SQLite database',
+    'settings.storage.refresh': 'Refresh storage snapshot',
+    'settings.storage.database_size': 'Database file',
+    'settings.storage.wal_size': 'Write-ahead log',
+    'settings.storage.evidence_size': 'Evidence pages',
+    'settings.storage.reusable_size': 'Reusable in SQLite',
+    'settings.storage.unknown': 'Unavailable',
+    'settings.storage.capacity_sample':
+        'Checked {time} · Runtime volume available {available} · warning below {threshold}',
+    'settings.storage.growth':
+        'SQLite files changed {change} since the last check.',
+    'settings.storage.low_space':
+        'The connected Runtime is below its free-space threshold. Free space, move App storage, or expand the server volume before recording more evidence.',
+    'settings.storage.capacity_unavailable':
+        'The Runtime could not read free space for this volume. Database statistics are still shown.',
+    'settings.storage.measurement_scope':
+        'Evidence pages are allocated SQLite pages, not decompressed body bytes. Reusable pages remain inside the database file for later writes; the file may not shrink.',
+    'settings.storage.cleanup_empty':
+        'No expired evidence is waiting for cleanup.',
+    'settings.storage.cleanup_preview':
+        '{exchanges} semantic Exchanges and {envelopes} Raw HTTP boundaries are past their retention deadlines.',
+    'settings.storage.cleanup_title': 'Clean expired evidence?',
+    'settings.storage.cleanup_consequence':
+        'Only evidence past its own retention deadline is removed. Active and unexpired evidence, traffic policies, services and accounts remain. SQLite can reuse the pages, but the file may not shrink and this does not claim secure SSD erasure.',
+    'settings.storage.cleanup_action': 'Clean expired evidence',
+    'settings.storage.cleanup_complete': 'Expired evidence was cleaned.',
+    'settings.storage.archive_preview':
+        'Current snapshot: {captures} Captures, {exchanges} semantic Exchanges and {envelopes} Raw HTTP boundaries.',
     'settings.storage.location_failed':
         'Storage location could not be read. Retry after checking the Runtime connection.',
     'settings.storage.move_hint':
@@ -3896,6 +3923,30 @@ final class AppCopy {
     'settings.storage.storage_location_unavailable':
         '指定的数据目录不可用。请重新连接磁盘或恢复目录后重试；未创建空数据库。',
     'settings.storage.database': 'SQLite 数据库',
+    'settings.storage.refresh': '刷新存储快照',
+    'settings.storage.database_size': '数据库文件',
+    'settings.storage.wal_size': '预写日志（WAL）',
+    'settings.storage.evidence_size': '证据占用页',
+    'settings.storage.reusable_size': 'SQLite 内可复用',
+    'settings.storage.unknown': '无法读取',
+    'settings.storage.capacity_sample':
+        '统计于 {time} · Runtime 磁盘可用 {available} · 低于 {threshold} 时提醒',
+    'settings.storage.growth': '与上次检查相比，SQLite 文件变化 {change}。',
+    'settings.storage.low_space':
+        '所连接 Runtime 的可用空间已低于阈值。继续记录前，请释放空间、迁移 App 数据目录或扩容服务端卷。',
+    'settings.storage.capacity_unavailable': 'Runtime 无法读取该卷的剩余空间；数据库统计仍可查看。',
+    'settings.storage.measurement_scope':
+        '“证据占用页”是相关表实际分配的 SQLite 页面，不是解压后的正文总量。“可复用”页面仍在数据库文件内，可供后续写入；文件未必会缩小。',
+    'settings.storage.cleanup_empty': '目前没有超过保留期、等待清理的证据。',
+    'settings.storage.cleanup_preview':
+        '已有 {exchanges} 条语义调用和 {envelopes} 条 Raw HTTP 边界超过保留期。',
+    'settings.storage.cleanup_title': '清理过期证据？',
+    'settings.storage.cleanup_consequence':
+        '只移除已经超过各自保留期的证据。运行中和未过期的证据、流量策略、服务与账号都会保留。SQLite 可复用释放的页面，但文件未必缩小；此操作不声称对 SSD 安全擦除。',
+    'settings.storage.cleanup_action': '清理过期证据',
+    'settings.storage.cleanup_complete': '过期证据已清理。',
+    'settings.storage.archive_preview':
+        '当前快照：{captures} 条运行记录、{exchanges} 条语义调用、{envelopes} 条 Raw HTTP 边界。',
     'settings.storage.location_failed': '无法读取存储位置。请检查 Runtime 连接后重试。',
     'settings.storage.move_hint': '迁移前请先停止 Runtime，并保留整个数据目录；不要单独复制正在使用的数据库。',
     'settings.storage.server_path':

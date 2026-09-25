@@ -303,6 +303,41 @@ try {
   assert.equal(originalDecision.result.accountId, '');
   await trialPage.locator('flt-semantics[role="button"]')
     .filter({ hasText: 'Cancel' }).last().click();
+  const settingsButton = trialPage.locator('flt-semantics[role="button"]')
+    .filter({ hasText: 'Settings' }).last();
+  const settingsBox = await settingsButton.boundingBox();
+  assert.ok(settingsBox, 'settings button has no visible bounds');
+  await trialPage.mouse.click(settingsBox.x + settingsBox.width / 2,
+    settingsBox.y + settingsBox.height / 2);
+  const safetyTab = trialPage.locator(
+    'flt-semantics[aria-label*="Safety & data"]',
+  ).last();
+  await safetyTab.waitFor();
+  const storageResponse = trialPage.waitForResponse(response =>
+    response.url().endsWith('/api/v1/storage'));
+  await safetyTab.click();
+  const storageHTTP = await storageResponse;
+  assert.equal(storageHTTP.status(), 200);
+  const storageSnapshot = await storageHTTP.json();
+  assert.equal(storageSnapshot.backend, 'sqlite');
+  assert.equal(storageSnapshot.capacityState, 'healthy');
+  assert.ok(storageSnapshot.databaseBytes > 0);
+  assert.ok(storageSnapshot.filesystemAvailableBytes > 0);
+  await trialPage.mouse.move(1000, 700);
+  await trialPage.mouse.wheel(0, 2_000);
+  await trialPage.waitForTimeout(250);
+  const storagePanel = trialPage.locator(
+    'flt-semantics[role="group"][aria-label*="Evidence storage"]' +
+    '[aria-label*="No expired evidence is waiting for cleanup."]',
+  ).last();
+  await storagePanel.waitFor();
+  const storageLabel = await storagePanel.getAttribute('aria-label');
+  assert.ok(storageLabel?.includes('Checked ') &&
+    storageLabel.includes('not a folder on your browser'),
+  'remote storage scope was not visible');
+  assert.equal(await trialPage.locator('flt-semantics')
+    .filter({ hasText: /^Change location$/ }).count(), 0,
+  'remote Web offered a browser-local storage picker');
   // Let dialog teardown and focus semantics settle before counting idle work.
   await trialPage.waitForTimeout(2_000);
   const idleResponses = [];
@@ -606,6 +641,10 @@ try {
       draftModel: draftDecision.result.effectiveModel,
       originalDestination: originalDecision.result.destinationKind,
       narrowActionVisible: true },
+    storage: { backend: storageSnapshot.backend,
+      capacityState: storageSnapshot.capacityState,
+      databaseBytes: storageSnapshot.databaseBytes,
+      browserPickerAbsent: true },
     local, delayed, browser: await browser.version(),
     runtime: process.platform + '/' + process.arch }));
 } finally {

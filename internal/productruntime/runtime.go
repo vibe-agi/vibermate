@@ -53,6 +53,7 @@ var ErrInvalidBuildResult = errors.New("invalid runtime build result")
 type Runtime struct {
 	launchSnapshots    launchsnapshot.Store
 	paths              RuntimePaths
+	storage            *runtimepersistence.Store
 	status             *statusTracker
 	schemaReader       runtimepersistence.SchemaStateReader
 	environments       environmentRuntime
@@ -738,6 +739,7 @@ func startWithBuilders(
 	tracker.commitInitialized(finalState.Revision)
 	return &Runtime{
 		paths:              options.Paths,
+		storage:            storageResult.store,
 		status:             tracker,
 		schemaReader:       storageResult.store.SchemaStateReader(),
 		environments:       environments,

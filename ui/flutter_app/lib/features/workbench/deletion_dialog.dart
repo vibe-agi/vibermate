@@ -20,6 +20,7 @@ final class DeletionConfirmation extends StatefulWidget {
     required this.consequence,
     required this.onConfirm,
     required this.copy,
+    this.confirmLabel,
     super.key,
   });
 
@@ -34,6 +35,7 @@ final class DeletionConfirmation extends StatefulWidget {
 
   final Future<DeletionOutcome> Function() onConfirm;
   final AppCopy copy;
+  final String? confirmLabel;
 
   @override
   State<DeletionConfirmation> createState() => _DeletionConfirmationState();
@@ -159,7 +161,7 @@ class _DeletionConfirmationState extends State<DeletionConfirmation> {
         FilledButton(
           key: const Key('deletion-confirm'),
           onPressed: _running || refused != null ? null : _confirm,
-          child: Text(copy('deletion.confirm')),
+          child: Text(widget.confirmLabel ?? copy('deletion.confirm')),
         ),
       ],
     );
