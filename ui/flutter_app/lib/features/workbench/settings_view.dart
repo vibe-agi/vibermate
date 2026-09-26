@@ -2,12 +2,14 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/api/runtime_storage.dart';
 import '../../core/bootstrap/terminal_command.dart';
 import '../../core/design/viber_theme.dart';
 import '../../core/design/workbench_widgets.dart';
 import '../../core/i18n/app_copy.dart';
+import '../../core/update/product_update.dart';
 import 'acp_setup.dart';
 import 'runtime_root_ca_panel.dart';
 import '../../core/api/control_models.dart';
@@ -577,7 +579,218 @@ final class _GeneralSettingsPane extends StatelessWidget {
           ],
         ),
       ),
+      const SizedBox(height: 12),
+      _ProductUpdatePanel(controller: controller, copy: copy),
     ],
+  );
+}
+
+final class _ProductUpdatePanel extends StatelessWidget {
+  const _ProductUpdatePanel({required this.controller, required this.copy});
+
+  static final _releases = Uri.https(
+    'github.com',
+    '/vibe-agi/vibermate/releases',
+  );
+  static const _brewCommand = 'brew upgrade --cask vibe-agi/tap/vibermate';
+
+  final WorkbenchController controller;
+  final AppCopy copy;
+
+  @override
+  Widget build(BuildContext context) {
+    final update = controller.productUpdate;
+    final runtimeBuild = controller.data?.status.productBuild ?? '—';
+    final terminalBuild = controller.terminalCommand?.installedBuild;
+    final heading = Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Icon(
+          Icons.system_update_alt,
+          size: 17,
+          color: context.viberColors.route,
+        ),
+        const SizedBox(width: 8),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                copy('updates.title'),
+                style: Theme.of(context).textTheme.labelLarge,
+              ),
+              const SizedBox(height: 3),
+              Text(
+                copy('updates.detail'),
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  color: context.viberColors.textMuted,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+    final check = OutlinedButton.icon(
+      key: const Key('product-update-check'),
+      onPressed: controller.productUpdateLoading
+          ? null
+          : () => unawaited(controller.checkProductUpdate()),
+      icon: controller.productUpdateLoading
+          ? const CompactProgressIndicator()
+          : const Icon(Icons.refresh, size: 15),
+      label: Text(copy('updates.check')),
+    );
+    return _SettingsSurface(
+      key: const Key('product-update-panel'),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          LayoutBuilder(
+            builder: (context, constraints) => constraints.maxWidth < 520
+                ? Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      heading,
+                      const SizedBox(height: 8),
+                      Align(alignment: Alignment.centerLeft, child: check),
+                    ],
+                  )
+                : Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Expanded(child: heading),
+                      const SizedBox(width: 12),
+                      check,
+                    ],
+                  ),
+          ),
+          const SizedBox(height: 10),
+          Wrap(
+            spacing: 18,
+            runSpacing: 6,
+            children: [
+              _UpdateBuildFact(
+                label: copy('updates.app'),
+                value: controller.appProductBuild,
+              ),
+              _UpdateBuildFact(
+                label: copy('updates.runtime'),
+                value: runtimeBuild,
+              ),
+              if (terminalBuild != null)
+                _UpdateBuildFact(
+                  label: copy('updates.terminal'),
+                  value: terminalBuild,
+                ),
+            ],
+          ),
+          if (controller.runtimeBuildMismatch ||
+              controller.terminalBuildMismatch) ...[
+            const SizedBox(height: 9),
+            InlineNotice(message: copy('updates.mismatch_detail'), error: true),
+          ],
+          if (update != null) ...[
+            const SizedBox(height: 9),
+            if (update.state == ProductUpdateState.unavailable)
+              InlineNotice(message: copy('updates.unavailable'))
+            else
+              Row(
+                children: [
+                  StatusPill(
+                    label: copy(
+                      update.state == ProductUpdateState.available
+                          ? 'updates.available'
+                          : 'updates.current',
+                    ),
+                    color: update.state == ProductUpdateState.available
+                        ? context.viberColors.warning
+                        : context.viberColors.verified,
+                    icon: update.state == ProductUpdateState.available
+                        ? Icons.system_update_alt
+                        : Icons.check_circle_outline,
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      [
+                        if (update.availableVersion != null)
+                          update.availableVersion!,
+                        if (update.releaseName != null) update.releaseName!,
+                      ].join(' · '),
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
+                  ),
+                ],
+              ),
+            const SizedBox(height: 8),
+            Text(
+              copy(switch (update.channel) {
+                ProductInstallChannel.homebrew => 'updates.guide.homebrew',
+                ProductInstallChannel.webServer => 'updates.guide.server',
+                ProductInstallChannel.manual => 'updates.guide.manual',
+              }),
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+            const SizedBox(height: 7),
+            Wrap(
+              spacing: 8,
+              runSpacing: 7,
+              children: [
+                if (update.channel == ProductInstallChannel.homebrew)
+                  FilledButton.icon(
+                    key: const Key('product-update-copy-brew'),
+                    onPressed: () => unawaited(
+                      Clipboard.setData(
+                        const ClipboardData(text: _brewCommand),
+                      ),
+                    ),
+                    icon: const Icon(Icons.copy, size: 14),
+                    label: Text(copy('updates.copy_brew')),
+                  ),
+                OutlinedButton.icon(
+                  key: const Key('product-update-open-release'),
+                  onPressed: () => unawaited(
+                    launchUrl(
+                      update.releaseUrl ?? _releases,
+                      mode: LaunchMode.externalApplication,
+                    ),
+                  ),
+                  icon: const Icon(Icons.open_in_new, size: 14),
+                  label: Text(copy('updates.release_notes')),
+                ),
+              ],
+            ),
+          ],
+          const SizedBox(height: 8),
+          Text(
+            copy('updates.no_auto_install'),
+            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+              color: context.viberColors.textMuted,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+final class _UpdateBuildFact extends StatelessWidget {
+  const _UpdateBuildFact({required this.label, required this.value});
+
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) => Text.rich(
+    TextSpan(
+      children: [
+        TextSpan(text: '$label  '),
+        TextSpan(text: value, style: monoStyle),
+      ],
+    ),
+    style: Theme.of(context).textTheme.bodySmall,
   );
 }
 
@@ -3662,6 +3875,19 @@ final class _TerminalCommandDetailsState
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
+                _CommandPath(
+                  label: copy('terminal.source_build'),
+                  value: status.sourceBuild,
+                ),
+                if (status.installedBuild case final installed?) ...[
+                  const SizedBox(height: 4),
+                  _CommandPath(
+                    label: copy('terminal.installed_build'),
+                    value: installed,
+                    muted: installed != status.sourceBuild,
+                  ),
+                ],
+                const SizedBox(height: 4),
                 _CommandPath(
                   label: copy('terminal.target'),
                   value: status.targetPath,

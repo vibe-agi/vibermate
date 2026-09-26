@@ -2154,6 +2154,35 @@ final class AppCopy {
     'settings.preview': 'Deterministic Preview data',
     'settings.live': 'Local ViberMate runtime',
     'settings.remote': 'Runtime Server · {target}',
+    'updates.title': 'Version and updates',
+    'updates.detail':
+        'Compare the App, Runtime and installed terminal command. Update checks run only when requested.',
+    'updates.app': 'App',
+    'updates.runtime': 'Runtime',
+    'updates.terminal': 'Terminal',
+    'updates.app_build': 'App {build}',
+    'updates.runtime_build': 'Runtime {build}',
+    'updates.terminal_build': 'Terminal {build}',
+    'updates.mismatch':
+        'ViberMate components do not match: {details}. Review the update path before starting new work; running Captures are not modified.',
+    'updates.mismatch_detail':
+        'The App, Runtime or terminal command is on a different release. Update the older component, then restart it; no running file is replaced automatically.',
+    'updates.review': 'Review versions',
+    'updates.check': 'Check for updates',
+    'updates.available': 'Update available',
+    'updates.current': 'Up to date',
+    'updates.unavailable':
+        'The release check is unavailable. ViberMate remains usable; retry when the network is available.',
+    'updates.guide.homebrew':
+        'Homebrew installation detected. Finish active Captures, then run the shown brew upgrade command.',
+    'updates.guide.manual':
+        'Finish active Captures and data operations, then open the official GitHub Release for signed downloads and release notes. Keep the current package until the replacement is verified.',
+    'updates.guide.server':
+        'This browser cannot replace Runtime Server files. Finish active work, update the native service or container from the official Release, then restart it.',
+    'updates.copy_brew': 'Copy brew upgrade',
+    'updates.release_notes': 'Release notes and downloads',
+    'updates.no_auto_install':
+        'ViberMate never downloads or installs an update in the background, and never replaces files during an active Capture or data operation.',
     'server.access.title': 'Web & client access',
     'server.access.description':
         'Use your personal Runtime username and password. Install the vibermate CLI and your Agent on the client computer before running these commands.',
@@ -2381,6 +2410,8 @@ final class AppCopy {
         'The packaged command could not be inspected. Rebuild or reinstall ViberMate.',
     'terminal.target': 'Terminal',
     'terminal.source': 'Packaged',
+    'terminal.source_build': 'App build',
+    'terminal.installed_build': 'Installed build',
     'terminal.details': 'Technical details',
     'terminal.diagnosis': 'Diagnostic',
     'terminal.boundary':
@@ -4226,6 +4257,32 @@ final class AppCopy {
     'settings.preview': '确定性预览数据',
     'settings.live': '本地 ViberMate 运行时',
     'settings.remote': 'Runtime Server · {target}',
+    'updates.title': '版本与更新',
+    'updates.detail': '对比 App、Runtime 与已安装终端命令；仅在你主动点击时联网检查。',
+    'updates.app': 'App',
+    'updates.runtime': 'Runtime',
+    'updates.terminal': '终端命令',
+    'updates.app_build': 'App {build}',
+    'updates.runtime_build': 'Runtime {build}',
+    'updates.terminal_build': '终端命令 {build}',
+    'updates.mismatch':
+        'ViberMate 组件版本不一致：{details}。开始新任务前请检查升级路径；正在运行的 Capture 不会被修改。',
+    'updates.mismatch_detail':
+        'App、Runtime 或终端命令并非同一发行版。请更新较旧组件后重启；ViberMate 不会自动替换运行文件。',
+    'updates.review': '检查版本',
+    'updates.check': '检查更新',
+    'updates.available': '有可用更新',
+    'updates.current': '已是最新',
+    'updates.unavailable': '暂时无法检查 Release。ViberMate 仍可正常使用；网络恢复后可重试。',
+    'updates.guide.homebrew': '检测到 Homebrew 安装。请先结束活动 Capture，再执行下方 brew 升级命令。',
+    'updates.guide.manual':
+        '请先结束活动 Capture 与数据操作，再打开官方 GitHub Release 查看签名下载与发行说明；确认新包可用前保留当前版本。',
+    'updates.guide.server':
+        '浏览器不能替换 Runtime Server 文件。请先结束活动任务，再从官方 Release 更新原生服务或容器并重启。',
+    'updates.copy_brew': '复制 brew upgrade',
+    'updates.release_notes': '发行说明与下载',
+    'updates.no_auto_install':
+        'ViberMate 不会在后台下载或安装更新，也不会在活动 Capture 或数据操作期间替换文件。',
     'server.access.title': '网页与客户端接入',
     'server.access.description':
         '使用你的个人运行用户账号和密码。执行下列命令前，请先在客户端电脑上安装 vibermate CLI 和要使用的 Agent。',
@@ -4423,6 +4480,8 @@ final class AppCopy {
     'terminal.unavailable': '无法检查打包命令。请重新构建或安装 ViberMate。',
     'terminal.target': '终端入口',
     'terminal.source': 'App 内命令',
+    'terminal.source_build': 'App 版本',
+    'terminal.installed_build': '已安装版本',
     'terminal.details': '技术详情',
     'terminal.diagnosis': '底层诊断',
     'terminal.boundary':

@@ -25,3 +25,12 @@ func TestLabelUsesVersionThenBoundedVCSIdentity(t *testing.T) {
 		})
 	}
 }
+
+func TestLabelPrefersInjectedReleaseVersion(t *testing.T) {
+	previous := releaseVersion
+	releaseVersion = "v1.2.3"
+	t.Cleanup(func() { releaseVersion = previous })
+	if got := Label(); got != "v1.2.3" {
+		t.Fatalf("Label() = %q", got)
+	}
+}

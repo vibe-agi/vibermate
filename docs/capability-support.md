@@ -48,6 +48,7 @@ Source package version: **0.1.13**. Latest published release: **v0.1.13**.
 | `raw-stage-compare` | Branch-only | The current stabilization source compares retained client/upstream request and response stages without rewriting retained bytes. |
 | `outbound-visibility` | Branch-only | The current stabilization source distinguishes inspected HTTP, decoded content, blind forwarding, and traffic not observed by ViberMate. It cannot infer a local file path from network bytes. |
 | `verified-backup-restore` | Branch-only | The current stabilization source provides manifest-bound backup, verification, and offline restore. Provider secrets and externally supplied TLS keys are excluded. |
+| `release-check` | Released | Settings compares App, Runtime, and terminal-command builds and checks the official GitHub Release only after an explicit user action. |
 | `automatic-updates` | Unsupported | Releases, checksums, Homebrew, and the website are published explicitly; the product does not silently self-update. |
 | `plugins` | Unsupported | The JavaScript transform sandbox is not a plugin marketplace or general extension runtime. |
 | `postgresql-runtime-store` | Unsupported | The current runtime store is SQLite. A PostgreSQL backend and verified migration are later-stage work. |

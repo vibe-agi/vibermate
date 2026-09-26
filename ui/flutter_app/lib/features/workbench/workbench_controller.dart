@@ -17,6 +17,8 @@ import '../../core/bootstrap/public_certificate_exporter.dart';
 import '../../core/bootstrap/runtime_connection.dart';
 import '../../core/bootstrap/terminal_command.dart';
 import '../../core/preferences/workbench_preferences.dart';
+import '../../core/update/product_update.dart';
+import '../../core/update/product_version.dart';
 import 'runtime_connection_guide.dart';
 import 'environment_editing.dart';
 
@@ -84,6 +86,7 @@ final class WorkbenchController extends ChangeNotifier
     WorkbenchPreferencesIssue? initialPreferencesIssue,
     ValueChanged<WorkbenchTheme>? onThemeChanged,
     DateTime Function()? clock,
+    ProductUpdateService? productUpdateService,
     this.webPrincipal,
     this.onSignOut,
     this.changeWebPassword,
@@ -94,6 +97,8 @@ final class WorkbenchController extends ChangeNotifier
        _closeRuntime = closeRuntime,
        _restartRuntime = restartRuntime,
        _clock = clock ?? DateTime.now,
+       _productUpdateService =
+           productUpdateService ?? GitHubProductUpdateService(clock: clock),
        _preferencesStore = preferencesStore,
        _preferencesWritable = preferencesWritable,
        _onThemeChanged = onThemeChanged,
@@ -132,6 +137,7 @@ final class WorkbenchController extends ChangeNotifier
   String? storageMoveFailure;
   bool storageMoving = false;
   final DateTime Function() _clock;
+  final ProductUpdateService _productUpdateService;
   final WorkbenchPreferencesStore _preferencesStore;
   final bool _preferencesWritable;
   final ValueChanged<WorkbenchTheme>? _onThemeChanged;
@@ -189,6 +195,8 @@ final class WorkbenchController extends ChangeNotifier
   List<RuntimeUser>? runtimeUsers;
   RuntimeUsageReport? runtimeUsage;
   RootCAStatus? rootCAStatus;
+  ProductUpdateResult? productUpdate;
+  bool productUpdateLoading = false;
   RuntimeStorageLocation? storageLocation;
   RuntimeStorageLocation? previousStorageLocation;
   bool storageLocationLoading = false;
@@ -1211,6 +1219,60 @@ final class WorkbenchController extends ChangeNotifier
     if (serverManagement && (runtimeUsers == null || serverAccess == null)) {
       unawaited(refreshServerManagement());
     }
+  }
+
+  void openUpdateSettings() {
+    settingsTab = settingsDestinations.indexOf(SettingsDestination.preferences);
+    section = WorkbenchSection.settings;
+    operationNotice = null;
+    notifyListeners();
+  }
+
+  String get appProductBuild => productVersionLabel;
+
+  String? get runtimeReleaseBuild {
+    final build = data?.status.productBuild;
+    return build != null && parseProductVersion(build) != null ? build : null;
+  }
+
+  bool get runtimeBuildMismatch {
+    final runtime = runtimeReleaseBuild;
+    return runtime != null &&
+        compareProductVersions(
+              parseProductVersion(runtime)!,
+              parseProductVersion(productVersionLabel)!,
+            ) !=
+            0;
+  }
+
+  bool get terminalBuildMismatch {
+    final status = terminalCommand;
+    if (status == null || status.installedBuild == null) return false;
+    final source = parseProductVersion(status.sourceBuild);
+    final installed = parseProductVersion(status.installedBuild!);
+    return source != null &&
+        installed != null &&
+        compareProductVersions(source, installed) != 0;
+  }
+
+  Future<void> checkProductUpdate() async {
+    if (_disposed || productUpdateLoading) return;
+    productUpdateLoading = true;
+    notifyListeners();
+    ProductUpdateResult result;
+    try {
+      result = await _productUpdateService.check();
+    } on Object {
+      result = ProductUpdateResult(
+        state: ProductUpdateState.unavailable,
+        channel: ProductInstallChannel.manual,
+        checkedAt: _clock().toUtc(),
+      );
+    }
+    if (_disposed) return;
+    productUpdate = result;
+    productUpdateLoading = false;
+    notifyListeners();
   }
 
   Future<void> refreshServerManagement({bool quiet = false}) async {

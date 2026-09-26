@@ -27,6 +27,8 @@ final class PreviewTerminalCommandService implements TerminalCommandService {
           state: TerminalCommandState.current,
           sourcePath: current.sourcePath,
           targetPath: current.targetPath,
+          sourceBuild: current.sourceBuild,
+          installedBuild: current.sourceBuild,
         );
       case TerminalCommandOperation.refresh:
         if (!current.canRefresh) throw _failed();
@@ -34,6 +36,8 @@ final class PreviewTerminalCommandService implements TerminalCommandService {
           state: TerminalCommandState.current,
           sourcePath: current.sourcePath,
           targetPath: current.targetPath,
+          sourceBuild: current.sourceBuild,
+          installedBuild: current.sourceBuild,
         );
       case TerminalCommandOperation.repair:
         if (!current.canRepair) throw _failed();
@@ -41,6 +45,8 @@ final class PreviewTerminalCommandService implements TerminalCommandService {
           state: TerminalCommandState.current,
           sourcePath: current.sourcePath,
           targetPath: current.targetPath,
+          sourceBuild: current.sourceBuild,
+          installedBuild: current.sourceBuild,
         );
       case TerminalCommandOperation.remove:
         if (!current.canRemove) throw _failed();
@@ -48,6 +54,7 @@ final class PreviewTerminalCommandService implements TerminalCommandService {
           state: TerminalCommandState.notInstalled,
           sourcePath: current.sourcePath,
           targetPath: current.targetPath,
+          sourceBuild: current.sourceBuild,
         );
     }
     return _status;

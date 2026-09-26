@@ -129,8 +129,10 @@ final class PreviewControlApi implements ControlApi {
     ControlProblem? upstreamModelFailure,
     bool seedCaptures = true,
     bool seedRuntimeUsers = true,
+    String productBuild = 'preview',
   }) : _dashboardCaptureLimit = dashboardCaptureLimit,
-       _upstreamModelFailure = upstreamModelFailure {
+       _upstreamModelFailure = upstreamModelFailure,
+       _productBuild = productBuild {
     if (dashboardCaptureLimit < 1 || dashboardCaptureLimit > 199) {
       throw ArgumentError.value(dashboardCaptureLimit, 'dashboardCaptureLimit');
     }
@@ -268,6 +270,8 @@ final class PreviewControlApi implements ControlApi {
       _manualVersions.clear();
     }
   }
+
+  final String _productBuild;
 
   final int _dashboardCaptureLimit;
   final ControlProblem? _upstreamModelFailure;
@@ -835,7 +839,7 @@ final class PreviewControlApi implements ControlApi {
     return DashboardData(
       status: RuntimeStatus(
         ready: true,
-        productBuild: 'preview',
+        productBuild: _productBuild,
         state: 'initialized',
         host: 'desktop',
         schemaRevision: 1,

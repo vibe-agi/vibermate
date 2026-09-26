@@ -203,6 +203,9 @@ the recovery key rotates after use.
   uninspected, and direct traffic can and cannot prove.
 - Transform JavaScript has no network, file, clock, or random access. A failure
   stops the request instead of silently bypassing the rule.
+- Settings shows the App, Runtime, and terminal-command builds and checks the
+  official GitHub Release only when requested. It provides Homebrew or manual
+  upgrade guidance; it does not download or install updates.
 - This is an early `0.x` release. A hardened public-Internet deployment,
   automatic updates, plugins, and arbitrary-client compatibility are not yet
   claimed.

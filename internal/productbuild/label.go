@@ -10,7 +10,12 @@ import (
 
 const development = "development"
 
+var releaseVersion string
+
 func Label() string {
+	if Valid(releaseVersion) {
+		return releaseVersion
+	}
 	information, ok := debug.ReadBuildInfo()
 	if !ok {
 		return development

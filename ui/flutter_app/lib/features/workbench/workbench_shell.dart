@@ -131,6 +131,27 @@ final class WorkbenchShell extends StatelessWidget {
     };
     return Column(
       children: [
+        if (controller.runtimeBuildMismatch || controller.terminalBuildMismatch)
+          InlineNotice(
+            key: const Key('product-build-mismatch'),
+            message: copy.format('updates.mismatch', {
+              'details': [
+                copy.format('updates.app_build', {
+                  'build': controller.appProductBuild,
+                }),
+                if (controller.runtimeBuildMismatch)
+                  copy.format('updates.runtime_build', {
+                    'build': controller.runtimeReleaseBuild!,
+                  }),
+                if (controller.terminalBuildMismatch)
+                  copy.format('updates.terminal_build', {
+                    'build': controller.terminalCommand!.installedBuild!,
+                  }),
+              ].join(' · '),
+            }),
+            actionLabel: copy('updates.review'),
+            onAction: controller.openUpdateSettings,
+          ),
         if (controller.terminalManagement &&
             controller.section != WorkbenchSection.settings) ...[
           if (controller.terminalCommandNotice case final notice?)

@@ -178,6 +178,8 @@ vibermate run --server https://your-server.example:9666 -- claude
 - 服务商凭据不会进入策略快照和证据，但主动写进提示词的文字仍然属于内容。
 - 变换 JavaScript 无法访问网络、文件、时钟或随机源；执行失败会停止请求，
   不会静默绕过规则。
+- 设置页会显示 App、Runtime 与终端命令版本，并仅在用户主动点击时查询官方
+  GitHub Release；它会给出 Homebrew 或手动升级指引，但不会下载或安装更新。
 - 当前仍是早期 `0.x` 版本，暂不承诺公网加固部署、自动更新、插件和任意客户端
   兼容。
 

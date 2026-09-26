@@ -16,11 +16,13 @@ const (
 )
 
 type terminalCommandView struct {
-	Schema     string               `json:"schema"`
-	State      cliinstall.LinkState `json:"state"`
-	SourcePath string               `json:"sourcePath"`
-	TargetPath string               `json:"targetPath"`
-	Detail     string               `json:"detail,omitempty"`
+	Schema         string               `json:"schema"`
+	State          cliinstall.LinkState `json:"state"`
+	SourcePath     string               `json:"sourcePath"`
+	TargetPath     string               `json:"targetPath"`
+	SourceBuild    string               `json:"sourceBuild"`
+	InstalledBuild string               `json:"installedBuild,omitempty"`
+	Detail         string               `json:"detail,omitempty"`
 }
 
 func executeTerminalCommand(arguments []string, stdout io.Writer) (int, string) {
@@ -62,11 +64,15 @@ func executeTerminalCommand(arguments []string, stdout io.Writer) (int, string) 
 	}
 	spec := command.Spec()
 	view := terminalCommandView{
-		Schema:     terminalCommandSchema,
-		State:      observation.State,
-		SourcePath: spec.SourcePath,
-		TargetPath: spec.TargetPath,
-		Detail:     observation.Detail,
+		Schema:      terminalCommandSchema,
+		State:       observation.State,
+		SourcePath:  spec.SourcePath,
+		TargetPath:  spec.TargetPath,
+		SourceBuild: spec.Version,
+		Detail:      observation.Detail,
+	}
+	if observation.Receipt != nil {
+		view.InstalledBuild = observation.Receipt.Version
 	}
 	if err := json.NewEncoder(stdout).Encode(view); err != nil {
 		return 1, keyTerminalCommandFailed

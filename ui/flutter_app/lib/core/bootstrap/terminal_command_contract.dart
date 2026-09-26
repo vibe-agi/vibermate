@@ -55,6 +55,8 @@ final class TerminalCommandStatus {
     required this.state,
     required this.sourcePath,
     required this.targetPath,
+    this.sourceBuild = 'development',
+    this.installedBuild,
     this.detail,
   });
 
@@ -72,8 +74,14 @@ final class TerminalCommandStatus {
       }
       payload[entry.key as String] = entry.value;
     }
-    const required = {'schema', 'state', 'sourcePath', 'targetPath'};
-    const allowed = {...required, 'detail'};
+    const required = {
+      'schema',
+      'state',
+      'sourcePath',
+      'targetPath',
+      'sourceBuild',
+    };
+    const allowed = {...required, 'installedBuild', 'detail'};
     if (!payload.keys.toSet().containsAll(required) ||
         payload.keys.any((key) => !allowed.contains(key)) ||
         payload['schema'] != 'vibermate-terminal-command/v1') {
@@ -83,6 +91,8 @@ final class TerminalCommandStatus {
     final sourcePath = payload['sourcePath'];
     final targetPath = payload['targetPath'];
     final detail = payload['detail'];
+    final sourceBuild = payload['sourceBuild'];
+    final installedBuild = payload['installedBuild'];
     if (state == null ||
         sourcePath is! String ||
         targetPath is! String ||
@@ -92,6 +102,10 @@ final class TerminalCommandStatus {
         _basename(sourcePath) != 'vibermate' ||
         _basename(targetPath) != 'vibermate' ||
         (expectedSourcePath != null && sourcePath != expectedSourcePath) ||
+        sourceBuild is! String ||
+        !_validBuild(sourceBuild) ||
+        (installedBuild != null &&
+            (installedBuild is! String || !_validBuild(installedBuild))) ||
         (detail != null && !_validDetail(detail))) {
       throw const TerminalCommandException(TerminalCommandFailure.contract);
     }
@@ -99,6 +113,8 @@ final class TerminalCommandStatus {
       state: state,
       sourcePath: sourcePath,
       targetPath: targetPath,
+      sourceBuild: sourceBuild,
+      installedBuild: installedBuild as String?,
       detail: detail as String?,
     );
   }
@@ -106,6 +122,8 @@ final class TerminalCommandStatus {
   final TerminalCommandState state;
   final String sourcePath;
   final String targetPath;
+  final String sourceBuild;
+  final String? installedBuild;
   final String? detail;
 
   bool get canInstall => state == TerminalCommandState.notInstalled;
@@ -145,5 +163,11 @@ bool _validDetail(Object value) =>
     value.length <= 4096 &&
     value.trim() == value &&
     !value.contains(RegExp(r'[\x00\r\n]'));
+
+bool _validBuild(String value) =>
+    value.isNotEmpty &&
+    value.length <= 128 &&
+    value.trim() == value &&
+    !value.contains(RegExp(r'[\x00-\x1f\x7f]'));
 
 String _basename(String path) => path.substring(path.lastIndexOf('/') + 1);
