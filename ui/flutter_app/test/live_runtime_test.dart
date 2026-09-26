@@ -882,37 +882,30 @@ String _protocolPath(String protocol) => switch (protocol) {
 
 MessageTransformTestSample _localIdentitySample(
   String protocol,
-) => MessageTransformTestSample(
-  request: MessageTransformTestRequest(
-    method: 'POST',
-    path: _protocolPath(protocol),
-    headers: const {
-      'content-type': ['application/json'],
-    },
-    body:
-        '{"home":"/Users/jack","workspace":"/Users/jack/Code/vibermate","user":"jack"}',
-  ),
-  response: const MessageTransformTestResponse(
-    statusCode: 200,
-    streaming: false,
-    headers: {
-      'content-type': ['application/json'],
-    },
-    body:
-        '{"home":"/Users/guest","workspace":"/workspace/project","user":"vibermate-user"}',
-  ),
-  runtime: MessageTransformTestRuntime(
-    userName: 'jack',
-    homeDirectory: '/Users/jack',
-    operatingSystem: 'darwin',
-    operatingSystemVersion: '26.0',
-    architecture: 'arm64',
-    timeZone: 'Asia/Singapore',
-    workspaceRoot: '/Users/jack/Code/vibermate',
-    workspaceLabel: 'vibermate',
-    turnStartedAt: DateTime.utc(2026, 9, 1, 12, 34, 56),
-  ),
-);
+) {
+  final sample = MessageTransformTestSample.example(
+    protocol,
+    userMessage:
+        'home /Users/jack; workspace /Users/jack/Code/vibermate; user jack',
+    assistantMessage:
+        'home /Users/guest; workspace /workspace/project; user vibermate-user',
+  );
+  return MessageTransformTestSample(
+    request: sample.request,
+    response: sample.response,
+    runtime: MessageTransformTestRuntime(
+      userName: 'jack',
+      homeDirectory: '/Users/jack',
+      operatingSystem: 'darwin',
+      operatingSystemVersion: '26.0',
+      architecture: 'arm64',
+      timeZone: 'Asia/Singapore',
+      workspaceRoot: '/Users/jack/Code/vibermate',
+      workspaceLabel: 'vibermate',
+      turnStartedAt: DateTime.utc(2026, 9, 1, 12, 34, 56),
+    ),
+  );
+}
 
 MessageTransformTestSample _secretSample(String protocol) =>
     MessageTransformTestSample(
