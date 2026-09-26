@@ -52,32 +52,33 @@ HTTPS 分别用隔离浏览器和合成凭据完成所有者登录、手动代�
 把 `127.0.0.1:0` 作为代理地址。默认构建及 Compose 冒烟已通过初始化、登录、CA
 交付和重启恢复；一次性诊断数据卷与测试镜像已删除。
 
-发布版 v0.1.13 的精确 schema 摘要回归现在同时放入一条 Conversation/Exchange 和
-一条 EgressAttempt：升级后记录、投影 ID 及两条审计序号均保留，新写入继续递增。
-定向测试与 race 通过；从旧发布可执行文件创建、再由新实进程启动的完整目录验收
-仍需单独完成。
+发布版 v0.1.13 的精确 schema 摘要回归同时放入一条 Conversation/Exchange 和一条
+EgressAttempt：升级后记录、投影 ID 及两条审计序号均保留，新写入继续递增。公开
+v0.1.13 Linux 实进程另行创建 Owner、Endpoint、Account 和已发布 Environment，随后
+v0.1.14 从同一数据目录启动，全部读回且新写入成功。
 
 本机打包 App 独占 GUI 验收没有作为成功计入：安装版退出后，测试用空的
 `CFFIXED_USER_HOME` 隔离 HOME，会触发 `secret_store_unavailable`。同一包的 sidecar
 在正常环境通过 Flutter live Runtime 测试，添加该变量后稳定复现钥匙串失败；这是
 测试隔离方式与本机 Keychain 的兼容问题，尚不能推断正式签名包失效。没有删除或
-更改用户钥匙串条目。精确发布包仍须在独立登录账号或干净 CI 上、以正常 HOME 完成
-GUI 启动、签名、公证、Gatekeeper 和安装验证。
+更改用户钥匙串条目。最终精确发布包已在干净 runner 的正常 HOME 中完成 Developer ID
+签名、Apple 公证/stapling、Gatekeeper、只读 DMG 安装和两次 App 启动。
 
 原始 HTTP 页的脱敏诊断现在先显示可检查的 JSON，再由用户明确复制；取消不会写入
 剪贴板。诊断包移除了客户端路径及 Content-Type/Encoding 等可由请求控制的字段，
 保留阶段、修订、时间、状态和证据边界；390px 的原始 HTTP 与 Thinking 标题栏也不再
-横向溢出。整体诊断包（版本、连接/DNS/TLS/OAuth 等多类故障统一预览）仍未验收完成。
+横向溢出。版本、连接/DNS/TLS/OAuth 等故障的可行动提示、技术详情和脱敏预览已通过
+结构测试与浏览器典型路径验收。
 
 2026-09-26，v0.1.14 候选又完成本机与远端 Web 的 Owner API + Playwright 合成试跑、
 长正文和延迟链路测量，以及公开 v0.1.13 Linux 实进程到当前二进制的同目录升级。
 账号、Environment 和后续写入均保留；测试主机上的临时进程、凭据和数据已清理。
 完整口径与数值见[发布验收记录](../evidence/2026-09-26-phase-one-release-acceptance.md)。
 
-第一阶段尚未完成的发布门槛只剩默认分支上的受保护签名/公证/安装流程，以及
-GitHub Release、Linux 资产、Homebrew 与官网指向同一精确标签。当前机器仍有另一套
-ViberMate Desktop 正在运行，因此没有把第二个 GUI 被独占锁拒绝误记成通过；最终
-安装版启动由干净的受保护 runner 验收。
+第一阶段发布门槛已完成：`main` 合并提交 `b0525c4` 通过受保护签名、公证与安装流程，
+GitHub v0.1.14 Release、Linux 双架构资产与校验和、Homebrew cask 和官网均指向同一
+标签。本机另一套 ViberMate Desktop 未被关闭或修改；最终安装版启动由干净 runner
+完成。精确流程与外部交付链接见[发布验收记录](../evidence/2026-09-26-phase-one-release-acceptance.md)。
 
 ## 后续阶段
 

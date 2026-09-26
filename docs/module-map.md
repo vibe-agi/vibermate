@@ -88,7 +88,7 @@ live provider or editor behavior.
 
 Hardened public-Internet operation, automatic account failover, plugins,
 QualityRun, Language Bridge, arbitrary-client compatibility, and automatic
-updates remain unclaimed. ACP observation is integrated and editor-accepted in
-the current source, but remains branch-only until a release includes it. See the
-[capability and support matrix](capability-support.md) for the release/source
-distinction.
+updates remain unclaimed. ACP observation is an experimental v0.1.14 capability
+with its own protocol boundary; it does not inherit HTTP routing or Account
+policy. See the [capability and support matrix](capability-support.md) for the
+release/source distinction.
