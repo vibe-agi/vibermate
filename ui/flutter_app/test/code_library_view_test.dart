@@ -1093,6 +1093,7 @@ void main() {
                 observed = sample;
                 return AccountSelectorTestResult(
                   accountId: sample.accounts.last.id,
+                  skippedAccountIds: [sample.accounts.first.id],
                 );
               },
             ),
@@ -1133,6 +1134,14 @@ void main() {
       expect(observed?.runtime.workspaceLabel, 'blue-workspace');
       expect(observed?.request.clientProtocol, 'anthropic_messages');
       expect(find.text('Selected account.blue'), findsOneWidget);
+      expect(
+        find.text('Not selected by this rule: account.red'),
+        findsOneWidget,
+      );
+      expect(
+        find.textContaining('never silently switch accounts'),
+        findsOneWidget,
+      );
       await tester.enterText(
         find.byKey(const Key('account-selector-sample-accounts')),
         'account.red',

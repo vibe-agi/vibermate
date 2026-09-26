@@ -1479,6 +1479,9 @@ final class AppCopy {
     'account_selector.sample.protocol': 'Client protocol',
     'account_selector.test.run': 'Run sample Turn',
     'account_selector.test.selected': 'Selected {account}',
+    'account_selector.test.skipped': 'Not selected by this rule: {accounts}',
+    'account_selector.test.switch_blocked':
+        'This Turn stays bound to the selected account. Failures and quota snapshots never silently switch accounts or replay the request.',
     'account_selector.test.failed':
         'The sample did not select an account. Fix the JavaScript or sample values, then run it again.',
     'account_selector.test.unavailable':
@@ -3622,6 +3625,9 @@ final class AppCopy {
     'account_selector.sample.protocol': '客户端协议',
     'account_selector.test.run': '运行测试样例',
     'account_selector.test.selected': '已选择 {account}',
+    'account_selector.test.skipped': '本规则未选择：{accounts}',
+    'account_selector.test.switch_blocked':
+        '本轮固定使用已选账号；请求失败或额度快照不会静默换号，也不会跨账号重放。',
     'account_selector.test.failed': '样例未能选出账号。请修正 JavaScript 或样例值，然后重新运行。',
     'account_selector.test.unavailable': 'Runtime 无法运行该样例。请检查 Runtime 状态后重试。',
     'environment.model.label': '模型映射',

@@ -1134,8 +1134,8 @@ func TestInterruptedResponseReportsConsistentOutcomeAndReason(t *testing.T) {
 		{name: "transformed original stream", stream: true, transform: true, readErr: context.Canceled, wantOutcome: AttemptCanceled, wantReason: ReasonExchangeCanceled},
 		{name: "managed complete", upstream: true, readErr: context.Canceled, wantOutcome: AttemptCanceled, wantReason: ReasonExchangeCanceled},
 		{name: "managed stream", upstream: true, stream: true, readErr: context.Canceled, wantOutcome: AttemptCanceled, wantReason: ReasonExchangeCanceled},
-		{name: "deadline", readErr: context.DeadlineExceeded, wantOutcome: AttemptCanceled, wantReason: ReasonExchangeCanceled},
-		{name: "broken response is not cancellation", readErr: io.ErrUnexpectedEOF, wantOutcome: AttemptFailed, wantReason: ReasonProviderResponseInvalid},
+		{name: "managed deadline", upstream: true, readErr: context.DeadlineExceeded, wantOutcome: AttemptCanceled, wantReason: ReasonExchangeCanceled},
+		{name: "managed broken response is not cancellation", upstream: true, readErr: io.ErrUnexpectedEOF, wantOutcome: AttemptFailed, wantReason: ReasonProviderResponseInvalid},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			options := testPlanOptions{
@@ -1143,13 +1143,14 @@ func TestInterruptedResponseReportsConsistentOutcomeAndReason(t *testing.T) {
 				modelMode:   environment.ModelModePassthrough,
 			}
 			account := testAccount{id: "account.primary", revision: 3, epoch: 7}
+			accounts := []testAccount{account, {id: "account.backup", revision: 4, epoch: 8}}
 			if test.upstream {
 				options.destination = environment.DestinationKindUpstream
 				options.providerOrigin = "https://provider.example/v1"
 				options.backend = protocolspec.DialectOpenAIChat
 				options.modelMode = environment.ModelModeMap
 				options.mappedModel = "gpt-provider"
-				options.accounts = []testAccount{account}
+				options.accounts = accounts
 				options.preferred = account.id
 			}
 			if test.transform {
@@ -1167,7 +1168,8 @@ func TestInterruptedResponseReportsConsistentOutcomeAndReason(t *testing.T) {
 				Body:       io.NopCloser(iotest.ErrReader(test.readErr)),
 			}}}}
 			observer := &attemptObserverDouble{}
-			pipeline := newTestPipeline(t, newAccountAuthority(t, account), provider, approvedDecisions(), observer)
+			authority := newAccountAuthority(t, accounts...)
+			pipeline := newTestPipeline(t, authority, provider, approvedDecisions(), observer)
 			defer shutdownPipeline(t, pipeline)
 			request := mustClientRequestWithOptions(
 				t, "exchange-interrupted", mustEnvironmentRequestPlan(t, options), body,
@@ -1181,6 +1183,12 @@ func TestInterruptedResponseReportsConsistentOutcomeAndReason(t *testing.T) {
 			if len(observations) != 1 || observations[0].Outcome != test.wantOutcome ||
 				observations[0].ReasonCode != test.wantReason || observations[0].ProviderStatus != http.StatusOK {
 				t.Fatalf("persisted outcome/reason disagrees with the result: %+v", observations)
+			}
+			if test.upstream {
+				leases := authority.snapshot()
+				if len(leases) != 1 || leases[0].AccountID() != account.id || provider.callCount() != 1 {
+					t.Fatalf("interrupted request crossed frozen account: leases=%+v calls=%d", leases, provider.callCount())
+				}
 			}
 		})
 	}
@@ -1979,9 +1987,11 @@ selection.accountId = runtime.login.username === "alice"
 	}
 }
 
-func TestManagedAuthenticationRejectionNeverSelectsAnotherAccount(t *testing.T) {
+func TestManagedProviderRejectionNeverSelectsAnotherAccount(t *testing.T) {
 	t.Parallel()
-	for _, status := range []int{http.StatusUnauthorized, http.StatusForbidden} {
+	// A 429 is not proof that the provider did no work. With the resend budget
+	// exhausted it has the same frozen-account boundary as 401 and 403.
+	for _, status := range []int{http.StatusUnauthorized, http.StatusForbidden, http.StatusTooManyRequests} {
 		status := status
 		t.Run(http.StatusText(status), func(t *testing.T) {
 			t.Parallel()

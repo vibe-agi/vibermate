@@ -563,7 +563,13 @@ void main() {
           request.response.write(jsonEncode(_accountSelectorRevisionJson(1)));
         } else if (request.method == 'POST' &&
             request.uri.path == '/api/v1/account-selectors/actions/test') {
-          request.response.write(jsonEncode({'accountId': 'account.work'}));
+          request.response.write(
+            jsonEncode({
+              'accountId': 'account.work',
+              'skippedAccountIds': <String>[],
+              'automaticSwitchReason': 'turn_account_frozen',
+            }),
+          );
         } else {
           request.response.statusCode = HttpStatus.notFound;
         }

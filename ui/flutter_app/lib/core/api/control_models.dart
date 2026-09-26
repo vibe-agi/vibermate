@@ -3593,17 +3593,42 @@ final class AccountSelectorTestSample {
 }
 
 final class AccountSelectorTestResult {
-  const AccountSelectorTestResult({required this.accountId});
+  const AccountSelectorTestResult({
+    required this.accountId,
+    this.skippedAccountIds = const [],
+    this.automaticSwitchReason = 'turn_account_frozen',
+  });
 
   factory AccountSelectorTestResult.fromJson(Object? json, String path) {
     final value = requireObject(json, path);
-    requireFields(value, path, required: const {'accountId'});
+    requireFields(
+      value,
+      path,
+      required: const {
+        'accountId',
+        'skippedAccountIds',
+        'automaticSwitchReason',
+      },
+    );
+    final accountId = _requireResourceId(value, 'accountId', path);
+    final skipped = requireStringList(value, 'skippedAccountIds', path);
+    if (skipped.length > 1023 ||
+        skipped.toSet().length != skipped.length ||
+        skipped.contains(accountId) ||
+        skipped.any((id) => !_resourceIdPattern.hasMatch(id)) ||
+        requireString(value, 'automaticSwitchReason', path) !=
+            'turn_account_frozen') {
+      throw ControlContractException('$path selection trace is invalid');
+    }
     return AccountSelectorTestResult(
-      accountId: _requireResourceId(value, 'accountId', path),
+      accountId: accountId,
+      skippedAccountIds: List.unmodifiable(skipped),
     );
   }
 
   final String accountId;
+  final List<String> skippedAccountIds;
+  final String automaticSwitchReason;
 }
 
 final class MessageTransformTestRequest {

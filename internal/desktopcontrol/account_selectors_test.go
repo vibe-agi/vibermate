@@ -67,8 +67,26 @@ selection.accountId = accounts.find(account => account.displayName === "Pro").id
 	if err != nil {
 		t.Fatalf("runAccountSelectorSample() error = %v", err)
 	}
-	if result.AccountID != "account.pro" {
-		t.Fatalf("AccountID = %q, want account.pro", result.AccountID)
+	if result.AccountID != "account.pro" ||
+		len(result.SkippedAccountIDs) != 1 || result.SkippedAccountIDs[0] != "account.basic" ||
+		result.AutomaticSwitchReason != "turn_account_frozen" {
+		t.Fatalf("selection result = %+v", result)
+	}
+}
+
+func TestAccountSelectorSampleRejectsCallerSuppliedQuotaHints(t *testing.T) {
+	t.Parallel()
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/account-selectors/actions/test", strings.NewReader(`{
+  "policy":{"javaScript":"selection.accountId = accounts[0].id;"},
+  "accounts":[{"id":"account.work","displayName":"Work","quota":{"state":"fresh"}}],
+  "request":{"method":"POST","path":"/v1/responses","headers":{},"body":"{}","clientProtocol":"openai_responses","requestedModel":"model"},
+  "runtime":{"userName":"","loginUsername":"","homeDirectory":"","operatingSystem":"","operatingSystemVersion":"","architecture":"","timeZone":"","workspaceRoot":"","workspaceLabel":"","turnStartedAt":"0001-01-01T00:00:00Z"}
+}`))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	(&Handler{}).testAccountSelector(response, request)
+	if response.Code != http.StatusUnprocessableEntity || !strings.Contains(response.Body.String(), "quota") {
+		t.Fatalf("untrusted quota hint response = %d %s", response.Code, response.Body.String())
 	}
 }
 
@@ -123,7 +141,7 @@ selection.accountId = accountId;`
 	if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil {
 		t.Fatal(err)
 	}
-	if result.AccountID != "account.team-a" {
-		t.Fatalf("AccountID = %q, want account.team-a", result.AccountID)
+	if result.AccountID != "account.team-a" || result.AutomaticSwitchReason != "turn_account_frozen" {
+		t.Fatalf("selection result = %+v", result)
 	}
 }
