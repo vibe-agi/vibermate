@@ -1,6 +1,7 @@
 package runlauncher
 
 import (
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -396,6 +397,7 @@ func TestBuildEnvironmentIsolatesFixedCodexInputs(t *testing.T) {
 		"all_proxy=socks5://ambient.invalid",
 		"NO_PROXY=.openai.com,localhost",
 		"SSL_CERT_FILE=/tmp/ambient-ssl.pem",
+		"CODEX_CA_CERTIFICATE=/tmp/ambient-codex.pem",
 		"REQUESTS_CA_BUNDLE=/tmp/ambient-requests.pem",
 		"CURL_CA_BUNDLE=/tmp/ambient-curl.pem",
 		"NODE_EXTRA_CA_CERTS=/tmp/ambient-node.pem",
@@ -406,21 +408,30 @@ func TestBuildEnvironmentIsolatesFixedCodexInputs(t *testing.T) {
 		"CODEX_API_KEY=ambient-codex-secret",
 		"OPENAI_ORGANIZATION=ambient-org",
 		"OPENAI_PROJECT=ambient-project",
+		"VST_PLANE_TOKEN=private-plane-token",
 	}
 	environment, err := buildEnvironment(base, grant)
 	if err != nil {
 		t.Fatal(err)
 	}
 	values := environmentMap(environment)
-	if values["SSL_CERT_FILE"] != "/tmp/root.pem" ||
-		values["CODEX_API_KEY"] != "vibermate-local-proxy" ||
+	if values["CODEX_API_KEY"] != "vibermate-local-proxy" ||
+		values["VST_PLANE_TOKEN"] != "private-plane-token" ||
 		values["UNRELATED"] != "value" ||
 		values["NO_PROXY"] != "localhost" {
 		t.Fatalf("fixed Codex environment = %+v", values)
 	}
+	if runtime.GOOS == "darwin" {
+		if _, exists := values["CODEX_CA_CERTIFICATE"]; exists {
+			t.Fatalf("local macOS Codex replaced native trust: %+v", values)
+		}
+	} else if values["CODEX_CA_CERTIFICATE"] != "/tmp/root.pem" {
+		t.Fatalf("fixed Codex CA = %+v", values)
+	}
 	for _, forbidden := range []string{
 		"ALL_PROXY",
 		"all_proxy",
+		"SSL_CERT_FILE",
 		"REQUESTS_CA_BUNDLE",
 		"CURL_CA_BUNDLE",
 		"NODE_EXTRA_CA_CERTS",
