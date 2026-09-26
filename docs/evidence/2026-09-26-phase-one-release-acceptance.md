@@ -50,7 +50,7 @@ Endpoint write succeeded at revision 1. The exact v0.1.13 schema-fixture tests
 separately retain a Conversation/Exchange, EgressAttempt, and monotonic audit
 sequence. The isolated upgrade directory was removed afterward.
 
-## macOS candidate boundary
+## Packaged release
 
 The pinned Flutter SDK passed analysis and all 630 Flutter tests (16 explicitly
 opt-in live tests skipped), followed by the native Xcode test target. The v0.1.14
@@ -60,8 +60,18 @@ was already active; it was not stopped or modified. Direct `flutter_tester`
 sidecar runs reproduced the already documented Keychain denial and therefore do
 not substitute for installed-App acceptance.
 
-The final release still requires the protected default-branch workflow to run
-the exact candidate through Developer ID signing, Apple notarization and
-stapling, Gatekeeper, and isolated installed-App launch. The GitHub Release,
-Linux archives/checksums, Homebrew cask, and website must all refer to that exact
-tag before this acceptance is complete.
+The exact merge candidate `b0525c4a7dde2bf1aef181176e874de9ba03430b`
+completed Developer ID signing, Apple notarization and stapling, Gatekeeper,
+read-only DMG installation, and two isolated installed-App launches in the
+[protected release run](https://github.com/vibe-agi/vibermate/actions/runs/36216643296).
+The closed installation report also verified the bundle inventory, exact tree
+copy, navigation persistence, graceful exit, and cleanup of isolated state.
+
+The [v0.1.14 Release](https://github.com/vibe-agi/vibermate/releases/tag/v0.1.14)
+publishes that DMG, its SPDX SBOM and checksums. The
+[Linux release run](https://github.com/vibe-agi/vibermate/actions/runs/36217553631)
+built and verified x86-64 and ARM64 archives from the same tag. Homebrew
+[PR #7](https://github.com/vibe-agi/homebrew-tap/pull/7) and website
+[PR #2](https://github.com/vibe-agi/vibe-agi.github.io/pull/2) passed their
+repository gates and merged. The public cask SHA-256 equals the notarized DMG
+digest.
