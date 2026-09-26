@@ -62,6 +62,13 @@ type inputContentWire struct {
 	Refusal string `json:"refusal,omitempty"`
 }
 
+type inputImageWire struct {
+	Type     string `json:"type"`
+	ImageURL string `json:"image_url,omitempty"`
+	FileID   string `json:"file_id,omitempty"`
+	Detail   string `json:"detail,omitempty"`
+}
+
 type functionCallWire struct {
 	Type             string          `json:"type"`
 	ID               string          `json:"id"`
@@ -1281,6 +1288,53 @@ func decodeMessageContent(
 				)
 			}
 			block, err = protocolcore.NewRefusalBlock(part.Refusal)
+		case "input_image":
+			if !compatible || role != protocolcore.RoleUser {
+				return nil, invalidClient(
+					fmt.Sprintf("%s[%d].type", path, index),
+					errors.New("Responses input images require a same-dialect user message"),
+				)
+			}
+			var image inputImageWire
+			if err := decodeClientWire(rawPart, &image, true); err != nil {
+				return nil, invalidClient(
+					fmt.Sprintf("%s[%d]", path, index),
+					err,
+				)
+			}
+			if (image.ImageURL == "") == (image.FileID == "") {
+				return nil, invalidClient(
+					fmt.Sprintf("%s[%d]", path, index),
+					errors.New("Responses input image requires exactly one image source"),
+				)
+			}
+			if image.ImageURL != "" {
+				err = validateBoundedString(
+					image.ImageURL,
+					protocolcore.MaxProviderExtensionBytes,
+					false,
+				)
+			} else {
+				err = validateBoundedString(image.FileID, 512, false)
+			}
+			if err == nil {
+				switch image.Detail {
+				case "", "auto", "low", "high", "original":
+				default:
+					err = errors.New("Responses input image detail is unsupported")
+				}
+			}
+			if err != nil {
+				return nil, invalidClient(
+					fmt.Sprintf("%s[%d]", path, index),
+					err,
+				)
+			}
+			block, err = newResponsesExtensionBlock(
+				protocolcore.ProviderExtensionInputImage,
+				fmt.Sprintf("%s[%d]", path, index),
+				rawPart,
+			)
 		default:
 			return nil, invalidClient(
 				fmt.Sprintf("%s[%d].type", path, index),

@@ -4329,6 +4329,7 @@ String _providerEvidenceCopyKey(String? kind) {
     'thinking' => 'exchange.content.reasoning_signature',
     'reasoning_encrypted_content' => 'exchange.content.reasoning_encrypted',
     'redacted_thinking' => 'exchange.content.reasoning_redacted',
+    'input_image' => 'exchange.content.input_image',
     'agent_message_encrypted_content' => 'exchange.content.agent_encrypted',
     'agent_message_image' => 'exchange.content.agent_image',
     'agent_message_file' => 'exchange.content.agent_file',

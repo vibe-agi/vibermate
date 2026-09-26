@@ -90,6 +90,41 @@ func TestResponsesPassthroughForwardsOnlyPortableConversationHistory(t *testing.
 	}
 }
 
+func TestResponsesPassthroughPreservesUserInputImage(t *testing.T) {
+	t.Parallel()
+
+	path, err := NewResponsesPassthroughProtocolPath(openairesponses.DefaultOptions())
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := []byte(`{
+		"model":"gpt-5.6-sol",
+		"input":[{
+			"type":"message",
+			"role":"user",
+			"content":[
+				{"type":"input_text","text":"Inspect this image."},
+				{"type":"input_image","image_url":"data:image/png;base64,AA==","detail":"original"}
+			]
+		}],
+		"stream":true
+	}`)
+	request, _, err := path.Client().DecodeRequest(source)
+	if err != nil {
+		t.Fatalf("DecodeRequest() error = %v", err)
+	}
+	provider, _, err := path.EncodeProviderRequest(request, source, make(http.Header))
+	if err != nil {
+		t.Fatalf("EncodeProviderRequest() error = %v", err)
+	}
+	if !bytes.Contains(
+		provider.Body(),
+		[]byte(`"type":"input_image","image_url":"data:image/png;base64,AA==","detail":"original"`),
+	) {
+		t.Fatalf("provider request lost input image: %s", provider.Body())
+	}
+}
+
 func TestResponsesPassthroughReleasesOnlyPortableConversationHistory(t *testing.T) {
 	t.Parallel()
 

@@ -876,6 +876,7 @@ func providerOpaqueEvidence(extension protocolcore.ProviderExtension) []byte {
 				opaque.WriteString(value.Signature)
 			}
 		case protocolcore.ProviderExtensionReasoningEncryptedContent,
+			protocolcore.ProviderExtensionInputImage,
 			protocolcore.ProviderExtensionAgentMessageEncryptedContent,
 			protocolcore.ProviderExtensionRedactedThinking,
 			protocolcore.ProviderExtensionAgentMessageImage,
