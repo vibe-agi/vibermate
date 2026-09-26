@@ -1,8 +1,7 @@
-# ACP editor setup (current source)
+# ACP editor setup
 
-ViberMate v0.1.13 does not contain this command; use matching App/Server and
-CLI bytes from the current source until a later release includes it. This is
-ACP observation, **not HTTP traffic
+ViberMate v0.1.14 includes this experimental command. Use matching App/Server
+and CLI builds. This is ACP observation, **not HTTP traffic
 capture or routing**: no account overwrite, model mapping, script, network exit,
 or tool policy from `vibermate run` is applied. The editor still owns login,
 permissions, tools, native history, and provider traffic.

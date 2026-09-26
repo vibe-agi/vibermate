@@ -82,10 +82,9 @@ current endpoint and Capture boundary.
 
 The repository proves coherent local Desktop and Runtime Server source
 compositions, Runtime User login, remote Capture relay, managed Codex OAuth,
-and the native Flutter workbench. The exact v0.1.13 macOS artifact separately
-passed Developer ID signing, notarization/stapling, Gatekeeper, and installed-App
-smoke in its protected release run. That release evidence does not transfer to
-later source commits and does not prove live provider or editor behavior.
+and the native Flutter workbench. Release evidence applies only to the exact
+tagged artifact; it does not transfer to later source commits and does not prove
+live provider or editor behavior.
 
 Hardened public-Internet operation, automatic account failover, plugins,
 QualityRun, Language Bridge, arbitrary-client compatibility, and automatic

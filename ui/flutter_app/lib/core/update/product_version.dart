@@ -1,4 +1,4 @@
-const productVersion = '0.1.13';
-const productBuildNumber = 14;
+const productVersion = '0.1.14';
+const productBuildNumber = 15;
 
 String get productVersionLabel => 'v$productVersion';
