@@ -46,6 +46,7 @@ var (
 	ErrAdapterVerification      = errors.New("client adapter verification failed")
 	ErrEnvironmentNotFound      = errors.New("selected Environment is not configured")
 	ErrEnvironmentUnavailable   = errors.New("selected Environment is unavailable")
+	ErrEnvironmentUnauthorized  = errors.New("selected Environment is not allowed for Runtime User")
 	ErrProjectionUnavailable    = errors.New("Environment projection is unavailable")
 	ErrWorkspaceUnavailable     = errors.New("workspace identity is unavailable")
 	ErrCaptureRunCreate         = errors.New("CaptureRun creation failed")
@@ -708,6 +709,9 @@ func (issuer *Issuer) IssueCaptureRun(
 		selectedEnvironment = environment.SystemTransparentID
 		assignmentSource = captureassignment.SourceSystemTransparent
 	}
+	if !environmentAuthorized(principal, selectedEnvironment) {
+		return CaptureRunGrant{}, ErrEnvironmentUnauthorized
+	}
 	// Reject a missing/disabled Environment or an unmatched client destination before creating
 	// a durable CaptureRun. This review is intentionally not authorization: the
 	// later AssignAndResolve call remains the sole linearization point and must
@@ -850,6 +854,14 @@ func (issuer *Issuer) IssueCaptureRun(
 		ManagedCredentialAuthorities: managedAuthorities,
 		LaunchEnvironment:            authorities.LaunchEnvironment(),
 	}, nil
+}
+
+func environmentAuthorized(
+	principal controlprincipal.Principal,
+	environmentID environment.EnvironmentID,
+) bool {
+	return principal.Kind() != controlprincipal.KindRuntimeUser ||
+		principal.AllowsEnvironment(environmentID.String())
 }
 
 func (issuer *Issuer) rootDelivery() (path string, inline string) {

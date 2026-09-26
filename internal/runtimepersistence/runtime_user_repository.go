@@ -3,6 +3,7 @@ package runtimepersistence
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -10,6 +11,14 @@ import (
 	"github.com/vibe-agi/vibermate/internal/runtimeuser"
 	"github.com/vibe-agi/vibermate/internal/workspaceidentity"
 )
+
+const runtimeUserProjection = `u.user_id, u.username, u.password_hash, u.state,
+       u.created_at_unix_ms, u.updated_at_unix_ms,
+       COALESCE(p.allowed_environment_ids_json, x'5b5d'),
+       COALESCE(p.daily_agent_api_call_warning, 0),
+       COALESCE(p.daily_token_warning, 0)
+  FROM runtime_users AS u
+  LEFT JOIN runtime_user_policies AS p ON p.user_id = u.user_id`
 
 type runtimeUserRepository struct {
 	database   *sql.DB
@@ -29,7 +38,7 @@ func (repository *runtimeUserRepository) CreateUser(
 	ctx context.Context,
 	record runtimeuser.UserRecord,
 ) error {
-	if record.Validate() != nil {
+	if record.Validate() != nil || record.User.Policy != (runtimeuser.Policy{}) {
 		return runtimeuser.ErrInvalidUser
 	}
 	operation, finish, err := repository.operations.begin(ctx)
@@ -72,10 +81,8 @@ func (repository *runtimeUserRepository) FindUserByUsername(
 	defer finish()
 	record, err := scanRuntimeUser(repository.database.QueryRowContext(
 		operation,
-		`SELECT user_id, username, password_hash, state,
-		        created_at_unix_ms, updated_at_unix_ms
-		   FROM runtime_users
-		  WHERE username = ?`,
+		`SELECT `+runtimeUserProjection+`
+		  WHERE u.username = ?`,
 		username,
 	))
 	if errors.Is(err, sql.ErrNoRows) {
@@ -101,10 +108,8 @@ func (repository *runtimeUserRepository) FindUserByID(
 	defer finish()
 	record, err := scanRuntimeUser(repository.database.QueryRowContext(
 		operation,
-		`SELECT user_id, username, password_hash, state,
-		        created_at_unix_ms, updated_at_unix_ms
-		   FROM runtime_users
-		  WHERE user_id = ?`,
+		`SELECT `+runtimeUserProjection+`
+		  WHERE u.user_id = ?`,
 		string(id),
 	))
 	if errors.Is(err, sql.ErrNoRows) {
@@ -126,10 +131,8 @@ func (repository *runtimeUserRepository) ListUsers(
 	defer finish()
 	rows, err := repository.database.QueryContext(
 		operation,
-		`SELECT user_id, username, password_hash, state,
-		        created_at_unix_ms, updated_at_unix_ms
-		   FROM runtime_users
-		  ORDER BY username ASC`,
+		`SELECT `+runtimeUserProjection+`
+		  ORDER BY u.username ASC`,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("list Runtime Users: %w", err)
@@ -199,10 +202,8 @@ func (repository *runtimeUserRepository) SetUserState(
 	}
 	record, err := scanRuntimeUser(transaction.QueryRowContext(
 		operation,
-		`SELECT user_id, username, password_hash, state,
-		        created_at_unix_ms, updated_at_unix_ms
-		   FROM runtime_users
-		  WHERE user_id = ?`,
+		`SELECT `+runtimeUserProjection+`
+		  WHERE u.user_id = ?`,
 		string(id),
 	))
 	if err != nil {
@@ -210,6 +211,65 @@ func (repository *runtimeUserRepository) SetUserState(
 	}
 	if err := transaction.Commit(); err != nil {
 		return runtimeuser.UserRecord{}, false, fmt.Errorf("commit Runtime User state update: %w", err)
+	}
+	return record, true, nil
+}
+
+func (repository *runtimeUserRepository) SetUserPolicy(
+	ctx context.Context,
+	id runtimeuser.UserID,
+	policy runtimeuser.Policy,
+) (runtimeuser.UserRecord, bool, error) {
+	if !id.Valid() || policy.Validate() != nil {
+		return runtimeuser.UserRecord{}, false, runtimeuser.ErrInvalidUser
+	}
+	encoded, err := json.Marshal(policy.EnvironmentIDs())
+	if err != nil {
+		return runtimeuser.UserRecord{}, false, runtimeuser.ErrInvalidUser
+	}
+	operation, finish, err := repository.operations.begin(ctx)
+	if err != nil {
+		return runtimeuser.UserRecord{}, false, err
+	}
+	defer finish()
+	transaction, err := repository.database.BeginTx(operation, nil)
+	if err != nil {
+		return runtimeuser.UserRecord{}, false, fmt.Errorf("begin Runtime User policy update: %w", err)
+	}
+	defer func() { _ = transaction.Rollback() }()
+	result, err := transaction.ExecContext(
+		operation,
+		`INSERT INTO runtime_user_policies(
+		     user_id, allowed_environment_ids_json,
+		     daily_agent_api_call_warning, daily_token_warning
+		 ) SELECT user_id, ?, ?, ? FROM runtime_users WHERE user_id = ?
+		 ON CONFLICT(user_id) DO UPDATE SET
+		     allowed_environment_ids_json = excluded.allowed_environment_ids_json,
+		     daily_agent_api_call_warning = excluded.daily_agent_api_call_warning,
+		     daily_token_warning = excluded.daily_token_warning`,
+		encoded, policy.DailyAgentAPICallWarning, policy.DailyTokenWarning, string(id),
+	)
+	if err != nil {
+		return runtimeuser.UserRecord{}, false, fmt.Errorf("store Runtime User policy: %w", err)
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return runtimeuser.UserRecord{}, false, fmt.Errorf("read Runtime User policy update: %w", err)
+	}
+	if affected == 0 {
+		return runtimeuser.UserRecord{}, false, nil
+	}
+	record, err := scanRuntimeUser(transaction.QueryRowContext(
+		operation,
+		`SELECT `+runtimeUserProjection+`
+		  WHERE u.user_id = ?`,
+		string(id),
+	))
+	if err != nil {
+		return runtimeuser.UserRecord{}, false, fmt.Errorf("read updated Runtime User policy: %w", err)
+	}
+	if err := transaction.Commit(); err != nil {
+		return runtimeuser.UserRecord{}, false, fmt.Errorf("commit Runtime User policy update: %w", err)
 	}
 	return record, true, nil
 }
@@ -267,10 +327,8 @@ func (repository *runtimeUserRepository) ReplacePassword(
 	}
 	record, err := scanRuntimeUser(transaction.QueryRowContext(
 		operation,
-		`SELECT user_id, username, password_hash, state,
-		        created_at_unix_ms, updated_at_unix_ms
-		   FROM runtime_users
-		  WHERE user_id = ?`,
+		`SELECT `+runtimeUserProjection+`
+		  WHERE u.user_id = ?`,
 		string(id),
 	))
 	if err != nil {
@@ -335,21 +393,27 @@ func (repository *runtimeUserRepository) FindSession(
 		revokedAt                                sql.NullInt64
 		username, passwordHash, state            string
 		userCreatedAt, userUpdatedAt             int64
+		policyJSON                               []byte
+		dailyCalls, dailyTokens                  int64
 	)
 	err = repository.database.QueryRowContext(
 		operation,
 		`SELECT s.session_id, s.user_id, s.token_digest, s.machine_id,
 		        s.device_name, s.created_at_unix_ms, s.expires_at_unix_ms,
 		        s.revoked_at_unix_ms, u.username, u.password_hash, u.state,
-		        u.created_at_unix_ms, u.updated_at_unix_ms
+		        u.created_at_unix_ms, u.updated_at_unix_ms,
+		        COALESCE(p.allowed_environment_ids_json, x'5b5d'),
+		        COALESCE(p.daily_agent_api_call_warning, 0),
+		        COALESCE(p.daily_token_warning, 0)
 		   FROM runtime_user_login_sessions AS s
 		   JOIN runtime_users AS u ON u.user_id = s.user_id
+		   LEFT JOIN runtime_user_policies AS p ON p.user_id = u.user_id
 		  WHERE s.token_digest = ?`,
 		digest[:],
 	).Scan(
 		&sessionID, &userID, &tokenDigest, &machineID, &deviceName,
 		&createdAt, &expiresAt, &revokedAt, &username, &passwordHash, &state,
-		&userCreatedAt, &userUpdatedAt,
+		&userCreatedAt, &userUpdatedAt, &policyJSON, &dailyCalls, &dailyTokens,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return runtimeuser.SessionRecord{}, runtimeuser.UserRecord{}, false, nil
@@ -377,11 +441,15 @@ func (repository *runtimeUserRepository) FindSession(
 	if revokedAt.Valid {
 		session.RevokedAt = fromUnixMillis(revokedAt.Int64)
 	}
+	policy, err := decodeRuntimeUserPolicy(policyJSON, dailyCalls, dailyTokens)
+	if err != nil {
+		return runtimeuser.SessionRecord{}, runtimeuser.UserRecord{}, false, err
+	}
 	user := runtimeuser.UserRecord{
 		User: runtimeuser.User{
 			ID: runtimeuser.UserID(userID), Username: username,
 			State: runtimeuser.State(state), CreatedAt: fromUnixMillis(userCreatedAt),
-			UpdatedAt: fromUnixMillis(userUpdatedAt),
+			UpdatedAt: fromUnixMillis(userUpdatedAt), Policy: policy,
 		},
 		PasswordHash: passwordHash,
 	}
@@ -424,16 +492,23 @@ type runtimeUserScanner interface{ Scan(...any) error }
 func scanRuntimeUser(scanner runtimeUserScanner) (runtimeuser.UserRecord, error) {
 	var userID, username, passwordHash, state string
 	var createdAt, updatedAt int64
+	var policyJSON []byte
+	var dailyCalls, dailyTokens int64
 	if err := scanner.Scan(
 		&userID, &username, &passwordHash, &state, &createdAt, &updatedAt,
+		&policyJSON, &dailyCalls, &dailyTokens,
 	); err != nil {
+		return runtimeuser.UserRecord{}, err
+	}
+	policy, err := decodeRuntimeUserPolicy(policyJSON, dailyCalls, dailyTokens)
+	if err != nil {
 		return runtimeuser.UserRecord{}, err
 	}
 	record := runtimeuser.UserRecord{
 		User: runtimeuser.User{
 			ID: runtimeuser.UserID(userID), Username: username,
 			State: runtimeuser.State(state), CreatedAt: fromUnixMillis(createdAt),
-			UpdatedAt: fromUnixMillis(updatedAt),
+			UpdatedAt: fromUnixMillis(updatedAt), Policy: policy,
 		},
 		PasswordHash: passwordHash,
 	}
@@ -441,4 +516,16 @@ func scanRuntimeUser(scanner runtimeUserScanner) (runtimeuser.UserRecord, error)
 		return runtimeuser.UserRecord{}, errors.New("stored Runtime User is invalid")
 	}
 	return record, nil
+}
+
+func decodeRuntimeUserPolicy(encoded []byte, dailyCalls, dailyTokens int64) (runtimeuser.Policy, error) {
+	var environmentIDs []string
+	if json.Unmarshal(encoded, &environmentIDs) != nil {
+		return runtimeuser.Policy{}, errors.New("stored Runtime User policy is invalid")
+	}
+	policy, err := runtimeuser.NewPolicy(environmentIDs, dailyCalls, dailyTokens)
+	if err != nil {
+		return runtimeuser.Policy{}, errors.New("stored Runtime User policy is invalid")
+	}
+	return policy, nil
 }

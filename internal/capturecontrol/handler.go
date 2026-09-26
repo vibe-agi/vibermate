@@ -38,6 +38,7 @@ const (
 	ReasonAdapterVerification          ReasonCode = "adapter_verification_failed"
 	ReasonEnvironmentNotFound          ReasonCode = "environment_not_found"
 	ReasonEnvironmentUnavailable       ReasonCode = "environment_unavailable"
+	ReasonEnvironmentNotAllowed        ReasonCode = "environment_not_allowed"
 	ReasonProjectionUnavailable        ReasonCode = "environment_projection_unavailable"
 	ReasonCaptureRunCreate             ReasonCode = "capture_run_create_failed"
 	ReasonWorkspaceUnavailable         ReasonCode = "workspace_identity_unavailable"
@@ -434,6 +435,8 @@ func (handler *Handler) writeIssueFailure(
 		writeProblem(writer, http.StatusNotFound, ReasonEnvironmentNotFound)
 	case errors.Is(err, capturegrant.ErrEnvironmentUnavailable):
 		writeProblem(writer, http.StatusConflict, ReasonEnvironmentUnavailable)
+	case errors.Is(err, capturegrant.ErrEnvironmentUnauthorized):
+		writeProblem(writer, http.StatusForbidden, ReasonEnvironmentNotAllowed)
 	case errors.Is(err, capturegrant.ErrProjectionUnavailable):
 		writeProblem(writer, http.StatusServiceUnavailable, ReasonProjectionUnavailable)
 	case errors.Is(err, capturegrant.ErrWorkspaceUnavailable):

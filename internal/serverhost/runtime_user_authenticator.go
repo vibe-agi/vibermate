@@ -28,6 +28,7 @@ func (authenticator runtimeUserAuthenticator) Authenticate(
 		RuntimeUserID:      string(identity.User.ID),
 		RuntimeUsername:    identity.User.Username,
 		LoginSessionID:     string(identity.SessionID),
+		RuntimeUserPolicy:  identity.User.Policy,
 		CredentialRevision: 1,
 		AllowedGrantKinds: []controlprincipal.GrantKind{
 			controlprincipal.GrantCaptureRun,

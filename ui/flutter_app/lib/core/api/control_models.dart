@@ -363,6 +363,9 @@ final class RuntimeUser {
     required this.createdAt,
     required this.updatedAt,
     this.role = 'member',
+    this.allowedEnvironmentIds = const [],
+    this.dailyAgentApiCallWarning = 0,
+    this.dailyTokenWarning = 0,
   });
 
   factory RuntimeUser.fromJson(Object? json, String path) {
@@ -371,7 +374,12 @@ final class RuntimeUser {
       value,
       path,
       required: const {'id', 'username', 'state', 'createdAt', 'updatedAt'},
-      optional: const {'role'},
+      optional: const {
+        'role',
+        'allowedEnvironmentIds',
+        'dailyAgentApiCallWarning',
+        'dailyTokenWarning',
+      },
     );
     final state = requireString(value, 'state', path);
     if (!const {'active', 'disabled'}.contains(state)) {
@@ -386,6 +394,24 @@ final class RuntimeUser {
     if (updatedAt.isBefore(createdAt)) {
       throw ControlContractException('$path timestamps are inconsistent');
     }
+    final allowedEnvironmentIds = value['allowedEnvironmentIds'] == null
+        ? <String>[]
+        : requireStringList(value, 'allowedEnvironmentIds', path);
+    final dailyAgentApiCallWarning = value['dailyAgentApiCallWarning'] == null
+        ? 0
+        : requireInteger(value, 'dailyAgentApiCallWarning', path);
+    final dailyTokenWarning = value['dailyTokenWarning'] == null
+        ? 0
+        : requireInteger(value, 'dailyTokenWarning', path);
+    if (allowedEnvironmentIds.length > 128 ||
+        allowedEnvironmentIds.toSet().length != allowedEnvironmentIds.length ||
+        allowedEnvironmentIds.any(
+          (id) => !_environmentIdPattern.hasMatch(id),
+        ) ||
+        dailyAgentApiCallWarning > 1000000000000000 ||
+        dailyTokenWarning > 1000000000000000) {
+      throw ControlContractException('$path policy is invalid');
+    }
     return RuntimeUser(
       id: requireString(value, 'id', path),
       username: requireString(value, 'username', path),
@@ -393,6 +419,9 @@ final class RuntimeUser {
       createdAt: createdAt,
       updatedAt: updatedAt,
       role: role,
+      allowedEnvironmentIds: List.unmodifiable(allowedEnvironmentIds),
+      dailyAgentApiCallWarning: dailyAgentApiCallWarning,
+      dailyTokenWarning: dailyTokenWarning,
     );
   }
 
@@ -402,10 +431,16 @@ final class RuntimeUser {
   final DateTime createdAt;
   final DateTime updatedAt;
   final String role;
+  final List<String> allowedEnvironmentIds;
+  final int dailyAgentApiCallWarning;
+  final int dailyTokenWarning;
 
   bool get active => state == 'active';
   bool get owner => role == 'owner';
+  bool get allEnvironments => allowedEnvironmentIds.isEmpty;
 }
+
+final _environmentIdPattern = RegExp(r'^[a-z0-9][a-z0-9._-]{0,127}$');
 
 /// Mirrors the Runtime Server's public username grammar for immediate form
 /// feedback. The Server remains authoritative and canonicalizes ASCII letters
@@ -476,7 +511,7 @@ final class RuntimeUsageReport {
       },
     );
     if (requireString(value, 'schema', path) !=
-        'vibermate-runtime-usage-report-v3') {
+        'vibermate-runtime-usage-report-v4') {
       throw ControlContractException('$path schema is unsupported');
     }
     final period = RuntimeUsagePeriod.fromJson(value['period'], '$path.period');
@@ -533,6 +568,8 @@ final class RuntimeUserUsage {
     required this.models,
     required this.contexts,
     required this.agentSessions,
+    required this.dailyAgentApiCallWarning,
+    required this.dailyTokenWarning,
   });
 
   factory RuntimeUserUsage.fromJson(Object? json, String path) {
@@ -557,6 +594,8 @@ final class RuntimeUserUsage {
         'models',
         'contexts',
         'agentSessions',
+        'dailyAgentApiCallWarning',
+        'dailyTokenWarning',
       },
       optional: const {'latestContext', 'lastActivityAt'},
     );
@@ -616,6 +655,12 @@ final class RuntimeUserUsage {
         '$path.agentSessions',
         RuntimeAgentSessionUsage.fromJson,
       ),
+      dailyAgentApiCallWarning: requireInteger(
+        value,
+        'dailyAgentApiCallWarning',
+        path,
+      ),
+      dailyTokenWarning: requireInteger(value, 'dailyTokenWarning', path),
     );
   }
 
@@ -637,6 +682,8 @@ final class RuntimeUserUsage {
   final List<RuntimeModelUsage> models;
   final List<RuntimeContextUsage> contexts;
   final List<RuntimeAgentSessionUsage> agentSessions;
+  final int dailyAgentApiCallWarning;
+  final int dailyTokenWarning;
 
   bool get active => state == 'active';
   bool get partial => contentUnavailableCalls > 0 || modelUnavailableCalls > 0;

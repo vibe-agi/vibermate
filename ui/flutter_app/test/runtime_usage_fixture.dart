@@ -1,5 +1,5 @@
 Map<String, Object?> runtimeUsagePayload() => {
-  'schema': 'vibermate-runtime-usage-report-v3',
+  'schema': 'vibermate-runtime-usage-report-v4',
   'generatedAt': '2026-08-24T14:00:00.000Z',
   'period': {
     'from': '2026-07-27',
@@ -73,6 +73,8 @@ Map<String, Object?> runtimeUsagePayload() => {
           'lastActivityAt': '2026-08-24T13:58:00.000Z',
         },
       ],
+      'dailyAgentApiCallWarning': 0,
+      'dailyTokenWarning': 0,
     },
   ],
 };

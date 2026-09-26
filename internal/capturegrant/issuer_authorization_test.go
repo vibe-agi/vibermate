@@ -6,6 +6,8 @@ import (
 	"testing"
 
 	"github.com/vibe-agi/vibermate/internal/controlprincipal"
+	"github.com/vibe-agi/vibermate/internal/environment"
+	"github.com/vibe-agi/vibermate/internal/runtimeuser"
 	"github.com/vibe-agi/vibermate/internal/workspaceidentity"
 )
 
@@ -30,6 +32,30 @@ func TestIssueCaptureRunRejectsGrantBeforeReadingDependencies(t *testing.T) {
 	)
 	if !errors.Is(err, ErrPrincipalUnauthorized) {
 		t.Fatalf("IssueCaptureRun() error = %v", err)
+	}
+}
+
+func TestRuntimeUserEnvironmentPolicyIsEnforcedAtGrantBoundary(t *testing.T) {
+	t.Parallel()
+	policy, err := runtimeuser.NewPolicy([]string{"team"}, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	principal, err := controlprincipal.New(controlprincipal.Attributes{
+		ID: "runtime-user:login-one", Kind: controlprincipal.KindRuntimeUser,
+		MachineID: "machine-source-one", DeviceName: "Linux workstation",
+		RuntimeUserID: "user.source-one", RuntimeUsername: "alice",
+		LoginSessionID: "login.source-one", RuntimeUserPolicy: policy,
+		CredentialRevision: 1,
+		AllowedGrantKinds:  []controlprincipal.GrantKind{controlprincipal.GrantCaptureRun},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !environmentAuthorized(principal, environment.EnvironmentID("team")) ||
+		environmentAuthorized(principal, environment.EnvironmentID("private")) ||
+		environmentAuthorized(principal, environment.SystemTransparentID) {
+		t.Fatal("Runtime User Environment policy was widened at grant boundary")
 	}
 }
 

@@ -1763,6 +1763,7 @@ final class _RuntimeUsersPanelState extends State<_RuntimeUsersPanel> {
                     onDisable: !user.owner
                         ? () => _confirmDisableRuntimeUser(user)
                         : null,
+                    onPolicy: () => _showRuntimeUserPolicyDialog(user),
                   ),
                   if (user != users.last) const SizedBox(height: 6),
                 ],
@@ -1831,6 +1832,238 @@ final class _RuntimeUsersPanelState extends State<_RuntimeUsersPanel> {
         user: user,
       ),
     );
+  }
+
+  Future<void> _showRuntimeUserPolicyDialog(RuntimeUser user) async {
+    await showDialog<void>(
+      context: context,
+      builder: (_) => _RuntimeUserPolicyDialog(
+        controller: widget.controller,
+        copy: widget.copy,
+        user: user,
+      ),
+    );
+  }
+}
+
+final class _RuntimeUserPolicyDialog extends StatefulWidget {
+  const _RuntimeUserPolicyDialog({
+    required this.controller,
+    required this.copy,
+    required this.user,
+  });
+
+  final WorkbenchController controller;
+  final AppCopy copy;
+  final RuntimeUser user;
+
+  @override
+  State<_RuntimeUserPolicyDialog> createState() =>
+      _RuntimeUserPolicyDialogState();
+}
+
+final class _RuntimeUserPolicyDialogState
+    extends State<_RuntimeUserPolicyDialog> {
+  late bool _all;
+  late final Set<String> _selected;
+  late final TextEditingController _calls;
+  late final TextEditingController _tokens;
+  bool _saving = false;
+  bool _failed = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _all = widget.user.allEnvironments;
+    _selected = widget.user.allowedEnvironmentIds.toSet();
+    _calls = TextEditingController(
+      text: widget.user.dailyAgentApiCallWarning == 0
+          ? ''
+          : '${widget.user.dailyAgentApiCallWarning}',
+    );
+    _tokens = TextEditingController(
+      text: widget.user.dailyTokenWarning == 0
+          ? ''
+          : '${widget.user.dailyTokenWarning}',
+    );
+  }
+
+  @override
+  void dispose() {
+    _calls.dispose();
+    _tokens.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final records =
+        widget.controller.data?.environments ?? const <EnvironmentRecord>[];
+    final labels = {for (final value in records) value.id: value.name};
+    final ids = {...labels.keys, ..._selected}.toList()..sort();
+    final calls = int.tryParse(_calls.text.trim()) ?? 0;
+    final tokens = int.tryParse(_tokens.text.trim()) ?? 0;
+    final valid =
+        !_saving &&
+        (_all || _selected.isNotEmpty) &&
+        calls >= 0 &&
+        calls <= 1000000000000000 &&
+        tokens >= 0 &&
+        tokens <= 1000000000000000;
+    return AlertDialog(
+      title: Text(
+        widget.copy.format('server.users.policy.title', {
+          'username': widget.user.username,
+        }),
+      ),
+      content: SizedBox(
+        width: 520,
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text(widget.copy('server.users.policy.detail')),
+              const SizedBox(height: 12),
+              CheckboxListTile(
+                key: const Key('runtime-user-policy-all'),
+                contentPadding: EdgeInsets.zero,
+                dense: true,
+                value: _all,
+                onChanged: _saving
+                    ? null
+                    : (value) => setState(() => _all = value ?? false),
+                title: Text(widget.copy('server.users.policy.all')),
+              ),
+              if (!_all)
+                Container(
+                  constraints: const BoxConstraints(maxHeight: 230),
+                  decoration: BoxDecoration(
+                    border: Border.all(color: context.viberColors.dividerSoft),
+                    borderRadius: ViberMetrics.controlRadius,
+                  ),
+                  child: ListView(
+                    shrinkWrap: true,
+                    children: [
+                      for (final id in ids)
+                        CheckboxListTile(
+                          key: Key('runtime-user-policy-environment-$id'),
+                          dense: true,
+                          value: _selected.contains(id),
+                          onChanged: _saving
+                              ? null
+                              : (value) => setState(() {
+                                  if (value == true) {
+                                    _selected.add(id);
+                                  } else {
+                                    _selected.remove(id);
+                                  }
+                                }),
+                          title: Text(labels[id] ?? id),
+                          subtitle: labels[id] == null ? null : Text(id),
+                        ),
+                    ],
+                  ),
+                ),
+              if (!_all && _selected.isEmpty)
+                Padding(
+                  padding: const EdgeInsets.only(top: 6),
+                  child: Text(
+                    widget.copy('server.users.policy.select_one'),
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: context.viberColors.warning,
+                    ),
+                  ),
+                ),
+              const SizedBox(height: 14),
+              Text(
+                widget.copy('server.users.policy.alerts'),
+                style: Theme.of(context).textTheme.titleSmall,
+              ),
+              const SizedBox(height: 4),
+              Text(widget.copy('server.users.policy.alerts_detail')),
+              const SizedBox(height: 8),
+              Row(
+                children: [
+                  Expanded(
+                    child: TextField(
+                      key: const Key('runtime-user-policy-calls'),
+                      controller: _calls,
+                      enabled: !_saving,
+                      keyboardType: TextInputType.number,
+                      inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                      decoration: InputDecoration(
+                        labelText: widget.copy('server.users.policy.calls'),
+                        hintText: '0',
+                      ),
+                      onChanged: (_) => setState(() {}),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: TextField(
+                      key: const Key('runtime-user-policy-tokens'),
+                      controller: _tokens,
+                      enabled: !_saving,
+                      keyboardType: TextInputType.number,
+                      inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                      decoration: InputDecoration(
+                        labelText: widget.copy('server.users.policy.tokens'),
+                        hintText: '0',
+                      ),
+                      onChanged: (_) => setState(() {}),
+                    ),
+                  ),
+                ],
+              ),
+              if (_failed) ...[
+                const SizedBox(height: 8),
+                InlineNotice(
+                  message: widget.copy('server.users.policy.failed'),
+                  error: true,
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: _saving ? null : () => Navigator.of(context).pop(),
+          child: Text(widget.copy('common.cancel')),
+        ),
+        FilledButton(
+          key: const Key('runtime-user-policy-save'),
+          onPressed: valid ? () => _save(calls, tokens) : null,
+          child: _saving
+              ? const CompactProgressIndicator()
+              : Text(widget.copy('common.save')),
+        ),
+      ],
+    );
+  }
+
+  Future<void> _save(int calls, int tokens) async {
+    setState(() {
+      _saving = true;
+      _failed = false;
+    });
+    final ids = _all ? <String>[] : (_selected.toList()..sort());
+    final saved = await widget.controller.setRuntimeUserPolicy(
+      user: widget.user,
+      allowedEnvironmentIds: ids,
+      dailyAgentApiCallWarning: calls,
+      dailyTokenWarning: tokens,
+    );
+    if (!mounted) return;
+    if (saved) {
+      Navigator.of(context).pop();
+    } else {
+      setState(() {
+        _saving = false;
+        _failed = true;
+      });
+    }
   }
 }
 
@@ -2227,6 +2460,7 @@ final class _RuntimeUserRow extends StatelessWidget {
     required this.owner,
     required this.onReset,
     required this.onDisable,
+    required this.onPolicy,
   });
 
   final RuntimeUser user;
@@ -2235,6 +2469,7 @@ final class _RuntimeUserRow extends StatelessWidget {
   final bool owner;
   final VoidCallback? onReset;
   final VoidCallback? onDisable;
+  final VoidCallback onPolicy;
 
   @override
   Widget build(BuildContext context) {
@@ -2287,10 +2522,41 @@ final class _RuntimeUserRow extends StatelessWidget {
                         color: context.viberColors.textMuted,
                       ),
                     ),
+                    const SizedBox(height: 2),
+                    Text(
+                      copy.format('server.users.policy.summary', {
+                        'access': user.allEnvironments
+                            ? copy('server.users.policy.all_short')
+                            : copy.format('server.users.policy.count', {
+                                'count': '${user.allowedEnvironmentIds.length}',
+                              }),
+                        'alerts':
+                            user.dailyAgentApiCallWarning == 0 &&
+                                user.dailyTokenWarning == 0
+                            ? copy('server.users.policy.alerts_off')
+                            : copy('server.users.policy.alerts_on'),
+                      }),
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: context.viberColors.textMuted,
+                      ),
+                    ),
                   ],
                 ),
               ),
               const SizedBox(width: 6),
+              IconButton(
+                key: Key('runtime-user-policy-${user.id}'),
+                onPressed: disabling ? null : onPolicy,
+                tooltip: copy('server.users.policy.action'),
+                icon: const Icon(Icons.policy_outlined, size: 15),
+                constraints: const BoxConstraints.tightFor(
+                  width: ViberMetrics.controlHeight,
+                  height: ViberMetrics.controlHeight,
+                ),
+                padding: EdgeInsets.zero,
+              ),
               Text(
                 copy(
                   user.active

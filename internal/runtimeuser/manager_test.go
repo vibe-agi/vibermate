@@ -142,6 +142,44 @@ func TestDisablingRuntimeUserRevokesEveryLoginSession(t *testing.T) {
 	}
 }
 
+func TestRuntimeUserPolicyIsCanonicalAndVisibleToExistingSessions(t *testing.T) {
+	t.Parallel()
+	clock := &fixedClock{now: time.Date(2026, 8, 24, 10, 0, 0, 0, time.UTC)}
+	repository := newMemoryRepository()
+	manager, err := New(Options{
+		Repository: repository, Clock: clock,
+		Random: bytes.NewReader(bytes.Repeat([]byte{0x73}, 512)), SessionLifetime: time.Hour,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	user, err := manager.Create(context.Background(), CreateCommand{Username: "alice", Password: []byte("test-policy-password")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	machineID, _ := workspaceidentity.ParseMachineID(base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x35}, 32)))
+	session, err := manager.Login(context.Background(), LoginCommand{
+		Username: "alice", Password: []byte("test-policy-password"), MachineID: machineID, DeviceName: "Test device",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy, err := NewPolicy([]string{"team", "system_transparent"}, 100, 1_000_000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	clock.now = clock.now.Add(time.Minute)
+	updated, err := manager.SetPolicy(context.Background(), user.ID, policy)
+	if err != nil || !updated.Policy.AllowsEnvironment("team") ||
+		updated.Policy.AllowsEnvironment("private") || updated.Policy.DailyAgentAPICallWarning != 100 {
+		t.Fatalf("SetPolicy() = %#v, %v", updated, err)
+	}
+	identity, err := manager.Authenticate(context.Background(), session.Token.Value())
+	if err != nil || identity.User.Policy != policy {
+		t.Fatalf("existing session policy = %#v, %v", identity.User.Policy, err)
+	}
+}
+
 func TestReplacingPasswordRevokesLoginSessionsAndChangesVerification(t *testing.T) {
 	t.Parallel()
 	clock := fixedClock{now: time.Date(2026, 8, 24, 10, 0, 0, 0, time.UTC)}
@@ -282,6 +320,20 @@ func (repository *memoryRepository) SetUserState(
 			}
 		}
 	}
+	return record, true, nil
+}
+
+func (repository *memoryRepository) SetUserPolicy(
+	_ context.Context,
+	id UserID,
+	policy Policy,
+) (UserRecord, bool, error) {
+	record, exists := repository.usersByID[id]
+	if !exists {
+		return UserRecord{}, false, nil
+	}
+	record.User.Policy = policy
+	repository.usersByID[id] = record
 	return record, true, nil
 }
 

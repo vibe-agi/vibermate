@@ -190,6 +190,13 @@ abstract interface class ControlApi {
     required String password,
   });
 
+  Future<RuntimeUser> setRuntimeUserPolicy({
+    required String userId,
+    required List<String> allowedEnvironmentIds,
+    required int dailyAgentApiCallWarning,
+    required int dailyTokenWarning,
+  });
+
   /// Discovers model IDs accepted by exactly one upstream Endpoint. A forced
   /// refresh bypasses the daemon's short-lived Endpoint + Account cache.
   Future<UpstreamModelCatalog> upstreamModels(
@@ -1419,6 +1426,40 @@ final class HttpControlApi implements ControlApi, ACPObservationApi {
     if (updated.id != userId || !updated.active) {
       throw const ControlContractException(
         'updated Runtime User is inconsistent',
+      );
+    }
+    return updated;
+  }
+
+  @override
+  Future<RuntimeUser> setRuntimeUserPolicy({
+    required String userId,
+    required List<String> allowedEnvironmentIds,
+    required int dailyAgentApiCallWarning,
+    required int dailyTokenWarning,
+  }) async {
+    if (userId.isEmpty ||
+        allowedEnvironmentIds.length > 128 ||
+        dailyAgentApiCallWarning < 0 ||
+        dailyTokenWarning < 0) {
+      throw const ControlContractException('Runtime User policy is invalid');
+    }
+    final updated = RuntimeUser.fromJson(
+      await _command(
+        'PATCH',
+        '/api/v1/server/runtime-users/${Uri.encodeComponent(userId)}/policy',
+        body: {
+          'schema': 'vibermate-runtime-user-policy-v1',
+          'allowedEnvironmentIds': allowedEnvironmentIds,
+          'dailyAgentApiCallWarning': dailyAgentApiCallWarning,
+          'dailyTokenWarning': dailyTokenWarning,
+        },
+      ),
+      'runtimeUser',
+    );
+    if (updated.id != userId) {
+      throw const ControlContractException(
+        'updated Runtime User policy is inconsistent',
       );
     }
     return updated;

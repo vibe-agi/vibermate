@@ -1346,6 +1346,12 @@ void main() {
     await tester.binding.setSurfaceSize(const Size(390, 760));
     addTearDown(() => tester.binding.setSurfaceSize(null));
     final api = PreviewControlApi();
+    await api.setRuntimeUserPolicy(
+      userId: 'user.preview.alice',
+      allowedEnvironmentIds: const [],
+      dailyAgentApiCallWarning: 10,
+      dailyTokenWarning: 1000,
+    );
     for (var index = 2; index <= 20; index += 1) {
       await api.createRuntimeUser(
         username: 'user${index.toString().padLeft(2, '0')}',
@@ -1462,6 +1468,11 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(alice);
     await tester.pumpAndSettle();
+    expect(
+      find.byKey(const Key('usage-warning-user.preview.alice')),
+      findsOneWidget,
+    );
+    expect(find.textContaining('not provider quota'), findsOneWidget);
     expect(
       tester
           .getTopLeft(

@@ -34,6 +34,9 @@ final class ControlFailure implements Exception {
         'dry_run_selector_failed' => 'error.dry_run_selector_failed',
         'dry_run_transform_failed' => 'error.dry_run_transform_failed',
         'invalid_control_request' => 'error.configuration_invalid',
+        'invalid_runtime_user_policy' => 'error.runtime_user_policy_invalid',
+        'runtime_user_policy_unavailable' =>
+          'error.runtime_user_policy_unavailable',
         'credential_reconnect_required' =>
           'provider_accounts.refresh.reconnect',
         'credential_refresh_failed' => 'provider_accounts.refresh.failed',

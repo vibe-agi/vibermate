@@ -376,7 +376,7 @@ void main() {
   testWidgets('User management resets, disables and re-enables a member', (
     tester,
   ) async {
-    await tester.binding.setSurfaceSize(const Size(900, 900));
+    await tester.binding.setSurfaceSize(const Size(390, 900));
     addTearDown(() => tester.binding.setSurfaceSize(null));
     final api = PreviewControlApi();
     final member = await api.createRuntimeUser(
@@ -389,7 +389,41 @@ void main() {
       terminal: true,
       api: api,
     );
-    await tapVisible(tester, find.byKey(const Key('settings-tab-users')));
+    await openSettingsTab(tester, 'users');
+    await tapVisible(
+      tester,
+      find.byKey(Key('runtime-user-policy-${member.id}')),
+    );
+    await tester.tap(find.byKey(const Key('runtime-user-policy-all')));
+    await tester.pump();
+    expect(
+      tester
+          .widget<FilledButton>(
+            find.byKey(const Key('runtime-user-policy-save')),
+          )
+          .onPressed,
+      isNull,
+    );
+    await tester.tap(
+      find.byKey(const Key('runtime-user-policy-environment-work')),
+    );
+    await tester.enterText(
+      find.byKey(const Key('runtime-user-policy-calls')),
+      '100',
+    );
+    await tester.enterText(
+      find.byKey(const Key('runtime-user-policy-tokens')),
+      '1000000',
+    );
+    await tester.pump();
+    await tester.tap(find.byKey(const Key('runtime-user-policy-save')));
+    await tester.pumpAndSettle();
+    final policyUser = controller.runtimeUsers!.firstWhere(
+      (user) => user.id == member.id,
+    );
+    expect(policyUser.allowedEnvironmentIds, ['work']);
+    expect(policyUser.dailyAgentApiCallWarning, 100);
+    expect(find.text('1 selected · Alerts on'), findsOneWidget);
     await tapVisible(
       tester,
       find.byKey(Key('runtime-user-reset-${member.id}')),

@@ -23,6 +23,7 @@ const (
 	RuntimeUserCreateSchema   = "vibermate-runtime-user-create-v1"
 	RuntimeUserUpdateSchema   = "vibermate-runtime-user-update-v1"
 	RuntimeUserPasswordSchema = "vibermate-runtime-user-password-v1"
+	RuntimeUserPolicySchema   = "vibermate-runtime-user-policy-v1"
 	RuntimeUserListSchema     = "vibermate-runtime-user-list-v1"
 	maxRuntimeUserBodyBytes   = 16 << 10
 )
@@ -67,13 +68,23 @@ type RuntimeUserPassword struct {
 	Password string `json:"password"`
 }
 
+type RuntimeUserPolicyUpdate struct {
+	Schema                   string   `json:"schema"`
+	AllowedEnvironmentIDs    []string `json:"allowedEnvironmentIds"`
+	DailyAgentAPICallWarning int64    `json:"dailyAgentApiCallWarning"`
+	DailyTokenWarning        int64    `json:"dailyTokenWarning"`
+}
+
 type RuntimeUserAdminView struct {
-	ID        string    `json:"id"`
-	Username  string    `json:"username"`
-	State     string    `json:"state"`
-	CreatedAt time.Time `json:"createdAt"`
-	UpdatedAt time.Time `json:"updatedAt"`
-	Role      string    `json:"role"`
+	ID                       string    `json:"id"`
+	Username                 string    `json:"username"`
+	State                    string    `json:"state"`
+	CreatedAt                time.Time `json:"createdAt"`
+	UpdatedAt                time.Time `json:"updatedAt"`
+	Role                     string    `json:"role"`
+	AllowedEnvironmentIDs    []string  `json:"allowedEnvironmentIds"`
+	DailyAgentAPICallWarning int64     `json:"dailyAgentApiCallWarning"`
+	DailyTokenWarning        int64     `json:"dailyTokenWarning"`
 }
 
 type RuntimeUserList struct {
@@ -128,6 +139,8 @@ func (handler *RuntimeUsersHandler) ServeHTTP(
 		}
 		if strings.HasSuffix(request.URL.Path, "/password") {
 			handler.replacePassword(writer, request)
+		} else if strings.HasSuffix(request.URL.Path, "/policy") {
+			handler.updatePolicy(writer, request)
 		} else {
 			handler.update(writer, request)
 		}
@@ -145,6 +158,62 @@ func (handler *RuntimeUsersHandler) ServeHTTP(
 	default:
 		writeProblem(writer, http.StatusNotFound, "server_route_not_found")
 	}
+}
+
+func (handler *RuntimeUsersHandler) updatePolicy(
+	writer http.ResponseWriter,
+	request *http.Request,
+) {
+	rawID := strings.TrimSuffix(
+		strings.TrimPrefix(request.URL.Path, RuntimeUsersPath+"/"),
+		"/policy",
+	)
+	id := runtimeuser.UserID(rawID)
+	if !id.Valid() || rawID == "" || strings.Contains(rawID, "/") {
+		writeProblem(writer, http.StatusNotFound, "runtime_user_not_found")
+		return
+	}
+	mediaType, _, err := mime.ParseMediaType(request.Header.Get("Content-Type"))
+	if err != nil || mediaType != "application/json" {
+		writeProblem(writer, http.StatusUnprocessableEntity, "invalid_runtime_user_policy")
+		return
+	}
+	payload, err := io.ReadAll(io.LimitReader(request.Body, maxRuntimeUserBodyBytes+1))
+	if err != nil || len(payload) == 0 || len(payload) > maxRuntimeUserBodyBytes {
+		writeProblem(writer, http.StatusUnprocessableEntity, "invalid_runtime_user_policy")
+		return
+	}
+	var input RuntimeUserPolicyUpdate
+	decoder := json.NewDecoder(bytes.NewReader(payload))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&input); err != nil || input.Schema != RuntimeUserPolicySchema {
+		writeProblem(writer, http.StatusUnprocessableEntity, "invalid_runtime_user_policy")
+		return
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
+		writeProblem(writer, http.StatusUnprocessableEntity, "invalid_runtime_user_policy")
+		return
+	}
+	policy, err := runtimeuser.NewPolicy(
+		input.AllowedEnvironmentIDs,
+		input.DailyAgentAPICallWarning,
+		input.DailyTokenWarning,
+	)
+	if err != nil {
+		writeProblem(writer, http.StatusUnprocessableEntity, "invalid_runtime_user_policy")
+		return
+	}
+	updated, err := handler.users.SetPolicy(request.Context(), id, policy)
+	if err != nil {
+		if errors.Is(err, runtimeuser.ErrInvalidUser) {
+			writeProblem(writer, http.StatusNotFound, "runtime_user_not_found")
+		} else {
+			writeProblem(writer, http.StatusServiceUnavailable, "runtime_user_policy_unavailable")
+		}
+		return
+	}
+	writeServerJSON(writer, http.StatusOK, handler.runtimeUserAdminView(updated))
 }
 
 func runtimeUsageQuery(rawQuery string) (runtimeusage.Query, error) {
@@ -349,6 +418,9 @@ func (handler *RuntimeUsersHandler) runtimeUserAdminView(
 	return RuntimeUserAdminView{
 		ID: string(user.ID), Username: user.Username, State: string(user.State),
 		CreatedAt: user.CreatedAt, UpdatedAt: user.UpdatedAt, Role: role,
+		AllowedEnvironmentIDs:    user.Policy.EnvironmentIDs(),
+		DailyAgentAPICallWarning: user.Policy.DailyAgentAPICallWarning,
+		DailyTokenWarning:        user.Policy.DailyTokenWarning,
 	}
 }
 

@@ -17,7 +17,7 @@ import (
 )
 
 const (
-	ReportSchema       = "vibermate-runtime-usage-report-v3"
+	ReportSchema       = "vibermate-runtime-usage-report-v4"
 	maxCaptureRuns     = 10_000
 	maxExchangeRecords = 100_000
 	maxReportedUsers   = 200
@@ -73,24 +73,26 @@ type Report struct {
 }
 
 type UserUsage struct {
-	UserID                  runtimeuser.UserID  `json:"userId"`
-	Username                string              `json:"username"`
-	State                   runtimeuser.State   `json:"state"`
-	CaptureRuns             int                 `json:"captureRuns"`
-	ActiveRuns              int                 `json:"activeRuns"`
-	AgentAPICalls           int                 `json:"agentApiCalls"`
-	Succeeded               int                 `json:"succeeded"`
-	Failed                  int                 `json:"failed"`
-	Canceled                int                 `json:"canceled"`
-	ContentUnavailableCalls int                 `json:"contentUnavailableCalls"`
-	ModelUnavailableCalls   int                 `json:"modelUnavailableCalls"`
-	Tokens                  TokenUsage          `json:"tokens"`
-	LatestContext           *ContextRef         `json:"latestContext,omitempty"`
-	LastActivityAt          *time.Time          `json:"lastActivityAt,omitempty"`
-	Days                    []DayUsage          `json:"days"`
-	Models                  []ModelUsage        `json:"models"`
-	Contexts                []ContextUsage      `json:"contexts"`
-	AgentSessions           []AgentSessionUsage `json:"agentSessions"`
+	UserID                   runtimeuser.UserID  `json:"userId"`
+	Username                 string              `json:"username"`
+	State                    runtimeuser.State   `json:"state"`
+	CaptureRuns              int                 `json:"captureRuns"`
+	ActiveRuns               int                 `json:"activeRuns"`
+	AgentAPICalls            int                 `json:"agentApiCalls"`
+	Succeeded                int                 `json:"succeeded"`
+	Failed                   int                 `json:"failed"`
+	Canceled                 int                 `json:"canceled"`
+	ContentUnavailableCalls  int                 `json:"contentUnavailableCalls"`
+	ModelUnavailableCalls    int                 `json:"modelUnavailableCalls"`
+	Tokens                   TokenUsage          `json:"tokens"`
+	LatestContext            *ContextRef         `json:"latestContext,omitempty"`
+	LastActivityAt           *time.Time          `json:"lastActivityAt,omitempty"`
+	Days                     []DayUsage          `json:"days"`
+	Models                   []ModelUsage        `json:"models"`
+	Contexts                 []ContextUsage      `json:"contexts"`
+	AgentSessions            []AgentSessionUsage `json:"agentSessions"`
+	DailyAgentAPICallWarning int64               `json:"dailyAgentApiCallWarning"`
+	DailyTokenWarning        int64               `json:"dailyTokenWarning"`
 }
 
 type ContextRef struct {
@@ -217,7 +219,9 @@ func (projector *Projector) report(
 	for _, user := range users {
 		accumulators[user.ID] = &userAccumulator{
 			view: UserUsage{UserID: user.ID, Username: user.Username, State: user.State,
-				Days: []DayUsage{}, Models: []ModelUsage{}, Contexts: []ContextUsage{}, AgentSessions: []AgentSessionUsage{}},
+				Days: []DayUsage{}, Models: []ModelUsage{}, Contexts: []ContextUsage{}, AgentSessions: []AgentSessionUsage{},
+				DailyAgentAPICallWarning: user.Policy.DailyAgentAPICallWarning,
+				DailyTokenWarning:        user.Policy.DailyTokenWarning},
 			days:     map[string]*DayUsage{},
 			contexts: map[string]*ContextUsage{}, models: map[string]*ModelUsage{},
 			sessions: map[string]*sessionAccumulator{},

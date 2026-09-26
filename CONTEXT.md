@@ -32,6 +32,10 @@ _Avoid_: bind address, upstream origin, certificate name
 A person authorized by a Runtime Server to create Captures, own their usage evidence, and sign in to their personal Web workbench. A Runtime User is never an upstream authentication Account.
 _Avoid_: Account, Provider Account, machine, client
 
+**Runtime User Policy**:
+The Server-enforced set of Environments a Runtime User may launch, together with optional soft warnings over that user's observed daily usage. Account access follows the selected Environment; the policy is not an Account ACL, provider quota, bill, or hard budget.
+_Avoid_: Profile, role, Account permission, spending limit
+
 **Server Owner**:
 The one Runtime User authorized to configure a Runtime Server and manage its other Runtime Users. Local App control acts with owner authority without turning the macOS login into a Runtime User.
 _Avoid_: default admin, shared admin, Provider Account

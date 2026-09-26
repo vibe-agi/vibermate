@@ -3373,6 +3373,8 @@ final class PreviewControlApi implements ControlApi {
                   lastActivityAt: _now,
                 ),
               ],
+              dailyAgentApiCallWarning: user.dailyAgentApiCallWarning,
+              dailyTokenWarning: user.dailyTokenWarning,
             )
           else
             RuntimeUserUsage(
@@ -3394,6 +3396,8 @@ final class PreviewControlApi implements ControlApi {
               models: const [],
               contexts: const [],
               agentSessions: const [],
+              dailyAgentApiCallWarning: user.dailyAgentApiCallWarning,
+              dailyTokenWarning: user.dailyTokenWarning,
             ),
       ],
     );
@@ -3450,6 +3454,9 @@ final class PreviewControlApi implements ControlApi {
       role: current.role,
       createdAt: current.createdAt,
       updatedAt: DateTime.now().toUtc(),
+      allowedEnvironmentIds: current.allowedEnvironmentIds,
+      dailyAgentApiCallWarning: current.dailyAgentApiCallWarning,
+      dailyTokenWarning: current.dailyTokenWarning,
     );
     _runtimeUsers[index] = updated;
     return updated;
@@ -3483,6 +3490,48 @@ final class PreviewControlApi implements ControlApi {
       state: current.state,
       createdAt: current.createdAt,
       updatedAt: DateTime.now().toUtc(),
+      role: current.role,
+      allowedEnvironmentIds: current.allowedEnvironmentIds,
+      dailyAgentApiCallWarning: current.dailyAgentApiCallWarning,
+      dailyTokenWarning: current.dailyTokenWarning,
+    );
+    _runtimeUsers[index] = updated;
+    return updated;
+  }
+
+  @override
+  Future<RuntimeUser> setRuntimeUserPolicy({
+    required String userId,
+    required List<String> allowedEnvironmentIds,
+    required int dailyAgentApiCallWarning,
+    required int dailyTokenWarning,
+  }) async {
+    _requireOpen();
+    final index = _runtimeUsers.indexWhere((user) => user.id == userId);
+    if (index < 0 ||
+        allowedEnvironmentIds.length > 128 ||
+        allowedEnvironmentIds.toSet().length != allowedEnvironmentIds.length ||
+        dailyAgentApiCallWarning < 0 ||
+        dailyTokenWarning < 0) {
+      throw const ControlProblem(
+        status: 422,
+        reasonCode: 'invalid_runtime_user_policy',
+        messageKey: 'error.invalid_runtime_user_policy',
+      );
+    }
+    final current = _runtimeUsers[index];
+    final updated = RuntimeUser(
+      id: current.id,
+      username: current.username,
+      state: current.state,
+      role: current.role,
+      createdAt: current.createdAt,
+      updatedAt: DateTime.now().toUtc(),
+      allowedEnvironmentIds: List.unmodifiable(
+        [...allowedEnvironmentIds]..sort(),
+      ),
+      dailyAgentApiCallWarning: dailyAgentApiCallWarning,
+      dailyTokenWarning: dailyTokenWarning,
     );
     _runtimeUsers[index] = updated;
     return updated;

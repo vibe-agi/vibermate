@@ -108,3 +108,60 @@ func TestRevokedMemberCannotKeepUsingCapture(t *testing.T) {
 		})
 	}
 }
+
+func TestRuntimeUserEnvironmentPolicyChangesApplyToExistingLoginSession(t *testing.T) {
+	ctx := context.Background()
+	options := serverOptions(t, t.TempDir())
+	options.Transport = serverhost.TransportOptions{Mode: serverhost.TransportHTTP}
+	host, err := serverhost.Start(ctx, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer shutdownServer(t, host)
+	users := host.Runtime().RuntimeUsers()
+	user, err := users.Create(ctx, runtimeuser.CreateCommand{Username: "policy-member", Password: []byte("review-password")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := &http.Client{Timeout: 10 * time.Second}
+	base := "http://" + host.Status().ListenAddress
+	login := postJSON(t, client, base+servercontrol.RuntimeUserSessionPath, "", servercontrol.RuntimeUserLogin{
+		Schema: servercontrol.RuntimeUserLoginSchema, Username: user.Username, Password: "review-password",
+		MachineID: "uRmbW_GvQ7LZ9poYHh0aC8W3vQoJ0lZB7iK2s6xQfEk", DeviceName: "Review device"})
+	defer login.Body.Close()
+	var session servercontrol.RuntimeUserSession
+	if login.StatusCode != http.StatusCreated || json.NewDecoder(login.Body).Decode(&session) != nil {
+		t.Fatalf("login status = %d", login.StatusCode)
+	}
+	policy, _ := runtimeuser.NewPolicy([]string{"work"}, 0, 0)
+	if _, err := users.SetPolicy(ctx, user.ID, policy); err != nil {
+		t.Fatal(err)
+	}
+	request := capturecontrol.CreateRequest{
+		EnvironmentID: environment.SystemTransparentID.String(), CWD: "/workspace/project",
+		Command: []string{"custom-agent"}, ExecutablePath: "/opt/tools/custom-agent",
+		Companion: &capturecontrol.CompanionAttestationInput{
+			Detection: clientadapter.Detection{Status: clientadapter.StatusGeneric, Recognition: clientadapter.RecognitionUnknown, CatalogRevision: clientadapter.BuiltInCatalog().Revision(), CanonicalPath: "/opt/tools/custom-agent", ExecutableLabel: "custom-agent"},
+			Workspace: capturecontrol.CompanionWorkspaceInput{MachineID: "uRmbW_GvQ7LZ9poYHh0aC8W3vQoJ0lZB7iK2s6xQfEk", WorkspaceID: "QfEkuRmbW_GvQ7LZ9poYHh0aC8W3vQoJ0lZB7iK2s6w", WorkspaceLabel: "project", RegistrationRevision: 1, DerivationRevision: 1}},
+	}
+	denied := postJSON(t, client, base+"/api/v1/capture-runs", session.SessionToken, request)
+	defer denied.Body.Close()
+	if denied.StatusCode != http.StatusForbidden {
+		t.Fatalf("restricted Environment status = %d", denied.StatusCode)
+	}
+	var problem struct {
+		ReasonCode string `json:"reasonCode"`
+	}
+	if json.NewDecoder(denied.Body).Decode(&problem) != nil || problem.ReasonCode != "environment_not_allowed" {
+		t.Fatalf("restricted Environment problem = %+v", problem)
+	}
+	policy, _ = runtimeuser.NewPolicy([]string{environment.SystemTransparentID.String()}, 0, 0)
+	if _, err := users.SetPolicy(ctx, user.ID, policy); err != nil {
+		t.Fatal(err)
+	}
+	allowed := postJSON(t, client, base+"/api/v1/capture-runs", session.SessionToken, request)
+	defer allowed.Body.Close()
+	if allowed.StatusCode != http.StatusCreated {
+		t.Fatalf("allowed Environment status = %d", allowed.StatusCode)
+	}
+}

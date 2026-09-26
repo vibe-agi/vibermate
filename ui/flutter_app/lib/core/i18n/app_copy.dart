@@ -131,6 +131,10 @@ final class AppCopy {
         'This policy review is no longer current. Review the draft again before publishing.',
     'error.configuration_invalid':
         'These settings could not be accepted. Check the selected service, account and required fields, then try again.',
+    'error.runtime_user_policy_invalid':
+        'The user policy is invalid. Select at least one traffic policy or allow all, and use non-negative warning values.',
+    'error.runtime_user_policy_unavailable':
+        'The user policy could not be saved. Refresh the user list and try again.',
     'error.dry_run_flow_not_matched':
         'This request does not match the selected request source. Check its path and protocol.',
     'error.dry_run_input_invalid':
@@ -2210,6 +2214,25 @@ final class AppCopy {
     'server.users.password.action': 'Reset password',
     'server.users.password.error':
         'The password could not be reset. Check the account state and try again.',
+    'server.users.policy.action': 'Access and usage alerts',
+    'server.users.policy.title': 'Access and alerts · {username}',
+    'server.users.policy.detail':
+        'Choose which published traffic policies this user may launch. Accounts are usable only through those policies.',
+    'server.users.policy.all': 'Allow every published traffic policy',
+    'server.users.policy.all_short': 'All policies',
+    'server.users.policy.count': '{count} selected',
+    'server.users.policy.select_one':
+        'Select at least one policy, or disable this user to deny all access.',
+    'server.users.policy.alerts': 'Observed usage alerts',
+    'server.users.policy.alerts_detail':
+        'Optional daily thresholds over retained ViberMate evidence. 0 disables a warning; these are not provider quota, billing, or a hard budget.',
+    'server.users.policy.calls': 'Agent API calls / day',
+    'server.users.policy.tokens': 'Observed tokens / day',
+    'server.users.policy.alerts_off': 'Alerts off',
+    'server.users.policy.alerts_on': 'Alerts on',
+    'server.users.policy.summary': '{access} · {alerts}',
+    'server.users.policy.failed':
+        'The policy was not saved. Review the selected policies and thresholds, then retry.',
     'server.usage.truncated':
         'This report reached its safety limit. The visible totals are partial.',
     'server.usage.no_traffic': 'No captured Agent traffic yet',
@@ -2219,6 +2242,10 @@ final class AppCopy {
     'server.usage.tokens': 'Input {input} · Output {output}',
     'server.usage.partial':
         'Some retained requests do not contain model or token evidence; missing values are not counted as zero.',
+    'usage.warning':
+        '{date} observed usage reached a soft warning: {facts}. This is retained ViberMate evidence, not provider quota, billing, or a hard budget.',
+    'usage.warning.calls': '{value} calls (warning {threshold})',
+    'usage.warning.tokens': '{value} tokens (warning {threshold})',
     'server.usage.details.show': 'Models and sessions',
     'server.usage.details.hide': 'Hide details',
     'server.usage.models.title': 'Exact request → upstream models',
@@ -2497,6 +2524,8 @@ final class AppCopy {
     'error.configuration_conflict': '配置已被其他操作更新，本次修改未保存。请刷新页面后重新检查修改内容。',
     'error.policy_review_stale': '本次策略检查已失效。请重新检查草稿，再发布策略。',
     'error.configuration_invalid': '设置未通过校验。请检查所选服务、账号和必填项后重试。',
+    'error.runtime_user_policy_invalid': '运行用户策略无效。请选择至少一个流量策略或允许全部，并填写非负告警值。',
+    'error.runtime_user_policy_unavailable': '运行用户策略未能保存。请刷新用户列表后重试。',
     'error.dry_run_flow_not_matched': '这条请求没有匹配当前请求来源。请检查路径和协议。',
     'error.dry_run_input_invalid': '合成请求不符合此协议。请检查 JSON 正文及必填字段。',
     'error.dry_run_environment_disabled': '这个版本已停用流量策略。请选择启用的版本再试跑。',
@@ -4249,6 +4278,22 @@ final class AppCopy {
         '从这个受信任的本机 App 为 {username} 设置新密码。已有的 CLI 与网页会话都会退出。',
     'server.users.password.action': '重置密码',
     'server.users.password.error': '无法重置密码，请检查账号状态后重试。',
+    'server.users.policy.action': '访问范围与用量告警',
+    'server.users.policy.title': '访问与告警 · {username}',
+    'server.users.policy.detail': '选择该用户可启动的已发布流量策略；账号只能通过这些策略间接使用。',
+    'server.users.policy.all': '允许使用全部已发布流量策略',
+    'server.users.policy.all_short': '全部策略',
+    'server.users.policy.count': '已选 {count} 个',
+    'server.users.policy.select_one': '请至少选择一个策略；若要完全禁止访问，请停用该用户。',
+    'server.users.policy.alerts': '已观察用量告警',
+    'server.users.policy.alerts_detail':
+        '按 ViberMate 留存证据设置每日软告警；0 表示关闭。它不是上游额度、账单或硬预算。',
+    'server.users.policy.calls': '每日 Agent API 调用',
+    'server.users.policy.tokens': '每日已观察 Token',
+    'server.users.policy.alerts_off': '告警关闭',
+    'server.users.policy.alerts_on': '告警开启',
+    'server.users.policy.summary': '{access} · {alerts}',
+    'server.users.policy.failed': '策略未保存。请检查所选策略与阈值后重试。',
     'server.usage.truncated': '统计已达到安全上限；当前显示的是部分总量。',
     'server.usage.no_traffic': '尚未捕获到 Agent 流量',
     'server.usage.workspace.unknown': '客户端未报告工作区',
@@ -4256,6 +4301,10 @@ final class AppCopy {
     'server.usage.failed': '失败 {count}',
     'server.usage.tokens': '输入 {input} · 输出 {output}',
     'server.usage.partial': '部分留存请求没有模型或 token 证据；缺失值不会按 0 计算。',
+    'usage.warning':
+        '{date} 的已观察用量达到软告警：{facts}。这是 ViberMate 留存证据，不是上游额度、账单或硬预算。',
+    'usage.warning.calls': '{value} 次调用（告警值 {threshold}）',
+    'usage.warning.tokens': '{value} Token（告警值 {threshold}）',
     'server.usage.details.show': '模型与客户端会话',
     'server.usage.details.hide': '收起详情',
     'server.usage.models.title': '精确的请求模型 → 上游模型',

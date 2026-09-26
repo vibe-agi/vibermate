@@ -33,6 +33,11 @@ func TestProjectorScopesPersonalUsageBeforeTheTeamRankingLimit(t *testing.T) {
 			State:    runtimeuser.StateActive, CreatedAt: now, UpdatedAt: now,
 		}
 	}
+	policy, err := runtimeuser.NewPolicy([]string{"team"}, 25, 1_000_000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	users[len(users)-1].Policy = policy
 	target := users[len(users)-1]
 	projector, err := runtimeusage.New(runtimeusage.Options{
 		Users: usersOf(users...), Runs: fakeRuns{}, Activities: fakeActivities{},
@@ -52,7 +57,8 @@ func TestProjectorScopesPersonalUsageBeforeTheTeamRankingLimit(t *testing.T) {
 	}
 	if report.Truncated || len(report.Users) != 1 ||
 		report.Users[0].UserID != target.ID || report.Users[0].Username != target.Username ||
-		len(report.Days) != 0 {
+		report.Users[0].DailyAgentAPICallWarning != 25 ||
+		report.Users[0].DailyTokenWarning != 1_000_000 || len(report.Days) != 0 {
 		t.Fatalf("personal report = %#v", report)
 	}
 }

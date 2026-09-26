@@ -188,6 +188,10 @@ func Open(ctx context.Context, options Options) (*Store, error) {
 		operations.closeAdmission()
 		return fail(err)
 	}
+	if err := initializeRuntimeUserPolicySchema(ctx, database); err != nil {
+		operations.closeAdmission()
+		return fail(err)
+	}
 
 	return &Store{
 		databasePath:       options.DatabasePath,

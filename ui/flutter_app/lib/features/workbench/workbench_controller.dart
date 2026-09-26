@@ -1364,6 +1364,41 @@ final class WorkbenchController extends ChangeNotifier
     }
   }
 
+  Future<bool> setRuntimeUserPolicy({
+    required RuntimeUser user,
+    required List<String> allowedEnvironmentIds,
+    required int dailyAgentApiCallWarning,
+    required int dailyTokenWarning,
+  }) async {
+    if (_disposed || !serverManagement || runtimeUserMutating) return false;
+    runtimeUserMutating = true;
+    serverManagementError = null;
+    notifyListeners();
+    try {
+      final updated = await _api.setRuntimeUserPolicy(
+        userId: user.id,
+        allowedEnvironmentIds: allowedEnvironmentIds,
+        dailyAgentApiCallWarning: dailyAgentApiCallWarning,
+        dailyTokenWarning: dailyTokenWarning,
+      );
+      if (_disposed) return false;
+      runtimeUsers = List<RuntimeUser>.unmodifiable([
+        for (final candidate in runtimeUsers ?? const <RuntimeUser>[])
+          if (candidate.id == updated.id) updated else candidate,
+      ]);
+      runtimeUserMutating = false;
+      notifyListeners();
+      unawaited(refreshServerManagement(quiet: true));
+      return true;
+    } catch (error) {
+      if (_disposed) return false;
+      runtimeUserMutating = false;
+      serverManagementError = _describeError(error);
+      notifyListeners();
+      return false;
+    }
+  }
+
   Future<void> refreshTerminalCommand({bool quiet = false}) async {
     if (_disposed || terminalCommandLoading || terminalCommandMutating) return;
     if (!quiet) {
