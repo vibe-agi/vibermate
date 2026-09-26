@@ -684,17 +684,11 @@ func (repository *exchangeContentRepository) PurgeExpired(
 		return 0, fmt.Errorf("begin Exchange content purge: %w", err)
 	}
 	defer func() { _ = transaction.Rollback() }()
-	result, err := transaction.ExecContext(
-		operation,
-		`DELETE FROM runtime_exchange_contents WHERE expires_at_unix_ms <= ?`,
-		toUnixMillis(now.UTC()),
+	count, err := purgeExpiredExchangeContent(
+		operation, transaction, toUnixMillis(now.UTC()),
 	)
 	if err != nil {
-		return 0, fmt.Errorf("purge expired Exchange content evidence: %w", err)
-	}
-	count, err := result.RowsAffected()
-	if err != nil || count < 0 {
-		return 0, fmt.Errorf("read purged Exchange content evidence count: %w", err)
+		return 0, err
 	}
 	// Reachability is recomputed only when an expiry actually removed an
 	// Exchange. Record calls PurgeExpired on every stored Exchange, so an
@@ -702,15 +696,6 @@ func (repository *exchangeContentRepository) PurgeExpired(
 	// turn — the cost shape this goal exists to remove. Nothing becomes
 	// unreachable without a delete, and the delete shares this transaction, so
 	// there is no partial state for a skipped sweep to miss.
-	if count == 0 {
-		if err := transaction.Commit(); err != nil {
-			return 0, fmt.Errorf("commit Exchange content purge: %w", err)
-		}
-		return 0, nil
-	}
-	if err := purgeUnreachableContent(operation, transaction); err != nil {
-		return 0, err
-	}
 	if err := transaction.Commit(); err != nil {
 		return 0, fmt.Errorf("commit Exchange content purge: %w", err)
 	}

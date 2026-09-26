@@ -17,6 +17,32 @@ Future<void> tapVisible(WidgetTester tester, Finder target) async {
   await tester.pumpAndSettle();
 }
 
+Future<void> openSettingsTab(WidgetTester tester, String tab) async {
+  final picker = find.byKey(const Key('settings-section-picker'));
+  if (picker.evaluate().isEmpty) {
+    await tapVisible(tester, find.byKey(Key('settings-tab-$tab')));
+    return;
+  }
+  await tester.tap(picker);
+  await tester.pumpAndSettle();
+  final option = switch (tab) {
+    'general' => 'preferences',
+    'proxy' => 'networkExits',
+    _ => tab,
+  };
+  final label = tester.widget<SettingsView>(find.byType(SettingsView)).copy(
+    switch (option) {
+      'preferences' => 'settings.tab.preferences',
+      'access' => 'settings.tab.access',
+      'users' => 'settings.tab.users',
+      'safety' => 'settings.tab.safety',
+      _ => 'settings.tab.proxy',
+    },
+  );
+  await tester.tap(find.text(label).hitTestable().last);
+  await tester.pumpAndSettle();
+}
+
 Future<WorkbenchController> mountSettings(
   WidgetTester tester, {
   required bool server,
@@ -142,7 +168,7 @@ void main() {
           chinese: chinese,
           dark: dark,
         );
-        await tapVisible(tester, find.byKey(const Key('settings-tab-access')));
+        await openSettingsTab(tester, 'access');
         expect(find.byKey(const Key('server-runtime-access')), findsNothing);
         await tapVisible(
           tester,
@@ -216,7 +242,7 @@ void main() {
       terminal: false,
       target: 'https://runtime.example.test:8443',
     );
-    await tapVisible(tester, find.byKey(const Key('settings-tab-access')));
+    await openSettingsTab(tester, 'access');
     expect(
       find.text('vibermate login --server https://runtime.example.test:8443'),
       findsOneWidget,
@@ -244,7 +270,7 @@ void main() {
         rootTrust: rootTrust,
         target: 'https://runtime.example.test:9666',
       );
-      await tapVisible(tester, find.byKey(const Key('settings-tab-safety')));
+      await openSettingsTab(tester, 'safety');
       expect(
         find.byKey(const Key('server-connection-settings-panel')),
         findsOneWidget,
@@ -289,7 +315,7 @@ void main() {
         notAfter: '2026-12-01T00:00:00Z',
       ),
     );
-    await tapVisible(tester, find.byKey(const Key('settings-tab-safety')));
+    await openSettingsTab(tester, 'safety');
     expect(find.textContaining('renewing the certificate'), findsOneWidget);
     await tapVisible(
       tester,
@@ -314,7 +340,7 @@ void main() {
         terminal: false,
         target: local ? 'http://127.0.0.1:9666' : 'http://192.0.2.10:9666',
       );
-      await tapVisible(tester, find.byKey(const Key('settings-tab-access')));
+      await openSettingsTab(tester, 'access');
       final notices = tester.widgetList<InlineNotice>(
         find.descendant(
           of: find.byKey(const Key('server-runtime-access')),
@@ -338,7 +364,7 @@ void main() {
       terminal: false,
     );
     controller.serverAccess = null;
-    await tapVisible(tester, find.byKey(const Key('settings-tab-access')));
+    await openSettingsTab(tester, 'access');
     expect(find.textContaining('vibermate login --server'), findsNothing);
     expect(find.textContaining('http://This Mac'), findsNothing);
     expect(find.text('Retry'), findsOneWidget);
@@ -350,7 +376,7 @@ void main() {
   testWidgets('User management resets, disables and re-enables a member', (
     tester,
   ) async {
-    await tester.binding.setSurfaceSize(const Size(900, 900));
+    await tester.binding.setSurfaceSize(const Size(390, 900));
     addTearDown(() => tester.binding.setSurfaceSize(null));
     final api = PreviewControlApi();
     final member = await api.createRuntimeUser(
@@ -363,7 +389,41 @@ void main() {
       terminal: true,
       api: api,
     );
-    await tapVisible(tester, find.byKey(const Key('settings-tab-users')));
+    await openSettingsTab(tester, 'users');
+    await tapVisible(
+      tester,
+      find.byKey(Key('runtime-user-policy-${member.id}')),
+    );
+    await tester.tap(find.byKey(const Key('runtime-user-policy-all')));
+    await tester.pump();
+    expect(
+      tester
+          .widget<FilledButton>(
+            find.byKey(const Key('runtime-user-policy-save')),
+          )
+          .onPressed,
+      isNull,
+    );
+    await tester.tap(
+      find.byKey(const Key('runtime-user-policy-environment-work')),
+    );
+    await tester.enterText(
+      find.byKey(const Key('runtime-user-policy-calls')),
+      '100',
+    );
+    await tester.enterText(
+      find.byKey(const Key('runtime-user-policy-tokens')),
+      '1000000',
+    );
+    await tester.pump();
+    await tester.tap(find.byKey(const Key('runtime-user-policy-save')));
+    await tester.pumpAndSettle();
+    final policyUser = controller.runtimeUsers!.firstWhere(
+      (user) => user.id == member.id,
+    );
+    expect(policyUser.allowedEnvironmentIds, ['work']);
+    expect(policyUser.dailyAgentApiCallWarning, 100);
+    expect(find.text('1 selected · Alerts on'), findsOneWidget);
     await tapVisible(
       tester,
       find.byKey(Key('runtime-user-reset-${member.id}')),

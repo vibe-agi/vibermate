@@ -30,6 +30,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/localca"
 	"github.com/vibe-agi/vibermate/internal/manualcapture"
 	"github.com/vibe-agi/vibermate/internal/runtimeuser"
+	"github.com/vibe-agi/vibermate/internal/serverconnection"
 	"github.com/vibe-agi/vibermate/internal/toolapproval"
 	"github.com/vibe-agi/vibermate/internal/workspaceidentity"
 )
@@ -45,6 +46,7 @@ var (
 	ErrAdapterVerification      = errors.New("client adapter verification failed")
 	ErrEnvironmentNotFound      = errors.New("selected Environment is not configured")
 	ErrEnvironmentUnavailable   = errors.New("selected Environment is unavailable")
+	ErrEnvironmentUnauthorized  = errors.New("selected Environment is not allowed for Runtime User")
 	ErrProjectionUnavailable    = errors.New("Environment projection is unavailable")
 	ErrWorkspaceUnavailable     = errors.New("workspace identity is unavailable")
 	ErrCaptureRunCreate         = errors.New("CaptureRun creation failed")
@@ -144,6 +146,7 @@ type Options struct {
 	Verifier            clientadapter.Verifier
 	Authorities         CaptureAuthorityResolver
 	ProxyOrigin         string
+	ManualProxyOrigin   string
 	Generation          string
 	RootIdentity        localca.RootIdentity
 	Root                localca.RootCertificate
@@ -174,19 +177,20 @@ func (delivery ProxyDelivery) Valid() bool {
 // creation. Transport handlers authenticate and decode; neither may recreate
 // ownership, Root delivery, or proxy grant policy.
 type Issuer struct {
-	runs        capturerun.Controller
-	manuals     manualcapture.Controller
-	verifier    clientadapter.Verifier
-	authorities CaptureAuthorityResolver
-	proxyOrigin string
-	generation  string
-	rootID      localca.RootIdentity
-	root        localca.RootCertificate
-	runLifetime time.Duration
-	workspaces  WorkspaceResolver
-	rootAsk     ClientRootApprovals
-	companions  clientadapter.Catalog
-	proxy       ProxyDelivery
+	runs              capturerun.Controller
+	manuals           manualcapture.Controller
+	verifier          clientadapter.Verifier
+	authorities       CaptureAuthorityResolver
+	proxyOrigin       string
+	manualProxyOrigin string
+	generation        string
+	rootID            localca.RootIdentity
+	root              localca.RootCertificate
+	runLifetime       time.Duration
+	workspaces        WorkspaceResolver
+	rootAsk           ClientRootApprovals
+	companions        clientadapter.Catalog
+	proxy             ProxyDelivery
 }
 
 func New(options Options) (*Issuer, error) {
@@ -206,9 +210,17 @@ func New(options Options) (*Issuer, error) {
 		if err := validateProxyOrigin(options.ProxyOrigin); err != nil {
 			return nil, err
 		}
+		if options.ManualProxyOrigin != "" && options.ManualProxyOrigin != options.ProxyOrigin {
+			return nil, errors.New("local ManualCapture proxy origin differs from the listener")
+		}
+		options.ManualProxyOrigin = options.ProxyOrigin
 	case ProxyDeliveryClientRelay:
 		if options.ProxyOrigin != "" {
 			return nil, errors.New("remote capture grant carries a Server-local proxy origin")
+		}
+		manualTarget, err := serverconnection.ParseTarget(options.ManualProxyOrigin)
+		if err != nil || manualTarget.Origin() != options.ManualProxyOrigin {
+			return nil, errors.New("remote ManualCapture proxy origin is invalid")
 		}
 	}
 	if !validGeneration(options.Generation) ||
@@ -218,19 +230,20 @@ func New(options Options) (*Issuer, error) {
 		return nil, errors.New("capture grant public Root delivery is incomplete")
 	}
 	return &Issuer{
-		runs:        options.Runs,
-		manuals:     options.ManualCaptures,
-		verifier:    options.Verifier,
-		authorities: options.Authorities,
-		proxyOrigin: options.ProxyOrigin,
-		generation:  options.Generation,
-		rootID:      options.RootIdentity,
-		root:        options.Root,
-		runLifetime: options.RunLifetime,
-		workspaces:  options.Workspaces,
-		rootAsk:     options.ClientRootApprovals,
-		companions:  options.CompanionCatalog,
-		proxy:       options.ProxyDelivery,
+		runs:              options.Runs,
+		manuals:           options.ManualCaptures,
+		verifier:          options.Verifier,
+		authorities:       options.Authorities,
+		proxyOrigin:       options.ProxyOrigin,
+		manualProxyOrigin: options.ManualProxyOrigin,
+		generation:        options.Generation,
+		rootID:            options.RootIdentity,
+		root:              options.Root,
+		runLifetime:       options.RunLifetime,
+		workspaces:        options.Workspaces,
+		rootAsk:           options.ClientRootApprovals,
+		companions:        options.CompanionCatalog,
+		proxy:             options.ProxyDelivery,
 	}, nil
 }
 
@@ -482,7 +495,7 @@ func (issuer *Issuer) manualCaptureOwner(
 		return manualcapture.OwnerScope{}, err
 	}
 	switch principal.Kind() {
-	case controlprincipal.KindDesktopApp, controlprincipal.KindLocalCLI:
+	case controlprincipal.KindDesktopApp, controlprincipal.KindServerOwner, controlprincipal.KindLocalCLI:
 		return manualcapture.NewLocalOwnerScope(), nil
 	case controlprincipal.KindEnrolledClient:
 		bindingID, ok := principal.ProxyClientBindingID()
@@ -505,7 +518,7 @@ func (issuer *Issuer) manualCaptureContext(
 ) ManualCaptureContext {
 	context := ManualCaptureContext{
 		ConfirmationToken:        issuer.manualCaptureConfirmation(owner, review),
-		ProxyAddress:             issuer.proxyOrigin,
+		ProxyAddress:             issuer.manualProxyOrigin,
 		EnvironmentID:            review.EnvironmentID(),
 		EnvironmentRevision:      review.EnvironmentRevision(),
 		EnvironmentDigest:        review.EnvironmentDigest(),
@@ -535,7 +548,7 @@ func (issuer *Issuer) manualCaptureConfirmation(
 	for _, value := range []string{
 		"vibermate:manual-capture-confirmation",
 		issuer.generation,
-		issuer.proxyOrigin,
+		issuer.manualProxyOrigin,
 		issuer.rootID.Digest().String(),
 		issuer.root.Path(),
 		string(owner.Kind()),
@@ -696,6 +709,9 @@ func (issuer *Issuer) IssueCaptureRun(
 		selectedEnvironment = environment.SystemTransparentID
 		assignmentSource = captureassignment.SourceSystemTransparent
 	}
+	if !environmentAuthorized(principal, selectedEnvironment) {
+		return CaptureRunGrant{}, ErrEnvironmentUnauthorized
+	}
 	// Reject a missing/disabled Environment or an unmatched client destination before creating
 	// a durable CaptureRun. This review is intentionally not authorization: the
 	// later AssignAndResolve call remains the sole linearization point and must
@@ -838,6 +854,14 @@ func (issuer *Issuer) IssueCaptureRun(
 		ManagedCredentialAuthorities: managedAuthorities,
 		LaunchEnvironment:            authorities.LaunchEnvironment(),
 	}, nil
+}
+
+func environmentAuthorized(
+	principal controlprincipal.Principal,
+	environmentID environment.EnvironmentID,
+) bool {
+	return principal.Kind() != controlprincipal.KindRuntimeUser ||
+		principal.AllowsEnvironment(environmentID.String())
 }
 
 func (issuer *Issuer) rootDelivery() (path string, inline string) {

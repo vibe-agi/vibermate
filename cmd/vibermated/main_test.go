@@ -73,6 +73,9 @@ func TestPackagedManagementUIRootRequiresTheClosedAppResource(t *testing.T) {
 	if _, err := packagedManagementUIRoot(executable); err == nil {
 		t.Fatal("packaged daemon accepted a missing Web UI")
 	}
+	if _, err := serverManagementUIRoot(executable); err == nil {
+		t.Fatal("packaged Server accepted a missing Web UI")
+	}
 	root := filepath.Join(contents, "Resources", "vibermate-web")
 	if err := os.MkdirAll(root, 0o700); err != nil {
 		t.Fatal(err)
@@ -90,6 +93,9 @@ func TestPackagedManagementUIRootRequiresTheClosedAppResource(t *testing.T) {
 	}
 	if resolved != root {
 		t.Fatalf("Web UI root = %q, want %q", resolved, root)
+	}
+	if resolved, err := serverManagementUIRoot(executable); err != nil || resolved != root {
+		t.Fatalf("packaged Server Web UI root = %q, error = %v", resolved, err)
 	}
 
 	standalone := filepath.Join(t.TempDir(), "vibermated")
@@ -133,6 +139,9 @@ func TestAdjacentServerManagementUIRootIsOptionalButClosedWhenPresent(t *testing
 	}
 	if resolved != root {
 		t.Fatalf("adjacent Web UI root = %q, want %q", resolved, root)
+	}
+	if resolved, err := serverManagementUIRoot(executable); err != nil || resolved != root {
+		t.Fatalf("standalone Server Web UI root = %q, error = %v", resolved, err)
 	}
 }
 

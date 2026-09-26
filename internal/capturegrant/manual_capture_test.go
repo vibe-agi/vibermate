@@ -106,12 +106,13 @@ func TestIssueManualCaptureDerivesOwnerFromPrincipal(t *testing.T) {
 	})
 	generation := base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x42}, 32))
 	issuer := &Issuer{
-		manuals:     manuals,
-		authorities: fixedManualAuthorities(t, []string{"api.anthropic.com:443"}),
-		proxyOrigin: "http://127.0.0.1:41080",
-		generation:  generation,
-		rootID:      authority.Identity(),
-		root:        authority.Certificate(),
+		manuals:           manuals,
+		authorities:       fixedManualAuthorities(t, []string{"api.anthropic.com:443"}),
+		proxyOrigin:       "http://127.0.0.1:41080",
+		manualProxyOrigin: "http://127.0.0.1:41080",
+		generation:        generation,
+		rootID:            authority.Identity(),
+		root:              authority.Certificate(),
 	}
 	principal, err := controlprincipal.New(controlprincipal.Attributes{
 		ID:                    "enrolled:one",
@@ -543,9 +544,10 @@ func manualCaptureTestIssuer(
 	})
 	return &Issuer{
 		manuals: manuals, authorities: authorities,
-		proxyOrigin: "http://127.0.0.1:41080",
-		generation:  base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x42}, 32)),
-		rootID:      authority.Identity(), root: authority.Certificate(),
+		proxyOrigin:       "http://127.0.0.1:41080",
+		manualProxyOrigin: "http://127.0.0.1:41080",
+		generation:        base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x42}, 32)),
+		rootID:            authority.Identity(), root: authority.Certificate(),
 	}, authority
 }
 

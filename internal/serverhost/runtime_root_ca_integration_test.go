@@ -14,12 +14,17 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/vibe-agi/vibermate/internal/capturecontrol"
+	"github.com/vibe-agi/vibermate/internal/connectionpolicy"
+	"github.com/vibe-agi/vibermate/internal/environment"
+	"github.com/vibe-agi/vibermate/internal/manualcapture"
 	"github.com/vibe-agi/vibermate/internal/servercontrol"
 	"github.com/vibe-agi/vibermate/internal/serverhost"
 	"github.com/vibe-agi/vibermate/internal/serveridentity"
@@ -184,6 +189,99 @@ func TestPrivateCAAccessAddressBecomesTheServerCertificateIdentity(t *testing.T)
 				t.Fatalf("access identity %s: %v", accessHost, err)
 			}
 			response.Body.Close()
+			recovery, err := os.ReadFile(host.Status().RecoveryKeyPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			setup := postJSON(t, client, "https://"+access+servercontrol.WebSetupPath, "",
+				servercontrol.WebSetup{
+					Schema: servercontrol.WebSetupSchema, RecoveryKey: strings.TrimSpace(string(recovery)),
+					Username: "owner", Password: "synthetic-owner-password",
+				})
+			defer setup.Body.Close()
+			if setup.StatusCode != http.StatusCreated {
+				t.Fatalf("HTTPS Web setup status=%d", setup.StatusCode)
+			}
+			var session servercontrol.WebSession
+			if err := json.NewDecoder(setup.Body).Decode(&session); err != nil {
+				t.Fatal(err)
+			}
+			request, err := http.NewRequest(http.MethodGet,
+				"https://"+access+"/api/v1/manual-captures/context?environmentId="+environment.SystemTransparentID.String(), nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			request.Header.Set("Authorization", "Bearer "+session.ReadToken)
+			manualResponse, err := client.Do(request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer manualResponse.Body.Close()
+			if manualResponse.StatusCode != http.StatusOK {
+				t.Fatalf("HTTPS owner ManualCapture review status=%d", manualResponse.StatusCode)
+			}
+			var reviewed capturecontrol.ManualCaptureContext
+			if err := json.NewDecoder(manualResponse.Body).Decode(&reviewed); err != nil {
+				t.Fatal(err)
+			}
+			if reviewed.ProxyAddress != "https://"+access || reviewed.Root == nil ||
+				reviewed.Root.Kind != "server_download" || reviewed.Root.PEMPath != "" {
+				t.Fatalf("HTTPS Web ManualCapture address/CA delivery = %q, %+v", reviewed.ProxyAddress, reviewed.Root)
+			}
+			created := postJSON(t, client, "https://"+access+"/api/v1/manual-captures", session.WriteToken,
+				capturecontrol.ManualCaptureCreateRequest{
+					EnvironmentID: reviewed.EnvironmentID, DisplayName: "synthetic remote Web proxy",
+					ClientClass: manualcapture.ClientDesktopApp, Lifetime: manualcapture.LifetimeUntilRevoked,
+					ConfirmationToken: reviewed.ConfirmationToken,
+				})
+			defer created.Body.Close()
+			if created.StatusCode != http.StatusCreated {
+				payload, _ := io.ReadAll(created.Body)
+				t.Fatalf("HTTPS Web ManualCapture create status=%d body=%s", created.StatusCode, payload)
+			}
+			var grant capturecontrol.ManualCaptureGrant
+			if err := json.NewDecoder(created.Body).Decode(&grant); err != nil {
+				t.Fatal(err)
+			}
+			if grant.ProxyAddress != reviewed.ProxyAddress || grant.ProxyPassword == "" ||
+				grant.Root == nil || grant.Root.Kind != "server_download" {
+				t.Fatal("HTTPS Web proxy grant lost the reviewed address or Root")
+			}
+			origin := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+				if request.Header.Get("Proxy-Authorization") != "" {
+					writer.WriteHeader(http.StatusBadRequest)
+					return
+				}
+				_, _ = io.WriteString(writer, "https-web-proxy-ok")
+			}))
+			defer origin.Close()
+			parsedOrigin, _ := url.Parse(origin.URL)
+			rules := host.Runtime().ConnectionRules()
+			current := rules.Current()
+			if _, err := rules.Replace(context.Background(), current.Revision,
+				[]connectionpolicy.Rule{{
+					ID: "test.https-web-origin", Priority: 100,
+					Decision: connectionpolicy.DecisionAllow,
+					Match:    connectionpolicy.MatchExactHostPort(parsedOrigin.Hostname(), mustPort(t, parsedOrigin.Port())),
+				}}, current.Mode); err != nil {
+				t.Fatal(err)
+			}
+			proxyURL, err := url.Parse(grant.ProxyAddress)
+			if err != nil {
+				t.Fatal(err)
+			}
+			proxyURL.User = url.UserPassword(grant.ProxyUsername, grant.ProxyPassword)
+			proxyClient := strictRootCAClient(t, string(rootPEM), host.Status().ListenAddress)
+			proxyClient.Transport.(*http.Transport).Proxy = http.ProxyURL(proxyURL)
+			proxied, err := proxyClient.Get(origin.URL + "/status")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer proxied.Body.Close()
+			body, err := io.ReadAll(proxied.Body)
+			if err != nil || proxied.StatusCode != http.StatusOK || string(body) != "https-web-proxy-ok" {
+				t.Fatalf("HTTPS Web proxy request status=%d body=%q error=%v", proxied.StatusCode, body, err)
+			}
 		})
 	}
 }

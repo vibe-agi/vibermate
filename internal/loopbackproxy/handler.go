@@ -358,8 +358,8 @@ func (handler *Handler) ServeHTTP(
 			return
 		}
 		if counted != nil {
-			terminalEvidence.BytesUp = counted.bytesUp.Load()
-			terminalEvidence.BytesDown = counted.bytesDown.Load()
+			terminalEvidence.BytesUp = counted.bytesRead.Load()
+			terminalEvidence.BytesDown = counted.bytesWritten.Load()
 		}
 		handler.finishConnectionAudit(audit, terminalEvidence)
 	}()
@@ -1502,14 +1502,14 @@ func protocolReasonCode(err error) string {
 
 type countingConnection struct {
 	net.Conn
-	bytesUp   atomic.Uint64
-	bytesDown atomic.Uint64
+	bytesRead    atomic.Uint64
+	bytesWritten atomic.Uint64
 }
 
 func (connection *countingConnection) Read(destination []byte) (int, error) {
 	count, err := connection.Conn.Read(destination)
 	if count > 0 {
-		connection.bytesUp.Add(uint64(count))
+		connection.bytesRead.Add(uint64(count))
 	}
 	return count, err
 }
@@ -1517,7 +1517,7 @@ func (connection *countingConnection) Read(destination []byte) (int, error) {
 func (connection *countingConnection) Write(source []byte) (int, error) {
 	count, err := connection.Conn.Write(source)
 	if count > 0 {
-		connection.bytesDown.Add(uint64(count))
+		connection.bytesWritten.Add(uint64(count))
 	}
 	return count, err
 }
@@ -2316,7 +2316,7 @@ func (handler *Handler) serveBlindTunnel(
 		request.Context(),
 		egressID,
 		audit.ID(),
-		authority,
+		"https://"+authority,
 	)
 	if err != nil {
 		writeReason(writer, http.StatusServiceUnavailable, ReasonBlindTunnelFailed, "")
@@ -2413,7 +2413,7 @@ func (handler *Handler) beginBlindAudit(
 	ctx context.Context,
 	egressID string,
 	connectionID string,
-	authority string,
+	targetOrigin string,
 ) (egressaudit.Attempt, error) {
 	if handler.egressAudit == nil {
 		return egressaudit.Attempt{}, nil
@@ -2428,7 +2428,7 @@ func (handler *Handler) beginBlindAudit(
 			ID:   connectionID,
 		},
 		Caller:       egressaudit.CallerCore,
-		TargetOrigin: "https://" + authority,
+		TargetOrigin: targetOrigin,
 		Decision: egressaudit.BuiltInDirectDecision(
 			egressaudit.AuthorityNetwork,
 		),
@@ -2493,9 +2493,9 @@ func completionTime(attempt egressaudit.Attempt, completedAt time.Time) time.Tim
 }
 
 // serveCleartextForward forwards a cleartext proxy request to its own origin.
-// A proxy necessarily sees an unencrypted request line, so the record says
-// plainly that this connection was not encrypted rather than implying a
-// blindness it does not have. It still records no body.
+// A proxy sees the cleartext request line, but this path does not inspect or
+// retain the body. DecryptionBlind means content was not inspected, not that
+// the client request was encrypted.
 func (handler *Handler) serveCleartextForward(
 	writer http.ResponseWriter,
 	request *http.Request,
@@ -2550,6 +2550,11 @@ func (handler *Handler) serveCleartextForward(
 		)
 		return false
 	}
+	connectionTerminal := connectionevent.TerminalEvidence{
+		Outcome:    connectionevent.OutcomeFailed,
+		ErrorClass: blindTunnelFailureClass,
+	}
+	defer func() { handler.finishConnectionAudit(audit, connectionTerminal) }()
 
 	egressID, err := handler.exchangeIDs.NewExchangeID(request.Context())
 	if err != nil {
@@ -2565,6 +2570,26 @@ func (handler *Handler) serveCleartextForward(
 		return true
 	}
 	defer actionLease.Release()
+	record, err := handler.beginBlindAudit(
+		request.Context(), egressID, audit.ID(), "http://"+authority,
+	)
+	if err != nil {
+		writeReason(writer, http.StatusServiceUnavailable, ReasonBlindTunnelFailed, "")
+		return true
+	}
+	egressOutcome := egressaudit.OutcomeFailed
+	egressErrorClass := blindTunnelFailureClass
+	var countedUpstream *countingConnection
+	defer func() {
+		result := blindtunnel.Result{}
+		if countedUpstream != nil {
+			result.BytesOut = int64(countedUpstream.bytesWritten.Load())
+			result.BytesIn = int64(countedUpstream.bytesRead.Load())
+		}
+		handler.completeBlindAudit(record, egressOutcome, egressErrorClass, result)
+		connectionTerminal.BytesUp = uint64(result.BytesOut)
+		connectionTerminal.BytesDown = uint64(result.BytesIn)
+	}()
 	upstream, lease, err := handler.blindTunnels.Dial(
 		request.Context(),
 		blindtunnel.DialRequest{
@@ -2576,23 +2601,16 @@ func (handler *Handler) serveCleartextForward(
 		},
 	)
 	if err != nil {
+		egressOutcome, connectionTerminal.Outcome, egressErrorClass = blindTunnelTerminal(err)
+		connectionTerminal.ErrorClass = egressErrorClass
 		writeReason(writer, http.StatusBadGateway, ReasonBlindTunnelFailed, "")
 		return true
 	}
 	defer lease.Release()
 	defer upstream.Close()
 	_ = active
-
-	record, err := handler.beginBlindAudit(
-		request.Context(),
-		egressID,
-		audit.ID(),
-		authority,
-	)
-	if err != nil {
-		writeReason(writer, http.StatusServiceUnavailable, ReasonBlindTunnelFailed, "")
-		return true
-	}
+	// Count transport bytes, including HTTP framing, without retaining the body.
+	countedUpstream = &countingConnection{Conn: upstream}
 
 	// Write in origin form and without hop-by-hop or proxy headers, so the
 	// origin sees an ordinary request and never a proxy credential.
@@ -2600,41 +2618,31 @@ func (handler *Handler) serveCleartextForward(
 	forwarded.RequestURI = ""
 	forwarded.Header = forwardableHeaders(request.Header)
 	forwarded.Host = request.URL.Host
-	if err := forwarded.Write(upstream); err != nil {
-		handler.completeBlindAudit(
-			record,
-			egressaudit.OutcomeFailed,
-			"forward_write_failed",
-			blindtunnel.Result{},
-		)
+	if err := forwarded.Write(countedUpstream); err != nil {
+		egressErrorClass = "forward_write_failed"
+		connectionTerminal.ErrorClass = egressErrorClass
 		writeReason(writer, http.StatusBadGateway, ReasonBlindTunnelFailed, "")
 		return true
 	}
-	response, err := http.ReadResponse(bufio.NewReader(upstream), forwarded)
+	response, err := http.ReadResponse(bufio.NewReader(countedUpstream), forwarded)
 	if err != nil {
-		handler.completeBlindAudit(
-			record,
-			egressaudit.OutcomeFailed,
-			"forward_read_failed",
-			blindtunnel.Result{},
-		)
+		egressErrorClass = "forward_read_failed"
+		connectionTerminal.ErrorClass = egressErrorClass
 		writeReason(writer, http.StatusBadGateway, ReasonBlindTunnelFailed, "")
 		return true
 	}
 	defer response.Body.Close()
 	copyResponseHeaders(writer.Header(), response.Header)
 	writer.WriteHeader(response.StatusCode)
-	copied, _ := io.Copy(writer, response.Body)
-	handler.completeBlindAudit(
-		record,
-		egressaudit.OutcomeCompleted,
-		"",
-		blindtunnel.Result{BytesIn: copied},
-	)
-	handler.finishConnectionAudit(audit, connectionevent.TerminalEvidence{
-		Outcome:   connectionevent.OutcomeCompleted,
-		BytesDown: uint64(copied),
-	})
+	if _, err := io.Copy(writer, response.Body); err != nil {
+		egressErrorClass = "forward_response_failed"
+		connectionTerminal.ErrorClass = egressErrorClass
+		return true
+	}
+	egressOutcome = egressaudit.OutcomeCompleted
+	egressErrorClass = ""
+	connectionTerminal.Outcome = connectionevent.OutcomeCompleted
+	connectionTerminal.ErrorClass = ""
 	return true
 }
 

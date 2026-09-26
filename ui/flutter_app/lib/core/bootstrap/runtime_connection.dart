@@ -118,8 +118,29 @@ final class RuntimeConnection {
     this.chooseStorageDirectory,
     this.prepareStorageMove,
     this.moveStorage,
+    this.chooseStorageBackupDirectory,
+    this.prepareStorageBackup,
+    this.backupStorage,
+    this.chooseStorageRestore,
+    this.prepareStorageRestore,
+    this.restoreStorage,
     this.storageNotice,
-  });
+  }) : assert(
+         (chooseStorageBackupDirectory == null &&
+                 prepareStorageBackup == null &&
+                 backupStorage == null) ||
+             (chooseStorageBackupDirectory != null &&
+                 prepareStorageBackup != null &&
+                 backupStorage != null),
+       ),
+       assert(
+         (chooseStorageRestore == null &&
+                 prepareStorageRestore == null &&
+                 restoreStorage == null) ||
+             (chooseStorageRestore != null &&
+                 prepareStorageRestore != null &&
+                 restoreStorage != null),
+       );
 
   final ControlApi api;
   final TerminalCommandService terminalCommands;
@@ -139,5 +160,15 @@ final class RuntimeConnection {
   final Future<String?> Function()? chooseStorageDirectory;
   final Future<void> Function(String target)? prepareStorageMove;
   final Future<void> Function(String target)? moveStorage;
+  final Future<String?> Function()? chooseStorageBackupDirectory;
+  final Future<void> Function(String target)? prepareStorageBackup;
+  final Future<void> Function(String target)? backupStorage;
+  final Future<StorageRestoreSelection?> Function()? chooseStorageRestore;
+  final Future<void> Function(StorageRestoreSelection selection)?
+  prepareStorageRestore;
+  final Future<void> Function(StorageRestoreSelection selection)?
+  restoreStorage;
   final String? storageNotice;
 }
+
+typedef StorageRestoreSelection = ({String backup, String target});

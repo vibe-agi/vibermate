@@ -12,6 +12,8 @@ void main() {
       'state': 'source_updated',
       'sourcePath': source,
       'targetPath': target,
+      'sourceBuild': 'v0.1.13',
+      'installedBuild': 'v0.1.12',
       'detail': 'the packaged command changed',
     }, expectedSourcePath: source);
 
@@ -20,6 +22,8 @@ void main() {
     expect(status.canRefresh, isTrue);
     expect(status.canRepair, isFalse);
     expect(status.canRemove, isTrue);
+    expect(status.sourceBuild, 'v0.1.13');
+    expect(status.installedBuild, 'v0.1.12');
 
     expect(
       () => TerminalCommandStatus.fromJson({
@@ -27,6 +31,7 @@ void main() {
         'state': 'current',
         'sourcePath': source,
         'targetPath': target,
+        'sourceBuild': 'v0.1.13',
         'credential': 'must-not-cross-the-host-boundary',
       }, expectedSourcePath: source),
       throwsA(isA<TerminalCommandException>()),
@@ -37,6 +42,7 @@ void main() {
         'state': 'current',
         'sourcePath': '/Applications/Other.app/Contents/MacOS/vibermate',
         'targetPath': target,
+        'sourceBuild': 'v0.1.13',
       }, expectedSourcePath: source),
       throwsA(isA<TerminalCommandException>()),
     );
@@ -46,6 +52,7 @@ void main() {
         'state': 'current',
         'sourcePath': source,
         'targetPath': '/Users/mira/.local/../bin/vibermate',
+        'sourceBuild': 'v0.1.13',
       }, expectedSourcePath: source),
       throwsA(isA<TerminalCommandException>()),
     );

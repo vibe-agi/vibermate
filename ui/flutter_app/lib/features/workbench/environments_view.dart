@@ -14,6 +14,7 @@ import 'control_failure_notice.dart';
 import '../../core/design/workbench_widgets.dart';
 import '../../core/i18n/app_copy.dart';
 import 'environment_editing.dart';
+import 'environment_dry_run_dialog.dart';
 import 'egress_profile_editor.dart';
 import 'launch_environment_editor.dart';
 import 'message_transform_editor.dart';
@@ -440,8 +441,27 @@ final class _EnvironmentDetail extends StatelessWidget {
                       onPressed: onShowCurrent,
                       icon: const Icon(Icons.update, size: 13),
                       label: Text(copy('environment.history.current')),
-                    )
-                  else if (!value.systemOwned)
+                    ),
+                  if (value.clientEndpoints.isNotEmpty &&
+                      !controller.previewMode)
+                    OutlinedButton.icon(
+                      key: const Key('environment-dry-run-open'),
+                      onPressed: controller.environmentMutating
+                          ? null
+                          : () => unawaited(
+                              showDialog<void>(
+                                context: context,
+                                builder: (_) => EnvironmentDryRunDialog(
+                                  controller: controller,
+                                  environment: value,
+                                  copy: copy,
+                                ),
+                              ),
+                            ),
+                      icon: const Icon(Icons.play_arrow_outlined, size: 14),
+                      label: Text(copy('environment.dry_run.open')),
+                    ),
+                  if (!historical && !value.systemOwned)
                     OutlinedButton.icon(
                       key: const Key('environment-edit'),
                       onPressed: controller.environmentMutating
@@ -645,21 +665,14 @@ final class _ProtocolPlanRows extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Container(
-          width: double.infinity,
-          color: context.viberColors.panelRaised.withValues(alpha: 0.45),
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-          child: LayoutBuilder(
-            builder: (context, constraints) {
-              if (constraints.maxWidth < 560) {
-                return Text(
-                  '${copy('environment.mapping.client')}  →  ${copy('environment.mapping.upstream')}  →  ${copy('environment.mapping.accounts')}',
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: Theme.of(context).textTheme.labelMedium,
-                );
-              }
-              return Row(
+        LayoutBuilder(
+          builder: (context, constraints) {
+            if (constraints.maxWidth < 560) return const SizedBox.shrink();
+            return Container(
+              width: double.infinity,
+              color: context.viberColors.panelRaised.withValues(alpha: 0.45),
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+              child: Row(
                 children: [
                   Expanded(
                     flex: 3,
@@ -685,9 +698,9 @@ final class _ProtocolPlanRows extends StatelessWidget {
                     ),
                   ),
                 ],
-              );
-            },
-          ),
+              ),
+            );
+          },
         ),
         if (upstream == null)
           _OriginalDestinationRow(
@@ -1060,8 +1073,10 @@ final class _NewEnvironmentDialogState extends State<_NewEnvironmentDialog> {
       animation: widget.controller,
       builder: (context, _) {
         final impact = widget.controller.reviewedEnvironmentImpact;
+        final draft = widget.controller.reviewedEnvironmentDraft;
         final reviewed =
             impact != null &&
+            draft != null &&
             impact.environmentId == (_draftEnvironmentId ?? _id.text);
         return _EnvironmentEditorPageFrame(
           key: const Key('environment-create-page'),
@@ -1078,6 +1093,10 @@ final class _NewEnvironmentDialogState extends State<_NewEnvironmentDialog> {
                       key: const Key('environment-create-impact'),
                       child: _EnvironmentImpactReview(
                         impact: impact,
+                        draft: draft,
+                        endpoints:
+                            widget.controller.data?.endpoints ?? const [],
+                        accounts: widget.controller.data?.accounts ?? const [],
                         copy: copy,
                       ),
                     )
@@ -1511,6 +1530,26 @@ final class _NewEnvironmentDialogState extends State<_NewEnvironmentDialog> {
                         : widget.controller.clearEnvironmentReview,
                     child: Text(copy('common.back')),
                   ),
+                  if (!widget.controller.previewMode)
+                    OutlinedButton.icon(
+                      key: const Key('environment-draft-dry-run-open'),
+                      onPressed: widget.controller.environmentMutating
+                          ? null
+                          : () => unawaited(
+                              showDialog<void>(
+                                context: context,
+                                builder: (_) => EnvironmentDryRunDialog(
+                                  controller: widget.controller,
+                                  environment: draft.candidate,
+                                  reviewedDraft: draft,
+                                  publishedAvailable: false,
+                                  copy: copy,
+                                ),
+                              ),
+                            ),
+                      icon: const Icon(Icons.play_arrow_outlined, size: 14),
+                      label: Text(copy('environment.dry_run.open')),
+                    ),
                   FilledButton.icon(
                     key: const Key('environment-create-publish'),
                     onPressed: widget.controller.environmentMutating
@@ -1651,8 +1690,11 @@ final class _EnvironmentEditorDialogState
       animation: widget.controller,
       builder: (context, _) {
         final impact = widget.controller.reviewedEnvironmentImpact;
+        final draft = widget.controller.reviewedEnvironmentDraft;
         final reviewed =
-            impact != null && impact.environmentId == widget.environment.id;
+            impact != null &&
+            draft != null &&
+            impact.environmentId == widget.environment.id;
         return _EnvironmentEditorPageFrame(
           key: const Key('environment-editor-page'),
           backLabel: copy('common.back'),
@@ -1683,6 +1725,10 @@ final class _EnvironmentEditorDialogState
                       key: const Key('environment-impact-review'),
                       child: _EnvironmentImpactReview(
                         impact: impact,
+                        draft: draft,
+                        endpoints:
+                            widget.controller.data?.endpoints ?? const [],
+                        accounts: widget.controller.data?.accounts ?? const [],
                         copy: copy,
                       ),
                     )
@@ -2106,6 +2152,25 @@ final class _EnvironmentEditorDialogState
                         : widget.controller.clearEnvironmentReview,
                     child: Text(copy('common.back')),
                   ),
+                  if (!widget.controller.previewMode)
+                    OutlinedButton.icon(
+                      key: const Key('environment-draft-dry-run-open'),
+                      onPressed: widget.controller.environmentMutating
+                          ? null
+                          : () => unawaited(
+                              showDialog<void>(
+                                context: context,
+                                builder: (_) => EnvironmentDryRunDialog(
+                                  controller: widget.controller,
+                                  environment: widget.environment,
+                                  reviewedDraft: draft,
+                                  copy: copy,
+                                ),
+                              ),
+                            ),
+                      icon: const Icon(Icons.play_arrow_outlined, size: 14),
+                      label: Text(copy('environment.dry_run.open')),
+                    ),
                   FilledButton.icon(
                     key: const Key('environment-publish'),
                     onPressed: widget.controller.environmentMutating
@@ -4507,14 +4572,24 @@ final class _RouteEditorAuthority extends StatelessWidget {
 }
 
 final class _EnvironmentImpactReview extends StatelessWidget {
-  const _EnvironmentImpactReview({required this.impact, required this.copy});
+  const _EnvironmentImpactReview({
+    required this.impact,
+    required this.draft,
+    required this.endpoints,
+    required this.accounts,
+    required this.copy,
+  });
 
   final EnvironmentImpact impact;
+  final EnvironmentDraft draft;
+  final List<UpstreamEndpoint> endpoints;
+  final List<ProviderAccount> accounts;
   final AppCopy copy;
 
   @override
   Widget build(BuildContext context) {
     final captures = impact.continuingCaptures;
+    final candidate = draft.candidate;
     return Semantics(
       liveRegion: true,
       container: true,
@@ -4537,7 +4612,38 @@ final class _EnvironmentImpactReview extends StatelessWidget {
               ),
             ],
           ),
-          const SizedBox(height: 7),
+          const SizedBox(height: 13),
+          _EditorSectionLabel(label: copy('environment.impact.summary')),
+          const SizedBox(height: 5),
+          Text(candidate.name, style: Theme.of(context).textTheme.titleSmall),
+          SelectableText(
+            '${candidate.id} · r${candidate.revision} · ${copy('environment.state.${candidate.state}')}',
+            style: monoStyle.copyWith(color: context.viberColors.textMuted),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            '${copy('environment.recording.mode')}: ${copy('environment.recording.${candidate.contentRecording.mode}')}'
+            '${candidate.contentRecording.mode == 'off' ? '' : ' · ${candidate.contentRecording.retentionDays} ${copy('environment.recording.days')}'}'
+            '  ·  ${copy('environment.policy.tool_mode')}: ${copy('environment.policy.${candidate.policySet.toolMode}')}',
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
+          const SizedBox(height: 9),
+          if (candidate.clientEndpoints.isEmpty)
+            Text(
+              copy('environment.edit.routes.empty'),
+              style: Theme.of(context).textTheme.bodySmall,
+            )
+          else
+            for (final endpoint in candidate.clientEndpoints)
+              _ClientEndpointPlan(
+                clientEndpoint: endpoint,
+                endpoints: endpoints,
+                accounts: accounts,
+                copy: copy,
+              ),
+          const SizedBox(height: 12),
+          Divider(height: 1, color: context.viberColors.divider),
+          const SizedBox(height: 12),
           Text(
             copy('environment.impact.description'),
             style: Theme.of(context).textTheme.bodySmall,

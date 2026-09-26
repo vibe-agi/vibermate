@@ -5,15 +5,22 @@ import 'dart:typed_data';
 
 import 'package:http/http.dart' as http;
 
+import 'acp_models.dart';
 import 'control_models.dart';
 import 'account_facts_models.dart';
 import 'provider_origin.dart';
 import 'runtime_storage.dart';
 import 'launch_environment_snapshot.dart';
 
+abstract interface class ACPObservationApi {
+  Future<ACPRecord?> acpObservation(String captureKey);
+}
+
 abstract interface class ControlApi {
   Future<List<LaunchEnvironmentSnapshot>> launchEnvironmentSnapshots();
   Future<RuntimeStorageLocation> storageLocation();
+  Future<DeletionOutcome> cleanupExpiredEvidence();
+  Future<DeletionReleased> evidenceClearPreview();
   Future<AccountFacts> accountFacts(String accountId, {bool history = false});
   Future<DashboardData> loadDashboard();
 
@@ -44,6 +51,8 @@ abstract interface class ControlApi {
   );
 
   Future<EnvironmentDraft> environmentDraft(String environmentId);
+
+  Future<EnvironmentDryRun> dryRunEnvironment(EnvironmentDryRunInput input);
 
   Future<EnvironmentDraft> saveEnvironmentDraft({
     required String environmentId,
@@ -131,6 +140,8 @@ abstract interface class ControlApi {
     String? conversationId,
   });
 
+  Future<EvidenceSearchPage> searchEvidence(EvidenceSearchRequest request);
+
   Future<ConversationPage> conversations({
     String? cursor,
     int limit = 50,
@@ -177,6 +188,13 @@ abstract interface class ControlApi {
   Future<RuntimeUser> replaceRuntimeUserPassword({
     required String userId,
     required String password,
+  });
+
+  Future<RuntimeUser> setRuntimeUserPolicy({
+    required String userId,
+    required List<String> allowedEnvironmentIds,
+    required int dailyAgentApiCallWarning,
+    required int dailyTokenWarning,
   });
 
   /// Discovers model IDs accepted by exactly one upstream Endpoint. A forced
@@ -227,6 +245,11 @@ abstract interface class ControlApi {
 
   Future<ProviderAccount> refreshProviderAccountCredential(
     ProviderAccount account,
+  );
+
+  Future<AccountResetRedemption> redeemAccountResetCredit(
+    ProviderAccount account,
+    String creditId,
   );
 
   Future<ProviderAccount> setProviderAccountNote(
@@ -349,7 +372,32 @@ final class ControlProblem implements Exception {
       : 'Control problem $status: $reasonCode — $detail';
 }
 
-final class HttpControlApi implements ControlApi {
+final class HttpControlApi implements ControlApi, ACPObservationApi {
+  @override
+  Future<ACPRecord?> acpObservation(String captureKey) async {
+    try {
+      final payload = await _read(
+        '/api/v1/captures/${Uri.encodeComponent(captureKey)}/acp',
+      );
+      final record = ACPRecord.fromJson(payload);
+      if ('managed_run:${record.runId}' != captureKey) {
+        throw const ControlContractException(
+          'ACP Capture identity is inconsistent',
+        );
+      }
+      return record;
+    } on ControlProblem catch (error) {
+      if (error.status == 404 &&
+          {
+            'acp_observation_not_found',
+            'control_route_not_found',
+          }.contains(error.reasonCode)) {
+        return null;
+      }
+      rethrow;
+    }
+  }
+
   @override
   Future<AccountFacts> accountFacts(
     String accountId, {
@@ -483,6 +531,24 @@ final class HttpControlApi implements ControlApi {
   @override
   Future<RuntimeStorageLocation> storageLocation() async =>
       RuntimeStorageLocation.fromJson(await _read('/api/v1/storage'));
+
+  @override
+  Future<DeletionOutcome> cleanupExpiredEvidence() async =>
+      DeletionOutcome.fromJson(
+        await _mutation(
+          'POST',
+          '/api/v1/storage/actions/cleanup-expired',
+          expectedRevision: 0,
+        ),
+        'storageCleanup',
+      );
+
+  @override
+  Future<DeletionReleased> evidenceClearPreview() async =>
+      DeletionReleased.fromJson(
+        await _read('/api/v1/evidence/actions/clear'),
+        'evidenceClearPreview',
+      );
 
   @override
   Future<List<LaunchEnvironmentSnapshot>> launchEnvironmentSnapshots() async =>
@@ -621,6 +687,27 @@ final class HttpControlApi implements ControlApi {
       'environmentDraft',
       expectedEnvironmentId: environmentId,
     );
+  }
+
+  @override
+  Future<EnvironmentDryRun> dryRunEnvironment(
+    EnvironmentDryRunInput input,
+  ) async {
+    if (!_validResourceId(input.environmentId) ||
+        input.revision < 1 ||
+        !const {'published', 'draft'}.contains(input.source) ||
+        !const {'http/1.1', 'h2'}.contains(input.clientProtocol) ||
+        input.body.isEmpty) {
+      throw const ControlContractException(
+        'Environment dry run input is invalid',
+      );
+    }
+    final result = await _command(
+      'POST',
+      '/api/v1/environments/${Uri.encodeComponent(input.environmentId)}/actions/dry-run',
+      body: input.toJson(),
+    );
+    return EnvironmentDryRun.fromJson(result, input);
   }
 
   @override
@@ -983,6 +1070,39 @@ final class HttpControlApi implements ControlApi {
   }
 
   @override
+  Future<EvidenceSearchPage> searchEvidence(
+    EvidenceSearchRequest request,
+  ) async {
+    _validatePageRequest(request.cursor, request.limit);
+    if (!request.valid) {
+      throw const ControlContractException('evidence search is invalid');
+    }
+    final uri = Uri(
+      path: '/api/v1/evidence/search',
+      queryParameters: {
+        'limit': '${request.limit}',
+        'cursor': ?request.cursor,
+        if (request.query.isNotEmpty) 'q': request.query,
+        if (request.environmentId.isNotEmpty)
+          'environmentId': request.environmentId,
+        if (request.accountId.isNotEmpty) 'accountId': request.accountId,
+        if (request.model.isNotEmpty) 'model': request.model,
+        if (request.tool.isNotEmpty) 'tool': request.tool,
+        if (request.status.isNotEmpty) 'status': request.status,
+        if (request.reason.isNotEmpty) 'reason': request.reason,
+        if (request.from != null)
+          'from': request.from!.toUtc().toIso8601String(),
+        if (request.until != null)
+          'until': request.until!.toUtc().toIso8601String(),
+      },
+    );
+    return EvidenceSearchPage.fromJson(
+      await _read(uri.toString()),
+      'evidenceSearch',
+    );
+  }
+
+  @override
   Future<ConversationPage> conversations({
     String? cursor,
     int limit = 50,
@@ -1312,6 +1432,40 @@ final class HttpControlApi implements ControlApi {
   }
 
   @override
+  Future<RuntimeUser> setRuntimeUserPolicy({
+    required String userId,
+    required List<String> allowedEnvironmentIds,
+    required int dailyAgentApiCallWarning,
+    required int dailyTokenWarning,
+  }) async {
+    if (userId.isEmpty ||
+        allowedEnvironmentIds.length > 128 ||
+        dailyAgentApiCallWarning < 0 ||
+        dailyTokenWarning < 0) {
+      throw const ControlContractException('Runtime User policy is invalid');
+    }
+    final updated = RuntimeUser.fromJson(
+      await _command(
+        'PATCH',
+        '/api/v1/server/runtime-users/${Uri.encodeComponent(userId)}/policy',
+        body: {
+          'schema': 'vibermate-runtime-user-policy-v1',
+          'allowedEnvironmentIds': allowedEnvironmentIds,
+          'dailyAgentApiCallWarning': dailyAgentApiCallWarning,
+          'dailyTokenWarning': dailyTokenWarning,
+        },
+      ),
+      'runtimeUser',
+    );
+    if (updated.id != userId) {
+      throw const ControlContractException(
+        'updated Runtime User policy is inconsistent',
+      );
+    }
+    return updated;
+  }
+
+  @override
   Future<UpstreamModelCatalog> upstreamModels(
     String endpointId, {
     required String accountId,
@@ -1610,6 +1764,42 @@ final class HttpControlApi implements ControlApi {
       );
     }
     return updated;
+  }
+
+  @override
+  Future<AccountResetRedemption> redeemAccountResetCredit(
+    ProviderAccount account,
+    String creditId,
+  ) async {
+    if (!_validResourceId(account.id) ||
+        account.kind != 'codex_oauth' ||
+        !account.usable ||
+        account.revision < 1 ||
+        creditId.isEmpty ||
+        creditId.length > 256 ||
+        creditId.runes.any((value) => value < 32 || value == 127)) {
+      throw const ControlContractException('reset redemption input is invalid');
+    }
+    await _ensureFreshSession();
+    final response = await _send(
+      'POST',
+      '/api/v1/provider-accounts/${Uri.encodeComponent(account.id)}/actions/redeem-reset-credit',
+      token: _session.writeToken,
+      expectedStatus: 200,
+      responseTimeout: _modelDiscoveryTimeout,
+      body: {'creditId': creditId},
+      headers: {
+        'if-match': '${account.revision}',
+        'Idempotency-Key': _newCapability(),
+      },
+    );
+    final result = AccountResetRedemption.fromJson(response.payload);
+    if (result.accountId != account.id ||
+        result.creditId != creditId ||
+        result.credentialEpoch < account.credentialEpoch) {
+      throw const ControlContractException('reset redemption account changed');
+    }
+    return result;
   }
 
   @override

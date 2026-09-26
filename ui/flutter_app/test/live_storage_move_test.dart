@@ -9,6 +9,47 @@ import 'package:vibermate_app/core/bootstrap/desktop_storage.dart';
 void main() {
   final daemon = Platform.environment['VIBERMATE_LIVE_TEST_DAEMON'];
   test(
+    'real daemon creates and restores a verified credential-free backup',
+    () async {
+      final temporary = await Directory.systemTemp.createTemp(
+        'vibermate-live-backup-',
+      );
+      final root = await temporary.resolveSymbolicLinks();
+      final backup = '$root/backup';
+      final restored = '$root/restored';
+      DesktopRuntime? runtime;
+      Future<DesktopRuntime> start() => DesktopRuntime.start(
+        daemonPath: daemon,
+        homeDirectory: root,
+        remoteServerListenAddress: '127.0.0.1:0',
+      );
+      try {
+        runtime = await start();
+        final original = (await runtime.api.storageLocation()).dataDirectory;
+        final ca = await runtime.api.rootCA();
+        await runtime.prepareStorageBackup(backup);
+        await runtime.backupStorage(backup);
+        expect(await File('$original/runtime.db').exists(), isTrue);
+        expect(await File('$backup/backup-manifest.json').exists(), isTrue);
+
+        runtime = await start();
+        final selection = (backup: backup, target: restored);
+        await runtime.prepareStorageRestore(selection);
+        await runtime.restoreStorage(selection);
+        runtime = await start();
+        expect((await runtime.api.storageLocation()).dataDirectory, restored);
+        expect((await runtime.api.rootCA()).fingerprint, ca.fingerprint);
+        expect((await DesktopStorage(original).read()).previous, isNull);
+      } finally {
+        await runtime?.close();
+        await temporary.delete(recursive: true);
+      }
+    },
+    skip: daemon == null,
+    timeout: const Timeout(Duration(minutes: 2)),
+  );
+
+  test(
     'real daemon relocates data, retains CA, restarts, and fails closed on a missing volume',
     () async {
       final temporary = await Directory.systemTemp.createTemp(

@@ -6,7 +6,7 @@ services:
       context: .
       dockerfile: Dockerfile
       target: local
-    image: ${VIBERMATE_IMAGE:-vibermate-runtime:0.1.12-local}
+    image: ${VIBERMATE_IMAGE:-vibermate-runtime:local}
     pull_policy: never
     init: true
     restart: unless-stopped
@@ -15,6 +15,8 @@ services:
       - server
       - --listen
       - 0.0.0.0:9666
+      - --access-address
+      - 127.0.0.1:${VIBERMATE_PORT:-9666}
       - --data-dir
       - /data
       - --web-root

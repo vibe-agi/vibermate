@@ -3,10 +3,9 @@ package main
 import (
 	"encoding/json"
 	"io"
-	"runtime/debug"
-	"strings"
 
 	"github.com/vibe-agi/vibermate/internal/cliinstall"
+	"github.com/vibe-agi/vibermate/internal/productbuild"
 )
 
 const (
@@ -17,11 +16,13 @@ const (
 )
 
 type terminalCommandView struct {
-	Schema     string               `json:"schema"`
-	State      cliinstall.LinkState `json:"state"`
-	SourcePath string               `json:"sourcePath"`
-	TargetPath string               `json:"targetPath"`
-	Detail     string               `json:"detail,omitempty"`
+	Schema         string               `json:"schema"`
+	State          cliinstall.LinkState `json:"state"`
+	SourcePath     string               `json:"sourcePath"`
+	TargetPath     string               `json:"targetPath"`
+	SourceBuild    string               `json:"sourceBuild"`
+	InstalledBuild string               `json:"installedBuild,omitempty"`
+	Detail         string               `json:"detail,omitempty"`
 }
 
 func executeTerminalCommand(arguments []string, stdout io.Writer) (int, string) {
@@ -63,11 +64,15 @@ func executeTerminalCommand(arguments []string, stdout io.Writer) (int, string) 
 	}
 	spec := command.Spec()
 	view := terminalCommandView{
-		Schema:     terminalCommandSchema,
-		State:      observation.State,
-		SourcePath: spec.SourcePath,
-		TargetPath: spec.TargetPath,
-		Detail:     observation.Detail,
+		Schema:      terminalCommandSchema,
+		State:       observation.State,
+		SourcePath:  spec.SourcePath,
+		TargetPath:  spec.TargetPath,
+		SourceBuild: spec.Version,
+		Detail:      observation.Detail,
+	}
+	if observation.Receipt != nil {
+		view.InstalledBuild = observation.Receipt.Version
 	}
 	if err := json.NewEncoder(stdout).Encode(view); err != nil {
 		return 1, keyTerminalCommandFailed
@@ -76,23 +81,5 @@ func executeTerminalCommand(arguments []string, stdout io.Writer) (int, string) 
 }
 
 func packagedTerminalCommandVersion() string {
-	information, ok := debug.ReadBuildInfo()
-	if !ok {
-		return "development"
-	}
-	for _, setting := range information.Settings {
-		if setting.Key == "vcs.revision" && validBuildLabel(setting.Value) {
-			return setting.Value
-		}
-	}
-	if information.Main.Version != "" &&
-		information.Main.Version != "(devel)" &&
-		validBuildLabel(information.Main.Version) {
-		return information.Main.Version
-	}
-	return "development"
-}
-
-func validBuildLabel(value string) bool {
-	return len(value) <= 128 && strings.TrimSpace(value) == value
+	return productbuild.Label()
 }

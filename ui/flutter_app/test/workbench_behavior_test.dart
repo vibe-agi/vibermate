@@ -14,6 +14,8 @@ import 'package:vibermate_app/core/i18n/app_copy.dart';
 import 'package:vibermate_app/core/preferences/workbench_preferences.dart';
 import 'package:vibermate_app/features/workbench/account_selector_editor.dart';
 import 'package:vibermate_app/features/workbench/conversation_timeline.dart';
+import 'package:vibermate_app/features/workbench/network_view.dart';
+import 'package:vibermate_app/features/workbench/settings_view.dart';
 import 'package:vibermate_app/features/workbench/workbench_controller.dart';
 import 'package:vibermate_app/features/workbench/workbench_shell.dart';
 import 'package:vibermate_app/preview/preview_control_api.dart';
@@ -377,7 +379,7 @@ void main() {
     controller.dispose();
   });
 
-  testWidgets('empty Captures leads a novice to the normal Agent launch path', (
+  testWidgets('empty Captures shows Agent and Web proxy launch paths', (
     tester,
   ) async {
     addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -402,7 +404,8 @@ void main() {
         size: Size(1180, 760),
         language: AppLanguage.english,
         empty: 'No captures yet.',
-        detail: 'Start Codex or Claude through ViberMate from Terminal.',
+        detail:
+            'Start an Agent from Terminal, or create a proxy login for another client.',
         settings: 'Web & client access',
         web: true,
       ),
@@ -410,7 +413,7 @@ void main() {
         size: Size(390, 760),
         language: AppLanguage.simplifiedChinese,
         empty: '还没有运行记录。',
-        detail: '先从终端通过 ViberMate 启动 Codex 或 Claude。',
+        detail: '从终端启动 Agent，或为其他客户端创建专属代理登录。',
         settings: '网页与客户端接入',
         web: true,
       ),
@@ -425,6 +428,13 @@ void main() {
         initialPreferences: WorkbenchPreferences(language: scenario.language),
         serverManagement: scenario.web,
         terminalManagement: !scenario.web,
+        webPrincipal: scenario.web
+            ? const RuntimeWebPrincipal(
+                id: 'user.preview.owner',
+                username: 'owner',
+                role: RuntimeWebRole.owner,
+              )
+            : null,
       );
       await controller.initialize();
       await tester.pumpWidget(
@@ -437,6 +447,16 @@ void main() {
 
       expect(find.text(scenario.empty), findsOneWidget);
       expect(find.text(scenario.detail), findsOneWidget);
+      expect(
+        find.byKey(const Key('capture-empty-create-manual')),
+        scenario.web ? findsOneWidget : findsNothing,
+      );
+      final emptyError = tester.takeException();
+      expect(
+        emptyError,
+        isNull,
+        reason: 'empty Capture ${scenario.size} web=${scenario.web}',
+      );
       final nextAction = find.byKey(
         const Key('capture-empty-open-terminal-settings'),
       );
@@ -446,7 +466,11 @@ void main() {
 
       expect(controller.section, WorkbenchSection.settings);
       expect(find.text(scenario.settings), findsOneWidget);
-      expect(tester.takeException(), isNull);
+      expect(
+        tester.takeException(),
+        isNull,
+        reason: 'access settings ${scenario.size} web=${scenario.web}',
+      );
 
       await tester.pumpWidget(const SizedBox.shrink());
       controller.dispose();
@@ -503,14 +527,10 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(find.byKey(const Key('offline-hold-command')), findsOneWidget);
+    expect(find.byKey(const Key('offline-hold-command')), findsNothing);
     expect(find.byKey(const Key('approval-attention')), findsOneWidget);
     expect(find.byIcon(Icons.science_outlined), findsOneWidget);
     expect(find.byIcon(Icons.refresh), findsOneWidget);
-    expect(
-      tester.getSize(find.byKey(const Key('offline-hold-command'))).height,
-      ViberMetrics.controlHeight,
-    );
     expect(
       tester.getSize(find.byKey(const Key('approval-attention'))).height,
       ViberMetrics.controlHeight,
@@ -530,12 +550,6 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.bySemanticsLabel(RegExp(r'^Traffic\s+⌘1$')), findsOneWidget);
-    expect(
-      find.bySemanticsLabel(
-        RegExp(r'^Prepare to disconnect · Online operation$'),
-      ),
-      findsOneWidget,
-    );
     final scaffoldContext = tester.element(find.byType(Scaffold).first);
     final theme = Theme.of(scaffoldContext);
     final colors = theme.brightness == Brightness.dark
@@ -562,63 +576,6 @@ void main() {
     expect(FocusManager.instance.primaryFocus, isNotNull);
     expect(tester.takeException(), isNull);
     semantics.dispose();
-  });
-
-  testWidgets('Offline protection requires review before traffic changes', (
-    tester,
-  ) async {
-    await tester.binding.setSurfaceSize(const Size(1180, 760));
-    addTearDown(() => tester.binding.setSurfaceSize(null));
-    await tester.pumpWidget(
-      const ViberMateApp(previewMode: true, preferChinese: false),
-    );
-    await tester.pumpAndSettle();
-
-    final command = find.byKey(const Key('offline-hold-command'));
-    expect(command, findsOneWidget);
-    expect(
-      find.bySemanticsLabel(
-        RegExp(r'^Prepare to disconnect · Online operation$'),
-      ),
-      findsOneWidget,
-    );
-
-    await tester.tap(command);
-    await tester.pumpAndSettle();
-    expect(find.byKey(const Key('offline-confirmation')), findsOneWidget);
-    expect(find.text('Prepare to disconnect?'), findsOneWidget);
-    expect(find.byKey(const Key('offline-confirm-action')), findsOneWidget);
-    await tester.tap(find.text('Cancel').last);
-    await tester.pumpAndSettle();
-    expect(
-      find.bySemanticsLabel(
-        RegExp(r'^Prepare to disconnect · Online operation$'),
-      ),
-      findsOneWidget,
-    );
-
-    await tester.tap(command);
-    await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const Key('offline-confirm-action')));
-    await tester.pumpAndSettle();
-    expect(
-      find.bySemanticsLabel(RegExp(r'^Resume online · Safe to disconnect$')),
-      findsOneWidget,
-    );
-
-    await tester.tap(command);
-    await tester.pumpAndSettle();
-    expect(find.text('Resume external work?'), findsOneWidget);
-    await tester.tap(find.byKey(const Key('offline-confirm-action')));
-    await tester.pumpAndSettle();
-    expect(
-      find.bySemanticsLabel(
-        RegExp(r'^Prepare to disconnect · Online operation$'),
-      ),
-      findsOneWidget,
-    );
-    await tester.pumpWidget(const SizedBox.shrink());
-    await tester.pump();
   });
 
   testWidgets('workbench navigation is grouped into three user task areas', (
@@ -734,7 +691,7 @@ void main() {
     expect(find.text('Retry'), findsOneWidget);
   });
 
-  testWidgets('390px Chinese Offline protection stays operable', (
+  testWidgets('390px Chinese Safety settings has no Offline Hold control', (
     tester,
   ) async {
     await tester.binding.setSurfaceSize(const Size(390, 760));
@@ -747,18 +704,10 @@ void main() {
     await tester.tap(find.byIcon(Icons.settings_outlined).first);
     await tester.pumpAndSettle();
     await _openSettingsTab(tester, const Key('settings-tab-safety'));
-    expect(find.byKey(const Key('offline-settings-panel')), findsOneWidget);
-    expect(find.text('断网保护'), findsOneWidget);
-    expect(find.text('联网运行'), findsOneWidget);
-    final action = find.byKey(const Key('offline-settings-action'));
-    await tester.ensureVisible(action);
-    await tester.tap(action);
-    await tester.pumpAndSettle();
-    expect(find.text('准备断网？'), findsOneWidget);
-    expect(find.byKey(const Key('offline-confirm-action')), findsOneWidget);
+    expect(find.byKey(const Key('offline-settings-panel')), findsNothing);
+    expect(find.text('断网保护'), findsNothing);
+    expect(find.text('准备断网'), findsNothing);
     expect(tester.takeException(), isNull);
-    await tester.tap(find.text('取消').last);
-    await tester.pumpAndSettle();
 
     await tester.pumpWidget(const SizedBox.shrink());
     await tester.pump();
@@ -1098,10 +1047,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(tester.takeException(), isNull);
-    expect(find.byKey(const Key('settings-tab-general')), findsOneWidget);
-    expect(find.byKey(const Key('settings-tab-access')), findsOneWidget);
-    expect(find.byKey(const Key('settings-tab-users')), findsOneWidget);
-    expect(find.byKey(const Key('settings-tab-safety')), findsOneWidget);
+    expect(find.byKey(const Key('settings-section-picker')), findsOneWidget);
     expect(find.byKey(const Key('server-runtime-access')), findsNothing);
     await _openSettingsTab(tester, const Key('settings-tab-access'));
     expect(find.byKey(const Key('server-runtime-access')), findsOneWidget);
@@ -1269,8 +1215,7 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(find.byKey(const Key('settings-tab-general')), findsOneWidget);
-    expect(find.byKey(const Key('settings-tab-proxy')), findsOneWidget);
+    expect(find.byKey(const Key('settings-section-picker')), findsOneWidget);
     await _openSettingsTab(tester, const Key('settings-tab-proxy'));
     expect(find.text('网络出口方案'), findsOneWidget);
     expect(
@@ -1401,6 +1346,12 @@ void main() {
     await tester.binding.setSurfaceSize(const Size(390, 760));
     addTearDown(() => tester.binding.setSurfaceSize(null));
     final api = PreviewControlApi();
+    await api.setRuntimeUserPolicy(
+      userId: 'user.preview.alice',
+      allowedEnvironmentIds: const [],
+      dailyAgentApiCallWarning: 10,
+      dailyTokenWarning: 1000,
+    );
     for (var index = 2; index <= 20; index += 1) {
       await api.createRuntimeUser(
         username: 'user${index.toString().padLeft(2, '0')}',
@@ -1517,6 +1468,11 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(alice);
     await tester.pumpAndSettle();
+    expect(
+      find.byKey(const Key('usage-warning-user.preview.alice')),
+      findsOneWidget,
+    );
+    expect(find.textContaining('not provider quota'), findsOneWidget);
     expect(
       tester
           .getTopLeft(
@@ -2206,7 +2162,7 @@ void main() {
       await tester.pumpAndSettle();
       await tester.tap(rawEvidence);
       await tester.pumpAndSettle();
-      expect(find.text('3 boundary messages'), findsOneWidget);
+      expect(find.text('6 boundary messages'), findsOneWidget);
       final rawReveal = find.byKey(
         const Key('raw-reveal-raw-preview-run-1-exchange-222'),
       );
@@ -2232,7 +2188,7 @@ void main() {
         findsOneWidget,
       );
       expect(
-        find.text('{"model":"claude-sonnet-4-5","stream":true}'),
+        find.text('{"model":"claude-sonnet-4-5-20250929","stream":true}'),
         findsOneWidget,
       );
       final copyRaw = find.byKey(
@@ -2245,8 +2201,49 @@ void main() {
       expect(copiedEvidence, isNot(contains('Bearer')));
       expect(
         copiedEvidence,
-        contains('{"model":"claude-sonnet-4-5","stream":true}'),
+        contains('{"model":"claude-sonnet-4-5-20250929","stream":true}'),
       );
+      final compareStages = find.byKey(
+        const Key('compare-raw-stages-run-1-exchange-222'),
+      );
+      await Scrollable.ensureVisible(
+        tester.element(compareStages),
+        alignment: 0.5,
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(compareStages);
+      await tester.pumpAndSettle();
+      final diffDialog = find.byKey(const Key('raw-evidence-diff-dialog'));
+      expect(diffDialog, findsOneWidget);
+      expect(
+        find.descendant(of: diffDialog, matching: find.text('/body/model')),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(
+          of: diffDialog,
+          matching: find.textContaining('b3b3b3b3'),
+        ),
+        findsNothing,
+      );
+      await tester.tap(
+        find.descendant(of: diffDialog, matching: find.text('Response')),
+      );
+      await tester.pumpAndSettle();
+      expect(
+        find.descendant(
+          of: diffDialog,
+          matching: find.text('/body/content/0/text'),
+        ),
+        findsOneWidget,
+      );
+      await tester.tap(find.byKey(const Key('raw-evidence-diff-copy')));
+      await tester.pump();
+      expect(copiedEvidence, contains('/body/content/0/text'));
+      expect(copiedEvidence, isNot(contains('b3b3b3b3')));
+      expect(copiedEvidence, isNot(contains('Bearer')));
+      await tester.tap(find.text('Dismiss'));
+      await tester.pumpAndSettle();
       expect(
         find.ancestor(
           of: find.text('Continue with the next verified implementation step.'),
@@ -2393,6 +2390,39 @@ void main() {
     },
   );
 
+  testWidgets('390px Chinese raw stage comparison stays readable', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(390, 760));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(
+      const ViberMateApp(previewMode: true, preferChinese: true),
+    );
+    await tester.pumpAndSettle();
+
+    await openCaptureConversation(tester, capture: 'managed_run:run-1');
+    final turn = find.byKey(const Key('conversation-turn-run-1-exchange-222'));
+    await ensureTurnVisible(tester, turn);
+    await tester.tap(turn);
+    await tester.pumpAndSettle();
+    final raw = find.byKey(const Key('exchange-raw-run-1-exchange-222'));
+    await Scrollable.ensureVisible(tester.element(raw), alignment: 0.5);
+    await tester.pumpAndSettle();
+    await tester.tap(raw);
+    await tester.pumpAndSettle();
+    final compare = find.byKey(
+      const Key('compare-raw-stages-run-1-exchange-222'),
+    );
+    await Scrollable.ensureVisible(tester.element(compare), alignment: 0.5);
+    await tester.pumpAndSettle();
+    await tester.tap(compare);
+    await tester.pumpAndSettle();
+
+    expect(find.text('比较请求与响应阶段'), findsOneWidget);
+    expect(find.text('/body/model'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('failed Turn explains the failing boundary and next action', (
     tester,
   ) async {
@@ -2421,6 +2451,14 @@ void main() {
     );
     expect(
       find.textContaining('provider_response_idle · 504 · upstream'),
+      findsNothing,
+    );
+    await tester.tap(
+      find.byKey(const Key('exchange-failure-details-provider_response_idle')),
+    );
+    await tester.pumpAndSettle();
+    expect(
+      find.textContaining('provider_response_idle · 504 · upstream'),
       findsOneWidget,
     );
   });
@@ -2441,7 +2479,108 @@ void main() {
 
     expect(find.text('上游服务未能及时响应。'), findsOneWidget);
     expect(find.text('检查上游服务与网络路径，然后重试 Agent 请求。'), findsOneWidget);
+    expect(find.textContaining('provider_response_idle'), findsNothing);
+    await tester.tap(
+      find.byKey(const Key('exchange-failure-details-provider_response_idle')),
+    );
+    await tester.pumpAndSettle();
     expect(find.textContaining('provider_response_idle'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets(
+    'transport failure names the observed connection stage without blaming proxy',
+    (tester) async {
+      await tester.binding.setSurfaceSize(const Size(1180, 760));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      await tester.pumpWidget(
+        const ViberMateApp(previewMode: true, preferChinese: false),
+      );
+      await tester.pumpAndSettle();
+
+      await openCaptureConversation(tester, capture: 'managed_run:run-1');
+      final turn = find.byKey(
+        const Key('conversation-turn-run-1-exchange-217'),
+      );
+      await ensureTurnVisible(tester, turn);
+      await tester.tap(turn);
+      await tester.pumpAndSettle();
+      expect(
+        find.text('The outbound connection failed or was interrupted.'),
+        findsOneWidget,
+      );
+      expect(
+        find.text(
+          'Check the selected network exit, upstream address, and firewall path, then retry.',
+        ),
+        findsOneWidget,
+      );
+      expect(find.text('Waiting for the terminal response…'), findsNothing);
+      expect(find.textContaining('provider_transport_failed'), findsNothing);
+      await tester.tap(
+        find.byKey(
+          const Key('exchange-failure-details-provider_transport_failed'),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(
+        find.textContaining('provider_transport_failed · upstream'),
+        findsOneWidget,
+      );
+      expect(find.textContaining('connection_failed'), findsOneWidget);
+    },
+  );
+
+  testWidgets('429 explains quota before exposing the provider status code', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1180, 760));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(
+      const ViberMateApp(previewMode: true, preferChinese: false),
+    );
+    await tester.pumpAndSettle();
+
+    await openCaptureConversation(tester, capture: 'managed_run:run-1');
+    final turn = find.byKey(const Key('conversation-turn-run-1-exchange-216'));
+    await ensureTurnVisible(tester, turn);
+    await tester.tap(turn);
+    await tester.pumpAndSettle();
+    expect(find.text('The upstream rate limit was reached.'), findsOneWidget);
+    expect(
+      find.text(
+        'Check this account’s quota or wait for the provider reset before retrying.',
+      ),
+      findsOneWidget,
+    );
+    expect(find.textContaining('provider_status_rejected · 429'), findsNothing);
+    await tester.tap(
+      find.byKey(
+        const Key('exchange-failure-details-provider_status_rejected'),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(
+      find.textContaining('provider_status_rejected · 429 · upstream'),
+      findsOneWidget,
+    );
+  });
+
+  testWidgets('401 explains account access in Chinese', (tester) async {
+    await tester.binding.setSurfaceSize(const Size(390, 760));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(
+      const ViberMateApp(previewMode: true, preferChinese: true),
+    );
+    await tester.pumpAndSettle();
+
+    await openCaptureConversation(tester, capture: 'managed_run:run-1');
+    final turn = find.byKey(const Key('conversation-turn-run-1-exchange-215'));
+    await ensureTurnVisible(tester, turn);
+    await tester.tap(turn);
+    await tester.pumpAndSettle();
+    expect(find.text('上游服务拒绝了本次请求。'), findsOneWidget);
+    expect(find.text('检查所选账号是否有权使用该服务和模型；必要时刷新账号凭据。'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 
@@ -2473,6 +2612,13 @@ void main() {
       ),
       findsOneWidget,
     );
+    expect(find.textContaining('unsupported_client_input'), findsNothing);
+    await tester.tap(
+      find.byKey(
+        const Key('exchange-failure-details-unsupported_client_input'),
+      ),
+    );
+    await tester.pumpAndSettle();
     expect(find.textContaining('unsupported_client_input'), findsOneWidget);
     expect(
       tester
@@ -2672,7 +2818,7 @@ void main() {
           null,
         ),
       );
-      await tester.binding.setSurfaceSize(const Size(1180, 760));
+      await tester.binding.setSurfaceSize(const Size(390, 760));
       addTearDown(() => tester.binding.setSurfaceSize(null));
       await tester.pumpWidget(
         const ViberMateApp(previewMode: true, preferChinese: false),
@@ -2692,26 +2838,47 @@ void main() {
       await tester.tap(raw);
       await tester.pumpAndSettle();
 
-      final export = find.byKey(
-        const Key('copy-redacted-diagnostic-run-1-exchange-222'),
+      final preview = find.byKey(
+        const Key('preview-redacted-diagnostic-run-1-exchange-222'),
       );
-      await tester.ensureVisible(export);
-      await tester.tap(export);
-      await tester.pump();
+      await tester.ensureVisible(preview);
+      await tester.tap(preview);
+      await tester.pumpAndSettle();
+      expect(copiedDiagnostic, isNull);
+      expect(
+        find.byKey(const Key('redacted-diagnostic-preview-run-1-exchange-222')),
+        findsOneWidget,
+      );
+      await tester.tap(
+        find.byKey(const Key('redacted-diagnostic-cancel-run-1-exchange-222')),
+      );
+      await tester.pumpAndSettle();
+      expect(copiedDiagnostic, isNull);
+      await tester.tap(preview);
+      await tester.pumpAndSettle();
+      await tester.tap(
+        find.byKey(const Key('redacted-diagnostic-copy-run-1-exchange-222')),
+      );
+      await tester.pumpAndSettle();
 
       final report = jsonDecode(copiedDiagnostic!) as Map<String, Object?>;
       expect(report['schema'], 'vibermate.redacted-diagnostic/v1');
+      expect(report['product'], {'build': 'preview'});
       expect(report['exchange'], isA<Map<String, Object?>>());
       expect(report['rawEvidence'], isA<Map<String, Object?>>());
       expect(copiedDiagnostic, contains('bodySha256'));
       expect(copiedDiagnostic, isNot(contains('Authorization')));
       expect(copiedDiagnostic, isNot(contains('Bearer')));
+      expect(copiedDiagnostic, isNot(contains('Cookie')));
       expect(
         copiedDiagnostic,
         isNot(contains('{"model":"claude-sonnet-4-5","stream":true}')),
       );
       expect(copiedDiagnostic, isNot(contains('/Users/')));
       expect(copiedDiagnostic, isNot(contains('rawQuery')));
+      expect(copiedDiagnostic, isNot(contains('clientPath')));
+      expect(copiedDiagnostic, isNot(contains('contentType')));
+      expect(copiedDiagnostic, isNot(contains('contentEncoding')));
       expect(tester.takeException(), isNull);
 
       await tester.pumpWidget(const SizedBox.shrink());
@@ -3011,7 +3178,7 @@ void main() {
     expect(tester.getCenter(rawSection).dy, lessThan(740));
     await tester.tap(rawSection);
     await tester.pumpAndSettle();
-    expect(find.text('3 条边界消息'), findsOneWidget);
+    expect(find.text('6 条边界消息'), findsOneWidget);
     final rawReveal = find.byKey(
       const Key('raw-reveal-raw-preview-run-1-exchange-222'),
     );
@@ -3324,6 +3491,55 @@ void main() {
     },
   );
 
+  for (final language in AppLanguage.values) {
+    testWidgets('network failure has one retry path at 390px ($language)', (
+      tester,
+    ) async {
+      await tester.binding.setSurfaceSize(const Size(390, 760));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      final api = PreviewControlApi(seedCaptures: false);
+      final controller = WorkbenchController(
+        api: api,
+        terminalCommands: PreviewTerminalCommandService(),
+        previewMode: true,
+        closeRuntime: api.close,
+      );
+      addTearDown(controller.dispose);
+      await controller.initialize();
+      controller.networkData = null;
+      controller.networkLoading = false;
+      controller.networkError = 'error.control_result_unknown';
+      controller.networkErrorDiagnostic = 'control_connection_failed';
+      final copy = AppCopy.forLanguage(language);
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: ViberTheme.dark(),
+          home: Scaffold(
+            body: AnimatedBuilder(
+              animation: controller,
+              builder: (context, _) =>
+                  NetworkView(controller: controller, copy: copy),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text(copy('error.control_result_unknown')), findsOneWidget);
+      expect(find.text('control_connection_failed'), findsNothing);
+      expect(find.byKey(const Key('network-retry')), findsOneWidget);
+      await tester.tap(find.byKey(const Key('network-retry')));
+      await tester.pumpAndSettle();
+
+      expect(controller.networkData, isNotNull);
+      expect(find.text(copy('error.control_result_unknown')), findsNothing);
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox.shrink());
+      controller.dispose();
+      await tester.pump();
+    });
+  }
+
   testWidgets('network evidence uses real cursor pagination', (tester) async {
     await tester.binding.setSurfaceSize(const Size(1180, 760));
     addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -3412,6 +3628,35 @@ void main() {
 
     await tester.pumpWidget(const SizedBox.shrink());
     await tester.pump();
+  });
+
+  testWidgets('blind forwarding does not claim the payload was encrypted', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1180, 760));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(
+      const ViberMateApp(previewMode: true, preferChinese: false),
+    );
+    await tester.pumpAndSettle();
+    await _openNetwork(tester);
+    await tester.tap(find.byKey(const Key('network-tab-connections')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('api.anthropic.com:443').first);
+    await tester.pumpAndSettle();
+
+    final details = find.byKey(
+      const Key('connection-evidence-table-connection-1'),
+    );
+    expect(details, findsOneWidget);
+    expect(
+      find.descendant(
+        of: details,
+        matching: find.text('Content not inspected'),
+      ),
+      findsOneWidget,
+    );
+    expect(tester.takeException(), isNull);
   });
 
   testWidgets(
@@ -3856,6 +4101,10 @@ void main() {
         find.byKey(const Key('environment-impact-review')),
         findsOneWidget,
       );
+      expect(find.text('CONFIGURATION TO PUBLISH'), findsOneWidget);
+      expect(find.text('Work reviewed'), findsOneWidget);
+      expect(find.textContaining('Metadata only'), findsOneWidget);
+      expect(find.text('Anthropic · Lab'), findsOneWidget);
       expect(find.text('Future Captures only'), findsWidgets);
       expect(
         find.text('6 RUNNING CAPTURES KEEP THEIR CURRENT REVISION'),
@@ -3874,6 +4123,14 @@ void main() {
         findsOneWidget,
       );
       expect(find.text('Anthropic · Lab'), findsOneWidget);
+
+      await tester.binding.setSurfaceSize(const Size(390, 844));
+      await tester.pumpAndSettle();
+      expect(find.textContaining('Client protocol & origin  →'), findsNothing);
+      expect(find.text('Anthropic · Lab'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+      await tester.binding.setSurfaceSize(const Size(1180, 760));
+      await tester.pumpAndSettle();
 
       await tester.tap(find.byKey(const Key('environment-edit')));
       await tester.pumpAndSettle();
@@ -4706,6 +4963,12 @@ void main() {
     await tester.tap(find.byKey(const Key('environment-create-review')));
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('environment-create-impact')), findsOneWidget);
+    expect(find.text('CONFIGURATION TO PUBLISH'), findsOneWidget);
+    expect(find.text('Local Observe'), findsOneWidget);
+    expect(
+      find.text('Capture-only · Requests are forwarded unchanged.'),
+      findsOneWidget,
+    );
     expect(
       find.text('0 RUNNING CAPTURES KEEP THEIR CURRENT REVISION'),
       findsOneWidget,
@@ -5409,10 +5672,16 @@ void main() {
             .data,
         'Authorization: Bearer',
       );
+      await tester.tap(find.byKey(const Key('account-editor-save')));
+      await tester.pumpAndSettle();
+      expect(find.text('Enter a bearer token.'), findsOneWidget);
       await tester.tap(find.byKey(const Key('account-editor-kind')));
       await tester.pumpAndSettle();
       await tester.tap(find.text('Anthropic API key').last);
       await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('account-editor-save')));
+      await tester.pumpAndSettle();
+      expect(find.text('Enter an API key.'), findsOneWidget);
       await tester.enterText(
         find.byKey(const Key('account-editor-name')),
         'Team Primary',
@@ -5708,6 +5977,31 @@ void main() {
 }
 
 Future<void> _openSettingsTab(WidgetTester tester, Key key) async {
+  final picker = find.byKey(const Key('settings-section-picker'));
+  if (picker.evaluate().isNotEmpty) {
+    final option = switch (key) {
+      const Key('settings-tab-general') => 'preferences',
+      const Key('settings-tab-access') => 'access',
+      const Key('settings-tab-users') => 'users',
+      const Key('settings-tab-safety') => 'safety',
+      const Key('settings-tab-proxy') => 'networkExits',
+      _ => throw StateError('Unknown Settings tab $key'),
+    };
+    await tester.tap(picker);
+    await tester.pumpAndSettle();
+    final label = tester.widget<SettingsView>(find.byType(SettingsView)).copy(
+      switch (option) {
+        'preferences' => 'settings.tab.preferences',
+        'access' => 'settings.tab.access',
+        'users' => 'settings.tab.users',
+        'safety' => 'settings.tab.safety',
+        _ => 'settings.tab.proxy',
+      },
+    );
+    await tester.tap(find.text(label).hitTestable().last);
+    await tester.pumpAndSettle();
+    return;
+  }
   final tab = find.byKey(key);
   await tester.ensureVisible(tab);
   await tester.pumpAndSettle();

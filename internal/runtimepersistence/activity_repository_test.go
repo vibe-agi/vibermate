@@ -126,6 +126,7 @@ func TestConversationIdentitySurvivesSQLiteReopenWithoutLosingNativeIDs(t *testi
 
 	databasePath := filepath.Join(t.TempDir(), "data", "runtime.db")
 	store := openTestStore(t, databasePath)
+	appendIdentityActivity(t, store, "exchange-native-identity")
 	identity := agentconversation.ClientIdentity{
 		Client: "claude", SessionID: "session-resumable", SessionResumable: true,
 		ActorID: "agent-review", ActorLabel: "code-review",
@@ -175,6 +176,7 @@ func TestConversationIdentityPersistsWireEvidenceThenDeepensFromLocalState(t *te
 
 	databasePath := filepath.Join(t.TempDir(), "data", "runtime.db")
 	store := openTestStore(t, databasePath)
+	appendIdentityActivity(t, store, "exchange-wire")
 	repository := store.ConversationIdentityRepository()
 	observedAt := time.Date(2026, 8, 14, 11, 31, 5, 0, time.UTC)
 	wire, found := agentconversation.ClientIdentityFromProtocolEvidence(
@@ -242,6 +244,22 @@ func TestConversationIdentityPersistsWireEvidenceThenDeepensFromLocalState(t *te
 		!stored.ObservedAt.Equal(observedAt) ||
 		len(stored.ProtocolIDs) != 4 {
 		t.Fatalf("deepened identity = %#v", stored)
+	}
+}
+
+func appendIdentityActivity(t *testing.T, store *Store, exchangeID string) {
+	t.Helper()
+	record := activity.Record{
+		ID:         "activity-" + exchangeID,
+		OccurredAt: time.Date(2026, 8, 14, 2, 3, 4, 0, time.UTC),
+		Kind:       activity.KindExchangeCompleted, SubjectID: exchangeID,
+		Status: activity.StatusSucceeded, SourceKind: activity.SourceCaptureRun,
+		SourceDisplayName: "codex", SourceRecognition: activity.SourceRecognitionVerified,
+		CaptureRunID: "run-identity", ConnectionID: "connection-" + exchangeID,
+	}
+	setFrozenExecutionEvidence(&record, "identity")
+	if _, err := store.ActivityRepository().Append(context.Background(), record); err != nil {
+		t.Fatal(err)
 	}
 }
 

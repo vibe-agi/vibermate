@@ -52,6 +52,33 @@ Future<RuntimeConnection> connectPlatformRuntime({
     },
     prepareStorageMove: runtime.prepareStorageMove,
     moveStorage: runtime.moveStorage,
+    chooseStorageBackupDirectory: () async {
+      final selected = await getDirectoryPath();
+      if (selected == null) return null;
+      final parent = await Directory(selected).resolveSymbolicLinks();
+      return '$parent${Platform.pathSeparator}ViberMate Backup ${_storageDirectorySuffix()}';
+    },
+    prepareStorageBackup: runtime.prepareStorageBackup,
+    backupStorage: runtime.backupStorage,
+    chooseStorageRestore: () async {
+      final selected = await getDirectoryPath();
+      if (selected == null) return null;
+      final backup = await Directory(selected).resolveSymbolicLinks();
+      return (
+        backup: backup,
+        target:
+            '${runtime.dataDirectory}.restored-${_storageDirectorySuffix()}',
+      );
+    },
+    prepareStorageRestore: runtime.prepareStorageRestore,
+    restoreStorage: runtime.restoreStorage,
     storageNotice: runtime.storageNotice,
   );
+}
+
+String _storageDirectorySuffix() {
+  final now = DateTime.now();
+  String two(int value) => value.toString().padLeft(2, '0');
+  return '${now.year}${two(now.month)}${two(now.day)}-'
+      '${two(now.hour)}${two(now.minute)}${two(now.second)}';
 }

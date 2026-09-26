@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/vibe-agi/vibermate/internal/productbuild"
 	"github.com/vibe-agi/vibermate/internal/runtimeuser"
 	"github.com/vibe-agi/vibermate/internal/workspaceidentity"
 )
@@ -30,9 +31,10 @@ type RuntimeUserSessionsOptions struct {
 }
 
 type RuntimeUserSessionsHandler struct {
-	instanceID string
-	users      RuntimeUserSessionAuthority
-	logins     *runtimeUserLoginAdmission
+	instanceID   string
+	productBuild string
+	users        RuntimeUserSessionAuthority
+	logins       *runtimeUserLoginAdmission
 }
 
 // RuntimeUserSessionAuthority is the narrow password/session boundary needed
@@ -62,6 +64,7 @@ type RuntimeUserSession struct {
 	Schema       string          `json:"schema"`
 	InstanceID   string          `json:"instanceId"`
 	APIVersion   string          `json:"apiVersion"`
+	ProductBuild string          `json:"productBuild"`
 	User         RuntimeUserView `json:"user"`
 	SessionID    string          `json:"sessionId"`
 	SessionToken string          `json:"sessionToken"`
@@ -69,13 +72,14 @@ type RuntimeUserSession struct {
 }
 
 type RuntimeUserCurrentSession struct {
-	Schema     string          `json:"schema"`
-	InstanceID string          `json:"instanceId"`
-	APIVersion string          `json:"apiVersion"`
-	User       RuntimeUserView `json:"user"`
-	SessionID  string          `json:"sessionId"`
-	MachineID  string          `json:"machineId"`
-	DeviceName string          `json:"deviceName"`
+	Schema       string          `json:"schema"`
+	InstanceID   string          `json:"instanceId"`
+	APIVersion   string          `json:"apiVersion"`
+	ProductBuild string          `json:"productBuild"`
+	User         RuntimeUserView `json:"user"`
+	SessionID    string          `json:"sessionId"`
+	MachineID    string          `json:"machineId"`
+	DeviceName   string          `json:"deviceName"`
 }
 
 func NewRuntimeUserSessions(
@@ -85,9 +89,10 @@ func NewRuntimeUserSessions(
 		return nil, errors.New("Runtime User Login Session dependencies are incomplete")
 	}
 	return &RuntimeUserSessionsHandler{
-		instanceID: options.InstanceID,
-		users:      options.Users,
-		logins:     newRuntimeUserLoginAdmission(),
+		instanceID:   options.InstanceID,
+		productBuild: productbuild.Label(),
+		users:        options.Users,
+		logins:       newRuntimeUserLoginAdmission(),
 	}, nil
 }
 
@@ -141,7 +146,7 @@ func (handler *RuntimeUserSessionsHandler) current(
 	writer.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(writer).Encode(RuntimeUserCurrentSession{
 		Schema: RuntimeUserCurrentSessionSchema, InstanceID: handler.instanceID,
-		APIVersion: "v1",
+		APIVersion: "v1", ProductBuild: handler.productBuild,
 		User: RuntimeUserView{
 			ID: string(identity.User.ID), Username: identity.User.Username,
 		},
@@ -214,7 +219,7 @@ func (handler *RuntimeUserSessionsHandler) login(
 	writer.WriteHeader(http.StatusCreated)
 	_ = json.NewEncoder(writer).Encode(RuntimeUserSession{
 		Schema: RuntimeUserSessionSchema, InstanceID: handler.instanceID,
-		APIVersion: "v1",
+		APIVersion: "v1", ProductBuild: handler.productBuild,
 		User: RuntimeUserView{
 			ID: string(session.User.ID), Username: session.User.Username,
 		},

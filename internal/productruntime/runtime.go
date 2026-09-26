@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/vibe-agi/vibermate/internal/accountoperation"
+	"github.com/vibe-agi/vibermate/internal/acpobservation"
 	"github.com/vibe-agi/vibermate/internal/activity"
 	"github.com/vibe-agi/vibermate/internal/blindtunnel"
 	"github.com/vibe-agi/vibermate/internal/captureadmission"
@@ -53,6 +54,8 @@ var ErrInvalidBuildResult = errors.New("invalid runtime build result")
 type Runtime struct {
 	launchSnapshots    launchsnapshot.Store
 	paths              RuntimePaths
+	storage            *runtimepersistence.Store
+	acpObservations    *acpobservation.Manager
 	status             *statusTracker
 	schemaReader       runtimepersistence.SchemaStateReader
 	environments       environmentRuntime
@@ -729,6 +732,10 @@ func startWithBuilders(
 		proxy.BeginShutdown()
 		return nil
 	})
+	acpObservations, err := acpobservation.NewManager(storageResult.store.ACPObservations(), captureRuns, assignments, environments, options.Clock)
+	if err != nil {
+		return fail("ACP observations", err)
+	}
 	pending = cleanupStack{}
 
 	finalState, err := storageResult.store.SchemaStateReader().ReadSchemaState(ctx)
@@ -738,6 +745,8 @@ func startWithBuilders(
 	tracker.commitInitialized(finalState.Revision)
 	return &Runtime{
 		paths:              options.Paths,
+		storage:            storageResult.store,
+		acpObservations:    acpObservations,
 		status:             tracker,
 		schemaReader:       storageResult.store.SchemaStateReader(),
 		environments:       environments,
@@ -798,6 +807,15 @@ func (r *Runtime) ExchangeExecutor() exchange.Executor {
 	return r.exchanges
 }
 
+// DryRun evaluates a frozen Exchange without acquiring credentials, opening a
+// provider connection, or writing evidence.
+func (r *Runtime) DryRun(ctx context.Context, request exchange.ClientRequest) (exchange.DryRunResult, error) {
+	if r == nil || r.exchanges == nil {
+		return exchange.DryRunResult{}, errors.New("Runtime dry run is unavailable")
+	}
+	return r.exchanges.DryRun(ctx, request)
+}
+
 // CaptureRuns returns the runtime-owned short-lived child attribution
 // controller. It has no HTTP exposure until a Host composes authenticated
 // control routes.
@@ -805,6 +823,8 @@ func (r *Runtime) ExchangeExecutor() exchange.Executor {
 func (r *Runtime) CaptureRunReader() capturerun.Reader {
 	return r.captureRuns
 }
+
+func (r *Runtime) ACPObservations() *acpobservation.Manager { return r.acpObservations }
 
 func (r *Runtime) CaptureRuns() capturerun.Controller {
 	return r.captureRuns

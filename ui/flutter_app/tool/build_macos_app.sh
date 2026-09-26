@@ -6,6 +6,9 @@ mode="${1:-live}"
 script_directory="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 flutter_directory="$(cd "${script_directory}/.." && pwd)"
 repository_root="$(cd "${flutter_directory}/../.." && pwd)"
+package_version="$(awk '$1 == "version:" { print $2 }' "${flutter_directory}/pubspec.yaml")"
+version="${package_version%%+*}"
+release_ldflags="-X github.com/vibe-agi/vibermate/internal/productbuild.releaseVersion=v${version}"
 distribution_directory="${repository_root}/dist"
 verify_app="${script_directory}/verify_macos_app.sh"
 
@@ -43,10 +46,10 @@ else
     export CGO_CFLAGS="${CGO_CFLAGS:-} -mmacosx-version-min=14.0"
     export CGO_CXXFLAGS="${CGO_CXXFLAGS:-} -mmacosx-version-min=14.0"
     export CGO_LDFLAGS="${CGO_LDFLAGS:-} -mmacosx-version-min=14.0"
-    go build -buildvcs=true -trimpath -tags vibermate_native_secrets \
+    go build -buildvcs=true -trimpath -ldflags="${release_ldflags}" -tags vibermate_native_secrets \
       -o "${flutter_directory}/build/vibermate" \
       ./cmd/vibermate
-    go build -buildvcs=true -trimpath -tags vibermate_native_secrets \
+    go build -buildvcs=true -trimpath -ldflags="${release_ldflags}" -tags vibermate_native_secrets \
       -o "${flutter_directory}/build/vibermated" \
       ./cmd/vibermated
   )
@@ -82,6 +85,9 @@ else
   ditto --norsrc --noextattr --noacl --noqtn -X \
     "${web_source}" \
     "${web_destination}"
+  cp "${repository_root}/LICENSE" "${app_bundle}/Contents/Resources/LICENSE"
+  cp "${repository_root}/LICENSE" "${web_destination}/LICENSE"
+  cp "${repository_root}/THIRD_PARTY_LICENSES.md" "${app_bundle}/Contents/Resources/THIRD_PARTY_LICENSES.md"
   if [[ "${app_executable}" -ef "${cli_executable}" ]]; then
     echo "App executable and packaged CLI resolve to the same file" >&2
     exit 70

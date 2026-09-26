@@ -83,13 +83,82 @@ void main() {
         await tester.pump();
       });
     }
+    for (final scope in ['full_body', 'observed_prefix', 'unavailable']) {
+      testWidgets('Client Body digest explains $scope in $language', (
+        tester,
+      ) async {
+        await tester.binding.setSurfaceSize(const Size(390, 760));
+        addTearDown(() => tester.binding.setSurfaceSize(null));
+        final api = _PrefixEvidenceApi(
+          'recording_metadata_only',
+          clientDigestScope: scope,
+        );
+        final copy = AppCopy.forLanguage(language);
+        final controller = WorkbenchController(
+          api: api,
+          terminalCommands: PreviewTerminalCommandService(),
+          previewMode: true,
+          closeRuntime: api.close,
+        );
+        addTearDown(controller.dispose);
+        addTearDown(api.close);
+        final page = await api.preview.activities(
+          captureRunId: 'run-1',
+          limit: 224,
+        );
+        final activity = page.items.singleWhere(
+          (item) => item.id == 'run-1-exchange-222',
+        );
+        expect(await controller.loadExchangeDetail(activity.id), isNotNull);
+        await tester.pumpWidget(
+          MaterialApp(
+            theme: ViberTheme.dark(),
+            home: Scaffold(
+              body: EvidenceConversationTimeline(
+                controller: controller,
+                activities: [activity],
+                copy: copy,
+              ),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+        final raw = find.byKey(Key('exchange-raw-${activity.id}'));
+        await tester.ensureVisible(raw);
+        await tester.tap(raw);
+        await tester.pumpAndSettle();
+        final digest = find.byKey(const Key('raw-body-digest-digest-fixture'));
+        await tester.ensureVisible(digest);
+        expect(digest, findsOneWidget);
+        expect(find.text(copy('exchange.raw.digest.$scope')), findsOneWidget);
+        expect(
+          find.text('a' * 64),
+          scope == 'unavailable' ? findsNothing : findsOneWidget,
+        );
+        expect(
+          find.byTooltip(copy('exchange.raw.digest.copy')),
+          scope == 'unavailable' ? findsNothing : findsOneWidget,
+        );
+        final help = find.byKey(
+          const Key('raw-body-digest-help-digest-fixture'),
+        );
+        await tester.ensureVisible(help);
+        await tester.pumpAndSettle();
+        await tester.tap(help);
+        await tester.pumpAndSettle();
+        expect(find.text(copy('exchange.raw.digest.help')), findsOneWidget);
+        expect(tester.takeException(), isNull);
+        await tester.pumpWidget(const SizedBox.shrink());
+      });
+    }
   }
 }
 
 final class _PrefixEvidenceApi implements ControlApi {
-  _PrefixEvidenceApi(this.reason);
+  _PrefixEvidenceApi(this.reason, {this.clientDigestScope});
 
   final String reason;
+  final String? clientDigestScope;
   final preview = PreviewControlApi();
 
   @override
@@ -102,27 +171,44 @@ final class _PrefixEvidenceApi implements ControlApi {
   Future<RawEvidencePage> rawEvidence(String exchangeId) async {
     final page = await preview.rawEvidence(exchangeId);
     final sample = page.items.first;
+    final client = clientDigestScope != null;
     return RawEvidencePage(
       items: [
         RawEvidenceEnvelope(
-          envelopeId: 'prefix-fixture',
-          layer: 'provider_response',
+          envelopeId: client ? 'digest-fixture' : 'prefix-fixture',
+          layer: client ? 'client_ingress' : 'provider_response',
           scopeKind: sample.scopeKind,
           scopeId: sample.scopeId,
           exchangeId: exchangeId,
           observedAt: sample.observedAt,
           expiresAt: sample.expiresAt,
-          statusCode: 200,
+          method: client ? 'POST' : null,
+          statusCode: client ? null : 200,
           headerCount: 0,
           trailerCount: 0,
-          bodyBytes: 65537,
-          digestScope: reason == 'response_payload_limit'
-              ? 'full'
-              : 'observed_prefix',
-          payloadState: 'truncated',
-          payloadReason: reason,
+          bodyBytes: client
+              ? clientDigestScope == 'unavailable'
+                    ? 0
+                    : 123
+              : 65537,
+          bodySha256: client && clientDigestScope != 'unavailable'
+              ? 'a' * 64
+              : null,
+          digestScope:
+              clientDigestScope ??
+              (reason == 'response_payload_limit'
+                  ? 'full_body'
+                  : 'observed_prefix'),
+          payloadState: client
+              ? clientDigestScope == 'unavailable'
+                    ? 'unavailable'
+                    : 'metadata_only'
+              : 'truncated',
+          payloadReason: client && clientDigestScope == 'unavailable'
+              ? 'unavailable'
+              : reason,
           redactedCredentialFields: const [],
-          revealAvailable: true,
+          revealAvailable: !client,
         ),
       ],
       recovery: page.recovery,

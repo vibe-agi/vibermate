@@ -51,6 +51,59 @@ final class AppCopy {
   }
 
   static const _en = <String, String>{
+    'acp.transport': 'Editor ↔ Agent · ACP',
+    'acp.boundary':
+        'ACP observation only. The editor owns login and permission decisions. HTTP account replacement, model mapping, scripts, and network rules are not applied by this wrapper.',
+    'acp.reported_identity':
+        'Name and version reported by the Agent during initialization; not release verification.',
+    'acp.counts': '{sessions} ACP sessions · {prompts} prompts',
+    'acp.metadata_only':
+        'Metadata only. Prompt outcomes are retained, but user and assistant text are not saved. To record text for a new connection, add --record-content before -- in the editor command.',
+    'acp.content_recorded':
+        'User and assistant text recording enabled, bounded by the Server policy and observation limits. Authentication, permission payloads, tool inputs/results, stderr, and unknown extensions are never saved.',
+    'acp.recording_off': 'ACP recording is disabled by the Server policy.',
+    'acp.expired':
+        'The retained ACP evidence has expired. This connection marker contains no saved conversation.',
+    'acp.incomplete':
+        'Observation is incomplete. A size limit, interrupted stream, or missing final update can leave gaps; this does not establish the Agent’s model outcome.',
+    'acp.session': 'Agent session',
+    'acp.workspace_claim':
+        'Working directory reported in the ACP session request. It does not change this Capture’s launch workspace or grant file access.',
+    'acp.awaiting_session':
+        'Waiting for the editor to create or load an Agent session. Complete any Agent login in the editor.',
+    'acp.no_session':
+        'No confirmed ACP session was observed. Check the editor’s Agent login and stderr output, then reconnect.',
+    'acp.no_prompts':
+        'No new prompts were observed in this session. Loading history does not count as a new prompt.',
+    'acp.prompt.pending': 'Awaiting Agent result',
+    'acp.prompt.completed': 'Agent returned',
+    'acp.prompt.cancelled': 'Cancelled',
+    'acp.prompt.failed': 'RPC error',
+    'acp.prompt.interrupted': 'Result not observed',
+    'acp.tool_calls': '{count} tool-call notifications',
+    'acp.user': 'You → Agent',
+    'acp.agent': 'Agent → Editor',
+    'acp.setup.title': 'Connect an ACP editor',
+    'acp.login_required':
+        'The Agent reports that login is required. Complete its authentication in the editor, then retry. This is the Agent’s account, not your ViberMate Runtime login.',
+    'acp.setup.detail':
+        'Install an ACP adapter, then make your editor start it through ViberMate. Existing Agent login, permission prompts, and environment stay with the editor.',
+    'acp.setup.program': 'ViberMate executable (absolute path)',
+    'acp.setup.agent_path':
+        'ACP adapter executable (absolute path recommended)',
+    'acp.setup.editor': 'Editor configuration format',
+    'acp.setup.content': 'Save user and assistant text',
+    'acp.setup.server': 'Runtime Server URL (empty = local App)',
+    'acp.setup.copy': 'Copy editor configuration',
+    'acp.setup.copied': 'Configuration copied',
+    'acp.setup.failed':
+        'Could not copy. Select the configuration text and copy it manually.',
+    'acp.setup.help.local':
+        'Merge the generated object into the editor’s settings and keep existing environment values. Do not replace the whole settings file.',
+    'acp.setup.help.remote':
+        'Merge the generated object into the editor’s settings and keep existing environment values. Do not replace the whole settings file. On the editor machine, first sign in with vibermate login --server using the same URL.',
+    'acp.setup.paths':
+        'GUI apps may not inherit your shell PATH. Use absolute paths and include Node in env.PATH for npm adapters; shell aliases do not work. Install the ACP adapter separately.',
     'error.account_selection_empty':
         'No usable accounts are linked to this service. Link a ready account under Upstream services, then review the policy again.',
     'error.deleted_refresh_failed':
@@ -78,6 +131,20 @@ final class AppCopy {
         'This policy review is no longer current. Review the draft again before publishing.',
     'error.configuration_invalid':
         'These settings could not be accepted. Check the selected service, account and required fields, then try again.',
+    'error.runtime_user_policy_invalid':
+        'The user policy is invalid. Select at least one traffic policy or allow all, and use non-negative warning values.',
+    'error.runtime_user_policy_unavailable':
+        'The user policy could not be saved. Refresh the user list and try again.',
+    'error.dry_run_flow_not_matched':
+        'This request does not match the selected request source. Check its path and protocol.',
+    'error.dry_run_input_invalid':
+        'The synthetic request is not valid for this protocol. Check the JSON body and required fields.',
+    'error.dry_run_environment_disabled':
+        'This version disables the traffic policy. Choose an active version before trying a request.',
+    'error.dry_run_selector_failed':
+        'The account selector could not choose an account. Check its script and candidate accounts.',
+    'error.dry_run_transform_failed':
+        'The request transform failed. Check its script and synthetic input.',
     'error.control_session_expired':
         'The management session is no longer authorized. Reconnect to the runtime or sign in again.',
     'error.control_result_unknown':
@@ -165,8 +232,32 @@ final class AppCopy {
     'account_facts.no_windows':
         'The upstream did not provide quota windows. This does not mean 0% used.',
     'account_facts.unknown': 'Not provided',
+    'account_facts.no_credits': 'No credits available',
     'account_facts.unlimited': 'Unlimited',
     'account_facts.credits': 'Credits: {balance}',
+    'account_facts.banked_resets': 'Banked Codex resets: {count}',
+    'account_facts.applicable_resets': 'Usable now: {count}',
+    'account_facts.reset.choose': 'Use a banked reset',
+    'account_facts.reset.choose_title': 'Choose a Codex reset',
+    'account_facts.reset.confirm_title': 'Use this reset?',
+    'account_facts.reset.confirm_detail':
+        'This consumes one saved reset immediately for the selected account. It may change the next weekly reset date.',
+    'account_facts.reset.confirm': 'Use reset',
+    'account_facts.reset.expires': 'Expires {time}',
+    'account_facts.reset.no_expiry': 'No expiration supplied',
+    'account_facts.reset.applied': 'Reset applied.',
+    'account_facts.reset.already': 'This reset was already applied.',
+    'account_facts.reset.not_needed':
+        'No quota window currently needs a reset.',
+    'account_facts.reset.none': 'This account has no usable reset credit.',
+    'account_facts.reset.unconfirmed':
+        'The reset result is not confirmed. Check current quota before trying again.',
+    'account_facts.reset.failed':
+        'Could not use this reset. Check the account and try again.',
+    'account_facts.reset.details_unavailable':
+        'Reset details are unavailable. Refresh this quota before using one.',
+    'account_facts.reset.oauth_only':
+        'Use a managed Codex OAuth account to redeem a reset here.',
     'account_facts.as_of': 'Upstream statistics as of {time}',
     'account_facts.partial':
         'The upstream reports incomplete historical statistics.',
@@ -293,11 +384,54 @@ final class AppCopy {
     'capture.search.no_match': 'No loaded captures match this filter.',
     'capture.search.load_hint':
         'Load older captures to continue searching retained history.',
+    'evidence_search.open': 'Search all records',
+    'evidence_search.title': 'Search retained history',
+    'evidence_search.boundary':
+        'Searches retained metadata across all Captures. Message bodies are not searched.',
+    'evidence_search.query':
+        'Workspace, account, model, tool, status, or error',
+    'evidence_search.search': 'Search',
+    'evidence_search.filters.show': 'More filters',
+    'evidence_search.filters.hide': 'Fewer filters',
+    'evidence_search.status': 'Status',
+    'evidence_search.status.any': 'Any status',
+    'evidence_search.period': 'Time',
+    'evidence_search.period.all': 'All retained history',
+    'evidence_search.period.day': 'Last 24 hours',
+    'evidence_search.period.week': 'Last 7 days',
+    'evidence_search.period.month': 'Last 30 days',
+    'evidence_search.environment': 'Traffic policy ID',
+    'evidence_search.account': 'Account ID',
+    'evidence_search.model': 'Model',
+    'evidence_search.tool': 'Tool name',
+    'evidence_search.reason': 'Error code',
+    'evidence_search.prompt': 'Enter a search term or choose a filter.',
+    'evidence_search.empty': 'No retained metadata matches these filters.',
+    'evidence_search.load_more': 'Load more results',
+    'evidence_search.result': 'Search result',
+    'evidence_search.open_capture': 'Open Capture',
+    'evidence_search.matches': 'Matched: {fields}',
+    'evidence_search.content_unavailable':
+        'Message metadata was not retained or has expired.',
+    'evidence_search.match.workspace': 'workspace',
+    'evidence_search.match.capture': 'Capture',
+    'evidence_search.match.conversation': 'conversation',
+    'evidence_search.match.environment': 'traffic policy',
+    'evidence_search.match.account': 'account',
+    'evidence_search.match.model': 'model',
+    'evidence_search.match.tool': 'tool',
+    'evidence_search.match.status': 'status',
+    'evidence_search.match.error': 'error',
+    'evidence_search.match.source': 'client',
+    'evidence_search.match.exchange': 'Exchange',
+    'evidence_search.match.time': 'time',
     'capture.running': 'Running now',
     'capture.history': 'History',
     'capture.empty': 'No captures yet.',
     'capture.empty.detail':
         'Start Codex or Claude through ViberMate from Terminal.',
+    'capture.empty.web.detail':
+        'Start an Agent from Terminal, or create a proxy login for another client.',
     'capture.empty.action': 'Open Terminal setup',
     'capture.empty.web.action': 'Open access and launch guide',
     'capture.load_more': 'Load older captures',
@@ -360,6 +494,20 @@ final class AppCopy {
     'capture.manual.delivery.username': 'Username',
     'capture.manual.delivery.password': 'Password',
     'capture.manual.delivery.root': 'Root path',
+    'capture.manual.delivery.root_server':
+        'Trust this Proxy CA on the client device for intercepted AI hosts. Verify its SHA-256 fingerprint before installing.',
+    'capture.manual.delivery.download_root': 'Download Proxy CA',
+    'capture.manual.delivery.fingerprint': 'Proxy CA SHA-256 fingerprint',
+    'capture.manual.delivery.root_saved':
+        'Proxy CA downloaded. Install it on the client device.',
+    'capture.manual.delivery.root_changed':
+        'The Proxy CA changed. Review the current certificate before using this proxy login.',
+    'capture.manual.delivery.root_download_failed':
+        'Could not download the Proxy CA. Check the Server connection and try again.',
+    'capture.manual.delivery.server_tls':
+        'The proxy connection uses the Server HTTPS certificate; the Proxy CA above is for intercepted AI hosts.',
+    'capture.manual.delivery.http_warning':
+        'This HTTP proxy connection is unencrypted. Use it only on a trusted private network.',
     'capture.manual.delivery.evidence':
         'Revoking or rotating this login never deletes captured Conversation or Activity evidence.',
     'capture.manual.delivery.copied': '{field} copied',
@@ -426,7 +574,7 @@ final class AppCopy {
         'answering; this does not claim erasure from disk snapshots or '
         'backups.',
     'common.back': 'Back',
-    'common.loading': 'Loading runtime evidence…',
+    'common.loading': 'Loading…',
     'common.retry': 'Retry',
     'common.hide_directory': 'Hide list',
     'common.show_directory': 'Show list',
@@ -462,7 +610,7 @@ final class AppCopy {
     'bootstrap.failure.runtime_already_active':
         'Another ViberMate window is already running. Close it, then retry.',
     'bootstrap.failure.secret_store_unavailable':
-        'ViberMate could not read the macOS Keychain. Unlock this Mac and retry. If this repeats after running a development build, quit ViberMate; open Keychain Access, search for io.vibermate.desktop, delete only those password items, then reopen. Captures stay; saved provider credentials and the local Root must be set up again.',
+        'ViberMate cannot access the macOS Keychain. Unlock the login keychain in Keychain Access and retry. If you switched between development and installed builds, reopen the signed installed build; they may not share Keychain access. Do not delete Keychain items or local data.',
     'bootstrap.failure.storage_unavailable':
         'ViberMate cannot open its local data. No database was replaced. Check free space and folder permissions. If this started after changing versions, keep the data directory and use the previous compatible version.',
     'bootstrap.failure.root_reset_failed':
@@ -571,6 +719,58 @@ final class AppCopy {
         'Upstream service did not respond in time.',
     'exchange.failure.provider_response_idle.action':
         'Check the upstream service and network path, then retry the Agent request.',
+    'exchange.failure.provider_transport_failed.title':
+        'The upstream network request failed; the exact stage is unknown.',
+    'exchange.failure.provider_transport_failed.action':
+        'Inspect the outbound attempt and selected network exit, then check upstream reachability and retry.',
+    'exchange.failure.provider_transport_dns.title':
+        'Name lookup failed on the outbound path.',
+    'exchange.failure.provider_transport_dns.action':
+        'Check the upstream address and DNS settings of the selected network exit, then retry.',
+    'exchange.failure.provider_transport_tls.title':
+        'TLS certificate verification failed on the outbound path.',
+    'exchange.failure.provider_transport_tls.action':
+        'Check the upstream host and trusted certificate chain; if an exit proxy is used, inspect its certificate. Do not disable verification.',
+    'exchange.failure.provider_transport_profile.title':
+        'The selected TLS fingerprint could not be prepared for this request.',
+    'exchange.failure.provider_transport_profile.action':
+        'Review the frozen wire profile and captured client TLS evidence, publish a compatible profile, then retry.',
+    'exchange.failure.provider_transport_handshake.title':
+        'The upstream TLS handshake failed before an HTTP response.',
+    'exchange.failure.provider_transport_handshake.action':
+        'Check upstream TLS compatibility and the selected fingerprint, then retry. Do not disable certificate verification.',
+    'exchange.failure.provider_transport_connection.title':
+        'The outbound connection failed or was interrupted.',
+    'exchange.failure.provider_transport_connection.action':
+        'Check the selected network exit, upstream address, and firewall path, then retry.',
+    'exchange.failure.provider_transport_timeout.title':
+        'The outbound request timed out.',
+    'exchange.failure.provider_transport_timeout.action':
+        'Check upstream reachability and the selected network exit or proxy, then retry.',
+    'exchange.failure.provider_status_rejected.title':
+        'The upstream service refused this request.',
+    'exchange.failure.provider_status_rejected.action':
+        'Check its HTTP status and the selected account in the upstream attempt before retrying.',
+    'exchange.failure.provider_status_rejected_auth.title':
+        'The upstream service denied this request.',
+    'exchange.failure.provider_status_rejected_auth.action':
+        'Check whether the selected account can access this service and model, then refresh its credential if needed.',
+    'exchange.failure.provider_status_rejected_rate_limit.title':
+        'The upstream rate limit was reached.',
+    'exchange.failure.provider_status_rejected_rate_limit.action':
+        'Check this account’s quota or wait for the provider reset before retrying.',
+    'exchange.failure.provider_credential_unavailable.title':
+        'The selected upstream account has no usable credential.',
+    'exchange.failure.provider_credential_unavailable.action':
+        'Refresh or reconnect that account under Upstream accounts, then retry.',
+    'exchange.failure.account_selector_failed.title':
+        'No usable upstream account was selected.',
+    'exchange.failure.account_selector_failed.action':
+        'Check the route’s linked accounts and account selection rule, then test the rule again.',
+    'exchange.failure.message_transform_failed.title':
+        'A message transform script failed.',
+    'exchange.failure.message_transform_failed.action':
+        'Inspect the script stage below, fix the published rule, then retry.',
     'exchange.failure.unsupported_client_input.title':
         'ViberMate rejected the Agent request before contacting an upstream service.',
     'exchange.failure.unsupported_client_input.action':
@@ -719,6 +919,13 @@ final class AppCopy {
         'Original unavailable: not an account overwrite, credential replaced/deleted, or historical fingerprint no longer matches.',
     'exchange.raw.trailers': 'Trailers',
     'exchange.raw.body': 'Body',
+    'exchange.raw.digest.full_body': 'Complete observed Body SHA-256',
+    'exchange.raw.digest.observed_prefix': 'Observed prefix SHA-256 only',
+    'exchange.raw.digest.unavailable': 'Body hash unavailable',
+    'exchange.raw.digest.copy': 'Copy Body hash',
+    'exchange.raw.digest.help_title': 'What the Body hash proves',
+    'exchange.raw.digest.help':
+        'This hash covers HTTP Body bytes received by ViberMate, not Headers or transfer framing. Compare only the same byte representation. Compression, encoding, packaging, or client-side ciphers change those bytes; a match cannot establish a local file path. Direct traffic and content inside blind tunnels are not visible here.',
     'exchange.raw.frames': 'Stream frames',
     'exchange.raw.body.empty': 'Empty body',
     'exchange.raw.body.base64': 'Binary body · Base64',
@@ -751,7 +958,53 @@ final class AppCopy {
     'exchange.raw.recovery':
         'A previous writer ended uncleanly; at most {ms} ms of the newest raw evidence may be absent.',
     'exchange.raw.copy_transform_sample': 'Copy exact Turn to test sample',
-    'exchange.raw.copy_redacted_diagnostic': 'Copy redacted diagnostic',
+    'exchange.raw.diagnostic.preview': 'Review redacted diagnostic',
+    'exchange.raw.diagnostic.copy': 'Copy diagnostic',
+    'exchange.raw.diff.open': 'Compare stages',
+    'exchange.raw.diff.title': 'Compare request and response stages',
+    'exchange.raw.diff.request': 'Request',
+    'exchange.raw.diff.response': 'Response',
+    'exchange.raw.diff.client_request': 'Client request',
+    'exchange.raw.diff.provider_request': 'Upstream request',
+    'exchange.raw.diff.provider_response': 'Upstream response',
+    'exchange.raw.diff.client_response': 'Client response',
+    'exchange.raw.diff.loading': 'Reading the two selected evidence stages…',
+    'exchange.raw.diff.boundary':
+        'Sensitive header values stay hidden; opening this comparison audits both stages.',
+    'exchange.raw.diff.identical':
+        'No visible field changed between these stages.',
+    'exchange.raw.diff.incomplete':
+        'A complete comparison is unavailable; missing evidence is not reported as deletion.',
+    'exchange.raw.diff.unsupported':
+        'The retained body cannot be compared as readable JSON or text.',
+    'exchange.raw.diff.too_large':
+        'This comparison exceeds the bounded in-memory diff size. Inspect each stage separately.',
+    'exchange.raw.diff.decoded': 'Decoded {encoding} reading view',
+    'exchange.raw.diff.original': 'Original readable body',
+    'exchange.raw.diff.mode.json': 'Semantic JSON fields',
+    'exchange.raw.diff.mode.text': 'Text body',
+    'exchange.raw.diff.copy': 'Copy visible diff',
+    'exchange.raw.diff.path': 'Field path',
+    'exchange.raw.diff.before': 'Before',
+    'exchange.raw.diff.after': 'After',
+    'exchange.raw.diff.kind.added': 'Added',
+    'exchange.raw.diff.kind.removed': 'Removed',
+    'exchange.raw.diff.kind.changed': 'Changed',
+    'exchange.raw.diff.reason.missing_stage':
+        'One of the two stages was not retained.',
+    'exchange.raw.diff.reason.incomplete_evidence':
+        'At least one stage contains only a prefix or metadata.',
+    'exchange.raw.diff.reason.unsupported_encoding':
+        'At least one Content-Encoding is unsupported.',
+    'exchange.raw.diff.reason.invalid_compression':
+        'At least one compressed body could not be decoded.',
+    'exchange.raw.diff.reason.size_limit':
+        'At least one decoded reading view exceeded its safety limit.',
+    'exchange.raw.diff.reason.binary_body': 'At least one body is binary.',
+    'exchange.raw.diff.reason.body_too_large':
+        'At least one readable body exceeds 1 MiB.',
+    'exchange.raw.diff.reason.too_many_changes':
+        'The payload contains more than 5,000 visible changes.',
     'exchange.raw.redacted_diagnostic_copied': 'Redacted diagnostic copied',
     'exchange.raw.layer.client_ingress': 'Client → ViberMate',
     'exchange.raw.layer.transform_request_input': 'Transform request input',
@@ -838,6 +1091,47 @@ final class AppCopy {
         'For each client protocol and origin, keep its original destination or send requests to an upstream service using one of that service\'s accounts.',
     'environment.edit.routes.empty':
         'Capture-only · Requests are forwarded unchanged.',
+    'environment.dry_run.open': 'Try configuration',
+    'environment.dry_run.title': 'Try this traffic policy',
+    'environment.dry_run.intro':
+        'Evaluate one synthetic request. No provider call or evidence is saved.',
+    'environment.dry_run.source': 'Configuration version',
+    'environment.dry_run.published': 'Published r{revision}',
+    'environment.dry_run.draft': 'Draft r{revision} · not published',
+    'environment.dry_run.draft_scope':
+        'This draft is not active. Running Captures keep their frozen revision.',
+    'environment.dry_run.flow': 'Request source',
+    'environment.dry_run.path': 'Path · optional query',
+    'environment.dry_run.body': 'Synthetic request JSON',
+    'environment.dry_run.body_help':
+        'Use test content. Do not paste credentials or private conversations.',
+    'environment.dry_run.run': 'Run preview',
+    'environment.dry_run.result': 'Predicted decision',
+    'environment.dry_run.destination': 'Destination',
+    'environment.dry_run.original': 'Keep original destination',
+    'environment.dry_run.route': 'Route',
+    'environment.dry_run.account': 'Account',
+    'environment.dry_run.client_auth': 'Client authentication · not checked',
+    'environment.dry_run.model': 'Model',
+    'environment.dry_run.model_unavailable':
+        'Not decoded from this synthetic request',
+    'environment.dry_run.egress': 'Network exit',
+    'environment.dry_run.changes': 'Request transform changes',
+    'environment.dry_run.protocol_changes': 'Protocol and model changes',
+    'environment.dry_run.protocol_unavailable':
+        'Protocol fields could not be compared.',
+    'environment.dry_run.no_changes': 'No Header or top-level JSON changes',
+    'environment.dry_run.body_changed':
+        'Body changed; no top-level JSON field names changed.',
+    'environment.dry_run.fields_unavailable':
+        'Top-level JSON fields could not be compared.',
+    'environment.dry_run.not_verified':
+        'Not live · account link/credential, runtime identity/time, DNS/TLS, quota and provider response remain unchecked.',
+    'environment.dry_run.not_verified_original':
+        'Not live · client authentication/Headers, runtime identity/time, DNS/TLS and provider response remain unchecked.',
+    'environment.dry_run.no_flow':
+        'Add a request source before trying this policy.',
+    'environment.dry_run.invalid_json': 'Enter a valid JSON request body.',
     'environment.field.name': 'Traffic policy name',
     'environment.field.state': 'Runtime state',
     'environment.state.active': 'Active',
@@ -851,7 +1145,7 @@ final class AppCopy {
     'environment.recording.metadata_only': 'Metadata only',
     'environment.recording.off': 'Do not record content',
     'environment.recording.full.detail':
-        'Saves conversation bodies and Raw HTTP evidence for inspection.',
+        'For the retention period below, saves supported Agent request and response bodies plus inspected Raw HTTP boundaries. Uninspected forwarding keeps connection metadata only.',
     'environment.recording.metadata_only.detail':
         'No conversation or Raw HTTP bodies are saved. Keeps metadata and available model and Token usage.',
     'environment.recording.off.detail':
@@ -1094,6 +1388,7 @@ final class AppCopy {
     'code_library.starter.protocol': 'Starter protocol',
     'code_library.starter.blank': 'Blank',
     'code_library.starter.local_identity': 'Hide local identity',
+    'code_library.starter.client_metadata': 'Replace client metadata',
     'code_library.starter.block_secrets': 'Block secret leakage',
     'code_library.starter.private_contacts': 'Hide email and private IP',
     'code_library.starter.turn_time': 'Show Turn time',
@@ -1102,14 +1397,16 @@ final class AppCopy {
     'code_library.starter.response_model': 'Show actual response model',
     'code_library.starters.title': 'Built-in examples',
     'code_library.starters.detail':
-        'Preview the complete code before deciding. Creating from an example makes an editable copy; nothing is published until you save it.',
+        'Preview and test the complete code before deciding. Tested privacy templates are generated from the same files published under javascript/. Creating from one makes an editable copy; nothing is published until you save it.',
     'code_library.starters.blank_action': 'Start blank',
     'code_library.starters.view': 'View code',
     'code_library.starters.use': 'Create from example',
     'code_library.starters.preview.detail':
         'Try this built-in code locally. Edits and test results are discarded unless you create a copy.',
     'code_library.starter.local_identity.detail':
-        'Replace the local user, home, and Workspace path before upload, then restore them in this Turn\'s response.',
+        'Tested request + response pair. Replaces supported local identity fields and restores editable response fields while preserving schema, IDs, signatures and encrypted continuation data.',
+    'code_library.starter.client_metadata.detail':
+        'Tested request-only template. Replaces allowlisted version, install-ID and User-Agent headers; it never changes credentials, bodies or session IDs. Edit the synthetic defaults before publishing.',
     'code_library.starter.block_secrets.detail':
         'Stop a request locally when it contains a private-key marker or a recognizable access-token prefix.',
     'code_library.starter.private_contacts.detail':
@@ -1122,6 +1419,22 @@ final class AppCopy {
         'Append an exact rule selected by the frozen Workspace label; unknown Workspaces stay unchanged.',
     'code_library.starter.response_model.detail':
         'Show the response model as a signed note in plain-text replies; skip structured JSON output. Removed before the next request.',
+    'code_library.template.current':
+        'Matches tested template {name} {version} · source {digest}.',
+    'code_library.template.changed':
+        'This revision identifies as {name}, but differs from the current tested {version} template ({digest}). Nothing is changed automatically.',
+    'code_library.template.compare': 'Compare template',
+    'code_library.template.compare_title': '{name} {version} changes',
+    'code_library.template.compare_detail':
+        'Only the changed middle block is shown; unchanged leading and trailing lines are counted. Copy uses the exact complete script. Review and test before publishing a new immutable revision.',
+    'code_library.template.stage_same':
+        'This stage already matches the current template.',
+    'code_library.template.diff_scope':
+        '{prefix} unchanged leading lines · {suffix} unchanged trailing lines',
+    'code_library.template.current_revision': 'Published revision',
+    'code_library.template.latest': 'Current tested template',
+    'code_library.template.block_title': '{title} · from line {line}',
+    'code_library.template.review': 'Review and test update',
     'code_library.empty': 'No code yet',
     'code_library.empty.detail':
         'Create and publish a message transform or account selection rule from an example.',
@@ -1170,6 +1483,9 @@ final class AppCopy {
     'account_selector.sample.protocol': 'Client protocol',
     'account_selector.test.run': 'Run sample Turn',
     'account_selector.test.selected': 'Selected {account}',
+    'account_selector.test.skipped': 'Not selected by this rule: {accounts}',
+    'account_selector.test.switch_blocked':
+        'This Turn stays bound to the selected account. Failures and quota snapshots never silently switch accounts or replay the request.',
     'account_selector.test.failed':
         'The sample did not select an account. Fix the JavaScript or sample values, then run it again.',
     'account_selector.test.unavailable':
@@ -1251,6 +1567,7 @@ final class AppCopy {
     'environment.publish': 'Publish traffic policy',
     'environment.impact.title': 'What changes after publish',
     'environment.impact.future_only': 'Future Captures only',
+    'environment.impact.summary': 'Configuration to publish',
     'environment.impact.description':
         'Publishing never changes a running Capture. Each listed Capture keeps the traffic policy revision it started with; this draft is used only when a new Capture starts.',
     'environment.impact.continuing':
@@ -1352,6 +1669,8 @@ final class AppCopy {
         '{environment} r{revision} · route {route}',
     'routes.account.delete.more': '{count} more references were not returned.',
     'routes.validation.required': 'Enter a value.',
+    'routes.validation.api_key_required': 'Enter an API key.',
+    'routes.validation.bearer_required': 'Enter a bearer token.',
     'routes.validation.codex_auth_json':
         'Paste a valid Codex ChatGPT auth.json file.',
     'routes.validation.origin':
@@ -1360,6 +1679,7 @@ final class AppCopy {
         'Enter a credential without line breaks or null characters.',
     'network.title': 'Connections',
     'network.subtitle': 'Review client access, active connections, and rules',
+    'network.unavailable': 'Network evidence is unavailable.',
     'network.tab.approvals': 'Approvals',
     'network.tab.connections': 'Connections',
     'network.tab.egress': 'Egress',
@@ -1407,8 +1727,9 @@ final class AppCopy {
     'network.connections.title': 'Connection evidence',
     'network.connections.latest': 'Latest state',
     'network.connections.latest.detail':
-        'One current row per physical connection; expand a row for routing evidence.',
-    'network.connections.empty': 'No connections have been recorded yet.',
+        'One current row per physical connection. Expand for routing evidence. Uninspected forwarding shows destinations and byte counts, not request content—even for cleartext HTTP.',
+    'network.connections.empty':
+        'ViberMate has not recorded a connection here. Direct traffic may not pass through this proxy.',
     'network.connections.load_more': 'Load more connections',
     'network.connections.source': 'Source',
     'network.connections.destination': 'Destination',
@@ -1428,8 +1749,9 @@ final class AppCopy {
         'This filters loaded evidence only. Load more to search older records.',
     'network.egress.title': 'Egress attempts',
     'network.egress.detail':
-        'Every runtime-owned outbound attempt, including its authority and parent evidence.',
-    'network.egress.empty': 'No egress attempts have been recorded yet.',
+        'Shows outbound attempts routed through ViberMate. A missing record does not prove the device made no direct connection. Transport byte counts include HTTP framing; they are not file sizes or file-path evidence.',
+    'network.egress.empty':
+        'ViberMate has not recorded an outbound attempt here. This does not establish that the device made no direct connection.',
     'network.egress.load_more': 'Load more egress attempts',
     'network.egress.caller': 'Caller',
     'network.egress.target': 'Target',
@@ -1453,9 +1775,10 @@ final class AppCopy {
     'network.value.outcome.canceled': 'Canceled',
     'network.value.confidence.verified': 'Verified',
     'network.value.confidence.observed': 'Observed',
-    'network.value.decryption.mitm': 'Inspected',
-    'network.value.decryption.blind': 'Encrypted passthrough',
-    'network.value.decryption.cleartext': 'Inspected cleartext',
+    'network.value.decryption.mitm': 'HTTP visible',
+    'network.value.decryption.blind': 'Content not inspected',
+    'network.value.decryption.cleartext': 'Cleartext HTTP visible',
+    'network.value.decryption.none': 'Not determined',
     'network.value.scope.network': 'Network',
     'network.value.scope.environment': 'Traffic policy',
     'network.value.source.network_rule': 'Connection rule',
@@ -1463,11 +1786,15 @@ final class AppCopy {
     'network.value.purpose.provider_attempt': 'Provider request',
     'network.value.purpose.route_operation': 'Route operation',
     'network.value.purpose.upstream_account_read': 'Upstream account query',
-    'network.value.purpose.blind_tunnel': 'Blind tunnel',
+    'network.value.purpose.blind_tunnel': 'Uninspected forwarding',
     'network.value.authority.environment': 'Traffic policy',
     'network.value.authority.network': 'Network',
     'network.value.payload.client_semantic': 'Agent request',
     'network.value.payload.control': 'Control traffic',
+    'network.value.payload.none': 'No client payload',
+    'network.value.payload.client_data': 'Client data',
+    'network.value.payload.opaque_tunnel': 'Payload not inspected',
+    'network.value.payload.runtime': 'Runtime request',
     'network.value.parent.upstream_attempt': 'Upstream attempt',
     'network.fact.connection_id': 'Connection ID',
     'network.fact.attempt_id': 'Attempt ID',
@@ -1478,10 +1805,10 @@ final class AppCopy {
     'network.fact.route_host': 'Route host',
     'network.fact.resolved_ip': 'Resolved IP',
     'network.fact.rule': 'Rule',
-    'network.fact.decryption': 'Decryption',
+    'network.fact.decryption': 'Content visibility',
     'network.fact.egress_authority': 'Egress authority',
     'network.fact.egress_source': 'Egress source',
-    'network.fact.bytes': 'Bytes',
+    'network.fact.bytes': 'Transport bytes',
     'network.fact.outcome': 'Outcome',
     'network.fact.error': 'Error',
     'network.fact.parent': 'Parent',
@@ -1538,6 +1865,7 @@ final class AppCopy {
         'Enter an exact lowercase host without a wildcard or trailing dot.',
     'network.rules.validation.port': 'Enter a port from 1 through 65535.',
     'settings.title': 'Settings',
+    'settings.section': 'Settings section',
     'settings.subtitle':
         'Preferences, access, safety and network behavior for this Runtime',
     'settings.subtitle.server':
@@ -1682,10 +2010,32 @@ final class AppCopy {
     'settings.storage.new_directory': 'New data directory',
     'settings.storage.move_confirm': 'Move and restart',
     'settings.storage.moving': 'Moving data…',
+    'settings.storage.backing_up': 'Creating verified backup…',
+    'settings.storage.restoring': 'Verifying and restoring backup…',
     'settings.storage.move_confirmation':
         'Creates a ViberMate folder at this location. Copies and verifies all data, then restarts the runtime. Stop running captures first. The original folder is kept as a backup; it will not receive new records. macOS Keychain credentials stay on this Mac.',
     'settings.storage.moved':
         'Storage location changed. The original folder is kept as a backup.',
+    'settings.storage.backup': 'Create backup',
+    'settings.storage.restore': 'Restore backup',
+    'settings.storage.backup_title': 'Create an offline backup?',
+    'settings.storage.backup_target': 'New backup directory',
+    'settings.storage.backup_confirm': 'Create backup',
+    'settings.storage.backup_confirmation':
+        'ViberMate stops and restarts the local Runtime, then writes a verified directory with a manifest, SQLite data, configuration and the local Proxy CA. Provider/OAuth credentials, macOS Keychain items and external Server TLS files are not exported. The backup contains unencrypted evidence and the Proxy CA private key; protect it accordingly.',
+    'settings.storage.backup_created':
+        'Verified backup created. Provider credentials and external TLS files were not included.',
+    'settings.storage.restore_title': 'Restore this backup?',
+    'settings.storage.restore_source': 'Verified backup',
+    'settings.storage.restore_target': 'New Runtime directory',
+    'settings.storage.restore_confirm': 'Verify and restore',
+    'settings.storage.restore_confirmation':
+        'The manifest, every file hash, SQLite integrity, foreign keys and schema compatibility are checked before a new Runtime directory is created. The current directory is not overwritten and remains the rollback source. On another machine, reconnect provider accounts and configure external Server TLS files again.',
+    'settings.storage.restore_completed':
+        'Backup restored to a new Runtime directory. The previous directory remains available for rollback; reconnect any unavailable credentials.',
+    'settings.storage.server_backup':
+        'Stop the Server before running these commands. Backups include Runtime data and the Proxy CA, but exclude provider credentials and external TLS files.',
+    'settings.storage.copy_command': 'Copy command',
     'settings.storage.rolled_back':
         'The new location could not start. Restored the original location; no source data was deleted.',
     'settings.storage.storage_target_invalid':
@@ -1696,15 +2046,46 @@ final class AppCopy {
         'Could not finish moving data. The original location remains in use. Check free space and permissions; an incomplete copy may remain at the destination.',
     'settings.storage.storage_validation_failed':
         'The copied database failed validation. The original location remains in use; the copy was not selected.',
+    'settings.storage.backup_validation_failed':
+        'The backup manifest, file hashes or database validation failed. Nothing was selected or overwritten; an incomplete new target may remain.',
+    'settings.storage.backup_incompatible':
+        'This backup uses an incompatible Runtime database schema. The current data directory remains in use.',
     'settings.storage.storage_settings_invalid':
         'The storage-location setting could not be read or saved. Check permissions on the App support directory; existing data was not removed.',
     'settings.storage.storage_location_unavailable':
         'The selected data directory is unavailable. Reconnect its disk or restore the directory and retry. No empty database has been created.',
     'settings.storage.database': 'SQLite database',
+    'settings.storage.refresh': 'Refresh storage snapshot',
+    'settings.storage.database_size': 'Database file',
+    'settings.storage.wal_size': 'Write-ahead log',
+    'settings.storage.evidence_size': 'Evidence pages',
+    'settings.storage.reusable_size': 'Reusable in SQLite',
+    'settings.storage.unknown': 'Unavailable',
+    'settings.storage.capacity_sample':
+        'Checked {time} · Runtime volume available {available} · warning below {threshold}',
+    'settings.storage.growth':
+        'SQLite files changed {change} since the last check.',
+    'settings.storage.low_space':
+        'The connected Runtime is below its free-space threshold. Free space, move App storage, or expand the server volume before recording more evidence.',
+    'settings.storage.capacity_unavailable':
+        'The Runtime could not read free space for this volume. Database statistics are still shown.',
+    'settings.storage.measurement_scope':
+        'Evidence pages are allocated SQLite pages, not decompressed body bytes. Reusable pages remain inside the database file for later writes; the file may not shrink.',
+    'settings.storage.cleanup_empty':
+        'No expired evidence is waiting for cleanup.',
+    'settings.storage.cleanup_preview':
+        '{exchanges} semantic Exchanges and {envelopes} Raw HTTP boundaries are past their retention deadlines.',
+    'settings.storage.cleanup_title': 'Clean expired evidence?',
+    'settings.storage.cleanup_consequence':
+        'Only evidence past its own retention deadline is removed. Active and unexpired evidence, traffic policies, services and accounts remain. SQLite can reuse the pages, but the file may not shrink and this does not claim secure SSD erasure.',
+    'settings.storage.cleanup_action': 'Clean expired evidence',
+    'settings.storage.cleanup_complete': 'Expired evidence was cleaned.',
+    'settings.storage.archive_preview':
+        'Current snapshot: {captures} Captures, {exchanges} semantic Exchanges and {envelopes} Raw HTTP boundaries.',
     'settings.storage.location_failed':
         'Storage location could not be read. Retry after checking the Runtime connection.',
     'settings.storage.move_hint':
-        'Move the whole data directory only after stopping the Runtime; do not copy an open database on its own.',
+        'Move, back up or restore only through these verified actions after stopping captures. Never copy an open runtime.db by itself. Backups intentionally exclude provider credentials, Keychain items and external TLS files.',
     'settings.storage.server_path':
         'Server deployments choose this directory with --data-dir; containers must also mount persistent storage. This is not a folder on your browser’s machine.',
     'settings.storage.retention':
@@ -1773,6 +2154,35 @@ final class AppCopy {
     'settings.preview': 'Deterministic Preview data',
     'settings.live': 'Local ViberMate runtime',
     'settings.remote': 'Runtime Server · {target}',
+    'updates.title': 'Version and updates',
+    'updates.detail':
+        'Compare the App, Runtime and installed terminal command. Update checks run only when requested.',
+    'updates.app': 'App',
+    'updates.runtime': 'Runtime',
+    'updates.terminal': 'Terminal',
+    'updates.app_build': 'App {build}',
+    'updates.runtime_build': 'Runtime {build}',
+    'updates.terminal_build': 'Terminal {build}',
+    'updates.mismatch':
+        'ViberMate components do not match: {details}. Review the update path before starting new work; running Captures are not modified.',
+    'updates.mismatch_detail':
+        'The App, Runtime or terminal command is on a different release. Update the older component, then restart it; no running file is replaced automatically.',
+    'updates.review': 'Review versions',
+    'updates.check': 'Check for updates',
+    'updates.available': 'Update available',
+    'updates.current': 'Up to date',
+    'updates.unavailable':
+        'The release check is unavailable. ViberMate remains usable; retry when the network is available.',
+    'updates.guide.homebrew':
+        'Homebrew installation detected. Finish active Captures, then run the shown brew upgrade command.',
+    'updates.guide.manual':
+        'Finish active Captures and data operations, then open the official GitHub Release for signed downloads and release notes. Keep the current package until the replacement is verified.',
+    'updates.guide.server':
+        'This browser cannot replace Runtime Server files. Finish active work, update the native service or container from the official Release, then restart it.',
+    'updates.copy_brew': 'Copy brew upgrade',
+    'updates.release_notes': 'Release notes and downloads',
+    'updates.no_auto_install':
+        'ViberMate never downloads or installs an update in the background, and never replaces files during an active Capture or data operation.',
     'server.access.title': 'Web & client access',
     'server.access.description':
         'Use your personal Runtime username and password. Install the vibermate CLI and your Agent on the client computer before running these commands.',
@@ -1833,6 +2243,25 @@ final class AppCopy {
     'server.users.password.action': 'Reset password',
     'server.users.password.error':
         'The password could not be reset. Check the account state and try again.',
+    'server.users.policy.action': 'Access and usage alerts',
+    'server.users.policy.title': 'Access and alerts · {username}',
+    'server.users.policy.detail':
+        'Choose which published traffic policies this user may launch. Accounts are usable only through those policies.',
+    'server.users.policy.all': 'Allow every published traffic policy',
+    'server.users.policy.all_short': 'All policies',
+    'server.users.policy.count': '{count} selected',
+    'server.users.policy.select_one':
+        'Select at least one policy, or disable this user to deny all access.',
+    'server.users.policy.alerts': 'Observed usage alerts',
+    'server.users.policy.alerts_detail':
+        'Optional daily thresholds over retained ViberMate evidence. 0 disables a warning; these are not provider quota, billing, or a hard budget.',
+    'server.users.policy.calls': 'Agent API calls / day',
+    'server.users.policy.tokens': 'Observed tokens / day',
+    'server.users.policy.alerts_off': 'Alerts off',
+    'server.users.policy.alerts_on': 'Alerts on',
+    'server.users.policy.summary': '{access} · {alerts}',
+    'server.users.policy.failed':
+        'The policy was not saved. Review the selected policies and thresholds, then retry.',
     'server.usage.truncated':
         'This report reached its safety limit. The visible totals are partial.',
     'server.usage.no_traffic': 'No captured Agent traffic yet',
@@ -1842,6 +2271,10 @@ final class AppCopy {
     'server.usage.tokens': 'Input {input} · Output {output}',
     'server.usage.partial':
         'Some retained requests do not contain model or token evidence; missing values are not counted as zero.',
+    'usage.warning':
+        '{date} observed usage reached a soft warning: {facts}. This is retained ViberMate evidence, not provider quota, billing, or a hard budget.',
+    'usage.warning.calls': '{value} calls (warning {threshold})',
+    'usage.warning.tokens': '{value} tokens (warning {threshold})',
     'server.usage.details.show': 'Models and sessions',
     'server.usage.details.hide': 'Hide details',
     'server.usage.models.title': 'Exact request → upstream models',
@@ -1977,6 +2410,8 @@ final class AppCopy {
         'The packaged command could not be inspected. Rebuild or reinstall ViberMate.',
     'terminal.target': 'Terminal',
     'terminal.source': 'Packaged',
+    'terminal.source_build': 'App build',
+    'terminal.installed_build': 'Installed build',
     'terminal.details': 'Technical details',
     'terminal.diagnosis': 'Diagnostic',
     'terminal.boundary':
@@ -2039,47 +2474,6 @@ final class AppCopy {
         'The Terminal command state changed or the operation was refused. Inspect the current status.',
     'terminal.error.contract':
         'The packaged command returned an invalid status and was not trusted.',
-    'offline.title': 'Offline protection',
-    'offline.summary':
-        'Pause new external work, drain active egress, then expose the exact safe-to-disconnect boundary.',
-    'offline.state.unbound': 'Not initialized',
-    'offline.state.online': 'Online operation',
-    'offline.state.entering': 'Preparing to disconnect',
-    'offline.state.held': 'Safe to disconnect',
-    'offline.state.probing': 'Checking upstream services',
-    'offline.state.releasing': 'Resuming queued work',
-    'offline.state.stopping': 'Stopping',
-    'offline.enter': 'Prepare to disconnect',
-    'offline.resume': 'Resume online',
-    'offline.safe': 'Safe to disconnect',
-    'offline.safe.yes': 'Yes',
-    'offline.safe.no': 'Not yet',
-    'offline.active_actions': 'Active actions',
-    'offline.entering_actions': 'Draining actions',
-    'offline.active_egress': 'Active egress',
-    'offline.queued_requests': 'Waiting requests',
-    'offline.held_bytes': 'Waiting data',
-    'offline.revision': 'Runtime revision',
-    'offline.last_probe': 'Last provider check',
-    'offline.confirm.enter.title': 'Prepare to disconnect?',
-    'offline.confirm.enter.detail':
-        'New external work will wait. Active network work must drain before ViberMate reports that disconnecting is safe.',
-    'offline.confirm.enter.action': 'Prepare to disconnect',
-    'offline.confirm.resume.title': 'Resume external work?',
-    'offline.confirm.resume.detail':
-        'ViberMate checks the frozen provider targets first, then releases queued work. A failed check keeps the hold active.',
-    'offline.confirm.resume.action': 'Check and resume',
-    'offline.probe.transport_unavailable': 'Provider transport unavailable',
-    'offline.probe.tls_rejected': 'Provider TLS identity rejected',
-    'offline.probe.canceled': 'Provider check canceled',
-    'offline.probe.probe_failed': 'Provider check failed',
-    'offline.kind.provider': 'Provider',
-    'offline.kind.opaque': 'Opaque tunnel',
-    'offline.kind.auxiliary': 'Auxiliary',
-    'offline.kind.plugin': 'Plugin',
-    'offline.kind.update': 'Update',
-    'offline.kind.blind_tunnel': 'Blind tunnel',
-    'offline.kind.counts': '{active} active · {queued} waiting',
     'notice.manual_capture.revoked':
         'Proxy login revoked. Conversation and Activity evidence were retained.',
     'notice.manual_capture.created':
@@ -2100,14 +2494,52 @@ final class AppCopy {
         'Credential replaced with its previous epoch as the CAS boundary.',
     'notice.inventory.account_deleted':
         'Upstream account and credential deleted. Captured evidence was not removed.',
-    'notice.offline.held': 'Offline protection is safe to disconnect.',
-    'notice.offline.resumed':
-        'Provider checks passed and external work resumed.',
-    'notice.offline.releasing':
-        'Provider checks passed; queued work is being released.',
   };
 
   static const _zh = <String, String>{
+    'acp.transport': '编辑器 ↔ Agent · ACP',
+    'acp.boundary': '这里只观察 ACP。登录和权限决定仍由编辑器负责；不会应用 HTTP 账号替换、模型映射、脚本或网络规则。',
+    'acp.reported_identity': '名称和版本来自 Agent 初始化时的自报信息，不代表发布版本认证。',
+    'acp.counts': '{sessions} 个 ACP 会话 · {prompts} 个 prompt',
+    'acp.metadata_only':
+        '当前仅记录元数据：保留 prompt 结果状态，不保存用户与助手文本。新连接需要记录文本时，请在编辑器命令的 -- 前加入 --record-content。',
+    'acp.content_recorded':
+        '已开启用户与助手文本记录，受服务端策略和观察大小限制。认证、权限内容、工具输入/结果、stderr 和未知扩展均不保存。',
+    'acp.recording_off': '服务端策略已关闭 ACP 记录。',
+    'acp.expired': 'ACP 证据已过期；此连接标记不包含已保存的对话。',
+    'acp.incomplete': '观察不完整。大小限制、流中断或最终更新缺失可能造成空缺；这不能证明 Agent 的模型执行结果。',
+    'acp.session': 'Agent 会话',
+    'acp.workspace_claim':
+        '工作目录来自 ACP 会话请求的声明，不会修改此 Capture 的启动工作区，也不会授予文件访问权限。',
+    'acp.awaiting_session': '等待编辑器创建或加载 Agent 会话。请在编辑器中完成 Agent 登录。',
+    'acp.no_session': '没有观察到已确认的 ACP 会话。请检查编辑器中的 Agent 登录与 stderr，然后重新连接。',
+    'acp.no_prompts': '此会话中尚未观察到新 prompt。加载历史不计为新 prompt。',
+    'acp.prompt.pending': '等待 Agent 结果',
+    'acp.prompt.completed': 'Agent 已返回',
+    'acp.prompt.cancelled': '已取消',
+    'acp.prompt.failed': 'RPC 错误',
+    'acp.prompt.interrupted': '未观察到结果',
+    'acp.tool_calls': '{count} 条工具调用通知',
+    'acp.user': '你 → Agent',
+    'acp.agent': 'Agent → 编辑器',
+    'acp.setup.title': '接入 ACP 编辑器',
+    'acp.login_required':
+        'Agent 提示需要登录。请在编辑器中完成 Agent 身份验证后重试。这是 Agent 的账号，不是 ViberMate Runtime 登录。',
+    'acp.setup.detail':
+        '安装 ACP 适配器，再让编辑器通过 ViberMate 启动它。Agent 登录、权限提示和环境变量仍由编辑器负责。',
+    'acp.setup.program': 'ViberMate 可执行文件（绝对路径）',
+    'acp.setup.agent_path': 'ACP 适配器可执行文件（推荐绝对路径）',
+    'acp.setup.editor': '编辑器配置格式',
+    'acp.setup.content': '保存用户与助手文本',
+    'acp.setup.server': 'Runtime Server URL（留空使用本地 App）',
+    'acp.setup.copy': '复制编辑器配置',
+    'acp.setup.copied': '配置已复制',
+    'acp.setup.failed': '复制失败。请选中下方配置文本手动复制。',
+    'acp.setup.help.local': '请把生成的对象合并到编辑器设置中，并保留已有环境变量；不要覆盖整个设置文件。',
+    'acp.setup.help.remote':
+        '请把生成的对象合并到编辑器设置中，并保留已有环境变量；不要覆盖整个设置文件。远程连接时，请先在编辑器所在机器使用同一个 URL 执行 vibermate login --server。',
+    'acp.setup.paths':
+        'GUI 应用可能不继承终端 PATH。请使用绝对路径，并为 npm 适配器在 env.PATH 中包含 Node；不能依赖 alias。ACP 适配器需要单独安装。',
     'error.account_selection_empty':
         '此上游服务没有可用的关联账号。请先在「上游服务」中关联凭据就绪的账号，再检查策略。',
     'error.deleted_refresh_failed': '已删除，但列表暂时未能刷新。请刷新页面，无需再次删除。',
@@ -2123,6 +2555,13 @@ final class AppCopy {
     'error.configuration_conflict': '配置已被其他操作更新，本次修改未保存。请刷新页面后重新检查修改内容。',
     'error.policy_review_stale': '本次策略检查已失效。请重新检查草稿，再发布策略。',
     'error.configuration_invalid': '设置未通过校验。请检查所选服务、账号和必填项后重试。',
+    'error.runtime_user_policy_invalid': '运行用户策略无效。请选择至少一个流量策略或允许全部，并填写非负告警值。',
+    'error.runtime_user_policy_unavailable': '运行用户策略未能保存。请刷新用户列表后重试。',
+    'error.dry_run_flow_not_matched': '这条请求没有匹配当前请求来源。请检查路径和协议。',
+    'error.dry_run_input_invalid': '合成请求不符合此协议。请检查 JSON 正文及必填字段。',
+    'error.dry_run_environment_disabled': '这个版本已停用流量策略。请选择启用的版本再试跑。',
+    'error.dry_run_selector_failed': '账号选择脚本未能选出账号。请检查脚本及候选账号。',
+    'error.dry_run_transform_failed': '请求转换脚本执行失败。请检查脚本和合成输入。',
     'error.control_session_expired': '管理会话已失效。请重新连接运行时，或重新登录管理页面。',
     'error.control_result_unknown': '未能确认操作结果。请检查连接，并刷新页面确认是否已生效后再重试。',
     'error.control_contract': '配置或运行时返回的数据不符合预期。请检查输入，确认 App 与运行时版本一致后刷新重试。',
@@ -2197,8 +2636,26 @@ final class AppCopy {
     'account_facts.resets': '重置时间 {time}（本地时间）',
     'account_facts.no_windows': '上游未提供额度窗口，不代表用量为 0%。',
     'account_facts.unknown': '未提供',
+    'account_facts.no_credits': '无可用积分',
     'account_facts.unlimited': '无限制',
     'account_facts.credits': '积分余额：{balance}',
+    'account_facts.banked_resets': 'Codex 可用额度重置券：{count}',
+    'account_facts.applicable_resets': '当前可使用：{count}',
+    'account_facts.reset.choose': '使用额度重置券',
+    'account_facts.reset.choose_title': '选择 Codex 重置券',
+    'account_facts.reset.confirm_title': '使用这张重置券？',
+    'account_facts.reset.confirm_detail': '将立即为所选账号消耗一张已存重置券，且可能改变下次周额度重置时间。',
+    'account_facts.reset.confirm': '确认使用',
+    'account_facts.reset.expires': '{time} 到期',
+    'account_facts.reset.no_expiry': '上游未提供到期时间',
+    'account_facts.reset.applied': '已使用重置券。',
+    'account_facts.reset.already': '此重置操作已处理。',
+    'account_facts.reset.not_needed': '当前没有需要重置的额度窗口。',
+    'account_facts.reset.none': '此账号没有可使用的重置券。',
+    'account_facts.reset.unconfirmed': '未能确认重置结果。请先查看最新额度，再决定是否重试。',
+    'account_facts.reset.failed': '未能使用重置券，请检查账号状态后重试。',
+    'account_facts.reset.details_unavailable': '未能获取重置券详情。请刷新额度后再使用。',
+    'account_facts.reset.oauth_only': '请使用托管的 Codex OAuth 账号在此使用重置券。',
     'account_facts.as_of': '上游统计截至 {time}',
     'account_facts.partial': '上游报告历史统计暂不完整。',
     'account_facts.failed': '暂时无法读取上游账号数据，请检查凭据与网络后重试。',
@@ -2298,10 +2755,49 @@ final class AppCopy {
     'capture.search.clear': '清除运行记录筛选条件',
     'capture.search.no_match': '已加载的运行记录中没有符合条件的内容。',
     'capture.search.load_hint': '继续加载更早的运行记录，以搜索保留的历史证据。',
+    'evidence_search.open': '搜索全部记录',
+    'evidence_search.title': '搜索已保留的历史',
+    'evidence_search.boundary': '跨全部运行记录搜索已保留的元数据；不会搜索消息正文。',
+    'evidence_search.query': '工作区、账号、模型、工具、状态或错误',
+    'evidence_search.search': '搜索',
+    'evidence_search.filters.show': '更多筛选',
+    'evidence_search.filters.hide': '收起筛选',
+    'evidence_search.status': '状态',
+    'evidence_search.status.any': '全部状态',
+    'evidence_search.period': '时间',
+    'evidence_search.period.all': '全部保留历史',
+    'evidence_search.period.day': '最近 24 小时',
+    'evidence_search.period.week': '最近 7 天',
+    'evidence_search.period.month': '最近 30 天',
+    'evidence_search.environment': '流量策略 ID',
+    'evidence_search.account': '账号 ID',
+    'evidence_search.model': '模型',
+    'evidence_search.tool': '工具名称',
+    'evidence_search.reason': '错误码',
+    'evidence_search.prompt': '请输入搜索内容，或选择至少一个筛选条件。',
+    'evidence_search.empty': '已保留的元数据中没有符合这些条件的记录。',
+    'evidence_search.load_more': '加载更多结果',
+    'evidence_search.result': '搜索结果',
+    'evidence_search.open_capture': '打开运行记录',
+    'evidence_search.matches': '命中：{fields}',
+    'evidence_search.content_unavailable': '消息元数据未保留或已经过期。',
+    'evidence_search.match.workspace': '工作区',
+    'evidence_search.match.capture': '运行记录',
+    'evidence_search.match.conversation': '对话',
+    'evidence_search.match.environment': '流量策略',
+    'evidence_search.match.account': '账号',
+    'evidence_search.match.model': '模型',
+    'evidence_search.match.tool': '工具',
+    'evidence_search.match.status': '状态',
+    'evidence_search.match.error': '错误',
+    'evidence_search.match.source': '客户端',
+    'evidence_search.match.exchange': 'Exchange',
+    'evidence_search.match.time': '时间',
     'capture.running': '正在运行',
     'capture.history': '历史记录',
     'capture.empty': '还没有运行记录。',
     'capture.empty.detail': '先从终端通过 ViberMate 启动 Codex 或 Claude。',
+    'capture.empty.web.detail': '从终端启动 Agent，或为其他客户端创建专属代理登录。',
     'capture.empty.action': '打开终端设置',
     'capture.empty.web.action': '打开接入与启动指南',
     'capture.load_more': '加载更早的运行记录',
@@ -2360,6 +2856,17 @@ final class AppCopy {
     'capture.manual.delivery.username': '用户名',
     'capture.manual.delivery.password': '密码',
     'capture.manual.delivery.root': 'Root 路径',
+    'capture.manual.delivery.root_server':
+        '在客户端设备上信任此 Proxy CA，才能验证被检查的 AI 域名。安装前请核对 SHA-256 指纹。',
+    'capture.manual.delivery.download_root': '下载 Proxy CA',
+    'capture.manual.delivery.fingerprint': 'Proxy CA SHA-256 指纹',
+    'capture.manual.delivery.root_saved': 'Proxy CA 已下载，请在客户端设备上安装并信任。',
+    'capture.manual.delivery.root_changed': 'Proxy CA 已变更。使用此代理登录前，请重新核对当前证书。',
+    'capture.manual.delivery.root_download_failed':
+        '无法下载 Proxy CA。请检查与服务器的连接后重试。',
+    'capture.manual.delivery.server_tls':
+        '代理外层连接使用服务器 HTTPS 证书；上面的 Proxy CA 用于被检查的 AI 域名。',
+    'capture.manual.delivery.http_warning': '此 HTTP 代理连接未加密，只应在可信的私有网络使用。',
     'capture.manual.delivery.evidence': '撤销或轮换登录都不会删除已有的对话与请求记录。',
     'capture.manual.delivery.copied': '已复制{field}',
     'capture.manual.delivery.done': '我已保存这些内容',
@@ -2411,7 +2918,7 @@ final class AppCopy {
         '所有运行记录与已记录的证据都会被移除；流量策略、上游服务和账号会保留。'
         '逻辑记录会被删除、查询不再返回它们；但这不声称从磁盘快照或备份介质上抹除。',
     'common.back': '返回',
-    'common.loading': '正在载入运行证据…',
+    'common.loading': '正在加载…',
     'common.retry': '重试',
     'common.hide_directory': '收起列表',
     'common.show_directory': '展开列表',
@@ -2445,7 +2952,7 @@ final class AppCopy {
     'bootstrap.failure.runtime_already_active':
         '已有一个 ViberMate 窗口正在运行。请先关闭它，再重试。',
     'bootstrap.failure.secret_store_unavailable':
-        'ViberMate 无法读取 macOS 钥匙串。请解锁 Mac 后重试。如果你曾运行开发版且问题重复出现，请退出 ViberMate，打开“钥匙串访问”，搜索 io.vibermate.desktop，只删除这些密码项目，然后重开。Capture 会保留；已保存的服务商凭据和本机根证书需要重新设置。',
+        'ViberMate 无法访问 macOS 钥匙串。请在“钥匙串访问”中解锁“登录”钥匙串并重试。若曾切换开发版与安装版，请重新打开已签名的安装版；两者可能无法共用钥匙串权限。不要删除钥匙串项目或本地数据。',
     'bootstrap.failure.storage_unavailable':
         'ViberMate 无法打开本机数据，数据库未被替换。请检查磁盘空间与目录权限。如果发生在更换版本后，请保留数据目录，并使用之前兼容的版本。',
     'bootstrap.failure.root_reset_failed':
@@ -2535,6 +3042,46 @@ final class AppCopy {
     'exchange.failure.provider_response_idle.title': '上游服务未能及时响应。',
     'exchange.failure.provider_response_idle.action':
         '检查上游服务与网络路径，然后重试 Agent 请求。',
+    'exchange.failure.provider_transport_failed.title': '上游网络请求失败，具体阶段尚未确认。',
+    'exchange.failure.provider_transport_failed.action':
+        '查看下方外发尝试与所选网络出口，检查上游是否可达后重试。',
+    'exchange.failure.provider_transport_dns.title': '外发路径的域名解析失败。',
+    'exchange.failure.provider_transport_dns.action':
+        '检查上游地址及所选网络出口的 DNS 设置，然后重试。',
+    'exchange.failure.provider_transport_tls.title': '外发路径的 TLS 证书验证失败。',
+    'exchange.failure.provider_transport_tls.action':
+        '核对上游地址和证书信任链；若使用出口代理，还需检查代理证书。不要关闭证书验证。',
+    'exchange.failure.provider_transport_profile.title': '无法为本次请求准备所选 TLS 指纹。',
+    'exchange.failure.provider_transport_profile.action':
+        '检查冻结的线路配置与已捕获的客户端 TLS 证据，发布兼容配置后重试。',
+    'exchange.failure.provider_transport_handshake.title':
+        '尚未收到 HTTP 响应，上游 TLS 握手已经失败。',
+    'exchange.failure.provider_transport_handshake.action':
+        '检查上游 TLS 兼容性与所选指纹后重试；不要关闭证书验证。',
+    'exchange.failure.provider_transport_connection.title': '外发连接建立失败或传输中断。',
+    'exchange.failure.provider_transport_connection.action':
+        '检查所选网络出口、上游地址和防火墙路径，然后重试。',
+    'exchange.failure.provider_transport_timeout.title': '外发请求超时。',
+    'exchange.failure.provider_transport_timeout.action':
+        '检查上游是否可达，以及所选网络出口或代理，然后重试。',
+    'exchange.failure.provider_status_rejected.title': '上游服务拒绝了本次请求。',
+    'exchange.failure.provider_status_rejected.action':
+        '先查看上游尝试中的 HTTP 状态和实际使用的账号，再决定如何重试。',
+    'exchange.failure.provider_status_rejected_auth.title': '上游服务拒绝了本次请求。',
+    'exchange.failure.provider_status_rejected_auth.action':
+        '检查所选账号是否有权使用该服务和模型；必要时刷新账号凭据。',
+    'exchange.failure.provider_status_rejected_rate_limit.title':
+        '上游额度或速率限制已触发。',
+    'exchange.failure.provider_status_rejected_rate_limit.action':
+        '检查该账号的额度，或等待服务商重置后再试。',
+    'exchange.failure.provider_credential_unavailable.title': '所选上游账号没有可用凭据。',
+    'exchange.failure.provider_credential_unavailable.action':
+        '在「上游账号」中刷新或重新连接该账号，然后重试。',
+    'exchange.failure.account_selector_failed.title': '未能选出可用的上游账号。',
+    'exchange.failure.account_selector_failed.action':
+        '检查路由关联的账号和账号选择规则，重新测试规则后再试。',
+    'exchange.failure.message_transform_failed.title': '消息变换脚本执行失败。',
+    'exchange.failure.message_transform_failed.action': '查看下方脚本阶段，修正已发布规则后重试。',
     'exchange.failure.unsupported_client_input.title':
         'ViberMate 在联系上游服务前拒绝了 Agent 请求。',
     'exchange.failure.unsupported_client_input.action': '检查列出的请求字段和客户端协议，然后重试。',
@@ -2674,6 +3221,13 @@ final class AppCopy {
     'exchange.raw.header_unavailable': '无法恢复原值：不是账号覆盖值、凭据已替换或删除，或与历史指纹不匹配。',
     'exchange.raw.trailers': 'Trailers',
     'exchange.raw.body': '正文',
+    'exchange.raw.digest.full_body': '完整观察到的 Body SHA-256',
+    'exchange.raw.digest.observed_prefix': '仅已观察片段的 SHA-256',
+    'exchange.raw.digest.unavailable': '没有可用的 Body 摘要',
+    'exchange.raw.digest.copy': '复制 Body 摘要',
+    'exchange.raw.digest.help_title': 'Body 摘要能证明什么',
+    'exchange.raw.digest.help':
+        '摘要对应 ViberMate 收到的 HTTP Body 字节，不含 Header 和传输分块。只能比较同一种字节表示；压缩、编码、打包或应用层加密会改变字节。即使摘要相同，也不能据此确定本地文件路径。直连流量和盲隧道内的内容在此不可见。',
     'exchange.raw.frames': '流式帧',
     'exchange.raw.body.empty': '正文为空',
     'exchange.raw.body.base64': '二进制 Body · Base64',
@@ -2703,7 +3257,42 @@ final class AppCopy {
         '当前 Runtime 未提供解压视图，请更新 Runtime 后在此阅读正文；也可展开 HTTP 技术详情查看原始字节。',
     'exchange.raw.recovery': '上次写入器未正常结束；最新原始证据最多可能缺失 {ms} 毫秒。',
     'exchange.raw.copy_transform_sample': '复制本轮原始数据为测试样本',
-    'exchange.raw.copy_redacted_diagnostic': '复制脱敏诊断',
+    'exchange.raw.diagnostic.preview': '预览脱敏诊断',
+    'exchange.raw.diagnostic.copy': '复制诊断',
+    'exchange.raw.diff.open': '比较各阶段',
+    'exchange.raw.diff.title': '比较请求与响应阶段',
+    'exchange.raw.diff.request': '请求',
+    'exchange.raw.diff.response': '响应',
+    'exchange.raw.diff.client_request': '客户端请求',
+    'exchange.raw.diff.provider_request': '上游请求',
+    'exchange.raw.diff.provider_response': '上游响应',
+    'exchange.raw.diff.client_response': '客户端响应',
+    'exchange.raw.diff.loading': '正在读取所选的两份阶段证据…',
+    'exchange.raw.diff.boundary': '敏感请求头始终隐藏；打开比较会分别记录两侧的查看审计。',
+    'exchange.raw.diff.identical': '这两个阶段之间没有可见字段变化。',
+    'exchange.raw.diff.incomplete': '无法进行完整比较；缺失证据不会被显示成“已删除”。',
+    'exchange.raw.diff.unsupported': '已保留的正文无法作为可读 JSON 或文本比较。',
+    'exchange.raw.diff.too_large': '该比较超过内存差异上限，请分别查看两侧阶段。',
+    'exchange.raw.diff.decoded': '已解码的 {encoding} 阅读视图',
+    'exchange.raw.diff.original': '原始可读正文',
+    'exchange.raw.diff.mode.json': '语义 JSON 字段',
+    'exchange.raw.diff.mode.text': '文本正文',
+    'exchange.raw.diff.copy': '复制当前差异',
+    'exchange.raw.diff.path': '字段路径',
+    'exchange.raw.diff.before': '之前',
+    'exchange.raw.diff.after': '之后',
+    'exchange.raw.diff.kind.added': '新增',
+    'exchange.raw.diff.kind.removed': '删除',
+    'exchange.raw.diff.kind.changed': '修改',
+    'exchange.raw.diff.reason.missing_stage': '两侧中有一个阶段没有被保留。',
+    'exchange.raw.diff.reason.incomplete_evidence': '至少一侧只保留了前缀或元数据。',
+    'exchange.raw.diff.reason.unsupported_encoding':
+        '至少一侧使用了不支持的 Content-Encoding。',
+    'exchange.raw.diff.reason.invalid_compression': '至少一侧的压缩正文无法解码。',
+    'exchange.raw.diff.reason.size_limit': '至少一侧解码后的阅读视图超过安全上限。',
+    'exchange.raw.diff.reason.binary_body': '至少一侧正文是二进制内容。',
+    'exchange.raw.diff.reason.body_too_large': '至少一侧可读正文超过 1 MiB。',
+    'exchange.raw.diff.reason.too_many_changes': '该内容包含超过 5,000 个可见变化。',
     'exchange.raw.redacted_diagnostic_copied': '已复制脱敏诊断',
     'exchange.raw.layer.client_ingress': '客户端 → ViberMate',
     'exchange.raw.layer.transform_request_input': '请求脚本输入',
@@ -2770,6 +3359,39 @@ final class AppCopy {
     'environment.edit.routes.detail':
         '每种客户端协议和入口都可以保留原始目标，或把请求发往上游服务，并使用该服务已关联的账号。',
     'environment.edit.routes.empty': '仅抓包 · 请求保持原样转发。',
+    'environment.dry_run.open': '试跑配置',
+    'environment.dry_run.title': '试跑这条流量策略',
+    'environment.dry_run.intro': '只计算一条合成请求；不连接上游，也不保存证据。',
+    'environment.dry_run.source': '配置版本',
+    'environment.dry_run.published': '已发布 r{revision}',
+    'environment.dry_run.draft': '草稿 r{revision} · 尚未发布',
+    'environment.dry_run.draft_scope': '草稿尚未生效；已有运行记录继续使用其冻结修订。',
+    'environment.dry_run.flow': '请求来源',
+    'environment.dry_run.path': '路径 · 可含查询参数',
+    'environment.dry_run.body': '合成请求 JSON',
+    'environment.dry_run.body_help': '请用测试内容，不要粘贴凭据或私人对话。',
+    'environment.dry_run.run': '运行试跑',
+    'environment.dry_run.result': '预计决策',
+    'environment.dry_run.destination': '目标',
+    'environment.dry_run.original': '保持原始目标',
+    'environment.dry_run.route': '路由',
+    'environment.dry_run.account': '账号',
+    'environment.dry_run.client_auth': '客户端原有认证 · 未检查',
+    'environment.dry_run.model': '模型',
+    'environment.dry_run.model_unavailable': '未能从这条合成请求中解析模型',
+    'environment.dry_run.egress': '网络出口',
+    'environment.dry_run.changes': '请求脚本改变',
+    'environment.dry_run.protocol_changes': '协议与模型处理改变',
+    'environment.dry_run.protocol_unavailable': '无法比较协议处理后的字段。',
+    'environment.dry_run.no_changes': 'Header 和顶层 JSON 字段未变化',
+    'environment.dry_run.body_changed': '正文已改变，但顶层 JSON 字段名未变化。',
+    'environment.dry_run.fields_unavailable': '无法比较顶层 JSON 字段。',
+    'environment.dry_run.not_verified':
+        '非真实请求；账号关联/凭据、运行时身份/时间、DNS/TLS、额度及上游响应未验证。',
+    'environment.dry_run.not_verified_original':
+        '非真实请求；客户端认证/Header、运行时身份/时间、DNS/TLS 与上游响应未验证。',
+    'environment.dry_run.no_flow': '请先添加请求来源，再试跑这条策略。',
+    'environment.dry_run.invalid_json': '请输入有效的 JSON 请求正文。',
     'environment.field.name': '流量策略名称',
     'environment.field.state': '运行状态',
     'environment.state.active': '启用',
@@ -2782,7 +3404,8 @@ final class AppCopy {
     'environment.recording.full': '记录完整内容',
     'environment.recording.metadata_only': '仅元数据',
     'environment.recording.off': '不记录内容',
-    'environment.recording.full.detail': '保存对话正文与原始 HTTP 证据，供后续查看。',
+    'environment.recording.full.detail':
+        '在下方保留期内保存受支持 Agent 的请求与响应正文，以及已解析边界的原始 HTTP 证据；内容未检查的转发只保留连接元数据。',
     'environment.recording.metadata_only.detail':
         '不保存对话或原始 HTTP 正文；保留元数据，以及可用的模型和 Token 用量。',
     'environment.recording.off.detail':
@@ -2980,6 +3603,7 @@ final class AppCopy {
     'code_library.starter.protocol': '示例适用协议',
     'code_library.starter.blank': '空白',
     'code_library.starter.local_identity': '隐藏本机身份',
+    'code_library.starter.client_metadata': '替换客户端元信息',
     'code_library.starter.block_secrets': '阻止密钥泄露',
     'code_library.starter.private_contacts': '隐藏邮箱与内网 IP',
     'code_library.starter.turn_time': '显示轮次时间',
@@ -2987,14 +3611,17 @@ final class AppCopy {
     'code_library.starter.workspace_rules': '按工作区应用规则',
     'code_library.starter.response_model': '显示实际响应模型',
     'code_library.starters.title': '内置示例',
-    'code_library.starters.detail': '先查看完整代码，再决定是否使用；新建后得到可编辑副本，保存前不会发布。',
+    'code_library.starters.detail':
+        '先查看并测试完整代码，再决定是否使用。隐私模板与 javascript/ 目录发布的文件由同一来源生成；新建后得到可编辑副本，保存前不会发布。',
     'code_library.starters.blank_action': '从空白开始',
     'code_library.starters.view': '查看代码',
     'code_library.starters.use': '以此新建',
     'code_library.starters.preview.detail':
         '可在本地修改并运行测试；关闭后丢弃改动和结果，只有以此新建才会保留代码。',
     'code_library.starter.local_identity.detail':
-        '发送前替换本机用户名、主目录和工作区路径，再在本轮响应中还原。',
+        '经过测试的请求＋响应成对模板：替换支持的本机身份字段，并只在可编辑响应字段中还原；保留 schema、ID、签名与加密续接数据。',
+    'code_library.starter.client_metadata.detail':
+        '经过测试的仅请求模板：只替换白名单内的版本、安装 ID 和 User-Agent 头，不改凭据、正文或会话 ID；发布前需修改合成默认值。',
     'code_library.starter.block_secrets.detail': '请求含私钥标记或可识别的访问令牌前缀时，在本地直接停止。',
     'code_library.starter.private_contacts.detail':
         '发送前替换邮箱和内网 IPv4 地址，再在响应中还原。',
@@ -3005,6 +3632,20 @@ final class AppCopy {
     'code_library.starter.workspace_rules.detail': '按冻结的工作区名称追加精确规则；未知工作区保持原样。',
     'code_library.starter.response_model.detail':
         '在普通文本回复中注明实际返回的模型；跳过结构化 JSON 输出，下次请求前自动移除。',
+    'code_library.template.current':
+        '与已测试模板 {name} {version} 一致 · 来源 {digest}。',
+    'code_library.template.changed':
+        '该修订标识为 {name}，但与当前已测试的 {version} 模板（{digest}）不同；不会自动修改。',
+    'code_library.template.compare': '比较模板',
+    'code_library.template.compare_title': '{name} {version} 变更',
+    'code_library.template.compare_detail':
+        '这里只显示中间的变化块，并统计前后未变化的行；复制操作使用完整精确脚本。请先审查并测试，再发布新的不可变修订。',
+    'code_library.template.stage_same': '此阶段已经与当前模板一致。',
+    'code_library.template.diff_scope': '前部 {prefix} 行未变 · 后部 {suffix} 行未变',
+    'code_library.template.current_revision': '已发布修订',
+    'code_library.template.latest': '当前已测试模板',
+    'code_library.template.block_title': '{title} · 从第 {line} 行开始',
+    'code_library.template.review': '审查并测试更新',
     'code_library.empty': '还没有代码',
     'code_library.empty.detail': '从示例新建并发布消息变换或账号选择规则。',
     'code_library.select': '选择一个变换',
@@ -3044,6 +3685,9 @@ final class AppCopy {
     'account_selector.sample.protocol': '客户端协议',
     'account_selector.test.run': '运行测试样例',
     'account_selector.test.selected': '已选择 {account}',
+    'account_selector.test.skipped': '本规则未选择：{accounts}',
+    'account_selector.test.switch_blocked':
+        '本轮固定使用已选账号；请求失败或额度快照不会静默换号，也不会跨账号重放。',
     'account_selector.test.failed': '样例未能选出账号。请修正 JavaScript 或样例值，然后重新运行。',
     'account_selector.test.unavailable': 'Runtime 无法运行该样例。请检查 Runtime 状态后重试。',
     'environment.model.label': '模型映射',
@@ -3106,6 +3750,7 @@ final class AppCopy {
     'environment.publish': '发布流量策略',
     'environment.impact.title': '发布后会改变什么',
     'environment.impact.future_only': '仅用于之后启动的运行记录',
+    'environment.impact.summary': '即将发布的配置',
     'environment.impact.description':
         '发布不会改变正在运行的记录。下列记录会继续使用各自启动时冻结的流量策略版本；此草稿只用于之后新启动的运行记录。',
     'environment.impact.continuing': '{count} 条运行中记录保持当前修订',
@@ -3192,12 +3837,15 @@ final class AppCopy {
     'routes.account.delete.reference': '{environment} r{revision} · 路由 {route}',
     'routes.account.delete.more': '另有 {count} 条引用未返回。',
     'routes.validation.required': '请输入内容。',
+    'routes.validation.api_key_required': '请输入 API Key。',
+    'routes.validation.bearer_required': '请输入 Bearer Token。',
     'routes.validation.codex_auth_json': '请粘贴有效的 Codex ChatGPT auth.json 文件内容。',
     'routes.validation.origin':
         '请输入不含路径、查询、片段或显式默认端口的精确 HTTPS 地址，或受信任的本机/私网 HTTP 地址。',
     'routes.validation.secret': '请输入不含换行或空字符的凭据。',
     'network.title': '连接',
     'network.subtitle': '检查客户端访问、活动连接与网络规则',
+    'network.unavailable': '网络证据暂时不可用。',
     'network.tab.approvals': '审批',
     'network.tab.connections': '连接',
     'network.tab.egress': '出站',
@@ -3235,8 +3883,9 @@ final class AppCopy {
         '在修订 {revision} 对 {target} 执行“{action}”。运行时接受后，等待中的请求会立即继续或终止。',
     'network.connections.title': '连接证据',
     'network.connections.latest': '最新状态',
-    'network.connections.latest.detail': '每条物理连接只显示当前一行；展开可检查路由证据。',
-    'network.connections.empty': '尚未记录到连接。',
+    'network.connections.latest.detail':
+        '每条物理连接只显示当前一行；展开可检查路由证据。未检查内容的转发只能看到目的地和字节数，明文 HTTP 也可能如此。',
+    'network.connections.empty': 'ViberMate 尚未记录到连接；设备的直连流量可能不会经过此代理。',
     'network.connections.load_more': '加载更多连接',
     'network.connections.source': '来源',
     'network.connections.destination': '目标',
@@ -3254,8 +3903,9 @@ final class AppCopy {
     'network.filter.no_match': '已加载证据中没有匹配项。',
     'network.filter.more_hint': '这里只筛选已加载证据；请加载更多以搜索更早记录。',
     'network.egress.title': '出站尝试',
-    'network.egress.detail': '每一次由运行时负责的对外尝试，以及对应 authority 和父级证据。',
-    'network.egress.empty': '尚未记录到出站尝试。',
+    'network.egress.detail':
+        '仅展示经过 ViberMate 的对外尝试。没有记录不代表设备没有直连。传输字节数包含 HTTP 封装，不是文件大小，也无法确定本地路径。',
+    'network.egress.empty': 'ViberMate 尚未记录到出站尝试；这不能证明设备没有其他直连。',
     'network.egress.load_more': '加载更多出站尝试',
     'network.egress.caller': '调用方',
     'network.egress.target': '目标',
@@ -3279,9 +3929,10 @@ final class AppCopy {
     'network.value.outcome.canceled': '已取消',
     'network.value.confidence.verified': '已验证',
     'network.value.confidence.observed': '已观察',
-    'network.value.decryption.mitm': '已解析',
-    'network.value.decryption.blind': '加密直通',
-    'network.value.decryption.cleartext': '已解析明文',
+    'network.value.decryption.mitm': 'HTTP 可见',
+    'network.value.decryption.blind': '内容未检查',
+    'network.value.decryption.cleartext': '明文 HTTP 可见',
+    'network.value.decryption.none': '尚未确定',
     'network.value.scope.network': '网络',
     'network.value.scope.environment': '流量策略',
     'network.value.source.network_rule': '连接规则',
@@ -3289,11 +3940,15 @@ final class AppCopy {
     'network.value.purpose.provider_attempt': '服务商请求',
     'network.value.purpose.route_operation': '路由操作',
     'network.value.purpose.upstream_account_read': '上游账号查询',
-    'network.value.purpose.blind_tunnel': '盲隧道',
+    'network.value.purpose.blind_tunnel': '内容未检查的转发',
     'network.value.authority.environment': '流量策略',
     'network.value.authority.network': '网络',
     'network.value.payload.client_semantic': 'Agent 请求',
     'network.value.payload.control': '控制流量',
+    'network.value.payload.none': '无客户端正文',
+    'network.value.payload.client_data': '客户端数据',
+    'network.value.payload.opaque_tunnel': '请求内容未检查',
+    'network.value.payload.runtime': '运行时请求',
     'network.value.parent.upstream_attempt': '上游尝试',
     'network.fact.connection_id': '连接 ID',
     'network.fact.attempt_id': '尝试 ID',
@@ -3304,10 +3959,10 @@ final class AppCopy {
     'network.fact.route_host': '路由主机',
     'network.fact.resolved_ip': '解析 IP',
     'network.fact.rule': '规则',
-    'network.fact.decryption': '解密',
+    'network.fact.decryption': '内容可见性',
     'network.fact.egress_authority': '出站 Authority',
     'network.fact.egress_source': '出站来源',
-    'network.fact.bytes': '字节',
+    'network.fact.bytes': '传输字节',
     'network.fact.outcome': '结果',
     'network.fact.error': '错误',
     'network.fact.parent': '父级',
@@ -3355,6 +4010,7 @@ final class AppCopy {
     'network.rules.validation.host': '请输入不含通配符和末尾点号的精确小写主机名。',
     'network.rules.validation.port': '请输入 1 至 65535 的端口。',
     'settings.title': '设置',
+    'settings.section': '设置分区',
     'settings.subtitle': '管理这套 Runtime 的偏好、接入、安全与网络行为',
     'settings.subtitle.server': '管理这套 Runtime 的偏好、团队接入、安全与网络行为',
     'settings.tab.general': '常规',
@@ -3479,9 +4135,30 @@ final class AppCopy {
     'settings.storage.new_directory': '新数据目录',
     'settings.storage.move_confirm': '迁移并重启',
     'settings.storage.moving': '正在迁移…',
+    'settings.storage.backing_up': '正在创建并校验备份…',
+    'settings.storage.restoring': '正在校验并恢复备份…',
     'settings.storage.move_confirmation':
         '在所选位置新建 ViberMate 文件夹，复制并校验全部数据后重启 Runtime。请先停止运行中的 Capture。旧目录保留为备份，不再写入新记录；macOS 钥匙串中的凭证仍留在本机。',
     'settings.storage.moved': '存储位置已更改，旧目录已保留为备份。',
+    'settings.storage.backup': '创建备份',
+    'settings.storage.restore': '恢复备份',
+    'settings.storage.backup_title': '创建离线备份？',
+    'settings.storage.backup_target': '新备份目录',
+    'settings.storage.backup_confirm': '创建备份',
+    'settings.storage.backup_confirmation':
+        'ViberMate 会停止并重启本机 Runtime，然后写入带 manifest 的可验证目录，包含 SQLite 数据、配置和本地代理 CA。不会导出服务商/OAuth 凭据、macOS 钥匙串项目或外部 Server TLS 文件。备份内含未加密证据和代理 CA 私钥，请妥善保护。',
+    'settings.storage.backup_created': '可验证备份已创建；未包含服务商凭据和外部 TLS 文件。',
+    'settings.storage.restore_title': '恢复这个备份？',
+    'settings.storage.restore_source': '已验证备份',
+    'settings.storage.restore_target': '新 Runtime 目录',
+    'settings.storage.restore_confirm': '校验并恢复',
+    'settings.storage.restore_confirmation':
+        '创建新 Runtime 目录前，会校验 manifest、每个文件的哈希、SQLite 完整性、外键和 schema 兼容性。当前目录不会被覆盖，并继续作为回滚来源。跨机器恢复后，需要重新连接服务商账号并重新配置外部 Server TLS 文件。',
+    'settings.storage.restore_completed':
+        '备份已恢复到新 Runtime 目录；旧目录仍可用于回滚。请重新连接不可用的凭据。',
+    'settings.storage.server_backup':
+        '请先停止 Server，再运行以下命令。备份包含 Runtime 数据和代理 CA，但不包含服务商凭据与外部 TLS 文件。',
+    'settings.storage.copy_command': '复制命令',
     'settings.storage.rolled_back': '新位置启动失败，已恢复使用原目录；原始数据未删除。',
     'settings.storage.storage_target_invalid':
         '请选择当前数据目录以外的本地文件夹，且其中不能已有 ViberMate 子文件夹。',
@@ -3489,13 +4166,42 @@ final class AppCopy {
     'settings.storage.storage_copy_failed':
         '迁移未完成，仍使用原目录。请检查剩余空间和目录权限；目标位置可能留有未完成的副本。',
     'settings.storage.storage_validation_failed': '副本未通过数据库校验，仍使用原目录，未切换到副本。',
+    'settings.storage.backup_validation_failed':
+        '备份的 manifest、文件哈希或数据库校验失败；没有切换或覆盖任何数据，但可能留有未完成的新目标目录。',
+    'settings.storage.backup_incompatible':
+        '该备份使用不兼容的 Runtime 数据库 schema；仍继续使用当前数据目录。',
     'settings.storage.storage_settings_invalid':
         '无法读取或保存存储位置设置。请检查 App 支持目录的权限；已有数据未删除。',
     'settings.storage.storage_location_unavailable':
         '指定的数据目录不可用。请重新连接磁盘或恢复目录后重试；未创建空数据库。',
     'settings.storage.database': 'SQLite 数据库',
+    'settings.storage.refresh': '刷新存储快照',
+    'settings.storage.database_size': '数据库文件',
+    'settings.storage.wal_size': '预写日志（WAL）',
+    'settings.storage.evidence_size': '证据占用页',
+    'settings.storage.reusable_size': 'SQLite 内可复用',
+    'settings.storage.unknown': '无法读取',
+    'settings.storage.capacity_sample':
+        '统计于 {time} · Runtime 磁盘可用 {available} · 低于 {threshold} 时提醒',
+    'settings.storage.growth': '与上次检查相比，SQLite 文件变化 {change}。',
+    'settings.storage.low_space':
+        '所连接 Runtime 的可用空间已低于阈值。继续记录前，请释放空间、迁移 App 数据目录或扩容服务端卷。',
+    'settings.storage.capacity_unavailable': 'Runtime 无法读取该卷的剩余空间；数据库统计仍可查看。',
+    'settings.storage.measurement_scope':
+        '“证据占用页”是相关表实际分配的 SQLite 页面，不是解压后的正文总量。“可复用”页面仍在数据库文件内，可供后续写入；文件未必会缩小。',
+    'settings.storage.cleanup_empty': '目前没有超过保留期、等待清理的证据。',
+    'settings.storage.cleanup_preview':
+        '已有 {exchanges} 条语义调用和 {envelopes} 条 Raw HTTP 边界超过保留期。',
+    'settings.storage.cleanup_title': '清理过期证据？',
+    'settings.storage.cleanup_consequence':
+        '只移除已经超过各自保留期的证据。运行中和未过期的证据、流量策略、服务与账号都会保留。SQLite 可复用释放的页面，但文件未必缩小；此操作不声称对 SSD 安全擦除。',
+    'settings.storage.cleanup_action': '清理过期证据',
+    'settings.storage.cleanup_complete': '过期证据已清理。',
+    'settings.storage.archive_preview':
+        '当前快照：{captures} 条运行记录、{exchanges} 条语义调用、{envelopes} 条 Raw HTTP 边界。',
     'settings.storage.location_failed': '无法读取存储位置。请检查 Runtime 连接后重试。',
-    'settings.storage.move_hint': '迁移前请先停止 Runtime，并保留整个数据目录；不要单独复制正在使用的数据库。',
+    'settings.storage.move_hint':
+        '请先停止运行中的 Capture，再使用这里的可验证操作进行迁移、备份或恢复。不要单独复制正在使用的 runtime.db；备份会有意排除服务商凭据、钥匙串项目和外部 TLS 文件。',
     'settings.storage.server_path':
         '服务端通过 --data-dir 指定此目录；容器还需挂载持久化卷。这里不是浏览器所在电脑的目录。',
     'settings.storage.retention': '新建流量策略默认保留全文证据 30 天。记录模式与保留期由各自的流量策略管理。',
@@ -3551,6 +4257,32 @@ final class AppCopy {
     'settings.preview': '确定性预览数据',
     'settings.live': '本地 ViberMate 运行时',
     'settings.remote': 'Runtime Server · {target}',
+    'updates.title': '版本与更新',
+    'updates.detail': '对比 App、Runtime 与已安装终端命令；仅在你主动点击时联网检查。',
+    'updates.app': 'App',
+    'updates.runtime': 'Runtime',
+    'updates.terminal': '终端命令',
+    'updates.app_build': 'App {build}',
+    'updates.runtime_build': 'Runtime {build}',
+    'updates.terminal_build': '终端命令 {build}',
+    'updates.mismatch':
+        'ViberMate 组件版本不一致：{details}。开始新任务前请检查升级路径；正在运行的 Capture 不会被修改。',
+    'updates.mismatch_detail':
+        'App、Runtime 或终端命令并非同一发行版。请更新较旧组件后重启；ViberMate 不会自动替换运行文件。',
+    'updates.review': '检查版本',
+    'updates.check': '检查更新',
+    'updates.available': '有可用更新',
+    'updates.current': '已是最新',
+    'updates.unavailable': '暂时无法检查 Release。ViberMate 仍可正常使用；网络恢复后可重试。',
+    'updates.guide.homebrew': '检测到 Homebrew 安装。请先结束活动 Capture，再执行下方 brew 升级命令。',
+    'updates.guide.manual':
+        '请先结束活动 Capture 与数据操作，再打开官方 GitHub Release 查看签名下载与发行说明；确认新包可用前保留当前版本。',
+    'updates.guide.server':
+        '浏览器不能替换 Runtime Server 文件。请先结束活动任务，再从官方 Release 更新原生服务或容器并重启。',
+    'updates.copy_brew': '复制 brew upgrade',
+    'updates.release_notes': '发行说明与下载',
+    'updates.no_auto_install':
+        'ViberMate 不会在后台下载或安装更新，也不会在活动 Capture 或数据操作期间替换文件。',
     'server.access.title': '网页与客户端接入',
     'server.access.description':
         '使用你的个人运行用户账号和密码。执行下列命令前，请先在客户端电脑上安装 vibermate CLI 和要使用的 Agent。',
@@ -3603,6 +4335,22 @@ final class AppCopy {
         '从这个受信任的本机 App 为 {username} 设置新密码。已有的 CLI 与网页会话都会退出。',
     'server.users.password.action': '重置密码',
     'server.users.password.error': '无法重置密码，请检查账号状态后重试。',
+    'server.users.policy.action': '访问范围与用量告警',
+    'server.users.policy.title': '访问与告警 · {username}',
+    'server.users.policy.detail': '选择该用户可启动的已发布流量策略；账号只能通过这些策略间接使用。',
+    'server.users.policy.all': '允许使用全部已发布流量策略',
+    'server.users.policy.all_short': '全部策略',
+    'server.users.policy.count': '已选 {count} 个',
+    'server.users.policy.select_one': '请至少选择一个策略；若要完全禁止访问，请停用该用户。',
+    'server.users.policy.alerts': '已观察用量告警',
+    'server.users.policy.alerts_detail':
+        '按 ViberMate 留存证据设置每日软告警；0 表示关闭。它不是上游额度、账单或硬预算。',
+    'server.users.policy.calls': '每日 Agent API 调用',
+    'server.users.policy.tokens': '每日已观察 Token',
+    'server.users.policy.alerts_off': '告警关闭',
+    'server.users.policy.alerts_on': '告警开启',
+    'server.users.policy.summary': '{access} · {alerts}',
+    'server.users.policy.failed': '策略未保存。请检查所选策略与阈值后重试。',
     'server.usage.truncated': '统计已达到安全上限；当前显示的是部分总量。',
     'server.usage.no_traffic': '尚未捕获到 Agent 流量',
     'server.usage.workspace.unknown': '客户端未报告工作区',
@@ -3610,6 +4358,10 @@ final class AppCopy {
     'server.usage.failed': '失败 {count}',
     'server.usage.tokens': '输入 {input} · 输出 {output}',
     'server.usage.partial': '部分留存请求没有模型或 token 证据；缺失值不会按 0 计算。',
+    'usage.warning':
+        '{date} 的已观察用量达到软告警：{facts}。这是 ViberMate 留存证据，不是上游额度、账单或硬预算。',
+    'usage.warning.calls': '{value} 次调用（告警值 {threshold}）',
+    'usage.warning.tokens': '{value} Token（告警值 {threshold}）',
     'server.usage.details.show': '模型与客户端会话',
     'server.usage.details.hide': '收起详情',
     'server.usage.models.title': '精确的请求模型 → 上游模型',
@@ -3728,6 +4480,8 @@ final class AppCopy {
     'terminal.unavailable': '无法检查打包命令。请重新构建或安装 ViberMate。',
     'terminal.target': '终端入口',
     'terminal.source': 'App 内命令',
+    'terminal.source_build': 'App 版本',
+    'terminal.installed_build': '已安装版本',
     'terminal.details': '技术详情',
     'terminal.diagnosis': '底层诊断',
     'terminal.boundary':
@@ -3775,46 +4529,6 @@ final class AppCopy {
     'terminal.error.timeout': '终端命令操作超时。',
     'terminal.error.failed': '终端命令状态已变化或操作被拒绝，请检查当前状态。',
     'terminal.error.contract': 'App 内命令返回了无效状态，ViberMate 未采信。',
-    'offline.title': '断网保护',
-    'offline.summary': '暂停新的外部工作，等待进行中的出站流量结束，再明确提示何时可安全断网。',
-    'offline.state.unbound': '尚未初始化',
-    'offline.state.online': '联网运行',
-    'offline.state.entering': '正在准备断网',
-    'offline.state.held': '可安全断网',
-    'offline.state.probing': '正在检查上游服务',
-    'offline.state.releasing': '正在恢复等待中的工作',
-    'offline.state.stopping': '正在停止',
-    'offline.enter': '准备断网',
-    'offline.resume': '恢复联网',
-    'offline.safe': '可安全断网',
-    'offline.safe.yes': '可以',
-    'offline.safe.no': '还不可以',
-    'offline.active_actions': '活动动作',
-    'offline.entering_actions': '正在排空的动作',
-    'offline.active_egress': '进行中的出站连接',
-    'offline.queued_requests': '等待中的请求',
-    'offline.held_bytes': '等待数据量',
-    'offline.revision': '运行时修订',
-    'offline.last_probe': '最近服务检查',
-    'offline.confirm.enter.title': '准备断网？',
-    'offline.confirm.enter.detail':
-        '新的外部工作会进入等待；活动网络工作排空后，ViberMate 才会报告可以安全断网。',
-    'offline.confirm.enter.action': '开始准备',
-    'offline.confirm.resume.title': '恢复外部工作？',
-    'offline.confirm.resume.detail':
-        'ViberMate 会先检查冻结的服务目标，再释放等待中的工作；检查失败时会继续保持。',
-    'offline.confirm.resume.action': '检查并恢复',
-    'offline.probe.transport_unavailable': '服务传输不可用',
-    'offline.probe.tls_rejected': '服务 TLS 身份被拒绝',
-    'offline.probe.canceled': '服务检查已取消',
-    'offline.probe.probe_failed': '服务检查失败',
-    'offline.kind.provider': '服务商',
-    'offline.kind.opaque': '不透明隧道',
-    'offline.kind.auxiliary': '辅助流量',
-    'offline.kind.plugin': '插件',
-    'offline.kind.update': '更新',
-    'offline.kind.blind_tunnel': '盲隧道',
-    'offline.kind.counts': '活动 {active} · 等待 {queued}',
     'notice.manual_capture.revoked': '代理登录已撤销；已有对话与请求记录已保留。',
     'notice.manual_capture.created': '专属代理登录已创建。',
     'notice.manual_capture.rotated': '代理凭据已轮换；已有对话与请求记录已保留。',
@@ -3827,8 +4541,5 @@ final class AppCopy {
     'notice.inventory.credential_replaced':
         '凭据已使用上一 credential epoch 作为 CAS 边界完成替换。',
     'notice.inventory.account_deleted': '账号与凭据已删除；捕获证据未被移除。',
-    'notice.offline.held': '断网保护已进入可安全断网状态。',
-    'notice.offline.resumed': '服务检查通过，外部工作已恢复。',
-    'notice.offline.releasing': '服务检查通过；正在释放等待中的工作。',
   };
 }

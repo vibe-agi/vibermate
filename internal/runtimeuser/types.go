@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"errors"
+	"slices"
 	"strings"
 	"time"
 	"unicode"
@@ -21,6 +22,8 @@ const (
 	maxPasswordBytes   = 1024
 	minPasswordBytes   = 8
 	maxDeviceNameBytes = 128
+	maxEnvironments    = 128
+	maxWarningValue    = int64(1_000_000_000_000_000)
 	tokenBytes         = 32
 )
 
@@ -61,16 +64,101 @@ type User struct {
 	// UpdatedAt is also the credential revision. Repositories must advance it
 	// on every password/state change, even within the same clock tick.
 	UpdatedAt time.Time `json:"updatedAt"`
+	Policy    Policy    `json:"-"`
 }
 
 func (user User) Validate() error {
 	if !user.ID.Valid() ||
 		canonicalUsername(user.Username) != user.Username ||
 		!user.State.valid() || !canonicalTimestamp(user.CreatedAt) ||
-		!canonicalTimestamp(user.UpdatedAt) || user.UpdatedAt.Before(user.CreatedAt) {
+		!canonicalTimestamp(user.UpdatedAt) || user.UpdatedAt.Before(user.CreatedAt) ||
+		user.Policy.Validate() != nil {
 		return ErrInvalidUser
 	}
 	return nil
+}
+
+// Policy limits which published Environments a Runtime User may launch and
+// carries soft warnings over retained, observed usage. An empty Environment
+// list means all published Environments; disabling the user is the deny-all
+// operation.
+type Policy struct {
+	allowedEnvironmentIDs    string
+	DailyAgentAPICallWarning int64
+	DailyTokenWarning        int64
+}
+
+func NewPolicy(environmentIDs []string, dailyCalls, dailyTokens int64) (Policy, error) {
+	if len(environmentIDs) > maxEnvironments || dailyCalls < 0 || dailyCalls > maxWarningValue ||
+		dailyTokens < 0 || dailyTokens > maxWarningValue {
+		return Policy{}, ErrInvalidUser
+	}
+	ids := slices.Clone(environmentIDs)
+	for _, id := range ids {
+		if !validEnvironmentID(id) {
+			return Policy{}, ErrInvalidUser
+		}
+	}
+	slices.Sort(ids)
+	for index := 1; index < len(ids); index++ {
+		if ids[index] == ids[index-1] {
+			return Policy{}, ErrInvalidUser
+		}
+	}
+	return Policy{
+		allowedEnvironmentIDs: strings.Join(ids, "\x00"), DailyAgentAPICallWarning: dailyCalls,
+		DailyTokenWarning: dailyTokens,
+	}, nil
+}
+
+func (policy Policy) Validate() error {
+	ids := policy.EnvironmentIDs()
+	if len(ids) > maxEnvironments ||
+		policy.DailyAgentAPICallWarning < 0 || policy.DailyAgentAPICallWarning > maxWarningValue ||
+		policy.DailyTokenWarning < 0 || policy.DailyTokenWarning > maxWarningValue {
+		return ErrInvalidUser
+	}
+	for index, id := range ids {
+		if !validEnvironmentID(id) ||
+			index > 0 && ids[index-1] >= id {
+			return ErrInvalidUser
+		}
+	}
+	return nil
+}
+
+func (policy Policy) Clone() Policy { return policy }
+
+func (policy Policy) AllowsEnvironment(id string) bool {
+	if policy.Validate() != nil {
+		return false
+	}
+	ids := policy.EnvironmentIDs()
+	return len(ids) == 0 || slices.Contains(ids, id)
+}
+
+func (policy Policy) EnvironmentIDs() []string {
+	if policy.allowedEnvironmentIDs == "" {
+		return []string{}
+	}
+	return strings.Split(policy.allowedEnvironmentIDs, "\x00")
+}
+
+func validEnvironmentID(value string) bool {
+	if value == "" || len(value) > 128 || !utf8.ValidString(value) ||
+		strings.TrimSpace(value) != value {
+		return false
+	}
+	for _, character := range value {
+		if character > unicode.MaxASCII ||
+			!(character >= 'a' && character <= 'z') &&
+				!(character >= '0' && character <= '9') &&
+				character != '-' && character != '_' && character != '.' {
+			return false
+		}
+	}
+	first := value[0]
+	return first >= 'a' && first <= 'z' || first >= '0' && first <= '9'
 }
 
 // UserRecord is the durable representation. PasswordHash is a one-way Argon2id
@@ -121,6 +209,7 @@ type Repository interface {
 	FindUserByID(context.Context, UserID) (UserRecord, bool, error)
 	ListUsers(context.Context) ([]UserRecord, error)
 	SetUserState(context.Context, UserID, State, time.Time) (UserRecord, bool, error)
+	SetUserPolicy(context.Context, UserID, Policy) (UserRecord, bool, error)
 	ReplacePassword(context.Context, UserID, string, time.Time, time.Time) (UserRecord, bool, error)
 	CreateSession(context.Context, SessionRecord, time.Time) error
 	FindSession(context.Context, SessionDigest) (SessionRecord, UserRecord, bool, error)

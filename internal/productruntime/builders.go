@@ -417,6 +417,7 @@ type providerBuildRequest struct {
 type providerRuntime interface {
 	exchange.Provider
 	ReadAccount(context.Context, providertransport.AccountReadRequest) (*http.Response, error)
+	ConsumeResetCredit(context.Context, providertransport.ResetRedemption) (*http.Response, error)
 	DoCodexOAuthTokenRequest(*http.Request) (*http.Response, error)
 	FetchEndpointModels(
 		context.Context,
@@ -549,6 +550,7 @@ type exchangeBuildRequest struct {
 
 type exchangeRuntime interface {
 	exchange.Executor
+	DryRun(context.Context, exchange.ClientRequest) (exchange.DryRunResult, error)
 	BeginShutdown()
 	Drain(context.Context) error
 	Shutdown(context.Context) error

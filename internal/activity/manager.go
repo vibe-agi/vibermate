@@ -202,6 +202,32 @@ func (manager *Manager) ListConversations(
 	return page, nil
 }
 
+func (manager *Manager) Search(
+	ctx context.Context,
+	query SearchQuery,
+) (SearchPage, error) {
+	if manager == nil || query.Validate() != nil {
+		return SearchPage{}, ErrInvalidEvent
+	}
+	operation, finish, err := manager.begin(ctx)
+	if err != nil {
+		return SearchPage{}, err
+	}
+	defer finish()
+	page, err := manager.repository.SearchExchanges(operation, SearchRequest{
+		Query:              query,
+		ContentAvailableAt: manager.clock.Now().UTC().Truncate(time.Millisecond),
+	})
+	if err != nil {
+		return SearchPage{}, err
+	}
+	page.Items = append([]SearchHit{}, page.Items...)
+	for index := range page.Items {
+		page.Items[index] = page.Items[index].Clone()
+	}
+	return page, nil
+}
+
 func (manager *Manager) list(
 	ctx context.Context,
 	request PageRequest,

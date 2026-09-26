@@ -5,6 +5,9 @@ script_directory="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repository_root="$(cd "${script_directory}/../.." && pwd)"
 flutter_bin="${VIBERMATE_FLUTTER_BIN:-flutter}"
 source "${repository_root}/ui/flutter_app/tool/flutter-sdk.env"
+package_version="$(awk '$1 == "version:" { print $2 }' "${repository_root}/ui/flutter_app/pubspec.yaml")"
+version="${package_version%%+*}"
+release_ldflags="-X github.com/vibe-agi/vibermate/internal/productbuild.releaseVersion=v${version}"
 
 sdk_version="$("${flutter_bin}" --version --machine)"
 if [[ "${sdk_version}" != *"\"frameworkRevision\": \"${VIBERMATE_FLUTTER_REVISION}\""* ]]; then
@@ -27,10 +30,14 @@ cd "${repository_root}"
 mkdir -p dist/docker/vibermate-web
 CGO_ENABLED=0 GOOS=linux GOARCH="${target_arch}" \
   go build -buildvcs=true -trimpath -tags vibermate_native_secrets \
+    -ldflags="${release_ldflags}" \
     -o dist/docker/vibermated ./cmd/vibermated
 CGO_ENABLED=0 GOOS=linux GOARCH="${target_arch}" \
   go build -buildvcs=true -trimpath -tags vibermate_native_secrets \
+    -ldflags="${release_ldflags}" \
     -o dist/docker/vibermate ./cmd/vibermate
 cp -R ui/flutter_app/build/web/. dist/docker/vibermate-web/
 cp LICENSE dist/docker/LICENSE
+cp LICENSE dist/docker/vibermate-web/LICENSE
+cp THIRD_PARTY_LICENSES.md dist/docker/THIRD_PARTY_LICENSES.md
 docker compose build --build-arg "VIBERMATE_SOURCE_REVISION=$(git rev-parse HEAD)"

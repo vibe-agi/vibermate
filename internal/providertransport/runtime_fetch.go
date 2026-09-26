@@ -291,7 +291,7 @@ func (client *Client) fetchRuntimeJSON(
 	if spec.captured != nil {
 		dispatch.egressPolicy = spec.captured.plan.EgressPolicy()
 	}
-	response, _, err := client.transport.RoundTrip(request, dispatch)
+	response, transportEvidence, err := client.transport.RoundTrip(request, dispatch)
 	if err != nil {
 		if response != nil && response.Body != nil {
 			_ = response.Body.Close()
@@ -300,7 +300,7 @@ func (client *Client) fetchRuntimeJSON(
 			operationContext,
 			attempt,
 			egressaudit.OutcomeFailed,
-			"transport_failed",
+			transportFailureClass(err, transportEvidence.FallbackReason()),
 			0,
 			0,
 		)

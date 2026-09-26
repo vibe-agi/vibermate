@@ -613,6 +613,7 @@ CREATE TABLE runtime_egress_attempts(
   CHECK(purpose IN('provider_attempt',
 'upstream_model_discovery',
 'upstream_account_read',
+'upstream_account_action',
 'credential_refresh',
 'model_metadata_directory',
 'route_operation',

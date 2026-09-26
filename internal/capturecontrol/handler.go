@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/vibe-agi/vibermate/internal/acpobservation"
 	"github.com/vibe-agi/vibermate/internal/captureassignment"
 	"github.com/vibe-agi/vibermate/internal/capturegrant"
 	"github.com/vibe-agi/vibermate/internal/capturerun"
@@ -37,6 +38,7 @@ const (
 	ReasonAdapterVerification          ReasonCode = "adapter_verification_failed"
 	ReasonEnvironmentNotFound          ReasonCode = "environment_not_found"
 	ReasonEnvironmentUnavailable       ReasonCode = "environment_unavailable"
+	ReasonEnvironmentNotAllowed        ReasonCode = "environment_not_allowed"
 	ReasonProjectionUnavailable        ReasonCode = "environment_projection_unavailable"
 	ReasonCaptureRunCreate             ReasonCode = "capture_run_create_failed"
 	ReasonWorkspaceUnavailable         ReasonCode = "workspace_identity_unavailable"
@@ -65,6 +67,7 @@ type CaptureRunIssuer interface {
 
 type Options struct {
 	LaunchSnapshots *launchsnapshot.Store
+	ACP             *acpobservation.Manager
 	Runs            capturerun.Controller
 	Principals      PrincipalAuthenticator
 	Issuer          CaptureRunIssuer
@@ -74,6 +77,7 @@ type Options struct {
 
 type Handler struct {
 	launchSnapshots *launchsnapshot.Store
+	acp             *acpobservation.Manager
 	runs            capturerun.Controller
 	principals      PrincipalAuthenticator
 	issuer          CaptureRunIssuer
@@ -153,6 +157,7 @@ func New(options Options) (*Handler, error) {
 	}
 	handler := &Handler{
 		launchSnapshots: options.LaunchSnapshots,
+		acp:             options.ACP,
 		runs:            options.Runs,
 		principals:      options.Principals,
 		issuer:          options.Issuer,
@@ -161,6 +166,10 @@ func New(options Options) (*Handler, error) {
 		mux:             http.NewServeMux(),
 	}
 	handler.mux.HandleFunc("POST /api/v1/capture-runs", handler.create)
+	if handler.acp != nil {
+		handler.mux.HandleFunc("POST /api/v1/capture-runs/{runId}/actions/start-acp", handler.startACP)
+		handler.mux.HandleFunc("POST /api/v1/capture-runs/{runId}/actions/observe-acp", handler.observeACP)
+	}
 	handler.mux.HandleFunc(
 		"POST /api/v1/capture-runs/{runId}/actions/attach-process",
 		handler.attach,
@@ -426,6 +435,8 @@ func (handler *Handler) writeIssueFailure(
 		writeProblem(writer, http.StatusNotFound, ReasonEnvironmentNotFound)
 	case errors.Is(err, capturegrant.ErrEnvironmentUnavailable):
 		writeProblem(writer, http.StatusConflict, ReasonEnvironmentUnavailable)
+	case errors.Is(err, capturegrant.ErrEnvironmentUnauthorized):
+		writeProblem(writer, http.StatusForbidden, ReasonEnvironmentNotAllowed)
 	case errors.Is(err, capturegrant.ErrProjectionUnavailable):
 		writeProblem(writer, http.StatusServiceUnavailable, ReasonProjectionUnavailable)
 	case errors.Is(err, capturegrant.ErrWorkspaceUnavailable):

@@ -90,6 +90,7 @@ func executeLocalStatus(
 		"pid":     fmt.Sprintf("%d", inspection.ProcessID),
 		"ready":   fmt.Sprintf("%t", inspection.Ready),
 		"api":     inspection.APIVersion,
+		"build":   inspection.ProductBuild,
 		"state":   inspection.State,
 		"host":    inspection.Host,
 		"storage": inspection.Storage,
@@ -140,6 +141,7 @@ func executeRemoteStatus(
 	if err := renderCLIMessage(environment, stdout, key, map[string]string{
 		"origin": inspection.Origin, "instance": inspection.InstanceID,
 		"api": inspection.APIVersion, "username": inspection.Username,
+		"build":     inspection.ProductBuild,
 		"transport": transport,
 	}); err != nil {
 		return 1, reasonRenderFailed

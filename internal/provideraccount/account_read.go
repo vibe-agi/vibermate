@@ -29,10 +29,10 @@ func (manager *Manager) AcquireReadCredential(ctx context.Context, plan environm
 	})
 }
 
-// AcquireOwnedReadCredential is reserved for the management-owner boundary.
+// AcquireOwnedCredential is reserved for the management-owner boundary.
 // An Account Link grants a profile use of an account; the owner's independent
-// account inspection neither needs a link nor creates one for Captures.
-func (manager *Manager) AcquireOwnedReadCredential(ctx context.Context, id ID) (providerauth.Lease, originidentity.ProviderOrigin, error) {
+// account operation neither needs a link nor creates one for Captures.
+func (manager *Manager) AcquireOwnedCredential(ctx context.Context, id ID) (providerauth.Lease, originidentity.ProviderOrigin, error) {
 	if ctx == nil {
 		return nil, originidentity.ProviderOrigin{}, ErrInvalidAccount
 	}
@@ -41,6 +41,6 @@ func (manager *Manager) AcquireOwnedReadCredential(ctx context.Context, id ID) (
 		return nil, originidentity.ProviderOrigin{}, err
 	}
 	lease, err := manager.acquire(ctx, accountLeaseScope{id: id, accountRevision: account.Revision, realmID: account.RealmID,
-		upstreamEndpointOrigin: account.Origin, ownerRead: true})
+		upstreamEndpointOrigin: account.Origin, ownerOperation: true})
 	return lease, account.Origin, err
 }

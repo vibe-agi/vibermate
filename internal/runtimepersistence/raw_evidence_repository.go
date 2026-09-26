@@ -79,18 +79,11 @@ func (repository *rawEvidenceRepository) AppendBatch(
 		return fmt.Errorf("prepare raw evidence append: %w", err)
 	}
 	defer statement.Close()
-	expired, err := transaction.ExecContext(
-		operation,
-		`DELETE FROM runtime_raw_evidence_envelopes
-		 WHERE expires_at_unix_ms <= ?`,
-		toUnixMillis(now.UTC()),
+	releasedEnvelopes, err := deleteExpiredRawEvidence(
+		operation, transaction, toUnixMillis(now.UTC()),
 	)
 	if err != nil {
-		return fmt.Errorf("purge expired raw evidence: %w", err)
-	}
-	releasedEnvelopes, err := expired.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("read purged raw evidence count: %w", err)
+		return err
 	}
 	for _, record := range records {
 		storedBodyDigest, bodyErr := storeEvidenceBody(
@@ -105,9 +98,6 @@ func (repository *rawEvidenceRepository) AppendBatch(
 			return fmt.Errorf("append raw evidence envelope: %w", err)
 		}
 	}
-	// Reachability is only recomputed when an envelope actually went away.
-	// Running it on every batch would scan every body and every envelope for
-	// each commit, which is the shape of cost this store exists to avoid.
 	if releasedEnvelopes > 0 {
 		if err := purgeUnreferencedEvidenceBytes(operation, transaction); err != nil {
 			return err

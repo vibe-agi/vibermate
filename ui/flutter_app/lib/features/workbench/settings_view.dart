@@ -2,12 +2,15 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:url_launcher/url_launcher.dart';
 
+import '../../core/api/runtime_storage.dart';
 import '../../core/bootstrap/terminal_command.dart';
 import '../../core/design/viber_theme.dart';
 import '../../core/design/workbench_widgets.dart';
 import '../../core/i18n/app_copy.dart';
-import 'offline_hold_view.dart';
+import '../../core/api/product_update_api.dart';
+import 'acp_setup.dart';
 import 'runtime_root_ca_panel.dart';
 import '../../core/api/control_models.dart';
 import 'deletion_dialog.dart';
@@ -42,44 +45,82 @@ final class SettingsView extends StatelessWidget {
           ),
           Material(
             color: context.viberColors.panel,
-            child: Align(
-              alignment: Alignment.centerLeft,
-              child: TabBar(
-                isScrollable: true,
-                tabAlignment: TabAlignment.start,
-                dividerHeight: 0,
-                onTap: controller.selectSettingsTab,
-                tabs: <Widget>[
-                  for (final destination in destinations)
-                    switch (destination) {
-                      SettingsDestination.preferences => _SettingsTab(
-                        key: const Key('settings-tab-general'),
-                        icon: Icons.tune,
-                        label: copy('settings.tab.preferences'),
+            child: LayoutBuilder(
+              builder: (context, constraints) => constraints.maxWidth < 600
+                  ? Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 12),
+                      child: Semantics(
+                        label: copy('settings.section'),
+                        child: DropdownButtonHideUnderline(
+                          child: DropdownButton<SettingsDestination>(
+                            key: const Key('settings-section-picker'),
+                            isExpanded: true,
+                            value: destinations[controller.settingsTab],
+                            items: [
+                              for (final destination in destinations)
+                                DropdownMenuItem(
+                                  key: Key(
+                                    'settings-option-${destination.name}',
+                                  ),
+                                  value: destination,
+                                  child: Text(
+                                    _settingsDestinationLabel(
+                                      copy,
+                                      destination,
+                                    ),
+                                  ),
+                                ),
+                            ],
+                            onChanged: (destination) {
+                              if (destination != null) {
+                                controller.selectSettingsTab(
+                                  destinations.indexOf(destination),
+                                );
+                              }
+                            },
+                          ),
+                        ),
                       ),
-                      SettingsDestination.access => _SettingsTab(
-                        key: const Key('settings-tab-access'),
-                        icon: Icons.link,
-                        label: copy('settings.tab.access'),
+                    )
+                  : Align(
+                      alignment: Alignment.centerLeft,
+                      child: TabBar(
+                        isScrollable: true,
+                        tabAlignment: TabAlignment.start,
+                        dividerHeight: 0,
+                        onTap: controller.selectSettingsTab,
+                        tabs: <Widget>[
+                          for (final destination in destinations)
+                            switch (destination) {
+                              SettingsDestination.preferences => _SettingsTab(
+                                key: const Key('settings-tab-general'),
+                                icon: Icons.tune,
+                                label: copy('settings.tab.preferences'),
+                              ),
+                              SettingsDestination.access => _SettingsTab(
+                                key: const Key('settings-tab-access'),
+                                icon: Icons.link,
+                                label: copy('settings.tab.access'),
+                              ),
+                              SettingsDestination.users => _SettingsTab(
+                                key: const Key('settings-tab-users'),
+                                icon: Icons.group_outlined,
+                                label: copy('settings.tab.users'),
+                              ),
+                              SettingsDestination.safety => _SettingsTab(
+                                key: const Key('settings-tab-safety'),
+                                icon: Icons.shield_outlined,
+                                label: copy('settings.tab.safety'),
+                              ),
+                              SettingsDestination.networkExits => _SettingsTab(
+                                key: const Key('settings-tab-proxy'),
+                                icon: Icons.alt_route,
+                                label: copy('settings.tab.proxy'),
+                              ),
+                            },
+                        ],
                       ),
-                      SettingsDestination.users => _SettingsTab(
-                        key: const Key('settings-tab-users'),
-                        icon: Icons.group_outlined,
-                        label: copy('settings.tab.users'),
-                      ),
-                      SettingsDestination.safety => _SettingsTab(
-                        key: const Key('settings-tab-safety'),
-                        icon: Icons.shield_outlined,
-                        label: copy('settings.tab.safety'),
-                      ),
-                      SettingsDestination.networkExits => _SettingsTab(
-                        key: const Key('settings-tab-proxy'),
-                        icon: Icons.alt_route,
-                        label: copy('settings.tab.proxy'),
-                      ),
-                    },
-                ],
-              ),
+                    ),
             ),
           ),
           const Divider(height: 1),
@@ -118,6 +159,17 @@ final class SettingsView extends StatelessWidget {
     );
   }
 }
+
+String _settingsDestinationLabel(
+  AppCopy copy,
+  SettingsDestination destination,
+) => copy(switch (destination) {
+  SettingsDestination.preferences => 'settings.tab.preferences',
+  SettingsDestination.access => 'settings.tab.access',
+  SettingsDestination.users => 'settings.tab.users',
+  SettingsDestination.safety => 'settings.tab.safety',
+  SettingsDestination.networkExits => 'settings.tab.proxy',
+});
 
 final class _SettingsTab extends StatelessWidget {
   const _SettingsTab({required this.icon, required this.label, super.key});
@@ -309,11 +361,9 @@ final class _EgressProfilesSettingsPaneState
       ),
       const SizedBox(height: 14),
       if (_loading)
-        const Center(
-          child: Padding(
-            padding: EdgeInsets.all(28),
-            child: CircularProgressIndicator(),
-          ),
+        Padding(
+          padding: const EdgeInsets.all(28),
+          child: CompactLoadingMessage(label: copy('common.loading')),
         )
       else if (_failed)
         Column(
@@ -529,7 +579,218 @@ final class _GeneralSettingsPane extends StatelessWidget {
           ],
         ),
       ),
+      const SizedBox(height: 12),
+      _ProductUpdatePanel(controller: controller, copy: copy),
     ],
+  );
+}
+
+final class _ProductUpdatePanel extends StatelessWidget {
+  const _ProductUpdatePanel({required this.controller, required this.copy});
+
+  static final _releases = Uri.https(
+    'github.com',
+    '/vibe-agi/vibermate/releases',
+  );
+  static const _brewCommand = 'brew upgrade --cask vibe-agi/tap/vibermate';
+
+  final WorkbenchController controller;
+  final AppCopy copy;
+
+  @override
+  Widget build(BuildContext context) {
+    final update = controller.productUpdate;
+    final runtimeBuild = controller.data?.status.productBuild ?? '—';
+    final terminalBuild = controller.terminalCommand?.installedBuild;
+    final heading = Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Icon(
+          Icons.system_update_alt,
+          size: 17,
+          color: context.viberColors.route,
+        ),
+        const SizedBox(width: 8),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                copy('updates.title'),
+                style: Theme.of(context).textTheme.labelLarge,
+              ),
+              const SizedBox(height: 3),
+              Text(
+                copy('updates.detail'),
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  color: context.viberColors.textMuted,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+    final check = OutlinedButton.icon(
+      key: const Key('product-update-check'),
+      onPressed: controller.productUpdateLoading
+          ? null
+          : () => unawaited(controller.checkProductUpdate()),
+      icon: controller.productUpdateLoading
+          ? const CompactProgressIndicator()
+          : const Icon(Icons.refresh, size: 15),
+      label: Text(copy('updates.check')),
+    );
+    return _SettingsSurface(
+      key: const Key('product-update-panel'),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          LayoutBuilder(
+            builder: (context, constraints) => constraints.maxWidth < 520
+                ? Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      heading,
+                      const SizedBox(height: 8),
+                      Align(alignment: Alignment.centerLeft, child: check),
+                    ],
+                  )
+                : Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Expanded(child: heading),
+                      const SizedBox(width: 12),
+                      check,
+                    ],
+                  ),
+          ),
+          const SizedBox(height: 10),
+          Wrap(
+            spacing: 18,
+            runSpacing: 6,
+            children: [
+              _UpdateBuildFact(
+                label: copy('updates.app'),
+                value: controller.appProductBuild,
+              ),
+              _UpdateBuildFact(
+                label: copy('updates.runtime'),
+                value: runtimeBuild,
+              ),
+              if (terminalBuild != null)
+                _UpdateBuildFact(
+                  label: copy('updates.terminal'),
+                  value: terminalBuild,
+                ),
+            ],
+          ),
+          if (controller.runtimeBuildMismatch ||
+              controller.terminalBuildMismatch) ...[
+            const SizedBox(height: 9),
+            InlineNotice(message: copy('updates.mismatch_detail'), error: true),
+          ],
+          if (update != null) ...[
+            const SizedBox(height: 9),
+            if (update.state == ProductUpdateState.unavailable)
+              InlineNotice(message: copy('updates.unavailable'))
+            else
+              Row(
+                children: [
+                  StatusPill(
+                    label: copy(
+                      update.state == ProductUpdateState.available
+                          ? 'updates.available'
+                          : 'updates.current',
+                    ),
+                    color: update.state == ProductUpdateState.available
+                        ? context.viberColors.warning
+                        : context.viberColors.verified,
+                    icon: update.state == ProductUpdateState.available
+                        ? Icons.system_update_alt
+                        : Icons.check_circle_outline,
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      [
+                        if (update.availableVersion != null)
+                          update.availableVersion!,
+                        if (update.releaseName != null) update.releaseName!,
+                      ].join(' · '),
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
+                  ),
+                ],
+              ),
+            const SizedBox(height: 8),
+            Text(
+              copy(switch (update.channel) {
+                ProductInstallChannel.homebrew => 'updates.guide.homebrew',
+                ProductInstallChannel.webServer => 'updates.guide.server',
+                ProductInstallChannel.manual => 'updates.guide.manual',
+              }),
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+            const SizedBox(height: 7),
+            Wrap(
+              spacing: 8,
+              runSpacing: 7,
+              children: [
+                if (update.channel == ProductInstallChannel.homebrew)
+                  FilledButton.icon(
+                    key: const Key('product-update-copy-brew'),
+                    onPressed: () => unawaited(
+                      Clipboard.setData(
+                        const ClipboardData(text: _brewCommand),
+                      ),
+                    ),
+                    icon: const Icon(Icons.copy, size: 14),
+                    label: Text(copy('updates.copy_brew')),
+                  ),
+                OutlinedButton.icon(
+                  key: const Key('product-update-open-release'),
+                  onPressed: () => unawaited(
+                    launchUrl(
+                      update.releaseUrl ?? _releases,
+                      mode: LaunchMode.externalApplication,
+                    ),
+                  ),
+                  icon: const Icon(Icons.open_in_new, size: 14),
+                  label: Text(copy('updates.release_notes')),
+                ),
+              ],
+            ),
+          ],
+          const SizedBox(height: 8),
+          Text(
+            copy('updates.no_auto_install'),
+            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+              color: context.viberColors.textMuted,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+final class _UpdateBuildFact extends StatelessWidget {
+  const _UpdateBuildFact({required this.label, required this.value});
+
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) => Text.rich(
+    TextSpan(
+      children: [
+        TextSpan(text: '$label  '),
+        TextSpan(text: value, style: monoStyle),
+      ],
+    ),
+    style: Theme.of(context).textTheme.bodySmall,
   );
 }
 
@@ -567,6 +828,19 @@ final class _AccessSettingsPane extends StatelessWidget {
         Text(
           copy('settings.access.local.no_account'),
           style: Theme.of(context).textTheme.bodySmall,
+        ),
+      ],
+      if (controller.terminalManagement ||
+          controller.runtimeServerURL.isNotEmpty) ...[
+        const SizedBox(height: 16),
+        ACPSetupGuide(
+          copy: copy,
+          program:
+              controller.terminalCommand?.targetPath ??
+              '/absolute/path/to/vibermate',
+          serverURL: controller.terminalManagement
+              ? ''
+              : controller.runtimeServerURL,
         ),
       ],
       if (controller.serverManagement || controller.webPrincipal != null) ...[
@@ -659,8 +933,6 @@ final class _SafetyDataSettingsPane extends StatelessWidget {
         dismissHelpLabel: copy('common.dismiss'),
       ),
       const SizedBox(height: 14),
-      OfflineHoldSettingsPanel(controller: controller, copy: copy),
-      const SizedBox(height: 12),
       if (controller.accessSettingsAvailable) ...[
         _ServerConnectionSettingsPanel(controller: controller, copy: copy),
         const SizedBox(height: 12),
@@ -1704,6 +1976,7 @@ final class _RuntimeUsersPanelState extends State<_RuntimeUsersPanel> {
                     onDisable: !user.owner
                         ? () => _confirmDisableRuntimeUser(user)
                         : null,
+                    onPolicy: () => _showRuntimeUserPolicyDialog(user),
                   ),
                   if (user != users.last) const SizedBox(height: 6),
                 ],
@@ -1772,6 +2045,238 @@ final class _RuntimeUsersPanelState extends State<_RuntimeUsersPanel> {
         user: user,
       ),
     );
+  }
+
+  Future<void> _showRuntimeUserPolicyDialog(RuntimeUser user) async {
+    await showDialog<void>(
+      context: context,
+      builder: (_) => _RuntimeUserPolicyDialog(
+        controller: widget.controller,
+        copy: widget.copy,
+        user: user,
+      ),
+    );
+  }
+}
+
+final class _RuntimeUserPolicyDialog extends StatefulWidget {
+  const _RuntimeUserPolicyDialog({
+    required this.controller,
+    required this.copy,
+    required this.user,
+  });
+
+  final WorkbenchController controller;
+  final AppCopy copy;
+  final RuntimeUser user;
+
+  @override
+  State<_RuntimeUserPolicyDialog> createState() =>
+      _RuntimeUserPolicyDialogState();
+}
+
+final class _RuntimeUserPolicyDialogState
+    extends State<_RuntimeUserPolicyDialog> {
+  late bool _all;
+  late final Set<String> _selected;
+  late final TextEditingController _calls;
+  late final TextEditingController _tokens;
+  bool _saving = false;
+  bool _failed = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _all = widget.user.allEnvironments;
+    _selected = widget.user.allowedEnvironmentIds.toSet();
+    _calls = TextEditingController(
+      text: widget.user.dailyAgentApiCallWarning == 0
+          ? ''
+          : '${widget.user.dailyAgentApiCallWarning}',
+    );
+    _tokens = TextEditingController(
+      text: widget.user.dailyTokenWarning == 0
+          ? ''
+          : '${widget.user.dailyTokenWarning}',
+    );
+  }
+
+  @override
+  void dispose() {
+    _calls.dispose();
+    _tokens.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final records =
+        widget.controller.data?.environments ?? const <EnvironmentRecord>[];
+    final labels = {for (final value in records) value.id: value.name};
+    final ids = {...labels.keys, ..._selected}.toList()..sort();
+    final calls = int.tryParse(_calls.text.trim()) ?? 0;
+    final tokens = int.tryParse(_tokens.text.trim()) ?? 0;
+    final valid =
+        !_saving &&
+        (_all || _selected.isNotEmpty) &&
+        calls >= 0 &&
+        calls <= 1000000000000000 &&
+        tokens >= 0 &&
+        tokens <= 1000000000000000;
+    return AlertDialog(
+      title: Text(
+        widget.copy.format('server.users.policy.title', {
+          'username': widget.user.username,
+        }),
+      ),
+      content: SizedBox(
+        width: 520,
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text(widget.copy('server.users.policy.detail')),
+              const SizedBox(height: 12),
+              CheckboxListTile(
+                key: const Key('runtime-user-policy-all'),
+                contentPadding: EdgeInsets.zero,
+                dense: true,
+                value: _all,
+                onChanged: _saving
+                    ? null
+                    : (value) => setState(() => _all = value ?? false),
+                title: Text(widget.copy('server.users.policy.all')),
+              ),
+              if (!_all)
+                Container(
+                  constraints: const BoxConstraints(maxHeight: 230),
+                  decoration: BoxDecoration(
+                    border: Border.all(color: context.viberColors.dividerSoft),
+                    borderRadius: ViberMetrics.controlRadius,
+                  ),
+                  child: ListView(
+                    shrinkWrap: true,
+                    children: [
+                      for (final id in ids)
+                        CheckboxListTile(
+                          key: Key('runtime-user-policy-environment-$id'),
+                          dense: true,
+                          value: _selected.contains(id),
+                          onChanged: _saving
+                              ? null
+                              : (value) => setState(() {
+                                  if (value == true) {
+                                    _selected.add(id);
+                                  } else {
+                                    _selected.remove(id);
+                                  }
+                                }),
+                          title: Text(labels[id] ?? id),
+                          subtitle: labels[id] == null ? null : Text(id),
+                        ),
+                    ],
+                  ),
+                ),
+              if (!_all && _selected.isEmpty)
+                Padding(
+                  padding: const EdgeInsets.only(top: 6),
+                  child: Text(
+                    widget.copy('server.users.policy.select_one'),
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: context.viberColors.warning,
+                    ),
+                  ),
+                ),
+              const SizedBox(height: 14),
+              Text(
+                widget.copy('server.users.policy.alerts'),
+                style: Theme.of(context).textTheme.titleSmall,
+              ),
+              const SizedBox(height: 4),
+              Text(widget.copy('server.users.policy.alerts_detail')),
+              const SizedBox(height: 8),
+              Row(
+                children: [
+                  Expanded(
+                    child: TextField(
+                      key: const Key('runtime-user-policy-calls'),
+                      controller: _calls,
+                      enabled: !_saving,
+                      keyboardType: TextInputType.number,
+                      inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                      decoration: InputDecoration(
+                        labelText: widget.copy('server.users.policy.calls'),
+                        hintText: '0',
+                      ),
+                      onChanged: (_) => setState(() {}),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: TextField(
+                      key: const Key('runtime-user-policy-tokens'),
+                      controller: _tokens,
+                      enabled: !_saving,
+                      keyboardType: TextInputType.number,
+                      inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                      decoration: InputDecoration(
+                        labelText: widget.copy('server.users.policy.tokens'),
+                        hintText: '0',
+                      ),
+                      onChanged: (_) => setState(() {}),
+                    ),
+                  ),
+                ],
+              ),
+              if (_failed) ...[
+                const SizedBox(height: 8),
+                InlineNotice(
+                  message: widget.copy('server.users.policy.failed'),
+                  error: true,
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: _saving ? null : () => Navigator.of(context).pop(),
+          child: Text(widget.copy('common.cancel')),
+        ),
+        FilledButton(
+          key: const Key('runtime-user-policy-save'),
+          onPressed: valid ? () => _save(calls, tokens) : null,
+          child: _saving
+              ? const CompactProgressIndicator()
+              : Text(widget.copy('common.save')),
+        ),
+      ],
+    );
+  }
+
+  Future<void> _save(int calls, int tokens) async {
+    setState(() {
+      _saving = true;
+      _failed = false;
+    });
+    final ids = _all ? <String>[] : (_selected.toList()..sort());
+    final saved = await widget.controller.setRuntimeUserPolicy(
+      user: widget.user,
+      allowedEnvironmentIds: ids,
+      dailyAgentApiCallWarning: calls,
+      dailyTokenWarning: tokens,
+    );
+    if (!mounted) return;
+    if (saved) {
+      Navigator.of(context).pop();
+    } else {
+      setState(() {
+        _saving = false;
+        _failed = true;
+      });
+    }
   }
 }
 
@@ -2168,6 +2673,7 @@ final class _RuntimeUserRow extends StatelessWidget {
     required this.owner,
     required this.onReset,
     required this.onDisable,
+    required this.onPolicy,
   });
 
   final RuntimeUser user;
@@ -2176,6 +2682,7 @@ final class _RuntimeUserRow extends StatelessWidget {
   final bool owner;
   final VoidCallback? onReset;
   final VoidCallback? onDisable;
+  final VoidCallback onPolicy;
 
   @override
   Widget build(BuildContext context) {
@@ -2228,10 +2735,41 @@ final class _RuntimeUserRow extends StatelessWidget {
                         color: context.viberColors.textMuted,
                       ),
                     ),
+                    const SizedBox(height: 2),
+                    Text(
+                      copy.format('server.users.policy.summary', {
+                        'access': user.allEnvironments
+                            ? copy('server.users.policy.all_short')
+                            : copy.format('server.users.policy.count', {
+                                'count': '${user.allowedEnvironmentIds.length}',
+                              }),
+                        'alerts':
+                            user.dailyAgentApiCallWarning == 0 &&
+                                user.dailyTokenWarning == 0
+                            ? copy('server.users.policy.alerts_off')
+                            : copy('server.users.policy.alerts_on'),
+                      }),
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: context.viberColors.textMuted,
+                      ),
+                    ),
                   ],
                 ),
               ),
               const SizedBox(width: 6),
+              IconButton(
+                key: Key('runtime-user-policy-${user.id}'),
+                onPressed: disabling ? null : onPolicy,
+                tooltip: copy('server.users.policy.action'),
+                icon: const Icon(Icons.policy_outlined, size: 15),
+                constraints: const BoxConstraints.tightFor(
+                  width: ViberMetrics.controlHeight,
+                  height: ViberMetrics.controlHeight,
+                ),
+                padding: EdgeInsets.zero,
+              ),
               Text(
                 copy(
                   user.active
@@ -2506,8 +3044,17 @@ final class _StorageDisclosure extends StatelessWidget {
                 color: context.viberColors.route,
               ),
               const SizedBox(width: 8),
-              _SettingsLabel(copy('settings.storage')),
-              const Spacer(),
+              Expanded(child: _SettingsLabel(copy('settings.storage'))),
+              IconButton(
+                key: const Key('storage-refresh'),
+                tooltip: copy('settings.storage.refresh'),
+                onPressed: controller.storageLocationLoading
+                    ? null
+                    : controller.refreshStorageLocation,
+                icon: controller.storageLocationLoading
+                    ? const CompactProgressIndicator()
+                    : const Icon(Icons.refresh, size: 16),
+              ),
               ContextHelpButton(
                 message: copy('settings.storage.move_hint'),
                 title: copy('settings.storage'),
@@ -2541,6 +3088,12 @@ final class _StorageDisclosure extends StatelessWidget {
               ),
               const SizedBox(height: 8),
             ],
+            _StorageCapacity(
+              current: location,
+              previous: controller.previousStorageLocation,
+              copy: copy,
+            ),
+            const SizedBox(height: 10),
           ] else if (controller.storageLocationFailed)
             Wrap(
               crossAxisAlignment: WrapCrossAlignment.center,
@@ -2558,27 +3111,50 @@ final class _StorageDisclosure extends StatelessWidget {
           if (!controller.terminalManagement && !controller.previewMode) ...[
             Text(copy('settings.storage.server_path'), style: body),
             const SizedBox(height: 8),
+            if (controller.storageLocation case final location?)
+              _ServerBackupGuide(location: location, copy: copy),
+            const SizedBox(height: 8),
           ],
-          if (controller.moveStorage != null &&
-              controller.chooseStorageDirectory != null) ...[
-            Align(
-              alignment: Alignment.centerLeft,
-              child: TextButton.icon(
-                key: const Key('storage-change-directory'),
-                onPressed:
-                    controller.storageMoving ||
-                        controller.storageLocation == null
-                    ? null
-                    : () => _chooseStorage(context),
-                icon: const Icon(Icons.drive_file_move_outline, size: 16),
-                label: Text(
-                  copy(
-                    controller.storageMoving
-                        ? 'settings.storage.moving'
-                        : 'settings.storage.change',
+          if (controller.moveStorage != null ||
+              controller.backupStorage != null ||
+              controller.restoreStorage != null) ...[
+            Wrap(
+              spacing: 8,
+              runSpacing: 6,
+              children: [
+                if (controller.moveStorage != null &&
+                    controller.chooseStorageDirectory != null)
+                  TextButton.icon(
+                    key: const Key('storage-change-directory'),
+                    onPressed:
+                        controller.storageMoving ||
+                            controller.storageLocation == null
+                        ? null
+                        : () => _chooseStorage(context),
+                    icon: const Icon(Icons.drive_file_move_outline, size: 16),
+                    label: Text(copy('settings.storage.change')),
                   ),
-                ),
-              ),
+                if (controller.backupStorage != null &&
+                    controller.chooseStorageBackupDirectory != null)
+                  TextButton.icon(
+                    key: const Key('storage-create-backup'),
+                    onPressed: controller.storageMoving
+                        ? null
+                        : () => _chooseBackup(context),
+                    icon: const Icon(Icons.archive_outlined, size: 16),
+                    label: Text(copy('settings.storage.backup')),
+                  ),
+                if (controller.restoreStorage != null &&
+                    controller.chooseStorageRestore != null)
+                  TextButton.icon(
+                    key: const Key('storage-restore-backup'),
+                    onPressed: controller.storageMoving
+                        ? null
+                        : () => _chooseRestore(context),
+                    icon: const Icon(Icons.restore_page_outlined, size: 16),
+                    label: Text(copy('settings.storage.restore')),
+                  ),
+              ],
             ),
             if (controller.storageMoveFailure ?? controller.storageMoveNotice
                 case final message?)
@@ -2594,6 +3170,14 @@ final class _StorageDisclosure extends StatelessWidget {
             'settings.storage.location',
             'settings.storage.retention',
           ]) ...[Text(copy(line), style: body), const SizedBox(height: 5)],
+          if (controller.storageLocation case final location?) ...[
+            const SizedBox(height: 7),
+            _StorageCleanup(
+              location: location,
+              controller: controller,
+              copy: copy,
+            ),
+          ],
           const SizedBox(height: 7),
           // Design 06 section 8.2 makes clearing a distinct, deliberate and
           // confirmable action rather than a side effect of stopping or
@@ -2603,32 +3187,51 @@ final class _StorageDisclosure extends StatelessWidget {
             alignment: Alignment.centerLeft,
             child: OutlinedButton.icon(
               key: const Key('storage-clear-archive'),
-              onPressed: () async {
-                final outcome = await showDialog<DeletionOutcome>(
-                  context: context,
-                  builder: (_) => DeletionConfirmation(
-                    copy: copy,
-                    title: copy('deletion.archive.title'),
-                    subject: copy('settings.storage'),
-                    consequence: copy('deletion.archive.consequence'),
-                    onConfirm: () async {
-                      final result = await controller.clearEvidence();
-                      if (result == null) {
-                        throw controller.inventoryFailure;
-                      }
-                      return result;
+              onPressed: controller.storageArchivePreviewLoading
+                  ? null
+                  : () async {
+                      final preview = await controller
+                          .loadEvidenceClearPreview();
+                      if (preview == null || !context.mounted) return;
+                      final outcome = await showDialog<DeletionOutcome>(
+                        context: context,
+                        builder: (_) => DeletionConfirmation(
+                          copy: copy,
+                          title: copy('deletion.archive.title'),
+                          subject: copy('settings.storage'),
+                          consequence: _archiveConsequence(preview),
+                          onConfirm: () async {
+                            final result = await controller.clearEvidence();
+                            if (result == null) {
+                              throw controller.inventoryFailure;
+                            }
+                            return result;
+                          },
+                        ),
+                      );
+                      if (outcome == null) return;
                     },
-                  ),
-                );
-                if (outcome == null) return;
-              },
-              icon: const Icon(Icons.delete_sweep_outlined, size: 15),
+              icon: controller.storageArchivePreviewLoading
+                  ? const CompactProgressIndicator()
+                  : const Icon(Icons.delete_sweep_outlined, size: 15),
               label: Text(copy('deletion.archive.title')),
             ),
           ),
+          if (controller.storageArchivePreviewError case final error?)
+            Text(
+              copy.maybe(error) ?? copy('error.control_result_unknown'),
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                color: context.viberColors.danger,
+              ),
+            ),
         ],
       ),
     );
+  }
+
+  String _archiveConsequence(DeletionReleased preview) {
+    return '${copy('deletion.archive.consequence')}\n\n'
+        '${copy.format('settings.storage.archive_preview', {'captures': preview.captures, 'exchanges': preview.exchanges, 'envelopes': preview.envelopes})}';
   }
 
   Future<void> _chooseStorage(BuildContext context) async {
@@ -2671,6 +3274,307 @@ final class _StorageDisclosure extends StatelessWidget {
     );
     if (confirmed == true) await controller.relocateStorage(target);
   }
+
+  Future<void> _chooseBackup(BuildContext context) async {
+    final target = await controller.pickStorageBackupDirectory();
+    if (target == null || !context.mounted) return;
+    final confirmed = await _confirmStorageOperation(
+      context,
+      title: copy('settings.storage.backup_title'),
+      paths: [(copy('settings.storage.backup_target'), target)],
+      consequence: copy('settings.storage.backup_confirmation'),
+      action: copy('settings.storage.backup_confirm'),
+    );
+    if (confirmed) await controller.createStorageBackup(target);
+  }
+
+  Future<void> _chooseRestore(BuildContext context) async {
+    final selection = await controller.pickStorageRestore();
+    if (selection == null || !context.mounted) return;
+    final confirmed = await _confirmStorageOperation(
+      context,
+      title: copy('settings.storage.restore_title'),
+      paths: [
+        (copy('settings.storage.restore_source'), selection.backup),
+        (copy('settings.storage.restore_target'), selection.target),
+      ],
+      consequence: copy('settings.storage.restore_confirmation'),
+      action: copy('settings.storage.restore_confirm'),
+    );
+    if (confirmed) await controller.restoreStorageBackup(selection);
+  }
+
+  Future<bool> _confirmStorageOperation(
+    BuildContext context, {
+    required String title,
+    required List<(String, String)> paths,
+    required String consequence,
+    required String action,
+  }) async {
+    return await showDialog<bool>(
+          context: context,
+          builder: (context) => AlertDialog(
+            title: Text(title),
+            content: SizedBox(
+              width: 520,
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    for (final (label, value) in paths) ...[
+                      Text(
+                        label,
+                        style: Theme.of(context).textTheme.labelLarge,
+                      ),
+                      const SizedBox(height: 5),
+                      SelectableText(value, style: monoStyle),
+                      const SizedBox(height: 12),
+                    ],
+                    Text(consequence),
+                  ],
+                ),
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context, false),
+                child: Text(copy('common.cancel')),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.pop(context, true),
+                child: Text(action),
+              ),
+            ],
+          ),
+        ) ??
+        false;
+  }
+}
+
+final class _ServerBackupGuide extends StatelessWidget {
+  const _ServerBackupGuide({required this.location, required this.copy});
+
+  final RuntimeStorageLocation location;
+  final AppCopy copy;
+
+  @override
+  Widget build(BuildContext context) {
+    final backup =
+        'vibermated backup-data --source=${_shellQuote(location.dataDirectory)} '
+        "--target='/absolute/new-backup-directory'";
+    final restore =
+        "vibermated restore-data --source='/absolute/backup-directory' "
+        "--target='/absolute/new-data-directory'";
+    return Column(
+      key: const Key('storage-server-backup-guide'),
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          copy('settings.storage.server_backup'),
+          style: Theme.of(context).textTheme.bodySmall,
+        ),
+        const SizedBox(height: 6),
+        for (final command in [backup, restore])
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(child: SelectableText(command, style: monoStyle)),
+              IconButton(
+                tooltip: copy('settings.storage.copy_command'),
+                onPressed: () =>
+                    Clipboard.setData(ClipboardData(text: command)),
+                icon: const Icon(Icons.copy_outlined, size: 14),
+              ),
+            ],
+          ),
+      ],
+    );
+  }
+}
+
+String _shellQuote(String value) {
+  final escaped = value.replaceAll("'", "'\"'\"'");
+  return "'$escaped'";
+}
+
+final class _StorageCapacity extends StatelessWidget {
+  const _StorageCapacity({
+    required this.current,
+    required this.previous,
+    required this.copy,
+  });
+
+  final RuntimeStorageLocation current;
+  final RuntimeStorageLocation? previous;
+  final AppCopy copy;
+
+  @override
+  Widget build(BuildContext context) {
+    final prior = previous;
+    final delta = prior == null ? null : current.fileBytes - prior.fileBytes;
+    return Column(
+      key: const Key('storage-capacity'),
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        ResponsiveFormGrid(
+          children: [
+            _StorageMetric(
+              label: copy('settings.storage.database_size'),
+              value: _storageBytes(current.databaseBytes),
+            ),
+            _StorageMetric(
+              label: copy('settings.storage.wal_size'),
+              value: _storageBytes(current.walBytes),
+            ),
+            _StorageMetric(
+              label: copy('settings.storage.evidence_size'),
+              value: _storageBytes(current.evidenceBytes),
+            ),
+            _StorageMetric(
+              label: copy('settings.storage.reusable_size'),
+              value: _storageBytes(current.reusableBytes),
+            ),
+          ],
+        ),
+        const SizedBox(height: 7),
+        Text(
+          copy.format('settings.storage.capacity_sample', {
+            'time': _storageTimestamp(current.collectedAt),
+            'available': current.filesystemAvailableBytes == null
+                ? copy('settings.storage.unknown')
+                : _storageBytes(current.filesystemAvailableBytes!),
+            'threshold': _storageBytes(current.lowSpaceThresholdBytes),
+          }),
+          style: Theme.of(context).textTheme.bodySmall,
+        ),
+        if (delta != null && delta != 0)
+          Text(
+            copy.format('settings.storage.growth', {
+              'change': '${delta > 0 ? '+' : '−'}${_storageBytes(delta.abs())}',
+            }),
+            key: const Key('storage-growth'),
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
+        if (current.capacityState == 'low') ...[
+          const SizedBox(height: 7),
+          InlineNotice(
+            message: copy('settings.storage.low_space'),
+            error: true,
+          ),
+        ] else if (current.capacityState == 'unavailable') ...[
+          const SizedBox(height: 7),
+          InlineNotice(message: copy('settings.storage.capacity_unavailable')),
+        ],
+        const SizedBox(height: 5),
+        Text(
+          copy('settings.storage.measurement_scope'),
+          style: Theme.of(
+            context,
+          ).textTheme.bodySmall?.copyWith(color: context.viberColors.textMuted),
+        ),
+      ],
+    );
+  }
+}
+
+final class _StorageMetric extends StatelessWidget {
+  const _StorageMetric({required this.label, required this.value});
+
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) => Semantics(
+    container: true,
+    label: '$label: $value',
+    child: ExcludeSemantics(
+      child: CompactLabeledControl(
+        label: label,
+        child: SelectableText(value, style: monoStyle),
+      ),
+    ),
+  );
+}
+
+final class _StorageCleanup extends StatelessWidget {
+  const _StorageCleanup({
+    required this.location,
+    required this.controller,
+    required this.copy,
+  });
+
+  final RuntimeStorageLocation location;
+  final WorkbenchController controller;
+  final AppCopy copy;
+
+  @override
+  Widget build(BuildContext context) {
+    final preview = location.cleanupPreview;
+    final pending = preview.exchanges + preview.envelopes;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          pending == 0
+              ? copy('settings.storage.cleanup_empty')
+              : copy.format('settings.storage.cleanup_preview', {
+                  'exchanges': preview.exchanges,
+                  'envelopes': preview.envelopes,
+                }),
+          key: const Key('storage-cleanup-preview'),
+          style: Theme.of(context).textTheme.bodySmall,
+        ),
+        if (pending > 0)
+          TextButton.icon(
+            key: const Key('storage-cleanup-expired'),
+            onPressed: controller.storageCleanupRunning
+                ? null
+                : () => showDialog<DeletionOutcome>(
+                    context: context,
+                    builder: (_) => DeletionConfirmation(
+                      copy: copy,
+                      title: copy('settings.storage.cleanup_title'),
+                      subject: copy.format('settings.storage.cleanup_preview', {
+                        'exchanges': preview.exchanges,
+                        'envelopes': preview.envelopes,
+                      }),
+                      consequence: copy('settings.storage.cleanup_consequence'),
+                      confirmLabel: copy('settings.storage.cleanup_action'),
+                      onConfirm: controller.cleanupExpiredEvidence,
+                    ),
+                  ),
+            icon: const Icon(Icons.cleaning_services_outlined, size: 15),
+            label: Text(copy('settings.storage.cleanup_action')),
+          ),
+        if (controller.storageCleanupNotice case final notice?)
+          Text(copy(notice), style: Theme.of(context).textTheme.bodySmall),
+        if (controller.storageCleanupError case final error?)
+          Text(
+            copy.maybe(error) ?? copy('error.control_result_unknown'),
+            style: Theme.of(
+              context,
+            ).textTheme.bodySmall?.copyWith(color: context.viberColors.danger),
+          ),
+      ],
+    );
+  }
+}
+
+String _storageBytes(int value) {
+  if (value < 1024) return '$value B';
+  if (value < 1024 * 1024) return '${(value / 1024).toStringAsFixed(1)} KiB';
+  if (value < 1024 * 1024 * 1024) {
+    return '${(value / (1024 * 1024)).toStringAsFixed(1)} MiB';
+  }
+  return '${(value / (1024 * 1024 * 1024)).toStringAsFixed(1)} GiB';
+}
+
+String _storageTimestamp(DateTime value) {
+  final local = value.toLocal();
+  String two(int number) => number.toString().padLeft(2, '0');
+  return '${local.year}-${two(local.month)}-${two(local.day)} '
+      '${two(local.hour)}:${two(local.minute)}:${two(local.second)}';
 }
 
 final class _SettingsLabel extends StatelessWidget {
@@ -2971,6 +3875,19 @@ final class _TerminalCommandDetailsState
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
+                _CommandPath(
+                  label: copy('terminal.source_build'),
+                  value: status.sourceBuild,
+                ),
+                if (status.installedBuild case final installed?) ...[
+                  const SizedBox(height: 4),
+                  _CommandPath(
+                    label: copy('terminal.installed_build'),
+                    value: installed,
+                    muted: installed != status.sourceBuild,
+                  ),
+                ],
+                const SizedBox(height: 4),
                 _CommandPath(
                   label: copy('terminal.target'),
                   value: status.targetPath,

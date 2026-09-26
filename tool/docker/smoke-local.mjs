@@ -3,6 +3,7 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
+import { createServer } from 'node:net';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { verifyWebSetup } from '../server/web-setup-smoke.mjs';
@@ -11,10 +12,21 @@ const execute = promisify(execFile);
 const project = `vibermate-setup-smoke-${randomBytes(6).toString('hex')}`;
 const volume = `${project}-data`;
 const root = fileURLToPath(new URL('../../', import.meta.url));
+// Port zero cannot be the advertised proxy address; choose a free loopback
+// port before starting Compose. ponytail: a later bind race fails safely;
+// retry the smoke if another process claims the port before Compose.
+const hostPort = await new Promise((resolve, reject) => {
+  const probe = createServer();
+  probe.once('error', reject);
+  probe.listen(0, '127.0.0.1', () => {
+    const port = probe.address().port;
+    probe.close(error => error ? reject(error) : resolve(String(port)));
+  });
+});
 const env = {
   ...process.env,
-  VIBERMATE_IMAGE: process.env.VIBERMATE_IMAGE ?? 'vibermate-runtime:0.1.12-local',
-  VIBERMATE_PORT: '0',
+  VIBERMATE_IMAGE: process.env.VIBERMATE_IMAGE ?? 'vibermate-runtime:local',
+  VIBERMATE_PORT: hostPort,
   VIBERMATE_BIND_ADDRESS: '0.0.0.0', // The HTTP template must ignore this.
   VIBERMATE_LOCAL_DATA_VOLUME: volume,
 };
@@ -40,7 +52,7 @@ await docker(['image', 'inspect', env.VIBERMATE_IMAGE, '--format', '{{.Id}}']);
 try {
   await compose('up', '-d', '--wait', '--wait-timeout', '90');
   let published = await compose('port', 'vibermate', '9666');
-  assert.match(published, /^127\.0\.0\.1:\d+$/);
+  assert.equal(published, `127.0.0.1:${hostPort}`);
   await verifyWebSetup({
     origin: () => `http://${published}`,
     readRecoveryKey: () => compose('exec', '-T', 'vibermate',
@@ -50,7 +62,7 @@ try {
       await compose('up', '-d', '--wait', '--wait-timeout', '90');
       // Docker may allocate a different host port when published port is zero.
       published = await compose('port', 'vibermate', '9666');
-      assert.match(published, /^127\.0\.0\.1:\d+$/);
+      assert.equal(published, `127.0.0.1:${hostPort}`);
     },
   });
   console.log('PASS: loopback HTTP, Web assets, authenticated owner setup, guarded Proxy CA export, login and CA persistence across restart.');

@@ -62,8 +62,10 @@ func New(options Options) (*desktopcontrol.Handler, error) {
 	return desktopcontrol.New(desktopcontrol.Options{
 		LaunchSnapshots: options.Runtime.LaunchSnapshots(),
 		Storage:         options.Runtime,
+		ACP:             options.Runtime.ACPObservations(),
 		Readiness:       options.Readiness, Status: options.Runtime,
 		Environments: options.Runtime.Environments(), Assignments: options.Runtime.CaptureAssignments(),
+		DryRun:     options.Runtime.DryRun,
 		Activities: options.Runtime.Activities(), ConversationIndexer: indexer,
 		Contents: options.Runtime.ExchangeContents(), Connections: options.Runtime.ConnectionEvents(),
 		Egress: options.Runtime.EgressAttempts(), Approvals: options.Runtime.ToolApprovals(),

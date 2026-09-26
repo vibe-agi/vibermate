@@ -4,10 +4,13 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"hash"
 	"io"
+	"net"
 	"net/http"
 	"slices"
 	"strconv"
@@ -31,9 +34,16 @@ var (
 )
 
 const (
-	responseCanceledClass = "response_canceled"
-	responseTimeoutClass  = "response_timeout"
-	responseFailureClass  = "response_body_failed"
+	responseCanceledClass   = "response_canceled"
+	responseTimeoutClass    = "response_timeout"
+	responseFailureClass    = "response_body_failed"
+	transportDNSClass       = "dns_failed"
+	transportTLSClass       = "tls_verification_failed"
+	transportConnectClass   = "connection_failed"
+	transportTimeoutClass   = "transport_timeout"
+	transportProfileClass   = "transport_profile_failed"
+	transportHandshakeClass = "tls_handshake_failed"
+	transportUnknownClass   = "transport_failed"
 )
 
 type ClientOptions struct {
@@ -419,7 +429,8 @@ func (client *Client) Do(
 		}
 		client.completeAudit(
 			operationContext, record, egressaudit.OutcomeFailed,
-			"transport_failed", int64(len(frozen.body)), 0,
+			transportFailureClass(err, transportEvidence.FallbackReason()),
+			int64(len(frozen.body)), 0,
 		)
 		client.reportRawEvidenceFailure(rawErr)
 		return nil, attemptEvidence, fmt.Errorf("send provider request: %w", err)
@@ -485,6 +496,48 @@ func (client *Client) Do(
 	response.Body = body
 	handoff = true
 	return response, attemptEvidence, nil
+}
+
+func transportFailureClass(
+	err error,
+	fallback transportprofile.FallbackReason,
+) string {
+	var dns *net.DNSError
+	if errors.As(err, &dns) {
+		return transportDNSClass
+	}
+	var verified *tls.CertificateVerificationError
+	var untrusted x509.UnknownAuthorityError
+	var hostname x509.HostnameError
+	var invalid x509.CertificateInvalidError
+	var roots x509.SystemRootsError
+	if errors.As(err, &verified) || errors.As(err, &untrusted) ||
+		errors.As(err, &hostname) || errors.As(err, &invalid) ||
+		errors.As(err, &roots) {
+		return transportTLSClass
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return transportTimeoutClass
+	}
+	var network net.Error
+	if errors.As(err, &network) && network.Timeout() {
+		return transportTimeoutClass
+	}
+	var operation *net.OpError
+	if errors.As(err, &operation) {
+		return transportConnectClass
+	}
+	switch fallback {
+	case transportprofile.FallbackObservationUnavailable,
+		transportprofile.FallbackClientHelloUnsupported,
+		transportprofile.FallbackApplicationProtocolMissing:
+		return transportProfileClass
+	case transportprofile.FallbackObservedTLSHandshakeRejected,
+		transportprofile.FallbackCapturedTLSHandshakeRejected,
+		transportprofile.FallbackStandardTLSHandshakeRejected:
+		return transportHandshakeClass
+	}
+	return transportUnknownClass
 }
 
 func (client *Client) rawResponseBody(

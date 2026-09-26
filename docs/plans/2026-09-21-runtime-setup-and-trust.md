@@ -1,8 +1,9 @@
 # Runtime setup and trust experience
 
-Status: integration implementation; public automatic HTTPS, private-CA DNS/IP
-identity, explicit access addresses and TLS status are implemented on the
-integration branch. DNS-01 and a real public-CA staging gate remain open.
+Status: historical integration record. The released deployment paths are
+documented in [deployment.md](../deployment.md); current release/source status
+is in the [capability and support matrix](../capability-support.md). DNS-01 is
+not a supported automatic-certificate mode.
 
 Stable base: `m1/root-leaf-foundation` at `1adc765` (v0.1.10).
 Integration branch: `feat/runtime-setup-experience`.

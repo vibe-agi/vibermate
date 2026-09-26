@@ -69,7 +69,7 @@ func detachDevelopmentAccounts(ctx context.Context, tx *sql.Tx, digest string) e
 		}
 	}
 	if previous != accountNotesDevelopmentDigest {
-		if err := widenDevelopmentAccountAudit(ctx, tx); err != nil {
+		if err := widenEgressPurposeCatalog(ctx, tx); err != nil {
 			return err
 		}
 	}
@@ -82,7 +82,7 @@ func detachDevelopmentAccounts(ctx context.Context, tx *sql.Tx, digest string) e
 // Keep local unreleased evidence and its pagination sequence when adding the
 // two account-related purposes. This stays inside the same all-or-nothing
 // development-baseline conversion; arbitrary schemas are never accepted.
-func widenDevelopmentAccountAudit(ctx context.Context, tx *sql.Tx) error {
+func widenEgressPurposeCatalog(ctx context.Context, tx *sql.Tx) error {
 	const tableStart = `CREATE TABLE runtime_egress_attempts(`
 	_, definition, found := strings.Cut(schemaSQL, tableStart)
 	definition, _, terminated := strings.Cut(definition, ") STRICT;")

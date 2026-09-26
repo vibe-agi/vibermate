@@ -48,6 +48,7 @@ type CaptureResponse struct {
 	Observation   string                 `json:"observation"`
 	CreatedAt     time.Time              `json:"createdAt"`
 	UpdatedAt     time.Time              `json:"updatedAt"`
+	Transport     string                 `json:"transport,omitempty"`
 	ManagedRun    *ManagedRunResponse    `json:"managedRun,omitempty"`
 	ManualCapture *ManualCaptureResponse `json:"manualCapture,omitempty"`
 }
@@ -215,7 +216,33 @@ func (handler *Handler) listCaptures(writer http.ResponseWriter, request *http.R
 			return
 		}
 	}
+	if err := handler.markACPCaptures(request, response.Items); err != nil {
+		writeProblem(writer, http.StatusServiceUnavailable, ReasonCaptureUnavailable)
+		return
+	}
 	writeJSON(writer, http.StatusOK, response)
+}
+
+func (handler *Handler) markACPCaptures(request *http.Request, items []CaptureResponse) error {
+	if handler.acp == nil {
+		return nil
+	}
+	var ids []string
+	for _, item := range items {
+		if item.ManagedRun != nil {
+			ids = append(ids, item.ID)
+		}
+	}
+	markers, err := handler.acp.Markers(request.Context(), ids)
+	if err != nil {
+		return err
+	}
+	for index := range items {
+		if items[index].ManagedRun != nil && markers[items[index].ID] {
+			items[index].Transport = "acp_stdio"
+		}
+	}
+	return nil
 }
 
 func captureListLimit(request *http.Request) (int, error) {
@@ -355,7 +382,12 @@ func (handler *Handler) getCapture(writer http.ResponseWriter, request *http.Req
 			writeCaptureReadError(writer, getErr)
 			return
 		}
-		writeJSON(writer, http.StatusOK, captureRunResponseOf(view))
+		items := []CaptureResponse{captureRunResponseOf(view)}
+		if err := handler.markACPCaptures(request, items); err != nil {
+			writeProblem(writer, http.StatusServiceUnavailable, ReasonCaptureUnavailable)
+			return
+		}
+		writeJSON(writer, http.StatusOK, items[0])
 	case captureidentity.KindManualCapture:
 		if handler.manualCaptures == nil {
 			writeProblem(writer, http.StatusServiceUnavailable, ReasonCaptureUnavailable)

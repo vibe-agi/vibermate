@@ -39,7 +39,9 @@ type AccountSelectorTestRuntime struct {
 }
 
 type AccountSelectorTestResult struct {
-	AccountID string `json:"accountId"`
+	AccountID             string   `json:"accountId"`
+	SkippedAccountIDs     []string `json:"skippedAccountIds"`
+	AutomaticSwitchReason string   `json:"automaticSwitchReason"`
 }
 
 func (handler *Handler) testAccountSelector(writer http.ResponseWriter, request *http.Request) {
@@ -104,5 +106,14 @@ func runAccountSelectorSample(
 	if err != nil {
 		return AccountSelectorTestResult{}, err
 	}
-	return AccountSelectorTestResult{AccountID: selection.AccountID}, nil
+	skipped := make([]string, 0, len(input.Accounts)-1)
+	for _, account := range input.Accounts {
+		if account.ID != selection.AccountID {
+			skipped = append(skipped, account.ID)
+		}
+	}
+	return AccountSelectorTestResult{
+		AccountID: selection.AccountID, SkippedAccountIDs: skipped,
+		AutomaticSwitchReason: "turn_account_frozen",
+	}, nil
 }

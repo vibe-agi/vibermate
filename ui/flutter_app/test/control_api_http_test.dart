@@ -563,7 +563,13 @@ void main() {
           request.response.write(jsonEncode(_accountSelectorRevisionJson(1)));
         } else if (request.method == 'POST' &&
             request.uri.path == '/api/v1/account-selectors/actions/test') {
-          request.response.write(jsonEncode({'accountId': 'account.work'}));
+          request.response.write(
+            jsonEncode({
+              'accountId': 'account.work',
+              'skippedAccountIds': <String>[],
+              'automaticSwitchReason': 'turn_account_frozen',
+            }),
+          );
         } else {
           request.response.statusCode = HttpStatus.notFound;
         }
@@ -842,6 +848,24 @@ void main() {
           }),
         );
       } else if (request.method == 'PATCH' &&
+          request.uri.path == '/api/v1/server/runtime-users/user.test/policy') {
+        final body = Map<String, Object?>.from(
+          jsonDecode(await utf8.decoder.bind(request).join()) as Map,
+        );
+        bodies.add(body);
+        request.response.write(
+          jsonEncode({
+            'id': 'user.test',
+            'username': 'alice',
+            'state': 'active',
+            'createdAt': '2026-08-24T12:00:00.000Z',
+            'updatedAt': '2026-08-24T13:10:00.000Z',
+            'allowedEnvironmentIds': body['allowedEnvironmentIds'],
+            'dailyAgentApiCallWarning': body['dailyAgentApiCallWarning'],
+            'dailyTokenWarning': body['dailyTokenWarning'],
+          }),
+        );
+      } else if (request.method == 'PATCH' &&
           request.uri.path ==
               '/api/v1/server/runtime-users/user.test/password') {
         final body = Map<String, Object?>.from(
@@ -916,6 +940,14 @@ void main() {
       password: 'test-password',
     );
     expect(created.username, 'bob');
+    final policy = await api.setRuntimeUserPolicy(
+      userId: users.single.id,
+      allowedEnvironmentIds: const ['team'],
+      dailyAgentApiCallWarning: 100,
+      dailyTokenWarning: 1000000,
+    );
+    expect(policy.allowedEnvironmentIds, ['team']);
+    expect(policy.dailyAgentApiCallWarning, 100);
     final passwordChanged = await api.replaceRuntimeUserPassword(
       userId: users.single.id,
       password: 'replacement-password',
@@ -933,6 +965,12 @@ void main() {
         'password': 'test-password',
       },
       {
+        'schema': 'vibermate-runtime-user-policy-v1',
+        'allowedEnvironmentIds': ['team'],
+        'dailyAgentApiCallWarning': 100,
+        'dailyTokenWarning': 1000000,
+      },
+      {
         'schema': 'vibermate-runtime-user-password-v1',
         'password': 'replacement-password',
       },
@@ -943,6 +981,7 @@ void main() {
       '/api/v1/server/runtime-users',
       '/api/v1/server/runtime-users/usage',
       '/api/v1/server/runtime-users',
+      '/api/v1/server/runtime-users/user.test/policy',
       '/api/v1/server/runtime-users/user.test/password',
       '/api/v1/server/runtime-users/user.test',
     ]);

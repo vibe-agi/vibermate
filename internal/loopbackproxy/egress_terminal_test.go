@@ -105,6 +105,49 @@ func TestBlindTunnelDoesNotDialBeforeAuditAppend(t *testing.T) {
 	}
 }
 
+func TestCleartextForwardDoesNotDialBeforeAuditAppend(t *testing.T) {
+	t.Parallel()
+	connections := &blindConnectionRepository{}
+	manager, err := connectionevent.New(context.Background(), connectionevent.Options{
+		Repository: connections,
+		Clock:      connectionevent.SystemClock{},
+		Random:     bytes.NewReader(bytes.Repeat([]byte{0x42}, 64)),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	audit, err := manager.Start(context.Background(), connectionevent.Attempt{
+		Source:        connectionevent.Source{Confidence: connectionevent.SourceConfidenceUnknown},
+		RequestedHost: "target.example",
+		Port:          80,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tunnels := &blindOrderingDialer{}
+	egress := &failingBlindAppendWriter{}
+	handler := &Handler{
+		blindTunnels: tunnels,
+		egressAudit:  egress,
+		exchangeIDs:  fixedBlindExchangeIDSource{},
+		ownerContext: context.Background(),
+		clock:        time.Now,
+	}
+	request := httptest.NewRequest(http.MethodPost, "http://target.example/upload", strings.NewReader("canary"))
+	writer := httptest.NewRecorder()
+	terminal := handler.serveCleartextForward(writer, request, &operation{}, audit,
+		connectionevent.Source{IngressID: "run-ordering", Label: "fixture", Confidence: connectionevent.SourceConfidenceConfigured},
+		"allow-target")
+	if !terminal || egress.appendCalls != 1 || tunnels.dialCalls != 0 || writer.Code != http.StatusServiceUnavailable {
+		t.Fatalf("terminal=%t append=%d dial=%d status=%d", terminal, egress.appendCalls, tunnels.dialCalls, writer.Code)
+	}
+	records := connections.snapshot()
+	last := records[len(records)-1]
+	if last.Outcome != connectionevent.OutcomeFailed || last.ErrorClass != blindTunnelFailureClass {
+		t.Fatalf("connection terminal = %+v", last)
+	}
+}
+
 type unusedProtocolCatalog struct{}
 
 func (unusedProtocolCatalog) Resolve(
@@ -225,7 +268,7 @@ func TestBlindTunnelAuditClampsDecreasingWallClock(t *testing.T) {
 		context.Background(),
 		"blind-terminal-attempt",
 		"blind-terminal-connection",
-		"target.example:443",
+		"https://target.example:443",
 	)
 	if err != nil {
 		t.Fatal(err)

@@ -13,7 +13,6 @@ import 'code_library_view.dart';
 import 'endpoints_view.dart';
 import 'environments_view.dart';
 import 'network_view.dart';
-import 'offline_hold_view.dart';
 import 'provider_accounts_view.dart';
 import 'settings_view.dart';
 import 'usage_dashboard_view.dart';
@@ -132,6 +131,27 @@ final class WorkbenchShell extends StatelessWidget {
     };
     return Column(
       children: [
+        if (controller.runtimeBuildMismatch || controller.terminalBuildMismatch)
+          InlineNotice(
+            key: const Key('product-build-mismatch'),
+            message: copy.format('updates.mismatch', {
+              'details': [
+                copy.format('updates.app_build', {
+                  'build': controller.appProductBuild,
+                }),
+                if (controller.runtimeBuildMismatch)
+                  copy.format('updates.runtime_build', {
+                    'build': controller.runtimeReleaseBuild!,
+                  }),
+                if (controller.terminalBuildMismatch)
+                  copy.format('updates.terminal_build', {
+                    'build': controller.terminalCommand!.installedBuild!,
+                  }),
+              ].join(' · '),
+            }),
+            actionLabel: copy('updates.review'),
+            onAction: controller.openUpdateSettings,
+          ),
         if (controller.terminalManagement &&
             controller.section != WorkbenchSection.settings) ...[
           if (controller.terminalCommandNotice case final notice?)
@@ -225,6 +245,7 @@ final class _TitleBar extends StatelessWidget {
                 WebAccountButton(
                   principal: principal,
                   copy: copy,
+                  compact: narrow,
                   onChangePassword: controller.changeWebPassword,
                   onSignOut: controller.onSignOut,
                 ),
@@ -253,12 +274,6 @@ final class _TitleBar extends StatelessWidget {
                   ),
                 const SizedBox(width: ViberSpacing.sm),
               ],
-              OfflineHoldCommand(
-                controller: controller,
-                copy: copy,
-                compact: true,
-              ),
-              const SizedBox(width: ViberSpacing.xs),
               _ApprovalAttention(
                 controller: controller,
                 copy: copy,

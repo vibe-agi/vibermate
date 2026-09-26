@@ -259,6 +259,40 @@ void main() {
     controller.dispose();
   });
 
+  testWidgets('unchanged inventory polls do not rebuild the workbench', (
+    tester,
+  ) async {
+    final fixture = PreviewControlApi();
+    final api = _DashboardRevisionApi(fixture);
+    final controller = WorkbenchController(
+      api: api,
+      terminalCommands: PreviewTerminalCommandService(),
+      previewMode: true,
+      closeRuntime: fixture.close,
+      terminalManagement: false,
+      initialPreferences: const WorkbenchPreferences(
+        section: WorkbenchSection.environments,
+      ),
+    );
+    await controller.initialize();
+    expect(controller.data!.accounts, isNotEmpty);
+    var notifications = 0;
+    controller.addListener(() => notifications++);
+
+    await tester.pump(const Duration(seconds: 5));
+    await tester.pump();
+    expect(api.dashboardCalls, 2);
+    expect(notifications, 0);
+
+    api.changeAccount = true;
+    await tester.pump(const Duration(seconds: 5));
+    await tester.pump();
+    expect(api.dashboardCalls, 3);
+    expect(notifications, 1);
+    expect(controller.data!.accounts.first.note, 'changed by poll');
+    controller.dispose();
+  });
+
   testWidgets('visible evidence refreshes before the inventory poll', (
     tester,
   ) async {
@@ -296,6 +330,141 @@ void main() {
       reason: 'hidden timelines do not fast-poll or load with inventory polls',
     );
     expect(api.conversationCalls, directoryCalls);
+    controller.dispose();
+  });
+
+  testWidgets(
+    'empty live Capture probes once per tick and loads new evidence',
+    (tester) async {
+      final fixture = PreviewControlApi();
+      final api = _IdleCaptureApi(fixture);
+      final controller = WorkbenchController(
+        api: api,
+        terminalCommands: PreviewTerminalCommandService(),
+        previewMode: true,
+        closeRuntime: fixture.close,
+        terminalManagement: false,
+      );
+      await controller.initialize();
+      await controller.selectCapture('manual_capture:manual-figma');
+      expect(controller.selectedCaptureConversationKey, isNull);
+      final assignments = api.assignmentCalls;
+      final conversations = api.conversationCalls;
+      final activities = api.activityCalls;
+
+      for (var tick = 0; tick < 4; tick++) {
+        await tester.pump(const Duration(seconds: 1));
+        await tester.pump();
+      }
+      expect(api.activityCalls, activities + 4);
+      expect(api.assignmentCalls, assignments);
+      expect(api.conversationCalls, conversations);
+
+      api.revealEvidence = true;
+      await tester.pump(const Duration(seconds: 1));
+      await tester.pump();
+      expect(api.conversationCalls, greaterThan(conversations));
+      expect(controller.selectedCaptureConversations?.items, isNotEmpty);
+      controller.dispose();
+    },
+  );
+
+  testWidgets('manual Capture notices a second independent Exchange', (
+    tester,
+  ) async {
+    final fixture = PreviewControlApi();
+    final api = _GrowingManualApi(fixture);
+    final controller = WorkbenchController(
+      api: api,
+      terminalCommands: PreviewTerminalCommandService(),
+      previewMode: true,
+      closeRuntime: fixture.close,
+      terminalManagement: false,
+    );
+    await controller.initialize();
+    await controller.selectCapture('manual_capture:manual-figma');
+    final oldLatest = controller.captureConversations.first;
+    final oldCount = controller.captureConversations.length;
+    expect(controller.selectedCaptureConversationKey, oldLatest.key);
+    final directoryCalls = api.directoryCalls;
+
+    await tester.pump(const Duration(seconds: 1));
+    await tester.pump();
+    expect(api.directoryCalls, directoryCalls);
+    expect(api.unscopedCalls, greaterThan(0));
+
+    api.newestVisible = true;
+    await tester.pump(const Duration(seconds: 1));
+    await tester.pump();
+    expect(controller.captureConversations.length, oldCount + 1);
+    expect(controller.captureConversations.first.key, isNot(oldLatest.key));
+    expect(
+      controller.selectedCaptureConversationKey,
+      controller.captureConversations.first.key,
+    );
+    expect(
+      controller.selectedActivities.first.id,
+      controller.captureConversations.first.latest.id,
+    );
+    controller.dispose();
+  });
+
+  testWidgets('manual Capture keeps an older Exchange selected', (
+    tester,
+  ) async {
+    final fixture = PreviewControlApi();
+    final api = _GrowingManualApi(fixture);
+    final controller = WorkbenchController(
+      api: api,
+      terminalCommands: PreviewTerminalCommandService(),
+      previewMode: true,
+      closeRuntime: fixture.close,
+      terminalManagement: false,
+    );
+    await controller.initialize();
+    await controller.selectCapture('manual_capture:manual-figma');
+    final older = controller.captureConversations[1];
+    await controller.selectCaptureConversation(older.key);
+    api.newestVisible = true;
+
+    await tester.pump(const Duration(seconds: 1));
+    await tester.pump();
+    expect(controller.captureConversations.first.key, isNot(older.key));
+    expect(controller.selectedCaptureConversationKey, older.key);
+    controller.dispose();
+  });
+
+  testWidgets('hidden workbench pauses polling and catches up on resume', (
+    tester,
+  ) async {
+    final fixture = PreviewControlApi();
+    final api = _LiveEvidenceApi(fixture);
+    final controller = WorkbenchController(
+      api: api,
+      terminalCommands: PreviewTerminalCommandService(),
+      previewMode: true,
+      closeRuntime: fixture.close,
+      terminalManagement: false,
+    );
+    await controller.initialize();
+    await controller.selectCapture('managed_run:run-1');
+    final dashboardCalls = api.dashboardCalls;
+    final activityCalls = api.activityCalls;
+
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.hidden);
+    for (var tick = 0; tick < 6; tick++) {
+      await tester.pump(const Duration(seconds: 1));
+      await tester.pump();
+    }
+    expect(api.dashboardCalls, dashboardCalls);
+    expect(api.activityCalls, activityCalls);
+
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+    await tester.pump();
+    await tester.pump(const Duration(seconds: 1));
+    await tester.pump();
+    expect(api.dashboardCalls, greaterThan(dashboardCalls));
+    expect(api.activityCalls, greaterThan(activityCalls));
     controller.dispose();
   });
 
@@ -460,7 +629,8 @@ void main() {
       expect(controller.rawEvidence(exchangeId), isNull);
 
       final page = await controller.loadRawEvidence(exchangeId);
-      expect(page?.items, hasLength(3));
+      expect(page?.items, hasLength(6));
+      expect(page?.items.first.layer, 'client_ingress');
       expect(controller.rawEvidence(exchangeId), same(page));
       expect(controller.rawEvidenceError(exchangeId), isNull);
 
@@ -758,61 +928,6 @@ void main() {
   );
 
   test(
-    'Offline hold enters and resumes through exact runtime revisions',
-    () async {
-      final api = PreviewControlApi();
-      final controller = WorkbenchController(
-        api: api,
-        terminalCommands: PreviewTerminalCommandService(),
-        previewMode: true,
-        closeRuntime: api.close,
-      );
-      addTearDown(controller.dispose);
-
-      await controller.initialize();
-      expect(controller.offlineHold!.state, 'online');
-      expect(controller.offlineHold!.revision, 1);
-
-      expect(await controller.enterOfflineHold(), isTrue);
-      expect(controller.offlineHold!.state, 'held');
-      expect(controller.offlineHold!.revision, 3);
-      expect(controller.offlineHold!.safeToDisconnect, isTrue);
-      expect(controller.offlineNotice, 'offline.held');
-
-      expect(await controller.resumeOfflineHold(), isTrue);
-      expect(controller.offlineHold!.state, 'online');
-      expect(controller.offlineHold!.revision, 6);
-      expect(controller.offlineHold!.safeToDisconnect, isFalse);
-      expect(controller.offlineNotice, 'offline.resumed');
-    },
-  );
-
-  test(
-    'Offline hold stale CAS reconciles to the current runtime state',
-    () async {
-      final api = PreviewControlApi();
-      final controller = WorkbenchController(
-        api: api,
-        terminalCommands: PreviewTerminalCommandService(),
-        previewMode: true,
-        closeRuntime: api.close,
-      );
-      addTearDown(controller.dispose);
-
-      await controller.initialize();
-      final stale = controller.offlineHold!;
-      final external = await api.enterOfflineHold(stale);
-      expect(external.revision, 3);
-
-      expect(await controller.enterOfflineHold(), isFalse);
-      expect(controller.offlineError, 'revision_conflict (409)');
-      expect(controller.offlineHold!.state, 'held');
-      expect(controller.offlineHold!.revision, external.revision);
-      expect(controller.offlineHold!.safeToDisconnect, isTrue);
-    },
-  );
-
-  test(
     'rule save remains fenced by the revision the draft started from',
     () async {
       final api = PreviewControlApi();
@@ -862,7 +977,8 @@ void main() {
       );
 
       expect(saved, isFalse);
-      expect(controller.networkError, 'revision_conflict (409)');
+      expect(controller.networkError, 'error.configuration_conflict');
+      expect(controller.networkErrorDiagnostic, 'revision_conflict · HTTP 409');
       expect(controller.networkData!.rules.revision, external.revision);
       expect(controller.networkData!.rules.rules.single.id, 'external-change');
     },
@@ -947,6 +1063,44 @@ void main() {
     },
   );
 
+  test('account link conflict reloads the revoked association', () async {
+    final api = PreviewControlApi();
+    final controller = WorkbenchController(
+      api: api,
+      terminalCommands: PreviewTerminalCommandService(),
+      previewMode: true,
+      closeRuntime: api.close,
+    );
+    addTearDown(controller.dispose);
+    await controller.initialize();
+    final account = controller.data!.accounts.firstWhere(
+      (value) => value.id == 'anthropic-lab',
+    );
+    final endpoint = controller.data!.endpoints.firstWhere(
+      (value) => account.isLinkedTo(value.id),
+    );
+    final external = await api.setProviderAccountAssociation(
+      account: account,
+      endpoint: endpoint,
+      linked: false,
+    );
+
+    final linked = await controller.setProviderAccountAssociation(
+      account: account,
+      endpoint: endpoint,
+      linked: false,
+    );
+
+    expect(linked, isFalse);
+    expect(controller.inventoryError, 'error.account_conflict');
+    final current = controller.data!.accounts.singleWhere(
+      (value) => value.id == account.id,
+    );
+    expect(current.associationRevision, external.associationRevision);
+    expect(current.isLinkedTo(endpoint.id), isFalse);
+    expect(current.credentialEpoch, account.credentialEpoch);
+  });
+
   test('Environment review freezes impact before CAS publish', () async {
     final api = PreviewControlApi();
     final controller = WorkbenchController(
@@ -997,6 +1151,46 @@ void main() {
         ),
       ),
     );
+  });
+
+  test('publish conflict preserves the reviewed draft and impact', () async {
+    final api = PreviewControlApi();
+    final controller = WorkbenchController(
+      api: api,
+      terminalCommands: PreviewTerminalCommandService(),
+      previewMode: true,
+      closeRuntime: api.close,
+    );
+    addTearDown(controller.dispose);
+    await controller.initialize();
+    controller.selectEnvironment('work');
+    final current = controller.selectedEnvironment!;
+    final impact = await controller.reviewSelectedEnvironment(
+      EnvironmentDraftInput.fromEnvironment(
+        current,
+        expectedDraftRevision: 0,
+        name: 'Reviewed locally',
+      ),
+    );
+    expect(impact, isNotNull);
+    final reviewed = controller.reviewedEnvironmentDraft!;
+    await api.saveEnvironmentDraft(
+      environmentId: current.id,
+      expectedBaseRevision: current.revision,
+      input: EnvironmentDraftInput.fromEnvironment(
+        current,
+        expectedDraftRevision: reviewed.draftRevision,
+        name: 'Competing edit',
+      ),
+    );
+
+    final published = await controller.publishReviewedEnvironment();
+
+    expect(published, isNull);
+    expect(controller.environmentError, isNotNull);
+    expect(controller.reviewedEnvironmentDraft, same(reviewed));
+    expect(controller.reviewedEnvironmentImpact, same(impact));
+    expect(controller.selectedEnvironment!.revision, current.revision);
   });
 
   test('Environment publish rejects a stale base revision', () async {
@@ -1428,6 +1622,175 @@ final class _LiveEvidenceApi extends _UsageTrackingApi {
             nextCursor: page.nextCursor,
           )
         : page;
+  }
+}
+
+final class _DashboardRevisionApi extends _UsageTrackingApi {
+  _DashboardRevisionApi(super.delegate);
+
+  int dashboardCalls = 0;
+  bool changeAccount = false;
+
+  @override
+  Future<DashboardData> loadDashboard() async {
+    dashboardCalls++;
+    final dashboard = await super.loadDashboard();
+    if (!changeAccount) return dashboard;
+    final account = dashboard.accounts.first;
+    final updated = ProviderAccount(
+      id: account.id,
+      displayName: account.displayName,
+      note: 'changed by poll',
+      noteRevision: account.noteRevision + 1,
+      credentialOrigin: account.credentialOrigin,
+      linkedEndpointIds: account.linkedEndpointIds,
+      associationRevision: account.associationRevision,
+      kind: account.kind,
+      realmId: account.realmId,
+      state: account.state,
+      revision: account.revision,
+      credentialState: account.credentialState,
+      credentialEpoch: account.credentialEpoch,
+      setHeaderNames: account.setHeaderNames,
+      deleteHeaderNames: account.deleteHeaderNames,
+      codexOAuth: account.codexOAuth,
+      tokenInfo: account.tokenInfo,
+    );
+    return DashboardData(
+      status: dashboard.status,
+      captures: dashboard.captures,
+      captureNextCursor: dashboard.captureNextCursor,
+      environments: dashboard.environments,
+      endpoints: dashboard.endpoints,
+      accounts: [updated, ...dashboard.accounts.skip(1)],
+    );
+  }
+}
+
+final class _IdleCaptureApi extends _UsageTrackingApi {
+  _IdleCaptureApi(super.delegate);
+
+  bool revealEvidence = false;
+  int assignmentCalls = 0;
+  int conversationCalls = 0;
+  int activityCalls = 0;
+
+  @override
+  Future<CaptureAssignment> captureAssignment(String captureKey) {
+    if (captureKey == 'manual_capture:manual-figma') assignmentCalls++;
+    return super.captureAssignment(captureKey);
+  }
+
+  @override
+  Future<ConversationPage> conversations({
+    String? cursor,
+    int limit = 50,
+    String? captureRunId,
+    String? manualCaptureId,
+  }) {
+    if (manualCaptureId == 'manual-figma') {
+      conversationCalls++;
+      if (!revealEvidence) {
+        return Future.value(
+          const ConversationPage(items: [], nextCursor: null),
+        );
+      }
+    }
+    return super.conversations(
+      cursor: cursor,
+      limit: limit,
+      captureRunId: captureRunId,
+      manualCaptureId: manualCaptureId,
+    );
+  }
+
+  @override
+  Future<ActivityPage> activities({
+    String? cursor,
+    int limit = 50,
+    String? captureRunId,
+    String? manualCaptureId,
+    String? environmentId,
+    String? conversationId,
+  }) {
+    if (manualCaptureId == 'manual-figma' && conversationId == null) {
+      activityCalls++;
+      if (!revealEvidence) {
+        return Future.value(const ActivityPage(items: [], nextCursor: null));
+      }
+    }
+    return super.activities(
+      cursor: cursor,
+      limit: limit,
+      captureRunId: captureRunId,
+      manualCaptureId: manualCaptureId,
+      environmentId: environmentId,
+      conversationId: conversationId,
+    );
+  }
+}
+
+final class _GrowingManualApi extends _UsageTrackingApi {
+  _GrowingManualApi(super.delegate);
+
+  bool newestVisible = false;
+  int directoryCalls = 0;
+  int unscopedCalls = 0;
+
+  @override
+  Future<ConversationPage> conversations({
+    String? cursor,
+    int limit = 50,
+    String? captureRunId,
+    String? manualCaptureId,
+  }) async {
+    final page = await super.conversations(
+      cursor: cursor,
+      limit: limit,
+      captureRunId: captureRunId,
+      manualCaptureId: manualCaptureId,
+    );
+    if (manualCaptureId != 'manual-figma') return page;
+    directoryCalls++;
+    return newestVisible
+        ? page
+        : ConversationPage(
+            items: page.items.skip(1).toList(),
+            nextCursor: page.nextCursor,
+          );
+  }
+
+  @override
+  Future<ActivityPage> activities({
+    String? cursor,
+    int limit = 50,
+    String? captureRunId,
+    String? manualCaptureId,
+    String? environmentId,
+    String? conversationId,
+  }) async {
+    if (manualCaptureId == 'manual-figma' && conversationId == null) {
+      unscopedCalls++;
+      final page = await super.activities(
+        cursor: cursor,
+        limit: newestVisible ? limit : limit + 1,
+        manualCaptureId: manualCaptureId,
+      );
+      return newestVisible
+          ? page
+          : ActivityPage(
+              items: page.items.skip(1).take(limit).toList(),
+              nextCursor: page.nextCursor,
+            );
+    }
+    return super.activities(
+      cursor: cursor,
+      limit: limit,
+      captureRunId: captureRunId,
+      manualCaptureId: manualCaptureId,
+      environmentId: environmentId,
+      conversationId: conversationId,
+    );
   }
 }
 

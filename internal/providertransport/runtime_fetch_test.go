@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"net"
 	"net/http"
 	"strings"
 	"sync"
@@ -304,6 +305,31 @@ func TestFetchChatGPTModelsUsesNativeCatalogAndSelectedAccount(t *testing.T) {
 	}
 }
 
+func TestRuntimeFetchPersistsClassifiedTransportFailure(t *testing.T) {
+	t.Parallel()
+	gate := newStartedGate(t)
+	audit := &runtimeAuditRecorder{}
+	transport := &runtimeTransportStub{
+		audit: audit,
+		err:   &net.DNSError{Err: "private host", Name: "secret.internal"},
+	}
+	client := newRuntimeFetchClient(t, gate, transport, audit)
+	endpoint := testDiscoveryEndpoint(t, "https://api.anthropic.com")
+	_, err := client.FetchEndpointModels(
+		context.Background(),
+		endpoint,
+		testRuntimeDiscoveryCredential(t, endpoint.RealmID),
+	)
+	if err == nil {
+		t.Fatal("runtime fetch transport failure was not returned")
+	}
+	_, terminal := audit.attempts()
+	if terminal.Outcome() != egressaudit.OutcomeFailed ||
+		terminal.ErrorClass() != transportDNSClass {
+		t.Fatalf("runtime fetch terminal = %+v", terminal)
+	}
+}
+
 func TestFetchChatGPTModelsNegotiatesAfterAccountOverrides(t *testing.T) {
 	t.Parallel()
 	for _, test := range []struct {
@@ -377,6 +403,7 @@ type runtimeTransportStub struct {
 	audit    *runtimeAuditRecorder
 	response *http.Response
 	request  *http.Request
+	err      error
 	calls    int
 	audited  bool
 }
@@ -396,7 +423,7 @@ func (transport *runtimeTransportStub) RoundTrip(
 	transport.request.Body = io.NopCloser(bytes.NewReader(body))
 	transport.request.Header = request.Header.Clone()
 	transport.request.Host = request.Host
-	return transport.response, transportprofile.Evidence{}, nil
+	return transport.response, transportprofile.Evidence{}, transport.err
 }
 
 func (transport *runtimeTransportStub) callCount() int {

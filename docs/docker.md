@@ -16,9 +16,12 @@
 bash tool/docker/build-local.sh
 ```
 
-脚本构建 Server、CLI 和 Web，生成 `vibermate-runtime:0.1.12-local`。Flutter 不在
+脚本构建 Server、CLI 和 Web，生成 `vibermate-runtime:local`。Flutter 不在
 `PATH` 时，将 `VIBERMATE_FLUTTER_BIN` 设为绝对路径。模板使用 `pull_policy: never`，
 不会把旧的远程镜像伪装成当前代码。
+
+可用 `node tool/docker/smoke-local.mjs` 在独立容器和数据卷中验证本机模板；脚本选择
+空闲回环端口，验证 Web 初始化、登录、Proxy CA 和重启恢复后清理测试资源。
 
 ## 本机：默认模板
 
@@ -28,6 +31,8 @@ docker compose --env-file .env.example up -d --wait --wait-timeout 90
 
 打开 <http://127.0.0.1:9666>。端口冲突时修改 `.env.example` 的
 `VIBERMATE_PORT`。模板固定发布到宿主机回环，忽略远程网卡变量；它不是远程明文部署。
+模板同时把 `127.0.0.1:<VIBERMATE_PORT>` 作为客户端访问地址传给 Runtime，Web 中创建
+手动代理登录时不会把容器内的 `172.x` 地址交付给用户。
 
 读取初始化/恢复密钥：
 

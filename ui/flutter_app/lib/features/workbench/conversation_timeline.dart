@@ -16,6 +16,7 @@ import '../../core/design/workbench_widgets.dart';
 import '../../core/i18n/app_copy.dart';
 import 'workbench_controller.dart';
 import 'raw_header_reveal.dart';
+import 'raw_evidence_diff_dialog.dart';
 
 final class EvidenceConversationTimeline extends StatefulWidget {
   const EvidenceConversationTimeline({
@@ -1083,6 +1084,15 @@ final class _ExchangeEvidencePanel extends StatelessWidget {
             _FailureNotice(
               diagnosis: detail.diagnosis,
               result: detail.processingTrace.result,
+              providerErrorClass: detail.processingTrace.attempts
+                  .where(
+                    (attempt) =>
+                        attempt.purpose == 'provider_attempt' &&
+                        attempt.terminal &&
+                        attempt.outcome == 'failed',
+                  )
+                  .lastOrNull
+                  ?.errorClass,
               copy: copy,
             ),
           if (content.state == 'not_recorded')
@@ -1202,7 +1212,7 @@ final class _ExchangeEvidencePanel extends StatelessWidget {
               ),
             if (content.response case final response?)
               _ResponseCard(id: activity.id, response: response, copy: copy)
-            else
+            else if (detail.status == 'pending')
               _PendingResponse(copy: copy),
           ],
           const SizedBox(height: 3),
@@ -1775,11 +1785,41 @@ final class _RawEvidenceDisclosureState extends State<_RawEvidenceDisclosure> {
     if (mounted) setState(() => _copyingSample = false);
   }
 
-  Future<void> _copyDiagnostic(RawEvidencePage page) async {
-    await Clipboard.setData(
-      ClipboardData(text: _redactedDiagnosticText(widget.detail, page)),
+  Future<void> _previewDiagnostic(RawEvidencePage page) async {
+    final report = _redactedDiagnosticText(
+      widget.detail,
+      page,
+      widget.controller.data?.status.productBuild ?? 'unavailable',
     );
-    if (mounted) setState(() => _copiedDiagnostic = true);
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        key: Key('redacted-diagnostic-preview-${widget.exchangeId}'),
+        scrollable: true,
+        title: Text(widget.copy('exchange.raw.diagnostic.preview')),
+        content: SizedBox(
+          width: math.min(620, MediaQuery.sizeOf(dialogContext).width - 80),
+          child: SelectableText(report, style: monoStyle),
+        ),
+        actions: [
+          TextButton(
+            key: Key('redacted-diagnostic-cancel-${widget.exchangeId}'),
+            onPressed: () => Navigator.of(dialogContext).pop(),
+            child: Text(widget.copy('common.cancel')),
+          ),
+          FilledButton.icon(
+            key: Key('redacted-diagnostic-copy-${widget.exchangeId}'),
+            onPressed: () async {
+              await Clipboard.setData(ClipboardData(text: report));
+              if (dialogContext.mounted) Navigator.of(dialogContext).pop();
+              if (mounted) setState(() => _copiedDiagnostic = true);
+            },
+            icon: const Icon(Icons.copy, size: 16),
+            label: Text(widget.copy('exchange.raw.diagnostic.copy')),
+          ),
+        ],
+      ),
+    );
   }
 
   @override
@@ -1815,13 +1855,17 @@ final class _RawEvidenceDisclosureState extends State<_RawEvidenceDisclosure> {
                       style: Theme.of(context).textTheme.titleSmall,
                     ),
                     if (count != null) ...[
-                      const SizedBox(width: 10),
-                      Text(
-                        copy.format('exchange.raw.summary', {'count': count}),
-                        style: Theme.of(context).textTheme.bodySmall,
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          copy.format('exchange.raw.summary', {'count': count}),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: Theme.of(context).textTheme.bodySmall,
+                        ),
                       ),
-                    ],
-                    const Spacer(),
+                    ] else
+                      const Spacer(),
                     Icon(
                       _expanded
                           ? Icons.keyboard_arrow_up
@@ -1876,8 +1920,22 @@ final class _RawEvidenceDisclosureState extends State<_RawEvidenceDisclosure> {
             runSpacing: 6,
             children: [
               OutlinedButton.icon(
-                key: Key('copy-redacted-diagnostic-${widget.exchangeId}'),
-                onPressed: () => unawaited(_copyDiagnostic(page)),
+                key: Key('compare-raw-stages-${widget.exchangeId}'),
+                onPressed: () => unawaited(
+                  showRawEvidenceDiffDialog(
+                    context,
+                    controller: widget.controller,
+                    exchangeId: widget.exchangeId,
+                    page: page,
+                    copy: copy,
+                  ),
+                ),
+                icon: const Icon(Icons.difference_outlined, size: 15),
+                label: Text(copy('exchange.raw.diff.open')),
+              ),
+              OutlinedButton.icon(
+                key: Key('preview-redacted-diagnostic-${widget.exchangeId}'),
+                onPressed: () => unawaited(_previewDiagnostic(page)),
                 icon: Icon(
                   _copiedDiagnostic ? Icons.check : Icons.privacy_tip_outlined,
                   size: 15,
@@ -1886,7 +1944,7 @@ final class _RawEvidenceDisclosureState extends State<_RawEvidenceDisclosure> {
                   copy(
                     _copiedDiagnostic
                         ? 'exchange.raw.redacted_diagnostic_copied'
-                        : 'exchange.raw.copy_redacted_diagnostic',
+                        : 'exchange.raw.diagnostic.preview',
                   ),
                 ),
               ),
@@ -2081,6 +2139,54 @@ final class _RawEnvelopeRow extends StatelessWidget {
               ],
             ),
           ),
+          if (envelope.layer == 'client_ingress')
+            Padding(
+              key: Key('raw-body-digest-${envelope.envelopeId}'),
+              padding: const EdgeInsets.fromLTRB(27, 0, 8, 7),
+              child: Row(
+                children: [
+                  Icon(
+                    Icons.fingerprint,
+                    size: 14,
+                    color: context.viberColors.textMuted,
+                  ),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          copy(
+                            'exchange.raw.digest.${envelope.bodySha256 == null ? 'unavailable' : envelope.digestScope}',
+                          ),
+                          style: Theme.of(context).textTheme.bodySmall,
+                        ),
+                        if (envelope.bodySha256 case final digest?)
+                          Text(
+                            digest,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: monoStyle.copyWith(
+                              color: context.viberColors.textMuted,
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+                  if (envelope.bodySha256 case final digest?)
+                    _CopyValueButton(
+                      tooltip: copy('exchange.raw.digest.copy'),
+                      value: () => digest,
+                    ),
+                  ContextHelpButton(
+                    key: Key('raw-body-digest-help-${envelope.envelopeId}'),
+                    title: copy('exchange.raw.digest.help_title'),
+                    message: copy('exchange.raw.digest.help'),
+                    dismissLabel: copy('common.dismiss'),
+                  ),
+                ],
+              ),
+            ),
           if (_rawPrefixExplanation(envelope, copy) case final explanation?)
             Padding(
               key: Key('raw-prefix-notice-${envelope.envelopeId}'),
@@ -2477,108 +2583,105 @@ String _rawEvidenceClipboardText(RevealedRawEvidence value, AppCopy copy) {
   return buffer.toString();
 }
 
-String _redactedDiagnosticText(ExchangeDetail detail, RawEvidencePage page) =>
-    const JsonEncoder.withIndent('  ').convert({
-      'schema': 'vibermate.redacted-diagnostic/v1',
-      'redaction': {
-        'omitted': [
-          'message content',
-          'HTTP body',
-          'HTTP header and trailer names and values',
-          'target authority, path, and query',
-          'client session, workspace, and identity attributes',
-        ],
-      },
-      'exchange': {
-        'id': detail.id,
-        'status': detail.status,
-        'environment': {
-          'id': detail.environment.id,
-          'revision': detail.environment.revision,
-          'digest': detail.environment.digest,
-          'clientEndpointId': detail.environment.clientEndpointId,
-          'clientEndpointRevision': detail.environment.clientEndpointRevision,
-          'protocolPlanId': detail.environment.protocolPlanId,
-          'protocolPlanRevision': detail.environment.protocolPlanRevision,
-          'routeId': detail.environment.routeId,
-          'routeRevision': detail.environment.routeRevision,
-          'accountId': detail.environment.accountId,
-          'accountRevision': detail.environment.accountRevision,
-          'credentialEpoch': detail.environment.credentialEpoch,
+String _redactedDiagnosticText(
+  ExchangeDetail detail,
+  RawEvidencePage page,
+  String productBuild,
+) => const JsonEncoder.withIndent('  ').convert({
+  'schema': 'vibermate.redacted-diagnostic/v1',
+  'product': {'build': productBuild},
+  'redaction': {
+    'omitted': [
+      'message content',
+      'HTTP body',
+      'HTTP header and trailer names and values',
+      'target authority, path, and query',
+      'client session, workspace, and identity attributes',
+    ],
+  },
+  'exchange': {
+    'id': detail.id,
+    'status': detail.status,
+    'environment': {
+      'id': detail.environment.id,
+      'revision': detail.environment.revision,
+      'digest': detail.environment.digest,
+      'clientEndpointId': detail.environment.clientEndpointId,
+      'clientEndpointRevision': detail.environment.clientEndpointRevision,
+      'protocolPlanId': detail.environment.protocolPlanId,
+      'protocolPlanRevision': detail.environment.protocolPlanRevision,
+      'routeId': detail.environment.routeId,
+      'routeRevision': detail.environment.routeRevision,
+      'accountId': detail.environment.accountId,
+      'accountRevision': detail.environment.accountRevision,
+      'credentialEpoch': detail.environment.credentialEpoch,
+    },
+    'diagnosis': detail.diagnosis == null
+        ? null
+        : {'providerStatus': detail.diagnosis!.providerStatus},
+    'processing': {
+      'result': detail.processingTrace.result,
+      'egressProxyId': detail.processingTrace.egressProxyId,
+      'pluginRunCount': detail.processingTrace.pluginRunIds.length,
+      'attempts': [
+        for (final attempt in detail.processingTrace.attempts)
+          {
+            'sequence': attempt.sequence,
+            'id': attempt.id,
+            'purpose': attempt.purpose,
+            'payloadClass': attempt.payloadClass,
+            'caller': attempt.caller,
+            'policyId': attempt.policyId,
+            'ruleId': attempt.ruleId,
+            'proxyId': attempt.proxyId,
+            'reusedTransport': attempt.reusedTransport,
+            'startedAt': attempt.startedAt.toUtc().toIso8601String(),
+            'terminal': attempt.terminal,
+            'outcome': attempt.outcome,
+            'errorClass': attempt.errorClass,
+            'bytesOut': attempt.bytesOut,
+            'bytesIn': attempt.bytesIn,
+            'completedAt': attempt.completedAt?.toUtc().toIso8601String(),
+          },
+      ],
+    },
+  },
+  'rawEvidence': {
+    'writer': {
+      'state': page.writer.state,
+      'admittedRecords': page.writer.admittedRecords,
+      'durableWatermark': page.writer.durableWatermark,
+      'queueRecords': page.writer.queueRecords,
+      'queueBytes': page.writer.queueBytes,
+      'maximumUnflushedTimeMs': page.writer.maximumUnflushedTimeMs,
+    },
+    'recovery': {
+      'recoveredUncleanWriters': page.recovery.recoveredUncleanWriters,
+      'purgedExpiredEnvelopes': page.recovery.purgedExpiredEnvelopes,
+      'maximumPossibleLossMs': page.recovery.maximumPossibleLossMs,
+    },
+    'boundaries': [
+      for (final envelope in page.items)
+        {
+          'layer': envelope.layer,
+          'observedAt': envelope.observedAt.toUtc().toIso8601String(),
+          'method': envelope.method,
+          'statusCode': envelope.statusCode,
+          'representation': envelope.representation,
+          'canonicalization': envelope.canonicalization,
+          'headerCount': envelope.headerCount,
+          'trailerCount': envelope.trailerCount,
+          'redactedCredentialFieldCount':
+              envelope.redactedCredentialFields.length,
+          'bodyBytes': envelope.bodyBytes,
+          'bodySha256': envelope.bodySha256,
+          'digestScope': envelope.digestScope,
+          'payloadState': envelope.payloadState,
+          'payloadReason': envelope.payloadReason,
         },
-        'diagnosis': detail.diagnosis == null
-            ? null
-            : {
-                'providerStatus': detail.diagnosis!.providerStatus,
-                'providerField': detail.diagnosis!.providerField,
-                'clientField': detail.diagnosis!.clientField,
-                'clientPath': detail.diagnosis!.clientPath,
-              },
-        'processing': {
-          'result': detail.processingTrace.result,
-          'egressProxyId': detail.processingTrace.egressProxyId,
-          'pluginRunCount': detail.processingTrace.pluginRunIds.length,
-          'attempts': [
-            for (final attempt in detail.processingTrace.attempts)
-              {
-                'sequence': attempt.sequence,
-                'id': attempt.id,
-                'purpose': attempt.purpose,
-                'payloadClass': attempt.payloadClass,
-                'caller': attempt.caller,
-                'policyId': attempt.policyId,
-                'ruleId': attempt.ruleId,
-                'proxyId': attempt.proxyId,
-                'reusedTransport': attempt.reusedTransport,
-                'startedAt': attempt.startedAt.toUtc().toIso8601String(),
-                'terminal': attempt.terminal,
-                'outcome': attempt.outcome,
-                'errorClass': attempt.errorClass,
-                'bytesOut': attempt.bytesOut,
-                'bytesIn': attempt.bytesIn,
-                'completedAt': attempt.completedAt?.toUtc().toIso8601String(),
-              },
-          ],
-        },
-      },
-      'rawEvidence': {
-        'writer': {
-          'state': page.writer.state,
-          'admittedRecords': page.writer.admittedRecords,
-          'durableWatermark': page.writer.durableWatermark,
-          'queueRecords': page.writer.queueRecords,
-          'queueBytes': page.writer.queueBytes,
-          'maximumUnflushedTimeMs': page.writer.maximumUnflushedTimeMs,
-        },
-        'recovery': {
-          'recoveredUncleanWriters': page.recovery.recoveredUncleanWriters,
-          'purgedExpiredEnvelopes': page.recovery.purgedExpiredEnvelopes,
-          'maximumPossibleLossMs': page.recovery.maximumPossibleLossMs,
-        },
-        'boundaries': [
-          for (final envelope in page.items)
-            {
-              'layer': envelope.layer,
-              'observedAt': envelope.observedAt.toUtc().toIso8601String(),
-              'method': envelope.method,
-              'statusCode': envelope.statusCode,
-              'contentType': envelope.contentType,
-              'contentEncoding': envelope.contentEncoding,
-              'representation': envelope.representation,
-              'canonicalization': envelope.canonicalization,
-              'headerCount': envelope.headerCount,
-              'trailerCount': envelope.trailerCount,
-              'redactedCredentialFieldCount':
-                  envelope.redactedCredentialFields.length,
-              'bodyBytes': envelope.bodyBytes,
-              'bodySha256': envelope.bodySha256,
-              'digestScope': envelope.digestScope,
-              'payloadState': envelope.payloadState,
-              'payloadReason': envelope.payloadReason,
-            },
-        ],
-      },
-    });
+    ],
+  },
+});
 
 String _rawContentEncoding(RevealedRawEvidence value) {
   final encoding = value.envelope.contentEncoding?.trim().toLowerCase() ?? '';
@@ -3076,6 +3179,20 @@ final class _ContentBlocksView extends StatelessWidget {
           estimatedLines: _estimatedContentLines(
             segment.map((entry) => entry.value),
           ),
+          useBoundedPreview:
+              segment.fold<int>(
+                0,
+                (total, entry) =>
+                    total +
+                    (entry.value.availability == 'recorded'
+                        ? entry.value.originalSize
+                        : 0),
+              ) >
+              8 * 1024,
+          preview: SelectableText(
+            _boundedContentPreview(segment.map((entry) => entry.value)),
+            style: Theme.of(context).textTheme.bodyMedium,
+          ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
@@ -3126,6 +3243,9 @@ final class _ContentBlocksView extends StatelessWidget {
 int _estimatedContentLines(Iterable<ExchangeContentBlock> blocks) {
   var lines = 0;
   for (final block in blocks) {
+    if (block.availability == 'recorded' && block.originalSize > 8 * 1024) {
+      return _defaultVisibleContentLines + 1;
+    }
     final text = switch (block.kind) {
       'tool_call' when block.arguments != null => const JsonEncoder.withIndent(
         '  ',
@@ -3136,13 +3256,45 @@ int _estimatedContentLines(Iterable<ExchangeContentBlock> blocks) {
       lines += 1;
       continue;
     }
-    for (final line in text.split('\n')) {
-      // This is only an admission heuristic. The collapsed viewport itself is
-      // measured in rendered line heights, so Markdown and code stay intact.
-      lines += math.max(1, (line.runes.length / 72).ceil());
+    var column = 0;
+    for (var index = 0; index < text.length; index++) {
+      if (text.codeUnitAt(index) == 10) {
+        lines++;
+        column = 0;
+      } else if (++column == 72) {
+        lines++;
+        column = 0;
+      }
+      if (lines > _defaultVisibleContentLines) return lines;
     }
+    lines++;
+    if (lines > _defaultVisibleContentLines) return lines;
   }
   return lines;
+}
+
+String _boundedContentPreview(Iterable<ExchangeContentBlock> blocks) {
+  const maxCharacters = 4096;
+  final output = StringBuffer();
+  var characters = 0;
+  var lines = 0;
+  for (final block in blocks) {
+    final value = block.kind == 'tool_call'
+        ? (block.toolName ?? '')
+        : (block.text ?? '');
+    if (value.isEmpty) continue;
+    for (final rune in value.runes) {
+      if (characters >= maxCharacters || lines >= _defaultVisibleContentLines) {
+        return output.toString().trimRight();
+      }
+      output.writeCharCode(rune);
+      characters++;
+      if (rune == 10) lines++;
+    }
+    output.writeln();
+    lines++;
+  }
+  return output.toString().trimRight();
 }
 
 final class _ExpandableContentRegion extends StatefulWidget {
@@ -3150,6 +3302,8 @@ final class _ExpandableContentRegion extends StatefulWidget {
     required this.id,
     required this.copy,
     required this.estimatedLines,
+    required this.useBoundedPreview,
+    required this.preview,
     required this.child,
     super.key,
   });
@@ -3160,6 +3314,8 @@ final class _ExpandableContentRegion extends StatefulWidget {
   final String id;
   final AppCopy copy;
   final int estimatedLines;
+  final bool useBoundedPreview;
+  final Widget preview;
   final Widget child;
 
   @override
@@ -3187,7 +3343,10 @@ final class _ExpandableContentRegionState
   Widget build(BuildContext context) {
     final content = !_collapsible || _expanded
         ? widget.child
-        : _HeightLimitedClip(maxHeight: _collapsedHeight, child: widget.child);
+        : _HeightLimitedClip(
+            maxHeight: _collapsedHeight,
+            child: widget.useBoundedPreview ? widget.preview : widget.child,
+          );
     if (!_collapsible) return content;
 
     final label = widget.copy(
@@ -3409,7 +3568,7 @@ final class _ContentBlockView extends StatelessWidget {
           : context.viberColors.text,
       height: 1.35,
     );
-    final segments = _splitAfterFencedBlocks(block.text ?? '');
+    final source = block.text ?? '';
     Widget markdown(String data, int index) => MarkdownBody(
       key: ValueKey('markdown-${block.kind}-${block.originalSize}-$index'),
       data: data,
@@ -3454,6 +3613,21 @@ final class _ContentBlockView extends StatelessWidget {
         blockSpacing: 7,
       ),
     );
+    final segments = _splitAfterFencedBlocks(source);
+    if ((block.originalSize > 32 * 1024 || source.length > 32 * 1024) &&
+        !(segments.length == 1 && _singleFencedBlock.hasMatch(source.trim()))) {
+      // Splitting lists, quotes, tables, references, or HTML can change their
+      // Markdown meaning. Showing the exact selectable source is preferable to
+      // freezing now or spreading the same layout cost across later scrolling.
+      return SizedBox(
+        key: Key('long-markdown-$id'),
+        height: math.min(420, MediaQuery.sizeOf(context).height * 0.6),
+        child: SingleChildScrollView(
+          primary: false,
+          child: SelectableText(source, style: bodyStyle),
+        ),
+      );
+    }
     if (segments.length == 1) return markdown(segments.single, 0);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -3466,6 +3640,10 @@ final class _ContentBlockView extends StatelessWidget {
     );
   }
 }
+
+final _singleFencedBlock = RegExp(
+  r'^[ \t]{0,3}(`{3,}|~{3,})[^\n]*\n[\s\S]*\n[ \t]{0,3}\1[ \t]*$',
+);
 
 final class _ReasoningBlockView extends StatefulWidget {
   const _ReasoningBlockView({
@@ -3523,6 +3701,11 @@ final class _ReasoningBlockViewState extends State<_ReasoningBlockView> {
       0,
       (total, block) => total + block.originalSize,
     );
+    final plaintextPill = StatusPill(
+      label: copy('exchange.content.plaintext_evidence'),
+      color: tone,
+      icon: Icons.visibility_outlined,
+    );
     return Semantics(
       container: true,
       label: '$title, ${copy('exchange.content.plaintext_evidence')}',
@@ -3559,47 +3742,84 @@ final class _ReasoningBlockViewState extends State<_ReasoningBlockView> {
                       }),
                       child: Padding(
                         padding: const EdgeInsets.fromLTRB(9, 7, 7, 6),
-                        child: Row(
-                          children: [
-                            Icon(
-                              Icons.psychology_alt_outlined,
-                              size: 15,
-                              color: tone,
-                            ),
-                            const SizedBox(width: 6),
-                            Expanded(
-                              child: Text(
-                                title,
-                                style: Theme.of(context).textTheme.labelMedium
-                                    ?.copyWith(
+                        child: LayoutBuilder(
+                          builder: (context, constraints) {
+                            final narrow = constraints.maxWidth < 360;
+                            return Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Row(
+                                  children: [
+                                    Icon(
+                                      Icons.psychology_alt_outlined,
+                                      size: 15,
                                       color: tone,
-                                      fontWeight: FontWeight.w700,
                                     ),
-                              ),
-                            ),
-                            StatusPill(
-                              label: copy(
-                                'exchange.content.plaintext_evidence',
-                              ),
-                              color: tone,
-                              icon: Icons.visibility_outlined,
-                            ),
-                            const SizedBox(width: 7),
-                            Text(
-                              _bytes(visibleSize),
-                              style: monoStyle.copyWith(
-                                color: context.viberColors.textMuted,
-                              ),
-                            ),
-                            const SizedBox(width: 5),
-                            Icon(
-                              _collapsed
-                                  ? Icons.expand_more
-                                  : Icons.expand_less,
-                              size: 16,
-                              color: context.viberColors.textMuted,
-                            ),
-                          ],
+                                    const SizedBox(width: 6),
+                                    Expanded(
+                                      child: Text(
+                                        title,
+                                        style: Theme.of(context)
+                                            .textTheme
+                                            .labelMedium
+                                            ?.copyWith(
+                                              color: tone,
+                                              fontWeight: FontWeight.w700,
+                                            ),
+                                      ),
+                                    ),
+                                    if (!narrow) plaintextPill,
+                                    const SizedBox(width: 7),
+                                    Text(
+                                      _bytes(visibleSize),
+                                      style: monoStyle.copyWith(
+                                        color: context.viberColors.textMuted,
+                                      ),
+                                    ),
+                                    const SizedBox(width: 5),
+                                    Icon(
+                                      _collapsed
+                                          ? Icons.expand_more
+                                          : Icons.expand_less,
+                                      size: 16,
+                                      color: context.viberColors.textMuted,
+                                    ),
+                                  ],
+                                ),
+                                if (narrow)
+                                  Padding(
+                                    padding: const EdgeInsets.only(
+                                      left: 21,
+                                      top: 4,
+                                    ),
+                                    child: Row(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        Icon(
+                                          Icons.visibility_outlined,
+                                          size: 12,
+                                          color: tone,
+                                        ),
+                                        const SizedBox(width: 4),
+                                        Flexible(
+                                          child: Text(
+                                            copy(
+                                              'exchange.content.plaintext_evidence',
+                                            ),
+                                            maxLines: 1,
+                                            overflow: TextOverflow.ellipsis,
+                                            style: Theme.of(context)
+                                                .textTheme
+                                                .bodySmall
+                                                ?.copyWith(color: tone),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                              ],
+                            );
+                          },
                         ),
                       ),
                     ),
@@ -3612,10 +3832,18 @@ final class _ReasoningBlockViewState extends State<_ReasoningBlockView> {
                           ? _HeightLimitedClip(
                               maxHeight: _ExpandableContentRegionState
                                   ._collapsedHeight,
-                              child: _ReasoningEvidenceContents(
-                                blocks: blocks,
-                                copy: copy,
-                              ),
+                              child: visibleSize > 8 * 1024
+                                  ? SelectableText(
+                                      _boundedContentPreview(blocks),
+                                      style: monoStyle.copyWith(
+                                        color: context.viberColors.text,
+                                        height: 1.45,
+                                      ),
+                                    )
+                                  : _ReasoningEvidenceContents(
+                                      blocks: blocks,
+                                      copy: copy,
+                                    ),
                             )
                           : _ReasoningEvidenceContents(
                               blocks: blocks,
@@ -3808,17 +4036,36 @@ final class _FailureNotice extends StatelessWidget {
   const _FailureNotice({
     required this.diagnosis,
     required this.result,
+    required this.providerErrorClass,
     required this.copy,
   });
 
   final ExchangeDiagnosis? diagnosis;
   final String result;
+  final String? providerErrorClass;
   final AppCopy copy;
 
   @override
   Widget build(BuildContext context) {
-    final titleKey = 'exchange.failure.$result.title';
-    final actionKey = 'exchange.failure.$result.action';
+    final failure = switch (result) {
+      'provider_status_rejected' => switch (diagnosis?.providerStatus) {
+        401 || 403 => 'provider_status_rejected_auth',
+        429 => 'provider_status_rejected_rate_limit',
+        _ => result,
+      },
+      'provider_transport_failed' => switch (providerErrorClass) {
+        'dns_failed' => 'provider_transport_dns',
+        'tls_verification_failed' => 'provider_transport_tls',
+        'transport_profile_failed' => 'provider_transport_profile',
+        'tls_handshake_failed' => 'provider_transport_handshake',
+        'connection_failed' => 'provider_transport_connection',
+        'transport_timeout' => 'provider_transport_timeout',
+        _ => result,
+      },
+      _ => result,
+    };
+    final titleKey = 'exchange.failure.$failure.title';
+    final actionKey = 'exchange.failure.$failure.action';
     final title =
         copy.maybe(titleKey) ?? copy('exchange.failure.default.title');
     final action =
@@ -3832,6 +4079,8 @@ final class _FailureNotice extends StatelessWidget {
       result,
       if (diagnosis?.providerStatus case final status?) '$status',
       if (location.isNotEmpty) location,
+      if (result == 'provider_transport_failed' && failure != result)
+        providerErrorClass!,
     ].join(' · ');
     return Container(
       width: double.infinity,
@@ -3849,10 +4098,30 @@ final class _FailureNotice extends StatelessWidget {
           ),
           const SizedBox(height: 2),
           Text(action),
-          const SizedBox(height: 4),
-          SelectableText(
-            technical,
-            style: monoStyle.copyWith(color: context.viberColors.danger),
+          ExpansionTile(
+            key: Key('exchange-failure-details-$result'),
+            dense: true,
+            visualDensity: VisualDensity.compact,
+            tilePadding: EdgeInsets.zero,
+            childrenPadding: EdgeInsets.zero,
+            title: Text(
+              copy('common.technical_details'),
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+            children: [
+              Align(
+                alignment: Alignment.centerLeft,
+                child: Semantics(
+                  label: technical,
+                  child: SelectableText(
+                    technical,
+                    style: monoStyle.copyWith(
+                      color: context.viberColors.danger,
+                    ),
+                  ),
+                ),
+              ),
+            ],
           ),
         ],
       ),

@@ -264,6 +264,20 @@ func (manager *Manager) Enable(ctx context.Context, id UserID) (User, error) {
 	return manager.setState(ctx, id, StateActive)
 }
 
+func (manager *Manager) SetPolicy(ctx context.Context, id UserID, policy Policy) (User, error) {
+	if manager == nil || ctx == nil || !id.Valid() || policy.Validate() != nil {
+		return User{}, ErrInvalidUser
+	}
+	record, found, err := manager.repository.SetUserPolicy(ctx, id, policy.Clone())
+	if err != nil {
+		return User{}, fmt.Errorf("update Runtime User policy: %w", err)
+	}
+	if !found || record.Validate() != nil {
+		return User{}, ErrInvalidUser
+	}
+	return record.User, nil
+}
+
 func (manager *Manager) setState(ctx context.Context, id UserID, state State) (User, error) {
 	if manager == nil || ctx == nil || !id.Valid() {
 		return User{}, ErrInvalidUser

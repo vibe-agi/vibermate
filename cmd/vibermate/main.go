@@ -44,7 +44,13 @@ func main() {
 		fmt.Fprintln(os.Stderr, reasonCatalogMissing)
 		os.Exit(1)
 	}
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	ctx := context.Background()
+	stop := func() {}
+	// ACP's process supervisor forwards the actual signal to its process
+	// group. Converting SIGINT into context cancellation here would send TERM.
+	if len(os.Args) < 2 || os.Args[1] != "acp" {
+		ctx, stop = signal.NotifyContext(ctx, os.Interrupt)
+	}
 	defer stop()
 	code, key := executeContext(
 		ctx,
@@ -96,6 +102,12 @@ func executeContext(
 ) (int, string) {
 	if ctx == nil {
 		return 1, keyLaunchFailed
+	}
+	if len(arguments) == 2 && arguments[0] == "acp" && (arguments[1] == "--help" || arguments[1] == "-h") {
+		if renderCLIMessage(environment, stdout, "cli.help.acp", nil) != nil {
+			return 1, reasonRenderFailed
+		}
+		return 0, ""
 	}
 	if len(arguments) == 1 &&
 		(arguments[0] == "help" || arguments[0] == "--help" || arguments[0] == "-h") {
@@ -187,6 +199,16 @@ func executeContext(
 		)
 	}
 	run, err := parseRun(arguments)
+	var acp *acpConfig
+	if len(arguments) > 0 && arguments[0] == "acp" {
+		parsed, parseErr := parseACP(arguments)
+		if parseErr != nil {
+			return 2, "cli.usage.acp"
+		}
+		acp = &parsed
+		run = runConfig{server: parsed.server, command: parsed.command}
+		err = nil
+	}
 	if err != nil {
 		return 2, keyUsage
 	}
@@ -227,15 +249,25 @@ func executeContext(
 	if err != nil {
 		return 1, keyLaunchFailed
 	}
-	code, err := launcher.Run(ctx, runlauncher.LaunchRequest{
-		EnvironmentID: run.environmentID,
-		Command:       run.command,
-	})
+	var code int
+	if acp != nil {
+		code, err = launcher.RunACP(ctx, runlauncher.ACPLaunchRequest{Command: acp.command, RecordContent: acp.recordContent})
+	} else {
+		code, err = launcher.Run(ctx, runlauncher.LaunchRequest{EnvironmentID: run.environmentID, Command: run.command})
+	}
 	if err == nil {
 		return code, ""
 	}
 	if errors.Is(err, context.Canceled) {
 		return 130, ""
+	}
+	if acp != nil {
+		if errors.Is(err, runlauncher.ErrACPUnavailable) {
+			return max(code, 1), "cli.error.acpUnavailable"
+		}
+		if launchFailureKey(err) == keyLaunchFailed {
+			return max(code, 1), "cli.error.acpLaunchFailed"
+		}
 	}
 	return code, launchFailureKey(err)
 }

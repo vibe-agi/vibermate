@@ -984,10 +984,11 @@ void main() {
   });
 
   test('Runtime status retains the Offline hold CAS authority', () {
-    final status = RuntimeStatus.fromJson({
+    final json = <String, Object?>{
       'generation': 'instance-test',
       'ready': true,
       'apiVersion': 'v1',
+      'productBuild': 'test-build',
       'statusKey': 'runtime.state.initialized',
       'runtime': {
         'state': 'initialized',
@@ -1014,11 +1015,23 @@ void main() {
         },
         'startedAt': '2026-08-10T00:00:00.000Z',
       },
-    }, expectedInstanceId: 'instance-test');
+    };
+    final status = RuntimeStatus.fromJson(
+      json,
+      expectedInstanceId: 'instance-test',
+    );
 
     expect(status.offlineHold.revision, 4);
     expect(status.offlineHold.activeByKind, {'provider': 1});
+    expect(status.productBuild, 'test-build');
     expect(status.schemaRevision, 1);
+
+    final unsafe = jsonDecode(jsonEncode(json)) as Map<String, dynamic>;
+    unsafe['productBuild'] = 'unsafe\nbuild';
+    expect(
+      () => RuntimeStatus.fromJson(unsafe, expectedInstanceId: 'instance-test'),
+      throwsA(isA<ControlContractException>()),
+    );
   });
 
   test('Runtime status accepts the public Runtime Server host kind', () {
@@ -1026,6 +1039,7 @@ void main() {
       'generation': 'instance-server',
       'ready': true,
       'apiVersion': 'v1',
+      'productBuild': 'test-build',
       'statusKey': 'runtime.state.initialized',
       'runtime': {
         'state': 'initialized',
@@ -1058,7 +1072,7 @@ void main() {
   });
 
   test(
-    'Manual Capture context accepts only literal loopback proxy authority',
+    'Manual Capture context accepts an exact proxy origin without a path',
     () {
       final context = ManualCaptureContext.fromJson(
         {
@@ -1090,7 +1104,7 @@ void main() {
         () => ManualCaptureContext.fromJson(
           {
             'confirmationToken': 'ctx_${List.filled(43, 'A').join()}',
-            'proxyAddress': 'http://localhost:43123',
+            'proxyAddress': 'http://localhost:43123/path',
             'environmentId': 'work',
             'environmentRevision': 7,
             'environmentDigest': List.filled(64, 'a').join(),
@@ -1105,6 +1119,36 @@ void main() {
         ),
         throwsA(isA<ControlContractException>()),
       );
+    },
+  );
+
+  test(
+    'Web Manual Capture accepts a canonical server proxy and downloadable Root',
+    () {
+      final context = ManualCaptureContext.fromJson(
+        {
+          'confirmationToken': 'ctx_${List.filled(43, 'A').join()}',
+          'proxyAddress': 'https://vibermate.home.arpa:9666',
+          'environmentId': 'work',
+          'environmentRevision': 7,
+          'environmentDigest': List.filled(64, 'a').join(),
+          'launchAuthorityDigest': List.filled(64, 'b').join(),
+          'protectedAuthorities': ['api.anthropic.com'],
+          'managedCredentialAuthorities': <String>[],
+          'defaultTemporarySeconds': 3600,
+          'maxTemporarySeconds': 86400,
+          'root': {
+            'kind': 'server_download',
+            'derSha256': List.filled(64, 'c').join(),
+            'fingerprint': 'CC:CC',
+          },
+        },
+        'manualCaptureContext',
+        expectedEnvironmentId: 'work',
+      );
+      expect(context.proxyAddress, 'https://vibermate.home.arpa:9666');
+      expect(context.root?.kind, 'server_download');
+      expect(context.root?.pemPath, isNull);
     },
   );
 
@@ -1174,6 +1218,30 @@ void main() {
     expect(activity.captureRunId, 'run-test');
     expect(activity.requestPreview?.kind, 'tool_call');
     expect(activity.requestPreview?.text, 'workspace.read');
+
+    final search = EvidenceSearchPage.fromJson({
+      'items': [
+        {
+          'activity': json,
+          'context': {
+            'workspaceId': 'workspace_test',
+            'workspaceLabel': 'Test workspace',
+            'captureLabel': 'Claude Code',
+            'requestedModel': 'claude-sonnet-4-5',
+            'effectiveModel': 'claude-sonnet-4-5',
+            'reportedModel': 'claude-sonnet-4-5-20260925',
+            'toolNames': ['workspace.read'],
+            'contentAvailable': true,
+          },
+          'matches': ['workspace', 'tool'],
+        },
+      ],
+      'nextCursor': 'AQAAAAAAAAAqYWJjZGVmZ2hpamtsbW5vcA',
+    }, 'search');
+    expect(search.items.single.activity.id, 'exchange-test');
+    expect(search.items.single.context.toolNames, ['workspace.read']);
+    expect(search.items.single.matches, ['workspace', 'tool']);
+    expect(search.nextCursor, isNotEmpty);
 
     final invalidPreview = jsonDecode(jsonEncode(json)) as Map<String, dynamic>;
     invalidPreview['requestPreview'] = {

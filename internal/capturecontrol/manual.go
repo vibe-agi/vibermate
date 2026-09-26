@@ -72,7 +72,7 @@ type RootPublicDelivery struct {
 	Kind        string `json:"kind"`
 	DERSHA256   string `json:"derSha256"`
 	Fingerprint string `json:"fingerprint"`
-	PEMPath     string `json:"pemPath"`
+	PEMPath     string `json:"pemPath,omitempty"`
 }
 
 type ManualCaptureContext struct {
@@ -186,7 +186,7 @@ func (handler *ManualHandler) context(
 		handler.writeFailure(writer, err)
 		return
 	}
-	writeJSON(writer, http.StatusOK, manualContextWire(result))
+	writeJSON(writer, http.StatusOK, manualContextWire(result, manualPrincipal(request.Context())))
 }
 
 func (handler *ManualHandler) list(
@@ -244,7 +244,7 @@ func (handler *ManualHandler) create(
 		return
 	}
 	setManualCaptureETag(writer, grant.Capture.Capture)
-	writeJSON(writer, http.StatusCreated, manualGrantWire(grant))
+	writeJSON(writer, http.StatusCreated, manualGrantWire(grant, manualPrincipal(request.Context())))
 }
 
 func (handler *ManualHandler) get(
@@ -312,7 +312,7 @@ func (handler *ManualHandler) rotate(
 		return
 	}
 	setManualCaptureETag(writer, grant.Capture.Capture)
-	writeJSON(writer, http.StatusOK, manualGrantWire(grant))
+	writeJSON(writer, http.StatusOK, manualGrantWire(grant, manualPrincipal(request.Context())))
 }
 
 func (handler *ManualHandler) revoke(
@@ -406,7 +406,7 @@ func manualMutationCoordinates(
 	return id, values[0], true
 }
 
-func manualContextWire(context capturegrant.ManualCaptureContext) ManualCaptureContext {
+func manualContextWire(context capturegrant.ManualCaptureContext, principal controlprincipal.Principal) ManualCaptureContext {
 	wired := ManualCaptureContext{
 		ConfirmationToken:       context.ConfirmationToken,
 		ProxyAddress:            context.ProxyAddress,
@@ -420,13 +420,13 @@ func manualContextWire(context capturegrant.ManualCaptureContext) ManualCaptureC
 		MaxTemporarySeconds:     int64(context.MaximumTemporaryLifetime / time.Second),
 	}
 	if context.DeliverRoot {
-		root := rootDeliveryWire(context)
+		root := rootDeliveryWire(context, principal)
 		wired.Root = &root
 	}
 	return wired
 }
 
-func manualGrantWire(grant capturegrant.ManualCaptureGrant) ManualCaptureGrant {
+func manualGrantWire(grant capturegrant.ManualCaptureGrant, principal controlprincipal.Principal) ManualCaptureGrant {
 	wired := ManualCaptureGrant{
 		Capture:               manualViewWire(grant.Capture.Capture),
 		ProxyAddress:          grant.Context.ProxyAddress,
@@ -439,19 +439,24 @@ func manualGrantWire(grant capturegrant.ManualCaptureGrant) ManualCaptureGrant {
 		ManagedAuthorities:    grant.Authority.ManagedCredentialAuthorities(),
 	}
 	if grant.Context.DeliverRoot {
-		root := rootDeliveryWire(grant.Context)
+		root := rootDeliveryWire(grant.Context, principal)
 		wired.Root = &root
 	}
 	return wired
 }
 
-func rootDeliveryWire(context capturegrant.ManualCaptureContext) RootPublicDelivery {
-	return RootPublicDelivery{
+func rootDeliveryWire(context capturegrant.ManualCaptureContext, principal controlprincipal.Principal) RootPublicDelivery {
+	root := RootPublicDelivery{
 		Kind:        "local_path",
 		DERSHA256:   context.RootIdentity.Digest().String(),
 		Fingerprint: context.RootIdentity.Fingerprint(),
 		PEMPath:     context.RootCertificate.Path(),
 	}
+	if principal.Kind() == controlprincipal.KindServerOwner {
+		root.Kind = "server_download"
+		root.PEMPath = ""
+	}
+	return root
 }
 
 func manualPageWire(page manualcapture.Page) ManualCapturePage {

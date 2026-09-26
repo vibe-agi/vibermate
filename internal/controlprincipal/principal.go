@@ -19,6 +19,7 @@ type Kind string
 
 const (
 	KindDesktopApp     Kind = "desktop_app"
+	KindServerOwner    Kind = "server_owner"
 	KindLocalCLI       Kind = "local_cli"
 	KindRemoteGuest    Kind = "remote_guest"
 	KindEnrolledClient Kind = "enrolled_client"
@@ -27,7 +28,7 @@ const (
 
 func (kind Kind) Valid() bool {
 	switch kind {
-	case KindDesktopApp, KindLocalCLI, KindRemoteGuest, KindEnrolledClient, KindRuntimeUser:
+	case KindDesktopApp, KindServerOwner, KindLocalCLI, KindRemoteGuest, KindEnrolledClient, KindRuntimeUser:
 		return true
 	default:
 		return false
@@ -61,6 +62,7 @@ type Attributes struct {
 	RuntimeUserID         string
 	RuntimeUsername       string
 	LoginSessionID        string
+	RuntimeUserPolicy     runtimeuser.Policy
 	CredentialRevision    CredentialRevision
 	AllowedGrantKinds     []GrantKind
 }
@@ -77,6 +79,7 @@ type Principal struct {
 	runtimeUserID         string
 	runtimeUsername       string
 	loginSessionID        string
+	runtimeUserPolicy     runtimeuser.Policy
 	credentialRevision    CredentialRevision
 	allowed               uint8
 }
@@ -89,11 +92,12 @@ func New(attributes Attributes) (Principal, error) {
 		return Principal{}, errors.New("control principal is incomplete")
 	}
 	switch attributes.Kind {
-	case KindDesktopApp, KindLocalCLI:
+	case KindDesktopApp, KindServerOwner, KindLocalCLI:
 		if attributes.ProxyClientBindingID != "" ||
 			attributes.MachineRegistrationID != "" || attributes.MachineID != "" ||
 			attributes.DeviceName != "" || attributes.RuntimeUserID != "" ||
-			attributes.RuntimeUsername != "" || attributes.LoginSessionID != "" {
+			attributes.RuntimeUsername != "" || attributes.LoginSessionID != "" ||
+			attributes.RuntimeUserPolicy != (runtimeuser.Policy{}) {
 			return Principal{}, errors.New(
 				"local control principal carries remote scope",
 			)
@@ -102,7 +106,7 @@ func New(attributes Attributes) (Principal, error) {
 		if attributes.ProxyClientBindingID != "" ||
 			attributes.MachineRegistrationID != "" ||
 			!validIdentity(attributes.MachineID) || attributes.DeviceName != "" ||
-			attributes.RuntimeUsername != "" {
+			attributes.RuntimeUsername != "" || attributes.RuntimeUserPolicy != (runtimeuser.Policy{}) {
 			return Principal{}, errors.New(
 				"guest control principal machine scope is invalid",
 			)
@@ -111,7 +115,7 @@ func New(attributes Attributes) (Principal, error) {
 		if !validIdentity(attributes.ProxyClientBindingID) ||
 			!validIdentity(attributes.MachineRegistrationID) ||
 			!validIdentity(attributes.MachineID) || attributes.DeviceName != "" ||
-			attributes.RuntimeUsername != "" {
+			attributes.RuntimeUsername != "" || attributes.RuntimeUserPolicy != (runtimeuser.Policy{}) {
 			return Principal{}, errors.New(
 				"enrolled control principal scope is incomplete",
 			)
@@ -123,7 +127,8 @@ func New(attributes Attributes) (Principal, error) {
 			!validDeviceName(attributes.DeviceName) ||
 			!validIdentity(attributes.RuntimeUserID) ||
 			!runtimeuser.ValidUsername(attributes.RuntimeUsername) ||
-			!validIdentity(attributes.LoginSessionID) {
+			!validIdentity(attributes.LoginSessionID) ||
+			attributes.RuntimeUserPolicy.Validate() != nil {
 			return Principal{}, errors.New(
 				"Runtime User control principal scope is incomplete",
 			)
@@ -139,6 +144,7 @@ func New(attributes Attributes) (Principal, error) {
 		runtimeUserID:         attributes.RuntimeUserID,
 		runtimeUsername:       attributes.RuntimeUsername,
 		loginSessionID:        attributes.LoginSessionID,
+		runtimeUserPolicy:     attributes.RuntimeUserPolicy,
 		credentialRevision:    attributes.CredentialRevision,
 	}
 	for _, kind := range attributes.AllowedGrantKinds {
@@ -166,28 +172,30 @@ func (principal Principal) Valid() bool {
 		return false
 	}
 	switch principal.kind {
-	case KindDesktopApp, KindLocalCLI:
+	case KindDesktopApp, KindServerOwner, KindLocalCLI:
 		return principal.proxyClientBindingID == "" &&
 			principal.machineRegistrationID == "" && principal.machineID == "" &&
 			principal.deviceName == "" && principal.runtimeUserID == "" &&
-			principal.runtimeUsername == "" && principal.loginSessionID == ""
+			principal.runtimeUsername == "" && principal.loginSessionID == "" &&
+			principal.runtimeUserPolicy == (runtimeuser.Policy{})
 	case KindRemoteGuest:
 		return principal.proxyClientBindingID == "" &&
 			principal.machineRegistrationID == "" && validIdentity(principal.machineID) &&
-			principal.deviceName == "" && principal.runtimeUsername == ""
+			principal.deviceName == "" && principal.runtimeUsername == "" &&
+			principal.runtimeUserPolicy == (runtimeuser.Policy{})
 	case KindEnrolledClient:
 		return validIdentity(principal.proxyClientBindingID) &&
 			validIdentity(principal.machineRegistrationID) &&
 			validIdentity(principal.machineID) && principal.deviceName == "" &&
 			principal.runtimeUserID == "" && principal.runtimeUsername == "" &&
-			principal.loginSessionID == ""
+			principal.loginSessionID == "" && principal.runtimeUserPolicy == (runtimeuser.Policy{})
 	case KindRuntimeUser:
 		return principal.proxyClientBindingID == "" &&
 			principal.machineRegistrationID == "" && validIdentity(principal.machineID) &&
 			validDeviceName(principal.deviceName) &&
 			validIdentity(principal.runtimeUserID) &&
 			runtimeuser.ValidUsername(principal.runtimeUsername) &&
-			validIdentity(principal.loginSessionID)
+			validIdentity(principal.loginSessionID) && principal.runtimeUserPolicy.Validate() == nil
 	default:
 		return false
 	}
@@ -238,6 +246,11 @@ func (principal Principal) Allows(kind GrantKind) bool {
 	return err == nil && principal.Valid() && principal.allowed&bit != 0
 }
 
+func (principal Principal) AllowsEnvironment(environmentID string) bool {
+	return principal.Valid() && principal.kind == KindRuntimeUser &&
+		principal.runtimeUserPolicy.AllowsEnvironment(environmentID)
+}
+
 func (principal Principal) AllowedGrantKinds() []GrantKind {
 	if !principal.Valid() {
 		return nil
@@ -261,7 +274,8 @@ func (principal Principal) sameConnection(other Principal) bool {
 		principal.deviceName == other.deviceName &&
 		principal.runtimeUserID == other.runtimeUserID &&
 		principal.runtimeUsername == other.runtimeUsername &&
-		principal.loginSessionID == other.loginSessionID
+		principal.loginSessionID == other.loginSessionID &&
+		principal.runtimeUserPolicy == other.runtimeUserPolicy
 }
 
 const (

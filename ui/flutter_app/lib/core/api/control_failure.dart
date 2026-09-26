@@ -28,7 +28,15 @@ final class ControlFailure implements Exception {
         'revision_conflict' => 'error.configuration_conflict',
         'environment_preview_stale' ||
         'environment_draft_not_found' => 'error.policy_review_stale',
+        'dry_run_flow_not_matched' => 'error.dry_run_flow_not_matched',
+        'dry_run_input_invalid' => 'error.dry_run_input_invalid',
+        'dry_run_environment_disabled' => 'error.dry_run_environment_disabled',
+        'dry_run_selector_failed' => 'error.dry_run_selector_failed',
+        'dry_run_transform_failed' => 'error.dry_run_transform_failed',
         'invalid_control_request' => 'error.configuration_invalid',
+        'invalid_runtime_user_policy' => 'error.runtime_user_policy_invalid',
+        'runtime_user_policy_unavailable' =>
+          'error.runtime_user_policy_unavailable',
         'credential_reconnect_required' =>
           'provider_accounts.refresh.reconnect',
         'credential_refresh_failed' => 'provider_accounts.refresh.failed',

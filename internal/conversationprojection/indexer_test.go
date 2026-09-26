@@ -2,6 +2,7 @@ package conversationprojection
 
 import (
 	"context"
+	"errors"
 	"reflect"
 	"testing"
 	"time"
@@ -56,6 +57,102 @@ func TestIdentityAndReindexNeverReadConversationBodies(t *testing.T) {
 	}
 }
 
+func TestReindexRepairsFirstThenSkipsStableLocalIdentity(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 9, 23, 0, 0, 0, 0, time.UTC)
+	pending, err := agentconversation.Pending("exchange")
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity := agentconversation.ClientIdentity{
+		Client: "codex", SessionID: "session", SessionResumable: true,
+		ProviderResponseID: "response", Source: agentconversation.ClientIdentitySourceLocalState,
+		Confidence: "exact", ObservedAt: now,
+	}
+	identities := &identityRepository{values: map[string]agentconversation.ClientIdentity{"exchange": identity}}
+	record := activity.Record{SubjectID: "exchange", CaptureRunID: "run", SourceDisplayName: "Codex", OccurredAt: now, Conversation: &pending}
+	var requests []activity.PageRequest
+	newIndexer := func() *Indexer {
+		indexer, err := New(Options{
+			Activities: activityReader{record: record, requests: &requests, skipLocal: true},
+			Contents:   &metadataOnlyReader{}, Identities: identities,
+			Writer: identities, CaptureRuns: runReader{},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return indexer
+	}
+	request := activity.ConversationIndexRequest{CaptureRunID: "run", Limit: 10}
+	indexer := newIndexer()
+	if err := indexer.Reindex(ctx, request); err != nil {
+		t.Fatal(err)
+	}
+	if err := indexer.Reindex(ctx, request); err != nil {
+		t.Fatal(err)
+	}
+	if len(requests) != 2 || requests[0].WithoutLocalConversationIdentity ||
+		!requests[1].WithoutLocalConversationIdentity || identities.projections != 1 {
+		t.Fatalf("first repair then incremental requests=%+v projections=%d", requests, identities.projections)
+	}
+	canceled, cancel := context.WithCancel(ctx)
+	cancel()
+	if err := indexer.Reindex(canceled, request); !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled repair error = %v", err)
+	}
+	if err := indexer.Reindex(ctx, request); err != nil {
+		t.Fatal(err)
+	}
+	if !requests[2].WithoutLocalConversationIdentity ||
+		requests[3].WithoutLocalConversationIdentity || identities.projections != 2 {
+		t.Fatalf("canceled scan skipped repair: requests=%+v projections=%d", requests, identities.projections)
+	}
+	// A fresh Runtime must repair an identity persisted before the previous
+	// process could finish its Conversation projection.
+	if err := newIndexer().Reindex(ctx, request); err != nil {
+		t.Fatal(err)
+	}
+	if requests[4].WithoutLocalConversationIdentity || identities.projections != 3 {
+		t.Fatalf("restart did not repair persisted identity: requests=%+v projections=%d", requests, identities.projections)
+	}
+
+	identities.failProject = true
+	failed := newIndexer()
+	if err := failed.Reindex(ctx, request); err == nil {
+		t.Fatal("project failure was ignored")
+	}
+	if err := failed.Reindex(ctx, request); err != nil {
+		t.Fatal(err)
+	}
+	if requests[5].WithoutLocalConversationIdentity || requests[6].WithoutLocalConversationIdentity {
+		t.Fatalf("failed projection incorrectly skipped repair: %+v", requests)
+	}
+}
+
+func TestReindexContinuesPastItsBoundBeforeUsingIncrementalFilter(t *testing.T) {
+	reader := &pagingActivityReader{remaining: maxExchangesPerRefresh + 1, next: maxExchangesPerRefresh + 1}
+	identities := &identityRepository{values: map[string]agentconversation.ClientIdentity{}}
+	indexer, err := New(Options{
+		Activities: reader, Contents: &metadataOnlyReader{}, CaptureRuns: runReader{},
+		Identities: identities, Writer: identities,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := activity.ConversationIndexRequest{CaptureRunID: "run", Limit: 10}
+	for range 3 {
+		if err := indexer.Reindex(context.Background(), request); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(reader.requests) != 52 ||
+		reader.requests[50].BeforeSequence != 2 ||
+		reader.requests[50].WithoutLocalConversationIdentity ||
+		!reader.requests[51].WithoutLocalConversationIdentity {
+		t.Fatalf("bounded repair did not reach old records before filtering: requests=%d tail=%+v", len(reader.requests), reader.requests[max(0, len(reader.requests)-2):])
+	}
+}
+
 // Deliberately no implementation for full content reads: invoking one fails
 // the test, so this asserts the read cost at the public reader interface.
 type metadataOnlyReader struct {
@@ -71,10 +168,43 @@ func (reader *metadataOnlyReader) GetConversationEvidence(context.Context, strin
 
 type activityReader struct {
 	activity.Reader
-	record activity.Record
+	record    activity.Record
+	requests  *[]activity.PageRequest
+	skipLocal bool
 }
 
-func (reader activityReader) ListExchanges(context.Context, activity.PageRequest) (activity.Page, error) {
+type pagingActivityReader struct {
+	activity.Reader
+	remaining int
+	next      int64
+	requests  []activity.PageRequest
+}
+
+func (reader *pagingActivityReader) ListExchanges(_ context.Context, request activity.PageRequest) (activity.Page, error) {
+	reader.requests = append(reader.requests, request)
+	count := min(request.Limit, reader.remaining)
+	items := make([]activity.Record, count)
+	for index := range items {
+		items[index].Sequence = reader.next
+		reader.next--
+	}
+	reader.remaining -= count
+	if reader.remaining == 0 {
+		return activity.Page{Items: items}, nil
+	}
+	return activity.Page{Items: items, NextBeforeSequence: reader.next + 1}, nil
+}
+
+func (reader activityReader) ListExchanges(ctx context.Context, request activity.PageRequest) (activity.Page, error) {
+	if reader.requests != nil {
+		*reader.requests = append(*reader.requests, request)
+	}
+	if err := ctx.Err(); err != nil {
+		return activity.Page{}, err
+	}
+	if reader.skipLocal && request.WithoutLocalConversationIdentity {
+		return activity.Page{Items: []activity.Record{}}, nil
+	}
 	return activity.Page{Items: []activity.Record{reader.record}}, nil
 }
 
@@ -87,6 +217,7 @@ func (runReader) GetRun(context.Context, string) (capturerun.View, error) {
 type identityRepository struct {
 	values      map[string]agentconversation.ClientIdentity
 	projections int
+	failProject bool
 }
 
 func (repository *identityRepository) GetConversationIdentity(_ context.Context, id string) (agentconversation.ClientIdentity, error) {
@@ -103,6 +234,10 @@ func (repository *identityRepository) PutConversationIdentity(_ context.Context,
 
 func (repository *identityRepository) ReprojectConversation(context.Context, string, agentconversation.Ref) error {
 	repository.projections++
+	if repository.failProject {
+		repository.failProject = false
+		return errors.New("synthetic projection failure")
+	}
 	return nil
 }
 

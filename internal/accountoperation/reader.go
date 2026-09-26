@@ -5,7 +5,9 @@ package accountoperation
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"mime"
 	"net/http"
@@ -21,10 +23,11 @@ import (
 
 var ErrUnavailable = errors.New("upstream account read is unavailable")
 var ErrInvalidResponse = errors.New("upstream account response is invalid")
+var ErrResetUnconfirmed = errors.New("Codex reset outcome could not be confirmed")
 
 type CredentialAuthority interface {
 	Get(context.Context, provideraccount.ID) (provideraccount.View, error)
-	AcquireOwnedReadCredential(context.Context, provideraccount.ID) (providerauth.Lease, originidentity.ProviderOrigin, error)
+	AcquireOwnedCredential(context.Context, provideraccount.ID) (providerauth.Lease, originidentity.ProviderOrigin, error)
 	AcquireReadCredential(context.Context, environment.RequestPlan) (providerauth.Lease, error)
 }
 
@@ -39,7 +42,7 @@ func (reader *Reader) ReadOwned(ctx context.Context, id provideraccount.ID, oper
 	if err != nil {
 		return Result{}, err
 	}
-	lease, origin, err := reader.accounts.AcquireOwnedReadCredential(ctx, id)
+	lease, origin, err := reader.accounts.AcquireOwnedCredential(ctx, id)
 	if err != nil {
 		return Result{}, err
 	}
@@ -54,11 +57,32 @@ func (reader *Reader) ReadOwned(ctx context.Context, id provideraccount.ID, oper
 	if err != nil {
 		return Result{}, err
 	}
-	return reader.execute(ctx, request, read, lease)
+	result, err := reader.execute(ctx, request, read, lease)
+	if err != nil || operation != upstreamservice.CodexRateLimits ||
+		view.Account.Driver != providerauth.CodexOAuthDriverRef() ||
+		result.Facts.RateLimitResets == nil || result.Facts.RateLimitResets.AvailableCount == 0 {
+		return result, err
+	}
+	// Credit details are enrichment for the owner, never part of a captured
+	// client query. A failed secondary read leaves the known inline count intact.
+	details, err := upstreamservice.ResolveRead(origin, upstreamservice.CodexResetCreditDetails)
+	if err != nil {
+		return result, nil
+	}
+	detailsRequest, err := providertransport.NewOwnedAccountRead(origin, details.ID(), lease)
+	if err != nil {
+		return result, nil
+	}
+	detailResult, err := reader.execute(ctx, detailsRequest, details, lease)
+	if err == nil && detailResult.Facts.RateLimitResets != nil {
+		result.Facts.RateLimitResets = detailResult.Facts.RateLimitResets
+	}
+	return result, nil
 }
 
 type Transport interface {
 	ReadAccount(context.Context, providertransport.AccountReadRequest) (*http.Response, error)
+	ConsumeResetCredit(context.Context, providertransport.ResetRedemption) (*http.Response, error)
 }
 type Options struct {
 	Accounts  CredentialAuthority
@@ -167,4 +191,117 @@ func (reader *Reader) execute(ctx context.Context, request providertransport.Acc
 	return Result{Body: body, Facts: Facts{AccountID: account.ID, CredentialEpoch: account.CredentialEpoch,
 		Origin: read.Origin().String(), AdapterID: read.AdapterID(), AdapterRevision: read.AdapterRevision(), ObservedAt: reader.clock().UTC(),
 		State: "known", Facts: facts}}, nil
+}
+
+type Redemption struct {
+	AccountID       string `json:"accountId"`
+	CredentialEpoch uint64 `json:"credentialEpoch"`
+	CreditID        string `json:"creditId"`
+	Outcome         string `json:"outcome"`
+	WindowsReset    int    `json:"windowsReset"`
+}
+
+// RedeemOwned consumes one identified, available banked reset for an owner.
+// It never accepts a captured-client operation or a caller-supplied URL.
+func (reader *Reader) RedeemOwned(ctx context.Context, id provideraccount.ID, expectedRevision uint64, creditID string) (Redemption, error) {
+	requestID, err := providertransport.ResetRequestID(id.String(), creditID)
+	if err != nil {
+		return Redemption{}, err
+	}
+	view, err := reader.accounts.Get(ctx, id)
+	if err != nil {
+		return Redemption{}, err
+	}
+	if expectedRevision == 0 || view.Account.Revision != expectedRevision {
+		return Redemption{}, provideraccount.ErrRevisionConflict
+	}
+	if view.Account.Driver != providerauth.CodexOAuthDriverRef() {
+		return Redemption{}, upstreamservice.ErrUnsupported
+	}
+	details, err := upstreamservice.ResolveRead(view.Account.Origin, upstreamservice.CodexResetCreditDetails)
+	if err != nil {
+		return Redemption{}, err
+	}
+	lease, origin, err := reader.accounts.AcquireOwnedCredential(ctx, id)
+	if err != nil {
+		return Redemption{}, err
+	}
+	if lease == nil {
+		return Redemption{}, ErrUnavailable
+	}
+	defer lease.Release()
+	if origin != details.Origin() {
+		return Redemption{}, ErrUnavailable
+	}
+	readRequest, err := providertransport.NewOwnedAccountRead(origin, details.ID(), lease)
+	if err != nil {
+		return Redemption{}, err
+	}
+	facts, err := reader.execute(ctx, readRequest, details, lease)
+	if err != nil {
+		return Redemption{}, err
+	}
+	selected := false
+	if resets := facts.Facts.RateLimitResets; resets != nil && resets.AvailableCount > 0 {
+		for _, credit := range resets.Details {
+			if credit.ID != creditID || credit.ResetType != "codex_rate_limits" || credit.Status != "available" {
+				continue
+			}
+			if credit.ExpiresAt != "" {
+				expiresAt, err := time.Parse(time.RFC3339, credit.ExpiresAt)
+				if err != nil || !expiresAt.After(reader.clock().UTC()) {
+					continue
+				}
+			}
+			selected = true
+			break
+		}
+	}
+	if !selected {
+		return Redemption{}, upstreamservice.ErrUnsupported
+	}
+	command, err := providertransport.NewOwnedResetRedemption(origin, creditID, requestID, lease)
+	if err != nil {
+		return Redemption{}, err
+	}
+	response, err := reader.transport.ConsumeResetCredit(ctx, command)
+	if err != nil {
+		if response != nil && response.Body != nil {
+			_ = response.Body.Close()
+		}
+		return Redemption{}, fmt.Errorf("%w: %w", ErrResetUnconfirmed, err)
+	}
+	if response == nil || response.Body == nil {
+		return Redemption{}, ErrResetUnconfirmed
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return Redemption{}, ErrResetUnconfirmed
+	}
+	contentType, _, err := mime.ParseMediaType(response.Header.Get("Content-Type"))
+	if err != nil || contentType != "application/json" {
+		return Redemption{}, ErrResetUnconfirmed
+	}
+	body, err := io.ReadAll(io.LimitReader(response.Body, 64<<10+1))
+	if err != nil || len(body) > 64<<10 {
+		return Redemption{}, ErrResetUnconfirmed
+	}
+	var outcome struct {
+		Code         string `json:"code"`
+		WindowsReset int    `json:"windows_reset"`
+	}
+	if json.Unmarshal(body, &outcome) != nil || outcome.WindowsReset < 0 || outcome.WindowsReset > 64 {
+		return Redemption{}, ErrResetUnconfirmed
+	}
+	switch outcome.Code {
+	case "reset", "nothing_to_reset", "no_credit", "already_redeemed":
+	default:
+		return Redemption{}, ErrResetUnconfirmed
+	}
+	account, ok := lease.Account()
+	if !ok || account.ID != id.String() {
+		return Redemption{}, ErrInvalidResponse
+	}
+	return Redemption{AccountID: account.ID, CredentialEpoch: account.CredentialEpoch,
+		CreditID: creditID, Outcome: outcome.Code, WindowsReset: outcome.WindowsReset}, nil
 }

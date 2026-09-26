@@ -171,9 +171,9 @@ final class _EgressProfileSelectionDialogState
       key: Key('environment-egress-profile-dialog-${widget.planId}'),
       width: 520,
       child: _loading
-          ? const Padding(
-              padding: EdgeInsets.symmetric(vertical: 28),
-              child: Center(child: CircularProgressIndicator()),
+          ? Padding(
+              padding: const EdgeInsets.symmetric(vertical: 28),
+              child: CompactLoadingMessage(label: copy('common.loading')),
             )
           : _failed
           ? Column(

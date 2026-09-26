@@ -54,6 +54,7 @@ type Options struct {
 
 // Store owns a SQLite connection pool and its repositories.
 type Store struct {
+	databasePath       string
 	database           *sql.DB
 	repo               *Repository
 	activityRepo       *activityRepository
@@ -183,8 +184,17 @@ func Open(ctx context.Context, options Options) (*Store, error) {
 		operations.closeAdmission()
 		return fail(fmt.Errorf("read initial schema state: %w", err))
 	}
+	if err := initializeACPSchema(ctx, database); err != nil {
+		operations.closeAdmission()
+		return fail(err)
+	}
+	if err := initializeRuntimeUserPolicySchema(ctx, database); err != nil {
+		operations.closeAdmission()
+		return fail(err)
+	}
 
 	return &Store{
+		databasePath:       options.DatabasePath,
 		database:           database,
 		repo:               repository,
 		activityRepo:       activityRepo,
@@ -372,6 +382,9 @@ func initializeSchema(ctx context.Context, database *sql.DB) (string, error) {
 	}
 	if initialized {
 		if err := detachDevelopmentAccounts(ctx, transaction, digest); err != nil {
+			return "", err
+		}
+		if err := widenReleasedAccountAction(ctx, transaction, digest); err != nil {
 			return "", err
 		}
 		if err := transaction.Commit(); err != nil {

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"database/sql"
 	"encoding/base64"
 	"errors"
 	"path/filepath"
@@ -13,6 +14,29 @@ import (
 	"github.com/vibe-agi/vibermate/internal/runtimeuser"
 	"github.com/vibe-agi/vibermate/internal/workspaceidentity"
 )
+
+func TestRuntimeUserPolicyExtensionPreservesReleasedBaseSchema(t *testing.T) {
+	ctx := context.Background()
+	databasePath := filepath.Join(t.TempDir(), "runtime.sqlite")
+	base := sql.OpenDB(newSQLiteConnector(databasePath, DefaultBusyTimeout))
+	digest, err := initializeSchema(ctx, base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := base.Close(); err != nil {
+		t.Fatal(err)
+	}
+	store := openTestStore(t, databasePath)
+	defer shutdownTestStore(t, store)
+	state, err := store.SchemaStateReader().ReadSchemaState(ctx)
+	if err != nil || state.SourceSHA256 != digest {
+		t.Fatalf("base schema changed during policy extension: state=%+v err=%v", state, err)
+	}
+	var count int
+	if err := store.database.QueryRowContext(ctx, `SELECT COUNT(*) FROM runtime_user_policy_schema_metadata`).Scan(&count); err != nil || count != 1 {
+		t.Fatalf("policy extension metadata count=%d err=%v", count, err)
+	}
+}
 
 func TestRuntimeUserLoginSessionSurvivesStoreReopen(t *testing.T) {
 	t.Parallel()
@@ -36,6 +60,14 @@ func TestRuntimeUserLoginSessionSurvivesStoreReopen(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
+	}
+	policy, err := runtimeuser.NewPolicy([]string{"team"}, 25, 1000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, err = manager.SetPolicy(context.Background(), created.ID, policy)
+	if err != nil {
+		t.Fatalf("SetPolicy() error = %v", err)
 	}
 	machineID, err := workspaceidentity.ParseMachineID(
 		base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x32}, 32)),

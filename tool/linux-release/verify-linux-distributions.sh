@@ -13,12 +13,13 @@ fi
 
 version="$1"
 distribution_directory="$(cd "$2" && pwd)"
+repository_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 if [[ ! "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
   echo "version must be a three-part release number" >&2
   exit 64
 fi
 
-for command in curl go jq sha256sum tar; do
+for command in cmp curl go jq sha256sum tar; do
   if ! command -v "${command}" >/dev/null 2>&1; then
     echo "required command is unavailable: ${command}" >&2
     exit 69
@@ -66,8 +67,20 @@ for asset_arch in x86_64 arm64; do
   if [[ ! -x "${bundle_root}/vibermate" ||
         ! -x "${bundle_root}/vibermated" ||
         ! -f "${bundle_root}/vibermate-web/index.html" ||
-        ! -f "${bundle_root}/LICENSE" ]]; then
+        ! -f "${bundle_root}/LICENSE" ||
+        ! -f "${bundle_root}/THIRD_PARTY_LICENSES.md" ||
+        ! -f "${bundle_root}/vibermate-web/LICENSE" ||
+        ! -s "${bundle_root}/vibermate-web/LICENSE" ]]; then
     echo "distribution bundle is incomplete: ${bundle_name}" >&2
+    exit 66
+  fi
+  if ! cmp -s "${bundle_root}/LICENSE" "${bundle_root}/vibermate-web/LICENSE"; then
+    echo "Web license differs from distribution license: ${bundle_name}" >&2
+    exit 66
+  fi
+  if ! cmp -s "${repository_root}/LICENSE" "${bundle_root}/LICENSE" ||
+    ! cmp -s "${repository_root}/THIRD_PARTY_LICENSES.md" "${bundle_root}/THIRD_PARTY_LICENSES.md"; then
+    echo "distribution license files differ from the source: ${bundle_name}" >&2
     exit 66
   fi
   if find "${bundle_root}" -type l -print -quit | grep -q .; then

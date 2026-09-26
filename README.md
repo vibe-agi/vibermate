@@ -8,6 +8,21 @@ ViberMate captures agent conversations, routes requests, applies small
 JavaScript rules, and keeps an auditable record. It does not replace your agent
 or AI provider.
 
+## License
+
+This project is available under the GNU Affero General Public License v3.0
+(AGPLv3). Commercial licensing is also available for organizations that need
+to use the software outside the terms of the AGPLv3.
+
+- [AGPLv3 license text](LICENSE)
+- [Commercial licensing and professional services](COMMERCIAL.md)
+
+## Commercial Support
+
+The project author provides architecture consulting, customization,
+integration, deployment, and production support. See
+[COMMERCIAL.md](COMMERCIAL.md) for details.
+
 ![ViberMate capture timeline](https://vibe-agi.github.io/images/vibermate/capture-timeline-2400.webp)
 
 ## Choose how to run it
@@ -58,12 +73,23 @@ or share it, go to **Settings → User management** and choose **Create owner**.
 Then copy the Web workbench address from **Settings → Access & launch**.
 The first account is the owner; later accounts are members.
 
+## ACP editors (current source)
+
+`vibermate acp -- <ACP adapter executable>` lets a compatible editor use its
+existing ACP adapter while ViberMate keeps a bounded session/prompt observation.
+The editor and adapter still own login, permissions, tools, provider traffic,
+and native history. ACP observation does not apply HTTP account replacement,
+model mapping, scripts, or network policy. Follow the [ACP setup
+guide](docs/acp-quickstart.md); the [support matrix](docs/capability-support.md)
+states whether this source capability is present in the latest release.
+
 ## Standalone Server + Web (with or without Docker)
 
 Native and container deployments use the same Web workbench and account model.
 Choose **this-computer access** or **access from other devices** first; installing
 Docker does not change which certificates or accounts you need. See the
-[deployment guide](docs/deployment.md) and [Docker configurations](docs/docker.md).
+[deployment guide](docs/deployment.md), [backup and restore guide](docs/backup-and-restore.md),
+and [Docker configurations](docs/docker.md).
 
 Download the `linux_x86_64` or `linux_arm64` archive from the
 [latest release](https://github.com/vibe-agi/vibermate/releases/latest), verify
@@ -163,7 +189,6 @@ the recovery key rotates after use.
   service and account.
 - Preview, edit, and test built-in JavaScript transforms before publishing.
 - Select an upstream account from the authenticated ViberMate login name.
-- Hold new external work before disconnecting a machine or Runtime.
 
 ![ViberMate script library](https://vibe-agi.github.io/images/vibermate/script-library-2400.webp)
 
@@ -174,14 +199,19 @@ the recovery key rotates after use.
   and filesystem. Recording and retention are configurable.
 - Provider credentials are kept out of policy snapshots and evidence, but text
   deliberately placed in a prompt remains prompt content.
+- [Outbound evidence limits](docs/egress-visibility.md) explain what inspected,
+  uninspected, and direct traffic can and cannot prove.
 - Transform JavaScript has no network, file, clock, or random access. A failure
   stops the request instead of silently bypassing the rule.
+- Settings shows the App, Runtime, and terminal-command builds and checks the
+  official GitHub Release only when requested. It provides Homebrew or manual
+  upgrade guidance; it does not download or install updates.
 - This is an early `0.x` release. A hardened public-Internet deployment,
   automatic updates, plugins, and arbitrary-client compatibility are not yet
   claimed.
 
 Run `vibermate doctor` when setup fails. For implementation details, see the
-[runtime module map](docs/module-map.md) and [architecture decisions](docs/adr).
-Report suspected vulnerabilities through [SECURITY.md](SECURITY.md).
-
-Apache-2.0 licensed.
+[capability and support matrix](docs/capability-support.md),
+[runtime module map](docs/module-map.md), and [architecture decisions](docs/adr).
+The matrix distinguishes released, experimental, branch-only, and unsupported
+work. Report suspected vulnerabilities through [SECURITY.md](SECURITY.md).

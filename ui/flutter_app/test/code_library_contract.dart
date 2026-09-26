@@ -1,3 +1,5 @@
+import 'package:vibermate_app/features/workbench/built_in_script_templates.g.dart';
+
 typedef TransformSourceContract = ({String request, String response});
 
 const structuredOutputGuard = r'''const payload = JSON.parse(request.body);
@@ -26,23 +28,13 @@ final transformSourceContracts = <String, Map<String, TransformSourceContract>>{
 };
 
 const localIdentityContract = (
-  request: r'''const candidates = [
-  [runtime.workspace.root, "/workspace/project"],
-  [runtime.user.homeDirectory, "/Users/guest"],
-  [runtime.user.name, "vibermate-user"],
-];
-context.redactions = [];
-for (let index = 0; index < candidates.length; index += 1) {
-  const privateValue = candidates[index][0];
-  const publicValue = candidates[index][1];
-  if (!privateValue || privateValue === publicValue) continue;
-  const encodedPrivate = JSON.stringify(privateValue).slice(1, -1);
-  const encodedPublic = JSON.stringify(publicValue).slice(1, -1);
-  if (!request.body.includes(encodedPrivate)) continue;
-  request.body = request.body.split(encodedPrivate).join(encodedPublic);
-  context.redactions.push([encodedPrivate, encodedPublic]);
-}''',
-  response: restoreRedactionsResponse,
+  request: builtInHideLocalIdentityRequest,
+  response: builtInHideLocalIdentityResponse,
+);
+
+const clientMetadataContract = (
+  request: builtInHideClientMetadataRequest,
+  response: '',
 );
 
 const blockSecretsContract = (
@@ -95,6 +87,11 @@ const _unguardedTransformSourceContracts =
         'anthropic_messages': localIdentityContract,
         'openai_responses': localIdentityContract,
         'openai_chat': localIdentityContract,
+      },
+      'clientMetadata': {
+        'anthropic_messages': clientMetadataContract,
+        'openai_responses': clientMetadataContract,
+        'openai_chat': clientMetadataContract,
       },
       'blockSecrets': {
         'anthropic_messages': blockSecretsContract,

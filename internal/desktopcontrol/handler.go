@@ -14,11 +14,14 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
+	"github.com/vibe-agi/vibermate/internal/acpobservation"
 	"github.com/vibe-agi/vibermate/internal/activity"
 	"github.com/vibe-agi/vibermate/internal/agentconversation"
 	"github.com/vibe-agi/vibermate/internal/captureassignment"
+	"github.com/vibe-agi/vibermate/internal/captureidentity"
 	"github.com/vibe-agi/vibermate/internal/capturerun"
 	"github.com/vibe-agi/vibermate/internal/codelibrary"
 	"github.com/vibe-agi/vibermate/internal/codexoauth"
@@ -28,11 +31,13 @@ import (
 	"github.com/vibe-agi/vibermate/internal/egressprofile"
 	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/evidencearchive"
+	"github.com/vibe-agi/vibermate/internal/exchange"
 	"github.com/vibe-agi/vibermate/internal/exchangecontent"
 	"github.com/vibe-agi/vibermate/internal/launchsnapshot"
 	"github.com/vibe-agi/vibermate/internal/manualcapture"
 	"github.com/vibe-agi/vibermate/internal/modelcatalog"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
+	"github.com/vibe-agi/vibermate/internal/productbuild"
 	"github.com/vibe-agi/vibermate/internal/productruntime"
 	"github.com/vibe-agi/vibermate/internal/provideraccount"
 	"github.com/vibe-agi/vibermate/internal/rawevidence"
@@ -65,6 +70,11 @@ const (
 	ReasonEnvironmentSystemOwned             ReasonCode = "environment_system_owned"
 	ReasonEnvironmentPreviewStale            ReasonCode = "environment_preview_stale"
 	ReasonEnvironmentUpstreamStale           ReasonCode = "environment_upstream_stale"
+	ReasonDryRunFlowNotMatched               ReasonCode = "dry_run_flow_not_matched"
+	ReasonDryRunInputInvalid                 ReasonCode = "dry_run_input_invalid"
+	ReasonDryRunSelectorFailed               ReasonCode = "dry_run_selector_failed"
+	ReasonDryRunTransformFailed              ReasonCode = "dry_run_transform_failed"
+	ReasonDryRunEnvironmentDisabled          ReasonCode = "dry_run_environment_disabled"
 	ReasonCaptureNotFound                    ReasonCode = "capture_not_found"
 	ReasonCaptureAssignmentNotFound          ReasonCode = "capture_assignment_not_found"
 	ReasonCaptureUnavailable                 ReasonCode = "capture_unavailable"
@@ -112,7 +122,9 @@ type ReadinessReader interface {
 }
 
 type StorageLocationReader interface {
-	StorageLocation() productruntime.StorageLocation
+	StorageLocation(context.Context) (productruntime.StorageLocation, error)
+	CleanupExpiredStorage(context.Context) (resourcedeletion.Released, error)
+	EvidenceArchivePreview(context.Context) (resourcedeletion.Released, error)
 }
 
 // SystemClock is available to standalone control-contract tests and tools.
@@ -141,9 +153,11 @@ type ConversationIndexer interface {
 type Options struct {
 	LaunchSnapshots     *launchsnapshot.Store
 	Storage             StorageLocationReader
+	ACP                 *acpobservation.Manager
 	Readiness           ReadinessReader
 	Status              StatusReader
 	Environments        environment.Controller
+	DryRun              func(context.Context, exchange.ClientRequest) (exchange.DryRunResult, error)
 	Assignments         captureassignment.Controller
 	Activities          activity.Runtime
 	ConversationIndexer ConversationIndexer
@@ -178,9 +192,11 @@ type Options struct {
 type Handler struct {
 	launchSnapshots     *launchsnapshot.Store
 	storage             StorageLocationReader
+	acp                 *acpobservation.Manager
 	readiness           ReadinessReader
 	status              StatusReader
 	environments        environment.Controller
+	dryRun              func(context.Context, exchange.ClientRequest) (exchange.DryRunResult, error)
 	assignments         captureassignment.Controller
 	activities          activity.Runtime
 	conversationIndexer ConversationIndexer
@@ -210,14 +226,19 @@ type Handler struct {
 
 	idempotent *idempotencyCache
 	mux        *http.ServeMux
+	indexMu    sync.Mutex
+	indexing   bool
+	indexScope string
+	indexStart time.Time
 }
 
 type StatusResponse struct {
-	Generation string                       `json:"generation"`
-	Ready      bool                         `json:"ready"`
-	APIVersion string                       `json:"apiVersion"`
-	StatusKey  string                       `json:"statusKey"`
-	Runtime    productruntime.RuntimeStatus `json:"runtime"`
+	Generation   string                       `json:"generation"`
+	Ready        bool                         `json:"ready"`
+	APIVersion   string                       `json:"apiVersion"`
+	ProductBuild string                       `json:"productBuild"`
+	StatusKey    string                       `json:"statusKey"`
+	Runtime      productruntime.RuntimeStatus `json:"runtime"`
 }
 
 type ApprovalDecisionInput struct {
@@ -245,9 +266,11 @@ func New(options Options) (*Handler, error) {
 	handler := &Handler{
 		launchSnapshots:     options.LaunchSnapshots,
 		storage:             options.Storage,
+		acp:                 options.ACP,
 		readiness:           options.Readiness,
 		status:              options.Status,
 		environments:        options.Environments,
+		dryRun:              options.DryRun,
 		assignments:         options.Assignments,
 		activities:          options.Activities,
 		conversationIndexer: options.ConversationIndexer,
@@ -278,6 +301,10 @@ func New(options Options) (*Handler, error) {
 	}
 	handler.mux.HandleFunc("GET /api/v1/status", handler.getStatus)
 	handler.mux.HandleFunc("GET /api/v1/storage", handler.getStorageLocation)
+	handler.mux.HandleFunc(
+		"POST /api/v1/storage/actions/cleanup-expired",
+		handler.cleanupExpiredStorage,
+	)
 	handler.mux.HandleFunc("GET /api/v1/launch-environment/snapshots", handler.listLaunchSnapshots)
 	handler.mux.HandleFunc("/api/v1/storage", handler.invalidRoute)
 	handler.mux.HandleFunc("POST "+CodexLoginPath, handler.startCodexLogin)
@@ -305,6 +332,25 @@ func New(options Options) (*Handler, error) {
 		handler.resumeOfflineHold,
 	)
 	handler.mux.HandleFunc("GET /api/v1/environments", handler.listEnvironments)
+	if options.ACP != nil {
+		handler.mux.HandleFunc("GET /api/v1/captures/{captureKey}/acp", func(writer http.ResponseWriter, request *http.Request) {
+			reference, err := captureidentity.ParseKey(request.PathValue("captureKey"))
+			if err != nil || reference.Kind != captureidentity.KindManagedRun {
+				writeProblem(writer, http.StatusNotFound, ReasonCaptureNotFound)
+				return
+			}
+			record, err := options.ACP.Read(request.Context(), reference.ID)
+			if errors.Is(err, acpobservation.ErrNotFound) {
+				writeProblem(writer, http.StatusNotFound, "acp_observation_not_found")
+				return
+			}
+			if err != nil {
+				writeProblem(writer, http.StatusServiceUnavailable, "acp_observation_unavailable")
+				return
+			}
+			writeJSON(writer, http.StatusOK, record)
+		})
+	}
 	handler.mux.HandleFunc(
 		"POST /api/v1/message-transforms/actions/test",
 		handler.testMessageTransform,
@@ -355,21 +401,27 @@ func New(options Options) (*Handler, error) {
 	handler.mux.HandleFunc("GET /api/v1/provider-accounts/{accountId}", handler.getProviderAccount)
 	handler.mux.HandleFunc("PUT /api/v1/provider-accounts/{accountId}/note", handler.setProviderAccountNote)
 	handler.mux.HandleFunc("GET /api/v1/provider-accounts/{accountId}/account-facts", handler.getAccountFacts)
+	handler.mux.HandleFunc("POST /api/v1/provider-accounts/{accountId}/actions/redeem-reset-credit", handler.redeemResetCredit)
 	handler.mux.HandleFunc("DELETE /api/v1/provider-accounts/{accountId}", handler.deleteProviderAccount)
 	handler.mux.HandleFunc("DELETE /api/v1/environments/{environmentId}", handler.deleteEnvironment)
 	handler.mux.HandleFunc("DELETE /api/v1/upstream-endpoints/{endpointId}", handler.deleteUpstreamEndpoint)
 	handler.mux.HandleFunc("DELETE /api/v1/captures/{captureKey}", handler.deleteCapture)
+	handler.mux.HandleFunc("GET /api/v1/evidence/actions/clear", handler.previewArchiveClear)
 	handler.mux.HandleFunc("POST /api/v1/evidence/actions/clear", handler.clearArchive)
 	handler.mux.HandleFunc("PUT /api/v1/provider-accounts/{accountId}/credential", handler.replaceProviderAccountCredential)
 	handler.mux.HandleFunc("POST /api/v1/provider-accounts/{accountId}/credential/refresh", handler.refreshProviderAccountCredential)
 	handler.mux.HandleFunc("PUT /api/v1/provider-accounts/{accountId}/associations/{endpointId}", handler.setProviderAccountAssociation)
 	handler.mux.HandleFunc("GET /api/v1/environments/{environmentId}", handler.getEnvironment)
+	if handler.dryRun != nil {
+		handler.mux.HandleFunc("POST /api/v1/environments/{environmentId}/actions/dry-run", handler.dryRunEnvironment)
+	}
 	handler.mux.HandleFunc("GET /api/v1/environments/{environmentId}/draft", handler.getEnvironmentDraft)
 	handler.mux.HandleFunc("PUT /api/v1/environments/{environmentId}/draft", handler.putEnvironmentDraft)
 	handler.mux.HandleFunc("POST /api/v1/environments/{environmentId}/draft/actions/preview", handler.previewEnvironmentDraft)
 	handler.mux.HandleFunc("POST /api/v1/environments/{environmentId}/draft/actions/publish", handler.publishEnvironmentDraft)
 	handler.mux.HandleFunc("GET /api/v1/environments/{environmentId}/revisions/{environmentRevision}", handler.getEnvironmentRevision)
 	handler.mux.HandleFunc("GET /api/v1/activities", handler.listActivities)
+	handler.mux.HandleFunc("GET /api/v1/evidence/search", handler.searchActivities)
 	handler.mux.HandleFunc("GET /api/v1/conversations", handler.listConversations)
 	handler.mux.HandleFunc(
 		"GET /api/v1/exchanges/{exchangeId}",
@@ -427,6 +479,7 @@ func New(options Options) (*Handler, error) {
 		handler.invalidRoute,
 	)
 	handler.mux.HandleFunc("/api/v1/activities", handler.invalidRoute)
+	handler.mux.HandleFunc("/api/v1/evidence/search", handler.invalidRoute)
 	handler.mux.HandleFunc(
 		"/api/v1/exchanges/{exchangeId}",
 		handler.invalidRoute,
@@ -502,11 +555,12 @@ func (handler *Handler) getStatus(
 ) {
 	status := handler.status.Status()
 	writeJSON(writer, http.StatusOK, StatusResponse{
-		Generation: status.InstanceID,
-		Ready:      handler.readiness.Ready(),
-		APIVersion: "v1",
-		StatusKey:  "runtime.state." + string(status.State),
-		Runtime:    status,
+		Generation:   status.InstanceID,
+		Ready:        handler.readiness.Ready(),
+		APIVersion:   "v1",
+		ProductBuild: productbuild.Label(),
+		StatusKey:    "runtime.state." + string(status.State),
+		Runtime:      status,
 	})
 }
 
@@ -607,13 +661,6 @@ func (handler *Handler) listActivities(
 	// with an empty Capture ID would scan every retained run, including local
 	// Agent logs, before returning this one timeline. The Conversation directory
 	// owns identity enrichment; exact timeline reads consume its projection.
-	if query.conversationID == "" {
-		handler.refreshConversationIndex(request.Context(), activity.ConversationIndexRequest{
-			Limit:           1,
-			CaptureRunID:    query.captureRunID,
-			ManualCaptureID: query.manualCaptureID,
-		})
-	}
 	page, err := handler.activities.ListExchanges(
 		request.Context(),
 		activity.PageRequest{
@@ -644,6 +691,13 @@ func (handler *Handler) listActivities(
 	// integrity check and reports the exact evidence failure when it is opened.
 	_ = handler.attachActivityRequestPreviews(request.Context(), &view)
 	writeJSON(writer, http.StatusOK, view)
+	if query.conversationID == "" {
+		handler.scheduleConversationIndex(activity.ConversationIndexRequest{
+			Limit:           1,
+			CaptureRunID:    query.captureRunID,
+			ManualCaptureID: query.manualCaptureID,
+		})
+	}
 }
 
 func (handler *Handler) listConversations(
@@ -681,7 +735,6 @@ func (handler *Handler) listConversations(
 		writeProblem(writer, http.StatusUnprocessableEntity, ReasonInvalidRequest)
 		return
 	}
-	handler.refreshConversationIndex(request.Context(), indexRequest)
 	page, err := handler.activities.ListConversations(
 		request.Context(),
 		indexRequest,
@@ -700,19 +753,42 @@ func (handler *Handler) listConversations(
 		return
 	}
 	writeJSON(writer, http.StatusOK, view)
+	handler.scheduleConversationIndex(indexRequest)
 }
 
-func (handler *Handler) refreshConversationIndex(
-	ctx context.Context,
+func (handler *Handler) scheduleConversationIndex(
 	request activity.ConversationIndexRequest,
 ) {
-	if handler.conversationIndexer == nil || request.Validate() != nil {
+	if handler.conversationIndexer == nil || request.Validate() != nil ||
+		request.ManualCaptureID != "" {
 		return
 	}
+	scope := request.CaptureRunID
+	now := time.Now()
+	handler.indexMu.Lock()
+	if handler.indexing ||
+		(scope == handler.indexScope && now.Sub(handler.indexStart) < 5*time.Second) {
+		handler.indexMu.Unlock()
+		return
+	}
+	handler.indexing = true
+	handler.indexScope = scope
+	handler.indexStart = now
+	handler.indexMu.Unlock()
 	// Client-local state is enrichment rather than Activity authority. A file
 	// being appended, moved, or temporarily unavailable must never turn the
-	// audit journal into a 503 response; unresolved Exchanges remain isolated.
-	_ = handler.conversationIndexer.Reindex(ctx, request)
+	// audit journal into a slow or failed response. Bound the detached work so
+	// a stopped Runtime cannot retain an unbounded client-log scan.
+	go func() {
+		defer func() {
+			handler.indexMu.Lock()
+			handler.indexing = false
+			handler.indexMu.Unlock()
+		}()
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		_ = handler.conversationIndexer.Reindex(ctx, request)
+	}()
 }
 
 func (handler *Handler) attachActivityIdentities(

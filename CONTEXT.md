@@ -32,6 +32,10 @@ _Avoid_: bind address, upstream origin, certificate name
 A person authorized by a Runtime Server to create Captures, own their usage evidence, and sign in to their personal Web workbench. A Runtime User is never an upstream authentication Account.
 _Avoid_: Account, Provider Account, machine, client
 
+**Runtime User Policy**:
+The Server-enforced set of Environments a Runtime User may launch, together with optional soft warnings over that user's observed daily usage. Account access follows the selected Environment; the policy is not an Account ACL, provider quota, bill, or hard budget.
+_Avoid_: Profile, role, Account permission, spending limit
+
 **Server Owner**:
 The one Runtime User authorized to configure a Runtime Server and manage its other Runtime Users. Local App control acts with owner authority without turning the macOS login into a Runtime User.
 _Avoid_: default admin, shared admin, Provider Account
@@ -52,6 +56,10 @@ _Avoid_: Runtime User, login user, Account
 One machine used by a Runtime User to connect to a Runtime Server. A Client Device supplies machine and workspace evidence but does not independently grant Capture authority.
 _Avoid_: Runtime User, Account, approval
 
+**Client Relay**:
+A transient loopback hop on a Client Device that forwards one managed Agent run to its selected Runtime Server. It is not a device-wide proxy, a local Runtime, or an inspection and evidence authority.
+_Avoid_: Runtime Server, local security gateway, network firewall
+
 **Login Session**:
 A revocable Runtime Server authority issued after a Runtime User authenticates. It may authorize multiple Capture Runs from one Client Device until it expires or is revoked.
 _Avoid_: Client Session, Capture, Provider session
@@ -59,6 +67,22 @@ _Avoid_: Client Session, Capture, Provider session
 **Capture Run**:
 A managed Capture created for one launched client process. It freezes the Runtime User, Client Device, Workspace, and Environment authority used by every Exchange it observes.
 _Avoid_: Client Session, Conversation, login
+
+**Manual Proxy Login**:
+An owner-created Capture authority for a client that connects to ViberMate with a dedicated, revocable proxy credential. It is separate from the owner's Web Session and freezes the selected Environment without asserting a verified client or Workspace identity.
+_Avoid_: Web login, Login Session, shared proxy password
+
+**ACP Connection**:
+One editor-to-Agent protocol connection owned by a Capture Run. It may carry multiple native ACP Sessions; observing it alone does not establish interception of the Agent's model-service traffic.
+_Avoid_: Login Session, Account, HTTP connection
+
+**ACP Session**:
+An Agent-confirmed native session within an ACP Connection. A resumed session keeps its opaque Agent identity; its reported working directory is a claim, not Workspace authority.
+_Avoid_: Capture Run, temporary Account, Workspace
+
+**ACP Prompt**:
+One observed editor prompt and its Agent-reported outcome in an ACP Session. Loading historical messages is not a fresh prompt, and a prompt does not establish an Agent API Call or token usage.
+_Avoid_: Exchange, billing event, HTTP Turn
 
 **Client Flow**:
 One exact client-facing origin and Client Protocol handled by an Environment, together with the Destination Plan for that traffic.
@@ -99,6 +123,10 @@ _Avoid_: Generic proxy GET, global current account, model usage
 **Account Observation**:
 Allowlisted facts returned by an Account Read, qualified by Account, credential epoch, upstream origin, service adapter revision, and observation time. Upstream quota, upstream historical usage, local ViberMate usage, and a client's local login identity remain distinct sources; absent facts do not mean zero.
 _Avoid_: Billing record, verified local identity, aggregate account balance
+
+**Banked Codex Reset**:
+One provider-issued, individually identified opportunity to reset eligible Codex usage windows. It is distinct from purchased usage credits, the scheduled limit reset, and a paid immediate reset; consuming it is an explicit owner action on one managed OAuth Account.
+_Avoid_: Credit balance, refresh token, automatic quota refresh
 
 **Account History Permission**:
 An explicit permission frozen into an Upstream Route to share account-wide historical usage with a captured client. Permission to generate or inspect current quota does not imply this grant. The owner management surface has its own authority and does not grant a Capture access by inspecting an Account.
@@ -147,6 +175,18 @@ _Avoid_: Capture, request session
 **Conversation**:
 One ordered dialogue stream inside a Client Session, belonging either to the main Agent or to one explicitly identified Subagent.
 _Avoid_: Session, Exchange
+
+**Knowledge Collection**:
+An explicitly shared or private set of reviewed Knowledge Documents owned by one Runtime. Its membership and visibility are independent of a Client Session, Capture, or local Workspace identity.
+_Avoid_: Workspace, Environment, automatic team archive
+
+**Knowledge Document**:
+A versioned, reviewed account of a decision, solution, or reusable finding drawn from one or more Conversations. It has its own visibility and retention after publication; an unreviewed draft is not a published document.
+_Avoid_: Conversation transcript, Raw HTTP, model summary
+
+**Knowledge Citation**:
+An exact reference from a Knowledge Document to the retained Turn or Exchange evidence supporting one claim. It can become unavailable when the source expires or is deleted; it never reconstructs absent evidence.
+_Avoid_: Prompt similarity, inferred source, permanent source copy
 
 **Session Continuity**:
 When an upstream execution target changes, the next model receives the portable prior conversation: instructions, user and Assistant messages, and completed tool calls and results. Provider-private reasoning, caches, and encrypted state remain evidence but are not part of this guarantee.

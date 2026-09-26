@@ -8,6 +8,7 @@ import 'package:vibermate_app/core/api/control_models.dart';
 import 'package:vibermate_app/core/design/viber_theme.dart';
 import 'package:vibermate_app/core/i18n/app_copy.dart';
 import 'package:vibermate_app/features/workbench/account_selector_editor.dart';
+import 'package:vibermate_app/features/workbench/built_in_script_templates.g.dart';
 import 'package:vibermate_app/features/workbench/code_library_view.dart';
 import 'package:vibermate_app/features/workbench/workbench_controller.dart';
 import 'package:vibermate_app/preview/preview_control_api.dart';
@@ -23,6 +24,7 @@ const _protocolLabels = <String, String>{
 
 const _transformLabels = <String, String>{
   'localIdentity': 'Hide local identity',
+  'clientMetadata': 'Replace client metadata',
   'blockSecrets': 'Block secret leakage',
   'privateContacts': 'Hide email and private IP',
   'turnTime': 'Show Turn time',
@@ -113,6 +115,119 @@ void main() {
     }
   }
 
+  testWidgets(
+    'template updates show a diff and publish only after explicit review',
+    (tester) async {
+      await tester.binding.setSurfaceSize(const Size(390, 760));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      final api = PreviewControlApi();
+      await api.createCodeLibraryCollection(
+        id: 'privacy',
+        displayName: 'Privacy',
+      );
+      final customized = await api.publishCodeLibraryTransform(
+        id: 'transform.template',
+        expectedRevision: 0,
+        collectionId: 'privacy',
+        displayName: 'Identity template',
+        policy: const TrafficTransformPolicy(
+          requestJavaScript:
+              '$builtInHideLocalIdentityRequest// local change\n',
+          responseJavaScript: builtInHideLocalIdentityResponse,
+        ),
+      );
+      final controller = WorkbenchController(
+        api: api,
+        terminalCommands: PreviewTerminalCommandService(),
+        previewMode: true,
+        closeRuntime: api.close,
+      );
+      addTearDown(controller.dispose);
+      addTearDown(api.close);
+      await controller.initialize();
+
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: ViberTheme.light(),
+          home: Scaffold(
+            body: CodeLibraryView(
+              controller: controller,
+              copy: AppCopy.forLanguage(AppLanguage.english),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(
+        find.byKey(const Key('code-library-template-status')),
+        findsOneWidget,
+      );
+      expect(
+        find.textContaining('Nothing is changed automatically'),
+        findsOneWidget,
+      );
+      await tester.tap(find.byKey(const Key('code-library-template-compare')));
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const Key('code-library-template-diff')),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(
+          of: find.byKey(const Key('code-library-template-request-current')),
+          matching: find.textContaining('// local change'),
+        ),
+        findsOneWidget,
+      );
+      final diff = find.byKey(const Key('code-library-template-diff'));
+      await tester.tap(
+        find.descendant(of: diff, matching: find.text('Response')),
+      );
+      await tester.pumpAndSettle();
+      expect(
+        find.text('This stage already matches the current template.'),
+        findsOneWidget,
+      );
+      await tester.tap(
+        find.descendant(of: diff, matching: find.text('Request')),
+      );
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+
+      await tester.tap(find.byKey(const Key('code-library-template-review')));
+      await tester.pumpAndSettle();
+      final request = tester.widget<TextField>(
+        find.byKey(
+          const Key('environment-transform-request-transform.template'),
+        ),
+      );
+      expect(request.controller?.text, builtInHideLocalIdentityRequest);
+      expect(
+        (await api.codeLibrary()).transforms.single.revision,
+        customized.revision,
+      );
+      await tester.tap(
+        find.byKey(const Key('environment-transform-save-transform.template')),
+      );
+      await tester.pumpAndSettle();
+      final published = (await api.codeLibrary()).transforms.single;
+      expect(published.revision, 2);
+      expect(
+        published.policy.requestJavaScript,
+        builtInHideLocalIdentityRequest,
+      );
+      expect(find.textContaining('Matches tested template'), findsOneWidget);
+      expect(
+        find.byKey(const Key('code-library-template-compare')),
+        findsNothing,
+      );
+      controller.dispose();
+      await tester.pumpWidget(const SizedBox.shrink());
+      await tester.pump();
+    },
+  );
+
   for (final languageCase in [
     (
       language: AppLanguage.english,
@@ -168,7 +283,7 @@ void main() {
         expect(find.text(languageCase.title), findsOneWidget);
         expect(find.text(languageCase.transforms), findsOneWidget);
         expect(find.text(languageCase.selectors), findsOneWidget);
-        expect(find.text(languageCase.viewCode), findsNWidgets(7));
+        expect(find.text(languageCase.viewCode), findsNWidgets(8));
         await tester.tap(
           find.byKey(const Key('code-library-starter-localIdentity')),
         );
@@ -256,6 +371,7 @@ void main() {
 
       final actions = [
         find.byKey(const Key('code-library-starter-localIdentity')),
+        find.byKey(const Key('code-library-starter-clientMetadata')),
         find.byKey(const Key('code-library-starter-blockSecrets')),
         find.byKey(const Key('code-library-starter-privateContacts')),
         find.byKey(const Key('code-library-starter-turnTime')),
@@ -489,7 +605,7 @@ void main() {
       find.byKey(const Key('code-library-starter-replyLanguage')),
       findsOneWidget,
     );
-    expect(find.textContaining('runtime.user.homeDirectory'), findsOneWidget);
+    expect(find.textContaining('ViberMate local identity v1'), findsOneWidget);
     expect((await api.codeLibrary()).transforms, isEmpty);
 
     await tester.tap(find.byKey(const Key('code-library-starter-blank')));
@@ -542,6 +658,23 @@ void main() {
         jsonDecode(starterSampleBody.controller!.text) as Map<String, dynamic>;
     expect(sampleRequest['messages'], isList);
     expect(sampleRequest.containsKey('home'), isFalse);
+    await tester.tap(
+      find.byKey(const Key('environment-transform-sample-tab-response')),
+    );
+    await tester.pumpAndSettle();
+    final starterSampleResponse = tester.widget<TextField>(
+      find.byKey(const Key('environment-transform-sample-response-body')),
+    );
+    expect(
+      starterSampleResponse.controller?.text,
+      contains('/__vmi1_workspace__'),
+    );
+    expect(starterSampleResponse.controller?.text, contains('/__vmi1_home__'));
+    expect(starterSampleResponse.controller?.text, contains('⟪vmi1_user⟫'));
+    expect(
+      starterSampleResponse.controller?.text,
+      isNot(contains('/Users/guest')),
+    );
     await tester.tap(
       find.byKey(const Key('environment-transform-sample-tab-runtime')),
     );
@@ -622,7 +755,7 @@ void main() {
     final request = tester.widget<TextField>(
       find.byKey(const Key('environment-transform-request-new-transform')),
     );
-    expect(request.controller?.text, contains('runtime.user.homeDirectory'));
+    expect(request.controller?.text, contains('user.homeDirectory'));
     expect(request.controller?.text, contains('// local experiment'));
     expect(tester.takeException(), isNull);
   });
@@ -891,6 +1024,7 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.text('Blank'), findsWidgets);
       expect(find.text('Hide local identity'), findsWidgets);
+      expect(find.text('Replace client metadata'), findsWidgets);
       expect(find.text('Block secret leakage'), findsWidgets);
       expect(find.text('Hide email and private IP'), findsWidgets);
       expect(find.text('Show Turn time'), findsWidgets);
@@ -910,8 +1044,9 @@ void main() {
         )
         .controller!
         .text;
-    expect(privacyRequest, contains('runtime.user.homeDirectory'));
-    expect(privacyRequest, contains('context.redactions'));
+    expect(privacyRequest, contains('ViberMate local identity v1'));
+    expect(privacyRequest, contains('vibermateLocalIdentityV1'));
+    expect(privacyRequest, contains('user.homeDirectory'));
     await tester.tap(
       find.byKey(const Key('environment-transform-tab-response-new-transform')),
     );
@@ -922,7 +1057,8 @@ void main() {
         )
         .controller!
         .text;
-    expect(privacyResponse, contains('context.redactions'));
+    expect(privacyResponse, contains('ViberMate local identity v1'));
+    expect(privacyResponse, contains('vibermateLocalIdentityV1'));
     await tester.sendKeyEvent(LogicalKeyboardKey.escape);
     await tester.pumpAndSettle();
 
@@ -974,6 +1110,7 @@ void main() {
                 observed = sample;
                 return AccountSelectorTestResult(
                   accountId: sample.accounts.last.id,
+                  skippedAccountIds: [sample.accounts.first.id],
                 );
               },
             ),
@@ -1014,6 +1151,14 @@ void main() {
       expect(observed?.runtime.workspaceLabel, 'blue-workspace');
       expect(observed?.request.clientProtocol, 'anthropic_messages');
       expect(find.text('Selected account.blue'), findsOneWidget);
+      expect(
+        find.text('Not selected by this rule: account.red'),
+        findsOneWidget,
+      );
+      expect(
+        find.textContaining('never silently switch accounts'),
+        findsOneWidget,
+      );
       await tester.enterText(
         find.byKey(const Key('account-selector-sample-accounts')),
         'account.red',

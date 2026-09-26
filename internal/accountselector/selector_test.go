@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"sync"
 	"testing"
 	"time"
 )
@@ -62,6 +63,44 @@ selection.accountId = request.body.includes("premium") ? accounts[1].id : accoun
 	request.Body = []byte(`{"tier":"basic"}`)
 	if _, err := turn.Select(context.Background(), request); !errors.Is(err, ErrExecutionFailed) {
 		t.Fatalf("different second Select() error = %v, want ErrExecutionFailed", err)
+	}
+}
+
+func TestPublishedSelectorKeepsConcurrentTurnsIsolated(t *testing.T) {
+	t.Parallel()
+	program, err := Compile(Policy{JavaScript: `selection.accountId = accounts[0].id;`}, DefaultLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	turns := make([]*Turn, 2)
+	for index, id := range []string{"account.left", "account.right"} {
+		turns[index], err = program.NewTurn(TurnOptions{Accounts: []Account{{ID: id, DisplayName: id}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	var wait sync.WaitGroup
+	failures := make(chan error, 32)
+	for index := range 32 {
+		wait.Add(1)
+		go func() {
+			defer wait.Done()
+			turn := turns[index%len(turns)]
+			selection, selectErr := turn.Select(context.Background(), Request{Method: "POST", Path: "/v1/responses", Body: []byte(`{}`)})
+			if selectErr != nil {
+				failures <- selectErr
+				return
+			}
+			want := []string{"account.left", "account.right"}[index%len(turns)]
+			if selection.AccountID != want {
+				failures <- errors.New("selection crossed Turn boundary")
+			}
+		}()
+	}
+	wait.Wait()
+	close(failures)
+	for err := range failures {
+		t.Fatal(err)
 	}
 }
 

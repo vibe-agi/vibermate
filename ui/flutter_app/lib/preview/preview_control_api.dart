@@ -11,15 +11,61 @@ import '../core/api/runtime_storage.dart';
 
 final class PreviewControlApi implements ControlApi {
   @override
+  Future<EnvironmentDryRun> dryRunEnvironment(EnvironmentDryRunInput input) =>
+      Future<EnvironmentDryRun>.error(
+        UnsupportedError('The design preview does not run traffic policies'),
+      );
+
+  @override
+  Future<AccountResetRedemption> redeemAccountResetCredit(
+    ProviderAccount account,
+    String creditId,
+  ) async => throw const ControlContractException(
+    'The preview cannot consume an upstream reset credit',
+  );
+
+  @override
   launchEnvironmentSnapshots() async => const [];
   @override
   Future<RuntimeStorageLocation>
-  storageLocation() async => const RuntimeStorageLocation(
+  storageLocation() async => RuntimeStorageLocation(
     dataDirectory:
         '/Users/mira/Library/Application Support/io.vibermate.desktop',
     databasePath:
         '/Users/mira/Library/Application Support/io.vibermate.desktop/runtime.db',
+    collectedAt: _now,
+    databaseBytes: 192 << 20,
+    walBytes: 8 << 20,
+    sharedMemoryBytes: 1 << 20,
+    evidenceBytes: 128 << 20,
+    reusableBytes: _expiredStorageCleaned ? 20 << 20 : 16 << 20,
+    filesystemAvailableBytes: 24 << 30,
+    lowSpaceThresholdBytes: 1 << 30,
+    capacityState: 'healthy',
+    cleanupPreview: DeletionReleased(
+      exchanges: _expiredStorageCleaned ? 0 : 3,
+      envelopes: _expiredStorageCleaned ? 0 : 12,
+      activities: 0,
+      connections: 0,
+      attempts: 0,
+      approvals: 0,
+      assignments: 0,
+      captures: 0,
+    ),
   );
+
+  @override
+  Future<DeletionReleased> evidenceClearPreview() async =>
+      const DeletionReleased(
+        exchanges: 744,
+        envelopes: 3055,
+        activities: 795,
+        connections: 148,
+        attempts: 761,
+        approvals: 12,
+        assignments: 20,
+        captures: 20,
+      );
 
   @override
   Future<AccountFacts> accountFacts(
@@ -36,6 +82,8 @@ final class PreviewControlApi implements ControlApi {
       'observedAt': DateTime.now().toUtc().toIso8601String(),
       'state': 'known',
       if (!history) 'planType': 'pro',
+      if (!history)
+        'rateLimitResets': {'availableCount': 1, 'applicableAvailableCount': 1},
       'limits': history
           ? <Object?>[]
           : [
@@ -81,8 +129,10 @@ final class PreviewControlApi implements ControlApi {
     ControlProblem? upstreamModelFailure,
     bool seedCaptures = true,
     bool seedRuntimeUsers = true,
+    String productBuild = 'preview',
   }) : _dashboardCaptureLimit = dashboardCaptureLimit,
-       _upstreamModelFailure = upstreamModelFailure {
+       _upstreamModelFailure = upstreamModelFailure,
+       _productBuild = productBuild {
     if (dashboardCaptureLimit < 1 || dashboardCaptureLimit > 199) {
       throw ArgumentError.value(dashboardCaptureLimit, 'dashboardCaptureLimit');
     }
@@ -221,8 +271,11 @@ final class PreviewControlApi implements ControlApi {
     }
   }
 
+  final String _productBuild;
+
   final int _dashboardCaptureLimit;
   final ControlProblem? _upstreamModelFailure;
+  bool _expiredStorageCleaned = false;
 
   static final _now = DateTime.utc(2026, 8, 10, 9, 42);
   static String _identity(int byte) =>
@@ -786,6 +839,7 @@ final class PreviewControlApi implements ControlApi {
     return DashboardData(
       status: RuntimeStatus(
         ready: true,
+        productBuild: _productBuild,
         state: 'initialized',
         host: 'desktop',
         schemaRevision: 1,
@@ -2100,6 +2154,38 @@ final class PreviewControlApi implements ControlApi {
   }
 
   @override
+  Future<DeletionOutcome> cleanupExpiredEvidence() async {
+    final released = _expiredStorageCleaned
+        ? const DeletionReleased(
+            exchanges: 0,
+            envelopes: 0,
+            activities: 0,
+            connections: 0,
+            attempts: 0,
+            approvals: 0,
+            assignments: 0,
+            captures: 0,
+          )
+        : const DeletionReleased(
+            exchanges: 3,
+            envelopes: 12,
+            activities: 0,
+            connections: 0,
+            attempts: 0,
+            approvals: 0,
+            assignments: 0,
+            captures: 0,
+          );
+    _expiredStorageCleaned = true;
+    return DeletionOutcome(
+      deleted: true,
+      holderCount: 0,
+      holders: const [],
+      released: released,
+    );
+  }
+
+  @override
   Future<ProviderAccountDeleteResult> deleteProviderAccount(
     ProviderAccount account,
   ) async {
@@ -2249,6 +2335,167 @@ final class PreviewControlApi implements ControlApi {
   }
 
   @override
+  Future<EvidenceSearchPage> searchEvidence(
+    EvidenceSearchRequest request,
+  ) async {
+    _requireOpen();
+    if (!request.valid) {
+      throw const ControlContractException('evidence search is invalid');
+    }
+    final offset = _previewOffset(request.cursor, 'search');
+    final query = request.query.toLowerCase();
+    bool contains(String value, String needle) =>
+        value.toLowerCase().contains(needle.toLowerCase());
+    final values = <EvidenceSearchHit>[];
+    for (final activity in _allPreviewActivities()) {
+      if (activity.occurredAt.isBefore(request.from ?? DateTime.utc(1)) ||
+          !activity.occurredAt.isBefore(
+            request.until ?? DateTime.utc(9999, 12, 31),
+          ) ||
+          (request.environmentId.isNotEmpty &&
+              activity.environmentId != request.environmentId) ||
+          (request.accountId.isNotEmpty &&
+              activity.accountId != request.accountId) ||
+          (request.status.isNotEmpty && activity.status != request.status) ||
+          (request.reason.isNotEmpty &&
+              !contains(activity.reasonCode ?? '', request.reason))) {
+        continue;
+      }
+      final capture = _captures.values
+          .where(
+            (value) =>
+                value.id == activity.captureRunId ||
+                value.id == activity.manualCaptureId,
+          )
+          .firstOrNull;
+      if (capture == null) continue;
+      final detail = await exchange(activity.id);
+      final contentAvailable = detail.content.state == 'recorded';
+      final requestedModel = contentAvailable
+          ? detail.content.request?.requestedModel ?? ''
+          : '';
+      final effectiveModel = contentAvailable
+          ? detail.content.response?.effectiveModel ??
+                detail.content.request?.effectiveModel ??
+                ''
+          : '';
+      final reportedModel = contentAvailable
+          ? detail.content.response?.reportedModel ?? ''
+          : '';
+      final toolNames = contentAvailable
+          ? detail.content.request?.tools
+                    .map((tool) => tool.name)
+                    .toSet()
+                    .toList(growable: false) ??
+                const <String>[]
+          : const <String>[];
+      if (request.model.isNotEmpty &&
+          ![
+            requestedModel,
+            effectiveModel,
+            reportedModel,
+          ].any((value) => contains(value, request.model))) {
+        continue;
+      }
+      if (request.tool.isNotEmpty &&
+          !toolNames.any((value) => contains(value, request.tool))) {
+        continue;
+      }
+      final context = EvidenceSearchContext(
+        workspaceId: capture.managedRun?.workspaceId ?? '',
+        workspaceLabel: capture.managedRun?.workspaceLabel ?? '',
+        captureLabel: capture.displayName,
+        requestedModel: requestedModel,
+        effectiveModel: effectiveModel,
+        reportedModel: reportedModel,
+        toolNames: toolNames,
+        contentAvailable: contentAvailable,
+      );
+      final matches = <String>{};
+      if (request.environmentId.isNotEmpty) matches.add('environment');
+      if (request.accountId.isNotEmpty) matches.add('account');
+      if (request.model.isNotEmpty) matches.add('model');
+      if (request.tool.isNotEmpty) matches.add('tool');
+      if (request.status.isNotEmpty) matches.add('status');
+      if (request.reason.isNotEmpty) matches.add('error');
+      if (request.from != null) matches.add('time');
+      if (query.isNotEmpty) {
+        var textMatched = false;
+        if ([
+          context.workspaceId,
+          context.workspaceLabel,
+        ].any((value) => contains(value, query))) {
+          matches.add('workspace');
+          textMatched = true;
+        }
+        if ([
+          capture.id,
+          context.captureLabel,
+        ].any((value) => contains(value, query))) {
+          matches.add('capture');
+          textMatched = true;
+        }
+        if ([
+          activity.conversation.id,
+          activity.conversation.displayName ?? '',
+        ].any((value) => contains(value, query))) {
+          matches.add('conversation');
+          textMatched = true;
+        }
+        if (contains(activity.environmentId, query)) {
+          matches.add('environment');
+          textMatched = true;
+        }
+        if (contains(activity.accountId ?? '', query)) {
+          matches.add('account');
+          textMatched = true;
+        }
+        if ([
+          requestedModel,
+          effectiveModel,
+          reportedModel,
+        ].any((value) => contains(value, query))) {
+          matches.add('model');
+          textMatched = true;
+        }
+        if (toolNames.any((value) => contains(value, query))) {
+          matches.add('tool');
+          textMatched = true;
+        }
+        if (contains(activity.status, query)) {
+          matches.add('status');
+          textMatched = true;
+        }
+        if (contains(activity.reasonCode ?? '', query)) {
+          matches.add('error');
+          textMatched = true;
+        }
+        if (contains(activity.source.displayName, query)) {
+          matches.add('source');
+          textMatched = true;
+        }
+        if (contains(activity.id, query)) {
+          matches.add('exchange');
+          textMatched = true;
+        }
+        if (!textMatched) continue;
+      }
+      values.add(
+        EvidenceSearchHit(
+          activity: activity,
+          context: context,
+          matches: matches.toList(growable: false),
+        ),
+      );
+    }
+    final end = (offset + request.limit).clamp(0, values.length).toInt();
+    return EvidenceSearchPage(
+      items: values.sublist(offset, end),
+      nextCursor: end < values.length ? 'search-$end' : null,
+    );
+  }
+
+  @override
   Future<ConversationPage> conversations({
     String? cursor,
     int limit = 50,
@@ -2338,11 +2585,39 @@ final class PreviewControlApi implements ControlApi {
     final requestBody = utf8.encode(
       '{"model":"claude-sonnet-4-5","stream":true}',
     );
+    final providerRequestBody = utf8.encode(
+      '{"model":"claude-sonnet-4-5-20250929","stream":true}',
+    );
     final responseBody = utf8.encode(
       '{"type":"message","content":[{"type":"text","text":"sample"}]}',
     );
+    final clientResponseBody = utf8.encode(
+      '{"type":"message","content":[{"type":"text","text":"sample (filtered)"}]}',
+    );
     return RawEvidencePage(
       items: [
+        RawEvidenceEnvelope(
+          envelopeId: 'raw-preview-client-$exchangeId',
+          layer: 'client_ingress',
+          scopeKind: 'managed_run',
+          scopeId: 'run-preview-$exchangeId',
+          exchangeId: exchangeId,
+          observedAt: observed.subtract(const Duration(milliseconds: 1)),
+          expiresAt: observed.add(const Duration(days: 30)),
+          method: 'POST',
+          scheme: 'https',
+          authority: 'api.anthropic.com',
+          path: '/v1/messages',
+          contentType: 'application/json',
+          headerCount: 2,
+          trailerCount: 0,
+          bodyBytes: requestBody.length,
+          bodySha256: crypto.sha256.convert(requestBody).toString(),
+          digestScope: 'full_body',
+          payloadState: 'captured',
+          redactedCredentialFields: const ['Authorization'],
+          revealAvailable: true,
+        ),
         RawEvidenceEnvelope(
           envelopeId: 'raw-preview-$exchangeId',
           layer: 'provider_egress',
@@ -2362,12 +2637,32 @@ final class PreviewControlApi implements ControlApi {
           contentEncoding: null,
           headerCount: 2,
           trailerCount: 0,
-          bodyBytes: requestBody.length,
-          bodySha256: crypto.sha256.convert(requestBody).toString(),
+          bodyBytes: providerRequestBody.length,
+          bodySha256: crypto.sha256.convert(providerRequestBody).toString(),
           digestScope: 'full_body',
           payloadState: 'captured',
           payloadReason: null,
           redactedCredentialFields: const ['Authorization'],
+          revealAvailable: true,
+        ),
+        RawEvidenceEnvelope(
+          envelopeId: 'raw-preview-provider-response-$exchangeId',
+          layer: 'provider_response',
+          scopeKind: 'managed_run',
+          scopeId: 'run-preview-$exchangeId',
+          exchangeId: exchangeId,
+          attemptId: 'attempt-preview-$exchangeId',
+          observedAt: observed.add(const Duration(milliseconds: 2)),
+          expiresAt: observed.add(const Duration(days: 30)),
+          statusCode: 200,
+          contentType: 'application/json',
+          headerCount: 1,
+          trailerCount: 0,
+          bodyBytes: responseBody.length,
+          bodySha256: crypto.sha256.convert(responseBody).toString(),
+          digestScope: 'full_body',
+          payloadState: 'captured',
+          redactedCredentialFields: const [],
           revealAvailable: true,
         ),
         RawEvidenceEnvelope(
@@ -2387,6 +2682,26 @@ final class PreviewControlApi implements ControlApi {
           trailerCount: 0,
           bodyBytes: requestBody.length,
           bodySha256: crypto.sha256.convert(requestBody).toString(),
+          digestScope: 'full_body',
+          payloadState: 'captured',
+          redactedCredentialFields: const [],
+          revealAvailable: true,
+        ),
+        RawEvidenceEnvelope(
+          envelopeId: 'raw-preview-client-response-$exchangeId',
+          layer: 'client_downstream',
+          scopeKind: 'managed_run',
+          scopeId: 'run-preview-$exchangeId',
+          exchangeId: exchangeId,
+          attemptId: 'attempt-preview-$exchangeId',
+          observedAt: observed.add(const Duration(milliseconds: 3)),
+          expiresAt: observed.add(const Duration(days: 30)),
+          statusCode: 200,
+          contentType: 'application/json',
+          headerCount: 1,
+          trailerCount: 0,
+          bodyBytes: clientResponseBody.length,
+          bodySha256: crypto.sha256.convert(clientResponseBody).toString(),
           digestScope: 'full_body',
           payloadState: 'captured',
           redactedCredentialFields: const [],
@@ -2421,8 +2736,8 @@ final class PreviewControlApi implements ControlApi {
       ),
       writer: const RawEvidenceWriter(
         state: 'active',
-        admittedRecords: 3,
-        durableWatermark: 3,
+        admittedRecords: 6,
+        durableWatermark: 6,
         queueRecords: 0,
         queueBytes: 0,
         lastFailure: null,
@@ -2438,6 +2753,9 @@ final class PreviewControlApi implements ControlApi {
     _requireOpen();
     const requestPrefix = 'raw-preview-transform-request-';
     const responsePrefix = 'raw-preview-transform-response-';
+    const providerResponsePrefix = 'raw-preview-provider-response-';
+    const clientResponsePrefix = 'raw-preview-client-response-';
+    const clientPrefix = 'raw-preview-client-';
     const rawPrefix = 'raw-preview-';
     if (!envelopeId.startsWith(rawPrefix)) {
       throw const ControlProblem(
@@ -2450,13 +2768,29 @@ final class PreviewControlApi implements ControlApi {
         ? envelopeId.substring(requestPrefix.length)
         : envelopeId.startsWith(responsePrefix)
         ? envelopeId.substring(responsePrefix.length)
+        : envelopeId.startsWith(providerResponsePrefix)
+        ? envelopeId.substring(providerResponsePrefix.length)
+        : envelopeId.startsWith(clientResponsePrefix)
+        ? envelopeId.substring(clientResponsePrefix.length)
+        : envelopeId.startsWith(clientPrefix)
+        ? envelopeId.substring(clientPrefix.length)
         : envelopeId.substring(rawPrefix.length);
     final page = await rawEvidence(exchangeId);
     final envelope = page.items.firstWhere(
       (candidate) => candidate.envelopeId == envelopeId,
     );
     final transformInput = envelope.layer.startsWith('transform_');
-    final responseInput = envelope.layer == 'transform_response_input';
+    final body = switch (envelope.layer) {
+      'provider_egress' =>
+        '{"model":"claude-sonnet-4-5-20250929","stream":true}',
+      'provider_response' =>
+        '{"type":"message","content":[{"type":"text","text":"sample"}]}',
+      'transform_response_input' =>
+        '{"type":"message","content":[{"type":"text","text":"sample"}]}',
+      'client_downstream' =>
+        '{"type":"message","content":[{"type":"text","text":"sample (filtered)"}]}',
+      _ => '{"model":"claude-sonnet-4-5","stream":true}',
+    };
     return RevealedRawEvidence(
       envelope: envelope,
       headers: transformInput
@@ -2489,13 +2823,7 @@ final class PreviewControlApi implements ControlApi {
               ),
             ],
       trailers: const [],
-      body: Uint8List.fromList(
-        utf8.encode(
-          responseInput
-              ? '{"type":"message","content":[{"type":"text","text":"sample"}]}'
-              : '{"model":"claude-sonnet-4-5","stream":true}',
-        ),
-      ),
+      body: Uint8List.fromList(utf8.encode(body)),
       frames: const [],
     );
   }
@@ -2525,6 +2853,8 @@ final class PreviewControlApi implements ControlApi {
     final count = capture.id == 'run-1' ? 224 : 24;
     final values = List.generate(count, (index) {
       final reasonCode = switch (index) {
+        214 || 215 => 'provider_status_rejected',
+        216 => 'provider_transport_failed',
         217 => 'unsupported_client_input',
         218 => 'provider_response_idle',
         _ => null,
@@ -3047,6 +3377,8 @@ final class PreviewControlApi implements ControlApi {
                   lastActivityAt: _now,
                 ),
               ],
+              dailyAgentApiCallWarning: user.dailyAgentApiCallWarning,
+              dailyTokenWarning: user.dailyTokenWarning,
             )
           else
             RuntimeUserUsage(
@@ -3068,6 +3400,8 @@ final class PreviewControlApi implements ControlApi {
               models: const [],
               contexts: const [],
               agentSessions: const [],
+              dailyAgentApiCallWarning: user.dailyAgentApiCallWarning,
+              dailyTokenWarning: user.dailyTokenWarning,
             ),
       ],
     );
@@ -3124,6 +3458,9 @@ final class PreviewControlApi implements ControlApi {
       role: current.role,
       createdAt: current.createdAt,
       updatedAt: DateTime.now().toUtc(),
+      allowedEnvironmentIds: current.allowedEnvironmentIds,
+      dailyAgentApiCallWarning: current.dailyAgentApiCallWarning,
+      dailyTokenWarning: current.dailyTokenWarning,
     );
     _runtimeUsers[index] = updated;
     return updated;
@@ -3157,6 +3494,48 @@ final class PreviewControlApi implements ControlApi {
       state: current.state,
       createdAt: current.createdAt,
       updatedAt: DateTime.now().toUtc(),
+      role: current.role,
+      allowedEnvironmentIds: current.allowedEnvironmentIds,
+      dailyAgentApiCallWarning: current.dailyAgentApiCallWarning,
+      dailyTokenWarning: current.dailyTokenWarning,
+    );
+    _runtimeUsers[index] = updated;
+    return updated;
+  }
+
+  @override
+  Future<RuntimeUser> setRuntimeUserPolicy({
+    required String userId,
+    required List<String> allowedEnvironmentIds,
+    required int dailyAgentApiCallWarning,
+    required int dailyTokenWarning,
+  }) async {
+    _requireOpen();
+    final index = _runtimeUsers.indexWhere((user) => user.id == userId);
+    if (index < 0 ||
+        allowedEnvironmentIds.length > 128 ||
+        allowedEnvironmentIds.toSet().length != allowedEnvironmentIds.length ||
+        dailyAgentApiCallWarning < 0 ||
+        dailyTokenWarning < 0) {
+      throw const ControlProblem(
+        status: 422,
+        reasonCode: 'invalid_runtime_user_policy',
+        messageKey: 'error.invalid_runtime_user_policy',
+      );
+    }
+    final current = _runtimeUsers[index];
+    final updated = RuntimeUser(
+      id: current.id,
+      username: current.username,
+      state: current.state,
+      role: current.role,
+      createdAt: current.createdAt,
+      updatedAt: DateTime.now().toUtc(),
+      allowedEnvironmentIds: List.unmodifiable(
+        [...allowedEnvironmentIds]..sort(),
+      ),
+      dailyAgentApiCallWarning: dailyAgentApiCallWarning,
+      dailyTokenWarning: dailyTokenWarning,
     );
     _runtimeUsers[index] = updated;
     return updated;
@@ -3578,6 +3957,8 @@ Evidence line 16''';
     final failed = activity.status == 'failed';
     final rejectedBeforeUpstream =
         activity.reasonCode == 'unsupported_client_input';
+    final transportFailure = activity.reasonCode == 'provider_transport_failed';
+    final providerRejected = activity.reasonCode == 'provider_status_rejected';
     final agentTurn = activity.source.displayName == 'Codex' && index >= 20;
     final routeId = activity.routeId ?? '';
     final attempt = EgressAttemptRecord(
@@ -3604,9 +3985,19 @@ Evidence line 16''';
       startedAt: activity.occurredAt,
       terminal: terminal,
       outcome: terminal ? (failed ? 'failed' : 'completed') : null,
-      errorClass: failed ? 'provider_timeout' : null,
+      errorClass: failed
+          ? transportFailure
+                ? 'connection_failed'
+                : providerRejected
+                ? 'provider_status'
+                : 'provider_timeout'
+          : null,
       bytesOut: 420 + index * 7,
-      bytesIn: failed ? 0 : 1280 + index * 17,
+      bytesIn: providerRejected
+          ? 128
+          : failed
+          ? 0
+          : 1280 + index * 17,
       completedAt: terminal
           ? activity.occurredAt.add(const Duration(milliseconds: 840))
           : null,
@@ -3739,6 +4130,20 @@ Evidence line 16''';
               providerField: null,
               clientField: 'messages',
               clientPath: r'$.messages[0].content',
+            )
+          : transportFailure
+          ? const ExchangeDiagnosis(
+              providerStatus: null,
+              providerField: 'upstream',
+              clientField: null,
+              clientPath: null,
+            )
+          : providerRejected
+          ? ExchangeDiagnosis(
+              providerStatus: index == 215 ? 429 : 401,
+              providerField: 'upstream',
+              clientField: null,
+              clientPath: null,
             )
           : failed
           ? const ExchangeDiagnosis(
@@ -3888,6 +4293,7 @@ Evidence line 16''';
       root: protected.isEmpty
           ? null
           : const ManualCaptureRoot(
+              kind: 'local_path',
               derSha256:
                   'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
               fingerprint: 'BB:BB:BB:BB:BB:BB',

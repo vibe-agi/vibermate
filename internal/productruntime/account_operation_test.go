@@ -35,19 +35,139 @@ import (
 // The only substitute is the external HTTP transport. Account storage,
 // associations, compilation, leases, authentication and Hold are real.
 type accountReadWire struct {
-	mu       sync.Mutex
-	requests []*http.Request
+	mu               sync.Mutex
+	requests         []*http.Request
+	resetDetails     bool
+	failResetDetails bool
+	failConsume      bool
+	consumeOutcome   string
+	redeemBody       []byte
+	consumed         bool
 }
 
 func (wire *accountReadWire) RoundTrip(request *http.Request, _ providertransport.TransportDispatch) (*http.Response, transportprofile.Evidence, error) {
 	wire.mu.Lock()
 	wire.requests = append(wire.requests, request.Clone(request.Context()))
 	wire.mu.Unlock()
+	if request.URL.Path == "/backend-api/wham/rate-limit-reset-credits/consume" {
+		body, err := io.ReadAll(request.Body)
+		_ = request.Body.Close()
+		if err != nil {
+			return nil, transportprofile.Evidence{}, err
+		}
+		wire.redeemBody = body
+		if wire.failConsume {
+			return &http.Response{StatusCode: 503, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(strings.NewReader(`{"error":"temporary"}`))}, transportprofile.Evidence{}, nil
+		}
+		if wire.consumeOutcome != "" {
+			return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(strings.NewReader(fmt.Sprintf(`{"code":%q,"windows_reset":0}`, wire.consumeOutcome)))}, transportprofile.Evidence{}, nil
+		}
+		if wire.consumed {
+			return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(strings.NewReader(`{"code":"already_redeemed","windows_reset":0}`))}, transportprofile.Evidence{}, nil
+		}
+		wire.consumed = true
+		return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(strings.NewReader(`{"code":"reset","windows_reset":2,"access_token":"never-expose-this"}`))}, transportprofile.Evidence{}, nil
+	}
+	if request.URL.Path == "/backend-api/wham/rate-limit-reset-credits" && wire.resetDetails {
+		if wire.failResetDetails {
+			return &http.Response{StatusCode: 503, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(strings.NewReader(`{"error":"temporary"}`))}, transportprofile.Evidence{}, nil
+		}
+		return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(strings.NewReader(`{"available_count":1,"credits":[{"id":"credit-fixture","reset_type":"codex_rate_limits","status":"available","granted_at":"2026-09-01T00:00:00Z","expires_at":"2026-10-01T00:00:00Z"}]}`))}, transportprofile.Evidence{}, nil
+	}
 	if request.URL.Path == "/backend-api/wham/profiles/me" {
 		return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(strings.NewReader(`{"stats":{"lifetime_tokens":1200}}`))}, transportprofile.Evidence{}, nil
 	}
 	return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"application/json"}},
-		Body: io.NopCloser(strings.NewReader(fmt.Sprintf(`{"plan_type":"pro","account_id":%q,"rate_limit":{"allowed":true,"limit_reached":false,"primary_window":{"used_percent":25,"limit_window_seconds":18000,"reset_after_seconds":3600,"reset_at":1800000000}}}`, request.Header.Get("Chatgpt-Account-Id"))))}, transportprofile.Evidence{}, nil
+		Body: io.NopCloser(strings.NewReader(fmt.Sprintf(`{"plan_type":"pro","account_id":%q,"rate_limit":{"allowed":true,"limit_reached":false,"primary_window":{"used_percent":25,"limit_window_seconds":18000,"reset_after_seconds":3600,"reset_at":1800000000}}%s}`, request.Header.Get("Chatgpt-Account-Id"), func() string {
+			if wire.resetDetails {
+				return `,"rate_limit_reset_credits":{"available_count":1}`
+			}
+			return ""
+		}())))}, transportprofile.Evidence{}, nil
+}
+
+func TestOwnerQuotaEnrichesBankedResetsWithoutOpeningCapturedWritePath(t *testing.T) {
+	f := newAccountReadFixtureWithDriver(t, providerauth.CodexOAuthDriverRef())
+	f.wire.resetDetails = true
+	result, err := f.reader.ReadOwned(context.Background(), f.account.Account.ID, upstreamservice.CodexRateLimits)
+	if err != nil || result.Facts.RateLimitResets == nil || result.Facts.RateLimitResets.AvailableCount != 1 ||
+		len(result.Facts.RateLimitResets.Details) != 1 || result.Facts.RateLimitResets.Details[0].ID != "credit-fixture" {
+		t.Fatalf("owner reset details = %+v, %v", result.Facts.RateLimitResets, err)
+	}
+	if len(f.wire.requests) != 2 {
+		t.Fatalf("owner quota made %d requests, want 2", len(f.wire.requests))
+	}
+	for _, request := range f.wire.requests {
+		if request.Method != http.MethodGet || request.Header.Get("Chatgpt-Account-Id") != "workspace-B" ||
+			request.Header.Get("Authorization") != "Bearer "+f.token {
+			t.Fatal("reset lookup lost the selected OAuth account or changed method")
+		}
+	}
+	f.wire.requests = nil
+	f.wire.failResetDetails = true
+	result, err = f.reader.ReadOwned(context.Background(), f.account.Account.ID, upstreamservice.CodexRateLimits)
+	if err != nil || result.Facts.RateLimitResets == nil || result.Facts.RateLimitResets.AvailableCount != 1 ||
+		result.Facts.RateLimitResets.Details != nil {
+		t.Fatalf("failed detail lookup erased the known count: %+v, %v", result.Facts.RateLimitResets, err)
+	}
+}
+
+func TestOwnerRedeemsOnlyNamedCodexOAuthResetWithFrozenAccount(t *testing.T) {
+	f := newAccountReadFixtureWithDriver(t, providerauth.CodexOAuthDriverRef())
+	f.wire.resetDetails = true
+	stableID, err := providertransport.ResetRequestID("managed-b", "credit-fixture")
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := f.reader.RedeemOwned(context.Background(), f.account.Account.ID, f.account.Account.Revision, "credit-fixture")
+	if err != nil || result.Outcome != "reset" || result.WindowsReset != 2 || result.CreditID != "credit-fixture" || result.AccountID != "managed-b" {
+		t.Fatalf("redeem result = %+v, %v; calls=%d body=%q", result, err, len(f.wire.requests), f.wire.redeemBody)
+	}
+	if got := string(f.wire.redeemBody); got != `{"redeem_request_id":"`+stableID+`","credit_id":"credit-fixture"}` {
+		t.Fatalf("redeem body = %q", got)
+	}
+	if len(f.wire.requests) != 2 || f.wire.requests[0].Method != http.MethodGet ||
+		f.wire.requests[1].Method != http.MethodPost ||
+		f.wire.requests[1].Header.Get("Authorization") != "Bearer "+f.token ||
+		f.wire.requests[1].Header.Get("Chatgpt-Account-Id") != "workspace-B" {
+		t.Fatal("redemption escaped the selected OAuth account or preflight")
+	}
+	page, err := f.runtime.EgressAttempts().List(context.Background(), egressaudit.PageRequest{Limit: 20})
+	if err != nil || len(page.Items) != 2 || page.Items[0].Attempt.Purpose() != egressaudit.PurposeUpstreamAccountAction {
+		t.Fatalf("missing redemption audit: %+v, %v", page.Items, err)
+	}
+	replayed, err := f.reader.RedeemOwned(context.Background(), f.account.Account.ID, f.account.Account.Revision, "credit-fixture")
+	if err != nil || replayed.Outcome != "already_redeemed" || string(f.wire.redeemBody) != `{"redeem_request_id":"`+stableID+`","credit_id":"credit-fixture"}` {
+		t.Fatalf("same credit did not reuse its backend identity: %+v, %v", replayed, err)
+	}
+	for _, outcome := range []string{"nothing_to_reset", "no_credit"} {
+		f.wire.consumeOutcome = outcome
+		observed, err := f.reader.RedeemOwned(context.Background(), f.account.Account.ID, f.account.Account.Revision, "credit-fixture")
+		if err != nil || observed.Outcome != outcome {
+			t.Fatalf("redemption outcome %q = %+v, %v", outcome, observed, err)
+		}
+	}
+	f.wire.consumeOutcome = ""
+
+	f.wire.requests = nil
+	if _, err := f.reader.RedeemOwned(context.Background(), f.account.Account.ID, f.account.Account.Revision, "other-credit"); !errors.Is(err, upstreamservice.ErrUnsupported) || len(f.wire.requests) != 1 {
+		t.Fatalf("unlisted credit reached write transport: %v; calls=%d", err, len(f.wire.requests))
+	}
+	f.wire.requests = nil
+	if _, err := f.reader.RedeemOwned(context.Background(), f.account.Account.ID, f.account.Account.Revision+1, "credit-fixture"); !errors.Is(err, provideraccount.ErrRevisionConflict) || len(f.wire.requests) != 0 {
+		t.Fatalf("stale account revision reached upstream: %v", err)
+	}
+	f.wire.failConsume = true
+	if _, err := f.reader.RedeemOwned(context.Background(), f.account.Account.ID, f.account.Account.Revision, "credit-fixture"); !errors.Is(err, accountoperation.ErrResetUnconfirmed) {
+		t.Fatalf("ambiguous consumed credit reported as safe retry: %v", err)
+	}
+}
+
+func TestStaticBearerCannotRedeemCodexReset(t *testing.T) {
+	f := newAccountReadFixture(t)
+	if _, err := f.reader.RedeemOwned(context.Background(), f.account.Account.ID, f.account.Account.Revision, "credit-fixture"); !errors.Is(err, upstreamservice.ErrUnsupported) || len(f.wire.requests) != 0 {
+		t.Fatalf("static bearer obtained Codex reset authority: %v", err)
+	}
 }
 
 type accountReadFixture struct {

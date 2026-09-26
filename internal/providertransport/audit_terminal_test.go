@@ -2,8 +2,12 @@ package providertransport
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"errors"
+	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"strings"
 	"sync"
@@ -13,7 +17,68 @@ import (
 	"github.com/vibe-agi/vibermate/internal/egressaudit"
 	"github.com/vibe-agi/vibermate/internal/providerauth"
 	"github.com/vibe-agi/vibermate/internal/secretstore"
+	"github.com/vibe-agi/vibermate/internal/transportprofile"
 )
+
+func TestProviderTransportFailureClassNeverCarriesErrorText(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name     string
+		err      error
+		fallback transportprofile.FallbackReason
+		want     string
+	}{
+		{"dns", &net.DNSError{Err: "private host", Name: "secret.internal"}, transportprofile.FallbackNone, transportDNSClass},
+		{"tls", x509.UnknownAuthorityError{Cert: &x509.Certificate{}}, transportprofile.FallbackNone, transportTLSClass},
+		{"tls-wrapper", &tls.CertificateVerificationError{Err: errors.New("private certificate")}, transportprofile.FallbackNone, transportTLSClass},
+		{"connection", &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("private path")}, transportprofile.FallbackNone, transportConnectClass},
+		{"timeout", context.DeadlineExceeded, transportprofile.FallbackNone, transportTimeoutClass},
+		{"profile", errors.New("token=secret"), transportprofile.FallbackApplicationProtocolMissing, transportProfileClass},
+		{"handshake", errors.New("token=secret"), transportprofile.FallbackObservedTLSHandshakeRejected, transportHandshakeClass},
+		{"unknown", errors.New("token=secret"), transportprofile.FallbackNone, transportUnknownClass},
+	}
+	for _, item := range cases {
+		t.Run(item.name, func(t *testing.T) {
+			got := transportFailureClass(
+				fmt.Errorf("private detail: %w", item.err),
+				item.fallback,
+			)
+			if got != item.want || strings.Contains(got, "private") || strings.Contains(got, "secret") {
+				t.Fatalf("failure class = %q, want %q", got, item.want)
+			}
+		})
+	}
+}
+
+func TestProviderAuditPersistsClassifiedTransportFailure(t *testing.T) {
+	t.Parallel()
+	audit := &providerTerminalAuditDouble{}
+	gate := newStartedGate(t)
+	authenticator, err := NewStaticBearerAuthenticator(testSecretReader(t, "provider-token"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	client, err := NewClient(ClientOptions{
+		Coordinator: gate, Authenticator: authenticator, Audit: audit,
+		Transport: &roundTripperStub{err: &net.DNSError{Err: "secret.internal", Name: "secret.internal"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer shutdownClient(t, client)
+	_, _, err = client.Do(context.Background(), newTestRequest(
+		t, gate, "classified-dns-failure", testTarget("provider.example", 443), nil,
+	))
+	if err == nil {
+		t.Fatal("provider transport failure was not returned")
+	}
+	terminal, calls, failures := audit.snapshot()
+	if calls != 1 || len(failures) != 0 ||
+		terminal.Outcome() != egressaudit.OutcomeFailed ||
+		terminal.ErrorClass() != transportDNSClass {
+		t.Fatalf("terminal=%+v calls=%d failures=%v", terminal, calls, failures)
+	}
+}
 
 func TestProviderAuditRecordsResponseReadFailure(t *testing.T) {
 	t.Parallel()

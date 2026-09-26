@@ -77,6 +77,13 @@ final class ProviderAccountRow extends StatelessWidget {
         : account.usable
         ? copy('routes.credentials.ready')
         : copy('routes.credentials.unavailable');
+    final credentialColor = oauth?.state == 'reconnect_required'
+        ? context.viberColors.danger
+        : oauth?.state == 'refresh_due'
+        ? context.viberColors.warning
+        : account.usable
+        ? context.viberColors.verified
+        : context.viberColors.danger;
     final kindLabel = _localizedCopy(copy, 'routes.account.kind', account.kind);
     final transportLabel = _localizedCopy(
       copy,
@@ -153,9 +160,7 @@ final class ProviderAccountRow extends StatelessWidget {
                       const SizedBox(height: 4),
                       InlineStatus(
                         label: credentialLabel,
-                        color: account.usable
-                            ? context.viberColors.verified
-                            : context.viberColors.danger,
+                        color: credentialColor,
                       ),
                     ],
                   ),
@@ -210,12 +215,7 @@ final class ProviderAccountRow extends StatelessWidget {
                 style: monoStyle,
               ),
             ),
-            InlineStatus(
-              label: credentialLabel,
-              color: account.usable
-                  ? context.viberColors.verified
-                  : context.viberColors.danger,
-            ),
+            InlineStatus(label: credentialLabel, color: credentialColor),
             const SizedBox(width: 4),
             compactActions,
           ],
@@ -647,12 +647,18 @@ final class _AccountEditorDialogState extends State<_AccountEditorDialog> {
                         enableSuggestions: false,
                         textAlignVertical: TextAlignVertical.center,
                         decoration: const InputDecoration(),
-                        validator: (value) =>
-                            value == null ||
-                                value.isEmpty ||
-                                value.contains(RegExp(r'[\u0000\r\n]'))
-                            ? copy('routes.validation.secret')
-                            : null,
+                        validator: (value) {
+                          if (value == null || value.isEmpty) {
+                            return copy(
+                              _kind == 'bearer_token'
+                                  ? 'routes.validation.bearer_required'
+                                  : 'routes.validation.api_key_required',
+                            );
+                          }
+                          return value.contains(RegExp(r'[\u0000\r\n]'))
+                              ? copy('routes.validation.secret')
+                              : null;
+                        },
                       ),
                     ),
                   const SizedBox(height: 10),

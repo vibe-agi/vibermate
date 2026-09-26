@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/vibe-agi/vibermate/internal/controlprincipal"
+	"github.com/vibe-agi/vibermate/internal/runtimeuser"
 )
 
 func TestPrincipalKeepsGrantScopeTypedAndImmutable(t *testing.T) {
@@ -181,13 +182,17 @@ func TestRuntimeUserPrincipalFreezesAuthenticatedDeviceAttribution(t *testing.T)
 	t.Parallel()
 
 	principal, err := controlprincipal.New(controlprincipal.Attributes{
-		ID:                 "runtime-user:login-one",
-		Kind:               controlprincipal.KindRuntimeUser,
-		MachineID:          "machine-source-one",
-		DeviceName:         "Linux workstation",
-		RuntimeUserID:      "user.source-one",
-		RuntimeUsername:    "alice",
-		LoginSessionID:     "login.source-one",
+		ID:              "runtime-user:login-one",
+		Kind:            controlprincipal.KindRuntimeUser,
+		MachineID:       "machine-source-one",
+		DeviceName:      "Linux workstation",
+		RuntimeUserID:   "user.source-one",
+		RuntimeUsername: "alice",
+		LoginSessionID:  "login.source-one",
+		RuntimeUserPolicy: func() runtimeuser.Policy {
+			policy, _ := runtimeuser.NewPolicy([]string{"team"}, 100, 1000)
+			return policy
+		}(),
 		CredentialRevision: 1,
 		AllowedGrantKinds:  []controlprincipal.GrantKind{controlprincipal.GrantCaptureRun},
 	})
@@ -202,6 +207,9 @@ func TestRuntimeUserPrincipalFreezesAuthenticatedDeviceAttribution(t *testing.T)
 	}
 	if !principal.Valid() {
 		t.Fatal("Runtime User principal became invalid after construction")
+	}
+	if !principal.AllowsEnvironment("team") || principal.AllowsEnvironment("private") {
+		t.Fatal("Runtime User principal widened its Environment policy")
 	}
 }
 

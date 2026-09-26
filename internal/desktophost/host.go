@@ -352,6 +352,7 @@ func Start(ctx context.Context, options Options) (*Host, error) {
 	}
 	captureHandler, err := capturecontrol.New(capturecontrol.Options{
 		LaunchSnapshots: runtime.LaunchSnapshots(),
+		ACP:             runtime.ACPObservations(),
 		Runs:            runtime.CaptureRuns(),
 		Principals:      cliControl,
 		Issuer:          grantIssuer,
@@ -419,6 +420,7 @@ func Start(ctx context.Context, options Options) (*Host, error) {
 	}
 	application, err := desktopcontrol.New(desktopcontrol.Options{
 		Storage:             runtime,
+		ACP:                 runtime.ACPObservations(),
 		Readiness:           ready,
 		Status:              runtime,
 		Environments:        runtime.Environments(),

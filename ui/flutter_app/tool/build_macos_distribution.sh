@@ -5,6 +5,9 @@ set -euo pipefail
 script_directory="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 flutter_directory="$(cd "${script_directory}/.." && pwd)"
 repository_root="$(cd "${flutter_directory}/../.." && pwd)"
+package_version="$(awk '$1 == "version:" { print $2 }' "${flutter_directory}/pubspec.yaml")"
+version="${package_version%%+*}"
+release_label="v${version}"
 target="universal-apple-darwin"
 release_directory="${flutter_directory}/build/distribution/${target}/release"
 app_directory="${release_directory}/bundle/macos"
@@ -94,6 +97,7 @@ build_slice() {
       go build \
         -buildvcs=true \
         -trimpath \
+        -ldflags="-X github.com/vibe-agi/vibermate/internal/productbuild.releaseVersion=${release_label}" \
         -tags=vibermate_native_secrets \
         -o "${output}" \
         "./cmd/${command_name}"
@@ -144,6 +148,9 @@ fi
 ditto --norsrc --noextattr --noacl --noqtn -X \
   "${web_source}" \
   "${web_destination}"
+/usr/bin/install -m 0644 "${repository_root}/LICENSE" "${app_bundle}/Contents/Resources/LICENSE"
+/usr/bin/install -m 0644 "${repository_root}/LICENSE" "${web_destination}/LICENSE"
+/usr/bin/install -m 0644 "${repository_root}/THIRD_PARTY_LICENSES.md" "${app_bundle}/Contents/Resources/THIRD_PARTY_LICENSES.md"
 
 VIBERMATE_RELEASE_REQUIRE_CLEAN=1 \
   node "${script_directory}/desktop_build_manifest.mjs" \

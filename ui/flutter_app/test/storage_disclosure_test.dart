@@ -3,6 +3,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:vibermate_app/app/vibermate_app.dart';
 import 'package:vibermate_app/core/bootstrap/runtime_connection.dart';
 import 'package:vibermate_app/core/preferences/workbench_preferences.dart';
+import 'package:vibermate_app/features/workbench/settings_view.dart';
 import 'package:vibermate_app/preview/preview_control_api.dart';
 import 'package:vibermate_app/preview/preview_terminal_command.dart';
 
@@ -73,6 +74,137 @@ void main() {
         findsOneWidget,
       );
       await tester.pumpWidget(const SizedBox.shrink());
+    },
+  );
+
+  testWidgets('local backup and restore disclose scope before restarting', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(390, 900));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final calls = <String>[];
+    await tester.pumpWidget(
+      ViberMateApp(
+        previewMode: false,
+        preferChinese: false,
+        preferencesStore: const DiscardWorkbenchPreferencesStore(),
+        runtimeConnector: ({login}) async {
+          final api = PreviewControlApi();
+          return RuntimeConnection(
+            api: api,
+            terminalCommands: PreviewTerminalCommandService(),
+            close: api.close,
+            isClosed: () => false,
+            serverManagement: false,
+            terminalManagement: true,
+            rootTrustManagement: false,
+            targetLabel: 'Test Mac',
+            chooseStorageBackupDirectory: () async =>
+                '/Volumes/Archive/ViberMate Backup 20260926-120000',
+            prepareStorageBackup: (target) async {
+              calls.add('prepare-backup:$target');
+            },
+            backupStorage: (target) async {
+              calls.add('backup:$target');
+            },
+            chooseStorageRestore: () async => (
+              backup: '/Volumes/Archive/ViberMate Backup 20260926-120000',
+              target:
+                  '/Users/mira/Library/Application Support/io.vibermate.desktop.restored-20260926-121000',
+            ),
+            prepareStorageRestore: (selection) async {
+              calls.add(
+                'prepare-restore:${selection.backup}->${selection.target}',
+              );
+            },
+            restoreStorage: (selection) async {
+              calls.add('restore:${selection.backup}->${selection.target}');
+            },
+          );
+        },
+      ),
+    );
+    await tester.pumpAndSettle();
+    await _openSafetySettings(tester);
+
+    var backup = find.byKey(const Key('storage-create-backup'));
+    await Scrollable.ensureVisible(tester.element(backup), alignment: 0.5);
+    await tester.pumpAndSettle();
+    await tester.tap(backup);
+    await tester.pumpAndSettle();
+    expect(find.text('Create an offline backup?'), findsOneWidget);
+    expect(find.textContaining('Provider/OAuth credentials'), findsOneWidget);
+    await tester.tap(find.widgetWithText(TextButton, 'Cancel'));
+    await tester.pumpAndSettle();
+    expect(calls, isEmpty);
+
+    await tester.tap(backup);
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(FilledButton, 'Create backup'));
+    await tester.pumpAndSettle();
+    expect(calls, [
+      'prepare-backup:/Volumes/Archive/ViberMate Backup 20260926-120000',
+      'backup:/Volumes/Archive/ViberMate Backup 20260926-120000',
+    ]);
+    expect(find.textContaining('Verified backup created'), findsOneWidget);
+
+    final restore = find.byKey(const Key('storage-restore-backup'));
+    await Scrollable.ensureVisible(tester.element(restore), alignment: 0.5);
+    await tester.pumpAndSettle();
+    await tester.tap(restore);
+    await tester.pumpAndSettle();
+    expect(find.text('Restore this backup?'), findsOneWidget);
+    expect(find.textContaining('not overwritten'), findsOneWidget);
+    await tester.tap(find.widgetWithText(FilledButton, 'Verify and restore'));
+    await tester.pumpAndSettle();
+    expect(calls, hasLength(4));
+    expect(calls[2], startsWith('prepare-restore:/Volumes/Archive/'));
+    expect(calls[3], startsWith('restore:/Volumes/Archive/'));
+    expect(find.textContaining('previous directory remains'), findsOneWidget);
+  });
+
+  testWidgets(
+    'Web storage paths stay server-owned and cannot open a browser picker',
+    (tester) async {
+      await tester.pumpWidget(
+        ViberMateApp(
+          previewMode: false,
+          preferChinese: false,
+          preferencesStore: const DiscardWorkbenchPreferencesStore(),
+          runtimeConnector: ({login}) async {
+            final api = PreviewControlApi();
+            return RuntimeConnection(
+              api: api,
+              terminalCommands: PreviewTerminalCommandService(),
+              close: api.close,
+              isClosed: () => false,
+              serverManagement: true,
+              terminalManagement: false,
+              rootTrustManagement: false,
+              targetLabel: 'team.example',
+            );
+          },
+        ),
+      );
+      await tester.pumpAndSettle();
+      await _openSafetySettings(tester);
+      final panel = find.byKey(const Key('storage-disclosure-panel'));
+      await Scrollable.ensureVisible(tester.element(panel), alignment: 0.4);
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(const Key('storage-change-directory')), findsNothing);
+      expect(find.byKey(const Key('storage-create-backup')), findsNothing);
+      expect(find.byKey(const Key('storage-restore-backup')), findsNothing);
+      expect(
+        find.textContaining('not a folder on your browser'),
+        findsOneWidget,
+      );
+      expect(
+        find.textContaining(
+          "--source='/Users/mira/Library/Application Support",
+        ),
+        findsOneWidget,
+      );
     },
   );
 
@@ -164,6 +296,79 @@ void main() {
     expect(find.textContaining('未加密'), findsOneWidget);
   });
 
+  testWidgets('storage snapshot previews and cleans only expired evidence', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      const ViberMateApp(previewMode: true, preferChinese: false),
+    );
+    await tester.pumpAndSettle();
+    await _openSafetySettings(tester);
+
+    final capacity = find.byKey(const Key('storage-capacity'));
+    await tester.scrollUntilVisible(
+      capacity,
+      240,
+      scrollable: _safetyScrollable(),
+    );
+    expect(find.text('192.0 MiB'), findsOneWidget);
+    expect(find.bySemanticsLabel('Database file: 192.0 MiB'), findsOneWidget);
+    expect(find.text('8.0 MiB'), findsOneWidget);
+    expect(find.text('128.0 MiB'), findsOneWidget);
+    expect(find.text('16.0 MiB'), findsOneWidget);
+    expect(find.textContaining('warning below 1.0 GiB'), findsOneWidget);
+
+    final cleanup = find.byKey(const Key('storage-cleanup-expired'));
+    await Scrollable.ensureVisible(tester.element(cleanup), alignment: 0.5);
+    await tester.pumpAndSettle();
+    await tester.tap(cleanup);
+    await tester.pumpAndSettle();
+    expect(find.text('Clean expired evidence?'), findsOneWidget);
+    expect(
+      find.descendant(
+        of: find.byKey(const Key('deletion-confirm-dialog')),
+        matching: find.textContaining('3 semantic Exchanges'),
+      ),
+      findsOneWidget,
+    );
+    await tester.tap(find.byKey(const Key('deletion-confirm')));
+    await tester.pumpAndSettle();
+    expect(
+      find.text('No expired evidence is waiting for cleanup.'),
+      findsOneWidget,
+    );
+    expect(find.text('Expired evidence was cleaned.'), findsOneWidget);
+
+    final clear = find.byKey(const Key('storage-clear-archive'));
+    await Scrollable.ensureVisible(tester.element(clear), alignment: 0.5);
+    await tester.pumpAndSettle();
+    await tester.tap(clear);
+    await tester.pumpAndSettle();
+    expect(find.textContaining('20 Captures'), findsOneWidget);
+    expect(find.textContaining('3055 Raw HTTP boundaries'), findsOneWidget);
+  });
+
+  testWidgets('390px Chinese storage capacity and cleanup stay operable', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(390, 760));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(
+      const ViberMateApp(previewMode: true, preferChinese: true),
+    );
+    await tester.pumpAndSettle();
+    await _openSafetySettings(tester);
+
+    final cleanup = find.byKey(const Key('storage-cleanup-expired'));
+    await Scrollable.ensureVisible(tester.element(cleanup), alignment: 0.5);
+    await tester.pumpAndSettle();
+    expect(find.textContaining('12 条 Raw HTTP'), findsOneWidget);
+    await tester.tap(cleanup);
+    await tester.pumpAndSettle();
+    expect(find.text('清理过期证据？'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
   // The disclosure grew when its claim was narrowed, and a copy change is
   // exactly the kind of edit that overflows a panel without anyone noticing:
   // every assertion above passes on a clipped layout. A widget test fails on a
@@ -198,6 +403,17 @@ void main() {
 Future<void> _openSafetySettings(WidgetTester tester) async {
   await tester.tap(find.byIcon(Icons.settings_outlined).first);
   await tester.pumpAndSettle();
+  final picker = find.byKey(const Key('settings-section-picker'));
+  if (picker.evaluate().isNotEmpty) {
+    await tester.tap(picker);
+    await tester.pumpAndSettle();
+    final label = tester
+        .widget<SettingsView>(find.byType(SettingsView))
+        .copy('settings.tab.safety');
+    await tester.tap(find.text(label).hitTestable().last);
+    await tester.pumpAndSettle();
+    return;
+  }
   final tab = find.byKey(const Key('settings-tab-safety'));
   await tester.ensureVisible(tab);
   await tester.pumpAndSettle();

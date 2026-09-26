@@ -363,6 +363,9 @@ final class RuntimeUser {
     required this.createdAt,
     required this.updatedAt,
     this.role = 'member',
+    this.allowedEnvironmentIds = const [],
+    this.dailyAgentApiCallWarning = 0,
+    this.dailyTokenWarning = 0,
   });
 
   factory RuntimeUser.fromJson(Object? json, String path) {
@@ -371,7 +374,12 @@ final class RuntimeUser {
       value,
       path,
       required: const {'id', 'username', 'state', 'createdAt', 'updatedAt'},
-      optional: const {'role'},
+      optional: const {
+        'role',
+        'allowedEnvironmentIds',
+        'dailyAgentApiCallWarning',
+        'dailyTokenWarning',
+      },
     );
     final state = requireString(value, 'state', path);
     if (!const {'active', 'disabled'}.contains(state)) {
@@ -386,6 +394,24 @@ final class RuntimeUser {
     if (updatedAt.isBefore(createdAt)) {
       throw ControlContractException('$path timestamps are inconsistent');
     }
+    final allowedEnvironmentIds = value['allowedEnvironmentIds'] == null
+        ? <String>[]
+        : requireStringList(value, 'allowedEnvironmentIds', path);
+    final dailyAgentApiCallWarning = value['dailyAgentApiCallWarning'] == null
+        ? 0
+        : requireInteger(value, 'dailyAgentApiCallWarning', path);
+    final dailyTokenWarning = value['dailyTokenWarning'] == null
+        ? 0
+        : requireInteger(value, 'dailyTokenWarning', path);
+    if (allowedEnvironmentIds.length > 128 ||
+        allowedEnvironmentIds.toSet().length != allowedEnvironmentIds.length ||
+        allowedEnvironmentIds.any(
+          (id) => !_environmentIdPattern.hasMatch(id),
+        ) ||
+        dailyAgentApiCallWarning > 1000000000000000 ||
+        dailyTokenWarning > 1000000000000000) {
+      throw ControlContractException('$path policy is invalid');
+    }
     return RuntimeUser(
       id: requireString(value, 'id', path),
       username: requireString(value, 'username', path),
@@ -393,6 +419,9 @@ final class RuntimeUser {
       createdAt: createdAt,
       updatedAt: updatedAt,
       role: role,
+      allowedEnvironmentIds: List.unmodifiable(allowedEnvironmentIds),
+      dailyAgentApiCallWarning: dailyAgentApiCallWarning,
+      dailyTokenWarning: dailyTokenWarning,
     );
   }
 
@@ -402,10 +431,16 @@ final class RuntimeUser {
   final DateTime createdAt;
   final DateTime updatedAt;
   final String role;
+  final List<String> allowedEnvironmentIds;
+  final int dailyAgentApiCallWarning;
+  final int dailyTokenWarning;
 
   bool get active => state == 'active';
   bool get owner => role == 'owner';
+  bool get allEnvironments => allowedEnvironmentIds.isEmpty;
 }
+
+final _environmentIdPattern = RegExp(r'^[a-z0-9][a-z0-9._-]{0,127}$');
 
 /// Mirrors the Runtime Server's public username grammar for immediate form
 /// feedback. The Server remains authoritative and canonicalizes ASCII letters
@@ -476,7 +511,7 @@ final class RuntimeUsageReport {
       },
     );
     if (requireString(value, 'schema', path) !=
-        'vibermate-runtime-usage-report-v3') {
+        'vibermate-runtime-usage-report-v4') {
       throw ControlContractException('$path schema is unsupported');
     }
     final period = RuntimeUsagePeriod.fromJson(value['period'], '$path.period');
@@ -533,6 +568,8 @@ final class RuntimeUserUsage {
     required this.models,
     required this.contexts,
     required this.agentSessions,
+    required this.dailyAgentApiCallWarning,
+    required this.dailyTokenWarning,
   });
 
   factory RuntimeUserUsage.fromJson(Object? json, String path) {
@@ -557,6 +594,8 @@ final class RuntimeUserUsage {
         'models',
         'contexts',
         'agentSessions',
+        'dailyAgentApiCallWarning',
+        'dailyTokenWarning',
       },
       optional: const {'latestContext', 'lastActivityAt'},
     );
@@ -616,6 +655,12 @@ final class RuntimeUserUsage {
         '$path.agentSessions',
         RuntimeAgentSessionUsage.fromJson,
       ),
+      dailyAgentApiCallWarning: requireInteger(
+        value,
+        'dailyAgentApiCallWarning',
+        path,
+      ),
+      dailyTokenWarning: requireInteger(value, 'dailyTokenWarning', path),
     );
   }
 
@@ -637,6 +682,8 @@ final class RuntimeUserUsage {
   final List<RuntimeModelUsage> models;
   final List<RuntimeContextUsage> contexts;
   final List<RuntimeAgentSessionUsage> agentSessions;
+  final int dailyAgentApiCallWarning;
+  final int dailyTokenWarning;
 
   bool get active => state == 'active';
   bool get partial => contentUnavailableCalls > 0 || modelUnavailableCalls > 0;
@@ -1489,6 +1536,7 @@ final class OfflineHoldSnapshot {
 final class RuntimeStatus {
   const RuntimeStatus({
     required this.ready,
+    required this.productBuild,
     required this.state,
     required this.host,
     required this.schemaRevision,
@@ -1514,12 +1562,17 @@ final class RuntimeStatus {
         'generation',
         'ready',
         'apiVersion',
+        'productBuild',
         'statusKey',
         'runtime',
       },
     );
     if (requireString(value, 'apiVersion', 'status') != 'v1') {
       throw const ControlContractException('status.apiVersion is unsupported');
+    }
+    final productBuild = requireString(value, 'productBuild', 'status');
+    if (!_validDisplayLabel(productBuild, maximumBytes: 128)) {
+      throw const ControlContractException('status.productBuild is invalid');
     }
     final runtime = requireObject(value['runtime'], 'status.runtime');
     requireFields(
@@ -1625,6 +1678,7 @@ final class RuntimeStatus {
     }
     return RuntimeStatus(
       ready: requireBoolean(value, 'ready', 'status'),
+      productBuild: productBuild,
       state: state,
       host: host,
       schemaRevision: requireInteger(
@@ -1649,6 +1703,7 @@ final class RuntimeStatus {
   }
 
   final bool ready;
+  final String productBuild;
   final String state;
   final String host;
   final int schemaRevision;
@@ -1660,21 +1715,6 @@ final class RuntimeStatus {
   final DateTime startedAt;
   final DateTime? stoppedAt;
   final String? stopReasonCode;
-
-  RuntimeStatus withOfflineHold(OfflineHoldSnapshot value) => RuntimeStatus(
-    ready: ready,
-    state: state,
-    host: host,
-    schemaRevision: schemaRevision,
-    storage: storage,
-    environmentProjection: environmentProjection,
-    unavailableEnvironments: unavailableEnvironments,
-    offlineHold: value,
-    instanceId: instanceId,
-    startedAt: startedAt,
-    stoppedAt: stoppedAt,
-    stopReasonCode: stopReasonCode,
-  );
 
   bool get healthy => ready && state == 'initialized' && storage == 'healthy';
 }
@@ -3600,17 +3640,42 @@ final class AccountSelectorTestSample {
 }
 
 final class AccountSelectorTestResult {
-  const AccountSelectorTestResult({required this.accountId});
+  const AccountSelectorTestResult({
+    required this.accountId,
+    this.skippedAccountIds = const [],
+    this.automaticSwitchReason = 'turn_account_frozen',
+  });
 
   factory AccountSelectorTestResult.fromJson(Object? json, String path) {
     final value = requireObject(json, path);
-    requireFields(value, path, required: const {'accountId'});
+    requireFields(
+      value,
+      path,
+      required: const {
+        'accountId',
+        'skippedAccountIds',
+        'automaticSwitchReason',
+      },
+    );
+    final accountId = _requireResourceId(value, 'accountId', path);
+    final skipped = requireStringList(value, 'skippedAccountIds', path);
+    if (skipped.length > 1023 ||
+        skipped.toSet().length != skipped.length ||
+        skipped.contains(accountId) ||
+        skipped.any((id) => !_resourceIdPattern.hasMatch(id)) ||
+        requireString(value, 'automaticSwitchReason', path) !=
+            'turn_account_frozen') {
+      throw ControlContractException('$path selection trace is invalid');
+    }
     return AccountSelectorTestResult(
-      accountId: _requireResourceId(value, 'accountId', path),
+      accountId: accountId,
+      skippedAccountIds: List.unmodifiable(skipped),
     );
   }
 
   final String accountId;
+  final List<String> skippedAccountIds;
+  final String automaticSwitchReason;
 }
 
 final class MessageTransformTestRequest {
@@ -5406,6 +5471,218 @@ final class EnvironmentDraft {
   final EnvironmentRecord candidate;
 }
 
+final class EnvironmentDryRunInput {
+  const EnvironmentDryRunInput({
+    required this.environmentId,
+    required this.source,
+    required this.revision,
+    required this.clientOrigin,
+    required this.method,
+    required this.path,
+    this.rawQuery = '',
+    required this.clientProtocol,
+    required this.body,
+  });
+
+  final String environmentId;
+  final String source;
+  final int revision;
+  final String clientOrigin;
+  final String method;
+  final String path;
+  final String rawQuery;
+  final String clientProtocol;
+  final String body;
+
+  JsonObject toJson() => {
+    'source': source,
+    'revision': revision,
+    'clientOrigin': clientOrigin,
+    'method': method,
+    'path': path,
+    if (rawQuery.isNotEmpty) 'rawQuery': rawQuery,
+    'clientProtocol': clientProtocol,
+    'body': body,
+  };
+}
+
+final class EnvironmentDryRun {
+  const EnvironmentDryRun({
+    required this.source,
+    required this.publishedRevision,
+    required this.draftRevision,
+    required this.decision,
+  });
+
+  factory EnvironmentDryRun.fromJson(
+    Object? json,
+    EnvironmentDryRunInput input,
+  ) {
+    const path = 'environmentDryRun';
+    final value = requireObject(json, path);
+    requireFields(
+      value,
+      path,
+      required: const {'schema', 'source', 'publishedRevision', 'result'},
+      optional: const {'draftRevision'},
+    );
+    if (value['schema'] != 'vibermate-environment-dry-run-v1' ||
+        value['source'] != input.source) {
+      throw const ControlContractException(
+        'Environment dry run source changed',
+      );
+    }
+    final publishedRevision = requireInteger(value, 'publishedRevision', path);
+    final draftRevision = optionalInteger(
+      value,
+      'draftRevision',
+      path,
+      minimum: 1,
+    );
+    final decision = EnvironmentDryRunDecision.fromJson(value['result']);
+    if (decision.environmentId != input.environmentId ||
+        (input.source == 'published' &&
+            (publishedRevision != input.revision ||
+                draftRevision != null ||
+                decision.environmentRevision != input.revision)) ||
+        (input.source == 'draft' &&
+            (draftRevision != input.revision ||
+                decision.environmentRevision != publishedRevision + 1))) {
+      throw const ControlContractException(
+        'Environment dry run revision changed',
+      );
+    }
+    return EnvironmentDryRun(
+      source: input.source,
+      publishedRevision: publishedRevision,
+      draftRevision: draftRevision,
+      decision: decision,
+    );
+  }
+
+  final String source;
+  final int publishedRevision;
+  final int? draftRevision;
+  final EnvironmentDryRunDecision decision;
+}
+
+final class EnvironmentDryRunDecision {
+  const EnvironmentDryRunDecision({
+    required this.environmentId,
+    required this.environmentRevision,
+    required this.destinationKind,
+    required this.providerOrigin,
+    required this.routeId,
+    required this.accountId,
+    required this.requestedModel,
+    required this.effectiveModel,
+    required this.modelMapped,
+    required this.networkExitId,
+    required this.bodyChanged,
+    required this.protocolChangedTopLevelFields,
+    required this.changedHeaderNames,
+    required this.changedTopLevelFields,
+    required this.unverified,
+  });
+
+  factory EnvironmentDryRunDecision.fromJson(Object? json) {
+    const path = 'environmentDryRun.result';
+    final value = requireObject(json, path);
+    requireFields(
+      value,
+      path,
+      required: const {
+        'evaluatedAt',
+        'environmentId',
+        'environmentRevision',
+        'environmentDigest',
+        'destinationKind',
+        'providerOrigin',
+        'routeId',
+        'routeRevision',
+        'accountId',
+        'accountRevision',
+        'requestedModel',
+        'effectiveModel',
+        'modelMapped',
+        'networkExitId',
+        'networkExitRevision',
+        'providerMethod',
+        'providerPath',
+        'bodyChanged',
+        'protocolChangedTopLevelFields',
+        'changedHeaderNames',
+        'changedTopLevelFields',
+        'unverified',
+      },
+    );
+    requireTimestamp(value, 'evaluatedAt', path);
+    _requireDigest(value, 'environmentDigest', path);
+    requireInteger(value, 'routeRevision', path);
+    requireInteger(value, 'accountRevision', path);
+    requireInteger(value, 'networkExitRevision', path);
+    requireString(value, 'providerMethod', path);
+    requireString(value, 'providerPath', path);
+    final kind = requireString(value, 'destinationKind', path);
+    if (!const {'upstream', 'original'}.contains(kind)) {
+      throw const ControlContractException(
+        'Environment dry run destination is invalid',
+      );
+    }
+    return EnvironmentDryRunDecision(
+      environmentId: requireString(value, 'environmentId', path),
+      environmentRevision: requireInteger(
+        value,
+        'environmentRevision',
+        path,
+        minimum: 1,
+      ),
+      destinationKind: kind,
+      providerOrigin: requireString(value, 'providerOrigin', path),
+      routeId: requireStringValue(value, 'routeId', path),
+      accountId: requireStringValue(value, 'accountId', path),
+      requestedModel: requireStringValue(value, 'requestedModel', path),
+      effectiveModel: requireStringValue(value, 'effectiveModel', path),
+      modelMapped: requireBoolean(value, 'modelMapped', path),
+      networkExitId: requireString(value, 'networkExitId', path),
+      bodyChanged: requireBoolean(value, 'bodyChanged', path),
+      protocolChangedTopLevelFields:
+          value['protocolChangedTopLevelFields'] == null
+          ? null
+          : List.unmodifiable(
+              requireStringList(value, 'protocolChangedTopLevelFields', path),
+            ),
+      changedHeaderNames: List.unmodifiable(
+        requireStringList(value, 'changedHeaderNames', path),
+      ),
+      changedTopLevelFields: value['changedTopLevelFields'] == null
+          ? null
+          : List.unmodifiable(
+              requireStringList(value, 'changedTopLevelFields', path),
+            ),
+      unverified: List.unmodifiable(
+        requireStringList(value, 'unverified', path),
+      ),
+    );
+  }
+
+  final String environmentId;
+  final int environmentRevision;
+  final String destinationKind;
+  final String providerOrigin;
+  final String routeId;
+  final String accountId;
+  final String requestedModel;
+  final String effectiveModel;
+  final bool modelMapped;
+  final String networkExitId;
+  final bool bodyChanged;
+  final List<String>? protocolChangedTopLevelFields;
+  final List<String> changedHeaderNames;
+  final List<String>? changedTopLevelFields;
+  final List<String> unverified;
+}
+
 final class EnvironmentImpactCapture {
   const EnvironmentImpactCapture({
     required this.captureKind,
@@ -5878,6 +6155,7 @@ final class CaptureRecord {
     required this.updatedAt,
     this.managedRun,
     this.manualCapture,
+    this.transport,
   });
 
   factory CaptureRecord.fromJson(Object? json, String path) {
@@ -5895,7 +6173,7 @@ final class CaptureRecord {
         'createdAt',
         'updatedAt',
       },
-      optional: const {'managedRun', 'manualCapture'},
+      optional: const {'managedRun', 'manualCapture', 'transport'},
     );
     final kind = requireString(value, 'kind', path);
     final id = _requireResourceId(value, 'id', path);
@@ -5904,7 +6182,10 @@ final class CaptureRecord {
     final observation = requireString(value, 'observation', path);
     final managed = value['managedRun'];
     final manual = value['manualCapture'];
+    final transport = optionalString(value, 'transport', path);
     if ((kind == 'managed_run') != (managed != null) ||
+        (transport != null &&
+            (transport != 'acp_stdio' || kind != 'managed_run')) ||
         (kind == 'manual_capture') != (manual != null) ||
         key != '$kind:$id' ||
         !_validDisplayLabel(requireString(value, 'displayName', path)) ||
@@ -5952,6 +6233,7 @@ final class CaptureRecord {
       updatedAt: updatedAt,
       managedRun: managedSummary,
       manualCapture: manualSummary,
+      transport: transport,
     );
   }
 
@@ -5965,11 +6247,13 @@ final class CaptureRecord {
   final DateTime updatedAt;
   final ManagedRunSummary? managedRun;
   final ManualCaptureSummary? manualCapture;
+  final String? transport;
 
   bool get running => kind == 'managed_run'
       ? state == 'created' || state == 'attached'
       : state == 'active';
   bool get isManual => kind == 'manual_capture';
+  bool get isACP => transport == 'acp_stdio';
   String? get captureRunId => kind == 'managed_run' ? id : null;
 }
 
@@ -6303,6 +6587,252 @@ final class ActivityRequestPreview {
   final String kind;
   final String text;
   final bool truncated;
+}
+
+final class EvidenceSearchRequest {
+  const EvidenceSearchRequest({
+    this.query = '',
+    this.environmentId = '',
+    this.accountId = '',
+    this.model = '',
+    this.tool = '',
+    this.status = '',
+    this.reason = '',
+    this.from,
+    this.until,
+    this.cursor,
+    this.limit = 50,
+  });
+
+  final String query;
+  final String environmentId;
+  final String accountId;
+  final String model;
+  final String tool;
+  final String status;
+  final String reason;
+  final DateTime? from;
+  final DateTime? until;
+  final String? cursor;
+  final int limit;
+
+  bool get valid {
+    bool text(String value) =>
+        value.isEmpty ||
+        (value.trim() == value &&
+            utf8.encode(value).length <= 256 &&
+            !_containsControlCharacter(value));
+    final hasFilter =
+        query.isNotEmpty ||
+        environmentId.isNotEmpty ||
+        accountId.isNotEmpty ||
+        model.isNotEmpty ||
+        tool.isNotEmpty ||
+        status.isNotEmpty ||
+        reason.isNotEmpty ||
+        from != null;
+    return hasFilter &&
+        limit > 0 &&
+        limit <= 200 &&
+        text(query) &&
+        (environmentId.isEmpty || _resourceIdPattern.hasMatch(environmentId)) &&
+        (accountId.isEmpty || _resourceIdPattern.hasMatch(accountId)) &&
+        text(model) &&
+        text(tool) &&
+        text(reason) &&
+        const {
+          '',
+          'succeeded',
+          'pending',
+          'failed',
+          'canceled',
+        }.contains(status) &&
+        ((from == null && until == null) ||
+            (from != null &&
+                until != null &&
+                until!.toUtc().isAfter(from!.toUtc())));
+  }
+
+  EvidenceSearchRequest next(String nextCursor) => EvidenceSearchRequest(
+    query: query,
+    environmentId: environmentId,
+    accountId: accountId,
+    model: model,
+    tool: tool,
+    status: status,
+    reason: reason,
+    from: from,
+    until: until,
+    cursor: nextCursor,
+    limit: limit,
+  );
+}
+
+final class EvidenceSearchContext {
+  const EvidenceSearchContext({
+    required this.workspaceId,
+    required this.workspaceLabel,
+    required this.captureLabel,
+    required this.requestedModel,
+    required this.effectiveModel,
+    required this.reportedModel,
+    required this.toolNames,
+    required this.contentAvailable,
+  });
+
+  factory EvidenceSearchContext.fromJson(Object? json, String path) {
+    final value = requireObject(json, path);
+    requireFields(
+      value,
+      path,
+      required: const {'captureLabel', 'toolNames', 'contentAvailable'},
+      optional: const {
+        'workspaceId',
+        'workspaceLabel',
+        'requestedModel',
+        'effectiveModel',
+        'reportedModel',
+      },
+    );
+    final workspaceId = optionalString(value, 'workspaceId', path) ?? '';
+    final workspaceLabel = optionalString(value, 'workspaceLabel', path) ?? '';
+    final captureLabel = requireString(value, 'captureLabel', path);
+    final requestedModel = optionalString(value, 'requestedModel', path) ?? '';
+    final effectiveModel = optionalString(value, 'effectiveModel', path) ?? '';
+    final reportedModel = optionalString(value, 'reportedModel', path) ?? '';
+    final toolNames = requireStringList(value, 'toolNames', path);
+    final contentAvailable = requireBoolean(value, 'contentAvailable', path);
+    if (!_validEvidenceSearchValue(workspaceId, 128) ||
+        (workspaceLabel.isNotEmpty &&
+            !_validDisplayLabel(workspaceLabel, maximumBytes: 120)) ||
+        !_validDisplayLabel(captureLabel) ||
+        !_validEvidenceSearchValue(requestedModel, 512) ||
+        !_validEvidenceSearchValue(effectiveModel, 512) ||
+        !_validEvidenceSearchValue(reportedModel, 512) ||
+        toolNames.length > 256 ||
+        toolNames.toSet().length != toolNames.length ||
+        toolNames.any((name) => !_validCatalogText(name, maximumBytes: 256)) ||
+        (!contentAvailable &&
+            (requestedModel.isNotEmpty ||
+                effectiveModel.isNotEmpty ||
+                reportedModel.isNotEmpty ||
+                toolNames.isNotEmpty))) {
+      throw ControlContractException('$path search context is invalid');
+    }
+    return EvidenceSearchContext(
+      workspaceId: workspaceId,
+      workspaceLabel: workspaceLabel,
+      captureLabel: captureLabel,
+      requestedModel: requestedModel,
+      effectiveModel: effectiveModel,
+      reportedModel: reportedModel,
+      toolNames: List.unmodifiable(toolNames),
+      contentAvailable: contentAvailable,
+    );
+  }
+
+  final String workspaceId;
+  final String workspaceLabel;
+  final String captureLabel;
+  final String requestedModel;
+  final String effectiveModel;
+  final String reportedModel;
+  final List<String> toolNames;
+  final bool contentAvailable;
+}
+
+bool _validEvidenceSearchValue(String value, int maximumBytes) =>
+    utf8.encode(value).length <= maximumBytes &&
+    !value.contains('\uFEFF') &&
+    !_containsControlCharacter(value);
+
+final class EvidenceSearchHit {
+  const EvidenceSearchHit({
+    required this.activity,
+    required this.context,
+    required this.matches,
+  });
+
+  factory EvidenceSearchHit.fromJson(Object? json, String path) {
+    final value = requireObject(json, path);
+    requireFields(
+      value,
+      path,
+      required: const {'activity', 'context', 'matches'},
+    );
+    final matches = requireStringList(value, 'matches', path);
+    const supported = {
+      'workspace',
+      'capture',
+      'conversation',
+      'environment',
+      'account',
+      'model',
+      'tool',
+      'status',
+      'error',
+      'source',
+      'exchange',
+      'time',
+    };
+    if (matches.isEmpty ||
+        matches.length > supported.length ||
+        matches.toSet().length != matches.length ||
+        !matches.every(supported.contains)) {
+      throw ControlContractException('$path search matches are invalid');
+    }
+    return EvidenceSearchHit(
+      activity: ActivityRecord.fromJson(value['activity'], '$path.activity'),
+      context: EvidenceSearchContext.fromJson(
+        value['context'],
+        '$path.context',
+      ),
+      matches: List.unmodifiable(matches),
+    );
+  }
+
+  final ActivityRecord activity;
+  final EvidenceSearchContext context;
+  final List<String> matches;
+}
+
+final class EvidenceSearchPage {
+  const EvidenceSearchPage({required this.items, required this.nextCursor});
+
+  factory EvidenceSearchPage.fromJson(Object? json, String path) {
+    final value = requireObject(json, path);
+    requireFields(
+      value,
+      path,
+      required: const {'items'},
+      optional: const {'nextCursor'},
+    );
+    final items = requireList(value['items'], '$path.items');
+    if (items.length > 200) {
+      throw ControlContractException('$path has too many search results');
+    }
+    final nextCursor = optionalString(value, 'nextCursor', path);
+    if (nextCursor != null &&
+        (nextCursor.isEmpty ||
+            nextCursor.length > 512 ||
+            RegExp(r'\s').hasMatch(nextCursor))) {
+      throw ControlContractException('$path next cursor is invalid');
+    }
+    return EvidenceSearchPage(
+      items: items.indexed
+          .map(
+            (entry) => EvidenceSearchHit.fromJson(
+              entry.$2,
+              '$path.items[${entry.$1}]',
+            ),
+          )
+          .toList(growable: false),
+      nextCursor: nextCursor,
+    );
+  }
+
+  final List<EvidenceSearchHit> items;
+  final String? nextCursor;
 }
 
 final class ActivityRecord {
@@ -9128,6 +9658,7 @@ final class NetworkData {
 
 final class ManualCaptureRoot {
   const ManualCaptureRoot({
+    required this.kind,
     required this.derSha256,
     required this.fingerprint,
     required this.pemPath,
@@ -9138,26 +9669,33 @@ final class ManualCaptureRoot {
     requireFields(
       value,
       path,
-      required: const {'kind', 'derSha256', 'fingerprint', 'pemPath'},
+      required: const {'kind', 'derSha256', 'fingerprint'},
+      optional: const {'pemPath'},
     );
+    final kind = requireString(value, 'kind', path);
     final digest = requireString(value, 'derSha256', path);
-    final pemPath = requireString(value, 'pemPath', path);
-    if (requireString(value, 'kind', path) != 'local_path' ||
+    final pemPath = optionalString(value, 'pemPath', path);
+    if (!const {'local_path', 'server_download'}.contains(kind) ||
         !RegExp(r'^[0-9a-f]{64}$').hasMatch(digest) ||
-        !pemPath.startsWith('/') ||
-        pemPath.contains('\u0000')) {
+        (kind == 'local_path'
+            ? pemPath == null ||
+                  !pemPath.startsWith('/') ||
+                  pemPath.contains('\u0000')
+            : pemPath != null)) {
       throw ControlContractException('$path Root evidence is invalid');
     }
     return ManualCaptureRoot(
+      kind: kind,
       derSha256: digest,
       fingerprint: requireString(value, 'fingerprint', path),
       pemPath: pemPath,
     );
   }
 
+  final String kind;
   final String derSha256;
   final String fingerprint;
-  final String pemPath;
+  final String? pemPath;
 }
 
 final class ManualCaptureContext {
@@ -9455,13 +9993,17 @@ final class ManualCaptureGrantStateTag {
 bool _validManualProxyAddress(String value) {
   final parsed = Uri.tryParse(value);
   return parsed != null &&
-      parsed.scheme == 'http' &&
-      parsed.host == '127.0.0.1' &&
+      const {'http', 'https'}.contains(parsed.scheme) &&
+      parsed.host.isNotEmpty &&
+      parsed.host != '0.0.0.0' &&
+      parsed.host != '::' &&
       parsed.hasPort &&
+      parsed.port > 0 &&
       parsed.userInfo.isEmpty &&
-      (parsed.path.isEmpty || parsed.path == '/') &&
+      parsed.path.isEmpty &&
       !parsed.hasQuery &&
-      !parsed.hasFragment;
+      !parsed.hasFragment &&
+      value == '${parsed.scheme}://${parsed.authority}';
 }
 
 final class DashboardData {

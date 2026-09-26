@@ -1200,6 +1200,60 @@ final class _UserLedger extends StatelessWidget {
   }
 }
 
+final class _UsageWarningNotice extends StatelessWidget {
+  const _UsageWarningNotice({required this.user, required this.copy});
+
+  final RuntimeUserUsage user;
+  final AppCopy copy;
+
+  static bool exceeded(RuntimeUserUsage user) => user.days.any(
+    (day) =>
+        user.dailyAgentApiCallWarning > 0 &&
+            day.agentApiCalls >= user.dailyAgentApiCallWarning ||
+        user.dailyTokenWarning > 0 &&
+            _dayValue(day, _ActivityMetric.tokens) >= user.dailyTokenWarning,
+  );
+
+  @override
+  Widget build(BuildContext context) {
+    final days = user.days.where(
+      (day) =>
+          user.dailyAgentApiCallWarning > 0 &&
+              day.agentApiCalls >= user.dailyAgentApiCallWarning ||
+          user.dailyTokenWarning > 0 &&
+              _dayValue(day, _ActivityMetric.tokens) >= user.dailyTokenWarning,
+    );
+    final day = days.last;
+    final facts = <String>[];
+    if (user.dailyAgentApiCallWarning > 0 &&
+        day.agentApiCalls >= user.dailyAgentApiCallWarning) {
+      facts.add(
+        copy.format('usage.warning.calls', {
+          'value': _integer(day.agentApiCalls),
+          'threshold': _integer(user.dailyAgentApiCallWarning),
+        }),
+      );
+    }
+    final tokens = _dayValue(day, _ActivityMetric.tokens);
+    if (user.dailyTokenWarning > 0 && tokens >= user.dailyTokenWarning) {
+      facts.add(
+        copy.format('usage.warning.tokens', {
+          'value':
+              '${_dayMetricComplete(day, _ActivityMetric.tokens) ? '' : '≥'}${_integer(tokens)}',
+          'threshold': _integer(user.dailyTokenWarning),
+        }),
+      );
+    }
+    return InlineNotice(
+      key: Key('usage-warning-${user.userId}'),
+      message: copy.format('usage.warning', {
+        'date': day.date,
+        'facts': facts.join(' · '),
+      }),
+    );
+  }
+}
+
 final class _RankingRows extends StatefulWidget {
   const _RankingRows({
     required this.entries,
@@ -1652,6 +1706,11 @@ final class _UserEvidenceState extends State<_UserEvidence> {
             ),
           ),
           Divider(height: 1, color: context.viberColors.dividerSoft),
+          if (_UsageWarningNotice.exceeded(user))
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 9, 12, 0),
+              child: _UsageWarningNotice(user: user, copy: copy),
+            ),
           Padding(
             key: Key('usage-user-heatmap-${user.userId}'),
             padding: const EdgeInsets.fromLTRB(12, 10, 12, 9),

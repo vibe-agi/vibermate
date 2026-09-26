@@ -13,10 +13,10 @@ var (
 
 // SchemaState is an immutable view of the durable schema authority.
 type SchemaState struct {
-	Revision      int64
-	Identity      string
-	SourceSHA256  string
-	InitializedAt string
+	Revision      int64  `json:"revision"`
+	Identity      string `json:"identity"`
+	SourceSHA256  string `json:"sourceSha256"`
+	InitializedAt string `json:"initializedAt"`
 }
 
 const (
@@ -87,31 +87,26 @@ func (r *Repository) ReadSchemaState(ctx context.Context) (SchemaState, error) {
 	); err != nil {
 		return SchemaState{}, fmt.Errorf("%w: read runtime metadata: %v", ErrSchemaBaselineMismatch, err)
 	}
-	if state.Identity != currentSchemaIdentity {
-		return SchemaState{}, fmt.Errorf(
-			"%w: identity %q",
-			ErrSchemaBaselineMismatch,
-			state.Identity,
-		)
-	}
-	if state.Revision != currentSchemaRevision {
-		return SchemaState{}, fmt.Errorf(
-			"%w: revision %d",
-			ErrSchemaBaselineMismatch,
-			state.Revision,
-		)
-	}
-	if state.SourceSHA256 != r.expectedSchemaSourceSHA256 {
-		return SchemaState{}, fmt.Errorf(
-			"%w: source digest %q",
-			ErrSchemaBaselineMismatch,
-			state.SourceSHA256,
-		)
+	if err := validateSchemaState(state, r.expectedSchemaSourceSHA256); err != nil {
+		return SchemaState{}, err
 	}
 	if err := transaction.Commit(); err != nil {
 		return SchemaState{}, fmt.Errorf("commit schema state transaction: %w", err)
 	}
 	return state, nil
+}
+
+func validateSchemaState(state SchemaState, expectedSourceSHA256 string) error {
+	if state.Identity != currentSchemaIdentity {
+		return fmt.Errorf("%w: identity %q", ErrSchemaBaselineMismatch, state.Identity)
+	}
+	if state.Revision != currentSchemaRevision {
+		return fmt.Errorf("%w: revision %d", ErrSchemaBaselineMismatch, state.Revision)
+	}
+	if state.SourceSHA256 != expectedSourceSHA256 {
+		return fmt.Errorf("%w: source digest %q", ErrSchemaBaselineMismatch, state.SourceSHA256)
+	}
+	return nil
 }
 
 func (r *Repository) Settings(ctx context.Context) (DatabaseSettings, error) {

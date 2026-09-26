@@ -18,6 +18,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/capturecontrol"
 	"github.com/vibe-agi/vibermate/internal/capturegrant"
 	"github.com/vibe-agi/vibermate/internal/clientadapter"
+	"github.com/vibe-agi/vibermate/internal/controlprincipal"
 	"github.com/vibe-agi/vibermate/internal/instanceguard"
 	"github.com/vibe-agi/vibermate/internal/productruntime"
 	"github.com/vibe-agi/vibermate/internal/runtimecontrol"
@@ -192,6 +193,16 @@ func startAttached(
 		return nil, err
 	}
 	runtime := options.Runtime
+	connectTargets, err := runtimeAccessTargets(
+		listener.Addr().String(), options.AccessAddress,
+	)
+	if err != nil {
+		return nil, err
+	}
+	manualScheme := "https"
+	if options.Transport.Mode == TransportHTTP {
+		manualScheme = "http"
+	}
 	application, err := runtimecontrol.New(runtimecontrol.Options{
 		Runtime: runtime, Readiness: runtimeReadiness{runtime: runtime},
 		Clock: options.Clock, ResolveLocalIdentities: options.ResolveLocalIdentities,
@@ -212,9 +223,10 @@ func startAttached(
 	issuer, err := capturegrant.New(capturegrant.Options{
 		Runs: runtime.CaptureRuns(), ManualCaptures: runtime.ManualCaptures(),
 		Verifier: verifier, Authorities: authorities,
-		ProxyDelivery: capturegrant.ProxyDeliveryClientRelay,
-		Generation:    runtime.Status().InstanceID,
-		RootIdentity:  runtime.LocalRootIdentity(), Root: runtime.LocalRootCertificate(),
+		ProxyDelivery:     capturegrant.ProxyDeliveryClientRelay,
+		ManualProxyOrigin: manualScheme + "://" + connectTargets[0],
+		Generation:        runtime.Status().InstanceID,
+		RootIdentity:      runtime.LocalRootIdentity(), Root: runtime.LocalRootCertificate(),
 		RunLifetime:      options.CaptureRunLifetime,
 		Workspaces:       capturegrant.NewCompanionWorkspaceResolver(),
 		CompanionCatalog: options.ClientCatalog,
@@ -226,8 +238,18 @@ func startAttached(
 	if err != nil {
 		return nil, err
 	}
+	manualOwner, err := controlprincipal.New(controlprincipal.Attributes{
+		ID:                 "server-owner:" + runtime.Status().InstanceID,
+		Kind:               controlprincipal.KindServerOwner,
+		CredentialRevision: 1,
+		AllowedGrantKinds:  []controlprincipal.GrantKind{controlprincipal.GrantManualCapture},
+	})
+	if err != nil {
+		return nil, err
+	}
 	capture, err := capturecontrol.New(capturecontrol.Options{
 		LaunchSnapshots: runtime.LaunchSnapshots(),
+		ACP:             runtime.ACPObservations(),
 		Runs:            runtime.CaptureRuns(),
 		Principals:      runtimeUserAuthenticator{users: runtime.RuntimeUsers()}, Issuer: issuer,
 		Manual: manual, RunLifetime: options.CaptureRunLifetime,
@@ -303,13 +325,6 @@ func startAttached(
 			transport.close()
 		}
 	}()
-	connectTargets, err := runtimeAccessTargets(
-		listener.Addr().String(),
-		options.AccessAddress,
-	)
-	if err != nil {
-		return nil, err
-	}
 	serverAccess, err := servercontrol.NewServerAccess(
 		servercontrol.ServerAccessOptions{
 			Transport: transport.scheme, Targets: connectTargets,
@@ -352,7 +367,8 @@ func startAttached(
 			scheme:       transport.scheme,
 			userSessions: userSessions, runtimeUsers: runtimeUsers, access: serverAccess,
 			rootCA:  rootCA,
-			capture: capture, proxy: runtime.ProxyHandler(),
+			capture: capture, manual: manual, manualOwner: manualOwner,
+			proxy:         runtime.ProxyHandler(),
 			adminSessions: adminSessions, admin: admin,
 			webSessions: webSessions, webSelf: webSelf,
 			application: application, managementUI: managementUI,

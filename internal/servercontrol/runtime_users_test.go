@@ -119,6 +119,37 @@ func TestRuntimeUserHTTPEnablesTheSameDisabledAccount(t *testing.T) {
 	}
 }
 
+func TestRuntimeUserPolicyHTTPStoresEnvironmentAccessAndSoftWarnings(t *testing.T) {
+	handler := newRuntimeUsersHandler(t, &recordingRuntimeUsage{})
+	created := webRequest(t, handler, http.MethodPost, servercontrol.RuntimeUsersPath, map[string]any{
+		"schema": servercontrol.RuntimeUserCreateSchema, "username": "member", "password": "test-member-password",
+	}, "")
+	var user servercontrol.RuntimeUserAdminView
+	if created.Code != http.StatusCreated || json.Unmarshal(created.Body.Bytes(), &user) != nil {
+		t.Fatalf("create = %d %s", created.Code, created.Body.String())
+	}
+	updated := webRequest(t, handler, http.MethodPatch, servercontrol.RuntimeUsersPath+"/"+user.ID+"/policy", map[string]any{
+		"schema":                   servercontrol.RuntimeUserPolicySchema,
+		"allowedEnvironmentIds":    []string{"system_transparent", "team"},
+		"dailyAgentApiCallWarning": 100,
+		"dailyTokenWarning":        1_000_000,
+	}, "")
+	if updated.Code != http.StatusOK || json.Unmarshal(updated.Body.Bytes(), &user) != nil ||
+		len(user.AllowedEnvironmentIDs) != 2 || user.AllowedEnvironmentIDs[0] != "system_transparent" ||
+		user.DailyAgentAPICallWarning != 100 || user.DailyTokenWarning != 1_000_000 {
+		t.Fatalf("policy update = %d %+v body=%s", updated.Code, user, updated.Body.String())
+	}
+	invalid := webRequest(t, handler, http.MethodPatch, servercontrol.RuntimeUsersPath+"/"+user.ID+"/policy", map[string]any{
+		"schema":                   servercontrol.RuntimeUserPolicySchema,
+		"allowedEnvironmentIds":    []string{"team", "team"},
+		"dailyAgentApiCallWarning": 0,
+		"dailyTokenWarning":        0,
+	}, "")
+	if invalid.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("duplicate Environment policy admitted: %d", invalid.Code)
+	}
+}
+
 type recordingRuntimeUsage struct {
 	calls  int
 	period runtimeusage.Period

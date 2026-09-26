@@ -2,6 +2,9 @@
 
 日期：2026-09-22。状态：**第一阶段已实施；见 [ADR 0013](../adr/0013-scope-account-reads-through-service-adapters.md)**。
 
+后续的托管 Codex 账号重置券消费是独立的 Owner 操作，见
+[ADR 0014](../adr/0014-owner-only-banked-codex-reset.md)；本文下方“写操作不开放”记录的是当时的首期只读边界。
+
 按上下文将“xcode”理解为 Codex，先核对官方源码快照，再在现有 OAuth 工作树中实现。未更改用户认证文件、运行中的 CLI、ACP 分支或发布状态。
 
 ## 当前交付边界

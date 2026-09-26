@@ -3,8 +3,10 @@ import 'dart:collection';
 import 'dart:math';
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/widgets.dart';
 
 import '../../core/api/control_api.dart';
+import '../../core/api/acp_models.dart';
 import '../../core/api/launch_environment_snapshot.dart';
 import '../../core/api/control_failure.dart';
 import '../../core/api/account_facts_models.dart';
@@ -15,6 +17,8 @@ import '../../core/bootstrap/public_certificate_exporter.dart';
 import '../../core/bootstrap/runtime_connection.dart';
 import '../../core/bootstrap/terminal_command.dart';
 import '../../core/preferences/workbench_preferences.dart';
+import '../../core/api/product_update_api.dart';
+import '../../core/update/product_version.dart';
 import 'runtime_connection_guide.dart';
 import 'environment_editing.dart';
 
@@ -23,7 +27,18 @@ export '../../core/preferences/workbench_preferences.dart'
 
 enum RootCAGuideIntent { remove, replace }
 
-final class WorkbenchController extends ChangeNotifier {
+final class WorkbenchController extends ChangeNotifier
+    with WidgetsBindingObserver {
+  Future<AccountResetRedemption> redeemAccountResetCredit(
+    ProviderAccount account,
+    AccountResetCredit credit,
+  ) async {
+    if (account.kind != 'codex_oauth' || !account.usable || !credit.available) {
+      throw const ControlContractException('reset credit is unavailable');
+    }
+    return _api.redeemAccountResetCredit(account, credit.id);
+  }
+
   Future<AccountFacts> accountFacts(
     ProviderAccount account, {
     bool history = false,
@@ -41,6 +56,7 @@ final class WorkbenchController extends ChangeNotifier {
 
   static const _exchangeDetailCacheLimit = 64;
   static const _fullExchangeDetailCacheLimit = 2;
+  static const _exchangeDetailCacheByteLimit = 8 * 1024 * 1024;
   static const _captureConversationPageCacheLimit = 24;
 
   WorkbenchController({
@@ -58,6 +74,10 @@ final class WorkbenchController extends ChangeNotifier {
     Future<void> Function()? restartRuntime,
     this.chooseStorageDirectory,
     this.moveStorage,
+    this.chooseStorageBackupDirectory,
+    this.backupStorage,
+    this.chooseStorageRestore,
+    this.restoreStorage,
     this.storageMoveNotice,
     WorkbenchPreferences initialPreferences = const WorkbenchPreferences(),
     WorkbenchPreferencesStore preferencesStore =
@@ -66,6 +86,7 @@ final class WorkbenchController extends ChangeNotifier {
     WorkbenchPreferencesIssue? initialPreferencesIssue,
     ValueChanged<WorkbenchTheme>? onThemeChanged,
     DateTime Function()? clock,
+    ProductUpdateService? productUpdateService,
     this.webPrincipal,
     this.onSignOut,
     this.changeWebPassword,
@@ -76,6 +97,8 @@ final class WorkbenchController extends ChangeNotifier {
        _closeRuntime = closeRuntime,
        _restartRuntime = restartRuntime,
        _clock = clock ?? DateTime.now,
+       _productUpdateService =
+           productUpdateService ?? GitHubProductUpdateService(clock: clock),
        _preferencesStore = preferencesStore,
        _preferencesWritable = preferencesWritable,
        _onThemeChanged = onThemeChanged,
@@ -105,10 +128,16 @@ final class WorkbenchController extends ChangeNotifier {
   final Future<void> Function()? _restartRuntime;
   final Future<String?> Function()? chooseStorageDirectory;
   final Future<void> Function(String target)? moveStorage;
+  final Future<String?> Function()? chooseStorageBackupDirectory;
+  final Future<void> Function(String target)? backupStorage;
+  final Future<StorageRestoreSelection?> Function()? chooseStorageRestore;
+  final Future<void> Function(StorageRestoreSelection selection)?
+  restoreStorage;
   String? storageMoveNotice;
   String? storageMoveFailure;
   bool storageMoving = false;
   final DateTime Function() _clock;
+  final ProductUpdateService _productUpdateService;
   final WorkbenchPreferencesStore _preferencesStore;
   final bool _preferencesWritable;
   final ValueChanged<WorkbenchTheme>? _onThemeChanged;
@@ -160,14 +189,23 @@ final class WorkbenchController extends ChangeNotifier {
   EnvironmentRecord? historicalEnvironment;
   CaptureAssignment? selectedAssignment;
   bool selectedCaptureLaunchIncomplete = false;
+  ACPRecord? selectedACP;
   TerminalCommandStatus? terminalCommand;
   RuntimeServerAccess? serverAccess;
   List<RuntimeUser>? runtimeUsers;
   RuntimeUsageReport? runtimeUsage;
   RootCAStatus? rootCAStatus;
+  ProductUpdateResult? productUpdate;
+  bool productUpdateLoading = false;
   RuntimeStorageLocation? storageLocation;
+  RuntimeStorageLocation? previousStorageLocation;
   bool storageLocationLoading = false;
   bool storageLocationFailed = false;
+  bool storageCleanupRunning = false;
+  bool storageArchivePreviewLoading = false;
+  String? storageCleanupNotice;
+  String? storageCleanupError;
+  String? storageArchivePreviewError;
   RootCAGuideIntent? rootCAGuideIntent;
   CapturedMessageTransformSample? capturedMessageTransformSample;
   final int usageRangeDays = 365;
@@ -183,6 +221,7 @@ final class WorkbenchController extends ChangeNotifier {
   String? errorMessage;
   String? operationNotice;
   String? networkError;
+  String? networkErrorDiagnostic;
   String? captureDirectoryError;
   String? networkNotice;
   String? inventoryError;
@@ -191,8 +230,6 @@ final class WorkbenchController extends ChangeNotifier {
   String? environmentError;
   String? environmentErrorDiagnostic;
   String? environmentNotice;
-  String? offlineError;
-  String? offlineNotice;
   String? terminalCommandError;
   String? terminalCommandNotice;
   String? serverManagementError;
@@ -208,7 +245,6 @@ final class WorkbenchController extends ChangeNotifier {
   bool inventoryMutating = false;
   bool environmentMutating = false;
   bool environmentRevisionLoading = false;
-  bool offlineMutating = false;
   bool terminalCommandLoading = false;
   bool terminalCommandMutating = false;
   bool serverManagementLoading = false;
@@ -242,6 +278,8 @@ final class WorkbenchController extends ChangeNotifier {
   Timer? _evidencePoller;
   bool _pollInFlight = false;
   bool _evidencePollInFlight = false;
+  bool _pollingVisible = true;
+  bool _observingLifecycle = false;
   int _captureDetailLoads = 0;
   bool _disposed = false;
   WorkbenchPreferences? _desiredPreferences;
@@ -351,6 +389,15 @@ final class WorkbenchController extends ChangeNotifier {
     required AccountSelectorPolicy policy,
     required AccountSelectorTestSample sample,
   }) => _api.testAccountSelector(policy: policy, sample: sample);
+
+  Future<EnvironmentDryRun> dryRunEnvironment(EnvironmentDryRunInput input) =>
+      _api.dryRunEnvironment(input);
+
+  Future<EvidenceSearchPage> searchEvidence(EvidenceSearchRequest request) =>
+      _api.searchEvidence(request);
+
+  Future<EnvironmentDraft> environmentDraft(String environmentId) =>
+      _api.environmentDraft(environmentId);
 
   Future<CodeLibraryCatalog> codeLibrary({bool refresh = false}) {
     if (refresh) _codeLibraryCatalog = null;
@@ -465,8 +512,6 @@ final class WorkbenchController extends ChangeNotifier {
     policy: policy,
   );
 
-  OfflineHoldSnapshot? get offlineHold => data?.status.offlineHold;
-
   int? get pendingApprovalCount => pendingApprovals?.length;
 
   List<ActivityRecord> get selectedActivities =>
@@ -539,6 +584,10 @@ final class WorkbenchController extends ChangeNotifier {
   }
 
   Future<void> initialize() async {
+    if (!_observingLifecycle) {
+      WidgetsFlutterBinding.ensureInitialized().addObserver(this);
+      _observingLifecycle = true;
+    }
     await refresh();
     if (_disposed) return;
     if (terminalManagement) await _maintainTerminalCommand();
@@ -766,6 +815,7 @@ final class WorkbenchController extends ChangeNotifier {
 
   Future<void> _poll() async {
     if (_disposed ||
+        !_pollingVisible ||
         _pollInFlight ||
         loading ||
         captureDirectoryLoading ||
@@ -784,16 +834,19 @@ final class WorkbenchController extends ChangeNotifier {
           inventoryMutating) {
         return;
       }
-      data = _mergePolledDashboard(data, updated);
+      final previous = data;
+      data = _mergePolledDashboard(previous, updated);
       _repairDashboardSelections(data!);
-      notifyListeners();
+      if (!_sameDashboard(previous, data!)) notifyListeners();
       if (section != WorkbenchSection.network) {
         await refreshPendingApprovals(quiet: true);
       }
       final capture = selectedCapture;
       if (section == WorkbenchSection.captures &&
           capture != null &&
-          !_evidencePollInFlight) {
+          !_evidencePollInFlight &&
+          !capture.running &&
+          !selectedActivities.any((item) => item.status == 'pending')) {
         await _loadCaptureDetail(capture, quiet: true);
       }
       if (section == WorkbenchSection.network) {
@@ -817,6 +870,7 @@ final class WorkbenchController extends ChangeNotifier {
   Future<void> _pollSelectedEvidence() async {
     final capture = selectedCapture;
     if (_disposed ||
+        !_pollingVisible ||
         section != WorkbenchSection.captures ||
         capture == null ||
         _evidencePollInFlight ||
@@ -834,9 +888,35 @@ final class WorkbenchController extends ChangeNotifier {
     final generation = _selectionGeneration;
     final conversationKey = selectedCaptureConversationKey;
     try {
-      if (conversationKey == null) {
-        await _loadCaptureDetail(capture, quiet: true);
-        return;
+      if (conversationKey == null || capture.isManual) {
+        // A manual Capture can receive independent Exchanges after its first.
+        // Probe the newest Activity without reloading its directory each tick.
+        final latest = await _captureActivityPage(capture, limit: 1);
+        if (_disposed ||
+            generation != _selectionGeneration ||
+            capture.key != selectedCaptureKey ||
+            conversationKey != selectedCaptureConversationKey) {
+          return;
+        }
+        final newest = captureConversations.firstOrNull;
+        final observed = latest.items.firstOrNull;
+        if (observed != null &&
+            (newest == null ||
+                observed.id != newest.latest.id ||
+                observed.occurredAt != newest.latest.occurredAt ||
+                observed.reasonCode != newest.latest.reasonCode ||
+                observed.status != newest.latest.status)) {
+          await _loadCaptureDetail(
+            capture,
+            quiet: true,
+            followLatest: capture.isManual && conversationKey == newest?.key,
+          );
+          return;
+        }
+        if (conversationKey == null ||
+            !selectedActivities.any((item) => item.status == 'pending')) {
+          return;
+        }
       }
       final latest = await _captureActivityPage(
         capture,
@@ -979,6 +1059,7 @@ final class WorkbenchController extends ChangeNotifier {
     try {
       final location = await _api.storageLocation();
       if (_disposed) return;
+      previousStorageLocation = storageLocation;
       storageLocation = location;
     } catch (_) {
       if (_disposed) return;
@@ -991,14 +1072,79 @@ final class WorkbenchController extends ChangeNotifier {
     }
   }
 
+  Future<DeletionOutcome> cleanupExpiredEvidence() async {
+    if (_disposed || storageCleanupRunning) {
+      throw const ControlContractException('storage cleanup is unavailable');
+    }
+    storageCleanupRunning = true;
+    storageCleanupNotice = null;
+    storageCleanupError = null;
+    notifyListeners();
+    try {
+      final outcome = await _api.cleanupExpiredEvidence();
+      if (_disposed) {
+        throw const ControlContractException('storage cleanup is unavailable');
+      }
+      storageCleanupNotice = 'settings.storage.cleanup_complete';
+      await refreshStorageLocation();
+      return outcome;
+    } catch (error) {
+      if (!_disposed) storageCleanupError = _describeError(error);
+      rethrow;
+    } finally {
+      if (!_disposed) {
+        storageCleanupRunning = false;
+        notifyListeners();
+      }
+    }
+  }
+
+  Future<DeletionReleased?> loadEvidenceClearPreview() async {
+    if (_disposed || storageArchivePreviewLoading) return null;
+    storageArchivePreviewLoading = true;
+    storageArchivePreviewError = null;
+    notifyListeners();
+    try {
+      final preview = await _api.evidenceClearPreview();
+      if (_disposed) return null;
+      return preview;
+    } catch (error) {
+      if (!_disposed) storageArchivePreviewError = _describeError(error);
+      return null;
+    } finally {
+      if (!_disposed) {
+        storageArchivePreviewLoading = false;
+        notifyListeners();
+      }
+    }
+  }
+
   Future<void> relocateStorage(String target) async {
-    if (_disposed || storageMoving || moveStorage == null) return;
+    final action = moveStorage;
+    if (action == null) return;
+    await _runStorageAction(() => action(target));
+  }
+
+  Future<void> createStorageBackup(String target) async {
+    final action = backupStorage;
+    if (action == null) return;
+    await _runStorageAction(() => action(target));
+  }
+
+  Future<void> restoreStorageBackup(StorageRestoreSelection selection) async {
+    final action = restoreStorage;
+    if (action == null) return;
+    await _runStorageAction(() => action(selection));
+  }
+
+  Future<void> _runStorageAction(Future<void> Function() action) async {
+    if (_disposed || storageMoving) return;
     storageMoving = true;
     storageMoveFailure = null;
     storageMoveNotice = null;
     notifyListeners();
     try {
-      await moveStorage!(target);
+      await action();
     } catch (error) {
       if (_disposed) return;
       storageMoveFailure = storageMoveErrorKey(error);
@@ -1011,11 +1157,30 @@ final class WorkbenchController extends ChangeNotifier {
   }
 
   Future<String?> pickStorageDirectory() async {
-    if (_disposed || storageMoving || chooseStorageDirectory == null) {
+    return _pickStoragePath(chooseStorageDirectory);
+  }
+
+  Future<String?> pickStorageBackupDirectory() async {
+    return _pickStoragePath(chooseStorageBackupDirectory);
+  }
+
+  Future<StorageRestoreSelection?> pickStorageRestore() async {
+    if (_disposed || storageMoving || chooseStorageRestore == null) return null;
+    try {
+      return await chooseStorageRestore!();
+    } catch (_) {
+      if (!_disposed) {
+        storageMoveFailure = 'settings.storage.picker_failed';
+        notifyListeners();
+      }
       return null;
     }
+  }
+
+  Future<String?> _pickStoragePath(Future<String?> Function()? picker) async {
+    if (_disposed || storageMoving || picker == null) return null;
     try {
-      return await chooseStorageDirectory!();
+      return await picker();
     } catch (_) {
       if (!_disposed) {
         storageMoveFailure = 'settings.storage.picker_failed';
@@ -1027,7 +1192,7 @@ final class WorkbenchController extends ChangeNotifier {
 
   static String storageMoveErrorKey(Object error) {
     final code = error.toString();
-    return 'settings.storage.${const {'storage_target_invalid', 'storage_in_use', 'storage_copy_failed', 'storage_validation_failed', 'storage_settings_invalid'}.contains(code) ? code : 'storage_copy_failed'}';
+    return 'settings.storage.${const {'storage_target_invalid', 'storage_in_use', 'storage_copy_failed', 'storage_validation_failed', 'storage_settings_invalid', 'backup_validation_failed', 'backup_incompatible'}.contains(code) ? code : 'storage_copy_failed'}';
   }
 
   void openRuntimeUsersSettings() {
@@ -1054,6 +1219,60 @@ final class WorkbenchController extends ChangeNotifier {
     if (serverManagement && (runtimeUsers == null || serverAccess == null)) {
       unawaited(refreshServerManagement());
     }
+  }
+
+  void openUpdateSettings() {
+    settingsTab = settingsDestinations.indexOf(SettingsDestination.preferences);
+    section = WorkbenchSection.settings;
+    operationNotice = null;
+    notifyListeners();
+  }
+
+  String get appProductBuild => productVersionLabel;
+
+  String? get runtimeReleaseBuild {
+    final build = data?.status.productBuild;
+    return build != null && parseProductVersion(build) != null ? build : null;
+  }
+
+  bool get runtimeBuildMismatch {
+    final runtime = runtimeReleaseBuild;
+    return runtime != null &&
+        compareProductVersions(
+              parseProductVersion(runtime)!,
+              parseProductVersion(productVersionLabel)!,
+            ) !=
+            0;
+  }
+
+  bool get terminalBuildMismatch {
+    final status = terminalCommand;
+    if (status == null || status.installedBuild == null) return false;
+    final source = parseProductVersion(status.sourceBuild);
+    final installed = parseProductVersion(status.installedBuild!);
+    return source != null &&
+        installed != null &&
+        compareProductVersions(source, installed) != 0;
+  }
+
+  Future<void> checkProductUpdate() async {
+    if (_disposed || productUpdateLoading) return;
+    productUpdateLoading = true;
+    notifyListeners();
+    ProductUpdateResult result;
+    try {
+      result = await _productUpdateService.check();
+    } on Object {
+      result = ProductUpdateResult(
+        state: ProductUpdateState.unavailable,
+        channel: ProductInstallChannel.manual,
+        checkedAt: _clock().toUtc(),
+      );
+    }
+    if (_disposed) return;
+    productUpdate = result;
+    productUpdateLoading = false;
+    notifyListeners();
   }
 
   Future<void> refreshServerManagement({bool quiet = false}) async {
@@ -1207,6 +1426,41 @@ final class WorkbenchController extends ChangeNotifier {
     }
   }
 
+  Future<bool> setRuntimeUserPolicy({
+    required RuntimeUser user,
+    required List<String> allowedEnvironmentIds,
+    required int dailyAgentApiCallWarning,
+    required int dailyTokenWarning,
+  }) async {
+    if (_disposed || !serverManagement || runtimeUserMutating) return false;
+    runtimeUserMutating = true;
+    serverManagementError = null;
+    notifyListeners();
+    try {
+      final updated = await _api.setRuntimeUserPolicy(
+        userId: user.id,
+        allowedEnvironmentIds: allowedEnvironmentIds,
+        dailyAgentApiCallWarning: dailyAgentApiCallWarning,
+        dailyTokenWarning: dailyTokenWarning,
+      );
+      if (_disposed) return false;
+      runtimeUsers = List<RuntimeUser>.unmodifiable([
+        for (final candidate in runtimeUsers ?? const <RuntimeUser>[])
+          if (candidate.id == updated.id) updated else candidate,
+      ]);
+      runtimeUserMutating = false;
+      notifyListeners();
+      unawaited(refreshServerManagement(quiet: true));
+      return true;
+    } catch (error) {
+      if (_disposed) return false;
+      runtimeUserMutating = false;
+      serverManagementError = _describeError(error);
+      notifyListeners();
+      return false;
+    }
+  }
+
   Future<void> refreshTerminalCommand({bool quiet = false}) async {
     if (_disposed || terminalCommandLoading || terminalCommandMutating) return;
     if (!quiet) {
@@ -1266,10 +1520,15 @@ final class WorkbenchController extends ChangeNotifier {
     try {
       final updated = await _api.pendingApprovals();
       if (_disposed) return;
+      final changed = !_sameApprovals(
+        pendingApprovals ?? const <ApprovalRecord>[],
+        updated,
+      );
       pendingApprovals = updated;
+      final clearedError = approvalAttentionError != null;
       approvalAttentionError = null;
       pendingApprovalsLoading = false;
-      notifyListeners();
+      if (!quiet || changed || clearedError) notifyListeners();
     } catch (error) {
       if (_disposed || quiet) return;
       approvalAttentionError = _describeError(error);
@@ -1325,72 +1584,6 @@ final class WorkbenchController extends ChangeNotifier {
   void clearTerminalCommandMessage() {
     terminalCommandError = null;
     terminalCommandNotice = null;
-    notifyListeners();
-  }
-
-  Future<bool> enterOfflineHold() => _changeOfflineHold(resume: false);
-
-  Future<bool> resumeOfflineHold() => _changeOfflineHold(resume: true);
-
-  Future<bool> _changeOfflineHold({required bool resume}) async {
-    final current = offlineHold;
-    if (_disposed ||
-        offlineMutating ||
-        current == null ||
-        (resume ? !current.canResume : !current.canEnter)) {
-      return false;
-    }
-    offlineMutating = true;
-    offlineError = null;
-    offlineNotice = null;
-    notifyListeners();
-    try {
-      final updated = resume
-          ? await _api.resumeOfflineHold(current)
-          : await _api.enterOfflineHold(current);
-      if (_disposed) return false;
-      final dashboard = data;
-      if (dashboard != null) {
-        data = _dashboardWith(
-          dashboard,
-          status: dashboard.status.withOfflineHold(updated),
-        );
-      }
-      if (resume && updated.state == 'held') {
-        offlineError = updated.lastProbeReason ?? 'probe_failed';
-        offlineMutating = false;
-        notifyListeners();
-        return false;
-      }
-      offlineNotice = resume
-          ? updated.state == 'online'
-                ? 'offline.resumed'
-                : 'offline.releasing'
-          : 'offline.held';
-      offlineMutating = false;
-      notifyListeners();
-      return true;
-    } catch (error) {
-      if (_disposed) return false;
-      final message = _describeError(error);
-      try {
-        final refreshed = await _api.loadDashboard();
-        if (!_disposed) data = refreshed;
-      } catch (_) {
-        // The original mutation error is the useful authority. A failed
-        // reconciliation must not replace it with a generic refresh failure.
-      }
-      if (_disposed) return false;
-      offlineError = message;
-      offlineMutating = false;
-      notifyListeners();
-      return false;
-    }
-  }
-
-  void clearOfflineMessage() {
-    offlineError = null;
-    offlineNotice = null;
     notifyListeners();
   }
 
@@ -1463,6 +1656,38 @@ final class WorkbenchController extends ChangeNotifier {
     while (_exchangeDetails.length > _exchangeDetailCacheLimit) {
       _exchangeDetails.remove(_exchangeDetails.keys.first);
     }
+    var bytes = _exchangeDetails.values.fold<int>(
+      0,
+      (total, detail) => total + _exchangeDetailBytes(detail),
+    );
+    // Keep the newly loaded item even when one exchange exceeds the budget.
+    while (bytes > _exchangeDetailCacheByteLimit &&
+        _exchangeDetails.length > 1) {
+      final removed = _exchangeDetails.remove(_exchangeDetails.keys.first)!;
+      bytes -= _exchangeDetailBytes(removed);
+    }
+  }
+
+  // ponytail: content-size estimate, not Dart heap size; profile RSS before
+  // adding per-object accounting.
+  static int _exchangeDetailBytes(ExchangeDetail detail) {
+    final content = detail.content;
+    final request = content.request;
+    Iterable<ExchangeContentBlock> blocks() sync* {
+      if (request != null) {
+        yield* request.system;
+        for (final message in request.messages) {
+          yield* message.blocks;
+        }
+      }
+      if (content.response case final response?) yield* response.blocks;
+    }
+
+    return blocks().fold<int>(
+      1024,
+      (total, block) =>
+          total + 256 + max(block.originalSize, block.text?.length ?? 0),
+    );
   }
 
   Future<RawEvidencePage?> loadRawEvidence(
@@ -1629,7 +1854,7 @@ final class WorkbenchController extends ChangeNotifier {
     if (_disposed || networkLoading || networkMutating) return;
     if (!quiet) {
       networkLoading = true;
-      networkError = null;
+      _clearNetworkError();
       notifyListeners();
     }
     try {
@@ -1643,7 +1868,7 @@ final class WorkbenchController extends ChangeNotifier {
     } catch (error) {
       if (_disposed || quiet) return;
       networkLoading = false;
-      networkError = _describeError(error);
+      _setNetworkError(error);
       notifyListeners();
     }
   }
@@ -1653,7 +1878,7 @@ final class WorkbenchController extends ChangeNotifier {
     final cursor = current?.connections.nextCursor;
     if (current == null || cursor == null || networkLoading) return;
     networkLoading = true;
-    networkError = null;
+    _clearNetworkError();
     notifyListeners();
     try {
       final page = await _api.connections(cursor: cursor);
@@ -1672,7 +1897,7 @@ final class WorkbenchController extends ChangeNotifier {
     } catch (error) {
       if (_disposed) return;
       networkLoading = false;
-      networkError = _describeError(error);
+      _setNetworkError(error);
       notifyListeners();
     }
   }
@@ -1682,7 +1907,7 @@ final class WorkbenchController extends ChangeNotifier {
     final cursor = current?.egressAttempts.nextCursor;
     if (current == null || cursor == null || networkLoading) return;
     networkLoading = true;
-    networkError = null;
+    _clearNetworkError();
     notifyListeners();
     try {
       final page = await _api.egressAttempts(cursor: cursor);
@@ -1701,7 +1926,7 @@ final class WorkbenchController extends ChangeNotifier {
     } catch (error) {
       if (_disposed) return;
       networkLoading = false;
-      networkError = _describeError(error);
+      _setNetworkError(error);
       notifyListeners();
     }
   }
@@ -1713,7 +1938,7 @@ final class WorkbenchController extends ChangeNotifier {
     final current = networkData;
     if (current == null || networkMutating) return false;
     networkMutating = true;
-    networkError = null;
+    _clearNetworkError();
     networkNotice = null;
     notifyListeners();
     try {
@@ -1742,7 +1967,7 @@ final class WorkbenchController extends ChangeNotifier {
     } catch (error) {
       if (_disposed) return false;
       networkMutating = false;
-      networkError = _describeError(error);
+      _setNetworkError(error);
       notifyListeners();
       return false;
     }
@@ -1756,7 +1981,7 @@ final class WorkbenchController extends ChangeNotifier {
     final current = networkData;
     if (current == null || networkMutating) return false;
     networkMutating = true;
-    networkError = null;
+    _clearNetworkError();
     networkNotice = null;
     notifyListeners();
     try {
@@ -1782,7 +2007,7 @@ final class WorkbenchController extends ChangeNotifier {
     } catch (error) {
       if (_disposed) return false;
       networkMutating = false;
-      networkError = _describeError(error);
+      _setNetworkError(error);
       notifyListeners();
       return false;
     }
@@ -2175,6 +2400,7 @@ final class WorkbenchController extends ChangeNotifier {
       selectedCaptureKey = null;
       _resetCaptureDetail();
       _invalidateEvidenceCaches();
+      unawaited(refreshStorageLocation());
     },
   );
 
@@ -2284,6 +2510,7 @@ final class WorkbenchController extends ChangeNotifier {
     _selectionGeneration += 1;
     selectedAssignment = null;
     selectedCaptureLaunchIncomplete = false;
+    selectedACP = null;
     selectedCaptureConversations = null;
     selectedCaptureConversationKey = null;
     selectedCapturePage = null;
@@ -2709,6 +2936,7 @@ final class WorkbenchController extends ChangeNotifier {
   Future<void> _loadCaptureDetail(
     CaptureRecord capture, {
     bool quiet = false,
+    bool followLatest = false,
   }) async {
     if (quiet && (captureActivitiesLoading || _captureDetailLoads != 0)) return;
     _captureDetailLoads += 1;
@@ -2725,6 +2953,10 @@ final class WorkbenchController extends ChangeNotifier {
       final values = await Future.wait<Object?>([
         _loadCaptureAssignment(capture),
         _captureConversationPage(capture, limit: 200),
+        if (capture.isACP && _api is ACPObservationApi)
+          (_api as ACPObservationApi).acpObservation(capture.key)
+        else
+          Future<ACPRecord?>.value(),
       ]);
       if (_disposed ||
           generation != _selectionGeneration ||
@@ -2732,11 +2964,14 @@ final class WorkbenchController extends ChangeNotifier {
         return;
       }
       selectedAssignment = values[0] as CaptureAssignment?;
+      selectedACP = values[2] as ACPRecord?;
       selectedCaptureLaunchIncomplete = selectedAssignment == null;
       final conversationPage = values[1]! as ConversationPage;
       selectedCaptureConversations = conversationPage;
       final available = captureConversations;
-      if (!available.any(
+      if (followLatest && available.isNotEmpty) {
+        selectedCaptureConversationKey = available.first.key;
+      } else if (!available.any(
         (value) => value.key == selectedCaptureConversationKey,
       )) {
         final migrated =
@@ -3139,6 +3374,17 @@ final class WorkbenchController extends ChangeNotifier {
     inventoryErrorDiagnostic,
   );
 
+  void _clearNetworkError() {
+    networkError = null;
+    networkErrorDiagnostic = null;
+  }
+
+  void _setNetworkError(Object error) {
+    final failure = ControlFailure.from(error);
+    networkError = failure.messageKey;
+    networkErrorDiagnostic = failure.diagnostic;
+  }
+
   void _setInventoryError(Object error) {
     final failure = ControlFailure.from(error);
     inventoryError = failure.messageKey;
@@ -3226,6 +3472,151 @@ final class WorkbenchController extends ChangeNotifier {
     );
   }
 
+  static bool _sameDashboard(DashboardData? left, DashboardData right) {
+    if (left == null ||
+        left.captureNextCursor != right.captureNextCursor ||
+        !_sameRuntimeStatus(left.status, right.status)) {
+      return false;
+    }
+    return _sameList(left.captures, right.captures, _sameCapture) &&
+        _sameList(left.environments, right.environments, _sameEnvironment) &&
+        _sameList(left.endpoints, right.endpoints, _sameEndpoint) &&
+        _sameList(left.accounts, right.accounts, _sameAccount);
+  }
+
+  static bool _sameRuntimeStatus(RuntimeStatus left, RuntimeStatus right) {
+    final a = left.offlineHold;
+    final b = right.offlineHold;
+    return left.ready == right.ready &&
+        left.productBuild == right.productBuild &&
+        left.state == right.state &&
+        left.host == right.host &&
+        left.schemaRevision == right.schemaRevision &&
+        left.storage == right.storage &&
+        left.environmentProjection == right.environmentProjection &&
+        listEquals(
+          left.unavailableEnvironments,
+          right.unavailableEnvironments,
+        ) &&
+        left.instanceId == right.instanceId &&
+        left.startedAt == right.startedAt &&
+        left.stoppedAt == right.stoppedAt &&
+        left.stopReasonCode == right.stopReasonCode &&
+        a.state == b.state &&
+        a.revision == b.revision &&
+        a.since == b.since &&
+        a.activeActions == b.activeActions &&
+        a.enteringActions == b.enteringActions &&
+        a.activeEgress == b.activeEgress &&
+        a.queuedRequests == b.queuedRequests &&
+        a.heldBytes == b.heldBytes &&
+        a.safeToDisconnect == b.safeToDisconnect &&
+        mapEquals(a.activeByKind, b.activeByKind) &&
+        mapEquals(a.queuedByKind, b.queuedByKind) &&
+        a.lastProbeReason == b.lastProbeReason;
+  }
+
+  static bool _sameCapture(CaptureRecord left, CaptureRecord right) =>
+      left.key == right.key &&
+      left.displayName == right.displayName &&
+      left.state == right.state &&
+      left.observation == right.observation &&
+      left.createdAt == right.createdAt &&
+      left.updatedAt == right.updatedAt;
+
+  static bool _sameEnvironment(
+    EnvironmentRecord left,
+    EnvironmentRecord right,
+  ) =>
+      left.id == right.id &&
+      left.name == right.name &&
+      left.state == right.state &&
+      left.revision == right.revision &&
+      left.digest == right.digest;
+
+  static bool _sameEndpoint(UpstreamEndpoint left, UpstreamEndpoint right) =>
+      left.id == right.id &&
+      left.displayName == right.displayName &&
+      left.origin == right.origin &&
+      left.realmId == right.realmId &&
+      left.state == right.state &&
+      left.revision == right.revision &&
+      listEquals(left.backendProtocols, right.backendProtocols) &&
+      listEquals(left.capabilities, right.capabilities) &&
+      listEquals(left.accountKinds, right.accountKinds);
+
+  static bool _sameAccount(ProviderAccount left, ProviderAccount right) {
+    final a = left.codexOAuth;
+    final b = right.codexOAuth;
+    final ta = left.tokenInfo;
+    final tb = right.tokenInfo;
+    return left.id == right.id &&
+        left.displayName == right.displayName &&
+        left.note == right.note &&
+        left.noteRevision == right.noteRevision &&
+        left.credentialOrigin == right.credentialOrigin &&
+        listEquals(left.linkedEndpointIds, right.linkedEndpointIds) &&
+        left.associationRevision == right.associationRevision &&
+        left.kind == right.kind &&
+        left.realmId == right.realmId &&
+        left.state == right.state &&
+        left.revision == right.revision &&
+        left.credentialState == right.credentialState &&
+        left.credentialEpoch == right.credentialEpoch &&
+        listEquals(left.setHeaderNames, right.setHeaderNames) &&
+        listEquals(left.deleteHeaderNames, right.deleteHeaderNames) &&
+        ((a == null && b == null) ||
+            (a != null &&
+                b != null &&
+                a.chatgptAccountId == b.chatgptAccountId &&
+                a.email == b.email &&
+                a.userId == b.userId &&
+                a.planType == b.planType &&
+                a.fedRamp == b.fedRamp &&
+                a.expiresAt == b.expiresAt &&
+                a.lastRefresh == b.lastRefresh &&
+                a.state == b.state)) &&
+        ((ta == null && tb == null) ||
+            (ta != null &&
+                tb != null &&
+                ta.chatgptAccountId == tb.chatgptAccountId &&
+                ta.email == tb.email &&
+                ta.userId == tb.userId &&
+                ta.planType == tb.planType &&
+                ta.issuedAt == tb.issuedAt &&
+                ta.authenticatedAt == tb.authenticatedAt &&
+                ta.expiresAt == tb.expiresAt));
+  }
+
+  static bool _sameApprovals(
+    List<ApprovalRecord> left,
+    List<ApprovalRecord> right,
+  ) => _sameList(
+    left,
+    right,
+    (a, b) =>
+        a.id == b.id &&
+        a.revision == b.revision &&
+        a.state == b.state &&
+        a.requestCount == b.requestCount &&
+        a.waiterCount == b.waiterCount &&
+        a.expiresAt == b.expiresAt &&
+        a.resolvedAt == b.resolvedAt,
+  );
+
+  static bool _sameList<T>(
+    List<T> left,
+    List<T> right,
+    bool Function(T left, T right) same,
+  ) {
+    if (identical(left, right)) return true;
+    if (left.length != right.length) return false;
+    for (var index = 0; index < left.length; index++) {
+      if (!same(left[index], right[index])) return false;
+    }
+    return true;
+  }
+
   static String _newUuid() {
     final random = Random.secure();
     final bytes = List<int>.generate(16, (_) => random.nextInt(256));
@@ -3245,10 +3636,28 @@ final class WorkbenchController extends ChangeNotifier {
   void dispose() {
     if (_disposed) return;
     _disposed = true;
+    if (_observingLifecycle) {
+      WidgetsBinding.instance.removeObserver(this);
+      _observingLifecycle = false;
+    }
     _poller?.cancel();
     _evidencePoller?.cancel();
+    _invalidateEvidenceCaches();
     unawaited(_flushPreferencesAndCloseRuntime());
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (_disposed) return;
+    if (state == AppLifecycleState.hidden ||
+        state == AppLifecycleState.paused ||
+        state == AppLifecycleState.detached) {
+      _pollingVisible = false;
+    } else if (state == AppLifecycleState.resumed && !_pollingVisible) {
+      _pollingVisible = true;
+      unawaited(refresh());
+    }
   }
 
   Future<void> _flushPreferencesAndCloseRuntime() async {

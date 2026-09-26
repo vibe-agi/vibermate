@@ -18,6 +18,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/desktopcontrol"
 	"github.com/vibe-agi/vibermate/internal/localdiscovery"
 	"github.com/vibe-agi/vibermate/internal/loopbackclient"
+	"github.com/vibe-agi/vibermate/internal/productbuild"
 )
 
 const maxControlResponseBytes = 128 << 10
@@ -48,13 +49,14 @@ type requestDoer interface {
 }
 
 type RuntimeInspection struct {
-	Origin     string
-	ProcessID  int
-	Ready      bool
-	APIVersion string
-	State      string
-	Host       string
-	Storage    string
+	Origin       string
+	ProcessID    int
+	Ready        bool
+	APIVersion   string
+	ProductBuild string
+	State        string
+	Host         string
+	Storage      string
 }
 
 func InspectLocal(
@@ -93,6 +95,7 @@ func InspectLocal(
 	if response.Generation != session.InstanceID ||
 		response.Runtime.InstanceID != session.InstanceID ||
 		response.APIVersion != "v1" ||
+		!productbuild.Valid(response.ProductBuild) ||
 		response.StatusKey != "runtime.state."+string(response.Runtime.State) ||
 		response.Runtime.StartedAt.IsZero() {
 		return RuntimeInspection{}, errors.New("local Runtime status is invalid")
@@ -115,7 +118,8 @@ func InspectLocal(
 	return RuntimeInspection{
 		Origin: session.BaseURL, ProcessID: session.ProcessID,
 		Ready: response.Ready, APIVersion: response.APIVersion,
-		State: string(response.Runtime.State), Host: string(response.Runtime.Host),
+		ProductBuild: response.ProductBuild,
+		State:        string(response.Runtime.State), Host: string(response.Runtime.Host),
 		Storage: string(response.Runtime.Storage),
 	}, nil
 }

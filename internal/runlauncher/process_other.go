@@ -25,3 +25,5 @@ func relaySignals(*os.Process) func() {
 func signaledExitCode(*exec.ExitError) int {
 	return 1
 }
+
+func finishChildGroup(*os.Process, time.Duration) error { return nil }

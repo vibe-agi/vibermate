@@ -552,20 +552,33 @@ void main() {
             );
             switch (starter.key) {
               case 'localIdentity':
-                expect(result.requestAfter.body, contains('/Users/guest'));
+                expect(result.requestAfter.body, contains('/__vmi1_home__'));
                 expect(
                   result.requestAfter.body,
                   isNot(contains('/Users/jack')),
                 );
                 expect(
                   result.requestAfter.body,
-                  contains('/workspace/project'),
+                  contains('/__vmi1_workspace__'),
                 );
-                expect(result.requestAfter.body, contains('vibermate-user'));
+                expect(result.requestAfter.body, contains('⟪vmi1_user⟫'));
                 expect(result.responseAfter.body, contains('/Users/jack'));
                 expect(
                   result.responseAfter.body,
-                  isNot(contains('/Users/guest')),
+                  contains('/Users/jack/Code/vibermate'),
+                );
+                expect(
+                  result.responseAfter.body,
+                  isNot(contains('/__vmi1_home__')),
+                );
+                expect(
+                  result.responseAfter.body,
+                  isNot(contains('/__vmi1_workspace__')),
+                );
+                expect(result.responseAfter.body, contains('user jack'));
+                expect(
+                  result.responseAfter.body,
+                  isNot(contains('⟪vmi1_user⟫')),
                 );
               case 'blockSecrets':
                 expect(result.requestAfter.body, result.requestBefore.body);
@@ -880,39 +893,30 @@ String _protocolPath(String protocol) => switch (protocol) {
   _ => throw ArgumentError.value(protocol, 'protocol'),
 };
 
-MessageTransformTestSample _localIdentitySample(
-  String protocol,
-) => MessageTransformTestSample(
-  request: MessageTransformTestRequest(
-    method: 'POST',
-    path: _protocolPath(protocol),
-    headers: const {
-      'content-type': ['application/json'],
-    },
-    body:
-        '{"home":"/Users/jack","workspace":"/Users/jack/Code/vibermate","user":"jack"}',
-  ),
-  response: const MessageTransformTestResponse(
-    statusCode: 200,
-    streaming: false,
-    headers: {
-      'content-type': ['application/json'],
-    },
-    body:
-        '{"home":"/Users/guest","workspace":"/workspace/project","user":"vibermate-user"}',
-  ),
-  runtime: MessageTransformTestRuntime(
-    userName: 'jack',
-    homeDirectory: '/Users/jack',
-    operatingSystem: 'darwin',
-    operatingSystemVersion: '26.0',
-    architecture: 'arm64',
-    timeZone: 'Asia/Singapore',
-    workspaceRoot: '/Users/jack/Code/vibermate',
-    workspaceLabel: 'vibermate',
-    turnStartedAt: DateTime.utc(2026, 9, 1, 12, 34, 56),
-  ),
-);
+MessageTransformTestSample _localIdentitySample(String protocol) {
+  final sample = MessageTransformTestSample.example(
+    protocol,
+    userMessage:
+        'home /Users/jack; workspace /Users/jack/Code/vibermate; user jack',
+    assistantMessage:
+        'home /__vmi1_home__; workspace /__vmi1_workspace__; user ⟪vmi1_user⟫',
+  );
+  return MessageTransformTestSample(
+    request: sample.request,
+    response: sample.response,
+    runtime: MessageTransformTestRuntime(
+      userName: 'jack',
+      homeDirectory: '/Users/jack',
+      operatingSystem: 'darwin',
+      operatingSystemVersion: '26.0',
+      architecture: 'arm64',
+      timeZone: 'Asia/Singapore',
+      workspaceRoot: '/Users/jack/Code/vibermate',
+      workspaceLabel: 'vibermate',
+      turnStartedAt: DateTime.utc(2026, 9, 1, 12, 34, 56),
+    ),
+  );
+}
 
 MessageTransformTestSample _secretSample(String protocol) =>
     MessageTransformTestSample(

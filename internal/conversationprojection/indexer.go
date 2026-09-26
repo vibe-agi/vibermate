@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/vibe-agi/vibermate/internal/activity"
 	"github.com/vibe-agi/vibermate/internal/agentconversation"
@@ -29,12 +30,19 @@ type Options struct {
 }
 
 type Indexer struct {
+	mu          sync.Mutex
+	scopes      map[string]scanScope
 	activities  activity.Reader
 	contents    exchangecontent.Reader
 	captureRuns capturerun.Reader
 	identities  activity.ConversationIdentityRepository
 	writer      activity.ConversationProjectionWriter
 	resolvers   map[string]agentconversation.ClientIdentityResolver
+}
+
+type scanScope struct {
+	before   int64
+	repaired bool
 }
 
 func New(options Options) (*Indexer, error) {
@@ -51,15 +59,17 @@ func New(options Options) (*Indexer, error) {
 		resolvers[client] = resolver
 	}
 	return &Indexer{
+		scopes:     make(map[string]scanScope),
 		activities: options.Activities, contents: options.Contents,
 		captureRuns: options.CaptureRuns, identities: options.Identities,
 		writer: options.Writer, resolvers: resolvers,
 	}, nil
 }
 
-// Reindex enriches all bounded terminal Exchanges selected by a Conversation
-// request before the caller reads the grouped index. Manual captures are kept
-// Exchange-scoped because they do not yet have an AgentSession authority.
+// Reindex enriches bounded terminal Exchanges selected by a Conversation
+// request. The first pass for each scope repairs identities whose projection
+// was interrupted; later passes omit already completed local identities.
+// Manual captures remain Exchange-scoped without AgentSession authority.
 func (indexer *Indexer) Reindex(
 	ctx context.Context,
 	request activity.ConversationIndexRequest,
@@ -70,10 +80,41 @@ func (indexer *Indexer) Reindex(
 	if request.ManualCaptureID != "" {
 		return nil
 	}
-	records, err := indexer.terminals(ctx, request.CaptureRunID)
+	indexer.mu.Lock()
+	defer indexer.mu.Unlock()
+	scope, knownScope := indexer.scopes[request.CaptureRunID]
+	var nextBefore int64
+	if err := indexer.reindex(ctx, request, scope.repaired, scope.before, &nextBefore); err != nil {
+		// A failed projection may have persisted its identity first. Force the
+		// next pass to inspect those rows again instead of skipping them.
+		clear(indexer.scopes)
+		return err
+	}
+	if !knownScope && len(indexer.scopes) >= 256 {
+		// ponytail: Bound per-scope repair state; an evicted scope safely
+		// repeats its first full pass when it is visited again.
+		clear(indexer.scopes)
+	}
+	scope.before = nextBefore
+	if nextBefore == 0 {
+		scope.repaired = true
+	}
+	indexer.scopes[request.CaptureRunID] = scope
+	return nil
+}
+
+func (indexer *Indexer) reindex(
+	ctx context.Context,
+	request activity.ConversationIndexRequest,
+	withoutLocalIdentity bool,
+	before int64,
+	nextBefore *int64,
+) error {
+	records, cursor, err := indexer.terminals(ctx, request.CaptureRunID, before, withoutLocalIdentity)
 	if err != nil {
 		return err
 	}
+	*nextBefore = cursor
 	type candidate struct {
 		record                   activity.Record
 		responseID               string
@@ -276,29 +317,31 @@ func (indexer *Indexer) Identity(
 func (indexer *Indexer) terminals(
 	ctx context.Context,
 	captureRunID string,
-) ([]activity.Record, error) {
+	before int64,
+	withoutLocalIdentity bool,
+) ([]activity.Record, int64, error) {
 	records := make([]activity.Record, 0, activity.MaxPageSize)
-	var before int64
 	for len(records) < maxExchangesPerRefresh {
 		limit := activity.MaxPageSize
 		if remaining := maxExchangesPerRefresh - len(records); remaining < limit {
 			limit = remaining
 		}
 		page, err := indexer.activities.ListExchanges(ctx, activity.PageRequest{
-			BeforeSequence: before,
-			Limit:          limit,
-			CaptureRunID:   captureRunID,
+			BeforeSequence:                   before,
+			Limit:                            limit,
+			CaptureRunID:                     captureRunID,
+			WithoutLocalConversationIdentity: withoutLocalIdentity,
 		})
 		if err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 		records = append(records, page.Items...)
 		if page.NextBeforeSequence == 0 {
-			break
+			return records, 0, nil
 		}
 		before = page.NextBeforeSequence
 	}
-	return records, nil
+	return records, before, nil
 }
 
 func (indexer *Indexer) project(

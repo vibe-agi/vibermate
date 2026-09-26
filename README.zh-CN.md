@@ -7,6 +7,19 @@
 ViberMate 可以捕获代理对话、控制请求去向、执行小型 JavaScript 规则，并保留
 可审计的运行记录。它不会替代你的代理或 AI 服务商。
 
+## 许可证
+
+本项目按照 GNU Affero General Public License v3.0（AGPLv3）提供。对于希望在
+AGPLv3 条款之外使用软件的组织，也可以联系作者获取商业许可。
+
+- [AGPLv3 正文](LICENSE)
+- [商业许可与专业服务](COMMERCIAL.md)
+
+## 商业支持
+
+项目作者提供架构咨询、定制开发、企业集成、部署和生产环境支持，详情见
+[COMMERCIAL.md](COMMERCIAL.md)。
+
 ![ViberMate 对话捕获界面](https://vibe-agi.github.io/images/vibermate/capture-timeline-2400.webp)
 
 ## 选择使用方式
@@ -54,11 +67,19 @@ vibermate run -- codex
 **设置 → 用户管理**，点击 **创建所有者**，再到 **设置 → 接入与启动** 复制网页
 工作台地址。第一个账号是所有者，之后创建的是成员。
 
+## ACP 编辑器（当前源码）
+
+`vibermate acp -- <ACP 适配器可执行文件>` 让兼容编辑器继续使用现有 ACP
+适配器，同时由 ViberMate 保留有上限的会话和 prompt 观察。登录、权限、工具、
+服务商流量与原生历史仍由编辑器和适配器负责；ACP 观察不会应用 HTTP 账号替换、
+模型映射、脚本或网络规则。配置见 [ACP 接入指南](docs/acp-quickstart.md)，该能力
+是否已进入最新发布版见[能力与支持矩阵](docs/capability-support.md)。
+
 ## 独立 Server + Web（原生进程或容器）
 
 不用 Docker 也可以运行完整 Web 工作台。先区分“只在本机使用”和“其他设备接入”，
-原生进程与容器共享同一账号体系和证书规则。见[统一部署指南](docs/deployment.md)和
-[Docker 配置](docs/docker.md)。
+原生进程与容器共享同一账号体系和证书规则。见[统一部署指南](docs/deployment.md)、
+[备份与恢复指南](docs/backup-and-restore.md)和 [Docker 配置](docs/docker.md)。
 
 从[最新版本](https://github.com/vibe-agi/vibermate/releases/latest)下载
 `linux_x86_64` 或 `linux_arm64` 压缩包，使用 `SHA256SUMS-linux` 校验并解压。
@@ -146,7 +167,6 @@ vibermate run --server https://your-server.example:9666 -- claude
 - 保持代理原来的请求去向，或改用另一个上游服务和账号。
 - 先查看、修改和测试内置 JavaScript 变换，确认效果后再发布。
 - 根据已经登录的 ViberMate 用户名选择上游账号。
-- 断开设备或 Runtime 前，先暂停新的外部网络操作。
 
 ![ViberMate 脚本库](https://vibe-agi.github.io/images/vibermate/script-library-2400.webp)
 
@@ -158,10 +178,12 @@ vibermate run --server https://your-server.example:9666 -- claude
 - 服务商凭据不会进入策略快照和证据，但主动写进提示词的文字仍然属于内容。
 - 变换 JavaScript 无法访问网络、文件、时钟或随机源；执行失败会停止请求，
   不会静默绕过规则。
+- 设置页会显示 App、Runtime 与终端命令版本，并仅在用户主动点击时查询官方
+  GitHub Release；它会给出 Homebrew 或手动升级指引，但不会下载或安装更新。
 - 当前仍是早期 `0.x` 版本，暂不承诺公网加固部署、自动更新、插件和任意客户端
   兼容。
 
-遇到安装问题可运行 `vibermate doctor`。实现细节见[运行时模块地图](docs/module-map.md)
-和[架构决策](docs/adr)。疑似漏洞请通过 [SECURITY.md](SECURITY.md) 私密报告。
-
-使用 Apache-2.0 许可证。
+遇到安装问题可运行 `vibermate doctor`。当前能力是否已发布、属于实验性、仅在分支，
+还是尚未支持，见[能力与支持矩阵](docs/capability-support.md)。实现细节见
+[运行时模块地图](docs/module-map.md)和[架构决策](docs/adr)。疑似漏洞请通过
+[SECURITY.md](SECURITY.md) 私密报告。

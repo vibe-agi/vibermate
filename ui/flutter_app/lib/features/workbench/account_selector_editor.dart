@@ -172,10 +172,35 @@ final class _AccountSelectorEditorDialogState
                           ),
                           const SizedBox(width: 7),
                           Expanded(
-                            child: Text(
-                              copy.format('account_selector.test.selected', {
-                                'account': result.accountId,
-                              }),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  copy.format(
+                                    'account_selector.test.selected',
+                                    {'account': result.accountId},
+                                  ),
+                                ),
+                                if (result.skippedAccountIds.isNotEmpty)
+                                  Text(
+                                    copy.format(
+                                      'account_selector.test.skipped',
+                                      {
+                                        'accounts': result.skippedAccountIds
+                                            .join(', '),
+                                      },
+                                    ),
+                                    maxLines: 2,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: Theme.of(
+                                      context,
+                                    ).textTheme.bodySmall,
+                                  ),
+                                Text(
+                                  copy('account_selector.test.switch_blocked'),
+                                  style: Theme.of(context).textTheme.bodySmall,
+                                ),
+                              ],
                             ),
                           ),
                         ],

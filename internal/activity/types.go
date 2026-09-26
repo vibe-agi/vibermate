@@ -836,8 +836,12 @@ type PageRequest struct {
 	ManualCaptureID          string
 	EnvironmentID            string
 	ConversationProjectionID string
-	OccurredAtOrAfter        time.Time
-	OccurredBefore           time.Time
+	// WithoutLocalConversationIdentity selects records still eligible for
+	// client-log enrichment. The first scan after Runtime start leaves this
+	// false so a previously interrupted projection can be repaired.
+	WithoutLocalConversationIdentity bool
+	OccurredAtOrAfter                time.Time
+	OccurredBefore                   time.Time
 }
 
 func (request PageRequest) Validate() error {
@@ -958,6 +962,7 @@ type Repository interface {
 	List(context.Context, PageRequest) (Page, error)
 	ListExchanges(context.Context, PageRequest) (Page, error)
 	ListConversations(context.Context, ConversationIndexRequest) (ConversationPage, error)
+	SearchExchanges(context.Context, SearchRequest) (SearchPage, error)
 }
 
 // ConversationIdentityRepository retains exact client session/actor/provider
@@ -983,6 +988,7 @@ type Reader interface {
 	List(context.Context, PageRequest) (Page, error)
 	ListExchanges(context.Context, PageRequest) (Page, error)
 	ListConversations(context.Context, ConversationIndexRequest) (ConversationPage, error)
+	Search(context.Context, SearchQuery) (SearchPage, error)
 }
 
 type Runtime interface {
