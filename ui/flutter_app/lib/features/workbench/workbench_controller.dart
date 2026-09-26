@@ -2836,6 +2836,56 @@ final class WorkbenchController extends ChangeNotifier
     }
   }
 
+  Future<EnvironmentAccountActivation?> activateEnvironmentAccount(
+    EnvironmentRecord environment,
+    String routeId,
+    String accountId,
+  ) async {
+    final current = data;
+    if (current == null ||
+        environment.systemOwned ||
+        environmentMutating ||
+        !_beginEnvironmentMutation()) {
+      return null;
+    }
+    environmentNotice = null;
+    notifyListeners();
+    try {
+      final result = await _api.activateEnvironmentAccount(
+        environment,
+        routeId,
+        accountId,
+      );
+      if (_disposed) return null;
+      final environments =
+          [
+            for (final candidate in current.environments)
+              if (candidate.id != result.environment.id) candidate,
+            result.environment,
+          ]..sort((left, right) {
+            if (left.systemOwned != right.systemOwned) {
+              return left.systemOwned ? -1 : 1;
+            }
+            return left.id.compareTo(right.id);
+          });
+      data = _dashboardWith(current, environments: environments);
+      if (selectedEnvironmentId == result.environment.id) {
+        selectedEnvironmentRevision = null;
+        historicalEnvironment = null;
+      }
+      environmentMutating = false;
+      environmentNotice = 'environment.account_activated';
+      notifyListeners();
+      return result;
+    } catch (error) {
+      if (_disposed) return null;
+      environmentMutating = false;
+      _setEnvironmentError(error);
+      notifyListeners();
+      return null;
+    }
+  }
+
   void clearEnvironmentReview() {
     reviewedEnvironmentDraft = null;
     reviewedEnvironmentImpact = null;

@@ -419,6 +419,10 @@ func New(options Options) (*Handler, error) {
 	handler.mux.HandleFunc("PUT /api/v1/environments/{environmentId}/draft", handler.putEnvironmentDraft)
 	handler.mux.HandleFunc("POST /api/v1/environments/{environmentId}/draft/actions/preview", handler.previewEnvironmentDraft)
 	handler.mux.HandleFunc("POST /api/v1/environments/{environmentId}/draft/actions/publish", handler.publishEnvironmentDraft)
+	handler.mux.HandleFunc(
+		"PUT /api/v1/environments/{environmentId}/routes/{routeId}/active-account",
+		handler.activateEnvironmentRouteAccount,
+	)
 	handler.mux.HandleFunc("GET /api/v1/environments/{environmentId}/revisions/{environmentRevision}", handler.getEnvironmentRevision)
 	handler.mux.HandleFunc("GET /api/v1/activities", handler.listActivities)
 	handler.mux.HandleFunc("GET /api/v1/evidence/search", handler.searchActivities)

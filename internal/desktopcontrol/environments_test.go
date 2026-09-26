@@ -863,6 +863,38 @@ func TestEnvironmentDraftPublishesOneAccountAcrossExplicitEndpointProtocols(t *t
 	if got := selectorDraft.Candidate.ClientEndpoints[0].ProtocolPlans[0].Destination.Upstream.Routes[0].AccountPolicy.Accounts; len(got) != 2 {
 		t.Fatalf("new draft did not freeze both linked accounts: %+v", got)
 	}
+	selectorPreview := environmentRequest(t, application, http.MethodPost,
+		"/api/v1/environments/cherry-mapped/draft/actions/preview", uint64(selectorDraft.DraftRevision),
+		"environment-selector-links-preview-0001", nil)
+	if selectorPreview.Code != http.StatusOK {
+		t.Fatalf("selector preview status=%d body=%s", selectorPreview.Code, selectorPreview.Body.Bytes())
+	}
+	selectorPublish := environmentRequest(t, application, http.MethodPost,
+		"/api/v1/environments/cherry-mapped/draft/actions/publish", uint64(selectorDraft.DraftRevision),
+		"environment-selector-links-publish-0001", nil)
+	if selectorPublish.Code != http.StatusOK {
+		t.Fatalf("selector publish status=%d body=%s", selectorPublish.Code, selectorPublish.Body.Bytes())
+	}
+	fixedRoute := selectorDraft.Candidate.ClientEndpoints[1].ProtocolPlans[0].Destination.Upstream.Routes[0]
+	activation := environmentRequest(t, application, http.MethodPut,
+		"/api/v1/environments/cherry-mapped/routes/"+fixedRoute.ID.String()+"/active-account",
+		uint64(selectorDraft.Candidate.Revision), "environment-account-activate-0001",
+		[]byte(`{"accountId":"account.cherry.additional"}`))
+	if activation.Code != http.StatusOK {
+		t.Fatalf("Account activation status=%d body=%s", activation.Code, activation.Body.Bytes())
+	}
+	var activated desktopcontrol.EnvironmentAccountActivationResponse
+	if err := json.Unmarshal(activation.Body.Bytes(), &activated); err != nil {
+		t.Fatal(err)
+	}
+	activatedRoute := activated.Environment.ClientEndpoints[1].ProtocolPlans[0].Destination.Upstream.Routes[0]
+	if activated.Environment.Revision != selectorDraft.Candidate.Revision+1 ||
+		activated.RouteID != fixedRoute.ID || activated.AccountID != "account.cherry.additional" ||
+		activatedRoute.AccountPolicy.FixedAccountID != "account.cherry.additional" ||
+		len(activatedRoute.AccountPolicy.Accounts) != 1 ||
+		activatedRoute.AccountPolicy.Accounts[0].ID != "account.cherry.additional" {
+		t.Fatalf("Account activation = %+v", activated)
+	}
 }
 
 func TestActivityRouteFiltersAndReturnsFrozenEnvironmentReferences(t *testing.T) {

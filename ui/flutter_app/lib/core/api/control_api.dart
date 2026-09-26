@@ -125,6 +125,12 @@ abstract interface class ControlApi {
     int draftRevision,
   );
 
+  Future<EnvironmentAccountActivation> activateEnvironmentAccount(
+    EnvironmentRecord environment,
+    String routeId,
+    String accountId,
+  );
+
   Future<CaptureAssignment> captureAssignment(String captureKey);
 
   Future<CaptureAssignment> applyLatestCaptureEnvironment(
@@ -1001,6 +1007,32 @@ final class HttpControlApi implements ControlApi, ACPObservationApi {
       'environmentPublish',
       expectedEnvironmentId: environmentId,
       expectedDraftRevision: draftRevision,
+    );
+  }
+
+  @override
+  Future<EnvironmentAccountActivation> activateEnvironmentAccount(
+    EnvironmentRecord environment,
+    String routeId,
+    String accountId,
+  ) async {
+    if (environment.systemOwned ||
+        !_validResourceId(routeId) ||
+        !_validResourceId(accountId)) {
+      throw const ControlContractException(
+        'Environment Account activation input is invalid',
+      );
+    }
+    return EnvironmentAccountActivation.fromJson(
+      await _mutation(
+        'PUT',
+        '/api/v1/environments/${Uri.encodeComponent(environment.id)}/routes/${Uri.encodeComponent(routeId)}/active-account',
+        expectedRevision: environment.revision,
+        body: {'accountId': accountId},
+      ),
+      environmentId: environment.id,
+      routeId: routeId,
+      accountId: accountId,
     );
   }
 

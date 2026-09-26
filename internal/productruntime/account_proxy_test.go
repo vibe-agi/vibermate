@@ -110,7 +110,11 @@ func (f accountReadFixture) serveProxy(t *testing.T) *url.URL {
 // synthetic credential to a real origin during this acceptance test.
 type accountFixtureOriginal struct{}
 
-func (accountFixtureOriginal) Do(context.Context, originaltransport.Request) (*http.Response, error) {
+func (accountFixtureOriginal) Do(_ context.Context, request originaltransport.Request) (*http.Response, error) {
+	if request.Path() == "/backend-api/wham/accounts/check" {
+		return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"application/json"}},
+			Body: io.NopCloser(strings.NewReader(`{"accounts":[{"id":"workspace-A","workspace_backend_origin":"https://chatgpt.com","account_routing_override":"NO_CONSTRAINT"}],"default_account_id":"workspace-A"}`))}, nil
+	}
 	return &http.Response{StatusCode: 503, Header: http.Header{"Content-Type": {"application/json"}},
 		Body: io.NopCloser(strings.NewReader(`{"error":"unrelated operation disabled in synthetic acceptance"}`))}, nil
 }

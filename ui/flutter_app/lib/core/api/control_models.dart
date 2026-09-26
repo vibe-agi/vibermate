@@ -5811,6 +5811,64 @@ final class EnvironmentPublishResult {
   final EnvironmentImpact impact;
 }
 
+final class EnvironmentAccountActivation {
+  const EnvironmentAccountActivation({
+    required this.environment,
+    required this.routeId,
+    required this.accountId,
+    required this.runningCaptureCount,
+  });
+
+  factory EnvironmentAccountActivation.fromJson(
+    Object? json, {
+    required String environmentId,
+    required String routeId,
+    required String accountId,
+  }) {
+    const path = 'environmentAccountActivation';
+    final value = requireObject(json, path);
+    requireFields(
+      value,
+      path,
+      required: const {
+        'environment',
+        'routeId',
+        'accountId',
+        'runningCaptureCount',
+      },
+    );
+    final environment = EnvironmentRecord.fromJson(
+      value['environment'],
+      '$path.environment',
+    );
+    final actualRouteId = _requireResourceId(value, 'routeId', path);
+    final actualAccountId = _requireResourceId(value, 'accountId', path);
+    final selected = environment.routes
+        .where((route) => route.id == actualRouteId)
+        .firstOrNull;
+    if (environment.id != environmentId ||
+        actualRouteId != routeId ||
+        actualAccountId != accountId ||
+        selected?.accountPolicy.mode != 'fixed' ||
+        selected?.accountPolicy.fixedAccountId != actualAccountId) {
+      throw const ControlContractException(
+        'Environment Account activation is inconsistent',
+      );
+    }
+    return EnvironmentAccountActivation(
+      environment: environment,
+      routeId: actualRouteId,
+      accountId: actualAccountId,
+      runningCaptureCount: requireInteger(value, 'runningCaptureCount', path),
+    );
+  }
+
+  final EnvironmentRecord environment;
+  final String routeId;
+  final String accountId;
+  final int runningCaptureCount;
+}
+
 final class CaptureClientAdapter {
   const CaptureClientAdapter({
     required this.id,

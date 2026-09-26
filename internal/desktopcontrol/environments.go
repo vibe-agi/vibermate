@@ -75,6 +75,13 @@ type EnvironmentPublishResponse struct {
 	Impact      EnvironmentImpactResponse `json:"impact"`
 }
 
+type EnvironmentAccountActivationResponse struct {
+	Environment         EnvironmentResponse         `json:"environment"`
+	RouteID             environment.UpstreamRouteID `json:"routeId"`
+	AccountID           string                      `json:"accountId"`
+	RunningCaptureCount int                         `json:"runningCaptureCount"`
+}
+
 func environmentResponseOf(snapshot environment.EnvironmentSnapshot) EnvironmentResponse {
 	aggregate := snapshot.Aggregate()
 	return environmentResponseOfAggregate(aggregate, snapshot.Digest().String(), snapshot.SystemOwned())
@@ -498,6 +505,92 @@ func (handler *Handler) previewEnvironmentDraft(writer http.ResponseWriter, requ
 
 func (handler *Handler) publishEnvironmentDraft(writer http.ResponseWriter, request *http.Request) {
 	handler.environmentDraftAction(writer, request, true)
+}
+
+func (handler *Handler) activateEnvironmentRouteAccount(writer http.ResponseWriter, request *http.Request) {
+	expected, key, headerErr := mutationHeaders(request)
+	body, bodyErr := readJSONBody(request)
+	var input struct {
+		AccountID *string `json:"accountId"`
+	}
+	id, idErr := environment.NewEnvironmentID(request.PathValue("environmentId"))
+	routeID, routeErr := environment.NewUpstreamRouteID(request.PathValue("routeId"))
+	if headerErr != nil || bodyErr != nil || idErr != nil || routeErr != nil ||
+		expected == 0 || expected >= uint64(environment.MaxRevision) ||
+		request.URL.RawQuery != "" || decodeStrictJSON(body, &input) != nil || input.AccountID == nil {
+		writeProblem(writer, http.StatusUnprocessableEntity, ReasonInvalidRequest)
+		return
+	}
+	accountID, err := provideraccount.NewID(*input.AccountID)
+	if err != nil {
+		writeProblem(writer, http.StatusUnprocessableEntity, ReasonInvalidRequest)
+		return
+	}
+	fingerprint := sha256.Sum256(bytes.Join([][]byte{
+		[]byte(request.Method), []byte(request.URL.Path), []byte(strconv.FormatUint(expected, 10)), body,
+	}, []byte{0}))
+	response, err := handler.idempotent.execute(request.Context(), key, fingerprint, func() cachedResponse {
+		account, accountErr := handler.accounts.Get(request.Context(), accountID)
+		if accountErr != nil {
+			return problemResponse(classifyEnvironmentAccountPolicyError(accountErr))
+		}
+		current, getErr := handler.environments.Get(request.Context(), id)
+		if getErr != nil {
+			return problemResponse(classifyEnvironmentError(getErr))
+		}
+		if current.Revision() != environment.Revision(expected) {
+			return problemResponse(problemSpec{status: http.StatusConflict, reason: ReasonRevisionConflict})
+		}
+		candidate, changed, switchErr := environment.ActivateRouteAccount(
+			current.Aggregate(), routeID, environment.RouteAccountReference{
+				ID: account.Account.ID.String(), Revision: environment.Revision(account.Account.Revision),
+				DisplayName: account.Account.DisplayName,
+			},
+		)
+		if switchErr != nil {
+			return problemResponse(classifyEnvironmentError(switchErr))
+		}
+		if !changed {
+			return jsonResponse(http.StatusOK, EnvironmentAccountActivationResponse{
+				Environment: environmentResponseOf(current), RouteID: routeID, AccountID: *input.AccountID,
+			})
+		}
+		if resolveErr := handler.resolvePublishedAccountPolicies(request.Context(), candidate.ClientEndpoints); resolveErr != nil {
+			return problemResponse(classifyEnvironmentAccountPolicyError(resolveErr))
+		}
+		draft, saveErr := handler.environments.SaveDraft(request.Context(), environment.DraftCommand{
+			ExpectedBaseRevision: environment.Revision(expected), Candidate: candidate,
+		})
+		if saveErr != nil {
+			return problemResponse(classifyEnvironmentError(saveErr))
+		}
+		preview, previewErr := handler.environments.Preview(request.Context(), id, draft.Revision)
+		if previewErr != nil {
+			return problemResponse(classifyEnvironmentError(previewErr))
+		}
+		result, publishErr := handler.environments.Publish(request.Context(), preview)
+		if publishErr != nil {
+			return problemResponse(classifyEnvironmentError(publishErr))
+		}
+		snapshot, readErr := handler.environments.GetRevision(request.Context(), id, result.ActualRevision)
+		if readErr != nil {
+			return problemResponse(classifyEnvironmentError(readErr))
+		}
+		handler.recordActivity(request.Context(), activity.Event{
+			Kind: activity.KindEnvironmentApplied, EnvironmentID: snapshot.ID(),
+			EnvironmentRevision: snapshot.Revision(), EnvironmentDigest: snapshot.Digest().String(),
+			SubjectID: snapshot.ID().String(), Status: activity.StatusSucceeded,
+		})
+		return jsonResponse(http.StatusOK, EnvironmentAccountActivationResponse{
+			Environment: environmentResponseOf(snapshot), RouteID: routeID, AccountID: *input.AccountID,
+			RunningCaptureCount: len(preview.ContinuingCaptures),
+		})
+	})
+	if err != nil {
+		writeProblem(writer, http.StatusConflict, ReasonRevisionConflict)
+		return
+	}
+	writeCached(writer, response)
 }
 
 func (handler *Handler) environmentDraftAction(writer http.ResponseWriter, request *http.Request, publish bool) {

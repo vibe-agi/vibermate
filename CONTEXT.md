@@ -137,8 +137,12 @@ An explicit destination through one Upstream Endpoint, one backend protocol, and
 _Avoid_: Endpoint, Client Flow, inferred provider
 
 **Account Selection Policy**:
-The closed choice on one Upstream Route between one fixed Account and one published Account Selector. Every selectable Account is explicitly linked to that Route's Upstream Endpoint and is frozen with the Environment revision.
-_Avoid_: Failover, credential rotation, global account switch
+The closed choice on one Upstream Route between manual activation from an Endpoint-owned Account Set and one published Account Selector. Every selectable Account is explicitly linked to that Route's Upstream Endpoint. Manual activation is shared by every Capture using that Environment Route and takes effect when its next request begins.
+_Avoid_: Failover, credential rotation, installation-wide account switch
+
+**Active Account**:
+The one manually enabled Account for an Environment Route. It is selected from the Route's Upstream Endpoint associations, is published as the Route's current choice, and is read by all current and future Captures using that Traffic Policy. Each in-flight request retains the Account it already acquired.
+_Avoid_: Capture override, default credential, automatic fallback
 
 **Account Selector**:
 A published fail-closed JavaScript decision that selects exactly one Account from the frozen Account Set of one Upstream Route for one Turn. It cannot observe credentials, alter traffic, change Endpoint, retry another Account, or retain state across Turns.

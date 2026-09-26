@@ -546,6 +546,18 @@ func (manager *Manager) BeginRequest(
 		release()
 		return nil, err
 	}
+	if assignedRoute, ok := plan.UpstreamRoute(); ok {
+		if _, manual := assignedRoute.AccountPolicy().FixedAccount(); manual {
+			latest, latestErr := manager.environments.Resolve(assignment.EnvironmentID)
+			if latestErr == nil && latest.State() == environment.StateActive {
+				if currentRoute, exists := latest.FixedRoute(assignedRoute.ID()); exists {
+					if currentPlan, overlayErr := plan.WithCurrentFixedAccount(currentRoute); overlayErr == nil {
+						plan = currentPlan
+					}
+				}
+			}
+		}
+	}
 	return &RequestLease{assignment: assignment, plan: plan, finish: release}, nil
 }
 

@@ -4181,6 +4181,70 @@ void main() {
   );
 
   testWidgets(
+    'Environment groups linked Accounts by upstream service and activates one for every run',
+    (tester) async {
+      await tester.binding.setSurfaceSize(const Size(1180, 760));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      final api = PreviewControlApi();
+      final controller = WorkbenchController(
+        api: api,
+        terminalCommands: PreviewTerminalCommandService(),
+        previewMode: true,
+        closeRuntime: api.close,
+      );
+      await controller.initialize();
+      controller.selectEnvironment('work');
+      controller.selectSection(WorkbenchSection.environments);
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: ViberTheme.light(),
+          home: WorkbenchShell(controller: controller),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      final group = find.byKey(
+        const Key('environment-account-group-anthropic-direct'),
+      );
+      expect(group, findsOneWidget);
+      expect(
+        find.descendant(of: group, matching: find.text('Anthropic · Work')),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(of: group, matching: find.text('Anthropic · Lab')),
+        findsOneWidget,
+      );
+      await tester.tap(
+        find.byKey(const Key('environment-account-activate-anthropic-lab')),
+      );
+      await tester.pumpAndSettle();
+
+      final selected = controller.selectedEnvironment!.routes
+          .where((route) => route.id == 'anthropic-direct')
+          .single;
+      expect(selected.accountPolicy.fixedAccountId, 'anthropic-lab');
+      expect(
+        find.text(
+          'Account activated. Running Captures switch on their next request.',
+        ),
+        findsOneWidget,
+      );
+
+      await tester.tap(
+        find.byKey(const Key('environment-account-manage-anthropic-direct')),
+      );
+      await tester.pumpAndSettle();
+      expect(controller.section, WorkbenchSection.routes);
+      expect(controller.selectedEndpointId, 'target.anthropic.official');
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox.shrink());
+      controller.dispose();
+      await api.close();
+    },
+  );
+
+  testWidgets(
     'Environment detail fills a wide pane and built-in state uses a precise lock marker',
     (tester) async {
       await tester.binding.setSurfaceSize(const Size(1800, 900));

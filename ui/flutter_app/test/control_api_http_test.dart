@@ -1585,6 +1585,80 @@ void main() {
     },
   );
 
+  test(
+    'HTTP API activates one linked Account for an Environment Route',
+    () async {
+      final preview = PreviewControlApi();
+      addTearDown(preview.close);
+      final dashboard = await preview.loadDashboard();
+      final work = dashboard.environments.firstWhere(
+        (environment) => environment.id == 'work',
+      );
+      final activated = await preview.activateEnvironmentAccount(
+        work,
+        'anthropic-direct',
+        'anthropic-lab',
+      );
+      String? ifMatch;
+      Object? body;
+      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      addTearDown(() => server.close(force: true));
+      server.listen((request) async {
+        request.response.headers.contentType = ContentType.json;
+        if (request.uri.path == '/api/v1/auth/sessions/current') {
+          await request.drain<void>();
+          request.response.write(
+            jsonEncode({
+              'schema': 'vibermate-app-session-state-v1',
+              'revision': 1,
+              'expiresAt': DateTime.now()
+                  .toUtc()
+                  .add(const Duration(hours: 1))
+                  .toIso8601String(),
+            }),
+          );
+        } else if (request.method == 'PUT' &&
+            request.uri.path ==
+                '/api/v1/environments/work/routes/anthropic-direct/active-account') {
+          ifMatch = request.headers.value(HttpHeaders.ifMatchHeader);
+          body = jsonDecode(await utf8.decoder.bind(request).join());
+          request.response.write(
+            jsonEncode({
+              'environment': activated.environment.toJson(),
+              'routeId': activated.routeId,
+              'accountId': activated.accountId,
+              'runningCaptureCount': activated.runningCaptureCount,
+            }),
+          );
+        } else {
+          request.response.statusCode = HttpStatus.notFound;
+        }
+        await request.response.close();
+      });
+
+      final api = await HttpControlApi.connect(
+        DesktopSession(
+          baseUrl: Uri.parse('http://127.0.0.1:${server.port}'),
+          readToken: List.filled(43, 'R').join(),
+          writeToken: List.filled(43, 'W').join(),
+          instanceId: 'instance-test',
+          expiresAt: DateTime.now().toUtc().add(const Duration(hours: 1)),
+        ),
+      );
+      addTearDown(api.close);
+
+      final result = await api.activateEnvironmentAccount(
+        work,
+        'anthropic-direct',
+        'anthropic-lab',
+      );
+      expect(ifMatch, '${work.revision}');
+      expect(body, {'accountId': 'anthropic-lab'});
+      expect(result.environment.revision, work.revision + 1);
+      expect(result.accountId, 'anthropic-lab');
+    },
+  );
+
   test('HTTP API follows the opaque Capture continuation cursor', () async {
     final requests = <Uri>[];
     final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);

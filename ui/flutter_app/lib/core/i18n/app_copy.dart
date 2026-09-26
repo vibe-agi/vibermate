@@ -1230,8 +1230,17 @@ final class AppCopy {
         'No ready account is linked to this upstream service.',
     'environment.account.unavailable': 'unavailable',
     'environment.account.no_candidate': 'No candidate account',
-    'environment.account.fixed': 'Fixed account',
+    'environment.account.fixed': 'Manual selection',
     'environment.account.javascript': 'JavaScript rule',
+    'environment.account.group': '{service} accounts',
+    'environment.account.manage_links': 'Manage linked accounts',
+    'environment.account.no_linked': 'No usable linked accounts.',
+    'environment.account.active': 'Active',
+    'environment.account.activate': 'Activate',
+    'environment.account.activation_scope':
+        'Running Captures using this traffic policy switch on their next request.',
+    'environment.account.script_active':
+        'The published JavaScript rule selects an account for each request.',
     'environment.account.selector_scope':
         'Runs once per Turn against {count} frozen upstream accounts.',
     'environment.account.selector_available':
@@ -1578,6 +1587,8 @@ final class AppCopy {
     'environment.impact.more': '{count} more Captures',
     'notice.environment.published':
         'Traffic policy published from the reviewed draft and impact boundary.',
+    'notice.environment.account_activated':
+        'Account activated. Running Captures switch on their next request.',
     'routes.title': 'Upstream services',
     'routes.subtitle':
         'Configure service addresses and protocols, then link existing accounts',
@@ -3473,8 +3484,15 @@ final class AppCopy {
     'environment.account.none': '该上游服务下没有可用账号。',
     'environment.account.unavailable': '不可用',
     'environment.account.no_candidate': '没有候选账号',
-    'environment.account.fixed': '固定账号',
+    'environment.account.fixed': '手动选择',
     'environment.account.javascript': 'JavaScript 规则',
+    'environment.account.group': '{service} 账号',
+    'environment.account.manage_links': '管理关联账号',
+    'environment.account.no_linked': '没有可用的已关联账号。',
+    'environment.account.active': '已启用',
+    'environment.account.activate': '启用',
+    'environment.account.activation_scope': '使用此流量策略的运行中 Capture 将从下一次请求切换。',
+    'environment.account.script_active': '已发布的 JavaScript 规则会为每次请求选择账号。',
     'environment.account.selector_scope': '每轮执行一次，仅可选择当前冻结的 {count} 个上游账号。',
     'environment.account.selector_available': '已有 {count} 条已发布的账号选择规则；展开即可切换。',
     'environment.account.selector_load_failed': '无法读取已发布的账号选择规则。',
@@ -3758,6 +3776,7 @@ final class AppCopy {
     'environment.impact.none': '当前没有运行记录使用此流量策略；下次启动时会使用新版本。',
     'environment.impact.more': '另有 {count} 条运行记录',
     'notice.environment.published': '流量策略已按检查过的草稿与影响边界发布。',
+    'notice.environment.account_activated': '账号已启用；运行中的 Capture 将从下一次请求切换。',
     'routes.title': '上游服务',
     'routes.subtitle': '配置服务地址与协议，并关联已有账号',
     'routes.add_endpoint': '添加上游服务',

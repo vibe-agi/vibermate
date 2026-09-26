@@ -1415,6 +1415,100 @@ final class PreviewControlApi implements ControlApi {
     );
   }
 
+  @override
+  Future<EnvironmentAccountActivation> activateEnvironmentAccount(
+    EnvironmentRecord environment,
+    String routeId,
+    String accountId,
+  ) async {
+    _requireOpen();
+    final index = _environments.indexWhere(
+      (candidate) => candidate.id == environment.id,
+    );
+    if (index < 0 ||
+        _environments[index].revision != environment.revision ||
+        environment.systemOwned) {
+      throw const ControlProblem(
+        status: 409,
+        reasonCode: 'revision_conflict',
+        messageKey: 'error.revision_conflict',
+      );
+    }
+    final route = environment.routes
+        .where((candidate) => candidate.id == routeId)
+        .firstOrNull;
+    final account = _accounts
+        .where((candidate) => candidate.id == accountId)
+        .firstOrNull;
+    if (route == null ||
+        route.accountPolicy.mode != 'fixed' ||
+        account == null ||
+        !account.usable ||
+        !account.isLinkedTo(route.endpointId)) {
+      throw const ControlProblem(
+        status: 422,
+        reasonCode: 'provider_account_unavailable',
+        messageKey: 'error.provider_account_unavailable',
+      );
+    }
+    final document = environment.toJson();
+    document['revision'] = environment.revision + 1;
+    document['digest'] = List.filled(64, '0').join();
+    var changed = false;
+    for (final endpointValue in document['clientEndpoints']! as List<Object?>) {
+      final endpoint = endpointValue! as JsonObject;
+      for (final planValue in endpoint['protocolPlans']! as List<Object?>) {
+        final plan = planValue! as JsonObject;
+        final destination = plan['destination']! as JsonObject;
+        final upstream = destination['upstream'] as JsonObject?;
+        if (upstream == null) continue;
+        for (final routeValue in upstream['routes']! as List<Object?>) {
+          final routeDocument = routeValue! as JsonObject;
+          if (routeDocument['id'] != routeId) continue;
+          final policy = routeDocument['accountPolicy']! as JsonObject;
+          endpoint['revision'] = (endpoint['revision']! as int) + 1;
+          plan['revision'] = (plan['revision']! as int) + 1;
+          routeDocument['revision'] = (routeDocument['revision']! as int) + 1;
+          policy['revision'] = (policy['revision']! as int) + 1;
+          policy['fixedAccountId'] = accountId;
+          policy['accounts'] = [
+            {
+              'id': account.id,
+              'revision': account.revision,
+              'displayName': account.displayName,
+            },
+          ];
+          changed = true;
+        }
+      }
+    }
+    if (!changed) {
+      throw const ControlContractException(
+        'Preview Environment Route was not found',
+      );
+    }
+    document['digest'] = crypto.sha256
+        .convert(utf8.encode(jsonEncode(document)))
+        .toString();
+    final updated = EnvironmentRecord.fromJson(
+      document,
+      'previewEnvironmentActivation',
+    );
+    _environments[index] = updated;
+    _environmentHistory[_environmentRevisionKey(updated.id, updated.revision)] =
+        updated;
+    final running = _assignments.values.where((assignment) {
+      final capture = _captures[assignment.captureKey];
+      return assignment.environmentId == updated.id && capture?.running == true;
+    }).length;
+    return EnvironmentAccountActivation(
+      environment: updated,
+      routeId: routeId,
+      accountId: accountId,
+      runningCaptureCount: running,
+    );
+  }
+
   EnvironmentImpact _environmentImpact(
     String environmentId,
     int draftRevision,

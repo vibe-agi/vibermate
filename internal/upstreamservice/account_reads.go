@@ -13,6 +13,7 @@ import (
 
 const CodexRateLimits = "codex-account-rate-limits"
 const CodexUsageHistory = "codex-account-usage-history"
+const CodexWorkspaceRoutingPath = "/backend-api/wham/accounts/check"
 
 // CodexResetCreditDetails is owner-only. It is not a client operation and is
 // deliberately absent from AccountOperations and AllowsClientRead.
@@ -70,6 +71,11 @@ func AllowsClientRead(base originidentity.ProviderOrigin, canonical originidenti
 	if base.Validate() != nil || canonical.Validate() != nil ||
 		base.String() != "https://chatgpt.com/backend-api/codex" || canonical.String() != "https://chatgpt.com" {
 		return false
+	}
+	if request.Validate() == nil && request.Method == http.MethodGet &&
+		request.Path == CodexWorkspaceRoutingPath && request.RawQuery == "" &&
+		request.Transport == protocolspec.ClientOperationTransportHTTP {
+		return true
 	}
 	for _, contract := range AccountOperations() {
 		operation, err := protocolspec.NewClientOperationDefinition(contract)

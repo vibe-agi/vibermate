@@ -535,10 +535,16 @@ final class _EnvironmentDetail extends StatelessWidget {
                   padding: const EdgeInsets.fromLTRB(14, 12, 14, 20),
                   itemCount: value.clientEndpoints.length,
                   itemBuilder: (context, index) => _ClientEndpointPlan(
+                    controller: controller,
+                    environment: value,
                     clientEndpoint: value.clientEndpoints[index],
                     endpoints: endpoints,
                     accounts: accounts,
                     copy: copy,
+                    activationEnabled:
+                        !historical &&
+                        !value.systemOwned &&
+                        !controller.environmentMutating,
                   ),
                 ),
         ),
@@ -578,16 +584,22 @@ void _confirmDeleteEnvironment(
 
 final class _ClientEndpointPlan extends StatelessWidget {
   const _ClientEndpointPlan({
+    this.controller,
+    this.environment,
     required this.clientEndpoint,
     required this.endpoints,
     required this.accounts,
     required this.copy,
+    this.activationEnabled = false,
   });
 
+  final WorkbenchController? controller;
+  final EnvironmentRecord? environment;
   final EnvironmentClientEndpoint clientEndpoint;
   final List<UpstreamEndpoint> endpoints;
   final List<ProviderAccount> accounts;
   final AppCopy copy;
+  final bool activationEnabled;
 
   @override
   Widget build(BuildContext context) {
@@ -635,10 +647,13 @@ final class _ClientEndpointPlan extends StatelessWidget {
           const Divider(height: 1),
           for (final plan in clientEndpoint.protocolPlans)
             _ProtocolPlanRows(
+              controller: controller,
+              environment: environment,
               plan: plan,
               endpoints: endpoints,
               accounts: accounts,
               copy: copy,
+              activationEnabled: activationEnabled,
             ),
         ],
       ),
@@ -648,16 +663,22 @@ final class _ClientEndpointPlan extends StatelessWidget {
 
 final class _ProtocolPlanRows extends StatelessWidget {
   const _ProtocolPlanRows({
+    this.controller,
+    this.environment,
     required this.plan,
     required this.endpoints,
     required this.accounts,
     required this.copy,
+    this.activationEnabled = false,
   });
 
+  final WorkbenchController? controller;
+  final EnvironmentRecord? environment;
   final EnvironmentProtocolPlan plan;
   final List<UpstreamEndpoint> endpoints;
   final List<ProviderAccount> accounts;
   final AppCopy copy;
+  final bool activationEnabled;
 
   @override
   Widget build(BuildContext context) {
@@ -710,6 +731,8 @@ final class _ProtocolPlanRows extends StatelessWidget {
         else
           for (final route in upstream.routes)
             _RouteAuthorityRow(
+              controller: controller,
+              environment: environment,
               route: route,
               clientProtocol: plan.clientProtocol,
               isDefault: route.id == upstream.defaultRouteId,
@@ -718,6 +741,7 @@ final class _ProtocolPlanRows extends StatelessWidget {
                   .firstOrNull,
               accounts: accounts,
               copy: copy,
+              activationEnabled: activationEnabled,
             ),
       ],
     );
@@ -768,34 +792,40 @@ final class _OriginalDestinationRow extends StatelessWidget {
 
 final class _RouteAuthorityRow extends StatelessWidget {
   const _RouteAuthorityRow({
+    this.controller,
+    this.environment,
     required this.route,
     required this.clientProtocol,
     required this.isDefault,
     required this.endpoint,
     required this.accounts,
     required this.copy,
+    this.activationEnabled = false,
   });
 
+  final WorkbenchController? controller;
+  final EnvironmentRecord? environment;
   final EnvironmentRoute route;
   final String clientProtocol;
   final bool isDefault;
   final UpstreamEndpoint? endpoint;
   final List<ProviderAccount> accounts;
   final AppCopy copy;
+  final bool activationEnabled;
 
   @override
   Widget build(BuildContext context) {
-    final candidates = route.accountPolicy.accounts
-        .map(
-          (reference) => accounts
-              .where((account) => account.id == reference.id)
-              .firstOrNull,
-        )
-        .whereType<ProviderAccount>()
-        .toList(growable: false);
-    final invalid = candidates
-        .where((account) => !account.isLinkedTo(route.endpointId))
-        .toList();
+    final candidates =
+        accounts
+            .where(
+              (account) =>
+                  account.isLinkedTo(route.endpointId) &&
+                  account.credentialOrigin == route.endpointOrigin.toString(),
+            )
+            .toList(growable: false)
+          ..sort(
+            (left, right) => left.displayName.compareTo(right.displayName),
+          );
     return LayoutBuilder(
       builder: (context, constraints) {
         final compact = constraints.maxWidth < 560;
@@ -848,30 +878,14 @@ final class _RouteAuthorityRow extends StatelessWidget {
             ),
           ],
         );
-        final accountList = Wrap(
-          spacing: 6,
-          runSpacing: 5,
-          children: [
-            if (route.accountPolicy.selector case final selector?)
-              StatusPill(
-                label: '${selector.displayName} · r${selector.revision}',
-                color: context.viberColors.route,
-                icon: Icons.data_object,
-              ),
-            for (final account in candidates)
-              StatusPill(
-                label: account.displayName,
-                color: account.isLinkedTo(route.endpointId)
-                    ? context.viberColors.verified
-                    : context.viberColors.danger,
-                icon: Icons.key_outlined,
-              ),
-            if (candidates.isEmpty)
-              Text(
-                copy('environment.account.no_candidate'),
-                style: Theme.of(context).textTheme.bodySmall,
-              ),
-          ],
+        final accountList = _RouteAccountActivationGroup(
+          controller: controller,
+          environment: environment,
+          route: route,
+          endpoint: endpoint,
+          accounts: candidates,
+          copy: copy,
+          enabled: activationEnabled,
         );
         return Container(
           padding: const EdgeInsets.fromLTRB(10, 8, 10, 8),
@@ -919,20 +933,207 @@ final class _RouteAuthorityRow extends StatelessWidget {
                     Expanded(flex: 4, child: accountList),
                   ],
                 ),
-              if (invalid.isNotEmpty)
-                Padding(
-                  padding: const EdgeInsets.only(top: 5),
-                  child: Text(
-                    copy('environment.account.invalid'),
-                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                      color: context.viberColors.danger,
-                    ),
-                  ),
-                ),
             ],
           ),
         );
       },
+    );
+  }
+}
+
+final class _RouteAccountActivationGroup extends StatelessWidget {
+  const _RouteAccountActivationGroup({
+    required this.controller,
+    required this.environment,
+    required this.route,
+    required this.endpoint,
+    required this.accounts,
+    required this.copy,
+    required this.enabled,
+  });
+
+  final WorkbenchController? controller;
+  final EnvironmentRecord? environment;
+  final EnvironmentRoute route;
+  final UpstreamEndpoint? endpoint;
+  final List<ProviderAccount> accounts;
+  final AppCopy copy;
+  final bool enabled;
+
+  @override
+  Widget build(BuildContext context) {
+    final manual = route.accountPolicy.mode == 'fixed';
+    final service = endpoint?.displayName ?? route.endpointId;
+    return Container(
+      key: Key('environment-account-group-${route.id}'),
+      padding: const EdgeInsets.fromLTRB(8, 7, 8, 7),
+      decoration: BoxDecoration(
+        color: context.viberColors.panelRaised.withValues(alpha: 0.35),
+        border: Border.all(color: context.viberColors.dividerSoft),
+        borderRadius: ViberMetrics.controlRadius,
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  copy.format('environment.account.group', {
+                    'service': service,
+                  }),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(context).textTheme.labelMedium,
+                ),
+              ),
+              if (controller != null)
+                IconButton(
+                  key: Key('environment-account-manage-${route.id}'),
+                  tooltip: copy('environment.account.manage_links'),
+                  onPressed: () {
+                    controller!.selectEndpoint(route.endpointId);
+                    controller!.selectSection(WorkbenchSection.routes);
+                  },
+                  icon: const Icon(Icons.link_outlined, size: 17),
+                ),
+            ],
+          ),
+          if (!manual && route.accountPolicy.selector != null) ...[
+            Row(
+              children: [
+                Icon(
+                  Icons.data_object,
+                  size: 14,
+                  color: context.viberColors.route,
+                ),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Text(
+                    '${route.accountPolicy.selector!.displayName} · r${route.accountPolicy.selector!.revision}',
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(context).textTheme.titleSmall,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 3),
+            Text(
+              copy('environment.account.script_active'),
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+          ] else if (accounts.isEmpty)
+            Text(
+              copy('environment.account.no_linked'),
+              style: Theme.of(context).textTheme.bodySmall,
+            )
+          else
+            for (final account in accounts) ...[
+              _RouteAccountActivationRow(
+                account: account,
+                active: account.id == route.accountPolicy.fixedAccountId,
+                enabled:
+                    enabled &&
+                    account.usable &&
+                    controller != null &&
+                    environment != null,
+                copy: copy,
+                onActivate: () => unawaited(
+                  controller!.activateEnvironmentAccount(
+                    environment!,
+                    route.id,
+                    account.id,
+                  ),
+                ),
+              ),
+              if (account != accounts.last) const SizedBox(height: 5),
+            ],
+          if (manual) ...[
+            const SizedBox(height: 6),
+            Text(
+              copy('environment.account.activation_scope'),
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+final class _RouteAccountActivationRow extends StatelessWidget {
+  const _RouteAccountActivationRow({
+    required this.account,
+    required this.active,
+    required this.enabled,
+    required this.copy,
+    required this.onActivate,
+  });
+
+  final ProviderAccount account;
+  final bool active;
+  final bool enabled;
+  final AppCopy copy;
+  final VoidCallback onActivate;
+
+  @override
+  Widget build(BuildContext context) {
+    final identity = account.note.isNotEmpty
+        ? account.note
+        : account.codexOAuth?.email ?? account.tokenInfo?.email;
+    return Container(
+      key: Key('environment-account-option-${account.id}'),
+      padding: const EdgeInsets.fromLTRB(7, 6, 6, 6),
+      decoration: BoxDecoration(
+        color: active
+            ? context.viberColors.verified.withValues(alpha: 0.07)
+            : context.viberColors.canvas,
+        borderRadius: ViberMetrics.controlRadius,
+      ),
+      child: Row(
+        children: [
+          Icon(
+            Icons.key_outlined,
+            size: 14,
+            color: account.usable
+                ? context.viberColors.verified
+                : context.viberColors.textFaint,
+          ),
+          const SizedBox(width: 7),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  account.displayName,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(context).textTheme.titleSmall,
+                ),
+                if (identity != null && identity.isNotEmpty)
+                  Text(
+                    identity,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 6),
+          if (active)
+            StatusPill(
+              label: copy('environment.account.active'),
+              color: context.viberColors.verified,
+            )
+          else
+            OutlinedButton(
+              key: Key('environment-account-activate-${account.id}'),
+              onPressed: enabled ? onActivate : null,
+              child: Text(copy('environment.account.activate')),
+            ),
+        ],
+      ),
     );
   }
 }
