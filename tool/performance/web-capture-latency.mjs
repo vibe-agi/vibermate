@@ -565,6 +565,7 @@ try {
       const exact = uiMatches.items[0].activity.id;
       const searchOpen = page.locator('flt-semantics[role="button"]')
         .filter({ hasText: /^Search all records$/ }).last();
+      await searchOpen.scrollIntoViewIfNeeded();
       const searchBox = await searchOpen.boundingBox();
       assert.ok(searchBox, 'search button has no visible bounds');
       await page.mouse.click(searchBox.x + searchBox.width / 2,
