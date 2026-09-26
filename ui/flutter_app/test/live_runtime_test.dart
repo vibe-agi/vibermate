@@ -552,20 +552,28 @@ void main() {
             );
             switch (starter.key) {
               case 'localIdentity':
-                expect(result.requestAfter.body, contains('/Users/guest'));
+                expect(result.requestAfter.body, contains('/__vmi1_home__'));
                 expect(
                   result.requestAfter.body,
                   isNot(contains('/Users/jack')),
                 );
                 expect(
                   result.requestAfter.body,
-                  contains('/workspace/project'),
+                  contains('/__vmi1_workspace__'),
                 );
-                expect(result.requestAfter.body, contains('vibermate-user'));
+                expect(result.requestAfter.body, contains('⟪vmi1_user⟫'));
                 expect(result.responseAfter.body, contains('/Users/jack'));
                 expect(
                   result.responseAfter.body,
+                  contains('/Users/jack/Code/vibermate'),
+                );
+                expect(
+                  result.responseAfter.body,
                   isNot(contains('/Users/guest')),
+                );
+                expect(
+                  result.responseAfter.body,
+                  isNot(contains('/workspace/project')),
                 );
               case 'blockSecrets':
                 expect(result.requestAfter.body, result.requestBefore.body);
@@ -880,9 +888,7 @@ String _protocolPath(String protocol) => switch (protocol) {
   _ => throw ArgumentError.value(protocol, 'protocol'),
 };
 
-MessageTransformTestSample _localIdentitySample(
-  String protocol,
-) {
+MessageTransformTestSample _localIdentitySample(String protocol) {
   final sample = MessageTransformTestSample.example(
     protocol,
     userMessage:
