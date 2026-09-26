@@ -424,11 +424,39 @@ func decodeProviderOutputItem(
 		block.Agent = cloneAgentMessageContext(context)
 		return []protocolcore.ContentBlock{block}, nil, nil
 	default:
+		if isOpaqueResponsesProviderOutputItem(kind) {
+			block, err := newResponsesExtensionBlock(
+				protocolcore.ProviderExtensionOpaqueItem,
+				path,
+				raw,
+			)
+			if err != nil {
+				return nil, nil, invalidProvider(path, err)
+			}
+			return []protocolcore.ContentBlock{block}, nil, nil
+		}
 		return nil, nil, protocolcore.NewFailure(
 			protocolcore.ReasonUnsupportedProviderData,
 			path+".type",
 			errors.New("Responses output item type is unsupported"),
 		)
+	}
+}
+
+func isOpaqueResponsesProviderOutputItem(kind string) bool {
+	// Local shell calls are deliberately absent: provider-originated local work
+	// must be modeled as an approvable tool call before it can pass this edge.
+	switch kind {
+	case "tool_search_call",
+		"tool_search_output",
+		"web_search_call",
+		"image_generation_call",
+		"compaction",
+		"compaction_summary",
+		"context_compaction":
+		return true
+	default:
+		return false
 	}
 }
 

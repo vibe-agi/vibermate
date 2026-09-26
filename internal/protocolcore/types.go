@@ -408,8 +408,10 @@ func (message Message) Validate() error {
 				!(block.Kind == BlockProviderExtension &&
 					block.ProviderExtension.source ==
 						ProviderExtensionSourceOpenAIResponses &&
-					block.ProviderExtension.kind ==
-						ProviderExtensionInputImage) {
+					(block.ProviderExtension.kind ==
+						ProviderExtensionInputImage ||
+						block.ProviderExtension.kind ==
+							ProviderExtensionInputAudio)) {
 				return errors.New("user message contains an unsupported block")
 			}
 		case RoleAssistant:
@@ -1227,6 +1229,8 @@ const (
 	ProviderExtensionReasoningSummary             ProviderExtensionKind = "reasoning_summary"
 	ProviderExtensionReasoningEncryptedContent    ProviderExtensionKind = "reasoning_encrypted_content"
 	ProviderExtensionInputImage                   ProviderExtensionKind = "input_image"
+	ProviderExtensionInputAudio                   ProviderExtensionKind = "input_audio"
+	ProviderExtensionOpaqueItem                   ProviderExtensionKind = "opaque_item"
 	ProviderExtensionAgentMessageEncryptedContent ProviderExtensionKind = "agent_message_encrypted_content"
 	ProviderExtensionAgentMessageImage            ProviderExtensionKind = "agent_message_image"
 	ProviderExtensionAgentMessageFile             ProviderExtensionKind = "agent_message_file"
@@ -1299,6 +1303,8 @@ func (extension ProviderExtension) Validate() error {
 			extension.kind != ProviderExtensionReasoningSummary &&
 			extension.kind != ProviderExtensionReasoningEncryptedContent &&
 			extension.kind != ProviderExtensionInputImage &&
+			extension.kind != ProviderExtensionInputAudio &&
+			extension.kind != ProviderExtensionOpaqueItem &&
 			extension.kind != ProviderExtensionAgentMessageEncryptedContent &&
 			extension.kind != ProviderExtensionAgentMessageImage &&
 			extension.kind != ProviderExtensionAgentMessageFile &&

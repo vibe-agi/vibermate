@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"slices"
 	"testing"
@@ -90,7 +91,7 @@ func TestResponsesPassthroughForwardsOnlyPortableConversationHistory(t *testing.
 	}
 }
 
-func TestResponsesPassthroughPreservesUserInputImage(t *testing.T) {
+func TestResponsesPassthroughPreservesUserMediaAndStructuredToolOutput(t *testing.T) {
 	t.Parallel()
 
 	path, err := NewResponsesPassthroughProtocolPath(openairesponses.DefaultOptions())
@@ -99,14 +100,35 @@ func TestResponsesPassthroughPreservesUserInputImage(t *testing.T) {
 	}
 	source := []byte(`{
 		"model":"gpt-5.6-sol",
-		"input":[{
-			"type":"message",
-			"role":"user",
-			"content":[
-				{"type":"input_text","text":"Inspect this image."},
-				{"type":"input_image","image_url":"data:image/png;base64,AA==","detail":"original"}
-			]
-		}],
+		"input":[
+			{
+				"type":"message",
+				"role":"user",
+				"content":[
+					{"type":"input_text","text":"Inspect these attachments."},
+					{"type":"input_image","image_url":"data:image/png;base64,AA==","detail":"original"},
+					{"type":"input_audio","audio_url":"data:audio/wav;base64,AA=="}
+				]
+			},
+			{
+				"type":"function_call",
+				"id":"item_1",
+				"call_id":"call_1",
+				"name":"inspect",
+				"arguments":"{}",
+				"status":"completed"
+			},
+			{
+				"type":"function_call_output",
+				"call_id":"call_1",
+				"output":[
+					{"type":"input_text","text":"caption"},
+					{"type":"input_image","file_id":"file_1","detail":"high"},
+					{"type":"input_audio","audio_url":"data:audio/wav;base64,AA=="},
+					{"type":"encrypted_content","encrypted_content":"opaque"}
+				]
+			}
+		],
 		"stream":true
 	}`)
 	request, _, err := path.Client().DecodeRequest(source)
@@ -117,11 +139,94 @@ func TestResponsesPassthroughPreservesUserInputImage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EncodeProviderRequest() error = %v", err)
 	}
-	if !bytes.Contains(
-		provider.Body(),
+	if len(request.Messages) != 3 ||
+		request.Messages[2].Blocks[0].ToolResult.Content != "caption" {
+		t.Fatalf("decoded request = %#v", request.Messages)
+	}
+	for _, want := range [][]byte{
 		[]byte(`"type":"input_image","image_url":"data:image/png;base64,AA==","detail":"original"`),
-	) {
-		t.Fatalf("provider request lost input image: %s", provider.Body())
+		[]byte(`"type":"input_audio","audio_url":"data:audio/wav;base64,AA=="`),
+		[]byte(`"type":"encrypted_content","encrypted_content":"opaque"`),
+	} {
+		if !bytes.Contains(provider.Body(), want) {
+			t.Fatalf("provider request lost %s: %s", want, provider.Body())
+		}
+	}
+	codec, err := openairesponses.New(openairesponses.DefaultOptions())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := codec.DecodeClientRequest(source); protocolcore.ReasonOf(err) != protocolcore.ReasonInvalidClientRequest {
+		t.Fatalf("cross-dialect media error = %v", err)
+	}
+}
+
+func TestResponsesPassthroughPreservesCurrentCodexOpaqueInputItems(t *testing.T) {
+	t.Parallel()
+
+	codec, err := openairesponses.New(openairesponses.DefaultOptions())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, item := range []string{
+		`{"type":"local_shell_call","call_id":"shell_1","status":"completed","action":{"type":"exec","command":"pwd"}}`,
+		`{"type":"tool_search_call","call_id":"search_1","execution":"client","arguments":{"query":"files"}}`,
+		`{"type":"tool_search_output","call_id":"search_1","status":"completed","execution":"client","tools":[]}`,
+		`{"type":"mcp_tool_call_output","call_id":"mcp_1","output":{"content":[]}}`,
+		`{"type":"web_search_call","id":"web_1","status":"completed"}`,
+		`{"type":"image_generation_call","id":"image_1","status":"completed","result":"opaque"}`,
+		`{"type":"compaction","id":"cmp_1","encrypted_content":"opaque-context"}`,
+		`{"type":"compaction_summary","encrypted_content":"opaque-context"}`,
+		`{"type":"configuration_update","reasoning":{"effort":"high"}}`,
+		`{"type":"compaction_trigger"}`,
+		`{"type":"context_compaction","id":"ctx_1","encrypted_content":"opaque-context"}`,
+	} {
+		var expected struct {
+			Type string `json:"type"`
+		}
+		if err := json.Unmarshal([]byte(item), &expected); err != nil {
+			t.Fatal(err)
+		}
+		t.Run(expected.Type, func(t *testing.T) {
+			path, err := NewResponsesPassthroughProtocolPath(openairesponses.DefaultOptions())
+			if err != nil {
+				t.Fatal(err)
+			}
+			source := []byte(fmt.Sprintf(`{
+				"model":"gpt-5.6-sol",
+				"input":[
+					{"type":"message","role":"user","content":[{"type":"input_text","text":"before"}]},
+					%s,
+					{"type":"message","role":"user","content":[{"type":"input_text","text":"continue"}]}
+				],
+				"stream":true
+			}`, item))
+			request, _, err := path.Client().DecodeRequest(source)
+			if err != nil {
+				t.Fatalf("DecodeRequest() error = %v", err)
+			}
+			if len(request.Messages) != 2 {
+				t.Fatalf("decoded messages = %#v", request.Messages)
+			}
+			provider, _, err := path.EncodeProviderRequest(request, source, make(http.Header))
+			if err != nil {
+				t.Fatalf("EncodeProviderRequest() error = %v", err)
+			}
+			var wire struct {
+				Input []struct {
+					Type string `json:"type"`
+				} `json:"input"`
+			}
+			if err := json.Unmarshal(provider.Body(), &wire); err != nil {
+				t.Fatal(err)
+			}
+			if len(wire.Input) != 3 || wire.Input[1].Type != expected.Type {
+				t.Fatalf("provider request lost %s: %s", expected.Type, provider.Body())
+			}
+			if _, _, err := codec.DecodeClientRequest(source); protocolcore.ReasonOf(err) != protocolcore.ReasonInvalidClientRequest {
+				t.Fatalf("cross-dialect %s error = %v", expected.Type, err)
+			}
+		})
 	}
 }
 

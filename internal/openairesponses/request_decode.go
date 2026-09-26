@@ -69,6 +69,11 @@ type inputImageWire struct {
 	Detail   string `json:"detail,omitempty"`
 }
 
+type inputAudioWire struct {
+	Type     string `json:"type"`
+	AudioURL string `json:"audio_url"`
+}
+
 type functionCallWire struct {
 	Type             string          `json:"type"`
 	ID               string          `json:"id"`
@@ -170,8 +175,13 @@ type multiAgentOutputTextWire struct {
 }
 
 type toolOutputContentWire struct {
-	Type string `json:"type"`
-	Text string `json:"text"`
+	Type             string `json:"type"`
+	Text             string `json:"text,omitempty"`
+	ImageURL         string `json:"image_url,omitempty"`
+	FileID           string `json:"file_id,omitempty"`
+	Detail           string `json:"detail,omitempty"`
+	AudioURL         string `json:"audio_url,omitempty"`
+	EncryptedContent string `json:"encrypted_content,omitempty"`
 }
 
 type toolTypeWire struct {
@@ -329,6 +339,19 @@ func (codec *Codec) decodeClientRequest(
 			var hosted webSearchToolWire
 			if err := decodeStrict(raw, &hosted); err != nil {
 				return protocolcore.Request{}, report, invalidClient(path, err)
+			}
+			report = report.Merge(notice(
+				protocolcore.NoticeHostedToolNotForwarded,
+				path,
+			))
+			continue
+		}
+		if kind == "tool_search" {
+			if strictRoot {
+				return protocolcore.Request{}, report, invalidClient(
+					path+".type",
+					errors.New("Responses tool search requires a same-dialect path"),
+				)
 			}
 			report = report.Merge(notice(
 				protocolcore.NoticeHostedToolNotForwarded,
@@ -616,11 +639,42 @@ func (codec *Codec) decodeInputItem(
 			path,
 		), nil
 	default:
+		if isOpaqueResponsesInputItem(kind) {
+			if !compatible {
+				return nil, nil, nil, protocolcore.TranslationReport{},
+					invalidClient(
+						path+".type",
+						errors.New("Responses provider-native history requires a same-dialect path"),
+					)
+			}
+			return nil, nil, nil, protocolcore.TranslationReport{}, nil
+		}
 		return nil, nil, nil, protocolcore.TranslationReport{},
 			invalidClient(
 				path+".type",
 				errors.New("Responses input item type is unsupported"),
 			)
+	}
+}
+
+func isOpaqueResponsesInputItem(kind string) bool {
+	// These current Codex history/control items are preserved by the original
+	// same-dialect wire. Keep this list closed so unknown active items fail.
+	switch kind {
+	case "local_shell_call",
+		"tool_search_call",
+		"tool_search_output",
+		"mcp_tool_call_output",
+		"web_search_call",
+		"image_generation_call",
+		"compaction",
+		"compaction_summary",
+		"configuration_update",
+		"compaction_trigger",
+		"context_compaction":
+		return true
+	default:
+		return false
 	}
 }
 
@@ -1295,35 +1349,7 @@ func decodeMessageContent(
 					errors.New("Responses input images require a same-dialect user message"),
 				)
 			}
-			var image inputImageWire
-			if err := decodeClientWire(rawPart, &image, true); err != nil {
-				return nil, invalidClient(
-					fmt.Sprintf("%s[%d]", path, index),
-					err,
-				)
-			}
-			if (image.ImageURL == "") == (image.FileID == "") {
-				return nil, invalidClient(
-					fmt.Sprintf("%s[%d]", path, index),
-					errors.New("Responses input image requires exactly one image source"),
-				)
-			}
-			if image.ImageURL != "" {
-				err = validateBoundedString(
-					image.ImageURL,
-					protocolcore.MaxProviderExtensionBytes,
-					false,
-				)
-			} else {
-				err = validateBoundedString(image.FileID, 512, false)
-			}
-			if err == nil {
-				switch image.Detail {
-				case "", "auto", "low", "high", "original":
-				default:
-					err = errors.New("Responses input image detail is unsupported")
-				}
-			}
+			err = validateResponsesInputImage(rawPart)
 			if err != nil {
 				return nil, invalidClient(
 					fmt.Sprintf("%s[%d]", path, index),
@@ -1335,6 +1361,21 @@ func decodeMessageContent(
 				fmt.Sprintf("%s[%d]", path, index),
 				rawPart,
 			)
+		case "input_audio":
+			if !compatible || role != protocolcore.RoleUser {
+				return nil, invalidClient(
+					fmt.Sprintf("%s[%d].type", path, index),
+					errors.New("Responses input audio requires a same-dialect user message"),
+				)
+			}
+			err = validateResponsesInputAudio(rawPart)
+			if err == nil {
+				block, err = newResponsesExtensionBlock(
+					protocolcore.ProviderExtensionInputAudio,
+					fmt.Sprintf("%s[%d]", path, index),
+					rawPart,
+				)
+			}
 		default:
 			return nil, invalidClient(
 				fmt.Sprintf("%s[%d].type", path, index),
@@ -1347,6 +1388,50 @@ func decodeMessageContent(
 		blocks[index] = block
 	}
 	return blocks, nil
+}
+
+func validateResponsesInputImage(raw json.RawMessage) error {
+	var image inputImageWire
+	if err := decodeClientWire(raw, &image, true); err != nil {
+		return err
+	}
+	if image.Type != "input_image" || (image.ImageURL == "") == (image.FileID == "") {
+		return errors.New("Responses input image requires exactly one image source")
+	}
+	var err error
+	if image.ImageURL != "" {
+		err = validateBoundedString(
+			image.ImageURL,
+			protocolcore.MaxProviderExtensionBytes,
+			false,
+		)
+	} else {
+		err = validateBoundedString(image.FileID, 512, false)
+	}
+	if err != nil {
+		return err
+	}
+	switch image.Detail {
+	case "", "auto", "low", "high", "original":
+		return nil
+	default:
+		return errors.New("Responses input image detail is unsupported")
+	}
+}
+
+func validateResponsesInputAudio(raw json.RawMessage) error {
+	var audio inputAudioWire
+	if err := decodeClientWire(raw, &audio, true); err != nil {
+		return err
+	}
+	if audio.Type != "input_audio" {
+		return errors.New("Responses input audio type is invalid")
+	}
+	return validateBoundedString(
+		audio.AudioURL,
+		protocolcore.MaxProviderExtensionBytes,
+		false,
+	)
 }
 
 func decodeFunctionCall(
@@ -1598,6 +1683,7 @@ func decodeToolOutputText(
 		)
 	}
 	var normalized strings.Builder
+	textItems := 0
 	for index, rawItem := range rawItems {
 		var item toolOutputContentWire
 		if err := decodeClientWire(rawItem, &item, compatible); err != nil {
@@ -1607,7 +1693,57 @@ func decodeToolOutputText(
 					err,
 				)
 		}
-		if item.Type != "input_text" {
+		switch item.Type {
+		case "input_text":
+			if textItems > 0 {
+				normalized.WriteByte('\n')
+			}
+			normalized.WriteString(item.Text)
+			textItems++
+		case "input_image":
+			if !compatible {
+				return "", protocolcore.TranslationReport{}, invalidClient(
+					fmt.Sprintf("%s[%d].type", path, index),
+					errors.New("multimodal tool output requires a same-dialect path"),
+				)
+			}
+			if err := validateResponsesInputImage(rawItem); err != nil {
+				return "", protocolcore.TranslationReport{}, invalidClient(
+					fmt.Sprintf("%s[%d]", path, index),
+					err,
+				)
+			}
+		case "input_audio":
+			if !compatible {
+				return "", protocolcore.TranslationReport{}, invalidClient(
+					fmt.Sprintf("%s[%d].type", path, index),
+					errors.New("multimodal tool output requires a same-dialect path"),
+				)
+			}
+			if err := validateResponsesInputAudio(rawItem); err != nil {
+				return "", protocolcore.TranslationReport{}, invalidClient(
+					fmt.Sprintf("%s[%d]", path, index),
+					err,
+				)
+			}
+		case "encrypted_content":
+			if !compatible {
+				return "", protocolcore.TranslationReport{}, invalidClient(
+					fmt.Sprintf("%s[%d].type", path, index),
+					errors.New("encrypted tool output requires a same-dialect path"),
+				)
+			}
+			if err := validateBoundedString(
+				item.EncryptedContent,
+				protocolcore.MaxProviderExtensionBytes,
+				false,
+			); err != nil {
+				return "", protocolcore.TranslationReport{}, invalidClient(
+					fmt.Sprintf("%s[%d].encrypted_content", path, index),
+					err,
+				)
+			}
+		default:
 			return "", protocolcore.TranslationReport{},
 				invalidClient(
 					fmt.Sprintf("%s[%d].type", path, index),
@@ -1616,10 +1752,6 @@ func decodeToolOutputText(
 					),
 				)
 		}
-		if index > 0 {
-			normalized.WriteByte('\n')
-		}
-		normalized.WriteString(item.Text)
 	}
 	return normalized.String(), notice(
 		protocolcore.NoticeToolOutputContentNormalized,

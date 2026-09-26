@@ -91,6 +91,70 @@ func TestProviderResponsePreservesOfficialAgentOutputEvidence(t *testing.T) {
 	}
 }
 
+func TestProviderResponseAcceptsCurrentOpaqueCodexOutputItems(t *testing.T) {
+	t.Parallel()
+
+	for _, item := range []string{
+		`{"type":"tool_search_call","call_id":"search_1","execution":"client","arguments":{"query":"files"}}`,
+		`{"type":"tool_search_output","call_id":"search_1","status":"completed","execution":"client","tools":[]}`,
+		`{"type":"web_search_call","id":"web_1","status":"completed"}`,
+		`{"type":"image_generation_call","id":"image_1","status":"completed","result":"opaque"}`,
+		`{"type":"compaction","id":"cmp_1","encrypted_content":"opaque-context"}`,
+		`{"type":"compaction_summary","encrypted_content":"opaque-context"}`,
+		`{"type":"context_compaction","id":"ctx_1","encrypted_content":"opaque-context"}`,
+	} {
+		var expected struct {
+			Type string `json:"type"`
+		}
+		if err := json.Unmarshal([]byte(item), &expected); err != nil {
+			t.Fatal(err)
+		}
+		t.Run(expected.Type, func(t *testing.T) {
+			body := []byte(`{
+				"id":"resp_opaque",
+				"created_at":1,
+				"status":"completed",
+				"model":"provider-model",
+				"output":[` + item + `],
+				"usage":{}
+			}`)
+			response, _, err := newTestCodec(t).DecodeProviderResponse(
+				streamingRequestFixture(t),
+				body,
+			)
+			if err != nil {
+				t.Fatalf("DecodeProviderResponse() error = %v", err)
+			}
+			if len(response.Blocks) != 1 ||
+				response.Blocks[0].Kind != protocolcore.BlockProviderExtension ||
+				response.Blocks[0].ProviderExtension.Kind() !=
+					protocolcore.ProviderExtensionOpaqueItem {
+				t.Fatalf("decoded output = %#v", response.Blocks)
+			}
+		})
+	}
+
+	localShell := []byte(`{
+		"id":"resp_shell",
+		"created_at":1,
+		"status":"completed",
+		"model":"provider-model",
+		"output":[{
+			"type":"local_shell_call",
+			"call_id":"shell_1",
+			"status":"completed",
+			"action":{"type":"exec","command":"pwd"}
+		}],
+		"usage":{}
+	}`)
+	if _, _, err := newTestCodec(t).DecodeProviderResponse(
+		streamingRequestFixture(t),
+		localShell,
+	); protocolcore.ReasonOf(err) != protocolcore.ReasonUnsupportedProviderData {
+		t.Fatalf("active local shell output error = %v", err)
+	}
+}
+
 func TestProviderStreamUsesCompletedItemsWhenTerminalOutputIsEmpty(t *testing.T) {
 	t.Parallel()
 

@@ -398,6 +398,24 @@ func TestDecodeCurrentResponsesInstructionsIdentityAndHostedToolHonestly(t *test
 	if _, _, err := newTestCodec(t).DecodeClientRequest(unknownHostedField); err == nil {
 		t.Fatal("unknown hosted-tool semantics were silently accepted")
 	}
+
+	toolSearch := []byte(`{
+		"model":"gpt-client-alias",
+		"input":[{"type":"message","role":"user","content":"ready"}],
+		"tools":[{"type":"tool_search","execution":"client","description":"Find deferred tools"}],
+		"stream":true
+	}`)
+	request, report, err = newTestCodec(t).DecodeCompatibleClientRequest(toolSearch)
+	if err != nil {
+		t.Fatalf("DecodeCompatibleClientRequest() error = %v", err)
+	}
+	if len(request.Tools) != 0 ||
+		!reportHasNotice(report, protocolcore.NoticeHostedToolNotForwarded) {
+		t.Fatalf("tool search request=%#v report=%#v", request, report.Notices())
+	}
+	if _, _, err := newTestCodec(t).DecodeClientRequest(toolSearch); protocolcore.ReasonOf(err) != protocolcore.ReasonInvalidClientRequest {
+		t.Fatalf("cross-dialect tool search error = %v", err)
+	}
 }
 
 func TestDecodeResponsesToolHistoryKeepsItemAndCallIdentitiesSeparate(t *testing.T) {
