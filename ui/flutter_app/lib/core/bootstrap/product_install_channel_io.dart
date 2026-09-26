@@ -1,6 +1,6 @@
 import 'dart:io';
 
-import 'install_channel_types.dart';
+import 'product_install_channel_contract.dart';
 
 Future<ProductInstallChannel> detectProductInstallChannel() async {
   try {

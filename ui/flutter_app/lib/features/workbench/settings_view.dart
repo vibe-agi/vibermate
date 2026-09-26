@@ -9,7 +9,7 @@ import '../../core/bootstrap/terminal_command.dart';
 import '../../core/design/viber_theme.dart';
 import '../../core/design/workbench_widgets.dart';
 import '../../core/i18n/app_copy.dart';
-import '../../core/update/product_update.dart';
+import '../../core/api/product_update_api.dart';
 import 'acp_setup.dart';
 import 'runtime_root_ca_panel.dart';
 import '../../core/api/control_models.dart';

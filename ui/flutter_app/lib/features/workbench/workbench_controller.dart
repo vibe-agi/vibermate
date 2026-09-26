@@ -17,7 +17,7 @@ import '../../core/bootstrap/public_certificate_exporter.dart';
 import '../../core/bootstrap/runtime_connection.dart';
 import '../../core/bootstrap/terminal_command.dart';
 import '../../core/preferences/workbench_preferences.dart';
-import '../../core/update/product_update.dart';
+import '../../core/api/product_update_api.dart';
 import '../../core/update/product_version.dart';
 import 'runtime_connection_guide.dart';
 import 'environment_editing.dart';

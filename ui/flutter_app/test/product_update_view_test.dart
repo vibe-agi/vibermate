@@ -3,7 +3,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:vibermate_app/core/bootstrap/terminal_command.dart';
 import 'package:vibermate_app/core/design/viber_theme.dart';
 import 'package:vibermate_app/core/preferences/workbench_preferences.dart';
-import 'package:vibermate_app/core/update/product_update.dart';
+import 'package:vibermate_app/core/api/product_update_api.dart';
 import 'package:vibermate_app/features/workbench/workbench_controller.dart';
 import 'package:vibermate_app/features/workbench/workbench_shell.dart';
 import 'package:vibermate_app/preview/preview_control_api.dart';

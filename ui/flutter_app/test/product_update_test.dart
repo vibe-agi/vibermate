@@ -3,7 +3,7 @@ import 'dart:convert';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
-import 'package:vibermate_app/core/update/product_update.dart';
+import 'package:vibermate_app/core/api/product_update_api.dart';
 
 void main() {
   test(

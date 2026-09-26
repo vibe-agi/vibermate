@@ -740,11 +740,14 @@ func CheckDesktopFrontendBoundary(repositoryRoot string) []Violation {
 		// Network and process access remain forbidden here.
 		"ui/flutter_app/lib/core/bootstrap/desktop_storage.dart":     {},
 		"ui/flutter_app/lib/core/bootstrap/platform_runtime_io.dart": {},
-		"ui/flutter_app/lib/core/bootstrap/terminal_command.dart":    {},
-		"ui/flutter_app/lib/core/bootstrap/terminal_command_io.dart": {},
+		// Read-only canonical executable path detection for Homebrew guidance.
+		"ui/flutter_app/lib/core/bootstrap/product_install_channel_io.dart": {},
+		"ui/flutter_app/lib/core/bootstrap/terminal_command.dart":           {},
+		"ui/flutter_app/lib/core/bootstrap/terminal_command_io.dart":        {},
 	}
 	allowedNetwork := map[string]struct{}{
 		"ui/flutter_app/lib/core/api/control_api.dart":           {},
+		"ui/flutter_app/lib/core/api/product_update_api.dart":    {},
 		"ui/flutter_app/lib/core/bootstrap/desktop_runtime.dart": {},
 	}
 	allowedProcess := map[string]struct{}{

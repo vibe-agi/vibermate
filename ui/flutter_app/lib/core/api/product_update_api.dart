@@ -3,10 +3,10 @@ import 'dart:typed_data';
 
 import 'package:http/http.dart' as http;
 
-import 'install_channel.dart';
-import 'product_version.dart';
+import '../bootstrap/product_install_channel.dart';
+import '../update/product_version.dart';
 
-export 'install_channel_types.dart';
+export '../bootstrap/product_install_channel_contract.dart';
 
 enum ProductUpdateState { current, available, unavailable }
 
