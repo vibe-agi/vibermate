@@ -150,7 +150,7 @@ func TestRuntimeUserEnvironmentPolicyChangesApplyToExistingLoginSession(t *testi
 		t.Fatalf("restricted Environment status = %d", denied.StatusCode)
 	}
 	var problem struct {
-		ReasonCode string `json:"reasonCode"`
+		ReasonCode string `json:"code"`
 	}
 	if json.NewDecoder(denied.Body).Decode(&problem) != nil || problem.ReasonCode != "environment_not_allowed" {
 		t.Fatalf("restricted Environment problem = %+v", problem)
