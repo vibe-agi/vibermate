@@ -62,18 +62,6 @@ final class _ProviderAccountTokenDetailsState
             runSpacing: 4,
             crossAxisAlignment: WrapCrossAlignment.center,
             children: [
-              if (info.email != null &&
-                  info.email != account.displayName &&
-                  info.email != account.codexOAuth?.email)
-                Text(info.email!, style: Theme.of(context).textTheme.bodySmall),
-              if (info.planType != null &&
-                  info.planType != account.codexOAuth?.planType)
-                Text(
-                  copy.format('provider_accounts.token.plan_summary', {
-                    'plan': info.planType!,
-                  }),
-                  style: Theme.of(context).textTheme.bodySmall,
-                ),
               if (expiry != null)
                 Text(
                   copy.format(

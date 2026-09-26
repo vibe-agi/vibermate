@@ -85,202 +85,182 @@ final class ProviderAccountRow extends StatelessWidget {
         ? context.viberColors.verified
         : context.viberColors.danger;
     final kindLabel = _localizedCopy(copy, 'routes.account.kind', account.kind);
-    final transportLabel = _localizedCopy(
-      copy,
-      'routes.account.transport',
-      account.kind,
-    );
-    final headerSummary = copy.format('routes.account.headers.summary', {
-      'set': account.setHeaderNames.length,
-      'delete': account.deleteHeaderNames.length,
-    });
-    final identitySummary = oauth == null
-        ? null
-        : [oauth.email ?? oauth.chatgptAccountId, ?oauth.planType].join(' · ');
-    final compactActions = Row(
+    final identity =
+        oauth?.email ??
+        account.tokenInfo?.email ??
+        oauth?.chatgptAccountId ??
+        account.tokenInfo?.chatgptAccountId ??
+        account.displayName;
+    final alias = identity == account.displayName ? null : account.displayName;
+    final plan = oauth?.planType ?? account.tokenInfo?.planType;
+    final details = [
+      if (alias != null)
+        copy.format('provider_accounts.alias', {'name': alias}),
+      if (plan != null) _planName(plan),
+      kindLabel,
+    ].join('  ·  ');
+    final actions = Row(
       mainAxisSize: MainAxisSize.min,
       children: [
         if (onRefresh != null)
-          compact
-              ? IconButton(
-                  key: Key('account-refresh-${account.id}'),
-                  tooltip: copy('provider_accounts.refresh.action'),
-                  onPressed: busy || !account.usable ? null : onRefresh,
-                  icon: refreshing
-                      ? const SizedBox.square(
-                          dimension: 15,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        )
-                      : const Icon(Icons.refresh, size: 15),
-                )
-              : TextButton.icon(
-                  key: Key('account-refresh-${account.id}'),
-                  onPressed: busy || !account.usable ? null : onRefresh,
-                  icon: refreshing
-                      ? const SizedBox.square(
-                          dimension: 15,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        )
-                      : const Icon(Icons.refresh, size: 15),
-                  label: Text(copy('provider_accounts.refresh.action')),
-                ),
+          IconButton(
+            key: Key('account-refresh-${account.id}'),
+            tooltip: copy('provider_accounts.refresh.action'),
+            onPressed: busy || !account.usable ? null : onRefresh,
+            constraints: const BoxConstraints.tightFor(width: 32, height: 32),
+            padding: const EdgeInsets.all(4),
+            icon: refreshing
+                ? const SizedBox.square(
+                    dimension: 15,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Icon(Icons.refresh, size: 16),
+          ),
         IconButton(
           key: Key('account-update-${account.id}'),
           onPressed: busy ? null : onReplace,
           tooltip: copy('routes.update_credential'),
-          icon: const Icon(Icons.key_outlined, size: 15),
+          constraints: const BoxConstraints.tightFor(width: 32, height: 32),
+          padding: const EdgeInsets.all(4),
+          icon: const Icon(Icons.key_outlined, size: 16),
         ),
         IconButton(
           key: Key('account-delete-${account.id}'),
           onPressed: busy ? null : onDelete,
           tooltip: copy('routes.delete_account'),
+          constraints: const BoxConstraints.tightFor(width: 32, height: 32),
+          padding: const EdgeInsets.all(4),
           icon: Icon(
             Icons.delete_outline,
-            size: 15,
+            size: 16,
             color: context.viberColors.danger,
           ),
         ),
       ],
     );
-    if (compact) {
-      return Padding(
-        padding: const EdgeInsets.fromLTRB(13, 9, 5, 9),
-        child: Row(
-          children: [
-            Icon(Icons.key, size: 14, color: context.viberColors.verified),
-            const SizedBox(width: 7),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
+    final identityBlock = Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Container(
+          width: 30,
+          height: 30,
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+            color: credentialColor.withValues(alpha: .12),
+            borderRadius: BorderRadius.circular(6),
+          ),
+          child: Icon(Icons.key_outlined, size: 16, color: credentialColor),
+        ),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Tooltip(
+            message: account.id,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Flexible(
+                      child: Text(
+                        identity,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: Theme.of(context).textTheme.titleMedium,
+                      ),
+                    ),
+                    if (onEditNote != null) ...[
+                      const SizedBox(width: 4),
+                      IconButton(
+                        key: Key('account-note-${account.id}'),
+                        onPressed: busy ? null : onEditNote,
+                        tooltip: copy(
+                          account.note.isEmpty
+                              ? 'provider_accounts.note.add'
+                              : 'provider_accounts.note.edit',
+                        ),
+                        constraints: const BoxConstraints.tightFor(
+                          width: 28,
+                          height: 28,
+                        ),
+                        padding: EdgeInsets.zero,
+                        icon: const Icon(Icons.edit_note_outlined, size: 16),
+                      ),
+                    ],
+                  ],
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  details,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: context.viberColors.textMuted,
+                  ),
+                ),
+                if (account.note.isNotEmpty) ...[
+                  const SizedBox(height: 3),
+                  Text(
+                    account.note,
+                    key: Key('account-note-text-${account.id}'),
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: context.viberColors.textFaint,
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(14, 13, 6, 10),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          if (compact || constraints.maxWidth < 680) {
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                identityBlock,
+                const SizedBox(height: 8),
+                Padding(
+                  padding: const EdgeInsets.only(left: 40),
+                  child: Wrap(
+                    spacing: 8,
+                    runSpacing: 4,
+                    crossAxisAlignment: WrapCrossAlignment.center,
+                    alignment: WrapAlignment.spaceBetween,
                     children: [
-                      _identity(context),
-                      const SizedBox(height: 4),
                       InlineStatus(
                         label: credentialLabel,
                         color: credentialColor,
                       ),
+                      actions,
                     ],
                   ),
-                  const SizedBox(height: 4),
-                  Text(
-                    '${identitySummary == null ? kindLabel : '$kindLabel  ·  $identitySummary'}  ·  $transportLabel  ·  $headerSummary  ·  ${copy.format('routes.credentials.epoch', {'epoch': account.credentialEpoch})}',
-                    style: monoStyle,
-                  ),
-                  const SizedBox(height: 4),
-                  Text(account.credentialOrigin, style: monoStyle),
-                ],
-              ),
-            ),
-            compactActions,
-          ],
-        ),
-      );
-    }
-    return ConstrainedBox(
-      constraints: const BoxConstraints(minHeight: 44),
-      child: Padding(
-        padding: const EdgeInsets.only(left: 14, right: 5),
-        child: Row(
-          children: [
-            Icon(Icons.key, size: 14, color: context.viberColors.verified),
-            const SizedBox(width: 8),
-            Expanded(
-              child: Tooltip(
-                message: account.id,
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    _identity(context),
-                    Text(
-                      '${identitySummary == null ? kindLabel : '$kindLabel · $identitySummary'} · $transportLabel · $headerSummary',
-                      overflow: TextOverflow.ellipsis,
-                      style: Theme.of(context).textTheme.bodySmall,
-                    ),
-                    Text(account.credentialOrigin, style: monoStyle),
-                  ],
                 ),
-              ),
-            ),
-            const SizedBox(width: 10),
-            SizedBox(
-              width: 76,
-              child: Text(
-                copy.format('routes.credentials.epoch', {
-                  'epoch': '${account.credentialEpoch}',
-                }),
-                style: monoStyle,
-              ),
-            ),
-            InlineStatus(label: credentialLabel, color: credentialColor),
-            const SizedBox(width: 4),
-            compactActions,
-          ],
-        ),
+              ],
+            );
+          }
+          return Row(
+            children: [
+              Expanded(child: identityBlock),
+              const SizedBox(width: 12),
+              InlineStatus(label: credentialLabel, color: credentialColor),
+              const SizedBox(width: 4),
+              actions,
+            ],
+          );
+        },
       ),
     );
   }
-
-  Widget _identity(BuildContext context) => Column(
-    crossAxisAlignment: CrossAxisAlignment.start,
-    children: [
-      Row(
-        children: [
-          Flexible(
-            child: Text(
-              account.displayName,
-              maxLines: compact ? 2 : 1,
-              overflow: TextOverflow.ellipsis,
-              style: Theme.of(context).textTheme.titleSmall,
-            ),
-          ),
-          if (onEditNote != null) ...[
-            const SizedBox(width: 4),
-            if (!compact && account.note.isEmpty)
-              TextButton.icon(
-                key: Key('account-note-${account.id}'),
-                onPressed: busy ? null : onEditNote,
-                icon: const Icon(Icons.edit_note_outlined, size: 16),
-                label: Text(copy('provider_accounts.note.add')),
-              )
-            else
-              IconButton(
-                key: Key('account-note-${account.id}'),
-                onPressed: busy ? null : onEditNote,
-                tooltip: copy(
-                  account.note.isEmpty
-                      ? 'provider_accounts.note.add'
-                      : 'provider_accounts.note.edit',
-                ),
-                constraints: const BoxConstraints.tightFor(
-                  width: 28,
-                  height: 28,
-                ),
-                padding: EdgeInsets.zero,
-                icon: const Icon(Icons.edit_note_outlined, size: 16),
-              ),
-          ],
-        ],
-      ),
-      if (account.note.isNotEmpty)
-        Tooltip(
-          message: account.note,
-          child: Text(
-            account.note,
-            key: Key('account-note-text-${account.id}'),
-            maxLines: 2,
-            overflow: TextOverflow.ellipsis,
-            style: Theme.of(context).textTheme.bodySmall?.copyWith(
-              color: context.viberColors.textMuted,
-            ),
-          ),
-        ),
-    ],
-  );
 }
+
+String _planName(String plan) =>
+    '${plan[0].toUpperCase()}${plan.substring(1).toLowerCase()}';
 
 final class _AccountEditorDialog extends StatefulWidget {
   const _AccountEditorDialog({

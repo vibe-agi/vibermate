@@ -29,6 +29,91 @@ enum RootCAGuideIntent { remove, replace }
 
 final class WorkbenchController extends ChangeNotifier
     with WidgetsBindingObserver {
+  final Map<String, AccountFacts> _providerAccountQuotas = {};
+  final Map<String, int> _providerAccountQuotaLoads = {};
+  final Map<String, int> _providerAccountQuotaFailures = {};
+
+  AccountFacts? providerAccountQuota(ProviderAccount account) {
+    final facts = _providerAccountQuotas[account.id];
+    return facts != null &&
+            facts.origin == account.credentialOrigin &&
+            facts.credentialEpoch >= account.credentialEpoch
+        ? facts
+        : null;
+  }
+
+  bool providerAccountQuotaLoading(ProviderAccount account) =>
+      _providerAccountQuotaLoads[account.id] == account.credentialEpoch;
+
+  bool providerAccountQuotaFailed(ProviderAccount account) =>
+      _providerAccountQuotaFailures[account.id] == account.credentialEpoch;
+
+  bool providerAccountQuotaSettled(ProviderAccount account) =>
+      providerAccountQuota(account) != null ||
+      providerAccountQuotaFailed(account);
+
+  void invalidateProviderAccountQuota(ProviderAccount account) {
+    _providerAccountQuotas.remove(account.id);
+    _providerAccountQuotaFailures.remove(account.id);
+    notifyListeners();
+  }
+
+  Future<AccountFacts?> refreshProviderAccountQuota(
+    ProviderAccount account,
+  ) async {
+    if (!account.usable || providerAccountQuotaLoading(account)) {
+      return providerAccountQuota(account);
+    }
+    final epoch = account.credentialEpoch;
+    _providerAccountQuotaLoads[account.id] = epoch;
+    _providerAccountQuotaFailures.remove(account.id);
+    notifyListeners();
+    try {
+      final facts = await accountFacts(account);
+      if (_disposed || _providerAccountQuotaLoads[account.id] != epoch) {
+        return null;
+      }
+      final current = data?.accounts
+          .where((value) => value.id == account.id)
+          .firstOrNull;
+      if (data != null &&
+          (current == null || current.credentialEpoch != epoch)) {
+        return null;
+      }
+      _providerAccountQuotas[account.id] = facts;
+      return facts;
+    } catch (_) {
+      if (!_disposed && _providerAccountQuotaLoads[account.id] == epoch) {
+        _providerAccountQuotaFailures[account.id] = epoch;
+      }
+      return providerAccountQuota(account);
+    } finally {
+      if (!_disposed && _providerAccountQuotaLoads[account.id] == epoch) {
+        _providerAccountQuotaLoads.remove(account.id);
+        notifyListeners();
+      }
+    }
+  }
+
+  Future<void> ensureProviderAccountQuotas(
+    Iterable<ProviderAccount> accounts,
+  ) async {
+    final pending = accounts
+        .where(
+          (account) =>
+              account.usable &&
+              providerAccountQuota(account) == null &&
+              !providerAccountQuotaLoading(account) &&
+              !providerAccountQuotaFailed(account),
+        )
+        .toList(growable: false);
+    for (var index = 0; index < pending.length; index += 4) {
+      await Future.wait(
+        pending.skip(index).take(4).map(refreshProviderAccountQuota),
+      );
+    }
+  }
+
   Future<AccountResetRedemption> redeemAccountResetCredit(
     ProviderAccount account,
     AccountResetCredit credit,

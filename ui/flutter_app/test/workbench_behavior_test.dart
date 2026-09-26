@@ -5810,10 +5810,12 @@ void main() {
         findsOneWidget,
       );
       expect(
-        find.textContaining('Anthropic API key · X-Api-Key'),
+        find.descendant(
+          of: find.byKey(const Key('provider-accounts-list')),
+          matching: find.text('Credential ready'),
+        ),
         findsOneWidget,
       );
-      expect(find.textContaining('Set 1 · Delete 1'), findsOneWidget);
 
       await tester.tap(policyNextStep);
       await tester.pumpAndSettle();
@@ -5872,7 +5874,6 @@ void main() {
         ),
         findsOneWidget,
       );
-      expect(find.textContaining('Credential version 2'), findsOneWidget);
 
       // Targeted by key, not by icon: the Endpoint itself now offers a delete
       // with the same icon, and an icon is not an identity.

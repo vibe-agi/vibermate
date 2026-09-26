@@ -2,7 +2,9 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../../core/api/account_facts_models.dart';
 import '../../core/api/control_models.dart';
+import '../../core/api/provider_origin.dart';
 import '../../core/design/viber_theme.dart';
 import '../../core/design/workbench_widgets.dart';
 import '../../core/i18n/app_copy.dart';
@@ -12,6 +14,14 @@ import 'provider_account_token_details.dart';
 import 'provider_account_facts.dart';
 import 'workbench_controller.dart';
 import 'control_failure_notice.dart';
+
+enum _ProviderAccountSort {
+  defaultOrder,
+  attention,
+  weeklyUsage,
+  weeklyReset,
+  name,
+}
 
 /// The one place for managing upstream credentials. Service configuration
 /// screens navigate here instead of hosting another credential editor.
@@ -31,6 +41,8 @@ final class ProviderAccountsView extends StatefulWidget {
 
 final class _ProviderAccountsViewState extends State<ProviderAccountsView> {
   final _search = TextEditingController();
+  var _sort = _ProviderAccountSort.defaultOrder;
+  String _quotaSignature = '';
 
   @override
   void dispose() {
@@ -44,24 +56,28 @@ final class _ProviderAccountsViewState extends State<ProviderAccountsView> {
     final copy = widget.copy;
     final accounts = controller.data?.accounts ?? const <ProviderAccount>[];
     final endpoints = controller.data?.endpoints ?? const <UpstreamEndpoint>[];
+    _scheduleQuotaLoads(accounts);
     final query = _search.text.trim().toLowerCase();
-    final filtered = accounts
-        .where((account) {
-          return [
-            account.displayName,
-            account.note,
-            copy('routes.account.kind.${account.kind}'),
-            account.codexOAuth?.email ?? '',
-            account.codexOAuth?.chatgptAccountId ?? '',
-            account.tokenInfo?.email ?? '',
-            account.tokenInfo?.chatgptAccountId ?? '',
-            account.credentialOrigin,
-            ...endpoints
-                .where((value) => account.isLinkedTo(value.id))
-                .map((value) => value.displayName),
-          ].any((value) => value.toLowerCase().contains(query));
-        })
-        .toList(growable: false);
+    final filtered = _sortedAccounts(
+      accounts
+          .where((account) {
+            return [
+              account.displayName,
+              account.note,
+              copy('routes.account.kind.${account.kind}'),
+              account.codexOAuth?.email ?? '',
+              account.codexOAuth?.chatgptAccountId ?? '',
+              account.tokenInfo?.email ?? '',
+              account.tokenInfo?.chatgptAccountId ?? '',
+              account.credentialOrigin,
+              ...endpoints
+                  .where((value) => account.isLinkedTo(value.id))
+                  .map((value) => value.displayName),
+            ].any((value) => value.toLowerCase().contains(query));
+          })
+          .toList(growable: false),
+      accounts,
+    );
 
     return Column(
       children: [
@@ -111,21 +127,62 @@ final class _ProviderAccountsViewState extends State<ProviderAccountsView> {
           ),
         Padding(
           padding: const EdgeInsets.all(16),
-          child: TextField(
-            key: const Key('provider-accounts-search'),
-            controller: _search,
-            onChanged: (_) => setState(() {}),
-            decoration: InputDecoration(
-              hintText: copy('provider_accounts.search'),
-              prefixIcon: const Icon(Icons.search, size: 18),
-              suffixIcon: query.isEmpty
-                  ? null
-                  : IconButton(
-                      tooltip: copy('provider_accounts.clear_search'),
-                      onPressed: () => setState(_search.clear),
-                      icon: const Icon(Icons.close, size: 16),
-                    ),
-            ),
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              final search = TextField(
+                key: const Key('provider-accounts-search'),
+                controller: _search,
+                onChanged: (_) => setState(() {}),
+                decoration: InputDecoration(
+                  hintText: copy('provider_accounts.search'),
+                  prefixIcon: const Icon(Icons.search, size: 18),
+                  suffixIcon: query.isEmpty
+                      ? null
+                      : IconButton(
+                          tooltip: copy('provider_accounts.clear_search'),
+                          onPressed: () => setState(_search.clear),
+                          icon: const Icon(Icons.close, size: 16),
+                        ),
+                ),
+              );
+              final sort = SizedBox(
+                width: constraints.maxWidth < 560 ? constraints.maxWidth : 220,
+                child: DropdownButtonFormField<_ProviderAccountSort>(
+                  key: const Key('provider-accounts-sort'),
+                  initialValue: _sort,
+                  isExpanded: true,
+                  decoration: InputDecoration(
+                    labelText: copy('provider_accounts.sort.label'),
+                    prefixIcon: const Icon(Icons.sort, size: 18),
+                  ),
+                  items: [
+                    for (final value in _ProviderAccountSort.values)
+                      DropdownMenuItem(
+                        value: value,
+                        child: Text(
+                          copy('provider_accounts.sort.${value.name}'),
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                  ],
+                  onChanged: (value) {
+                    if (value != null) setState(() => _sort = value);
+                  },
+                ),
+              );
+              if (constraints.maxWidth < 560) {
+                return Column(
+                  children: [search, const SizedBox(height: 8), sort],
+                );
+              }
+              return Row(
+                children: [
+                  Expanded(child: search),
+                  const SizedBox(width: 10),
+                  sort,
+                ],
+              );
+            },
           ),
         ),
         Expanded(
@@ -154,19 +211,25 @@ final class _ProviderAccountsViewState extends State<ProviderAccountsView> {
                       : null,
                 )
               : LayoutBuilder(
-                  builder: (context, constraints) => ListView.separated(
+                  builder: (context, constraints) => ListView.builder(
                     key: const Key('provider-accounts-list'),
                     padding: const EdgeInsets.only(bottom: 24),
                     itemCount: filtered.length,
-                    separatorBuilder: (_, _) => const Divider(height: 1),
                     itemBuilder: (context, index) {
                       final account = filtered[index];
                       final linkedEndpoints = endpoints.where(
                         (value) => account.isLinkedTo(value.id),
                       );
-                      return Padding(
+                      return Container(
                         key: Key('provider-account-${account.id}'),
-                        padding: const EdgeInsets.symmetric(vertical: 10),
+                        margin: const EdgeInsets.fromLTRB(16, 0, 16, 10),
+                        decoration: BoxDecoration(
+                          color: context.viberColors.panel,
+                          border: Border.all(
+                            color: context.viberColors.dividerSoft,
+                          ),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
@@ -211,20 +274,20 @@ final class _ProviderAccountsViewState extends State<ProviderAccountsView> {
                                 ),
                               ),
                             ),
-                            ProviderAccountTokenDetails(
-                              account: account,
-                              copy: copy,
-                            ),
                             ProviderAccountFactsPanel(
                               account: account,
                               controller: controller,
                               copy: copy,
                             ),
+                            ProviderAccountTokenDetails(
+                              account: account,
+                              copy: copy,
+                            ),
                             if (linkedEndpoints.isEmpty)
                               Padding(
                                 padding: const EdgeInsets.only(
-                                  left: 36,
-                                  top: 6,
+                                  left: 14,
+                                  bottom: 8,
                                 ),
                                 child: TextButton.icon(
                                   onPressed: () => controller.selectSection(
@@ -239,8 +302,8 @@ final class _ProviderAccountsViewState extends State<ProviderAccountsView> {
                             for (final endpoint in linkedEndpoints)
                               Padding(
                                 padding: const EdgeInsets.only(
-                                  left: 36,
-                                  top: 6,
+                                  left: 14,
+                                  bottom: 8,
                                 ),
                                 child: TextButton.icon(
                                   key: Key(
@@ -276,4 +339,115 @@ final class _ProviderAccountsViewState extends State<ProviderAccountsView> {
       ],
     );
   }
+
+  void _scheduleQuotaLoads(List<ProviderAccount> accounts) {
+    final eligible = accounts.where(_supportsQuota).toList(growable: false);
+    final signature = eligible
+        .map(
+          (account) =>
+              '${account.id}:${account.credentialEpoch}:${account.credentialOrigin}',
+        )
+        .join('|');
+    if (signature == _quotaSignature) return;
+    _quotaSignature = signature;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        unawaited(widget.controller.ensureProviderAccountQuotas(eligible));
+      }
+    });
+  }
+
+  List<ProviderAccount> _sortedAccounts(
+    List<ProviderAccount> filtered,
+    List<ProviderAccount> all,
+  ) {
+    if (_sort == _ProviderAccountSort.defaultOrder) return filtered;
+    final originalIndex = {
+      for (final (index, account) in all.indexed) account.id: index,
+    };
+    if ((_sort == _ProviderAccountSort.weeklyUsage ||
+            _sort == _ProviderAccountSort.weeklyReset) &&
+        all
+            .where(_supportsQuota)
+            .any(
+              (account) =>
+                  !widget.controller.providerAccountQuotaSettled(account),
+            )) {
+      return filtered;
+    }
+    final sorted = [...filtered];
+    sorted.sort((left, right) {
+      final compared = switch (_sort) {
+        _ProviderAccountSort.attention => _attentionRank(
+          left,
+        ).compareTo(_attentionRank(right)),
+        _ProviderAccountSort.weeklyUsage => _compareNullableIntDescending(
+          _weeklyWindow(left)?.usedPercent,
+          _weeklyWindow(right)?.usedPercent,
+        ),
+        _ProviderAccountSort.weeklyReset => _compareNullableDate(
+          _weeklyWindow(left)?.resetAt,
+          _weeklyWindow(right)?.resetAt,
+        ),
+        _ProviderAccountSort.name => _accountIdentity(
+          left,
+        ).toLowerCase().compareTo(_accountIdentity(right).toLowerCase()),
+        _ProviderAccountSort.defaultOrder => 0,
+      };
+      return compared != 0
+          ? compared
+          : originalIndex[left.id]!.compareTo(originalIndex[right.id]!);
+    });
+    return sorted;
+  }
+
+  int _attentionRank(ProviderAccount account) {
+    final oauth = account.codexOAuth;
+    final used = _weeklyWindow(account)?.usedPercent ?? 0;
+    if (!account.usable ||
+        oauth?.state == 'reconnect_required' ||
+        used >= 100) {
+      return 0;
+    }
+    if (oauth?.state == 'refresh_due' || used >= 90) return 1;
+    return 2;
+  }
+
+  AccountQuotaWindow? _weeklyWindow(ProviderAccount account) {
+    final facts = widget.controller.providerAccountQuota(account);
+    AccountQuotaWindow? longest;
+    for (final limit in facts?.limits ?? const <AccountQuotaLimit>[]) {
+      for (final window in [limit.primary, limit.secondary]) {
+        if (window != null &&
+            (longest == null || window.windowSeconds > longest.windowSeconds)) {
+          longest = window;
+        }
+      }
+    }
+    return longest;
+  }
+
+  bool _supportsQuota(ProviderAccount account) {
+    final origin = Uri.tryParse(account.credentialOrigin);
+    return account.usable && origin != null && isChatGPTCodexOrigin(origin);
+  }
+
+  String _accountIdentity(ProviderAccount account) =>
+      account.codexOAuth?.email ??
+      account.tokenInfo?.email ??
+      account.codexOAuth?.chatgptAccountId ??
+      account.tokenInfo?.chatgptAccountId ??
+      account.displayName;
+}
+
+int _compareNullableIntDescending(int? left, int? right) {
+  if (left == null) return right == null ? 0 : 1;
+  if (right == null) return -1;
+  return right.compareTo(left);
+}
+
+int _compareNullableDate(DateTime? left, DateTime? right) {
+  if (left == null) return right == null ? 0 : 1;
+  if (right == null) return -1;
+  return left.compareTo(right);
 }

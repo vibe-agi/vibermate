@@ -213,6 +213,67 @@ void main() {
       },
     );
   }
+
+  testWidgets('account sorting uses the visible account identity', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1180, 900));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final api = PreviewControlApi(seedCaptures: false);
+    for (final name in ['sort-fixture-zulu', 'sort-fixture-alpha']) {
+      await api.createProviderAccount(
+        id: 'account.$name',
+        displayName: name,
+        upstreamEndpointId: 'target.codex.official',
+        kind: 'bearer_token',
+        secret: 'synthetic-account-secret',
+        headerPolicy: const ProviderAccountHeaderPolicy(),
+        unlinked: true,
+      );
+    }
+    final controller = WorkbenchController(
+      api: api,
+      terminalCommands: PreviewTerminalCommandService(),
+      previewMode: true,
+      closeRuntime: api.close,
+      initialPreferences: const WorkbenchPreferences(
+        language: AppLanguage.simplifiedChinese,
+        section: WorkbenchSection.providerAccounts,
+      ),
+    );
+    addTearDown(controller.dispose);
+    await controller.initialize();
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: ViberTheme.dark(),
+        home: WorkbenchShell(controller: controller),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const Key('provider-accounts-search')),
+      'sort-fixture',
+    );
+    await tester.pumpAndSettle();
+    final alpha = find.byKey(
+      const Key('provider-account-account.sort-fixture-alpha'),
+    );
+    final zulu = find.byKey(
+      const Key('provider-account-account.sort-fixture-zulu'),
+    );
+    expect(tester.getTopLeft(zulu).dy, lessThan(tester.getTopLeft(alpha).dy));
+    expect(find.textContaining('25%'), findsNWidgets(2));
+
+    await tester.tap(find.byKey(const Key('provider-accounts-sort')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('按账号排序').last);
+    await tester.pumpAndSettle();
+    expect(tester.getTopLeft(alpha).dy, lessThan(tester.getTopLeft(zulu).dy));
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pump();
+    controller.dispose();
+  });
 }
 
 // Optional local review artifacts, never a required golden baseline or secret.

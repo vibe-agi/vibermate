@@ -102,6 +102,17 @@ final class PreviewControlApi implements ControlApi {
                           .millisecondsSinceEpoch ~/
                       1000,
                 },
+                'secondary': {
+                  'usedPercent': 63,
+                  'windowSeconds': 604800,
+                  'resetAfterSeconds': 259200,
+                  'resetAt':
+                      DateTime.now()
+                          .toUtc()
+                          .add(const Duration(days: 3))
+                          .millisecondsSinceEpoch ~/
+                      1000,
+                },
               },
             ],
       if (history)
