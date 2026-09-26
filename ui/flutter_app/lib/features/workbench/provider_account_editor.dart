@@ -85,17 +85,15 @@ final class ProviderAccountRow extends StatelessWidget {
         ? context.viberColors.verified
         : context.viberColors.danger;
     final kindLabel = _localizedCopy(copy, 'routes.account.kind', account.kind);
-    final identity =
+    final accountIdentity =
         oauth?.email ??
         account.tokenInfo?.email ??
         oauth?.chatgptAccountId ??
-        account.tokenInfo?.chatgptAccountId ??
-        account.displayName;
-    final alias = identity == account.displayName ? null : account.displayName;
+        account.tokenInfo?.chatgptAccountId;
     final plan = oauth?.planType ?? account.tokenInfo?.planType;
     final details = [
-      if (alias != null)
-        copy.format('provider_accounts.alias', {'name': alias}),
+      if (accountIdentity != null && accountIdentity != account.displayName)
+        accountIdentity,
       if (plan != null) _planName(plan),
       kindLabel,
     ].join('  ·  ');
@@ -162,7 +160,7 @@ final class ProviderAccountRow extends StatelessWidget {
                   children: [
                     Flexible(
                       child: Text(
-                        identity,
+                        account.displayName,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: Theme.of(context).textTheme.titleMedium,
@@ -188,15 +186,17 @@ final class ProviderAccountRow extends StatelessWidget {
                     ],
                   ],
                 ),
-                const SizedBox(height: 2),
-                Text(
-                  details,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                    color: context.viberColors.textMuted,
+                if (details.isNotEmpty) ...[
+                  const SizedBox(height: 2),
+                  Text(
+                    details,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: context.viberColors.textMuted,
+                    ),
                   ),
-                ),
+                ],
                 if (account.note.isNotEmpty) ...[
                   const SizedBox(height: 3),
                   Text(
@@ -216,7 +216,7 @@ final class ProviderAccountRow extends StatelessWidget {
       ],
     );
     return Padding(
-      padding: const EdgeInsets.fromLTRB(14, 13, 6, 10),
+      padding: const EdgeInsets.fromLTRB(14, 11, 6, 6),
       child: LayoutBuilder(
         builder: (context, constraints) {
           if (compact || constraints.maxWidth < 680) {

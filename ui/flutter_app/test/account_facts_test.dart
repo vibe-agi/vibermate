@@ -57,6 +57,10 @@ void main() {
         expect(find.textContaining('25%'), findsOneWidget);
         expect(find.text('Codex 可用额度重置券：1'), findsOneWidget);
         expect(find.text('当前可使用：1'), findsOneWidget);
+        expect(
+          tester.getSize(find.byType(LinearProgressIndicator).first).width,
+          lessThanOrEqualTo(width < 600 ? 340 : 300),
+        );
         expect(find.textContaining('1,200'), findsNothing);
         await tester.tap(
           find.byKey(const Key('account-history-account.facts')),
@@ -70,7 +74,7 @@ void main() {
         final history = tester.getRect(
           find.byKey(const Key('account-facts-history')),
         );
-        expect(history.top, greaterThan(quota.bottom));
+        expect(history.top, greaterThanOrEqualTo(quota.bottom));
         expect(find.text('synthetic-secret'), findsNothing);
         expect(tester.takeException(), isNull);
       },
@@ -86,7 +90,7 @@ void main() {
       await _pumpPanel(tester, fixture, dark: dark);
       await _query(tester);
       await _query(tester, history: true);
-      expect(find.text('Pro'), findsOneWidget);
+      expect(find.text('Pro'), findsNothing);
       expect(find.text('6.98B'), findsOneWidget);
       expect(find.text('6,980,410,315 tokens'), findsOneWidget);
       expect(find.text('codex'), findsNothing);

@@ -217,9 +217,9 @@ final class _ProviderAccountsViewState extends State<ProviderAccountsView> {
                     itemCount: filtered.length,
                     itemBuilder: (context, index) {
                       final account = filtered[index];
-                      final linkedEndpoints = endpoints.where(
-                        (value) => account.isLinkedTo(value.id),
-                      );
+                      final linkedEndpoints = endpoints
+                          .where((value) => account.isLinkedTo(value.id))
+                          .toList(growable: false);
                       return Container(
                         key: Key('provider-account-${account.id}'),
                         margin: const EdgeInsets.fromLTRB(16, 0, 16, 10),
@@ -283,52 +283,52 @@ final class _ProviderAccountsViewState extends State<ProviderAccountsView> {
                               account: account,
                               copy: copy,
                             ),
-                            if (linkedEndpoints.isEmpty)
-                              Padding(
-                                padding: const EdgeInsets.only(
-                                  left: 14,
-                                  bottom: 8,
-                                ),
-                                child: TextButton.icon(
-                                  onPressed: () => controller.selectSection(
-                                    WorkbenchSection.routes,
-                                  ),
-                                  icon: const Icon(Icons.add_link, size: 14),
-                                  label: Text(
-                                    copy('provider_accounts.unlinked'),
-                                  ),
-                                ),
+                            Padding(
+                              padding: const EdgeInsets.fromLTRB(14, 0, 14, 6),
+                              child: Wrap(
+                                spacing: 6,
+                                runSpacing: 2,
+                                children: [
+                                  if (linkedEndpoints.isEmpty)
+                                    TextButton.icon(
+                                      onPressed: () => controller.selectSection(
+                                        WorkbenchSection.routes,
+                                      ),
+                                      icon: const Icon(
+                                        Icons.add_link,
+                                        size: 14,
+                                      ),
+                                      label: Text(
+                                        copy('provider_accounts.unlinked'),
+                                      ),
+                                    ),
+                                  for (final endpoint in linkedEndpoints)
+                                    TextButton.icon(
+                                      key: Key(
+                                        'provider-account-service-${account.id}-${endpoint.id}',
+                                      ),
+                                      onPressed: () {
+                                        controller.selectEndpoint(endpoint.id);
+                                        controller.selectSection(
+                                          WorkbenchSection.routes,
+                                        );
+                                      },
+                                      icon: const Icon(
+                                        Icons.hub_outlined,
+                                        size: 14,
+                                      ),
+                                      label: Text(endpoint.displayName),
+                                      style: TextButton.styleFrom(
+                                        foregroundColor:
+                                            context.viberColors.textMuted,
+                                        textStyle: Theme.of(
+                                          context,
+                                        ).textTheme.bodySmall,
+                                      ),
+                                    ),
+                                ],
                               ),
-                            for (final endpoint in linkedEndpoints)
-                              Padding(
-                                padding: const EdgeInsets.only(
-                                  left: 14,
-                                  bottom: 8,
-                                ),
-                                child: TextButton.icon(
-                                  key: Key(
-                                    'provider-account-service-${account.id}-${endpoint.id}',
-                                  ),
-                                  onPressed: () {
-                                    controller.selectEndpoint(endpoint.id);
-                                    controller.selectSection(
-                                      WorkbenchSection.routes,
-                                    );
-                                  },
-                                  icon: const Icon(
-                                    Icons.hub_outlined,
-                                    size: 14,
-                                  ),
-                                  label: Text(endpoint.displayName),
-                                  style: TextButton.styleFrom(
-                                    foregroundColor:
-                                        context.viberColors.textMuted,
-                                    textStyle: Theme.of(
-                                      context,
-                                    ).textTheme.bodySmall,
-                                  ),
-                                ),
-                              ),
+                            ),
                           ],
                         ),
                       );
@@ -432,12 +432,7 @@ final class _ProviderAccountsViewState extends State<ProviderAccountsView> {
     return account.usable && origin != null && isChatGPTCodexOrigin(origin);
   }
 
-  String _accountIdentity(ProviderAccount account) =>
-      account.codexOAuth?.email ??
-      account.tokenInfo?.email ??
-      account.codexOAuth?.chatgptAccountId ??
-      account.tokenInfo?.chatgptAccountId ??
-      account.displayName;
+  String _accountIdentity(ProviderAccount account) => account.displayName;
 }
 
 int _compareNullableIntDescending(int? left, int? right) {

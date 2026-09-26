@@ -220,13 +220,11 @@ final class _ProviderAccountFactsPanelState
       container: true,
       explicitChildNodes: true,
       child: Padding(
-        padding: const EdgeInsets.fromLTRB(14, 4, 14, 10),
+        padding: const EdgeInsets.fromLTRB(14, 2, 14, 8),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             _quotaSection(context),
-            Divider(height: 18, color: context.viberColors.dividerSoft),
-            Align(alignment: Alignment.centerLeft, child: _historyAction()),
             if (_history.started) _historySection(context),
           ],
         ),
@@ -234,7 +232,7 @@ final class _ProviderAccountFactsPanelState
     );
   }
 
-  Widget _quotaAction({bool compact = false}) {
+  Widget _quotaAction() {
     final facts = widget.controller.providerAccountQuota(widget.account);
     final loading = widget.controller.providerAccountQuotaLoading(
       widget.account,
@@ -250,15 +248,10 @@ final class _ProviderAccountFactsPanelState
             dimension: 16,
             child: CircularProgressIndicator(strokeWidth: 2),
           )
-        : Icon(compact ? Icons.refresh : Icons.data_usage_outlined, size: 16);
-    if (compact) {
-      return IconButton(
-        key: Key('account-quota-${widget.account.id}'),
-        tooltip: label,
-        onPressed: enabled ? _refreshQuota : null,
-        icon: icon,
-      );
-    }
+        : Icon(
+            facts == null ? Icons.data_usage_outlined : Icons.refresh,
+            size: 16,
+          );
     return TextButton.icon(
       key: Key('account-quota-${widget.account.id}'),
       onPressed: enabled ? _refreshQuota : null,
@@ -294,7 +287,6 @@ final class _ProviderAccountFactsPanelState
       widget.account,
     );
     final failed = widget.controller.providerAccountQuotaFailed(widget.account);
-    final colors = context.viberColors;
     final unavailable =
         facts != null &&
         (facts.state == 'unsupported' || facts.state == 'unavailable');
@@ -303,44 +295,9 @@ final class _ProviderAccountFactsPanelState
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
-            children: [
-              Expanded(
-                child: Wrap(
-                  spacing: 10,
-                  runSpacing: 6,
-                  crossAxisAlignment: WrapCrossAlignment.center,
-                  children: [
-                    Text(
-                      copy('account_facts.quota_title'),
-                      style: Theme.of(context).textTheme.titleSmall,
-                    ),
-                    if (facts?.planType != null)
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 7,
-                          vertical: 2,
-                        ),
-                        decoration: BoxDecoration(
-                          color: colors.panelRaised,
-                          borderRadius: BorderRadius.circular(4),
-                        ),
-                        child: Text(
-                          _planName(facts!.planType!),
-                          style: Theme.of(context).textTheme.labelSmall,
-                        ),
-                      ),
-                  ],
-                ),
-              ),
-              if (facts != null || loading || failed)
-                _quotaAction(compact: true),
-            ],
-          ),
-          const SizedBox(height: 10),
           if (_resetNotice != null) ...[
             _notice(context, _resetNotice!),
-            const SizedBox(height: 10),
+            const SizedBox(height: 6),
           ],
           if (failed || facts?.state == 'stale') ...[
             _notice(
@@ -351,42 +308,53 @@ final class _ProviderAccountFactsPanelState
                         : 'account_facts.failed_stale'
                   : 'account_facts.stale',
             ),
-            const SizedBox(height: 10),
+            const SizedBox(height: 6),
           ],
           if (unavailable)
-            _caption(context, copy('account_facts.unavailable'))
+            Wrap(
+              spacing: 10,
+              runSpacing: 4,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              children: [
+                _caption(context, copy('account_facts.unavailable')),
+                _quotaAction(),
+                _historyAction(),
+              ],
+            )
           else if (facts != null)
             _quotaContent(context, facts)
           else if (loading)
-            Row(
+            Wrap(
+              spacing: 10,
+              runSpacing: 4,
+              crossAxisAlignment: WrapCrossAlignment.center,
               children: [
-                const SizedBox.square(
-                  dimension: 14,
-                  child: CircularProgressIndicator(strokeWidth: 1.5),
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const SizedBox.square(
+                      dimension: 14,
+                      child: CircularProgressIndicator(strokeWidth: 1.5),
+                    ),
+                    const SizedBox(width: 8),
+                    _caption(context, copy('account_facts.loading')),
+                  ],
                 ),
-                const SizedBox(width: 8),
-                _caption(context, copy('account_facts.loading')),
+                _historyAction(),
               ],
             )
-          else if (!failed) ...[
-            _caption(context, copy('account_facts.quota_hint')),
-            const SizedBox(height: 4),
-            _quotaAction(),
-          ],
-          if (facts != null) ...[
-            const SizedBox(height: 8),
-            Tooltip(
-              message: copy.format('account_facts.observed', {
-                'time': _fullTime(facts.observedAt),
-              }),
-              child: _caption(
-                context,
-                copy.format('account_facts.updated', {
-                  'time': _shortTime(facts.observedAt),
-                }),
-              ),
+          else
+            Wrap(
+              spacing: 10,
+              runSpacing: 4,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              children: [
+                if (!failed)
+                  _caption(context, copy('account_facts.quota_hint')),
+                _quotaAction(),
+                _historyAction(),
+              ],
             ),
-          ],
         ],
       ),
     );
@@ -396,7 +364,7 @@ final class _ProviderAccountFactsPanelState
     final facts = _history.facts;
     return Container(
       key: const Key('account-facts-history'),
-      margin: const EdgeInsets.only(top: 4),
+      margin: const EdgeInsets.only(top: 8),
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
         color: context.viberColors.panelRaised,
@@ -450,116 +418,190 @@ final class _ProviderAccountFactsPanelState
       (left, right) =>
           left.window.windowSeconds.compareTo(right.window.windowSeconds),
     );
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final windowsPanel = _quotaWindows(context, facts, windows);
+        final metadata = _quotaMetadata(context, facts);
+        if (windows.isNotEmpty && constraints.maxWidth >= 720) {
+          final width = windows.length == 1
+              ? 320.0
+              : (constraints.maxWidth - 300).clamp(420.0, 640.0).toDouble();
+          return Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              SizedBox(width: width, child: windowsPanel),
+              const SizedBox(width: 16),
+              Expanded(child: metadata),
+            ],
+          );
+        }
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [windowsPanel, const SizedBox(height: 8), metadata],
+        );
+      },
+    );
+  }
+
+  Widget _quotaWindows(
+    BuildContext context,
+    AccountFacts facts,
+    List<({AccountQuotaLimit limit, AccountQuotaWindow window})> windows,
+  ) {
+    if (windows.isEmpty) {
+      return _caption(context, copy('account_facts.no_windows'));
+    }
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final columns = windows.length > 1 && constraints.maxWidth >= 420
+            ? 2
+            : 1;
+        final available = columns == 2
+            ? (constraints.maxWidth - 8) / 2
+            : constraints.maxWidth;
+        final width = columns == 1 && available > 360 ? 360.0 : available;
+        return Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            for (final item in windows)
+              SizedBox(
+                width: width,
+                child: _window(
+                  context,
+                  item.window,
+                  name: facts.limits.length > 1 || item.limit.id != 'codex'
+                      ? item.limit.name ?? item.limit.model ?? item.limit.id
+                      : null,
+                ),
+              ),
+          ],
+        );
+      },
+    );
+  }
+
+  Widget _quotaMetadata(BuildContext context, AccountFacts facts) {
+    final credits = facts.credits;
+    final resets = facts.rateLimitResets;
+    final limitReached = facts.limits.any(
+      (limit) => limit.limitReached == true || limit.allowed == false,
+    );
+    final resetAvailable =
+        resets != null &&
+        resets.availableCount > 0 &&
+        resets.applicableAvailableCount != 0 &&
+        resets.details?.any((credit) => credit.available) == true &&
+        widget.account.kind == 'codex_oauth' &&
+        !widget.controller.previewMode;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        if (facts.limits.any(
-          (limit) => limit.limitReached == true || limit.allowed == false,
-        )) ...[
-          _notice(
-            context,
-            facts.limits.any((limit) => limit.limitReached == true)
-                ? 'account_facts.limit_reached'
-                : 'account_facts.not_allowed',
-          ),
-          const SizedBox(height: 8),
-        ],
-        if (windows.isEmpty)
-          _caption(context, copy('account_facts.no_windows'))
-        else
-          LayoutBuilder(
-            builder: (context, constraints) {
-              final width = constraints.maxWidth >= 560
-                  ? (constraints.maxWidth - 10) / 2
-                  : constraints.maxWidth;
-              return Wrap(
-                spacing: 10,
-                runSpacing: 8,
-                children: [
-                  for (final item in windows)
-                    SizedBox(
-                      width: width,
-                      child: _window(
-                        context,
-                        item.window,
-                        name:
-                            facts.limits.length > 1 || item.limit.id != 'codex'
-                            ? item.limit.name ??
-                                  item.limit.model ??
-                                  item.limit.id
-                            : null,
-                      ),
-                    ),
-                ],
-              );
-            },
-          ),
-        if (facts.credits != null || facts.rateLimitResets != null)
-          const SizedBox(height: 8),
-        if (facts.credits case final credits?)
-          _caption(
-            context,
-            copy.format('account_facts.credits', {
-              'balance': credits.unlimited
-                  ? copy('account_facts.unlimited')
-                  : !credits.hasCredits
-                  ? copy('account_facts.no_credits')
-                  : credits.balance ?? copy('account_facts.unknown'),
-            }),
-          ),
-        if (facts.rateLimitResets case final resets?) ...[
-          if (facts.credits != null) const SizedBox(height: 8),
-          _caption(
-            context,
-            copy.format('account_facts.banked_resets', {
-              'count': resets.availableCount,
-            }),
-          ),
-          if (resets.applicableAvailableCount case final applicable?)
-            _caption(
-              context,
-              copy.format('account_facts.applicable_resets', {
-                'count': applicable,
-              }),
+        Wrap(
+          spacing: 10,
+          runSpacing: 4,
+          crossAxisAlignment: WrapCrossAlignment.center,
+          children: [
+            Text(
+              copy('account_facts.quota_title'),
+              style: Theme.of(context).textTheme.titleSmall,
             ),
-          if (resets.availableCount > 0 && widget.account.kind != 'codex_oauth')
-            _caption(context, copy('account_facts.reset.oauth_only'))
-          else if (resets.availableCount > 0 && resets.details == null)
-            _caption(context, copy('account_facts.reset.details_unavailable'))
-          else if (resets.availableCount > 0 &&
-              resets.applicableAvailableCount == 0)
-            _caption(context, copy('account_facts.reset.not_needed'))
-          else if (resets.availableCount > 0 &&
-              resets.details?.any((credit) => credit.available) == false)
-            _caption(context, copy('account_facts.reset.none')),
-          if (resets.availableCount > 0 &&
-              resets.applicableAvailableCount != 0 &&
-              resets.details?.any((credit) => credit.available) == true &&
-              widget.account.kind == 'codex_oauth' &&
-              !widget.controller.previewMode) ...[
-            const SizedBox(height: 6),
-            TextButton.icon(
-              key: Key('account-reset-${widget.account.id}'),
-              onPressed:
-                  _redeeming ||
-                      widget.controller.providerAccountQuotaFailed(
-                        widget.account,
-                      ) ||
-                      widget.controller.providerAccountQuotaLoading(
-                        widget.account,
-                      )
-                  ? null
-                  : () => _chooseReset(resets),
-              icon: _redeeming
-                  ? const SizedBox.square(
-                      dimension: 15,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    )
-                  : const Icon(Icons.restart_alt, size: 16),
-              label: Text(copy('account_facts.reset.choose')),
-            ),
+            if (limitReached)
+              _notice(
+                context,
+                facts.limits.any((limit) => limit.limitReached == true)
+                    ? 'account_facts.limit_reached'
+                    : 'account_facts.not_allowed',
+              ),
           ],
+        ),
+        if (credits != null || resets != null) ...[
+          const SizedBox(height: 5),
+          Wrap(
+            spacing: 14,
+            runSpacing: 3,
+            children: [
+              if (credits != null)
+                _caption(
+                  context,
+                  copy.format('account_facts.credits', {
+                    'balance': credits.unlimited
+                        ? copy('account_facts.unlimited')
+                        : !credits.hasCredits
+                        ? copy('account_facts.no_credits')
+                        : credits.balance ?? copy('account_facts.unknown'),
+                  }),
+                ),
+              if (resets != null)
+                _caption(
+                  context,
+                  copy.format('account_facts.banked_resets', {
+                    'count': resets.availableCount,
+                  }),
+                ),
+              if (resets?.applicableAvailableCount case final applicable?)
+                _caption(
+                  context,
+                  copy.format('account_facts.applicable_resets', {
+                    'count': applicable,
+                  }),
+                ),
+            ],
+          ),
         ],
+        if (resets != null && resets.availableCount > 0) ...[
+          const SizedBox(height: 3),
+          if (widget.account.kind != 'codex_oauth')
+            _caption(context, copy('account_facts.reset.oauth_only'))
+          else if (resets.details == null)
+            _caption(context, copy('account_facts.reset.details_unavailable'))
+          else if (resets.applicableAvailableCount == 0)
+            _caption(context, copy('account_facts.reset.not_needed'))
+          else if (resets.details?.any((credit) => credit.available) == false)
+            _caption(context, copy('account_facts.reset.none')),
+        ],
+        const SizedBox(height: 3),
+        Wrap(
+          spacing: 4,
+          runSpacing: 2,
+          crossAxisAlignment: WrapCrossAlignment.center,
+          children: [
+            _quotaAction(),
+            _historyAction(),
+            if (resetAvailable)
+              TextButton.icon(
+                key: Key('account-reset-${widget.account.id}'),
+                onPressed:
+                    _redeeming ||
+                        widget.controller.providerAccountQuotaFailed(
+                          widget.account,
+                        ) ||
+                        widget.controller.providerAccountQuotaLoading(
+                          widget.account,
+                        )
+                    ? null
+                    : () => _chooseReset(resets),
+                icon: _redeeming
+                    ? const SizedBox.square(
+                        dimension: 15,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.restart_alt, size: 16),
+                label: Text(copy('account_facts.reset.choose')),
+              ),
+          ],
+        ),
+        Tooltip(
+          message: copy.format('account_facts.observed', {
+            'time': _fullTime(facts.observedAt),
+          }),
+          child: _caption(
+            context,
+            copy.format('account_facts.updated', {
+              'time': _shortTime(facts.observedAt),
+            }),
+          ),
+        ),
       ],
     );
   }
@@ -583,10 +625,10 @@ final class _ProviderAccountFactsPanelState
     return Semantics(
       label: '$title ${window.usedPercent}% ${copy('account_facts.used')}',
       child: Container(
-        padding: const EdgeInsets.fromLTRB(11, 9, 11, 9),
+        padding: const EdgeInsets.fromLTRB(10, 7, 10, 7),
         decoration: BoxDecoration(
           color: colors.panelRaised,
-          borderRadius: BorderRadius.circular(6),
+          borderRadius: BorderRadius.circular(5),
         ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -605,26 +647,24 @@ final class _ProviderAccountFactsPanelState
                 Text(
                   '${window.usedPercent}%',
                   style: monoStyle.copyWith(
-                    fontSize: 18,
+                    fontSize: 16,
                     fontWeight: FontWeight.w700,
                     color: color,
                   ),
                 ),
-                const SizedBox(width: 4),
-                _caption(context, copy('account_facts.used')),
               ],
             ),
-            const SizedBox(height: 7),
+            const SizedBox(height: 5),
             ExcludeSemantics(
               child: LinearProgressIndicator(
                 value: (window.usedPercent / 100).clamp(0, 1),
-                minHeight: 4,
+                minHeight: 3,
                 borderRadius: BorderRadius.circular(2),
                 color: color,
                 backgroundColor: colors.dividerSoft,
               ),
             ),
-            const SizedBox(height: 6),
+            const SizedBox(height: 4),
             Tooltip(
               message: copy.format('account_facts.resets', {
                 'time': _fullTime(window.resetAt),
@@ -735,18 +775,6 @@ final class _ProviderAccountFactsPanelState
     return copy.format('account_facts.seconds', {'count': seconds});
   }
 }
-
-String _planName(String plan) =>
-    const {
-      'free': 'Free',
-      'plus': 'Plus',
-      'pro': 'Pro',
-      'team': 'Team',
-      'business': 'Business',
-      'enterprise': 'Enterprise',
-      'edu': 'Edu',
-    }[plan.toLowerCase()] ??
-    plan;
 
 String _fullTime(DateTime time) => time.toLocal().toString().split('.').first;
 

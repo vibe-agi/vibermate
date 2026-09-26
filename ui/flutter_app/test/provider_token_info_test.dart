@@ -122,7 +122,14 @@ void main() {
                 ),
               ),
             );
-            expect(find.text('engineer@example.com'), findsOneWidget);
+            final title = find.text('Codex work');
+            final identity = find.textContaining('engineer@example.com');
+            expect(title, findsOneWidget);
+            expect(identity, findsOneWidget);
+            expect(
+              tester.getTopLeft(title).dy,
+              lessThan(tester.getTopLeft(identity).dy),
+            );
             expect(
               find.textContaining(
                 language == AppLanguage.english ? 'Token expired:' : '令牌已过期：',
