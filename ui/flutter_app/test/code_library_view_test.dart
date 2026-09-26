@@ -659,6 +659,23 @@ void main() {
     expect(sampleRequest['messages'], isList);
     expect(sampleRequest.containsKey('home'), isFalse);
     await tester.tap(
+      find.byKey(const Key('environment-transform-sample-tab-response')),
+    );
+    await tester.pumpAndSettle();
+    final starterSampleResponse = tester.widget<TextField>(
+      find.byKey(const Key('environment-transform-sample-response-body')),
+    );
+    expect(
+      starterSampleResponse.controller?.text,
+      contains('/__vmi1_workspace__'),
+    );
+    expect(starterSampleResponse.controller?.text, contains('/__vmi1_home__'));
+    expect(starterSampleResponse.controller?.text, contains('⟪vmi1_user⟫'));
+    expect(
+      starterSampleResponse.controller?.text,
+      isNot(contains('/Users/guest')),
+    );
+    await tester.tap(
       find.byKey(const Key('environment-transform-sample-tab-runtime')),
     );
     await tester.pumpAndSettle();

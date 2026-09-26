@@ -569,11 +569,16 @@ void main() {
                 );
                 expect(
                   result.responseAfter.body,
-                  isNot(contains('/Users/guest')),
+                  isNot(contains('/__vmi1_home__')),
                 );
                 expect(
                   result.responseAfter.body,
-                  isNot(contains('/workspace/project')),
+                  isNot(contains('/__vmi1_workspace__')),
+                );
+                expect(result.responseAfter.body, contains('user jack'));
+                expect(
+                  result.responseAfter.body,
+                  isNot(contains('⟪vmi1_user⟫')),
                 );
               case 'blockSecrets':
                 expect(result.requestAfter.body, result.requestBefore.body);
@@ -894,7 +899,7 @@ MessageTransformTestSample _localIdentitySample(String protocol) {
     userMessage:
         'home /Users/jack; workspace /Users/jack/Code/vibermate; user jack',
     assistantMessage:
-        'home /Users/guest; workspace /workspace/project; user vibermate-user',
+        'home /__vmi1_home__; workspace /__vmi1_workspace__; user ⟪vmi1_user⟫',
   );
   return MessageTransformTestSample(
     request: sample.request,

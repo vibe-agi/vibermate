@@ -2451,8 +2451,8 @@ MessageTransformTestSample _starterTestSample(
         'My username is example-user. My home is /Users/example-user '
         'and my project is /Users/example-user/Code/example. Where should I put the config?',
     assistantMessage:
-        'For vibermate-user, put the project config in /workspace/project '
-        'or the user config in /Users/guest.',
+        'For ⟪vmi1_user⟫, put the project config in /__vmi1_workspace__ '
+        'or the user config in /__vmi1_home__.',
   ),
   _TransformStarter.privateContacts => MessageTransformTestSample.example(
     wireProtocol,
