@@ -4,7 +4,7 @@ This matrix separates what users can install from work that exists only in
 source. A passing unit test, an isolated development branch, and a published
 product are not interchangeable evidence.
 
-Source package version: **0.1.15**. Latest published release: **v0.1.14**.
+Source package version: **0.1.15**. Latest published release: **v0.1.15**.
 
 - **Released** — included in the latest published release and covered by the
   stated release evidence.
@@ -18,7 +18,7 @@ Source package version: **0.1.15**. Latest published release: **v0.1.14**.
 
 | Capability ID | Status | Current boundary |
 | --- | --- | --- |
-| `macos-app` | Released | macOS 14+ Universal App for Apple silicon and Intel. The exact v0.1.14 DMG passed Developer ID signing, Apple notarization/stapling, Gatekeeper, and two isolated installed-App launches in the [protected release run](https://github.com/vibe-agi/vibermate/actions/runs/36216643296). That result applies to the tagged artifact, not later source commits. |
+| `macos-app` | Released | macOS 14+ Universal App for Apple silicon and Intel. The exact v0.1.15 DMG passed Developer ID signing, Apple notarization/stapling, Gatekeeper, and two isolated installed-App launches in the [protected release run](https://github.com/vibe-agi/vibermate/actions/runs/36336905828). That result applies to the tagged artifact, not later source commits. |
 | `linux-server-web` | Released | Native Runtime Server, CLI, and Web workbench archives for Linux x86-64 and ARM64. |
 | `docker-server-web` | Released | The same Runtime Server and Web workbench can run from the versioned Docker/Compose files; Docker does not create a separate account or certificate model. |
 | `local-web-http` | Released | Native or container Web on loopback HTTP; no domain or certificate is required. |
@@ -45,6 +45,7 @@ Source package version: **0.1.15**. Latest published release: **v0.1.14**.
 | Capability ID | Status | Current boundary |
 | --- | --- | --- |
 | `retained-evidence` | Released | Recording mode and retention control semantic and Raw HTTP evidence. The SQLite archive is not encrypted by ViberMate; recognized credential fields are removed by bounded rules, not by a claim that arbitrary content is secret-free. |
+| `body-free-usage` | Released | Runtime-wide opt-in statistics are independent of body recording, with permission-scoped caller/model breakdowns and reference API-equivalent USD costs, not provider bills. Git project and branch attribution is a launch-time snapshot for new managed runs; missing history is not invented or backfilled. |
 | `raw-stage-compare` | Released | The workbench compares retained client/upstream request and response stages without rewriting retained bytes. |
 | `outbound-visibility` | Released | The workbench distinguishes inspected HTTP, decoded content, blind forwarding, and traffic not observed by ViberMate. It cannot infer a local file path from network bytes. |
 | `verified-backup-restore` | Released | Offline backup, verification, and restore are manifest-bound. Provider secrets and externally supplied TLS keys are excluded. |
