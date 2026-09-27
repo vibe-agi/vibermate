@@ -44,6 +44,7 @@ final class _ProviderAccountsViewState extends State<ProviderAccountsView> {
   final _expandedAccounts = <String>{};
   var _sort = _ProviderAccountSort.defaultOrder;
   String _quotaSignature = '';
+  bool _refreshingAccounts = false;
 
   @override
   void dispose() {
@@ -86,19 +87,63 @@ final class _ProviderAccountsViewState extends State<ProviderAccountsView> {
           title: copy('provider_accounts.title'),
           help: copy('provider_accounts.subtitle'),
           dismissHelpLabel: copy('common.dismiss'),
-          trailing: FilledButton.icon(
-            key: const Key('provider-accounts-add'),
-            onPressed: controller.inventoryMutating || endpoints.isEmpty
-                ? null
-                : () => unawaited(
-                    showProviderAccountEditor(
-                      context,
-                      controller: controller,
-                      copy: copy,
-                    ),
+          trailing: LayoutBuilder(
+            builder: (context, constraints) {
+              final onRefresh =
+                  _refreshingAccounts || controller.inventoryMutating
+                  ? null
+                  : () => unawaited(_refreshAccounts());
+              final icon = _refreshingAccounts
+                  ? const SizedBox.square(
+                      dimension: 14,
+                      child: CircularProgressIndicator(strokeWidth: 1.5),
+                    )
+                  : const Icon(Icons.refresh, size: 16);
+              final refresh = constraints.maxWidth < 360
+                  ? IconButton.outlined(
+                      key: const Key('provider-accounts-refresh-all'),
+                      onPressed: onRefresh,
+                      icon: icon,
+                    )
+                  : OutlinedButton.icon(
+                      key: const Key('provider-accounts-refresh-all'),
+                      onPressed: onRefresh,
+                      icon: icon,
+                      label: Text(copy('provider_accounts.refresh_all')),
+                    );
+              final onAdd = controller.inventoryMutating || endpoints.isEmpty
+                  ? null
+                  : () => unawaited(
+                      showProviderAccountEditor(
+                        context,
+                        controller: controller,
+                        copy: copy,
+                      ),
+                    );
+              final add = constraints.maxWidth < 360
+                  ? IconButton.filled(
+                      key: const Key('provider-accounts-add'),
+                      onPressed: onAdd,
+                      icon: const Icon(Icons.add, size: 16),
+                    )
+                  : FilledButton.icon(
+                      key: const Key('provider-accounts-add'),
+                      onPressed: onAdd,
+                      icon: const Icon(Icons.add, size: 16),
+                      label: Text(copy('routes.add_account')),
+                    );
+              return Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Tooltip(
+                    message: copy('provider_accounts.refresh_all.hint'),
+                    child: refresh,
                   ),
-            icon: const Icon(Icons.add, size: 16),
-            label: Text(copy('routes.add_account')),
+                  const SizedBox(width: 8),
+                  Tooltip(message: copy('routes.add_account'), child: add),
+                ],
+              );
+            },
           ),
         ),
         const Divider(height: 1),
@@ -305,7 +350,10 @@ final class _ProviderAccountsViewState extends State<ProviderAccountsView> {
     final controller = widget.controller;
     final copy = widget.copy;
     final expanded = _expandedAccounts.contains(account.id);
-    final hasDetails = _supportsQuota(account) || account.tokenInfo != null;
+    final hasDetails =
+        _supportsQuota(account) ||
+        account.tokenInfo != null ||
+        account.kind == 'codex_oauth';
     final quota = _ProviderAccountQuotaSummary(
       account: account,
       controller: controller,
@@ -342,11 +390,9 @@ final class _ProviderAccountsViewState extends State<ProviderAccountsView> {
               copy: copy,
             ),
           ),
-          refreshing: controller.refreshingProviderAccountId == account.id,
-          onRefresh: account.kind == 'codex_oauth'
-              ? () => unawaited(
-                  controller.refreshProviderAccountCredential(account),
-                )
+          refreshingQuota: controller.providerAccountQuotaLoading(account),
+          onRefreshQuota: _supportsQuota(account)
+              ? () => unawaited(controller.refreshProviderAccountQuota(account))
               : null,
           onReplace: () => unawaited(
             showProviderAccountEditor(
@@ -385,18 +431,54 @@ final class _ProviderAccountsViewState extends State<ProviderAccountsView> {
                 top: BorderSide(color: context.viberColors.dividerSoft),
               ),
             ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                if (_supportsQuota(account))
-                  ProviderAccountFactsPanel(
-                    account: account,
-                    controller: controller,
-                    copy: copy,
-                    showQuotaWindows: false,
+            child: Padding(
+              padding: const EdgeInsets.all(14),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  LayoutBuilder(
+                    builder: (context, constraints) {
+                      final quotaPanel = _supportsQuota(account)
+                          ? ProviderAccountFactsPanel(
+                              account: account,
+                              controller: controller,
+                              copy: copy,
+                              showQuotaWindows: false,
+                            )
+                          : null;
+                      final credentialPanel = account.kind == 'codex_oauth'
+                          ? _OAuthCredentialMaintenance(
+                              account: account,
+                              controller: controller,
+                              copy: copy,
+                            )
+                          : null;
+                      if (constraints.maxWidth >= 820 &&
+                          quotaPanel != null &&
+                          credentialPanel != null) {
+                        return Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Expanded(child: quotaPanel),
+                            const SizedBox(width: 12),
+                            SizedBox(width: 390, child: credentialPanel),
+                          ],
+                        );
+                      }
+                      return Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          ?quotaPanel,
+                          if (quotaPanel != null && credentialPanel != null)
+                            const SizedBox(height: 10),
+                          ?credentialPanel,
+                        ],
+                      );
+                    },
                   ),
-                ProviderAccountTokenDetails(account: account, copy: copy),
-              ],
+                  ProviderAccountTokenDetails(account: account, copy: copy),
+                ],
+              ),
             ),
           ),
       ],
@@ -471,6 +553,23 @@ final class _ProviderAccountsViewState extends State<ProviderAccountsView> {
         unawaited(widget.controller.ensureProviderAccountQuotas(eligible));
       }
     });
+  }
+
+  Future<void> _refreshAccounts() async {
+    if (_refreshingAccounts) return;
+    setState(() => _refreshingAccounts = true);
+    try {
+      await widget.controller.refresh();
+      if (!mounted) return;
+      final accounts =
+          widget.controller.data?.accounts ?? const <ProviderAccount>[];
+      await widget.controller.ensureProviderAccountQuotas(
+        accounts.where(_supportsQuota),
+        refresh: true,
+      );
+    } finally {
+      if (mounted) setState(() => _refreshingAccounts = false);
+    }
   }
 
   List<ProviderAccount> _sortedAccounts(
@@ -549,6 +648,72 @@ final class _ProviderAccountsViewState extends State<ProviderAccountsView> {
   }
 
   String _accountIdentity(ProviderAccount account) => account.displayName;
+}
+
+final class _OAuthCredentialMaintenance extends StatelessWidget {
+  const _OAuthCredentialMaintenance({
+    required this.account,
+    required this.controller,
+    required this.copy,
+  });
+
+  final ProviderAccount account;
+  final WorkbenchController controller;
+  final AppCopy copy;
+
+  @override
+  Widget build(BuildContext context) {
+    final refreshing = controller.refreshingProviderAccountId == account.id;
+    return Container(
+      key: Key('provider-account-credential-${account.id}'),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: context.viberColors.panel,
+        border: Border.all(color: context.viberColors.dividerSoft),
+        borderRadius: BorderRadius.circular(6),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(
+                Icons.sync_lock_outlined,
+                size: 16,
+                color: context.viberColors.warning,
+              ),
+              const SizedBox(width: 7),
+              Text(
+                copy('provider_accounts.credential.title'),
+                style: Theme.of(context).textTheme.titleSmall,
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Text(
+            copy('provider_accounts.credential.refresh_hint'),
+            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+              color: context.viberColors.textMuted,
+            ),
+          ),
+          const SizedBox(height: 6),
+          TextButton.icon(
+            key: Key('account-credential-refresh-${account.id}'),
+            onPressed: controller.inventoryMutating || !account.usable
+                ? null
+                : () => controller.refreshProviderAccountCredential(account),
+            icon: refreshing
+                ? const SizedBox.square(
+                    dimension: 15,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Icon(Icons.refresh, size: 16),
+            label: Text(copy('provider_accounts.refresh.action')),
+          ),
+        ],
+      ),
+    );
+  }
 }
 
 final class _ProviderAccountQuotaSummary extends StatelessWidget {
@@ -660,11 +825,9 @@ final class _ProviderAccountQuotaSummary extends StatelessWidget {
               constraints: const BoxConstraints(maxWidth: 560),
               child: LayoutBuilder(
                 builder: (context, constraints) {
-                  final columns =
-                      windows.length > 1 && constraints.maxWidth >= 300 ? 2 : 1;
-                  final width = columns == 2
+                  final width = constraints.maxWidth >= 300
                       ? (constraints.maxWidth - 14) / 2
-                      : constraints.maxWidth.clamp(0, 280).toDouble();
+                      : constraints.maxWidth;
                   return Wrap(
                     spacing: 14,
                     runSpacing: 7,

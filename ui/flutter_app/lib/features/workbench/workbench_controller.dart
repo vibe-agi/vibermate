@@ -96,15 +96,16 @@ final class WorkbenchController extends ChangeNotifier
   }
 
   Future<void> ensureProviderAccountQuotas(
-    Iterable<ProviderAccount> accounts,
-  ) async {
+    Iterable<ProviderAccount> accounts, {
+    bool refresh = false,
+  }) async {
     final pending = accounts
         .where(
           (account) =>
               account.usable &&
-              providerAccountQuota(account) == null &&
+              (refresh || providerAccountQuota(account) == null) &&
               !providerAccountQuotaLoading(account) &&
-              !providerAccountQuotaFailed(account),
+              (refresh || !providerAccountQuotaFailed(account)),
         )
         .toList(growable: false);
     for (var index = 0; index < pending.length; index += 4) {

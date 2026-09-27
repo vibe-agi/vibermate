@@ -222,7 +222,9 @@ final class _ProviderAccountFactsPanelState
       container: true,
       explicitChildNodes: true,
       child: Padding(
-        padding: const EdgeInsets.fromLTRB(14, 2, 14, 8),
+        padding: widget.showQuotaWindows
+            ? const EdgeInsets.fromLTRB(14, 2, 14, 8)
+            : EdgeInsets.zero,
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
@@ -497,7 +499,18 @@ final class _ProviderAccountFactsPanelState
         resets.details?.any((credit) => credit.available) == true &&
         widget.account.kind == 'codex_oauth' &&
         !widget.controller.previewMode;
-    return Column(
+    final resetHint = resets != null && resets.availableCount > 0
+        ? widget.account.kind != 'codex_oauth'
+              ? 'account_facts.reset.oauth_only'
+              : resets.details == null
+              ? 'account_facts.reset.details_unavailable'
+              : resets.applicableAvailableCount == 0
+              ? 'account_facts.reset.not_needed'
+              : resets.details?.any((credit) => credit.available) == false
+              ? 'account_facts.reset.none'
+              : null
+        : null;
+    final summary = Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Wrap(
@@ -552,48 +565,11 @@ final class _ProviderAccountFactsPanelState
             ],
           ),
         ],
-        if (resets != null && resets.availableCount > 0) ...[
+        if (resetHint != null) ...[
           const SizedBox(height: 3),
-          if (widget.account.kind != 'codex_oauth')
-            _caption(context, copy('account_facts.reset.oauth_only'))
-          else if (resets.details == null)
-            _caption(context, copy('account_facts.reset.details_unavailable'))
-          else if (resets.applicableAvailableCount == 0)
-            _caption(context, copy('account_facts.reset.not_needed'))
-          else if (resets.details?.any((credit) => credit.available) == false)
-            _caption(context, copy('account_facts.reset.none')),
+          _caption(context, copy(resetHint)),
         ],
-        const SizedBox(height: 3),
-        Wrap(
-          spacing: 4,
-          runSpacing: 2,
-          crossAxisAlignment: WrapCrossAlignment.center,
-          children: [
-            _quotaAction(),
-            _historyAction(),
-            if (resetAvailable)
-              TextButton.icon(
-                key: Key('account-reset-${widget.account.id}'),
-                onPressed:
-                    _redeeming ||
-                        widget.controller.providerAccountQuotaFailed(
-                          widget.account,
-                        ) ||
-                        widget.controller.providerAccountQuotaLoading(
-                          widget.account,
-                        )
-                    ? null
-                    : () => _chooseReset(resets),
-                icon: _redeeming
-                    ? const SizedBox.square(
-                        dimension: 15,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
-                    : const Icon(Icons.restart_alt, size: 16),
-                label: Text(copy('account_facts.reset.choose')),
-              ),
-          ],
-        ),
+        const SizedBox(height: 6),
         Tooltip(
           message: copy.format('account_facts.observed', {
             'time': _fullTime(facts.observedAt),
@@ -606,6 +582,71 @@ final class _ProviderAccountFactsPanelState
           ),
         ),
       ],
+    );
+    final actions = Wrap(
+      spacing: 4,
+      runSpacing: 2,
+      crossAxisAlignment: WrapCrossAlignment.center,
+      children: [
+        _quotaAction(),
+        _historyAction(),
+        if (resetAvailable)
+          TextButton.icon(
+            key: Key('account-reset-${widget.account.id}'),
+            onPressed:
+                _redeeming ||
+                    widget.controller.providerAccountQuotaFailed(
+                      widget.account,
+                    ) ||
+                    widget.controller.providerAccountQuotaLoading(
+                      widget.account,
+                    )
+                ? null
+                : () => _chooseReset(resets),
+            icon: _redeeming
+                ? const SizedBox.square(
+                    dimension: 15,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Icon(Icons.restart_alt, size: 16),
+            label: Text(copy('account_facts.reset.choose')),
+          ),
+      ],
+    );
+    if (widget.showQuotaWindows) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [summary, const SizedBox(height: 3), actions],
+      );
+    }
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: context.viberColors.panel,
+        border: Border.all(color: context.viberColors.dividerSoft),
+        borderRadius: BorderRadius.circular(6),
+      ),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          if (constraints.maxWidth < 560) {
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [summary, const SizedBox(height: 8), actions],
+            );
+          }
+          return Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(child: summary),
+              const SizedBox(width: 16),
+              ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 380),
+                child: actions,
+              ),
+            ],
+          );
+        },
+      ),
     );
   }
 

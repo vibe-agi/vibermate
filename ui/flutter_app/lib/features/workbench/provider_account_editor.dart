@@ -54,13 +54,13 @@ final class ProviderAccountRow extends StatelessWidget {
     required this.busy,
     required this.onReplace,
     required this.onDelete,
-    this.onRefresh,
+    this.onRefreshQuota,
     this.onEditNote,
     this.quota,
     this.service,
     this.onToggleDetails,
     this.detailsExpanded = false,
-    this.refreshing = false,
+    this.refreshingQuota = false,
   });
 
   final ProviderAccount account;
@@ -69,13 +69,13 @@ final class ProviderAccountRow extends StatelessWidget {
   final bool busy;
   final VoidCallback onReplace;
   final VoidCallback onDelete;
-  final VoidCallback? onRefresh;
+  final VoidCallback? onRefreshQuota;
   final VoidCallback? onEditNote;
   final Widget? quota;
   final Widget? service;
   final VoidCallback? onToggleDetails;
   final bool detailsExpanded;
-  final bool refreshing;
+  final bool refreshingQuota;
 
   @override
   Widget build(BuildContext context) {
@@ -108,14 +108,14 @@ final class ProviderAccountRow extends StatelessWidget {
     final actions = Row(
       mainAxisSize: MainAxisSize.min,
       children: [
-        if (onRefresh != null)
+        if (onRefreshQuota != null)
           IconButton(
-            key: Key('account-refresh-${account.id}'),
-            tooltip: copy('provider_accounts.refresh.action'),
-            onPressed: busy || !account.usable ? null : onRefresh,
+            key: Key('account-quota-refresh-${account.id}'),
+            tooltip: copy('provider_accounts.quota.refresh'),
+            onPressed: busy || !account.usable ? null : onRefreshQuota,
             constraints: const BoxConstraints.tightFor(width: 32, height: 32),
             padding: const EdgeInsets.all(4),
-            icon: refreshing
+            icon: refreshingQuota
                 ? const SizedBox.square(
                     dimension: 15,
                     child: CircularProgressIndicator(strokeWidth: 2),

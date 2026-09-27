@@ -231,6 +231,12 @@ void main() {
           find.byKey(const Key('provider-account-details-account.independent')),
           findsOneWidget,
         );
+        await _review(
+          tester,
+          boundary,
+          reviewDirectory,
+          'account-details-${width.toInt()}',
+        );
         expect(tester.takeException(), isNull);
         await tester.pumpWidget(const SizedBox.shrink());
         await tester.pump();

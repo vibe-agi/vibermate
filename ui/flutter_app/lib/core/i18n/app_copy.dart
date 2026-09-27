@@ -181,7 +181,14 @@ final class AppCopy {
     'nav.routes': 'Upstream services',
     'nav.provider_accounts': 'Upstream accounts',
     'provider_accounts.title': 'Upstream accounts',
+    'provider_accounts.refresh_all': 'Refresh all accounts',
+    'provider_accounts.refresh_all.hint':
+        'Reload account status and upstream quota',
+    'provider_accounts.quota.refresh': 'Refresh quota',
     'provider_accounts.refresh.action': 'Refresh OAuth credential',
+    'provider_accounts.credential.title': 'OAuth credential',
+    'provider_accounts.credential.refresh_hint':
+        'Usually no action is needed. Use this only when authorization is unhealthy; it requests and stores a new token from the upstream service.',
     'provider_accounts.refresh.failed':
         'Could not confirm credential refresh. Check the network and account status before trying again.',
     'provider_accounts.refresh.conflict':
@@ -2620,7 +2627,13 @@ final class AppCopy {
     'nav.routes': '上游服务',
     'nav.provider_accounts': '上游账号',
     'provider_accounts.title': '上游账号',
+    'provider_accounts.refresh_all': '刷新全部账号',
+    'provider_accounts.refresh_all.hint': '重新读取账号状态与上游额度',
+    'provider_accounts.quota.refresh': '刷新额度',
     'provider_accounts.refresh.action': '刷新 OAuth 凭据',
+    'provider_accounts.credential.title': 'OAuth 凭据',
+    'provider_accounts.credential.refresh_hint':
+        '通常无需操作。仅在授权异常时使用；此操作会向上游请求并保存新令牌。',
     'provider_accounts.refresh.failed': '未能确认凭据刷新成功，请检查网络及账号状态后重试。',
     'provider_accounts.refresh.conflict': '凭据已变化或有其他操作正在进行，请核对账号后重试。',
     'provider_accounts.refresh.reconnect': '此授权已无法刷新，请重新登录或导入新的授权文件。',
