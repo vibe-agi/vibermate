@@ -260,9 +260,20 @@ type logicalTransformStream struct {
 	io.Reader
 	source  io.ReadCloser
 	decoder io.Closer
+	readMu  sync.Mutex
+	closed  bool
 
 	closeOnce sync.Once
 	closeErr  error
+}
+
+func (stream *logicalTransformStream) Read(buffer []byte) (int, error) {
+	stream.readMu.Lock()
+	defer stream.readMu.Unlock()
+	if stream.closed {
+		return 0, io.ErrClosedPipe
+	}
+	return stream.Reader.Read(buffer)
 }
 
 func (stream *logicalTransformStream) Close() error {
@@ -270,8 +281,12 @@ func (stream *logicalTransformStream) Close() error {
 		return nil
 	}
 	stream.closeOnce.Do(func() {
-		// Release a decoder blocked in Read before waiting for its workers.
+		// Interrupt the transport before waiting for Read. Decoder Read and
+		// Close are not concurrent-safe, even after a semantic terminal.
 		sourceErr := stream.source.Close()
+		stream.readMu.Lock()
+		defer stream.readMu.Unlock()
+		stream.closed = true
 		var decoderErr error
 		if stream.decoder != nil {
 			decoderErr = stream.decoder.Close()

@@ -1,6 +1,7 @@
 import 'dart:io';
 import 'dart:ui' as ui;
 
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
@@ -17,7 +18,9 @@ import 'package:vibermate_app/preview/preview_terminal_command.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
-  final screenshots = Platform.environment['VIBERMATE_USAGE_SCREENSHOTS'];
+  final screenshots = kIsWeb
+      ? null
+      : Platform.environment['VIBERMATE_USAGE_SCREENSHOTS'];
   setUpAll(() async {
     if (screenshots == null) return;
     for (final entry in {

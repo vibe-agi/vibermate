@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"testing"
+	"time"
 
 	"github.com/vibe-agi/vibermate/internal/clientannotation"
 	"github.com/vibe-agi/vibermate/internal/messagetransform"
@@ -15,6 +17,52 @@ import (
 type responseCloseFunc func() error
 
 func (close responseCloseFunc) Close() error { return close() }
+
+type responseReadFunc func([]byte) (int, error)
+
+func (read responseReadFunc) Read(buffer []byte) (int, error) { return read(buffer) }
+
+func TestLogicalResponseCloseInterruptsReadBeforeClosingDecoder(t *testing.T) {
+	readStarted, transportClosed := make(chan struct{}), make(chan struct{})
+	readExited, closed := make(chan struct{}), make(chan error, 1)
+	stream := &logicalTransformStream{
+		Reader: responseReadFunc(func([]byte) (int, error) {
+			close(readStarted)
+			<-transportClosed
+			defer close(readExited)
+			return 0, io.ErrClosedPipe
+		}),
+		source: struct {
+			io.Reader
+			io.Closer
+		}{Closer: responseCloseFunc(func() error { close(transportClosed); return nil })},
+		decoder: responseCloseFunc(func() error {
+			select {
+			case <-readExited:
+				return nil
+			default:
+				return errors.New("decoder closed while Read was still active")
+			}
+		}),
+	}
+	go func() { _, _ = stream.Read(make([]byte, 1)) }()
+	<-readStarted
+	go func() { closed <- stream.Close() }()
+	select {
+	case err := <-closed:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Close did not interrupt the blocked transport read")
+	}
+	if _, err := stream.Read(make([]byte, 1)); !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("Read after Close = %v", err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
 
 func TestLogicalResponseClosesTransportBeforeDecoder(t *testing.T) {
 	sourceClosed, decoderClosed := false, false
