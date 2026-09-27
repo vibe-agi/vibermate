@@ -27,16 +27,16 @@ type CaptureListResponse struct {
 const (
 	captureListDefaultLimit = 50
 	captureListMaximumLimit = 199
-	captureCursorVersion    = 1
+	captureCursorVersion    = 2
 	maximumCaptureCursor    = 512
 )
 
 type captureCursorDocument struct {
-	Version             int                  `json:"v"`
-	Running             bool                 `json:"running"`
-	UpdatedAtUnixMillis int64                `json:"updatedAtUnixMillis"`
-	Kind                captureidentity.Kind `json:"kind"`
-	ID                  string               `json:"id"`
+	Version              int                  `json:"v"`
+	Running              bool                 `json:"running"`
+	ActivityAtUnixMillis int64                `json:"activityAtUnixMillis"`
+	Kind                 captureidentity.Kind `json:"kind"`
+	ID                   string               `json:"id"`
 }
 
 type CaptureResponse struct {
@@ -48,6 +48,7 @@ type CaptureResponse struct {
 	Observation   string                 `json:"observation"`
 	CreatedAt     time.Time              `json:"createdAt"`
 	UpdatedAt     time.Time              `json:"updatedAt"`
+	ActivityAt    time.Time              `json:"activityAt"`
 	Transport     string                 `json:"transport,omitempty"`
 	ManagedRun    *ManagedRunResponse    `json:"managedRun,omitempty"`
 	ManualCapture *ManualCaptureResponse `json:"manualCapture,omitempty"`
@@ -110,6 +111,7 @@ func captureRunResponseOf(view capturerun.View) CaptureResponse {
 		Key: reference.Key(), ID: view.ID, Kind: reference.Kind,
 		DisplayName: view.ExecutableLabel, State: string(view.State),
 		Observation: string(view.Observation), CreatedAt: view.CreatedAt, UpdatedAt: view.UpdatedAt,
+		ActivityAt: view.ActivityTime(),
 		ManagedRun: &ManagedRunResponse{
 			ExecutableLabel: view.ExecutableLabel, CWD: view.CWD,
 			CanonicalExecutablePath:     view.CanonicalExecutablePath,
@@ -136,6 +138,7 @@ func manualCaptureResponseOf(view manualcapture.View) CaptureResponse {
 		Key: reference.Key(), ID: view.ID, Kind: reference.Kind,
 		DisplayName: view.DisplayName, State: string(view.State), Observation: string(view.Observation),
 		CreatedAt: view.CreatedAt, UpdatedAt: view.UpdatedAt,
+		ActivityAt: view.ActivityTime(),
 		ManualCapture: &ManualCaptureResponse{
 			ClientClass: view.ClientClass, Lifetime: view.Lifetime,
 			CredentialRevision: view.CredentialRevision, ExpiresAt: view.ExpiresAt,
@@ -278,8 +281,8 @@ func captureResponseLess(left, right CaptureResponse) bool {
 	if leftRunning != rightRunning {
 		return leftRunning
 	}
-	if !left.UpdatedAt.Equal(right.UpdatedAt) {
-		return left.UpdatedAt.After(right.UpdatedAt)
+	if !left.ActivityAt.Equal(right.ActivityAt) {
+		return left.ActivityAt.After(right.ActivityAt)
 	}
 	leftKind := captureKindOrder(left.Kind)
 	rightKind := captureKindOrder(right.Kind)
@@ -291,11 +294,11 @@ func captureResponseLess(left, right CaptureResponse) bool {
 
 func encodeCaptureCursor(response CaptureResponse) (string, error) {
 	document := captureCursorDocument{
-		Version:             captureCursorVersion,
-		Running:             captureResponseRunning(response),
-		UpdatedAtUnixMillis: response.UpdatedAt.UnixMilli(),
-		Kind:                response.Kind,
-		ID:                  response.ID,
+		Version:              captureCursorVersion,
+		Running:              captureResponseRunning(response),
+		ActivityAtUnixMillis: response.ActivityAt.UnixMilli(),
+		Kind:                 response.Kind,
+		ID:                   response.ID,
 	}
 	payload, err := json.Marshal(document)
 	if err != nil {
@@ -325,39 +328,39 @@ func decodeCaptureCursor(raw string) (*captureCursorDocument, error) {
 	}
 	reference, err := captureidentity.New(document.Kind, document.ID)
 	if err != nil || document.Version != captureCursorVersion ||
-		document.UpdatedAtUnixMillis <= 0 || reference.ID != document.ID {
+		document.ActivityAtUnixMillis <= 0 || reference.ID != document.ID {
 		return nil, errors.New("Capture cursor authority is invalid")
 	}
 	return &document, nil
 }
 
 func captureRunCursor(cursor captureCursorDocument) *capturerun.PageCursor {
-	includeAtUpdatedAt := captureKindOrder(captureidentity.KindManagedRun) >=
+	includeAtActivityAt := captureKindOrder(captureidentity.KindManagedRun) >=
 		captureKindOrder(cursor.Kind)
 	afterID := ""
 	if cursor.Kind == captureidentity.KindManagedRun {
 		afterID = cursor.ID
 	}
 	return &capturerun.PageCursor{
-		Running:            cursor.Running,
-		UpdatedAt:          time.UnixMilli(cursor.UpdatedAtUnixMillis).UTC(),
-		AfterID:            afterID,
-		IncludeAtUpdatedAt: includeAtUpdatedAt,
+		Running:             cursor.Running,
+		ActivityAt:          time.UnixMilli(cursor.ActivityAtUnixMillis).UTC(),
+		AfterID:             afterID,
+		IncludeAtActivityAt: includeAtActivityAt,
 	}
 }
 
 func manualCaptureCursor(cursor captureCursorDocument) *manualcapture.PageCursor {
-	includeAtUpdatedAt := captureKindOrder(captureidentity.KindManualCapture) >=
+	includeAtActivityAt := captureKindOrder(captureidentity.KindManualCapture) >=
 		captureKindOrder(cursor.Kind)
 	afterID := ""
 	if cursor.Kind == captureidentity.KindManualCapture {
 		afterID = cursor.ID
 	}
 	return &manualcapture.PageCursor{
-		Running:            cursor.Running,
-		UpdatedAt:          time.UnixMilli(cursor.UpdatedAtUnixMillis).UTC(),
-		AfterID:            afterID,
-		IncludeAtUpdatedAt: includeAtUpdatedAt,
+		Running:             cursor.Running,
+		ActivityAt:          time.UnixMilli(cursor.ActivityAtUnixMillis).UTC(),
+		AfterID:             afterID,
+		IncludeAtActivityAt: includeAtActivityAt,
 	}
 }
 

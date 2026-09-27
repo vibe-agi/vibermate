@@ -494,6 +494,20 @@ final class RuntimeUsageReport {
     required this.truncated,
     required this.days,
     required this.users,
+    this.cost,
+    this.pricing,
+    this.collection = const RuntimeUsageCollection(
+      enabled: false,
+      retentionDays: 90,
+      revision: 1,
+    ),
+    this.sources = const [],
+    this.profiles = const [],
+    this.accounts = const [],
+    this.models = const [],
+    this.callers = const [],
+    this.projects = const [],
+    this.total,
   });
 
   factory RuntimeUsageReport.fromJson(Object? json, String path) {
@@ -508,14 +522,28 @@ final class RuntimeUsageReport {
         'truncated',
         'days',
         'users',
+        'collection',
+        'total',
+        'sources',
+        'profiles',
+        'accounts',
+        'models',
+        'pricing',
+        'callers',
+        'projects',
       },
     );
-    if (requireString(value, 'schema', path) !=
-        'vibermate-runtime-usage-report-v4') {
+    final schema = requireString(value, 'schema', path);
+    if (schema != 'vibermate-runtime-usage-report-v1') {
       throw ControlContractException('$path schema is unsupported');
     }
     final period = RuntimeUsagePeriod.fromJson(value['period'], '$path.period');
     final days = _runtimeUsageDays(value['days'], '$path.days', period);
+    final total = RuntimeUsageGroup.fromJson(value['total'], '$path.total');
+    if (total.agentApiCalls !=
+        days.fold<int>(0, (sum, day) => sum + day.agentApiCalls)) {
+      throw ControlContractException('$path totals disagree with its days');
+    }
     final users = requireList(value['users'], '$path.users').indexed
         .map(
           (entry) =>
@@ -538,6 +566,43 @@ final class RuntimeUsageReport {
       truncated: requireBoolean(value, 'truncated', path),
       days: days,
       users: users,
+      cost: total.cost,
+      total: total,
+      pricing: RuntimePricingInfo.fromJson(value['pricing'], '$path.pricing'),
+      collection: RuntimeUsageCollection.fromJson(
+        value['collection'],
+        '$path.collection',
+      ),
+      sources: _runtimeUsageList(
+        value['sources'],
+        '$path.sources',
+        RuntimeUsageGroup.fromJson,
+      ),
+      profiles: _runtimeUsageList(
+        value['profiles'],
+        '$path.profiles',
+        RuntimeUsageGroup.fromJson,
+      ),
+      accounts: _runtimeUsageList(
+        value['accounts'],
+        '$path.accounts',
+        RuntimeUsageGroup.fromJson,
+      ),
+      models: _runtimeUsageList(
+        value['models'],
+        '$path.models',
+        RuntimeUsageGroup.fromJson,
+      ),
+      callers: _runtimeUsageList(
+        value['callers'],
+        '$path.callers',
+        RuntimeUsageGroup.fromJson,
+      ),
+      projects: _runtimeUsageList(
+        value['projects'],
+        '$path.projects',
+        RuntimeUsageGroup.fromJson,
+      ),
     );
   }
 
@@ -546,6 +611,259 @@ final class RuntimeUsageReport {
   final bool truncated;
   final List<RuntimeDayUsage> days;
   final List<RuntimeUserUsage> users;
+  final RuntimeCostEstimate? cost;
+  final RuntimePricingInfo? pricing;
+  final RuntimeUsageCollection collection;
+  final List<RuntimeUsageGroup> sources;
+  final List<RuntimeUsageGroup> profiles;
+  final List<RuntimeUsageGroup> accounts;
+  final List<RuntimeUsageGroup> models;
+  final List<RuntimeUsageGroup> callers;
+  final List<RuntimeUsageGroup> projects;
+  final RuntimeUsageGroup? total;
+}
+
+final class RuntimeUsageCollection {
+  const RuntimeUsageCollection({
+    required this.enabled,
+    required this.retentionDays,
+    required this.revision,
+    this.collectingSince,
+  });
+  factory RuntimeUsageCollection.fromJson(Object? json, String path) {
+    final value = requireObject(json, path);
+    requireFields(
+      value,
+      path,
+      required: const {'enabled', 'retentionDays', 'revision'},
+      optional: const {'collectingSince'},
+    );
+    final days = requireInteger(value, 'retentionDays', path);
+    final revision = requireInteger(value, 'revision', path);
+    final enabled = requireBoolean(value, 'enabled', path);
+    final since = value['collectingSince'] == null
+        ? null
+        : requireTimestamp(value, 'collectingSince', path);
+    if (days < 1 || days > 365 || revision < 1 || (enabled && since == null)) {
+      throw ControlContractException('$path is invalid');
+    }
+    return RuntimeUsageCollection(
+      enabled: enabled,
+      retentionDays: days,
+      revision: revision,
+      collectingSince: since,
+    );
+  }
+  final bool enabled;
+  final int retentionDays;
+  final int revision;
+  final DateTime? collectingSince;
+}
+
+final class RuntimeCostEstimate {
+  const RuntimeCostEstimate({
+    this.nanoUsd = 0,
+    this.pricedCalls = 0,
+    this.partialCalls = 0,
+    this.unpricedCalls = 0,
+  });
+
+  factory RuntimeCostEstimate.fromJson(Object? json, String path, int calls) {
+    final value = requireObject(json, path);
+    requireFields(
+      value,
+      path,
+      required: const {
+        'nanoUsd',
+        'pricedCalls',
+        'partialCalls',
+        'unpricedCalls',
+      },
+    );
+    final amount = requireInteger(value, 'nanoUsd', path);
+    final priced = requireInteger(value, 'pricedCalls', path);
+    final partial = requireInteger(value, 'partialCalls', path);
+    final unpriced = requireInteger(value, 'unpricedCalls', path);
+    if (amount < 0 ||
+        amount > 9007199254740991 ||
+        priced < 0 ||
+        partial < 0 ||
+        unpriced < 0 ||
+        partial > priced ||
+        priced + unpriced != calls ||
+        (priced == 0 && amount != 0)) {
+      throw ControlContractException('$path cost evidence is inconsistent');
+    }
+    return RuntimeCostEstimate(
+      nanoUsd: amount,
+      pricedCalls: priced,
+      partialCalls: partial,
+      unpricedCalls: unpriced,
+    );
+  }
+
+  final int nanoUsd;
+  final int pricedCalls;
+  final int partialCalls;
+  final int unpricedCalls;
+  bool get partial => partialCalls > 0 || unpricedCalls > 0;
+  int get completeCalls => pricedCalls - partialCalls;
+
+  RuntimeCostEstimate add(RuntimeCostEstimate value) => RuntimeCostEstimate(
+    nanoUsd: nanoUsd + value.nanoUsd,
+    pricedCalls: pricedCalls + value.pricedCalls,
+    partialCalls: partialCalls + value.partialCalls,
+    unpricedCalls: unpricedCalls + value.unpricedCalls,
+  );
+}
+
+final class RuntimePricingInfo {
+  const RuntimePricingInfo({required this.state, this.updatedAt});
+  factory RuntimePricingInfo.fromJson(Object? json, String path) {
+    final value = requireObject(json, path);
+    requireFields(
+      value,
+      path,
+      required: const {'source', 'currency', 'basis', 'state'},
+      optional: const {'updatedAt'},
+    );
+    final state = requireString(value, 'state', path);
+    final time = optionalTimestamp(value, 'updatedAt', path);
+    if (value['source'] != 'models.dev' ||
+        value['currency'] != 'USD' ||
+        value['basis'] != 'current_standard_api' ||
+        !const {'ready', 'stale', 'unavailable'}.contains(state) ||
+        ((state == 'unavailable') != (time == null))) {
+      throw ControlContractException('$path pricing basis is invalid');
+    }
+    return RuntimePricingInfo(state: state, updatedAt: time);
+  }
+  final String state;
+  final DateTime? updatedAt;
+}
+
+final class RuntimeUsageGroup {
+  const RuntimeUsageGroup({
+    required this.id,
+    required this.label,
+    required this.agentApiCalls,
+    required this.succeeded,
+    required this.failed,
+    required this.canceled,
+    required this.tokens,
+    this.cost,
+    this.dimension = '',
+    this.evidence = '',
+    this.children = const [],
+    this.childrenTruncated = false,
+  });
+  factory RuntimeUsageGroup.fromJson(
+    Object? json,
+    String path, {
+    int depth = 0,
+  }) {
+    if (depth > 3) {
+      throw ControlContractException('$path has too many grouping levels');
+    }
+    final value = requireObject(json, path);
+    requireFields(
+      value,
+      path,
+      required: const {
+        'id',
+        'label',
+        'agentApiCalls',
+        'succeeded',
+        'failed',
+        'canceled',
+        'tokens',
+        'cost',
+      },
+      optional: const {
+        'dimension',
+        'evidence',
+        'children',
+        'childrenTruncated',
+      },
+    );
+    final calls = requireInteger(value, 'agentApiCalls', path);
+    final succeeded = requireInteger(value, 'succeeded', path);
+    final failed = requireInteger(value, 'failed', path);
+    final canceled = requireInteger(value, 'canceled', path);
+    if (calls < 0 ||
+        succeeded < 0 ||
+        failed < 0 ||
+        canceled < 0 ||
+        succeeded + failed + canceled != calls) {
+      throw ControlContractException('$path counters are inconsistent');
+    }
+    final dimension = optionalString(value, 'dimension', path) ?? '';
+    final evidence = optionalString(value, 'evidence', path) ?? '';
+    if (!const {
+          '',
+          'source',
+          'profile',
+          'account',
+          'model',
+          'caller',
+          'project',
+          'branch',
+        }.contains(dimension) ||
+        !const {
+          '',
+          'local',
+          'member',
+          'launch_snapshot',
+          'detached',
+        }.contains(evidence)) {
+      throw ControlContractException('$path grouping evidence is invalid');
+    }
+    final children = value.containsKey('children')
+        ? _runtimeUsageList(
+            value['children'],
+            '$path.children',
+            (item, location) =>
+                RuntimeUsageGroup.fromJson(item, location, depth: depth + 1),
+          )
+        : const <RuntimeUsageGroup>[];
+    final childrenTruncated =
+        value.containsKey('childrenTruncated') &&
+        requireBoolean(value, 'childrenTruncated', path);
+    final childCalls = children.fold<int>(
+      0,
+      (sum, item) => sum + item.agentApiCalls,
+    );
+    if (childCalls > calls ||
+        (children.isNotEmpty && !childrenTruncated && childCalls != calls)) {
+      throw ControlContractException('$path child totals disagree');
+    }
+    return RuntimeUsageGroup(
+      id: requireStringValue(value, 'id', path),
+      label: requireStringValue(value, 'label', path),
+      agentApiCalls: calls,
+      succeeded: succeeded,
+      failed: failed,
+      canceled: canceled,
+      tokens: RuntimeTokenUsage.fromJson(value['tokens'], '$path.tokens'),
+      cost: RuntimeCostEstimate.fromJson(value['cost'], '$path.cost', calls),
+      dimension: dimension,
+      evidence: evidence,
+      children: children,
+      childrenTruncated: childrenTruncated,
+    );
+  }
+  final String id;
+  final String label;
+  final int agentApiCalls;
+  final int succeeded;
+  final int failed;
+  final int canceled;
+  final RuntimeTokenUsage tokens;
+  final RuntimeCostEstimate? cost;
+  final String dimension;
+  final String evidence;
+  final List<RuntimeUsageGroup> children;
+  final bool childrenTruncated;
 }
 
 final class RuntimeUserUsage {
@@ -559,7 +877,6 @@ final class RuntimeUserUsage {
     required this.succeeded,
     required this.failed,
     required this.canceled,
-    required this.contentUnavailableCalls,
     required this.modelUnavailableCalls,
     required this.tokens,
     required this.latestContext,
@@ -587,7 +904,6 @@ final class RuntimeUserUsage {
         'succeeded',
         'failed',
         'canceled',
-        'contentUnavailableCalls',
         'modelUnavailableCalls',
         'tokens',
         'days',
@@ -624,11 +940,6 @@ final class RuntimeUserUsage {
       succeeded: succeeded,
       failed: failed,
       canceled: canceled,
-      contentUnavailableCalls: requireInteger(
-        value,
-        'contentUnavailableCalls',
-        path,
-      ),
       modelUnavailableCalls: requireInteger(
         value,
         'modelUnavailableCalls',
@@ -673,7 +984,6 @@ final class RuntimeUserUsage {
   final int succeeded;
   final int failed;
   final int canceled;
-  final int contentUnavailableCalls;
   final int modelUnavailableCalls;
   final RuntimeTokenUsage tokens;
   final RuntimeUsageContextRef? latestContext;
@@ -686,7 +996,7 @@ final class RuntimeUserUsage {
   final int dailyTokenWarning;
 
   bool get active => state == 'active';
-  bool get partial => contentUnavailableCalls > 0 || modelUnavailableCalls > 0;
+  bool get partial => modelUnavailableCalls > 0;
 }
 
 final class RuntimeDayUsage {
@@ -696,9 +1006,9 @@ final class RuntimeDayUsage {
     required this.succeeded,
     required this.failed,
     required this.canceled,
-    required this.contentUnavailableCalls,
     required this.modelUnavailableCalls,
     required this.tokens,
+    this.cost,
   });
 
   factory RuntimeDayUsage.fromJson(Object? json, String path) {
@@ -712,9 +1022,9 @@ final class RuntimeDayUsage {
         'succeeded',
         'failed',
         'canceled',
-        'contentUnavailableCalls',
         'modelUnavailableCalls',
         'tokens',
+        'cost',
       },
     );
     final date = requireString(value, 'date', path);
@@ -723,11 +1033,6 @@ final class RuntimeDayUsage {
     final succeeded = requireInteger(value, 'succeeded', path);
     final failed = requireInteger(value, 'failed', path);
     final canceled = requireInteger(value, 'canceled', path);
-    final contentUnavailableCalls = requireInteger(
-      value,
-      'contentUnavailableCalls',
-      path,
-    );
     final modelUnavailableCalls = requireInteger(
       value,
       'modelUnavailableCalls',
@@ -735,7 +1040,6 @@ final class RuntimeDayUsage {
     );
     if (agentApiCalls <= 0 ||
         succeeded + failed + canceled > agentApiCalls ||
-        contentUnavailableCalls > agentApiCalls ||
         modelUnavailableCalls > agentApiCalls) {
       throw ControlContractException('$path counters are inconsistent');
     }
@@ -745,9 +1049,13 @@ final class RuntimeDayUsage {
       succeeded: succeeded,
       failed: failed,
       canceled: canceled,
-      contentUnavailableCalls: contentUnavailableCalls,
       modelUnavailableCalls: modelUnavailableCalls,
       tokens: RuntimeTokenUsage.fromJson(value['tokens'], '$path.tokens'),
+      cost: RuntimeCostEstimate.fromJson(
+        value['cost'],
+        '$path.cost',
+        agentApiCalls,
+      ),
     );
   }
 
@@ -756,11 +1064,11 @@ final class RuntimeDayUsage {
   final int succeeded;
   final int failed;
   final int canceled;
-  final int contentUnavailableCalls;
   final int modelUnavailableCalls;
   final RuntimeTokenUsage tokens;
+  final RuntimeCostEstimate? cost;
 
-  bool get partial => contentUnavailableCalls > 0 || modelUnavailableCalls > 0;
+  bool get partial => modelUnavailableCalls > 0;
 }
 
 final class RuntimeUsageContextRef {
@@ -5811,6 +6119,64 @@ final class EnvironmentPublishResult {
   final EnvironmentImpact impact;
 }
 
+final class EnvironmentAccountActivation {
+  const EnvironmentAccountActivation({
+    required this.environment,
+    required this.routeId,
+    required this.accountId,
+    required this.runningCaptureCount,
+  });
+
+  factory EnvironmentAccountActivation.fromJson(
+    Object? json, {
+    required String environmentId,
+    required String routeId,
+    required String accountId,
+  }) {
+    const path = 'environmentAccountActivation';
+    final value = requireObject(json, path);
+    requireFields(
+      value,
+      path,
+      required: const {
+        'environment',
+        'routeId',
+        'accountId',
+        'runningCaptureCount',
+      },
+    );
+    final environment = EnvironmentRecord.fromJson(
+      value['environment'],
+      '$path.environment',
+    );
+    final actualRouteId = _requireResourceId(value, 'routeId', path);
+    final actualAccountId = _requireResourceId(value, 'accountId', path);
+    final selected = environment.routes
+        .where((route) => route.id == actualRouteId)
+        .firstOrNull;
+    if (environment.id != environmentId ||
+        actualRouteId != routeId ||
+        actualAccountId != accountId ||
+        selected?.accountPolicy.mode != 'fixed' ||
+        selected?.accountPolicy.fixedAccountId != actualAccountId) {
+      throw const ControlContractException(
+        'Environment Account activation is inconsistent',
+      );
+    }
+    return EnvironmentAccountActivation(
+      environment: environment,
+      routeId: actualRouteId,
+      accountId: actualAccountId,
+      runningCaptureCount: requireInteger(value, 'runningCaptureCount', path),
+    );
+  }
+
+  final EnvironmentRecord environment;
+  final String routeId;
+  final String accountId;
+  final int runningCaptureCount;
+}
+
 final class CaptureClientAdapter {
   const CaptureClientAdapter({
     required this.id,
@@ -6153,10 +6519,11 @@ final class CaptureRecord {
     required this.observation,
     required this.createdAt,
     required this.updatedAt,
+    DateTime? activityAt,
     this.managedRun,
     this.manualCapture,
     this.transport,
-  });
+  }) : _activityAt = activityAt;
 
   factory CaptureRecord.fromJson(Object? json, String path) {
     final value = requireObject(json, path);
@@ -6173,7 +6540,12 @@ final class CaptureRecord {
         'createdAt',
         'updatedAt',
       },
-      optional: const {'managedRun', 'manualCapture', 'transport'},
+      optional: const {
+        'managedRun',
+        'manualCapture',
+        'transport',
+        'activityAt',
+      },
     );
     final kind = requireString(value, 'kind', path);
     final id = _requireResourceId(value, 'id', path);
@@ -6212,7 +6584,9 @@ final class CaptureRecord {
         : ManualCaptureSummary.fromJson(manual, '$path.manualCapture');
     final createdAt = requireTimestamp(value, 'createdAt', path);
     final updatedAt = requireTimestamp(value, 'updatedAt', path);
+    final activityAt = optionalTimestamp(value, 'activityAt', path);
     if (updatedAt.isBefore(createdAt) ||
+        (activityAt?.isBefore(createdAt) ?? false) ||
         (kind == 'managed_run' &&
             ((state == 'created' && managedSummary?.processId != null) ||
                 (state == 'attached' && managedSummary?.processId == null))) ||
@@ -6231,6 +6605,7 @@ final class CaptureRecord {
       observation: observation,
       createdAt: createdAt,
       updatedAt: updatedAt,
+      activityAt: activityAt,
       managedRun: managedSummary,
       manualCapture: manualSummary,
       transport: transport,
@@ -6245,6 +6620,7 @@ final class CaptureRecord {
   final String observation;
   final DateTime createdAt;
   final DateTime updatedAt;
+  final DateTime? _activityAt;
   final ManagedRunSummary? managedRun;
   final ManualCaptureSummary? manualCapture;
   final String? transport;
@@ -6255,6 +6631,14 @@ final class CaptureRecord {
   bool get isManual => kind == 'manual_capture';
   bool get isACP => transport == 'acp_stdio';
   String? get captureRunId => kind == 'managed_run' ? id : null;
+
+  // Older Runtime/preview records have no projection. Never borrow a selected
+  // native session's timeline: that session can span multiple Capture runs.
+  DateTime get activityAt =>
+      _activityAt ??
+      manualCapture?.lastObservedAt ??
+      managedRun?.firstObservedAt ??
+      (running ? createdAt : updatedAt);
 }
 
 final class CapturePage {
@@ -6847,6 +7231,7 @@ final class ActivityRecord {
     required this.environment,
     required this.parentRefs,
     this.requestPreview,
+    this.contentAvailable,
   });
 
   factory ActivityRecord.fromJson(Object? json, String path) {
@@ -6865,7 +7250,7 @@ final class ActivityRecord {
         'environment',
         'parentRefs',
       },
-      optional: const {'reasonCode', 'requestPreview'},
+      optional: const {'reasonCode', 'requestPreview', 'contentAvailable'},
     );
     final id = requireString(value, 'id', path);
     final status = requireString(value, 'status', path);
@@ -6886,6 +7271,9 @@ final class ActivityRecord {
     return ActivityRecord(
       id: id,
       occurredAt: requireTimestamp(value, 'occurredAt', path),
+      contentAvailable: value['contentAvailable'] == null
+          ? null
+          : requireBoolean(value, 'contentAvailable', path),
       title: requireString(value, 'title', path),
       status: status,
       reasonCode: optionalString(value, 'reasonCode', path),
@@ -6918,6 +7306,7 @@ final class ActivityRecord {
   final FrozenEnvironmentRef environment;
   final ActivityParentRefs parentRefs;
   final ActivityRequestPreview? requestPreview;
+  final bool? contentAvailable;
 
   String get sourceName => source.displayName;
   String get environmentId => environment.id;
@@ -8062,6 +8451,7 @@ List<Object?> _rawEvidenceList(Object? json, String path) {
 
 final class ExchangeDiagnosis {
   const ExchangeDiagnosis({
+    this.providerErrorCode,
     required this.providerStatus,
     required this.providerField,
     required this.clientField,
@@ -8075,6 +8465,7 @@ final class ExchangeDiagnosis {
       path,
       required: const {},
       optional: const {
+        'providerErrorCode',
         'providerStatus',
         'providerField',
         'clientField',
@@ -8082,6 +8473,7 @@ final class ExchangeDiagnosis {
       },
     );
     final result = ExchangeDiagnosis(
+      providerErrorCode: optionalString(value, 'providerErrorCode', path),
       providerStatus: optionalInteger(
         value,
         'providerStatus',
@@ -8092,7 +8484,8 @@ final class ExchangeDiagnosis {
       clientField: optionalString(value, 'clientField', path),
       clientPath: optionalString(value, 'clientPath', path),
     );
-    if (result.providerStatus == null &&
+    if (result.providerErrorCode == null &&
+        result.providerStatus == null &&
         result.providerField == null &&
         result.clientField == null &&
         result.clientPath == null) {
@@ -8102,6 +8495,7 @@ final class ExchangeDiagnosis {
   }
 
   final int? providerStatus;
+  final String? providerErrorCode;
   final String? providerField;
   final String? clientField;
   final String? clientPath;

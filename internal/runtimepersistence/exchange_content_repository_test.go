@@ -185,6 +185,14 @@ func TestExchangeContentRepositorySharesExactHistoryAndDerivesIncrementalViews(t
 		previews["exchange-second"].Text != "second question" {
 		t.Fatalf("RequestPreviews() = %+v, %v", previews, err)
 	}
+	availability, err := repository.AvailableBodies(context.Background(), []string{"exchange-first", "exchange-missing"}, recordedAt.Add(time.Hour))
+	if err != nil || !availability["exchange-first"] || availability["exchange-missing"] {
+		t.Fatalf("body availability: %v %v", availability, err)
+	}
+	expired, err := repository.AvailableBodies(context.Background(), []string{"exchange-first"}, first.ExpiresAt)
+	if err != nil || expired["exchange-first"] {
+		t.Fatalf("expired body availability: %v %v", expired, err)
+	}
 
 	assertPresentation := func(
 		exchangeID string,

@@ -216,12 +216,14 @@ func TestArchiveClearGuardReadsEveryCaptureCatalogPage(t *testing.T) {
 			ID:              fmt.Sprintf("run.%03d", index),
 			ExecutableLabel: "Claude Code",
 			State:           capturerun.StateAttached,
+			CreatedAt:       now,
 			UpdatedAt:       now,
 		}
 		manualFirst[index] = manualcapture.View{
 			ID:          fmt.Sprintf("manual.%03d", index),
 			DisplayName: "Desktop client",
 			State:       manualcapture.StateActive,
+			CreatedAt:   now,
 			UpdatedAt:   now,
 		}
 	}
@@ -229,6 +231,7 @@ func TestArchiveClearGuardReadsEveryCaptureCatalogPage(t *testing.T) {
 		managedFirst,
 		{{
 			ID: "run.200", ExecutableLabel: "Codex", State: capturerun.StateCreated,
+			CreatedAt: now.Add(-time.Second),
 			UpdatedAt: now.Add(-time.Second),
 		}},
 	}}
@@ -236,6 +239,7 @@ func TestArchiveClearGuardReadsEveryCaptureCatalogPage(t *testing.T) {
 		manualFirst,
 		{{
 			ID: "manual.200", DisplayName: "IDE plugin", State: manualcapture.StateActive,
+			CreatedAt: now.Add(-time.Second),
 			UpdatedAt: now.Add(-time.Second),
 		}},
 	}}

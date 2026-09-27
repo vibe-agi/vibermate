@@ -322,10 +322,10 @@ func TestManualCaptureCatalogPaginatesRunningFirstAtSharedTimestamp(t *testing.T
 			t.Fatalf("ManualCapture page %d state = %q", index+1, item.State)
 		}
 		cursor = &manualcapture.PageCursor{
-			Running:            running,
-			UpdatedAt:          item.UpdatedAt,
-			AfterID:            item.ID,
-			IncludeAtUpdatedAt: true,
+			Running:             running,
+			ActivityAt:          item.ActivityAt,
+			AfterID:             item.ID,
+			IncludeAtActivityAt: true,
 		}
 	}
 	page, err := manager.List(context.Background(), manualcapture.PageRequest{

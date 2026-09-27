@@ -9,6 +9,9 @@ func TestCommitLedgerSeparatesHoldEnvelopeFromSemanticCommit(t *testing.T) {
 	t.Parallel()
 
 	var ledger CommitLedger
+	if allowed, reason := ledger.CanTransportResend(ReplayGenerationCostOnly, true); !allowed {
+		t.Fatalf("uncommitted headers must permit policy-controlled retry: %s", reason)
+	}
 	if err := ledger.RecordHoldEnvelope(); err != nil {
 		t.Fatal(err)
 	}
@@ -30,6 +33,17 @@ func TestCommitLedgerSeparatesHoldEnvelopeFromSemanticCommit(t *testing.T) {
 			allowed,
 			reason,
 		)
+	}
+}
+
+func TestProviderMetadataCommitsAttemptIdentity(t *testing.T) {
+	var ledger CommitLedger
+	if err := ledger.RecordHoldEnvelope(); err != nil {
+		t.Fatal(err)
+	}
+	ledger.RecordProviderMetadata()
+	if allowed, reason := ledger.CanTransportResend(ReplayGenerationCostOnly, true); allowed || reason != RetryBlockedProviderMetadata {
+		t.Fatalf("provider-affine headers must block retry: %t, %s", allowed, reason)
 	}
 }
 

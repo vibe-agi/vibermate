@@ -20,6 +20,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/clientadapter"
 	"github.com/vibe-agi/vibermate/internal/controlprincipal"
 	"github.com/vibe-agi/vibermate/internal/instanceguard"
+	"github.com/vibe-agi/vibermate/internal/modelcatalog"
 	"github.com/vibe-agi/vibermate/internal/productruntime"
 	"github.com/vibe-agi/vibermate/internal/runtimecontrol"
 	"github.com/vibe-agi/vibermate/internal/runtimeusage"
@@ -268,8 +269,8 @@ func startAttached(
 	}
 	usage, err := runtimeusage.New(runtimeusage.Options{
 		Users: runtime.RuntimeUsers(), Runs: runtime.CaptureRunReader(),
-		Activities: runtime.Activities(), Contents: runtime.ExchangeContents(),
-		Identities: runtime.ConversationIdentities(), Clock: options.Clock,
+		Ledger: runtime.UsageRepository(), Clock: options.Clock,
+		Prices: &modelcatalog.ReferencePrices{Fetch: runtime.FetchModelsDevPrices, Clock: options.Clock},
 	})
 	if err != nil {
 		return nil, err

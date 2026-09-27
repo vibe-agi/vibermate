@@ -38,6 +38,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/rawevidence"
 	"github.com/vibe-agi/vibermate/internal/responseschat"
 	"github.com/vibe-agi/vibermate/internal/runtimepersistence"
+	"github.com/vibe-agi/vibermate/internal/runtimeusage"
 	"github.com/vibe-agi/vibermate/internal/secretstore"
 	"github.com/vibe-agi/vibermate/internal/toolapproval"
 	"github.com/vibe-agi/vibermate/internal/transportprofile"
@@ -425,6 +426,7 @@ type providerRuntime interface {
 		providerauth.Lease,
 	) (*http.Response, error)
 	FetchModelsDev(context.Context) (*http.Response, error)
+	FetchModelsDevPrices(context.Context) (*http.Response, error)
 	Shutdown(context.Context) error
 }
 
@@ -541,6 +543,7 @@ type exchangeBuildRequest struct {
 	activities               activity.Recorder
 	identities               activity.ConversationIdentityRepository
 	contents                 exchangecontent.Recorder
+	usage                    runtimeusage.Recorder
 	clock                    Clock
 	hold                     exchange.HoldPolicy
 	annotations              *clientannotation.Signer
@@ -559,6 +562,7 @@ type exchangeRuntime interface {
 type activityAttemptObserver struct {
 	recorder   activity.Recorder
 	identities activity.ConversationIdentityRepository
+	usage      runtimeusage.Recorder
 }
 
 type exchangeContentObserver struct {
@@ -701,10 +705,11 @@ func (observer activityAttemptObserver) ObserveTerminal(
 		ConnectionID:           observation.ConnectionID,
 		Conversation:           observation.Conversation,
 		Diagnosis: activity.Diagnosis{
-			ProviderStatus: observation.ProviderStatus,
-			ProviderField:  string(observation.ProviderField),
-			ClientField:    string(observation.ClientField),
-			ClientPath:     observation.ClientPath,
+			ProviderErrorCode: observation.ProviderErrorCode,
+			ProviderStatus:    observation.ProviderStatus,
+			ProviderField:     string(observation.ProviderField),
+			ClientField:       string(observation.ClientField),
+			ClientPath:        observation.ClientPath,
 		},
 		Transport: activityTransportEvidence(
 			observation.Presentation,
@@ -714,13 +719,28 @@ func (observer activityAttemptObserver) ObserveTerminal(
 	if err != nil {
 		return err
 	}
-	return observer.persistProtocolIdentity(
+	identityErr := observer.persistProtocolIdentity(
 		ctx,
 		observation.ExchangeID,
 		observation.ClientProtocolEvidence,
 		observation.ProviderResponseID,
 		record.OccurredAt,
 	)
+	var usageErr error
+	if observer.usage != nil {
+		value := runtimeusage.Observation{
+			ExchangeID: observation.ExchangeID, StartedAt: observation.StartedAt,
+			OccurredAt: record.OccurredAt, CaptureRunID: source.captureRunID, ManualCaptureID: source.manualCaptureID,
+			Status: status, EnvironmentID: string(observation.EnvironmentID), EnvironmentRevision: uint64(observation.EnvironmentRevision),
+			AccountID: observation.AccountID, RequestedModel: observation.RequestedModel,
+			UpstreamModel: observation.UpstreamModel, Usage: observation.Usage,
+		}
+		if identity, ok := agentconversation.ClientIdentityFromProtocolEvidence(observation.ClientProtocolEvidence, observation.ProviderResponseID, record.OccurredAt); ok {
+			value.Client, value.SessionID = identity.Client, identity.SessionID
+		}
+		usageErr = observer.usage.RecordUsage(ctx, value)
+	}
+	return errors.Join(identityErr, usageErr)
 }
 
 func (observer activityAttemptObserver) persistProtocolIdentity(
@@ -902,6 +922,7 @@ func buildExchange(
 		ToolDecisions: request.toolDecisions,
 		RetryWaiter:   exchange.TimerRetryWaiter{},
 		Observer: activityAttemptObserver{
+			usage:    request.usage,
 			recorder: request.activities, identities: request.identities,
 		},
 		ContentObserver: exchangeContentObserver{

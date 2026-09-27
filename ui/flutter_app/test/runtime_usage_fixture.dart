@@ -1,5 +1,25 @@
 Map<String, Object?> runtimeUsagePayload() => {
-  'schema': 'vibermate-runtime-usage-report-v4',
+  'schema': 'vibermate-runtime-usage-report-v1',
+  'pricing': {
+    'source': 'models.dev',
+    'currency': 'USD',
+    'basis': 'current_standard_api',
+    'state': 'ready',
+    'updatedAt': '2026-08-24T13:00:00Z',
+  },
+  'collection': {
+    'enabled': true,
+    'retentionDays': 90,
+    'revision': 1,
+    'collectingSince': '2026-07-27T00:00:00Z',
+  },
+  'total': usageGroupPayload('all'),
+  'sources': [usageGroupPayload('member')],
+  'profiles': [usageGroupPayload('general')],
+  'accounts': [usageGroupPayload('team-dev')],
+  'models': [usageGroupPayload('gpt-5.6-sol')],
+  'callers': [usageGroupPayload('user.test')],
+  'projects': [usageGroupPayload('')],
   'generatedAt': '2026-08-24T14:00:00.000Z',
   'period': {
     'from': '2026-07-27',
@@ -19,7 +39,6 @@ Map<String, Object?> runtimeUsagePayload() => {
       'succeeded': 1,
       'failed': 1,
       'canceled': 0,
-      'contentUnavailableCalls': 0,
       'modelUnavailableCalls': 0,
       'tokens': tokenUsagePayload(),
       'latestContext': {
@@ -85,9 +104,27 @@ Map<String, Object?> dayUsagePayload(String date) => {
   'succeeded': 1,
   'failed': 1,
   'canceled': 0,
-  'contentUnavailableCalls': 0,
   'modelUnavailableCalls': 0,
   'tokens': tokenUsagePayload(),
+  'cost': costUsagePayload(),
+};
+
+Map<String, Object?> usageGroupPayload(String id) => {
+  'id': id,
+  'label': id,
+  'agentApiCalls': 2,
+  'succeeded': 1,
+  'failed': 1,
+  'canceled': 0,
+  'tokens': tokenUsagePayload(),
+  'cost': costUsagePayload(),
+};
+
+Map<String, Object?> costUsagePayload() => {
+  'nanoUsd': 12500000,
+  'pricedCalls': 1,
+  'partialCalls': 1,
+  'unpricedCalls': 1,
 };
 
 Map<String, Object?> tokenUsagePayload() => {

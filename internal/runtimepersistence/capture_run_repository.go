@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -52,12 +53,22 @@ const captureRunColumns = `
 	first_observed_at_unix_ms,
 	created_at_unix_ms,
 	expires_at_unix_ms,
-	updated_at_unix_ms`
+	updated_at_unix_ms,
+	COALESCE((SELECT git_json FROM capture_run_projects p WHERE p.run_id=capture_runs.run_id),'')`
 
 type captureRunRepository struct {
 	database   *sql.DB
 	operations *operationGate
 }
+
+// Derive display/order from scoped, body-free evidence using the existing
+// capture/kind index. A lease heartbeat is deliberately not activity.
+const captureRunActivityAt = `MAX(created_at_unix_ms, COALESCE(
+	(SELECT MAX(a.occurred_at_unix_ms) FROM runtime_activities a
+	 WHERE a.capture_run_id = capture_runs.run_id AND a.capture_run_id <> ''
+	 AND a.kind IN ('exchange.started', 'exchange.completed')),
+	first_observed_at_unix_ms,
+	 CASE WHEN state IN ('created', 'attached') THEN created_at_unix_ms ELSE updated_at_unix_ms END))`
 
 // Local captures have no login identity. Remote captures must retain the exact
 // active user/session grant; their own heartbeat cannot extend that authority.
@@ -93,7 +104,12 @@ func (repository *captureRunRepository) Create(
 		releaseDigest, launchRecipe, features := captureRunAdapterColumns(
 		record.Adapter,
 	)
-	result, err := repository.database.ExecContext(
+	tx, err := repository.database.BeginTx(operation, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	result, err := tx.ExecContext(
 		operation,
 		`INSERT INTO capture_runs (
 		     run_id,
@@ -186,7 +202,16 @@ func (repository *captureRunRepository) Create(
 	} else if affected != 1 {
 		return capturerun.ErrCapabilityRejected
 	}
-	return nil
+	if record.Runtime.GitAtLaunch != nil {
+		data, err := json.Marshal(record.Runtime.GitAtLaunch)
+		if err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(operation, `INSERT INTO capture_run_projects VALUES(?,?)`, record.ID, string(data)); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 func (repository *captureRunRepository) AuthorizeProxy(
@@ -468,7 +493,7 @@ type captureRunScanner interface {
 	Scan(...any) error
 }
 
-func scanCaptureRun(scanner captureRunScanner) (capturerun.DurableRecord, error) {
+func scanCaptureRun(scanner captureRunScanner, extra ...any) (capturerun.DurableRecord, error) {
 	var (
 		record                              capturerun.DurableRecord
 		proxyHash, controlHash              []byte
@@ -487,8 +512,9 @@ func scanCaptureRun(scanner captureRunScanner) (capturerun.DurableRecord, error)
 		machineRevision, derivationRevision int64
 		runtimeUserID, runtimeUsername      sql.NullString
 		loginSessionID, deviceName          sql.NullString
+		gitJSON                             string
 	)
-	if err := scanner.Scan(
+	destinations := []any{
 		&record.ID,
 		&proxyHash,
 		&controlHash,
@@ -527,8 +553,15 @@ func scanCaptureRun(scanner captureRunScanner) (capturerun.DurableRecord, error)
 		&createdAt,
 		&expiresAt,
 		&updatedAtMS,
-	); err != nil {
+		&gitJSON,
+	}
+	if err := scanner.Scan(append(destinations, extra...)...); err != nil {
 		return capturerun.DurableRecord{}, err
+	}
+	if gitJSON != "" {
+		if err := json.Unmarshal([]byte(gitJSON), &record.Runtime.GitAtLaunch); err != nil {
+			return capturerun.DurableRecord{}, err
+		}
 	}
 	if len(proxyHash) != len(record.ProxyCapabilityHash) ||
 		len(controlHash) != len(record.ControlCapabilityHash) {
@@ -660,6 +693,9 @@ func (repository *captureRunRepository) List(
 	request capturerun.PageRequest,
 ) (capturerun.Page, error) {
 	request = request.Normalized()
+	if request.RuntimeUserID != "" && !request.RuntimeUserID.Valid() {
+		return capturerun.Page{}, capturerun.ErrInvalidRequest
+	}
 	if request.Cursor != nil && !request.Cursor.Valid() {
 		return capturerun.Page{}, capturerun.ErrInvalidRequest
 	}
@@ -669,25 +705,29 @@ func (repository *captureRunRepository) List(
 	}
 	defer finish()
 	const runningRank = `CASE WHEN state IN ('created', 'attached') THEN 0 ELSE 1 END`
-	query := `SELECT ` + captureRunColumns + `
-		 FROM capture_runs`
+	query := `SELECT ` + captureRunColumns + `, ` + captureRunActivityAt + ` AS activity_at_unix_ms
+		 FROM capture_runs WHERE 1=1`
 	arguments := make([]any, 0, 7)
+	if request.RuntimeUserID != "" {
+		query += ` AND runtime_user_id=?`
+		arguments = append(arguments, request.RuntimeUserID)
+	}
 	if cursor := request.Cursor; cursor != nil {
 		cursorRank := 1
 		if cursor.Running {
 			cursorRank = 0
 		}
 		includeBoundary := 0
-		if cursor.IncludeAtUpdatedAt {
+		if cursor.IncludeAtActivityAt {
 			includeBoundary = 1
 		}
-		updatedAt := toUnixMillis(cursor.UpdatedAt)
+		updatedAt := toUnixMillis(cursor.ActivityAt)
 		query += `
-		 WHERE (` + runningRank + ` > ?)
+		 AND ((` + runningRank + ` > ?)
 		    OR (` + runningRank + ` = ? AND (
-		      updated_at_unix_ms < ?
-		      OR (? = 1 AND updated_at_unix_ms = ? AND run_id > ?)
-		    ))`
+		      activity_at_unix_ms < ?
+		      OR (? = 1 AND activity_at_unix_ms = ? AND run_id > ?)
+		    )))`
 		arguments = append(
 			arguments,
 			cursorRank,
@@ -699,7 +739,7 @@ func (repository *captureRunRepository) List(
 		)
 	}
 	query += `
-		 ORDER BY ` + runningRank + ` ASC, updated_at_unix_ms DESC, run_id ASC
+		 ORDER BY ` + runningRank + ` ASC, activity_at_unix_ms DESC, run_id ASC
 		 LIMIT ?`
 	arguments = append(arguments, request.Limit)
 	rows, err := repository.database.QueryContext(operation, query, arguments...)
@@ -711,11 +751,14 @@ func (repository *captureRunRepository) List(
 	}()
 	page := capturerun.Page{Items: make([]capturerun.View, 0, request.Limit)}
 	for rows.Next() {
-		record, err := scanCaptureRun(rows)
+		var activityAt int64
+		record, err := scanCaptureRun(rows, &activityAt)
 		if err != nil {
 			return capturerun.Page{}, err
 		}
-		page.Items = append(page.Items, capturerun.ViewOf(record))
+		view := capturerun.ViewOf(record)
+		view.ActivityAt = fromUnixMillis(activityAt)
+		page.Items = append(page.Items, view)
 	}
 	if err := rows.Err(); err != nil {
 		return capturerun.Page{}, err
@@ -734,18 +777,21 @@ func (repository *captureRunRepository) Get(
 		return capturerun.View{}, err
 	}
 	defer finish()
+	var activityAt int64
 	record, err := scanCaptureRun(repository.database.QueryRowContext(
 		operation,
-		`SELECT `+captureRunColumns+` FROM capture_runs WHERE run_id = ?`,
+		`SELECT `+captureRunColumns+`, `+captureRunActivityAt+` FROM capture_runs WHERE run_id = ?`,
 		runID,
-	))
+	), &activityAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return capturerun.View{}, capturerun.ErrNotFound
 	}
 	if err != nil {
 		return capturerun.View{}, fmt.Errorf("get CaptureRun: %w", err)
 	}
-	return capturerun.ViewOf(record), nil
+	view := capturerun.ViewOf(record)
+	view.ActivityAt = fromUnixMillis(activityAt)
+	return view, nil
 }
 
 func (repository *captureRunRepository) Active(

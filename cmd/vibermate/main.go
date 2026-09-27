@@ -273,6 +273,12 @@ func executeContext(
 }
 
 func launchFailureKey(err error) string {
+	if errors.Is(err, runlauncher.ErrCaptureSupervisionFailed) {
+		return "cli.error.captureSupervisionFailed"
+	}
+	if errors.Is(err, runlauncher.ErrCaptureFinalizationFailed) {
+		return "cli.error.captureFinalizationFailed"
+	}
 	if errors.Is(err, runlauncher.ErrClientTargetNotConfigured) {
 		return keyClientTargetNotConfigured
 	}

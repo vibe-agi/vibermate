@@ -77,6 +77,7 @@ func TestOwnedDevelopmentAccountsBecomeLinksWithoutLosingCredentials(t *testing.
 	prior := strings.Replace(current, "  credential_origin TEXT NOT NULL,\n  endpoint_associations TEXT NOT NULL CHECK(json_valid(endpoint_associations)),\n  association_revision INTEGER NOT NULL CHECK(association_revision BETWEEN 1 AND 9223372036854775807),", "  upstream_endpoint_id TEXT NOT NULL\n  REFERENCES upstream_endpoints(endpoint_id),", 1)
 	prior = strings.Replace(prior, accountNoteColumnsSQL, "", 1)
 	priorSchema := strings.Replace(schemaSQL, current, prior, 1)
+	priorSchema = strings.Replace(priorSchema, providerErrorCodeColumnSQL, "", 1)
 	priorSchema = strings.ReplaceAll(priorSchema, "'upstream_account_read',\n", "")
 	priorSchema = strings.ReplaceAll(priorSchema, "'upstream_account_action',\n", "")
 	priorSchema = strings.ReplaceAll(priorSchema, "'credential_refresh',\n", "")
@@ -84,7 +85,7 @@ func TestOwnedDevelopmentAccountsBecomeLinksWithoutLosingCredentials(t *testing.
 	if got := fmt.Sprintf("%x", sha256.Sum256([]byte(priorSchema))); got != ownedAccountDevelopmentDigest {
 		t.Fatalf("prior schema fixture digest=%s", got)
 	}
-	if _, err := db.Exec(`DROP TABLE provider_accounts;` + prior); err != nil {
+	if _, err := db.Exec(`ALTER TABLE runtime_activities DROP COLUMN provider_error_code; DROP TABLE provider_accounts;` + prior); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.Exec(`INSERT INTO provider_accounts(account_id, display_name, upstream_endpoint_id, realm_id, driver_ref, secret_reference, state, revision, created_at_unix_ms, updated_at_unix_ms) VALUES(?, ?, ?, ?, ?, ?, 'active', 7, 1786200000000, 1786200001000)`, "preserved", "Preserved", upstreamendpoint.AnthropicOfficialID.String(), "anthropic.official", providerauth.AnthropicAPIKeyDriverRef().String(), "secret://provider-account/preserved"); err != nil {

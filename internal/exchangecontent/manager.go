@@ -21,6 +21,7 @@ type Repository interface {
 	GetConversationEvidence(context.Context, string, time.Time) (ConversationEvidence, error)
 	GetProjection(context.Context, string, time.Time, RequestView) (Projection, error)
 	RequestPreviews(context.Context, []string, time.Time) (map[string]RequestPreview, error)
+	AvailableBodies(context.Context, []string, time.Time) (map[string]bool, error)
 	PurgeExpired(context.Context, time.Time) (uint64, error)
 }
 
@@ -33,6 +34,7 @@ type Reader interface {
 	GetConversationEvidence(context.Context, string) (ConversationEvidence, error)
 	GetProjection(context.Context, string, RequestView) (Projection, error)
 	RequestPreviews(context.Context, []string) (map[string]RequestPreview, error)
+	AvailableBodies(context.Context, []string) (map[string]bool, error)
 }
 
 type Runtime interface {
@@ -180,6 +182,23 @@ func (manager *Manager) RequestPreviews(
 		}
 	}
 	return previews, nil
+}
+
+func (manager *Manager) AvailableBodies(ctx context.Context, exchangeIDs []string) (map[string]bool, error) {
+	if len(exchangeIDs) > MaxRequestPreviewBatch {
+		return nil, ErrInvalidEvidence
+	}
+	for _, id := range exchangeIDs {
+		if !validIdentity(id, MaxExchangeIDBytes) {
+			return nil, ErrInvalidEvidence
+		}
+	}
+	operation, finish, err := manager.begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer finish()
+	return manager.repository.AvailableBodies(operation, exchangeIDs, manager.clock.Now().UTC())
 }
 
 func (manager *Manager) Shutdown(ctx context.Context) error {

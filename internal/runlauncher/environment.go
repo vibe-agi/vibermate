@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net"
 	"net/url"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -34,17 +35,18 @@ var managedEnvironment = map[string]struct{}{
 }
 
 var codexManagedEnvironment = map[string]struct{}{
-	"SSL_CERT_FILE":       {},
-	"REQUESTS_CA_BUNDLE":  {},
-	"CURL_CA_BUNDLE":      {},
-	"OPENAI_BASE_URL":     {},
-	"CODEX_BASE_URL":      {},
-	"OPENAI_API_KEY":      {},
-	"CODEX_API_KEY":       {},
-	"OPENAI_ORGANIZATION": {},
-	"OPENAI_PROJECT":      {},
-	"OPENAI_ORG_ID":       {},
-	"OPENAI_PROJECT_ID":   {},
+	"CODEX_CA_CERTIFICATE": {},
+	"SSL_CERT_FILE":        {},
+	"REQUESTS_CA_BUNDLE":   {},
+	"CURL_CA_BUNDLE":       {},
+	"OPENAI_BASE_URL":      {},
+	"CODEX_BASE_URL":       {},
+	"OPENAI_API_KEY":       {},
+	"CODEX_API_KEY":        {},
+	"OPENAI_ORGANIZATION":  {},
+	"OPENAI_PROJECT":       {},
+	"OPENAI_ORG_ID":        {},
+	"OPENAI_PROJECT_ID":    {},
 }
 
 var claudeManagedEnvironment = map[string]struct{}{
@@ -140,7 +142,13 @@ func buildEnvironment(
 			preserved["ANTHROPIC_AUTH_TOKEN"] = clientCredentialPlaceholder
 		}
 	case clientadapter.LaunchCodexResponsesHTTP:
-		preserved["SSL_CERT_FILE"] = grant.RootPEMPath
+		// A custom CA makes Codex switch its HTTP clients to rustls, which does
+		// not inherit user-trusted macOS roots. Local Desktop capture already
+		// installs this Root in Keychain, so keep Codex on native trust there.
+		if runtime.GOOS != "darwin" ||
+			grant.ProxyDelivery != capturecontrol.ProxyDeliveryLocalListener {
+			preserved["CODEX_CA_CERTIFICATE"] = grant.RootPEMPath
+		}
 		if managedClientCredential {
 			preserved["CODEX_API_KEY"] = clientCredentialPlaceholder
 		}

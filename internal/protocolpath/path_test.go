@@ -143,6 +143,8 @@ func (streamFixture) SemanticProgress() uint64 {
 	return 0
 }
 
+func (streamFixture) TerminalReceived() bool { return false }
+
 func (streamFixture) FinishDecoded(
 	context.Context,
 ) (PendingTerminal, error) {

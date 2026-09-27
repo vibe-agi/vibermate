@@ -15,6 +15,113 @@ import 'package:vibermate_app/preview/preview_control_api.dart';
 import 'package:vibermate_app/preview/preview_terminal_command.dart';
 
 void main() {
+  testWidgets('Capture detail failure is not an empty or unassigned run', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1420, 1000));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final fixture = PreviewControlApi();
+    final api = _ConversationFailureApi(fixture);
+    final controller = WorkbenchController(
+      api: api,
+      terminalCommands: PreviewTerminalCommandService(),
+      previewMode: true,
+      closeRuntime: fixture.close,
+    );
+    addTearDown(controller.dispose);
+    await controller.initialize();
+    await controller.selectCapture('managed_run:run-2');
+    expect(controller.errorMessage, 'runtime_unavailable (503)');
+    expect(controller.selectedAssignment, isNotNull);
+    expect(controller.selectedCaptureConversations, isNull);
+    expect(controller.selectedCaptureLaunchIncomplete, isFalse);
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: ViberTheme.dark(),
+        home: WorkbenchShell(controller: controller),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(
+      find.text('Run details are temporarily unavailable'),
+      findsOneWidget,
+    );
+    expect(find.text('No traffic policy attached'), findsNothing);
+    expect(find.textContaining('0 turns'), findsNothing);
+    expect(
+      find.byKey(const Key('capture-client-compatibility-managed_run:run-2')),
+      findsNothing,
+    );
+
+    api.fails = false;
+    await tester.tap(find.byKey(const Key('capture-detail-retry')));
+    await tester.pumpAndSettle();
+    expect(controller.errorMessage, isNull);
+    expect(controller.selectedActivities, isNotEmpty);
+    expect(find.text('Run details are temporarily unavailable'), findsNothing);
+
+    final previous = controller.selectedCaptureConversations;
+    final previousActivities = controller.selectedCapturePage;
+    api.fails = true;
+    await controller.refresh();
+    await tester.pumpAndSettle();
+    expect(controller.errorMessage, 'runtime_unavailable (503)');
+    expect(controller.selectedCaptureConversations, same(previous));
+    expect(controller.selectedCapturePage, same(previousActivities));
+    expect(find.text('Run details are temporarily unavailable'), findsNothing);
+    expect(tester.takeException(), isNull);
+    api.fails = false;
+    await tester.pump(const Duration(seconds: 6));
+    await tester.pumpAndSettle();
+    expect(controller.errorMessage, isNull);
+    expect(controller.captureDetailError, isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
+    controller.dispose();
+  });
+
+  testWidgets(
+    'Capture selection and refresh cannot change directory activity',
+    (tester) async {
+      await tester.binding.setSurfaceSize(const Size(1420, 1000));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      final api = PreviewControlApi();
+      final controller = WorkbenchController(
+        api: api,
+        terminalCommands: PreviewTerminalCommandService(),
+        previewMode: true,
+        closeRuntime: api.close,
+      );
+      addTearDown(controller.dispose);
+      await controller.initialize();
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: ViberTheme.dark(),
+          home: WorkbenchShell(controller: controller),
+        ),
+      );
+      await tester.pumpAndSettle();
+      const key = 'managed_run:run-2';
+      final label = find.byKey(const Key('capture-activity-$key'));
+      final originalText = tester.widget<Text>(label).data;
+      final order = controller.runningCaptures.map((item) => item.key).toList();
+      final originalActivity = controller.data!.captures
+          .firstWhere((item) => item.key == key)
+          .activityAt;
+      await controller.selectCapture(key);
+      await tester.pumpAndSettle();
+      expect(controller.selectedActivities, isNotEmpty);
+      expect(tester.widget<Text>(label).data, originalText);
+      await controller.refresh();
+      await tester.pumpAndSettle();
+      expect(controller.selectedCaptureKey, key);
+      expect(tester.widget<Text>(label).data, originalText);
+      expect(controller.runningCaptures.map((item) => item.key), order);
+      expect(controller.selectedCapture!.activityAt, originalActivity);
+      await tester.pumpWidget(const SizedBox.shrink());
+      controller.dispose();
+    },
+  );
+
   for (final scenario in [
     (
       status: 404,
@@ -194,7 +301,7 @@ void main() {
     },
   );
 
-  testWidgets('usage loads on demand and is not rebuilt by polling', (
+  testWidgets('usage refreshes only while the page and app are visible', (
     tester,
   ) async {
     final fixture = PreviewControlApi();
@@ -221,19 +328,83 @@ void main() {
     await tester.pump();
     expect(api.usageCalls, 1);
     expect(api.usageQueries.single.toQueryParameters(), {
-      'from': '2025-08-26',
+      'from': '2026-08-19',
       'until': '2026-08-26',
       'timeZone': 'UTC',
     });
 
-    expect(controller.usageRangeDays, 365);
-    expect(controller.runtimeUsage?.period.from, '2025-08-26');
+    expect(controller.usageRangeDays, 7);
+    expect(controller.runtimeUsage?.period.from, '2026-08-19');
 
     await tester.pump(const Duration(seconds: 11));
     await tester.pump();
-    expect(api.usageCalls, 1);
+    expect(api.usageCalls, 3);
+    controller.didChangeAppLifecycleState(AppLifecycleState.hidden);
+    await tester.pump(const Duration(seconds: 11));
+    expect(api.usageCalls, 3);
+    controller.selectSection(WorkbenchSection.settings);
+    controller.didChangeAppLifecycleState(AppLifecycleState.resumed);
+    await tester.pump();
+    await tester.pump(const Duration(seconds: 6));
+    expect(api.usageCalls, 3);
+    controller.selectSection(WorkbenchSection.usage);
+    await tester.pump();
+    await tester.pump();
+    expect(api.usageCalls, 4);
     controller.dispose();
   });
+
+  testWidgets(
+    'usage refresh coalesces, survives management failure and retains stale data on error',
+    (tester) async {
+      final fixture = PreviewControlApi();
+      final api = _UsageTrackingApi(fixture)..managementFails = true;
+      final controller = WorkbenchController(
+        api: api,
+        terminalCommands: PreviewTerminalCommandService(),
+        previewMode: true,
+        closeRuntime: fixture.close,
+        serverManagement: true,
+        terminalManagement: false,
+        initialPreferences: const WorkbenchPreferences(
+          section: WorkbenchSection.usage,
+        ),
+      );
+      await controller.initialize();
+      expect(controller.runtimeUsage, isNotNull);
+      expect(controller.usageError, isNull);
+      final previous = controller.runtimeUsage;
+      api.usageGate = Completer<void>();
+      final first = controller.refreshUsage();
+      final second = controller.refreshUsage();
+      await tester.pump(const Duration(seconds: 11));
+      expect(api.usageCalls, 2);
+      expect(controller.usageLoading, isTrue);
+      expect(controller.runtimeUsage, same(previous));
+      await controller.setUsageRange(30);
+      expect(controller.usageRangeDays, 7);
+      api.usageGate!.complete();
+      await first;
+      await second;
+      expect(controller.usageLoading, isFalse);
+      api.usageFails = true;
+      final lastGood = controller.runtimeUsage;
+      await controller.refreshUsage();
+      expect(controller.runtimeUsage, same(lastGood));
+      expect(controller.usageError, isNotNull);
+      api.usageFails = false;
+      await controller.setUsageRange(30);
+      expect(controller.usageError, isNull);
+      expect(
+        DateTime.parse(controller.runtimeUsage!.period.until)
+            .difference(DateTime.parse(controller.runtimeUsage!.period.from))
+            .inDays,
+        30,
+      );
+      controller.dispose();
+      await tester.pump();
+    },
+  );
 
   testWidgets('periodic dashboard polls never overlap', (tester) async {
     final fixture = PreviewControlApi();
@@ -1505,6 +1676,9 @@ final class _UsageTrackingApi implements ControlApi {
 
   final PreviewControlApi delegate;
   int usageCalls = 0;
+  bool managementFails = false;
+  bool usageFails = false;
+  Completer<void>? usageGate;
   final List<RuntimeUsageQuery> usageQueries = [];
 
   @override
@@ -1549,15 +1723,20 @@ final class _UsageTrackingApi implements ControlApi {
       delegate.pendingApprovals();
 
   @override
-  Future<RuntimeServerAccess> serverAccess() => delegate.serverAccess();
+  Future<RuntimeServerAccess> serverAccess() async {
+    if (managementFails) throw StateError('management unavailable');
+    return delegate.serverAccess();
+  }
 
   @override
   Future<List<RuntimeUser>> runtimeUsers() => delegate.runtimeUsers();
 
   @override
-  Future<RuntimeUsageReport> runtimeUsage(RuntimeUsageQuery query) {
+  Future<RuntimeUsageReport> runtimeUsage(RuntimeUsageQuery query) async {
     usageCalls += 1;
     usageQueries.add(query);
+    await usageGate?.future;
+    if (usageFails) throw StateError('usage unavailable');
     return delegate.runtimeUsage(query);
   }
 
@@ -1802,6 +1981,33 @@ final class _AssignmentFailureApi extends _UsageTrackingApi {
   Future<CaptureAssignment> captureAssignment(String captureKey) async {
     if (captureKey == 'managed_run:failed-run') throw failure;
     return super.captureAssignment(captureKey);
+  }
+}
+
+final class _ConversationFailureApi extends _UsageTrackingApi {
+  _ConversationFailureApi(super.delegate);
+  bool fails = true;
+
+  @override
+  Future<ConversationPage> conversations({
+    String? cursor,
+    int limit = 50,
+    String? captureRunId,
+    String? manualCaptureId,
+  }) {
+    if (fails && captureRunId == 'run-2') {
+      throw const ControlProblem(
+        status: 503,
+        reasonCode: 'runtime_unavailable',
+        messageKey: 'error.runtime_unavailable',
+      );
+    }
+    return super.conversations(
+      cursor: cursor,
+      limit: limit,
+      captureRunId: captureRunId,
+      manualCaptureId: manualCaptureId,
+    );
   }
 }
 

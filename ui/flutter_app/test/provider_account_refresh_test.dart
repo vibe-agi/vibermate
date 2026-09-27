@@ -16,7 +16,7 @@ import 'package:vibermate_app/preview/preview_terminal_command.dart';
 void main() {
   for (final width in [390.0, 1180.0]) {
     testWidgets(
-      'OAuth refresh is distinct from quota and hidden for bearer at $width',
+      'quota refresh stays safe while OAuth refresh is explained at $width',
       (tester) async {
         await tester.binding.setSurfaceSize(Size(width, 1000));
         addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -68,13 +68,68 @@ void main() {
         );
         await tester.pumpAndSettle();
         expect(
-          find.byKey(const Key('account-refresh-account.bearer')),
+          find.byKey(const Key('account-credential-refresh-account.oauth')),
           findsNothing,
         );
-        final refresh = find.byKey(const Key('account-refresh-account.oauth'));
-        await tester.ensureVisible(refresh);
+        final quotaRefresh = find.byKey(
+          const Key('account-quota-refresh-account.oauth'),
+        );
+        await tester.ensureVisible(quotaRefresh);
         await tester.pumpAndSettle();
-        await tester.tap(refresh);
+        await tester.tap(quotaRefresh);
+        await tester.pumpAndSettle();
+        expect(
+          controller.data!.accounts
+              .singleWhere((a) => a.id == 'account.oauth')
+              .credentialEpoch,
+          1,
+        );
+        expect(controller.inventoryNotice, isNull);
+
+        final details = find.byKey(
+          const Key('provider-account-details-toggle-account.oauth'),
+        );
+        await tester.ensureVisible(details);
+        await tester.tap(details);
+        await tester.pumpAndSettle();
+        expect(
+          find.byKey(const Key('account-credential-refresh-account.bearer')),
+          findsNothing,
+        );
+        final credentialRefresh = find.byKey(
+          const Key('account-credential-refresh-account.oauth'),
+        );
+        expect(
+          tester
+              .widget<Tooltip>(
+                find
+                    .ancestor(
+                      of: credentialRefresh,
+                      matching: find.byType(Tooltip),
+                    )
+                    .first,
+              )
+              .message,
+          contains('通常无需操作'),
+        );
+        expect(
+          find.byKey(const Key('account-quota-account.oauth')),
+          findsNothing,
+        );
+        final accountList = find.descendant(
+          of: find.byKey(const Key('provider-accounts-list')),
+          matching: find.byType(Scrollable),
+        );
+        await tester.scrollUntilVisible(
+          credentialRefresh,
+          200,
+          scrollable: accountList,
+        );
+        if (width < 600) {
+          await tester.drag(accountList, const Offset(0, -80));
+          await tester.pumpAndSettle();
+        }
+        await tester.tap(credentialRefresh);
         await tester.pumpAndSettle();
         expect(
           controller.data!.accounts
@@ -85,6 +140,20 @@ void main() {
         expect(controller.inventoryNotice, 'credential_refreshed');
         expect(find.text('OAuth 凭据已刷新，账号资料已更新。'), findsOneWidget);
         expect(find.textContaining('synthetic-refresh'), findsNothing);
+
+        await tester.ensureVisible(
+          find.byKey(const Key('provider-accounts-refresh-all')),
+        );
+        await tester.tap(
+          find.byKey(const Key('provider-accounts-refresh-all')),
+        );
+        await tester.pumpAndSettle();
+        expect(
+          controller.data!.accounts
+              .singleWhere((a) => a.id == 'account.oauth')
+              .credentialEpoch,
+          2,
+        );
         expect(tester.takeException(), isNull);
       },
     );

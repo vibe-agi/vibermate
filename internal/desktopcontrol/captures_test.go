@@ -65,12 +65,12 @@ func TestUnifiedCaptureCatalogPaginatesRunningBeforeCompleteHistory(t *testing.T
 	t.Parallel()
 	now := time.Date(2026, 8, 8, 10, 0, 0, 0, time.UTC)
 	managed := []capturerun.View{
-		{ID: "managed-running", ExecutableLabel: "codex", CWD: "/workspace/a", State: capturerun.StateAttached, Observation: capturerun.ObservationWaitingForTraffic, CreatedAt: now.Add(-time.Hour), UpdatedAt: now.Add(-time.Minute), ExpiresAt: now.Add(time.Hour), ProcessID: 42},
+		{ID: "managed-running", ExecutableLabel: "codex", CWD: "/workspace/a", State: capturerun.StateAttached, Observation: capturerun.ObservationWaitingForTraffic, CreatedAt: now.Add(-time.Hour), UpdatedAt: now, ActivityAt: now.Add(-time.Minute), ExpiresAt: now.Add(time.Hour), ProcessID: 42},
 		{ID: "managed-tie", ExecutableLabel: "claude", CWD: "/workspace/b", State: capturerun.StateFinished, Observation: capturerun.ObservationWaitingForTraffic, CreatedAt: now.Add(-time.Hour), UpdatedAt: now.Add(-2 * time.Minute), ExpiresAt: now.Add(time.Hour)},
 		{ID: "managed-old", ExecutableLabel: "claude", CWD: "/workspace/c", State: capturerun.StateFinished, Observation: capturerun.ObservationWaitingForTraffic, CreatedAt: now.Add(-time.Hour), UpdatedAt: now.Add(-3 * time.Minute), ExpiresAt: now.Add(time.Hour)},
 	}
 	manual := []manualcapture.View{
-		{ID: "manual-running", DisplayName: "IDE proxy", ClientClass: manualcapture.ClientDesktopApp, Lifetime: manualcapture.LifetimeUntilRevoked, State: manualcapture.StateActive, CredentialRevision: 1, Observation: manualcapture.ObservationWaiting, CreatedAt: now.Add(-time.Hour), UpdatedAt: now},
+		{ID: "manual-running", DisplayName: "IDE proxy", ClientClass: manualcapture.ClientDesktopApp, Lifetime: manualcapture.LifetimeUntilRevoked, State: manualcapture.StateActive, CredentialRevision: 1, Observation: manualcapture.ObservationWaiting, CreatedAt: now.Add(-time.Hour), UpdatedAt: now, ActivityAt: now},
 		{ID: "manual-tie", DisplayName: "Old proxy", ClientClass: manualcapture.ClientOther, Lifetime: manualcapture.LifetimeUntilRevoked, State: manualcapture.StateRevoked, CredentialRevision: 1, Observation: manualcapture.ObservationWaiting, CreatedAt: now.Add(-time.Hour), UpdatedAt: now.Add(-2 * time.Minute)},
 	}
 	application := pagedCaptureApplication(t, managed, manual)
@@ -287,8 +287,8 @@ func (fixture capturePageReaderFixture) ListRuns(
 		if leftRunning != rightRunning {
 			return leftRunning
 		}
-		if !items[left].UpdatedAt.Equal(items[right].UpdatedAt) {
-			return items[left].UpdatedAt.After(items[right].UpdatedAt)
+		if !items[left].ActivityTime().Equal(items[right].ActivityTime()) {
+			return items[left].ActivityTime().After(items[right].ActivityTime())
 		}
 		return items[left].ID < items[right].ID
 	})
@@ -322,7 +322,7 @@ func filterCaptureRunFixture(
 	filtered := make([]capturerun.View, 0, len(items))
 	for _, item := range items {
 		running := item.State == capturerun.StateCreated || item.State == capturerun.StateAttached
-		if fixturePageAfter(running, item.UpdatedAt, item.ID, cursor.Running, cursor.UpdatedAt, cursor.AfterID, cursor.IncludeAtUpdatedAt) {
+		if fixturePageAfter(running, item.ActivityTime(), item.ID, cursor.Running, cursor.ActivityAt, cursor.AfterID, cursor.IncludeAtActivityAt) {
 			filtered = append(filtered, item)
 		}
 	}
@@ -356,8 +356,8 @@ func (fixture manualCapturePageFixture) List(_ context.Context, request manualca
 		if leftRunning != rightRunning {
 			return leftRunning
 		}
-		if !items[left].UpdatedAt.Equal(items[right].UpdatedAt) {
-			return items[left].UpdatedAt.After(items[right].UpdatedAt)
+		if !items[left].ActivityTime().Equal(items[right].ActivityTime()) {
+			return items[left].ActivityTime().After(items[right].ActivityTime())
 		}
 		return items[left].ID < items[right].ID
 	})
@@ -366,12 +366,12 @@ func (fixture manualCapturePageFixture) List(_ context.Context, request manualca
 		for _, item := range items {
 			if fixturePageAfter(
 				item.State == manualcapture.StateActive,
-				item.UpdatedAt,
+				item.ActivityTime(),
 				item.ID,
 				cursor.Running,
-				cursor.UpdatedAt,
+				cursor.ActivityAt,
 				cursor.AfterID,
-				cursor.IncludeAtUpdatedAt,
+				cursor.IncludeAtActivityAt,
 			) {
 				filtered = append(filtered, item)
 			}

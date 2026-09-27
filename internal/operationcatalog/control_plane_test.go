@@ -129,6 +129,7 @@ func TestObservedCodexOperationsAreCatalogued(t *testing.T) {
 		// client, while each forwards client-chosen query values to the original
 		// origin.
 		{"/backend-api/codex/models", protocolspec.OperationPayloadControl},
+		{"/backend-api/wham/accounts/check", protocolspec.OperationPayloadNone},
 		{"/backend-api/plugins/featured", protocolspec.OperationPayloadControl},
 		{"/backend-api/ps/plugins/installed", protocolspec.OperationPayloadControl},
 		{"/backend-api/ps/plugins/list", protocolspec.OperationPayloadControl},

@@ -50,6 +50,7 @@ func (launcher *Launcher) RunACP(ctx context.Context, request ACPLaunchRequest) 
 		return result.ExitCode, err
 	}
 	create := capturecontrol.CreateRequest{EnvironmentID: environment.SystemTransparentID.String(), CWD: cwd, Command: request.Command, ExecutablePath: executable, RuntimeMetadata: runtimeMetadata(launcher.config.BaseEnvironment)}
+	create.RuntimeMetadata.GitAtLaunch = gitSnapshot(ctx, cwd)
 	var control *controlClient
 	if launcher.config.Remote != nil {
 		connection, companion, connectErr := connectRemote(ctx, *launcher.config.Remote, controlTransportTimeout(launcher.config), cwd, request.Command, executable)

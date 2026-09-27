@@ -88,6 +88,14 @@ void main() {
         await tester.pumpAndSettle();
         expect(find.byKey(const Key('provider-accounts-add')), findsOneWidget);
         expect(find.text('synthetic-account-secret'), findsNothing);
+        final searchRect = tester.getRect(
+          find.byKey(const Key('provider-accounts-search')),
+        );
+        final sortRect = tester.getRect(
+          find.byKey(const Key('provider-accounts-sort')),
+        );
+        expect(sortRect.height, searchRect.height);
+        if (width >= 1000) expect(sortRect.top, searchRect.top);
         await _review(
           tester,
           boundary,
@@ -205,7 +213,48 @@ void main() {
           find.byKey(const Key('provider-account-account.independent')),
           findsOneWidget,
         );
-        expect(find.text('尚未关联 · 前往上游服务选择使用此账号'), findsOneWidget);
+        expect(find.text('未关联'), findsOneWidget);
+        expect(
+          find.byKey(const Key('provider-account-details-account.independent')),
+          findsNothing,
+        );
+        if (width >= 1000) {
+          expect(find.text('已用额度'), findsOneWidget);
+          expect(
+            find.byKey(
+              const Key('provider-account-resets-account.independent'),
+            ),
+            findsOneWidget,
+          );
+          expect(
+            tester
+                .getSize(
+                  find.byKey(const Key('provider-account-account.independent')),
+                )
+                .height,
+            lessThan(100),
+          );
+        }
+        final detailsToggle = find.byKey(
+          const Key('provider-account-details-toggle-account.independent'),
+        );
+        await tester.ensureVisible(detailsToggle);
+        await tester.tap(detailsToggle);
+        await tester.pumpAndSettle();
+        expect(
+          find.byKey(const Key('provider-account-details-account.independent')),
+          findsOneWidget,
+        );
+        expect(
+          find.byKey(const Key('account-quota-account.independent')),
+          findsNothing,
+        );
+        await _review(
+          tester,
+          boundary,
+          reviewDirectory,
+          'account-details-${width.toInt()}',
+        );
         expect(tester.takeException(), isNull);
         await tester.pumpWidget(const SizedBox.shrink());
         await tester.pump();
@@ -213,6 +262,67 @@ void main() {
       },
     );
   }
+
+  testWidgets('account sorting uses the visible account identity', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1180, 900));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final api = PreviewControlApi(seedCaptures: false);
+    for (final name in ['sort-fixture-zulu', 'sort-fixture-alpha']) {
+      await api.createProviderAccount(
+        id: 'account.$name',
+        displayName: name,
+        upstreamEndpointId: 'target.codex.official',
+        kind: 'bearer_token',
+        secret: 'synthetic-account-secret',
+        headerPolicy: const ProviderAccountHeaderPolicy(),
+        unlinked: true,
+      );
+    }
+    final controller = WorkbenchController(
+      api: api,
+      terminalCommands: PreviewTerminalCommandService(),
+      previewMode: true,
+      closeRuntime: api.close,
+      initialPreferences: const WorkbenchPreferences(
+        language: AppLanguage.simplifiedChinese,
+        section: WorkbenchSection.providerAccounts,
+      ),
+    );
+    addTearDown(controller.dispose);
+    await controller.initialize();
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: ViberTheme.dark(),
+        home: WorkbenchShell(controller: controller),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const Key('provider-accounts-search')),
+      'sort-fixture',
+    );
+    await tester.pumpAndSettle();
+    final alpha = find.byKey(
+      const Key('provider-account-account.sort-fixture-alpha'),
+    );
+    final zulu = find.byKey(
+      const Key('provider-account-account.sort-fixture-zulu'),
+    );
+    expect(tester.getTopLeft(zulu).dy, lessThan(tester.getTopLeft(alpha).dy));
+    expect(find.textContaining('25%'), findsNWidgets(2));
+
+    await tester.tap(find.byKey(const Key('provider-accounts-sort')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('按账号排序').last);
+    await tester.pumpAndSettle();
+    expect(tester.getTopLeft(alpha).dy, lessThan(tester.getTopLeft(zulu).dy));
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pump();
+    controller.dispose();
+  });
 }
 
 // Optional local review artifacts, never a required golden baseline or secret.

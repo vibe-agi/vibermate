@@ -26,6 +26,7 @@ func TestUnreleasedAccountAuditCorrectionPreservesEvidenceAndSequence(t *testing
 			}
 			db := sql.OpenDB(newSQLiteConnector(path, DefaultBusyTimeout))
 			priorSchema := strings.ReplaceAll(schemaSQL, "'upstream_account_read',\n", "")
+			priorSchema = strings.Replace(priorSchema, providerErrorCodeColumnSQL, "", 1)
 			priorSchema = strings.ReplaceAll(priorSchema, "'upstream_account_action',\n", "")
 			priorSchema = strings.Replace(priorSchema, accountNoteColumnsSQL, "", 1)
 			priorSchema = strings.ReplaceAll(priorSchema, "'credential_refresh',\n", "")
@@ -34,7 +35,7 @@ func TestUnreleasedAccountAuditCorrectionPreservesEvidenceAndSequence(t *testing
 			}
 			_, definition, _ := strings.Cut(priorSchema, "CREATE TABLE runtime_egress_attempts(")
 			definition, _, _ = strings.Cut(definition, ") STRICT;")
-			if _, err := db.Exec(`ALTER TABLE runtime_egress_attempts RENAME TO fixture_rows;
+			if _, err := db.Exec(`ALTER TABLE runtime_activities DROP COLUMN provider_error_code; ALTER TABLE runtime_egress_attempts RENAME TO fixture_rows;
                 CREATE TABLE runtime_egress_attempts(` + definition + `) STRICT;
                 INSERT INTO runtime_egress_attempts SELECT * FROM fixture_rows;
                 DROP TABLE fixture_rows;`); err != nil {

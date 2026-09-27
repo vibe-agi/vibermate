@@ -3,11 +3,14 @@ package loopbackproxy
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 
 	"github.com/vibe-agi/vibermate/internal/exchange"
+	"github.com/vibe-agi/vibermate/internal/protocolcore"
 	"github.com/vibe-agi/vibermate/internal/protocolspec"
+	"github.com/vibe-agi/vibermate/internal/ssewire"
 )
 
 // ReasonHeader carries the stable vibermate reason code beside a dialect-shaped
@@ -90,7 +93,8 @@ func dialectErrorEnvelope(dialect protocolspec.Dialect, reason ReasonCode) any {
 	}
 }
 
-// writeExchangeFailure returns a fixed, dialect-shaped local failure. It never
+// writeExchangeFailure preserves matching native provider errors for the client;
+// locally generated failures use a fixed, dialect-shaped envelope. It never
 // serializes err: an Exchange error may wrap transport or provider details that
 // are not part of the client contract. The stable reason remains visible in a
 // response header and in the bounded message/code fields clients already know
@@ -104,6 +108,9 @@ func writeExchangeFailure(
 	if reason == "" {
 		reason = exchange.ReasonProviderTransportFailed
 	}
+	for name, values := range exchangeFailureMetadata(dialect, err) {
+		writer.Header()[name] = values
+	}
 	writer.Header().Set("Content-Type", "application/json")
 	writer.Header().Set("Cache-Control", "no-store")
 	writer.Header().Set(ReasonHeader, string(reason))
@@ -115,7 +122,7 @@ func writeExchangeFailure(
 	}
 	writer.WriteHeader(exchangeStatus(err))
 	_ = json.NewEncoder(writer).Encode(
-		exchangeErrorEnvelope(dialect, reason),
+		exchangeFailureEnvelope(dialect, reason, err),
 	)
 }
 
@@ -136,6 +143,9 @@ func writeExchangeFailureDownstream(
 		"Cache-Control": {"no-store"},
 		ReasonHeader:    {string(reason)},
 	}
+	for name, values := range exchangeFailureMetadata(dialect, err) {
+		headers[name] = values
+	}
 	if exchangeFailureShouldNotRetry(reason) {
 		headers.Set("X-Should-Retry", "false")
 	}
@@ -147,7 +157,7 @@ func writeExchangeFailureDownstream(
 	if envelopeErr != nil {
 		return envelopeErr
 	}
-	body, marshalErr := json.Marshal(exchangeErrorEnvelope(dialect, reason))
+	body, marshalErr := json.Marshal(exchangeFailureEnvelope(dialect, reason, err))
 	if marshalErr != nil {
 		return marshalErr
 	}
@@ -165,11 +175,42 @@ func writeExchangeFailureDownstream(
 	return nil
 }
 
+func exchangeFailureMetadata(dialect protocolspec.Dialect, err error) http.Header {
+	var failure *exchange.Failure
+	if errors.As(err, &failure) {
+		return failure.NativeError.HeadersForDialect(dialect)
+	}
+	return nil
+}
+
+func exchangeFailureEnvelope(dialect protocolspec.Dialect, reason exchange.ReasonCode, err error) any {
+	var failure *exchange.Failure
+	if errors.As(err, &failure) {
+		if native := failure.NativeError.ForDialect(dialect); len(native) > 0 {
+			return map[string]any{"error": native}
+		}
+	}
+	return exchangeErrorEnvelope(dialect, reason, providerCodeOf(err))
+}
+
 func exchangeErrorEnvelope(
 	dialect protocolspec.Dialect,
 	reason exchange.ReasonCode,
+	providerCode string,
 ) any {
 	message := exchangeReasonMessage(reason)
+	code := protocolcore.KnownProviderErrorCode(providerCode)
+	errorType := exchangeErrorType(reason)
+	if code != "" {
+		message += " Upstream error: " + code + "."
+		// Only Anthropic's documented error types belong in its type field.
+		switch code {
+		case "invalid_request_error", "authentication_error", "permission_error", "not_found_error", "request_too_large", "rate_limit_error", "api_error", "overloaded_error":
+			errorType = code
+		}
+	} else {
+		code = string(reason)
+	}
 	switch dialect {
 	case protocolspec.DialectOpenAIResponses:
 		type openAIError struct {
@@ -183,8 +224,8 @@ func exchangeErrorEnvelope(
 		}{
 			Error: openAIError{
 				Message: message,
-				Type:    exchangeErrorType(reason),
-				Code:    string(reason),
+				Type:    errorType,
+				Code:    code,
 			},
 		}
 	default:
@@ -198,11 +239,19 @@ func exchangeErrorEnvelope(
 		}{
 			Type: "error",
 			Error: anthropicError{
-				Type:    exchangeErrorType(reason),
+				Type:    errorType,
 				Message: message,
 			},
 		}
 	}
+}
+
+func providerCodeOf(err error) string {
+	var failure *exchange.Failure
+	if errors.As(err, &failure) {
+		return protocolcore.KnownProviderErrorCode(failure.ProviderErrorCode)
+	}
+	return ""
 }
 
 func exchangeErrorType(reason exchange.ReasonCode) string {
@@ -215,6 +264,51 @@ func exchangeErrorType(reason exchange.ReasonCode) string {
 	default:
 		return "api_error"
 	}
+}
+
+// Streaming failures need the same dialect boundary as ordinary HTTP errors.
+// In particular Codex handles response.failed, not our old custom error event.
+// Local failures use fixed classified messages; compatible native failures
+// retain their client semantics separately from privacy-safe diagnostics.
+func encodeExchangeStreamFailure(dialect protocolspec.Dialect, notice exchange.FailureNotice) ([]byte, error) {
+	if name, data := notice.NativeError.StreamEvent(dialect); name != "" {
+		return ssewire.Encode(ssewire.Event{Name: name, Data: data})
+	}
+	name := "error"
+	payload := exchangeErrorEnvelope(dialect, notice.ReasonCode, notice.ProviderErrorCode)
+	switch dialect {
+	case protocolspec.DialectAnthropicMessages:
+	case protocolspec.DialectOpenAIResponses:
+		name = "response.failed"
+		message := exchangeReasonMessage(notice.ReasonCode)
+		code := protocolcore.KnownProviderErrorCode(notice.ProviderErrorCode)
+		if code == "" {
+			code = "server_error"
+		} else {
+			message += " Upstream error: " + code + "."
+		}
+		if notice.ProtocolReason != "" {
+			message += " Protocol: " + string(notice.ProtocolReason) + "."
+		}
+		var clientError any = map[string]string{"code": code, "message": message}
+		if native := notice.NativeError.ForDialect(dialect); len(native) > 0 {
+			clientError = native
+		}
+		payload = map[string]any{
+			"type": name,
+			"response": map[string]any{
+				"object": "response", "status": "failed", "output": []any{},
+				"error": clientError,
+			},
+		}
+	default:
+		return nil, errors.New("unsupported streaming failure dialect")
+	}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return nil, err
+	}
+	return ssewire.Encode(ssewire.Event{Name: name, Data: data})
 }
 
 func exchangeReasonMessage(reason exchange.ReasonCode) string {

@@ -55,6 +55,21 @@ func configureChildWithTerminalCheck(
 	attributes.Foreground = true
 	attributes.Ctty = int(input.Fd())
 	launcherProcessGroup := unix.Getpgrp()
+	state, _ := term.GetState(int(input.Fd()))
+	// Only write terminal controls to an inherited TTY, never an ACP pipe or
+	// redirected transcript. Prefer stderr so stdout remains a data channel.
+	var terminalOutput *os.File
+	for _, output := range []io.Writer{command.Stderr, command.Stdout} {
+		file, ok := output.(*os.File)
+		if ok && term.IsTerminal(int(file.Fd())) {
+			inStat, inErr := input.Stat()
+			outStat, outErr := file.Stat()
+			if inErr == nil && outErr == nil && os.SameFile(inStat, outStat) {
+				terminalOutput = file
+				break
+			}
+		}
+	}
 	var once sync.Once
 	return func() {
 		once.Do(func() {
@@ -68,12 +83,24 @@ func configureChildWithTerminalCheck(
 				unix.TIOCSPGRP,
 				launcherProcessGroup,
 			)
+			if state != nil {
+				_ = term.Restore(int(input.Fd()), state)
+			}
+			if state != nil && terminalOutput != nil && command.Process != nil {
+				// SIGKILL and control-channel failures can bypass a TUI's Drop/
+				// defer cleanup. termios does not own terminal-emulator modes.
+				_, _ = io.WriteString(terminalOutput, terminalExitReset)
+			}
 			if !wasIgnored {
 				signal.Reset(syscall.SIGTTOU)
 			}
 		})
 	}
 }
+
+const terminalExitReset = "\x1b[?1000l\x1b[?1002l\x1b[?1003l" +
+	"\x1b[?1005l\x1b[?1006l\x1b[?1015l\x1b[?1016l" +
+	"\x1b[?1004l\x1b[?2004l\x1b[<u\x1b[=0u\x1b[>4;0m\x1b[?25h\x1b[0m"
 
 func relaySignals(process *os.Process) func() {
 	if process == nil {

@@ -127,6 +127,9 @@ func (store *Store) DeleteCapture(
 		return CaptureDeletion{}, fmt.Errorf("delete Capture Environment assignment: %w", err)
 	}
 	authorityTable := "capture_runs"
+	if _, err := transaction.ExecContext(operation, `DELETE FROM runtime_usage_observations WHERE `+activityColumn+`=?`, captureID); err != nil {
+		return CaptureDeletion{}, err
+	}
 	authorityColumn := "run_id"
 	if captureKind == "manual_capture" {
 		authorityTable = "manual_captures"
@@ -318,6 +321,7 @@ type ArchiveClear = resourcedeletion.Released
 //     identity is (writer_id, watermark) and it is UNIQUE, so resetting the
 //     watermark would let a later envelope collide with one that is gone.
 var evidenceTables = []string{
+	"runtime_usage_observations",
 	"tool_approvals",
 	"runtime_exchange_agent_identities",
 	"runtime_activities",
@@ -358,6 +362,13 @@ func (store *Store) ClearEvidence(ctx context.Context) (ArchiveClear, error) {
 	defer func() { _ = transaction.Rollback() }()
 
 	cleared := ArchiveClear{}
+	// Reject pre-clear terminal callbacks even for traffic without a Capture.
+	// Keep the collection setting, but begin a fresh observation interval.
+	if _, err := transaction.ExecContext(operation, `UPDATE runtime_usage_policy SET revision=revision+1,
+ collecting_since_unix_ms=max(coalesce(collecting_since_unix_ms,0),cast(unixepoch('subsec')*1000 as integer)+1,
+ coalesce((SELECT max(occurred_at_unix_ms)+1 FROM runtime_usage_observations),0)) WHERE enabled=1`); err != nil {
+		return ArchiveClear{}, err
+	}
 	for _, table := range evidenceTables {
 		count, deleteErr := deleteCounted(
 			operation, transaction, `DELETE FROM `+table,

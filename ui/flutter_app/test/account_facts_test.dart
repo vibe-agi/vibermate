@@ -57,6 +57,10 @@ void main() {
         expect(find.textContaining('25%'), findsOneWidget);
         expect(find.text('Codex 可用额度重置券：1'), findsOneWidget);
         expect(find.text('当前可使用：1'), findsOneWidget);
+        expect(
+          tester.getSize(find.byType(LinearProgressIndicator).first).width,
+          lessThanOrEqualTo(width < 600 ? 340 : 300),
+        );
         expect(find.textContaining('1,200'), findsNothing);
         await tester.tap(
           find.byKey(const Key('account-history-account.facts')),
@@ -70,13 +74,7 @@ void main() {
         final history = tester.getRect(
           find.byKey(const Key('account-facts-history')),
         );
-        if (width < 740) {
-          expect(history.top, greaterThan(quota.bottom));
-        } else {
-          expect(history.left, greaterThan(quota.right));
-          expect(history.top, quota.top);
-          expect(quota.width + history.width, lessThanOrEqualTo(960));
-        }
+        expect(history.top, greaterThanOrEqualTo(quota.bottom));
         expect(find.text('synthetic-secret'), findsNothing);
         expect(tester.takeException(), isNull);
       },
@@ -92,7 +90,7 @@ void main() {
       await _pumpPanel(tester, fixture, dark: dark);
       await _query(tester);
       await _query(tester, history: true);
-      expect(find.text('Pro'), findsOneWidget);
+      expect(find.text('Pro'), findsNothing);
       expect(find.text('6.98B'), findsOneWidget);
       expect(find.text('6,980,410,315 tokens'), findsOneWidget);
       expect(find.text('codex'), findsNothing);
@@ -139,6 +137,26 @@ void main() {
     await _query(tester, history: true);
     expect(find.descendant(of: quota, matching: stale), findsNothing);
     expect(find.descendant(of: history, matching: stale), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('quota snapshot survives panel rebuild until explicit refresh', (
+    tester,
+  ) async {
+    final api = _FactsApi();
+    final fixture = await _fixture(api);
+    addTearDown(fixture.controller.dispose);
+    await _pumpPanel(tester, fixture);
+    await _query(tester);
+    expect(api.calls, [false]);
+
+    await _pumpPanel(tester, fixture);
+    await tester.pumpAndSettle();
+    expect(find.textContaining('69%'), findsOneWidget);
+    expect(api.calls, [false]);
+
+    await _query(tester);
+    expect(api.calls, [false, false]);
     expect(tester.takeException(), isNull);
   });
 

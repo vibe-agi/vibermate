@@ -122,22 +122,34 @@ void main() {
                 ),
               ),
             );
-            expect(find.text('engineer@example.com'), findsOneWidget);
+            final title = find.text('Codex work');
+            final identity = find.descendant(
+              of: find.byType(ProviderAccountRow),
+              matching: find.text('engineer@example.com'),
+            );
+            expect(title, findsOneWidget);
+            expect(identity, findsOneWidget);
             expect(
-              find.textContaining(
-                language == AppLanguage.english ? 'Token expired:' : '令牌已过期：',
-              ),
-              findsOneWidget,
+              tester.getTopLeft(title).dy,
+              lessThan(tester.getTopLeft(identity).dy),
+            );
+            expect(find.text('Pro'), findsOneWidget);
+            expect(
+              tester
+                  .widget<Tooltip>(
+                    find.byKey(const Key('account-kind-account.jwt')),
+                  )
+                  .message,
+              copy('routes.account.kind.bearer_token'),
             );
             expect(
-              find.text(copy('provider_accounts.token.authenticated')),
+              find.text(copy('routes.account.kind.bearer_token')),
               findsNothing,
             );
-            final toggle = find.byKey(
-              const Key('provider-account-token-toggle-account.jwt'),
+            expect(
+              find.text(copy('provider_accounts.token.expires')),
+              findsOneWidget,
             );
-            await tester.tap(toggle);
-            await tester.pumpAndSettle();
             expect(
               find.text(copy('provider_accounts.token.authenticated')),
               findsOneWidget,
@@ -160,10 +172,6 @@ void main() {
             );
             expect(find.text('workspace-42'), findsOneWidget);
             expect(find.textContaining('UTC'), findsWidgets);
-            expect(tester.takeException(), isNull);
-            await tester.tap(toggle);
-            await tester.pumpAndSettle();
-            expect(find.text('workspace-42'), findsNothing);
             expect(tester.takeException(), isNull);
           },
         );
@@ -207,10 +215,6 @@ void main() {
           oauth: oauth,
         ),
       );
-      await tester.tap(
-        find.byKey(const Key('provider-account-token-toggle-account.jwt')),
-      );
-      await tester.pumpAndSettle();
       expect(find.text('Last refreshed'), findsOneWidget);
       expect(
         find.text(copy('provider_accounts.token.not_provided')),

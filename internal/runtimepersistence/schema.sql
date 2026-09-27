@@ -499,6 +499,7 @@ CREATE TABLE "runtime_activities"(
   json_valid(CAST(transport_evidence_json AS TEXT)))),
   provider_status INTEGER NOT NULL DEFAULT 0
   CHECK(provider_status BETWEEN 0 AND 599),
+  provider_error_code TEXT NOT NULL DEFAULT '' CHECK(length(provider_error_code) <= 128),
   provider_field TEXT NOT NULL DEFAULT ''
   CHECK(length(CAST(provider_field AS BLOB)) <= 128),
   client_field TEXT NOT NULL DEFAULT ''

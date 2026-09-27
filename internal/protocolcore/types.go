@@ -404,7 +404,14 @@ func (message Message) Validate() error {
 				return errors.New("instruction message contains a non-text block")
 			}
 		case RoleUser:
-			if block.Kind != BlockText && block.Kind != BlockToolResult {
+			if block.Kind != BlockText && block.Kind != BlockToolResult &&
+				!(block.Kind == BlockProviderExtension &&
+					block.ProviderExtension.source ==
+						ProviderExtensionSourceOpenAIResponses &&
+					(block.ProviderExtension.kind ==
+						ProviderExtensionInputImage ||
+						block.ProviderExtension.kind ==
+							ProviderExtensionInputAudio)) {
 				return errors.New("user message contains an unsupported block")
 			}
 		case RoleAssistant:
@@ -1031,12 +1038,15 @@ func (request Request) Validate() error {
 	if len(request.Messages) == 0 || len(request.Messages) > MaxMessageCount {
 		return errors.New("message count is invalid")
 	}
-	providerExtensionCount := 0
 	providerExtensionBytes := 0
 	for index, message := range request.Messages {
 		if err := message.Validate(); err != nil {
 			return fmt.Errorf("message %d: %w", index, err)
 		}
+		// History contains many responses. Bound extension count per message,
+		// not over the whole history needed for the next turn or compaction.
+		// The byte budget remains aggregate, and message/block counts are bounded.
+		providerExtensionCount := 0
 		for _, block := range message.Blocks {
 			if block.Kind != BlockProviderExtension {
 				continue
@@ -1221,6 +1231,9 @@ const (
 	ProviderExtensionReasoningContent             ProviderExtensionKind = "reasoning_content"
 	ProviderExtensionReasoningSummary             ProviderExtensionKind = "reasoning_summary"
 	ProviderExtensionReasoningEncryptedContent    ProviderExtensionKind = "reasoning_encrypted_content"
+	ProviderExtensionInputImage                   ProviderExtensionKind = "input_image"
+	ProviderExtensionInputAudio                   ProviderExtensionKind = "input_audio"
+	ProviderExtensionOpaqueItem                   ProviderExtensionKind = "opaque_item"
 	ProviderExtensionAgentMessageEncryptedContent ProviderExtensionKind = "agent_message_encrypted_content"
 	ProviderExtensionAgentMessageImage            ProviderExtensionKind = "agent_message_image"
 	ProviderExtensionAgentMessageFile             ProviderExtensionKind = "agent_message_file"
@@ -1292,6 +1305,9 @@ func (extension ProviderExtension) Validate() error {
 		if extension.kind != ProviderExtensionReasoningContent &&
 			extension.kind != ProviderExtensionReasoningSummary &&
 			extension.kind != ProviderExtensionReasoningEncryptedContent &&
+			extension.kind != ProviderExtensionInputImage &&
+			extension.kind != ProviderExtensionInputAudio &&
+			extension.kind != ProviderExtensionOpaqueItem &&
 			extension.kind != ProviderExtensionAgentMessageEncryptedContent &&
 			extension.kind != ProviderExtensionAgentMessageImage &&
 			extension.kind != ProviderExtensionAgentMessageFile &&

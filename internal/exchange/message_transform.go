@@ -211,12 +211,10 @@ func newStreamMessageTransformer(
 	}, nil
 }
 
-// newLogicalTransformStream exposes the decoded representation to JavaScript
-// while retaining ownership of the upstream body. The transform output is
-// always emitted as identity bytes, so the old Content-Encoding and validators
-// are removed by newStreamMessageTransformer before the downstream envelope is
-// committed.
-func newLogicalTransformStream(
+// newLogicalResponseStream exposes decoded bytes to codecs and scripts while
+// retaining ownership of the upstream body. Their downstream envelopes use
+// identity bytes, never the upstream Content-Encoding or validators.
+func newLogicalResponseStream(
 	source io.ReadCloser,
 	contentEncoding string,
 ) (io.ReadCloser, error) {
@@ -262,9 +260,20 @@ type logicalTransformStream struct {
 	io.Reader
 	source  io.ReadCloser
 	decoder io.Closer
+	readMu  sync.Mutex
+	closed  bool
 
 	closeOnce sync.Once
 	closeErr  error
+}
+
+func (stream *logicalTransformStream) Read(buffer []byte) (int, error) {
+	stream.readMu.Lock()
+	defer stream.readMu.Unlock()
+	if stream.closed {
+		return 0, io.ErrClosedPipe
+	}
+	return stream.Reader.Read(buffer)
 }
 
 func (stream *logicalTransformStream) Close() error {
@@ -272,11 +281,17 @@ func (stream *logicalTransformStream) Close() error {
 		return nil
 	}
 	stream.closeOnce.Do(func() {
+		// Interrupt the transport before waiting for Read. Decoder Read and
+		// Close are not concurrent-safe, even after a semantic terminal.
+		sourceErr := stream.source.Close()
+		stream.readMu.Lock()
+		defer stream.readMu.Unlock()
+		stream.closed = true
 		var decoderErr error
 		if stream.decoder != nil {
 			decoderErr = stream.decoder.Close()
 		}
-		stream.closeErr = errors.Join(decoderErr, stream.source.Close())
+		stream.closeErr = errors.Join(decoderErr, sourceErr)
 	})
 	return stream.closeErr
 }
@@ -418,7 +433,7 @@ func equalHeaders(left, right http.Header) bool {
 }
 
 func logicalTransformInput(headers http.Header, body []byte) (http.Header, []byte, error) {
-	logicalBody, err := decodeBoundedContent(body, headers.Get("Content-Encoding"))
+	logicalBody, err := decodeBoundedContent(body, strings.Join(headers.Values("Content-Encoding"), ","))
 	if err != nil {
 		return nil, nil, fmt.Errorf("decode logical message Body: %w", err)
 	}
@@ -461,7 +476,7 @@ func managedEnvelopeWithTransform(
 	before http.Header,
 	after http.Header,
 ) (ResponseEnvelope, error) {
-	envelope := managedResponseEnvelope(mode)
+	envelope := managedResponseEnvelope(mode, before)
 	names := make(map[string]struct{}, len(before)+len(after))
 	for name := range before {
 		names[http.CanonicalHeaderKey(name)] = struct{}{}
@@ -493,6 +508,7 @@ func managedEnvelopeWithTransform(
 func managedResponseHeaderIsCoreOwned(name string) bool {
 	normalized := strings.ToLower(name)
 	return normalized == "cache-control" ||
+		normalized == "x-codex-turn-state" ||
 		normalized == "content-type" ||
 		normalized == "content-encoding" ||
 		normalized == "content-length" ||

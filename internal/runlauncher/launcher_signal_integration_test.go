@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"syscall"
 	"testing"
 	"time"
@@ -35,6 +36,7 @@ func TestLauncherRelaysSIGINTAndFinishesFixedCodexCaptureRun(
 	executable := filepath.Join(directory, "codex")
 	script := `#!/bin/sh
 {
+  printf 'ca=%s\n' "$CODEX_CA_CERTIFICATE"
   printf 'ssl=%s\n' "$SSL_CERT_FILE"
   printf 'credential=%s\n' "$CODEX_API_KEY"
   printf 'base=%s\n' "$OPENAI_BASE_URL"
@@ -151,10 +153,17 @@ while :; do sleep 1; done
 		t.Fatal(err)
 	}
 	lines := parseLines(string(output))
-	if lines["ssl"] != rootPath ||
+	if lines["ssl"] != "" ||
 		lines["credential"] != "vibermate-local-proxy" ||
 		lines["base"] != "" {
 		t.Fatalf("fixed Codex child environment = %+v", lines)
+	}
+	if runtime.GOOS == "darwin" {
+		if lines["ca"] != "" {
+			t.Fatalf("local macOS Codex replaced native trust: %+v", lines)
+		}
+	} else if lines["ca"] != rootPath {
+		t.Fatalf("fixed Codex CA = %+v", lines)
 	}
 	control.mu.Lock()
 	defer control.mu.Unlock()

@@ -300,6 +300,41 @@ func (plan RequestPlan) UpstreamRoute() (CompiledRoutePlan, bool) {
 	return cloneCompiledRoute(*plan.upstreamRoute), true
 }
 
+// WithCurrentFixedAccount overlays only the active manual Account from the
+// latest published Environment. Route, model, network, Transform, recording,
+// and launch authority remain frozen on the Capture's assigned revision.
+func (plan RequestPlan) WithCurrentFixedAccount(current CompiledRoutePlan) (RequestPlan, error) {
+	if plan.upstreamRoute == nil ||
+		plan.upstreamRoute.accountPolicy.mode != AccountSelectionFixed ||
+		current.accountPolicy.mode != AccountSelectionFixed ||
+		current.accountPolicy.fixed == nil ||
+		plan.upstreamRoute.id != current.id ||
+		plan.upstreamRoute.backend != current.backend ||
+		plan.upstreamRoute.target.ID != current.target.ID ||
+		plan.upstreamRoute.target.Revision != current.target.Revision ||
+		plan.upstreamRoute.target.Origin != current.target.Origin ||
+		plan.upstreamRoute.target.RealmID != current.target.RealmID {
+		return RequestPlan{}, ErrAccountReadAmbiguous
+	}
+	route := cloneCompiledRoute(*plan.upstreamRoute)
+	fixed := *current.accountPolicy.fixed
+	route.accountPolicy.fixed = &fixed
+	replaced := false
+	for index := range route.accountPolicy.accounts {
+		if route.accountPolicy.accounts[index].ID == fixed.ID {
+			route.accountPolicy.accounts[index] = fixed
+			replaced = true
+			break
+		}
+	}
+	if !replaced {
+		route.accountPolicy.accounts = append(route.accountPolicy.accounts, fixed)
+	}
+	result := plan
+	result.upstreamRoute = &route
+	return result, nil
+}
+
 // AccountReadTarget never runs a Turn selector or guesses from a recent
 // Exchange. A control query can precede the first generation entirely.
 func (plan RequestPlan) AccountReadTarget() (CompiledRoutePlan, CompiledAccountReference, error) {

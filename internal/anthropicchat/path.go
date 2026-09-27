@@ -98,6 +98,10 @@ func (adapter streamAdapter) SemanticProgress() uint64 {
 	return adapter.stream.SemanticProgress()
 }
 
+func (adapter streamAdapter) TerminalReceived() bool {
+	return adapter.stream.TerminalReceived()
+}
+
 func (adapter streamAdapter) FinishDecoded(
 	ctx context.Context,
 ) (protocolpath.PendingTerminal, error) {

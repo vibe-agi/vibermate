@@ -31,6 +31,13 @@ type manualCaptureRepository struct {
 	operations *operationGate
 }
 
+const manualCaptureActivityAt = `MAX(created_at_unix_ms, COALESCE(
+	(SELECT MAX(a.occurred_at_unix_ms) FROM runtime_activities a
+	 WHERE a.manual_capture_id = manual_captures.capture_id AND a.manual_capture_id <> ''
+	 AND a.kind IN ('exchange.started', 'exchange.completed')),
+	last_observed_at_unix_ms,
+	 CASE WHEN state = 'active' THEN created_at_unix_ms ELSE updated_at_unix_ms END))`
+
 var _ manualcapture.Repository = (*manualCaptureRepository)(nil)
 
 func newManualCaptureRepository(
@@ -380,15 +387,16 @@ func (repository *manualCaptureRepository) Get(
 	); err != nil {
 		return manualcapture.DurableRecord{}, err
 	}
+	var activityAt int64
 	record, err := scanManualCapture(transaction.QueryRowContext(
 		operation,
-		`SELECT `+manualCaptureColumns+`
+		`SELECT `+manualCaptureColumns+`, `+manualCaptureActivityAt+`
 		 FROM manual_captures
 		 WHERE capture_id = ? AND owner_kind = ? AND owner_id = ?`,
 		id.String(),
 		string(owner.Kind()),
 		ownerStorageID(owner),
-	))
+	), &activityAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return manualcapture.DurableRecord{}, manualcapture.ErrNotFound
 	}
@@ -398,6 +406,7 @@ func (repository *manualCaptureRepository) Get(
 	if err := transaction.Commit(); err != nil {
 		return manualcapture.DurableRecord{}, fmt.Errorf("commit ManualCapture read: %w", err)
 	}
+	record.ActivityAt = fromUnixMillis(activityAt)
 	return record, nil
 }
 
@@ -469,7 +478,7 @@ func (repository *manualCaptureRepository) List(
 		return nil, err
 	}
 	const runningRank = `CASE WHEN state = 'active' THEN 0 ELSE 1 END`
-	query := `SELECT ` + manualCaptureColumns + `
+	query := `SELECT ` + manualCaptureColumns + `, ` + manualCaptureActivityAt + ` AS activity_at_unix_ms
 		 FROM manual_captures
 		 WHERE owner_kind = ? AND owner_id = ?`
 	arguments := []any{
@@ -482,15 +491,15 @@ func (repository *manualCaptureRepository) List(
 			cursorRank = 0
 		}
 		includeBoundary := 0
-		if cursor.IncludeAtUpdatedAt {
+		if cursor.IncludeAtActivityAt {
 			includeBoundary = 1
 		}
-		updatedAt := toUnixMillis(cursor.UpdatedAt)
+		updatedAt := toUnixMillis(cursor.ActivityAt)
 		query += `
 		   AND ((` + runningRank + ` > ?)
 		    OR (` + runningRank + ` = ? AND (
-		      updated_at_unix_ms < ?
-		      OR (? = 1 AND updated_at_unix_ms = ? AND capture_id > ?)
+		      activity_at_unix_ms < ?
+		      OR (? = 1 AND activity_at_unix_ms = ? AND capture_id > ?)
 		    )))`
 		arguments = append(
 			arguments,
@@ -503,7 +512,7 @@ func (repository *manualCaptureRepository) List(
 		)
 	}
 	query += `
-		 ORDER BY ` + runningRank + ` ASC, updated_at_unix_ms DESC, capture_id ASC
+		 ORDER BY ` + runningRank + ` ASC, activity_at_unix_ms DESC, capture_id ASC
 		 LIMIT ?`
 	arguments = append(arguments, request.Limit)
 	rows, err := transaction.QueryContext(operation, query, arguments...)
@@ -513,10 +522,12 @@ func (repository *manualCaptureRepository) List(
 	defer rows.Close()
 	records := make([]manualcapture.DurableRecord, 0, request.Limit)
 	for rows.Next() {
-		record, scanErr := scanManualCapture(rows)
+		var activityAt int64
+		record, scanErr := scanManualCapture(rows, &activityAt)
 		if scanErr != nil {
 			return nil, fmt.Errorf("scan ManualCapture list: %w", scanErr)
 		}
+		record.ActivityAt = fromUnixMillis(activityAt)
 		records = append(records, record)
 	}
 	if err := rows.Err(); err != nil {
@@ -611,6 +622,7 @@ type manualCaptureScanner interface {
 
 func scanManualCapture(
 	scanner manualCaptureScanner,
+	extra ...any,
 ) (manualcapture.DurableRecord, error) {
 	var (
 		record                        manualcapture.DurableRecord
@@ -622,7 +634,7 @@ func scanManualCapture(
 		createdAt, updatedAt          int64
 		expiresAt, lastObservedAt     sql.NullInt64
 	)
-	if err := scanner.Scan(
+	destinations := []any{
 		&captureID,
 		&ownerKind,
 		&ownerID,
@@ -637,7 +649,8 @@ func scanManualCapture(
 		&updatedAt,
 		&expiresAt,
 		&lastObservedAt,
-	); err != nil {
+	}
+	if err := scanner.Scan(append(destinations, extra...)...); err != nil {
 		return manualcapture.DurableRecord{}, err
 	}
 	id, err := manualcapture.ParseID(captureID)

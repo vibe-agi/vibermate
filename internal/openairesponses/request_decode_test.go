@@ -203,6 +203,69 @@ func TestDecodeCompatibleRequestPreservesResponsesReasoningHistory(t *testing.T)
 	}
 }
 
+func TestDecodeCompatibleRequestPreservesUserInputImage(t *testing.T) {
+	t.Parallel()
+
+	body := []byte(`{
+		"model":"gpt-5.6-sol",
+		"input":[{
+			"type":"message",
+			"role":"user",
+			"content":[
+				{"type":"input_text","text":"Inspect this image."},
+				{
+					"type":"input_image",
+					"image_url":"data:image/png;base64,AA==",
+					"detail":"original"
+				}
+			]
+		}],
+		"stream":true
+	}`)
+	request, _, err := newTestCodec(t).DecodeCompatibleClientRequest(body)
+	if err != nil {
+		t.Fatalf("DecodeCompatibleClientRequest() error = %v", err)
+	}
+	blocks := request.Messages[0].Blocks
+	if len(blocks) != 2 ||
+		blocks[1].Kind != protocolcore.BlockProviderExtension ||
+		blocks[1].ProviderExtension.Source() !=
+			protocolcore.ProviderExtensionSourceOpenAIResponses ||
+		blocks[1].ProviderExtension.Kind() !=
+			protocolcore.ProviderExtensionInputImage ||
+		!bytes.Contains(
+			blocks[1].ProviderExtension.Fragments()[0],
+			[]byte(`"image_url":"data:image/png;base64,AA=="`),
+		) {
+		t.Fatalf("decoded image blocks = %#v", blocks)
+	}
+
+	if _, _, err := newTestCodec(t).DecodeClientRequest(body); protocolcore.ReasonOf(err) != protocolcore.ReasonInvalidClientRequest {
+		t.Fatalf("cross-dialect image error = %v", err)
+	}
+}
+
+func TestDecodeCompatibleRequestRejectsInvalidUserInputImage(t *testing.T) {
+	t.Parallel()
+
+	for name, message := range map[string]string{
+		"missing source": `{"type":"input_image","detail":"auto"}`,
+		"two sources":    `{"type":"input_image","image_url":"data:image/png;base64,AA==","file_id":"file-1"}`,
+		"bad detail":     `{"type":"input_image","file_id":"file-1","detail":"huge"}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, _, err := newTestCodec(t).DecodeCompatibleClientRequest([]byte(`{
+				"model":"gpt-5.6-sol",
+				"input":[{"type":"message","role":"user","content":[` + message + `]}]
+			}`))
+			if protocolcore.ReasonOf(err) !=
+				protocolcore.ReasonInvalidClientRequest {
+				t.Fatalf("DecodeCompatibleClientRequest() error = %v", err)
+			}
+		})
+	}
+}
+
 func TestDecodeCompatibleRequestPreservesOfficialMultiAgentEvidence(t *testing.T) {
 	t.Parallel()
 
@@ -334,6 +397,24 @@ func TestDecodeCurrentResponsesInstructionsIdentityAndHostedToolHonestly(t *test
 	}`)
 	if _, _, err := newTestCodec(t).DecodeClientRequest(unknownHostedField); err == nil {
 		t.Fatal("unknown hosted-tool semantics were silently accepted")
+	}
+
+	toolSearch := []byte(`{
+		"model":"gpt-client-alias",
+		"input":[{"type":"message","role":"user","content":"ready"}],
+		"tools":[{"type":"tool_search","execution":"client","description":"Find deferred tools"}],
+		"stream":true
+	}`)
+	request, report, err = newTestCodec(t).DecodeCompatibleClientRequest(toolSearch)
+	if err != nil {
+		t.Fatalf("DecodeCompatibleClientRequest() error = %v", err)
+	}
+	if len(request.Tools) != 0 ||
+		!reportHasNotice(report, protocolcore.NoticeHostedToolNotForwarded) {
+		t.Fatalf("tool search request=%#v report=%#v", request, report.Notices())
+	}
+	if _, _, err := newTestCodec(t).DecodeClientRequest(toolSearch); protocolcore.ReasonOf(err) != protocolcore.ReasonInvalidClientRequest {
+		t.Fatalf("cross-dialect tool search error = %v", err)
 	}
 }
 

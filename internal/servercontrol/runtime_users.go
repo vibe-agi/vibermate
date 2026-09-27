@@ -30,6 +30,7 @@ const (
 
 type RuntimeUsageReader interface {
 	Report(context.Context, runtimeusage.Query) (runtimeusage.Report, error)
+	SetCollectionPolicy(context.Context, runtimeusage.CollectionPolicy) (runtimeusage.CollectionPolicy, error)
 }
 
 type RuntimeUsersOptions struct {
@@ -110,6 +111,10 @@ func (handler *RuntimeUsersHandler) ServeHTTP(
 		writeProblem(writer, http.StatusNotFound, "server_route_not_found")
 		return
 	}
+	if request.URL.Path == RuntimeUserUsagePath+"/collection" && request.Method == http.MethodPatch && request.URL.RawQuery == "" {
+		handler.setUsageCollection(writer, request)
+		return
+	}
 	if request.URL.Path == RuntimeUserUsagePath {
 		if request.Method != http.MethodGet {
 			writeProblem(writer, http.StatusNotFound, "server_route_not_found")
@@ -158,6 +163,46 @@ func (handler *RuntimeUsersHandler) ServeHTTP(
 	default:
 		writeProblem(writer, http.StatusNotFound, "server_route_not_found")
 	}
+}
+
+func (handler *RuntimeUsersHandler) setUsageCollection(writer http.ResponseWriter, request *http.Request) {
+	mediaType, _, err := mime.ParseMediaType(request.Header.Get("Content-Type"))
+	if err != nil || mediaType != "application/json" {
+		writeProblem(writer, http.StatusUnprocessableEntity, "invalid_usage_collection_policy")
+		return
+	}
+	payload, err := io.ReadAll(io.LimitReader(request.Body, maxRuntimeUserBodyBytes+1))
+	if err != nil || len(payload) == 0 || len(payload) > maxRuntimeUserBodyBytes {
+		writeProblem(writer, http.StatusUnprocessableEntity, "invalid_usage_collection_policy")
+		return
+	}
+	var input struct {
+		Enabled       *bool `json:"enabled"`
+		RetentionDays int   `json:"retentionDays"`
+		Revision      int64 `json:"revision"`
+	}
+	decoder := json.NewDecoder(bytes.NewReader(payload))
+	decoder.DisallowUnknownFields()
+	var trailing any
+	if err := decoder.Decode(&input); err != nil || input.Enabled == nil || !errors.Is(decoder.Decode(&trailing), io.EOF) {
+		writeProblem(writer, http.StatusUnprocessableEntity, "invalid_usage_collection_policy")
+		return
+	}
+	policy := runtimeusage.CollectionPolicy{Enabled: *input.Enabled, RetentionDays: input.RetentionDays, Revision: input.Revision}
+	if err := policy.Validate(); err != nil {
+		writeProblem(writer, http.StatusUnprocessableEntity, "invalid_usage_collection_policy")
+		return
+	}
+	updated, err := handler.usage.SetCollectionPolicy(request.Context(), policy)
+	if errors.Is(err, runtimeusage.ErrPolicyConflict) {
+		writeProblem(writer, http.StatusConflict, "usage_collection_policy_conflict")
+		return
+	}
+	if err != nil {
+		writeProblem(writer, http.StatusServiceUnavailable, "usage_collection_policy_unavailable")
+		return
+	}
+	writeServerJSON(writer, http.StatusOK, updated)
 }
 
 func (handler *RuntimeUsersHandler) updatePolicy(

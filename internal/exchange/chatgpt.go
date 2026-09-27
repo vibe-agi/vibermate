@@ -18,13 +18,11 @@ import (
 // codex-rs/codex-api/src/endpoint/responses.rs and core/src/client.rs.
 // These are protocol fields, not account credentials. Only copy them between
 // native Codex endpoints, before scripts and the selected account's Set/Delete
-// policy. Never inherit Cookie, account ID, attestation or the opaque turn-state
-// token: the latter belongs to a previous upstream/account routing context.
+// policy. Never inherit Cookie, account ID or attestation. Turn-state replay
+// has a separate ownership check; an unknown token may belong to another account.
 func nativeChatGPTProtocolHeaders(request ClientRequest, selection frozenSelection) http.Header {
 	headers := make(http.Header)
-	if request.operation.id.String() != operationcatalog.OpenAICodexResponsesCreateID ||
-		selection.codecPlan.ProviderDialect() != protocolspec.DialectOpenAIResponses ||
-		!upstreamendpoint.IsChatGPTCodexOrigin(selection.target.Origin()) {
+	if !isNativeCodexSelection(request, selection) {
 		return headers
 	}
 	source, _ := request.OriginalHeaders()
@@ -46,6 +44,12 @@ func nativeChatGPTProtocolHeaders(request ClientRequest, selection frozenSelecti
 		}
 	}
 	return headers
+}
+
+func isNativeCodexSelection(request ClientRequest, selection frozenSelection) bool {
+	return request.operation.id.String() == operationcatalog.OpenAICodexResponsesCreateID &&
+		selection.codecPlan.ProviderDialect() == protocolspec.DialectOpenAIResponses &&
+		upstreamendpoint.IsChatGPTCodexOrigin(selection.target.Origin())
 }
 
 // A routing hint describes the actual model/tier in the body. Update inherited

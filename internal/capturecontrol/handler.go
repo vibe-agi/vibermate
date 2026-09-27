@@ -98,16 +98,18 @@ type CreateRequest struct {
 }
 
 type ClientRuntimeMetadataInput struct {
-	LocalUserName          string `json:"localUserName,omitempty"`
-	HomeDirectory          string `json:"homeDirectory,omitempty"`
-	OperatingSystem        string `json:"operatingSystem,omitempty"`
-	OperatingSystemVersion string `json:"operatingSystemVersion,omitempty"`
-	Architecture           string `json:"architecture,omitempty"`
-	TimeZone               string `json:"timeZone,omitempty"`
+	GitAtLaunch            *capturerun.GitSnapshot `json:"gitAtLaunch,omitempty"`
+	LocalUserName          string                  `json:"localUserName,omitempty"`
+	HomeDirectory          string                  `json:"homeDirectory,omitempty"`
+	OperatingSystem        string                  `json:"operatingSystem,omitempty"`
+	OperatingSystemVersion string                  `json:"operatingSystemVersion,omitempty"`
+	Architecture           string                  `json:"architecture,omitempty"`
+	TimeZone               string                  `json:"timeZone,omitempty"`
 }
 
 func (input ClientRuntimeMetadataInput) domain() (capturerun.RuntimeMetadata, error) {
 	metadata := capturerun.RuntimeMetadata{
+		GitAtLaunch:            input.GitAtLaunch,
 		LocalUserName:          input.LocalUserName,
 		HomeDirectory:          input.HomeDirectory,
 		OperatingSystem:        input.OperatingSystem,

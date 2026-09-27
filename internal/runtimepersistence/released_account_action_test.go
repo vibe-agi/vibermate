@@ -18,6 +18,7 @@ func TestPublished013AuditUpgradesWithoutLosingRowsOrSequence(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "runtime.db")
 	oldSchema := strings.Replace(schemaSQL, "'upstream_account_action',\n", "", 1)
+	oldSchema = strings.Replace(oldSchema, providerErrorCodeColumnSQL, "", 1)
 	if fmt.Sprintf("%x", sha256.Sum256([]byte(oldSchema))) != published013SchemaDigest {
 		t.Fatal("published v0.1.13 schema fixture drifted")
 	}
@@ -40,8 +41,15 @@ func TestPublished013AuditUpgradesWithoutLosingRowsOrSequence(t *testing.T) {
 		CaptureRunID: "released-run", ConnectionID: "released-connection",
 	}
 	setFrozenExecutionEvidence(&legacyActivity, "released")
+	// Use today's fixture writer, then restore the exact old physical schema.
+	if _, err := old.ExecContext(ctx, `ALTER TABLE runtime_activities ADD COLUMN provider_error_code TEXT NOT NULL DEFAULT ''`); err != nil {
+		t.Fatal(err)
+	}
 	previousActivity, err := newActivityRepository(old, newOperationGate()).Append(ctx, legacyActivity)
 	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := old.ExecContext(ctx, `ALTER TABLE runtime_activities DROP COLUMN provider_error_code`); err != nil {
 		t.Fatal(err)
 	}
 	if err := old.Close(); err != nil {

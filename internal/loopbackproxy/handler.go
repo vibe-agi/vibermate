@@ -45,7 +45,6 @@ import (
 	"github.com/vibe-agi/vibermate/internal/protocolcore"
 	"github.com/vibe-agi/vibermate/internal/protocolspec"
 	"github.com/vibe-agi/vibermate/internal/rawevidence"
-	"github.com/vibe-agi/vibermate/internal/ssewire"
 	"github.com/vibe-agi/vibermate/internal/transportprofile"
 	"github.com/vibe-agi/vibermate/internal/upstreamservice"
 	"github.com/vibe-agi/vibermate/internal/wireprofile"
@@ -1191,6 +1190,7 @@ func (handler *Handler) serveSemantic(
 		}
 	}
 	downstream := newHTTPDownstream(writer, httpDownstreamOptions{
+		ClientDialect:    plan.ProtocolPlan().ClientDialect(),
 		Observer:         handler.rawEvidence,
 		ObservationLimit: handler.rawTimeout,
 		MaximumBodyBytes: handler.rawBodyBytes,
@@ -1981,6 +1981,7 @@ func copyResponseHeaders(destination, source http.Header) {
 }
 
 type httpDownstreamOptions struct {
+	ClientDialect    protocolspec.Dialect
 	Observer         rawevidence.Observer
 	ObservationLimit time.Duration
 	MaximumBodyBytes int
@@ -2136,32 +2137,14 @@ func (downstream *httpDownstream) Abort(
 	if !downstream.begun || downstream.mode != exchange.ResponseModeEventStream {
 		return errors.New("only a begun event stream can abort in band")
 	}
-	data, err := json.Marshal(struct {
-		Type           string                         `json:"type"`
-		ReasonCode     exchange.ReasonCode            `json:"reasonCode"`
-		ProviderStatus int                            `json:"providerStatus,omitempty"`
-		ProviderField  exchange.ProviderField         `json:"providerField,omitempty"`
-		ProtocolReason protocolcore.Reason            `json:"protocolReason,omitempty"`
-		ResponseIssue  exchange.ProviderResponseIssue `json:"providerResponseIssue,omitempty"`
-	}{
-		Type:           "error",
-		ReasonCode:     notice.ReasonCode,
-		ProviderStatus: notice.ProviderStatus,
-		ProviderField:  notice.ProviderField,
-		ProtocolReason: notice.ProtocolReason,
-		ResponseIssue:  notice.ResponseIssue,
-	})
+	encoded, err := encodeExchangeStreamFailure(downstream.options.ClientDialect, notice)
 	if err != nil {
 		return err
 	}
-	encoded, err := ssewire.Encode(ssewire.Event{
-		Name: "error",
-		Data: data,
-	})
-	if err != nil {
-		return err
+	written, err := downstream.write(ctx, encoded, rawevidence.FrameAbort)
+	if err == nil && written != len(encoded) {
+		return io.ErrShortWrite
 	}
-	_, err = downstream.write(ctx, encoded, rawevidence.FrameAbort)
 	return err
 }
 

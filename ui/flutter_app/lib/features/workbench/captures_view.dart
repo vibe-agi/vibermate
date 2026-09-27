@@ -397,20 +397,7 @@ final class _CaptureMaster extends StatelessWidget {
     );
   }
 
-  // The last-activity stamp used to prefer a global Conversation index, which
-  // only ever loaded while the retired Conversations section was on screen. A
-  // Capture row therefore showed a different time depending on where the user
-  // had browsed. The selected Capture's own Activities are exact, and the
-  // Capture's own timestamps are the answer for every other row.
-  DateTime _activityAt(CaptureRecord capture) {
-    if (capture.key == controller.selectedCaptureKey &&
-        controller.selectedActivities.isNotEmpty) {
-      return controller.selectedActivities
-          .map((value) => value.occurredAt)
-          .reduce((left, right) => left.isAfter(right) ? left : right);
-    }
-    return capture.manualCapture?.lastObservedAt ?? capture.updatedAt;
-  }
+  DateTime _activityAt(CaptureRecord capture) => capture.activityAt;
 }
 
 final class _CaptureRow extends StatelessWidget {
@@ -485,6 +472,7 @@ final class _CaptureRow extends StatelessWidget {
                           ),
                           Text(
                             activity,
+                            key: Key('capture-activity-${capture.key}'),
                             style: Theme.of(context).textTheme.bodySmall,
                           ),
                         ],
@@ -592,7 +580,13 @@ final class _CaptureDetail extends StatelessWidget {
         .firstOrNull;
     final selector = accountPolicy?.selector;
     final accountAuthority = switch (accountPolicy?.mode) {
-      _ when assignment == null => copy('capture.assignment.missing'),
+      _ when assignment == null => copy(
+        controller.selectedCaptureLaunchIncomplete
+            ? 'capture.assignment.missing'
+            : controller.detailLoading
+            ? 'common.loading'
+            : 'capture.assignment.unavailable',
+      ),
       'fixed' =>
         account?.displayName ??
             frozenFixedAccount?.displayName ??
@@ -624,6 +618,8 @@ final class _CaptureDetail extends StatelessWidget {
             assignment: assignment,
             environments: controller.data?.environments ?? const [],
             conversations: controller.captureConversations,
+            conversationsLoaded:
+                controller.selectedCaptureConversations != null,
             hasEarlierConversations:
                 controller.selectedCaptureConversations?.nextCursor != null,
             copy: copy,
@@ -662,6 +658,21 @@ final class _CaptureDetail extends StatelessWidget {
           Expanded(
             child: controller.detailLoading
                 ? const Center(child: CompactProgressIndicator())
+                : controller.captureDetailError != null &&
+                      (controller.selectedCaptureConversations == null ||
+                          controller.selectedCapturePage == null) &&
+                      controller.selectedACP == null
+                ? CenteredMessage(
+                    icon: Icons.error_outline,
+                    title: copy('capture.detail.unavailable'),
+                    detail: copy('capture.detail.unavailable.detail'),
+                    action: OutlinedButton.icon(
+                      key: const Key('capture-detail-retry'),
+                      onPressed: () => unawaited(controller.refresh()),
+                      icon: const Icon(Icons.refresh, size: 16),
+                      label: Text(copy('common.retry')),
+                    ),
+                  )
                 : controller.selectedCaptureLaunchIncomplete
                 ? CenteredMessage(
                     icon: Icons.error_outline,
@@ -748,6 +759,14 @@ final class _CaptureConversationWorkspaceState
       _collapsed.clear();
     }
     final sessions = _captureSessionGroups(conversations);
+    // An in-flight request has not acquired its content yet. It must not
+    // replace the user's view while the next terminal observation is pending.
+    final activities = controller.selectedActivities.where(
+      (item) => item.status != 'pending',
+    );
+    final withoutBodies =
+        activities.isNotEmpty &&
+        activities.every((item) => item.contentAvailable == false);
     final selected = controller.selectedCaptureConversation;
     final selectedConversationSession = sessions
         .where(
@@ -769,7 +788,7 @@ final class _CaptureConversationWorkspaceState
     final timelineTitle = selected?.exchangeScoped == true
         ? copy('conversation.exchanges_title')
         : copy('capture.conversation');
-    final Widget timeline =
+    Widget timeline =
         controller.captureActivitiesLoading &&
             controller.selectedCapturePage == null
         ? CompactLoadingMessage(label: copy('common.loading'))
@@ -787,6 +806,46 @@ final class _CaptureConversationWorkspaceState
             onLoadEarlier: () =>
                 unawaited(controller.loadMoreSelectedCapture()),
           );
+    if (withoutBodies) {
+      timeline = Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Padding(
+            padding: const EdgeInsets.all(12),
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: SegmentedButton<bool>(
+                key: const Key('capture-evidence-mode'),
+                showSelectedIcon: false,
+                segments: [
+                  ButtonSegment(
+                    value: false,
+                    label: Text(copy('capture.summary.overview')),
+                  ),
+                  ButtonSegment(
+                    value: true,
+                    label: Text(copy('capture.summary.records')),
+                  ),
+                ],
+                selected: {controller.showCaptureRequestRecords},
+                onSelectionChanged: (value) =>
+                    controller.selectCaptureRequestRecords(value.single),
+              ),
+            ),
+          ),
+          Expanded(
+            child: controller.showCaptureRequestRecords
+                ? timeline
+                : _CaptureRequestOverview(
+                    controller: controller,
+                    copy: copy,
+                    onShowRecords: () =>
+                        controller.selectCaptureRequestRecords(true),
+                  ),
+          ),
+        ],
+      );
+    }
     final hasExactSession = sessions.any(
       (session) => session.sessionId != null,
     );
@@ -868,6 +927,101 @@ final class _CaptureConversationWorkspaceState
           ],
         );
       },
+    );
+  }
+}
+
+final class _CaptureRequestOverview extends StatelessWidget {
+  const _CaptureRequestOverview({
+    required this.controller,
+    required this.copy,
+    required this.onShowRecords,
+  });
+  final WorkbenchController controller;
+  final AppCopy copy;
+  final VoidCallback onShowRecords;
+
+  @override
+  Widget build(BuildContext context) {
+    final records = controller.selectedActivities;
+    final failures = records
+        .where((record) => record.status == 'failed')
+        .toList();
+    final reasons = <String, int>{};
+    for (final record in failures) {
+      final reason = record.reasonCode ?? 'unknown';
+      reasons[reason] = (reasons[reason] ?? 0) + 1;
+    }
+    return SingleChildScrollView(
+      key: const Key('capture-request-overview'),
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            copy('capture.summary.title'),
+            style: Theme.of(context).textTheme.titleMedium,
+          ),
+          const SizedBox(height: 8),
+          Text(
+            copy('capture.summary.hint'),
+            style: TextStyle(color: context.viberColors.textMuted),
+          ),
+          const SizedBox(height: 20),
+          Wrap(
+            spacing: 24,
+            runSpacing: 12,
+            children: [
+              for (final entry in <String, int>{
+                'calls': records.length,
+                'success': records
+                    .where((item) => item.status == 'succeeded')
+                    .length,
+                'failure': failures.length,
+                'canceled': records
+                    .where((item) => item.status == 'canceled')
+                    .length,
+              }.entries)
+                Text(
+                  copy.format('capture.summary.${entry.key}', {
+                    'count': '${entry.value}',
+                  }),
+                  style: Theme.of(context).textTheme.titleMedium,
+                ),
+            ],
+          ),
+          const SizedBox(height: 20),
+          for (final entry in reasons.entries)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: Row(
+                children: [
+                  const Icon(Icons.error_outline, size: 16),
+                  const SizedBox(width: 8),
+                  Expanded(child: Text(entry.key)),
+                  Text('× ${entry.value}'),
+                ],
+              ),
+            ),
+          if (controller.selectedCapturePage?.nextCursor != null) ...[
+            Text(
+              copy('capture.summary.partial'),
+              style: TextStyle(color: context.viberColors.textMuted),
+            ),
+            TextButton(
+              onPressed: controller.captureActivitiesLoading
+                  ? null
+                  : () => unawaited(controller.loadMoreSelectedCapture()),
+              child: Text(copy('conversation.load_earlier_exchanges')),
+            ),
+          ],
+          TextButton.icon(
+            onPressed: onShowRecords,
+            icon: const Icon(Icons.list_alt, size: 16),
+            label: Text(copy('capture.summary.records')),
+          ),
+        ],
+      ),
     );
   }
 }
@@ -1556,6 +1710,7 @@ final class _CaptureContext extends StatelessWidget {
     required this.assignment,
     required this.environments,
     required this.conversations,
+    required this.conversationsLoaded,
     required this.hasEarlierConversations,
     required this.copy,
     required this.showBack,
@@ -1578,6 +1733,7 @@ final class _CaptureContext extends StatelessWidget {
   final CaptureAssignment? assignment;
   final List<EnvironmentRecord> environments;
   final List<ConversationSummary> conversations;
+  final bool conversationsLoaded;
   final bool hasEarlierConversations;
   final AppCopy copy;
   final bool showBack;
@@ -1613,6 +1769,8 @@ final class _CaptureContext extends StatelessWidget {
           })
         : capture.isACP
         ? copy('acp.transport')
+        : !conversationsLoaded
+        ? '—'
         : _captureAggregate(
             copy,
             conversations,
@@ -1744,6 +1902,7 @@ final class _CaptureContext extends StatelessWidget {
                         ),
                         if (acp == null &&
                             !capture.isACP &&
+                            conversationsLoaded &&
                             capture.managedRun != null) ...[
                           const SizedBox(height: 3),
                           _CaptureClientCompatibility(

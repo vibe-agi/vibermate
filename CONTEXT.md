@@ -137,8 +137,12 @@ An explicit destination through one Upstream Endpoint, one backend protocol, and
 _Avoid_: Endpoint, Client Flow, inferred provider
 
 **Account Selection Policy**:
-The closed choice on one Upstream Route between one fixed Account and one published Account Selector. Every selectable Account is explicitly linked to that Route's Upstream Endpoint and is frozen with the Environment revision.
-_Avoid_: Failover, credential rotation, global account switch
+The closed choice on one Upstream Route between manual activation from an Endpoint-owned Account Set and one published Account Selector. Every selectable Account is explicitly linked to that Route's Upstream Endpoint. Manual activation is shared by every Capture using that Environment Route and takes effect when its next request begins.
+_Avoid_: Failover, credential rotation, installation-wide account switch
+
+**Active Account**:
+The one manually enabled Account for an Environment Route. It is selected from the Route's Upstream Endpoint associations, is published as the Route's current choice, and is read by all current and future Captures using that Traffic Policy. Each in-flight request retains the Account it already acquired.
+_Avoid_: Capture override, default credential, automatic fallback
 
 **Account Selector**:
 A published fail-closed JavaScript decision that selects exactly one Account from the frozen Account Set of one Upstream Route for one Turn. It cannot observe credentials, alter traffic, change Endpoint, retry another Account, or retain state across Turns.
@@ -222,12 +226,20 @@ One captured client request and its terminal downstream outcome, together with r
 _Avoid_: Conversation, Session
 
 **Agent API Call**:
-One retained terminal Exchange counted by the Usage report. This count does not claim a user-visible Turn; one Turn may produce multiple Agent API Calls.
+One terminal Exchange counted once by the Usage report, regardless of retries or conversation-body retention. This count does not claim a user-visible Turn; one Turn may produce multiple Agent API Calls. Opaque forwarded connections and ACP Prompts do not establish Agent API Calls.
 _Avoid_: Turn, billing event
 
 **Usage Observation**:
-Protocol-declared model and token counts recorded for one Exchange. Missing values remain unknown; ViberMate does not infer them from model names, payload size, or provider identity.
+Body-free status, time, routing identity, and protocol-declared model and token counts for one Exchange. Its ownership follows the admitted Capture, never the person viewing the dashboard. Missing values remain unknown; ViberMate does not infer them from model names, payload size, or provider identity.
 _Avoid_: Estimate, billing record, model guess
+
+**Usage Collection Policy**:
+The Runtime-wide, explicitly enabled authority to retain Usage Observations independently of conversation content, with its own retention period. App and Web read the same observations. Stopping collection does not erase history; body expiry does not erase usage, but deleting a Capture or clearing the archive does. Uncollected history is not reconstructed.
+_Avoid_: Content Recording Policy, upstream quota, analytics consent for a different Runtime
+
+**Usage Source**:
+The observed launch/admission category: local launch, manual proxy, authenticated Runtime User, or Runtime proxy. A local or manual Capture does not become a Runtime User merely because a Server Owner can inspect it.
+_Avoid_: viewer, OS user, provider Account
 
 **Actor**:
 The client-native Agent or Subagent identity that owns a Conversation.

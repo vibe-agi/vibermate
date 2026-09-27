@@ -29,12 +29,13 @@ func TestNotesPreserveAccountsAcrossDevelopmentUpgradeAndRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	prior := strings.Replace(schemaSQL, accountNoteColumnsSQL, "", 1)
+	prior = strings.Replace(prior, providerErrorCodeColumnSQL, "", 1)
 	prior = strings.ReplaceAll(prior, "'upstream_account_action',\n", "")
 	if fmt.Sprintf("%x", sha256.Sum256([]byte(prior))) != accountNotesDevelopmentDigest {
 		t.Fatal("previous baseline fixture drifted")
 	}
 	db := sql.OpenDB(newSQLiteConnector(path, DefaultBusyTimeout))
-	if _, err := db.Exec(`ALTER TABLE provider_accounts DROP COLUMN note; ALTER TABLE provider_accounts DROP COLUMN note_revision; UPDATE runtime_metadata SET schema_source_sha256 = ?`, accountNotesDevelopmentDigest); err != nil {
+	if _, err := db.Exec(`ALTER TABLE runtime_activities DROP COLUMN provider_error_code; ALTER TABLE provider_accounts DROP COLUMN note; ALTER TABLE provider_accounts DROP COLUMN note_revision; UPDATE runtime_metadata SET schema_source_sha256 = ?`, accountNotesDevelopmentDigest); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.Close(); err != nil {

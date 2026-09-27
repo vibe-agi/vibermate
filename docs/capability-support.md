@@ -4,7 +4,7 @@ This matrix separates what users can install from work that exists only in
 source. A passing unit test, an isolated development branch, and a published
 product are not interchangeable evidence.
 
-Source package version: **0.1.14**. Latest published release: **v0.1.14**.
+Source package version: **0.1.15**. Latest published release: **v0.1.14**.
 
 - **Released** — included in the latest published release and covered by the
   stated release evidence.

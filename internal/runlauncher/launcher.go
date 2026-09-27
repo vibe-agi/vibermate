@@ -60,6 +60,8 @@ var (
 	ErrClientTargetInvalid        = errors.New("client base URL is invalid")
 	ErrRemoteLoginRequired        = errors.New("remote Runtime Server login is required")
 	ErrRemoteRuntimeUnavailable   = errors.New("remote Runtime Server is unavailable")
+	ErrCaptureSupervisionFailed   = errors.New("captured process supervision failed after launch")
+	ErrCaptureFinalizationFailed  = errors.New("captured process exited but Capture finalization failed")
 )
 
 type Discovery interface {
@@ -183,6 +185,7 @@ func (launcher *Launcher) Run(
 	}
 	var control *controlClient
 	var remote *remoteConnection
+	createRequest.RuntimeMetadata.GitAtLaunch = gitSnapshot(ctx, cwd)
 	if launcher.config.Remote != nil {
 		var companion *capturecontrol.CompanionAttestationInput
 		remote, companion, err = connectRemote(
@@ -271,6 +274,7 @@ func (launcher *Launcher) Run(
 		launcher.finishBestEffort(control, grant)
 		return 1, err
 	}
+	launcher.announceCodexSessions(grant.LaunchRecipe)
 
 	childContext, cancelChild := context.WithCancelCause(context.WithoutCancel(ctx))
 	defer cancelChild(errors.New("launcher child supervision ended"))
@@ -312,7 +316,7 @@ func (launcher *Launcher) Run(
 		_ = waitChild(child, launcher.config.TerminationTimeout)
 		restoreTerminal()
 		launcher.finishBestEffort(control, grant)
-		return 1, fmt.Errorf("attach captured process: %w", err)
+		return 1, errors.Join(ErrCaptureSupervisionFailed, fmt.Errorf("attach captured process: %w", err))
 	}
 
 	waitResult := make(chan error, 1)
@@ -338,7 +342,7 @@ func (launcher *Launcher) Run(
 		waitErr = <-waitResult
 		restoreTerminal()
 		launcher.finishBestEffort(control, grant)
-		return 1, fmt.Errorf("CaptureRun heartbeat failed: %w", heartbeatErr)
+		return 1, errors.Join(ErrCaptureSupervisionFailed, fmt.Errorf("CaptureRun heartbeat failed: %w", heartbeatErr))
 	case <-ctx.Done():
 		stopHeartbeat(ctx.Err())
 		cancelChild(ctx.Err())
@@ -357,7 +361,10 @@ func (launcher *Launcher) Run(
 	)
 	exitCode, childErr := childExit(waitErr)
 	if finishErr != nil {
-		return exitCode, fmt.Errorf("finish CaptureRun: %w", finishErr)
+		return exitCode, errors.Join(ErrCaptureFinalizationFailed, fmt.Errorf("finish CaptureRun: %w", finishErr))
+	}
+	if childErr != nil {
+		return exitCode, errors.Join(ErrCaptureSupervisionFailed, childErr)
 	}
 	return exitCode, childErr
 }

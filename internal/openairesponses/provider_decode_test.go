@@ -4,12 +4,68 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
+	"strings"
 	"testing"
 
 	openai "github.com/openai/openai-go/v3"
 	"github.com/vibe-agi/vibermate/internal/protocolcore"
 	"github.com/vibe-agi/vibermate/internal/ssewire"
 )
+
+func TestProviderStreamReportsExplicitFailuresWithoutLeakingProviderText(t *testing.T) {
+	for _, kind := range []string{"response.failed", "error"} {
+		t.Run(kind, func(t *testing.T) {
+			stream, err := newTestCodec(t).NewProviderStream(streamingRequestFixture(t))
+			if err != nil {
+				t.Fatal(err)
+			}
+			wire := appendResponseEvent(t, kind, map[string]any{
+				"type": kind, "error": map[string]string{"message": "private upstream text"},
+				"response": map[string]any{"status": "failed", "error": map[string]string{"message": "private upstream text"}},
+			})
+			released, err := stream.Feed(context.Background(), wire)
+			if kind == "error" {
+				if err != nil || !bytes.Equal(released, wire) || stream.TerminalReceived() {
+					t.Fatalf("notification closed the stream: err=%v bytes=%q", err, released)
+				}
+				_, err = stream.FinishDecoded(context.Background())
+			} else if len(released) != 0 {
+				t.Fatal("failed response released content")
+			}
+			if protocolcore.ReasonOf(err) != protocolcore.ReasonProviderResponseFailed || strings.Contains(err.Error(), "private upstream text") {
+				t.Fatalf("provider failure was hidden or leaked: %v", err)
+			}
+			if _, err := stream.FinishDecoded(context.Background()); err == nil {
+				t.Fatal("failed stream became a successful terminal")
+			}
+		})
+	}
+}
+
+func TestProviderFailureCodeSurvivesResponsesEnvelopes(t *testing.T) {
+	for _, payload := range []string{
+		`{"type":"response.failed","response":{"status":"failed","error":{"code":"context_length_exceeded","message":"private"}}}`,
+		`{"type":"error","code":"context_length_exceeded","message":"private"}`,
+		`{"type":"error","error":{"code":"context_length_exceeded","message":"private"}}`,
+	} {
+		stream, err := newTestCodec(t).NewProviderStream(streamingRequestFixture(t))
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = stream.Feed(context.Background(), []byte("data: "+payload+"\n\n"))
+		if err == nil {
+			_, err = stream.FinishDecoded(context.Background())
+		}
+		if protocolcore.ProviderErrorCodeOf(err) != "context_length_exceeded" || strings.Contains(err.Error(), "private") {
+			t.Fatalf("provider code lost: %v", err)
+		}
+	}
+	_, _, err := newTestCodec(t).DecodeProviderResponse(streamingRequestFixture(t), []byte(`{"status":"failed","error":{"code":"invalid_encrypted_content","message":"private"}}`))
+	if protocolcore.ReasonOf(err) != protocolcore.ReasonProviderResponseFailed || protocolcore.ProviderErrorCodeOf(err) != "invalid_encrypted_content" {
+		t.Fatalf("JSON failure lost its code: %v", err)
+	}
+}
 
 func TestProviderResponsePreservesOfficialAgentOutputEvidence(t *testing.T) {
 	t.Parallel()
@@ -91,6 +147,70 @@ func TestProviderResponsePreservesOfficialAgentOutputEvidence(t *testing.T) {
 	}
 }
 
+func TestProviderResponseAcceptsCurrentOpaqueCodexOutputItems(t *testing.T) {
+	t.Parallel()
+
+	for _, item := range []string{
+		`{"type":"tool_search_call","call_id":"search_1","execution":"client","arguments":{"query":"files"}}`,
+		`{"type":"tool_search_output","call_id":"search_1","status":"completed","execution":"client","tools":[]}`,
+		`{"type":"web_search_call","id":"web_1","status":"completed"}`,
+		`{"type":"image_generation_call","id":"image_1","status":"completed","result":"opaque"}`,
+		`{"type":"compaction","id":"cmp_1","encrypted_content":"opaque-context"}`,
+		`{"type":"compaction_summary","encrypted_content":"opaque-context"}`,
+		`{"type":"context_compaction","id":"ctx_1","encrypted_content":"opaque-context"}`,
+	} {
+		var expected struct {
+			Type string `json:"type"`
+		}
+		if err := json.Unmarshal([]byte(item), &expected); err != nil {
+			t.Fatal(err)
+		}
+		t.Run(expected.Type, func(t *testing.T) {
+			body := []byte(`{
+				"id":"resp_opaque",
+				"created_at":1,
+				"status":"completed",
+				"model":"provider-model",
+				"output":[` + item + `],
+				"usage":{}
+			}`)
+			response, _, err := newTestCodec(t).DecodeProviderResponse(
+				streamingRequestFixture(t),
+				body,
+			)
+			if err != nil {
+				t.Fatalf("DecodeProviderResponse() error = %v", err)
+			}
+			if len(response.Blocks) != 1 ||
+				response.Blocks[0].Kind != protocolcore.BlockProviderExtension ||
+				response.Blocks[0].ProviderExtension.Kind() !=
+					protocolcore.ProviderExtensionOpaqueItem {
+				t.Fatalf("decoded output = %#v", response.Blocks)
+			}
+		})
+	}
+
+	localShell := []byte(`{
+		"id":"resp_shell",
+		"created_at":1,
+		"status":"completed",
+		"model":"provider-model",
+		"output":[{
+			"type":"local_shell_call",
+			"call_id":"shell_1",
+			"status":"completed",
+			"action":{"type":"exec","command":"pwd"}
+		}],
+		"usage":{}
+	}`)
+	if _, _, err := newTestCodec(t).DecodeProviderResponse(
+		streamingRequestFixture(t),
+		localShell,
+	); protocolcore.ReasonOf(err) != protocolcore.ReasonUnsupportedProviderData {
+		t.Fatalf("active local shell output error = %v", err)
+	}
+}
+
 func TestProviderStreamUsesCompletedItemsWhenTerminalOutputIsEmpty(t *testing.T) {
 	t.Parallel()
 
@@ -156,6 +276,129 @@ func TestProviderStreamUsesCompletedItemsWhenTerminalOutputIsEmpty(t *testing.T)
 	}
 }
 
+func TestProviderStreamProgressAndApprovalBarrier(t *testing.T) {
+	for _, allow := range []bool{false, true} {
+		t.Run(fmt.Sprintf("allow=%t", allow), func(t *testing.T) {
+			request := streamingRequestFixture(t)
+			request, err := request.WithEffectiveModel(request.RequestedModel)
+			if err != nil {
+				t.Fatal(err)
+			}
+			stream, err := newTestCodec(t).NewProviderStream(request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			progress := appendResponseEvent(t, "response.in_progress", map[string]any{
+				"type": "response.in_progress", "response": map[string]any{"id": "resp_1"},
+			})
+			var safe []byte
+			for _, b := range progress {
+				part, err := stream.Feed(context.Background(), []byte{b})
+				if err != nil {
+					t.Fatal(err)
+				}
+				safe = append(safe, part...)
+			}
+			if !bytes.Equal(safe, progress) || stream.TerminalReceived() {
+				t.Fatalf("progress was buffered or completed early: %q", safe)
+			}
+			tool := json.RawMessage(`{"type":"function_call","id":"fc_1","call_id":"call_1","name":"lookup","arguments":"{}"}`)
+			held := appendResponseEvent(t, "response.output_item.done", map[string]any{
+				"type": "response.output_item.done", "output_index": 0, "item": tool,
+			})
+			if early, err := stream.Feed(context.Background(), held); err != nil || len(early) != 0 {
+				t.Fatalf("tool escaped approval: %q, %v", early, err)
+			}
+			notification := appendResponseEvent(t, "error", map[string]any{
+				"type": "error", "code": "notification_fixture", "message": "synthetic notification",
+			})
+			if early, err := stream.Feed(context.Background(), notification); err != nil || !bytes.Equal(early, notification) || stream.TerminalReceived() {
+				t.Fatalf("notification was held, closed the stream or released tools: %q, %v", early, err)
+			}
+			terminalWire := appendResponseEvent(t, "response.completed", map[string]any{
+				"type": "response.completed", "response": map[string]any{
+					"id": "resp_1", "created_at": 1, "status": "completed", "model": request.RequestedModel,
+					"output": []json.RawMessage{tool},
+				},
+			})
+			held = append(held, terminalWire...)
+			if early, err := stream.Feed(context.Background(), terminalWire); err != nil || len(early) != 0 || !stream.TerminalReceived() {
+				t.Fatalf("tool/terminal escaped approval: %q, %v", early, err)
+			}
+			pending, err := stream.FinishDecoded(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(pending.ToolIntents()) != 1 {
+				t.Fatal("tool intent missing")
+			}
+			if allow {
+				release, err := pending.Approve()
+				if err != nil || !bytes.Equal(release, held) {
+					t.Fatalf("release = %q, %v", release, err)
+				}
+			} else {
+				if err := pending.Reject(); err != nil {
+					t.Fatal(err)
+				}
+				if release, err := pending.Approve(); err == nil || len(release) != 0 {
+					t.Fatal("rejected tool released")
+				}
+			}
+		})
+	}
+}
+
+func TestProviderStreamBoundsNormalizedWire(t *testing.T) {
+	options := DefaultOptions()
+	options.MaxResponseBytes = 1024
+	codec, err := New(options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stream, err := codec.NewProviderStream(streamingRequestFixture(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// SSE ids persist between frames. Re-encoding must not amplify a short
+	// source into an unbounded held/client representation.
+	wire := "id: " + strings.Repeat("i", 256) + "\n" + strings.Repeat("data: {\"type\":\"response.in_progress\"}\n\n", 10)
+	if len(wire) >= options.MaxResponseBytes {
+		t.Fatal("fixture must fit the input limit")
+	}
+	if _, err := stream.Feed(context.Background(), []byte(wire)); protocolcore.ReasonOf(err) != protocolcore.ReasonStreamLimitExceeded {
+		t.Fatalf("normalized limit = %v", err)
+	}
+}
+
+func TestProviderStreamRejectsContradictoryTerminalTool(t *testing.T) {
+	stream, err := newTestCodec(t).NewProviderStream(streamingRequestFixture(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	item := json.RawMessage(`{"type":"function_call","id":"fc_1","call_id":"call_1","name":"lookup","arguments":"{\"path\":\"private\"}"}`)
+	wire := appendResponseEvent(t, "response.output_item.done", map[string]any{
+		"type": "response.output_item.done", "output_index": 0, "item": item,
+	})
+	wire = append(wire, appendResponseEvent(t, "response.completed", map[string]any{
+		"type": "response.completed", "response": map[string]any{
+			"id": "resp_1", "created_at": 1, "status": "completed", "model": "provider-model",
+			"output": []json.RawMessage{bytes.ReplaceAll(item, []byte("private"), []byte("public"))},
+		},
+	})...)
+	if safe, err := stream.Feed(context.Background(), wire); err == nil || len(safe) != 0 {
+		t.Fatalf("contradictory call escaped approval: %q, %v", safe, err)
+	}
+}
+
+func TestProviderReasoningOnlyTerminalRetainsOpaqueAuditBlocks(t *testing.T) {
+	body := []byte(`{"id":"resp_1","created_at":1,"status":"completed","model":"provider-model","output":[{"type":"reasoning","id":"rs_1","summary":[],"encrypted_content":"opaque"}]}`)
+	response, _, err := newTestCodec(t).DecodeProviderResponse(streamingRequestFixture(t), body)
+	if err != nil || len(response.Blocks) != 1 || response.Blocks[0].Kind != protocolcore.BlockProviderExtension {
+		t.Fatalf("reasoning-only projection: %#v, %v", response, err)
+	}
+}
+
 func TestProviderStreamPreservesExactWireWithoutModelMapping(t *testing.T) {
 	t.Parallel()
 
@@ -190,7 +433,8 @@ func TestProviderStreamPreservesExactWireWithoutModelMapping(t *testing.T) {
 		"sequence_number": 2,
 		"response":        terminal,
 	})...)
-	if _, err := stream.Feed(context.Background(), encoded); err != nil {
+	safe, err := stream.Feed(context.Background(), encoded)
+	if err != nil {
 		t.Fatalf("Feed() error = %v", err)
 	}
 	pending, err := stream.FinishDecoded(context.Background())
@@ -201,7 +445,7 @@ func TestProviderStreamPreservesExactWireWithoutModelMapping(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Approve() error = %v", err)
 	}
-	if !bytes.Equal(released, encoded) {
+	if !bytes.Equal(append(safe, released...), encoded) {
 		t.Fatal("unmapped stream did not preserve the exact provider wire")
 	}
 }
@@ -279,7 +523,7 @@ func TestProviderStreamRecordsReasoningSummaryWithoutExposingEncryptedStateAsTex
 	}
 }
 
-func TestProviderStreamReleasesOnlyPortableConversationHistory(t *testing.T) {
+func TestProviderStreamPreservesNativeConversationHistory(t *testing.T) {
 	t.Parallel()
 
 	request := streamingRequestFixture(t)
@@ -331,7 +575,8 @@ func TestProviderStreamReleasesOnlyPortableConversationHistory(t *testing.T) {
 	encoded = append(encoded, appendResponseEvent(t, "response.completed", map[string]any{
 		"type": "response.completed", "sequence_number": 4, "response": terminal,
 	})...)
-	if _, err := stream.Feed(context.Background(), encoded); err != nil {
+	safe, err := stream.Feed(context.Background(), encoded)
+	if err != nil {
 		t.Fatalf("Feed() error = %v", err)
 	}
 	pending, err := stream.FinishDecoded(context.Background())
@@ -348,54 +593,9 @@ func TestProviderStreamReleasesOnlyPortableConversationHistory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Approve() error = %v", err)
 	}
-	decoder, err := ssewire.NewDecoder(ssewire.DefaultOptions())
-	if err != nil {
-		t.Fatal(err)
-	}
-	events, err := decoder.Feed(released)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := decoder.Finish(); err != nil {
-		t.Fatal(err)
-	}
-	if len(events) != 2 {
-		t.Fatalf("portable client event count = %d; wire=%s", len(events), released)
-	}
-	var itemEvent struct {
-		Type        string          `json:"type"`
-		OutputIndex int             `json:"output_index"`
-		Item        json.RawMessage `json:"item"`
-	}
-	if err := json.Unmarshal(events[0].Data, &itemEvent); err != nil {
-		t.Fatal(err)
-	}
-	var item inputTypeWire
-	if err := json.Unmarshal(itemEvent.Item, &item); err != nil {
-		t.Fatal(err)
-	}
-	if itemEvent.Type != "response.output_item.done" ||
-		itemEvent.OutputIndex != 0 || item.Type != "message" {
-		t.Fatalf("portable output item = %#v / %s", itemEvent, itemEvent.Item)
-	}
-	var completed struct {
-		Type     string `json:"type"`
-		Response struct {
-			Output []json.RawMessage `json:"output"`
-		} `json:"response"`
-	}
-	if err := json.Unmarshal(events[1].Data, &completed); err != nil {
-		t.Fatal(err)
-	}
-	if completed.Type != "response.completed" || len(completed.Response.Output) != 1 {
-		t.Fatalf("portable terminal = %#v", completed)
-	}
-	if err := json.Unmarshal(completed.Response.Output[0], &item); err != nil {
-		t.Fatal(err)
-	}
-	if item.Type != "message" || bytes.Contains(released, []byte(`"type":"reasoning"`)) ||
-		bytes.Contains(released, []byte("provider-private plaintext reasoning")) {
-		t.Fatalf("released stream retained provider-private reasoning: %s", released)
+
+	if !bytes.Equal(append(safe, released...), encoded) {
+		t.Fatalf("native stream replay state or indexes changed: %s", released)
 	}
 }
 

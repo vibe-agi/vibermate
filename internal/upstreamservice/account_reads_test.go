@@ -25,6 +25,8 @@ func TestClientAccountReadScopeUsesExactAdapterContracts(t *testing.T) {
 	}{
 		{"quota", protocolspec.RequestTarget{Method: "GET", Path: "/backend-api/wham/usage", Transport: "http"}, true},
 		{"history", protocolspec.RequestTarget{Method: "GET", Path: "/backend-api/wham/profiles/me", Transport: "http"}, true},
+		{"workspace routing", protocolspec.RequestTarget{Method: "GET", Path: upstreamservice.CodexWorkspaceRoutingPath, Transport: "http"}, true},
+		{"workspace routing query", protocolspec.RequestTarget{Method: "GET", Path: upstreamservice.CodexWorkspaceRoutingPath, RawQuery: "other=true", Transport: "http"}, false},
 		{"unknown sibling", protocolspec.RequestTarget{Method: "GET", Path: "/backend-api/wham/other", Transport: "http"}, false},
 		{"reset list", protocolspec.RequestTarget{Method: "GET", Path: "/backend-api/wham/rate-limit-reset-credits", Transport: "http"}, false},
 		{"reset consumption", protocolspec.RequestTarget{Method: "POST", Path: "/backend-api/wham/rate-limit-reset-credits/consume", Transport: "http"}, false},

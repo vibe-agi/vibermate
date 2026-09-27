@@ -179,6 +179,20 @@ func TestServerOwnerWebSessionCanManageManualCapture(t *testing.T) {
 	}
 	dryRunURL := "http://" + host.Status().ListenAddress +
 		"/api/v1/environments/system_transparent/actions/dry-run"
+	for _, credential := range []string{session.ReadToken, memberSession.WriteToken} {
+		payload := strings.NewReader(`{"enabled":true,"retentionDays":90,"revision":1}`)
+		request, _ := http.NewRequest(http.MethodPatch, "http://"+host.Status().ListenAddress+servercontrol.RuntimeUserUsagePath+"/collection", payload)
+		request.Header.Set("Authorization", "Bearer "+credential)
+		request.Header.Set("Content-Type", "application/json")
+		response, err := http.DefaultClient.Do(request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		response.Body.Close()
+		if response.StatusCode != http.StatusUnauthorized {
+			t.Fatalf("non-owner collection update = %d", response.StatusCode)
+		}
+	}
 	dryRunInput := map[string]any{
 		"source": "published", "revision": 1,
 		"clientOrigin": "https://api.anthropic.com", "method": "POST",
@@ -1201,6 +1215,9 @@ func TestRuntimeUserCustomClaudeHTTPOriginProducesExchangeAndUsage(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
+	if _, policyErr := host.Runtime().UsageRepository().SetUsagePolicy(context.Background(), runtimeusage.CollectionPolicy{Enabled: true, RetentionDays: 90, Revision: 1}, time.Now().UTC()); policyErr != nil {
+		t.Fatal(policyErr)
+	}
 	rules := host.Runtime().ConnectionRules()
 	current := rules.Current()
 	if _, err := rules.Replace(
@@ -1253,13 +1270,32 @@ func TestRuntimeUserCustomClaudeHTTPOriginProducesExchangeAndUsage(t *testing.T)
 
 	catalog := clientadapter.BuiltInCatalog()
 	signer := clientadapter.ClaudeCodeSignerDarwin()
+	manager := host.Runtime().Environments()
+	system, err := manager.Get(context.Background(), environment.SystemTransparentID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidate := system.Aggregate()
+	candidate.ID, candidate.Name = "usage-only", "Usage without bodies"
+	candidate.ContentRecording = environment.ContentRecordingPolicy{Mode: environment.ContentRecordingOff}
+	draft, err := manager.SaveDraft(context.Background(), environment.DraftCommand{Candidate: candidate})
+	if err != nil {
+		t.Fatal(err)
+	}
+	preview, err := manager.Preview(context.Background(), candidate.ID, draft.Revision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.Publish(context.Background(), preview); err != nil {
+		t.Fatal(err)
+	}
 	create := postJSON(
 		t,
 		controlClient,
 		"http://"+host.Status().ListenAddress+"/api/v1/capture-runs",
 		session.SessionToken,
 		capturecontrol.CreateRequest{
-			EnvironmentID:  environment.SystemTransparentID.String(),
+			EnvironmentID:  candidate.ID.String(),
 			CWD:            "/workspace/project",
 			Command:        []string{"claude"},
 			ExecutablePath: "/opt/tools/claude",
@@ -1330,6 +1366,10 @@ func TestRuntimeUserCustomClaudeHTTPOriginProducesExchangeAndUsage(t *testing.T)
 	}
 	if len(page.Items) != 1 || page.Items[0].Status != activity.StatusSucceeded {
 		t.Fatalf("Capture activities = %#v", page.Items)
+	}
+	available, err := host.Runtime().ExchangeContents().AvailableBodies(context.Background(), []string{page.Items[0].SubjectID})
+	if err != nil || available[page.Items[0].SubjectID] {
+		t.Fatalf("body-free usage retained content: %v %v", available, err)
 	}
 
 	adminKey, err := os.ReadFile(host.Status().RecoveryKeyPath)

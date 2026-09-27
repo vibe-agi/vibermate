@@ -192,6 +192,68 @@ func TestApplyLatestChangesOnlyRequestsBegunAfterApply(t *testing.T) {
 	assertRequestRoute(t, manager, capture, "connection.semantic", 2, "route.revision-two")
 }
 
+func TestPublishedManualAccountActivationChangesEveryNextRequest(t *testing.T) {
+	t.Parallel()
+	repository := newMemoryRepository()
+	revisionOne := environmentFixture(t, "work", "adapter.shared")
+	resolver := newRevisionResolver(t, revisionOne)
+	manager := newTestManager(t, repository, resolver)
+	capture := testCapture()
+	created, err := manager.Create(context.Background(), CreateCommand{
+		Capture: capture, EnvironmentID: "work", Source: SourceLaunch,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	connection, err := manager.RegisterConnection(
+		context.Background(), capture, "connection.semantic", semanticOrigin(t),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer connection.Close()
+	before, err := manager.BeginRequest(
+		context.Background(), capture, "connection.semantic", semanticRequestFacts(),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer before.Release()
+
+	revisionTwo, changed, err := environment.ActivateRouteAccount(
+		revisionOne, "route.default", environment.RouteAccountReference{
+			ID: "account.alternate", Revision: 1, DisplayName: "Alternate",
+		},
+	)
+	if err != nil || !changed {
+		t.Fatalf("activate = changed %t, error %v", changed, err)
+	}
+	resolver.Publish(t, revisionTwo)
+	after, err := manager.BeginRequest(
+		context.Background(), capture, "connection.semantic", semanticRequestFacts(),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer after.Release()
+	assertAccount := func(label string, lease *RequestLease, want string) {
+		t.Helper()
+		route, ok := lease.Plan().UpstreamRoute()
+		if !ok {
+			t.Fatalf("%s Route missing", label)
+		}
+		account, ok := route.AccountPolicy().FixedAccount()
+		if !ok || account.ID != want {
+			t.Fatalf("%s Account = %+v, %t", label, account, ok)
+		}
+	}
+	assertAccount("in-flight", before, "account.default")
+	assertAccount("next", after, "account.alternate")
+	if after.Assignment().EnvironmentRevision != created.EnvironmentRevision {
+		t.Fatalf("manual Account activation changed frozen policy revision: %+v", after.Assignment())
+	}
+}
+
 func TestApplyLatestRejectsAnEnvironmentThatCannotServeAnOpenConnection(t *testing.T) {
 	t.Parallel()
 	repository := newMemoryRepository()
@@ -568,11 +630,15 @@ func environmentCompiler(t *testing.T) environment.Compiler {
 type captureAssignmentAccountCatalog struct{}
 
 func (captureAssignmentAccountCatalog) LookupAccount(id string, _ string) (environment.AccountDescriptor, bool) {
-	if id != "account.default" {
+	if id != "account.default" && id != "account.alternate" {
 		return environment.AccountDescriptor{}, false
 	}
+	displayName := id
+	if id == "account.alternate" {
+		displayName = "Alternate"
+	}
 	return environment.AccountDescriptor{
-		ID: id, Revision: 1, DisplayName: id,
+		ID: id, Revision: 1, DisplayName: displayName,
 		UpstreamEndpointID: "target.default", UpstreamEndpointRevision: 1,
 		RealmID: "realm.default", Active: true,
 		BackendProtocols: []string{"anthropic_messages"},

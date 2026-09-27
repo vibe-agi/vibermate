@@ -35,6 +35,23 @@ func TestBuildChildArgumentsKeepsNonCodexInvocationsExact(t *testing.T) {
 	}
 }
 
+func TestCodexSessionEntrypointsStayNative(t *testing.T) {
+	t.Parallel()
+	for _, arguments := range [][]string{
+		nil, {"resume"}, {"resume", "--last"}, {"resume", "--all"},
+		{"resume", "12345678-1234-4234-9234-123456789abc"}, {"resume", "named-session"},
+		{"fork"}, {"fork", "--last"}, {"exec", "resume", "--last", "synthetic prompt"},
+		{"--model", "fixture", "resume", "named-session", "continue without changing permissions"},
+		{"explain resume and fork"},
+	} {
+		invocation := append([]string{"codex"}, arguments...)
+		got, err := buildChildArguments(invocation, nil, clientadapter.LaunchCodexResponsesHTTP)
+		if err != nil || len(got) < len(arguments) || !slices.Equal(got[len(got)-len(arguments):], arguments) {
+			t.Fatalf("native session arguments were rewritten: %v => %v (%v)", arguments, got, err)
+		}
+	}
+}
+
 func TestBuildChildArgumentsPinsCodexToResponsesHTTP(t *testing.T) {
 	t.Parallel()
 

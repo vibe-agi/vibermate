@@ -29,6 +29,92 @@ enum RootCAGuideIntent { remove, replace }
 
 final class WorkbenchController extends ChangeNotifier
     with WidgetsBindingObserver {
+  final Map<String, AccountFacts> _providerAccountQuotas = {};
+  final Map<String, int> _providerAccountQuotaLoads = {};
+  final Map<String, int> _providerAccountQuotaFailures = {};
+
+  AccountFacts? providerAccountQuota(ProviderAccount account) {
+    final facts = _providerAccountQuotas[account.id];
+    return facts != null &&
+            facts.origin == account.credentialOrigin &&
+            facts.credentialEpoch >= account.credentialEpoch
+        ? facts
+        : null;
+  }
+
+  bool providerAccountQuotaLoading(ProviderAccount account) =>
+      _providerAccountQuotaLoads[account.id] == account.credentialEpoch;
+
+  bool providerAccountQuotaFailed(ProviderAccount account) =>
+      _providerAccountQuotaFailures[account.id] == account.credentialEpoch;
+
+  bool providerAccountQuotaSettled(ProviderAccount account) =>
+      providerAccountQuota(account) != null ||
+      providerAccountQuotaFailed(account);
+
+  void invalidateProviderAccountQuota(ProviderAccount account) {
+    _providerAccountQuotas.remove(account.id);
+    _providerAccountQuotaFailures.remove(account.id);
+    notifyListeners();
+  }
+
+  Future<AccountFacts?> refreshProviderAccountQuota(
+    ProviderAccount account,
+  ) async {
+    if (!account.usable || providerAccountQuotaLoading(account)) {
+      return providerAccountQuota(account);
+    }
+    final epoch = account.credentialEpoch;
+    _providerAccountQuotaLoads[account.id] = epoch;
+    _providerAccountQuotaFailures.remove(account.id);
+    notifyListeners();
+    try {
+      final facts = await accountFacts(account);
+      if (_disposed || _providerAccountQuotaLoads[account.id] != epoch) {
+        return null;
+      }
+      final current = data?.accounts
+          .where((value) => value.id == account.id)
+          .firstOrNull;
+      if (data != null &&
+          (current == null || current.credentialEpoch != epoch)) {
+        return null;
+      }
+      _providerAccountQuotas[account.id] = facts;
+      return facts;
+    } catch (_) {
+      if (!_disposed && _providerAccountQuotaLoads[account.id] == epoch) {
+        _providerAccountQuotaFailures[account.id] = epoch;
+      }
+      return providerAccountQuota(account);
+    } finally {
+      if (!_disposed && _providerAccountQuotaLoads[account.id] == epoch) {
+        _providerAccountQuotaLoads.remove(account.id);
+        notifyListeners();
+      }
+    }
+  }
+
+  Future<void> ensureProviderAccountQuotas(
+    Iterable<ProviderAccount> accounts, {
+    bool refresh = false,
+  }) async {
+    final pending = accounts
+        .where(
+          (account) =>
+              account.usable &&
+              (refresh || providerAccountQuota(account) == null) &&
+              !providerAccountQuotaLoading(account) &&
+              (refresh || !providerAccountQuotaFailed(account)),
+        )
+        .toList(growable: false);
+    for (var index = 0; index < pending.length; index += 4) {
+      await Future.wait(
+        pending.skip(index).take(4).map(refreshProviderAccountQuota),
+      );
+    }
+  }
+
   Future<AccountResetRedemption> redeemAccountResetCredit(
     ProviderAccount account,
     AccountResetCredit credit,
@@ -184,11 +270,13 @@ final class WorkbenchController extends ChangeNotifier
   List<ApprovalRecord>? pendingApprovals;
   ConversationPage? selectedCaptureConversations;
   ActivityPage? selectedCapturePage;
+  bool showCaptureRequestRecords = false;
   EnvironmentDraft? reviewedEnvironmentDraft;
   EnvironmentImpact? reviewedEnvironmentImpact;
   EnvironmentRecord? historicalEnvironment;
   CaptureAssignment? selectedAssignment;
   bool selectedCaptureLaunchIncomplete = false;
+  String? captureDetailError;
   ACPRecord? selectedACP;
   TerminalCommandStatus? terminalCommand;
   RuntimeServerAccess? serverAccess;
@@ -208,7 +296,48 @@ final class WorkbenchController extends ChangeNotifier
   String? storageArchivePreviewError;
   RootCAGuideIntent? rootCAGuideIntent;
   CapturedMessageTransformSample? capturedMessageTransformSample;
-  final int usageRangeDays = 365;
+  int usageRangeDays = 7;
+
+  Future<void> setUsageRange(int days) async {
+    if (![7, 30, 90, 365].contains(days) || usageLoading) return;
+    usageRangeDays = days;
+    await refreshUsage();
+  }
+
+  Future<bool> setUsageCollection({
+    required bool enabled,
+    required int retentionDays,
+  }) async {
+    final policy = runtimeUsage?.collection;
+    if (_disposed ||
+        !serverManagement ||
+        policy == null ||
+        usageLoading ||
+        runtimeUserMutating) {
+      return false;
+    }
+    runtimeUserMutating = true;
+    usageError = null;
+    notifyListeners();
+    try {
+      await _api.setUsageCollection(
+        enabled: enabled,
+        retentionDays: retentionDays,
+        revision: policy.revision,
+      );
+      if (_disposed) return false;
+      runtimeUserMutating = false;
+      await refreshUsage();
+      return usageError == null;
+    } catch (error) {
+      if (_disposed) return false;
+      runtimeUserMutating = false;
+      usageError = _describeError(error);
+      notifyListeners();
+      return false;
+    }
+  }
+
   WorkbenchSection section;
   AppLanguage language;
   WorkbenchTheme theme;
@@ -248,6 +377,9 @@ final class WorkbenchController extends ChangeNotifier
   bool terminalCommandLoading = false;
   bool terminalCommandMutating = false;
   bool serverManagementLoading = false;
+  bool usageLoading = false;
+  String? usageError;
+  Future<void>? _usageRefresh;
   bool runtimeUserMutating = false;
   bool rootCALoading = false;
   bool rootCAMutating = false;
@@ -290,14 +422,14 @@ final class WorkbenchController extends ChangeNotifier
   List<CaptureRecord> get runningCaptures {
     final values =
         data?.captures.where((capture) => capture.running).toList() ?? [];
-    values.sort((left, right) => right.updatedAt.compareTo(left.updatedAt));
+    values.sort(_compareCaptureActivity);
     return values;
   }
 
   List<CaptureRecord> get historicalCaptures {
     final values =
         data?.captures.where((capture) => !capture.running).toList() ?? [];
-    values.sort((left, right) => right.updatedAt.compareTo(left.updatedAt));
+    values.sort(_compareCaptureActivity);
     return values;
   }
 
@@ -305,6 +437,11 @@ final class WorkbenchController extends ChangeNotifier
     final key = selectedCaptureKey;
     if (key == null) return null;
     return data?.captures.where((capture) => capture.key == key).firstOrNull;
+  }
+
+  static int _compareCaptureActivity(CaptureRecord left, CaptureRecord right) {
+    final order = right.activityAt.compareTo(left.activityAt);
+    return order != 0 ? order : left.key.compareTo(right.key);
   }
 
   EnvironmentRecord? get selectedEnvironment {
@@ -516,6 +653,12 @@ final class WorkbenchController extends ChangeNotifier
 
   List<ActivityRecord> get selectedActivities =>
       selectedCapturePage?.items ?? const [];
+
+  void selectCaptureRequestRecords(bool show) {
+    if (showCaptureRequestRecords == show) return;
+    showCaptureRequestRecords = show;
+    notifyListeners();
+  }
 
   List<ConversationSummary> get captureConversations =>
       selectedCaptureConversations?.items
@@ -845,8 +988,11 @@ final class WorkbenchController extends ChangeNotifier
       if (section == WorkbenchSection.captures &&
           capture != null &&
           !_evidencePollInFlight &&
-          !capture.running &&
-          !selectedActivities.any((item) => item.status == 'pending')) {
+          (captureDetailError != null ||
+              (!capture.running &&
+                  !selectedActivities.any(
+                    (item) => item.status == 'pending',
+                  )))) {
         await _loadCaptureDetail(capture, quiet: true);
       }
       if (section == WorkbenchSection.network) {
@@ -875,6 +1021,7 @@ final class WorkbenchController extends ChangeNotifier
         capture == null ||
         _evidencePollInFlight ||
         _captureDetailLoads != 0 ||
+        captureDetailError != null ||
         loading ||
         detailLoading ||
         captureActivitiesLoading ||
@@ -1023,7 +1170,7 @@ final class WorkbenchController extends ChangeNotifier
       if (serverManagement &&
           (serverAccess == null ||
               runtimeUsers == null ||
-              value == WorkbenchSection.usage && runtimeUsage == null)) {
+              value == WorkbenchSection.usage)) {
         unawaited(refreshServerManagement());
       }
       if (terminalManagement && terminalCommand == null) {
@@ -1276,6 +1423,10 @@ final class WorkbenchController extends ChangeNotifier
   }
 
   Future<void> refreshServerManagement({bool quiet = false}) async {
+    if (section == WorkbenchSection.usage) {
+      await refreshUsage();
+      return;
+    }
     if (_disposed ||
         !serverManagement ||
         serverManagementLoading ||
@@ -1287,22 +1438,17 @@ final class WorkbenchController extends ChangeNotifier
       serverManagementError = null;
       notifyListeners();
     }
-    final includeUsage = !quiet && section == WorkbenchSection.usage;
     try {
       final requests = <Future<Object>>[
         _api.serverAccess(),
         _api.runtimeUsers(),
       ];
-      if (includeUsage) requests.add(_api.runtimeUsage(_usageQuery()));
       final updated = await Future.wait<Object>(requests);
       if (_disposed) return;
       serverAccess = updated[0] as RuntimeServerAccess;
       runtimeUsers = List<RuntimeUser>.unmodifiable(
         updated[1] as List<RuntimeUser>,
       );
-      if (includeUsage) {
-        runtimeUsage = updated[2] as RuntimeUsageReport;
-      }
       serverManagementLoading = false;
       serverManagementError = null;
       notifyListeners();
@@ -1311,6 +1457,32 @@ final class WorkbenchController extends ChangeNotifier
       serverManagementLoading = false;
       serverManagementError = _describeError(error);
       notifyListeners();
+    }
+  }
+
+  Future<void> refreshUsage() {
+    if (_disposed || !serverManagement) return Future<void>.value();
+    return _usageRefresh ??= _loadUsage().whenComplete(
+      () => _usageRefresh = null,
+    );
+  }
+
+  Future<void> _loadUsage() async {
+    usageLoading = true;
+    usageError = null;
+    notifyListeners();
+    try {
+      final report = await _api.runtimeUsage(_usageQuery());
+      if (_disposed) return;
+      runtimeUsage = report;
+    } catch (error) {
+      if (_disposed) return;
+      usageError = _describeError(error);
+    } finally {
+      if (!_disposed) {
+        usageLoading = false;
+        notifyListeners();
+      }
     }
   }
 
@@ -2510,10 +2682,13 @@ final class WorkbenchController extends ChangeNotifier
     _selectionGeneration += 1;
     selectedAssignment = null;
     selectedCaptureLaunchIncomplete = false;
+    if (errorMessage == captureDetailError) errorMessage = null;
+    captureDetailError = null;
     selectedACP = null;
     selectedCaptureConversations = null;
     selectedCaptureConversationKey = null;
     selectedCapturePage = null;
+    showCaptureRequestRecords = false;
     detailLoading = false;
     captureActivitiesLoading = false;
   }
@@ -2590,7 +2765,11 @@ final class WorkbenchController extends ChangeNotifier
   }
 
   Future<void> selectCapture(String captureKey) async {
-    if (selectedCaptureKey == captureKey && selectedAssignment != null) return;
+    if (selectedCaptureKey == captureKey &&
+        selectedAssignment != null &&
+        captureDetailError == null) {
+      return;
+    }
     selectedCaptureKey = captureKey;
     _resetCaptureDetail();
     operationNotice = null;
@@ -2836,6 +3015,56 @@ final class WorkbenchController extends ChangeNotifier
     }
   }
 
+  Future<EnvironmentAccountActivation?> activateEnvironmentAccount(
+    EnvironmentRecord environment,
+    String routeId,
+    String accountId,
+  ) async {
+    final current = data;
+    if (current == null ||
+        environment.systemOwned ||
+        environmentMutating ||
+        !_beginEnvironmentMutation()) {
+      return null;
+    }
+    environmentNotice = null;
+    notifyListeners();
+    try {
+      final result = await _api.activateEnvironmentAccount(
+        environment,
+        routeId,
+        accountId,
+      );
+      if (_disposed) return null;
+      final environments =
+          [
+            for (final candidate in current.environments)
+              if (candidate.id != result.environment.id) candidate,
+            result.environment,
+          ]..sort((left, right) {
+            if (left.systemOwned != right.systemOwned) {
+              return left.systemOwned ? -1 : 1;
+            }
+            return left.id.compareTo(right.id);
+          });
+      data = _dashboardWith(current, environments: environments);
+      if (selectedEnvironmentId == result.environment.id) {
+        selectedEnvironmentRevision = null;
+        historicalEnvironment = null;
+      }
+      environmentMutating = false;
+      environmentNotice = 'environment.account_activated';
+      notifyListeners();
+      return result;
+    } catch (error) {
+      if (_disposed) return null;
+      environmentMutating = false;
+      _setEnvironmentError(error);
+      notifyListeners();
+      return null;
+    }
+  }
+
   void clearEnvironmentReview() {
     reviewedEnvironmentDraft = null;
     reviewedEnvironmentImpact = null;
@@ -2951,7 +3180,17 @@ final class WorkbenchController extends ChangeNotifier
     }
     try {
       final values = await Future.wait<Object?>([
-        _loadCaptureAssignment(capture),
+        _loadCaptureAssignment(capture).then((assignment) {
+          // Assignment and evidence are independent reads. A failed index
+          // must not turn a confirmed assignment into an unassigned run.
+          if (!_disposed &&
+              generation == _selectionGeneration &&
+              selectedCaptureKey == capture.key) {
+            selectedAssignment = assignment;
+            selectedCaptureLaunchIncomplete = assignment == null;
+          }
+          return assignment;
+        }),
         _captureConversationPage(capture, limit: 200),
         if (capture.isACP && _api is ACPObservationApi)
           (_api as ACPObservationApi).acpObservation(capture.key)
@@ -3018,12 +3257,15 @@ final class WorkbenchController extends ChangeNotifier
       }
       captureActivitiesLoading = false;
       detailLoading = false;
+      if (errorMessage == captureDetailError) errorMessage = null;
+      captureDetailError = null;
       notifyListeners();
     } catch (error) {
-      if (_disposed || generation != _selectionGeneration || quiet) return;
+      if (_disposed || generation != _selectionGeneration) return;
       captureActivitiesLoading = false;
       detailLoading = false;
-      errorMessage = _describeError(error);
+      captureDetailError = _describeError(error);
+      errorMessage = captureDetailError;
       notifyListeners();
     } finally {
       _captureDetailLoads -= 1;

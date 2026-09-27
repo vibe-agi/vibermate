@@ -80,6 +80,8 @@ func (query Query) day(value time.Time) string {
 
 func (query Query) Period() Period { return query.period }
 
+func (query Query) Bounds() (time.Time, time.Time) { return query.from, query.until }
+
 func validTimeZoneName(value string) bool {
 	if value == "" || !utf8.ValidString(value) || len(value) > maxTimeZoneBytes {
 		return false

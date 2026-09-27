@@ -276,6 +276,22 @@ type View struct {
 	CreatedAt       time.Time                     `json:"createdAt"`
 	ExpiresAt       time.Time                     `json:"expiresAt"`
 	UpdatedAt       time.Time                     `json:"-"`
+	// ActivityAt is scoped to this run, not its native client session.
+	// Heartbeats never advance this read-side projection.
+	ActivityAt time.Time `json:"-"`
+}
+
+func (view View) ActivityTime() time.Time {
+	if !view.ActivityAt.IsZero() {
+		return view.ActivityAt
+	}
+	if !view.FirstObservedAt.IsZero() {
+		return view.FirstObservedAt
+	}
+	if view.State != StateCreated && view.State != StateAttached && !view.UpdatedAt.IsZero() {
+		return view.UpdatedAt
+	}
+	return view.CreatedAt
 }
 
 // ViewOf renders a run for a reader. It carries no capability.
@@ -507,6 +523,7 @@ func evidenceOf(record DurableRecord) Evidence {
 // RuntimeMetadata is display-only launcher evidence. It never grants capture,
 // filesystem, process, routing, or credential authority.
 type RuntimeMetadata struct {
+	GitAtLaunch            *GitSnapshot
 	LocalUserName          string
 	HomeDirectory          string
 	OperatingSystem        string
@@ -516,6 +533,11 @@ type RuntimeMetadata struct {
 }
 
 func (metadata RuntimeMetadata) Validate() error {
+	if metadata.GitAtLaunch != nil {
+		if err := metadata.GitAtLaunch.Validate(); err != nil {
+			return err
+		}
+	}
 	for _, item := range []struct {
 		name  string
 		value string
@@ -624,26 +646,27 @@ type GlobalActivityReader interface {
 
 // PageRequest bounds a read of the run list.
 type PageRequest struct {
-	Limit  int
-	Cursor *PageCursor
+	Limit         int
+	Cursor        *PageCursor
+	RuntimeUserID runtimeuser.UserID
 }
 
 // PageCursor is the stable position of the last CaptureRun returned by a
-// running-first, most-recent-first catalog. IncludeAtUpdatedAt lets a caller
+// running-first, most-recent-activity-first catalog. IncludeAtActivityAt lets a caller
 // merging multiple Capture kinds either include every item at the boundary
 // timestamp or continue after one exact run ID without using offsets.
 type PageCursor struct {
-	Running            bool
-	UpdatedAt          time.Time
-	AfterID            string
-	IncludeAtUpdatedAt bool
+	Running             bool
+	ActivityAt          time.Time
+	AfterID             string
+	IncludeAtActivityAt bool
 }
 
 func (cursor PageCursor) Valid() bool {
-	return !cursor.UpdatedAt.IsZero() &&
-		cursor.UpdatedAt.Equal(cursor.UpdatedAt.UTC().Truncate(time.Millisecond)) &&
+	return !cursor.ActivityAt.IsZero() &&
+		cursor.ActivityAt.Equal(cursor.ActivityAt.UTC().Truncate(time.Millisecond)) &&
 		(cursor.AfterID == "" || validateID(cursor.AfterID) == nil) &&
-		(cursor.IncludeAtUpdatedAt || cursor.AfterID == "")
+		(cursor.IncludeAtActivityAt || cursor.AfterID == "")
 }
 
 const (

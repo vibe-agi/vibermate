@@ -187,6 +187,7 @@ type DurableRecord struct {
 	UpdatedAt           time.Time
 	ExpiresAt           time.Time
 	LastObservedAt      time.Time
+	ActivityAt          time.Time // Read-side projection, not a mutation input.
 }
 
 func (record DurableRecord) Validate() error {
@@ -236,6 +237,20 @@ type View struct {
 	UpdatedAt          time.Time          `json:"updatedAt"`
 	ExpiresAt          *time.Time         `json:"expiresAt,omitempty"`
 	LastObservedAt     *time.Time         `json:"lastObservedAt,omitempty"`
+	ActivityAt         time.Time          `json:"-"`
+}
+
+func (view View) ActivityTime() time.Time {
+	if !view.ActivityAt.IsZero() {
+		return view.ActivityAt
+	}
+	if view.LastObservedAt != nil {
+		return *view.LastObservedAt
+	}
+	if view.State != StateActive && !view.UpdatedAt.IsZero() {
+		return view.UpdatedAt
+	}
+	return view.CreatedAt
 }
 
 func ViewOf(record DurableRecord) View {
@@ -250,6 +265,7 @@ func ViewOf(record DurableRecord) View {
 		Observation:        record.Observation,
 		CreatedAt:          record.CreatedAt,
 		UpdatedAt:          record.UpdatedAt,
+		ActivityAt:         record.ActivityAt,
 	}
 	if !record.ExpiresAt.IsZero() {
 		value := record.ExpiresAt
@@ -348,10 +364,10 @@ type PageRequest struct {
 // running-first, most-recent-first catalog. It is owner-scoped by PageRequest;
 // no credential or bearer authority is encoded in it.
 type PageCursor struct {
-	Running            bool
-	UpdatedAt          time.Time
-	AfterID            string
-	IncludeAtUpdatedAt bool
+	Running             bool
+	ActivityAt          time.Time
+	AfterID             string
+	IncludeAtActivityAt bool
 }
 
 func (cursor PageCursor) Valid() bool {
@@ -360,9 +376,9 @@ func (cursor PageCursor) Valid() bool {
 		_, err := ParseID(cursor.AfterID)
 		validID = err == nil
 	}
-	return !cursor.UpdatedAt.IsZero() &&
-		cursor.UpdatedAt.Equal(cursor.UpdatedAt.UTC().Truncate(time.Millisecond)) &&
-		validID && (cursor.IncludeAtUpdatedAt || cursor.AfterID == "")
+	return !cursor.ActivityAt.IsZero() &&
+		cursor.ActivityAt.Equal(cursor.ActivityAt.UTC().Truncate(time.Millisecond)) &&
+		validID && (cursor.IncludeAtActivityAt || cursor.AfterID == "")
 }
 
 func (request PageRequest) Normalized() PageRequest {

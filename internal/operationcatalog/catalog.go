@@ -42,6 +42,7 @@ const (
 	OpenAICodexResponsesCreateID               = "openai-codex-responses-create"
 	OpenAICodexResponsesWebSocketUnsupportedID = "openai-codex-responses-websocket-unsupported"
 	OpenAICodexModelsProbeID                   = "openai-codex-models-probe"
+	OpenAICodexAccountsCheckID                 = "openai-codex-accounts-check"
 	OpenAIPluginsFeaturedProbeID               = "openai-plugins-featured-probe"
 	OpenAIPluginsInstalledID                   = "openai-ps-plugins-installed-probe"
 	OpenAIPluginsListID                        = "openai-ps-plugins-list-probe"
@@ -162,6 +163,12 @@ func BuiltIn() (Catalog, error) {
 			"/backend-api/codex/models",
 			[]string{"client_version"},
 			protocolspec.OperationPayloadControl,
+		},
+		{
+			OpenAICodexAccountsCheckID,
+			upstreamservice.CodexWorkspaceRoutingPath,
+			nil,
+			protocolspec.OperationPayloadNone,
 		},
 		{
 			OpenAIPluginsFeaturedProbeID,

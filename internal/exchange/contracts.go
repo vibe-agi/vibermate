@@ -53,6 +53,13 @@ const (
 	ReasonProviderResponseIdle          ReasonCode = "provider_response_idle"
 	ReasonProviderStatusRejected        ReasonCode = "provider_status_rejected"
 	ReasonProviderResponseInvalid       ReasonCode = "provider_response_invalid"
+	ReasonProviderResponseFailed        ReasonCode = "provider_response_failed"
+	ReasonProviderStreamTruncated       ReasonCode = "provider_stream_truncated"
+	ReasonProviderStreamMalformed       ReasonCode = "provider_stream_malformed"
+	ReasonProviderStreamStateInvalid    ReasonCode = "provider_stream_state_invalid"
+	ReasonProviderStreamLimitExceeded   ReasonCode = "provider_stream_limit_exceeded"
+	ReasonProviderOutputUnsupported     ReasonCode = "provider_output_unsupported"
+	ReasonProviderToolCallIncomplete    ReasonCode = "provider_tool_call_incomplete"
 	ReasonTransportRetryExhausted       ReasonCode = "transport_retry_exhausted"
 	ReasonToolDecisionRejected          ReasonCode = "tool_decision_rejected"
 	ReasonToolDecisionExpired           ReasonCode = "tool_decision_expired"
@@ -167,11 +174,13 @@ var (
 // Failure carries a stable language-independent classification. Error details
 // are developer evidence and must never contain credentials or response bodies.
 type Failure struct {
-	Code           ReasonCode
-	ExchangeID     string
-	ProviderStatus int
-	ProviderField  ProviderField
-	ClientField    ClientField
+	ProviderErrorCode string
+	NativeError       protocolcore.NativeProviderError `json:"-"`
+	Code              ReasonCode
+	ExchangeID        string
+	ProviderStatus    int
+	ProviderField     ProviderField
+	ClientField       ClientField
 	// ClientPath is where in the request's shape the failure happened: field
 	// names and indices, never a value. It is what makes a rejected request
 	// diagnosable without rebuilding the runtime.
@@ -214,14 +223,16 @@ func (failure *Failure) Error() string {
 func newProviderStatusFailure(
 	exchangeID string,
 	providerStatus int,
-	providerField ProviderField,
+	diagnosis providerRejection,
 ) *Failure {
 	return &Failure{
-		Code:           ReasonProviderStatusRejected,
-		ExchangeID:     exchangeID,
-		ProviderStatus: providerStatus,
-		ProviderField:  providerField,
-		cause:          errors.New("provider returned a non-success status"),
+		Code:              ReasonProviderStatusRejected,
+		ExchangeID:        exchangeID,
+		ProviderStatus:    providerStatus,
+		ProviderField:     diagnosis.field,
+		ProviderErrorCode: diagnosis.code,
+		NativeError:       diagnosis.native,
+		cause:             errors.New("provider returned a non-success status"),
 	}
 }
 
@@ -241,13 +252,36 @@ func newFailure(
 	if cause == nil {
 		cause = errors.New("Exchange operation failed")
 	}
+	// Classify once for every provider decode path. The durable Activity keeps
+	// this closed reason even when body recording is off; don't collapse a
+	// missing terminal, rejected output and provider-declared failure together.
+	if code == ReasonProviderResponseInvalid {
+		switch protocolcore.ReasonOf(cause) {
+		case protocolcore.ReasonProviderResponseFailed:
+			code = ReasonProviderResponseFailed
+		case protocolcore.ReasonTruncatedEventStream:
+			code = ReasonProviderStreamTruncated
+		case protocolcore.ReasonMalformedEventStream:
+			code = ReasonProviderStreamMalformed
+		case protocolcore.ReasonStreamStateViolation:
+			code = ReasonProviderStreamStateInvalid
+		case protocolcore.ReasonStreamLimitExceeded:
+			code = ReasonProviderStreamLimitExceeded
+		case protocolcore.ReasonUnsupportedProviderData:
+			code = ReasonProviderOutputUnsupported
+		case protocolcore.ReasonToolCallIncomplete:
+			code = ReasonProviderToolCallIncomplete
+		}
+	}
 	failure := &Failure{
-		Code:           code,
-		ExchangeID:     exchangeID,
-		ProviderStatus: providerStatus,
-		ClientPath:     structuralPath(cause),
-		ProtocolReason: protocolcore.ReasonOf(cause),
-		cause:          cause,
+		Code:              code,
+		ExchangeID:        exchangeID,
+		ProviderStatus:    providerStatus,
+		ClientPath:        structuralPath(cause),
+		ProtocolReason:    protocolcore.ReasonOf(cause),
+		ProviderErrorCode: protocolcore.ProviderErrorCodeOf(cause),
+		NativeError:       protocolcore.NativeProviderErrorOf(cause),
+		cause:             cause,
 	}
 	return failure
 }
@@ -962,29 +996,32 @@ func (envelope ResponseEnvelope) Headers() http.Header {
 	return envelope.headers.Clone()
 }
 
-func managedResponseEnvelope(mode ResponseMode) ResponseEnvelope {
+func managedResponseEnvelope(mode ResponseMode, upstream http.Header) ResponseEnvelope {
 	contentType := "application/json"
 	if mode == ResponseModeEventStream {
 		contentType = "text/event-stream"
 	}
+	headers := nativeResponseHeaders(upstream)
+	headers.Set("Cache-Control", "no-store")
+	headers.Set("Content-Type", contentType)
 	return ResponseEnvelope{
 		mode:       mode,
 		statusCode: http.StatusOK,
-		headers: http.Header{
-			"Cache-Control": []string{"no-store"},
-			"Content-Type":  []string{contentType},
-		},
+		headers:    headers,
 	}
 }
 
 // FailureNotice is the in-band streaming failure contract. It intentionally
-// contains no localized or provider-supplied text.
+// contains only stable diagnostics except for the separately sealed native
+// client-delivery payload, which is never serialized into evidence.
 type FailureNotice struct {
-	ReasonCode     ReasonCode
-	ProviderStatus int
-	ProviderField  ProviderField
-	ProtocolReason protocolcore.Reason
-	ResponseIssue  ProviderResponseIssue
+	ProviderErrorCode string
+	NativeError       protocolcore.NativeProviderError `json:"-"`
+	ReasonCode        ReasonCode
+	ProviderStatus    int
+	ProviderField     ProviderField
+	ProtocolReason    protocolcore.Reason
+	ResponseIssue     ProviderResponseIssue
 }
 
 // Downstream is implemented by a future ingress adapter. Begin commits the
@@ -1070,6 +1107,11 @@ type AccountLeaseAuthority interface {
 }
 
 type AttemptObservation struct {
+	ProviderErrorCode      string
+	StartedAt              time.Time
+	RequestedModel         string
+	UpstreamModel          string
+	Usage                  protocolcore.Usage
 	ExchangeID             string
 	EnvironmentID          environment.EnvironmentID
 	EnvironmentRevision    environment.Revision
@@ -1461,7 +1503,7 @@ type StreamBudgets struct {
 func DefaultStreamBudgets() StreamBudgets {
 	return StreamBudgets{
 		KeepaliveInterval:       15 * time.Second,
-		ProviderProgressTimeout: 60 * time.Second,
+		ProviderProgressTimeout: providertransport.DefaultProviderResponseIdleTimeout,
 	}
 }
 

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sync"
 	"testing"
 	"time"
@@ -157,6 +158,7 @@ func TestCaptureRunPersistsVerifiedAdapterEvidenceWithProxyCapability(
 			Workspace:               testWorkspaceScope(t),
 			Runtime: capturerun.RuntimeMetadata{
 				LocalUserName: "jack", HomeDirectory: "/Users/jack",
+				GitAtLaunch:     &capturerun.GitSnapshot{RepositoryKey: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", RepositoryName: "project", Branch: "main"},
 				OperatingSystem: "darwin", OperatingSystemVersion: "15.6",
 				Architecture: "arm64", TimeZone: "Asia/Singapore",
 			},
@@ -188,7 +190,7 @@ func TestCaptureRunPersistsVerifiedAdapterEvidenceWithProxyCapability(
 	}
 	assertCodexEvidence(t, recovered)
 	view, err := second.GetRun(context.Background(), grant.Run.ID)
-	if err != nil || view.Runtime != recovered.Runtime {
+	if err != nil || !reflect.DeepEqual(view.Runtime, recovered.Runtime) {
 		t.Fatalf("CaptureRun runtime view = %+v, %v", view.Runtime, err)
 	}
 }
@@ -516,10 +518,10 @@ func TestCaptureRunCatalogPaginatesRunningFirstAtSharedTimestamp(t *testing.T) {
 			t.Fatalf("CaptureRun page %d state = %q", index+1, item.State)
 		}
 		cursor = &capturerun.PageCursor{
-			Running:            running,
-			UpdatedAt:          item.UpdatedAt,
-			AfterID:            item.ID,
-			IncludeAtUpdatedAt: true,
+			Running:             running,
+			ActivityAt:          item.ActivityTime(),
+			AfterID:             item.ID,
+			IncludeAtActivityAt: true,
 		}
 	}
 	page, err := manager.ListRuns(context.Background(), capturerun.PageRequest{
@@ -672,6 +674,9 @@ func assertCodexEvidence(
 	t.Helper()
 
 	if evidence.CatalogRevision != 7 ||
+		evidence.Runtime.GitAtLaunch == nil ||
+		evidence.Runtime.GitAtLaunch.RepositoryName != "project" ||
+		evidence.Runtime.GitAtLaunch.Branch != "main" ||
 		evidence.Runtime.LocalUserName != "jack" ||
 		evidence.Runtime.HomeDirectory != "/Users/jack" ||
 		evidence.Runtime.OperatingSystem != "darwin" ||

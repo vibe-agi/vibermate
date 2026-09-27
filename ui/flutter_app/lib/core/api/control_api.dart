@@ -125,6 +125,12 @@ abstract interface class ControlApi {
     int draftRevision,
   );
 
+  Future<EnvironmentAccountActivation> activateEnvironmentAccount(
+    EnvironmentRecord environment,
+    String routeId,
+    String accountId,
+  );
+
   Future<CaptureAssignment> captureAssignment(String captureKey);
 
   Future<CaptureAssignment> applyLatestCaptureEnvironment(
@@ -174,6 +180,12 @@ abstract interface class ControlApi {
   Future<List<RuntimeUser>> runtimeUsers();
 
   Future<RuntimeUsageReport> runtimeUsage(RuntimeUsageQuery query);
+
+  Future<RuntimeUsageCollection> setUsageCollection({
+    required bool enabled,
+    required int retentionDays,
+    required int revision,
+  });
 
   Future<RuntimeUser> createRuntimeUser({
     required String username,
@@ -1005,6 +1017,32 @@ final class HttpControlApi implements ControlApi, ACPObservationApi {
   }
 
   @override
+  Future<EnvironmentAccountActivation> activateEnvironmentAccount(
+    EnvironmentRecord environment,
+    String routeId,
+    String accountId,
+  ) async {
+    if (environment.systemOwned ||
+        !_validResourceId(routeId) ||
+        !_validResourceId(accountId)) {
+      throw const ControlContractException(
+        'Environment Account activation input is invalid',
+      );
+    }
+    return EnvironmentAccountActivation.fromJson(
+      await _mutation(
+        'PUT',
+        '/api/v1/environments/${Uri.encodeComponent(environment.id)}/routes/${Uri.encodeComponent(routeId)}/active-account',
+        expectedRevision: environment.revision,
+        body: {'accountId': accountId},
+      ),
+      environmentId: environment.id,
+      routeId: routeId,
+      accountId: accountId,
+    );
+  }
+
+  @override
   Future<CaptureAssignment> captureAssignment(String captureKey) async {
     final payload = await _read(
       '/api/v1/captures/${Uri.encodeComponent(captureKey)}/environment-assignment',
@@ -1341,6 +1379,32 @@ final class HttpControlApi implements ControlApi, ACPObservationApi {
         maximumResponseBytes: _maximumUsageResponseBytes,
       ),
       'runtimeUsage',
+    );
+  }
+
+  @override
+  Future<RuntimeUsageCollection> setUsageCollection({
+    required bool enabled,
+    required int retentionDays,
+    required int revision,
+  }) async {
+    if (_selfScoped ||
+        retentionDays < 1 ||
+        retentionDays > 365 ||
+        revision < 1) {
+      throw const ControlContractException('invalid usage collection policy');
+    }
+    return RuntimeUsageCollection.fromJson(
+      await _command(
+        'PATCH',
+        '/api/v1/server/runtime-users/usage/collection',
+        body: {
+          'enabled': enabled,
+          'retentionDays': retentionDays,
+          'revision': revision,
+        },
+      ),
+      'usageCollection',
     );
   }
 

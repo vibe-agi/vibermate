@@ -1,5 +1,5 @@
-// Package runtimeusage projects retained runtime evidence into an operator
-// usage report. It never invents missing token counts or model identities.
+// Package runtimeusage collects body-free usage independently of recording.
+// It never invents missing token counts or model identities.
 package runtimeusage
 
 import (
@@ -10,14 +10,14 @@ import (
 	"time"
 
 	"github.com/vibe-agi/vibermate/internal/activity"
-	"github.com/vibe-agi/vibermate/internal/agentconversation"
 	"github.com/vibe-agi/vibermate/internal/capturerun"
-	"github.com/vibe-agi/vibermate/internal/exchangecontent"
+	"github.com/vibe-agi/vibermate/internal/modelcatalog"
+	"github.com/vibe-agi/vibermate/internal/protocolcore"
 	"github.com/vibe-agi/vibermate/internal/runtimeuser"
 )
 
 const (
-	ReportSchema       = "vibermate-runtime-usage-report-v4"
+	ReportSchema       = "vibermate-runtime-usage-report-v1"
 	maxCaptureRuns     = 10_000
 	maxExchangeRecords = 100_000
 	maxReportedUsers   = 200
@@ -34,42 +34,64 @@ type UserReader interface {
 type CaptureRunReader interface {
 	ListRuns(context.Context, capturerun.PageRequest) (capturerun.Page, error)
 }
-type ActivityReader interface {
-	ListExchanges(context.Context, activity.PageRequest) (activity.Page, error)
-}
-type ContentReader interface {
-	Get(context.Context, string) (exchangecontent.Record, error)
-}
-type IdentityReader interface {
-	GetConversationIdentity(context.Context, string) (agentconversation.ClientIdentity, error)
-}
-
 type Options struct {
-	Users      UserReader
-	Runs       CaptureRunReader
-	Activities ActivityReader
-	Contents   ContentReader
-	Identities IdentityReader
-	Clock      Clock
+	Users  UserReader
+	Runs   CaptureRunReader
+	Ledger Repository
+	Clock  Clock
+	Prices *modelcatalog.ReferencePrices
 }
 
 type Projector struct{ options Options }
 
 func New(options Options) (*Projector, error) {
-	if options.Users == nil || options.Runs == nil || options.Activities == nil ||
-		options.Contents == nil || options.Identities == nil || options.Clock == nil {
+	if options.Users == nil || options.Runs == nil || options.Ledger == nil || options.Clock == nil {
 		return nil, errors.New("Runtime usage dependencies are incomplete")
 	}
 	return &Projector{options: options}, nil
 }
 
 type Report struct {
-	Schema      string      `json:"schema"`
-	GeneratedAt time.Time   `json:"generatedAt"`
-	Period      Period      `json:"period"`
-	Truncated   bool        `json:"truncated"`
-	Days        []DayUsage  `json:"days"`
-	Users       []UserUsage `json:"users"`
+	Schema      string           `json:"schema"`
+	GeneratedAt time.Time        `json:"generatedAt"`
+	Period      Period           `json:"period"`
+	Truncated   bool             `json:"truncated"`
+	Days        []DayUsage       `json:"days"`
+	Users       []UserUsage      `json:"users"`
+	Collection  CollectionPolicy `json:"collection"`
+	Total       GroupUsage       `json:"total"`
+	Sources     []GroupUsage     `json:"sources"`
+	Profiles    []GroupUsage     `json:"profiles"`
+	Accounts    []GroupUsage     `json:"accounts"`
+	Models      []GroupUsage     `json:"models"`
+	Callers     []GroupUsage     `json:"callers"`
+	Projects    []GroupUsage     `json:"projects"`
+	Pricing     PricingInfo      `json:"pricing"`
+}
+
+type GroupUsage struct {
+	Dimension         string       `json:"dimension,omitempty"`
+	Evidence          string       `json:"evidence,omitempty"`
+	Children          []GroupUsage `json:"children,omitempty"`
+	ChildrenTruncated bool         `json:"childrenTruncated,omitempty"`
+	ID                string       `json:"id"`
+	Label             string       `json:"label"`
+	AgentAPICalls     int          `json:"agentApiCalls"`
+	Succeeded         int          `json:"succeeded"`
+	Failed            int          `json:"failed"`
+	Canceled          int          `json:"canceled"`
+	Tokens            TokenUsage   `json:"tokens"`
+	Cost              CostEstimate `json:"cost"`
+}
+
+func (group *GroupUsage) add(record Observation) {
+	group.AgentAPICalls++
+	addStatus(&group.Succeeded, &group.Failed, &group.Canceled, record.Status)
+	group.Tokens.add(record.Usage)
+}
+
+func (projector *Projector) SetCollectionPolicy(ctx context.Context, policy CollectionPolicy) (CollectionPolicy, error) {
+	return projector.options.Ledger.SetUsagePolicy(ctx, policy, projector.options.Clock.Now().UTC())
 }
 
 type UserUsage struct {
@@ -82,7 +104,6 @@ type UserUsage struct {
 	Succeeded                int                 `json:"succeeded"`
 	Failed                   int                 `json:"failed"`
 	Canceled                 int                 `json:"canceled"`
-	ContentUnavailableCalls  int                 `json:"contentUnavailableCalls"`
 	ModelUnavailableCalls    int                 `json:"modelUnavailableCalls"`
 	Tokens                   TokenUsage          `json:"tokens"`
 	LatestContext            *ContextRef         `json:"latestContext,omitempty"`
@@ -161,14 +182,14 @@ type TokenUsage struct {
 // that day, while the evidence counters distinguish a known zero from missing
 // evidence.
 type DayUsage struct {
-	Date                    string     `json:"date"`
-	AgentAPICalls           int        `json:"agentApiCalls"`
-	Succeeded               int        `json:"succeeded"`
-	Failed                  int        `json:"failed"`
-	Canceled                int        `json:"canceled"`
-	ContentUnavailableCalls int        `json:"contentUnavailableCalls"`
-	ModelUnavailableCalls   int        `json:"modelUnavailableCalls"`
-	Tokens                  TokenUsage `json:"tokens"`
+	Date                  string       `json:"date"`
+	AgentAPICalls         int          `json:"agentApiCalls"`
+	Succeeded             int          `json:"succeeded"`
+	Failed                int          `json:"failed"`
+	Canceled              int          `json:"canceled"`
+	ModelUnavailableCalls int          `json:"modelUnavailableCalls"`
+	Tokens                TokenUsage   `json:"tokens"`
+	Cost                  CostEstimate `json:"cost"`
 }
 
 type userAccumulator struct {
@@ -227,7 +248,7 @@ func (projector *Projector) report(
 			sessions: map[string]*sessionAccumulator{},
 		}
 	}
-	runs, truncated, err := projector.listRuns(ctx)
+	runs, truncated, err := projector.listRuns(ctx, selectedUserID)
 	if err != nil {
 		return Report{}, err
 	}
@@ -244,44 +265,112 @@ func (projector *Projector) report(
 			countedRuns[run.ID] = struct{}{}
 		}
 	}
-	records, recordsTruncated, err := projector.listExchanges(
-		ctx, query, maxExchangeRecords,
-	)
+	// ponytail: a bounded indexed scan keeps one aggregation path; move the
+	// group reducers to SQL if a report regularly exceeds 100,000 calls.
+	records, recordsTruncated, err := projector.options.Ledger.ListUsage(ctx, query, selectedUserID, projector.options.Clock.Now().UTC(), maxExchangeRecords)
 	if err != nil {
 		return Report{}, err
 	}
 	truncated = truncated || recordsTruncated
+	policy, err := projector.options.Ledger.UsagePolicy(ctx)
+	if err != nil {
+		return Report{}, err
+	}
+	report := Report{Schema: ReportSchema, GeneratedAt: projector.options.Clock.Now().UTC(),
+		Period: query.period, Truncated: truncated, Days: []DayUsage{}, Collection: policy,
+		Users: make([]UserUsage, 0, len(users)), Total: GroupUsage{ID: "all", Label: "all"}}
+	var prices modelcatalog.PriceSnapshot
+	if len(records) > 0 {
+		prices = projector.options.Prices.Snapshot(ctx)
+	}
+	report.Pricing = pricingInfo(prices)
+	groups := [6]map[string]*groupAccumulator{}
+	groupBudgets := [6]int{}
+	for index := range groups {
+		groups[index] = map[string]*groupAccumulator{}
+		groupBudgets[index] = maxReportDetails
+	}
+	days := map[string]*DayUsage{}
 	for _, record := range records {
-		if !query.contains(record.OccurredAt) {
+		if !query.contains(record.OccurredAt) || (selectedUserID != "" && record.UserID != selectedUserID) {
 			continue
 		}
-		run, ok := runsByID[record.CaptureRunID]
-		if !ok || run.LoginSessionID == "" {
-			continue
+		report.Total.add(record)
+		cost := estimateCost(prices, record)
+		report.Total.Cost.add(cost)
+		attribution := record.Attribution
+		if attribution == nil {
+			// Older observations can use immutable launch metadata, never today's
+			// working tree or the identity of the viewer of this report.
+			run := runsByID[record.CaptureRunID]
+			if run.RuntimeUserID == record.UserID {
+				attribution = CaptureAttribution(run)
+			} else {
+				attribution = &Attribution{}
+			}
+			if record.UserID != "" {
+				attribution.CallerID, attribution.CallerKind = string(record.UserID), "member"
+				if user := accumulators[record.UserID]; user != nil {
+					attribution.CallerLabel = user.view.Username
+				}
+			}
 		}
-		accumulator := accumulators[run.RuntimeUserID]
+		model := groupLabel{"model", record.UpstreamModel, record.UpstreamModel, ""}
+		caller := groupLabel{"caller", attribution.CallerID, attribution.CallerLabel, attribution.CallerKind}
+		project, branch := groupLabel{dimension: "project"}, groupLabel{dimension: "branch"}
+		if git := attribution.GitAtLaunch; git != nil {
+			project = groupLabel{"project", attribution.ProjectID, git.RepositoryName, "launch_snapshot"}
+			branch = groupLabel{"branch", "branch:" + git.Branch, git.Branch, "launch_snapshot"}
+			if git.Detached {
+				branch = groupLabel{"branch", "detached", "", "detached"}
+			}
+		}
+		for index, path := range [][]groupLabel{
+			{{"source", record.Source, record.Source, ""}, model},
+			{{"profile", record.EnvironmentID, record.EnvironmentName, ""}, model},
+			{{"account", record.AccountID, record.AccountName, ""}, model},
+			{model, caller}, {caller, model}, {project, branch, caller, model},
+		} {
+			addGroup(groups[index], path, record, cost, &groupBudgets[index], &report.Truncated)
+		}
+		date := query.day(record.OccurredAt)
+		day := days[date]
+		if day == nil {
+			day = &DayUsage{Date: date}
+			days[date] = day
+		}
+		day.AgentAPICalls++
+		addStatus(&day.Succeeded, &day.Failed, &day.Canceled, record.Status)
+		day.Tokens.add(record.Usage)
+		day.Cost.add(cost)
+		if record.RequestedModel == "" || record.UpstreamModel == "" {
+			day.ModelUnavailableCalls++
+		}
+		accumulator := accumulators[record.UserID]
 		if accumulator == nil {
 			continue
 		}
-		if _, counted := countedRuns[run.ID]; !counted {
+		run, runKnown := runsByID[record.CaptureRunID]
+		if _, counted := countedRuns[run.ID]; runKnown && !counted && run.RuntimeUserID == record.UserID {
 			accumulator.addRun(run)
 			countedRuns[run.ID] = struct{}{}
 		}
-		if err := projector.addExchange(
-			ctx, accumulator, run, record, query.day(record.OccurredAt),
-		); err != nil {
-			return Report{}, err
-		}
+		accumulator.addExchange(run, record, date)
+		accumulator.days[date].Cost.add(cost)
 	}
-	report := Report{Schema: ReportSchema, GeneratedAt: projector.options.Clock.Now().UTC(),
-		Period: query.period, Truncated: truncated, Days: []DayUsage{},
-		Users: make([]UserUsage, 0, len(users))}
 	for _, user := range users {
 		accumulator := accumulators[user.ID]
 		accumulator.finish()
 		report.Users = append(report.Users, accumulator.view)
 	}
-	report.Days = aggregateDays(report.Users)
+	for _, day := range days {
+		report.Days = append(report.Days, *day)
+	}
+	sort.Slice(report.Days, func(i, j int) bool { return report.Days[i].Date < report.Days[j].Date })
+	destinations := []*[]GroupUsage{&report.Sources, &report.Profiles, &report.Accounts, &report.Models, &report.Callers, &report.Projects}
+	for index, destination := range destinations {
+		*destination = finishGroups(groups[index])
+	}
 	sort.Slice(report.Users, func(left, right int) bool {
 		return userUsageLess(report.Users[left], report.Users[right])
 	})
@@ -342,12 +431,12 @@ func boundedDetails[T any](items []T, perUserLimit int, budget *int) ([]T, bool)
 	return items[:limit], trimmed
 }
 
-func (projector *Projector) listRuns(ctx context.Context) ([]capturerun.View, bool, error) {
+func (projector *Projector) listRuns(ctx context.Context, userID runtimeuser.UserID) ([]capturerun.View, bool, error) {
 	result := make([]capturerun.View, 0, capturerun.MaxPageLimit)
 	var cursor *capturerun.PageCursor
 	for len(result) < maxCaptureRuns {
 		page, err := projector.options.Runs.ListRuns(ctx, capturerun.PageRequest{
-			Limit: capturerun.MaxPageLimit, Cursor: cursor,
+			Limit: capturerun.MaxPageLimit, Cursor: cursor, RuntimeUserID: userID,
 		})
 		if err != nil {
 			return nil, false, err
@@ -366,116 +455,54 @@ func (projector *Projector) listRuns(ctx context.Context) ([]capturerun.View, bo
 		}
 		last := page.Items[len(page.Items)-1]
 		cursor = &capturerun.PageCursor{
-			Running: active(last.State), UpdatedAt: last.UpdatedAt,
-			AfterID: last.ID, IncludeAtUpdatedAt: true,
+			Running: active(last.State), ActivityAt: last.ActivityTime(),
+			AfterID: last.ID, IncludeAtActivityAt: true,
 		}
 	}
 	return result, true, nil
 }
 
-func (projector *Projector) listExchanges(
-	ctx context.Context,
-	query Query,
-	limit int,
-) ([]activity.Record, bool, error) {
-	result := make([]activity.Record, 0)
-	var before int64
-	for len(result) < limit {
-		pageLimit := activity.MaxPageSize
-		if remaining := limit - len(result); remaining < pageLimit {
-			pageLimit = remaining
-		}
-		page, err := projector.options.Activities.ListExchanges(ctx, activity.PageRequest{
-			BeforeSequence:    before,
-			Limit:             pageLimit,
-			OccurredAtOrAfter: query.from,
-			OccurredBefore:    query.until,
-		})
-		if err != nil {
-			return nil, false, err
-		}
-		result = append(result, page.Items...)
-		if page.NextBeforeSequence == 0 {
-			return result, false, nil
-		}
-		before = page.NextBeforeSequence
-	}
-	return result, true, nil
-}
-
-func (projector *Projector) addExchange(
-	ctx context.Context,
-	user *userAccumulator,
+func (user *userAccumulator) addExchange(
 	run capturerun.View,
-	record activity.Record,
+	record Observation,
 	date string,
-) error {
+) {
 	context := user.contexts[contextKey(run)]
 	day := user.day(date)
 	user.view.AgentAPICalls++
-	context.AgentAPICalls++
 	day.AgentAPICalls++
 	addStatus(&user.view.Succeeded, &user.view.Failed, &user.view.Canceled, record.Status)
-	addStatus(&context.Succeeded, &context.Failed, &context.Canceled, record.Status)
 	addStatus(&day.Succeeded, &day.Failed, &day.Canceled, record.Status)
 	setLatest(&user.view.LastActivityAt, record.OccurredAt)
-	setLatest(&context.LastActivityAt, record.OccurredAt)
-
-	content, contentErr := projector.options.Contents.Get(ctx, record.SubjectID)
-	contentKnown := contentErr == nil
-	if contentErr != nil && !errors.Is(contentErr, exchangecontent.ErrNotFound) {
-		return contentErr
+	if context != nil {
+		context.AgentAPICalls++
+		addStatus(&context.Succeeded, &context.Failed, &context.Canceled, record.Status)
+		setLatest(&context.LastActivityAt, record.OccurredAt)
+		context.Tokens.add(record.Usage)
 	}
-	usage := exchangecontent.Usage{}
-	if !contentKnown {
-		user.view.ContentUnavailableCalls++
+	if record.RequestedModel == "" || record.UpstreamModel == "" {
 		user.view.ModelUnavailableCalls++
-		day.ContentUnavailableCalls++
 		day.ModelUnavailableCalls++
 	} else {
-		if content.Response != nil {
-			usage = content.Response.Usage
-		}
-		if content.Request.RequestedModel == "" || content.Request.EffectiveModel == "" {
-			user.view.ModelUnavailableCalls++
-			day.ModelUnavailableCalls++
-		} else {
-			model := user.model(content.Request.RequestedModel, content.Request.EffectiveModel)
-			model.AgentAPICalls++
-			addStatus(&model.Succeeded, &model.Failed, &model.Canceled, record.Status)
-			model.Tokens.add(usage)
-		}
+		model := user.model(record.RequestedModel, record.UpstreamModel)
+		model.AgentAPICalls++
+		addStatus(&model.Succeeded, &model.Failed, &model.Canceled, record.Status)
+		model.Tokens.add(record.Usage)
 	}
-	user.view.Tokens.add(usage)
-	context.Tokens.add(usage)
-	day.Tokens.add(usage)
-
-	identity, identityErr := projector.options.Identities.GetConversationIdentity(ctx, record.SubjectID)
-	if errors.Is(identityErr, activity.ErrExchangeNotFound) && contentKnown {
-		responseID := ""
-		if content.Response != nil {
-			responseID = content.Response.ID
-		}
-		if derived, ok := agentconversation.ClientIdentityFromProtocolEvidence(
-			content.Request.ProtocolEvidence, responseID, content.RecordedAt,
-		); ok {
-			identity, identityErr = derived, nil
-		}
-	}
-	if identityErr != nil && !errors.Is(identityErr, activity.ErrExchangeNotFound) {
-		return identityErr
-	}
-	if identityErr == nil && identity.Client != "" && identity.SessionID != "" {
-		session := user.session(identity.Client, identity.SessionID)
+	user.view.Tokens.add(record.Usage)
+	day.Tokens.add(record.Usage)
+	if record.Client != "" && record.SessionID != "" {
+		session := user.session(record.Client, record.SessionID)
 		session.view.AgentAPICalls++
 		addStatus(&session.view.Succeeded, &session.view.Failed, &session.view.Canceled, record.Status)
-		session.view.Tokens.add(usage)
+		session.view.Tokens.add(record.Usage)
 		if record.OccurredAt.After(session.view.LastActivityAt) {
 			session.view.LastActivityAt = record.OccurredAt
 		}
-		session.runs[run.ID] = struct{}{}
+		if record.CaptureRunID != "" {
+			session.runs[record.CaptureRunID] = struct{}{}
+		}
 	}
-	return nil
 }
 
 func (user *userAccumulator) addRun(run capturerun.View) {
@@ -580,37 +607,7 @@ func (user *userAccumulator) finish() {
 	})
 }
 
-func aggregateDays(users []UserUsage) []DayUsage {
-	byDate := make(map[string]*DayUsage)
-	for _, user := range users {
-		for _, source := range user.Days {
-			target := byDate[source.Date]
-			if target == nil {
-				target = &DayUsage{Date: source.Date}
-				byDate[source.Date] = target
-			}
-			target.add(source)
-		}
-	}
-	result := make([]DayUsage, 0, len(byDate))
-	for _, value := range byDate {
-		result = append(result, *value)
-	}
-	sort.Slice(result, func(i, j int) bool { return result[i].Date < result[j].Date })
-	return result
-}
-
-func (usage *DayUsage) add(value DayUsage) {
-	usage.AgentAPICalls += value.AgentAPICalls
-	usage.Succeeded += value.Succeeded
-	usage.Failed += value.Failed
-	usage.Canceled += value.Canceled
-	usage.ContentUnavailableCalls += value.ContentUnavailableCalls
-	usage.ModelUnavailableCalls += value.ModelUnavailableCalls
-	usage.Tokens.addAggregate(value.Tokens)
-}
-
-func (usage *TokenUsage) add(value exchangecontent.Usage) {
+func (usage *TokenUsage) add(value protocolcore.Usage) {
 	usage.InputUncached.add(value.InputUncached)
 	usage.CacheWrite.add(value.CacheWrite)
 	usage.CacheRead.add(value.CacheRead)
@@ -626,7 +623,7 @@ func (usage *TokenUsage) addAggregate(value TokenUsage) {
 	usage.Reasoning.addAggregate(value.Reasoning)
 }
 
-func (aggregate *TokenAggregate) add(value exchangecontent.UsageValue) {
+func (aggregate *TokenAggregate) add(value protocolcore.UsageValue) {
 	if value.Known {
 		if value.Tokens < 0 || value.Tokens > math.MaxInt64-aggregate.Tokens {
 			aggregate.UnknownCalls++

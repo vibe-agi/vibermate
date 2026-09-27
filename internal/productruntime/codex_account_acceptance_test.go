@@ -79,14 +79,15 @@ func TestInstalledCodexReadsManagedAccount(t *testing.T) {
 				ID     int             `json:"id"`
 				Result json.RawMessage `json:"result"`
 				Error  *struct {
-					Code int `json:"code"`
+					Code    int    `json:"code"`
+					Message string `json:"message"`
 				} `json:"error"`
 			}
 			if json.Unmarshal(scanner.Bytes(), &reply) != nil || reply.ID != nextID {
 				continue
 			}
 			if reply.Error != nil {
-				t.Fatalf("native %s rejected request: RPC %d", method, reply.Error.Code)
+				t.Fatalf("native %s rejected request: RPC %d: %s", method, reply.Error.Code, reply.Error.Message)
 			}
 			return reply.Result
 		}
