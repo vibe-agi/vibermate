@@ -56,6 +56,10 @@ final class ProviderAccountRow extends StatelessWidget {
     required this.onDelete,
     this.onRefresh,
     this.onEditNote,
+    this.quota,
+    this.service,
+    this.onToggleDetails,
+    this.detailsExpanded = false,
     this.refreshing = false,
   });
 
@@ -67,6 +71,10 @@ final class ProviderAccountRow extends StatelessWidget {
   final VoidCallback onDelete;
   final VoidCallback? onRefresh;
   final VoidCallback? onEditNote;
+  final Widget? quota;
+  final Widget? service;
+  final VoidCallback? onToggleDetails;
+  final bool detailsExpanded;
   final bool refreshing;
 
   @override
@@ -134,6 +142,22 @@ final class ProviderAccountRow extends StatelessWidget {
             color: context.viberColors.danger,
           ),
         ),
+        if (onToggleDetails != null)
+          IconButton(
+            key: Key('provider-account-details-toggle-${account.id}'),
+            onPressed: onToggleDetails,
+            tooltip: copy(
+              detailsExpanded
+                  ? 'provider_accounts.details.hide'
+                  : 'provider_accounts.details.show',
+            ),
+            constraints: const BoxConstraints.tightFor(width: 32, height: 32),
+            padding: const EdgeInsets.all(4),
+            icon: Icon(
+              detailsExpanded ? Icons.expand_less : Icons.expand_more,
+              size: 18,
+            ),
+          ),
       ],
     );
     final identityBlock = Row(
@@ -219,6 +243,49 @@ final class ProviderAccountRow extends StatelessWidget {
       padding: const EdgeInsets.fromLTRB(14, 11, 6, 6),
       child: LayoutBuilder(
         builder: (context, constraints) {
+          if (!compact && quota != null) {
+            return Row(
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                Expanded(flex: 30, child: identityBlock),
+                const SizedBox(width: 16),
+                SizedBox(
+                  width: 128,
+                  child: Semantics(
+                    label: credentialLabel,
+                    container: true,
+                    child: Row(
+                      children: [
+                        Icon(Icons.circle, size: 6, color: credentialColor),
+                        const SizedBox(width: 6),
+                        Expanded(
+                          child: Tooltip(
+                            message: credentialLabel,
+                            child: Text(
+                              credentialLabel,
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                              style: Theme.of(context).textTheme.bodySmall
+                                  ?.copyWith(
+                                    color: credentialColor,
+                                    fontWeight: FontWeight.w500,
+                                  ),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 16),
+                Expanded(flex: 42, child: quota!),
+                const SizedBox(width: 16),
+                SizedBox(width: 150, child: service),
+                const SizedBox(width: 8),
+                actions,
+              ],
+            );
+          }
           if (compact || constraints.maxWidth < 680) {
             return Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,

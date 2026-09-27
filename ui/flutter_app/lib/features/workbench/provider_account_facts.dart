@@ -15,11 +15,13 @@ final class ProviderAccountFactsPanel extends StatefulWidget {
     required this.account,
     required this.controller,
     required this.copy,
+    this.showQuotaWindows = true,
     super.key,
   });
   final ProviderAccount account;
   final WorkbenchController controller;
   final AppCopy copy;
+  final bool showQuotaWindows;
   @override
   State<ProviderAccountFactsPanel> createState() =>
       _ProviderAccountFactsPanelState();
@@ -418,6 +420,7 @@ final class _ProviderAccountFactsPanelState
       (left, right) =>
           left.window.windowSeconds.compareTo(right.window.windowSeconds),
     );
+    if (!widget.showQuotaWindows) return _quotaMetadata(context, facts);
     return LayoutBuilder(
       builder: (context, constraints) {
         final windowsPanel = _quotaWindows(context, facts, windows);

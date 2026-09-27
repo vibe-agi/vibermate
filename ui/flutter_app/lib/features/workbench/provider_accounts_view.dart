@@ -41,6 +41,7 @@ final class ProviderAccountsView extends StatefulWidget {
 
 final class _ProviderAccountsViewState extends State<ProviderAccountsView> {
   final _search = TextEditingController();
+  final _expandedAccounts = <String>{};
   var _sort = _ProviderAccountSort.defaultOrder;
   String _quotaSignature = '';
 
@@ -211,132 +212,247 @@ final class _ProviderAccountsViewState extends State<ProviderAccountsView> {
                       : null,
                 )
               : LayoutBuilder(
-                  builder: (context, constraints) => ListView.builder(
-                    key: const Key('provider-accounts-list'),
-                    padding: const EdgeInsets.only(bottom: 24),
-                    itemCount: filtered.length,
-                    itemBuilder: (context, index) {
-                      final account = filtered[index];
-                      final linkedEndpoints = endpoints
-                          .where((value) => account.isLinkedTo(value.id))
-                          .toList(growable: false);
-                      return Container(
-                        key: Key('provider-account-${account.id}'),
-                        margin: const EdgeInsets.fromLTRB(16, 0, 16, 10),
-                        decoration: BoxDecoration(
-                          color: context.viberColors.panel,
-                          border: Border.all(
-                            color: context.viberColors.dividerSoft,
-                          ),
-                          borderRadius: BorderRadius.circular(8),
+                  builder: (context, constraints) {
+                    final table = constraints.maxWidth >= 1100;
+                    final count = filtered.length + (table ? 1 : 0);
+                    final list = ListView.separated(
+                      key: const Key('provider-accounts-list'),
+                      padding: table
+                          ? EdgeInsets.zero
+                          : const EdgeInsets.only(bottom: 24),
+                      itemCount: count,
+                      separatorBuilder: (_, _) => table
+                          ? Divider(
+                              height: 1,
+                              color: context.viberColors.dividerSoft,
+                            )
+                          : const SizedBox.shrink(),
+                      itemBuilder: (context, index) {
+                        if (table && index == 0) {
+                          return _accountTableHeader(context);
+                        }
+                        final account = filtered[index - (table ? 1 : 0)];
+                        final linkedEndpoints = endpoints
+                            .where((value) => account.isLinkedTo(value.id))
+                            .toList(growable: false);
+                        return _accountEntry(
+                          context,
+                          account: account,
+                          linkedEndpoints: linkedEndpoints,
+                          table: table,
+                        );
+                      },
+                    );
+                    if (!table) return list;
+                    return Container(
+                      margin: const EdgeInsets.fromLTRB(16, 0, 16, 24),
+                      clipBehavior: Clip.antiAlias,
+                      decoration: BoxDecoration(
+                        color: context.viberColors.panel,
+                        border: Border.all(
+                          color: context.viberColors.dividerSoft,
                         ),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            ProviderAccountRow(
-                              account: account,
-                              compact: constraints.maxWidth < 850,
-                              copy: copy,
-                              busy: controller.inventoryMutating,
-                              onEditNote: () => unawaited(
-                                showProviderAccountNoteEditor(
-                                  context,
-                                  controller: controller,
-                                  account: account,
-                                  copy: copy,
-                                ),
-                              ),
-                              refreshing:
-                                  controller.refreshingProviderAccountId ==
-                                  account.id,
-                              onRefresh: account.kind == 'codex_oauth'
-                                  ? () => unawaited(
-                                      controller
-                                          .refreshProviderAccountCredential(
-                                            account,
-                                          ),
-                                    )
-                                  : null,
-                              onReplace: () => unawaited(
-                                showProviderAccountEditor(
-                                  context,
-                                  controller: controller,
-                                  copy: copy,
-                                  account: account,
-                                ),
-                              ),
-                              onDelete: () => unawaited(
-                                showProviderAccountDeletion(
-                                  context,
-                                  controller: controller,
-                                  copy: copy,
-                                  account: account,
-                                ),
-                              ),
-                            ),
-                            ProviderAccountFactsPanel(
-                              account: account,
-                              controller: controller,
-                              copy: copy,
-                            ),
-                            ProviderAccountTokenDetails(
-                              account: account,
-                              copy: copy,
-                            ),
-                            Padding(
-                              padding: const EdgeInsets.fromLTRB(14, 0, 14, 6),
-                              child: Wrap(
-                                spacing: 6,
-                                runSpacing: 2,
-                                children: [
-                                  if (linkedEndpoints.isEmpty)
-                                    TextButton.icon(
-                                      onPressed: () => controller.selectSection(
-                                        WorkbenchSection.routes,
-                                      ),
-                                      icon: const Icon(
-                                        Icons.add_link,
-                                        size: 14,
-                                      ),
-                                      label: Text(
-                                        copy('provider_accounts.unlinked'),
-                                      ),
-                                    ),
-                                  for (final endpoint in linkedEndpoints)
-                                    TextButton.icon(
-                                      key: Key(
-                                        'provider-account-service-${account.id}-${endpoint.id}',
-                                      ),
-                                      onPressed: () {
-                                        controller.selectEndpoint(endpoint.id);
-                                        controller.selectSection(
-                                          WorkbenchSection.routes,
-                                        );
-                                      },
-                                      icon: const Icon(
-                                        Icons.hub_outlined,
-                                        size: 14,
-                                      ),
-                                      label: Text(endpoint.displayName),
-                                      style: TextButton.styleFrom(
-                                        foregroundColor:
-                                            context.viberColors.textMuted,
-                                        textStyle: Theme.of(
-                                          context,
-                                        ).textTheme.bodySmall,
-                                      ),
-                                    ),
-                                ],
-                              ),
-                            ),
-                          ],
-                        ),
-                      );
-                    },
-                  ),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: list,
+                    );
+                  },
                 ),
         ),
       ],
+    );
+  }
+
+  Widget _accountTableHeader(BuildContext context) {
+    final copy = widget.copy;
+    final style = Theme.of(context).textTheme.labelSmall?.copyWith(
+      color: context.viberColors.textMuted,
+      fontWeight: FontWeight.w600,
+    );
+    Widget label(String key, {TextAlign align = TextAlign.left}) =>
+        Text(copy(key), textAlign: align, style: style);
+    return Container(
+      color: context.viberColors.panelRaised,
+      padding: const EdgeInsets.fromLTRB(14, 9, 6, 9),
+      child: Row(
+        children: [
+          Expanded(flex: 30, child: label('provider_accounts.table.account')),
+          const SizedBox(width: 16),
+          SizedBox(width: 128, child: label('provider_accounts.table.status')),
+          const SizedBox(width: 16),
+          Expanded(flex: 42, child: label('provider_accounts.table.quota')),
+          const SizedBox(width: 16),
+          SizedBox(width: 150, child: label('provider_accounts.table.service')),
+          const SizedBox(width: 8),
+          SizedBox(
+            width: 128,
+            child: label(
+              'provider_accounts.table.actions',
+              align: TextAlign.right,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _accountEntry(
+    BuildContext context, {
+    required ProviderAccount account,
+    required List<UpstreamEndpoint> linkedEndpoints,
+    required bool table,
+  }) {
+    final controller = widget.controller;
+    final copy = widget.copy;
+    final expanded = _expandedAccounts.contains(account.id);
+    final hasDetails = _supportsQuota(account) || account.tokenInfo != null;
+    final quota = _ProviderAccountQuotaSummary(
+      account: account,
+      controller: controller,
+      copy: copy,
+    );
+    final service = _accountService(
+      context,
+      account: account,
+      linkedEndpoints: linkedEndpoints,
+    );
+    final content = Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        ProviderAccountRow(
+          account: account,
+          compact: !table,
+          copy: copy,
+          busy: controller.inventoryMutating,
+          quota: table ? quota : null,
+          service: table ? service : null,
+          detailsExpanded: expanded,
+          onToggleDetails: hasDetails
+              ? () => setState(() {
+                  if (!_expandedAccounts.remove(account.id)) {
+                    _expandedAccounts.add(account.id);
+                  }
+                })
+              : null,
+          onEditNote: () => unawaited(
+            showProviderAccountNoteEditor(
+              context,
+              controller: controller,
+              account: account,
+              copy: copy,
+            ),
+          ),
+          refreshing: controller.refreshingProviderAccountId == account.id,
+          onRefresh: account.kind == 'codex_oauth'
+              ? () => unawaited(
+                  controller.refreshProviderAccountCredential(account),
+                )
+              : null,
+          onReplace: () => unawaited(
+            showProviderAccountEditor(
+              context,
+              controller: controller,
+              copy: copy,
+              account: account,
+            ),
+          ),
+          onDelete: () => unawaited(
+            showProviderAccountDeletion(
+              context,
+              controller: controller,
+              copy: copy,
+              account: account,
+            ),
+          ),
+        ),
+        if (!table)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(14, 2, 14, 7),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                quota,
+                Align(alignment: Alignment.centerLeft, child: service),
+              ],
+            ),
+          ),
+        if (expanded)
+          Container(
+            key: Key('provider-account-details-${account.id}'),
+            decoration: BoxDecoration(
+              color: context.viberColors.panelRaised.withValues(alpha: .45),
+              border: Border(
+                top: BorderSide(color: context.viberColors.dividerSoft),
+              ),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                if (_supportsQuota(account))
+                  ProviderAccountFactsPanel(
+                    account: account,
+                    controller: controller,
+                    copy: copy,
+                    showQuotaWindows: false,
+                  ),
+                ProviderAccountTokenDetails(account: account, copy: copy),
+              ],
+            ),
+          ),
+      ],
+    );
+    if (table) {
+      return KeyedSubtree(
+        key: Key('provider-account-${account.id}'),
+        child: content,
+      );
+    }
+    return Container(
+      key: Key('provider-account-${account.id}'),
+      margin: const EdgeInsets.fromLTRB(16, 0, 16, 10),
+      decoration: BoxDecoration(
+        color: context.viberColors.panel,
+        border: Border.all(color: context.viberColors.dividerSoft),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: content,
+    );
+  }
+
+  Widget _accountService(
+    BuildContext context, {
+    required ProviderAccount account,
+    required List<UpstreamEndpoint> linkedEndpoints,
+  }) {
+    final linked = linkedEndpoints.isNotEmpty;
+    final label = linked
+        ? linkedEndpoints.map((endpoint) => endpoint.displayName).join(' · ')
+        : widget.copy('provider_accounts.table.unlinked');
+    return Tooltip(
+      message: linked ? label : widget.copy('provider_accounts.unlinked'),
+      child: TextButton.icon(
+        key: linkedEndpoints.length == 1
+            ? Key(
+                'provider-account-service-${account.id}-${linkedEndpoints.single.id}',
+              )
+            : Key('provider-account-service-${account.id}'),
+        onPressed: () {
+          if (linkedEndpoints.length == 1) {
+            widget.controller.selectEndpoint(linkedEndpoints.single.id);
+          }
+          widget.controller.selectSection(WorkbenchSection.routes);
+        },
+        style: TextButton.styleFrom(
+          alignment: Alignment.centerLeft,
+          padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+          minimumSize: const Size(0, 30),
+          foregroundColor: context.viberColors.textMuted,
+          textStyle: Theme.of(context).textTheme.bodySmall,
+        ),
+        icon: Icon(linked ? Icons.hub_outlined : Icons.add_link, size: 14),
+        label: Text(label, maxLines: 2, overflow: TextOverflow.ellipsis),
+      ),
     );
   }
 
@@ -433,6 +549,254 @@ final class _ProviderAccountsViewState extends State<ProviderAccountsView> {
   }
 
   String _accountIdentity(ProviderAccount account) => account.displayName;
+}
+
+final class _ProviderAccountQuotaSummary extends StatelessWidget {
+  const _ProviderAccountQuotaSummary({
+    required this.account,
+    required this.controller,
+    required this.copy,
+  });
+
+  final ProviderAccount account;
+  final WorkbenchController controller;
+  final AppCopy copy;
+
+  @override
+  Widget build(BuildContext context) {
+    final origin = Uri.tryParse(account.credentialOrigin);
+    if (origin == null || !isChatGPTCodexOrigin(origin)) {
+      return const SizedBox.shrink();
+    }
+    final facts = controller.providerAccountQuota(account);
+    final loading = controller.providerAccountQuotaLoading(account);
+    final failed = controller.providerAccountQuotaFailed(account);
+    if (facts == null) {
+      return SizedBox(
+        height: 44,
+        child: Row(
+          children: [
+            if (loading) ...[
+              const SizedBox.square(
+                dimension: 13,
+                child: CircularProgressIndicator(strokeWidth: 1.5),
+              ),
+              const SizedBox(width: 7),
+            ],
+            Flexible(
+              child: Text(
+                copy(
+                  failed
+                      ? 'account_facts.failed'
+                      : loading
+                      ? 'account_facts.loading'
+                      : 'account_facts.unavailable',
+                ),
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  color: failed
+                      ? context.viberColors.warning
+                      : context.viberColors.textMuted,
+                ),
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+    if (facts.state == 'unsupported' || facts.state == 'unavailable') {
+      return Text(
+        copy('account_facts.unavailable'),
+        style: Theme.of(
+          context,
+        ).textTheme.bodySmall?.copyWith(color: context.viberColors.textMuted),
+      );
+    }
+    final windows = <({AccountQuotaLimit limit, AccountQuotaWindow window})>[];
+    for (final limit in facts.limits) {
+      if (limit.primary case final window?) {
+        windows.add((limit: limit, window: window));
+      }
+      if (limit.secondary case final window?) {
+        windows.add((limit: limit, window: window));
+      }
+    }
+    windows.sort(
+      (left, right) =>
+          left.window.windowSeconds.compareTo(right.window.windowSeconds),
+    );
+    if (windows.isEmpty) {
+      return Text(
+        copy('account_facts.no_windows'),
+        maxLines: 2,
+        overflow: TextOverflow.ellipsis,
+        style: Theme.of(
+          context,
+        ).textTheme.bodySmall?.copyWith(color: context.viberColors.textMuted),
+      );
+    }
+    final stale = failed || facts.state == 'stale';
+    return Row(
+      key: Key('provider-account-quota-summary-${account.id}'),
+      children: [
+        if (stale) ...[
+          Tooltip(
+            message: copy(
+              failed ? 'account_facts.failed_stale' : 'account_facts.stale',
+            ),
+            child: Icon(
+              Icons.warning_amber_rounded,
+              size: 15,
+              color: context.viberColors.warning,
+            ),
+          ),
+          const SizedBox(width: 7),
+        ],
+        Expanded(
+          child: Align(
+            alignment: Alignment.centerLeft,
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 560),
+              child: LayoutBuilder(
+                builder: (context, constraints) {
+                  final columns =
+                      windows.length > 1 && constraints.maxWidth >= 300 ? 2 : 1;
+                  final width = columns == 2
+                      ? (constraints.maxWidth - 14) / 2
+                      : constraints.maxWidth.clamp(0, 280).toDouble();
+                  return Wrap(
+                    spacing: 14,
+                    runSpacing: 7,
+                    children: [
+                      for (final item in windows)
+                        SizedBox(
+                          width: width,
+                          child: _QuotaGauge(
+                            item: item,
+                            multipleLimits: facts.limits.length > 1,
+                            copy: copy,
+                          ),
+                        ),
+                    ],
+                  );
+                },
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+final class _QuotaGauge extends StatelessWidget {
+  const _QuotaGauge({
+    required this.item,
+    required this.multipleLimits,
+    required this.copy,
+  });
+
+  final ({AccountQuotaLimit limit, AccountQuotaWindow window}) item;
+  final bool multipleLimits;
+  final AppCopy copy;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.viberColors;
+    final window = item.window;
+    final color = window.usedPercent >= 100
+        ? colors.danger
+        : window.usedPercent >= 90
+        ? colors.warning
+        : colors.route;
+    final duration = _quotaDuration(copy, window.windowSeconds);
+    final windowLabel = window.windowSeconds == 0
+        ? copy('account_facts.window_unknown')
+        : copy.format('account_facts.window_title', {'duration': duration});
+    final name = item.limit.name ?? item.limit.model ?? item.limit.id;
+    final label = multipleLimits || item.limit.id != 'codex'
+        ? '$windowLabel · $name'
+        : windowLabel;
+    return Semantics(
+      label: '$label ${window.usedPercent}% ${copy('account_facts.used')}',
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(
+                    context,
+                  ).textTheme.labelSmall?.copyWith(color: colors.textMuted),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Text(
+                '${window.usedPercent}%',
+                style: monoStyle.copyWith(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w700,
+                  color: color,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 4),
+          ExcludeSemantics(
+            child: LinearProgressIndicator(
+              value: (window.usedPercent / 100).clamp(0, 1),
+              minHeight: 2,
+              borderRadius: BorderRadius.circular(1),
+              color: color,
+              backgroundColor: colors.dividerSoft,
+            ),
+          ),
+          const SizedBox(height: 3),
+          Tooltip(
+            message: copy.format('account_facts.resets', {
+              'time': window.resetAt.toLocal().toString().split('.').first,
+            }),
+            child: Text(
+              copy.format('account_facts.reset_short', {
+                'time': _quotaTime(window.resetAt),
+              }),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                color: colors.textFaint,
+                fontSize: 11,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+String _quotaDuration(AppCopy copy, int seconds) {
+  for (final unit in [(86400, 'days'), (3600, 'hours'), (60, 'minutes')]) {
+    if (seconds > 0 && seconds % unit.$1 == 0) {
+      return copy.format('account_facts.${unit.$2}', {
+        'count': seconds ~/ unit.$1,
+      });
+    }
+  }
+  return copy.format('account_facts.seconds', {'count': seconds});
+}
+
+String _quotaTime(DateTime time) {
+  final local = time.toLocal();
+  final year = local.year == DateTime.now().year ? '' : '${local.year}/';
+  String two(int value) => value.toString().padLeft(2, '0');
+  return '$year${two(local.month)}/${two(local.day)} '
+      '${two(local.hour)}:${two(local.minute)}';
 }
 
 int _compareNullableIntDescending(int? left, int? right) {

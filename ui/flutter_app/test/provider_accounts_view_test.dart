@@ -205,7 +205,32 @@ void main() {
           find.byKey(const Key('provider-account-account.independent')),
           findsOneWidget,
         );
-        expect(find.text('尚未关联 · 前往上游服务选择使用此账号'), findsOneWidget);
+        expect(find.text('未关联'), findsOneWidget);
+        expect(
+          find.byKey(const Key('provider-account-details-account.independent')),
+          findsNothing,
+        );
+        if (width >= 1000) {
+          expect(find.text('额度'), findsOneWidget);
+          expect(
+            tester
+                .getSize(
+                  find.byKey(const Key('provider-account-account.independent')),
+                )
+                .height,
+            lessThan(100),
+          );
+        }
+        final detailsToggle = find.byKey(
+          const Key('provider-account-details-toggle-account.independent'),
+        );
+        await tester.ensureVisible(detailsToggle);
+        await tester.tap(detailsToggle);
+        await tester.pumpAndSettle();
+        expect(
+          find.byKey(const Key('provider-account-details-account.independent')),
+          findsOneWidget,
+        );
         expect(tester.takeException(), isNull);
         await tester.pumpWidget(const SizedBox.shrink());
         await tester.pump();
