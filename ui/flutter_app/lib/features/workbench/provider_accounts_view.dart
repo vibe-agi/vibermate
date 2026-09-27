@@ -193,27 +193,29 @@ final class _ProviderAccountsViewState extends State<ProviderAccountsView> {
               );
               final sort = SizedBox(
                 width: constraints.maxWidth < 560 ? constraints.maxWidth : 220,
-                child: DropdownButtonFormField<_ProviderAccountSort>(
-                  key: const Key('provider-accounts-sort'),
-                  initialValue: _sort,
-                  isExpanded: true,
-                  decoration: InputDecoration(
-                    labelText: copy('provider_accounts.sort.label'),
-                    prefixIcon: const Icon(Icons.sort, size: 18),
-                  ),
-                  items: [
-                    for (final value in _ProviderAccountSort.values)
-                      DropdownMenuItem(
-                        value: value,
-                        child: Text(
-                          copy('provider_accounts.sort.${value.name}'),
-                          overflow: TextOverflow.ellipsis,
+                child: Tooltip(
+                  message: copy('provider_accounts.sort.label'),
+                  child: CompactSelectField<_ProviderAccountSort>(
+                    key: const Key('provider-accounts-sort'),
+                    initialValue: _sort,
+                    isExpanded: true,
+                    decoration: const InputDecoration(
+                      prefixIcon: Icon(Icons.sort, size: 18),
+                    ),
+                    items: [
+                      for (final value in _ProviderAccountSort.values)
+                        DropdownMenuItem(
+                          value: value,
+                          child: Text(
+                            copy('provider_accounts.sort.${value.name}'),
+                            overflow: TextOverflow.ellipsis,
+                          ),
                         ),
-                      ),
-                  ],
-                  onChanged: (value) {
-                    if (value != null) setState(() => _sort = value);
-                  },
+                    ],
+                    onChanged: (value) {
+                      if (value != null) setState(() => _sort = value);
+                    },
+                  ),
                 ),
               );
               if (constraints.maxWidth < 560) {
@@ -436,6 +438,7 @@ final class _ProviderAccountsViewState extends State<ProviderAccountsView> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
+                  ProviderAccountTokenDetails(account: account, copy: copy),
                   if (_supportsQuota(account) || account.kind == 'codex_oauth')
                     ProviderAccountFactsPanel(
                       account: account,
@@ -443,7 +446,6 @@ final class _ProviderAccountsViewState extends State<ProviderAccountsView> {
                       copy: copy,
                       showQuotaWindows: false,
                     ),
-                  ProviderAccountTokenDetails(account: account, copy: copy),
                 ],
               ),
             ),
@@ -719,9 +721,7 @@ final class _ProviderAccountQuotaSummary extends StatelessWidget {
           context,
           key: Key('provider-account-resets-${account.id}'),
           icon: Icons.confirmation_number_outlined,
-          value: resets.applicableAvailableCount == null
-              ? '${resets.availableCount}'
-              : '${resets.applicableAvailableCount}/${resets.availableCount}',
+          value: '${resets.availableCount}',
           hint: [
             copy.format('account_facts.banked_resets', {
               'count': resets.availableCount,

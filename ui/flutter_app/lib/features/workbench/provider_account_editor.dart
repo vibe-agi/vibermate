@@ -4,9 +4,11 @@ import 'dart:typed_data';
 import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_svg/flutter_svg.dart';
 
 import '../../core/api/control_models.dart';
 import '../../core/api/provider_origin.dart';
+import '../../core/design/agent_identity.dart';
 import '../../core/design/viber_theme.dart';
 import '../../core/design/workbench_widgets.dart';
 import '../../core/i18n/app_copy.dart';
@@ -99,12 +101,8 @@ final class ProviderAccountRow extends StatelessWidget {
         oauth?.chatgptAccountId ??
         account.tokenInfo?.chatgptAccountId;
     final plan = oauth?.planType ?? account.tokenInfo?.planType;
-    final details = [
-      if (accountIdentity != null && accountIdentity != account.displayName)
-        accountIdentity,
-      if (plan != null) _planName(plan),
-      kindLabel,
-    ].join('  ·  ');
+    final showIdentity =
+        accountIdentity != null && accountIdentity != account.displayName;
     final actions = Row(
       mainAxisSize: MainAxisSize.min,
       children: [
@@ -163,15 +161,32 @@ final class ProviderAccountRow extends StatelessWidget {
     final identityBlock = Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Container(
-          width: 30,
-          height: 30,
-          alignment: Alignment.center,
-          decoration: BoxDecoration(
-            color: credentialColor.withValues(alpha: .12),
-            borderRadius: BorderRadius.circular(6),
+        Tooltip(
+          key: Key('account-kind-${account.id}'),
+          message: kindLabel,
+          child: Container(
+            width: 30,
+            height: 30,
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              color: credentialColor.withValues(alpha: .12),
+              borderRadius: BorderRadius.circular(6),
+            ),
+            child: account.kind == 'codex_oauth'
+                ? SvgPicture.asset(
+                    AgentIdentity.codex.assetPath,
+                    width: 20,
+                    height: 20,
+                    excludeFromSemantics: true,
+                  )
+                : Icon(
+                    account.kind == 'anthropic_api_key'
+                        ? Icons.api_outlined
+                        : Icons.key_outlined,
+                    size: 16,
+                    color: credentialColor,
+                  ),
           ),
-          child: Icon(Icons.key_outlined, size: 16, color: credentialColor),
         ),
         const SizedBox(width: 10),
         Expanded(
@@ -210,15 +225,54 @@ final class ProviderAccountRow extends StatelessWidget {
                     ],
                   ],
                 ),
-                if (details.isNotEmpty) ...[
+                if (showIdentity || plan != null) ...[
                   const SizedBox(height: 2),
-                  Text(
-                    details,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                      color: context.viberColors.textMuted,
-                    ),
+                  Row(
+                    children: [
+                      if (plan != null) ...[
+                        Tooltip(
+                          message:
+                              '${copy('provider_accounts.token.plan')}: ${_planName(plan)}',
+                          child: Container(
+                            constraints: const BoxConstraints(maxWidth: 80),
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 5,
+                              vertical: 1,
+                            ),
+                            decoration: BoxDecoration(
+                              color: context.viberColors.panelRaised,
+                              borderRadius: ViberMetrics.controlRadius,
+                            ),
+                            child: Text(
+                              _planName(plan),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: Theme.of(context).textTheme.labelSmall
+                                  ?.copyWith(
+                                    color: context.viberColors.textMuted,
+                                    height: 1.2,
+                                  ),
+                            ),
+                          ),
+                        ),
+                        if (showIdentity) const SizedBox(width: 6),
+                      ],
+                      if (showIdentity)
+                        Expanded(
+                          child: Tooltip(
+                            message: accountIdentity,
+                            child: Text(
+                              accountIdentity,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: Theme.of(context).textTheme.bodySmall
+                                  ?.copyWith(
+                                    color: context.viberColors.textMuted,
+                                  ),
+                            ),
+                          ),
+                        ),
+                    ],
                   ),
                 ],
                 if (account.note.isNotEmpty) ...[

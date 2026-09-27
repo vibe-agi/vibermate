@@ -228,10 +228,9 @@ final class _ProviderAccountFactsPanelState
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            widget.showQuotaWindows
-                ? _quotaSection(context)
-                : _compactActions(context),
+            if (widget.showQuotaWindows) _quotaSection(context),
             if (_history.started) _historySection(context),
+            if (!widget.showQuotaWindows) _compactActions(context),
           ],
         ),
       ),
@@ -344,6 +343,8 @@ final class _ProviderAccountFactsPanelState
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          if (widget.account.tokenInfo != null || _history.started)
+            const Divider(height: 20),
           if (_resetNotice != null) ...[
             _notice(context, _resetNotice!),
             const SizedBox(height: 6),

@@ -88,6 +88,14 @@ void main() {
         await tester.pumpAndSettle();
         expect(find.byKey(const Key('provider-accounts-add')), findsOneWidget);
         expect(find.text('synthetic-account-secret'), findsNothing);
+        final searchRect = tester.getRect(
+          find.byKey(const Key('provider-accounts-search')),
+        );
+        final sortRect = tester.getRect(
+          find.byKey(const Key('provider-accounts-sort')),
+        );
+        expect(sortRect.height, searchRect.height);
+        if (width >= 1000) expect(sortRect.top, searchRect.top);
         await _review(
           tester,
           boundary,
