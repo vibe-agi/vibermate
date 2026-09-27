@@ -436,46 +436,13 @@ final class _ProviderAccountsViewState extends State<ProviderAccountsView> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  LayoutBuilder(
-                    builder: (context, constraints) {
-                      final quotaPanel = _supportsQuota(account)
-                          ? ProviderAccountFactsPanel(
-                              account: account,
-                              controller: controller,
-                              copy: copy,
-                              showQuotaWindows: false,
-                            )
-                          : null;
-                      final credentialPanel = account.kind == 'codex_oauth'
-                          ? _OAuthCredentialMaintenance(
-                              account: account,
-                              controller: controller,
-                              copy: copy,
-                            )
-                          : null;
-                      if (constraints.maxWidth >= 820 &&
-                          quotaPanel != null &&
-                          credentialPanel != null) {
-                        return Row(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Expanded(child: quotaPanel),
-                            const SizedBox(width: 12),
-                            SizedBox(width: 390, child: credentialPanel),
-                          ],
-                        );
-                      }
-                      return Column(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [
-                          ?quotaPanel,
-                          if (quotaPanel != null && credentialPanel != null)
-                            const SizedBox(height: 10),
-                          ?credentialPanel,
-                        ],
-                      );
-                    },
-                  ),
+                  if (_supportsQuota(account) || account.kind == 'codex_oauth')
+                    ProviderAccountFactsPanel(
+                      account: account,
+                      controller: controller,
+                      copy: copy,
+                      showQuotaWindows: false,
+                    ),
                   ProviderAccountTokenDetails(account: account, copy: copy),
                 ],
               ),
@@ -650,72 +617,6 @@ final class _ProviderAccountsViewState extends State<ProviderAccountsView> {
   String _accountIdentity(ProviderAccount account) => account.displayName;
 }
 
-final class _OAuthCredentialMaintenance extends StatelessWidget {
-  const _OAuthCredentialMaintenance({
-    required this.account,
-    required this.controller,
-    required this.copy,
-  });
-
-  final ProviderAccount account;
-  final WorkbenchController controller;
-  final AppCopy copy;
-
-  @override
-  Widget build(BuildContext context) {
-    final refreshing = controller.refreshingProviderAccountId == account.id;
-    return Container(
-      key: Key('provider-account-credential-${account.id}'),
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: context.viberColors.panel,
-        border: Border.all(color: context.viberColors.dividerSoft),
-        borderRadius: BorderRadius.circular(6),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Icon(
-                Icons.sync_lock_outlined,
-                size: 16,
-                color: context.viberColors.warning,
-              ),
-              const SizedBox(width: 7),
-              Text(
-                copy('provider_accounts.credential.title'),
-                style: Theme.of(context).textTheme.titleSmall,
-              ),
-            ],
-          ),
-          const SizedBox(height: 6),
-          Text(
-            copy('provider_accounts.credential.refresh_hint'),
-            style: Theme.of(context).textTheme.bodySmall?.copyWith(
-              color: context.viberColors.textMuted,
-            ),
-          ),
-          const SizedBox(height: 6),
-          TextButton.icon(
-            key: Key('account-credential-refresh-${account.id}'),
-            onPressed: controller.inventoryMutating || !account.usable
-                ? null
-                : () => controller.refreshProviderAccountCredential(account),
-            icon: refreshing
-                ? const SizedBox.square(
-                    dimension: 15,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  )
-                : const Icon(Icons.refresh, size: 16),
-            label: Text(copy('provider_accounts.refresh.action')),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
 final class _ProviderAccountQuotaSummary extends StatelessWidget {
   const _ProviderAccountQuotaSummary({
     required this.account,
@@ -791,17 +692,47 @@ final class _ProviderAccountQuotaSummary extends StatelessWidget {
       (left, right) =>
           left.window.windowSeconds.compareTo(right.window.windowSeconds),
     );
-    if (windows.isEmpty) {
-      return Text(
-        copy('account_facts.no_windows'),
-        maxLines: 2,
-        overflow: TextOverflow.ellipsis,
-        style: Theme.of(
-          context,
-        ).textTheme.bodySmall?.copyWith(color: context.viberColors.textMuted),
-      );
-    }
     final stale = failed || facts.state == 'stale';
+    final credits = facts.credits;
+    final resets = facts.rateLimitResets;
+    final compactFacts = <Widget>[
+      if (credits != null)
+        _compactFact(
+          context,
+          key: Key('provider-account-credits-${account.id}'),
+          icon: Icons.toll_outlined,
+          value: credits.unlimited
+              ? '∞'
+              : !credits.hasCredits
+              ? '0'
+              : credits.balance ?? '?',
+          hint: copy.format('account_facts.credits', {
+            'balance': credits.unlimited
+                ? copy('account_facts.unlimited')
+                : !credits.hasCredits
+                ? copy('account_facts.no_credits')
+                : credits.balance ?? copy('account_facts.unknown'),
+          }),
+        ),
+      if (resets != null)
+        _compactFact(
+          context,
+          key: Key('provider-account-resets-${account.id}'),
+          icon: Icons.confirmation_number_outlined,
+          value: resets.applicableAvailableCount == null
+              ? '${resets.availableCount}'
+              : '${resets.applicableAvailableCount}/${resets.availableCount}',
+          hint: [
+            copy.format('account_facts.banked_resets', {
+              'count': resets.availableCount,
+            }),
+            if (resets.applicableAvailableCount case final applicable?)
+              copy.format('account_facts.applicable_resets', {
+                'count': applicable,
+              }),
+          ].join(' · '),
+        ),
+    ];
     return Row(
       key: Key('provider-account-quota-summary-${account.id}'),
       children: [
@@ -828,19 +759,41 @@ final class _ProviderAccountQuotaSummary extends StatelessWidget {
                   final width = constraints.maxWidth >= 300
                       ? (constraints.maxWidth - 14) / 2
                       : constraints.maxWidth;
-                  return Wrap(
-                    spacing: 14,
-                    runSpacing: 7,
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      for (final item in windows)
-                        SizedBox(
-                          width: width,
-                          child: _QuotaGauge(
-                            item: item,
-                            multipleLimits: facts.limits.length > 1,
-                            copy: copy,
-                          ),
+                      if (windows.isEmpty)
+                        Text(
+                          copy('account_facts.no_windows'),
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: Theme.of(context).textTheme.bodySmall
+                              ?.copyWith(color: context.viberColors.textMuted),
+                        )
+                      else
+                        Wrap(
+                          spacing: 14,
+                          runSpacing: 7,
+                          children: [
+                            for (final item in windows)
+                              SizedBox(
+                                width: width,
+                                child: _QuotaGauge(
+                                  item: item,
+                                  multipleLimits: facts.limits.length > 1,
+                                  copy: copy,
+                                ),
+                              ),
+                          ],
                         ),
+                      if (compactFacts.isNotEmpty) ...[
+                        const SizedBox(height: 5),
+                        Wrap(
+                          spacing: 12,
+                          runSpacing: 3,
+                          children: compactFacts,
+                        ),
+                      ],
                     ],
                   );
                 },
@@ -851,6 +804,35 @@ final class _ProviderAccountQuotaSummary extends StatelessWidget {
       ],
     );
   }
+
+  Widget _compactFact(
+    BuildContext context, {
+    required Key key,
+    required IconData icon,
+    required String value,
+    required String hint,
+  }) => Tooltip(
+    key: key,
+    message: hint,
+    child: Semantics(
+      label: hint,
+      excludeSemantics: true,
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 13, color: context.viberColors.textFaint),
+          const SizedBox(width: 4),
+          Text(
+            value,
+            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+              color: context.viberColors.textMuted,
+              fontSize: 11,
+            ),
+          ),
+        ],
+      ),
+    ),
+  );
 }
 
 final class _QuotaGauge extends StatelessWidget {
@@ -882,7 +864,7 @@ final class _QuotaGauge extends StatelessWidget {
         ? '$windowLabel · $name'
         : windowLabel;
     return Semantics(
-      label: '$label ${window.usedPercent}% ${copy('account_facts.used')}',
+      label: '$label ${window.usedPercent}%',
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         mainAxisSize: MainAxisSize.min,

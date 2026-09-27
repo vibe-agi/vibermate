@@ -53,7 +53,7 @@ final class _ProviderAccountTokenDetailsState
     ];
     return Padding(
       key: Key('provider-account-token-${account.id}'),
-      padding: const EdgeInsets.fromLTRB(14, 0, 14, 2),
+      padding: const EdgeInsets.only(bottom: 2),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [

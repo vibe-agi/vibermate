@@ -228,7 +228,9 @@ final class _ProviderAccountFactsPanelState
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            _quotaSection(context),
+            widget.showQuotaWindows
+                ? _quotaSection(context)
+                : _compactActions(context),
             if (_history.started) _historySection(context),
           ],
         ),
@@ -282,6 +284,82 @@ final class _ProviderAccountFactsPanelState
             )
           : const Icon(Icons.history, size: 16),
       label: Text(label),
+    );
+  }
+
+  Widget _credentialAction() {
+    final refreshing =
+        widget.controller.refreshingProviderAccountId == widget.account.id;
+    return Tooltip(
+      message: copy('provider_accounts.credential.refresh_hint'),
+      child: TextButton.icon(
+        key: Key('account-credential-refresh-${widget.account.id}'),
+        onPressed: widget.controller.inventoryMutating || !widget.account.usable
+            ? null
+            : () => widget.controller.refreshProviderAccountCredential(
+                widget.account,
+              ),
+        icon: refreshing
+            ? const SizedBox.square(
+                dimension: 15,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              )
+            : const Icon(Icons.refresh, size: 16),
+        label: Text(copy('provider_accounts.refresh.action')),
+      ),
+    );
+  }
+
+  bool _canReset(AccountRateLimitResets? resets) =>
+      resets != null &&
+      resets.availableCount > 0 &&
+      resets.applicableAvailableCount != 0 &&
+      resets.details?.any((credit) => credit.available) == true &&
+      widget.account.kind == 'codex_oauth' &&
+      !widget.controller.previewMode;
+
+  Widget _resetAction(AccountRateLimitResets resets) => TextButton.icon(
+    key: Key('account-reset-${widget.account.id}'),
+    onPressed:
+        _redeeming ||
+            widget.controller.providerAccountQuotaFailed(widget.account) ||
+            widget.controller.providerAccountQuotaLoading(widget.account)
+        ? null
+        : () => _chooseReset(resets),
+    icon: _redeeming
+        ? const SizedBox.square(
+            dimension: 15,
+            child: CircularProgressIndicator(strokeWidth: 2),
+          )
+        : const Icon(Icons.restart_alt, size: 16),
+    label: Text(copy('account_facts.reset.choose')),
+  );
+
+  Widget _compactActions(BuildContext context) {
+    final resets = widget.controller
+        .providerAccountQuota(widget.account)
+        ?.rateLimitResets;
+    return Container(
+      key: const Key('account-facts-quota'),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (_resetNotice != null) ...[
+            _notice(context, _resetNotice!),
+            const SizedBox(height: 6),
+          ],
+          Wrap(
+            spacing: 4,
+            runSpacing: 2,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              _historyAction(),
+              if (widget.account.kind == 'codex_oauth') _credentialAction(),
+              if (_canReset(resets)) _resetAction(resets!),
+            ],
+          ),
+        ],
+      ),
     );
   }
 
@@ -422,7 +500,6 @@ final class _ProviderAccountFactsPanelState
       (left, right) =>
           left.window.windowSeconds.compareTo(right.window.windowSeconds),
     );
-    if (!widget.showQuotaWindows) return _quotaMetadata(context, facts);
     return LayoutBuilder(
       builder: (context, constraints) {
         final windowsPanel = _quotaWindows(context, facts, windows);
@@ -492,13 +569,7 @@ final class _ProviderAccountFactsPanelState
     final limitReached = facts.limits.any(
       (limit) => limit.limitReached == true || limit.allowed == false,
     );
-    final resetAvailable =
-        resets != null &&
-        resets.availableCount > 0 &&
-        resets.applicableAvailableCount != 0 &&
-        resets.details?.any((credit) => credit.available) == true &&
-        widget.account.kind == 'codex_oauth' &&
-        !widget.controller.previewMode;
+    final resetAvailable = _canReset(resets);
     final resetHint = resets != null && resets.availableCount > 0
         ? widget.account.kind != 'codex_oauth'
               ? 'account_facts.reset.oauth_only'
@@ -590,63 +661,12 @@ final class _ProviderAccountFactsPanelState
       children: [
         _quotaAction(),
         _historyAction(),
-        if (resetAvailable)
-          TextButton.icon(
-            key: Key('account-reset-${widget.account.id}'),
-            onPressed:
-                _redeeming ||
-                    widget.controller.providerAccountQuotaFailed(
-                      widget.account,
-                    ) ||
-                    widget.controller.providerAccountQuotaLoading(
-                      widget.account,
-                    )
-                ? null
-                : () => _chooseReset(resets),
-            icon: _redeeming
-                ? const SizedBox.square(
-                    dimension: 15,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  )
-                : const Icon(Icons.restart_alt, size: 16),
-            label: Text(copy('account_facts.reset.choose')),
-          ),
+        if (resetAvailable) _resetAction(resets!),
       ],
     );
-    if (widget.showQuotaWindows) {
-      return Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [summary, const SizedBox(height: 3), actions],
-      );
-    }
-    return Container(
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: context.viberColors.panel,
-        border: Border.all(color: context.viberColors.dividerSoft),
-        borderRadius: BorderRadius.circular(6),
-      ),
-      child: LayoutBuilder(
-        builder: (context, constraints) {
-          if (constraints.maxWidth < 560) {
-            return Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [summary, const SizedBox(height: 8), actions],
-            );
-          }
-          return Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Expanded(child: summary),
-              const SizedBox(width: 16),
-              ConstrainedBox(
-                constraints: const BoxConstraints(maxWidth: 380),
-                child: actions,
-              ),
-            ],
-          );
-        },
-      ),
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [summary, const SizedBox(height: 3), actions],
     );
   }
 
@@ -667,7 +687,7 @@ final class _ProviderAccountFactsPanelState
             'duration': _duration(window.windowSeconds),
           });
     return Semantics(
-      label: '$title ${window.usedPercent}% ${copy('account_facts.used')}',
+      label: '$title ${window.usedPercent}%',
       child: Container(
         padding: const EdgeInsets.fromLTRB(10, 7, 10, 7),
         decoration: BoxDecoration(

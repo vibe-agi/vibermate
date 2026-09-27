@@ -211,7 +211,13 @@ void main() {
           findsNothing,
         );
         if (width >= 1000) {
-          expect(find.text('额度'), findsOneWidget);
+          expect(find.text('已用额度'), findsOneWidget);
+          expect(
+            find.byKey(
+              const Key('provider-account-resets-account.independent'),
+            ),
+            findsOneWidget,
+          );
           expect(
             tester
                 .getSize(
@@ -230,6 +236,10 @@ void main() {
         expect(
           find.byKey(const Key('provider-account-details-account.independent')),
           findsOneWidget,
+        );
+        expect(
+          find.byKey(const Key('account-quota-account.independent')),
+          findsNothing,
         );
         await _review(
           tester,

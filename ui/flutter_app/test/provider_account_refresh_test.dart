@@ -92,13 +92,29 @@ void main() {
         await tester.ensureVisible(details);
         await tester.tap(details);
         await tester.pumpAndSettle();
-        expect(find.textContaining('通常无需操作'), findsOneWidget);
         expect(
           find.byKey(const Key('account-credential-refresh-account.bearer')),
           findsNothing,
         );
         final credentialRefresh = find.byKey(
           const Key('account-credential-refresh-account.oauth'),
+        );
+        expect(
+          tester
+              .widget<Tooltip>(
+                find
+                    .ancestor(
+                      of: credentialRefresh,
+                      matching: find.byType(Tooltip),
+                    )
+                    .first,
+              )
+              .message,
+          contains('通常无需操作'),
+        );
+        expect(
+          find.byKey(const Key('account-quota-account.oauth')),
+          findsNothing,
         );
         final accountList = find.descendant(
           of: find.byKey(const Key('provider-accounts-list')),
