@@ -263,6 +263,31 @@ func TestFetchModelsDevUsesTheFixedMetadataOriginAndRuntimePurpose(t *testing.T)
 	}
 }
 
+func TestFetchModelsDevPricesUsesCredentialFreeAuditedEgress(t *testing.T) {
+	gate := newStartedGate(t)
+	audit := &runtimeAuditRecorder{}
+	transport := &runtimeTransportStub{audit: audit, response: &http.Response{
+		StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{}`)),
+	}}
+	client := newRuntimeFetchClient(t, gate, transport, audit)
+	response, err := client.FetchModelsDevPrices(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	request := transport.lastRequest()
+	if request.Method != http.MethodGet || request.URL.String() != "https://models.dev/api.json" || request.Header.Get("Authorization") != "" || request.Header.Get("Cookie") != "" {
+		t.Fatal("price fetch must be fixed and credential-free")
+	}
+	if _, err := io.Copy(io.Discard, response.Body); err != nil {
+		t.Fatal(err)
+	}
+	started, terminal := audit.attempts()
+	if started.Purpose() != egressaudit.PurposeModelMetadataDirectory || terminal.Outcome() != egressaudit.OutcomeCompleted {
+		t.Fatal("missing auxiliary egress audit")
+	}
+}
+
 func TestFetchChatGPTModelsUsesNativeCatalogAndSelectedAccount(t *testing.T) {
 	t.Parallel()
 	for _, origin := range []string{

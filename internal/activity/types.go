@@ -16,6 +16,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/agentconversation"
 	"github.com/vibe-agi/vibermate/internal/captureidentity"
 	"github.com/vibe-agi/vibermate/internal/environment"
+	"github.com/vibe-agi/vibermate/internal/protocolcore"
 )
 
 const (
@@ -684,9 +685,10 @@ type Record struct {
 // closed vocabulary, and a path of field names and indices. No value from the
 // request, no credential, and no provider text appears here.
 type Diagnosis struct {
-	ProviderStatus int    `json:"providerStatus,omitempty"`
-	ProviderField  string `json:"providerField,omitempty"`
-	ClientField    string `json:"clientField,omitempty"`
+	ProviderErrorCode string `json:"providerErrorCode,omitempty"`
+	ProviderStatus    int    `json:"providerStatus,omitempty"`
+	ProviderField     string `json:"providerField,omitempty"`
+	ClientField       string `json:"clientField,omitempty"`
 	// ClientPath names where in the request's shape the failure happened. A
 	// closed vocabulary cannot name a field the translator does not model,
 	// which is exactly the case that was impossible to diagnose.
@@ -699,6 +701,9 @@ func (diagnosis Diagnosis) Empty() bool {
 }
 
 func (diagnosis Diagnosis) validate() error {
+	if protocolcore.KnownProviderErrorCode(diagnosis.ProviderErrorCode) != diagnosis.ProviderErrorCode {
+		return fmt.Errorf("%w: provider error code is invalid", ErrInvalidEvent)
+	}
 	if diagnosis.ProviderStatus < 0 || diagnosis.ProviderStatus > 599 {
 		return fmt.Errorf("%w: provider status is invalid", ErrInvalidEvent)
 	}

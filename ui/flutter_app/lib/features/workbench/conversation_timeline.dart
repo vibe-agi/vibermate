@@ -4077,6 +4077,7 @@ final class _FailureNotice extends StatelessWidget {
     ].whereType<String>().join(' · ');
     final technical = [
       result,
+      ?diagnosis?.providerErrorCode,
       if (diagnosis?.providerStatus case final status?) '$status',
       if (location.isNotEmpty) location,
       if (result == 'provider_transport_failed' && failure != result)
@@ -4098,6 +4099,11 @@ final class _FailureNotice extends StatelessWidget {
           ),
           const SizedBox(height: 2),
           Text(action),
+          if (diagnosis?.providerErrorCode case final code?)
+            SelectableText(
+              '${copy('exchange.failure.provider_code')}: $code',
+              style: monoStyle.copyWith(color: context.viberColors.danger),
+            ),
           ExpansionTile(
             key: Key('exchange-failure-details-$result'),
             dense: true,

@@ -1294,7 +1294,7 @@ void main() {
     await tester.pump();
   });
 
-  testWidgets('empty team insights leads directly to owner setup', (
+  testWidgets('local usage works without creating a Runtime User', (
     tester,
   ) async {
     await tester.binding.setSurfaceSize(const Size(900, 700));
@@ -1322,17 +1322,21 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    final createUser = find.byKey(const Key('usage-create-runtime-user'));
-    expect(createUser, findsOneWidget);
-    await tester.ensureVisible(createUser);
+    expect(find.byKey(const Key('usage-create-runtime-user')), findsNothing);
+    expect(controller.runtimeUsage!.users, isEmpty);
+    expect(controller.usageRangeDays, 7);
+    expect(find.byKey(const Key('usage-total-api-calls')), findsOneWidget);
+    expect(find.byKey(const Key('usage-team-heatmap')), findsNothing);
+    await tester.tap(find.byKey(const Key('usage-collection-settings')));
     await tester.pumpAndSettle();
-    await tester.tap(createUser);
+    expect(find.byKey(const Key('usage-retention')), findsOneWidget);
+    expect(find.textContaining('Never saves prompts'), findsOneWidget);
+    await tester.tap(find.byType(SwitchListTile));
     await tester.pumpAndSettle();
-    expect(controller.section, WorkbenchSection.settings);
-    expect(controller.settingsTab, 2);
-    expect(find.byKey(const Key('server-runtime-access')), findsNothing);
-    expect(find.byKey(const Key('runtime-users-panel')), findsOneWidget);
-    expect(find.text('Create owner'), findsOneWidget);
+    await tester.tap(find.text('Save changes'));
+    await tester.pumpAndSettle();
+    expect(controller.runtimeUsage!.collection.enabled, isFalse);
+    expect(controller.section, WorkbenchSection.usage);
     expect(tester.takeException(), isNull);
 
     controller.dispose();
@@ -1386,12 +1390,22 @@ void main() {
     expect(find.byKey(const Key('usage-dashboard')), findsOneWidget);
     expect(find.text('Server'), findsOneWidget);
     expect(find.byKey(const Key('usage-total-api-calls')), findsOneWidget);
-    expect(find.byKey(const Key('usage-active-runs')), findsOneWidget);
+    expect(find.byKey(const Key('usage-active-runs')), findsNothing);
     expect(find.byKey(const Key('usage-input-tokens')), findsOneWidget);
     expect(find.byKey(const Key('usage-output-tokens')), findsOneWidget);
     expect(find.byKey(const Key('usage-range-30')), findsNothing);
     expect(find.byKey(const Key('usage-range-90')), findsNothing);
     expect(find.byKey(const Key('usage-range-365')), findsNothing);
+    expect(controller.usageRangeDays, 7);
+    expect(find.byKey(const Key('usage-daily-trend')), findsOneWidget);
+    expect(find.byKey(const Key('usage-team-heatmap')), findsNothing);
+    await controller.setUsageRange(365);
+    await tester.pumpAndSettle();
+    final members = find.byKey(const Key('usage-member-details'));
+    await tester.ensureVisible(members);
+    await tester.pumpAndSettle();
+    await tester.tap(members);
+    await tester.pumpAndSettle();
     expect(find.byKey(const Key('usage-team-heatmap')), findsOneWidget);
     expect(
       find.byKey(const Key('usage-team-day-month-2026-08')),
@@ -1423,6 +1437,8 @@ void main() {
         .join(' ');
     expect(cellSemantics('2026-08-24'), contains('no retained API call'));
     expect(cellSemantics('2026-08-25'), contains('complete evidence'));
+    await tester.ensureVisible(find.byKey(const Key('usage-metric-tokens')));
+    await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('usage-metric-tokens')));
     await tester.pump();
     expect(cellSemantics('2026-08-25'), contains('incomplete evidence'));
@@ -1519,6 +1535,12 @@ void main() {
     await tester.tap(find.byKey(const Key('usage-dashboard-nav')));
     await tester.pumpAndSettle();
 
+    final members = find.byKey(const Key('usage-member-details'));
+    await tester.ensureVisible(members);
+    await tester.pumpAndSettle();
+    await tester.tap(members);
+    await tester.pumpAndSettle();
+
     expect(
       find.byKey(const Key('usage-dimension-content-workspaces')),
       findsOneWidget,
@@ -1568,6 +1590,12 @@ void main() {
     );
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('usage-dashboard-nav')));
+    await tester.pumpAndSettle();
+
+    final members = find.byKey(const Key('usage-member-details'));
+    await tester.ensureVisible(members);
+    await tester.pumpAndSettle();
+    await tester.tap(members);
     await tester.pumpAndSettle();
 
     expect(
@@ -5089,7 +5117,7 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text('不记录内容').last);
     await tester.pumpAndSettle();
-    expect(find.textContaining('无法统计模型和 Token 用量'), findsOneWidget);
+    expect(find.textContaining('仍会统计模型和 Token'), findsOneWidget);
     expect(find.byKey(const Key('environment-create-retention')), findsNothing);
     expect(tester.takeException(), isNull);
     await tester.ensureVisible(
@@ -5214,7 +5242,7 @@ void main() {
       find.byKey(const Key('environment-editor-recording')),
     );
     expect(savedRecording.initialValue, 'off');
-    expect(find.textContaining('无法统计模型和 Token 用量'), findsOneWidget);
+    expect(find.textContaining('仍会统计模型和 Token'), findsOneWidget);
     expect(find.byKey(const Key('environment-editor-retention')), findsNothing);
     expect(tester.takeException(), isNull);
 

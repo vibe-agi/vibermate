@@ -26,18 +26,48 @@ final class MemberPortal extends StatefulWidget {
   State<MemberPortal> createState() => _MemberPortalState();
 }
 
-final class _MemberPortalState extends State<MemberPortal> {
+final class _MemberPortalState extends State<MemberPortal>
+    with WidgetsBindingObserver {
   RuntimeUsageReport? _report;
   bool _loading = true;
   String? _error;
+  int _rangeDays = 7;
+  Timer? _poller;
+  bool _visible = true;
+  bool _requestInFlight = false;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _poller = Timer.periodic(const Duration(seconds: 5), (_) {
+      if (_visible) unawaited(_load());
+    });
     unawaited(_load());
   }
 
+  @override
+  void dispose() {
+    _poller?.cancel();
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.hidden ||
+        state == AppLifecycleState.paused ||
+        state == AppLifecycleState.detached) {
+      _visible = false;
+    } else if (state == AppLifecycleState.resumed && !_visible) {
+      _visible = true;
+      unawaited(_load());
+    }
+  }
+
   Future<void> _load() async {
+    if (!mounted || _requestInFlight) return;
+    _requestInFlight = true;
     if (!_loading) setState(() => _loading = true);
     try {
       final now = DateTime.now().toUtc();
@@ -46,7 +76,7 @@ final class _MemberPortalState extends State<MemberPortal> {
         now.month,
         now.day,
       ).add(const Duration(days: 1));
-      final from = until.subtract(const Duration(days: 365));
+      final from = until.subtract(Duration(days: _rangeDays));
       String date(DateTime value) =>
           '${value.year.toString().padLeft(4, '0')}-'
           '${value.month.toString().padLeft(2, '0')}-'
@@ -70,6 +100,8 @@ final class _MemberPortalState extends State<MemberPortal> {
         _loading = false;
         _error = widget.copy('usage.unavailable');
       });
+    } finally {
+      _requestInFlight = false;
     }
   }
 
@@ -119,6 +151,11 @@ final class _MemberPortalState extends State<MemberPortal> {
           const Divider(height: 1),
           Expanded(
             child: PersonalUsageDashboard(
+              rangeDays: _rangeDays,
+              onRangeChanged: (days) {
+                setState(() => _rangeDays = days);
+                unawaited(_load());
+              },
               report: _report,
               loading: _loading,
               error: _error,

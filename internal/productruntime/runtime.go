@@ -41,6 +41,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/resourcedeletion"
 	"github.com/vibe-agi/vibermate/internal/runtimedata"
 	"github.com/vibe-agi/vibermate/internal/runtimepersistence"
+	"github.com/vibe-agi/vibermate/internal/runtimeusage"
 	"github.com/vibe-agi/vibermate/internal/runtimeuser"
 	"github.com/vibe-agi/vibermate/internal/toolapproval"
 	"github.com/vibe-agi/vibermate/internal/toolpolicy"
@@ -586,6 +587,7 @@ func startWithBuilders(
 		activities:               activities,
 		identities:               storageResult.store.ConversationIdentityRepository(),
 		contents:                 contents,
+		usage:                    storageResult.store.UsageRepository(),
 		clock:                    options.Clock,
 		hold:                     options.ExchangeHold,
 		annotations:              clientAnnotations,
@@ -889,6 +891,8 @@ func (r *Runtime) ConversationProjectionWriter() activity.ConversationProjection
 
 // ExchangeContents returns the separate, retention-bound semantic evidence
 // reader. Body-free Activity and egress journals never expose this content.
+func (r *Runtime) UsageRepository() runtimeusage.Repository { return r.storage.UsageRepository() }
+
 func (r *Runtime) ExchangeContents() exchangecontent.Reader {
 	return r.contents
 }
@@ -988,6 +992,13 @@ func (r *Runtime) FetchModelsDev(ctx context.Context) (*http.Response, error) {
 		return nil, errors.New("provider transport is unavailable")
 	}
 	return r.provider.FetchModelsDev(ctx)
+}
+
+func (r *Runtime) FetchModelsDevPrices(ctx context.Context) (*http.Response, error) {
+	if r == nil || r.provider == nil {
+		return nil, errors.New("provider transport is unavailable")
+	}
+	return r.provider.FetchModelsDevPrices(ctx)
 }
 
 // ToolApprovals returns the durable interactive tool decision authority used

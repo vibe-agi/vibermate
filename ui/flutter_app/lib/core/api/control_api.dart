@@ -181,6 +181,12 @@ abstract interface class ControlApi {
 
   Future<RuntimeUsageReport> runtimeUsage(RuntimeUsageQuery query);
 
+  Future<RuntimeUsageCollection> setUsageCollection({
+    required bool enabled,
+    required int retentionDays,
+    required int revision,
+  });
+
   Future<RuntimeUser> createRuntimeUser({
     required String username,
     required String password,
@@ -1373,6 +1379,32 @@ final class HttpControlApi implements ControlApi, ACPObservationApi {
         maximumResponseBytes: _maximumUsageResponseBytes,
       ),
       'runtimeUsage',
+    );
+  }
+
+  @override
+  Future<RuntimeUsageCollection> setUsageCollection({
+    required bool enabled,
+    required int retentionDays,
+    required int revision,
+  }) async {
+    if (_selfScoped ||
+        retentionDays < 1 ||
+        retentionDays > 365 ||
+        revision < 1) {
+      throw const ControlContractException('invalid usage collection policy');
+    }
+    return RuntimeUsageCollection.fromJson(
+      await _command(
+        'PATCH',
+        '/api/v1/server/runtime-users/usage/collection',
+        body: {
+          'enabled': enabled,
+          'retentionDays': retentionDays,
+          'revision': revision,
+        },
+      ),
+      'usageCollection',
     );
   }
 

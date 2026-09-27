@@ -4,12 +4,40 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"testing"
 
 	"github.com/vibe-agi/vibermate/internal/clientannotation"
 	"github.com/vibe-agi/vibermate/internal/messagetransform"
 )
+
+type responseCloseFunc func() error
+
+func (close responseCloseFunc) Close() error { return close() }
+
+func TestLogicalResponseClosesTransportBeforeDecoder(t *testing.T) {
+	sourceClosed, decoderClosed := false, false
+	stream := &logicalTransformStream{
+		source: struct {
+			io.Reader
+			io.Closer
+		}{
+			Reader: bytes.NewReader(nil),
+			Closer: responseCloseFunc(func() error { sourceClosed = true; return nil }),
+		},
+		decoder: responseCloseFunc(func() error {
+			if !sourceClosed {
+				t.Error("decoder could still be blocked reading the transport")
+			}
+			decoderClosed = true
+			return nil
+		}),
+	}
+	if err := stream.Close(); err != nil || !sourceClosed || !decoderClosed {
+		t.Fatalf("incomplete close: %v", err)
+	}
+}
 
 func TestRequestPreparationCleansAnnotationsEvenWithoutRequestJavaScript(t *testing.T) {
 	for _, encoding := range []string{"identity", "gzip", "zstd"} {

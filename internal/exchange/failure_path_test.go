@@ -1,10 +1,13 @@
 package exchange
 
 import (
+	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/vibe-agi/vibermate/internal/protocolcore"
+	"github.com/vibe-agi/vibermate/internal/providertransport"
 )
 
 // A failure has to say where in the request's shape it happened. A path is
@@ -24,6 +27,24 @@ func TestAFailureCarriesTheStructuralPath(t *testing.T) {
 	}
 	if ClientPathOf(failure) != "$.messages[1].role" {
 		t.Fatalf("ClientPathOf = %q", ClientPathOf(failure))
+	}
+}
+
+func TestProviderFailureIsNotClassifiedAsLocalIdleTimeout(t *testing.T) {
+	if budget := DefaultStreamBudgets(); budget.ProviderProgressTimeout != 5*time.Minute || budget.ProviderProgressTimeout != providertransport.DefaultTransportTimeouts().ResponseIdle || budget.KeepaliveInterval >= budget.ProviderProgressTimeout {
+		t.Fatalf("provider progress budget preempts native reasoning: %+v", budget)
+	}
+	pipeline := &Pipeline{}
+	failure := pipeline.classifyStreamError(context.Background(), "exchange", 200,
+		protocolcore.NewProviderFailure("$.error", []byte(`{"code":"server_error","message":"private"}`)))
+	if failure.Code != ReasonProviderResponseFailed || failure.ProviderErrorCode != "server_error" {
+		t.Fatalf("provider failure classification: %+v", failure)
+	}
+	for _, err := range []error{ErrProviderSemanticIdle, providertransport.ErrProviderResponseIdle} {
+		idle := pipeline.classifyStreamError(context.Background(), "exchange", 200, err)
+		if idle.Code != ReasonProviderResponseIdle || idle.ProviderErrorCode != "" {
+			t.Fatalf("local idle timeout classification: %+v", idle)
+		}
 	}
 }
 
@@ -62,5 +83,26 @@ func TestAFailureWithoutAProtocolCauseHasNoPath(t *testing.T) {
 	)
 	if failure.ClientPath != "" {
 		t.Fatalf("path = %q", failure.ClientPath)
+	}
+}
+
+func TestProviderFailureReasonsSurviveWithoutBodyEvidence(t *testing.T) {
+	for reason, want := range map[protocolcore.Reason]ReasonCode{
+		protocolcore.ReasonProviderResponseFailed:  ReasonProviderResponseFailed,
+		protocolcore.ReasonTruncatedEventStream:    ReasonProviderStreamTruncated,
+		protocolcore.ReasonMalformedEventStream:    ReasonProviderStreamMalformed,
+		protocolcore.ReasonStreamStateViolation:    ReasonProviderStreamStateInvalid,
+		protocolcore.ReasonStreamLimitExceeded:     ReasonProviderStreamLimitExceeded,
+		protocolcore.ReasonUnsupportedProviderData: ReasonProviderOutputUnsupported,
+		protocolcore.ReasonToolCallIncomplete:      ReasonProviderToolCallIncomplete,
+	} {
+		cause := protocolcore.NewFailure(reason, "$", errors.New("private upstream detail"))
+		failure := newFailure(ReasonProviderResponseInvalid, "exchange-1", 200, cause)
+		if ReasonOf(failure) != want || failure.ProtocolReason != reason || failure.ClientPath != "$" {
+			t.Fatalf("%s lost its structural classification: %v", reason, failure)
+		}
+		if got := newFailure(ReasonMessageTransformFailed, "exchange-1", 200, cause); got.Code != ReasonMessageTransformFailed {
+			t.Fatalf("a different failing boundary was relabeled: %v", got)
+		}
 	}
 }

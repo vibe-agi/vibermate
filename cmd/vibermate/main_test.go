@@ -55,6 +55,10 @@ func TestHelpExplainsTheFirstCapturedRun(t *testing.T) {
 			"vibermate run -- claude",
 			"vibermate doctor",
 			"vibermate login --server",
+			"/resume",
+			"F to fork",
+			"R to retry",
+			"new ID",
 		} {
 			if !strings.Contains(stdout.String(), expected) {
 				t.Fatalf("help for %v lacks %q: %s", arguments, expected, stdout.String())
@@ -257,6 +261,8 @@ func TestLaunchFailureKeyDistinguishesEnvironmentSelection(t *testing.T) {
 		{err: runlauncher.ErrRemoteRuntimeUnavailable, want: keyRemoteRuntimeUnavailable},
 		{err: runlauncher.ErrCapturePreparationTimedOut, want: keyCapturePreparationTimedOut},
 		{err: errors.New("other launch failure"), want: keyLaunchFailed},
+		{err: errors.Join(runlauncher.ErrCaptureSupervisionFailed, runlauncher.ErrRuntimeUnavailable), want: "cli.error.captureSupervisionFailed"},
+		{err: errors.Join(runlauncher.ErrCaptureFinalizationFailed, runlauncher.ErrRuntimeUnavailable), want: "cli.error.captureFinalizationFailed"},
 	}
 	for _, test := range tests {
 		if got := launchFailureKey(test.err); got != test.want {

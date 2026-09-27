@@ -192,6 +192,14 @@ func Open(ctx context.Context, options Options) (*Store, error) {
 		operations.closeAdmission()
 		return fail(err)
 	}
+	if err := initializeUsageSchema(ctx, database); err != nil {
+		operations.closeAdmission()
+		return fail(err)
+	}
+	if err := initializeCaptureProjectSchema(ctx, database); err != nil {
+		operations.closeAdmission()
+		return fail(err)
+	}
 
 	return &Store{
 		databasePath:       options.DatabasePath,
@@ -381,10 +389,13 @@ func initializeSchema(ctx context.Context, database *sql.DB) (string, error) {
 		return "", fmt.Errorf("inspect SQLite schema: %w", err)
 	}
 	if initialized {
-		if err := detachDevelopmentAccounts(ctx, transaction, digest); err != nil {
+		if err := detachDevelopmentAccounts(ctx, transaction, beforeProviderErrorCodeDigest); err != nil {
 			return "", err
 		}
-		if err := widenReleasedAccountAction(ctx, transaction, digest); err != nil {
+		if err := widenReleasedAccountAction(ctx, transaction, beforeProviderErrorCodeDigest); err != nil {
+			return "", err
+		}
+		if err := addProviderErrorCode(ctx, transaction, digest); err != nil {
 			return "", err
 		}
 		if err := transaction.Commit(); err != nil {

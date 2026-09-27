@@ -66,6 +66,8 @@ type ActivitySummary struct {
 	// content. It is not copied into the body-free Activity journal and is
 	// absent when content recording did not retain a visible request block.
 	RequestPreview *exchangecontent.RequestPreview `json:"requestPreview,omitempty"`
+	// nil means availability could not be determined, not absence of bodies.
+	ContentAvailable *bool `json:"contentAvailable,omitempty"`
 }
 
 // ActivityConversationRef is a flat, structural projection boundary. It does
@@ -112,6 +114,21 @@ func (ref ActivityConversationRef) Validate() error {
 		}
 	}
 	return nil
+}
+
+func (ref *ActivityConversationRef) attachIdentity(identity agentconversation.ClientIdentity) error {
+	if err := identity.Validate(); err != nil {
+		return err
+	}
+	// Optional identity enrichment can precede durable reprojection. Keep the
+	// existing evidence readable so the bounded background index can repair it;
+	// never attach a contradictory identity or change a page's grouping here.
+	if ref.Actor != identity.ActorID {
+		return ref.Validate()
+	}
+	cloned := identity.Clone()
+	ref.ClientIdentity = &cloned
+	return ref.Validate()
 }
 
 type ActivitySourceRef struct {
@@ -199,10 +216,11 @@ type ExchangeDetail struct {
 // shape that failed without carrying request values, provider text, or
 // credentials into the control plane.
 type ExchangeDiagnosis struct {
-	ProviderStatus int    `json:"providerStatus,omitempty"`
-	ProviderField  string `json:"providerField,omitempty"`
-	ClientField    string `json:"clientField,omitempty"`
-	ClientPath     string `json:"clientPath,omitempty"`
+	ProviderErrorCode string `json:"providerErrorCode,omitempty"`
+	ProviderStatus    int    `json:"providerStatus,omitempty"`
+	ProviderField     string `json:"providerField,omitempty"`
+	ClientField       string `json:"clientField,omitempty"`
+	ClientPath        string `json:"clientPath,omitempty"`
 }
 
 type ExchangeContentState string
@@ -433,10 +451,11 @@ func exchangeDetailOf(
 	}
 	if record.Diagnosis != nil && !record.Diagnosis.Empty() {
 		detail.Diagnosis = &ExchangeDiagnosis{
-			ProviderStatus: record.Diagnosis.ProviderStatus,
-			ProviderField:  record.Diagnosis.ProviderField,
-			ClientField:    record.Diagnosis.ClientField,
-			ClientPath:     record.Diagnosis.ClientPath,
+			ProviderErrorCode: record.Diagnosis.ProviderErrorCode,
+			ProviderStatus:    record.Diagnosis.ProviderStatus,
+			ProviderField:     record.Diagnosis.ProviderField,
+			ClientField:       record.Diagnosis.ClientField,
+			ClientPath:        record.Diagnosis.ClientPath,
 		}
 	}
 	if content != nil {

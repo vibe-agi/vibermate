@@ -46,6 +46,7 @@ type operation struct {
 }
 
 type contentCapture struct {
+	startedAt       time.Time
 	request         *protocolcore.Request
 	response        *protocolcore.Response
 	requestObserved bool
@@ -82,6 +83,7 @@ type Pipeline struct {
 	closing    bool
 	operations map[*operation]struct{}
 	changed    chan struct{}
+	turnStates map[[32]byte]codexTurnStateBinding
 }
 
 type Executor interface {
@@ -136,6 +138,7 @@ func New(options Options) (*Pipeline, error) {
 		cancelOwner:              cancelOwner,
 		operations:               make(map[*operation]struct{}),
 		changed:                  make(chan struct{}),
+		turnStates:               make(map[[32]byte]codexTurnStateBinding),
 	}, nil
 }
 
@@ -145,6 +148,9 @@ func (pipeline *Pipeline) Execute(
 	downstream Downstream,
 ) (result Result, resultErr error) {
 	captured := &contentCapture{}
+	if pipeline != nil && pipeline.now != nil {
+		captured.startedAt = pipeline.now()
+	}
 	result = Result{
 		ExchangeID: request.exchangeID,
 		Outcome:    AttemptFailed,
@@ -587,6 +593,7 @@ func (pipeline *Pipeline) executeCandidate(
 		for name, values := range nativeChatGPTProtocolHeaders(request, selection) {
 			headers[name] = values
 		}
+		pipeline.replayCodexTurnState(request, selection, credential.account, decoded, headers)
 		refreshChatGPTRoutingHint(headers, logicalBody, encodedProvider.Body())
 	}
 	if credential.mode == providerauth.CredentialClientPassthrough {
@@ -1043,11 +1050,20 @@ func (pipeline *Pipeline) observeAttempt(
 	}
 	if captured != nil && captured.response != nil {
 		observation.ProviderResponseID = captured.response.ID
+		observation.Usage = captured.response.Usage
+	}
+	if captured != nil {
+		observation.StartedAt = captured.startedAt
+		if captured.request != nil {
+			observation.RequestedModel = captured.request.RequestedModel
+			observation.UpstreamModel = captured.request.EffectiveModel
+		}
 	}
 	var failure *Failure
 	if errors.As(resultErr, &failure) {
 		observation.ProviderStatus = failure.ProviderStatus
 		observation.ProviderField = failure.ProviderField
+		observation.ProviderErrorCode = failure.ProviderErrorCode
 		observation.ClientField = failure.ClientField
 		observation.ClientPath = failure.ClientPath
 	}
@@ -1478,7 +1494,7 @@ func (pipeline *Pipeline) executeComplete(
 		return newProviderStatusFailure(
 			request.exchangeID,
 			response.StatusCode,
-			classifyProviderRejection(response.Body),
+			classifyProviderRejectionResponse(response, selection),
 		)
 	}
 	if !contentTypeMatches(response.Header.Get("Content-Type"), "application/json") {
@@ -1498,13 +1514,27 @@ func (pipeline *Pipeline) executeComplete(
 			err,
 		)
 	}
-	responseEnvelope := managedResponseEnvelope(ResponseModeJSON)
+	responseHeaders := pipeline.managedResponseHeaders(request, selection, frozenRequest, decoded, response.Header)
+	responseEnvelope := managedResponseEnvelope(ResponseModeJSON, responseHeaders)
+	// Protocol inspection always consumes the logical representation. Whether
+	// a response script exists cannot decide if compressed provider bytes work.
+	logicalHeaders, body, err := logicalTransformInput(response.Header, body)
+	if err != nil {
+		return newFailure(ReasonProviderResponseInvalid, request.exchangeID, response.StatusCode,
+			protocolcore.NewFailure(protocolcore.ReasonInvalidProviderResponse, "$.http.content_encoding", err))
+	}
 	if transformTurn.HasResponse() {
+		// Opaque state is exposed to a native client only after its ownership
+		// binding has been recorded. Scripts cannot revive a stripped token.
+		logicalHeaders.Del("X-Codex-Turn-State")
+		if state := responseHeaders.Get("X-Codex-Turn-State"); state != "" {
+			logicalHeaders.Set("X-Codex-Turn-State", state)
+		}
 		transformed, transformInput, _, transformErr := applyResponseMessageTransform(
 			ctx,
 			transformTurn,
 			response.StatusCode,
-			response.Header,
+			logicalHeaders,
 			body,
 		)
 		if transformErr != nil {
@@ -1809,7 +1839,7 @@ func (pipeline *Pipeline) executeOriginal(
 		return newProviderStatusFailure(
 			request.exchangeID,
 			response.StatusCode,
-			ProviderFieldUnknown,
+			providerRejection{},
 		)
 	}
 	if decodedResponse := contentDecoder.Finish(ctx); decodedResponse != nil {
@@ -1923,7 +1953,7 @@ func (pipeline *Pipeline) executeTransformedOriginalComplete(
 		return newProviderStatusFailure(
 			request.exchangeID,
 			response.StatusCode,
-			ProviderFieldUnknown,
+			providerRejection{},
 		)
 	}
 	if decodedResponse := contentDecoder.Finish(ctx); decodedResponse != nil {
@@ -1944,9 +1974,9 @@ func (pipeline *Pipeline) executeTransformedOriginalStream(
 	captured *contentCapture,
 	transformTurn *messagetransform.PipelineTurn,
 ) error {
-	logicalBody, err := newLogicalTransformStream(
+	logicalBody, err := newLogicalResponseStream(
 		response.Body,
-		response.Header.Get("Content-Encoding"),
+		strings.Join(response.Header.Values("Content-Encoding"), ","),
 	)
 	if err != nil {
 		return newFailure(
@@ -2102,7 +2132,7 @@ func (pipeline *Pipeline) executeTransformedOriginalStream(
 		return newProviderStatusFailure(
 			request.exchangeID,
 			response.StatusCode,
-			ProviderFieldUnknown,
+			providerRejection{},
 		)
 	}
 	if decodedResponse := contentDecoder.Finish(ctx); decodedResponse != nil {
@@ -2135,15 +2165,15 @@ func finishCanceledOriginalStream(
 }
 
 type originalContentDecoder struct {
-	path       *protocolpath.Path
-	request    *protocolcore.Request
-	mode       ResponseMode
-	stream     protocolpath.Stream
-	body       bytes.Buffer
-	compressed bool
-	failed     bool
-	finished   bool
-	response   *protocolcore.Response
+	path            *protocolpath.Path
+	request         *protocolcore.Request
+	mode            ResponseMode
+	stream          protocolpath.Stream
+	body            bytes.Buffer
+	contentEncoding string
+	failed          bool
+	finished        bool
+	response        *protocolcore.Response
 }
 
 func reportDeepProtocolFailure(_ string, _ error) {
@@ -2166,8 +2196,8 @@ func newOriginalContentDecoder(
 	encoding := strings.TrimSpace(contentEncoding)
 	switch {
 	case encoding == "" || strings.EqualFold(encoding, "identity"):
-	case strings.EqualFold(encoding, "gzip"):
-		decoder.compressed = true
+	case strings.EqualFold(encoding, "gzip"), strings.EqualFold(encoding, "zstd"):
+		decoder.contentEncoding = encoding
 	default:
 		decoder.failed = true
 		return decoder
@@ -2187,7 +2217,7 @@ func (decoder *originalContentDecoder) Feed(ctx context.Context, fragment []byte
 	if decoder == nil || decoder.failed || len(fragment) == 0 {
 		return
 	}
-	if decoder.compressed {
+	if decoder.contentEncoding != "" {
 		if decoder.body.Len()+len(fragment) > maxCompleteResponseBytes {
 			decoder.failed = true
 			decoder.body.Reset()
@@ -2226,14 +2256,9 @@ func (decoder *originalContentDecoder) Finish(ctx context.Context) *protocolcore
 	if decoder.failed || decoder.path == nil || decoder.request == nil {
 		return nil
 	}
-	if decoder.compressed {
-		reader, err := gzip.NewReader(bytes.NewReader(decoder.body.Bytes()))
+	if decoder.contentEncoding != "" {
+		decoded, err := decodeBoundedContent(decoder.body.Bytes(), decoder.contentEncoding)
 		if err != nil {
-			return nil
-		}
-		decoded, err := readBounded(reader, maxCompleteResponseBytes)
-		closeErr := reader.Close()
-		if err != nil || closeErr != nil {
 			return nil
 		}
 		if decoder.mode == ResponseModeEventStream {
@@ -2284,28 +2309,6 @@ func (pipeline *Pipeline) executeStream(
 	captured *contentCapture,
 	transformTurn *messagetransform.PipelineTurn,
 ) error {
-	if !transformTurn.HasResponse() {
-		if err := downstream.Begin(
-			ctx,
-			managedResponseEnvelope(ResponseModeEventStream),
-		); err != nil {
-			return newFailure(
-				ReasonDownstreamCommitFailed,
-				request.exchangeID,
-				0,
-				err,
-			)
-		}
-		if err := ledger.RecordHoldEnvelope(); err != nil {
-			return newFailure(
-				ReasonDownstreamCommitFailed,
-				request.exchangeID,
-				0,
-				err,
-			)
-		}
-	}
-
 	var retryDeadline time.Time
 	for {
 		if err := ledger.RecordUpstreamSend(int64(len(frozenRequest.Body()))); err != nil {
@@ -2401,7 +2404,7 @@ func (pipeline *Pipeline) executeStream(
 
 		statusCode := response.StatusCode
 		if statusCode < 200 || statusCode > 299 {
-			providerField := classifyProviderRejection(response.Body)
+			providerField := classifyProviderRejectionResponse(response, selection)
 			_ = response.Body.Close()
 			failure := newProviderStatusFailure(
 				request.exchangeID,
@@ -2474,10 +2477,29 @@ func (pipeline *Pipeline) executeStream(
 				failure,
 			)
 		}
+		responseHeaders := response.Header.Clone()
+		responseHeaders.Del("X-Codex-Turn-State")
+		metadata := pipeline.managedResponseHeaders(request, selection, frozenRequest, decoded, response.Header)
+		if state := metadata.Get("X-Codex-Turn-State"); state != "" {
+			responseHeaders.Set("X-Codex-Turn-State", state)
+		}
+		if !transformTurn.HasResponse() && !ledger.Snapshot().DownstreamHoldEnvelope {
+			if err := downstream.Begin(ctx, managedResponseEnvelope(ResponseModeEventStream, metadata)); err != nil {
+				_ = response.Body.Close()
+				return newFailure(ReasonDownstreamCommitFailed, request.exchangeID, 0, err)
+			}
+			if len(metadata) > 0 {
+				ledger.RecordProviderMetadata()
+			}
+			if err := ledger.RecordHoldEnvelope(); err != nil {
+				_ = response.Body.Close()
+				return newFailure(ReasonDownstreamCommitFailed, request.exchangeID, 0, err)
+			}
+		}
 		transformer, err := newStreamMessageTransformer(
 			transformTurn,
 			statusCode,
-			response.Header,
+			responseHeaders,
 		)
 		if err != nil {
 			_ = response.Body.Close()
@@ -2494,27 +2516,15 @@ func (pipeline *Pipeline) executeStream(
 				),
 			)
 		}
-		streamBody := response.Body
-		if transformer != nil {
-			streamBody, err = newLogicalTransformStream(
-				response.Body,
-				response.Header.Get("Content-Encoding"),
-			)
-			if err != nil {
-				_ = response.Body.Close()
-				return pipeline.failStream(
-					ctx,
-					request.exchangeID,
-					downstream,
-					ledger,
-					newFailure(
-						ReasonMessageTransformFailed,
-						request.exchangeID,
-						statusCode,
-						err,
-					),
-				)
-			}
+		streamBody, err := newLogicalResponseStream(
+			response.Body,
+			strings.Join(response.Header.Values("Content-Encoding"), ","),
+		)
+		if err != nil {
+			_ = response.Body.Close()
+			return pipeline.failStream(ctx, request.exchangeID, downstream, ledger,
+				newFailure(ReasonProviderResponseInvalid, request.exchangeID, statusCode,
+					protocolcore.NewFailure(protocolcore.ReasonInvalidProviderResponse, "$.http.content_encoding", err)))
 		}
 
 		stream, err := protocolPath.Streaming().NewStream(decoded)
@@ -2692,6 +2702,9 @@ func (pipeline *Pipeline) consumeProviderStream(
 							beginErr,
 						)
 					}
+					if len(nativeResponseHeaders(envelope.Headers())) > 0 {
+						ledger.RecordProviderMetadata()
+					}
 					if recordErr := ledger.RecordHoldEnvelope(); recordErr != nil {
 						return newFailure(
 							ReasonDownstreamCommitFailed,
@@ -2733,6 +2746,17 @@ func (pipeline *Pipeline) consumeProviderStream(
 				}
 				if decodeErr != nil {
 					return decodeErr
+				}
+				if stream.TerminalReceived() {
+					// A semantic terminal, not connection closure, ends the
+					// response. Stop reads before potentially waiting for tools.
+					if terminalBody, ok := body.(interface{ ConfirmSemanticTerminal() }); ok {
+						terminalBody.ConfirmSemanticTerminal()
+					}
+					cancelRead(context.Canceled)
+					_ = body.Close()
+					streamComplete = true
+					continue
 				}
 			}
 			if result.err != nil {
@@ -3018,7 +3042,7 @@ func (pipeline *Pipeline) retryBudgetExhausted(
 	ledger *CommitLedger,
 	resends uint32,
 ) bool {
-	if resends < pipeline.hold.MaxTransportResends ||
+	if pipeline.hold.MaxTransportResends == 0 || resends < pipeline.hold.MaxTransportResends ||
 		(!retryableStatus(statusCode) && !retryableTransportError(err)) {
 		return false
 	}
@@ -3074,11 +3098,13 @@ func (pipeline *Pipeline) abortStream(
 		return typed
 	}
 	abortErr := downstream.Abort(ctx, FailureNotice{
-		ReasonCode:     typed.Code,
-		ProviderStatus: typed.ProviderStatus,
-		ProviderField:  typed.ProviderField,
-		ProtocolReason: typed.ProtocolReason,
-		ResponseIssue:  typed.ResponseIssue,
+		ReasonCode:        typed.Code,
+		ProviderStatus:    typed.ProviderStatus,
+		ProviderField:     typed.ProviderField,
+		ProviderErrorCode: typed.ProviderErrorCode,
+		NativeError:       typed.NativeError,
+		ProtocolReason:    typed.ProtocolReason,
+		ResponseIssue:     typed.ResponseIssue,
 	})
 	if abortErr != nil {
 		return errors.Join(
@@ -3118,27 +3144,63 @@ func (pipeline *Pipeline) failStream(
 	return pipeline.abortStream(ctx, exchangeID, downstream, ledger, failure)
 }
 
-func classifyProviderRejection(reader io.Reader) ProviderField {
+type providerRejection struct {
+	field  ProviderField
+	code   string
+	native protocolcore.NativeProviderError
+}
+
+func classifyProviderRejectionResponse(response *http.Response, selection frozenSelection) providerRejection {
+	body, err := newLogicalResponseStream(response.Body, strings.Join(response.Header.Values("Content-Encoding"), ","))
+	if err != nil {
+		return providerRejection{}
+	}
+	defer body.Close()
+	diagnosis := classifyProviderRejection(body)
+	if selection.codecPlan.ClientDialect() != protocolspec.DialectOpenAIResponses ||
+		selection.codecPlan.ProviderDialect() != protocolspec.DialectOpenAIResponses {
+		diagnosis.native = protocolcore.NativeProviderError{}
+	} else {
+		headers := nativeResponseHeaders(response.Header)
+		// A rejected attempt does not establish a trusted turn-state binding.
+		headers.Del(codexTurnStateHeader)
+		diagnosis.native = diagnosis.native.WithHeaders(headers)
+	}
+	return diagnosis
+}
+
+func classifyProviderRejection(reader io.Reader) providerRejection {
 	if reader == nil {
-		return ProviderFieldUnknown
+		return providerRejection{}
 	}
 	body, err := readBounded(reader, maxProviderErrorBytes)
 	if err != nil {
-		return ProviderFieldUnknown
+		return providerRejection{}
 	}
+	var native struct {
+		Error json.RawMessage `json:"error"`
+	}
+	_ = json.Unmarshal(body, &native)
+	nativeError := protocolcore.NewNativeProviderError(protocolspec.DialectOpenAIResponses, native.Error)
 	var payload struct {
 		Error struct {
 			Param string `json:"param"`
+			Code  string `json:"code"`
+			Type  string `json:"type"`
 		} `json:"error"`
 		Detail []struct {
 			Location []json.RawMessage `json:"loc"`
 		} `json:"detail"`
 	}
 	if json.Unmarshal(body, &payload) != nil {
-		return ProviderFieldUnknown
+		return providerRejection{native: nativeError}
+	}
+	code := protocolcore.KnownProviderErrorCode(payload.Error.Code)
+	if code == "" {
+		code = protocolcore.KnownProviderErrorCode(payload.Error.Type)
 	}
 	if field := knownProviderField(payload.Error.Param); field != ProviderFieldUnknown {
-		return field
+		return providerRejection{field: field, code: code, native: nativeError}
 	}
 	for _, detail := range payload.Detail {
 		for index := len(detail.Location) - 1; index >= 0; index-- {
@@ -3147,11 +3209,11 @@ func classifyProviderRejection(reader io.Reader) ProviderField {
 				continue
 			}
 			if field := knownProviderField(fieldName); field != ProviderFieldUnknown {
-				return field
+				return providerRejection{field: field, code: code, native: nativeError}
 			}
 		}
 	}
-	return ProviderFieldUnknown
+	return providerRejection{code: code, native: nativeError}
 }
 
 func newProviderContentTypeFailure(
@@ -3170,7 +3232,9 @@ func newProviderContentTypeFailure(
 			fmt.Errorf("provider response Content-Type is not %s", expected),
 		),
 	)
-	failure.ProviderField = classifyProviderRejection(body)
+	diagnosis := classifyProviderRejection(body)
+	failure.ProviderField = diagnosis.field
+	failure.ProviderErrorCode = diagnosis.code
 	failure.ResponseIssue = ProviderResponseIssueContentType
 	return failure
 }

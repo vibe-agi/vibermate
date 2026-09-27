@@ -6,7 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"slices"
+	"reflect"
 	"testing"
 
 	"github.com/openai/openai-go/v3/responses"
@@ -16,7 +16,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/ssewire"
 )
 
-func TestResponsesPassthroughForwardsOnlyPortableConversationHistory(t *testing.T) {
+func TestResponsesPassthroughPreservesNativeConversationHistory(t *testing.T) {
 	t.Parallel()
 
 	path, err := NewResponsesPassthroughProtocolPath(openairesponses.DefaultOptions())
@@ -59,35 +59,20 @@ func TestResponsesPassthroughForwardsOnlyPortableConversationHistory(t *testing.
 	if err := json.Unmarshal(provider.Body(), &wire); err != nil {
 		t.Fatal(err)
 	}
-	if wire.Model != "provider-model" || len(wire.Input) != 3 {
+
+	if wire.Model != "provider-model" || len(wire.Input) != 4 {
 		t.Fatalf("provider wire = %s", provider.Body())
 	}
-	roles := make([]string, len(wire.Input))
-	for index, raw := range wire.Input {
-		var item struct {
-			Type string `json:"type"`
-			Role string `json:"role"`
-		}
-		if err := json.Unmarshal(raw, &item); err != nil {
-			t.Fatal(err)
-		}
-		if item.Type != "message" {
-			t.Fatalf("input[%d] type = %q", index, item.Type)
-		}
-		roles[index] = item.Role
+	var original, forwarded map[string]any
+	if err := json.Unmarshal(source, &original); err != nil {
+		t.Fatal(err)
 	}
-	if got, want := roles, []string{"user", "assistant", "user"}; !slices.Equal(got, want) {
-		t.Fatalf("portable roles = %v, want %v", got, want)
+	if err := json.Unmarshal(provider.Body(), &forwarded); err != nil {
+		t.Fatal(err)
 	}
-	if bytes.Contains(provider.Body(), []byte("private reasoning")) ||
-		bytes.Contains(provider.Body(), []byte("opaque-provider-state")) {
-		t.Fatalf("provider request leaked private reasoning: %s", provider.Body())
-	}
-	notices := report.Notices()
-	if len(notices) != 1 ||
-		notices[0].Code != protocolcore.NoticeReasoningExecutionNotForwarded ||
-		notices[0].Path != "$.input[1]" {
-		t.Fatalf("translation notices = %#v", notices)
+	original["model"] = "provider-model"
+	if !reflect.DeepEqual(original, forwarded) || len(report.Notices()) != 0 {
+		t.Fatalf("native request was changed beyond model alias: %s", provider.Body())
 	}
 }
 
@@ -230,7 +215,7 @@ func TestResponsesPassthroughPreservesCurrentCodexOpaqueInputItems(t *testing.T)
 	}
 }
 
-func TestResponsesPassthroughReleasesOnlyPortableConversationHistory(t *testing.T) {
+func TestResponsesPassthroughPreservesNativeResponseHistory(t *testing.T) {
 	t.Parallel()
 
 	path, err := NewResponsesPassthroughProtocolPath(openairesponses.DefaultOptions())
@@ -297,24 +282,20 @@ func TestResponsesPassthroughReleasesOnlyPortableConversationHistory(t *testing.
 	if err := json.Unmarshal(released, &wire); err != nil {
 		t.Fatal(err)
 	}
-	if wire.Model != request.RequestedModel || len(wire.Output) != 1 {
+
+	if wire.Model != request.RequestedModel || len(wire.Output) != 2 {
 		t.Fatalf("released response = %s", released)
 	}
-	var item struct {
-		Type string `json:"type"`
-	}
-	if err := json.Unmarshal(wire.Output[0], &item); err != nil {
+	var original, forwarded map[string]any
+	if err := json.Unmarshal(sourceResponse, &original); err != nil {
 		t.Fatal(err)
 	}
-	if item.Type != "message" ||
-		bytes.Contains(released, []byte("private reasoning")) {
-		t.Fatalf("released response is not portable: %s", released)
+	if err := json.Unmarshal(released, &forwarded); err != nil {
+		t.Fatal(err)
 	}
-	notices := report.Notices()
-	if len(notices) != 1 ||
-		notices[0].Code != protocolcore.NoticeReasoningExecutionNotForwarded ||
-		notices[0].Path != "$.output[0]" {
-		t.Fatalf("translation notices = %#v", notices)
+	original["model"] = request.RequestedModel
+	if !reflect.DeepEqual(original, forwarded) || len(report.Notices()) != 0 {
+		t.Fatalf("native response was changed beyond model alias: %s", released)
 	}
 }
 

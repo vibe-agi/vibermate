@@ -355,10 +355,10 @@ func (handler *Handler) runningCaptureHolders(
 		}
 		last := page.Items[len(page.Items)-1]
 		runCursor = &capturerun.PageCursor{
-			Running:            managedRunIsActive(last),
-			UpdatedAt:          last.UpdatedAt,
-			AfterID:            last.ID,
-			IncludeAtUpdatedAt: true,
+			Running:             managedRunIsActive(last),
+			ActivityAt:          last.ActivityTime(),
+			AfterID:             last.ID,
+			IncludeAtActivityAt: true,
 		}
 	}
 
@@ -378,10 +378,10 @@ func (handler *Handler) runningCaptureHolders(
 		}
 		last := page.Items[len(page.Items)-1]
 		manualCursor = &manualcapture.PageCursor{
-			Running:            last.State == manualcapture.StateActive,
-			UpdatedAt:          last.UpdatedAt,
-			AfterID:            last.ID,
-			IncludeAtUpdatedAt: true,
+			Running:             last.State == manualcapture.StateActive,
+			ActivityAt:          last.ActivityTime(),
+			AfterID:             last.ID,
+			IncludeAtActivityAt: true,
 		}
 	}
 	return holders, nil

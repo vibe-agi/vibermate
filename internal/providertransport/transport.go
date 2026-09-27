@@ -9,6 +9,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptrace"
 	"sync"
 	"time"
 
@@ -24,12 +25,16 @@ const (
 	DefaultProviderDialTimeout         = 15 * time.Second
 	DefaultTLSHandshakeTimeout         = 10 * time.Second
 	DefaultProviderResponseHeadTimeout = 30 * time.Second
-	DefaultProviderResponseIdleTimeout = 60 * time.Second
+	// Match the native Codex SSE idle budget. Reasoning can be silent for
+	// minutes; this is renewed on progress, never an entire-request deadline.
+	DefaultProviderResponseIdleTimeout = 5 * time.Minute
 )
 
 var ErrProviderResponseIdle = errors.New(
 	"provider response exceeded its idle timeout",
 )
+
+var ErrProviderResponseHeadTimeout = errors.New("provider response headers exceeded their timeout")
 
 type TransportDispatch struct {
 	target       Target
@@ -349,22 +354,31 @@ func (transport *profileTransport) roundTripHTTP2(
 		), nil
 	}
 	requestContext, cancelRequest := context.WithCancelCause(request.Context())
-	request = request.Clone(requestContext)
 	var headMu sync.Mutex
 	waitingForHead := true
-	headTimer := time.AfterFunc(transport.timeouts.ResponseHead, func() {
+	var headTimer *time.Timer
+	// Match net/http's HTTP/1 ResponseHeaderTimeout: connect/TLS/upload have
+	// their own budgets, and waiting for response headers starts after upload.
+	trace := &httptrace.ClientTrace{WroteRequest: func(info httptrace.WroteRequestInfo) {
 		headMu.Lock()
 		defer headMu.Unlock()
-		if waitingForHead {
-			cancelRequest(errors.New(
-				"provider response headers exceeded their timeout",
-			))
+		if info.Err == nil && waitingForHead && headTimer == nil {
+			headTimer = time.AfterFunc(transport.timeouts.ResponseHead, func() {
+				headMu.Lock()
+				defer headMu.Unlock()
+				if waitingForHead {
+					cancelRequest(ErrProviderResponseHeadTimeout)
+				}
+			})
 		}
-	})
+	}}
+	request = request.Clone(httptrace.WithClientTrace(requestContext, trace))
 	response, err := h2Transport.RoundTrip(request)
 	headMu.Lock()
 	waitingForHead = false
-	_ = headTimer.Stop()
+	if headTimer != nil {
+		headTimer.Stop()
+	}
 	headMu.Unlock()
 	evidenceMu.Lock()
 	resultEvidence := evidence
@@ -374,6 +388,9 @@ func (transport *profileTransport) roundTripHTTP2(
 		h2Transport.CloseIdleConnections()
 	}
 	if err != nil {
+		if cause := context.Cause(requestContext); cause != nil {
+			err = cause
+		}
 		finish()
 		if response != nil && response.Body != nil {
 			_ = response.Body.Close()

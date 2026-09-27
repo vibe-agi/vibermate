@@ -11,6 +11,7 @@ import (
 )
 
 type messagesProviderResponseWire struct {
+	Error        json.RawMessage   `json:"error,omitempty"`
 	ID           string            `json:"id"`
 	Type         string            `json:"type"`
 	Role         string            `json:"role"`
@@ -70,6 +71,9 @@ func decodeMessagesResponse(
 	wire messagesProviderResponseWire,
 	maxToolArgumentBytes int,
 ) (protocolcore.Response, error) {
+	if wire.Type == "error" {
+		return protocolcore.Response{}, protocolcore.NewProviderFailure("$.error", wire.Error)
+	}
 	if wire.Type != "message" {
 		return protocolcore.Response{}, messagesProviderFailure(
 			"$.type",

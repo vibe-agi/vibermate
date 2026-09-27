@@ -454,6 +454,10 @@ final class AppCopy {
     'capture.load_more': 'Load older captures',
     'capture.select': 'Select a Capture to inspect its evidence.',
     'capture.assignment.missing': 'No traffic policy attached',
+    'capture.assignment.unavailable': 'Traffic policy information unavailable',
+    'capture.detail.unavailable': 'Run details are temporarily unavailable',
+    'capture.detail.unavailable.detail':
+        'The runtime could not load these details. Retry to read them again; this does not mean the run has no requests.',
     'capture.launch_incomplete': 'Launch did not complete',
     'capture.launch_incomplete.detail':
         'No traffic policy was attached and no traffic was recorded. Check the launch error in Terminal, correct the policy if needed, then run the command again. You can delete this empty record.',
@@ -582,11 +586,11 @@ final class AppCopy {
         'where they went.',
     'deletion.capture.title': 'Delete this Capture?',
     'deletion.capture.consequence':
-        'Every Exchange, Turn and Raw HTTP envelope recorded under it is '
+        'Every Exchange, Turn, usage observation and Raw HTTP envelope recorded under it is '
         'removed, and the bytes are released. This cannot be undone.',
     'deletion.archive.title': 'Clear the evidence archive?',
     'deletion.archive.consequence':
-        'Every Capture and all recorded evidence is removed. Traffic policies, '
+        'Every Capture, all usage statistics and recorded evidence are removed. Traffic policies, '
         'upstream services and accounts are kept. Logical records go and queries stop '
         'answering; this does not claim erasure from disk snapshots or '
         'backups.',
@@ -732,6 +736,35 @@ final class AppCopy {
     'exchange.failure.default.title': 'The Agent request did not complete.',
     'exchange.failure.default.action':
         'Inspect the frozen evidence below, correct the failing boundary, and retry.',
+    'exchange.failure.provider_stream_truncated.title':
+        'The upstream stream ended before completion.',
+    'exchange.failure.provider_stream_truncated.action':
+        'The response had no complete terminal event. HTTP 200 alone does not mean the model finished; check the upstream service and network path.',
+    'exchange.failure.provider_response_failed.title':
+        'The upstream service reported a failed response.',
+    'exchange.failure.provider_response_failed.action':
+        'A failure event was received, not a successful completion. Use the upstream error code to inspect request forwarding and service state.',
+    'exchange.failure.provider_code': 'Upstream error code',
+    'exchange.failure.provider_stream_malformed.title':
+        'The upstream stream could not be parsed.',
+    'exchange.failure.provider_stream_malformed.action':
+        'Check the response encoding, event framing and any response script.',
+    'exchange.failure.provider_stream_state_invalid.title':
+        'The upstream stream has an invalid event sequence.',
+    'exchange.failure.provider_stream_state_invalid.action':
+        'Check for duplicate or out-of-order terminal and output events in the provider or response script.',
+    'exchange.failure.provider_stream_limit_exceeded.title':
+        'The upstream stream exceeded the processing limit.',
+    'exchange.failure.provider_stream_limit_exceeded.action':
+        'Reduce the response size or inspect unusually large events. The request was not marked as completed.',
+    'exchange.failure.provider_output_unsupported.title':
+        'ViberMate could not interpret this upstream output.',
+    'exchange.failure.provider_output_unsupported.action':
+        'Check the field path in technical details and the selected protocol. Do not treat this as a network disconnection.',
+    'exchange.failure.provider_tool_call_incomplete.title':
+        'The upstream tool call was incomplete.',
+    'exchange.failure.provider_tool_call_incomplete.action':
+        'The incomplete tool call was not released to the client. Check the upstream response before retrying.',
     'exchange.failure.provider_response_idle.title':
         'Upstream service did not respond in time.',
     'exchange.failure.provider_response_idle.action':
@@ -1167,7 +1200,7 @@ final class AppCopy {
     'environment.recording.metadata_only.detail':
         'No conversation or Raw HTTP bodies are saved. Keeps metadata and available model and Token usage.',
     'environment.recording.off.detail':
-        'Keeps basic activity and status only, with no conversation or Raw HTTP records. Model and Token statistics are unavailable. Existing history is unchanged.',
+        'This policy keeps basic activity and status, not conversation or Raw HTTP records. Independently enabled Runtime usage collection can still retain models and tokens. Existing history is unchanged.',
     'environment.recording.retention': 'Retention',
     'environment.recording.days': 'days',
     'environment.launch.label': 'Child process environment',
@@ -2292,7 +2325,7 @@ final class AppCopy {
     'server.users.policy.failed':
         'The policy was not saved. Review the selected policies and thresholds, then retry.',
     'server.usage.truncated':
-        'This report reached its safety limit. The visible totals are partial.',
+        'This report reached its safety limit. Some records or breakdowns are not shown.',
     'server.usage.no_traffic': 'No captured Agent traffic yet',
     'server.usage.workspace.unknown': 'Workspace not reported',
     'server.usage.succeeded': '{count} succeeded',
@@ -2308,13 +2341,109 @@ final class AppCopy {
     'server.usage.details.hide': 'Hide details',
     'server.usage.models.title': 'Exact request → upstream models',
     'server.usage.sessions.title': 'Agent sessions',
-    'usage.title': 'Team insights',
+    'usage.title': 'Usage overview',
+    'usage.range': '{days} days',
+    'usage.collection.settings': 'Usage collection',
+    'usage.personal.collection_off':
+        'The Runtime owner has not enabled usage collection. Existing history, if any, remains until expiry.',
+    'usage.personal.details': 'Sessions and devices',
+    'usage.collection.enable': 'Collect body-free usage for this Runtime',
+    'usage.collection.retention': 'Retention',
+    'usage.collection.explanation':
+        'Applies to local App, Web and proxy traffic on this Runtime, including profiles with body recording off. Saves request status, time, policy/account, model, declared tokens, session IDs and available caller/Git launch metadata. Never saves prompts, responses, tool arguments or credentials.',
+    'usage.collection.retention_hint':
+        'New requests only; past gaps are not backfilled. Disabling stops collection but keeps history until expiry. Clearing the archive also clears usage. App and Web share the same records.',
+    'usage.collection.shorter':
+        'Saving a shorter retention immediately deletes older usage records.',
+    'usage.collection.since':
+        'Collection since {time} · retain up to {days} days · earlier gaps are not backfilled',
+    'usage.collection.disabled':
+        'Usage collection is off. Enable it in Usage collection to count future traffic without saving conversation bodies.',
+    'usage.succeeded': 'Succeeded',
+    'usage.failed': 'Failed',
+    'usage.canceled': '{count} canceled',
+    'usage.trend': 'Daily requests',
+    'usage.trend.requests': 'Requests',
+    'usage.trend.monthly': 'Monthly requests',
+    'usage.cost.title': 'API-equivalent cost',
+    'usage.cost.short': 'Estimated cost',
+    'usage.cost.daily': 'Daily estimated cost · USD',
+    'usage.cost.monthly': 'Monthly estimated cost · USD',
+    'usage.cost.no_priced':
+        'No priceable usage yet. Unknown models or missing token counts are not zero cost.',
+    'usage.cost.coverage': '{known}/{total} fully priced · USD',
+    'usage.cost.coverage_detail':
+        '{complete} fully priced · {partial} partially priced · {unpriced} unpriced calls',
+    'usage.cost.basis': 'Estimate, not a bill',
+    'usage.cost.updated': 'models.dev · prices updated {time}',
+    'usage.cost.stale': 'Update failed; using cached prices',
+    'usage.cost.unavailable':
+        'Reference prices unavailable; token statistics are unaffected.',
+    'usage.cost.explanation':
+        'USD equivalent at current standard API reference prices, not subscription charges or an upstream bill. Prices are downloaded from models.dev every 6 hours while reports are viewed; usage and account data are never sent. Updating prices also recalculates past usage.',
+    'usage.cost.formula':
+        '(Uncached input × input rate + cache reads × read rate + cache writes × write rate + output × output rate) / 1,000,000. Reasoning already included in output is not charged twice. A separate reasoning rate and identifiable context tiers are applied when published.',
+    'usage.cost.limits':
+        'Exact OpenAI, Anthropic and Google catalog IDs only. No guessing private aliases. Unknown usage or prices stay unpriced; ≥ is the known subtotal. Failed calls count when they declare tokens. Standard token rates only, excluding priority/batch adjustments and additional media/tool charges.',
+    'usage.refresh.hint':
+        'Refresh usage · checks every 5 seconds while visible; completed requests only',
+    'usage.refresh.failed':
+        'Refresh failed; showing the last successful report.',
+    'usage.empty.window':
+        'No usage collected in this period. This does not mean the account was unused.',
+    'usage.members': 'Member details',
+    'usage.group.profiles': 'Traffic policy',
+    'usage.group.accounts': 'Upstream account',
+    'usage.group.models': 'Upstream model',
+    'usage.group.sources': 'Traffic source',
+    'usage.group.callers': 'Caller',
+    'usage.group.projects': 'Git project',
+    'usage.path.profiles': 'Traffic policy › Upstream model',
+    'usage.path.accounts': 'Upstream account › Upstream model',
+    'usage.path.models': 'Upstream model › Caller',
+    'usage.path.sources': 'Traffic source › Upstream model',
+    'usage.path.callers': 'Caller › Upstream model',
+    'usage.path.projects':
+        'Git project › Branch at launch › Caller › Upstream model',
+    'usage.total': 'Total',
+    'usage.expand': 'Expand',
+    'usage.collapse': 'Collapse',
+    'usage.children.truncated': 'Partial breakdown',
+    'usage.caller.local': 'Local user · launcher-reported',
+    'usage.caller.member': 'Authenticated Runtime user',
+    'usage.branch.launch': 'Branch at launch',
+    'usage.table.input': 'Uncached input',
+    'usage.table.output': 'Output tokens',
+    'usage.table.cost': 'Estimated cost (USD)',
+    'usage.projects.hint':
+        'Git is a launch-time snapshot, not a history of branch switches. Missing metadata stays unknown. Different machines or clones are not merged by name.',
+    'usage.callers.hint':
+        'Runtime users are authenticated; local user names are launcher-reported labels, not upstream accounts or Git commit authors.',
+    'usage.source.local': 'Local launch',
+    'usage.source.manual': 'Manual proxy',
+    'usage.source.member': 'Signed-in member',
+    'usage.source.proxy': 'Runtime proxy',
+    'usage.cache_read': 'Cache read',
+    'usage.unknown': 'Not reported',
+    'usage.tokens.hint':
+        '— means not reported; ≥ is a known minimum. Tokens come from declared response usage, not provider-wide quota or billing.',
+    'capture.summary.title': 'Request overview',
+    'capture.summary.hint':
+        'No conversation bodies are available. Basic request outcomes remain visible; open request records for routing and failure details.',
+    'capture.summary.records': 'Request records',
+    'capture.summary.overview': 'Overview',
+    'capture.summary.calls': '{count} requests',
+    'capture.summary.success': '{count} succeeded',
+    'capture.summary.failure': '{count} failed',
+    'capture.summary.canceled': '{count} canceled',
+    'capture.summary.partial':
+        'Summary covers loaded requests; load older records for more.',
     'usage.subtitle':
-        'Runtime user activity projected from retained Agent traffic evidence',
+        'Traffic through this Runtime, shared by App and Web. Usage collection is independent of conversation recording.',
     'usage.loading': 'Reading retained usage evidence…',
     'usage.unavailable': 'Usage evidence is unavailable',
-    'usage.scope.retained': 'Past 365 days · retained evidence',
-    'usage.generated': 'Projected at {time}',
+    'usage.scope.retained': 'Current Runtime · collected usage',
+    'usage.generated': 'Updated {time}',
     'usage.activity.team.title': 'Team activity evidence',
     'usage.activity.team.detail':
         'Daily retained Agent API calls across runtime users; select Token to inspect declared usage.',
@@ -2344,7 +2473,7 @@ final class AppCopy {
         'Counted from retained terminal Agent API Exchanges',
     'usage.metric.success': 'Success rate',
     'usage.metric.success.detail': '{succeeded} succeeded · {failed} failed',
-    'usage.metric.input': 'Input tokens',
+    'usage.metric.input': 'Uncached input tokens',
     'usage.metric.output': 'Output tokens',
     'usage.metric.protocol_declared': 'Protocol-declared evidence only',
     'usage.users.title': 'Users',
@@ -2848,6 +2977,9 @@ final class AppCopy {
     'capture.load_more': '加载更早的运行记录',
     'capture.select': '请选择一条运行记录以检查其证据。',
     'capture.assignment.missing': '未绑定流量策略',
+    'capture.assignment.unavailable': '策略信息暂不可用',
+    'capture.detail.unavailable': '运行记录详情暂时无法读取',
+    'capture.detail.unavailable.detail': 'Runtime 未能读取详情。请重试；这不代表该运行记录没有请求。',
     'capture.launch_incomplete': '启动未完成',
     'capture.launch_incomplete.detail':
         '本次启动未绑定流量策略，也没有记录到流量。请查看终端中的启动错误，按需修正策略后重新运行命令。此空记录可以删除。',
@@ -2957,10 +3089,10 @@ final class AppCopy {
     'deletion.endpoint.consequence': '它将不再可用于新的路由。历史调用记录仍会保留实际去向。',
     'deletion.capture.title': '删除这条运行记录？',
     'deletion.capture.consequence':
-        '其中的所有 Agent 调用、轮次和 Raw HTTP 信封都会被移除，占用的字节会被释放。此操作不可撤销。',
+        '其中的所有 Agent 调用、轮次、用量统计和 Raw HTTP 信封都会被移除，占用的字节会被释放。此操作不可撤销。',
     'deletion.archive.title': '清空证据存档？',
     'deletion.archive.consequence':
-        '所有运行记录与已记录的证据都会被移除；流量策略、上游服务和账号会保留。'
+        '所有运行记录、用量统计与已记录的证据都会被移除；流量策略、上游服务和账号会保留。'
         '逻辑记录会被删除、查询不再返回它们；但这不声称从磁盘快照或备份介质上抹除。',
     'common.back': '返回',
     'common.loading': '正在加载…',
@@ -3084,6 +3216,28 @@ final class AppCopy {
     'activity.status.canceled': '已取消',
     'exchange.failure.default.title': 'Agent 请求未完成。',
     'exchange.failure.default.action': '检查下方冻结证据，修复故障边界后重试。',
+    'exchange.failure.provider_stream_truncated.title': '上游流在完成前结束。',
+    'exchange.failure.provider_stream_truncated.action':
+        '未收到完整终止事件；HTTP 200 不代表模型已完成。请检查上游服务与网络路径。',
+    'exchange.failure.provider_response_failed.title': '上游服务报告本次响应失败。',
+    'exchange.failure.provider_response_failed.action':
+        '已收到失败事件，而非成功终止事件。请结合上游错误码检查请求转发与服务状态。',
+    'exchange.failure.provider_code': '上游错误码',
+    'exchange.failure.provider_stream_malformed.title': '无法解析上游流。',
+    'exchange.failure.provider_stream_malformed.action': '请检查响应编码、事件格式及响应脚本。',
+    'exchange.failure.provider_stream_state_invalid.title': '上游流的事件顺序异常。',
+    'exchange.failure.provider_stream_state_invalid.action':
+        '请检查上游或响应脚本是否产生重复、乱序的终止事件或输出事件。',
+    'exchange.failure.provider_stream_limit_exceeded.title': '上游流超出处理上限。',
+    'exchange.failure.provider_stream_limit_exceeded.action':
+        '请缩小响应规模或检查异常大事件。本次请求未被标记为成功。',
+    'exchange.failure.provider_output_unsupported.title':
+        'ViberMate 无法解释本次上游输出。',
+    'exchange.failure.provider_output_unsupported.action':
+        '请查看技术详情中的字段路径并检查所选协议，不应将此问题当作网络断开。',
+    'exchange.failure.provider_tool_call_incomplete.title': '上游返回的工具调用不完整。',
+    'exchange.failure.provider_tool_call_incomplete.action':
+        '不完整的工具调用未放行给客户端。请检查上游响应后重试。',
     'exchange.failure.provider_response_idle.title': '上游服务未能及时响应。',
     'exchange.failure.provider_response_idle.action':
         '检查上游服务与网络路径，然后重试 Agent 请求。',
@@ -3455,7 +3609,7 @@ final class AppCopy {
     'environment.recording.metadata_only.detail':
         '不保存对话或原始 HTTP 正文；保留元数据，以及可用的模型和 Token 用量。',
     'environment.recording.off.detail':
-        '仅保留基本运行状态，不保存对话或原始 HTTP 记录；无法统计模型和 Token 用量。已有历史不会删除。',
+        '本策略仅保留基本运行状态，不保存对话或原始 HTTP 记录。若单独开启 Runtime 用量采集，仍会统计模型和 Token。已有历史不会删除。',
     'environment.recording.retention': '保留时间',
     'environment.recording.days': '天',
     'environment.launch.label': '子进程环境变量',
@@ -4405,7 +4559,7 @@ final class AppCopy {
     'server.users.policy.alerts_on': '告警开启',
     'server.users.policy.summary': '{access} · {alerts}',
     'server.users.policy.failed': '策略未保存。请检查所选策略与阈值后重试。',
-    'server.usage.truncated': '统计已达到安全上限；当前显示的是部分总量。',
+    'server.usage.truncated': '统计已达到安全上限；部分记录或分组明细未展示。',
     'server.usage.no_traffic': '尚未捕获到 Agent 流量',
     'server.usage.workspace.unknown': '客户端未报告工作区',
     'server.usage.succeeded': '成功 {count}',
@@ -4420,12 +4574,93 @@ final class AppCopy {
     'server.usage.details.hide': '收起详情',
     'server.usage.models.title': '精确的请求模型 → 上游模型',
     'server.usage.sessions.title': 'Agent 会话',
-    'usage.title': '团队洞察',
-    'usage.subtitle': '基于已保留 Agent 流量证据统计每个运行用户的实际使用',
+    'usage.title': '使用概览',
+    'usage.range': '{days} 天',
+    'usage.collection.settings': '统计设置',
+    'usage.personal.collection_off': '当前 Runtime 未开启用量采集，请联系管理员。已有统计在保留期内仍可查看。',
+    'usage.personal.details': '会话与设备',
+    'usage.collection.enable': '为当前 Runtime 采集无正文用量',
+    'usage.collection.retention': '保留期限',
+    'usage.collection.explanation':
+        '覆盖当前 Runtime 的本地 App、Web 和代理流量，包括关闭正文录制的策略。保存请求状态、时间、策略/账号、模型、声明的 Token、会话标识及可用的调用者、Git 启动信息；不保存提示词、回复、工具参数或凭据。',
+    'usage.collection.retention_hint':
+        '仅从开启后的新请求开始，历史空白不回填。关闭后停止采集，已有统计按期过期；清空记录也会清空统计。App 与 Web 共用一份数据。',
+    'usage.collection.shorter': '缩短期限并保存后，超期用量记录会立即删除。',
+    'usage.collection.since': '本次统计起点 {time} · 最多保留 {days} 天 · 之前空白不回填',
+    'usage.collection.disabled': '用量采集未开启。可在「统计设置」中开启，无需保存对话正文即可统计后续流量。',
+    'usage.succeeded': '成功',
+    'usage.failed': '失败',
+    'usage.canceled': '已取消 {count} 次',
+    'usage.trend': '每日请求',
+    'usage.trend.requests': '请求',
+    'usage.trend.monthly': '每月请求',
+    'usage.cost.title': 'API 等价费用',
+    'usage.cost.short': '估算费用',
+    'usage.cost.daily': '每日估算费用 · USD',
+    'usage.cost.monthly': '每月估算费用 · USD',
+    'usage.cost.no_priced': '暂无可计价用量。模型未匹配或 Token 缺失不代表零费用。',
+    'usage.cost.coverage': '{known}/{total} 完整计价 · USD',
+    'usage.cost.coverage_detail':
+        '完整计价 {complete} 次 · 部分计价 {partial} 次 · 未计价 {unpriced} 次',
+    'usage.cost.basis': '估算口径 · 非实际账单',
+    'usage.cost.updated': 'models.dev · 价格更新于 {time}',
+    'usage.cost.stale': '更新失败，沿用缓存价格',
+    'usage.cost.unavailable': '参考价格暂不可用，Token 统计不受影响。',
+    'usage.cost.explanation':
+        '按当前标准 API 参考价折算为美元，不代表包月扣费或上游账单。查看报表时每 6 小时从 models.dev 更新价格，不上传用量或账号信息；价格更新后历史用量也会重新折算。',
+    'usage.cost.formula':
+        '（未缓存输入 × 输入单价 + 缓存读取 × 读取单价 + 缓存写入 × 写入单价 + 输出 × 输出单价）÷ 1,000,000。已包含在输出中的推理 Token 不重复计费；目录单列推理价或可识别的上下文阶梯时分别计算。',
+    'usage.cost.limits':
+        '首版精确匹配 OpenAI、Anthropic、Google 目录，不猜测私有模型别名。用量或价格缺失不当作零，≥ 表示已知部分。失败请求声明了用量也计入。采用标准 Token 参考价，不含优先级／批量折扣和媒体、工具附加收费。',
+    'usage.refresh.hint': '刷新用量 · 页面可见时每 5 秒检查，仅统计已结束请求',
+    'usage.refresh.failed': '刷新失败，仍显示上次成功的报表。',
+    'usage.empty.window': '此时间段没有采集到用量，不代表账号没有使用。',
+    'usage.members': '成员明细',
+    'usage.group.profiles': '流量策略',
+    'usage.group.accounts': '上游账号',
+    'usage.group.models': '上游模型',
+    'usage.group.sources': '流量来源',
+    'usage.group.callers': '调用者',
+    'usage.group.projects': 'Git 项目',
+    'usage.path.profiles': '流量策略 › 上游模型',
+    'usage.path.accounts': '上游账号 › 上游模型',
+    'usage.path.models': '上游模型 › 调用者',
+    'usage.path.sources': '流量来源 › 上游模型',
+    'usage.path.callers': '调用者 › 上游模型',
+    'usage.path.projects': 'Git 项目 › 启动分支 › 调用者 › 上游模型',
+    'usage.total': '总计',
+    'usage.expand': '展开',
+    'usage.collapse': '收起',
+    'usage.children.truncated': '部分明细',
+    'usage.caller.local': '本机使用者 · 启动器报告',
+    'usage.caller.member': '已认证 Runtime 用户',
+    'usage.branch.launch': '启动时分支',
+    'usage.table.input': '未缓存输入',
+    'usage.table.output': '输出 Token',
+    'usage.table.cost': '估算费用 (USD)',
+    'usage.projects.hint': 'Git 信息是启动时快照，不追踪运行中的分支切换；缺失信息记为未知，不按同名合并不同机器或克隆。',
+    'usage.callers.hint': 'Runtime 用户已认证；本机用户名是启动器报告的标签，不等于上游账号或 Git 提交作者。',
+    'usage.source.local': '本机启动',
+    'usage.source.manual': '手动代理',
+    'usage.source.member': '已登录成员',
+    'usage.source.proxy': 'Runtime 代理',
+    'usage.cache_read': '缓存读取',
+    'usage.unknown': '未报告',
+    'usage.tokens.hint': '— 表示未报告，≥ 表示已知下限。Token 来自响应声明，不代表账号总额度或上游账单。',
+    'capture.summary.title': '请求概览',
+    'capture.summary.hint': '当前没有可查看的对话正文。这里只汇总请求状态；路由和失败详情可在请求记录中查看。',
+    'capture.summary.records': '请求记录',
+    'capture.summary.overview': '概览',
+    'capture.summary.calls': '{count} 次请求',
+    'capture.summary.success': '成功 {count} 次',
+    'capture.summary.failure': '失败 {count} 次',
+    'capture.summary.canceled': '取消 {count} 次',
+    'capture.summary.partial': '当前汇总仅包含已加载的请求，可加载更早记录。',
+    'usage.subtitle': '仅统计经过当前 Runtime 的流量，App 与 Web 共用；用量采集与正文录制独立。',
     'usage.loading': '正在读取已保留的用量证据…',
     'usage.unavailable': '当前无法读取用量证据',
-    'usage.scope.retained': '近 365 天 · 已保留证据',
-    'usage.generated': '生成于 {time}',
+    'usage.scope.retained': '当前 Runtime · 已采集用量',
+    'usage.generated': '已更新 {time}',
     'usage.activity.team.title': '团队活动证据',
     'usage.activity.team.detail':
         '按天汇总运行用户的已保留 Agent API 调用；切换 Token 可查看协议声明的用量。',
@@ -4450,10 +4685,10 @@ final class AppCopy {
     'usage.metric.active_runs': '运行中的记录',
     'usage.metric.active_runs.detail': '来自已认证的运行用户',
     'usage.metric.api_calls': 'Agent API 调用',
-    'usage.metric.api_calls.detail': '按已保留的终态 Agent API 调用统计',
+    'usage.metric.api_calls.detail': '一个请求计一次，不等于对话轮数',
     'usage.metric.success': '成功率',
     'usage.metric.success.detail': '成功 {succeeded} · 失败 {failed}',
-    'usage.metric.input': '输入 Token',
+    'usage.metric.input': '未缓存输入 Token',
     'usage.metric.output': '输出 Token',
     'usage.metric.protocol_declared': '仅统计协议明确声明的证据',
     'usage.users.title': '用户',

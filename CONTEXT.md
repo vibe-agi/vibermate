@@ -226,12 +226,20 @@ One captured client request and its terminal downstream outcome, together with r
 _Avoid_: Conversation, Session
 
 **Agent API Call**:
-One retained terminal Exchange counted by the Usage report. This count does not claim a user-visible Turn; one Turn may produce multiple Agent API Calls.
+One terminal Exchange counted once by the Usage report, regardless of retries or conversation-body retention. This count does not claim a user-visible Turn; one Turn may produce multiple Agent API Calls. Opaque forwarded connections and ACP Prompts do not establish Agent API Calls.
 _Avoid_: Turn, billing event
 
 **Usage Observation**:
-Protocol-declared model and token counts recorded for one Exchange. Missing values remain unknown; ViberMate does not infer them from model names, payload size, or provider identity.
+Body-free status, time, routing identity, and protocol-declared model and token counts for one Exchange. Its ownership follows the admitted Capture, never the person viewing the dashboard. Missing values remain unknown; ViberMate does not infer them from model names, payload size, or provider identity.
 _Avoid_: Estimate, billing record, model guess
+
+**Usage Collection Policy**:
+The Runtime-wide, explicitly enabled authority to retain Usage Observations independently of conversation content, with its own retention period. App and Web read the same observations. Stopping collection does not erase history; body expiry does not erase usage, but deleting a Capture or clearing the archive does. Uncollected history is not reconstructed.
+_Avoid_: Content Recording Policy, upstream quota, analytics consent for a different Runtime
+
+**Usage Source**:
+The observed launch/admission category: local launch, manual proxy, authenticated Runtime User, or Runtime proxy. A local or manual Capture does not become a Runtime User merely because a Server Owner can inspect it.
+_Avoid_: viewer, OS user, provider Account
 
 **Actor**:
 The client-native Agent or Subagent identity that owns a Conversation.

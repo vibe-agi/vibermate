@@ -39,7 +39,7 @@ func TestProjectorScopesPersonalUsageBeforeTheTeamRankingLimit(t *testing.T) {
 	}
 	users[len(users)-1].Policy = policy
 	target := users[len(users)-1]
-	projector, err := runtimeusage.New(runtimeusage.Options{
+	projector, err := newTestProjector(testOptions{
 		Users: usersOf(users...), Runs: fakeRuns{}, Activities: fakeActivities{},
 		Contents:   fakeContents{items: map[string]exchangecontent.Record{}},
 		Identities: fakeIdentities{items: map[string]agentconversation.ClientIdentity{}},
@@ -81,7 +81,7 @@ func TestProjectorContinuesAfterAFullCaptureRunPage(t *testing.T) {
 		}
 	}
 	runs := &validatingPagedRuns{items: items}
-	projector, err := runtimeusage.New(runtimeusage.Options{
+	projector, err := newTestProjector(testOptions{
 		Users: fakeUsers{items: []runtimeuser.User{user}}, Runs: runs,
 		Activities: fakeActivities{byRun: map[string][]activity.Record{}},
 		Contents:   fakeContents{items: map[string]exchangecontent.Record{}},
@@ -122,7 +122,7 @@ func TestProjectorKeepsAnOverflowingTokenCallUnknown(t *testing.T) {
 		"exchange-one": usageContent("exchange-one", math.MaxInt64),
 		"exchange-two": usageContent("exchange-two", 1),
 	}}
-	projector, err := runtimeusage.New(runtimeusage.Options{
+	projector, err := newTestProjector(testOptions{
 		Users: fakeUsers{items: []runtimeuser.User{user}},
 		Runs:  fakeRuns{items: []capturerun.View{run}},
 		Activities: fakeActivities{byRun: map[string][]activity.Record{
@@ -173,7 +173,7 @@ func TestProjectorReportsSparseDaysWithinAnExplicitCivilWindow(t *testing.T) {
 			{SubjectID: "until", Status: activity.StatusSucceeded, OccurredAt: time.Date(2026, 8, 26, 16, 0, 0, 0, time.UTC)},
 		},
 	}}
-	projector, err := runtimeusage.New(runtimeusage.Options{
+	projector, err := newTestProjector(testOptions{
 		Users: usersOf(user), Runs: fakeRuns{items: []capturerun.View{run}},
 		Activities: activities,
 		Contents: fakeContents{items: map[string]exchangecontent.Record{
@@ -213,7 +213,7 @@ func TestProjectorReportsSparseDaysWithinAnExplicitCivilWindow(t *testing.T) {
 	}
 	if report.Days[0].AgentAPICalls != 1 || report.Days[0].Tokens.Output.Tokens != 7 ||
 		report.Days[0].Tokens.Output.KnownCalls != 1 ||
-		report.Days[1].Failed != 1 || report.Days[1].ContentUnavailableCalls != 1 ||
+		report.Days[1].Failed != 1 ||
 		report.Days[1].Tokens.Output.UnknownCalls != 1 {
 		t.Fatalf("daily evidence = %#v", report.Days)
 	}
@@ -251,7 +251,7 @@ func TestProjectorReadsOneWindowedExchangeStreamForAllCaptureRuns(t *testing.T) 
 			Status: activity.StatusSucceeded, OccurredAt: now,
 		},
 	}}
-	projector, err := runtimeusage.New(runtimeusage.Options{
+	projector, err := newTestProjector(testOptions{
 		Users: usersOf(user), Runs: fakeRuns{items: runs}, Activities: activities,
 		Contents:   fakeContents{items: map[string]exchangecontent.Record{}},
 		Identities: fakeIdentities{items: map[string]agentconversation.ClientIdentity{}},
@@ -323,7 +323,7 @@ func TestProjectorBoundsBreakdownsWithoutChangingUserTotals(t *testing.T) {
 			},
 		}
 	}
-	projector, err := runtimeusage.New(runtimeusage.Options{
+	projector, err := newTestProjector(testOptions{
 		Users: fakeUsers{items: []runtimeuser.User{user}},
 		Runs:  fakeRuns{items: []capturerun.View{run}},
 		Activities: fakeActivities{byRun: map[string][]activity.Record{
@@ -391,7 +391,7 @@ func TestProjectorAttributesExactModelsTokensAndResumedAgentSession(t *testing.T
 			Confidence: "exact", ObservedAt: now,
 		}
 	}
-	projector, err := runtimeusage.New(runtimeusage.Options{
+	projector, err := newTestProjector(testOptions{
 		Users: users, Runs: runs, Activities: activities, Contents: contents,
 		Identities: identities, Clock: fixedClock{now: now},
 	})
@@ -411,7 +411,7 @@ func TestProjectorAttributesExactModelsTokensAndResumedAgentSession(t *testing.T
 	}
 	alice := report.Users[0]
 	if alice.CaptureRuns != 2 || alice.AgentAPICalls != 3 || alice.Succeeded != 2 || alice.Failed != 1 ||
-		alice.ContentUnavailableCalls != 1 || alice.ModelUnavailableCalls != 1 {
+		alice.ModelUnavailableCalls != 1 {
 		t.Fatalf("alice counters = %#v", alice)
 	}
 	if len(alice.Models) != 1 || alice.Models[0].RequestedModel != "gpt-5.6-sol" ||

@@ -673,6 +673,7 @@ func TestDisabledContentRecordingRunsTransformsWithoutConversationOrRawEvidence(
 		},
 	})
 	content := &contentObserverDouble{}
+	attempts := &attemptObserverDouble{}
 	provider := &providerDouble{results: []providerResult{{
 		response: jsonResponse(http.StatusOK, completeProviderResponse("gpt-provider")),
 	}}}
@@ -681,7 +682,7 @@ func TestDisabledContentRecordingRunsTransformsWithoutConversationOrRawEvidence(
 		newAccountAuthority(t, testAccount{id: "account.primary", revision: 3, epoch: 7}),
 		provider,
 		approvedDecisions(),
-		&attemptObserverDouble{},
+		attempts,
 		content,
 	)
 	raw := &rawObserverDouble{}
@@ -699,6 +700,10 @@ func TestDisabledContentRecordingRunsTransformsWithoutConversationOrRawEvidence(
 	}
 	if _, ok := content.latest(); ok {
 		t.Fatal("recording-off Environment emitted conversation evidence")
+	}
+	observations := attempts.snapshot()
+	if len(observations) != 1 || observations[0].StartedAt.IsZero() || observations[0].UpstreamModel != "gpt-provider" || !observations[0].Usage.Output.Known || observations[0].Usage.Output.Tokens != 2 {
+		t.Fatalf("recording-off lost body-free usage: %+v", observations)
 	}
 	if len(raw.snapshot()) != 0 {
 		t.Fatal("recording-off Environment emitted raw transform evidence")
@@ -910,79 +915,83 @@ func TestOriginalDestinationTransformsWithoutRecordingOrExposingCredentials(t *t
 	}
 }
 
-func TestOriginalDestinationPreservesGzipStreamAndRecordsDecodedResponse(t *testing.T) {
-	plan := mustEnvironmentRequestPlan(t, testPlanOptions{
-		destination:    environment.DestinationKindOriginal,
-		providerOrigin: "https://api.anthropic.com",
-		backend:        protocolspec.DialectAnthropicMessages,
-		modelMode:      environment.ModelModePassthrough,
-	})
-	wire := []byte(strings.Join([]string{
-		`event: message_start`,
-		`data: {"type":"message_start","message":{"id":"msg_gzip","type":"message","role":"assistant","model":"claude-client-alias","usage":{"input_tokens":4}}}`,
-		``,
-		`event: content_block_start`,
-		`data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`,
-		``,
-		`event: content_block_delta`,
-		`data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"compressed evidence"}}`,
-		``,
-		`event: content_block_stop`,
-		`data: {"type":"content_block_stop","index":0}`,
-		``,
-		`event: message_delta`,
-		`data: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":2}}`,
-		``,
-		`event: message_stop`,
-		`data: {"type":"message_stop"}`,
-		``,
-	}, "\n") + "\n")
-	compressed := gzipFixture(t, wire)
-	provider := &providerDouble{results: []providerResult{{response: &http.Response{
-		StatusCode: http.StatusOK,
-		Header: http.Header{
-			"Content-Type":     []string{"text/event-stream"},
-			"Content-Encoding": []string{"gzip"},
-		},
-		Body: io.NopCloser(bytes.NewReader(compressed)),
-	}}}}
-	content := &contentObserverDouble{}
-	pipeline := newTestPipelineWithContentObserver(
-		t, nil, provider, approvedDecisions(), &attemptObserverDouble{}, content,
-	)
-	defer shutdownPipeline(t, pipeline)
-	downstream := &downstreamRecorder{}
-	request := mustClientRequestWithOptions(
-		t,
-		"exchange-original-gzip",
-		plan,
-		streamingClientRequest(),
-		WithOriginalHeaders(http.Header{
-			"Authorization":     []string{"Bearer client-owned"},
-			"Anthropic-Version": []string{"2023-06-01"},
-		}),
-	)
-	result, err := pipeline.Execute(
-		context.Background(),
-		request,
-		downstream,
-	)
-	if err != nil || result.Outcome != AttemptSucceeded {
-		t.Fatalf("Execute() = %+v, %v", result, err)
-	}
-	if !bytes.Equal(downstream.bytesSnapshot(), compressed) {
-		t.Fatal("original gzip response bytes changed before downstream delivery")
-	}
-	envelopes := downstream.envelopesSnapshot()
-	if len(envelopes) != 1 || envelopes[0].Headers().Get("Content-Encoding") != "gzip" {
-		t.Fatalf("downstream envelope = %+v", envelopes)
-	}
-	observation, ok := content.latest()
-	if !ok || observation.Response == nil || len(observation.Response.Blocks) != 1 ||
-		observation.Response.Blocks[0].Text != "compressed evidence" ||
-		!observation.Response.Usage.Output.Known ||
-		observation.Response.Usage.Output.Tokens != 2 {
-		t.Fatalf("gzip content observation = %+v", observation)
+func TestOriginalDestinationPreservesCompressedStreamAndRecordsDecodedResponse(t *testing.T) {
+	for _, encoding := range []string{"gzip", "zstd"} {
+		t.Run(encoding, func(t *testing.T) {
+			plan := mustEnvironmentRequestPlan(t, testPlanOptions{
+				destination:    environment.DestinationKindOriginal,
+				providerOrigin: "https://api.anthropic.com",
+				backend:        protocolspec.DialectAnthropicMessages,
+				modelMode:      environment.ModelModePassthrough,
+			})
+			wire := []byte(strings.Join([]string{
+				`event: message_start`,
+				`data: {"type":"message_start","message":{"id":"msg_gzip","type":"message","role":"assistant","model":"claude-client-alias","usage":{"input_tokens":4}}}`,
+				``,
+				`event: content_block_start`,
+				`data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`,
+				``,
+				`event: content_block_delta`,
+				`data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"compressed evidence"}}`,
+				``,
+				`event: content_block_stop`,
+				`data: {"type":"content_block_stop","index":0}`,
+				``,
+				`event: message_delta`,
+				`data: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":2}}`,
+				``,
+				`event: message_stop`,
+				`data: {"type":"message_stop"}`,
+				``,
+			}, "\n") + "\n")
+			compressed := compressedRequestFixture(t, encoding, wire)
+			provider := &providerDouble{results: []providerResult{{response: &http.Response{
+				StatusCode: http.StatusOK,
+				Header: http.Header{
+					"Content-Type":     []string{"text/event-stream"},
+					"Content-Encoding": []string{encoding},
+				},
+				Body: io.NopCloser(bytes.NewReader(compressed)),
+			}}}}
+			content := &contentObserverDouble{}
+			pipeline := newTestPipelineWithContentObserver(
+				t, nil, provider, approvedDecisions(), &attemptObserverDouble{}, content,
+			)
+			defer shutdownPipeline(t, pipeline)
+			downstream := &downstreamRecorder{}
+			request := mustClientRequestWithOptions(
+				t,
+				"exchange-original-gzip",
+				plan,
+				streamingClientRequest(),
+				WithOriginalHeaders(http.Header{
+					"Authorization":     []string{"Bearer client-owned"},
+					"Anthropic-Version": []string{"2023-06-01"},
+				}),
+			)
+			result, err := pipeline.Execute(
+				context.Background(),
+				request,
+				downstream,
+			)
+			if err != nil || result.Outcome != AttemptSucceeded {
+				t.Fatalf("Execute() = %+v, %v", result, err)
+			}
+			if !bytes.Equal(downstream.bytesSnapshot(), compressed) {
+				t.Fatal("original gzip response bytes changed before downstream delivery")
+			}
+			envelopes := downstream.envelopesSnapshot()
+			if len(envelopes) != 1 || envelopes[0].Headers().Get("Content-Encoding") != encoding {
+				t.Fatalf("downstream envelope = %+v", envelopes)
+			}
+			observation, ok := content.latest()
+			if !ok || observation.Response == nil || len(observation.Response.Blocks) != 1 ||
+				observation.Response.Blocks[0].Text != "compressed evidence" ||
+				!observation.Response.Usage.Output.Known ||
+				observation.Response.Usage.Output.Tokens != 2 {
+				t.Fatalf("compressed content observation = %+v", observation)
+			}
+		})
 	}
 }
 
@@ -1876,6 +1885,38 @@ func TestManagedResponsesStreamingKeepsIncrementalClientSemantics(t *testing.T) 
 	}
 }
 
+func TestManagedProviderFailureCodeReachesClientAndBodyFreeObservation(t *testing.T) {
+	account := testAccount{id: "account.primary", revision: 1, epoch: 1}
+	plan := mustEnvironmentRequestPlan(t, testPlanOptions{
+		clientProtocol: environment.ClientProtocolOpenAIResponses,
+		destination:    environment.DestinationKindUpstream, providerOrigin: "https://api.openai.com",
+		backend: protocolspec.DialectOpenAIResponses, modelMode: environment.ModelModePassthrough,
+		accounts: []testAccount{account}, preferred: account.id,
+		recording: environment.ContentRecordingPolicy{Mode: environment.ContentRecordingOff},
+	})
+	provider := &providerDouble{results: []providerResult{{response: streamResponse(http.StatusOK,
+		strings.NewReader("data: {\"type\":\"response.failed\",\"response\":{\"error\":{\"code\":\"invalid_encrypted_content\",\"message\":\"private\"}}}\n\n"))}}}
+	observer := &attemptObserverDouble{}
+	content := &contentObserverDouble{}
+	pipeline := newTestPipelineWithContentObserver(t, newAccountAuthority(t, account), provider, approvedDecisions(), observer, content)
+	defer shutdownPipeline(t, pipeline)
+	downstream := &downstreamRecorder{}
+	_, err := pipeline.Execute(context.Background(), mustClientRequest(t, "failure-code", plan, streamingResponsesClientRequest()), downstream)
+	var failure *Failure
+	if !errors.As(err, &failure) || failure.Code != ReasonProviderResponseFailed || failure.ProviderErrorCode != "invalid_encrypted_content" {
+		t.Fatalf("failure=%v", err)
+	}
+	if got := observer.snapshot(); len(got) != 1 || got[0].ProviderErrorCode != failure.ProviderErrorCode {
+		t.Fatalf("observation=%+v", got)
+	}
+	if got := downstream.abortsSnapshot(); len(got) != 1 || got[0].ProviderErrorCode != failure.ProviderErrorCode {
+		t.Fatalf("abort=%+v", got)
+	}
+	if _, retained := content.latest(); retained {
+		t.Fatal("recording-off failure retained body")
+	}
+}
+
 func TestAccountSelectorChoosesOneFrozenEndpointAccount(t *testing.T) {
 	accounts := []testAccount{
 		{id: "account.backup", revision: 4, epoch: 5},
@@ -2279,6 +2320,7 @@ type testPlanOptions struct {
 	downstreamProtocol wireprofile.ApplicationProtocol
 	destination        environment.DestinationKind
 	providerOrigin     string
+	routeRevision      environment.Revision
 	backend            protocolspec.Dialect
 	modelMode          environment.ModelMode
 	mappedModel        string
@@ -2374,6 +2416,10 @@ func mustEnvironmentRequestPlan(t *testing.T, options testPlanOptions) environme
 	}
 	destination := environment.DestinationPlan{Kind: options.destination}
 	if options.destination == environment.DestinationKindUpstream {
+		routeRevision := options.routeRevision
+		if routeRevision == 0 {
+			routeRevision = 6
+		}
 		providerOrigin := mustProviderOrigin(t, options.providerOrigin)
 		destination.Upstream = &environment.UpstreamPlan{
 			DefaultRouteID: "route.primary",
@@ -2382,7 +2428,7 @@ func mustEnvironmentRequestPlan(t *testing.T, options testPlanOptions) environme
 				CandidateRouteIDs: []environment.UpstreamRouteID{"route.primary"},
 			},
 			Routes: []environment.UpstreamRoute{{
-				ID: "route.primary", Revision: 6,
+				ID: "route.primary", Revision: routeRevision,
 				ProviderTarget: environment.ProviderTarget{
 					ID: "target.primary", Revision: 3,
 					Origin: providerOrigin, RealmID: realm,
@@ -3325,7 +3371,7 @@ func TestProviderRejectionClassifierReturnsOnlyKnownEmittedFields(t *testing.T) 
 		{`{"error":{"message":"max_tokens is private text"}}`, ProviderFieldUnknown},
 	}
 	for _, test := range tests {
-		if got := classifyProviderRejection(strings.NewReader(test.body)); got != test.want {
+		if got := classifyProviderRejection(strings.NewReader(test.body)).field; got != test.want {
 			t.Fatalf("classifyProviderRejection() = %q, want %q", got, test.want)
 		}
 	}

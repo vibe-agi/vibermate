@@ -110,6 +110,16 @@ func (client *Client) FetchEndpointModels(
 // FetchModelsDev reads the fixed metadata directory. It is an enrichment
 // source only and travels under the runtime auxiliary-egress purpose.
 func (client *Client) FetchModelsDev(ctx context.Context) (*http.Response, error) {
+	return client.fetchModelsDev(ctx, "/models.json")
+}
+
+// FetchModelsDevPrices uses the same credential-free, audited auxiliary egress
+// as model metadata. The remote URL is fixed; usage data never leaves Runtime.
+func (client *Client) FetchModelsDevPrices(ctx context.Context) (*http.Response, error) {
+	return client.fetchModelsDev(ctx, "/api.json")
+}
+
+func (client *Client) fetchModelsDev(ctx context.Context, path string) (*http.Response, error) {
 	origin, err := originidentity.ParseProviderOrigin(modelsDevOrigin)
 	if err != nil {
 		return nil, fmt.Errorf("construct models.dev origin: %w", err)
@@ -122,7 +132,7 @@ func (client *Client) FetchModelsDev(ctx context.Context) (*http.Response, error
 		purpose:      egressaudit.PurposeModelMetadataDirectory,
 		targetRef:    "runtime.models-dev",
 		target:       target,
-		relativePath: "/models.json",
+		relativePath: path,
 	})
 }
 

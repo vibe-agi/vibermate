@@ -1038,12 +1038,15 @@ func (request Request) Validate() error {
 	if len(request.Messages) == 0 || len(request.Messages) > MaxMessageCount {
 		return errors.New("message count is invalid")
 	}
-	providerExtensionCount := 0
 	providerExtensionBytes := 0
 	for index, message := range request.Messages {
 		if err := message.Validate(); err != nil {
 			return fmt.Errorf("message %d: %w", index, err)
 		}
+		// History contains many responses. Bound extension count per message,
+		// not over the whole history needed for the next turn or compaction.
+		// The byte budget remains aggregate, and message/block counts are bounded.
+		providerExtensionCount := 0
 		for _, block := range message.Blocks {
 			if block.Kind != BlockProviderExtension {
 				continue

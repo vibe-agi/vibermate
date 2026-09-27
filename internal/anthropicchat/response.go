@@ -10,6 +10,7 @@ import (
 )
 
 type openAIResponseWire struct {
+	Error             json.RawMessage    `json:"error,omitempty"`
 	ID                string             `json:"id"`
 	Object            string             `json:"object"`
 	Created           int64              `json:"created"`
@@ -116,6 +117,9 @@ func (codec *Codec) DecodeProviderResponse(
 	if err := decodeStrict(body, &wire); err != nil {
 		return protocolcore.Response{}, protocolcore.TranslationReport{},
 			protocolcore.NewFailure(protocolcore.ReasonInvalidProviderResponse, "$", err)
+	}
+	if len(wire.Error) > 0 && !bytes.Equal(bytes.TrimSpace(wire.Error), []byte("null")) {
+		return protocolcore.Response{}, protocolcore.TranslationReport{}, protocolcore.NewProviderFailure("$.error", wire.Error)
 	}
 	if wire.Object != "chat.completion" {
 		return protocolcore.Response{}, protocolcore.TranslationReport{},

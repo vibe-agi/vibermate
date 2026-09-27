@@ -24,6 +24,7 @@ var (
 )
 
 type openAIStreamChunkWire struct {
+	Error             json.RawMessage          `json:"error,omitempty"`
 	ID                string                   `json:"id"`
 	Object            string                   `json:"object"`
 	Created           int64                    `json:"created"`
@@ -218,6 +219,10 @@ func (stream *ProviderStream) Feed(
 				err,
 			)
 		}
+		if len(chunk.Error) > 0 && !bytes.Equal(bytes.TrimSpace(chunk.Error), []byte("null")) {
+			stream.failed = true
+			return safe.Bytes(), protocolcore.NewProviderFailure(fmt.Sprintf("$event[%d].error", eventIndex), chunk.Error)
+		}
 		if err := stream.consumeChunk(&safe, chunk); err != nil {
 			stream.failed = true
 			return safe.Bytes(), err
@@ -236,6 +241,12 @@ func (stream *ProviderStream) SemanticProgress() uint64 {
 	stream.mu.Lock()
 	defer stream.mu.Unlock()
 	return stream.semanticProgress
+}
+
+func (stream *ProviderStream) TerminalReceived() bool {
+	stream.mu.Lock()
+	defer stream.mu.Unlock()
+	return stream.done && !stream.failed
 }
 
 func (stream *ProviderStream) FinishDecoded(

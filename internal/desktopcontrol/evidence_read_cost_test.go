@@ -13,6 +13,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/activity"
 	"github.com/vibe-agi/vibermate/internal/agentconversation"
 	"github.com/vibe-agi/vibermate/internal/desktopcontrol"
+	"github.com/vibe-agi/vibermate/internal/protocolcore"
 )
 
 // Opening a Turn, or polling its exact Conversation, must not run the optional
@@ -24,6 +25,11 @@ func TestEvidencePointReadsDoNotReindexTheArchive(t *testing.T) {
 	t.Cleanup(func() { shutdownRuntime(t, runtime) })
 	conversation, err := agentconversation.Project(agentconversation.ProjectionInput{
 		CaptureRunID: "run-read-cost", ExchangeID: "exchange-read-cost", SourceDisplayName: "Codex",
+		// A legacy body-author projection can disagree with the later native
+		// identity. Reads must stay available while the index repairs it.
+		Request: &protocolcore.Request{Messages: []protocolcore.Message{{
+			Agent: &protocolcore.AgentMessageContext{Author: "/root/reviewer"},
+		}}},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -49,6 +55,7 @@ func TestEvidencePointReadsDoNotReindexTheArchive(t *testing.T) {
 		ProviderResponseID: "response-read-cost", Source: agentconversation.ClientIdentitySourceLocalState,
 		Confidence: "exact", ObservedAt: time.Date(2026, 9, 23, 0, 0, 0, 0, time.UTC),
 	}
+	indexer.identity = &deeperIdentity
 	deeperConversation, err := agentconversation.Project(agentconversation.ProjectionInput{
 		CaptureRunID: "run-read-cost", ExchangeID: "exchange-read-cost", SourceDisplayName: "Codex",
 		ClientIdentity: &deeperIdentity,
@@ -94,6 +101,9 @@ func TestEvidencePointReadsDoNotReindexTheArchive(t *testing.T) {
 	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), "exchange-read-cost") {
 		t.Fatalf("directory must return durable evidence: status=%d body=%s", response.Code, response.Body)
 	}
+	if strings.Contains(response.Body.String(), "clientIdentity") {
+		t.Fatal("mismatched identity was attached to the old projection")
+	}
 	select {
 	case <-indexer.started:
 	case <-time.After(time.Second):
@@ -122,6 +132,9 @@ func TestEvidencePointReadsDoNotReindexTheArchive(t *testing.T) {
 	application.ServeHTTP(updated, httptest.NewRequest(http.MethodGet, "/api/v1/conversations?captureRunId=run-read-cost", nil))
 	if updated.Code != http.StatusOK || !strings.Contains(updated.Body.String(), deeperConversation.ProjectionID) {
 		t.Fatalf("directory did not expose completed enrichment: status=%d body=%s", updated.Code, updated.Body)
+	}
+	if !strings.Contains(updated.Body.String(), "clientIdentity") {
+		t.Fatal("repaired projection did not expose its native identity")
 	}
 
 	activityIndexer := &readCostIndexer{
@@ -152,6 +165,7 @@ type readCostIndexer struct {
 	reindexes, identities  atomic.Int64
 	started, release, done chan struct{}
 	onRelease              func() error
+	identity               *agentconversation.ClientIdentity
 }
 
 func (indexer *readCostIndexer) Reindex(ctx context.Context, _ activity.ConversationIndexRequest) error {
@@ -170,5 +184,8 @@ func (indexer *readCostIndexer) Reindex(ctx context.Context, _ activity.Conversa
 
 func (indexer *readCostIndexer) Identity(context.Context, string) (agentconversation.ClientIdentity, error) {
 	indexer.identities.Add(1)
+	if indexer.identity != nil {
+		return indexer.identity.Clone(), nil
+	}
 	return agentconversation.ClientIdentity{}, activity.ErrExchangeNotFound
 }

@@ -207,6 +207,17 @@ func (repository *repositoryDouble) GetProjection(
 	return Project(record, view)
 }
 
+func (repository *repositoryDouble) AvailableBodies(_ context.Context, ids []string, now time.Time) (map[string]bool, error) {
+	repository.mu.Lock()
+	defer repository.mu.Unlock()
+	result := map[string]bool{}
+	for _, id := range ids {
+		record, ok := repository.records[id]
+		result[id] = ok && record.ExpiresAt.After(now) && string(record.Mode) == "full"
+	}
+	return result, nil
+}
+
 func (repository *repositoryDouble) RequestPreviews(
 	_ context.Context,
 	exchangeIDs []string,

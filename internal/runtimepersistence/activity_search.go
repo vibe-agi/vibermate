@@ -22,7 +22,7 @@ const searchActivityColumns = `
 	 candidate.conversation_projection_id, candidate.conversation_display_name,
 	 candidate.conversation_kind, candidate.conversation_evidence,
 	 candidate.conversation_actor, candidate.provider_status,
-	 candidate.provider_field, candidate.client_field, candidate.client_path,
+	 candidate.provider_field, candidate.provider_error_code, candidate.client_field, candidate.client_path,
 	 candidate.transport_evidence_json`
 
 func (repository *activityRepository) SearchExchanges(

@@ -2,10 +2,12 @@ package exchange
 
 import (
 	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -19,6 +21,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/messagetransform"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
+	"github.com/vibe-agi/vibermate/internal/protocolcore"
 	"github.com/vibe-agi/vibermate/internal/protocolspec"
 	"github.com/vibe-agi/vibermate/internal/providerauth"
 	"github.com/vibe-agi/vibermate/internal/providertransport"
@@ -27,25 +30,135 @@ import (
 	"github.com/vibe-agi/vibermate/internal/transportprofile"
 )
 
+func TestManagedResponsesCompressedRejectionPreservesNativeError(t *testing.T) {
+	for _, encoding := range []string{"identity", "gzip", "zstd"} {
+		for _, streaming := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/stream=%t", encoding, streaming), func(t *testing.T) {
+				body := []byte(`{"error":{"code":"credit_balance_exhausted","type":"native_quota","message":"private account context"}}`)
+				var encoded []byte
+				switch encoding {
+				case "gzip":
+					var buffer bytes.Buffer
+					compressor := gzip.NewWriter(&buffer)
+					_, _ = compressor.Write(body)
+					_ = compressor.Close()
+					encoded = buffer.Bytes()
+				case "zstd":
+					compressor, err := zstd.NewWriter(nil)
+					if err != nil {
+						t.Fatal(err)
+					}
+					encoded = compressor.EncodeAll(body, nil)
+					compressor.Close()
+				default:
+					encoded = body
+				}
+				account := testAccount{id: "account.errors", revision: 1, epoch: 1}
+				plan := mustEnvironmentRequestPlan(t, testPlanOptions{
+					clientProtocol: environment.ClientProtocolOpenAIResponses, destination: environment.DestinationKindUpstream,
+					providerOrigin: "https://api.openai.com", backend: protocolspec.DialectOpenAIResponses,
+					modelMode: environment.ModelModePassthrough, accounts: []testAccount{account}, preferred: account.id,
+				})
+				response := jsonResponse(http.StatusTooManyRequests, encoded)
+				response.Header.Set("Content-Encoding", encoding)
+				response.Header.Set("Retry-After", "60")
+				response.Header.Set("X-Should-Retry", "false")
+				response.Header.Set("Set-Cookie", "private-cookie")
+				response.Header.Set(codexTurnStateHeader, "unbound-state")
+				pipeline := newTestPipeline(t, newAccountAuthority(t, account), &providerDouble{results: []providerResult{{response: response}}}, approvedDecisions(), &attemptObserverDouble{})
+				defer shutdownPipeline(t, pipeline)
+				request := []byte(fmt.Sprintf(`{"model":"fixture","input":[{"type":"message","role":"user","content":"hello"}],"stream":%t}`, streaming))
+				downstream := &downstreamRecorder{}
+				_, err := pipeline.Execute(context.Background(), mustClientRequest(t, "compressed-native-error", plan, request), downstream)
+				var failure *Failure
+				if !errors.As(err, &failure) || failure.ProviderStatus != 429 {
+					t.Fatalf("failure = %v", err)
+				}
+				if native := failure.NativeError.ForDialect(protocolspec.DialectOpenAIResponses); !bytes.Contains(native, []byte("credit_balance_exhausted")) {
+					t.Fatalf("native code lost: %s", native)
+				}
+				headers := failure.NativeError.HeadersForDialect(protocolspec.DialectOpenAIResponses)
+				if headers.Get("Retry-After") != "60" || headers.Get("X-Should-Retry") != "false" || headers.Get("Set-Cookie") != "" || headers.Get(codexTurnStateHeader) != "" {
+					t.Fatalf("native rejection metadata = %v", headers)
+				}
+				if failure.ProviderErrorCode != protocolcore.KnownProviderErrorCode("credit_balance_exhausted") || strings.Contains(err.Error(), "private") {
+					t.Fatalf("unsafe diagnosis = %v", err)
+				}
+				if len(downstream.envelopesSnapshot()) != 0 {
+					t.Fatal("committed HTTP 200 before the rejected upstream response")
+				}
+			})
+		}
+	}
+}
+
+func TestManagedResponsesSemanticTerminalDoesNotWaitForEOF(t *testing.T) {
+	account := testAccount{id: "account.primary", revision: 1, epoch: 1}
+	plan := mustEnvironmentRequestPlan(t, testPlanOptions{
+		clientProtocol: environment.ClientProtocolOpenAIResponses,
+		destination:    environment.DestinationKindUpstream, providerOrigin: "https://api.openai.com",
+		backend: protocolspec.DialectOpenAIResponses, modelMode: environment.ModelModePassthrough,
+		accounts: []testAccount{account}, preferred: account.id,
+	})
+	reader, writer := io.Pipe()
+	defer writer.Close()
+	response := streamResponse(http.StatusOK, reader)
+	confirmedBody := &terminalConfirmationBody{ReadCloser: reader}
+	response.Body = confirmedBody
+	pipeline := newTestPipeline(t, newAccountAuthority(t, account),
+		&providerDouble{results: []providerResult{{response: response}}}, approvedDecisions(), &attemptObserverDouble{})
+	defer shutdownPipeline(t, pipeline)
+	pipeline.streamBudgets.ProviderProgressTimeout = 200 * time.Millisecond
+	wire := originalResponsesTerminalWire(t)
+	go func() { _, _ = writer.Write(wire) }() // Deliberately no EOF.
+	downstream := &downstreamRecorder{}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	_, err := pipeline.Execute(ctx, mustClientRequest(t, "terminal-without-eof", plan, streamingResponsesClientRequest()), downstream)
+	if err != nil || !bytes.Equal(downstream.bytesSnapshot(), wire) || !confirmedBody.confirmed {
+		t.Fatalf("valid semantic completion waited for connection close: %v, %q", err, downstream.bytesSnapshot())
+	}
+}
+
+type terminalConfirmationBody struct {
+	io.ReadCloser
+	confirmed bool
+}
+
+func (body *terminalConfirmationBody) ConfirmSemanticTerminal() { body.confirmed = true }
+
 // This exercises the real pipeline, credential finalization, HTTP serialization
 // and Raw observer together. Only the upstream socket and secret reader are
 // local fixtures; no real account or external inference is used.
 func TestManagedChatGPTHTTPStreamWithoutContentType(t *testing.T) {
 	for _, test := range []struct {
-		name      string
-		recording environment.ContentRecordingMode
-		rawLimit  int
-		encoding  string
+		name       string
+		recording  environment.ContentRecordingMode
+		rawLimit   int
+		encoding   string
+		compaction bool
 	}{
-		{"full response retained", environment.ContentRecordingFull, 0, ""},
-		{"retention cap does not truncate delivery", environment.ContentRecordingFull, 64 << 10, ""},
-		{"recording off", environment.ContentRecordingOff, 0, ""},
-		{"zstd request", environment.ContentRecordingFull, 0, "zstd"},
-		{"gzip request", environment.ContentRecordingFull, 0, "gzip"},
-		{"zstd request recording off", environment.ContentRecordingOff, 0, "zstd"},
+		{"full response retained", environment.ContentRecordingFull, 0, "", false},
+		{"retention cap does not truncate delivery", environment.ContentRecordingFull, 64 << 10, "", false},
+		{"recording off", environment.ContentRecordingOff, 0, "", false},
+		{"zstd request", environment.ContentRecordingFull, 0, "zstd", false},
+		{"gzip request", environment.ContentRecordingFull, 0, "gzip", false},
+		{"zstd request recording off", environment.ContentRecordingOff, 0, "zstd", false},
+		{"compaction", environment.ContentRecordingFull, 0, "", true},
+		{"compaction recording off", environment.ContentRecordingOff, 0, "", true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			wire := chatGPTLargeStream(t)
+			if test.compaction {
+				wire = appendSSEFixture(t, "response.completed", map[string]any{
+					"type": "response.completed", "sequence_number": 0,
+					"response": map[string]any{
+						"id": "resp_compacted", "created_at": 1, "status": "completed", "model": "codex-client-alias",
+						"output": []json.RawMessage{json.RawMessage(`{"type":"compaction","id":"cmp_fixture","encrypted_content":"compacted-state"}`)},
+						"usage":  map[string]any{"input_tokens": 10000, "output_tokens": 100},
+					},
+				})
+			}
 			observed := make(chan *http.Request, 1)
 			server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 				body, err := io.ReadAll(request.Body)
@@ -91,8 +204,9 @@ func TestManagedChatGPTHTTPStreamWithoutContentType(t *testing.T) {
 				},
 			})
 			content := &contentObserverDouble{}
+			attempts := &attemptObserverDouble{}
 			pipeline := newTestPipelineWithContentObserver(t, newAccountAuthority(t, account),
-				&providerDouble{}, approvedDecisions(), &attemptObserverDouble{}, content)
+				&providerDouble{}, approvedDecisions(), attempts, content)
 			defer shutdownPipeline(t, pipeline)
 			raw := &rawObserverDouble{}
 			pipeline.rawEvidence = raw
@@ -135,7 +249,29 @@ func TestManagedChatGPTHTTPStreamWithoutContentType(t *testing.T) {
 			}()
 			pipeline.provider = client
 
-			body := []byte(`{"model":"codex-client-alias","stream":true,"store":false,"input":[{"type":"message","role":"user","content":"hello"}]}`)
+			// Mirrors the failing long-history shape without retaining user data:
+			// 256 reasoning + 3 agent + 1 image extension, plus native compaction.
+			input := []json.RawMessage{
+				json.RawMessage(`{"type":"compaction","encrypted_content":"compaction-replay-fixture"}`),
+				json.RawMessage(`{"type":"message","role":"user","content":[{"type":"input_text","text":"hello"},{"type":"input_image","image_url":"data:image/png;base64,AA=="}]}`),
+			}
+			for index := 0; index < 256; index++ {
+				input = append(input, json.RawMessage(fmt.Sprintf(`{"type":"reasoning","id":"rs_%d","summary":[],"encrypted_content":"encrypted-replay-fixture"}`, index)))
+			}
+			for index := 0; index < 3; index++ {
+				input = append(input, json.RawMessage(fmt.Sprintf(`{"type":"agent_message","id":"am_%d","author":"planner","recipient":"all","content":[{"type":"encrypted_content","encrypted_content":"agent-state"}]}`, index)))
+			}
+			if test.compaction {
+				input = append(input, json.RawMessage(`{"type":"compaction_trigger"}`))
+			}
+			inputJSON, err := json.Marshal(input)
+			if err != nil {
+				t.Fatal(err)
+			}
+			body, err := json.Marshal(map[string]any{"model": "codex-client-alias", "stream": true, "store": false, "input": input})
+			if err != nil {
+				t.Fatal(err)
+			}
 			headers := chatGPTClientHeaderFixture()
 			if test.encoding != "" {
 				body = compressedRequestFixture(t, test.encoding, body)
@@ -158,6 +294,15 @@ func TestManagedChatGPTHTTPStreamWithoutContentType(t *testing.T) {
 			outboundBody, err := io.ReadAll(outbound.Body)
 			if err != nil {
 				t.Fatal(err)
+			}
+			if !bytes.Contains(outboundBody, []byte("encrypted-replay-fixture")) || !bytes.Contains(outboundBody, []byte("compaction-replay-fixture")) {
+				t.Fatal("managed transport dropped native replay state")
+			}
+			var forwarded struct {
+				Input json.RawMessage `json:"input"`
+			}
+			if err := json.Unmarshal(outboundBody, &forwarded); err != nil || !bytes.Equal(forwarded.Input, inputJSON) {
+				t.Fatal("managed transport changed long history or the compaction trigger")
 			}
 			for name, want := range map[string]string{
 				"Accept": "text/event-stream", "Content-Type": "application/json",
@@ -192,6 +337,10 @@ func TestManagedChatGPTHTTPStreamWithoutContentType(t *testing.T) {
 				}
 				if _, ok := content.latest(); ok {
 					t.Fatal("recording-off stream retained conversation content")
+				}
+				observations := attempts.snapshot()
+				if len(observations) != 1 || observations[0].RequestedModel == "" || !observations[0].Usage.Output.Known {
+					t.Fatalf("stream without recording lost usage: %+v", observations)
 				}
 				return
 			}
@@ -245,6 +394,7 @@ func TestManagedChatGPTStreamMediaTypeBoundary(t *testing.T) {
 		body          []byte
 		wantSuccess   bool
 		wantTypeError bool
+		wantReason    ReasonCode
 	}{
 		{name: "native missing header", origin: "https://chatgpt.com", wantSuccess: true},
 		{name: "native backend base", origin: "https://chatgpt.com/backend-api", wantSuccess: true},
@@ -261,6 +411,10 @@ func TestManagedChatGPTStreamMediaTypeBoundary(t *testing.T) {
 		{name: "missing type HTML body", origin: "https://chatgpt.com", body: []byte("<html>not an event stream</html>")},
 		{name: "missing type JSON body", origin: "https://chatgpt.com", body: []byte(`{"error":{"message":"not an event stream"}}`)},
 		{name: "missing terminal", origin: "https://chatgpt.com", body: []byte("event: response.created\ndata: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_1\",\"model\":\"codex-client-alias\",\"status\":\"in_progress\"}}\n\n")},
+		{name: "explicit provider failure", origin: "https://chatgpt.com", body: []byte("event: response.failed\ndata: {\"type\":\"response.failed\",\"response\":{\"status\":\"failed\",\"error\":{\"message\":\"private detail\"}}}\n\n"), wantReason: ReasonProviderResponseFailed},
+		{name: "explicit provider error", origin: "https://chatgpt.com", body: []byte("event: error\ndata: {\"type\":\"error\",\"message\":\"private detail\"}\n\n"), wantReason: ReasonProviderResponseFailed},
+		{name: "malformed event JSON", origin: "https://chatgpt.com", body: []byte("data: not-json\n\n"), wantReason: ReasonProviderStreamMalformed},
+		{name: "done without terminal", origin: "https://chatgpt.com", body: []byte("data: [DONE]\n\n"), wantReason: ReasonProviderStreamStateInvalid},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			account := testAccount{id: "account.selected", revision: 3, epoch: 7}
@@ -278,7 +432,8 @@ func TestManagedChatGPTStreamMediaTypeBoundary(t *testing.T) {
 				StatusCode: http.StatusOK, Header: test.header,
 				Body: io.NopCloser(&boundedChunkReader{reader: bytes.NewReader(wire), maximum: 97}),
 			}}}}
-			pipeline := newTestPipeline(t, newAccountAuthority(t, account), provider, approvedDecisions(), &attemptObserverDouble{})
+			observer := &attemptObserverDouble{}
+			pipeline := newTestPipeline(t, newAccountAuthority(t, account), provider, approvedDecisions(), observer)
 			defer shutdownPipeline(t, pipeline)
 			downstream := &downstreamRecorder{}
 			result, err := pipeline.Execute(context.Background(), mustClientRequest(t, "exchange-media-type", plan,
@@ -290,12 +445,22 @@ func TestManagedChatGPTStreamMediaTypeBoundary(t *testing.T) {
 				return
 			}
 			var failure *Failure
-			if !errors.As(err, &failure) || failure.Code != ReasonProviderResponseInvalid ||
+			wantReason := ReasonProviderStreamTruncated
+			if test.wantTypeError {
+				wantReason = ReasonProviderResponseInvalid
+			}
+			if test.wantReason != "" {
+				wantReason = test.wantReason
+			}
+			if !errors.As(err, &failure) || failure.Code != wantReason ||
 				result.Outcome == AttemptSucceeded || result.Ledger.DownstreamTerminal {
 				t.Fatalf("invalid stream was accepted: %+v err=%v", result, err)
 			}
 			if (failure.ResponseIssue == ProviderResponseIssueContentType) != test.wantTypeError {
 				t.Fatalf("failure = %v issue=%s, want content-type failure=%v", err, failure.ResponseIssue, test.wantTypeError)
+			}
+			if observations := observer.snapshot(); len(observations) != 1 || observations[0].ReasonCode != wantReason {
+				t.Fatal("terminal observation lost the precise protocol failure")
 			}
 		})
 	}
@@ -313,6 +478,79 @@ func chatGPTLargeStream(t *testing.T) []byte {
 		},
 	})
 	return append(wire, originalResponsesTerminalWire(t)...)
+}
+
+func TestManagedResponsesDecodeCompressionWithoutRequiringTransforms(t *testing.T) {
+	for _, dialect := range []protocolspec.Dialect{protocolspec.DialectOpenAIResponses, protocolspec.DialectAnthropicMessages, protocolspec.DialectOpenAIChat} {
+		for _, streaming := range []bool{false, true} {
+			for _, encoding := range []string{"gzip", "zstd"} {
+				for _, transform := range []bool{false, true} {
+					t.Run(fmt.Sprintf("%s/stream=%t/%s/transform=%t", dialect, streaming, encoding, transform), func(t *testing.T) {
+						account := testAccount{id: "account.selected", revision: 1, epoch: 1}
+						policy := messagetransform.Policy{}
+						if transform {
+							policy.ResponseJavaScript = `response.headers["x-decoded"] = "yes";`
+						}
+						options := testPlanOptions{
+							clientProtocol: environment.ClientProtocolOpenAIResponses,
+							destination:    environment.DestinationKindUpstream, providerOrigin: "https://api.openai.com",
+							backend: dialect, modelMode: environment.ModelModePassthrough,
+							accounts: []testAccount{account}, preferred: account.id, transform: policy,
+							recording: environment.ContentRecordingPolicy{Mode: environment.ContentRecordingOff},
+						}
+						wire := []byte(`{"id":"resp_fixture","created_at":1,"model":"codex-client-alias","status":"completed","output":[{"type":"message","id":"msg_fixture","role":"assistant","status":"completed","content":[{"type":"output_text","text":"Done."}]}],"usage":{"input_tokens":4,"output_tokens":2}}`)
+						mediaType := "application/json"
+						if streaming {
+							wire = chatGPTLargeStream(t)
+							mediaType = "text/event-stream"
+						}
+						request := []byte(fmt.Sprintf(`{"model":"codex-client-alias","stream":%t,"input":[{"type":"message","role":"user","content":"hello"}]}`, streaming))
+						if dialect != protocolspec.DialectOpenAIResponses {
+							options.clientProtocol = environment.ClientProtocolAnthropicMessages
+							options.modelMode, options.mappedModel = environment.ModelModeMap, "claude-provider"
+							request = completeClientRequest()
+							wire = []byte(`{"id":"msg_fixture","type":"message","role":"assistant","model":"claude-provider","content":[{"type":"text","text":"Done."}],"stop_reason":"end_turn","stop_sequence":null,"usage":{"input_tokens":4,"output_tokens":2}}`)
+							if dialect == protocolspec.DialectOpenAIChat {
+								wire = completeProviderResponse("claude-provider")
+							}
+							if streaming {
+								request = streamingClientRequest()
+								stream := anthropicTextProviderStream()
+								if dialect == protocolspec.DialectOpenAIChat {
+									stream = normalProviderStream(t, "claude-provider")
+								}
+								var err error
+								wire, err = io.ReadAll(stream)
+								if err != nil {
+									t.Fatal(err)
+								}
+							}
+						}
+						plan := mustEnvironmentRequestPlan(t, options)
+						provider := &providerDouble{results: []providerResult{{response: &http.Response{
+							StatusCode: http.StatusOK,
+							Header:     http.Header{"Content-Type": {mediaType}, "Content-Encoding": {encoding}},
+							Body:       io.NopCloser(&boundedChunkReader{reader: bytes.NewReader(compressedRequestFixture(t, encoding, wire)), maximum: 17}),
+						}}}}
+						observer := &attemptObserverDouble{}
+						pipeline := newTestPipeline(t, newAccountAuthority(t, account), provider, approvedDecisions(), observer)
+						defer shutdownPipeline(t, pipeline)
+						downstream := &downstreamRecorder{}
+						result, err := pipeline.Execute(context.Background(), mustClientRequest(t, "exchange-compressed", plan, request), downstream)
+						if err != nil || result.Outcome != AttemptSucceeded || !result.Ledger.DownstreamTerminal {
+							t.Fatalf("compressed response failed: %+v err=%v", result, err)
+						}
+						if (dialect == protocolspec.DialectOpenAIResponses && !bytes.Equal(downstream.bytesSnapshot(), wire)) || downstream.envelopesSnapshot()[0].Headers().Get("Content-Encoding") != "" {
+							t.Fatal("managed downstream did not receive the decoded response")
+						}
+						if values := observer.snapshot(); len(values) != 1 || !values[0].Usage.Output.Known {
+							t.Fatal("compressed response lost body-free usage evidence")
+						}
+					})
+				}
+			}
+		}
+	}
 }
 
 func TestManagedChatGPTHeaderlessStreamStillRequiresToolApproval(t *testing.T) {

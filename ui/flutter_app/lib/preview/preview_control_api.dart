@@ -10,6 +10,31 @@ import '../core/api/provider_origin.dart';
 import '../core/api/runtime_storage.dart';
 
 final class PreviewControlApi implements ControlApi {
+  RuntimeUsageCollection _usageCollection = RuntimeUsageCollection(
+    enabled: true,
+    retentionDays: 90,
+    revision: 1,
+    collectingSince: DateTime.utc(2026, 1, 1),
+  );
+
+  @override
+  Future<RuntimeUsageCollection> setUsageCollection({
+    required bool enabled,
+    required int retentionDays,
+    required int revision,
+  }) async {
+    _requireOpen();
+    if (revision != _usageCollection.revision) {
+      throw const ControlContractException('Usage policy changed');
+    }
+    return _usageCollection = RuntimeUsageCollection(
+      enabled: enabled,
+      retentionDays: retentionDays,
+      revision: revision + 1,
+      collectingSince: _usageCollection.collectingSince ?? _now,
+    );
+  }
+
   @override
   Future<EnvironmentDryRun> dryRunEnvironment(EnvironmentDryRunInput input) =>
       Future<EnvironmentDryRun>.error(
@@ -140,9 +165,11 @@ final class PreviewControlApi implements ControlApi {
     ControlProblem? upstreamModelFailure,
     bool seedCaptures = true,
     bool seedRuntimeUsers = true,
+    bool retainConversationBodies = true,
     String productBuild = 'preview',
   }) : _dashboardCaptureLimit = dashboardCaptureLimit,
        _upstreamModelFailure = upstreamModelFailure,
+       _retainConversationBodies = retainConversationBodies,
        _productBuild = productBuild {
     if (dashboardCaptureLimit < 1 || dashboardCaptureLimit > 199) {
       throw ArgumentError.value(dashboardCaptureLimit, 'dashboardCaptureLimit');
@@ -170,6 +197,7 @@ final class PreviewControlApi implements ControlApi {
         observation: 'observed',
         createdAt: _now.subtract(Duration(hours: index + 1)),
         updatedAt: _now.subtract(Duration(minutes: index * 3 + 1)),
+        activityAt: _now.subtract(Duration(minutes: index * 3 + 1)),
         managedRun: ManagedRunSummary(
           executableLabel: index.isEven ? 'claude' : 'codex',
           cwd: index < 4
@@ -285,6 +313,7 @@ final class PreviewControlApi implements ControlApi {
   final String _productBuild;
 
   final int _dashboardCaptureLimit;
+  final bool _retainConversationBodies;
   final ControlProblem? _upstreamModelFailure;
   bool _expiredStorageCleaned = false;
 
@@ -956,8 +985,8 @@ final class PreviewControlApi implements ControlApi {
     final values = _captures.values.toList(growable: false)
       ..sort((left, right) {
         if (left.running != right.running) return left.running ? -1 : 1;
-        final updated = right.updatedAt.compareTo(left.updatedAt);
-        if (updated != 0) return updated;
+        final activity = right.activityAt.compareTo(left.activityAt);
+        if (activity != 0) return activity;
         final leftKind = left.kind == 'managed_run' ? 0 : 1;
         final rightKind = right.kind == 'managed_run' ? 0 : 1;
         if (leftKind != rightKind) return leftKind.compareTo(rightKind);
@@ -2967,22 +2996,25 @@ final class PreviewControlApi implements ControlApi {
       final succeeded = reasonCode == null;
       final conversation = _previewConversation(capture, index);
       return ActivityRecord(
+        contentAvailable: _retainConversationBodies,
         id: '${capture.id}-exchange-${index + 1}',
         occurredAt: _now.subtract(Duration(minutes: (count - 1 - index) * 4)),
         title: index % 4 == 0 ? 'Tool-assisted request' : 'Agent exchange',
-        status: index == count - 1
+        status: _retainConversationBodies && index == count - 1
             ? 'pending'
             : succeeded
             ? 'succeeded'
             : 'failed',
         reasonCode: reasonCode,
-        requestPreview: ActivityRequestPreview(
-          kind: index % 4 == 0 ? 'tool_call' : 'text',
-          text: index % 4 == 0
-              ? 'workspace.read'
-              : 'Continue with the next verified implementation step.',
-          truncated: false,
-        ),
+        requestPreview: !_retainConversationBodies
+            ? null
+            : ActivityRequestPreview(
+                kind: index % 4 == 0 ? 'tool_call' : 'text',
+                text: index % 4 == 0
+                    ? 'workspace.read'
+                    : 'Continue with the next verified implementation step.',
+                truncated: false,
+              ),
         source: ActivitySourceRef(
           kind: capture.isManual ? 'manual_proxy' : 'capture_run',
           displayName: capture.displayName,
@@ -3228,6 +3260,11 @@ final class PreviewControlApi implements ControlApi {
   Future<RuntimeUsageReport> runtimeUsage(RuntimeUsageQuery query) async {
     _requireOpen();
     query.toQueryParameters();
+    const previewCost = RuntimeCostEstimate(
+      nanoUsd: 46035000,
+      pricedCalls: 18,
+      partialCalls: 2,
+    );
     final until = DateTime.parse('${query.until}T00:00:00.000Z');
     final activityDate = until.subtract(const Duration(days: 1));
     final activityDay = [
@@ -3316,7 +3353,69 @@ final class PreviewControlApi implements ControlApi {
         unknownCalls: agentApiCalls,
       ),
     );
+    RuntimeUsageGroup group(
+      String id,
+      String label,
+      String dimension, {
+      List<RuntimeUsageGroup> children = const [],
+      String evidence = '',
+    }) => RuntimeUsageGroup(
+      id: id,
+      label: label,
+      dimension: dimension,
+      evidence: evidence,
+      agentApiCalls: 18,
+      succeeded: 16,
+      failed: 2,
+      canceled: 0,
+      tokens: aliceTokens,
+      cost: previewCost,
+      children: children,
+    );
+    final model = group('gpt-5', 'gpt-5', 'model');
+    final callerKind = _runtimeUsers.isEmpty ? 'local' : 'member';
+    final caller = group('alice', 'alice', 'caller', evidence: callerKind);
+    final callerModels = group(
+      'alice',
+      'alice',
+      'caller',
+      evidence: callerKind,
+      children: [model],
+    );
     return RuntimeUsageReport(
+      collection: _usageCollection,
+      total: group('all', 'All', ''),
+      callers: [callerModels],
+      projects: [
+        group(
+          'project-one',
+          'vibermate',
+          'project',
+          children: [
+            group(
+              'branch:main',
+              'main',
+              'branch',
+              evidence: 'launch_snapshot',
+              children: [callerModels],
+            ),
+          ],
+        ),
+      ],
+      cost: previewCost,
+      pricing: RuntimePricingInfo(state: 'ready', updatedAt: _now),
+      sources: [
+        group(callerKind, callerKind, 'source', children: [model]),
+      ],
+      profiles: [
+        group('general', 'General', 'profile', children: [model]),
+      ],
+      accounts: [
+        group('team-dev', 'team-dev', 'account', children: [model]),
+      ],
+      models: [
+        group('gpt-5', 'gpt-5', 'model', children: [caller]),
+      ],
       generatedAt: _now,
       period: RuntimeUsagePeriod(
         from: query.from,
@@ -3331,9 +3430,9 @@ final class PreviewControlApi implements ControlApi {
           succeeded: 16,
           failed: 2,
           canceled: 0,
-          contentUnavailableCalls: 0,
           modelUnavailableCalls: 0,
           tokens: aliceTokens,
+          cost: previewCost,
         ),
       ],
       users: [
@@ -3349,7 +3448,6 @@ final class PreviewControlApi implements ControlApi {
               succeeded: 16,
               failed: 2,
               canceled: 0,
-              contentUnavailableCalls: 0,
               modelUnavailableCalls: 0,
               tokens: aliceTokens,
               latestContext: RuntimeUsageContextRef(
@@ -3368,7 +3466,6 @@ final class PreviewControlApi implements ControlApi {
                   succeeded: 16,
                   failed: 2,
                   canceled: 0,
-                  contentUnavailableCalls: 0,
                   modelUnavailableCalls: 0,
                   tokens: aliceTokens,
                 ),
@@ -3496,7 +3593,6 @@ final class PreviewControlApi implements ControlApi {
               succeeded: 0,
               failed: 0,
               canceled: 0,
-              contentUnavailableCalls: 0,
               modelUnavailableCalls: 0,
               tokens: emptyTokens,
               latestContext: null,
@@ -3900,6 +3996,7 @@ final class PreviewControlApi implements ControlApi {
       observation: aggregate.observation,
       createdAt: aggregate.createdAt,
       updatedAt: _now,
+      activityAt: aggregate.activityAt,
       manualCapture: ManualCaptureSummary(
         clientClass: aggregate.manualCapture!.clientClass,
         lifetime: aggregate.manualCapture!.lifetime,
@@ -3954,6 +4051,7 @@ final class PreviewControlApi implements ControlApi {
       observation: capture.observation,
       createdAt: capture.createdAt,
       updatedAt: _now,
+      activityAt: capture.observation == 'observed' ? capture.activityAt : _now,
       manualCapture: capture.manualCapture,
     );
   }
@@ -4265,67 +4363,80 @@ Evidence line 16''';
         attempts: rejectedBeforeUpstream ? const [] : [attempt],
         result: activity.reasonCode ?? activity.status,
       ),
-      content: ExchangeContentDetail(
-        state: 'recorded',
-        mode: 'full',
-        recordedAt: activity.occurredAt,
-        expiresAt: activity.occurredAt.add(const Duration(days: 30)),
-        requestProjection: ExchangeRequestProjection(
-          view: view,
-          relationship: checkpoint ? 'checkpoint' : 'incremental',
-          inheritedMessageCount: inherited,
-          totalMessageCount: allMessages.length,
-          fullSnapshotAvailable: inherited > 0,
-        ),
-        agentConversation: agentTurn
-            ? const AgentConversationProjection(
-                scope: 'capture_run',
-                agents: [
-                  AgentConversationAgent(name: 'root'),
-                  AgentConversationAgent(name: 'reviewer'),
-                ],
-                relationships: [
-                  AgentConversationRelationship(
-                    source: 'root',
-                    target: 'reviewer',
-                    kind: 'message',
-                  ),
-                ],
-                actions: [
-                  AgentConversationAction(
-                    callId: 'preview-agent-call',
-                    name: 'spawn_agent',
-                    status: 'completed',
-                    sourceAgent: 'root',
-                    resultAgent: 'reviewer',
-                    attributed: true,
-                  ),
-                ],
-              )
-            : null,
-        request: ExchangeRequest(
-          requestedModel: 'claude-sonnet-4-5',
-          effectiveModel: 'claude-sonnet-4-5',
-          maxOutputTokens: 4096,
-          stream: true,
-          // Only one fixture Exchange carries a top-level instruction
-          // parameter. A fixture exists to exercise a surface, not to make every
-          // other fixture taller.
-          system: activity.id.endsWith('-exchange-222')
-              ? [
-                  _previewTextBlock(
-                    'You are an interactive agent. Stay precise.',
-                  ),
-                ]
-              : const [],
-          messages: visibleMessages,
-          tools: toolTurn
-              ? const [ExchangeToolDefinition(name: 'Read', namespace: null)]
-              : const [],
-          protocolEvidence: const [],
-        ),
-        response: response,
-      ),
+      content: activity.contentAvailable == false
+          ? const ExchangeContentDetail(
+              state: 'not_recorded',
+              mode: null,
+              recordedAt: null,
+              expiresAt: null,
+              requestProjection: null,
+              agentConversation: null,
+              request: null,
+              response: null,
+            )
+          : ExchangeContentDetail(
+              state: 'recorded',
+              mode: 'full',
+              recordedAt: activity.occurredAt,
+              expiresAt: activity.occurredAt.add(const Duration(days: 30)),
+              requestProjection: ExchangeRequestProjection(
+                view: view,
+                relationship: checkpoint ? 'checkpoint' : 'incremental',
+                inheritedMessageCount: inherited,
+                totalMessageCount: allMessages.length,
+                fullSnapshotAvailable: inherited > 0,
+              ),
+              agentConversation: agentTurn
+                  ? const AgentConversationProjection(
+                      scope: 'capture_run',
+                      agents: [
+                        AgentConversationAgent(name: 'root'),
+                        AgentConversationAgent(name: 'reviewer'),
+                      ],
+                      relationships: [
+                        AgentConversationRelationship(
+                          source: 'root',
+                          target: 'reviewer',
+                          kind: 'message',
+                        ),
+                      ],
+                      actions: [
+                        AgentConversationAction(
+                          callId: 'preview-agent-call',
+                          name: 'spawn_agent',
+                          status: 'completed',
+                          sourceAgent: 'root',
+                          resultAgent: 'reviewer',
+                          attributed: true,
+                        ),
+                      ],
+                    )
+                  : null,
+              request: ExchangeRequest(
+                requestedModel: 'claude-sonnet-4-5',
+                effectiveModel: 'claude-sonnet-4-5',
+                maxOutputTokens: 4096,
+                stream: true,
+                // Only one fixture Exchange carries a top-level instruction
+                // parameter. A fixture exists to exercise a surface, not to make every
+                // other fixture taller.
+                system: activity.id.endsWith('-exchange-222')
+                    ? [
+                        _previewTextBlock(
+                          'You are an interactive agent. Stay precise.',
+                        ),
+                      ]
+                    : const [],
+                messages: visibleMessages,
+                tools: toolTurn
+                    ? const [
+                        ExchangeToolDefinition(name: 'Read', namespace: null),
+                      ]
+                    : const [],
+                protocolEvidence: const [],
+              ),
+              response: response,
+            ),
     );
   }
 

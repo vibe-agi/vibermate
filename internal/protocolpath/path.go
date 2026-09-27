@@ -112,6 +112,9 @@ func (request ProviderRequest) Body() []byte {
 type Stream interface {
 	Feed(context.Context, []byte) ([]byte, error)
 	SemanticProgress() uint64
+	// TerminalReceived means the protocol's terminal event was decoded, not
+	// that tools were approved. The HTTP connection need not reach EOF.
+	TerminalReceived() bool
 	FinishDecoded(context.Context) (PendingTerminal, error)
 }
 

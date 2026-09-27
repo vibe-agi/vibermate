@@ -810,8 +810,9 @@ func (handler *Handler) attachActivityIdentities(
 		identity, err := handler.conversationIndexer.Identity(ctx, record.SubjectID)
 		switch {
 		case err == nil:
-			cloned := identity.Clone()
-			view.Items[index].Conversation.ClientIdentity = &cloned
+			if err := view.Items[index].Conversation.attachIdentity(identity); err != nil {
+				return err
+			}
 			if err := view.Items[index].Validate(); err != nil {
 				return err
 			}
@@ -834,6 +835,13 @@ func (handler *Handler) attachActivityRequestPreviews(
 	exchangeIDs := make([]string, len(view.Items))
 	for index := range view.Items {
 		exchangeIDs[index] = view.Items[index].ID
+	}
+	if available, err := handler.contents.AvailableBodies(ctx, exchangeIDs); err == nil {
+		for index := range view.Items {
+			if exists, known := available[view.Items[index].ID]; known {
+				view.Items[index].ContentAvailable = &exists
+			}
+		}
 	}
 	previews, err := handler.contents.RequestPreviews(ctx, exchangeIDs)
 	if err != nil {
@@ -867,10 +875,10 @@ func (handler *Handler) attachConversationIdentities(
 		identity, err := handler.conversationIndexer.Identity(ctx, item.Latest.SubjectID)
 		switch {
 		case err == nil:
-			cloned := identity.Clone()
-			view.Items[index].Conversation.ClientIdentity = &cloned
-			view.Items[index].Latest.Conversation.ClientIdentity = &cloned
-			if err := view.Items[index].Conversation.Validate(); err != nil {
+			if err := view.Items[index].Conversation.attachIdentity(identity); err != nil {
+				return err
+			}
+			if err := view.Items[index].Latest.Conversation.attachIdentity(identity); err != nil {
 				return err
 			}
 			if err := view.Items[index].Latest.Validate(); err != nil {

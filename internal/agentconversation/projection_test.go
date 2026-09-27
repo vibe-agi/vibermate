@@ -122,6 +122,36 @@ func TestNativeResumeKeepsClientSessionConversationAcrossCaptures(t *testing.T) 
 	}
 }
 
+func TestCodexSessionProjectionIgnoresHistoricalMessageAuthors(t *testing.T) {
+	t.Parallel()
+	input := request(t, &protocolcore.AgentMessageContext{Author: "/root/reviewer"}, "reviewed")
+	input.ProtocolEvidence = []protocolcore.ProtocolEvidenceValue{
+		{Name: "openai_responses.session_id", Value: "session-main"},
+		{Name: "openai_responses.thread_id", Value: "thread-main"},
+	}
+	identity, ok := agentconversation.ClientIdentityFromProtocolEvidence(input.ProtocolEvidence, "", time.Now())
+	if !ok {
+		t.Fatal("native identity was not derived")
+	}
+	want, err := agentconversation.Project(agentconversation.ProjectionInput{
+		CaptureRunID: "run-1", ExchangeID: "exchange-1", SourceDisplayName: "Claude", ClientIdentity: &identity,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	block, _ := protocolcore.NewTextBlock("another agent's output")
+	block.Agent = &protocolcore.AgentMessageContext{AgentName: "/root/worker"}
+	for _, response := range []*protocolcore.Response{nil, {Blocks: []protocolcore.ContentBlock{block}}} {
+		if got := project(t, "run-1", input, response); got != want {
+			t.Fatalf("message author replaced native caller: got=%#v want=%#v", got, want)
+		}
+	}
+	input.ProtocolEvidence[1].Value = "thread-other"
+	if got := project(t, "run-1", input, nil); got.ProjectionID == want.ProjectionID {
+		t.Fatal("different native threads were merged")
+	}
+}
+
 func TestClientSessionIdentityIncludesTheNativeClient(t *testing.T) {
 	t.Parallel()
 

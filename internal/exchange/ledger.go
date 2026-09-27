@@ -11,7 +11,7 @@ const (
 	RetryAllowed                    RetryBlockReason = ""
 	RetryBlockedPolicy              RetryBlockReason = "retry_policy_disabled"
 	RetryBlockedReplayClass         RetryBlockReason = "replay_class_not_safe"
-	RetryBlockedEnvelopeMissing     RetryBlockReason = "hold_envelope_not_committed"
+	RetryBlockedProviderMetadata    RetryBlockReason = "provider_metadata_committed"
 	RetryBlockedOrdinaryHeaders     RetryBlockReason = "ordinary_headers_committed"
 	RetryBlockedDownstreamSemantics RetryBlockReason = "downstream_semantics_committed"
 	RetryBlockedToolExposure        RetryBlockReason = "downstream_tool_exposed"
@@ -21,16 +21,17 @@ const (
 )
 
 type ledgerState struct {
-	upstreamSends            uint32
-	upstreamResponses        uint32
-	upstreamBodyBytes        int64
-	downstreamHoldEnvelope   bool
-	downstreamOrdinaryHeader bool
-	downstreamSemanticBytes  int64
-	downstreamSemanticWrites uint32
-	downstreamToolKeys       []string
-	downstreamTerminal       bool
-	downstreamFailure        bool
+	upstreamSends              uint32
+	upstreamResponses          uint32
+	upstreamBodyBytes          int64
+	downstreamHoldEnvelope     bool
+	downstreamOrdinaryHeader   bool
+	downstreamProviderMetadata bool
+	downstreamSemanticBytes    int64
+	downstreamSemanticWrites   uint32
+	downstreamToolKeys         []string
+	downstreamTerminal         bool
+	downstreamFailure          bool
 }
 
 // CommitLedger separates possible provider processing from client-visible
@@ -42,16 +43,17 @@ type CommitLedger struct {
 }
 
 type LedgerSnapshot struct {
-	UpstreamSends             uint32
-	UpstreamResponses         uint32
-	UpstreamBodyBytes         int64
-	DownstreamHoldEnvelope    bool
-	DownstreamOrdinaryHeaders bool
-	DownstreamSemanticBytes   int64
-	DownstreamSemanticWrites  uint32
-	DownstreamTerminal        bool
-	DownstreamFailure         bool
-	downstreamToolKeys        []string
+	UpstreamSends              uint32
+	UpstreamResponses          uint32
+	UpstreamBodyBytes          int64
+	DownstreamHoldEnvelope     bool
+	DownstreamOrdinaryHeaders  bool
+	DownstreamProviderMetadata bool
+	DownstreamSemanticBytes    int64
+	DownstreamSemanticWrites   uint32
+	DownstreamTerminal         bool
+	DownstreamFailure          bool
+	downstreamToolKeys         []string
 }
 
 func (snapshot LedgerSnapshot) DownstreamToolKeys() []string {
@@ -73,6 +75,15 @@ func (ledger *CommitLedger) RecordUpstreamResponse() {
 	ledger.mu.Lock()
 	defer ledger.mu.Unlock()
 	ledger.state.upstreamResponses++
+}
+
+// A generic Hold envelope permits resends; provider-affine metadata does not.
+// The next attempt could otherwise return a different state token/request ID
+// after the client has already received the first attempt's response headers.
+func (ledger *CommitLedger) RecordProviderMetadata() {
+	ledger.mu.Lock()
+	defer ledger.mu.Unlock()
+	ledger.state.downstreamProviderMetadata = true
 }
 
 func (ledger *CommitLedger) RecordHoldEnvelope() error {
@@ -184,10 +195,10 @@ func (ledger *CommitLedger) CanTransportResend(
 	switch {
 	case !class.allowsTransportResend():
 		return false, RetryBlockedReplayClass
-	case !ledger.state.downstreamHoldEnvelope:
-		return false, RetryBlockedEnvelopeMissing
 	case ledger.state.downstreamOrdinaryHeader:
 		return false, RetryBlockedOrdinaryHeaders
+	case ledger.state.downstreamProviderMetadata:
+		return false, RetryBlockedProviderMetadata
 	case ledger.state.downstreamSemanticBytes != 0 ||
 		ledger.state.downstreamSemanticWrites != 0:
 		return false, RetryBlockedDownstreamSemantics
@@ -208,15 +219,16 @@ func (ledger *CommitLedger) Snapshot() LedgerSnapshot {
 	ledger.mu.Lock()
 	defer ledger.mu.Unlock()
 	return LedgerSnapshot{
-		UpstreamSends:             ledger.state.upstreamSends,
-		UpstreamResponses:         ledger.state.upstreamResponses,
-		UpstreamBodyBytes:         ledger.state.upstreamBodyBytes,
-		DownstreamHoldEnvelope:    ledger.state.downstreamHoldEnvelope,
-		DownstreamOrdinaryHeaders: ledger.state.downstreamOrdinaryHeader,
-		DownstreamSemanticBytes:   ledger.state.downstreamSemanticBytes,
-		DownstreamSemanticWrites:  ledger.state.downstreamSemanticWrites,
-		DownstreamTerminal:        ledger.state.downstreamTerminal,
-		DownstreamFailure:         ledger.state.downstreamFailure,
+		UpstreamSends:              ledger.state.upstreamSends,
+		UpstreamResponses:          ledger.state.upstreamResponses,
+		UpstreamBodyBytes:          ledger.state.upstreamBodyBytes,
+		DownstreamHoldEnvelope:     ledger.state.downstreamHoldEnvelope,
+		DownstreamOrdinaryHeaders:  ledger.state.downstreamOrdinaryHeader,
+		DownstreamProviderMetadata: ledger.state.downstreamProviderMetadata,
+		DownstreamSemanticBytes:    ledger.state.downstreamSemanticBytes,
+		DownstreamSemanticWrites:   ledger.state.downstreamSemanticWrites,
+		DownstreamTerminal:         ledger.state.downstreamTerminal,
+		DownstreamFailure:          ledger.state.downstreamFailure,
 		downstreamToolKeys: cloneStrings(
 			ledger.state.downstreamToolKeys,
 		),

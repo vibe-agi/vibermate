@@ -11,7 +11,7 @@ import 'workbench_controller.dart';
 
 enum _ActivityMetric { agentApiCalls, tokens }
 
-/// Operator-facing projection of retained Runtime User evidence.
+/// Operator-facing projection of the Runtime's body-free usage ledger.
 ///
 /// This view deliberately reports only protocol-declared usage. Unknown token
 /// values stay unknown and are rendered with an em dash or a lower-bound mark.
@@ -33,6 +33,7 @@ final class _UsageDashboardViewState extends State<UsageDashboardView> {
   String? _selectedUserId;
   String _userQuery = '';
   _ActivityMetric _activityMetric = _ActivityMetric.agentApiCalls;
+  String _groupBy = 'profiles';
   final GlobalKey _detailKey = GlobalKey();
 
   RuntimeUserUsage? _selectedUser(RuntimeUsageReport report) {
@@ -61,20 +62,23 @@ final class _UsageDashboardViewState extends State<UsageDashboardView> {
         const Divider(height: 1),
         Expanded(
           child: switch (report) {
-            null when controller.serverManagementLoading => Center(
+            null when controller.usageLoading => Center(
               child: CompactLoadingMessage(label: copy('usage.loading')),
             ),
             null => _UsageUnavailable(
               copy: copy,
-              detail: controller.serverManagementError,
-              onRetry: () => unawaited(controller.refreshServerManagement()),
+              detail: controller.usageError,
+              onRetry: () => unawaited(controller.refreshUsage()),
             ),
             final value => _UsageReportBody(
+              controller: controller,
+              groupBy: _groupBy,
+              onGroupChanged: (value) => setState(() => _groupBy = value),
               report: value,
               selected: _selectedUser(value),
               copy: copy,
-              refreshing: controller.serverManagementLoading,
-              onRefresh: () => unawaited(controller.refreshServerManagement()),
+              refreshing: controller.usageLoading,
+              onRefresh: () => unawaited(controller.refreshUsage()),
               activityMetric: _activityMetric,
               onActivityMetricChanged: (value) => setState(() {
                 _activityMetric = value;
@@ -85,7 +89,6 @@ final class _UsageDashboardViewState extends State<UsageDashboardView> {
               onUserQueryChanged: (value) => setState(() {
                 _userQuery = value;
               }),
-              onCreateUser: controller.openRuntimeUsersSettings,
             ),
           },
         ),
@@ -123,6 +126,8 @@ final class PersonalUsageDashboard extends StatefulWidget {
     required this.error,
     required this.onRefresh,
     required this.copy,
+    this.rangeDays = 7,
+    this.onRangeChanged,
     super.key,
   });
 
@@ -131,6 +136,8 @@ final class PersonalUsageDashboard extends StatefulWidget {
   final String? error;
   final VoidCallback onRefresh;
   final AppCopy copy;
+  final int rangeDays;
+  final ValueChanged<int>? onRangeChanged;
 
   @override
   State<PersonalUsageDashboard> createState() => _PersonalUsageDashboardState();
@@ -138,6 +145,7 @@ final class PersonalUsageDashboard extends StatefulWidget {
 
 final class _PersonalUsageDashboardState extends State<PersonalUsageDashboard> {
   _ActivityMetric _metric = _ActivityMetric.agentApiCalls;
+  String _groupBy = 'profiles';
 
   @override
   Widget build(BuildContext context) {
@@ -179,12 +187,40 @@ final class _PersonalUsageDashboardState extends State<PersonalUsageDashboard> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
+          if (widget.onRangeChanged != null) ...[
+            Align(
+              alignment: Alignment.centerLeft,
+              child: SegmentedButton<int>(
+                showSelectedIcon: false,
+                segments: [
+                  for (final days in [7, 30, 90, 365])
+                    ButtonSegment(
+                      value: days,
+                      label: Text(
+                        widget.copy.format('usage.range', {'days': '$days'}),
+                      ),
+                    ),
+                ],
+                selected: {widget.rangeDays},
+                onSelectionChanged: widget.loading
+                    ? null
+                    : (value) => widget.onRangeChanged!(value.single),
+              ),
+            ),
+            const SizedBox(height: 12),
+          ],
           _ReportScope(
             report: report,
             copy: widget.copy,
             refreshing: widget.loading,
             onRefresh: widget.onRefresh,
           ),
+          if (widget.error != null)
+            InlineNotice(message: widget.error!, error: true),
+          if (!report.collection.enabled) ...[
+            const SizedBox(height: 8),
+            InlineNotice(message: widget.copy('usage.personal.collection_off')),
+          ],
           if (report.truncated) ...[
             const SizedBox(height: ViberSpacing.md),
             InlineNotice(message: widget.copy('server.usage.truncated')),
@@ -193,91 +229,55 @@ final class _PersonalUsageDashboardState extends State<PersonalUsageDashboard> {
           if (user == null)
             _PersonalUsageEmpty(copy: widget.copy)
           else ...[
-            _PersonalOverview(user: user, copy: widget.copy),
+            _UsageOverview(report: report, copy: widget.copy),
+            _PricingNote(report: report, copy: widget.copy),
             const SizedBox(height: ViberSpacing.lg),
-            SegmentedButton<_ActivityMetric>(
-              segments: [
-                ButtonSegment(
-                  value: _ActivityMetric.agentApiCalls,
-                  label: Text(widget.copy('usage.activity.metric.api_calls')),
+            _UsageTrend(report: report, copy: widget.copy),
+            const SizedBox(height: ViberSpacing.lg),
+            _UsageGroupTable(
+              report: report,
+              groupBy: _groupBy,
+              onChanged: (value) => setState(() => _groupBy = value),
+              copy: widget.copy,
+            ),
+            const SizedBox(height: ViberSpacing.lg),
+            ExpansionTile(
+              key: const Key('personal-usage-details'),
+              title: Text(widget.copy('usage.personal.details')),
+              children: [
+                SegmentedButton<_ActivityMetric>(
+                  segments: [
+                    ButtonSegment(
+                      value: _ActivityMetric.agentApiCalls,
+                      label: Text(
+                        widget.copy('usage.activity.metric.api_calls'),
+                      ),
+                    ),
+                    ButtonSegment(
+                      value: _ActivityMetric.tokens,
+                      label: Text(widget.copy('usage.activity.metric.tokens')),
+                    ),
+                  ],
+                  selected: {_metric},
+                  showSelectedIcon: false,
+                  onSelectionChanged: (value) => setState(() {
+                    _metric = value.single;
+                  }),
                 ),
-                ButtonSegment(
-                  value: _ActivityMetric.tokens,
-                  label: Text(widget.copy('usage.activity.metric.tokens')),
+                const SizedBox(height: ViberSpacing.md),
+                _UserEvidence(
+                  user: user,
+                  period: report.period,
+                  metric: _metric,
+                  copy: widget.copy,
                 ),
               ],
-              selected: {_metric},
-              showSelectedIcon: false,
-              onSelectionChanged: (value) => setState(() {
-                _metric = value.single;
-              }),
-            ),
-            const SizedBox(height: ViberSpacing.md),
-            _UserEvidence(
-              user: user,
-              period: report.period,
-              metric: _metric,
-              copy: widget.copy,
             ),
           ],
         ],
       ),
     );
   }
-}
-
-final class _PersonalOverview extends StatelessWidget {
-  const _PersonalOverview({required this.user, required this.copy});
-
-  final RuntimeUserUsage user;
-  final AppCopy copy;
-
-  @override
-  Widget build(BuildContext context) => LayoutBuilder(
-    builder: (context, constraints) {
-      final columns = constraints.maxWidth >= 760 ? 4 : 2;
-      final width =
-          (constraints.maxWidth - ViberSpacing.md * (columns - 1)) / columns;
-      return Wrap(
-        spacing: ViberSpacing.md,
-        runSpacing: ViberSpacing.md,
-        children: [
-          _OverviewCard(
-            width: width,
-            icon: Icons.podcasts_outlined,
-            label: copy('usage.personal.captures'),
-            value: _integer(user.captureRuns),
-            detail: copy.format('usage.personal.active', {
-              'count': '${user.activeRuns}',
-            }),
-          ),
-          _OverviewCard(
-            width: width,
-            icon: Icons.forum_outlined,
-            label: copy('usage.metric.api_calls'),
-            value: _integer(user.agentApiCalls),
-            detail: copy.format('usage.personal.succeeded', {
-              'count': '${user.succeeded}',
-            }),
-          ),
-          _OverviewCard(
-            width: width,
-            icon: Icons.input,
-            label: copy('usage.metric.input'),
-            value: _tokenLabel(user.tokens.inputUncached),
-            detail: copy('usage.metric.protocol_declared'),
-          ),
-          _OverviewCard(
-            width: width,
-            icon: Icons.output,
-            label: copy('usage.metric.output'),
-            value: _tokenLabel(user.tokens.output),
-            detail: copy('usage.metric.protocol_declared'),
-          ),
-        ],
-      );
-    },
-  );
 }
 
 final class _PersonalUsageEmpty extends StatelessWidget {
@@ -357,7 +357,9 @@ final class _UsageReportBody extends StatelessWidget {
     required this.detailKey,
     required this.userQuery,
     required this.onUserQueryChanged,
-    required this.onCreateUser,
+    required this.controller,
+    required this.groupBy,
+    required this.onGroupChanged,
   });
 
   final RuntimeUsageReport report;
@@ -371,7 +373,9 @@ final class _UsageReportBody extends StatelessWidget {
   final Key detailKey;
   final String userQuery;
   final ValueChanged<String> onUserQueryChanged;
-  final VoidCallback onCreateUser;
+  final WorkbenchController controller;
+  final String groupBy;
+  final ValueChanged<String> onGroupChanged;
 
   @override
   Widget build(BuildContext context) => SingleChildScrollView(
@@ -380,53 +384,794 @@ final class _UsageReportBody extends StatelessWidget {
     child: Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
+        Wrap(
+          spacing: 12,
+          runSpacing: 8,
+          alignment: WrapAlignment.spaceBetween,
+          crossAxisAlignment: WrapCrossAlignment.center,
+          children: [
+            SegmentedButton<int>(
+              key: const Key('usage-range'),
+              showSelectedIcon: false,
+              segments: [
+                for (final days in [7, 30, 90, 365])
+                  ButtonSegment(
+                    value: days,
+                    label: Text(copy.format('usage.range', {'days': '$days'})),
+                  ),
+              ],
+              selected: {controller.usageRangeDays},
+              onSelectionChanged: refreshing
+                  ? null
+                  : (value) =>
+                        unawaited(controller.setUsageRange(value.single)),
+            ),
+            TextButton.icon(
+              key: const Key('usage-collection-settings'),
+              onPressed: controller.runtimeUserMutating
+                  ? null
+                  : () => unawaited(
+                      _editUsageCollection(context, controller, copy),
+                    ),
+              icon: const Icon(Icons.tune, size: 16),
+              label: Text(copy('usage.collection.settings')),
+            ),
+          ],
+        ),
+        const SizedBox(height: 12),
         _ReportScope(
           report: report,
           copy: copy,
           refreshing: refreshing,
           onRefresh: onRefresh,
         ),
+        const SizedBox(height: 8),
+        Text(
+          report.collection.enabled
+              ? copy.format('usage.collection.since', {
+                  'time': _timestamp(report.collection.collectingSince!),
+                  'days': '${report.collection.retentionDays}',
+                })
+              : copy('usage.collection.disabled'),
+          style: Theme.of(
+            context,
+          ).textTheme.bodySmall?.copyWith(color: context.viberColors.textMuted),
+        ),
+        if (controller.usageError != null)
+          InlineNotice(
+            message:
+                '${copy('usage.refresh.failed')} ${controller.usageError!}',
+            error: true,
+          ),
         if (report.truncated) ...[
           const SizedBox(height: ViberSpacing.md),
           InlineNotice(message: copy('server.usage.truncated'), error: true),
         ],
         const SizedBox(height: ViberSpacing.lg),
         _UsageOverview(report: report, copy: copy),
+        _PricingNote(report: report, copy: copy),
         const SizedBox(height: ViberSpacing.lg),
-        _TeamActivityPanel(
+        _UsageTrend(
           report: report,
-          metric: activityMetric,
           copy: copy,
-          onMetricChanged: onActivityMetricChanged,
+          annual: controller.usageRangeDays == 365
+              ? _TeamActivityPanel(
+                  report: report,
+                  metric: activityMetric,
+                  copy: copy,
+                  onMetricChanged: onActivityMetricChanged,
+                )
+              : null,
         ),
         const SizedBox(height: ViberSpacing.xl),
-        if (report.users.isEmpty)
-          _EmptyUsage(copy: copy, onCreateUser: onCreateUser)
-        else ...[
-          _UserLedger(
-            users: _rankedUsers(report.users),
-            selectedUserId: selected?.userId,
-            query: userQuery,
-            copy: copy,
-            metric: activityMetric,
-            period: report.period,
-            onQueryChanged: onUserQueryChanged,
-            onSelectUser: onSelectUser,
+        _UsageGroupTable(
+          report: report,
+          groupBy: groupBy,
+          onChanged: onGroupChanged,
+          copy: copy,
+        ),
+        if (report.users.any((user) => user.agentApiCalls > 0)) ...[
+          const SizedBox(height: 16),
+          ExpansionTile(
+            key: const Key('usage-member-details'),
+            tilePadding: EdgeInsets.zero,
+            title: Text(copy('usage.members')),
+            children: [
+              _UserLedger(
+                users: _rankedUsers(report.users),
+                selectedUserId: selected?.userId,
+                query: userQuery,
+                copy: copy,
+                metric: activityMetric,
+                period: report.period,
+                onQueryChanged: onUserQueryChanged,
+                onSelectUser: onSelectUser,
+              ),
+              if (selected != null) ...[
+                const SizedBox(height: ViberSpacing.xl),
+                _UserEvidence(
+                  key: detailKey,
+                  user: selected!,
+                  period: report.period,
+                  metric: activityMetric,
+                  copy: copy,
+                ),
+              ],
+            ],
           ),
-          if (selected != null) ...[
-            const SizedBox(height: ViberSpacing.xl),
-            _UserEvidence(
-              key: detailKey,
-              user: selected!,
-              period: report.period,
-              metric: activityMetric,
-              copy: copy,
-            ),
-          ],
         ],
       ],
     ),
   );
+}
+
+Future<void> _editUsageCollection(
+  BuildContext context,
+  WorkbenchController controller,
+  AppCopy copy,
+) async {
+  final policy = controller.runtimeUsage!.collection;
+  var enabled = policy.enabled;
+  var days = policy.retentionDays;
+  final confirmed = await showDialog<bool>(
+    context: context,
+    builder: (context) => StatefulBuilder(
+      builder: (context, setState) => AlertDialog(
+        title: Text(copy('usage.collection.settings')),
+        content: SizedBox(
+          width: 480,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(copy('usage.collection.explanation')),
+              const SizedBox(height: 16),
+              SwitchListTile.adaptive(
+                contentPadding: EdgeInsets.zero,
+                title: Text(copy('usage.collection.enable')),
+                value: enabled,
+                onChanged: (value) => setState(() => enabled = value),
+              ),
+              const SizedBox(height: 12),
+              DropdownButtonFormField<int>(
+                key: const Key('usage-retention'),
+                initialValue: days,
+                decoration: InputDecoration(
+                  labelText: copy('usage.collection.retention'),
+                  border: const OutlineInputBorder(),
+                ),
+                items: [
+                  for (final value in ({7, 30, 90, 365, days}.toList()..sort()))
+                    DropdownMenuItem(
+                      value: value,
+                      child: Text(
+                        copy.format('usage.range', {'days': '$value'}),
+                      ),
+                    ),
+                ],
+                onChanged: (value) {
+                  if (value != null) setState(() => days = value);
+                },
+              ),
+              const SizedBox(height: 12),
+              Text(
+                copy('usage.collection.retention_hint'),
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+              if (days < policy.retentionDays) ...[
+                const SizedBox(height: 12),
+                InlineNotice(
+                  message: copy('usage.collection.shorter'),
+                  error: true,
+                ),
+              ],
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: Text(copy('common.cancel')),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: Text(copy('common.save')),
+          ),
+        ],
+      ),
+    ),
+  );
+  if (confirmed == true) {
+    await controller.setUsageCollection(enabled: enabled, retentionDays: days);
+  }
+}
+
+final class _UsageTrend extends StatefulWidget {
+  const _UsageTrend({required this.report, required this.copy, this.annual});
+  final RuntimeUsageReport report;
+  final AppCopy copy;
+  final Widget? annual;
+  @override
+  State<_UsageTrend> createState() => _UsageTrendState();
+}
+
+final class _UsageTrendState extends State<_UsageTrend> {
+  bool _cost = false;
+  @override
+  Widget build(BuildContext context) => Column(
+    crossAxisAlignment: CrossAxisAlignment.stretch,
+    children: [
+      Align(
+        alignment: Alignment.centerRight,
+        child: SegmentedButton<bool>(
+          key: const Key('usage-trend-metric'),
+          showSelectedIcon: false,
+          segments: [
+            ButtonSegment(
+              value: false,
+              label: Text(widget.copy('usage.trend.requests')),
+            ),
+            ButtonSegment(
+              value: true,
+              label: Text(widget.copy('usage.cost.short')),
+            ),
+          ],
+          selected: {_cost},
+          onSelectionChanged: (value) => setState(() => _cost = value.single),
+        ),
+      ),
+      const SizedBox(height: 8),
+      if (!_cost && widget.annual != null)
+        widget.annual!
+      else
+        _UsageDailyBars(report: widget.report, copy: widget.copy, cost: _cost),
+    ],
+  );
+}
+
+final class _UsageChartPoint {
+  _UsageChartPoint(this.date);
+  final String date;
+  int calls = 0;
+  int failed = 0;
+  RuntimeCostEstimate cost = const RuntimeCostEstimate();
+}
+
+final class _UsageDailyBars extends StatelessWidget {
+  const _UsageDailyBars({
+    required this.report,
+    required this.copy,
+    this.cost = false,
+  });
+  final RuntimeUsageReport report;
+  final AppCopy copy;
+  final bool cost;
+
+  @override
+  Widget build(BuildContext context) {
+    final dates = _periodDates(report.period);
+    final monthly = dates.length > 90;
+    String bucket(String date) => monthly ? date.substring(0, 7) : date;
+    final byDate = <String, _UsageChartPoint>{};
+    for (final date in dates) {
+      final key = bucket(date.toIso8601String().substring(0, 10));
+      byDate.putIfAbsent(key, () => _UsageChartPoint(key));
+    }
+    for (final day in report.days) {
+      final point = byDate[bucket(day.date)]!;
+      point.calls += day.agentApiCalls;
+      point.failed += day.failed;
+      point.cost = point.cost.add(
+        day.cost ?? RuntimeCostEstimate(unpricedCalls: day.agentApiCalls),
+      );
+    }
+    final points = byDate.values.toList(growable: false);
+    final peak = points.fold<int>(
+      1,
+      (value, point) =>
+          math.max(value, cost ? point.cost.nanoUsd : point.calls),
+    );
+    final colors = context.viberColors;
+    return Container(
+      key: const Key('usage-daily-trend'),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        border: Border.all(color: colors.dividerSoft),
+        borderRadius: ViberMetrics.surfaceRadius,
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text(
+            cost
+                ? copy(monthly ? 'usage.cost.monthly' : 'usage.cost.daily')
+                : copy(monthly ? 'usage.trend.monthly' : 'usage.trend'),
+            style: Theme.of(context).textTheme.titleSmall,
+          ),
+          const SizedBox(height: 8),
+          if (report.days.isEmpty ||
+              (cost && _reportCost(report).pricedCalls == 0))
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 24),
+              child: Text(
+                copy(
+                  report.days.isEmpty
+                      ? 'usage.empty.window'
+                      : 'usage.cost.no_priced',
+                ),
+                style: TextStyle(color: colors.textMuted),
+              ),
+            )
+          else
+            SizedBox(
+              height: 132,
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  for (final point in points)
+                    Expanded(
+                      child: Builder(
+                        builder: (context) {
+                          final key = point.date;
+                          final count = cost ? point.cost.nanoUsd : point.calls;
+                          final failed = cost ? 0 : point.failed;
+                          final label = point.calls == 0
+                              ? '$key · ${copy('usage.empty.window')}'
+                              : cost
+                              ? '$key · ${_costLabel(point.cost)} USD · ${_costCoverage(point.cost, copy)}'
+                              : '$key · $count ${copy('usage.metric.api_calls')} · $failed ${copy('usage.failed')}';
+                          return Tooltip(
+                            message: label,
+                            child: Semantics(
+                              label: label,
+                              child: Padding(
+                                padding: EdgeInsets.symmetric(
+                                  horizontal: points.length > 30 ? 1 : 4,
+                                ),
+                                child: Column(
+                                  mainAxisAlignment: MainAxisAlignment.end,
+                                  children: [
+                                    if (points.length <= 7)
+                                      SizedBox(
+                                        height: 16,
+                                        child: LayoutBuilder(
+                                          builder: (context, constraints) =>
+                                              cost && constraints.maxWidth < 60
+                                              ? const SizedBox.shrink()
+                                              : Text(
+                                                  point.calls == 0
+                                                      ? '—'
+                                                      : cost
+                                                      ? _costLabel(point.cost)
+                                                      : '$count',
+                                                  style: Theme.of(
+                                                    context,
+                                                  ).textTheme.labelSmall,
+                                                  maxLines: 1,
+                                                  overflow:
+                                                      TextOverflow.ellipsis,
+                                                ),
+                                        ),
+                                      ),
+                                    const SizedBox(height: 4),
+                                    Container(
+                                      height: math.max(2, 90.0 * count / peak),
+                                      constraints: const BoxConstraints(
+                                        maxWidth: 48,
+                                      ),
+                                      decoration: BoxDecoration(
+                                        color: colors.route.withValues(
+                                          alpha: .7,
+                                        ),
+                                        borderRadius: BorderRadius.circular(3),
+                                      ),
+                                      child: Align(
+                                        alignment: Alignment.topCenter,
+                                        child: FractionallySizedBox(
+                                          heightFactor: count == 0
+                                              ? 0
+                                              : failed / count,
+                                          child: Container(
+                                            color: Theme.of(
+                                              context,
+                                            ).colorScheme.error,
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                    const SizedBox(height: 6),
+                                    SizedBox(
+                                      height: 16,
+                                      child: points.length <= 13
+                                          ? FittedBox(
+                                              fit: BoxFit.scaleDown,
+                                              child: Text(
+                                                key.substring(5),
+                                                style: Theme.of(
+                                                  context,
+                                                ).textTheme.labelSmall,
+                                                maxLines: 1,
+                                              ),
+                                            )
+                                          : null,
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          );
+                        },
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          if (points.length > 13 && report.days.isNotEmpty)
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text(report.period.from),
+                Text(dates.last.toIso8601String().substring(0, 10)),
+              ],
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+final class _UsageGroupTable extends StatefulWidget {
+  const _UsageGroupTable({
+    required this.report,
+    required this.groupBy,
+    required this.onChanged,
+    required this.copy,
+  });
+  final RuntimeUsageReport report;
+  final String groupBy;
+  final ValueChanged<String> onChanged;
+  final AppCopy copy;
+
+  @override
+  State<_UsageGroupTable> createState() => _UsageGroupTableState();
+}
+
+final class _UsageGroupTableState extends State<_UsageGroupTable> {
+  final Set<String> _expanded = {};
+  final _horizontalScroll = ScrollController();
+
+  @override
+  void dispose() {
+    _horizontalScroll.dispose();
+    super.dispose();
+  }
+
+  @override
+  void didUpdateWidget(covariant _UsageGroupTable oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.groupBy != widget.groupBy && _horizontalScroll.hasClients) {
+      _horizontalScroll.jumpTo(0);
+    }
+  }
+
+  List<({RuntimeUsageGroup group, int depth, String path})> _rows(
+    List<RuntimeUsageGroup> groups,
+    String parent, [
+    int depth = 0,
+  ]) => [
+    for (final group in groups) ...[
+      (
+        group: group,
+        depth: depth,
+        path: '$parent/${Uri.encodeComponent(group.id)}',
+      ),
+      if (_expanded.contains('$parent/${Uri.encodeComponent(group.id)}'))
+        ..._rows(
+          group.children,
+          '$parent/${Uri.encodeComponent(group.id)}',
+          depth + 1,
+        ),
+    ],
+  ];
+
+  String _label(RuntimeUsageGroup group) {
+    if (group.dimension == 'source') {
+      return widget.copy('usage.source.${group.id}');
+    }
+    if (group.evidence == 'detached') return 'Detached HEAD';
+    if (group.label.isNotEmpty) return group.label;
+    if (group.id.isEmpty || group.dimension == 'caller') {
+      return widget.copy('usage.unknown');
+    }
+    return group.id;
+  }
+
+  DataRow _row(
+    BuildContext context,
+    RuntimeUsageGroup group, {
+    required String path,
+    int depth = 0,
+    bool total = false,
+  }) {
+    final copy = widget.copy;
+    final cost =
+        group.cost ?? RuntimeCostEstimate(unpricedCalls: group.agentApiCalls);
+    final name = total ? copy('usage.total') : _label(group);
+    final expanded = _expanded.contains(path);
+    final kind = group.evidence == 'local'
+        ? copy('usage.caller.local')
+        : group.evidence == 'member'
+        ? copy('usage.caller.member')
+        : group.dimension == 'branch'
+        ? copy('usage.branch.launch')
+        : '';
+    return DataRow(
+      key: ValueKey('usage-row-$path'),
+      color: total || depth > 0
+          ? WidgetStatePropertyAll(
+              context.viberColors.panel.withValues(alpha: total ? 1 : .6),
+            )
+          : null,
+      cells: [
+        DataCell(
+          SizedBox(
+            width: 290,
+            child: Padding(
+              padding: EdgeInsets.only(left: depth * 18),
+              child: Row(
+                children: [
+                  if (group.children.isNotEmpty)
+                    IconButton(
+                      key: Key('usage-expand-$path'),
+                      tooltip:
+                          '${copy(expanded ? 'usage.collapse' : 'usage.expand')} $name',
+                      constraints: const BoxConstraints.tightFor(
+                        width: 28,
+                        height: 32,
+                      ),
+                      padding: EdgeInsets.zero,
+                      onPressed: () => setState(() {
+                        expanded ? _expanded.remove(path) : _expanded.add(path);
+                      }),
+                      icon: Icon(
+                        expanded ? Icons.expand_more : Icons.chevron_right,
+                        size: 18,
+                      ),
+                    )
+                  else
+                    const SizedBox(width: 28),
+                  if (depth > 0) ...[
+                    Icon(
+                      switch (group.dimension) {
+                        'caller' => Icons.person_outline,
+                        'branch' => Icons.call_split,
+                        _ => Icons.memory_outlined,
+                      },
+                      size: 14,
+                      color: context.viberColors.textFaint,
+                    ),
+                    const SizedBox(width: 6),
+                  ],
+                  Expanded(
+                    child: Tooltip(
+                      message:
+                          '$name${group.id.isEmpty || total ? '' : '\n${group.id}'}',
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            name,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              fontWeight: total || depth == 0
+                                  ? FontWeight.w600
+                                  : FontWeight.w400,
+                            ),
+                          ),
+                          if (kind.isNotEmpty || group.childrenTruncated)
+                            Text(
+                              group.childrenTruncated
+                                  ? copy('usage.children.truncated')
+                                  : kind,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: Theme.of(context).textTheme.bodySmall
+                                  ?.copyWith(
+                                    color: context.viberColors.textFaint,
+                                  ),
+                            ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+        DataCell(Text(_reportInteger(group.agentApiCalls))),
+        DataCell(Text(_reportInteger(group.failed))),
+        for (final value in [
+          group.tokens.inputUncached,
+          group.tokens.cacheRead,
+          group.tokens.output,
+        ])
+          DataCell(
+            Tooltip(
+              message: copy('usage.tokens.hint'),
+              child: Text(
+                value.observed
+                    ? '${value.complete ? '' : '≥ '}${_reportInteger(value.tokens)}'
+                    : '—',
+              ),
+            ),
+          ),
+        DataCell(
+          Tooltip(
+            message: '${_costCoverage(cost, copy)}\n${_costLabel(cost)}',
+            child: Text(
+              _tableCostLabel(cost),
+              style: TextStyle(
+                fontWeight: FontWeight.w600,
+                color: context.viberColors.route,
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final report = widget.report;
+    final groupBy = widget.groupBy;
+    final copy = widget.copy;
+    final groups = switch (groupBy) {
+      'sources' => report.sources,
+      'accounts' => report.accounts,
+      'models' => report.models,
+      'callers' => report.callers,
+      'projects' => report.projects,
+      _ => report.profiles,
+    };
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            for (final key in [
+              'profiles',
+              'accounts',
+              'models',
+              'sources',
+              'callers',
+              'projects',
+            ])
+              ChoiceChip(
+                key: Key('usage-group-$key'),
+                label: Text(copy('usage.group.$key')),
+                selected: key == groupBy,
+                onSelected: (_) => widget.onChanged(key),
+              ),
+          ],
+        ),
+        const SizedBox(height: 12),
+        Text(
+          copy('usage.path.$groupBy'),
+          style: Theme.of(
+            context,
+          ).textTheme.bodySmall?.copyWith(color: context.viberColors.textMuted),
+        ),
+        const SizedBox(height: 8),
+        if (groups.isEmpty)
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 16),
+            child: Text(
+              copy('usage.empty.window'),
+              style: TextStyle(color: context.viberColors.textMuted),
+            ),
+          )
+        else
+          LayoutBuilder(
+            builder: (context, constraints) => Scrollbar(
+              controller: _horizontalScroll,
+              thumbVisibility: true,
+              child: SingleChildScrollView(
+                key: const Key('usage-breakdown-scroll'),
+                controller: _horizontalScroll,
+                scrollDirection: Axis.horizontal,
+                child: ConstrainedBox(
+                  constraints: BoxConstraints(
+                    minWidth: math.max(1000, constraints.maxWidth),
+                  ),
+                  child: DataTable(
+                    key: const Key('usage-breakdown-table'),
+                    headingRowHeight: 38,
+                    dataRowMinHeight: 44,
+                    dataRowMaxHeight: 52,
+                    horizontalMargin: 12,
+                    columnSpacing: 24,
+                    dataTextStyle: Theme.of(context).textTheme.bodyMedium
+                        ?.copyWith(
+                          fontFeatures: const [FontFeature.tabularFigures()],
+                        ),
+                    columns: [
+                      DataColumn(label: Text(copy('usage.group.$groupBy'))),
+                      for (final label in [
+                        'usage.metric.api_calls',
+                        'usage.failed',
+                        'usage.table.input',
+                        'usage.cache_read',
+                        'usage.table.output',
+                        'usage.table.cost',
+                      ])
+                        DataColumn(numeric: true, label: Text(copy(label))),
+                    ],
+                    rows: [
+                      for (final row in _rows(groups, groupBy))
+                        _row(
+                          context,
+                          row.group,
+                          path: row.path,
+                          depth: row.depth,
+                        ),
+                      if (report.total case final total?)
+                        _row(
+                          context,
+                          total,
+                          path: '$groupBy#total',
+                          total: true,
+                        ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+        const SizedBox(height: 8),
+        Text(
+          copy('usage.tokens.hint'),
+          style: Theme.of(
+            context,
+          ).textTheme.bodySmall?.copyWith(color: context.viberColors.textFaint),
+        ),
+        if (groupBy == 'projects' ||
+            groupBy == 'callers' ||
+            groupBy == 'models') ...[
+          const SizedBox(height: 4),
+          Text(
+            copy(
+              groupBy == 'projects'
+                  ? 'usage.projects.hint'
+                  : 'usage.callers.hint',
+            ),
+            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+              color: context.viberColors.textFaint,
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+}
+
+String _reportInteger(int value) =>
+    '$value'.replaceAllMapped(RegExp(r'\B(?=(\d{3})+(?!\d))'), (_) => ',');
+
+String _tableCostLabel(RuntimeCostEstimate cost) {
+  if (cost.pricedCalls == 0) return '—';
+  if (!cost.partial && cost.nanoUsd > 0 && cost.nanoUsd < 10000000) {
+    return '< \$0.01';
+  }
+  final cents = cost.partial
+      ? cost.nanoUsd ~/ 10000000
+      : (cost.nanoUsd + 5000000) ~/ 10000000;
+  return '${cost.partial ? '≥ ' : ''}\$${_reportInteger(cents ~/ 100)}.${(cents % 100).toString().padLeft(2, '0')}';
 }
 
 final class _ReportScope extends StatelessWidget {
@@ -461,7 +1206,7 @@ final class _ReportScope extends StatelessWidget {
             ),
             Text(
               '${_periodLabel(report.period)} · '
-              '${copy.format('usage.generated', {'time': _timestamp(report.generatedAt)})}',
+              '${copy.format('usage.generated', {'time': _timestamp(report.generatedAt, seconds: true)})}',
               maxLines: 2,
               overflow: TextOverflow.ellipsis,
               style: Theme.of(context).textTheme.bodySmall?.copyWith(
@@ -474,7 +1219,7 @@ final class _ReportScope extends StatelessWidget {
       IconButton(
         key: const Key('usage-refresh'),
         onPressed: refreshing ? null : onRefresh,
-        tooltip: copy('status.refresh'),
+        tooltip: copy('usage.refresh.hint'),
         icon: refreshing
             ? const CompactProgressIndicator()
             : const Icon(Icons.refresh, size: 16),
@@ -491,9 +1236,12 @@ final class _UsageOverview extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final users = report.users;
-    final activeUsers = users.where((user) => user.active).length;
-    final activeRuns = users.fold<int>(0, (sum, user) => sum + user.activeRuns);
+    final succeeded = report.days.fold<int>(
+      0,
+      (sum, day) => sum + day.succeeded,
+    );
+    final failed = report.days.fold<int>(0, (sum, day) => sum + day.failed);
+    final canceled = report.days.fold<int>(0, (sum, day) => sum + day.canceled);
     final agentApiCalls = report.days.fold<int>(
       0,
       (sum, day) => sum + day.agentApiCalls,
@@ -502,8 +1250,8 @@ final class _UsageOverview extends StatelessWidget {
     final output = _sumDayTokens(report.days, (tokens) => tokens.output);
     return LayoutBuilder(
       builder: (context, constraints) {
-        final columns = constraints.maxWidth >= 900
-            ? 5
+        final columns = constraints.maxWidth >= 1100
+            ? 6
             : constraints.maxWidth >= 560
             ? 3
             : 2;
@@ -515,31 +1263,28 @@ final class _UsageOverview extends StatelessWidget {
           children: [
             _OverviewCard(
               width: width,
-              icon: Icons.people_outline,
-              label: copy('usage.metric.users'),
-              value: _integer(users.length),
-              detail: copy.format('usage.metric.users.detail', {
-                'count': '$activeUsers',
-              }),
-            ),
-            _OverviewCard(
-              key: const Key('usage-active-runs'),
-              width: width,
-              icon: Icons.podcasts_outlined,
-              label: copy('usage.metric.active_runs'),
-              value: _integer(activeRuns),
-              detail: copy('usage.metric.active_runs.detail'),
-              accent: activeRuns > 0
-                  ? context.viberColors.verified
-                  : context.viberColors.textFaint,
-            ),
-            _OverviewCard(
               key: const Key('usage-total-api-calls'),
-              width: width,
-              icon: Icons.forum_outlined,
+              icon: Icons.swap_horiz,
               label: copy('usage.metric.api_calls'),
               value: _integer(agentApiCalls),
               detail: copy('usage.metric.api_calls.detail'),
+            ),
+            _OverviewCard(
+              width: width,
+              icon: Icons.check_circle_outline,
+              label: copy('usage.succeeded'),
+              value: _integer(succeeded),
+              detail: agentApiCalls == 0
+                  ? '—'
+                  : '${(100 * succeeded / agentApiCalls).toStringAsFixed(1)}%',
+              accent: context.viberColors.verified,
+            ),
+            _OverviewCard(
+              width: width,
+              icon: Icons.error_outline,
+              label: copy('usage.failed'),
+              value: _integer(failed),
+              detail: copy.format('usage.canceled', {'count': '$canceled'}),
             ),
             _OverviewCard(
               key: const Key('usage-input-tokens'),
@@ -557,11 +1302,120 @@ final class _UsageOverview extends StatelessWidget {
               value: output.label,
               detail: copy('usage.metric.protocol_declared'),
             ),
+            Tooltip(
+              message: _costCoverage(_reportCost(report), copy),
+              child: _OverviewCard(
+                key: const Key('usage-estimated-cost'),
+                width: width,
+                icon: Icons.payments_outlined,
+                label: copy('usage.cost.title'),
+                value: _costLabel(_reportCost(report)),
+                detail: copy.format('usage.cost.coverage', {
+                  'known': '${_reportCost(report).completeCalls}',
+                  'total': '$agentApiCalls',
+                }),
+              ),
+            ),
           ],
         );
       },
     );
   }
+}
+
+final class _PricingNote extends StatelessWidget {
+  const _PricingNote({required this.report, required this.copy});
+  final RuntimeUsageReport report;
+  final AppCopy copy;
+
+  @override
+  Widget build(BuildContext context) {
+    final pricing = report.pricing;
+    final state = pricing?.state ?? 'unavailable';
+    final label = state == 'unavailable'
+        ? copy('usage.cost.unavailable')
+        : '${copy.format('usage.cost.updated', {'time': _timestamp(pricing!.updatedAt!)})}'
+              '${state == 'stale' ? ' · ${copy('usage.cost.stale')}' : ''}';
+    return Padding(
+      padding: const EdgeInsets.only(top: 6),
+      child: Wrap(
+        alignment: WrapAlignment.spaceBetween,
+        crossAxisAlignment: WrapCrossAlignment.center,
+        spacing: 12,
+        runSpacing: 2,
+        children: [
+          Text(
+            label,
+            key: const Key('usage-price-status'),
+            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+              color: state == 'ready'
+                  ? context.viberColors.textFaint
+                  : context.viberColors.warning,
+            ),
+          ),
+          TextButton.icon(
+            key: const Key('usage-price-basis'),
+            onPressed: () => showDialog<void>(
+              context: context,
+              builder: (context) => AlertDialog(
+                title: Text(copy('usage.cost.title')),
+                content: SizedBox(
+                  width: 460,
+                  child: SingleChildScrollView(
+                    child: SelectableText(
+                      '${copy('usage.cost.explanation')}\n\n'
+                      '${copy('usage.cost.formula')}\n\n'
+                      '${copy('usage.cost.limits')}\n\n'
+                      '${_costCoverage(_reportCost(report), copy)}\n$label',
+                    ),
+                  ),
+                ),
+                actions: [
+                  TextButton(
+                    onPressed: () => Navigator.pop(context),
+                    child: Text(copy('common.dismiss')),
+                  ),
+                ],
+              ),
+            ),
+            icon: const Icon(Icons.info_outline, size: 14),
+            label: Text(copy('usage.cost.basis')),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+RuntimeCostEstimate _reportCost(RuntimeUsageReport report) =>
+    report.cost ??
+    report.days.fold(
+      const RuntimeCostEstimate(),
+      (sum, day) => sum.add(
+        day.cost ?? RuntimeCostEstimate(unpricedCalls: day.agentApiCalls),
+      ),
+    );
+
+String _costCoverage(RuntimeCostEstimate cost, AppCopy copy) =>
+    copy.format('usage.cost.coverage_detail', {
+      'complete': '${cost.completeCalls}',
+      'partial': '${cost.partialCalls}',
+      'unpriced': '${cost.unpricedCalls}',
+    });
+
+String _costLabel(RuntimeCostEstimate cost) {
+  if (cost.pricedCalls == 0) return '—';
+  final amount = cost.nanoUsd;
+  final digits = amount == 0 || amount >= 1000000000
+      ? 2
+      : amount >= 100000
+      ? 4
+      : amount >= 1000
+      ? 6
+      : 9;
+  final scale = math.pow(10, 9 - digits).toInt();
+  final value = cost.partial ? (amount ~/ scale) * scale : amount;
+  return '${cost.partial ? '≥ ' : ''}\$${(value / 1000000000).toStringAsFixed(digits)}';
 }
 
 final class _OverviewCard extends StatelessWidget {
@@ -602,12 +1456,15 @@ final class _OverviewCard extends StatelessWidget {
               Icon(icon, size: 15, color: color),
               const SizedBox(width: ViberSpacing.sm),
               Expanded(
-                child: Text(
-                  label,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: Theme.of(context).textTheme.labelMedium?.copyWith(
-                    color: context.viberColors.textMuted,
+                child: Tooltip(
+                  message: label,
+                  child: Text(
+                    label,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                      color: context.viberColors.textMuted,
+                    ),
                   ),
                 ),
               ),
@@ -619,6 +1476,7 @@ final class _OverviewCard extends StatelessWidget {
             style: Theme.of(context).textTheme.titleLarge?.copyWith(
               color: context.viberColors.text,
               fontWeight: FontWeight.w600,
+              fontFeatures: const [FontFeature.tabularFigures()],
             ),
           ),
           const SizedBox(height: ViberSpacing.xxs),
@@ -2410,51 +3268,6 @@ final class _EvidenceEmpty extends StatelessWidget {
   );
 }
 
-final class _EmptyUsage extends StatelessWidget {
-  const _EmptyUsage({required this.copy, required this.onCreateUser});
-
-  final AppCopy copy;
-  final VoidCallback onCreateUser;
-
-  @override
-  Widget build(BuildContext context) => Container(
-    padding: const EdgeInsets.all(ViberSpacing.xl),
-    decoration: BoxDecoration(
-      color: context.viberColors.panelRaised,
-      border: Border.all(color: context.viberColors.dividerSoft),
-      borderRadius: ViberMetrics.surfaceRadius,
-    ),
-    child: Row(
-      children: [
-        Icon(
-          Icons.person_add_alt_1,
-          size: 20,
-          color: context.viberColors.route,
-        ),
-        const SizedBox(width: ViberSpacing.md),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                copy('usage.empty'),
-                style: Theme.of(context).textTheme.bodyMedium,
-              ),
-              const SizedBox(height: ViberSpacing.sm),
-              OutlinedButton.icon(
-                key: const Key('usage-create-runtime-user'),
-                onPressed: onCreateUser,
-                icon: const Icon(Icons.person_add_alt_1, size: 16),
-                label: Text(copy('usage.empty.action')),
-              ),
-            ],
-          ),
-        ),
-      ],
-    ),
-  );
-}
-
 String _periodLabel(RuntimeUsagePeriod period) {
   final until = _parseCivilDate(period.until).subtract(const Duration(days: 1));
   return '${period.from} – ${_civilDate(until)} · ${period.timeZone}';
@@ -2492,8 +3305,7 @@ int _dayValue(RuntimeDayUsage day, _ActivityMetric metric) => switch (metric) {
     day.tokens.inputUncached.tokens +
         day.tokens.cacheWrite.tokens +
         day.tokens.cacheRead.tokens +
-        day.tokens.output.tokens +
-        day.tokens.reasoning.tokens,
+        day.tokens.output.tokens,
 };
 
 bool _dayMetricComplete(RuntimeDayUsage day, _ActivityMetric metric) {
@@ -2503,7 +3315,6 @@ bool _dayMetricComplete(RuntimeDayUsage day, _ActivityMetric metric) {
     day.tokens.cacheWrite,
     day.tokens.cacheRead,
     day.tokens.output,
-    day.tokens.reasoning,
   ];
   return values.every((value) => value.complete);
 }
@@ -2610,9 +3421,9 @@ String _integer(int value) {
   return '$value';
 }
 
-String _timestamp(DateTime value) {
+String _timestamp(DateTime value, {bool seconds = false}) {
   final local = value.toLocal();
   String two(int number) => number.toString().padLeft(2, '0');
   return '${local.year}-${two(local.month)}-${two(local.day)} '
-      '${two(local.hour)}:${two(local.minute)}';
+      '${two(local.hour)}:${two(local.minute)}${seconds ? ':${two(local.second)}' : ''}';
 }

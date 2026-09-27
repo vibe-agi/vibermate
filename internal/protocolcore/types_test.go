@@ -2,6 +2,7 @@ package protocolcore
 
 import (
 	"bytes"
+	"slices"
 	"testing"
 )
 
@@ -396,5 +397,55 @@ func TestProviderExtensionOwnsOpaqueFragments(t *testing.T) {
 		[]byte(`"opaque-one"`),
 	) {
 		t.Fatalf("Response.Clone() retained extension alias: %q", fresh)
+	}
+}
+
+func TestRequestProviderExtensionLimitsApplyAcrossHistory(t *testing.T) {
+	makeBlock := func(size int) ContentBlock {
+		t.Helper()
+		fragment := bytes.Repeat([]byte{'x'}, size)
+		fragment[0], fragment[len(fragment)-1] = '"', '"'
+		extension, err := NewProviderExtension(ProviderExtensionSourceOpenAIResponses,
+			ProviderExtensionReasoningEncryptedContent, "$.encrypted_content", [][]byte{fragment})
+		if err != nil {
+			t.Fatal(err)
+		}
+		block, err := NewProviderExtensionBlock(extension)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return block
+	}
+	small := makeBlock(2)
+	halfBudget := makeBlock(MaxProviderExtensionBytes / 2)
+	message := Message{Role: RoleAssistant, Blocks: []ContentBlock{small}}
+	for _, test := range []struct {
+		name     string
+		messages []Message
+		wantErr  bool
+	}{
+		{"history exceeds one-response count", slices.Repeat([]Message{message}, MaxProviderExtensions+1), false},
+		{"history at message limit", slices.Repeat([]Message{message}, MaxMessageCount), false},
+		{"history exceeds message limit", slices.Repeat([]Message{message}, MaxMessageCount+1), true},
+		{"single message at count limit", []Message{{Role: RoleAssistant, Blocks: slices.Repeat([]ContentBlock{small}, MaxProviderExtensions)}}, false},
+		{"single message exceeds count limit", []Message{{Role: RoleAssistant, Blocks: slices.Repeat([]ContentBlock{small}, MaxProviderExtensions+1)}}, true},
+		{"history at byte limit", []Message{{Role: RoleAssistant, Blocks: []ContentBlock{halfBudget}}, {Role: RoleAssistant, Blocks: []ContentBlock{halfBudget}}}, false},
+		{"history exceeds byte limit", []Message{{Role: RoleAssistant, Blocks: []ContentBlock{halfBudget}}, {Role: RoleAssistant, Blocks: []ContentBlock{halfBudget}}, message}, true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			request := Request{RequestedModel: "fixture", EffectiveModel: "fixture", Messages: test.messages}
+			if err := request.Validate(); (err != nil) != test.wantErr {
+				t.Fatalf("Validate() = %v, want error %t", err, test.wantErr)
+			}
+		})
+	}
+	// History may span many responses; one newly produced response keeps its cap.
+	for _, count := range []int{MaxProviderExtensions, MaxProviderExtensions + 1} {
+		response := Response{ID: "fixture", RequestedModel: "fixture", EffectiveModel: "fixture",
+			ReportedModel: "fixture", StopReason: StopReasonEndTurn,
+			Blocks: slices.Repeat([]ContentBlock{small}, count)}
+		if err := response.Validate(); (err != nil) != (count > MaxProviderExtensions) {
+			t.Fatalf("response with %d extensions: %v", count, err)
+		}
 	}
 }

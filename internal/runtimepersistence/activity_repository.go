@@ -89,12 +89,12 @@ func (repository *activityRepository) Append(
 		     conversation_evidence,
 		     conversation_actor,
 		     provider_status,
-		     provider_field,
+		     provider_field, provider_error_code,
 		     client_field,
 		     client_path,
 		     transport_evidence_json
 		 )
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		record.ID,
 		toUnixMillis(record.OccurredAt),
 		string(record.Kind),
@@ -125,7 +125,7 @@ func (repository *activityRepository) Append(
 		conversationEvidence(record.Conversation),
 		conversationActor(record.Conversation),
 		diagnosis.ProviderStatus,
-		diagnosis.ProviderField,
+		diagnosis.ProviderField, diagnosis.ProviderErrorCode,
 		diagnosis.ClientField,
 		diagnosis.ClientPath,
 		transportEvidence,
@@ -180,7 +180,7 @@ func (repository *activityRepository) List(
 		     conversation_evidence,
 		     conversation_actor,
 		     provider_status,
-		     provider_field,
+		     provider_field, provider_error_code,
 		     client_field,
 		     client_path,
 		     transport_evidence_json
@@ -224,7 +224,7 @@ func exchangePageQuery(request activity.PageRequest) (string, []any) {
 		     capture_run_id, manual_capture_id, connection_id,
 		     conversation_projection_id, conversation_display_name,
 		     conversation_kind, conversation_evidence, conversation_actor,
-		     provider_status, provider_field, client_field, client_path,
+		     provider_status, provider_field, provider_error_code, client_field, client_path,
 		     transport_evidence_json
 		 FROM runtime_activities AS candidate
 		 WHERE kind IN ('exchange.started', 'exchange.completed')`
@@ -309,7 +309,7 @@ func (repository *activityRepository) GetExchange(
 		     conversation_evidence,
 		     conversation_actor,
 		     provider_status,
-		     provider_field,
+		     provider_field, provider_error_code,
 		     client_field,
 		     client_path,
 		     transport_evidence_json
@@ -707,7 +707,7 @@ func (repository *activityRepository) ListConversations(
 		        capture_run_id, manual_capture_id, connection_id,
 		        conversation_projection_id, conversation_display_name,
 		        conversation_kind, conversation_evidence, conversation_actor,
-		        provider_status, provider_field, client_field, client_path,
+		        provider_status, provider_field, provider_error_code, client_field, client_path,
 		        transport_evidence_json
 		 FROM selected
 		 ORDER BY first_sequence DESC,
@@ -869,7 +869,7 @@ func (state *activityScanState) targets() []any {
 		&state.conversation.ProjectionID, &state.conversation.DisplayName,
 		&state.conversation.Kind, &state.conversation.Evidence,
 		&state.conversation.Actor,
-		&state.diagnosis.ProviderStatus, &state.diagnosis.ProviderField,
+		&state.diagnosis.ProviderStatus, &state.diagnosis.ProviderField, &state.diagnosis.ProviderErrorCode,
 		&state.diagnosis.ClientField, &state.diagnosis.ClientPath,
 		&state.transportEvidence,
 	}

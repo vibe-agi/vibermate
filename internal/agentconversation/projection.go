@@ -604,6 +604,17 @@ func Project(input ProjectionInput) (Ref, error) {
 			Actor:       actor,
 		})
 	}
+	// Native Codex headers identify the requesting session/thread. Authors in
+	// its history or response describe individual messages, not this caller.
+	if scope.client == "codex" && scope.sessionID != "" {
+		projectionID, evidence := mainProjectionID(input.CaptureRunID, scope)
+		return checked(Ref{
+			ProjectionID: projectionID,
+			DisplayName:  input.SourceDisplayName,
+			Kind:         KindMain,
+			Evidence:     evidence,
+		})
+	}
 	actor, ambiguous := explicitCurrentActor(*input.Request, input.Response)
 	if actor != "" && !ambiguous {
 		return checked(Ref{

@@ -10,6 +10,14 @@ import 'package:vibermate_app/preview/preview_control_api.dart';
 import 'runtime_usage_fixture.dart';
 
 void main() {
+  test('Body-free diagnosis retains the structural upstream error code', () {
+    final diagnosis = ExchangeDiagnosis.fromJson({
+      'providerStatus': 200,
+      'providerErrorCode': 'invalid_encrypted_content',
+    }, 'diagnosis');
+    expect(diagnosis.providerErrorCode, 'invalid_encrypted_content');
+    expect(diagnosis.providerStatus, 200);
+  });
   test('Root CA material is bound to its advertised SHA-256 identity', () {
     final der = Uint8List.fromList([0x30, 0x03, 0x01, 0x02, 0x03]);
     final fingerprint = crypto.sha256.convert(der).toString();
@@ -265,6 +273,10 @@ void main() {
       expect(report.period.until, '2026-08-26');
       expect(report.period.timeZone, 'Asia/Singapore');
       expect(report.days.single.date, '2026-08-24');
+      expect(report.cost!.nanoUsd, 12500000);
+      expect(report.cost!.partial, isTrue);
+      expect(report.cost!.unpricedCalls, 1);
+      expect(report.pricing!.state, 'ready');
       expect(alice.days.single.failed, 1);
       expect(alice.latestContext?.workspaceLabel, 'vibermate');
       expect(alice.models.single.requestedModel, 'gpt-5.6-sol');
@@ -273,6 +285,74 @@ void main() {
       expect(alice.tokens.inputUncached.knownCalls, 1);
       expect(alice.tokens.inputUncached.unknownCalls, 1);
       expect(alice.agentSessions.single.sessionId, 'native-session-one');
+    },
+  );
+
+  test(
+    'Usage cost rejects inconsistent coverage, negative money and unsupported basis',
+    () {
+      for (final edit in <void Function(Map<String, Object?>)>[
+        (value) => value['nanoUsd'] = -1,
+        (value) => value['nanoUsd'] = 9007199254740992,
+        (value) => value['partialCalls'] = 2,
+        (value) => value['unpricedCalls'] = 3,
+      ]) {
+        final cost = costUsagePayload();
+        edit(cost);
+        expect(
+          () => RuntimeCostEstimate.fromJson(cost, 'cost', 2),
+          throwsA(isA<ControlContractException>()),
+        );
+      }
+      final payload = runtimeUsagePayload();
+      (payload['pricing']! as Map<String, Object?>)['currency'] = 'EUR';
+      expect(
+        () => RuntimeUsageReport.fromJson(payload, 'usage'),
+        throwsA(isA<ControlContractException>()),
+      );
+    },
+  );
+
+  test(
+    'Usage drilldown validates nesting, counters and truncated children',
+    () {
+      final leaf = usageGroupPayload('model')..['dimension'] = 'model';
+      final parent = usageGroupPayload('profile')
+        ..['dimension'] = 'profile'
+        ..['children'] = [leaf];
+      expect(
+        RuntimeUsageGroup.fromJson(parent, 'group').children.single.id,
+        'model',
+      );
+      parent['children'] = [leaf, leaf];
+      expect(
+        () => RuntimeUsageGroup.fromJson(parent, 'group'),
+        throwsA(isA<ControlContractException>()),
+      );
+      parent['children'] = [leaf];
+      parent['agentApiCalls'] = 3;
+      parent['succeeded'] = 2;
+      parent['cost'] = {...costUsagePayload(), 'unpricedCalls': 2};
+      expect(
+        () => RuntimeUsageGroup.fromJson(parent, 'group'),
+        throwsA(isA<ControlContractException>()),
+      );
+      parent['childrenTruncated'] = true;
+      expect(
+        RuntimeUsageGroup.fromJson(parent, 'group').childrenTruncated,
+        isTrue,
+      );
+      Map<String, Object?> deep = leaf;
+      for (var i = 0; i < 4; i++) {
+        deep = {
+          ...leaf,
+          'children': [deep],
+        };
+      }
+      expect(
+        () => RuntimeUsageGroup.fromJson(deep, 'group'),
+        throwsA(isA<ControlContractException>()),
+      );
     },
   );
 
@@ -459,6 +539,7 @@ void main() {
         'observation': 'observed',
         'createdAt': '2026-08-10T09:00:00.000Z',
         'updatedAt': '2026-08-10T09:01:00.000Z',
+        'activityAt': '2026-08-10T09:00:45.000Z',
         'managedRun': {
           'executableLabel': 'claude',
           'cwd': '/Users/mira/Code/vibermate',
@@ -496,6 +577,7 @@ void main() {
       }, 'capture');
 
       expect(record.running, isTrue);
+      expect(record.activityAt, DateTime.utc(2026, 8, 10, 9, 0, 45));
       expect(record.managedRun!.machineId, machineId);
       expect(record.managedRun!.workspaceId, workspaceId);
       expect(record.managedRun!.workspaceEvidence, 'registered_companion');

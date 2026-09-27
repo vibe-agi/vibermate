@@ -155,6 +155,36 @@ type recordingRuntimeUsage struct {
 	period runtimeusage.Period
 }
 
+func TestUsageCollectionRequiresExplicitBoundedOwnerInput(t *testing.T) {
+	for _, trial := range []struct {
+		body   map[string]any
+		status int
+	}{
+		{map[string]any{"enabled": true, "retentionDays": 90, "revision": 1}, http.StatusOK},
+		{map[string]any{"retentionDays": 90, "revision": 1}, http.StatusUnprocessableEntity},
+		{map[string]any{"enabled": true, "retentionDays": 0, "revision": 1}, http.StatusUnprocessableEntity},
+		{map[string]any{"enabled": true, "retentionDays": 366, "revision": 1}, http.StatusUnprocessableEntity},
+		{map[string]any{"enabled": true, "retentionDays": 90, "revision": 0}, http.StatusUnprocessableEntity},
+		{map[string]any{"enabled": true, "retentionDays": 90, "revision": 1, "userId": "injected"}, http.StatusUnprocessableEntity},
+	} {
+		usage := &recordingRuntimeUsage{}
+		handler := newRuntimeUsersHandler(t, usage)
+		response := webRequest(t, handler, http.MethodPatch, servercontrol.RuntimeUserUsagePath+"/collection", trial.body, "")
+		if response.Code != trial.status {
+			t.Fatalf("%v -> %d %s", trial.body, response.Code, response.Body.String())
+		}
+		if trial.status != http.StatusOK && usage.calls != 0 {
+			t.Fatal("invalid policy reached mutation")
+		}
+	}
+}
+
+func (usage *recordingRuntimeUsage) SetCollectionPolicy(_ context.Context, policy runtimeusage.CollectionPolicy) (runtimeusage.CollectionPolicy, error) {
+	usage.calls++
+	policy.Revision++
+	return policy, nil
+}
+
 func (usage *recordingRuntimeUsage) Report(
 	_ context.Context,
 	query runtimeusage.Query,

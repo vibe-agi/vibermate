@@ -130,6 +130,9 @@ func (store *Store) CleanupExpired(
 	if err != nil {
 		return resourcedeletion.Released{}, err
 	}
+	if _, err := transaction.ExecContext(operation, `DELETE FROM runtime_usage_observations WHERE expires_at_unix_ms<=?`, now.UnixMilli()); err != nil {
+		return resourcedeletion.Released{}, err
+	}
 	if err := transaction.Commit(); err != nil {
 		return resourcedeletion.Released{}, fmt.Errorf("commit expired evidence cleanup: %w", err)
 	}

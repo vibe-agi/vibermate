@@ -4,13 +4,16 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"errors"
 	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/http/httptrace"
 	"slices"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -20,6 +23,130 @@ import (
 	"github.com/vibe-agi/vibermate/internal/transportprofile"
 	"github.com/vibe-agi/vibermate/internal/wireprofile"
 )
+
+func TestResponseHeadTimeoutStartsAfterUpload(t *testing.T) {
+	for _, protocol := range []wireprofile.ApplicationProtocol{wireprofile.ApplicationProtocolHTTP1, wireprofile.ApplicationProtocolHTTP2} {
+		for _, scenario := range []string{"slow upload", "stalled head", "early head", "canceled upload"} {
+			t.Run(string(protocol)+"/"+scenario, func(t *testing.T) {
+				t.Parallel()
+				const budget = 60 * time.Millisecond
+				release := make(chan struct{})
+				server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					if scenario != "early head" {
+						_, _ = io.Copy(io.Discard, r.Body)
+					}
+					if scenario == "stalled head" {
+						<-release
+						return
+					}
+					_, _ = io.WriteString(w, "ok")
+					w.(http.Flusher).Flush()
+				}))
+				server.EnableHTTP2 = protocol == wireprofile.ApplicationProtocolHTTP2
+				server.StartTLS()
+				defer server.Close()
+				defer close(release)
+				roots := x509.NewCertPool()
+				roots.AddCert(server.Certificate())
+				connector, err := transportprofile.NewConnector(transportprofile.ConnectorOptions{
+					Dialer: &mappingDialer{address: server.Listener.Addr().String()}, RootCAs: roots, HandshakeTimeout: time.Second,
+				})
+				if err != nil {
+					t.Fatal(err)
+				}
+				timeouts := DefaultTransportTimeouts()
+				timeouts.ResponseHead = budget
+				transport := &profileTransport{timeouts: timeouts}
+				ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+				defer cancel()
+				reader, writer := io.Pipe()
+				defer reader.Close()
+				defer writer.Close()
+				wroteHeaders := make(chan struct{}, 1)
+				var wroteRequest atomic.Bool
+				ctx = httptrace.WithClientTrace(ctx, &httptrace.ClientTrace{
+					WroteHeaders: func() {
+						select {
+						case wroteHeaders <- struct{}{}:
+						default:
+						}
+					},
+					WroteRequest: func(info httptrace.WroteRequestInfo) {
+						if info.Err == nil {
+							wroteRequest.Store(true)
+						}
+					},
+				})
+				go func() {
+					select {
+					case <-ctx.Done():
+						_ = writer.CloseWithError(ctx.Err())
+						return
+					case <-wroteHeaders:
+					}
+					if scenario == "canceled upload" {
+						cancel()
+						_ = writer.CloseWithError(context.Canceled)
+						return
+					}
+					if scenario != "stalled head" {
+						select {
+						case <-ctx.Done():
+							_ = writer.CloseWithError(ctx.Err())
+							return
+						case <-time.After(4 * budget):
+						}
+					}
+					_, _ = io.WriteString(writer, "fixture")
+					_ = writer.Close()
+				}()
+				target := testTarget("example.com", listenerPort(t, server.Listener.Addr()))
+				request, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://"+target.HTTPAuthority()+"/responses", reader)
+				if err != nil {
+					t.Fatal(err)
+				}
+				plan := testRequestPlan(t)
+				variant, _ := plan.wireProfile.Variant(protocol)
+				observation := captureTransportClientHello(t, []string{string(protocol)})
+				observation, err = observation.WithDownstreamNegotiatedALPN(string(protocol))
+				if err != nil {
+					t.Fatal(err)
+				}
+				dispatch := TransportDispatch{target: target, plan: variant.TransportFingerprintPlan(), clientHello: observation}
+				var response *http.Response
+				if protocol == wireprofile.ApplicationProtocolHTTP2 {
+					response, _, err = transport.roundTripHTTP2(request, dispatch, connector)
+				} else {
+					response, _, err = transport.roundTripHTTP1(request, dispatch, connector)
+				}
+				if response != nil {
+					defer response.Body.Close()
+				}
+				switch scenario {
+				case "stalled head":
+					if !wroteRequest.Load() || err == nil {
+						t.Fatalf("head timeout missing: %v", err)
+					}
+					if protocol == wireprofile.ApplicationProtocolHTTP2 && !errors.Is(err, ErrProviderResponseHeadTimeout) {
+						t.Fatalf("lost head timeout cause: %v", err)
+					}
+				case "canceled upload":
+					if !errors.Is(err, context.Canceled) {
+						t.Fatalf("lost upload cancellation: %v", err)
+					}
+				default:
+					if err != nil {
+						t.Fatalf("upload consumed the head budget: %v", err)
+					}
+					body, err := io.ReadAll(response.Body)
+					if err != nil || string(body) != "ok" {
+						t.Fatalf("response = %q, %v", body, err)
+					}
+				}
+			})
+		}
+	}
+}
 
 func TestStrictTransportPreservesHTTP2AcrossTheProviderBoundary(t *testing.T) {
 	t.Parallel()

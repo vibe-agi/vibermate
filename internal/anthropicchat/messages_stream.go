@@ -198,6 +198,12 @@ func (stream *AnthropicProviderStream) SemanticProgress() uint64 {
 	return stream.semanticProgress
 }
 
+func (stream *AnthropicProviderStream) TerminalReceived() bool {
+	stream.mu.Lock()
+	defer stream.mu.Unlock()
+	return stream.done && !stream.failed
+}
+
 func (stream *AnthropicProviderStream) FinishDecoded(
 	ctx context.Context,
 ) (protocolpath.PendingTerminal, error) {
@@ -351,7 +357,8 @@ func (stream *AnthropicProviderStream) consumeEvent(
 	index int,
 ) error {
 	var envelope struct {
-		Type string `json:"type"`
+		Type  string          `json:"type"`
+		Error json.RawMessage `json:"error"`
 	}
 	if err := json.Unmarshal(event.Data, &envelope); err != nil {
 		return protocolcore.NewFailure(
@@ -371,11 +378,7 @@ func (stream *AnthropicProviderStream) consumeEvent(
 	case "ping":
 		return nil
 	case "error":
-		return protocolcore.NewFailure(
-			protocolcore.ReasonInvalidProviderResponse,
-			fmt.Sprintf("$event[%d]", index),
-			errors.New("provider returned an Anthropic error event"),
-		)
+		return protocolcore.NewProviderFailure(fmt.Sprintf("$event[%d]", index), envelope.Error)
 	case "message_start":
 		if stream.messageStarted {
 			return stream.stateFailure(index, "message_start is duplicated")

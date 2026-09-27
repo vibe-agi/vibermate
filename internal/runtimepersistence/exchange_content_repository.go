@@ -417,6 +417,38 @@ func (repository *exchangeContentRepository) GetProjection(
 	return projection.Clone(), nil
 }
 
+func (repository *exchangeContentRepository) AvailableBodies(ctx context.Context, ids []string, now time.Time) (map[string]bool, error) {
+	if len(ids) > exchangecontent.MaxRequestPreviewBatch {
+		return nil, exchangecontent.ErrInvalidEvidence
+	}
+	encoded, err := json.Marshal(ids)
+	if err != nil {
+		return nil, err
+	}
+	operation, finish, err := repository.operations.begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer finish()
+	rows, err := repository.database.QueryContext(operation, `SELECT exchange_id FROM runtime_exchange_contents JOIN json_each(?) AS wanted ON wanted.value=exchange_id WHERE mode='full' AND expires_at_unix_ms>?`, string(encoded), now.UnixMilli())
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		result[id] = false
+	}
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		result[id] = true
+	}
+	return result, rows.Err()
+}
+
 // RequestPreviews resolves the final request message for a bounded Activity
 // page in two set-oriented reads. It verifies the content-addressed terminal
 // node and the rebuilt message digest; full-chain verification remains the
