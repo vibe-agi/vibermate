@@ -136,6 +136,53 @@ func TestRuntimeResumeKeepsDistinctFrozenPlanIdentities(t *testing.T) {
 	releaseAcquired(t, <-acquiredTwo, actionTwo)
 }
 
+func TestRuntimeResumeKeepsDistinctAccountNetworkExits(t *testing.T) {
+	for _, changed := range []string{"proxy", "resolver"} {
+		t.Run(changed, func(t *testing.T) {
+			gate := newEnteredOfflineGate(t, "account-egress-resume")
+			defer gate.BeginShutdown()
+			first := testRuntimeProbeTarget(offlinehold.EgressProvider, "provider.example", 1)
+			first.EgressPolicy.Proxy = egressnetwork.ProxyPolicy{Kind: egressnetwork.ProxySOCKS5, Endpoint: "127.0.0.1:1080"}
+			second := first
+			if changed == "proxy" {
+				second.EgressPolicy.Proxy.Endpoint = "127.0.0.1:1081"
+			} else {
+				second.EgressPolicy.Resolver = egressnetwork.ResolverPolicy{
+					Kind: egressnetwork.ResolverDoH, DoHURL: "https://resolver.example/dns-query", Transport: egressnetwork.ResolverTransportProxy,
+				}
+			}
+			actions := make([]*offlinehold.ActionLease, 0, 2)
+			acquired := make([]<-chan acquireResult, 0, 2)
+			for index, target := range []offlinehold.ProbeTarget{first, second} {
+				id := fmt.Sprintf("account-egress-%d", index)
+				action, err := gate.BeginAction(context.Background(), offlinehold.ActionRequest{ActionID: id})
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer action.Release()
+				actions = append(actions, action)
+				acquired = append(acquired, acquireHeld(t, gate, action, id, target))
+			}
+			waitForQueuedTargets(t, gate, 2)
+			prober := &recordingProber{}
+			runtime := &Runtime{offlineHold: gate, resumeProber: prober}
+			targets, err := runtime.resumeProbeTargets()
+			if err != nil || len(targets) != 2 {
+				t.Fatalf("different account exits collapsed: targets=%+v, error=%v", targets, err)
+			}
+			if _, err := runtime.ResumeOfflineHold(context.Background(), gate.Snapshot().Revision); err != nil {
+				t.Fatal(err)
+			}
+			if got := prober.Targets(); len(got) != 2 || got[0].EgressPolicy == got[1].EgressPolicy {
+				t.Fatalf("not every frozen network exit was probed: %+v", got)
+			}
+			for index, result := range acquired {
+				releaseAcquired(t, <-result, actions[index])
+			}
+		})
+	}
+}
+
 func newEnteredOfflineGate(t *testing.T, instanceID string) *offlinehold.Gate {
 	t.Helper()
 	gate, err := offlinehold.New(offlinehold.Config{

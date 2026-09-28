@@ -56,6 +56,7 @@ type Options struct {
 type Store struct {
 	databasePath       string
 	database           *sql.DB
+	reads              *sql.DB
 	repo               *Repository
 	activityRepo       *activityRepository
 	exchangeContents   *exchangeContentRepository
@@ -99,6 +100,11 @@ func Open(ctx context.Context, options Options) (*Store, error) {
 		)
 	}
 	if err := prepareDatabasePath(options.DatabasePath); err != nil {
+		return nil, err
+	}
+	// Reject an old baseline before even enabling WAL: journal_mode itself can
+	// change the database header despite a later schema transaction rollback.
+	if err := validateExistingSchema(ctx, options.DatabasePath, options.BusyTimeout); err != nil {
 		return nil, err
 	}
 
@@ -147,7 +153,6 @@ func Open(ctx context.Context, options Options) (*Store, error) {
 		options.CommitReconcileTimeout,
 		sqlTransactionCommitter{},
 	)
-	activityRepo := newActivityRepository(database, operations)
 	exchangeContents := newExchangeContentRepository(database, operations)
 	connectionRepo := newConnectionEventRepository(database, operations)
 	egressRepo := newEgressAttemptRepository(database, operations)
@@ -184,26 +189,20 @@ func Open(ctx context.Context, options Options) (*Store, error) {
 		operations.closeAdmission()
 		return fail(fmt.Errorf("read initial schema state: %w", err))
 	}
-	if err := initializeACPSchema(ctx, database); err != nil {
+	// Conversation directories and reports must never hold the serialized
+	// audit writer: even a canceled UI read can exceed its durability deadline.
+	reads := sql.OpenDB(newSQLiteReadConnector(options.DatabasePath, options.BusyTimeout))
+	reads.SetMaxOpenConns(2)
+	reads.SetMaxIdleConns(2)
+	if err := reads.PingContext(ctx); err != nil {
 		operations.closeAdmission()
-		return fail(err)
+		return fail(errors.Join(err, reads.Close()))
 	}
-	if err := initializeRuntimeUserPolicySchema(ctx, database); err != nil {
-		operations.closeAdmission()
-		return fail(err)
-	}
-	if err := initializeUsageSchema(ctx, database); err != nil {
-		operations.closeAdmission()
-		return fail(err)
-	}
-	if err := initializeCaptureProjectSchema(ctx, database); err != nil {
-		operations.closeAdmission()
-		return fail(err)
-	}
-
+	activityRepo := newActivityRepository(database, reads, operations)
 	return &Store{
 		databasePath:       options.DatabasePath,
 		database:           database,
+		reads:              reads,
 		repo:               repository,
 		activityRepo:       activityRepo,
 		exchangeContents:   exchangeContents,
@@ -358,7 +357,7 @@ func (s *Store) Shutdown(ctx context.Context) error {
 	}
 	s.closeMu.Unlock()
 
-	closeErr := s.database.Close()
+	closeErr := errors.Join(s.reads.Close(), s.database.Close())
 	s.closeMu.Lock()
 	s.closeErr = closeErr
 	s.closed = true
@@ -389,13 +388,13 @@ func initializeSchema(ctx context.Context, database *sql.DB) (string, error) {
 		return "", fmt.Errorf("inspect SQLite schema: %w", err)
 	}
 	if initialized {
-		if err := detachDevelopmentAccounts(ctx, transaction, beforeProviderErrorCodeDigest); err != nil {
-			return "", err
+		var state SchemaState
+		if err := transaction.QueryRowContext(ctx, `SELECT schema_identity, schema_revision, schema_source_sha256, initialized_at FROM runtime_metadata WHERE singleton=1`).Scan(
+			&state.Identity, &state.Revision, &state.SourceSHA256, &state.InitializedAt,
+		); err != nil {
+			return "", fmt.Errorf("%w: read schema: %v", ErrSchemaBaselineMismatch, err)
 		}
-		if err := widenReleasedAccountAction(ctx, transaction, beforeProviderErrorCodeDigest); err != nil {
-			return "", err
-		}
-		if err := addProviderErrorCode(ctx, transaction, digest); err != nil {
+		if err := validateSchemaState(state, digest); err != nil {
 			return "", err
 		}
 		if err := transaction.Commit(); err != nil {

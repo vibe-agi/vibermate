@@ -10,6 +10,67 @@ import 'package:vibermate_app/preview/preview_control_api.dart';
 import 'runtime_usage_fixture.dart';
 
 void main() {
+  test('Egress evidence keeps frozen account settings and proxy revisions', () {
+    final decision = <String, Object?>{
+      'authority': 'environment',
+      'policyId': 'policy.work',
+      'policyRevision': 2,
+      'ruleId': 'route.work',
+      'proxyId': 'profile.us',
+      'proxyRevision': 3,
+      'accountId': 'account.work',
+      'accountSettingsRevision': 4,
+    };
+    final json = <String, Object?>{
+      'sequence': 1,
+      'id': 'egress.work',
+      'purpose': 'provider_attempt',
+      'payloadClass': 'client_semantic',
+      'parent': {
+        'kind': 'upstream_attempt',
+        'id': 'attempt.work',
+        'exchangeId': 'exchange.work',
+      },
+      'caller': 'core',
+      'targetOrigin': 'https://provider.example',
+      'decision': decision,
+      'reusedTransport': false,
+      'startedAt': '2026-09-28T00:00:00Z',
+      'terminal': false,
+      'bytesOut': 0,
+      'bytesIn': 0,
+    };
+    final record = EgressAttemptRecord.fromJson(json, 'attempt');
+    expect(record.policyRevision, 2);
+    expect(record.proxyRevision, 3);
+    expect(record.accountId, 'account.work');
+    expect(record.accountSettingsRevision, 4);
+    for (final missing in [
+      'accountId',
+      'accountSettingsRevision',
+      'proxyRevision',
+    ]) {
+      final partial = {...decision}..remove(missing);
+      expect(
+        () => EgressAttemptRecord.fromJson({
+          ...json,
+          'decision': partial,
+        }, 'attempt'),
+        throwsA(isA<ControlContractException>()),
+      );
+    }
+    final passthrough = {...decision}
+      ..remove('accountId')
+      ..remove('accountSettingsRevision');
+    expect(
+      EgressAttemptRecord.fromJson({
+        ...json,
+        'decision': passthrough,
+      }, 'attempt').accountId,
+      isNull,
+    );
+  });
+
   test('Body-free diagnosis retains the structural upstream error code', () {
     final diagnosis = ExchangeDiagnosis.fromJson({
       'providerStatus': 200,
@@ -260,15 +321,15 @@ void main() {
   );
 
   test(
-    'Runtime usage keeps exact A to B models and partial token knowledge',
+    'Runtime summary preserves partial token knowledge and bounded shape',
     () {
       final report = RuntimeUsageReport.fromJson(
         runtimeUsagePayload(),
         'runtimeUsage',
       );
 
-      final alice = report.users.single;
-      expect(report.truncated, isFalse);
+      final total = report.total!;
+      expect(report.groups, isEmpty);
       expect(report.period.from, '2026-07-27');
       expect(report.period.until, '2026-08-26');
       expect(report.period.timeZone, 'Asia/Singapore');
@@ -276,15 +337,11 @@ void main() {
       expect(report.cost!.nanoUsd, 12500000);
       expect(report.cost!.partial, isTrue);
       expect(report.cost!.unpricedCalls, 1);
-      expect(report.pricing!.state, 'ready');
-      expect(alice.days.single.failed, 1);
-      expect(alice.latestContext?.workspaceLabel, 'vibermate');
-      expect(alice.models.single.requestedModel, 'gpt-5.6-sol');
-      expect(alice.models.single.upstreamModel, 'relay:model/custom');
-      expect(alice.tokens.inputUncached.tokens, 42);
-      expect(alice.tokens.inputUncached.knownCalls, 1);
-      expect(alice.tokens.inputUncached.unknownCalls, 1);
-      expect(alice.agentSessions.single.sessionId, 'native-session-one');
+      expect(report.pricing.state, 'ready');
+      expect(total.failed, 1);
+      expect(total.tokens.inputUncached.tokens, 42);
+      expect(total.tokens.inputUncached.knownCalls, 1);
+      expect(total.tokens.inputUncached.unknownCalls, 1);
     },
   );
 
@@ -313,46 +370,82 @@ void main() {
     },
   );
 
+  test('Usage page rejects mixed scopes, excess rows and old nested shape', () {
+    Map<String, Object?> page() => runtimeUsagePayload()
+      ..['dimension'] = 'model'
+      ..['total'] = null
+      ..['days'] = <Object?>[]
+      ..['groups'] = [
+        usageGroupPayload('relay:model/custom')..['dimension'] = 'model',
+      ];
+    final report = RuntimeUsageReport.fromJson(page(), 'usage');
+    expect(report.groups.single.id, 'relay:model/custom');
+    expect(report.total, isNull);
+    for (final edit in <void Function(Map<String, Object?>)>[
+      (value) => value['total'] = usageGroupPayload('all'),
+      (value) => value['dimension'] = 'account',
+      (value) => value['snapshot'] = 'bad',
+      (value) => value['groups'] = List.filled(
+        51,
+        usageGroupPayload('model')..['dimension'] = 'model',
+      ),
+      (value) => value['filters'] = [
+        {'dimension': 'caller', 'id': 'alice'},
+        {'dimension': 'caller', 'id': 'bob'},
+      ],
+      (value) => value['users'] = <Object?>[],
+    ]) {
+      final value = page();
+      edit(value);
+      expect(
+        () => RuntimeUsageReport.fromJson(value, 'usage'),
+        throwsA(isA<ControlContractException>()),
+      );
+    }
+    final nested = usageGroupPayload('profile')
+      ..['children'] = [usageGroupPayload('model')];
+    expect(
+      () => RuntimeUsageGroup.fromJson(nested, 'group'),
+      throwsA(isA<ControlContractException>()),
+    );
+    final inconsistent = usageGroupPayload('profile')
+      ..['agentApiCalls'] = 3
+      ..['succeeded'] = 2;
+    expect(
+      () => RuntimeUsageGroup.fromJson(inconsistent, 'group'),
+      throwsA(isA<ControlContractException>()),
+    );
+  });
+
   test(
-    'Usage drilldown validates nesting, counters and truncated children',
+    'Usage query preserves empty unknown filters and rejects user overrides',
     () {
-      final leaf = usageGroupPayload('model')..['dimension'] = 'model';
-      final parent = usageGroupPayload('profile')
-        ..['dimension'] = 'profile'
-        ..['children'] = [leaf];
-      expect(
-        RuntimeUsageGroup.fromJson(parent, 'group').children.single.id,
-        'model',
+      final query = RuntimeUsageQuery(
+        from: '2026-08-01',
+        until: '2026-08-26',
+        timeZone: 'UTC',
+        groupBy: 'model',
+        filters: const {'project': '', 'caller': 'alice'},
+        snapshot: List.filled(64, 'a').join(),
+        cursor: 'next',
       );
-      parent['children'] = [leaf, leaf];
-      expect(
-        () => RuntimeUsageGroup.fromJson(parent, 'group'),
-        throwsA(isA<ControlContractException>()),
-      );
-      parent['children'] = [leaf];
-      parent['agentApiCalls'] = 3;
-      parent['succeeded'] = 2;
-      parent['cost'] = {...costUsagePayload(), 'unpricedCalls': 2};
-      expect(
-        () => RuntimeUsageGroup.fromJson(parent, 'group'),
-        throwsA(isA<ControlContractException>()),
-      );
-      parent['childrenTruncated'] = true;
-      expect(
-        RuntimeUsageGroup.fromJson(parent, 'group').childrenTruncated,
-        isTrue,
-      );
-      Map<String, Object?> deep = leaf;
-      for (var i = 0; i < 4; i++) {
-        deep = {
-          ...leaf,
-          'children': [deep],
-        };
+      expect(query.toQueryParameters(), containsPair('filter.project', ''));
+      expect(query.toQueryParameters(), containsPair('filter.caller', 'alice'));
+      expect(query.toQueryParameters(), containsPair('limit', '50'));
+      for (final filters in [
+        {'userId': 'alice'},
+        {'session': 'session-only'},
+      ]) {
+        expect(
+          () => RuntimeUsageQuery(
+            from: query.from,
+            until: query.until,
+            timeZone: query.timeZone,
+            filters: filters,
+          ).toQueryParameters(),
+          throwsA(isA<ControlContractException>()),
+        );
       }
-      expect(
-        () => RuntimeUsageGroup.fromJson(deep, 'group'),
-        throwsA(isA<ControlContractException>()),
-      );
     },
   );
 
@@ -626,6 +719,12 @@ void main() {
       () => ProviderAccount.fromJson({
         'id': 'account.test',
         'displayName': 'Test',
+        'note': '',
+        'noteRevision': 0,
+        'settingsRevision': 1,
+        'automaticRefresh': false,
+        'supportsAutomaticRefresh': false,
+        'egressProfile': null,
         'credentialOrigin': 'https://api.anthropic.com',
         'linkedEndpointIds': ['target.test'],
         'associationRevision': 1,
@@ -647,6 +746,12 @@ void main() {
     final account = ProviderAccount.fromJson({
       'id': 'account.codex.work',
       'displayName': 'Codex Work',
+      'note': '',
+      'noteRevision': 0,
+      'settingsRevision': 1,
+      'automaticRefresh': false,
+      'supportsAutomaticRefresh': false,
+      'egressProfile': null,
       'credentialOrigin': 'https://chatgpt.com',
       'linkedEndpointIds': ['target.codex.official'],
       'associationRevision': 1,
@@ -679,6 +784,12 @@ void main() {
       () => ProviderAccount.fromJson({
         'id': 'account.codex.bad',
         'displayName': 'Codex Bad',
+        'note': '',
+        'noteRevision': 0,
+        'settingsRevision': 1,
+        'automaticRefresh': false,
+        'supportsAutomaticRefresh': false,
+        'egressProfile': null,
         'credentialOrigin': 'https://chatgpt.com',
         'linkedEndpointIds': ['target.codex.official'],
         'associationRevision': 1,
@@ -706,6 +817,12 @@ void main() {
     final account = ProviderAccount.fromJson({
       'id': 'account.missing',
       'displayName': 'Missing',
+      'note': '',
+      'noteRevision': 0,
+      'settingsRevision': 1,
+      'automaticRefresh': false,
+      'supportsAutomaticRefresh': false,
+      'egressProfile': null,
       'credentialOrigin': 'https://api.anthropic.com',
       'linkedEndpointIds': ['target.test'],
       'associationRevision': 1,
@@ -731,6 +848,12 @@ void main() {
       final account = ProviderAccount.fromJson({
         'id': 'account.headers',
         'displayName': 'Headers',
+        'note': '',
+        'noteRevision': 0,
+        'settingsRevision': 1,
+        'automaticRefresh': false,
+        'supportsAutomaticRefresh': false,
+        'egressProfile': null,
         'credentialOrigin': 'https://api.anthropic.com',
         'linkedEndpointIds': ['target.test'],
         'associationRevision': 1,
@@ -750,6 +873,12 @@ void main() {
         () => ProviderAccount.fromJson({
           'id': 'account.headers',
           'displayName': 'Headers',
+          'note': '',
+          'noteRevision': 0,
+          'settingsRevision': 1,
+          'automaticRefresh': false,
+          'supportsAutomaticRefresh': false,
+          'egressProfile': null,
           'credentialOrigin': 'https://api.anthropic.com',
           'linkedEndpointIds': ['target.test'],
           'associationRevision': 1,
@@ -1107,6 +1236,66 @@ void main() {
     expect(status.offlineHold.activeByKind, {'provider': 1});
     expect(status.productBuild, 'test-build');
     expect(status.schemaRevision, 1);
+
+    final runtime = Map<String, Object?>.from(json['runtime']! as Map);
+    json['runtime'] = runtime;
+    final warning = <String, Object?>{
+      'operation': 'usage',
+      'reason': 'write_failed',
+      'at': '2026-08-11T00:00:01.000Z',
+    };
+    runtime['recordingFailure'] = warning;
+    final recorded = RuntimeStatus.fromJson(
+      json,
+      expectedInstanceId: 'instance-test',
+    );
+    expect(recorded.healthy, isTrue);
+    expect(recorded.recordingFailure?.operation, 'usage');
+    expect(
+      recorded.recordingFailure,
+      RuntimePersistenceFailure.fromJson(warning),
+    );
+    for (final malformed in [
+      {...warning, 'operation': 'egress_complete'},
+      {...warning, 'operation': 'future_operation'},
+      {...warning, 'reason': 'raw secret error'},
+      {...warning, 'at': 'bad date'},
+      {...warning, 'message': 'secret account'},
+      null,
+    ]) {
+      runtime['recordingFailure'] = malformed;
+      expect(
+        () => RuntimeStatus.fromJson(json, expectedInstanceId: 'instance-test'),
+        throwsA(isA<ControlContractException>()),
+      );
+    }
+    runtime['recordingFailure'] = warning;
+    runtime['storageFailure'] = {
+      ...warning,
+      'operation': 'egress_complete',
+      'reason': 'timeout',
+    };
+    expect(
+      () => RuntimeStatus.fromJson(json, expectedInstanceId: 'instance-test'),
+      throwsA(isA<ControlContractException>()),
+    );
+    runtime['storage'] = 'unavailable';
+    runtime['state'] = 'degraded';
+    json['ready'] = false;
+    json['statusKey'] = 'runtime.state.degraded';
+    final failed = RuntimeStatus.fromJson(
+      json,
+      expectedInstanceId: 'instance-test',
+    );
+    expect(failed.healthy, isFalse);
+    expect(failed.storageFailure?.reason, 'timeout');
+    expect(failed.recordingFailure, recorded.recordingFailure);
+    runtime['storageFailure'] = warning;
+    expect(
+      () => RuntimeStatus.fromJson(json, expectedInstanceId: 'instance-test'),
+      throwsA(isA<ControlContractException>()),
+    );
+    runtime.remove('storageFailure');
 
     final unsafe = jsonDecode(jsonEncode(json)) as Map<String, dynamic>;
     unsafe['productBuild'] = 'unsafe\nbuild';

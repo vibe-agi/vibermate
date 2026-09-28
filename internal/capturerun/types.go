@@ -1,6 +1,6 @@
-// Package capturerun owns short-lived, persisted child-process attribution
-// capabilities. Raw capabilities are returned only in a one-time LaunchGrant;
-// SQLite stores domain-separated hashes.
+// Package capturerun owns renewable child-process proxy leases and separate
+// supervisor capabilities. Raw capabilities are returned only in a one-time
+// LaunchGrant; SQLite stores domain-separated hashes.
 package capturerun
 
 import (
@@ -43,7 +43,9 @@ const (
 	StateAttached State = "attached"
 	StateFinished State = "finished"
 	StateRevoked  State = "revoked"
-	StateExpired  State = "expired"
+	// Expired is an inactive lease. The original supervisor of an attached
+	// process may renew it; finished and revoked are irreversible.
+	StateExpired State = "expired"
 )
 
 // Observation answers whether traffic was actually seen through this run.
@@ -312,7 +314,7 @@ func ViewOf(record DurableRecord) View {
 		CWD:                         record.CWD,
 		CanonicalExecutablePath:     record.CanonicalExecutablePath,
 		LocalUserLabel:              record.Runtime.LocalUserName,
-		Runtime:                     record.Runtime,
+		Runtime:                     record.Runtime.Clone(),
 		RuntimeUserID:               record.RuntimeUserID,
 		RuntimeUsername:             record.RuntimeUsername,
 		LoginSessionID:              record.LoginSessionID,
@@ -512,7 +514,7 @@ func evidenceOf(record DurableRecord) Evidence {
 		ProcessID:       record.ProcessID,
 		ExpiresAt:       record.ExpiresAt,
 		Workspace:       workspace,
-		Runtime:         record.Runtime,
+		Runtime:         record.Runtime.Clone(),
 		RuntimeUserID:   record.RuntimeUserID,
 		RuntimeUsername: record.RuntimeUsername,
 		LoginSessionID:  record.LoginSessionID,
@@ -530,6 +532,14 @@ type RuntimeMetadata struct {
 	OperatingSystemVersion string
 	Architecture           string
 	TimeZone               string
+}
+
+func (metadata RuntimeMetadata) Clone() RuntimeMetadata {
+	if metadata.GitAtLaunch != nil {
+		git := *metadata.GitAtLaunch
+		metadata.GitAtLaunch = &git
+	}
+	return metadata
 }
 
 func (metadata RuntimeMetadata) Validate() error {

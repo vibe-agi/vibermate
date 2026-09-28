@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/vibe-agi/vibermate/internal/egressprofile"
 	"github.com/vibe-agi/vibermate/internal/originidentity"
 	"github.com/vibe-agi/vibermate/internal/protocolspec"
 	"github.com/vibe-agi/vibermate/internal/provideraccount"
@@ -47,7 +48,7 @@ func TestDiscoverUsesOnlyEndpointAsAvailabilityAuthority(t *testing.T) {
 	endpoint := testEndpoint(origin)
 	catalog, err := New(Options{
 		Endpoints:   endpointReaderStub{endpoint: endpoint},
-		Credentials: credentialAuthorityStub{},
+		Credentials: credentialAuthorityStub{settingsRevision: 1},
 		Transport:   endpointTransportClient{client: server.Client()},
 		Clock:       fixedClock{now: time.Date(2026, 8, 20, 10, 0, 0, 0, time.UTC)},
 	})
@@ -93,7 +94,7 @@ func TestDiscoverDefaultBudgetIncludesHostCredentialAccess(t *testing.T) {
 	observedBudget := make(chan time.Duration, 1)
 	catalog, err := New(Options{
 		Endpoints:   endpointReaderStub{endpoint: endpoint},
-		Credentials: credentialAuthorityStub{},
+		Credentials: credentialAuthorityStub{settingsRevision: 1},
 		Transport: endpointTransportFunc(func(ctx context.Context, _ upstreamendpoint.Endpoint) (*http.Response, error) {
 			deadline, ok := ctx.Deadline()
 			if !ok {
@@ -131,7 +132,7 @@ func TestDiscoverPreservesTransportTimeoutCause(t *testing.T) {
 	endpoint := testEndpoint(origin)
 	catalog, err := New(Options{
 		Endpoints:   endpointReaderStub{endpoint: endpoint},
-		Credentials: credentialAuthorityStub{},
+		Credentials: credentialAuthorityStub{settingsRevision: 1},
 		Transport: endpointTransportFunc(func(context.Context, upstreamendpoint.Endpoint) (*http.Response, error) {
 			return nil, context.DeadlineExceeded
 		}),
@@ -159,7 +160,7 @@ func TestDiscoverDoesNotGuessAvailabilityForCustomEndpoint(t *testing.T) {
 	endpoint := testEndpoint(origin)
 	catalog, err := New(Options{
 		Endpoints:   endpointReaderStub{endpoint: endpoint},
-		Credentials: credentialAuthorityStub{},
+		Credentials: credentialAuthorityStub{settingsRevision: 1},
 		Transport: endpointTransportFunc(func(context.Context, upstreamendpoint.Endpoint) (*http.Response, error) {
 			return &http.Response{
 				StatusCode: http.StatusUnauthorized,
@@ -190,7 +191,7 @@ func TestDiscoverNeverTreatsMetadataAsEndpointAvailability(t *testing.T) {
 	endpoint := testEndpoint(origin)
 	catalog, err := New(Options{
 		Endpoints:   endpointReaderStub{endpoint: endpoint},
-		Credentials: credentialAuthorityStub{},
+		Credentials: credentialAuthorityStub{settingsRevision: 1},
 		Transport: endpointTransportFunc(func(context.Context, upstreamendpoint.Endpoint) (*http.Response, error) {
 			return &http.Response{
 				StatusCode: http.StatusUnauthorized,
@@ -241,19 +242,49 @@ type endpointReaderStub struct {
 	err      error
 }
 
-type credentialAuthorityStub struct{}
+type credentialAuthorityStub struct{ settingsRevision uint64 }
 
-func (credentialAuthorityStub) AcquireEndpointCredential(
+func (stub credentialAuthorityStub) AcquireEndpointCredential(
 	_ context.Context,
 	accountID provideraccount.ID,
 	endpoint upstreamendpoint.Endpoint,
 ) (providerauth.Lease, error) {
 	return &catalogCredentialLease{account: providerauth.AccountRef{
-		ID:              accountID.String(),
-		Revision:        5,
-		CredentialEpoch: 7,
-		RealmID:         endpoint.RealmID,
+		ID:               accountID.String(),
+		Revision:         5,
+		CredentialEpoch:  7,
+		SettingsRevision: stub.settingsRevision,
+		EgressProfile:    egressprofile.Direct(),
+		RealmID:          endpoint.RealmID,
 	}}, nil
+}
+
+func TestDiscoverInvalidatesCacheWhenAccountSettingsChange(t *testing.T) {
+	t.Parallel()
+	origin, _ := originidentity.ParseProviderOrigin("https://relay.example.test")
+	endpoint := testEndpoint(origin)
+	calls := 0
+	catalog, err := New(Options{
+		Endpoints:   endpointReaderStub{endpoint: endpoint},
+		Credentials: credentialAuthorityStub{settingsRevision: 1},
+		Transport: endpointTransportFunc(func(context.Context, upstreamendpoint.Endpoint) (*http.Response, error) {
+			calls++
+			return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"data":[{"id":"model"}]}`))}, nil
+		}),
+		Clock: fixedClock{now: time.Date(2026, 9, 28, 0, 0, 0, 0, time.UTC)},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, revision := range []uint64{1, 1, 2, 2} {
+		catalog.credentials = credentialAuthorityStub{settingsRevision: revision}
+		if _, err := catalog.Discover(context.Background(), endpoint.ID, testCatalogAccountID, false); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if calls != 2 {
+		t.Fatalf("transport calls = %d, want 2 settings-scoped snapshots", calls)
+	}
 }
 
 type catalogCredentialLease struct {

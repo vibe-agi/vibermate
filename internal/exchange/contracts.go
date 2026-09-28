@@ -22,6 +22,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/agentconversation"
 	"github.com/vibe-agi/vibermate/internal/captureadmission"
 	"github.com/vibe-agi/vibermate/internal/clientannotation"
+	"github.com/vibe-agi/vibermate/internal/egressprofile"
 	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
 	"github.com/vibe-agi/vibermate/internal/originidentity"
@@ -1045,6 +1046,7 @@ type Provider interface {
 // provider attempt. It is derived only from the frozen Environment request
 // plan; an ingress caller cannot choose a different account or realm.
 type AccountLeaseRequest struct {
+	egressProfile            egressprofile.ProfileRevision
 	environmentID            environment.EnvironmentID
 	environmentRevision      environment.Revision
 	environmentDigest        environment.CandidateDigest
@@ -1056,6 +1058,10 @@ type AccountLeaseRequest struct {
 	accountID                string
 	accountRevision          environment.Revision
 	realmID                  string
+}
+
+func (request AccountLeaseRequest) EgressProfile() egressprofile.ProfileRevision {
+	return request.egressProfile
 }
 
 func (request AccountLeaseRequest) EnvironmentID() environment.EnvironmentID {

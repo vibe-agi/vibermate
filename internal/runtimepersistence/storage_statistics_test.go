@@ -7,10 +7,13 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/vibe-agi/vibermate/internal/activity"
 	"github.com/vibe-agi/vibermate/internal/rawevidence"
+	"github.com/vibe-agi/vibermate/internal/runtimeusage"
 )
 
 func TestStorageStatisticsPreviewAndCleanupRespectRetention(t *testing.T) {
@@ -82,6 +85,100 @@ func TestStorageStatisticsPreviewAndCleanupRespectRetention(t *testing.T) {
 		context.Background(), `SELECT COUNT(*) FROM runtime_raw_evidence_reveal_audits`,
 	).Scan(&audits); err != nil || audits != 0 {
 		t.Fatalf("expired reveal audits = %d, %v", audits, err)
+	}
+}
+
+func TestExpiredMaintenanceBoundsEachEvidencePlane(t *testing.T) {
+	store := openTestStore(t, filepath.Join(t.TempDir(), "runtime.db"))
+	defer shutdownTestStore(t, store)
+	ctx := context.Background()
+	now := time.Date(2026, 9, 28, 0, 0, 0, 0, time.UTC)
+	for index, id := range []string{"expired-a", "expired-b", "live"} {
+		expires := now
+		if id == "live" {
+			expires = now.Add(time.Hour)
+		}
+		content := blockRecordFixture(t, id, now.Add(-time.Hour), []string{"shared system"}, "shared message")
+		content.ExpiresAt = expires
+		if err := store.ExchangeContentRepository().Put(ctx, content); err != nil {
+			t.Fatal(err)
+		}
+		raw := rawEvidenceRecordForTest(fmt.Sprintf("writer-batch.%d", index+1), uint64(index+1), rawevidence.LayerClientIngress,
+			[]byte("shared raw body"), []byte(`{"version":1,"headers":[]}`))
+		raw.WriterID, raw.ExchangeID = "writer-batch", id
+		raw.ObservedAt, raw.ExpiresAt = now.Add(-time.Hour), expires
+		if err := store.RawEvidenceRepository().AppendBatch(ctx, []rawevidence.StoredEnvelope{raw}, now.Add(-time.Minute)); err != nil {
+			t.Fatal(err)
+		}
+		insertUsageFixture(t, store, runtimeusage.Observation{
+			ExchangeID: id, OccurredAt: now.Add(-time.Hour), Status: activity.StatusSucceeded,
+		}, expires)
+	}
+	if _, err := store.database.Exec(`CREATE TRIGGER reject_expiry BEFORE DELETE ON runtime_usage_observations BEGIN SELECT RAISE(ABORT, 'fixture'); END`); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := store.cleanupExpired(ctx, now, 1); err == nil {
+		t.Fatal("failed batch reported success")
+	}
+	for _, table := range []string{"runtime_exchange_contents", "runtime_raw_evidence_envelopes", "runtime_usage_observations"} {
+		if got := countRows(t, store, table); got != 3 {
+			t.Fatalf("failed batch partially removed %s: %d", table, got)
+		}
+	}
+	if _, err := store.database.Exec(`DROP TRIGGER reject_expiry`); err != nil {
+		t.Fatal(err)
+	}
+	released, more, err := store.cleanupExpired(ctx, now, 1)
+	if err != nil || !more || released.Exchanges != 1 || released.Envelopes != 1 {
+		t.Fatalf("first batch=%+v more=%v error=%v", released, more, err)
+	}
+	for _, table := range []string{"runtime_exchange_contents", "runtime_raw_evidence_envelopes", "runtime_usage_observations"} {
+		if got := countRows(t, store, table); got != 2 {
+			t.Fatalf("unbounded %s batch: %d rows remain", table, got)
+		}
+	}
+	if err := store.MaintainExpired(ctx, now); err != nil {
+		t.Fatal(err)
+	}
+	for _, table := range []string{"runtime_exchange_contents", "runtime_raw_evidence_envelopes", "runtime_usage_observations"} {
+		if got := countRows(t, store, table); got != 1 {
+			t.Fatalf("expired %s remaining: %d", table, got)
+		}
+	}
+	if _, err := store.ExchangeContentRepository().Get(ctx, "live", now); err != nil {
+		t.Fatalf("shared live content was damaged: %v", err)
+	}
+	if _, err := store.RawEvidenceRepository().GetEnvelope(ctx, "writer-batch.3"); err != nil {
+		t.Fatalf("shared live raw body was damaged: %v", err)
+	}
+}
+
+func TestContentDeletionUsesIndexedForeignKeyProbes(t *testing.T) {
+	store := openTestStore(t, filepath.Join(t.TempDir(), "runtime.db"))
+	defer shutdownTestStore(t, store)
+	for _, table := range []string{"runtime_exchange_content_transcripts", "runtime_exchange_content_messages", "runtime_evidence_bodies"} {
+		t.Run(table, func(t *testing.T) {
+			rows, err := store.database.Query("EXPLAIN QUERY PLAN DELETE FROM "+table+" WHERE digest=?", strings.Repeat("a", 64))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer rows.Close()
+			var plan string
+			for rows.Next() {
+				var id, parent, unused int
+				var detail string
+				if err := rows.Scan(&id, &parent, &unused, &detail); err != nil {
+					t.Fatal(err)
+				}
+				plan += detail + "\n"
+			}
+			if err := rows.Err(); err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(plan, "SCAN ") {
+				t.Fatalf("deleting one content node scans retained references:\n%s", plan)
+			}
+		})
 	}
 }
 

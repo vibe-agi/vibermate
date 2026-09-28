@@ -8,11 +8,15 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:vibermate_app/core/api/control_api.dart';
 import 'package:vibermate_app/core/api/control_models.dart';
 
-Map<String, Object> _accountJson({String note = '', int noteRevision = 0}) => {
+Map<String, Object?> _accountJson({String note = '', int noteRevision = 0}) => {
   'id': 'account.notes',
   'displayName': 'Notes fixture',
   'note': note,
   'noteRevision': noteRevision,
+  'settingsRevision': 1,
+  'automaticRefresh': false,
+  'supportsAutomaticRefresh': false,
+  'egressProfile': null,
   'credentialOrigin': 'https://chatgpt.com',
   'linkedEndpointIds': <String>[],
   'associationRevision': 3,

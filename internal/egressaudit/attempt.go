@@ -8,6 +8,7 @@ package egressaudit
 import (
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 	"time"
 	"unicode"
@@ -175,11 +176,14 @@ type ParentRef struct {
 // DecisionRef records which policy produced the route, without the candidate
 // set or any credential.
 type DecisionRef struct {
-	PolicyID       string
-	PolicyRevision uint64
-	Authority      PolicyAuthorityKind
-	RuleID         string
-	ProxyID        string
+	PolicyID                string
+	PolicyRevision          uint64
+	Authority               PolicyAuthorityKind
+	RuleID                  string
+	ProxyID                 string
+	ProxyRevision           uint64
+	AccountID               string
+	AccountSettingsRevision uint64
 }
 
 type NewInput struct {
@@ -501,11 +505,23 @@ func validateDecision(decision DecisionRef) error {
 	); err != nil {
 		return err
 	}
-	if decision.PolicyRevision == 0 {
+	if decision.PolicyRevision == 0 || decision.PolicyRevision > math.MaxInt64 {
 		return errors.New("egress policy revision is required")
 	}
 	if err := validateIdentity("egress rule ID", decision.RuleID); err != nil {
 		return err
+	}
+	if decision.ProxyRevision > math.MaxInt64 || decision.AccountSettingsRevision > math.MaxInt64 ||
+		(decision.AccountID == "") != (decision.AccountSettingsRevision == 0) {
+		return errors.New("egress account settings reference is invalid")
+	}
+	if decision.AccountID != "" {
+		if err := validateIdentity("egress account ID", decision.AccountID); err != nil {
+			return err
+		}
+		if decision.ProxyRevision == 0 {
+			return errors.New("account egress profile revision is required")
+		}
 	}
 	return validateIdentity("egress proxy ID", decision.ProxyID)
 }
@@ -545,6 +561,7 @@ func BuiltInDirectDecision(authority PolicyAuthorityKind) DecisionRef {
 		Authority:      authority,
 		RuleID:         BuiltInDirectRuleID,
 		ProxyID:        BuiltInDirectProxyID,
+		ProxyRevision:  1,
 	}
 }
 

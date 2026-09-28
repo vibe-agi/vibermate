@@ -1355,9 +1355,24 @@ final class _EgressEvidenceRowState extends State<_EgressEvidenceRow> {
                   record.payloadClass,
                 ),
               ),
-              (copy('network.fact.policy'), record.policyId ?? ''),
+              (
+                copy('network.fact.policy'),
+                record.policyId == null
+                    ? ''
+                    : '${record.policyId}@${record.policyRevision}',
+              ),
               (copy('network.fact.rule'), record.ruleId ?? ''),
-              (copy('network.fact.proxy'), record.proxyId ?? ''),
+              (
+                copy('network.fact.proxy'),
+                record.proxyId == null
+                    ? ''
+                    : '${record.proxyId}${record.proxyRevision == null ? '' : '@${record.proxyRevision}'}',
+              ),
+              if (record.accountId case final account?)
+                (
+                  copy('network.fact.account_settings'),
+                  '$account@${record.accountSettingsRevision}',
+                ),
               (
                 copy('network.fact.transport'),
                 record.reusedTransport

@@ -165,6 +165,51 @@ func TestExchangePageCanSkipOnlyCompletedLocalIdentities(t *testing.T) {
 	}
 }
 
+func TestConversationIndexDoesNotBlockAuditWriter(t *testing.T) {
+	store := activityReadFixture(t, 300)
+	// A busy writer must not block this UI read. Conversely, a long-running
+	// conversation read must never occupy the connection needed by audit.
+	writer, err := store.database.Conn(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer writer.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if _, err := store.ActivityRepository().ListConversations(ctx, activity.ConversationIndexRequest{
+		Limit: 50, CaptureRunID: "run-4",
+	}); err != nil {
+		t.Fatalf("conversation read waited for the audit writer: %v", err)
+	}
+}
+
+func TestConversationIndexScalesWithHistory(t *testing.T) {
+	if testing.Short() {
+		t.Skip("12k lifecycle-row timing check; covered by full unit/contracts runs")
+	}
+	store := activityReadFixture(t, 12000)
+	// The fixture starts with two unmatched starts. Remove them so this test
+	// has 4,000 complete requests, each with its pending lifecycle records.
+	if _, err := store.database.Exec(`DELETE FROM runtime_activities WHERE subject_id = 'exchange-0'`); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	start := time.Now()
+	page, err := store.ActivityRepository().ListConversations(ctx, activity.ConversationIndexRequest{Limit: 50})
+	if err != nil || len(page.Items) != 41 {
+		t.Fatalf("12k lifecycle rows: conversations=%d error=%v", len(page.Items), err)
+	}
+	var total int
+	for _, item := range page.Items {
+		total += item.TurnCount
+	}
+	if total != 4000 {
+		t.Fatalf("lifecycle records were counted as requests: %d", total)
+	}
+	t.Logf("12k lifecycle rows, 4k requests: %v", time.Since(start))
+}
+
 func BenchmarkConversationPageRead(b *testing.B) {
 	for _, size := range []int{3000, 30000} {
 		b.Run(fmt.Sprint(size), func(b *testing.B) {

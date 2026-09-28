@@ -2632,8 +2632,12 @@ String _redactedDiagnosticText(
             'payloadClass': attempt.payloadClass,
             'caller': attempt.caller,
             'policyId': attempt.policyId,
+            'policyRevision': attempt.policyRevision,
             'ruleId': attempt.ruleId,
             'proxyId': attempt.proxyId,
+            'proxyRevision': attempt.proxyRevision,
+            'accountId': attempt.accountId,
+            'accountSettingsRevision': attempt.accountSettingsRevision,
             'reusedTransport': attempt.reusedTransport,
             'startedAt': attempt.startedAt.toUtc().toIso8601String(),
             'terminal': attempt.terminal,
@@ -4157,6 +4161,18 @@ final class _FrozenEvidence extends StatelessWidget {
         value.accountId ?? copy('common.client_passthrough'),
       ),
       (copy('flow.digest'), value.digest),
+      for (final attempt in detail.processingTrace.attempts) ...[
+        if (attempt.proxyId case final proxy?)
+          (
+            '${copy('network.fact.proxy')} #${attempt.sequence}',
+            '$proxy${attempt.proxyRevision == null ? '' : '@${attempt.proxyRevision}'}',
+          ),
+        if (attempt.accountId case final account?)
+          (
+            '${copy('network.fact.account_settings')} #${attempt.sequence}',
+            '$account@${attempt.accountSettingsRevision}',
+          ),
+      ],
     ];
     return Container(
       width: double.infinity,

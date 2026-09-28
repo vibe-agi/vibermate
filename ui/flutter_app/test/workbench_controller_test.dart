@@ -8,6 +8,7 @@ import 'package:vibermate_app/core/bootstrap/terminal_command.dart';
 import 'package:vibermate_app/core/bootstrap/root_trust_installer.dart';
 import 'package:vibermate_app/core/preferences/workbench_preferences.dart';
 import 'package:vibermate_app/core/design/viber_theme.dart';
+import 'package:vibermate_app/core/i18n/app_copy.dart';
 import 'package:vibermate_app/features/workbench/workbench_controller.dart';
 import 'package:vibermate_app/features/workbench/environment_editing.dart';
 import 'package:vibermate_app/features/workbench/workbench_shell.dart';
@@ -15,6 +16,88 @@ import 'package:vibermate_app/preview/preview_control_api.dart';
 import 'package:vibermate_app/preview/preview_terminal_command.dart';
 
 void main() {
+  for (final width in [640.0, 1440.0]) {
+    testWidgets('Runtime first cause survives failed inventory at $width', (
+      tester,
+    ) async {
+      await tester.binding.setSurfaceSize(Size(width, 1000));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      final fixture = PreviewControlApi();
+      final api = _DashboardRevisionApi(fixture);
+      final controller = WorkbenchController(
+        api: api,
+        terminalCommands: PreviewTerminalCommandService(),
+        previewMode: true,
+        closeRuntime: fixture.close,
+        terminalManagement: false,
+        initialPreferences: const WorkbenchPreferences(
+          section: WorkbenchSection.environments,
+        ),
+      );
+      addTearDown(controller.dispose);
+      await controller.initialize();
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: ViberTheme.dark(),
+          home: WorkbenchShell(controller: controller),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('runtime-recording-failure')), findsNothing);
+      api.recordingFailure = RuntimePersistenceFailure(
+        operation: 'usage',
+        reason: 'write_failed',
+        at: DateTime.utc(2026, 9, 28, 3),
+      );
+      await tester.pump(const Duration(seconds: 5));
+      await tester.pumpAndSettle();
+      expect(controller.runtimeStatus!.healthy, isTrue);
+      expect(
+        find.byKey(const Key('runtime-recording-failure')),
+        findsOneWidget,
+      );
+      final accounts = controller.data!.accounts;
+      api.failInventory = true;
+      api.stopProxy = true;
+      await tester.pump(const Duration(seconds: 5));
+      await tester.pumpAndSettle();
+      expect(controller.data!.accounts, same(accounts));
+      expect(controller.runtimeStatus!.healthy, isFalse);
+      expect(find.byKey(const Key('runtime-storage-failure')), findsOneWidget);
+      for (final language in AppLanguage.values) {
+        controller.setLanguage(language);
+        await controller.refresh();
+        await tester.pumpAndSettle();
+        final copy = AppCopy.forLanguage(language);
+        expect(find.text(copy('status.proxy_stopped')), findsOneWidget);
+        expect(
+          find.textContaining(copy('status.failure.operation.egress_complete')),
+          findsOneWidget,
+        );
+        expect(controller.errorMessage, 'runtime_unavailable (503)');
+        expect(controller.data!.accounts, same(accounts));
+        expect(tester.takeException(), isNull);
+      }
+      // The first launch can fail before any inventory has been loaded.
+      controller.data = null;
+      await controller.refresh();
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('runtime-storage-failure')), findsOneWidget);
+      expect(controller.data, isNull);
+      expect(tester.takeException(), isNull);
+      api.failInventory = false;
+      api.stopProxy = false;
+      api.recordingFailure = null;
+      await controller.refresh();
+      await tester.pumpAndSettle();
+      expect(controller.runtimeStatus!.healthy, isTrue);
+      expect(find.byKey(const Key('runtime-storage-failure')), findsNothing);
+      expect(find.byKey(const Key('runtime-recording-failure')), findsNothing);
+      await tester.pumpWidget(const SizedBox.shrink());
+      controller.dispose();
+    });
+  }
+
   testWidgets('Capture detail failure is not an empty or unassigned run', (
     tester,
   ) async {
@@ -304,6 +387,7 @@ void main() {
   testWidgets('usage refreshes only while the page and app are visible', (
     tester,
   ) async {
+    var now = DateTime.utc(2026, 8, 25, 12);
     final fixture = PreviewControlApi();
     final api = _UsageTrackingApi(fixture);
     final controller = WorkbenchController(
@@ -316,7 +400,7 @@ void main() {
       initialPreferences: const WorkbenchPreferences(
         section: WorkbenchSection.settings,
       ),
-      clock: () => DateTime.utc(2026, 8, 25, 12),
+      clock: () => now,
     );
     addTearDown(fixture.close);
 
@@ -338,19 +422,23 @@ void main() {
 
     await tester.pump(const Duration(seconds: 11));
     await tester.pump();
-    expect(api.usageCalls, 3);
+    expect(api.usageCalls, 1);
+    now = now.add(const Duration(seconds: 15));
+    await tester.pump(const Duration(seconds: 5));
+    await tester.pump();
+    expect(api.usageCalls, 2);
     controller.didChangeAppLifecycleState(AppLifecycleState.hidden);
     await tester.pump(const Duration(seconds: 11));
-    expect(api.usageCalls, 3);
+    expect(api.usageCalls, 2);
     controller.selectSection(WorkbenchSection.settings);
     controller.didChangeAppLifecycleState(AppLifecycleState.resumed);
     await tester.pump();
     await tester.pump(const Duration(seconds: 6));
-    expect(api.usageCalls, 3);
+    expect(api.usageCalls, 2);
     controller.selectSection(WorkbenchSection.usage);
     await tester.pump();
     await tester.pump();
-    expect(api.usageCalls, 4);
+    expect(api.usageCalls, 3);
     controller.dispose();
   });
 
@@ -381,11 +469,15 @@ void main() {
       expect(api.usageCalls, 2);
       expect(controller.usageLoading, isTrue);
       expect(controller.runtimeUsage, same(previous));
+      final oldGate = api.usageGate!;
+      api.usageGate = null;
       await controller.setUsageRange(30);
-      expect(controller.usageRangeDays, 7);
-      api.usageGate!.complete();
+      expect(controller.usageRangeDays, 30);
+      final newReport = controller.runtimeUsage;
+      oldGate.complete();
       await first;
       await second;
+      expect(controller.runtimeUsage, same(newReport));
       expect(controller.usageLoading, isFalse);
       api.usageFails = true;
       final lastGood = controller.runtimeUsage;
@@ -393,7 +485,7 @@ void main() {
       expect(controller.runtimeUsage, same(lastGood));
       expect(controller.usageError, isNotNull);
       api.usageFails = false;
-      await controller.setUsageRange(30);
+      await controller.refreshUsage();
       expect(controller.usageError, isNull);
       expect(
         DateTime.parse(controller.runtimeUsage!.period.until)
@@ -1809,11 +1901,57 @@ final class _DashboardRevisionApi extends _UsageTrackingApi {
 
   int dashboardCalls = 0;
   bool changeAccount = false;
+  bool failInventory = false;
+  bool stopProxy = false;
+  RuntimePersistenceFailure? recordingFailure;
 
   @override
   Future<DashboardData> loadDashboard() async {
     dashboardCalls++;
-    final dashboard = await super.loadDashboard();
+    var dashboard = await super.loadDashboard();
+    if (recordingFailure != null || stopProxy) {
+      final old = dashboard.status;
+      dashboard = DashboardData(
+        status: RuntimeStatus(
+          ready: !stopProxy,
+          productBuild: old.productBuild,
+          state: stopProxy ? 'degraded' : old.state,
+          host: old.host,
+          schemaRevision: old.schemaRevision,
+          storage: stopProxy ? 'unavailable' : old.storage,
+          storageFailure: stopProxy
+              ? RuntimePersistenceFailure(
+                  operation: 'egress_complete',
+                  reason: 'timeout',
+                  at: DateTime.utc(2026, 9, 28, 4),
+                )
+              : null,
+          recordingFailure: recordingFailure,
+          environmentProjection: old.environmentProjection,
+          unavailableEnvironments: old.unavailableEnvironments,
+          offlineHold: old.offlineHold,
+          instanceId: old.instanceId,
+          startedAt: old.startedAt,
+          stoppedAt: old.stoppedAt,
+          stopReasonCode: old.stopReasonCode,
+        ),
+        captures: dashboard.captures,
+        captureNextCursor: dashboard.captureNextCursor,
+        environments: dashboard.environments,
+        endpoints: dashboard.endpoints,
+        accounts: dashboard.accounts,
+      );
+    }
+    if (failInventory) {
+      throw DashboardUnavailable(
+        dashboard.status,
+        const ControlProblem(
+          status: 503,
+          reasonCode: 'runtime_unavailable',
+          messageKey: 'error.runtime_unavailable',
+        ),
+      );
+    }
     if (!changeAccount) return dashboard;
     final account = dashboard.accounts.first;
     final updated = ProviderAccount(

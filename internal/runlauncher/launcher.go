@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/vibe-agi/vibermate/internal/capturecontrol"
@@ -147,7 +148,23 @@ func New(config Config) (*Launcher, error) {
 	if config.Stderr == nil {
 		config.Stderr = os.Stderr
 	}
+	if _, isFile := config.Stderr.(*os.File); !isFile {
+		// Files already allow concurrent writes and ACP needs their native FDs.
+		// Other writers receive both child output and supervisor diagnostics.
+		config.Stderr = &lockedWriter{writer: config.Stderr}
+	}
 	return &Launcher{config: config}, nil
+}
+
+type lockedWriter struct {
+	mu     sync.Mutex
+	writer io.Writer
+}
+
+func (writer *lockedWriter) Write(data []byte) (int, error) {
+	writer.mu.Lock()
+	defer writer.mu.Unlock()
+	return writer.writer.Write(data)
 }
 
 // Run starts exactly one child, remains its supervisor, and returns its exit
@@ -169,23 +186,9 @@ func (launcher *Launcher) Run(
 	if err != nil {
 		return 1, err
 	}
-	inventory := launchsnapshot.Collect(launcher.config.BaseEnvironment)
-	createRequest := capturecontrol.CreateRequest{
-		EnvironmentInventory: &inventory,
-		EnvironmentID:        request.EnvironmentID.String(),
-		CWD:                  cwd,
-		Command:              append([]string(nil), command...),
-		ExecutablePath:       executable,
-		RuntimeMetadata: runtimeMetadata(
-			launcher.config.BaseEnvironment,
-		),
-		ClientEnvironment: clientEnvironmentInput(
-			clienttarget.FromEnvironment(launcher.config.BaseEnvironment),
-		),
-	}
+	createRequest := launcher.captureCreateRequest(ctx, cwd, executable, command, request.EnvironmentID)
 	var control *controlClient
 	var remote *remoteConnection
-	createRequest.RuntimeMetadata.GitAtLaunch = gitSnapshot(ctx, cwd)
 	if launcher.config.Remote != nil {
 		var companion *capturecontrol.CompanionAttestationInput
 		remote, companion, err = connectRemote(
@@ -506,6 +509,24 @@ func localUserLabel(environment []string) string {
 	return ""
 }
 
+// Both run and ACP publish one launch snapshot through Capture creation. These
+// are display facts, not device registration or caller authentication.
+func (launcher *Launcher) captureCreateRequest(ctx context.Context, cwd, executable string, command []string, environmentID environment.EnvironmentID) capturecontrol.CreateRequest {
+	values := launcher.config.BaseEnvironment
+	inventory := launchsnapshot.Collect(values)
+	metadata := runtimeMetadata(values)
+	metadata.GitAtLaunch = gitSnapshot(ctx, cwd, values)
+	return capturecontrol.CreateRequest{
+		EnvironmentInventory: &inventory,
+		EnvironmentID:        environmentID.String(),
+		CWD:                  cwd,
+		Command:              append([]string(nil), command...),
+		ExecutablePath:       executable,
+		RuntimeMetadata:      metadata,
+		ClientEnvironment:    clientEnvironmentInput(clienttarget.FromEnvironment(values)),
+	}
+}
+
 func runtimeMetadata(environment []string) capturecontrol.ClientRuntimeMetadataInput {
 	metadata := capturecontrol.ClientRuntimeMetadataInput{
 		LocalUserName:          localUserLabel(environment),
@@ -613,19 +634,34 @@ func (launcher *Launcher) heartbeat(
 ) <-chan error {
 	failure := make(chan error, 1)
 	go func() {
-		ticker := time.NewTicker(launcher.config.HeartbeatInterval)
-		defer ticker.Stop()
+		timer := time.NewTimer(launcher.config.HeartbeatInterval)
+		defer timer.Stop()
+		reconnecting := false
 		for {
 			select {
 			case <-ctx.Done():
 				return
-			case <-ticker.C:
+			case <-timer.C:
 				err := launcher.callWithTimeout(
 					ctx,
 					func(call context.Context) error {
 						return control.heartbeat(call, grant)
 					},
 				)
+				if ctx.Err() != nil {
+					return
+				}
+				if retryableControlFailure(err) {
+					if !reconnecting {
+						fmt.Fprintln(launcher.config.Stderr, "vibermate: Runtime connection interrupted; keeping the command running and retrying. Proxy access still requires a valid Runtime lease.")
+						reconnecting = true
+					}
+					// Do not measure an outage from the last successful heartbeat:
+					// a suspended laptop may wake hours later. Every call stays
+					// bounded; only definitive rejection ends child supervision.
+					timer.Reset(min(launcher.config.HeartbeatInterval, 2*time.Second))
+					continue
+				}
 				if err != nil {
 					select {
 					case failure <- err:
@@ -633,6 +669,11 @@ func (launcher *Launcher) heartbeat(
 					}
 					return
 				}
+				if reconnecting {
+					fmt.Fprintln(launcher.config.Stderr, "vibermate: Runtime connection restored.")
+					reconnecting = false
+				}
+				timer.Reset(launcher.config.HeartbeatInterval)
 			}
 		}
 	}()

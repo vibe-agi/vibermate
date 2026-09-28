@@ -2,17 +2,13 @@ package runtimepersistence
 
 import (
 	"context"
-	"crypto/sha256"
-	"database/sql"
-	"fmt"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/vibe-agi/vibermate/internal/activity"
 )
 
-func TestProviderErrorCodeUpgradePreservesHistoryAndSurvivesRestart(t *testing.T) {
+func TestProviderErrorCodePreservesHistoryAndSurvivesRestart(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "runtime.db")
 	store := openTestStore(t, path)
@@ -22,17 +18,6 @@ func TestProviderErrorCodeUpgradePreservesHistoryAndSurvivesRestart(t *testing.T
 		t.Fatal(err)
 	}
 	shutdownTestStore(t, store)
-	prior := strings.Replace(schemaSQL, providerErrorCodeColumnSQL, "", 1)
-	if fmt.Sprintf("%x", sha256.Sum256([]byte(prior))) != beforeProviderErrorCodeDigest {
-		t.Fatal("prior schema fixture drifted")
-	}
-	db := sql.OpenDB(newSQLiteConnector(path, DefaultBusyTimeout))
-	if _, err := db.Exec(`ALTER TABLE runtime_activities DROP COLUMN provider_error_code; UPDATE runtime_metadata SET schema_source_sha256 = ?`, beforeProviderErrorCodeDigest); err != nil {
-		t.Fatal(err)
-	}
-	if err := db.Close(); err != nil {
-		t.Fatal(err)
-	}
 	store = openTestStore(t, path)
 	got, err := store.ActivityRepository().GetExchange(ctx, "retained")
 	if err != nil || got.ID != before.ID || got.Sequence != before.Sequence {

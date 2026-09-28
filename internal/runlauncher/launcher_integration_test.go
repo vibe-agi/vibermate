@@ -16,6 +16,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -25,6 +26,111 @@ import (
 	"github.com/vibe-agi/vibermate/internal/localdiscovery"
 	"github.com/vibe-agi/vibermate/internal/runlauncher"
 )
+
+func TestLauncherKeepsChildThroughTemporaryControlFailure(t *testing.T) {
+	t.Parallel()
+	for _, revoke := range []bool{false, true} {
+		t.Run(fmt.Sprintf("revoke=%t", revoke), func(t *testing.T) {
+			directory := t.TempDir()
+			executable := filepath.Join(directory, "agent")
+			if err := os.WriteFile(executable, []byte("#!/bin/sh\nread line\nprintf 'survived:%s' \"$line\"\nexit 7\n"), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			input, send, err := os.Pipe()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer input.Close()
+			defer send.Close()
+			control := &controlFixture{
+				t: t, executable: executable, workspace: directory,
+				credential: capability(0x11), proxy: capability(0x22), run: capability(0x33),
+				expectedCommand: []string{"agent"}, recipe: clientadapter.LaunchGeneric, recognition: clientadapter.RecognitionUnknown,
+			}
+			var attempts atomic.Int32
+			var revoked atomic.Bool
+			recovered := make(chan struct{})
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if strings.HasSuffix(r.URL.Path, "/heartbeat") {
+					if revoked.Load() {
+						http.Error(w, "revoked", http.StatusForbidden)
+						return
+					}
+					switch attempts.Add(1) {
+					case 1:
+						http.Error(w, "unavailable", http.StatusServiceUnavailable) // intermediary HTML/plain text
+						return
+					case 2:
+						<-r.Context().Done() // one bounded request times out across suspension
+						return
+					case 3:
+						http.Error(w, "busy", http.StatusTooManyRequests)
+						return
+					case 5:
+						close(recovered) // prior heartbeat succeeded; the same child is still waiting
+					}
+				}
+				control.ServeHTTP(w, r)
+			}))
+			defer server.Close()
+			var output, diagnostic bytes.Buffer
+			launcher, err := runlauncher.New(runlauncher.Config{
+				Discovery:       fixedDiscovery{session: localdiscovery.Session{BaseURL: server.URL, ControlCredential: control.credential}},
+				BaseEnvironment: []string{"PATH=/usr/bin:/bin"}, Stdin: input, Stdout: &output, Stderr: &diagnostic,
+				HeartbeatInterval: 10 * time.Millisecond, ControlTimeout: 100 * time.Millisecond,
+				Getwd: func() (string, error) { return directory, nil }, LookPath: func(string) (string, error) { return executable, nil },
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			type outcome struct {
+				code int
+				err  error
+			}
+			finished := make(chan outcome, 1)
+			go func() {
+				code, err := launcher.Run(ctx, runlauncher.LaunchRequest{EnvironmentID: environment.SystemTransparentID, Command: []string{"agent"}})
+				finished <- outcome{code, err}
+			}()
+			select {
+			case <-recovered:
+			case done := <-finished:
+				t.Fatalf("temporary heartbeat failure killed child: code=%d err=%v", done.code, done.err)
+			case <-ctx.Done():
+				t.Fatal("heartbeat did not reconnect")
+			}
+			if revoke {
+				revoked.Store(true)
+				done := <-finished
+				if done.code != 1 || !errors.Is(done.err, runlauncher.ErrCaptureSupervisionFailed) {
+					t.Fatalf("revocation did not stop child: code=%d err=%v", done.code, done.err)
+				}
+				if output.Len() != 0 {
+					t.Fatal("revoked child kept running")
+				}
+				return
+			}
+			if _, err := send.WriteString("awake\n"); err != nil {
+				t.Fatal(err)
+			}
+			done := <-finished
+			if done.err != nil || done.code != 7 || output.String() != "survived:awake" {
+				t.Fatalf("child result=%d %v, output=%q", done.code, done.err, output.String())
+			}
+			control.mu.Lock()
+			defer control.mu.Unlock()
+			if control.createCalls != 1 || control.attachCalls != 1 || control.finishCalls != 1 {
+				t.Fatalf("reconnection recreated the run or child: create=%d attach=%d finish=%d", control.createCalls, control.attachCalls, control.finishCalls)
+			}
+			if strings.Count(diagnostic.String(), "Runtime connection interrupted") != 1 ||
+				strings.Count(diagnostic.String(), "Runtime connection restored") != 1 {
+				t.Fatalf("reconnection diagnostics=%q", diagnostic.String())
+			}
+		})
+	}
+}
 
 func TestLauncherSupervisesExactChildAndCaptureRunLifecycle(t *testing.T) {
 	t.Parallel()

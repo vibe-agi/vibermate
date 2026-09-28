@@ -75,7 +75,7 @@ func (repository *runtimeEgressRepository) Complete(
 	defer cancel()
 	record, err := repository.delegate.Complete(completionContext, attempt)
 	if err != nil {
-		repository.fail("complete EgressAttempt", err)
+		repository.fail("egress_complete", err)
 	}
 	return record, err
 }
@@ -85,7 +85,7 @@ func (repository *runtimeEgressRepository) Complete(
 // receive a valid terminal Attempt.
 func (repository *runtimeEgressRepository) ReportTerminalFailure(err error) {
 	if err != nil {
-		repository.fail("construct EgressAttempt terminal", err)
+		repository.fail("egress_terminal", err)
 	}
 }
 
@@ -103,6 +103,9 @@ func (repository *runtimeEgressRepository) ReportRawEvidenceFailure(err error) {
 	)
 	repository.rawEvidenceFailureCount++
 	repository.mu.Unlock()
+	if repository.status != nil {
+		repository.status.failRecording("raw_evidence", err)
+	}
 }
 
 func (repository *runtimeEgressRepository) List(
@@ -122,11 +125,13 @@ func (repository *runtimeEgressRepository) Recover(
 func (repository *runtimeEgressRepository) fail(operation string, root error) {
 	failure := fmt.Errorf("%s durability failure: %w", operation, root)
 	repository.mu.Lock()
-	if repository.failureErr == nil {
-		repository.failureErr = failure
+	if repository.failureErr != nil {
+		repository.mu.Unlock()
+		return
 	}
+	repository.failureErr = failure
+	repository.status.failStorage(operation, root)
 	repository.mu.Unlock()
-	repository.status.failStorage()
 	repository.stop(failure)
 }
 
@@ -175,7 +180,7 @@ func (repository *runtimeEgressRepository) finishShutdown() {
 	repository.mu.Unlock()
 	if outstanding != 0 {
 		repository.fail(
-			"drain EgressAttempt terminal writes",
+			"egress_drain",
 			fmt.Errorf("%d terminal writes remain", outstanding),
 		)
 	}

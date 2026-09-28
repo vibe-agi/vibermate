@@ -62,6 +62,12 @@ void main() {
     final account = ProviderAccount.fromJson({
       'id': 'account.jwt',
       'displayName': 'Codex work',
+      'note': '',
+      'noteRevision': 0,
+      'settingsRevision': 1,
+      'automaticRefresh': false,
+      'supportsAutomaticRefresh': false,
+      'egressProfile': null,
       'credentialOrigin': 'https://chatgpt.com',
       'linkedEndpointIds': <String>[],
       'associationRevision': 1,

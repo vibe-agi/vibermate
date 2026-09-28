@@ -37,7 +37,7 @@ func TestProviderAccountRepositoryCASAndReopenWithoutSecretBytes(t *testing.T) {
 		ID: "anthropic-work", DisplayName: "Anthropic Work",
 		Origin: providerTestOrigin(t), AssociationRevision: 1, RealmID: "anthropic.official",
 		Driver: providerauth.AnthropicAPIKeyDriverRef(), SecretRef: reference,
-		State: provideraccount.StateActive, Revision: 1,
+		State: provideraccount.StateActive, Revision: 1, SettingsRevision: 1,
 		CreatedAt: now, UpdatedAt: now,
 	}
 	result, err := store.ProviderAccountRepository().Write(context.Background(), 0, account)
@@ -80,7 +80,7 @@ func TestProviderAccountRepositoryDeleteCASPersistsAcrossReopen(t *testing.T) {
 		ID: "unused", DisplayName: "Unused",
 		Origin: providerTestOrigin(t), AssociationRevision: 1, RealmID: "anthropic.official",
 		Driver: providerauth.AnthropicAPIKeyDriverRef(), SecretRef: reference,
-		State: provideraccount.StateActive, Revision: 1, CreatedAt: now, UpdatedAt: now,
+		State: provideraccount.StateActive, Revision: 1, SettingsRevision: 1, CreatedAt: now, UpdatedAt: now,
 	}
 	if result, writeErr := store.ProviderAccountRepository().Write(context.Background(), 0, account); writeErr != nil || result.Outcome != provideraccount.CommitCommitted {
 		t.Fatalf("create ProviderAccount = %+v err=%v", result, writeErr)

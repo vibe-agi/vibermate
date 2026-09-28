@@ -136,10 +136,12 @@ func seedCaptureGraph(
 		  attempt_id, connection_id, purpose, payload_class, parent_kind,
 		  parent_id, parent_exchange_id, caller_kind, target_origin,
 		  policy_id, policy_revision, policy_authority, rule_id, proxy_id,
+		  proxy_revision, account_id, account_settings_revision,
 		  started_at_unix_ms, completed_at_unix_ms, outcome
 		) VALUES(?, ?, 'provider_attempt', 'client_semantic',
 		  'upstream_attempt', ?, ?, 'core', 'https://api.example.test',
 		  'policy.fixture', 1, 'environment', 'rule.fixture', 'direct',
+		  1, '', 0,
 		  1, 2, 'completed')
 	`, attemptID, connectionID, attemptID, exchangeID); err != nil {
 		t.Fatal(err)

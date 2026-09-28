@@ -110,5 +110,5 @@ type Repository interface {
 	Recorder
 	UsagePolicy(context.Context) (CollectionPolicy, error)
 	SetUsagePolicy(context.Context, CollectionPolicy, time.Time) (CollectionPolicy, error)
-	ListUsage(context.Context, Query, runtimeuser.UserID, time.Time, int) ([]Observation, bool, error)
+	ScanUsage(context.Context, AggregationQuery, runtimeuser.UserID, time.Time, func(UsageBucket) error) (AggregationResult, error)
 }

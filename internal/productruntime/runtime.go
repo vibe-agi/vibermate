@@ -152,6 +152,7 @@ func startWithBuilders(
 	}
 
 	tracker := newStatusTracker(instanceID, options.Host.Kind(), options.Clock.Now())
+	tracker.clock = options.Clock
 	var cleanups cleanupStack
 	var pending cleanupStack
 	fail := func(stage string, root error) (*Runtime, error) {
@@ -357,6 +358,9 @@ func startWithBuilders(
 		return fail("ProviderAccount recovery", err)
 	}
 	cleanups.register("ProviderAccount manager", accounts.Shutdown)
+	if err := accounts.BindEgressProfiles(egressProfiles); err != nil {
+		return fail("ProviderAccount egress profiles", err)
+	}
 	captureRunRepository := storageResult.store.CaptureRunRepository()
 	manualCaptureRepository := storageResult.store.ManualCaptureRepository()
 	captureActivity, err := newCaptureActivityResolver(
@@ -490,6 +494,9 @@ func startWithBuilders(
 		observe: func(state runtimepersistence.SchemaState, observationErr error) {
 			tracker.observeStorage(state.Revision, observationErr)
 		},
+		cleanup: func(ctx context.Context) error {
+			return storageResult.store.MaintainExpired(ctx, options.Clock.Now().UTC())
+		},
 	})
 	if err != nil {
 		return fail("storage health monitor", err)
@@ -593,6 +600,8 @@ func startWithBuilders(
 		annotations:              clientAnnotations,
 		rawEvidence:              rawEvidence,
 		reportRawEvidenceFailure: runtimeEgress.ReportRawEvidenceFailure,
+		// Recording gaps are warnings, not a reason to revoke Runtime readiness.
+		reportObservationFailure: tracker.failRecording,
 	})
 	if err != nil || exchanges == nil {
 		buildErr := err

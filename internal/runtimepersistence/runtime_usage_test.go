@@ -2,6 +2,7 @@ package runtimepersistence
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"path/filepath"
@@ -16,6 +17,175 @@ import (
 	"github.com/vibe-agi/vibermate/internal/runtimeuser"
 )
 
+// Test-only evidence inspection. Reports use numeric, complete ScanUsage queries.
+func (store *Store) ListUsage(ctx context.Context, query runtimeusage.Query, userID runtimeuser.UserID, now time.Time, limit int) ([]runtimeusage.Observation, bool, error) {
+	from, until := query.Bounds()
+	if from.IsZero() || !until.After(from) || now.IsZero() || limit < 1 || limit > 100000 || (userID != "" && !userID.Valid()) {
+		return nil, false, errors.New("invalid usage query")
+	}
+	operation, finish, err := store.operations.begin(ctx)
+	if err != nil {
+		return nil, false, err
+	}
+	defer finish()
+	statement := `SELECT observation_json FROM runtime_usage_observations WHERE occurred_at_unix_ms>=? AND occurred_at_unix_ms<? AND expires_at_unix_ms>?`
+	args := []any{from.UnixMilli(), until.UnixMilli(), now.UnixMilli()}
+	// Filter ownership before limiting, so members cannot lose their history to
+	// another member's traffic or learn anything about that traffic's volume.
+	if userID != "" {
+		statement += ` AND runtime_user_id=?`
+		args = append(args, userID)
+	}
+	statement += ` ORDER BY occurred_at_unix_ms DESC,exchange_id LIMIT ?`
+	args = append(args, limit+1)
+	rows, err := store.reads.QueryContext(operation, statement, args...)
+	if err != nil {
+		return nil, false, err
+	}
+	defer rows.Close()
+	result := []runtimeusage.Observation{}
+	for rows.Next() {
+		if len(result) == limit {
+			return result, true, nil
+		}
+		var data string
+		if err := rows.Scan(&data); err != nil {
+			return nil, false, err
+		}
+		var value runtimeusage.Observation
+		if err := json.Unmarshal([]byte(data), &value); err != nil {
+			return nil, false, err
+		}
+		if err := value.Validate(); err != nil {
+			return nil, false, err
+		}
+		result = append(result, value)
+	}
+	return result, false, rows.Err()
+}
+
+func TestUsageReadersDoNotBlockTheWriterAndCannotWrite(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	store := openTestStore(t, filepath.Join(t.TempDir(), "usage.db"))
+	defer shutdownTestStore(t, store)
+	var version string
+	if err := store.reads.QueryRowContext(ctx, `SELECT sqlite_version()`).Scan(&version); err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("read/write isolation SQLite version: %s", version)
+	now := time.Date(2026, 9, 28, 0, 0, 0, 0, time.UTC)
+	query, err := runtimeusage.NewQuery("2026-09-28", "2026-09-29", "UTC")
+	if err != nil {
+		t.Fatal(err)
+	}
+	writer, err := store.database.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer writer.Rollback()
+	if _, _, err := store.ListUsage(ctx, query, "", now, 1); err != nil {
+		t.Fatalf("usage reader borrowed the held writer connection: %v", err)
+	}
+	if err := writer.Rollback(); err != nil {
+		t.Fatal(err)
+	}
+	reader, err := store.reads.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Rollback()
+	before, err := scanUsagePolicy(reader.QueryRowContext(ctx, `SELECT enabled,retention_days,revision,collecting_since_unix_ms FROM runtime_usage_policy`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	before.Enabled = true
+	started := time.Now()
+	updated, err := store.SetUsagePolicy(ctx, before, now)
+	if err != nil {
+		t.Fatalf("held read snapshot blocked writer: %v", err)
+	}
+	t.Logf("policy write while report snapshot remains open: %v", time.Since(started))
+	var frozen int64
+	if err := reader.QueryRowContext(ctx, `SELECT revision FROM runtime_usage_policy`).Scan(&frozen); err != nil || frozen != before.Revision || updated.Revision != before.Revision+1 {
+		t.Fatalf("read snapshot was not isolated: frozen=%d updated=%d err=%v", frozen, updated.Revision, err)
+	}
+	if _, err := store.reads.ExecContext(ctx, `UPDATE runtime_usage_policy SET enabled=0`); err == nil {
+		t.Fatal("report connection can mutate storage")
+	}
+	if current, err := store.UsagePolicy(ctx); err != nil || !current.Enabled || current.Revision != updated.Revision {
+		t.Fatalf("fresh report did not see committed policy: %+v %v", current, err)
+	}
+}
+
+func TestUsageReadFiltersExpiryWithoutDeleting(t *testing.T) {
+	ctx := context.Background()
+	store := openTestStore(t, filepath.Join(t.TempDir(), "usage.db"))
+	defer shutdownTestStore(t, store)
+	now := time.Date(2026, 9, 28, 0, 0, 0, 0, time.UTC)
+	if _, err := store.SetUsagePolicy(ctx, runtimeusage.CollectionPolicy{Enabled: true, RetentionDays: 1, Revision: 1}, now); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.RecordUsage(ctx, runtimeusage.Observation{ExchangeID: "expired", StartedAt: now, OccurredAt: now, Status: activity.StatusSucceeded}); err != nil {
+		t.Fatal(err)
+	}
+	query, _ := runtimeusage.NewQuery("2026-09-28", "2026-09-29", "UTC")
+	if values, _, err := store.ListUsage(ctx, query, "", now.Add(24*time.Hour), 10); err != nil || len(values) != 0 {
+		t.Fatalf("expired data became visible: %+v %v", values, err)
+	}
+	var count int
+	if err := store.database.QueryRowContext(ctx, `SELECT count(*) FROM runtime_usage_observations`).Scan(&count); err != nil || count != 1 {
+		t.Fatalf("read mutated the ledger: count=%d err=%v", count, err)
+	}
+	if _, err := store.CleanupExpired(ctx, now.Add(24*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.database.QueryRowContext(ctx, `SELECT count(*) FROM runtime_usage_observations`).Scan(&count); err != nil || count != 0 {
+		t.Fatalf("maintenance did not remove expired usage: count=%d err=%v", count, err)
+	}
+}
+
+func TestExpiredMaintenanceCommitsBoundedProgressAndPreservesLiveUsage(t *testing.T) {
+	ctx := context.Background()
+	store := openTestStore(t, filepath.Join(t.TempDir(), "usage.db"))
+	defer shutdownTestStore(t, store)
+	now := time.Date(2026, 9, 28, 0, 0, 0, 0, time.UTC)
+	for _, id := range []string{"a", "b", "c", "d", "e", "live"} {
+		expires := now
+		if id == "live" {
+			expires = now.Add(time.Hour)
+		}
+		insertUsageFixture(t, store, runtimeusage.Observation{
+			ExchangeID: id, OccurredAt: now.Add(-time.Hour), Status: activity.StatusSucceeded,
+		}, expires)
+	}
+	if _, more, err := store.cleanupExpired(ctx, now, 2); err != nil || !more {
+		t.Fatalf("bounded cleanup: more=%v error=%v", more, err)
+	}
+	count := func(want int) {
+		t.Helper()
+		var got int
+		if err := store.database.QueryRow(`SELECT COUNT(*) FROM runtime_usage_observations`).Scan(&got); err != nil || got != want {
+			t.Fatalf("remaining=%d want=%d error=%v", got, want, err)
+		}
+	}
+	count(4)
+	canceled, cancel := context.WithCancel(ctx)
+	cancel()
+	if err := store.MaintainExpired(canceled, now); !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled maintenance: %v", err)
+	}
+	count(4) // The earlier batch stays committed; cancellation cannot restart the backlog.
+	if err := store.MaintainExpired(ctx, now); err != nil {
+		t.Fatal(err)
+	}
+	count(1)
+	var remaining string
+	if err := store.database.QueryRow(`SELECT exchange_id FROM runtime_usage_observations`).Scan(&remaining); err != nil || remaining != "live" {
+		t.Fatalf("live usage was changed: id=%q error=%v", remaining, err)
+	}
+}
+
 func TestUsageLedgerConsentDeduplicationOwnershipAndRetention(t *testing.T) {
 	ctx := context.Background()
 	now := time.Date(2026, 9, 27, 12, 0, 0, 0, time.UTC)
@@ -24,11 +194,11 @@ func TestUsageLedgerConsentDeduplicationOwnershipAndRetention(t *testing.T) {
 	seedCaptureGraph(t, store, "managed_run", "local", 1)
 	seedCaptureGraph(t, store, "managed_run", "member", 1)
 	seedCaptureGraph(t, store, "manual_capture", "manual", 1)
-	git, err := json.Marshal(capturerun.GitSnapshot{RepositoryKey: strings.Repeat("a", 64), RepositoryName: "project", Branch: "main"})
+	git, err := json.Marshal(capturerun.GitSnapshot{RepositorySource: "local", RepositoryKey: strings.Repeat("a", 64), RepositoryName: "project", Branch: "main"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.database.ExecContext(ctx, `INSERT INTO capture_run_projects VALUES('local',?); UPDATE capture_runs SET local_user_label='local-alice' WHERE run_id='local'`, string(git)); err != nil {
+	if _, err := store.database.ExecContext(ctx, `UPDATE capture_runs SET git_json=?,local_user_label='local-alice' WHERE run_id='local'`, string(git)); err != nil {
 		t.Fatal(err)
 	}
 	user := runtimeuser.UserID("user.AAAAAAAAAAAAAAAAAAAAAAAAAAA")
@@ -67,7 +237,7 @@ func TestUsageLedgerConsentDeduplicationOwnershipAndRetention(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if _, err := store.database.ExecContext(ctx, `UPDATE capture_run_projects SET git_json=json_set(git_json,'$.branch','later') WHERE run_id='local'; UPDATE capture_runs SET local_user_label='later-user' WHERE run_id='local'`); err != nil {
+	if _, err := store.database.ExecContext(ctx, `UPDATE capture_runs SET git_json=json_set(git_json,'$.branch','later'),local_user_label='later-user' WHERE run_id='local'`); err != nil {
 		t.Fatal(err)
 	}
 	value.ExchangeID, value.CaptureRunID = "two", "member"

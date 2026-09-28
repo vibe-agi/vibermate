@@ -21,7 +21,7 @@ type scopedUsageRecorder struct {
 
 func (recorder *scopedUsageRecorder) ReportForUser(
 	_ context.Context,
-	_ runtimeusage.Query,
+	_ runtimeusage.AggregationQuery,
 	userID runtimeuser.UserID,
 ) (runtimeusage.Report, error) {
 	recorder.userID = userID
@@ -30,12 +30,7 @@ func (recorder *scopedUsageRecorder) ReportForUser(
 		Schema:      runtimeusage.ReportSchema,
 		GeneratedAt: time.Date(2026, 9, 5, 1, 2, 3, 0, time.UTC),
 		Days:        []runtimeusage.DayUsage{},
-		Users: []runtimeusage.UserUsage{{
-			UserID: userID, Username: "alice", State: runtimeuser.StateActive,
-			Days: []runtimeusage.DayUsage{}, Models: []runtimeusage.ModelUsage{},
-			Contexts:      []runtimeusage.ContextUsage{},
-			AgentSessions: []runtimeusage.AgentSessionUsage{},
-		}},
+		Total:       &runtimeusage.GroupUsage{ID: "all", Label: "all"},
 	}, nil
 }
 
@@ -86,7 +81,7 @@ func TestWebSelfUsageIsBoundToTheAuthenticatedMember(t *testing.T) {
 		t.Fatalf("self usage scope = %q across %d calls", usage.userID, usage.calls)
 	}
 	if bytes.Contains(response.Body.Bytes(), []byte("owner")) ||
-		!bytes.Contains(response.Body.Bytes(), []byte(`"username":"alice"`)) {
+		!bytes.Contains(response.Body.Bytes(), []byte(`"agentApiCalls":0`)) {
 		t.Fatalf("self usage body = %s", response.Body.String())
 	}
 

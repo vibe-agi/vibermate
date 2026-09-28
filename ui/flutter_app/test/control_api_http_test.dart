@@ -16,6 +16,207 @@ import 'runtime_usage_fixture.dart';
 
 void main() {
   test(
+    'activity summary is a closed, scoped and internally consistent contract',
+    () async {
+      final payload = <String, Object?>{
+        'scope': {'client': 'codex', 'sessionId': 'session-test'},
+        'generatedAt': '2026-09-28T12:00:00Z',
+        'requests': 1357,
+        'succeeded': 1300,
+        'failed': 30,
+        'canceled': 22,
+        'pending': 5,
+        'firstObservedAt': '2026-09-26T00:00:00Z',
+        'lastObservedAt': '2026-09-28T12:00:00Z',
+        'failures': [
+          {'reasonCode': 'provider_transport_failed', 'count': 30},
+        ],
+        'otherFailures': 0,
+      };
+      for (final bad in <Map<String, Object?>>[
+        {...payload}..remove('pending'),
+        {...payload, 'requests': 1356},
+        {...payload, 'pending': -1},
+        {...payload, 'otherFailures': 1},
+        {...payload, 'firstObservedAt': null},
+        {
+          ...payload,
+          'scope': {'client': 'codex'},
+        },
+        {
+          ...payload,
+          'scope': {'captureRunId': 'one', 'manualCaptureId': 'two'},
+        },
+        {
+          ...payload,
+          'scope': {
+            'captureRunId': 'one',
+            'client': 'codex',
+            'sessionId': 'two',
+          },
+        },
+        {
+          ...payload,
+          'scope': {'captureRunId': 'one', 'sessionId': ''},
+        },
+        {
+          ...payload,
+          'scope': {'client': 'codex', 'sessionId': 'bad\nidentity'},
+        },
+        {
+          ...payload,
+          'failures': [
+            {'reasonCode': 'duplicated', 'count': 15},
+            {'reasonCode': 'duplicated', 'count': 15},
+          ],
+        },
+        {...payload, 'loadedPageCount': 100},
+      ]) {
+        expect(
+          () => ExchangeSummary.fromJson(bad, 'summary'),
+          throwsA(isA<ControlContractException>()),
+        );
+      }
+      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      addTearDown(() => server.close(force: true));
+      final requests = <Uri>[];
+      server.listen((request) async {
+        requests.add(request.uri);
+        await request.drain<void>();
+        request.response.headers.contentType = ContentType.json;
+        request.response.write(jsonEncode(payload));
+        await request.response.close();
+      });
+      final api = await HttpControlApi.connect(
+        DesktopSession(
+          baseUrl: Uri.parse('http://127.0.0.1:${server.port}'),
+          readToken: List.filled(43, 'R').join(),
+          writeToken: List.filled(43, 'W').join(),
+          instanceId: 'instance-test',
+          expiresAt: DateTime.now().toUtc().add(const Duration(hours: 1)),
+        ),
+        inspectSession: false,
+      );
+      addTearDown(api.close);
+      const scope = ActivitySummaryScope(
+        client: 'codex',
+        sessionId: 'session-test',
+      );
+      final summary = await api.activitySummary(scope);
+      expect(summary.requests, 1357);
+      expect(summary.scope, scope);
+      expect(requests.single.path, '/api/v1/activities/summary');
+      expect(requests.single.queryParameters, scope.toQueryParameters());
+      payload['scope'] = {'captureRunId': 'another-run'};
+      await expectLater(
+        api.activitySummary(scope),
+        throwsA(isA<ControlContractException>()),
+      );
+    },
+  );
+
+  test(
+    'failed inventory preserves Runtime health even when status arrives last',
+    () async {
+      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      addTearDown(() => server.close(force: true));
+      server.listen((request) async {
+        await request.drain<void>();
+        request.response.headers.contentType = ContentType.json;
+        if (request.uri.path == '/api/v1/status') {
+          await Future<void>.delayed(const Duration(milliseconds: 20));
+          request.response.write(
+            jsonEncode({
+              'generation': 'instance-test',
+              'ready': false,
+              'apiVersion': 'v1',
+              'productBuild': 'test-build',
+              'statusKey': 'runtime.state.degraded',
+              'runtime': {
+                'state': 'degraded',
+                'instanceId': 'instance-test',
+                'host': 'server',
+                'schemaRevision': 1,
+                'storage': 'unavailable',
+                'storageFailure': {
+                  'operation': 'egress_complete',
+                  'reason': 'timeout',
+                  'at': '2026-09-28T04:00:00Z',
+                },
+                'environmentProjection': {
+                  'state': 'healthy',
+                  'unavailableEnvironments': null,
+                },
+                'startedAt': '2026-09-28T00:00:00Z',
+                'offlineHold': {
+                  'state': 'online',
+                  'revision': 1,
+                  'since': '2026-09-28T00:00:00Z',
+                  'activeActions': 0,
+                  'enteringActions': 0,
+                  'activeEgress': 0,
+                  'queuedRequests': 0,
+                  'heldBytes': 0,
+                  'safeToDisconnect': false,
+                  'activeByKind': <String, Object?>{},
+                  'queuedByKind': <String, Object?>{},
+                },
+              },
+            }),
+          );
+        } else {
+          request.response.statusCode = HttpStatus.serviceUnavailable;
+          request.response.write(
+            jsonEncode({
+              'type': 'urn:vibermate:error:runtime-unavailable',
+              'title': 'runtime unavailable',
+              'status': 503,
+              'code': 'runtime_unavailable',
+            }),
+          );
+        }
+        await request.response.close();
+      });
+      final api = await HttpControlApi.connect(
+        DesktopSession(
+          baseUrl: Uri.parse('http://127.0.0.1:${server.port}'),
+          readToken: List.filled(43, 'R').join(),
+          writeToken: List.filled(43, 'W').join(),
+          instanceId: 'instance-test',
+          expiresAt: DateTime.now().toUtc().add(const Duration(hours: 1)),
+        ),
+        inspectSession: false,
+      );
+      addTearDown(api.close);
+      await expectLater(
+        api.loadDashboard(),
+        throwsA(
+          isA<DashboardUnavailable>()
+              .having(
+                (error) => error.status.storageFailure?.operation,
+                'first operation',
+                'egress_complete',
+              )
+              .having(
+                (error) => error.status.storageFailure?.reason,
+                'first reason',
+                'timeout',
+              )
+              .having(
+                (error) => error.cause,
+                'inventory cause',
+                isA<ControlProblem>().having(
+                  (error) => error.status,
+                  'status',
+                  503,
+                ),
+              ),
+        ),
+      );
+    },
+  );
+
+  test(
     'HTTP API reads exact Root material and schedules revisioned replacement',
     () async {
       final requests = <({String method, String path, String? match})>[];
@@ -222,6 +423,12 @@ void main() {
             jsonEncode({
               'id': 'account.headers',
               'displayName': 'Header Account',
+              'note': '',
+              'noteRevision': 0,
+              'settingsRevision': 1,
+              'automaticRefresh': false,
+              'supportsAutomaticRefresh': false,
+              'egressProfile': null,
               'credentialOrigin': 'https://api.anthropic.com',
               'linkedEndpointIds': ['target.headers'],
               'associationRevision': 1,
@@ -311,6 +518,12 @@ void main() {
             jsonEncode({
               'id': 'account.codex',
               'displayName': 'Codex Work',
+              'note': '',
+              'noteRevision': 0,
+              'settingsRevision': 1,
+              'automaticRefresh': false,
+              'supportsAutomaticRefresh': false,
+              'egressProfile': null,
               'credentialOrigin': 'https://chatgpt.com',
               'linkedEndpointIds': ['target.codex.official'],
               'associationRevision': 1,
@@ -929,12 +1142,8 @@ void main() {
         timeZone: 'Asia/Singapore',
       ),
     );
-    expect(usage.users.single.username, 'alice');
-    expect(usage.users.single.agentApiCalls, 2);
-    expect(
-      usage.users.single.models.single.upstreamModel,
-      'relay:model/custom',
-    );
+    expect(usage.total!.agentApiCalls, 2);
+    expect(usage.total!.failed, 1);
     final created = await api.createRuntimeUser(
       username: 'bob',
       password: 'test-password',
@@ -997,7 +1206,7 @@ void main() {
     expect(requests.last.token, 'Bearer ${List.filled(43, 'W').join()}');
   });
 
-  test('usage report has its own bounded response budget', () async {
+  test('usage report rejects the old oversized monolithic response', () async {
     final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
     addTearDown(() => server.close(force: true));
     server.listen((request) async {
@@ -1028,14 +1237,16 @@ void main() {
     );
     addTearDown(api.close);
 
-    final report = await api.runtimeUsage(
-      const RuntimeUsageQuery(
-        from: '2026-07-27',
-        until: '2026-08-26',
-        timeZone: 'Asia/Singapore',
+    await expectLater(
+      api.runtimeUsage(
+        const RuntimeUsageQuery(
+          from: '2026-07-27',
+          until: '2026-08-26',
+          timeZone: 'Asia/Singapore',
+        ),
       ),
+      throwsA(isA<ControlContractException>()),
     );
-    expect(report.users.single.username, 'alice');
   });
 
   test('code library has its own bounded response budget', () async {

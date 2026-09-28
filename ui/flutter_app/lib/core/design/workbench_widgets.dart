@@ -47,10 +47,14 @@ final class CompactLoadingMessage extends StatelessWidget {
             children: [
               const CompactProgressIndicator(),
               const SizedBox(width: ViberSpacing.sm),
-              Text(
-                label,
-                style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                  color: context.viberColors.textMuted,
+              Flexible(
+                child: Text(
+                  label,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: context.viberColors.textMuted,
+                  ),
                 ),
               ),
             ],

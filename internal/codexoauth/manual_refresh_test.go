@@ -29,11 +29,11 @@ func TestManualRefreshRotatesAStillValidCredentialAndPreservesPolicy(t *testing.
 		t.Fatal(err)
 	}
 	ref := testReference(t)
-	if epoch, err := manager.Prepare(context.Background(), providerauth.CodexOAuthDriverRef(), ref, 1); err != nil || epoch != 1 || client.Calls() != 0 {
+	if epoch, err := manager.Prepare(context.Background(), providerauth.CodexOAuthDriverRef(), ref, testAccountScope()); err != nil || epoch != 1 || client.Calls() != 0 {
 		t.Fatalf("automatic preparation unexpectedly refreshed: epoch=%d error=%v", epoch, err)
 	}
 	for range 2 { // A stale caller must observe the winner, never replay its token.
-		epoch, err := manager.Refresh(context.Background(), providerauth.CodexOAuthDriverRef(), ref, 1)
+		epoch, err := manager.Refresh(context.Background(), providerauth.CodexOAuthDriverRef(), ref, testAccountScope())
 		if err != nil || epoch != 2 {
 			t.Fatalf("manual refresh epoch=%d error=%v", epoch, err)
 		}
@@ -68,10 +68,10 @@ func TestManualRefreshDoesNotReportTransientFailureAsSuccess(t *testing.T) {
 		t.Fatal(err)
 	}
 	ref := testReference(t)
-	if epoch, err := manager.Prepare(context.Background(), providerauth.CodexOAuthDriverRef(), ref, 1); err != nil || epoch != 1 {
+	if epoch, err := manager.Prepare(context.Background(), providerauth.CodexOAuthDriverRef(), ref, testAccountScope()); err != nil || epoch != 1 {
 		t.Fatalf("valid access token should survive automatic transient failure: %d %v", epoch, err)
 	}
-	if _, err := manager.Refresh(context.Background(), providerauth.CodexOAuthDriverRef(), ref, 1); !errors.Is(err, ErrRefreshUnavailable) {
+	if _, err := manager.Refresh(context.Background(), providerauth.CodexOAuthDriverRef(), ref, testAccountScope()); !errors.Is(err, ErrRefreshUnavailable) {
 		t.Fatalf("manual failure incorrectly swallowed: %v", err)
 	}
 	if _, _, err := manager.readCredential(context.Background(), ref, 1); err != nil {

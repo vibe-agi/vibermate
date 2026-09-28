@@ -34,7 +34,7 @@ var (
 )
 
 type HTTPClient interface {
-	Do(*http.Request) (*http.Response, error)
+	Do(*http.Request, providerauth.AccountRef) (*http.Response, error)
 }
 
 type Clock interface {
@@ -159,9 +159,9 @@ func (manager *Manager) Prepare(
 	ctx context.Context,
 	driver providerauth.DriverRef,
 	reference secretstore.Reference,
-	revision secretstore.Revision,
+	scope providerauth.AccountRef,
 ) (secretstore.Revision, error) {
-	return manager.prepare(ctx, driver, reference, revision, false)
+	return manager.prepare(ctx, driver, reference, scope, false)
 }
 
 // Refresh forces a refresh of one credential epoch even if its access token is
@@ -171,20 +171,21 @@ func (manager *Manager) Refresh(
 	ctx context.Context,
 	driver providerauth.DriverRef,
 	reference secretstore.Reference,
-	revision secretstore.Revision,
+	scope providerauth.AccountRef,
 ) (secretstore.Revision, error) {
-	return manager.prepare(ctx, driver, reference, revision, true)
+	return manager.prepare(ctx, driver, reference, scope, true)
 }
 
 func (manager *Manager) prepare(
 	ctx context.Context,
 	driver providerauth.DriverRef,
 	reference secretstore.Reference,
-	revision secretstore.Revision,
+	scope providerauth.AccountRef,
 	force bool,
 ) (secretstore.Revision, error) {
+	revision := secretstore.Revision(scope.CredentialEpoch)
 	if manager == nil || ctx == nil || driver != providerauth.CodexOAuthDriverRef() ||
-		reference.String() == "" || revision == 0 || revision > secretstore.MaxRevision {
+		reference.String() == "" || scope.Validate() != nil {
 		return 0, ErrInvalidCredential
 	}
 	credential, _, err := manager.readCredential(ctx, reference, revision)
@@ -213,7 +214,7 @@ func (manager *Manager) prepare(
 	result := manager.refreshes.DoChan(key.flightKey(), func() (any, error) {
 		operation, cancel := context.WithTimeout(context.WithoutCancel(ctx), manager.refreshTimeout)
 		defer cancel()
-		rotated, refreshErr := manager.refresh(operation, reference, revision, force)
+		rotated, refreshErr := manager.refresh(operation, reference, scope, force)
 		if errors.Is(refreshErr, ErrReconnectRequired) {
 			manager.rememberPermanent(key, refreshErr)
 		}
@@ -240,9 +241,10 @@ func (manager *Manager) prepare(
 func (manager *Manager) refresh(
 	ctx context.Context,
 	reference secretstore.Reference,
-	revision secretstore.Revision,
+	scope providerauth.AccountRef,
 	force bool,
 ) (secretstore.Revision, error) {
+	revision := secretstore.Revision(scope.CredentialEpoch)
 	credential, policy, err := manager.readCredential(ctx, reference, revision)
 	if err != nil {
 		if errors.Is(err, secretstore.ErrRevisionConflict) {
@@ -254,7 +256,7 @@ func (manager *Manager) refresh(
 	if !force && !credential.needsRefresh(manager.clock.Now().UTC()) {
 		return revision, nil
 	}
-	rotated, err := manager.exchange(ctx, credential)
+	rotated, err := manager.exchange(ctx, credential, scope)
 	if err != nil {
 		if errors.Is(err, ErrReconnectRequired) {
 			credential.state = StateReconnectRequired
@@ -332,6 +334,7 @@ func (manager *Manager) replaceCredential(
 func (manager *Manager) exchange(
 	ctx context.Context,
 	credential *Credential,
+	scope providerauth.AccountRef,
 ) (*Credential, error) {
 	payload, err := json.Marshal(map[string]string{
 		"grant_type":    "refresh_token",
@@ -348,7 +351,7 @@ func (manager *Manager) exchange(
 	}
 	request.Header.Set("Accept", "application/json")
 	request.Header.Set("Content-Type", "application/json")
-	response, err := manager.client.Do(request)
+	response, err := manager.client.Do(request, scope)
 	if err != nil {
 		return nil, fmt.Errorf("%w: token endpoint request failed", ErrRefreshUnavailable)
 	}

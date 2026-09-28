@@ -15,6 +15,7 @@ import (
 
 	"github.com/vibe-agi/vibermate/internal/codexoauth"
 	"github.com/vibe-agi/vibermate/internal/egressaudit"
+	"github.com/vibe-agi/vibermate/internal/egressprofile"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
 	"github.com/vibe-agi/vibermate/internal/originidentity"
 	"github.com/vibe-agi/vibermate/internal/providerauth"
@@ -42,6 +43,16 @@ type runtimeFetchSpec struct {
 	body         []byte
 	contentType  string
 	captured     *capturedAccountRead
+	// OAuth carries the same frozen scope without applying its access token to
+	// the token endpoint. Other operations obtain it from credential.
+	account providerauth.AccountRef
+}
+
+func (spec runtimeFetchSpec) egressProfile() egressprofile.ProfileRevision {
+	if spec.account.EgressProfile.ID != "" {
+		return spec.account.EgressProfile
+	}
+	return egressprofile.Direct()
 }
 
 // clearingRequestBody gives the transport its own copy of a Runtime-owned
@@ -139,7 +150,7 @@ func (client *Client) fetchModelsDev(ctx context.Context, path string) (*http.Re
 // DoCodexOAuthTokenRequest sends only the fixed Codex OAuth token exchange
 // through the runtime's mandatory Hold, strict transport, and body-free audit
 // boundary. The refresh token is never emitted as Raw evidence.
-func (client *Client) DoCodexOAuthTokenRequest(request *http.Request) (*http.Response, error) {
+func (client *Client) DoCodexOAuthTokenRequest(request *http.Request, account providerauth.AccountRef) (*http.Response, error) {
 	if request == nil || request.URL == nil || request.Body == nil ||
 		request.Method != http.MethodPost || request.URL.String() != codexoauth.TokenURL ||
 		(request.Header.Get("Content-Type") != "application/json" &&
@@ -169,6 +180,7 @@ func (client *Client) DoCodexOAuthTokenRequest(request *http.Request) (*http.Res
 		method:       http.MethodPost,
 		body:         body,
 		contentType:  request.Header.Get("Content-Type"),
+		account:      account,
 	})
 }
 
@@ -184,6 +196,16 @@ func (client *Client) fetchRuntimeJSON(
 	}
 	if err := spec.target.validate(); err != nil {
 		return nil, err
+	}
+	if spec.credential != nil {
+		var ok bool
+		spec.account, ok = spec.credential.Account()
+		if !ok || spec.account.Validate() != nil {
+			return nil, errors.New("runtime account scope is invalid")
+		}
+	}
+	if spec.account != (providerauth.AccountRef{}) && spec.account.Validate() != nil {
+		return nil, errors.New("runtime account scope is invalid")
 	}
 	if spec.method == "" {
 		spec.method = http.MethodGet
@@ -297,10 +319,7 @@ func (client *Client) fetchRuntimeJSON(
 		return nil, err
 	}
 	transportOwnsBody = true
-	dispatch := TransportDispatch{target: spec.target, plan: client.runtimePlan}
-	if spec.captured != nil {
-		dispatch.egressPolicy = spec.captured.plan.EgressPolicy()
-	}
+	dispatch := TransportDispatch{target: spec.target, plan: client.runtimePlan, egressPolicy: spec.egressProfile().Policy}
 	response, transportEvidence, err := client.transport.RoundTrip(request, dispatch)
 	if err != nil {
 		if response != nil && response.Body != nil {
@@ -417,10 +436,10 @@ func (client *Client) runtimeProbeTarget(
 		PlanDigest:    hex.EncodeToString(digest[:]),
 	}
 	if spec.captured != nil {
-		target.EgressPolicy = spec.captured.plan.EgressPolicy()
 		target.PlanDigest = spec.captured.plan.EnvironmentDigest().String()
 		target.PlanRevision = uint64(spec.captured.plan.EnvironmentRevision())
 	}
+	target.EgressPolicy = spec.egressProfile().Policy
 	if err := target.Validate(); err != nil {
 		return offlinehold.ProbeTarget{}, fmt.Errorf(
 			"construct runtime probe target: %w",
@@ -467,6 +486,17 @@ func (client *Client) beginRuntimeAudit(
 		input.Parent = egressaudit.ParentRef{Kind: egressaudit.ParentClientOperation, ID: spec.captured.operationID}
 		input.Decision = egressaudit.DecisionRef{PolicyID: string(plan.EnvironmentID()), PolicyRevision: uint64(plan.EnvironmentRevision()),
 			Authority: egressaudit.AuthorityEnvironment, RuleID: string(route.ID()), ProxyID: string(plan.EgressProfile().ID)}
+	}
+	if spec.account.EgressProfile.ID != "" {
+		input.Decision.ProxyID = spec.account.EgressProfile.ID.String()
+		input.Decision.ProxyRevision = uint64(spec.account.EgressProfile.Revision)
+		input.Decision.AccountID = spec.account.ID
+		input.Decision.AccountSettingsRevision = spec.account.SettingsRevision
+		if spec.captured == nil {
+			input.Decision.PolicyID = spec.account.ID
+			input.Decision.PolicyRevision = spec.account.SettingsRevision
+			input.Decision.RuleID = "account.egress"
+		}
 	}
 	attempt, err := egressaudit.New(input)
 	if err != nil {

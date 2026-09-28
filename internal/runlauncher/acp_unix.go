@@ -49,8 +49,7 @@ func (launcher *Launcher) RunACP(ctx context.Context, request ACPLaunchRequest) 
 		result, err := RunACPProcess(ctx, process)
 		return result.ExitCode, err
 	}
-	create := capturecontrol.CreateRequest{EnvironmentID: environment.SystemTransparentID.String(), CWD: cwd, Command: request.Command, ExecutablePath: executable, RuntimeMetadata: runtimeMetadata(launcher.config.BaseEnvironment)}
-	create.RuntimeMetadata.GitAtLaunch = gitSnapshot(ctx, cwd)
+	create := launcher.captureCreateRequest(ctx, cwd, executable, request.Command, environment.SystemTransparentID)
 	var control *controlClient
 	if launcher.config.Remote != nil {
 		connection, companion, connectErr := connectRemote(ctx, *launcher.config.Remote, controlTransportTimeout(launcher.config), cwd, request.Command, executable)
@@ -107,8 +106,13 @@ func (launcher *Launcher) RunACP(ctx context.Context, request ACPLaunchRequest) 
 	if receipt.Policy.Mode != environment.ContentRecordingOff {
 		process.Observer = observer
 	}
+	attached := make(chan struct{})
 	process.OnStart = func(call context.Context, pid int) error {
-		return launcher.callWithTimeout(call, func(call context.Context) error { return control.attach(call, grant, pid) })
+		if err := launcher.callWithTimeout(call, func(call context.Context) error { return control.attach(call, grant, pid) }); err != nil {
+			return err
+		}
+		close(attached)
+		return nil
 	}
 	childContext, cancelChild := context.WithCancel(ctx)
 	defer cancelChild()
@@ -118,13 +122,26 @@ func (launcher *Launcher) RunACP(ctx context.Context, request ACPLaunchRequest) 
 	}
 	finished := make(chan outcome, 1)
 	go func() { result, err := RunACPProcess(childContext, process); finished <- outcome{result, err} }()
-	heartbeat := time.NewTicker(launcher.config.HeartbeatInterval)
-	defer heartbeat.Stop()
+	var heartbeat <-chan error
 	publish := time.NewTicker(time.Second)
 	defer publish.Stop()
 	save := func(call context.Context, snapshot acpobservation.Snapshot) error {
 		return launcher.callWithTimeout(call, func(call context.Context) error {
-			return control.jsonRequest(call, http.MethodPost, runActionPath(grant.Run.ID, "observe-acp"), "", grant.RunCapability, snapshot, http.StatusNoContent, nil)
+			publish := func() error {
+				return control.jsonRequest(call, http.MethodPost, runActionPath(grant.Run.ID, "observe-acp"), "", grant.RunCapability, snapshot, http.StatusNoContent, nil)
+			}
+			err := publish()
+			var failure *ControlFailure
+			if errors.As(err, &failure) && failure.Status == http.StatusForbidden {
+				// The 1s observation tick may win the wake-up race against the
+				// heartbeat. Revalidate/renew first; do not mistake expiry for
+				// revocation. A revoked supervisor still receives a final 403.
+				if err := control.heartbeat(call, grant); err != nil {
+					return err
+				}
+				return publish()
+			}
+			return err
 		})
 	}
 	var lastRevision uint64 = 1
@@ -132,6 +149,9 @@ func (launcher *Launcher) RunACP(ctx context.Context, request ACPLaunchRequest) 
 	warned := false
 	for {
 		select {
+		case <-attached:
+			attached = nil
+			heartbeat = launcher.heartbeat(childContext, control, grant)
 		case done := <-finished:
 			observer.Finish(done.result.ExitCode, done.err != nil)
 			if err := save(context.Background(), observer.Snapshot()); err != nil {
@@ -169,11 +189,10 @@ func (launcher *Launcher) RunACP(ctx context.Context, request ACPLaunchRequest) 
 			} else {
 				lastRevision = snapshot.Revision
 			}
-		case <-heartbeat.C:
-			if err := launcher.callWithTimeout(childContext, func(call context.Context) error { return control.heartbeat(call, grant) }); err != nil {
-				authorityFailure = errors.New("ACP Capture heartbeat failed")
-				cancelChild()
-			}
+		case err := <-heartbeat:
+			heartbeat = nil
+			authorityFailure = errors.Join(ErrCaptureSupervisionFailed, fmt.Errorf("ACP Capture heartbeat failed: %w", err))
+			cancelChild()
 		}
 	}
 }

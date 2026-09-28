@@ -37,7 +37,7 @@ func TestDiscoverChatGPTModelSlugsAreEndpointOwned(t *testing.T) {
 			}
 			endpoint := testEndpoint(origin)
 			catalog, err := New(Options{
-				Endpoints: endpointReaderStub{endpoint: endpoint}, Credentials: credentialAuthorityStub{},
+				Endpoints: endpointReaderStub{endpoint: endpoint}, Credentials: credentialAuthorityStub{settingsRevision: 1},
 				Clock: fixedClock{now: time.Date(2026, 9, 6, 0, 0, 0, 0, time.UTC)},
 				Transport: endpointTransportFunc(func(context.Context, upstreamendpoint.Endpoint) (*http.Response, error) {
 					return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(test.body))}, nil

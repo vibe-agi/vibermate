@@ -18,10 +18,10 @@ import (
 	"github.com/vibe-agi/vibermate/internal/workspaceidentity"
 )
 
-func TestACPAdditiveUpgradePreservesReleasedBaselineAndSnapshots(t *testing.T) {
+func TestACPCurrentSchemaPreservesSnapshotsAcrossRestart(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "runtime.db")
-	// Build precisely the released base schema, without ACP extension tables.
+	// ACP is part of the current baseline, not initialized by a second pass.
 	base := sql.OpenDB(newSQLiteConnector(path, DefaultBusyTimeout))
 	digest, err := initializeSchema(ctx, base)
 	if err != nil {
@@ -33,7 +33,7 @@ func TestACPAdditiveUpgradePreservesReleasedBaselineAndSnapshots(t *testing.T) {
 	store := openTestStore(t, path)
 	state, err := store.SchemaStateReader().ReadSchemaState(ctx)
 	if err != nil || state.SourceSHA256 != digest {
-		t.Fatalf("released baseline changed: %v", err)
+		t.Fatalf("current baseline changed: %v", err)
 	}
 	manager, err := capturerun.NewManager(ctx, capturerun.DefaultOptions(store.CaptureRunRepository()))
 	if err != nil {
@@ -146,23 +146,24 @@ func TestACPRevokedRuntimeIdentityCannotPublishThroughALiveRun(t *testing.T) {
 	}
 }
 
-func TestACPUnfamiliarSchemaIsNotSilentlyReset(t *testing.T) {
+func TestUnfamiliarSchemaIsNotSilentlyResetForACP(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "runtime.db")
 	store := openTestStore(t, path)
-	if _, err := store.database.ExecContext(ctx, `UPDATE acp_schema_metadata SET source_sha256='unfamiliar-test-digest'`); err != nil {
+	const unfamiliar = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	if _, err := store.database.ExecContext(ctx, `UPDATE runtime_metadata SET schema_source_sha256=?`, unfamiliar); err != nil {
 		t.Fatal(err)
 	}
 	shutdownTestStore(t, store)
 	if reopened, err := Open(ctx, Options{DatabasePath: path, BusyTimeout: DefaultBusyTimeout, CommitReconcileTimeout: DefaultCommitReconcileTimeout}); err == nil {
 		shutdownTestStore(t, reopened)
-		t.Fatal("unfamiliar extension opened")
+		t.Fatal("unfamiliar schema opened")
 	}
 	database := sql.OpenDB(newSQLiteConnector(path, DefaultBusyTimeout))
 	defer database.Close()
 	var digest string
-	if err := database.QueryRowContext(ctx, `SELECT source_sha256 FROM acp_schema_metadata`).Scan(&digest); err != nil || digest != "unfamiliar-test-digest" {
-		t.Fatal("failed open rewrote extension")
+	if err := database.QueryRowContext(ctx, `SELECT schema_source_sha256 FROM runtime_metadata`).Scan(&digest); err != nil || digest != unfamiliar {
+		t.Fatal("failed open rewrote schema")
 	}
 }
 

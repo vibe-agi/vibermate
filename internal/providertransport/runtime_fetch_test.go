@@ -3,6 +3,7 @@ package providertransport
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/vibe-agi/vibermate/internal/codexoauth"
 	"github.com/vibe-agi/vibermate/internal/egressaudit"
+	"github.com/vibe-agi/vibermate/internal/egressprofile"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
 	"github.com/vibe-agi/vibermate/internal/originidentity"
 	"github.com/vibe-agi/vibermate/internal/protocolspec"
@@ -48,7 +50,7 @@ func TestCodexOAuthTokenGrantsUseFixedAuditedRuntimeEgress(t *testing.T) {
 				t.Fatal(err)
 			}
 			request.Header.Set("Content-Type", grant.contentType)
-			response, err := client.DoCodexOAuthTokenRequest(request)
+			response, err := client.DoCodexOAuthTokenRequest(request, providerauth.AccountRef{})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -416,11 +418,15 @@ func (source *sequentialInstanceIDs) NewInstanceID(context.Context) (string, err
 	source.mu.Lock()
 	defer source.mu.Unlock()
 	source.next++
-	return []string{
+	id := []string{
 		"runtime-action",
 		"runtime-request",
 		"runtime-attempt",
-	}[source.next-1], nil
+	}[(source.next-1)%3]
+	if source.next > 3 {
+		id = fmt.Sprintf("%s-%d", id, (source.next-1)/3)
+	}
+	return id, nil
 }
 
 type runtimeTransportStub struct {
@@ -428,6 +434,7 @@ type runtimeTransportStub struct {
 	audit    *runtimeAuditRecorder
 	response *http.Response
 	request  *http.Request
+	dispatch TransportDispatch
 	err      error
 	calls    int
 	audited  bool
@@ -435,7 +442,7 @@ type runtimeTransportStub struct {
 
 func (transport *runtimeTransportStub) RoundTrip(
 	request *http.Request,
-	_ TransportDispatch,
+	dispatch TransportDispatch,
 ) (*http.Response, transportprofile.Evidence, error) {
 	body, _ := io.ReadAll(request.Body)
 	_ = request.Body.Close()
@@ -443,6 +450,7 @@ func (transport *runtimeTransportStub) RoundTrip(
 	transport.mu.Lock()
 	defer transport.mu.Unlock()
 	transport.calls++
+	transport.dispatch = dispatch
 	transport.audited = transport.audit.appendCount() == 1
 	transport.request = request.Clone(context.Background())
 	transport.request.Body = io.NopCloser(bytes.NewReader(body))
@@ -603,10 +611,12 @@ func testRuntimeDiscoveryCredential(
 	return &runtimeDiscoveryCredential{
 		secret: reference,
 		account: providerauth.AccountRef{
-			ID:              "account.catalog-test",
-			Revision:        2,
-			CredentialEpoch: 3,
-			RealmID:         realmID,
+			ID:               "account.catalog-test",
+			SettingsRevision: 1,
+			EgressProfile:    egressprofile.Direct(),
+			Revision:         2,
+			CredentialEpoch:  3,
+			RealmID:          realmID,
 		},
 	}
 }

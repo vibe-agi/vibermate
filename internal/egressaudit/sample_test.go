@@ -61,6 +61,7 @@ func TestEgressSamplesDescribeWhatTheRuntimeSends(t *testing.T) {
 			Authority:      egressaudit.AuthorityEnvironment,
 			RuleID:         "anthropic-direct",
 			ProxyID:        "direct",
+			ProxyRevision:  1, AccountID: "account.sample", AccountSettingsRevision: 2,
 		},
 		StartedAt: started.Add(time.Minute),
 	})

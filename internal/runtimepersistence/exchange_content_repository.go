@@ -717,7 +717,7 @@ func (repository *exchangeContentRepository) PurgeExpired(
 	}
 	defer func() { _ = transaction.Rollback() }()
 	count, err := purgeExpiredExchangeContent(
-		operation, transaction, toUnixMillis(now.UTC()),
+		operation, transaction, toUnixMillis(now.UTC()), -1,
 	)
 	if err != nil {
 		return 0, err

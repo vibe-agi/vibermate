@@ -293,7 +293,7 @@ func providerTerminalAttempt(t *testing.T, startedAt time.Time) egressaudit.Atte
 		},
 		Caller:       egressaudit.CallerCore,
 		TargetOrigin: "https://provider.example:443",
-		Decision:     providerEgressDecision(),
+		Decision:     egressaudit.BuiltInDirectDecision(egressaudit.AuthorityEnvironment),
 		StartedAt:    startedAt,
 	})
 	if err != nil {

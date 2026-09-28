@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -73,6 +74,16 @@ func TestStatusAndDoctorVerifyTheRealLocalControlAPI(t *testing.T) {
 	now := time.Now().UTC()
 	credential := base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x43}, 32))
 	instanceID := base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x49}, 16))
+	status := desktopcontrol.StatusResponse{
+		Generation: instanceID, Ready: true, APIVersion: "v1", ProductBuild: "test-build",
+		StatusKey: "runtime.state.initialized",
+		Runtime: productruntime.RuntimeStatus{
+			State: productruntime.RuntimeStateInitialized, InstanceID: instanceID,
+			Host: hostcontract.KindDesktop, Storage: productruntime.StorageStateHealthy, StartedAt: now,
+		},
+	}
+	var current atomic.Pointer[desktopcontrol.StatusResponse]
+	current.Store(&status)
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		if request.Method != http.MethodGet || request.URL.Path != "/api/v1/status" ||
 			request.Header.Get("Authorization") != "Bearer "+credential {
@@ -80,20 +91,7 @@ func TestStatusAndDoctorVerifyTheRealLocalControlAPI(t *testing.T) {
 			return
 		}
 		writer.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(writer).Encode(desktopcontrol.StatusResponse{
-			Generation:   instanceID,
-			Ready:        true,
-			APIVersion:   "v1",
-			ProductBuild: "test-build",
-			StatusKey:    "runtime.state.initialized",
-			Runtime: productruntime.RuntimeStatus{
-				State:      productruntime.RuntimeStateInitialized,
-				InstanceID: instanceID,
-				Host:       hostcontract.KindDesktop,
-				Storage:    productruntime.StorageStateHealthy,
-				StartedAt:  now,
-			},
-		})
+		_ = json.NewEncoder(writer).Encode(current.Load())
 	}))
 	defer server.Close()
 	layout, err := runtimepath.Default()
@@ -145,6 +143,37 @@ func TestStatusAndDoctorVerifyTheRealLocalControlAPI(t *testing.T) {
 		}
 		if command == "doctor" && !strings.Contains(stdout.String(), "vibermate run -- codex") {
 			t.Fatalf("doctor output lacks next action: %s", stdout.String())
+		}
+	}
+	for _, stopped := range []bool{false, true} {
+		updated := status
+		updated.Runtime.RecordingFailure = &productruntime.PersistenceFailure{
+			Operation: "usage", Reason: "write_failed", At: now,
+		}
+		wantCode := 0
+		if stopped {
+			wantCode = 1
+			updated.Ready = false
+			updated.StatusKey = "runtime.state.degraded"
+			updated.Runtime.State = productruntime.RuntimeStateDegraded
+			updated.Runtime.Storage = productruntime.StorageStateUnavailable
+			updated.Runtime.StorageFailure = &productruntime.PersistenceFailure{
+				Operation: "egress_complete", Reason: "timeout", At: now,
+			}
+		}
+		current.Store(&updated)
+		for _, command := range []string{"status", "doctor"} {
+			var stdout, stderr strings.Builder
+			code, key := execute([]string{command}, []string{"LANG=en_US.UTF-8"}, strings.NewReader(""), &stdout, &stderr)
+			output := stdout.String()
+			if code != wantCode || key != "" || stderr.Len() != 0 ||
+				!strings.Contains(output, "WARN") || !strings.Contains(output, "usage / write_failed") ||
+				strings.Contains(output, "PASS") || strings.Contains(output, "vibermate run -- codex") {
+				t.Fatalf("%s stopped=%t: code=%d key=%q output=%s stderr=%s", command, stopped, code, key, output, stderr.String())
+			}
+			if stopped && (!strings.Contains(output, "egress_complete / timeout") || !strings.Contains(output, now.Format(time.RFC3339))) {
+				t.Fatalf("core audit first cause missing: %s", output)
+			}
 		}
 	}
 }

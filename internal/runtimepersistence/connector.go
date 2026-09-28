@@ -20,8 +20,12 @@ var _ driver.Connector = (*sqliteConnector)(nil)
 func newSQLiteConnector(databasePath string, busyTimeout time.Duration) driver.Connector {
 	return &sqliteConnector{
 		driver: &sqlite.Driver{},
-		dsn:    sqliteDSN(databasePath, busyTimeout),
+		dsn:    sqliteDSN(databasePath, busyTimeout, false),
 	}
+}
+
+func newSQLiteReadConnector(databasePath string, busyTimeout time.Duration) driver.Connector {
+	return &sqliteConnector{driver: &sqlite.Driver{}, dsn: sqliteDSN(databasePath, busyTimeout, true)}
 }
 
 func (c *sqliteConnector) Connect(ctx context.Context) (driver.Conn, error) {
@@ -35,7 +39,7 @@ func (c *sqliteConnector) Driver() driver.Driver {
 	return c.driver
 }
 
-func sqliteDSN(databasePath string, busyTimeout time.Duration) string {
+func sqliteDSN(databasePath string, busyTimeout time.Duration, readOnly bool) string {
 	databaseURL := url.URL{
 		Scheme: "file",
 		Path:   databasePath,
@@ -43,8 +47,13 @@ func sqliteDSN(databasePath string, busyTimeout time.Duration) string {
 	query := databaseURL.Query()
 	query.Add("_pragma", "busy_timeout("+strconv.FormatInt(busyTimeout.Milliseconds(), 10)+")")
 	query.Add("_pragma", "foreign_keys(1)")
-	query.Add("_pragma", "journal_mode(WAL)")
-	query.Add("_pragma", "synchronous(NORMAL)")
+	if readOnly {
+		query.Set("mode", "ro")
+		query.Add("_pragma", "query_only(1)")
+	} else {
+		query.Add("_pragma", "journal_mode(WAL)")
+		query.Add("_pragma", "synchronous(NORMAL)")
+	}
 	query.Set("_dqs", "false")
 	query.Set("_error_rc", "true")
 	databaseURL.RawQuery = query.Encode()

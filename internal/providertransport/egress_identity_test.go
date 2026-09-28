@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/vibe-agi/vibermate/internal/egressnetwork"
+	"github.com/vibe-agi/vibermate/internal/egressprofile"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
 	"github.com/vibe-agi/vibermate/internal/providerauth"
 	"github.com/vibe-agi/vibermate/internal/secretstore"
@@ -45,6 +46,7 @@ func validRequestOptions(t *testing.T) RequestOptions {
 		Body:            []byte(`{"model":"gpt-provider-model"}`),
 		CredentialMode:  providerauth.CredentialManaged,
 		AccountRef:      testAccountRef(),
+		EgressProfile:   egressprofile.Direct(),
 		SecretRef:       secretRef,
 		AuthDriverRef:   providerauth.StaticHeaderDriverRef(),
 		WireProfile:     plan.wireProfile,
@@ -83,20 +85,22 @@ func TestAProviderRequestFreezesItsTrafficEgressPolicy(t *testing.T) {
 	t.Parallel()
 
 	options := validRequestOptions(t)
-	options.EgressPolicy = egressnetwork.Policy{
+	policy := egressnetwork.Policy{
 		Proxy: egressnetwork.ProxyPolicy{
 			Kind:     egressnetwork.ProxySOCKS5,
 			Endpoint: "PROXY.Example.:1080",
 		},
 		Resolver: egressnetwork.ResolverPolicy{Kind: egressnetwork.ResolverSystem},
 	}
+	want, err := policy.Normalize()
+	if err != nil {
+		t.Fatal(err)
+	}
+	options.AccountRef.EgressProfile = testAccountEgress()
+	options.AccountRef.EgressProfile.Policy = want
 	frozen, err := NewRequest(options)
 	if err != nil {
 		t.Fatalf("NewRequest(): %v", err)
-	}
-	want, err := options.EgressPolicy.Normalize()
-	if err != nil {
-		t.Fatal(err)
 	}
 	if frozen.EgressPolicy() != want || frozen.probeTarget.EgressPolicy != want {
 		t.Fatalf(

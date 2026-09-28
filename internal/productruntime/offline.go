@@ -157,6 +157,11 @@ func probeTargetIdentityKey(target offlinehold.ProbeTarget) string {
 		target.TLSServerName,
 		fmt.Sprintf("%020d", target.PlanRevision),
 		target.PlanDigest,
+		string(target.EgressPolicy.Proxy.Kind),
+		target.EgressPolicy.Proxy.Endpoint,
+		string(target.EgressPolicy.Resolver.Kind),
+		target.EgressPolicy.Resolver.DoHURL,
+		string(target.EgressPolicy.Resolver.Transport),
 	}, "\x00")
 }
 

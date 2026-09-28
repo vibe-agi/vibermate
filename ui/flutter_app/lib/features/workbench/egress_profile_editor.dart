@@ -60,19 +60,35 @@ final class EgressProfileButton extends StatelessWidget {
   );
 
   Future<void> _edit(BuildContext context) async {
-    final profile = await showDialog<EgressProfileRevision>(
+    final selection = await showEgressProfileSelection(
       context: context,
-      barrierDismissible: true,
-      builder: (context) => _EgressProfileSelectionDialog(
-        planId: plan.id,
-        initial: plan.egressProfile,
-        copy: copy,
-        loadProfiles: loadProfiles,
-      ),
+      selectionId: plan.id,
+      initial: plan.egressProfile,
+      copy: copy,
+      loadProfiles: loadProfiles,
     );
-    if (profile != null) onChanged(profile);
+    if (selection?.profile case final profile?) onChanged(profile);
   }
 }
+
+/// A null result is cancellation; a selected null profile means inheritance.
+Future<({EgressProfileRevision? profile})?> showEgressProfileSelection({
+  required BuildContext context,
+  required String selectionId,
+  required EgressProfileRevision? initial,
+  required AppCopy copy,
+  required EgressProfileLoader loadProfiles,
+  bool allowInheritance = false,
+}) => showDialog<({EgressProfileRevision? profile})>(
+  context: context,
+  builder: (_) => _EgressProfileSelectionDialog(
+    planId: selectionId,
+    initial: initial,
+    copy: copy,
+    loadProfiles: loadProfiles,
+    allowInheritance: allowInheritance,
+  ),
+);
 
 String egressProfileSummary(AppCopy copy, EgressProfileRevision profile) {
   if (profile.id == EgressProfileRevision.direct.id) {
@@ -104,12 +120,14 @@ final class _EgressProfileSelectionDialog extends StatefulWidget {
     required this.initial,
     required this.copy,
     required this.loadProfiles,
-  });
+    required this.allowInheritance,
+  }) : assert(initial != null || allowInheritance);
 
   final String planId;
-  final EgressProfileRevision initial;
+  final EgressProfileRevision? initial;
   final AppCopy copy;
   final EgressProfileLoader loadProfiles;
+  final bool allowInheritance;
 
   @override
   State<_EgressProfileSelectionDialog> createState() =>
@@ -119,7 +137,7 @@ final class _EgressProfileSelectionDialog extends StatefulWidget {
 final class _EgressProfileSelectionDialogState
     extends State<_EgressProfileSelectionDialog> {
   List<EgressProfileRevision> _profiles = const [];
-  late EgressProfileRevision _selected = widget.initial;
+  late EgressProfileRevision? _selected = widget.initial;
   bool _loading = true;
   bool _failed = false;
 
@@ -141,8 +159,7 @@ final class _EgressProfileSelectionDialogState
       if (!mounted) return;
       final profiles =
           <String, EgressProfileRevision>{
-            '${widget.initial.id}@${widget.initial.revision}': widget.initial,
-            for (final profile in catalog.items)
+            for (final profile in [?widget.initial, ...catalog.items])
               '${profile.id}@${profile.revision}': profile,
           }.values.toList(growable: false)..sort(
             (left, right) => left.displayName.compareTo(right.displayName),
@@ -196,16 +213,20 @@ final class _EgressProfileSelectionDialogState
               constraints: const BoxConstraints(maxHeight: 420),
               child: ListView.separated(
                 shrinkWrap: true,
-                itemCount: _profiles.length,
+                itemCount: _profiles.length + (widget.allowInheritance ? 1 : 0),
                 separatorBuilder: (_, _) => const Divider(height: 1),
                 itemBuilder: (context, index) {
-                  final profile = _profiles[index];
+                  final profile = widget.allowInheritance && index == 0
+                      ? null
+                      : _profiles[index - (widget.allowInheritance ? 1 : 0)];
                   final selected =
-                      profile.id == _selected.id &&
-                      profile.revision == _selected.revision;
+                      profile?.id == _selected?.id &&
+                      profile?.revision == _selected?.revision;
                   return ListTile(
                     key: Key(
-                      'environment-egress-profile-${profile.id}-${profile.revision}',
+                      profile == null
+                          ? 'account-egress-inherit'
+                          : 'environment-egress-profile-${profile.id}-${profile.revision}',
                     ),
                     onTap: () => setState(() => _selected = profile),
                     leading: Icon(
@@ -218,11 +239,15 @@ final class _EgressProfileSelectionDialogState
                           : context.viberColors.textFaint,
                     ),
                     title: Text(
-                      egressProfileSummary(copy, profile),
+                      profile == null
+                          ? copy('provider_accounts.egress.inherit')
+                          : egressProfileSummary(copy, profile),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                     ),
-                    subtitle: profile.id == EgressProfileRevision.direct.id
+                    subtitle: profile == null
+                        ? Text(copy('provider_accounts.egress.inherit.detail'))
+                        : profile.id == EgressProfileRevision.direct.id
                         ? null
                         : Text(
                             egressPolicySummary(copy, profile.policy),
@@ -244,7 +269,7 @@ final class _EgressProfileSelectionDialogState
         key: const Key('environment-egress-profile-save'),
         onPressed: _loading || _failed
             ? null
-            : () => Navigator.of(context).pop(_selected),
+            : () => Navigator.of(context).pop((profile: _selected)),
         child: Text(copy('common.save')),
       ),
     ],

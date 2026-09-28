@@ -119,7 +119,7 @@ func TestManagerRecoversMissingCredentialFailClosed(t *testing.T) {
 		ID: "anthropic-work", DisplayName: "Anthropic Work",
 		Origin: testEndpoints(t)[upstreamendpoint.AnthropicOfficialID].Origin, AssociationRevision: 1, RealmID: "anthropic.official",
 		Driver: providerauth.AnthropicAPIKeyDriverRef(), SecretRef: reference,
-		State: StateActive, Revision: 1, CreatedAt: now, UpdatedAt: now,
+		State: StateActive, Revision: 1, SettingsRevision: 1, CreatedAt: now, UpdatedAt: now,
 	}
 	manager, err := NewManager(
 		context.Background(),
@@ -202,6 +202,7 @@ func TestManagerPreparesCodexOAuthBeforeFreezingCredentialLease(t *testing.T) {
 	defer value.Destroy()
 	view, err := manager.Create(context.Background(), CreateCommand{
 		ID: "codex-work", DisplayName: "Codex Work",
+		AutomaticRefresh:   true,
 		UpstreamEndpointID: upstreamendpoint.ChatGPTOfficialID,
 		Driver:             providerauth.CodexOAuthDriverRef(), Secret: value,
 	})
@@ -242,8 +243,9 @@ func (preparer *rotatingCredentialPreparer) Prepare(
 	ctx context.Context,
 	driver providerauth.DriverRef,
 	reference secretstore.Reference,
-	revision secretstore.Revision,
+	scope providerauth.AccountRef,
 ) (secretstore.Revision, error) {
+	revision := secretstore.Revision(scope.CredentialEpoch)
 	preparer.calls++
 	preparer.receivedRevision = revision
 	if driver != providerauth.CodexOAuthDriverRef() {
@@ -1167,6 +1169,17 @@ func (repository *memoryRepository) WriteNote(_ context.Context, expected uint64
 	}
 	repository.accounts[candidate.ID] = candidate
 	return CommitResult{Outcome: CommitCommitted, Account: candidate, Actual: candidate.NoteRevision}, nil
+}
+
+func (repository *memoryRepository) WriteSettings(_ context.Context, expected uint64, candidate Account) (CommitResult, error) {
+	repository.mu.Lock()
+	defer repository.mu.Unlock()
+	current, exists := repository.accounts[candidate.ID]
+	if !exists || current.SettingsRevision != expected || current.Revision != candidate.Revision || current.AssociationRevision != candidate.AssociationRevision || current.NoteRevision != candidate.NoteRevision {
+		return CommitResult{Outcome: CommitConflict, Account: current, Actual: current.SettingsRevision}, nil
+	}
+	repository.accounts[candidate.ID] = candidate
+	return CommitResult{Outcome: CommitCommitted, Account: candidate, Actual: candidate.SettingsRevision}, nil
 }
 
 func (repository *memoryRepository) Load(_ context.Context, id ID) (Account, bool, error) {

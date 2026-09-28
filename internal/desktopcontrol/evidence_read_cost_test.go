@@ -86,6 +86,7 @@ func TestEvidencePointReadsDoNotReindexTheArchive(t *testing.T) {
 	for _, path := range []string{
 		"/api/v1/exchanges/exchange-read-cost",
 		"/api/v1/activities?conversationId=" + url.QueryEscape(conversation.ProjectionID),
+		"/api/v1/activities/summary?captureRunId=run-read-cost",
 	} {
 		response := httptest.NewRecorder()
 		application.ServeHTTP(response, httptest.NewRequest(http.MethodGet, path, nil))
@@ -96,6 +97,13 @@ func TestEvidencePointReadsDoNotReindexTheArchive(t *testing.T) {
 	if indexer.reindexes.Load() != 0 || indexer.identities.Load() != 2 {
 		t.Fatalf("point reads: reindexes=%d identities=%d", indexer.reindexes.Load(), indexer.identities.Load())
 	}
+	for _, query := range []string{"", "?limit=100", "?client=codex", "?sessionId=s", "?captureRunId=run-a&manualCaptureId=manual-a", "?captureRunId=run-a&captureRunId=run-b", "?captureRunId=run-a&client=codex&sessionId=s"} {
+		response := httptest.NewRecorder()
+		application.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/activities/summary"+query, nil))
+		if response.Code != http.StatusUnprocessableEntity {
+			t.Fatalf("invalid summary scope %q: %d", query, response.Code)
+		}
+	}
 	response := httptest.NewRecorder()
 	application.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/conversations?captureRunId=run-read-cost", nil))
 	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), "exchange-read-cost") {
@@ -103,6 +111,9 @@ func TestEvidencePointReadsDoNotReindexTheArchive(t *testing.T) {
 	}
 	if strings.Contains(response.Body.String(), "clientIdentity") {
 		t.Fatal("mismatched identity was attached to the old projection")
+	}
+	if !strings.Contains(response.Body.String(), `"contentAvailable":false`) {
+		t.Fatal("conversation directory did not report absent bodies")
 	}
 	select {
 	case <-indexer.started:

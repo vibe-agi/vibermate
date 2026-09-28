@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/vibe-agi/vibermate/internal/egressnetwork"
+	"github.com/vibe-agi/vibermate/internal/egressprofile"
 	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
 	"github.com/vibe-agi/vibermate/internal/originidentity"
@@ -205,15 +206,15 @@ func TestClientPassthroughPreservesClientCredentialsOnlyForExactOrigin(
 		WireProfile:       plan.wireProfile,
 		ClientProtocol:    wireprofile.ApplicationProtocolHTTP1,
 		ClientUserAgent:   "client-cli/1.0",
-		EgressPolicy: egressnetwork.Policy{
+		EgressProfile: egressprofile.ProfileRevision{ID: "profile.company", Revision: 3, DisplayName: "Company", PublishedAt: time.Unix(0, 0).UTC(), Policy: egressnetwork.Policy{
 			Proxy: egressnetwork.ProxyPolicy{
 				Kind:     egressnetwork.ProxySOCKS5,
 				Endpoint: "proxy.example:1080",
 			},
 			Resolver: egressnetwork.ResolverPolicy{
-				Kind: egressnetwork.ResolverSystem,
+				Kind: egressnetwork.ResolverSystem, Transport: egressnetwork.ResolverTransportDirect,
 			},
-		},
+		}},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -225,6 +226,10 @@ func TestClientPassthroughPreservesClientCredentialsOnlyForExactOrigin(
 	defer response.Body.Close()
 	request := transport.lastRequest()
 	dispatch := transport.lastDispatch()
+	decision := providerEgressDecision(frozen)
+	if decision.ProxyID != "profile.company" || decision.ProxyRevision != 3 || decision.AccountID != "" || decision.PolicyID != plan.provenance.environmentID.String() {
+		t.Fatalf("client passthrough audit lost configured exit: %+v", decision)
+	}
 	if secrets.readCount() != 0 ||
 		request.URL.RawQuery != "beta=true" ||
 		request.Header.Get("Authorization") != "Bearer client-oauth" ||
@@ -293,6 +298,7 @@ func TestClientPassthroughRejectsRedirectWithoutReturningLocationOrResponse(
 	t.Cleanup(action.Release)
 	frozen, err := NewRequest(RequestOptions{
 		RequestID:       "original-redirect",
+		EgressProfile:   egressprofile.Direct(),
 		ExchangeID:      "exchange-original-redirect",
 		ParentAttemptID: "attempt-original-redirect",
 		EgressAttemptID: "egress-original-redirect",
@@ -1384,6 +1390,7 @@ func testRequestProvenance(t *testing.T) RequestProvenance {
 func testAccountRef() providerauth.AccountRef {
 	return providerauth.AccountRef{
 		ID: "provider-account", Revision: 2, CredentialEpoch: 5, RealmID: "provider-realm",
+		SettingsRevision: 1, EgressProfile: egressprofile.Direct(),
 	}
 }
 

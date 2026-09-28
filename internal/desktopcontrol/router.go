@@ -19,6 +19,7 @@ type RouterOptions struct {
 	Application      *Handler
 	Bootstrap        http.Handler
 	CLIControl       http.Handler
+	CLIPrincipals    *controlprincipal.Authority
 	ManualCaptures   ManualCaptureHandler
 	DesktopPrincipal controlprincipal.Principal
 	ServerManagement http.Handler
@@ -39,6 +40,7 @@ type Router struct {
 	application      *Handler
 	bootstrap        http.Handler
 	cliControl       http.Handler
+	cliPrincipals    *controlprincipal.Authority
 	manualCaptures   ManualCaptureHandler
 	desktopPrincipal controlprincipal.Principal
 	serverManagement http.Handler
@@ -86,6 +88,7 @@ func NewRouter(options RouterOptions) (*Router, error) {
 		application:      options.Application,
 		bootstrap:        options.Bootstrap,
 		cliControl:       options.CLIControl,
+		cliPrincipals:    options.CLIPrincipals,
 		manualCaptures:   options.ManualCaptures,
 		desktopPrincipal: options.DesktopPrincipal,
 		serverManagement: options.ServerManagement,
@@ -114,6 +117,21 @@ func (router *Router) ServeHTTP(
 			return
 		}
 		router.bootstrap.ServeHTTP(writer, request)
+		return
+	}
+	// CLI discovery publishes a separate principal credential, not an App read
+	// token. It may inspect this one status resource without gaining access to
+	// account/history reads, mutation routes or browser-origin authority.
+	if request.Method == http.MethodGet && request.URL.Path == "/api/v1/status" &&
+		router.validCLIControlTransport(request) {
+		token, valid := takeBearerCapability(request)
+		principal, authenticated := router.cliPrincipals.Authenticate(request.Context(), token)
+		if !valid || !authenticated || principal.Kind() != controlprincipal.KindLocalCLI ||
+			len(request.Header.Values("X-Vibermate-Run-Capability")) != 0 {
+			writeProblem(writer, http.StatusUnauthorized, ReasonUnauthorized)
+			return
+		}
+		router.application.getStatus(writer, request)
 		return
 	}
 	// The verb chooses the authority here, because they are different acts on

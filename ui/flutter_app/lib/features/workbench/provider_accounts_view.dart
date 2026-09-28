@@ -14,6 +14,7 @@ import 'provider_account_token_details.dart';
 import 'provider_account_facts.dart';
 import 'workbench_controller.dart';
 import 'control_failure_notice.dart';
+import 'egress_profile_editor.dart';
 
 enum _ProviderAccountSort {
   defaultOrder,
@@ -320,12 +321,26 @@ final class _ProviderAccountsViewState extends State<ProviderAccountsView> {
         Text(copy(key), textAlign: align, style: style);
     return Container(
       color: context.viberColors.panelRaised,
-      padding: const EdgeInsets.fromLTRB(14, 9, 6, 9),
+      padding: const EdgeInsets.fromLTRB(14, 4, 6, 4),
       child: Row(
         children: [
           Expanded(flex: 30, child: label('provider_accounts.table.account')),
           const SizedBox(width: 16),
-          SizedBox(width: 128, child: label('provider_accounts.table.status')),
+          SizedBox(
+            key: const Key('provider-accounts-automatic-refresh-column'),
+            width: 128,
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Flexible(child: label('provider_accounts.automatic_refresh')),
+                ContextHelpButton(
+                  title: copy('provider_accounts.automatic_refresh'),
+                  message: copy('provider_accounts.automatic_refresh.detail'),
+                  dismissLabel: copy('common.dismiss'),
+                ),
+              ],
+            ),
+          ),
           const SizedBox(width: 16),
           Expanded(flex: 42, child: label('provider_accounts.table.quota')),
           const SizedBox(width: 16),
@@ -352,10 +367,6 @@ final class _ProviderAccountsViewState extends State<ProviderAccountsView> {
     final controller = widget.controller;
     final copy = widget.copy;
     final expanded = _expandedAccounts.contains(account.id);
-    final hasDetails =
-        _supportsQuota(account) ||
-        account.tokenInfo != null ||
-        account.kind == 'codex_oauth';
     final quota = _ProviderAccountQuotaSummary(
       account: account,
       controller: controller,
@@ -377,13 +388,18 @@ final class _ProviderAccountsViewState extends State<ProviderAccountsView> {
           quota: table ? quota : null,
           service: table ? service : null,
           detailsExpanded: expanded,
-          onToggleDetails: hasDetails
-              ? () => setState(() {
-                  if (!_expandedAccounts.remove(account.id)) {
-                    _expandedAccounts.add(account.id);
-                  }
-                })
-              : null,
+          onToggleDetails: () => setState(() {
+            if (!_expandedAccounts.remove(account.id)) {
+              _expandedAccounts.add(account.id);
+            }
+          }),
+          onAutomaticRefreshChanged: (enabled) => unawaited(
+            controller.setProviderAccountSettings(
+              account,
+              egressProfile: account.egressProfile,
+              automaticRefresh: enabled,
+            ),
+          ),
           onEditNote: () => unawaited(
             showProviderAccountNoteEditor(
               context,
@@ -446,6 +462,45 @@ final class _ProviderAccountsViewState extends State<ProviderAccountsView> {
                       copy: copy,
                       showQuotaWindows: false,
                     ),
+                  const Divider(height: 24),
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: ConstrainedBox(
+                      constraints: const BoxConstraints(maxWidth: 420),
+                      child: CompactLabeledControl(
+                        label: copy('provider_accounts.egress.label'),
+                        help: copy('provider_accounts.egress.detail'),
+                        dismissHelpLabel: copy('common.dismiss'),
+                        child: OutlinedButton(
+                          key: Key('account-egress-${account.id}'),
+                          onPressed: controller.inventoryMutating
+                              ? null
+                              : () => unawaited(_selectAccountEgress(account)),
+                          child: Row(
+                            children: [
+                              const Icon(Icons.alt_route_rounded, size: 16),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: Text(
+                                  account.egressProfile != null
+                                      ? egressProfileSummary(
+                                          copy,
+                                          account.egressProfile!,
+                                        )
+                                      : copy(
+                                          'provider_accounts.egress.inherit',
+                                        ),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                              const Icon(Icons.expand_more, size: 16),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
                 ],
               ),
             ),
@@ -507,12 +562,29 @@ final class _ProviderAccountsViewState extends State<ProviderAccountsView> {
     );
   }
 
+  Future<void> _selectAccountEgress(ProviderAccount account) async {
+    final selection = await showEgressProfileSelection(
+      context: context,
+      selectionId: account.id,
+      initial: account.egressProfile,
+      copy: widget.copy,
+      loadProfiles: widget.controller.egressProfiles,
+      allowInheritance: true,
+    );
+    if (!mounted || selection == null) return;
+    await widget.controller.setProviderAccountSettings(
+      account,
+      egressProfile: selection.profile,
+      automaticRefresh: account.automaticRefresh,
+    );
+  }
+
   void _scheduleQuotaLoads(List<ProviderAccount> accounts) {
     final eligible = accounts.where(_supportsQuota).toList(growable: false);
     final signature = eligible
         .map(
           (account) =>
-              '${account.id}:${account.credentialEpoch}:${account.credentialOrigin}',
+              '${account.id}:${account.credentialEpoch}:${account.settingsRevision}:${account.credentialOrigin}',
         )
         .join('|');
     if (signature == _quotaSignature) return;
@@ -850,11 +922,7 @@ final class _QuotaGauge extends StatelessWidget {
   Widget build(BuildContext context) {
     final colors = context.viberColors;
     final window = item.window;
-    final color = window.usedPercent >= 100
-        ? colors.danger
-        : window.usedPercent >= 90
-        ? colors.warning
-        : colors.route;
+    final color = accountQuotaUsageColor(colors, window.usedPercent);
     final duration = _quotaDuration(copy, window.windowSeconds);
     final windowLabel = window.windowSeconds == 0
         ? copy('account_facts.window_unknown')

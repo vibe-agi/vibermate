@@ -83,6 +83,37 @@ final class WorkbenchShell extends StatelessWidget {
   }
 
   Widget _body(AppCopy copy) {
+    return Column(
+      children: [
+        if (controller.runtimeStatus?.storageFailure case final failure?)
+          InlineNotice(
+            key: const Key('runtime-storage-failure'),
+            error: true,
+            message: copy.format('status.failure.storage', {
+              'operation': copy(
+                'status.failure.operation.${failure.operation}',
+              ),
+              'reason': copy('status.failure.reason.${failure.reason}'),
+              'at': failure.at.toUtc().toIso8601String(),
+            }),
+          ),
+        if (controller.runtimeStatus?.recordingFailure case final failure?)
+          InlineNotice(
+            key: const Key('runtime-recording-failure'),
+            message: copy.format('status.failure.recording', {
+              'operation': copy(
+                'status.failure.operation.${failure.operation}',
+              ),
+              'reason': copy('status.failure.reason.${failure.reason}'),
+              'at': failure.at.toUtc().toIso8601String(),
+            }),
+          ),
+        Expanded(child: _content(copy)),
+      ],
+    );
+  }
+
+  Widget _content(AppCopy copy) {
     if (controller.loading && controller.data == null) {
       return _LoadingView(copy: copy);
     }
@@ -204,7 +235,7 @@ final class _TitleBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final status = controller.data?.status;
+    final status = controller.runtimeStatus;
     return Container(
       height: ViberMetrics.toolbarHeight,
       color: context.viberColors.panel,
@@ -219,10 +250,15 @@ final class _TitleBar extends StatelessWidget {
           // the compact controls retain their tooltip and semantic labels.
           final compact = constraints.maxWidth < 1120;
           final narrow = constraints.maxWidth < 520;
-          final statusLabel = status?.healthy == true
+          final recordingDegraded = status?.recordingFailure != null;
+          final statusLabel = status?.storageFailure != null
+              ? copy('status.proxy_stopped')
+              : recordingDegraded && status?.healthy == true
+              ? copy('status.recording_degraded')
+              : status?.healthy == true
               ? copy('status.ready')
               : _runtimeStateLabel(copy, status?.state ?? 'starting');
-          final statusColor = status?.healthy == true
+          final statusColor = status?.healthy == true && !recordingDegraded
               ? context.viberColors.verified
               : context.viberColors.warning;
           return Row(
@@ -280,7 +316,7 @@ final class _TitleBar extends StatelessWidget {
                 compact: compact,
               ),
               const SizedBox(width: ViberSpacing.xs),
-              if (status?.healthy != true) ...[
+              if (status?.healthy != true || recordingDegraded) ...[
                 if (narrow)
                   Tooltip(
                     message: statusLabel,

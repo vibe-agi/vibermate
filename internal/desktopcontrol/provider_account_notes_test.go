@@ -35,7 +35,7 @@ func TestAccountNoteRequiresWriteScopeAndUsesIndependentCAS(t *testing.T) {
 	ref, _ := secretstore.ParseReference("secret://provider-account/noted")
 	now := time.Now().UTC()
 	accounts := &noteAccountControl{view: provideraccount.View{
-		Account: provideraccount.Account{ID: "noted", DisplayName: "Work", Origin: origin, AssociationRevision: 1, RealmID: "openai.platform", Driver: providerauth.StaticHeaderDriverRef(), SecretRef: ref, State: provideraccount.StateActive, Revision: 1, CreatedAt: now, UpdatedAt: now},
+		Account: provideraccount.Account{ID: "noted", DisplayName: "Work", Origin: origin, AssociationRevision: 1, RealmID: "openai.platform", Driver: providerauth.StaticHeaderDriverRef(), SecretRef: ref, State: provideraccount.StateActive, Revision: 1, SettingsRevision: 1, CreatedAt: now, UpdatedAt: now},
 		Health:  provideraccount.Health{State: provideraccount.HealthReady, CredentialEpoch: 5},
 	}}
 	handler := &Handler{accounts: accounts, idempotent: newIdempotencyCache()}

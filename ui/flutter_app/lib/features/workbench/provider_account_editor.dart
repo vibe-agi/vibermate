@@ -58,6 +58,7 @@ final class ProviderAccountRow extends StatelessWidget {
     required this.onDelete,
     this.onRefreshQuota,
     this.onEditNote,
+    this.onAutomaticRefreshChanged,
     this.quota,
     this.service,
     this.onToggleDetails,
@@ -73,6 +74,7 @@ final class ProviderAccountRow extends StatelessWidget {
   final VoidCallback onDelete;
   final VoidCallback? onRefreshQuota;
   final VoidCallback? onEditNote;
+  final ValueChanged<bool>? onAutomaticRefreshChanged;
   final Widget? quota;
   final Widget? service;
   final VoidCallback? onToggleDetails;
@@ -103,6 +105,80 @@ final class ProviderAccountRow extends StatelessWidget {
     final plan = oauth?.planType ?? account.tokenInfo?.planType;
     final showIdentity =
         accountIdentity != null && accountIdentity != account.displayName;
+    final healthStatus = Tooltip(
+      message: credentialLabel,
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.circle, size: 6, color: credentialColor),
+          const SizedBox(width: 6),
+          Flexible(
+            child: Text(
+              credentialLabel,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: Theme.of(
+                context,
+              ).textTheme.bodySmall?.copyWith(color: credentialColor),
+            ),
+          ),
+        ],
+      ),
+    );
+    final table = !compact && quota != null;
+    final status = account.supportsAutomaticRefresh
+        ? Row(
+            mainAxisSize: table ? MainAxisSize.max : MainAxisSize.min,
+            mainAxisAlignment: table
+                ? MainAxisAlignment.center
+                : MainAxisAlignment.start,
+            children: [
+              if (!table)
+                Text(
+                  copy('provider_accounts.automatic_refresh'),
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+              SizedBox(
+                key: Key('account-automatic-refresh-hit-${account.id}'),
+                width: 56,
+                height: compact ? 44 : 32,
+                child: Tooltip(
+                  message: copy('provider_accounts.automatic_refresh.detail'),
+                  excludeFromSemantics: true,
+                  child: Semantics(
+                    container: true,
+                    label:
+                        '${copy('provider_accounts.automatic_refresh')}: ${account.displayName}',
+                    child: Transform.scale(
+                      scale: .72,
+                      // Shrink the native drawing, not its pointer target.
+                      transformHitTests: false,
+                      child: Switch(
+                        key: Key('account-automatic-refresh-${account.id}'),
+                        value: account.automaticRefresh,
+                        onChanged: busy ? null : onAutomaticRefreshChanged,
+                        padding: EdgeInsets.zero,
+                        materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          )
+        : table
+        ? Center(
+            child: Tooltip(
+              message: copy('provider_accounts.automatic_refresh.unsupported'),
+              child: Text(
+                '—',
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  color: context.viberColors.textFaint,
+                ),
+              ),
+            ),
+          )
+        : const SizedBox.shrink();
     final actions = Row(
       mainAxisSize: MainAxisSize.min,
       children: [
@@ -161,32 +237,66 @@ final class ProviderAccountRow extends StatelessWidget {
     final identityBlock = Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Tooltip(
-          key: Key('account-kind-${account.id}'),
-          message: kindLabel,
-          child: Container(
-            width: 30,
-            height: 30,
-            alignment: Alignment.center,
-            decoration: BoxDecoration(
-              color: credentialColor.withValues(alpha: .12),
-              borderRadius: BorderRadius.circular(6),
+        Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Tooltip(
+              key: Key('account-kind-${account.id}'),
+              message: kindLabel,
+              child: Container(
+                width: 30,
+                height: 30,
+                alignment: Alignment.center,
+                decoration: BoxDecoration(
+                  color: credentialColor.withValues(alpha: .12),
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child: account.kind == 'codex_oauth'
+                    ? SvgPicture.asset(
+                        AgentIdentity.codex.assetPath,
+                        width: 20,
+                        height: 20,
+                        excludeFromSemantics: true,
+                      )
+                    : Icon(
+                        account.kind == 'anthropic_api_key'
+                            ? Icons.api_outlined
+                            : Icons.key_outlined,
+                        size: 16,
+                        color: credentialColor,
+                      ),
+              ),
             ),
-            child: account.kind == 'codex_oauth'
-                ? SvgPicture.asset(
-                    AgentIdentity.codex.assetPath,
-                    width: 20,
-                    height: 20,
-                    excludeFromSemantics: true,
-                  )
-                : Icon(
-                    account.kind == 'anthropic_api_key'
-                        ? Icons.api_outlined
-                        : Icons.key_outlined,
-                    size: 16,
-                    color: credentialColor,
+            if (plan != null && plan.isNotEmpty) ...[
+              const SizedBox(height: 4),
+              Tooltip(
+                message:
+                    '${copy('provider_accounts.token.plan')}: ${_planName(plan)}',
+                child: Container(
+                  key: Key('account-plan-${account.id}'),
+                  constraints: const BoxConstraints(minWidth: 30, maxWidth: 54),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 4,
+                    vertical: 1,
                   ),
-          ),
+                  decoration: BoxDecoration(
+                    color: context.viberColors.panelRaised,
+                    borderRadius: ViberMetrics.controlRadius,
+                  ),
+                  child: Text(
+                    _planName(plan),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    textAlign: TextAlign.center,
+                    style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                      color: context.viberColors.textMuted,
+                      height: 1.2,
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ],
         ),
         const SizedBox(width: 10),
         Expanded(
@@ -225,38 +335,10 @@ final class ProviderAccountRow extends StatelessWidget {
                     ],
                   ],
                 ),
-                if (showIdentity || plan != null) ...[
+                if (showIdentity) ...[
                   const SizedBox(height: 2),
                   Row(
                     children: [
-                      if (plan != null) ...[
-                        Tooltip(
-                          message:
-                              '${copy('provider_accounts.token.plan')}: ${_planName(plan)}',
-                          child: Container(
-                            constraints: const BoxConstraints(maxWidth: 80),
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 5,
-                              vertical: 1,
-                            ),
-                            decoration: BoxDecoration(
-                              color: context.viberColors.panelRaised,
-                              borderRadius: ViberMetrics.controlRadius,
-                            ),
-                            child: Text(
-                              _planName(plan),
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: Theme.of(context).textTheme.labelSmall
-                                  ?.copyWith(
-                                    color: context.viberColors.textMuted,
-                                    height: 1.2,
-                                  ),
-                            ),
-                          ),
-                        ),
-                        if (showIdentity) const SizedBox(width: 6),
-                      ],
                       if (showIdentity)
                         Expanded(
                           child: Tooltip(
@@ -287,6 +369,12 @@ final class ProviderAccountRow extends StatelessWidget {
                     ),
                   ),
                 ],
+                if (!account.supportsAutomaticRefresh ||
+                    !account.usable ||
+                    oauth?.state != 'ready') ...[
+                  const SizedBox(height: 4),
+                  healthStatus,
+                ],
               ],
             ),
           ),
@@ -297,46 +385,25 @@ final class ProviderAccountRow extends StatelessWidget {
       padding: const EdgeInsets.fromLTRB(14, 11, 6, 6),
       child: LayoutBuilder(
         builder: (context, constraints) {
-          if (!compact && quota != null) {
+          if (table) {
             return Row(
               crossAxisAlignment: CrossAxisAlignment.center,
               children: [
                 Expanded(flex: 30, child: identityBlock),
                 const SizedBox(width: 16),
-                SizedBox(
-                  width: 128,
-                  child: Semantics(
-                    label: credentialLabel,
-                    container: true,
-                    child: Row(
-                      children: [
-                        Icon(Icons.circle, size: 6, color: credentialColor),
-                        const SizedBox(width: 6),
-                        Expanded(
-                          child: Tooltip(
-                            message: credentialLabel,
-                            child: Text(
-                              credentialLabel,
-                              maxLines: 2,
-                              overflow: TextOverflow.ellipsis,
-                              style: Theme.of(context).textTheme.bodySmall
-                                  ?.copyWith(
-                                    color: credentialColor,
-                                    fontWeight: FontWeight.w500,
-                                  ),
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
+                SizedBox(width: 128, child: status),
                 const SizedBox(width: 16),
                 Expanded(flex: 42, child: quota!),
                 const SizedBox(width: 16),
                 SizedBox(width: 150, child: service),
                 const SizedBox(width: 8),
-                actions,
+                SizedBox(
+                  width: 128,
+                  child: Align(
+                    alignment: Alignment.centerRight,
+                    child: actions,
+                  ),
+                ),
               ],
             );
           }
@@ -353,13 +420,7 @@ final class ProviderAccountRow extends StatelessWidget {
                     runSpacing: 4,
                     crossAxisAlignment: WrapCrossAlignment.center,
                     alignment: WrapAlignment.spaceBetween,
-                    children: [
-                      InlineStatus(
-                        label: credentialLabel,
-                        color: credentialColor,
-                      ),
-                      actions,
-                    ],
+                    children: [status, actions],
                   ),
                 ),
               ],
@@ -369,7 +430,7 @@ final class ProviderAccountRow extends StatelessWidget {
             children: [
               Expanded(child: identityBlock),
               const SizedBox(width: 12),
-              InlineStatus(label: credentialLabel, color: credentialColor),
+              status,
               const SizedBox(width: 4),
               actions,
             ],

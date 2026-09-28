@@ -17,6 +17,7 @@ import (
 
 type activityRepository struct {
 	database   *sql.DB
+	reads      *sql.DB
 	operations *operationGate
 	identityMu sync.Mutex
 }
@@ -27,9 +28,10 @@ var _ activity.ConversationProjectionWriter = (*activityRepository)(nil)
 
 func newActivityRepository(
 	database *sql.DB,
+	reads *sql.DB,
 	operations *operationGate,
 ) *activityRepository {
-	return &activityRepository{database: database, operations: operations}
+	return &activityRepository{database: database, reads: reads, operations: operations}
 }
 
 func (repository *activityRepository) Append(
@@ -212,6 +214,14 @@ func (repository *activityRepository) ListExchanges(
 // The winner probe deliberately ignores scope, time and cursor: an old start
 // must never reappear after its completion moves to another page/conversation.
 func exchangePageQuery(request activity.PageRequest) (string, []any) {
+	query, arguments := exchangeCandidateQuery(request)
+	return query + " ORDER BY sequence DESC LIMIT ?", append(arguments, request.Limit+1)
+}
+
+// Both request pages and conversation summaries select the same lifecycle
+// winner. Keeping the IN predicate explicit is required for SQLite to use the
+// partial subject index; a kind equality alone makes each probe scan history.
+func exchangeCandidateQuery(request activity.PageRequest) (string, []any) {
 	query := `SELECT
 		     sequence, activity_id, occurred_at_unix_ms, kind,
 		     environment_id, environment_revision, environment_digest,
@@ -262,8 +272,8 @@ func exchangePageQuery(request activity.PageRequest) (string, []any) {
 		  AND winner.subject_id = candidate.subject_id
 		  AND ((winner.kind = 'exchange.completed' AND candidate.kind = 'exchange.started')
 		       OR (winner.kind = candidate.kind AND winner.sequence > candidate.sequence))
-	) ORDER BY sequence DESC LIMIT ?`
-	return query, append(arguments, request.Limit+1)
+	)`
+	return query, arguments
 }
 
 func (repository *activityRepository) GetExchange(
@@ -275,7 +285,7 @@ func (repository *activityRepository) GetExchange(
 		return activity.Record{}, err
 	}
 	defer finish()
-	rows, err := repository.database.QueryContext(
+	rows, err := repository.reads.QueryContext(
 		operation,
 		`SELECT
 		     sequence,
@@ -514,7 +524,7 @@ func (repository *activityRepository) getConversationIdentity(
 	var identity agentconversation.ClientIdentity
 	var observedAt int64
 	var protocolIDs, attributes string
-	err := repository.database.QueryRowContext(
+	err := repository.reads.QueryRowContext(
 		ctx,
 		`SELECT client_kind, session_id, session_resumable,
 		        actor_id, actor_label, actor_type, actor_is_subagent,
@@ -632,28 +642,62 @@ func (repository *activityRepository) ListConversations(
 		return activity.ConversationPage{}, err
 	}
 	defer finish()
-	rows, err := repository.database.QueryContext(
-		operation,
-		`WITH indexed_all AS (
-		   SELECT terminal.*
-		   FROM runtime_activities AS terminal
-		   WHERE terminal.kind = 'exchange.completed'
-		   UNION ALL
-		   SELECT started.*
-		   FROM runtime_activities AS started
-		   WHERE started.kind = 'exchange.started'
-		     AND NOT EXISTS (
-		       SELECT 1
-		       FROM runtime_activities AS terminal
-		       WHERE terminal.kind = 'exchange.completed'
-		         AND terminal.subject_id = started.subject_id
-		     )
-		 ), indexed AS (
-		   SELECT *
-		   FROM indexed_all
-		   WHERE (? = '' OR capture_run_id = ?)
-		     AND (? = '' OR manual_capture_id = ?)
-		 ), named AS (
+	query, arguments := conversationPageQuery(request)
+	rows, err := repository.reads.QueryContext(operation, query, arguments...)
+	if err != nil {
+		return activity.ConversationPage{}, fmt.Errorf("list Conversations: %w", err)
+	}
+	defer rows.Close()
+	page := activity.ConversationPage{Items: make([]activity.ConversationRecord, 0)}
+	for rows.Next() {
+		var firstOccurredAt int64
+		var preferredDisplayName string
+		var item activity.ConversationRecord
+		state := activityScanState{record: &item.Latest}
+		targets := []any{
+			&item.FirstSequence,
+			&firstOccurredAt,
+			&item.TurnCount,
+			&preferredDisplayName,
+		}
+		targets = append(targets, state.targets()...)
+		if err := rows.Scan(targets...); err != nil {
+			return activity.ConversationPage{}, fmt.Errorf("scan Conversation: %w", err)
+		}
+		latest, err := state.finish()
+		if err != nil {
+			return activity.ConversationPage{}, err
+		}
+		item.Latest = latest
+		item.FirstOccurredAt = fromUnixMillis(firstOccurredAt)
+		if item.Latest.Conversation == nil {
+			return activity.ConversationPage{}, errors.New("Conversation has no reference")
+		}
+		item.Conversation = *item.Latest.Conversation
+		// Identity evidence can deepen after a Conversation has started. Preserve
+		// the latest Activity as immutable evidence while the derived directory
+		// projection keeps the best observed operator-facing label.
+		item.Conversation.DisplayName = preferredDisplayName
+		if err := item.Validate(); err != nil {
+			return activity.ConversationPage{}, fmt.Errorf("validate Conversation: %w", err)
+		}
+		page.Items = append(page.Items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return activity.ConversationPage{}, fmt.Errorf("iterate Conversations: %w", err)
+	}
+	if len(page.Items) > request.Limit {
+		page.Items = page.Items[:request.Limit]
+		page.NextBeforeFirstSequence = page.Items[len(page.Items)-1].FirstSequence
+	}
+	return page, nil
+}
+
+func conversationPageQuery(request activity.ConversationIndexRequest) (string, []any) {
+	candidates, arguments := exchangeCandidateQuery(activity.PageRequest{
+		CaptureRunID: request.CaptureRunID, ManualCaptureID: request.ManualCaptureID,
+	})
+	query := `WITH indexed AS (` + candidates + `), named AS (
 		   SELECT conversation_projection_id,
 		          conversation_display_name,
 		          ROW_NUMBER() OVER (
@@ -712,62 +756,12 @@ func (repository *activityRepository) ListConversations(
 		 FROM selected
 		 ORDER BY first_sequence DESC,
 		          lower(preferred_display_name) ASC,
-		          conversation_projection_id ASC`,
-		request.CaptureRunID,
-		request.CaptureRunID,
-		request.ManualCaptureID,
-		request.ManualCaptureID,
+		          conversation_projection_id ASC`
+	return query, append(arguments,
 		request.BeforeFirstSequence,
 		request.BeforeFirstSequence,
 		request.Limit+1,
 	)
-	if err != nil {
-		return activity.ConversationPage{}, fmt.Errorf("list Conversations: %w", err)
-	}
-	defer rows.Close()
-	page := activity.ConversationPage{Items: make([]activity.ConversationRecord, 0)}
-	for rows.Next() {
-		var firstOccurredAt int64
-		var preferredDisplayName string
-		var item activity.ConversationRecord
-		state := activityScanState{record: &item.Latest}
-		targets := []any{
-			&item.FirstSequence,
-			&firstOccurredAt,
-			&item.TurnCount,
-			&preferredDisplayName,
-		}
-		targets = append(targets, state.targets()...)
-		if err := rows.Scan(targets...); err != nil {
-			return activity.ConversationPage{}, fmt.Errorf("scan Conversation: %w", err)
-		}
-		latest, err := state.finish()
-		if err != nil {
-			return activity.ConversationPage{}, err
-		}
-		item.Latest = latest
-		item.FirstOccurredAt = fromUnixMillis(firstOccurredAt)
-		if item.Latest.Conversation == nil {
-			return activity.ConversationPage{}, errors.New("Conversation has no reference")
-		}
-		item.Conversation = *item.Latest.Conversation
-		// Identity evidence can deepen after a Conversation has started. Preserve
-		// the latest Activity as immutable evidence while the derived directory
-		// projection keeps the best observed operator-facing label.
-		item.Conversation.DisplayName = preferredDisplayName
-		if err := item.Validate(); err != nil {
-			return activity.ConversationPage{}, fmt.Errorf("validate Conversation: %w", err)
-		}
-		page.Items = append(page.Items, item)
-	}
-	if err := rows.Err(); err != nil {
-		return activity.ConversationPage{}, fmt.Errorf("iterate Conversations: %w", err)
-	}
-	if len(page.Items) > request.Limit {
-		page.Items = page.Items[:request.Limit]
-		page.NextBeforeFirstSequence = page.Items[len(page.Items)-1].FirstSequence
-	}
-	return page, nil
 }
 
 func sameExchangeIdentity(left, right activity.Record) bool {
@@ -804,7 +798,7 @@ func (repository *activityRepository) list(
 		return activity.Page{}, err
 	}
 	defer finish()
-	rows, err := repository.database.QueryContext(
+	rows, err := repository.reads.QueryContext(
 		operation,
 		query,
 		arguments...,

@@ -47,6 +47,7 @@ final class _ProviderAccountFactsPanelState
     super.didUpdateWidget(oldWidget);
     if (oldWidget.account.id != widget.account.id ||
         oldWidget.account.credentialEpoch != widget.account.credentialEpoch ||
+        oldWidget.account.settingsRevision != widget.account.settingsRevision ||
         oldWidget.account.credentialOrigin != widget.account.credentialOrigin) {
       _generation++;
       _history = _Observation();
@@ -677,11 +678,7 @@ final class _ProviderAccountFactsPanelState
     String? name,
   }) {
     final colors = context.viberColors;
-    final color = window.usedPercent >= 100
-        ? colors.danger
-        : window.usedPercent >= 90
-        ? colors.warning
-        : colors.route;
+    final color = accountQuotaUsageColor(colors, window.usedPercent);
     final title = window.windowSeconds == 0
         ? copy('account_facts.window_unknown')
         : copy.format('account_facts.window_title', {
@@ -842,6 +839,142 @@ final class _ProviderAccountFactsPanelState
 }
 
 String _fullTime(DateTime time) => time.toLocal().toString().split('.').first;
+
+Color accountQuotaUsageColor(ViberColors colors, int percent) => percent >= 90
+    ? colors.danger
+    : percent >= 70
+    ? colors.warning
+    : colors.route;
+
+/// Keep the provider's main bucket separate from model-specific quotas. An
+/// ambiguous multi-bucket response has no comparable account-wide percentage.
+List<AccountQuotaWindow> accountQuotaWindows(AccountFacts? facts) {
+  if (facts == null || !{'known', 'stale'}.contains(facts.state)) {
+    return const [];
+  }
+  final main =
+      facts.limits.where((limit) => limit.id == 'codex').firstOrNull ??
+      (facts.limits.length == 1 ? facts.limits.single : null);
+  return [?main?.primary, ?main?.secondary]
+    ..sort((left, right) => right.windowSeconds.compareTo(left.windowSeconds));
+}
+
+String accountQuotaCountdown(DateTime reset, DateTime now, AppCopy copy) {
+  final remaining = reset.difference(now);
+  if (remaining <= Duration.zero) return copy('account_facts.reset_due');
+  if (remaining.inDays > 0) {
+    return '${remaining.inDays}d${remaining.inHours % 24}h';
+  }
+  if (remaining.inHours > 0) {
+    return '${remaining.inHours}h${remaining.inMinutes % 60}m';
+  }
+  return remaining.inMinutes > 0 ? '${remaining.inMinutes}m' : '<1m';
+}
+
+/// Two independent quota windows, not a blended account percentage.
+final class ProviderAccountQuotaMini extends StatelessWidget {
+  const ProviderAccountQuotaMini({
+    required this.facts,
+    required this.loading,
+    required this.failed,
+    required this.copy,
+    super.key,
+  });
+  final AccountFacts? facts;
+  final bool loading, failed;
+  final AppCopy copy;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.viberColors;
+    final windows = accountQuotaWindows(facts);
+    final stale = failed || facts?.state == 'stale';
+    final now = DateTime.now();
+    final caption = Theme.of(
+      context,
+    ).textTheme.bodySmall?.copyWith(color: colors.textMuted);
+    if (windows.isEmpty) {
+      return Text(
+        copy(
+          failed
+              ? 'account_facts.failed'
+              : loading
+              ? 'account_facts.loading'
+              : 'account_facts.unavailable',
+        ),
+        style: caption,
+      );
+    }
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        for (final window in windows)
+          Padding(
+            padding: const EdgeInsets.only(top: 4),
+            child: Tooltip(
+              message:
+                  '${copy.format('account_facts.resets', {'time': _fullTime(window.resetAt)})}\n'
+                  '${copy.format('account_facts.observed', {'time': _fullTime(facts!.observedAt)})}',
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          '${_compactQuotaPeriod(window.windowSeconds)} · ${window.usedPercent}%',
+                          style: monoStyle.copyWith(
+                            fontSize: 11,
+                            color: accountQuotaUsageColor(
+                              colors,
+                              window.usedPercent,
+                            ),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 6),
+                      Text(
+                        accountQuotaCountdown(window.resetAt, now, copy),
+                        style: monoStyle.copyWith(
+                          fontSize: 11,
+                          color: window.resetAt.isAfter(now)
+                              ? colors.textMuted
+                              : colors.warning,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 3),
+                  ExcludeSemantics(
+                    child: LinearProgressIndicator(
+                      value: (window.usedPercent / 100).clamp(0, 1),
+                      minHeight: 2,
+                      color: accountQuotaUsageColor(colors, window.usedPercent),
+                      backgroundColor: colors.dividerSoft,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        if (stale)
+          Text(
+            copy('account_facts.stale'),
+            style: caption?.copyWith(color: colors.warning),
+          ),
+        if ((facts?.limits.length ?? 0) > 1)
+          Text(copy('account_facts.additional_limits'), style: caption),
+      ],
+    );
+  }
+}
+
+String _compactQuotaPeriod(int seconds) {
+  for (final (size, unit) in [(86400, 'd'), (3600, 'h'), (60, 'm')]) {
+    if (seconds > 0 && seconds % size == 0) return '${seconds ~/ size}$unit';
+  }
+  return seconds > 0 ? '${seconds}s' : '—';
+}
 
 String _shortTime(DateTime time) {
   final local = time.toLocal();

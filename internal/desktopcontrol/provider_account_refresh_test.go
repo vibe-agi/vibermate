@@ -43,7 +43,7 @@ func TestManualCredentialRefreshIsOwnerScopedIdempotentAndBodyless(t *testing.T)
 	accounts := &refreshAccountControl{view: provideraccount.View{
 		Account: provideraccount.Account{ID: "managed", DisplayName: "Managed", Origin: origin,
 			AssociationRevision: 1, RealmID: "realm.chatgpt", Driver: providerauth.CodexOAuthDriverRef(),
-			SecretRef: ref, State: provideraccount.StateActive, Revision: 1, CreatedAt: now, UpdatedAt: now},
+			SecretRef: ref, State: provideraccount.StateActive, Revision: 1, SettingsRevision: 1, CreatedAt: now, UpdatedAt: now},
 		Health: provideraccount.Health{State: provideraccount.HealthReady, CredentialEpoch: 2},
 	}}
 	handler := &Handler{accounts: accounts, codexOAuth: refreshInspector{}, idempotent: newIdempotencyCache()}

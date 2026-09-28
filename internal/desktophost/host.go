@@ -471,6 +471,7 @@ func Start(ctx context.Context, options Options) (*Host, error) {
 		Application:      application,
 		Bootstrap:        bootstrapAuthority,
 		CLIControl:       captureHandler,
+		CLIPrincipals:    cliControl,
 		ManualCaptures:   manualCaptureHandler,
 		DesktopPrincipal: desktopPrincipal,
 		ServerManagement: func() http.Handler {

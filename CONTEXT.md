@@ -68,6 +68,14 @@ _Avoid_: Client Session, Capture, Provider session
 A managed Capture created for one launched client process. It freezes the Runtime User, Client Device, Workspace, and Environment authority used by every Exchange it observes.
 _Avoid_: Client Session, Conversation, login
 
+**Launch Context**:
+The display facts observed when a Capture Run begins, including its local user, operating environment and optional Git project and branch. It is neither device registration nor evidence of caller or filesystem authority.
+_Avoid_: Device identity, current workspace state, telemetry event
+
+**Git Project**:
+A repository grouping for observed usage, shared by clones with the same established remote identity. Without an established remote identity, the grouping is confined to one local clone on one Client Device; it never identifies a person or grants access to a repository.
+_Avoid_: Directory name, Workspace, Git author, Runtime User
+
 **Manual Proxy Login**:
 An owner-created Capture authority for a client that connects to ViberMate with a dedicated, revocable proxy credential. It is separate from the owner's Web Session and freezes the selected Environment without asserting a verified client or Workspace identity.
 _Avoid_: Web login, Login Session, shared proxy password
@@ -109,8 +117,20 @@ An explicit permission for one Upstream Endpoint to use one compatible Account. 
 _Avoid_: Account copy, Account ownership, credential rotation
 
 **OAuth Account Connection**:
-One Account credential lifecycle whose access token, rotating refresh token, provider account identity, and provider routing flags are stored and replaced as one versioned secret snapshot. ViberMate is the sole refresh owner while the connection is active; an imported provider file is one-time bootstrap input, not shared live state.
+One Account credential lifecycle whose access token, rotating refresh token, provider account identity, and provider routing flags form one versioned secret snapshot. Rotation is governed by Account Automatic Refresh or an explicit owner action; an imported provider file is one-time bootstrap input, not shared live state.
 _Avoid_: Login Session, Web Session, synced auth file, bearer string
+
+**Account Runtime Settings**:
+An Account's independently revisioned egress and automatic-refresh choices, shared by every authorized use of that Account. A new credential lease freezes these settings without changing the Account identity authorized by a published Route or rewriting an in-flight lease.
+_Avoid_: Account Link, credential epoch, Capture override
+
+**Account Automatic Refresh**:
+The owner's permission for ViberMate to rotate an Account's renewable credential without another explicit action. Disabling it preserves valid credentials and the owner's ability to request one manual refresh.
+_Avoid_: Quota refresh, login state, Account activation
+
+**Account Egress**:
+An Account's optional, published network-exit choice, which takes precedence over the Traffic Path's Egress Policy for every operation using that Account. No Account Egress means inheritance, whereas an explicitly selected direct exit is an override.
+_Avoid_: Endpoint origin, Account Link, per-Agent proxy
 
 **Account Header Policy**:
 The exact Header deletions and assignments applied to every Endpoint request authenticated by one Account. Authentication presets are protected assignments within this policy, not provider inference.
@@ -149,7 +169,7 @@ A published fail-closed JavaScript decision that selects exactly one Account fro
 _Avoid_: Transform Policy, load balancer, fallback
 
 **Traffic Path**:
-One Client Flow resolved to either its Original Destination or one selected Upstream Route. Egress and Transform Policies attach to this exact path rather than to a provider name or Runtime Server.
+One Client Flow resolved to either its Original Destination or one selected Upstream Route. Transform Policy and the default Egress Policy attach to this exact path; an authenticated operation may override the latter with Account Egress.
 _Avoid_: Account, Endpoint, network connection
 
 **Launch Environment Policy**:
@@ -157,7 +177,7 @@ The exact environment-variable deletions and assignments an Environment supplies
 _Avoid_: Server environment, Route environment, shell profile
 
 **Egress Policy**:
-The second-hop network and name-resolution authority used by one Traffic Path to reach its destination. It never changes the destination identity recorded by the Route or Original Destination.
+The second-hop network and name-resolution authority used by one outbound operation to reach its destination, inherited from the Traffic Path unless Account Egress overrides it. It never changes the destination identity recorded by the Route or Original Destination.
 _Avoid_: Runtime Server, capture proxy, Endpoint
 
 **Transform Policy**:
