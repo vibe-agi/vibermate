@@ -4,11 +4,12 @@ This matrix separates what users can install from work that exists only in
 source. A passing unit test, an isolated development branch, and a published
 product are not interchangeable evidence.
 
-Source package version: **0.1.16**. Latest published release: **v0.1.15**.
+Source package version: **0.1.16**. Latest published release: **v0.1.16**.
 
 The 0.1.16 account egress/refresh settings, unified Git launch context, complete
-paginated reports, recording-failure isolation and sleep recovery remain
-**Branch-only** until that version is published. Existing 0.1.15 data requires
+paginated reports, recording-failure isolation and sleep recovery are
+[released](https://github.com/vibe-agi/vibermate/releases/tag/v0.1.16).
+Upstream-specific OAuth and quota interfaces remain experimental. Existing 0.1.15 data requires
 the explicit private backup and [offline conversion](../tool/convert-v1/README.md)
 before switching to the current v1 Runtime; there is no startup migration.
 
@@ -24,8 +25,8 @@ before switching to the current v1 Runtime; there is no startup migration.
 
 | Capability ID | Status | Current boundary |
 | --- | --- | --- |
-| `macos-app` | Released | macOS 14+ Universal App for Apple silicon and Intel. The exact v0.1.15 DMG passed Developer ID signing, Apple notarization/stapling, Gatekeeper, and two isolated installed-App launches in the [protected release run](https://github.com/vibe-agi/vibermate/actions/runs/36336905828). That result applies to the tagged artifact, not later source commits. |
-| `linux-server-web` | Released | Native Runtime Server, CLI, and Web workbench archives for Linux x86-64 and ARM64. |
+| `macos-app` | Released | macOS 14+ Universal App for Apple silicon and Intel. The exact v0.1.16 DMG passed Developer ID signing, Apple notarization/stapling, Gatekeeper, and two isolated installed-App launches in the [protected release run](https://github.com/vibe-agi/vibermate/actions/runs/36445659545). That result applies to the tagged artifact, not later source commits. |
+| `linux-server-web` | Released | Native Runtime Server, CLI, and Web workbench archives for Linux x86-64 and ARM64; both v0.1.16 archives passed the [Linux build and verification run](https://github.com/vibe-agi/vibermate/actions/runs/36448077038). |
 | `docker-server-web` | Released | The same Runtime Server and Web workbench can run from the versioned Docker/Compose files; Docker does not create a separate account or certificate model. |
 | `local-web-http` | Released | Native or container Web on loopback HTTP; no domain or certificate is required. |
 | `remote-web-tls` | Released | Explicit private-CA DNS/IP identity, automatic public-domain HTTPS, or operator-provided certificate files. Server HTTPS identity remains separate from the Proxy CA except in the explicitly selected private-CA mode. |
@@ -38,7 +39,7 @@ before switching to the current v1 Runtime; there is no startup migration.
 | --- | --- | --- |
 | `managed-claude-codex` | Released | `vibermate run` starts recognized Claude Code or Codex CLI processes through a local App or an explicitly selected Server. Release evidence is version- and path-specific; it is not a claim that every future client build is compatible. |
 | `provider-static-credentials` | Released | Upstream API credentials are managed independently from Runtime User login and are injected only after route selection. |
-| `codex-oauth` | Experimental | OAuth login and `auth.json` import use one managed Codex credential format, automatic preparation, and explicit manual refresh. ViberMate becomes the refresh owner for the imported copy; continuing to refresh the original file can invalidate either copy. This is not an official OpenAI integration or a stable public API contract. |
+| `codex-oauth` | Experimental | OAuth login and `auth.json` import use one managed Codex credential format and explicit manual refresh. Auto refresh defaults off for new imports and on for OAuth-created accounts; replacing credentials preserves the account's setting. When enabled, ViberMate owns refresh for its copy; refreshing the original file can invalidate either copy. This is not an official OpenAI integration or a stable public API contract. |
 | `codex-quota-history` | Experimental | An Owner may explicitly query the selected managed Codex account's upstream quota and, when separately authorized, history. These observations are not ViberMate traffic statistics or billing authority. |
 | `codex-reset-credit` | Experimental | An Owner can inspect and explicitly consume one selected banked reset credit through a confirmed, idempotent management operation. This depends on an upstream compatibility contract and never purchases a paid instant reset. |
 | `native-cli-identity-rewrite` | Unsupported | Routing an upstream account changes the actual request credentials. It does not rewrite the CLI's local `auth.json`, local profile, or every native `/status` identity field. |
