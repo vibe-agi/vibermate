@@ -98,10 +98,14 @@ Chrome 原生 UI 实际确认：
 
 测试标签已关闭，独立 Server 正常退出，测试专用 Go 包已移到私有临时目录，不进入正式源码或候选包。
 
-剩余门禁：最终原生切换、签名和发布。
+后续原生切换、签名和发布结果见本文末尾；以上按各轮实际验证时间记录。
 
 ## 发布 CI 的规模与竞态分工
 
 首次全量远端 `-race` 暴露测试配置问题：12k 生命周期查询的 2 秒性能预算超时，300k 生命周期规模检查耗尽该包的默认 10 分钟预算；日志没有数据竞争报告。相同本机 12k 查询普通执行 43.2 ms、竞态插桩执行 1.74 s，100,001 请求普通汇总 1.27 s，单请求会话 0.20 ms。纯 Go SQLite 的每次内存访问也被插桩，不能将该耗时当作发布二进制性能。
 
-CI race 改用已有的 `-short` 约定；仅三个批量规模／计时夹具（12k 生命周期、300k 生命周期、100k 用量）不参与插桩。普通 `unit` 和 `contracts` 仍不带 `-short`，保留原规模、数量、分页和性能断言。读取不占写连接、并发写入与快照失效、会话权限及金额正确性等功能检查继续参加 race，未改生产查询或放宽普通性能门限。定向功能 race 本机通过；最终远端完整 race 结果仍需等待。
+CI race 改用已有的 `-short` 约定；仅三个批量规模／计时夹具（12k 生命周期、300k 生命周期、100k 用量）不参与插桩。普通 `unit` 和 `contracts` 仍不带 `-short`，保留原规模、数量、分页和性能断言。读取不占写连接、并发写入与快照失效、会话权限及金额正确性等功能检查继续参加 race，未改生产查询或放宽普通性能门限。
+
+最终本机 `go test -race -short -count=1 ./...` 全部通过；三个普通规模检查再次通过。PR [#24](https://github.com/vibe-agi/vibermate/pull/24) 的 [PR CI](https://github.com/vibe-agi/vibermate/actions/runs/36443553992) 和 [push CI](https://github.com/vibe-agi/vibermate/actions/runs/36443547314) 各八项全部通过；合并后的 [main CI](https://github.com/vibe-agi/vibermate/actions/runs/36445610595) 也全部通过。包括普通全量规模、功能 race、Flutter 671 项／16 条既有条件跳过、Chrome、原生偏好边界及包内 CLI/daemon 检查。发布构建中的 UI 版本常量已统一为 0.1.16 build 18，相关五项版本检查通过。
+
+正式标签 `v0.1.16` 冻结在 `7eb2c196a9383790dc9f02800c6d4c3ee3ec2ac1`；签名、公证及两次隔离安装验收见 [正式发布流程](https://github.com/vibe-agi/vibermate/actions/runs/36445659545)。[Release](https://github.com/vibe-agi/vibermate/releases/tag/v0.1.16) 已发布；用户授权的两份本机 App 与数据目录切换结果见 [离线转换记录](2026-09-28-offline-conversion-review.md)。没有启动用户 App，也不把跳时／合成上游检查描述成真实 12 小时休眠或公网账号验收。

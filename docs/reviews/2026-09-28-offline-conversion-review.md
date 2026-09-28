@@ -1,9 +1,10 @@
 # Offline conversion and independent candidate — 2026-09-28
 
-Scope: VIBERMATE-45, still in progress. The stopped user's full private data
-directory has now been backed up and converted into a separate target. The
-original remains unchanged; no data-directory cutover, installed App replacement,
-GUI launch, release or Homebrew mutation has occurred.
+Scope: VIBERMATE-45. The authorized final cutover is complete: both App locations
+use signed/notarized 0.1.16 build 18, and the selected data directory is a fresh,
+verified current-v1 conversion. The original data and old Apps are retained;
+the user's App was not launched. Historical rehearsal entries below retain their
+original timing and do not supersede the final receipt at the end.
 
 ## Architecture and preservation
 
@@ -163,7 +164,7 @@ additional database conversion is needed. No App preference points at the new ta
 If the old Runtime writes again before cutover, re-check and take a fresh full
 backup/conversion: this target must not replace newer source records.
 
-## Remaining gates
+## Pre-cutover coordination
 
 The final pre-cutover recheck found the source database no longer matched the
 14:12 receipt, so that target was not selected. A new complete private conversion
@@ -195,5 +196,63 @@ renames Keychain items.
 - Final clean-source candidate with the intended release/build number, native
   App acceptance, signing/notarization and release/Homebrew verification.
 
-No success claim here covers these pending gates. Operator usage and rollback
-constraints: [conversion instructions](../../tool/convert-v1/README.md).
+These were pending at that checkpoint; completion evidence follows. Operator
+usage and rollback constraints: [conversion instructions](../../tool/convert-v1/README.md).
+
+## Final authorized cutover — 2026-09-29 Asia/Singapore
+
+The old source changed again while formal release checks were running, so neither
+earlier target was selected. A final full private conversion completed at
+`2026-09-28T15:58:21.711508Z`, with all 107 historical raw-writer sessions closed.
+The byte differences did not establish their cause; no cause is inferred here.
+
+- Private parent: `/Users/null/Library/Application Support/ViberMate-v1-final-20260928.Rsrnja`.
+- Separate `backup` and `converted` directories; receipt at `converted/conversion.json`.
+- Source and backup database SHA-256:
+  `7a5de87f31f1f3298bb38b96a89f75c58111af5200920ce83e6337af8953295f`.
+- Converted database SHA-256:
+  `ed2fb1bb646b1e5e2b65cdcb1de44503d3cdf1228f3e626d3cd21edab9de3b61`.
+- Current baseline remains `aca772a7d57e0a0e22584f7ab9427db9fbe5a57f5edf6f6ba722f212afb72897`.
+- Preserved counts/values: 6 accounts, 64 runs/assignments, 6,529 usage rows,
+  13,186 activities, 178,826 connection events, 22,023 attempts, 6,589 identities,
+  and all retained content/raw evidence. Only the previously verified two empty
+  selection rows and one metadata row were retired in the new target.
+
+Immediately before replacement, process/open-file checks found no App, daemon or
+source database owner, and source/backup hashes still matched. Old Apps were
+moved to `apps/Applications-ViberMate.app` and `apps/Dist-ViberMate.app` under the
+private parent; the exact signed package replaced `/Applications/ViberMate.app`
+and repository `dist/ViberMate.app`. Both installed bundles passed the existing
+live bundle verifier and report 0.1.16 build 18.
+
+The mode-0600 `io.vibermate.desktop.storage.json` was atomically installed with
+schema `vibermate-storage-v1`, selecting only the final `converted` directory.
+It had been absent; no `previous` fallback was added. Post-cutover source,
+backup and target hashes still matched the receipt, and process checks confirmed
+that no user App or Runtime had been started. Keychain was not read or changed.
+The mounted installer and empty staging directories were removed; all backups,
+old Apps and original data remain. A private `RESTORE.md` records the coordinated
+old-App/old-data rollback boundary; it does not merge future new-format writes.
+
+### Formal artifact and publication evidence
+
+- Source/tag: `v0.1.16` at `7eb2c196a9383790dc9f02800c6d4c3ee3ec2ac1`, merged by
+  [PR #24](https://github.com/vibe-agi/vibermate/pull/24).
+- [Protected Universal release run](https://github.com/vibe-agi/vibermate/actions/runs/36445659545):
+  all five jobs passed, including clean-source/SBOM evidence, Developer ID signing,
+  Apple Accepted/stapled notarization and two isolated installed-App launches.
+- Local source/payload ledger and signed-installation evidence verifiers passed;
+  `stapler validate`, Gatekeeper DMG/App assessment and staged bundle checks passed.
+- DMG SHA-256: `505256cd0b7c3d06de4a44ead2b6faf64ee96c2f4bc2ee8e00bb575788cd5e5c`.
+- [Linux release run](https://github.com/vibe-agi/vibermate/actions/runs/36448077038):
+  x86-64 and ARM64 build/verification passed. Both archive checksums, the DMG and
+  SBOM matched their published checksum manifests.
+- [v0.1.16 Release](https://github.com/vibe-agi/vibermate/releases/tag/v0.1.16)
+  published at `2026-09-28T16:08:49Z`, with six public assets and no private data
+  or private signing evidence.
+- [Homebrew PR #9](https://github.com/vibe-agi/homebrew-tap/pull/9) passed all four
+  jobs in [tap CI](https://github.com/vibe-agi/homebrew-tap/actions/runs/36449002767),
+  including strict online cask audit, installation, codesign/Gatekeeper and
+  uninstall. It merged as `5546faf2b4f255fa89d32af64d83aa908f387f80` at
+  `2026-09-28T16:12:27Z`; the cask pins the published DMG hash and warns existing
+  installations to perform the offline conversion before opening the new App.
