@@ -54,7 +54,7 @@ const captureRunColumns = `
 	created_at_unix_ms,
 	expires_at_unix_ms,
 	updated_at_unix_ms,
-	COALESCE((SELECT git_json FROM capture_run_projects p WHERE p.run_id=capture_runs.run_id),'')`
+	git_json`
 
 type captureRunRepository struct {
 	database   *sql.DB
@@ -93,6 +93,10 @@ func (repository *captureRunRepository) Create(
 	record capturerun.DurableRecord,
 ) error {
 	if err := record.Validate(); err != nil {
+		return err
+	}
+	gitJSON, err := json.Marshal(record.Runtime.GitAtLaunch)
+	if err != nil {
 		return err
 	}
 	operation, finish, err := repository.operations.begin(ctx)
@@ -147,9 +151,10 @@ func (repository *captureRunRepository) Create(
 		     recognition,
 		     created_at_unix_ms,
 		     expires_at_unix_ms,
-		     updated_at_unix_ms
+		     updated_at_unix_ms,
+		     git_json
 		 )
-		 SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+		 SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
 		 WHERE ? IS NULL OR EXISTS (
 		   SELECT 1 FROM runtime_user_login_sessions s JOIN runtime_users u ON u.user_id = s.user_id
 		    WHERE s.session_id = ? AND u.user_id = ? AND u.state = 'active'
@@ -191,6 +196,7 @@ func (repository *captureRunRepository) Create(
 		toUnixMillis(record.CreatedAt),
 		toUnixMillis(record.ExpiresAt),
 		toUnixMillis(record.UpdatedAt),
+		string(gitJSON),
 		nullableText(string(record.RuntimeUserID)), string(record.LoginSessionID),
 		string(record.RuntimeUserID), toUnixMillis(record.CreatedAt),
 	)
@@ -201,15 +207,6 @@ func (repository *captureRunRepository) Create(
 		return err
 	} else if affected != 1 {
 		return capturerun.ErrCapabilityRejected
-	}
-	if record.Runtime.GitAtLaunch != nil {
-		data, err := json.Marshal(record.Runtime.GitAtLaunch)
-		if err != nil {
-			return err
-		}
-		if _, err := tx.ExecContext(operation, `INSERT INTO capture_run_projects VALUES(?,?)`, record.ID, string(data)); err != nil {
-			return err
-		}
 	}
 	return tx.Commit()
 }
@@ -309,21 +306,23 @@ func (repository *captureRunRepository) Heartbeat(
 	now time.Time,
 	expiresAt time.Time,
 ) (capturerun.DurableRecord, error) {
+	// Expiry withdraws the proxy lease, not the supervisor's right to renew it.
+	// Only an already attached process with its original control capability and
+	// still-active login may resume. Finished/revoked/deleted runs stay closed.
 	return repository.updateAndRead(
 		ctx,
 		runID,
 		digest,
 		`UPDATE capture_runs
-		 SET expires_at_unix_ms = ?, updated_at_unix_ms = ?
+		 SET state = 'attached', expires_at_unix_ms = ?, updated_at_unix_ms = ?
 		 WHERE run_id = ?
 		   AND control_capability_hash = ?
-		   AND state = 'attached'
-		   AND expires_at_unix_ms > ? AND `+captureRunIdentityActive,
+		   AND state IN ('attached', 'expired') AND process_id > 0
+		   AND `+captureRunIdentityActive,
 		toUnixMillis(expiresAt),
 		toUnixMillis(now),
 		runID,
 		digest[:],
-		toUnixMillis(now),
 		toUnixMillis(now),
 	)
 }
@@ -345,14 +344,10 @@ func (repository *captureRunRepository) Finish(
 		 SET state = 'finished', updated_at_unix_ms = ?
 		 WHERE run_id = ?
 		   AND control_capability_hash = ?
-		   AND (
-		       state = 'finished' OR
-		       (state IN ('created', 'attached') AND expires_at_unix_ms > ?)
-		   )`,
+		   AND state IN ('created', 'attached', 'expired', 'finished')`,
 		toUnixMillis(now),
 		runID,
 		digest[:],
-		toUnixMillis(now),
 	)
 	if err != nil {
 		return fmt.Errorf("finish CaptureRun: %w", err)
@@ -432,7 +427,7 @@ func (repository *captureRunRepository) RevokeActive(
 		operation,
 		`UPDATE capture_runs
 		 SET state = 'revoked', updated_at_unix_ms = ?
-		 WHERE state IN ('created', 'attached')`,
+		 WHERE state IN ('created', 'attached', 'expired')`,
 		toUnixMillis(now),
 	)
 	if err != nil {
@@ -558,10 +553,8 @@ func scanCaptureRun(scanner captureRunScanner, extra ...any) (capturerun.Durable
 	if err := scanner.Scan(append(destinations, extra...)...); err != nil {
 		return capturerun.DurableRecord{}, err
 	}
-	if gitJSON != "" {
-		if err := json.Unmarshal([]byte(gitJSON), &record.Runtime.GitAtLaunch); err != nil {
-			return capturerun.DurableRecord{}, err
-		}
+	if err := json.Unmarshal([]byte(gitJSON), &record.Runtime.GitAtLaunch); err != nil {
+		return capturerun.DurableRecord{}, err
 	}
 	if len(proxyHash) != len(record.ProxyCapabilityHash) ||
 		len(controlHash) != len(record.ControlCapabilityHash) {

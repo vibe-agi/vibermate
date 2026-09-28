@@ -138,6 +138,54 @@ func TestRetentionCostTracksDistinctContent(t *testing.T) {
 	}
 }
 
+func TestBodyHeavyExpiryFitsMaintenanceBudget(t *testing.T) {
+	if os.Getenv("VIBERMATE_USAGE_SCALE") != "1" {
+		t.Skip("set VIBERMATE_USAGE_SCALE=1 for the isolated body-retention check")
+	}
+	store := openTestStore(t, filepath.Join(t.TempDir(), "retention.db"))
+	defer shutdownTestStore(t, store)
+	ctx := context.Background()
+	now := time.Date(2026, 9, 28, 0, 0, 0, 0, time.UTC)
+	const count = 10001
+	for index := 0; index < count; index++ {
+		id := fmt.Sprintf("body-scale-%d", index)
+		text := fmt.Sprintf("%s message %d", strings.Repeat("body evidence ", 80), index)
+		content := blockRecordFixture(t, id, now, []string{"shared instruction"}, text)
+		content.ExpiresAt = now.Add(time.Hour)
+		if index == count-1 {
+			content.ExpiresAt = now.Add(2 * time.Hour)
+		}
+		if err := store.ExchangeContentRepository().Put(ctx, content); err != nil {
+			t.Fatal(err)
+		}
+		raw := rawEvidenceRecordForTest(fmt.Sprintf("writer-body-scale.%d", index+1), uint64(index+1),
+			rawevidence.LayerClientIngress, []byte(text), []byte(`{"version":1,"headers":[]}`))
+		raw.WriterID, raw.ExchangeID = "writer-body-scale", id
+		raw.ObservedAt, raw.ExpiresAt = now, content.ExpiresAt
+		if err := store.RawEvidenceRepository().AppendBatch(ctx, []rawevidence.StoredEnvelope{raw}, now); err != nil {
+			t.Fatal(err)
+		}
+	}
+	started := time.Now()
+	budget, cancel := context.WithTimeout(ctx, 5*time.Second)
+	released, more, err := store.cleanupExpired(budget, now.Add(time.Hour), expiredCleanupBatchSize)
+	cancel()
+	t.Logf("10k distinct semantic and raw bodies: first maintenance batch %v, released=%+v error=%v", time.Since(started), released, err)
+	if err != nil || !more || released.Exchanges != expiredCleanupBatchSize || released.Envelopes != expiredCleanupBatchSize {
+		t.Fatalf("body cleanup cannot make bounded progress: %+v more=%v error=%v", released, more, err)
+	}
+	if err := store.MaintainExpired(ctx, now.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("10k distinct semantic and raw bodies: complete maintenance %v", time.Since(started))
+	if _, err := store.ExchangeContentRepository().Get(ctx, "body-scale-10000", now.Add(time.Hour)); err != nil {
+		t.Fatalf("live semantic body was damaged: %v", err)
+	}
+	if _, err := store.RawEvidenceRepository().GetEnvelope(ctx, "writer-body-scale.10001"); err != nil {
+		t.Fatalf("live raw body was damaged: %v", err)
+	}
+}
+
 // databaseBytesOnDisk sums the main database, its WAL and its shared-memory
 // file. Measuring the payload columns alone answers a narrower question than
 // the one a user asks, which is how large the file on their disk gets: envelope

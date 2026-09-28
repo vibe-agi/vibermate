@@ -963,6 +963,7 @@ type ConversationPage struct {
 
 type Repository interface {
 	Append(context.Context, Record) (Record, error)
+	SummarizeExchanges(context.Context, SummaryScope) (ExchangeSummary, error)
 	GetExchange(context.Context, string) (Record, error)
 	List(context.Context, PageRequest) (Page, error)
 	ListExchanges(context.Context, PageRequest) (Page, error)
@@ -989,6 +990,7 @@ type Recorder interface {
 }
 
 type Reader interface {
+	SummarizeExchanges(context.Context, SummaryScope) (ExchangeSummary, error)
 	GetExchange(context.Context, string) (Record, error)
 	List(context.Context, PageRequest) (Page, error)
 	ListExchanges(context.Context, PageRequest) (Page, error)

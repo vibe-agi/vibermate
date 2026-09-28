@@ -268,7 +268,6 @@ func startAttached(
 		return nil, err
 	}
 	usage, err := runtimeusage.New(runtimeusage.Options{
-		Users: runtime.RuntimeUsers(), Runs: runtime.CaptureRunReader(),
 		Ledger: runtime.UsageRepository(), Clock: options.Clock,
 		Prices: &modelcatalog.ReferencePrices{Fetch: runtime.FetchModelsDevPrices, Clock: options.Clock},
 	})

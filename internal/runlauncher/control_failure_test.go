@@ -3,6 +3,7 @@ package runlauncher
 import (
 	"context"
 	"errors"
+	"io"
 	"net/http"
 	"net/url"
 	"syscall"
@@ -10,6 +11,29 @@ import (
 
 	"github.com/vibe-agi/vibermate/internal/capturecontrol"
 )
+
+func TestHeartbeatRetriesOnlyTemporaryControlFailures(t *testing.T) {
+	for _, test := range []struct {
+		err   error
+		retry bool
+	}{
+		{context.DeadlineExceeded, true},
+		{io.ErrUnexpectedEOF, true},
+		{&url.Error{Op: "POST", Err: syscall.ECONNREFUSED}, true},
+		{decodeControlFailure(503, []byte("<h1>Unavailable</h1>")), true},
+		{decodeControlFailure(429, nil), true},
+		{decodeControlFailure(403, nil), false},
+		{decodeControlFailure(401, nil), false},
+		{decodeControlFailure(404, nil), false},
+		{errors.New("invalid control contract"), false},
+		{context.Canceled, false},
+		{nil, false},
+	} {
+		if got := retryableControlFailure(test.err); got != test.retry {
+			t.Errorf("retry(%v)=%t, want %t", test.err, got, test.retry)
+		}
+	}
+}
 
 func TestClassifyCreateFailurePreservesTypedEnvironmentSelection(t *testing.T) {
 	t.Parallel()

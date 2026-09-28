@@ -2786,7 +2786,7 @@ func (authority *accountAuthorityDouble) Acquire(
 	return &accountLeaseDouble{
 		account: providerauth.AccountRef{
 			ID: account.id, Revision: uint64(account.revision), CredentialEpoch: account.epoch,
-			RealmID: request.RealmID(),
+			RealmID: request.RealmID(), SettingsRevision: 1, EgressProfile: request.EgressProfile(),
 		},
 		driver: providerauth.StaticHeaderDriverRef(), secret: secret,
 		release: func() {

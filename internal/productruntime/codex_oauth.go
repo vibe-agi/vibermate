@@ -57,6 +57,7 @@ func persistCodexLogin(accounts provideraccount.Controller) func(context.Context
 		view, err := accounts.Create(ctx, provideraccount.CreateCommand{
 			ID: id, DisplayName: name, UpstreamEndpointID: endpointID, Unlinked: true,
 			Driver: providerauth.CodexOAuthDriverRef(), Secret: value,
+			AutomaticRefresh: true,
 		})
 		if err != nil {
 			return "", err
@@ -65,9 +66,9 @@ func persistCodexLogin(accounts provideraccount.Controller) func(context.Context
 	}
 }
 
-func (client codexOAuthHTTPClient) Do(request *http.Request) (*http.Response, error) {
+func (client codexOAuthHTTPClient) Do(request *http.Request, scope providerauth.AccountRef) (*http.Response, error) {
 	if client.provider == nil {
 		return nil, errors.New("Codex OAuth provider transport is unavailable")
 	}
-	return client.provider.DoCodexOAuthTokenRequest(request)
+	return client.provider.DoCodexOAuthTokenRequest(request, scope)
 }

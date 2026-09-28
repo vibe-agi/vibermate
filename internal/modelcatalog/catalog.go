@@ -54,6 +54,7 @@ type cacheKey struct {
 type cachedSnapshot struct {
 	endpointRevision uint64
 	accountRevision  uint64
+	settingsRevision uint64
 	credentialEpoch  uint64
 	expiresAt        time.Time
 	snapshot         Snapshot
@@ -136,6 +137,7 @@ func (service *Service) Discover(
 		service.mu.Unlock()
 		if found && cached.endpointRevision == endpoint.Revision &&
 			cached.accountRevision == accountRef.Revision &&
+			cached.settingsRevision == accountRef.SettingsRevision &&
 			cached.credentialEpoch == accountRef.CredentialEpoch &&
 			now.Before(cached.expiresAt) {
 			return cached.snapshot.clone(), nil
@@ -172,6 +174,7 @@ func (service *Service) Discover(
 	service.cache[key] = cachedSnapshot{
 		endpointRevision: endpoint.Revision,
 		accountRevision:  accountRef.Revision,
+		settingsRevision: accountRef.SettingsRevision,
 		credentialEpoch:  accountRef.CredentialEpoch,
 		expiresAt:        now.Add(service.cacheTTL),
 		snapshot:         snapshot.clone(),

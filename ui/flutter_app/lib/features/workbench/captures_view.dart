@@ -11,6 +11,7 @@ import '../../core/design/viber_theme.dart';
 import '../../core/design/workbench_widgets.dart';
 import '../../core/i18n/app_copy.dart';
 import 'capture_conversation_tree.dart';
+import 'capture_overview.dart';
 import 'acp_view.dart';
 import 'conversation_timeline.dart';
 import 'deletion_dialog.dart';
@@ -806,46 +807,45 @@ final class _CaptureConversationWorkspaceState
             onLoadEarlier: () =>
                 unawaited(controller.loadMoreSelectedCapture()),
           );
-    if (withoutBodies) {
-      timeline = Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Padding(
-            padding: const EdgeInsets.all(12),
-            child: Align(
-              alignment: Alignment.centerLeft,
-              child: SegmentedButton<bool>(
-                key: const Key('capture-evidence-mode'),
-                showSelectedIcon: false,
-                segments: [
-                  ButtonSegment(
-                    value: false,
-                    label: Text(copy('capture.summary.overview')),
-                  ),
-                  ButtonSegment(
-                    value: true,
-                    label: Text(copy('capture.summary.records')),
-                  ),
-                ],
-                selected: {controller.showCaptureRequestRecords},
-                onSelectionChanged: (value) =>
-                    controller.selectCaptureRequestRecords(value.single),
-              ),
+    timeline = Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Padding(
+          padding: const EdgeInsets.all(12),
+          child: Align(
+            alignment: Alignment.centerLeft,
+            child: SegmentedButton<bool>(
+              key: const Key('capture-evidence-mode'),
+              showSelectedIcon: false,
+              segments: [
+                ButtonSegment(
+                  value: false,
+                  label: Text(copy('capture.summary.overview')),
+                ),
+                ButtonSegment(
+                  value: true,
+                  label: Text(copy('capture.summary.records')),
+                ),
+              ],
+              selected: {controller.showCaptureRequestRecords},
+              onSelectionChanged: (value) =>
+                  controller.selectCaptureRequestRecords(value.single),
             ),
           ),
-          Expanded(
-            child: controller.showCaptureRequestRecords
-                ? timeline
-                : _CaptureRequestOverview(
-                    controller: controller,
-                    copy: copy,
-                    onShowRecords: () =>
-                        controller.selectCaptureRequestRecords(true),
-                  ),
-          ),
-        ],
-      );
-    }
+        ),
+        Expanded(
+          child: controller.showCaptureRequestRecords
+              ? timeline
+              : CaptureRequestOverview(
+                  controller: controller,
+                  copy: copy,
+                  withoutBodies: withoutBodies,
+                  onShowRecords: () =>
+                      controller.selectCaptureRequestRecords(true),
+                ),
+        ),
+      ],
+    );
     final hasExactSession = sessions.any(
       (session) => session.sessionId != null,
     );
@@ -927,101 +927,6 @@ final class _CaptureConversationWorkspaceState
           ],
         );
       },
-    );
-  }
-}
-
-final class _CaptureRequestOverview extends StatelessWidget {
-  const _CaptureRequestOverview({
-    required this.controller,
-    required this.copy,
-    required this.onShowRecords,
-  });
-  final WorkbenchController controller;
-  final AppCopy copy;
-  final VoidCallback onShowRecords;
-
-  @override
-  Widget build(BuildContext context) {
-    final records = controller.selectedActivities;
-    final failures = records
-        .where((record) => record.status == 'failed')
-        .toList();
-    final reasons = <String, int>{};
-    for (final record in failures) {
-      final reason = record.reasonCode ?? 'unknown';
-      reasons[reason] = (reasons[reason] ?? 0) + 1;
-    }
-    return SingleChildScrollView(
-      key: const Key('capture-request-overview'),
-      padding: const EdgeInsets.all(16),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            copy('capture.summary.title'),
-            style: Theme.of(context).textTheme.titleMedium,
-          ),
-          const SizedBox(height: 8),
-          Text(
-            copy('capture.summary.hint'),
-            style: TextStyle(color: context.viberColors.textMuted),
-          ),
-          const SizedBox(height: 20),
-          Wrap(
-            spacing: 24,
-            runSpacing: 12,
-            children: [
-              for (final entry in <String, int>{
-                'calls': records.length,
-                'success': records
-                    .where((item) => item.status == 'succeeded')
-                    .length,
-                'failure': failures.length,
-                'canceled': records
-                    .where((item) => item.status == 'canceled')
-                    .length,
-              }.entries)
-                Text(
-                  copy.format('capture.summary.${entry.key}', {
-                    'count': '${entry.value}',
-                  }),
-                  style: Theme.of(context).textTheme.titleMedium,
-                ),
-            ],
-          ),
-          const SizedBox(height: 20),
-          for (final entry in reasons.entries)
-            Padding(
-              padding: const EdgeInsets.only(bottom: 8),
-              child: Row(
-                children: [
-                  const Icon(Icons.error_outline, size: 16),
-                  const SizedBox(width: 8),
-                  Expanded(child: Text(entry.key)),
-                  Text('× ${entry.value}'),
-                ],
-              ),
-            ),
-          if (controller.selectedCapturePage?.nextCursor != null) ...[
-            Text(
-              copy('capture.summary.partial'),
-              style: TextStyle(color: context.viberColors.textMuted),
-            ),
-            TextButton(
-              onPressed: controller.captureActivitiesLoading
-                  ? null
-                  : () => unawaited(controller.loadMoreSelectedCapture()),
-              child: Text(copy('conversation.load_earlier_exchanges')),
-            ),
-          ],
-          TextButton.icon(
-            onPressed: onShowRecords,
-            icon: const Icon(Icons.list_alt, size: 16),
-            label: Text(copy('capture.summary.records')),
-          ),
-        ],
-      ),
     );
   }
 }

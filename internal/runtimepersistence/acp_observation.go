@@ -3,10 +3,7 @@ package runtimepersistence
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
 	"database/sql"
-	_ "embed"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"strings"
@@ -14,40 +11,6 @@ import (
 	"github.com/vibe-agi/vibermate/internal/acpobservation"
 	"github.com/vibe-agi/vibermate/internal/environment"
 )
-
-//go:embed acp_schema.sql
-var acpSchemaSQL string
-
-// Called only after the released base digest has been validated. No destructive
-// migration or reinitialization is permitted if either schema is unfamiliar.
-func initializeACPSchema(ctx context.Context, database *sql.DB) error {
-	transaction, err := database.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer transaction.Rollback()
-	digest := sha256.Sum256([]byte(acpSchemaSQL))
-	expected := hex.EncodeToString(digest[:])
-	var count int
-	if err := transaction.QueryRowContext(ctx, `SELECT COUNT(*) FROM sqlite_schema WHERE name='acp_schema_metadata'`).Scan(&count); err != nil {
-		return err
-	}
-	if count == 0 {
-		if _, err := transaction.ExecContext(ctx, acpSchemaSQL); err != nil {
-			return errors.New("ACP schema extension could not be initialized")
-		}
-		if _, err := transaction.ExecContext(ctx, `INSERT INTO acp_schema_metadata VALUES (1,1,?)`, expected); err != nil {
-			return err
-		}
-	} else {
-		var revision int
-		var digest string
-		if err := transaction.QueryRowContext(ctx, `SELECT revision,source_sha256 FROM acp_schema_metadata WHERE singleton=1`).Scan(&revision, &digest); err != nil || revision != 1 || digest != expected {
-			return errors.New("unsupported ACP schema extension")
-		}
-	}
-	return transaction.Commit()
-}
 
 type acpObservationRepository struct {
 	database   *sql.DB

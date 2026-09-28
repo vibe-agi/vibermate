@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../../core/api/control_api.dart';
+import '../../core/api/account_facts_models.dart';
 import '../../core/api/control_models.dart';
 import '../../core/api/provider_origin.dart';
 import '../../core/design/viber_theme.dart';
@@ -18,6 +19,7 @@ import 'environment_dry_run_dialog.dart';
 import 'egress_profile_editor.dart';
 import 'launch_environment_editor.dart';
 import 'message_transform_editor.dart';
+import 'provider_account_facts.dart';
 import 'workbench_controller.dart';
 
 final class EnvironmentsView extends StatefulWidget {
@@ -444,22 +446,27 @@ final class _EnvironmentDetail extends StatelessWidget {
                     ),
                   if (value.clientEndpoints.isNotEmpty &&
                       !controller.previewMode)
-                    OutlinedButton.icon(
+                    PopupMenuButton<bool>(
                       key: const Key('environment-dry-run-open'),
-                      onPressed: controller.environmentMutating
-                          ? null
-                          : () => unawaited(
-                              showDialog<void>(
-                                context: context,
-                                builder: (_) => EnvironmentDryRunDialog(
-                                  controller: controller,
-                                  environment: value,
-                                  copy: copy,
-                                ),
-                              ),
-                            ),
-                      icon: const Icon(Icons.play_arrow_outlined, size: 14),
-                      label: Text(copy('environment.dry_run.open')),
+                      tooltip: copy('environment.dry_run.menu'),
+                      enabled: !controller.environmentMutating,
+                      onSelected: (_) => unawaited(
+                        showDialog<void>(
+                          context: context,
+                          builder: (_) => EnvironmentDryRunDialog(
+                            controller: controller,
+                            environment: value,
+                            copy: copy,
+                          ),
+                        ),
+                      ),
+                      itemBuilder: (_) => [
+                        PopupMenuItem(
+                          value: true,
+                          child: Text(copy('environment.dry_run.menu')),
+                        ),
+                      ],
+                      icon: const Icon(Icons.more_horiz, size: 18),
                     ),
                   if (!historical && !value.systemOwned)
                     OutlinedButton.icon(
@@ -879,6 +886,7 @@ final class _RouteAuthorityRow extends StatelessWidget {
           ],
         );
         final accountList = _RouteAccountActivationGroup(
+          key: ValueKey(route.id),
           controller: controller,
           environment: environment,
           route: route,
@@ -941,8 +949,9 @@ final class _RouteAuthorityRow extends StatelessWidget {
   }
 }
 
-final class _RouteAccountActivationGroup extends StatelessWidget {
+final class _RouteAccountActivationGroup extends StatefulWidget {
   const _RouteAccountActivationGroup({
+    super.key,
     required this.controller,
     required this.environment,
     required this.route,
@@ -961,8 +970,117 @@ final class _RouteAccountActivationGroup extends StatelessWidget {
   final bool enabled;
 
   @override
+  State<_RouteAccountActivationGroup> createState() =>
+      _RouteAccountActivationGroupState();
+}
+
+final class _RouteAccountActivationGroupState
+    extends State<_RouteAccountActivationGroup> {
+  String _quotaSignature = '';
+  List<String> _accountOrder = const [];
+  bool _refreshing = false;
+
+  bool _supportsQuota(ProviderAccount account) =>
+      account.usable &&
+      isChatGPTCodexOrigin(Uri.parse(account.credentialOrigin));
+
+  List<ProviderAccount> _orderedAccounts() {
+    final controller = widget.controller;
+    final eligible = widget.accounts
+        .where(_supportsQuota)
+        .toList(growable: false);
+    final signature = eligible
+        .map((a) => '${a.id}:${a.credentialEpoch}:${a.settingsRevision}')
+        .join('|');
+    if (controller != null && signature != _quotaSignature) {
+      _quotaSignature = signature;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          unawaited(controller.ensureProviderAccountQuotas(eligible));
+        }
+      });
+    }
+    final accounts = [...widget.accounts];
+    final previous = {
+      for (final (index, id) in _accountOrder.indexed) id: index,
+    };
+    final original = {
+      for (final (index, account) in accounts.indexed) account.id: index,
+    };
+    int stable(ProviderAccount a, ProviderAccount b) =>
+        (previous[a.id] ?? previous.length + original[a.id]!).compareTo(
+          previous[b.id] ?? previous.length + original[b.id]!,
+        );
+    if (controller == null ||
+        _refreshing ||
+        eligible.any(
+          (a) =>
+              !controller.providerAccountQuotaSettled(a) ||
+              controller.providerAccountQuotaLoading(a),
+        )) {
+      accounts.sort(stable);
+    } else {
+      final windows = <String, AccountQuotaWindow>{};
+      for (final account in eligible) {
+        final facts = controller.providerAccountQuota(account);
+        if (facts?.state != 'known' ||
+            controller.providerAccountQuotaFailed(account)) {
+          continue;
+        }
+        final window = accountQuotaWindows(facts).firstOrNull;
+        if (window != null &&
+            window.windowSeconds > 0 &&
+            window.resetAt.isAfter(DateTime.now())) {
+          windows[account.id] = window;
+        }
+      }
+      // Compare the same main window (normally 7 days), never a 5-hour quota
+      // against a 7-day quota. Missing/expired observations sort after known ones.
+      final period = windows.values.fold(
+        0,
+        (longest, window) => math.max(longest, window.windowSeconds),
+      );
+      DateTime? reset(ProviderAccount account) =>
+          windows[account.id]?.windowSeconds == period
+          ? windows[account.id]?.resetAt
+          : null;
+      accounts.sort((a, b) {
+        final left = reset(a), right = reset(b);
+        final compared = left == null
+            ? (right == null ? 0 : 1)
+            : right == null
+            ? -1
+            : left.compareTo(right);
+        return compared == 0 ? stable(a, b) : compared;
+      });
+    }
+    _accountOrder = accounts.map((a) => a.id).toList(growable: false);
+    return accounts;
+  }
+
+  Future<void> _refreshQuota() async {
+    if (_refreshing || widget.controller == null) return;
+    setState(() => _refreshing = true);
+    try {
+      await widget.controller!.ensureProviderAccountQuotas(
+        widget.accounts.where(_supportsQuota),
+        refresh: true,
+      );
+    } finally {
+      if (mounted) setState(() => _refreshing = false);
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final controller = widget.controller;
+    final environment = widget.environment;
+    final route = widget.route;
+    final endpoint = widget.endpoint;
+    final copy = widget.copy;
+    final enabled = widget.enabled;
     final manual = route.accountPolicy.mode == 'fixed';
+    final accounts = manual ? _orderedAccounts() : widget.accounts;
     final service = endpoint?.displayName ?? route.endpointId;
     return Container(
       key: Key('environment-account-group-${route.id}'),
@@ -978,13 +1096,16 @@ final class _RouteAccountActivationGroup extends StatelessWidget {
           Row(
             children: [
               Expanded(
-                child: Text(
-                  copy.format('environment.account.group', {
-                    'service': service,
-                  }),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: Theme.of(context).textTheme.labelMedium,
+                child: Tooltip(
+                  message: copy('environment.account.reset_order'),
+                  child: Text(
+                    copy.format('environment.account.group', {
+                      'service': service,
+                    }),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(context).textTheme.labelMedium,
+                  ),
                 ),
               ),
               if (controller != null)
@@ -992,10 +1113,28 @@ final class _RouteAccountActivationGroup extends StatelessWidget {
                   key: Key('environment-account-manage-${route.id}'),
                   tooltip: copy('environment.account.manage_links'),
                   onPressed: () {
-                    controller!.selectEndpoint(route.endpointId);
-                    controller!.selectSection(WorkbenchSection.routes);
+                    controller.selectEndpoint(route.endpointId);
+                    controller.selectSection(WorkbenchSection.routes);
                   },
                   icon: const Icon(Icons.link_outlined, size: 17),
+                ),
+              if (controller != null && accounts.any(_supportsQuota))
+                IconButton(
+                  key: Key('environment-account-refresh-${route.id}'),
+                  tooltip: copy('environment.account.refresh'),
+                  onPressed:
+                      _refreshing ||
+                          accounts.any(controller.providerAccountQuotaLoading)
+                      ? null
+                      : _refreshQuota,
+                  icon:
+                      _refreshing ||
+                          accounts.any(controller.providerAccountQuotaLoading)
+                      ? const SizedBox.square(
+                          dimension: 15,
+                          child: CircularProgressIndicator(strokeWidth: 1.5),
+                        )
+                      : const Icon(Icons.refresh, size: 17),
                 ),
             ],
           ),
@@ -1030,6 +1169,7 @@ final class _RouteAccountActivationGroup extends StatelessWidget {
           else
             for (final account in accounts) ...[
               _RouteAccountActivationRow(
+                key: ValueKey(account.id),
                 account: account,
                 active: account.id == route.accountPolicy.fixedAccountId,
                 enabled:
@@ -1038,6 +1178,16 @@ final class _RouteAccountActivationGroup extends StatelessWidget {
                     controller != null &&
                     environment != null,
                 copy: copy,
+                quota: _supportsQuota(account) && controller != null
+                    ? ProviderAccountQuotaMini(
+                        facts: controller.providerAccountQuota(account),
+                        loading: controller.providerAccountQuotaLoading(
+                          account,
+                        ),
+                        failed: controller.providerAccountQuotaFailed(account),
+                        copy: copy,
+                      )
+                    : null,
                 onActivate: () => unawaited(
                   controller!.activateEnvironmentAccount(
                     environment!,
@@ -1063,11 +1213,13 @@ final class _RouteAccountActivationGroup extends StatelessWidget {
 
 final class _RouteAccountActivationRow extends StatelessWidget {
   const _RouteAccountActivationRow({
+    super.key,
     required this.account,
     required this.active,
     required this.enabled,
     required this.copy,
     required this.onActivate,
+    this.quota,
   });
 
   final ProviderAccount account;
@@ -1075,6 +1227,7 @@ final class _RouteAccountActivationRow extends StatelessWidget {
   final bool enabled;
   final AppCopy copy;
   final VoidCallback onActivate;
+  final Widget? quota;
 
   @override
   Widget build(BuildContext context) {
@@ -1117,21 +1270,46 @@ final class _RouteAccountActivationRow extends StatelessWidget {
                     overflow: TextOverflow.ellipsis,
                     style: Theme.of(context).textTheme.bodySmall,
                   ),
+                ?quota,
               ],
             ),
           ),
           const SizedBox(width: 6),
-          if (active)
-            StatusPill(
-              label: copy('environment.account.active'),
-              color: context.viberColors.verified,
-            )
-          else
-            OutlinedButton(
-              key: Key('environment-account-activate-${account.id}'),
-              onPressed: enabled ? onActivate : null,
-              child: Text(copy('environment.account.activate')),
+          Semantics(
+            selected: active,
+            child: SizedBox(
+              width: 96,
+              height: ViberMetrics.controlHeight,
+              child: OutlinedButton.icon(
+                key: Key('environment-account-activate-${account.id}'),
+                onPressed: enabled && !active ? onActivate : null,
+                style: OutlinedButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(horizontal: 6),
+                  disabledForegroundColor: active
+                      ? context.viberColors.verified
+                      : null,
+                  side: active
+                      ? BorderSide(
+                          color: context.viberColors.verified.withValues(
+                            alpha: .5,
+                          ),
+                        )
+                      : null,
+                ),
+                icon: Icon(
+                  active ? Icons.check : Icons.radio_button_unchecked,
+                  size: 14,
+                ),
+                label: Text(
+                  copy(
+                    active
+                        ? 'environment.account.active'
+                        : 'environment.account.activate',
+                  ),
+                ),
+              ),
             ),
+          ),
         ],
       ),
     );

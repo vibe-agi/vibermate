@@ -2,11 +2,7 @@ package runtimepersistence
 
 import (
 	"context"
-	"crypto/sha256"
-	"database/sql"
-	"fmt"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
@@ -15,36 +11,23 @@ import (
 	"github.com/vibe-agi/vibermate/internal/secretstore"
 )
 
-func TestNotesPreserveAccountsAcrossDevelopmentUpgradeAndRestart(t *testing.T) {
+func TestAccountNotesPersistWithCASAcrossRestart(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "runtime.db")
 	store := openTestStore(t, path)
 	ref, _ := secretstore.ParseReference("secret://provider-account/noted")
 	now := time.Unix(1786200000, 0).UTC()
-	account := provideraccount.Account{ID: "noted", DisplayName: "Noted", Origin: providerTestOrigin(t), RealmID: "anthropic.official", Driver: providerauth.AnthropicAPIKeyDriverRef(), SecretRef: ref, State: provideraccount.StateActive, Revision: 1, AssociationRevision: 1, CreatedAt: now, UpdatedAt: now}
+	account := provideraccount.Account{ID: "noted", DisplayName: "Noted", Origin: providerTestOrigin(t), RealmID: "anthropic.official", Driver: providerauth.AnthropicAPIKeyDriverRef(), SecretRef: ref, State: provideraccount.StateActive, Revision: 1, SettingsRevision: 1, AssociationRevision: 1, CreatedAt: now, UpdatedAt: now}
 	if result, err := store.ProviderAccountRepository().Write(ctx, 0, account); err != nil || result.Outcome != provideraccount.CommitCommitted {
 		t.Fatalf("create: %+v %v", result, err)
 	}
 	if err := store.Shutdown(ctx); err != nil {
 		t.Fatal(err)
 	}
-	prior := strings.Replace(schemaSQL, accountNoteColumnsSQL, "", 1)
-	prior = strings.Replace(prior, providerErrorCodeColumnSQL, "", 1)
-	prior = strings.ReplaceAll(prior, "'upstream_account_action',\n", "")
-	if fmt.Sprintf("%x", sha256.Sum256([]byte(prior))) != accountNotesDevelopmentDigest {
-		t.Fatal("previous baseline fixture drifted")
-	}
-	db := sql.OpenDB(newSQLiteConnector(path, DefaultBusyTimeout))
-	if _, err := db.Exec(`ALTER TABLE runtime_activities DROP COLUMN provider_error_code; ALTER TABLE provider_accounts DROP COLUMN note; ALTER TABLE provider_accounts DROP COLUMN note_revision; UPDATE runtime_metadata SET schema_source_sha256 = ?`, accountNotesDevelopmentDigest); err != nil {
-		t.Fatal(err)
-	}
-	if err := db.Close(); err != nil {
-		t.Fatal(err)
-	}
 	store = openTestStore(t, path)
 	loaded, exists, err := store.ProviderAccountRepository().Load(ctx, account.ID)
 	if err != nil || !exists || loaded != account {
-		t.Fatalf("upgrade lost account: %+v %v", loaded, err)
+		t.Fatalf("reopen lost account: %+v %v", loaded, err)
 	}
 	account.Note = "\u7814\u53d1\u81ea\u7528"
 	account.NoteRevision = 1

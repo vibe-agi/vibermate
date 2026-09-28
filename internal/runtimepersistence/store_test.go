@@ -123,6 +123,53 @@ func TestSQLiteStoreRejectsChangedCurrentSchema(t *testing.T) {
 	}
 }
 
+func TestSQLiteStoreRejectsPreviousSchemaWithoutChangingData(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "runtime.db")
+	store := openTestStore(t, path)
+	appendIdentityActivity(t, store, "preserved")
+	before, err := store.ActivityRepository().GetExchange(ctx, "preserved")
+	if err != nil {
+		t.Fatal(err)
+	}
+	shutdownTestStore(t, store)
+	// The previous baseline is input to an explicit offline conversion, never
+	// an invitation for Runtime startup to mutate stored accounts or evidence.
+	const previous = "94865976df1130b198b9dbe28da1a249a0082adf9e797f43cb96005904ec7914"
+	database := sql.OpenDB(newSQLiteConnector(path, DefaultBusyTimeout))
+	defer database.Close()
+	if _, err := database.Exec(`ALTER TABLE provider_accounts DROP COLUMN settings_revision;
+		ALTER TABLE provider_accounts DROP COLUMN egress_profile_json;
+		ALTER TABLE provider_accounts DROP COLUMN automatic_refresh;
+		UPDATE runtime_metadata SET schema_source_sha256 = ?`, previous); err != nil {
+		t.Fatal(err)
+	}
+	var schemaBefore string
+	if err := database.QueryRow(`SELECT sql FROM sqlite_schema WHERE name = 'provider_accounts'`).Scan(&schemaBefore); err != nil {
+		t.Fatal(err)
+	}
+	opened, err := Open(ctx, Options{DatabasePath: path, BusyTimeout: DefaultBusyTimeout, CommitReconcileTimeout: DefaultCommitReconcileTimeout})
+	if opened != nil {
+		shutdownTestStore(t, opened)
+		t.Fatal("previous schema was opened")
+	}
+	if !errors.Is(err, ErrSchemaBaselineMismatch) {
+		t.Fatalf("previous schema error = %v", err)
+	}
+	var schemaAfter, digest string
+	if err := database.QueryRow(`SELECT sql FROM sqlite_schema WHERE name = 'provider_accounts'`).Scan(&schemaAfter); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.QueryRow(`SELECT schema_source_sha256 FROM runtime_metadata`).Scan(&digest); err != nil {
+		t.Fatal(err)
+	}
+	after, err := newActivityRepository(database, database, newOperationGate()).GetExchange(ctx, "preserved")
+	if err != nil || after.ID != before.ID || after.Sequence != before.Sequence || digest != previous || schemaBefore != schemaAfter {
+		t.Fatalf("rejected open changed database: digest=%s activity=%+v error=%v", digest, after, err)
+	}
+}
+
 func TestSQLiteShutdownCancelsAndDrainsHeldTransaction(t *testing.T) {
 	t.Parallel()
 

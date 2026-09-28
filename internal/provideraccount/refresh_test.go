@@ -10,8 +10,8 @@ import (
 	"github.com/vibe-agi/vibermate/internal/upstreamendpoint"
 )
 
-func (preparer *rotatingCredentialPreparer) Refresh(ctx context.Context, driver providerauth.DriverRef, ref secretstore.Reference, revision secretstore.Revision) (secretstore.Revision, error) {
-	return preparer.Prepare(ctx, driver, ref, revision)
+func (preparer *rotatingCredentialPreparer) Refresh(ctx context.Context, driver providerauth.DriverRef, ref secretstore.Reference, scope providerauth.AccountRef) (secretstore.Revision, error) {
+	return preparer.Prepare(ctx, driver, ref, scope)
 }
 
 func TestExplicitRefreshChecksEpochAndDoesNotRetargetIdentity(t *testing.T) {

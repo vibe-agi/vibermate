@@ -10,6 +10,7 @@ package_version="$(awk '$1 == "version:" { print $2 }' "${flutter_directory}/pub
 version="${package_version%%+*}"
 release_ldflags="-X github.com/vibe-agi/vibermate/internal/productbuild.releaseVersion=v${version}"
 distribution_directory="${repository_root}/dist"
+candidate_directory=""
 verify_app="${script_directory}/verify_macos_app.sh"
 
 # Keep local builds compatible with the same baseline as distribution builds.
@@ -24,8 +25,14 @@ case "${mode}" in
   preview)
     destination="${distribution_directory}/ViberMate-Preview.app"
     ;;
+  candidate)
+    mkdir -p "${distribution_directory}/candidates"
+    candidate_directory="$(mktemp -d "${distribution_directory}/candidates/local-XXXXXXXX")"
+    destination="${candidate_directory}/ViberMate.app"
+    mode="live"
+    ;;
   *)
-    echo "usage: $0 [live|preview]" >&2
+    echo "usage: $0 [live|preview|candidate]" >&2
     exit 64
     ;;
 esac
@@ -121,6 +128,12 @@ source_app="${flutter_directory}/build/macos/Build/Products/Release/ViberMate.ap
 mkdir -p "${distribution_directory}"
 
 case "${destination}" in
+  "${candidate_directory}/ViberMate.app")
+    if [[ -z "${candidate_directory}" || -e "${destination}" ]]; then
+      echo "refusing to replace a candidate bundle" >&2
+      exit 70
+    fi
+    ;;
   "${repository_root}/dist/ViberMate.app"|"${repository_root}/dist/ViberMate-Preview.app")
     if [[ -e "${destination}" ]]; then
       rm -rf -- "${destination}"

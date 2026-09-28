@@ -47,6 +47,7 @@ const (
 	ReasonManualCaptureConflict        ReasonCode = "manual_capture_conflict"
 	ReasonManualCaptureUnavailable     ReasonCode = "manual_capture_unavailable"
 	ReasonRunCapabilityRejected        ReasonCode = "run_capability_rejected"
+	ReasonRunControlUnavailable        ReasonCode = "run_control_unavailable"
 	ReasonInvalidProcess               ReasonCode = "invalid_process_attachment"
 	ReasonInvalidRoute                 ReasonCode = "control_route_not_found"
 	ReasonClientTargetNotConfigured    ReasonCode = "client_target_not_configured"
@@ -337,7 +338,7 @@ func (handler *Handler) attach(
 		input.ProcessID,
 	)
 	if err != nil {
-		writeProblem(writer, http.StatusForbidden, ReasonRunCapabilityRejected)
+		writeRunControlFailure(writer, err)
 		return
 	}
 	writeJSON(writer, http.StatusOK, CaptureRunViewOf(view))
@@ -359,7 +360,7 @@ func (handler *Handler) heartbeat(
 		handler.runLifetime,
 	)
 	if err != nil {
-		writeProblem(writer, http.StatusForbidden, ReasonRunCapabilityRejected)
+		writeRunControlFailure(writer, err)
 		return
 	}
 	writeJSON(writer, http.StatusOK, CaptureRunViewOf(view))
@@ -379,11 +380,23 @@ func (handler *Handler) finish(
 		request.PathValue("runId"),
 		capability,
 	); err != nil {
-		writeProblem(writer, http.StatusForbidden, ReasonRunCapabilityRejected)
+		writeRunControlFailure(writer, err)
 		return
 	}
 	writer.Header().Set("Cache-Control", "no-store")
 	writer.WriteHeader(http.StatusNoContent)
+}
+
+func writeRunControlFailure(writer http.ResponseWriter, err error) {
+	if errors.Is(err, capturerun.ErrCapabilityRejected) ||
+		errors.Is(err, capturerun.ErrNotFound) ||
+		errors.Is(err, capturerun.ErrInvalidRequest) ||
+		errors.Is(err, capturerun.ErrStateConflict) {
+		writeProblem(writer, http.StatusForbidden, ReasonRunCapabilityRejected)
+		return
+	}
+	// A timeout or unavailable store is not evidence of authority revocation.
+	writeProblem(writer, http.StatusServiceUnavailable, ReasonRunControlUnavailable)
 }
 
 func (handler *Handler) authenticatePrincipal(

@@ -27,15 +27,27 @@ export '../../core/preferences/workbench_preferences.dart'
 
 enum RootCAGuideIntent { remove, replace }
 
+typedef _AccountReadScope = ({int epoch, int settings, String origin});
+
+_AccountReadScope _accountReadScope(ProviderAccount account) => (
+  epoch: account.credentialEpoch,
+  settings: account.settingsRevision,
+  origin: account.credentialOrigin,
+);
+
 final class WorkbenchController extends ChangeNotifier
     with WidgetsBindingObserver {
-  final Map<String, AccountFacts> _providerAccountQuotas = {};
-  final Map<String, int> _providerAccountQuotaLoads = {};
-  final Map<String, int> _providerAccountQuotaFailures = {};
+  final Map<String, ({AccountFacts facts, int settings})>
+  _providerAccountQuotas = {};
+  final Map<String, ({_AccountReadScope scope, Object request})>
+  _providerAccountQuotaLoads = {};
+  final Map<String, _AccountReadScope> _providerAccountQuotaFailures = {};
 
   AccountFacts? providerAccountQuota(ProviderAccount account) {
-    final facts = _providerAccountQuotas[account.id];
+    final cached = _providerAccountQuotas[account.id];
+    final facts = cached?.facts;
     return facts != null &&
+            cached!.settings == account.settingsRevision &&
             facts.origin == account.credentialOrigin &&
             facts.credentialEpoch >= account.credentialEpoch
         ? facts
@@ -43,10 +55,11 @@ final class WorkbenchController extends ChangeNotifier
   }
 
   bool providerAccountQuotaLoading(ProviderAccount account) =>
-      _providerAccountQuotaLoads[account.id] == account.credentialEpoch;
+      _providerAccountQuotaLoads[account.id]?.scope ==
+      _accountReadScope(account);
 
   bool providerAccountQuotaFailed(ProviderAccount account) =>
-      _providerAccountQuotaFailures[account.id] == account.credentialEpoch;
+      _providerAccountQuotaFailures[account.id] == _accountReadScope(account);
 
   bool providerAccountQuotaSettled(ProviderAccount account) =>
       providerAccountQuota(account) != null ||
@@ -54,6 +67,7 @@ final class WorkbenchController extends ChangeNotifier
 
   void invalidateProviderAccountQuota(ProviderAccount account) {
     _providerAccountQuotas.remove(account.id);
+    _providerAccountQuotaLoads.remove(account.id);
     _providerAccountQuotaFailures.remove(account.id);
     notifyListeners();
   }
@@ -64,31 +78,36 @@ final class WorkbenchController extends ChangeNotifier
     if (!account.usable || providerAccountQuotaLoading(account)) {
       return providerAccountQuota(account);
     }
-    final epoch = account.credentialEpoch;
-    _providerAccountQuotaLoads[account.id] = epoch;
+    // A distinct request also prevents a pre-redemption read from repopulating
+    // the cache after invalidation, even when the account scope is unchanged.
+    final load = (scope: _accountReadScope(account), request: Object());
+    _providerAccountQuotaLoads[account.id] = load;
     _providerAccountQuotaFailures.remove(account.id);
     notifyListeners();
     try {
       final facts = await accountFacts(account);
-      if (_disposed || _providerAccountQuotaLoads[account.id] != epoch) {
+      if (_disposed || _providerAccountQuotaLoads[account.id] != load) {
         return null;
       }
       final current = data?.accounts
           .where((value) => value.id == account.id)
           .firstOrNull;
       if (data != null &&
-          (current == null || current.credentialEpoch != epoch)) {
+          (current == null || _accountReadScope(current) != load.scope)) {
         return null;
       }
-      _providerAccountQuotas[account.id] = facts;
+      _providerAccountQuotas[account.id] = (
+        facts: facts,
+        settings: load.scope.settings,
+      );
       return facts;
     } catch (_) {
-      if (!_disposed && _providerAccountQuotaLoads[account.id] == epoch) {
-        _providerAccountQuotaFailures[account.id] = epoch;
+      if (!_disposed && _providerAccountQuotaLoads[account.id] == load) {
+        _providerAccountQuotaFailures[account.id] = load.scope;
       }
       return providerAccountQuota(account);
     } finally {
-      if (!_disposed && _providerAccountQuotaLoads[account.id] == epoch) {
+      if (!_disposed && _providerAccountQuotaLoads[account.id] == load) {
         _providerAccountQuotaLoads.remove(account.id);
         notifyListeners();
       }
@@ -266,11 +285,16 @@ final class WorkbenchController extends ChangeNotifier
       _certificateExporter.save(certificate);
 
   DashboardData? data;
+  RuntimeStatus? _inventoryFailureStatus;
+  RuntimeStatus? get runtimeStatus => _inventoryFailureStatus ?? data?.status;
   NetworkData? networkData;
   List<ApprovalRecord>? pendingApprovals;
   ConversationPage? selectedCaptureConversations;
   ActivityPage? selectedCapturePage;
   bool showCaptureRequestRecords = false;
+  bool _captureViewChosen = false;
+  bool summarizeClientSession = false;
+  int captureOverviewRefresh = 0;
   EnvironmentDraft? reviewedEnvironmentDraft;
   EnvironmentImpact? reviewedEnvironmentImpact;
   EnvironmentRecord? historicalEnvironment;
@@ -299,8 +323,9 @@ final class WorkbenchController extends ChangeNotifier
   int usageRangeDays = 7;
 
   Future<void> setUsageRange(int days) async {
-    if (![7, 30, 90, 365].contains(days) || usageLoading) return;
+    if (![7, 30, 90, 365].contains(days) || days == usageRangeDays) return;
     usageRangeDays = days;
+    runtimeUsage = null;
     await refreshUsage();
   }
 
@@ -380,6 +405,9 @@ final class WorkbenchController extends ChangeNotifier
   bool usageLoading = false;
   String? usageError;
   Future<void>? _usageRefresh;
+  String? _usageRefreshKey;
+  int _usageGeneration = 0;
+  DateTime? _usageLastChecked;
   bool runtimeUserMutating = false;
   bool rootCALoading = false;
   bool rootCAMutating = false;
@@ -655,10 +683,42 @@ final class WorkbenchController extends ChangeNotifier
       selectedCapturePage?.items ?? const [];
 
   void selectCaptureRequestRecords(bool show) {
+    _captureViewChosen = true;
     if (showCaptureRequestRecords == show) return;
     showCaptureRequestRecords = show;
     notifyListeners();
   }
+
+  void selectCaptureSummarySession(bool session) {
+    if (summarizeClientSession == session) return;
+    summarizeClientSession = session;
+    notifyListeners();
+  }
+
+  ActivitySummaryScope? get captureSummaryScope {
+    final capture = selectedCapture;
+    if (capture == null) return null;
+    final identity = selectedCaptureConversation?.conversation.clientIdentity;
+    if (summarizeClientSession && identity != null) {
+      return ActivitySummaryScope(
+        client: identity.client,
+        sessionId: identity.sessionId,
+      );
+    }
+    return capture.isManual
+        ? ActivitySummaryScope(manualCaptureId: capture.id)
+        : ActivitySummaryScope(captureRunId: capture.captureRunId!);
+  }
+
+  Future<ExchangeSummary> loadActivitySummary(ActivitySummaryScope scope) =>
+      _api.activitySummary(scope);
+
+  Future<RuntimeUsageReport> loadCaptureUsage(
+    ActivitySummaryScope scope,
+    DateTime at,
+  ) => _api.runtimeUsage(
+    _usageQuery(days: 366, filters: scope.usageFilters, at: at),
+  );
 
   List<ConversationSummary> get captureConversations =>
       selectedCaptureConversations?.items
@@ -922,12 +982,14 @@ final class WorkbenchController extends ChangeNotifier
   Future<void> refresh({bool selectDefaults = false}) async {
     if (_disposed || inventoryMutating || environmentMutating) return;
     final generation = ++_dashboardGeneration;
+    captureOverviewRefresh += 1;
     if (data == null) loading = true;
     errorMessage = null;
     notifyListeners();
     try {
       final updated = await _api.loadDashboard();
       if (_disposed || generation != _dashboardGeneration) return;
+      _inventoryFailureStatus = null;
       data = updated;
       _repairDashboardSelections(updated, forceCaptureDefault: selectDefaults);
       loading = false;
@@ -951,6 +1013,7 @@ final class WorkbenchController extends ChangeNotifier
     } catch (error) {
       if (_disposed || generation != _dashboardGeneration) return;
       loading = false;
+      if (error is DashboardUnavailable) _inventoryFailureStatus = error.status;
       errorMessage = _describeError(error);
       notifyListeners();
     }
@@ -978,9 +1041,13 @@ final class WorkbenchController extends ChangeNotifier
         return;
       }
       final previous = data;
+      final hadInventoryFailure = _inventoryFailureStatus != null;
+      _inventoryFailureStatus = null;
       data = _mergePolledDashboard(previous, updated);
       _repairDashboardSelections(data!);
-      if (!_sameDashboard(previous, data!)) notifyListeners();
+      if (hadInventoryFailure || !_sameDashboard(previous, data!)) {
+        notifyListeners();
+      }
       if (section != WorkbenchSection.network) {
         await refreshPendingApprovals(quiet: true);
       }
@@ -1005,9 +1072,18 @@ final class WorkbenchController extends ChangeNotifier
           await refreshTerminalCommand(quiet: true);
         }
       }
-    } catch (_) {
+    } catch (error) {
       // A transient poll must not replace useful evidence with an error page.
-      // Explicit refresh still surfaces the exact failure.
+      // Valid health evidence must still survive failed inventory reads.
+      if (!_disposed &&
+          generation == _dashboardGeneration &&
+          error is DashboardUnavailable) {
+        final previous = runtimeStatus;
+        _inventoryFailureStatus = error.status;
+        if (previous == null || !_sameRuntimeStatus(previous, error.status)) {
+          notifyListeners();
+        }
+      }
     } finally {
       _pollInFlight = false;
     }
@@ -1424,7 +1500,7 @@ final class WorkbenchController extends ChangeNotifier
 
   Future<void> refreshServerManagement({bool quiet = false}) async {
     if (section == WorkbenchSection.usage) {
-      await refreshUsage();
+      await refreshUsage(quiet: quiet);
       return;
     }
     if (_disposed ||
@@ -1460,40 +1536,58 @@ final class WorkbenchController extends ChangeNotifier
     }
   }
 
-  Future<void> refreshUsage() {
+  Future<RuntimeUsageReport> loadUsagePage(RuntimeUsageQuery query) =>
+      _api.runtimeUsage(query);
+
+  Future<void> refreshUsage({bool quiet = false}) {
     if (_disposed || !serverManagement) return Future<void>.value();
-    return _usageRefresh ??= _loadUsage().whenComplete(
-      () => _usageRefresh = null,
-    );
+    final query = _usageQuery();
+    final key = query.toQueryParameters().toString();
+    if (_usageRefreshKey == key && _usageRefresh != null) return _usageRefresh!;
+    if (quiet &&
+        _usageLastChecked != null &&
+        _clock().difference(_usageLastChecked!) < const Duration(seconds: 15)) {
+      return Future<void>.value();
+    }
+    _usageRefreshKey = key;
+    final generation = ++_usageGeneration;
+    return _usageRefresh = _loadUsage(query, generation).whenComplete(() {
+      if (generation == _usageGeneration) _usageRefresh = null;
+    });
   }
 
-  Future<void> _loadUsage() async {
+  Future<void> _loadUsage(RuntimeUsageQuery query, int generation) async {
     usageLoading = true;
     usageError = null;
+    _usageLastChecked = _clock();
     notifyListeners();
     try {
-      final report = await _api.runtimeUsage(_usageQuery());
-      if (_disposed) return;
+      final report = await _api.runtimeUsage(query);
+      if (_disposed || generation != _usageGeneration) return;
       runtimeUsage = report;
     } catch (error) {
-      if (_disposed) return;
+      if (_disposed || generation != _usageGeneration) return;
       usageError = _describeError(error);
     } finally {
-      if (!_disposed) {
+      if (!_disposed && generation == _usageGeneration) {
         usageLoading = false;
         notifyListeners();
       }
     }
   }
 
-  RuntimeUsageQuery _usageQuery() {
-    final now = _clock().toUtc();
+  RuntimeUsageQuery _usageQuery({
+    int? days,
+    Map<String, String> filters = const {},
+    DateTime? at,
+  }) {
+    final now = (at ?? _clock()).toUtc();
     final until = DateTime.utc(
       now.year,
       now.month,
       now.day,
     ).add(const Duration(days: 1));
-    final from = until.subtract(Duration(days: usageRangeDays));
+    final from = until.subtract(Duration(days: days ?? usageRangeDays));
     String civilDate(DateTime value) => [
       value.year.toString().padLeft(4, '0'),
       value.month.toString().padLeft(2, '0'),
@@ -1503,6 +1597,7 @@ final class WorkbenchController extends ChangeNotifier
       from: civilDate(from),
       until: civilDate(until),
       timeZone: 'UTC',
+      filters: filters,
     );
   }
 
@@ -2306,6 +2401,53 @@ final class WorkbenchController extends ChangeNotifier
     }
   }
 
+  Future<ProviderAccount?> setProviderAccountSettings(
+    ProviderAccount account, {
+    required EgressProfileRevision? egressProfile,
+    required bool automaticRefresh,
+  }) async {
+    if (!_beginInventoryMutation()) return null;
+    try {
+      final updated = await _api.setProviderAccountSettings(
+        account,
+        egressProfile: egressProfile,
+        automaticRefresh: automaticRefresh,
+      );
+      if (_disposed || data == null) return null;
+      data = _dashboardWith(
+        data!,
+        accounts: [
+          for (final candidate in data!.accounts)
+            if (candidate.id == updated.id) updated else candidate,
+        ],
+      );
+      if (updated.settingsRevision != account.settingsRevision) {
+        invalidateProviderAccountQuota(updated);
+      }
+      return updated;
+    } catch (error) {
+      if (error is ControlProblem && error.status == 409) {
+        try {
+          final latest = await _api.loadDashboard();
+          if (!_disposed && data != null) {
+            data = _dashboardWith(data!, accounts: latest.accounts);
+          }
+        } catch (_) {
+          // Keep the failed setting visible; never silently overwrite it.
+        }
+        if (!_disposed) inventoryError = 'provider_accounts.settings.conflict';
+      } else if (!_disposed) {
+        inventoryError = 'provider_accounts.settings.failed';
+      }
+      return null;
+    } finally {
+      if (!_disposed) {
+        inventoryMutating = false;
+        notifyListeners();
+      }
+    }
+  }
+
   Future<bool> setProviderAccountAssociation({
     required ProviderAccount account,
     required UpstreamEndpoint endpoint,
@@ -2689,6 +2831,8 @@ final class WorkbenchController extends ChangeNotifier
     selectedCaptureConversationKey = null;
     selectedCapturePage = null;
     showCaptureRequestRecords = false;
+    _captureViewChosen = false;
+    summarizeClientSession = false;
     detailLoading = false;
     captureActivitiesLoading = false;
   }
@@ -3248,6 +3392,21 @@ final class WorkbenchController extends ChangeNotifier
           ? currentPage
           : cached;
       selectedCapturePage = _reconcileCaptureConversationPage(retained, latest);
+      if (!_captureViewChosen) {
+        // The selected independent request may still be pending. Other
+        // conversations can already prove retained bodies; do not hide their
+        // records just because the newest request has no terminal row yet.
+        final completed = selectedActivities
+            .followedBy(available.map((conversation) => conversation.latest))
+            .where((record) => record.status != 'pending');
+        if (completed.isNotEmpty) {
+          showCaptureRequestRecords = completed.any(
+            // Unknown availability is not evidence of retained bodies.
+            (record) => record.contentAvailable == true,
+          );
+          _captureViewChosen = true;
+        }
+      }
       if (selectedKey != null) {
         _cacheCaptureConversationPage(
           capture.key,
@@ -3570,6 +3729,7 @@ final class WorkbenchController extends ChangeNotifier
 
   String _describeError(Object error) {
     return switch (error) {
+      DashboardUnavailable failure => _describeError(failure.cause),
       EnvironmentUpstreamReferenceException() =>
         'error.environment_upstream_changed',
       ControlProblem(reasonCode: 'environment_upstream_stale') =>
@@ -3735,6 +3895,8 @@ final class WorkbenchController extends ChangeNotifier
         left.host == right.host &&
         left.schemaRevision == right.schemaRevision &&
         left.storage == right.storage &&
+        left.storageFailure == right.storageFailure &&
+        left.recordingFailure == right.recordingFailure &&
         left.environmentProjection == right.environmentProjection &&
         listEquals(
           left.unavailableEnvironments,

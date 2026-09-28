@@ -29,7 +29,7 @@ func TestCostProjectionSharesOneSnapshotAndScopesAllGroups(t *testing.T) {
 		fetches++
 		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(`{"openai":{"models":{"m":{"cost":{"input":2,"output":10}}}}}`))}, nil
 	}}
-	projector, err := runtimeusage.New(runtimeusage.Options{Users: usersOf(user), Runs: fakeRuns{}, Ledger: ledger, Clock: fixedClock{now}, Prices: prices})
+	projector, err := runtimeusage.New(runtimeusage.Options{Ledger: ledger, Clock: fixedClock{now}, Prices: prices})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -40,32 +40,29 @@ func TestCostProjectionSharesOneSnapshotAndScopesAllGroups(t *testing.T) {
 	if all.Total.Cost.NanoUSD != 6_000_000 || all.Total.Cost.PricedCalls != 2 || all.Total.Cost.UnpricedCalls != 1 || all.Total.Failed != 2 {
 		t.Fatalf("cost = %+v", all.Total)
 	}
-	if all.Days[0].Cost != all.Total.Cost || all.Profiles[0].Cost != all.Total.Cost || all.Pricing.State != "ready" {
+	if all.Days[0].Cost != all.Total.Cost || all.Pricing.State != "ready" {
 		t.Fatal("inconsistent totals")
 	}
-	for _, groups := range [][]runtimeusage.GroupUsage{all.Accounts, all.Models, all.Sources} {
+	for _, dimension := range []string{"profile", "account", "model", "source"} {
+		query := queryAround(t, now)
+		query.Dimension, query.Limit = dimension, 50
+		page, err := projector.Report(context.Background(), query)
+		if err != nil {
+			t.Fatal(err)
+		}
 		nanos := int64(0)
-		for _, group := range groups {
+		for _, group := range page.Groups {
 			nanos += group.Cost.NanoUSD
 		}
 		if nanos != all.Total.Cost.NanoUSD {
 			t.Fatal("group sum differs")
 		}
 	}
-	for _, group := range all.Profiles {
-		var children int64
-		for _, child := range group.Children {
-			children += child.Cost.NanoUSD
-		}
-		if children != group.Cost.NanoUSD {
-			t.Fatal("model subtotals changed estimated cost")
-		}
-	}
 	self, err := projector.ReportForUser(context.Background(), queryAround(t, now), user.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if self.Total.Cost.NanoUSD != 3_000_000 || self.Total.AgentAPICalls != 2 || len(self.Sources) != 1 || self.Sources[0].ID != "member" || self.Users[0].Days[0].Cost != self.Total.Cost || fetches != 1 {
+	if self.Total.Cost.NanoUSD != 3_000_000 || self.Total.AgentAPICalls != 2 || self.Days[0].Cost != self.Total.Cost || fetches != 1 {
 		t.Fatalf("self report leaked or re-fetched: %+v", self.Total)
 	}
 }

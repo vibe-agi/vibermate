@@ -7,12 +7,18 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:vibermate_app/core/api/control_api.dart';
 import 'package:vibermate_app/core/api/control_models.dart';
 
-Map<String, Object> _accountJson({
+Map<String, Object?> _accountJson({
   int epoch = 1,
   String workspace = 'workspace',
 }) => {
   'id': 'account.oauth',
   'displayName': 'Managed OAuth',
+  'note': '',
+  'noteRevision': 0,
+  'settingsRevision': 1,
+  'automaticRefresh': false,
+  'supportsAutomaticRefresh': false,
+  'egressProfile': null,
   'credentialOrigin': 'https://chatgpt.com',
   'linkedEndpointIds': <String>[],
   'associationRevision': 1,

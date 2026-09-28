@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/vibe-agi/vibermate/internal/localdiscovery"
+	"github.com/vibe-agi/vibermate/internal/productruntime"
 	"github.com/vibe-agi/vibermate/internal/runlauncher"
 	"github.com/vibe-agi/vibermate/internal/runtimepath"
 	"github.com/vibe-agi/vibermate/internal/serverconnection"
@@ -82,7 +83,8 @@ func executeLocalStatus(
 		return 1, keyRuntimeUnavailable
 	}
 	key := "cli.status.local"
-	if doctor {
+	healthy := inspection.Ready && inspection.Storage == "healthy" && inspection.State == "initialized"
+	if doctor && healthy && inspection.RecordingFailure == nil {
 		key = "cli.doctor.local"
 	}
 	if err := renderCLIMessage(environment, stdout, key, map[string]string{
@@ -97,7 +99,28 @@ func executeLocalStatus(
 	}); err != nil {
 		return 1, reasonRenderFailed
 	}
-	if !inspection.Ready || inspection.Storage != "healthy" {
+	for _, diagnostic := range []struct {
+		key     string
+		failure *productruntime.PersistenceFailure
+	}{
+		{"cli.status.storage_failure", inspection.StorageFailure},
+		{"cli.status.recording_failure", inspection.RecordingFailure},
+	} {
+		if diagnostic.failure == nil {
+			continue
+		}
+		if err := renderCLIMessage(environment, stdout, diagnostic.key, map[string]string{
+			"operation": diagnostic.failure.Operation, "reason": diagnostic.failure.Reason, "at": diagnostic.failure.At.Format(time.RFC3339),
+		}); err != nil {
+			return 1, reasonRenderFailed
+		}
+	}
+	if !healthy {
+		if doctor {
+			if err := renderCLIMessage(environment, stdout, "cli.doctor.unhealthy", nil); err != nil {
+				return 1, reasonRenderFailed
+			}
+		}
 		return 1, ""
 	}
 	return 0, ""

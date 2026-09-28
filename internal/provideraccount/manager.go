@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/vibe-agi/vibermate/internal/egressprofile"
 	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/exchange"
 	"github.com/vibe-agi/vibermate/internal/originidentity"
@@ -28,20 +29,21 @@ func (systemClock) Now() time.Time { return time.Now().UTC() }
 type Manager struct {
 	mu sync.RWMutex
 
-	repository Repository
-	secrets    secretstore.Store
-	endpoints  upstreamendpoint.Catalog
-	realms     map[string]Realm
-	accounts   map[ID]Account
-	clock      Clock
-	deletion   environment.AccountDeletionGuard
-	preparer   CredentialPreparer
-	active     map[ID]uint64
-	operations map[ID]accountOperation
-	epochs     map[ID]secretstore.Revision
-	inFlight   uint64
-	drained    chan struct{}
-	closing    bool
+	repository     Repository
+	secrets        secretstore.Store
+	endpoints      upstreamendpoint.Catalog
+	realms         map[string]Realm
+	accounts       map[ID]Account
+	clock          Clock
+	deletion       environment.AccountDeletionGuard
+	preparer       CredentialPreparer
+	egressProfiles egressprofile.Controller
+	active         map[ID]uint64
+	operations     map[ID]accountOperation
+	epochs         map[ID]secretstore.Revision
+	inFlight       uint64
+	drained        chan struct{}
+	closing        bool
 }
 
 type accountOperation uint8
@@ -53,6 +55,7 @@ const (
 	accountOperationAssociation
 	accountOperationRefresh
 	accountOperationNote
+	accountOperationSettings
 )
 
 var (
@@ -268,6 +271,7 @@ func (manager *Manager) Create(ctx context.Context, command CreateCommand) (View
 		Origin: endpoint.Origin, RealmID: endpoint.RealmID, AssociationRevision: 1,
 		Driver: command.Driver, SecretRef: reference, State: StateActive,
 		Revision: 1, CreatedAt: now, UpdatedAt: now,
+		SettingsRevision: 1, AutomaticRefresh: command.AutomaticRefresh,
 	}
 	if !account.CompatibleEndpoint(endpoint) {
 		return View{}, ErrEndpointMismatch
@@ -554,6 +558,7 @@ func (manager *Manager) Acquire(
 		upstreamEndpointID:       request.UpstreamEndpointID(),
 		upstreamEndpointRevision: uint64(request.UpstreamEndpointRevision()),
 		upstreamEndpointOrigin:   request.UpstreamEndpointOrigin(),
+		egressProfile:            request.EgressProfile(),
 	})
 }
 
@@ -598,6 +603,7 @@ func (manager *Manager) AcquireEndpointCredential(
 }
 
 type accountLeaseScope struct {
+	egressProfile            egressprofile.ProfileRevision
 	ownerOperation           bool
 	id                       ID
 	accountRevision          uint64
@@ -618,7 +624,7 @@ func (manager *Manager) acquire(
 	}
 	// Annotation writes do not change the credential or routing authority. New
 	// requests can keep acquiring it while the note is being persisted.
-	if operation, exists := manager.operations[scope.id]; exists && operation != accountOperationNote {
+	if operation, exists := manager.operations[scope.id]; exists && operation != accountOperationNote && operation != accountOperationSettings {
 		manager.mu.Unlock()
 		return nil, ErrOperationInProgress
 	}
@@ -680,7 +686,11 @@ func (manager *Manager) acquire(
 		credentialEpoch = metadata.Revision
 		manager.observeCredentialEpoch(account.ID, credentialEpoch)
 	}
-	if account.Driver == providerauth.CodexOAuthDriverRef() {
+	credentialScope := account.credentialScope(scope.realmID, uint64(credentialEpoch), scope.egressProfile)
+	if credentialScope.Validate() != nil {
+		return nil, ErrInvalidAccount
+	}
+	if account.AutomaticRefresh {
 		manager.mu.RLock()
 		preparer := manager.preparer
 		manager.mu.RUnlock()
@@ -688,7 +698,7 @@ func (manager *Manager) acquire(
 			return nil, ErrPreparationUnavailable
 		}
 		prepared, err := preparer.Prepare(
-			ctx, account.Driver, account.SecretRef, credentialEpoch,
+			ctx, account.Driver, account.SecretRef, credentialScope,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("prepare ProviderAccount credential: %w", err)
@@ -697,14 +707,12 @@ func (manager *Manager) acquire(
 			return nil, ErrCredentialMissing
 		}
 		credentialEpoch = prepared
+		credentialScope.CredentialEpoch = uint64(prepared)
 		manager.observeCredentialEpoch(account.ID, credentialEpoch)
 	}
 	releaseOnError = false
 	return &lease{
-		account: providerauth.AccountRef{
-			ID: account.ID.String(), Revision: account.Revision,
-			CredentialEpoch: uint64(credentialEpoch), RealmID: scope.realmID,
-		},
+		account: credentialScope,
 		driver:  account.Driver,
 		secret:  account.SecretRef,
 		release: func() { manager.release(scope.id) },

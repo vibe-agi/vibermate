@@ -400,6 +400,7 @@ func New(options Options) (*Handler, error) {
 	handler.mux.HandleFunc("POST /api/v1/provider-accounts", handler.createProviderAccount)
 	handler.mux.HandleFunc("GET /api/v1/provider-accounts/{accountId}", handler.getProviderAccount)
 	handler.mux.HandleFunc("PUT /api/v1/provider-accounts/{accountId}/note", handler.setProviderAccountNote)
+	handler.mux.HandleFunc("PUT /api/v1/provider-accounts/{accountId}/settings", handler.setProviderAccountSettings)
 	handler.mux.HandleFunc("GET /api/v1/provider-accounts/{accountId}/account-facts", handler.getAccountFacts)
 	handler.mux.HandleFunc("POST /api/v1/provider-accounts/{accountId}/actions/redeem-reset-credit", handler.redeemResetCredit)
 	handler.mux.HandleFunc("DELETE /api/v1/provider-accounts/{accountId}", handler.deleteProviderAccount)
@@ -425,6 +426,7 @@ func New(options Options) (*Handler, error) {
 	)
 	handler.mux.HandleFunc("GET /api/v1/environments/{environmentId}/revisions/{environmentRevision}", handler.getEnvironmentRevision)
 	handler.mux.HandleFunc("GET /api/v1/activities", handler.listActivities)
+	handler.mux.HandleFunc("GET /api/v1/activities/summary", handler.summarizeActivities)
 	handler.mux.HandleFunc("GET /api/v1/evidence/search", handler.searchActivities)
 	handler.mux.HandleFunc("GET /api/v1/conversations", handler.listConversations)
 	handler.mux.HandleFunc(
@@ -755,6 +757,21 @@ func (handler *Handler) listConversations(
 	if err := handler.attachConversationIdentities(request.Context(), page, &view); err != nil {
 		writeProblem(writer, http.StatusServiceUnavailable, ReasonRuntimeUnavailable)
 		return
+	}
+	// The directory and selected request page must agree about retained bodies.
+	// One bounded metadata read; never load conversation content to pick a tab.
+	if len(view.Items) != 0 {
+		ids := make([]string, len(view.Items))
+		for index := range view.Items {
+			ids[index] = view.Items[index].Latest.ID
+		}
+		if available, err := handler.contents.AvailableBodies(request.Context(), ids); err == nil {
+			for index := range view.Items {
+				if exists, known := available[ids[index]]; known {
+					view.Items[index].Latest.ContentAvailable = &exists
+				}
+			}
+		}
 	}
 	writeJSON(writer, http.StatusOK, view)
 	handler.scheduleConversationIndex(indexRequest)

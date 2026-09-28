@@ -51,6 +51,37 @@ func TestNewFreezesACompleteAttempt(t *testing.T) {
 	}
 }
 
+func TestAccountSettingsEvidenceIsCompleteAndFrozen(t *testing.T) {
+	input := baseInput()
+	input.Decision.AccountID = "account.work"
+	input.Decision.AccountSettingsRevision = 4
+	input.Decision.ProxyRevision = 3
+	attempt, err := egressaudit.New(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	input.Decision.AccountSettingsRevision++
+	input.Decision.ProxyRevision++
+	view := egressaudit.ViewOf(egressaudit.Record{Sequence: 1, Attempt: attempt})
+	if view.Decision.AccountID != "account.work" || view.Decision.AccountSettingsRevision != 4 || view.Decision.ProxyRevision != 3 {
+		t.Fatalf("audit rewrote frozen settings: %+v", view.Decision)
+	}
+	for _, field := range []string{"account", "settings", "proxy_revision"} {
+		partial := input
+		switch field {
+		case "account":
+			partial.Decision.AccountID = ""
+		case "settings":
+			partial.Decision.AccountSettingsRevision = 0
+		case "proxy_revision":
+			partial.Decision.ProxyRevision = 0
+		}
+		if _, err := egressaudit.New(partial); err == nil {
+			t.Fatalf("missing %s accepted", field)
+		}
+	}
+}
+
 // Each purpose maps to exactly one policy authority. A mismatch means the
 // caller resolved the wrong configuration, so it is refused rather than
 // recorded.

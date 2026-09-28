@@ -17,6 +17,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/vibe-agi/vibermate/internal/providerauth"
 )
 
 const AuthorizationURL = "https://auth.openai.com/oauth/authorize"
@@ -382,7 +384,7 @@ func (manager *LoginManager) exchangeCode(ctx context.Context, code string, veri
 	}
 	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	request.Header.Set("Accept", "application/json")
-	response, err := manager.options.Client.Do(request)
+	response, err := manager.options.Client.Do(request, providerauth.AccountRef{})
 	if err != nil || response == nil {
 		return nil, ErrLoginInvalid
 	}

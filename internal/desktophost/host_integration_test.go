@@ -101,6 +101,50 @@ func TestHostPublishesReadyGenerationAndRunsCapturedChildOverRealSockets(
 		controlStatus.Runtime.State != productruntime.RuntimeStateInitialized {
 		t.Fatalf("control status = %+v", controlStatus)
 	}
+	inspection, err := runlauncher.InspectLocal(context.Background(), sessionFile, time.Second)
+	if err != nil || !inspection.Ready || inspection.Storage != "healthy" {
+		t.Fatalf("real local CLI inspection = %+v, error=%v", inspection, err)
+	}
+	// The local CLI may inspect health, not borrow the App's read authority.
+	for _, headers := range []http.Header{
+		{"Authorization": {"Bearer " + session.ControlCredential, "Bearer " + session.ControlCredential}},
+		{"Sec-Fetch-Site": {"same-origin"}},
+		{"X-Vibermate-Run-Capability": {"fixture-run-capability"}},
+		{"X-Forwarded-For": {"127.0.0.1"}},
+	} {
+		request, err := http.NewRequest(http.MethodGet, app.BaseURL+"/api/v1/status", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		request.Header = headers
+		if request.Header.Get("Authorization") == "" {
+			request.Header.Set("Authorization", "Bearer "+session.ControlCredential)
+		}
+		response, err := http.DefaultClient.Do(request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		response.Body.Close()
+		if response.StatusCode != http.StatusUnauthorized && response.StatusCode != http.StatusForbidden {
+			t.Fatalf("ambiguous CLI status authority accepted: %d", response.StatusCode)
+		}
+	}
+	for _, probe := range []struct{ method, path, token, origin string }{
+		{http.MethodGet, "/api/v1/status", "", ""},
+		{http.MethodGet, "/api/v1/status", app.ReadToken, ""},
+		{http.MethodGet, "/api/v1/status", session.ControlCredential, "vibermate://desktop"},
+		{http.MethodGet, "/api/v1/status", session.ControlCredential, "https://untrusted.example"},
+		{http.MethodPost, "/api/v1/status", session.ControlCredential, ""},
+		{http.MethodGet, "/api/v1/provider-accounts", session.ControlCredential, ""},
+		{http.MethodGet, "/api/v1/capture-runs", session.ControlCredential, ""},
+		{http.MethodGet, "/api/v1/activities/summary?captureRunId=run-test", session.ControlCredential, ""},
+	} {
+		response := controlRequest(t, app.BaseURL, probe.method, probe.path, probe.token, probe.origin)
+		response.Body.Close()
+		if response.StatusCode != http.StatusUnauthorized && response.StatusCode != http.StatusForbidden {
+			t.Fatalf("CLI authority escaped scope for %s %s (%s): %d", probe.method, probe.path, probe.origin, response.StatusCode)
+		}
+	}
 
 	launcher, err := runlauncher.New(runlauncher.Config{
 		Discovery:          sessionFile,

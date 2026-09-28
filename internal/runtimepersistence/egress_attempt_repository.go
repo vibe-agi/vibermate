@@ -28,6 +28,7 @@ const egressAttemptSelect = `SELECT
 	    policy_authority,
 	    rule_id,
 	    proxy_id,
+	    proxy_revision, account_id, account_settings_revision,
 	    reused_transport,
 	    started_at_unix_ms,
 	    completed_at_unix_ms,
@@ -88,9 +89,10 @@ func (repository *egressAttemptRepository) Append(
 		     policy_authority,
 		     rule_id,
 		     proxy_id,
+		     proxy_revision, account_id, account_settings_revision,
 		     reused_transport,
 		     started_at_unix_ms
-		 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		attempt.ID(),
 		attempt.ConnectionID(),
 		string(attempt.Purpose()),
@@ -106,6 +108,7 @@ func (repository *egressAttemptRepository) Append(
 		string(attempt.Decision().Authority),
 		attempt.Decision().RuleID,
 		attempt.Decision().ProxyID,
+		attempt.Decision().ProxyRevision, attempt.Decision().AccountID, attempt.Decision().AccountSettingsRevision,
 		reused,
 		toUnixMillis(attempt.StartedAt()),
 	)
@@ -360,29 +363,32 @@ func (repository *egressAttemptRepository) List(
 
 func scanEgressAttempt(rows *sql.Rows) (egressaudit.Record, error) {
 	var (
-		sequence     int64
-		attemptID    string
-		connectionID string
-		purpose      string
-		payloadClass string
-		parentKind   string
-		parentID     string
-		parentXID    string
-		callerKind   string
-		callerID     string
-		targetOrigin string
-		policyID     string
-		policyRev    int64
-		authority    string
-		ruleID       string
-		proxyID      string
-		reused       int64
-		startedAt    int64
-		completedAt  sql.NullInt64
-		outcome      string
-		errorClass   string
-		bytesOut     int64
-		bytesIn      int64
+		sequence                int64
+		attemptID               string
+		connectionID            string
+		purpose                 string
+		payloadClass            string
+		parentKind              string
+		parentID                string
+		parentXID               string
+		callerKind              string
+		callerID                string
+		targetOrigin            string
+		policyID                string
+		policyRev               int64
+		authority               string
+		ruleID                  string
+		proxyID                 string
+		proxyRevision           uint64
+		accountID               string
+		accountSettingsRevision uint64
+		reused                  int64
+		startedAt               int64
+		completedAt             sql.NullInt64
+		outcome                 string
+		errorClass              string
+		bytesOut                int64
+		bytesIn                 int64
 	)
 	if err := rows.Scan(
 		&sequence,
@@ -401,6 +407,7 @@ func scanEgressAttempt(rows *sql.Rows) (egressaudit.Record, error) {
 		&authority,
 		&ruleID,
 		&proxyID,
+		&proxyRevision, &accountID, &accountSettingsRevision,
 		&reused,
 		&startedAt,
 		&completedAt,
@@ -438,11 +445,14 @@ func scanEgressAttempt(rows *sql.Rows) (egressaudit.Record, error) {
 		CallerID:     callerID,
 		TargetOrigin: targetOrigin,
 		Decision: egressaudit.DecisionRef{
-			PolicyID:       policyID,
-			PolicyRevision: uint64(policyRev),
-			Authority:      egressaudit.PolicyAuthorityKind(authority),
-			RuleID:         ruleID,
-			ProxyID:        proxyID,
+			PolicyID:                policyID,
+			PolicyRevision:          uint64(policyRev),
+			Authority:               egressaudit.PolicyAuthorityKind(authority),
+			RuleID:                  ruleID,
+			ProxyID:                 proxyID,
+			ProxyRevision:           proxyRevision,
+			AccountID:               accountID,
+			AccountSettingsRevision: accountSettingsRevision,
 		},
 		ReusedTransport: reused == 1,
 		StartedAt:       fromUnixMillis(startedAt),

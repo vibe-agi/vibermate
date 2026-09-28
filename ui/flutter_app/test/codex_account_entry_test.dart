@@ -114,7 +114,11 @@ void main() {
     final warning = find.byKey(const Key('account-editor-codex-ownership'));
     expect(warning, findsOneWidget);
     expect(
-      find.textContaining('请停止在原 Codex 或其他工具中使用这份 auth.json 及其副本'),
+      find.textContaining('新导入默认关闭自动刷新；替换凭据保留当前设置'),
+      findsOneWidget,
+    );
+    expect(
+      find.textContaining('请避免与其他会刷新的客户端共用该文件或其副本'),
       findsOneWidget,
     );
     for (final key in [

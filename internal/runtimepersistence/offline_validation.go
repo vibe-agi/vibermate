@@ -10,9 +10,37 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"time"
 
 	_ "modernc.org/sqlite"
 )
+
+func validateExistingSchema(ctx context.Context, path string, timeout time.Duration) error {
+	info, err := os.Stat(path)
+	if errors.Is(err, os.ErrNotExist) || err == nil && info.Size() == 0 {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	database := sql.OpenDB(newSQLiteReadConnector(path, timeout))
+	defer database.Close()
+	var objects int
+	if err := database.QueryRowContext(ctx, `SELECT count(*) FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%'`).Scan(&objects); err != nil {
+		return fmt.Errorf("%w: inspect existing database: %v", ErrSchemaBaselineMismatch, err)
+	}
+	if objects == 0 {
+		return nil
+	}
+	var state SchemaState
+	if err := database.QueryRowContext(ctx, `SELECT schema_identity,schema_revision,schema_source_sha256,initialized_at FROM runtime_metadata WHERE singleton=1`).Scan(
+		&state.Identity, &state.Revision, &state.SourceSHA256, &state.InitializedAt,
+	); err != nil {
+		return fmt.Errorf("%w: read existing schema: %v", ErrSchemaBaselineMismatch, err)
+	}
+	sum := sha256.Sum256([]byte(schemaSQL))
+	return validateSchemaState(state, hex.EncodeToString(sum[:]))
+}
 
 // ValidateOfflineDatabase verifies a stopped Runtime database before backup or
 // restore. Opening read-write is intentional: SQLite must recover a retained

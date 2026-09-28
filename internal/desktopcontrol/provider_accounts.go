@@ -48,23 +48,27 @@ type ProviderTokenInfoResponse struct {
 }
 
 type ProviderAccountResponse struct {
-	ID                  string                      `json:"id"`
-	DisplayName         string                      `json:"displayName"`
-	Note                string                      `json:"note"`
-	NoteRevision        uint64                      `json:"noteRevision"`
-	CredentialOrigin    string                      `json:"credentialOrigin"`
-	LinkedEndpointIDs   []upstreamendpoint.ID       `json:"linkedEndpointIds"`
-	AssociationRevision uint64                      `json:"associationRevision"`
-	Kind                ProviderAccountKind         `json:"kind"`
-	RealmID             string                      `json:"realmId"`
-	State               provideraccount.State       `json:"state"`
-	Revision            uint64                      `json:"revision"`
-	CredentialState     provideraccount.HealthState `json:"credentialState"`
-	CredentialEpoch     uint64                      `json:"credentialEpoch"`
-	SetHeaderNames      []string                    `json:"setHeaderNames"`
-	DeleteHeaderNames   []string                    `json:"deleteHeaderNames"`
-	CodexOAuth          *CodexOAuthResponse         `json:"codexOAuth,omitempty"`
-	TokenInfo           *ProviderTokenInfoResponse  `json:"tokenInfo,omitempty"`
+	ID                       string                      `json:"id"`
+	DisplayName              string                      `json:"displayName"`
+	Note                     string                      `json:"note"`
+	NoteRevision             uint64                      `json:"noteRevision"`
+	CredentialOrigin         string                      `json:"credentialOrigin"`
+	LinkedEndpointIDs        []upstreamendpoint.ID       `json:"linkedEndpointIds"`
+	AssociationRevision      uint64                      `json:"associationRevision"`
+	Kind                     ProviderAccountKind         `json:"kind"`
+	RealmID                  string                      `json:"realmId"`
+	State                    provideraccount.State       `json:"state"`
+	Revision                 uint64                      `json:"revision"`
+	CredentialState          provideraccount.HealthState `json:"credentialState"`
+	CredentialEpoch          uint64                      `json:"credentialEpoch"`
+	SetHeaderNames           []string                    `json:"setHeaderNames"`
+	DeleteHeaderNames        []string                    `json:"deleteHeaderNames"`
+	CodexOAuth               *CodexOAuthResponse         `json:"codexOAuth,omitempty"`
+	TokenInfo                *ProviderTokenInfoResponse  `json:"tokenInfo,omitempty"`
+	SettingsRevision         uint64                      `json:"settingsRevision"`
+	AutomaticRefresh         bool                        `json:"automaticRefresh"`
+	SupportsAutomaticRefresh bool                        `json:"supportsAutomaticRefresh"`
+	EgressProfile            *EgressProfileResponse      `json:"egressProfile"`
 }
 
 type ProviderAccountPage struct {
@@ -314,19 +318,26 @@ func providerAccountResponseOf(view provideraccount.View) (ProviderAccountRespon
 	if err != nil || view.Account.Validate() != nil || view.Health.Validate() != nil {
 		return ProviderAccountResponse{}, provideraccount.ErrInvalidAccount
 	}
-	return ProviderAccountResponse{
+	response := ProviderAccountResponse{
 		ID: view.Account.ID.String(), DisplayName: view.Account.DisplayName,
 		Note: view.Account.Note, NoteRevision: view.Account.NoteRevision,
 		CredentialOrigin: view.Account.Origin.String(), LinkedEndpointIDs: view.Account.Associations.IDs(), AssociationRevision: view.Account.AssociationRevision,
 		Kind: kind, RealmID: view.Account.RealmID, State: view.Account.State,
 		Revision: view.Account.Revision, CredentialState: view.Health.State,
-		CredentialEpoch: view.Health.CredentialEpoch,
-		SetHeaderNames:  append([]string{}, view.SetHeaderNames...),
+		CredentialEpoch:  view.Health.CredentialEpoch,
+		SettingsRevision: view.Account.SettingsRevision, AutomaticRefresh: view.Account.AutomaticRefresh,
+		SupportsAutomaticRefresh: view.Account.SupportsAutomaticRefresh(),
+		SetHeaderNames:           append([]string{}, view.SetHeaderNames...),
 		DeleteHeaderNames: append(
 			[]string{},
 			view.DeleteHeaderNames...,
 		),
-	}, nil
+	}
+	if view.Account.EgressProfile.ID != "" {
+		profile := egressProfileResponseOf(view.Account.EgressProfile)
+		response.EgressProfile = &profile
+	}
+	return response, nil
 }
 
 func (handler *Handler) providerAccountResponse(

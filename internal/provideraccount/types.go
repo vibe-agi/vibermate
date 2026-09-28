@@ -11,6 +11,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/vibe-agi/vibermate/internal/egressprofile"
 	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/originidentity"
 	"github.com/vibe-agi/vibermate/internal/providerauth"
@@ -38,6 +39,7 @@ var (
 	ErrDeletionUnavailable    = errors.New("ProviderAccount deletion authority is unavailable")
 	ErrPreparationUnavailable = errors.New("ProviderAccount credential preparation authority is unavailable")
 	ErrManagerClosing         = errors.New("ProviderAccount manager is closing")
+	ErrSettingsUnavailable    = errors.New("ProviderAccount settings authority is unavailable")
 )
 
 type ID string
@@ -108,8 +110,13 @@ type Account struct {
 	SecretRef           secretstore.Reference
 	State               State
 	Revision            uint64
-	CreatedAt           time.Time
-	UpdatedAt           time.Time
+	// Settings are frozen when a lease is acquired, independently of the
+	// identity revision embedded in published routes. A zero profile inherits.
+	SettingsRevision uint64
+	EgressProfile    egressprofile.ProfileRevision
+	AutomaticRefresh bool
+	CreatedAt        time.Time
+	UpdatedAt        time.Time
 }
 
 func (account Account) Validate() error {
@@ -121,6 +128,9 @@ func (account Account) Validate() error {
 		!validIdentity(account.RealmID) ||
 		!account.State.Valid() ||
 		account.Revision == 0 || account.Revision > MaxRevision ||
+		account.SettingsRevision == 0 || account.SettingsRevision > MaxRevision ||
+		(account.EgressProfile != (egressprofile.ProfileRevision{}) && account.EgressProfile.Validate() != nil) ||
+		(account.AutomaticRefresh && !account.SupportsAutomaticRefresh()) ||
 		account.SecretRef.String() == "" ||
 		account.CreatedAt.IsZero() || account.UpdatedAt.IsZero() ||
 		account.UpdatedAt.Before(account.CreatedAt) {
@@ -135,6 +145,10 @@ func (account Account) Validate() error {
 		return ErrInvalidAccount
 	}
 	return nil
+}
+
+func (account Account) SupportsAutomaticRefresh() bool {
+	return account.Driver == providerauth.CodexOAuthDriverRef()
 }
 
 func (account Account) CompatibleEndpoint(endpoint upstreamendpoint.Endpoint) bool {
@@ -217,6 +231,7 @@ type Repository interface {
 	Write(context.Context, uint64, Account) (CommitResult, error)
 	WriteAssociations(context.Context, uint64, Account) (CommitResult, error)
 	WriteNote(context.Context, uint64, Account) (CommitResult, error)
+	WriteSettings(context.Context, uint64, Account) (CommitResult, error)
 	Delete(context.Context, ID, uint64) (CommitResult, error)
 }
 
@@ -230,6 +245,8 @@ type CreateCommand struct {
 	Unlinked bool
 	Driver   providerauth.DriverRef
 	Secret   *secretstore.Value
+	// Imports default off. Only an explicit managed OAuth login opts in.
+	AutomaticRefresh bool
 }
 
 type ReplaceSecretCommand struct {
@@ -254,6 +271,7 @@ type Controller interface {
 	Create(context.Context, CreateCommand) (View, error)
 	SetAssociation(context.Context, AssociationCommand) (View, error)
 	SetNote(context.Context, NoteCommand) (View, error)
+	SetSettings(context.Context, SettingsCommand) (View, error)
 	ReplaceSecret(context.Context, ReplaceSecretCommand) (View, error)
 	RefreshCredential(context.Context, ID, uint64) (View, error)
 	Delete(context.Context, DeleteCommand) (DeleteResult, error)
@@ -272,14 +290,14 @@ type CredentialPreparer interface {
 		context.Context,
 		providerauth.DriverRef,
 		secretstore.Reference,
-		secretstore.Revision,
+		providerauth.AccountRef,
 	) (secretstore.Revision, error)
 }
 
 // CredentialRefresher is the explicit user-initiated rotation capability of a
 // dynamic credential preparer. Secret material never crosses this interface.
 type CredentialRefresher interface {
-	Refresh(context.Context, providerauth.DriverRef, secretstore.Reference, secretstore.Revision) (secretstore.Revision, error)
+	Refresh(context.Context, providerauth.DriverRef, secretstore.Reference, providerauth.AccountRef) (secretstore.Revision, error)
 }
 
 func secretReference(id ID) (secretstore.Reference, error) {

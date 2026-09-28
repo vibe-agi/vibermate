@@ -15,7 +15,7 @@ const WebSelfUsagePath = "/api/v1/server/me/usage"
 type WebSelfUsageProjector interface {
 	ReportForUser(
 		ctx context.Context,
-		query runtimeusage.Query,
+		query runtimeusage.AggregationQuery,
 		userID runtimeuser.UserID,
 	) (runtimeusage.Report, error)
 }
@@ -54,6 +54,14 @@ func (handler *WebSelfHandler) ServeHTTP(writer http.ResponseWriter, request *ht
 		return
 	}
 	report, err := handler.usage.ReportForUser(request.Context(), query, principal.UserID)
+	if errors.Is(err, runtimeusage.ErrSnapshotChanged) {
+		writeProblem(writer, http.StatusConflict, "usage_snapshot_changed")
+		return
+	}
+	if errors.Is(err, runtimeusage.ErrInvalidQuery) {
+		writeProblem(writer, http.StatusUnprocessableEntity, "invalid_runtime_usage_query")
+		return
+	}
 	if err != nil {
 		writeProblem(writer, http.StatusServiceUnavailable, "runtime_usage_unavailable")
 		return

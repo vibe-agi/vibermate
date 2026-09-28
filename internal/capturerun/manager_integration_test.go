@@ -158,7 +158,7 @@ func TestCaptureRunPersistsVerifiedAdapterEvidenceWithProxyCapability(
 			Workspace:               testWorkspaceScope(t),
 			Runtime: capturerun.RuntimeMetadata{
 				LocalUserName: "jack", HomeDirectory: "/Users/jack",
-				GitAtLaunch:     &capturerun.GitSnapshot{RepositoryKey: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", RepositoryName: "project", Branch: "main"},
+				GitAtLaunch:     &capturerun.GitSnapshot{RepositorySource: "local", RepositoryKey: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", RepositoryName: "project", Branch: "main"},
 				OperatingSystem: "darwin", OperatingSystemVersion: "15.6",
 				Architecture: "arm64", TimeZone: "Asia/Singapore",
 			},
@@ -566,6 +566,80 @@ func TestCaptureRunCatalogReconcilesExpiredLeaseBeforeListing(t *testing.T) {
 	if len(page.Items) != 1 || page.Items[0].ID != grant.Run.ID ||
 		page.Items[0].State != capturerun.StateExpired {
 		t.Fatalf("reconciled CaptureRun page = %+v", page.Items)
+	}
+}
+
+func TestCaptureRunResumesAfterSleepWithoutRevivingTerminalAuthority(t *testing.T) {
+	for _, action := range []string{"wake", "wake before catalog refresh", "finish while asleep", "already finished", "shutdown while asleep", "deleted", "never attached"} {
+		t.Run(action, func(t *testing.T) {
+			t.Parallel()
+			ctx := context.Background()
+			store := openStore(t, filepath.Join(t.TempDir(), "runtime.db"))
+			defer shutdownStore(t, store)
+			clock := newClock(time.Date(2026, 9, 28, 1, 0, 0, 0, time.UTC))
+			manager := newManager(t, store, clock)
+			grant, err := manager.Create(ctx, capturerun.CreateCommand{
+				CWD: "/workspace", CanonicalExecutablePath: "/bin/agent",
+				ExecutableLabel: "agent", CatalogRevision: 1,
+				Workspace: testWorkspaceScope(t),
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if action != "never attached" {
+				if _, err := manager.Attach(ctx, grant.Run.ID, grant.ControlCapability, 744); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if action == "already finished" {
+				if err := manager.Finish(ctx, grant.Run.ID, grant.ControlCapability); err != nil {
+					t.Fatal(err)
+				}
+			}
+			// Both laptop and supervisor were suspended, well beyond the 2m lease.
+			clock.Advance(12 * time.Hour)
+			if action != "wake before catalog refresh" {
+				if count, err := manager.ActiveCount(ctx); err != nil || count != 0 {
+					t.Fatalf("asleep count=%d: %v", count, err)
+				}
+			}
+			if _, err := manager.AuthorizeProxy(ctx, grant.ProxyCapability); !errors.Is(err, capturerun.ErrCapabilityRejected) {
+				t.Fatalf("expired proxy authority: %v", err)
+			}
+			switch action {
+			case "finish while asleep":
+				if err := manager.Finish(ctx, grant.Run.ID, grant.ControlCapability); err != nil {
+					t.Fatal(err)
+				}
+			case "shutdown while asleep":
+				if err := manager.Shutdown(ctx); err != nil {
+					t.Fatal(err)
+				}
+				manager = newManager(t, store, clock)
+			case "deleted":
+				if _, err := store.DeleteCapture(ctx, "managed_run", grant.Run.ID); err != nil {
+					t.Fatal(err)
+				}
+			}
+			// The child only receives the proxy token, never the supervisor secret.
+			wrong, _ := capturerun.NewControlCapability(base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x71}, 32)))
+			if _, err := manager.Heartbeat(ctx, grant.Run.ID, wrong, 0); !errors.Is(err, capturerun.ErrCapabilityRejected) {
+				t.Fatalf("wrong supervisor accepted: %v", err)
+			}
+			view, err := manager.Heartbeat(ctx, grant.Run.ID, grant.ControlCapability, 0)
+			if action != "wake" && action != "wake before catalog refresh" {
+				if !errors.Is(err, capturerun.ErrCapabilityRejected) {
+					t.Fatalf("terminal or unattached run revived: %v", err)
+				}
+				return
+			}
+			if err != nil || view.State != capturerun.StateAttached || view.ProcessID != 744 || !view.ExpiresAt.After(clock.Now()) {
+				t.Fatalf("wake heartbeat state=%s: %v", view.State, err)
+			}
+			if _, err := manager.AuthorizeProxy(ctx, grant.ProxyCapability); err != nil {
+				t.Fatalf("renewed proxy authority: %v", err)
+			}
+		})
 	}
 }
 

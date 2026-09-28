@@ -23,7 +23,9 @@ import (
 
 type loginHTTPFunc func(*http.Request) (*http.Response, error)
 
-func (f loginHTTPFunc) Do(r *http.Request) (*http.Response, error) { return f(r) }
+func (f loginHTTPFunc) Do(r *http.Request, _ providerauth.AccountRef) (*http.Response, error) {
+	return f(r)
+}
 
 func TestCodexLoginControlUsesWriteSessionAndPersistsIndependentAccount(t *testing.T) {
 	runtime := startRuntime(t)

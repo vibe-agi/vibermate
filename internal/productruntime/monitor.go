@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"sync"
 	"time"
+
+	"github.com/vibe-agi/vibermate/internal/runtimepersistence"
 )
 
 var ErrStorageMonitorStopped = errors.New("storage health monitor stopped")
@@ -44,6 +46,22 @@ func (m *storageHealthMonitor) run(ctx context.Context, request monitorBuildRequ
 	defer close(m.done)
 	ticker := time.NewTicker(request.interval)
 	defer ticker.Stop()
+	maintenance := time.NewTicker(time.Minute)
+	defer maintenance.Stop()
+	cleanup := func() {
+		if request.cleanup == nil {
+			return
+		}
+		call, cancel := context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+		// Expiry is already enforced by readers. Exhausting a maintenance budget
+		// means continue next pass, not that the database or proxy is unavailable.
+		if err := request.cleanup(call); err != nil &&
+			!errors.Is(err, context.DeadlineExceeded) && !errors.Is(err, context.Canceled) {
+			request.observe(runtimepersistence.SchemaState{}, err)
+		}
+	}
+	cleanup()
 
 	for {
 		select {
@@ -52,6 +70,8 @@ func (m *storageHealthMonitor) run(ctx context.Context, request monitorBuildRequ
 		case <-ticker.C:
 			state, err := request.reader.ReadSchemaState(ctx)
 			request.observe(state, err)
+		case <-maintenance.C:
+			cleanup()
 		}
 	}
 }

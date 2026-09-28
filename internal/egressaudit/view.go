@@ -47,11 +47,14 @@ type ParentView struct {
 }
 
 type DecisionView struct {
-	PolicyID       string              `json:"policyId,omitempty"`
-	PolicyRevision uint64              `json:"policyRevision,omitempty"`
-	Authority      PolicyAuthorityKind `json:"authority"`
-	RuleID         string              `json:"ruleId,omitempty"`
-	ProxyID        string              `json:"proxyId,omitempty"`
+	PolicyID                string              `json:"policyId,omitempty"`
+	PolicyRevision          uint64              `json:"policyRevision,omitempty"`
+	Authority               PolicyAuthorityKind `json:"authority"`
+	RuleID                  string              `json:"ruleId,omitempty"`
+	ProxyID                 string              `json:"proxyId,omitempty"`
+	ProxyRevision           uint64              `json:"proxyRevision,omitempty"`
+	AccountID               string              `json:"accountId,omitempty"`
+	AccountSettingsRevision uint64              `json:"accountSettingsRevision,omitempty"`
 }
 
 // ViewOf renders one stored attempt for a reader.
@@ -72,11 +75,14 @@ func ViewOf(record Record) View {
 		CallerID:     attempt.CallerID(),
 		TargetOrigin: attempt.TargetOrigin(),
 		Decision: DecisionView{
-			PolicyID:       attempt.Decision().PolicyID,
-			PolicyRevision: attempt.Decision().PolicyRevision,
-			Authority:      attempt.Decision().Authority,
-			RuleID:         attempt.Decision().RuleID,
-			ProxyID:        attempt.Decision().ProxyID,
+			PolicyID:                attempt.Decision().PolicyID,
+			PolicyRevision:          attempt.Decision().PolicyRevision,
+			Authority:               attempt.Decision().Authority,
+			RuleID:                  attempt.Decision().RuleID,
+			ProxyID:                 attempt.Decision().ProxyID,
+			ProxyRevision:           attempt.Decision().ProxyRevision,
+			AccountID:               attempt.Decision().AccountID,
+			AccountSettingsRevision: attempt.Decision().AccountSettingsRevision,
 		},
 		ReusedTransport: attempt.ReusedTransport(),
 		StartedAt:       attempt.StartedAt(),

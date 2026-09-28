@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -19,6 +20,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/localdiscovery"
 	"github.com/vibe-agi/vibermate/internal/loopbackclient"
 	"github.com/vibe-agi/vibermate/internal/productbuild"
+	"github.com/vibe-agi/vibermate/internal/productruntime"
 )
 
 const maxControlResponseBytes = 128 << 10
@@ -49,14 +51,16 @@ type requestDoer interface {
 }
 
 type RuntimeInspection struct {
-	Origin       string
-	ProcessID    int
-	Ready        bool
-	APIVersion   string
-	ProductBuild string
-	State        string
-	Host         string
-	Storage      string
+	Origin           string
+	ProcessID        int
+	Ready            bool
+	APIVersion       string
+	ProductBuild     string
+	State            string
+	Host             string
+	Storage          string
+	StorageFailure   *productruntime.PersistenceFailure
+	RecordingFailure *productruntime.PersistenceFailure
 }
 
 func InspectLocal(
@@ -115,12 +119,26 @@ func InspectLocal(
 	default:
 		return RuntimeInspection{}, errors.New("local Runtime storage state is invalid")
 	}
+	for _, failure := range []*productruntime.PersistenceFailure{response.Runtime.StorageFailure, response.Runtime.RecordingFailure} {
+		if failure != nil && !failure.Valid() {
+			return RuntimeInspection{}, errors.New("local Runtime failure evidence is invalid")
+		}
+	}
+	if failure := response.Runtime.StorageFailure; failure != nil &&
+		(!failure.CoreAudit() || response.Runtime.Storage != productruntime.StorageStateUnavailable) {
+		return RuntimeInspection{}, errors.New("local Runtime storage failure is inconsistent")
+	}
+	if failure := response.Runtime.RecordingFailure; failure != nil && failure.CoreAudit() {
+		return RuntimeInspection{}, errors.New("local Runtime recording failure is inconsistent")
+	}
 	return RuntimeInspection{
 		Origin: session.BaseURL, ProcessID: session.ProcessID,
 		Ready: response.Ready, APIVersion: response.APIVersion,
 		ProductBuild: response.ProductBuild,
 		State:        string(response.Runtime.State), Host: string(response.Runtime.Host),
-		Storage: string(response.Runtime.Storage),
+		Storage:          string(response.Runtime.Storage),
+		StorageFailure:   response.Runtime.StorageFailure,
+		RecordingFailure: response.Runtime.RecordingFailure,
 	}, nil
 }
 
@@ -331,15 +349,25 @@ func decodeControlFailure(status int, payload []byte) error {
 		problem.Code == "" ||
 		problem.Type != "urn:vibermate:error:"+
 			strings.ReplaceAll(string(problem.Code), "_", "-") {
-		return fmt.Errorf(
-			"local control returned invalid error response with status %d",
-			status,
-		)
+		// Keep the HTTP status even when an intermediary returns HTML or an
+		// incomplete body. No untrusted error content is copied into diagnostics.
+		return &ControlFailure{Status: status, ReasonCode: "invalid_control_error_response"}
 	}
 	return &ControlFailure{
 		Status:     status,
 		ReasonCode: problem.Code,
 	}
+}
+
+func retryableControlFailure(err error) bool {
+	var failure *ControlFailure
+	if errors.As(err, &failure) {
+		return failure.Status == http.StatusRequestTimeout ||
+			failure.Status == http.StatusTooManyRequests ||
+			failure.Status >= 500 && failure.Status <= 599
+	}
+	var network net.Error
+	return errors.As(err, &network) || errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF)
 }
 
 func runActionPath(runID string, action string) string {

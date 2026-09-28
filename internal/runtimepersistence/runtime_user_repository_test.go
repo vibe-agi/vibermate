@@ -15,7 +15,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/workspaceidentity"
 )
 
-func TestRuntimeUserPolicyExtensionPreservesReleasedBaseSchema(t *testing.T) {
+func TestCurrentSchemaIncludesAllRuntimeTablesWithoutExtensions(t *testing.T) {
 	ctx := context.Background()
 	databasePath := filepath.Join(t.TempDir(), "runtime.sqlite")
 	base := sql.OpenDB(newSQLiteConnector(databasePath, DefaultBusyTimeout))
@@ -30,11 +30,14 @@ func TestRuntimeUserPolicyExtensionPreservesReleasedBaseSchema(t *testing.T) {
 	defer shutdownTestStore(t, store)
 	state, err := store.SchemaStateReader().ReadSchemaState(ctx)
 	if err != nil || state.SourceSHA256 != digest {
-		t.Fatalf("base schema changed during policy extension: state=%+v err=%v", state, err)
+		t.Fatalf("base schema changed during open: state=%+v err=%v", state, err)
 	}
 	var count int
-	if err := store.database.QueryRowContext(ctx, `SELECT COUNT(*) FROM runtime_user_policy_schema_metadata`).Scan(&count); err != nil || count != 1 {
-		t.Fatalf("policy extension metadata count=%d err=%v", count, err)
+	if err := store.database.QueryRowContext(ctx, `SELECT COUNT(*) FROM sqlite_schema WHERE type='table' AND name IN ('acp_observations','runtime_user_policies','runtime_usage_observations','runtime_usage_policy')`).Scan(&count); err != nil || count != 4 {
+		t.Fatalf("current tables count=%d err=%v", count, err)
+	}
+	if err := store.database.QueryRowContext(ctx, `SELECT COUNT(*) FROM sqlite_schema WHERE name IN ('acp_schema_metadata','runtime_user_policy_schema_metadata','runtime_usage_schema_metadata','capture_project_schema_metadata','capture_run_projects')`).Scan(&count); err != nil || count != 0 {
+		t.Fatalf("runtime retained extension schemas: count=%d err=%v", count, err)
 	}
 }
 

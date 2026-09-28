@@ -43,6 +43,153 @@ void main() {
 
   for (final width in [390.0, 1180.0]) {
     testWidgets(
+      'account settings select a shared exit and keep refresh explicit at $width',
+      (tester) async {
+        final semantics = tester.ensureSemantics();
+        await tester.binding.setSurfaceSize(Size(width, 900));
+        addTearDown(() => tester.binding.setSurfaceSize(null));
+        final api = PreviewControlApi(seedCaptures: false);
+        final login = await api.startCodexLogin(
+          accountId: 'account.settings',
+          upstreamEndpointId: 'target.codex.official',
+          displayName: 'Settings fixture',
+          callbackMode: 'manual',
+        );
+        await api.completeCodexLogin(
+          login.id,
+          'http://localhost:1455/auth/callback?state=${login.id}&code=synthetic',
+        );
+        final secondLogin = await api.startCodexLogin(
+          accountId: 'account.settings-second',
+          upstreamEndpointId: 'target.codex.official',
+          displayName: 'Settings fixture second',
+          callbackMode: 'manual',
+        );
+        await api.completeCodexLogin(
+          secondLogin.id,
+          'http://localhost:1455/auth/callback?state=${secondLogin.id}&code=synthetic',
+        );
+        final controller = WorkbenchController(
+          api: api,
+          terminalCommands: PreviewTerminalCommandService(),
+          previewMode: true,
+          closeRuntime: api.close,
+          initialPreferences: const WorkbenchPreferences(
+            language: AppLanguage.simplifiedChinese,
+            section: WorkbenchSection.providerAccounts,
+          ),
+        );
+        addTearDown(controller.dispose);
+        await controller.initialize();
+        final boundary = GlobalKey();
+        await tester.pumpWidget(
+          RepaintBoundary(
+            key: boundary,
+            child: MaterialApp(
+              theme: ViberTheme.dark(),
+              home: WorkbenchShell(controller: controller),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+        await tester.enterText(
+          find.byKey(const Key('provider-accounts-search')),
+          'Settings fixture',
+        );
+        await tester.pumpAndSettle();
+        ProviderAccount current() => controller.data!.accounts.singleWhere(
+          (a) => a.id == 'account.settings',
+        );
+        final toggle = find.byKey(
+          const Key('account-automatic-refresh-account.settings'),
+        );
+        expect(find.text('自动刷新'), findsNWidgets(width >= 1180 ? 1 : 2));
+        expect(tester.getRect(toggle).height, lessThanOrEqualTo(32));
+        final hit = tester.getRect(
+          find.byKey(
+            const Key('account-automatic-refresh-hit-account.settings'),
+          ),
+        );
+        expect(hit.width, greaterThanOrEqualTo(48));
+        expect(hit.height, greaterThanOrEqualTo(width < 1180 ? 44 : 32));
+        if (width >= 1180) {
+          final heading = tester.getRect(
+            find.byKey(const Key('provider-accounts-automatic-refresh-column')),
+          );
+          expect(hit.center.dx, closeTo(heading.center.dx, .1));
+        }
+        expect(find.bySemanticsLabel('自动刷新: Settings fixture'), findsOneWidget);
+        expect(
+          tester.getSemantics(toggle),
+          matchesSemantics(
+            label: '自动刷新: Settings fixture',
+            textDirection: TextDirection.ltr,
+            hasEnabledState: true,
+            isEnabled: true,
+            hasToggledState: true,
+            isToggled: true,
+            isFocusable: true,
+            hasFocusAction: true,
+            hasTapAction: true,
+          ),
+        );
+        semantics.dispose();
+        expect(tester.widget<Switch>(toggle).value, isTrue);
+        // The quiet, smaller drawing must not shrink the clickable target.
+        await tester.tapAt(Offset(hit.right - 2, hit.center.dy));
+        await tester.pumpAndSettle();
+        expect(current().automaticRefresh, isFalse);
+        expect(tester.widget<Switch>(toggle).value, isFalse);
+        expect(find.text('已托管刷新'), findsNothing);
+        await tester.tap(
+          find.byKey(
+            const Key('provider-account-details-toggle-account.settings'),
+          ),
+        );
+        await tester.pumpAndSettle();
+        final exit = find.byKey(const Key('account-egress-account.settings'));
+        await tester.ensureVisible(exit);
+        await tester.tap(exit);
+        await tester.pumpAndSettle();
+        expect(find.byKey(const Key('account-egress-inherit')), findsOneWidget);
+        await _review(
+          tester,
+          boundary,
+          reviewDirectory,
+          'account-exit-picker-${width.toInt()}',
+        );
+        await tester.tap(
+          find.byKey(const Key('environment-egress-profile-profile.direct-1')),
+        );
+        await tester.tap(
+          find.byKey(const Key('environment-egress-profile-save')),
+        );
+        await tester.pumpAndSettle();
+        expect(current().egressProfile, EgressProfileRevision.direct);
+        expect(current().automaticRefresh, isFalse);
+        await _review(
+          tester,
+          boundary,
+          reviewDirectory,
+          'account-settings-${width.toInt()}',
+        );
+        await tester.ensureVisible(exit);
+        await tester.tap(exit);
+        await tester.pumpAndSettle();
+        await tester.tap(find.byKey(const Key('account-egress-inherit')));
+        await tester.tap(
+          find.byKey(const Key('environment-egress-profile-save')),
+        );
+        await tester.pumpAndSettle();
+        expect(current().egressProfile, isNull);
+        expect(current().revision, 1);
+        expect(tester.takeException(), isNull);
+        await tester.pumpWidget(const SizedBox.shrink());
+        controller.dispose();
+      },
+    );
+
+    testWidgets(
       'accounts are independent; compatible links can be removed at $width px',
       (tester) async {
         await tester.binding.setSurfaceSize(Size(width, 900));

@@ -104,6 +104,7 @@ void main() {
                     ? Scaffold(
                         body: PersonalUsageDashboard(
                           report: controller.runtimeUsage,
+                          loadPage: api.runtimeUsage,
                           loading: false,
                           error: null,
                           onRefresh: () {},
@@ -137,11 +138,7 @@ void main() {
           await tester.ensureVisible(projects);
           await tester.tap(projects);
           await tester.pumpAndSettle();
-          for (final path in [
-            'projects/project-one',
-            'projects/project-one/branch%3Amain',
-            'projects/project-one/branch%3Amain/alice',
-          ]) {
+          for (final path in ['project-one', 'alice']) {
             final expand = find.byKey(Key('usage-expand-$path'));
             await tester.ensureVisible(expand);
             await tester.tap(expand);
@@ -154,16 +151,16 @@ void main() {
           );
           expect(
             find.descendant(of: table, matching: find.text('25,864')),
-            findsNWidgets(5),
+            findsNWidgets(2),
           );
           expect(
             find.descendant(of: table, matching: find.text('≥ \$0.04')),
-            findsNWidgets(5),
+            findsNWidgets(2),
           );
           expect(
             find.descendant(
               of: table,
-              matching: find.text(copy('usage.total')),
+              matching: find.text(copy('usage.subtotal')),
             ),
             findsOneWidget,
           );
@@ -211,10 +208,19 @@ void main() {
       final unpriced = RuntimeUsageReport(
         generatedAt: report.generatedAt,
         period: report.period,
-        truncated: false,
+        collection: report.collection,
+        snapshot: report.snapshot,
         days: report.days,
-        users: report.users,
-        cost: const RuntimeCostEstimate(unpricedCalls: 18),
+        total: RuntimeUsageGroup(
+          id: 'all',
+          label: 'All',
+          agentApiCalls: 18,
+          succeeded: 16,
+          failed: 2,
+          canceled: 0,
+          tokens: report.total!.tokens,
+          cost: const RuntimeCostEstimate(unpricedCalls: 18),
+        ),
         pricing: const RuntimePricingInfo(state: 'unavailable'),
       );
       await tester.pumpWidget(
@@ -223,6 +229,7 @@ void main() {
           home: Scaffold(
             body: PersonalUsageDashboard(
               report: unpriced,
+              loadPage: api.runtimeUsage,
               loading: false,
               error: 'Refresh failed',
               onRefresh: () {},
@@ -239,7 +246,10 @@ void main() {
         ),
         findsOneWidget,
       );
-      expect(find.text('Refresh failed'), findsOneWidget);
+      expect(
+        find.text('Refresh failed; showing the last successful report.'),
+        findsOneWidget,
+      );
       expect(
         find.textContaining('Reference prices unavailable'),
         findsOneWidget,

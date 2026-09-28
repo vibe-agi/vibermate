@@ -543,11 +543,8 @@ func TestServerHostAuthenticatesServerCreatedRuntimeUserOverExplicitHTTP(t *test
 	if err := json.NewDecoder(usageResponse.Body).Decode(&usage); err != nil {
 		t.Fatal(err)
 	}
-	if len(usage.Users) != 1 || usage.Users[0].CaptureRuns != 1 ||
-		usage.Users[0].LatestContext == nil ||
-		usage.Users[0].LatestContext.DeviceName != "Linux workstation" ||
-		usage.Users[0].LatestContext.WorkspaceLabel != "project" {
-		t.Fatalf("remote Capture usage attribution = %#v", usage)
+	if usage.Total == nil || usage.Total.AgentAPICalls != 0 || len(usage.Days) != 0 {
+		t.Fatalf("a Capture without observed usage invented report activity = %#v", usage)
 	}
 }
 
@@ -743,9 +740,7 @@ func TestServerAdminCreatesRuntimeUserWithoutExposingPasswordMaterial(t *testing
 	if err := json.NewDecoder(usageResponse.Body).Decode(&usage); err != nil {
 		t.Fatal(err)
 	}
-	if usage.Schema != runtimeusage.ReportSchema || len(usage.Users) != 1 ||
-		usage.Users[0].UserID != runtimeuser.UserID(created.ID) ||
-		usage.Users[0].AgentAPICalls != 0 {
+	if usage.Schema != runtimeusage.ReportSchema || usage.Total == nil || usage.Total.AgentAPICalls != 0 {
 		t.Fatalf("Runtime User usage = %#v", usage)
 	}
 	createMember := postJSON(
@@ -769,6 +764,37 @@ func TestServerAdminCreatesRuntimeUserWithoutExposingPasswordMaterial(t *testing
 	}
 	if removable.Role != string(serveradmin.RoleMember) {
 		t.Fatalf("second Runtime User role = %q", removable.Role)
+	}
+	memberLogin := postJSON(t, client, "https://"+status.ListenAddress+servercontrol.WebSessionPath, "",
+		servercontrol.WebLogin{Schema: servercontrol.WebLoginSchema, Username: "bob", Password: "test-disabled-user-password"})
+	var memberSession servercontrol.WebSession
+	if err := json.NewDecoder(memberLogin.Body).Decode(&memberSession); err != nil {
+		t.Fatal(err)
+	}
+	memberLogin.Body.Close()
+	if memberLogin.StatusCode != http.StatusCreated || memberSession.Principal.Role != string(serveradmin.RoleMember) {
+		t.Fatalf("member Web login status=%d role=%s", memberLogin.StatusCode, memberSession.Principal.Role)
+	}
+	for _, access := range []struct {
+		token string
+		want  int
+	}{
+		{ownerSession.ReadToken, http.StatusOK},
+		{memberSession.ReadToken, http.StatusUnauthorized},
+	} {
+		request, err := http.NewRequest(http.MethodGet, "https://"+status.ListenAddress+"/api/v1/activities/summary?captureRunId=run-test", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		request.Header.Set("Authorization", "Bearer "+access.token)
+		response, err := client.Do(request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		response.Body.Close()
+		if response.StatusCode != access.want {
+			t.Fatalf("activity summary authority status=%d, want %d", response.StatusCode, access.want)
+		}
 	}
 	disable := sendJSON(
 		t,
@@ -1412,16 +1438,22 @@ func TestRuntimeUserCustomClaudeHTTPOriginProducesExchangeAndUsage(t *testing.T)
 	if usageResponse.StatusCode != http.StatusOK || json.NewDecoder(usageResponse.Body).Decode(&usage) != nil {
 		t.Fatalf("usage status=%d", usageResponse.StatusCode)
 	}
-	if len(usage.Users) != 1 || usage.Users[0].UserID != created.ID ||
-		usage.Users[0].AgentAPICalls != 1 || usage.Users[0].Succeeded != 1 ||
-		usage.Users[0].Tokens.InputUncached.Tokens != 4 ||
-		usage.Users[0].Tokens.InputUncached.KnownCalls != 1 ||
-		usage.Users[0].Tokens.Output.Tokens != 2 ||
-		usage.Users[0].Tokens.Output.KnownCalls != 1 ||
-		len(usage.Users[0].Models) != 1 ||
-		usage.Users[0].Models[0].RequestedModel != model ||
-		usage.Users[0].Models[0].UpstreamModel != model {
-		t.Fatalf("Runtime User usage = %#v", usage.Users)
+	if usage.Total == nil || usage.Total.AgentAPICalls != 1 || usage.Total.Succeeded != 1 ||
+		usage.Total.Tokens.InputUncached.Tokens != 4 || usage.Total.Tokens.InputUncached.KnownCalls != 1 ||
+		usage.Total.Tokens.Output.Tokens != 2 || usage.Total.Tokens.Output.KnownCalls != 1 {
+		t.Fatalf("Runtime User usage = %#v", usage)
+	}
+	pageRequest := usageRequest.Clone(context.Background())
+	pageRequest.URL.RawQuery += "&groupBy=model&filter.caller=" + string(created.ID) + "&snapshot=" + usage.Snapshot
+	pageResponse, err := controlClient.Do(pageRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pageResponse.Body.Close()
+	var usagePage runtimeusage.Report
+	if pageResponse.StatusCode != http.StatusOK || json.NewDecoder(pageResponse.Body).Decode(&usagePage) != nil ||
+		usagePage.Total != nil || len(usagePage.Groups) != 1 || usagePage.Groups[0].ID != model || usagePage.Groups[0].AgentAPICalls != 1 || usagePage.Groups[0].Tokens != usage.Total.Tokens {
+		t.Fatalf("Runtime User model page = %#v status=%d", usagePage, pageResponse.StatusCode)
 	}
 }
 

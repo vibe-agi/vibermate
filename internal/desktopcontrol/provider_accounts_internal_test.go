@@ -44,7 +44,7 @@ func TestUnavailableCodexOAuthAccountRemainsListable(t *testing.T) {
 			Origin: origin, AssociationRevision: 1,
 			RealmID: "openai.chatgpt",
 			Driver:  providerauth.CodexOAuthDriverRef(), SecretRef: reference,
-			State: provideraccount.StateActive, Revision: 1,
+			State: provideraccount.StateActive, Revision: 1, SettingsRevision: 1,
 			CreatedAt: now, UpdatedAt: now,
 		},
 		Health: provideraccount.Health{

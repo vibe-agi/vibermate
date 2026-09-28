@@ -34,13 +34,14 @@ final class _MemberPortalState extends State<MemberPortal>
   int _rangeDays = 7;
   Timer? _poller;
   bool _visible = true;
-  bool _requestInFlight = false;
+  int? _requestRange;
+  int _generation = 0;
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    _poller = Timer.periodic(const Duration(seconds: 5), (_) {
+    _poller = Timer.periodic(const Duration(seconds: 15), (_) {
       if (_visible) unawaited(_load());
     });
     unawaited(_load());
@@ -66,8 +67,9 @@ final class _MemberPortalState extends State<MemberPortal>
   }
 
   Future<void> _load() async {
-    if (!mounted || _requestInFlight) return;
-    _requestInFlight = true;
+    if (!mounted || _requestRange == _rangeDays) return;
+    _requestRange = _rangeDays;
+    final generation = ++_generation;
     if (!_loading) setState(() => _loading = true);
     try {
       final now = DateTime.now().toUtc();
@@ -88,20 +90,20 @@ final class _MemberPortalState extends State<MemberPortal>
           timeZone: 'UTC',
         ),
       );
-      if (!mounted) return;
+      if (!mounted || generation != _generation) return;
       setState(() {
         _report = report;
         _loading = false;
         _error = null;
       });
     } on Object {
-      if (!mounted) return;
+      if (!mounted || generation != _generation) return;
       setState(() {
         _loading = false;
         _error = widget.copy('usage.unavailable');
       });
     } finally {
-      _requestInFlight = false;
+      if (generation == _generation) _requestRange = null;
     }
   }
 
@@ -153,9 +155,14 @@ final class _MemberPortalState extends State<MemberPortal>
             child: PersonalUsageDashboard(
               rangeDays: _rangeDays,
               onRangeChanged: (days) {
-                setState(() => _rangeDays = days);
+                if (days == _rangeDays) return;
+                setState(() {
+                  _rangeDays = days;
+                  _report = null;
+                });
                 unawaited(_load());
               },
+              loadPage: widget.runtime.api.runtimeUsage,
               report: _report,
               loading: _loading,
               error: _error,

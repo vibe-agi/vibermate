@@ -148,6 +148,8 @@ abstract interface class ControlApi {
 
   Future<EvidenceSearchPage> searchEvidence(EvidenceSearchRequest request);
 
+  Future<ExchangeSummary> activitySummary(ActivitySummaryScope scope);
+
   Future<ConversationPage> conversations({
     String? cursor,
     int limit = 50,
@@ -269,6 +271,12 @@ abstract interface class ControlApi {
     String note,
   );
 
+  Future<ProviderAccount> setProviderAccountSettings(
+    ProviderAccount account, {
+    required EgressProfileRevision? egressProfile,
+    required bool automaticRefresh,
+  });
+
   Future<ProviderAccount> replaceProviderAccountCredential({
     required ProviderAccount account,
     required String secret,
@@ -332,6 +340,14 @@ abstract interface class ControlApi {
   });
 
   Future<void> close();
+}
+
+/// Health remains useful when storage-backed inventory reads fail.
+final class DashboardUnavailable implements Exception {
+  const DashboardUnavailable(this.status, this.cause);
+
+  final RuntimeStatus status;
+  final Object cause;
 }
 
 final class ControlProblem implements Exception {
@@ -448,9 +464,6 @@ final class HttpControlApi implements ControlApi, ACPObservationApi {
   static const _origin = 'vibermate://desktop';
   static const _maximumResponseBytes = 2 * 1024 * 1024;
   static const _maximumCodeLibraryResponseBytes = 16 * 1024 * 1024;
-  // The Server bounds usage to 200 ranked users and 5,000 detail rows. Keep
-  // this endpoint-specific wire budget aligned with that retained projection.
-  static const _maximumUsageResponseBytes = 16 * 1024 * 1024;
   // A deliberately revealed body may contain the configured 16 MiB retained
   // prefix plus Base64 and JSON overhead. Ordinary control reads stay at the
   // tighter 2 MiB boundary.
@@ -508,36 +521,44 @@ final class HttpControlApi implements ControlApi, ACPObservationApi {
 
   @override
   Future<DashboardData> loadDashboard() async {
-    final results = await Future.wait<Object?>([
-      _read('/api/v1/status'),
-      captures(),
-      _read('/api/v1/environments'),
-      _read('/api/v1/upstream-endpoints'),
-      _read('/api/v1/provider-accounts'),
-    ]);
-    return DashboardData(
-      status: RuntimeStatus.fromJson(
-        results[0],
-        expectedInstanceId: _session.instanceId,
-      ),
-      captures: (results[1]! as CapturePage).items,
-      captureNextCursor: (results[1]! as CapturePage).nextCursor,
-      environments: _page(
-        results[2],
-        'environments',
-        (item, path) => EnvironmentRecord.fromJson(item, path),
-      ),
-      endpoints: _page(
-        results[3],
-        'upstreamEndpoints',
-        (item, path) => UpstreamEndpoint.fromJson(item, path),
-      ),
-      accounts: _page(
-        results[4],
-        'providerAccounts',
-        (item, path) => ProviderAccount.fromJson(item, path),
-      ),
-    );
+    RuntimeStatus? status;
+    try {
+      final results = await Future.wait<Object?>([
+        _read('/api/v1/status').then(
+          (json) => status = RuntimeStatus.fromJson(
+            json,
+            expectedInstanceId: _session.instanceId,
+          ),
+        ),
+        captures(),
+        _read('/api/v1/environments'),
+        _read('/api/v1/upstream-endpoints'),
+        _read('/api/v1/provider-accounts'),
+      ]);
+      return DashboardData(
+        status: status!,
+        captures: (results[1]! as CapturePage).items,
+        captureNextCursor: (results[1]! as CapturePage).nextCursor,
+        environments: _page(
+          results[2],
+          'environments',
+          (item, path) => EnvironmentRecord.fromJson(item, path),
+        ),
+        endpoints: _page(
+          results[3],
+          'upstreamEndpoints',
+          (item, path) => UpstreamEndpoint.fromJson(item, path),
+        ),
+        accounts: _page(
+          results[4],
+          'providerAccounts',
+          (item, path) => ProviderAccount.fromJson(item, path),
+        ),
+      );
+    } catch (error) {
+      if (status == null) rethrow;
+      throw DashboardUnavailable(status!, error);
+    }
   }
 
   @override
@@ -1108,6 +1129,22 @@ final class HttpControlApi implements ControlApi, ACPObservationApi {
   }
 
   @override
+  Future<ExchangeSummary> activitySummary(ActivitySummaryScope scope) async {
+    final uri = Uri(
+      path: '/api/v1/activities/summary',
+      queryParameters: scope.toQueryParameters(),
+    );
+    final result = ExchangeSummary.fromJson(
+      await _read(uri.toString()),
+      'activitySummary',
+    );
+    if (result.scope != scope) {
+      throw const ControlContractException('activity summary scope changed');
+    }
+    return result;
+  }
+
+  @override
   Future<EvidenceSearchPage> searchEvidence(
     EvidenceSearchRequest request,
   ) async {
@@ -1373,13 +1410,25 @@ final class HttpControlApi implements ControlApi, ACPObservationApi {
           : '/api/v1/server/runtime-users/usage',
       queryParameters: query.toQueryParameters(),
     );
-    return RuntimeUsageReport.fromJson(
-      await _read(
-        uri.toString(),
-        maximumResponseBytes: _maximumUsageResponseBytes,
-      ),
+    final report = RuntimeUsageReport.fromJson(
+      await _read(uri.toString()),
       'runtimeUsage',
     );
+    if (report.period.from != query.from ||
+        report.period.until != query.until ||
+        report.period.timeZone != query.timeZone ||
+        report.dimension != query.groupBy ||
+        report.filters.length != query.filters.length ||
+        query.filters.entries.any(
+          (entry) => report.filters[entry.key] != entry.value,
+        ) ||
+        report.groups.length > query.limit ||
+        (query.snapshot.isNotEmpty && report.snapshot != query.snapshot)) {
+      throw const ControlContractException(
+        'usage response does not match its requested scope',
+      );
+    }
+    return report;
   }
 
   @override
@@ -1891,6 +1940,49 @@ final class HttpControlApi implements ControlApi, ACPObservationApi {
         updated.credentialOrigin != account.credentialOrigin) {
       throw const ControlContractException(
         'Provider Account note response is inconsistent',
+      );
+    }
+    return updated;
+  }
+
+  @override
+  Future<ProviderAccount> setProviderAccountSettings(
+    ProviderAccount account, {
+    required EgressProfileRevision? egressProfile,
+    required bool automaticRefresh,
+  }) async {
+    if (!_validResourceId(account.id) ||
+        automaticRefresh && !account.supportsAutomaticRefresh) {
+      throw const ControlContractException(
+        'Provider Account settings are invalid',
+      );
+    }
+    final payload = await _mutation(
+      'PUT',
+      '/api/v1/provider-accounts/${Uri.encodeComponent(account.id)}/settings',
+      expectedRevision: account.settingsRevision,
+      body: {
+        'automaticRefresh': automaticRefresh,
+        'egressProfile': egressProfile == null
+            ? null
+            : {'id': egressProfile.id, 'revision': egressProfile.revision},
+      },
+    );
+    final updated = ProviderAccount.fromJson(payload, 'providerAccount');
+    final changed =
+        account.egressProfile != egressProfile ||
+        account.automaticRefresh != automaticRefresh;
+    if (updated.id != account.id ||
+        updated.revision != account.revision ||
+        updated.kind != account.kind ||
+        updated.realmId != account.realmId ||
+        updated.credentialOrigin != account.credentialOrigin ||
+        updated.settingsRevision !=
+            account.settingsRevision + (changed ? 1 : 0) ||
+        updated.automaticRefresh != automaticRefresh ||
+        updated.egressProfile != egressProfile) {
+      throw const ControlContractException(
+        'Provider Account settings response is inconsistent',
       );
     }
     return updated;

@@ -71,6 +71,15 @@ func TestRevokedMemberCannotKeepUsingCapture(t *testing.T) {
 			if _, err := runs.Attach(ctx, grant.Run.ID, control, 12345); err != nil {
 				t.Fatal(err)
 			}
+			// An expired lease can be renewed only while the original login is
+			// still valid. Logout/disable/password reset must also block wake-up.
+			if _, err := runs.Heartbeat(ctx, grant.Run.ID, control, time.Nanosecond); err != nil {
+				t.Fatal(err)
+			}
+			page, err := runs.ListRuns(ctx, capturerun.PageRequest{Limit: 10})
+			if err != nil || len(page.Items) != 1 || page.Items[0].State != capturerun.StateExpired {
+				t.Fatalf("lease not expired before revocation: %+v, %v", page, err)
+			}
 			switch action {
 			case "disable":
 				_, err = users.Disable(ctx, user.ID)

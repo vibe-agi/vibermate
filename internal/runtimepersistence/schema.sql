@@ -1,4 +1,4 @@
--- Current unreleased ViberMate runtime schema. Compatibility starts with the first release.
+-- Single current v1 schema. Older data is converted explicitly while offline.
 CREATE TABLE runtime_metadata(
   singleton INTEGER PRIMARY KEY NOT NULL CHECK(singleton = 1),
   schema_identity TEXT NOT NULL CHECK(schema_identity = 'vibermate-runtime-clean-baseline'),
@@ -94,6 +94,8 @@ CREATE TABLE capture_runs(
   CHECK(length(CAST(architecture AS BLOB)) <= 64),
   time_zone TEXT NOT NULL DEFAULT ''
   CHECK(length(CAST(time_zone AS BLOB)) <= 128),
+  git_json TEXT NOT NULL DEFAULT 'null'
+  CHECK(json_valid(git_json) AND length(CAST(git_json AS BLOB)) <= 2048),
   machine_id TEXT NOT NULL DEFAULT ''
   CHECK(length(CAST(machine_id AS BLOB)) <= 128),
   machine_registration_revision INTEGER NOT NULL DEFAULT 0
@@ -383,6 +385,9 @@ CREATE TABLE "provider_accounts"(
   association_revision INTEGER NOT NULL CHECK(association_revision BETWEEN 1 AND 9223372036854775807),
   note TEXT NOT NULL DEFAULT '' CHECK(length(note) <= 256),
   note_revision INTEGER NOT NULL DEFAULT 0 CHECK(note_revision BETWEEN 0 AND 9223372036854775807),
+  settings_revision INTEGER NOT NULL CHECK(settings_revision BETWEEN 1 AND 9223372036854775807),
+  egress_profile_json TEXT NOT NULL CHECK(json_valid(egress_profile_json) AND length(egress_profile_json)<=4096),
+  automatic_refresh INTEGER NOT NULL CHECK(automatic_refresh IN (0,1)),
   realm_id TEXT NOT NULL
   CHECK(length(CAST(realm_id AS BLOB)) BETWEEN 1 AND 128),
   driver_ref TEXT NOT NULL
@@ -661,6 +666,11 @@ CREATE TABLE runtime_egress_attempts(
   CHECK(length(CAST(rule_id AS BLOB)) BETWEEN 1 AND 512),
   proxy_id TEXT NOT NULL
   CHECK(length(CAST(proxy_id AS BLOB)) BETWEEN 1 AND 512),
+  proxy_revision INTEGER NOT NULL CHECK(proxy_revision >= 0),
+  account_id TEXT NOT NULL CHECK(length(CAST(account_id AS BLOB)) <= 512),
+  account_settings_revision INTEGER NOT NULL CHECK(account_settings_revision >= 0)
+  CHECK((account_id = '' AND account_settings_revision = 0) OR
+        (account_id <> '' AND account_settings_revision > 0 AND proxy_revision > 0)),
   reused_transport INTEGER NOT NULL DEFAULT 0
   CHECK(reused_transport IN(0, 1)),
   started_at_unix_ms INTEGER NOT NULL,
@@ -1141,6 +1151,23 @@ CREATE INDEX runtime_exchange_agent_identities_session
 ON runtime_exchange_agent_identities(client_kind, session_id, exchange_id);
 CREATE INDEX runtime_exchange_content_transcripts_parent
 ON runtime_exchange_content_transcripts(parent_digest);
+CREATE INDEX runtime_exchange_content_transcripts_message
+ON runtime_exchange_content_transcripts(message_digest);
+-- GC deletes content-addressed parents. SQLite must probe each referencing
+-- column by index, not scan every retained Exchange once per deleted node.
+CREATE INDEX runtime_exchange_contents_request_transcript
+ON runtime_exchange_contents(request_transcript_digest);
+CREATE INDEX runtime_exchange_contents_expected_transcript
+ON runtime_exchange_contents(expected_transcript_digest);
+CREATE INDEX runtime_exchange_contents_base_transcript
+ON runtime_exchange_contents(base_transcript_digest)
+WHERE base_transcript_digest IS NOT NULL;
+CREATE INDEX runtime_exchange_contents_system_message
+ON runtime_exchange_contents(system_message_digest)
+WHERE system_message_digest IS NOT NULL;
+CREATE INDEX runtime_exchange_contents_response_message
+ON runtime_exchange_contents(response_message_digest)
+WHERE response_message_digest IS NOT NULL;
 CREATE INDEX runtime_exchange_contents_expiry
 ON runtime_exchange_contents(expires_at_unix_ms);
 CREATE INDEX runtime_exchange_contents_scope_expected
@@ -1192,3 +1219,87 @@ ON tool_approvals(
 );
 CREATE INDEX upstream_endpoints_state
 ON upstream_endpoints(state, endpoint_id);
+
+-- Usage is independent of body recording. Generated columns have one source of
+-- truth (the immutable observation), but queries never decode every JSON row.
+CREATE TABLE runtime_usage_policy(
+  singleton INTEGER PRIMARY KEY CHECK(singleton=1),
+  enabled INTEGER NOT NULL CHECK(enabled IN (0,1)),
+  retention_days INTEGER NOT NULL CHECK(retention_days BETWEEN 1 AND 365),
+  revision INTEGER NOT NULL CHECK(revision>0), collecting_since_unix_ms INTEGER
+) STRICT;
+INSERT INTO runtime_usage_policy VALUES(1,0,90,1,NULL);
+CREATE TABLE runtime_usage_observations(
+  sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+  exchange_id TEXT NOT NULL UNIQUE,
+  capture_run_id TEXT NOT NULL, manual_capture_id TEXT NOT NULL,
+  runtime_user_id TEXT NOT NULL,
+  occurred_at_unix_ms INTEGER NOT NULL, expires_at_unix_ms INTEGER NOT NULL,
+  observation_json TEXT NOT NULL CHECK(json_valid(observation_json) AND length(observation_json)<=16384),
+  status TEXT GENERATED ALWAYS AS (json_extract(observation_json,'$.status')) STORED NOT NULL
+    CHECK(status IN ('succeeded','failed','canceled')),
+  source TEXT GENERATED ALWAYS AS (json_extract(observation_json,'$.source')) STORED NOT NULL,
+  environment_id TEXT GENERATED ALWAYS AS (json_extract(observation_json,'$.environmentId')) STORED NOT NULL,
+  account_id TEXT GENERATED ALWAYS AS (coalesce(json_extract(observation_json,'$.accountId'),'')) STORED NOT NULL,
+  model_id TEXT GENERATED ALWAYS AS (coalesce(json_extract(observation_json,'$.upstreamModel'),'')) STORED NOT NULL,
+  caller_id TEXT GENERATED ALWAYS AS (coalesce(json_extract(observation_json,'$.attribution.callerId'),'')) STORED NOT NULL,
+  project_id TEXT GENERATED ALWAYS AS (coalesce(json_extract(observation_json,'$.attribution.projectId'),'')) STORED NOT NULL,
+  branch_id TEXT GENERATED ALWAYS AS (
+    CASE WHEN json_extract(observation_json,'$.attribution.gitAtLaunch.detached')=1 THEN 'detached'
+      WHEN json_extract(observation_json,'$.attribution.gitAtLaunch.branch') IS NOT NULL
+      THEN 'branch:'||json_extract(observation_json,'$.attribution.gitAtLaunch.branch') ELSE '' END
+  ) STORED NOT NULL,
+  client TEXT GENERATED ALWAYS AS (coalesce(json_extract(observation_json,'$.client'),'')) STORED NOT NULL,
+  session_id TEXT GENERATED ALWAYS AS (coalesce(json_extract(observation_json,'$.sessionId'),'')) STORED NOT NULL,
+  input_tokens INTEGER GENERATED ALWAYS AS (
+    CASE WHEN json_extract(observation_json,'$.usage.InputUncached.Known')=1
+      THEN json_extract(observation_json,'$.usage.InputUncached.Tokens') END
+  ) STORED CHECK(input_tokens>=0),
+  cache_read_tokens INTEGER GENERATED ALWAYS AS (
+    CASE WHEN json_extract(observation_json,'$.usage.CacheRead.Known')=1
+      THEN json_extract(observation_json,'$.usage.CacheRead.Tokens') END
+  ) STORED CHECK(cache_read_tokens>=0),
+  cache_write_tokens INTEGER GENERATED ALWAYS AS (
+    CASE WHEN json_extract(observation_json,'$.usage.CacheWrite.Known')=1
+      THEN json_extract(observation_json,'$.usage.CacheWrite.Tokens') END
+  ) STORED CHECK(cache_write_tokens>=0),
+  output_tokens INTEGER GENERATED ALWAYS AS (
+    CASE WHEN json_extract(observation_json,'$.usage.Output.Known')=1
+      THEN json_extract(observation_json,'$.usage.Output.Tokens') END
+  ) STORED CHECK(output_tokens>=0),
+  reasoning_tokens INTEGER GENERATED ALWAYS AS (
+    CASE WHEN json_extract(observation_json,'$.usage.Reasoning.Known')=1
+      THEN json_extract(observation_json,'$.usage.Reasoning.Tokens') END
+  ) STORED CHECK(reasoning_tokens>=0)
+) STRICT;
+CREATE INDEX runtime_usage_period ON runtime_usage_observations(occurred_at_unix_ms,sequence,expires_at_unix_ms);
+CREATE INDEX runtime_usage_user_period ON runtime_usage_observations(runtime_user_id,occurred_at_unix_ms,sequence,expires_at_unix_ms);
+CREATE INDEX runtime_usage_expiry ON runtime_usage_observations(expires_at_unix_ms);
+CREATE INDEX runtime_usage_capture ON runtime_usage_observations(capture_run_id,occurred_at_unix_ms);
+CREATE INDEX runtime_usage_manual ON runtime_usage_observations(manual_capture_id);
+CREATE INDEX runtime_usage_project ON runtime_usage_observations(project_id,occurred_at_unix_ms);
+CREATE INDEX runtime_usage_caller ON runtime_usage_observations(caller_id,occurred_at_unix_ms);
+CREATE INDEX runtime_usage_model ON runtime_usage_observations(model_id,occurred_at_unix_ms);
+CREATE INDEX runtime_usage_session ON runtime_usage_observations(client,session_id,occurred_at_unix_ms);
+
+CREATE TABLE acp_observations (
+  run_id TEXT PRIMARY KEY REFERENCES capture_runs(run_id) ON DELETE CASCADE,
+  policy TEXT NOT NULL,
+  expires_at_unix_ms INTEGER NOT NULL,
+  snapshot BLOB,
+  revision INTEGER NOT NULL CHECK (revision > 0),
+  final INTEGER NOT NULL CHECK (final IN (0, 1))
+);
+CREATE INDEX acp_observation_expiry ON acp_observations(expires_at_unix_ms);
+
+CREATE TABLE runtime_user_policies(
+  user_id TEXT PRIMARY KEY NOT NULL REFERENCES runtime_users(user_id) ON DELETE CASCADE,
+  allowed_environment_ids_json BLOB NOT NULL
+  CHECK(length(allowed_environment_ids_json) BETWEEN 2 AND 65536 AND
+        json_valid(allowed_environment_ids_json) AND
+        json_type(allowed_environment_ids_json) = 'array'),
+  daily_agent_api_call_warning INTEGER NOT NULL DEFAULT 0
+  CHECK(daily_agent_api_call_warning BETWEEN 0 AND 1000000000000000),
+  daily_token_warning INTEGER NOT NULL DEFAULT 0
+  CHECK(daily_token_warning BETWEEN 0 AND 1000000000000000)
+) STRICT;

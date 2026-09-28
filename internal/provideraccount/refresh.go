@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/vibe-agi/vibermate/internal/egressprofile"
 	"github.com/vibe-agi/vibermate/internal/providerauth"
 	"github.com/vibe-agi/vibermate/internal/secretstore"
 )
@@ -60,7 +61,7 @@ func (manager *Manager) RefreshCredential(ctx context.Context, id ID, expectedEp
 	if uint64(metadata.Revision) != expectedEpoch {
 		return View{}, ErrRevisionConflict
 	}
-	prepared, err := refresher.Refresh(ctx, account.Driver, account.SecretRef, metadata.Revision)
+	prepared, err := refresher.Refresh(ctx, account.Driver, account.SecretRef, account.credentialScope(account.RealmID, uint64(metadata.Revision), egressprofile.Direct()))
 	if err != nil {
 		return View{}, err
 	}

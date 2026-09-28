@@ -80,7 +80,7 @@ func (repository *rawEvidenceRepository) AppendBatch(
 	}
 	defer statement.Close()
 	releasedEnvelopes, err := deleteExpiredRawEvidence(
-		operation, transaction, toUnixMillis(now.UTC()),
+		operation, transaction, toUnixMillis(now.UTC()), -1,
 	)
 	if err != nil {
 		return err

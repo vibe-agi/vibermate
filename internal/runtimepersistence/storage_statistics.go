@@ -104,52 +104,88 @@ func (store *Store) CleanupExpired(
 	ctx context.Context,
 	now time.Time,
 ) (resourcedeletion.Released, error) {
-	if store == nil || ctx == nil || now.IsZero() {
-		return resourcedeletion.Released{}, errors.New("storage cleanup request is invalid")
+	released, _, err := store.cleanupExpired(ctx, now, -1)
+	return released, err
+}
+
+const expiredCleanupBatchSize = 1000
+
+// MaintainExpired yields the write connection between bounded deletion batches.
+// Its caller owns the time budget; cancellation rolls back only the active batch,
+// so the next maintenance pass continues instead of repeating a huge transaction.
+// Explicit user cleanup retains the all-or-nothing receipt above.
+// ponytail: shared-content GC still scans the retained graph; use incremental GC
+// if body-heavy measurements show that scan dominates these parent batches.
+func (store *Store) MaintainExpired(ctx context.Context, now time.Time) error {
+	for {
+		_, more, err := store.cleanupExpired(ctx, now, expiredCleanupBatchSize)
+		if err != nil || !more {
+			return err
+		}
+	}
+}
+
+func (store *Store) cleanupExpired(
+	ctx context.Context,
+	now time.Time,
+	limit int,
+) (resourcedeletion.Released, bool, error) {
+	if store == nil || ctx == nil || now.IsZero() || limit == 0 || limit < -1 {
+		return resourcedeletion.Released{}, false, errors.New("storage cleanup request is invalid")
 	}
 	operation, finish, err := store.operations.begin(ctx)
 	if err != nil {
-		return resourcedeletion.Released{}, err
+		return resourcedeletion.Released{}, false, err
 	}
 	defer finish()
 	transaction, err := store.database.BeginTx(operation, nil)
 	if err != nil {
-		return resourcedeletion.Released{}, fmt.Errorf("begin expired evidence cleanup: %w", err)
+		return resourcedeletion.Released{}, false, fmt.Errorf("begin expired evidence cleanup: %w", err)
 	}
 	defer func() { _ = transaction.Rollback() }()
 
 	exchanges, err := purgeExpiredExchangeContent(
-		operation, transaction, toUnixMillis(now.UTC()),
+		operation, transaction, toUnixMillis(now.UTC()), limit,
 	)
 	if err != nil {
-		return resourcedeletion.Released{}, err
+		return resourcedeletion.Released{}, false, err
 	}
 	envelopes, err := purgeExpiredRawEvidence(
-		operation, transaction, toUnixMillis(now.UTC()),
+		operation, transaction, toUnixMillis(now.UTC()), limit,
 	)
 	if err != nil {
-		return resourcedeletion.Released{}, err
+		return resourcedeletion.Released{}, false, err
 	}
-	if _, err := transaction.ExecContext(operation, `DELETE FROM runtime_usage_observations WHERE expires_at_unix_ms<=?`, now.UnixMilli()); err != nil {
-		return resourcedeletion.Released{}, err
+	result, err := transaction.ExecContext(operation, `DELETE FROM runtime_usage_observations WHERE sequence IN (
+		SELECT sequence FROM runtime_usage_observations WHERE expires_at_unix_ms<=? ORDER BY expires_at_unix_ms LIMIT ?
+	)`, now.UnixMilli(), limit)
+	if err != nil {
+		return resourcedeletion.Released{}, false, err
+	}
+	usage, err := result.RowsAffected()
+	if err != nil {
+		return resourcedeletion.Released{}, false, err
 	}
 	if err := transaction.Commit(); err != nil {
-		return resourcedeletion.Released{}, fmt.Errorf("commit expired evidence cleanup: %w", err)
+		return resourcedeletion.Released{}, false, fmt.Errorf("commit expired evidence cleanup: %w", err)
 	}
 	return resourcedeletion.Released{
 		Exchanges: uint64(exchanges), Envelopes: uint64(envelopes),
-	}, nil
+	}, limit > 0 && (exchanges == int64(limit) || envelopes == int64(limit) || usage == int64(limit)), nil
 }
 
 func purgeExpiredExchangeContent(
 	ctx context.Context,
 	transaction *sql.Tx,
 	deadline int64,
+	limit int,
 ) (int64, error) {
 	result, err := transaction.ExecContext(
 		ctx,
-		`DELETE FROM runtime_exchange_contents WHERE expires_at_unix_ms <= ?`,
-		deadline,
+		`DELETE FROM runtime_exchange_contents WHERE exchange_id IN (
+		 SELECT exchange_id FROM runtime_exchange_contents WHERE expires_at_unix_ms <= ? ORDER BY expires_at_unix_ms LIMIT ?
+		)`,
+		deadline, limit,
 	)
 	if err != nil {
 		return 0, fmt.Errorf("purge expired Exchange content evidence: %w", err)
@@ -170,8 +206,9 @@ func purgeExpiredRawEvidence(
 	ctx context.Context,
 	transaction *sql.Tx,
 	deadline int64,
+	limit int,
 ) (int64, error) {
-	count, err := deleteExpiredRawEvidence(ctx, transaction, deadline)
+	count, err := deleteExpiredRawEvidence(ctx, transaction, deadline, limit)
 	if err != nil {
 		return 0, err
 	}
@@ -187,11 +224,14 @@ func deleteExpiredRawEvidence(
 	ctx context.Context,
 	transaction *sql.Tx,
 	deadline int64,
+	limit int,
 ) (int64, error) {
 	result, err := transaction.ExecContext(
 		ctx,
-		`DELETE FROM runtime_raw_evidence_envelopes WHERE expires_at_unix_ms <= ?`,
-		deadline,
+		`DELETE FROM runtime_raw_evidence_envelopes WHERE envelope_id IN (
+		 SELECT envelope_id FROM runtime_raw_evidence_envelopes WHERE expires_at_unix_ms <= ? ORDER BY expires_at_unix_ms LIMIT ?
+		)`,
+		deadline, limit,
 	)
 	if err != nil {
 		return 0, fmt.Errorf("purge expired raw evidence: %w", err)

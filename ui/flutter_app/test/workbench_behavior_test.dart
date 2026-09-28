@@ -1323,7 +1323,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.byKey(const Key('usage-create-runtime-user')), findsNothing);
-    expect(controller.runtimeUsage!.users, isEmpty);
+    expect(controller.runtimeUsage!.total!.agentApiCalls, 18);
     expect(controller.usageRangeDays, 7);
     expect(find.byKey(const Key('usage-total-api-calls')), findsOneWidget);
     expect(find.byKey(const Key('usage-team-heatmap')), findsNothing);
@@ -1344,24 +1344,12 @@ void main() {
     await tester.pump();
   });
 
-  testWidgets('390px usage ranks and searches 20 Runtime Users', (
+  testWidgets('390px annual usage preserves evidence-aware heatmap', (
     tester,
   ) async {
     await tester.binding.setSurfaceSize(const Size(390, 760));
     addTearDown(() => tester.binding.setSurfaceSize(null));
     final api = PreviewControlApi();
-    await api.setRuntimeUserPolicy(
-      userId: 'user.preview.alice',
-      allowedEnvironmentIds: const [],
-      dailyAgentApiCallWarning: 10,
-      dailyTokenWarning: 1000,
-    );
-    for (var index = 2; index <= 20; index += 1) {
-      await api.createRuntimeUser(
-        username: 'user${index.toString().padLeft(2, '0')}',
-        password: 'test-password',
-      );
-    }
     final controller = WorkbenchController(
       api: api,
       terminalCommands: PreviewTerminalCommandService(),
@@ -1401,31 +1389,11 @@ void main() {
     expect(find.byKey(const Key('usage-team-heatmap')), findsNothing);
     await controller.setUsageRange(365);
     await tester.pumpAndSettle();
-    final members = find.byKey(const Key('usage-member-details'));
-    await tester.ensureVisible(members);
-    await tester.pumpAndSettle();
-    await tester.tap(members);
-    await tester.pumpAndSettle();
     expect(find.byKey(const Key('usage-team-heatmap')), findsOneWidget);
     expect(
-      find.byKey(const Key('usage-team-day-month-2026-08')),
+      find.byKey(const Key('usage-team-day-month-2026-01')),
       findsOneWidget,
     );
-    expect(controller.usageRangeDays, 365);
-    expect(
-      DateTime.parse(
-        controller.runtimeUsage!.period.until,
-      ).difference(DateTime.parse(controller.runtimeUsage!.period.from)).inDays,
-      365,
-    );
-    final callsMetric = find.byKey(const Key('usage-metric-api-calls'));
-    final tokensMetric = find.byKey(const Key('usage-metric-tokens'));
-    expect(
-      tester.getSize(callsMetric).width,
-      tester.getSize(tokensMetric).width,
-    );
-    expect(tester.getSize(callsMetric).height, ViberMetrics.controlHeight);
-    expect(tester.getSize(tokensMetric).height, ViberMetrics.controlHeight);
     String cellSemantics(String date) => tester
         .widgetList<Semantics>(
           find.descendant(
@@ -1437,214 +1405,26 @@ void main() {
         .join(' ');
     expect(cellSemantics('2026-08-24'), contains('no retained API call'));
     expect(cellSemantics('2026-08-25'), contains('complete evidence'));
-    await tester.ensureVisible(find.byKey(const Key('usage-metric-tokens')));
+    final metric = find.byKey(const Key('usage-metric-tokens'));
+    await tester.ensureVisible(metric);
+    await tester.tap(metric);
     await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const Key('usage-metric-tokens')));
-    await tester.pump();
     expect(cellSemantics('2026-08-25'), contains('incomplete evidence'));
-    expect(
-      find.byKey(const Key('usage-team-day-month-2026-01')),
-      findsOneWidget,
-    );
-    expect(
-      find.byKey(const Key('usage-user-user.preview.alice-day-month-2026-01')),
-      findsOneWidget,
-    );
-    expect(find.byKey(const Key('usage-ranking')), findsOneWidget);
-    expect(find.byKey(const Key('usage-ranking-scroll')), findsOneWidget);
-    expect(find.byKey(const Key('usage-ranking-count')), findsOneWidget);
-    expect(
-      find.byKey(const Key('usage-user-user.preview.alice')),
-      findsOneWidget,
-    );
-    expect(
-      find.byKey(const Key('usage-user-activity-user.preview.alice')),
-      findsOneWidget,
-    );
-    expect(find.byKey(const Key('usage-user-user.preview.20')), findsNothing);
-
-    await tester.enterText(
-      find.byKey(const Key('usage-user-search')),
-      'user20',
-    );
-    await tester.pump();
-    expect(find.byKey(const Key('usage-user-user.preview.20')), findsOneWidget);
-    expect(
-      find.byKey(const Key('usage-user-activity-user.preview.20')),
-      findsOneWidget,
-    );
-    expect(
-      find.byKey(const Key('usage-user-user.preview.alice')),
-      findsNothing,
-    );
-    await tester.enterText(find.byKey(const Key('usage-user-search')), '');
-    await tester.pump();
-    final alice = find.byKey(const Key('usage-user-user.preview.alice'));
-    await tester.ensureVisible(alice);
+    final callers = find.byKey(const Key('usage-group-callers'));
+    await tester.ensureVisible(callers);
+    await tester.tap(callers);
     await tester.pumpAndSettle();
-    await tester.tap(alice);
-    await tester.pumpAndSettle();
-    expect(
-      find.byKey(const Key('usage-warning-user.preview.alice')),
-      findsOneWidget,
-    );
-    expect(find.textContaining('not provider quota'), findsOneWidget);
-    expect(
-      tester
-          .getTopLeft(
-            find.byKey(const Key('usage-user-evidence-user.preview.alice')),
-          )
-          .dy,
-      lessThan(300),
-    );
-    expect(
-      find.byKey(const Key('usage-user-heatmap-user.preview.alice')),
-      findsOneWidget,
-    );
-    expect(tester.takeException(), isNull);
-
-    controller.dispose();
-    await tester.pumpWidget(const SizedBox.shrink());
-    await tester.pump();
-  });
-
-  testWidgets('usage groups the same Workspace across Capture Runs', (
-    tester,
-  ) async {
-    await tester.binding.setSurfaceSize(const Size(390, 760));
-    addTearDown(() => tester.binding.setSurfaceSize(null));
-    final api = PreviewControlApi();
-    final controller = WorkbenchController(
-      api: api,
-      terminalCommands: PreviewTerminalCommandService(),
-      previewMode: false,
-      serverManagement: true,
-      terminalManagement: false,
-      runtimeTarget: 'server.local:9666',
-      closeRuntime: api.close,
-    );
-    addTearDown(controller.dispose);
-    await controller.initialize();
-    await tester.pumpWidget(
-      MaterialApp(
-        theme: ViberTheme.light(),
-        home: WorkbenchShell(controller: controller),
-      ),
-    );
-    await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const Key('usage-dashboard-nav')));
-    await tester.pumpAndSettle();
-
-    final members = find.byKey(const Key('usage-member-details'));
-    await tester.ensureVisible(members);
-    await tester.pumpAndSettle();
-    await tester.tap(members);
-    await tester.pumpAndSettle();
-
-    expect(
-      find.byKey(const Key('usage-dimension-content-workspaces')),
-      findsOneWidget,
-    );
-    final workspace = find.byKey(
-      const Key(
-        'usage-workspace-user.preview.alice-workspace.preview.vibermate',
-      ),
-    );
-    expect(workspace, findsOneWidget);
-    expect(
-      find.descendant(
-        of: workspace,
-        matching: find.textContaining('2 Captures · 12 calls'),
-      ),
-      findsOneWidget,
-    );
-    expect(tester.takeException(), isNull);
-
-    controller.dispose();
-    await tester.pumpWidget(const SizedBox.shrink());
-    await tester.pump();
-  });
-
-  testWidgets('usage drill-down shows one grouping dimension at a time', (
-    tester,
-  ) async {
-    await tester.binding.setSurfaceSize(const Size(390, 760));
-    addTearDown(() => tester.binding.setSurfaceSize(null));
-    final api = PreviewControlApi();
-    final controller = WorkbenchController(
-      api: api,
-      terminalCommands: PreviewTerminalCommandService(),
-      previewMode: false,
-      serverManagement: true,
-      terminalManagement: false,
-      runtimeTarget: 'server.local:9666',
-      closeRuntime: api.close,
-    );
-    addTearDown(controller.dispose);
-    await controller.initialize();
-    await tester.pumpWidget(
-      MaterialApp(
-        theme: ViberTheme.light(),
-        home: WorkbenchShell(controller: controller),
-      ),
-    );
-    await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const Key('usage-dashboard-nav')));
-    await tester.pumpAndSettle();
-
-    final members = find.byKey(const Key('usage-member-details'));
-    await tester.ensureVisible(members);
-    await tester.pumpAndSettle();
-    await tester.tap(members);
-    await tester.pumpAndSettle();
-
-    expect(
-      find.byKey(const Key('usage-dimension-content-workspaces')),
-      findsOneWidget,
-    );
-    expect(
-      find.byKey(const Key('usage-model-user.preview.alice-0')),
-      findsNothing,
-    );
-    expect(
-      find.byKey(const Key('usage-session-user.preview.alice-0')),
-      findsNothing,
-    );
-
-    final models = find.byKey(const Key('usage-dimension-models'));
+    expect(find.byKey(const Key('usage-expand-alice')), findsOneWidget);
+    expect(find.byKey(const Key('usage-expand-project-one')), findsNothing);
+    final models = find.byKey(const Key('usage-group-models'));
     await tester.ensureVisible(models);
-    await tester.pumpAndSettle();
     await tester.tap(models);
     await tester.pumpAndSettle();
-    expect(
-      find.byKey(const Key('usage-dimension-content-models')),
-      findsOneWidget,
-    );
-    expect(find.text('gpt-5.6-sol'), findsOneWidget);
-    expect(find.text('dashscope:deepseek-v4-flash-0731'), findsOneWidget);
-    expect(
-      find.byKey(const Key('usage-dimension-content-workspaces')),
-      findsNothing,
-    );
-
-    final sessions = find.byKey(const Key('usage-dimension-sessions'));
-    await tester.tap(sessions);
-    await tester.pumpAndSettle();
-    expect(
-      find.byKey(const Key('usage-dimension-content-sessions')),
-      findsOneWidget,
-    );
-    expect(find.textContaining('01a02deb'), findsOneWidget);
-    expect(find.text('gpt-5.6-sol'), findsNothing);
-    expect(
-      find.byKey(const Key('usage-dimension-content-workspaces')),
-      findsNothing,
-    );
+    expect(find.byKey(const Key('usage-expand-gpt-5')), findsOneWidget);
+    expect(find.byKey(const Key('usage-expand-alice')), findsNothing);
     expect(tester.takeException(), isNull);
-
     controller.dispose();
     await tester.pumpWidget(const SizedBox.shrink());
-    await tester.pump();
   });
 
   testWidgets(
@@ -2895,6 +2675,8 @@ void main() {
       expect(report['exchange'], isA<Map<String, Object?>>());
       expect(report['rawEvidence'], isA<Map<String, Object?>>());
       expect(copiedDiagnostic, contains('bodySha256'));
+      expect(copiedDiagnostic, contains('"accountSettingsRevision": 4'));
+      expect(copiedDiagnostic, contains('"proxyRevision": 1'));
       expect(copiedDiagnostic, isNot(contains('Authorization')));
       expect(copiedDiagnostic, isNot(contains('Bearer')));
       expect(copiedDiagnostic, isNot(contains('Cookie')));

@@ -49,6 +49,7 @@ func providerAttempt(t *testing.T, id string) egressaudit.Attempt {
 			Authority:      egressaudit.AuthorityEnvironment,
 			RuleID:         "rule-1",
 			ProxyID:        "direct",
+			ProxyRevision:  1, AccountID: "account.fixture", AccountSettingsRevision: 7,
 		},
 		StartedAt: time.Date(2026, 8, 2, 1, 2, 3, 0, time.UTC),
 	})
@@ -112,7 +113,7 @@ func TestEgressAttemptsPersistAndSurviveReopen(t *testing.T) {
 		completed.Outcome() != egressaudit.OutcomeCompleted ||
 		completed.BytesIn() != 4096 ||
 		completed.Parent().ExchangeID != "exchange-egress-1" ||
-		completed.PayloadClass() != egressaudit.PayloadClientSemantic {
+		completed.PayloadClass() != egressaudit.PayloadClientSemantic || completed.Decision() != first.Decision() {
 		t.Fatalf("restored attempt = %+v", completed)
 	}
 }

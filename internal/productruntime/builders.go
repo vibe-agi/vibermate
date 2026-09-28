@@ -297,6 +297,7 @@ type monitorBuildRequest struct {
 	reader       runtimepersistence.SchemaStateReader
 	interval     time.Duration
 	observe      func(runtimepersistence.SchemaState, error)
+	cleanup      func(context.Context) error
 }
 
 type activityBuildRequest struct {
@@ -419,7 +420,7 @@ type providerRuntime interface {
 	exchange.Provider
 	ReadAccount(context.Context, providertransport.AccountReadRequest) (*http.Response, error)
 	ConsumeResetCredit(context.Context, providertransport.ResetRedemption) (*http.Response, error)
-	DoCodexOAuthTokenRequest(*http.Request) (*http.Response, error)
+	DoCodexOAuthTokenRequest(*http.Request, providerauth.AccountRef) (*http.Response, error)
 	FetchEndpointModels(
 		context.Context,
 		upstreamendpoint.Endpoint,
@@ -549,6 +550,7 @@ type exchangeBuildRequest struct {
 	annotations              *clientannotation.Signer
 	rawEvidence              rawevidence.Observer
 	reportRawEvidenceFailure func(error)
+	reportObservationFailure func(string, error)
 }
 
 type exchangeRuntime interface {
@@ -560,20 +562,27 @@ type exchangeRuntime interface {
 }
 
 type activityAttemptObserver struct {
-	recorder   activity.Recorder
-	identities activity.ConversationIdentityRepository
-	usage      runtimeusage.Recorder
+	recorder      activity.Recorder
+	identities    activity.ConversationIdentityRepository
+	usage         runtimeusage.Recorder
+	reportFailure func(string, error)
 }
 
 type exchangeContentObserver struct {
-	recorder exchangecontent.Recorder
-	clock    Clock
+	recorder      exchangecontent.Recorder
+	clock         Clock
+	reportFailure func(string, error)
 }
 
 func (observer exchangeContentObserver) ObserveContent(
 	ctx context.Context,
 	observation exchange.ContentObservation,
-) error {
+) (err error) {
+	defer func() {
+		if err != nil && observer.reportFailure != nil {
+			observer.reportFailure("response_content", err)
+		}
+	}()
 	if observer.recorder == nil || observer.clock == nil {
 		return errors.New("Exchange content recorder is nil")
 	}
@@ -608,7 +617,13 @@ func (observer exchangeContentObserver) ObserveContent(
 func (observer activityAttemptObserver) ObserveStart(
 	ctx context.Context,
 	observation exchange.StartObservation,
-) error {
+) (err error) {
+	stage := "activity_start"
+	defer func() {
+		if err != nil && observer.reportFailure != nil {
+			observer.reportFailure(stage, err)
+		}
+	}()
 	if observer.recorder == nil {
 		return errors.New("Exchange Activity recorder is nil")
 	}
@@ -643,6 +658,7 @@ func (observer activityAttemptObserver) ObserveStart(
 	if err != nil {
 		return err
 	}
+	stage = "conversation_identity"
 	return observer.persistProtocolIdentity(
 		ctx,
 		observation.ExchangeID,
@@ -655,7 +671,17 @@ func (observer activityAttemptObserver) ObserveStart(
 func (observer activityAttemptObserver) ObserveTerminal(
 	ctx context.Context,
 	observation exchange.AttemptObservation,
-) error {
+) (err error) {
+	stage := "activity_terminal"
+	var firstFailure error
+	defer func() {
+		if err != nil && observer.reportFailure != nil {
+			if firstFailure == nil {
+				firstFailure = err
+			}
+			observer.reportFailure(stage, firstFailure)
+		}
+	}()
 	if observer.recorder == nil {
 		return errors.New("Exchange Activity recorder is nil")
 	}
@@ -726,6 +752,11 @@ func (observer activityAttemptObserver) ObserveTerminal(
 		observation.ProviderResponseID,
 		record.OccurredAt,
 	)
+	stage = "conversation_identity"
+	firstFailure = identityErr
+	if identityErr == nil {
+		stage = "usage"
+	}
 	var usageErr error
 	if observer.usage != nil {
 		value := runtimeusage.Observation{
@@ -924,10 +955,12 @@ func buildExchange(
 		Observer: activityAttemptObserver{
 			usage:    request.usage,
 			recorder: request.activities, identities: request.identities,
+			reportFailure: request.reportObservationFailure,
 		},
 		ContentObserver: exchangeContentObserver{
-			recorder: request.contents,
-			clock:    request.clock,
+			recorder:      request.contents,
+			clock:         request.clock,
+			reportFailure: request.reportObservationFailure,
 		},
 		ObservationTimeout:       2 * time.Second,
 		Hold:                     request.hold,

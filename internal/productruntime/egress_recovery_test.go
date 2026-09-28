@@ -138,6 +138,14 @@ func TestRuntimeEgressCompletionUsesOwnerContextAndLatchesFailure(t *testing.T) 
 		status.Storage != StorageStateUnavailable {
 		t.Fatalf("completion failure remained silent: %+v", status)
 	}
+	first := status.StorageFailure
+	if first == nil || first.Operation != "egress_complete" || first.Reason != "write_failed" || !first.Valid() {
+		t.Fatalf("completion first cause not projected: %+v", first)
+	}
+	repository.ReportTerminalFailure(context.Canceled)
+	if *tracker.snapshot().StorageFailure != *first || !errors.Is(context.Cause(owner), completeErr) {
+		t.Fatal("secondary cancellation replaced the original completion failure")
+	}
 	tracker.observeStorage(25, nil)
 	status = tracker.snapshot()
 	if status.State != RuntimeStateDegraded ||

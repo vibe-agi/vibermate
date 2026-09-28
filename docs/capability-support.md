@@ -4,7 +4,13 @@ This matrix separates what users can install from work that exists only in
 source. A passing unit test, an isolated development branch, and a published
 product are not interchangeable evidence.
 
-Source package version: **0.1.15**. Latest published release: **v0.1.15**.
+Source package version: **0.1.16**. Latest published release: **v0.1.15**.
+
+The 0.1.16 account egress/refresh settings, unified Git launch context, complete
+paginated reports, recording-failure isolation and sleep recovery remain
+**Branch-only** until that version is published. Existing 0.1.15 data requires
+the explicit private backup and [offline conversion](../tool/convert-v1/README.md)
+before switching to the current v1 Runtime; there is no startup migration.
 
 - **Released** — included in the latest published release and covered by the
   stated release evidence.

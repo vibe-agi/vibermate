@@ -21,6 +21,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/agentconversation"
 	"github.com/vibe-agi/vibermate/internal/clientadapter"
 	"github.com/vibe-agi/vibermate/internal/clientannotation"
+	"github.com/vibe-agi/vibermate/internal/egressprofile"
 	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/messagetransform"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
@@ -279,6 +280,7 @@ func (pipeline *Pipeline) Execute(
 		operationContext,
 		selection,
 		candidate,
+		request.RequestPlan().EgressProfile(),
 	)
 	if acquireErr != nil {
 		err = newFailure(
@@ -774,7 +776,7 @@ func (pipeline *Pipeline) newProviderRequest(
 		WireProfile: selection.wireProfile, ClientProtocol: request.ClientHTTPProtocol(),
 		ClientUserAgent: request.ClientUserAgent(), ClientHello: clientHello,
 		MessageTransformUserAgent: transformedUserAgent,
-		EgressPolicy:              request.RequestPlan().EgressPolicy(),
+		EgressProfile:             request.RequestPlan().EgressProfile(),
 		RawEvidence:               rawEvidence,
 	}
 	if credential.mode == providerauth.CredentialClientPassthrough {
@@ -970,6 +972,7 @@ func (pipeline *Pipeline) acquireCredential(
 	ctx context.Context,
 	selection frozenSelection,
 	candidate credentialCandidate,
+	egressProfile egressprofile.ProfileRevision,
 ) (credentialMaterial, error) {
 	if candidate.mode == providerauth.CredentialClientPassthrough {
 		return credentialMaterial{mode: providerauth.CredentialClientPassthrough}, nil
@@ -978,6 +981,7 @@ func (pipeline *Pipeline) acquireCredential(
 		return credentialMaterial{}, errors.New("managed account authority is unavailable")
 	}
 	request := AccountLeaseRequest{
+		egressProfile:            egressProfile,
 		environmentID:            selection.environmentID,
 		environmentRevision:      selection.environmentRevision,
 		environmentDigest:        selection.environmentDigest,

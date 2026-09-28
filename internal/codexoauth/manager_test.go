@@ -13,6 +13,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/vibe-agi/vibermate/internal/egressnetwork"
+	"github.com/vibe-agi/vibermate/internal/egressprofile"
 	"github.com/vibe-agi/vibermate/internal/providerauth"
 	"github.com/vibe-agi/vibermate/internal/secretstore"
 )
@@ -163,14 +165,22 @@ func TestManagerPrepareRefreshesNearExpiryAndAtomicallyRotatesMaterial(t *testin
 		t.Fatal(err)
 	}
 	reference := testReference(t)
+	scope := testAccountScope()
+	scope.SettingsRevision = 3
+	scope.EgressProfile = egressprofile.Direct()
+	scope.EgressProfile.ID = "profile.us"
+	scope.EgressProfile.Policy.Proxy = egressnetwork.ProxyPolicy{Kind: egressnetwork.ProxySOCKS5, Endpoint: "127.0.0.1:1080"}
 	revision, err := manager.Prepare(
-		context.Background(), providerauth.CodexOAuthDriverRef(), reference, 1,
+		context.Background(), providerauth.CodexOAuthDriverRef(), reference, scope,
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if revision != 2 || client.Calls() != 1 {
 		t.Fatalf("Prepare revision=%d calls=%d", revision, client.Calls())
+	}
+	if client.scope != scope {
+		t.Fatal("refresh lost the frozen account settings and egress")
 	}
 	request := client.Request()
 	if request == nil || request.Method != http.MethodPost || request.URL.String() != TokenURL ||
@@ -272,7 +282,7 @@ func TestManagerPrepareCoalescesConcurrentAutomaticAndManualRefreshes(t *testing
 				prepare = manager.Refresh
 			}
 			revision, prepareErr := prepare(
-				context.Background(), providerauth.CodexOAuthDriverRef(), reference, 1,
+				context.Background(), providerauth.CodexOAuthDriverRef(), reference, testAccountScope(),
 			)
 			results <- struct {
 				revision secretstore.Revision
@@ -319,7 +329,7 @@ func TestManagerPrepareCachesPermanentRefreshFailureForCredentialEpoch(t *testin
 	}
 	for range 2 {
 		_, prepareErr := manager.Prepare(
-			context.Background(), providerauth.CodexOAuthDriverRef(), testReference(t), 1,
+			context.Background(), providerauth.CodexOAuthDriverRef(), testReference(t), testAccountScope(),
 		)
 		if !errors.Is(prepareErr, ErrReconnectRequired) ||
 			strings.Contains(prepareErr.Error(), "refresh-old") {
@@ -358,7 +368,7 @@ func TestManagerPrepareRecognizesNestedPermanentRefreshFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err = manager.Prepare(
-		context.Background(), providerauth.CodexOAuthDriverRef(), testReference(t), 1,
+		context.Background(), providerauth.CodexOAuthDriverRef(), testReference(t), testAccountScope(),
 	)
 	if !errors.Is(err, ErrReconnectRequired) || client.Calls() != 1 ||
 		strings.Contains(err.Error(), "the imported token was revoked") {
@@ -399,14 +409,14 @@ func TestManagerPrepareTreatsRefreshedAccountIdentityChangeAsPermanent(t *testin
 	}
 	reference := testReference(t)
 	_, firstErr := manager.Prepare(
-		context.Background(), providerauth.CodexOAuthDriverRef(), reference, 1,
+		context.Background(), providerauth.CodexOAuthDriverRef(), reference, testAccountScope(),
 	)
 	if !errors.Is(firstErr, ErrReconnectRequired) ||
 		!errors.Is(firstErr, ErrIdentityMismatch) {
 		t.Fatalf("first Prepare error = %v", firstErr)
 	}
 	_, secondErr := manager.Prepare(
-		context.Background(), providerauth.CodexOAuthDriverRef(), reference, 1,
+		context.Background(), providerauth.CodexOAuthDriverRef(), reference, testAccountScope(),
 	)
 	if !errors.Is(secondErr, ErrReconnectRequired) {
 		t.Fatalf("second Prepare error = %v", secondErr)
@@ -449,7 +459,7 @@ func TestManagerPrepareKeepsStillValidAccessTokenAfterTransientRefreshFailure(t 
 		t.Fatal(err)
 	}
 	revision, err := manager.Prepare(
-		context.Background(), providerauth.CodexOAuthDriverRef(), testReference(t), 1,
+		context.Background(), providerauth.CodexOAuthDriverRef(), testReference(t), testAccountScope(),
 	)
 	if err != nil || revision != 1 || client.Calls() != 1 {
 		t.Fatalf("Prepare revision=%d calls=%d err=%v", revision, client.Calls(), err)
@@ -478,7 +488,7 @@ func TestManagerPrepareRefusesExpiredAccessTokenAfterTransientRefreshFailure(t *
 		t.Fatal(err)
 	}
 	_, err = manager.Prepare(
-		context.Background(), providerauth.CodexOAuthDriverRef(), testReference(t), 1,
+		context.Background(), providerauth.CodexOAuthDriverRef(), testReference(t), testAccountScope(),
 	)
 	if !errors.Is(err, ErrRefreshUnavailable) || client.Calls() != 1 {
 		t.Fatalf("Prepare calls=%d err=%v", client.Calls(), err)
@@ -490,6 +500,7 @@ type fixedClock struct{ now time.Time }
 func (clock fixedClock) Now() time.Time { return clock.now }
 
 type recordingClient struct {
+	scope    providerauth.AccountRef
 	mu       sync.Mutex
 	response *http.Response
 	request  *http.Request
@@ -499,7 +510,11 @@ type recordingClient struct {
 	err      error
 }
 
-func (client *recordingClient) Do(request *http.Request) (*http.Response, error) {
+func testAccountScope() providerauth.AccountRef {
+	return providerauth.AccountRef{ID: "oauth", Revision: 1, CredentialEpoch: 1, SettingsRevision: 1, EgressProfile: egressprofile.Direct(), RealmID: "openai.chatgpt"}
+}
+
+func (client *recordingClient) Do(request *http.Request, scope providerauth.AccountRef) (*http.Response, error) {
 	body, _ := io.ReadAll(request.Body)
 	request.Body = io.NopCloser(bytes.NewReader(body))
 	stored := request.Clone(request.Context())
@@ -507,6 +522,7 @@ func (client *recordingClient) Do(request *http.Request) (*http.Response, error)
 	client.mu.Lock()
 	client.calls++
 	client.request = stored
+	client.scope = scope
 	if client.started != nil && client.calls == 1 {
 		close(client.started)
 	}

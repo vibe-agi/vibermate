@@ -26,6 +26,7 @@ func (manager *Manager) AcquireReadCredential(ctx context.Context, plan environm
 		id: id, accountRevision: uint64(account.Revision), realmID: account.RealmID,
 		upstreamEndpointID: account.UpstreamEndpointID, upstreamEndpointRevision: uint64(account.UpstreamEndpointRevision),
 		upstreamEndpointOrigin: route.ProviderTarget().Origin,
+		egressProfile:          plan.EgressProfile(),
 	})
 }
 

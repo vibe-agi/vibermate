@@ -16,7 +16,8 @@
       "policyRevision": 1,
       "authority": "network",
       "ruleId": "builtin.direct.default",
-      "proxyId": "direct"
+      "proxyId": "direct",
+      "proxyRevision": 1
     },
     "reusedTransport": false,
     "startedAt": "2026-08-02T10:00:00Z",
@@ -44,7 +45,10 @@
       "policyRevision": 4,
       "authority": "environment",
       "ruleId": "anthropic-direct",
-      "proxyId": "direct"
+      "proxyId": "direct",
+      "proxyRevision": 1,
+      "accountId": "account.sample",
+      "accountSettingsRevision": 2
     },
     "reusedTransport": false,
     "startedAt": "2026-08-02T10:01:00Z",

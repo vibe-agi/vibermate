@@ -9,6 +9,8 @@ import (
 	"mime"
 	"net/http"
 	"net/url"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -29,7 +31,7 @@ const (
 )
 
 type RuntimeUsageReader interface {
-	Report(context.Context, runtimeusage.Query) (runtimeusage.Report, error)
+	Report(context.Context, runtimeusage.AggregationQuery) (runtimeusage.Report, error)
 	SetCollectionPolicy(context.Context, runtimeusage.CollectionPolicy) (runtimeusage.CollectionPolicy, error)
 }
 
@@ -126,6 +128,14 @@ func (handler *RuntimeUsersHandler) ServeHTTP(
 			return
 		}
 		report, err := handler.usage.Report(request.Context(), query)
+		if errors.Is(err, runtimeusage.ErrSnapshotChanged) {
+			writeProblem(writer, http.StatusConflict, "usage_snapshot_changed")
+			return
+		}
+		if errors.Is(err, runtimeusage.ErrInvalidQuery) {
+			writeProblem(writer, http.StatusUnprocessableEntity, "invalid_runtime_usage_query")
+			return
+		}
 		if err != nil {
 			writeProblem(writer, http.StatusServiceUnavailable, "runtime_user_usage_unavailable")
 			return
@@ -261,16 +271,44 @@ func (handler *RuntimeUsersHandler) updatePolicy(
 	writeServerJSON(writer, http.StatusOK, handler.runtimeUserAdminView(updated))
 }
 
-func runtimeUsageQuery(rawQuery string) (runtimeusage.Query, error) {
+func runtimeUsageQuery(rawQuery string) (runtimeusage.AggregationQuery, error) {
+	if len(rawQuery) > 16<<10 {
+		return runtimeusage.AggregationQuery{}, runtimeusage.ErrInvalidQuery
+	}
 	values, err := url.ParseQuery(rawQuery)
-	if err != nil || len(values) != 3 ||
+	if err != nil ||
 		len(values["from"]) != 1 || len(values["until"]) != 1 ||
 		len(values["timeZone"]) != 1 {
-		return runtimeusage.Query{}, runtimeusage.ErrInvalidQuery
+		return runtimeusage.AggregationQuery{}, runtimeusage.ErrInvalidQuery
 	}
-	return runtimeusage.NewQuery(
-		values.Get("from"), values.Get("until"), values.Get("timeZone"),
-	)
+	period, err := runtimeusage.NewQuery(values.Get("from"), values.Get("until"), values.Get("timeZone"))
+	if err != nil {
+		return runtimeusage.AggregationQuery{}, err
+	}
+	query := runtimeusage.AggregationQuery{Period: period, Dimension: values.Get("groupBy"), Cursor: values.Get("cursor"), Snapshot: values.Get("snapshot")}
+	if query.Dimension != "" {
+		query.Limit = runtimeusage.MaxGroupPage
+	}
+	for key, items := range values {
+		if len(items) != 1 {
+			return runtimeusage.AggregationQuery{}, runtimeusage.ErrInvalidQuery
+		}
+		switch key {
+		case "from", "until", "timeZone", "groupBy", "cursor", "snapshot":
+		case "limit":
+			query.Limit, err = strconv.Atoi(items[0])
+			if err != nil || query.Dimension == "" {
+				return runtimeusage.AggregationQuery{}, runtimeusage.ErrInvalidQuery
+			}
+		default:
+			if !strings.HasPrefix(key, "filter.") {
+				return runtimeusage.AggregationQuery{}, runtimeusage.ErrInvalidQuery
+			}
+			query.Filters = append(query.Filters, runtimeusage.Filter{Dimension: strings.TrimPrefix(key, "filter."), ID: items[0]})
+		}
+	}
+	sort.Slice(query.Filters, func(i, j int) bool { return query.Filters[i].Dimension < query.Filters[j].Dimension })
+	return query, query.Validate()
 }
 
 func (handler *RuntimeUsersHandler) update(

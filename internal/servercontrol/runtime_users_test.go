@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -153,6 +154,31 @@ func TestRuntimeUserPolicyHTTPStoresEnvironmentAccessAndSoftWarnings(t *testing.
 type recordingRuntimeUsage struct {
 	calls  int
 	period runtimeusage.Period
+	query  runtimeusage.AggregationQuery
+	err    error
+}
+
+func TestUsageHTTPPagedFiltersAndConflictStayExplicit(t *testing.T) {
+	usage := &recordingRuntimeUsage{}
+	handler := newRuntimeUsersHandler(t, usage)
+	base := servercontrol.RuntimeUserUsagePath + "?from=2026-09-01&until=2026-09-29&timeZone=UTC"
+	path := base + "&groupBy=model&limit=50&filter.project=&filter.caller=user.alice&snapshot=" + strings.Repeat("a", 64)
+	response := webRequest(t, handler, http.MethodGet, path, nil, "")
+	if response.Code != http.StatusOK || usage.query.Dimension != "model" || usage.query.Limit != 50 || len(usage.query.Filters) != 2 || usage.query.Filters[1].ID != "" {
+		t.Fatalf("query lost scope: %+v %d", usage.query, response.Code)
+	}
+	for _, suffix := range []string{"&userId=override", "&filter.userId=override", "&filter.session=without-client", "&groupBy=model&limit=51", "&snapshot=bad", "&groupBy=model&groupBy=caller", "&filter.caller=a&filter.caller=b", "&knownSnapshot=" + strings.Repeat("a", 64)} {
+		before := usage.calls
+		response := webRequest(t, handler, http.MethodGet, base+suffix, nil, "")
+		if response.Code != http.StatusUnprocessableEntity || usage.calls != before {
+			t.Fatalf("invalid query reached report: %s status=%d", suffix, response.Code)
+		}
+	}
+	usage.err = runtimeusage.ErrSnapshotChanged
+	response = webRequest(t, handler, http.MethodGet, path, nil, "")
+	if response.Code != http.StatusConflict || !bytes.Contains(response.Body.Bytes(), []byte("usage_snapshot_changed")) {
+		t.Fatalf("snapshot mismatch hidden: %d %s", response.Code, response.Body.String())
+	}
 }
 
 func TestUsageCollectionRequiresExplicitBoundedOwnerInput(t *testing.T) {
@@ -187,17 +213,20 @@ func (usage *recordingRuntimeUsage) SetCollectionPolicy(_ context.Context, polic
 
 func (usage *recordingRuntimeUsage) Report(
 	_ context.Context,
-	query runtimeusage.Query,
+	query runtimeusage.AggregationQuery,
 ) (runtimeusage.Report, error) {
 	usage.calls++
-	usage.period = query.Period()
+	usage.period = query.Period.Period()
+	usage.query = query
+	if usage.err != nil {
+		return runtimeusage.Report{}, usage.err
+	}
 	return runtimeusage.Report{
 		Schema: runtimeusage.ReportSchema, Period: usage.period,
 		GeneratedAt: time.Date(2026, 8, 26, 1, 2, 3, 0, time.UTC),
 		Days: []runtimeusage.DayUsage{{
 			Date: "2026-07-27", AgentAPICalls: 1,
 		}},
-		Users: []runtimeusage.UserUsage{},
 	}, nil
 }
 

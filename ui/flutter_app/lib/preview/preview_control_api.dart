@@ -519,6 +519,7 @@ final class PreviewControlApi implements ControlApi {
           : 'https://api.openai.com',
       authority: 'environment',
       policyId: index < 12 ? 'egress.work' : 'egress.research',
+      policyRevision: 1,
       ruleId: null,
       proxyId: null,
       reusedTransport: index % 3 != 0,
@@ -1856,6 +1857,8 @@ final class PreviewControlApi implements ControlApi {
       revision: 1,
       credentialState: 'ready',
       credentialEpoch: 1,
+      settingsRevision: 1,
+      supportsAutomaticRefresh: kind == 'codex_oauth',
       setHeaderNames: headerPolicy.setHeaders.keys.toList(growable: false)
         ..sort(),
       deleteHeaderNames: [...headerPolicy.deleteHeaders]..sort(),
@@ -1936,7 +1939,7 @@ final class PreviewControlApi implements ControlApi {
       );
     }
     final target = _codexLoginTargets[loginId]!;
-    await createProviderAccount(
+    final created = await createProviderAccount(
       id: target.id,
       displayName: target.name.isEmpty ? 'Codex · Preview' : target.name,
       upstreamEndpointId: target.endpoint,
@@ -1954,6 +1957,12 @@ final class PreviewControlApi implements ControlApi {
         },
         'last_refresh': DateTime.now().toUtc().toIso8601String(),
       }),
+    );
+    final index = _accounts.indexWhere((value) => value.id == created.id);
+    _accounts[index] = created.withSettings(
+      settingsRevision: created.settingsRevision,
+      egressProfile: created.egressProfile,
+      automaticRefresh: true,
     );
     return _codexLogins[loginId] = CodexLogin(
       id: loginId,
@@ -2028,6 +2037,10 @@ final class PreviewControlApi implements ControlApi {
       revision: current.revision,
       credentialState: 'ready',
       credentialEpoch: current.credentialEpoch + 1,
+      settingsRevision: current.settingsRevision,
+      automaticRefresh: current.automaticRefresh,
+      supportsAutomaticRefresh: current.supportsAutomaticRefresh,
+      egressProfile: current.egressProfile,
       setHeaderNames: headerPolicy.setHeaders.keys.toList(growable: false)
         ..sort(),
       deleteHeaderNames: [...headerPolicy.deleteHeaders]..sort(),
@@ -2073,6 +2086,10 @@ final class PreviewControlApi implements ControlApi {
       revision: current.revision,
       credentialState: 'ready',
       credentialEpoch: current.credentialEpoch + 1,
+      settingsRevision: current.settingsRevision,
+      automaticRefresh: current.automaticRefresh,
+      supportsAutomaticRefresh: current.supportsAutomaticRefresh,
+      egressProfile: current.egressProfile,
       setHeaderNames: current.setHeaderNames,
       deleteHeaderNames: current.deleteHeaderNames,
       codexOAuth: CodexOAuthAccount(
@@ -2112,6 +2129,46 @@ final class PreviewControlApi implements ControlApi {
     final updated = current.withNote(
       note,
       current.noteRevision + (note == current.note ? 0 : 1),
+    );
+    _accounts[index] = updated;
+    return updated;
+  }
+
+  @override
+  Future<ProviderAccount> setProviderAccountSettings(
+    ProviderAccount account, {
+    required EgressProfileRevision? egressProfile,
+    required bool automaticRefresh,
+  }) async {
+    _requireOpen();
+    final index = _accounts.indexWhere((value) => value.id == account.id);
+    if (index < 0 ||
+        _accounts[index].settingsRevision != account.settingsRevision) {
+      throw const ControlProblem(
+        status: 409,
+        reasonCode: 'provider_account_conflict',
+        messageKey: 'error.provider_account_conflict',
+      );
+    }
+    final current = _accounts[index];
+    if (automaticRefresh && !current.supportsAutomaticRefresh ||
+        egressProfile != null &&
+            await egressProfileRevision(
+                  egressProfile.id,
+                  egressProfile.revision,
+                ) !=
+                egressProfile) {
+      throw const ControlContractException(
+        'Provider Account settings are invalid',
+      );
+    }
+    final changed =
+        current.egressProfile != egressProfile ||
+        current.automaticRefresh != automaticRefresh;
+    final updated = current.withSettings(
+      settingsRevision: current.settingsRevision + (changed ? 1 : 0),
+      egressProfile: egressProfile,
+      automaticRefresh: automaticRefresh,
     );
     _accounts[index] = updated;
     return updated;
@@ -2465,6 +2522,43 @@ final class PreviewControlApi implements ControlApi {
     return ActivityPage(
       items: values.sublist(offset, end),
       nextCursor: end < values.length ? 'activities-$end' : null,
+    );
+  }
+
+  @override
+  Future<ExchangeSummary> activitySummary(ActivitySummaryScope scope) async {
+    _requireOpen();
+    scope.toQueryParameters();
+    final values = _allPreviewActivities().where((record) {
+      if (scope.captureRunId.isNotEmpty) {
+        return record.captureRunId == scope.captureRunId;
+      }
+      if (scope.manualCaptureId.isNotEmpty) {
+        return record.manualCaptureId == scope.manualCaptureId;
+      }
+      final identity = record.conversation.clientIdentity;
+      return identity?.client == scope.client &&
+          identity?.sessionId == scope.sessionId;
+    }).toList()..sort((a, b) => a.occurredAt.compareTo(b.occurredAt));
+    final failures = <String, int>{};
+    for (final record in values.where((record) => record.status == 'failed')) {
+      final reason = record.reasonCode ?? '';
+      failures[reason] = (failures[reason] ?? 0) + 1;
+    }
+    int count(String status) =>
+        values.where((record) => record.status == status).length;
+    return ExchangeSummary(
+      scope: scope,
+      generatedAt: _now,
+      requests: values.length,
+      succeeded: count('succeeded'),
+      failed: count('failed'),
+      canceled: count('canceled'),
+      pending: count('pending'),
+      firstObservedAt: values.firstOrNull?.occurredAt,
+      lastObservedAt: values.lastOrNull?.occurredAt,
+      failures: failures,
+      otherFailures: 0,
     );
   }
 
@@ -3260,42 +3354,12 @@ final class PreviewControlApi implements ControlApi {
   Future<RuntimeUsageReport> runtimeUsage(RuntimeUsageQuery query) async {
     _requireOpen();
     query.toQueryParameters();
-    const previewCost = RuntimeCostEstimate(
+    const cost = RuntimeCostEstimate(
       nanoUsd: 46035000,
       pricedCalls: 18,
       partialCalls: 2,
     );
-    final until = DateTime.parse('${query.until}T00:00:00.000Z');
-    final activityDate = until.subtract(const Duration(days: 1));
-    final activityDay = [
-      activityDate.year.toString().padLeft(4, '0'),
-      activityDate.month.toString().padLeft(2, '0'),
-      activityDate.day.toString().padLeft(2, '0'),
-    ].join('-');
-    const emptyTokens = RuntimeTokenUsage(
-      inputUncached: RuntimeTokenAggregate(
-        tokens: 0,
-        knownCalls: 0,
-        unknownCalls: 0,
-      ),
-      cacheWrite: RuntimeTokenAggregate(
-        tokens: 0,
-        knownCalls: 0,
-        unknownCalls: 0,
-      ),
-      cacheRead: RuntimeTokenAggregate(
-        tokens: 0,
-        knownCalls: 0,
-        unknownCalls: 0,
-      ),
-      output: RuntimeTokenAggregate(tokens: 0, knownCalls: 0, unknownCalls: 0),
-      reasoning: RuntimeTokenAggregate(
-        tokens: 0,
-        knownCalls: 0,
-        unknownCalls: 0,
-      ),
-    );
-    const aliceTokens = RuntimeTokenUsage(
+    const tokens = RuntimeTokenUsage(
       inputUncached: RuntimeTokenAggregate(
         tokens: 25864,
         knownCalls: 18,
@@ -3322,42 +3386,11 @@ final class PreviewControlApi implements ControlApi {
         unknownCalls: 18,
       ),
     );
-    RuntimeTokenUsage observedTokens({
-      required int input,
-      required int output,
-      required int agentApiCalls,
-    }) => RuntimeTokenUsage(
-      inputUncached: RuntimeTokenAggregate(
-        tokens: input,
-        knownCalls: agentApiCalls,
-        unknownCalls: 0,
-      ),
-      cacheWrite: RuntimeTokenAggregate(
-        tokens: 0,
-        knownCalls: 0,
-        unknownCalls: agentApiCalls,
-      ),
-      cacheRead: RuntimeTokenAggregate(
-        tokens: 0,
-        knownCalls: 0,
-        unknownCalls: agentApiCalls,
-      ),
-      output: RuntimeTokenAggregate(
-        tokens: output,
-        knownCalls: agentApiCalls,
-        unknownCalls: 0,
-      ),
-      reasoning: RuntimeTokenAggregate(
-        tokens: 0,
-        knownCalls: 0,
-        unknownCalls: agentApiCalls,
-      ),
-    );
-    RuntimeUsageGroup group(
+
+    RuntimeUsageGroup makeGroup(
       String id,
       String label,
       String dimension, {
-      List<RuntimeUsageGroup> children = const [],
       String evidence = '',
     }) => RuntimeUsageGroup(
       id: id,
@@ -3368,243 +3401,63 @@ final class PreviewControlApi implements ControlApi {
       succeeded: 16,
       failed: 2,
       canceled: 0,
-      tokens: aliceTokens,
-      cost: previewCost,
-      children: children,
+      tokens: tokens,
+      cost: cost,
     );
-    final model = group('gpt-5', 'gpt-5', 'model');
     final callerKind = _runtimeUsers.isEmpty ? 'local' : 'member';
-    final caller = group('alice', 'alice', 'caller', evidence: callerKind);
-    final callerModels = group(
-      'alice',
-      'alice',
-      'caller',
-      evidence: callerKind,
-      children: [model],
-    );
+    final grouped = query.groupBy.isNotEmpty;
+    final group = switch (query.groupBy) {
+      'project' => makeGroup(
+        'project-one',
+        'vibe-agi/vibermate',
+        'project',
+        evidence: 'remote',
+      ),
+      'branch' => makeGroup(
+        'branch:main',
+        'main',
+        'branch',
+        evidence: 'launch_snapshot',
+      ),
+      'caller' => makeGroup('alice', 'alice', 'caller', evidence: callerKind),
+      'model' => makeGroup('gpt-5', 'gpt-5', 'model'),
+      'profile' => makeGroup('general', 'General', 'profile'),
+      'account' => makeGroup('team-dev', 'team-dev', 'account'),
+      'source' => makeGroup(callerKind, callerKind, 'source'),
+      'client' => makeGroup('codex', 'Codex', 'client'),
+      _ => makeGroup('all', 'All', ''),
+    };
+    final date = DateTime.parse(
+      query.until,
+    ).subtract(const Duration(days: 1)).toIso8601String().substring(0, 10);
     return RuntimeUsageReport(
-      collection: _usageCollection,
-      total: group('all', 'All', ''),
-      callers: [callerModels],
-      projects: [
-        group(
-          'project-one',
-          'vibermate',
-          'project',
-          children: [
-            group(
-              'branch:main',
-              'main',
-              'branch',
-              evidence: 'launch_snapshot',
-              children: [callerModels],
-            ),
-          ],
-        ),
-      ],
-      cost: previewCost,
-      pricing: RuntimePricingInfo(state: 'ready', updatedAt: _now),
-      sources: [
-        group(callerKind, callerKind, 'source', children: [model]),
-      ],
-      profiles: [
-        group('general', 'General', 'profile', children: [model]),
-      ],
-      accounts: [
-        group('team-dev', 'team-dev', 'account', children: [model]),
-      ],
-      models: [
-        group('gpt-5', 'gpt-5', 'model', children: [caller]),
-      ],
       generatedAt: _now,
       period: RuntimeUsagePeriod(
         from: query.from,
         until: query.until,
         timeZone: query.timeZone,
       ),
-      truncated: false,
-      days: [
-        RuntimeDayUsage(
-          date: activityDay,
-          agentApiCalls: 18,
-          succeeded: 16,
-          failed: 2,
-          canceled: 0,
-          modelUnavailableCalls: 0,
-          tokens: aliceTokens,
-          cost: previewCost,
-        ),
-      ],
-      users: [
-        for (final user in _runtimeUsers)
-          if (user.username == 'alice')
-            RuntimeUserUsage(
-              userId: user.id,
-              username: user.username,
-              state: user.state,
-              captureRuns: 3,
-              activeRuns: 1,
-              agentApiCalls: 18,
-              succeeded: 16,
-              failed: 2,
-              canceled: 0,
-              modelUnavailableCalls: 0,
-              tokens: aliceTokens,
-              latestContext: RuntimeUsageContextRef(
-                loginSessionId: 'login.preview.alice',
-                deviceName: 'MacBook Pro',
-                machineId: _previewMachineId,
-                workspaceId: 'workspace.preview.vibermate',
-                workspaceLabel: 'vibermate',
-                observedAt: _now,
+      snapshot: List.filled(64, 'a').join(),
+      collection: _usageCollection,
+      pricing: RuntimePricingInfo(state: 'ready', updatedAt: _now),
+      total: grouped ? null : group,
+      dimension: query.groupBy,
+      filters: query.filters,
+      days: grouped
+          ? const []
+          : [
+              RuntimeDayUsage(
+                date: date,
+                agentApiCalls: 18,
+                succeeded: 16,
+                failed: 2,
+                canceled: 0,
+                modelUnavailableCalls: 0,
+                tokens: tokens,
+                cost: cost,
               ),
-              lastActivityAt: _now,
-              days: [
-                RuntimeDayUsage(
-                  date: activityDay,
-                  agentApiCalls: 18,
-                  succeeded: 16,
-                  failed: 2,
-                  canceled: 0,
-                  modelUnavailableCalls: 0,
-                  tokens: aliceTokens,
-                ),
-              ],
-              models: const [
-                RuntimeModelUsage(
-                  requestedModel: 'gpt-5.6-sol',
-                  upstreamModel: 'dashscope:deepseek-v4-flash-0731',
-                  agentApiCalls: 18,
-                  succeeded: 16,
-                  failed: 2,
-                  canceled: 0,
-                  tokens: RuntimeTokenUsage(
-                    inputUncached: RuntimeTokenAggregate(
-                      tokens: 25864,
-                      knownCalls: 18,
-                      unknownCalls: 0,
-                    ),
-                    cacheWrite: RuntimeTokenAggregate(
-                      tokens: 0,
-                      knownCalls: 0,
-                      unknownCalls: 18,
-                    ),
-                    cacheRead: RuntimeTokenAggregate(
-                      tokens: 4200,
-                      knownCalls: 16,
-                      unknownCalls: 2,
-                    ),
-                    output: RuntimeTokenAggregate(
-                      tokens: 1318,
-                      knownCalls: 18,
-                      unknownCalls: 0,
-                    ),
-                    reasoning: RuntimeTokenAggregate(
-                      tokens: 0,
-                      knownCalls: 0,
-                      unknownCalls: 18,
-                    ),
-                  ),
-                ),
-              ],
-              contexts: [
-                RuntimeContextUsage(
-                  loginSessionId: 'login.preview.alice.mac',
-                  deviceName: 'MacBook Pro',
-                  machineId: _previewMachineId,
-                  workspaceId: 'workspace.preview.vibermate',
-                  workspaceLabel: 'vibermate',
-                  captureRuns: 1,
-                  activeRuns: 1,
-                  agentApiCalls: 10,
-                  succeeded: 9,
-                  failed: 1,
-                  canceled: 0,
-                  tokens: observedTokens(
-                    input: 15000,
-                    output: 700,
-                    agentApiCalls: 10,
-                  ),
-                  lastActivityAt: _now,
-                ),
-                RuntimeContextUsage(
-                  loginSessionId: 'login.preview.alice.linux',
-                  deviceName: 'Linux workstation',
-                  machineId: 'machine.preview.linux',
-                  workspaceId: 'workspace.preview.vibermate',
-                  workspaceLabel: 'vibermate',
-                  captureRuns: 1,
-                  activeRuns: 0,
-                  agentApiCalls: 2,
-                  succeeded: 2,
-                  failed: 0,
-                  canceled: 0,
-                  tokens: observedTokens(
-                    input: 3000,
-                    output: 200,
-                    agentApiCalls: 2,
-                  ),
-                  lastActivityAt: _now.subtract(const Duration(minutes: 12)),
-                ),
-                RuntimeContextUsage(
-                  loginSessionId: 'login.preview.alice.design',
-                  deviceName: 'MacBook Pro',
-                  machineId: _previewMachineId,
-                  workspaceId: 'workspace.preview.vibermate-design',
-                  workspaceLabel: 'vibermate-design',
-                  captureRuns: 1,
-                  activeRuns: 0,
-                  agentApiCalls: 6,
-                  succeeded: 5,
-                  failed: 1,
-                  canceled: 0,
-                  tokens: observedTokens(
-                    input: 7864,
-                    output: 418,
-                    agentApiCalls: 6,
-                  ),
-                  lastActivityAt: _now.subtract(const Duration(hours: 2)),
-                ),
-              ],
-              agentSessions: [
-                RuntimeAgentSessionUsage(
-                  client: 'codex',
-                  sessionId: '01a02deb-d420-79e2-b0bc-1a9cbdaa643f',
-                  captureRuns: 2,
-                  agentApiCalls: 18,
-                  succeeded: 16,
-                  failed: 2,
-                  canceled: 0,
-                  tokens: emptyTokens,
-                  lastActivityAt: _now,
-                ),
-              ],
-              dailyAgentApiCallWarning: user.dailyAgentApiCallWarning,
-              dailyTokenWarning: user.dailyTokenWarning,
-            )
-          else
-            RuntimeUserUsage(
-              userId: user.id,
-              username: user.username,
-              state: user.state,
-              captureRuns: 0,
-              activeRuns: 0,
-              agentApiCalls: 0,
-              succeeded: 0,
-              failed: 0,
-              canceled: 0,
-              modelUnavailableCalls: 0,
-              tokens: emptyTokens,
-              latestContext: null,
-              lastActivityAt: null,
-              days: const [],
-              models: const [],
-              contexts: const [],
-              agentSessions: const [],
-              dailyAgentApiCallWarning: user.dailyAgentApiCallWarning,
-              dailyTokenWarning: user.dailyTokenWarning,
-            ),
-      ],
+            ],
+      groups: grouped ? [group] : const [],
     );
   }
 
@@ -4182,8 +4035,12 @@ Evidence line 16''';
           : 'https://api.anthropic.com',
       authority: 'environment',
       policyId: 'egress.${activity.environmentId}',
+      policyRevision: 1,
+      accountId: 'account.work',
+      accountSettingsRevision: 4,
+      proxyRevision: 1,
       ruleId: null,
-      proxyId: null,
+      proxyId: 'profile.direct',
       reusedTransport: index.isEven,
       startedAt: activity.occurredAt,
       terminal: terminal,

@@ -14,6 +14,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/vibe-agi/vibermate/internal/egressnetwork"
+	"github.com/vibe-agi/vibermate/internal/egressprofile"
 	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
 	"github.com/vibe-agi/vibermate/internal/originidentity"
@@ -304,7 +305,7 @@ type RequestOptions struct {
 	ClientProtocol    wireprofile.ApplicationProtocol
 	ClientUserAgent   string
 	ClientHello       transportprofile.Observation
-	EgressPolicy      egressnetwork.Policy
+	EgressProfile     egressprofile.ProfileRevision
 	// ConnectionID, ExchangeID, and ParentAttemptID associate this outbound
 	// with the client connection, the Exchange, and the upstream attempt that
 	// caused it. They travel as typed references so no identity encodes
@@ -353,7 +354,7 @@ type Request struct {
 	clientProtocol  wireprofile.ApplicationProtocol
 	clientUserAgent string
 	clientHello     transportprofile.Observation
-	egressPolicy    egressnetwork.Policy
+	egressProfile   egressprofile.ProfileRevision
 	rawEvidence     *rawevidence.Context
 
 	messageTransformUserAgent *string
@@ -409,10 +410,16 @@ func NewRequest(options RequestOptions) (Request, error) {
 	if err := validateOpaqueIdentity("provider target reference", options.TargetRef); err != nil {
 		return Request{}, err
 	}
-	egressPolicy, err := options.EgressPolicy.Normalize()
-	if err != nil {
+	if options.CredentialMode == providerauth.CredentialManaged {
+		if err := options.AccountRef.Validate(); err != nil {
+			return Request{}, err
+		}
+		options.EgressProfile = options.AccountRef.EgressProfile
+	}
+	if err := options.EgressProfile.Validate(); err != nil {
 		return Request{}, err
 	}
+	egressPolicy := options.EgressProfile.Policy
 	if options.Target.TransportKind() != originidentity.ProviderTransportStrictTLS &&
 		egressPolicy.Proxy.Kind != egressnetwork.ProxyDirect {
 		return Request{}, errors.New(
@@ -627,7 +634,7 @@ func NewRequest(options RequestOptions) (Request, error) {
 		clientProtocol:  options.ClientProtocol,
 		clientUserAgent: options.ClientUserAgent,
 		clientHello:     options.ClientHello,
-		egressPolicy:    egressPolicy,
+		egressProfile:   options.EgressProfile,
 		rawEvidence:     rawEvidence,
 
 		messageTransformUserAgent: messageTransformUserAgent,
@@ -651,7 +658,7 @@ func (request Request) ProbeTarget() offlinehold.ProbeTarget {
 }
 
 func (request Request) EgressPolicy() egressnetwork.Policy {
-	return request.egressPolicy
+	return request.egressProfile.Policy
 }
 
 func (request Request) Method() string {

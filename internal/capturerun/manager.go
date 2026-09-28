@@ -148,6 +148,7 @@ func (manager *Manager) Create(
 		command.Lifetime = manager.defaultLifetime
 	}
 	command.Adapter = cloneAdapter(command.Adapter)
+	command.Runtime = command.Runtime.Clone()
 	if err := command.validate(manager.maxLifetime); err != nil {
 		return LaunchGrant{}, err
 	}
@@ -300,6 +301,13 @@ func (manager *Manager) Heartbeat(
 		return View{}, err
 	}
 	defer finish()
+	// A sleeping supervisor can re-admit an expired lease. Serialize that with
+	// archive maintenance just like initial creation, so a clear cannot race it.
+	archiveRelease, err := manager.archiveBarrier.BeginCaptureCreation(operation)
+	if err != nil {
+		return View{}, fmt.Errorf("enter Capture renewal archive barrier: %w", err)
+	}
+	defer archiveRelease()
 	now := manager.clock.Now().UTC()
 	record, err := manager.repository.Heartbeat(
 		operation,

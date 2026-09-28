@@ -8,6 +8,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/vibe-agi/vibermate/internal/egressprofile"
 	"github.com/vibe-agi/vibermate/internal/secretstore"
 )
 
@@ -49,15 +50,20 @@ func (mode CredentialMode) Valid() bool {
 }
 
 type AccountRef struct {
-	ID              string
-	Revision        uint64
-	CredentialEpoch uint64
-	RealmID         string
+	ID               string
+	Revision         uint64
+	CredentialEpoch  uint64
+	RealmID          string
+	SettingsRevision uint64
+	// EgressProfile is the effective, immutable network path for this lease.
+	EgressProfile egressprofile.ProfileRevision
 }
 
 func (ref AccountRef) Validate() error {
 	if !validIdentity(ref.ID) || !validIdentity(ref.RealmID) || ref.Revision == 0 ||
-		ref.Revision > MaxRevision || ref.CredentialEpoch == 0 || ref.CredentialEpoch > MaxRevision {
+		ref.Revision > MaxRevision || ref.CredentialEpoch == 0 || ref.CredentialEpoch > MaxRevision ||
+		ref.SettingsRevision == 0 || ref.SettingsRevision > MaxRevision ||
+		ref.EgressProfile.Validate() != nil {
 		return ErrInvalidAuthentication
 	}
 	return nil

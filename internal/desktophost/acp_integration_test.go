@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -24,11 +25,16 @@ import (
 )
 
 func TestACPRegisteredEditorFlowReachesAppWithoutProxyInjection(t *testing.T) {
-	for _, content := range []bool{false, true} {
-		t.Run(fmt.Sprint(content), func(t *testing.T) {
+	for _, scenario := range []struct{ content, sleep bool }{{}, {content: true}, {sleep: true}} {
+		t.Run(fmt.Sprintf("content=%t/sleep=%t", scenario.content, scenario.sleep), func(t *testing.T) {
+			content := scenario.content
 			root := t.TempDir()
 			paths := newHostPaths(t, filepath.Join(root, "cache"))
-			host := startHost(t, hostOptions(t, paths, filepath.Join(root, "data")))
+			options := hostOptions(t, paths, filepath.Join(root, "data"))
+			options.AppSessionTTL = 12 * time.Hour // independent of the short Capture lease
+			clock := &acpSleepClock{}
+			options.Runtime.Clock = clock
+			host := startHost(t, options)
 			defer shutdownHost(t, host)
 			discovery, err := localdiscovery.NewFile(paths.DiscoveryPath(), productruntime.SystemClock{})
 			if err != nil {
@@ -55,7 +61,11 @@ func TestACPRegisteredEditorFlowReachesAppWithoutProxyInjection(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			launcher, err := runlauncher.New(runlauncher.Config{Discovery: discovery, BaseEnvironment: []string{"VIBERMATE_ACP_HOST_FIXTURE=1", "GORACE=atexit_sleep_ms=0", "HTTP_PROXY=http://editor-proxy.invalid:1234", "ACP_CUSTOM=editor value"}, Stdin: input, Stdout: output, Stderr: stderr, HeartbeatInterval: 50 * time.Millisecond, ControlTimeout: 2 * time.Second, TerminationTimeout: time.Second})
+			heartbeatInterval := 50 * time.Millisecond
+			if scenario.sleep {
+				heartbeatInterval = time.Hour // observation must repair the expired lease first
+			}
+			launcher, err := runlauncher.New(runlauncher.Config{Discovery: discovery, BaseEnvironment: []string{"VIBERMATE_ACP_HOST_FIXTURE=1", "GORACE=atexit_sleep_ms=0", "HTTP_PROXY=http://editor-proxy.invalid:1234", "ACP_CUSTOM=editor value", "USER=editor-user", "HOME=/editor/home", "TZ=UTC"}, Stdin: input, Stdout: output, Stderr: stderr, HeartbeatInterval: heartbeatInterval, ControlTimeout: 2 * time.Second, TerminationTimeout: time.Second})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -88,6 +98,33 @@ func TestACPRegisteredEditorFlowReachesAppWithoutProxyInjection(t *testing.T) {
 			}
 			exchange(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":1}}`, `"protocolVersion":1`)
 			exchange(`{"jsonrpc":"2.0","id":2,"method":"session/new","params":{"cwd":"/editor/project","mcpServers":[]}}`, `"sessionId":"native-session"`)
+			if scenario.sleep {
+				clock.offset.Store(int64(3 * time.Hour))
+				page, err := host.Runtime().CaptureRunReader().ListRuns(ctx, capturerun.PageRequest{Limit: 20})
+				if err != nil || len(page.Items) != 1 || page.Items[0].State != capturerun.StateExpired {
+					t.Fatalf("sleep did not expire capture: %+v, %v", page, err)
+				}
+				// Poll the isolated Runtime until the 1s observation publisher has
+				// revalidated the original supervisor and renewed the same run.
+				deadline := time.Now().Add(5 * time.Second)
+				for {
+					view, err := host.Runtime().CaptureRunReader().GetRun(ctx, page.Items[0].ID)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if view.State == capturerun.StateAttached {
+						break
+					}
+					if time.Now().After(deadline) {
+						t.Fatal("ACP did not resume its expired capture")
+					}
+					select {
+					case err := <-done:
+						t.Fatalf("sleep stopped ACP: %v", err)
+					case <-time.After(10 * time.Millisecond):
+					}
+				}
+			}
 			exchange(`{"jsonrpc":"2.0","id":3,"method":"session/prompt","params":{"sessionId":"native-session","prompt":[{"type":"text","text":"hello private prompt"}]}}`, `"method":"session/request_permission"`)
 			exchange(`{"jsonrpc":"2.0","id":3,"result":{"outcome":{"outcome":"selected","optionId":"allow"}}}`, `"sessionUpdate":"agent_message_chunk"`)
 			line, err := reader.ReadString('\n')
@@ -106,6 +143,9 @@ func TestACPRegisteredEditorFlowReachesAppWithoutProxyInjection(t *testing.T) {
 			run := page.Items[0]
 			if run.State != capturerun.StateFinished || run.ProcessID <= 0 || run.Observation != capturerun.ObservationWaitingForTraffic {
 				t.Fatalf("ACP mislabeled as HTTP: %+v", run)
+			}
+			if run.LocalUserLabel != "editor-user" || run.Runtime.LocalUserName != "editor-user" || run.Runtime.HomeDirectory != "/editor/home" || run.Runtime.TimeZone != "UTC" {
+				t.Fatalf("ACP launch context used server environment: %+v", run.Runtime)
 			}
 			app := host.AppSession()
 			response := controlRequest(t, app.BaseURL, http.MethodGet, "/api/v1/captures/managed_run:"+run.ID+"/acp", app.ReadToken, "vibermate://desktop")
@@ -129,6 +169,12 @@ func TestACPRegisteredEditorFlowReachesAppWithoutProxyInjection(t *testing.T) {
 			}
 		})
 	}
+}
+
+type acpSleepClock struct{ offset atomic.Int64 }
+
+func (clock *acpSleepClock) Now() time.Time {
+	return time.Now().UTC().Add(time.Duration(clock.offset.Load()))
 }
 
 func TestACPHostAgentFixture(t *testing.T) {

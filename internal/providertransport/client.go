@@ -398,7 +398,7 @@ func (client *Client) Do(
 			target:       frozen.target,
 			plan:         frozen.wireVariant.TransportFingerprintPlan(),
 			clientHello:  frozen.clientHello,
-			egressPolicy: frozen.egressPolicy,
+			egressPolicy: frozen.EgressPolicy(),
 		},
 	)
 	stripProtectedCredentialHeaders(request.Header, evidence.ProtectedHeaderNames)
@@ -1084,7 +1084,7 @@ func (client *Client) beginAudit(
 		},
 		Caller:       egressaudit.CallerCore,
 		TargetOrigin: frozen.target.origin.String(),
-		Decision:     providerEgressDecision(),
+		Decision:     providerEgressDecision(frozen),
 		StartedAt:    client.clock(),
 	})
 	if err != nil {
@@ -1102,12 +1102,21 @@ func (client *Client) beginAudit(
 	return attempt, nil
 }
 
-func providerEgressDecision() egressaudit.DecisionRef {
+func providerEgressDecision(frozen Request) egressaudit.DecisionRef {
 	authority, err := egressaudit.AuthorityForPurpose(egressaudit.PurposeProviderAttempt)
 	if err != nil {
 		return egressaudit.DecisionRef{}
 	}
-	return egressaudit.BuiltInDirectDecision(authority)
+	rule := frozen.provenance.routeID.String()
+	if rule == "" {
+		rule = "original.destination"
+	}
+	return egressaudit.DecisionRef{
+		PolicyID: frozen.provenance.environmentID.String(), PolicyRevision: uint64(frozen.provenance.environmentRevision),
+		Authority: authority, RuleID: rule,
+		ProxyID: frozen.egressProfile.ID.String(), ProxyRevision: uint64(frozen.egressProfile.Revision),
+		AccountID: frozen.accountRef.ID, AccountSettingsRevision: frozen.accountRef.SettingsRevision,
+	}
 }
 
 func (client *Client) completeAudit(
