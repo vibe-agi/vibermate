@@ -184,6 +184,9 @@ func TestConversationIndexDoesNotBlockAuditWriter(t *testing.T) {
 }
 
 func TestConversationIndexScalesWithHistory(t *testing.T) {
+	if testing.Short() {
+		t.Skip("12k lifecycle-row timing check; covered by full unit/contracts runs")
+	}
 	store := activityReadFixture(t, 12000)
 	// The fixture starts with two unmatched starts. Remove them so this test
 	// has 4,000 complete requests, each with its pending lifecycle records.

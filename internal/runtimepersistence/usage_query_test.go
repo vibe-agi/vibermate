@@ -229,6 +229,9 @@ func seedBulkUsage(t testing.TB, store *Store, count, groups int, now time.Time)
 }
 
 func TestUsageAggregationBeyond100000IsCompleteAndPageSizeIsBounded(t *testing.T) {
+	if testing.Short() {
+		t.Skip("100k usage-row scale check; covered by full unit/contracts runs")
+	}
 	store := openTestStore(t, filepath.Join(t.TempDir(), "usage.db"))
 	defer shutdownTestStore(t, store)
 	now := time.Date(2026, 9, 28, 0, 0, 0, 0, time.UTC)

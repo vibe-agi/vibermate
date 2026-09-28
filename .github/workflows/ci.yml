@@ -101,7 +101,9 @@ jobs:
           go-version-file: go.mod
           check-latest: false
           cache: true
-      - run: go test -race ./...
+      # Full-size SQLite scale fixtures run in unit/contracts. Instrumented
+      # runs retain the functional, concurrent read/write and isolation checks.
+      - run: go test -race -short ./...
 
   contracts:
     needs: generated-structural

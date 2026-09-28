@@ -165,6 +165,27 @@ backup/conversion: this target must not replace newer source records.
 
 ## Remaining gates
 
+The final pre-cutover recheck found the source database no longer matched the
+14:12 receipt, so that target was not selected. A new complete private conversion
+finished at `2026-09-28T15:11:11.631182Z` under
+`/Users/null/Library/Application Support/ViberMate-v1-cutover-20260928.h8epWc`
+with distinct `backup` and `converted` children. Source/backup SHA-256:
+`beb266ec957adc75acba600aa329288461417ba140ed0c7a6f632b314af59a15`;
+converted SHA-256:
+`bad2327b855d46df821ddde581868a81e16eb7034bd415f5e7db53f8cf38fa80`.
+The baseline and all retained counts/value checks above still match. Both older
+rehearsals and the original directory remain available; the receipt does not
+explain why the old source bytes changed. No cutover occurred. The source must
+still be checked again immediately before switching.
+
+The user explicitly approved updating both App locations and selecting the
+verified new directory after formal package checks, without launching the App.
+Use the existing `vibermate-storage-v1` directory selection; do not set its optional
+`previous` fallback, because an older schema requires restoring the matching old
+App as well. The native credential service is fixed at `io.vibermate.desktop`,
+independent of directory, so moving the data selection neither exports nor
+renames Keychain items.
+
 - Web account-column styling, successful quota/sorting/refresh, and account/team/
   project checks are complete and recorded in the capture-overview review. The
   quota-success fixture used production Server composition with process-local
