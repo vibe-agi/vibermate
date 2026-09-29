@@ -11,9 +11,9 @@ import (
 // anything a later IDNA mapping could turn into another name is refused.
 func TestProxyAuthorityHostIsAlreadyTheDialedASCIIName(t *testing.T) {
 	for _, authority := range []string{
-		"ⓛocalhost:443",    // ⓛocalhost maps to localhost
-		"loc­alhost:443",   // soft hyphen is removed by IDNA
-		"ｐastebin.com:443", // fullwidth p maps to p
+		"\u24dbocalhost:443",    // \u24dbocalhost maps to localhost
+		"loc\u00adalhost:443",   // soft hyphen is removed by IDNA
+		"\uff50astebin.com:443", // fullwidth p maps to p
 		"%E2%93%9Bocalhost:443",
 		"exa mple.com:443",
 		"example..com:443",

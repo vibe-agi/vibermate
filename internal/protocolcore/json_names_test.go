@@ -13,8 +13,8 @@ func TestValidateJSONNamesRejectsNamesEncodingJSONWouldMerge(t *testing.T) {
 		`{"a":{"stop_reason":"x","Stop_Reason":"y"}}`,
 		`[{"ok":1},{"model":"a","MODEL":"b"}]`,
 		// U+212A KELVIN SIGN and U+017F LATIN SMALL LETTER LONG S fold to k and s.
-		"{\"kind\":1,\"Kind\":2}",
-		"{\"stop\":1,\"ſtop\":2}",
+		"{\"kind\":1,\"\u212aind\":2}",
+		"{\"stop\":1,\"\u017ftop\":2}",
 	} {
 		if err := ValidateJSONNames([]byte(document)); err == nil {
 			t.Errorf("accepted ambiguous document %s", document)
@@ -28,7 +28,7 @@ func TestValidateJSONNamesAgreesWithEncodingJSONBinding(t *testing.T) {
 	type probe struct {
 		Kind string `json:"kind"`
 	}
-	for _, name := range []string{"kind", "KIND", "Kind", "Kind", "kınd", "kind\u0000"} {
+	for _, name := range []string{"kind", "KIND", "Kind", "\u212aind", "k\u0131nd", "kind\u0000"} {
 		var value probe
 		_ = json.Unmarshal([]byte(`{"`+name+`":"x"}`), &value)
 		binds := value.Kind == "x"
