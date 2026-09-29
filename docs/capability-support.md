@@ -3,7 +3,7 @@
 This matrix states what the current source offers. A passing unit test and a
 published product are not interchangeable evidence.
 
-Source package version: **0.1.16**. Latest published release: **none**.
+Source package version: **0.1.17**. Latest published release: **none**.
 
 Earlier releases were withdrawn; the next release will be built from this
 source. The current source opens only databases of its own schema revision and
