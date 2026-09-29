@@ -18,6 +18,8 @@ ViberMate 就站在两者之间，运行在你的 Mac 或你自己的服务器�
 - **算清用量**：按项目、分支、模型、账号或人员统计请求数、Token 和估算费用。
 - **团队共用**：一台服务器给整个团队用。每人用自己的账号登录，所有者决定谁能使用哪些策略。
 
+![使用概览：请求数、Token 与估算费用](https://vibe-agi.github.io/images/vibermate/usage-zh-2400.webp)
+
 [官网](https://vibe-agi.github.io/zh/products/vibermate/)配有截图，一步步介绍以上每项能力。
 
 ## 开始使用

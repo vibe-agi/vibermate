@@ -24,6 +24,8 @@ happens to it.
 - **Share** one server with your team. Everyone signs in with their own
   account, and the owner decides who may use which policies.
 
+![Usage overview with requests, tokens and estimated cost](https://vibe-agi.github.io/images/vibermate/usage-en-2400.webp)
+
 The [website](https://vibe-agi.github.io/products/vibermate/) walks through
 each of these with screenshots.
 
