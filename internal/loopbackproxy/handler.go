@@ -18,6 +18,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"strconv"
 	"strings"
@@ -604,7 +605,9 @@ func (handler *Handler) ServeHTTP(
 			audit,
 			source,
 			outcome,
-			request.Host,
+			// Dial the canonical authority that policy and audit evaluated,
+			// never the client's spelling of it.
+			net.JoinHostPort(host, strconv.Itoa(int(port))),
 			host,
 			port,
 			snapshot,
@@ -1820,11 +1823,11 @@ func connectOrigin(authority string) (originidentity.ClientOrigin, string, error
 	return origin, origin.Host(), nil
 }
 
-// splitAuthority canonicalizes rather than refuses. RFC 3986 makes a host
-// case-insensitive and a trailing dot is the root form of the same name, so a
-// client that sends either is asking for the same endpoint. Canonicalization
-// cannot widen the match: case folding and root-dot removal map a name only
-// onto itself, and no suffix, wildcard, or different host becomes equal.
+// splitAuthority canonicalizes case and a root dot, and refuses everything
+// else. RFC 3986 makes a host case-insensitive and a trailing dot is the root
+// form of the same name, so either maps a name only onto itself. Any other
+// spelling, including non-ASCII text a resolver would IDNA-map to a different
+// name, is rejected so policy, audit and the dialer see one host.
 func splitAuthority(authority string) (string, uint16, error) {
 	host, portText, err := net.SplitHostPort(authority)
 	if err != nil || host == "" || portText == "" {
@@ -1841,15 +1844,36 @@ func splitAuthority(authority string) (string, uint16, error) {
 	return host, uint16(port), nil
 }
 
+// canonicalCONNECTHost returns the one host string used for connection
+// policy, audit and dialing, or "" when the authority is not already in that
+// form. HTTP authorities carry internationalized names in ASCII (punycode);
+// accepting anything a later IDNA mapping could turn into another name would
+// let a policy match one host while the dialer resolves a different one.
 func canonicalCONNECTHost(host string) string {
-	host = strings.ToLower(host)
 	// A single trailing dot is the DNS root label. More than one, or a dot
 	// alone, is not a name.
-	if strings.HasSuffix(host, ".") {
-		host = strings.TrimSuffix(host, ".")
+	host = strings.TrimSuffix(host, ".")
+	if address, err := netip.ParseAddr(host); err == nil {
+		if address.Zone() != "" {
+			return ""
+		}
+		return address.String()
 	}
-	if host == "" || strings.HasSuffix(host, ".") {
+	host = strings.ToLower(host)
+	if host == "" || len(host) > 253 {
 		return ""
+	}
+	for _, label := range strings.Split(host, ".") {
+		if label == "" || len(label) > 63 || label[0] == '-' || label[len(label)-1] == '-' {
+			return ""
+		}
+		for index := 0; index < len(label); index++ {
+			character := label[index]
+			if (character < 'a' || character > 'z') &&
+				(character < '0' || character > '9') && character != '-' {
+				return ""
+			}
+		}
 	}
 	return host
 }
