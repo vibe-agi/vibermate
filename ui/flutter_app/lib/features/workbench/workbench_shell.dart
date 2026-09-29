@@ -18,6 +18,10 @@ import 'settings_view.dart';
 import 'usage_dashboard_view.dart';
 import 'workbench_controller.dart';
 
+// Product screenshots render the sample Preview dataset without the Preview
+// markers; the published pages state that the screens show sample data.
+const _productScreenshot = bool.fromEnvironment('VIBERMATE_SCREENSHOT');
+
 final class WorkbenchShell extends StatelessWidget {
   const WorkbenchShell({required this.controller, super.key});
 
@@ -287,7 +291,7 @@ final class _TitleBar extends StatelessWidget {
                 ),
                 const SizedBox(width: ViberSpacing.sm),
               ],
-              if (controller.previewMode) ...[
+              if (controller.previewMode && !_productScreenshot) ...[
                 if (compact)
                   Tooltip(
                     message: copy('status.preview'),
@@ -698,7 +702,7 @@ final class _StatusBar extends StatelessWidget {
         builder: (context, constraints) {
           final compact = constraints.maxWidth < 520;
           final showInstance = constraints.maxWidth >= 720;
-          final runtimeLabel = controller.previewMode
+          final runtimeLabel = controller.previewMode && !_productScreenshot
               ? compact
                     ? copy('status.preview.short')
                     : copy('settings.preview')
