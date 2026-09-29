@@ -104,6 +104,7 @@ if [[ "${mode}" == "live" ]]; then
     echo "Live bundle Web management UI contains a symbolic link" >&2
     exit 70
   fi
+  "$(dirname "${BASH_SOURCE[0]}")/verify_web_self_contained.sh" "${web_root}" >/dev/null
   repository_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
   if [[ -L "${app}/Contents/Resources/LICENSE" ||
     -L "${app}/Contents/Resources/THIRD_PARTY_LICENSES.md" ||

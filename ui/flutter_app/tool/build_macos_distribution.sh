@@ -45,7 +45,7 @@ fi
 (
   cd "${flutter_directory}"
   # Use pubspec.yaml for both products, just like local builds.
-  flutter build web --release
+  tool/build_web.sh
   flutter build macos --release
 )
 

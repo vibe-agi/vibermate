@@ -60,7 +60,7 @@ else
       -o "${flutter_directory}/build/vibermated" \
       ./cmd/vibermated
   )
-  flutter build web --release
+  tool/build_web.sh
   flutter build macos --release
   app_bundle="${flutter_directory}/build/macos/Build/Products/Release/ViberMate.app"
   macos_directory="${app_bundle}/Contents/MacOS"
