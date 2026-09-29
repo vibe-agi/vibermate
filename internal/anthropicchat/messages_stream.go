@@ -396,6 +396,9 @@ func (stream *AnthropicProviderStream) consumeEvent(
 	}
 	switch envelope.Type {
 	case "ping":
+		// The provider's keepalive while it is still producing the message
+		// (for example during long thinking). It renews stream liveness.
+		stream.semanticProgress++
 		return nil
 	case "error":
 		failure := protocolcore.NewNativeProviderFailure(
