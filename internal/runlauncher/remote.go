@@ -153,6 +153,9 @@ func (connection *remoteConnection) materialize(
 	if err := grant.Validate(); err != nil {
 		return capturecontrol.LaunchGrant{}, nil, err
 	}
+	if err := validateRemoteLaunchEnvironment(grant.LaunchEnvironment); err != nil {
+		return capturecontrol.LaunchGrant{}, nil, err
+	}
 	relay, err := startLocalServerRelay(connection.transport)
 	if err != nil {
 		return capturecontrol.LaunchGrant{}, nil, err

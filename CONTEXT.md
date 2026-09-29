@@ -177,7 +177,7 @@ One Client Flow resolved to either its Original Destination or one selected Upst
 _Avoid_: Account, Endpoint, network connection
 
 **Launch Environment Policy**:
-The exact environment-variable deletions and assignments an Environment supplies when a Capture Run starts. It affects only the launched client process and is frozen by that Capture Run.
+The exact environment-variable deletions and assignments an Environment supplies when a Capture Run starts. It affects only the launched client process and is frozen by that Capture Run. When a remote Runtime Server supplies it, the member device accepts assignments only to a fixed list of agent-behavior variables (models, timeouts, output limits, telemetry switches) and refuses the launch otherwise; deletions are unrestricted.
 _Avoid_: Server environment, Route environment, shell profile
 
 **Egress Policy**:
