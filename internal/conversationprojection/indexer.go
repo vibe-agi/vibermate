@@ -258,11 +258,19 @@ func (indexer *Indexer) reindex(
 			if !found {
 				continue
 			}
-			if err := indexer.identities.PutConversationIdentity(
+			err := indexer.identities.PutConversationIdentity(
 				ctx,
 				item.record.SubjectID,
 				identity,
-			); err != nil {
+			)
+			if errors.Is(err, activity.ErrInvalidEvent) {
+				// The client-local log names a different session or actor than
+				// the wire already recorded for this Exchange (a Codex subagent
+				// can do this). The wire identity stays authoritative; one
+				// contradicting Exchange must not stall the rest of the index.
+				continue
+			}
+			if err != nil {
 				return err
 			}
 			if err := indexer.project(ctx, item.record, identity); err != nil {

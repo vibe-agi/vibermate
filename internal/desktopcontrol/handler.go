@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log"
 	"mime"
 	"net/http"
 	"net/url"
@@ -808,7 +809,10 @@ func (handler *Handler) scheduleConversationIndex(
 		}()
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
-		_ = handler.conversationIndexer.Reindex(ctx, request)
+		if err := handler.conversationIndexer.Reindex(ctx, request); err != nil &&
+			!errors.Is(err, context.DeadlineExceeded) && !errors.Is(err, context.Canceled) {
+			log.Printf("Conversation index pass for Capture Run %s failed: %v", request.CaptureRunID, err)
+		}
 	}()
 }
 
