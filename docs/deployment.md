@@ -1,78 +1,101 @@
-# 部署与 HTTPS：先选场景
+[English](deployment.md) · [简体中文](deployment.zh-CN.md)
 
-先回答“谁要从哪里连接”，不用先理解 CA、SAN 或容器网络。App、原生 Web 和容器 Web
-使用同一个 Runtime、账号体系和证书边界。
+# Deployment and HTTPS: pick your setup first
 
-| 场景 | 推荐入口 | 地址与证书 |
+Start with one question: who connects, and from where? You do not need to
+understand CAs, SANs or container networking first. The App, the native Web
+workbench and the container Web workbench all use the same Runtime, the same
+account system and the same certificate boundaries.
+
+| Setup | Start with | Address and certificate |
 | --- | --- | --- |
-| 个人 App | 打开 App，安装终端命令，运行 `vibermate run -- codex` | 不需要网页账号、域名或全局安装 CA |
-| 同一台电脑的原生 Web | `vibermated server` | `http://127.0.0.1:9666`，不需要证书 |
-| 同一台电脑的容器 Web | `compose.yaml` | 固定发布到宿主机回环 HTTP |
-| 私网/VPN，没有公网域名 | `private_ca_tls` 或 `compose.private.yaml` | ViberMate 私有 CA；可用 hosts 名称或 IP 证书 |
-| 有公网域名，希望自动维护 | `automatic_tls` 或 `compose.public.yaml` | 自动申请、续期并热加载公共证书 |
-| 已有公共/企业证书 | `tls_files` 或 `compose.team.yaml` | 部署者提供完整证书链和私钥 |
+| Personal App | Open the App, install the terminal command, run `vibermate run -- codex` | No Web account, domain or system-wide CA install needed |
+| Native Web on the same computer | `vibermated server` | `http://127.0.0.1:9666`, no certificate needed |
+| Container Web on the same computer | `compose.yaml` | Always published on host loopback, over HTTP |
+| Private network/VPN, no public domain | `private_ca_tls` or `compose.private.yaml` | ViberMate private CA; certificate for a hosts-file name or an IP |
+| Public domain, certificates managed for you | `automatic_tls` or `compose.public.yaml` | Public certificate requested, renewed and hot-reloaded automatically |
+| You already have a public or company certificate | `tls_files` or `compose.team.yaml` | You provide the full certificate chain and private key |
 
-“个人使用”不代表远程 HTTP 安全。只要浏览器或 CLI 跨设备连接，就选择一种 HTTPS
-模式，或使用经过身份验证的可信隧道。不要把 `0.0.0.0`、容器的 `172.x` 地址或证书
-警告页发给用户。
+"Personal use" does not make remote HTTP safe. As soon as a browser or CLI
+connects from another device, choose one of the HTTPS modes or use an
+authenticated, trusted tunnel. Never hand users `0.0.0.0`, a container `172.x`
+address, or a certificate warning page.
 
-## 三条连接，三种信任
+## Three connections, three kinds of trust
 
-1. 浏览器/CLI → ViberMate：由本页配置的 **服务器 HTTPS 证书**保护。
-2. Agent → 被检查的 AI 域名：由 **AI 流量检查 CA（Proxy CA）**签发目标域名叶证书。
-3. Runtime → 真正的 AI 服务商：严格验证服务商自己的证书，并使用选定网络出口。
+1. Browser/CLI → ViberMate: protected by the **Server HTTPS certificate**
+   configured on this page.
+2. Agent → inspected AI domain: the **AI traffic inspection CA (Proxy CA)**
+   issues leaf certificates for the target domains.
+3. Runtime → the real AI provider: the provider's own certificate is verified
+   strictly, and the selected network exit is used.
 
-公共自动证书和部署者证书与 Proxy CA 完全不同。`private_ca_tls` 是一个明确的例外：
-为了让无公网域名的受管设备少维护一套根，它目前使用同一个 ViberMate 私有 CA 签发
-Runtime 服务器叶证书。因此把该 CA 加入系统信任会同时信任这台 Runtime 的流量检查
-能力，只应安装到受管设备，不应公开分发。
+Automatic public certificates and certificates you provide have nothing to do
+with the Proxy CA. `private_ca_tls` is a deliberate exception: so that managed
+devices without a public domain only need one root, it uses the same ViberMate
+private CA to issue the Runtime's server leaf certificate. Trusting that CA in a
+system trust store therefore also trusts this Runtime's traffic inspection.
+Install it only on managed devices. Do not distribute it publicly.
 
-## 本机原生 Web
+## Native Web on this computer
 
-从发布包目录运行：
+Run from the release package directory:
 
 ```sh
 ./vibermated server
 ```
 
-打开 <http://127.0.0.1:9666>。默认仅监听回环地址。端口冲突时使用
-`--listen 127.0.0.1:9667`，浏览器与 CLI 一起改端口。另开一个终端读取初始化/恢复密钥：
+Open <http://127.0.0.1:9666>. By default the Server listens on loopback only.
+If the port is taken, use `--listen 127.0.0.1:9667` and change the port in the
+browser and CLI as well. In another terminal, read the setup/recovery key:
 
 ```sh
 ./vibermated server recovery-key
 ```
 
-在网页创建所有者账号。没有默认 `admin/admin`。若启动时指定了 `--data-dir`，所有
-服务器本地命令都要使用同一个绝对目录。CLI 显式连接独立 Server：
+Create the owner account in the Web page. There is no default `admin/admin`. If
+you started the Server with `--data-dir`, pass the same absolute directory to
+every server-local command. The CLI connects to a standalone Server explicitly:
 
 ```sh
 vibermate login --server http://127.0.0.1:9666
 vibermate run --server http://127.0.0.1:9666 -- codex
 ```
 
-不带 `--server` 的本地 `vibermate run` 连接 App。System Transparent 默认不保留
-对话正文；需要内容时发布流量策略，并用 `--env <策略ID>` 选择。
+A local `vibermate run` without `--server` connects to the App. The default
+traffic policy, System Transparent, records conversations (kept for 30 days by
+default) and keeps the original destination and credentials. When you want
+different routing, recording or retention, publish your own traffic policy and
+select it with `--env <policy ID>`.
 
-### Web 中为其他客户端创建专用代理登录
+### Create a manual capture login for other clients in the Web workbench
 
-所有者登录 Web 工作台，在「流量 → 运行记录」点创建专用代理登录，选择流量策略、客户端
-类型和有效期，核对地址与受检 AI 域名后创建。代理用户名、密码只在创建或轮换后显示一次；
-轮换会立即使旧密码失效，撤销会停止新流量，但不会删除已有记录。普通团队成员不能创建
-这类登录。
+The owner signs in to the Web workbench and opens **Traffic → Captures**, then
+**Create manual capture**. Choose the traffic policy, client type and lifetime,
+check the address and the inspected AI domains, and create it. The proxy
+username and password are shown only once, after creation or rotation. Rotating
+invalidates the old password immediately. Revoking stops new traffic but does
+not delete existing records. Regular team members cannot create these logins.
 
-同机原生 Web 显示本机回环代理地址；远程 Web 使用配置的客户端可达 `--access-address`
-及其 HTTPS 证书身份，不会把 `0.0.0.0`、容器内网地址或服务器上的证书文件路径交给客户端。
-从交付页下载 **Proxy CA**，核对显示的 SHA-256 指纹，再按客户端要求安装到实际发起
-AI 请求的设备。它用于校验被检查的 AI 域名；外层代理连接仍需独立验证 **服务器 HTTPS
-证书**。使用 `private_ca_tls` 时，当前安装的私有根可能同时签发服务器叶证书；使用
-公共/企业证书时，下载 Proxy CA 不会修复服务器证书错误。远程客户端优先使用 HTTPS，
-HTTP 只适合受信任的本机或私网环境。
+Native Web on the same computer shows a local loopback proxy address. Remote
+Web uses the client-reachable `--access-address` you configured and its HTTPS
+certificate identity. It never hands clients `0.0.0.0`, an internal container
+address, or a certificate file path on the server.
 
-## 私网 HTTPS：没有公网域名
+Download the **Proxy CA** from the delivery page, check the SHA-256 fingerprint
+shown there, and install it as the client requires on the device that actually
+sends the AI requests. It only validates the inspected AI domains; the outer
+proxy connection still has to validate the **Server HTTPS certificate**
+separately. With `private_ca_tls`, the same private root also issues the
+server leaf certificate. With a public or company certificate, downloading the
+Proxy CA does not fix a server certificate error. Remote clients should prefer
+HTTPS; HTTP is only for trusted local or private networks.
 
-### 方案 A：自定义名称 + hosts 文件
+## Private HTTPS without a public domain
 
-选择稳定、仅内部使用的名称，例如 `vibermate.home.arpa`：
+### Option A: a custom name plus the hosts file
+
+Pick a stable, internal-only name such as `vibermate.home.arpa`:
 
 ```sh
 ./vibermated server \
@@ -81,19 +104,20 @@ HTTP 只适合受信任的本机或私网环境。
   --transport private_ca_tls
 ```
 
-在每台客户端的 hosts 文件加入实际服务器地址，例如：
+On every client, add the server's real address to the hosts file, for example:
 
 ```text
 192.168.1.20  vibermate.home.arpa
 ```
 
-Unix/macOS 文件为 `/etc/hosts`；Windows 为
-`C:\Windows\System32\drivers\etc\hosts`。浏览器与 CLI 都使用
-`https://vibermate.home.arpa:9666`，不要改回 IP，否则名称校验会失败。
+On Unix/macOS the file is `/etc/hosts`; on Windows it is
+`C:\Windows\System32\drivers\etc\hosts`. Browsers and the CLI both use
+`https://vibermate.home.arpa:9666`. Do not switch back to the IP, or the name
+check fails.
 
-### 方案 B：直接使用 IP
+### Option B: use the IP directly
 
-IP 稳定时无需 hosts 文件：
+If the IP is stable, you do not need a hosts file:
 
 ```sh
 ./vibermated server \
@@ -102,47 +126,66 @@ IP 稳定时无需 hosts 文件：
   --transport private_ca_tls
 ```
 
-证书会包含 IP SAN，客户端使用 `https://192.168.1.20:9666`。不要把 DHCP 地址当成
-稳定身份；地址变化后更新 `--access-address` 并重启，ViberMate 会用同一 CA 重签
-叶证书，已正确信任 CA 的客户端不需要重新安装根。
+The certificate includes an IP SAN, and clients use `https://192.168.1.20:9666`.
+Do not treat a DHCP address as a stable identity. If the address changes,
+update `--access-address` and restart. ViberMate reissues the leaf certificate
+from the same CA, so clients that already trust the CA do not need to reinstall
+the root.
 
-### 安全地取得并信任 CA
+### Get and trust the CA safely
 
-先启动一次 Server，再在服务器本机执行：
+Start the Server once, then run on the server itself:
 
 ```sh
 ./vibermated server ca-certificate > vibermate-private-ca.crt
 openssl x509 -in vibermate-private-ca.crt -noout -fingerprint -sha256
 ```
 
-将指纹与启动日志中的 `caFingerprint` 通过独立可信渠道核对，再把公开证书导入每台
-受管客户端的系统/浏览器信任库。该命令只读取公开证书，不打开或导出 CA 私钥。
-不要先忽略浏览器警告，再从同一个未信任页面下载 CA；那不能建立安全的首次信任。
+The command reads the public CA certificate directly from the server data
+directory. It never opens or exports the CA private key. Because it runs on the
+server, the fingerprint it prints is your trusted reference. Send the
+certificate file and that fingerprint to each managed client over an
+independent trusted channel (in person, or a verified chat). On each client,
+run the same `openssl` command on the received file and confirm the
+fingerprint matches before importing it into the system/browser trust store.
+Do not click through a browser warning and then download the CA from that same
+untrusted page; that cannot establish safe first trust.
 
-CLI 会优先使用系统根验证。首次连接私有 CA 时，会把该 CA 限定到准确的 Server
-主机和端口，正常换发叶证书不需要重新信任；这不会把 CA 安装到系统，也不代替
-Agent 的 Proxy CA 配置。首次连接仍是 TOFU，建议在登录、发送密码前，先用独立
-可信渠道核对的 CA SHA-256 指纹建立信任（64 位十六进制，不含冒号）：
+The CLI prefers system-root verification. The first time it connects to a
+Server whose certificate comes from a private CA, it scopes that CA to the
+exact Server host and port, so normal leaf reissues do not require trusting
+again. This does not install the CA in the system, and it does not replace the
+Agent's Proxy CA setup. The first connection is still TOFU (trust on first
+use). Before logging in or sending a password, it is better to establish trust
+with a CA SHA-256 fingerprint you checked over an independent trusted channel
+(64 hex characters, no colons):
 
 ```sh
-vibermate trust --server https://vibermate.home.arpa:9666 --ca-fingerprint <已核对的CA指纹>
+vibermate trust --server https://vibermate.home.arpa:9666 --ca-fingerprint <verified-CA-fingerprint>
 ```
 
-该命令只做 TLS 握手，不发送登录信息，并验证主机名、有效期和证书链。它也可显式
-转换已有叶指纹；失败不会更改原有信任。已有叶指纹不会在连接时自动升级为 CA 信任。
-如果已把 CA 安装到本机系统信任库，可选择系统根验证：
+This command only performs a TLS handshake. It sends no login data, and it
+checks the host name, validity period and certificate chain. It can also
+explicitly switch a leaf-certificate fingerprint already saved for this Server
+to CA trust; if it fails, the existing trust is left unchanged. A saved leaf
+fingerprint is never upgraded to CA trust automatically during a connection.
+If you have installed the CA in this machine's system trust store, you can
+choose system-root verification instead:
 
 ```sh
 vibermate trust --server https://vibermate.home.arpa:9666 --system-roots
 ```
 
-## 自动公共 HTTPS
+## Automatic public HTTPS
 
-初始实现支持一个可公开签发的 DNS 名称、HTTP-01 或 TLS-ALPN-01，不支持私网名称、
-IP、通配符或 DNS-01。ViberMate 使用 CertMagic 管理证书状态，证书持久化在数据目录的
-`server-https` 中，续期成功后热加载，不需要替换 Proxy CA。
+This mode supports one publicly issuable DNS name, validated with HTTP-01 or
+TLS-ALPN-01. It does not support private names, IPs, wildcards or DNS-01.
+ViberMate uses CertMagic to manage certificate state. Certificates are stored in
+`server-https` inside the data directory and are hot-reloaded after a
+successful renewal. The Proxy CA does not change.
 
-最简单的原生部署让公网 TCP 443 转发到进程监听端口（示例为 8443）：
+The simplest native setup forwards public TCP 443 to the process's listen port
+(8443 in this example):
 
 ```sh
 ./vibermated server \
@@ -154,20 +197,29 @@ IP、通配符或 DNS-01。ViberMate 使用 CertMagic 管理证书状态，证�
   --acme-challenge tls_alpn_01
 ```
 
-公网 DNS 必须先解析到该服务器，公网 443 必须原样到达监听端口。若直接监听 443，
-请用服务管理器授予最小的低端口绑定能力，不要以 root 运行整个 Runtime。
+Public DNS must already point to this server, and public port 443 must reach
+the listen port unchanged. If you listen on 443 directly, have your service
+manager grant only the minimal capability to bind low ports. Do not run the
+whole Runtime as root.
 
-HTTP-01 可用于公网 80 转发到一个非特权内部端口：增加
-`--acme-challenge http_01 --acme-http-port 8080`，并让公网 80 转发到本机 8080。
-`--access-address` 仍是用户实际打开的 HTTPS 地址。启动命令明确同意签发机构条款，并会
-把域名和可选联系邮箱发送给所选 CA；自定义 ACME 目录可用专家参数 `--acme-ca`。
+HTTP-01 works with public port 80 forwarded to an unprivileged internal port:
+add `--acme-challenge http_01 --acme-http-port 8080` and forward public port 80
+to local port 8080. Without `--acme-challenge`, HTTP-01 is the default, and
+without `--acme-http-port` it uses port 80. `--access-address` is always the
+HTTPS address users actually open. `--acme-agree-terms` records that you
+explicitly accept the issuer's terms; on start, the domain and the optional
+contact email are sent to the chosen CA. For a custom ACME directory, use the
+expert flag `--acme-ca`.
 
-证书正在申请、续期或失败时，「设置 → 安全与数据 → 连接到服务器」会显示真实状态和
-错误。TLS-ALPN 首次申请是异步的，进程已启动不等于证书已经可用。
+While a certificate is being requested or renewed, or if issuance fails,
+**Settings → Safety & data → Server connection** shows the real state and
+error. The first TLS-ALPN request is asynchronous: a running process does not
+mean the certificate is ready.
 
-## 使用已有证书
+## Use an existing certificate
 
-证书必须覆盖 `--access-address` 中的准确域名/IP；不匹配时 Server 拒绝启动：
+The certificate must cover the exact domain or IP in `--access-address`. If it
+does not, the Server refuses to start:
 
 ```sh
 ./vibermated server \
@@ -178,38 +230,56 @@ HTTP-01 可用于公网 80 转发到一个非特权内部端口：增加
   --tls-key /absolute/path/privkey.pem
 ```
 
-证书和密钥必须是普通文件，私钥仅运行用户可读（`0600`）。ViberMate 不复制或改写
-这些文件；当前在替换后需要重启服务。使用 Caddy/Nginx 等外部入口时，普通 HTTP
-反向代理不一定支持同端口的认证 CONNECT；需验证四层透传，不能只验证网页能打开。
+The certificate and key must be regular files (not symlinks), and the private
+key must be readable only by the user running the Server (`0600`). ViberMate
+does not copy or rewrite these files. After replacing them, restart the
+Server. If you put an external entry point such as Caddy or Nginx in front, a
+plain HTTP reverse proxy may not support authenticated CONNECT on the same
+port. Verify layer-4 passthrough; checking that the Web page opens is not
+enough.
 
-## 账号与页面
+## Accounts and pages
 
-存储位置在「设置 → 安全与数据」中查看。App 可以选择本机新目录并安全迁移；原生 Web
-与容器 Web 使用服务器的 `--data-dir` / 持久化卷，不使用浏览器电脑的目录。步骤、备份
-边界与读取性能说明见 [数据位置与读取性能](storage-and-read-performance.md)。
+You can see where data is stored in **Settings → Safety & data**. The App can
+pick a new local directory and move the data there safely. Native Web and
+container Web use the server's `--data-dir` or persistent volume, never a
+directory on the computer running the browser. For steps, backup scope and
+read performance, see
+[Storage location and read performance](storage-and-read-performance.md)
+(in Chinese) and
+[Backup and restore](backup-and-restore.md).
 
-- 「接入与启动」只回答如何登录和启动；不会混入用户表或证书私钥。
-- 「用户管理」创建、重置、停用 Runtime 用户；上游服务账号在另一套配置中。
-- 「安全与数据」分别显示服务器连接证书、Proxy CA、数据留存。阻断错误不折叠，
-  签发者、指纹、验证方式等专家信息放在详情中。
+- **Access & launch** only explains how to sign in and launch. It never mixes in
+  the user list or certificate private keys.
+- **User management** creates, resets and disables Runtime users. Upstream
+  service accounts are configured elsewhere.
+- **Safety & data** shows the server connection certificate, the Proxy CA and
+  data retention separately. Blocking errors are never collapsed; expert
+  details such as issuer, fingerprint and verification method are in the
+  details view.
 
-每个人使用自己的账号登录网页和 CLI。密码可自行修改，所有者可重置成员密码。恢复
-密钥只在服务器本机读取，使用后轮换，不能分享给成员。
+Everyone signs in to the Web page and the CLI with their own account. Users can
+change their own password, and the owner can reset members' passwords. The
+recovery key can only be read on the server itself. Rotate it after use, and
+never share it with members.
 
-## 诊断与验证
+## Diagnostics and checks
 
-查看所有服务器参数和三条最短示例：
+Show the three common setups, the server-local commands and the offline data
+commands:
 
 ```sh
 ./vibermated server --help
 ```
 
-本地冒烟测试使用临时数据，不读取现有用户数据：
+Local smoke tests use temporary data and never read existing user data:
 
 ```sh
 node tool/server/smoke-native.mjs
 node tool/docker/smoke-local.mjs
 ```
 
-真实公共 ACME 仍需在拥有可控 DNS/端口的预发布环境验收；单元测试不会向公共 CA
-申请证书。容器具体命令、数据卷与回滚见 [Docker 部署](docker.md)。
+Real public ACME issuance still has to be accepted in a staging environment
+with DNS and ports you control; unit tests never request certificates from a
+public CA. For container commands, data volumes and rollback, see
+[Docker deployment](docker.md).

@@ -1,3 +1,5 @@
+[English](backup-and-restore.md) · [简体中文](backup-and-restore.zh-CN.md)
+
 # Backup and restore
 
 ViberMate backups are new local directories with a verified manifest. They are
@@ -73,3 +75,5 @@ foreign key, or incompatible schema fails closed. A failed restore leaves the
 existing Runtime directory untouched and never replaces a non-empty or unknown
 target. An incomplete newly created target may remain for inspection or manual
 removal, but ViberMate never selects it.
+
+For container data volumes and rollback, see [Docker deployment](docker.md).
