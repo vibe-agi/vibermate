@@ -18,19 +18,25 @@
 ## 本分支已完成（`fix/post-016-review`）
 
 - 协议：大小写折叠重名键拒绝；Responses 与 Anthropic 未建模输出走工具策略；Responses 字符串 input、无 type 消息、未知历史/工具/tool_choice/include/input_file 不再被拒；incomplete 保留原因；Anthropic ping 计为存活；转换脚本不能以任何大小写形式改 model。
-- 安全：Unicode 主机名绕过 deny 规则；成员默认授权；OAuth 凭据替换不再丢弃新修订上的轮换；私有 PKI 只发中间证书链时固定最上层 CA。
-- 可靠性：审计终态熔断与幂等写入；手动清理与维护分批。
-- 界面：Route 账号集合只做结构校验并显示真实不可用原因；报表导航原子提交，翻页不跳页、下钻失败保留原视图、错误可重试。
-- 结构：Schema 单修订号；删除离线转换工具、开发库归档函数与历史文档。
+- 安全：Unicode 主机名绕过 deny 规则；成员默认授权；OAuth 凭据替换不再丢弃新修订上的轮换；私有 PKI 只发中间证书链时固定最上层 CA；远程 Server 下发的启动环境变量只接受 Agent 行为类允许列表（S2）。
+- 可靠性：审计终态熔断与幂等写入；手动清理与维护分批；单个 Exchange 的本地身份与线上身份冲突不再中止整轮会话索引（L7）。
+- 界面：Route 账号集合只做结构校验并显示真实不可用原因；报表导航原子提交，翻页不跳页、下钻失败保留原视图、错误可重试；额度倒计时在窗口失焦时继续更新；报表单元格带列名供读屏，短报表不再占 480px。
+- 结构：Schema 单修订号；删除离线转换工具、开发库归档函数与历史文档；CI 检查 `dart format`。
+- 发布：撤下 v0.1.14–v0.1.16 的 Release、tag 与 Homebrew cask；`golang.org/x/crypto` 升级到 v0.56.0。
+
+## 复核后不改
+
+- **盲隧道出口（S4）**：盲隧道承载的是 Environment 未声明的目的地，本来就没有 Environment 出口配置；审计按"网络默认（直连）"记录。Server 成员的 CONNECT 与绝对 URI 请求在入口标记为仅公网，拦截后的内层请求继承该上下文，私网目标被拒。
+- **Server 进程拨号默认仅公网**：成员流量全部经入口标记；把进程级默认改为仅公网只会破坏 Owner 自己配置的私网上游，不增加安全性。
+- **B7 启动全表校验出口记录**：有意检测被绕过约束写坏的终态记录，20 万行约 0.6 秒，仅启动时一次。
 
 ## 待完成
 
-1. 撤下 GitHub 上 v0.1.14–v0.1.16 的 Release 与 tag，并撤下 Homebrew cask（需要有效的 GitHub token）；随后把能力矩阵改为"当前没有已发布版本"。
-2. Server：启动环境变量改为允许列表（S2）；盲隧道遵守出口策略（S4）；Server 进程内拨号默认仅公网，而不是依赖请求上下文。
-3. 大 Capture 删除改为异步分批，删除期间显示"删除中"。
-4. Codex 子代理身份合并失败导致会话索引整轮中止（L7）。
-5. 前端：额度倒计时在窗口失焦时暂停；`supportsAutomaticRefresh` 未参与账号比较；报表行区固定高度与读屏列头。
-6. 账号切换后加密推理内容的处理（P11），需要先设计上游状态范围。
-7. 依赖：`golang.org/x/crypto` 升级到 v0.56.0。
-8. 文档：CONTEXT、module-map、README、部署文档与代码统一；CI 增加 `dart format` 检查。
-9. 验收：Go 全量与 race、Flutter 全量、Flutter Web 构建后用无头 Playwright 走主要界面流程。
+1. 发布 v0.1.17：release 分支、版本号、macOS 签名公证、Linux 包、GitHub Release、Homebrew cask、vibe-agi.github.io。
+2. 验收：Go 全量与 race、Flutter 全量、Flutter Web 构建后用无头 Playwright 走主要界面流程。
+
+## 发布之后
+
+- 大 Capture 删除改为异步分批，删除期间显示"删除中"。
+- 读请求（正文、raw、Capture 列表、搜索、`dbstat`）迁到只读连接池（B6）。
+- 账号切换后加密推理内容的处理（P11），需要先设计上游状态范围。
