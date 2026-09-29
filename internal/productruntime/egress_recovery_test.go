@@ -93,7 +93,7 @@ func TestProductRuntimeRefusesToStartWhenEgressRecoveryFails(t *testing.T) {
 	}
 }
 
-func TestRuntimeEgressCompletionUsesOwnerContextAndLatchesFailure(t *testing.T) {
+func TestRuntimeEgressCompletionUsesOwnerContextAndHoldsTheTerminal(t *testing.T) {
 	t.Parallel()
 
 	completeErr := errors.New("injected completion failure")
@@ -105,6 +105,7 @@ func TestRuntimeEgressCompletionUsesOwnerContextAndLatchesFailure(t *testing.T) 
 	)
 	tracker.commitInitialized(25)
 	owner, stop := context.WithCancelCause(context.Background())
+	defer stop(nil)
 	repository := newRuntimeEgressRepository(
 		delegate,
 		tracker,
@@ -130,8 +131,8 @@ func TestRuntimeEgressCompletionUsesOwnerContextAndLatchesFailure(t *testing.T) 
 			delegate.completeContextErr,
 		)
 	}
-	if !errors.Is(context.Cause(owner), completeErr) {
-		t.Fatalf("runtime owner cause = %v", context.Cause(owner))
+	if owner.Err() != nil {
+		t.Fatalf("a held terminal stopped the Runtime: %v", context.Cause(owner))
 	}
 	status := tracker.snapshot()
 	if status.State != RuntimeStateDegraded ||
@@ -142,15 +143,18 @@ func TestRuntimeEgressCompletionUsesOwnerContextAndLatchesFailure(t *testing.T) 
 	if first == nil || first.Operation != "egress_complete" || first.Reason != "write_failed" || !first.Valid() {
 		t.Fatalf("completion first cause not projected: %+v", first)
 	}
-	repository.ReportTerminalFailure(context.Canceled)
-	if *tracker.snapshot().StorageFailure != *first || !errors.Is(context.Cause(owner), completeErr) {
-		t.Fatal("secondary cancellation replaced the original completion failure")
-	}
 	tracker.observeStorage(25, nil)
 	status = tracker.snapshot()
 	if status.State != RuntimeStateDegraded ||
 		status.Storage != StorageStateUnavailable {
-		t.Fatalf("read-only health poll cleared durability failure: %+v", status)
+		t.Fatalf("read-only health poll cleared a pending terminal: %+v", status)
+	}
+	repository.ReportTerminalFailure(context.Canceled)
+	if *tracker.snapshot().StorageFailure != *first {
+		t.Fatal("secondary failure replaced the original completion failure")
+	}
+	if owner.Err() == nil {
+		t.Fatal("an unconstructible terminal did not stop the generation")
 	}
 }
 

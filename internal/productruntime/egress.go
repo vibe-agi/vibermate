@@ -2,6 +2,7 @@ package productruntime
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -9,21 +10,28 @@ import (
 	"github.com/vibe-agi/vibermate/internal/egressaudit"
 )
 
-// runtimeEgressRepository turns an otherwise easy-to-ignore terminal-write
-// error into a generation-level durability failure. Some terminal callbacks
-// run after the outbound result can no longer be changed, so their callers
-// intentionally cannot return the audit error to the client. The production
-// composition therefore latches storage unhealthy and cancels the owner
-// context instead of allowing the generation to keep emitting unverifiable
-// egress.
+// ErrCoreAuditRecovering refuses a new EgressAttempt while an earlier
+// terminal is not yet durable.
+var ErrCoreAuditRecovering = errors.New("egress audit is writing a pending terminal; new egress is refused")
+
+// runtimeEgressRepository keeps "no audit, no egress" without turning one slow
+// write into an outage. Every attempt is appended before its first outbound
+// byte. When a terminal write fails, the terminal is kept and retried, and no
+// new attempt may start until it is durable; the Runtime then recovers on its
+// own. Terminal callbacks run after the outbound result is fixed, so their
+// callers never see these errors. A terminal still unwritten at shutdown, or a
+// terminal that could not even be constructed, fails the generation.
 type runtimeEgressRepository struct {
 	delegate          egressaudit.Repository
 	status            *statusTracker
 	owner             context.Context
 	completionTimeout time.Duration
+	retryInterval     time.Duration
 	stop              context.CancelCauseFunc
 
 	mu                      sync.Mutex
+	pending                 []egressaudit.Attempt
+	retrying                bool
 	failureErr              error
 	rawEvidenceFailureErr   error
 	rawEvidenceFailureCount uint64
@@ -50,6 +58,7 @@ func newRuntimeEgressRepository(
 		status:            status,
 		owner:             owner,
 		completionTimeout: completionTimeout,
+		retryInterval:     time.Second,
 		stop:              stop,
 		completions:       make(map[uint64]context.CancelCauseFunc),
 	}
@@ -61,6 +70,12 @@ func (repository *runtimeEgressRepository) Append(
 ) (egressaudit.Record, error) {
 	// Append precedes any outbound byte, so the caller can propagate a failure
 	// normally and no missing terminal evidence exists yet.
+	repository.mu.Lock()
+	recovering := len(repository.pending) != 0
+	repository.mu.Unlock()
+	if recovering {
+		return egressaudit.Record{}, ErrCoreAuditRecovering
+	}
 	return repository.delegate.Append(ctx, attempt)
 }
 
@@ -75,9 +90,68 @@ func (repository *runtimeEgressRepository) Complete(
 	defer cancel()
 	record, err := repository.delegate.Complete(completionContext, attempt)
 	if err != nil {
-		repository.fail("egress_complete", err)
+		repository.hold(attempt, err)
 	}
 	return record, err
+}
+
+// hold keeps an unwritten terminal and starts the single retry loop.
+func (repository *runtimeEgressRepository) hold(attempt egressaudit.Attempt, cause error) {
+	repository.mu.Lock()
+	repository.pending = append(repository.pending, attempt)
+	start := !repository.retrying
+	repository.retrying = true
+	repository.mu.Unlock()
+	if repository.status != nil {
+		repository.status.holdCoreAudit("egress_complete", cause)
+	}
+	if start {
+		go repository.retryPending()
+	}
+}
+
+// retryPending writes held terminals in order until none remain or the
+// Runtime stops. Shutdown reports whatever is still pending.
+func (repository *runtimeEgressRepository) retryPending() {
+	timer := time.NewTimer(repository.retryInterval)
+	defer timer.Stop()
+	for {
+		select {
+		case <-repository.owner.Done():
+			repository.mu.Lock()
+			repository.retrying = false
+			repository.mu.Unlock()
+			return
+		case <-timer.C:
+		}
+		repository.mu.Lock()
+		held := append([]egressaudit.Attempt(nil), repository.pending...)
+		repository.mu.Unlock()
+		written := 0
+		for _, attempt := range held {
+			ctx, cancel := repository.completionContext()
+			_, err := repository.delegate.Complete(ctx, attempt)
+			cancel()
+			if err != nil {
+				break
+			}
+			written++
+		}
+		repository.mu.Lock()
+		repository.pending = repository.pending[written:]
+		done := len(repository.pending) == 0
+		if done {
+			repository.retrying = false
+		}
+		repository.mu.Unlock()
+		if done {
+			if repository.status != nil {
+				repository.status.releaseCoreAudit()
+			}
+			return
+		}
+		timer.Reset(repository.retryInterval)
+	}
 }
 
 // ReportTerminalFailure is the production-owned failure boundary implemented
@@ -176,7 +250,7 @@ func (repository *runtimeEgressRepository) beginShutdown(ctx context.Context) {
 // durable success.
 func (repository *runtimeEgressRepository) finishShutdown() {
 	repository.mu.Lock()
-	outstanding := len(repository.completions)
+	outstanding := len(repository.completions) + len(repository.pending)
 	repository.mu.Unlock()
 	if outstanding != 0 {
 		repository.fail(

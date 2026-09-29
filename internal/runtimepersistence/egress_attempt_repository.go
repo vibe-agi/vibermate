@@ -179,9 +179,27 @@ func (repository *egressAttemptRepository) Complete(
 		)
 	}
 	if affected != 1 {
-		return egressaudit.Record{}, errors.New(
-			"EgressAttempt is absent or already terminal",
-		)
+		// A retry after an ambiguous commit finds its own terminal already
+		// stored. Only that exact terminal is success; anything else is an
+		// absent attempt or a conflicting terminal.
+		var completedAt sql.NullInt64
+		var outcome, errorClass string
+		var bytesOut, bytesIn int64
+		err := repository.database.QueryRowContext(
+			operation,
+			`SELECT completed_at_unix_ms, outcome, error_class, bytes_out, bytes_in
+			   FROM runtime_egress_attempts WHERE attempt_id = ?`,
+			attempt.ID(),
+		).Scan(&completedAt, &outcome, &errorClass, &bytesOut, &bytesIn)
+		if err != nil || !completedAt.Valid ||
+			completedAt.Int64 != toUnixMillis(attempt.CompletedAt()) ||
+			outcome != string(attempt.Outcome()) ||
+			errorClass != attempt.ErrorClass() ||
+			bytesOut != attempt.BytesOut() || bytesIn != attempt.BytesIn() {
+			return egressaudit.Record{}, errors.New(
+				"EgressAttempt is absent or already has another terminal",
+			)
+		}
 	}
 	return egressaudit.Record{Attempt: attempt}, nil
 }
