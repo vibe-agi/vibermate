@@ -181,11 +181,9 @@ func (codec *Codec) decodeClientRequest(
 			)
 	}
 
-	if mode == requestDecodeNative {
-		if err := rejectDuplicateJSONNames(body); err != nil {
-			return protocolcore.Request{}, protocolcore.TranslationReport{},
-				protocolcore.NewFailure(protocolcore.ReasonInvalidClientRequest, "$", err)
-		}
+	if err := rejectDuplicateJSONNames(body); err != nil {
+		return protocolcore.Request{}, protocolcore.TranslationReport{},
+			protocolcore.NewFailure(protocolcore.ReasonInvalidClientRequest, "$", err)
 	}
 	var wire anthropicRequestWire
 	unknownReport, err := mode.fields(body, &wire, "$")

@@ -33,6 +33,7 @@ const (
 	childManagedResponse    = "VIBERMATE_TEST_CHILD_MANAGED_RESPONSE"
 	childManagedStatus      = "VIBERMATE_TEST_CHILD_MANAGED_STATUS"
 	childManagedHeaders     = "VIBERMATE_TEST_CHILD_MANAGED_HEADERS"
+	childManagedForbidden   = "VIBERMATE_TEST_CHILD_MANAGED_FORBIDDEN"
 	childSuccessMarker      = "reached"
 )
 
@@ -137,7 +138,10 @@ func runCapturedManagedRequest() int {
 	}
 	wantBody := os.Getenv(childManagedResponse)
 	validBody := strings.Contains(string(body), "managed reached")
-	if wantBody != "" {
+	if forbidden := os.Getenv(childManagedForbidden); forbidden != "" {
+		// The client must never observe these bytes, whatever else it receives.
+		validBody = !strings.Contains(string(body), forbidden)
+	} else if wantBody != "" {
 		validBody = string(body) == wantBody
 		if !validBody {
 			var got, want any

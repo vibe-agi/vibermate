@@ -42,6 +42,11 @@ func TestMessageTransformControlPreservesModelSelection(t *testing.T) {
 			{"null", `const p = JSON.parse(request.body); p.model = null; request.body = JSON.stringify(p);`, false},
 			{"duplicate", `request.body = '{"model":"private-script-model",' + request.body.trim().slice(1);`, false},
 			{"escaped duplicate", `request.body = '{"mo\\u0064el":"private-script-model",' + request.body.trim().slice(1);`, false},
+			// encoding/json relays bind any case-folded spelling to "model".
+			{"upper-case model", `const p = JSON.parse(request.body); p.MODEL = "private-script-model"; request.body = JSON.stringify(p);`, false},
+			{"capitalized model", `const p = JSON.parse(request.body); p.Model = "private-script-model"; request.body = JSON.stringify(p);`, false},
+			{"escaped upper-case model", `request.body = '{"MOD\\u0045L":"private-script-model",' + request.body.trim().slice(1);`, false},
+			{"case-only nested duplicate", `const p = JSON.parse(request.body); p.metadata = {user: "a", USER: "private-script-model"}; request.body = JSON.stringify(p);`, false},
 			{"trailing data", `request.body += '{}';`, false},
 			{"malformed", `request.body = '{"model":';`, false},
 			{"formatting", `request.body = JSON.stringify(JSON.parse(request.body), null, 2);`, true},

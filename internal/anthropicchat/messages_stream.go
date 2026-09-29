@@ -359,6 +359,15 @@ func (stream *AnthropicProviderStream) consumeEvent(
 		Type  string          `json:"type"`
 		Error json.RawMessage `json:"error"`
 	}
+	// Checked before any field is read: every later decision must see the
+	// same members the client will parse.
+	if err := rejectDuplicateJSONNames(event.Data); err != nil {
+		return protocolcore.NewFailure(
+			protocolcore.ReasonMalformedEventStream,
+			fmt.Sprintf("$event[%d].data", index),
+			err,
+		)
+	}
 	if err := json.Unmarshal(event.Data, &envelope); err != nil {
 		return protocolcore.NewFailure(
 			protocolcore.ReasonMalformedEventStream,

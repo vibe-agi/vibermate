@@ -22,6 +22,7 @@ import (
 
 	"github.com/dop251/goja"
 	"github.com/vibe-agi/vibermate/internal/clientannotation"
+	"github.com/vibe-agi/vibermate/internal/protocolcore"
 )
 
 var (
@@ -669,12 +670,17 @@ func executeAndExportStage(
 }
 
 // Model selection belongs to the client or Route, not a Body transform. Read
-// only the top-level field; unknown nested content stays opaque. Decode names
-// to reject duplicate/escaped model keys without imposing a protocol schema.
+// only the top-level field; unknown nested content stays opaque. Names are
+// checked without imposing a protocol schema: an upstream parsed with
+// encoding/json binds any case-folded spelling of a member, so an object may
+// name each member once under that folding and "model" only in exact form.
 func requestModel(body []byte) (string, bool, error) {
 	body = bytes.TrimSpace(body)
 	if len(body) == 0 || body[0] != '{' {
 		return "", false, nil
+	}
+	if err := protocolcore.ValidateJSONNames(body); err != nil {
+		return "", false, err
 	}
 	decoder := json.NewDecoder(bytes.NewReader(body))
 	if _, err := decoder.Token(); err != nil {
@@ -690,6 +696,9 @@ func requestModel(body []byte) (string, bool, error) {
 		var value json.RawMessage
 		if err := decoder.Decode(&value); err != nil {
 			return "", false, err
+		}
+		if name, _ := key.(string); name != "model" && protocolcore.SameJSONName(name, "model") {
+			return "", false, errors.New("request model is ambiguous")
 		}
 		if key == "model" {
 			if present || len(value) == 0 || value[0] != '"' || json.Unmarshal(value, &model) != nil {

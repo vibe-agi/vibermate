@@ -47,6 +47,13 @@ func (codec *Codec) DecodeAnthropicProviderResponse(
 			errors.New("response body has an invalid size"),
 		)
 	}
+	if err := rejectDuplicateJSONNames(body); err != nil {
+		return protocolcore.Response{}, protocolcore.NewFailure(
+			protocolcore.ReasonInvalidProviderResponse,
+			"$",
+			err,
+		)
+	}
 	decoder := json.NewDecoder(bytes.NewReader(body))
 	var wire messagesProviderResponseWire
 	if err := decoder.Decode(&wire); err != nil {
