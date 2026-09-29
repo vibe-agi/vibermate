@@ -70,13 +70,16 @@ func (codec *Codec) DecodeAnthropicProviderResponse(
 			errors.New("response body has trailing data"),
 		)
 	}
-	return decodeMessagesResponse(request, wire, codec.options.MaxToolArgumentBytes)
+	return decodeMessagesResponse(request, wire, codec.options.MaxToolArgumentBytes, nil)
 }
 
+// decodeMessagesResponse decodes one complete message. actionDeltas holds, by
+// content index, the streamed deltas of blocks that decode as provider actions.
 func decodeMessagesResponse(
 	request protocolcore.Request,
 	wire messagesProviderResponseWire,
 	maxToolArgumentBytes int,
+	actionDeltas map[int][]json.RawMessage,
 ) (protocolcore.Response, error) {
 	if wire.Type == "error" {
 		return protocolcore.Response{}, protocolcore.NewProviderFailure("$.error", wire.Error)
@@ -156,9 +159,12 @@ func decodeMessagesResponse(
 		default:
 			kind, recognized := messagesExtensionKind(header.Type)
 			if !recognized {
-				return protocolcore.Response{}, messagesProviderFailure(
-					path+".type", fmt.Errorf("provider content type %q is unsupported", header.Type),
-				)
+				block, err := messagesProviderActionBlock(header.Type, index, raw, actionDeltas[index], maxToolArgumentBytes)
+				if err != nil {
+					return protocolcore.Response{}, messagesProviderFailure(path, err)
+				}
+				blocks = append(blocks, block)
+				continue
 			}
 			extension, err := protocolcore.NewProviderExtension(
 				protocolcore.ProviderExtensionSourceAnthropicMessages,
@@ -217,9 +223,11 @@ func messagesExtensionKind(kind string) (protocolcore.ProviderExtensionKind, boo
 		return protocolcore.ProviderExtensionThinking, true
 	case "redacted_thinking":
 		return protocolcore.ProviderExtensionRedactedThinking, true
+	// Work the provider already ran: results to show, never client actions.
 	case "server_tool_use", "web_search_tool_result", "web_fetch_tool_result",
 		"code_execution_tool_result", "bash_code_execution_tool_result",
-		"text_editor_code_execution_tool_result", "tool_search_tool_result", "container_upload":
+		"text_editor_code_execution_tool_result", "tool_search_tool_result", "container_upload",
+		"mcp_tool_use", "mcp_tool_result":
 		return protocolcore.ProviderExtensionOpaqueItem, true
 	default:
 		return "", false
@@ -286,4 +294,43 @@ func messagesProviderFailure(path string, err error) error {
 		path,
 		err,
 	)
+}
+
+// messagesProviderActionBlock carries a content block this dialect does not
+// model as an unproven client action. Its arguments are the native block and
+// any streamed deltas, so a reviewer sees everything the client would receive.
+func messagesProviderActionBlock(
+	kind string,
+	index int,
+	raw json.RawMessage,
+	deltas []json.RawMessage,
+	maxBytes int,
+) (protocolcore.ContentBlock, error) {
+	var identity struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(raw, &identity); err != nil {
+		return protocolcore.ContentBlock{}, err
+	}
+	if identity.ID == "" {
+		identity.ID = fmt.Sprintf("content-%d", index)
+	}
+	key, err := protocolcore.NewCallKey(CallNamespace, identity.ID)
+	if err != nil {
+		return protocolcore.ContentBlock{}, err
+	}
+	encoded, err := json.Marshal(struct {
+		ContentBlock json.RawMessage   `json:"content_block"`
+		Deltas       []json.RawMessage `json:"deltas,omitempty"`
+	}{ContentBlock: raw, Deltas: deltas})
+	if err != nil {
+		return protocolcore.ContentBlock{}, err
+	}
+	arguments, err := protocolcore.NewJSONObject(encoded, maxBytes)
+	if err != nil {
+		return protocolcore.ContentBlock{}, err
+	}
+	return protocolcore.NewToolCallBlock(protocolcore.ToolCall{
+		Kind: protocolcore.ToolKindProviderAction, Key: key, Name: kind, Arguments: arguments,
+	})
 }

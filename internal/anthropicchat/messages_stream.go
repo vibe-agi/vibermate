@@ -24,6 +24,12 @@ type messagesStreamBlock struct {
 	partialInput       bytes.Buffer
 	extensionFragments [][]byte
 	stopped            bool
+	// A block this dialect does not model is a provider action: its native
+	// start and every delta are kept (bounded) for the tool decision.
+	action       bool
+	actionStart  json.RawMessage
+	actionDeltas []json.RawMessage
+	actionBytes  int
 }
 
 // AnthropicProviderStream inventories native SSE while streaming text and
@@ -241,6 +247,7 @@ func (stream *AnthropicProviderStream) FinishDecoded(
 		indices = append(indices, index)
 	}
 	sort.Ints(indices)
+	actionDeltas := make(map[int][]json.RawMessage)
 	for _, index := range indices {
 		block := stream.blocks[index]
 		if !block.stopped {
@@ -280,7 +287,11 @@ func (stream *AnthropicProviderStream) FinishDecoded(
 				Input json.RawMessage `json:"input"`
 			}{Type: "tool_use", ID: block.id, Name: block.name, Input: input})
 		default:
-			continue
+			if !block.action {
+				continue
+			}
+			actionDeltas[len(wire.Content)] = block.actionDeltas
+			encoded = block.actionStart
 		}
 		if err != nil {
 			return nil, err
@@ -291,6 +302,7 @@ func (stream *AnthropicProviderStream) FinishDecoded(
 		stream.request,
 		wire,
 		stream.codec.options.MaxToolArgumentBytes,
+		actionDeltas,
 	)
 	if err != nil {
 		return nil, err
@@ -462,7 +474,11 @@ func (stream *AnthropicProviderStream) consumeEvent(
 			stream.barrier = true
 		default:
 			if _, recognized := messagesExtensionKind(blockHeader.Type); !recognized {
-				return stream.stateFailure(index, "content block type is unsupported")
+				block.action = true
+				block.actionStart = bytes.Clone(payload.ContentBlock)
+				block.actionBytes = len(payload.ContentBlock)
+				stream.barrier = true
+				break
 			}
 			block.extensionFragments = append(block.extensionFragments, bytes.Clone(payload.ContentBlock))
 		}
@@ -485,6 +501,24 @@ func (stream *AnthropicProviderStream) consumeEvent(
 		block, exists := stream.blocks[payload.Index]
 		if !exists || block.stopped {
 			return stream.stateFailure(index, "content delta has no open block")
+		}
+		if block.action {
+			var raw struct {
+				Delta json.RawMessage `json:"delta"`
+			}
+			if err := json.Unmarshal(event.Data, &raw); err != nil || len(raw.Delta) == 0 {
+				return stream.stateFailure(index, "provider action delta is invalid")
+			}
+			block.actionBytes += len(raw.Delta)
+			if block.actionBytes > stream.codec.options.MaxToolArgumentBytes {
+				return protocolcore.NewFailure(
+					protocolcore.ReasonStreamLimitExceeded,
+					fmt.Sprintf("$event[%d].data.delta", index),
+					errors.New("provider action exceeds the configured limit"),
+				)
+			}
+			block.actionDeltas = append(block.actionDeltas, bytes.Clone(raw.Delta))
+			break
 		}
 		switch payload.Delta.Type {
 		case "text_delta":
