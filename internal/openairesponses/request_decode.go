@@ -15,7 +15,7 @@ import (
 type requestWire struct {
 	Model              string            `json:"model"`
 	Instructions       *string           `json:"instructions,omitempty"`
-	Input              []json.RawMessage `json:"input"`
+	Input              json.RawMessage   `json:"input"`
 	MaxOutputTokens    *int64            `json:"max_output_tokens,omitempty"`
 	ToolChoice         json.RawMessage   `json:"tool_choice,omitempty"`
 	ParallelToolCalls  *bool             `json:"parallel_tool_calls,omitempty"`
@@ -315,10 +315,14 @@ func (codec *Codec) decodeClientRequest(
 		}
 		system = append(system, block)
 	}
-	messages := make([]protocolcore.Message, 0, len(wire.Input))
+	input, err := decodeInputList(wire.Input)
+	if err != nil {
+		return protocolcore.Request{}, report, err
+	}
+	messages := make([]protocolcore.Message, 0, len(input))
 	tools := make([]protocolcore.ToolDefinition, 0, len(wire.Tools))
 	namespaces := make([]protocolcore.ToolNamespace, 0)
-	for index, raw := range wire.Input {
+	for index, raw := range input {
 		decodedMessages, decodedTools, decodedNamespaces, itemReport, err :=
 			codec.decodeInputItem(index, raw, !strictRoot)
 		if err != nil {
@@ -337,7 +341,7 @@ func (codec *Codec) decodeClientRequest(
 		}
 		if kind == "web_search" {
 			var hosted webSearchToolWire
-			if err := decodeStrict(raw, &hosted); err != nil {
+			if err := decodeClientWire(raw, &hosted, !strictRoot); err != nil {
 				return protocolcore.Request{}, report, invalidClient(path, err)
 			}
 			report = report.Merge(notice(
@@ -359,6 +363,13 @@ func (codec *Codec) decodeClientRequest(
 			))
 			continue
 		}
+		if !strictRoot && !modelledResponsesToolType(kind) {
+			// Hosted and client-native tools the projection does not model.
+			// They carry no definition into the tool policy: calls they
+			// produce are unproven there, so nothing is approved by omission.
+			report = report.Merge(notice(protocolcore.NoticeNativeContentNotProjected, path))
+			continue
+		}
 		tool, namespace, err := codec.decodeTool(
 			raw,
 			path,
@@ -375,13 +386,15 @@ func (codec *Codec) decodeClientRequest(
 		}
 	}
 
-	toolChoice, err := decodeToolChoice(
+	toolChoice, toolChoiceReport, err := decodeToolChoice(
 		wire.ToolChoice,
 		wire.ParallelToolCalls,
+		!strictRoot,
 	)
 	if err != nil {
 		return protocolcore.Request{}, report, err
 	}
+	report = report.Merge(toolChoiceReport)
 	reasoning, reasoningReport, err := decodeReasoning(wire.Reasoning)
 	if err != nil {
 		return protocolcore.Request{}, report, err
@@ -392,7 +405,7 @@ func (codec *Codec) decodeClientRequest(
 		return protocolcore.Request{}, report, err
 	}
 	report = report.Merge(textReport)
-	includeReport, err := decodeInclude(wire.Include)
+	includeReport, err := decodeInclude(wire.Include, !strictRoot)
 	if err != nil {
 		return protocolcore.Request{}, report, err
 	}
@@ -414,7 +427,7 @@ func (codec *Codec) decodeClientRequest(
 	protocolEvidence, err := decodeRequestProtocolEvidence(
 		wire.ClientMetadata,
 		wire.PreviousResponseID,
-		wire.Input,
+		input,
 	)
 	if err != nil {
 		return protocolcore.Request{}, report, err
@@ -573,7 +586,7 @@ func (codec *Codec) decodeInputItem(
 	error,
 ) {
 	path := fmt.Sprintf("$.input[%d]", index)
-	kind, err := peekType(raw)
+	kind, err := inputItemType(raw)
 	if err != nil {
 		return nil, nil, nil, protocolcore.TranslationReport{},
 			invalidClient(path, err)
@@ -639,39 +652,69 @@ func (codec *Codec) decodeInputItem(
 			path,
 		), nil
 	default:
-		if isOpaqueResponsesInputItem(kind) {
-			if !compatible {
-				return nil, nil, nil, protocolcore.TranslationReport{},
-					invalidClient(
-						path+".type",
-						errors.New("Responses provider-native history requires a same-dialect path"),
-					)
-			}
-			return nil, nil, nil, protocolcore.TranslationReport{}, nil
+		// Other items are history the same-dialect wire carries unchanged:
+		// provider-native state, hosted-tool results, references, or item
+		// types added after this projection. None of them is a new action;
+		// actions are decided when a response releases them, not here.
+		if !compatible {
+			return nil, nil, nil, protocolcore.TranslationReport{},
+				invalidClient(
+					path+".type",
+					errors.New("Responses input item type requires a same-dialect path"),
+				)
 		}
-		return nil, nil, nil, protocolcore.TranslationReport{},
-			invalidClient(
-				path+".type",
-				errors.New("Responses input item type is unsupported"),
-			)
+		return nil, nil, nil, notice(protocolcore.NoticeNativeContentNotProjected, path), nil
 	}
 }
 
-func isOpaqueResponsesInputItem(kind string) bool {
-	// These current Codex history/control items are preserved by the original
-	// same-dialect wire. Keep this list closed so unknown active items fail.
+// decodeInputList accepts both documented forms of input: a string, which is
+// one user message, or a list of items.
+func decodeInputList(raw json.RawMessage) ([]json.RawMessage, error) {
+	if !rawPresent(raw) {
+		return nil, nil
+	}
+	var text string
+	if json.Unmarshal(raw, &text) == nil {
+		item, err := json.Marshal(map[string]string{"type": "message", "role": "user", "content": text})
+		if err != nil {
+			return nil, invalidClient("$.input", err)
+		}
+		return []json.RawMessage{item}, nil
+	}
+	var items []json.RawMessage
+	if err := json.Unmarshal(raw, &items); err != nil {
+		return nil, invalidClient("$.input", errors.New("input must be text or a list of items"))
+	}
+	return items, nil
+}
+
+// inputItemType returns an item's type. An easy input message may omit it;
+// such an item is identified by its role.
+func inputItemType(raw json.RawMessage) (string, error) {
+	if err := rejectDuplicateNames(raw); err != nil {
+		return "", err
+	}
+	var wire struct {
+		Type string          `json:"type"`
+		Role json.RawMessage `json:"role"`
+	}
+	if err := json.Unmarshal(raw, &wire); err != nil {
+		return "", err
+	}
+	if wire.Type == "" && rawPresent(wire.Role) {
+		return "message", nil
+	}
+	if wire.Type == "" {
+		return "", errors.New("JSON object type is missing")
+	}
+	return wire.Type, nil
+}
+
+// modelledResponsesToolType reports tool types the projection decodes into
+// definitions. web_search and tool_search are handled before this check.
+func modelledResponsesToolType(kind string) bool {
 	switch kind {
-	case "local_shell_call",
-		"tool_search_call",
-		"tool_search_output",
-		"mcp_tool_call_output",
-		"web_search_call",
-		"image_generation_call",
-		"compaction",
-		"compaction_summary",
-		"configuration_update",
-		"compaction_trigger",
-		"context_compaction":
+	case "function", "custom", "namespace":
 		return true
 	default:
 		return false
@@ -1377,9 +1420,18 @@ func decodeMessageContent(
 				)
 			}
 		default:
-			return nil, invalidClient(
-				fmt.Sprintf("%s[%d].type", path, index),
-				errors.New("Responses content type is unsupported"),
+			if !compatible {
+				return nil, invalidClient(
+					fmt.Sprintf("%s[%d].type", path, index),
+					errors.New("Responses content type is unsupported"),
+				)
+			}
+			// Files and later part types stay in the original wire; the
+			// projection keeps them as bounded opaque content.
+			block, err = newResponsesExtensionBlock(
+				protocolcore.ProviderExtensionOpaqueItem,
+				fmt.Sprintf("%s[%d]", path, index),
+				rawPart,
 			)
 		}
 		if err != nil {
@@ -1971,12 +2023,22 @@ func decodeCompatibleJSON(raw []byte, destination any, compatible bool) error {
 func decodeToolChoice(
 	raw json.RawMessage,
 	parallel *bool,
-) (protocolcore.ToolChoice, error) {
+	compatible bool,
+) (protocolcore.ToolChoice, protocolcore.TranslationReport, error) {
 	choice := protocolcore.ToolChoice{}
+	report := protocolcore.TranslationReport{}
+	if parallel != nil && !*parallel {
+		choice.DisableParallel = true
+	}
 	if rawPresent(raw) {
 		var value string
 		if err := json.Unmarshal(raw, &value); err != nil {
-			return protocolcore.ToolChoice{}, invalidClient(
+			if compatible {
+				// Object choices (a named tool, allowed_tools, hosted types)
+				// travel unchanged on the same-dialect wire.
+				return choice, notice(protocolcore.NoticeNativeContentNotProjected, "$.tool_choice"), nil
+			}
+			return protocolcore.ToolChoice{}, report, invalidClient(
 				"$.tool_choice",
 				errors.New("object tool choices are unsupported"),
 			)
@@ -1989,16 +2051,13 @@ func decodeToolChoice(
 		case "none":
 			choice.Mode = protocolcore.ToolChoiceNone
 		default:
-			return protocolcore.ToolChoice{}, invalidClient(
+			return protocolcore.ToolChoice{}, report, invalidClient(
 				"$.tool_choice",
 				errors.New("tool choice is unsupported"),
 			)
 		}
 	}
-	if parallel != nil && !*parallel {
-		choice.DisableParallel = true
-	}
-	return choice, nil
+	return choice, report, nil
 }
 
 func decodeReasoning(
@@ -2113,6 +2172,7 @@ func validateTextFormat(raw json.RawMessage, compatible bool) error {
 
 func decodeInclude(
 	values []string,
+	compatible bool,
 ) (protocolcore.TranslationReport, error) {
 	if len(values) == 0 {
 		return protocolcore.TranslationReport{}, nil
@@ -2127,6 +2187,13 @@ func decodeInclude(
 			)
 		}
 		seen[value] = struct{}{}
+		if value != "reasoning.encrypted_content" && compatible {
+			report = report.Merge(notice(
+				protocolcore.NoticeNativeContentNotProjected,
+				fmt.Sprintf("$.include[%d]", index),
+			))
+			continue
+		}
 		if value != "reasoning.encrypted_content" {
 			return protocolcore.TranslationReport{}, invalidClient(
 				fmt.Sprintf("$.include[%d]", index),

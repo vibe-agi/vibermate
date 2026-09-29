@@ -282,16 +282,20 @@ type Controller interface {
 	) (providerauth.Lease, error)
 }
 
-// CredentialPreparer rotates a dynamic credential, when necessary, before an
-// AccountRef freezes the credential epoch used by one attempt. Implementations
-// own provider-specific I/O; ProviderAccount owns only the resulting lease.
+// CredentialPreparer completes pending credential storage before a lease freezes
+// its epoch. The boolean permits new automatic rotations, not storage recovery.
+// Implementations own provider-specific I/O; ProviderAccount owns the lease.
 type CredentialPreparer interface {
 	Prepare(
 		context.Context,
 		providerauth.DriverRef,
 		secretstore.Reference,
 		providerauth.AccountRef,
+		bool,
 	) (secretstore.Revision, error)
+	// Forget releases retained rotations after an owner replaces or deletes the
+	// credential. In-flight writes must still obey SecretStore compare-and-swap.
+	Forget(reference secretstore.Reference, supersededBelow secretstore.Revision)
 }
 
 // CredentialRefresher is the explicit user-initiated rotation capability of a

@@ -31,10 +31,13 @@ func IsChatGPTCodexOrigin(origin originidentity.ProviderOrigin) bool {
 // Callers must do this before scripts and request freezing, so both see the
 // same destination path that is sent and recorded. The origin stays unchanged.
 func ProviderRelativePath(origin originidentity.ProviderOrigin, codecPath string) string {
-	if !IsChatGPTCodexOrigin(origin) || codecPath != "v1/responses" {
-		return codecPath
+	if IsChatGPTCodexOrigin(origin) && codecPath == "v1/responses" {
+		return strings.TrimPrefix("/backend-api/codex/responses", origin.BasePath()+"/")
 	}
-	return strings.TrimPrefix("/backend-api/codex/responses", origin.BasePath()+"/")
+	if strings.HasSuffix(strings.TrimSuffix(origin.BasePath(), "/"), "/v1") {
+		return strings.TrimPrefix(codecPath, "v1/")
+	}
+	return codecPath
 }
 
 // ModelsPath is absolute, including the configured base path. Discovery is

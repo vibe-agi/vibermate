@@ -47,6 +47,13 @@ func (codec *Codec) DecodeAnthropicProviderResponse(
 			errors.New("response body has an invalid size"),
 		)
 	}
+	if err := rejectDuplicateJSONNames(body); err != nil {
+		return protocolcore.Response{}, protocolcore.NewFailure(
+			protocolcore.ReasonInvalidProviderResponse,
+			"$",
+			err,
+		)
+	}
 	decoder := json.NewDecoder(bytes.NewReader(body))
 	var wire messagesProviderResponseWire
 	if err := decoder.Decode(&wire); err != nil {
@@ -63,13 +70,16 @@ func (codec *Codec) DecodeAnthropicProviderResponse(
 			errors.New("response body has trailing data"),
 		)
 	}
-	return decodeMessagesResponse(request, wire, codec.options.MaxToolArgumentBytes)
+	return decodeMessagesResponse(request, wire, codec.options.MaxToolArgumentBytes, nil)
 }
 
+// decodeMessagesResponse decodes one complete message. actionDeltas holds, by
+// content index, the streamed deltas of blocks that decode as provider actions.
 func decodeMessagesResponse(
 	request protocolcore.Request,
 	wire messagesProviderResponseWire,
 	maxToolArgumentBytes int,
+	actionDeltas map[int][]json.RawMessage,
 ) (protocolcore.Response, error) {
 	if wire.Type == "error" {
 		return protocolcore.Response{}, protocolcore.NewProviderFailure("$.error", wire.Error)
@@ -146,10 +156,15 @@ func decodeMessagesResponse(
 				return protocolcore.Response{}, messagesProviderFailure(path, err)
 			}
 			blocks = append(blocks, block)
-		case "thinking", "redacted_thinking":
-			kind := protocolcore.ProviderExtensionThinking
-			if header.Type == "redacted_thinking" {
-				kind = protocolcore.ProviderExtensionRedactedThinking
+		default:
+			kind, recognized := messagesExtensionKind(header.Type)
+			if !recognized {
+				block, err := messagesProviderActionBlock(header.Type, index, raw, actionDeltas[index], maxToolArgumentBytes)
+				if err != nil {
+					return protocolcore.Response{}, messagesProviderFailure(path, err)
+				}
+				blocks = append(blocks, block)
+				continue
 			}
 			extension, err := protocolcore.NewProviderExtension(
 				protocolcore.ProviderExtensionSourceAnthropicMessages,
@@ -161,11 +176,6 @@ func decodeMessagesResponse(
 				return protocolcore.Response{}, messagesProviderFailure(path, err)
 			}
 			extensions = append(extensions, extension)
-		default:
-			return protocolcore.Response{}, messagesProviderFailure(
-				path+".type",
-				fmt.Errorf("provider content type %q is unsupported", header.Type),
-			)
 		}
 	}
 	if len(blocks) == 0 {
@@ -204,20 +214,35 @@ func decodeMessagesResponse(
 	return response.Clone(), nil
 }
 
+// These are provider-side evidence, not proposals for the client to execute.
+// Client tool_use blocks always take the separate tool-intent/approval path,
+// including when their request definition uses a native built-in tool type.
+func messagesExtensionKind(kind string) (protocolcore.ProviderExtensionKind, bool) {
+	switch kind {
+	case "thinking":
+		return protocolcore.ProviderExtensionThinking, true
+	case "redacted_thinking":
+		return protocolcore.ProviderExtensionRedactedThinking, true
+	// Work the provider already ran: results to show, never client actions.
+	case "server_tool_use", "web_search_tool_result", "web_fetch_tool_result",
+		"code_execution_tool_result", "bash_code_execution_tool_result",
+		"text_editor_code_execution_tool_result", "tool_search_tool_result", "container_upload",
+		"mcp_tool_use", "mcp_tool_result":
+		return protocolcore.ProviderExtensionOpaqueItem, true
+	default:
+		return "", false
+	}
+}
+
 func decodeMessagesStopReason(value string) (protocolcore.StopReason, error) {
 	reason := protocolcore.StopReason(value)
-	switch reason {
-	case protocolcore.StopReasonEndTurn,
-		protocolcore.StopReasonMaxTokens,
-		protocolcore.StopReasonToolUse,
-		protocolcore.StopReasonStopSequence:
-		return reason, nil
-	default:
+	if err := reason.Validate(); err != nil {
 		return "", messagesProviderFailure(
 			"$.stop_reason",
-			fmt.Errorf("provider stop reason %q is unsupported", value),
+			fmt.Errorf("provider stop reason %q: %w", value, err),
 		)
 	}
+	return reason, nil
 }
 
 func decodeMessagesUsage(wire messagesUsageWire) (protocolcore.Usage, error) {
@@ -269,4 +294,43 @@ func messagesProviderFailure(path string, err error) error {
 		path,
 		err,
 	)
+}
+
+// messagesProviderActionBlock carries a content block this dialect does not
+// model as an unproven client action. Its arguments are the native block and
+// any streamed deltas, so a reviewer sees everything the client would receive.
+func messagesProviderActionBlock(
+	kind string,
+	index int,
+	raw json.RawMessage,
+	deltas []json.RawMessage,
+	maxBytes int,
+) (protocolcore.ContentBlock, error) {
+	var identity struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(raw, &identity); err != nil {
+		return protocolcore.ContentBlock{}, err
+	}
+	if identity.ID == "" {
+		identity.ID = fmt.Sprintf("content-%d", index)
+	}
+	key, err := protocolcore.NewCallKey(CallNamespace, identity.ID)
+	if err != nil {
+		return protocolcore.ContentBlock{}, err
+	}
+	encoded, err := json.Marshal(struct {
+		ContentBlock json.RawMessage   `json:"content_block"`
+		Deltas       []json.RawMessage `json:"deltas,omitempty"`
+	}{ContentBlock: raw, Deltas: deltas})
+	if err != nil {
+		return protocolcore.ContentBlock{}, err
+	}
+	arguments, err := protocolcore.NewJSONObject(encoded, maxBytes)
+	if err != nil {
+		return protocolcore.ContentBlock{}, err
+	}
+	return protocolcore.NewToolCallBlock(protocolcore.ToolCall{
+		Kind: protocolcore.ToolKindProviderAction, Key: key, Name: kind, Arguments: arguments,
+	})
 }

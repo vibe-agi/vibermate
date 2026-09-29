@@ -555,6 +555,7 @@ func startWithBuilders(
 	if err != nil {
 		return fail("Codex OAuth credential manager", err)
 	}
+	pending.register("Codex OAuth credential manager", codexOAuth.Shutdown)
 	if err := accounts.BindCredentialPreparer(codexOAuth); err != nil {
 		return fail("ProviderAccount credential preparation authority", err)
 	}

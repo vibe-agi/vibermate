@@ -171,7 +171,7 @@ func TestManagerPrepareRefreshesNearExpiryAndAtomicallyRotatesMaterial(t *testin
 	scope.EgressProfile.ID = "profile.us"
 	scope.EgressProfile.Policy.Proxy = egressnetwork.ProxyPolicy{Kind: egressnetwork.ProxySOCKS5, Endpoint: "127.0.0.1:1080"}
 	revision, err := manager.Prepare(
-		context.Background(), providerauth.CodexOAuthDriverRef(), reference, scope,
+		context.Background(), providerauth.CodexOAuthDriverRef(), reference, scope, true,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -277,13 +277,13 @@ func TestManagerPrepareCoalescesConcurrentAutomaticAndManualRefreshes(t *testing
 	}, 2)
 	for index := range 2 {
 		go func() {
-			prepare := manager.Prepare
+			var revision secretstore.Revision
+			var prepareErr error
 			if index == 1 {
-				prepare = manager.Refresh
+				revision, prepareErr = manager.Refresh(context.Background(), providerauth.CodexOAuthDriverRef(), reference, testAccountScope())
+			} else {
+				revision, prepareErr = manager.Prepare(context.Background(), providerauth.CodexOAuthDriverRef(), reference, testAccountScope(), true)
 			}
-			revision, prepareErr := prepare(
-				context.Background(), providerauth.CodexOAuthDriverRef(), reference, testAccountScope(),
-			)
 			results <- struct {
 				revision secretstore.Revision
 				err      error
@@ -329,7 +329,7 @@ func TestManagerPrepareCachesPermanentRefreshFailureForCredentialEpoch(t *testin
 	}
 	for range 2 {
 		_, prepareErr := manager.Prepare(
-			context.Background(), providerauth.CodexOAuthDriverRef(), testReference(t), testAccountScope(),
+			context.Background(), providerauth.CodexOAuthDriverRef(), testReference(t), testAccountScope(), true,
 		)
 		if !errors.Is(prepareErr, ErrReconnectRequired) ||
 			strings.Contains(prepareErr.Error(), "refresh-old") {
@@ -368,7 +368,7 @@ func TestManagerPrepareRecognizesNestedPermanentRefreshFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err = manager.Prepare(
-		context.Background(), providerauth.CodexOAuthDriverRef(), testReference(t), testAccountScope(),
+		context.Background(), providerauth.CodexOAuthDriverRef(), testReference(t), testAccountScope(), true,
 	)
 	if !errors.Is(err, ErrReconnectRequired) || client.Calls() != 1 ||
 		strings.Contains(err.Error(), "the imported token was revoked") {
@@ -409,14 +409,14 @@ func TestManagerPrepareTreatsRefreshedAccountIdentityChangeAsPermanent(t *testin
 	}
 	reference := testReference(t)
 	_, firstErr := manager.Prepare(
-		context.Background(), providerauth.CodexOAuthDriverRef(), reference, testAccountScope(),
+		context.Background(), providerauth.CodexOAuthDriverRef(), reference, testAccountScope(), true,
 	)
 	if !errors.Is(firstErr, ErrReconnectRequired) ||
 		!errors.Is(firstErr, ErrIdentityMismatch) {
 		t.Fatalf("first Prepare error = %v", firstErr)
 	}
 	_, secondErr := manager.Prepare(
-		context.Background(), providerauth.CodexOAuthDriverRef(), reference, testAccountScope(),
+		context.Background(), providerauth.CodexOAuthDriverRef(), reference, testAccountScope(), true,
 	)
 	if !errors.Is(secondErr, ErrReconnectRequired) {
 		t.Fatalf("second Prepare error = %v", secondErr)
@@ -459,7 +459,7 @@ func TestManagerPrepareKeepsStillValidAccessTokenAfterTransientRefreshFailure(t 
 		t.Fatal(err)
 	}
 	revision, err := manager.Prepare(
-		context.Background(), providerauth.CodexOAuthDriverRef(), testReference(t), testAccountScope(),
+		context.Background(), providerauth.CodexOAuthDriverRef(), testReference(t), testAccountScope(), true,
 	)
 	if err != nil || revision != 1 || client.Calls() != 1 {
 		t.Fatalf("Prepare revision=%d calls=%d err=%v", revision, client.Calls(), err)
@@ -488,7 +488,7 @@ func TestManagerPrepareRefusesExpiredAccessTokenAfterTransientRefreshFailure(t *
 		t.Fatal(err)
 	}
 	_, err = manager.Prepare(
-		context.Background(), providerauth.CodexOAuthDriverRef(), testReference(t), testAccountScope(),
+		context.Background(), providerauth.CodexOAuthDriverRef(), testReference(t), testAccountScope(), true,
 	)
 	if !errors.Is(err, ErrRefreshUnavailable) || client.Calls() != 1 {
 		t.Fatalf("Prepare calls=%d err=%v", client.Calls(), err)

@@ -178,6 +178,7 @@ jobs:
           set -euo pipefail
           tool/verify_flutter_sdk.sh
           flutter pub get
+          dart format --output=none --set-exit-if-changed lib test
           flutter analyze
           flutter test
           flutter pub deps --no-dev --style=compact

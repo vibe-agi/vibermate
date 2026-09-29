@@ -369,19 +369,23 @@ func (handler *Handler) resolvePublishedAccountPolicies(
 	ctx context.Context,
 	endpoints []environment.ClientEndpoint,
 ) error {
-	var accounts []provideraccount.View
-	loaded := false
+	var accounts map[string]provideraccount.View
 	loadAccounts := func() error {
-		if loaded {
+		if accounts != nil {
 			return nil
 		}
 		if handler.accounts == nil {
 			return provideraccount.ErrInvalidAccount
 		}
-		var err error
-		accounts, err = handler.accounts.List(ctx)
-		loaded = err == nil
-		return err
+		views, err := handler.accounts.List(ctx)
+		if err != nil {
+			return err
+		}
+		accounts = make(map[string]provideraccount.View, len(views))
+		for _, view := range views {
+			accounts[view.Account.ID.String()] = view
+		}
+		return nil
 	}
 	for endpointIndex := range endpoints {
 		for planIndex := range endpoints[endpointIndex].ProtocolPlans {
@@ -395,27 +399,26 @@ func (handler *Handler) resolvePublishedAccountPolicies(
 			for routeIndex := range upstream.Routes {
 				route := &upstream.Routes[routeIndex]
 				policy := &route.AccountPolicy
-				policy.Accounts = nil
+				if len(policy.Accounts) == 0 {
+					return provideraccount.ErrInvalidAccount
+				}
+				for index, selected := range policy.Accounts {
+					view, found := accounts[selected.ID]
+					if !found {
+						return provideraccount.ErrAccountNotFound
+					}
+					if err := routeAccountMembershipError(view, route.ProviderTarget); err != nil {
+						return err
+					}
+					policy.Accounts[index] = environment.RouteAccountReference{
+						ID: view.Account.ID.String(), Revision: environment.Revision(view.Account.Revision),
+						DisplayName: view.Account.DisplayName,
+					}
+				}
 				switch policy.Mode {
 				case environment.AccountSelectionFixed:
 					if policy.FixedAccountID == "" || policy.Selector != nil {
 						return environment.ErrInvalidEnvironment
-					}
-					for _, view := range accounts {
-						if view.Account.ID.String() == policy.FixedAccountID {
-							if err := routeAccountError(view, *route); err != nil {
-								return err
-							}
-							policy.Accounts = []environment.RouteAccountReference{{
-								ID:          view.Account.ID.String(),
-								Revision:    environment.Revision(view.Account.Revision),
-								DisplayName: view.Account.DisplayName,
-							}}
-							break
-						}
-					}
-					if len(policy.Accounts) != 1 {
-						return provideraccount.ErrAccountNotFound
 					}
 				case environment.AccountSelectionJavaScript:
 					if policy.FixedAccountID != "" || policy.Selector == nil || handler.codeLibrary == nil {
@@ -434,18 +437,6 @@ func (handler *Handler) resolvePublishedAccountPolicies(
 					}
 					selector := published
 					policy.Selector = &selector
-					for _, view := range accounts {
-						if accountBelongsToRoute(view, *route) {
-							policy.Accounts = append(policy.Accounts, environment.RouteAccountReference{
-								ID:          view.Account.ID.String(),
-								Revision:    environment.Revision(view.Account.Revision),
-								DisplayName: view.Account.DisplayName,
-							})
-						}
-					}
-					if len(policy.Accounts) == 0 {
-						return provideraccount.ErrInvalidAccount
-					}
 					sort.Slice(policy.Accounts, func(left, right int) bool {
 						return policy.Accounts[left].ID < policy.Accounts[right].ID
 					})
@@ -458,21 +449,28 @@ func (handler *Handler) resolvePublishedAccountPolicies(
 	return nil
 }
 
-func accountBelongsToRoute(
-	view provideraccount.View,
-	route environment.UpstreamRoute,
-) bool {
-	return routeAccountError(view, route) == nil
+// routeAccountMembershipError is the structural rule for a Route Account Set:
+// the Account exists for this exact Endpoint origin and is linked to it.
+// Disabled state and credential health are runtime facts. They never shrink
+// an explicit set or block an unrelated configuration edit; a lease on such an
+// Account fails explicitly when a request actually selects it.
+func routeAccountMembershipError(view provideraccount.View, target environment.ProviderTarget) error {
+	account := view.Account
+	if account.Origin != target.Origin ||
+		!account.Associations.Contains(upstreamendpoint.ID(target.ID)) {
+		return provideraccount.ErrEndpointMismatch
+	}
+	return nil
 }
 
-func routeAccountError(view provideraccount.View, route environment.UpstreamRoute) error {
-	account := view.Account
-	if account.State != provideraccount.StateActive {
-		return provideraccount.ErrAccountDisabled
+// routeAccountError is the stricter rule for making an Account the active
+// choice now: it must also be enabled and hold a ready credential.
+func routeAccountError(view provideraccount.View, target environment.ProviderTarget) error {
+	if err := routeAccountMembershipError(view, target); err != nil {
+		return err
 	}
-	if account.Origin != route.ProviderTarget.Origin ||
-		!account.Associations.Contains(upstreamendpoint.ID(route.ProviderTarget.ID)) {
-		return provideraccount.ErrEndpointMismatch
+	if view.Account.State != provideraccount.StateActive {
+		return provideraccount.ErrAccountDisabled
 	}
 	if view.Health.State != provideraccount.HealthReady {
 		return provideraccount.ErrCredentialMissing
@@ -541,6 +539,13 @@ func (handler *Handler) activateEnvironmentRouteAccount(writer http.ResponseWrit
 		if current.Revision() != environment.Revision(expected) {
 			return problemResponse(problemSpec{status: http.StatusConflict, reason: ReasonRevisionConflict})
 		}
+		route, exists := current.FixedRoute(routeID)
+		if !exists {
+			return problemResponse(classifyEnvironmentError(environment.ErrInvalidEnvironment))
+		}
+		if accountErr := routeAccountError(account, route.ProviderTarget()); accountErr != nil {
+			return problemResponse(classifyEnvironmentAccountPolicyError(accountErr))
+		}
 		candidate, changed, switchErr := environment.ActivateRouteAccount(
 			current.Aggregate(), routeID, environment.RouteAccountReference{
 				ID: account.Account.ID.String(), Revision: environment.Revision(account.Account.Revision),
@@ -554,9 +559,6 @@ func (handler *Handler) activateEnvironmentRouteAccount(writer http.ResponseWrit
 			return jsonResponse(http.StatusOK, EnvironmentAccountActivationResponse{
 				Environment: environmentResponseOf(current), RouteID: routeID, AccountID: *input.AccountID,
 			})
-		}
-		if resolveErr := handler.resolvePublishedAccountPolicies(request.Context(), candidate.ClientEndpoints); resolveErr != nil {
-			return problemResponse(classifyEnvironmentAccountPolicyError(resolveErr))
 		}
 		draft, saveErr := handler.environments.SaveDraft(request.Context(), environment.DraftCommand{
 			ExpectedBaseRevision: environment.Revision(expected), Candidate: candidate,

@@ -1151,6 +1151,7 @@ void main() {
     expect(created.username, 'bob');
     final policy = await api.setRuntimeUserPolicy(
       userId: users.single.id,
+      allEnvironments: false,
       allowedEnvironmentIds: const ['team'],
       dailyAgentApiCallWarning: 100,
       dailyTokenWarning: 1000000,
@@ -1175,6 +1176,7 @@ void main() {
       },
       {
         'schema': 'vibermate-runtime-user-policy-v1',
+        'allEnvironments': false,
         'allowedEnvironmentIds': ['team'],
         'dailyAgentApiCallWarning': 100,
         'dailyTokenWarning': 1000000,
@@ -1797,7 +1799,7 @@ void main() {
   );
 
   test(
-    'HTTP API activates one linked Account for an Environment Route',
+    'HTTP API sends a selected Account activation and reads its result',
     () async {
       final preview = PreviewControlApi();
       addTearDown(preview.close);
@@ -1808,7 +1810,7 @@ void main() {
       final activated = await preview.activateEnvironmentAccount(
         work,
         'anthropic-direct',
-        'anthropic-lab',
+        'anthropic-work',
       );
       String? ifMatch;
       Object? body;
@@ -1861,12 +1863,12 @@ void main() {
       final result = await api.activateEnvironmentAccount(
         work,
         'anthropic-direct',
-        'anthropic-lab',
+        'anthropic-work',
       );
       expect(ifMatch, '${work.revision}');
-      expect(body, {'accountId': 'anthropic-lab'});
-      expect(result.environment.revision, work.revision + 1);
-      expect(result.accountId, 'anthropic-lab');
+      expect(body, {'accountId': 'anthropic-work'});
+      expect(result.environment.revision, activated.environment.revision);
+      expect(result.accountId, 'anthropic-work');
     },
   );
 

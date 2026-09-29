@@ -60,7 +60,23 @@ const (
 	StopReasonMaxTokens    StopReason = "max_tokens"
 	StopReasonToolUse      StopReason = "tool_use"
 	StopReasonStopSequence StopReason = "stop_sequence"
+	StopReasonRefusal      StopReason = "refusal"
+	StopReasonPauseTurn    StopReason = "pause_turn"
+	StopReasonContextLimit StopReason = "model_context_window_exceeded"
+	// StopReasonIncomplete is a provider-declared incomplete terminal whose
+	// reason this projection does not model; the reason stays in the native wire.
+	StopReasonIncomplete StopReason = "incomplete"
 )
+
+func (reason StopReason) Validate() error {
+	switch reason {
+	case StopReasonEndTurn, StopReasonMaxTokens, StopReasonToolUse, StopReasonStopSequence,
+		StopReasonRefusal, StopReasonPauseTurn, StopReasonContextLimit, StopReasonIncomplete:
+		return nil
+	default:
+		return errors.New("response stop reason is unsupported")
+	}
+}
 
 // JSONDocument owns one complete JSON value.
 type JSONDocument struct {
@@ -182,6 +198,13 @@ func (call ToolCall) Validate() error {
 			true,
 		); err != nil {
 			return err
+		}
+	case ToolKindProviderAction:
+		if call.Arguments.IsZero() {
+			return errors.New("provider action does not carry its native item")
+		}
+		if call.Input != "" || call.Namespace != "" {
+			return errors.New("provider action contains portable call fields")
 		}
 	default:
 		return errors.New("tool call kind is unsupported")
@@ -406,12 +429,17 @@ func (message Message) Validate() error {
 		case RoleUser:
 			if block.Kind != BlockText && block.Kind != BlockToolResult &&
 				!(block.Kind == BlockProviderExtension &&
+					block.ProviderExtension.source == ProviderExtensionSourceAnthropicMessages &&
+					block.ProviderExtension.kind == ProviderExtensionOpaqueItem) &&
+				!(block.Kind == BlockProviderExtension &&
 					block.ProviderExtension.source ==
 						ProviderExtensionSourceOpenAIResponses &&
 					(block.ProviderExtension.kind ==
 						ProviderExtensionInputImage ||
 						block.ProviderExtension.kind ==
-							ProviderExtensionInputAudio)) {
+							ProviderExtensionInputAudio ||
+						block.ProviderExtension.kind ==
+							ProviderExtensionOpaqueItem)) {
 				return errors.New("user message contains an unsupported block")
 			}
 		case RoleAssistant:
@@ -448,6 +476,15 @@ type ToolKind string
 const (
 	ToolKindFunction ToolKind = "function"
 	ToolKindCustom   ToolKind = "custom"
+	// Native definitions are meaningful only in their original wire dialect.
+	// They do not assert where a tool executes or grant any execution authority.
+	ToolKindNative ToolKind = "native"
+	// A provider action is an upstream output item that its dialect does not
+	// model. The client may execute it, so it is always an unproven action:
+	// the Environment tool policy decides whether it may pass. Its arguments
+	// are the complete native item; it exists only as a call, never as a
+	// definition, and no other dialect can encode it.
+	ToolKindProviderAction ToolKind = "provider_action"
 )
 
 type CustomToolFormatKind string
@@ -497,6 +534,7 @@ type ToolDefinition struct {
 	Kind                ToolKind
 	Name                string
 	Description         string
+	NativeType          string
 	InputSchema         JSONDocument
 	CustomFormat        CustomToolFormat
 	StrictKnown         bool
@@ -510,6 +548,9 @@ func (definition ToolDefinition) Validate() error {
 	}
 	if err := validateText("tool description", definition.Description, MaxTextBytes, true); err != nil {
 		return err
+	}
+	if definition.EffectiveKind() != ToolKindNative && definition.NativeType != "" {
+		return errors.New("portable tool contains a native type")
 	}
 	switch definition.EffectiveKind() {
 	case ToolKindFunction:
@@ -531,6 +572,14 @@ func (definition ToolDefinition) Validate() error {
 		}
 		if err := definition.CustomFormat.Validate(); err != nil {
 			return err
+		}
+	case ToolKindNative:
+		if err := validateIdentifier("native tool type", definition.NativeType, 256); err != nil {
+			return err
+		}
+		if !definition.InputSchema.IsZero() || !definition.CustomFormat.IsZero() ||
+			definition.StrictKnown || definition.Strict || definition.EagerInputStreaming {
+			return errors.New("native tool contains portable tool configuration")
 		}
 	default:
 		return errors.New("tool definition kind is unsupported")
@@ -1316,7 +1365,8 @@ func (extension ProviderExtension) Validate() error {
 		}
 	case ProviderExtensionSourceAnthropicMessages:
 		if extension.kind != ProviderExtensionThinking &&
-			extension.kind != ProviderExtensionRedactedThinking {
+			extension.kind != ProviderExtensionRedactedThinking &&
+			extension.kind != ProviderExtensionOpaqueItem {
 			return errors.New("provider extension kind is unsupported for Anthropic Messages")
 		}
 	default:
@@ -1451,12 +1501,12 @@ func (response Response) Validate() error {
 	if err := ValidateProtocolEvidence(response.ProtocolEvidence); err != nil {
 		return fmt.Errorf("response protocol evidence: %w", err)
 	}
-	switch response.StopReason {
-	case StopReasonEndTurn, StopReasonMaxTokens, StopReasonToolUse, StopReasonStopSequence:
-	default:
-		return errors.New("response stop reason is unsupported")
+	if err := response.StopReason.Validate(); err != nil {
+		return err
 	}
-	if (response.StopReason == StopReasonToolUse) != hasToolCall {
+	// A limit, refusal or pause can follow tool calls in the same response.
+	// Their execution still requires the separate tool-decision boundary.
+	if response.StopReason == StopReasonToolUse && !hasToolCall {
 		return errors.New("response stop reason and tool calls are inconsistent")
 	}
 	if response.StopReason != StopReasonStopSequence && response.StopSequence != "" {
@@ -1516,6 +1566,9 @@ const (
 	NoticeCustomToolKindEncoded               NoticeCode = "custom_tool_kind_encoded"
 	NoticeDeveloperRoleNormalized             NoticeCode = "developer_role_normalized"
 	NoticeToolOutputContentNormalized         NoticeCode = "tool_output_content_normalized"
+	// NoticeNativeContentNotProjected marks same-dialect content that the
+	// original wire carries unchanged but the neutral projection does not model.
+	NoticeNativeContentNotProjected NoticeCode = "native_content_not_projected"
 	// NoticeUnknownRequestFieldNotForwarded names a field the client sent that
 	// this dialect does not model. Clients add fields faster than any
 	// translator learns them; refusing the request would make the product
@@ -1605,69 +1658,5 @@ func validateText(label, value string, maxBytes int, allowEmpty bool) error {
 }
 
 func rejectDuplicateJSONNames(value []byte) error {
-	decoder := json.NewDecoder(bytes.NewReader(value))
-	decoder.UseNumber()
-	if err := consumeUniqueJSONValue(decoder); err != nil {
-		return err
-	}
-	var trailing json.RawMessage
-	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
-		return errors.New("JSON object has trailing data")
-	}
-	return nil
-}
-
-func consumeUniqueJSONValue(decoder *json.Decoder) error {
-	token, err := decoder.Token()
-	if err != nil {
-		return err
-	}
-	delimiter, composite := token.(json.Delim)
-	if !composite {
-		return nil
-	}
-	switch delimiter {
-	case '{':
-		names := make(map[string]struct{})
-		for decoder.More() {
-			nameToken, err := decoder.Token()
-			if err != nil {
-				return err
-			}
-			name, ok := nameToken.(string)
-			if !ok {
-				return errors.New("JSON object key is not a string")
-			}
-			if _, duplicate := names[name]; duplicate {
-				return fmt.Errorf("JSON object key %q is duplicated", name)
-			}
-			names[name] = struct{}{}
-			if err := consumeUniqueJSONValue(decoder); err != nil {
-				return err
-			}
-		}
-		closing, err := decoder.Token()
-		if err != nil {
-			return err
-		}
-		if closing != json.Delim('}') {
-			return errors.New("JSON object is not terminated")
-		}
-	case '[':
-		for decoder.More() {
-			if err := consumeUniqueJSONValue(decoder); err != nil {
-				return err
-			}
-		}
-		closing, err := decoder.Token()
-		if err != nil {
-			return err
-		}
-		if closing != json.Delim(']') {
-			return errors.New("JSON array is not terminated")
-		}
-	default:
-		return errors.New("JSON delimiter is invalid")
-	}
-	return nil
+	return ValidateJSONNames(value)
 }

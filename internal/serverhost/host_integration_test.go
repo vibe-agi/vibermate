@@ -163,6 +163,7 @@ func TestServerOwnerWebSessionCanManageManualCapture(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	grantAllEnvironments(t, host.Runtime().RuntimeUsers(), member.ID)
 	memberLogin := postJSON(t, client,
 		"http://"+host.Status().ListenAddress+servercontrol.WebSessionPath, "",
 		servercontrol.WebLogin{
@@ -425,6 +426,7 @@ func TestServerHostAuthenticatesServerCreatedRuntimeUserOverExplicitHTTP(t *test
 	if err != nil {
 		t.Fatalf("create Runtime User: %v", err)
 	}
+	grantAllEnvironments(t, host.Runtime().RuntimeUsers(), created.ID)
 	response := postJSON(
 		t,
 		&http.Client{Timeout: 10 * time.Second},
@@ -1052,7 +1054,7 @@ func TestRemoteLauncherRunsChildWithoutLocalDesktopDaemon(t *testing.T) {
 	candidate := environment.Environment{
 		ID: "filtered-env", Name: "Filtered environment", Revision: 1, State: environment.StateActive,
 		ContentRecording:  environment.ContentRecordingPolicy{Mode: environment.ContentRecordingFull, RetentionDays: 30},
-		LaunchEnvironment: environment.LaunchEnvironmentPolicy{DeleteEnv: []string{"GH_TOKEN"}, SetEnv: map[string]string{"TEAM_CONTEXT": "research"}},
+		LaunchEnvironment: environment.LaunchEnvironmentPolicy{DeleteEnv: []string{"GH_TOKEN"}, SetEnv: map[string]string{"ANTHROPIC_MODEL": "research"}},
 	}
 	draft, err := manager.SaveDraft(context.Background(), environment.DraftCommand{Candidate: candidate})
 	if err != nil {
@@ -1068,7 +1070,7 @@ func TestRemoteLauncherRunsChildWithoutLocalDesktopDaemon(t *testing.T) {
 	var firstLog strings.Builder
 	launcher, err := runlauncher.New(runlauncher.Config{
 		Remote:          &remoteConfig,
-		BaseEnvironment: []string{"PATH=/usr/bin:/bin", "GH_TOKEN=synthetic-private-canary", "LANG=C", "TEAM_CONTEXT=original"},
+		BaseEnvironment: []string{"PATH=/usr/bin:/bin", "GH_TOKEN=synthetic-private-canary", "LANG=C", "ANTHROPIC_MODEL=original"},
 		Stdin:           strings.NewReader(""), Stdout: io.Discard, Stderr: &firstLog,
 		Getwd:          func() (string, error) { return workspace, nil },
 		ControlTimeout: 2 * time.Second, CreateTimeout: 10 * time.Second,
@@ -1080,7 +1082,7 @@ func TestRemoteLauncherRunsChildWithoutLocalDesktopDaemon(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	exitCode, err := launcher.Run(ctx, runlauncher.LaunchRequest{
 		EnvironmentID: candidate.ID,
-		Command:       []string{"/bin/sh", "-c", `test -z "${GH_TOKEN+x}" && test "$LANG" = C && test "$TEAM_CONTEXT" = research`},
+		Command:       []string{"/bin/sh", "-c", `test -z "${GH_TOKEN+x}" && test "$LANG" = C && test "$ANTHROPIC_MODEL" = research`},
 	})
 	cancel()
 	if err != nil || exitCode != 0 {
@@ -1088,7 +1090,7 @@ func TestRemoteLauncherRunsChildWithoutLocalDesktopDaemon(t *testing.T) {
 	}
 	snapshots := host.Runtime().LaunchSnapshots().List()
 	if len(snapshots) != 1 || !snapshots[0].Remote || snapshots[0].DeviceName != "integration-client" ||
-		strings.Join(snapshots[0].Inventory.Names, ",") != "GH_TOKEN,LANG,PATH,TEAM_CONTEXT" {
+		strings.Join(snapshots[0].Inventory.Names, ",") != "ANTHROPIC_MODEL,GH_TOKEN,LANG,PATH" {
 		t.Fatalf("remote launch snapshot is not the actual pre-filter environment: %+v", snapshots)
 	}
 	wire, _ := json.Marshal(snapshots)
@@ -1271,6 +1273,7 @@ func TestRuntimeUserCustomClaudeHTTPOriginProducesExchangeAndUsage(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
+	grantAllEnvironments(t, host.Runtime().RuntimeUsers(), created.ID)
 	controlClient := &http.Client{Timeout: 10 * time.Second}
 	login := postJSON(
 		t,
@@ -1463,7 +1466,7 @@ func loginRemoteTestUser(
 	config runlauncher.RemoteConfig,
 ) runlauncher.RemoteLoginResult {
 	t.Helper()
-	_, err := host.Runtime().RuntimeUsers().Create(
+	integrationUser, err := host.Runtime().RuntimeUsers().Create(
 		context.Background(),
 		runtimeuser.CreateCommand{
 			Username: "integration-user", Password: []byte("test-integration-password"),
@@ -1472,6 +1475,7 @@ func loginRemoteTestUser(
 	if err != nil {
 		t.Fatalf("create integration Runtime User: %v", err)
 	}
+	grantAllEnvironments(t, host.Runtime().RuntimeUsers(), integrationUser.ID)
 	result, err := runlauncher.LoginRemote(context.Background(), runlauncher.RemoteLoginRequest{
 		Config: config, Username: "integration-user",
 		Password: []byte("test-integration-password"),
@@ -1593,4 +1597,18 @@ func sendJSON(t *testing.T, client *http.Client, method, target, bearer string, 
 		t.Fatal(err)
 	}
 	return response
+}
+
+// grantAllEnvironments is the Owner's explicit grant; a new user has none.
+func grantAllEnvironments(t *testing.T, users interface {
+	SetPolicy(context.Context, runtimeuser.UserID, runtimeuser.Policy) (runtimeuser.User, error)
+}, id runtimeuser.UserID) {
+	t.Helper()
+	policy, err := runtimeuser.NewPolicy(true, nil, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := users.SetPolicy(context.Background(), id, policy); err != nil {
+		t.Fatalf("grant Environments: %v", err)
+	}
 }

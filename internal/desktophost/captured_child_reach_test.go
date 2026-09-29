@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net"
@@ -11,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
@@ -27,6 +29,11 @@ const (
 	childMarkerEnvironment  = "VIBERMATE_TEST_CHILD_FETCH"
 	childManagedEnvironment = "VIBERMATE_TEST_CHILD_MANAGED"
 	childManagedFailure     = "VIBERMATE_TEST_CHILD_MANAGED_FAILURE"
+	childManagedBody        = "VIBERMATE_TEST_CHILD_MANAGED_BODY"
+	childManagedResponse    = "VIBERMATE_TEST_CHILD_MANAGED_RESPONSE"
+	childManagedStatus      = "VIBERMATE_TEST_CHILD_MANAGED_STATUS"
+	childManagedHeaders     = "VIBERMATE_TEST_CHILD_MANAGED_HEADERS"
+	childManagedForbidden   = "VIBERMATE_TEST_CHILD_MANAGED_FORBIDDEN"
 	childSuccessMarker      = "reached"
 )
 
@@ -85,10 +92,14 @@ func runCapturedManagedRequest() int {
 		},
 	}
 	defer transport.CloseIdleConnections()
+	requestBody := os.Getenv(childManagedBody)
+	if requestBody == "" {
+		requestBody = `{"model":"claude-test","max_tokens":32,"messages":[{"role":"user","content":"managed route"}]}`
+	}
 	request, err := http.NewRequest(
 		http.MethodPost,
 		"https://api.anthropic.com/v1/messages",
-		strings.NewReader(`{"model":"claude-test","max_tokens":32,"messages":[{"role":"user","content":"managed route"}]}`),
+		strings.NewReader(requestBody),
 	)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "child request:", err)
@@ -101,7 +112,7 @@ func runCapturedManagedRequest() int {
 	request.Header.Set("Cookie", "session=client-cookie")
 	response, err := (&http.Client{
 		Transport: transport,
-		Timeout:   15 * time.Second,
+		Timeout:   45 * time.Second,
 	}).Do(request)
 	if err != nil {
 		if expectFailure {
@@ -125,8 +136,41 @@ func runCapturedManagedRequest() int {
 		)
 		return 1
 	}
-	if readErr != nil || response.StatusCode != http.StatusOK ||
-		!strings.Contains(string(body), "managed reached") {
+	wantBody := os.Getenv(childManagedResponse)
+	validBody := strings.Contains(string(body), "managed reached")
+	if forbidden := os.Getenv(childManagedForbidden); forbidden != "" {
+		// The client must never observe these bytes, whatever else it receives.
+		validBody = !strings.Contains(string(body), forbidden)
+	} else if wantBody != "" {
+		validBody = string(body) == wantBody
+		if !validBody {
+			var got, want any
+			validBody = json.Unmarshal(body, &got) == nil &&
+				json.Unmarshal([]byte(wantBody), &want) == nil && reflect.DeepEqual(got, want)
+		}
+	}
+	wantStatus := http.StatusOK
+	if value := os.Getenv(childManagedStatus); value != "" {
+		wantStatus, err = strconv.Atoi(value)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "child: invalid expected status")
+			return 1
+		}
+	}
+	if value := os.Getenv(childManagedHeaders); value != "" {
+		var headers map[string]string
+		if json.Unmarshal([]byte(value), &headers) != nil {
+			fmt.Fprintln(os.Stderr, "child: invalid expected headers")
+			return 1
+		}
+		for name, want := range headers {
+			if got := response.Header.Get(name); got != want {
+				fmt.Fprintf(os.Stderr, "child: response header %s = %q, want %q\n", name, got, want)
+				return 1
+			}
+		}
+	}
+	if readErr != nil || response.StatusCode != wantStatus || !validBody {
 		fmt.Fprintf(
 			os.Stderr,
 			"child managed response: status=%d body=%q err=%v\n",

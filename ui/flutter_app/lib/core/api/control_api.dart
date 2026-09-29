@@ -206,6 +206,7 @@ abstract interface class ControlApi {
 
   Future<RuntimeUser> setRuntimeUserPolicy({
     required String userId,
+    required bool allEnvironments,
     required List<String> allowedEnvironmentIds,
     required int dailyAgentApiCallWarning,
     required int dailyTokenWarning,
@@ -1547,11 +1548,13 @@ final class HttpControlApi implements ControlApi, ACPObservationApi {
   @override
   Future<RuntimeUser> setRuntimeUserPolicy({
     required String userId,
+    required bool allEnvironments,
     required List<String> allowedEnvironmentIds,
     required int dailyAgentApiCallWarning,
     required int dailyTokenWarning,
   }) async {
     if (userId.isEmpty ||
+        allEnvironments && allowedEnvironmentIds.isNotEmpty ||
         allowedEnvironmentIds.length > 128 ||
         dailyAgentApiCallWarning < 0 ||
         dailyTokenWarning < 0) {
@@ -1563,6 +1566,7 @@ final class HttpControlApi implements ControlApi, ACPObservationApi {
         '/api/v1/server/runtime-users/${Uri.encodeComponent(userId)}/policy',
         body: {
           'schema': 'vibermate-runtime-user-policy-v1',
+          'allEnvironments': allEnvironments,
           'allowedEnvironmentIds': allowedEnvironmentIds,
           'dailyAgentApiCallWarning': dailyAgentApiCallWarning,
           'dailyTokenWarning': dailyTokenWarning,

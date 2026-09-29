@@ -85,9 +85,34 @@ func NewProviderFailure(path string, raw []byte) *Failure {
 type NativeProviderError struct {
 	dialect   protocolspec.Dialect
 	payload   json.RawMessage
+	httpBody  json.RawMessage
 	eventName string
 	eventData json.RawMessage
 	headers   http.Header
+}
+
+// WithHTTPBody retains the matching error envelope, including native request
+// IDs and future fields. It is bounded transient delivery, never diagnostics.
+func (native NativeProviderError) WithHTTPBody(body []byte) NativeProviderError {
+	if native.dialect == "" || len(native.payload) == 0 || len(body) > 64<<10 {
+		return native
+	}
+	var envelope struct {
+		Error json.RawMessage `json:"error"`
+	}
+	if json.Unmarshal(body, &envelope) != nil ||
+		!bytes.Equal(bytes.TrimSpace(envelope.Error), bytes.TrimSpace(native.payload)) {
+		return native
+	}
+	native.httpBody = bytes.Clone(body)
+	return native
+}
+
+func (native NativeProviderError) HTTPBodyForDialect(dialect protocolspec.Dialect) json.RawMessage {
+	if native.dialect != dialect {
+		return nil
+	}
+	return bytes.Clone(native.httpBody)
 }
 
 // WithHeaders accepts metadata already filtered by the managed HTTP boundary.
@@ -131,7 +156,7 @@ func (native NativeProviderError) StreamEvent(dialect protocolspec.Dialect) (str
 }
 
 func NewNativeProviderError(dialect protocolspec.Dialect, raw []byte) NativeProviderError {
-	if len(raw) == 0 || len(raw) > 64<<10 || !json.Valid(raw) || bytes.TrimSpace(raw)[0] != '{' {
+	if dialect == "" || len(raw) == 0 || len(raw) > 64<<10 || !json.Valid(raw) || bytes.TrimSpace(raw)[0] != '{' {
 		return NativeProviderError{}
 	}
 	return NativeProviderError{dialect: dialect, payload: bytes.Clone(raw)}

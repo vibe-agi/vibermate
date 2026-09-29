@@ -2,14 +2,77 @@ package servercontrol_test
 
 import (
 	"context"
+	"crypto/rand"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/vibe-agi/vibermate/internal/runtimeuser"
 	"github.com/vibe-agi/vibermate/internal/serveradmin"
 	"github.com/vibe-agi/vibermate/internal/servercontrol"
 )
+
+func TestTransientUserLookupFailureDoesNotEndWebSession(t *testing.T) {
+	_, users, _, _ := newWebSessionsHandler(t)
+	ctx := context.Background()
+	owner, err := users.Create(ctx, runtimeuser.CreateCommand{
+		Username: "review-owner", Password: []byte("review-password"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var lookupFailure error
+	authority, err := serveradmin.Open(serveradmin.Options{
+		DataDirectory: t.TempDir(), Clock: serverUsageClock{now: time.Now()},
+		Random: rand.Reader, SessionLifetime: time.Hour,
+		LookupUser: func(ctx context.Context, id runtimeuser.UserID) (runtimeuser.User, error) {
+			if lookupFailure != nil {
+				return runtimeuser.User{}, lookupFailure
+			}
+			return users.User(ctx, id)
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := authority.EnsureOwner(owner.ID); err != nil {
+		t.Fatal(err)
+	}
+	handler, err := servercontrol.NewWebSessions(servercontrol.WebSessionsOptions{
+		InstanceID: "review-instance", Users: users, Sessions: authority,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, failure := range []error{context.Canceled, context.DeadlineExceeded, errors.New("temporary database read failure")} {
+		t.Run(failure.Error(), func(t *testing.T) {
+			session := decodeWebSession(t, webRequest(t, handler, http.MethodPost,
+				servercontrol.WebSessionPath, map[string]any{
+					"schema": servercontrol.WebLoginSchema, "username": owner.Username,
+					"password": "review-password",
+				}, ""))
+			lookupFailure = failure
+			unavailable := webRequest(t, handler, http.MethodGet,
+				servercontrol.WebCurrentSessionPath, nil, session.ReadToken)
+			lookupFailure = nil
+			if unavailable.Code != http.StatusServiceUnavailable {
+				t.Errorf("temporary lookup failure = HTTP %d, want 503", unavailable.Code)
+			}
+			recovered := webRequest(t, handler, http.MethodGet,
+				servercontrol.WebCurrentSessionPath, nil, session.ReadToken)
+			if recovered.Code != http.StatusOK {
+				t.Errorf("same session after recovery = HTTP %d, want 200", recovered.Code)
+			}
+			logout := webRequest(t, handler, http.MethodDelete,
+				servercontrol.WebCurrentSessionPath, nil, session.WriteToken)
+			if logout.Code != http.StatusNoContent {
+				t.Errorf("paired write token after recovery = HTTP %d, want 204", logout.Code)
+			}
+		})
+	}
+}
 
 type pausedCredentialCheck struct {
 	*runtimeuser.Manager
@@ -68,8 +131,8 @@ func TestRevocationFencesAnInFlightWebLogin(t *testing.T) {
 			response := <-completed
 			if response.Code == http.StatusCreated {
 				session := decodeWebSession(t, response)
-				principal, stillValid := authority.Authenticate(context.Background(), session.ReadToken, serveradmin.ScopeRead)
-				t.Fatalf("%s completed before mint; old credentials still issued HTTP %d, valid=%t, role=%s", action, response.Code, stillValid, principal.Role)
+				principal, authErr := authority.Authenticate(context.Background(), session.ReadToken, serveradmin.ScopeRead)
+				t.Fatalf("%s completed before mint; old credentials still issued HTTP %d, auth error=%v, role=%s", action, response.Code, authErr, principal.Role)
 			}
 		})
 	}
@@ -99,7 +162,7 @@ func TestAbandonedWebSessionsDoNotBlockAnotherLogin(t *testing.T) {
 		}
 		count++
 	}
-	if _, valid := authority.Authenticate(context.Background(), memberSession.ReadToken.Value(), serveradmin.ScopeRead); !valid {
+	if _, err := authority.Authenticate(context.Background(), memberSession.ReadToken.Value(), serveradmin.ScopeRead); err != nil {
 		t.Fatal("another person's session was evicted")
 	}
 }
@@ -122,10 +185,10 @@ func TestWebSessionRevalidatesDurableCredentialRevision(t *testing.T) {
 		t.Fatal(err)
 	}
 	// No in-memory revoke is needed, including a reset between lookup and mint.
-	if _, valid := authority.Authenticate(ctx, session.ReadToken.Value(), serveradmin.ScopeRead); valid {
+	if _, err := authority.Authenticate(ctx, session.ReadToken.Value(), serveradmin.ScopeRead); err == nil {
 		t.Fatal("old credential revision remained authorized")
 	}
-	if _, valid := authority.Authenticate(ctx, session.WriteToken.Value(), serveradmin.ScopeWrite); valid {
+	if _, err := authority.Authenticate(ctx, session.WriteToken.Value(), serveradmin.ScopeWrite); err == nil {
 		t.Fatal("paired write authority remained authorized")
 	}
 }

@@ -504,20 +504,24 @@ EnvironmentRoute _upstreamRoute(
   );
 }
 
-RouteAccountPolicy fixedRouteAccountPolicy(ProviderAccount account) =>
-    RouteAccountPolicy(
-      revision: 1,
-      mode: 'fixed',
-      fixedAccountId: account.id,
-      selector: null,
-      accounts: [
+RouteAccountPolicy fixedRouteAccountPolicy(
+  ProviderAccount account, {
+  List<RouteAccountReference>? accounts,
+}) => RouteAccountPolicy(
+  revision: 1,
+  mode: 'fixed',
+  fixedAccountId: account.id,
+  selector: null,
+  accounts:
+      accounts ??
+      [
         RouteAccountReference(
           id: account.id,
           revision: account.revision,
           displayName: account.displayName,
         ),
       ],
-    );
+);
 
 String _stableResourceToken(String value) {
   var hash = 2166136261;
@@ -862,8 +866,7 @@ void _validateRouteAccountPolicy({
       policy.mode == 'fixed' &&
       policy.fixedAccountId.isNotEmpty &&
       policy.selector == null &&
-      policy.accounts.length == 1 &&
-      policy.accounts.single.id == policy.fixedAccountId;
+      ids.contains(policy.fixedAccountId);
   final scripted =
       policy.mode == 'javascript' &&
       policy.fixedAccountId.isEmpty &&
@@ -875,8 +878,7 @@ void _validateRouteAccountPolicy({
         .firstOrNull;
     return account != null &&
         account.revision == reference.revision &&
-        account.isLinkedTo(endpointId) &&
-        account.usable;
+        account.isLinkedTo(endpointId);
   });
   if ((!fixed && !scripted) ||
       ids.length != policy.accounts.length ||
@@ -884,7 +886,7 @@ void _validateRouteAccountPolicy({
     throw ArgumentError.value(
       policy.accounts.map((account) => account.id).toList(),
       'policy',
-      'Account authority contains an Account that is not a ready child of Route Endpoint $endpointId',
+      'Account authority contains an Account that is not linked to Route Endpoint $endpointId',
     );
   }
 }
@@ -1108,21 +1110,26 @@ List<EnvironmentClientEndpoint> prepareEnvironmentDraftEndpoints({
               route['accountPolicy'],
               'accountPolicy',
             );
-            if (policy.mode == 'javascript') {
-              // The server resolves the selector's eligible accounts again.
-              // Prepare the same authority before normalizing child revisions.
+            {
+              // Refresh only explicitly selected references. Endpoint links
+              // define eligibility, not permission to expand this Profile.
+              // Credential health and disabled state are runtime facts: they
+              // never shrink the explicit scope or block an unrelated edit.
+              final selected = policy.accounts
+                  .map((account) => account.id)
+                  .toSet();
               final eligible =
                   availableAccounts
                       .where(
                         (account) =>
-                            account.usable &&
+                            selected.contains(account.id) &&
                             account.isLinkedTo(service.id) &&
                             account.credentialOrigin ==
                                 service.origin.toString(),
                       )
                       .toList()
                     ..sort((a, b) => a.id.compareTo(b.id));
-              if (eligible.isEmpty) {
+              if (eligible.isEmpty || eligible.length != selected.length) {
                 throw const EnvironmentAccountSelectionException();
               }
               route['accountPolicy'] = policy

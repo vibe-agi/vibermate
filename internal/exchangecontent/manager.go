@@ -62,13 +62,13 @@ func New(ctx context.Context, options Options) (*Manager, error) {
 	if ctx == nil || options.Repository == nil || options.Clock == nil {
 		return nil, errors.New("Exchange content dependencies are incomplete")
 	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	manager := &Manager{
 		repository: options.Repository,
 		clock:      options.Clock,
 		changed:    make(chan struct{}),
-	}
-	if _, err := options.Repository.PurgeExpired(ctx, options.Clock.Now().UTC()); err != nil {
-		return nil, err
 	}
 	return manager, nil
 }
@@ -86,9 +86,8 @@ func (manager *Manager) Record(ctx context.Context, record Record) error {
 	if !record.ExpiresAt.After(now) {
 		return ErrInvalidEvidence
 	}
-	if _, err := manager.repository.PurgeExpired(operation, now); err != nil {
-		return err
-	}
+	// Expiry is enforced on reads; Store maintenance reclaims bytes separately.
+	// A recording budget must not include unrelated retention work.
 	return manager.repository.Put(operation, record.Clone())
 }
 

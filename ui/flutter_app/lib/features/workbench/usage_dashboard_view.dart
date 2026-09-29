@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:math' as math;
 
+import 'package:flutter/foundation.dart' show listEquals, mapEquals;
 import 'package:flutter/material.dart';
 
 import '../../core/api/control_models.dart';
@@ -645,101 +646,234 @@ final class _UsageGroupTableState extends State<UsageGroupTable> {
     'project': 'projects',
   };
   final _horizontalScroll = ScrollController();
+  final _rowsScroll = ScrollController();
+  // The committed view. A load names a target view and commits it together
+  // with its page, snapshot and subtotal only when every request succeeded,
+  // so a failed or superseded navigation never leaves a partial view.
   final List<RuntimeUsageGroup> _trail = [];
   final List<String> _cursors = [''];
   String _groupBy = 'project';
   bool _byBranch = false;
   bool _loading = true;
+  // A newer snapshot exists (seen by the report poll) or the committed one was
+  // refused (409). Either way later pages of the committed snapshot cannot be
+  // read, so paging waits for an explicit update to the first page.
+  bool _updatesPending = false;
+  bool _snapshotExpired = false;
   String? _error;
+  _UsageTarget? _failedTarget;
   RuntimeUsageReport? _page;
   RuntimeUsageGroup? _subtotal;
+  late String _snapshot;
   int _generation = 0;
 
-  List<String> get _dimensions => switch (_groupBy) {
-    'project' => ['project', if (_byBranch) 'branch', 'caller', 'model'],
-    'model' => ['model', 'caller'],
-    _ => [_groupBy, 'model'],
-  };
-  Map<String, String> get _filters => {
-    ...widget.report.filters,
-    for (var i = 0; i < _trail.length; i++) _dimensions[i]: _trail[i].id,
-  };
+  bool get _pagingBlocked => _loading || _updatesPending || _snapshotExpired;
+
+  _UsageTarget get _committed => _UsageTarget(
+    groupBy: _groupBy,
+    byBranch: _byBranch,
+    trail: List.of(_trail),
+    cursors: List.of(_cursors),
+  );
 
   @override
   void initState() {
     super.initState();
+    _snapshot = widget.report.snapshot;
     if (widget.modelsOnly) _groupBy = 'model';
-    unawaited(_load());
+    unawaited(_load(_committed));
   }
 
   @override
   void dispose() {
     _horizontalScroll.dispose();
+    _rowsScroll.dispose();
     super.dispose();
   }
 
   @override
   void didUpdateWidget(covariant UsageGroupTable oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (widget.report.snapshot != oldWidget.report.snapshot ||
-        (_error != null && widget.report != oldWidget.report)) {
-      _cursors
-        ..clear()
-        ..add('');
-      unawaited(_load());
-    }
-  }
-
-  Future<void> _load({RuntimeUsageGroup? knownSubtotal}) async {
-    final generation = ++_generation;
-    _loading = true;
-    _error = null;
     final period = widget.report.period;
-    RuntimeUsageQuery query({bool summary = false}) => RuntimeUsageQuery(
-      from: period.from,
-      until: period.until,
-      timeZone: period.timeZone,
-      groupBy: summary ? '' : _dimensions[_trail.length],
-      filters: _filters,
-      snapshot: widget.report.snapshot,
-      cursor: summary ? '' : _cursors.last,
-    );
-    try {
-      final results = await Future.wait([
-        widget.loadPage(query()),
-        if (_trail.isNotEmpty && knownSubtotal == null)
-          widget.loadPage(query(summary: true)),
-      ]);
-      if (!mounted || generation != _generation) return;
-      setState(() {
-        _page = results.first;
-        _subtotal = _trail.isEmpty
-            ? widget.report.total
-            : knownSubtotal ?? results.last.total;
-        _loading = false;
-      });
-    } on Object catch (error) {
-      if (!mounted || generation != _generation) return;
-      setState(() {
-        _loading = false;
-        _error =
-            error is ControlProblem &&
-                error.reasonCode == 'usage_snapshot_changed'
-            ? 'usage.page.changed'
-            : 'usage.page.failed';
-      });
-    }
-  }
-
-  void _navigate(int depth, {RuntimeUsageGroup? child}) {
-    setState(() {
-      _trail.removeRange(depth, _trail.length);
-      if (child != null) _trail.add(child);
+    final previous = oldWidget.report.period;
+    if (period.from != previous.from ||
+        period.until != previous.until ||
+        period.timeZone != previous.timeZone ||
+        !mapEquals(widget.report.filters, oldWidget.report.filters)) {
+      // A different scope has no relationship to the committed view.
+      _trail.clear();
       _cursors
         ..clear()
         ..add('');
-      unawaited(_load(knownSubtotal: child));
-    });
+      _page = null;
+      _refresh();
+    } else if (widget.report.snapshot != oldWidget.report.snapshot) {
+      if (_page?.snapshot == widget.report.snapshot) {
+        _updatesPending = false;
+      } else if (_trail.isEmpty && _cursors.length == 1 && !_loading) {
+        // The root first page follows the report silently.
+        unawaited(_load(_committed, snapshot: widget.report.snapshot));
+      } else {
+        _updatesPending = true;
+      }
+    }
+  }
+
+  void _refresh() {
+    unawaited(_load(_committed.firstPage(), snapshot: widget.report.snapshot));
+  }
+
+  Future<void> _load(
+    _UsageTarget target, {
+    RuntimeUsageGroup? knownSubtotal,
+    String? snapshot,
+    bool renewable = true,
+  }) async {
+    final generation = ++_generation;
+    void begin() {
+      _loading = true;
+      _error = null;
+      _failedTarget = null;
+    }
+
+    // The first load starts from initState, before the first build.
+    if (_page == null && generation == 1) {
+      begin();
+    } else {
+      setState(begin);
+    }
+    final period = widget.report.period;
+    final rootSnapshot = widget.report.snapshot;
+    final requestedSnapshot = snapshot ?? _snapshot;
+    final filters = target.filters(widget.report.filters);
+    final dimension = target.dimensions[target.trail.length];
+    final cursor = target.cursors.last;
+    RuntimeUsageQuery query({bool summary = false, required String snapshot}) =>
+        RuntimeUsageQuery(
+          from: period.from,
+          until: period.until,
+          timeZone: period.timeZone,
+          groupBy: summary ? '' : dimension,
+          filters: filters,
+          snapshot: snapshot,
+          cursor: summary ? '' : cursor,
+        );
+    // Navigation (open a level, regroup, update) may move to the newest
+    // snapshot: it starts a fresh first page, so nothing being read is
+    // replaced. Paging reads one snapshot and is never swapped for a page of
+    // another. Renewal is bounded so continuous writes cannot loop forever.
+    final renewals = renewable && cursor.isEmpty ? 2 : 0;
+    for (var attempt = 0; attempt <= renewals; attempt++) {
+      try {
+        RuntimeUsageReport page;
+        RuntimeUsageGroup? subtotal;
+        if (attempt == 0) {
+          subtotal =
+              knownSubtotal ??
+              (target.trail.isEmpty && requestedSnapshot == rootSnapshot
+                  ? widget.report.total
+                  : null);
+          final results = await Future.wait([
+            widget.loadPage(query(snapshot: requestedSnapshot)),
+            if (subtotal == null)
+              widget.loadPage(
+                query(summary: true, snapshot: requestedSnapshot),
+              ),
+          ]);
+          page = results.first;
+          subtotal ??= results.last.total;
+        } else {
+          final summary = await widget.loadPage(
+            query(summary: true, snapshot: ''),
+          );
+          if (!mounted || generation != _generation) return;
+          page = await widget.loadPage(query(snapshot: summary.snapshot));
+          subtotal = summary.total;
+        }
+        if (!mounted || generation != _generation) return;
+        final pageChanged =
+            _cursors.last != target.cursors.last ||
+            !listEquals(_trail, target.trail) ||
+            _groupBy != target.groupBy ||
+            _byBranch != target.byBranch;
+        setState(() {
+          _groupBy = target.groupBy;
+          _byBranch = target.byBranch;
+          _trail
+            ..clear()
+            ..addAll(target.trail);
+          _cursors
+            ..clear()
+            ..addAll(target.cursors);
+          _page = page;
+          _snapshot = page.snapshot;
+          _subtotal = subtotal;
+          _loading = false;
+          _snapshotExpired = false;
+          _updatesPending =
+              widget.report.snapshot != rootSnapshot &&
+              widget.report.snapshot != page.snapshot;
+        });
+        if (pageChanged && _rowsScroll.hasClients) _rowsScroll.jumpTo(0);
+        return;
+      } on Object catch (error) {
+        if (!mounted || generation != _generation) return;
+        final expired =
+            error is ControlProblem &&
+            error.reasonCode == 'usage_snapshot_changed';
+        if (expired && attempt < renewals) continue;
+        setState(() {
+          _loading = false;
+          if (expired) {
+            _snapshotExpired = true;
+          } else {
+            _error = 'usage.page.failed';
+            _failedTarget = target;
+          }
+        });
+        return;
+      }
+    }
+  }
+
+  void _navigate(
+    int depth, {
+    RuntimeUsageGroup? child,
+    String? groupBy,
+    bool? byBranch,
+  }) {
+    final regrouped =
+        (groupBy != null && groupBy != _groupBy) ||
+        (byBranch != null && byBranch != _byBranch);
+    final trail = regrouped ? <RuntimeUsageGroup>[] : _trail.sublist(0, depth);
+    if (child != null) trail.add(child);
+    unawaited(
+      _load(
+        _UsageTarget(
+          groupBy: groupBy ?? _groupBy,
+          byBranch: byBranch ?? _byBranch,
+          trail: trail,
+          cursors: const [''],
+        ),
+        knownSubtotal: child,
+        snapshot: _page?.snapshot ?? _snapshot,
+      ),
+    );
+  }
+
+  void _turnPage(List<String> cursors) {
+    unawaited(
+      _load(
+        _UsageTarget(
+          groupBy: _groupBy,
+          byBranch: _byBranch,
+          trail: List.of(_trail),
+          cursors: cursors,
+        ),
+        knownSubtotal: _subtotal,
+        renewable: false,
+      ),
+    );
   }
 
   String _label(RuntimeUsageGroup group) {
@@ -754,8 +888,13 @@ final class _UsageGroupTableState extends State<UsageGroupTable> {
         : group.id;
   }
 
-  DataRow _row(RuntimeUsageGroup group, {bool total = false}) {
-    final expandable = !total && _trail.length + 1 < _dimensions.length;
+  DataRow _row(
+    RuntimeUsageGroup group,
+    List<String> headers, {
+    bool total = false,
+  }) {
+    final expandable =
+        !total && _trail.length + 1 < _committed.dimensions.length;
     final name = total
         ? widget.copy(_trail.isEmpty ? 'usage.total' : 'usage.subtotal')
         : _label(group);
@@ -826,32 +965,40 @@ final class _UsageGroupTableState extends State<UsageGroupTable> {
               ? () => _navigate(_trail.length, child: group)
               : null,
         ),
-        DataCell(Text(usageIntegerLabel(group.agentApiCalls))),
-        DataCell(Text(usageIntegerLabel(group.failed))),
-        for (final value in [
+        DataCell(
+          _headed(headers[1], Text(usageIntegerLabel(group.agentApiCalls))),
+        ),
+        DataCell(_headed(headers[2], Text(usageIntegerLabel(group.failed)))),
+        for (final (index, value) in [
           group.tokens.inputUncached,
           group.tokens.cacheRead,
           group.tokens.output,
-        ])
+        ].indexed)
           DataCell(
-            Tooltip(
-              message: widget.copy('usage.tokens.hint'),
-              child: Text(
-                value.observed
-                    ? '${value.complete ? '' : '≥ '}${usageIntegerLabel(value.tokens)}'
-                    : '—',
+            _headed(
+              headers[3 + index],
+              Tooltip(
+                message: widget.copy('usage.tokens.hint'),
+                child: Text(
+                  value.observed
+                      ? '${value.complete ? '' : '≥ '}${usageIntegerLabel(value.tokens)}'
+                      : '—',
+                ),
               ),
             ),
           ),
         DataCell(
-          Tooltip(
-            message:
-                '${_costCoverage(group.cost, widget.copy)}\n${usageCostLabel(group.cost)}',
-            child: Text(
-              _tableCostLabel(group.cost),
-              style: TextStyle(
-                fontWeight: FontWeight.w600,
-                color: context.viberColors.route,
+          _headed(
+            headers[6],
+            Tooltip(
+              message:
+                  '${_costCoverage(group.cost, widget.copy)}\n${usageCostLabel(group.cost)}',
+              child: Text(
+                _tableCostLabel(group.cost),
+                style: TextStyle(
+                  fontWeight: FontWeight.w600,
+                  color: context.viberColors.route,
+                ),
               ),
             ),
           ),
@@ -860,12 +1007,122 @@ final class _UsageGroupTableState extends State<UsageGroupTable> {
     );
   }
 
+  // The body table repeats no visible heading, so each value carries its
+  // column name for screen readers.
+  static Widget _headed(String header, Widget child) => MergeSemantics(
+    child: Semantics(label: header, child: child),
+  );
+
+  Widget _table(RuntimeUsageReport page) => LayoutBuilder(
+    builder: (context, constraints) {
+      final labels = [
+        _committed.dimensions[_trail.length] == 'branch'
+            ? 'usage.branch.launch'
+            : 'usage.group.${_labels[_committed.dimensions[_trail.length]]}',
+        'usage.metric.api_calls',
+        'usage.failed',
+        'usage.table.input',
+        'usage.cache_read',
+        'usage.table.output',
+        'usage.table.cost',
+      ];
+      final headers = [for (final label in labels) widget.copy(label)];
+      final rowCount = page.groups.length + (_subtotal == null ? 0 : 1);
+      List<DataColumn> columns({required bool heading}) => [
+        for (var i = 0; i < labels.length; i++)
+          DataColumn(
+            numeric: i > 0,
+            columnWidth: i == 0
+                ? const FixedColumnWidth(324)
+                : const FlexColumnWidth(),
+            label: heading
+                ? Flexible(
+                    child: Text(
+                      headers[i],
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  )
+                : const SizedBox.shrink(),
+          ),
+      ];
+      return SizedBox(
+        key: const Key('usage-breakdown-viewport'),
+        // Short reports shrink to their rows; long ones scroll inside 480.
+        height: math.min(480, 44 + rowCount * 60 + 24),
+        child: Scrollbar(
+          controller: _horizontalScroll,
+          thumbVisibility: true,
+          notificationPredicate: (notification) => notification.depth == 0,
+          child: SingleChildScrollView(
+            key: const Key('usage-breakdown-scroll'),
+            controller: _horizontalScroll,
+            scrollDirection: Axis.horizontal,
+            child: SizedBox(
+              width: math.max(1200, constraints.maxWidth),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  DataTable(
+                    headingRowHeight: 44,
+                    headingRowColor: WidgetStatePropertyAll(
+                      context.viberColors.panelRaised,
+                    ),
+                    horizontalMargin: 12,
+                    columnSpacing: 24,
+                    columns: columns(heading: true),
+                    rows: const [],
+                  ),
+                  Expanded(
+                    child: Scrollbar(
+                      controller: _rowsScroll,
+                      thumbVisibility: true,
+                      child: SingleChildScrollView(
+                        controller: _rowsScroll,
+                        child: DataTable(
+                          key: const Key('usage-breakdown-table'),
+                          headingRowHeight: 0,
+                          dataRowMinHeight: 44,
+                          dataRowMaxHeight: 60,
+                          horizontalMargin: 12,
+                          columnSpacing: 24,
+                          dataTextStyle: Theme.of(context).textTheme.bodyMedium
+                              ?.copyWith(
+                                fontFeatures: const [
+                                  FontFeature.tabularFigures(),
+                                ],
+                              ),
+                          columns: columns(heading: false),
+                          rows: [
+                            for (final group in page.groups)
+                              _row(group, headers),
+                            if (_subtotal case final total?)
+                              _row(total, headers, total: true),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+    },
+  );
+
   @override
   Widget build(BuildContext context) {
     final copy = widget.copy;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
+        Text(
+          copy('usage.breakdown.title'),
+          style: Theme.of(context).textTheme.titleMedium,
+        ),
+        const SizedBox(height: 8),
         Wrap(
           spacing: 8,
           runSpacing: 8,
@@ -883,10 +1140,7 @@ final class _UsageGroupTableState extends State<UsageGroupTable> {
                   key: Key('usage-group-${_labels[dimension]}'),
                   label: Text(copy('usage.group.${_labels[dimension]}')),
                   selected: dimension == _groupBy,
-                  onSelected: (_) {
-                    _groupBy = dimension;
-                    _navigate(0);
-                  },
+                  onSelected: (_) => _navigate(0, groupBy: dimension),
                 ),
           ],
         ),
@@ -920,10 +1174,7 @@ final class _UsageGroupTableState extends State<UsageGroupTable> {
               FilterChip(
                 label: Text(copy('usage.branch.launch')),
                 selected: _byBranch,
-                onSelected: (value) {
-                  _byBranch = value;
-                  _navigate(0);
-                },
+                onSelected: (value) => _navigate(0, byBranch: value),
               ),
           ],
         ),
@@ -933,25 +1184,58 @@ final class _UsageGroupTableState extends State<UsageGroupTable> {
             context,
           ).textTheme.bodySmall?.copyWith(color: context.viberColors.textMuted),
         ),
+        SizedBox(
+          height: 36,
+          child: Row(
+            children: [
+              Expanded(
+                child: Text(
+                  _snapshotExpired
+                      ? copy('usage.page.changed')
+                      : _updatesPending
+                      ? copy('usage.page.updated')
+                      : copy.format('usage.page.as_of', {
+                          'time': _timestamp(
+                            (_page ?? widget.report).generatedAt,
+                            seconds: true,
+                          ),
+                        }),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: context.viberColors.textMuted,
+                  ),
+                ),
+              ),
+              TextButton.icon(
+                key: const Key('usage-breakdown-update'),
+                onPressed: _loading ? null : _refresh,
+                icon: const Icon(Icons.refresh, size: 15),
+                label: Text(copy('usage.page.update')),
+              ),
+            ],
+          ),
+        ),
+        if (_error case final error?)
+          InlineNotice(
+            key: const Key('usage-breakdown-error'),
+            message: copy(error),
+            error: true,
+            actionLabel: copy('common.retry'),
+            onAction: () {
+              final target = _failedTarget;
+              if (target != null) unawaited(_load(target));
+            },
+          ),
         const SizedBox(height: 8),
-        if (_loading)
+        SizedBox(
+          height: 2,
+          child: _loading ? const LinearProgressIndicator() : null,
+        ),
+        if (_loading && _page == null)
           Padding(
             padding: const EdgeInsets.all(24),
             child: CompactLoadingMessage(label: copy('usage.loading')),
-          )
-        else if (_error != null)
-          Row(
-            children: [
-              Expanded(
-                child: InlineNotice(message: copy(_error!), error: true),
-              ),
-              TextButton(
-                onPressed: _error == 'usage.page.changed'
-                    ? widget.onRefresh
-                    : () => setState(() => unawaited(_load())),
-                child: Text(copy('common.retry')),
-              ),
-            ],
           )
         else if (_page case final page?) ...[
           if (page.groups.isEmpty)
@@ -960,59 +1244,7 @@ final class _UsageGroupTableState extends State<UsageGroupTable> {
               child: Text(copy('usage.empty.window')),
             )
           else
-            LayoutBuilder(
-              builder: (context, constraints) => Scrollbar(
-                controller: _horizontalScroll,
-                thumbVisibility: true,
-                child: SingleChildScrollView(
-                  key: const Key('usage-breakdown-scroll'),
-                  controller: _horizontalScroll,
-                  scrollDirection: Axis.horizontal,
-                  child: ConstrainedBox(
-                    constraints: BoxConstraints(
-                      minWidth: math.max(1040, constraints.maxWidth),
-                    ),
-                    child: DataTable(
-                      key: const Key('usage-breakdown-table'),
-                      headingRowHeight: 38,
-                      dataRowMinHeight: 44,
-                      dataRowMaxHeight: 60,
-                      horizontalMargin: 12,
-                      columnSpacing: 24,
-                      dataTextStyle: Theme.of(context).textTheme.bodyMedium
-                          ?.copyWith(
-                            fontFeatures: const [FontFeature.tabularFigures()],
-                          ),
-                      columns: [
-                        DataColumn(
-                          label: Text(
-                            copy(
-                              _dimensions[_trail.length] == 'branch'
-                                  ? 'usage.branch.launch'
-                                  : 'usage.group.${_labels[_dimensions[_trail.length]]}',
-                            ),
-                          ),
-                        ),
-                        for (final key in [
-                          'usage.metric.api_calls',
-                          'usage.failed',
-                          'usage.table.input',
-                          'usage.cache_read',
-                          'usage.table.output',
-                          'usage.table.cost',
-                        ])
-                          DataColumn(numeric: true, label: Text(copy(key))),
-                      ],
-                      rows: [
-                        for (final group in page.groups) _row(group),
-                        if (_subtotal case final total?)
-                          _row(total, total: true),
-                      ],
-                    ),
-                  ),
-                ),
-              ),
-            ),
+            _table(page),
           if (_cursors.length > 1 || page.nextCursor.isNotEmpty)
             Row(
               mainAxisAlignment: MainAxisAlignment.end,
@@ -1020,12 +1252,10 @@ final class _UsageGroupTableState extends State<UsageGroupTable> {
                 IconButton(
                   tooltip: copy('usage.page.previous'),
                   icon: const Icon(Icons.chevron_left),
-                  onPressed: _cursors.length == 1
+                  onPressed: _pagingBlocked || _cursors.length == 1
                       ? null
-                      : () => setState(() {
-                          _cursors.removeLast();
-                          unawaited(_load(knownSubtotal: _subtotal));
-                        }),
+                      : () =>
+                            _turnPage(_cursors.sublist(0, _cursors.length - 1)),
                 ),
                 Text(
                   copy.format('usage.page.number', {
@@ -1035,12 +1265,9 @@ final class _UsageGroupTableState extends State<UsageGroupTable> {
                 IconButton(
                   tooltip: copy('usage.page.next'),
                   icon: const Icon(Icons.chevron_right),
-                  onPressed: page.nextCursor.isEmpty
+                  onPressed: _pagingBlocked || page.nextCursor.isEmpty
                       ? null
-                      : () => setState(() {
-                          _cursors.add(page.nextCursor);
-                          unawaited(_load(knownSubtotal: _subtotal));
-                        }),
+                      : () => _turnPage([..._cursors, page.nextCursor]),
                 ),
               ],
             ),
@@ -2012,4 +2239,37 @@ String _timestamp(DateTime value, {bool seconds = false}) {
   String two(int number) => number.toString().padLeft(2, '0');
   return '${local.year}-${two(local.month)}-${two(local.day)} '
       '${two(local.hour)}:${two(local.minute)}${seconds ? ':${two(local.second)}' : ''}';
+}
+
+/// One requested breakdown view: grouping, drill-down path and page cursors.
+final class _UsageTarget {
+  const _UsageTarget({
+    required this.groupBy,
+    required this.byBranch,
+    required this.trail,
+    required this.cursors,
+  });
+
+  final String groupBy;
+  final bool byBranch;
+  final List<RuntimeUsageGroup> trail;
+  final List<String> cursors;
+
+  List<String> get dimensions => switch (groupBy) {
+    'project' => ['project', if (byBranch) 'branch', 'caller', 'model'],
+    'model' => ['model', 'caller'],
+    _ => [groupBy, 'model'],
+  };
+
+  Map<String, String> filters(Map<String, String> base) => {
+    ...base,
+    for (var i = 0; i < trail.length; i++) dimensions[i]: trail[i].id,
+  };
+
+  _UsageTarget firstPage() => _UsageTarget(
+    groupBy: groupBy,
+    byBranch: byBranch,
+    trail: trail,
+    cursors: const [''],
+  );
 }

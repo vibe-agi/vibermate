@@ -11,12 +11,12 @@ import (
 
 var (
 	capabilityVersionRE = regexp.MustCompile(
-		`Source package version: \*\*(\d+\.\d+\.\d+)\*\*\. Latest published release: \*\*v(\d+\.\d+\.\d+)\*\*\.`,
+		`Source package version: \*\*(\d+\.\d+\.\d+)\*\*\. Latest published release: \*\*(v\d+\.\d+\.\d+|none)\*\*\.`,
 	)
 	pubspecVersionRE = regexp.MustCompile(`(?m)^version: (\d+\.\d+\.\d+)\+\d+$`)
 	dockerVersionRE  = regexp.MustCompile(`org\.opencontainers\.image\.version="(\d+\.\d+\.\d+)"`)
 	capabilityRowRE  = regexp.MustCompile(
-		`(?m)^\| ` + "`" + `([a-z0-9.-]+)` + "`" + ` \| (Released|Experimental|Branch-only|Unsupported) \|`,
+		`(?m)^\| ` + "`" + `([a-z0-9.-]+)` + "`" + ` \| (Released|Available|Experimental|Branch-only|Unsupported) \|`,
 	)
 )
 
@@ -74,12 +74,15 @@ func CheckCapabilityDocs(repositoryRoot string) []Violation {
 		}
 	}
 
-	releasePath := filepath.Join("docs", "releases", "v"+versions[2]+".md")
-	if _, statErr := os.Stat(filepath.Join(repositoryRoot, releasePath)); statErr != nil {
-		violations = append(violations, Violation{
-			Rule: rule, Path: filepath.ToSlash(releasePath),
-			Message: "the matrix's latest published release note does not exist",
-		})
+	published := versions[2] != "none"
+	if published {
+		releasePath := filepath.Join("docs", "releases", versions[2]+".md")
+		if _, statErr := os.Stat(filepath.Join(repositoryRoot, releasePath)); statErr != nil {
+			violations = append(violations, Violation{
+				Rule: rule, Path: filepath.ToSlash(releasePath),
+				Message: "the matrix's latest published release note does not exist",
+			})
+		}
 	}
 	for _, readme := range []string{"README.md", "README.zh-CN.md"} {
 		contents, readErr := os.ReadFile(filepath.Join(repositoryRoot, readme))
@@ -94,6 +97,12 @@ func CheckCapabilityDocs(repositoryRoot string) []Violation {
 	rows := map[string]int{}
 	for _, match := range capabilityRowRE.FindAllStringSubmatch(text, -1) {
 		rows[match[1]]++
+		if match[2] == "Released" && !published {
+			violations = append(violations, Violation{
+				Rule: rule, Path: "docs/capability-support.md",
+				Message: fmt.Sprintf("capability %q is marked Released but no release is published", match[1]),
+			})
+		}
 	}
 	for _, capability := range []string{
 		"macos-app",

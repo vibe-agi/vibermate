@@ -80,8 +80,8 @@ final class LaunchEnvironmentSnapshot {
           }
           return LaunchEnvironmentSnapshot(
             id: requireString(value, 'id', path),
-        deviceName: requireStringValue(value, 'deviceName', path),
-        userLabel: requireStringValue(value, 'userLabel', path),
+            deviceName: requireStringValue(value, 'deviceName', path),
+            userLabel: requireStringValue(value, 'userLabel', path),
             executable: requireString(value, 'executable', path),
             remote: value['remote']! as bool,
             collectedAt: timestamp,

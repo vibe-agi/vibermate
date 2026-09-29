@@ -62,3 +62,46 @@ func TestCapabilityDocsRejectVersionAndStatusDrift(t *testing.T) {
 		t.Fatalf("status drift was not rejected: %v", violations)
 	}
 }
+
+// With no published release there is no release note to link, and nothing
+// may be described as released.
+func TestCapabilityDocsWithoutAPublishedRelease(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	matrix := "Source package version: **1.2.3**. Latest published release: **none**.\n" +
+		"| Capability ID | Status | Boundary |\n" +
+		"| --- | --- | --- |\n" +
+		"| `macos-app` | Available | x |\n" +
+		"| `linux-server-web` | Available | x |\n" +
+		"| `remote-web-tls` | Available | x |\n" +
+		"| `codex-oauth` | Experimental | x |\n" +
+		"| `native-cli-identity-rewrite` | Unsupported | x |\n" +
+		"| `editor-acp` | Experimental | x |\n" +
+		"| `automatic-account-failover` | Unsupported | x |\n"
+	files := map[string]string{
+		"README.md":                   "[Support](docs/capability-support.md)\n",
+		"README.zh-CN.md":             "[Support](docs/capability-support.md)\n",
+		"Dockerfile":                  "LABEL org.opencontainers.image.version=\"1.2.3\"\n",
+		"ui/flutter_app/pubspec.yaml": "version: 1.2.3+4\n",
+		"docs/capability-support.md":  matrix,
+	}
+	for path, contents := range files {
+		fullPath := filepath.Join(root, filepath.FromSlash(path))
+		if err := os.MkdirAll(filepath.Dir(fullPath), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(fullPath, []byte(contents), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if violations := CheckCapabilityDocs(root); len(violations) != 0 {
+		t.Fatalf("unreleased matrix failed: %v", violations)
+	}
+	released := strings.Replace(matrix, "| `macos-app` | Available |", "| `macos-app` | Released |", 1)
+	if err := os.WriteFile(filepath.Join(root, "docs", "capability-support.md"), []byte(released), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if violations := CheckCapabilityDocs(root); len(violations) == 0 {
+		t.Fatal("a capability was described as released without any release")
+	}
+}

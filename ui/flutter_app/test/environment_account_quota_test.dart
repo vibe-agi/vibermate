@@ -14,6 +14,72 @@ import 'package:vibermate_app/preview/preview_control_api.dart';
 import 'package:vibermate_app/preview/preview_terminal_command.dart';
 
 void main() {
+  testWidgets(
+    'quota countdown advances without a read and catches up on resume',
+    (tester) async {
+      var now = DateTime.utc(2026, 9, 29, 10);
+      final facts = AccountFacts.fromJson({
+        'accountId': 'account.clock',
+        'credentialEpoch': 1,
+        'origin': 'https://chatgpt.com',
+        'adapterId': 'chatgpt-codex',
+        'adapterRevision': 1,
+        'observedAt': now.toIso8601String(),
+        'state': 'known',
+        'limits': [
+          {
+            'id': 'codex',
+            'primary': {
+              'windowSeconds': 18000,
+              'usedPercent': 70,
+              'resetAfterSeconds': 90,
+              'resetAt':
+                  DateTime.utc(2026, 9, 29, 10, 1, 30).millisecondsSinceEpoch ~/
+                  1000,
+            },
+          },
+        ],
+      });
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+      addTearDown(
+        () => tester.binding.handleAppLifecycleStateChanged(
+          AppLifecycleState.resumed,
+        ),
+      );
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: ViberTheme.dark(),
+          home: Scaffold(
+            body: ProviderAccountQuotaMini(
+              facts: facts,
+              loading: false,
+              failed: false,
+              copy: AppCopy.forLanguage(AppLanguage.simplifiedChinese),
+              clock: () => now,
+            ),
+          ),
+        ),
+      );
+      expect(find.text('1m'), findsOneWidget);
+      // A visible but unfocused desktop window is inactive, not hidden.
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+      now = now.add(const Duration(minutes: 1));
+      await tester.pump(const Duration(minutes: 1));
+      expect(find.text('<1m'), findsOneWidget);
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
+      now = now.add(const Duration(hours: 12));
+      await tester.pump(const Duration(minutes: 1));
+      expect(find.text('<1m'), findsOneWidget);
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+      await tester.pump();
+      expect(find.text('待刷新'), findsOneWidget);
+      expect(find.text('5h · 70%'), findsOneWidget);
+      await tester.pumpWidget(const SizedBox.shrink());
+      await tester.pump(const Duration(minutes: 2));
+      expect(tester.takeException(), isNull);
+    },
+  );
+
   test(
     'quota thresholds and countdown preserve boundary and expired meaning',
     () {
@@ -101,11 +167,12 @@ void main() {
               selector: null,
               fixedAccountId: 'a-far',
               accounts: [
-                RouteAccountReference(
-                  id: 'a-far',
-                  revision: 1,
-                  displayName: accounts.first.displayName,
-                ),
+                for (final account in accounts)
+                  RouteAccountReference(
+                    id: account.id,
+                    revision: 1,
+                    displayName: account.displayName,
+                  ),
               ],
             ),
             modelPolicy: const EnvironmentModelPolicy(

@@ -39,10 +39,10 @@ func TestAccessKeyMintsSeparateShortLivedAdminCapabilities(t *testing.T) {
 		t.Fatal(err)
 	}
 	if session.ReadToken.Value() == session.WriteToken.Value() ||
-		!authority.Authorize(context.Background(), session.ReadToken.Value(), ScopeRead) ||
-		!authority.Authorize(context.Background(), session.WriteToken.Value(), ScopeWrite) ||
-		authority.Authorize(context.Background(), session.ReadToken.Value(), ScopeWrite) ||
-		authority.Authorize(context.Background(), session.WriteToken.Value(), ScopeRead) {
+		authority.Authorize(context.Background(), session.ReadToken.Value(), ScopeRead) != nil ||
+		authority.Authorize(context.Background(), session.WriteToken.Value(), ScopeWrite) != nil ||
+		authority.Authorize(context.Background(), session.ReadToken.Value(), ScopeWrite) == nil ||
+		authority.Authorize(context.Background(), session.WriteToken.Value(), ScopeRead) == nil {
 		t.Fatal("admin capabilities did not preserve exact scopes")
 	}
 	if strings.Contains(session.ReadToken.String(), session.ReadToken.Value()) ||
@@ -50,8 +50,8 @@ func TestAccessKeyMintsSeparateShortLivedAdminCapabilities(t *testing.T) {
 		t.Fatal("admin credential formatting exposed a capability")
 	}
 	clock.now = session.ExpiresAt
-	if authority.Authorize(context.Background(), session.ReadToken.Value(), ScopeRead) ||
-		authority.Authorize(context.Background(), session.WriteToken.Value(), ScopeWrite) {
+	if authority.Authorize(context.Background(), session.ReadToken.Value(), ScopeRead) == nil ||
+		authority.Authorize(context.Background(), session.WriteToken.Value(), ScopeWrite) == nil {
 		t.Fatal("expired admin session remained authorized")
 	}
 }
@@ -153,16 +153,16 @@ func TestClaimedOwnerAndMemberReceiveDistinctWebAuthority(t *testing.T) {
 		memberSession.Principal.Role != RoleMember {
 		t.Fatalf("roles = %q, %q", ownerSession.Principal.Role, memberSession.Principal.Role)
 	}
-	if !authority.Authorize(context.Background(), ownerSession.ReadToken.Value(), ScopeRead) ||
-		authority.Authorize(context.Background(), memberSession.ReadToken.Value(), ScopeRead) {
+	if authority.Authorize(context.Background(), ownerSession.ReadToken.Value(), ScopeRead) != nil ||
+		authority.Authorize(context.Background(), memberSession.ReadToken.Value(), ScopeRead) == nil {
 		t.Fatal("owner-only management authority was not preserved")
 	}
-	principal, valid := authority.Authenticate(context.Background(), memberSession.ReadToken.Value(), ScopeRead)
-	if !valid || principal.UserID != member.ID || principal.Username != "bob" {
-		t.Fatalf("member principal = %#v, %v", principal, valid)
+	principal, err := authority.Authenticate(context.Background(), memberSession.ReadToken.Value(), ScopeRead)
+	if err != nil || principal.UserID != member.ID || principal.Username != "bob" {
+		t.Fatalf("member principal = %#v, %v", principal, err)
 	}
 	authority.RevokeUserSessions(member.ID)
-	if _, valid := authority.Authenticate(context.Background(), memberSession.ReadToken.Value(), ScopeRead); valid {
+	if _, err := authority.Authenticate(context.Background(), memberSession.ReadToken.Value(), ScopeRead); err == nil {
 		t.Fatal("revoked member Web Session remained valid")
 	}
 }

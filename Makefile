@@ -44,6 +44,7 @@ check-desktop: check-flutter
 check-flutter:
 	ui/flutter_app/tool/verify_flutter_sdk.sh
 	cd ui/flutter_app && flutter pub get
+	cd ui/flutter_app && dart format --output=none --set-exit-if-changed lib test
 	cd ui/flutter_app && flutter analyze
 	cd ui/flutter_app && flutter test
 

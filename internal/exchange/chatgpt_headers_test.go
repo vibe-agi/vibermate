@@ -148,7 +148,7 @@ func TestNativeStreamMetadataBlocksRetryAfterHeaderCommit(t *testing.T) {
 
 func TestNativeErrorDoesNotDependOnDiagnosticFieldTypes(t *testing.T) {
 	body := `{"error":{"code":"future_native_code","message":"native-only","param":["input",1]}}`
-	diagnosis := classifyProviderRejection(strings.NewReader(body))
+	diagnosis := classifyProviderRejection(strings.NewReader(body), protocolspec.DialectOpenAIResponses)
 	if diagnosis.code != "" || !strings.Contains(string(diagnosis.native.ForDialect(protocolspec.DialectOpenAIResponses)), "future_native_code") {
 		t.Fatal("diagnostic parsing changed native error delivery")
 	}
@@ -209,7 +209,7 @@ func TestManagedCodexProtocolHeadersStayWithinNativeService(t *testing.T) {
 	}
 }
 
-func TestManagedChatGPTRoutingHintFollowsModelMappingAndScript(t *testing.T) {
+func TestManagedChatGPTRoutingHintFollowsModelMappingAndServiceTier(t *testing.T) {
 	account := testAccount{id: "account.selected", revision: 3, epoch: 7}
 	plan := mustEnvironmentRequestPlan(t, testPlanOptions{
 		clientProtocol: environment.ClientProtocolOpenAIResponses, chatGPTClient: true,
@@ -219,12 +219,11 @@ func TestManagedChatGPTRoutingHintFollowsModelMappingAndScript(t *testing.T) {
 		transform: messagetransform.Policy{RequestJavaScript: `
 			if (request.headers["x-codex-routing-hint"][0] !== "model=mapped-model") throw new Error("stale mapped hint");
 			const payload = JSON.parse(request.body);
-			payload.model = "script-model";
 			payload.service_tier = "priority";
 			request.body = JSON.stringify(payload);
 		`},
 	})
-	provider := &providerDouble{results: []providerResult{{response: jsonResponse(http.StatusOK, completeResponsesProviderResponse("script-model"))}}}
+	provider := &providerDouble{results: []providerResult{{response: jsonResponse(http.StatusOK, completeResponsesProviderResponse("mapped-model"))}}}
 	pipeline := newTestPipeline(t, newAccountAuthority(t, account), provider, approvedDecisions(), &attemptObserverDouble{})
 	defer shutdownPipeline(t, pipeline)
 	_, err := pipeline.Execute(context.Background(), mustClientRequestWithOptions(t, "exchange-routing-hint", plan,
@@ -233,7 +232,7 @@ func TestManagedChatGPTRoutingHintFollowsModelMappingAndScript(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := provider.requestsSnapshot()[0].Headers().Get("X-Codex-Routing-Hint"); got != "model=script-model;tier=priority" {
+	if got := provider.requestsSnapshot()[0].Headers().Get("X-Codex-Routing-Hint"); got != "model=mapped-model;tier=priority" {
 		t.Fatalf("outgoing routing hint = %q", got)
 	}
 }

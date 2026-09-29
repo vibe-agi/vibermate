@@ -7,6 +7,7 @@ import (
 	"net"
 	"time"
 
+	"github.com/vibe-agi/vibermate/internal/egressnetwork"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
 )
 
@@ -18,16 +19,26 @@ const DefaultDialTimeout = 15 * time.Second
 // path that ignores a planned offline hold.
 type Dialer struct {
 	coordinator offlinehold.Coordinator
-	dialer      *net.Dialer
+	dialer      egressnetwork.ContextDialer
 }
 
 func NewDialer(coordinator offlinehold.Coordinator) (*Dialer, error) {
 	if coordinator == nil {
 		return nil, errors.New("blind tunnel requires an egress coordinator")
 	}
+	builder, err := egressnetwork.NewBuilder(egressnetwork.BuilderOptions{
+		BaseDialer: &net.Dialer{Timeout: DefaultDialTimeout},
+	})
+	if err != nil {
+		return nil, err
+	}
+	targetDialer, err := builder.Dialer(egressnetwork.DefaultPolicy())
+	if err != nil {
+		return nil, err
+	}
 	return &Dialer{
 		coordinator: coordinator,
-		dialer:      &net.Dialer{Timeout: DefaultDialTimeout},
+		dialer:      targetDialer,
 	}, nil
 }
 

@@ -41,6 +41,90 @@ void main() {
     });
   }
 
+  testWidgets('remote account settings appear before the next local edit', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1180, 900));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final api = PreviewControlApi(seedCaptures: false);
+    final login = await api.startCodexLogin(
+      accountId: 'account.remote-settings',
+      upstreamEndpointId: 'target.codex.official',
+      displayName: 'Remote settings fixture',
+      callbackMode: 'manual',
+    );
+    await api.completeCodexLogin(
+      login.id,
+      'http://localhost:1455/auth/callback?state=${login.id}&code=synthetic',
+    );
+    final controller = WorkbenchController(
+      api: api,
+      terminalCommands: PreviewTerminalCommandService(),
+      previewMode: true,
+      closeRuntime: api.close,
+      initialPreferences: const WorkbenchPreferences(
+        language: AppLanguage.simplifiedChinese,
+        section: WorkbenchSection.providerAccounts,
+      ),
+    );
+    addTearDown(controller.dispose);
+    await controller.initialize();
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: ViberTheme.dark(),
+        home: WorkbenchShell(controller: controller),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const Key('provider-accounts-search')),
+      'Remote settings fixture',
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find.byKey(
+        const Key('provider-account-details-toggle-account.remote-settings'),
+      ),
+    );
+    await tester.pumpAndSettle();
+    final toggle = find.byKey(
+      const Key('account-automatic-refresh-account.remote-settings'),
+    );
+    expect(tester.widget<Switch>(toggle).value, isTrue);
+    final original = (await api.loadDashboard()).accounts.singleWhere(
+      (a) => a.id == 'account.remote-settings',
+    );
+    final remote = await api.setProviderAccountSettings(
+      original,
+      automaticRefresh: false,
+      egressProfile: EgressProfileRevision.direct,
+    );
+    expect(remote.revision, original.revision);
+    await tester.pump(const Duration(seconds: 5));
+    await tester.pumpAndSettle();
+    expect(tester.widget<Switch>(toggle).value, isFalse);
+    final exit = find.byKey(
+      const Key('account-egress-account.remote-settings'),
+    );
+    expect(
+      find.descendant(of: exit, matching: find.text('直连 · 系统 DNS')),
+      findsOneWidget,
+    );
+    await tester.ensureVisible(toggle);
+    await tester.tap(toggle);
+    await tester.pumpAndSettle();
+    expect(controller.inventoryError, isNull);
+    final saved = (await api.loadDashboard()).accounts.singleWhere(
+      (a) => a.id == original.id,
+    );
+    expect(saved.automaticRefresh, isTrue);
+    expect(saved.egressProfile, EgressProfileRevision.direct);
+    expect(saved.settingsRevision, remote.settingsRevision + 1);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
+    controller.dispose();
+  });
+
   for (final width in [390.0, 1180.0]) {
     testWidgets(
       'account settings select a shared exit and keep refresh explicit at $width',

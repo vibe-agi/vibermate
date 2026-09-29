@@ -87,7 +87,11 @@ type statusTracker struct {
 	mu                    sync.RWMutex
 	status                RuntimeStatus
 	storageFailureLatched bool
-	clock                 Clock
+	// coreAuditPending is true while an EgressAttempt terminal is not yet
+	// durable. It degrades the Runtime like a latched failure, but clears
+	// once the pending terminal is written.
+	coreAuditPending bool
+	clock            Clock
 }
 
 func newStatusTracker(instanceID string, host hostcontract.Kind, startedAt time.Time) *statusTracker {
@@ -144,7 +148,7 @@ func (t *statusTracker) observeStorage(schemaRevision int64, err error) {
 		}
 		return
 	}
-	if t.storageFailureLatched {
+	if t.storageFailureLatched || t.coreAuditPending {
 		t.status.Storage = StorageStateUnavailable
 		t.status.SchemaRevision = schemaRevision
 		if t.status.State == RuntimeStateInitialized {
@@ -177,6 +181,41 @@ func (t *statusTracker) failStorage(operation string, err error) {
 		t.status.State = RuntimeStateStopFailed
 		t.status.StoppedAt = nil
 		t.status.StopReasonCode = StopReasonShutdownFailed
+	}
+}
+
+// holdCoreAudit reports that an EgressAttempt terminal is not yet durable.
+// New egress is refused meanwhile; the first cause stays visible until the
+// terminal is written.
+func (t *statusTracker) holdCoreAudit(operation string, err error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if !t.coreAuditPending && t.status.StorageFailure == nil {
+		t.status.StorageFailure = persistenceFailure(operation, err, t.clock.Now())
+	}
+	t.coreAuditPending = true
+	t.status.Storage = StorageStateUnavailable
+	if t.status.State == RuntimeStateInitialized {
+		t.status.State = RuntimeStateDegraded
+	}
+}
+
+// releaseCoreAudit reports that every pending terminal is durable again. A
+// latched failure (which only a restart can clear) is left untouched.
+func (t *statusTracker) releaseCoreAudit() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if !t.coreAuditPending {
+		return
+	}
+	t.coreAuditPending = false
+	if t.storageFailureLatched {
+		return
+	}
+	t.status.StorageFailure = nil
+	t.status.Storage = StorageStateHealthy
+	if t.status.State == RuntimeStateDegraded {
+		t.status.State = RuntimeStateInitialized
 	}
 }
 

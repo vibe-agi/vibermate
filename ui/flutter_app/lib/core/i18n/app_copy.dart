@@ -667,6 +667,8 @@ final class AppCopy {
         'ViberMate cannot access the macOS Keychain. Unlock the login keychain in Keychain Access and retry. If you switched between development and installed builds, reopen the signed installed build; they may not share Keychain access. Do not delete Keychain items or local data.',
     'bootstrap.failure.storage_unavailable':
         'ViberMate cannot open its local data. No database was replaced. Check free space and folder permissions. If this started after changing versions, keep the data directory and use the previous compatible version.',
+    'bootstrap.failure.storage_incompatible':
+        'This data folder was created by a different ViberMate version, and this version cannot open it. Nothing was changed. To start with empty data, quit ViberMate, move the data folder (by default ~/Library/Application Support/io.vibermate.desktop) somewhere else to keep it, then reopen ViberMate. To keep using the old data, reopen the version that created it.',
     'bootstrap.failure.root_reset_failed':
         'Root replacement could not recover safely. Retry once. If it repeats, quit ViberMate; in Keychain Access → login → Certificates remove ViberMate Local Root entries, move ~/Library/Application Support/io.vibermate.desktop/local-ca and ~/Library/Application Support/io.vibermate.desktop/root-reset-request.json to Trash, then reopen ViberMate. Captured evidence is kept.',
     'server.login.title': 'Connect to this Runtime Server',
@@ -2352,8 +2354,9 @@ final class AppCopy {
     'server.users.policy.all': 'Allow every published traffic policy',
     'server.users.policy.all_short': 'All policies',
     'server.users.policy.count': '{count} selected',
-    'server.users.policy.select_one':
-        'Select at least one policy, or disable this user to deny all access.',
+    'server.users.policy.none_short': 'No policies granted',
+    'server.users.policy.none_detail':
+        'This user cannot start a Capture until you grant at least one traffic policy.',
     'server.users.policy.alerts': 'Observed usage alerts',
     'server.users.policy.alerts_detail':
         'Optional daily thresholds over retained ViberMate evidence. 0 disables a warning; these are not provider quota, billing, or a hard budget.',
@@ -2447,6 +2450,21 @@ final class AppCopy {
     'usage.page.changed':
         'Usage changed. Refresh the report to continue with consistent totals.',
     'usage.page.failed': 'Could not load this breakdown.',
+    'usage.page.updated': 'New usage available',
+    'usage.breakdown.title': 'Usage breakdown',
+    'usage.page.as_of': 'As of {time} · Most calls first',
+    'usage.page.update': 'Update · first page',
+    'environment.account.scope': 'Accounts in this policy',
+    'environment.account.scope_count': '{count} accounts selected',
+    'environment.account.replacement': 'Replace unavailable manual account',
+    'environment.account.replacement_hint':
+        'Choose from selected, available accounts',
+    'environment.account.scope_hint':
+        'Only these accounts can be activated or chosen by a rule. Adding an account to the service will not add it to this policy.',
+    'environment.account.scope_selection':
+        'Manual selection and rules use only the selected accounts.',
+    'environment.account.scope_active':
+        'Currently active · switch accounts before removing',
     'usage.page.previous': 'Previous page',
     'usage.page.next': 'Next page',
     'usage.page.number': 'Page {page}',
@@ -3232,6 +3250,8 @@ final class AppCopy {
         'ViberMate 无法访问 macOS 钥匙串。请在“钥匙串访问”中解锁“登录”钥匙串并重试。若曾切换开发版与安装版，请重新打开已签名的安装版；两者可能无法共用钥匙串权限。不要删除钥匙串项目或本地数据。',
     'bootstrap.failure.storage_unavailable':
         'ViberMate 无法打开本机数据，数据库未被替换。请检查磁盘空间与目录权限。如果发生在更换版本后，请保留数据目录，并使用之前兼容的版本。',
+    'bootstrap.failure.storage_incompatible':
+        '这个数据目录由另一个 ViberMate 版本创建，当前版本无法打开，也没有做任何修改。若要从空数据开始，请退出 ViberMate，把数据目录（默认 ~/Library/Application Support/io.vibermate.desktop）移到别处保留，然后重新打开 ViberMate。若要继续使用旧数据，请重新打开创建它的版本。',
     'bootstrap.failure.root_reset_failed':
         '根证书更换无法安全恢复。请先重试一次；若仍失败，请退出 ViberMate，在“钥匙串访问”→“登录”钥匙串→“证书”中移除 ViberMate Local Root，再将 ~/Library/Application Support/io.vibermate.desktop/local-ca 与 ~/Library/Application Support/io.vibermate.desktop/root-reset-request.json 移到废纸篓，然后重新打开 ViberMate。已捕获的证据会保留。',
     'server.login.title': '连接到这台 Runtime Server',
@@ -4655,7 +4675,8 @@ final class AppCopy {
     'server.users.policy.all': '允许使用全部已发布流量策略',
     'server.users.policy.all_short': '全部策略',
     'server.users.policy.count': '已选 {count} 个',
-    'server.users.policy.select_one': '请至少选择一个策略；若要完全禁止访问，请停用该用户。',
+    'server.users.policy.none_short': '未授权策略',
+    'server.users.policy.none_detail': '授权至少一个流量策略之前，该用户无法启动采集。',
     'server.users.policy.alerts': '已观察用量告警',
     'server.users.policy.alerts_detail':
         '按 ViberMate 留存证据设置每日软告警；0 表示关闭。它不是上游额度、账单或硬预算。',
@@ -4736,6 +4757,17 @@ final class AppCopy {
     'usage.path.projects': 'Git 项目 › 调用者 › 上游模型',
     'usage.page.changed': '用量已变化，请刷新报表后继续，确保各级统计一致。',
     'usage.page.failed': '无法加载此分组明细。',
+    'usage.page.updated': '有新的用量数据',
+    'usage.breakdown.title': '分组明细',
+    'usage.page.as_of': '数据截至 {time} · 按调用量降序',
+    'usage.page.update': '更新 · 回到本层首页',
+    'environment.account.scope': '本策略账号范围',
+    'environment.account.scope_count': '已选 {count} 个账号',
+    'environment.account.replacement': '替换当前不可用的账号',
+    'environment.account.replacement_hint': '从已勾选的可用账号中选择',
+    'environment.account.scope_hint': '仅这些账号可被启用或规则选中。服务中新建的账号不会自动加入本策略。',
+    'environment.account.scope_selection': '手动启用和规则选择都限定在已选账号内。',
+    'environment.account.scope_active': '当前启用 · 切换账号后可移除',
     'usage.page.previous': '上一页',
     'usage.page.next': '下一页',
     'usage.page.number': '第 {page} 页',

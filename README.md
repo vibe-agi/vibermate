@@ -49,10 +49,12 @@ short-lived implementation details and are not something people need to copy.
 
 ## macOS App: first capture
 
-Install and open ViberMate:
+There is no published release at the moment. Build the App from source on
+macOS 14+ with the pinned Flutter SDK (see `ui/flutter_app/tool/flutter-sdk.env`)
+and open `dist/ViberMate.app`:
 
 ```sh
-brew install --cask vibe-agi/tap/vibermate
+make build-flutter-app
 ```
 
 In **Settings → Access & launch → Terminal command**, choose **Set up command**. Then,
@@ -81,7 +83,7 @@ The editor and adapter still own login, permissions, tools, provider traffic,
 and native history. ACP observation does not apply HTTP account replacement,
 model mapping, scripts, or network policy. Follow the [ACP setup
 guide](docs/acp-quickstart.md); the [support matrix](docs/capability-support.md)
-states whether this source capability is present in the latest release.
+states its current status.
 
 ## Standalone Server + Web (with or without Docker)
 
@@ -91,9 +93,9 @@ Docker does not change which certificates or accounts you need. See the
 [deployment guide](docs/deployment.md), [backup and restore guide](docs/backup-and-restore.md),
 and [Docker configurations](docs/docker.md).
 
-Download the `linux_x86_64` or `linux_arm64` archive from the
-[latest release](https://github.com/vibe-agi/vibermate/releases/latest), verify
-it with `SHA256SUMS-linux`, and extract it. The archive contains `vibermated`,
+Build the `linux_x86_64` or `linux_arm64` archive on Linux with
+`make build-linux-distributions` (output in `dist/linux-release`, with
+`SHA256SUMS-linux`) and extract it. The archive contains `vibermated`,
 `vibermate`, and the adjacent `vibermate-web` UI.
 
 For personal use on this computer, no domain or certificate is needed:
@@ -157,8 +159,10 @@ Replace the example address with the exact HTTPS address opened in the browser.
 The CLI uses normal system PKI when available, so public certificate renewal
 does not change server identity. Private CA deployments export the public CA
 locally with `vibermated server ca-certificate`; verify its fingerprint out of
-band before installing it. A legacy exact-leaf pin can be deliberately migrated
-with `vibermate trust --server <URL> --system-roots`. See the
+band, then enroll it for this Server with `vibermate trust --server <URL>
+--ca-fingerprint <SHA256>` before login. This also explicitly converts an existing
+leaf pin without installing a system root. If the CA is installed in system trust,
+use `vibermate trust --server <URL> --system-roots`. See the
 [deployment guide](docs/deployment.md) for the complete commands and trust model.
 
 Each person can change their own password from the browser account menu. The

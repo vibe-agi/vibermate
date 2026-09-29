@@ -363,18 +363,24 @@ func (authority *Authority) issueLocked(
 	}, nil
 }
 
-func (authority *Authority) Authorize(ctx context.Context, value string, scope Scope) bool {
-	principal, valid := authority.Authenticate(ctx, value, scope)
-	return valid && principal.Role == RoleOwner
+func (authority *Authority) Authorize(ctx context.Context, value string, scope Scope) error {
+	principal, err := authority.Authenticate(ctx, value, scope)
+	if err != nil {
+		return err
+	}
+	if principal.Role != RoleOwner {
+		return ErrUnauthorized
+	}
+	return nil
 }
 
 func (authority *Authority) Authenticate(
 	ctx context.Context,
 	value string,
 	scope Scope,
-) (Principal, bool) {
+) (Principal, error) {
 	if authority == nil || ctx == nil || !scope.Valid() || !validCredential(value) {
-		return Principal{}, false
+		return Principal{}, ErrUnauthorized
 	}
 	digest := sessionDigest(scope, value)
 	authority.mu.Lock()
@@ -383,19 +389,24 @@ func (authority *Authority) Authenticate(
 	record, found := authority.sessions[digest]
 	if !found || record.scope != scope || !now.Before(record.expiresAt) {
 		delete(authority.sessions, digest)
-		return Principal{}, false
+		return Principal{}, ErrUnauthorized
 	}
 	if record.principal.UserID.Valid() {
 		if authority.lookupUser == nil {
-			return Principal{}, false
+			return Principal{}, ErrInvalidOptions
 		}
 		user, err := authority.lookupUser(ctx, record.principal.UserID)
+		// A failed lookup is not evidence of revocation. Deny this request, but
+		// preserve both capabilities so a transient storage failure can recover.
+		if err != nil && !errors.Is(err, runtimeuser.ErrInvalidUser) {
+			return Principal{}, fmt.Errorf("validate Web Session user: %w", err)
+		}
 		if err != nil || user.Validate() != nil || user.ID != record.principal.UserID || user.State != runtimeuser.StateActive || !user.UpdatedAt.Equal(record.userUpdatedAt) {
 			authority.revokeSessionLocked(record.sessionID)
-			return Principal{}, false
+			return Principal{}, ErrUnauthorized
 		}
 	}
-	return record.principal, true
+	return record.principal, nil
 }
 
 func (authority *Authority) RevokeUserSessions(id runtimeuser.UserID) {

@@ -30,6 +30,10 @@ func TestProviderFailureKeepsOnlyClosedStructuralCodes(t *testing.T) {
 func TestNativeErrorDeliveryIsSeparateFromDiagnosticVocabulary(t *testing.T) {
 	raw := []byte(`{"code":"future_native_code","message":"private provider context","details":{"retry_after":12}}`)
 	failure := NewNativeProviderFailure("$.error", protocolspec.DialectOpenAIResponses, raw)
+	body := []byte(`{"error":` + string(raw) + `,"request_id":"private-native-request-id"}`)
+	wantBody := string(body)
+	failure.NativeError = failure.NativeError.WithHTTPBody(body)
+	body[0] = 'x'
 	failure.NativeError = failure.NativeError.WithHeaders(http.Header{"X-Request-Id": {"private-request-id"}})
 	if ProviderErrorCodeOf(failure) != "" {
 		t.Fatal("unknown code entered diagnostics")
@@ -39,6 +43,22 @@ func TestNativeErrorDeliveryIsSeparateFromDiagnosticVocabulary(t *testing.T) {
 	}
 	if got := failure.NativeError.ForDialect(protocolspec.DialectAnthropicMessages); got != nil {
 		t.Fatal("native error crossed dialects")
+	}
+	if got := failure.NativeError.HTTPBodyForDialect(protocolspec.DialectOpenAIResponses); string(got) != wantBody {
+		t.Fatalf("native HTTP envelope changed: %s", got)
+	} else {
+		got[0] = 'x'
+	}
+	if got := failure.NativeError.HTTPBodyForDialect(protocolspec.DialectOpenAIResponses); string(got) != wantBody {
+		t.Fatal("native HTTP envelope did not own its bytes")
+	}
+	if got := failure.NativeError.HTTPBodyForDialect(protocolspec.DialectAnthropicMessages); got != nil {
+		t.Fatal("native HTTP envelope crossed dialects")
+	}
+	unrelated := NewNativeProviderError(protocolspec.DialectOpenAIResponses, raw).
+		WithHTTPBody([]byte(`{"error":{"message":"different error"}}`))
+	if len(unrelated.HTTPBodyForDialect(protocolspec.DialectOpenAIResponses)) != 0 {
+		t.Fatal("native HTTP envelope accepted a different error payload")
 	}
 	encoded, err := json.Marshal(failure)
 	if err != nil {

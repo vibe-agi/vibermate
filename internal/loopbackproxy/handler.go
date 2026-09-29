@@ -18,6 +18,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"strconv"
 	"strings"
@@ -36,6 +37,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/connectionevent"
 	"github.com/vibe-agi/vibermate/internal/connectionpolicy"
 	"github.com/vibe-agi/vibermate/internal/egressaudit"
+	"github.com/vibe-agi/vibermate/internal/egressnetwork"
 	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/exchange"
 	"github.com/vibe-agi/vibermate/internal/localca"
@@ -87,8 +89,6 @@ const (
 	ReasonCaptureEnvironmentUnavailable   ReasonCode = "capture_environment_unavailable"
 	ReasonRawEvidenceUnavailable          ReasonCode = "raw_evidence_unavailable"
 )
-
-const systemTransparentRuleID = "system_transparent"
 
 type CertificateAuthority interface {
 	Identity() localca.RootIdentity
@@ -458,7 +458,7 @@ func (handler *Handler) ServeHTTP(
 	if cleartextForward {
 		policyHost, policyPort := policyTarget(request, true)
 		outcome, denialReason := handler.decideConnection(
-			request.Context(), source.IngressID, policyHost, policyPort, false,
+			request.Context(), source.IngressID, policyHost, policyPort,
 		)
 		if outcome.Decision != connectionpolicy.DecisionAllow {
 			if handler.denyConnection(request.Context(), audit, source, denialReason) != nil {
@@ -488,6 +488,9 @@ func (handler *Handler) ServeHTTP(
 		}
 		defer connectionLease.Close()
 		binding := connectionLease.Binding()
+		if outcome.Explicit || (!connectionLease.Environment().SystemOwned() && binding.Mode != environment.ConnectionModeBlind) {
+			request = request.WithContext(egressnetwork.WithTargetAccess(request.Context(), egressnetwork.TargetAccessOwnerConfigured))
+		}
 		if binding.Mode == environment.ConnectionModeBlind {
 			terminal = handler.serveCleartextForward(
 				writer,
@@ -575,10 +578,9 @@ func (handler *Handler) ServeHTTP(
 	defer connectionLease.Close()
 	snapshot := connectionLease.Environment()
 	binding := connectionLease.Binding()
-	bypassPolicy := snapshot.SystemOwned() && snapshot.ID() == environment.SystemTransparentID
 	policyHost, policyPort := policyTarget(request, false)
 	outcome, denialReason := handler.decideConnection(
-		request.Context(), source.IngressID, policyHost, policyPort, bypassPolicy,
+		request.Context(), source.IngressID, policyHost, policyPort,
 	)
 	if outcome.Decision != connectionpolicy.DecisionAllow {
 		if handler.denyConnection(request.Context(), audit, source, denialReason) != nil {
@@ -588,6 +590,9 @@ func (handler *Handler) ServeHTTP(
 		terminal = true
 		writeReason(writer, http.StatusForbidden, ReasonConnectionDenied, outcome.RuleID)
 		return
+	}
+	if outcome.Explicit || (!snapshot.SystemOwned() && binding.Mode != environment.ConnectionModeBlind) {
+		request = request.WithContext(egressnetwork.WithTargetAccess(request.Context(), egressnetwork.TargetAccessOwnerConfigured))
 	}
 	if binding.Mode == environment.ConnectionModeBlind {
 		// The selected Environment does not intercept this exact origin. The
@@ -600,7 +605,9 @@ func (handler *Handler) ServeHTTP(
 			audit,
 			source,
 			outcome,
-			request.Host,
+			// Dial the canonical authority that policy and audit evaluated,
+			// never the client's spelling of it.
+			net.JoinHostPort(host, strconv.Itoa(int(port))),
 			host,
 			port,
 			snapshot,
@@ -777,6 +784,7 @@ func (handler *Handler) serveTLS(
 	}
 	listener := newSingleConnListener(secured)
 	inner := &http.Server{
+		BaseContext: func(net.Listener) context.Context { return parent },
 		Handler: http.HandlerFunc(func(
 			writer http.ResponseWriter,
 			request *http.Request,
@@ -1328,15 +1336,8 @@ func (handler *Handler) decideConnection(
 	ingressID string,
 	host string,
 	port uint16,
-	bypass bool,
 ) (connectionpolicy.Outcome, ReasonCode) {
-	outcome := connectionpolicy.Outcome{
-		Decision: connectionpolicy.DecisionAllow,
-		RuleID:   systemTransparentRuleID,
-	}
-	if !bypass {
-		outcome = handler.rules().Evaluate(connectionpolicy.Request{Host: host, Port: port})
-	}
+	outcome := handler.rules().Evaluate(connectionpolicy.Request{Host: host, Port: port})
 	reason := ReasonCode(outcome.RuleID)
 	if outcome.Decision != connectionpolicy.DecisionAsk {
 		return outcome, reason
@@ -1822,11 +1823,11 @@ func connectOrigin(authority string) (originidentity.ClientOrigin, string, error
 	return origin, origin.Host(), nil
 }
 
-// splitAuthority canonicalizes rather than refuses. RFC 3986 makes a host
-// case-insensitive and a trailing dot is the root form of the same name, so a
-// client that sends either is asking for the same endpoint. Canonicalization
-// cannot widen the match: case folding and root-dot removal map a name only
-// onto itself, and no suffix, wildcard, or different host becomes equal.
+// splitAuthority canonicalizes case and a root dot, and refuses everything
+// else. RFC 3986 makes a host case-insensitive and a trailing dot is the root
+// form of the same name, so either maps a name only onto itself. Any other
+// spelling, including non-ASCII text a resolver would IDNA-map to a different
+// name, is rejected so policy, audit and the dialer see one host.
 func splitAuthority(authority string) (string, uint16, error) {
 	host, portText, err := net.SplitHostPort(authority)
 	if err != nil || host == "" || portText == "" {
@@ -1843,15 +1844,36 @@ func splitAuthority(authority string) (string, uint16, error) {
 	return host, uint16(port), nil
 }
 
+// canonicalCONNECTHost returns the one host string used for connection
+// policy, audit and dialing, or "" when the authority is not already in that
+// form. HTTP authorities carry internationalized names in ASCII (punycode);
+// accepting anything a later IDNA mapping could turn into another name would
+// let a policy match one host while the dialer resolves a different one.
 func canonicalCONNECTHost(host string) string {
-	host = strings.ToLower(host)
 	// A single trailing dot is the DNS root label. More than one, or a dot
 	// alone, is not a name.
-	if strings.HasSuffix(host, ".") {
-		host = strings.TrimSuffix(host, ".")
+	host = strings.TrimSuffix(host, ".")
+	if address, err := netip.ParseAddr(host); err == nil {
+		if address.Zone() != "" {
+			return ""
+		}
+		return address.String()
 	}
-	if host == "" || strings.HasSuffix(host, ".") {
+	host = strings.ToLower(host)
+	if host == "" || len(host) > 253 {
 		return ""
+	}
+	for _, label := range strings.Split(host, ".") {
+		if label == "" || len(label) > 63 || label[0] == '-' || label[len(label)-1] == '-' {
+			return ""
+		}
+		for index := 0; index < len(label); index++ {
+			character := label[index]
+			if (character < 'a' || character > 'z') &&
+				(character < '0' || character > '9') && character != '-' {
+				return ""
+			}
+		}
 	}
 	return host
 }
@@ -2331,6 +2353,10 @@ func (handler *Handler) serveBlindTunnel(
 		egressOutcome, connectionTerminal.Outcome, egressErrorClass =
 			blindTunnelTerminal(err)
 		connectionTerminal.ErrorClass = egressErrorClass
+		if errors.Is(err, egressnetwork.ErrPrivateTarget) {
+			writeReason(writer, http.StatusForbidden, ReasonConnectionDenied, "private_destination_denied")
+			return true
+		}
 		writeReason(writer, http.StatusBadGateway, ReasonBlindTunnelFailed, "")
 		return true
 	}
@@ -2386,6 +2412,9 @@ func blindTunnelTerminal(
 	case errors.Is(err, context.DeadlineExceeded):
 		return egressaudit.OutcomeFailed,
 			connectionevent.OutcomeFailed, "deadline"
+	case errors.Is(err, egressnetwork.ErrPrivateTarget):
+		return egressaudit.OutcomeFailed,
+			connectionevent.OutcomeFailed, "private_destination_denied"
 	default:
 		return egressaudit.OutcomeFailed,
 			connectionevent.OutcomeFailed, blindTunnelFailureClass
@@ -2586,6 +2615,10 @@ func (handler *Handler) serveCleartextForward(
 	if err != nil {
 		egressOutcome, connectionTerminal.Outcome, egressErrorClass = blindTunnelTerminal(err)
 		connectionTerminal.ErrorClass = egressErrorClass
+		if errors.Is(err, egressnetwork.ErrPrivateTarget) {
+			writeReason(writer, http.StatusForbidden, ReasonConnectionDenied, "private_destination_denied")
+			return true
+		}
 		writeReason(writer, http.StatusBadGateway, ReasonBlindTunnelFailed, "")
 		return true
 	}

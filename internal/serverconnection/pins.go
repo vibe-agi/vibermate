@@ -34,6 +34,7 @@ type TrustMode string
 
 const (
 	TrustModePinnedLeaf  TrustMode = "pinned_leaf"
+	TrustModePinnedCA    TrustMode = "pinned_ca"
 	TrustModeSystemRoots TrustMode = "system_roots"
 )
 
@@ -60,8 +61,9 @@ type trustDocument struct {
 
 // PinStore is the CLI's persistent Runtime Server trust boundary. Existing
 // first-use leaf pins remain exact. New certificates that validate through the
-// platform roots are enrolled as system-root trust so normal leaf renewal does
-// not mutate trust. The historical name and file path are retained on purpose
+// platform roots use system-root trust; private chains pin their CA to this
+// Server address so leaf renewal does not mutate trust. The historical name and
+// file path are retained on purpose
 // so upgrades never lose or silently replace an existing pin.
 type PinStore struct {
 	path string
@@ -148,7 +150,7 @@ func decodeTrustDocument(payload []byte, destination any) error {
 
 func (record trustRecord) valid() bool {
 	switch record.Mode {
-	case TrustModePinnedLeaf:
+	case TrustModePinnedLeaf, TrustModePinnedCA:
 		decoded, err := hex.DecodeString(record.Fingerprint)
 		return err == nil && len(decoded) == sha256.Size &&
 			hex.EncodeToString(decoded) == record.Fingerprint
@@ -173,14 +175,15 @@ func (store *PinStore) Verify(
 		fingerprint,
 		errors.New("leaf pin explicitly requested"),
 		true,
+		"",
 	)
 }
 
 // VerifyPeer selects and persists the trust mode on first connection. A chain
 // that validates through roots is never converted into a leaf pin. An unknown
-// private issuer retains the legacy TOFU behavior, but the certificate must
-// still cover the selected Server host. Once a mode exists, verification never
-// falls back to another mode.
+// private issuer is pinned on first use, scoped to the selected Server host and
+// port. A standalone leaf remains an exact leaf pin. Once a mode exists,
+// verification never falls back to another mode.
 func (store *PinStore) VerifyPeer(
 	address Address,
 	rawCertificates [][]byte,
@@ -192,9 +195,13 @@ func (store *PinStore) VerifyPeer(
 		return PinResult{}, err
 	}
 	publicErr := verifySystemRoots(leaf, rawCertificates[1:], now, roots)
-	unknownIssuer := publicErr != nil &&
-		verifyPresentedChain(leaf, rawCertificates[1:], now) == nil
-	return store.verify(address, fingerprint, publicErr, unknownIssuer)
+	issuer, chainErr := verifyPresentedChain(leaf, rawCertificates[1:], now)
+	issuerFingerprint := ""
+	if chainErr == nil && issuer != nil {
+		digest := sha256.Sum256(issuer.Raw)
+		issuerFingerprint = hex.EncodeToString(digest[:])
+	}
+	return store.verify(address, fingerprint, publicErr, chainErr == nil, issuerFingerprint)
 }
 
 func parsePeerCertificate(
@@ -240,25 +247,36 @@ func verifySystemRoots(
 
 // verifyPresentedChain distinguishes an internally valid private chain from a
 // malformed or otherwise ineligible certificate. It does not establish trust:
-// its only caller may retain an existing TOFU boundary after this succeeds.
+// its caller must still match or explicitly enroll the returned CA fingerprint.
+//
+// The anchor is the topmost presented certificate. Private PKI often serves
+// leaf + intermediate and keeps its root offline, so the anchor may be an
+// intermediate; it must still be a CA and sign the rest of the chain. A root
+// that is presented must also carry a valid self-signature.
 func verifyPresentedChain(
 	leaf *x509.Certificate,
 	rawChain [][]byte,
 	now time.Time,
-) error {
+) (*x509.Certificate, error) {
 	presentedRoots := x509.NewCertPool()
 	intermediates := rawChain
+	var issuer *x509.Certificate
 	if len(rawChain) == 0 {
 		presentedRoots.AddCert(leaf)
 	} else {
-		root, err := x509.ParseCertificate(rawChain[len(rawChain)-1])
-		if err != nil {
-			return err
+		anchor, err := x509.ParseCertificate(rawChain[len(rawChain)-1])
+		if err != nil || !anchor.IsCA || !anchor.BasicConstraintsValid ||
+			anchor.KeyUsage&x509.KeyUsageCertSign == 0 {
+			return nil, ErrInvalidCertificate
 		}
-		presentedRoots.AddCert(root)
+		if bytes.Equal(anchor.RawIssuer, anchor.RawSubject) && anchor.CheckSignatureFrom(anchor) != nil {
+			return nil, ErrInvalidCertificate
+		}
+		issuer = anchor
+		presentedRoots.AddCert(anchor)
 		intermediates = rawChain[:len(rawChain)-1]
 	}
-	return verifySystemRoots(leaf, intermediates, now, presentedRoots)
+	return issuer, verifySystemRoots(leaf, intermediates, now, presentedRoots)
 }
 
 func (store *PinStore) verify(
@@ -266,6 +284,7 @@ func (store *PinStore) verify(
 	fingerprint string,
 	publicErr error,
 	unknownIssuer bool,
+	issuerFingerprint string,
 ) (PinResult, error) {
 	if store == nil || address.String() == "" || fingerprint == "" {
 		return PinResult{}, ErrInvalidCertificate
@@ -289,6 +308,10 @@ func (store *PinStore) verify(
 					if existing.Fingerprint != fingerprint {
 						return filetransaction.Mutation{}, ErrServerIdentityChanged
 					}
+				case TrustModePinnedCA:
+					if existing.Fingerprint != issuerFingerprint {
+						return filetransaction.Mutation{}, ErrServerIdentityChanged
+					}
 				case TrustModeSystemRoots:
 					if publicErr != nil {
 						return filetransaction.Mutation{}, errors.Join(
@@ -307,8 +330,12 @@ func (store *PinStore) verify(
 			} else if unknownIssuer {
 				result.Mode = TrustModePinnedLeaf
 				result.FirstUse = true
+				if issuerFingerprint != "" {
+					result.Mode = TrustModePinnedCA
+					fingerprint = issuerFingerprint
+				}
 				trust[address.String()] = trustRecord{
-					Mode: TrustModePinnedLeaf, Fingerprint: fingerprint,
+					Mode: result.Mode, Fingerprint: fingerprint,
 				}
 			} else {
 				return filetransaction.Mutation{}, errors.Join(
@@ -325,7 +352,45 @@ func (store *PinStore) verify(
 	return result, nil
 }
 
-// UseSystemRoots changes an existing exact leaf pin into normal PKI trust. It
+// UsePrivateCA explicitly enrolls a private CA for one Server address. The
+// expected fingerprint must come from an independent trusted channel. Callers
+// supply the chain from a completed TLS handshake, before any application data.
+func (store *PinStore) UsePrivateCA(address Address, rawCertificates [][]byte, now time.Time, expectedFingerprint string) (string, error) {
+	record := trustRecord{Mode: TrustModePinnedCA, Fingerprint: expectedFingerprint}
+	if store == nil || !record.valid() {
+		return "", ErrInvalidCertificate
+	}
+	leaf, fingerprint, err := parsePeerCertificate(address, rawCertificates, now)
+	if err != nil {
+		return "", err
+	}
+	issuer, err := verifyPresentedChain(leaf, rawCertificates[1:], now)
+	if err != nil || issuer == nil {
+		return "", ErrInvalidCertificate
+	}
+	digest := sha256.Sum256(issuer.Raw)
+	if hex.EncodeToString(digest[:]) != expectedFingerprint {
+		return "", ErrServerIdentityChanged
+	}
+	err = filetransaction.Update(store.transactionOptions(), func(snapshot filetransaction.Snapshot) (filetransaction.Mutation, error) {
+		trust := make(map[string]trustRecord)
+		if snapshot.Exists {
+			stored, err := decodeTrust(snapshot.Payload)
+			if err != nil {
+				return filetransaction.Mutation{}, err
+			}
+			trust = stored
+		}
+		if trust[address.String()] == record {
+			return filetransaction.Mutation{}, nil
+		}
+		trust[address.String()] = record
+		return encodeTrust(trust)
+	})
+	return fingerprint, err
+}
+
+// UseSystemRoots changes an existing exact leaf or CA pin into normal PKI trust. It
 // is intentionally separate from verification so callers can require a fresh,
 // successful system-root handshake before committing this migration.
 func (store *PinStore) UseSystemRoots(address Address) error {
@@ -349,7 +414,7 @@ func (store *PinStore) UseSystemRoots(address Address) error {
 			if existing.Mode == TrustModeSystemRoots {
 				return filetransaction.Mutation{}, nil
 			}
-			if existing.Mode != TrustModePinnedLeaf {
+			if existing.Mode != TrustModePinnedLeaf && existing.Mode != TrustModePinnedCA {
 				return filetransaction.Mutation{}, ErrServerIdentityChanged
 			}
 			trust[address.String()] = trustRecord{Mode: TrustModeSystemRoots}

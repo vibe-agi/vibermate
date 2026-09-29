@@ -14,6 +14,7 @@ import (
 
 const runtimeUserProjection = `u.user_id, u.username, u.password_hash, u.state,
        u.created_at_unix_ms, u.updated_at_unix_ms,
+       COALESCE(p.all_environments, 0),
        COALESCE(p.allowed_environment_ids_json, x'5b5d'),
        COALESCE(p.daily_agent_api_call_warning, 0),
        COALESCE(p.daily_token_warning, 0)
@@ -240,14 +241,15 @@ func (repository *runtimeUserRepository) SetUserPolicy(
 	result, err := transaction.ExecContext(
 		operation,
 		`INSERT INTO runtime_user_policies(
-		     user_id, allowed_environment_ids_json,
+		     user_id, all_environments, allowed_environment_ids_json,
 		     daily_agent_api_call_warning, daily_token_warning
-		 ) SELECT user_id, ?, ?, ? FROM runtime_users WHERE user_id = ?
+		 ) SELECT user_id, ?, ?, ?, ? FROM runtime_users WHERE user_id = ?
 		 ON CONFLICT(user_id) DO UPDATE SET
+		     all_environments = excluded.all_environments,
 		     allowed_environment_ids_json = excluded.allowed_environment_ids_json,
 		     daily_agent_api_call_warning = excluded.daily_agent_api_call_warning,
 		     daily_token_warning = excluded.daily_token_warning`,
-		encoded, policy.DailyAgentAPICallWarning, policy.DailyTokenWarning, string(id),
+		policy.AllEnvironments(), encoded, policy.DailyAgentAPICallWarning, policy.DailyTokenWarning, string(id),
 	)
 	if err != nil {
 		return runtimeuser.UserRecord{}, false, fmt.Errorf("store Runtime User policy: %w", err)
@@ -394,6 +396,7 @@ func (repository *runtimeUserRepository) FindSession(
 		username, passwordHash, state            string
 		userCreatedAt, userUpdatedAt             int64
 		policyJSON                               []byte
+		allEnvironments                          bool
 		dailyCalls, dailyTokens                  int64
 	)
 	err = repository.database.QueryRowContext(
@@ -402,6 +405,7 @@ func (repository *runtimeUserRepository) FindSession(
 		        s.device_name, s.created_at_unix_ms, s.expires_at_unix_ms,
 		        s.revoked_at_unix_ms, u.username, u.password_hash, u.state,
 		        u.created_at_unix_ms, u.updated_at_unix_ms,
+		        COALESCE(p.all_environments, 0),
 		        COALESCE(p.allowed_environment_ids_json, x'5b5d'),
 		        COALESCE(p.daily_agent_api_call_warning, 0),
 		        COALESCE(p.daily_token_warning, 0)
@@ -413,7 +417,7 @@ func (repository *runtimeUserRepository) FindSession(
 	).Scan(
 		&sessionID, &userID, &tokenDigest, &machineID, &deviceName,
 		&createdAt, &expiresAt, &revokedAt, &username, &passwordHash, &state,
-		&userCreatedAt, &userUpdatedAt, &policyJSON, &dailyCalls, &dailyTokens,
+		&userCreatedAt, &userUpdatedAt, &allEnvironments, &policyJSON, &dailyCalls, &dailyTokens,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return runtimeuser.SessionRecord{}, runtimeuser.UserRecord{}, false, nil
@@ -441,7 +445,7 @@ func (repository *runtimeUserRepository) FindSession(
 	if revokedAt.Valid {
 		session.RevokedAt = fromUnixMillis(revokedAt.Int64)
 	}
-	policy, err := decodeRuntimeUserPolicy(policyJSON, dailyCalls, dailyTokens)
+	policy, err := decodeRuntimeUserPolicy(allEnvironments, policyJSON, dailyCalls, dailyTokens)
 	if err != nil {
 		return runtimeuser.SessionRecord{}, runtimeuser.UserRecord{}, false, err
 	}
@@ -493,14 +497,15 @@ func scanRuntimeUser(scanner runtimeUserScanner) (runtimeuser.UserRecord, error)
 	var userID, username, passwordHash, state string
 	var createdAt, updatedAt int64
 	var policyJSON []byte
+	var allEnvironments bool
 	var dailyCalls, dailyTokens int64
 	if err := scanner.Scan(
 		&userID, &username, &passwordHash, &state, &createdAt, &updatedAt,
-		&policyJSON, &dailyCalls, &dailyTokens,
+		&allEnvironments, &policyJSON, &dailyCalls, &dailyTokens,
 	); err != nil {
 		return runtimeuser.UserRecord{}, err
 	}
-	policy, err := decodeRuntimeUserPolicy(policyJSON, dailyCalls, dailyTokens)
+	policy, err := decodeRuntimeUserPolicy(allEnvironments, policyJSON, dailyCalls, dailyTokens)
 	if err != nil {
 		return runtimeuser.UserRecord{}, err
 	}
@@ -518,12 +523,12 @@ func scanRuntimeUser(scanner runtimeUserScanner) (runtimeuser.UserRecord, error)
 	return record, nil
 }
 
-func decodeRuntimeUserPolicy(encoded []byte, dailyCalls, dailyTokens int64) (runtimeuser.Policy, error) {
+func decodeRuntimeUserPolicy(allEnvironments bool, encoded []byte, dailyCalls, dailyTokens int64) (runtimeuser.Policy, error) {
 	var environmentIDs []string
 	if json.Unmarshal(encoded, &environmentIDs) != nil {
 		return runtimeuser.Policy{}, errors.New("stored Runtime User policy is invalid")
 	}
-	policy, err := runtimeuser.NewPolicy(environmentIDs, dailyCalls, dailyTokens)
+	policy, err := runtimeuser.NewPolicy(allEnvironments, environmentIDs, dailyCalls, dailyTokens)
 	if err != nil {
 		return runtimeuser.Policy{}, errors.New("stored Runtime User policy is invalid")
 	}

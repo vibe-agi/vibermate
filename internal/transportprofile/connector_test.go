@@ -338,7 +338,7 @@ func TestConnectorReplaysObservedShapeWithFreshConnectionState(t *testing.T) {
 	}
 }
 
-func TestConnectorRejectsMissingObservationWithoutFallback(
+func TestConnectorRejectsMissingObservationEvenWithFallback(
 	t *testing.T,
 ) {
 	t.Parallel()

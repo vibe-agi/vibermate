@@ -2118,7 +2118,6 @@ final class _RuntimeUserPolicyDialogState
     final tokens = int.tryParse(_tokens.text.trim()) ?? 0;
     final valid =
         !_saving &&
-        (_all || _selected.isNotEmpty) &&
         calls >= 0 &&
         calls <= 1000000000000000 &&
         tokens >= 0 &&
@@ -2182,7 +2181,7 @@ final class _RuntimeUserPolicyDialogState
                 Padding(
                   padding: const EdgeInsets.only(top: 6),
                   child: Text(
-                    widget.copy('server.users.policy.select_one'),
+                    widget.copy('server.users.policy.none_detail'),
                     style: Theme.of(context).textTheme.bodySmall?.copyWith(
                       color: context.viberColors.warning,
                     ),
@@ -2264,6 +2263,7 @@ final class _RuntimeUserPolicyDialogState
     final ids = _all ? <String>[] : (_selected.toList()..sort());
     final saved = await widget.controller.setRuntimeUserPolicy(
       user: widget.user,
+      allEnvironments: _all,
       allowedEnvironmentIds: ids,
       dailyAgentApiCallWarning: calls,
       dailyTokenWarning: tokens,
@@ -2738,8 +2738,11 @@ final class _RuntimeUserRow extends StatelessWidget {
                     const SizedBox(height: 2),
                     Text(
                       copy.format('server.users.policy.summary', {
-                        'access': user.allEnvironments
+                        // The Owner configures every policy and holds all of them.
+                        'access': user.owner || user.allEnvironments
                             ? copy('server.users.policy.all_short')
+                            : user.allowedEnvironmentIds.isEmpty
+                            ? copy('server.users.policy.none_short')
                             : copy.format('server.users.policy.count', {
                                 'count': '${user.allowedEnvironmentIds.length}',
                               }),

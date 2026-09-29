@@ -245,7 +245,8 @@ func TestExpiredEnvelopesReleaseTheirBodiesAndChunks(t *testing.T) {
 		t.Fatal("the first append did not store the body")
 	}
 
-	// A later append purges expired envelopes, and the bytes must go with them.
+	// Recording and maintenance have separate budgets. Maintenance must release
+	// the envelope's bytes without damaging the later append.
 	unrelated := rawEvidenceRecordForTest(
 		"writer-later.1", 2, rawevidence.LayerClientDownstream,
 		nil, []byte(`{"version":1,"headers":[]}`),
@@ -260,6 +261,9 @@ func TestExpiredEnvelopesReleaseTheirBodiesAndChunks(t *testing.T) {
 		[]rawevidence.StoredEnvelope{unrelated},
 		observed.Add(2*time.Hour),
 	); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.MaintainExpired(context.Background(), observed.Add(2*time.Hour)); err != nil {
 		t.Fatal(err)
 	}
 	if got := countRows(t, store, "runtime_evidence_bodies"); got != 0 {

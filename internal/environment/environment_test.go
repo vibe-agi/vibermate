@@ -169,10 +169,10 @@ func TestRequestPlanFreezesOrderedPublishedTransformRevisions(t *testing.T) {
 			},
 		},
 		{
-			ID: "rewrite-model", Revision: 8, CollectionID: "routing",
-			DisplayName: "Rewrite model", PublishedAt: publishedAt,
+			ID: "annotate-request", Revision: 8, CollectionID: "privacy",
+			DisplayName: "Annotate request", PublishedAt: publishedAt,
 			Policy: messagetransform.Policy{
-				RequestJavaScript:  `request.headers["x-request-order"] += ",two"; request.body = "{\"model\":\"upstream\"}";`,
+				RequestJavaScript:  `request.headers["x-request-order"] += ",two"; request.body = '{"model":"client","metadata":"upstream"}';`,
 				ResponseJavaScript: `response.headers["x-response-order"] = "two";`,
 			},
 		},
@@ -202,7 +202,7 @@ func TestRequestPlanFreezesOrderedPublishedTransformRevisions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ApplyRequest(): %v", err)
 	}
-	if got := string(request.Body); got != `{"model":"upstream"}` {
+	if got := string(request.Body); got != `{"model":"client","metadata":"upstream"}` {
 		t.Fatalf("transformed request Body = %s", got)
 	}
 	if got := request.Headers.Get("X-Request-Order"); got != "one,two" {

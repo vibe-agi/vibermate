@@ -186,7 +186,13 @@ func exchangeFailureMetadata(dialect protocolspec.Dialect, err error) http.Heade
 func exchangeFailureEnvelope(dialect protocolspec.Dialect, reason exchange.ReasonCode, err error) any {
 	var failure *exchange.Failure
 	if errors.As(err, &failure) {
+		if body := failure.NativeError.HTTPBodyForDialect(dialect); len(body) > 0 {
+			return body
+		}
 		if native := failure.NativeError.ForDialect(dialect); len(native) > 0 {
+			if dialect == protocolspec.DialectAnthropicMessages {
+				return map[string]any{"type": "error", "error": native}
+			}
 			return map[string]any{"error": native}
 		}
 	}

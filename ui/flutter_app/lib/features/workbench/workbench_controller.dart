@@ -1695,6 +1695,7 @@ final class WorkbenchController extends ChangeNotifier
 
   Future<bool> setRuntimeUserPolicy({
     required RuntimeUser user,
+    required bool allEnvironments,
     required List<String> allowedEnvironmentIds,
     required int dailyAgentApiCallWarning,
     required int dailyTokenWarning,
@@ -1706,6 +1707,7 @@ final class WorkbenchController extends ChangeNotifier
     try {
       final updated = await _api.setRuntimeUserPolicy(
         userId: user.id,
+        allEnvironments: allEnvironments,
         allowedEnvironmentIds: allowedEnvironmentIds,
         dailyAgentApiCallWarning: dailyAgentApiCallWarning,
         dailyTokenWarning: dailyTokenWarning,
@@ -3958,6 +3960,10 @@ final class WorkbenchController extends ChangeNotifier
         left.displayName == right.displayName &&
         left.note == right.note &&
         left.noteRevision == right.noteRevision &&
+        left.settingsRevision == right.settingsRevision &&
+        left.automaticRefresh == right.automaticRefresh &&
+        left.supportsAutomaticRefresh == right.supportsAutomaticRefresh &&
+        left.egressProfile == right.egressProfile &&
         left.credentialOrigin == right.credentialOrigin &&
         listEquals(left.linkedEndpointIds, right.linkedEndpointIds) &&
         left.associationRevision == right.associationRevision &&

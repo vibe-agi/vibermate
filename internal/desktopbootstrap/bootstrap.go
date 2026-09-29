@@ -35,6 +35,7 @@ const (
 	FailureRuntimeAlreadyActive   FailureReason = "runtime_already_active"
 	FailureSecretStoreUnavailable FailureReason = "secret_store_unavailable"
 	FailureStorageUnavailable     FailureReason = "storage_unavailable"
+	FailureStorageIncompatible    FailureReason = "storage_incompatible"
 	FailureRootResetFailed        FailureReason = "root_reset_failed"
 )
 
@@ -59,6 +60,7 @@ func (failure Failure) Validate() error {
 		FailureRuntimeAlreadyActive,
 		FailureSecretStoreUnavailable,
 		FailureStorageUnavailable,
+		FailureStorageIncompatible,
 		FailureRootResetFailed:
 		return nil
 	default:

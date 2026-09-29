@@ -3,6 +3,8 @@ package main
 import (
 	"bufio"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -33,21 +35,32 @@ type loginConfig struct {
 }
 
 type trustConfig struct {
-	server serverconnection.Target
+	server        serverconnection.Target
+	caFingerprint string
 }
 
 func parseTrust(arguments []string) (trustConfig, error) {
-	if len(arguments) != 4 || arguments[0] != "trust" ||
-		arguments[1] != "--server" || arguments[3] != "--system-roots" {
+	if len(arguments) < 4 || arguments[0] != "trust" || arguments[1] != "--server" {
 		return trustConfig{}, errors.New(
-			"trust requires --server https://host:port --system-roots",
+			"trust requires --server https://host:port and one trust mode",
 		)
 	}
 	target, err := serverconnection.ParseTarget(arguments[2])
 	if err != nil || target.Transport() != serverconnection.TransportHTTPS {
 		return trustConfig{}, errors.New("trust requires an HTTPS Runtime Server")
 	}
-	return trustConfig{server: target}, nil
+	config := trustConfig{server: target}
+	if len(arguments) == 4 && arguments[3] == "--system-roots" {
+		return config, nil
+	}
+	if len(arguments) == 5 && arguments[3] == "--ca-fingerprint" {
+		decoded, err := hex.DecodeString(arguments[4])
+		if err == nil && len(decoded) == sha256.Size {
+			config.caFingerprint = hex.EncodeToString(decoded)
+			return config, nil
+		}
+	}
+	return trustConfig{}, errors.New("trust requires --system-roots or --ca-fingerprint with a SHA-256 hex digest")
 }
 
 func parseLogin(arguments []string) (loginConfig, error) {
@@ -120,7 +133,7 @@ func executeRemoteLogin(
 	if config.server.Transport() != serverconnection.TransportHTTP && result.FirstUse {
 		_, _ = fmt.Fprintf(
 			stderr,
-			"Trusted this Runtime Server certificate (SHA-256 %s).\n",
+			"Recorded first-use trust for this Runtime Server (current leaf SHA-256 %s).\n",
 			result.TLSFingerprint,
 		)
 	}
@@ -171,15 +184,21 @@ func executeRemoteTrust(
 	}
 	trustContext, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
-	fingerprint, err := runlauncher.TrustRemoteSystemRoots(
+	fingerprint, err := runlauncher.TrustRemote(
 		trustContext,
 		config.server,
 		stateDirectory,
 		clock,
 		15*time.Second,
+		config.caFingerprint,
 	)
 	if err != nil {
 		return 1, keyTrustFailed
+	}
+	if config.caFingerprint != "" {
+		_, _ = fmt.Fprintf(stdout, "Verified %s and saved its private CA trust (CA SHA-256 %s; leaf SHA-256 %s).\n",
+			config.server.Origin(), config.caFingerprint, fingerprint)
+		return 0, ""
 	}
 	_, _ = fmt.Fprintf(
 		stdout,

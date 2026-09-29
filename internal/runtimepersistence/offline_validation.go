@@ -2,9 +2,7 @@ package runtimepersistence
 
 import (
 	"context"
-	"crypto/sha256"
 	"database/sql"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"net/url"
@@ -15,6 +13,9 @@ import (
 	_ "modernc.org/sqlite"
 )
 
+// validateExistingSchema refuses, before any write (journal_mode itself can
+// change the file header), a file that is not a ViberMate database of this
+// build's schema revision.
 func validateExistingSchema(ctx context.Context, path string, timeout time.Duration) error {
 	info, err := os.Stat(path)
 	if errors.Is(err, os.ErrNotExist) || err == nil && info.Size() == 0 {
@@ -25,21 +26,14 @@ func validateExistingSchema(ctx context.Context, path string, timeout time.Durat
 	}
 	database := sql.OpenDB(newSQLiteReadConnector(path, timeout))
 	defer database.Close()
-	var objects int
-	if err := database.QueryRowContext(ctx, `SELECT count(*) FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%'`).Scan(&objects); err != nil {
-		return fmt.Errorf("%w: inspect existing database: %v", ErrSchemaBaselineMismatch, err)
+	revision, err := readSchemaRevision(ctx, database)
+	if err != nil {
+		return err
 	}
-	if objects == 0 {
-		return nil
+	if revision != 0 && revision != schemaRevision {
+		return fmt.Errorf("%w: file revision %d, build revision %d", ErrUnsupportedSchema, revision, schemaRevision)
 	}
-	var state SchemaState
-	if err := database.QueryRowContext(ctx, `SELECT schema_identity,schema_revision,schema_source_sha256,initialized_at FROM runtime_metadata WHERE singleton=1`).Scan(
-		&state.Identity, &state.Revision, &state.SourceSHA256, &state.InitializedAt,
-	); err != nil {
-		return fmt.Errorf("%w: read existing schema: %v", ErrSchemaBaselineMismatch, err)
-	}
-	sum := sha256.Sum256([]byte(schemaSQL))
-	return validateSchemaState(state, hex.EncodeToString(sum[:]))
+	return nil
 }
 
 // ValidateOfflineDatabase verifies a stopped Runtime database before backup or
@@ -64,7 +58,7 @@ func ValidateOfflineDatabase(ctx context.Context, path string) (SchemaState, err
 
 	var integrity string
 	if err := database.QueryRowContext(ctx, "PRAGMA integrity_check").Scan(&integrity); err != nil || integrity != "ok" {
-		return SchemaState{}, errors.Join(ErrSchemaBaselineMismatch, err)
+		return SchemaState{}, errors.Join(ErrUnsupportedSchema, err)
 	}
 	rows, err := database.QueryContext(ctx, "PRAGMA foreign_key_check")
 	if err != nil {
@@ -72,7 +66,7 @@ func ValidateOfflineDatabase(ctx context.Context, path string) (SchemaState, err
 	}
 	if rows.Next() {
 		_ = rows.Close()
-		return SchemaState{}, ErrSchemaBaselineMismatch
+		return SchemaState{}, ErrUnsupportedSchema
 	}
 	if err := errors.Join(rows.Err(), rows.Close()); err != nil {
 		return SchemaState{}, fmt.Errorf("finish offline SQLite foreign-key check: %w", err)
@@ -80,14 +74,13 @@ func ValidateOfflineDatabase(ctx context.Context, path string) (SchemaState, err
 	var state SchemaState
 	if err := database.QueryRowContext(
 		ctx,
-		`SELECT schema_identity, schema_revision, schema_source_sha256, initialized_at
+		`SELECT schema_identity, schema_revision, initialized_at
 		 FROM runtime_metadata WHERE singleton = 1`,
-	).Scan(&state.Identity, &state.Revision, &state.SourceSHA256, &state.InitializedAt); err != nil {
-		return SchemaState{}, fmt.Errorf("%w: read offline Runtime metadata: %v", ErrSchemaBaselineMismatch, err)
+	).Scan(&state.Identity, &state.Revision, &state.InitializedAt); err != nil {
+		return SchemaState{}, fmt.Errorf("%w: read offline Runtime metadata: %v", ErrUnsupportedSchema, err)
 	}
-	sum := sha256.Sum256([]byte(schemaSQL))
-	if err := validateSchemaState(state, hex.EncodeToString(sum[:])); err != nil {
-		return SchemaState{}, err
+	if state.Identity != schemaIdentity || state.Revision != schemaRevision {
+		return SchemaState{}, fmt.Errorf("%w: identity %q revision %d", ErrUnsupportedSchema, state.Identity, state.Revision)
 	}
 	return state, nil
 }

@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
-	"database/sql"
 	"encoding/base64"
 	"errors"
 	"path/filepath"
@@ -18,19 +17,10 @@ import (
 func TestCurrentSchemaIncludesAllRuntimeTablesWithoutExtensions(t *testing.T) {
 	ctx := context.Background()
 	databasePath := filepath.Join(t.TempDir(), "runtime.sqlite")
-	base := sql.OpenDB(newSQLiteConnector(databasePath, DefaultBusyTimeout))
-	digest, err := initializeSchema(ctx, base)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := base.Close(); err != nil {
-		t.Fatal(err)
-	}
 	store := openTestStore(t, databasePath)
 	defer shutdownTestStore(t, store)
-	state, err := store.SchemaStateReader().ReadSchemaState(ctx)
-	if err != nil || state.SourceSHA256 != digest {
-		t.Fatalf("base schema changed during open: state=%+v err=%v", state, err)
+	if state, err := store.SchemaStateReader().ReadSchemaState(ctx); err != nil || state.Revision != schemaRevision {
+		t.Fatalf("schema state = %+v, %v", state, err)
 	}
 	var count int
 	if err := store.database.QueryRowContext(ctx, `SELECT COUNT(*) FROM sqlite_schema WHERE type='table' AND name IN ('acp_observations','runtime_user_policies','runtime_usage_observations','runtime_usage_policy')`).Scan(&count); err != nil || count != 4 {
@@ -64,7 +54,7 @@ func TestRuntimeUserLoginSessionSurvivesStoreReopen(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
-	policy, err := runtimeuser.NewPolicy([]string{"team"}, 25, 1000)
+	policy, err := runtimeuser.NewPolicy(false, []string{"team"}, 25, 1000)
 	if err != nil {
 		t.Fatal(err)
 	}

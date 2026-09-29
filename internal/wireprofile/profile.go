@@ -408,8 +408,8 @@ func BuiltInTransportFingerprintDefinitions() []TransportFingerprintDefinition {
 		return result
 	}
 	return []TransportFingerprintDefinition{
-		{Ref: ref(TransportProfileObservedClientH1Value), Revision: 1, Source: TransportFingerprintObservedClient, HTTPTransport: HTTPTransportHTTP1, ALPN: []ApplicationProtocol{ApplicationProtocolHTTP1}},
-		{Ref: ref(TransportProfileObservedClientH2Value), Revision: 1, Source: TransportFingerprintObservedClient, HTTPTransport: HTTPTransportHTTP2, ALPN: []ApplicationProtocol{ApplicationProtocolHTTP2}},
+		{Ref: ref(TransportProfileObservedClientH1Value), Revision: 2, Source: TransportFingerprintObservedClient, HTTPTransport: HTTPTransportHTTP1, ALPN: []ApplicationProtocol{ApplicationProtocolHTTP1}, FallbackRefs: []TransportProfileRef{ref(TransportProfileStandardH1Value)}},
+		{Ref: ref(TransportProfileObservedClientH2Value), Revision: 2, Source: TransportFingerprintObservedClient, HTTPTransport: HTTPTransportHTTP2, ALPN: []ApplicationProtocol{ApplicationProtocolHTTP2}, FallbackRefs: []TransportProfileRef{ref(TransportProfileStandardH2Value)}},
 		{Ref: ref(TransportProfileStandardH1Value), Revision: 1, Source: TransportFingerprintStandard, HTTPTransport: HTTPTransportHTTP1, ALPN: []ApplicationProtocol{ApplicationProtocolHTTP1}},
 		{Ref: ref(TransportProfileStandardH2Value), Revision: 1, Source: TransportFingerprintStandard, HTTPTransport: HTTPTransportHTTP2, ALPN: []ApplicationProtocol{ApplicationProtocolHTTP2}},
 		{Ref: ref(TransportProfileClaudeCodeH1Value), Revision: 1, Source: TransportFingerprintCaptured, Preset: TransportFingerprintPresetClaudeCodeH1, HTTPTransport: HTTPTransportHTTP1, ALPN: []ApplicationProtocol{ApplicationProtocolHTTP1}},
@@ -419,7 +419,7 @@ func BuiltInTransportFingerprintDefinitions() []TransportFingerprintDefinition {
 func BuiltInUpstreamWireProfileDefinitions() []UpstreamWireProfileDefinition {
 	transport := func(value string) TransportProfileRef { result, _ := NewTransportProfileRef(value); return result }
 	return []UpstreamWireProfileDefinition{
-		{Ref: FollowClientUpstreamWireProfileRef(), Revision: 1, Mode: UpstreamWireModeFollowClient, Variants: []UpstreamWireVariantDefinition{
+		{Ref: FollowClientUpstreamWireProfileRef(), Revision: 2, Mode: UpstreamWireModeFollowClient, Variants: []UpstreamWireVariantDefinition{
 			{Protocol: ApplicationProtocolHTTP1, TransportProfileRef: transport(TransportProfileObservedClientH1Value), UserAgentPolicy: UserAgentPolicyFollowClient},
 			{Protocol: ApplicationProtocolHTTP2, TransportProfileRef: transport(TransportProfileObservedClientH2Value), UserAgentPolicy: UserAgentPolicyFollowClient},
 		}},

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"strconv"
 	"strings"
@@ -31,6 +32,7 @@ const (
 var (
 	ErrRefreshUnavailable = errors.New("Codex OAuth refresh is unavailable")
 	ErrReconnectRequired  = errors.New("Codex OAuth account must be connected again")
+	ErrManagerClosing     = errors.New("Codex OAuth manager is closing")
 )
 
 type HTTPClient interface {
@@ -79,6 +81,15 @@ type Manager struct {
 
 	mu        sync.Mutex
 	permanent map[credentialEpochKey]error
+	pending   map[credentialEpochKey]*pendingRefresh
+	closing   bool
+	active    int
+	changed   chan struct{}
+}
+
+type pendingRefresh struct {
+	credential *Credential
+	policy     providerauth.HeaderPolicy
 }
 
 type credentialEpochKey struct {
@@ -104,6 +115,7 @@ func NewManager(options Options) (*Manager, error) {
 	return &Manager{
 		secrets: options.Secrets, client: options.Client, clock: options.Clock,
 		refreshTimeout: timeout, permanent: make(map[credentialEpochKey]error),
+		pending: make(map[credentialEpochKey]*pendingRefresh), changed: make(chan struct{}),
 	}, nil
 }
 
@@ -125,7 +137,7 @@ func (manager *Manager) Inspect(
 	state := StateReady
 	if credential.state == StateReconnectRequired || manager.permanentError(key) != nil {
 		state = StateReconnectRequired
-	} else if credential.needsRefresh(manager.clock.Now().UTC()) {
+	} else if manager.hasPending(key) || credential.needsRefresh(manager.clock.Now().UTC()) {
 		state = StateRefreshDue
 	}
 	return View{Profile: credential.Profile(), State: state}, nil
@@ -160,8 +172,9 @@ func (manager *Manager) Prepare(
 	driver providerauth.DriverRef,
 	reference secretstore.Reference,
 	scope providerauth.AccountRef,
+	automaticRefresh bool,
 ) (secretstore.Revision, error) {
-	return manager.prepare(ctx, driver, reference, scope, false)
+	return manager.prepare(ctx, driver, reference, scope, automaticRefresh, false)
 }
 
 // Refresh forces a refresh of one credential epoch even if its access token is
@@ -173,7 +186,7 @@ func (manager *Manager) Refresh(
 	reference secretstore.Reference,
 	scope providerauth.AccountRef,
 ) (secretstore.Revision, error) {
-	return manager.prepare(ctx, driver, reference, scope, true)
+	return manager.prepare(ctx, driver, reference, scope, true, true)
 }
 
 func (manager *Manager) prepare(
@@ -181,6 +194,7 @@ func (manager *Manager) prepare(
 	driver providerauth.DriverRef,
 	reference secretstore.Reference,
 	scope providerauth.AccountRef,
+	allowRefresh bool,
 	force bool,
 ) (secretstore.Revision, error) {
 	revision := secretstore.Revision(scope.CredentialEpoch)
@@ -188,25 +202,50 @@ func (manager *Manager) prepare(
 		reference.String() == "" || scope.Validate() != nil {
 		return 0, ErrInvalidCredential
 	}
-	credential, _, err := manager.readCredential(ctx, reference, revision)
-	if err != nil {
-		if errors.Is(err, secretstore.ErrRevisionConflict) {
-			return manager.currentPreparedRevision(ctx, reference)
-		}
+	if err := ctx.Err(); err != nil {
 		return 0, err
 	}
-	now := manager.clock.Now().UTC()
-	if credential.state == StateReconnectRequired {
-		credential.Destroy()
-		return 0, ErrReconnectRequired
-	}
-	needsRefresh := force || credential.needsRefresh(now)
-	usableAfterTransientFailure := !force && credential.accessUsableAt(now)
-	credential.Destroy()
-	if !needsRefresh {
-		return revision, nil
+	manager.mu.Lock()
+	closing := manager.closing
+	manager.mu.Unlock()
+	if closing {
+		return 0, ErrManagerClosing
 	}
 	key := credentialEpochKey{reference: reference.String(), revision: revision}
+	usableAfterTransientFailure := false
+	if !manager.hasPending(key) {
+		if !allowRefresh {
+			// A concurrent recovery may have committed before ProviderAccount
+			// observed its new epoch. Read the authoritative epoch without
+			// authorizing another token-endpoint rotation.
+			metadata, err := manager.secrets.Inspect(ctx, reference)
+			if err != nil {
+				return 0, err
+			}
+			if metadata.Validate() != nil || metadata.State != secretstore.StateConfigured {
+				return 0, ErrRefreshUnavailable
+			}
+			return metadata.Revision, nil
+		}
+		credential, _, err := manager.readCredential(ctx, reference, revision)
+		if err != nil {
+			if errors.Is(err, secretstore.ErrRevisionConflict) {
+				return manager.currentPreparedRevision(ctx, reference)
+			}
+			return 0, err
+		}
+		now := manager.clock.Now().UTC()
+		if credential.state == StateReconnectRequired {
+			credential.Destroy()
+			return 0, ErrReconnectRequired
+		}
+		needsRefresh := force || credential.needsRefresh(now)
+		usableAfterTransientFailure = !force && credential.accessUsableAt(now)
+		credential.Destroy()
+		if !needsRefresh {
+			return revision, nil
+		}
+	}
 	manager.forgetOtherPermanentEpochs(key)
 	if err := manager.permanentError(key); err != nil {
 		return 0, err
@@ -214,7 +253,7 @@ func (manager *Manager) prepare(
 	result := manager.refreshes.DoChan(key.flightKey(), func() (any, error) {
 		operation, cancel := context.WithTimeout(context.WithoutCancel(ctx), manager.refreshTimeout)
 		defer cancel()
-		rotated, refreshErr := manager.refresh(operation, reference, scope, force)
+		rotated, refreshErr := manager.refresh(operation, reference, scope, allowRefresh, force)
 		if errors.Is(refreshErr, ErrReconnectRequired) {
 			manager.rememberPermanent(key, refreshErr)
 		}
@@ -225,7 +264,7 @@ func (manager *Manager) prepare(
 		return 0, ctx.Err()
 	case outcome := <-result:
 		if outcome.Err != nil {
-			if usableAfterTransientFailure && errors.Is(outcome.Err, ErrRefreshUnavailable) {
+			if usableAfterTransientFailure && errors.Is(outcome.Err, ErrRefreshUnavailable) && !manager.hasPending(key) {
 				return revision, nil
 			}
 			return 0, outcome.Err
@@ -238,13 +277,53 @@ func (manager *Manager) prepare(
 	}
 }
 
+func (manager *Manager) hasPending(key credentialEpochKey) bool {
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+	return manager.pending[key] != nil
+}
+
 func (manager *Manager) refresh(
 	ctx context.Context,
 	reference secretstore.Reference,
 	scope providerauth.AccountRef,
+	allowRefresh bool,
 	force bool,
 ) (secretstore.Revision, error) {
 	revision := secretstore.Revision(scope.CredentialEpoch)
+	key := credentialEpochKey{reference: reference.String(), revision: revision}
+	manager.mu.Lock()
+	if manager.closing {
+		manager.mu.Unlock()
+		return 0, ErrManagerClosing
+	}
+	manager.active++
+	pending := manager.pending[key]
+	recovering := pending != nil
+	if !recovering {
+		pending = &pendingRefresh{}
+		manager.pending[key] = pending
+	}
+	manager.mu.Unlock()
+	defer func() {
+		manager.mu.Lock()
+		if manager.pending[key] == pending && pending.credential == nil {
+			delete(manager.pending, key)
+		}
+		manager.mu.Unlock()
+		manager.finishRefresh()
+	}()
+	if recovering {
+		prepared, err := manager.persistRefresh(ctx, reference, key, pending)
+		if err != nil || !allowRefresh {
+			return prepared, err
+		}
+		// The store may have been locked longer than the new access token's
+		// lifetime. Save its unique refresh token first, then let the ordinary
+		// preparation path renew the committed epoch if it is due.
+		scope.CredentialEpoch = uint64(prepared)
+		return manager.prepare(ctx, providerauth.CodexOAuthDriverRef(), reference, scope, true, false)
+	}
 	credential, policy, err := manager.readCredential(ctx, reference, revision)
 	if err != nil {
 		if errors.Is(err, secretstore.ErrRevisionConflict) {
@@ -274,8 +353,43 @@ func (manager *Manager) refresh(
 		}
 		return 0, err
 	}
-	defer rotated.Destroy()
-	prepared, err := manager.replaceCredential(ctx, reference, revision, rotated, policy)
+	// The upstream has consumed the old refresh token. Retain the replacement
+	// until its CAS commits; retrying the token endpoint would lose this account.
+	manager.mu.Lock()
+	if manager.pending[key] != pending {
+		manager.mu.Unlock()
+		rotated.Destroy()
+		return manager.currentPreparedRevision(ctx, reference)
+	}
+	pending.credential, pending.policy = rotated, policy
+	manager.mu.Unlock()
+	return manager.persistRefresh(ctx, reference, key, pending)
+}
+
+func (manager *Manager) persistRefresh(ctx context.Context, reference secretstore.Reference, key credentialEpochKey, pending *pendingRefresh) (secretstore.Revision, error) {
+	manager.mu.Lock()
+	if manager.pending[key] != pending {
+		manager.mu.Unlock()
+		return manager.currentPreparedRevision(ctx, reference)
+	}
+	// Own the bytes used for I/O so an owner replacement can erase the retained
+	// copy concurrently, without keeping the manager lock across storage calls.
+	credential := *pending.credential
+	credential.idToken = bytes.Clone(credential.idToken)
+	credential.accessToken = bytes.Clone(credential.accessToken)
+	credential.refreshToken = bytes.Clone(credential.refreshToken)
+	policy := pending.policy.Clone()
+	manager.mu.Unlock()
+	defer credential.Destroy()
+	prepared, err := manager.replaceCredential(ctx, reference, key.revision, &credential, policy)
+	if err == nil || errors.Is(err, secretstore.ErrRevisionConflict) {
+		manager.mu.Lock()
+		if manager.pending[key] == pending {
+			delete(manager.pending, key)
+			pending.credential.Destroy()
+		}
+		manager.mu.Unlock()
+	}
 	if errors.Is(err, secretstore.ErrRevisionConflict) {
 		return manager.currentPreparedRevision(ctx, reference)
 	}
@@ -283,6 +397,76 @@ func (manager *Manager) refresh(
 		return 0, fmt.Errorf("persist refreshed Codex OAuth credential: %w", err)
 	}
 	return prepared, nil
+}
+
+// Forget discards provider state for credential epochs older than
+// supersededBelow, after an explicit credential change committed that epoch.
+// State of the committed epoch itself is kept: a rotation that already started
+// from it has consumed the provider's refresh token, so dropping its result
+// would leave the store holding a token that can never be redeemed again.
+// SecretStore CAS still protects against a token exchange already in flight.
+func (manager *Manager) Forget(reference secretstore.Reference, supersededBelow secretstore.Revision) {
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+	for key, pending := range manager.pending {
+		if key.reference == reference.String() && key.revision < supersededBelow {
+			pending.credential.Destroy()
+			delete(manager.pending, key)
+		}
+	}
+	for key := range manager.permanent {
+		if key.reference == reference.String() && key.revision < supersededBelow {
+			delete(manager.permanent, key)
+		}
+	}
+}
+
+func (manager *Manager) finishRefresh() {
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+	manager.active--
+	close(manager.changed)
+	manager.changed = make(chan struct{})
+}
+
+// Shutdown drains token exchanges before retrying any uncommitted storage.
+// A failed save remains in memory and is reported, never silently destroyed;
+// another call can retry it after storage recovers. No alternate secret file is
+// written: process loss while the physical store is unavailable is unrecoverable.
+func (manager *Manager) Shutdown(ctx context.Context) error {
+	if manager == nil {
+		return nil
+	}
+	if ctx == nil {
+		return errors.New("Codex OAuth shutdown context is nil")
+	}
+	manager.mu.Lock()
+	manager.closing = true
+	for manager.active != 0 {
+		changed := manager.changed
+		manager.mu.Unlock()
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-changed:
+		}
+		manager.mu.Lock()
+	}
+	manager.active++ // Serialize concurrent shutdown saves with each other.
+	pending := maps.Clone(manager.pending)
+	manager.mu.Unlock()
+	defer manager.finishRefresh()
+	var failures []error
+	for key, refresh := range pending {
+		reference, err := secretstore.ParseReference(key.reference)
+		if err == nil {
+			_, err = manager.persistRefresh(ctx, reference, key, refresh)
+		}
+		if err != nil && manager.hasPending(key) {
+			failures = append(failures, err)
+		}
+	}
+	return errors.Join(failures...)
 }
 
 func (manager *Manager) replaceCredential(

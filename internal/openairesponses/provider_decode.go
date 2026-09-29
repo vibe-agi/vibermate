@@ -184,16 +184,20 @@ func (codec *Codec) decodeProviderResponse(
 	switch wire.Status {
 	case "completed":
 	case "incomplete":
-		if wire.IncompleteDetails == nil ||
-			wire.IncompleteDetails.Reason != "max_output_tokens" || hasToolCall {
+		if wire.IncompleteDetails == nil || wire.IncompleteDetails.Reason == "" {
 			return protocolcore.Response{}, protocolcore.TranslationReport{},
-				protocolcore.NewFailure(
-					protocolcore.ReasonUnsupportedProviderData,
-					"$.incomplete_details.reason",
-					errors.New("Responses incomplete reason is unsupported"),
-				)
+				invalidProvider("$.incomplete_details", errors.New("Responses incomplete terminal has no reason"))
 		}
-		stopReason = protocolcore.StopReasonMaxTokens
+		// Tool calls in an incomplete response still pass the decision gate;
+		// the stop reason records why the provider ended it.
+		switch wire.IncompleteDetails.Reason {
+		case "max_output_tokens":
+			stopReason = protocolcore.StopReasonMaxTokens
+		case "content_filter":
+			stopReason = protocolcore.StopReasonRefusal
+		default:
+			stopReason = protocolcore.StopReasonIncomplete
+		}
 	default:
 		return protocolcore.Response{}, protocolcore.TranslationReport{},
 			invalidProvider("$.status", errors.New("Responses terminal status is invalid"))
@@ -310,8 +314,9 @@ func decodeProviderOutputItem(
 		if err := json.Unmarshal(raw, &wire); err != nil {
 			return nil, nil, invalidProvider(path, err)
 		}
+		// A message cut off by an incomplete terminal is itself incomplete.
 		if wire.Role != "assistant" ||
-			(wire.Status != "" && wire.Status != "completed") ||
+			(wire.Status != "" && wire.Status != "completed" && wire.Status != "incomplete") ||
 			len(wire.Content) == 0 {
 			return nil, nil, invalidProvider(path, errors.New("Responses message output is invalid"))
 		}
@@ -449,22 +454,56 @@ func decodeProviderOutputItem(
 			}
 			return []protocolcore.ContentBlock{block}, nil, nil
 		}
-		return nil, nil, protocolcore.NewFailure(
-			protocolcore.ReasonUnsupportedProviderData,
-			path+".type",
-			errors.New("Responses output item type is unsupported"),
-		)
+		block, err := providerActionBlock(kind, path, raw)
+		if err != nil {
+			return nil, nil, invalidProvider(path, err)
+		}
+		return []protocolcore.ContentBlock{block}, nil, nil
 	}
 }
 
+// providerActionBlock carries an unmodelled output item as an unproven client
+// action. Its call key is the item's own call_id or id, so an approval and the
+// client's later result name the same item.
+func providerActionBlock(kind, path string, raw json.RawMessage) (protocolcore.ContentBlock, error) {
+	var identity struct {
+		ID     string `json:"id"`
+		CallID string `json:"call_id"`
+	}
+	if err := json.Unmarshal(raw, &identity); err != nil {
+		return protocolcore.ContentBlock{}, err
+	}
+	callID := identity.CallID
+	if callID == "" {
+		callID = identity.ID
+	}
+	if callID == "" {
+		return protocolcore.ContentBlock{}, errors.New("Responses output item has neither call_id nor id")
+	}
+	item, err := protocolcore.NewJSONObject(raw, protocolcore.MaxToolJSONBytes)
+	if err != nil {
+		return protocolcore.ContentBlock{}, err
+	}
+	call, err := newToolCall(protocolcore.ToolKindProviderAction, identity.ID, callID, "", kind, item, "")
+	if err != nil {
+		return protocolcore.ContentBlock{}, err
+	}
+	return protocolcore.NewToolCallBlock(call)
+}
+
 func isOpaqueResponsesProviderOutputItem(kind string) bool {
-	// Local shell calls are deliberately absent: provider-originated local work
-	// must be modeled as an approvable tool call before it can pass this edge.
+	// Only items whose work already ran on the provider belong here: they are
+	// results, not something the client can execute. Every other unmodelled
+	// item is an unproven action (see providerActionBlock).
 	switch kind {
 	case "tool_search_call",
 		"tool_search_output",
 		"web_search_call",
 		"image_generation_call",
+		"mcp_call",
+		"mcp_list_tools",
+		"code_interpreter_call",
+		"file_search_call",
 		"compaction",
 		"compaction_summary",
 		"context_compaction":

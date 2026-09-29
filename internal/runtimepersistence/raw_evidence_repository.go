@@ -79,12 +79,6 @@ func (repository *rawEvidenceRepository) AppendBatch(
 		return fmt.Errorf("prepare raw evidence append: %w", err)
 	}
 	defer statement.Close()
-	releasedEnvelopes, err := deleteExpiredRawEvidence(
-		operation, transaction, toUnixMillis(now.UTC()), -1,
-	)
-	if err != nil {
-		return err
-	}
 	for _, record := range records {
 		storedBodyDigest, bodyErr := storeEvidenceBody(
 			operation, transaction, record.Body,
@@ -96,11 +90,6 @@ func (repository *rawEvidenceRepository) AppendBatch(
 			operation, rawEvidenceArguments(record, storedBodyDigest)...,
 		); err != nil {
 			return fmt.Errorf("append raw evidence envelope: %w", err)
-		}
-	}
-	if releasedEnvelopes > 0 {
-		if err := purgeUnreferencedEvidenceBytes(operation, transaction); err != nil {
-			return err
 		}
 	}
 	if err := transaction.Commit(); err != nil {
@@ -208,26 +197,9 @@ func (repository *rawEvidenceRepository) BeginWriterSession(
 	); err != nil {
 		return rawevidence.Recovery{}, fmt.Errorf("mark unclean raw evidence writers: %w", err)
 	}
-	result, err := transaction.ExecContext(
-		operation,
-		`DELETE FROM runtime_raw_evidence_envelopes
-		 WHERE expires_at_unix_ms <= ?`,
-		toUnixMillis(now),
-	)
+	purged, err := purgeExpiredRawEvidence(operation, transaction, toUnixMillis(now), expiredCleanupBatchSize)
 	if err != nil {
 		return rawevidence.Recovery{}, fmt.Errorf("recover expired raw evidence: %w", err)
-	}
-	purged, err := result.RowsAffected()
-	if err != nil {
-		return rawevidence.Recovery{}, fmt.Errorf("read raw evidence purge result: %w", err)
-	}
-	// Recovery is the path that expires the most rows at once, and the sweep
-	// AppendBatch runs is conditional on its own deletion — so without this the
-	// bytes these envelopes were the sole reference to would never be reclaimed.
-	if purged > 0 {
-		if err := purgeUnreferencedEvidenceBytes(operation, transaction); err != nil {
-			return rawevidence.Recovery{}, err
-		}
 	}
 	if _, err := transaction.ExecContext(
 		operation,

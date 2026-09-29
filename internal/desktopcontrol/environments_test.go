@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
@@ -17,6 +18,62 @@ import (
 	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/messagetransform"
 )
+
+func TestMessageTransformControlPreservesModelSelection(t *testing.T) {
+	runtime := startRuntime(t)
+	defer shutdownRuntime(t, runtime)
+	application, err := desktopcontrol.New(desktopcontrol.Options{
+		Readiness: readyState(true), Status: runtime, Environments: runtime.Environments(),
+		Assignments: runtime.CaptureAssignments(), Activities: runtime.Activities(), Contents: runtime.ExchangeContents(),
+		Connections: runtime.ConnectionEvents(), Egress: runtime.EgressAttempts(),
+		Approvals: runtime.ToolApprovals(), Endpoints: runtime.UpstreamEndpoints(), Accounts: runtime.ProviderAccounts(),
+		Offline: runtime, Clock: desktopcontrol.SystemClock{}, ManualCaptures: runtime.ManualCaptures(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, protocol := range []string{"anthropic_messages", "openai_responses", "openai_chat"} {
+		for _, test := range []struct {
+			name, script string
+			valid        bool
+		}{
+			{"replace", `const p = JSON.parse(request.body); p.model = "private-script-model"; request.body = JSON.stringify(p);`, false},
+			{"remove", `const p = JSON.parse(request.body); delete p.model; request.body = JSON.stringify(p);`, false},
+			{"null", `const p = JSON.parse(request.body); p.model = null; request.body = JSON.stringify(p);`, false},
+			{"duplicate", `request.body = '{"model":"private-script-model",' + request.body.trim().slice(1);`, false},
+			{"escaped duplicate", `request.body = '{"mo\\u0064el":"private-script-model",' + request.body.trim().slice(1);`, false},
+			// encoding/json relays bind any case-folded spelling to "model".
+			{"upper-case model", `const p = JSON.parse(request.body); p.MODEL = "private-script-model"; request.body = JSON.stringify(p);`, false},
+			{"capitalized model", `const p = JSON.parse(request.body); p.Model = "private-script-model"; request.body = JSON.stringify(p);`, false},
+			{"escaped upper-case model", `request.body = '{"MOD\\u0045L":"private-script-model",' + request.body.trim().slice(1);`, false},
+			{"case-only nested duplicate", `const p = JSON.parse(request.body); p.metadata = {user: "a", USER: "private-script-model"}; request.body = JSON.stringify(p);`, false},
+			{"trailing data", `request.body += '{}';`, false},
+			{"malformed", `request.body = '{"model":';`, false},
+			{"formatting", `request.body = JSON.stringify(JSON.parse(request.body), null, 2);`, true},
+			{"nested model", `const p = JSON.parse(request.body); p.metadata = {model: "nested-data"}; request.body = JSON.stringify(p);`, true},
+			{"service tier", `const p = JSON.parse(request.body); p.service_tier = "priority"; request.body = JSON.stringify(p);`, true},
+		} {
+			t.Run(protocol+"/"+test.name, func(t *testing.T) {
+				body, err := json.Marshal(desktopcontrol.MessageTransformTestInput{
+					WireProtocol: protocol, Policy: messagetransform.Policy{RequestJavaScript: test.script},
+				})
+				if err != nil {
+					t.Fatal(err)
+				}
+				response := environmentRequest(t, application, http.MethodPost, "/api/v1/message-transforms/actions/test", 0, "", body)
+				if test.valid {
+					if response.Code != http.StatusOK {
+						t.Fatalf("model-preserving transform rejected: %d %s", response.Code, response.Body.Bytes())
+					}
+				} else if response.Code != http.StatusUnprocessableEntity ||
+					!bytes.Contains(response.Body.Bytes(), []byte("request · invalid transform output")) ||
+					bytes.Contains(response.Body.Bytes(), []byte("private-script-model")) {
+					t.Fatalf("invalid model transform did not fail closed: %d %s", response.Code, response.Body.Bytes())
+				}
+			})
+		}
+	}
+}
 
 func TestMessageTransformSampleRunsOneBoundedTurn(t *testing.T) {
 	t.Parallel()
@@ -334,7 +391,8 @@ func TestEnvironmentDraftSavesPreviewsAndPublishesOriginalDestination(t *testing
 
 func TestEnvironmentDraftPublishesOneAccountAcrossExplicitEndpointProtocols(t *testing.T) {
 	t.Parallel()
-	runtime := startRuntime(t)
+	secrets := newCredentialStoreFixture()
+	runtime := startRuntimeWithSecrets(t, secrets)
 	defer shutdownRuntime(t, runtime)
 	application, err := desktopcontrol.New(desktopcontrol.Options{
 		Readiness: readyState(true), Status: runtime,
@@ -459,7 +517,7 @@ func TestEnvironmentDraftPublishesOneAccountAcrossExplicitEndpointProtocols(t *t
             "revision":1,
             "mode":"javascript",
             "selector":` + string(frozenSelectorJSON) + `,
-            "accounts":[]
+            "accounts":[{"id":"account.cherry.bearer","revision":1,"displayName":"Cherry"}]
           },
           "modelPolicy":{"revision":1,"mode":"map","mappings":[{"requestedModel":"claude-client-alias","upstreamModel":"dashscope:deepseek-v4-flash-0731"}]},
           "wireProfileRef":"follow-client",
@@ -500,7 +558,7 @@ func TestEnvironmentDraftPublishesOneAccountAcrossExplicitEndpointProtocols(t *t
             "revision":1,
             "mode":"fixed",
             "fixedAccountId":"account.cherry.bearer",
-            "accounts":[]
+            "accounts":[{"id":"account.cherry.bearer","revision":1,"displayName":"Cherry"}]
           },
           "modelPolicy":{"revision":1,"mode":"passthrough","mappings":[]},
           "wireProfileRef":"follow-client",
@@ -818,9 +876,8 @@ func TestEnvironmentDraftPublishesOneAccountAcrossExplicitEndpointProtocols(t *t
 		t.Fatalf("reopened OpenAI egress policy = %#v, want %#v", got, wantOpenAIEgress)
 	}
 
-	// A newly linked account changes selector authority even when the user only
-	// edits the policy's name. The UI must normalize revisions after refreshing
-	// that authority; the control boundary must still reject unversioned changes.
+	// Adding a catalog account must not widen an existing Profile's selection
+	// scope or make a name-only edit fail due to unrelated Route revisions.
 	additional := environmentRequest(t, application, http.MethodPost,
 		"/api/v1/provider-accounts", 0, "provider-account-cherry-additional-0001",
 		[]byte(`{"id":"account.cherry.additional","displayName":"Additional","upstreamEndpointId":"target.cherry.anthropic","kind":"bearer_token","secret":"synthetic-additional"}`))
@@ -836,8 +893,22 @@ func TestEnvironmentDraftPublishesOneAccountAcrossExplicitEndpointProtocols(t *t
 	staleSelector := environmentRequest(t, application, http.MethodPut,
 		"/api/v1/environments/cherry-mapped/draft", uint64(finalEnvironment.Revision),
 		"environment-selector-links-stale-0001", selectorBody)
-	if staleSelector.Code != http.StatusUnprocessableEntity {
-		t.Fatalf("unversioned selector account changes status=%d body=%s", staleSelector.Code, staleSelector.Body.Bytes())
+	if staleSelector.Code != http.StatusOK {
+		t.Fatalf("name-only edit after catalog growth status=%d body=%s", staleSelector.Code, staleSelector.Body.Bytes())
+	}
+	var unchangedScope desktopcontrol.EnvironmentDraftResponse
+	if err := json.Unmarshal(staleSelector.Body.Bytes(), &unchangedScope); err != nil {
+		t.Fatal(err)
+	}
+	if got := unchangedScope.Candidate.ClientEndpoints[0].ProtocolPlans[0].Destination.Upstream.Routes[0].AccountPolicy.Accounts; len(got) != 1 || got[0].ID != "account.cherry.bearer" {
+		t.Fatalf("catalog growth expanded Profile scope: %+v", got)
+	}
+	outsideScope := environmentRequest(t, application, http.MethodPut,
+		"/api/v1/environments/cherry-mapped/routes/route.cherry.openai/active-account",
+		uint64(finalEnvironment.Revision), "environment-outside-scope-activate-0001",
+		[]byte(`{"accountId":"account.cherry.additional"}`))
+	if outsideScope.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("activated account outside Profile scope: status=%d body=%s", outsideScope.Code, outsideScope.Body.Bytes())
 	}
 	selectorEndpoint := &updateInput.ClientEndpoints[0]
 	selectorPlan := &selectorEndpoint.ProtocolPlans[0]
@@ -846,6 +917,20 @@ func TestEnvironmentDraftPublishesOneAccountAcrossExplicitEndpointProtocols(t *t
 	selectorPlan.Revision++
 	selectorRoute.Revision++
 	selectorRoute.AccountPolicy.Revision++
+	selectorRoute.AccountPolicy.Accounts = append(selectorRoute.AccountPolicy.Accounts, environment.RouteAccountReference{
+		ID: "account.cherry.additional", Revision: 1, DisplayName: "Additional",
+	})
+	manualEndpoint := &updateInput.ClientEndpoints[1]
+	manualPlan := &manualEndpoint.ProtocolPlans[0]
+	manualRoute := &manualPlan.Destination.Upstream.Routes[0]
+	manualEndpoint.Revision++
+	manualPlan.Revision++
+	manualRoute.Revision++
+	manualRoute.AccountPolicy.Revision++
+	manualRoute.AccountPolicy.Accounts = append(manualRoute.AccountPolicy.Accounts, environment.RouteAccountReference{
+		ID: "account.cherry.additional", Revision: 1, DisplayName: "Additional",
+	})
+	updateInput.ExpectedDraftRevision = unchangedScope.DraftRevision
 	selectorBody, err = json.Marshal(updateInput)
 	if err != nil {
 		t.Fatal(err)
@@ -875,6 +960,22 @@ func TestEnvironmentDraftPublishesOneAccountAcrossExplicitEndpointProtocols(t *t
 	if selectorPublish.Code != http.StatusOK {
 		t.Fatalf("selector publish status=%d body=%s", selectorPublish.Code, selectorPublish.Body.Bytes())
 	}
+	// A new catalog entry cannot expand another Route's frozen Account Set.
+	third := environmentRequest(t, application, http.MethodPost,
+		"/api/v1/provider-accounts", 0, "provider-account-cherry-third-0001",
+		[]byte(`{"id":"account.cherry.third","displayName":"Third","upstreamEndpointId":"target.cherry.anthropic","kind":"bearer_token","secret":"synthetic-third"}`))
+	if third.Code != http.StatusCreated {
+		t.Fatalf("third account status=%d body=%s", third.Code, third.Body.Bytes())
+	}
+	// Loss of an old/other Route's credential must not prevent switching this
+	// Route to a healthy selected Account. Only the replacement must be usable.
+	oldAccount, err := runtime.ProviderAccounts().Get(context.Background(), "account.cherry.bearer")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := secrets.Delete(context.Background(), oldAccount.Account.SecretRef); err != nil {
+		t.Fatal(err)
+	}
 	fixedRoute := selectorDraft.Candidate.ClientEndpoints[1].ProtocolPlans[0].Destination.Upstream.Routes[0]
 	activation := environmentRequest(t, application, http.MethodPut,
 		"/api/v1/environments/cherry-mapped/routes/"+fixedRoute.ID.String()+"/active-account",
@@ -891,9 +992,57 @@ func TestEnvironmentDraftPublishesOneAccountAcrossExplicitEndpointProtocols(t *t
 	if activated.Environment.Revision != selectorDraft.Candidate.Revision+1 ||
 		activated.RouteID != fixedRoute.ID || activated.AccountID != "account.cherry.additional" ||
 		activatedRoute.AccountPolicy.FixedAccountID != "account.cherry.additional" ||
-		len(activatedRoute.AccountPolicy.Accounts) != 1 ||
+		len(activatedRoute.AccountPolicy.Accounts) != 2 ||
 		activatedRoute.AccountPolicy.Accounts[0].ID != "account.cherry.additional" {
 		t.Fatalf("Account activation = %+v", activated)
+	}
+	if !reflect.DeepEqual(activated.Environment.ClientEndpoints[0], selectorDraft.Candidate.ClientEndpoints[0]) {
+		t.Fatal("Account activation rewrote another Route's frozen authority")
+	}
+	invalid := environmentRequest(t, application, http.MethodPut,
+		"/api/v1/environments/cherry-mapped/routes/"+fixedRoute.ID.String()+"/active-account",
+		uint64(activated.Environment.Revision), "environment-missing-account-activate-0001",
+		[]byte(`{"accountId":"account.cherry.bearer"}`))
+	if invalid.Code != http.StatusUnprocessableEntity || !bytes.Contains(invalid.Body.Bytes(), []byte("provider_account_credential_unavailable")) {
+		t.Fatalf("missing replacement credential was not rejected: %d %s", invalid.Code, invalid.Body.Bytes())
+	}
+	afterFailure := environmentRequest(t, application, http.MethodGet,
+		"/api/v1/environments/cherry-mapped", 0, "", nil)
+	var retained desktopcontrol.EnvironmentResponse
+	if afterFailure.Code != http.StatusOK || json.Unmarshal(afterFailure.Body.Bytes(), &retained) != nil ||
+		!reflect.DeepEqual(retained, activated.Environment) {
+		t.Fatal("failed activation changed the published Environment")
+	}
+	// Credential health is runtime state. A backup member that lost its
+	// credential must not block an unrelated edit, and must stay in the set.
+	renameInput := updateInput
+	renameInput.ClientEndpoints = retained.ClientEndpoints
+	renameInput.Name = "Renamed while a backup Account is unavailable"
+	renameInput.ExpectedDraftRevision = 0
+	renameBody, err := json.Marshal(renameInput)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rename := environmentRequest(t, application, http.MethodPut,
+		"/api/v1/environments/cherry-mapped/draft", uint64(retained.Revision),
+		"environment-rename-unhealthy-member-0001", renameBody)
+	if rename.Code != http.StatusOK {
+		t.Fatalf("rename with an unavailable backup Account status=%d body=%s", rename.Code, rename.Body.Bytes())
+	}
+	var renamed desktopcontrol.EnvironmentDraftResponse
+	if err := json.Unmarshal(rename.Body.Bytes(), &renamed); err != nil {
+		t.Fatal(err)
+	}
+	renamedRoute := renamed.Candidate.ClientEndpoints[1].ProtocolPlans[0].Destination.Upstream.Routes[0]
+	if len(renamedRoute.AccountPolicy.Accounts) != 2 ||
+		renamedRoute.AccountPolicy.FixedAccountID != "account.cherry.additional" {
+		t.Fatalf("rename changed the Route Account Set: %+v", renamedRoute.AccountPolicy)
+	}
+	renamePublish := environmentRequest(t, application, http.MethodPost,
+		"/api/v1/environments/cherry-mapped/draft/actions/publish", uint64(renamed.DraftRevision),
+		"environment-rename-unhealthy-member-publish-0001", nil)
+	if renamePublish.Code != http.StatusOK {
+		t.Fatalf("publish with an unavailable backup Account status=%d body=%s", renamePublish.Code, renamePublish.Body.Bytes())
 	}
 }
 

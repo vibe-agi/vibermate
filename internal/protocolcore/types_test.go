@@ -286,6 +286,22 @@ func TestToolKindsRejectAmbiguousPayloads(t *testing.T) {
 		call       ToolCall
 	}{
 		{
+			name:       "native definition without type",
+			definition: ToolDefinition{Kind: ToolKindNative, Name: "search"},
+		},
+		{
+			name:       "native definition with schema",
+			definition: ToolDefinition{Kind: ToolKindNative, Name: "search", NativeType: "web_search_20250305", InputSchema: schema},
+		},
+		{
+			name:       "function definition with native type",
+			definition: ToolDefinition{Kind: ToolKindFunction, Name: "search", NativeType: "web_search_20250305", InputSchema: schema},
+		},
+		{
+			name: "native kind is not an executable tool intent",
+			call: ToolCall{Kind: ToolKindNative, Key: callID, Name: "search", Arguments: schema},
+		},
+		{
 			name: "function definition with custom format",
 			definition: ToolDefinition{
 				Kind:        ToolKindFunction,

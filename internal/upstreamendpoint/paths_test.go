@@ -16,7 +16,10 @@ func TestServicePathsDistinguishChatGPTFromResponsesAPIs(t *testing.T) {
 		{"https://chatgpt.com/backend-api", "codex/responses", "/backend-api/codex/models", true},
 		{"https://chatgpt.com/backend-api/codex", "responses", "/backend-api/codex/models", true},
 		{"https://api.openai.com", "v1/responses", "/v1/models", false},
-		{"https://relay.example/api/v1", "v1/responses", "/api/v1/models", false},
+		{"https://api.openai.com/v1", "responses", "/v1/models", false},
+		{"https://relay.example/api/v1", "responses", "/api/v1/models", false},
+		{"https://relay.example/api", "v1/responses", "/api/v1/models", false},
+		{"https://relay.example/v10", "v1/responses", "/v10/v1/models", false},
 		{"https://relay.example/backend-api/codex", "v1/responses", "/backend-api/codex/v1/models", false},
 		{"https://chatgpt.com.example", "v1/responses", "/v1/models", false},
 		{"https://chatgpt.com:8443", "v1/responses", "/v1/models", false},
@@ -43,7 +46,7 @@ func TestServicePathsDistinguishChatGPTFromResponsesAPIs(t *testing.T) {
 			if got := IsChatGPTCodexOrigin(origin); got != test.codex {
 				t.Fatalf("Codex = %v", got)
 			}
-			if got := ProviderRelativePath(origin, "v1/chat/completions"); got != "v1/chat/completions" {
+			if got := ProviderRelativePath(origin, "unrelated/operation"); got != "unrelated/operation" {
 				t.Fatalf("unrelated operation changed: %s", got)
 			}
 		})

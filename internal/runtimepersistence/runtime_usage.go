@@ -52,6 +52,10 @@ func (store *Store) SetUsagePolicy(ctx context.Context, policy runtimeusage.Coll
 		return runtimeusage.CollectionPolicy{}, err
 	}
 	defer tx.Rollback()
+	current, err := scanUsagePolicy(tx.QueryRowContext(operation, `SELECT enabled,retention_days,revision,collecting_since_unix_ms FROM runtime_usage_policy WHERE singleton=1`))
+	if err != nil {
+		return runtimeusage.CollectionPolicy{}, err
+	}
 	since := now.Truncate(time.Millisecond)
 	if since.Before(now) {
 		since = since.Add(time.Millisecond)
@@ -67,11 +71,16 @@ func (store *Store) SetUsagePolicy(ctx context.Context, policy runtimeusage.Coll
 	}
 	// Shorter retention applies immediately. Lengthening never resurrects or
 	// extends records collected under a shorter consented retention period.
-	if _, err := tx.ExecContext(operation, `UPDATE runtime_usage_observations SET expires_at_unix_ms=min(expires_at_unix_ms,occurred_at_unix_ms+?)`, int64(policy.RetentionDays)*86400000); err != nil {
-		return runtimeusage.CollectionPolicy{}, err
-	}
-	if _, err := tx.ExecContext(operation, `DELETE FROM runtime_usage_observations WHERE expires_at_unix_ms<=?`, now.UnixMilli()); err != nil {
-		return runtimeusage.CollectionPolicy{}, err
+	if policy.RetentionDays < current.RetentionDays {
+		// The new cap dominates every longer cap over older sequences. One row
+		// per duration bounds pending work even if settings change repeatedly.
+		if _, err := tx.ExecContext(operation, `DELETE FROM runtime_usage_retention_caps WHERE retention_days>=?`, policy.RetentionDays); err != nil {
+			return runtimeusage.CollectionPolicy{}, err
+		}
+		if _, err := tx.ExecContext(operation, `INSERT INTO runtime_usage_retention_caps(retention_days,through_sequence)
+ SELECT ?,sequence FROM runtime_usage_observations ORDER BY sequence DESC LIMIT 1`, policy.RetentionDays); err != nil {
+			return runtimeusage.CollectionPolicy{}, err
+		}
 	}
 	updated, err := scanUsagePolicy(tx.QueryRowContext(operation, `SELECT enabled,retention_days,revision,collecting_since_unix_ms FROM runtime_usage_policy WHERE singleton=1`))
 	if err != nil {
@@ -81,6 +90,46 @@ func (store *Store) SetUsagePolicy(ctx context.Context, policy runtimeusage.Coll
 		return runtimeusage.CollectionPolicy{}, err
 	}
 	return updated, nil
+}
+
+// applyUsageRetention shares the existing maintenance transaction and budget.
+// The cap and its progress move atomically with each batch of expiry updates;
+// failed or canceled maintenance cannot relax a previously published limit.
+func applyUsageRetention(ctx context.Context, tx *sql.Tx, limit int) (bool, error) {
+	for {
+		var days int
+		var after, through int64
+		err := tx.QueryRowContext(ctx, `SELECT retention_days,after_sequence,through_sequence
+ FROM runtime_usage_retention_caps ORDER BY retention_days LIMIT 1`).Scan(&days, &after, &through)
+		if errors.Is(err, sql.ErrNoRows) {
+			return false, nil
+		}
+		if err != nil {
+			return false, err
+		}
+		var end int64
+		if err := tx.QueryRowContext(ctx, `SELECT coalesce(max(sequence),?) FROM (
+ SELECT sequence FROM runtime_usage_observations WHERE sequence>? AND sequence<=? ORDER BY sequence LIMIT ?
+)`, through, after, through, limit).Scan(&end); err != nil {
+			return false, err
+		}
+		duration := int64(days) * 86400000
+		if _, err := tx.ExecContext(ctx, `UPDATE runtime_usage_observations SET expires_at_unix_ms=occurred_at_unix_ms+?
+ WHERE sequence>? AND sequence<=? AND expires_at_unix_ms>occurred_at_unix_ms+?`, duration, after, end, duration); err != nil {
+			return false, err
+		}
+		if end == through {
+			_, err = tx.ExecContext(ctx, `DELETE FROM runtime_usage_retention_caps WHERE retention_days=?`, days)
+		} else {
+			_, err = tx.ExecContext(ctx, `UPDATE runtime_usage_retention_caps SET after_sequence=? WHERE retention_days=?`, end, days)
+		}
+		if err != nil {
+			return false, err
+		}
+		if limit > 0 {
+			return true, nil // Yield the writer before applying another batch/cap.
+		}
+	}
 }
 
 func (store *Store) RecordUsage(ctx context.Context, value runtimeusage.Observation) error {

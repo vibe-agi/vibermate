@@ -196,6 +196,10 @@ func TestPublishedManualAccountActivationChangesEveryNextRequest(t *testing.T) {
 	t.Parallel()
 	repository := newMemoryRepository()
 	revisionOne := environmentFixture(t, "work", "adapter.shared")
+	policy := &revisionOne.ClientEndpoints[0].ProtocolPlans[0].Destination.Upstream.Routes[0].AccountPolicy
+	policy.Accounts = append(policy.Accounts, environment.RouteAccountReference{
+		ID: "account.alternate", Revision: 1, DisplayName: "Alternate",
+	})
 	resolver := newRevisionResolver(t, revisionOne)
 	manager := newTestManager(t, repository, resolver)
 	capture := testCapture()

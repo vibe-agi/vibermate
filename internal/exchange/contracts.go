@@ -1115,6 +1115,7 @@ type AccountLeaseAuthority interface {
 type AttemptObservation struct {
 	ProviderErrorCode      string
 	StartedAt              time.Time
+	OccurredAt             time.Time
 	RequestedModel         string
 	UpstreamModel          string
 	Usage                  protocolcore.Usage

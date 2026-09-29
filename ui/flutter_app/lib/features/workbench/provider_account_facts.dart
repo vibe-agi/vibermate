@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../../core/api/account_facts_models.dart';
@@ -872,24 +874,65 @@ String accountQuotaCountdown(DateTime reset, DateTime now, AppCopy copy) {
 }
 
 /// Two independent quota windows, not a blended account percentage.
-final class ProviderAccountQuotaMini extends StatelessWidget {
+final class ProviderAccountQuotaMini extends StatefulWidget {
   const ProviderAccountQuotaMini({
     required this.facts,
     required this.loading,
     required this.failed,
     required this.copy,
+    this.clock,
     super.key,
   });
   final AccountFacts? facts;
   final bool loading, failed;
   final AppCopy copy;
+  final DateTime Function()? clock;
+
+  @override
+  State<ProviderAccountQuotaMini> createState() =>
+      _ProviderAccountQuotaMiniState();
+}
+
+final class _ProviderAccountQuotaMiniState
+    extends State<ProviderAccountQuotaMini>
+    with WidgetsBindingObserver {
+  late final Timer _clockTick;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _clockTick = Timer.periodic(const Duration(minutes: 1), (_) {
+      if (_visible(WidgetsBinding.instance.lifecycleState)) setState(() {});
+    });
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (_visible(state)) setState(() {});
+  }
+
+  // A desktop window that lost focus is inactive but still on screen.
+  static bool _visible(AppLifecycleState? state) =>
+      state == null ||
+      state == AppLifecycleState.resumed ||
+      state == AppLifecycleState.inactive;
+
+  @override
+  void dispose() {
+    _clockTick.cancel();
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
+    final facts = widget.facts, copy = widget.copy;
+    final loading = widget.loading, failed = widget.failed;
     final colors = context.viberColors;
     final windows = accountQuotaWindows(facts);
     final stale = failed || facts?.state == 'stale';
-    final now = DateTime.now();
+    final now = (widget.clock ?? DateTime.now)();
     final caption = Theme.of(
       context,
     ).textTheme.bodySmall?.copyWith(color: colors.textMuted);

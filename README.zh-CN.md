@@ -46,10 +46,11 @@ ViberMate 不提供共享或默认的 `admin/admin`。短期登录 token 只是�
 
 ## macOS App：第一次捕获
 
-安装并打开 ViberMate：
+目前没有已发布的版本。请在 macOS 14+ 上使用固定版本的 Flutter SDK（见
+`ui/flutter_app/tool/flutter-sdk.env`）从源码构建，然后打开 `dist/ViberMate.app`：
 
 ```sh
-brew install --cask vibe-agi/tap/vibermate
+make build-flutter-app
 ```
 
 进入 **设置 → 接入与启动 → 终端命令**，点击 **设置终端命令**。然后在项目目录执行：
@@ -72,8 +73,8 @@ vibermate run -- codex
 `vibermate acp -- <ACP 适配器可执行文件>` 让兼容编辑器继续使用现有 ACP
 适配器，同时由 ViberMate 保留有上限的会话和 prompt 观察。登录、权限、工具、
 服务商流量与原生历史仍由编辑器和适配器负责；ACP 观察不会应用 HTTP 账号替换、
-模型映射、脚本或网络规则。配置见 [ACP 接入指南](docs/acp-quickstart.md)，该能力
-是否已进入最新发布版见[能力与支持矩阵](docs/capability-support.md)。
+模型映射、脚本或网络规则。配置见 [ACP 接入指南](docs/acp-quickstart.md)，当前状态见
+[能力与支持矩阵](docs/capability-support.md)。
 
 ## 独立 Server + Web（原生进程或容器）
 
@@ -81,8 +82,8 @@ vibermate run -- codex
 原生进程与容器共享同一账号体系和证书规则。见[统一部署指南](docs/deployment.md)、
 [备份与恢复指南](docs/backup-and-restore.md)和 [Docker 配置](docs/docker.md)。
 
-从[最新版本](https://github.com/vibe-agi/vibermate/releases/latest)下载
-`linux_x86_64` 或 `linux_arm64` 压缩包，使用 `SHA256SUMS-linux` 校验并解压。
+在 Linux 上执行 `make build-linux-distributions` 构建 `linux_x86_64` 或
+`linux_arm64` 压缩包（输出在 `dist/linux-release`，附 `SHA256SUMS-linux`），然后解压。
 压缩包内已经包含 `vibermated`、`vibermate` 和相邻的 `vibermate-web` 网页界面。
 
 个人只在本机使用，不需要域名或证书：
@@ -139,8 +140,9 @@ vibermate run --server https://your-server.example:9666 -- claude
 
 请将示例地址替换为浏览器打开的准确 HTTPS 地址。CLI 会优先使用系统 PKI，因此公共
 证书正常续期不会改变服务器身份。私有 CA 部署应在服务器本机通过
-`vibermated server ca-certificate` 导出公开 CA，带外核对指纹后再安装。已有精确叶
-指纹可用 `vibermate trust --server <URL> --system-roots` 显式迁移。完整命令和信任
+`vibermated server ca-certificate` 导出公开 CA，带外核对指纹后，在登录前运行
+`vibermate trust --server <URL> --ca-fingerprint <SHA256>`，只为该 Server 建立
+CA 信任，也可显式转换已有叶指纹。若已安装系统根，可用 `--system-roots`。完整命令和信任
 边界见[统一部署指南](docs/deployment.md)。
 
 每个人都能从网页右上角修改自己的密码；所有者可以重置成员密码。本机 App

@@ -78,19 +78,22 @@ func (user User) Validate() error {
 	return nil
 }
 
-// Policy limits which published Environments a Runtime User may launch and
-// carries soft warnings over retained, observed usage. An empty Environment
-// list means all published Environments; disabling the user is the deny-all
-// operation.
+// Policy is the Owner's explicit grant of published Environments a Runtime
+// User may launch (ADR 0018), plus soft warnings over observed usage. The zero
+// value grants nothing: a new user launches nothing until the Owner grants it.
+// "All Environments" is itself an explicit grant and cannot be combined with a
+// list. The built-in transparent Environment is granted like any other.
 type Policy struct {
+	allEnvironments          bool
 	allowedEnvironmentIDs    string
 	DailyAgentAPICallWarning int64
 	DailyTokenWarning        int64
 }
 
-func NewPolicy(environmentIDs []string, dailyCalls, dailyTokens int64) (Policy, error) {
+func NewPolicy(allEnvironments bool, environmentIDs []string, dailyCalls, dailyTokens int64) (Policy, error) {
 	if len(environmentIDs) > maxEnvironments || dailyCalls < 0 || dailyCalls > maxWarningValue ||
-		dailyTokens < 0 || dailyTokens > maxWarningValue {
+		dailyTokens < 0 || dailyTokens > maxWarningValue ||
+		allEnvironments && len(environmentIDs) != 0 {
 		return Policy{}, ErrInvalidUser
 	}
 	ids := slices.Clone(environmentIDs)
@@ -106,14 +109,18 @@ func NewPolicy(environmentIDs []string, dailyCalls, dailyTokens int64) (Policy, 
 		}
 	}
 	return Policy{
+		allEnvironments:       allEnvironments,
 		allowedEnvironmentIDs: strings.Join(ids, "\x00"), DailyAgentAPICallWarning: dailyCalls,
 		DailyTokenWarning: dailyTokens,
 	}, nil
 }
 
+// AllEnvironments reports the explicit grant of every published Environment.
+func (policy Policy) AllEnvironments() bool { return policy.allEnvironments }
+
 func (policy Policy) Validate() error {
 	ids := policy.EnvironmentIDs()
-	if len(ids) > maxEnvironments ||
+	if policy.allEnvironments && len(ids) != 0 || len(ids) > maxEnvironments ||
 		policy.DailyAgentAPICallWarning < 0 || policy.DailyAgentAPICallWarning > maxWarningValue ||
 		policy.DailyTokenWarning < 0 || policy.DailyTokenWarning > maxWarningValue {
 		return ErrInvalidUser
@@ -133,8 +140,7 @@ func (policy Policy) AllowsEnvironment(id string) bool {
 	if policy.Validate() != nil {
 		return false
 	}
-	ids := policy.EnvironmentIDs()
-	return len(ids) == 0 || slices.Contains(ids, id)
+	return policy.allEnvironments || slices.Contains(policy.EnvironmentIDs(), id)
 }
 
 func (policy Policy) EnvironmentIDs() []string {

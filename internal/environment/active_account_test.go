@@ -9,6 +9,7 @@ func TestActivateRouteAccountAdvancesOnlyTheOwningAuthorityChain(t *testing.T) {
 	alternate := RouteAccountReference{
 		ID: "account.alternate", Revision: 1, DisplayName: "Alternate",
 	}
+	route.AccountPolicy.Accounts = append(route.AccountPolicy.Accounts, alternate)
 
 	candidate, changed, err := ActivateRouteAccount(current, route.ID, alternate)
 	if err != nil || !changed {

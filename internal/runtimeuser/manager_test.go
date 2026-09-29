@@ -164,7 +164,7 @@ func TestRuntimeUserPolicyIsCanonicalAndVisibleToExistingSessions(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	policy, err := NewPolicy([]string{"team", "system_transparent"}, 100, 1_000_000)
+	policy, err := NewPolicy(false, []string{"team", "system_transparent"}, 100, 1_000_000)
 	if err != nil {
 		t.Fatal(err)
 	}

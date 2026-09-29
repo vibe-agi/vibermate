@@ -118,11 +118,11 @@ func TestMemberWebLoginPasswordChangeAndLogoutStaySelfScoped(t *testing.T) {
 	session := decodeWebSession(t, login)
 	if session.Principal.ID != string(member.ID) ||
 		session.Principal.Role != string(serveradmin.RoleMember) ||
-		authority.Authorize(context.Background(), session.ReadToken, serveradmin.ScopeRead) {
+		authority.Authorize(context.Background(), session.ReadToken, serveradmin.ScopeRead) == nil {
 		t.Fatalf("member received owner authority: %#v", session)
 	}
-	if principal, valid := authority.Authenticate(context.Background(), session.ReadToken, serveradmin.ScopeRead); !valid || principal.UserID != member.ID {
-		t.Fatalf("member read session = %#v, valid = %v", principal, valid)
+	if principal, err := authority.Authenticate(context.Background(), session.ReadToken, serveradmin.ScopeRead); err != nil || principal.UserID != member.ID {
+		t.Fatalf("member read session = %#v, error = %v", principal, err)
 	}
 
 	changed := webRequest(t, handler, http.MethodPatch, servercontrol.WebPasswordPath, map[string]any{
@@ -130,7 +130,7 @@ func TestMemberWebLoginPasswordChangeAndLogoutStaySelfScoped(t *testing.T) {
 		"currentPassword": "alice password 123", "newPassword": "alice password 456",
 	}, session.WriteToken)
 	replacement := decodeWebSession(t, changed)
-	if _, valid := authority.Authenticate(context.Background(), session.ReadToken, serveradmin.ScopeRead); valid {
+	if _, err := authority.Authenticate(context.Background(), session.ReadToken, serveradmin.ScopeRead); err == nil {
 		t.Fatal("old read token survived password replacement")
 	}
 	if _, err := users.VerifyCredentials(context.Background(), "alice", []byte("alice password 456")); err != nil {
@@ -144,7 +144,7 @@ func TestMemberWebLoginPasswordChangeAndLogoutStaySelfScoped(t *testing.T) {
 	if loggedOut.Code != http.StatusNoContent {
 		t.Fatalf("logout = %d %s", loggedOut.Code, loggedOut.Body.String())
 	}
-	if _, valid := authority.Authenticate(context.Background(), replacement.ReadToken, serveradmin.ScopeRead); valid {
+	if _, err := authority.Authenticate(context.Background(), replacement.ReadToken, serveradmin.ScopeRead); err == nil {
 		t.Fatal("paired read token survived logout")
 	}
 }

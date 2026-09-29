@@ -10,6 +10,29 @@ import (
 	"github.com/vibe-agi/vibermate/internal/protocolcore"
 )
 
+func TestResponseEncodersRejectForeignNativeToolDefinitions(t *testing.T) {
+	codec := newTestCodec(t)
+	native := protocolcore.ToolDefinition{
+		Kind: protocolcore.ToolKindNative, Name: "web_search", NativeType: "web_search_20250305",
+	}
+	for _, namespaced := range []bool{false, true} {
+		request := streamingRequestFixture(t)
+		if namespaced {
+			request.ToolNamespaces = append(request.ToolNamespaces, protocolcore.ToolNamespace{
+				Name: "native", Description: "Synthetic native tools", Tools: []protocolcore.ToolDefinition{native},
+			})
+		} else {
+			request.Tools = append(request.Tools, native)
+		}
+		if _, _, err := codec.EncodeClientResponse(request, completeResponseFixture(t)); protocolcore.ReasonOf(err) != protocolcore.ReasonUnsupportedClientInput {
+			t.Errorf("JSON response did not reject a native tool: namespaced=%t, err=%v", namespaced, err)
+		}
+		if _, err := codec.NewStreamEncoder(request); protocolcore.ReasonOf(err) != protocolcore.ReasonUnsupportedClientInput {
+			t.Errorf("stream response did not reject a native tool: namespaced=%t, err=%v", namespaced, err)
+		}
+	}
+}
+
 func TestEncodeCompleteResponseUsesDistinctDeterministicClientIdentities(
 	t *testing.T,
 ) {

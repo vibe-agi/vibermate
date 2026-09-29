@@ -47,6 +47,7 @@ func (manager *Manager) RefreshCredential(ctx context.Context, id ID, expectedEp
 		return View{}, ErrPreparationUnavailable
 	}
 	manager.operations[id] = accountOperationRefresh
+	manager.refreshing[id] = make(chan struct{})
 	manager.beginInFlightLocked()
 	manager.mu.Unlock()
 	defer manager.finishOperation(id, accountOperationRefresh)
@@ -61,7 +62,13 @@ func (manager *Manager) RefreshCredential(ctx context.Context, id ID, expectedEp
 	if uint64(metadata.Revision) != expectedEpoch {
 		return View{}, ErrRevisionConflict
 	}
-	prepared, err := refresher.Refresh(ctx, account.Driver, account.SecretRef, account.credentialScope(account.RealmID, uint64(metadata.Revision), egressprofile.Direct()))
+	if err := ctx.Err(); err != nil {
+		return View{}, err
+	}
+	// The preparer owns a bounded rotation once started. Keep the account gate
+	// until that rotation has committed/failed, even if the control caller leaves;
+	// otherwise a new request could freeze the epoch being replaced in the background.
+	prepared, err := refresher.Refresh(context.WithoutCancel(ctx), account.Driver, account.SecretRef, account.credentialScope(account.RealmID, uint64(metadata.Revision), egressprofile.Direct()))
 	if err != nil {
 		return View{}, err
 	}
@@ -69,5 +76,8 @@ func (manager *Manager) RefreshCredential(ctx context.Context, id ID, expectedEp
 		return View{}, ErrCredentialMissing
 	}
 	manager.observeCredentialEpoch(id, prepared)
+	if err := ctx.Err(); err != nil {
+		return View{}, err
+	}
 	return manager.view(ctx, account)
 }

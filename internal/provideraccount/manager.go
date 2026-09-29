@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"slices"
 	"sort"
 	"sync"
@@ -40,10 +41,12 @@ type Manager struct {
 	egressProfiles egressprofile.Controller
 	active         map[ID]uint64
 	operations     map[ID]accountOperation
+	refreshing     map[ID]chan struct{}
 	epochs         map[ID]secretstore.Revision
 	inFlight       uint64
 	drained        chan struct{}
 	closing        bool
+	closed         chan struct{}
 }
 
 type accountOperation uint8
@@ -162,7 +165,9 @@ func NewManager(
 		accounts: accounts, clock: clock,
 		active:     make(map[ID]uint64),
 		operations: make(map[ID]accountOperation),
+		refreshing: make(map[ID]chan struct{}),
 		epochs:     make(map[ID]secretstore.Revision),
+		closed:     make(chan struct{}),
 	}, nil
 }
 
@@ -407,7 +412,11 @@ func (manager *Manager) ReplaceSecret(
 	}
 	manager.mu.Lock()
 	manager.epochs[account.ID] = metadata.Revision
+	preparer := manager.preparer
 	manager.mu.Unlock()
+	if preparer != nil {
+		preparer.Forget(account.SecretRef, metadata.Revision)
+	}
 	return View{
 		Account: account,
 		Health: Health{
@@ -521,6 +530,13 @@ func (manager *Manager) deleteUnreferenced(
 			return secretstore.ErrUnavailable
 		}
 	}
+	manager.mu.RLock()
+	preparer := manager.preparer
+	manager.mu.RUnlock()
+	if preparer != nil {
+		// Deletion supersedes every epoch of this credential.
+		preparer.Forget(account.SecretRef, math.MaxUint64)
+	}
 	result, err := manager.repository.Delete(ctx, account.ID, account.Revision)
 	if err != nil && result.Outcome != CommitCommitted {
 		if result.Outcome == CommitConflict {
@@ -617,10 +633,27 @@ func (manager *Manager) acquire(
 	ctx context.Context,
 	scope accountLeaseScope,
 ) (providerauth.Lease, error) {
-	manager.mu.Lock()
-	if manager.closing {
+	for {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		manager.mu.Lock()
+		if manager.closing {
+			manager.mu.Unlock()
+			return nil, ErrManagerClosing
+		}
+		done := manager.refreshing[scope.id]
+		if done == nil {
+			break // Keep the lock through account validation and epoch freezing.
+		}
 		manager.mu.Unlock()
-		return nil, ErrManagerClosing
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-manager.closed:
+			return nil, ErrManagerClosing
+		case <-done:
+		}
 	}
 	// Annotation writes do not change the credential or routing authority. New
 	// requests can keep acquiring it while the note is being persisted.
@@ -690,15 +723,15 @@ func (manager *Manager) acquire(
 	if credentialScope.Validate() != nil {
 		return nil, ErrInvalidAccount
 	}
-	if account.AutomaticRefresh {
-		manager.mu.RLock()
-		preparer := manager.preparer
-		manager.mu.RUnlock()
-		if preparer == nil {
-			return nil, ErrPreparationUnavailable
-		}
+	manager.mu.RLock()
+	preparer := manager.preparer
+	manager.mu.RUnlock()
+	if account.AutomaticRefresh && preparer == nil {
+		return nil, ErrPreparationUnavailable
+	}
+	if account.SupportsAutomaticRefresh() && preparer != nil {
 		prepared, err := preparer.Prepare(
-			ctx, account.Driver, account.SecretRef, credentialScope,
+			ctx, account.Driver, account.SecretRef, credentialScope, account.AutomaticRefresh,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("prepare ProviderAccount credential: %w", err)
@@ -724,6 +757,10 @@ func (manager *Manager) finishOperation(id ID, operation accountOperation) {
 	defer manager.mu.Unlock()
 	if manager.operations[id] == operation {
 		delete(manager.operations, id)
+		if operation == accountOperationRefresh {
+			close(manager.refreshing[id])
+			delete(manager.refreshing, id)
+		}
 	}
 	manager.finishInFlightLocked()
 }
@@ -785,7 +822,10 @@ func (manager *Manager) Shutdown(ctx context.Context) error {
 		return errors.New("ProviderAccount shutdown context is nil")
 	}
 	manager.mu.Lock()
-	manager.closing = true
+	if !manager.closing {
+		manager.closing = true
+		close(manager.closed)
+	}
 	if manager.inFlight == 0 {
 		manager.mu.Unlock()
 		return nil

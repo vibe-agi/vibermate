@@ -37,7 +37,7 @@ func TestIssueCaptureRunRejectsGrantBeforeReadingDependencies(t *testing.T) {
 
 func TestRuntimeUserEnvironmentPolicyIsEnforcedAtGrantBoundary(t *testing.T) {
 	t.Parallel()
-	policy, err := runtimeuser.NewPolicy([]string{"team"}, 0, 0)
+	policy, err := runtimeuser.NewPolicy(false, []string{"team"}, 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -56,6 +56,41 @@ func TestRuntimeUserEnvironmentPolicyIsEnforcedAtGrantBoundary(t *testing.T) {
 		environmentAuthorized(principal, environment.EnvironmentID("private")) ||
 		environmentAuthorized(principal, environment.SystemTransparentID) {
 		t.Fatal("Runtime User Environment policy was widened at grant boundary")
+	}
+}
+
+// ADR 0018: a Runtime User may launch only Environments the Owner granted.
+// A new user has none; "all Environments" is itself an explicit grant.
+func TestRuntimeUserWithoutGrantsCannotLaunchAnyEnvironment(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct {
+		name    string
+		all     bool
+		allowed bool
+	}{{"no grants", false, false}, {"all environments", true, true}} {
+		policy, err := runtimeuser.NewPolicy(test.all, nil, 0, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		principal, err := controlprincipal.New(controlprincipal.Attributes{
+			ID: "runtime-user:login-two", Kind: controlprincipal.KindRuntimeUser,
+			MachineID: "machine-source-two", DeviceName: "Linux workstation",
+			RuntimeUserID: "user.source-two", RuntimeUsername: "bob",
+			LoginSessionID: "login.source-two", RuntimeUserPolicy: policy,
+			CredentialRevision: 1,
+			AllowedGrantKinds:  []controlprincipal.GrantKind{controlprincipal.GrantCaptureRun},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, id := range []environment.EnvironmentID{"team", environment.SystemTransparentID} {
+			if environmentAuthorized(principal, id) != test.allowed {
+				t.Fatalf("%s: environment %s authorized = %t", test.name, id, !test.allowed)
+			}
+		}
+	}
+	if _, err := runtimeuser.NewPolicy(true, []string{"team"}, 0, 0); err == nil {
+		t.Fatal("a policy may not be both all Environments and an explicit list")
 	}
 }
 

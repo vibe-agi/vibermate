@@ -390,19 +390,11 @@ void main() {
       api: api,
     );
     await openSettingsTab(tester, 'users');
+    // A new member has no grants until the Owner chooses them.
+    expect(find.text('No policies granted · Alerts off'), findsOneWidget);
     await tapVisible(
       tester,
       find.byKey(Key('runtime-user-policy-${member.id}')),
-    );
-    await tester.tap(find.byKey(const Key('runtime-user-policy-all')));
-    await tester.pump();
-    expect(
-      tester
-          .widget<FilledButton>(
-            find.byKey(const Key('runtime-user-policy-save')),
-          )
-          .onPressed,
-      isNull,
     );
     await tester.tap(
       find.byKey(const Key('runtime-user-policy-environment-work')),

@@ -1,9 +1,9 @@
--- Single current v1 schema. Older data is converted explicitly while offline.
+-- The complete Runtime schema. Any change here must bump schemaRevision.
+-- schema_revision is the schemaRevision of the build that created the file.
 CREATE TABLE runtime_metadata(
   singleton INTEGER PRIMARY KEY NOT NULL CHECK(singleton = 1),
-  schema_identity TEXT NOT NULL CHECK(schema_identity = 'vibermate-runtime-clean-baseline'),
-  schema_revision INTEGER NOT NULL CHECK(schema_revision = 1),
-  schema_source_sha256 TEXT NOT NULL CHECK(length(schema_source_sha256) = 64),
+  schema_identity TEXT NOT NULL CHECK(schema_identity = 'vibermate-runtime'),
+  schema_revision INTEGER NOT NULL CHECK(schema_revision >= 1),
   initialized_at TEXT NOT NULL CHECK(length(initialized_at) > 0)
 ) STRICT;
 
@@ -699,6 +699,35 @@ CREATE TABLE runtime_evidence_chunks(
   codec TEXT NOT NULL CHECK(codec IN('identity', 'zstd')),
   payload BLOB NOT NULL CHECK(length(payload) > 0)
 ) STRICT;
+-- Reverse index only; chunk_manifest remains the ordered body representation.
+CREATE TABLE runtime_evidence_chunk_refs(
+  body_digest BLOB NOT NULL REFERENCES runtime_evidence_bodies(digest) ON DELETE CASCADE,
+  chunk_digest BLOB NOT NULL REFERENCES runtime_evidence_chunks(digest),
+  PRIMARY KEY(body_digest, chunk_digest)
+) STRICT, WITHOUT ROWID;
+CREATE INDEX runtime_evidence_chunk_refs_chunk
+ON runtime_evidence_chunk_refs(chunk_digest);
+CREATE TRIGGER runtime_evidence_chunk_refs_insert
+AFTER INSERT ON runtime_evidence_bodies BEGIN
+  INSERT INTO runtime_evidence_chunk_refs
+  SELECT NEW.digest, substr(NEW.chunk_manifest, position, 32) FROM (
+    WITH RECURSIVE spans(position) AS (
+      VALUES(1) UNION ALL SELECT position+32 FROM spans
+      WHERE position+32 <= length(NEW.chunk_manifest)
+    ) SELECT position FROM spans
+  ) WHERE true ON CONFLICT DO NOTHING;
+END;
+CREATE TRIGGER runtime_evidence_chunk_refs_update
+AFTER UPDATE OF chunk_manifest ON runtime_evidence_bodies BEGIN
+  DELETE FROM runtime_evidence_chunk_refs WHERE body_digest=OLD.digest;
+  INSERT INTO runtime_evidence_chunk_refs
+  SELECT NEW.digest, substr(NEW.chunk_manifest, position, 32) FROM (
+    WITH RECURSIVE spans(position) AS (
+      VALUES(1) UNION ALL SELECT position+32 FROM spans
+      WHERE position+32 <= length(NEW.chunk_manifest)
+    ) SELECT position FROM spans
+  ) WHERE true ON CONFLICT DO NOTHING;
+END;
 CREATE TABLE "runtime_exchange_agent_identities"(
   exchange_id TEXT PRIMARY KEY NOT NULL
   CHECK(length(CAST(exchange_id AS BLOB)) BETWEEN 1 AND 512),
@@ -745,6 +774,36 @@ CREATE TABLE runtime_exchange_content_messages(
   CHECK(length(CAST(block_manifest AS BLOB)) % 64 = 0 AND
   length(CAST(block_manifest AS BLOB)) BETWEEN 64 AND 1048576)
 ) STRICT;
+-- Derived reverse index of the ordered manifest. Keeping it in the same SQLite
+-- transaction lets expiry probe only the blocks of deleted messages.
+CREATE TABLE runtime_exchange_content_block_refs(
+  message_digest TEXT NOT NULL REFERENCES runtime_exchange_content_messages(digest) ON DELETE CASCADE,
+  block_digest TEXT NOT NULL REFERENCES runtime_exchange_content_blocks(digest),
+  PRIMARY KEY(message_digest, block_digest)
+) STRICT, WITHOUT ROWID;
+CREATE INDEX runtime_exchange_content_block_refs_block
+ON runtime_exchange_content_block_refs(block_digest);
+CREATE TRIGGER runtime_exchange_content_block_refs_insert
+AFTER INSERT ON runtime_exchange_content_messages BEGIN
+  INSERT INTO runtime_exchange_content_block_refs
+  SELECT NEW.digest, substr(NEW.block_manifest, position, 64) FROM (
+    WITH RECURSIVE spans(position) AS (
+      VALUES(1) UNION ALL SELECT position+64 FROM spans
+      WHERE position+64 <= length(NEW.block_manifest)
+    ) SELECT position FROM spans
+  ) WHERE true ON CONFLICT DO NOTHING;
+END;
+CREATE TRIGGER runtime_exchange_content_block_refs_update
+AFTER UPDATE OF block_manifest ON runtime_exchange_content_messages BEGIN
+  DELETE FROM runtime_exchange_content_block_refs WHERE message_digest=OLD.digest;
+  INSERT INTO runtime_exchange_content_block_refs
+  SELECT NEW.digest, substr(NEW.block_manifest, position, 64) FROM (
+    WITH RECURSIVE spans(position) AS (
+      VALUES(1) UNION ALL SELECT position+64 FROM spans
+      WHERE position+64 <= length(NEW.block_manifest)
+    ) SELECT position FROM spans
+  ) WHERE true ON CONFLICT DO NOTHING;
+END;
 CREATE TABLE runtime_exchange_content_transcripts(
   digest TEXT PRIMARY KEY NOT NULL
   CHECK(length(CAST(digest AS BLOB)) = 64 AND lower(digest) = digest),
@@ -1174,8 +1233,8 @@ CREATE INDEX runtime_exchange_contents_scope_expected
 ON runtime_exchange_contents(
   scope_kind,
   scope_id,
-  expected_message_count DESC,
-  recorded_at_unix_ms DESC
+  expected_transcript_digest,
+  expected_message_count
 );
 CREATE INDEX runtime_raw_evidence_exchange
 ON runtime_raw_evidence_envelopes(
@@ -1229,6 +1288,14 @@ CREATE TABLE runtime_usage_policy(
   revision INTEGER NOT NULL CHECK(revision>0), collecting_since_unix_ms INTEGER
 ) STRICT;
 INSERT INTO runtime_usage_policy VALUES(1,0,90,1,NULL);
+-- Publishing a shorter retention period never rewrites the observation table.
+-- Readers enforce these caps immediately; maintenance materializes them in
+-- bounded batches. A cap covers only pre-existing, never-reused sequences.
+CREATE TABLE runtime_usage_retention_caps(
+  retention_days INTEGER PRIMARY KEY CHECK(retention_days BETWEEN 1 AND 365),
+  through_sequence INTEGER NOT NULL CHECK(through_sequence>0),
+  after_sequence INTEGER NOT NULL DEFAULT 0 CHECK(after_sequence>=0 AND after_sequence<through_sequence)
+) STRICT;
 CREATE TABLE runtime_usage_observations(
   sequence INTEGER PRIMARY KEY AUTOINCREMENT,
   exchange_id TEXT NOT NULL UNIQUE,
@@ -1292,8 +1359,11 @@ CREATE TABLE acp_observations (
 );
 CREATE INDEX acp_observation_expiry ON acp_observations(expires_at_unix_ms);
 
+-- A user without a row has no grants. all_environments is an explicit grant
+-- of every published Environment and excludes a list.
 CREATE TABLE runtime_user_policies(
   user_id TEXT PRIMARY KEY NOT NULL REFERENCES runtime_users(user_id) ON DELETE CASCADE,
+  all_environments INTEGER NOT NULL DEFAULT 0 CHECK(all_environments IN (0, 1)),
   allowed_environment_ids_json BLOB NOT NULL
   CHECK(length(allowed_environment_ids_json) BETWEEN 2 AND 65536 AND
         json_valid(allowed_environment_ids_json) AND
@@ -1301,5 +1371,6 @@ CREATE TABLE runtime_user_policies(
   daily_agent_api_call_warning INTEGER NOT NULL DEFAULT 0
   CHECK(daily_agent_api_call_warning BETWEEN 0 AND 1000000000000000),
   daily_token_warning INTEGER NOT NULL DEFAULT 0
-  CHECK(daily_token_warning BETWEEN 0 AND 1000000000000000)
+  CHECK(daily_token_warning BETWEEN 0 AND 1000000000000000),
+  CHECK(all_environments = 0 OR json_array_length(allowed_environment_ids_json) = 0)
 ) STRICT;

@@ -2,6 +2,8 @@ package runtimepersistence
 
 import (
 	"context"
+	"crypto/rand"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -12,6 +14,110 @@ import (
 	"github.com/vibe-agi/vibermate/internal/exchangecontent"
 	"github.com/vibe-agi/vibermate/internal/rawevidence"
 )
+
+func TestRecordingDoesNotDependOnRetentionMaintenance(t *testing.T) {
+	store := openTestStore(t, filepath.Join(t.TempDir(), "retention-failure.db"))
+	defer shutdownTestStore(t, store)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	repository := store.ExchangeContentRepository()
+	expired := blockRecordFixture(t, "expired", now.Add(-48*time.Hour), nil, "old content")
+	expired.ExpiresAt = now.Add(-time.Hour)
+	if err := repository.Put(ctx, expired); err != nil {
+		t.Fatal(err)
+	}
+	// An external storage fault affecting deletion must not consume the recording
+	// operation or its budget. Reads must still hide expired evidence.
+	if _, err := store.database.Exec(`CREATE TRIGGER unavailable_retention BEFORE DELETE ON runtime_exchange_contents
+	 BEGIN SELECT RAISE(ABORT, 'synthetic retention failure'); END`); err != nil {
+		t.Fatal(err)
+	}
+	manager, err := exchangecontent.New(ctx, exchangecontent.Options{
+		Repository: repository, Clock: exchangecontent.SystemClock{},
+	})
+	if err != nil {
+		t.Fatalf("recorder startup depended on garbage collection: %v", err)
+	}
+	defer manager.Shutdown(ctx)
+	live := blockRecordFixture(t, "live", now, nil, "new content")
+	if err := manager.Record(ctx, live); err != nil {
+		t.Fatalf("recording depended on garbage collection: %v", err)
+	}
+	if _, err := manager.Get(ctx, live.ExchangeID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.Get(ctx, expired.ExchangeID); !errors.Is(err, exchangecontent.ErrNotFound) {
+		t.Fatalf("expired evidence is visible: %v", err)
+	}
+	if err := store.MaintainExpired(ctx, now); err == nil {
+		t.Fatal("fixture did not exercise the separate maintenance failure")
+	}
+}
+
+func TestRawRecordingDoesNotDependOnRetentionMaintenance(t *testing.T) {
+	store := openTestStore(t, filepath.Join(t.TempDir(), "raw-retention-failure.db"))
+	defer shutdownTestStore(t, store)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	repository := store.RawEvidenceRepository()
+	expired := rawEvidenceRecordForTest("writer.1", 1, rawevidence.LayerClientIngress,
+		[]byte("expired"), []byte(`{"version":1,"headers":[]}`))
+	expired.ObservedAt, expired.ExpiresAt = now.Add(-48*time.Hour), now.Add(-time.Hour)
+	if err := repository.AppendBatch(ctx, []rawevidence.StoredEnvelope{expired}, expired.ObservedAt); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.database.Exec(`CREATE TRIGGER unavailable_retention BEFORE DELETE ON runtime_raw_evidence_envelopes
+	 BEGIN SELECT RAISE(ABORT, 'synthetic retention failure'); END`); err != nil {
+		t.Fatal(err)
+	}
+	live := rawEvidenceRecordForTest("writer.2", 2, rawevidence.LayerClientIngress,
+		[]byte("live"), []byte(`{"version":1,"headers":[]}`))
+	live.ObservedAt, live.ExpiresAt = now, now.Add(time.Hour)
+	if err := repository.AppendBatch(ctx, []rawevidence.StoredEnvelope{live}, now); err != nil {
+		t.Fatalf("raw recording depended on garbage collection: %v", err)
+	}
+	if _, err := repository.GetEnvelope(ctx, live.EnvelopeID); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.MaintainExpired(ctx, now); err == nil {
+		t.Fatal("fixture did not exercise the separate maintenance failure")
+	}
+}
+
+func TestExpiredRawEvidenceCannotBeReadWhileMaintenanceIsPending(t *testing.T) {
+	store := openTestStore(t, filepath.Join(t.TempDir(), "expiry-read.db"))
+	defer shutdownTestStore(t, store)
+	ctx := context.Background()
+	now := time.Date(2026, 9, 29, 0, 0, 0, 0, time.UTC)
+	clock := &proxyClientClock{now: now}
+	manager, err := rawevidence.Open(ctx, rawevidence.Options{
+		Repository: store.RawEvidenceRepository(), Random: rand.Reader, Clock: clock, Config: rawevidence.DefaultConfig(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Shutdown(ctx)
+	record := rawEvidenceRecordForTest("writer.1", 1, rawevidence.LayerClientIngress,
+		[]byte("body"), []byte(`{"version":1,"headers":[]}`))
+	record.ObservedAt, record.ExpiresAt = now, now.Add(time.Hour)
+	if err := store.RawEvidenceRepository().AppendBatch(ctx, []rawevidence.StoredEnvelope{record}, now); err != nil {
+		t.Fatal(err)
+	}
+	request := rawevidence.RevealRequest{EnvelopeID: record.EnvelopeID, ActorID: "test-owner"}
+	if _, err := manager.Reveal(ctx, request); err != nil {
+		t.Fatal("live evidence was not readable", err)
+	}
+	clock.Set(record.ExpiresAt)
+	if records, err := manager.ListExchange(ctx, record.ExchangeID); err != nil || len(records) != 0 {
+		t.Errorf("expired metadata remained visible: records=%d error=%v", len(records), err)
+	}
+	if _, err := manager.Reveal(ctx, request); !errors.Is(err, rawevidence.ErrEnvelopeNotFound) {
+		t.Errorf("expired body remained readable: %v", err)
+	}
+	if _, err := store.RawEvidenceRepository().GetEnvelope(ctx, record.EnvelopeID); err != nil {
+		t.Fatal("test requires pending physical maintenance", err)
+	}
+}
 
 // growingConversationBody models what an Agent actually sends: the whole
 // conversation on every turn, with a per-request telemetry header at the front
@@ -186,6 +292,142 @@ func TestBodyHeavyExpiryFitsMaintenanceBudget(t *testing.T) {
 	}
 }
 
+// The important workload is one expired record among many live records, not a
+// mostly expired database. Neither recording nor expiry may walk the live graph.
+func TestSparseExpiryDoesNotScanRetainedBodies(t *testing.T) {
+	if os.Getenv("VIBERMATE_USAGE_SCALE") != "1" {
+		t.Skip("set VIBERMATE_USAGE_SCALE=1 for the isolated sparse-retention check")
+	}
+	store := openTestStore(t, filepath.Join(t.TempDir(), "sparse-retention.db"))
+	defer shutdownTestStore(t, store)
+	ctx := context.Background()
+	now := time.Date(2026, 9, 29, 0, 0, 0, 0, time.UTC)
+	repository := store.ExchangeContentRepository()
+	const count = 100000
+	for index := 0; index < count; index++ {
+		id := fmt.Sprintf("live-%d", index)
+		record := blockRecordFixture(t, id, now, nil, id)
+		record.Parent.CaptureRunID = id
+		if err := repository.Put(ctx, record); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for index := 0; index < 3; index++ {
+		record := blockRecordFixture(t, fmt.Sprintf("expired-%d", index), now,
+			[]string{"shared instruction"}, "expired content")
+		record.ExpiresAt = now.Add(time.Hour)
+		if err := repository.Put(ctx, record); err != nil {
+			t.Fatal(err)
+		}
+		started := time.Now()
+		budget, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
+		purged, err := repository.PurgeExpired(budget, now.Add(time.Hour))
+		cancel()
+		t.Logf("100k live records, one expired: %v, removed=%d, error=%v", time.Since(started), purged, err)
+		if err != nil || purged != 1 {
+			t.Fatalf("sparse expiry blocked on retained content: removed=%d error=%v", purged, err)
+		}
+	}
+	for _, id := range []string{"live-0", "live-50000", "live-99999"} {
+		if _, err := repository.Get(ctx, id, now.Add(time.Hour)); err != nil {
+			t.Fatalf("retained content %s was damaged: %v", id, err)
+		}
+	}
+}
+
+func TestSparseRawExpiryDoesNotScanRetainedBodies(t *testing.T) {
+	if os.Getenv("VIBERMATE_USAGE_SCALE") != "1" {
+		t.Skip("set VIBERMATE_USAGE_SCALE=1 for the isolated raw-retention check")
+	}
+	store := openTestStore(t, filepath.Join(t.TempDir(), "sparse-raw.db"))
+	defer shutdownTestStore(t, store)
+	ctx := context.Background()
+	now := time.Date(2026, 9, 29, 0, 0, 0, 0, time.UTC)
+	repository := store.RawEvidenceRepository()
+	makeRecord := func(writer string, index int) rawevidence.StoredEnvelope {
+		id := fmt.Sprintf("%s.%d", writer, index)
+		record := rawEvidenceRecordForTest(id, uint64(index), rawevidence.LayerClientIngress,
+			[]byte(id), []byte(`{"version":1,"headers":[]}`))
+		record.WriterID, record.ExchangeID = writer, id
+		record.ObservedAt, record.ExpiresAt = now, now.Add(24*time.Hour)
+		return record
+	}
+	const count = 100000
+	for start := 1; start <= count; start += 1000 {
+		batch := make([]rawevidence.StoredEnvelope, 0, 1000)
+		for index := start; index < start+1000; index++ {
+			batch = append(batch, makeRecord("live", index))
+		}
+		if err := repository.AppendBatch(ctx, batch, now); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for index := 1; index <= 3; index++ {
+		expired := makeRecord("expired", index)
+		expired.ExpiresAt = now.Add(time.Hour)
+		if err := repository.AppendBatch(ctx, []rawevidence.StoredEnvelope{expired}, now); err != nil {
+			t.Fatal(err)
+		}
+		started := time.Now()
+		budget, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
+		err := store.MaintainExpired(budget, now.Add(time.Hour))
+		cancel()
+		t.Logf("100k live raw bodies, one expired: %v, error=%v", time.Since(started), err)
+		if err != nil {
+			t.Fatalf("raw expiry blocked on retained bodies: %v", err)
+		}
+		if _, err := repository.GetEnvelope(ctx, expired.EnvelopeID); !errors.Is(err, rawevidence.ErrEnvelopeNotFound) {
+			t.Fatalf("expired envelope was not reclaimed: %v", err)
+		}
+	}
+	for _, id := range []string{"live.1", "live.50000", "live.100000"} {
+		record, err := repository.GetEnvelope(ctx, id)
+		if err != nil || string(record.Body) != id {
+			t.Fatalf("retained raw body %s was damaged: %v", id, err)
+		}
+	}
+}
+
+func TestSharedContentAppendDoesNotWalkRetainedReferences(t *testing.T) {
+	if os.Getenv("VIBERMATE_USAGE_SCALE") != "1" {
+		t.Skip("set VIBERMATE_USAGE_SCALE=1 for the isolated shared-content check")
+	}
+	store := openTestStore(t, filepath.Join(t.TempDir(), "shared-content.db"))
+	defer shutdownTestStore(t, store)
+	ctx := context.Background()
+	now := time.Date(2026, 9, 29, 0, 0, 0, 0, time.UTC)
+	repository := store.ExchangeContentRepository()
+	record := blockRecordFixture(t, "seed", now, []string{"shared instruction"}, "shared question")
+	if err := repository.Put(ctx, record); err != nil {
+		t.Fatal(err)
+	}
+	// Duplicate valid frozen records in one fixture transaction. Only identities
+	// differ; public reads below verify the fixture before measuring public writes.
+	if _, err := store.database.ExecContext(ctx, `WITH RECURSIVE ids(n) AS (
+	 VALUES(1) UNION ALL SELECT n+1 FROM ids WHERE n<100000
+	) INSERT INTO runtime_exchange_contents
+	 SELECT 'retained-'||n,scope_kind,scope_id,mode,recorded_at_unix_ms,expires_at_unix_ms,
+	 request_transcript_digest,expected_transcript_digest,base_transcript_digest,request_message_count,
+	 expected_message_count,inherited_message_count,response_message_digest,system_message_digest,
+	 cast(json_set(manifest_json,'$.exchangeId','retained-'||n) AS BLOB)
+	 FROM ids CROSS JOIN runtime_exchange_contents WHERE exchange_id='seed'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repository.Get(ctx, "retained-100000", now); err != nil {
+		t.Fatal("invalid scale fixture", err)
+	}
+	started := time.Now()
+	budget, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
+	defer cancel()
+	for index := 0; index < 100; index++ {
+		record.ExchangeID = fmt.Sprintf("new-%d", index)
+		if err := repository.Put(budget, record); err != nil {
+			t.Fatalf("shared-content append %d walked retained references: %v", index, err)
+		}
+	}
+	t.Logf("100 appends sharing 100k retained references: %v", time.Since(started))
+}
+
 // databaseBytesOnDisk sums the main database, its WAL and its shared-memory
 // file. Measuring the payload columns alone answers a narrower question than
 // the one a user asks, which is how large the file on their disk gets: envelope
@@ -308,7 +550,7 @@ func TestWholeDatabaseGrowthTracksDistinctContent(t *testing.T) {
 	}
 }
 
-// BenchmarkNoOpPurgeExpired measures what `Record` pays for the PurgeExpired
+// BenchmarkNoOpPurgeExpired measures an idle maintenance pass's PurgeExpired
 // transaction it runs before every Put.
 //
 // The shape is worth challenging: a sweep on every write reads like an O(n)

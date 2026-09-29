@@ -702,6 +702,26 @@ func (observer activityAttemptObserver) ObserveTerminal(
 	if err != nil {
 		return err
 	}
+	// Usage collection is independent of Activity retention and conversation
+	// indexing. Freeze its observation time before either display projection can
+	// fail or consume the terminal write budget.
+	var usageErr error
+	if observer.usage != nil {
+		value := runtimeusage.Observation{
+			ExchangeID: observation.ExchangeID, StartedAt: observation.StartedAt,
+			OccurredAt: observation.OccurredAt, CaptureRunID: source.captureRunID, ManualCaptureID: source.manualCaptureID,
+			Status: status, EnvironmentID: string(observation.EnvironmentID), EnvironmentRevision: uint64(observation.EnvironmentRevision),
+			AccountID: observation.AccountID, RequestedModel: observation.RequestedModel,
+			UpstreamModel: observation.UpstreamModel, Usage: observation.Usage,
+		}
+		if identity, ok := agentconversation.ClientIdentityFromProtocolEvidence(observation.ClientProtocolEvidence, observation.ProviderResponseID, observation.OccurredAt); ok {
+			value.Client, value.SessionID = identity.Client, identity.SessionID
+		}
+		usageErr = observer.usage.RecordUsage(ctx, value)
+		if usageErr != nil {
+			stage, firstFailure = "usage", usageErr
+		}
+	}
 	// The reason stays one stable code. The evidence beside it travels as its
 	// own typed fields: a reason with facts glued onto its end cannot be
 	// mapped to copy, matched by a rule, or told apart from a reason that
@@ -743,7 +763,7 @@ func (observer activityAttemptObserver) ObserveTerminal(
 		),
 	})
 	if err != nil {
-		return err
+		return errors.Join(usageErr, err)
 	}
 	identityErr := observer.persistProtocolIdentity(
 		ctx,
@@ -752,24 +772,8 @@ func (observer activityAttemptObserver) ObserveTerminal(
 		observation.ProviderResponseID,
 		record.OccurredAt,
 	)
-	stage = "conversation_identity"
-	firstFailure = identityErr
-	if identityErr == nil {
-		stage = "usage"
-	}
-	var usageErr error
-	if observer.usage != nil {
-		value := runtimeusage.Observation{
-			ExchangeID: observation.ExchangeID, StartedAt: observation.StartedAt,
-			OccurredAt: record.OccurredAt, CaptureRunID: source.captureRunID, ManualCaptureID: source.manualCaptureID,
-			Status: status, EnvironmentID: string(observation.EnvironmentID), EnvironmentRevision: uint64(observation.EnvironmentRevision),
-			AccountID: observation.AccountID, RequestedModel: observation.RequestedModel,
-			UpstreamModel: observation.UpstreamModel, Usage: observation.Usage,
-		}
-		if identity, ok := agentconversation.ClientIdentityFromProtocolEvidence(observation.ClientProtocolEvidence, observation.ProviderResponseID, record.OccurredAt); ok {
-			value.Client, value.SessionID = identity.Client, identity.SessionID
-		}
-		usageErr = observer.usage.RecordUsage(ctx, value)
+	if identityErr != nil && firstFailure == nil {
+		stage, firstFailure = "conversation_identity", identityErr
 	}
 	return errors.Join(identityErr, usageErr)
 }

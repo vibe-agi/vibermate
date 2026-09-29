@@ -123,6 +123,4 @@ message, tool permission, cancellation, EOF and reconnect through the real
 Runtime. Codex ACP 1.13.1 and Claude Agent ACP 0.81.2 also passed their isolated
 login/session boundaries without provider credentials. A real paid provider
 prompt, Zed/JetBrains human-click login, and arbitrary editor versions remain
-outside this evidence. See the [current editor acceptance](evidence/2026-09-26-acp-editor-acceptance.md),
-[earlier adapter research](research/2026-09-07-acp-acceptance.md), and
-[implementation evidence](plans/2026-09-07-acp-integration.md).
+outside this evidence.

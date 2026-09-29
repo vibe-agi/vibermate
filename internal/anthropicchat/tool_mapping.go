@@ -72,6 +72,9 @@ func (catalog *providerToolCatalog) add(
 	definition protocolcore.ToolDefinition,
 	path string,
 ) error {
+	if definition.EffectiveKind() == protocolcore.ToolKindNative {
+		return errors.New("native tool requires its original wire dialect")
+	}
 	identity := clientToolIdentity{
 		kind:      definition.EffectiveKind(),
 		namespace: namespace,

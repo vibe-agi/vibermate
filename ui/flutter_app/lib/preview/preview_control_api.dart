@@ -1483,6 +1483,9 @@ final class PreviewControlApi implements ControlApi {
         .firstOrNull;
     if (route == null ||
         route.accountPolicy.mode != 'fixed' ||
+        !route.accountPolicy.accounts.any(
+          (candidate) => candidate.id == accountId,
+        ) ||
         account == null ||
         !account.usable ||
         !account.isLinkedTo(route.endpointId)) {
@@ -1513,11 +1516,15 @@ final class PreviewControlApi implements ControlApi {
           policy['revision'] = (policy['revision']! as int) + 1;
           policy['fixedAccountId'] = accountId;
           policy['accounts'] = [
-            {
-              'id': account.id,
-              'revision': account.revision,
-              'displayName': account.displayName,
-            },
+            for (final selected in route.accountPolicy.accounts)
+              (selected.id == account.id
+                      ? RouteAccountReference(
+                          id: account.id,
+                          revision: account.revision,
+                          displayName: account.displayName,
+                        )
+                      : selected)
+                  .toJson(),
           ];
           changed = true;
         }
@@ -3560,6 +3567,7 @@ final class PreviewControlApi implements ControlApi {
   @override
   Future<RuntimeUser> setRuntimeUserPolicy({
     required String userId,
+    required bool allEnvironments,
     required List<String> allowedEnvironmentIds,
     required int dailyAgentApiCallWarning,
     required int dailyTokenWarning,
@@ -3567,6 +3575,7 @@ final class PreviewControlApi implements ControlApi {
     _requireOpen();
     final index = _runtimeUsers.indexWhere((user) => user.id == userId);
     if (index < 0 ||
+        allEnvironments && allowedEnvironmentIds.isNotEmpty ||
         allowedEnvironmentIds.length > 128 ||
         allowedEnvironmentIds.toSet().length != allowedEnvironmentIds.length ||
         dailyAgentApiCallWarning < 0 ||
@@ -3585,6 +3594,7 @@ final class PreviewControlApi implements ControlApi {
       role: current.role,
       createdAt: current.createdAt,
       updatedAt: DateTime.now().toUtc(),
+      allEnvironments: allEnvironments,
       allowedEnvironmentIds: List.unmodifiable(
         [...allowedEnvironmentIds]..sort(),
       ),

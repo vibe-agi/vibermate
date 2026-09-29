@@ -267,9 +267,12 @@ func (manager *Manager) ListExchange(
 	if err != nil {
 		return nil, err
 	}
-	metadata := make([]EnvelopeMetadata, len(records))
+	metadata := make([]EnvelopeMetadata, 0, len(records))
+	now := manager.clock.Now()
 	for index := range records {
-		metadata[index] = MetadataOf(records[index])
+		if records[index].ExpiresAt.After(now) {
+			metadata = append(metadata, MetadataOf(records[index]))
+		}
 	}
 	return metadata, nil
 }
@@ -962,8 +965,12 @@ func (manager *Manager) durableWatermark() uint64 {
 func (manager *Manager) ReadPayload(
 	record StoredEnvelope,
 ) (Payload, error) {
-	if manager == nil {
+	if manager == nil || manager.clock == nil {
 		return Payload{}, errors.New("raw evidence reader is unavailable")
+	}
+	// Visibility expires immediately even when physical maintenance is delayed.
+	if !record.ExpiresAt.After(manager.clock.Now()) {
+		return Payload{}, ErrEnvelopeNotFound
 	}
 	if record.PayloadState != PayloadCaptured &&
 		record.PayloadState != PayloadTruncated {

@@ -1,8 +1,8 @@
 package environment
 
 // ActivateRouteAccount prepares the smallest valid Environment revision that
-// changes one manual Route's active Account. Catalog-backed Account references
-// are refreshed by the control boundary before this candidate is saved.
+// changes one manual Route's active Account. The control boundary validates the
+// selected Account; all other frozen Account references remain unchanged.
 func ActivateRouteAccount(
 	current Environment,
 	routeID UpstreamRouteID,
@@ -34,6 +34,16 @@ func ActivateRouteAccount(
 					endpoint.Revision >= MaxRevision {
 					return Environment{}, false, ErrInvalidTransition
 				}
+				selectedIndex := -1
+				for index, selected := range route.AccountPolicy.Accounts {
+					if selected.ID == account.ID {
+						selectedIndex = index
+						break
+					}
+				}
+				if selectedIndex < 0 {
+					return Environment{}, false, ErrInvalidEnvironment
+				}
 				if route.AccountPolicy.FixedAccountID == account.ID {
 					return candidate, false, nil
 				}
@@ -43,7 +53,7 @@ func ActivateRouteAccount(
 				route.Revision++
 				route.AccountPolicy.Revision++
 				route.AccountPolicy.FixedAccountID = account.ID
-				route.AccountPolicy.Accounts = []RouteAccountReference{account}
+				route.AccountPolicy.Accounts[selectedIndex] = account
 				return candidate, true, nil
 			}
 		}
