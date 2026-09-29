@@ -46,12 +46,16 @@ ViberMate 不提供共享或默认的 `admin/admin`。短期登录 token 只是�
 
 ## macOS App：第一次捕获
 
-目前没有已发布的版本。请在 macOS 14+ 上使用固定版本的 Flutter SDK（见
-`ui/flutter_app/tool/flutter-sdk.env`）从源码构建，然后打开 `dist/ViberMate.app`：
+安装经过签名与 Apple 公证的通用 App（macOS 14+）：
 
 ```sh
-make build-flutter-app
+brew install --cask vibe-agi/tap/vibermate
 ```
+
+也可以从[最新发布](https://github.com/vibe-agi/vibermate/releases/latest)下载
+`ViberMate_<版本>_universal.dmg`。若要从源码构建，请使用固定版本的
+Flutter SDK（见 `ui/flutter_app/tool/flutter-sdk.env`）执行 `make build-flutter-app`，然后打开
+`dist/ViberMate.app`。
 
 进入 **设置 → 接入与启动 → 终端命令**，点击 **设置终端命令**。然后在项目目录执行：
 
@@ -82,8 +86,9 @@ vibermate run -- codex
 原生进程与容器共享同一账号体系和证书规则。见[统一部署指南](docs/deployment.md)、
 [备份与恢复指南](docs/backup-and-restore.md)和 [Docker 配置](docs/docker.md)。
 
-在 Linux 上执行 `make build-linux-distributions` 构建 `linux_x86_64` 或
-`linux_arm64` 压缩包（输出在 `dist/linux-release`，附 `SHA256SUMS-linux`），然后解压。
+从[最新发布](https://github.com/vibe-agi/vibermate/releases/latest)下载 `linux_x86_64` 或
+`linux_arm64` 压缩包和 `SHA256SUMS-linux`，用 `sha256sum -c --ignore-missing SHA256SUMS-linux`
+校验后解压。若要从源码构建，请在 Linux 上执行 `make build-linux-distributions`（输出在 `dist/linux-release`）。
 压缩包内已经包含 `vibermated`、`vibermate` 和相邻的 `vibermate-web` 网页界面。
 
 个人只在本机使用，不需要域名或证书：

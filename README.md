@@ -49,13 +49,16 @@ short-lived implementation details and are not something people need to copy.
 
 ## macOS App: first capture
 
-There is no published release at the moment. Build the App from source on
-macOS 14+ with the pinned Flutter SDK (see `ui/flutter_app/tool/flutter-sdk.env`)
-and open `dist/ViberMate.app`:
+Install the signed and notarized universal App (macOS 14+):
 
 ```sh
-make build-flutter-app
+brew install --cask vibe-agi/tap/vibermate
 ```
+
+Or download `ViberMate_<version>_universal.dmg` from the
+[latest release](https://github.com/vibe-agi/vibermate/releases/latest).
+To build from source instead, run `make build-flutter-app` with the pinned Flutter
+SDK (see `ui/flutter_app/tool/flutter-sdk.env`) and open `dist/ViberMate.app`.
 
 In **Settings → Access & launch → Terminal command**, choose **Set up command**. Then,
 from your project directory:
@@ -93,9 +96,10 @@ Docker does not change which certificates or accounts you need. See the
 [deployment guide](docs/deployment.md), [backup and restore guide](docs/backup-and-restore.md),
 and [Docker configurations](docs/docker.md).
 
-Build the `linux_x86_64` or `linux_arm64` archive on Linux with
-`make build-linux-distributions` (output in `dist/linux-release`, with
-`SHA256SUMS-linux`) and extract it. The archive contains `vibermated`,
+Download the `linux_x86_64` or `linux_arm64` archive and `SHA256SUMS-linux` from the
+[latest release](https://github.com/vibe-agi/vibermate/releases/latest), verify it
+with `sha256sum -c --ignore-missing SHA256SUMS-linux`, and extract it. To build from
+source, run `make build-linux-distributions` on Linux (output in `dist/linux-release`). The archive contains `vibermated`,
 `vibermate`, and the adjacent `vibermate-web` UI.
 
 For personal use on this computer, no domain or certificate is needed:
