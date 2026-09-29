@@ -3962,6 +3962,7 @@ final class WorkbenchController extends ChangeNotifier
         left.noteRevision == right.noteRevision &&
         left.settingsRevision == right.settingsRevision &&
         left.automaticRefresh == right.automaticRefresh &&
+        left.supportsAutomaticRefresh == right.supportsAutomaticRefresh &&
         left.egressProfile == right.egressProfile &&
         left.credentialOrigin == right.credentialOrigin &&
         listEquals(left.linkedEndpointIds, right.linkedEndpointIds) &&

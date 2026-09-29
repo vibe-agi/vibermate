@@ -164,6 +164,21 @@ void main() {
             ),
             findsOneWidget,
           );
+          // Two rows (model and subtotal) do not reserve a 480px viewport.
+          expect(
+            tester
+                .getSize(find.byKey(const Key('usage-breakdown-viewport')))
+                .height,
+            lessThan(480),
+          );
+          final semantics = tester.ensureSemantics();
+          expect(
+            find.bySemanticsLabel(
+              RegExp('^${RegExp.escape(copy('usage.table.cost'))}\\s'),
+            ),
+            findsNWidgets(2),
+          );
+          semantics.dispose();
           expect(tester.takeException(), isNull);
           if (width < 600) {
             await tester.drag(

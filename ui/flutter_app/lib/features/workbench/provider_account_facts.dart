@@ -903,15 +903,20 @@ final class _ProviderAccountQuotaMiniState
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _clockTick = Timer.periodic(const Duration(minutes: 1), (_) {
-      final state = WidgetsBinding.instance.lifecycleState;
-      if (state == null || state == AppLifecycleState.resumed) setState(() {});
+      if (_visible(WidgetsBinding.instance.lifecycleState)) setState(() {});
     });
   }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed) setState(() {});
+    if (_visible(state)) setState(() {});
   }
+
+  // A desktop window that lost focus is inactive but still on screen.
+  static bool _visible(AppLifecycleState? state) =>
+      state == null ||
+      state == AppLifecycleState.resumed ||
+      state == AppLifecycleState.inactive;
 
   @override
   void dispose() {

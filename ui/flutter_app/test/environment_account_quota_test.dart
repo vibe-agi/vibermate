@@ -61,6 +61,8 @@ void main() {
         ),
       );
       expect(find.text('1m'), findsOneWidget);
+      // A visible but unfocused desktop window is inactive, not hidden.
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
       now = now.add(const Duration(minutes: 1));
       await tester.pump(const Duration(minutes: 1));
       expect(find.text('<1m'), findsOneWidget);

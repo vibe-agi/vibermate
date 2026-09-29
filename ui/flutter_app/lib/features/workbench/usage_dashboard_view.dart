@@ -888,7 +888,11 @@ final class _UsageGroupTableState extends State<UsageGroupTable> {
         : group.id;
   }
 
-  DataRow _row(RuntimeUsageGroup group, {bool total = false}) {
+  DataRow _row(
+    RuntimeUsageGroup group,
+    List<String> headers, {
+    bool total = false,
+  }) {
     final expandable =
         !total && _trail.length + 1 < _committed.dimensions.length;
     final name = total
@@ -961,32 +965,40 @@ final class _UsageGroupTableState extends State<UsageGroupTable> {
               ? () => _navigate(_trail.length, child: group)
               : null,
         ),
-        DataCell(Text(usageIntegerLabel(group.agentApiCalls))),
-        DataCell(Text(usageIntegerLabel(group.failed))),
-        for (final value in [
+        DataCell(
+          _headed(headers[1], Text(usageIntegerLabel(group.agentApiCalls))),
+        ),
+        DataCell(_headed(headers[2], Text(usageIntegerLabel(group.failed)))),
+        for (final (index, value) in [
           group.tokens.inputUncached,
           group.tokens.cacheRead,
           group.tokens.output,
-        ])
+        ].indexed)
           DataCell(
-            Tooltip(
-              message: widget.copy('usage.tokens.hint'),
-              child: Text(
-                value.observed
-                    ? '${value.complete ? '' : '≥ '}${usageIntegerLabel(value.tokens)}'
-                    : '—',
+            _headed(
+              headers[3 + index],
+              Tooltip(
+                message: widget.copy('usage.tokens.hint'),
+                child: Text(
+                  value.observed
+                      ? '${value.complete ? '' : '≥ '}${usageIntegerLabel(value.tokens)}'
+                      : '—',
+                ),
               ),
             ),
           ),
         DataCell(
-          Tooltip(
-            message:
-                '${_costCoverage(group.cost, widget.copy)}\n${usageCostLabel(group.cost)}',
-            child: Text(
-              _tableCostLabel(group.cost),
-              style: TextStyle(
-                fontWeight: FontWeight.w600,
-                color: context.viberColors.route,
+          _headed(
+            headers[6],
+            Tooltip(
+              message:
+                  '${_costCoverage(group.cost, widget.copy)}\n${usageCostLabel(group.cost)}',
+              child: Text(
+                _tableCostLabel(group.cost),
+                style: TextStyle(
+                  fontWeight: FontWeight.w600,
+                  color: context.viberColors.route,
+                ),
               ),
             ),
           ),
@@ -994,6 +1006,12 @@ final class _UsageGroupTableState extends State<UsageGroupTable> {
       ],
     );
   }
+
+  // The body table repeats no visible heading, so each value carries its
+  // column name for screen readers.
+  static Widget _headed(String header, Widget child) => MergeSemantics(
+    child: Semantics(label: header, child: child),
+  );
 
   Widget _table(RuntimeUsageReport page) => LayoutBuilder(
     builder: (context, constraints) {
@@ -1008,6 +1026,8 @@ final class _UsageGroupTableState extends State<UsageGroupTable> {
         'usage.table.output',
         'usage.table.cost',
       ];
+      final headers = [for (final label in labels) widget.copy(label)];
+      final rowCount = page.groups.length + (_subtotal == null ? 0 : 1);
       List<DataColumn> columns({required bool heading}) => [
         for (var i = 0; i < labels.length; i++)
           DataColumn(
@@ -1018,7 +1038,7 @@ final class _UsageGroupTableState extends State<UsageGroupTable> {
             label: heading
                 ? Flexible(
                     child: Text(
-                      widget.copy(labels[i]),
+                      headers[i],
                       maxLines: 2,
                       overflow: TextOverflow.ellipsis,
                     ),
@@ -1028,7 +1048,8 @@ final class _UsageGroupTableState extends State<UsageGroupTable> {
       ];
       return SizedBox(
         key: const Key('usage-breakdown-viewport'),
-        height: 480,
+        // Short reports shrink to their rows; long ones scroll inside 480.
+        height: math.min(480, 44 + rowCount * 60 + 24),
         child: Scrollbar(
           controller: _horizontalScroll,
           thumbVisibility: true,
@@ -1073,9 +1094,10 @@ final class _UsageGroupTableState extends State<UsageGroupTable> {
                               ),
                           columns: columns(heading: false),
                           rows: [
-                            for (final group in page.groups) _row(group),
+                            for (final group in page.groups)
+                              _row(group, headers),
                             if (_subtotal case final total?)
-                              _row(total, total: true),
+                              _row(total, headers, total: true),
                           ],
                         ),
                       ),
