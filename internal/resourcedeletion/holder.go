@@ -32,6 +32,20 @@ type Released struct {
 	Captures    uint64
 }
 
+// Add returns the combined receipt of two committed deletions.
+func (released Released) Add(other Released) Released {
+	return Released{
+		Exchanges:   released.Exchanges + other.Exchanges,
+		Envelopes:   released.Envelopes + other.Envelopes,
+		Activities:  released.Activities + other.Activities,
+		Connections: released.Connections + other.Connections,
+		Attempts:    released.Attempts + other.Attempts,
+		Approvals:   released.Approvals + other.Approvals,
+		Assignments: released.Assignments + other.Assignments,
+		Captures:    released.Captures + other.Captures,
+	}
+}
+
 // Archive is the narrow destructive boundary implemented by the runtime
 // store. A Capture purge and a whole-archive clear span several repositories,
 // so neither operation belongs to any one of them.

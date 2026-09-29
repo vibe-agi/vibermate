@@ -98,22 +98,33 @@ SELECT
 }
 
 // CleanupExpired removes only evidence whose own retention deadline passed.
-// Both evidence planes share one transaction so a reported failure cannot hide
-// a partial cleanup.
+// It uses the same bounded, committed batches as background maintenance so
+// the single writer is never held for long. The receipt counts every batch
+// that committed; on failure it is returned with the error, so a partial
+// cleanup is reported rather than hidden.
 func (store *Store) CleanupExpired(
 	ctx context.Context,
 	now time.Time,
 ) (resourcedeletion.Released, error) {
-	released, _, err := store.cleanupExpired(ctx, now, -1)
-	return released, err
+	var total resourcedeletion.Released
+	for {
+		released, more, err := store.cleanupExpired(ctx, now, expiredCleanupBatchSize)
+		total = total.Add(released)
+		if err != nil || !more {
+			return total, err
+		}
+	}
 }
 
-const expiredCleanupBatchSize = 1000
+// expiredCleanupBatchSize bounds one cleanup transaction. Every item may
+// release a transcript chain or a body's chunks, so the bound is kept small
+// enough that a batch of the most expensive items still yields the writer
+// well within the terminal-write budgets.
+const expiredCleanupBatchSize = 100
 
 // MaintainExpired yields the write connection between bounded deletion batches.
 // Its caller owns the time budget; cancellation rolls back only the active batch,
 // so the next maintenance pass continues instead of repeating a huge transaction.
-// Explicit user cleanup retains the all-or-nothing receipt above.
 func (store *Store) MaintainExpired(ctx context.Context, now time.Time) error {
 	for {
 		_, more, err := store.cleanupExpired(ctx, now, expiredCleanupBatchSize)
