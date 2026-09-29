@@ -57,8 +57,6 @@ brew install --cask vibe-agi/tap/vibermate
 
 Or download `ViberMate_<version>_universal.dmg` from the
 [latest release](https://github.com/vibe-agi/vibermate/releases/latest).
-0.1.17 cannot open data created by 0.1.16 or earlier; move
-`~/Library/Application Support/io.vibermate.desktop` aside before the first launch.
 To build from source instead, run `make build-flutter-app` with the pinned Flutter
 SDK (see `ui/flutter_app/tool/flutter-sdk.env`) and open `dist/ViberMate.app`.
 

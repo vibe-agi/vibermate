@@ -5,9 +5,8 @@ published product are not interchangeable evidence.
 
 Source package version: **0.1.17**. Latest published release: **v0.1.17**.
 
-[v0.1.17](https://github.com/vibe-agi/vibermate/releases/tag/v0.1.17) replaces the
-withdrawn 0.1.14–0.1.16 releases. It opens only databases of its own schema
-revision and has no migrations
+[v0.1.17](https://github.com/vibe-agi/vibermate/releases/tag/v0.1.17) opens only
+databases of its own schema revision and has no migrations
 ([ADR 0021](adr/0021-one-schema-revision-without-migrations.md)).
 
 - **Released** — part of the latest published release.

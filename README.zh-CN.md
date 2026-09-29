@@ -53,8 +53,7 @@ brew install --cask vibe-agi/tap/vibermate
 ```
 
 也可以从[最新发布](https://github.com/vibe-agi/vibermate/releases/latest)下载
-`ViberMate_<版本>_universal.dmg`。0.1.17 无法打开 0.1.16 及更早版本创建的数据；首次启动前请把
-`~/Library/Application Support/io.vibermate.desktop` 移到别处保留。若要从源码构建，请使用固定版本的
+`ViberMate_<版本>_universal.dmg`。若要从源码构建，请使用固定版本的
 Flutter SDK（见 `ui/flutter_app/tool/flutter-sdk.env`）执行 `make build-flutter-app`，然后打开
 `dist/ViberMate.app`。
 
