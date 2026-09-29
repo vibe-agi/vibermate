@@ -63,12 +63,15 @@ const (
 	StopReasonRefusal      StopReason = "refusal"
 	StopReasonPauseTurn    StopReason = "pause_turn"
 	StopReasonContextLimit StopReason = "model_context_window_exceeded"
+	// StopReasonIncomplete is a provider-declared incomplete terminal whose
+	// reason this projection does not model; the reason stays in the native wire.
+	StopReasonIncomplete StopReason = "incomplete"
 )
 
 func (reason StopReason) Validate() error {
 	switch reason {
 	case StopReasonEndTurn, StopReasonMaxTokens, StopReasonToolUse, StopReasonStopSequence,
-		StopReasonRefusal, StopReasonPauseTurn, StopReasonContextLimit:
+		StopReasonRefusal, StopReasonPauseTurn, StopReasonContextLimit, StopReasonIncomplete:
 		return nil
 	default:
 		return errors.New("response stop reason is unsupported")
@@ -434,7 +437,9 @@ func (message Message) Validate() error {
 					(block.ProviderExtension.kind ==
 						ProviderExtensionInputImage ||
 						block.ProviderExtension.kind ==
-							ProviderExtensionInputAudio)) {
+							ProviderExtensionInputAudio ||
+						block.ProviderExtension.kind ==
+							ProviderExtensionOpaqueItem)) {
 				return errors.New("user message contains an unsupported block")
 			}
 		case RoleAssistant:
@@ -1561,6 +1566,9 @@ const (
 	NoticeCustomToolKindEncoded               NoticeCode = "custom_tool_kind_encoded"
 	NoticeDeveloperRoleNormalized             NoticeCode = "developer_role_normalized"
 	NoticeToolOutputContentNormalized         NoticeCode = "tool_output_content_normalized"
+	// NoticeNativeContentNotProjected marks same-dialect content that the
+	// original wire carries unchanged but the neutral projection does not model.
+	NoticeNativeContentNotProjected NoticeCode = "native_content_not_projected"
 	// NoticeUnknownRequestFieldNotForwarded names a field the client sent that
 	// this dialect does not model. Clients add fields faster than any
 	// translator learns them; refusing the request would make the product

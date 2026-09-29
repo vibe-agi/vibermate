@@ -184,16 +184,20 @@ func (codec *Codec) decodeProviderResponse(
 	switch wire.Status {
 	case "completed":
 	case "incomplete":
-		if wire.IncompleteDetails == nil ||
-			wire.IncompleteDetails.Reason != "max_output_tokens" || hasToolCall {
+		if wire.IncompleteDetails == nil || wire.IncompleteDetails.Reason == "" {
 			return protocolcore.Response{}, protocolcore.TranslationReport{},
-				protocolcore.NewFailure(
-					protocolcore.ReasonUnsupportedProviderData,
-					"$.incomplete_details.reason",
-					errors.New("Responses incomplete reason is unsupported"),
-				)
+				invalidProvider("$.incomplete_details", errors.New("Responses incomplete terminal has no reason"))
 		}
-		stopReason = protocolcore.StopReasonMaxTokens
+		// Tool calls in an incomplete response still pass the decision gate;
+		// the stop reason records why the provider ended it.
+		switch wire.IncompleteDetails.Reason {
+		case "max_output_tokens":
+			stopReason = protocolcore.StopReasonMaxTokens
+		case "content_filter":
+			stopReason = protocolcore.StopReasonRefusal
+		default:
+			stopReason = protocolcore.StopReasonIncomplete
+		}
 	default:
 		return protocolcore.Response{}, protocolcore.TranslationReport{},
 			invalidProvider("$.status", errors.New("Responses terminal status is invalid"))
@@ -310,8 +314,9 @@ func decodeProviderOutputItem(
 		if err := json.Unmarshal(raw, &wire); err != nil {
 			return nil, nil, invalidProvider(path, err)
 		}
+		// A message cut off by an incomplete terminal is itself incomplete.
 		if wire.Role != "assistant" ||
-			(wire.Status != "" && wire.Status != "completed") ||
+			(wire.Status != "" && wire.Status != "completed" && wire.Status != "incomplete") ||
 			len(wire.Content) == 0 {
 			return nil, nil, invalidProvider(path, errors.New("Responses message output is invalid"))
 		}
