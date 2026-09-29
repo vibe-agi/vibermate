@@ -248,6 +248,11 @@ func verifySystemRoots(
 // verifyPresentedChain distinguishes an internally valid private chain from a
 // malformed or otherwise ineligible certificate. It does not establish trust:
 // its caller must still match or explicitly enroll the returned CA fingerprint.
+//
+// The anchor is the topmost presented certificate. Private PKI often serves
+// leaf + intermediate and keeps its root offline, so the anchor may be an
+// intermediate; it must still be a CA and sign the rest of the chain. A root
+// that is presented must also carry a valid self-signature.
 func verifyPresentedChain(
 	leaf *x509.Certificate,
 	rawChain [][]byte,
@@ -259,13 +264,16 @@ func verifyPresentedChain(
 	if len(rawChain) == 0 {
 		presentedRoots.AddCert(leaf)
 	} else {
-		root, err := x509.ParseCertificate(rawChain[len(rawChain)-1])
-		if err != nil || !root.IsCA || !bytes.Equal(root.RawIssuer, root.RawSubject) ||
-			root.CheckSignatureFrom(root) != nil {
+		anchor, err := x509.ParseCertificate(rawChain[len(rawChain)-1])
+		if err != nil || !anchor.IsCA || !anchor.BasicConstraintsValid ||
+			anchor.KeyUsage&x509.KeyUsageCertSign == 0 {
 			return nil, ErrInvalidCertificate
 		}
-		issuer = root
-		presentedRoots.AddCert(root)
+		if bytes.Equal(anchor.RawIssuer, anchor.RawSubject) && anchor.CheckSignatureFrom(anchor) != nil {
+			return nil, ErrInvalidCertificate
+		}
+		issuer = anchor
+		presentedRoots.AddCert(anchor)
 		intermediates = rawChain[:len(rawChain)-1]
 	}
 	return issuer, verifySystemRoots(leaf, intermediates, now, presentedRoots)
