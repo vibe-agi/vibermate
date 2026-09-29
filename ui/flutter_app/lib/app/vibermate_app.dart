@@ -568,6 +568,7 @@ String _bootstrapFailureMessage(AppCopy copy, Object? failure) {
         'bootstrap.failure.secret_store_unavailable',
       ),
       'storage_unavailable' => copy('bootstrap.failure.storage_unavailable'),
+      'storage_incompatible' => copy('bootstrap.failure.storage_incompatible'),
       'storage_location_unavailable' => copy(
         'settings.storage.storage_location_unavailable',
       ),

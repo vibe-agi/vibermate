@@ -667,6 +667,8 @@ final class AppCopy {
         'ViberMate cannot access the macOS Keychain. Unlock the login keychain in Keychain Access and retry. If you switched between development and installed builds, reopen the signed installed build; they may not share Keychain access. Do not delete Keychain items or local data.',
     'bootstrap.failure.storage_unavailable':
         'ViberMate cannot open its local data. No database was replaced. Check free space and folder permissions. If this started after changing versions, keep the data directory and use the previous compatible version.',
+    'bootstrap.failure.storage_incompatible':
+        'This data folder was created by a different ViberMate version, and this version cannot open it. Nothing was changed. To start with empty data, quit ViberMate, move the data folder (by default ~/Library/Application Support/io.vibermate.desktop) somewhere else to keep it, then reopen ViberMate. To keep using the old data, reopen the version that created it.',
     'bootstrap.failure.root_reset_failed':
         'Root replacement could not recover safely. Retry once. If it repeats, quit ViberMate; in Keychain Access → login → Certificates remove ViberMate Local Root entries, move ~/Library/Application Support/io.vibermate.desktop/local-ca and ~/Library/Application Support/io.vibermate.desktop/root-reset-request.json to Trash, then reopen ViberMate. Captured evidence is kept.',
     'server.login.title': 'Connect to this Runtime Server',
@@ -3248,6 +3250,8 @@ final class AppCopy {
         'ViberMate 无法访问 macOS 钥匙串。请在“钥匙串访问”中解锁“登录”钥匙串并重试。若曾切换开发版与安装版，请重新打开已签名的安装版；两者可能无法共用钥匙串权限。不要删除钥匙串项目或本地数据。',
     'bootstrap.failure.storage_unavailable':
         'ViberMate 无法打开本机数据，数据库未被替换。请检查磁盘空间与目录权限。如果发生在更换版本后，请保留数据目录，并使用之前兼容的版本。',
+    'bootstrap.failure.storage_incompatible':
+        '这个数据目录由另一个 ViberMate 版本创建，当前版本无法打开，也没有做任何修改。若要从空数据开始，请退出 ViberMate，把数据目录（默认 ~/Library/Application Support/io.vibermate.desktop）移到别处保留，然后重新打开 ViberMate。若要继续使用旧数据，请重新打开创建它的版本。',
     'bootstrap.failure.root_reset_failed':
         '根证书更换无法安全恢复。请先重试一次；若仍失败，请退出 ViberMate，在“钥匙串访问”→“登录”钥匙串→“证书”中移除 ViberMate Local Root，再将 ~/Library/Application Support/io.vibermate.desktop/local-ca 与 ~/Library/Application Support/io.vibermate.desktop/root-reset-request.json 移到废纸篓，然后重新打开 ViberMate。已捕获的证据会保留。',
     'server.login.title': '连接到这台 Runtime Server',

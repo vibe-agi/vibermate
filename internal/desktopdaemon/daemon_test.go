@@ -33,7 +33,7 @@ func TestStartupFailureClassificationIsClosed(t *testing.T) {
 		{
 			name:   "unsupported schema",
 			err:    errors.Join(errors.New("wrapped"), runtimepersistence.ErrUnsupportedSchema),
-			reason: desktopbootstrap.FailureStorageUnavailable,
+			reason: desktopbootstrap.FailureStorageIncompatible,
 		},
 		{
 			name:   "invalid storage",
