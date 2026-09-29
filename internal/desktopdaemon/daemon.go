@@ -164,7 +164,7 @@ func classifyStartupFailure(err error) desktopbootstrap.Failure {
 	case errors.Is(err, localca.ErrRootResetFailed):
 		reason = desktopbootstrap.FailureRootResetFailed
 	case errors.Is(err, runtimepersistence.ErrInvalidDatabasePath),
-		errors.Is(err, runtimepersistence.ErrSchemaBaselineMismatch):
+		errors.Is(err, runtimepersistence.ErrUnsupportedSchema):
 		reason = desktopbootstrap.FailureStorageUnavailable
 	case errors.Is(err, secretstore.ErrLocked),
 		errors.Is(err, secretstore.ErrDenied),

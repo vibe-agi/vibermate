@@ -3,26 +3,15 @@ package runtimepersistence
 import (
 	"context"
 	"database/sql"
-	"errors"
 	"fmt"
-)
-
-var (
-	ErrSchemaBaselineMismatch = errors.New("database was created from an unsupported development baseline")
 )
 
 // SchemaState is an immutable view of the durable schema authority.
 type SchemaState struct {
 	Revision      int64  `json:"revision"`
 	Identity      string `json:"identity"`
-	SourceSHA256  string `json:"sourceSha256"`
 	InitializedAt string `json:"initializedAt"`
 }
-
-const (
-	currentSchemaIdentity = "vibermate-runtime-clean-baseline"
-	currentSchemaRevision = int64(1)
-)
 
 // DatabaseSettings records connection invariants that must hold on every
 // SQLite connection used by the runtime.
@@ -39,23 +28,14 @@ type SchemaStateReader interface {
 }
 
 type Repository struct {
-	database                   *sql.DB
-	operations                 *operationGate
-	expectedSchemaSourceSHA256 string
+	database   *sql.DB
+	operations *operationGate
 }
 
 var _ SchemaStateReader = (*Repository)(nil)
 
-func newRepository(
-	database *sql.DB,
-	operations *operationGate,
-	expectedSchemaSourceSHA256 string,
-) *Repository {
-	return &Repository{
-		database:                   database,
-		operations:                 operations,
-		expectedSchemaSourceSHA256: expectedSchemaSourceSHA256,
-	}
+func newRepository(database *sql.DB, operations *operationGate) *Repository {
+	return &Repository{database: database, operations: operations}
 }
 
 func (r *Repository) ReadSchemaState(ctx context.Context) (SchemaState, error) {
@@ -76,37 +56,24 @@ func (r *Repository) ReadSchemaState(ctx context.Context) (SchemaState, error) {
 	var state SchemaState
 	if err := transaction.QueryRowContext(
 		operationContext,
-		`SELECT schema_identity, schema_revision, schema_source_sha256, initialized_at
+		`SELECT schema_identity, schema_revision, initialized_at
 		 FROM runtime_metadata
 		 WHERE singleton = 1`,
 	).Scan(
 		&state.Identity,
 		&state.Revision,
-		&state.SourceSHA256,
 		&state.InitializedAt,
 	); err != nil {
-		return SchemaState{}, fmt.Errorf("%w: read runtime metadata: %v", ErrSchemaBaselineMismatch, err)
+		return SchemaState{}, fmt.Errorf("%w: read runtime metadata: %v", ErrUnsupportedSchema, err)
 	}
-	if err := validateSchemaState(state, r.expectedSchemaSourceSHA256); err != nil {
-		return SchemaState{}, err
+	// The open store migrated this file; anything else means it changed under us.
+	if state.Identity != schemaIdentity || state.Revision != latestSchemaRevision() {
+		return SchemaState{}, fmt.Errorf("%w: identity %q revision %d", ErrUnsupportedSchema, state.Identity, state.Revision)
 	}
 	if err := transaction.Commit(); err != nil {
 		return SchemaState{}, fmt.Errorf("commit schema state transaction: %w", err)
 	}
 	return state, nil
-}
-
-func validateSchemaState(state SchemaState, expectedSourceSHA256 string) error {
-	if state.Identity != currentSchemaIdentity {
-		return fmt.Errorf("%w: identity %q", ErrSchemaBaselineMismatch, state.Identity)
-	}
-	if state.Revision != currentSchemaRevision {
-		return fmt.Errorf("%w: revision %d", ErrSchemaBaselineMismatch, state.Revision)
-	}
-	if state.SourceSHA256 != expectedSourceSHA256 {
-		return fmt.Errorf("%w: source digest %q", ErrSchemaBaselineMismatch, state.SourceSHA256)
-	}
-	return nil
 }
 
 func (r *Repository) Settings(ctx context.Context) (DatabaseSettings, error) {

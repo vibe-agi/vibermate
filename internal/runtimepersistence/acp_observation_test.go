@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
-	"database/sql"
 	"encoding/base64"
 	"errors"
 	"path/filepath"
@@ -21,19 +20,10 @@ import (
 func TestACPCurrentSchemaPreservesSnapshotsAcrossRestart(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "runtime.db")
-	// ACP is part of the current baseline, not initialized by a second pass.
-	base := sql.OpenDB(newSQLiteConnector(path, DefaultBusyTimeout))
-	digest, err := initializeSchema(ctx, base)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err = base.Close(); err != nil {
-		t.Fatal(err)
-	}
+	// ACP is part of the schema migrations, not initialized by a second pass.
 	store := openTestStore(t, path)
-	state, err := store.SchemaStateReader().ReadSchemaState(ctx)
-	if err != nil || state.SourceSHA256 != digest {
-		t.Fatalf("current baseline changed: %v", err)
+	if state, err := store.SchemaStateReader().ReadSchemaState(ctx); err != nil || state.Revision != latestSchemaRevision() {
+		t.Fatalf("schema state = %+v, %v", state, err)
 	}
 	manager, err := capturerun.NewManager(ctx, capturerun.DefaultOptions(store.CaptureRunRepository()))
 	if err != nil {
@@ -143,27 +133,6 @@ func TestACPRevokedRuntimeIdentityCannotPublishThroughALiveRun(t *testing.T) {
 				t.Fatalf("revoked identity published: %v", err)
 			}
 		})
-	}
-}
-
-func TestUnfamiliarSchemaIsNotSilentlyResetForACP(t *testing.T) {
-	ctx := context.Background()
-	path := filepath.Join(t.TempDir(), "runtime.db")
-	store := openTestStore(t, path)
-	const unfamiliar = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-	if _, err := store.database.ExecContext(ctx, `UPDATE runtime_metadata SET schema_source_sha256=?`, unfamiliar); err != nil {
-		t.Fatal(err)
-	}
-	shutdownTestStore(t, store)
-	if reopened, err := Open(ctx, Options{DatabasePath: path, BusyTimeout: DefaultBusyTimeout, CommitReconcileTimeout: DefaultCommitReconcileTimeout}); err == nil {
-		shutdownTestStore(t, reopened)
-		t.Fatal("unfamiliar schema opened")
-	}
-	database := sql.OpenDB(newSQLiteConnector(path, DefaultBusyTimeout))
-	defer database.Close()
-	var digest string
-	if err := database.QueryRowContext(ctx, `SELECT schema_source_sha256 FROM runtime_metadata`).Scan(&digest); err != nil || digest != unfamiliar {
-		t.Fatal("failed open rewrote schema")
 	}
 }
 

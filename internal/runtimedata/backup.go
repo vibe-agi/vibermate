@@ -148,7 +148,7 @@ func validateBackupLocked(ctx context.Context, directory string) error {
 		ctx, filepath.Join(directory, "runtime.db"),
 	)
 	if err != nil {
-		if errors.Is(err, runtimepersistence.ErrSchemaBaselineMismatch) {
+		if errors.Is(err, runtimepersistence.ErrUnsupportedSchema) {
 			return ErrBackupIncompatible
 		}
 		return ErrBackupInvalid

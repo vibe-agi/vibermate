@@ -3,7 +3,6 @@ package runtimepersistence
 import (
 	"context"
 	"database/sql"
-	"encoding/hex"
 	"errors"
 	"os"
 	"path/filepath"
@@ -83,90 +82,8 @@ func TestSQLiteStoreRejectsUnsupportedDatabase(t *testing.T) {
 		_ = store.Shutdown(context.Background())
 		t.Fatal("unsupported database returned a store")
 	}
-	if !errors.Is(err, ErrSchemaBaselineMismatch) {
+	if !errors.Is(err, ErrUnsupportedSchema) {
 		t.Fatalf("unsupported database error = %v", err)
-	}
-}
-
-func TestSQLiteStoreRejectsChangedCurrentSchema(t *testing.T) {
-	t.Parallel()
-
-	databasePath := filepath.Join(t.TempDir(), "runtime.db")
-	store := openTestStore(t, databasePath)
-	if err := store.Shutdown(context.Background()); err != nil {
-		t.Fatalf("close store: %v", err)
-	}
-
-	database := sql.OpenDB(newSQLiteConnector(databasePath, DefaultBusyTimeout))
-	if _, err := database.Exec(
-		`UPDATE runtime_metadata SET schema_source_sha256 = ? WHERE singleton = 1`,
-		"0000000000000000000000000000000000000000000000000000000000000000",
-	); err != nil {
-		_ = database.Close()
-		t.Fatalf("change schema binding: %v", err)
-	}
-	if err := database.Close(); err != nil {
-		t.Fatalf("close changed database: %v", err)
-	}
-
-	store, err := Open(context.Background(), Options{
-		DatabasePath:           databasePath,
-		BusyTimeout:            DefaultBusyTimeout,
-		CommitReconcileTimeout: DefaultCommitReconcileTimeout,
-	})
-	if store != nil {
-		_ = store.Shutdown(context.Background())
-		t.Fatal("changed database returned a store")
-	}
-	if !errors.Is(err, ErrSchemaBaselineMismatch) {
-		t.Fatalf("changed database error = %v", err)
-	}
-}
-
-func TestSQLiteStoreRejectsPreviousSchemaWithoutChangingData(t *testing.T) {
-	t.Parallel()
-	ctx := context.Background()
-	path := filepath.Join(t.TempDir(), "runtime.db")
-	store := openTestStore(t, path)
-	appendIdentityActivity(t, store, "preserved")
-	before, err := store.ActivityRepository().GetExchange(ctx, "preserved")
-	if err != nil {
-		t.Fatal(err)
-	}
-	shutdownTestStore(t, store)
-	// The previous baseline is input to an explicit offline conversion, never
-	// an invitation for Runtime startup to mutate stored accounts or evidence.
-	const previous = "94865976df1130b198b9dbe28da1a249a0082adf9e797f43cb96005904ec7914"
-	database := sql.OpenDB(newSQLiteConnector(path, DefaultBusyTimeout))
-	defer database.Close()
-	if _, err := database.Exec(`ALTER TABLE provider_accounts DROP COLUMN settings_revision;
-		ALTER TABLE provider_accounts DROP COLUMN egress_profile_json;
-		ALTER TABLE provider_accounts DROP COLUMN automatic_refresh;
-		UPDATE runtime_metadata SET schema_source_sha256 = ?`, previous); err != nil {
-		t.Fatal(err)
-	}
-	var schemaBefore string
-	if err := database.QueryRow(`SELECT sql FROM sqlite_schema WHERE name = 'provider_accounts'`).Scan(&schemaBefore); err != nil {
-		t.Fatal(err)
-	}
-	opened, err := Open(ctx, Options{DatabasePath: path, BusyTimeout: DefaultBusyTimeout, CommitReconcileTimeout: DefaultCommitReconcileTimeout})
-	if opened != nil {
-		shutdownTestStore(t, opened)
-		t.Fatal("previous schema was opened")
-	}
-	if !errors.Is(err, ErrSchemaBaselineMismatch) {
-		t.Fatalf("previous schema error = %v", err)
-	}
-	var schemaAfter, digest string
-	if err := database.QueryRow(`SELECT sql FROM sqlite_schema WHERE name = 'provider_accounts'`).Scan(&schemaAfter); err != nil {
-		t.Fatal(err)
-	}
-	if err := database.QueryRow(`SELECT schema_source_sha256 FROM runtime_metadata`).Scan(&digest); err != nil {
-		t.Fatal(err)
-	}
-	after, err := newActivityRepository(database, database, newOperationGate()).GetExchange(ctx, "preserved")
-	if err != nil || after.ID != before.ID || after.Sequence != before.Sequence || digest != previous || schemaBefore != schemaAfter {
-		t.Fatalf("rejected open changed database: digest=%s activity=%+v error=%v", digest, after, err)
 	}
 }
 
@@ -295,19 +212,13 @@ func openTestStore(t testing.TB, databasePath string) *Store {
 
 func assertInitialSchemaState(t *testing.T, state SchemaState) {
 	t.Helper()
-	if state.Revision != currentSchemaRevision {
-		t.Fatalf("schema revision = %d, want %d", state.Revision, currentSchemaRevision)
+	if state.Revision != latestSchemaRevision() {
+		t.Fatalf("schema revision = %d, want %d", state.Revision, latestSchemaRevision())
 	}
 	if state.InitializedAt == "" {
 		t.Fatal("schema initialization timestamp is empty")
 	}
-	if state.Identity != currentSchemaIdentity {
-		t.Fatalf("schema identity = %q, want %q", state.Identity, currentSchemaIdentity)
-	}
-	if len(state.SourceSHA256) != 64 {
-		t.Fatalf("schema source digest length = %d, want 64", len(state.SourceSHA256))
-	}
-	if _, err := hex.DecodeString(state.SourceSHA256); err != nil {
-		t.Fatalf("schema source digest = %q: %v", state.SourceSHA256, err)
+	if state.Identity != schemaIdentity {
+		t.Fatalf("schema identity = %q, want %q", state.Identity, schemaIdentity)
 	}
 }

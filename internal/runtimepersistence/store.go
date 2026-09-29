@@ -3,10 +3,7 @@ package runtimepersistence
 
 import (
 	"context"
-	"crypto/sha256"
 	"database/sql"
-	_ "embed"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -38,12 +35,7 @@ const (
 	DefaultCommitReconcileTimeout = 2 * time.Second
 )
 
-var (
-	ErrInvalidDatabasePath = errors.New("invalid database path")
-
-	//go:embed schema.sql
-	schemaSQL string
-)
+var ErrInvalidDatabasePath = errors.New("invalid database path")
 
 // Options contains the typed SQLite construction policy.
 type Options struct {
@@ -123,8 +115,7 @@ func Open(ctx context.Context, options Options) (*Store, error) {
 	if err := database.PingContext(ctx); err != nil {
 		return fail(fmt.Errorf("open SQLite database: %w", err))
 	}
-	schemaSourceSHA256, err := initializeSchema(ctx, database)
-	if err != nil {
+	if _, err := migrateSchema(ctx, database, migrations, time.Now()); err != nil {
 		return fail(err)
 	}
 	if err := protectDatabaseArtifacts(options.DatabasePath); err != nil {
@@ -132,7 +123,7 @@ func Open(ctx context.Context, options Options) (*Store, error) {
 	}
 
 	operations := newOperationGate()
-	repository := newRepository(database, operations, schemaSourceSHA256)
+	repository := newRepository(database, operations)
 	captureRepo := newCaptureRunRepository(database, operations)
 	codeLibrary := newCodeLibraryRepository(
 		database,
@@ -184,8 +175,7 @@ func Open(ctx context.Context, options Options) (*Store, error) {
 	)
 	rawEvidence := newRawEvidenceRepository(database, operations)
 	runtimeUsers := newRuntimeUserRepository(database, operations)
-	_, err = repository.ReadSchemaState(ctx)
-	if err != nil {
+	if _, err := repository.ReadSchemaState(ctx); err != nil {
 		operations.closeAdmission()
 		return fail(fmt.Errorf("read initial schema state: %w", err))
 	}
@@ -365,74 +355,6 @@ func (s *Store) Shutdown(ctx context.Context) error {
 	close(s.closeDone)
 	s.closeMu.Unlock()
 	return closeErr
-}
-
-func initializeSchema(ctx context.Context, database *sql.DB) (string, error) {
-	sum := sha256.Sum256([]byte(schemaSQL))
-	digest := hex.EncodeToString(sum[:])
-
-	transaction, err := database.BeginTx(ctx, nil)
-	if err != nil {
-		return "", fmt.Errorf("begin SQLite schema initialization: %w", err)
-	}
-	defer func() { _ = transaction.Rollback() }()
-
-	var initialized bool
-	if err := transaction.QueryRowContext(
-		ctx,
-		`SELECT EXISTS(
-		   SELECT 1 FROM sqlite_schema
-		   WHERE type = 'table' AND name = 'runtime_metadata'
-		 )`,
-	).Scan(&initialized); err != nil {
-		return "", fmt.Errorf("inspect SQLite schema: %w", err)
-	}
-	if initialized {
-		var state SchemaState
-		if err := transaction.QueryRowContext(ctx, `SELECT schema_identity, schema_revision, schema_source_sha256, initialized_at FROM runtime_metadata WHERE singleton=1`).Scan(
-			&state.Identity, &state.Revision, &state.SourceSHA256, &state.InitializedAt,
-		); err != nil {
-			return "", fmt.Errorf("%w: read schema: %v", ErrSchemaBaselineMismatch, err)
-		}
-		if err := validateSchemaState(state, digest); err != nil {
-			return "", err
-		}
-		if err := transaction.Commit(); err != nil {
-			return "", fmt.Errorf("commit SQLite schema check: %w", err)
-		}
-		return digest, nil
-	}
-
-	var objects int
-	if err := transaction.QueryRowContext(
-		ctx,
-		`SELECT COUNT(*) FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%'`,
-	).Scan(&objects); err != nil {
-		return "", fmt.Errorf("inspect empty SQLite schema: %w", err)
-	}
-	if objects != 0 {
-		return "", fmt.Errorf("%w: database contains %d schema objects", ErrSchemaBaselineMismatch, objects)
-	}
-	if _, err := transaction.ExecContext(ctx, schemaSQL); err != nil {
-		return "", fmt.Errorf("initialize SQLite schema: %w", err)
-	}
-	if _, err := transaction.ExecContext(
-		ctx,
-		`INSERT INTO runtime_metadata(
-		   singleton, schema_identity, schema_revision,
-		   schema_source_sha256, initialized_at
-		 ) VALUES (1, ?, ?, ?, ?)`,
-		currentSchemaIdentity,
-		currentSchemaRevision,
-		digest,
-		time.Now().UTC().Format(time.RFC3339Nano),
-	); err != nil {
-		return "", fmt.Errorf("record SQLite schema state: %w", err)
-	}
-	if err := transaction.Commit(); err != nil {
-		return "", fmt.Errorf("commit SQLite schema initialization: %w", err)
-	}
-	return digest, nil
 }
 
 func prepareDatabasePath(databasePath string) error {

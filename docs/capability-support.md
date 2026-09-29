@@ -9,9 +9,11 @@ Source package version: **0.1.16**. Latest published release: **v0.1.16**.
 The 0.1.16 account egress/refresh settings, unified Git launch context, complete
 paginated reports, recording-failure isolation and sleep recovery are
 [released](https://github.com/vibe-agi/vibermate/releases/tag/v0.1.16).
-Upstream-specific OAuth and quota interfaces remain experimental. Existing 0.1.15 data requires
-the explicit private backup and [offline conversion](../tool/convert-v1/README.md)
-before switching to the current v1 Runtime; there is no startup migration.
+Upstream-specific OAuth and quota interfaces remain experimental. The current
+source evolves its database with forward schema migrations applied at startup
+([ADR 0021](adr/0021-evolve-sqlite-schema-with-forward-migrations.md)); its
+migration chain starts after v0.1.16, so databases created by v0.1.16 or earlier
+are not opened by this source.
 
 - **Released** — included in the latest published release and covered by the
   stated release evidence.

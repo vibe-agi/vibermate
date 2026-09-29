@@ -69,7 +69,7 @@ func TestDaemonsPreserveUnsupportedDatabaseInsteadOfStartingEmpty(t *testing.T) 
 				}
 				err = serverdaemon.Run(ctx, options)
 			}
-			if !errors.Is(err, runtimepersistence.ErrSchemaBaselineMismatch) {
+			if !errors.Is(err, runtimepersistence.ErrUnsupportedSchema) {
 				t.Fatalf("startup error = %v, want unsupported schema", err)
 			}
 			after, err := os.Stat(paths.DatabasePath())

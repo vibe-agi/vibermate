@@ -169,7 +169,7 @@ func copyDataDirectory(
 			ctx, filepath.Join(target, "runtime.db"),
 		)
 		if err != nil {
-			if errors.Is(err, runtimepersistence.ErrSchemaBaselineMismatch) {
+			if errors.Is(err, runtimepersistence.ErrUnsupportedSchema) {
 				return ErrBackupIncompatible
 			}
 			return ErrBackupInvalid
