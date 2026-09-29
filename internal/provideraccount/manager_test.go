@@ -239,7 +239,7 @@ type rotatingCredentialPreparer struct {
 	receivedRevision secretstore.Revision
 }
 
-func (preparer *rotatingCredentialPreparer) Forget(secretstore.Reference) {}
+func (preparer *rotatingCredentialPreparer) Forget(secretstore.Reference, secretstore.Revision) {}
 
 func (preparer *rotatingCredentialPreparer) Prepare(
 	ctx context.Context,

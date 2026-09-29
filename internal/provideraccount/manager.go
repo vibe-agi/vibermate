@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"slices"
 	"sort"
 	"sync"
@@ -414,7 +415,7 @@ func (manager *Manager) ReplaceSecret(
 	preparer := manager.preparer
 	manager.mu.Unlock()
 	if preparer != nil {
-		preparer.Forget(account.SecretRef)
+		preparer.Forget(account.SecretRef, metadata.Revision)
 	}
 	return View{
 		Account: account,
@@ -533,7 +534,8 @@ func (manager *Manager) deleteUnreferenced(
 	preparer := manager.preparer
 	manager.mu.RUnlock()
 	if preparer != nil {
-		preparer.Forget(account.SecretRef)
+		// Deletion supersedes every epoch of this credential.
+		preparer.Forget(account.SecretRef, math.MaxUint64)
 	}
 	result, err := manager.repository.Delete(ctx, account.ID, account.Revision)
 	if err != nil && result.Outcome != CommitCommitted {

@@ -399,19 +399,23 @@ func (manager *Manager) persistRefresh(ctx context.Context, reference secretstor
 	return prepared, nil
 }
 
-// Forget discards provider state superseded by an explicit credential change.
+// Forget discards provider state for credential epochs older than
+// supersededBelow, after an explicit credential change committed that epoch.
+// State of the committed epoch itself is kept: a rotation that already started
+// from it has consumed the provider's refresh token, so dropping its result
+// would leave the store holding a token that can never be redeemed again.
 // SecretStore CAS still protects against a token exchange already in flight.
-func (manager *Manager) Forget(reference secretstore.Reference) {
+func (manager *Manager) Forget(reference secretstore.Reference, supersededBelow secretstore.Revision) {
 	manager.mu.Lock()
 	defer manager.mu.Unlock()
 	for key, pending := range manager.pending {
-		if key.reference == reference.String() {
+		if key.reference == reference.String() && key.revision < supersededBelow {
 			pending.credential.Destroy()
 			delete(manager.pending, key)
 		}
 	}
 	for key := range manager.permanent {
-		if key.reference == reference.String() {
+		if key.reference == reference.String() && key.revision < supersededBelow {
 			delete(manager.permanent, key)
 		}
 	}

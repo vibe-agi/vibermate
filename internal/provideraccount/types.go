@@ -295,7 +295,7 @@ type CredentialPreparer interface {
 	) (secretstore.Revision, error)
 	// Forget releases retained rotations after an owner replaces or deletes the
 	// credential. In-flight writes must still obey SecretStore compare-and-swap.
-	Forget(secretstore.Reference)
+	Forget(reference secretstore.Reference, supersededBelow secretstore.Revision)
 }
 
 // CredentialRefresher is the explicit user-initiated rotation capability of a
