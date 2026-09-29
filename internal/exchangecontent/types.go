@@ -671,10 +671,7 @@ func (response Response) validate(mode environment.ContentRecordingMode) error {
 		len(response.Blocks) == 0 || len(response.Blocks) > protocolcore.MaxContentBlocks {
 		return fmt.Errorf("%w: response projection is incomplete", ErrInvalidEvidence)
 	}
-	switch protocolcore.StopReason(response.StopReason) {
-	case protocolcore.StopReasonEndTurn, protocolcore.StopReasonMaxTokens,
-		protocolcore.StopReasonToolUse, protocolcore.StopReasonStopSequence:
-	default:
+	if err := protocolcore.StopReason(response.StopReason).Validate(); err != nil {
 		return fmt.Errorf("%w: stop reason is unsupported", ErrInvalidEvidence)
 	}
 	for _, block := range response.Blocks {

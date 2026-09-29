@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"net/http"
 	"net/textproto"
@@ -653,11 +654,57 @@ func executeAndExportStage(
 	if err != nil {
 		return scriptMessage{}, nil, fmt.Errorf("%w: %s: %v", ErrInvalidOutput, stage, err)
 	}
+	if stage == "request" && !bytes.Equal(input.Body, output.Body) {
+		before, beforePresent, beforeErr := requestModel(input.Body)
+		after, afterPresent, afterErr := requestModel(output.Body)
+		if beforeErr != nil || afterErr != nil || beforePresent != afterPresent || before != after {
+			return scriptMessage{}, nil, fmt.Errorf("%w: request transform cannot change model", ErrInvalidOutput)
+		}
+	}
 	contextOutput, err = exportContext(runtime, contextValue, limits)
 	if err != nil {
 		return scriptMessage{}, nil, fmt.Errorf("%w: %s Context: %v", ErrInvalidOutput, stage, err)
 	}
 	return output, contextOutput, nil
+}
+
+// Model selection belongs to the client or Route, not a Body transform. Read
+// only the top-level field; unknown nested content stays opaque. Decode names
+// to reject duplicate/escaped model keys without imposing a protocol schema.
+func requestModel(body []byte) (string, bool, error) {
+	body = bytes.TrimSpace(body)
+	if len(body) == 0 || body[0] != '{' {
+		return "", false, nil
+	}
+	decoder := json.NewDecoder(bytes.NewReader(body))
+	if _, err := decoder.Token(); err != nil {
+		return "", false, err
+	}
+	var model string
+	present := false
+	for decoder.More() {
+		key, err := decoder.Token()
+		if err != nil {
+			return "", false, err
+		}
+		var value json.RawMessage
+		if err := decoder.Decode(&value); err != nil {
+			return "", false, err
+		}
+		if key == "model" {
+			if present || len(value) == 0 || value[0] != '"' || json.Unmarshal(value, &model) != nil {
+				return "", false, errors.New("request model is ambiguous")
+			}
+			present = true
+		}
+	}
+	if _, err := decoder.Token(); err != nil {
+		return "", false, err
+	}
+	if _, err := decoder.Token(); !errors.Is(err, io.EOF) {
+		return "", false, errors.New("request object has trailing data")
+	}
+	return model, present, nil
 }
 
 func installRuntimeCapabilities(

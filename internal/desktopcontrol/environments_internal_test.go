@@ -75,17 +75,17 @@ func TestAccountSelectorAuthorityIncludesOnlyReadyAccountsOnTheExactRoute(t *tes
 	if accountBelongsToRoute(view, route) {
 		t.Fatal("Account without a ready credential entered selector authority")
 	}
-	if !errors.Is(routeAccountError(view, route), provideraccount.ErrCredentialMissing) {
+	if !errors.Is(routeAccountError(view, route.ProviderTarget), provideraccount.ErrCredentialMissing) {
 		t.Fatal("missing credential was not distinguished from a broken association")
 	}
 	view.Health = provideraccount.Health{State: provideraccount.HealthReady, CredentialEpoch: 1}
 	route.ProviderTarget.ID = "endpoint.unlinked"
-	if !errors.Is(routeAccountError(view, route), provideraccount.ErrEndpointMismatch) {
+	if !errors.Is(routeAccountError(view, route.ProviderTarget), provideraccount.ErrEndpointMismatch) {
 		t.Fatal("unlinked account was not diagnosed as an association mismatch")
 	}
 	route.ProviderTarget.ID = "endpoint.work"
 	view.Account.State = provideraccount.StateDisabled
-	if !errors.Is(routeAccountError(view, route), provideraccount.ErrAccountDisabled) {
+	if !errors.Is(routeAccountError(view, route.ProviderTarget), provideraccount.ErrAccountDisabled) {
 		t.Fatal("disabled account was not diagnosed")
 	}
 }

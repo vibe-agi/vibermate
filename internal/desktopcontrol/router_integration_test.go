@@ -566,6 +566,11 @@ func decodeResponse(
 
 func startRuntime(t *testing.T) *productruntime.Runtime {
 	t.Helper()
+	return startRuntimeWithSecrets(t, newCredentialStoreFixture())
+}
+
+func startRuntimeWithSecrets(t *testing.T, secrets secretstore.Store) *productruntime.Runtime {
+	t.Helper()
 	paths, err := productruntime.NewRuntimePaths(
 		filepath.Join(t.TempDir(), "runtime-data"),
 	)
@@ -576,8 +581,8 @@ func startRuntime(t *testing.T) *productruntime.Runtime {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// This starts the complete production runtime, including all embedded SQLite
-	// migrations. Under the full repository race job many such fixtures compete
+	// This starts the complete production runtime and current-schema SQLite
+	// stores. Under the full repository race job many such fixtures compete
 	// for CPU, so this harness bound must not masquerade as a product deadline.
 	ctx, cancel := context.WithTimeout(
 		context.Background(),
@@ -588,7 +593,7 @@ func startRuntime(t *testing.T) *productruntime.Runtime {
 		Paths:          paths,
 		Host:           hostcontract.Desktop(),
 		OfflineHold:    gate,
-		Secrets:        newCredentialStoreFixture(),
+		Secrets:        secrets,
 		Approvals:      toolapproval.DefaultConfig(),
 		ExchangeHold:   exchange.DefaultHoldPolicy(),
 		Clock:          productruntime.SystemClock{},

@@ -11,6 +11,7 @@ import (
 
 	"github.com/vibe-agi/vibermate/internal/protocolcore"
 	"github.com/vibe-agi/vibermate/internal/protocolpath"
+	"github.com/vibe-agi/vibermate/internal/protocolspec"
 	"github.com/vibe-agi/vibermate/internal/ssewire"
 )
 
@@ -25,10 +26,9 @@ type messagesStreamBlock struct {
 	stopped            bool
 }
 
-// AnthropicProviderStream validates and inventories an Anthropic-compatible
-// SSE stream while holding the original bytes until the terminal tool decision
-// is known. Holding the whole response is conservative but prevents a tool call
-// from crossing the downstream boundary before policy approval.
+// AnthropicProviderStream inventories native SSE while streaming text and
+// provider-side evidence. The first client tool call and subsequent events stay
+// behind the terminal tool decision, so no client action crosses before approval.
 type AnthropicProviderStream struct {
 	mu sync.Mutex
 
@@ -123,7 +123,9 @@ func (stream *AnthropicProviderStream) Feed(
 		}
 		if err := stream.consumeEvent(event, index); err != nil {
 			stream.failed = true
-			return nil, err
+			// Read boundaries are arbitrary. Preserve earlier safe events from
+			// this chunk; bytes behind a tool barrier remain withheld on failure.
+			return bytes.Clone(safe.Bytes()), err
 		}
 		destination := &safe
 		if stream.barrier {
@@ -295,12 +297,9 @@ func (stream *AnthropicProviderStream) FinishDecoded(
 	}
 	for _, index := range indices {
 		block := stream.blocks[index]
-		if block.kind != "thinking" && block.kind != "redacted_thinking" {
+		kind, recognized := messagesExtensionKind(block.kind)
+		if !recognized {
 			continue
-		}
-		kind := protocolcore.ProviderExtensionThinking
-		if block.kind == "redacted_thinking" {
-			kind = protocolcore.ProviderExtensionRedactedThinking
 		}
 		extension, extensionErr := protocolcore.NewProviderExtension(
 			protocolcore.ProviderExtensionSourceAnthropicMessages,
@@ -378,7 +377,11 @@ func (stream *AnthropicProviderStream) consumeEvent(
 	case "ping":
 		return nil
 	case "error":
-		return protocolcore.NewProviderFailure(fmt.Sprintf("$event[%d]", index), envelope.Error)
+		failure := protocolcore.NewNativeProviderFailure(
+			fmt.Sprintf("$event[%d]", index), protocolspec.DialectAnthropicMessages, envelope.Error,
+		)
+		failure.NativeError = failure.NativeError.WithStreamEvent("error", event.Data)
+		return failure
 	case "message_start":
 		if stream.messageStarted {
 			return stream.stateFailure(index, "message_start is duplicated")
@@ -448,21 +451,23 @@ func (stream *AnthropicProviderStream) consumeEvent(
 			block.name = content.Name
 			block.initialInput = bytes.Clone(content.Input)
 			stream.barrier = true
-		case "thinking", "redacted_thinking":
-			block.extensionFragments = append(block.extensionFragments, bytes.Clone(payload.ContentBlock))
 		default:
-			return stream.stateFailure(index, "content block type is unsupported")
+			if _, recognized := messagesExtensionKind(blockHeader.Type); !recognized {
+				return stream.stateFailure(index, "content block type is unsupported")
+			}
+			block.extensionFragments = append(block.extensionFragments, bytes.Clone(payload.ContentBlock))
 		}
 		stream.blocks[payload.Index] = block
 	case "content_block_delta":
 		var payload struct {
 			Index int `json:"index"`
 			Delta struct {
-				Type        string `json:"type"`
-				Text        string `json:"text"`
-				PartialJSON string `json:"partial_json"`
-				Thinking    string `json:"thinking,omitempty"`
-				Signature   string `json:"signature,omitempty"`
+				Type        string          `json:"type"`
+				Text        string          `json:"text"`
+				PartialJSON string          `json:"partial_json"`
+				Thinking    string          `json:"thinking,omitempty"`
+				Signature   string          `json:"signature,omitempty"`
+				Citation    json.RawMessage `json:"citation,omitempty"`
 			} `json:"delta"`
 		}
 		if err := json.Unmarshal(event.Data, &payload); err != nil {
@@ -478,7 +483,20 @@ func (stream *AnthropicProviderStream) consumeEvent(
 				return stream.stateFailure(index, "text delta targets a non-text block")
 			}
 			_, _ = block.text.WriteString(payload.Delta.Text)
+		case "citations_delta":
+			if block.kind != "text" {
+				return stream.stateFailure(index, "citation delta targets a non-text block")
+			}
+			if err := validateAnthropicCitation(payload.Delta.Citation); err != nil {
+				return stream.eventFailure(index, err)
+			}
 		case "input_json_delta":
+			if block.kind == "server_tool_use" {
+				// Provider-executed input remains opaque evidence. It must not
+				// become a local ToolIntent or activate the client-tool barrier.
+				block.extensionFragments = append(block.extensionFragments, bytes.Clone(event.Data))
+				break
+			}
 			if block.kind != "tool_use" {
 				return stream.stateFailure(index, "tool delta targets a non-tool block")
 			}

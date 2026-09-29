@@ -139,8 +139,9 @@ vibermate run --server https://your-server.example:9666 -- claude
 
 请将示例地址替换为浏览器打开的准确 HTTPS 地址。CLI 会优先使用系统 PKI，因此公共
 证书正常续期不会改变服务器身份。私有 CA 部署应在服务器本机通过
-`vibermated server ca-certificate` 导出公开 CA，带外核对指纹后再安装。已有精确叶
-指纹可用 `vibermate trust --server <URL> --system-roots` 显式迁移。完整命令和信任
+`vibermated server ca-certificate` 导出公开 CA，带外核对指纹后，在登录前运行
+`vibermate trust --server <URL> --ca-fingerprint <SHA256>`，只为该 Server 建立
+CA 信任，也可显式转换已有叶指纹。若已安装系统根，可用 `--system-roots`。完整命令和信任
 边界见[统一部署指南](docs/deployment.md)。
 
 每个人都能从网页右上角修改自己的密码；所有者可以重置成员密码。本机 App

@@ -28,15 +28,10 @@ func (store *Store) ListUsage(ctx context.Context, query runtimeusage.Query, use
 		return nil, false, err
 	}
 	defer finish()
-	statement := `SELECT observation_json FROM runtime_usage_observations WHERE occurred_at_unix_ms>=? AND occurred_at_unix_ms<? AND expires_at_unix_ms>?`
-	args := []any{from.UnixMilli(), until.UnixMilli(), now.UnixMilli()}
 	// Filter ownership before limiting, so members cannot lose their history to
 	// another member's traffic or learn anything about that traffic's volume.
-	if userID != "" {
-		statement += ` AND runtime_user_id=?`
-		args = append(args, userID)
-	}
-	statement += ` ORDER BY occurred_at_unix_ms DESC,exchange_id LIMIT ?`
+	where, args := usageWhere(query, userID, now)
+	statement := `SELECT observation_json FROM runtime_usage_observations WHERE ` + where + ` ORDER BY occurred_at_unix_ms DESC,exchange_id LIMIT ?`
 	args = append(args, limit+1)
 	rows, err := store.reads.QueryContext(operation, statement, args...)
 	if err != nil {

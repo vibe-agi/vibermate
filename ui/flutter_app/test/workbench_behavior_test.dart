@@ -3766,10 +3766,7 @@ void main() {
       final accountIds = accountDropdown.items
           .map((item) => item.value)
           .toList(growable: false);
-      expect(
-        accountIds,
-        containsAll(['fixed:anthropic-work', 'fixed:anthropic-lab']),
-      );
+      expect(accountIds, ['fixed:anthropic-work']);
       expect(accountIds, isNot(contains('fixed:orbit-team')));
       expect(accountIds, isNot(contains('fixed:openai-work')));
       final accountMenu = tester.widget<MenuAnchor>(
@@ -3778,6 +3775,11 @@ void main() {
       expect(
         accountMenu.style?.maximumSize?.resolve({})?.height,
         lessThanOrEqualTo(240),
+      );
+      await _includeRouteAccount(
+        tester,
+        'environment-route-accounts-anthropic-direct',
+        'anthropic-lab',
       );
 
       final modelField = find.byKey(
@@ -3991,7 +3993,7 @@ void main() {
   );
 
   testWidgets(
-    'Environment groups linked Accounts by upstream service and activates one for every run',
+    'Environment activates only explicitly selected Accounts for every run',
     (tester) async {
       await tester.binding.setSurfaceSize(const Size(1180, 760));
       addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -4021,6 +4023,22 @@ void main() {
         find.descendant(of: group, matching: find.text('Anthropic · Work')),
         findsOneWidget,
       );
+      expect(
+        find.descendant(of: group, matching: find.text('Anthropic · Lab')),
+        findsNothing,
+      );
+      await tester.tap(find.byKey(const Key('environment-edit')));
+      await tester.pumpAndSettle();
+      await _includeRouteAccount(
+        tester,
+        'environment-route-accounts-anthropic-direct',
+        'anthropic-lab',
+      );
+      await tester.ensureVisible(find.byKey(const Key('environment-review')));
+      await tester.tap(find.byKey(const Key('environment-review')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('environment-publish')));
+      await tester.pumpAndSettle();
       expect(
         find.descendant(of: group, matching: find.text('Anthropic · Lab')),
         findsOneWidget,
@@ -4536,7 +4554,7 @@ void main() {
       await tester.ensureVisible(initialAccount);
       expect(find.text('Account selection'), findsOneWidget);
       expect(
-        find.text('Published account selection rules: 1. Open to choose.'),
+        find.text('Manual selection and rules use only the selected accounts.'),
         findsOneWidget,
       );
       final initialDropdown = tester.widget<CompactSelectField<String>>(
@@ -4555,8 +4573,8 @@ void main() {
       await tester.tap(find.byKey(const Key('environment-add-endpoint')));
       await tester.pumpAndSettle();
       expect(
-        find.text('Runs once per Turn against 2 frozen upstream accounts.'),
-        findsOneWidget,
+        find.text('Manual selection and rules use only the selected accounts.'),
+        findsWidgets,
       );
       await tester.tap(find.text('Cancel').last);
       await tester.pumpAndSettle();
@@ -4586,8 +4604,8 @@ void main() {
         findsOneWidget,
       );
       expect(
-        find.text('Runs once per Turn against 2 frozen upstream accounts.'),
-        findsOneWidget,
+        find.text('Manual selection and rules use only the selected accounts.'),
+        findsWidgets,
       );
 
       await api.publishCodeLibraryAccountSelector(
@@ -5294,10 +5312,7 @@ void main() {
       final accountIds = accountDropdown.items
           .map((item) => item.value)
           .toList(growable: false);
-      expect(
-        accountIds,
-        containsAll(['fixed:anthropic-work', 'fixed:anthropic-lab']),
-      );
+      expect(accountIds, ['fixed:anthropic-work']);
       expect(accountIds, isNot(contains('fixed:openai-work')));
       expect(accountIds, isNot(contains('fixed:orbit-team')));
 
@@ -5849,6 +5864,24 @@ void main() {
     await tester.pumpWidget(const SizedBox.shrink());
     await tester.pump();
   });
+}
+
+Future<void> _includeRouteAccount(
+  WidgetTester tester,
+  String scopeKey,
+  String accountId,
+) async {
+  final button = find.descendant(
+    of: find.byKey(Key(scopeKey)),
+    matching: find.byType(OutlinedButton),
+  );
+  await tester.ensureVisible(button);
+  await tester.tap(button);
+  await tester.pumpAndSettle();
+  await tester.tap(find.byKey(Key('route-account-scope-$accountId')));
+  await tester.pump();
+  await tester.tap(find.byKey(const Key('route-account-scope-apply')));
+  await tester.pumpAndSettle();
 }
 
 Future<void> _openSettingsTab(WidgetTester tester, Key key) async {

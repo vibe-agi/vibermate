@@ -46,7 +46,7 @@ func TestPublishedEnvironmentDryRunExplainsOneSyntheticRequestWithoutRetainingIt
         "routes":[{"id":"route.preview","revision":1,
           "providerTarget":{"id":"target.claude.official","revision":1,"origin":"https://api.anthropic.com","realmId":"anthropic.official","capabilities":["messages","streaming","tool_calls"]},
           "backendProtocol":"anthropic_messages",
-          "accountPolicy":{"revision":1,"mode":"fixed","fixedAccountId":"account.dry-run","accounts":[]},
+          "accountPolicy":{"revision":1,"mode":"fixed","fixedAccountId":"account.dry-run","accounts":[{"id":"account.dry-run","revision":1,"displayName":"Synthetic"}]},
           "modelPolicy":{"revision":1,"mode":"passthrough","mappings":[]},
           "wireProfileRef":"follow-client","pluginBindings":[]}],
         "defaultRouteId":"route.preview","routeSet":{"id":"routes.preview","revision":1,"candidateRouteIds":["route.preview"]}}},
@@ -402,7 +402,6 @@ func TestPublishedEnvironmentDryRunExplainsOneSyntheticRequestWithoutRetainingIt
 	selectorPolicy.Mode = environment.AccountSelectionJavaScript
 	selectorPolicy.FixedAccountID = ""
 	selectorPolicy.Selector = &selectorRevision
-	selectorPolicy.Accounts = nil
 	selectorInput, err := json.Marshal(desktopcontrol.EnvironmentDraftInput{
 		ExpectedDraftRevision: workingSaved.DraftRevision,
 		Name:                  selectorCandidate.Name, State: selectorCandidate.State,

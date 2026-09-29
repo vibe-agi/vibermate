@@ -22,7 +22,7 @@ func TestTurnTransformsRequestAndResponseWithTransactionalSharedContext(t *testi
 			context.originalModel = payload.model;
 			request.headers["x-vibermate-test"] = ["request"];
 			request.headers["content-length"] = ["1"];
-			request.body = JSON.stringify({...payload, model: "opaque:upstream"});
+			request.body = JSON.stringify({...payload, metadata: "transformed"});
 		`,
 		ResponseJavaScript: `
 			const payload = JSON.parse(response.body);
@@ -51,7 +51,7 @@ func TestTurnTransformsRequestAndResponseWithTransactionalSharedContext(t *testi
 	if got := request.Headers.Get("Content-Length"); got != "" {
 		t.Fatalf("request Content-Length = %q, want Core-owned empty value", got)
 	}
-	if got := string(request.Body); got != `{"model":"opaque:upstream","messages":[]}` {
+	if got := string(request.Body); got != `{"model":"client-model","messages":[],"metadata":"transformed"}` {
 		t.Fatalf("request Body = %s", got)
 	}
 	if request.Method != http.MethodPost || request.Path != "/v1/messages" {

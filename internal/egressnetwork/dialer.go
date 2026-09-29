@@ -140,7 +140,7 @@ func (dialer *policyDialer) DialContext(
 	canonical := net.JoinHostPort(host, port)
 	switch dialer.policy.Proxy.Kind {
 	case ProxyDirect:
-		if dialer.policy.Resolver.Kind == ResolverSystem {
+		if dialer.policy.Resolver.Kind == ResolverSystem && !publicTargetsOnly(ctx) {
 			return dialer.base.DialContext(ctx, network, canonical)
 		}
 		return dialer.resolveAndDial(ctx, network, host, port, dialer.base)
@@ -162,6 +162,9 @@ func (dialer *policyDialer) resolveAndDial(
 	target ContextDialer,
 ) (net.Conn, error) {
 	if address, err := netip.ParseAddr(host); err == nil {
+		if publicTargetsOnly(ctx) && !publicAddress(address) {
+			return nil, ErrPrivateTarget
+		}
 		if !addressMatchesNetwork(address, network) {
 			return nil, errors.New("traffic egress target address family is incompatible")
 		}
@@ -173,6 +176,15 @@ func (dialer *policyDialer) resolveAndDial(
 	addresses, err := dialer.resolver.LookupNetIP(ctx, lookupNetwork(network), host)
 	if err != nil {
 		return nil, fmt.Errorf("resolve traffic egress target: %w", err)
+	}
+	// Validate the whole answer before dialing, then dial only these literal
+	// addresses. A later DNS lookup cannot rebind an admitted name to the LAN.
+	if publicTargetsOnly(ctx) {
+		for _, address := range addresses {
+			if !publicAddress(address) {
+				return nil, ErrPrivateTarget
+			}
+		}
 	}
 	var failures []error
 	for _, address := range addresses {

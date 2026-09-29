@@ -294,6 +294,14 @@ func parseIdentityDocument(payload []byte, now time.Time, schema string) (Identi
 	if err != nil || len(certificate.Certificate) != 1 {
 		return Identity{}, ErrInvalidIdentity
 	}
+	if doc.IssuerCertificatePEM != "" {
+		issuer, err := parseRootCertificate([]byte(doc.IssuerCertificatePEM), now)
+		leaf, leafErr := x509.ParseCertificate(certificate.Certificate[0])
+		if err != nil || leafErr != nil || leaf.CheckSignatureFrom(issuer) != nil {
+			return Identity{}, ErrInvalidIdentity
+		}
+		certificate.Certificate = append(certificate.Certificate, issuer.Raw)
+	}
 	return identityOf(certificate, now)
 }
 

@@ -36,6 +36,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/connectionevent"
 	"github.com/vibe-agi/vibermate/internal/connectionpolicy"
 	"github.com/vibe-agi/vibermate/internal/egressaudit"
+	"github.com/vibe-agi/vibermate/internal/egressnetwork"
 	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/exchange"
 	"github.com/vibe-agi/vibermate/internal/localca"
@@ -87,8 +88,6 @@ const (
 	ReasonCaptureEnvironmentUnavailable   ReasonCode = "capture_environment_unavailable"
 	ReasonRawEvidenceUnavailable          ReasonCode = "raw_evidence_unavailable"
 )
-
-const systemTransparentRuleID = "system_transparent"
 
 type CertificateAuthority interface {
 	Identity() localca.RootIdentity
@@ -458,7 +457,7 @@ func (handler *Handler) ServeHTTP(
 	if cleartextForward {
 		policyHost, policyPort := policyTarget(request, true)
 		outcome, denialReason := handler.decideConnection(
-			request.Context(), source.IngressID, policyHost, policyPort, false,
+			request.Context(), source.IngressID, policyHost, policyPort,
 		)
 		if outcome.Decision != connectionpolicy.DecisionAllow {
 			if handler.denyConnection(request.Context(), audit, source, denialReason) != nil {
@@ -488,6 +487,9 @@ func (handler *Handler) ServeHTTP(
 		}
 		defer connectionLease.Close()
 		binding := connectionLease.Binding()
+		if outcome.Explicit || (!connectionLease.Environment().SystemOwned() && binding.Mode != environment.ConnectionModeBlind) {
+			request = request.WithContext(egressnetwork.WithTargetAccess(request.Context(), egressnetwork.TargetAccessOwnerConfigured))
+		}
 		if binding.Mode == environment.ConnectionModeBlind {
 			terminal = handler.serveCleartextForward(
 				writer,
@@ -575,10 +577,9 @@ func (handler *Handler) ServeHTTP(
 	defer connectionLease.Close()
 	snapshot := connectionLease.Environment()
 	binding := connectionLease.Binding()
-	bypassPolicy := snapshot.SystemOwned() && snapshot.ID() == environment.SystemTransparentID
 	policyHost, policyPort := policyTarget(request, false)
 	outcome, denialReason := handler.decideConnection(
-		request.Context(), source.IngressID, policyHost, policyPort, bypassPolicy,
+		request.Context(), source.IngressID, policyHost, policyPort,
 	)
 	if outcome.Decision != connectionpolicy.DecisionAllow {
 		if handler.denyConnection(request.Context(), audit, source, denialReason) != nil {
@@ -588,6 +589,9 @@ func (handler *Handler) ServeHTTP(
 		terminal = true
 		writeReason(writer, http.StatusForbidden, ReasonConnectionDenied, outcome.RuleID)
 		return
+	}
+	if outcome.Explicit || (!snapshot.SystemOwned() && binding.Mode != environment.ConnectionModeBlind) {
+		request = request.WithContext(egressnetwork.WithTargetAccess(request.Context(), egressnetwork.TargetAccessOwnerConfigured))
 	}
 	if binding.Mode == environment.ConnectionModeBlind {
 		// The selected Environment does not intercept this exact origin. The
@@ -777,6 +781,7 @@ func (handler *Handler) serveTLS(
 	}
 	listener := newSingleConnListener(secured)
 	inner := &http.Server{
+		BaseContext: func(net.Listener) context.Context { return parent },
 		Handler: http.HandlerFunc(func(
 			writer http.ResponseWriter,
 			request *http.Request,
@@ -1328,15 +1333,8 @@ func (handler *Handler) decideConnection(
 	ingressID string,
 	host string,
 	port uint16,
-	bypass bool,
 ) (connectionpolicy.Outcome, ReasonCode) {
-	outcome := connectionpolicy.Outcome{
-		Decision: connectionpolicy.DecisionAllow,
-		RuleID:   systemTransparentRuleID,
-	}
-	if !bypass {
-		outcome = handler.rules().Evaluate(connectionpolicy.Request{Host: host, Port: port})
-	}
+	outcome := handler.rules().Evaluate(connectionpolicy.Request{Host: host, Port: port})
 	reason := ReasonCode(outcome.RuleID)
 	if outcome.Decision != connectionpolicy.DecisionAsk {
 		return outcome, reason
@@ -2331,6 +2329,10 @@ func (handler *Handler) serveBlindTunnel(
 		egressOutcome, connectionTerminal.Outcome, egressErrorClass =
 			blindTunnelTerminal(err)
 		connectionTerminal.ErrorClass = egressErrorClass
+		if errors.Is(err, egressnetwork.ErrPrivateTarget) {
+			writeReason(writer, http.StatusForbidden, ReasonConnectionDenied, "private_destination_denied")
+			return true
+		}
 		writeReason(writer, http.StatusBadGateway, ReasonBlindTunnelFailed, "")
 		return true
 	}
@@ -2386,6 +2388,9 @@ func blindTunnelTerminal(
 	case errors.Is(err, context.DeadlineExceeded):
 		return egressaudit.OutcomeFailed,
 			connectionevent.OutcomeFailed, "deadline"
+	case errors.Is(err, egressnetwork.ErrPrivateTarget):
+		return egressaudit.OutcomeFailed,
+			connectionevent.OutcomeFailed, "private_destination_denied"
 	default:
 		return egressaudit.OutcomeFailed,
 			connectionevent.OutcomeFailed, blindTunnelFailureClass
@@ -2586,6 +2591,10 @@ func (handler *Handler) serveCleartextForward(
 	if err != nil {
 		egressOutcome, connectionTerminal.Outcome, egressErrorClass = blindTunnelTerminal(err)
 		connectionTerminal.ErrorClass = egressErrorClass
+		if errors.Is(err, egressnetwork.ErrPrivateTarget) {
+			writeReason(writer, http.StatusForbidden, ReasonConnectionDenied, "private_destination_denied")
+			return true
+		}
 		writeReason(writer, http.StatusBadGateway, ReasonBlindTunnelFailed, "")
 		return true
 	}

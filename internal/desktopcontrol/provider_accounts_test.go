@@ -355,7 +355,7 @@ func TestProviderAccountControlStoresCredentialWithoutReturningItAndCompilesMana
           "revision":1,
 		  "providerTarget":{"id":"target.claude.official","revision":1,"origin":"https://api.anthropic.com","realmId":"anthropic.official","capabilities":["messages","streaming","tool_calls"]},
           "backendProtocol":"anthropic_messages",
-		  "accountPolicy":{"revision":1,"mode":"fixed","fixedAccountId":"anthropic-work","accounts":[]},
+		  "accountPolicy":{"revision":1,"mode":"fixed","fixedAccountId":"anthropic-work","accounts":[{"id":"anthropic-work","revision":1,"displayName":"Work"}]},
           "modelPolicy":{"revision":1,"mode":"passthrough","mappings":[]},
           "wireProfileRef":"follow-client",
           "pluginBindings":[]

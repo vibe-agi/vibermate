@@ -60,7 +60,20 @@ const (
 	StopReasonMaxTokens    StopReason = "max_tokens"
 	StopReasonToolUse      StopReason = "tool_use"
 	StopReasonStopSequence StopReason = "stop_sequence"
+	StopReasonRefusal      StopReason = "refusal"
+	StopReasonPauseTurn    StopReason = "pause_turn"
+	StopReasonContextLimit StopReason = "model_context_window_exceeded"
 )
+
+func (reason StopReason) Validate() error {
+	switch reason {
+	case StopReasonEndTurn, StopReasonMaxTokens, StopReasonToolUse, StopReasonStopSequence,
+		StopReasonRefusal, StopReasonPauseTurn, StopReasonContextLimit:
+		return nil
+	default:
+		return errors.New("response stop reason is unsupported")
+	}
+}
 
 // JSONDocument owns one complete JSON value.
 type JSONDocument struct {
@@ -406,6 +419,9 @@ func (message Message) Validate() error {
 		case RoleUser:
 			if block.Kind != BlockText && block.Kind != BlockToolResult &&
 				!(block.Kind == BlockProviderExtension &&
+					block.ProviderExtension.source == ProviderExtensionSourceAnthropicMessages &&
+					block.ProviderExtension.kind == ProviderExtensionOpaqueItem) &&
+				!(block.Kind == BlockProviderExtension &&
 					block.ProviderExtension.source ==
 						ProviderExtensionSourceOpenAIResponses &&
 					(block.ProviderExtension.kind ==
@@ -448,6 +464,9 @@ type ToolKind string
 const (
 	ToolKindFunction ToolKind = "function"
 	ToolKindCustom   ToolKind = "custom"
+	// Native definitions are meaningful only in their original wire dialect.
+	// They do not assert where a tool executes or grant any execution authority.
+	ToolKindNative ToolKind = "native"
 )
 
 type CustomToolFormatKind string
@@ -497,6 +516,7 @@ type ToolDefinition struct {
 	Kind                ToolKind
 	Name                string
 	Description         string
+	NativeType          string
 	InputSchema         JSONDocument
 	CustomFormat        CustomToolFormat
 	StrictKnown         bool
@@ -510,6 +530,9 @@ func (definition ToolDefinition) Validate() error {
 	}
 	if err := validateText("tool description", definition.Description, MaxTextBytes, true); err != nil {
 		return err
+	}
+	if definition.EffectiveKind() != ToolKindNative && definition.NativeType != "" {
+		return errors.New("portable tool contains a native type")
 	}
 	switch definition.EffectiveKind() {
 	case ToolKindFunction:
@@ -531,6 +554,14 @@ func (definition ToolDefinition) Validate() error {
 		}
 		if err := definition.CustomFormat.Validate(); err != nil {
 			return err
+		}
+	case ToolKindNative:
+		if err := validateIdentifier("native tool type", definition.NativeType, 256); err != nil {
+			return err
+		}
+		if !definition.InputSchema.IsZero() || !definition.CustomFormat.IsZero() ||
+			definition.StrictKnown || definition.Strict || definition.EagerInputStreaming {
+			return errors.New("native tool contains portable tool configuration")
 		}
 	default:
 		return errors.New("tool definition kind is unsupported")
@@ -1316,7 +1347,8 @@ func (extension ProviderExtension) Validate() error {
 		}
 	case ProviderExtensionSourceAnthropicMessages:
 		if extension.kind != ProviderExtensionThinking &&
-			extension.kind != ProviderExtensionRedactedThinking {
+			extension.kind != ProviderExtensionRedactedThinking &&
+			extension.kind != ProviderExtensionOpaqueItem {
 			return errors.New("provider extension kind is unsupported for Anthropic Messages")
 		}
 	default:
@@ -1451,12 +1483,12 @@ func (response Response) Validate() error {
 	if err := ValidateProtocolEvidence(response.ProtocolEvidence); err != nil {
 		return fmt.Errorf("response protocol evidence: %w", err)
 	}
-	switch response.StopReason {
-	case StopReasonEndTurn, StopReasonMaxTokens, StopReasonToolUse, StopReasonStopSequence:
-	default:
-		return errors.New("response stop reason is unsupported")
+	if err := response.StopReason.Validate(); err != nil {
+		return err
 	}
-	if (response.StopReason == StopReasonToolUse) != hasToolCall {
+	// A limit, refusal or pause can follow tool calls in the same response.
+	// Their execution still requires the separate tool-decision boundary.
+	if response.StopReason == StopReasonToolUse && !hasToolCall {
 		return errors.New("response stop reason and tool calls are inconsistent")
 	}
 	if response.StopReason != StopReasonStopSequence && response.StopSequence != "" {

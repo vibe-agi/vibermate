@@ -55,6 +55,8 @@ func mustZstdReader() *zstd.Decoder {
 
 // storeEvidenceBody writes the chunks of body and its manifest, returning the
 // digest an envelope should reference. An empty body has no row and no digest.
+// Deduplication never updates the primary key, even to itself: that would make
+// SQLite revisit all retained references to shared bodies/chunks on each write.
 func storeEvidenceBody(
 	ctx context.Context,
 	transaction *sql.Tx,
@@ -82,7 +84,7 @@ func storeEvidenceBody(
 	result, err := transaction.ExecContext(
 		ctx,
 		`INSERT INTO runtime_evidence_bodies(digest, plain_bytes, chunk_manifest)
-		 VALUES (?, ?, ?) ON CONFLICT(digest) DO UPDATE SET digest = excluded.digest
+		 VALUES (?, ?, ?) ON CONFLICT(digest) DO UPDATE SET plain_bytes = excluded.plain_bytes
 		 WHERE runtime_evidence_bodies.plain_bytes = excluded.plain_bytes
 		   AND runtime_evidence_bodies.chunk_manifest = excluded.chunk_manifest`,
 		bodyDigest[:], len(body), manifest,
@@ -129,7 +131,7 @@ func putEvidenceChunk(
 		ctx,
 		`INSERT INTO runtime_evidence_chunks(digest, plain_bytes, codec, payload)
 		 VALUES (?, ?, ?, ?) ON CONFLICT(digest) DO UPDATE
-		 SET digest = excluded.digest
+		 SET plain_bytes = excluded.plain_bytes
 		 WHERE runtime_evidence_chunks.plain_bytes = excluded.plain_bytes`,
 		digest[:], len(chunk), codec, stored,
 	)
@@ -257,53 +259,6 @@ func loadEvidenceChunks(
 		return nil, fmt.Errorf("iterate evidence chunks: %w", err)
 	}
 	return chunks, nil
-}
-
-// purgeUnreferencedEvidenceBytes releases bodies and then chunks that nothing
-// points at any more. Order matters: a chunk stays reachable while any body
-// still names it.
-func purgeUnreferencedEvidenceBytes(
-	ctx context.Context,
-	transaction *sql.Tx,
-) error {
-	if _, err := transaction.ExecContext(
-		ctx,
-		`DELETE FROM runtime_evidence_bodies
-		  WHERE digest NOT IN (
-		    SELECT stored_body_digest FROM runtime_raw_evidence_envelopes
-		     WHERE stored_body_digest IS NOT NULL
-		  )`,
-	); err != nil {
-		return fmt.Errorf("purge unreferenced evidence bodies: %w", err)
-	}
-	if _, err := transaction.ExecContext(
-		ctx,
-		// The recursion carries the body's key, not its manifest. Carrying the
-		// manifest copies the whole BLOB into every generated row, so the sweep
-		// materializes O(32*K^2) bytes for a K-chunk body; joining back by
-		// primary key is linear. Measured at a 4 MiB body it is the difference
-		// between 0.66 s and 0.42 s for the suite, and the gap widens with K
-		// toward the 8,192-chunk bound this file documents.
-		`WITH RECURSIVE spans(body_digest, position) AS (
-		   SELECT digest, 1 FROM runtime_evidence_bodies
-		   UNION ALL
-		   SELECT spans.body_digest, spans.position + 32
-		     FROM spans
-		     JOIN runtime_evidence_bodies AS bodies
-		       ON bodies.digest = spans.body_digest
-		    WHERE spans.position + 32 <= length(bodies.chunk_manifest)
-		 )
-		 DELETE FROM runtime_evidence_chunks
-		  WHERE digest NOT IN (
-		    SELECT substr(bodies.chunk_manifest, spans.position, 32)
-		      FROM spans
-		      JOIN runtime_evidence_bodies AS bodies
-		        ON bodies.digest = spans.body_digest
-		  )`,
-	); err != nil {
-		return fmt.Errorf("purge unreferenced evidence chunks: %w", err)
-	}
-	return nil
 }
 
 func equalDigest(left, right []byte) bool {

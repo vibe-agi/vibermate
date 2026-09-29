@@ -71,12 +71,30 @@ type anthropicToolReferenceBlockWire struct {
 	ToolName string `json:"tool_name"`
 }
 
-type toolResultContentMode uint8
+type requestDecodeMode uint8
 
 const (
-	toolResultContentStrict toolResultContentMode = iota
-	toolResultContentCompatible
+	requestDecodeStrict requestDecodeMode = iota
+	requestDecodeNative
 )
+
+// Native JSON is forwarded from the original source, not regenerated from the
+// inspection view. Unknown nested fields therefore stay on the wire. Known
+// fields keep their type/semantic validation; duplicate names are rejected once
+// at the native request boundary before any projection is used for decisions.
+func (mode requestDecodeMode) decode(value []byte, destination any) error {
+	if mode == requestDecodeNative {
+		return json.Unmarshal(value, destination)
+	}
+	return decodeStrict(value, destination)
+}
+
+func (mode requestDecodeMode) fields(value []byte, destination any, path string) (protocolcore.TranslationReport, error) {
+	if mode == requestDecodeNative {
+		return protocolcore.TranslationReport{}, mode.decode(value, destination)
+	}
+	return decodeTolerant(value, destination, path)
+}
 
 type anthropicToolDefinitionWire struct {
 	Name                string          `json:"name"`
@@ -137,7 +155,7 @@ type anthropicDiagnosticsWire struct {
 func (codec *Codec) DecodeClientRequest(
 	body []byte,
 ) (protocolcore.Request, protocolcore.TranslationReport, error) {
-	return codec.decodeClientRequest(body, toolResultContentStrict)
+	return codec.decodeClientRequest(body, requestDecodeStrict)
 }
 
 // DecodeCompatibleClientRequest produces the neutral inspection view for an
@@ -147,12 +165,12 @@ func (codec *Codec) DecodeClientRequest(
 func (codec *Codec) DecodeCompatibleClientRequest(
 	body []byte,
 ) (protocolcore.Request, protocolcore.TranslationReport, error) {
-	return codec.decodeClientRequest(body, toolResultContentCompatible)
+	return codec.decodeClientRequest(body, requestDecodeNative)
 }
 
 func (codec *Codec) decodeClientRequest(
 	body []byte,
-	toolResultMode toolResultContentMode,
+	mode requestDecodeMode,
 ) (protocolcore.Request, protocolcore.TranslationReport, error) {
 	if len(body) == 0 || len(body) > codec.options.MaxRequestBytes {
 		return protocolcore.Request{}, protocolcore.TranslationReport{},
@@ -163,15 +181,21 @@ func (codec *Codec) decodeClientRequest(
 			)
 	}
 
+	if mode == requestDecodeNative {
+		if err := rejectDuplicateJSONNames(body); err != nil {
+			return protocolcore.Request{}, protocolcore.TranslationReport{},
+				protocolcore.NewFailure(protocolcore.ReasonInvalidClientRequest, "$", err)
+		}
+	}
 	var wire anthropicRequestWire
-	unknownReport, err := decodeTolerant(body, &wire, "$")
+	unknownReport, err := mode.fields(body, &wire, "$")
 	if err != nil {
 		return protocolcore.Request{}, protocolcore.TranslationReport{},
 			protocolcore.NewFailure(protocolcore.ReasonInvalidClientRequest, "$", err)
 	}
 	report := unknownReport
 
-	system, systemReport, err := codec.decodeSystem(wire.System)
+	system, systemReport, err := codec.decodeSystem(wire.System, mode)
 	if err != nil {
 		return protocolcore.Request{}, report, err
 	}
@@ -182,7 +206,7 @@ func (codec *Codec) decodeClientRequest(
 		decoded, messageReport, decodeErr := codec.decodeMessage(
 			index,
 			message,
-			toolResultMode,
+			mode,
 		)
 		if decodeErr != nil {
 			return protocolcore.Request{}, report, decodeErr
@@ -200,7 +224,7 @@ func (codec *Codec) decodeClientRequest(
 		// §3.2 permits the loss because it is declared.
 		var tool anthropicToolDefinitionWire
 		toolPath := fmt.Sprintf("$.tools[%d]", index)
-		unknownTool, unknownErr := decodeTolerant(rawTool, &tool, toolPath)
+		unknownTool, unknownErr := mode.fields(rawTool, &tool, toolPath)
 		if unknownErr != nil {
 			return protocolcore.Request{}, report, protocolcore.NewFailure(
 				protocolcore.ReasonInvalidClientRequest,
@@ -209,7 +233,7 @@ func (codec *Codec) decodeClientRequest(
 			)
 		}
 		report = report.Merge(unknownTool)
-		decoded, toolReport, decodeErr := codec.decodeToolDefinition(index, tool)
+		decoded, toolReport, decodeErr := codec.decodeToolDefinition(index, tool, mode)
 		if decodeErr != nil {
 			return protocolcore.Request{}, report, decodeErr
 		}
@@ -224,15 +248,16 @@ func (codec *Codec) decodeClientRequest(
 	reasoning, output, err := decodeOutputConfiguration(
 		wire.Thinking,
 		wire.OutputConfig,
+		mode,
 	)
 	if err != nil {
 		return protocolcore.Request{}, report, err
 	}
-	contextIntent, err := decodeContextManagement(wire.Context)
+	contextIntent, err := decodeContextManagement(wire.Context, mode)
 	if err != nil {
 		return protocolcore.Request{}, report, err
 	}
-	diagnostics, err := decodeDiagnostics(wire.Diagnostics)
+	diagnostics, err := decodeDiagnostics(wire.Diagnostics, mode)
 	if err != nil {
 		return protocolcore.Request{}, report, err
 	}
@@ -291,12 +316,13 @@ func (codec *Codec) decodeClientRequest(
 
 func decodeDiagnostics(
 	raw json.RawMessage,
+	mode requestDecodeMode,
 ) (protocolcore.DiagnosticsIntent, error) {
 	if !rawPresent(raw) {
 		return protocolcore.DiagnosticsIntent{}, nil
 	}
 	var wire anthropicDiagnosticsWire
-	if err := decodeStrict(raw, &wire); err != nil {
+	if err := mode.decode(raw, &wire); err != nil {
 		return protocolcore.DiagnosticsIntent{}, protocolcore.NewFailure(
 			protocolcore.ReasonInvalidClientRequest,
 			"$.diagnostics",
@@ -326,12 +352,13 @@ func decodeDiagnostics(
 
 func decodeContextManagement(
 	raw json.RawMessage,
+	mode requestDecodeMode,
 ) (protocolcore.ContextManagementIntent, error) {
 	if !rawPresent(raw) {
 		return protocolcore.ContextManagementIntent{}, nil
 	}
 	var wire anthropicContextManagementWire
-	if err := decodeStrict(raw, &wire); err != nil {
+	if err := mode.decode(raw, &wire); err != nil {
 		return protocolcore.ContextManagementIntent{}, protocolcore.NewFailure(
 			protocolcore.ReasonInvalidClientRequest,
 			"$.context_management",
@@ -350,7 +377,7 @@ func decodeContextManagement(
 	}
 	for index, rawEdit := range wire.Edits {
 		var edit anthropicClearThinkingWire
-		if err := decodeStrict(rawEdit, &edit); err != nil {
+		if err := mode.decode(rawEdit, &edit); err != nil {
 			return protocolcore.ContextManagementIntent{}, protocolcore.NewFailure(
 				protocolcore.ReasonInvalidClientRequest,
 				fmt.Sprintf("$.context_management.edits[%d]", index),
@@ -364,7 +391,7 @@ func decodeContextManagement(
 				errors.New("context edit type cannot be represented by the configured provider dialect"),
 			)
 		}
-		decoded, err := decodeClearThinkingEdit(edit.Keep)
+		decoded, err := decodeClearThinkingEdit(edit.Keep, mode)
 		if err != nil {
 			return protocolcore.ContextManagementIntent{}, protocolcore.NewFailure(
 				protocolcore.ReasonInvalidClientRequest,
@@ -377,7 +404,7 @@ func decodeContextManagement(
 	return intent, nil
 }
 
-func decodeClearThinkingEdit(raw json.RawMessage) (protocolcore.ContextEdit, error) {
+func decodeClearThinkingEdit(raw json.RawMessage, mode requestDecodeMode) (protocolcore.ContextEdit, error) {
 	var keep string
 	if json.Unmarshal(raw, &keep) == nil {
 		if keep != "all" {
@@ -389,7 +416,7 @@ func decodeClearThinkingEdit(raw json.RawMessage) (protocolcore.ContextEdit, err
 		}, nil
 	}
 	var wire anthropicThinkingTurnsWire
-	if err := decodeStrict(raw, &wire); err != nil {
+	if err := mode.decode(raw, &wire); err != nil {
 		return protocolcore.ContextEdit{}, err
 	}
 	switch wire.Type {
@@ -417,6 +444,7 @@ func decodeClearThinkingEdit(raw json.RawMessage) (protocolcore.ContextEdit, err
 func decodeOutputConfiguration(
 	thinkingRaw json.RawMessage,
 	outputConfigRaw json.RawMessage,
+	mode requestDecodeMode,
 ) (
 	protocolcore.ReasoningIntent,
 	protocolcore.StructuredOutputIntent,
@@ -426,7 +454,7 @@ func decodeOutputConfiguration(
 	var structuredOutput protocolcore.StructuredOutputIntent
 	if rawPresent(outputConfigRaw) {
 		var output anthropicOutputConfigWire
-		if err := decodeStrict(outputConfigRaw, &output); err != nil {
+		if err := mode.decode(outputConfigRaw, &output); err != nil {
 			return protocolcore.ReasoningIntent{},
 				protocolcore.StructuredOutputIntent{},
 				protocolcore.NewFailure(
@@ -437,7 +465,7 @@ func decodeOutputConfiguration(
 		}
 		if rawPresent(output.Format) {
 			var format anthropicJSONOutputFormatWire
-			if err := decodeStrict(output.Format, &format); err != nil {
+			if err := mode.decode(output.Format, &format); err != nil {
 				return protocolcore.ReasoningIntent{},
 					protocolcore.StructuredOutputIntent{},
 					protocolcore.NewFailure(
@@ -490,7 +518,7 @@ func decodeOutputConfiguration(
 		}
 		if rawPresent(output.TaskBudget) {
 			var budget anthropicTaskBudgetWire
-			if err := decodeStrict(output.TaskBudget, &budget); err != nil {
+			if err := mode.decode(output.TaskBudget, &budget); err != nil {
 				return protocolcore.ReasoningIntent{},
 					protocolcore.StructuredOutputIntent{},
 					protocolcore.NewFailure(
@@ -531,7 +559,7 @@ func decodeOutputConfiguration(
 		return intent, structuredOutput, nil
 	}
 	var thinking anthropicThinkingWire
-	if err := decodeStrict(thinkingRaw, &thinking); err != nil {
+	if err := mode.decode(thinkingRaw, &thinking); err != nil {
 		return protocolcore.ReasoningIntent{},
 			protocolcore.StructuredOutputIntent{},
 			protocolcore.NewFailure(
@@ -579,6 +607,7 @@ func decodeOutputConfiguration(
 
 func (codec *Codec) decodeSystem(
 	raw json.RawMessage,
+	mode requestDecodeMode,
 ) ([]protocolcore.ContentBlock, protocolcore.TranslationReport, error) {
 	if !rawPresent(raw) {
 		return nil, protocolcore.TranslationReport{}, nil
@@ -608,7 +637,7 @@ func (codec *Codec) decodeSystem(
 	report := protocolcore.TranslationReport{}
 	for index, rawBlock := range rawBlocks {
 		var blockWire anthropicTextBlockWire
-		if err := decodeStrict(rawBlock, &blockWire); err != nil {
+		if err := mode.decode(rawBlock, &blockWire); err != nil {
 			return nil, report, protocolcore.NewFailure(
 				protocolcore.ReasonInvalidClientRequest,
 				fmt.Sprintf("$.system[%d]", index),
@@ -693,7 +722,7 @@ func (codec *Codec) decodeInstructionMessage(
 func (codec *Codec) decodeMessage(
 	messageIndex int,
 	wire anthropicMessageWire,
-	toolResultMode toolResultContentMode,
+	mode requestDecodeMode,
 ) (protocolcore.Message, protocolcore.TranslationReport, error) {
 	role := protocolcore.Role(wire.Role)
 	switch role {
@@ -767,7 +796,7 @@ func (codec *Codec) decodeMessage(
 		switch header.Type {
 		case "text":
 			var blockWire anthropicTextBlockWire
-			if err := decodeStrict(rawBlock, &blockWire); err != nil {
+			if err := mode.decode(rawBlock, &blockWire); err != nil {
 				return protocolcore.Message{}, report,
 					protocolcore.NewFailure(protocolcore.ReasonInvalidClientRequest, path, err)
 			}
@@ -806,7 +835,7 @@ func (codec *Codec) decodeMessage(
 				)
 			}
 			var blockWire anthropicToolUseBlockWire
-			if err := decodeStrict(rawBlock, &blockWire); err != nil {
+			if err := mode.decode(rawBlock, &blockWire); err != nil {
 				return protocolcore.Message{}, report,
 					protocolcore.NewFailure(protocolcore.ReasonInvalidClientRequest, path, err)
 			}
@@ -834,7 +863,7 @@ func (codec *Codec) decodeMessage(
 			}
 			blocks = append(blocks, block)
 			if rawPresent(blockWire.Caller) {
-				if err := validateAnthropicToolCaller(blockWire.Caller); err != nil {
+				if err := validateAnthropicToolCaller(blockWire.Caller, mode); err != nil {
 					return protocolcore.Message{}, report,
 						protocolcore.NewFailure(
 							protocolcore.ReasonInvalidClientRequest,
@@ -862,7 +891,7 @@ func (codec *Codec) decodeMessage(
 				)
 			}
 			var blockWire anthropicToolResultBlockWire
-			if err := decodeStrict(rawBlock, &blockWire); err != nil {
+			if err := mode.decode(rawBlock, &blockWire); err != nil {
 				return protocolcore.Message{}, report,
 					protocolcore.NewFailure(protocolcore.ReasonInvalidClientRequest, path, err)
 			}
@@ -871,10 +900,10 @@ func (codec *Codec) decodeMessage(
 				return protocolcore.Message{}, report,
 					protocolcore.NewFailure(protocolcore.ReasonInvalidClientRequest, path+".tool_use_id", err)
 			}
-			content, err := decodeToolResultContent(
+			content, native, err := decodeToolResultContent(
 				blockWire.Content,
 				path+".content",
-				toolResultMode,
+				mode,
 			)
 			if err != nil {
 				return protocolcore.Message{}, report, err
@@ -889,6 +918,13 @@ func (codec *Codec) decodeMessage(
 					protocolcore.NewFailure(protocolcore.ReasonInvalidClientRequest, path, err)
 			}
 			blocks = append(blocks, block)
+			if len(native) != 0 {
+				opaque, err := nativeHistoryBlock(path+".content", native)
+				if err != nil {
+					return protocolcore.Message{}, report, err
+				}
+				blocks = append(blocks, opaque)
+			}
 			if rawPresent(blockWire.CacheControl) {
 				report = report.Merge(cacheNotice(path + ".cache_control"))
 			}
@@ -929,6 +965,14 @@ func (codec *Codec) decodeMessage(
 			blocks = append(blocks, block)
 
 		default:
+			if mode == requestDecodeNative && header.Type != "" {
+				block, err := nativeHistoryBlock(path, [][]byte{rawBlock})
+				if err != nil {
+					return protocolcore.Message{}, report, err
+				}
+				blocks = append(blocks, block)
+				continue
+			}
 			return protocolcore.Message{}, report, protocolcore.NewFailure(
 				protocolcore.ReasonUnsupportedClientInput,
 				path+".type",
@@ -947,6 +991,19 @@ func (codec *Codec) decodeMessage(
 	return message.Clone(), report, nil
 }
 
+// Native history is evidence, not an executable tool intent or text. Only the
+// same-dialect path uses this view; its source body remains authoritative.
+func nativeHistoryBlock(path string, fragments [][]byte) (protocolcore.ContentBlock, error) {
+	extension, err := protocolcore.NewProviderExtension(
+		protocolcore.ProviderExtensionSourceAnthropicMessages,
+		protocolcore.ProviderExtensionOpaqueItem, path, fragments,
+	)
+	if err != nil {
+		return protocolcore.ContentBlock{}, protocolcore.NewFailure(protocolcore.ReasonInvalidClientRequest, path, err)
+	}
+	return protocolcore.NewProviderExtensionBlock(extension)
+}
+
 func validateAnthropicCitations(raw json.RawMessage) error {
 	if bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
 		return nil
@@ -957,28 +1014,35 @@ func validateAnthropicCitations(raw json.RawMessage) error {
 		return errors.New("citations are invalid")
 	}
 	for _, rawCitation := range citations {
-		var citation map[string]json.RawMessage
-		if len(rawCitation) > protocolcore.MaxTextBytes ||
-			json.Unmarshal(rawCitation, &citation) != nil || citation == nil {
-			return errors.New("citation is invalid")
-		}
-		var kind string
-		if json.Unmarshal(citation["type"], &kind) != nil || kind == "" ||
-			len(kind) > 128 || !utf8.ValidString(kind) || strings.TrimSpace(kind) != kind {
-			return errors.New("citation type is invalid")
-		}
-		for _, character := range kind {
-			if unicode.IsControl(character) {
-				return errors.New("citation type is invalid")
-			}
+		if err := validateAnthropicCitation(rawCitation); err != nil {
+			return err
 		}
 	}
 	return nil
 }
 
-func validateAnthropicToolCaller(raw json.RawMessage) error {
+func validateAnthropicCitation(raw json.RawMessage) error {
+	var citation map[string]json.RawMessage
+	if len(raw) > protocolcore.MaxTextBytes ||
+		json.Unmarshal(raw, &citation) != nil || citation == nil {
+		return errors.New("citation is invalid")
+	}
+	var kind string
+	if json.Unmarshal(citation["type"], &kind) != nil || kind == "" ||
+		len(kind) > 128 || !utf8.ValidString(kind) || strings.TrimSpace(kind) != kind {
+		return errors.New("citation type is invalid")
+	}
+	for _, character := range kind {
+		if unicode.IsControl(character) {
+			return errors.New("citation type is invalid")
+		}
+	}
+	return nil
+}
+
+func validateAnthropicToolCaller(raw json.RawMessage, mode requestDecodeMode) error {
 	var caller anthropicToolCallerWire
-	if err := decodeStrict(raw, &caller); err != nil {
+	if err := mode.decode(raw, &caller); err != nil {
 		return err
 	}
 	switch caller.Type {
@@ -999,14 +1063,27 @@ func validateAnthropicToolCaller(raw json.RawMessage) error {
 func (codec *Codec) decodeToolDefinition(
 	index int,
 	wire anthropicToolDefinitionWire,
+	mode requestDecodeMode,
 ) (protocolcore.ToolDefinition, protocolcore.TranslationReport, error) {
 	path := fmt.Sprintf("$.tools[%d]", index)
-	if wire.Type != "" {
+	if wire.Type != "" && wire.Type != "custom" {
+		if mode == requestDecodeNative {
+			// The original body owns the native configuration. Keep its identity
+			// for named choices and tool decisions without inventing a schema.
+			tool := protocolcore.ToolDefinition{
+				Kind: protocolcore.ToolKindNative, Name: wire.Name, NativeType: wire.Type,
+			}
+			if err := tool.Validate(); err != nil {
+				return protocolcore.ToolDefinition{}, protocolcore.TranslationReport{},
+					protocolcore.NewFailure(protocolcore.ReasonInvalidClientRequest, path, err)
+			}
+			return tool, protocolcore.TranslationReport{}, nil
+		}
 		return protocolcore.ToolDefinition{}, protocolcore.TranslationReport{},
 			protocolcore.NewFailure(
 				protocolcore.ReasonUnsupportedClientInput,
 				path+".type",
-				errors.New("server-side tool types are unsupported"),
+				errors.New("native tool types are unsupported"),
 			)
 	}
 	schema, err := protocolcore.NewJSONObject(wire.InputSchema, codec.options.MaxRequestBytes)
@@ -1063,59 +1140,63 @@ func decodeToolChoice(
 func decodeToolResultContent(
 	raw json.RawMessage,
 	path string,
-	mode toolResultContentMode,
-) (string, error) {
+	mode requestDecodeMode,
+) (string, [][]byte, error) {
 	if !rawPresent(raw) || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
-		return "", nil
+		return "", nil, nil
 	}
 	var text string
 	if err := json.Unmarshal(raw, &text); err == nil {
-		return text, nil
+		return text, nil, nil
 	}
 	var blocks []json.RawMessage
 	if err := json.Unmarshal(raw, &blocks); err != nil {
-		return "", protocolcore.NewFailure(protocolcore.ReasonInvalidClientRequest, path, err)
+		return "", nil, protocolcore.NewFailure(protocolcore.ReasonInvalidClientRequest, path, err)
 	}
 	var combined bytes.Buffer
-	structured := false
+	var native [][]byte
 	for index, rawBlock := range blocks {
 		var header struct {
 			Type string `json:"type"`
 		}
 		if err := json.Unmarshal(rawBlock, &header); err != nil {
-			return "", protocolcore.NewFailure(
+			return "", nil, protocolcore.NewFailure(
 				protocolcore.ReasonInvalidClientRequest,
 				fmt.Sprintf("%s[%d]", path, index),
 				err,
 			)
 		}
-		if header.Type == "tool_reference" && mode == toolResultContentCompatible {
+		if header.Type == "tool_reference" && mode == requestDecodeNative {
 			var reference anthropicToolReferenceBlockWire
-			if err := decodeStrict(rawBlock, &reference); err != nil ||
+			if err := mode.decode(rawBlock, &reference); err != nil ||
 				reference.Type != "tool_reference" ||
 				!validToolReferenceName(reference.ToolName) {
 				if err == nil {
 					err = errors.New("tool reference is invalid")
 				}
-				return "", protocolcore.NewFailure(
+				return "", nil, protocolcore.NewFailure(
 					protocolcore.ReasonInvalidClientRequest,
 					fmt.Sprintf("%s[%d]", path, index),
 					err,
 				)
 			}
-			structured = true
+			native = append(native, rawBlock)
+			continue
+		}
+		if mode == requestDecodeNative && header.Type != "" && header.Type != "text" {
+			native = append(native, rawBlock)
 			continue
 		}
 		var block anthropicTextBlockWire
-		if err := decodeStrict(rawBlock, &block); err != nil {
-			return "", protocolcore.NewFailure(
+		if err := mode.decode(rawBlock, &block); err != nil {
+			return "", nil, protocolcore.NewFailure(
 				protocolcore.ReasonUnsupportedClientInput,
 				fmt.Sprintf("%s[%d]", path, index),
 				errors.New("tool result contains a non-text block"),
 			)
 		}
-		if block.Type != "text" || rawPresent(block.CacheControl) {
-			return "", protocolcore.NewFailure(
+		if block.Type != "text" || (mode == requestDecodeStrict && rawPresent(block.CacheControl)) {
+			return "", nil, protocolcore.NewFailure(
 				protocolcore.ReasonUnsupportedClientInput,
 				fmt.Sprintf("%s[%d]", path, index),
 				errors.New("tool result content cannot be represented losslessly"),
@@ -1123,18 +1204,7 @@ func decodeToolResultContent(
 		}
 		combined.WriteString(block.Text)
 	}
-	if structured {
-		encoded, err := json.Marshal(blocks)
-		if err != nil || len(encoded) > protocolcore.MaxTextBytes {
-			return "", protocolcore.NewFailure(
-				protocolcore.ReasonInvalidClientRequest,
-				path,
-				errors.New("structured tool result exceeds the audit bound"),
-			)
-		}
-		return string(encoded), nil
-	}
-	return combined.String(), nil
+	return combined.String(), native, nil
 }
 
 func validToolReferenceName(value string) bool {

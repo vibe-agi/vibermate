@@ -43,9 +43,8 @@ func (handler *WebSelfHandler) ServeHTTP(writer http.ResponseWriter, request *ht
 		writeProblem(writer, http.StatusNotFound, "server_route_not_found")
 		return
 	}
-	principal, valid := takeWebPrincipal(request, handler.sessions, serveradmin.ScopeRead)
-	if !valid || !principal.Valid() {
-		writeProblem(writer, http.StatusUnauthorized, "web_session_invalid")
+	principal, valid := takeWebPrincipal(writer, request, handler.sessions, serveradmin.ScopeRead)
+	if !valid {
 		return
 	}
 	query, err := runtimeUsageQuery(request.URL.RawQuery)

@@ -45,12 +45,9 @@ func buildChildArguments(
 		// WebSocket transport behind this feature; selecting the built-in provider
 		// must not silently re-enable a wire shape the launch recipe cannot decode.
 		"features.responses_websockets=false",
-		// Retry/attempt ownership belongs to the frozen Environment route. If
-		// Codex retries internally, those attempts cannot be selected, approved,
-		// or explained independently by ViberMate.
-		"request_max_retries=0",
-		"stream_max_retries=0",
 	}
+	// Preserve the client's retry policy. Each new HTTP request is a new
+	// Exchange; the Runtime's commit ledger still bounds its own resends.
 	result := make([]string, 0, len(settings)*2+2+len(arguments))
 	for _, setting := range settings {
 		result = append(result, "--config", setting)

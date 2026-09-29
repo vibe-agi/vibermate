@@ -318,12 +318,13 @@ func (pipeline *Pipeline) Execute(
 			ReasonOf(err) == ReasonToolDecisionUnavailable:
 			result.Outcome = AttemptAborted
 		case errors.Is(err, context.Canceled) ||
-			errors.Is(err, context.DeadlineExceeded) ||
+			operationContext.Err() != nil ||
 			errors.Is(err, ErrRuntimeStopping) ||
 			errors.Is(context.Cause(operationContext), ErrRuntimeStopping):
 			result.Outcome = AttemptCanceled
 			// Body readers can wrap cancellation as a response/commit failure.
-			// Keep the persisted reason consistent with the terminal outcome.
+			// DeadlineExceeded alone is not client cancellation: net/http also
+			// returns it when the provider's response-header budget expires.
 			reason := ReasonExchangeCanceled
 			if errors.Is(err, ErrRuntimeStopping) ||
 				errors.Is(context.Cause(operationContext), ErrRuntimeStopping) {
@@ -1038,6 +1039,7 @@ func (pipeline *Pipeline) observeAttempt(
 	conversation := terminalConversationRef(request, captured)
 	observation := AttemptObservation{
 		ExchangeID:          request.exchangeID,
+		OccurredAt:          pipeline.now().UTC(),
 		EnvironmentID:       plan.EnvironmentID(),
 		EnvironmentRevision: plan.EnvironmentRevision(),
 		EnvironmentDigest:   plan.EnvironmentDigest().String(),
@@ -3097,7 +3099,7 @@ func (pipeline *Pipeline) abortStream(
 		)
 	}
 	if errors.Is(failure, context.Canceled) ||
-		errors.Is(failure, context.DeadlineExceeded) ||
+		ctx.Err() != nil ||
 		errors.Is(context.Cause(ctx), ErrRuntimeStopping) {
 		return typed
 	}
@@ -3160,9 +3162,8 @@ func classifyProviderRejectionResponse(response *http.Response, selection frozen
 		return providerRejection{}
 	}
 	defer body.Close()
-	diagnosis := classifyProviderRejection(body)
-	if selection.codecPlan.ClientDialect() != protocolspec.DialectOpenAIResponses ||
-		selection.codecPlan.ProviderDialect() != protocolspec.DialectOpenAIResponses {
+	diagnosis := classifyProviderRejection(body, selection.codecPlan.ProviderDialect())
+	if selection.codecPlan.ClientDialect() != selection.codecPlan.ProviderDialect() {
 		diagnosis.native = protocolcore.NativeProviderError{}
 	} else {
 		headers := nativeResponseHeaders(response.Header)
@@ -3173,7 +3174,7 @@ func classifyProviderRejectionResponse(response *http.Response, selection frozen
 	return diagnosis
 }
 
-func classifyProviderRejection(reader io.Reader) providerRejection {
+func classifyProviderRejection(reader io.Reader, dialect protocolspec.Dialect) providerRejection {
 	if reader == nil {
 		return providerRejection{}
 	}
@@ -3185,7 +3186,7 @@ func classifyProviderRejection(reader io.Reader) providerRejection {
 		Error json.RawMessage `json:"error"`
 	}
 	_ = json.Unmarshal(body, &native)
-	nativeError := protocolcore.NewNativeProviderError(protocolspec.DialectOpenAIResponses, native.Error)
+	nativeError := protocolcore.NewNativeProviderError(dialect, native.Error).WithHTTPBody(body)
 	var payload struct {
 		Error struct {
 			Param string `json:"param"`
@@ -3236,7 +3237,7 @@ func newProviderContentTypeFailure(
 			fmt.Errorf("provider response Content-Type is not %s", expected),
 		),
 	)
-	diagnosis := classifyProviderRejection(body)
+	diagnosis := classifyProviderRejection(body, "")
 	failure.ProviderField = diagnosis.field
 	failure.ProviderErrorCode = diagnosis.code
 	failure.ResponseIssue = ProviderResponseIssueContentType
@@ -3253,7 +3254,6 @@ func (pipeline *Pipeline) classifyProviderError(
 		return newFailure(ReasonExchangeRuntimeStopping, exchangeID, 0, err)
 	}
 	if errors.Is(err, context.Canceled) ||
-		errors.Is(err, context.DeadlineExceeded) ||
 		ctx.Err() != nil {
 		return newFailure(ReasonExchangeCanceled, exchangeID, 0, err)
 	}
@@ -3307,8 +3307,7 @@ func (pipeline *Pipeline) classifyStreamError(
 		)
 	}
 	if ctx.Err() != nil ||
-		errors.Is(err, context.Canceled) ||
-		errors.Is(err, context.DeadlineExceeded) {
+		errors.Is(err, context.Canceled) {
 		return newFailure(
 			ReasonExchangeCanceled,
 			exchangeID,

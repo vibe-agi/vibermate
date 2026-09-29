@@ -26,7 +26,7 @@ type CaptureDeletion = resourcedeletion.Released
 // half-deleted Capture visible between commits with no way for the user to
 // finish it.
 //
-// Both content-addressed planes are swept afterwards, and only afterwards: a
+// Both content-addressed planes are reclaimed in the same transaction: a
 // body or block is released when the last Exchange naming it goes, which cannot
 // be known until the deletes have run.
 func (store *Store) DeleteCapture(
@@ -87,7 +87,7 @@ func (store *Store) DeleteCapture(
 	); err != nil {
 		return CaptureDeletion{}, fmt.Errorf("delete Capture Agent identities: %w", err)
 	}
-	deletion.Exchanges, err = deleteCounted(
+	exchanges, err := deleteExchangeContent(
 		operation, transaction,
 		`DELETE FROM runtime_exchange_contents
 		  WHERE scope_kind = ? AND scope_id = ?`,
@@ -96,7 +96,8 @@ func (store *Store) DeleteCapture(
 	if err != nil {
 		return CaptureDeletion{}, fmt.Errorf("delete Capture content evidence: %w", err)
 	}
-	deletion.Envelopes, err = deleteCounted(
+	deletion.Exchanges = uint64(exchanges)
+	envelopes, err := deleteRawEvidence(
 		operation, transaction,
 		`DELETE FROM runtime_raw_evidence_envelopes
 		  WHERE scope_kind = ? AND scope_id = ?`,
@@ -105,6 +106,7 @@ func (store *Store) DeleteCapture(
 	if err != nil {
 		return CaptureDeletion{}, fmt.Errorf("delete Capture raw evidence: %w", err)
 	}
+	deletion.Envelopes = uint64(envelopes)
 	activityColumn := "capture_run_id"
 	if captureKind == "manual_capture" {
 		activityColumn = "manual_capture_id"
@@ -147,16 +149,6 @@ func (store *Store) DeleteCapture(
 		return CaptureDeletion{}, resourcedeletion.ErrTargetNotFound
 	}
 
-	if deletion.Exchanges > 0 {
-		if err := purgeUnreachableContent(operation, transaction); err != nil {
-			return CaptureDeletion{}, err
-		}
-	}
-	if deletion.Envelopes > 0 {
-		if err := purgeUnreferencedEvidenceBytes(operation, transaction); err != nil {
-			return CaptureDeletion{}, err
-		}
-	}
 	if err := dropCaptureEvidenceSelection(operation, transaction); err != nil {
 		return CaptureDeletion{}, err
 	}
@@ -322,6 +314,7 @@ type ArchiveClear = resourcedeletion.Released
 //     watermark would let a later envelope collide with one that is gone.
 var evidenceTables = []string{
 	"runtime_usage_observations",
+	"runtime_usage_retention_caps",
 	"tool_approvals",
 	"runtime_exchange_agent_identities",
 	"runtime_activities",

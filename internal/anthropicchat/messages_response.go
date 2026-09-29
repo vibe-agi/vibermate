@@ -146,10 +146,12 @@ func decodeMessagesResponse(
 				return protocolcore.Response{}, messagesProviderFailure(path, err)
 			}
 			blocks = append(blocks, block)
-		case "thinking", "redacted_thinking":
-			kind := protocolcore.ProviderExtensionThinking
-			if header.Type == "redacted_thinking" {
-				kind = protocolcore.ProviderExtensionRedactedThinking
+		default:
+			kind, recognized := messagesExtensionKind(header.Type)
+			if !recognized {
+				return protocolcore.Response{}, messagesProviderFailure(
+					path+".type", fmt.Errorf("provider content type %q is unsupported", header.Type),
+				)
 			}
 			extension, err := protocolcore.NewProviderExtension(
 				protocolcore.ProviderExtensionSourceAnthropicMessages,
@@ -161,11 +163,6 @@ func decodeMessagesResponse(
 				return protocolcore.Response{}, messagesProviderFailure(path, err)
 			}
 			extensions = append(extensions, extension)
-		default:
-			return protocolcore.Response{}, messagesProviderFailure(
-				path+".type",
-				fmt.Errorf("provider content type %q is unsupported", header.Type),
-			)
 		}
 	}
 	if len(blocks) == 0 {
@@ -204,20 +201,33 @@ func decodeMessagesResponse(
 	return response.Clone(), nil
 }
 
+// These are provider-side evidence, not proposals for the client to execute.
+// Client tool_use blocks always take the separate tool-intent/approval path,
+// including when their request definition uses a native built-in tool type.
+func messagesExtensionKind(kind string) (protocolcore.ProviderExtensionKind, bool) {
+	switch kind {
+	case "thinking":
+		return protocolcore.ProviderExtensionThinking, true
+	case "redacted_thinking":
+		return protocolcore.ProviderExtensionRedactedThinking, true
+	case "server_tool_use", "web_search_tool_result", "web_fetch_tool_result",
+		"code_execution_tool_result", "bash_code_execution_tool_result",
+		"text_editor_code_execution_tool_result", "tool_search_tool_result", "container_upload":
+		return protocolcore.ProviderExtensionOpaqueItem, true
+	default:
+		return "", false
+	}
+}
+
 func decodeMessagesStopReason(value string) (protocolcore.StopReason, error) {
 	reason := protocolcore.StopReason(value)
-	switch reason {
-	case protocolcore.StopReasonEndTurn,
-		protocolcore.StopReasonMaxTokens,
-		protocolcore.StopReasonToolUse,
-		protocolcore.StopReasonStopSequence:
-		return reason, nil
-	default:
+	if err := reason.Validate(); err != nil {
 		return "", messagesProviderFailure(
 			"$.stop_reason",
-			fmt.Errorf("provider stop reason %q is unsupported", value),
+			fmt.Errorf("provider stop reason %q: %w", value, err),
 		)
 	}
+	return reason, nil
 }
 
 func decodeMessagesUsage(wire messagesUsageWire) (protocolcore.Usage, error) {

@@ -2,6 +2,7 @@ package serverhost
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/url"
 	"strings"
@@ -10,6 +11,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/capturecontrol"
 	"github.com/vibe-agi/vibermate/internal/controlprincipal"
 	"github.com/vibe-agi/vibermate/internal/desktopcontrol"
+	"github.com/vibe-agi/vibermate/internal/egressnetwork"
 	"github.com/vibe-agi/vibermate/internal/serveradmin"
 	"github.com/vibe-agi/vibermate/internal/servercontrol"
 )
@@ -43,6 +45,7 @@ func (handler router) ServeHTTP(writer http.ResponseWriter, request *http.Reques
 		return
 	}
 	if request.Method == http.MethodConnect || request.URL.IsAbs() {
+		request = request.WithContext(egressnetwork.WithTargetAccess(request.Context(), egressnetwork.TargetAccessPublicOnly))
 		handler.proxy.ServeHTTP(writer, request)
 		return
 	}
@@ -71,9 +74,7 @@ func (handler router) ServeHTTP(writer http.ResponseWriter, request *http.Reques
 		handler.userSessions.ServeHTTP(writer, request)
 	case request.URL.Path == servercontrol.RuntimeUsersPath ||
 		strings.HasPrefix(request.URL.Path, servercontrol.RuntimeUsersPath+"/"):
-		if !validAdminTransport(request, handler.scheme) ||
-			!handler.authorizeAdmin(request, runtimeUsersScope(request.Method)) {
-			serverProblem(writer, http.StatusUnauthorized, "server_admin_unauthorized")
+		if !handler.authorizeAdmin(writer, request, runtimeUsersScope(request.Method)) {
 			return
 		}
 		handler.runtimeUsers.ServeHTTP(writer, request)
@@ -84,16 +85,12 @@ func (handler router) ServeHTTP(writer http.ResponseWriter, request *http.Reques
 		}
 		handler.adminSessions.ServeHTTP(writer, request)
 	case request.URL.Path == servercontrol.ServerAccessPath:
-		if !validAdminTransport(request, handler.scheme) ||
-			!handler.authorizeAdmin(request, serveradmin.ScopeRead) {
-			serverProblem(writer, http.StatusUnauthorized, "server_admin_unauthorized")
+		if !handler.authorizeAdmin(writer, request, serveradmin.ScopeRead) {
 			return
 		}
 		handler.access.ServeHTTP(writer, request)
 	case request.URL.Path == servercontrol.RuntimeRootCAPath:
-		if !validAdminTransport(request, handler.scheme) ||
-			!handler.authorizeAdmin(request, serveradmin.ScopeRead) {
-			serverProblem(writer, http.StatusUnauthorized, "server_admin_unauthorized")
+		if !handler.authorizeAdmin(writer, request, serveradmin.ScopeRead) {
 			return
 		}
 		if handler.rootCA == nil {
@@ -110,9 +107,7 @@ func (handler router) ServeHTTP(writer http.ResponseWriter, request *http.Reques
 		if request.Method == http.MethodGet {
 			scope = serveradmin.ScopeRead
 		}
-		if !validAdminTransport(request, handler.scheme) ||
-			!handler.authorizeAdmin(request, scope) {
-			serverProblem(writer, http.StatusUnauthorized, "server_admin_unauthorized")
+		if !handler.authorizeAdmin(writer, request, scope) {
 			return
 		}
 		if handler.manual == nil || !handler.manualOwner.Valid() {
@@ -130,8 +125,7 @@ func (handler router) ServeHTTP(writer http.ResponseWriter, request *http.Reques
 			return
 		}
 		scope := applicationScope(handler.application.RequiredScope(request))
-		if !handler.authorizeAdmin(request, scope) {
-			serverProblem(writer, http.StatusUnauthorized, "server_admin_unauthorized")
+		if !handler.authorizeAdmin(writer, request, scope) {
 			return
 		}
 		handler.application.ServeHTTP(writer, request)
@@ -177,17 +171,29 @@ func applicationScope(scope desktopcontrol.Scope) serveradmin.Scope {
 	}
 }
 
-func (handler router) authorizeAdmin(request *http.Request, scope serveradmin.Scope) bool {
-	if handler.admin == nil || request == nil || !scope.Valid() {
+func (handler router) authorizeAdmin(writer http.ResponseWriter, request *http.Request, scope serveradmin.Scope) bool {
+	if handler.admin == nil || !scope.Valid() || !validAdminTransport(request, handler.scheme) {
+		serverProblem(writer, http.StatusUnauthorized, "server_admin_unauthorized")
 		return false
 	}
 	values := request.Header.Values("Authorization")
 	request.Header.Del("Authorization")
 	if len(values) != 1 {
+		serverProblem(writer, http.StatusUnauthorized, "server_admin_unauthorized")
 		return false
 	}
 	value, found := strings.CutPrefix(values[0], "Bearer ")
-	if !found || !handler.admin.Authorize(request.Context(), value, scope) {
+	if !found {
+		serverProblem(writer, http.StatusUnauthorized, "server_admin_unauthorized")
+		return false
+	}
+	if err := handler.admin.Authorize(request.Context(), value, scope); err != nil {
+		if errors.Is(err, serveradmin.ErrUnauthorized) {
+			serverProblem(writer, http.StatusUnauthorized, "server_admin_unauthorized")
+		} else {
+			writer.Header().Set("Retry-After", "1")
+			serverProblem(writer, http.StatusServiceUnavailable, "server_admin_unavailable")
+		}
 		return false
 	}
 	if scope == serveradmin.ScopeWrite {

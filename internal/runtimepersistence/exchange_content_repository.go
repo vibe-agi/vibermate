@@ -722,68 +722,10 @@ func (repository *exchangeContentRepository) PurgeExpired(
 	if err != nil {
 		return 0, err
 	}
-	// Reachability is recomputed only when an expiry actually removed an
-	// Exchange. Record calls PurgeExpired on every stored Exchange, so an
-	// unconditional sweep would scan every node, message and block once per
-	// turn — the cost shape this goal exists to remove. Nothing becomes
-	// unreachable without a delete, and the delete shares this transaction, so
-	// there is no partial state for a skipped sweep to miss.
 	if err := transaction.Commit(); err != nil {
 		return 0, fmt.Errorf("commit Exchange content purge: %w", err)
 	}
 	return uint64(count), nil
-}
-
-// purgeUnreachableContent releases every transcript node, message and block no
-// retained Exchange still names.
-//
-// It is shared by expiry and by Capture deletion because it is the same
-// question in both cases: content is addressed by digest, so what became
-// unreachable does not depend on why the Exchange left. Callers run it inside
-// their own transaction and only after a delete actually removed something —
-// nothing becomes unreachable otherwise, and an unconditional sweep would scan
-// the whole store on every write.
-func purgeUnreachableContent(ctx context.Context, transaction *sql.Tx) error {
-	if _, err := transaction.ExecContext(
-		ctx,
-		`WITH RECURSIVE reachable(digest) AS (
-		   SELECT request_transcript_digest FROM runtime_exchange_contents
-		   UNION
-		   SELECT expected_transcript_digest FROM runtime_exchange_contents
-		   UNION
-		   SELECT base_transcript_digest FROM runtime_exchange_contents
-		    WHERE base_transcript_digest IS NOT NULL
-		   UNION
-		   SELECT nodes.parent_digest
-		     FROM runtime_exchange_content_transcripts AS nodes
-		     JOIN reachable ON nodes.digest = reachable.digest
-		    WHERE nodes.parent_digest IS NOT NULL
-		 )
-		 DELETE FROM runtime_exchange_content_transcripts
-		 WHERE digest NOT IN (SELECT digest FROM reachable)`); err != nil {
-		return fmt.Errorf("purge unreferenced transcript nodes: %w", err)
-	}
-	if _, err := transaction.ExecContext(
-		ctx,
-		`DELETE FROM runtime_exchange_content_messages
-		 WHERE digest NOT IN (
-		   SELECT message_digest FROM runtime_exchange_content_transcripts
-		   UNION
-		   SELECT response_message_digest FROM runtime_exchange_contents
-		    WHERE response_message_digest IS NOT NULL
-		   UNION
-		   SELECT system_message_digest FROM runtime_exchange_contents
-		    WHERE system_message_digest IS NOT NULL
-		 )`); err != nil {
-		return fmt.Errorf("purge unreferenced transcript messages: %w", err)
-	}
-	// Blocks are released last: one stays reachable while any retained message
-	// names it. Without this the store would keep unreachable content forever,
-	// and retention cost would stop tracking retained content.
-	if err := purgeUnreferencedContentBlocks(ctx, transaction); err != nil {
-		return err
-	}
-	return nil
 }
 
 func encodeStoredContent(record exchangecontent.Record) (
@@ -1088,7 +1030,7 @@ func putStoredTranscriptNode(
 		`INSERT INTO runtime_exchange_content_transcripts(
 		   digest, parent_digest, message_digest, depth
 		 ) VALUES (?, ?, ?, ?) ON CONFLICT(digest) DO UPDATE
-		 SET digest = excluded.digest
+		 SET depth = excluded.depth
 		 WHERE runtime_exchange_content_transcripts.parent_digest IS excluded.parent_digest
 		   AND runtime_exchange_content_transcripts.message_digest = excluded.message_digest
 		   AND runtime_exchange_content_transcripts.depth = excluded.depth`,
@@ -1146,15 +1088,12 @@ func findStoredTranscriptBase(
 		          json_extract(value, '$.depth')
 		     FROM json_each(?)
 		 )
-		 SELECT contents.expected_transcript_digest,
-		        candidates.depth
-		   FROM runtime_exchange_contents AS contents
-		   JOIN candidates
-		     ON candidates.digest = contents.expected_transcript_digest
-		  WHERE contents.scope_kind = ? AND contents.scope_id = ?
-		    AND contents.expected_message_count = candidates.depth
-		  ORDER BY candidates.depth DESC,
-		           contents.recorded_at_unix_ms DESC
+		 SELECT candidates.digest, candidates.depth FROM candidates
+		 WHERE EXISTS(SELECT 1 FROM runtime_exchange_contents AS contents
+		   WHERE contents.scope_kind = ? AND contents.scope_id = ?
+		     AND contents.expected_transcript_digest = candidates.digest
+		     AND contents.expected_message_count = candidates.depth)
+		 ORDER BY candidates.depth DESC
 		  LIMIT 1`,
 		string(encodedCandidates),
 		scopeKind,

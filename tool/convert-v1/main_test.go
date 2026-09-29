@@ -2,10 +2,12 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	_ "embed"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -15,6 +17,10 @@ import (
 
 	"github.com/vibe-agi/vibermate/internal/capturerun"
 	"github.com/vibe-agi/vibermate/internal/egressaudit"
+	"github.com/vibe-agi/vibermate/internal/environment"
+	"github.com/vibe-agi/vibermate/internal/exchangecontent"
+	"github.com/vibe-agi/vibermate/internal/protocolcore"
+	"github.com/vibe-agi/vibermate/internal/rawevidence"
 	"github.com/vibe-agi/vibermate/internal/runtimedata"
 	"github.com/vibe-agi/vibermate/internal/runtimepersistence"
 	"github.com/vibe-agi/vibermate/internal/runtimeusage"
@@ -22,6 +28,147 @@ import (
 
 //go:embed testdata/released.sql
 var releasedSQL string
+
+//go:embed testdata/released-0.1.16.sql
+var released016SQL string
+
+func TestOfflineConversionOf016RebuildsReferenceIndexesAndPreservesEvidence(t *testing.T) {
+	if fmt.Sprintf("%x", sha256.Sum256([]byte(released016SQL))) != released016Digest {
+		t.Fatal("released 0.1.16 schema fixture was changed")
+	}
+	ctx := context.Background()
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	source, seed := filepath.Join(root, "source"), filepath.Join(root, "seed")
+	for _, directory := range []string{source, seed} {
+		if err := os.Mkdir(directory, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	store, err := openCurrent(ctx, filepath.Join(seed, "runtime.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 9, 29, 0, 0, 0, 0, time.UTC)
+	block, _ := protocolcore.NewTextBlock("preserved block")
+	content, err := exchangecontent.NewRecord("exchange", exchangecontent.FrozenRef{
+		EnvironmentID: "environment", EnvironmentRevision: 1, EnvironmentDigest: strings.Repeat("a", 64),
+		ClientEndpointID: "endpoint", ClientEndpointRevision: 1, ProtocolPlanID: "plan", ProtocolPlanRevision: 1,
+		RouteID: "route", RouteRevision: 1,
+	}, environment.DefaultContentRecordingPolicy(), now, protocolcore.Request{
+		RequestedModel: "model", EffectiveModel: "model", MaxOutputTokens: 16,
+		Messages: []protocolcore.Message{{Role: protocolcore.RoleUser, Blocks: []protocolcore.ContentBlock{block, block}}},
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.ExchangeContentRepository().Put(ctx, content); err != nil {
+		t.Fatal(err)
+	}
+	body := []byte(strings.Repeat("preserved raw body ", 10000))
+	raw := rawevidence.StoredEnvelope{
+		EnvelopeID: "writer.1", WriterID: "writer", Watermark: 1, Layer: rawevidence.LayerClientIngress,
+		ScopeKind: rawevidence.ScopeManagedRun, ScopeID: "capture", ExchangeID: "exchange", ConnectionID: "connection",
+		EnvironmentID: "environment", EnvironmentRevision: 1, ClientEndpointID: "endpoint", ClientEndpointRevision: 1,
+		ProtocolPlanID: "plan", ProtocolPlanRevision: 1, RouteID: "route", RouteRevision: 1,
+		ObservedAt: now, ExpiresAt: content.ExpiresAt, Method: "POST", Scheme: "https", Authority: "provider.example",
+		Path: "/v1/messages", ContentType: "application/json", Representation: "http_message", Canonicalization: "go_net_http_v1",
+		Body: body, BodyBytes: int64(len(body)), BodySHA256: sha256.Sum256(body), DigestScope: rawevidence.DigestFull,
+		PayloadState: rawevidence.PayloadCaptured, PayloadMetadata: []byte(`{"version":1,"headers":[]}`),
+	}
+	if err := store.RawEvidenceRepository().AppendBatch(ctx, []rawevidence.StoredEnvelope{raw}, now); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Shutdown(ctx); err != nil {
+		t.Fatal(err)
+	}
+	// Freeze the real released table definitions, importing only its columns.
+	// The source has no new indexes/triggers and cannot be opened by this Runtime.
+	db := openFixtureDB(t, source)
+	if _, err := db.Exec(released016SQL); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`ATTACH DATABASE ? AS seed`, filepath.Join(seed, "runtime.db")); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := db.Query(`SELECT name FROM main.sqlite_schema WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var tables []string
+	for rows.Next() {
+		var table string
+		if err := rows.Scan(&table); err != nil {
+			t.Fatal(err)
+		}
+		tables = append(tables, table)
+	}
+	if err := errors.Join(rows.Err(), rows.Close()); err != nil {
+		t.Fatal(err)
+	}
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, table := range tables {
+		columns, err := stringColumn(ctx, tx, `SELECT name FROM pragma_table_xinfo(?, 'main') WHERE hidden=0 ORDER BY cid`, table)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for index := range columns {
+			columns[index] = identifier(columns[index])
+		}
+		names := strings.Join(columns, ",")
+		if _, err := tx.Exec(`DELETE FROM main.` + identifier(table) + `; INSERT INTO main.` + identifier(table) + ` (` + names + `) SELECT ` + names + ` FROM seed.` + identifier(table)); err != nil {
+			t.Fatal(table, err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	const digest016 = "aca772a7d57e0a0e22584f7ab9427db9fbe5a57f5edf6f6ba722f212afb72897"
+	if _, err := db.Exec(`UPDATE runtime_metadata SET schema_source_sha256=?`, digest016); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	before, _ := fileDigest(filepath.Join(source, "runtime.db"))
+	backup, target := filepath.Join(root, "backup"), filepath.Join(root, "converted")
+	result, err := convert(ctx, source, backup, target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.SourceSchema != digest016 || result.Rows["runtime_exchange_content_block_refs"] == 0 || result.Rows["runtime_evidence_chunk_refs"] == 0 {
+		t.Fatal("conversion did not verify derived references", result)
+	}
+	for _, directory := range []string{source, backup} {
+		if after, _ := fileDigest(filepath.Join(directory, "runtime.db")); after != before {
+			t.Fatal("source or backup changed")
+		}
+	}
+	if _, err := openCurrent(ctx, filepath.Join(source, "runtime.db")); !errors.Is(err, runtimepersistence.ErrSchemaBaselineMismatch) {
+		t.Fatal("runtime accepted the old format", err)
+	}
+	converted, err := openCurrent(ctx, filepath.Join(target, "runtime.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer converted.Shutdown(ctx)
+	got, err := converted.ExchangeContentRepository().Get(ctx, "exchange", now)
+	if err != nil || len(got.Request.Messages[0].Blocks) != 2 || got.Request.Messages[0].Blocks[0].Text != block.Text {
+		t.Fatal("lost ordered semantic content", err)
+	}
+	gotRaw, err := converted.RawEvidenceRepository().GetEnvelope(ctx, raw.EnvelopeID)
+	if err != nil || string(gotRaw.Body) != string(body) {
+		t.Fatal("lost raw content", err)
+	}
+	if err := converted.MaintainExpired(ctx, content.ExpiresAt); err != nil {
+		t.Fatal("converted references cannot be reclaimed", err)
+	}
+}
 
 func TestOfflineConversionPreservesDataAndUsesOnlyCurrentSchema(t *testing.T) {
 	source, backup, target := fixture(t)

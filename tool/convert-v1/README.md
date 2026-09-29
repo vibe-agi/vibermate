@@ -1,7 +1,7 @@
 # Offline v1 conversion
 
-This operator-only command converts the exact released 0.1.15 baseline into the
-current v1 schema. It is not shipped in `vibermate` or `vibermated`, is never run
+This operator-only command converts the exact released 0.1.15 or 0.1.16 baseline
+into the current v1 schema. It is not shipped in `vibermate` or `vibermated`, is never run
 at startup, and is not a general migration framework. Unknown shapes fail.
 
 Stop the App, its Runtime and all managed Agents first. Use three **absolute,
@@ -37,6 +37,11 @@ remains on the original Mac; copying this directory does not export it or make
 it usable on another host. External TLS files are not copied.
 
 ## Explicit conversion decisions
+
+The field conversions below apply to 0.1.15; 0.1.16 already carries those fields
+and they are copied unchanged. Both baselines gain verified content-reference
+indexes and an empty usage-retention cap table: their existing observation
+deadlines already embody all previously consented restrictions.
 
 - Existing OAuth accounts retain the previously active automatic refresh
   behavior as an explicit setting; other accounts remain off. New imports are
@@ -80,6 +85,6 @@ go test ./tool/convert-v1 ./internal/runtimepersistence ./internal/runtimedata -
 go test -race ./tool/convert-v1 -count=1
 ```
 
-The frozen SQL under `testdata/` is test input from commit `09a01d7`. Production
-conversion does not embed it, read Git history, or add old-schema readers to the
-Runtime.
+The frozen SQL under `testdata/` is test input from released commits `09a01d7`
+and `7eb2c19`. Production conversion does not embed it, read Git history, or add
+old-schema readers to the Runtime.

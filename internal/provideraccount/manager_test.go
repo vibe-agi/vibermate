@@ -239,13 +239,19 @@ type rotatingCredentialPreparer struct {
 	receivedRevision secretstore.Revision
 }
 
+func (preparer *rotatingCredentialPreparer) Forget(secretstore.Reference) {}
+
 func (preparer *rotatingCredentialPreparer) Prepare(
 	ctx context.Context,
 	driver providerauth.DriverRef,
 	reference secretstore.Reference,
 	scope providerauth.AccountRef,
+	automaticRefresh bool,
 ) (secretstore.Revision, error) {
 	revision := secretstore.Revision(scope.CredentialEpoch)
+	if !automaticRefresh {
+		return revision, nil
+	}
 	preparer.calls++
 	preparer.receivedRevision = revision
 	if driver != providerauth.CodexOAuthDriverRef() {

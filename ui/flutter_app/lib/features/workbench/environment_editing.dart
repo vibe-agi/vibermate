@@ -504,20 +504,24 @@ EnvironmentRoute _upstreamRoute(
   );
 }
 
-RouteAccountPolicy fixedRouteAccountPolicy(ProviderAccount account) =>
-    RouteAccountPolicy(
-      revision: 1,
-      mode: 'fixed',
-      fixedAccountId: account.id,
-      selector: null,
-      accounts: [
+RouteAccountPolicy fixedRouteAccountPolicy(
+  ProviderAccount account, {
+  List<RouteAccountReference>? accounts,
+}) => RouteAccountPolicy(
+  revision: 1,
+  mode: 'fixed',
+  fixedAccountId: account.id,
+  selector: null,
+  accounts:
+      accounts ??
+      [
         RouteAccountReference(
           id: account.id,
           revision: account.revision,
           displayName: account.displayName,
         ),
       ],
-    );
+);
 
 String _stableResourceToken(String value) {
   var hash = 2166136261;
@@ -862,8 +866,7 @@ void _validateRouteAccountPolicy({
       policy.mode == 'fixed' &&
       policy.fixedAccountId.isNotEmpty &&
       policy.selector == null &&
-      policy.accounts.length == 1 &&
-      policy.accounts.single.id == policy.fixedAccountId;
+      ids.contains(policy.fixedAccountId);
   final scripted =
       policy.mode == 'javascript' &&
       policy.fixedAccountId.isEmpty &&
@@ -1108,13 +1111,17 @@ List<EnvironmentClientEndpoint> prepareEnvironmentDraftEndpoints({
               route['accountPolicy'],
               'accountPolicy',
             );
-            if (policy.mode == 'javascript') {
-              // The server resolves the selector's eligible accounts again.
-              // Prepare the same authority before normalizing child revisions.
+            {
+              // Refresh only explicitly selected references. Endpoint links
+              // define eligibility, not permission to expand this Profile.
+              final selected = policy.accounts
+                  .map((account) => account.id)
+                  .toSet();
               final eligible =
                   availableAccounts
                       .where(
                         (account) =>
+                            selected.contains(account.id) &&
                             account.usable &&
                             account.isLinkedTo(service.id) &&
                             account.credentialOrigin ==
@@ -1122,7 +1129,7 @@ List<EnvironmentClientEndpoint> prepareEnvironmentDraftEndpoints({
                       )
                       .toList()
                     ..sort((a, b) => a.id.compareTo(b.id));
-              if (eligible.isEmpty) {
+              if (eligible.isEmpty || eligible.length != selected.length) {
                 throw const EnvironmentAccountSelectionException();
               }
               route['accountPolicy'] = policy

@@ -119,7 +119,18 @@ openssl x509 -in vibermate-private-ca.crt -noout -fingerprint -sha256
 受管客户端的系统/浏览器信任库。该命令只读取公开证书，不打开或导出 CA 私钥。
 不要先忽略浏览器警告，再从同一个未信任页面下载 CA；那不能建立安全的首次信任。
 
-CLI 会优先使用系统根验证。旧的精确叶指纹记录可在 CA 已安装后显式迁移：
+CLI 会优先使用系统根验证。首次连接私有 CA 时，会把该 CA 限定到准确的 Server
+主机和端口，正常换发叶证书不需要重新信任；这不会把 CA 安装到系统，也不代替
+Agent 的 Proxy CA 配置。首次连接仍是 TOFU，建议在登录、发送密码前，先用独立
+可信渠道核对的 CA SHA-256 指纹建立信任（64 位十六进制，不含冒号）：
+
+```sh
+vibermate trust --server https://vibermate.home.arpa:9666 --ca-fingerprint <已核对的CA指纹>
+```
+
+该命令只做 TLS 握手，不发送登录信息，并验证主机名、有效期和证书链。它也可显式
+转换已有叶指纹；失败不会更改原有信任。已有叶指纹不会在连接时自动升级为 CA 信任。
+如果已把 CA 安装到本机系统信任库，可选择系统根验证：
 
 ```sh
 vibermate trust --server https://vibermate.home.arpa:9666 --system-roots

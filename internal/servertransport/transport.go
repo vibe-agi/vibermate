@@ -61,28 +61,49 @@ func ProbeSystemTrust(
 	ctx context.Context,
 	options SystemTrustProbeOptions,
 ) (string, error) {
+	certificates, err := probeTLS(ctx, options, &tls.Config{RootCAs: options.RootCAs})
+	if err != nil {
+		return "", err
+	}
+	digest := sha256.Sum256(certificates[0])
+	return hex.EncodeToString(digest[:]), nil
+}
+
+// TrustPrivateCA verifies possession of the Server key, then validates the
+// hostname, chain and independently supplied CA fingerprint before saving
+// address-scoped trust. It sends no HTTP request, password or session token.
+func TrustPrivateCA(ctx context.Context, options Options, expectedFingerprint string) (string, error) {
+	certificates, err := probeTLS(ctx, SystemTrustProbeOptions{
+		Target: options.Target, Clock: options.Clock, Timeout: options.Timeout,
+	}, &tls.Config{InsecureSkipVerify: true}) // verified below, before trust is changed or application data is sent
+	if err != nil {
+		return "", err
+	}
+	store, err := serverconnection.OpenPinStore(options.TrustDirectory)
+	if err != nil {
+		return "", err
+	}
+	return store.UsePrivateCA(options.Target.Address(), certificates, options.Clock.Now().UTC(), expectedFingerprint)
+}
+
+func probeTLS(ctx context.Context, options SystemTrustProbeOptions, config *tls.Config) ([][]byte, error) {
 	if ctx == nil || !options.Target.Valid() ||
 		options.Target.Transport() != serverconnection.TransportHTTPS ||
 		options.Clock == nil || options.Timeout <= 0 {
-		return "", errors.New("Runtime Server system trust probe is incomplete")
+		return nil, errors.New("Runtime Server trust probe is incomplete")
 	}
 	host, _, err := net.SplitHostPort(options.Target.Address().String())
 	if err != nil {
-		return "", serverconnection.ErrInvalidAddress
+		return nil, serverconnection.ErrInvalidAddress
 	}
 	networkDialer := &net.Dialer{
 		Timeout: min(options.Timeout, 5*time.Second), KeepAlive: 15 * time.Second,
 	}
-	tlsDialer := &tls.Dialer{
-		NetDialer: networkDialer,
-		Config: &tls.Config{
-			MinVersion: tls.VersionTLS13,
-			NextProtos: []string{"http/1.1"},
-			ServerName: host,
-			RootCAs:    options.RootCAs,
-			Time:       func() time.Time { return options.Clock.Now().UTC() },
-		},
-	}
+	config.MinVersion = tls.VersionTLS13
+	config.NextProtos = []string{"http/1.1"}
+	config.ServerName = host
+	config.Time = func() time.Time { return options.Clock.Now().UTC() }
+	tlsDialer := &tls.Dialer{NetDialer: networkDialer, Config: config}
 	probeContext, cancel := context.WithTimeout(ctx, options.Timeout)
 	defer cancel()
 	connection, err := tlsDialer.DialContext(
@@ -91,19 +112,22 @@ func ProbeSystemTrust(
 		options.Target.Address().String(),
 	)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	defer connection.Close()
 	tlsConnection, ok := connection.(*tls.Conn)
 	if !ok {
-		return "", errors.New("Runtime Server system trust probe did not negotiate TLS")
+		return nil, errors.New("Runtime Server trust probe did not negotiate TLS")
 	}
 	peers := tlsConnection.ConnectionState().PeerCertificates
 	if len(peers) == 0 {
-		return "", serverconnection.ErrInvalidCertificate
+		return nil, serverconnection.ErrInvalidCertificate
 	}
-	digest := sha256.Sum256(peers[0].Raw)
-	return hex.EncodeToString(digest[:]), nil
+	certificates := make([][]byte, len(peers))
+	for index, peer := range peers {
+		certificates[index] = peer.Raw
+	}
+	return certificates, nil
 }
 
 func Open(options Options) (*Transport, error) {

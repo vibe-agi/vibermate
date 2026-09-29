@@ -252,7 +252,7 @@ void main() {
   }
 
   test(
-    'selector candidates follow current links and advance the draft exactly once',
+    'catalog growth preserves the explicitly selected account scope',
     () async {
       final endpoint = base.single;
       final plan = endpoint.protocolPlans.single;
@@ -304,21 +304,9 @@ void main() {
         availableAccounts: [...accounts, unlinked],
       );
       final after = prepared.single.protocolPlans.single.routes.single;
-      final eligible =
-          accounts
-              .where(
-                (account) =>
-                    account.usable &&
-                    account.isLinkedTo(service.id) &&
-                    account.credentialOrigin == service.origin.toString(),
-              )
-              .map((account) => account.id)
-              .toList()
-            ..sort();
-      expect(
-        after.accountPolicy.accounts.map((account) => account.id),
-        eligible,
-      );
+      expect(after.accountPolicy.accounts.map((account) => account.id), [
+        oauth.id,
+      ]);
       expect(
         after.accountPolicy.accounts.any(
           (account) => account.id == unlinked.id,
@@ -326,12 +314,12 @@ void main() {
         isFalse,
       );
       expect(after.accountPolicy.selector, selector);
-      expect(after.accountPolicy.revision, before.accountPolicy.revision + 1);
-      expect(after.revision, before.revision + 1);
-      expect(prepared.single.revision, frozen.single.revision + 1);
+      expect(after.accountPolicy.revision, before.accountPolicy.revision);
+      expect(after.revision, before.revision);
+      expect(prepared.single.revision, frozen.single.revision);
       expect(
         prepared.single.protocolPlans.single.revision,
-        frozen.single.protocolPlans.single.revision + 1,
+        frozen.single.protocolPlans.single.revision,
       );
       expect(before.accountPolicy.accounts.single.id, oauth.id);
       expect(

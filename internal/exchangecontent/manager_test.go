@@ -10,7 +10,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/environment"
 )
 
-func TestManagerPurgesExpiredEvidenceAndRejectsWorkAfterShutdown(t *testing.T) {
+func TestManagerRecordsEvidenceAndRejectsWorkAfterShutdown(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 8, 8, 3, 0, 0, 0, time.UTC)
 	repository := &repositoryDouble{records: make(map[string]Record)}

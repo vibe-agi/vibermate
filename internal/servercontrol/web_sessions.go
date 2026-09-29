@@ -233,9 +233,8 @@ func (handler *WebSessionsHandler) login(writer http.ResponseWriter, request *ht
 }
 
 func (handler *WebSessionsHandler) current(writer http.ResponseWriter, request *http.Request) {
-	principal, valid := takeWebPrincipal(request, handler.sessions, serveradmin.ScopeRead)
-	if !valid || !principal.Valid() {
-		writeProblem(writer, http.StatusUnauthorized, "web_session_invalid")
+	principal, valid := takeWebPrincipal(writer, request, handler.sessions, serveradmin.ScopeRead)
+	if !valid {
 		return
 	}
 	writeServerJSON(writer, http.StatusOK, WebPrincipalView{
@@ -254,9 +253,8 @@ func (handler *WebSessionsHandler) logout(writer http.ResponseWriter, request *h
 }
 
 func (handler *WebSessionsHandler) changePassword(writer http.ResponseWriter, request *http.Request) {
-	principal, valid := takeWebPrincipal(request, handler.sessions, serveradmin.ScopeWrite)
-	if !valid || !principal.Valid() {
-		writeProblem(writer, http.StatusUnauthorized, "web_session_invalid")
+	principal, valid := takeWebPrincipal(writer, request, handler.sessions, serveradmin.ScopeWrite)
+	if !valid {
 		return
 	}
 	var input WebPasswordChange
@@ -387,18 +385,31 @@ func decodeWebInput(
 }
 
 func takeWebPrincipal(
+	writer http.ResponseWriter,
 	request *http.Request,
 	authority *serveradmin.Authority,
 	scope serveradmin.Scope,
 ) (serveradmin.Principal, bool) {
 	if request.Header.Get("Proxy-Authorization") != "" {
+		writeProblem(writer, http.StatusUnauthorized, "web_session_invalid")
 		return serveradmin.Principal{}, false
 	}
 	token, valid := takeRuntimeUserBearer(request)
 	if !valid {
+		writeProblem(writer, http.StatusUnauthorized, "web_session_invalid")
 		return serveradmin.Principal{}, false
 	}
-	return authority.Authenticate(request.Context(), token, scope)
+	principal, err := authority.Authenticate(request.Context(), token, scope)
+	if err != nil && !errors.Is(err, serveradmin.ErrUnauthorized) {
+		writer.Header().Set("Retry-After", "1")
+		writeProblem(writer, http.StatusServiceUnavailable, "web_session_unavailable")
+		return serveradmin.Principal{}, false
+	}
+	if err != nil || !principal.Valid() {
+		writeProblem(writer, http.StatusUnauthorized, "web_session_invalid")
+		return serveradmin.Principal{}, false
+	}
+	return principal, true
 }
 
 func writeWebSession(writer http.ResponseWriter, instanceID string, session serveradmin.Session) {

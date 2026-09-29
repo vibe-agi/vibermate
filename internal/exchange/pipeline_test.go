@@ -1143,7 +1143,8 @@ func TestInterruptedResponseReportsConsistentOutcomeAndReason(t *testing.T) {
 		{name: "transformed original stream", stream: true, transform: true, readErr: context.Canceled, wantOutcome: AttemptCanceled, wantReason: ReasonExchangeCanceled},
 		{name: "managed complete", upstream: true, readErr: context.Canceled, wantOutcome: AttemptCanceled, wantReason: ReasonExchangeCanceled},
 		{name: "managed stream", upstream: true, stream: true, readErr: context.Canceled, wantOutcome: AttemptCanceled, wantReason: ReasonExchangeCanceled},
-		{name: "managed deadline", upstream: true, readErr: context.DeadlineExceeded, wantOutcome: AttemptCanceled, wantReason: ReasonExchangeCanceled},
+		{name: "managed provider deadline", upstream: true, readErr: context.DeadlineExceeded, wantOutcome: AttemptFailed, wantReason: ReasonProviderResponseInvalid},
+		{name: "managed stream provider deadline", upstream: true, stream: true, readErr: context.DeadlineExceeded, wantOutcome: AttemptFailed, wantReason: ReasonProviderResponseInvalid},
 		{name: "managed broken response is not cancellation", upstream: true, readErr: io.ErrUnexpectedEOF, wantOutcome: AttemptFailed, wantReason: ReasonProviderResponseInvalid},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -1751,7 +1752,7 @@ func TestManagedResponsesHTTP2ClientUsesLoopbackHTTP1Provider(t *testing.T) {
 	}
 	requests := provider.requestsSnapshot()
 	if result.Outcome != AttemptSucceeded || len(requests) != 1 ||
-		requests[0].RelativePath() != responseschat.ResponsesProviderRelativePath ||
+		requests[0].RelativePath() != "responses" ||
 		result.Presentation.ClientProtocol != wireprofile.ApplicationProtocolHTTP2 ||
 		result.Presentation.UpstreamProtocol != wireprofile.ApplicationProtocolHTTP1 {
 		t.Fatalf("result = %+v, requests = %+v", result, requests)
@@ -3371,7 +3372,7 @@ func TestProviderRejectionClassifierReturnsOnlyKnownEmittedFields(t *testing.T) 
 		{`{"error":{"message":"max_tokens is private text"}}`, ProviderFieldUnknown},
 	}
 	for _, test := range tests {
-		if got := classifyProviderRejection(strings.NewReader(test.body)).field; got != test.want {
+		if got := classifyProviderRejection(strings.NewReader(test.body), "").field; got != test.want {
 			t.Fatalf("classifyProviderRejection() = %q, want %q", got, test.want)
 		}
 	}

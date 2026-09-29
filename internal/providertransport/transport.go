@@ -22,9 +22,11 @@ import (
 )
 
 const (
-	DefaultProviderDialTimeout         = 15 * time.Second
-	DefaultTLSHandshakeTimeout         = 10 * time.Second
-	DefaultProviderResponseHeadTimeout = 30 * time.Second
+	DefaultProviderDialTimeout = 15 * time.Second
+	DefaultTLSHandshakeTimeout = 10 * time.Second
+	// Non-streaming models may finish computation before sending any headers.
+	// Give that wait the same budget as response progress, not the dial budget.
+	DefaultProviderResponseHeadTimeout = DefaultProviderResponseIdleTimeout
 	// Match the native Codex SSE idle budget. Reasoning can be silent for
 	// minutes; this is renewed on progress, never an entire-request deadline.
 	DefaultProviderResponseIdleTimeout = 5 * time.Minute

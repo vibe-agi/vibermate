@@ -67,8 +67,6 @@ func TestBuildChildArgumentsPinsCodexToResponsesHTTP(t *testing.T) {
 		"--config", `model_provider="openai"`,
 		"--config", `openai_base_url="https://chatgpt.com/backend-api/codex"`,
 		"--config", `features.responses_websockets=false`,
-		"--config", `request_max_retries=0`,
-		"--config", `stream_max_retries=0`,
 		"--disable", "enable_request_compression",
 	}
 	if len(arguments) != len(wantPrefix)+3 ||
@@ -97,8 +95,6 @@ func TestBuildChildArgumentsMakesNewCodexSessionsPortable(t *testing.T) {
 		"--config", `model_provider="openai"`,
 		"--config", `openai_base_url="https://chatgpt.com/backend-api/codex"`,
 		"--config", `features.responses_websockets=false`,
-		"--config", `request_max_retries=0`,
-		"--config", `stream_max_retries=0`,
 		"--disable", "enable_request_compression",
 		"resume", "old-session-id",
 	}

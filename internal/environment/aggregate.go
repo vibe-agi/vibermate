@@ -466,8 +466,8 @@ func validateRoute(route *UpstreamRoute) error {
 	}
 	switch policy.Mode {
 	case AccountSelectionFixed:
-		if policy.FixedAccountID == "" || policy.Selector != nil || len(policy.Accounts) != 1 ||
-			policy.Accounts[0].ID != policy.FixedAccountID {
+		if policy.FixedAccountID == "" || policy.Selector != nil ||
+			!slices.ContainsFunc(policy.Accounts, func(account RouteAccountReference) bool { return account.ID == policy.FixedAccountID }) {
 			return fmt.Errorf("%w: route %q fixed Account selection is invalid", ErrInvalidEnvironment, route.ID)
 		}
 	case AccountSelectionJavaScript:

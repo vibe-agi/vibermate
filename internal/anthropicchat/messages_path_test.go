@@ -282,14 +282,19 @@ func TestMessagesProtocolPathPreservesSubagentToolReferenceHistory(t *testing.T)
 	if !report.Empty() {
 		t.Fatalf("same-dialect decode reported a loss: %+v", report.Notices())
 	}
-	if len(request.Messages) != 2 || len(request.Messages[1].Blocks) != 1 {
+	if len(request.Messages) != 2 || len(request.Messages[1].Blocks) != 2 {
 		t.Fatalf("decoded messages = %+v", request.Messages)
 	}
 	result := request.Messages[1].Blocks[0]
 	if result.Kind != protocolcore.BlockToolResult ||
-		!strings.Contains(result.ToolResult.Content, `"type":"tool_reference"`) ||
-		!strings.Contains(result.ToolResult.Content, `"tool_name":"vibermate-reader"`) {
+		result.ToolResult.Content != "subagent finished" {
 		t.Fatalf("decoded tool result = %+v", result)
+	}
+	native := request.Messages[1].Blocks[1]
+	if native.Kind != protocolcore.BlockProviderExtension ||
+		native.ProviderExtension.Kind() != protocolcore.ProviderExtensionOpaqueItem ||
+		!bytes.Contains(bytes.Join(native.ProviderExtension.Fragments(), nil), []byte(`"tool_name":"vibermate-reader"`)) {
+		t.Fatalf("native tool result = %+v", native)
 	}
 
 	request, err = request.WithEffectiveModel("claude-provider-model")
@@ -333,6 +338,87 @@ func TestCrossDialectPathRejectsSubagentToolReferenceHistory(t *testing.T) {
 	if err == nil || protocolcore.ReasonOf(err) != protocolcore.ReasonUnsupportedClientInput ||
 		!strings.Contains(err.Error(), "$.messages[1].content[0].content[0]") {
 		t.Fatalf("cross-dialect tool reference error = %v", err)
+	}
+}
+
+func TestNativeHistoryIsOpaqueAndDoesNotBecomeCrossDialectText(t *testing.T) {
+	codec, err := New(DefaultOptions())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, block := range []string{
+		`{"type":"image","source":{"type":"url","url":"https://files.example/synthetic.png"}}`,
+		`{"type":"document","source":{"type":"url","url":"https://files.example/synthetic.pdf"}}`,
+		`{"type":"future_native_block","nested":{"new_option":true}}`,
+	} {
+		body := []byte(`{"model":"claude-test","max_tokens":32,"messages":[{"role":"user","content":[` + block + `]}]}`)
+		request, _, err := codec.DecodeCompatibleClientRequest(body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := request.Messages[0].Blocks[0]
+		if got.Kind != protocolcore.BlockProviderExtension || got.Text != "" ||
+			got.ProviderExtension.Source() != protocolcore.ProviderExtensionSourceAnthropicMessages ||
+			got.ProviderExtension.Kind() != protocolcore.ProviderExtensionOpaqueItem ||
+			!bytes.Equal(bytes.Join(got.ProviderExtension.Fragments(), nil), []byte(block)) {
+			t.Fatalf("native history was not preserved as opaque evidence: %+v", got)
+		}
+		if _, _, err := codec.DecodeClientRequest(body); protocolcore.ReasonOf(err) != protocolcore.ReasonUnsupportedClientInput {
+			t.Fatalf("cross-dialect request silently accepted native-only input: %v", err)
+		}
+		if _, _, err := codec.EncodeProviderRequest(request); protocolcore.ReasonOf(err) != protocolcore.ReasonUnsupportedClientInput {
+			t.Fatalf("cross-dialect encoder silently translated native-only input: %v", err)
+		}
+	}
+}
+
+func TestNativeToolDefinitionsRequireTheirOriginalDialect(t *testing.T) {
+	codec, err := New(DefaultOptions())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, definition := range []string{
+		`{"type":"web_search_20250305","name":"web_search","max_uses":2}`,
+		`{"type":"bash_20250124","name":"bash"}`,
+		`{"type":"future_native_tool","name":"future","new_configuration":true}`,
+	} {
+		body := []byte(`{"model":"claude-test","max_tokens":32,"messages":[{"role":"user","content":"hello"}],"tools":[` + definition + `]}`)
+		request, _, err := codec.DecodeCompatibleClientRequest(body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(request.Tools) != 1 || request.Tools[0].EffectiveKind() != protocolcore.ToolKindNative ||
+			request.Tools[0].NativeType == "" || !request.Tools[0].InputSchema.IsZero() {
+			t.Fatalf("native definition became a portable function: %+v", request.Tools)
+		}
+		if _, _, err := codec.DecodeClientRequest(body); protocolcore.ReasonOf(err) != protocolcore.ReasonUnsupportedClientInput {
+			t.Fatalf("cross-dialect decoder accepted native definition: %v", err)
+		}
+		if _, _, err := codec.EncodeProviderRequest(request); protocolcore.ReasonOf(err) != protocolcore.ReasonUnsupportedClientInput {
+			t.Fatalf("cross-dialect encoder accepted native definition: %v", err)
+		}
+	}
+}
+
+func TestNativeRequestProjectionStillRejectsAmbiguousOrMalformedKnownFields(t *testing.T) {
+	path, err := NewMessagesProtocolPath(DefaultOptions())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, body := range []string{
+		`{"model":"a","model":"b","max_tokens":32,"messages":[{"role":"user","content":"hello"}]}`,
+		`{"model":"a","max_tokens":32,"messages":[{"role":"user","content":[{"type":"future_block","nested":{"value":1,"value":2}}]}]}`,
+		`{"model":"a","max_tokens":32,"messages":[{"role":"user","content":[{"type":"text","text":123,"future_field":true}]}]}`,
+		`{"model":"a","max_tokens":32,"messages":[{"role":"user","content":[{"future_field":true}]}]}`,
+		`{"model":"a","max_tokens":32,"stream":"true","messages":[{"role":"user","content":"hello"}]}`,
+		`{"model":"a","max_tokens":32,"messages":[{"role":"user","content":"hello"}]} {}`,
+		`{"model":"a","max_tokens":32,"messages":[{"role":"user","content":"hello"}],"tools":[{"type":"custom","name":"read"}]}`,
+		`{"model":"a","max_tokens":32,"messages":[{"role":"user","content":"hello"}],"tools":[{"type":"web_search_20250305","name":"search"},{"type":"web_search_20260209","name":"search"}]}`,
+		`{"model":"a","max_tokens":32,"messages":[{"role":"user","content":"hello"}],"tools":[{"type":"web_search_20250305","name":"search"}],"tool_choice":{"type":"tool","name":"not_declared"}}`,
+	} {
+		if _, _, err := path.Client().DecodeRequest([]byte(body)); err == nil {
+			t.Fatalf("accepted malformed/ambiguous native request: %s", body)
+		}
 	}
 }
 
@@ -563,6 +649,37 @@ func TestMessagesProtocolPathStreamsTextWithoutWaitingForTerminalApproval(t *tes
 	}
 	if len(release) != 0 || len(terminal.ToolIntents()) != 0 {
 		t.Fatalf("text-only terminal release=%q intents=%+v", release, terminal.ToolIntents())
+	}
+}
+
+func TestMessagesProtocolPathRejectsMalformedCitationDeltas(t *testing.T) {
+	path, err := NewMessagesProtocolPath(DefaultOptions())
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, _, err := path.Client().DecodeRequest([]byte(`{"model":"claude-test","max_tokens":32,"stream":true,"messages":[{"role":"user","content":"Search"}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct{ block, delta string }{
+		{`{"type":"text","text":""}`, `{"type":"citations_delta"}`},
+		{`{"type":"text","text":""}`, `{"type":"citations_delta","citation":7}`},
+		{`{"type":"text","text":""}`, `{"type":"citations_delta","citation":{"type":""}}`},
+		{`{"type":"thinking","thinking":""}`, `{"type":"citations_delta","citation":{"type":"web_search_result_location"}}`},
+	} {
+		stream, err := path.Streaming().NewStream(request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		start := "event: message_start\ndata: " + `{"type":"message_start","message":{"id":"msg_cite","type":"message","role":"assistant","model":"claude-test","usage":{"input_tokens":3}}}` + "\n\n" +
+			"event: content_block_start\ndata: " + `{"type":"content_block_start","index":0,"content_block":` + test.block + "}\n\n"
+		if _, err := stream.Feed(context.Background(), []byte(start)); err != nil {
+			t.Fatal(err)
+		}
+		delta := "event: content_block_delta\ndata: " + `{"type":"content_block_delta","index":0,"delta":` + test.delta + "}\n\n"
+		if released, err := stream.Feed(context.Background(), []byte(delta)); err == nil || len(released) != 0 {
+			t.Fatalf("malformed/misdirected citation released: %q, %v", released, err)
+		}
 	}
 }
 

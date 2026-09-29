@@ -2,7 +2,7 @@
 
 Status: accepted
 
-An Upstream Route chooses its Account through exactly one Account Selection Policy: either one fixed Account or one published Account Selector revision. A selector runs once for one Turn and may choose only from the exact Account revisions belonging to the Route's frozen Upstream Endpoint. Its result is validated before any credential is acquired; an exception, timeout, empty result, unavailable Account, or out-of-set Account fails the Exchange without another attempt.
+An Upstream Route chooses its Account through exactly one Account Selection Policy: either one active manual Account or one published Account Selector revision. Both use the Route's explicit, frozen Account Set, which is a subset of the Accounts associated with its Upstream Endpoint; adding an Endpoint association never expands an existing Route's set. A selector runs once for one Turn. Its result is validated before any credential is acquired; an exception, timeout, empty result, unavailable Account, or out-of-set Account fails the Exchange without another attempt.
 
 Account Selector JavaScript is a separate Code Library kind from message Transform JavaScript. It receives a read-only request, bounded runtime metadata, and non-secret Account metadata. It cannot mutate the request, observe credentials, change the Endpoint, perform I/O, retain state across Turns, or trigger fallback. Message Transform authority remains unchanged and runs only after Account selection.
 

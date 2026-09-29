@@ -1,0 +1,5 @@
+# Publish usage retention before bounded cleanup
+
+Shortening Usage Collection Policy immediately restricts existing observations, and later lengthening must not resurrect or extend them. Rewriting all observation rows while saving settings monopolized SQLite's writer; merely postponing that rewrite would relax consent until cleanup, so we instead commit a durable retention cap and the policy together. The cap covers only the existing, never-reused observation sequences; shared report queries enforce it while existing maintenance materializes expiry in bounded transactions.
+
+Caps are bounded to one per retention duration, with weaker covered caps discarded. Progress and expiry updates commit together, so cancellation or restart cannot reopen expired data; newly collected observations follow the current policy. No control interface or background worker is added. Released 0.1.15/0.1.16 databases require the existing backup-and-offline conversion, which preserves their materialized deadlines and starts with no pending caps; the Runtime still opens only the current structure.

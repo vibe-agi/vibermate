@@ -69,8 +69,10 @@ func (store *Store) ScanUsage(ctx context.Context, query runtimeusage.Aggregatio
 
 func usageWhere(query runtimeusage.Query, userID runtimeuser.UserID, now time.Time) (string, []any) {
 	from, until := query.Bounds()
-	where := "occurred_at_unix_ms>=? AND occurred_at_unix_ms<? AND expires_at_unix_ms>?"
-	args := []any{from.UnixMilli(), until.UnixMilli(), now.UnixMilli()}
+	where := `occurred_at_unix_ms>=? AND occurred_at_unix_ms<? AND expires_at_unix_ms>?
+ AND NOT EXISTS (SELECT 1 FROM runtime_usage_retention_caps
+ WHERE sequence>after_sequence AND sequence<=through_sequence AND occurred_at_unix_ms<=?-retention_days*86400000)`
+	args := []any{from.UnixMilli(), until.UnixMilli(), now.UnixMilli(), now.UnixMilli()}
 	if userID != "" {
 		where += " AND runtime_user_id=?"
 		args = append(args, userID)

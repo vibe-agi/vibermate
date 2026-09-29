@@ -1,5 +1,9 @@
 # ViberMate 当前实施计划
 
+当前追加任务：复核用户提供的 v0.1.16 独立架构 review，按确认的四类产品入口 test-first 修复成立的问题；同时处理实测的报表跳动、快照下钻错误与 Profile 显式账号范围。Plane **VIBERMATE-48–56**；[完整逐项矩阵与门禁](docs/plans/2026-09-29-post-release-review.md)。此前发布事实如下，不代表本次新风险已经排除；不改写既有标签或操作正在运行的 App。
+
+本次交付调整：按用户要求冻结现有修复集，提交并推送 `fix/post-016-review`，交由 Claude Code 独立 review。尚未关闭的安全、协议、持久化与生命周期项保留在矩阵和 Plane；不宣称全部完成，不发布或替换用户 App。L9 合盖换网另以低优先级 **VIBERMATE-57** 跟踪。
+
 本轮已完成：账号出口与 OAuth 刷新策略、账号界面、启动上下文、完整用量汇总和运行概览；保持 v1，完成回归、规模与 Web 验证，发布 `0.1.16+18`。
 
 任务状态以 official-plane 的 ViberMate 项目 `779ab6f7-24dd-49ca-9b01-d8be8ef20a51` 为准：总任务 **VIBERMATE-37**，子任务 **38–47**。本文件是仓库内实施索引，不代替 Plane。

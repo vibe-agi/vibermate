@@ -58,8 +58,8 @@ func TestAdminAccessKeyMintsBoundedManagementSession(t *testing.T) {
 	if session.Schema != AdminSessionSchema || session.InstanceID != "runtime-test" ||
 		session.ReadToken == "" || session.WriteToken == "" ||
 		strings.Contains(response.Body.String(), accessKey) ||
-		!authority.Authorize(context.Background(), session.ReadToken, serveradmin.ScopeRead) ||
-		!authority.Authorize(context.Background(), session.WriteToken, serveradmin.ScopeWrite) {
+		authority.Authorize(context.Background(), session.ReadToken, serveradmin.ScopeRead) != nil ||
+		authority.Authorize(context.Background(), session.WriteToken, serveradmin.ScopeWrite) != nil {
 		t.Fatalf("invalid admin session response: %+v", session)
 	}
 }

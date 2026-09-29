@@ -4623,8 +4623,7 @@ final class RouteAccountPolicy {
         mode == 'fixed' &&
         fixedAccountId.isNotEmpty &&
         selector == null &&
-        accounts.length == 1 &&
-        accounts.single.id == fixedAccountId;
+        accountIds.contains(fixedAccountId);
     final scripted =
         mode == 'javascript' &&
         fixedAccountId.isEmpty &&

@@ -133,6 +133,9 @@ func (codec *Codec) NewStreamEncoder(
 			err,
 		)
 	}
+	if err := validateResponseToolDefinitions(request); err != nil {
+		return nil, err
+	}
 	if !request.Stream {
 		return nil, protocolcore.NewFailure(
 			protocolcore.ReasonInvalidClientRequest,

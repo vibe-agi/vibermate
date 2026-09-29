@@ -18,6 +18,8 @@ const defaultTLSHandshakeTimeout = 10 * time.Second
 var (
 	ErrTransportPlanInvalid = errors.New("transport fingerprint plan is invalid")
 	ErrNoTransportProfile   = errors.New("no transport fingerprint profile succeeded")
+
+	errObservedExtensionUnsupported = errors.New("observed ClientHello contains an unsupported extension")
 )
 
 type ContextDialer interface {
@@ -122,6 +124,9 @@ func (connector *Connector) Connect(
 			if err != nil {
 				failures = append(failures, err)
 				evidence.fallbackReason = reason
+				if !errors.Is(err, errObservedExtensionUnsupported) {
+					return nil, evidence, errors.Join(ErrNoTransportProfile, errors.Join(failures...))
+				}
 				continue
 			}
 			connection, negotiated, err := connector.connectCustom(
@@ -140,12 +145,10 @@ func (connector *Connector) Connect(
 			}
 			failures = append(failures, err)
 			evidence.fallbackReason = FallbackObservedTLSHandshakeRejected
-			if strictVerificationFailure(err) || ctx.Err() != nil {
-				return nil, evidence, errors.Join(
-					ErrNoTransportProfile,
-					errors.Join(failures...),
-				)
-			}
+			// Only an unsupported fingerprint may select another template.
+			// A dial, proxy, certificate or handshake failure is not permission
+			// to start another connection.
+			return nil, evidence, errors.Join(ErrNoTransportProfile, errors.Join(failures...))
 		case wireprofile.TransportFingerprintCaptured:
 			spec, offered, err := prepareCapturedSpec(
 				template,
@@ -331,7 +334,9 @@ func prepareObservedSpec(
 			ErrClientHelloUnavailable
 	}
 	fingerprinter := utls.Fingerprinter{
-		AllowBluntMimicry: false,
+		// Decode unknown extensions only to detect unsupported fingerprints.
+		// Never advertise an extension whose negotiated behavior we cannot honor.
+		AllowBluntMimicry: true,
 		RealPSKResumption: false,
 	}
 	spec, err := fingerprinter.FingerprintClientHello(
@@ -361,8 +366,12 @@ func prepareObservedSpec(
 	sanitized := make([]utls.TLSExtension, 0, len(spec.Extensions))
 	hasSNI := false
 	hasALPN := false
+	unsupportedExtension := false
 	for _, extension := range spec.Extensions {
 		switch extension.(type) {
+		case *utls.GenericExtension:
+			unsupportedExtension = true
+			continue
 		case utls.PreSharedKeyExtension:
 			continue
 		case *utls.SNIExtension:
@@ -404,6 +413,9 @@ func prepareObservedSpec(
 	if hasALPN != (len(offered) != 0) {
 		return nil, nil, FallbackClientHelloUnsupported,
 			errors.New("observed ClientHello ALPN extension is inconsistent")
+	}
+	if unsupportedExtension {
+		return nil, nil, FallbackClientHelloUnsupported, errObservedExtensionUnsupported
 	}
 	spec.Extensions = sanitized
 	spec.GetSessionID = nil
@@ -508,9 +520,7 @@ func (connector *Connector) connectCustom(
 	}
 	if !protocolMatches {
 		_ = secured.Close()
-		return nil, negotiated, errors.New(
-			"upstream TLS negotiated an unexpected application protocol",
-		)
+		return nil, negotiated, errors.New("upstream TLS negotiated an unexpected application protocol")
 	}
 	return secured, negotiated, nil
 }
@@ -545,9 +555,7 @@ func (connector *Connector) connectStandard(
 	negotiated := secured.ConnectionState().NegotiatedProtocol
 	if len(alpn) != 1 || negotiated != alpn[0] {
 		_ = secured.Close()
-		return nil, negotiated, errors.New(
-			"upstream TLS negotiated an unexpected application protocol",
-		)
+		return nil, negotiated, errors.New("upstream TLS negotiated an unexpected application protocol")
 	}
 	return secured, negotiated, nil
 }

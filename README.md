@@ -157,8 +157,10 @@ Replace the example address with the exact HTTPS address opened in the browser.
 The CLI uses normal system PKI when available, so public certificate renewal
 does not change server identity. Private CA deployments export the public CA
 locally with `vibermated server ca-certificate`; verify its fingerprint out of
-band before installing it. A legacy exact-leaf pin can be deliberately migrated
-with `vibermate trust --server <URL> --system-roots`. See the
+band, then enroll it for this Server with `vibermate trust --server <URL>
+--ca-fingerprint <SHA256>` before login. This also explicitly converts an existing
+leaf pin without installing a system root. If the CA is installed in system trust,
+use `vibermate trust --server <URL> --system-roots`. See the
 [deployment guide](docs/deployment.md) for the complete commands and trust model.
 
 Each person can change their own password from the browser account menu. The

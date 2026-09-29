@@ -30,7 +30,7 @@ func nativeResponseHeaders(source http.Header) http.Header {
 		lower := strings.ToLower(name)
 		allowed := false
 		switch lower {
-		case "x-request-id", "retry-after", "x-should-retry", "x-models-etag",
+		case "x-request-id", "request-id", "retry-after", "retry-after-ms", "x-should-retry", "x-models-etag",
 			"openai-model", "x-reasoning-included", "x-codex-turn-state",
 			"x-codex-promo-message", "x-codex-rate-limit-reached-type",
 			"x-codex-credits-has-credits", "x-codex-credits-unlimited", "x-codex-credits-balance",

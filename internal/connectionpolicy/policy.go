@@ -142,6 +142,8 @@ type Outcome struct {
 	Decision Decision
 	RuleID   string
 	Revision uint64
+	// Explicit distinguishes a scoped Owner rule from the default mode.
+	Explicit bool
 }
 
 type RuleSetOptions struct {
@@ -211,6 +213,7 @@ func (set RuleSet) Evaluate(request Request) Outcome {
 				Decision: rule.Decision,
 				RuleID:   rule.ID,
 				Revision: set.revision,
+				Explicit: true,
 			}
 		}
 	}

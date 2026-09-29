@@ -21,6 +21,8 @@ const storedDigestHexBytes = 2 * sha256.Size
 // The message digest is not recomputed here: it stays SHA-256 of the message's
 // canonical JSON, so every transcript node and every stored digest keeps the
 // meaning it already had. Only where the bytes live changes.
+// On conflict, update only an equal non-key field: assigning digest to itself
+// makes SQLite recheck every retained foreign-key reference on every append.
 func putStoredMessageBlocks(
 	ctx context.Context,
 	transaction *sql.Tx,
@@ -60,7 +62,7 @@ func putStoredMessageBlocks(
 		`INSERT INTO runtime_exchange_content_messages(
 		   digest, role, agent_json, block_manifest
 		 ) VALUES (?, ?, ?, ?) ON CONFLICT(digest) DO UPDATE
-		 SET digest = excluded.digest
+		 SET role = excluded.role
 		 WHERE runtime_exchange_content_messages.role = excluded.role
 		   AND runtime_exchange_content_messages.agent_json IS excluded.agent_json
 		   AND runtime_exchange_content_messages.block_manifest =
@@ -102,7 +104,7 @@ func putStoredBlock(
 		`INSERT INTO runtime_exchange_content_blocks(
 		   digest, plain_bytes, codec, payload
 		 ) VALUES (?, ?, ?, ?) ON CONFLICT(digest) DO UPDATE
-		 SET digest = excluded.digest
+		 SET plain_bytes = excluded.plain_bytes
 		 WHERE runtime_exchange_content_blocks.plain_bytes = excluded.plain_bytes`,
 		digest, len(encoded), codec, stored,
 	)
@@ -251,32 +253,23 @@ func decodeStoredBlock(encoded []byte) (exchangecontent.Block, error) {
 	return block, nil
 }
 
-// purgeUnreferencedContentBlocks releases blocks no retained message names.
+// Only the deleted message's blocks can have become unreferenced.
 func purgeUnreferencedContentBlocks(
 	ctx context.Context,
 	transaction *sql.Tx,
+	manifest string,
 ) error {
 	if _, err := transaction.ExecContext(
 		ctx,
-		// Recursing over the message digest rather than its manifest, for the
-		// same reason as the raw plane: carrying the manifest makes the sweep
-		// quadratic in blocks per message.
-		`WITH RECURSIVE spans(message_digest, position) AS (
-		   SELECT digest, 1 FROM runtime_exchange_content_messages
+		`WITH RECURSIVE spans(position) AS (
+		   VALUES(1)
 		   UNION ALL
-		   SELECT spans.message_digest, spans.position + 64
-		     FROM spans
-		     JOIN runtime_exchange_content_messages AS messages
-		       ON messages.digest = spans.message_digest
-		    WHERE spans.position + 64 <= length(messages.block_manifest)
+		   SELECT position + 64 FROM spans WHERE position + 64 <= length(?)
 		 )
 		 DELETE FROM runtime_exchange_content_blocks
-		  WHERE digest NOT IN (
-		    SELECT substr(messages.block_manifest, spans.position, 64)
-		      FROM spans
-		      JOIN runtime_exchange_content_messages AS messages
-		        ON messages.digest = spans.message_digest
-		  )`,
+		  WHERE digest IN (SELECT substr(?, position, 64) FROM spans)
+		  AND NOT EXISTS(SELECT 1 FROM runtime_exchange_content_block_refs
+		    WHERE block_digest=runtime_exchange_content_blocks.digest)`, manifest, manifest,
 	); err != nil {
 		return fmt.Errorf("purge unreferenced Exchange content blocks: %w", err)
 	}

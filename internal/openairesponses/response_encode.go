@@ -141,6 +141,9 @@ func (codec *Codec) EncodeClientResponse(
 			err,
 		)
 	}
+	if err := validateResponseToolDefinitions(request); err != nil {
+		return nil, protocolcore.TranslationReport{}, err
+	}
 	if err := response.Validate(); err != nil {
 		return nil, protocolcore.TranslationReport{}, protocolcore.NewFailure(
 			protocolcore.ReasonInvalidProviderResponse,
@@ -301,6 +304,27 @@ func baseResponseWire(
 		Usage:                nil,
 		PromptCacheRetention: nil,
 	}
+}
+
+func validateResponseToolDefinitions(request protocolcore.Request) error {
+	validate := func(tools []protocolcore.ToolDefinition) error {
+		for _, tool := range tools {
+			if tool.EffectiveKind() == protocolcore.ToolKindNative {
+				return protocolcore.NewFailure(protocolcore.ReasonUnsupportedClientInput, "$.tools",
+					errors.New("native tool requires its original wire dialect"))
+			}
+		}
+		return nil
+	}
+	if err := validate(request.Tools); err != nil {
+		return err
+	}
+	for _, namespace := range request.ToolNamespaces {
+		if err := validate(namespace.Tools); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func encodeResponseTools(request protocolcore.Request) []any {

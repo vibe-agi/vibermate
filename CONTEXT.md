@@ -157,11 +157,15 @@ An explicit destination through one Upstream Endpoint, one backend protocol, and
 _Avoid_: Endpoint, Client Flow, inferred provider
 
 **Account Selection Policy**:
-The closed choice on one Upstream Route between manual activation from an Endpoint-owned Account Set and one published Account Selector. Every selectable Account is explicitly linked to that Route's Upstream Endpoint. Manual activation is shared by every Capture using that Environment Route and takes effect when its next request begins.
+The closed choice on one Upstream Route between manual activation and one published Account Selector, both restricted to that Route's Account Set. Manual activation is shared by every Capture using that Environment Route and takes effect when its next request begins.
 _Avoid_: Failover, credential rotation, installation-wide account switch
 
+**Account Set**:
+The explicitly selected Accounts that one Environment Route may use, each associated with its Upstream Endpoint. Endpoint association grants eligibility, not membership in every Route's Account Set.
+_Avoid_: All service accounts, automatic enrollment, global account pool
+
 **Active Account**:
-The one manually enabled Account for an Environment Route. It is selected from the Route's Upstream Endpoint associations, is published as the Route's current choice, and is read by all current and future Captures using that Traffic Policy. Each in-flight request retains the Account it already acquired.
+The one manually enabled Account from an Environment Route's Account Set, published as the Route's current choice and read by all current and future Captures using that Traffic Policy. Each in-flight request retains the Account it already acquired.
 _Avoid_: Capture override, default credential, automatic fallback
 
 **Account Selector**:
@@ -254,7 +258,7 @@ Body-free status, time, routing identity, and protocol-declared model and token 
 _Avoid_: Estimate, billing record, model guess
 
 **Usage Collection Policy**:
-The Runtime-wide, explicitly enabled authority to retain Usage Observations independently of conversation content, with its own retention period. App and Web read the same observations. Stopping collection does not erase history; body expiry does not erase usage, but deleting a Capture or clearing the archive does. Uncollected history is not reconstructed.
+The Runtime-wide, explicitly enabled authority to retain Usage Observations independently of conversation content, with its own retention period. App and Web read the same observations. Shortening also limits existing observations; lengthening never extends their previously consented lifetime. Stopping collection does not erase history; body expiry does not erase usage, but deleting a Capture or clearing the archive does. Uncollected history is not reconstructed.
 _Avoid_: Content Recording Policy, upstream quota, analytics consent for a different Runtime
 
 **Usage Source**:

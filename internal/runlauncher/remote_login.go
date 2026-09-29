@@ -45,12 +45,15 @@ type RemoteInspection struct {
 	Encrypted    bool
 }
 
-func TrustRemoteSystemRoots(
+// TrustRemote performs an unauthenticated TLS probe before explicitly changing
+// this Server's saved trust. An empty CA fingerprint selects system-root PKI.
+func TrustRemote(
 	ctx context.Context,
 	target serverconnection.Target,
 	stateDirectory string,
 	clock RemoteClock,
 	timeout time.Duration,
+	caFingerprint string,
 ) (string, error) {
 	if ctx == nil || !target.Valid() ||
 		target.Transport() != serverconnection.TransportHTTPS ||
@@ -58,6 +61,12 @@ func TrustRemoteSystemRoots(
 		filepath.Clean(stateDirectory) != stateDirectory || clock == nil ||
 		timeout <= 0 {
 		return "", errors.New("remote Runtime trust migration is incomplete")
+	}
+	if caFingerprint != "" {
+		return servertransport.TrustPrivateCA(ctx, servertransport.Options{
+			Target: target, TrustDirectory: filepath.Join(stateDirectory, "trust"),
+			Clock: clock, Timeout: timeout,
+		}, caFingerprint)
 	}
 	fingerprint, err := servertransport.ProbeSystemTrust(
 		ctx,
