@@ -190,7 +190,7 @@ func TestRuntimeUserPrincipalFreezesAuthenticatedDeviceAttribution(t *testing.T)
 		RuntimeUsername: "alice",
 		LoginSessionID:  "login.source-one",
 		RuntimeUserPolicy: func() runtimeuser.Policy {
-			policy, _ := runtimeuser.NewPolicy([]string{"team"}, 100, 1000)
+			policy, _ := runtimeuser.NewPolicy(false, []string{"team"}, 100, 1000)
 			return policy
 		}(),
 		CredentialRevision: 1,

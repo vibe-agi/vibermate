@@ -1151,6 +1151,7 @@ void main() {
     expect(created.username, 'bob');
     final policy = await api.setRuntimeUserPolicy(
       userId: users.single.id,
+      allEnvironments: false,
       allowedEnvironmentIds: const ['team'],
       dailyAgentApiCallWarning: 100,
       dailyTokenWarning: 1000000,
@@ -1175,6 +1176,7 @@ void main() {
       },
       {
         'schema': 'vibermate-runtime-user-policy-v1',
+        'allEnvironments': false,
         'allowedEnvironmentIds': ['team'],
         'dailyAgentApiCallWarning': 100,
         'dailyTokenWarning': 1000000,

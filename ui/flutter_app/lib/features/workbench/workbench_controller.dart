@@ -1695,6 +1695,7 @@ final class WorkbenchController extends ChangeNotifier
 
   Future<bool> setRuntimeUserPolicy({
     required RuntimeUser user,
+    required bool allEnvironments,
     required List<String> allowedEnvironmentIds,
     required int dailyAgentApiCallWarning,
     required int dailyTokenWarning,
@@ -1706,6 +1707,7 @@ final class WorkbenchController extends ChangeNotifier
     try {
       final updated = await _api.setRuntimeUserPolicy(
         userId: user.id,
+        allEnvironments: allEnvironments,
         allowedEnvironmentIds: allowedEnvironmentIds,
         dailyAgentApiCallWarning: dailyAgentApiCallWarning,
         dailyTokenWarning: dailyTokenWarning,

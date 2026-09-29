@@ -252,7 +252,7 @@ func startAttached(
 		LaunchSnapshots: runtime.LaunchSnapshots(),
 		ACP:             runtime.ACPObservations(),
 		Runs:            runtime.CaptureRuns(),
-		Principals:      runtimeUserAuthenticator{users: runtime.RuntimeUsers()}, Issuer: issuer,
+		Principals:      runtimeUserAuthenticator{users: runtime.RuntimeUsers(), isOwner: admin.IsOwner}, Issuer: issuer,
 		Manual: manual, RunLifetime: options.CaptureRunLifetime,
 	})
 	if err != nil {

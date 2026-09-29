@@ -3567,6 +3567,7 @@ final class PreviewControlApi implements ControlApi {
   @override
   Future<RuntimeUser> setRuntimeUserPolicy({
     required String userId,
+    required bool allEnvironments,
     required List<String> allowedEnvironmentIds,
     required int dailyAgentApiCallWarning,
     required int dailyTokenWarning,
@@ -3574,6 +3575,7 @@ final class PreviewControlApi implements ControlApi {
     _requireOpen();
     final index = _runtimeUsers.indexWhere((user) => user.id == userId);
     if (index < 0 ||
+        allEnvironments && allowedEnvironmentIds.isNotEmpty ||
         allowedEnvironmentIds.length > 128 ||
         allowedEnvironmentIds.toSet().length != allowedEnvironmentIds.length ||
         dailyAgentApiCallWarning < 0 ||
@@ -3592,6 +3594,7 @@ final class PreviewControlApi implements ControlApi {
       role: current.role,
       createdAt: current.createdAt,
       updatedAt: DateTime.now().toUtc(),
+      allEnvironments: allEnvironments,
       allowedEnvironmentIds: List.unmodifiable(
         [...allowedEnvironmentIds]..sort(),
       ),

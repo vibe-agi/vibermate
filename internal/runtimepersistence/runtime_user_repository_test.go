@@ -54,7 +54,7 @@ func TestRuntimeUserLoginSessionSurvivesStoreReopen(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
-	policy, err := runtimeuser.NewPolicy([]string{"team"}, 25, 1000)
+	policy, err := runtimeuser.NewPolicy(false, []string{"team"}, 25, 1000)
 	if err != nil {
 		t.Fatal(err)
 	}

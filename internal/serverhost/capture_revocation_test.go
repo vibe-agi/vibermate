@@ -32,6 +32,7 @@ func TestRevokedMemberCannotKeepUsingCapture(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			grantAllEnvironments(t, users, user.ID)
 			client := &http.Client{Timeout: 10 * time.Second}
 			base := "http://" + host.Status().ListenAddress
 			login := postJSON(t, client, base+servercontrol.RuntimeUserSessionPath, "", servercontrol.RuntimeUserLogin{
@@ -142,7 +143,7 @@ func TestRuntimeUserEnvironmentPolicyChangesApplyToExistingLoginSession(t *testi
 	if login.StatusCode != http.StatusCreated || json.NewDecoder(login.Body).Decode(&session) != nil {
 		t.Fatalf("login status = %d", login.StatusCode)
 	}
-	policy, _ := runtimeuser.NewPolicy([]string{"work"}, 0, 0)
+	policy, _ := runtimeuser.NewPolicy(false, []string{"work"}, 0, 0)
 	if _, err := users.SetPolicy(ctx, user.ID, policy); err != nil {
 		t.Fatal(err)
 	}
@@ -164,7 +165,7 @@ func TestRuntimeUserEnvironmentPolicyChangesApplyToExistingLoginSession(t *testi
 	if json.NewDecoder(denied.Body).Decode(&problem) != nil || problem.ReasonCode != "environment_not_allowed" {
 		t.Fatalf("restricted Environment problem = %+v", problem)
 	}
-	policy, _ = runtimeuser.NewPolicy([]string{environment.SystemTransparentID.String()}, 0, 0)
+	policy, _ = runtimeuser.NewPolicy(false, []string{environment.SystemTransparentID.String()}, 0, 0)
 	if _, err := users.SetPolicy(ctx, user.ID, policy); err != nil {
 		t.Fatal(err)
 	}

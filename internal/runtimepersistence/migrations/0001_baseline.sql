@@ -1359,8 +1359,11 @@ CREATE TABLE acp_observations (
 );
 CREATE INDEX acp_observation_expiry ON acp_observations(expires_at_unix_ms);
 
+-- A user without a row has no grants. all_environments is an explicit grant
+-- of every published Environment and excludes a list.
 CREATE TABLE runtime_user_policies(
   user_id TEXT PRIMARY KEY NOT NULL REFERENCES runtime_users(user_id) ON DELETE CASCADE,
+  all_environments INTEGER NOT NULL DEFAULT 0 CHECK(all_environments IN (0, 1)),
   allowed_environment_ids_json BLOB NOT NULL
   CHECK(length(allowed_environment_ids_json) BETWEEN 2 AND 65536 AND
         json_valid(allowed_environment_ids_json) AND
@@ -1368,5 +1371,6 @@ CREATE TABLE runtime_user_policies(
   daily_agent_api_call_warning INTEGER NOT NULL DEFAULT 0
   CHECK(daily_agent_api_call_warning BETWEEN 0 AND 1000000000000000),
   daily_token_warning INTEGER NOT NULL DEFAULT 0
-  CHECK(daily_token_warning BETWEEN 0 AND 1000000000000000)
+  CHECK(daily_token_warning BETWEEN 0 AND 1000000000000000),
+  CHECK(all_environments = 0 OR json_array_length(allowed_environment_ids_json) = 0)
 ) STRICT;

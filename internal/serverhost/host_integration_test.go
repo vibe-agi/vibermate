@@ -163,6 +163,7 @@ func TestServerOwnerWebSessionCanManageManualCapture(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	grantAllEnvironments(t, host.Runtime().RuntimeUsers(), member.ID)
 	memberLogin := postJSON(t, client,
 		"http://"+host.Status().ListenAddress+servercontrol.WebSessionPath, "",
 		servercontrol.WebLogin{
@@ -425,6 +426,7 @@ func TestServerHostAuthenticatesServerCreatedRuntimeUserOverExplicitHTTP(t *test
 	if err != nil {
 		t.Fatalf("create Runtime User: %v", err)
 	}
+	grantAllEnvironments(t, host.Runtime().RuntimeUsers(), created.ID)
 	response := postJSON(
 		t,
 		&http.Client{Timeout: 10 * time.Second},
@@ -1271,6 +1273,7 @@ func TestRuntimeUserCustomClaudeHTTPOriginProducesExchangeAndUsage(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
+	grantAllEnvironments(t, host.Runtime().RuntimeUsers(), created.ID)
 	controlClient := &http.Client{Timeout: 10 * time.Second}
 	login := postJSON(
 		t,
@@ -1463,7 +1466,7 @@ func loginRemoteTestUser(
 	config runlauncher.RemoteConfig,
 ) runlauncher.RemoteLoginResult {
 	t.Helper()
-	_, err := host.Runtime().RuntimeUsers().Create(
+	integrationUser, err := host.Runtime().RuntimeUsers().Create(
 		context.Background(),
 		runtimeuser.CreateCommand{
 			Username: "integration-user", Password: []byte("test-integration-password"),
@@ -1472,6 +1475,7 @@ func loginRemoteTestUser(
 	if err != nil {
 		t.Fatalf("create integration Runtime User: %v", err)
 	}
+	grantAllEnvironments(t, host.Runtime().RuntimeUsers(), integrationUser.ID)
 	result, err := runlauncher.LoginRemote(context.Background(), runlauncher.RemoteLoginRequest{
 		Config: config, Username: "integration-user",
 		Password: []byte("test-integration-password"),
@@ -1593,4 +1597,18 @@ func sendJSON(t *testing.T, client *http.Client, method, target, bearer string, 
 		t.Fatal(err)
 	}
 	return response
+}
+
+// grantAllEnvironments is the Owner's explicit grant; a new user has none.
+func grantAllEnvironments(t *testing.T, users interface {
+	SetPolicy(context.Context, runtimeuser.UserID, runtimeuser.Policy) (runtimeuser.User, error)
+}, id runtimeuser.UserID) {
+	t.Helper()
+	policy, err := runtimeuser.NewPolicy(true, nil, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := users.SetPolicy(context.Background(), id, policy); err != nil {
+		t.Fatalf("grant Environments: %v", err)
+	}
 }

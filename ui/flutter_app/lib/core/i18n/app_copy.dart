@@ -2352,8 +2352,9 @@ final class AppCopy {
     'server.users.policy.all': 'Allow every published traffic policy',
     'server.users.policy.all_short': 'All policies',
     'server.users.policy.count': '{count} selected',
-    'server.users.policy.select_one':
-        'Select at least one policy, or disable this user to deny all access.',
+    'server.users.policy.none_short': 'No policies granted',
+    'server.users.policy.none_detail':
+        'This user cannot start a Capture until you grant at least one traffic policy.',
     'server.users.policy.alerts': 'Observed usage alerts',
     'server.users.policy.alerts_detail':
         'Optional daily thresholds over retained ViberMate evidence. 0 disables a warning; these are not provider quota, billing, or a hard budget.',
@@ -4670,7 +4671,8 @@ final class AppCopy {
     'server.users.policy.all': '允许使用全部已发布流量策略',
     'server.users.policy.all_short': '全部策略',
     'server.users.policy.count': '已选 {count} 个',
-    'server.users.policy.select_one': '请至少选择一个策略；若要完全禁止访问，请停用该用户。',
+    'server.users.policy.none_short': '未授权策略',
+    'server.users.policy.none_detail': '授权至少一个流量策略之前，该用户无法启动采集。',
     'server.users.policy.alerts': '已观察用量告警',
     'server.users.policy.alerts_detail':
         '按 ViberMate 留存证据设置每日软告警；0 表示关闭。它不是上游额度、账单或硬预算。',

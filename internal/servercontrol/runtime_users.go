@@ -73,6 +73,7 @@ type RuntimeUserPassword struct {
 
 type RuntimeUserPolicyUpdate struct {
 	Schema                   string   `json:"schema"`
+	AllEnvironments          bool     `json:"allEnvironments"`
 	AllowedEnvironmentIDs    []string `json:"allowedEnvironmentIds"`
 	DailyAgentAPICallWarning int64    `json:"dailyAgentApiCallWarning"`
 	DailyTokenWarning        int64    `json:"dailyTokenWarning"`
@@ -85,6 +86,7 @@ type RuntimeUserAdminView struct {
 	CreatedAt                time.Time `json:"createdAt"`
 	UpdatedAt                time.Time `json:"updatedAt"`
 	Role                     string    `json:"role"`
+	AllEnvironments          bool      `json:"allEnvironments"`
 	AllowedEnvironmentIDs    []string  `json:"allowedEnvironmentIds"`
 	DailyAgentAPICallWarning int64     `json:"dailyAgentApiCallWarning"`
 	DailyTokenWarning        int64     `json:"dailyTokenWarning"`
@@ -251,6 +253,7 @@ func (handler *RuntimeUsersHandler) updatePolicy(
 		return
 	}
 	policy, err := runtimeuser.NewPolicy(
+		input.AllEnvironments,
 		input.AllowedEnvironmentIDs,
 		input.DailyAgentAPICallWarning,
 		input.DailyTokenWarning,
@@ -501,6 +504,7 @@ func (handler *RuntimeUsersHandler) runtimeUserAdminView(
 	return RuntimeUserAdminView{
 		ID: string(user.ID), Username: user.Username, State: string(user.State),
 		CreatedAt: user.CreatedAt, UpdatedAt: user.UpdatedAt, Role: role,
+		AllEnvironments:          user.Policy.AllEnvironments(),
 		AllowedEnvironmentIDs:    user.Policy.EnvironmentIDs(),
 		DailyAgentAPICallWarning: user.Policy.DailyAgentAPICallWarning,
 		DailyTokenWarning:        user.Policy.DailyTokenWarning,

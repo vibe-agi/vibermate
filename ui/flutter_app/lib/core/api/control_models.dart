@@ -363,6 +363,7 @@ final class RuntimeUser {
     required this.createdAt,
     required this.updatedAt,
     this.role = 'member',
+    this.allEnvironments = false,
     this.allowedEnvironmentIds = const [],
     this.dailyAgentApiCallWarning = 0,
     this.dailyTokenWarning = 0,
@@ -376,6 +377,7 @@ final class RuntimeUser {
       required: const {'id', 'username', 'state', 'createdAt', 'updatedAt'},
       optional: const {
         'role',
+        'allEnvironments',
         'allowedEnvironmentIds',
         'dailyAgentApiCallWarning',
         'dailyTokenWarning',
@@ -394,6 +396,9 @@ final class RuntimeUser {
     if (updatedAt.isBefore(createdAt)) {
       throw ControlContractException('$path timestamps are inconsistent');
     }
+    final allEnvironments = value['allEnvironments'] == null
+        ? false
+        : requireBoolean(value, 'allEnvironments', path);
     final allowedEnvironmentIds = value['allowedEnvironmentIds'] == null
         ? <String>[]
         : requireStringList(value, 'allowedEnvironmentIds', path);
@@ -403,7 +408,8 @@ final class RuntimeUser {
     final dailyTokenWarning = value['dailyTokenWarning'] == null
         ? 0
         : requireInteger(value, 'dailyTokenWarning', path);
-    if (allowedEnvironmentIds.length > 128 ||
+    if (allEnvironments && allowedEnvironmentIds.isNotEmpty ||
+        allowedEnvironmentIds.length > 128 ||
         allowedEnvironmentIds.toSet().length != allowedEnvironmentIds.length ||
         allowedEnvironmentIds.any(
           (id) => !_environmentIdPattern.hasMatch(id),
@@ -419,6 +425,7 @@ final class RuntimeUser {
       createdAt: createdAt,
       updatedAt: updatedAt,
       role: role,
+      allEnvironments: allEnvironments,
       allowedEnvironmentIds: List.unmodifiable(allowedEnvironmentIds),
       dailyAgentApiCallWarning: dailyAgentApiCallWarning,
       dailyTokenWarning: dailyTokenWarning,
@@ -431,13 +438,16 @@ final class RuntimeUser {
   final DateTime createdAt;
   final DateTime updatedAt;
   final String role;
+
+  /// The Owner's explicit grant of every published Environment. Without it,
+  /// only [allowedEnvironmentIds] may be launched; a new user has none.
+  final bool allEnvironments;
   final List<String> allowedEnvironmentIds;
   final int dailyAgentApiCallWarning;
   final int dailyTokenWarning;
 
   bool get active => state == 'active';
   bool get owner => role == 'owner';
-  bool get allEnvironments => allowedEnvironmentIds.isEmpty;
 }
 
 final _environmentIdPattern = RegExp(r'^[a-z0-9][a-z0-9._-]{0,127}$');

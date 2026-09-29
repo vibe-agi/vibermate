@@ -130,7 +130,8 @@ func privateDestinationCapture(t *testing.T, host *serverhost.Host) capturecontr
 	if err != nil {
 		t.Fatal(err)
 	}
-	policy, err := runtimeuser.NewPolicy([]string{environment.SystemTransparentID.String()}, 0, 0)
+	grantAllEnvironments(t, users, user.ID)
+	policy, err := runtimeuser.NewPolicy(false, []string{environment.SystemTransparentID.String()}, 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
