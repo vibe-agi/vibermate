@@ -68,12 +68,13 @@ func TestAccountSelectorAuthorityIncludesOnlyReadyAccountsOnTheExactRoute(t *tes
 		},
 		Health: provideraccount.Health{State: provideraccount.HealthReady, CredentialEpoch: 1},
 	}
-	if !accountBelongsToRoute(view, route) {
+	if routeAccountMembershipError(view, route.ProviderTarget) != nil ||
+		routeAccountError(view, route.ProviderTarget) != nil {
 		t.Fatal("ready Account on the exact Endpoint was rejected")
 	}
 	view.Health = provideraccount.Health{State: provideraccount.HealthMissing}
-	if accountBelongsToRoute(view, route) {
-		t.Fatal("Account without a ready credential entered selector authority")
+	if routeAccountMembershipError(view, route.ProviderTarget) != nil {
+		t.Fatal("a missing credential removed the Account from its explicit Route set")
 	}
 	if !errors.Is(routeAccountError(view, route.ProviderTarget), provideraccount.ErrCredentialMissing) {
 		t.Fatal("missing credential was not distinguished from a broken association")

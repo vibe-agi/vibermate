@@ -878,8 +878,7 @@ void _validateRouteAccountPolicy({
         .firstOrNull;
     return account != null &&
         account.revision == reference.revision &&
-        account.isLinkedTo(endpointId) &&
-        account.usable;
+        account.isLinkedTo(endpointId);
   });
   if ((!fixed && !scripted) ||
       ids.length != policy.accounts.length ||
@@ -887,7 +886,7 @@ void _validateRouteAccountPolicy({
     throw ArgumentError.value(
       policy.accounts.map((account) => account.id).toList(),
       'policy',
-      'Account authority contains an Account that is not a ready child of Route Endpoint $endpointId',
+      'Account authority contains an Account that is not linked to Route Endpoint $endpointId',
     );
   }
 }
@@ -1114,6 +1113,8 @@ List<EnvironmentClientEndpoint> prepareEnvironmentDraftEndpoints({
             {
               // Refresh only explicitly selected references. Endpoint links
               // define eligibility, not permission to expand this Profile.
+              // Credential health and disabled state are runtime facts: they
+              // never shrink the explicit scope or block an unrelated edit.
               final selected = policy.accounts
                   .map((account) => account.id)
                   .toSet();
@@ -1122,7 +1123,6 @@ List<EnvironmentClientEndpoint> prepareEnvironmentDraftEndpoints({
                       .where(
                         (account) =>
                             selected.contains(account.id) &&
-                            account.usable &&
                             account.isLinkedTo(service.id) &&
                             account.credentialOrigin ==
                                 service.origin.toString(),

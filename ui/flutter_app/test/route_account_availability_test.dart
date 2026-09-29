@@ -70,7 +70,7 @@ void main() {
   });
 
   testWidgets(
-    'an unavailable fixed account can be explicitly replaced in scope',
+    'a disabled fixed account stays in scope without forcing a replacement',
     (tester) async {
       await tester.binding.setSurfaceSize(const Size(1180, 850));
       addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -96,6 +96,80 @@ void main() {
               _unavailable(account, 'disabled')
             else
               account,
+        ],
+      );
+      controller.selectEnvironment('work');
+      final copy = AppCopy.forLanguage(AppLanguage.english);
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: ViberTheme.dark(),
+          home: Scaffold(
+            body: EnvironmentsView(controller: controller, copy: copy),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('environment-edit')));
+      await tester.pumpAndSettle();
+      final scope = find.descendant(
+        of: find.byKey(
+          const Key('environment-route-accounts-anthropic-direct'),
+        ),
+        matching: find.byType(OutlinedButton),
+      );
+      await tester.ensureVisible(scope);
+      await tester.tap(scope);
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const Key('route-account-scope-replacement')),
+        findsNothing,
+      );
+      final row = find.byKey(const Key('route-account-scope-anthropic-work'));
+      expect(
+        find.descendant(
+          of: row,
+          matching: find.text(copy('environment.account.disabled')),
+        ),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(
+          of: row,
+          matching: find.text(copy('environment.account.selection_lost')),
+        ),
+        findsNothing,
+      );
+      final apply = find.byKey(const Key('route-account-scope-apply'));
+      expect(tester.widget<FilledButton>(apply).onPressed, isNotNull);
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox.shrink());
+    },
+  );
+
+  testWidgets(
+    'an unlinked fixed account must be explicitly replaced in scope',
+    (tester) async {
+      await tester.binding.setSurfaceSize(const Size(1180, 850));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      final api = PreviewControlApi(seedCaptures: false);
+      final controller = WorkbenchController(
+        api: api,
+        terminalCommands: PreviewTerminalCommandService(),
+        previewMode: true,
+        closeRuntime: api.close,
+      );
+      addTearDown(controller.dispose);
+      await controller.refresh();
+      final original = controller.data!;
+      controller.data = DashboardData(
+        status: original.status,
+        captures: original.captures,
+        captureNextCursor: original.captureNextCursor,
+        environments: original.environments,
+        endpoints: original.endpoints,
+        accounts: [
+          for (final account in original.accounts)
+            if (account.id != 'anthropic-work') account,
         ],
       );
       controller.selectEnvironment('work');

@@ -75,12 +75,15 @@ final class _AccountScopeDialogState extends State<_AccountScopeDialog> {
     final available = {
       for (final account in widget.accounts) account.id: account,
     };
+    // Only a structural loss (the Account was unlinked or deleted) forces a
+    // replacement. Disabled state and credential health are runtime facts:
+    // they are labelled, but never block editing the explicit scope.
     final needsReplacement =
         widget.policy.mode == 'fixed' &&
-        available[widget.policy.fixedAccountId]?.usable != true;
+        !available.containsKey(widget.policy.fixedAccountId);
     final validSelection =
         _selected.isNotEmpty &&
-        _selected.every((id) => available[id]?.usable == true) &&
+        _selected.every(available.containsKey) &&
         (widget.policy.mode != 'fixed' || _selected.contains(_fixedAccountId));
     final references = {
       for (final account in widget.policy.accounts) account.id: account,
@@ -135,14 +138,14 @@ final class _AccountScopeDialogState extends State<_AccountScopeDialog> {
                 label: copy('environment.account.replacement'),
                 child: CompactSelectField<String>(
                   key: const Key('route-account-scope-replacement'),
-                  initialValue: available[_fixedAccountId]?.usable == true
+                  initialValue: available.containsKey(_fixedAccountId)
                       ? _fixedAccountId
                       : null,
                   placeholder: copy('environment.account.replacement_hint'),
                   isExpanded: true,
                   items: [
                     for (final account in widget.accounts)
-                      if (_selected.contains(account.id) && account.usable)
+                      if (_selected.contains(account.id))
                         DropdownMenuItem(
                           value: account.id,
                           child: Text(account.displayName),
@@ -166,8 +169,11 @@ final class _AccountScopeDialogState extends State<_AccountScopeDialog> {
                         final account = available[reference.id];
                         final active = reference.id == _fixedAccountId;
                         final selected = _selected.contains(reference.id);
-                        final detail = account?.usable != true
+                        final unavailable = account == null
                             ? copy('environment.account.selection_lost')
+                            : routeAccountUnavailableReason(account, copy);
+                        final detail = unavailable.isNotEmpty
+                            ? unavailable
                             : active
                             ? copy('environment.account.scope_active')
                             : account?.codexOAuth?.email ?? '';
@@ -179,8 +185,7 @@ final class _AccountScopeDialogState extends State<_AccountScopeDialog> {
                           title: Text(reference.displayName),
                           subtitle: detail.isEmpty ? null : Text(detail),
                           value: selected,
-                          onChanged:
-                              active || (!selected && account?.usable != true)
+                          onChanged: active || (!selected && account == null)
                               ? null
                               : (value) => setState(
                                   () => value == true
@@ -223,4 +228,15 @@ final class _AccountScopeDialogState extends State<_AccountScopeDialog> {
       ],
     );
   }
+}
+
+/// The runtime reason an Account cannot serve a request right now, or "" when
+/// it can. Shared by every view that labels Route Account availability.
+String routeAccountUnavailableReason(ProviderAccount account, AppCopy copy) {
+  if (account.usable) return '';
+  if (account.codexOAuth?.state == 'reconnect_required') {
+    return copy('routes.account.oauth_state.reconnect_required');
+  }
+  if (account.state != 'active') return copy('environment.account.disabled');
+  return copy('routes.credentials.unavailable');
 }

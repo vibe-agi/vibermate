@@ -407,7 +407,7 @@ func (handler *Handler) resolvePublishedAccountPolicies(
 					if !found {
 						return provideraccount.ErrAccountNotFound
 					}
-					if err := routeAccountError(view, route.ProviderTarget); err != nil {
+					if err := routeAccountMembershipError(view, route.ProviderTarget); err != nil {
 						return err
 					}
 					policy.Accounts[index] = environment.RouteAccountReference{
@@ -449,21 +449,28 @@ func (handler *Handler) resolvePublishedAccountPolicies(
 	return nil
 }
 
-func accountBelongsToRoute(
-	view provideraccount.View,
-	route environment.UpstreamRoute,
-) bool {
-	return routeAccountError(view, route.ProviderTarget) == nil
-}
-
-func routeAccountError(view provideraccount.View, target environment.ProviderTarget) error {
+// routeAccountMembershipError is the structural rule for a Route Account Set:
+// the Account exists for this exact Endpoint origin and is linked to it.
+// Disabled state and credential health are runtime facts. They never shrink
+// an explicit set or block an unrelated configuration edit; a lease on such an
+// Account fails explicitly when a request actually selects it.
+func routeAccountMembershipError(view provideraccount.View, target environment.ProviderTarget) error {
 	account := view.Account
-	if account.State != provideraccount.StateActive {
-		return provideraccount.ErrAccountDisabled
-	}
 	if account.Origin != target.Origin ||
 		!account.Associations.Contains(upstreamendpoint.ID(target.ID)) {
 		return provideraccount.ErrEndpointMismatch
+	}
+	return nil
+}
+
+// routeAccountError is the stricter rule for making an Account the active
+// choice now: it must also be enabled and hold a ready credential.
+func routeAccountError(view provideraccount.View, target environment.ProviderTarget) error {
+	if err := routeAccountMembershipError(view, target); err != nil {
+		return err
+	}
+	if view.Account.State != provideraccount.StateActive {
+		return provideraccount.ErrAccountDisabled
 	}
 	if view.Health.State != provideraccount.HealthReady {
 		return provideraccount.ErrCredentialMissing

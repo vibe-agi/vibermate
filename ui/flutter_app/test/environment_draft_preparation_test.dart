@@ -342,7 +342,91 @@ void main() {
       );
     },
   );
+  test('unavailable selected accounts stay in the explicit scope', () async {
+    final endpoint = base.single;
+    final plan = endpoint.protocolPlans.single;
+    final route = plan.routes.single;
+    final linked = [
+      for (final account in accounts)
+        if (account.isLinkedTo(service.id) &&
+            account.credentialOrigin == service.origin.toString())
+          account,
+    ];
+    expect(linked.length, greaterThan(1));
+    final frozen = assignEnvironmentRouteAccountPolicy(
+      endpoints: base,
+      clientEndpointId: endpoint.id,
+      protocolPlanId: plan.id,
+      routeId: route.id,
+      availableAccounts: linked,
+      policy: RouteAccountPolicy(
+        revision: route.accountPolicy.revision,
+        mode: 'fixed',
+        fixedAccountId: oauth.id,
+        selector: null,
+        accounts: [
+          for (final account in linked)
+            RouteAccountReference(
+              id: account.id,
+              revision: account.revision,
+              displayName: account.displayName,
+            ),
+        ],
+      ),
+    );
+    // A lost credential, a disabled account or a required reconnect is
+    // runtime state. It must not shrink the scope or block an unrelated edit.
+    for (final state in ['credential_missing', 'disabled', 'reconnect']) {
+      final degraded = [
+        for (final account in linked)
+          account.id == oauth.id ? account : _degraded(account, state),
+      ];
+      final prepared = prepareEnvironmentDraftEndpoints(
+        base: frozen,
+        edited: frozen,
+        upstreamEndpoints: [service],
+        availableAccounts: degraded,
+      );
+      expect(
+        prepared
+            .single
+            .protocolPlans
+            .single
+            .routes
+            .single
+            .accountPolicy
+            .accounts
+            .map((account) => account.id)
+            .toSet(),
+        linked.map((account) => account.id).toSet(),
+        reason: state,
+      );
+    }
+  });
 }
+
+ProviderAccount _degraded(ProviderAccount account, String state) =>
+    ProviderAccount(
+      id: account.id,
+      displayName: account.displayName,
+      credentialOrigin: account.credentialOrigin,
+      linkedEndpointIds: account.linkedEndpointIds,
+      associationRevision: account.associationRevision,
+      kind: account.kind,
+      realmId: account.realmId,
+      state: state == 'disabled' ? 'disabled' : account.state,
+      revision: account.revision,
+      credentialState: switch (state) {
+        'credential_missing' => 'credential_missing',
+        'disabled' => 'disabled',
+        _ => account.credentialState,
+      },
+      credentialEpoch: state == 'reconnect' ? account.credentialEpoch : 0,
+      setHeaderNames: account.setHeaderNames,
+      deleteHeaderNames: account.deleteHeaderNames,
+      codexOAuth: account.codexOAuth,
+      tokenInfo: account.tokenInfo,
+    );
 
 UpstreamEndpoint _updated(
   UpstreamEndpoint service, {

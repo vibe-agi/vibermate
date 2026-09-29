@@ -1013,6 +1013,37 @@ func TestEnvironmentDraftPublishesOneAccountAcrossExplicitEndpointProtocols(t *t
 		!reflect.DeepEqual(retained, activated.Environment) {
 		t.Fatal("failed activation changed the published Environment")
 	}
+	// Credential health is runtime state. A backup member that lost its
+	// credential must not block an unrelated edit, and must stay in the set.
+	renameInput := updateInput
+	renameInput.ClientEndpoints = retained.ClientEndpoints
+	renameInput.Name = "Renamed while a backup Account is unavailable"
+	renameInput.ExpectedDraftRevision = 0
+	renameBody, err := json.Marshal(renameInput)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rename := environmentRequest(t, application, http.MethodPut,
+		"/api/v1/environments/cherry-mapped/draft", uint64(retained.Revision),
+		"environment-rename-unhealthy-member-0001", renameBody)
+	if rename.Code != http.StatusOK {
+		t.Fatalf("rename with an unavailable backup Account status=%d body=%s", rename.Code, rename.Body.Bytes())
+	}
+	var renamed desktopcontrol.EnvironmentDraftResponse
+	if err := json.Unmarshal(rename.Body.Bytes(), &renamed); err != nil {
+		t.Fatal(err)
+	}
+	renamedRoute := renamed.Candidate.ClientEndpoints[1].ProtocolPlans[0].Destination.Upstream.Routes[0]
+	if len(renamedRoute.AccountPolicy.Accounts) != 2 ||
+		renamedRoute.AccountPolicy.FixedAccountID != "account.cherry.additional" {
+		t.Fatalf("rename changed the Route Account Set: %+v", renamedRoute.AccountPolicy)
+	}
+	renamePublish := environmentRequest(t, application, http.MethodPost,
+		"/api/v1/environments/cherry-mapped/draft/actions/publish", uint64(renamed.DraftRevision),
+		"environment-rename-unhealthy-member-publish-0001", nil)
+	if renamePublish.Code != http.StatusOK {
+		t.Fatalf("publish with an unavailable backup Account status=%d body=%s", renamePublish.Code, renamePublish.Body.Bytes())
+	}
 }
 
 func TestActivityRouteFiltersAndReturnsFrozenEnvironmentReferences(t *testing.T) {

@@ -3714,13 +3714,7 @@ final class _OriginalDestinationEditorRow extends StatelessWidget {
 }
 
 String _routeAccountLabel(ProviderAccount account, AppCopy copy) {
-  final status = account.usable
-      ? ''
-      : account.codexOAuth?.state == 'reconnect_required'
-      ? copy('routes.account.oauth_state.reconnect_required')
-      : account.state != 'active'
-      ? copy('environment.account.disabled')
-      : copy('routes.credentials.unavailable');
+  final status = routeAccountUnavailableReason(account, copy);
   return '${copy('environment.account.fixed')} · ${account.displayName}${status.isEmpty ? '' : ' · $status'}';
 }
 
