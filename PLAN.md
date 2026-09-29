@@ -30,10 +30,10 @@
 - **Server 进程拨号默认仅公网**：成员流量全部经入口标记；把进程级默认改为仅公网只会破坏 Owner 自己配置的私网上游，不增加安全性。
 - **B7 启动全表校验出口记录**：有意检测被绕过约束写坏的终态记录，20 万行约 0.6 秒，仅启动时一次。
 
-## 待完成
+## 已发布
 
-1. 发布 v0.1.17：release 分支、版本号、macOS 签名公证、Linux 包、GitHub Release、Homebrew cask、vibe-agi.github.io。
-2. 验收：Go 全量与 race、Flutter 全量、Flutter Web 构建后用无头 Playwright 走主要界面流程。
+- **v0.1.17**（2026-09-29，`7ac39f0`）：macOS 签名公证与安装证据、Linux x86-64/ARM64 包、Homebrew cask、vibe-agi.github.io 均已更新。构建证据与发布说明见 [docs/releases/v0.1.17.md](docs/releases/v0.1.17.md)。
+- 发布前验收：Go 全量与 race、govulncheck（Go 1.26.8）、Flutter 全量、Linux 包构建校验、打包 Server 上的无头 Playwright 界面走查。
 
 ## 发布之后
 

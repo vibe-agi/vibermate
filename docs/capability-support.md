@@ -3,12 +3,14 @@
 This matrix states what the current source offers. A passing unit test and a
 published product are not interchangeable evidence.
 
-Source package version: **0.1.17**. Latest published release: **none**.
+Source package version: **0.1.17**. Latest published release: **v0.1.17**.
 
-Earlier releases were withdrawn; the next release will be built from this
-source. The current source opens only databases of its own schema revision and
-has no migrations ([ADR 0021](adr/0021-one-schema-revision-without-migrations.md)).
+[v0.1.17](https://github.com/vibe-agi/vibermate/releases/tag/v0.1.17) replaces the
+withdrawn 0.1.14–0.1.16 releases. It opens only databases of its own schema
+revision and has no migrations
+([ADR 0021](adr/0021-one-schema-revision-without-migrations.md)).
 
+- **Released** — part of the latest published release.
 - **Available** — implemented and tested in the current source; not yet part
   of a published release.
 - **Experimental** — implemented, but depends on an upstream or compatibility
@@ -19,20 +21,20 @@ has no migrations ([ADR 0021](adr/0021-one-schema-revision-without-migrations.md
 
 | Capability ID | Status | Current boundary |
 | --- | --- | --- |
-| `macos-app` | Available | macOS 14+ Universal App for Apple silicon and Intel. Developer ID signing, notarization and Gatekeeper evidence apply only to a published, tagged artifact. |
-| `linux-server-web` | Available | Native Runtime Server, CLI, and Web workbench archives for Linux x86-64 and ARM64. |
-| `docker-server-web` | Available | The same Runtime Server and Web workbench can run from the versioned Docker/Compose files; Docker does not create a separate account or certificate model. |
-| `local-web-http` | Available | Native or container Web on loopback HTTP; no domain or certificate is required. |
-| `remote-web-tls` | Available | Explicit private-CA DNS/IP identity, automatic public-domain HTTPS, or operator-provided certificate files. Server HTTPS identity remains separate from the Proxy CA except in the explicitly selected private-CA mode. |
-| `web-manual-proxy-login` | Available | An Owner can create, rotate, revoke, and deliver a manual proxy login and its public Proxy CA through the Web management API. The proxy login is separate from Runtime User and upstream Account credentials. |
+| `macos-app` | Released | macOS 14+ Universal App for Apple silicon and Intel. v0.1.17 was signed, notarized and installed by [run 36529757893](https://github.com/vibe-agi/vibermate/actions/runs/36529757893); Homebrew cask `vibe-agi/tap/vibermate`. |
+| `linux-server-web` | Released | Native Runtime Server, CLI, and Web workbench archives for Linux x86-64 and ARM64, built and verified by [run 36531368382](https://github.com/vibe-agi/vibermate/actions/runs/36531368382). |
+| `docker-server-web` | Released | The same Runtime Server and Web workbench can run from the versioned Docker/Compose files; Docker does not create a separate account or certificate model. |
+| `local-web-http` | Released | Native or container Web on loopback HTTP; no domain or certificate is required. |
+| `remote-web-tls` | Released | Explicit private-CA DNS/IP identity, automatic public-domain HTTPS, or operator-provided certificate files. Server HTTPS identity remains separate from the Proxy CA except in the explicitly selected private-CA mode. |
+| `web-manual-proxy-login` | Released | An Owner can create, rotate, revoke, and deliver a manual proxy login and its public Proxy CA through the Web management API. The proxy login is separate from Runtime User and upstream Account credentials. |
 | `windows-runtime` | Unsupported | There is no Windows App, Server, or managed launcher release. |
 
 ## Clients, routing, and accounts
 
 | Capability ID | Status | Current boundary |
 | --- | --- | --- |
-| `managed-claude-codex` | Available | `vibermate run` starts recognized Claude Code or Codex CLI processes through a local App or an explicitly selected Server. Release evidence is version- and path-specific; it is not a claim that every future client build is compatible. |
-| `provider-static-credentials` | Available | Upstream API credentials are managed independently from Runtime User login and are injected only after route selection. |
+| `managed-claude-codex` | Released | `vibermate run` starts recognized Claude Code or Codex CLI processes through a local App or an explicitly selected Server. Release evidence is version- and path-specific; it is not a claim that every future client build is compatible. |
+| `provider-static-credentials` | Released | Upstream API credentials are managed independently from Runtime User login and are injected only after route selection. |
 | `codex-oauth` | Experimental | OAuth login and `auth.json` import use one managed Codex credential format and explicit manual refresh. Auto refresh defaults off for new imports and on for OAuth-created accounts; replacing credentials preserves the account's setting. When enabled, ViberMate owns refresh for its copy; refreshing the original file can invalidate either copy. This is not an official OpenAI integration or a stable public API contract. |
 | `codex-quota-history` | Experimental | An Owner may explicitly query the selected managed Codex account's upstream quota and, when separately authorized, history. These observations are not ViberMate traffic statistics or billing authority. |
 | `codex-reset-credit` | Experimental | An Owner can inspect and explicitly consume one selected banked reset credit through a confirmed, idempotent management operation. This depends on an upstream compatibility contract and never purchases a paid instant reset. |
@@ -45,12 +47,12 @@ has no migrations ([ADR 0021](adr/0021-one-schema-revision-without-migrations.md
 
 | Capability ID | Status | Current boundary |
 | --- | --- | --- |
-| `retained-evidence` | Available | Recording mode and retention control semantic and Raw HTTP evidence. The SQLite archive is not encrypted by ViberMate; recognized credential fields are removed by bounded rules, not by a claim that arbitrary content is secret-free. |
-| `body-free-usage` | Available | Runtime-wide opt-in statistics are independent of body recording, with permission-scoped caller/model breakdowns and reference API-equivalent USD costs, not provider bills. Git project and branch attribution is a launch-time snapshot for new managed runs; missing history is not invented or backfilled. |
-| `raw-stage-compare` | Available | The workbench compares retained client/upstream request and response stages without rewriting retained bytes. |
-| `outbound-visibility` | Available | The workbench distinguishes inspected HTTP, decoded content, blind forwarding, and traffic not observed by ViberMate. It cannot infer a local file path from network bytes. |
-| `verified-backup-restore` | Available | Offline backup, verification, and restore are manifest-bound. Provider secrets and externally supplied TLS keys are excluded. |
-| `release-check` | Available | Settings compares App, Runtime, and terminal-command builds and checks the official GitHub Release only after an explicit user action. |
+| `retained-evidence` | Released | Recording mode and retention control semantic and Raw HTTP evidence. The SQLite archive is not encrypted by ViberMate; recognized credential fields are removed by bounded rules, not by a claim that arbitrary content is secret-free. |
+| `body-free-usage` | Released | Runtime-wide opt-in statistics are independent of body recording, with permission-scoped caller/model breakdowns and reference API-equivalent USD costs, not provider bills. Git project and branch attribution is a launch-time snapshot for new managed runs; missing history is not invented or backfilled. |
+| `raw-stage-compare` | Released | The workbench compares retained client/upstream request and response stages without rewriting retained bytes. |
+| `outbound-visibility` | Released | The workbench distinguishes inspected HTTP, decoded content, blind forwarding, and traffic not observed by ViberMate. It cannot infer a local file path from network bytes. |
+| `verified-backup-restore` | Released | Offline backup, verification, and restore are manifest-bound. Provider secrets and externally supplied TLS keys are excluded. |
+| `release-check` | Released | Settings compares App, Runtime, and terminal-command builds and checks the official GitHub Release only after an explicit user action. |
 | `automatic-updates` | Unsupported | Releases, checksums, Homebrew, and the website are published explicitly; the product does not silently self-update. |
 | `plugins` | Unsupported | The JavaScript transform sandbox is not a plugin marketplace or general extension runtime. |
 | `postgresql-runtime-store` | Unsupported | The current runtime store is SQLite. A PostgreSQL backend and verified migration are later-stage work. |
