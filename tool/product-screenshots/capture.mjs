@@ -80,8 +80,26 @@ const browser = await chromium.launch();
 await mkdir(outDir, { recursive: true });
 const encoder = await browser.newPage();
 
+// Chromium wraps its WebP in an extended container only to embed an sRGB ICC
+// profile. Keep just the lossy VP8 bitstream in a simple container.
+function simpleWebP(webp) {
+  for (let offset = 12; offset + 8 <= webp.length;) {
+    const size = webp.readUInt32LE(offset + 4);
+    if (webp.toString("ascii", offset, offset + 4) === "VP8 ") {
+      const chunk = webp.subarray(offset, offset + 8 + size + (size & 1));
+      const header = Buffer.alloc(12);
+      header.write("RIFF", 0, "ascii");
+      header.writeUInt32LE(4 + chunk.length, 4);
+      header.write("WEBP", 8, "ascii");
+      return Buffer.concat([header, chunk]);
+    }
+    offset += 8 + size + (size & 1);
+  }
+  throw new Error("encoded WebP has no lossy VP8 bitstream");
+}
+
 async function encode(png, width) {
-  return Buffer.from(
+  return simpleWebP(Buffer.from(
     await encoder.evaluate(
       async ({ data, width }) => {
         const image = new Image();
@@ -90,15 +108,15 @@ async function encode(png, width) {
         const canvas = document.createElement("canvas");
         canvas.width = width;
         canvas.height = Math.round((image.height * width) / image.width);
-        const context = canvas.getContext("2d");
+        const context = canvas.getContext("2d", { alpha: false });
         context.imageSmoothingQuality = "high";
         context.drawImage(image, 0, 0, canvas.width, canvas.height);
-        return canvas.toDataURL("image/webp", 0.9).split(",")[1];
+        return canvas.toDataURL("image/webp", 0.82).split(",")[1];
       },
       { data: png.toString("base64"), width },
     ),
     "base64",
-  );
+  ));
 }
 
 function driver(page) {
