@@ -35,6 +35,11 @@
 - **v0.1.17**（2026-09-29，`7ac39f0`）：macOS 签名公证与安装证据、Linux x86-64/ARM64 包、Homebrew cask、vibe-agi.github.io 均已更新。构建证据与发布说明见 [docs/releases/v0.1.17.md](docs/releases/v0.1.17.md)。
 - 发布前验收：Go 全量与 race、govulncheck（Go 1.26.8）、Flutter 全量、Linux 包构建校验、打包 Server 上的无头 Playwright 界面走查。
 
+## 发布之后已完成
+
+- Web 工作台自包含：CanvasKit 与全部 725 个回退字体随构建发布（SHA-256 锁定清单、OFL 声明），Server 下发严格 CSP，打包校验拒绝依赖 CDN 的构建（PR #28）。
+- 产品说明：README 只讲大类与重点并引导到官网；官网产品页按“一句话说明 → 适合谁 → 能做什么 → 三步开始 → 值得了解”循序渐进；截图由 `tool/product-screenshots` 从 Preview 构建按中英文生成；部署、Docker、备份指南提供中英文。
+
 ## 发布之后
 
 - 大 Capture 删除改为异步分批，删除期间显示"删除中"。
