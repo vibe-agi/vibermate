@@ -138,6 +138,9 @@ vibermate trust --server https://runtime.example.com:443 --system-roots
 - `docker compose down` 会保留数据卷。除非确定要永久删除身份、账号和证据，否则不要
   使用 `down -v`。
 - 停止、查看日志、读取恢复密钥和回滚时，都要带上与启动时相同的 `--env-file` 和 `-f`。
+- 如需限制可以连接的网络，请使用[部署指南](deployment.zh-CN.md#限制可以连接的网络ip-白名单)中的
+  IP 白名单。如果前面的四层负载均衡会隐藏客户端地址，请把 `VIBERMATE_TRUSTED_PROXIES` 设为
+  负载均衡自己的地址。
 - 外部 HTTP 反向代理可能破坏同一端口上的 CONNECT。需要网关时，请验证四层透传，
   不能只测试网页能否打开。
 

@@ -41,6 +41,8 @@
 - Web 工作台自包含：CanvasKit 与全部 725 个回退字体随构建发布（SHA-256 锁定清单、OFL 声明），Server 下发严格 CSP，打包校验拒绝依赖 CDN 的构建（PR #28）。
 - 产品说明：README 只讲大类与重点并引导到官网；官网产品页按“一句话说明 → 适合谁 → 能做什么 → 三步开始 → 值得了解”循序渐进；截图由 `tool/product-screenshots` 从 Preview 构建按中英文生成；部署、Docker、备份指南提供中英文。
 
+- Server IP 白名单：所有者在 Web 编辑 CIDR 白名单，作用于整个 Server 端口，保存即生效并断开不再允许的连接；本机始终允许，保存不会把自己锁在外面，`vibermated server ip-allowlist clear` 用于应急。只认 TCP 对端；四层负载均衡通过 `--trusted-proxies` 与 PROXY protocol v1/v2 告知真实客户端，缺头按负载均衡地址严格判断；从不信任 HTTP 转发头（ADR 0022）。
+
 ## 发布之后
 
 - 大 Capture 删除改为异步分批，删除期间显示"删除中"。
