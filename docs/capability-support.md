@@ -3,9 +3,9 @@
 This matrix states what the current source offers. A passing unit test and a
 published product are not interchangeable evidence.
 
-Source package version: **0.1.19**. Latest published release: **v0.1.18**.
+Source package version: **0.1.19**. Latest published release: **v0.1.19**.
 
-[v0.1.18](https://github.com/vibe-agi/vibermate/releases/tag/v0.1.18) opens only
+[v0.1.19](https://github.com/vibe-agi/vibermate/releases/tag/v0.1.19) opens only
 databases of its own schema revision and has no migrations
 ([ADR 0021](adr/0021-one-schema-revision-without-migrations.md)).
 
@@ -20,13 +20,13 @@ databases of its own schema revision and has no migrations
 
 | Capability ID | Status | Current boundary |
 | --- | --- | --- |
-| `macos-app` | Released | macOS 14+ Universal App for Apple silicon and Intel. v0.1.18 was signed, notarized and installed by [run 36545713076](https://github.com/vibe-agi/vibermate/actions/runs/36545713076); Homebrew cask `vibe-agi/tap/vibermate`. |
-| `linux-server-web` | Released | Native Runtime Server, CLI, and Web workbench archives for Linux x86-64 and ARM64, built and verified by [run 36547786712](https://github.com/vibe-agi/vibermate/actions/runs/36547786712). |
+| `macos-app` | Released | macOS 14+ Universal App for Apple silicon and Intel. v0.1.19 was signed, notarized and installed by [run 36581198825](https://github.com/vibe-agi/vibermate/actions/runs/36581198825); Homebrew cask `vibe-agi/tap/vibermate`. |
+| `linux-server-web` | Released | Native Runtime Server, CLI, and Web workbench archives for Linux x86-64 and ARM64, built and verified by [run 36584661277](https://github.com/vibe-agi/vibermate/actions/runs/36584661277). |
 | `docker-server-web` | Released | The same Runtime Server and Web workbench can run from the versioned Docker/Compose files; Docker does not create a separate account or certificate model. |
 | `local-web-http` | Released | Native or container Web on loopback HTTP; no domain or certificate is required. |
 | `remote-web-tls` | Released | Explicit private-CA DNS/IP identity, automatic public-domain HTTPS, or operator-provided certificate files. Server HTTPS identity remains separate from the Proxy CA except in the explicitly selected private-CA mode. |
 | `web-manual-proxy-login` | Released | An Owner can create, rotate, revoke, and deliver a manual proxy login and its public Proxy CA through the Web management API. The proxy login is separate from Runtime User and upstream Account credentials. |
-| `server-ip-allowlist` | Available | The Owner limits which networks may connect to the Server port (Web, API, CLI login and Agent traffic); refused clients are disconnected before TLS or HTTP. Loopback is always allowed. Clients are judged by the TCP peer or, from load balancers listed with `--trusted-proxies`, by their PROXY protocol v1/v2 header; HTTP forwarding headers are never trusted. |
+| `server-ip-allowlist` | Released | The Owner limits which networks may connect to the Server port (Web, API, CLI login and Agent traffic); refused clients are disconnected before TLS or HTTP. Loopback is always allowed. Clients are judged by the TCP peer or, from load balancers listed with `--trusted-proxies`, by their PROXY protocol v1/v2 header; HTTP forwarding headers are never trusted. |
 | `windows-runtime` | Unsupported | There is no Windows App, Server, or managed launcher release. |
 
 ## Clients, routing, and accounts
