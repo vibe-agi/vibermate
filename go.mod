@@ -2,6 +2,8 @@ module github.com/vibe-agi/vibermate
 
 go 1.26.0
 
+toolchain go1.26.8
+
 require (
 	github.com/anthropics/anthropic-sdk-go v1.61.0
 	github.com/caddyserver/certmagic v0.25.4
