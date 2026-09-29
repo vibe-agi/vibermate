@@ -1,5 +1,5 @@
--- Migration 0001: the complete baseline schema. Later changes are new migrations.
--- schema_revision is the number of the last applied migration.
+-- The complete Runtime schema. Any change here must bump schemaRevision.
+-- schema_revision is the schemaRevision of the build that created the file.
 CREATE TABLE runtime_metadata(
   singleton INTEGER PRIMARY KEY NOT NULL CHECK(singleton = 1),
   schema_identity TEXT NOT NULL CHECK(schema_identity = 'vibermate-runtime'),

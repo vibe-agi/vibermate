@@ -20,9 +20,9 @@ import (
 func TestACPCurrentSchemaPreservesSnapshotsAcrossRestart(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "runtime.db")
-	// ACP is part of the schema migrations, not initialized by a second pass.
+	// ACP is part of the one schema, not initialized by a second pass.
 	store := openTestStore(t, path)
-	if state, err := store.SchemaStateReader().ReadSchemaState(ctx); err != nil || state.Revision != latestSchemaRevision() {
+	if state, err := store.SchemaStateReader().ReadSchemaState(ctx); err != nil || state.Revision != schemaRevision {
 		t.Fatalf("schema state = %+v, %v", state, err)
 	}
 	manager, err := capturerun.NewManager(ctx, capturerun.DefaultOptions(store.CaptureRunRepository()))

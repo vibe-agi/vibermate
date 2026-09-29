@@ -66,8 +66,7 @@ func (r *Repository) ReadSchemaState(ctx context.Context) (SchemaState, error) {
 	); err != nil {
 		return SchemaState{}, fmt.Errorf("%w: read runtime metadata: %v", ErrUnsupportedSchema, err)
 	}
-	// The open store migrated this file; anything else means it changed under us.
-	if state.Identity != schemaIdentity || state.Revision != latestSchemaRevision() {
+	if state.Identity != schemaIdentity || state.Revision != schemaRevision {
 		return SchemaState{}, fmt.Errorf("%w: identity %q revision %d", ErrUnsupportedSchema, state.Identity, state.Revision)
 	}
 	if err := transaction.Commit(); err != nil {

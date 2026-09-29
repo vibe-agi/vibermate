@@ -14,8 +14,8 @@ import (
 )
 
 // validateExistingSchema refuses, before any write (journal_mode itself can
-// change the file header), a file that is not a ViberMate database or that a
-// newer ViberMate created. An older revision is accepted: Open migrates it.
+// change the file header), a file that is not a ViberMate database of this
+// build's schema revision.
 func validateExistingSchema(ctx context.Context, path string, timeout time.Duration) error {
 	info, err := os.Stat(path)
 	if errors.Is(err, os.ErrNotExist) || err == nil && info.Size() == 0 {
@@ -30,8 +30,8 @@ func validateExistingSchema(ctx context.Context, path string, timeout time.Durat
 	if err != nil {
 		return err
 	}
-	if revision > latestSchemaRevision() {
-		return fmt.Errorf("%w: revision %d is newer than this build (%d)", ErrUnsupportedSchema, revision, latestSchemaRevision())
+	if revision != 0 && revision != schemaRevision {
+		return fmt.Errorf("%w: file revision %d, build revision %d", ErrUnsupportedSchema, revision, schemaRevision)
 	}
 	return nil
 }
@@ -79,8 +79,7 @@ func ValidateOfflineDatabase(ctx context.Context, path string) (SchemaState, err
 	).Scan(&state.Identity, &state.Revision, &state.InitializedAt); err != nil {
 		return SchemaState{}, fmt.Errorf("%w: read offline Runtime metadata: %v", ErrUnsupportedSchema, err)
 	}
-	// An older revision is a valid backup: opening it later migrates it.
-	if state.Identity != schemaIdentity || state.Revision < 1 || state.Revision > latestSchemaRevision() {
+	if state.Identity != schemaIdentity || state.Revision != schemaRevision {
 		return SchemaState{}, fmt.Errorf("%w: identity %q revision %d", ErrUnsupportedSchema, state.Identity, state.Revision)
 	}
 	return state, nil

@@ -212,8 +212,8 @@ func openTestStore(t testing.TB, databasePath string) *Store {
 
 func assertInitialSchemaState(t *testing.T, state SchemaState) {
 	t.Helper()
-	if state.Revision != latestSchemaRevision() {
-		t.Fatalf("schema revision = %d, want %d", state.Revision, latestSchemaRevision())
+	if state.Revision != schemaRevision {
+		t.Fatalf("schema revision = %d, want %d", state.Revision, schemaRevision)
 	}
 	if state.InitializedAt == "" {
 		t.Fatal("schema initialization timestamp is empty")

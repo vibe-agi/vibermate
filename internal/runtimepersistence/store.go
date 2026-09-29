@@ -115,7 +115,7 @@ func Open(ctx context.Context, options Options) (*Store, error) {
 	if err := database.PingContext(ctx); err != nil {
 		return fail(fmt.Errorf("open SQLite database: %w", err))
 	}
-	if _, err := migrateSchema(ctx, database, migrations, time.Now()); err != nil {
+	if err := initializeSchema(ctx, database, time.Now()); err != nil {
 		return fail(err)
 	}
 	if err := protectDatabaseArtifacts(options.DatabasePath); err != nil {

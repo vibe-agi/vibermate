@@ -19,7 +19,7 @@ func TestCurrentSchemaIncludesAllRuntimeTablesWithoutExtensions(t *testing.T) {
 	databasePath := filepath.Join(t.TempDir(), "runtime.sqlite")
 	store := openTestStore(t, databasePath)
 	defer shutdownTestStore(t, store)
-	if state, err := store.SchemaStateReader().ReadSchemaState(ctx); err != nil || state.Revision != latestSchemaRevision() {
+	if state, err := store.SchemaStateReader().ReadSchemaState(ctx); err != nil || state.Revision != schemaRevision {
 		t.Fatalf("schema state = %+v, %v", state, err)
 	}
 	var count int
