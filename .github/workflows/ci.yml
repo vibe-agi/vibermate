@@ -257,7 +257,7 @@ jobs:
           tool/verify_flutter_sdk.sh
           flutter pub get
           flutter test --platform chrome
-          flutter build web --release
+          tool/build_web.sh
           version="$(awk '$1 == "version:" { print $2 }' pubspec.yaml)"
           version="${version%%+*}"
           ../../tool/linux-release/build-linux-distributions.sh \

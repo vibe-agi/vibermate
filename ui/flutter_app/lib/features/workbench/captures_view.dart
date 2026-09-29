@@ -814,22 +814,34 @@ final class _CaptureConversationWorkspaceState
           padding: const EdgeInsets.all(12),
           child: Align(
             alignment: Alignment.centerLeft,
-            child: SegmentedButton<bool>(
-              key: const Key('capture-evidence-mode'),
-              showSelectedIcon: false,
-              segments: [
-                ButtonSegment(
-                  value: false,
-                  label: Text(copy('capture.summary.overview')),
-                ),
-                ButtonSegment(
-                  value: true,
-                  label: Text(copy('capture.summary.records')),
-                ),
-              ],
-              selected: {controller.showCaptureRequestRecords},
-              onSelectionChanged: (value) =>
-                  controller.selectCaptureRequestRecords(value.single),
+            // On the Web the first layout can run before the CJK fallback font
+            // arrives, and equal-width segments keep that narrow measurement.
+            // A minimum width keeps either language's label whole.
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(minWidth: 176),
+              child: SegmentedButton<bool>(
+                key: const Key('capture-evidence-mode'),
+                showSelectedIcon: false,
+                segments: [
+                  ButtonSegment(
+                    value: false,
+                    label: Text(
+                      copy('capture.summary.overview'),
+                      softWrap: false,
+                    ),
+                  ),
+                  ButtonSegment(
+                    value: true,
+                    label: Text(
+                      copy('capture.summary.records'),
+                      softWrap: false,
+                    ),
+                  ),
+                ],
+                selected: {controller.showCaptureRequestRecords},
+                onSelectionChanged: (value) =>
+                    controller.selectCaptureRequestRecords(value.single),
+              ),
             ),
           ),
         ),

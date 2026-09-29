@@ -78,6 +78,7 @@ for asset_arch in x86_64 arm64; do
     echo "Web license differs from distribution license: ${bundle_name}" >&2
     exit 66
   fi
+  "${repository_root}/ui/flutter_app/tool/verify_web_self_contained.sh" "${bundle_root}/vibermate-web" >/dev/null
   if ! cmp -s "${repository_root}/LICENSE" "${bundle_root}/LICENSE" ||
     ! cmp -s "${repository_root}/THIRD_PARTY_LICENSES.md" "${bundle_root}/THIRD_PARTY_LICENSES.md"; then
     echo "distribution license files differ from the source: ${bundle_name}" >&2

@@ -61,6 +61,8 @@ review the release SBOM before a Commercial License delivery.
 | flutter_lints | 6.0.0 | BSD-3-Clause | Development-only | Lint rules, not a runtime dependency. |
 | file_selector_platform_interface | 2.7.0 | BSD-3-Clause | Permissive | Retain Flutter notice if bundled. |
 | Flutter SDK | 3.41.5 (pinned toolchain) | BSD-3-Clause | Permissive | The SDK and bundled platform material retain Flutter notices. |
+| CanvasKit (Skia) | engine of the pinned Flutter SDK | BSD-3-Clause | Permissive | Bundled in the Web workbench instead of loading from a CDN. |
+| Noto and Roboto fonts | pinned in ui/flutter_app/tool/web_fallback_fonts.json | SIL OFL 1.1 | Permissive | Unmodified Web fallback fonts; the license travels as vibermate-web/fonts/LICENSE.txt. |
 
 The bundled agent icons are from Lobe Icons and are separately licensed under
 the MIT License; their notice is in

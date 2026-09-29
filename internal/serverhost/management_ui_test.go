@@ -38,7 +38,7 @@ func TestManagementUIRevalidatesEveryPackagedMember(t *testing.T) {
 		if response.Code != http.StatusOK ||
 			response.Header().Get("Cache-Control") != "no-cache" ||
 			response.Header().Get("X-Frame-Options") != "DENY" ||
-			response.Header().Get("Content-Security-Policy") != "frame-ancestors 'none'" {
+			response.Header().Get("Content-Security-Policy") != managementUIContentSecurityPolicy {
 			t.Fatalf(
 				"GET %s status=%d headers=%v",
 				requestPath,

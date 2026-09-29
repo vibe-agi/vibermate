@@ -61,10 +61,10 @@ build-flutter-app:
 build-linux-distributions:
 	@test "$$(uname -s)" = Linux || { echo "Linux distributions must be assembled on Linux" >&2; exit 69; }
 	ui/flutter_app/tool/verify_flutter_sdk.sh
-	cd ui/flutter_app && flutter pub get && flutter build web --release
+	cd ui/flutter_app && flutter pub get && tool/build_web.sh
 	@version="$$(awk '$$1 == "version:" { print $$2 }' ui/flutter_app/pubspec.yaml)"; \
 	version="$${version%%+*}"; \
-	tool/linux-release/build-linux-distributions.sh "$$version" ui/flutter_app/build/web dist/linux-release; \
+	tool/linux-release/build-linux-distributions.sh "$$version" ui/flutter_app/build/web dist/linux-release && \
 	tool/linux-release/verify-linux-distributions.sh "$$version" dist/linux-release
 
 test:

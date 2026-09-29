@@ -68,7 +68,7 @@ jobs:
           set -euo pipefail
           tool/verify_flutter_sdk.sh
           flutter pub get
-          flutter build web --release
+          tool/build_web.sh
       - name: Build and verify Linux distributions
         shell: bash
         run: |

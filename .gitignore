@@ -9,3 +9,6 @@ javascript/**/*RESULTS-*.json
 javascript/**/*ROUND-*.md
 javascript/**/TEST-REPORT-*.md
 javascript/**/REVIEW-FIXES-*.md
+
+# Screenshot tooling dependencies.
+/tool/product-screenshots/node_modules/

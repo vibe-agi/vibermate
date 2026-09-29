@@ -14,6 +14,11 @@ import (
 	"strings"
 )
 
+// The Web workbench is self-contained (CanvasKit and fallback fonts ship in
+// the build), so it may load only from this origin. CanvasKit needs
+// wasm-unsafe-eval to compile its WebAssembly.
+const managementUIContentSecurityPolicy = "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data: blob:; connect-src 'self'; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'none'; frame-ancestors 'none'"
+
 func newManagementUI(root string) (http.Handler, error) {
 	if root == "" {
 		return nil, nil
@@ -71,7 +76,7 @@ func newManagementUI(root string) (http.Handler, error) {
 		}
 		writer.Header().Set("X-Content-Type-Options", "nosniff")
 		writer.Header().Set("X-Frame-Options", "DENY")
-		writer.Header().Set("Content-Security-Policy", "frame-ancestors 'none'")
+		writer.Header().Set("Content-Security-Policy", managementUIContentSecurityPolicy)
 		writer.Header().Set("Referrer-Policy", "no-referrer")
 		writer.Header().Set("Cross-Origin-Resource-Policy", "same-origin")
 		// Flutter's bootstrap, service worker, and main bundle keep stable names

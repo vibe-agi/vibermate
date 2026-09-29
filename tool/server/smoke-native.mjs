@@ -1,5 +1,5 @@
 // Builds and runs a real standalone Server against disposable private data.
-// Requires the Web build: flutter build web --release --no-pub.
+// Requires the Web build: ui/flutter_app/tool/build_web.sh --no-pub.
 import assert from 'node:assert/strict';
 import { execFile, spawn } from 'node:child_process';
 import { cp, mkdtemp, realpath, rm, stat } from 'node:fs/promises';
