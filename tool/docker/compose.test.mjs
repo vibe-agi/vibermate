@@ -11,7 +11,11 @@ test('container image consumes only the current prepared source artifacts', () =
   assert.doesNotMatch(dockerfile, /releases\/download/u);
   assert.doesNotMatch(dockerfile, / AS distribution/u);
   assert.match(dockerfile, /COPY dist\/docker\/ \/opt\/vibermate\//u);
-  assert.match(dockerfile, /org\.opencontainers\.image\.version="0\.1\.13"/u);
+  // The image label follows the source version, never a hand-copied number.
+  const pubspec = readFileSync(new URL('../../ui/flutter_app/pubspec.yaml', import.meta.url), 'utf8');
+  const version = /^version:\s*([0-9]+\.[0-9]+\.[0-9]+)\+/mu.exec(pubspec)?.[1];
+  assert.ok(version, 'pubspec.yaml version');
+  assert.ok(dockerfile.includes(`org.opencontainers.image.version="${version}"`), 'Dockerfile image version');
   assert.match(dockerfile, /org\.opencontainers\.image\.licenses="AGPL-3\.0-only"/u);
 });
 
@@ -88,6 +92,7 @@ test('automatic public HTTPS has an explicit name, terms and TLS challenge', () 
   assert.equal(service.command[service.command.indexOf('--transport') + 1], 'automatic_tls');
   assert.ok(service.command.includes('--acme-agree-terms'));
   assert.equal(service.command[service.command.indexOf('--acme-challenge') + 1], 'tls_alpn_01');
+  assert.equal(service.command[service.command.indexOf('--trusted-proxies') + 1], 'none');
   assert.equal(service.ports[0].published, '443');
   assert.equal(service.ports[0].target, 9666);
   assert.equal(value.volumes['runtime-data'].name, 'vibermate-public-data');
@@ -101,11 +106,14 @@ test('team HTTPS requires operator-owned read-only server certificate files', ()
     '--tls-key', '/certs/privkey.pem',
   ]);
   assert.equal(service.ports[0].host_ip, '192.0.2.10');
+  assert.equal(service.command[service.command.indexOf('--trusted-proxies') + 1], 'none');
   assert.equal(value.volumes['runtime-data'].name, 'vibermate-team-data');
   const files = service.volumes.filter(v => v.type === 'bind');
   assert.equal(files.length, 2);
   for (const file of files) {
     assert.equal(file.read_only, true);
-    assert.equal(file.bind.create_host_path, false);
+    // Long-syntax binds default to not creating host paths; Compose omits
+    // the false value, so only an explicit true is wrong.
+    assert.notEqual(file.bind?.create_host_path, true);
   }
 });

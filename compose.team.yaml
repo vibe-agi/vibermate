@@ -19,6 +19,8 @@ services:
       - /data
       - --web-root
       - /opt/vibermate/vibermate-web
+      - --trusted-proxies
+      - ${VIBERMATE_TRUSTED_PROXIES:-none}
       - --transport
       - tls_files
       - --tls-cert

@@ -49,7 +49,7 @@ jobs:
           node --test .github/check-action-pins.test.mjs
           node .github/check-action-pins.mjs
       - name: Verify Flutter distribution and macOS release tooling
-        run: node --test ui/flutter_app/tool/desktop_build_manifest.test.mjs tool/macos-release/*.test.mjs
+        run: node --test ui/flutter_app/tool/desktop_build_manifest.test.mjs tool/macos-release/*.test.mjs tool/docker/compose.test.mjs
 
   unit:
     needs: generated-structural
