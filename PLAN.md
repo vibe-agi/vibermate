@@ -32,6 +32,7 @@
 
 ## 已发布
 
+- **v0.1.18**（2026-09-29，`25091f8`）：Web 工作台自包含（CanvasKit 与字体随包、严格 CSP）、中英文指南与官网改版；macOS 签名公证、Linux 包、Homebrew、官网均已更新，见 [docs/releases/v0.1.18.md](docs/releases/v0.1.18.md)。
 - **v0.1.17**（2026-09-29，`7ac39f0`）：macOS 签名公证与安装证据、Linux x86-64/ARM64 包、Homebrew cask、vibe-agi.github.io 均已更新。构建证据与发布说明见 [docs/releases/v0.1.17.md](docs/releases/v0.1.17.md)。
 - 发布前验收：Go 全量与 race、govulncheck（Go 1.26.8）、Flutter 全量、Linux 包构建校验、打包 Server 上的无头 Playwright 界面走查。
 

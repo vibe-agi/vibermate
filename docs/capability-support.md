@@ -3,9 +3,9 @@
 This matrix states what the current source offers. A passing unit test and a
 published product are not interchangeable evidence.
 
-Source package version: **0.1.18**. Latest published release: **v0.1.17**.
+Source package version: **0.1.18**. Latest published release: **v0.1.18**.
 
-[v0.1.17](https://github.com/vibe-agi/vibermate/releases/tag/v0.1.17) opens only
+[v0.1.18](https://github.com/vibe-agi/vibermate/releases/tag/v0.1.18) opens only
 databases of its own schema revision and has no migrations
 ([ADR 0021](adr/0021-one-schema-revision-without-migrations.md)).
 
@@ -20,8 +20,8 @@ databases of its own schema revision and has no migrations
 
 | Capability ID | Status | Current boundary |
 | --- | --- | --- |
-| `macos-app` | Released | macOS 14+ Universal App for Apple silicon and Intel. v0.1.17 was signed, notarized and installed by [run 36529757893](https://github.com/vibe-agi/vibermate/actions/runs/36529757893); Homebrew cask `vibe-agi/tap/vibermate`. |
-| `linux-server-web` | Released | Native Runtime Server, CLI, and Web workbench archives for Linux x86-64 and ARM64, built and verified by [run 36531368382](https://github.com/vibe-agi/vibermate/actions/runs/36531368382). |
+| `macos-app` | Released | macOS 14+ Universal App for Apple silicon and Intel. v0.1.18 was signed, notarized and installed by [run 36545713076](https://github.com/vibe-agi/vibermate/actions/runs/36545713076); Homebrew cask `vibe-agi/tap/vibermate`. |
+| `linux-server-web` | Released | Native Runtime Server, CLI, and Web workbench archives for Linux x86-64 and ARM64, built and verified by [run 36547786712](https://github.com/vibe-agi/vibermate/actions/runs/36547786712). |
 | `docker-server-web` | Released | The same Runtime Server and Web workbench can run from the versioned Docker/Compose files; Docker does not create a separate account or certificate model. |
 | `local-web-http` | Released | Native or container Web on loopback HTTP; no domain or certificate is required. |
 | `remote-web-tls` | Released | Explicit private-CA DNS/IP identity, automatic public-domain HTTPS, or operator-provided certificate files. Server HTTPS identity remains separate from the Proxy CA except in the explicitly selected private-CA mode. |
