@@ -170,6 +170,119 @@ final class RuntimeServerAccess {
       authentication == 'runtime_user_password';
 }
 
+/// The networks allowed to connect to a Runtime Server. An empty list allows
+/// every address; loopback is always allowed.
+final class ServerIpAllowlist {
+  const ServerIpAllowlist({
+    required this.revision,
+    required this.ranges,
+    required this.maxRanges,
+    this.updatedAt,
+    this.clientAddress,
+    this.refusedCount = 0,
+    this.lastRefusedAddress,
+    this.lastRefusedAt,
+    this.trustedProxies = const [],
+    this.proxyHeaderProblems = 0,
+  });
+
+  factory ServerIpAllowlist.fromJson(Object? json, String path) {
+    final value = requireObject(json, path);
+    requireFields(
+      value,
+      path,
+      required: const {
+        'schema',
+        'revision',
+        'ranges',
+        'maxRanges',
+        'refused',
+        'trustedProxies',
+        'proxyHeaderProblems',
+      },
+      optional: const {'updatedAt', 'clientAddress'},
+    );
+    if (requireString(value, 'schema', path) !=
+        'vibermate-server-ip-allowlist-v1') {
+      throw ControlContractException('$path schema is unsupported');
+    }
+    final maxRanges = requireInteger(value, 'maxRanges', path, minimum: 1);
+    final rawRanges = requireList(value['ranges'], '$path.ranges');
+    final ranges = <String>[];
+    for (final (index, item) in rawRanges.indexed) {
+      if (item is! String || item.isEmpty || item.length > 64) {
+        throw ControlContractException('$path.ranges[$index] is invalid');
+      }
+      ranges.add(item);
+    }
+    if (ranges.length > maxRanges || ranges.toSet().length != ranges.length) {
+      throw ControlContractException('$path.ranges is invalid');
+    }
+    final refused = requireObject(value['refused'], '$path.refused');
+    requireFields(
+      refused,
+      '$path.refused',
+      required: const {'count'},
+      optional: const {'lastAddress', 'lastAt'},
+    );
+    final trustedProxies = <String>[];
+    for (final (index, item) in requireList(
+      value['trustedProxies'],
+      '$path.trustedProxies',
+    ).indexed) {
+      if (item is! String || item.isEmpty || item.length > 64) {
+        throw ControlContractException(
+          '$path.trustedProxies[$index] is invalid',
+        );
+      }
+      trustedProxies.add(item);
+    }
+    final clientAddress = value.containsKey('clientAddress')
+        ? requireString(value, 'clientAddress', path)
+        : null;
+    final lastAddress = refused.containsKey('lastAddress')
+        ? requireString(refused, 'lastAddress', '$path.refused')
+        : null;
+    return ServerIpAllowlist(
+      revision: requireInteger(value, 'revision', path),
+      ranges: List.unmodifiable(ranges),
+      maxRanges: maxRanges,
+      updatedAt: optionalTimestamp(value, 'updatedAt', path),
+      clientAddress: clientAddress == null || clientAddress.isEmpty
+          ? null
+          : clientAddress,
+      refusedCount: requireInteger(refused, 'count', '$path.refused'),
+      lastRefusedAddress: lastAddress == null || lastAddress.isEmpty
+          ? null
+          : lastAddress,
+      lastRefusedAt: optionalTimestamp(refused, 'lastAt', '$path.refused'),
+      trustedProxies: List.unmodifiable(trustedProxies),
+      proxyHeaderProblems: requireInteger(value, 'proxyHeaderProblems', path),
+    );
+  }
+
+  final int revision;
+  final List<String> ranges;
+  final int maxRanges;
+  final DateTime? updatedAt;
+
+  /// The address this browser connects from; absent in the App, which is
+  /// always allowed.
+  final String? clientAddress;
+  final int refusedCount;
+  final String? lastRefusedAddress;
+  final DateTime? lastRefusedAt;
+
+  /// Load balancers whose PROXY protocol header names the client. They are
+  /// set when the Server starts and cannot be changed here.
+  final List<String> trustedProxies;
+
+  /// Connections from a trusted load balancer without a valid PROXY header.
+  final int proxyHeaderProblems;
+
+  bool get restricted => ranges.isNotEmpty;
+}
+
 final class RuntimeServerTLS {
   const RuntimeServerTLS({
     required this.mode,

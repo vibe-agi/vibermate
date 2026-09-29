@@ -304,6 +304,10 @@ final class WorkbenchController extends ChangeNotifier
   ACPRecord? selectedACP;
   TerminalCommandStatus? terminalCommand;
   RuntimeServerAccess? serverAccess;
+
+  /// The networks allowed to connect to the Server; null until loaded.
+  ServerIpAllowlist? serverIpAllowlist;
+  bool serverIpAllowlistSaving = false;
   List<RuntimeUser>? runtimeUsers;
   RuntimeUsageReport? runtimeUsage;
   RootCAStatus? rootCAStatus;
@@ -1525,6 +1529,8 @@ final class WorkbenchController extends ChangeNotifier
       runtimeUsers = List<RuntimeUser>.unmodifiable(
         updated[1] as List<RuntimeUser>,
       );
+      await _loadServerIpAllowlist();
+      if (_disposed) return;
       serverManagementLoading = false;
       serverManagementError = null;
       notifyListeners();
@@ -1533,6 +1539,50 @@ final class WorkbenchController extends ChangeNotifier
       serverManagementLoading = false;
       serverManagementError = _describeError(error);
       notifyListeners();
+    }
+  }
+
+  // The allowlist is one panel of Server management; failing to read it must
+  // not make users, access and the rest unavailable.
+  Future<void> _loadServerIpAllowlist() async {
+    try {
+      final loaded = await _api.serverIpAllowlist();
+      if (!_disposed) serverIpAllowlist = loaded;
+    } catch (_) {}
+  }
+
+  /// Saves [ranges] as the Server IP allowlist. Returns null when saved, or
+  /// the error that explains why not. After a conflict the latest stored list
+  /// is loaded so the Owner reviews it before saving again.
+  Future<Object?> saveServerIpAllowlist(List<String> ranges) async {
+    final current = serverIpAllowlist;
+    if (_disposed || !serverManagement || current == null) {
+      return StateError('Server IP allowlist is unavailable');
+    }
+    if (serverIpAllowlistSaving) {
+      return StateError('Server IP allowlist is already being saved');
+    }
+    serverIpAllowlistSaving = true;
+    notifyListeners();
+    try {
+      final saved = await _api.replaceServerIpAllowlist(
+        revision: current.revision,
+        ranges: ranges,
+      );
+      if (_disposed) return null;
+      serverIpAllowlist = saved;
+      serverIpAllowlistSaving = false;
+      notifyListeners();
+      return null;
+    } catch (error) {
+      if (_disposed) return error;
+      if (error is ControlProblem && error.status == 409) {
+        await _loadServerIpAllowlist();
+        if (_disposed) return error;
+      }
+      serverIpAllowlistSaving = false;
+      notifyListeners();
+      return error;
     }
   }
 
