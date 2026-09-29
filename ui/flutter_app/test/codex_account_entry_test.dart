@@ -312,7 +312,7 @@ void main() {
         expect(find.byType(AlertDialog), findsNothing);
         expect(controller.data!.accounts.length, initialCount + 1);
         final account = controller.data!.accounts.singleWhere(
-          (value) => value.kind == 'codex_oauth',
+          (value) => value.kind == 'codex_oauth' && value.id != 'codex-pro',
         );
         expect(account.linkedEndpointIds, isEmpty);
         expect(account.codexOAuth!.chatgptAccountId, 'workspace-preview');

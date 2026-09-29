@@ -74,7 +74,17 @@ void main() {
         final quotaRefresh = find.byKey(
           const Key('account-quota-refresh-account.oauth'),
         );
-        await tester.ensureVisible(quotaRefresh);
+        await tester.scrollUntilVisible(
+          quotaRefresh,
+          200,
+          scrollable: find
+              .byWidgetPredicate(
+                (widget) =>
+                    widget is Scrollable &&
+                    widget.axisDirection == AxisDirection.down,
+              )
+              .first,
+        );
         await tester.pumpAndSettle();
         await tester.tap(quotaRefresh);
         await tester.pumpAndSettle();

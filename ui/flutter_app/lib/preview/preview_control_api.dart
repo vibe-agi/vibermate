@@ -637,6 +637,29 @@ final class PreviewControlApi implements ControlApi {
       setHeaderNames: const ['X-Team'],
       deleteHeaderNames: const ['X-Legacy'],
     ),
+    ProviderAccount(
+      id: 'codex-pro',
+      displayName: 'ChatGPT · Pro',
+      credentialOrigin: 'https://chatgpt.com',
+      linkedEndpointIds: const ['target.codex.official'],
+      kind: 'codex_oauth',
+      realmId: 'openai.chatgpt',
+      state: 'active',
+      revision: 2,
+      credentialState: 'ready',
+      credentialEpoch: 4,
+      automaticRefresh: true,
+      supportsAutomaticRefresh: true,
+      setHeaderNames: const [],
+      deleteHeaderNames: const [],
+      codexOAuth: _previewCodexOAuth(
+        jsonEncode({
+          'auth_mode': 'chatgpt',
+          'tokens': {'account_id': 'workspace-preview'},
+          'last_refresh': '2026-08-10T08:00:00Z',
+        }),
+      ),
+    ),
   ];
 
   late final List<EnvironmentRecord> _environments;
@@ -647,7 +670,7 @@ final class PreviewControlApi implements ControlApi {
   List<EnvironmentRecord> _initialEnvironments() => [
     _environment(
       id: 'system_transparent',
-      name: 'System capture',
+      name: 'System Transparent',
       revision: 1,
       digestCharacter: '1',
       systemOwned: true,
@@ -3111,9 +3134,7 @@ final class PreviewControlApi implements ControlApi {
             ? null
             : ActivityRequestPreview(
                 kind: index % 4 == 0 ? 'tool_call' : 'text',
-                text: index % 4 == 0
-                    ? 'workspace.read'
-                    : 'Continue with the next verified implementation step.',
+                text: index % 4 == 0 ? 'workspace.read' : _previewPrompt(index),
                 truncated: false,
               ),
         source: ActivitySourceRef(
@@ -4010,7 +4031,7 @@ Evidence line 16''';
           _previewTextBlock(
             index % 4 == 0
                 ? 'Read the project notes and summarize the next action.'
-                : 'Continue with the next verified implementation step.',
+                : _previewPrompt(index),
           ),
         ],
       ),
@@ -4470,3 +4491,16 @@ String? _previewJWTAccountID(Object? token) {
     return null;
   }
 }
+
+// Realistic prompts make Preview read like real work. Exchange 222 keeps the
+// prompt its regression tests search for.
+const _previewPrompts = [
+  'Add retry with backoff to the upstream client and cover it with a test.',
+  'Continue with the next verified implementation step.',
+  'Why does the usage report count cached tokens twice? Find the cause.',
+  'Review this diff for data races before we merge.',
+  'Rename the session store and update every caller.',
+];
+
+String _previewPrompt(int index) =>
+    _previewPrompts[index % _previewPrompts.length];

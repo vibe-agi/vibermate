@@ -1,136 +1,174 @@
-# Docker 部署
+[English](docker.md) · [简体中文](docker.zh-CN.md)
 
-容器和原生进程使用同一套账号与证书逻辑。先选场景，每个模板使用独立、具名数据卷，
-避免一次试运行意外覆盖另一套 Runtime。
+# Docker deployment
 
-| 场景 | 配置 | 浏览器地址 |
+Containers and native processes share the same account and certificate logic.
+Pick your setup first. Each template uses its own named data volume, so a test
+run cannot accidentally overwrite another Runtime.
+
+| Setup | Configuration | Browser address |
 | --- | --- | --- |
-| 本机个人使用 | `compose.yaml` + `.env.example` | `http://127.0.0.1:9666` |
-| 私网/VPN，无公网域名 | `compose.private.yaml` + `.env.private` | 自定义 hosts 名称或 IP 的 HTTPS |
-| 公网域名，自动证书 | `compose.public.yaml` + `.env.public` | `https://域名`（443） |
-| 已有公共/企业证书 | `compose.team.yaml` + `.env.team` | 证书覆盖的 HTTPS 域名/IP |
+| Personal use on this computer | `compose.yaml` + `.env.example` | `http://127.0.0.1:9666` |
+| Private network/VPN, no public domain | `compose.private.yaml` + `.env.private` | HTTPS on a custom hosts-file name or an IP |
+| Public domain, automatic certificate | `compose.public.yaml` + `.env.public` | `https://your-domain` (443) |
+| Existing public or company certificate | `compose.team.yaml` + `.env.team` | HTTPS on the domain/IP the certificate covers |
 
-## 构建当前源码
+## Build the current source
 
 ```sh
 bash tool/docker/build-local.sh
 ```
 
-脚本构建 Server、CLI 和 Web，生成 `vibermate-runtime:local`。Flutter 不在
-`PATH` 时，将 `VIBERMATE_FLUTTER_BIN` 设为绝对路径。模板使用 `pull_policy: never`，
-不会把旧的远程镜像伪装成当前代码。
+The script builds the Server, CLI and Web, and produces the image
+`vibermate-runtime:local`. If Flutter is not on `PATH`, set
+`VIBERMATE_FLUTTER_BIN` to its absolute path. The templates use
+`pull_policy: never`, so an old remote image can never pass itself off as the
+current code.
 
-可用 `node tool/docker/smoke-local.mjs` 在独立容器和数据卷中验证本机模板；脚本选择
-空闲回环端口，验证 Web 初始化、登录、Proxy CA 和重启恢复后清理测试资源。
+You can run `node tool/docker/smoke-local.mjs` to test the local template in a
+separate container and volume. The script picks a free loopback port, checks
+Web setup, sign-in, the Proxy CA and recovery after a restart, and then removes
+its test resources.
 
-## 本机：默认模板
+## This computer: the default template
 
 ```sh
 docker compose --env-file .env.example up -d --wait --wait-timeout 90
 ```
 
-打开 <http://127.0.0.1:9666>。端口冲突时修改 `.env.example` 的
-`VIBERMATE_PORT`。模板固定发布到宿主机回环，忽略远程网卡变量；它不是远程明文部署。
-模板同时把 `127.0.0.1:<VIBERMATE_PORT>` 作为客户端访问地址传给 Runtime，Web 中创建
-手动代理登录时不会把容器内的 `172.x` 地址交付给用户。
+Open <http://127.0.0.1:9666>. If the port is taken, change `VIBERMATE_PORT` in
+`.env.example`. This template always publishes on host loopback and ignores
+variables for remote network interfaces. It is not a remote plain-HTTP
+deployment. It also passes `127.0.0.1:<VIBERMATE_PORT>` to the Runtime as the
+client access address, so a manual capture login created in the Web workbench
+never hands users the container's internal `172.x` address.
 
-读取初始化/恢复密钥：
+Read the setup/recovery key:
 
 ```sh
 docker compose --env-file .env.example exec vibermate \
   /opt/vibermate/vibermated server recovery-key --data-dir /data
 ```
 
-## 私网 HTTPS：hosts 名称或 IP
+## Private HTTPS: hosts-file name or IP
 
 ```sh
 cp .env.private.example .env.private
-# 编辑 VIBERMATE_ACCESS_ADDRESS 与 VIBERMATE_PRIVATE_BIND_ADDRESS
+# Edit VIBERMATE_ACCESS_ADDRESS and VIBERMATE_PRIVATE_BIND_ADDRESS
 docker compose --env-file .env.private -f compose.private.yaml \
   up -d --wait --wait-timeout 90
 ```
 
-`VIBERMATE_ACCESS_ADDRESS` 是客户端实际使用的规范 `host:port`：
+`VIBERMATE_ACCESS_ADDRESS` is the canonical `host:port` that clients actually
+use:
 
-- DNS 示例：`vibermate.home.arpa:9666`，在每台客户端 hosts 文件写入
-  `192.168.1.20 vibermate.home.arpa`。
-- IP 示例：`192.168.1.20:9666`，无需 hosts 文件。
+- DNS example: `vibermate.home.arpa:9666`. Add
+  `192.168.1.20 vibermate.home.arpa` to the hosts file on every client.
+- IP example: `192.168.1.20:9666`. No hosts file needed.
 
-ViberMate 会用同一个私有 CA 生成覆盖该 DNS/IP 的服务器叶证书。安全导出公开 CA：
+`VIBERMATE_PRIVATE_BIND_ADDRESS` is the host network interface the port is
+published on, not a container IP.
+
+ViberMate uses the same private CA to issue a server leaf certificate that
+covers that DNS name or IP. Export the public CA certificate safely:
 
 ```sh
 docker compose --env-file .env.private -f compose.private.yaml exec -T vibermate \
   /opt/vibermate/vibermated server ca-certificate --data-dir /data \
   > vibermate-private-ca.crt
 openssl x509 -in vibermate-private-ca.crt -noout -fingerprint -sha256
-docker compose --env-file .env.private -f compose.private.yaml logs vibermate
 ```
 
-核对导出指纹与日志 `caFingerprint`，再通过可信渠道安装到受管客户端。不要通过未信任
-的网页反向下载。修改访问名称/IP并重启会在同一 CA 下重签叶证书，客户端 CA 信任不变。
-此私有 CA 也授权当前 Runtime 的 AI 流量检查能力，不要安装到不受管设备。
+The command reads the CA certificate straight from the data volume on the
+server and never exports the private key, so the fingerprint it prints is your
+trusted reference. Send the certificate and fingerprint to managed clients over
+a trusted channel, and have each client check that the fingerprint matches
+before installing it. Never download the CA back from an untrusted Web page.
+Changing the access name or IP and restarting reissues the leaf certificate
+under the same CA; clients' trust in the CA is not affected. This private CA
+also authorizes this Runtime's AI traffic inspection. Do not install it on
+unmanaged devices.
 
-## 公网域名：自动 HTTPS
+## Public domain: automatic HTTPS
 
 ```sh
 cp .env.public.example .env.public
-# 编辑公网域名、联系邮箱和需要的绑定地址
+# Edit the public domain, contact email and any bind address you need
 docker compose --env-file .env.public -f compose.public.yaml \
   up -d --wait --wait-timeout 120
 ```
 
-先让域名解析到服务器，并让公网 TCP 443 到达宿主机 443。模板把宿主机 443 转发到
-容器非特权端口 9666，使用 TLS-ALPN-01；容器无需 root、`NET_BIND_SERVICE` 或 host
-network。`--acme-agree-terms` 是显式条款确认。证书和 ACME 状态保存在
-`vibermate-public-data`，续期后热加载。
+First make the domain resolve to the server, and make public TCP 443 reach port
+443 on the host. The template forwards host port 443 to the container's
+unprivileged port 9666 and uses TLS-ALPN-01. The container needs no root,
+`NET_BIND_SERVICE` or host network. The template's `--acme-agree-terms` records
+that you explicitly accept the issuer's terms. Certificates and ACME state are
+stored in the `vibermate-public-data` volume and hot-reloaded after renewal.
 
-初次 TLS-ALPN 申请是异步的。容器运行不表示证书已经签发；查看日志及网页中的
-「安全与数据 → 连接到服务器」。私网 DNS、IP、通配符与 DNS-01 不属于当前自动模式。
+The first TLS-ALPN request is asynchronous. A running container does not mean
+the certificate has been issued; check the logs and **Settings → Safety &
+data → Server connection** in the Web page. Private DNS names, IPs, wildcards
+and DNS-01 are not supported by the automatic mode.
 
-## 已有证书
+## Existing certificate
 
 ```sh
 cp .env.team.example .env.team
-# 编辑访问地址、网卡、证书和私钥的绝对路径
+# Edit the access address, interface, and absolute certificate and key paths
 docker compose --env-file .env.team -f compose.team.yaml \
   up -d --wait --wait-timeout 90
 ```
 
-证书必须覆盖 `VIBERMATE_TEAM_ACCESS_ADDRESS` 的域名/IP。两份 PEM 以只读普通文件
-挂载；私钥为 `0600` 且容器 UID 10001 可读。模板不会创建缺失路径或写入私钥。
-证书替换后使用同一命令加 `--force-recreate` 重建容器，保留数据卷。
+The certificate must cover the domain or IP in `VIBERMATE_TEAM_ACCESS_ADDRESS`.
+Both PEM files are mounted read-only and must be regular files (not symlinks).
+The private key must be `0600` and readable by container UID 10001. The template
+never creates missing paths or writes the private key. After replacing the
+certificate, run the same command with `--force-recreate` to recreate the
+container; the data volume is kept.
 
-## 登录与托管运行
+## Sign-in and managed runs
 
-先在实际浏览器地址完成所有者初始化，再创建成员。客户端使用同一个地址：
-
-```sh
-vibermate login --server https://runtime.example.com
-vibermate doctor --server https://runtime.example.com
-vibermate run --server https://runtime.example.com -- codex
-```
-
-私有 CA 模式应先安装 CA。公共/企业证书由系统根直接验证。CLI 若已有旧叶指纹，可在
-系统验证已经成功后显式迁移：
+Complete owner setup at the address the browser actually uses, then create
+members. Clients use the same address, with the port written out:
 
 ```sh
-vibermate trust --server https://runtime.example.com --system-roots
+vibermate login --server https://runtime.example.com:443
+vibermate doctor --server https://runtime.example.com:443
+vibermate run --server https://runtime.example.com:443 -- codex
 ```
 
-## 数据、安全与回滚
+In private-CA mode, install the CA first (see above). Public and company
+certificates are verified directly by the system roots. If the CLI already
+saved a leaf-certificate fingerprint for this Server, you can switch it to
+system-root verification explicitly, once system verification works:
 
-- `/data` 保存数据库、用户、上游密钥、Proxy CA、服务器身份及自动证书状态；完整备份
-  数据卷并加密保存。一个卷只运行一个 Runtime。
-- 根文件系统只读，容器 UID/GID 为 `10001:10001`，不挂载 Docker socket，不需要特权
-  模式。健康检查只证明本机入口存活，不证明浏览器信任或上游模型可用。
-- `docker compose down` 保留卷；除非明确永久删除身份、账号和证据，不要使用 `down -v`。
-- 停止、日志、恢复密钥和回滚都要带启动时相同的 `--env-file` 与 `-f`。
-- 外部 HTTP 反向代理可能破坏同端口 CONNECT。需要网关时验证四层透传，不能只测试网页。
+```sh
+vibermate trust --server https://runtime.example.com:443 --system-roots
+```
 
-只渲染并检查四套配置：
+## Data, security and rollback
+
+- `/data` holds the database, users, upstream keys, the Proxy CA, the server
+  identity and automatic certificate state. Back up the whole volume and store
+  the backup encrypted. Run only one Runtime per volume. See
+  [Backup and restore](backup-and-restore.md) for how.
+- The root filesystem is read-only, the container runs as UID/GID
+  `10001:10001`, the Docker socket is not mounted, and privileged mode is not
+  needed. The health check only proves the local entry point is alive. It does
+  not prove browser trust or that upstream models are reachable.
+- `docker compose down` keeps volumes. Do not use `down -v` unless you really
+  mean to delete the identity, accounts and evidence for good.
+- For stopping, logs, the recovery key and rollback, always pass the same
+  `--env-file` and `-f` you started with.
+- An external HTTP reverse proxy may break CONNECT on the same port. If you need
+  a gateway, verify layer-4 passthrough; testing that the Web page opens is not
+  enough.
+
+Render and check the four configurations only:
 
 ```sh
 node --test tool/docker/compose.test.mjs
 ```
 
-完整的原生命令、证书边界与首次信任见 [部署与 HTTPS](deployment.md)。
+For the full native commands, certificate boundaries and first trust, see
+[Deployment and HTTPS](deployment.md).

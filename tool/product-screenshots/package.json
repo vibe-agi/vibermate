@@ -1,0 +1,12 @@
+{
+  "name": "vibermate-product-screenshots",
+  "private": true,
+  "type": "module",
+  "description": "Renders the website and README screenshots from the Preview build.",
+  "scripts": {
+    "capture": "node capture.mjs"
+  },
+  "devDependencies": {
+    "playwright": "1.63.0"
+  }
+}

@@ -20,6 +20,10 @@ import '../preview/preview_terminal_command.dart';
 import '../core/bootstrap/root_trust_installer_contract.dart';
 import '../preview/preview_root_trust_installer.dart';
 
+// Preview normally shows the local App. This build flag previews the Runtime
+// Server Owner workbench instead, with Runtime Users and usage reports.
+const _previewServer = bool.fromEnvironment('VIBERMATE_PREVIEW_SERVER');
+
 typedef RuntimeConnector =
     Future<RuntimeConnection> Function({RuntimeLoginAttempt? login});
 
@@ -184,7 +188,7 @@ final class _RuntimeBootstrapState extends State<_RuntimeBootstrap> {
       final loadedPreferences = widget.loadedPreferences;
       RuntimeConnection? liveRuntime;
       if (widget.previewMode) {
-        final preview = PreviewControlApi();
+        final preview = PreviewControlApi(seedRuntimeUsers: _previewServer);
         api = preview;
         terminalCommands = PreviewTerminalCommandService();
         closeRuntime = preview.close;
@@ -216,7 +220,7 @@ final class _RuntimeBootstrapState extends State<_RuntimeBootstrap> {
         api: api,
         terminalCommands: terminalCommands,
         previewMode: widget.previewMode,
-        serverManagement: liveRuntime?.serverManagement ?? false,
+        serverManagement: liveRuntime?.serverManagement ?? _previewServer,
         terminalManagement: liveRuntime?.terminalManagement ?? true,
         rootTrustManagement:
             liveRuntime?.rootTrustManagement ?? widget.previewMode,
