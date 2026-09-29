@@ -449,22 +449,56 @@ func decodeProviderOutputItem(
 			}
 			return []protocolcore.ContentBlock{block}, nil, nil
 		}
-		return nil, nil, protocolcore.NewFailure(
-			protocolcore.ReasonUnsupportedProviderData,
-			path+".type",
-			errors.New("Responses output item type is unsupported"),
-		)
+		block, err := providerActionBlock(kind, path, raw)
+		if err != nil {
+			return nil, nil, invalidProvider(path, err)
+		}
+		return []protocolcore.ContentBlock{block}, nil, nil
 	}
 }
 
+// providerActionBlock carries an unmodelled output item as an unproven client
+// action. Its call key is the item's own call_id or id, so an approval and the
+// client's later result name the same item.
+func providerActionBlock(kind, path string, raw json.RawMessage) (protocolcore.ContentBlock, error) {
+	var identity struct {
+		ID     string `json:"id"`
+		CallID string `json:"call_id"`
+	}
+	if err := json.Unmarshal(raw, &identity); err != nil {
+		return protocolcore.ContentBlock{}, err
+	}
+	callID := identity.CallID
+	if callID == "" {
+		callID = identity.ID
+	}
+	if callID == "" {
+		return protocolcore.ContentBlock{}, errors.New("Responses output item has neither call_id nor id")
+	}
+	item, err := protocolcore.NewJSONObject(raw, protocolcore.MaxToolJSONBytes)
+	if err != nil {
+		return protocolcore.ContentBlock{}, err
+	}
+	call, err := newToolCall(protocolcore.ToolKindProviderAction, identity.ID, callID, "", kind, item, "")
+	if err != nil {
+		return protocolcore.ContentBlock{}, err
+	}
+	return protocolcore.NewToolCallBlock(call)
+}
+
 func isOpaqueResponsesProviderOutputItem(kind string) bool {
-	// Local shell calls are deliberately absent: provider-originated local work
-	// must be modeled as an approvable tool call before it can pass this edge.
+	// Only items whose work already ran on the provider belong here: they are
+	// results, not something the client can execute. Every other unmodelled
+	// item is an unproven action (see providerActionBlock).
 	switch kind {
 	case "tool_search_call",
 		"tool_search_output",
 		"web_search_call",
 		"image_generation_call",
+		"mcp_call",
+		"mcp_list_tools",
+		"code_interpreter_call",
+		"file_search_call",
 		"compaction",
 		"compaction_summary",
 		"context_compaction":

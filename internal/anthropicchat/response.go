@@ -574,6 +574,13 @@ func (codec *Codec) EncodeClientResponse(response protocolcore.Response) ([]byte
 				Text: block.Text,
 			}
 		case protocolcore.BlockToolCall:
+			if block.ToolCall.EffectiveKind() != protocolcore.ToolKindFunction {
+				return nil, protocolcore.NewFailure(
+					protocolcore.ReasonUnsupportedProviderData,
+					fmt.Sprintf("$.content[%d]", index),
+					errors.New("only function tool calls can be encoded for Anthropic Messages"),
+				)
+			}
 			content[index] = anthropicResponseContentWire{
 				Type:  "tool_use",
 				ID:    block.ToolCall.Key.WireID(),

@@ -196,6 +196,13 @@ func (call ToolCall) Validate() error {
 		); err != nil {
 			return err
 		}
+	case ToolKindProviderAction:
+		if call.Arguments.IsZero() {
+			return errors.New("provider action does not carry its native item")
+		}
+		if call.Input != "" || call.Namespace != "" {
+			return errors.New("provider action contains portable call fields")
+		}
 	default:
 		return errors.New("tool call kind is unsupported")
 	}
@@ -467,6 +474,12 @@ const (
 	// Native definitions are meaningful only in their original wire dialect.
 	// They do not assert where a tool executes or grant any execution authority.
 	ToolKindNative ToolKind = "native"
+	// A provider action is an upstream output item that its dialect does not
+	// model. The client may execute it, so it is always an unproven action:
+	// the Environment tool policy decides whether it may pass. Its arguments
+	// are the complete native item; it exists only as a call, never as a
+	// definition, and no other dialect can encode it.
+	ToolKindProviderAction ToolKind = "provider_action"
 )
 
 type CustomToolFormatKind string

@@ -190,25 +190,6 @@ func TestProviderResponseAcceptsCurrentOpaqueCodexOutputItems(t *testing.T) {
 		})
 	}
 
-	localShell := []byte(`{
-		"id":"resp_shell",
-		"created_at":1,
-		"status":"completed",
-		"model":"provider-model",
-		"output":[{
-			"type":"local_shell_call",
-			"call_id":"shell_1",
-			"status":"completed",
-			"action":{"type":"exec","command":"pwd"}
-		}],
-		"usage":{}
-	}`)
-	if _, _, err := newTestCodec(t).DecodeProviderResponse(
-		streamingRequestFixture(t),
-		localShell,
-	); protocolcore.ReasonOf(err) != protocolcore.ReasonUnsupportedProviderData {
-		t.Fatalf("active local shell output error = %v", err)
-	}
 }
 
 func TestProviderStreamUsesCompletedItemsWhenTerminalOutputIsEmpty(t *testing.T) {
