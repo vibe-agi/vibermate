@@ -5,6 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:vibermate_app/core/api/control_api.dart' show ControlProblem;
 import 'package:vibermate_app/core/api/control_models.dart';
 import 'package:vibermate_app/core/design/viber_theme.dart';
+import 'package:vibermate_app/core/design/workbench_widgets.dart';
 import 'package:vibermate_app/core/i18n/app_copy.dart';
 import 'package:vibermate_app/core/preferences/workbench_preferences.dart';
 import 'package:vibermate_app/features/workbench/usage_dashboard_view.dart';
@@ -87,6 +88,7 @@ Widget dashboard(UsagePageLoader loadPage, {RuntimeUsageReport? summary}) =>
     );
 
 void main() {
+  mainSnapshotSemantics();
   for (final reason in ['runtime_unavailable', 'usage_snapshot_changed']) {
     testWidgets('failed navigation retains its page and rows: $reason', (
       tester,
@@ -118,6 +120,18 @@ void main() {
       expect(find.text('Page 2'), findsNothing);
       expect(requests, lessThanOrEqualTo(6));
       fail = false;
+      if (reason == 'usage_snapshot_changed') {
+        // An expired snapshot cannot be paged; only an update continues.
+        expect(find.textContaining('Usage changed.'), findsOneWidget);
+        final next = tester.widget<IconButton>(
+          find.ancestor(
+            of: find.byTooltip('Next page'),
+            matching: find.byType(IconButton),
+          ),
+        );
+        expect(next.onPressed, isNull);
+        return;
+      }
       await tester.tap(find.byTooltip('Next page'));
       await tester.pumpAndSettle();
       expect(find.text('Page 2'), findsOneWidget);
@@ -337,6 +351,138 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('usage-expand-model-0')), findsOneWidget);
     expect(find.byKey(const Key('usage-expand-project-0')), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+}
+
+/// Mirrors the Runtime: a snapshot names one complete state of the period, and
+/// any request that names an older snapshot is refused once usage changes.
+final class _SnapshotServer {
+  String current = 'a' * 64;
+  final requests = <RuntimeUsageQuery>[];
+  bool changeOnEverySummary = false;
+  bool unavailable = false;
+
+  var _version = 0;
+
+  void change() {
+    _version++;
+    current = _version.toRadixString(16).padLeft(64, 'b');
+  }
+
+  Future<RuntimeUsageReport> load(RuntimeUsageQuery query) async {
+    requests.add(query);
+    if (unavailable) {
+      throw const ControlProblem(
+        status: 503,
+        reasonCode: 'runtime_unavailable',
+        messageKey: 'runtime_unavailable',
+      );
+    }
+    if (query.snapshot.isNotEmpty && query.snapshot != current) {
+      throw const ControlProblem(
+        status: 409,
+        reasonCode: 'usage_snapshot_changed',
+        messageKey: 'usage_snapshot_changed',
+      );
+    }
+    final served = report(query: query, snapshot: current);
+    // Continuous writes: new usage lands between a summary and its page.
+    if (query.groupBy.isEmpty && changeOnEverySummary) change();
+    return served;
+  }
+}
+
+void mainSnapshotSemantics() {
+  testWidgets('an expired snapshot never moves a reader to another page', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1440, 900));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final server = _SnapshotServer();
+    await tester.pumpWidget(
+      dashboard(server.load, summary: report(snapshot: server.current)),
+    );
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(find.byTooltip('Next page'));
+    await tester.tap(find.byTooltip('Next page'));
+    await tester.pumpAndSettle();
+    expect(find.text('Page 2'), findsOneWidget);
+
+    server.change();
+    await tester.tap(find.byTooltip('Previous page'));
+    await tester.pumpAndSettle();
+    expect(find.text('Page 2'), findsOneWidget);
+    expect(find.byKey(const Key('usage-expand-project-50')), findsOneWidget);
+    expect(find.textContaining('Usage changed.'), findsOneWidget);
+    final previous = tester.widget<IconButton>(
+      find.ancestor(
+        of: find.byTooltip('Previous page'),
+        matching: find.byType(IconButton),
+      ),
+    );
+    expect(previous.onPressed, isNull);
+
+    final update = find.byKey(const Key('usage-breakdown-update'));
+    await tester.ensureVisible(update);
+    await tester.tap(update);
+    await tester.pumpAndSettle();
+    expect(find.text('Page 1'), findsOneWidget);
+    expect(server.requests.last.snapshot, server.current);
+    expect(find.textContaining('Usage changed.'), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('a drill-down that cannot settle keeps the previous level', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1440, 900));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final server = _SnapshotServer();
+    await tester.pumpWidget(
+      dashboard(server.load, summary: report(snapshot: server.current)),
+    );
+    await tester.pumpAndSettle();
+    server
+      ..change()
+      ..changeOnEverySummary = true;
+    final expand = find.byKey(const Key('usage-expand-project-0'));
+    await tester.ensureVisible(expand);
+    await tester.tap(expand);
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('usage-expand-project-0')), findsOneWidget);
+    expect(find.byKey(const Key('usage-expand-alice')), findsNothing);
+    expect(find.textContaining('Usage changed.'), findsOneWidget);
+    expect(find.text('Selection subtotal'), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('an unavailable Runtime is shown as an error with retry', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1440, 900));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final server = _SnapshotServer();
+    await tester.pumpWidget(
+      dashboard(server.load, summary: report(snapshot: server.current)),
+    );
+    await tester.pumpAndSettle();
+    server.unavailable = true;
+    await tester.ensureVisible(find.byTooltip('Next page'));
+    await tester.tap(find.byTooltip('Next page'));
+    await tester.pumpAndSettle();
+    expect(find.text('Page 1'), findsOneWidget);
+    final notice = find.widgetWithText(
+      InlineNotice,
+      'Could not load this breakdown.',
+    );
+    expect(notice, findsOneWidget);
+    expect(tester.widget<InlineNotice>(notice).error, isTrue);
+    server.unavailable = false;
+    await tester.tap(find.descendant(of: notice, matching: find.text('Retry')));
+    await tester.pumpAndSettle();
+    expect(find.text('Page 2'), findsOneWidget);
+    expect(find.text('Could not load this breakdown.'), findsNothing);
     expect(tester.takeException(), isNull);
   });
 }
