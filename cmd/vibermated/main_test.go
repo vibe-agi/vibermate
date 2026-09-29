@@ -441,3 +441,29 @@ func TestParseCACertificateArgumentsUsesTheServerDataDirectory(t *testing.T) {
 		}
 	}
 }
+
+func TestParseServerArgumentsTrustsOnlyListedLoadBalancers(t *testing.T) {
+	t.Parallel()
+
+	base := []string{"--data-dir", filepath.Join(t.TempDir(), "data"), "--transport", "http"}
+	config, err := parseServerArguments(append(base, "--trusted-proxies", "10.0.0.0/24,10.0.1.7"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := config.trustedProxies.Entries(); len(got) != 2 || got[0] != "10.0.0.0/24" || got[1] != "10.0.1.7" {
+		t.Fatalf("trusted proxies = %q", got)
+	}
+	if config, err := parseServerArguments(append(base, "--trusted-proxies=none")); err != nil ||
+		config.trustedProxies.Len() != 0 {
+		t.Fatalf("none = %+v, %v", config.trustedProxies, err)
+	}
+	for _, value := range []string{"0.0.0.0/0", "10.0.0.0/8,::/0", "10.0.0.7/8", "load-balancer", ""} {
+		if _, err := parseServerArguments(append(base, "--trusted-proxies="+value)); err == nil {
+			t.Errorf("--trusted-proxies=%q was accepted", value)
+		}
+	}
+	if _, err := parseServerArguments(append(base,
+		"--trusted-proxies", "10.0.0.0/24", "--trusted-proxies", "10.0.1.0/24")); err == nil {
+		t.Fatal("--trusted-proxies was accepted twice")
+	}
+}

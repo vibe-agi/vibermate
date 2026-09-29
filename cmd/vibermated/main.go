@@ -16,6 +16,7 @@ import (
 
 	"github.com/vibe-agi/vibermate/internal/desktopdaemon"
 	"github.com/vibe-agi/vibermate/internal/hostsecret"
+	"github.com/vibe-agi/vibermate/internal/ipallowlist"
 	"github.com/vibe-agi/vibermate/internal/localca"
 	"github.com/vibe-agi/vibermate/internal/serveradmin"
 	"github.com/vibe-agi/vibermate/internal/serverconnection"
@@ -61,6 +62,9 @@ func main() {
 		if len(os.Args) > 2 && os.Args[2] == "ca-certificate" {
 			runServerCACertificate(os.Args[3:])
 			return
+		}
+		if len(os.Args) > 2 && os.Args[2] == "ip-allowlist" {
+			os.Exit(runServerIPAllowlist(os.Args[3:], os.Stdout, os.Stderr))
 		}
 		if len(os.Args) == 3 && (os.Args[2] == "--help" || os.Args[2] == "-h") {
 			fmt.Fprint(os.Stdout, serverHelp)
@@ -141,9 +145,14 @@ Automatic public HTTPS (public TCP 443 must reach the listener):
     --acme-agree-terms --acme-email admin@example.com \
     --acme-challenge tls_alpn_01
 
+Behind a layer-4 load balancer that sends PROXY protocol headers, trust only
+the load balancer's own addresses so the IP allowlist sees real clients:
+  vibermated server ... --trusted-proxies 10.0.0.0/24
+
 Server-local bootstrap commands:
   vibermated server recovery-key [--data-dir /absolute/path]
   vibermated server ca-certificate [--data-dir /absolute/path]
+  vibermated server ip-allowlist [clear] [--data-dir /absolute/path]
 
 Offline data commands (stop the Runtime first):
   vibermated backup-data --source /absolute/data --target /absolute/new-backup
@@ -282,11 +291,12 @@ func directManagementUIRoot(root string, optional bool) (string, error) {
 }
 
 type serverCommandConfig struct {
-	dataDirectory string
-	listenAddress string
-	accessAddress string
-	webRoot       string
-	transport     serverhost.TransportOptions
+	dataDirectory  string
+	listenAddress  string
+	accessAddress  string
+	webRoot        string
+	transport      serverhost.TransportOptions
+	trustedProxies ipallowlist.List
 }
 
 func runServer(arguments []string) {
@@ -332,6 +342,7 @@ func runServer(arguments []string) {
 		os.Exit(1)
 	}
 	options.Host.AccessAddress = config.accessAddress
+	options.Host.TrustedProxies = config.trustedProxies
 	if err := serverdaemon.Run(ctx, options); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
@@ -351,7 +362,7 @@ func parseServerArguments(arguments []string) (serverCommandConfig, error) {
 		case "--data-dir", "--listen", "--access-address", "--web-root",
 			"--transport", "--tls-cert", "--tls-key", "--tls-hosts",
 			"--acme-email", "--acme-challenge", "--acme-http-port", "--acme-ca",
-			"--acme-agree-terms":
+			"--acme-agree-terms", "--trusted-proxies":
 		default:
 			return serverCommandConfig{}, errors.New("vibermated server received an unsupported argument")
 		}
@@ -407,6 +418,12 @@ func parseServerArguments(arguments []string) (serverCommandConfig, error) {
 			config.transport.Automatic.CA = value
 		case "--acme-agree-terms":
 			config.transport.Automatic.TermsAgreed = true
+		case "--trusted-proxies":
+			proxies, parseErr := parseTrustedProxies(value)
+			if parseErr != nil {
+				return serverCommandConfig{}, parseErr
+			}
+			config.trustedProxies = proxies
 		}
 	}
 	if config.dataDirectory == "" {
@@ -587,4 +604,22 @@ func parseCommandConfig(arguments []string) (commandConfig, error) {
 		)
 	}
 	return config, nil
+}
+
+// parseTrustedProxies reads --trusted-proxies: the layer-4 load balancers
+// whose PROXY protocol header names the client, or "none".
+func parseTrustedProxies(value string) (ipallowlist.List, error) {
+	if value == "none" {
+		return ipallowlist.List{}, nil
+	}
+	proxies, err := ipallowlist.Parse(strings.Split(value, ","))
+	if err != nil {
+		return ipallowlist.List{}, fmt.Errorf("--trusted-proxies is invalid: %w", err)
+	}
+	if proxies.HasCatchAll() {
+		return ipallowlist.List{}, errors.New(
+			"--trusted-proxies cannot include every address: list only your load balancers",
+		)
+	}
+	return proxies, nil
 }

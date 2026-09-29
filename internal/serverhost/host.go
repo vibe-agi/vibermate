@@ -20,6 +20,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/clientadapter"
 	"github.com/vibe-agi/vibermate/internal/controlprincipal"
 	"github.com/vibe-agi/vibermate/internal/instanceguard"
+	"github.com/vibe-agi/vibermate/internal/ipallowlist"
 	"github.com/vibe-agi/vibermate/internal/modelcatalog"
 	"github.com/vibe-agi/vibermate/internal/productruntime"
 	"github.com/vibe-agi/vibermate/internal/runtimecontrol"
@@ -62,6 +63,11 @@ type Status struct {
 	TLSError        string `json:"tlsError,omitempty"`
 	RecoveryKeyPath string `json:"recoveryKeyPath"`
 	ManagementUI    bool   `json:"managementUi"`
+	// IPAllowlistRanges is how many networks may connect; 0 allows every address.
+	IPAllowlistRanges int `json:"ipAllowlistRanges"`
+	// TrustedProxyRanges is how many load balancer networks may name clients
+	// with a PROXY protocol header.
+	TrustedProxyRanges int `json:"trustedProxyRanges"`
 }
 
 type Host struct {
@@ -78,6 +84,9 @@ type Host struct {
 	managementUI   bool
 	ownsRuntime    bool
 	managementHTTP http.Handler
+	ipAllowlist    *ipAllowlist
+	stopWatching   chan struct{}
+	stopOnce       sync.Once
 
 	done       chan struct{}
 	shutdownMu sync.Mutex
@@ -124,6 +133,7 @@ func Start(ctx context.Context, options Options) (*Host, error) {
 	attached.AdminSessionLifetime = options.AdminSessionLifetime
 	attached.CaptureRunLifetime = options.CaptureRunLifetime
 	attached.ShutdownTimeout = options.ShutdownTimeout
+	attached.TrustedProxies = options.TrustedProxies
 	host, err := startAttached(ctx, attached, guard, true)
 	if err == nil {
 		return host, nil
@@ -307,9 +317,22 @@ func startAttached(
 	if err != nil {
 		return nil, err
 	}
+	allowlistStore, err := ipallowlist.Open(
+		filepath.Join(options.DataDirectory, "server-admin"), options.Clock.Now,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("open Runtime Server IP allowlist: %w", err)
+	}
+	allowlist := &ipAllowlist{
+		store: allowlistStore,
+		gate: newConnectionGate(
+			allowlistStore.Current().List, options.TrustedProxies, options.Clock.Now,
+		),
+	}
 	transport, err := prepareTransport(
 		ctx,
 		listener,
+		allowlist.gate,
 		options.Transport,
 		options.AccessAddress,
 		options.DataDirectory,
@@ -343,8 +366,21 @@ func startAttached(
 	if err != nil {
 		return nil, err
 	}
+	remoteIPAllowlist, err := servercontrol.NewServerIPAllowlist(
+		servercontrol.ServerIPAllowlistOptions{Allowlist: allowlist},
+	)
+	if err != nil {
+		return nil, err
+	}
+	localIPAllowlist, err := servercontrol.NewServerIPAllowlist(
+		servercontrol.ServerIPAllowlistOptions{Allowlist: allowlist, Local: true},
+	)
+	if err != nil {
+		return nil, err
+	}
 	localManagement := serverManagementRouter{
 		access: serverAccess, runtimeUsers: localRuntimeUsers,
+		ipAllowlist: localIPAllowlist,
 	}
 	rootCA := servercontrol.NewRuntimeRootCA(func() []byte {
 		return runtime.LocalRootCertificate().CertificatePEM()
@@ -360,13 +396,15 @@ func startAttached(
 		managementUI:   managementUI != nil,
 		ownsRuntime:    ownsRuntime,
 		managementHTTP: localManagement,
+		ipAllowlist:    allowlist,
+		stopWatching:   make(chan struct{}),
 		done:           make(chan struct{}),
 	}
 	host.server = &http.Server{
 		Handler: router{
 			scheme:       transport.scheme,
 			userSessions: userSessions, runtimeUsers: runtimeUsers, access: serverAccess,
-			rootCA:  rootCA,
+			rootCA: rootCA, ipAllowlist: remoteIPAllowlist,
 			capture: capture, manual: manual, manualOwner: manualOwner,
 			proxy:         runtime.ProxyHandler(),
 			adminSessions: adminSessions, admin: admin,
@@ -378,6 +416,7 @@ func startAttached(
 		MaxHeaderBytes:    64 << 10,
 	}
 	go host.serve()
+	go allowlist.watch(host.stopWatching, ipAllowlistReloadInterval)
 	started = true
 	return host, nil
 }
@@ -416,6 +455,18 @@ func (host *Host) Status() Status {
 		TLSError:        tlsStatus.lastError,
 		RecoveryKeyPath: host.admin.AccessKeyPath(),
 		ManagementUI:    host.managementUI,
+		IPAllowlistRanges: func() int {
+			if host.ipAllowlist == nil {
+				return 0
+			}
+			return host.ipAllowlist.Current().List.Len()
+		}(),
+		TrustedProxyRanges: func() int {
+			if host.ipAllowlist == nil {
+				return 0
+			}
+			return host.ipAllowlist.TrustedProxies().Len()
+		}(),
 	}
 }
 
@@ -449,6 +500,11 @@ func (host *Host) Shutdown(ctx context.Context) error {
 	if host.closed {
 		return host.closeErr
 	}
+	host.stopOnce.Do(func() {
+		if host.stopWatching != nil {
+			close(host.stopWatching)
+		}
+	})
 	if err := ctx.Err(); err != nil {
 		return err
 	}

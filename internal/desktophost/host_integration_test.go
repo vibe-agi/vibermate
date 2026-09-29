@@ -230,6 +230,41 @@ func TestMacHostSharesOneRuntimeWithItsRemoteServerBoundary(t *testing.T) {
 		access.Authentication != servercontrol.RuntimeUserPasswordAuthentication {
 		t.Fatalf("local Server access = %+v", access)
 	}
+	// The App manages the attached Server's IP allowlist without a requester
+	// check: its own requests never cross the Server listener.
+	allowlistRequest, err := http.NewRequest(
+		http.MethodPut,
+		host.AppSession().BaseURL+servercontrol.ServerIPAllowlistPath,
+		strings.NewReader(`{"revision":0,"ranges":["203.0.113.0/24"]}`),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	allowlistRequest.Header.Set("Origin", "vibermate://desktop")
+	allowlistRequest.Header.Set("Sec-Fetch-Site", "cross-site")
+	allowlistRequest.Header.Set("Sec-Fetch-Mode", "cors")
+	allowlistRequest.Header.Set("Sec-Fetch-Dest", "empty")
+	allowlistRequest.Header.Set("Content-Type", "application/json")
+	allowlistRequest.Header.Set("Authorization", "Bearer "+host.AppSession().WriteToken)
+	allowlistResponse, err := (&http.Client{Timeout: 5 * time.Second}).Do(allowlistRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var allowlist struct {
+		Revision      int64    `json:"revision"`
+		Ranges        []string `json:"ranges"`
+		ClientAddress string   `json:"clientAddress"`
+	}
+	if err := json.NewDecoder(allowlistResponse.Body).Decode(&allowlist); err != nil {
+		t.Fatal(err)
+	}
+	allowlistResponse.Body.Close()
+	if allowlistResponse.StatusCode != http.StatusOK || allowlist.Revision != 1 ||
+		len(allowlist.Ranges) != 1 || allowlist.ClientAddress != "" ||
+		host.RemoteServerStatus().IPAllowlistRanges != 1 {
+		t.Fatalf("App IP allowlist save status=%d body=%+v", allowlistResponse.StatusCode, allowlist)
+	}
+
 	createPayload, err := json.Marshal(servercontrol.RuntimeUserCreate{
 		Schema:   servercontrol.RuntimeUserCreateSchema,
 		Username: "mac-client", Password: "test-mac-client-password",
