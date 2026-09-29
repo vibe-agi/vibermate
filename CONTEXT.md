@@ -24,6 +24,14 @@ _Avoid_: Proxy CA, intercepted host certificate, universal Runtime certificate
 The Runtime-owned authority that signs authorized AI destination certificates inside intercepted connections. Trusting it enables inspection of those destinations; it does not establish trust in an independently issued Server HTTPS Identity.
 _Avoid_: Server certificate, browser certificate, universal Runtime CA
 
+**Server IP Allowlist**:
+The networks whose clients may connect to a Runtime Server, applied to every connection before TLS or HTTP. An empty list allows every address, loopback is always allowed, and the Server Owner edits it; a list that would disconnect the Owner saving it is refused.
+_Avoid_: firewall, IP filter, Connection Policy
+
+**Trusted Proxy**:
+A layer-4 load balancer, listed when the Runtime Server starts, whose PROXY protocol header names the client it relays. Only connections from Trusted Proxies may name a client; HTTP forwarding headers are never trusted.
+_Avoid_: reverse proxy, X-Forwarded-For, gateway
+
 **Server Access Address**:
 An explicit client-reachable URL for connecting to a Runtime Server. It is distinct from the server's listening socket, a container's internal address, and an upstream AI destination.
 _Avoid_: bind address, upstream origin, certificate name

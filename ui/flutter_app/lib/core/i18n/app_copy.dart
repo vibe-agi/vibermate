@@ -131,6 +131,16 @@ final class AppCopy {
         'This policy review is no longer current. Review the draft again before publishing.',
     'error.configuration_invalid':
         'These settings could not be accepted. Check the selected service, account and required fields, then try again.',
+    'error.ip_allowlist_entry_invalid':
+        'An IP allowlist entry is not a valid network.',
+    'error.ip_allowlist_excludes_requester':
+        'The IP allowlist would disconnect you. Include your own address.',
+    'error.ip_allowlist_too_long': 'The IP allowlist has too many entries.',
+    'error.ip_allowlist_conflict':
+        'The IP allowlist was changed elsewhere. Review the latest version and save again.',
+    'error.ip_allowlist_unavailable':
+        'The IP allowlist could not be saved. Try again.',
+    'error.invalid_ip_allowlist': 'The IP allowlist request was invalid.',
     'error.runtime_user_policy_invalid':
         'The user policy is invalid. Select at least one traffic policy or allow all, and use non-negative warning values.',
     'error.runtime_user_policy_unavailable':
@@ -2288,6 +2298,50 @@ final class AppCopy {
     'updates.no_auto_install':
         'ViberMate never downloads or installs an update in the background, and never replaces files during an active Capture or data operation.',
     'server.access.title': 'Web & client access',
+    'server.ip_allowlist.title': 'IP allowlist',
+    'server.ip_allowlist.help':
+        'Only clients whose address is inside one of these networks can reach this Server: the Web workbench, sign-in and Agent traffic. Leave the list empty to allow any address. The Server machine itself is always allowed. If no allowed network can reach the Server any more, run vibermated server ip-allowlist clear on the Server machine.',
+    'server.ip_allowlist.open': 'Any address can connect.',
+    'server.ip_allowlist.restricted':
+        'Only the networks below can connect ({count}).',
+    'server.ip_allowlist.client': 'This browser connects from {address}.',
+    'server.ip_allowlist.app':
+        'This App manages the Server on this computer and is always allowed.',
+    'server.ip_allowlist.field': 'Allowed networks, one per line',
+    'server.ip_allowlist.trusted':
+        'Client addresses come from the PROXY protocol headers of the load balancers at {proxies}. This is set when the Server starts.',
+    'server.ip_allowlist.loopback_hint':
+        'Your browser reaches the Server from this machine ({address}), which is always allowed. If you actually connect through a tunnel such as frp, cloudflared or an SSH port forward, every client arrives this way and the allowlist cannot tell them apart: use a load balancer with PROXY protocol, or let clients connect to the Server directly.',
+    'server.ip_allowlist.private_hint':
+        '{address} is a private address. If the Server is behind a load balancer, a NAT gateway or Docker Desktop, it may be that device rather than your browser; see the deployment guide before relying on the allowlist.',
+    'server.ip_allowlist.proxy_problems':
+        'Connections from a trusted load balancer without a valid PROXY protocol header: {count}. They are judged by the load balancer\'s own address. Turn on PROXY protocol on the load balancer, or start the Server without --trusted-proxies.',
+    'server.ip_allowlist.save': 'Save',
+    'server.ip_allowlist.add_mine': 'Add my address',
+    'server.ip_allowlist.revert': 'Discard changes',
+    'server.ip_allowlist.saved': 'Saved. The list is in effect now.',
+    'server.ip_allowlist.unavailable': 'The IP allowlist could not be loaded.',
+    'server.ip_allowlist.refused':
+        'Connections refused since the Server started: {count}. The latest came from {address} at {time}.',
+    'server.ip_allowlist.refused_count':
+        'Connections refused since the Server started: {count}.',
+    'server.ip_allowlist.error.line': 'Line {line}: {reason}',
+    'server.ip_allowlist.reason.syntax':
+        'not an IP address or a CIDR network such as 203.0.113.0/24.',
+    'server.ip_allowlist.reason.host_bits':
+        'the address does not start its network. Did you mean {suggestion}?',
+    'server.ip_allowlist.reason.zone':
+        'remove the % and the interface name after it.',
+    'server.ip_allowlist.reason.ipv4_mapped':
+        'write the IPv4 address without the ::ffff: prefix.',
+    'server.ip_allowlist.reason.empty': 'the entry is empty.',
+    'server.ip_allowlist.reason.length': 'the entry is too long.',
+    'server.ip_allowlist.error.excludes':
+        'Not saved: this browser connects from {address}, which the list does not include, so saving would disconnect you. Add your address or a network that contains it.',
+    'server.ip_allowlist.error.too_long': 'Keep at most {max} entries.',
+    'server.ip_allowlist.error.conflict':
+        'The list was changed elsewhere. The latest version is shown; review it and save again.',
+    'server.ip_allowlist.error.failed': 'The list was not saved: {error}',
     'server.access.description':
         'Use your personal Runtime username and password. Install the vibermate CLI and your Agent on the client computer before running these commands.',
     'server.access.loading': 'Reading Server access…',
@@ -2802,6 +2856,12 @@ final class AppCopy {
     'error.configuration_conflict': '配置已被其他操作更新，本次修改未保存。请刷新页面后重新检查修改内容。',
     'error.policy_review_stale': '本次策略检查已失效。请重新检查草稿，再发布策略。',
     'error.configuration_invalid': '设置未通过校验。请检查所选服务、账号和必填项后重试。',
+    'error.ip_allowlist_entry_invalid': 'IP 白名单中有无效的网段。',
+    'error.ip_allowlist_excludes_requester': '这个 IP 白名单会把你断开，请包含你自己的地址。',
+    'error.ip_allowlist_too_long': 'IP 白名单的条目过多。',
+    'error.ip_allowlist_conflict': 'IP 白名单已在别处被修改，请检查最新版本后再保存。',
+    'error.ip_allowlist_unavailable': 'IP 白名单暂时无法保存，请重试。',
+    'error.invalid_ip_allowlist': 'IP 白名单请求无效。',
     'error.runtime_user_policy_invalid': '运行用户策略无效。请选择至少一个流量策略或允许全部，并填写非负告警值。',
     'error.runtime_user_policy_unavailable': '运行用户策略未能保存。请刷新用户列表后重试。',
     'error.dry_run_flow_not_matched': '这条请求没有匹配当前请求来源。请检查路径和协议。',
@@ -4618,6 +4678,43 @@ final class AppCopy {
     'updates.no_auto_install':
         'ViberMate 不会在后台下载或安装更新，也不会在活动 Capture 或数据操作期间替换文件。',
     'server.access.title': '网页与客户端接入',
+    'server.ip_allowlist.title': 'IP 白名单',
+    'server.ip_allowlist.help':
+        '只有地址属于这些网段的客户端才能连接本 Server，包括 Web 工作台、登录和 Agent 流量。列表为空表示允许任何地址。Server 所在的机器本身始终允许访问。如果没有任何允许的网络还能连上 Server，请在 Server 机器上运行 vibermated server ip-allowlist clear。',
+    'server.ip_allowlist.open': '任何地址都可以连接。',
+    'server.ip_allowlist.restricted': '只有下面的网段可以连接（{count} 个）。',
+    'server.ip_allowlist.client': '当前浏览器的地址是 {address}。',
+    'server.ip_allowlist.app': '本 App 在这台电脑上管理 Server，始终允许访问。',
+    'server.ip_allowlist.field': '允许的网段，每行一个',
+    'server.ip_allowlist.trusted':
+        '客户端地址取自负载均衡 {proxies} 发来的 PROXY protocol 头。此项在 Server 启动时设置。',
+    'server.ip_allowlist.loopback_hint':
+        '你的浏览器是从 Server 所在机器本身（{address}）连接的，这类连接始终允许。如果你实际是经由 frp、cloudflared 或 SSH 端口转发之类的隧道连接，所有客户端都会以这种方式到达，白名单无法区分它们：请使用支持 PROXY protocol 的负载均衡，或让客户端直接连接 Server。',
+    'server.ip_allowlist.private_hint':
+        '{address} 是内网地址。如果 Server 位于负载均衡、NAT 网关或 Docker Desktop 之后，这可能是那台设备的地址，而不是你的浏览器；依赖白名单之前请先阅读部署指南。',
+    'server.ip_allowlist.proxy_problems':
+        '有 {count} 个来自可信负载均衡的连接没有有效的 PROXY protocol 头，已按负载均衡自身的地址判断。请在负载均衡上开启 PROXY protocol，或者启动 Server 时不要设置 --trusted-proxies。',
+    'server.ip_allowlist.save': '保存',
+    'server.ip_allowlist.add_mine': '添加我的地址',
+    'server.ip_allowlist.revert': '放弃修改',
+    'server.ip_allowlist.saved': '已保存，立即生效。',
+    'server.ip_allowlist.unavailable': '无法读取 IP 白名单。',
+    'server.ip_allowlist.refused':
+        'Server 启动以来已拒绝 {count} 个连接，最近一次来自 {address}（{time}）。',
+    'server.ip_allowlist.refused_count': 'Server 启动以来已拒绝 {count} 个连接。',
+    'server.ip_allowlist.error.line': '第 {line} 行：{reason}',
+    'server.ip_allowlist.reason.syntax':
+        '不是有效的 IP 地址或 CIDR 网段（例如 203.0.113.0/24）。',
+    'server.ip_allowlist.reason.host_bits': '地址不是网段的起始地址，是否应为 {suggestion}？',
+    'server.ip_allowlist.reason.zone': '请去掉 % 及其后面的网卡名。',
+    'server.ip_allowlist.reason.ipv4_mapped': '请直接写 IPv4 地址，不要带 ::ffff: 前缀。',
+    'server.ip_allowlist.reason.empty': '内容为空。',
+    'server.ip_allowlist.reason.length': '内容过长。',
+    'server.ip_allowlist.error.excludes':
+        '未保存：当前浏览器的地址 {address} 不在列表中，保存后你会被断开。请添加你的地址或包含它的网段。',
+    'server.ip_allowlist.error.too_long': '最多保留 {max} 条。',
+    'server.ip_allowlist.error.conflict': '白名单已在别处被修改。下面显示的是最新版本，请检查后再保存。',
+    'server.ip_allowlist.error.failed': '白名单未保存：{error}',
     'server.access.description':
         '使用你的个人运行用户账号和密码。执行下列命令前，请先在客户端电脑上安装 vibermate CLI 和要使用的 Agent。',
     'server.access.loading': '正在读取 Server 访问方式…',

@@ -253,6 +253,7 @@ func (router *Router) ServeHTTP(
 
 func serverManagementPath(path string) bool {
 	return path == servercontrol.ServerAccessPath ||
+		path == servercontrol.ServerIPAllowlistPath ||
 		path == servercontrol.RuntimeRootCAPath ||
 		path == servercontrol.RuntimeUsersPath ||
 		strings.HasPrefix(path, servercontrol.RuntimeUsersPath+"/")
@@ -262,7 +263,7 @@ func serverManagementScope(method string) Scope {
 	switch method {
 	case http.MethodGet:
 		return ScopeRead
-	case http.MethodPost, http.MethodPatch:
+	case http.MethodPost, http.MethodPatch, http.MethodPut:
 		return ScopeWrite
 	default:
 		return ""

@@ -27,6 +27,7 @@ type router struct {
 	runtimeUsers  http.Handler
 	access        http.Handler
 	rootCA        http.Handler
+	ipAllowlist   http.Handler
 	capture       http.Handler
 	manual        *capturecontrol.ManualHandler
 	manualOwner   controlprincipal.Principal
@@ -89,6 +90,15 @@ func (handler router) ServeHTTP(writer http.ResponseWriter, request *http.Reques
 			return
 		}
 		handler.access.ServeHTTP(writer, request)
+	case request.URL.Path == servercontrol.ServerIPAllowlistPath:
+		scope := serveradmin.ScopeRead
+		if request.Method != http.MethodGet {
+			scope = serveradmin.ScopeWrite
+		}
+		if !handler.authorizeAdmin(writer, request, scope) {
+			return
+		}
+		handler.ipAllowlist.ServeHTTP(writer, request)
 	case request.URL.Path == servercontrol.RuntimeRootCAPath:
 		if !handler.authorizeAdmin(writer, request, serveradmin.ScopeRead) {
 			return

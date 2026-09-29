@@ -14,6 +14,7 @@ type serverManagementRouter struct {
 	access       http.Handler
 	rootCA       http.Handler
 	runtimeUsers http.Handler
+	ipAllowlist  http.Handler
 }
 
 func (router serverManagementRouter) ServeHTTP(
@@ -27,6 +28,8 @@ func (router serverManagementRouter) ServeHTTP(
 	switch {
 	case request.URL.Path == servercontrol.ServerAccessPath:
 		router.access.ServeHTTP(writer, request)
+	case request.URL.Path == servercontrol.ServerIPAllowlistPath && router.ipAllowlist != nil:
+		router.ipAllowlist.ServeHTTP(writer, request)
 	case request.URL.Path == servercontrol.RuntimeRootCAPath && router.rootCA != nil:
 		router.rootCA.ServeHTTP(writer, request)
 	case request.URL.Path == servercontrol.RuntimeUsersPath ||

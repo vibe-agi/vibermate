@@ -160,6 +160,10 @@ vibermate trust --server https://runtime.example.com:443 --system-roots
   mean to delete the identity, accounts and evidence for good.
 - For stopping, logs, the recovery key and rollback, always pass the same
   `--env-file` and `-f` you started with.
+- To limit which networks can connect, use the IP allowlist described in the
+  [deployment guide](deployment.md#limit-who-can-connect-ip-allowlist). Behind a
+  layer-4 load balancer that hides client addresses, set
+  `VIBERMATE_TRUSTED_PROXIES` to the load balancer's own addresses.
 - An external HTTP reverse proxy may break CONNECT on the same port. If you need
   a gateway, verify layer-4 passthrough; testing that the Web page opens is not
   enough.

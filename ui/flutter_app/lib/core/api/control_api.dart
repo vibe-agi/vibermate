@@ -177,6 +177,15 @@ abstract interface class ControlApi {
 
   Future<RuntimeServerAccess> serverAccess();
 
+  /// The networks allowed to connect to this Runtime Server.
+  Future<ServerIpAllowlist> serverIpAllowlist();
+
+  /// Replaces the allowlist when [revision] is still the stored one.
+  Future<ServerIpAllowlist> replaceServerIpAllowlist({
+    required int revision,
+    required List<String> ranges,
+  });
+
   Future<RuntimeRootCertificate> runtimeRootCA();
 
   Future<List<RuntimeUser>> runtimeUsers();
@@ -357,6 +366,11 @@ final class ControlProblem implements Exception {
     required this.reasonCode,
     required this.messageKey,
     this.detail,
+    this.entry,
+    this.reason,
+    this.suggestion,
+    this.clientAddress,
+    this.maxEntries,
   });
 
   factory ControlProblem.fromJson(Object? json, {required int status}) {
@@ -365,7 +379,14 @@ final class ControlProblem implements Exception {
       value,
       'problem',
       required: const {'type', 'title', 'status', 'code'},
-      optional: const {'detail'},
+      optional: const {
+        'detail',
+        'entry',
+        'reason',
+        'suggestion',
+        'clientAddress',
+        'maxRanges',
+      },
     );
     final wireStatus = requireInteger(value, 'status', 'problem', minimum: 100);
     final code = requireString(value, 'code', 'problem');
@@ -382,11 +403,33 @@ final class ControlProblem implements Exception {
     if (detail != null && detail.length > 4096) {
       throw const ControlContractException('problem response is invalid');
     }
+    String? shortText(String name) {
+      if (!value.containsKey(name)) return null;
+      final text = requireString(value, name, 'problem');
+      if (text.isEmpty || text.length > 128) {
+        throw const ControlContractException('problem response is invalid');
+      }
+      return text;
+    }
+
+    final reason = shortText('reason');
+    if (reason != null && !RegExp(r'^[a-z][a-z0-9_]{0,63}$').hasMatch(reason)) {
+      throw const ControlContractException('problem response is invalid');
+    }
     return ControlProblem(
       status: status,
       reasonCode: code,
       messageKey: 'error.$code',
       detail: detail,
+      entry: value.containsKey('entry')
+          ? requireInteger(value, 'entry', 'problem')
+          : null,
+      reason: reason,
+      suggestion: shortText('suggestion'),
+      clientAddress: shortText('clientAddress'),
+      maxEntries: value.containsKey('maxRanges')
+          ? requireInteger(value, 'maxRanges', 'problem', minimum: 1)
+          : null,
     );
   }
 
@@ -394,6 +437,21 @@ final class ControlProblem implements Exception {
   final String reasonCode;
   final String messageKey;
   final String? detail;
+
+  /// Zero-based index of the rejected entry in a submitted list.
+  final int? entry;
+
+  /// Machine-readable reason the entry was rejected.
+  final String? reason;
+
+  /// The value the Server suggests instead of the rejected entry.
+  final String? suggestion;
+
+  /// The requester address a submitted list would have excluded.
+  final String? clientAddress;
+
+  /// The largest list the Server accepts.
+  final int? maxEntries;
 
   @override
   String toString() => detail == null
@@ -1370,6 +1428,26 @@ final class HttpControlApi implements ControlApi, ACPObservationApi {
         await _read('/api/v1/server/access'),
         'serverAccess',
       );
+
+  @override
+  Future<ServerIpAllowlist> serverIpAllowlist() async =>
+      ServerIpAllowlist.fromJson(
+        await _read('/api/v1/server/ip-allowlist'),
+        'serverIpAllowlist',
+      );
+
+  @override
+  Future<ServerIpAllowlist> replaceServerIpAllowlist({
+    required int revision,
+    required List<String> ranges,
+  }) async => ServerIpAllowlist.fromJson(
+    await _command(
+      'PUT',
+      '/api/v1/server/ip-allowlist',
+      body: {'revision': revision, 'ranges': ranges},
+    ),
+    'serverIpAllowlist',
+  );
 
   @override
   Future<RuntimeRootCertificate> runtimeRootCA() async =>

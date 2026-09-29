@@ -26,6 +26,7 @@ databases of its own schema revision and has no migrations
 | `local-web-http` | Released | Native or container Web on loopback HTTP; no domain or certificate is required. |
 | `remote-web-tls` | Released | Explicit private-CA DNS/IP identity, automatic public-domain HTTPS, or operator-provided certificate files. Server HTTPS identity remains separate from the Proxy CA except in the explicitly selected private-CA mode. |
 | `web-manual-proxy-login` | Released | An Owner can create, rotate, revoke, and deliver a manual proxy login and its public Proxy CA through the Web management API. The proxy login is separate from Runtime User and upstream Account credentials. |
+| `server-ip-allowlist` | Available | The Owner limits which networks may connect to the Server port (Web, API, CLI login and Agent traffic); refused clients are disconnected before TLS or HTTP. Loopback is always allowed. Clients are judged by the TCP peer or, from load balancers listed with `--trusted-proxies`, by their PROXY protocol v1/v2 header; HTTP forwarding headers are never trusted. |
 | `windows-runtime` | Unsupported | There is no Windows App, Server, or managed launcher release. |
 
 ## Clients, routing, and accounts

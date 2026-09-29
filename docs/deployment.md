@@ -238,6 +238,75 @@ plain HTTP reverse proxy may not support authenticated CONNECT on the same
 port. Verify layer-4 passthrough; checking that the Web page opens is not
 enough.
 
+## Limit who can connect (IP allowlist)
+
+On a public address anyone can reach the sign-in page. To accept connections
+only from networks you trust, sign in as the Owner, open **Settings → Access &
+launch → IP allowlist**, and list them one per line: a single address
+(`203.0.113.7`) or a CIDR network (`203.0.113.0/24`, `2001:db8::/32`). Saving
+takes effect at once for the Web workbench, sign-in and Agent traffic, and
+disconnects connections that are no longer allowed.
+
+- An empty list allows every address.
+- The Server machine itself (`127.0.0.1`, `::1`) is always allowed.
+- The panel shows the address it sees for your browser and refuses a list that
+  would disconnect you; **Add my address** fills it in.
+- Refused clients are disconnected before TLS or HTTP. The panel counts them
+  and shows the latest address.
+- Automatic HTTPS keeps renewing: certificate validation connections are let
+  through without reaching the workbench.
+
+If no allowed network can reach the Server any more, run this on the Server
+machine (add `--data-dir` if you started the Server with one). The running
+Server applies it within a few seconds:
+
+```sh
+./vibermated server ip-allowlist clear
+./vibermated server ip-allowlist        # show the current list
+```
+
+### Which address the Server sees
+
+The allowlist judges the address of the TCP connection. HTTP headers such as
+`X-Forwarded-For` or `X-Real-IP` are never trusted, because any client can send
+them.
+
+- **Directly reachable Server** (public IP, port forwarding, Docker on Linux
+  with published ports) and **layer-4 (TCP) load balancers that keep the client
+  address**: the Server sees each client's real address. Nothing to configure.
+- **Layer-4 load balancers that replace the client address with their own**:
+  turn on **PROXY protocol v2** on the load balancer, then start the Server with
+  the load balancer's own addresses:
+
+  ```sh
+  ./vibermated server ... --trusted-proxies 10.0.0.0/24
+  ```
+
+  Only connections from those addresses may name a client, in the PROXY header
+  the load balancer writes. A connection from them without a header is judged
+  by the load balancer's own address, so a misconfiguration never widens
+  access; the panel reports such connections. List only the load balancer's
+  subnet, never client networks (`0.0.0.0/0` is refused). TCP health checks
+  work unchanged, and PROXY protocol `LOCAL` health checks are allowed. With
+  Docker, set `VIBERMATE_TRUSTED_PROXIES` in `.env.public` or `.env.team`.
+- **Layer-7 (HTTP) reverse proxies**, such as Nginx, Caddy's HTTP mode or cloud
+  application load balancers, are not supported in front of the Server: they
+  cannot carry the Agents' CONNECT traffic, and the Server refuses management
+  requests that carry forwarded headers.
+- **Docker Desktop and rootless Docker** usually hide client addresses: every
+  client appears as the Docker gateway. Use the native Server, or Docker on
+  Linux, when you need the allowlist.
+- **Tunnels on the Server machine**, such as frp, cloudflared, `ssh -R` or
+  socat forwarding to `127.0.0.1`, make every client arrive from this machine,
+  which is always allowed, so the allowlist cannot tell them apart. The panel
+  warns when your own browser arrives this way. Use a tunnel or load balancer
+  that sends PROXY protocol, with `--trusted-proxies`, or let clients connect
+  directly.
+
+If the panel shows a private address (such as `10.x`, `172.16–31.x` or
+`192.168.x`) for your browser while you connect over the internet, the Server
+is behind one of the address-hiding setups above.
+
 ## Accounts and pages
 
 You can see where data is stored in **Settings → Safety & data**. The App can

@@ -10,6 +10,7 @@ import (
 
 	"github.com/vibe-agi/vibermate/internal/clientadapter"
 	"github.com/vibe-agi/vibermate/internal/hostcontract"
+	"github.com/vibe-agi/vibermate/internal/ipallowlist"
 	"github.com/vibe-agi/vibermate/internal/productruntime"
 	"github.com/vibe-agi/vibermate/internal/serverconnection"
 )
@@ -30,6 +31,9 @@ type Options struct {
 	AdminSessionLifetime time.Duration
 	CaptureRunLifetime   time.Duration
 	ShutdownTimeout      time.Duration
+	// TrustedProxies are layer-4 load balancers whose PROXY protocol header
+	// names the client they relay. Empty trusts no one.
+	TrustedProxies ipallowlist.List
 }
 
 // AttachOptions exposes the Runtime Server transport around an already-owned
@@ -49,6 +53,7 @@ type AttachOptions struct {
 	Clock                  productruntime.Clock
 	SecurityRandom         io.Reader
 	ResolveLocalIdentities bool
+	TrustedProxies         ipallowlist.List
 }
 
 func DefaultOptions(runtimeOptions productruntime.Options) Options {
@@ -82,7 +87,17 @@ func DefaultAttachOptions(
 	}
 }
 
+func validTrustedProxies(proxies ipallowlist.List) error {
+	if proxies.HasCatchAll() {
+		return errors.New("trusted proxies cannot include every address: any client could then forge its address")
+	}
+	return nil
+}
+
 func (options Options) validate() error {
+	if err := validTrustedProxies(options.TrustedProxies); err != nil {
+		return err
+	}
 	if options.Runtime.Host.Kind() != hostcontract.KindServer ||
 		!options.Runtime.Host.SupportsCaptureRuns() ||
 		options.Runtime.SecurityRandom == nil {
@@ -96,6 +111,9 @@ func (options Options) validate() error {
 }
 
 func (options AttachOptions) validate() error {
+	if err := validTrustedProxies(options.TrustedProxies); err != nil {
+		return err
+	}
 	if options.Runtime == nil || options.Clock == nil || options.SecurityRandom == nil ||
 		options.DataDirectory == "" || !filepath.IsAbs(options.DataDirectory) ||
 		filepath.Clean(options.DataDirectory) != options.DataDirectory {

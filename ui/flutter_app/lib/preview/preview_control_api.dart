@@ -3366,6 +3366,84 @@ final class PreviewControlApi implements ControlApi {
     return _serverAccess;
   }
 
+  // Preview behaves like a Server reached from a browser at this address.
+  static const _previewClientAddress = '198.51.100.23';
+  int _ipAllowlistRevision = 0;
+  List<String> _ipAllowlist = const [];
+  DateTime? _ipAllowlistUpdatedAt;
+
+  ServerIpAllowlist get _ipAllowlistView => ServerIpAllowlist(
+    revision: _ipAllowlistRevision,
+    ranges: _ipAllowlist,
+    maxRanges: _previewMaxAllowlist,
+    updatedAt: _ipAllowlistUpdatedAt,
+    clientAddress: _previewClientAddress,
+    refusedCount: 12,
+    lastRefusedAddress: '203.0.113.77',
+    lastRefusedAt: _now.subtract(const Duration(minutes: 7)),
+    trustedProxies: const [],
+  );
+
+  @override
+  Future<ServerIpAllowlist> serverIpAllowlist() async {
+    _requireOpen();
+    return _ipAllowlistView;
+  }
+
+  @override
+  Future<ServerIpAllowlist> replaceServerIpAllowlist({
+    required int revision,
+    required List<String> ranges,
+  }) async {
+    _requireOpen();
+    if (ranges.length > _previewMaxAllowlist) {
+      throw const ControlProblem(
+        status: 422,
+        reasonCode: 'ip_allowlist_too_long',
+        messageKey: 'error.ip_allowlist_too_long',
+        maxEntries: _previewMaxAllowlist,
+      );
+    }
+    final networks = <_PreviewNetwork>[];
+    for (final (index, raw) in ranges.indexed) {
+      final (network, reason, suggestion) = _PreviewNetwork.parse(raw);
+      if (network == null) {
+        throw ControlProblem(
+          status: 422,
+          reasonCode: 'ip_allowlist_entry_invalid',
+          messageKey: 'error.ip_allowlist_entry_invalid',
+          entry: index,
+          reason: reason,
+          suggestion: suggestion,
+        );
+      }
+      if (!networks.any((known) => known.text == network.text)) {
+        networks.add(network);
+      }
+    }
+    final client = _PreviewNetwork.parse(_previewClientAddress).$1!;
+    if (networks.isNotEmpty &&
+        !networks.any((network) => network.contains(client))) {
+      throw const ControlProblem(
+        status: 422,
+        reasonCode: 'ip_allowlist_excludes_requester',
+        messageKey: 'error.ip_allowlist_excludes_requester',
+        clientAddress: _previewClientAddress,
+      );
+    }
+    if (revision != _ipAllowlistRevision) {
+      throw const ControlProblem(
+        status: 409,
+        reasonCode: 'ip_allowlist_conflict',
+        messageKey: 'error.ip_allowlist_conflict',
+      );
+    }
+    _ipAllowlistRevision += 1;
+    _ipAllowlist = List.unmodifiable(networks.map((network) => network.text));
+    _ipAllowlistUpdatedAt = _now;
+    return _ipAllowlistView;
+  }
+
   @override
   Future<RuntimeRootCertificate> runtimeRootCA() async {
     _requireOpen();
@@ -4504,3 +4582,107 @@ const _previewPrompts = [
 
 String _previewPrompt(int index) =>
     _previewPrompts[index % _previewPrompts.length];
+
+const _previewMaxAllowlist = 256;
+
+/// A CIDR network for Preview, validated like the Runtime Server does.
+final class _PreviewNetwork {
+  const _PreviewNetwork(this.bytes, this.prefixLength, this.text);
+
+  final List<int> bytes;
+  final int prefixLength;
+  final String text;
+
+  /// Returns the network, or the reason it is invalid and a suggestion.
+  static (_PreviewNetwork?, String?, String?) parse(String raw) {
+    final entry = raw.trim();
+    if (entry.isEmpty) return (null, 'empty', null);
+    if (entry.length > 64) return (null, 'length', null);
+    if (entry.contains('%')) return (null, 'zone', null);
+    final slash = entry.indexOf('/');
+    final addressText = slash < 0 ? entry : entry.substring(0, slash);
+    final List<int> bytes;
+    try {
+      bytes = addressText.contains(':')
+          ? Uri.parseIPv6Address(addressText)
+          : Uri.parseIPv4Address(addressText);
+    } on FormatException {
+      return (null, 'syntax', null);
+    }
+    final bits = bytes.length * 8;
+    final prefixLength = slash < 0
+        ? bits
+        : int.tryParse(entry.substring(slash + 1)) ?? -1;
+    if (prefixLength < 0 || prefixLength > bits) {
+      return (null, 'syntax', null);
+    }
+    if (bytes.length == 16 &&
+        bytes.take(10).every((byte) => byte == 0) &&
+        bytes[10] == 0xff &&
+        bytes[11] == 0xff) {
+      return (null, 'ipv4_mapped', null);
+    }
+    final masked = _mask(bytes, prefixLength);
+    final canonical = _format(masked, prefixLength);
+    for (var index = 0; index < bytes.length; index++) {
+      if (bytes[index] != masked[index]) {
+        return (null, 'host_bits', canonical);
+      }
+    }
+    return (_PreviewNetwork(masked, prefixLength, canonical), null, null);
+  }
+
+  bool contains(_PreviewNetwork address) =>
+      address.bytes.length == bytes.length &&
+      _mask(
+        address.bytes,
+        prefixLength,
+      ).indexed.every((entry) => entry.$2 == bytes[entry.$1]);
+
+  static List<int> _mask(List<int> bytes, int prefixLength) => [
+    for (var index = 0; index < bytes.length; index++)
+      switch (prefixLength - index * 8) {
+        >= 8 => bytes[index],
+        <= 0 => 0,
+        final kept => bytes[index] & (0xff << (8 - kept)) & 0xff,
+      },
+  ];
+
+  static String _format(List<int> bytes, int prefixLength) {
+    final address = bytes.length == 4 ? bytes.join('.') : _ipv6Text(bytes);
+    return prefixLength == bytes.length * 8
+        ? address
+        : '$address/$prefixLength';
+  }
+
+  /// RFC 5952 text: lowercase groups, the longest run of two or more zero
+  /// groups compressed to "::".
+  static String _ipv6Text(List<int> bytes) {
+    final groups = [
+      for (var index = 0; index < 16; index += 2)
+        (bytes[index] << 8) | bytes[index + 1],
+    ];
+    var bestStart = -1;
+    var bestLength = 1;
+    for (var start = 0; start < groups.length;) {
+      if (groups[start] != 0) {
+        start++;
+        continue;
+      }
+      var end = start;
+      while (end < groups.length && groups[end] == 0) {
+        end++;
+      }
+      if (end - start > bestLength) {
+        bestStart = start;
+        bestLength = end - start;
+      }
+      start = end;
+    }
+    String text(Iterable<int> values) =>
+        values.map((value) => value.toRadixString(16)).join(':');
+    if (bestStart < 0) return text(groups);
+    return '${text(groups.take(bestStart))}::'
+        '${text(groups.skip(bestStart + bestLength))}';
+  }
+}

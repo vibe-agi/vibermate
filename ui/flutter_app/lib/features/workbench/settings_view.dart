@@ -12,6 +12,7 @@ import '../../core/i18n/app_copy.dart';
 import '../../core/api/product_update_api.dart';
 import 'acp_setup.dart';
 import 'runtime_root_ca_panel.dart';
+import '../../core/api/control_api.dart' show ControlProblem;
 import '../../core/api/control_models.dart';
 import 'deletion_dialog.dart';
 import 'egress_profile_editor.dart';
@@ -887,8 +888,299 @@ final class _RemoteAccessGuide extends StatelessWidget {
         const SizedBox(height: 8),
       ],
       _ServerAccessPanel(controller: controller, copy: copy),
+      if (controller.serverManagement) ...[
+        const SizedBox(height: 12),
+        _ServerIpAllowlistPanel(controller: controller, copy: copy),
+      ],
     ],
   );
+}
+
+/// Lets the Owner choose which networks may connect to the Server.
+final class _ServerIpAllowlistPanel extends StatefulWidget {
+  const _ServerIpAllowlistPanel({required this.controller, required this.copy});
+
+  final WorkbenchController controller;
+  final AppCopy copy;
+
+  @override
+  State<_ServerIpAllowlistPanel> createState() =>
+      _ServerIpAllowlistPanelState();
+}
+
+final class _ServerIpAllowlistPanelState
+    extends State<_ServerIpAllowlistPanel> {
+  final _text = TextEditingController();
+  int? _shownRevision;
+  String? _problem;
+  bool _saved = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _text.addListener(_edited);
+  }
+
+  @override
+  void dispose() {
+    _text
+      ..removeListener(_edited)
+      ..dispose();
+    super.dispose();
+  }
+
+  void _edited() {
+    if (_saved || _problem != null) {
+      setState(() {
+        _saved = false;
+        _problem = null;
+      });
+    } else {
+      setState(() {});
+    }
+  }
+
+  /// Non-empty lines with the 1-based line each came from.
+  List<(int, String)> get _entries => [
+    for (final (index, line) in _text.text.split('\n').indexed)
+      if (line.trim().isNotEmpty) (index + 1, line.trim()),
+  ];
+
+  bool _dirty(ServerIpAllowlist allowlist) {
+    final entries = _entries.map((entry) => entry.$2).toList();
+    return entries.length != allowlist.ranges.length ||
+        entries.indexed.any((entry) => entry.$2 != allowlist.ranges[entry.$1]);
+  }
+
+  void _show(ServerIpAllowlist allowlist) {
+    _shownRevision = allowlist.revision;
+    _text.text = allowlist.ranges.join('\n');
+  }
+
+  void _addMine(String address) {
+    final text = _text.text.trimRight();
+    _text.text = text.isEmpty ? address : '$text\n$address';
+  }
+
+  Future<void> _save() async {
+    final entries = _entries;
+    final error = await widget.controller.saveServerIpAllowlist([
+      for (final entry in entries) entry.$2,
+    ]);
+    if (!mounted) return;
+    final latest = widget.controller.serverIpAllowlist;
+    setState(() {
+      if (error == null) {
+        if (latest != null) _show(latest);
+        _saved = true;
+        _problem = null;
+        return;
+      }
+      if (error is ControlProblem && error.status == 409 && latest != null) {
+        _show(latest);
+      }
+      _saved = false;
+      _problem = _describe(error, entries);
+    });
+  }
+
+  String _describe(Object error, List<(int, String)> entries) {
+    final copy = widget.copy;
+    if (error is! ControlProblem) {
+      return copy.format('server.ip_allowlist.error.failed', {
+        'error': error.toString(),
+      });
+    }
+    switch (error.reasonCode) {
+      case 'ip_allowlist_entry_invalid':
+        final index = error.entry;
+        final line = index != null && index < entries.length
+            ? entries[index].$1
+            : 0;
+        final reason = copy.format(
+          'server.ip_allowlist.reason.${error.reason ?? 'syntax'}',
+          {'suggestion': error.suggestion ?? ''},
+        );
+        return copy.format('server.ip_allowlist.error.line', {
+          'line': line,
+          'reason': reason,
+        });
+      case 'ip_allowlist_excludes_requester':
+        return copy.format('server.ip_allowlist.error.excludes', {
+          'address': error.clientAddress ?? '?',
+        });
+      case 'ip_allowlist_too_long':
+        return copy.format('server.ip_allowlist.error.too_long', {
+          'max': error.maxEntries ?? 256,
+        });
+      case 'ip_allowlist_conflict':
+        return copy('server.ip_allowlist.error.conflict');
+      default:
+        return copy.format('server.ip_allowlist.error.failed', {
+          'error': '${error.reasonCode} (${error.status})',
+        });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final copy = widget.copy;
+    final allowlist = widget.controller.serverIpAllowlist;
+    if (allowlist != null &&
+        allowlist.revision != _shownRevision &&
+        (_shownRevision == null || !_dirty(allowlist))) {
+      _show(allowlist);
+    }
+    final saving = widget.controller.serverIpAllowlistSaving;
+    final dirty = allowlist != null && _dirty(allowlist);
+    final client = allowlist?.clientAddress;
+    final small = Theme.of(context).textTheme.bodySmall;
+    return _SettingsSurface(
+      key: const Key('server-ip-allowlist'),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          ContextHelpHeading(
+            title: copy('server.ip_allowlist.title'),
+            message: copy('server.ip_allowlist.help'),
+            dismissLabel: copy('common.dismiss'),
+          ),
+          const SizedBox(height: 6),
+          if (allowlist == null)
+            InlineNotice(message: copy('server.ip_allowlist.unavailable'))
+          else ...[
+            Text(
+              allowlist.restricted
+                  ? copy.format('server.ip_allowlist.restricted', {
+                      'count': allowlist.ranges.length,
+                    })
+                  : copy('server.ip_allowlist.open'),
+              key: const Key('server-ip-allowlist-state'),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              client == null
+                  ? copy('server.ip_allowlist.app')
+                  : copy.format('server.ip_allowlist.client', {
+                      'address': client,
+                    }),
+              style: small,
+            ),
+            if (client != null && _loopbackAddress(client)) ...[
+              const SizedBox(height: 8),
+              InlineNotice(
+                key: const Key('server-ip-allowlist-loopback-hint'),
+                message: copy.format('server.ip_allowlist.loopback_hint', {
+                  'address': client,
+                }),
+              ),
+            ] else if (allowlist.trustedProxies.isNotEmpty)
+              Text(
+                copy.format('server.ip_allowlist.trusted', {
+                  'proxies': allowlist.trustedProxies.join(', '),
+                }),
+                key: const Key('server-ip-allowlist-trusted'),
+                style: small,
+              )
+            else if (client != null && _sharedAddress(client))
+              Text(
+                copy.format('server.ip_allowlist.private_hint', {
+                  'address': client,
+                }),
+                key: const Key('server-ip-allowlist-private-hint'),
+                style: small,
+              ),
+            if (allowlist.proxyHeaderProblems > 0) ...[
+              const SizedBox(height: 8),
+              InlineNotice(
+                key: const Key('server-ip-allowlist-proxy-problems'),
+                message: copy.format('server.ip_allowlist.proxy_problems', {
+                  'count': allowlist.proxyHeaderProblems,
+                }),
+                error: true,
+              ),
+            ],
+            const SizedBox(height: 10),
+            TextField(
+              key: const Key('server-ip-allowlist-field'),
+              controller: _text,
+              minLines: 3,
+              maxLines: 10,
+              enabled: !saving,
+              style: monoStyle,
+              keyboardType: TextInputType.multiline,
+              decoration: InputDecoration(
+                labelText: copy('server.ip_allowlist.field'),
+                hintText: '203.0.113.0/24\n2001:db8::/32\n198.51.100.7',
+                border: const OutlineInputBorder(),
+              ),
+            ),
+            if (_problem case final problem?) ...[
+              const SizedBox(height: 8),
+              InlineNotice(
+                key: const Key('server-ip-allowlist-problem'),
+                message: problem,
+                error: true,
+              ),
+            ] else if (_saved) ...[
+              const SizedBox(height: 8),
+              Text(
+                copy('server.ip_allowlist.saved'),
+                key: const Key('server-ip-allowlist-saved'),
+                style: small?.copyWith(color: context.viberColors.verified),
+              ),
+            ],
+            const SizedBox(height: 10),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                FilledButton.icon(
+                  key: const Key('server-ip-allowlist-save'),
+                  onPressed: dirty && !saving ? () => unawaited(_save()) : null,
+                  icon: const Icon(Icons.save_outlined, size: 15),
+                  label: Text(copy('server.ip_allowlist.save')),
+                ),
+                if (client != null &&
+                    !_entries.any((entry) => entry.$2 == client))
+                  OutlinedButton.icon(
+                    key: const Key('server-ip-allowlist-add-mine'),
+                    onPressed: saving ? null : () => _addMine(client),
+                    icon: const Icon(Icons.add, size: 15),
+                    label: Text(copy('server.ip_allowlist.add_mine')),
+                  ),
+                if (dirty)
+                  TextButton(
+                    key: const Key('server-ip-allowlist-revert'),
+                    onPressed: saving
+                        ? null
+                        : () => setState(() => _show(allowlist)),
+                    child: Text(copy('server.ip_allowlist.revert')),
+                  ),
+              ],
+            ),
+            if (allowlist.refusedCount > 0) ...[
+              const SizedBox(height: 10),
+              Text(
+                allowlist.lastRefusedAddress != null &&
+                        allowlist.lastRefusedAt != null
+                    ? copy.format('server.ip_allowlist.refused', {
+                        'count': allowlist.refusedCount,
+                        'address': allowlist.lastRefusedAddress!,
+                        'time': _storageTimestamp(allowlist.lastRefusedAt!),
+                      })
+                    : copy.format('server.ip_allowlist.refused_count', {
+                        'count': allowlist.refusedCount,
+                      }),
+                key: const Key('server-ip-allowlist-refused'),
+                style: small,
+              ),
+            ],
+          ],
+        ],
+      ),
+    );
+  }
 }
 
 final class _UsersSettingsPane extends StatelessWidget {
@@ -4124,3 +4416,37 @@ IconData _stateIcon(TerminalCommandState state) => switch (state) {
   TerminalCommandState.targetMissing => Icons.link_off,
   _ => Icons.error_outline,
 };
+
+/// Whether an address belongs to the Server machine itself, which is also how
+/// every client arrives through a local tunnel such as frp or cloudflared.
+bool _loopbackAddress(String address) {
+  try {
+    if (address.contains(':')) {
+      final bytes = Uri.parseIPv6Address(address);
+      return bytes.take(15).every((byte) => byte == 0) && bytes[15] == 1;
+    }
+    return Uri.parseIPv4Address(address)[0] == 127;
+  } on FormatException {
+    return false;
+  }
+}
+
+/// Whether an address is private, shared or local, which is what a browser
+/// appears to come from behind a load balancer, NAT gateway or Docker Desktop.
+bool _sharedAddress(String address) {
+  try {
+    if (address.contains(':')) {
+      final bytes = Uri.parseIPv6Address(address);
+      return (bytes[0] & 0xfe) == 0xfc || // fc00::/7 unique local
+          (bytes[0] == 0xfe && (bytes[1] & 0xc0) == 0x80); // fe80::/10
+    }
+    final bytes = Uri.parseIPv4Address(address);
+    return bytes[0] == 10 ||
+        (bytes[0] == 172 && bytes[1] >= 16 && bytes[1] < 32) ||
+        (bytes[0] == 192 && bytes[1] == 168) ||
+        (bytes[0] == 100 && bytes[1] >= 64 && bytes[1] < 128) || // CGNAT
+        (bytes[0] == 169 && bytes[1] == 254);
+  } on FormatException {
+    return false;
+  }
+}

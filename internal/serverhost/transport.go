@@ -114,6 +114,7 @@ func (ca runtimeCertificateAuthority) SignServerCertificate(ctx context.Context,
 func prepareTransport(
 	ctx context.Context,
 	listener net.Listener,
+	gate *connectionGate,
 	options TransportOptions,
 	accessAddress string,
 	dataDirectory string,
@@ -123,12 +124,12 @@ func prepareTransport(
 ) (preparedTransport, error) {
 	resolvedOptions, err := options.forAccessAddress(accessAddress)
 	options = resolvedOptions
-	if ctx == nil || listener == nil || err != nil || options.validate() != nil {
+	if ctx == nil || listener == nil || gate == nil || err != nil || options.validate() != nil {
 		return preparedTransport{}, errors.New("Runtime Server transport is invalid")
 	}
 	if options.Mode == TransportHTTP {
 		return preparedTransport{
-			listener: listener, scheme: "http",
+			listener: gate.listen(listener, false), scheme: "http",
 			status: func() transportTLSStatus {
 				return transportTLSStatus{mode: TransportHTTP, state: "disabled"}
 			},
@@ -157,8 +158,15 @@ func prepareTransport(
 		if err != nil {
 			return preparedTransport{}, err
 		}
+		// A TLS-ALPN-01 validation arrives on this listener from an address no
+		// Owner can list, so that mode decides during the handshake instead.
+		tlsALPN := options.Automatic.Challenge == serveridentity.AutomaticChallengeTLSALPN01
+		configuration := automatic.TLSConfig()
+		if tlsALPN {
+			configuration = gate.guardTLS(configuration)
+		}
 		return preparedTransport{
-			listener: tls.NewListener(listener, automatic.TLSConfig()),
+			listener: tls.NewListener(gate.listen(listener, tlsALPN), configuration),
 			scheme:   "https",
 			close:    automatic.Close,
 			status: func() transportTLSStatus {
@@ -213,7 +221,7 @@ func prepareTransport(
 			)
 		}
 	}
-	tlsListener := newTLSListener(listener, certificate)
+	tlsListener := newTLSListener(gate.listen(listener, false), certificate)
 	leaf := certificate.Leaf
 	return preparedTransport{
 		listener: tlsListener,
