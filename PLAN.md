@@ -32,6 +32,7 @@
 
 ## 已发布
 
+- **v0.1.21**（2026-10-01，`9b7eeaa`）：落地正文优先的对话阅读、就近工具/上下文面板与紧凑 Token/API 等价费用；修复原生 Codex 心跳被审批屏障误缓存造成的重复 SSE 超时。构建验证与下载渠道见 [docs/releases/v0.1.21.md](docs/releases/v0.1.21.md)。
 - **v0.1.20**（2026-09-30，`c1eece3`）：修复请求预览与 Codex 协议边界；完善重置券、账号范围/原始账号、用量默认值及刷新交互；增加自有域名部署向导。macOS 签名公证与安装验收、Linux 双架构包、Homebrew 和官网更新见 [docs/releases/v0.1.20.md](docs/releases/v0.1.20.md)。
 - **v0.1.19**（2026-09-29，`07bd4e7`）：Server IP 白名单（含 `--trusted-proxies` 与 PROXY protocol）；macOS 签名公证、Linux 包、Homebrew、官网均已更新，见 [docs/releases/v0.1.19.md](docs/releases/v0.1.19.md)。
 - **v0.1.18**（2026-09-29，`25091f8`）：Web 工作台自包含（CanvasKit 与字体随包、严格 CSP）、中英文指南与官网改版；macOS 签名公证、Linux 包、Homebrew、官网均已更新，见 [docs/releases/v0.1.18.md](docs/releases/v0.1.18.md)。

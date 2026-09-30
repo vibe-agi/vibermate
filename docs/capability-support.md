@@ -3,9 +3,9 @@
 This matrix states what the current source offers. A passing unit test and a
 published product are not interchangeable evidence.
 
-Source package version: **0.1.21**. Latest published release: **v0.1.20**.
+Source package version: **0.1.21**. Latest published release: **v0.1.21**.
 
-[v0.1.20](https://github.com/vibe-agi/vibermate/releases/tag/v0.1.20) opens only
+[v0.1.21](https://github.com/vibe-agi/vibermate/releases/tag/v0.1.21) opens only
 databases of its own schema revision and has no migrations
 ([ADR 0021](adr/0021-one-schema-revision-without-migrations.md)).
 
@@ -20,8 +20,8 @@ databases of its own schema revision and has no migrations
 
 | Capability ID | Status | Current boundary |
 | --- | --- | --- |
-| `macos-app` | Released | macOS 14+ Universal App for Apple silicon and Intel. v0.1.20 was signed, notarized and installed by [run 36681906110](https://github.com/vibe-agi/vibermate/actions/runs/36681906110); Homebrew cask `vibe-agi/tap/vibermate`. |
-| `linux-server-web` | Released | Native Runtime Server, CLI, and Web workbench archives for Linux x86-64 and ARM64, built and verified by [run 36681952821](https://github.com/vibe-agi/vibermate/actions/runs/36681952821). |
+| `macos-app` | Released | macOS 14+ Universal App for Apple silicon and Intel. v0.1.21 was signed, notarized and installed by [run 36742979182](https://github.com/vibe-agi/vibermate/actions/runs/36742979182); Homebrew cask `vibe-agi/tap/vibermate`. |
+| `linux-server-web` | Released | Native Runtime Server, CLI, and Web workbench archives for Linux x86-64 and ARM64, built and verified by [run 36743075571](https://github.com/vibe-agi/vibermate/actions/runs/36743075571). |
 | `docker-server-web` | Released | The same Runtime Server and Web workbench can run from the versioned Docker/Compose files; Docker does not create a separate account or certificate model. |
 | `local-web-http` | Released | Native or container Web on loopback HTTP; no domain or certificate is required. |
 | `remote-web-tls` | Released | Explicit private-CA DNS/IP identity, automatic public-domain HTTPS, or operator-provided certificate files. Settings offers a read-only public-domain deployment guide; server HTTPS identity remains separate from the Proxy CA except in the explicitly selected private-CA mode. Real public-domain issuance requires separate deployment acceptance. |
@@ -47,8 +47,8 @@ databases of its own schema revision and has no migrations
 
 | Capability ID | Status | Current boundary |
 | --- | --- | --- |
-| `retained-evidence` | Released | Recording mode and retention control semantic and Raw HTTP evidence. The SQLite archive is not encrypted by ViberMate; recognized credential fields are removed by bounded rules, not by a claim that arbitrary content is secret-free. |
-| `body-free-usage` | Released | Runtime-wide statistics are independent of body recording, with permission-scoped caller/model breakdowns and reference API-equivalent USD costs, not provider bills. New databases enable collection with 365-day retention; existing choices are preserved. Git project and branch attribution is a launch-time snapshot for new managed runs; missing history is not invented or backfilled. |
+| `retained-evidence` | Released | Conversation-first reading separates verified incremental input and Agent text from tools, system context and raw evidence. Inspector state and reading position are preserved; full checkpoints do not masquerade as new user messages. Recording mode and retention still control semantic and Raw HTTP evidence. The SQLite archive is not encrypted by ViberMate; recognized credential fields are removed by bounded rules, not by a claim that arbitrary content is secret-free. |
+| `body-free-usage` | Released | Runtime-wide statistics are independent of body recording, with permission-scoped caller/model breakdowns and reference API-equivalent USD costs, not provider bills. Inline request details and explicitly bounded loaded-request totals reuse collected usage; missing data is not zero, and reasoning subsets are not counted twice. New databases enable collection with 365-day retention; existing choices are preserved. Git project and branch attribution is a launch-time snapshot for new managed runs; missing history is not invented or backfilled. |
 | `raw-stage-compare` | Released | The workbench compares retained client/upstream request and response stages without rewriting retained bytes. |
 | `outbound-visibility` | Released | The workbench distinguishes inspected HTTP, decoded content, blind forwarding, and traffic not observed by ViberMate. It cannot infer a local file path from network bytes. |
 | `verified-backup-restore` | Released | Offline backup, verification, and restore are manifest-bound. Provider secrets and externally supplied TLS keys are excluded. |
