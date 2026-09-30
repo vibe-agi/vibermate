@@ -1,0 +1,564 @@
+{
+  "previews": [
+    {
+      "kind": "text",
+      "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      "truncated": true
+    },
+    {
+      "kind": "text",
+      "text": "🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀",
+      "truncated": true
+    },
+    {
+      "kind": "text",
+      "text": "one two three",
+      "truncated": false
+    }
+  ],
+  "responses": [
+    {
+      "id": "response-1",
+      "requestedModel": "claude",
+      "effectiveModel": "claude",
+      "reportedModel": "claude",
+      "stopReason": "end_turn",
+      "blocks": [
+        {
+          "kind": "tool_call",
+          "availability": "recorded",
+          "originalSize": 64,
+          "callId": "tool-1",
+          "toolName": "read_file",
+          "arguments": {
+            "api_key": "[redacted]",
+            "path": "~/project"
+          }
+        }
+      ],
+      "usage": {
+        "inputUncached": {
+          "known": true,
+          "tokens": 12,
+          "source": "provider"
+        },
+        "cacheWrite": {
+          "known": false
+        },
+        "cacheRead": {
+          "known": false
+        },
+        "output": {
+          "known": true,
+          "tokens": 5,
+          "source": "provider"
+        },
+        "reasoning": {
+          "known": false
+        }
+      },
+      "protocolEvidence": []
+    },
+    {
+      "id": "response-1",
+      "requestedModel": "claude",
+      "effectiveModel": "claude",
+      "reportedModel": "claude",
+      "stopReason": "end_turn",
+      "blocks": [],
+      "usage": {
+        "inputUncached": {
+          "known": true,
+          "tokens": 12,
+          "source": "provider"
+        },
+        "cacheWrite": {
+          "known": false
+        },
+        "cacheRead": {
+          "known": false
+        },
+        "output": {
+          "known": true,
+          "tokens": 5,
+          "source": "provider"
+        },
+        "reasoning": {
+          "known": false
+        }
+      },
+      "protocolEvidence": []
+    },
+    {
+      "id": "response-1",
+      "requestedModel": "claude",
+      "effectiveModel": "claude",
+      "reportedModel": "claude",
+      "stopReason": "max_tokens",
+      "blocks": [
+        {
+          "kind": "tool_call",
+          "availability": "recorded",
+          "originalSize": 64,
+          "callId": "tool-1",
+          "toolName": "read_file",
+          "arguments": {
+            "api_key": "[redacted]",
+            "path": "~/project"
+          }
+        }
+      ],
+      "usage": {
+        "inputUncached": {
+          "known": true,
+          "tokens": 12,
+          "source": "provider"
+        },
+        "cacheWrite": {
+          "known": false
+        },
+        "cacheRead": {
+          "known": false
+        },
+        "output": {
+          "known": true,
+          "tokens": 5,
+          "source": "provider"
+        },
+        "reasoning": {
+          "known": false
+        }
+      },
+      "protocolEvidence": []
+    },
+    {
+      "id": "response-1",
+      "requestedModel": "claude",
+      "effectiveModel": "claude",
+      "reportedModel": "claude",
+      "stopReason": "max_tokens",
+      "blocks": [],
+      "usage": {
+        "inputUncached": {
+          "known": true,
+          "tokens": 12,
+          "source": "provider"
+        },
+        "cacheWrite": {
+          "known": false
+        },
+        "cacheRead": {
+          "known": false
+        },
+        "output": {
+          "known": true,
+          "tokens": 5,
+          "source": "provider"
+        },
+        "reasoning": {
+          "known": false
+        }
+      },
+      "protocolEvidence": []
+    },
+    {
+      "id": "response-1",
+      "requestedModel": "claude",
+      "effectiveModel": "claude",
+      "reportedModel": "claude",
+      "stopReason": "tool_use",
+      "blocks": [
+        {
+          "kind": "tool_call",
+          "availability": "recorded",
+          "originalSize": 2,
+          "callId": "call_1",
+          "toolName": "read",
+          "arguments": {}
+        }
+      ],
+      "usage": {
+        "inputUncached": {
+          "known": true,
+          "tokens": 12,
+          "source": "provider"
+        },
+        "cacheWrite": {
+          "known": false
+        },
+        "cacheRead": {
+          "known": false
+        },
+        "output": {
+          "known": true,
+          "tokens": 5,
+          "source": "provider"
+        },
+        "reasoning": {
+          "known": false
+        }
+      },
+      "protocolEvidence": []
+    },
+    {
+      "id": "response-1",
+      "requestedModel": "claude",
+      "effectiveModel": "claude",
+      "reportedModel": "claude",
+      "stopReason": "stop_sequence",
+      "blocks": [
+        {
+          "kind": "tool_call",
+          "availability": "recorded",
+          "originalSize": 64,
+          "callId": "tool-1",
+          "toolName": "read_file",
+          "arguments": {
+            "api_key": "[redacted]",
+            "path": "~/project"
+          }
+        }
+      ],
+      "usage": {
+        "inputUncached": {
+          "known": true,
+          "tokens": 12,
+          "source": "provider"
+        },
+        "cacheWrite": {
+          "known": false
+        },
+        "cacheRead": {
+          "known": false
+        },
+        "output": {
+          "known": true,
+          "tokens": 5,
+          "source": "provider"
+        },
+        "reasoning": {
+          "known": false
+        }
+      },
+      "protocolEvidence": []
+    },
+    {
+      "id": "response-1",
+      "requestedModel": "claude",
+      "effectiveModel": "claude",
+      "reportedModel": "claude",
+      "stopReason": "stop_sequence",
+      "blocks": [],
+      "usage": {
+        "inputUncached": {
+          "known": true,
+          "tokens": 12,
+          "source": "provider"
+        },
+        "cacheWrite": {
+          "known": false
+        },
+        "cacheRead": {
+          "known": false
+        },
+        "output": {
+          "known": true,
+          "tokens": 5,
+          "source": "provider"
+        },
+        "reasoning": {
+          "known": false
+        }
+      },
+      "protocolEvidence": []
+    },
+    {
+      "id": "response-1",
+      "requestedModel": "claude",
+      "effectiveModel": "claude",
+      "reportedModel": "claude",
+      "stopReason": "refusal",
+      "blocks": [
+        {
+          "kind": "tool_call",
+          "availability": "recorded",
+          "originalSize": 64,
+          "callId": "tool-1",
+          "toolName": "read_file",
+          "arguments": {
+            "api_key": "[redacted]",
+            "path": "~/project"
+          }
+        }
+      ],
+      "usage": {
+        "inputUncached": {
+          "known": true,
+          "tokens": 12,
+          "source": "provider"
+        },
+        "cacheWrite": {
+          "known": false
+        },
+        "cacheRead": {
+          "known": false
+        },
+        "output": {
+          "known": true,
+          "tokens": 5,
+          "source": "provider"
+        },
+        "reasoning": {
+          "known": false
+        }
+      },
+      "protocolEvidence": []
+    },
+    {
+      "id": "response-1",
+      "requestedModel": "claude",
+      "effectiveModel": "claude",
+      "reportedModel": "claude",
+      "stopReason": "refusal",
+      "blocks": [],
+      "usage": {
+        "inputUncached": {
+          "known": true,
+          "tokens": 12,
+          "source": "provider"
+        },
+        "cacheWrite": {
+          "known": false
+        },
+        "cacheRead": {
+          "known": false
+        },
+        "output": {
+          "known": true,
+          "tokens": 5,
+          "source": "provider"
+        },
+        "reasoning": {
+          "known": false
+        }
+      },
+      "protocolEvidence": []
+    },
+    {
+      "id": "response-1",
+      "requestedModel": "claude",
+      "effectiveModel": "claude",
+      "reportedModel": "claude",
+      "stopReason": "pause_turn",
+      "blocks": [
+        {
+          "kind": "tool_call",
+          "availability": "recorded",
+          "originalSize": 64,
+          "callId": "tool-1",
+          "toolName": "read_file",
+          "arguments": {
+            "api_key": "[redacted]",
+            "path": "~/project"
+          }
+        }
+      ],
+      "usage": {
+        "inputUncached": {
+          "known": true,
+          "tokens": 12,
+          "source": "provider"
+        },
+        "cacheWrite": {
+          "known": false
+        },
+        "cacheRead": {
+          "known": false
+        },
+        "output": {
+          "known": true,
+          "tokens": 5,
+          "source": "provider"
+        },
+        "reasoning": {
+          "known": false
+        }
+      },
+      "protocolEvidence": []
+    },
+    {
+      "id": "response-1",
+      "requestedModel": "claude",
+      "effectiveModel": "claude",
+      "reportedModel": "claude",
+      "stopReason": "pause_turn",
+      "blocks": [],
+      "usage": {
+        "inputUncached": {
+          "known": true,
+          "tokens": 12,
+          "source": "provider"
+        },
+        "cacheWrite": {
+          "known": false
+        },
+        "cacheRead": {
+          "known": false
+        },
+        "output": {
+          "known": true,
+          "tokens": 5,
+          "source": "provider"
+        },
+        "reasoning": {
+          "known": false
+        }
+      },
+      "protocolEvidence": []
+    },
+    {
+      "id": "response-1",
+      "requestedModel": "claude",
+      "effectiveModel": "claude",
+      "reportedModel": "claude",
+      "stopReason": "model_context_window_exceeded",
+      "blocks": [
+        {
+          "kind": "tool_call",
+          "availability": "recorded",
+          "originalSize": 64,
+          "callId": "tool-1",
+          "toolName": "read_file",
+          "arguments": {
+            "api_key": "[redacted]",
+            "path": "~/project"
+          }
+        }
+      ],
+      "usage": {
+        "inputUncached": {
+          "known": true,
+          "tokens": 12,
+          "source": "provider"
+        },
+        "cacheWrite": {
+          "known": false
+        },
+        "cacheRead": {
+          "known": false
+        },
+        "output": {
+          "known": true,
+          "tokens": 5,
+          "source": "provider"
+        },
+        "reasoning": {
+          "known": false
+        }
+      },
+      "protocolEvidence": []
+    },
+    {
+      "id": "response-1",
+      "requestedModel": "claude",
+      "effectiveModel": "claude",
+      "reportedModel": "claude",
+      "stopReason": "model_context_window_exceeded",
+      "blocks": [],
+      "usage": {
+        "inputUncached": {
+          "known": true,
+          "tokens": 12,
+          "source": "provider"
+        },
+        "cacheWrite": {
+          "known": false
+        },
+        "cacheRead": {
+          "known": false
+        },
+        "output": {
+          "known": true,
+          "tokens": 5,
+          "source": "provider"
+        },
+        "reasoning": {
+          "known": false
+        }
+      },
+      "protocolEvidence": []
+    },
+    {
+      "id": "response-1",
+      "requestedModel": "claude",
+      "effectiveModel": "claude",
+      "reportedModel": "claude",
+      "stopReason": "incomplete",
+      "blocks": [
+        {
+          "kind": "tool_call",
+          "availability": "recorded",
+          "originalSize": 64,
+          "callId": "tool-1",
+          "toolName": "read_file",
+          "arguments": {
+            "api_key": "[redacted]",
+            "path": "~/project"
+          }
+        }
+      ],
+      "usage": {
+        "inputUncached": {
+          "known": true,
+          "tokens": 12,
+          "source": "provider"
+        },
+        "cacheWrite": {
+          "known": false
+        },
+        "cacheRead": {
+          "known": false
+        },
+        "output": {
+          "known": true,
+          "tokens": 5,
+          "source": "provider"
+        },
+        "reasoning": {
+          "known": false
+        }
+      },
+      "protocolEvidence": []
+    },
+    {
+      "id": "response-1",
+      "requestedModel": "claude",
+      "effectiveModel": "claude",
+      "reportedModel": "claude",
+      "stopReason": "incomplete",
+      "blocks": [],
+      "usage": {
+        "inputUncached": {
+          "known": true,
+          "tokens": 12,
+          "source": "provider"
+        },
+        "cacheWrite": {
+          "known": false
+        },
+        "cacheRead": {
+          "known": false
+        },
+        "output": {
+          "known": true,
+          "tokens": 5,
+          "source": "provider"
+        },
+        "reasoning": {
+          "known": false
+        }
+      },
+      "protocolEvidence": []
+    }
+  ]
+}

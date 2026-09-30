@@ -149,10 +149,12 @@ final class AccountResetCredit {
   late final DateTime? expiresAt;
   late final String? title, description;
 
-  bool get available =>
+  bool get available => availableAt(DateTime.now().toUtc());
+
+  bool availableAt(DateTime now) =>
       resetType == 'codex_rate_limits' &&
       status == 'available' &&
-      (expiresAt == null || expiresAt!.isAfter(DateTime.now().toUtc()));
+      (expiresAt == null || expiresAt!.isAfter(now));
 }
 
 final class AccountResetRedemption {

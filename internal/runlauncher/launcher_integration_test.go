@@ -22,6 +22,7 @@ import (
 
 	"github.com/vibe-agi/vibermate/internal/capturecontrol"
 	"github.com/vibe-agi/vibermate/internal/clientadapter"
+	"github.com/vibe-agi/vibermate/internal/desktopcontrol"
 	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/localdiscovery"
 	"github.com/vibe-agi/vibermate/internal/runlauncher"
@@ -590,6 +591,7 @@ type controlFixture struct {
 	recognition         clientadapter.Recognition
 	adapter             *capturecontrol.ClientLaunchAdapterView
 	authorities         []string
+	rootStatus          *desktopcontrol.RootCAResponse
 
 	mu             sync.Mutex
 	createCalls    int
@@ -607,6 +609,16 @@ func (fixture *controlFixture) ServeHTTP(
 	defer fixture.mu.Unlock()
 	writer.Header().Set("Content-Type", "application/json")
 	switch request.URL.Path {
+	case "/api/v1/platform/root-ca":
+		if request.Method != http.MethodGet || request.Header.Get("Authorization") != "Bearer "+fixture.credential {
+			writeControlProblem(writer, http.StatusUnauthorized)
+			return
+		}
+		status := fixture.rootStatus
+		if status == nil {
+			status = &desktopcontrol.RootCAResponse{Available: true, RootValid: true, CertificatePresent: "present", TrustDecision: "trusted"}
+		}
+		writeControlJSON(writer, http.StatusOK, status)
 	case "/api/v1/capture-runs":
 		if request.Method != http.MethodPost ||
 			request.Header.Get("Authorization") != "Bearer "+fixture.credential {

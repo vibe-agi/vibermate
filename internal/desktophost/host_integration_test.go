@@ -130,6 +130,10 @@ func TestHostPublishesReadyGenerationAndRunsCapturedChildOverRealSockets(
 		}
 	}
 	for _, probe := range []struct{ method, path, token, origin string }{
+		{http.MethodGet, "/api/v1/platform/root-ca", "", ""},
+		{http.MethodGet, "/api/v1/platform/root-ca", session.ControlCredential, "vibermate://desktop"},
+		{http.MethodGet, "/api/v1/platform/root-ca/material", session.ControlCredential, ""},
+		{http.MethodPost, "/api/v1/platform/root-ca/actions/replace", session.ControlCredential, ""},
 		{http.MethodGet, "/api/v1/status", "", ""},
 		{http.MethodGet, "/api/v1/status", app.ReadToken, ""},
 		{http.MethodGet, "/api/v1/status", session.ControlCredential, "vibermate://desktop"},

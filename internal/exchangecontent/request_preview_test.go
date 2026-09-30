@@ -60,11 +60,27 @@ func TestPreviewRequestMessageUsesOnlyRecordedVisibleContent(t *testing.T) {
 
 func TestPreviewRequestMessageTruncatesByRune(t *testing.T) {
 	t.Parallel()
-	preview, ok := PreviewRequestMessage(Message{Role: "user", Blocks: []Block{{
-		Kind: string(protocolcore.BlockText), Availability: AvailabilityRecorded,
-		Text: strings.Repeat("\u754c", MaxRequestPreviewRunes+1),
-	}}})
-	if !ok || !preview.Truncated || len([]rune(preview.Text)) != MaxRequestPreviewRunes {
-		t.Fatalf("preview = %+v, %t", preview, ok)
+	for _, separator := range []string{"", " ", "\n", "\u00a0", "\ufeff"} {
+		prefix := strings.Repeat("\u754c", MaxRequestPreviewRunes-1)
+		preview, ok := PreviewRequestMessage(Message{Role: "user", Blocks: []Block{{
+			Kind: string(protocolcore.BlockText), Availability: AvailabilityRecorded,
+			Text: prefix + separator + "\u754c\u754c",
+		}}})
+		want := prefix
+		if separator == "" {
+			want += "\u754c"
+		}
+		if !ok || !preview.Truncated || preview.Text != want || preview.Validate() != nil {
+			t.Fatalf("separator %q: preview = %+v, %t", separator, preview, ok)
+		}
+	}
+}
+
+func TestRequestPreviewRejectsTextTheClientCannotDisplay(t *testing.T) {
+	t.Parallel()
+	for _, value := range []string{" text", "text ", "text\nmore", "text\x00more", "text\u0085more", "text\ufeffmore"} {
+		if err := (RequestPreview{Kind: "text", Text: value}).Validate(); err == nil {
+			t.Errorf("accepted unsafe preview %q", value)
+		}
 	}
 }

@@ -89,6 +89,39 @@ Widget dashboard(UsagePageLoader loadPage, {RuntimeUsageReport? summary}) =>
 
 void main() {
   mainSnapshotSemantics();
+  testWidgets('regrouping to a short report keeps the outer reading position', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1440, 900));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(
+      dashboard(
+        (query) async => report(
+          query: query.groupBy == 'model'
+              ? RuntimeUsageQuery(
+                  from: query.from,
+                  until: query.until,
+                  timeZone: query.timeZone,
+                  groupBy: query.groupBy,
+                  filters: const {'project': 'short'},
+                  snapshot: query.snapshot,
+                )
+              : query,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    final chip = find.byKey(const Key('usage-group-models'));
+    await tester.ensureVisible(chip);
+    final before = tester.getTopLeft(chip).dy;
+    final viewport = find.byKey(const Key('usage-breakdown-viewport'));
+    final height = tester.getSize(viewport).height;
+    await tester.tap(chip);
+    await tester.pumpAndSettle();
+    expect(tester.getSize(viewport).height, height);
+    expect(tester.getTopLeft(chip).dy, before);
+    expect(tester.takeException(), isNull);
+  });
   for (final reason in ['runtime_unavailable', 'usage_snapshot_changed']) {
     testWidgets('failed navigation retains its page and rows: $reason', (
       tester,
@@ -215,9 +248,13 @@ void main() {
     await tester.binding.setSurfaceSize(const Size(1440, 900));
     addTearDown(() => tester.binding.setSurfaceSize(null));
     final requests = <RuntimeUsageQuery>[];
+    var newest = 'a' * 64;
     Future<RuntimeUsageReport> load(RuntimeUsageQuery query) async {
       requests.add(query);
-      return report(query: query, snapshot: query.snapshot);
+      return report(
+        query: query,
+        snapshot: query.snapshot.isEmpty ? newest : query.snapshot,
+      );
     }
 
     await tester.pumpWidget(dashboard(load));
@@ -228,6 +265,7 @@ void main() {
     final table = find.byKey(const Key('usage-breakdown-table'));
     final before = tester.getTopLeft(table);
     final count = requests.length;
+    newest = 'b' * 64;
     await tester.pumpWidget(
       dashboard(load, summary: report(snapshot: 'b' * 64)),
     );
@@ -242,8 +280,8 @@ void main() {
     await tester.tap(update);
     await tester.pumpAndSettle();
     expect(requests.last.snapshot, 'b' * 64);
-    expect(requests.last.cursor, isEmpty);
-    expect(find.text('Page 1'), findsOneWidget);
+    expect(requests.last.cursor, 'page-50');
+    expect(find.text('Page 2'), findsOneWidget);
     expect(find.text('New usage available'), findsNothing);
   });
 
@@ -427,7 +465,7 @@ void mainSnapshotSemantics() {
     await tester.ensureVisible(update);
     await tester.tap(update);
     await tester.pumpAndSettle();
-    expect(find.text('Page 1'), findsOneWidget);
+    expect(find.text('Page 2'), findsOneWidget);
     expect(server.requests.last.snapshot, server.current);
     expect(find.textContaining('Usage changed.'), findsNothing);
     expect(tester.takeException(), isNull);

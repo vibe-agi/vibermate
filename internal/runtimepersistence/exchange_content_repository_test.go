@@ -95,6 +95,43 @@ func TestExchangeContentRepositoryCompletesARecordedRequestInPlace(t *testing.T)
 	}
 }
 
+func TestEmptyTerminalPersistsWithoutInventingATranscriptMessage(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "runtime.db")
+	store := openTestStore(t, path)
+	at := time.Date(2026, 9, 30, 0, 0, 0, 0, time.UTC)
+	record := contentRecordFixture(t, "empty-terminal", at)
+	record.Response.Blocks = nil
+	record.Response.StopReason = string(protocolcore.StopReasonIncomplete)
+	pending := record.Clone()
+	pending.Response = nil
+	if err := store.ExchangeContentRepository().Put(context.Background(), pending); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.ExchangeContentRepository().Put(context.Background(), record); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.ExchangeContentRepository().Put(context.Background(), record); err == nil {
+		t.Fatal("completed record was overwritten")
+	}
+	shutdownTestStore(t, store)
+	store = openTestStore(t, path)
+	defer shutdownTestStore(t, store)
+	got, err := store.ExchangeContentRepository().Get(context.Background(), record.ExchangeID, at.Add(time.Minute))
+	if err != nil || got.Response == nil || len(got.Response.Blocks) != 0 || got.Response.Usage != record.Response.Usage || got.Response.StopReason != string(protocolcore.StopReasonIncomplete) {
+		t.Fatalf("empty terminal: %+v, %v", got.Response, err)
+	}
+	projection, err := store.ExchangeContentRepository().GetProjection(context.Background(), record.ExchangeID, at.Add(time.Minute), exchangecontent.RequestViewIncremental)
+	if err != nil || projection.Response == nil || len(projection.Response.Blocks) != 0 {
+		t.Fatalf("projection: %+v, %v", projection, err)
+	}
+	var requestCount, expectedCount int
+	var noResponseMessage bool
+	if err := store.database.QueryRow(`SELECT request_message_count,expected_message_count,response_message_digest IS NULL FROM runtime_exchange_contents WHERE exchange_id=?`, record.ExchangeID).Scan(&requestCount, &expectedCount, &noResponseMessage); err != nil || requestCount != expectedCount || !noResponseMessage {
+		t.Fatalf("empty output invented a transcript message: %d/%d %v %v", requestCount, expectedCount, noResponseMessage, err)
+	}
+}
+
 func TestExchangeContentRepositorySharesExactHistoryAndDerivesIncrementalViews(t *testing.T) {
 	t.Parallel()
 	store := openTestStore(t, filepath.Join(t.TempDir(), "runtime.db"))

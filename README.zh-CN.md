@@ -47,6 +47,11 @@ vibermate run -- claude    # 或：vibermate run -- codex
 打开 <http://127.0.0.1:9666>，用 `./vibermated server recovery-key` 输出的密钥创建所有者账号。
 如需从其他设备访问，请看[部署指南](docs/deployment.zh-CN.md)。
 
+**有自己的公网域名？** ViberMate 内置自动 HTTPS，可申请、续期并热加载证书，无需另装
+Caddy。在 **设置 → 接入与启动 → 使用自有域名部署** 中生成原生命令或 Docker 配置，
+或直接查看[公网 HTTPS](docs/deployment.zh-CN.md#自动公共-https)与[Docker 示例](docs/docker.zh-CN.md#公网域名自动-https)。
+域名需解析到服务器，公网 TCP 443 需直达或四层透传；普通 HTTP 反向代理不能替代 Agent 的 CONNECT 通道。
+
 ## 了解更多
 
 - [官网](https://vibe-agi.github.io/zh/products/vibermate/)：一步步了解 ViberMate

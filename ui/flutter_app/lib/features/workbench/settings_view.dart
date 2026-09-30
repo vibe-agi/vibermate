@@ -17,6 +17,7 @@ import '../../core/api/control_models.dart';
 import 'deletion_dialog.dart';
 import 'egress_profile_editor.dart';
 import 'runtime_connection_guide.dart';
+import 'server_deployment_guide.dart';
 import 'workbench_controller.dart';
 
 final class SettingsView extends StatelessWidget {
@@ -815,6 +816,10 @@ final class _AccessSettingsPane extends StatelessWidget {
         ),
         dismissHelpLabel: copy('common.dismiss'),
       ),
+      if (controller.terminalManagement || controller.serverManagement) ...[
+        const SizedBox(height: 14),
+        ServerDeploymentGuide(copy: copy),
+      ],
       if (controller.terminalManagement) ...[
         const SizedBox(height: 14),
         Text(
@@ -1286,6 +1291,25 @@ final class _ServerConnectionSettingsPanel extends StatelessWidget {
             message: copy('settings.server_connection.$status'),
             error: connectionError,
           ),
+          if (tls case final identity?) ...[
+            const SizedBox(height: 8),
+            Wrap(
+              key: const Key('server-tls-summary'),
+              spacing: 16,
+              runSpacing: 8,
+              children: [
+                Text(
+                  copy('settings.server_connection.tls.mode.${identity.mode}'),
+                ),
+                if (identity.serverName case final name?)
+                  SelectableText(name, style: monoStyle),
+                if (identity.notAfter case final expiry?)
+                  Text(
+                    '${copy('settings.server_connection.tls.expires')}: $expiry',
+                  ),
+              ],
+            ),
+          ],
           if (guide.available)
             ExpansionTile(
               key: const Key('server-connection-details'),
@@ -1350,15 +1374,9 @@ final class _ServerTLSDetails extends StatelessWidget {
   Widget build(BuildContext context) {
     final facts = <(String, String)>[
       (
-        copy('settings.server_connection.tls.mode'),
-        copy('settings.server_connection.tls.mode.${status.mode}'),
-      ),
-      (
         copy('settings.server_connection.tls.state'),
         copy('settings.server_connection.tls.state.${status.state}'),
       ),
-      if (status.serverName case final value?)
-        (copy('settings.server_connection.tls.name'), value),
       if (status.challenge case final value?)
         (
           copy('settings.server_connection.tls.challenge'),
@@ -1366,8 +1384,6 @@ final class _ServerTLSDetails extends StatelessWidget {
         ),
       if (status.issuer case final value?)
         (copy('settings.server_connection.tls.issuer'), value),
-      if (status.notAfter case final value?)
-        (copy('settings.server_connection.tls.expires'), value),
       if (status.fingerprint case final value?)
         (copy('settings.server_connection.tls.fingerprint'), value),
       if (status.lastError case final value?)

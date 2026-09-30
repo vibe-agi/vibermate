@@ -1807,7 +1807,7 @@ void main() {
       final work = dashboard.environments.firstWhere(
         (environment) => environment.id == 'work',
       );
-      final activated = await preview.activateEnvironmentAccount(
+      var activated = await preview.activateEnvironmentAccount(
         work,
         'anthropic-direct',
         'anthropic-work',
@@ -1869,6 +1869,27 @@ void main() {
       expect(body, {'accountId': 'anthropic-work'});
       expect(result.environment.revision, activated.environment.revision);
       expect(result.accountId, 'anthropic-work');
+      final managed = activated.environment;
+      activated = await preview.activateEnvironmentAccount(
+        managed,
+        'anthropic-direct',
+        '',
+      );
+      final original = await api.activateEnvironmentAccount(
+        managed,
+        'anthropic-direct',
+        '',
+      );
+      expect(body, {'mode': 'original'});
+      expect(ifMatch, '${managed.revision}');
+      expect(original.accountId, isEmpty);
+      expect(
+        original.environment.routes
+            .singleWhere((route) => route.id == 'anthropic-direct')
+            .accountPolicy
+            .mode,
+        'original',
+      );
     },
   );
 

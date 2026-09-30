@@ -41,9 +41,8 @@ func buildChildArguments(
 		// ViberMate because session_meta outlived its temporary definition.
 		"model_provider=" + strconv.Quote(codexBuiltInProvider),
 		"openai_base_url=" + strconv.Quote(baseURL),
-		// The semantic proxy owns Responses HTTP. Codex 0.145 exposed its
-		// WebSocket transport behind this feature; selecting the built-in provider
-		// must not silently re-enable a wire shape the launch recipe cannot decode.
+		// Older clients honor this switch. Current built-in providers still
+		// negotiate WebSockets; the proxy returns 426 and Codex falls back to HTTP.
 		"features.responses_websockets=false",
 	}
 	// Preserve the client's retry policy. Each new HTTP request is a new

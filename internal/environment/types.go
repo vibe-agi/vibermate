@@ -141,6 +141,7 @@ type AccountSelectionMode string
 
 const (
 	AccountSelectionFixed      AccountSelectionMode = "fixed"
+	AccountSelectionOriginal   AccountSelectionMode = "original"
 	AccountSelectionJavaScript AccountSelectionMode = "javascript"
 )
 

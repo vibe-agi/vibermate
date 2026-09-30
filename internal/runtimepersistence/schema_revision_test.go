@@ -8,6 +8,7 @@ import (
 	"errors"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 // schema.sql and schemaRevision change together. When this fails after an
@@ -18,6 +19,29 @@ func TestSchemaRevisionTracksSchemaFile(t *testing.T) {
 	digest := sha256.Sum256([]byte(schemaSQL))
 	if schemaRevision != 1 || hex.EncodeToString(digest[:]) != revision1 {
 		t.Fatalf("schema.sql changed (sha256 %x) without a schemaRevision bump", digest)
+	}
+}
+
+func TestUsageDefaultsApplyOnlyToNewDatabases(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "runtime.db")
+	before := time.Now().UTC().Truncate(time.Millisecond)
+	store := openTestStore(t, path)
+	policy, err := store.UsagePolicy(context.Background())
+	if err != nil || !policy.Enabled || policy.RetentionDays != 365 || policy.Revision != 1 ||
+		policy.CollectingSince == nil || policy.CollectingSince.Before(before) {
+		t.Fatalf("new usage defaults = %+v, %v", policy, err)
+	}
+	// An old revision-one default is still an existing user's choice.
+	if _, err := store.database.Exec(`UPDATE runtime_usage_policy SET enabled=0,retention_days=90,collecting_since_unix_ms=NULL`); err != nil {
+		t.Fatal(err)
+	}
+	shutdownTestStore(t, store)
+	store = openTestStore(t, path)
+	defer shutdownTestStore(t, store)
+	policy, err = store.UsagePolicy(context.Background())
+	if err != nil || policy.Enabled || policy.RetentionDays != 90 || policy.Revision != 1 || policy.CollectingSince != nil {
+		t.Fatalf("reopening overwrote an existing choice = %+v, %v", policy, err)
 	}
 }
 

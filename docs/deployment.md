@@ -68,6 +68,18 @@ default) and keeps the original destination and credentials. When you want
 different routing, recording or retention, publish your own traffic policy and
 select it with `--env <policy ID>`.
 
+New Runtime databases enable body-free usage collection with 365-day retention.
+Existing collection and retention choices are preserved. Changes in Statistics
+settings take effect without restarting; disabled periods are not backfilled.
+
+An upstream route can also select **Original request account · keep credentials**
+when its origin and protocol match the client. This retains route/model/network
+policies but does not inject managed credentials. The account list switches
+manual selection between this option and scoped managed accounts for the next
+request, leaving in-flight requests unchanged. Cross-origin credential
+passthrough is rejected. Changing account identity revokes the separate managed
+account-history permission.
+
 ### Create a manual capture login for other clients in the Web workbench
 
 The owner signs in to the Web workbench and opens **Traffic → Captures**, then
@@ -178,6 +190,13 @@ vibermate trust --server https://vibermate.home.arpa:9666 --system-roots
 
 ## Automatic public HTTPS
 
+In the App or owner Web workbench, **Settings → Access & launch → Deploy with
+your own domain** generates native commands or `.env.public` settings after
+you enter the domain/contact email and accept the issuer's terms. It does not
+change the current Runtime, execute commands or request certificates. Existing
+certificate files and private-network deployment use the corresponding sections
+of this guide.
+
 This mode supports one publicly issuable DNS name, validated with HTTP-01 or
 TLS-ALPN-01. It does not support private names, IPs, wildcards or DNS-01.
 ViberMate uses CertMagic to manage certificate state. Certificates are stored in
@@ -211,10 +230,23 @@ explicitly accept the issuer's terms; on start, the domain and the optional
 contact email are sent to the chosen CA. For a custom ACME directory, use the
 expert flag `--acme-ca`.
 
-While a certificate is being requested or renewed, or if issuance fails,
-**Settings → Safety & data → Server connection** shows the real state and
-error. The first TLS-ALPN request is asynchronous: a running process does not
-mean the certificate is ready.
+**Settings → Safety & data → Server HTTPS** shows certificate state, domain
+and expiry immediately; expand the details for issuer, fingerprint and errors.
+Initial TLS-ALPN issuance is asynchronous. A running process or healthy
+container does not prove that its certificate is ready, and the Web page may
+be unreachable until that first certificate exists. Check the server terminal
+or container logs first:
+
+```sh
+docker compose --env-file .env.public -f compose.public.yaml logs --tail=100 -f vibermate
+```
+
+Check A/AAAA records, cloud/firewall TCP 443 rules, unchanged TCP forwarding,
+and persistent writable storage in that order. Do not bypass certificate
+warnings or open plaintext public HTTP as a workaround. Let's Encrypt staging
+can exercise initial setup, but its test certificates are not browser-trusted
+and do not prove production issuance. Automated release tests use synthetic
+certificates, not public-domain ACME acceptance.
 
 ## Use an existing certificate
 
@@ -289,6 +321,10 @@ them.
   subnet, never client networks (`0.0.0.0/0` is refused). TCP health checks
   work unchanged, and PROXY protocol `LOCAL` health checks are allowed. With
   Docker, set `VIBERMATE_TRUSTED_PROXIES` in `.env.public` or `.env.team`.
+  `UNKNOWN` (v1) and `PROXY` with `UNSPEC` (v2) do not identify health checks:
+  they receive the same strict address check as a missing header, including
+  when the allowlist is changed. Several networks whose union covers all IPv4
+  or all IPv6 addresses are refused as trusted proxies, just like `/0`.
 - **Layer-7 (HTTP) reverse proxies**, such as Nginx, Caddy's HTTP mode or cloud
   application load balancers, are not supported in front of the Server: they
   cannot carry the Agents' CONNECT traffic, and the Server refuses management

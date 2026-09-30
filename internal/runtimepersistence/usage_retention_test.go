@@ -27,7 +27,7 @@ func TestUsagePolicyNonShorteningDoesNotRewriteHistory(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			ctx := context.Background()
-			store := openTestStore(t, filepath.Join(t.TempDir(), "usage.db"))
+			store := openDisabledUsageTestStore(t, filepath.Join(t.TempDir(), "usage.db"))
 			defer shutdownTestStore(t, store)
 			now := time.Date(2026, 9, 28, 0, 0, 0, 0, time.UTC)
 			start := now.AddDate(0, 0, -91)
@@ -74,7 +74,7 @@ BEGIN SELECT RAISE(ABORT,'synthetic history delete failure'); END;`); err != nil
 func TestUsageShorterRetentionIsImmediateAndNeverResurrected(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "usage.db")
-	store := openTestStore(t, path)
+	store := openDisabledUsageTestStore(t, path)
 	defer func() { shutdownTestStore(t, store) }()
 	start := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
 	now := start.AddDate(0, 0, 8)
@@ -128,7 +128,7 @@ BEGIN SELECT RAISE(ABORT,'synthetic history delete failure'); END;`); err != nil
 	}
 	check(1) // New observations use the new policy, not an older pending restriction.
 	shutdownTestStore(t, store)
-	store = openTestStore(t, path)
+	store = openDisabledUsageTestStore(t, path)
 	check(1)
 	if err := store.MaintainExpired(ctx, now); err == nil {
 		t.Fatal("maintenance did not attempt to apply the shortened retention")
@@ -143,7 +143,7 @@ BEGIN SELECT RAISE(ABORT,'synthetic history delete failure'); END;`); err != nil
 	now = now.AddDate(0, 0, 10)
 	check(1)
 	shutdownTestStore(t, store)
-	store = openTestStore(t, path)
+	store = openDisabledUsageTestStore(t, path)
 	check(1)
 }
 
@@ -153,7 +153,7 @@ func TestUsageRetentionAtScaleDoesNotHoldWriter(t *testing.T) {
 	}
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "usage.db")
-	store := openTestStore(t, path)
+	store := openDisabledUsageTestStore(t, path)
 	defer func() { shutdownTestStore(t, store) }()
 	start := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
 	now := start.AddDate(0, 0, 8)
@@ -246,7 +246,7 @@ func TestUsageRetentionAtScaleDoesNotHoldWriter(t *testing.T) {
 	checkAudit()
 	check(20)
 	shutdownTestStore(t, store)
-	store = openTestStore(t, path)
+	store = openDisabledUsageTestStore(t, path)
 	check(20)
 	checkAudit()
 	if err := store.MaintainExpired(ctx, now); err != nil {
@@ -259,7 +259,7 @@ func TestUsageRetentionAtScaleDoesNotHoldWriter(t *testing.T) {
 func TestUsageRetentionChangesPreserveEachObservationDeadline(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "usage.db")
-	store := openTestStore(t, path)
+	store := openDisabledUsageTestStore(t, path)
 	defer func() { shutdownTestStore(t, store) }()
 	start := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
 	policy, err := store.UsagePolicy(ctx)
@@ -305,7 +305,7 @@ func TestUsageRetentionChangesPreserveEachObservationDeadline(t *testing.T) {
 	check(9, []string{"middle", "new"})
 	check(18, []string{"new"})
 	shutdownTestStore(t, store)
-	store = openTestStore(t, path)
+	store = openDisabledUsageTestStore(t, path)
 	if err := store.MaintainExpired(ctx, start.AddDate(0, 0, 7)); err != nil {
 		t.Fatal(err)
 	}

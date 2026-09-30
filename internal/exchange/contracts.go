@@ -550,10 +550,10 @@ func WithClientProtocolEvidence(
 }
 
 // WithOriginalHeaders carries the client-owned request envelope needed only
-// by an exact client-passthrough route. A managed-credential path never reads
-// it; the frozen Environment plan must prove exact Original Destination
-// equality before these headers can reach a transport. Values remain in
-// memory only and are never evidence.
+// by an exact client-passthrough route. Managed paths read only bounded native
+// protocol metadata from it, never client credential authority. The frozen
+// plan must prove same-origin passthrough before the full envelope can reach
+// a transport. Values remain in memory only and are never evidence.
 func WithOriginalHeaders(headers http.Header) ClientRequestOption {
 	return ClientRequestOption{
 		kind:            clientRequestOptionOriginalHeaders,

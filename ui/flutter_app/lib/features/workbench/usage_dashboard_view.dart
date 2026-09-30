@@ -324,11 +324,18 @@ Future<void> _editUsageCollection(
             children: [
               Text(copy('usage.collection.explanation')),
               const SizedBox(height: 16),
-              SwitchListTile.adaptive(
-                contentPadding: EdgeInsets.zero,
-                title: Text(copy('usage.collection.enable')),
-                value: enabled,
-                onChanged: (value) => setState(() => enabled = value),
+              Row(
+                children: [
+                  Expanded(child: Text(copy('usage.collection.enable'))),
+                  Semantics(
+                    label: copy('usage.collection.enable'),
+                    child: CompactSwitch(
+                      switchKey: const Key('usage-collection-enabled'),
+                      value: enabled,
+                      onChanged: (value) => setState(() => enabled = value),
+                    ),
+                  ),
+                ],
               ),
               const SizedBox(height: 12),
               DropdownButtonFormField<int>(
@@ -657,11 +664,13 @@ final class _UsageGroupTableState extends State<UsageGroupTable> {
   bool _loading = true;
   // A newer snapshot exists (seen by the report poll) or the committed one was
   // refused (409). Either way later pages of the committed snapshot cannot be
-  // read, so paging waits for an explicit update to the first page.
+  // read, so paging waits for an explicit refresh of the current page.
   bool _updatesPending = false;
   bool _snapshotExpired = false;
   String? _error;
   _UsageTarget? _failedTarget;
+  bool _failedRefresh = false;
+  double _viewportHeight = 80;
   RuntimeUsageReport? _page;
   RuntimeUsageGroup? _subtotal;
   late String _snapshot;
@@ -720,7 +729,7 @@ final class _UsageGroupTableState extends State<UsageGroupTable> {
   }
 
   void _refresh() {
-    unawaited(_load(_committed.firstPage(), snapshot: widget.report.snapshot));
+    unawaited(_load(_committed, refreshPage: true));
   }
 
   Future<void> _load(
@@ -728,6 +737,7 @@ final class _UsageGroupTableState extends State<UsageGroupTable> {
     RuntimeUsageGroup? knownSubtotal,
     String? snapshot,
     bool renewable = true,
+    bool refreshPage = false,
   }) async {
     final generation = ++_generation;
     void begin() {
@@ -748,26 +758,51 @@ final class _UsageGroupTableState extends State<UsageGroupTable> {
     final filters = target.filters(widget.report.filters);
     final dimension = target.dimensions[target.trail.length];
     final cursor = target.cursors.last;
-    RuntimeUsageQuery query({bool summary = false, required String snapshot}) =>
-        RuntimeUsageQuery(
-          from: period.from,
-          until: period.until,
-          timeZone: period.timeZone,
-          groupBy: summary ? '' : dimension,
-          filters: filters,
-          snapshot: snapshot,
-          cursor: summary ? '' : cursor,
-        );
+    RuntimeUsageQuery query({
+      bool summary = false,
+      required String snapshot,
+      String? pageCursor,
+    }) => RuntimeUsageQuery(
+      from: period.from,
+      until: period.until,
+      timeZone: period.timeZone,
+      groupBy: summary ? '' : dimension,
+      filters: filters,
+      snapshot: snapshot,
+      cursor: summary ? '' : pageCursor ?? cursor,
+    );
     // Navigation (open a level, regroup, update) may move to the newest
     // snapshot: it starts a fresh first page, so nothing being read is
     // replaced. Paging reads one snapshot and is never swapped for a page of
     // another. Renewal is bounded so continuous writes cannot loop forever.
-    final renewals = renewable && cursor.isEmpty ? 2 : 0;
+    final renewals = renewable && (refreshPage || cursor.isEmpty) ? 2 : 0;
     for (var attempt = 0; attempt <= renewals; attempt++) {
       try {
         RuntimeUsageReport page;
         RuntimeUsageGroup? subtotal;
-        if (attempt == 0) {
+        var cursors = target.cursors;
+        if (refreshPage) {
+          // Cursors belong to one snapshot; clamp only if it has fewer pages.
+          // ponytail: replay is O(current page); add server-side seek only if
+          // deep-page refresh becomes slow.
+          final summary = await widget.loadPage(
+            query(summary: true, snapshot: ''),
+          );
+          if (!mounted || generation != _generation) return;
+          subtotal = summary.total;
+          cursors = [''];
+          page = await widget.loadPage(
+            query(snapshot: summary.snapshot, pageCursor: ''),
+          );
+          while (cursors.length < target.cursors.length &&
+              page.nextCursor.isNotEmpty) {
+            if (!mounted || generation != _generation) return;
+            cursors.add(page.nextCursor);
+            page = await widget.loadPage(
+              query(snapshot: summary.snapshot, pageCursor: cursors.last),
+            );
+          }
+        } else if (attempt == 0) {
           subtotal =
               knownSubtotal ??
               (target.trail.isEmpty && requestedSnapshot == rootSnapshot
@@ -804,10 +839,19 @@ final class _UsageGroupTableState extends State<UsageGroupTable> {
             ..addAll(target.trail);
           _cursors
             ..clear()
-            ..addAll(target.cursors);
+            ..addAll(cursors);
           _page = page;
           _snapshot = page.snapshot;
           _subtotal = subtotal;
+          // Keep this viewport stable when regrouping to fewer rows, so the
+          // surrounding scroll view does not clamp and jump towards the top.
+          _viewportHeight = math.max(
+            _viewportHeight,
+            math.min(
+              480,
+              44 + (page.groups.length + (subtotal == null ? 0 : 1)) * 60 + 24,
+            ),
+          );
           _loading = false;
           _snapshotExpired = false;
           _updatesPending =
@@ -829,6 +873,7 @@ final class _UsageGroupTableState extends State<UsageGroupTable> {
           } else {
             _error = 'usage.page.failed';
             _failedTarget = target;
+            _failedRefresh = refreshPage;
           }
         });
         return;
@@ -1027,7 +1072,6 @@ final class _UsageGroupTableState extends State<UsageGroupTable> {
         'usage.table.cost',
       ];
       final headers = [for (final label in labels) widget.copy(label)];
-      final rowCount = page.groups.length + (_subtotal == null ? 0 : 1);
       List<DataColumn> columns({required bool heading}) => [
         for (var i = 0; i < labels.length; i++)
           DataColumn(
@@ -1048,8 +1092,7 @@ final class _UsageGroupTableState extends State<UsageGroupTable> {
       ];
       return SizedBox(
         key: const Key('usage-breakdown-viewport'),
-        // Short reports shrink to their rows; long ones scroll inside 480.
-        height: math.min(480, 44 + rowCount * 60 + 24),
+        height: _viewportHeight,
         child: Scrollbar(
           controller: _horizontalScroll,
           thumbVisibility: true,
@@ -1145,38 +1188,41 @@ final class _UsageGroupTableState extends State<UsageGroupTable> {
           ],
         ),
         const SizedBox(height: 8),
-        Wrap(
-          spacing: 4,
-          runSpacing: 4,
-          crossAxisAlignment: WrapCrossAlignment.center,
-          children: [
-            TextButton(
-              onPressed: _trail.isEmpty ? null : () => _navigate(0),
-              child: Text(copy('usage.group.${_labels[_groupBy]}')),
-            ),
-            for (var i = 0; i < _trail.length; i++) ...[
-              const Icon(Icons.chevron_right, size: 14),
-              ConstrainedBox(
-                constraints: const BoxConstraints(maxWidth: 240),
-                child: TextButton(
-                  onPressed: i == _trail.length - 1
-                      ? null
-                      : () => _navigate(i + 1),
-                  child: Text(
-                    _label(_trail[i]),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
+        ConstrainedBox(
+          constraints: const BoxConstraints(minHeight: 40),
+          child: Wrap(
+            spacing: 4,
+            runSpacing: 4,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              TextButton(
+                onPressed: _trail.isEmpty ? null : () => _navigate(0),
+                child: Text(copy('usage.group.${_labels[_groupBy]}')),
+              ),
+              for (var i = 0; i < _trail.length; i++) ...[
+                const Icon(Icons.chevron_right, size: 14),
+                ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 240),
+                  child: TextButton(
+                    onPressed: i == _trail.length - 1
+                        ? null
+                        : () => _navigate(i + 1),
+                    child: Text(
+                      _label(_trail[i]),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
                   ),
                 ),
-              ),
+              ],
+              if (_groupBy == 'project')
+                FilterChip(
+                  label: Text(copy('usage.branch.launch')),
+                  selected: _byBranch,
+                  onSelected: (value) => _navigate(0, byBranch: value),
+                ),
             ],
-            if (_groupBy == 'project')
-              FilterChip(
-                label: Text(copy('usage.branch.launch')),
-                selected: _byBranch,
-                onSelected: (value) => _navigate(0, byBranch: value),
-              ),
-          ],
+          ),
         ),
         Text(
           copy('usage.path.${_labels[_groupBy]}'),
@@ -1224,7 +1270,9 @@ final class _UsageGroupTableState extends State<UsageGroupTable> {
             actionLabel: copy('common.retry'),
             onAction: () {
               final target = _failedTarget;
-              if (target != null) unawaited(_load(target));
+              if (target != null) {
+                unawaited(_load(target, refreshPage: _failedRefresh));
+              }
             },
           ),
         const SizedBox(height: 8),
@@ -1233,44 +1281,54 @@ final class _UsageGroupTableState extends State<UsageGroupTable> {
           child: _loading ? const LinearProgressIndicator() : null,
         ),
         if (_loading && _page == null)
-          Padding(
-            padding: const EdgeInsets.all(24),
-            child: CompactLoadingMessage(label: copy('usage.loading')),
+          SizedBox(
+            height: _viewportHeight,
+            child: Center(
+              child: CompactLoadingMessage(label: copy('usage.loading')),
+            ),
           )
         else if (_page case final page?) ...[
           if (page.groups.isEmpty)
-            Padding(
-              padding: const EdgeInsets.all(16),
-              child: Text(copy('usage.empty.window')),
+            SizedBox(
+              height: _viewportHeight,
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Text(copy('usage.empty.window')),
+              ),
             )
           else
             _table(page),
-          if (_cursors.length > 1 || page.nextCursor.isNotEmpty)
-            Row(
-              mainAxisAlignment: MainAxisAlignment.end,
-              children: [
-                IconButton(
-                  tooltip: copy('usage.page.previous'),
-                  icon: const Icon(Icons.chevron_left),
-                  onPressed: _pagingBlocked || _cursors.length == 1
-                      ? null
-                      : () =>
-                            _turnPage(_cursors.sublist(0, _cursors.length - 1)),
-                ),
-                Text(
-                  copy.format('usage.page.number', {
-                    'page': _cursors.length.toString(),
-                  }),
-                ),
-                IconButton(
-                  tooltip: copy('usage.page.next'),
-                  icon: const Icon(Icons.chevron_right),
-                  onPressed: _pagingBlocked || page.nextCursor.isEmpty
-                      ? null
-                      : () => _turnPage([..._cursors, page.nextCursor]),
-                ),
-              ],
-            ),
+          SizedBox(
+            height: 40,
+            child: _cursors.length == 1 && page.nextCursor.isEmpty
+                ? null
+                : Row(
+                    mainAxisAlignment: MainAxisAlignment.end,
+                    children: [
+                      IconButton(
+                        tooltip: copy('usage.page.previous'),
+                        icon: const Icon(Icons.chevron_left),
+                        onPressed: _pagingBlocked || _cursors.length == 1
+                            ? null
+                            : () => _turnPage(
+                                _cursors.sublist(0, _cursors.length - 1),
+                              ),
+                      ),
+                      Text(
+                        copy.format('usage.page.number', {
+                          'page': _cursors.length.toString(),
+                        }),
+                      ),
+                      IconButton(
+                        tooltip: copy('usage.page.next'),
+                        icon: const Icon(Icons.chevron_right),
+                        onPressed: _pagingBlocked || page.nextCursor.isEmpty
+                            ? null
+                            : () => _turnPage([..._cursors, page.nextCursor]),
+                      ),
+                    ],
+                  ),
+          ),
         ],
         const SizedBox(height: 8),
         Text(
@@ -1285,13 +1343,18 @@ final class _UsageGroupTableState extends State<UsageGroupTable> {
             context,
           ).textTheme.bodySmall?.copyWith(color: context.viberColors.textFaint),
         ),
-        if (_groupBy == 'project')
-          Text(
+        Visibility(
+          visible: _groupBy == 'project',
+          maintainSize: true,
+          maintainAnimation: true,
+          maintainState: true,
+          child: Text(
             copy('usage.projects.hint'),
             style: Theme.of(context).textTheme.bodySmall?.copyWith(
               color: context.viberColors.textFaint,
             ),
           ),
+        ),
       ],
     );
   }
@@ -2265,11 +2328,4 @@ final class _UsageTarget {
     ...base,
     for (var i = 0; i < trail.length; i++) dimensions[i]: trail[i].id,
   };
-
-  _UsageTarget firstPage() => _UsageTarget(
-    groupBy: groupBy,
-    byBranch: byBranch,
-    trail: trail,
-    cursors: const [''],
-  );
 }

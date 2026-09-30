@@ -53,6 +53,9 @@ type storedResponseManifest struct {
 	StopReason       string                               `json:"stopReason"`
 	Usage            exchangecontent.Usage                `json:"usage"`
 	ProtocolEvidence []protocolcore.ProtocolEvidenceValue `json:"protocolEvidence,omitempty"`
+	// Empty terminals retain status/usage without adding an invented message
+	// to the transcript. Omitted on all pre-existing, non-empty records.
+	EmptyOutput bool `json:"emptyOutput,omitempty"`
 }
 
 type storedTranscript struct {
@@ -268,6 +271,10 @@ func completeStoredExchangeContent(
 		return false, fmt.Errorf("load pending Exchange content: %w", err)
 	}
 	storedManifest, err := decodeStoredContentManifest(storedEncodedManifest)
+	addedMessages := 1
+	if manifest.Response != nil && manifest.Response.EmptyOutput {
+		addedMessages = 0
+	}
 	if err != nil || storedManifest.ExchangeID != manifest.ExchangeID ||
 		storedManifest.Response != nil || manifest.Response == nil ||
 		storedScopeKind != scopeKind || storedScopeID != scopeID ||
@@ -282,9 +289,9 @@ func completeStoredExchangeContent(
 		responseDigest.Valid ||
 		systemDigest.String != transcript.systemDigest ||
 		inherited < 0 || inherited > requestCount ||
-		transcript.responseDigest == "" ||
+		(transcript.responseDigest == "") != manifest.Response.EmptyOutput ||
 		len(transcript.nodes) != transcript.expectedCount ||
-		transcript.expectedCount != requestCount+1 {
+		transcript.expectedCount != requestCount+addedMessages {
 		return false, exchangecontent.ErrInvalidEvidence
 	}
 	if inherited == 0 && baseRoot.Valid || inherited > 0 && !baseRoot.Valid {
@@ -297,16 +304,18 @@ func completeStoredExchangeContent(
 		return false, exchangecontent.ErrInvalidEvidence
 	}
 	*encodedManifest = encoded
-	responseNode := transcript.nodes[len(transcript.nodes)-1]
-	payload, ok := transcript.messages[responseNode.messageDigest]
-	if !ok || responseNode.digest != transcript.expectedRoot {
-		return false, exchangecontent.ErrInvalidEvidence
-	}
-	if err := putStoredMessage(ctx, transaction, responseNode.messageDigest, payload); err != nil {
-		return false, err
-	}
-	if err := putStoredTranscriptNode(ctx, transaction, responseNode); err != nil {
-		return false, err
+	if !manifest.Response.EmptyOutput {
+		responseNode := transcript.nodes[len(transcript.nodes)-1]
+		payload, ok := transcript.messages[responseNode.messageDigest]
+		if !ok || responseNode.digest != transcript.expectedRoot {
+			return false, exchangecontent.ErrInvalidEvidence
+		}
+		if err := putStoredMessage(ctx, transaction, responseNode.messageDigest, payload); err != nil {
+			return false, err
+		}
+		if err := putStoredTranscriptNode(ctx, transaction, responseNode); err != nil {
+			return false, err
+		}
 	}
 	result, err := transaction.ExecContext(
 		ctx,
@@ -318,7 +327,7 @@ func completeStoredExchangeContent(
 		 WHERE exchange_id = ? AND response_message_digest IS NULL`,
 		transcript.expectedRoot,
 		transcript.expectedCount,
-		transcript.responseDigest,
+		nullableDigest(transcript.responseDigest),
 		*encodedManifest,
 		manifest.ExchangeID,
 	)
@@ -618,7 +627,7 @@ func loadStoredContentReference(
 			!validStoredDigest(reference.baseRoot.String))) {
 		return storedContentReference{}, exchangecontent.ErrInvalidEvidence
 	}
-	if manifest.Response == nil {
+	if manifest.Response == nil || manifest.Response.EmptyOutput {
 		if reference.responseDigest.Valid ||
 			reference.expectedCount != reference.requestCount ||
 			reference.expectedRoot != reference.requestRoot {
@@ -755,6 +764,7 @@ func encodeStoredContent(record exchangecontent.Record) (
 	}
 	if record.Response != nil {
 		manifest.Response = &storedResponseManifest{
+			EmptyOutput:    len(record.Response.Blocks) == 0,
 			ID:             record.Response.ID,
 			RequestedModel: record.Response.RequestedModel,
 			EffectiveModel: record.Response.EffectiveModel,
@@ -826,8 +836,12 @@ func recordFromStoredManifest(
 		},
 	}
 	if manifest.Response != nil {
-		if responseMessage == nil {
+		if (responseMessage == nil) != manifest.Response.EmptyOutput {
 			return exchangecontent.Record{}, exchangecontent.ErrInvalidEvidence
+		}
+		var blocks []exchangecontent.Block
+		if responseMessage != nil {
+			blocks = responseMessage.Blocks
 		}
 		record.Response = &exchangecontent.Response{
 			ID:             manifest.Response.ID,
@@ -835,7 +849,7 @@ func recordFromStoredManifest(
 			EffectiveModel: manifest.Response.EffectiveModel,
 			ReportedModel:  manifest.Response.ReportedModel,
 			StopReason:     manifest.Response.StopReason,
-			Blocks:         cloneStoredBlocks(responseMessage.Blocks),
+			Blocks:         cloneStoredBlocks(blocks),
 			Usage:          manifest.Response.Usage,
 			ProtocolEvidence: append(
 				[]protocolcore.ProtocolEvidenceValue(nil),
@@ -894,8 +908,12 @@ func projectionFromStoredManifest(
 		TotalMessageCount: totalMessageCount,
 	}
 	if manifest.Response != nil {
-		if responseMessage == nil {
+		if (responseMessage == nil) != manifest.Response.EmptyOutput {
 			return exchangecontent.Projection{}, exchangecontent.ErrInvalidEvidence
+		}
+		var blocks []exchangecontent.Block
+		if responseMessage != nil {
+			blocks = responseMessage.Blocks
 		}
 		projection.Response = &exchangecontent.Response{
 			ID:             manifest.Response.ID,
@@ -903,7 +921,7 @@ func projectionFromStoredManifest(
 			EffectiveModel: manifest.Response.EffectiveModel,
 			ReportedModel:  manifest.Response.ReportedModel,
 			StopReason:     manifest.Response.StopReason,
-			Blocks:         cloneStoredBlocks(responseMessage.Blocks),
+			Blocks:         cloneStoredBlocks(blocks),
 			Usage:          manifest.Response.Usage,
 			ProtocolEvidence: append(
 				[]protocolcore.ProtocolEvidenceValue(nil),
@@ -945,7 +963,7 @@ func buildStoredTranscript(record exchangecontent.Record) (storedTranscript, err
 	result.requestCount = len(record.Request.Messages)
 	result.expectedRoot = parent
 	result.expectedCount = result.requestCount
-	if record.Response != nil {
+	if record.Response != nil && len(record.Response.Blocks) != 0 {
 		message := exchangecontent.Message{
 			Role: "assistant", Blocks: cloneStoredBlocks(record.Response.Blocks),
 		}

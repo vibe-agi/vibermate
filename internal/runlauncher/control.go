@@ -25,6 +25,38 @@ import (
 
 const maxControlResponseBytes = 128 << 10
 
+var ErrLocalRootUntrusted = errors.New("local Root trust could not be verified; install and trust the current Root in ViberMate Settings")
+
+// CheckLocalRootTrust is read-only: Runtime readiness does not establish that
+// a client using macOS native trust can connect through the current local CA.
+func CheckLocalRootTrust(ctx context.Context, discovery Discovery, timeout time.Duration) error {
+	if ctx == nil || discovery == nil || timeout <= 0 {
+		return ErrLocalRootUntrusted
+	}
+	session, err := discovery.Load()
+	if err != nil {
+		return errors.Join(ErrLocalRootUntrusted, err)
+	}
+	client, err := newControlClient(session, timeout)
+	if err != nil {
+		return errors.Join(ErrLocalRootUntrusted, err)
+	}
+	defer client.close()
+	return client.checkLocalRootTrust(ctx)
+}
+
+func (client *controlClient) checkLocalRootTrust(ctx context.Context) error {
+	var root desktopcontrol.RootCAResponse
+	if err := client.jsonRequest(ctx, http.MethodGet, "/api/v1/platform/root-ca",
+		client.credential, "", nil, http.StatusOK, &root); err != nil {
+		return errors.Join(ErrLocalRootUntrusted, err)
+	}
+	if !root.Available || !root.RootValid || root.CertificatePresent != "present" || root.TrustDecision != "trusted" {
+		return ErrLocalRootUntrusted
+	}
+	return nil
+}
+
 type ControlFailure struct {
 	Status     int
 	ReasonCode capturecontrol.ReasonCode

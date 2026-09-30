@@ -5,13 +5,15 @@ import '../../core/design/viber_theme.dart';
 import '../../core/design/workbench_widgets.dart';
 import '../../core/i18n/app_copy.dart';
 
-/// Edits a Route's explicit scope, never the shared Endpoint associations.
+/// Edits selection and scope together, never the shared Endpoint associations.
 final class RouteAccountScopeButton extends StatelessWidget {
   const RouteAccountScopeButton({
     required this.policy,
     required this.accounts,
     required this.copy,
     required this.onChanged,
+    this.loadLibrary,
+    this.allowOriginal = false,
     super.key,
   });
 
@@ -19,34 +21,61 @@ final class RouteAccountScopeButton extends StatelessWidget {
   final List<ProviderAccount> accounts;
   final AppCopy copy;
   final ValueChanged<RouteAccountPolicy>? onChanged;
+  final Future<CodeLibraryCatalog> Function()? loadLibrary;
+  final bool allowOriginal;
 
   @override
-  Widget build(BuildContext context) => CompactLabeledControl(
-    label: copy('environment.account.scope'),
-    child: OutlinedButton.icon(
-      onPressed: onChanged == null
-          ? null
-          : () async {
-              final selected = await showDialog<RouteAccountPolicy>(
-                context: context,
-                builder: (_) => _AccountScopeDialog(
-                  policy: policy,
-                  accounts: accounts,
-                  copy: copy,
-                ),
-              );
-              if (selected != null && context.mounted) {
-                onChanged!(selected);
-              }
-            },
-      icon: const Icon(Icons.filter_list, size: 15),
-      label: Text(
-        copy.format('environment.account.scope_count', {
-          'count': policy.accounts.length,
-        }),
+  Widget build(BuildContext context) {
+    final account = accounts
+        .where((value) => value.id == policy.fixedAccountId)
+        .firstOrNull;
+    final name =
+        policy.accounts
+            .where((value) => value.id == policy.fixedAccountId)
+            .firstOrNull
+            ?.displayName ??
+        policy.fixedAccountId;
+    final selection = policy.mode == 'original'
+        ? copy('environment.account.original')
+        : policy.mode == 'javascript'
+        ? '${copy('environment.account.javascript')} · ${policy.selector!.displayName} · r${policy.selector!.revision}'
+        : _fixedLabel(name, account, copy);
+    return CompactLabeledControl(
+      label: copy('environment.account'),
+      child: OutlinedButton.icon(
+        onPressed: onChanged == null
+            ? null
+            : () async {
+                final selected = await showDialog<RouteAccountPolicy>(
+                  context: context,
+                  builder: (_) => _AccountScopeDialog(
+                    policy: policy,
+                    accounts: accounts,
+                    copy: copy,
+                    loadLibrary: loadLibrary,
+                    allowOriginal: allowOriginal,
+                  ),
+                );
+                if (selected != null && context.mounted) {
+                  onChanged!(selected);
+                }
+              },
+        icon: const Icon(Icons.filter_list, size: 15),
+        label: Text(
+          '$selection · ${copy.format('environment.account.scope_count', {'count': policy.accounts.length})}',
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+        ),
       ),
-    ),
-  );
+    );
+  }
+}
+
+String _fixedLabel(String name, ProviderAccount? account, AppCopy copy) {
+  final reason = account == null
+      ? copy('environment.account.selection_lost')
+      : routeAccountUnavailableReason(account, copy);
+  return '${copy('environment.account.fixed')} · $name${reason.isEmpty ? '' : ' · $reason'}';
 }
 
 final class _AccountScopeDialog extends StatefulWidget {
@@ -54,10 +83,14 @@ final class _AccountScopeDialog extends StatefulWidget {
     required this.policy,
     required this.accounts,
     required this.copy,
+    required this.loadLibrary,
+    required this.allowOriginal,
   });
   final RouteAccountPolicy policy;
   final List<ProviderAccount> accounts;
   final AppCopy copy;
+  final Future<CodeLibraryCatalog> Function()? loadLibrary;
+  final bool allowOriginal;
   @override
   State<_AccountScopeDialog> createState() => _AccountScopeDialogState();
 }
@@ -67,6 +100,9 @@ final class _AccountScopeDialogState extends State<_AccountScopeDialog> {
       .map((account) => account.id)
       .toSet();
   late String _fixedAccountId = widget.policy.fixedAccountId;
+  late String _mode = widget.policy.mode;
+  late CodeLibraryAccountSelectorRevision? _selector = widget.policy.selector;
+  late final _library = widget.loadLibrary?.call();
   String _query = '';
 
   @override
@@ -75,16 +111,14 @@ final class _AccountScopeDialogState extends State<_AccountScopeDialog> {
     final available = {
       for (final account in widget.accounts) account.id: account,
     };
-    // Only a structural loss (the Account was unlinked or deleted) forces a
-    // replacement. Disabled state and credential health are runtime facts:
-    // they are labelled, but never block editing the explicit scope.
-    final needsReplacement =
-        widget.policy.mode == 'fixed' &&
-        !available.containsKey(widget.policy.fixedAccountId);
     final validSelection =
-        _selected.isNotEmpty &&
+        (_selected.isNotEmpty || _mode == 'original') &&
         _selected.every(available.containsKey) &&
-        (widget.policy.mode != 'fixed' || _selected.contains(_fixedAccountId));
+        (_mode == 'fixed'
+            ? _selected.contains(_fixedAccountId)
+            : _mode == 'original'
+            ? widget.allowOriginal
+            : _selector != null);
     final references = {
       for (final account in widget.policy.accounts) account.id: account,
       for (final account in widget.accounts)
@@ -104,7 +138,7 @@ final class _AccountScopeDialogState extends State<_AccountScopeDialog> {
       ].any((value) => value.toLowerCase().contains(_query));
     }).toList()..sort((a, b) => a.displayName.compareTo(b.displayName));
     return AlertDialog(
-      title: Text(copy('environment.account.scope')),
+      title: Text(copy('environment.account.configure')),
       content: SizedBox(
         width: ViberMetrics.dialogStandardWidth,
         height: (MediaQuery.sizeOf(context).height * 0.55).clamp(200, 480),
@@ -112,8 +146,99 @@ final class _AccountScopeDialogState extends State<_AccountScopeDialog> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            FutureBuilder<CodeLibraryCatalog>(
+              future: _library,
+              builder: (context, snapshot) {
+                String token(CodeLibraryAccountSelectorRevision item) =>
+                    'javascript:${item.id}:${item.revision}';
+                final selectors = [...?snapshot.data?.accountSelectors]
+                  ..sort((a, b) => a.displayName.compareTo(b.displayName));
+                final current = _mode == 'original'
+                    ? 'original'
+                    : _mode == 'fixed'
+                    ? 'fixed:$_fixedAccountId'
+                    : token(_selector!);
+                final frozen = _selector;
+                if (frozen != null &&
+                    !selectors.any((item) => token(item) == token(frozen))) {
+                  selectors.insert(0, frozen);
+                }
+                return CompactLabeledControl(
+                  label: copy('environment.account'),
+                  detail: snapshot.hasError
+                      ? copy('environment.account.selector_load_failed')
+                      : copy('environment.account.scope_selection'),
+                  child: CompactSelectField<String>(
+                    key: const Key('route-account-selection'),
+                    initialValue: current,
+                    isExpanded: true,
+                    items: [
+                      if (widget.allowOriginal || _mode == 'original')
+                        DropdownMenuItem(
+                          value: 'original',
+                          enabled: widget.allowOriginal,
+                          child: Text(
+                            copy('environment.account.original'),
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                      for (final reference in references.values)
+                        if (_selected.contains(reference.id))
+                          DropdownMenuItem(
+                            value: 'fixed:${reference.id}',
+                            enabled: available[reference.id]?.usable ?? false,
+                            child: Text(
+                              _fixedLabel(
+                                reference.displayName,
+                                available[reference.id],
+                                copy,
+                              ),
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                      for (final selector in selectors)
+                        DropdownMenuItem(
+                          value: token(selector),
+                          enabled: _selected.any(
+                            (id) => available[id]?.usable ?? false,
+                          ),
+                          child: Text(
+                            '${copy('environment.account.javascript')} · ${selector.displayName} · r${selector.revision}',
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                    ],
+                    onChanged: (value) {
+                      if (value == null || value == current) return;
+                      setState(() {
+                        if (value == 'original') {
+                          _mode = 'original';
+                          _fixedAccountId = '';
+                          _selector = null;
+                        } else if (value.startsWith('fixed:')) {
+                          _mode = 'fixed';
+                          _fixedAccountId = value.substring('fixed:'.length);
+                          _selector = null;
+                        } else {
+                          _mode = 'javascript';
+                          _fixedAccountId = '';
+                          _selector = selectors.firstWhere(
+                            (item) => token(item) == value,
+                          );
+                        }
+                      });
+                    },
+                  ),
+                );
+              },
+            ),
+            const SizedBox(height: 16),
             Text(
-              copy('environment.account.scope_hint'),
+              copy(
+                _mode == 'original'
+                    ? 'environment.account.original_hint'
+                    : 'environment.account.scope_hint',
+              ),
               style: Theme.of(context).textTheme.bodySmall,
             ),
             const SizedBox(height: 12),
@@ -132,31 +257,6 @@ final class _AccountScopeDialogState extends State<_AccountScopeDialog> {
                 'count': _selected.length,
               }),
             ),
-            if (needsReplacement) ...[
-              const SizedBox(height: 8),
-              CompactLabeledControl(
-                label: copy('environment.account.replacement'),
-                child: CompactSelectField<String>(
-                  key: const Key('route-account-scope-replacement'),
-                  initialValue: available.containsKey(_fixedAccountId)
-                      ? _fixedAccountId
-                      : null,
-                  placeholder: copy('environment.account.replacement_hint'),
-                  isExpanded: true,
-                  items: [
-                    for (final account in widget.accounts)
-                      if (_selected.contains(account.id))
-                        DropdownMenuItem(
-                          value: account.id,
-                          child: Text(account.displayName),
-                        ),
-                  ],
-                  onChanged: (value) {
-                    if (value != null) setState(() => _fixedAccountId = value);
-                  },
-                ),
-              ),
-            ],
             const SizedBox(height: 8),
             Flexible(
               child: rows.isEmpty
@@ -167,7 +267,8 @@ final class _AccountScopeDialogState extends State<_AccountScopeDialog> {
                       itemBuilder: (context, index) {
                         final reference = rows[index];
                         final account = available[reference.id];
-                        final active = reference.id == _fixedAccountId;
+                        final active =
+                            _mode == 'fixed' && reference.id == _fixedAccountId;
                         final selected = _selected.contains(reference.id);
                         final unavailable = account == null
                             ? copy('environment.account.selection_lost')
@@ -216,8 +317,8 @@ final class _AccountScopeDialogState extends State<_AccountScopeDialog> {
                     context,
                     RouteAccountPolicy(
                       revision: widget.policy.revision,
-                      mode: widget.policy.mode,
-                      selector: widget.policy.selector,
+                      mode: _mode,
+                      selector: _selector,
                       accounts: selected,
                       fixedAccountId: _fixedAccountId,
                     ),

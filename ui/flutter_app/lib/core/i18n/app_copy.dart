@@ -272,8 +272,20 @@ final class AppCopy {
     'account_facts.credits': 'Credits: {balance}',
     'account_facts.banked_resets': 'Banked Codex resets: {count}',
     'account_facts.applicable_resets': 'Usable now: {count}',
-    'account_facts.reset.choose': 'Use a banked reset',
     'account_facts.reset.choose_title': 'Choose a Codex reset',
+    'account_facts.reset.view': 'View reset credits',
+    'account_facts.reset.expiring_soon':
+        '{count} reset credits expire within 3 days',
+    'account_facts.reset.granted': 'Granted {time}',
+    'account_facts.reset.status_available': 'Available',
+    'account_facts.reset.status_expired': 'Expired',
+    'account_facts.reset.status_redeemed': 'Used',
+    'account_facts.reset.weekly_used':
+        'Weekly usage is {percent}%. Confirm that you want to consume this reset now.',
+    'account_facts.reset.not_earliest':
+        'Another usable credit expires sooner ({time}). Consider using that one first.',
+    'account_facts.reset.natural_soon':
+        'The {window} quota window resets naturally within 3 hours ({time}). You can wait instead of consuming a credit.',
     'account_facts.reset.confirm_title': 'Use this reset?',
     'account_facts.reset.confirm_detail':
         'This consumes one saved reset immediately for the selected account. It may change the next weekly reset date.',
@@ -938,6 +950,10 @@ final class AppCopy {
     'exchange.stop.max_tokens': 'Output limit',
     'exchange.stop.tool_use': 'Tool call',
     'exchange.stop.refusal': 'Refused',
+    'exchange.stop.stop_sequence': 'Stop sequence',
+    'exchange.stop.pause_turn': 'Paused',
+    'exchange.stop.model_context_window_exceeded': 'Context limit',
+    'exchange.stop.incomplete': 'Incomplete',
     'exchange.client.claude': 'Claude Code',
     'exchange.client.codex': 'Codex',
     'exchange.client.evidence': '{client} client evidence',
@@ -2009,7 +2025,52 @@ final class AppCopy {
     'settings.safety.title': 'Safety & data',
     'settings.safety.detail':
         'Server connections, AI traffic inspection and stored data are separate controls.',
-    'settings.server_connection.title': 'Server connection',
+    'settings.server_connection.title': 'Server HTTPS',
+    'deployment.title': 'Deploy with your own domain',
+    'deployment.detail':
+        'ViberMate can obtain and renew a public HTTPS certificate. No separate Caddy installation is needed.',
+    'deployment.configure': 'Configure automatic HTTPS',
+    'deployment.other': 'Existing certificates or private networks',
+    'deployment.docs_url':
+        'https://github.com/vibe-agi/vibermate/blob/main/docs/deployment.md',
+    'deployment.instructions_only':
+        'Generate instructions to run on your server. This form does not change the current Runtime or request a certificate.',
+    'deployment.method': 'Deployment method',
+    'deployment.docker': 'Docker Compose',
+    'deployment.native': 'Native Server',
+    'deployment.domain': 'Public domain (no scheme, path or port)',
+    'deployment.email': 'Certificate contact email',
+    'deployment.domain_invalid':
+        'Use one public DNS name. IPs, wildcards and private names are not supported here.',
+    'deployment.email_invalid':
+        'Enter a plain contact email without a display name.',
+    'deployment.prerequisites.docker':
+        'Point DNS to your server and allow public TCP 443. In a checkout of ViberMate, build the image with bash tool/docker/build-local.sh, then save the generated settings as .env.public beside compose.public.yaml. The template maps 443 to the container’s unprivileged port.',
+    'deployment.prerequisites.native':
+        'Extract the native Server release. Point DNS to your server and forward public TCP 443 unchanged to its listener on 8443. Run as a dedicated, unprivileged user. This command does not configure DNS, firewall or port forwarding.',
+    'deployment.trust':
+        'Use direct TCP access or layer-4 passthrough, not a normal HTTP reverse proxy/CDN: Agent CONNECT traffic must also work. Server HTTPS is separate from the AI inspection CA; opening the Web page does not require installing that CA.',
+    'deployment.terms': 'I agree to the certificate issuer’s subscriber terms',
+    'deployment.terms_detail':
+        'The generated command uses Let’s Encrypt. Executing it sends the domain and contact email to the CA; issued domain names are public in Certificate Transparency logs.',
+    'deployment.read_terms': 'Read Let’s Encrypt terms',
+    'deployment.complete_form':
+        'Enter the domain and email and accept the issuer’s terms to generate configuration.',
+    'deployment.env_file': 'Save as .env.public',
+    'deployment.start': 'Run on the server',
+    'deployment.first_certificate':
+        'A running process or healthy container does not prove that the first certificate is ready. If HTTPS is unavailable, check the server logs, DNS (including AAAA), firewall and TCP 443 forwarding. Do not bypass certificate warnings.',
+    'deployment.after_start': 'Owner setup and troubleshooting',
+    'deployment.recovery_hint':
+        'In another terminal on the same server, read the recovery key and use it to create the owner in the Web page. Keep the key private.',
+    'deployment.recovery': 'Read the owner recovery key',
+    'deployment.logs': 'View container logs',
+    'deployment.retention':
+        'Keep the Runtime data directory or Docker volume, including server-https. Renewed certificates load automatically. A changed domain or deployment mode requires a service restart.',
+    'deployment.copy': 'Copy',
+    'deployment.copied': 'Copied',
+    'deployment.copy_failed':
+        'Could not copy. Select and copy the text manually.',
     'settings.server_connection.detail':
         'This connection carries browser access and CLI traffic to ViberMate, not requests to an AI provider.',
     'settings.server_connection.unknown':
@@ -2507,12 +2568,16 @@ final class AppCopy {
     'usage.page.updated': 'New usage available',
     'usage.breakdown.title': 'Usage breakdown',
     'usage.page.as_of': 'As of {time} · Most calls first',
-    'usage.page.update': 'Update · first page',
+    'usage.page.update': 'Refresh',
+    'environment.account.configure': 'Account selection and scope',
+    'environment.account.original':
+        'Original request account · keep credentials',
+    'environment.account.original_hint':
+        'Use the client’s own account without replacing credentials. Only available for the same origin and protocol; model, recording and network policies still apply.',
+    'environment.account.original_active':
+        'Using the client’s original account. /status and /usage read that account directly.',
     'environment.account.scope': 'Accounts in this policy',
     'environment.account.scope_count': '{count} accounts selected',
-    'environment.account.replacement': 'Replace unavailable manual account',
-    'environment.account.replacement_hint':
-        'Choose from selected, available accounts',
     'environment.account.scope_hint':
         'Only these accounts can be activated or chosen by a rule. Adding an account to the service will not add it to this policy.',
     'environment.account.scope_selection':
@@ -2971,8 +3036,17 @@ final class AppCopy {
     'account_facts.credits': '积分余额：{balance}',
     'account_facts.banked_resets': 'Codex 可用额度重置券：{count}',
     'account_facts.applicable_resets': '当前可使用：{count}',
-    'account_facts.reset.choose': '使用额度重置券',
     'account_facts.reset.choose_title': '选择 Codex 重置券',
+    'account_facts.reset.view': '查看重置券详情',
+    'account_facts.reset.expiring_soon': '{count} 张重置券将在 3 天内到期',
+    'account_facts.reset.granted': '{time} 发放',
+    'account_facts.reset.status_available': '可使用',
+    'account_facts.reset.status_expired': '已过期',
+    'account_facts.reset.status_redeemed': '已使用',
+    'account_facts.reset.weekly_used': '本周已使用 {percent}%，请确认现在消耗重置券。',
+    'account_facts.reset.not_earliest': '还有更早到期的可用券（{time}），建议优先使用，避免过期浪费。',
+    'account_facts.reset.natural_soon':
+        '{window}额度窗口将在 3 小时内自然重置（{time}），也可以等待重置后再使用。',
     'account_facts.reset.confirm_title': '使用这张重置券？',
     'account_facts.reset.confirm_detail': '将立即为所选账号消耗一张已存重置券，且可能改变下次周额度重置时间。',
     'account_facts.reset.confirm': '确认使用',
@@ -3530,6 +3604,10 @@ final class AppCopy {
     'exchange.stop.max_tokens': '达到输出上限',
     'exchange.stop.tool_use': '工具调用',
     'exchange.stop.refusal': '已拒绝',
+    'exchange.stop.stop_sequence': '停止序列',
+    'exchange.stop.pause_turn': '已暂停',
+    'exchange.stop.model_context_window_exceeded': '达到上下文上限',
+    'exchange.stop.incomplete': '未完成',
     'exchange.client.claude': 'Claude Code',
     'exchange.client.codex': 'Codex',
     'exchange.client.evidence': '{client} 客户端证据',
@@ -4425,7 +4503,45 @@ final class AppCopy {
     'settings.access.team.detail': '先在「用户管理」中创建账号，再分享工作台地址和连接命令。',
     'settings.safety.title': '安全与数据',
     'settings.safety.detail': '服务器连接、AI 流量检查和数据留存分别管理，互不混淆。',
-    'settings.server_connection.title': '连接到服务器',
+    'settings.server_connection.title': '服务器 HTTPS',
+    'deployment.title': '使用自有域名部署',
+    'deployment.detail': 'ViberMate 可自动申请和续期公网 HTTPS 证书，无需另外安装 Caddy。',
+    'deployment.configure': '配置自动 HTTPS',
+    'deployment.other': '已有证书或私网部署',
+    'deployment.docs_url':
+        'https://github.com/vibe-agi/vibermate/blob/main/docs/deployment.zh-CN.md',
+    'deployment.instructions_only': '生成在服务器上执行的部署说明。此表单不会修改当前 Runtime，也不会申请证书。',
+    'deployment.method': '部署方式',
+    'deployment.docker': 'Docker Compose',
+    'deployment.native': '原生 Server',
+    'deployment.domain': '公网域名（不含协议、路径和端口）',
+    'deployment.email': '证书联系邮箱',
+    'deployment.domain_invalid': '请输入一个公网 DNS 名称；这里不支持 IP、通配符和私网名称。',
+    'deployment.email_invalid': '请输入不带显示名的联系邮箱。',
+    'deployment.prerequisites.docker':
+        '将域名解析到服务器并开放公网 TCP 443。在 ViberMate 源码目录运行 bash tool/docker/build-local.sh 构建镜像，再把下方配置保存为 compose.public.yaml 旁的 .env.public。模板会把 443 映射到容器内的非特权端口。',
+    'deployment.prerequisites.native':
+        '解压原生 Server 发布包，将域名解析到服务器，并将公网 TCP 443 原样转发至监听端口 8443。使用专用普通用户运行；这条命令不会配置 DNS、防火墙或端口转发。',
+    'deployment.trust':
+        '使用 TCP 直连或四层透传，不要套普通 HTTP 反代或 CDN：Agent 的 CONNECT 流量也必须能够通过。服务器 HTTPS 与 AI 流量检查 CA 独立；仅打开 Web 页面不需要安装该 CA。',
+    'deployment.terms': '我同意证书签发机构的订户条款',
+    'deployment.terms_detail':
+        '生成的命令使用 Let’s Encrypt。执行后会向 CA 提交域名和联系邮箱；签发的域名会公开记录在证书透明度日志中。',
+    'deployment.read_terms': '查看 Let’s Encrypt 条款',
+    'deployment.complete_form': '填写域名和邮箱，并同意签发机构条款后，即可生成配置。',
+    'deployment.env_file': '保存为 .env.public',
+    'deployment.start': '在服务器上执行',
+    'deployment.first_certificate':
+        '进程运行或容器健康不代表首张证书已可用。HTTPS 无法访问时，请查看服务日志，并检查 DNS（包括 AAAA）、防火墙及 TCP 443 转发；不要绕过证书警告。',
+    'deployment.after_start': '初始化所有者与排查故障',
+    'deployment.recovery_hint': '在同一服务器的另一终端读取恢复密钥，再用它在 Web 页面创建所有者。不要公开密钥。',
+    'deployment.recovery': '读取所有者恢复密钥',
+    'deployment.logs': '查看容器日志',
+    'deployment.retention':
+        '请保留 Runtime 数据目录或 Docker 数据卷，包括 server-https。续期证书会自动热加载；修改域名或部署模式需要重启服务。',
+    'deployment.copy': '复制',
+    'deployment.copied': '已复制',
+    'deployment.copy_failed': '复制失败，请选中文本后手动复制。',
     'settings.server_connection.detail':
         '保护浏览器和 CLI 到 ViberMate 的连接，不是到 AI 服务商的连接。',
     'settings.server_connection.unknown': '连接地址暂不可用，尚未检查任何证书信任。',
@@ -4857,11 +4973,15 @@ final class AppCopy {
     'usage.page.updated': '有新的用量数据',
     'usage.breakdown.title': '分组明细',
     'usage.page.as_of': '数据截至 {time} · 按调用量降序',
-    'usage.page.update': '更新 · 回到本层首页',
+    'usage.page.update': '刷新',
+    'environment.account.configure': '账号选择与范围',
+    'environment.account.original': '原始请求账号 · 不替换凭证',
+    'environment.account.original_hint':
+        '使用客户端自己的账号，不替换凭证。仅支持同源、同协议；模型、记录和网络策略仍然生效。',
+    'environment.account.original_active':
+        '正在使用客户端原始账号，/status 与 /usage 直接查询该账号。',
     'environment.account.scope': '本策略账号范围',
     'environment.account.scope_count': '已选 {count} 个账号',
-    'environment.account.replacement': '替换当前不可用的账号',
-    'environment.account.replacement_hint': '从已勾选的可用账号中选择',
     'environment.account.scope_hint': '仅这些账号可被启用或规则选中。服务中新建的账号不会自动加入本策略。',
     'environment.account.scope_selection': '手动启用和规则选择都限定在已选账号内。',
     'environment.account.scope_active': '当前启用 · 切换账号后可移除',

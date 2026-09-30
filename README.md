@@ -58,6 +58,14 @@ Open <http://127.0.0.1:9666> and create the owner account with the key from
 `./vibermated server recovery-key`. To reach the server from other devices,
 follow the [deployment guide](docs/deployment.md).
 
+**Have your own public domain?** ViberMate obtains, renews and hot-loads HTTPS
+certificates without a separate Caddy installation. Open **Settings → Access &
+launch → Deploy with your own domain** for native commands or Docker settings,
+or follow the [public HTTPS](docs/deployment.md#automatic-public-https) and
+[Docker examples](docs/docker.md#public-domain-automatic-https). Point DNS at
+the server and provide direct TCP 443 or layer-4 passthrough; an ordinary HTTP
+reverse proxy cannot replace the Agent CONNECT path.
+
 ## Learn more
 
 - [Website](https://vibe-agi.github.io/products/vibermate/): what ViberMate

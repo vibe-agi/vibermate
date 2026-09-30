@@ -227,11 +227,11 @@ type webSearchToolWire struct {
 }
 
 type reasoningWire struct {
-	Context         string `json:"context,omitempty"`
-	Effort          string `json:"effort,omitempty"`
-	Summary         string `json:"summary,omitempty"`
-	Mode            string `json:"mode,omitempty"`
-	GenerateSummary string `json:"generate_summary,omitempty"`
+	Context         string          `json:"context,omitempty"`
+	Effort          json.RawMessage `json:"effort,omitempty"`
+	Summary         string          `json:"summary,omitempty"`
+	Mode            string          `json:"mode,omitempty"`
+	GenerateSummary string          `json:"generate_summary,omitempty"`
 }
 
 type textWire struct {
@@ -395,7 +395,7 @@ func (codec *Codec) decodeClientRequest(
 		return protocolcore.Request{}, report, err
 	}
 	report = report.Merge(toolChoiceReport)
-	reasoning, reasoningReport, err := decodeReasoning(wire.Reasoning)
+	reasoning, reasoningReport, err := decodeReasoning(wire.Reasoning, !strictRoot)
 	if err != nil {
 		return protocolcore.Request{}, report, err
 	}
@@ -1630,6 +1630,14 @@ func decodeFunctionCallOutput(
 				errors.New("function call output is not complete"),
 			)
 	}
+	if compatible && wire.CallID == "" {
+		if _, _, err := decodeToolOutputText(wire.Output, path+".output", true); err != nil {
+			return protocolcore.Message{}, protocolcore.TranslationReport{}, err
+		}
+		// New Codex history can contain a named output without a call ID.
+		// Keep it on the native wire; never invent a tool-correlation key.
+		return protocolcore.Message{}, notice(protocolcore.NoticeNativeContentNotProjected, path), nil
+	}
 	message, outputReport, err := decodeToolOutput(
 		wire.CallID,
 		wire.Output,
@@ -2062,6 +2070,7 @@ func decodeToolChoice(
 
 func decodeReasoning(
 	raw json.RawMessage,
+	compatible bool,
 ) (
 	protocolcore.ReasoningIntent,
 	protocolcore.TranslationReport,
@@ -2072,12 +2081,12 @@ func decodeReasoning(
 			protocolcore.TranslationReport{}, nil
 	}
 	var wire reasoningWire
-	if err := decodeStrict(raw, &wire); err != nil {
+	if err := decodeClientWire(raw, &wire, compatible); err != nil {
 		return protocolcore.ReasoningIntent{},
 			protocolcore.TranslationReport{},
 			invalidClient("$.reasoning", err)
 	}
-	if wire.GenerateSummary != "" {
+	if wire.GenerateSummary != "" && !compatible {
 		return protocolcore.ReasoningIntent{},
 			protocolcore.TranslationReport{},
 			invalidClient(
@@ -2085,13 +2094,31 @@ func decodeReasoning(
 				errors.New("deprecated reasoning summary is unsupported"),
 			)
 	}
+	var effort string
+	report := protocolcore.TranslationReport{}
+	if rawPresent(wire.Effort) {
+		if err := json.Unmarshal(wire.Effort, &effort); err != nil {
+			// Codex also emits an unsigned token budget here. Its meaning stays
+			// in the same-dialect wire, never coerced into a neutral effort enum.
+			var budget uint64
+			if !compatible || json.Unmarshal(wire.Effort, &budget) != nil {
+				return protocolcore.ReasoningIntent{}, report, invalidClient("$.reasoning.effort", err)
+			}
+			report = notice(protocolcore.NoticeNativeContentNotProjected, "$.reasoning.effort")
+		}
+	}
 	intent := protocolcore.ReasoningIntent{
 		Context:   protocolcore.ReasoningContext(wire.Context),
-		Effort:    protocolcore.ReasoningEffort(wire.Effort),
+		Effort:    protocolcore.ReasoningEffort(effort),
 		Summary:   protocolcore.ReasoningSummary(wire.Summary),
 		Execution: protocolcore.ReasoningExecutionMode(wire.Mode),
 	}
-	report := protocolcore.TranslationReport{}
+	if err := intent.Validate(0); err != nil {
+		if compatible {
+			return protocolcore.ReasoningIntent{}, notice(protocolcore.NoticeNativeContentNotProjected, "$.reasoning"), nil
+		}
+		return protocolcore.ReasoningIntent{}, report, invalidClient("$.reasoning", err)
+	}
 	if intent.Context != "" {
 		report = report.Merge(notice(
 			protocolcore.NoticeReasoningContextNotForwarded,
@@ -2109,7 +2136,7 @@ func decodeText(
 		return "", protocolcore.TranslationReport{}, nil
 	}
 	var wire textWire
-	if err := decodeStrict(raw, &wire); err != nil {
+	if err := decodeClientWire(raw, &wire, compatible); err != nil {
 		return "", protocolcore.TranslationReport{},
 			invalidClient("$.text", err)
 	}
@@ -2119,6 +2146,10 @@ func decodeText(
 		}
 	}
 	verbosity := protocolcore.TextVerbosity(wire.Verbosity)
+	if compatible && verbosity != "" && verbosity != protocolcore.TextVerbosityLow &&
+		verbosity != protocolcore.TextVerbosityMedium && verbosity != protocolcore.TextVerbosityHigh {
+		return "", notice(protocolcore.NoticeNativeContentNotProjected, "$.text.verbosity"), nil
+	}
 	report := protocolcore.TranslationReport{}
 	if verbosity != "" {
 		report = notice(

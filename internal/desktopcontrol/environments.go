@@ -393,14 +393,16 @@ func (handler *Handler) resolvePublishedAccountPolicies(
 			if upstream == nil {
 				continue
 			}
-			if err := loadAccounts(); err != nil {
-				return err
-			}
 			for routeIndex := range upstream.Routes {
 				route := &upstream.Routes[routeIndex]
 				policy := &route.AccountPolicy
-				if len(policy.Accounts) == 0 {
+				if len(policy.Accounts) == 0 && policy.Mode != environment.AccountSelectionOriginal {
 					return provideraccount.ErrInvalidAccount
+				}
+				if len(policy.Accounts) > 0 {
+					if err := loadAccounts(); err != nil {
+						return err
+					}
 				}
 				for index, selected := range policy.Accounts {
 					view, found := accounts[selected.ID]
@@ -416,6 +418,10 @@ func (handler *Handler) resolvePublishedAccountPolicies(
 					}
 				}
 				switch policy.Mode {
+				case environment.AccountSelectionOriginal:
+					if policy.FixedAccountID != "" || policy.Selector != nil || route.AllowAccountHistory {
+						return environment.ErrInvalidEnvironment
+					}
 				case environment.AccountSelectionFixed:
 					if policy.FixedAccountID == "" || policy.Selector != nil {
 						return environment.ErrInvalidEnvironment
@@ -510,16 +516,24 @@ func (handler *Handler) activateEnvironmentRouteAccount(writer http.ResponseWrit
 	body, bodyErr := readJSONBody(request)
 	var input struct {
 		AccountID *string `json:"accountId"`
+		Mode      *string `json:"mode"`
 	}
 	id, idErr := environment.NewEnvironmentID(request.PathValue("environmentId"))
 	routeID, routeErr := environment.NewUpstreamRouteID(request.PathValue("routeId"))
 	if headerErr != nil || bodyErr != nil || idErr != nil || routeErr != nil ||
 		expected == 0 || expected >= uint64(environment.MaxRevision) ||
-		request.URL.RawQuery != "" || decodeStrictJSON(body, &input) != nil || input.AccountID == nil {
+		request.URL.RawQuery != "" || decodeStrictJSON(body, &input) != nil {
 		writeProblem(writer, http.StatusUnprocessableEntity, ReasonInvalidRequest)
 		return
 	}
-	accountID, err := provideraccount.NewID(*input.AccountID)
+	original := input.Mode != nil && *input.Mode == "original" && input.AccountID == nil
+	var accountID provideraccount.ID
+	var err error
+	if !original && input.Mode == nil && input.AccountID != nil {
+		accountID, err = provideraccount.NewID(*input.AccountID)
+	} else if !original {
+		err = provideraccount.ErrInvalidAccount
+	}
 	if err != nil {
 		writeProblem(writer, http.StatusUnprocessableEntity, ReasonInvalidRequest)
 		return
@@ -528,10 +542,6 @@ func (handler *Handler) activateEnvironmentRouteAccount(writer http.ResponseWrit
 		[]byte(request.Method), []byte(request.URL.Path), []byte(strconv.FormatUint(expected, 10)), body,
 	}, []byte{0}))
 	response, err := handler.idempotent.execute(request.Context(), key, fingerprint, func() cachedResponse {
-		account, accountErr := handler.accounts.Get(request.Context(), accountID)
-		if accountErr != nil {
-			return problemResponse(classifyEnvironmentAccountPolicyError(accountErr))
-		}
 		current, getErr := handler.environments.Get(request.Context(), id)
 		if getErr != nil {
 			return problemResponse(classifyEnvironmentError(getErr))
@@ -539,25 +549,33 @@ func (handler *Handler) activateEnvironmentRouteAccount(writer http.ResponseWrit
 		if current.Revision() != environment.Revision(expected) {
 			return problemResponse(problemSpec{status: http.StatusConflict, reason: ReasonRevisionConflict})
 		}
-		route, exists := current.FixedRoute(routeID)
+		route, exists := current.ManualRoute(routeID)
 		if !exists {
 			return problemResponse(classifyEnvironmentError(environment.ErrInvalidEnvironment))
 		}
-		if accountErr := routeAccountError(account, route.ProviderTarget()); accountErr != nil {
-			return problemResponse(classifyEnvironmentAccountPolicyError(accountErr))
+		var candidate environment.Environment
+		var changed bool
+		var switchErr error
+		if original {
+			candidate, changed, switchErr = environment.ActivateRouteOriginalAccount(current.Aggregate(), routeID)
+		} else {
+			account, accountErr := handler.accounts.Get(request.Context(), accountID)
+			if accountErr != nil {
+				return problemResponse(classifyEnvironmentAccountPolicyError(accountErr))
+			}
+			if accountErr := routeAccountError(account, route.ProviderTarget()); accountErr != nil {
+				return problemResponse(classifyEnvironmentAccountPolicyError(accountErr))
+			}
+			candidate, changed, switchErr = environment.ActivateRouteAccount(current.Aggregate(), routeID, environment.RouteAccountReference{
+				ID: account.Account.ID.String(), Revision: environment.Revision(account.Account.Revision), DisplayName: account.Account.DisplayName,
+			})
 		}
-		candidate, changed, switchErr := environment.ActivateRouteAccount(
-			current.Aggregate(), routeID, environment.RouteAccountReference{
-				ID: account.Account.ID.String(), Revision: environment.Revision(account.Account.Revision),
-				DisplayName: account.Account.DisplayName,
-			},
-		)
 		if switchErr != nil {
 			return problemResponse(classifyEnvironmentError(switchErr))
 		}
 		if !changed {
 			return jsonResponse(http.StatusOK, EnvironmentAccountActivationResponse{
-				Environment: environmentResponseOf(current), RouteID: routeID, AccountID: *input.AccountID,
+				Environment: environmentResponseOf(current), RouteID: routeID, AccountID: accountID.String(),
 			})
 		}
 		draft, saveErr := handler.environments.SaveDraft(request.Context(), environment.DraftCommand{
@@ -584,7 +602,7 @@ func (handler *Handler) activateEnvironmentRouteAccount(writer http.ResponseWrit
 			SubjectID: snapshot.ID().String(), Status: activity.StatusSucceeded,
 		})
 		return jsonResponse(http.StatusOK, EnvironmentAccountActivationResponse{
-			Environment: environmentResponseOf(snapshot), RouteID: routeID, AccountID: *input.AccountID,
+			Environment: environmentResponseOf(snapshot), RouteID: routeID, AccountID: accountID.String(),
 			RunningCaptureCount: len(preview.ContinuingCaptures),
 		})
 	})

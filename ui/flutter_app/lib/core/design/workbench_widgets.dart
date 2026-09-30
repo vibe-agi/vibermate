@@ -453,6 +453,36 @@ final class ResponsiveFormGrid extends StatelessWidget {
   }
 }
 
+/// Shared small switch drawing with a desktop-sized hit target.
+final class CompactSwitch extends StatelessWidget {
+  const CompactSwitch({
+    required this.value,
+    required this.onChanged,
+    this.switchKey,
+    super.key,
+  });
+  final bool value;
+  final ValueChanged<bool>? onChanged;
+  final Key? switchKey;
+
+  @override
+  Widget build(BuildContext context) => SizedBox(
+    width: 44,
+    height: 32,
+    child: Transform.scale(
+      scale: .60,
+      transformHitTests: false,
+      child: Switch(
+        key: switchKey,
+        value: value,
+        onChanged: onChanged,
+        padding: EdgeInsets.zero,
+        materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+      ),
+    ),
+  );
+}
+
 /// A quiet, wrapping permission row with a full-row pointer target. Only the
 /// checkbox's painted mark is reduced; its native focus and keyboard behavior
 /// and the disclosure beside it remain available.

@@ -317,6 +317,10 @@ void main() {
     );
     await openSettingsTab(tester, 'safety');
     expect(find.textContaining('renewing the certificate'), findsOneWidget);
+    expect(find.byKey(const Key('server-tls-summary')), findsOneWidget);
+    expect(find.text('runtime.example.test'), findsOneWidget);
+    expect(find.textContaining('2026-12-01T00:00:00Z'), findsOneWidget);
+    expect(find.text('Example Public CA'), findsNothing);
     await tapVisible(
       tester,
       find.byKey(const Key('server-connection-details')),

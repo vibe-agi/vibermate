@@ -11,6 +11,109 @@ import 'package:vibermate_app/preview/preview_control_api.dart';
 import 'package:vibermate_app/preview/preview_terminal_command.dart';
 
 void main() {
+  testWidgets(
+    'original account can be configured and switched live without losing scope',
+    (tester) async {
+      await tester.binding.setSurfaceSize(const Size(1180, 850));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      final api = PreviewControlApi(seedCaptures: false);
+      final controller = WorkbenchController(
+        api: api,
+        terminalCommands: PreviewTerminalCommandService(),
+        previewMode: true,
+        closeRuntime: api.close,
+      );
+      addTearDown(controller.dispose);
+      await controller.refresh();
+      controller.selectEnvironment('work');
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: ViberTheme.dark(),
+          home: Scaffold(
+            body: AnimatedBuilder(
+              animation: controller,
+              builder: (_, _) => EnvironmentsView(
+                controller: controller,
+                copy: AppCopy.forLanguage(AppLanguage.english),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      final original = find.byKey(
+        const Key('environment-account-original-anthropic-direct'),
+      );
+      await tester.ensureVisible(original);
+      await tester.pumpAndSettle();
+      await tester.tap(original);
+      await tester.pumpAndSettle();
+      EnvironmentRoute route() => controller.data!.environments
+          .singleWhere((environment) => environment.id == 'work')
+          .routes
+          .singleWhere((route) => route.id == 'anthropic-direct');
+      expect(route().accountPolicy.mode, 'original');
+      expect(route().accountPolicy.accounts.single.id, 'anthropic-work');
+      final managed = find.byKey(
+        const Key('environment-account-activate-anthropic-work'),
+      );
+      await tester.ensureVisible(managed);
+      await tester.pumpAndSettle();
+      await tester.tap(managed);
+      await tester.pumpAndSettle();
+      expect(route().accountPolicy.mode, 'fixed');
+      await tester.tap(find.byKey(const Key('environment-edit')));
+      await tester.pumpAndSettle();
+      final scope = find.descendant(
+        of: find.byKey(
+          const Key('environment-route-accounts-anthropic-direct'),
+        ),
+        matching: find.byType(OutlinedButton),
+      );
+      await tester.ensureVisible(scope);
+      await tester.pumpAndSettle();
+      await tester.tap(scope);
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('route-account-selection')));
+      await tester.pumpAndSettle();
+      await tester.tap(
+        find.widgetWithText(
+          MenuItemButton,
+          'Original request account · keep credentials',
+        ),
+      );
+      await tester.pumpAndSettle();
+      final current = find.byKey(
+        const Key('route-account-scope-anthropic-work'),
+      );
+      await tester.scrollUntilVisible(
+        current,
+        80,
+        scrollable: find
+            .descendant(
+              of: find.byType(AlertDialog),
+              matching: find.byType(Scrollable),
+            )
+            .last,
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(current);
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('route-account-scope-apply')));
+      await tester.pumpAndSettle();
+      final saved = tester
+          .widget<RouteAccountScopeButton>(
+            find.byKey(
+              const Key('environment-route-accounts-anthropic-direct'),
+            ),
+          )
+          .policy;
+      expect(saved.mode, 'original');
+      expect(saved.accounts, isEmpty);
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox.shrink());
+    },
+  );
   testWidgets('390px account scope search is reversible until save', (
     tester,
   ) async {
@@ -202,12 +305,19 @@ void main() {
         find.byKey(const Key('route-account-scope-anthropic-lab')),
       );
       await tester.pump();
-      final replacement = find.byKey(
-        const Key('route-account-scope-replacement'),
-      );
+      final replacement = find.byKey(const Key('route-account-selection'));
       await tester.tap(replacement);
       await tester.pumpAndSettle();
-      await tester.tap(find.widgetWithText(MenuItemButton, 'Anthropic · Lab'));
+      await tester.tap(
+        find.widgetWithText(
+          MenuItemButton,
+          'Manual selection · Anthropic · Lab',
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.ensureVisible(
+        find.byKey(const Key('route-account-scope-anthropic-work')),
+      );
       await tester.pumpAndSettle();
       await tester.tap(
         find.byKey(const Key('route-account-scope-anthropic-work')),
@@ -215,14 +325,15 @@ void main() {
       await tester.pump();
       await tester.tap(apply);
       await tester.pumpAndSettle();
-      expect(
-        find.byKey(
-          const Key(
-            'environment-route-account-anthropic-direct-fixed:anthropic-lab',
-          ),
-        ),
-        findsOneWidget,
-      );
+      final saved = tester
+          .widget<RouteAccountScopeButton>(
+            find.byKey(
+              const Key('environment-route-accounts-anthropic-direct'),
+            ),
+          )
+          .policy;
+      expect(saved.fixedAccountId, 'anthropic-lab');
+      expect(saved.accounts.map((account) => account.id), ['anthropic-lab']);
       await tester.ensureVisible(find.byKey(const Key('environment-review')));
       await tester.tap(find.byKey(const Key('environment-review')));
       await tester.pumpAndSettle();
@@ -276,9 +387,7 @@ void main() {
       await tester.tap(find.byKey(const Key('environment-edit')));
       await tester.pumpAndSettle();
       final field = find.byKey(
-        const Key(
-          'environment-route-account-anthropic-direct-fixed:anthropic-work',
-        ),
+        const Key('environment-route-accounts-anthropic-direct'),
       );
       await tester.ensureVisible(field);
       await tester.pumpAndSettle();
@@ -302,9 +411,8 @@ void main() {
       );
       controller.selectEnvironment('work');
       await tester.pumpAndSettle();
-      final unavailable = tester.widget<CompactSelectField<String>>(field);
-      expect(unavailable.initialValue, 'fixed:anthropic-work');
-      expect(unavailable.onChanged, isNull);
+      final unavailable = tester.widget<RouteAccountScopeButton>(field);
+      expect(unavailable.policy.fixedAccountId, 'anthropic-work');
       expect(
         find.descendant(
           of: field,
@@ -324,7 +432,12 @@ void main() {
 
       await controller.refresh();
       await tester.pumpAndSettle();
-      final recovered = tester.widget<CompactSelectField<String>>(field);
+      await tester.tap(
+        find.descendant(of: field, matching: find.byType(OutlinedButton)),
+      );
+      await tester.pumpAndSettle();
+      final selection = find.byKey(const Key('route-account-selection'));
+      final recovered = tester.widget<CompactSelectField<String>>(selection);
       expect(recovered.initialValue, 'fixed:anthropic-work');
       expect(recovered.onChanged, isNotNull);
       expect(
@@ -344,14 +457,6 @@ void main() {
         recovered.items.any((item) => item.value == 'fixed:${alternative.id}'),
         isFalse,
       );
-      final scope = find.byKey(
-        const Key('environment-route-accounts-anthropic-direct'),
-      );
-      await tester.ensureVisible(scope);
-      await tester.tap(
-        find.descendant(of: scope, matching: find.byType(OutlinedButton)),
-      );
-      await tester.pumpAndSettle();
       await tester.enterText(
         find.byKey(const Key('route-account-scope-search')),
         alternative.displayName,
@@ -361,9 +466,7 @@ void main() {
         find.byKey(Key('route-account-scope-${alternative.id}')),
       );
       await tester.pump();
-      await tester.tap(find.byKey(const Key('route-account-scope-apply')));
-      await tester.pumpAndSettle();
-      await tester.tap(field);
+      await tester.tap(selection);
       await tester.pumpAndSettle();
       await tester.tap(
         find
@@ -373,13 +476,11 @@ void main() {
             .last,
       );
       await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('route-account-scope-apply')));
+      await tester.pumpAndSettle();
       expect(
-        find.byKey(
-          const Key(
-            'environment-route-account-anthropic-direct-fixed:anthropic-lab',
-          ),
-        ),
-        findsOneWidget,
+        tester.widget<RouteAccountScopeButton>(field).policy.fixedAccountId,
+        alternative.id,
       );
       expect(tester.takeException(), isNull);
       await tester.pumpWidget(const SizedBox.shrink());

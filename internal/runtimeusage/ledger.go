@@ -16,9 +16,9 @@ import (
 
 var ErrPolicyConflict = errors.New("usage collection policy changed")
 
-// CollectionPolicy is independent of body recording. Existing installations
-// start disabled; enabling it is an explicit owner decision, not a new meaning
-// for ContentRecordingOff. Disabling stops new observations, not existing history.
+// CollectionPolicy is independent of body recording. New installations collect
+// body-free usage for 365 days; reopening preserves the Owner's existing choice.
+// Disabling stops new observations, not existing history.
 type CollectionPolicy struct {
 	Enabled         bool       `json:"enabled"`
 	RetentionDays   int        `json:"retentionDays"`

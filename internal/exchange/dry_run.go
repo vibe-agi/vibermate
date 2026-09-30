@@ -80,9 +80,9 @@ func (pipeline *Pipeline) DryRun(ctx context.Context, request ClientRequest) (Dr
 	if err != nil {
 		return DryRunResult{}, err
 	}
-	if candidate.mode != providerauth.CredentialManaged {
+	if candidate.mode != providerauth.CredentialManaged && candidate.mode != providerauth.CredentialClientPassthrough {
 		return DryRunResult{}, newFailure(ReasonEnvironmentPlanInvalid, request.exchangeID, 0,
-			errors.New("dry run requires a managed upstream account"))
+			errors.New("dry run credential mode is invalid"))
 	}
 	path, err := pipeline.protocolPaths.Select(selection.codecPlan, request.operation.id)
 	if err != nil {
@@ -110,10 +110,21 @@ func (pipeline *Pipeline) DryRun(ctx context.Context, request ClientRequest) (Dr
 		return DryRunResult{}, newFailure(ReasonProviderRequestInvalid, request.exchangeID, 0, err)
 	}
 	headers := providerRequest.Headers()
-	for name, values := range nativeChatGPTProtocolHeaders(request, selection) {
-		headers[name] = values
+	if candidate.mode == providerauth.CredentialManaged {
+		for name, values := range nativeChatGPTProtocolHeaders(request, selection) {
+			headers[name] = values
+		}
+		refreshChatGPTRoutingHint(headers, logicalBody, providerRequest.Body())
+	} else {
+		original, available := request.OriginalHeaders()
+		if !available {
+			return DryRunResult{}, newFailure(ReasonEnvironmentPlanInvalid, request.exchangeID, 0, errors.New("original Account request headers are unavailable"))
+		}
+		for name, values := range headers {
+			original[name] = values
+		}
+		headers = original
 	}
-	refreshChatGPTRoutingHint(headers, logicalBody, providerRequest.Body())
 	providerPath := upstreamendpoint.ProviderRelativePath(selection.target.Origin(), providerRequest.RelativePath())
 	turn, err := newMessageTransformTurn(request, pipeline.annotations, startedAt)
 	if err != nil {
@@ -132,6 +143,9 @@ func (pipeline *Pipeline) DryRun(ctx context.Context, request ClientRequest) (Dr
 	}
 	profile := request.plan.EgressProfile()
 	unverified := []string{"account_link", "credential", "dns", "tls", "quota", "provider_response", "runtime_time"}
+	if candidate.mode == providerauth.CredentialClientPassthrough {
+		unverified[0], unverified[1] = "client_authentication", "client_headers"
+	}
 	if _, hasAdmission := request.CaptureAdmission(); !hasAdmission {
 		unverified = append(unverified, "runtime_identity")
 	}

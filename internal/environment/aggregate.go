@@ -12,6 +12,8 @@ import (
 	"strings"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/vibe-agi/vibermate/internal/originidentity"
 )
 
 type CandidateDigest [sha256.Size]byte
@@ -273,6 +275,11 @@ func normalizeRoot(input Environment, allowSystem bool) (Environment, error) {
 				if err := normalizeUpstreamPlan(plan, routeIDs); err != nil {
 					return Environment{}, err
 				}
+				for _, route := range plan.Destination.Upstream.Routes {
+					if route.AccountPolicy.Mode == AccountSelectionOriginal && !routePreservesClientAccount(endpoint.ClientOrigin, plan.ClientProtocol, route) {
+						return Environment{}, fmt.Errorf("%w: original Account requires the same origin and protocol", ErrInvalidEnvironment)
+					}
+				}
 			default:
 				return Environment{}, fmt.Errorf(
 					"%w: protocol plan %q has an invalid Destination",
@@ -450,6 +457,9 @@ func validateRoute(route *UpstreamRoute) error {
 		return fmt.Errorf("%w: route %q has an incomplete target", ErrInvalidEnvironment, route.ID)
 	}
 	policy := &route.AccountPolicy
+	if policy.Accounts == nil {
+		policy.Accounts = []RouteAccountReference{}
+	}
 	if policy.Revision == 0 || policy.Revision > MaxRevision {
 		return fmt.Errorf("%w: route %q account policy is invalid", ErrInvalidEnvironment, route.ID)
 	}
@@ -465,6 +475,10 @@ func validateRoute(route *UpstreamRoute) error {
 		}
 	}
 	switch policy.Mode {
+	case AccountSelectionOriginal:
+		if policy.FixedAccountID != "" || policy.Selector != nil || route.AllowAccountHistory {
+			return fmt.Errorf("%w: route %q original Account carries managed authority", ErrInvalidEnvironment, route.ID)
+		}
 	case AccountSelectionFixed:
 		if policy.FixedAccountID == "" || policy.Selector != nil ||
 			!slices.ContainsFunc(policy.Accounts, func(account RouteAccountReference) bool { return account.ID == policy.FixedAccountID }) {
@@ -655,12 +669,18 @@ func hasDuplicateUnsortedString(values []string) bool {
 	return false
 }
 
+func routePreservesClientAccount(origin originidentity.ClientOrigin, protocol ClientProtocol, route UpstreamRoute) bool {
+	client, clientErr := clientDialect(protocol)
+	backend, backendErr := backendDialect(route.BackendProtocol)
+	return clientErr == nil && backendErr == nil && client == backend && route.ProviderTarget.Origin.String() == origin.String()
+}
+
 func validateAccounts(aggregate Environment, catalog AccountCatalog) error {
 	for _, endpoint := range aggregate.ClientEndpoints {
 		for _, plan := range endpoint.ProtocolPlans {
 			for _, route := range destinationRoutes(plan.Destination) {
 				policy := route.AccountPolicy
-				if catalog == nil {
+				if catalog == nil && len(policy.Accounts) > 0 {
 					return fmt.Errorf("%w: upstream route %q has no account catalog", ErrInvalidEnvironment, route.ID)
 				}
 				for _, frozen := range policy.Accounts {

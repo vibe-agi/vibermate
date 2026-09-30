@@ -814,6 +814,29 @@ List<EnvironmentClientEndpoint> assignEnvironmentRouteAccountPolicy({
                 accountPolicy: desiredPolicy.copyWith(
                   revision: route.accountPolicy.revision + 1,
                 ),
+                // Scope edits do not change whose history was authorized.
+                // A different fixed account or a script still revokes consent.
+                allowAccountHistory:
+                    route.allowAccountHistory &&
+                    route.accountPolicy.mode == 'fixed' &&
+                    desiredPolicy.mode == 'fixed' &&
+                    route.accountPolicy.fixedAccountId ==
+                        desiredPolicy.fixedAccountId &&
+                    route.accountPolicy.accounts
+                            .where(
+                              (account) =>
+                                  account.id ==
+                                  route.accountPolicy.fixedAccountId,
+                            )
+                            .firstOrNull
+                            ?.revision ==
+                        desiredPolicy.accounts
+                            .where(
+                              (account) =>
+                                  account.id == desiredPolicy.fixedAccountId,
+                            )
+                            .firstOrNull
+                            ?.revision,
                 modelPolicy: route.modelPolicy,
                 wireProfileRef: route.wireProfileRef,
                 pluginBindings: route.pluginBindings,
@@ -880,7 +903,11 @@ void _validateRouteAccountPolicy({
         account.revision == reference.revision &&
         account.isLinkedTo(endpointId);
   });
-  if ((!fixed && !scripted) ||
+  final original =
+      policy.mode == 'original' &&
+      policy.fixedAccountId.isEmpty &&
+      policy.selector == null;
+  if ((!fixed && !scripted && !original) ||
       ids.length != policy.accounts.length ||
       !validAccounts) {
     throw ArgumentError.value(
@@ -1129,7 +1156,8 @@ List<EnvironmentClientEndpoint> prepareEnvironmentDraftEndpoints({
                       )
                       .toList()
                     ..sort((a, b) => a.id.compareTo(b.id));
-              if (eligible.isEmpty || eligible.length != selected.length) {
+              if ((eligible.isEmpty && policy.mode != 'original') ||
+                  eligible.length != selected.length) {
                 throw const EnvironmentAccountSelectionException();
               }
               route['accountPolicy'] = policy

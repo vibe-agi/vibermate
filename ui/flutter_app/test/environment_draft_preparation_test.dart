@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:vibermate_app/core/api/control_models.dart';
 import 'package:vibermate_app/core/design/viber_theme.dart';
+import 'package:vibermate_app/core/design/workbench_widgets.dart';
 import 'package:vibermate_app/core/i18n/app_copy.dart';
 import 'package:vibermate_app/features/workbench/environment_editing.dart';
 import 'package:vibermate_app/features/workbench/environments_view.dart';
@@ -112,6 +113,91 @@ void main() {
         ).single.toJson(),
         prepared.single.toJson(),
       );
+    },
+  );
+
+  testWidgets(
+    'new policy keeps history permission and content settings across tabs',
+    (tester) async {
+      await tester.binding.setSurfaceSize(const Size(1180, 900));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      final controller = WorkbenchController(
+        api: api,
+        terminalCommands: PreviewTerminalCommandService(),
+        previewMode: true,
+        closeRuntime: api.close,
+      );
+      addTearDown(controller.dispose);
+      await controller.refresh();
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: ViberTheme.dark(),
+          home: Scaffold(
+            body: EnvironmentsView(
+              controller: controller,
+              copy: AppCopy.forLanguage(AppLanguage.english),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('environment-create')));
+      await tester.pumpAndSettle();
+      await tester.enterText(
+        find.byKey(const Key('environment-create-name')),
+        'History consent',
+      );
+      await tester.tap(find.byKey(const Key('environment-client-plan-target')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('https://chatgpt.com').last);
+      await tester.pumpAndSettle();
+      await tester.tap(
+        find.descendant(
+          of: find.byKey(const Key('environment-destination-kind')),
+          matching: find.text('Upstream service'),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('environment-endpoint-catalog')));
+      await tester.pumpAndSettle();
+      await tester.tap(
+        find.text('${service.displayName} · ${service.origin}').last,
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('environment-add-endpoint')));
+      await tester.pumpAndSettle();
+      final history = find.byWidgetPredicate(
+        (widget) =>
+            widget is CompactCheckboxField &&
+            widget.key.toString().contains(
+              'environment-route-account-history-',
+            ),
+      );
+      await tester.ensureVisible(history);
+      await tester.tap(history);
+      await tester.pumpAndSettle();
+      expect(tester.widget<CompactCheckboxField>(history).value, isTrue);
+      await tester.ensureVisible(
+        find.byKey(const Key('environment-tab-runtime')),
+      );
+      await tester.tap(find.byKey(const Key('environment-tab-runtime')));
+      await tester.pumpAndSettle();
+      final recording = find.byKey(const Key('environment-create-recording'));
+      await tester.tap(recording);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Do not record content').last);
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('environment-tab-traffic')));
+      await tester.pumpAndSettle();
+      expect(tester.widget<CompactCheckboxField>(history).value, isTrue);
+      await tester.tap(find.byKey(const Key('environment-tab-runtime')));
+      await tester.pumpAndSettle();
+      expect(
+        tester.widget<CompactSelectField<String>>(recording).initialValue,
+        'off',
+      );
+      await tester.pumpWidget(const SizedBox.shrink());
+      expect(tester.takeException(), isNull);
     },
   );
 

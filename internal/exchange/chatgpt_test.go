@@ -3,7 +3,9 @@ package exchange
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"net/http"
+	"reflect"
 	"testing"
 
 	"github.com/vibe-agi/vibermate/internal/environment"
@@ -44,9 +46,14 @@ func TestManagedChatGPTRequestAllowsOptionalMetadataWithRecordingOff(t *testing.
 			raw := &rawObserverDouble{}
 			pipeline.rawEvidence = raw
 			defer shutdownPipeline(t, pipeline)
-			body := []byte(`{"model":"codex-client-alias","stream":false,"input":[
+			body := []byte(`{"model":"codex-client-alias","stream":false,
+				"reasoning":{"effort":16384,"summary":"auto"},
+				"text":{"verbosity":"low","native_control":true},
+				"access_programs":{"cyber":"standard"},"input":[
 				{"type":"message","role":"assistant","content":"previous","internal_chat_message_metadata_passthrough":{"turn_id":"older-turn"}},
-				{"type":"message","role":"user","content":"continue","internal_chat_message_metadata_passthrough":{"turn_id":null}}
+				{"type":"message","role":"user","content":"continue","internal_chat_message_metadata_passthrough":{"turn_id":null}},
+				{"type":"function_call_output","name":"exec","output":"background result"},
+				{"type":"configuration_update","reasoning":{"effort":16384}}
 			]}`)
 			downstream := &downstreamRecorder{}
 			result, err := pipeline.Execute(context.Background(), mustClientRequestWithOptions(t,
@@ -67,6 +74,10 @@ func TestManagedChatGPTRequestAllowsOptionalMetadataWithRecordingOff(t *testing.
 				request.Headers().Get("Authorization") != "" || request.Headers().Get("Chatgpt-Account-Id") != "" ||
 				!bytes.Contains(request.Body(), []byte(`"turn_id":null`)) {
 				t.Fatal("managed request lost its destination, credential boundary, transform, or optional metadata")
+			}
+			var wantBody, gotBody map[string]any
+			if json.Unmarshal(body, &wantBody) != nil || json.Unmarshal(request.Body(), &gotBody) != nil || !reflect.DeepEqual(gotBody, wantBody) {
+				t.Fatal("native request controls/history changed during account replacement")
 			}
 			envelopes := downstream.envelopesSnapshot()
 			if len(envelopes) != 1 || envelopes[0].Headers().Get("X-Response-Transformed") != "request-transform-ran" {
