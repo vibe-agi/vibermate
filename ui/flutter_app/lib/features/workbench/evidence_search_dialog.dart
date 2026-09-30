@@ -350,7 +350,7 @@ final class _EvidenceSearchDialogState extends State<_EvidenceSearchDialog> {
                 ),
                 const SizedBox(height: ViberSpacing.sm),
                 Expanded(
-                  child: EvidenceConversationTimeline(
+                  child: ConversationReadingView(
                     controller: widget.controller,
                     activities: [hit.activity],
                     copy: widget.copy,

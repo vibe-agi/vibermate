@@ -51,6 +51,61 @@ final class AppCopy {
   }
 
   static const _en = <String, String>{
+    'reader.title': 'Conversation',
+    'reader.input': 'request input',
+    'reader.subagent': 'Subagent',
+    'reader.detail.other': 'Other retained blocks',
+    'reader.other': 'Other blocks · {count}',
+    'reader.usage_snapshot': 'Loaded requests · {count} · snapshot at opening',
+    'reader.usage_coverage':
+        'Collected usage for {known}/{count} requests · models.dev pricing at query time',
+    'reader.requests': 'Request records',
+    'reader.back': 'Back to conversation',
+    'reader.new_replies': '{count} new requests',
+    'reader.inspect_hint':
+        'Open details beside a message. The conversation stays in place.',
+    'reader.detail.tools': 'Tool calls',
+    'reader.detail.reasoning': 'Recorded reasoning',
+    'reader.detail.context': 'Request context',
+    'reader.detail.usage': 'Tokens and estimated cost',
+    'reader.detail.raw': 'Protocol evidence',
+    'reader.unavailable':
+        'This request could not be loaded. Retained records have not been deleted.',
+    'reader.reasoning_note':
+        'Only reasoning text actually provided and recorded. Unavailable internal reasoning is not reconstructed.',
+    'reader.instructions': 'Instructions',
+    'reader.history': 'Input history',
+    'reader.client': 'Client identity',
+    'reader.history_note':
+        'This request carried {count} messages. This is its input snapshot, not {count} new conversation messages.',
+    'reader.arguments': 'Arguments',
+    'reader.results': 'Results',
+    'reader.tool_pairing':
+        'Matched by call ID within this conversation. Results can arrive in a later request; they are not assistant replies.',
+    'reader.unmatched_tool':
+        'No call ID was recorded; these blocks cannot be paired.',
+    'reader.tool_not_observed':
+        'No matching block in the currently loaded evidence. This does not establish that a tool is still running.',
+    'reader.usage_unavailable':
+        'Request usage is unavailable. The Server may not support request-scoped usage yet.',
+    'reader.usage_not_recorded':
+        'No retained usage observation for this request. Not collected is not zero.',
+    'reader.checkpoint':
+        'Input snapshot · {count} messages · new input not established',
+    'reader.no_text': 'No recorded text reply for this request.',
+    'reader.tools': 'Tool calls · {count}',
+    'reader.reasoning': 'Reasoning · {count}',
+    'reader.context': 'Request context',
+    'reader.raw': 'Protocol evidence',
+    'reader.loaded_usage':
+        'Usage for loaded requests only, not the entire conversation. Each unique request is counted once.',
+    'reader.request_usage':
+        'Whole-request tokens and API-equivalent cost, not just this reply. Click for evidence.',
+    'reader.cache_write': 'Cache write',
+    'reader.usage_basis':
+        'Reasoning tokens are already part of output. Cost uses models.dev standard API prices, not actual subscription charges. Missing evidence is not treated as zero.',
+    'reader.partial_cost':
+        'Some usage or prices are missing. The amount is only the known lower bound.',
     'acp.transport': 'Editor ↔ Agent · ACP',
     'acp.boundary':
         'ACP observation only. The editor owns login and permission decisions. HTTP account replacement, model mapping, scripts, and network rules are not applied by this wrapper.',
@@ -2618,7 +2673,7 @@ final class AppCopy {
     'capture.summary.title': 'Request overview',
     'capture.summary.hint':
         'No conversation bodies are available. Request statistics do not require body recording.',
-    'capture.summary.records': 'Request records',
+    'capture.summary.records': 'Conversation',
     'capture.summary.overview': 'Overview',
     'capture.summary.calls': '{count} requests',
     'capture.summary.run': 'This run',
@@ -2863,6 +2918,47 @@ final class AppCopy {
   };
 
   static const _zh = <String, String>{
+    'reader.title': '对话',
+    'reader.input': '请求输入',
+    'reader.subagent': '子 Agent',
+    'reader.detail.other': '其他保留内容',
+    'reader.other': '其他内容 · {count}',
+    'reader.usage_snapshot': '已加载请求 · {count} 次 · 打开时快照',
+    'reader.usage_coverage': '已采集 {known}/{count} 次请求 · 各次查询时的 models.dev 价格',
+    'reader.requests': '请求记录',
+    'reader.back': '返回对话',
+    'reader.new_replies': '{count} 条新请求',
+    'reader.inspect_hint': '从消息旁查看详情，正文保留在原位。',
+    'reader.detail.tools': '工具调用',
+    'reader.detail.reasoning': '已记录的思考摘要',
+    'reader.detail.context': '请求上下文',
+    'reader.detail.usage': 'Token 与估算费用',
+    'reader.detail.raw': '协议证据',
+    'reader.unavailable': '暂时无法读取该请求，已有记录并未被删除。',
+    'reader.reasoning_note': '仅展示接口实际提供且已记录的思考内容，不推测或还原未提供的内部思考。',
+    'reader.instructions': '系统指令',
+    'reader.history': '输入历史',
+    'reader.client': '客户端身份',
+    'reader.history_note': '该请求携带了 {count} 条消息。这是输入快照，并不代表新增了 {count} 条对话。',
+    'reader.arguments': '入参',
+    'reader.results': '返回',
+    'reader.tool_pairing': '按本对话中的 call ID 关联。工具返回可能由后续请求携带，不属于 Agent 正文回复。',
+    'reader.unmatched_tool': '未记录 call ID，不能推测这些块的配对关系。',
+    'reader.tool_not_observed': '当前已加载证据中未发现匹配内容，不能据此判断工具仍在运行。',
+    'reader.usage_unavailable': '暂时无法读取请求级用量，当前 Server 也可能尚未支持该查询。',
+    'reader.usage_not_recorded': '该请求没有保留的用量记录。未采集不等于 0。',
+    'reader.checkpoint': '输入快照 · {count} 条消息 · 无法确认新增输入',
+    'reader.no_text': '该请求没有已记录的文字回复。',
+    'reader.tools': '工具调用 · {count}',
+    'reader.reasoning': '思考摘要 · {count}',
+    'reader.context': '请求上下文',
+    'reader.raw': '协议证据',
+    'reader.loaded_usage': '仅汇总已加载请求的用量，不是整个对话的总量。每个唯一请求只统计一次。',
+    'reader.request_usage': '整个请求的 Token 与 API 等价费用，不只是这段回复。点击查看明细。',
+    'reader.cache_write': '缓存写入',
+    'reader.usage_basis':
+        '推理 Token 已包含在输出中，不重复相加。费用按 models.dev 标准 API 价格估算，不是订阅实际扣款；缺失证据不按 0 处理。',
+    'reader.partial_cost': '部分用量或价格缺失，金额仅为已知下界。',
     'acp.transport': '编辑器 ↔ Agent · ACP',
     'acp.boundary': '这里只观察 ACP。登录和权限决定仍由编辑器负责；不会应用 HTTP 账号替换、模型映射、脚本或网络规则。',
     'acp.reported_identity': '名称和版本来自 Agent 初始化时的自报信息，不代表发布版本认证。',
@@ -5014,7 +5110,7 @@ final class AppCopy {
     'usage.tokens.hint': '— 表示未报告，≥ 表示已知下限。Token 来自响应声明，不代表账号总额度或上游账单。',
     'capture.summary.title': '请求概览',
     'capture.summary.hint': '当前没有可查看的对话正文；请求统计不依赖正文录制。',
-    'capture.summary.records': '请求记录',
+    'capture.summary.records': '对话',
     'capture.summary.overview': '概览',
     'capture.summary.calls': '{count} 次请求',
     'capture.summary.run': '本次运行',

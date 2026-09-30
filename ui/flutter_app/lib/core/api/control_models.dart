@@ -615,7 +615,9 @@ final class RuntimeUsageQuery {
                 'capture',
                 'manualCapture',
                 'session',
+                'exchange',
               }.contains(entry.key)) ||
+          (entry.key == 'exchange' && entry.value.isEmpty) ||
           entry.value.length > 1024 ||
           RegExp(r'[\x00-\x1f\x7f]').hasMatch(entry.value)) {
         throw const ControlContractException(
@@ -874,12 +876,23 @@ final class RuntimeCostEstimate {
   bool get partial => partialCalls > 0 || unpricedCalls > 0;
   int get completeCalls => pricedCalls - partialCalls;
 
-  RuntimeCostEstimate add(RuntimeCostEstimate value) => RuntimeCostEstimate(
-    nanoUsd: nanoUsd + value.nanoUsd,
-    pricedCalls: pricedCalls + value.pricedCalls,
-    partialCalls: partialCalls + value.partialCalls,
-    unpricedCalls: unpricedCalls + value.unpricedCalls,
-  );
+  RuntimeCostEstimate add(RuntimeCostEstimate value) {
+    // Match the Runtime's exact integer/lower-bound overflow semantics on Web.
+    if (value.nanoUsd > 9007199254740991 - nanoUsd) {
+      return RuntimeCostEstimate(
+        nanoUsd: nanoUsd,
+        pricedCalls: pricedCalls,
+        partialCalls: partialCalls,
+        unpricedCalls: unpricedCalls + value.pricedCalls + value.unpricedCalls,
+      );
+    }
+    return RuntimeCostEstimate(
+      nanoUsd: nanoUsd + value.nanoUsd,
+      pricedCalls: pricedCalls + value.pricedCalls,
+      partialCalls: partialCalls + value.partialCalls,
+      unpricedCalls: unpricedCalls + value.unpricedCalls,
+    );
+  }
 }
 
 final class RuntimePricingInfo {

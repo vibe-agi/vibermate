@@ -87,7 +87,7 @@ func usageColumn(dimension string) string {
 		return dimension
 	case "profile":
 		return "environment_id"
-	case "account", "model", "caller", "project", "branch", "session":
+	case "account", "model", "caller", "project", "branch", "session", "exchange":
 		return dimension + "_id"
 	case "capture":
 		return "capture_run_id"

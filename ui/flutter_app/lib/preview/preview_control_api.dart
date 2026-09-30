@@ -3480,6 +3480,75 @@ final class PreviewControlApi implements ControlApi {
   Future<RuntimeUsageReport> runtimeUsage(RuntimeUsageQuery query) async {
     _requireOpen();
     query.toQueryParameters();
+    if (query.filters['exchange'] case final id?) {
+      final activity = _allPreviewActivities()
+          .where((a) => a.id == id)
+          .firstOrNull;
+      final observed = activity != null && activity.status != 'pending';
+      final response = activity == null
+          ? null
+          : _previewExchange(activity, 'incremental').content.response;
+      final calls = observed ? 1 : 0;
+      RuntimeTokenAggregate field(ExchangeUsageValue? value) =>
+          RuntimeTokenAggregate(
+            tokens: observed && value?.known == true ? value!.tokens! : 0,
+            knownCalls: observed && value?.known == true ? 1 : 0,
+            unknownCalls: observed && value?.known != true ? 1 : 0,
+          );
+      final tokens = RuntimeTokenUsage(
+        inputUncached: field(response?.usage.inputUncached),
+        cacheWrite: field(response?.usage.cacheWrite),
+        cacheRead: field(response?.usage.cacheRead),
+        output: field(response?.usage.output),
+        reasoning: field(response?.usage.reasoning),
+      );
+      // This class is only the explicit Preview backend, never live pricing.
+      final cost = RuntimeCostEstimate(
+        nanoUsd: observed && response != null ? 4500000 : 0,
+        pricedCalls: observed && response != null ? 1 : 0,
+        unpricedCalls: observed && response == null ? 1 : 0,
+      );
+      final total = RuntimeUsageGroup(
+        id: 'all',
+        label: 'all',
+        agentApiCalls: calls,
+        succeeded: observed && activity.status == 'succeeded' ? 1 : 0,
+        failed: observed && activity.status == 'failed' ? 1 : 0,
+        canceled: observed && activity.status == 'canceled' ? 1 : 0,
+        tokens: tokens,
+        cost: cost,
+      );
+      final date = DateTime.parse(
+        query.until,
+      ).subtract(const Duration(days: 1)).toIso8601String().substring(0, 10);
+      return RuntimeUsageReport(
+        generatedAt: _now,
+        period: RuntimeUsagePeriod(
+          from: query.from,
+          until: query.until,
+          timeZone: query.timeZone,
+        ),
+        snapshot: List.filled(64, 'a').join(),
+        collection: _usageCollection,
+        pricing: RuntimePricingInfo(state: 'ready', updatedAt: _now),
+        total: total,
+        filters: query.filters,
+        days: !observed
+            ? const []
+            : [
+                RuntimeDayUsage(
+                  date: date,
+                  agentApiCalls: calls,
+                  succeeded: total.succeeded,
+                  failed: total.failed,
+                  canceled: total.canceled,
+                  modelUnavailableCalls: response == null ? 1 : 0,
+                  tokens: tokens,
+                  cost: cost,
+                ),
+              ],
+      );
+    }
     const cost = RuntimeCostEstimate(
       nanoUsd: 46035000,
       pricedCalls: 18,

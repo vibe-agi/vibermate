@@ -43,7 +43,16 @@ Future<void> openCaptureConversation(
   // A Capture selects the preferred main Conversation itself. Native client
   // Session IDs deliberately define Conversation identity, so a behavior test
   // must not reach back to the retired capture_run:<id>:main synthetic key.
-  if (conversationLabel == null) return;
+  if (conversationLabel == null) {
+    // These assertions exercise the retained request-evidence accordion. The
+    // default reading view has its own role, scope and navigation regressions.
+    final requests = find.byKey(const Key('reader-request-view'));
+    if (requests.evaluate().isNotEmpty) {
+      await tester.tap(requests);
+      await tester.pumpAndSettle();
+    }
+    return;
+  }
 
   final pane = find.byKey(const Key('capture-conversation-pane'));
   final label = find.descendant(
@@ -63,26 +72,75 @@ Future<void> openCaptureConversation(
   await tester.ensureVisible(row.first);
   await tester.tap(row.first);
   await tester.pumpAndSettle();
+  final requests = find.byKey(const Key('reader-request-view'));
+  if (requests.evaluate().isNotEmpty) {
+    await tester.tap(requests);
+    await tester.pumpAndSettle();
+  }
 }
 
 /// Brings a Turn into view. The timeline is a virtualized list, so a Turn that
 /// was mounted a moment ago can be gone after scrolling elsewhere, and
 /// ensureVisible throws on a Turn that is not currently built.
 Future<void> ensureTurnVisible(WidgetTester tester, Finder turn) async {
+  await openRetainedRequests(tester);
+  expect(
+    find.byKey(const Key('conversation-timeline-scroll')),
+    findsOneWidget,
+    reason:
+        'request reader=${find.byKey(const Key('reader-request-view')).evaluate().length}, '
+        'return=${find.byKey(const Key('reader-return-from-requests')).evaluate().length}, '
+        'mode=${find.byKey(const Key('capture-evidence-mode')).evaluate().length}',
+  );
   if (turn.evaluate().isEmpty) {
-    await tester.scrollUntilVisible(
-      turn,
-      -160,
-      scrollable: find
-          .descendant(
-            of: find.byKey(const Key('conversation-timeline-scroll')),
-            matching: find.byType(Scrollable),
-          )
-          .first,
-    );
+    final scrollable = find
+        .descendant(
+          of: find.byKey(const Key('conversation-timeline-scroll')),
+          matching: find.byType(Scrollable),
+        )
+        .first;
+    final position = tester.state<ScrollableState>(scrollable).position;
+    var direction = position.pixels > position.maxScrollExtent / 2 ? -1 : 1;
+    // The request view can be restored at either end. Search both directions;
+    // a fixed upward drag cannot reveal an earlier request from the bottom.
+    for (
+      var attempts = 0;
+      attempts < 400 && turn.evaluate().isEmpty;
+      attempts++
+    ) {
+      final next = (position.pixels + direction * 240).clamp(
+        0.0,
+        position.maxScrollExtent,
+      );
+      if (next == position.pixels) {
+        direction = -direction;
+      } else {
+        position.jumpTo(next);
+      }
+      await tester.pump();
+    }
   }
   await tester.ensureVisible(turn);
   await tester.pumpAndSettle();
+}
+
+Future<void> openRetainedRequests(WidgetTester tester) async {
+  final mode = find.byKey(const Key('capture-evidence-mode'));
+  if (mode.evaluate().isNotEmpty) {
+    final widget = tester.widget<SegmentedButton<bool>>(mode);
+    if (!widget.selected.contains(true)) {
+      final label = widget.segments.singleWhere((s) => s.value).label! as Text;
+      await tester.tap(
+        find.descendant(of: mode, matching: find.text(label.data!)),
+      );
+      await tester.pumpAndSettle();
+    }
+  }
+  final requests = find.byKey(const Key('reader-request-view'));
+  if (requests.evaluate().isNotEmpty) {
+    await tester.tap(requests);
+    await tester.pumpAndSettle();
+  }
 }
 
 double paintedFormSurfaceHeight(WidgetTester tester, Finder field) {
@@ -1446,6 +1504,7 @@ void main() {
         find.byKey(const Key('capture-aggregate-summary')),
         findsOneWidget,
       );
+      await openRetainedRequests(tester);
       await tester.tap(find.byKey(const Key('conversation-load-earlier')));
       await tester.pumpAndSettle();
       expect(find.textContaining('224 turns'), findsOneWidget);

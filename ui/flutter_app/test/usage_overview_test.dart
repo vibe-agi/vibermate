@@ -125,7 +125,7 @@ void main() {
           controller.selectedCapturePage = completed;
           final mode = find.byKey(const Key('capture-evidence-mode'));
           await tester.tap(
-            find.descendant(of: mode, matching: find.text('Request records')),
+            find.descendant(of: mode, matching: find.text('Conversation')),
           );
           await tester.pumpAndSettle();
           expect(

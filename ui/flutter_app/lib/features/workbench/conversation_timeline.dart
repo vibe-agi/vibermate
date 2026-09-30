@@ -17,6 +17,9 @@ import '../../core/i18n/app_copy.dart';
 import 'workbench_controller.dart';
 import 'raw_header_reveal.dart';
 import 'raw_evidence_diff_dialog.dart';
+import 'usage_dashboard_view.dart' show usageCostLabel;
+
+part 'conversation_reader.dart';
 
 final class EvidenceConversationTimeline extends StatefulWidget {
   const EvidenceConversationTimeline({
@@ -1082,6 +1085,7 @@ final class _ExchangeEvidencePanel extends StatelessWidget {
           const SizedBox(height: 6),
           if (detail.status == 'failed')
             _FailureNotice(
+              key: PageStorageKey('exchange-failure:${activity.id}'),
               diagnosis: detail.diagnosis,
               result: detail.processingTrace.result,
               providerErrorClass: detail.processingTrace.attempts
@@ -2782,11 +2786,34 @@ final class _MessageCard extends StatefulWidget {
 
 final class _MessageCardState extends State<_MessageCard> {
   late bool _expanded;
+  bool _restored = false;
+
+  bool get _instruction =>
+      const {'system', 'developer'}.contains(widget.message.role);
+
+  void _restoreExpansion() {
+    _expanded =
+        (PageStorage.maybeOf(context)?.readState(
+              context,
+              identifier: ValueKey('instruction:${widget.id}'),
+            )
+            as bool?) ??
+        !_instruction;
+  }
 
   @override
   void initState() {
     super.initState();
-    _expanded = widget.message.role != 'system';
+    _expanded = !_instruction;
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (!_restored) {
+      _restoreExpansion();
+      _restored = true;
+    }
   }
 
   @override
@@ -2794,7 +2821,7 @@ final class _MessageCardState extends State<_MessageCard> {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.id != widget.id ||
         oldWidget.message.role != widget.message.role) {
-      _expanded = widget.message.role != 'system';
+      _restoreExpansion();
     }
   }
 
@@ -2803,7 +2830,7 @@ final class _MessageCardState extends State<_MessageCard> {
     final message = widget.message;
     final copy = widget.copy;
     final user = message.role == 'user' || message.role == 'tool';
-    final system = message.role == 'system';
+    final system = _instruction;
     final agent = message.agent;
     final size = message.blocks.fold<int>(
       0,
@@ -2831,7 +2858,14 @@ final class _MessageCardState extends State<_MessageCard> {
               ),
               child: InkWell(
                 key: Key('system-context-${widget.id}'),
-                onTap: () => setState(() => _expanded = !_expanded),
+                onTap: () {
+                  setState(() => _expanded = !_expanded);
+                  PageStorage.maybeOf(context)?.writeState(
+                    context,
+                    _expanded,
+                    identifier: ValueKey('instruction:${widget.id}'),
+                  );
+                },
                 child: Padding(
                   padding: const EdgeInsets.symmetric(
                     horizontal: 9,
@@ -2841,7 +2875,7 @@ final class _MessageCardState extends State<_MessageCard> {
                     children: [
                       Expanded(
                         child: Text(
-                          widget.label ?? copy('exchange.role.system'),
+                          widget.label ?? copy('exchange.role.${message.role}'),
                           style: Theme.of(context).textTheme.labelMedium
                               ?.copyWith(color: context.viberColors.textMuted),
                         ),
@@ -3237,9 +3271,12 @@ final class _ContentBlocksView extends StatelessWidget {
     }
     flushOrdinary();
     flushReasoning();
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: children,
+    return KeyedSubtree(
+      key: PageStorageKey('content-blocks:$id'),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: children,
+      ),
     );
   }
 }
@@ -4042,6 +4079,7 @@ final class _FailureNotice extends StatelessWidget {
     required this.result,
     required this.providerErrorClass,
     required this.copy,
+    super.key,
   });
 
   final ExchangeDiagnosis? diagnosis;
@@ -4105,6 +4143,7 @@ final class _FailureNotice extends StatelessWidget {
           Text(action),
           if (diagnosis?.providerErrorCode case final code?)
             SelectableText(
+              key: const PageStorageKey('failure-provider-code-scroll'),
               '${copy('exchange.failure.provider_code')}: $code',
               style: monoStyle.copyWith(color: context.viberColors.danger),
             ),
@@ -4125,6 +4164,7 @@ final class _FailureNotice extends StatelessWidget {
                   label: technical,
                   child: SelectableText(
                     technical,
+                    key: const PageStorageKey('failure-diagnostic-scroll'),
                     style: monoStyle.copyWith(
                       color: context.viberColors.danger,
                     ),

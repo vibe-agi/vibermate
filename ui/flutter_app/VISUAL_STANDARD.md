@@ -73,17 +73,25 @@ must remain available without making opaque identifiers the visual headline.
 
 ## Conversation behavior
 
-- The newest Turn is expanded on first entry. Expanding another Turn forms a
-  single-open accordion.
-- The whole Turn header is interactive, exposes expanded/collapsed semantics,
-  and has a clear chevron and hover/focus response.
-- A Turn keeps the same rounded silhouette when collapsed and expanded. Its
-  timeline node aligns to the optical center of the first header row, not to
-  the card's top border.
-- New Turns auto-follow only while the reader remains near the bottom.
+- Conversation reading is the default. Request input and Agent text share a
+  continuous reading line; tools, recorded reasoning, instructions, input
+  history and protocol evidence are opened beside their owning request.
+- A checkpoint is input context, not proof of new user messages. Never replay
+  an entire retained snapshot as newly spoken conversation.
+- Wide readers reserve their inspector width so opening details does not
+  reflow the prose. Narrow readers replace the reading surface with details
+  and restore it without losing position or the selected detail tab.
+- Token and API-equivalent cost values are muted inline metadata, not cards or
+  a separate statistics row. Loaded-request aggregates name their limited
+  scope; unavailable evidence is not zero and reasoning is not added twice.
+- The retained request-record mode still uses a single-open accordion. Its
+  whole header is interactive, with expanded semantics and a consistent
+  rounded silhouette; timeline nodes align with the first header row.
+- New requests auto-follow only while reading near the bottom and not
+  inspecting another object. Otherwise show a deliberate jump-to-latest action.
 - Captures is the operational authority; Conversations is the cross-Capture
-  derived audit index. Both reuse the same canonical timeline renderer and
-  provide a clear route back to Capture context.
+  derived audit index. Captures and search results reuse the same conversation,
+  content-block and raw-evidence renderers and retain a route back to Capture.
 
 ## Acceptance views
 
