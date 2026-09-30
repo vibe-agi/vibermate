@@ -32,6 +32,7 @@
 
 ## 已发布
 
+- **v0.1.20**（2026-09-30，`c1eece3`）：修复请求预览与 Codex 协议边界；完善重置券、账号范围/原始账号、用量默认值及刷新交互；增加自有域名部署向导。macOS 签名公证与安装验收、Linux 双架构包、Homebrew 和官网更新见 [docs/releases/v0.1.20.md](docs/releases/v0.1.20.md)。
 - **v0.1.19**（2026-09-29，`07bd4e7`）：Server IP 白名单（含 `--trusted-proxies` 与 PROXY protocol）；macOS 签名公证、Linux 包、Homebrew、官网均已更新，见 [docs/releases/v0.1.19.md](docs/releases/v0.1.19.md)。
 - **v0.1.18**（2026-09-29，`25091f8`）：Web 工作台自包含（CanvasKit 与字体随包、严格 CSP）、中英文指南与官网改版；macOS 签名公证、Linux 包、Homebrew、官网均已更新，见 [docs/releases/v0.1.18.md](docs/releases/v0.1.18.md)。
 - **v0.1.17**（2026-09-29，`7ac39f0`）：macOS 签名公证与安装证据、Linux x86-64/ARM64 包、Homebrew cask、vibe-agi.github.io 均已更新。构建证据与发布说明见 [docs/releases/v0.1.17.md](docs/releases/v0.1.17.md)。
