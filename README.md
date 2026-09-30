@@ -14,13 +14,13 @@ happens to it.
 
 ## What it does
 
-- **See** every conversation turn by turn: what was asked, what the model
-  answered, which tools it used, and the raw HTTP when you need it.
+- **See** user input and Agent replies first. Open tool calls, system context
+  or raw HTTP beside the relevant message without losing your reading position.
 - **Steer** each request to the upstream service and account you choose, and
   switch without editing config files.
 - **Approve** before your agent reaches a site your policy hasn't decided.
 - **Measure** requests, tokens and estimated cost by project, branch, model,
-  account or person.
+  account or person, with compact request-level details inside conversations.
 - **Share** one server with your team. Everyone signs in with their own
   account, and the owner decides who may use which policies.
 
