@@ -111,12 +111,54 @@ func (f accountReadFixture) serveProxy(t *testing.T) *url.URL {
 type accountFixtureOriginal struct{}
 
 func (accountFixtureOriginal) Do(_ context.Context, request originaltransport.Request) (*http.Response, error) {
+	if request.Path() == "/backend-api/wham/usage" || request.Path() == "/backend-api/wham/profiles/me" {
+		if request.Headers().Get("Authorization") != "Bearer original-A" || request.Headers().Get("Chatgpt-Account-Id") != "workspace-A" || request.Headers().Get("Cookie") != "original-A-cookie" {
+			return &http.Response{StatusCode: http.StatusUnauthorized, Header: http.Header{}, Body: io.NopCloser(strings.NewReader("wrong original account"))}, nil
+		}
+		return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(strings.NewReader(`{"account_id":"workspace-A"}`))}, nil
+	}
 	if request.Path() == "/backend-api/wham/accounts/check" {
 		return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"application/json"}},
 			Body: io.NopCloser(strings.NewReader(`{"accounts":[{"id":"workspace-A","workspace_backend_origin":"https://chatgpt.com","account_routing_override":"NO_CONSTRAINT"}],"default_account_id":"workspace-A"}`))}, nil
 	}
 	return &http.Response{StatusCode: 503, Header: http.Header{"Content-Type": {"application/json"}},
 		Body: io.NopCloser(strings.NewReader(`{"error":"unrelated operation disabled in synthetic acceptance"}`))}, nil
+}
+
+func TestOriginalAccountQueriesThroughCONNECT(t *testing.T) {
+	for _, http2 := range []bool{false, true} {
+		f := newAccountReadFixtureWithDriver(t, providerauth.CodexOAuthDriverRef())
+		route := &f.aggregate.ClientEndpoints[0].ProtocolPlans[0].Destination.Upstream.Routes[0]
+		route.AccountPolicy = environment.RouteAccountPolicy{Revision: 1, Mode: environment.AccountSelectionOriginal, Accounts: []environment.RouteAccountReference{}}
+		route.AllowAccountHistory = false
+		proxyURL := f.serveProxy(t)
+		roots := x509.NewCertPool()
+		roots.AppendCertsFromPEM(f.runtime.LocalRootCertificate().CertificatePEM())
+		transport := &http.Transport{Proxy: http.ProxyURL(proxyURL), TLSClientConfig: &tls.Config{RootCAs: roots, MinVersion: tls.VersionTLS12}, ForceAttemptHTTP2: http2}
+		defer transport.CloseIdleConnections()
+		client := &http.Client{Transport: transport, Timeout: 4 * time.Second}
+		for _, path := range []string{"/backend-api/wham/usage", "/backend-api/wham/profiles/me"} {
+			request, _ := http.NewRequest(http.MethodGet, "https://chatgpt.com"+path, nil)
+			request.Header.Set("Authorization", "Bearer original-A")
+			request.Header.Set("Chatgpt-Account-Id", "workspace-A")
+			request.Header.Set("Cookie", "original-A-cookie")
+			response, err := client.Do(request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			body, err := io.ReadAll(response.Body)
+			response.Body.Close()
+			if err != nil || response.StatusCode != 200 || !strings.Contains(string(body), `"account_id":"workspace-A"`) || (http2 && response.ProtoMajor != 2) {
+				t.Fatalf("original account read: %d, %s, %v", response.StatusCode, body, err)
+			}
+		}
+		f.wire.mu.Lock()
+		count := len(f.wire.requests)
+		f.wire.mu.Unlock()
+		if count != 0 {
+			t.Fatal("original account read acquired managed account authority")
+		}
+	}
 }
 
 func TestManagedAccountQueriesThroughCONNECT(t *testing.T) {

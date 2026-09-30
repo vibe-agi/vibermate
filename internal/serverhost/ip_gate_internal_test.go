@@ -404,3 +404,63 @@ func TestLoadBalancerWithoutAHeaderNeverWidensAccess(t *testing.T) {
 func v2LocalHeader() string {
 	return "\r\n\r\n\x00\r\nQUIT\n\x20\x00\x00\x00"
 }
+
+func TestUnknownProxySourceDoesNotGetTheHealthCheckException(t *testing.T) {
+	t.Parallel()
+	for _, peer := range []string{"10.0.0.5", "127.0.0.2"} {
+		for name, header := range map[string]string{
+			"v1 unknown":     "PROXY UNKNOWN\r\n",
+			"v2 unspecified": "\r\n\r\n\x00\r\nQUIT\n\x21\x00\x00\x00",
+		} {
+			t.Run(peer+"/"+name, func(t *testing.T) {
+				gate := newConnectionGate(mustAllowlist(t, "203.0.113.0/24"), mustAllowlist(t, peer), gateNow)
+				peers := newPeerRewritingListener(t)
+				serveHello(t, gate.listen(peers, false))
+				peers.connectAs(peer)
+				if body, err := send(t, peers.Addr().String(), header); err == nil {
+					t.Fatalf("unknown client bypassed allowlist: %q", body)
+				}
+				if got := gate.refusals(); got.count != 1 || got.proxyHeaderProblems != 1 {
+					t.Fatalf("missing source was not reported: %+v", got)
+				}
+				// An explicitly permitted balancer can still use unknown source
+				// headers, but its connections remain subject to later updates.
+				gate.update(mustAllowlist(t, peer))
+				peers.connectAs(peer)
+				if body, err := send(t, peers.Addr().String(), header); err != nil || body != "hello" {
+					t.Fatalf("allowed balancer failed: %q, %v", body, err)
+				}
+			})
+		}
+	}
+}
+
+func TestUpdatedGateRechecksUntrackedAndUnknownSourceConnections(t *testing.T) {
+	for _, lateTrack := range []bool{false, true} {
+		for _, address := range []string{"198.51.100.4", "127.0.0.2"} {
+			gate := newConnectionGate(ipallowlist.List{}, ipallowlist.List{}, gateNow)
+			client, server := net.Pipe()
+			defer client.Close()
+			conn := &gatedConn{Conn: server, gate: gate, address: netip.MustParseAddr(address)}
+			if conn.address.IsLoopback() {
+				conn.balancer = conn.address
+			}
+			conn.admitted.Store(true)
+			if !lateTrack {
+				gate.track(conn)
+			}
+			gate.update(mustAllowlist(t, "203.0.113.0/24"))
+			if lateTrack {
+				gate.track(conn)
+			}
+			_ = client.SetReadDeadline(time.Now().Add(time.Second))
+			if _, err := client.Read(make([]byte, 1)); !errors.Is(err, io.EOF) {
+				t.Fatalf("late=%t address=%s escaped updated policy: %v", lateTrack, address, err)
+			}
+			gate.track(conn) // A resolve finishing after Close must not leak a tracked connection.
+			if len(gate.open) != 0 {
+				t.Fatal("closed connection was tracked again")
+			}
+		}
+	}
+}

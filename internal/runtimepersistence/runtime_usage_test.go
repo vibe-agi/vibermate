@@ -17,6 +17,16 @@ import (
 	"github.com/vibe-agi/vibermate/internal/runtimeuser"
 )
 
+// Historical retention tests start with the old, explicitly disabled policy;
+// their fixture timestamps precede wall-clock database creation.
+func openDisabledUsageTestStore(t *testing.T, path string) *Store {
+	store := openTestStore(t, path)
+	if _, err := store.database.Exec(`UPDATE runtime_usage_policy SET enabled=0, retention_days=90, collecting_since_unix_ms=NULL WHERE revision=1`); err != nil {
+		t.Fatal(err)
+	}
+	return store
+}
+
 // Test-only evidence inspection. Reports use numeric, complete ScanUsage queries.
 func (store *Store) ListUsage(ctx context.Context, query runtimeusage.Query, userID runtimeuser.UserID, now time.Time, limit int) ([]runtimeusage.Observation, bool, error) {
 	from, until := query.Bounds()
@@ -62,7 +72,7 @@ func (store *Store) ListUsage(ctx context.Context, query runtimeusage.Query, use
 func TestUsageReadersDoNotBlockTheWriterAndCannotWrite(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	store := openTestStore(t, filepath.Join(t.TempDir(), "usage.db"))
+	store := openDisabledUsageTestStore(t, filepath.Join(t.TempDir(), "usage.db"))
 	defer shutdownTestStore(t, store)
 	var version string
 	if err := store.reads.QueryRowContext(ctx, `SELECT sqlite_version()`).Scan(&version); err != nil {
@@ -115,7 +125,7 @@ func TestUsageReadersDoNotBlockTheWriterAndCannotWrite(t *testing.T) {
 
 func TestUsageReadFiltersExpiryWithoutDeleting(t *testing.T) {
 	ctx := context.Background()
-	store := openTestStore(t, filepath.Join(t.TempDir(), "usage.db"))
+	store := openDisabledUsageTestStore(t, filepath.Join(t.TempDir(), "usage.db"))
 	defer shutdownTestStore(t, store)
 	now := time.Date(2026, 9, 28, 0, 0, 0, 0, time.UTC)
 	if _, err := store.SetUsagePolicy(ctx, runtimeusage.CollectionPolicy{Enabled: true, RetentionDays: 1, Revision: 1}, now); err != nil {
@@ -142,7 +152,7 @@ func TestUsageReadFiltersExpiryWithoutDeleting(t *testing.T) {
 
 func TestExpiredMaintenanceCommitsBoundedProgressAndPreservesLiveUsage(t *testing.T) {
 	ctx := context.Background()
-	store := openTestStore(t, filepath.Join(t.TempDir(), "usage.db"))
+	store := openDisabledUsageTestStore(t, filepath.Join(t.TempDir(), "usage.db"))
 	defer shutdownTestStore(t, store)
 	now := time.Date(2026, 9, 28, 0, 0, 0, 0, time.UTC)
 	for _, id := range []string{"a", "b", "c", "d", "e", "live"} {
@@ -184,7 +194,7 @@ func TestExpiredMaintenanceCommitsBoundedProgressAndPreservesLiveUsage(t *testin
 func TestUsageLedgerConsentDeduplicationOwnershipAndRetention(t *testing.T) {
 	ctx := context.Background()
 	now := time.Date(2026, 9, 27, 12, 0, 0, 0, time.UTC)
-	store := openTestStore(t, filepath.Join(t.TempDir(), "usage.db"))
+	store := openDisabledUsageTestStore(t, filepath.Join(t.TempDir(), "usage.db"))
 	t.Cleanup(func() { _ = store.Shutdown(ctx) })
 	seedCaptureGraph(t, store, "managed_run", "local", 1)
 	seedCaptureGraph(t, store, "managed_run", "member", 1)
@@ -324,7 +334,7 @@ func TestUsageLedgerConsentDeduplicationOwnershipAndRetention(t *testing.T) {
 func TestUsageArchiveClearAndReopen(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "usage.db")
-	store := openTestStore(t, path)
+	store := openDisabledUsageTestStore(t, path)
 	now := time.Date(2026, 9, 27, 12, 0, 0, 0, time.UTC)
 	if _, err := store.SetUsagePolicy(ctx, runtimeusage.CollectionPolicy{Enabled: true, RetentionDays: 7, Revision: 1}, now); err != nil {
 		t.Fatal(err)
@@ -336,7 +346,7 @@ func TestUsageArchiveClearAndReopen(t *testing.T) {
 	if err := store.Shutdown(ctx); err != nil {
 		t.Fatal(err)
 	}
-	store = openTestStore(t, path)
+	store = openDisabledUsageTestStore(t, path)
 	t.Cleanup(func() { _ = store.Shutdown(ctx) })
 	query, _ := runtimeusage.NewQuery("2026-09-27", "2026-10-10", "UTC")
 	rows, _, err := store.ListUsage(ctx, query, "", now, 100)

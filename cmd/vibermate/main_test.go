@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"sync/atomic"
@@ -84,13 +85,22 @@ func TestStatusAndDoctorVerifyTheRealLocalControlAPI(t *testing.T) {
 	}
 	var current atomic.Pointer[desktopcontrol.StatusResponse]
 	current.Store(&status)
+	var rootTrusted atomic.Bool
+	rootTrusted.Store(true)
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		if request.Method != http.MethodGet || request.URL.Path != "/api/v1/status" ||
+		if request.Method != http.MethodGet ||
 			request.Header.Get("Authorization") != "Bearer "+credential {
 			http.Error(writer, "unexpected request", http.StatusForbidden)
 			return
 		}
 		writer.Header().Set("Content-Type", "application/json")
+		writer.Header().Set("Cache-Control", "no-store")
+		if request.URL.Path == "/api/v1/platform/root-ca" {
+			_ = json.NewEncoder(writer).Encode(desktopcontrol.RootCAResponse{
+				Available: true, RootValid: rootTrusted.Load(), CertificatePresent: "present", TrustDecision: "trusted",
+			})
+			return
+		}
 		_ = json.NewEncoder(writer).Encode(current.Load())
 	}))
 	defer server.Close()
@@ -144,6 +154,15 @@ func TestStatusAndDoctorVerifyTheRealLocalControlAPI(t *testing.T) {
 		if command == "doctor" && !strings.Contains(stdout.String(), "vibermate run -- codex") {
 			t.Fatalf("doctor output lacks next action: %s", stdout.String())
 		}
+	}
+	if runtime.GOOS == "darwin" {
+		rootTrusted.Store(false)
+		var stdout, stderr strings.Builder
+		code, key := execute([]string{"doctor"}, []string{"LANG=en_US.UTF-8"}, strings.NewReader(""), &stdout, &stderr)
+		if code != 1 || key != "cli.error.localRootUntrusted" || strings.Contains(stdout.String(), "PASS") {
+			t.Fatalf("untrusted Root: code=%d key=%q stdout=%s", code, key, &stdout)
+		}
+		rootTrusted.Store(true)
 	}
 	for _, stopped := range []bool{false, true} {
 		updated := status

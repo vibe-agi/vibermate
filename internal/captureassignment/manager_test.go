@@ -253,6 +253,34 @@ func TestPublishedManualAccountActivationChangesEveryNextRequest(t *testing.T) {
 	}
 	assertAccount("in-flight", before, "account.default")
 	assertAccount("next", after, "account.alternate")
+	original, changed, err := environment.ActivateRouteOriginalAccount(revisionTwo, "route.default")
+	if err != nil || !changed {
+		t.Fatalf("original activation: %v, %v", changed, err)
+	}
+	resolver.Publish(t, original)
+	passthrough, err := manager.BeginRequest(context.Background(), capture, "connection.semantic", semanticRequestFacts())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer passthrough.Release()
+	if !passthrough.Plan().UsesOriginalAccount() {
+		t.Fatal("next request did not keep the client's account")
+	}
+	assertAccount("in-flight managed", after, "account.alternate")
+	restored, _, err := environment.ActivateRouteAccount(original, "route.default", policy.Accounts[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolver.Publish(t, restored)
+	restoredLease, err := manager.BeginRequest(context.Background(), capture, "connection.semantic", semanticRequestFacts())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer restoredLease.Release()
+	assertAccount("restored next request", restoredLease, "account.default")
+	if !passthrough.Plan().UsesOriginalAccount() {
+		t.Fatal("in-flight passthrough was mutated")
+	}
 	if after.Assignment().EnvironmentRevision != created.EnvironmentRevision {
 		t.Fatalf("manual Account activation changed frozen policy revision: %+v", after.Assignment())
 	}

@@ -93,7 +93,9 @@ docker compose --env-file .env.public -f compose.public.yaml \
 热加载。
 
 首次 TLS-ALPN 申请是异步的。容器在运行，不代表证书已经签发；请查看日志和网页中的
-「设置 → 安全与数据 → 连接到服务器」。私网 DNS、IP、通配符和 DNS-01 不在当前自动模式
+「设置 → 安全与数据 → 服务器 HTTPS」。首张证书未签发时网页可能无法打开，先运行
+`docker compose --env-file .env.public -f compose.public.yaml logs --tail=100 -f vibermate`
+检查 DNS（含 AAAA）、公网 443 和 TCP 转发。私网 DNS、IP、通配符和 DNS-01 不在当前自动模式
 的支持范围内。
 
 ## 已有证书

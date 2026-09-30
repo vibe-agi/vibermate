@@ -15,6 +15,7 @@ import 'package:vibermate_app/core/preferences/workbench_preferences.dart';
 import 'package:vibermate_app/features/workbench/account_selector_editor.dart';
 import 'package:vibermate_app/features/workbench/conversation_timeline.dart';
 import 'package:vibermate_app/features/workbench/network_view.dart';
+import 'package:vibermate_app/features/workbench/route_account_scope_editor.dart';
 import 'package:vibermate_app/features/workbench/settings_view.dart';
 import 'package:vibermate_app/features/workbench/workbench_controller.dart';
 import 'package:vibermate_app/features/workbench/workbench_shell.dart';
@@ -1331,7 +1332,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('usage-retention')), findsOneWidget);
     expect(find.textContaining('Never saves prompts'), findsOneWidget);
-    await tester.tap(find.byType(SwitchListTile));
+    await tester.tap(find.byKey(const Key('usage-collection-enabled')));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Save changes'));
     await tester.pumpAndSettle();
@@ -3755,10 +3756,9 @@ void main() {
       await tester.tap(find.byKey(const Key('environment-tab-traffic')));
       await tester.pumpAndSettle();
 
-      final accountField = find.byKey(
-        const Key(
-          'environment-route-account-anthropic-direct-fixed:anthropic-work',
-        ),
+      final accountField = await _openAccountSelection(
+        tester,
+        'environment-route-accounts-anthropic-direct',
       );
       final accountDropdown = tester.widget<CompactSelectField<String>>(
         accountField,
@@ -3766,7 +3766,7 @@ void main() {
       final accountIds = accountDropdown.items
           .map((item) => item.value)
           .toList(growable: false);
-      expect(accountIds, ['fixed:anthropic-work']);
+      expect(accountIds, ['original', 'fixed:anthropic-work']);
       expect(accountIds, isNot(contains('fixed:orbit-team')));
       expect(accountIds, isNot(contains('fixed:openai-work')));
       final accountMenu = tester.widget<MenuAnchor>(
@@ -3776,6 +3776,8 @@ void main() {
         accountMenu.style?.maximumSize?.resolve({})?.height,
         lessThanOrEqualTo(240),
       );
+      await tester.tap(find.text('Cancel').last);
+      await tester.pumpAndSettle();
       await _includeRouteAccount(
         tester,
         'environment-route-accounts-anthropic-direct',
@@ -3900,11 +3902,22 @@ void main() {
       await tester.pumpAndSettle();
       await tester.tap(trafficTab);
       await tester.pumpAndSettle();
+      await _openAccountSelection(
+        tester,
+        'environment-route-accounts-anthropic-direct',
+      );
       await tester.ensureVisible(accountField);
       await tester.pumpAndSettle();
       await tester.tap(accountField);
       await tester.pumpAndSettle();
-      await tester.tap(find.textContaining('Anthropic · Lab').last);
+      await tester.tap(
+        find.widgetWithText(
+          MenuItemButton,
+          'Manual selection · Anthropic · Lab',
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('route-account-scope-apply')));
       await tester.pumpAndSettle();
 
       await tester.tap(find.byKey(const Key('environment-review')));
@@ -3916,7 +3929,7 @@ void main() {
       expect(find.text('CONFIGURATION TO PUBLISH'), findsOneWidget);
       expect(find.text('Work reviewed'), findsOneWidget);
       expect(find.textContaining('Metadata only'), findsOneWidget);
-      expect(find.text('Anthropic · Lab'), findsOneWidget);
+      expect(find.textContaining('Anthropic · Lab'), findsWidgets);
       expect(find.text('Future Captures only'), findsWidgets);
       expect(
         find.text('6 RUNNING CAPTURES KEEP THEIR CURRENT REVISION'),
@@ -4548,11 +4561,12 @@ void main() {
       await tester.pumpAndSettle();
       await tester.tap(find.textContaining('Anthropic API').last);
       await tester.pumpAndSettle();
-      final initialAccount = find.byKey(
-        const Key('environment-endpoint-account-target.anthropic.official'),
+      final initialAccount = await _openAccountSelection(
+        tester,
+        'environment-endpoint-accounts-target.anthropic.official',
       );
       await tester.ensureVisible(initialAccount);
-      expect(find.text('Account selection'), findsOneWidget);
+      expect(find.text('Account selection').hitTestable(), findsOneWidget);
       expect(
         find.text('Manual selection and rules use only the selected accounts.'),
         findsOneWidget,
@@ -4570,10 +4584,12 @@ void main() {
         find.text('JavaScript rule · Workspace account · r1').last,
       );
       await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('route-account-scope-apply')));
+      await tester.pumpAndSettle();
       await tester.tap(find.byKey(const Key('environment-add-endpoint')));
       await tester.pumpAndSettle();
       expect(
-        find.text('Manual selection and rules use only the selected accounts.'),
+        find.textContaining('JavaScript rule · Workspace account · r1'),
         findsWidgets,
       );
       await tester.tap(find.text('Cancel').last);
@@ -4583,10 +4599,9 @@ void main() {
       await tester.pumpAndSettle();
       await tester.tap(find.byKey(const Key('environment-edit')));
       await tester.pumpAndSettle();
-      final fixed = find.byKey(
-        const Key(
-          'environment-route-account-anthropic-direct-fixed:anthropic-work',
-        ),
+      final fixed = await _openAccountSelection(
+        tester,
+        'environment-route-accounts-anthropic-direct',
       );
       await tester.ensureVisible(fixed);
       await tester.tap(fixed);
@@ -4595,16 +4610,14 @@ void main() {
         find.text('JavaScript rule · Workspace account · r1').last,
       );
       await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('route-account-scope-apply')));
+      await tester.pumpAndSettle();
       expect(
-        find.byKey(
-          const Key(
-            'environment-route-account-anthropic-direct-javascript:selector.workspace:1',
-          ),
-        ),
+        find.byKey(const Key('environment-route-accounts-anthropic-direct')),
         findsOneWidget,
       );
       expect(
-        find.text('Manual selection and rules use only the selected accounts.'),
+        find.textContaining('JavaScript rule · Workspace account · r1'),
         findsWidgets,
       );
 
@@ -4625,9 +4638,7 @@ void main() {
       await tester.tap(find.byKey(const Key('environment-edit')));
       await tester.pumpAndSettle();
       final reopened = find.byKey(
-        const Key(
-          'environment-route-account-anthropic-direct-javascript:selector.workspace:1',
-        ),
+        const Key('environment-route-accounts-anthropic-direct'),
       );
       await tester.ensureVisible(reopened);
       expect(reopened, findsOneWidget);
@@ -5094,13 +5105,14 @@ void main() {
     final firstAdd = find.byKey(const Key('environment-add-endpoint'));
     expect(
       tester
-          .widget<CompactSelectField<String>>(
+          .widget<RouteAccountScopeButton>(
             find.byKey(
-              const Key('environment-endpoint-account-target.orbit.relay'),
+              const Key('environment-endpoint-accounts-target.orbit.relay'),
             ),
           )
-          .initialValue,
-      'fixed:orbit-team',
+          .policy
+          .fixedAccountId,
+      'orbit-team',
     );
     expect(tester.widget<OutlinedButton>(firstAdd).onPressed, isNotNull);
     await tester.tap(firstAdd);
@@ -5241,8 +5253,9 @@ void main() {
             .last,
       );
       await tester.pumpAndSettle();
-      final relayAccount = find.byKey(
-        const Key('environment-endpoint-account-target.orbit.relay'),
+      final relayAccount = await _openAccountSelection(
+        tester,
+        'environment-endpoint-accounts-target.orbit.relay',
       );
       final relayDropdown = tester.widget<CompactSelectField<String>>(
         relayAccount,
@@ -5251,6 +5264,8 @@ void main() {
         relayDropdown.items.map((item) => item.value),
         orderedEquals(['fixed:orbit-team']),
       );
+      await tester.tap(find.text('Cancel').last);
+      await tester.pumpAndSettle();
       await tester.tap(find.byKey(const Key('environment-add-endpoint')));
       await tester.pumpAndSettle();
 
@@ -5303,8 +5318,9 @@ void main() {
       await tester.tap(find.textContaining('Anthropic API').last);
       await tester.pumpAndSettle();
 
-      final accountField = find.byKey(
-        const Key('environment-endpoint-account-target.anthropic.official'),
+      final accountField = await _openAccountSelection(
+        tester,
+        'environment-endpoint-accounts-target.anthropic.official',
       );
       final accountDropdown = tester.widget<CompactSelectField<String>>(
         accountField,
@@ -5312,13 +5328,15 @@ void main() {
       final accountIds = accountDropdown.items
           .map((item) => item.value)
           .toList(growable: false);
-      expect(accountIds, ['fixed:anthropic-work']);
+      expect(accountIds, ['original', 'fixed:anthropic-work']);
       expect(accountIds, isNot(contains('fixed:openai-work')));
       expect(accountIds, isNot(contains('fixed:orbit-team')));
 
       await tester.tap(accountField);
       await tester.pumpAndSettle();
       await tester.tap(find.textContaining('Anthropic · Work').last);
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('route-account-scope-apply')));
       await tester.pumpAndSettle();
 
       // A catalog choice is still pending until it is added to the draft.
@@ -5864,6 +5882,18 @@ void main() {
     await tester.pumpWidget(const SizedBox.shrink());
     await tester.pump();
   });
+}
+
+Future<Finder> _openAccountSelection(WidgetTester tester, String key) async {
+  final button = find.descendant(
+    of: find.byKey(Key(key)),
+    matching: find.byType(OutlinedButton),
+  );
+  await tester.ensureVisible(button);
+  await tester.pumpAndSettle();
+  await tester.tap(button);
+  await tester.pumpAndSettle();
+  return find.byKey(const Key('route-account-selection'));
 }
 
 Future<void> _includeRouteAccount(

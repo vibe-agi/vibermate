@@ -350,6 +350,8 @@ func (pipeline *Pipeline) selectCredentialCandidate(
 	}
 	policy := selection.accountPolicy
 	switch policy.Mode() {
+	case environment.AccountSelectionOriginal:
+		return credentialCandidate{mode: providerauth.CredentialClientPassthrough}, nil
 	case environment.AccountSelectionFixed:
 		account, available := policy.FixedAccount()
 		if !available {

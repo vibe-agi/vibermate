@@ -93,7 +93,7 @@ func (handler *Handler) dryRunEnvironment(writer http.ResponseWriter, request *h
 		return
 	}
 	var requestOptions []exchange.ClientRequestOption
-	if plan.PreservesOriginalDestination() {
+	if plan.PreservesOriginalDestination() || plan.UsesOriginalAccount() {
 		// No client credential or observed wire Headers enter this preview.
 		requestOptions = append(requestOptions, exchange.WithOriginalHeaders(http.Header{}))
 	}

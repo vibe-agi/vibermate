@@ -149,17 +149,10 @@ final class ProviderAccountRow extends StatelessWidget {
                     container: true,
                     label:
                         '${copy('provider_accounts.automatic_refresh')}: ${account.displayName}',
-                    child: Transform.scale(
-                      scale: .72,
-                      // Shrink the native drawing, not its pointer target.
-                      transformHitTests: false,
-                      child: Switch(
-                        key: Key('account-automatic-refresh-${account.id}'),
-                        value: account.automaticRefresh,
-                        onChanged: busy ? null : onAutomaticRefreshChanged,
-                        padding: EdgeInsets.zero,
-                        materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                      ),
+                    child: CompactSwitch(
+                      switchKey: Key('account-automatic-refresh-${account.id}'),
+                      value: account.automaticRefresh,
+                      onChanged: busy ? null : onAutomaticRefreshChanged,
                     ),
                   ),
                 ),

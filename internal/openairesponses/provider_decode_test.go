@@ -151,7 +151,7 @@ func TestProviderResponseAcceptsCurrentOpaqueCodexOutputItems(t *testing.T) {
 	t.Parallel()
 
 	for _, item := range []string{
-		`{"type":"tool_search_call","call_id":"search_1","execution":"client","arguments":{"query":"files"}}`,
+		`{"type":"tool_search_call","call_id":"search_1","execution":"server","arguments":{"query":"files"}}`,
 		`{"type":"tool_search_output","call_id":"search_1","status":"completed","execution":"client","tools":[]}`,
 		`{"type":"web_search_call","id":"web_1","status":"completed"}`,
 		`{"type":"image_generation_call","id":"image_1","status":"completed","result":"opaque"}`,

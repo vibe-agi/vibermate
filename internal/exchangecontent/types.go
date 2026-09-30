@@ -668,7 +668,7 @@ func (request Request) validateProjection(mode environment.ContentRecordingMode)
 func (response Response) validate(mode environment.ContentRecordingMode) error {
 	if !validIdentity(response.ID, 512) || response.RequestedModel == "" ||
 		response.EffectiveModel == "" || response.ReportedModel == "" ||
-		len(response.Blocks) == 0 || len(response.Blocks) > protocolcore.MaxContentBlocks {
+		len(response.Blocks) > protocolcore.MaxContentBlocks {
 		return fmt.Errorf("%w: response projection is incomplete", ErrInvalidEvidence)
 	}
 	if err := protocolcore.StopReason(response.StopReason).Validate(); err != nil {

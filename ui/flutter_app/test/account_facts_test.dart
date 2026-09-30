@@ -14,6 +14,124 @@ import 'package:vibermate_app/preview/preview_control_api.dart';
 import 'package:vibermate_app/preview/preview_terminal_command.dart';
 
 void main() {
+  test('credits have two decimals and only live vouchers expire soon', () {
+    expect(accountCreditsLabel('62429.2476250000', 'unknown'), '62429.25');
+    expect(accountCreditsLabel('0', 'unknown'), '0.00');
+    expect(accountCreditsLabel(null, 'unknown'), 'unknown');
+    final now = DateTime.utc(2026, 9, 30);
+    for (final (hours, soon) in [
+      (-1, false),
+      (0, false),
+      (1, true),
+      (72, true),
+      (73, false),
+    ]) {
+      final credit = AccountResetCredit.fromJson({
+        'id': 'fixture',
+        'resetType': 'codex_rate_limits',
+        'status': 'available',
+        'grantedAt': now.subtract(const Duration(days: 10)).toIso8601String(),
+        'expiresAt': now.add(Duration(hours: hours)).toIso8601String(),
+      });
+      expect(resetCreditExpiresSoon(credit, now), soon);
+    }
+  });
+
+  testWidgets('voucher details combine all warnings in one confirmation', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1180, 900));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final now = DateTime.now().toUtc();
+    final api = _FactsApi()
+      ..quota = {
+        'limits': [
+          {
+            'id': 'codex',
+            'primary': {
+              ..._window(41),
+              'resetAt':
+                  now.add(const Duration(hours: 2)).millisecondsSinceEpoch ~/
+                  1000,
+            },
+          },
+        ],
+        'rateLimitResets': {
+          'availableCount': 2,
+          'applicableAvailableCount': 2,
+          'details': [
+            for (final (id, days) in [
+              ('expired', -1),
+              ('used', -1),
+              ('earliest', 1),
+              ('later', 2),
+            ])
+              {
+                'id': id,
+                'title': id,
+                'description': 'Fixture voucher details',
+                'resetType': 'codex_rate_limits',
+                'status': id == 'used' ? 'redeemed' : 'available',
+                'grantedAt': now
+                    .subtract(const Duration(days: 10))
+                    .toIso8601String(),
+                'expiresAt': now.add(Duration(days: days)).toIso8601String(),
+              },
+          ],
+        },
+      };
+    final fixture = await _fixture(api, codexOAuth: true);
+    addTearDown(fixture.controller.dispose);
+    await _pumpPanel(tester, fixture);
+    await _query(tester);
+    final chip = find.byKey(const Key('provider-account-resets-account.facts'));
+    expect(
+      tester.widget<TextButton>(chip).style!.foregroundColor!.resolve({}),
+      ViberColors.dark.danger,
+    );
+    await tester.ensureVisible(chip);
+    await tester.tap(chip);
+    await tester.pumpAndSettle();
+    expect(find.byType(AlertDialog), findsOneWidget);
+    expect(api.redeemCalls, isEmpty);
+    expect(
+      find.descendant(
+        of: find.byKey(const Key('account-reset-credit-used')),
+        matching: find.text('已使用'),
+      ),
+      findsOneWidget,
+    );
+    expect(
+      tester
+          .widget<ListTile>(
+            find.byKey(const Key('account-reset-credit-expired')),
+          )
+          .onTap,
+      isNull,
+    );
+    final later = find.byKey(const Key('account-reset-credit-later'));
+    await tester.ensureVisible(later);
+    await tester.tap(later);
+    await tester.pumpAndSettle();
+    final warning = tester
+        .widget<Text>(
+          find.descendant(
+            of: find.byKey(const Key('account-reset-warnings')),
+            matching: find.byType(Text),
+          ),
+        )
+        .data!;
+    expect(warning, contains('本周已使用 41%'));
+    expect(warning, contains('更早到期'));
+    expect(warning, contains('3 小时内自然重置'));
+    expect(find.byType(AlertDialog), findsOneWidget);
+    expect(api.redeemCalls, isEmpty);
+    await tester.tap(find.byKey(const Key('account-reset-confirm')));
+    await tester.pumpAndSettle();
+    expect(api.redeemCalls.single.creditId, 'later');
+    expect(find.byType(AlertDialog), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
   for (final width in [390.0, 1180.0]) {
     testWidgets(
       'account quota is explicit and remains separate from history at $width',
@@ -55,7 +173,7 @@ void main() {
         await tester.tap(find.byKey(const Key('account-quota-account.facts')));
         await tester.pumpAndSettle();
         expect(find.textContaining('25%'), findsOneWidget);
-        expect(find.text('Codex 可用额度重置券：1'), findsOneWidget);
+        expect(find.byTooltip('Codex 可用额度重置券：1 · 查看重置券详情'), findsOneWidget);
         expect(find.text('当前可使用：1'), findsOneWidget);
         expect(
           tester.getSize(find.byType(LinearProgressIndicator).first).width,
@@ -271,7 +389,9 @@ void main() {
       addTearDown(fixture.controller.dispose);
       await _pumpPanel(tester, fixture);
       await _query(tester);
-      final reset = find.byKey(const Key('account-reset-account.facts'));
+      final reset = find.byKey(
+        const Key('provider-account-resets-account.facts'),
+      );
       expect(reset, findsOneWidget);
       await tester.ensureVisible(reset);
       await tester.tap(reset);
@@ -335,7 +455,9 @@ void main() {
       await _pumpPanel(tester, fixture);
       await _query(tester);
       Future<void> confirm() async {
-        final reset = find.byKey(const Key('account-reset-account.facts'));
+        final reset = find.byKey(
+          const Key('provider-account-resets-account.facts'),
+        );
         await tester.ensureVisible(reset);
         await tester.tap(reset);
         await tester.pumpAndSettle();
@@ -348,7 +470,7 @@ void main() {
       await confirm();
       expect(find.text('未能确认重置结果。请先查看最新额度，再决定是否重试。'), findsOneWidget);
       expect(
-        find.byKey(const Key('account-reset-account.facts')),
+        find.byKey(const Key('provider-account-resets-account.facts')),
         findsNothing,
       );
       await _query(tester);

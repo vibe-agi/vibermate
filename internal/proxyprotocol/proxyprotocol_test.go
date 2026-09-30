@@ -84,14 +84,25 @@ func TestReadsLoadBalancerOwnConnections(t *testing.T) {
 	t.Parallel()
 
 	for name, stream := range map[string][]byte{
-		"v1 UNKNOWN":              []byte("PROXY UNKNOWN\r\n"),
-		"v1 UNKNOWN detail":       []byte("PROXY UNKNOWN ffff::1 ffff::2 1 2\r\n"),
 		"v2 LOCAL":                v2Header(0x0, 0x00, nil),
 		"v2 LOCAL with addresses": v2Header(0x0, 0x11, ipv4Block("203.0.113.9", 1)),
-		"v2 UNSPEC":               v2Header(0x1, 0x00, nil),
 	} {
 		header, err, rest := readThenRest(t, append(stream, "GET /health HTTP/1.1\r\n"...))
 		if err != nil || !header.Local || header.Source.IsValid() || rest != "GET /health HTTP/1.1\r\n" {
+			t.Errorf("%s: Read() = %+v, %v, rest %q", name, header, err, rest)
+		}
+	}
+}
+
+func TestUnknownSourcesAreNotLocalConnections(t *testing.T) {
+	t.Parallel()
+	for name, stream := range map[string][]byte{
+		"v1 UNKNOWN":        []byte("PROXY UNKNOWN\r\n"),
+		"v1 UNKNOWN detail": []byte("PROXY UNKNOWN ffff::1 ffff::2 1 2\r\n"),
+		"v2 UNSPEC":         v2Header(0x1, 0x00, nil),
+	} {
+		header, err, rest := readThenRest(t, append(stream, "GET / HTTP/1.1\r\n"...))
+		if err != nil || header.Local || header.Source.IsValid() || rest != "GET / HTTP/1.1\r\n" {
 			t.Errorf("%s: Read() = %+v, %v, rest %q", name, header, err, rest)
 		}
 	}

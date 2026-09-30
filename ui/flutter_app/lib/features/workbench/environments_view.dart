@@ -655,6 +655,7 @@ final class _ClientEndpointPlan extends StatelessWidget {
           const Divider(height: 1),
           for (final plan in clientEndpoint.protocolPlans)
             _ProtocolPlanRows(
+              clientOrigin: clientEndpoint.clientOrigin,
               controller: controller,
               environment: environment,
               plan: plan,
@@ -674,6 +675,7 @@ final class _ProtocolPlanRows extends StatelessWidget {
     this.controller,
     this.environment,
     required this.plan,
+    required this.clientOrigin,
     required this.endpoints,
     required this.accounts,
     required this.copy,
@@ -683,6 +685,7 @@ final class _ProtocolPlanRows extends StatelessWidget {
   final WorkbenchController? controller;
   final EnvironmentRecord? environment;
   final EnvironmentProtocolPlan plan;
+  final Uri clientOrigin;
   final List<UpstreamEndpoint> endpoints;
   final List<ProviderAccount> accounts;
   final AppCopy copy;
@@ -739,6 +742,7 @@ final class _ProtocolPlanRows extends StatelessWidget {
         else
           for (final route in upstream.routes)
             _RouteAuthorityRow(
+              clientOrigin: clientOrigin,
               controller: controller,
               environment: environment,
               route: route,
@@ -804,6 +808,7 @@ final class _RouteAuthorityRow extends StatelessWidget {
     this.environment,
     required this.route,
     required this.clientProtocol,
+    required this.clientOrigin,
     required this.isDefault,
     required this.endpoint,
     required this.accounts,
@@ -815,6 +820,7 @@ final class _RouteAuthorityRow extends StatelessWidget {
   final EnvironmentRecord? environment;
   final EnvironmentRoute route;
   final String clientProtocol;
+  final Uri clientOrigin;
   final bool isDefault;
   final UpstreamEndpoint? endpoint;
   final List<ProviderAccount> accounts;
@@ -898,6 +904,9 @@ final class _RouteAuthorityRow extends StatelessWidget {
           accounts: candidates,
           copy: copy,
           enabled: activationEnabled,
+          allowOriginal:
+              route.backendProtocol == clientProtocol &&
+              route.endpointOrigin == clientOrigin,
         );
         return Container(
           padding: const EdgeInsets.fromLTRB(10, 8, 10, 8),
@@ -963,6 +972,7 @@ final class _RouteAccountActivationGroup extends StatefulWidget {
     required this.accounts,
     required this.copy,
     required this.enabled,
+    required this.allowOriginal,
   });
 
   final WorkbenchController? controller;
@@ -972,6 +982,7 @@ final class _RouteAccountActivationGroup extends StatefulWidget {
   final List<ProviderAccount> accounts;
   final AppCopy copy;
   final bool enabled;
+  final bool allowOriginal;
 
   @override
   State<_RouteAccountActivationGroup> createState() =>
@@ -1083,7 +1094,7 @@ final class _RouteAccountActivationGroupState
     final endpoint = widget.endpoint;
     final copy = widget.copy;
     final enabled = widget.enabled;
-    final manual = route.accountPolicy.mode == 'fixed';
+    final manual = route.accountPolicy.mode != 'javascript';
     final accounts = manual ? _orderedAccounts() : widget.accounts;
     final service = endpoint?.displayName ?? route.endpointId;
     return Container(
@@ -1142,6 +1153,42 @@ final class _RouteAccountActivationGroupState
                 ),
             ],
           ),
+          if (manual && widget.allowOriginal) ...[
+            ListTile(
+              contentPadding: EdgeInsets.zero,
+              dense: true,
+              leading: const Icon(Icons.person_outline, size: 18),
+              title: Text(copy('environment.account.original')),
+              trailing: OutlinedButton(
+                key: Key('environment-account-original-${route.id}'),
+                onPressed:
+                    !enabled ||
+                        route.accountPolicy.mode == 'original' ||
+                        controller == null ||
+                        environment == null
+                    ? null
+                    : () => unawaited(
+                        controller.activateEnvironmentAccount(
+                          environment,
+                          route.id,
+                          '',
+                        ),
+                      ),
+                child: Text(
+                  copy(
+                    route.accountPolicy.mode == 'original'
+                        ? 'environment.account.active'
+                        : 'environment.account.activate',
+                  ),
+                ),
+              ),
+            ),
+            if (route.accountPolicy.mode == 'original')
+              Text(
+                copy('environment.account.original_active'),
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+          ],
           if (!manual && route.accountPolicy.selector != null) ...[
             Row(
               children: [
@@ -1165,7 +1212,7 @@ final class _RouteAccountActivationGroupState
               copy('environment.account.script_active'),
               style: Theme.of(context).textTheme.bodySmall,
             ),
-          ] else if (accounts.isEmpty)
+          ] else if (accounts.isEmpty && route.accountPolicy.mode != 'original')
             Text(
               copy('environment.account.no_linked'),
               style: Theme.of(context).textTheme.bodySmall,
@@ -2974,7 +3021,8 @@ final class _EnvironmentEndpointAdderState
     final canAdd =
         selected != null &&
         _accountPolicy != null &&
-        _accountPolicy!.accounts.isNotEmpty &&
+        (_accountPolicy!.accounts.isNotEmpty ||
+            _accountPolicy!.mode == 'original') &&
         _accountPolicy!.accounts.every(
           (reference) => owned.any(
             (account) =>
@@ -3164,7 +3212,19 @@ final class _EnvironmentEndpointAdderState
                             setState(() {
                               _endpointId = endpoint.id;
                               _accountPolicy = accounts.firstOrNull == null
-                                  ? null
+                                  ? (endpoint.origin ==
+                                                effectiveTarget?.clientOrigin &&
+                                            endpoint.backendProtocols.contains(
+                                              effectiveTarget?.clientProtocol,
+                                            )
+                                        ? const RouteAccountPolicy(
+                                            revision: 1,
+                                            mode: 'original',
+                                            fixedAccountId: '',
+                                            selector: null,
+                                            accounts: [],
+                                          )
+                                        : null)
                                   : fixedRouteAccountPolicy(accounts.first);
                               _pending = true;
                             });
@@ -3172,160 +3232,44 @@ final class _EnvironmentEndpointAdderState
                           },
                   ),
                 );
-                final accountField = FutureBuilder<CodeLibraryCatalog>(
-                  future: _codeLibrary,
-                  builder: (context, snapshot) {
-                    final selectors = [...?snapshot.data?.accountSelectors]
-                      ..sort(
-                        (left, right) =>
-                            left.displayName.compareTo(right.displayName),
-                      );
-                    String fixedToken(String id) => 'fixed:$id';
-                    String selectorToken(
-                      CodeLibraryAccountSelectorRevision selector,
-                    ) => 'javascript:${selector.id}:${selector.revision}';
-                    final currentPolicy = _accountPolicy;
-                    final scoped = linked
-                        .where(
-                          (account) =>
-                              currentPolicy?.accounts.any(
-                                (selected) => selected.id == account.id,
-                              ) ??
-                              false,
-                        )
-                        .toList(growable: false);
-                    final currentToken = currentPolicy == null
-                        ? null
-                        : currentPolicy.mode == 'javascript'
-                        ? selectorToken(currentPolicy.selector!)
-                        : fixedToken(currentPolicy.fixedAccountId);
-                    return Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        if (currentPolicy != null) ...[
-                          RouteAccountScopeButton(
-                            key: Key(
-                              'environment-endpoint-accounts-${selected?.id ?? 'none'}',
-                            ),
-                            policy: currentPolicy,
-                            accounts: linked,
-                            copy: widget.copy,
-                            onChanged: widget.enabled
-                                ? (policy) {
-                                    setState(() {
-                                      _accountPolicy = policy;
-                                      _pending = true;
-                                    });
-                                    field.didChange(_endpointId);
-                                  }
-                                : null,
-                          ),
-                          const SizedBox(height: 8),
-                        ],
-                        CompactLabeledControl(
-                          label: widget.copy('environment.account'),
-                          detail: snapshot.hasError
-                              ? widget.copy(
-                                  'environment.account.selector_load_failed',
-                                )
-                              : selected != null && owned.isEmpty
-                              ? widget.copy(
-                                  'environment.endpoint.account_required',
-                                )
-                              : widget.copy(
-                                  'environment.account.scope_selection',
-                                ),
-                          child: CompactSelectField<String>(
-                            key: Key(
-                              'environment-endpoint-account-${selected?.id ?? 'none'}',
-                            ),
-                            initialValue: currentToken,
-                            placeholder: widget.copy(
-                              selected == null
-                                  ? 'environment.account.select_service'
-                                  : linked.isEmpty
-                                  ? 'environment.account.no_links'
-                                  : owned.isEmpty
-                                  ? 'environment.account.none'
-                                  : 'environment.account.choose',
-                            ),
-                            isExpanded: true,
-                            items: [
-                              if (currentPolicy?.mode == 'fixed' &&
-                                  !linked.any(
-                                    (account) =>
-                                        account.id ==
-                                        currentPolicy!.fixedAccountId,
-                                  ))
-                                DropdownMenuItem(
-                                  value: currentToken,
-                                  enabled: false,
-                                  child: Text(
-                                    widget.copy(
-                                      'environment.account.selection_lost',
-                                    ),
-                                  ),
-                                ),
-                              for (final account in scoped)
-                                DropdownMenuItem(
-                                  value: fixedToken(account.id),
-                                  enabled: account.usable,
-                                  child: Text(
-                                    _routeAccountLabel(account, widget.copy),
-                                    overflow: TextOverflow.ellipsis,
-                                  ),
-                                ),
-                              for (final selector in selectors)
-                                DropdownMenuItem(
-                                  value: selectorToken(selector),
-                                  enabled: owned.isNotEmpty,
-                                  child: Text(
-                                    '${widget.copy('environment.account.javascript')} · ${selector.displayName} · r${selector.revision}',
-                                    overflow: TextOverflow.ellipsis,
-                                  ),
-                                ),
-                            ],
-                            onChanged:
-                                !widget.enabled ||
-                                    selected == null ||
-                                    owned.isEmpty
-                                ? null
-                                : (value) {
-                                    if (value == null) return;
-                                    setState(() {
-                                      if (value.startsWith('fixed:')) {
-                                        final account = owned.firstWhere(
-                                          (candidate) =>
-                                              fixedToken(candidate.id) == value,
-                                        );
-                                        _accountPolicy =
-                                            fixedRouteAccountPolicy(
-                                              account,
-                                              accounts: currentPolicy?.accounts,
-                                            );
-                                      } else {
-                                        final selector = selectors.firstWhere(
-                                          (candidate) =>
-                                              selectorToken(candidate) == value,
-                                        );
-                                        _accountPolicy = RouteAccountPolicy(
-                                          revision: 1,
-                                          mode: 'javascript',
-                                          fixedAccountId: '',
-                                          selector: selector,
-                                          accounts: currentPolicy!.accounts,
-                                        );
-                                      }
-                                      _pending = true;
-                                    });
-                                    field.didChange(_endpointId);
-                                  },
+                final currentPolicy = _accountPolicy;
+                final accountField = currentPolicy == null
+                    ? CompactLabeledControl(
+                        label: widget.copy('environment.account'),
+                        child: Text(
+                          widget.copy(
+                            selected == null
+                                ? 'environment.account.select_service'
+                                : linked.isEmpty
+                                ? 'environment.account.no_links'
+                                : 'environment.account.none',
                           ),
                         ),
-                      ],
-                    );
-                  },
-                );
+                      )
+                    : RouteAccountScopeButton(
+                        key: Key(
+                          'environment-endpoint-accounts-${selected?.id ?? 'none'}',
+                        ),
+                        policy: currentPolicy,
+                        accounts: linked,
+                        copy: widget.copy,
+                        loadLibrary: () => _codeLibrary,
+                        allowOriginal:
+                            selected?.origin == effectiveTarget?.clientOrigin &&
+                            (selected?.backendProtocols.contains(
+                                  effectiveTarget?.clientProtocol,
+                                ) ??
+                                false),
+                        onChanged: widget.enabled
+                            ? (policy) {
+                                setState(() {
+                                  _accountPolicy = policy;
+                                  _pending = true;
+                                });
+                                field.didChange(_endpointId);
+                              }
+                            : null,
+                      );
                 final add = OutlinedButton.icon(
                   key: Key(
                     originalDestination
@@ -3649,6 +3593,7 @@ final class _EnvironmentEndpointEditor extends StatelessWidget {
                   else
                     for (final route in plan.routes)
                       _RouteAccountEditor(
+                        clientOrigin: endpoint.clientOrigin,
                         controller: controller,
                         plan: plan,
                         route: route,
@@ -3713,14 +3658,10 @@ final class _OriginalDestinationEditorRow extends StatelessWidget {
   );
 }
 
-String _routeAccountLabel(ProviderAccount account, AppCopy copy) {
-  final status = routeAccountUnavailableReason(account, copy);
-  return '${copy('environment.account.fixed')} · ${account.displayName}${status.isEmpty ? '' : ' · $status'}';
-}
-
 final class _RouteAccountEditor extends StatelessWidget {
   const _RouteAccountEditor({
     required this.controller,
+    required this.clientOrigin,
     required this.plan,
     required this.route,
     required this.upstreamEndpoint,
@@ -3733,6 +3674,7 @@ final class _RouteAccountEditor extends StatelessWidget {
   });
 
   final WorkbenchController controller;
+  final Uri clientOrigin;
   final EnvironmentProtocolPlan plan;
   final EnvironmentRoute route;
   final UpstreamEndpoint? upstreamEndpoint;
@@ -3756,19 +3698,6 @@ final class _RouteAccountEditor extends StatelessWidget {
           ..sort(
             (left, right) => left.displayName.compareTo(right.displayName),
           );
-    final owned = available
-        .where(
-          (account) => route.accountPolicy.accounts.any(
-            (selected) => selected.id == account.id,
-          ),
-        )
-        .toList(growable: false);
-    final currentId = route.accountPolicy.fixedAccountId;
-    final currentItemExists = owned.any((account) => account.id == currentId);
-    final eligible = owned
-        .where((account) => account.usable)
-        .toList(growable: false);
-    final selectable = eligible.length;
     final mappings = route.modelPolicy.mappings;
     final modelLabel = mappings.isEmpty
         ? copy('environment.model.passthrough')
@@ -3784,141 +3713,33 @@ final class _RouteAccountEditor extends StatelessWidget {
             route: route,
             endpoint: upstreamEndpoint,
           );
-          final accountControl = FutureBuilder<CodeLibraryCatalog>(
-            future: controller.codeLibrary(),
-            builder: (context, snapshot) {
-              final selectors = [...?snapshot.data?.accountSelectors]
-                ..sort(
-                  (left, right) =>
-                      left.displayName.compareTo(right.displayName),
-                );
-              final frozenSelector = route.accountPolicy.selector;
-              String fixedToken(String id) => 'fixed:$id';
-              String selectorToken(CodeLibraryAccountSelectorRevision value) =>
-                  'javascript:${value.id}:${value.revision}';
-              final currentToken = route.accountPolicy.mode == 'javascript'
-                  ? selectorToken(frozenSelector!)
-                  : fixedToken(currentId);
-              final hasCurrentSelector =
-                  frozenSelector != null &&
-                  selectors.any(
-                    (item) =>
-                        item.id == frozenSelector.id &&
-                        item.revision == frozenSelector.revision,
-                  );
-              return Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  RouteAccountScopeButton(
-                    key: Key('environment-route-accounts-${route.id}'),
-                    policy: route.accountPolicy,
-                    accounts: available,
-                    copy: copy,
-                    onChanged: enabled ? onChanged : null,
-                  ),
-                  const SizedBox(height: 8),
-                  CompactLabeledControl(
-                    label: copy('environment.account'),
-                    detail: snapshot.hasError
-                        ? copy('environment.account.selector_load_failed')
-                        : selectable == 0
-                        ? copy('environment.account.none')
-                        : copy('environment.account.scope_selection'),
-                    child: CompactSelectField<String>(
-                      key: Key(
-                        'environment-route-account-${route.id}-$currentToken',
-                      ),
-                      initialValue: currentToken,
-                      placeholder: copy('environment.account.no_links'),
-                      isExpanded: true,
-                      items: [
-                        if (!currentItemExists && currentId.isNotEmpty)
-                          DropdownMenuItem(
-                            value: fixedToken(currentId),
-                            enabled: false,
-                            child: Text(
-                              '${copy('environment.account.fixed')} · ${route.accountPolicy.accounts.where((account) => account.id == currentId).firstOrNull?.displayName ?? currentId} · ${copy('environment.account.selection_lost')}',
-                            ),
-                          ),
-                        for (final account in owned)
-                          DropdownMenuItem(
-                            value: fixedToken(account.id),
-                            enabled: account.usable,
-                            child: Text(
-                              _routeAccountLabel(account, copy),
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                          ),
-                        if (frozenSelector != null && !hasCurrentSelector)
-                          DropdownMenuItem(
-                            value: selectorToken(frozenSelector),
-                            child: Text(
-                              '${copy('environment.account.javascript')} · ${frozenSelector.displayName} · r${frozenSelector.revision}',
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                          ),
-                        for (final selector in selectors)
-                          DropdownMenuItem(
-                            value: selectorToken(selector),
-                            enabled: eligible.isNotEmpty,
-                            child: Text(
-                              '${copy('environment.account.javascript')} · ${selector.displayName} · r${selector.revision}',
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                          ),
-                      ],
-                      onChanged: !enabled || selectable == 0
-                          ? null
-                          : (value) {
-                              if (value == null || value == currentToken) {
-                                return;
-                              }
-                              if (value.startsWith('fixed:')) {
-                                final accountId = value.substring(
-                                  'fixed:'.length,
-                                );
-                                final selectedAccount = owned.firstWhere(
-                                  (account) => account.id == accountId,
-                                );
-                                onChanged(
-                                  fixedRouteAccountPolicy(
-                                    selectedAccount,
-                                    accounts: route.accountPolicy.accounts,
-                                  ),
-                                );
-                                unawaited(
-                                  controller
-                                      .upstreamModels(
-                                        route.endpointId,
-                                        accountId: selectedAccount.id,
-                                      )
-                                      .then<void>((_) {})
-                                      .onError((_, _) {}),
-                                );
-                                return;
-                              }
-                              final selected =
-                                  <CodeLibraryAccountSelectorRevision>[
-                                    ?frozenSelector,
-                                    ...selectors,
-                                  ].firstWhere(
-                                    (item) => selectorToken(item) == value,
-                                  );
-                              onChanged(
-                                RouteAccountPolicy(
-                                  revision: route.accountPolicy.revision,
-                                  mode: 'javascript',
-                                  fixedAccountId: '',
-                                  selector: selected,
-                                  accounts: route.accountPolicy.accounts,
-                                ),
-                              );
-                            },
-                    ),
-                  ),
-                ],
-              );
-            },
+          final accountControl = RouteAccountScopeButton(
+            key: Key('environment-route-accounts-${route.id}'),
+            policy: route.accountPolicy,
+            accounts: available,
+            copy: copy,
+            loadLibrary: controller.codeLibrary,
+            allowOriginal:
+                route.endpointOrigin == clientOrigin &&
+                route.backendProtocol == plan.clientProtocol,
+            onChanged: !enabled
+                ? null
+                : (policy) {
+                    onChanged(policy);
+                    if (policy.mode == 'fixed' &&
+                        policy.fixedAccountId !=
+                            route.accountPolicy.fixedAccountId) {
+                      unawaited(
+                        controller
+                            .upstreamModels(
+                              route.endpointId,
+                              accountId: policy.fixedAccountId,
+                            )
+                            .then<void>((_) {})
+                            .onError((_, _) {}),
+                      );
+                    }
+                  },
           );
           final modelSelector = CompactLabeledControl(
             label: copy('environment.model.label'),
@@ -3992,6 +3813,11 @@ final class _RouteAccountEditor extends StatelessWidget {
                     description: copy('environment.account_history.detail'),
                     value: route.allowAccountHistory,
                     onChanged: enabled ? onHistoryChanged : null,
+                  )
+                else if (route.accountPolicy.mode == 'original')
+                  Text(
+                    copy('environment.account.original_active'),
+                    style: Theme.of(context).textTheme.bodySmall,
                   )
                 else
                   Text(

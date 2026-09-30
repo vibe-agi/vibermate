@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"runtime"
 	"time"
 
 	"github.com/vibe-agi/vibermate/internal/localdiscovery"
@@ -84,7 +85,11 @@ func executeLocalStatus(
 	}
 	key := "cli.status.local"
 	healthy := inspection.Ready && inspection.Storage == "healthy" && inspection.State == "initialized"
-	if doctor && healthy && inspection.RecordingFailure == nil {
+	var trustErr error
+	if doctor && healthy && runtime.GOOS == "darwin" {
+		trustErr = runlauncher.CheckLocalRootTrust(ctx, discovery, 10*time.Second)
+	}
+	if doctor && healthy && inspection.RecordingFailure == nil && trustErr == nil {
 		key = "cli.doctor.local"
 	}
 	if err := renderCLIMessage(environment, stdout, key, map[string]string{
@@ -98,6 +103,9 @@ func executeLocalStatus(
 		"storage": inspection.Storage,
 	}); err != nil {
 		return 1, reasonRenderFailed
+	}
+	if trustErr != nil {
+		return 1, "cli.error.localRootUntrusted"
 	}
 	for _, diagnostic := range []struct {
 		key     string

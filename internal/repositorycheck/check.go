@@ -912,6 +912,7 @@ func CheckDataPlaneEnvironmentBoundary(repositoryRoot string) []Violation {
 		"ContentRecordingPolicy":       {},
 		"EnvironmentID":                {},
 		"AccountSelectionFixed":        {},
+		"AccountSelectionOriginal":     {},
 		"AccountSelectionJavaScript":   {},
 		"MaxRevision":                  {},
 		"NewClientEndpointID":          {},

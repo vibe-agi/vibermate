@@ -1014,7 +1014,13 @@ type CapturedAccountReader interface {
 }
 
 func (handler *Handler) serveAccountRead(writer http.ResponseWriter, request *http.Request, plan environment.RequestPlan, connectionID, operationID string) {
-	if plan.PreservesOriginalDestination() {
+	if plan.UsesOriginalAccount() {
+		if _, valid := plan.OriginalOrigin(); !valid {
+			writeReason(writer, http.StatusUnprocessableEntity, "account_read_ambiguous", "")
+			return
+		}
+	}
+	if plan.PreservesOriginalDestination() || plan.UsesOriginalAccount() {
 		handler.forwardToOriginalOrigin(writer, request, plan, offlinehold.EgressAuxiliary, plan.Operation().PayloadClass(), connectionID, operationID, nil)
 		return
 	}

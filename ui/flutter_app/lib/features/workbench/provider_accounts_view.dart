@@ -778,31 +778,24 @@ final class _ProviderAccountQuotaSummary extends StatelessWidget {
           value: credits.unlimited
               ? '∞'
               : !credits.hasCredits
-              ? '0'
-              : credits.balance ?? '?',
+              ? '0.00'
+              : accountCreditsLabel(credits.balance, '?'),
           hint: copy.format('account_facts.credits', {
             'balance': credits.unlimited
                 ? copy('account_facts.unlimited')
                 : !credits.hasCredits
                 ? copy('account_facts.no_credits')
-                : credits.balance ?? copy('account_facts.unknown'),
+                : accountCreditsLabel(
+                    credits.balance,
+                    copy('account_facts.unknown'),
+                  ),
           }),
         ),
       if (resets != null)
-        _compactFact(
-          context,
-          key: Key('provider-account-resets-${account.id}'),
-          icon: Icons.confirmation_number_outlined,
-          value: '${resets.availableCount}',
-          hint: [
-            copy.format('account_facts.banked_resets', {
-              'count': resets.availableCount,
-            }),
-            if (resets.applicableAvailableCount case final applicable?)
-              copy.format('account_facts.applicable_resets', {
-                'count': applicable,
-              }),
-          ].join(' · '),
+        ProviderAccountResetCreditsButton(
+          account: account,
+          controller: controller,
+          copy: copy,
         ),
     ];
     return Row(

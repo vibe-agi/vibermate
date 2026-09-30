@@ -9,6 +9,7 @@ package ipallowlist
 import (
 	"errors"
 	"fmt"
+	"math/big"
 	"net/netip"
 	"strings"
 )
@@ -132,12 +133,30 @@ func format(prefix netip.Prefix) string {
 	return prefix.String()
 }
 
-// HasCatchAll reports whether a network covers every address of its family,
-// such as 0.0.0.0/0. Trusting every address as a load balancer would let any
-// client name its own address.
+// HasCatchAll reports whether the union covers every address of either family.
+// Trusting every address as a load balancer would let any client name its own address.
 func (list List) HasCatchAll() bool {
-	for _, prefix := range list.prefixes {
-		if prefix.Bits() == 0 {
+	for _, bits := range []int{32, 128} {
+		covered := new(big.Int)
+		for _, prefix := range list.prefixes {
+			if prefix.Addr().BitLen() != bits {
+				continue
+			}
+			// CIDRs are disjoint or nested. Count each address once by skipping
+			// children; Parse already removed duplicates.
+			// ponytail: O(n²), bounded by 256 ranges; sort/merge if that limit grows.
+			nested := false
+			for _, parent := range list.prefixes {
+				if parent.Bits() < prefix.Bits() && parent.Contains(prefix.Addr()) {
+					nested = true
+					break
+				}
+			}
+			if !nested {
+				covered.Add(covered, new(big.Int).Lsh(big.NewInt(1), uint(bits-prefix.Bits())))
+			}
+		}
+		if covered.BitLen() > bits {
 			return true
 		}
 	}

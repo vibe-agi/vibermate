@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/vibe-agi/vibermate/internal/desktopcontrol"
+	"github.com/vibe-agi/vibermate/internal/environment"
 )
 
 func TestProviderAccountControlImportsCodexOAuthWithoutReturningTokens(t *testing.T) {
@@ -438,6 +439,26 @@ func TestProviderAccountControlStoresCredentialWithoutReturningItAndCompilesMana
 		blockedResult.References[0].EnvironmentRevision != 1 ||
 		blockedResult.References[0].RouteID != "route.managed.anthropic" {
 		t.Fatalf("blocked account deletion = %+v", blockedResult)
+	}
+	for index, body := range []string{`{"mode":"original"}`, `{"accountId":"anthropic-work"}`} {
+		switched := environmentRequest(t, application, http.MethodPut,
+			"/api/v1/environments/managed-work/routes/route.managed.anthropic/active-account",
+			uint64(index+1), "managed-original-account-switch-"+strconv.Itoa(index), []byte(body))
+		if switched.Code != http.StatusOK {
+			t.Fatalf("account switch: %d %s", switched.Code, switched.Body.Bytes())
+		}
+		var result desktopcontrol.EnvironmentAccountActivationResponse
+		if err := json.Unmarshal(switched.Body.Bytes(), &result); err != nil {
+			t.Fatal(err)
+		}
+		route := result.Environment.ClientEndpoints[0].ProtocolPlans[0].Destination.Upstream.Routes[0]
+		if result.Environment.Revision != environment.Revision(index+2) || len(route.AccountPolicy.Accounts) != 1 {
+			t.Fatalf("switch lost scope: %+v", route)
+		}
+		if index == 0 && (result.AccountID != "" || route.AccountPolicy.Mode != environment.AccountSelectionOriginal) ||
+			index == 1 && (result.AccountID != "anthropic-work" || route.AccountPolicy.Mode != environment.AccountSelectionFixed) {
+			t.Fatalf("wrong account activation: %+v", result)
+		}
 	}
 
 	const unusedSecret = "sk-openai-unused-control-sentinel"

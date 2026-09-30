@@ -598,7 +598,7 @@ final class _CaptureDetail extends StatelessWidget {
     };
     final accountMatches =
         route == null ||
-        route.accountPolicy.mode == 'javascript' ||
+        route.accountPolicy.mode != 'fixed' ||
         account != null && endpoint != null && account.isLinkedTo(endpoint.id);
     final notice = controller.operationNotice;
     return ColoredBox(

@@ -1440,7 +1440,9 @@ func (response Response) Validate() error {
 	if err := validateIdentifier("reported model", response.ReportedModel, MaxModelBytes); err != nil {
 		return err
 	}
-	if len(response.Blocks) == 0 || len(response.Blocks) > MaxContentBlocks {
+	// A terminal can arrive before any output, e.g. an interrupted response.
+	// Its status and usage remain evidence; do not synthesize a text block.
+	if len(response.Blocks) > MaxContentBlocks {
 		return errors.New("response content block count is invalid")
 	}
 	toolKeys := make(map[CallKey]struct{})

@@ -25,7 +25,8 @@ type RequestPreview struct {
 
 func (preview RequestPreview) Validate() error {
 	if preview.Text == "" || !utf8.ValidString(preview.Text) ||
-		len([]rune(preview.Text)) > MaxRequestPreviewRunes {
+		len([]rune(preview.Text)) > MaxRequestPreviewRunes ||
+		singleLinePreview(preview.Text) != preview.Text {
 		return fmt.Errorf("%w: request preview text is invalid", ErrInvalidEvidence)
 	}
 	switch protocolcore.BlockKind(preview.Kind) {
@@ -69,7 +70,7 @@ func PreviewRequestMessage(message Message) (RequestPreview, bool) {
 		runes := []rune(value)
 		preview := RequestPreview{Kind: string(kind), Text: value}
 		if len(runes) > MaxRequestPreviewRunes {
-			preview.Text = string(runes[:MaxRequestPreviewRunes])
+			preview.Text = strings.TrimSpace(string(runes[:MaxRequestPreviewRunes]))
 			preview.Truncated = true
 		}
 		return preview, true

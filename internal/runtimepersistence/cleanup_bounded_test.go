@@ -19,7 +19,7 @@ func TestExplicitCleanupYieldsTheWriterBetweenBatches(t *testing.T) {
 		t.Skip("50k-row writer contention check")
 	}
 	ctx := context.Background()
-	store := openTestStore(t, filepath.Join(t.TempDir(), "usage.db"))
+	store := openDisabledUsageTestStore(t, filepath.Join(t.TempDir(), "usage.db"))
 	defer func() { shutdownTestStore(t, store) }()
 	start := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
 	now := start.AddDate(0, 0, 8)

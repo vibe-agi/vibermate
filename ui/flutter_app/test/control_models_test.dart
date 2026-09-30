@@ -1514,16 +1514,41 @@ void main() {
     expect(search.items.single.matches, ['workspace', 'tool']);
     expect(search.nextCursor, isNotEmpty);
 
-    final invalidPreview = jsonDecode(jsonEncode(json)) as Map<String, dynamic>;
-    invalidPreview['requestPreview'] = {
-      'kind': 'reasoning',
-      'text': 'private chain of thought',
-      'truncated': false,
-    };
-    expect(
-      () => ActivityRecord.fromJson(invalidPreview, 'activity'),
-      throwsA(isA<ControlContractException>()),
-    );
+    for (final preview in [
+      {
+        'kind': 'reasoning',
+        'text': 'private chain of thought',
+        'truncated': false,
+      },
+      {
+        'kind': 'text',
+        'text': '${List.filled(179, 'x').join()} ',
+        'truncated': true,
+      },
+      {'kind': 'text', 'text': 'a\nline', 'truncated': false},
+      {'kind': 'text', 'text': List.filled(181, 'x').join(), 'truncated': true},
+      {'kind': 'text', 'text': '', 'truncated': false},
+      {'kind': 'text', 'text': 'missing flag'},
+      'invalid preview object',
+    ]) {
+      final withPreview = {...json, 'requestPreview': preview};
+      final page = ActivityPage.fromJson({
+        'items': [json, withPreview],
+      }, 'activities');
+      expect(page.items.length, 2);
+      expect(page.items.first.requestPreview?.text, 'workspace.read');
+      expect(page.items.last.requestPreview, isNull);
+      expect(page.items.last.accountId, 'anthropic-work');
+      expect(page.items.last.status, 'succeeded');
+      // Malformed authority still fails, even beside a discarded preview.
+      expect(
+        () => ActivityRecord.fromJson({
+          ...withPreview,
+          'status': 'bogus',
+        }, 'activity'),
+        throwsA(isA<ControlContractException>()),
+      );
+    }
 
     expect(
       () => ActivityRecord.fromJson({
@@ -1928,6 +1953,21 @@ void main() {
   });
 
   test('Account Selector revision and Route authority round-trip', () {
+    final original = RouteAccountPolicy.fromJson({
+      'revision': 1,
+      'mode': 'original',
+      'accounts': <Object>[],
+    }, 'policy');
+    expect(original.mode, 'original');
+    expect(original.fixedAccountId, isEmpty);
+    expect(RouteAccountPolicy.fromJson(original.toJson(), 'policy'), original);
+    expect(
+      () => RouteAccountPolicy.fromJson({
+        ...original.toJson(),
+        'fixedAccountId': 'account.other',
+      }, 'policy'),
+      throwsA(isA<ControlContractException>()),
+    );
     final selector = CodeLibraryAccountSelectorRevision.fromJson({
       'id': 'workspace-account',
       'revision': 3,

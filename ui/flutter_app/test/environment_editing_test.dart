@@ -78,6 +78,28 @@ void main() {
         changed.first.protocolPlans.first.routes.first.allowAccountHistory,
         isFalse,
       );
+      final scoped = assignEnvironmentRouteAccountPolicy(
+        endpoints: normalized,
+        clientEndpointId: endpoint.id,
+        protocolPlanId: plan.id,
+        routeId: route.id,
+        policy: fixedRouteAccountPolicy(
+          original,
+          accounts: [
+            ...route.accountPolicy.accounts,
+            RouteAccountReference(
+              id: second.id,
+              revision: second.revision,
+              displayName: second.displayName,
+            ),
+          ],
+        ),
+        availableAccounts: [...accounts, second],
+      );
+      expect(
+        scoped.first.protocolPlans.first.routes.first.allowAccountHistory,
+        isTrue,
+      );
       final revoked = assignEnvironmentRouteAccountHistory(
         endpoints: normalized,
         clientEndpointId: endpoint.id,

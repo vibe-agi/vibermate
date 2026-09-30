@@ -120,9 +120,10 @@ func (router *Router) ServeHTTP(
 		return
 	}
 	// CLI discovery publishes a separate principal credential, not an App read
-	// token. It may inspect this one status resource without gaining access to
-	// account/history reads, mutation routes or browser-origin authority.
-	if request.Method == http.MethodGet && request.URL.Path == "/api/v1/status" &&
+	// token. It may inspect runtime and public Root trust status without gaining
+	// access to account/history reads, mutation routes or browser-origin authority.
+	if request.Method == http.MethodGet &&
+		(request.URL.Path == "/api/v1/status" || request.URL.Path == "/api/v1/platform/root-ca") &&
 		router.validCLIControlTransport(request) {
 		token, valid := takeBearerCapability(request)
 		principal, authenticated := router.cliPrincipals.Authenticate(request.Context(), token)
@@ -131,7 +132,15 @@ func (router *Router) ServeHTTP(
 			writeProblem(writer, http.StatusUnauthorized, ReasonUnauthorized)
 			return
 		}
-		router.application.getStatus(writer, request)
+		if request.URL.Path == "/api/v1/platform/root-ca" {
+			if router.application.rootTrust == nil {
+				writeProblem(writer, http.StatusServiceUnavailable, ReasonRootTrustUnsupported)
+				return
+			}
+			router.application.getRootCA(writer, request)
+		} else {
+			router.application.getStatus(writer, request)
+		}
 		return
 	}
 	// The verb chooses the authority here, because they are different acts on

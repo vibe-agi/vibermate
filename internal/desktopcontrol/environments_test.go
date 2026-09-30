@@ -910,6 +910,13 @@ func TestEnvironmentDraftPublishesOneAccountAcrossExplicitEndpointProtocols(t *t
 	if outsideScope.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("activated account outside Profile scope: status=%d body=%s", outsideScope.Code, outsideScope.Body.Bytes())
 	}
+	crossOrigin := environmentRequest(t, application, http.MethodPut,
+		"/api/v1/environments/cherry-mapped/routes/route.cherry.openai/active-account",
+		uint64(finalEnvironment.Revision), "environment-original-account-cross-origin",
+		[]byte(`{"mode":"original"}`))
+	if crossOrigin.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("cross-origin original account accepted: %d %s", crossOrigin.Code, crossOrigin.Body.Bytes())
+	}
 	selectorEndpoint := &updateInput.ClientEndpoints[0]
 	selectorPlan := &selectorEndpoint.ProtocolPlans[0]
 	selectorRoute := &selectorPlan.Destination.Upstream.Routes[0]

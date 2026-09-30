@@ -12,7 +12,7 @@ import '../core/api/runtime_storage.dart';
 final class PreviewControlApi implements ControlApi {
   RuntimeUsageCollection _usageCollection = RuntimeUsageCollection(
     enabled: true,
-    retentionDays: 90,
+    retentionDays: 365,
     revision: 1,
     collectingSince: DateTime.utc(2026, 1, 1),
   );
@@ -1504,14 +1504,27 @@ final class PreviewControlApi implements ControlApi {
     final account = _accounts
         .where((candidate) => candidate.id == accountId)
         .firstOrNull;
+    final original = accountId.isEmpty;
     if (route == null ||
-        route.accountPolicy.mode != 'fixed' ||
-        !route.accountPolicy.accounts.any(
-          (candidate) => candidate.id == accountId,
-        ) ||
-        account == null ||
-        !account.usable ||
-        !account.isLinkedTo(route.endpointId)) {
+        !{'fixed', 'original'}.contains(route.accountPolicy.mode) ||
+        (original
+            ? !environment.clientEndpoints.any(
+                (endpoint) =>
+                    endpoint.clientOrigin == route.endpointOrigin &&
+                    endpoint.protocolPlans.any(
+                      (plan) =>
+                          plan.clientProtocol == route.backendProtocol &&
+                          plan.routes.any(
+                            (candidate) => candidate.id == routeId,
+                          ),
+                    ),
+              )
+            : (!route.accountPolicy.accounts.any(
+                    (candidate) => candidate.id == accountId,
+                  ) ||
+                  account == null ||
+                  !account.usable ||
+                  !account.isLinkedTo(route.endpointId)))) {
       throw const ControlProblem(
         status: 422,
         reasonCode: 'provider_account_unavailable',
@@ -1537,10 +1550,17 @@ final class PreviewControlApi implements ControlApi {
           plan['revision'] = (plan['revision']! as int) + 1;
           routeDocument['revision'] = (routeDocument['revision']! as int) + 1;
           policy['revision'] = (policy['revision']! as int) + 1;
-          policy['fixedAccountId'] = accountId;
+          policy['mode'] = original ? 'original' : 'fixed';
+          policy.remove('selector');
+          routeDocument.remove('allowAccountHistory');
+          if (original) {
+            policy.remove('fixedAccountId');
+          } else {
+            policy['fixedAccountId'] = accountId;
+          }
           policy['accounts'] = [
             for (final selected in route.accountPolicy.accounts)
-              (selected.id == account.id
+              (account != null && selected.id == account.id
                       ? RouteAccountReference(
                           id: account.id,
                           revision: account.revision,

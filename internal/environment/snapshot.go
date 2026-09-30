@@ -198,18 +198,17 @@ func (snapshot EnvironmentSnapshot) BlindOnly() bool {
 }
 func (snapshot EnvironmentSnapshot) Aggregate() Environment { return snapshot.aggregate.Clone() }
 
-// FixedRoute returns the latest published manual Account authority for one
+// ManualRoute returns the latest published manual Account authority for one
 // stable Route. Running Captures use only this narrow live pointer; every
 // other part of their Environment remains frozen at launch/apply time.
-func (snapshot EnvironmentSnapshot) FixedRoute(routeID UpstreamRouteID) (CompiledRoutePlan, bool) {
+func (snapshot EnvironmentSnapshot) ManualRoute(routeID UpstreamRouteID) (CompiledRoutePlan, bool) {
 	for _, endpoint := range snapshot.compiled {
 		for _, plan := range endpoint.plans {
 			if plan.upstreamRouteSet == nil {
 				continue
 			}
 			route, exists := plan.upstreamRouteSet.routes[routeID]
-			if !exists || route.accountPolicy.mode != AccountSelectionFixed ||
-				route.accountPolicy.fixed == nil {
+			if !exists || !route.accountPolicy.IsManual() {
 				continue
 			}
 			return cloneCompiledRoute(route), true

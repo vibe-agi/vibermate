@@ -107,7 +107,10 @@ stored in the `vibermate-public-data` volume and hot-reloaded after renewal.
 
 The first TLS-ALPN request is asynchronous. A running container does not mean
 the certificate has been issued; check the logs and **Settings → Safety &
-data → Server connection** in the Web page. Private DNS names, IPs, wildcards
+data → Server HTTPS** in the Web page. Before the first certificate is ready,
+the page may be unreachable: use
+`docker compose --env-file .env.public -f compose.public.yaml logs --tail=100 -f vibermate`
+and check DNS (including AAAA), public TCP 443 and TCP forwarding. Private DNS names, IPs, wildcards
 and DNS-01 are not supported by the automatic mode.
 
 ## Existing certificate

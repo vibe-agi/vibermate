@@ -31,7 +31,8 @@ type Header struct {
 	// Local marks a connection the load balancer opened on its own behalf,
 	// such as a health check. It carries no client address.
 	Local bool
-	// Source is the client address when Local is false.
+	// Source is the relayed client address. An invalid address with Local=false
+	// means UNKNOWN/UNSPEC, not a load balancer's own connection.
 	Source netip.AddrPort
 }
 
@@ -98,7 +99,7 @@ func readV1(reader *bufio.Reader) (Header, error) {
 	fields := strings.Split(text, " ")
 	if len(fields) >= 2 && fields[0] == "PROXY" && fields[1] == "UNKNOWN" {
 		// The proxy could not tell who connected; use the real endpoints.
-		return Header{Local: true}, nil
+		return Header{}, nil
 	}
 	if len(fields) != 6 || fields[0] != "PROXY" {
 		return Header{}, ErrInvalidHeader
@@ -166,7 +167,7 @@ func readV2(reader *bufio.Reader) (Header, error) {
 	switch family {
 	case 0x00:
 		// UNSPEC: no address information; use the real endpoints.
-		return Header{Local: true}, nil
+		return Header{}, nil
 	case 0x11: // TCP over IPv4
 		if length < 12 {
 			return Header{}, ErrInvalidHeader

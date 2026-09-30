@@ -161,12 +161,12 @@ func (codec *Codec) decodeProviderResponse(
 		}
 		extensions = nil
 	}
-	if len(blocks) == 0 {
+	if len(blocks) == 0 && wire.Output == nil {
 		return protocolcore.Response{}, protocolcore.TranslationReport{},
 			protocolcore.NewFailure(
 				protocolcore.ReasonUnsupportedProviderData,
 				"$.output",
-				errors.New("Responses terminal has no auditable output"),
+				errors.New("Responses terminal has no output array"),
 			)
 	}
 
@@ -317,7 +317,7 @@ func decodeProviderOutputItem(
 		// A message cut off by an incomplete terminal is itself incomplete.
 		if wire.Role != "assistant" ||
 			(wire.Status != "" && wire.Status != "completed" && wire.Status != "incomplete") ||
-			len(wire.Content) == 0 {
+			wire.Content == nil {
 			return nil, nil, invalidProvider(path, errors.New("Responses message output is invalid"))
 		}
 		blocks := make([]protocolcore.ContentBlock, 0, len(wire.Content))
@@ -443,7 +443,19 @@ func decodeProviderOutputItem(
 		block.Agent = cloneAgentMessageContext(context)
 		return []protocolcore.ContentBlock{block}, nil, nil
 	default:
-		if isOpaqueResponsesProviderOutputItem(kind) {
+		opaque := isOpaqueResponsesProviderOutputItem(kind)
+		if kind == "tool_search_call" {
+			var search struct {
+				Execution string `json:"execution"`
+			}
+			if err := json.Unmarshal(raw, &search); err != nil {
+				return nil, nil, invalidProvider(path, err)
+			}
+			// Codex executes client-side tool searches. Only explicitly hosted
+			// searches are observations rather than unproven client actions.
+			opaque = search.Execution == "server"
+		}
+		if opaque {
 			block, err := newResponsesExtensionBlock(
 				protocolcore.ProviderExtensionOpaqueItem,
 				path,
@@ -496,8 +508,7 @@ func isOpaqueResponsesProviderOutputItem(kind string) bool {
 	// results, not something the client can execute. Every other unmodelled
 	// item is an unproven action (see providerActionBlock).
 	switch kind {
-	case "tool_search_call",
-		"tool_search_output",
+	case "tool_search_output",
 		"web_search_call",
 		"image_generation_call",
 		"mcp_call",

@@ -1104,7 +1104,7 @@ final class HttpControlApi implements ControlApi, ACPObservationApi {
   ) async {
     if (environment.systemOwned ||
         !_validResourceId(routeId) ||
-        !_validResourceId(accountId)) {
+        (accountId.isNotEmpty && !_validResourceId(accountId))) {
       throw const ControlContractException(
         'Environment Account activation input is invalid',
       );
@@ -1114,7 +1114,9 @@ final class HttpControlApi implements ControlApi, ACPObservationApi {
         'PUT',
         '/api/v1/environments/${Uri.encodeComponent(environment.id)}/routes/${Uri.encodeComponent(routeId)}/active-account',
         expectedRevision: environment.revision,
-        body: {'accountId': accountId},
+        body: accountId.isEmpty
+            ? {'mode': 'original'}
+            : {'accountId': accountId},
       ),
       environmentId: environment.id,
       routeId: routeId,

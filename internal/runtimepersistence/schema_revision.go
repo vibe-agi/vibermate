@@ -49,6 +49,14 @@ func initializeSchema(ctx context.Context, database *sql.DB, now time.Time) erro
 	if _, err := transaction.ExecContext(ctx, schemaSQL); err != nil {
 		return fmt.Errorf("initialize SQLite schema: %w", err)
 	}
+	// Product defaults apply only to a new database. Opening an existing one
+	// must preserve its collection choice and retention, including an opt-out.
+	if _, err := transaction.ExecContext(ctx,
+		`UPDATE runtime_usage_policy SET enabled=1, retention_days=365, collecting_since_unix_ms=? WHERE singleton=1`,
+		now.UTC().UnixMilli(),
+	); err != nil {
+		return fmt.Errorf("initialize usage collection defaults: %w", err)
+	}
 	if _, err := transaction.ExecContext(ctx,
 		`INSERT INTO runtime_metadata(singleton, schema_identity, schema_revision, initialized_at) VALUES (1, ?, ?, ?)`,
 		schemaIdentity, schemaRevision, now.UTC().Format(time.RFC3339Nano),

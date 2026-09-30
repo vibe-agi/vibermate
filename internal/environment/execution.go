@@ -77,6 +77,9 @@ type CompiledAccountPolicy struct {
 
 func (policy CompiledAccountPolicy) Revision() Revision         { return policy.revision }
 func (policy CompiledAccountPolicy) Mode() AccountSelectionMode { return policy.mode }
+func (policy CompiledAccountPolicy) IsManual() bool {
+	return policy.mode == AccountSelectionOriginal || policy.mode == AccountSelectionFixed && policy.fixed != nil
+}
 func (policy CompiledAccountPolicy) FixedAccount() (CompiledAccountReference, bool) {
 	if policy.fixed == nil {
 		return CompiledAccountReference{}, false
@@ -300,14 +303,12 @@ func (plan RequestPlan) UpstreamRoute() (CompiledRoutePlan, bool) {
 	return cloneCompiledRoute(*plan.upstreamRoute), true
 }
 
-// WithCurrentFixedAccount overlays only the active manual Account from the
+// WithCurrentManualAccount overlays only the active manual Account from the
 // latest published Environment. Route, model, network, Transform, recording,
 // and launch authority remain frozen on the Capture's assigned revision.
-func (plan RequestPlan) WithCurrentFixedAccount(current CompiledRoutePlan) (RequestPlan, error) {
+func (plan RequestPlan) WithCurrentManualAccount(current CompiledRoutePlan) (RequestPlan, error) {
 	if plan.upstreamRoute == nil ||
-		plan.upstreamRoute.accountPolicy.mode != AccountSelectionFixed ||
-		current.accountPolicy.mode != AccountSelectionFixed ||
-		current.accountPolicy.fixed == nil ||
+		!plan.upstreamRoute.accountPolicy.IsManual() || !current.accountPolicy.IsManual() ||
 		plan.upstreamRoute.id != current.id ||
 		plan.upstreamRoute.backend != current.backend ||
 		plan.upstreamRoute.target.ID != current.target.ID ||
@@ -317,6 +318,20 @@ func (plan RequestPlan) WithCurrentFixedAccount(current CompiledRoutePlan) (Requ
 		return RequestPlan{}, ErrAccountReadAmbiguous
 	}
 	route := cloneCompiledRoute(*plan.upstreamRoute)
+	previous, next := route.accountPolicy.fixed, current.accountPolicy.fixed
+	if previous == nil || next == nil || previous.ID != next.ID || previous.Revision != next.Revision {
+		route.allowAccountHistory = false
+	} else {
+		route.allowAccountHistory = route.allowAccountHistory && current.allowAccountHistory
+	}
+	route.accountPolicy.mode = current.accountPolicy.mode
+	route.accountPolicy.revision = current.accountPolicy.revision
+	if current.accountPolicy.mode == AccountSelectionOriginal {
+		route.accountPolicy.fixed = nil
+		result := plan
+		result.upstreamRoute = &route
+		return result, nil
+	}
 	fixed := *current.accountPolicy.fixed
 	route.accountPolicy.fixed = &fixed
 	replaced := false
@@ -361,10 +376,17 @@ func (plan RequestPlan) WireVariant() wireprofile.CompiledUpstreamWireVariant {
 	return plan.wireVariant
 }
 func (plan RequestPlan) OriginalOrigin() (originidentity.ProviderOrigin, bool) {
-	if !plan.PreservesOriginalDestination() || plan.originalOrigin.Validate() != nil {
+	if (!plan.PreservesOriginalDestination() && !plan.UsesOriginalAccount()) || plan.originalOrigin.Validate() != nil ||
+		(plan.UsesOriginalAccount() && plan.originalOrigin != plan.upstreamRoute.target.Origin) {
 		return originidentity.ProviderOrigin{}, false
 	}
 	return plan.originalOrigin, true
+}
+
+// UsesOriginalAccount leaves client credentials untouched, without discarding
+// the Route's model, recording or network policies.
+func (plan RequestPlan) UsesOriginalAccount() bool {
+	return plan.upstreamRoute != nil && plan.upstreamRoute.accountPolicy.mode == AccountSelectionOriginal
 }
 
 func compileExecution(
@@ -589,6 +611,8 @@ func compileAccountPolicy(route UpstreamRoute) (CompiledAccountPolicy, error) {
 		})
 	}
 	switch policy.Mode {
+	case AccountSelectionOriginal:
+		// No managed lease or selector is authorized by this mode.
 	case AccountSelectionFixed:
 		for index := range compiled.accounts {
 			if compiled.accounts[index].ID == policy.FixedAccountID {

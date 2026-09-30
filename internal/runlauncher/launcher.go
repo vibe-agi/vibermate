@@ -257,6 +257,12 @@ func (launcher *Launcher) Run(
 		launcher.finishBestEffort(control, grant)
 		return 1, err
 	}
+	if runtime.GOOS == "darwin" && remote == nil && grant.LaunchRecipe == clientadapter.LaunchCodexResponsesHTTP {
+		if err := launcher.callWithTimeout(ctx, control.checkLocalRootTrust); err != nil {
+			launcher.finishBestEffort(control, grant)
+			return 1, err
+		}
+	}
 	// Explain a missing compatible launch recipe without implying that a
 	// publisher-recognized launch is an exact catalogued release.
 	launcher.warnUnverified(grant)

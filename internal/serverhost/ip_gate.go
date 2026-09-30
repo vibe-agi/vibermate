@@ -82,7 +82,7 @@ func (gate *connectionGate) update(list ipallowlist.List) {
 	gate.mu.Lock()
 	var refused []*gatedConn
 	for conn := range gate.open {
-		if conn.admitted.Load() && !conn.balancerOwn && !list.Allows(conn.address) {
+		if conn.admitted.Load() && !conn.allowedBy(list) {
 			refused = append(refused, conn)
 		}
 	}
@@ -129,10 +129,12 @@ func (gate *connectionGate) guardTLS(config *tls.Config) *tls.Config {
 				return nil, err
 			}
 			if !conn.admitted.Load() {
-				if gate.allows(conn.address) {
-					conn.admitted.Store(true)
-				} else if len(hello.SupportedProtos) != 1 ||
-					hello.SupportedProtos[0] != acmeTLSALPNProtocol {
+				gate.mu.Lock()
+				allowed := conn.allowedBy(*gate.list.Load())
+				conn.admitted.Store(allowed)
+				gate.mu.Unlock()
+				if !allowed && (len(hello.SupportedProtos) != 1 ||
+					hello.SupportedProtos[0] != acmeTLSALPNProtocol) {
 					gate.refuse(conn.address)
 					return nil, errClientAddressRefused
 				}
@@ -148,8 +150,16 @@ func (gate *connectionGate) guardTLS(config *tls.Config) *tls.Config {
 
 func (gate *connectionGate) track(conn *gatedConn) {
 	gate.mu.Lock()
-	gate.open[conn] = struct{}{}
+	// A save may have happened after the initial decision but before tracking.
+	allowed := !conn.admitted.Load() || conn.allowedBy(*gate.list.Load())
+	if allowed && !conn.closed.Load() {
+		gate.open[conn] = struct{}{}
+	}
 	gate.mu.Unlock()
+	if !allowed {
+		gate.refuse(conn.address)
+		_ = conn.Close()
+	}
 }
 
 func (gate *connectionGate) untrack(conn *gatedConn) {
@@ -212,6 +222,19 @@ type gatedConn struct {
 	deadlineMu   sync.Mutex
 	readDeadline time.Time
 	closeOnce    sync.Once
+	closed       atomic.Bool
+}
+
+func (conn *gatedConn) allowedBy(list ipallowlist.List) bool {
+	if conn.balancerOwn {
+		return true
+	}
+	if conn.balancer.IsValid() && !conn.source.IsValid() {
+		// UNKNOWN/no-header connections retain the strict balancer check even
+		// during hot reload; a local balancer is not a local client.
+		return list.Len() == 0 || list.Contains(conn.address)
+	}
+	return list.Allows(conn.address)
 }
 
 // resolve reads the PROXY header of a relayed connection and applies the
@@ -228,10 +251,10 @@ func (conn *gatedConn) resolve() error {
 			conn.admitted.Store(true)
 			conn.gate.track(conn)
 			return
-		case err == nil:
+		case err == nil && header.Source.IsValid():
 			conn.address, conn.source = header.Source.Addr().Unmap(), header.Source
-		case errors.Is(err, proxyprotocol.ErrNoHeader):
-			// A load balancer that sends no header hides every client behind
+		case err == nil || errors.Is(err, proxyprotocol.ErrNoHeader):
+			// A load balancer that sends no client address hides every client behind
 			// its own address. Judge that address strictly, without the
 			// loopback exception, so a missing header can never widen access
 			// even for a load balancer on this machine, and surface the
@@ -254,7 +277,7 @@ func (conn *gatedConn) resolve() error {
 			conn.fail(io.EOF)
 			return
 		}
-		admitted := conn.gate.allows(conn.address)
+		admitted := conn.allowedBy(*conn.gate.list.Load())
 		if !admitted && !conn.deferToTLS {
 			conn.gate.refuse(conn.address)
 			conn.fail(errClientAddressRefused)
@@ -322,6 +345,7 @@ func (conn *gatedConn) SetReadDeadline(deadline time.Time) error {
 }
 
 func (conn *gatedConn) Close() error {
+	conn.closed.Store(true)
 	err := conn.Conn.Close()
 	conn.closeOnce.Do(func() { conn.gate.untrack(conn) })
 	return err

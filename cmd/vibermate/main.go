@@ -273,6 +273,9 @@ func executeContext(
 }
 
 func launchFailureKey(err error) string {
+	if errors.Is(err, runlauncher.ErrLocalRootUntrusted) {
+		return "cli.error.localRootUntrusted"
+	}
 	if errors.Is(err, runlauncher.ErrCaptureSupervisionFailed) {
 		return "cli.error.captureSupervisionFailed"
 	}

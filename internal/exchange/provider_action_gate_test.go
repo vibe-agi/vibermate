@@ -18,6 +18,7 @@ import (
 // they reach the client only through the tool decision gate, never around it.
 func TestUnmodelledResponsesOutputItemsPassOnlyThroughTheToolGate(t *testing.T) {
 	for _, item := range []string{
+		`{"type":"tool_search_call","id":"search_fixture","call_id":"search_1","execution":"client","arguments":{"query":"files"}}`,
 		`{"type":"local_shell_call","id":"ls_fixture","call_id":"call_local","status":"completed","action":{"type":"exec","command":["rm","-rf","/"]}}`,
 		`{"type":"shell_call","id":"sh_fixture","call_id":"call_shell","status":"completed","action":{"commands":["rm -rf /"]}}`,
 		`{"type":"computer_call","id":"cu_fixture","call_id":"call_computer","status":"completed","action":{"type":"click","x":1,"y":1}}`,

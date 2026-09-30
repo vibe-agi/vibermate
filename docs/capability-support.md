@@ -3,7 +3,7 @@
 This matrix states what the current source offers. A passing unit test and a
 published product are not interchangeable evidence.
 
-Source package version: **0.1.19**. Latest published release: **v0.1.19**.
+Source package version: **0.1.20**. Latest published release: **v0.1.19**.
 
 [v0.1.19](https://github.com/vibe-agi/vibermate/releases/tag/v0.1.19) opens only
 databases of its own schema revision and has no migrations
@@ -48,7 +48,7 @@ databases of its own schema revision and has no migrations
 | Capability ID | Status | Current boundary |
 | --- | --- | --- |
 | `retained-evidence` | Released | Recording mode and retention control semantic and Raw HTTP evidence. The SQLite archive is not encrypted by ViberMate; recognized credential fields are removed by bounded rules, not by a claim that arbitrary content is secret-free. |
-| `body-free-usage` | Released | Runtime-wide opt-in statistics are independent of body recording, with permission-scoped caller/model breakdowns and reference API-equivalent USD costs, not provider bills. Git project and branch attribution is a launch-time snapshot for new managed runs; missing history is not invented or backfilled. |
+| `body-free-usage` | Released | Runtime-wide statistics are independent of body recording, with permission-scoped caller/model breakdowns and reference API-equivalent USD costs, not provider bills. In the 0.1.20 source, new databases enable collection with 365-day retention; existing choices are preserved. Git project and branch attribution is a launch-time snapshot for new managed runs; missing history is not invented or backfilled. |
 | `raw-stage-compare` | Released | The workbench compares retained client/upstream request and response stages without rewriting retained bytes. |
 | `outbound-visibility` | Released | The workbench distinguishes inspected HTTP, decoded content, blind forwarding, and traffic not observed by ViberMate. It cannot infer a local file path from network bytes. |
 | `verified-backup-restore` | Released | Offline backup, verification, and restore are manifest-bound. Provider secrets and externally supplied TLS keys are excluded. |
@@ -59,6 +59,26 @@ databases of its own schema revision and has no migrations
 | `team-knowledge-base` | Unsupported | Captured evidence is not yet an approved, independently retained team knowledge-document system. |
 
 ## Evidence rules
+
+Codex compatibility checks use the official `rust-v0.145.0`, `rust-v0.158.0`
+and `rust-v0.159.2` source contracts. Current native request controls (including
+numeric reasoning effort and uncorrelated tool-result history) stay on the
+same-dialect wire; an unrepresentable value is not silently translated to another
+provider. Client-executed tool searches still require the tool decision gate.
+The native provider can negotiate WebSockets first: ViberMate returns 426 and
+Codex selects its HTTP fallback. The legacy feature flag alone does not force
+HTTP in current Codex. See the official [request types](https://github.com/openai/codex/blob/rust-v0.159.2/codex-rs/codex-api/src/common.rs),
+[history types](https://github.com/openai/codex/blob/rust-v0.159.2/codex-rs/protocol/src/models.rs)
+and [stream terminal handling](https://github.com/openai/codex/blob/rust-v0.159.2/codex-rs/codex-api/src/sse/responses.rs).
+
+The codex-current-compatibility CI job exercises Codex 0.159.2 on macOS and Linux against
+a synthetic proxy and the production Responses codec, including 426 fallback,
+HTTP retries, SSE completion and usage. This is separate from digest-catalog
+recognition and does not label other builds as verified. Go and Flutter also
+validate the same generated `api/samples/content-contract.json` fixture, covering
+preview normalization, all response stop reasons and empty terminals. Local
+macOS Codex capture and `vibermate doctor` check the current Root's trust status
+before recommending or starting a native-trust capture.
 
 Release packaging evidence proves only the exact tagged artifacts. Deterministic
 or mocked provider tests do not prove a live provider account, and one real

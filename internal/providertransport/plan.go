@@ -107,6 +107,7 @@ type RequestProvenance struct {
 	destinationKind     environment.DestinationKind
 	routeID             environment.UpstreamRouteID
 	routeRevision       environment.Revision
+	clientAccountOrigin originidentity.ProviderOrigin
 }
 
 func NewOriginalRequestProvenance(
@@ -139,6 +140,23 @@ func NewUpstreamRequestProvenance(
 		routeID,
 		routeRevision,
 	)
+}
+
+// NewClientAccountRequestProvenance derives credential passthrough authority
+// from a compiled request, not a caller-supplied target or account identifier.
+func NewClientAccountRequestProvenance(plan environment.RequestPlan) (RequestProvenance, error) {
+	origin, valid := plan.OriginalOrigin()
+	route, exists := plan.UpstreamRoute()
+	if !plan.UsesOriginalAccount() || !valid || !exists || origin.BasePath() != "" ||
+		plan.CodecPlan().ClientDialect() != plan.CodecPlan().ProviderDialect() {
+		return RequestProvenance{}, errors.New("original Account destination is not identity-preserving")
+	}
+	provenance, err := NewUpstreamRequestProvenance(plan.EnvironmentID(), plan.EnvironmentRevision(), plan.EnvironmentDigest(), route.ID(), route.Revision())
+	if err != nil {
+		return RequestProvenance{}, err
+	}
+	provenance.clientAccountOrigin = origin
+	return provenance, nil
 }
 
 func newRequestProvenance(
@@ -509,7 +527,8 @@ func NewRequest(options RequestOptions) (Request, error) {
 		}
 		if options.Target.origin != options.PassthroughOrigin ||
 			options.Target.origin.BasePath() != "" ||
-			options.Provenance.DestinationKind() != environment.DestinationKindOriginal {
+			(options.Provenance.DestinationKind() != environment.DestinationKindOriginal &&
+				options.Provenance.clientAccountOrigin != options.PassthroughOrigin) {
 			return Request{}, errors.New(
 				"client passthrough target differs from the frozen original destination",
 			)

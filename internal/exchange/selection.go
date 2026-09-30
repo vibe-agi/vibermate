@@ -281,6 +281,9 @@ func selectFrozenPlan(plan environment.RequestPlan) (frozenSelection, error) {
 			route.ID(),
 			route.Revision(),
 		)
+		if plan.UsesOriginalAccount() {
+			provenance, err = providertransport.NewClientAccountRequestProvenance(plan)
+		}
 		if err != nil {
 			return frozenSelection{}, fmt.Errorf("compile provider request provenance: %w", err)
 		}

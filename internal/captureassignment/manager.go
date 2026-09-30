@@ -547,11 +547,11 @@ func (manager *Manager) BeginRequest(
 		return nil, err
 	}
 	if assignedRoute, ok := plan.UpstreamRoute(); ok {
-		if _, manual := assignedRoute.AccountPolicy().FixedAccount(); manual {
+		if assignedRoute.AccountPolicy().IsManual() {
 			latest, latestErr := manager.environments.Resolve(assignment.EnvironmentID)
 			if latestErr == nil && latest.State() == environment.StateActive {
-				if currentRoute, exists := latest.FixedRoute(assignedRoute.ID()); exists {
-					if currentPlan, overlayErr := plan.WithCurrentFixedAccount(currentRoute); overlayErr == nil {
+				if currentRoute, exists := latest.ManualRoute(assignedRoute.ID()); exists {
+					if currentPlan, overlayErr := plan.WithCurrentManualAccount(currentRoute); overlayErr == nil {
 						plan = currentPlan
 					}
 				}

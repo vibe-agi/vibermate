@@ -136,3 +136,30 @@ func TestContainsHasNoExceptions(t *testing.T) {
 		t.Fatal("an empty list contained an address")
 	}
 }
+
+func TestCatchAllIncludesTheUnionOfNetworks(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct {
+		entries []string
+		want    bool
+	}{
+		{nil, false},
+		{[]string{"0.0.0.0/0"}, true},
+		{[]string{"::/0"}, true},
+		{[]string{"128.0.0.0/1", "0.0.0.0/1"}, true},
+		{[]string{"::/1", "8000::/1"}, true},
+		{[]string{"0.0.0.0/2", "64.0.0.0/2", "128.0.0.0/1", "10.0.0.0/8"}, true},
+		{[]string{"0.0.0.0/1", "0.0.0.0/2", "64.0.0.0/2"}, false},
+		{[]string{"::/1", "::/2", "4000::/2"}, false},
+		{[]string{"0.0.0.0/1", "::/1"}, false},
+		{[]string{"0.0.0.0/1", "128.0.0.0/2"}, false},
+	} {
+		list, err := Parse(test.entries)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := list.HasCatchAll(); got != test.want {
+			t.Errorf("HasCatchAll(%v) = %v, want %v", test.entries, got, test.want)
+		}
+	}
+}

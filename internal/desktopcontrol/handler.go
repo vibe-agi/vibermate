@@ -873,10 +873,10 @@ func (handler *Handler) attachActivityRequestPreviews(
 		if !exists {
 			continue
 		}
-		view.Items[index].RequestPreview = &preview
-		if err := view.Items[index].Validate(); err != nil {
-			return err
+		if preview.Validate() != nil {
+			continue
 		}
+		view.Items[index].RequestPreview = &preview
 	}
 	return nil
 }

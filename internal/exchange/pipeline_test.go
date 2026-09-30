@@ -2316,6 +2316,7 @@ func TestShutdownCancelsAndDrainsActiveFrozenRequest(t *testing.T) {
 }
 
 type testPlanOptions struct {
+	originalAccount    bool
 	clientProtocol     environment.ClientProtocol
 	chatGPTClient      bool
 	downstreamProtocol wireprofile.ApplicationProtocol
@@ -2376,7 +2377,9 @@ func mustEnvironmentRequestPlan(t *testing.T, options testPlanOptions) environme
 			BackendProtocols: []string{string(options.backend)},
 		}
 	}
-	if options.selector != nil {
+	if options.originalAccount {
+		accountPolicy.Mode = environment.AccountSelectionOriginal
+	} else if options.selector != nil {
 		selector := *options.selector
 		accountPolicy.Mode = environment.AccountSelectionJavaScript
 		accountPolicy.Selector = &selector

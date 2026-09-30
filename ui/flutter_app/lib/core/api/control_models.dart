@@ -4752,7 +4752,10 @@ final class RouteAccountPolicy {
         fixedAccountId.isEmpty &&
         selector != null &&
         accounts.isNotEmpty;
-    if ((!fixed && !scripted) || accountIds.length != accounts.length) {
+    final original =
+        mode == 'original' && fixedAccountId.isEmpty && selector == null;
+    if ((!fixed && !scripted && !original) ||
+        accountIds.length != accounts.length) {
       throw ControlContractException('$path Account authority is invalid');
     }
     return RouteAccountPolicy(
@@ -6076,14 +6079,18 @@ final class EnvironmentAccountActivation {
       '$path.environment',
     );
     final actualRouteId = _requireResourceId(value, 'routeId', path);
-    final actualAccountId = _requireResourceId(value, 'accountId', path);
+    final actualAccountId = requireStringValue(value, 'accountId', path);
+    if (actualAccountId.isNotEmpty) {
+      _requireResourceId(value, 'accountId', path);
+    }
     final selected = environment.routes
         .where((route) => route.id == actualRouteId)
         .firstOrNull;
     if (environment.id != environmentId ||
         actualRouteId != routeId ||
         actualAccountId != accountId ||
-        selected?.accountPolicy.mode != 'fixed' ||
+        selected?.accountPolicy.mode !=
+            (actualAccountId.isEmpty ? 'original' : 'fixed') ||
         selected?.accountPolicy.fixedAccountId != actualAccountId) {
       throw const ControlContractException(
         'Environment Account activation is inconsistent',
@@ -7194,6 +7201,18 @@ final class ActivityRecord {
         parents.exchangeId != id) {
       throw ControlContractException('$path Activity evidence is inconsistent');
     }
+    ActivityRequestPreview? preview;
+    if (value['requestPreview'] != null) {
+      try {
+        preview = ActivityRequestPreview.fromJson(
+          value['requestPreview'],
+          '$path.requestPreview',
+        );
+      } on ControlContractException {
+        // Optional list text cannot invalidate the authoritative Activity.
+        // Older runtimes can truncate a preview immediately after a space.
+      }
+    }
     return ActivityRecord(
       id: id,
       occurredAt: requireTimestamp(value, 'occurredAt', path),
@@ -7213,12 +7232,7 @@ final class ActivityRecord {
         '$path.environment',
       ),
       parentRefs: parents,
-      requestPreview: value['requestPreview'] == null
-          ? null
-          : ActivityRequestPreview.fromJson(
-              value['requestPreview'],
-              '$path.requestPreview',
-            ),
+      requestPreview: preview,
     );
   }
 
@@ -8990,8 +9004,13 @@ final class ExchangeResponse {
           'max_tokens',
           'tool_use',
           'stop_sequence',
+          'refusal',
+          'pause_turn',
+          'model_context_window_exceeded',
+          'incomplete',
         }.contains(stopReason) ||
-        rawBlocks.isEmpty) {
+        rawBlocks.length > 4096 ||
+        (stopReason == 'tool_use' && rawBlocks.isEmpty)) {
       throw ControlContractException('$path response is invalid');
     }
     return ExchangeResponse(
