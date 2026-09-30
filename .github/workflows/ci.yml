@@ -116,8 +116,9 @@ jobs:
           codex_binary="$(find "${prefix}/node_modules" -type f -path '*/vendor/*/bin/codex')"
           test -f "${codex_binary}"
           test "$("${codex_binary}" --version)" = 'codex-cli 0.159.2'
-          VIBERMATE_CODEX_ACCEPTANCE="${codex_binary}" \
-            go test -count=1 -run '^TestInstalledCodexRecoversTransientHTTPFailureThroughLauncher$' ./internal/runlauncher
+          export VIBERMATE_CODEX_ACCEPTANCE="${codex_binary}"
+          go test -count=1 -run '^TestInstalledCodexRecoversTransientHTTPFailureThroughLauncher$' ./internal/runlauncher
+          go test -count=1 -run '^TestInstalledCodex' ./internal/loopbackproxy
 
   race:
     needs: generated-structural
