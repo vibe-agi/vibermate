@@ -3368,15 +3368,33 @@ final class _ExpandableContentRegionState
     extends State<_ExpandableContentRegion> {
   static const _collapsedHeight = 315.0;
   bool _expanded = false;
+  bool _restored = false;
 
   bool get _collapsible => widget.estimatedLines > _defaultVisibleContentLines;
+
+  void _restoreExpansion() {
+    _expanded =
+        PageStorage.maybeOf(context)?.readState(
+          context,
+          identifier: ValueKey('content-expanded:${widget.id}'),
+        ) ==
+        true;
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (!_restored) {
+      _restoreExpansion();
+      _restored = true;
+    }
+  }
 
   @override
   void didUpdateWidget(covariant _ExpandableContentRegion oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.key != widget.key ||
-        oldWidget.estimatedLines != widget.estimatedLines) {
-      _expanded = false;
+    if (oldWidget.key != widget.key || oldWidget.id != widget.id) {
+      _restoreExpansion();
     }
   }
 
@@ -3403,7 +3421,14 @@ final class _ExpandableContentRegionState
           alignment: Alignment.centerLeft,
           child: TextButton.icon(
             key: Key('toggle-long-${widget.id}'),
-            onPressed: () => setState(() => _expanded = !_expanded),
+            onPressed: () {
+              setState(() => _expanded = !_expanded);
+              PageStorage.maybeOf(context)?.writeState(
+                context,
+                _expanded,
+                identifier: ValueKey('content-expanded:${widget.id}'),
+              );
+            },
             icon: Icon(
               _expanded ? Icons.unfold_less : Icons.unfold_more,
               size: 15,

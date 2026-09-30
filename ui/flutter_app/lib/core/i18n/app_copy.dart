@@ -52,6 +52,11 @@ final class AppCopy {
 
   static const _en = <String, String>{
     'reader.title': 'Conversation',
+    'reader.agent_reply': 'Agent reply',
+    'reader.tool_source_input': 'Carried in request input · {request}',
+    'reader.tool_source_output': 'Returned by the Agent · {request}',
+    'reader.tool_ambiguous':
+        'Multiple matching blocks were recorded. No unique pairing is inferred; each source is shown below.',
     'reader.input': 'request input',
     'reader.subagent': 'Subagent',
     'reader.detail.other': 'Other retained blocks',
@@ -2919,6 +2924,10 @@ final class AppCopy {
 
   static const _zh = <String, String>{
     'reader.title': '对话',
+    'reader.agent_reply': 'Agent 回复',
+    'reader.tool_source_input': '请求输入携带 · {request}',
+    'reader.tool_source_output': 'Agent 返回 · {request}',
+    'reader.tool_ambiguous': '同一 ID 存在多条记录，未推断唯一配对；下方分别标出来源。',
     'reader.input': '请求输入',
     'reader.subagent': '子 Agent',
     'reader.detail.other': '其他保留内容',

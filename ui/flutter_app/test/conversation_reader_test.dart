@@ -312,6 +312,70 @@ void main() {
       await tester.pumpAndSettle();
       expect(readerPosition(tester).pixels, 0);
       expect(find.text('NEW_REPLY'), findsOneWidget);
+      await tester.ensureVisible(
+        find.byKey(Key('reader-tools-${activity.id}')),
+      );
+      await tester.tap(find.byKey(Key('reader-tools-${activity.id}')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('reader-detail-tab-1')));
+      await tester.pumpAndSettle();
+      expect(find.text('MATCHED_TOOL_RESULT'), findsOneWidget);
+      expect(
+        find.text('Carried in request input · ${next.id}'),
+        findsOneWidget,
+      );
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox.shrink());
+    },
+  );
+
+  testWidgets(
+    'unkeyed results remain unpaired and long inspection survives tab changes',
+    (tester) async {
+      await tester.binding.setSurfaceSize(const Size(1220, 1000));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      final api = _ReaderApi();
+      final activity = (await api.fixture.activities(
+        captureRunId: 'run-1',
+      )).items.firstWhere((a) => a.status == 'succeeded');
+      final base = await api.exchange(activity.id);
+      final source =
+          '${List.filled(40, 'Retained tool output line.').join('\n')}\nTOOL_TAIL';
+      final output = ExchangeContentBlock.fromJson({
+        'kind': 'tool_result',
+        'availability': 'recorded',
+        'originalSize': source.length,
+        'text': source,
+      }, 'fixture');
+      api.details[activity.id] = detail(
+        base,
+        [
+          ExchangeContentMessage(role: 'tool', blocks: [output], agent: null),
+        ],
+        [block('text', 'REPLY')],
+      );
+      final controller = makeController(api);
+      addTearDown(controller.dispose);
+      await tester.pumpWidget(host(controller, [activity]));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(Key('reader-tools-${activity.id}')));
+      await tester.pumpAndSettle();
+      expect(
+        find.text('No call ID was recorded; these blocks cannot be paired.'),
+        findsOneWidget,
+      );
+      final toggle = find.byKey(
+        Key('toggle-long-reader-unkeyed-${activity.id}-1-0'),
+      );
+      await tester.ensureVisible(toggle);
+      await tester.tap(toggle);
+      await tester.pumpAndSettle();
+      expect(find.text('Show first 15 lines'), findsOneWidget);
+      await tester.tap(find.byKey(const Key('reader-detail-tab-0')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('reader-detail-tab-1')));
+      await tester.pumpAndSettle();
+      expect(find.text('Show first 15 lines'), findsOneWidget);
       expect(tester.takeException(), isNull);
       await tester.pumpWidget(const SizedBox.shrink());
     },

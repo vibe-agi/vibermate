@@ -737,13 +737,21 @@ final class _ConversationReadingViewState
   );
 
   Widget _toolInspector(_ReaderSelection selection, ExchangeDetail detail) {
-    final blocks = _allReaderBlocks(
-      detail.content,
-    ).where((b) => b.kind == 'tool_call' || b.kind == 'tool_result').toList();
     final ids = selection.toolIds;
-    final wanted = blocks
-        .where((b) => b.callId != null && ids.contains(b.callId))
-        .toList();
+    final wanted =
+        <({ExchangeContentBlock block, String requestId, bool input})>[
+          for (final message
+              in detail.content.request?.messages ??
+                  const <ExchangeContentMessage>[])
+            for (final block in message.blocks)
+              if (ids.contains(block.callId))
+                (block: block, requestId: detail.id, input: true),
+          for (final block
+              in detail.content.response?.blocks ??
+                  const <ExchangeContentBlock>[])
+            if (ids.contains(block.callId))
+              (block: block, requestId: detail.id, input: false),
+        ];
     // Later incremental requests can carry this call's return. Never match by
     // neighbouring text, tool name, or a different conversation/actor.
     for (final activity in widget.activities) {
@@ -758,13 +766,18 @@ final class _ConversationReadingViewState
         if (block.kind == 'tool_result' &&
             block.callId != null &&
             ids.contains(block.callId)) {
-          wanted.add(block);
+          wanted.add((block: block, requestId: activity.id, input: true));
         }
       }
     }
     final tab =
         _detailTabs[selection.key] ??
-        (wanted.any((b) => b.kind == 'tool_result') ? 1 : 0);
+        (wanted.any((entry) => entry.block.kind == 'tool_result') ||
+                selection.unkeyedTools.any(
+                  (block) => block.kind == 'tool_result',
+                )
+            ? 1
+            : 0);
     _detailTabs.putIfAbsent(selection.key, () => tab);
     return Column(
       children: [
@@ -793,26 +806,34 @@ final class _ConversationReadingViewState
               const SizedBox(height: 12),
             ],
             for (final id in ids) ...[
-              Text(
-                wanted
-                        .where((b) => b.callId == id && b.toolName != null)
-                        .firstOrNull
-                        ?.toolName ??
-                    copy('exchange.tool.unknown'),
-                style: Theme.of(context).textTheme.titleSmall,
-              ),
-              SelectableText(
-                id.isEmpty ? copy('reader.unmatched_tool') : id,
-                style: monoStyle,
-              ),
+              if (tab == 1)
+                Text(
+                  wanted
+                          .where(
+                            (entry) =>
+                                entry.block.callId == id &&
+                                entry.block.toolName != null,
+                          )
+                          .firstOrNull
+                          ?.block
+                          .toolName ??
+                      copy('exchange.tool.unknown'),
+                  style: Theme.of(context).textTheme.titleSmall,
+                ),
+              if (tab == 1)
+                SelectableText(
+                  id.isEmpty ? copy('reader.unmatched_tool') : id,
+                  style: monoStyle,
+                ),
               const SizedBox(height: 6),
               Builder(
                 builder: (context) {
                   final matches = wanted
                       .where(
-                        (b) =>
-                            (b.callId ?? '') == id &&
-                            b.kind == (tab == 0 ? 'tool_call' : 'tool_result'),
+                        (entry) =>
+                            entry.block.callId == id &&
+                            entry.block.kind ==
+                                (tab == 0 ? 'tool_call' : 'tool_result'),
                       )
                       .toList();
                   // Multiple distinct candidates are evidence, not permission to pick
@@ -823,16 +844,40 @@ final class _ConversationReadingViewState
                       style: Theme.of(context).textTheme.bodySmall,
                     );
                   }
-                  return _ContentBlocksView(
-                    id: 'reader-tool-${detail.id}-$id-$tab',
-                    blocks: matches,
-                    copy: copy,
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      if (matches.length > 1)
+                        Text(
+                          copy('reader.tool_ambiguous'),
+                          style: Theme.of(context).textTheme.bodySmall,
+                        ),
+                      for (final (index, entry) in matches.indexed) ...[
+                        SelectableText(
+                          copy.format(
+                            entry.input
+                                ? 'reader.tool_source_input'
+                                : 'reader.tool_source_output',
+                            {'request': entry.requestId},
+                          ),
+                          style: monoStyle,
+                        ),
+                        const SizedBox(height: 6),
+                        _ContentBlocksView(
+                          id: 'reader-tool-${detail.id}-$id-$tab-$index',
+                          blocks: [entry.block],
+                          copy: copy,
+                        ),
+                        const SizedBox(height: 10),
+                      ],
+                    ],
                   );
                 },
               ),
               const SizedBox(height: 16),
             ],
-            if (ids.isEmpty) Text(copy('reader.unmatched_tool')),
+            if (ids.isEmpty && selection.unkeyedTools.isEmpty)
+              Text(copy('reader.unmatched_tool')),
           ]),
         ),
       ],
@@ -876,16 +921,6 @@ final class _ConversationReadingViewState
             ),
           ]),
         );
-}
-
-Iterable<ExchangeContentBlock> _allReaderBlocks(
-  ExchangeContentDetail content,
-) sync* {
-  for (final message
-      in content.request?.messages ?? const <ExchangeContentMessage>[]) {
-    yield* message.blocks;
-  }
-  yield* content.response?.blocks ?? const <ExchangeContentBlock>[];
 }
 
 List<ExchangeContentBlock> _readerText(Iterable<ExchangeContentBlock> blocks) =>
@@ -1055,6 +1090,15 @@ final class _ReadingRequestState extends State<_ReadingRequest> {
               ),
               const SizedBox(width: 8),
               Expanded(child: Divider(color: context.viberColors.dividerSoft)),
+              if (text.isEmpty && detail.status != 'pending')
+                Flexible(
+                  flex: 6,
+                  child: _ReaderUsageBadge(
+                    copy: copy,
+                    reports: _usage == null ? const [] : [_usage!],
+                    onPressed: () => _inspect(_ReaderDetail.usage),
+                  ),
+                ),
             ],
           ),
           const SizedBox(height: 12),
@@ -1102,7 +1146,7 @@ final class _ReadingRequestState extends State<_ReadingRequest> {
             _ReadingMessage(
               id: '${detail.id}-response',
               role: 'assistant',
-              roleLabel: actorLabel,
+              roleLabel: actorLabel ?? copy('reader.agent_reply'),
               blocks: text,
               copy: copy,
               usage: _usage,
@@ -1165,12 +1209,6 @@ final class _ReadingRequestState extends State<_ReadingRequest> {
                 icon: const Icon(Icons.data_object, size: 14),
                 label: Text(copy('reader.raw')),
               ),
-              if (text.isEmpty)
-                _ReaderUsageBadge(
-                  copy: copy,
-                  reports: _usage == null ? const [] : [_usage!],
-                  onPressed: () => _inspect(_ReaderDetail.usage),
-                ),
             ],
           ),
         ],
