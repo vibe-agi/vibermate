@@ -715,6 +715,19 @@ func (stream *ProviderStream) Feed(_ context.Context, fragment []byte) ([]byte, 
 		}
 		stream.progress++
 		switch header.Type {
+		case "keepalive":
+			// Native Codex renews its idle budget on SSE data events, not
+			// comments. A keepalive must neither arm the tool barrier nor
+			// wait behind it: otherwise a healthy, quiet generation times
+			// out on every client retry. Like error notifications, this is
+			// an out-of-band, non-executable event; held tools stay held.
+			encoded, err := stream.encodeClientEvent(event)
+			if err != nil {
+				stream.failed = true
+				return nil, err
+			}
+			_, _ = safe.Write(encoded)
+			continue
 		case "response.output_item.done":
 			var completed struct {
 				OutputIndex *int            `json:"output_index"`

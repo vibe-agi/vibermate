@@ -81,6 +81,15 @@ Real topology results:
 
 ## Codex CLI / OpenAI Responses
 
+Native heartbeat regression verified with Codex CLI `0.159.2` on 2026-09-30:
+the upstream `keepalive` SSE data event is forwarded immediately, including
+while executable tool output is held for approval. It does not arm or release
+that barrier. Proxy-generated SSE comments are not a substitute for this event:
+Codex applies its idle timeout while waiting for the next SSE data event.
+`TestInstalledCodexProgressSurvivesNativeStream` runs an isolated local fixture
+past the client's shortened idle interval, without retries or real credentials;
+the codec tests separately prove tool rejection and wire-size limits still hold.
+
 | Wire evidence | Retained normalized evidence | Thread signal | UI label and rule |
 | --- | --- | --- | --- |
 | input/output message item | message role plus ordered content blocks | actor path when present, otherwise main thread | User / Assistant |

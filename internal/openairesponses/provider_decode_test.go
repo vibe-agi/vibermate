@@ -330,6 +330,69 @@ func TestProviderStreamProgressAndApprovalBarrier(t *testing.T) {
 	}
 }
 
+func TestProviderStreamKeepaliveDoesNotArmOrReleaseApprovalBarrier(t *testing.T) {
+	for _, approve := range []bool{false, true} {
+		t.Run(fmt.Sprintf("approve=%t", approve), func(t *testing.T) {
+			request := streamingRequestFixture(t)
+			request, err := request.WithEffectiveModel(request.RequestedModel)
+			if err != nil {
+				t.Fatal(err)
+			}
+			stream, err := newTestCodec(t).NewProviderStream(request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			heartbeat := appendResponseEvent(t, "keepalive", map[string]any{"type": "keepalive", "sequence_number": 1})
+			var delivered []byte
+			for _, b := range heartbeat {
+				part, err := stream.Feed(context.Background(), []byte{b})
+				if err != nil {
+					t.Fatal(err)
+				}
+				delivered = append(delivered, part...)
+			}
+			if !bytes.Equal(delivered, heartbeat) || stream.TerminalReceived() || stream.SemanticProgress() == 0 {
+				t.Fatalf("native keepalive was not delivered immediately: %q", delivered)
+			}
+			text := appendResponseEvent(t, "response.output_text.delta", map[string]any{"type": "response.output_text.delta", "delta": "visible text"})
+			if early, err := stream.Feed(context.Background(), text); err != nil || !bytes.Equal(early, text) {
+				t.Fatalf("keepalive incorrectly armed the tool barrier: %q, %v", early, err)
+			}
+			tool := json.RawMessage(`{"type":"function_call","id":"fc_1","call_id":"call_1","name":"lookup","arguments":"{}"}`)
+			held := appendResponseEvent(t, "response.output_item.done", map[string]any{"type": "response.output_item.done", "output_index": 0, "item": tool})
+			if early, err := stream.Feed(context.Background(), held); err != nil || len(early) != 0 {
+				t.Fatalf("tool escaped approval: %q, %v", early, err)
+			}
+			if early, err := stream.Feed(context.Background(), heartbeat); err != nil || !bytes.Equal(early, heartbeat) {
+				t.Fatalf("keepalive was held behind a tool or released held content: %q, %v", early, err)
+			}
+			terminal := appendResponseEvent(t, "response.completed", map[string]any{"type": "response.completed", "response": map[string]any{
+				"id": "resp_1", "created_at": 1, "status": "completed", "model": request.RequestedModel, "output": []json.RawMessage{tool},
+			}})
+			if early, err := stream.Feed(context.Background(), terminal); err != nil || len(early) != 0 {
+				t.Fatalf("terminal escaped approval: %q, %v", early, err)
+			}
+			pending, err := stream.FinishDecoded(context.Background())
+			if err != nil || len(pending.ToolIntents()) != 1 {
+				t.Fatalf("lost tool approval: %v", err)
+			}
+			if approve {
+				released, err := pending.Approve()
+				if err != nil || !bytes.Equal(released, append(held, terminal...)) {
+					t.Fatalf("held stream changed or heartbeat duplicated: %q, %v", released, err)
+				}
+			} else {
+				if err := pending.Reject(); err != nil {
+					t.Fatal(err)
+				}
+				if released, err := pending.Approve(); err == nil || len(released) != 0 {
+					t.Fatal("heartbeat bypassed tool rejection")
+				}
+			}
+		})
+	}
+}
+
 func TestProviderStreamBoundsNormalizedWire(t *testing.T) {
 	options := DefaultOptions()
 	options.MaxResponseBytes = 1024

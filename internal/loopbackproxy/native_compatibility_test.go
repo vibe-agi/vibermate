@@ -111,14 +111,20 @@ func TestInstalledCodexNativeFatalErrorsDoNotBecomeRetries(t *testing.T) {
 }
 
 func TestInstalledCodexProgressSurvivesNativeStream(t *testing.T) {
-	for _, managed := range []bool{false, true} {
-		t.Run(fmt.Sprintf("managed=%t", managed), func(t *testing.T) {
+	for _, test := range []struct {
+		managed bool
+		event   string
+	}{{false, "response.in_progress"}, {true, "response.in_progress"}, {false, "keepalive"}, {true, "keepalive"}} {
+		managed := test.managed
+		t.Run(fmt.Sprintf("managed=%t/event=%s", managed, test.event), func(t *testing.T) {
+			var requests atomic.Int32
 			codec, request := nativeResponsesFixture(t)
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if r.Method != http.MethodPost || !strings.HasSuffix(r.URL.Path, "/responses") {
 					http.NotFound(w, r)
 					return
 				}
+				requests.Add(1)
 				stream, _ := codec.NewProviderStream(request)
 				w.Header().Set("Content-Type", "text/event-stream")
 				w.WriteHeader(200)
@@ -136,13 +142,17 @@ func TestInstalledCodexProgressSurvivesNativeStream(t *testing.T) {
 					_, _ = w.Write(data)
 					w.(http.Flusher).Flush()
 				}
-				for range 8 {
+				for index := range 8 {
 					select {
 					case <-r.Context().Done():
 						return
 					case <-time.After(50 * time.Millisecond):
 					}
-					send("data: {\"type\":\"response.in_progress\",\"response\":{\"id\":\"resp_fixture\"}}\n\n")
+					if test.event == "keepalive" {
+						send(fmt.Sprintf("event: keepalive\ndata: {\"type\":\"keepalive\",\"sequence_number\":%d}\n\n", index))
+					} else {
+						send("data: {\"type\":\"response.in_progress\",\"response\":{\"id\":\"resp_fixture\"}}\n\n")
+					}
 				}
 				send("data: {\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{\"id\":\"msg_fixture\",\"type\":\"message\",\"role\":\"assistant\",\"status\":\"completed\",\"content\":[{\"type\":\"output_text\",\"text\":\"hello\"}]}}\n\n")
 				send("data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_fixture\",\"created_at\":1,\"status\":\"completed\",\"model\":\"fixture\",\"output\":[]}}\n\n")
@@ -162,8 +172,8 @@ func TestInstalledCodexProgressSurvivesNativeStream(t *testing.T) {
 			}))
 			defer server.Close()
 			output, err := nativeCodexFixtureCommand(t, server.URL, `model_providers.fixture.stream_idle_timeout_ms=180`, `model_providers.fixture.stream_max_retries=0`).CombinedOutput()
-			if err != nil {
-				t.Fatalf("progressing stream disconnected: %v output=%s", err, output)
+			if err != nil || requests.Load() != 1 {
+				t.Fatalf("progressing stream disconnected: requests=%d err=%v output=%s", requests.Load(), err, output)
 			}
 		})
 	}
