@@ -129,6 +129,50 @@ func TestUsageAggregationScopesWindowsMissingValuesAndFrozenLabels(t *testing.T)
 	}
 }
 
+func TestExchangeUsageFilterPreservesOwnershipRetentionAndUnknowns(t *testing.T) {
+	store := openTestStore(t, filepath.Join(t.TempDir(), "usage.db"))
+	defer shutdownTestStore(t, store)
+	now := time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC)
+	user := runtimeuser.UserID("user.AAAAAAAAAAAAAAAAAAAAAAAAAAA")
+	other := runtimeuser.UserID("user.BBBBBBBBBBBBBBBBBBBBBBBBBBB")
+	for _, item := range []struct {
+		id      string
+		owner   runtimeuser.UserID
+		expires time.Time
+	}{
+		{"own", user, now.Add(time.Hour)},
+		{"other", other, now.Add(time.Hour)},
+		{"expired", user, now},
+	} {
+		insertUsageFixture(t, store, runtimeusage.Observation{
+			ExchangeID: item.id, UserID: item.owner, OccurredAt: now, Status: activity.StatusSucceeded,
+			Usage: protocolcore.Usage{InputUncached: protocolcore.UsageValue{Known: true, Tokens: 11, Source: "fixture"}},
+		}, item.expires)
+	}
+	period, _ := runtimeusage.NewQuery("2026-09-30", "2026-10-01", "UTC")
+	for _, test := range []struct {
+		id    string
+		owner runtimeuser.UserID
+		calls int
+	}{
+		{"own", user, 1}, {"other", user, 0}, {"other", "", 1},
+		{"expired", user, 0}, {"' OR 1=1 --", user, 0}, {"missing", user, 0},
+	} {
+		calls := 0
+		query := runtimeusage.AggregationQuery{Period: period, Filters: []runtimeusage.Filter{{Dimension: "exchange", ID: test.id}}}
+		_, err := store.ScanUsage(context.Background(), query, test.owner, now, func(bucket runtimeusage.UsageBucket) error {
+			calls += bucket.Calls
+			if !bucket.Usage.InputUncached.Known || bucket.Usage.InputUncached.Tokens != 11 || bucket.Usage.Output.Known {
+				t.Fatalf("request usage lost known/unknown evidence: %+v", bucket.Usage)
+			}
+			return nil
+		})
+		if err != nil || calls != test.calls {
+			t.Fatalf("exchange=%q owner=%q: calls=%d want=%d err=%v", test.id, test.owner, calls, test.calls, err)
+		}
+	}
+}
+
 func TestUsagePaginationSnapshotInvalidationAndConcurrentWrite(t *testing.T) {
 	store := openTestStore(t, filepath.Join(t.TempDir(), "usage.db"))
 	defer shutdownTestStore(t, store)

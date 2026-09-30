@@ -724,6 +724,25 @@ final class WorkbenchController extends ChangeNotifier
     _usageQuery(days: 366, filters: scope.usageFilters, at: at),
   );
 
+  /// Read the independent, body-free ledger for exactly one request. Never use
+  /// a broader report as this request's usage when an older Server lacks the
+  /// filter or a preview/API implementation ignores it.
+  Future<RuntimeUsageReport> loadExchangeUsage(String exchangeId) async {
+    final report = await _api.runtimeUsage(
+      _usageQuery(days: 366, filters: {'exchange': exchangeId}),
+    );
+    if (report.filters.length != 1 ||
+        report.filters['exchange'] != exchangeId ||
+        report.dimension.isNotEmpty ||
+        report.total == null ||
+        report.total!.agentApiCalls > 1) {
+      throw const ControlContractException(
+        'request usage does not match its exact scope',
+      );
+    }
+    return report;
+  }
+
   List<ConversationSummary> get captureConversations =>
       selectedCaptureConversations?.items
           .map(ConversationSummary.fromRecord)

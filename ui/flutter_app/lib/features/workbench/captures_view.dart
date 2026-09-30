@@ -745,6 +745,7 @@ final class _CaptureConversationWorkspaceState
 
   double _directoryWidth = 260;
   final Set<String> _collapsed = <String>{};
+  final _conversationStorage = PageStorageBucket();
   String? _captureKey;
   String? _selectedSessionKey;
 
@@ -793,7 +794,8 @@ final class _CaptureConversationWorkspaceState
         controller.captureActivitiesLoading &&
             controller.selectedCapturePage == null
         ? CompactLoadingMessage(label: copy('common.loading'))
-        : EvidenceConversationTimeline(
+        : ConversationReadingView(
+            storage: _conversationStorage,
             key: ValueKey(
               'capture-timeline:${controller.selectedCaptureConversationKey ?? 'empty'}',
             ),
@@ -833,7 +835,11 @@ final class _CaptureConversationWorkspaceState
                   ButtonSegment(
                     value: true,
                     label: Text(
-                      copy('capture.summary.records'),
+                      copy(
+                        selected?.exchangeScoped == true
+                            ? 'reader.requests'
+                            : 'capture.summary.records',
+                      ),
                       softWrap: false,
                     ),
                   ),

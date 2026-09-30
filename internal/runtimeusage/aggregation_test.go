@@ -63,12 +63,16 @@ func TestAggregationWindowsAndValidation(t *testing.T) {
 		{Period: period, Filters: []Filter{{"caller", "a"}, {"caller", "b"}}},
 		{Period: period, Filters: []Filter{{"model", "\x00"}}},
 		{Period: period, Filters: []Filter{{"session", "same-id"}}},
+		{Period: period, Filters: []Filter{{"exchange", ""}}},
 	} {
 		if query.Validate() == nil {
 			t.Fatalf("accepted invalid query: %+v", query)
 		}
 	}
 	if err := (AggregationQuery{Period: period, Filters: []Filter{{"model", ""}, {"session", "same-id"}, {"client", "codex"}}}).Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if err := (AggregationQuery{Period: period, Filters: []Filter{{"exchange", "exchange-1"}}}).Validate(); err != nil {
 		t.Fatal(err)
 	}
 }

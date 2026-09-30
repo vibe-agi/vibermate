@@ -56,6 +56,7 @@ func (query AggregationQuery) Validate() error {
 	client := ""
 	for _, filter := range query.Filters {
 		if seen[filter.Dimension] || !filterDimension(filter.Dimension) || len(filter.ID) > 1024 ||
+			(filter.Dimension == "exchange" && filter.ID == "") ||
 			!utf8.ValidString(filter.ID) || strings.IndexFunc(filter.ID, unicode.IsControl) >= 0 {
 			return ErrInvalidQuery
 		}
@@ -79,7 +80,7 @@ func groupDimension(value string) bool {
 }
 
 func filterDimension(value string) bool {
-	return groupDimension(value) || value == "capture" || value == "manualCapture" || value == "session"
+	return groupDimension(value) || value == "capture" || value == "manualCapture" || value == "session" || value == "exchange"
 }
 
 func validSnapshot(value string) bool {
