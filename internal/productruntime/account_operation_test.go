@@ -72,7 +72,9 @@ func (wire *accountReadWire) RoundTrip(request *http.Request, _ providertranspor
 		if wire.failResetDetails {
 			return &http.Response{StatusCode: 503, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(strings.NewReader(`{"error":"temporary"}`))}, transportprofile.Evidence{}, nil
 		}
-		return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(strings.NewReader(`{"available_count":1,"credits":[{"id":"credit-fixture","reset_type":"codex_rate_limits","status":"available","granted_at":"2026-09-01T00:00:00Z","expires_at":"2026-10-01T00:00:00Z"}]}`))}, transportprofile.Evidence{}, nil
+		// This transport models an available credit, not a calendar-date expiry.
+		expires := time.Now().UTC().Add(24 * time.Hour).Format(time.RFC3339)
+		return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(strings.NewReader(fmt.Sprintf(`{"available_count":1,"credits":[{"id":"credit-fixture","reset_type":"codex_rate_limits","status":"available","granted_at":"2026-09-01T00:00:00Z","expires_at":%q}]}`, expires)))}, transportprofile.Evidence{}, nil
 	}
 	if request.URL.Path == "/backend-api/wham/profiles/me" {
 		return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(strings.NewReader(`{"stats":{"lifetime_tokens":1200}}`))}, transportprofile.Evidence{}, nil

@@ -231,14 +231,15 @@ const (
 )
 
 type ExchangeContentDetail struct {
-	State             ExchangeContentState         `json:"state"`
-	Mode              string                       `json:"mode,omitempty"`
-	RecordedAt        *time.Time                   `json:"recordedAt,omitempty"`
-	ExpiresAt         *time.Time                   `json:"expiresAt,omitempty"`
-	RequestProjection *ExchangeRequestProjection   `json:"requestProjection,omitempty"`
-	AgentConversation *AgentConversationProjection `json:"agentConversation,omitempty"`
-	Request           *exchangecontent.Request     `json:"request,omitempty"`
-	Response          *exchangecontent.Response    `json:"response,omitempty"`
+	Page              *exchangecontent.ProjectionPage `json:"page,omitempty"`
+	State             ExchangeContentState            `json:"state"`
+	Mode              string                          `json:"mode,omitempty"`
+	RecordedAt        *time.Time                      `json:"recordedAt,omitempty"`
+	ExpiresAt         *time.Time                      `json:"expiresAt,omitempty"`
+	RequestProjection *ExchangeRequestProjection      `json:"requestProjection,omitempty"`
+	AgentConversation *AgentConversationProjection    `json:"agentConversation,omitempty"`
+	Request           *exchangecontent.Request        `json:"request,omitempty"`
+	Response          *exchangecontent.Response       `json:"response,omitempty"`
 }
 
 // AgentConversationProjection is a rebuildable relationship view over the
@@ -460,18 +461,7 @@ func exchangeDetailOf(
 	}
 	if content != nil {
 		if content.Validate() != nil || content.View != requestView ||
-			content.ExchangeID != record.SubjectID ||
-			content.Parent.CaptureRunID != record.CaptureRunID ||
-			content.Parent.ManualCaptureID != record.ManualCaptureID ||
-			content.Frozen.EnvironmentID != record.EnvironmentID ||
-			content.Frozen.EnvironmentRevision != record.EnvironmentRevision ||
-			content.Frozen.EnvironmentDigest != record.EnvironmentDigest ||
-			content.Frozen.ClientEndpointID != record.ClientEndpointID ||
-			content.Frozen.ClientEndpointRevision != record.ClientEndpointRevision ||
-			content.Frozen.ProtocolPlanID != record.ProtocolPlanID ||
-			content.Frozen.ProtocolPlanRevision != record.ProtocolPlanRevision ||
-			content.Frozen.RouteID != record.RouteID ||
-			content.Frozen.RouteRevision != record.RouteRevision ||
+			!contentReferencesMatch(record, content.ExchangeID, content.Parent, content.Frozen) ||
 			!validRequestPresentation(content.Presentation, content.TotalMessageCount) {
 			return ExchangeDetail{}, errors.New("Exchange content does not match frozen Activity evidence")
 		}
@@ -483,11 +473,12 @@ func exchangeDetailOf(
 		// not a complete authority for a capture-wide agent relationship graph.
 		// Only project relationships when the request view contains the whole
 		// frozen transcript.
-		if content.View == exchangecontent.RequestViewFull ||
-			content.Presentation.InheritedMessageCount == 0 {
+		if content.Page == nil && (content.View == exchangecontent.RequestViewFull ||
+			content.Presentation.InheritedMessageCount == 0) {
 			agentConversation = agentConversationProjection(*content)
 		}
 		detail.Content = ExchangeContentDetail{
+			Page:  content.Page,
 			State: ExchangeContentRecorded, Mode: string(content.Mode),
 			RecordedAt: &recordedAt, ExpiresAt: &expiresAt,
 			AgentConversation: agentConversation,
@@ -663,14 +654,21 @@ func parseExchangeContentView(rawQuery string) (ExchangeContentView, error) {
 	if err != nil {
 		return "", errInvalidActivityQuery
 	}
-	if len(values) == 0 {
-		return ExchangeContentViewIncremental, nil
+	for key, entries := range values {
+		if len(entries) != 1 || (key != "contentView" && key != "contentMode" && key != "contentCursor") {
+			return "", errInvalidActivityQuery
+		}
 	}
-	entries, present := values["contentView"]
-	if !present || len(values) != 1 || len(entries) != 1 {
+	if entries, ok := values["contentMode"]; ok && entries[0] != "paged" {
 		return "", errInvalidActivityQuery
 	}
-	view := ExchangeContentView(entries[0])
+	if entries, ok := values["contentCursor"]; ok && (entries[0] == "" || len(entries[0]) > exchangecontent.MaxPageCursorBytes || values.Get("contentMode") != "paged" || values.Has("contentView")) {
+		return "", errInvalidActivityQuery
+	}
+	view := ExchangeContentViewIncremental
+	if values.Has("contentView") {
+		view = ExchangeContentView(values.Get("contentView"))
+	}
 	if view != ExchangeContentViewIncremental && view != ExchangeContentViewFull {
 		return "", errInvalidActivityQuery
 	}
@@ -752,6 +750,20 @@ func (handler *Handler) getExchange(writer http.ResponseWriter, request *http.Re
 		writeProblem(writer, http.StatusServiceUnavailable, ReasonRuntimeUnavailable)
 		return
 	}
+	if cursor := request.URL.Query().Get("contentCursor"); cursor != "" {
+		page, pageErr := handler.contents.GetContentPage(request.Context(), exchangeID, cursor)
+		switch {
+		case errors.Is(pageErr, exchangecontent.ErrNotFound):
+			writeProblem(writer, http.StatusNotFound, ReasonExchangeNotFound)
+		case errors.Is(pageErr, exchangecontent.ErrInvalidEvidence):
+			writeProblem(writer, http.StatusUnprocessableEntity, ReasonInvalidRequest)
+		case pageErr != nil || !contentReferencesMatch(record, page.ExchangeID, page.Parent, page.Frozen):
+			writeProblem(writer, http.StatusServiceUnavailable, ReasonRuntimeUnavailable)
+		default:
+			writeJSON(writer, http.StatusOK, page)
+		}
+		return
+	}
 	egressPage, err := handler.egress.List(request.Context(), egressaudit.PageRequest{Limit: egressaudit.MaxPageLimit, ExchangeID: exchangeID})
 	if err != nil {
 		writeProblem(writer, http.StatusServiceUnavailable, ReasonRuntimeUnavailable)
@@ -763,9 +775,11 @@ func (handler *Handler) getExchange(writer http.ResponseWriter, request *http.Re
 		return
 	}
 	var content *exchangecontent.Projection
-	contentProjection, contentErr := handler.contents.GetProjection(
-		request.Context(), exchangeID, requestView,
-	)
+	readContent := handler.contents.GetProjection
+	if request.URL.Query().Get("contentMode") == "paged" {
+		readContent = handler.contents.GetPagedProjection
+	}
+	contentProjection, contentErr := readContent(request.Context(), exchangeID, requestView)
 	switch {
 	case contentErr == nil:
 		content = &contentProjection
@@ -798,4 +812,14 @@ func (handler *Handler) getExchange(writer http.ResponseWriter, request *http.Re
 		}
 	}
 	writeJSON(writer, http.StatusOK, detail)
+}
+
+func contentReferencesMatch(record activity.Record, id string, parent exchangecontent.ParentRef, frozen exchangecontent.FrozenRef) bool {
+	return id == record.SubjectID && parent.CaptureRunID == record.CaptureRunID && parent.ManualCaptureID == record.ManualCaptureID &&
+		frozen == (exchangecontent.FrozenRef{
+			EnvironmentID: record.EnvironmentID, EnvironmentRevision: record.EnvironmentRevision, EnvironmentDigest: record.EnvironmentDigest,
+			ClientEndpointID: record.ClientEndpointID, ClientEndpointRevision: record.ClientEndpointRevision,
+			ProtocolPlanID: record.ProtocolPlanID, ProtocolPlanRevision: record.ProtocolPlanRevision,
+			RouteID: record.RouteID, RouteRevision: record.RouteRevision,
+		})
 }

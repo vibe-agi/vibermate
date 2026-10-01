@@ -2850,6 +2850,18 @@ final class PreviewControlApi implements ControlApi {
   }
 
   @override
+  Future<ExchangeContentPage> exchangeContentPage(
+    String exchangeId,
+    String cursor,
+  ) async {
+    _requireOpen();
+    // Preview's retained fixtures fit in one page and issue no remote cursors.
+    throw const ControlContractException(
+      'Preview content cursor is unavailable',
+    );
+  }
+
+  @override
   Future<RawEvidencePage> rawEvidence(String exchangeId) async {
     _requireOpen();
     if (!_allPreviewActivities().any((value) => value.id == exchangeId)) {

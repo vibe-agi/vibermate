@@ -20,6 +20,7 @@ import 'raw_evidence_diff_dialog.dart';
 import 'usage_dashboard_view.dart' show usageCostLabel;
 
 part 'conversation_reader.dart';
+part 'content_page_view.dart';
 
 final class EvidenceConversationTimeline extends StatefulWidget {
   const EvidenceConversationTimeline({
@@ -455,7 +456,12 @@ final class _EvidenceConversationTimelineState
   }
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => _ContentPageScope(
+    controller: widget.controller,
+    child: Builder(builder: _buildTimeline),
+  );
+
+  Widget _buildTimeline(BuildContext context) {
     final activities = _ordered;
     if (activities.isEmpty) {
       return CenteredMessage(
@@ -1168,6 +1174,13 @@ final class _ExchangeEvidencePanel extends StatelessWidget {
                 );
               },
             ),
+            if (content.page?.requestNextCursor case final cursor?)
+              _ContentPageButton(
+                exchangeId: detail.id,
+                cursor: cursor,
+                copy: copy,
+                label: copy('content_page.earlier'),
+              ),
             if (!showFull && fullLoadError != null) ...[
               const SizedBox(height: 6),
               InlineNotice(message: fullLoadError, error: true),
@@ -1697,7 +1710,25 @@ final class _EvidenceDisclosureState extends State<_EvidenceDisclosure> {
                 label: Text(copy('common.technical_details')),
               ),
             ),
-            if (_technical) _FrozenEvidence(detail: detail, copy: copy),
+            if (_technical) ...[
+              _FrozenEvidence(detail: detail, copy: copy),
+              if (detail.content.page?.requestEvidenceNextCursor
+                  case final cursor?)
+                _ContentPageButton(
+                  exchangeId: detail.id,
+                  cursor: cursor,
+                  copy: copy,
+                  label: copy('content_page.request_metadata'),
+                ),
+              if (detail.content.page?.responseEvidenceNextCursor
+                  case final cursor?)
+                _ContentPageButton(
+                  exchangeId: detail.id,
+                  cursor: cursor,
+                  copy: copy,
+                  label: copy('content_page.response_metadata'),
+                ),
+            ],
           ],
         ],
       ),
@@ -2893,14 +2924,15 @@ final class _MessageCardState extends State<_MessageCard> {
                         ),
                         const SizedBox(width: 6),
                       ],
-                      _CopyValueButton(
-                        key: Key('copy-message-${widget.id}'),
-                        tooltip: copy.format('common.copy', {
-                          'field': copy('exchange.content.value'),
-                        }),
-                        value: () =>
-                            _contentBlocksClipboardText(message.blocks),
-                      ),
+                      if (_hasCopyableContent(message.blocks))
+                        _CopyValueButton(
+                          key: Key('copy-message-${widget.id}'),
+                          tooltip: copy.format('common.copy', {
+                            'field': copy('exchange.content.value'),
+                          }),
+                          value: () =>
+                              _contentBlocksClipboardText(message.blocks),
+                        ),
                       const SizedBox(width: 2),
                       Icon(
                         _expanded ? Icons.expand_less : Icons.expand_more,
@@ -2949,13 +2981,14 @@ final class _MessageCardState extends State<_MessageCard> {
                     ),
                   ],
                   const Spacer(),
-                  _CopyValueButton(
-                    key: Key('copy-message-${widget.id}'),
-                    tooltip: copy.format('common.copy', {
-                      'field': copy('exchange.content.value'),
-                    }),
-                    value: () => _contentBlocksClipboardText(message.blocks),
-                  ),
+                  if (_hasCopyableContent(message.blocks))
+                    _CopyValueButton(
+                      key: Key('copy-message-${widget.id}'),
+                      tooltip: copy.format('common.copy', {
+                        'field': copy('exchange.content.value'),
+                      }),
+                      value: () => _contentBlocksClipboardText(message.blocks),
+                    ),
                 ],
               ),
             ),
@@ -3124,6 +3157,9 @@ String _contentBlocksClipboardText(Iterable<ExchangeContentBlock> blocks) =>
         .where((value) => value.isNotEmpty)
         .join('\n\n');
 
+bool _hasCopyableContent(Iterable<ExchangeContentBlock> blocks) =>
+    blocks.any((b) => (b.text?.isNotEmpty ?? false) || b.arguments != null);
+
 final class _CopyValueButton extends StatefulWidget {
   const _CopyValueButton({
     required this.tooltip,
@@ -3261,6 +3297,19 @@ final class _ContentBlocksView extends StatelessWidget {
     }
 
     for (final (index, block) in blocks.indexed) {
+      if (block.deferred case final deferred?) {
+        flushOrdinary();
+        flushReasoning();
+        children.add(
+          _ContentPageButton(
+            exchangeId: deferred.exchangeId,
+            cursor: deferred.cursor,
+            estimatedBytes: deferred.estimatedBytes,
+            copy: copy,
+          ),
+        );
+        continue;
+      }
       if (block.kind == 'reasoning') {
         flushOrdinary();
         reasoning.add(MapEntry(index, block));

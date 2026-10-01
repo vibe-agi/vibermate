@@ -419,6 +419,8 @@ func (repository *exchangeContentRepository) GetProjection(
 		responseMessage,
 		reference.requestCount,
 		reference.inherited,
+		exchangecontent.RequestViewIncremental,
+		nil,
 	)
 	if err != nil {
 		return exchangecontent.Projection{}, err
@@ -459,7 +461,7 @@ func (repository *exchangeContentRepository) AvailableBodies(ctx context.Context
 }
 
 // RequestPreviews resolves the final request message for a bounded Activity
-// page in two set-oriented reads. It verifies the content-addressed terminal
+// page using bounded metadata and payload reads. It verifies the terminal
 // node and the rebuilt message digest; full-chain verification remains the
 // responsibility of Get/GetProjection when an operator opens the evidence.
 func (repository *exchangeContentRepository) RequestPreviews(
@@ -549,7 +551,19 @@ func (repository *exchangeContentRepository) RequestPreviews(
 		return nil, fmt.Errorf("close Exchange request preview roots: %w", err)
 	}
 
-	messages, err := loadStoredMessagesByDigest(operation, repository.database, digests)
+	// Snippets are optional: never inflate a multi-MiB tool return just to
+	// render a directory row. Full content stays available through paging.
+	inlineDigests := make([]string, 0, len(digests))
+	for _, digest := range uniqueStrings(digests) {
+		size, count, err := repository.inlineMessageSize(operation, digest, exchangecontent.PageMessageLimit)
+		if err != nil {
+			return nil, err
+		}
+		if size <= 16<<10 && count <= exchangecontent.PageMessageLimit {
+			inlineDigests = append(inlineDigests, digest)
+		}
+	}
+	messages, err := loadStoredMessagesByDigest(operation, repository.database, inlineDigests)
 	if err != nil {
 		return nil, err
 	}
@@ -557,7 +571,7 @@ func (repository *exchangeContentRepository) RequestPreviews(
 	for exchangeID, terminal := range terminals {
 		message, exists := messages[terminal.messageDigest]
 		if !exists {
-			return nil, exchangecontent.ErrInvalidEvidence
+			continue
 		}
 		if preview, ok := exchangecontent.PreviewRequestMessage(message); ok {
 			previews[exchangeID] = preview
@@ -872,6 +886,8 @@ func projectionFromStoredManifest(
 	responseMessage *exchangecontent.Message,
 	totalMessageCount int,
 	inherited int,
+	view exchangecontent.RequestView,
+	page *exchangecontent.ProjectionPage,
 ) (exchangecontent.Projection, error) {
 	presentationMode := exchangecontent.RequestPresentationCheckpoint
 	if inherited > 0 {
@@ -881,6 +897,7 @@ func projectionFromStoredManifest(
 		}
 	}
 	projection := exchangecontent.Projection{
+		Page:       page,
 		ExchangeID: manifest.ExchangeID,
 		Parent:     manifest.Parent,
 		Frozen:     manifest.Frozen,
@@ -904,7 +921,7 @@ func projectionFromStoredManifest(
 			Mode:                  presentationMode,
 			InheritedMessageCount: inherited,
 		},
-		View:              exchangecontent.RequestViewIncremental,
+		View:              view,
 		TotalMessageCount: totalMessageCount,
 	}
 	if manifest.Response != nil {

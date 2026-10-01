@@ -8637,6 +8637,7 @@ final class ExchangeContentBlock {
     required this.providerKind,
     required this.fingerprint,
     required this.agent,
+    this.deferred,
   });
 
   factory ExchangeContentBlock.fromJson(Object? json, String path) {
@@ -8656,6 +8657,7 @@ final class ExchangeContentBlock {
         'providerKind',
         'fingerprint',
         'agent',
+        'deferred',
       },
     );
     final kind = requireString(value, 'kind', path);
@@ -8668,12 +8670,30 @@ final class ExchangeContentBlock {
           'tool_result',
           'reasoning',
           'provider_extension',
+          'deferred',
         }.contains(kind) ||
         !const {'recorded', 'omitted'}.contains(availability) ||
         (toolErrorValue != null && toolErrorValue is! bool)) {
       throw ControlContractException('$path content block is unsupported');
     }
     final text = optionalString(value, 'text', path);
+    final deferred = value['deferred'] == null
+        ? null
+        : DeferredExchangeContent.fromJson(value['deferred'], '$path.deferred');
+    if ((kind == 'deferred') != (deferred != null) ||
+        (deferred != null &&
+            (availability != 'recorded' ||
+                requireInteger(value, 'originalSize', path) != 0 ||
+                value.keys.any(
+                  (key) => !const {
+                    'kind',
+                    'availability',
+                    'originalSize',
+                    'deferred',
+                  }.contains(key),
+                )))) {
+      throw ControlContractException('$path deferred content is invalid');
+    }
     final arguments = value['arguments'] == null
         ? null
         : requireObject(value['arguments'], '$path.arguments');
@@ -8696,6 +8716,7 @@ final class ExchangeContentBlock {
       agent: value['agent'] == null
           ? null
           : ExchangeAgentContext.fromJson(value['agent'], '$path.agent'),
+      deferred: deferred,
     );
   }
 
@@ -8712,6 +8733,220 @@ final class ExchangeContentBlock {
   final String? providerKind;
   final String? fingerprint;
   final ExchangeAgentContext? agent;
+  final DeferredExchangeContent? deferred;
+}
+
+String? _contentPageCursor(JsonObject value, String field, String path) {
+  final cursor = optionalString(value, field, path);
+  if (cursor != null &&
+      (cursor.isEmpty ||
+          cursor.length > 2048 ||
+          !RegExp(r'^[A-Za-z0-9_-]+$').hasMatch(cursor))) {
+    throw ControlContractException('$path.$field content cursor is invalid');
+  }
+  return cursor;
+}
+
+final class DeferredExchangeContent {
+  const DeferredExchangeContent({
+    required this.exchangeId,
+    required this.cursor,
+    required this.estimatedBytes,
+  });
+  factory DeferredExchangeContent.fromJson(Object? json, String path) {
+    final value = requireObject(json, path);
+    requireFields(
+      value,
+      path,
+      required: const {'exchangeId', 'cursor', 'estimatedBytes'},
+    );
+    final cursor = _contentPageCursor(value, 'cursor', path);
+    final size = requireInteger(value, 'estimatedBytes', path);
+    if (cursor == null || size > 32 * 1024 * 1024) {
+      throw ControlContractException('$path deferred content is invalid');
+    }
+    return DeferredExchangeContent(
+      exchangeId: requireString(value, 'exchangeId', path),
+      cursor: cursor,
+      estimatedBytes: size,
+    );
+  }
+  final String exchangeId;
+  final String cursor;
+  final int estimatedBytes;
+}
+
+final class ExchangeContentPaging {
+  const ExchangeContentPaging({
+    required this.requestOffset,
+    this.requestNextCursor,
+    this.requestEvidenceNextCursor,
+    this.responseEvidenceNextCursor,
+  });
+  factory ExchangeContentPaging.fromJson(Object? json, String path) {
+    final value = requireObject(json, path);
+    requireFields(
+      value,
+      path,
+      required: const {'requestOffset'},
+      optional: const {
+        'requestNextCursor',
+        'requestEvidenceNextCursor',
+        'responseEvidenceNextCursor',
+      },
+    );
+    return ExchangeContentPaging(
+      requestOffset: requireInteger(value, 'requestOffset', path),
+      requestNextCursor: _contentPageCursor(value, 'requestNextCursor', path),
+      requestEvidenceNextCursor: _contentPageCursor(
+        value,
+        'requestEvidenceNextCursor',
+        path,
+      ),
+      responseEvidenceNextCursor: _contentPageCursor(
+        value,
+        'responseEvidenceNextCursor',
+        path,
+      ),
+    );
+  }
+  final int requestOffset;
+  final String? requestNextCursor;
+  final String? requestEvidenceNextCursor, responseEvidenceNextCursor;
+}
+
+final class ExchangeContentPage {
+  const ExchangeContentPage({
+    required this.exchangeId,
+    required this.kind,
+    required this.messages,
+    required this.blocks,
+    required this.text,
+    required this.offset,
+    required this.total,
+    this.nextCursor,
+    this.protocolEvidence = const [],
+    this.blockKind,
+    this.callId,
+    this.toolName,
+  });
+  factory ExchangeContentPage.fromJson(Object? json, String path) {
+    final value = requireObject(json, path);
+    requireFields(
+      value,
+      path,
+      required: const {
+        'exchangeId',
+        'kind',
+        'messages',
+        'blocks',
+        'offset',
+        'total',
+      },
+      optional: const {
+        'text',
+        'nextCursor',
+        'protocolEvidence',
+        'blockKind',
+        'callId',
+        'toolName',
+      },
+    );
+    final messages = requireList(value['messages'], '$path.messages').indexed
+        .map(
+          (e) =>
+              ExchangeContentMessage.fromJson(e.$2, '$path.messages[${e.$1}]'),
+        )
+        .toList(growable: false);
+    final blocks = requireList(value['blocks'], '$path.blocks').indexed
+        .map(
+          (e) => ExchangeContentBlock.fromJson(e.$2, '$path.blocks[${e.$1}]'),
+        )
+        .toList(growable: false);
+    final kind = requireString(value, 'kind', path);
+    final protocolEvidence = _agentClientEvidenceValues(
+      value['protocolEvidence'],
+      '$path.protocolEvidence',
+      singleValueNames: true,
+    );
+    final offset = requireInteger(value, 'offset', path);
+    final total = requireInteger(value, 'total', path);
+    final text = optionalString(value, 'text', path) ?? '';
+    final valid = switch (kind) {
+      'protocol' =>
+        messages.isEmpty &&
+            blocks.isEmpty &&
+            text.isEmpty &&
+            protocolEvidence.length <= 24 &&
+            offset + protocolEvidence.length <= total &&
+            total <= 8192,
+      'request' =>
+        blocks.isEmpty &&
+            text.isEmpty &&
+            messages.length <= 24 &&
+            offset + messages.length <= total &&
+            total <= 100001,
+      'message' =>
+        messages.isEmpty &&
+            text.isEmpty &&
+            blocks.length <= 24 &&
+            offset + blocks.length <= total &&
+            total <= 16384,
+      'text' || 'arguments' =>
+        messages.isEmpty &&
+            blocks.isEmpty &&
+            utf8.encode(text).length <= 32 * 1024 &&
+            offset + utf8.encode(text).length <= total &&
+            total <= 32 * 1024 * 1024,
+      _ => false,
+    };
+    if (!valid ||
+        offset > total ||
+        (kind != 'protocol' && protocolEvidence.isNotEmpty)) {
+      throw ControlContractException('$path content page is inconsistent');
+    }
+    final exchangeId = requireString(value, 'exchangeId', path);
+    _requireDeferredOwners(
+      [...blocks, for (final message in messages) ...message.blocks],
+      exchangeId,
+      path,
+    );
+    return ExchangeContentPage(
+      exchangeId: exchangeId,
+      protocolEvidence: protocolEvidence,
+      blockKind: optionalString(value, 'blockKind', path),
+      callId: optionalString(value, 'callId', path),
+      toolName: optionalString(value, 'toolName', path),
+      kind: kind,
+      messages: messages,
+      blocks: blocks,
+      text: text,
+      offset: offset,
+      total: total,
+      nextCursor: _contentPageCursor(value, 'nextCursor', path),
+    );
+  }
+  final String exchangeId, kind, text;
+  final List<ExchangeContentMessage> messages;
+  final List<ExchangeContentBlock> blocks;
+  final int offset, total;
+  final String? nextCursor;
+  final List<AgentClientEvidenceValue> protocolEvidence;
+  final String? blockKind, callId, toolName;
+}
+
+void _requireDeferredOwners(
+  Iterable<ExchangeContentBlock> blocks,
+  String exchangeId,
+  String path,
+) {
+  for (final block in blocks) {
+    if (block.deferred != null && block.deferred!.exchangeId != exchangeId) {
+      throw ControlContractException(
+        '$path unloaded content belongs to another Exchange',
+      );
+    }
+  }
 }
 
 final class ExchangeContentMessage {
@@ -8737,9 +8972,16 @@ final class ExchangeContentMessage {
           'user',
           'assistant',
           'tool',
+          'unknown',
         }.contains(role) ||
         rawBlocks.isEmpty) {
       throw ControlContractException('$path message is invalid');
+    }
+    if (role == 'unknown' &&
+        (value['agent'] != null ||
+            rawBlocks.length != 1 ||
+            requireObject(rawBlocks.single, path)['kind'] != 'deferred')) {
+      throw ControlContractException('$path unloaded message asserts a role');
     }
     return ExchangeContentMessage(
       role: role,
@@ -9274,6 +9516,7 @@ final class ExchangeContentDetail {
     required this.agentConversation,
     required this.request,
     required this.response,
+    this.page,
   });
 
   factory ExchangeContentDetail.fromJson(Object? json, String path) {
@@ -9306,7 +9549,7 @@ final class ExchangeContentDetail {
         'requestProjection',
         'request',
       },
-      optional: const {'agentConversation', 'response'},
+      optional: const {'agentConversation', 'response', 'page'},
     );
     final mode = requireString(value, 'mode', path);
     final recordedAt = requireTimestamp(value, 'recordedAt', path);
@@ -9316,12 +9559,21 @@ final class ExchangeContentDetail {
       '$path.requestProjection',
     );
     final request = ExchangeRequest.fromJson(value['request'], '$path.request');
+    final page = value['page'] == null
+        ? null
+        : ExchangeContentPaging.fromJson(value['page'], '$path.page');
     final expectedMessages = projection.view == 'full'
         ? projection.totalMessageCount
         : projection.totalMessageCount - projection.inheritedMessageCount;
     if (!const {'full', 'metadata_only'}.contains(mode) ||
         !expiresAt.isAfter(recordedAt) ||
-        request.messages.length != expectedMessages) {
+        (page == null
+            ? request.messages.length != expectedMessages
+            : request.messages.length > 24 ||
+                  page.requestOffset <
+                      projection.totalMessageCount - expectedMessages ||
+                  page.requestOffset + request.messages.length >
+                      projection.totalMessageCount)) {
       throw ControlContractException('$path recorded content is inconsistent');
     }
     return ExchangeContentDetail(
@@ -9330,6 +9582,7 @@ final class ExchangeContentDetail {
       recordedAt: recordedAt,
       expiresAt: expiresAt,
       requestProjection: projection,
+      page: page,
       agentConversation: value['agentConversation'] == null
           ? null
           : AgentConversationProjection.fromJson(
@@ -9351,6 +9604,7 @@ final class ExchangeContentDetail {
   final AgentConversationProjection? agentConversation;
   final ExchangeRequest? request;
   final ExchangeResponse? response;
+  final ExchangeContentPaging? page;
 }
 
 final class ExchangeProcessingTrace {
@@ -9438,6 +9692,21 @@ final class ExchangeDetail {
         trace.attempts.any((attempt) => attempt.exchangeId != id)) {
       throw ControlContractException('$path Exchange evidence is inconsistent');
     }
+    final content = ExchangeContentDetail.fromJson(
+      value['content'],
+      '$path.content',
+    );
+    _requireDeferredOwners(
+      [
+        ...?content.request?.system,
+        for (final message
+            in content.request?.messages ?? const <ExchangeContentMessage>[])
+          ...message.blocks,
+        ...?content.response?.blocks,
+      ],
+      id,
+      path,
+    );
     return ExchangeDetail(
       id: id,
       status: status,
@@ -9450,10 +9719,7 @@ final class ExchangeDetail {
           ? null
           : ExchangeDiagnosis.fromJson(value['diagnosis'], '$path.diagnosis'),
       processingTrace: trace,
-      content: ExchangeContentDetail.fromJson(
-        value['content'],
-        '$path.content',
-      ),
+      content: content,
       clientIdentity: value['clientIdentity'] == null
           ? null
           : AgentClientIdentity.fromJson(

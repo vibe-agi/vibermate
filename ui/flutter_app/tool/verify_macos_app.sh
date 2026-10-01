@@ -30,9 +30,13 @@ fi
 
 bundle_id="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "${app}/Contents/Info.plist")"
 app_executable_name="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "${app}/Contents/Info.plist")"
-if [[ "${bundle_id}" != "io.vibermate.desktop" ||
+expected_bundle_id="io.vibermate.desktop"
+if [[ "${mode}" == "preview" ]]; then
+  expected_bundle_id="io.vibermate.preview"
+fi
+if [[ "${bundle_id}" != "${expected_bundle_id}" ||
   "${app_executable_name}" != "vibermate-desktop" ]]; then
-  echo "App identity is not the shared Desktop authority" >&2
+  echo "App identity does not match its ${mode} authority" >&2
   exit 70
 fi
 

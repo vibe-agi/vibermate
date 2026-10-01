@@ -104,7 +104,10 @@ final class _ConversationReadingViewState
     final newest = _ordered.lastOrNull;
     if (newest != null && !previous.contains(newest.id)) {
       final restore = _beforeLayoutChange();
-      if (!_follow || _selection != null || !_reading) {
+      if (!_follow ||
+          _selection != null ||
+          !_reading ||
+          !(ModalRoute.of(context)?.isCurrent ?? true)) {
         _unread += ids.difference(previous).length;
       }
       restore();
@@ -145,7 +148,11 @@ final class _ConversationReadingViewState
   VoidCallback _beforeLayoutChange() {
     if (!_scroll.hasClients) return () {};
     final position = _scroll.offset;
-    final follow = _follow && _reading && _selection == null;
+    final follow =
+        _follow &&
+        _reading &&
+        _selection == null &&
+        (ModalRoute.of(context)?.isCurrent ?? true);
     GlobalKey? anchor;
     double? anchorY;
     final viewport = _scroll.position.context.storageContext.findRenderObject();
@@ -273,7 +280,12 @@ final class _ConversationReadingViewState
   }
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => _ContentPageScope(
+    controller: widget.controller,
+    child: Builder(builder: _buildReader),
+  );
+
+  Widget _buildReader(BuildContext context) {
     if (widget.activities.isEmpty) {
       return CenteredMessage(
         icon: Icons.chat_bubble_outline,
@@ -654,10 +666,24 @@ final class _ConversationReadingViewState
                   key: PageStorageKey('reader-panel-$_panelKey'),
                   controller: _panelScroll,
                   padding: const EdgeInsets.all(12),
-                  itemCount: tab == 0
-                      ? instructions.length + (system.isEmpty ? 0 : 1)
-                      : history.length + 1,
+                  itemCount:
+                      (tab == 0
+                          ? instructions.length + (system.isEmpty ? 0 : 1)
+                          : history.length + 1) +
+                      (content.page?.requestNextCursor == null ? 0 : 1),
                   itemBuilder: (context, index) {
+                    final count = tab == 0
+                        ? instructions.length + (system.isEmpty ? 0 : 1)
+                        : history.length + 1;
+                    if (index == count &&
+                        content.page?.requestNextCursor != null) {
+                      return _ContentPageButton(
+                        exchangeId: detail.id,
+                        cursor: content.page!.requestNextCursor!,
+                        copy: copy,
+                        label: copy('content_page.earlier'),
+                      );
+                    }
                     if (tab == 1 && index == 0) {
                       return Padding(
                         padding: const EdgeInsets.only(bottom: 12),
@@ -925,7 +951,9 @@ final class _ConversationReadingViewState
 
 List<ExchangeContentBlock> _readerText(Iterable<ExchangeContentBlock> blocks) =>
     blocks
-        .where((b) => b.kind == 'text' || b.kind == 'refusal')
+        .where(
+          (b) => b.kind == 'text' || b.kind == 'refusal' || b.deferred != null,
+        )
         .toList(growable: false);
 
 final class _ReadingRequest extends StatefulWidget {
@@ -1126,6 +1154,13 @@ final class _ReadingRequestState extends State<_ReadingRequest> {
                 ),
               ),
             ),
+          if (incremental && content.page?.requestNextCursor != null)
+            _ContentPageButton(
+              exchangeId: detail.id,
+              cursor: content.page!.requestNextCursor!,
+              copy: copy,
+              label: copy('content_page.earlier'),
+            ),
           for (final (index, message) in inputs.indexed)
             if (message.role != 'system' &&
                 message.role != 'developer' &&
@@ -1273,13 +1308,16 @@ final class _ReadingMessage extends StatelessWidget {
                   onPressed: onUsage!,
                 ),
               ),
-            _CopyValueButton(
-              key: Key('reader-copy-$id'),
-              tooltip: copy.format('common.copy', {
-                'field': copy('exchange.content.value'),
-              }),
-              value: () => _contentBlocksClipboardText(blocks),
-            ),
+            if (_hasCopyableContent(blocks))
+              _CopyValueButton(
+                key: Key('reader-copy-$id'),
+                tooltip: blocks.any((b) => b.deferred != null)
+                    ? copy('content_page.copy')
+                    : copy.format('common.copy', {
+                        'field': copy('exchange.content.value'),
+                      }),
+                value: () => _contentBlocksClipboardText(blocks),
+              ),
           ],
         ),
         Container(

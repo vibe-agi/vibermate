@@ -1953,6 +1953,13 @@ final class WorkbenchController extends ChangeNotifier
     return load;
   }
 
+  // Page ownership stays with the visible inspector; do not accumulate every
+  // visited history/body page in the shared Exchange cache.
+  Future<ExchangeContentPage> loadExchangeContentPage(
+    String exchangeId,
+    String cursor,
+  ) => _api.exchangeContentPage(exchangeId, cursor);
+
   Future<ExchangeDetail?> _fetchExchangeDetail(
     String key,
     String exchangeId, {

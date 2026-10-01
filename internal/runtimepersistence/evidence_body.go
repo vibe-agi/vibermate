@@ -46,7 +46,9 @@ func mustZstdWriter() *zstd.Encoder {
 }
 
 func mustZstdReader() *zstd.Decoder {
-	decoder, err := zstd.NewReader(nil)
+	// Every DecodeAll caller supplies the validated retained plain-byte count
+	// as capacity. A forged compressed frame must not inflate output beyond it.
+	decoder, err := zstd.NewReader(nil, zstd.WithDecodeAllCapLimit(true), zstd.WithDecoderMaxMemory(64<<20))
 	if err != nil {
 		panic(fmt.Errorf("construct evidence body decoder: %w", err))
 	}
@@ -234,7 +236,7 @@ func loadEvidenceChunks(
 		if err := rows.Scan(&digest, &plainBytes, &codec, &stored); err != nil {
 			return nil, fmt.Errorf("scan evidence chunk: %w", err)
 		}
-		if plainBytes > evidencechunk.MaximumBytes {
+		if plainBytes < 1 || plainBytes > evidencechunk.MaximumBytes {
 			return nil, errors.New("stored evidence chunk length is out of range")
 		}
 		switch codec {

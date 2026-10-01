@@ -11,6 +11,7 @@ import (
 	"fmt"
 
 	"github.com/vibe-agi/vibermate/internal/exchangecontent"
+	"github.com/vibe-agi/vibermate/internal/protocolcore"
 )
 
 const storedDigestHexBytes = 2 * sha256.Size
@@ -186,8 +187,10 @@ func loadStoredBlock(
 	if err := queryer.QueryRowContext(
 		ctx,
 		`SELECT plain_bytes, codec, payload
-		   FROM runtime_exchange_content_blocks WHERE digest = ?`,
-		digest,
+		   FROM runtime_exchange_content_blocks WHERE digest = ?
+		   AND plain_bytes BETWEEN 1 AND ? AND length(payload)<=?
+		   AND codec IN ('identity','zstd')`,
+		digest, exchangecontent.MaxEncodedBytes, exchangecontent.MaxEncodedBytes,
 	).Scan(&plainBytes, &codec, &stored); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return exchangecontent.Block{}, exchangecontent.ErrInvalidEvidence
@@ -207,7 +210,7 @@ func decodeStoredBlockPayload(
 	codec string,
 	stored []byte,
 ) (exchangecontent.Block, error) {
-	if plainBytes > exchangecontent.MaxEncodedBytes {
+	if plainBytes < 1 || plainBytes > exchangecontent.MaxEncodedBytes || len(stored) > exchangecontent.MaxEncodedBytes {
 		return exchangecontent.Block{}, exchangecontent.ErrInvalidEvidence
 	}
 	switch codec {
@@ -307,8 +310,10 @@ func loadStoredMessagesByDigest(
 		`SELECT messages.digest, messages.role, messages.agent_json,
 		        messages.block_manifest
 		   FROM runtime_exchange_content_messages AS messages
-		   JOIN json_each(?) AS wanted ON wanted.value = messages.digest`,
-		string(wanted),
+	   JOIN json_each(?) AS wanted ON wanted.value = messages.digest
+	   WHERE length(messages.block_manifest) BETWEEN 64 AND ?
+	     AND coalesce(length(messages.agent_json),0)<=4096`,
+		string(wanted), 64*protocolcore.MaxContentBlocks,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("load Exchange content messages: %w", err)
@@ -390,8 +395,10 @@ func loadStoredBlocksByDigest(
 		ctx,
 		`SELECT blocks.digest, blocks.plain_bytes, blocks.codec, blocks.payload
 		   FROM runtime_exchange_content_blocks AS blocks
-		   JOIN json_each(?) AS wanted ON wanted.value = blocks.digest`,
-		string(wanted),
+	   JOIN json_each(?) AS wanted ON wanted.value = blocks.digest
+	   WHERE blocks.plain_bytes BETWEEN 1 AND ? AND length(blocks.payload)<=?
+	     AND blocks.codec IN ('identity','zstd')`,
+		string(wanted), exchangecontent.MaxEncodedBytes, exchangecontent.MaxEncodedBytes,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("load Exchange content blocks: %w", err)
