@@ -140,19 +140,21 @@ const (
 )
 
 type Block struct {
-	Kind           string          `json:"kind"`
-	Availability   Availability    `json:"availability"`
-	Text           string          `json:"text,omitempty"`
-	OriginalSize   int             `json:"originalSize"`
-	CallID         string          `json:"callId,omitempty"`
-	ToolName       string          `json:"toolName,omitempty"`
-	ToolNamespace  string          `json:"toolNamespace,omitempty"`
-	Arguments      json.RawMessage `json:"arguments,omitempty"`
-	ToolError      bool            `json:"toolError,omitempty"`
-	ProviderSource string          `json:"providerSource,omitempty"`
-	ProviderKind   string          `json:"providerKind,omitempty"`
-	Fingerprint    string          `json:"fingerprint,omitempty"`
-	Agent          *AgentContext   `json:"agent,omitempty"`
+	// Deferred exists only in bounded read projections; Record.Validate refuses it.
+	Deferred       *DeferredContent `json:"deferred,omitempty"`
+	Kind           string           `json:"kind"`
+	Availability   Availability     `json:"availability"`
+	Text           string           `json:"text,omitempty"`
+	OriginalSize   int              `json:"originalSize"`
+	CallID         string           `json:"callId,omitempty"`
+	ToolName       string           `json:"toolName,omitempty"`
+	ToolNamespace  string           `json:"toolNamespace,omitempty"`
+	Arguments      json.RawMessage  `json:"arguments,omitempty"`
+	ToolError      bool             `json:"toolError,omitempty"`
+	ProviderSource string           `json:"providerSource,omitempty"`
+	ProviderKind   string           `json:"providerKind,omitempty"`
+	Fingerprint    string           `json:"fingerprint,omitempty"`
+	Agent          *AgentContext    `json:"agent,omitempty"`
 }
 
 type Message struct {
@@ -304,6 +306,7 @@ type Record struct {
 // TotalMessageCount and Presentation preserve the relationship to the full
 // authority without making the partial value pretend to be a Record.
 type Projection struct {
+	Page              *ProjectionPage                  `json:"-"`
 	ExchangeID        string                           `json:"exchangeId"`
 	Parent            ParentRef                        `json:"parent"`
 	Frozen            FrozenRef                        `json:"frozen"`
@@ -508,7 +511,14 @@ func (projection Projection) Validate() error {
 		projection.TotalMessageCount > protocolcore.MaxMessageCount+1 {
 		return ErrInvalidEvidence
 	}
-	if err := projection.Request.validateProjection(projection.Mode); err != nil {
+	request := projection.Request
+	if projection.Page != nil {
+		request.System, request.Messages = nil, nil
+		if err := validatePageContent(projection.Request.Messages, projection.Request.System, projection.Mode, projection.ExchangeID); err != nil {
+			return err
+		}
+	}
+	if err := request.validateProjection(projection.Mode); err != nil {
 		return err
 	}
 	inherited := projection.Presentation.InheritedMessageCount
@@ -539,16 +549,35 @@ func (projection Projection) Validate() error {
 	default:
 		return ErrInvalidEvidence
 	}
-	if len(projection.Request.Messages) != wantMessages {
+	if projection.Page != nil {
+		page := projection.Page
+		if page.RequestOffset < projection.TotalMessageCount-wantMessages ||
+			page.RequestOffset+len(projection.Request.Messages) > projection.TotalMessageCount ||
+			len(projection.Request.Messages) > PageMessageLimit || !validPageCursor(page.RequestNextCursor) ||
+			!validPageCursor(page.RequestEvidenceNextCursor) || !validPageCursor(page.ResponseEvidenceNextCursor) {
+			return ErrInvalidEvidence
+		}
+	} else if len(projection.Request.Messages) != wantMessages {
 		return ErrInvalidEvidence
 	}
 	if projection.Response != nil {
-		if err := projection.Response.validate(projection.Mode); err != nil {
+		response := *projection.Response
+		if projection.Page != nil {
+			if err := validatePageContent(nil, response.Blocks, projection.Mode, projection.ExchangeID); err != nil {
+				return err
+			}
+			response.Blocks = nil
+		}
+		if err := response.validate(projection.Mode); err != nil {
 			return err
 		}
 	}
 	encoded, err := json.Marshal(projection)
-	if err != nil || len(encoded) > MaxEncodedBytes {
+	limit := MaxEncodedBytes
+	if projection.Page != nil {
+		limit = MaxPageBytes
+	}
+	if err != nil || len(encoded) > limit {
 		return fmt.Errorf("%w: encoded projection exceeds its bound", ErrInvalidEvidence)
 	}
 	return nil
@@ -556,6 +585,10 @@ func (projection Projection) Validate() error {
 
 func (projection Projection) Clone() Projection {
 	cloned := projection
+	if projection.Page != nil {
+		page := *projection.Page
+		cloned.Page = &page
+	}
 	cloned.Request = cloneRequest(projection.Request)
 	if projection.Response != nil {
 		response := cloneResponse(*projection.Response)
@@ -623,7 +656,7 @@ func (request Request) validateProjection(mode environment.ContentRecordingMode)
 		return fmt.Errorf("%w: request projection is incomplete", ErrInvalidEvidence)
 	}
 	for _, block := range request.System {
-		if err := block.validate(mode); err != nil {
+		if err := block.Validate(mode); err != nil {
 			return err
 		}
 	}
@@ -648,7 +681,7 @@ func (request Request) validateProjection(mode environment.ContentRecordingMode)
 			}
 		}
 		for _, block := range message.Blocks {
-			if err := block.validate(mode); err != nil {
+			if err := block.Validate(mode); err != nil {
 				return err
 			}
 		}
@@ -675,7 +708,7 @@ func (response Response) validate(mode environment.ContentRecordingMode) error {
 		return fmt.Errorf("%w: stop reason is unsupported", ErrInvalidEvidence)
 	}
 	for _, block := range response.Blocks {
-		if err := block.validate(mode); err != nil {
+		if err := block.Validate(mode); err != nil {
 			return err
 		}
 	}
@@ -694,8 +727,9 @@ func (response Response) validate(mode environment.ContentRecordingMode) error {
 	return nil
 }
 
-func (block Block) validate(mode environment.ContentRecordingMode) error {
-	if block.OriginalSize < 0 {
+// Validate checks retained block evidence, never read-time placeholders.
+func (block Block) Validate(mode environment.ContentRecordingMode) error {
+	if block.OriginalSize < 0 || block.Deferred != nil {
 		return ErrInvalidEvidence
 	}
 	expected := AvailabilityOmitted
@@ -1116,6 +1150,10 @@ func cloneBlocks(value []Block) []Block {
 		result[index] = block
 		result[index].Arguments = append(json.RawMessage(nil), block.Arguments...)
 		result[index].Agent = cloneAgentContext(block.Agent)
+		if block.Deferred != nil {
+			deferred := *block.Deferred
+			result[index].Deferred = &deferred
+		}
 	}
 	return result
 }

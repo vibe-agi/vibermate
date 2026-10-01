@@ -166,6 +166,25 @@ final class RunnerTests: XCTestCase {
     )
   }
 
+  func testPreviewCannotReadOrReplaceLivePreferencesInTheSameHome() throws {
+    let environment = ["HOME": temporaryDirectory.path]
+    let live = try WorkbenchPreferencesBridge(
+      environment: environment, bundleIdentifier: "io.vibermate.desktop"
+    )
+    let preview = try WorkbenchPreferencesBridge(
+      environment: environment, bundleIdentifier: "io.vibermate.preview"
+    )
+    let liveValue = validPreferences(section: "captures", language: "zh-CN")
+    let previewValue = validPreferences(section: "settings", language: "en-US")
+    try live.write(liveValue)
+    XCTAssertNil(try preview.read())
+    try preview.write(previewValue)
+    try preview.close()
+    XCTAssertNotEqual(live.stateURL, preview.stateURL)
+    XCTAssertEqual(try live.read(), liveValue)
+    XCTAssertThrowsError(try preview.read())
+  }
+
   func testFixedUserHomeCanonicalizesAMacOSFilesystemAlias() throws {
     let aliasedHome = "/private/tmp"
     let canonicalHome = URL(fileURLWithPath: aliasedHome, isDirectory: true)

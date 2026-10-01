@@ -207,6 +207,16 @@ func (repository *repositoryDouble) GetProjection(
 	return Project(record, view)
 }
 
+func (repository *repositoryDouble) GetPagedProjection(ctx context.Context, id string, now time.Time, view RequestView) (Projection, error) {
+	value, err := repository.GetProjection(ctx, id, now, view)
+	value.Page = &ProjectionPage{RequestOffset: value.TotalMessageCount - len(value.Request.Messages)}
+	return value, err
+}
+
+func (repository *repositoryDouble) GetContentPage(context.Context, string, time.Time, string) (ContentPage, error) {
+	return ContentPage{}, ErrNotFound
+}
+
 func (repository *repositoryDouble) AvailableBodies(_ context.Context, ids []string, now time.Time) (map[string]bool, error) {
 	repository.mu.Lock()
 	defer repository.mu.Unlock()

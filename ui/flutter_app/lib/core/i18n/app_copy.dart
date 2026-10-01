@@ -51,6 +51,22 @@ final class AppCopy {
   }
 
   static const _en = <String, String>{
+    'content_page.title': 'Retained content',
+    'content_page.close': 'Close',
+    'content_page.load': 'Read content',
+    'content_page.unloaded': 'Not loaded · approximately {size} KiB',
+    'content_page.unavailable':
+        'This page cannot be read. The evidence may have expired or changed; return and refresh the request.',
+    'content_page.byte_range': 'Bytes {start}–{end} of {total}',
+    'content_page.item_range': 'Items {start}–{end} of {total}',
+    'content_page.arguments_note': 'Partial tool-argument JSON.',
+    'content_page.body_note': 'Partial content · copy includes this page only.',
+    'content_page.copy': 'Copy loaded page',
+    'content_page.earlier': 'Read earlier input',
+    'content_page.next': 'Next segment',
+    'content_page.request_metadata': 'More request protocol metadata',
+    'content_page.response_metadata': 'More response protocol metadata',
+    'exchange.role.unknown': 'Message · not loaded',
     'reader.title': 'Conversation',
     'reader.agent_reply': 'Agent reply',
     'reader.tool_source_input': 'Carried in request input · {request}',
@@ -2923,6 +2939,21 @@ final class AppCopy {
   };
 
   static const _zh = <String, String>{
+    'content_page.title': '保留内容',
+    'content_page.close': '关闭',
+    'content_page.load': '读取内容',
+    'content_page.unloaded': '尚未加载 · 约 {size} KiB',
+    'content_page.unavailable': '无法读取此页。证据可能已过期或发生变化，请返回并刷新请求。',
+    'content_page.byte_range': '第 {start}–{end} 字节，共 {total} 字节',
+    'content_page.item_range': '第 {start}–{end} 项，共 {total} 项',
+    'content_page.arguments_note': '工具参数 JSON 片段，不代表完整参数。',
+    'content_page.body_note': '仅此片段；复制不含未加载内容。',
+    'content_page.copy': '复制已加载页',
+    'content_page.earlier': '读取更早输入',
+    'content_page.next': '下一片段',
+    'content_page.request_metadata': '更多请求协议元数据',
+    'content_page.response_metadata': '更多响应协议元数据',
+    'exchange.role.unknown': '消息 · 尚未加载',
     'reader.title': '对话',
     'reader.agent_reply': 'Agent 回复',
     'reader.tool_source_input': '请求输入携带 · {request}',

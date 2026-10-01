@@ -164,6 +164,11 @@ abstract interface class ControlApi {
 
   Future<RawEvidencePage> rawEvidence(String exchangeId);
 
+  Future<ExchangeContentPage> exchangeContentPage(
+    String exchangeId,
+    String cursor,
+  );
+
   Future<RevealedRawEvidence> revealRawEvidence({required String envelopeId});
 
   Future<String> revealRawHeader({
@@ -556,6 +561,7 @@ final class HttpControlApi implements ControlApi, ACPObservationApi {
 
   DesktopSession _session;
   final http.Client _client;
+  bool _pagedExchangeReads = true;
   final bool _browserManagedHeaders;
   final bool _renewable;
   final bool _selfScoped;
@@ -1277,12 +1283,28 @@ final class HttpControlApi implements ControlApi, ACPObservationApi {
     }
     final uri = Uri(
       path: '/api/v1/exchanges/${Uri.encodeComponent(exchangeId)}',
-      queryParameters: {'contentView': contentView},
+      queryParameters: {
+        'contentView': contentView,
+        if (_pagedExchangeReads) 'contentMode': 'paged',
+      },
     );
-    final detail = ExchangeDetail.fromJson(
-      await _read(uri.toString()),
-      'exchange',
-    );
+    Object? payload;
+    try {
+      payload = await _read(uri.toString());
+    } on ControlProblem catch (problem) {
+      // Older Runtimes reject the new query. Keep small legacy reads usable;
+      // the ordinary 2 MiB guard is never relaxed, including on this fallback.
+      if (!_pagedExchangeReads ||
+          problem.status != 422 ||
+          problem.reasonCode != 'invalid_request') {
+        rethrow;
+      }
+      _pagedExchangeReads = false;
+      payload = await _read(
+        uri.replace(queryParameters: {'contentView': contentView}).toString(),
+      );
+    }
+    final detail = ExchangeDetail.fromJson(payload, 'exchange');
     final projection = detail.content.requestProjection;
     if (detail.id != exchangeId ||
         (projection != null && projection.view != contentView)) {
@@ -1291,6 +1313,35 @@ final class HttpControlApi implements ControlApi, ACPObservationApi {
       );
     }
     return detail;
+  }
+
+  @override
+  Future<ExchangeContentPage> exchangeContentPage(
+    String exchangeId,
+    String cursor,
+  ) async {
+    if (!_validResourceId(exchangeId) ||
+        cursor.isEmpty ||
+        cursor.length > 2048 ||
+        !RegExp(r'^[A-Za-z0-9_-]+$').hasMatch(cursor)) {
+      throw const ControlContractException(
+        'Exchange content cursor is invalid',
+      );
+    }
+    final uri = Uri(
+      path: '/api/v1/exchanges/${Uri.encodeComponent(exchangeId)}',
+      queryParameters: {'contentMode': 'paged', 'contentCursor': cursor},
+    );
+    final page = ExchangeContentPage.fromJson(
+      await _read(uri.toString()),
+      'contentPage',
+    );
+    if (page.exchangeId != exchangeId) {
+      throw const ControlContractException(
+        'content page belongs to another Exchange',
+      );
+    }
+    return page;
   }
 
   @override

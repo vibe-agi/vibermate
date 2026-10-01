@@ -46,6 +46,12 @@ flutter pub get
 
 if [[ "${mode}" == "preview" ]]; then
   flutter build macos --release --dart-define=VIBERMATE_PREVIEW=true
+  # NSWindow autosave uses the bundle's preferences domain, not our Runtime
+  # data directory or CFFIXED_USER_HOME. Never share it with the live App.
+  preview_app="${flutter_directory}/build/macos/Build/Products/Release/ViberMate.app"
+  /usr/libexec/PlistBuddy -c 'Set :CFBundleIdentifier io.vibermate.preview' "${preview_app}/Contents/Info.plist"
+  /usr/libexec/PlistBuddy -c 'Set :CFBundleName ViberMate Preview' "${preview_app}/Contents/Info.plist"
+  codesign --force --sign - "${preview_app}"
 else
   (
     cd "${repository_root}"

@@ -2116,7 +2116,10 @@ void main() {
         'thread-subagent-1',
       );
       expect(requests.last.path, '/api/v1/exchanges/_exchange-agent');
-      expect(requests.last.queryParameters, {'contentView': 'incremental'});
+      expect(requests.last.queryParameters, {
+        'contentView': 'incremental',
+        'contentMode': 'paged',
+      });
     },
   );
 

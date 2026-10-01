@@ -12,6 +12,89 @@ import 'package:vibermate_app/preview/preview_control_api.dart';
 import 'package:vibermate_app/preview/preview_terminal_command.dart';
 
 void main() {
+  for (final language in AppLanguage.values) {
+    testWidgets(
+      'large content is opt-in and pages do not accumulate at 390px in $language',
+      (tester) async {
+        await tester.binding.setSurfaceSize(const Size(390, 1000));
+        addTearDown(() => tester.binding.setSurfaceSize(null));
+        final api = _ReaderApi();
+        final activity = (await api.fixture.activities(
+          captureRunId: 'run-1',
+        )).items.firstWhere((a) => a.status == 'succeeded');
+        final base = await api.exchange(activity.id);
+        final deferred = ExchangeContentBlock.fromJson({
+          'kind': 'deferred',
+          'availability': 'recorded',
+          'originalSize': 0,
+          'deferred': {
+            'exchangeId': activity.id,
+            'cursor': 'first',
+            'estimatedBytes': 3 * 1024 * 1024,
+          },
+        }, 'fixture');
+        api.details[activity.id] = detail(
+          base,
+          [message('user', 'QUESTION')],
+          [deferred],
+        );
+        api.pages['first'] = ExchangeContentPage(
+          exchangeId: activity.id,
+          kind: 'text',
+          messages: const [],
+          blocks: const [],
+          text: 'PAGE_ONE',
+          offset: 0,
+          total: 16,
+          nextCursor: 'second',
+        );
+        api.pages['second'] = ExchangeContentPage(
+          exchangeId: activity.id,
+          kind: 'text',
+          messages: const [],
+          blocks: const [],
+          text: 'PAGE_TWO',
+          offset: 8,
+          total: 16,
+        );
+        final controller = makeController(api);
+        addTearDown(controller.dispose);
+        await tester.pumpWidget(
+          host(controller, [activity], language: language, scale: 2),
+        );
+        await tester.pumpAndSettle();
+        expect(api.pageCalls, isEmpty);
+        expect(
+          find.byKey(Key('reader-copy-${activity.id}-response')),
+          findsNothing,
+        );
+        final before = readerPosition(tester).pixels;
+        final open = find.byKey(const ValueKey('content-page-open-first'));
+        await tester.ensureVisible(open);
+        await tester.tap(open);
+        await tester.pumpAndSettle();
+        expect(api.pageCalls, ['first']);
+        expect(find.text('PAGE_ONE'), findsOneWidget);
+        expect(find.text('PAGE_TWO'), findsNothing);
+        expect(tester.takeException(), isNull);
+        await tester.tap(find.byKey(const Key('content-page-next')));
+        await tester.pumpAndSettle();
+        expect(api.pageCalls, ['first', 'second']);
+        expect(find.text('PAGE_ONE'), findsNothing);
+        expect(find.text('PAGE_TWO'), findsOneWidget);
+        await tester.tap(find.byKey(const Key('content-page-back')));
+        await tester.pumpAndSettle();
+        expect(api.pageCalls, ['first', 'second', 'first']);
+        expect(find.text('PAGE_ONE'), findsOneWidget);
+        await tester.tap(find.byKey(const Key('content-page-close')));
+        await tester.pumpAndSettle();
+        expect(find.text('PAGE_ONE'), findsNothing);
+        expect(readerPosition(tester).pixels, before);
+        expect(tester.takeException(), isNull);
+        await tester.pumpWidget(const SizedBox.shrink());
+      },
+    );
+  }
   testWidgets('long conversation entry hydrates a bounded visible window', (
     tester,
   ) async {
@@ -652,6 +735,21 @@ final class _ReaderApi implements ControlApi {
   final delayedFull = <String, Completer<ExchangeDetail>>{};
   final usageQueries = <RuntimeUsageQuery>[];
   final exchangeCalls = <String>[];
+  final pages = <String, ExchangeContentPage>{};
+  final pageCalls = <String>[];
+  @override
+  Future<ExchangeContentPage> exchangeContentPage(
+    String id,
+    String cursor,
+  ) async {
+    pageCalls.add(cursor);
+    final page = pages[cursor];
+    if (page == null || page.exchangeId != id) {
+      throw const ControlContractException('fixture page unavailable');
+    }
+    return page;
+  }
+
   bool broadUsage = false;
   @override
   Future<ExchangeDetail> exchange(

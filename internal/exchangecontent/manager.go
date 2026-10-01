@@ -20,6 +20,8 @@ type Repository interface {
 	Get(context.Context, string, time.Time) (Record, error)
 	GetConversationEvidence(context.Context, string, time.Time) (ConversationEvidence, error)
 	GetProjection(context.Context, string, time.Time, RequestView) (Projection, error)
+	GetPagedProjection(context.Context, string, time.Time, RequestView) (Projection, error)
+	GetContentPage(context.Context, string, time.Time, string) (ContentPage, error)
 	RequestPreviews(context.Context, []string, time.Time) (map[string]RequestPreview, error)
 	AvailableBodies(context.Context, []string, time.Time) (map[string]bool, error)
 	PurgeExpired(context.Context, time.Time) (uint64, error)
@@ -33,6 +35,8 @@ type Reader interface {
 	Get(context.Context, string) (Record, error)
 	GetConversationEvidence(context.Context, string) (ConversationEvidence, error)
 	GetProjection(context.Context, string, RequestView) (Projection, error)
+	GetPagedProjection(context.Context, string, RequestView) (Projection, error)
+	GetContentPage(context.Context, string, string) (ContentPage, error)
 	RequestPreviews(context.Context, []string) (map[string]RequestPreview, error)
 	AvailableBodies(context.Context, []string) (map[string]bool, error)
 }

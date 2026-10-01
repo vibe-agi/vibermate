@@ -3,7 +3,7 @@
 This matrix states what the current source offers. A passing unit test and a
 published product are not interchangeable evidence.
 
-Source package version: **0.1.21**. Latest published release: **v0.1.21**.
+Source package version: **0.1.22**. Latest published release: **v0.1.21**.
 
 [v0.1.21](https://github.com/vibe-agi/vibermate/releases/tag/v0.1.21) opens only
 databases of its own schema revision and has no migrations

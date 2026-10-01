@@ -58,7 +58,8 @@ class MainFlutterWindow: NSWindow {
     self.contentViewController = flutterViewController
     self.setFrame(windowFrame, display: true)
 
-    self.title = "ViberMate"
+    self.title = Bundle.main.bundleIdentifier == "io.vibermate.preview"
+      ? "ViberMate Preview" : "ViberMate"
     self.titleVisibility = .hidden
     self.minSize = WorkbenchWindowGeometry.minimumFrameSize
     if self.setFrameUsingName(Self.frameAutosaveName) {
@@ -337,7 +338,8 @@ final class WorkbenchPreferencesBridge {
   private var lastValidPayload: String?
 
   convenience init(
-    environment: [String: String] = ProcessInfo.processInfo.environment
+    environment: [String: String] = ProcessInfo.processInfo.environment,
+    bundleIdentifier: String? = Bundle.main.bundleIdentifier
   ) throws {
     let selectedHome = environment["CFFIXED_USER_HOME"] ?? environment["HOME"]
     guard let home = selectedHome,
@@ -358,7 +360,10 @@ final class WorkbenchPreferencesBridge {
     let directory = canonicalHome
       .appendingPathComponent("Library", isDirectory: true)
       .appendingPathComponent("Application Support", isDirectory: true)
-      .appendingPathComponent(Self.applicationID, isDirectory: true)
+      .appendingPathComponent(
+        bundleIdentifier == "io.vibermate.preview" ? "io.vibermate.preview" : Self.applicationID,
+        isDirectory: true
+      )
       .appendingPathComponent("ui-state", isDirectory: true)
     try self.init(directory: directory)
   }

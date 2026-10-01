@@ -114,6 +114,35 @@ Real topology results:
 
 ## Projection rules established by the matrix
 
+### Bounded workbench reads
+
+The workbench opts into `contentMode=paged` when reading an Exchange. A
+checkpoint initially carries no historical message bodies; opening its context
+loads a bounded window. Request history, large messages and protocol metadata
+have explicit continuation cursors. The ordinary control client retains its
+2 MiB response limit: a content page is at most 1 MiB, normal inline content has
+a 128 KiB budget, and a large text/tool-argument segment is at most 32 KiB of
+UTF-8. Unloaded content is distinct from omitted recording. Copying a segment
+copies only that loaded segment, not an invented complete document.
+
+Cursors are positions bound to an Exchange and its frozen content root. They do
+not authorize access: every read repeats the existing Activity/ownership,
+retention and frozen-reference checks. Request ordinals are resolved through
+indexed transcript ancestry metadata; payloads outside the selected window are
+not hydrated. Directory snippets skip oversized messages instead of inflating
+them just to produce a short preview. Visited page bodies are not accumulated
+in the shared UI cache.
+
+The existing storage format hashes complete canonical messages. Explicitly
+opening a large message therefore verifies that one message before returning
+a segment (bounded by the existing 32 MiB retained-record limit). Deep ordinal
+seeks still walk that request's ancestry metadata. This is not a claim of
+constant latency at arbitrary database size, nor permission to load the whole
+archive. The SQLite schema and retained evidence bytes are unchanged.
+
+Older Runtimes can still serve small legacy reads after rejecting the new query;
+large-history paging requires updating the Runtime as well as the App.
+
 1. Split content by explicit native session and actor identity when it exists.
 2. Retain an explicit native parent actor ID as a directed edge. Render the
    edge only when both endpoints belong to the same client session; never infer
