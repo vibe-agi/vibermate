@@ -73,6 +73,7 @@ reverse proxy cannot replace the Agent CONNECT path.
 - [Deployment and HTTPS](docs/deployment.md), [Docker](docs/docker.md),
   [backup and restore](docs/backup-and-restore.md)
 - [What is supported today](docs/capability-support.md)
+- [Paseo integration](integrations/paseo/README.md): choose a traffic profile per conversation
 - [Security policy](SECURITY.md) · [Contributing](CONTRIBUTING.md)
 
 Run `vibermate doctor` if setup fails.

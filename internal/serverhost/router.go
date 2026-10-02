@@ -108,7 +108,7 @@ func (handler router) ServeHTTP(writer http.ResponseWriter, request *http.Reques
 			return
 		}
 		handler.rootCA.ServeHTTP(writer, request)
-	case request.URL.Path == "/api/v1/capture-runs" ||
+	case request.URL.Path == capturecontrol.EnvironmentsPath || request.URL.Path == "/api/v1/capture-runs" ||
 		strings.HasPrefix(request.URL.Path, "/api/v1/capture-runs/"):
 		handler.capture.ServeHTTP(writer, request)
 	case request.URL.Path == "/api/v1/manual-captures" ||

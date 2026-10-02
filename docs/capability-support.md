@@ -3,7 +3,7 @@
 This matrix states what the current source offers. A passing unit test and a
 published product are not interchangeable evidence.
 
-Source package version: **0.1.22**. Latest published release: **v0.1.22**.
+Source package version: **0.1.23**. Latest published release: **v0.1.22**.
 
 [v0.1.22](https://github.com/vibe-agi/vibermate/releases/tag/v0.1.22) opens only
 databases of its own schema revision and has no migrations
@@ -42,6 +42,7 @@ databases of its own schema revision and has no migrations
 | `automatic-account-failover` | Unsupported | One request does not silently move between accounts after an authentication or quota failure. |
 | `arbitrary-client-compatibility` | Unsupported | Manual proxy access does not imply semantic parsing, identity attribution, or tested compatibility for every application. |
 | `editor-acp` | Experimental | Bounded ACP observation through App or Server. VS Code 1.139.0 with ACP Client 0.2.0 passed isolated auth/session/prompt/tool/cancel/EOF/reconnect acceptance; Codex ACP 1.13.1 passed its real auth-required boundary. ACP does not inherit HTTP routing/account policy. |
+| `paseo-profile-picker` | Experimental | Current source includes an open-source Paseo 0.11.0-beta.3 plugin with a shared desktop/Web/mobile picker and persistent per-conversation Environment choice. It reuses managed CLI capture and adds a permission-filtered launch-choice catalog; not included in v0.1.22. Deterministic and official compiler checks do not claim live desktop or physical mobile acceptance. See [Paseo integration](paseo-integration.md). |
 
 ## Evidence, storage, and extensions
 

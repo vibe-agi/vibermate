@@ -67,6 +67,7 @@ type CaptureRunIssuer interface {
 }
 
 type Options struct {
+	Environments    environment.Reader
 	LaunchSnapshots *launchsnapshot.Store
 	ACP             *acpobservation.Manager
 	Runs            capturerun.Controller
@@ -77,6 +78,7 @@ type Options struct {
 }
 
 type Handler struct {
+	environments    environment.Reader
 	launchSnapshots *launchsnapshot.Store
 	acp             *acpobservation.Manager
 	runs            capturerun.Controller
@@ -159,6 +161,7 @@ func New(options Options) (*Handler, error) {
 		return nil, errors.New("CaptureRun control dependencies are incomplete")
 	}
 	handler := &Handler{
+		environments:    options.Environments,
 		launchSnapshots: options.LaunchSnapshots,
 		acp:             options.ACP,
 		runs:            options.Runs,
@@ -168,6 +171,7 @@ func New(options Options) (*Handler, error) {
 		runLifetime:     options.RunLifetime,
 		mux:             http.NewServeMux(),
 	}
+	handler.mux.HandleFunc("GET "+EnvironmentsPath, handler.listEnvironments)
 	handler.mux.HandleFunc("POST /api/v1/capture-runs", handler.create)
 	if handler.acp != nil {
 		handler.mux.HandleFunc("POST /api/v1/capture-runs/{runId}/actions/start-acp", handler.startACP)

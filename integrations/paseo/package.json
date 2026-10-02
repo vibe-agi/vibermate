@@ -1,0 +1,23 @@
+{
+  "name": "@vibe-agi/paseo-vibermate",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Choose a ViberMate traffic profile for each Paseo conversation, on desktop and mobile.",
+  "license": "AGPL-3.0-only",
+  "type": "module",
+  "engines": { "node": ">=22.18.0" },
+  "files": ["paseo-plugin.json", "index.client.tsx", "index.server.ts", "client/", "server/", "shared/", "bin/", "LICENSE", "README.md"],
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "node --test server/*.test.ts"
+  },
+  "devDependencies": {
+    "@getpaseo/plugin": "0.11.0-beta.3",
+    "@types/node": "^22.19.0",
+    "@types/react": "^19.1.0",
+    "react": "19.1.0",
+    "react-native": "0.81.5",
+    "typescript": "^5.9.3",
+    "zod": "4.4.3"
+  }
+}

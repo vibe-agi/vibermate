@@ -1,0 +1,6 @@
+{
+  "id": "vibermate",
+  "description": "Choose a ViberMate profile per conversation; desktop, web, iOS and Android share the same selection.",
+  "requirements": { "paseo": ">=0.11.0-beta.3 <0.12.0" },
+  "build": [["chmod", "+x", "bin/claude", "bin/codex"]]
+}

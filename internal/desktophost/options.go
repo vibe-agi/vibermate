@@ -16,7 +16,7 @@ import (
 const (
 	defaultCLIControlDiscoveryTTL = 15 * time.Minute
 	defaultBootstrapTTL           = 30 * time.Second
-	defaultAppSessionTTL          = 12 * time.Hour
+	defaultAppSessionTTL          = 10 * 24 * time.Hour
 	defaultAppSessionReplayTTL    = 2 * time.Minute
 	defaultCaptureRunLifetime     = 90 * time.Second
 	defaultShutdownTimeout        = 20 * time.Second
