@@ -3,9 +3,9 @@
 This matrix states what the current source offers. A passing unit test and a
 published product are not interchangeable evidence.
 
-Source package version: **0.1.23**. Latest published release: **v0.1.22**.
+Source package version: **0.1.23**. Latest published release: **v0.1.23**.
 
-[v0.1.22](https://github.com/vibe-agi/vibermate/releases/tag/v0.1.22) opens only
+[v0.1.23](https://github.com/vibe-agi/vibermate/releases/tag/v0.1.23) opens only
 databases of its own schema revision and has no migrations
 ([ADR 0021](adr/0021-one-schema-revision-without-migrations.md)).
 
@@ -20,8 +20,8 @@ databases of its own schema revision and has no migrations
 
 | Capability ID | Status | Current boundary |
 | --- | --- | --- |
-| `macos-app` | Released | macOS 14+ Universal App for Apple silicon and Intel. v0.1.22 was signed, notarized and installed by [run 36808971891](https://github.com/vibe-agi/vibermate/actions/runs/36808971891); Homebrew cask `vibe-agi/tap/vibermate`. Development Preview uses a separate App identifier and UI preferences domain. |
-| `linux-server-web` | Released | Native Runtime Server, CLI, and Web workbench archives for Linux x86-64 and ARM64, built and verified by [run 36809025111](https://github.com/vibe-agi/vibermate/actions/runs/36809025111). |
+| `macos-app` | Released | macOS 14+ Universal App for Apple silicon and Intel. v0.1.23 was signed, notarized and installed by [run 37006092239](https://github.com/vibe-agi/vibermate/actions/runs/37006092239); Homebrew cask `vibe-agi/tap/vibermate`. Development Preview uses a separate App identifier and UI preferences domain. |
+| `linux-server-web` | Released | Native Runtime Server, CLI, and Web workbench archives for Linux x86-64 and ARM64, built and verified by [run 37006108103](https://github.com/vibe-agi/vibermate/actions/runs/37006108103). |
 | `docker-server-web` | Released | The same Runtime Server and Web workbench can run from the versioned Docker/Compose files; Docker does not create a separate account or certificate model. |
 | `local-web-http` | Released | Native or container Web on loopback HTTP; no domain or certificate is required. |
 | `remote-web-tls` | Released | Explicit private-CA DNS/IP identity, automatic public-domain HTTPS, or operator-provided certificate files. Settings offers a read-only public-domain deployment guide; server HTTPS identity remains separate from the Proxy CA except in the explicitly selected private-CA mode. Real public-domain issuance requires separate deployment acceptance. |
@@ -42,7 +42,7 @@ databases of its own schema revision and has no migrations
 | `automatic-account-failover` | Unsupported | One request does not silently move between accounts after an authentication or quota failure. |
 | `arbitrary-client-compatibility` | Unsupported | Manual proxy access does not imply semantic parsing, identity attribution, or tested compatibility for every application. |
 | `editor-acp` | Experimental | Bounded ACP observation through App or Server. VS Code 1.139.0 with ACP Client 0.2.0 passed isolated auth/session/prompt/tool/cancel/EOF/reconnect acceptance; Codex ACP 1.13.1 passed its real auth-required boundary. ACP does not inherit HTTP routing/account policy. |
-| `paseo-profile-picker` | Experimental | Current source includes an open-source Paseo 0.11.0-beta.3 plugin with a shared desktop/Web/mobile picker and persistent per-conversation Environment choice. It reuses managed CLI capture and adds a permission-filtered launch-choice catalog; not included in v0.1.22. Deterministic and official compiler checks do not claim live desktop or physical mobile acceptance. See [Paseo integration](paseo-integration.md). |
+| `paseo-profile-picker` | Experimental | v0.1.23 includes an open-source Paseo 0.11.0-beta.3 plugin with a shared desktop/Web/mobile picker and persistent per-conversation Environment choice. It reuses managed CLI capture and adds a permission-filtered launch-choice catalog. Deterministic and official compiler checks do not claim live desktop or physical mobile acceptance. See [Paseo integration](paseo-integration.md). |
 
 ## Evidence, storage, and extensions
 

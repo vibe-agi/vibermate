@@ -32,6 +32,7 @@
 
 ## 已发布
 
+- **v0.1.23**（2026-10-02，`2237b3a`）：桌面控制会话延长到 10 天，隐藏窗口独立续期并恢复丢失的续期响应；修复取消/未响应请求的重复记录误报；开源 Paseo 对话 Profile 插件及权限过滤的 CLI 目录。签名公证、Linux 包、Homebrew 与验证边界见 [docs/releases/v0.1.23.md](docs/releases/v0.1.23.md)。
 - **v0.1.22**（2026-10-01，`5131dbd`）：修复大历史读取超过 2 MiB；历史、正文和协议元数据按需分页，列表预览跳过大消息；Preview 使用独立 App 标识与偏好域。验证边界、构建证据和下载渠道见 [docs/releases/v0.1.22.md](docs/releases/v0.1.22.md)。
 - **v0.1.21**（2026-10-01，`9b7eeaa`）：落地正文优先的对话阅读、就近工具/上下文面板与紧凑 Token/API 等价费用；修复原生 Codex 心跳被审批屏障误缓存造成的重复 SSE 超时。构建验证与下载渠道见 [docs/releases/v0.1.21.md](docs/releases/v0.1.21.md)。
 - **v0.1.20**（2026-09-30，`c1eece3`）：修复请求预览与 Codex 协议边界；完善重置券、账号范围/原始账号、用量默认值及刷新交互；增加自有域名部署向导。macOS 签名公证与安装验收、Linux 双架构包、Homebrew 和官网更新见 [docs/releases/v0.1.20.md](docs/releases/v0.1.20.md)。
