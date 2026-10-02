@@ -1,0 +1,4 @@
+#!/bin/sh
+set -eu
+provider=claude
+. "$(dirname "$0")/launch.sh"

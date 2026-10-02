@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync/atomic"
 
+	"github.com/vibe-agi/vibermate/internal/capturecontrol"
 	"github.com/vibe-agi/vibermate/internal/controlprincipal"
 	"github.com/vibe-agi/vibermate/internal/servercontrol"
 )
@@ -117,6 +118,14 @@ func (router *Router) ServeHTTP(
 			return
 		}
 		router.bootstrap.ServeHTTP(writer, request)
+		return
+	}
+	if request.URL.Path == capturecontrol.EnvironmentsPath {
+		if !router.validCLIControlTransport(request) {
+			writeProblem(writer, http.StatusForbidden, ReasonUnauthorized)
+			return
+		}
+		router.cliControl.ServeHTTP(writer, request)
 		return
 	}
 	// CLI discovery publishes a separate principal credential, not an App read

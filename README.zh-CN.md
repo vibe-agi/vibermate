@@ -57,6 +57,7 @@ Caddy。在 **设置 → 接入与启动 → 使用自有域名部署** 中生�
 - [官网](https://vibe-agi.github.io/zh/products/vibermate/)：一步步了解 ViberMate
 - [部署与 HTTPS](docs/deployment.zh-CN.md)、[Docker](docs/docker.zh-CN.md)、[备份与恢复](docs/backup-and-restore.zh-CN.md)
 - [当前支持范围](docs/capability-support.md)
+- [Paseo 集成](integrations/paseo/README.md)：每个对话独立选择流量策略，桌面与手机共用
 - [安全策略](SECURITY.md) · [参与贡献](CONTRIBUTING.md)
 
 安装或启动遇到问题时，运行 `vibermate doctor`。

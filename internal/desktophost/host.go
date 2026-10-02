@@ -351,6 +351,7 @@ func Start(ctx context.Context, options Options) (*Host, error) {
 		return fail("ManualCapture control routes", err)
 	}
 	captureHandler, err := capturecontrol.New(capturecontrol.Options{
+		Environments:    runtime.Environments(),
 		LaunchSnapshots: runtime.LaunchSnapshots(),
 		ACP:             runtime.ACPObservations(),
 		Runs:            runtime.CaptureRuns(),

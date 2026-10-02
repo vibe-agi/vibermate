@@ -160,7 +160,12 @@ func (pipeline *Pipeline) Execute(
 		pipeline.observeAttempt(request, result, resultErr, captured)
 	}()
 	defer func() {
-		pipeline.observeContent(request, captured)
+		// Request evidence was already published before egress. An unanswered
+		// failed/canceled attempt has nothing to complete; writing its request
+		// again violates immutable evidence and falsely latches a recording gap.
+		if captured.response != nil || !captured.requestObserved || result.Outcome == AttemptSucceeded {
+			pipeline.observeContent(request, captured)
+		}
 	}()
 	if ctx == nil {
 		return result, newFailure(

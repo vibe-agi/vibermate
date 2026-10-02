@@ -259,6 +259,7 @@ func startAttached(
 		return nil, err
 	}
 	capture, err := capturecontrol.New(capturecontrol.Options{
+		Environments:    runtime.Environments(),
 		LaunchSnapshots: runtime.LaunchSnapshots(),
 		ACP:             runtime.ACPObservations(),
 		Runs:            runtime.CaptureRuns(),

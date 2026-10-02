@@ -11,6 +11,7 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"syscall"
 	"time"
 
 	"github.com/vibe-agi/vibermate/internal/clientpath"
@@ -44,13 +45,7 @@ func main() {
 		fmt.Fprintln(os.Stderr, reasonCatalogMissing)
 		os.Exit(1)
 	}
-	ctx := context.Background()
-	stop := func() {}
-	// ACP's process supervisor forwards the actual signal to its process
-	// group. Converting SIGINT into context cancellation here would send TERM.
-	if len(os.Args) < 2 || os.Args[1] != "acp" {
-		ctx, stop = signal.NotifyContext(ctx, os.Interrupt)
-	}
+	ctx, stop := commandContext(os.Args[1:])
 	defer stop()
 	code, key := executeContext(
 		ctx,
@@ -73,6 +68,16 @@ func main() {
 		fmt.Fprintln(os.Stderr, message)
 	}
 	os.Exit(code)
+}
+
+func commandContext(arguments []string) (context.Context, context.CancelFunc) {
+	// ACP forwards the actual signal to its process group. Cancellation here
+	// would change SIGINT into TERM. Other commands also need cleanup when a
+	// harness sends TERM during capture preparation, before relaySignals exists.
+	if len(arguments) > 0 && arguments[0] == "acp" {
+		return context.Background(), func() {}
+	}
+	return signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 }
 
 func execute(
@@ -141,6 +146,9 @@ func executeContext(
 			stdout,
 			stderr,
 		)
+	}
+	if len(arguments) > 0 && arguments[0] == "profiles" {
+		return executeProfiles(ctx, arguments[1:], stdout)
 	}
 	if len(arguments) > 0 && arguments[0] == "terminal-command" {
 		return executeTerminalCommand(arguments[1:], stdout)

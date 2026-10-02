@@ -9,7 +9,20 @@ import (
 	"time"
 
 	"github.com/vibe-agi/vibermate/internal/desktopcontrol"
+	"github.com/vibe-agi/vibermate/internal/desktophost"
+	"github.com/vibe-agi/vibermate/internal/productruntime"
 )
+
+func TestDesktopDefaultSessionAllowsTenDaysBetweenRenewals(t *testing.T) {
+	defaults := desktophost.DefaultOptions(desktophost.Paths{}, productruntime.Options{})
+	if defaults.AppSessionTTL != 10*24*time.Hour {
+		t.Fatalf("desktop session lifetime = %v, want 10 days", defaults.AppSessionTTL)
+	}
+	// A longer current session does not extend the retired-token replay window.
+	if defaults.AppSessionReplayTTL != 2*time.Minute {
+		t.Fatalf("retired session replay lifetime changed: %v", defaults.AppSessionReplayTTL)
+	}
+}
 
 func TestHostWiresRecoverableControlSessionRotation(t *testing.T) {
 	root := t.TempDir()

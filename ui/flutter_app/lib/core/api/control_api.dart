@@ -556,6 +556,7 @@ final class HttpControlApi implements ControlApi, ACPObservationApi {
     } else {
       api._renewAt = session.expiresAt;
     }
+    api._scheduleSessionRenewal();
     return api;
   }
 
@@ -569,6 +570,8 @@ final class HttpControlApi implements ControlApi, ACPObservationApi {
   int _sessionRevision = 1;
   DateTime? _renewAt;
   Future<void>? _renewal;
+  String? _renewalKey;
+  Timer? _sessionRenewalTimer;
   bool _closed = false;
   bool _sessionInvalidated = false;
 
@@ -579,9 +582,13 @@ final class HttpControlApi implements ControlApi, ACPObservationApi {
       );
     }
     _session = session;
-    _renewAt = session.expiresAt;
+    _renewAt = _renewable
+        ? _renewalTime(DateTime.now().toUtc(), session.expiresAt)
+        : session.expiresAt;
     _sessionRevision += 1;
+    _renewalKey = null;
     _sessionInvalidated = false;
+    _scheduleSessionRenewal();
   }
 
   @override
@@ -2622,7 +2629,9 @@ final class HttpControlApi implements ControlApi, ACPObservationApi {
       expectedStatus: 200,
       headers: {
         'if-match': '$_sessionRevision',
-        'Idempotency-Key': _newCapability(),
+        // A committed rotation retires this write token. After a lost reply,
+        // only the same key/revision can recover the server's replay response.
+        'Idempotency-Key': _renewalKey ??= _newCapability(),
       },
       skipRenewal: true,
     );
@@ -2655,7 +2664,37 @@ final class HttpControlApi implements ControlApi, ACPObservationApi {
     }
     _sessionRevision += 1;
     _session = rotated;
+    _renewalKey = null;
     _renewAt = _renewalTime(DateTime.now().toUtc(), rotated.expiresAt);
+    _scheduleSessionRenewal();
+  }
+
+  void _scheduleSessionRenewal() {
+    _sessionRenewalTimer?.cancel();
+    if (_closed || !_renewable || _sessionInvalidated) return;
+    final renewAt = _renewAt;
+    if (renewAt == null) return;
+    final delay = renewAt.difference(DateTime.now().toUtc());
+    _sessionRenewalTimer = Timer(
+      delay.isNegative ? Duration.zero : delay,
+      () => unawaited(_renewInBackground()),
+    );
+  }
+
+  Future<void> _renewInBackground() async {
+    try {
+      await _ensureFreshSession();
+      _scheduleSessionRenewal();
+    } on Object {
+      if (_closed || _sessionInvalidated) return;
+      // Keep renewing even when a hidden workbench stops polling. Transient
+      // failures replay the same command; the server still owns expiry/grants.
+      _sessionRenewalTimer?.cancel();
+      _sessionRenewalTimer = Timer(
+        const Duration(seconds: 1),
+        () => unawaited(_renewInBackground()),
+      );
+    }
   }
 
   Future<_WireResponse> _send(
@@ -2666,6 +2705,7 @@ final class HttpControlApi implements ControlApi, ACPObservationApi {
     Object? body,
     Map<String, String> headers = const {},
     bool skipRenewal = false,
+    bool retryRetiredRead = true,
     Duration responseTimeout = _requestTimeout,
     int maximumResponseBytes = _maximumResponseBytes,
   }) async {
@@ -2680,6 +2720,8 @@ final class HttpControlApi implements ControlApi, ACPObservationApi {
         );
       }
     }
+    final sentSession = _session;
+    final isReadCapability = token == sentSession.readToken;
     final destination = _resolve(path);
     final request = http.Request(method, destination)
       ..followRedirects = false
@@ -2707,7 +2749,28 @@ final class HttpControlApi implements ControlApi, ACPObservationApi {
       responseTimeout,
       maximumResponseBytes,
     );
-    if (response.statusCode == 401) _notifySessionInvalidated();
+    if (response.statusCode == 401) {
+      final retired = !identical(sentSession, _session);
+      if (retired &&
+          method == 'GET' &&
+          isReadCapability &&
+          !skipRenewal &&
+          retryRetiredRead &&
+          sentSession.baseUrl == _session.baseUrl) {
+        return _send(
+          method,
+          path,
+          token: _session.readToken,
+          expectedStatus: expectedStatus,
+          body: body,
+          headers: headers,
+          retryRetiredRead: false,
+          responseTimeout: responseTimeout,
+          maximumResponseBytes: maximumResponseBytes,
+        );
+      }
+      if (!retired) _notifySessionInvalidated();
+    }
     final payload = bytes.isEmpty ? null : _decodeJson(bytes);
     if (response.statusCode != expectedStatus) {
       throw _problem(response.statusCode, payload);
@@ -2907,6 +2970,7 @@ final class HttpControlApi implements ControlApi, ACPObservationApi {
   void _notifySessionInvalidated() {
     if (_sessionInvalidated) return;
     _sessionInvalidated = true;
+    _sessionRenewalTimer?.cancel();
     try {
       _onSessionInvalidated?.call();
     } on Object {
@@ -2919,6 +2983,8 @@ final class HttpControlApi implements ControlApi, ACPObservationApi {
   Future<void> close() async {
     if (_closed) return;
     _closed = true;
+    _sessionRenewalTimer?.cancel();
+    _renewalKey = null;
     _session = DesktopSession(
       baseUrl: _session.baseUrl,
       readToken: '___________________________________________',
