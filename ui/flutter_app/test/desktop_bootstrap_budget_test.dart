@@ -182,7 +182,34 @@ void main() {
     budget.acceptRuntimeStarting();
     now = const Duration(seconds: 120);
     expect(budget.acceptStoragePreparation, throwsA(isA<TimeoutException>()));
+    expect(budget.upgradeSeen, isTrue);
+    expect(() => budget.remaining, throwsA(isA<TimeoutException>()));
   });
+
+  test(
+    'both recognized phases at ordinary deadline retain preservation fact',
+    () async {
+      for (final phase in ['storage_preparing', 'storage_upgrade']) {
+        var elapsed = Duration.zero;
+        final budget = DesktopBootstrapBudget(elapsed: () => elapsed);
+        Stream<String> frames() async* {
+          yield jsonEncode(starting);
+          elapsed = const Duration(seconds: 120);
+          yield jsonEncode({
+            'schema': 'vibermate-daemon-progress-v1',
+            'phase': phase,
+          });
+        }
+
+        await expectLater(
+          readDesktopBootstrapFrames(frames(), budget),
+          throwsA(isA<TimeoutException>()),
+        );
+        expect(budget.upgradeSeen, isTrue);
+        expect(() => budget.remaining, throwsA(isA<TimeoutException>()));
+      }
+    },
+  );
   test('missing starting and backwards time are rejected', () {
     var now = const Duration(seconds: 4);
     final budget = DesktopBootstrapBudget(elapsed: () => now);

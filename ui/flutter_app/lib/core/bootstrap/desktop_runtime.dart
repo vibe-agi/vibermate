@@ -25,6 +25,56 @@ final class DesktopRuntimeException implements Exception {
   String toString() => reason == null ? message : '$message ($reason)';
 }
 
+/// The existing launch/selection transaction, with per-call dependencies so
+/// its failure boundary can be exercised without launching a native process.
+Future<T> startDesktopRuntimeSelection<T>({
+  required String directory,
+  String? previous,
+  required Future<T> Function(String directory, String? notice) launch,
+  required Future<void> Function(DesktopStorageSelection) saveSelection,
+  required Future<void> Function(T) close,
+  required bool Function(T) preparationSeen,
+  required Future<bool> Function(String directory) hasDatabase,
+}) async {
+  try {
+    final runtime = await launch(directory, null);
+    if (previous != null) {
+      try {
+        await saveSelection(DesktopStorageSelection(directory));
+      } catch (_) {
+        var exitConfirmed = true;
+        try {
+          await close(runtime);
+        } catch (_) {
+          exitConfirmed = false;
+        }
+        // A returned runtime may already have performed ordinary writes.
+        // Selection persistence failure never proves an uncommitted move.
+        throw DesktopRuntimeException(
+          'Storage selection could not be saved; chosen data directory retained',
+          reason: preparationSeen(runtime)
+              ? 'storage_upgrade_incomplete'
+              : exitConfirmed
+              ? 'storage_unavailable'
+              : 'runtime_unavailable',
+          preserveDataDirectory: true,
+        );
+      }
+    }
+    return runtime;
+  } catch (error) {
+    if (error is DesktopRuntimeException &&
+        (error.reason == 'runtime_already_active' ||
+            error.reason == 'storage_upgrade_incomplete' ||
+            error.preserveDataDirectory)) {
+      rethrow;
+    }
+    if (previous == null || !await hasDatabase(previous)) rethrow;
+    await saveSelection(DesktopStorageSelection(previous));
+    return launch(previous, 'settings.storage.rolled_back');
+  }
+}
+
 final class DesktopRuntime {
   DesktopRuntime._({
     required this.api,
@@ -34,7 +84,9 @@ final class DesktopRuntime {
     required this.dataDirectory,
     required this.storage,
     this.storageNotice,
-  }) : _daemon = daemon;
+    required bool storagePreparationSeen,
+  }) : _daemon = daemon,
+       _storagePreparationSeen = storagePreparationSeen;
 
   static const _maximumBootstrapBytes = 16 * 1024;
   static const _flutterOrigin = 'vibermate://desktop';
@@ -47,6 +99,7 @@ final class DesktopRuntime {
   final String dataDirectory;
   final DesktopStorage? storage;
   final String? storageNotice;
+  final bool _storagePreparationSeen;
   Future<void>? _closeFuture;
   bool _closed = false;
 
@@ -69,46 +122,22 @@ final class DesktopRuntime {
       dataDirectory: dataDirectory,
       homeDirectory: homeDirectory,
     );
-    final selection = paths.selection;
-    try {
-      final runtime = await _launch(
+    return startDesktopRuntimeSelection<DesktopRuntime>(
+      directory: paths.data,
+      previous: paths.selection?.previous,
+      launch: (directory, notice) => _launch(
         executable,
         paths.cache,
-        paths.data,
+        directory,
         storage: paths.storage,
         remoteServerListenAddress: remoteServerListenAddress,
-      );
-      if (selection?.previous != null) {
-        try {
-          await paths.storage!.save(DesktopStorageSelection(paths.data));
-        } catch (_) {
-          await runtime.close();
-          rethrow;
-        }
-      }
-      return runtime;
-    } catch (error) {
-      if (error is DesktopRuntimeException &&
-          (error.reason == 'runtime_already_active' ||
-              error.reason == 'storage_upgrade_incomplete' ||
-              error.preserveDataDirectory)) {
-        rethrow;
-      }
-      final previous = selection?.previous;
-      if (previous == null) rethrow;
-      // This fallback is only for an UNCOMMITTED migration. A missing external
-      // volume on later launches must not silently fork the user's history.
-      if (!await File('$previous/runtime.db').exists()) rethrow;
-      await paths.storage!.save(DesktopStorageSelection(previous));
-      return _launch(
-        executable,
-        paths.cache,
-        previous,
-        storage: paths.storage,
-        remoteServerListenAddress: remoteServerListenAddress,
-        storageNotice: 'settings.storage.rolled_back',
-      );
-    }
+        storageNotice: notice,
+      ),
+      saveSelection: (selection) => paths.storage!.save(selection),
+      close: (runtime) => runtime.close(),
+      preparationSeen: (runtime) => runtime._storagePreparationSeen,
+      hasDatabase: (directory) => File('$directory/runtime.db').exists(),
+    );
   }
 
   static Future<DesktopRuntime> _launch(
@@ -178,6 +207,7 @@ final class DesktopRuntime {
         dataDirectory: data,
         storage: storage,
         storageNotice: storageNotice,
+        storagePreparationSeen: budget.upgradeSeen,
       );
     } catch (error) {
       try {

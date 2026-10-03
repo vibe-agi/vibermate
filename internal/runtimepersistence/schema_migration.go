@@ -270,8 +270,12 @@ func UpgradeRevision1(ctx context.Context, input MigrationInput) (MigrationResul
 }
 
 type schemaMigrationRunner struct {
-	afterDDL func(context.Context, *sql.Conn) error
-	commit   func(context.Context, *sql.Conn) error
+	afterDDL            func(context.Context, *sql.Conn) error
+	commit              func(context.Context, *sql.Conn) error
+	closeConn           func(*sql.Conn) error
+	closePool           func(*sql.DB) error
+	syncSourceFile      func(context.Context, string) error
+	syncSourceDirectory func(context.Context, string) error
 }
 
 func commitSchemaMigration(ctx context.Context, conn *sql.Conn) error {
@@ -292,25 +296,32 @@ func (runner schemaMigrationRunner) upgrade(ctx context.Context, input Migration
 	}
 	fresh, err := VerifyMigrationDatabase(ctx, v.sourcePath, v.snapshotPath, v.sourceOwner, v.snapshotOwner, DefaultBusyTimeout)
 	if err != nil || fresh.legacyDigest != v.legacyDigest {
-		return reconcileVerifiedMigration(ctx, v, timeout)
+		return runner.reconcileVerified(ctx, v, timeout)
 	}
 	// No journal_mode pragma: opening the writer cannot precede certification.
 	db := sql.OpenDB(newSQLiteUpgradeConnector(v.sourcePath, DefaultBusyTimeout))
 	db.SetMaxOpenConns(1)
 	conn, err := db.Conn(ctx)
 	if err != nil {
-		db.Close()
-		return reconcileVerifiedMigration(ctx, v, timeout)
+		if err := runner.closeDatabasePool(db); err != nil {
+			return MigrationResult{FromRevision: 1}, ErrMigrationOutcomeUnknown
+		}
+		return runner.reconcileVerified(ctx, v, timeout)
 	}
 	closed := false
-	closeDatabase := func() {
+	var closeErr error
+	closeDatabase := func() error {
 		if !closed {
-			_ = conn.Close()
-			_ = db.Close()
+			closeConnection := runner.closeConn
+			if closeConnection == nil {
+				closeConnection = (*sql.Conn).Close
+			}
+			closeErr = errors.Join(closeConnection(conn), runner.closeDatabasePool(db))
 			closed = true
 		}
+		return closeErr
 	}
-	defer closeDatabase()
+	defer func() { _ = closeDatabase() }()
 	begun := false
 	reconcile := func(root error) (MigrationResult, error) {
 		cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), timeout)
@@ -318,8 +329,12 @@ func (runner schemaMigrationRunner) upgrade(ctx context.Context, input Migration
 		if begun {
 			_, _ = conn.ExecContext(cleanup, "ROLLBACK")
 		}
-		closeDatabase() // A returned Conn alone still leaves the physical writer in the pool.
-		result, err := ReconcileMigrationDatabase(cleanup, v.sourcePath, v.snapshotPath, v.sourceOwner, v.snapshotOwner, v.legacyDigest, timeout)
+		// Both closes must positively succeed before source visibility can be
+		// considered. A failed close retains uncertainty even if v2 is readable.
+		if err := closeDatabase(); err != nil {
+			return MigrationResult{FromRevision: 1}, errors.Join(ErrMigrationOutcomeUnknown, ctx.Err())
+		}
+		result, err := runner.reconcile(cleanup, v, timeout)
 		if err != nil {
 			return result, errors.Join(err, ctx.Err())
 		}
@@ -380,15 +395,22 @@ func (runner schemaMigrationRunner) upgrade(ctx context.Context, input Migration
 		return reconcile(err)
 	}
 	begun = false
-	closeDatabase()
 	// Even ordinary successful COMMIT gets an independent durable proof.
 	return reconcile(nil)
 }
 
-func reconcileVerifiedMigration(ctx context.Context, v VerifiedMigrationDatabase, timeout time.Duration) (MigrationResult, error) {
+func (runner schemaMigrationRunner) closeDatabasePool(database *sql.DB) error {
+	closePool := runner.closePool
+	if closePool == nil {
+		closePool = (*sql.DB).Close
+	}
+	return closePool(database)
+}
+
+func (runner schemaMigrationRunner) reconcileVerified(ctx context.Context, v VerifiedMigrationDatabase, timeout time.Duration) (MigrationResult, error) {
 	proof, cancel := context.WithTimeout(context.WithoutCancel(ctx), timeout)
 	defer cancel()
-	result, err := ReconcileMigrationDatabase(proof, v.sourcePath, v.snapshotPath, v.sourceOwner, v.snapshotOwner, v.legacyDigest, timeout)
+	result, err := runner.reconcile(proof, v, timeout)
 	if err != nil {
 		return result, errors.Join(err, ctx.Err())
 	}
@@ -418,19 +440,34 @@ func migrationAdditionsEmpty(ctx context.Context, q schemaQueryer) error {
 // Used only before normal writers are admitted. A persisted digest is never
 // authority by itself: the exact frozen snapshot is independently re-proved.
 func ReconcileMigrationDatabase(ctx context.Context, source, snapshot string, owner, snapshotOwner *instanceguard.Guard, expected [32]byte, timeout time.Duration) (MigrationResult, error) {
-	result := MigrationResult{FromRevision: 1}
 	v := VerifiedMigrationDatabase{sourcePath: source, snapshotPath: snapshot, sourceOwner: owner, snapshotOwner: snapshotOwner}
-	if ctx == nil || timeout <= 0 || expected == ([32]byte{}) || !migrationOwners(v) {
+	v.legacyDigest = expected
+	return (schemaMigrationRunner{}).reconcile(ctx, v, timeout)
+}
+
+func (runner schemaMigrationRunner) reconcile(ctx context.Context, v VerifiedMigrationDatabase, timeout time.Duration) (MigrationResult, error) {
+	result := MigrationResult{FromRevision: 1}
+	if ctx == nil || timeout <= 0 || v.legacyDigest == ([32]byte{}) || !migrationOwners(v) {
 		return result, ErrMigrationOutcomeUnknown
 	}
 	proof, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	snapshotState, snapshotDigest, err := migrationFingerprintPath(proof, snapshot, timeout)
-	if err != nil || snapshotState.Revision != 1 || snapshotDigest != expected {
+	snapshotState, snapshotDigest, err := migrationFingerprintPath(proof, v.snapshotPath, timeout)
+	if err != nil || snapshotState.Revision != 1 || snapshotDigest != v.legacyDigest {
 		return result, ErrMigrationOutcomeUnknown
 	}
-	sourceState, sourceDigest, err := migrationFingerprintPath(proof, source, timeout)
-	if err != nil || sourceDigest != expected || sourceState.Identity != snapshotState.Identity || sourceState.InitializedAt != snapshotState.InitializedAt || !migrationOwners(v) {
+	// Readable cache bytes are insufficient after commit/close uncertainty.
+	// Durably flush the exact owned source, then independently inspect it anew.
+	// Pending-startup row proof may use its owned work budget, but the
+	// durability segment itself is always at most 30s and caller remaining.
+	barrier, cancelBarrier := context.WithTimeout(proof, 30*time.Second)
+	barrierErr := runner.syncOwnedSource(barrier, v)
+	cancelBarrier()
+	if barrierErr != nil {
+		return result, ErrMigrationOutcomeUnknown
+	}
+	sourceState, sourceDigest, err := migrationFingerprintPath(proof, v.sourcePath, timeout)
+	if err != nil || sourceDigest != v.legacyDigest || sourceState.Identity != snapshotState.Identity || sourceState.InitializedAt != snapshotState.InitializedAt || proof.Err() != nil || !migrationOwners(v) {
 		return result, ErrMigrationOutcomeUnknown
 	}
 	if sourceState.Revision == 1 {

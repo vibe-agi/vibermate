@@ -80,7 +80,8 @@ final class DesktopBootstrapBudget {
   Duration? _deadline;
   Duration _last = Duration.zero;
   bool _upgrade = false;
-  bool get upgradeSeen => _upgrade;
+  bool _preparationSeen = false;
+  bool get upgradeSeen => _preparationSeen;
 
   Duration _now() {
     final next = _elapsed();
@@ -97,6 +98,8 @@ final class DesktopBootstrapBudget {
   }
 
   void acceptStoragePreparation() {
+    // Recognition is a preservation fact even if acceptance is too late.
+    _preparationSeen = true;
     if (_deadline == null || _upgrade) {
       throw const FormatException('Unexpected upgrade phase');
     }
