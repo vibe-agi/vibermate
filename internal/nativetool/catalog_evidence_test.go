@@ -134,3 +134,121 @@ func TestNativeCatalogRequestCoverage(t *testing.T) {
 		t.Fatal("duplicate page request accepted")
 	}
 }
+
+func TestNativeCatalogExactPublicKeysIgnoreCaseAliases(t *testing.T) {
+	input := bindingFixture(t)
+	observer, err := NewCatalogObserver(CatalogScope{input.Capture, input.Plan, 1, 1, input.SessionID, 1, 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/list"}`)
+	tool := `{"name":"read_file","description":"public description","inputSchema":{"type":"object","properties":{"Name":{"type":"number"},"_meta":{"type":"boolean"}}},"annotations":{"readOnlyHint":true,"destructiveHint":false}}`
+	observe := func(result string) (CatalogEvidence, error) {
+		return observer.Observe([]CatalogPageObservation{{request, []byte(`{"jsonrpc":"2.0","id":1,"result":` + result + `}`)}})
+	}
+	baseline, err := observe(`{"tools":[` + tool + `]}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, alias := range []struct{ name, field string }{
+		{"name", `"Name":"other"`},
+		{"description", `"Description":"unclassified sentinel"`},
+		{"schema", `"InputSchema":{"type":"object","properties":{"unclassified":{"type":"string"}}}`},
+		{"annotations", `"Annotations":{"readOnlyHint":false,"destructiveHint":true}`},
+	} {
+		for _, before := range []bool{true, false} {
+			t.Run(alias.name+map[bool]string{true: "_before", false: "_after"}[before], func(t *testing.T) {
+				modified := strings.TrimSuffix(tool, "}") + `,` + alias.field + `}`
+				if before {
+					modified = `{` + alias.field + `,` + strings.TrimPrefix(tool, "{")
+				}
+				_, err := observe(`{"tools":[` + modified + `]}`)
+				// Existing recursive name validation rejects case-fold collisions.
+				// Keep that behavior rather than expanding the accepted wire shape.
+				if err == nil {
+					t.Fatal("case-folded public field collision admitted")
+				}
+			})
+		}
+	}
+	for _, result := range []string{`{"Tools":[],"tools":[` + tool + `]}`, `{"tools":[` + tool + `],"Tools":[]}`} {
+		if _, err := observe(result); err == nil {
+			t.Error("case-folded tools collision admitted")
+		}
+	}
+	for _, test := range []struct{ name, canonical, alias string }{
+		{"description", strings.Replace(tool, `,"description":"public description"`, "", 1), `"Description":"unclassified sentinel"`},
+		{"annotations", strings.Replace(tool, `,"annotations":{"readOnlyHint":true,"destructiveHint":false}`, "", 1), `"Annotations":{"readOnlyHint":true}`},
+	} {
+		for _, before := range []bool{true, false} {
+			t.Run("case_only_"+test.name+map[bool]string{true: "_before", false: "_after"}[before], func(t *testing.T) {
+				ordinary, err := observe(`{"tools":[` + test.canonical + `]}`)
+				if err != nil {
+					t.Fatal(err)
+				}
+				modified := strings.TrimSuffix(test.canonical, "}") + `,` + test.alias + `}`
+				if before {
+					modified = `{` + test.alias + `,` + strings.TrimPrefix(test.canonical, "{")
+				}
+				evidence, err := observe(`{"tools":[` + modified + `]}`)
+				if err != nil || evidence.Digest() != ordinary.Digest() {
+					t.Fatalf("case-only optional extension entered public digest: %v", err)
+				}
+				digest := evidence.Digest()
+				input.CatalogDigest = &digest
+				input.CatalogEvidence = &evidence
+				bound, err := NewBinding(input)
+				if err != nil || bound.ToolName() != "read_file" {
+					t.Fatalf("exact canonical membership changed %q %v", bound.ToolName(), err)
+				}
+				injected := input
+				injected.Intents = append(injected.Intents[:0:0], input.Intents...)
+				injected.Intents[0].Call.Name = "other"
+				injected.ExactRPC = []byte(strings.Replace(string(input.ExactRPC), `"name":"read_file"`, `"name":"other"`, 1))
+				if _, err := NewBinding(injected); err == nil {
+					t.Fatal("unknown alias evidence manufactured membership")
+				}
+			})
+		}
+	}
+	for _, result := range []string{`{"NextCursor":"unclassified","tools":[` + tool + `]}`, `{"tools":[` + tool + `],"NextCursor":"unclassified"}`} {
+		evidence, err := observe(result)
+		if err != nil || evidence.Digest() != baseline.Digest() {
+			t.Errorf("case-only cursor extension altered exact terminal catalog: %v", err)
+		}
+	}
+	// Literal schema property names are public schema data, not field aliases.
+	changed, err := observe(`{"tools":[` + strings.Replace(tool, `"Name":{"type":"number"}`, `"Name":{"type":"string"}`, 1) + `]}`)
+	if err != nil || changed.Digest() == baseline.Digest() {
+		t.Fatalf("literal schema property lost: %v", err)
+	}
+}
+
+func TestNativeCatalogExactRequiredFieldsAndCursorCompletion(t *testing.T) {
+	input := bindingFixture(t)
+	observer, err := NewCatalogObserver(CatalogScope{input.Capture, input.Plan, 1, 1, input.SessionID, 1, 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/list"}`)
+	for _, test := range []struct{ name, result string }{
+		{"case_only_tools", `{"Tools":[{"name":"read_file","inputSchema":{"type":"object"}}]}`},
+		{"case_only_name", `{"tools":[{"Name":"read_file","inputSchema":{"type":"object"}}]}`},
+		{"case_only_undeclared_member", `{"tools":[{"Name":"other","inputSchema":{"type":"object"}}]}`},
+		{"case_only_schema", `{"tools":[{"name":"read_file","InputSchema":{"type":"object"}}]}`},
+		{"cursor_alias_before", `{"NextCursor":"","nextCursor":"more","tools":[]}`},
+		{"cursor_alias_after", `{"nextCursor":"more","NextCursor":"","tools":[]}`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := observer.Observe([]CatalogPageObservation{{request, []byte(`{"jsonrpc":"2.0","id":1,"result":` + test.result + `}`)}}); err == nil {
+				t.Fatal("case alias satisfied required field or manufactured terminal completion")
+			}
+		})
+	}
+	// Request extensions remain rejected; case aliases cannot supply cursor.
+	for _, params := range []string{`{"Cursor":"more"}`, `{"cursor":"","Cursor":"more"}`, `{"Cursor":"more","cursor":""}`} {
+		if _, err := observer.Observe([]CatalogPageObservation{{[]byte(`{"jsonrpc":"2.0","id":1,"method":"tools/list","params":` + params + `}`), []byte(`{"jsonrpc":"2.0","id":1,"result":{"tools":[]}}`)}}); err == nil {
+			t.Fatal("request cursor alias admitted")
+		}
+	}
+}

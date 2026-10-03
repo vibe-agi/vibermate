@@ -79,9 +79,7 @@ func (observer *CatalogObserver) Observe(pages []CatalogPageObservation) (Catalo
 			return CatalogEvidence{}, err
 		}
 		var method string
-		var params struct {
-			Cursor string `json:"cursor"`
-		}
+		requestCursor := ""
 		if json.Unmarshal(request["method"], &method) != nil || method != "tools/list" || !sameRPCID(request["id"], response["id"]) || len(request["result"]) > 0 || len(request["error"]) > 0 || len(response["method"]) > 0 || len(response["error"]) > 0 {
 			return CatalogEvidence{}, ErrInvalid
 		}
@@ -91,7 +89,7 @@ func (observer *CatalogObserver) Observe(pages []CatalogPageObservation) (Catalo
 			}
 		}
 		if raw := request["params"]; len(raw) > 0 {
-			if _, err := canonicalObject(raw); err != nil || json.Unmarshal(raw, &params) != nil {
+			if _, err := canonicalObject(raw); err != nil {
 				return CatalogEvidence{}, ErrInvalid
 			}
 			var fields map[string]json.RawMessage
@@ -101,8 +99,11 @@ func (observer *CatalogObserver) Observe(pages []CatalogPageObservation) (Catalo
 					return CatalogEvidence{}, ErrDenied
 				}
 			}
+			if value, present := fields["cursor"]; present && json.Unmarshal(value, &requestCursor) != nil {
+				return CatalogEvidence{}, ErrInvalid
+			}
 		}
-		if params.Cursor != cursor {
+		if requestCursor != cursor {
 			return CatalogEvidence{}, ErrInvalid
 		}
 		requestDigest := Digest(sha256.Sum256(page.ExactRequest))
@@ -111,34 +112,45 @@ func (observer *CatalogObserver) Observe(pages []CatalogPageObservation) (Catalo
 		}
 		requestSet[requestDigest] = true
 		requests = append(requests, requestDigest)
-		var result struct {
-			Tools      []json.RawMessage `json:"tools"`
-			NextCursor string            `json:"nextCursor"`
-		}
-		if _, err := canonicalObject(response["result"]); err != nil || json.Unmarshal(response["result"], &result) != nil || result.Tools == nil {
+		// Wire fields are exact-key protocol data. Struct decoding would treat
+		// case-only extensions as canonical fields before public projection.
+		var result map[string]json.RawMessage
+		if _, err := canonicalObject(response["result"]); err != nil || json.Unmarshal(response["result"], &result) != nil {
 			return CatalogEvidence{}, ErrInvalid
 		}
-		if (result.NextCursor == "") != (index == len(pages)-1) || len(result.NextCursor) > MaxObservedIDBytes || (result.NextCursor != "" && cursors[result.NextCursor]) {
+		var tools []json.RawMessage
+		if json.Unmarshal(result["tools"], &tools) != nil || tools == nil {
 			return CatalogEvidence{}, ErrInvalid
 		}
-		cursors[result.NextCursor] = true
-		cursor = result.NextCursor
-		for _, raw := range result.Tools {
-			var tool struct {
-				Name, Description string
-				InputSchema       json.RawMessage
-				Annotations       map[string]json.RawMessage
-			}
-			if json.Unmarshal(raw, &tool) != nil || len(tool.Name) > 256 || !publicName.MatchString(tool.Name) || seen[tool.Name] {
+		nextCursor := ""
+		if value, present := result["nextCursor"]; present && json.Unmarshal(value, &nextCursor) != nil {
+			return CatalogEvidence{}, ErrInvalid
+		}
+		if (nextCursor == "") != (index == len(pages)-1) || len(nextCursor) > MaxObservedIDBytes || (nextCursor != "" && cursors[nextCursor]) {
+			return CatalogEvidence{}, ErrInvalid
+		}
+		cursors[nextCursor] = true
+		cursor = nextCursor
+		for _, raw := range tools {
+			var tool map[string]json.RawMessage
+			var name, description string
+			if json.Unmarshal(raw, &tool) != nil || json.Unmarshal(tool["name"], &name) != nil || len(name) > 256 || !publicName.MatchString(name) || seen[name] {
 				return CatalogEvidence{}, ErrInvalid
 			}
-			schema, err := publicCatalogSchema(tool.InputSchema)
+			if value, present := tool["description"]; present && json.Unmarshal(value, &description) != nil {
+				return CatalogEvidence{}, ErrInvalid
+			}
+			schema, err := publicCatalogSchema(tool["inputSchema"])
 			if err != nil {
 				return CatalogEvidence{}, ErrInvalid
 			}
-			definition := catalogDefinition{Name: tool.Name, Description: tool.Description, InputSchema: schema, Annotations: map[string]any{}}
+			var annotations map[string]json.RawMessage
+			if value, present := tool["annotations"]; present && json.Unmarshal(value, &annotations) != nil {
+				return CatalogEvidence{}, ErrInvalid
+			}
+			definition := catalogDefinition{Name: name, Description: description, InputSchema: schema, Annotations: map[string]any{}}
 			for _, name := range []string{"title", "readOnlyHint", "destructiveHint", "idempotentHint", "openWorldHint"} {
-				value, ok := tool.Annotations[name]
+				value, ok := annotations[name]
 				if !ok {
 					continue
 				}
@@ -157,10 +169,10 @@ func (observer *CatalogObserver) Observe(pages []CatalogPageObservation) (Catalo
 				}
 			}
 			mapped, err := protocolcore.NewJSONObject(schema, MaxRPCBytes)
-			if err != nil || (protocolcore.ToolDefinition{Name: tool.Name, Description: tool.Description, InputSchema: mapped}).Validate() != nil {
+			if err != nil || (protocolcore.ToolDefinition{Name: name, Description: description, InputSchema: mapped}).Validate() != nil {
 				return CatalogEvidence{}, ErrInvalid
 			}
-			seen[tool.Name] = true
+			seen[name] = true
 			definitions = append(definitions, definition)
 			if len(definitions) > 1024 {
 				return CatalogEvidence{}, ErrInvalid
