@@ -53,6 +53,28 @@ func TestInstalledCodexCaptureIsolationStartupContract(t *testing.T) {
 			t.Fatalf("pinned startup contract %v: %v", original, err)
 		}
 	}
+	// Exercise native Clap as well as our consumer: attached images end at
+	// their token, while spaced values remain variadic until the next option.
+	for _, fixture := range []struct {
+		args      []string
+		usage     string
+		wantError bool
+	}{
+		{[]string{"--image=fixture.png", "app-server", "proxy"}, "Usage: codex app-server proxy", false},
+		{[]string{"-ifixture.png", "app-server", "proxy"}, "Usage: codex app-server proxy", false},
+		{[]string{"-i=fixture.png", "app-server", "proxy"}, "Usage: codex app-server proxy", false},
+		{[]string{"--image", "fixture.png", "app-server", "proxy"}, "Usage: codex [OPTIONS]", false},
+		{[]string{"--yolo", "resume"}, "Usage: codex resume", false},
+		{[]string{"--not-so-yolo", "resume"}, "Usage: codex resume", legacy},
+		{[]string{"exec", "--experimental-json", "--yolo"}, "Usage: codex exec", false},
+	} {
+		helper := exec.CommandContext(ctx, executable, append(slices.Clone(fixture.args), "--help")...)
+		helper.Env = environment
+		data, err := helper.Output()
+		if (err != nil) != fixture.wantError || !fixture.wantError && !strings.Contains(string(data), fixture.usage) {
+			t.Fatalf("native pinned argument grammar disagrees: args=%v failed=%v", fixture.args, err != nil)
+		}
+	}
 	t.Logf("%s: interactive/resume/fork/global-value/exec/review/foreground startup contracts passed", strings.TrimSpace(string(version)))
 }
 
@@ -81,7 +103,12 @@ func TestCodexInvocationClass(t *testing.T) {
 		{[]string{"--remote-auth-token-env", "exec", "resume", "thread"}, codexRemote},
 		{[]string{"resume", "--model", "exec", "thread"}, codexInteractive},
 		{[]string{"--image", "exec", "daemon", "--model", "fixture"}, codexInteractive},
-		{[]string{"--image=exec", "app-server", "daemon"}, codexInteractive},
+		{[]string{"--image=exec", "exec", "prompt"}, codexSeparateProcess},
+		{[]string{"-iexec", "app-server", "--stdio"}, codexSeparateProcess},
+		{[]string{"-i=exec", "review", "--base", "main"}, codexSeparateProcess},
+		{[]string{"--image", "fixture.png", "app-server", "proxy"}, codexInteractive},
+		{[]string{"-i", "fixture.png", "app-server", "proxy"}, codexInteractive},
+		{[]string{"--image=exec", "--", "app-server", "proxy"}, codexInteractive},
 		{[]string{"-iexec", "daemon", "--", "prompt"}, codexInteractive},
 		{[]string{"app-server", "--listen", "daemon"}, codexSeparateProcess},
 		{[]string{"app-server", "--listen=proxy", "--stdio"}, codexSeparateProcess},
@@ -92,6 +119,12 @@ func TestCodexInvocationClass(t *testing.T) {
 		{[]string{"exec", "--ignore-user-config", "--ignore-rules", "--json", "prompt"}, codexSeparateProcess},
 		{[]string{"exec", "--worktree", "--thread-source", "daemon", "resume", "--last", "prompt"}, codexSeparateProcess},
 		{[]string{"exec", "--model", "daemon", "--", "--remote"}, codexSeparateProcess},
+		{[]string{"--yolo", "prompt"}, codexInteractive},
+		{[]string{"resume", "--yolo", "fixture-thread"}, codexInteractive},
+		{[]string{"--not-so-yolo", "fork", "--last"}, codexInteractive},
+		{[]string{"exec", "--yolo", "prompt"}, codexSeparateProcess},
+		{[]string{"exec", "--not-so-yolo", "prompt"}, codexSeparateProcess},
+		{[]string{"exec", "--experimental-json", "resume", "--last", "prompt"}, codexSeparateProcess},
 	} {
 		t.Run(strings.Join(test.args, "_"), func(t *testing.T) {
 			got, err := classifyCodexInvocation(test.args)
@@ -103,15 +136,45 @@ func TestCodexInvocationClass(t *testing.T) {
 	for _, args := range [][]string{
 		{"agents"}, {"queue", "thread", "prompt"}, {"archive", "thread"}, {"remote-control", "start"},
 		{"stdio-to-uds"}, {"responses-api-proxy"}, {"cloud-tasks"}, {"execpolicy", "check"},
+		{"--image=exec", "app-server", "daemon"}, {"-ifixture.png", "app-server", "proxy"},
+		{"-i=fixture.png", "stdio-to-uds"}, {"-hi=fixture.png", "app-server", "proxy"},
+		{"--image=fixture.png", "agents"}, {"--image=fixture.png", "app-server", "--listen=daemon", "proxy"},
+		{"--no-daemon", "--image=fixture.png", "app-server", "proxy"},
 		{"app-server", "daemon", "start"}, {"app-server", "proxy"},
 		{"app-server", "--listen", "proxy", "daemon", "start"},
 		{"app-server", "--config=daemon", "proxy"}, {"app-server", "--", "daemon", "start"},
 		{"fixture-prompt", "app-server", "proxy"}, {"fixture-prompt", "agents"},
 		{"app-server", "unknown-entry"}, {"--unknown", "exec"}, {"resume", "--unknown", "exec"},
 		{"--model"}, {"--model", "--"}, {"--image"}, {"--no-daemon=true"},
+		{"app-server", "--yolo"}, {"app-server", "--not-so-yolo"}, {"app-server", "--experimental-json"},
+		{"--experimental-json", "prompt"}, {"--yolo=true"}, {"--not-so-yolo=false"}, {"exec", "--experimental-json=true"},
 	} {
 		if _, err := classifyCodexInvocation(args); !errors.Is(err, ErrCodexIsolationUnsupported) {
 			t.Errorf("unproven %v: %v", args, err)
+		}
+	}
+}
+
+func TestCodexCaptureIsolationNativeAliasesPreserveOriginalSpelling(t *testing.T) {
+	for _, original := range [][]string{
+		{"--no-daemon", "--yolo", "prompt"}, {"resume", "--no-daemon", "--not-so-yolo", "fixture-thread"},
+		{"exec", "--yolo", "--experimental-json", "prompt"}, {"exec", "--not-so-yolo", "prompt"},
+	} {
+		got, err := prepareCodexCaptureArguments(context.Background(), "/not/executed", original, original, nil, false)
+		if err != nil || !slices.Equal(got, original) {
+			t.Errorf("native alias rewritten/rejected: %v => %v (%v)", original, got, err)
+		}
+	}
+}
+
+func TestCodexCaptureIsolationInlineImagesPreserveIndependentArguments(t *testing.T) {
+	for _, original := range [][]string{
+		{"--image=fixture.png", "exec", "prompt"}, {"-ifixture.png", "app-server", "--stdio"},
+		{"-i=fixture.png", "review", "--base", "main"},
+	} {
+		got, err := prepareCodexCaptureArguments(context.Background(), "/not/executed", original, original, nil, false)
+		if err != nil || !slices.Equal(got, original) {
+			t.Errorf("inline image independent argv changed: %v => %v (%v)", original, got, err)
 		}
 	}
 }

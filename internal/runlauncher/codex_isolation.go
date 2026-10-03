@@ -104,7 +104,9 @@ func parseCodexInvocation(args []string) (codexInvocationKind, bool, error) {
 			if value == "" {
 				return 0, false, ErrCodexIsolationUnsupported
 			}
-			if name == "--image" {
+			// Clap's variadic scan applies only to a separate image value.
+			// An attached long/compact short value ends at this argv token.
+			if name == "--image" && !attached {
 				for i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
 					i++
 				}
@@ -147,7 +149,7 @@ func codexFlag(name, scope string) bool {
 	case "--help", "--version", "--strict-config":
 		return true
 	case "--oss", "--search", "--full-auto", "--approve-for-me", "--dangerously-bypass-approvals-and-sandbox",
-		"--dangerously-bypass-hook-trust":
+		"--dangerously-bypass-hook-trust", "--yolo", "--not-so-yolo":
 		return scope != "app-server"
 	case "--no-daemon", "--no-alt-screen":
 		return scope == "root" || scope == "session"
@@ -155,7 +157,7 @@ func codexFlag(name, scope string) bool {
 		return scope != "app-server"
 	case "--last", "--all", "--include-non-interactive":
 		return scope == "session" || scope == "exec"
-	case "--json", "--ephemeral", "--skip-git-repo-check", "--uncommitted", "--ignore-user-config", "--ignore-rules":
+	case "--json", "--experimental-json", "--ephemeral", "--skip-git-repo-check", "--uncommitted", "--ignore-user-config", "--ignore-rules":
 		return scope == "exec"
 	case "--stdio", "--analytics-default-enabled":
 		return scope == "app-server"

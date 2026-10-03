@@ -227,6 +227,84 @@ func TestCodexCaptureIsolationRequiresExactLegacyEvidence(t *testing.T) {
 	}
 }
 
+// Native Clap ends an attached image value at that argv token. An ensuing
+// daemon/proxy/hidden command must be rejected at the real Launcher boundary,
+// including when modern help or the exact legacy recipe could authorize TUI.
+func TestCodexCaptureIsolationImageAndAliasArgumentsAtLauncherBoundary(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX client fixture")
+	}
+	for _, version := range []string{"0.145.0", "0.160.0"} {
+		for _, test := range []struct {
+			args                    []string
+			wantLaunch, interactive bool
+		}{
+			{[]string{"--image=fixture.png", "app-server", "proxy"}, false, false},
+			{[]string{"-ifixture.png", "app-server", "daemon", "start"}, false, false},
+			{[]string{"-i=fixture.png", "stdio-to-uds"}, false, false},
+			{[]string{"--image=fixture.png", "app-server", "--listen=daemon", "proxy"}, false, false},
+			{[]string{"--no-daemon", "--image=fixture.png", "app-server", "proxy"}, false, false},
+			{[]string{"--image=fixture.png", "exec", "prompt"}, true, false},
+			{[]string{"-ifixture.png", "app-server", "--stdio"}, true, false},
+			{[]string{"-i=fixture.png", "review", "--base", "main"}, true, false},
+			{[]string{"--image", "fixture.png", "app-server", "proxy"}, true, true},
+			{[]string{"--image=fixture.png", "--", "app-server", "proxy"}, true, true},
+			{[]string{"--yolo", "exec", "prompt"}, true, false},
+			{[]string{"--not-so-yolo", "exec", "prompt"}, true, false},
+			{[]string{"exec", "--experimental-json", "--yolo", "prompt"}, true, false},
+			{[]string{"--yolo", "resume", "fixture-thread"}, true, true},
+			{[]string{"resume", "--not-so-yolo", "fixture-thread"}, true, true},
+		} {
+			t.Run(version+"_"+strings.Join(test.args, "_"), func(t *testing.T) {
+				directory := t.TempDir()
+				executable, started := filepath.Join(directory, "codex"), filepath.Join(directory, "started")
+				script := "#!/bin/sh\nif [ \"$1\" = --help ]; then printf '      --no-daemon\\n'; exit 0; fi\nprintf '%s\\n' \"$@\" > " + strconv.Quote(started) + "\n"
+				if err := os.WriteFile(executable, []byte(script), 0700); err != nil {
+					t.Fatal(err)
+				}
+				command := append([]string{"codex"}, test.args...)
+				control := &controlFixture{t: t, executable: executable, workspace: directory, rootPath: filepath.Join(directory, "root.pem"),
+					credential: capability(0x11), proxy: capability(0x22), run: capability(0x33), expectedCommand: command,
+					recipe: clientadapter.LaunchCodexResponsesHTTP, recognition: clientadapter.RecognitionVerified,
+					adapter: &capturecontrol.ClientLaunchAdapterView{ClientAdapterView: capturecontrol.ClientAdapterView{
+						ID: "codex-cli", Revision: 1, Version: version, CatalogRevision: 7,
+						Source: capturecontrol.ClientAdapterSourcePrelaunchDigestCatalog, InstallShape: clientadapter.InstallNativeSingleBinary,
+						LaunchRecipe: clientadapter.LaunchCodexResponsesHTTP,
+					}, StreamingFallbackPolicy: clientadapter.StreamingFallbackClientDefault},
+				}
+				server := httptest.NewServer(control)
+				defer server.Close()
+				launcher, err := runlauncher.New(runlauncher.Config{
+					Discovery:       fixedDiscovery{session: localdiscovery.Session{BaseURL: server.URL, ControlCredential: control.credential}},
+					BaseEnvironment: []string{"PATH=/usr/bin:/bin"}, Stdin: strings.NewReader(""), Stdout: io.Discard, Stderr: io.Discard,
+					Getwd: func() (string, error) { return directory, nil }, LookPath: func(string) (string, error) { return executable, nil },
+				})
+				if err != nil {
+					t.Fatal(err)
+				}
+				code, err := launcher.Run(context.Background(), runlauncher.LaunchRequest{EnvironmentID: environment.SystemTransparentID, Command: command})
+				data, startedErr := os.ReadFile(started)
+				if test.wantLaunch {
+					want := []string{"--config", `model_provider="openai"`, "--config", `openai_base_url="https://chatgpt.com/backend-api/codex"`,
+						"--config", "features.responses_websockets=false", "--disable", "enable_request_compression"}
+					if test.interactive && version != "0.145.0" {
+						want = append([]string{"--no-daemon"}, want...)
+					}
+					want = append(want, test.args...)
+					if code != 0 || err != nil || startedErr != nil || string(data) != strings.Join(want, "\n")+"\n" || control.attachCalls != 1 {
+						t.Fatalf("native argv not preserved: code=%d err=%v started=%v argv=%q", code, err, startedErr, data)
+					}
+				} else if code != 1 || !errors.Is(err, runlauncher.ErrCodexIsolationUnsupported) || !errors.Is(startedErr, os.ErrNotExist) || control.attachCalls != 0 {
+					t.Fatalf("shared backend command reached child: code=%d err=%v started=%v attach=%d", code, err, startedErr, control.attachCalls)
+				}
+				if control.finishCalls != 1 {
+					t.Fatalf("Capture cleanup finish=%d", control.finishCalls)
+				}
+			})
+		}
+	}
+}
+
 // Only the external client is substituted. Launcher, grant validation, proxy
 // authentication, argv consumption and descendant cleanup remain production.
 func TestCodexIsolationFixtureProcess(t *testing.T) {
