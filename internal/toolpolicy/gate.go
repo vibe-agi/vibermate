@@ -39,6 +39,23 @@ func (gate Gate) Decide(
 	if ctx == nil {
 		return exchange.ToolDecision{}, errors.New("tool policy context is nil")
 	}
+	if _, binding, native := request.NativeExecution(); native {
+		policyContext, available := request.NativeContext()
+		policy := policyContext.PolicySet()
+		if !available || policy.Validate() != nil || policy != binding.Plan().PolicySet() {
+			return exchange.ToolDecision{}, errors.New("native tool policy is invalid")
+		}
+		switch policy.ToolMode {
+		case environment.ToolPolicyObserve:
+			return exchange.ToolDecision{Outcome: exchange.ToolDecisionApproved}, nil
+		case environment.ToolPolicyStrict:
+			return exchange.ToolDecision{Outcome: exchange.ToolDecisionRejected, ReasonCode: ReasonStrictPolicy}, nil
+		case environment.ToolPolicyReview:
+			return gate.review.Decide(ctx, request)
+		default:
+			return exchange.ToolDecision{}, errors.New("native tool policy is unsupported")
+		}
+	}
 	policyContext := request.Context()
 	policy := policyContext.PolicySet()
 	if err := policy.Validate(); err != nil {

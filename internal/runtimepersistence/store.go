@@ -68,6 +68,7 @@ type Store struct {
 	rawEvidence        *rawEvidenceRepository
 	runtimeUsers       *runtimeUserRepository
 	operations         *operationGate
+	nativeTools        *nativeToolRepository
 
 	closeMu   sync.Mutex
 	closing   bool
@@ -215,6 +216,7 @@ func Open(ctx context.Context, options Options) (*Store, error) {
 		rawEvidence:        rawEvidence,
 		runtimeUsers:       runtimeUsers,
 		operations:         operations,
+		nativeTools:        &nativeToolRepository{database: database, operations: operations},
 		closeDone:          make(chan struct{}),
 	}, nil
 }

@@ -46,6 +46,15 @@ type DecisionInput struct {
 	IdempotencyKey   string
 	ObservedAt       time.Time
 }
+
+// ApprovalClosure is lifecycle termination, never a user allow/deny answer.
+type ApprovalClosure string
+
+const (
+	ApprovalClosureCancelled ApprovalClosure = "canceled"
+	ApprovalClosureExpired   ApprovalClosure = "expired"
+)
+
 type Approval struct {
 	ID, OperationID      ID
 	BindingDigest        Digest
@@ -99,23 +108,31 @@ type Page struct {
 	Items        []Operation
 	NextSequence int64
 }
-type Repository interface {
+type LifecycleRepository interface {
 	EnsureScope(context.Context, ScopeInput) (uint64, error)
 	RegisterSession(context.Context, SessionInput) error
 	ReadySession(context.Context, ID, uint64, time.Time) (uint64, error)
-	SetCatalog(context.Context, ID, uint64, Digest, time.Time) (uint64, error)
+	SetCatalog(context.Context, ID, uint64, CatalogEvidence, time.Time) (uint64, error)
 	Receive(context.Context, ReceiveInput) (ReceiveResult, error)
 	Bind(context.Context, ID, Binding, time.Time) error
 	RequestApproval(context.Context, ID, ID, time.Time, time.Time) (Approval, error)
 	DecideApproval(context.Context, DecisionInput) (Approval, error)
+	CloseApproval(context.Context, ID, uint64, ApprovalClosure, time.Time) (Approval, error)
 	Get(context.Context, ID) (Operation, error)
 	GetApproval(context.Context, ID) (Approval, error)
+	Page(context.Context, PageRequest) (Page, error)
+}
+type ExecutionRepository interface {
 	Start(context.Context, ID, string, uint64, time.Time) (StartReceipt, error)
+	VerifyStartReceipt(context.Context, StartReceipt, time.Time) error
 	Finish(context.Context, ID, TerminalInput) error
 	Revoke(context.Context, captureidentity.Reference, uint64, string, time.Time) error
 	MarkReplayBarrier(context.Context, captureidentity.Reference, uint64, time.Time) error
 	Recover(context.Context, time.Time) error
-	Page(context.Context, PageRequest) (Page, error)
 	PutContent(context.Context, ID, string, []byte, time.Time) error
 	ReadContent(context.Context, captureidentity.Reference, ID, string, int, int) ([]byte, error)
+}
+type Repository interface {
+	LifecycleRepository
+	ExecutionRepository
 }

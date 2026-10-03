@@ -24,6 +24,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/clientannotation"
 	"github.com/vibe-agi/vibermate/internal/egressprofile"
 	"github.com/vibe-agi/vibermate/internal/environment"
+	"github.com/vibe-agi/vibermate/internal/nativetool"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
 	"github.com/vibe-agi/vibermate/internal/originidentity"
 	"github.com/vibe-agi/vibermate/internal/protocolcore"
@@ -1227,6 +1228,10 @@ func (decision ToolDecision) validate() error {
 // ToolDecisionRequest is an immutable complete decision group. Parallel tool
 // calls from one provider terminal are never split into independent decisions.
 type ToolDecisionRequest struct {
+	nativeOperation     nativetool.ID
+	nativeBinding       *nativetool.Binding
+	nativeContext       ToolDecisionContext
+	nativeWitness       *nativetool.RegisteredParentWitness
 	exchangeID          string
 	environmentID       environment.EnvironmentID
 	environmentRevision environment.Revision

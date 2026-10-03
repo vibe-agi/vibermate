@@ -16,6 +16,7 @@ import (
 
 	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/exchange"
+	"github.com/vibe-agi/vibermate/internal/nativetool"
 )
 
 const approvalIDBytes = 20
@@ -85,10 +86,11 @@ func DefaultConfig() Config {
 }
 
 type Options struct {
-	Repository Repository
-	Clock      Clock
-	Random     io.Reader
-	Config     Config
+	NativeRepository nativetool.LifecycleRepository
+	Repository       Repository
+	Clock            Clock
+	Random           io.Reader
+	Config           Config
 	// Remembered is told that a decision wrote a rule, in the same commit that
 	// resolved the question. The rules in force have to follow that commit, or
 	// the next connection would ask a question that was already answered.
@@ -114,12 +116,13 @@ type waiter struct {
 }
 
 type Authority struct {
-	repository Repository
-	clock      Clock
-	random     io.Reader
-	config     Config
-	remembered RememberedListener
-	recovery   Recovery
+	nativeRepository nativetool.LifecycleRepository
+	repository       Repository
+	clock            Clock
+	random           io.Reader
+	config           Config
+	remembered       RememberedListener
+	recovery         Recovery
 
 	mu      sync.Mutex
 	closing bool
@@ -146,6 +149,7 @@ func New(ctx context.Context, options Options) (*Authority, error) {
 		return nil, fmt.Errorf("recover tool approvals: %w", err)
 	}
 	return &Authority{
+		nativeRepository:       options.NativeRepository,
 		repository:             options.Repository,
 		clock:                  options.Clock,
 		random:                 options.Random,
@@ -174,6 +178,9 @@ func (authority *Authority) Decide(
 		return exchange.ToolDecision{}, err
 	}
 	defer finish()
+	if _, _, native := request.NativeExecution(); native {
+		return authority.decideNative(operation, request)
+	}
 	intents := request.ToolIntents()
 	if request.ExchangeID() == "" ||
 		request.EnvironmentID().String() == "" ||

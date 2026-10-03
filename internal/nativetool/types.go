@@ -94,6 +94,7 @@ type BindingInput struct {
 	ObservedCallID, ExactRPC           []byte
 	Intents                            []protocolcore.ToolIntent
 	PublicToolDefinition               *protocolcore.ToolDefinition
+	CatalogEvidence                    *CatalogEvidence
 }
 type Binding struct {
 	kind                                                    RequestKind
@@ -109,6 +110,8 @@ type Binding struct {
 	replayKey                                               *Digest
 	safeCallRefs                                            []string
 	toolName                                                string
+	rpcIDDigest                                             *Digest
+	cancelledRPCIDDigest                                    *Digest
 }
 
 func NewBinding(input BindingInput) (Binding, error) {
@@ -142,7 +145,7 @@ func NewBinding(input BindingInput) (Binding, error) {
 		if input.CatalogGeneration == 0 || len(input.Intents) != 1 {
 			return Binding{}, ErrInvalid
 		}
-	} else if len(input.Intents) != 0 || len(input.ObservedCallID) != 0 || input.PublicToolDefinition != nil {
+	} else if len(input.Intents) != 0 || len(input.ObservedCallID) != 0 || input.PublicToolDefinition != nil || input.CatalogEvidence != nil {
 		return Binding{}, ErrInvalid
 	}
 	params, err := validateEnvelope(input)
@@ -165,6 +168,36 @@ func NewBinding(input BindingInput) (Binding, error) {
 		sessionID: input.SessionID, sessionRevision: input.SessionRevision, catalogGeneration: input.CatalogGeneration, catalogDigest: copyPointer(input.CatalogDigest),
 		parentOperationID: copyPointer(input.ParentOperationID), serverRequestDigest: copyPointer(input.ServerRequestDigest),
 		requestDigest: Digest(sha256.Sum256(input.ExactRPC)), paramsDigest: Digest(sha256.Sum256(params)), groupDigest: Digest(sha256.Sum256(group)), safeCallRefs: refs}
+	if input.CatalogEvidence != nil {
+		binding.toolName, err = input.CatalogEvidence.member(input)
+		if err != nil {
+			return Binding{}, err
+		}
+	}
+	if input.Kind != RequestGetStream && input.Kind != RequestDeleteSession {
+		var envelope map[string]json.RawMessage
+		_ = json.Unmarshal(input.ExactRPC, &envelope)
+		identity := envelope["id"]
+		if len(identity) == 0 {
+			binding.rpcIDDigest = copyPointer(&binding.requestDigest)
+		} else {
+			decoder := json.NewDecoder(bytes.NewReader(identity))
+			decoder.UseNumber()
+			var value any
+			_ = decoder.Decode(&value)
+			digest := hashJSON(struct {
+				Domain string
+				ID     any
+			}{"native-rpc-id/v1", value})
+			binding.rpcIDDigest = &digest
+		}
+		if input.Kind == RequestCancel {
+			var fields map[string]json.RawMessage
+			_ = json.Unmarshal(envelope["params"], &fields)
+			digest := rpcIdentityDigest(fields["requestId"])
+			binding.cancelledRPCIDDigest = &digest
+		}
+	}
 	if len(input.ObservedCallID) > 0 {
 		// Scope correlation to the actual service, independently of mutable
 		// Environment/route/owner/session generations. The parser supplies an
@@ -198,7 +231,9 @@ func NewBinding(input BindingInput) (Binding, error) {
 		Request, Params, Group             Digest
 		Replay                             *Digest
 		Name                               string
-	}{"native-binding/v1", input.Kind, input.Capture, input.Plan.EnvironmentID(), input.Plan.EnvironmentRevision(), input.Plan.EnvironmentDigest(), route, input.Plan.ContentRecording(), input.Plan.PolicySet(), input.AssignmentRevision, input.OwnerEpoch, input.SessionID, input.SessionRevision, input.CatalogGeneration, binding.catalogDigest, binding.parentOperationID, binding.serverRequestDigest, binding.requestDigest, binding.paramsDigest, binding.groupDigest, binding.replayKey, binding.toolName})
+		RPCID                              *Digest
+		CancelledRPCID                     *Digest
+	}{"native-binding/v1", input.Kind, input.Capture, input.Plan.EnvironmentID(), input.Plan.EnvironmentRevision(), input.Plan.EnvironmentDigest(), route, input.Plan.ContentRecording(), input.Plan.PolicySet(), input.AssignmentRevision, input.OwnerEpoch, input.SessionID, input.SessionRevision, input.CatalogGeneration, binding.catalogDigest, binding.parentOperationID, binding.serverRequestDigest, binding.requestDigest, binding.paramsDigest, binding.groupDigest, binding.replayKey, binding.toolName, binding.rpcIDDigest, binding.cancelledRPCIDDigest})
 	return binding, nil
 }
 func revision(value uint64) bool { return value > 0 && value <= math.MaxInt64 }
@@ -412,10 +447,32 @@ func (binding Binding) ReplayKey() (Digest, bool) {
 }
 func (binding Binding) SafeCallRefs() []string { return slices.Clone(binding.safeCallRefs) }
 func (binding Binding) ToolName() string       { return binding.toolName }
+func (binding Binding) RPCIDDigest() (Digest, bool) {
+	if binding.rpcIDDigest == nil {
+		return Digest{}, false
+	}
+	return *binding.rpcIDDigest, true
+}
 func (binding Binding) MatchesIntents(intents []protocolcore.ToolIntent) bool {
 	if binding.bindingDigest == (Digest{}) || len(intents) > MaxIntentGroup {
 		return false
 	}
 	encoded, _, err := intentEvidence(intents)
 	return err == nil && Digest(sha256.Sum256(encoded)) == binding.groupDigest
+}
+func (binding Binding) CancelledRPCIDDigest() (Digest, bool) {
+	if binding.cancelledRPCIDDigest == nil {
+		return Digest{}, false
+	}
+	return *binding.cancelledRPCIDDigest, true
+}
+func rpcIdentityDigest(raw []byte) Digest {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	var value any
+	_ = decoder.Decode(&value)
+	return hashJSON(struct {
+		Domain string
+		ID     any
+	}{"native-rpc-id/v1", value})
 }
