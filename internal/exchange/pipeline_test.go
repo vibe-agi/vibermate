@@ -4,10 +4,13 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -19,6 +22,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/agentconversation"
 	"github.com/vibe-agi/vibermate/internal/anthropicchat"
 	"github.com/vibe-agi/vibermate/internal/captureadmission"
+	"github.com/vibe-agi/vibermate/internal/clientadapter"
 	"github.com/vibe-agi/vibermate/internal/clientannotation"
 	"github.com/vibe-agi/vibermate/internal/codelibrary"
 	"github.com/vibe-agi/vibermate/internal/egressprofile"
@@ -38,6 +42,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/secretstore"
 	"github.com/vibe-agi/vibermate/internal/ssewire"
 	"github.com/vibe-agi/vibermate/internal/wireprofile"
+	"github.com/vibe-agi/vibermate/internal/workspaceidentity"
 )
 
 func TestManagedRequestUsesOnlyFrozenEnvironmentRouteAndAccount(t *testing.T) {
@@ -2147,6 +2152,94 @@ func TestToolDecisionRejectsBeforeAnyToolBytesReachClient(t *testing.T) {
 	decision := decisions.lastRequest()
 	if decision.EnvironmentID().String() != "environment.test" || decision.RouteID().String() != "route.primary" {
 		t.Fatalf("tool decision authority = %+v", decision)
+	}
+}
+
+func TestToolDecisionWorkspaceAuthorityRequiresLocalEvidence(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "notes.txt"), []byte("local notes"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(t.TempDir(), "workspace-link")
+	linkErr := os.Symlink(root, link)
+	adapter, ok := clientadapter.BuiltInCatalog().ExpectedEvidence("claude-code", "2.1.220")
+	if !ok {
+		t.Fatal("built-in Claude evidence is unavailable")
+	}
+	for _, test := range []struct {
+		name       string
+		evidence   workspaceidentity.Evidence
+		root       string
+		adapter    *clientadapter.Evidence
+		wantRoot   string
+		structured bool
+	}{
+		{"local", workspaceidentity.EvidenceLocalLauncher, root, &adapter, root, true},
+		{"RemoteWorkspaceExisting", workspaceidentity.EvidenceRegisteredCompanion, root, &adapter, "", false},
+		{"RemoteWorkspaceSymlink", workspaceidentity.EvidenceRegisteredCompanion, link, &adapter, "", false},
+		{"RemoteWorkspaceMissing", workspaceidentity.EvidenceRegisteredCompanion, filepath.Join(root, "missing"), &adapter, "", false},
+		{"unscoped", "", root, &adapter, "", false},
+		{"local-without-root", workspaceidentity.EvidenceLocalLauncher, "", &adapter, "", false},
+		{"local-unverified-client", workspaceidentity.EvidenceLocalLauncher, root, nil, root, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if test.name == "RemoteWorkspaceSymlink" && linkErr != nil {
+				t.Skipf("symlinks unavailable: %v", linkErr)
+			}
+			var scope workspaceidentity.Scope
+			if test.evidence != "" {
+				var err error
+				scope, err = workspaceidentity.NewScope(
+					workspaceidentity.MachineID(base64.RawURLEncoding.EncodeToString([]byte(strings.Repeat("m", 32)))),
+					workspaceidentity.WorkspaceID(base64.RawURLEncoding.EncodeToString([]byte(strings.Repeat("w", 32)))),
+					"project", test.evidence, 1, 1,
+				)
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			admission, err := captureadmission.NewManagedRun(captureadmission.ManagedRunEvidence{
+				CaptureRunID: "run-workspace-authority", SourceLabel: "claude",
+				WorkspaceRoot: test.root, Workspace: scope, Adapter: test.adapter,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			plan := mustEnvironmentRequestPlan(t, testPlanOptions{
+				destination: environment.DestinationKindUpstream, providerOrigin: "https://provider.example/v1",
+				backend: protocolspec.DialectOpenAIChat, modelMode: environment.ModelModeMap,
+				mappedModel: "gpt-provider", accounts: []testAccount{{id: "account.primary", revision: 1, epoch: 1}},
+				preferred: "account.primary",
+			})
+			provider := &providerDouble{results: []providerResult{{response: jsonResponse(http.StatusOK, []byte(`{
+				"id":"chatcmpl-read","object":"chat.completion","created":1,"model":"gpt-provider",
+				"choices":[{"index":0,"message":{"role":"assistant","content":null,"tool_calls":[{"id":"call-read","type":"function","function":{"name":"Read","arguments":"{\"file_path\":\"notes.txt\"}"}}]},"finish_reason":"tool_calls","logprobs":null}],
+				"usage":{"prompt_tokens":4,"completion_tokens":2,"total_tokens":6}
+			}`))}}}
+			decisions := &decisionDouble{decision: ToolDecision{Outcome: ToolDecisionRejected, ReasonCode: "user_rejected"}}
+			pipeline := newTestPipeline(t, newAccountAuthority(t, testAccount{id: "account.primary", revision: 1, epoch: 1}), provider, decisions, &attemptObserverDouble{})
+			defer shutdownPipeline(t, pipeline)
+			downstream := &downstreamRecorder{}
+			_, err = pipeline.Execute(context.Background(), mustClientRequestWithOptions(
+				t, "exchange-workspace-authority", plan, []byte(`{
+					"model":"claude-client-alias","max_tokens":32,"messages":[{"role":"user","content":"read notes"}],
+					"tools":[{"name":"Read","input_schema":{"type":"object","properties":{"file_path":{"type":"string"}},"required":["file_path"]}}]
+				}`), WithIngressCorrelation(admission, "connection-workspace-authority"),
+			), downstream)
+			if ReasonOf(err) != ReasonToolDecisionRejected || decisions.callCount() != 1 || len(downstream.bytesSnapshot()) != 0 {
+				t.Fatalf("err=%v decisions=%d downstream=%s", err, decisions.callCount(), downstream.bytesSnapshot())
+			}
+			decision := decisions.lastRequest()
+			if root, ok := decision.Context().WorkspaceRoot(); root != test.wantRoot || ok != (test.wantRoot != "") {
+				t.Errorf("workspace filesystem authority = %q, %v; want %q", root, ok, test.wantRoot)
+			}
+			if decision.Context().StructuredWorkspaceTools() != test.structured {
+				t.Errorf("structured workspace authority = %v; want %v", decision.Context().StructuredWorkspaceTools(), test.structured)
+			}
+			if claimed, ok := admission.WorkspaceRoot(); ok != (test.root != "") || claimed != test.root {
+				t.Fatalf("display/redaction claim = %q, %v; want %q", claimed, ok, test.root)
+			}
+		})
 	}
 }
 

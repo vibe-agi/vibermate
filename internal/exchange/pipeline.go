@@ -2907,8 +2907,9 @@ func (pipeline *Pipeline) decideTools(
 	workspaceRoot := ""
 	structuredWorkspaceTools := false
 	if admission, available := request.CaptureAdmission(); available {
-		workspaceRoot, _ = admission.WorkspaceRoot()
-		structuredWorkspaceTools = admission.Supports(
+		var local bool
+		workspaceRoot, local = admission.LocalWorkspaceRoot()
+		structuredWorkspaceTools = local && admission.Supports(
 			clientadapter.FeatureStructuredWorkspaceTools,
 		)
 	}
