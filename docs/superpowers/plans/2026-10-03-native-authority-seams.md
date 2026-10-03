@@ -22,6 +22,8 @@ Modify `internal/nativetool/{repository.go,types.go}`; create `internal/nativeto
 Dependency direction stays exchange/toolapproval/runtimepersistence -> nativetool -> environment/captureidentity/protocolcore. Domain must never import runtimepersistence or exchange. Store keeps its issuer private; parser keeps observation producers private; HTTP/control/plugin JS receive neither.
 
 ## Addition to native-store Task 3: commit-owned receipt seam
+
+Cancellation is not body-free authority. The controller-approved unreleased-v2 `cancel_rpc_id_digest` binding refinement makes the exact typed target available to operation-ID-only Start. Bind derives the opaque digest from the immutable domain binding; Start/Verify recheck actual same-session target operation/binding/owner and current active state within SQL. A target that completed after Bind cannot yield a cancellation receipt. Keep the cancel-only insert constraint, NULL for other kinds, frozen-v1 preservation and exact schema parity; no raw IDs, caller grant or memory-only target relation.
 Public Go domain factory is needed because another package cannot construct private fields; it only creates an issuer identity, not Store authorization.
 ```go
 type StartFacts struct { OperationID ID; AttemptID string; AuthorityRevision, OwnerEpoch uint64; BindingDigest Digest }
@@ -106,5 +108,4 @@ Run focused RED before implementing, then GREEN: `DEVELOPER_DIR=/Library/Develop
 No commands above were executed; no source/tests changed and no acceptance claimed. The actual authenticated parser, recognized sensitive tool-field profiles and exact endpoint observation remain required producer evidence. This draft deliberately keeps them explicit; a public Go factory, cryptographic digest or private fields alone do not resolve those facts.
 
 Controller self-review: complete106line artifact read, actual earlier private-receipt/catalog-provenance gaps confirmed. Same-Store authoritative verifier is the send seam, catalog complete-public evidence is label/membership provenance only, and sensitive callback HMAC uses nonpersisted per-session key before any raw SHA. Actual parser producer and source-pinned callback tests remain mandatory. Interim rejection is not the goal's final default-callback solution. Migration implementation c8c7e71 is under independent review. These committed additions bind NativeStoreTask2/3 and the later nativemcp transport task, not standalone shipping acceptance.
-
 
