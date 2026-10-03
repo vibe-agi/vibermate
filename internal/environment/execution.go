@@ -249,6 +249,7 @@ type RequestFacts struct {
 }
 
 type RequestPlan struct {
+	clientTool          *ClientToolPlan
 	environmentID       EnvironmentID
 	environmentRevision Revision
 	environmentDigest   CandidateDigest

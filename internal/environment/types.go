@@ -241,8 +241,9 @@ type Environment struct {
 	LaunchEnvironment LaunchEnvironmentPolicy `json:"launchEnvironment"`
 	// PolicySet is nil only in canonical storage for the default Observe
 	// policy. EffectivePolicySet always returns the concrete authority.
-	PolicySet              *PolicySet             `json:"policySet,omitempty"`
-	RetiredChildIdentities []RetiredChildIdentity `json:"retiredChildIdentities,omitempty"`
+	PolicySet              *PolicySet              `json:"policySet,omitempty"`
+	ClientToolAccess       *ClientToolAccessPolicy `json:"clientToolAccess,omitempty"`
+	RetiredChildIdentities []RetiredChildIdentity  `json:"retiredChildIdentities,omitempty"`
 }
 
 // LaunchEnvironmentPolicy is the exact child-process environment overlay
