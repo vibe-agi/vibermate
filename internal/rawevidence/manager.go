@@ -941,6 +941,7 @@ func (manager *Manager) commit(
 	manager.stats.QueueRecords -= len(*batch)
 	manager.stats.QueueBytes -= *batchBytes
 	manager.statsMu.Unlock()
+	manager.releaseDurableFences(records)
 	for _, item := range *batch {
 		manager.recordSlots.Release(1)
 		manager.byteSlots.Release(item.weight)
@@ -948,6 +949,24 @@ func (manager *Manager) commit(
 	*batch = (*batch)[:0]
 	*batchBytes = 0
 	return nil
+}
+
+// releaseDurableFences visits only the committed batch. A later admission for
+// the same Exchange or scope still needs its read/terminal durability barrier.
+// Never acquire admissionMu while holding statsMu: Observe locks them in the
+// opposite order.
+func (manager *Manager) releaseDurableFences(records []StoredEnvelope) {
+	manager.admissionMu.Lock()
+	defer manager.admissionMu.Unlock()
+	for _, record := range records {
+		if manager.exchangeLatest[record.ExchangeID] <= record.Watermark {
+			delete(manager.exchangeLatest, record.ExchangeID)
+		}
+		key := scopeKey{kind: record.ScopeKind, id: record.ScopeID}
+		if manager.scopeLatest[key] <= record.Watermark {
+			delete(manager.scopeLatest, key)
+		}
+	}
 }
 
 func (manager *Manager) durableWatermark() uint64 {
