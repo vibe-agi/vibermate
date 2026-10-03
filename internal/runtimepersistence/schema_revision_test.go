@@ -16,8 +16,12 @@ import (
 func TestSchemaRevisionTracksSchemaFile(t *testing.T) {
 	t.Parallel()
 	const revision1 = "393b7d67f8ffd1952fc516a150e1a2a68707b67536fbc2e7f5a7f17208424cb1"
+	const revision2 = "3774d865280ad0de21bcd0b052486499a8eb5c582b580d1e7c27a794f0eb7d71"
+	if frozen := sha256.Sum256([]byte(schemaV1SQL)); hex.EncodeToString(frozen[:]) != revision1 {
+		t.Fatal("frozen v1 changed")
+	}
 	digest := sha256.Sum256([]byte(schemaSQL))
-	if schemaRevision != 1 || hex.EncodeToString(digest[:]) != revision1 {
+	if schemaRevision != 2 || hex.EncodeToString(digest[:]) != revision2 {
 		t.Fatalf("schema.sql changed (sha256 %x) without a schemaRevision bump", digest)
 	}
 }

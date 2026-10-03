@@ -11,7 +11,7 @@ import (
 
 // schema.sql is the current bootstrap, identified by an integer revision.
 // Older supported schemas are frozen separately for read-only inspection and
-// private rollback validation. This build does not migrate or accept revision 2.
+// private rollback validation and verified transactional upgrades.
 // Any bootstrap change requires its corresponding revision and upgrade review.
 //
 //go:embed schema.sql
@@ -20,10 +20,16 @@ var schemaSQL string
 //go:embed schema/v1.sql
 var schemaV1SQL string
 
+//go:embed schema/v2.sql
+var schemaV2SQL string
+
+//go:embed migrations/001_to_002.sql
+var migration001To002SQL string
+
 const (
 	// schemaIdentity marks a SQLite file as a ViberMate Runtime database.
 	schemaIdentity = "vibermate-runtime"
-	schemaRevision = int64(1)
+	schemaRevision = int64(2)
 )
 
 // ErrUnsupportedSchema reports a file that is not a ViberMate Runtime database

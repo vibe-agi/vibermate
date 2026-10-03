@@ -4,12 +4,15 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"path/filepath"
 	"time"
 
 	"github.com/vibe-agi/vibermate/internal/exchange"
 	"github.com/vibe-agi/vibermate/internal/hostcontract"
+	"github.com/vibe-agi/vibermate/internal/instanceguard"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
+	"github.com/vibe-agi/vibermate/internal/runtimedata"
 	"github.com/vibe-agi/vibermate/internal/secretstore"
 	"github.com/vibe-agi/vibermate/internal/toolapproval"
 )
@@ -36,6 +39,43 @@ func NewRuntimePaths(dataDirectory string) (RuntimePaths, error) {
 	}
 	if dataDirectory == filepath.VolumeName(dataDirectory)+string(filepath.Separator) {
 		return RuntimePaths{}, fmt.Errorf("%w: data directory must not be a filesystem root", ErrInvalidOptions)
+	}
+	// Resolve only directory ancestors. A final endpoint link is still rejected,
+	// while OS aliases such as /var share one physical data/SQLite/guard authority.
+	if info, err := os.Lstat(dataDirectory); err == nil {
+		if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+			return RuntimePaths{}, fmt.Errorf("%w: data directory endpoint must be a directory", ErrInvalidOptions)
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return RuntimePaths{}, fmt.Errorf("%w: inspect data directory", ErrInvalidOptions)
+	}
+	ancestor := dataDirectory
+	var missing []string
+	for {
+		info, err := os.Stat(ancestor)
+		if err == nil {
+			if !info.IsDir() {
+				return RuntimePaths{}, fmt.Errorf("%w: data path ancestor is not a directory", ErrInvalidOptions)
+			}
+			physical, err := filepath.EvalSymlinks(ancestor)
+			if err != nil {
+				return RuntimePaths{}, fmt.Errorf("%w: resolve data directory", ErrInvalidOptions)
+			}
+			dataDirectory = physical
+			for index := len(missing) - 1; index >= 0; index-- {
+				dataDirectory = filepath.Join(dataDirectory, missing[index])
+			}
+			break
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			return RuntimePaths{}, fmt.Errorf("%w: inspect data path ancestor", ErrInvalidOptions)
+		}
+		missing = append(missing, filepath.Base(ancestor))
+		parent := filepath.Dir(ancestor)
+		if parent == ancestor {
+			return RuntimePaths{}, ErrInvalidOptions
+		}
+		ancestor = parent
 	}
 	return RuntimePaths{
 		dataDirectory: dataDirectory,
@@ -73,19 +113,25 @@ func DefaultLifecycleOptions() LifecycleOptions {
 
 // Options is the complete typed ProductRuntime construction input.
 type Options struct {
-	Paths          RuntimePaths
-	Host           hostcontract.Contract
-	OfflineHold    offlinehold.RuntimeCoordinator
-	Secrets        secretstore.Store
-	Approvals      toolapproval.Config
-	ExchangeHold   exchange.HoldPolicy
-	Clock          Clock
-	InstanceIDs    InstanceIDSource
-	SecurityRandom io.Reader
-	Lifecycle      LifecycleOptions
+	SchemaUpgradeHostGuard *instanceguard.Guard
+	SchemaUpgradeTimeout   time.Duration
+	SchemaUpgradeProgress  func(runtimedata.SchemaUpgradePhase) error
+	Paths                  RuntimePaths
+	Host                   hostcontract.Contract
+	OfflineHold            offlinehold.RuntimeCoordinator
+	Secrets                secretstore.Store
+	Approvals              toolapproval.Config
+	ExchangeHold           exchange.HoldPolicy
+	Clock                  Clock
+	InstanceIDs            InstanceIDSource
+	SecurityRandom         io.Reader
+	Lifecycle              LifecycleOptions
 }
 
 func (o Options) validate() error {
+	if o.SchemaUpgradeTimeout < 0 {
+		return fmt.Errorf("%w: negative schema upgrade timeout", ErrInvalidOptions)
+	}
 	if o.Paths.dataDirectory == "" || o.Paths.databasePath == "" {
 		return fmt.Errorf("%w: runtime paths are missing", ErrInvalidOptions)
 	}

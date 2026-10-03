@@ -3,6 +3,20 @@ import 'package:vibermate_app/core/i18n/app_copy.dart';
 import 'package:vibermate_app/features/workbench/workbench_controller.dart';
 
 void main() {
+  test('upgrade failure retains plain localized data preservation copy', () {
+    expect(
+      AppCopy.forLanguage(AppLanguage.english)(
+        'bootstrap.failure.storage_upgrade_incomplete',
+      ),
+      'Data upgrade incomplete; original data retained',
+    );
+    expect(
+      AppCopy.forLanguage(AppLanguage.simplifiedChinese)(
+        'bootstrap.failure.storage_upgrade_incomplete',
+      ),
+      '数据升级未完成，原数据保留',
+    );
+  });
   test('English and Chinese copy catalogs reject missing public keys', () {
     final english = AppCopy.forLanguage(AppLanguage.english);
     final chinese = AppCopy.forLanguage(AppLanguage.simplifiedChinese);

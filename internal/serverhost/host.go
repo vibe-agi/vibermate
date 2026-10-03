@@ -114,6 +114,7 @@ func Start(ctx context.Context, options Options) (*Host, error) {
 	if err != nil {
 		return nil, fmt.Errorf("acquire Runtime Server generation: %w", err)
 	}
+	options.Runtime.SchemaUpgradeHostGuard = guard
 	runtime, err := productruntime.Start(ctx, options.Runtime)
 	if err != nil {
 		_ = guard.Release()

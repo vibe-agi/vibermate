@@ -32,12 +32,14 @@ type View struct {
 	StartedAt       time.Time `json:"startedAt"`
 	// Terminal says whether this attempt has finished. Until it has, an
 	// outcome and a byte count would be guesses.
-	Terminal    bool       `json:"terminal"`
-	Outcome     Outcome    `json:"outcome,omitempty"`
-	ErrorClass  string     `json:"errorClass,omitempty"`
-	BytesOut    int64      `json:"bytesOut"`
-	BytesIn     int64      `json:"bytesIn"`
-	CompletedAt *time.Time `json:"completedAt,omitempty"`
+	Terminal          bool       `json:"terminal"`
+	Outcome           Outcome    `json:"outcome,omitempty"`
+	ErrorClass        string     `json:"errorClass,omitempty"`
+	BytesOut          int64      `json:"bytesOut"`
+	BytesIn           int64      `json:"bytesIn"`
+	ByteCountsKnown   bool       `json:"byteCountsKnown"`
+	NativeOperationID string     `json:"nativeOperationId,omitempty"`
+	CompletedAt       *time.Time `json:"completedAt,omitempty"`
 }
 
 type ParentView struct {
@@ -91,6 +93,10 @@ func ViewOf(record Record) View {
 		ErrorClass:      attempt.ErrorClass(),
 		BytesOut:        attempt.BytesOut(),
 		BytesIn:         attempt.BytesIn(),
+		ByteCountsKnown: attempt.ByteCountsKnown(),
+	}
+	if attempt.Purpose() == PurposeClientToolService {
+		view.NativeOperationID = attempt.Parent().ID
 	}
 	if !attempt.CompletedAt().IsZero() {
 		completed := attempt.CompletedAt()

@@ -97,6 +97,26 @@ func TestRuntimeStartingProgressIsCapabilityFreeAndClosed(t *testing.T) {
 	}
 }
 
+func TestStoragePreparationProgressAndIncompleteFailureAreClosed(t *testing.T) {
+	for _, phase := range []desktopbootstrap.ProgressPhase{desktopbootstrap.ProgressStoragePreparing, desktopbootstrap.ProgressStorageUpgrade} {
+		progress := desktopbootstrap.Progress{Schema: desktopbootstrap.ProgressSchema, Phase: phase}
+		if err := progress.Validate(); err != nil {
+			t.Fatal(err)
+		}
+		encoded, err := json.Marshal(progress)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var object map[string]any
+		if err := json.Unmarshal(encoded, &object); err != nil || len(object) != 2 {
+			t.Fatal("preparation leaked authority")
+		}
+	}
+	if err := desktopbootstrap.StartupFailure(desktopbootstrap.FailureStorageUpgradeIncomplete).Validate(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestStartupFailureCarriesOnlyAClosedReason(t *testing.T) {
 	t.Parallel()
 

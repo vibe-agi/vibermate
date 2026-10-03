@@ -48,6 +48,7 @@ func TestEveryPurposeMapsToAHoldKind(t *testing.T) {
 		egressaudit.PurposePluginCatalogSync:      offlinehold.EgressPlugin,
 		egressaudit.PurposePluginArtifactFetch:    offlinehold.EgressPlugin,
 		egressaudit.PurposeUpdate:                 offlinehold.EgressUpdate,
+		egressaudit.PurposeClientToolService:      offlinehold.EgressAuxiliary,
 	}
 	seen := make(map[egressaudit.EgressPurpose]struct{}, len(expected))
 	for _, purpose := range egressaudit.Purposes() {

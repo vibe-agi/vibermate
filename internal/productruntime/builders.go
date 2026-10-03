@@ -23,6 +23,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/evidencearchive"
 	"github.com/vibe-agi/vibermate/internal/exchange"
 	"github.com/vibe-agi/vibermate/internal/exchangecontent"
+	"github.com/vibe-agi/vibermate/internal/instanceguard"
 	"github.com/vibe-agi/vibermate/internal/localca"
 	"github.com/vibe-agi/vibermate/internal/loopbackproxy"
 	"github.com/vibe-agi/vibermate/internal/manualcapture"
@@ -37,6 +38,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/providertransport"
 	"github.com/vibe-agi/vibermate/internal/rawevidence"
 	"github.com/vibe-agi/vibermate/internal/responseschat"
+	"github.com/vibe-agi/vibermate/internal/runtimedata"
 	"github.com/vibe-agi/vibermate/internal/runtimepersistence"
 	"github.com/vibe-agi/vibermate/internal/runtimeusage"
 	"github.com/vibe-agi/vibermate/internal/secretstore"
@@ -47,7 +49,12 @@ import (
 )
 
 type storageBuildRequest struct {
-	databasePath string
+	databasePath         string
+	directory            string
+	dataGuard, hostGuard *instanceguard.Guard
+	now                  time.Time
+	upgradeTimeout       time.Duration
+	progress             func(runtimedata.SchemaUpgradePhase) error
 }
 
 type storageBuildResult struct {
@@ -59,6 +66,15 @@ func buildStorage(
 	ctx context.Context,
 	request storageBuildRequest,
 ) (storageBuildResult, error) {
+	if _, err := runtimedata.UpgradeSchemaOwned(ctx, request.directory, "", request.dataGuard, request.hostGuard, request.now, request.upgradeTimeout, request.progress); err != nil {
+		return storageBuildResult{}, err
+	}
+	if err := ctx.Err(); err != nil {
+		return storageBuildResult{}, err
+	}
+	if request.dataGuard == nil || !request.dataGuard.OwnsDirectory(request.directory) || request.hostGuard == nil || !request.hostGuard.OwnsDirectory(request.directory) {
+		return storageBuildResult{}, runtimedata.ErrSchemaUpgradeIncomplete
+	}
 	store, err := runtimepersistence.Open(ctx, runtimepersistence.Options{
 		DatabasePath:           request.databasePath,
 		BusyTimeout:            runtimepersistence.DefaultBusyTimeout,

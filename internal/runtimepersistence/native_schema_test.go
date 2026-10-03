@@ -200,7 +200,7 @@ func TestNativeSchemaBootstrapMatchesMigration(t *testing.T) {
 
 func TestNativeAuditRebuildPreservesRowsAndSequence(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "legacy.db")
-	store := openTestStore(t, path)
+	store := openFrozenV1Store(t, path)
 	ctx := context.Background()
 	now := time.Date(2026, 10, 3, 0, 0, 0, 0, time.UTC)
 	writeAnthropicEndpoint(t, store)

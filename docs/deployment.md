@@ -431,8 +431,31 @@ and flush its files and directory entries before it can be used.
 
 Local file credentials retain their original account references after restore.
 External and keychain credentials stay in their existing locations on the
-original host and are not exported. This internal snapshot facility does not
-introduce a schema-upgrade command or activate a new database revision.
+original host and are not exported.
+
+Stopped revision-1 data upgrades automatically to revision 2 at startup, under
+exclusive data and server locks. Startup first creates and verifies a fresh
+private snapshot of the complete directory, including local secrets, then
+upgrades SQLite in one fully synchronized transaction. Keep the snapshot
+private and retain it; it is not an ordinary shareable backup.
+
+Desktop readiness normally has a two-minute budget after its initial starting
+frame. One storage preparation or upgrade frame allows at most twenty minutes
+from process launch, with fifteen minutes for owned work and bounded commit
+reconciliation. Large retained WAL data may show preparation before its format
+is checked. Preparation conveys no credential or permission authority.
+
+“Data upgrade incomplete; original data retained” means startup did not activate
+the runtime. Keep the source directory, snapshot and any private upgrade receipt.
+An uncertain commit is checked again synchronously on the next owned startup;
+it is never blindly restored. Once a committed upgrade is proved, the receipt
+is removed and synchronized before normal writes begin. Retry only after the
+previous process exits and releases its locks. A storage upgrade failure never
+selects a previous directory or starts another daemon automatically.
+
+To recover old data, restore the verified private snapshot to a new sibling
+directory and verify it before selecting it. Do not overwrite the source or
+restore over an active runtime. There is no manual primary upgrade command.
 
 ## Diagnostics and checks
 

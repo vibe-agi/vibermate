@@ -13,6 +13,8 @@ import (
 	"time"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/vibe-agi/vibermate/internal/environment"
 )
 
 // RecoveryErrorClass marks an attempt whose process disappeared before it
@@ -42,6 +44,7 @@ const (
 	PurposePluginCatalogSync      EgressPurpose = "plugin_catalog_sync"
 	PurposePluginArtifactFetch    EgressPurpose = "plugin_artifact_fetch"
 	PurposeUpdate                 EgressPurpose = "update"
+	PurposeClientToolService      EgressPurpose = "client_tool_service"
 )
 
 // Purposes returns the complete set of supported logical egress purposes.
@@ -64,6 +67,7 @@ func Purposes() []EgressPurpose {
 		PurposePluginCatalogSync,
 		PurposePluginArtifactFetch,
 		PurposeUpdate,
+		PurposeClientToolService,
 	}
 }
 
@@ -83,7 +87,7 @@ func AuthorityForPurpose(
 	purpose EgressPurpose,
 ) (PolicyAuthorityKind, error) {
 	switch purpose {
-	case PurposeProviderAttempt, PurposeRouteOperation:
+	case PurposeProviderAttempt, PurposeRouteOperation, PurposeClientToolService:
 		return AuthorityEnvironment, nil
 	case PurposeOriginalOrigin, PurposeAgentProbe, PurposeBlindTunnel:
 		return AuthorityNetwork, nil
@@ -201,11 +205,12 @@ type NewInput struct {
 }
 
 type TerminalInput struct {
-	Outcome     Outcome
-	ErrorClass  string
-	BytesOut    int64
-	BytesIn     int64
-	CompletedAt time.Time
+	UnobservedByteCounts bool
+	Outcome              Outcome
+	ErrorClass           string
+	BytesOut             int64
+	BytesIn              int64
+	CompletedAt          time.Time
 }
 
 // Attempt is immutable. Finish returns a new terminal value rather than
@@ -223,15 +228,19 @@ type Attempt struct {
 	reusedTransport bool
 	startedAt       time.Time
 
-	terminal    bool
-	outcome     Outcome
-	errorClass  string
-	bytesOut    int64
-	bytesIn     int64
-	completedAt time.Time
+	terminal        bool
+	outcome         Outcome
+	errorClass      string
+	bytesOut        int64
+	bytesIn         int64
+	completedAt     time.Time
+	byteCountsKnown bool
 }
 
 func New(input NewInput) (Attempt, error) {
+	if input.Purpose == PurposeClientToolService && (input.Decision.AccountID != "" || input.Decision.AccountSettingsRevision != 0) {
+		return Attempt{}, errors.New("native tool egress cannot carry a model account")
+	}
 	if err := validateIdentity("EgressAttempt ID", input.ID); err != nil {
 		return Attempt{}, err
 	}
@@ -297,6 +306,7 @@ func New(input NewInput) (Attempt, error) {
 		decision:        input.Decision,
 		reusedTransport: input.ReusedTransport,
 		startedAt:       input.StartedAt.UTC(),
+		byteCountsKnown: true,
 	}, nil
 }
 
@@ -330,8 +340,27 @@ func (attempt Attempt) Finish(input TerminalInput) (Attempt, error) {
 	attempt.bytesOut = input.BytesOut
 	attempt.bytesIn = input.BytesIn
 	attempt.completedAt = input.CompletedAt.UTC()
+	attempt.byteCountsKnown = !input.UnobservedByteCounts
 	return attempt, nil
 }
+
+// NewClientToolAttempt proves the exact frozen non-model route. The ordinary
+// constructor remains the stored-row decoder, not native routing authority.
+func NewClientToolAttempt(plan environment.ClientToolPlan, input NewInput) (Attempt, error) {
+	if err := plan.Validate(); err != nil {
+		return Attempt{}, err
+	}
+	route := plan.Route()
+	if input.Purpose != PurposeClientToolService || input.TargetOrigin != route.TargetOrigin.String() ||
+		input.Decision.PolicyID != plan.EnvironmentID().String() || input.Decision.PolicyRevision != uint64(plan.EnvironmentRevision()) ||
+		input.Decision.RuleID != route.ID.String() || input.Decision.ProxyID != route.EgressProfile.ID.String() ||
+		input.Decision.ProxyRevision != uint64(route.EgressProfile.Revision) || input.Decision.AccountID != "" || input.Decision.AccountSettingsRevision != 0 {
+		return Attempt{}, errors.New("native tool egress differs from frozen route")
+	}
+	return New(input)
+}
+
+func (attempt Attempt) ByteCountsKnown() bool { return attempt.byteCountsKnown }
 
 func (attempt Attempt) ID() string                 { return attempt.id }
 func (attempt Attempt) ConnectionID() string       { return attempt.connectionID }
@@ -359,6 +388,10 @@ func validatePayloadClass(
 	class PayloadClass,
 ) error {
 	switch purpose {
+	case PurposeClientToolService:
+		if class != PayloadClientData && class != PayloadNone {
+			return errors.New("native tool payload must be client data or none")
+		}
 	case PurposeProviderAttempt, PurposeRouteOperation:
 		return nil
 	case PurposeOriginalOrigin, PurposeAgentProbe:
@@ -436,7 +469,7 @@ func validateParent(
 			return nil
 		}
 		return requireConnection()
-	case PurposeRouteOperation:
+	case PurposeRouteOperation, PurposeClientToolService:
 		if parent.Kind != ParentClientOperation || parent.ExchangeID != "" {
 			return errors.New(
 				"route operation requires a client-operation parent with no Exchange",
@@ -481,7 +514,7 @@ func validateCaller(
 	callerID string,
 ) error {
 	if (purpose == PurposePluginCatalogSync ||
-		purpose == PurposePluginArtifactFetch) &&
+		purpose == PurposePluginArtifactFetch || purpose == PurposeClientToolService) &&
 		caller != CallerCore {
 		return errors.New("plugin distribution egress must be created by core")
 	}

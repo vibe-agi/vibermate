@@ -25,6 +25,7 @@
     "outcome": "completed",
     "bytesOut": 2048,
     "bytesIn": 16384,
+    "byteCountsKnown": true,
     "completedAt": "2026-08-02T10:00:03Z"
   },
   {
@@ -54,6 +55,7 @@
     "startedAt": "2026-08-02T10:01:00Z",
     "terminal": false,
     "bytesOut": 0,
-    "bytesIn": 0
+    "bytesIn": 0,
+    "byteCountsKnown": true
   }
 ]

@@ -8,6 +8,9 @@ import (
 	"time"
 
 	"github.com/vibe-agi/vibermate/internal/egressaudit"
+	"github.com/vibe-agi/vibermate/internal/egressprofile"
+	"github.com/vibe-agi/vibermate/internal/environment"
+	"github.com/vibe-agi/vibermate/internal/protocolspec"
 )
 
 // This tests the persistence taxonomy, not the per-purpose parent/payload
@@ -19,6 +22,13 @@ func TestSQLiteAcceptsEveryDeclaredEgressPurpose(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, purpose := range egressaudit.Purposes() {
+		if purpose == egressaudit.PurposeClientToolService {
+			attempt := nativeAuditFixture(t, "native-catalog")
+			if _, err := store.EgressAttemptRepository().Append(context.Background(), attempt); err != nil {
+				t.Fatal(err)
+			}
+			continue
+		}
 		if _, err := store.database.ExecContext(context.Background(), `UPDATE runtime_egress_attempts SET purpose = ? WHERE attempt_id = 'purpose-catalog'`, purpose); err != nil {
 			t.Errorf("declared purpose %q cannot be audited: %v", purpose, err)
 		}
@@ -26,6 +36,33 @@ func TestSQLiteAcceptsEveryDeclaredEgressPurpose(t *testing.T) {
 	if _, err := store.database.ExecContext(context.Background(), `UPDATE runtime_egress_attempts SET purpose = 'invented'`); err == nil {
 		t.Fatal("unknown purpose accepted")
 	}
+}
+
+func nativeAuditFixture(t *testing.T, id string) egressaudit.Attempt {
+	t.Helper()
+	candidate := environmentFixture(t, "native-audit", 1)
+	candidate.ClientToolAccess = &environment.ClientToolAccessPolicy{Enabled: true, Route: &environment.ClientToolRoute{ID: "native-route", Revision: 1, TargetOrigin: runtimeProviderOrigin(t, "https://chatgpt.com"), Path: environment.ClientToolMCPPath, CredentialOwner: environment.ClientToolCredentialOriginal, Contract: environment.ClientToolContractCodexLegacy, EgressProfile: egressprofile.Direct()}}
+	snapshot, err := runtimeEnvironmentCompiler(t).Compile(candidate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	binding, err := snapshot.BeginProviderConnection(candidate.ClientToolAccess.Route.TargetOrigin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, err := snapshot.ResolveClientToolRequest(binding, environment.RequestFacts{Target: protocolspec.RequestTarget{Method: "POST", Path: environment.ClientToolMCPPath, Transport: protocolspec.ClientOperationTransportHTTP}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, ok := request.ClientToolPlan()
+	if !ok {
+		t.Fatal("no native plan")
+	}
+	attempt, err := egressaudit.NewClientToolAttempt(plan, egressaudit.NewInput{ID: id, ConnectionID: "native-connection", Purpose: egressaudit.PurposeClientToolService, PayloadClass: egressaudit.PayloadClientData, Parent: egressaudit.ParentRef{Kind: egressaudit.ParentClientOperation, ID: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}, Caller: egressaudit.CallerCore, TargetOrigin: plan.Route().TargetOrigin.String(), Decision: egressaudit.DecisionRef{PolicyID: "native-audit", PolicyRevision: 1, Authority: egressaudit.AuthorityEnvironment, RuleID: "native-route", ProxyID: "profile.direct", ProxyRevision: 1}, StartedAt: time.Date(2026, 10, 3, 0, 0, 0, 0, time.UTC)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return attempt
 }
 
 func providerAttempt(t *testing.T, id string) egressaudit.Attempt {

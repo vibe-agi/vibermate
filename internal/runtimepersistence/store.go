@@ -94,6 +94,9 @@ func Open(ctx context.Context, options Options) (*Store, error) {
 	if err := prepareDatabasePath(options.DatabasePath); err != nil {
 		return nil, err
 	}
+	if _, err := os.Lstat(filepath.Join(filepath.Dir(options.DatabasePath), SchemaUpgradeReceiptName)); !errors.Is(err, os.ErrNotExist) {
+		return nil, ErrMigrationRequired
+	}
 	// Reject an old baseline before even enabling WAL: journal_mode itself can
 	// change the database header despite a later schema transaction rollback.
 	if err := validateExistingSchema(ctx, options.DatabasePath, options.BusyTimeout); err != nil {

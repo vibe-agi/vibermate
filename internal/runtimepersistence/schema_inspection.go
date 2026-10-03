@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"time"
 )
 
@@ -219,36 +220,8 @@ func inspectSupportedSchema(ctx context.Context, database schemaQueryer) (Schema
 	if revision == 0 {
 		return SchemaState{}, nil
 	}
-	var frozen string
-	switch revision {
-	case 1:
-		frozen = schemaV1SQL
-	default:
-		return SchemaState{}, ErrUnsupportedSchema
-	}
-	observed, err := schemaObjects(ctx, database)
-	if err != nil {
-		return SchemaState{}, errors.Join(ErrUnsupportedSchema, ctx.Err())
-	}
-	// Build the reference in memory, never in the inspected directory. SQLite
-	// supplies its own canonical sqlite_schema form for the exact frozen DDL.
-	reference, err := sql.Open("sqlite", ":memory:")
-	if err != nil {
-		return SchemaState{}, ErrUnsupportedSchema
-	}
-	defer reference.Close()
-	reference.SetMaxOpenConns(1)
-	if _, err := reference.ExecContext(ctx, frozen); err != nil {
-		return SchemaState{}, errors.Join(ErrUnsupportedSchema, ctx.Err())
-	}
-	expected, err := schemaObjects(ctx, reference)
-	if err != nil || len(observed) != len(expected) {
-		return SchemaState{}, errors.Join(ErrUnsupportedSchema, ctx.Err())
-	}
-	for index := range expected {
-		if observed[index] != expected[index] {
-			return SchemaState{}, ErrUnsupportedSchema
-		}
+	if err := inspectSchemaLayout(ctx, database, revision); err != nil {
+		return SchemaState{}, err
 	}
 	var state SchemaState
 	if err := database.QueryRowContext(ctx, `SELECT schema_identity, schema_revision, initialized_at FROM runtime_metadata WHERE singleton=1`).Scan(&state.Identity, &state.Revision, &state.InitializedAt); err != nil {
@@ -259,6 +232,46 @@ func inspectSupportedSchema(ctx context.Context, database schemaQueryer) (Schema
 		return SchemaState{}, ErrUnsupportedSchema
 	}
 	return state, nil
+}
+
+// SQLite's ALTER TABLE produces a second exact layout. Admit only a complete
+// layout generated from one of the two reviewed SQL paths, never normalized SQL.
+func inspectSchemaLayout(ctx context.Context, database schemaQueryer, revision int64) error {
+	var bootstraps []string
+	switch revision {
+	case 1:
+		bootstraps = []string{schemaV1SQL}
+	case 2:
+		bootstraps = []string{schemaV2SQL, schemaV1SQL + "\n" + migration001To002SQL}
+	default:
+		return ErrUnsupportedSchema
+	}
+	observed, err := schemaObjects(ctx, database)
+	if err != nil {
+		return errors.Join(ErrUnsupportedSchema, ctx.Err())
+	}
+	// Build the reference in memory, never in the inspected directory. SQLite
+	// supplies its own canonical sqlite_schema form for the exact frozen DDL.
+	for _, frozen := range bootstraps {
+		reference, err := sql.Open("sqlite", ":memory:")
+		if err != nil {
+			return ErrUnsupportedSchema
+		}
+		reference.SetMaxOpenConns(1)
+		if _, err := reference.ExecContext(ctx, frozen); err != nil {
+			_ = reference.Close()
+			return errors.Join(ErrUnsupportedSchema, ctx.Err())
+		}
+		expected, err := schemaObjects(ctx, reference)
+		_ = reference.Close()
+		if err != nil {
+			return errors.Join(ErrUnsupportedSchema, ctx.Err())
+		}
+		if slices.Equal(observed, expected) {
+			return nil
+		}
+	}
+	return ErrUnsupportedSchema
 }
 
 type schemaObject struct{ kind, name, table, statement string }

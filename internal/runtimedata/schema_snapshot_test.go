@@ -590,7 +590,7 @@ func TestSchemaUpgradeSnapshotValidationRejectsTampering(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				statement := "UPDATE runtime_metadata SET schema_revision=2"
+				statement := "UPDATE runtime_metadata SET schema_revision=99"
 				if scenario == "revision99" {
 					statement = "UPDATE runtime_metadata SET schema_revision=99"
 				}
@@ -631,7 +631,7 @@ func TestSchemaUpgradeSnapshotValidationRejectsTampering(t *testing.T) {
 				case "wrong_format":
 					manifest.Schema = backupManifestSchema
 				case "manifest_revision":
-					manifest.Database.Revision = 2
+					manifest.Database.Revision = 99
 					expect = ErrBackupIncompatible
 				}
 				writeSnapshotTestManifest(t, target, manifest)
@@ -797,7 +797,7 @@ func TestSchemaUpgradeSnapshotFailureHasNoCompletionManifest(t *testing.T) {
 				}
 				statement := "UPDATE runtime_metadata SET schema_identity='foreign-runtime'"
 				if scenario == "source_revision2" {
-					statement = "UPDATE runtime_metadata SET schema_revision=2"
+					statement = "UPDATE runtime_metadata SET schema_revision=99"
 				}
 				if scenario == "source_revision99" {
 					statement = "UPDATE runtime_metadata SET schema_revision=99"

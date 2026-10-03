@@ -6,14 +6,20 @@ import 'dart:typed_data';
 import '../api/control_api.dart';
 import '../api/control_models.dart';
 import 'desktop_daemon_environment.dart';
+import 'desktop_bootstrap_budget.dart';
 import 'desktop_daemon_lifecycle.dart';
 import 'desktop_storage.dart';
 
 final class DesktopRuntimeException implements Exception {
-  const DesktopRuntimeException(this.message, {this.reason});
+  const DesktopRuntimeException(
+    this.message, {
+    this.reason,
+    this.preserveDataDirectory = false,
+  });
 
   final String message;
   final String? reason;
+  final bool preserveDataDirectory;
 
   @override
   String toString() => reason == null ? message : '$message ($reason)';
@@ -83,7 +89,9 @@ final class DesktopRuntime {
       return runtime;
     } catch (error) {
       if (error is DesktopRuntimeException &&
-          error.reason == 'runtime_already_active') {
+          (error.reason == 'runtime_already_active' ||
+              error.reason == 'storage_upgrade_incomplete' ||
+              error.preserveDataDirectory)) {
         rethrow;
       }
       final previous = selection?.previous;
@@ -125,6 +133,8 @@ final class DesktopRuntime {
       if (remoteServerListenAddress != null)
         '--remote-server-listen=$remoteServerListenAddress',
     ];
+    final stopwatch = Stopwatch()..start();
+    final budget = DesktopBootstrapBudget(elapsed: () => stopwatch.elapsed);
     final process = await Process.start(
       executable,
       arguments,
@@ -138,34 +148,18 @@ final class DesktopRuntime {
       final lines = process.stdout
           .transform(const Utf8Decoder(allowMalformed: false))
           .transform(const LineSplitter());
-      final iterator = StreamIterator<String>(lines);
-      final progress = await _nextFrame(
-        iterator,
-        timeout: const Duration(seconds: 5),
-        frame: 1,
-      );
-      if (requireString(progress, 'schema', 'bootstrap.progress') !=
-              'vibermate-daemon-progress-v1' ||
-          requireString(progress, 'phase', 'bootstrap.progress') !=
-              'runtime_starting') {
-        throw const DesktopRuntimeException(
-          'Desktop bootstrap progress contract did not match',
-        );
-      }
-      final descriptor = await _nextFrame(
-        iterator,
-        timeout: const Duration(seconds: 120),
-        frame: 2,
-      );
+      final descriptor = await readDesktopBootstrapFrames(lines, budget);
       final schema = requireString(
         descriptor,
         'schema',
         'bootstrap.descriptor',
       );
       if (schema == 'vibermate-daemon-failure-v1') {
+        final reason = requireString(descriptor, 'reason', 'bootstrap.failure');
         throw DesktopRuntimeException(
           'Desktop runtime could not be started',
-          reason: requireString(descriptor, 'reason', 'bootstrap.failure'),
+          reason: reason,
+          preserveDataDirectory: budget.upgradeSeen,
         );
       }
       final validated = _DaemonDescriptor.fromJson(descriptor);
@@ -185,44 +179,35 @@ final class DesktopRuntime {
         storage: storage,
         storageNotice: storageNotice,
       );
-    } catch (_) {
-      await const DesktopDaemonLifecycle.production().close(
-        _IODesktopDaemonProcess(process),
-      );
+    } catch (error) {
+      try {
+        await const DesktopDaemonLifecycle.production().close(
+          _IODesktopDaemonProcess(process),
+        );
+      } catch (_) {
+        throw DesktopRuntimeException(
+          'Desktop runtime exit could not be confirmed',
+          reason: budget.upgradeSeen
+              ? 'storage_upgrade_incomplete'
+              : 'runtime_unavailable',
+          preserveDataDirectory: true,
+        );
+      }
+      if (budget.upgradeSeen) {
+        if (error is DesktopRuntimeException && error.reason != null) {
+          throw DesktopRuntimeException(
+            error.message,
+            reason: error.reason,
+            preserveDataDirectory: true,
+          );
+        }
+        throw const DesktopRuntimeException(
+          'Data upgrade incomplete; original data retained',
+          reason: 'storage_upgrade_incomplete',
+          preserveDataDirectory: true,
+        );
+      }
       rethrow;
-    }
-  }
-
-  static Future<JsonObject> _nextFrame(
-    StreamIterator<String> iterator, {
-    required Duration timeout,
-    required int frame,
-  }) async {
-    final available = await iterator.moveNext().timeout(
-      timeout,
-      onTimeout: () => throw DesktopRuntimeException(
-        frame == 1
-            ? 'Desktop bootstrap progress deadline exceeded'
-            : 'Desktop bootstrap readiness deadline exceeded',
-      ),
-    );
-    if (!available) {
-      throw const DesktopRuntimeException(
-        'Desktop sidecar exited before bootstrap',
-      );
-    }
-    final line = iterator.current;
-    if (utf8.encode(line).length > _maximumBootstrapBytes) {
-      throw const DesktopRuntimeException(
-        'Desktop bootstrap exceeded its size limit',
-      );
-    }
-    try {
-      return requireObject(jsonDecode(line), 'bootstrap.frame');
-    } on FormatException {
-      throw const DesktopRuntimeException(
-        'Desktop bootstrap was not valid JSON',
-      );
     }
   }
 

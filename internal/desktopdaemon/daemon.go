@@ -20,6 +20,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/localca"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
 	"github.com/vibe-agi/vibermate/internal/productruntime"
+	"github.com/vibe-agi/vibermate/internal/runtimedata"
 	"github.com/vibe-agi/vibermate/internal/runtimepersistence"
 	"github.com/vibe-agi/vibermate/internal/secretstore"
 	"github.com/vibe-agi/vibermate/internal/toolapproval"
@@ -113,6 +114,18 @@ func Run(ctx context.Context, options Options) error {
 	if err := encoder.Encode(progress); err != nil {
 		return fmt.Errorf("write native-shell bootstrap progress: %w", err)
 	}
+	preparationSent := false
+	options.Host.Runtime.SchemaUpgradeProgress = func(phase runtimedata.SchemaUpgradePhase) error {
+		if preparationSent {
+			return errors.New("duplicate storage preparation")
+		}
+		frame := desktopbootstrap.Progress{Schema: desktopbootstrap.ProgressSchema, Phase: desktopbootstrap.ProgressPhase(phase)}
+		if err := frame.Validate(); err != nil {
+			return err
+		}
+		preparationSent = true
+		return encoder.Encode(frame)
+	}
 	host, err := desktophost.Start(ctx, options.Host)
 	if err != nil {
 		failure := classifyStartupFailure(err)
@@ -159,6 +172,8 @@ func Run(ctx context.Context, options Options) error {
 func classifyStartupFailure(err error) desktopbootstrap.Failure {
 	reason := desktopbootstrap.FailureRuntimeUnavailable
 	switch {
+	case errors.Is(err, runtimedata.ErrSchemaUpgradeIncomplete):
+		reason = desktopbootstrap.FailureStorageUpgradeIncomplete
 	case errors.Is(err, instanceguard.ErrAlreadyOwned):
 		reason = desktopbootstrap.FailureRuntimeAlreadyActive
 	case errors.Is(err, localca.ErrRootResetFailed):

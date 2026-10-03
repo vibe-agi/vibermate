@@ -24,14 +24,15 @@ func validateExistingSchema(ctx context.Context, path string, timeout time.Durat
 	if err != nil {
 		return err
 	}
-	database := sql.OpenDB(newSQLiteReadConnector(path, timeout))
-	defer database.Close()
-	revision, err := readSchemaRevision(ctx, database)
+	state, err := InspectSchema(ctx, path, timeout)
 	if err != nil {
 		return err
 	}
-	if revision != 0 && revision != schemaRevision {
-		return fmt.Errorf("%w: file revision %d, build revision %d", ErrUnsupportedSchema, revision, schemaRevision)
+	if state.Revision == 1 {
+		return ErrMigrationRequired
+	}
+	if state.Revision != 0 && state.Revision != schemaRevision {
+		return ErrUnsupportedSchema
 	}
 	return nil
 }

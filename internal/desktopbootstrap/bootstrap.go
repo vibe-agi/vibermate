@@ -26,17 +26,22 @@ const (
 
 type ProgressPhase string
 
-const ProgressRuntimeStarting ProgressPhase = "runtime_starting"
+const (
+	ProgressRuntimeStarting  ProgressPhase = "runtime_starting"
+	ProgressStoragePreparing ProgressPhase = "storage_preparing"
+	ProgressStorageUpgrade   ProgressPhase = "storage_upgrade"
+)
 
 type FailureReason string
 
 const (
-	FailureRuntimeUnavailable     FailureReason = "runtime_unavailable"
-	FailureRuntimeAlreadyActive   FailureReason = "runtime_already_active"
-	FailureSecretStoreUnavailable FailureReason = "secret_store_unavailable"
-	FailureStorageUnavailable     FailureReason = "storage_unavailable"
-	FailureStorageIncompatible    FailureReason = "storage_incompatible"
-	FailureRootResetFailed        FailureReason = "root_reset_failed"
+	FailureRuntimeUnavailable       FailureReason = "runtime_unavailable"
+	FailureRuntimeAlreadyActive     FailureReason = "runtime_already_active"
+	FailureSecretStoreUnavailable   FailureReason = "secret_store_unavailable"
+	FailureStorageUnavailable       FailureReason = "storage_unavailable"
+	FailureStorageIncompatible      FailureReason = "storage_incompatible"
+	FailureStorageUpgradeIncomplete FailureReason = "storage_upgrade_incomplete"
+	FailureRootResetFailed          FailureReason = "root_reset_failed"
 )
 
 // Failure is the only startup diagnosis that crosses the native pipe. It is a
@@ -61,6 +66,7 @@ func (failure Failure) Validate() error {
 		FailureSecretStoreUnavailable,
 		FailureStorageUnavailable,
 		FailureStorageIncompatible,
+		FailureStorageUpgradeIncomplete,
 		FailureRootResetFailed:
 		return nil
 	default:
@@ -84,11 +90,15 @@ func RuntimeStartingProgress() Progress {
 }
 
 func (progress Progress) Validate() error {
-	if progress.Schema != ProgressSchema ||
-		progress.Phase != ProgressRuntimeStarting {
+	if progress.Schema != ProgressSchema {
 		return errors.New("Desktop bootstrap progress is invalid")
 	}
-	return nil
+	switch progress.Phase {
+	case ProgressRuntimeStarting, ProgressStoragePreparing, ProgressStorageUpgrade:
+		return nil
+	default:
+		return errors.New("Desktop bootstrap progress is invalid")
+	}
 }
 
 type Clock interface {

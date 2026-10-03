@@ -104,6 +104,7 @@ func TestPurposeAndAuthorityMustAgree(t *testing.T) {
 		egressaudit.PurposePluginCatalogSync:      egressaudit.AuthorityRuntime,
 		egressaudit.PurposePluginArtifactFetch:    egressaudit.AuthorityRuntime,
 		egressaudit.PurposeUpdate:                 egressaudit.AuthorityRuntime,
+		egressaudit.PurposeClientToolService:      egressaudit.AuthorityEnvironment,
 	}
 	seen := make(map[egressaudit.EgressPurpose]struct{}, len(expected))
 	for _, purpose := range egressaudit.Purposes() {

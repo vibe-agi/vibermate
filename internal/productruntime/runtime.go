@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -29,6 +30,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/evidencearchive"
 	"github.com/vibe-agi/vibermate/internal/exchange"
 	"github.com/vibe-agi/vibermate/internal/exchangecontent"
+	"github.com/vibe-agi/vibermate/internal/instanceguard"
 	"github.com/vibe-agi/vibermate/internal/launchsnapshot"
 	"github.com/vibe-agi/vibermate/internal/localca"
 	"github.com/vibe-agi/vibermate/internal/manualcapture"
@@ -179,8 +181,21 @@ func startWithBuilders(
 		return fail("data directory ownership", err)
 	}
 	cleanups.register("data directory ownership", func(context.Context) error { return dataGuard.Release() })
+	hostGuard := options.SchemaUpgradeHostGuard
+	if hostGuard == nil {
+		hostGuard, err = instanceguard.Acquire(filepath.Join(options.Paths.DataDirectory(), "server.lock"))
+		if err != nil {
+			return fail("host ownership", err)
+		}
+		// Retain through Open, all startup and failed-start cleanup. Desktop's
+		// existing serverhost.Attach acquires it only after Start returns.
+		defer hostGuard.Release()
+	} else if hostGuard.Path() != filepath.Join(options.Paths.DataDirectory(), "server.lock") || !hostGuard.OwnsDirectory(options.Paths.DataDirectory()) {
+		return fail("host ownership", ErrInvalidOptions)
+	}
 	storageResult, err := buildStorage(ctx, storageBuildRequest{
 		databasePath: options.Paths.DatabasePath(),
+		directory:    options.Paths.DataDirectory(), dataGuard: dataGuard, hostGuard: hostGuard, now: options.Clock.Now().UTC(), upgradeTimeout: options.SchemaUpgradeTimeout, progress: options.SchemaUpgradeProgress,
 	})
 	if err != nil {
 		return fail("sqlite", err)
@@ -755,6 +770,12 @@ func startWithBuilders(
 		return fail("foundation state verification", err)
 	}
 	tracker.commitInitialized(finalState.Revision)
+	if err := ctx.Err(); err != nil {
+		return fail("startup cancellation", err)
+	}
+	if !dataGuard.OwnsDirectory(options.Paths.DataDirectory()) || !hostGuard.OwnsDirectory(options.Paths.DataDirectory()) {
+		return fail("startup ownership", runtimedata.ErrSchemaUpgradeIncomplete)
+	}
 	return &Runtime{
 		paths:              options.Paths,
 		storage:            storageResult.store,

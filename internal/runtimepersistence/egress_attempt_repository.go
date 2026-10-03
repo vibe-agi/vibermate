@@ -35,7 +35,7 @@ const egressAttemptSelect = `SELECT
 	    outcome,
 	    error_class,
 	    bytes_out,
-	    bytes_in
+	    bytes_in, byte_counts_known
 	 FROM runtime_egress_attempts`
 
 type egressAttemptRepository struct {
@@ -151,7 +151,7 @@ func (repository *egressAttemptRepository) Complete(
 		        outcome = ?,
 		        error_class = ?,
 		        bytes_out = ?,
-		        bytes_in = ?
+		        bytes_in = ?, byte_counts_known = ?
 		  WHERE attempt_id = ?
 		    AND outcome = ''
 		    AND completed_at_unix_ms IS NULL
@@ -163,6 +163,7 @@ func (repository *egressAttemptRepository) Complete(
 		attempt.ErrorClass(),
 		attempt.BytesOut(),
 		attempt.BytesIn(),
+		attempt.ByteCountsKnown(),
 		attempt.ID(),
 	)
 	if err != nil {
@@ -185,17 +186,18 @@ func (repository *egressAttemptRepository) Complete(
 		var completedAt sql.NullInt64
 		var outcome, errorClass string
 		var bytesOut, bytesIn int64
+		var known bool
 		err := repository.database.QueryRowContext(
 			operation,
-			`SELECT completed_at_unix_ms, outcome, error_class, bytes_out, bytes_in
+			`SELECT completed_at_unix_ms, outcome, error_class, bytes_out, bytes_in, byte_counts_known
 			   FROM runtime_egress_attempts WHERE attempt_id = ?`,
 			attempt.ID(),
-		).Scan(&completedAt, &outcome, &errorClass, &bytesOut, &bytesIn)
+		).Scan(&completedAt, &outcome, &errorClass, &bytesOut, &bytesIn, &known)
 		if err != nil || !completedAt.Valid ||
 			completedAt.Int64 != toUnixMillis(attempt.CompletedAt()) ||
 			outcome != string(attempt.Outcome()) ||
 			errorClass != attempt.ErrorClass() ||
-			bytesOut != attempt.BytesOut() || bytesIn != attempt.BytesIn() {
+			bytesOut != attempt.BytesOut() || bytesIn != attempt.BytesIn() || known != attempt.ByteCountsKnown() {
 			return egressaudit.Record{}, errors.New(
 				"EgressAttempt is absent or already has another terminal",
 			)
@@ -275,7 +277,8 @@ func (repository *egressAttemptRepository) Recover(
 		            ELSE ?
 		        END,
 		        outcome = ?,
-		        error_class = ?
+		        error_class = CASE WHEN purpose='client_tool_service' THEN 'execution_uncertain' ELSE ? END,
+		        byte_counts_known = CASE WHEN purpose='client_tool_service' THEN 0 ELSE byte_counts_known END
 		  WHERE outcome = ''
 		    AND completed_at_unix_ms IS NULL`,
 		recoveryMillis,
@@ -407,6 +410,7 @@ func scanEgressAttempt(rows *sql.Rows) (egressaudit.Record, error) {
 		errorClass              string
 		bytesOut                int64
 		bytesIn                 int64
+		known                   int64
 	)
 	if err := rows.Scan(
 		&sequence,
@@ -433,13 +437,14 @@ func scanEgressAttempt(rows *sql.Rows) (egressaudit.Record, error) {
 		&errorClass,
 		&bytesOut,
 		&bytesIn,
+		&known,
 	); err != nil {
 		return egressaudit.Record{}, fmt.Errorf(
 			"scan EgressAttempt: %w",
 			err,
 		)
 	}
-	if reused != 0 && reused != 1 {
+	if (reused != 0 && reused != 1) || (known != 0 && known != 1) {
 		return egressaudit.Record{}, errors.New(
 			"restore EgressAttempt: reused transport flag is invalid",
 		)
@@ -486,18 +491,19 @@ func scanEgressAttempt(rows *sql.Rows) (egressaudit.Record, error) {
 			"restore EgressAttempt: terminal evidence is partial",
 		)
 	}
-	if outcome == "" && (errorClass != "" || bytesOut != 0 || bytesIn != 0) {
+	if outcome == "" && (errorClass != "" || bytesOut != 0 || bytesIn != 0 || known != 1) {
 		return egressaudit.Record{}, errors.New(
 			"restore EgressAttempt: nonterminal evidence is not empty",
 		)
 	}
 	if outcome != "" {
 		attempt, err = attempt.Finish(egressaudit.TerminalInput{
-			Outcome:     egressaudit.Outcome(outcome),
-			ErrorClass:  errorClass,
-			BytesOut:    bytesOut,
-			BytesIn:     bytesIn,
-			CompletedAt: fromUnixMillis(completedAt.Int64),
+			Outcome:              egressaudit.Outcome(outcome),
+			ErrorClass:           errorClass,
+			BytesOut:             bytesOut,
+			BytesIn:              bytesIn,
+			CompletedAt:          fromUnixMillis(completedAt.Int64),
+			UnobservedByteCounts: known == 0,
 		})
 		if err != nil {
 			return egressaudit.Record{}, fmt.Errorf(

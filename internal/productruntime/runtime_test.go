@@ -144,7 +144,11 @@ func TestProductRuntimeRequiresPersistentClientAnnotationSigning(t *testing.T) {
 func TestProductRuntimePublishesEnvironmentAndRestoresCaptureAssignment(t *testing.T) {
 	t.Parallel()
 
-	paths, err := NewRuntimePaths(filepath.Join(t.TempDir(), "runtime-data"))
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	paths, err := NewRuntimePaths(filepath.Join(root, "runtime-data"))
 	if err != nil {
 		t.Fatal(err)
 	}

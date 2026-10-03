@@ -766,7 +766,10 @@ final class AppCopy {
     'common.time.days': '{count}d',
     'common.client_passthrough': 'Client passthrough',
     'bootstrap.preview': 'Preparing Preview evidence…',
-    'bootstrap.live': 'Starting local traffic runtime…',
+    'bootstrap.live':
+        'Preparing local data; backups and upgrades may take a few minutes',
+    'bootstrap.failure.storage_upgrade_incomplete':
+        'Data upgrade incomplete; original data retained',
     'bootstrap.sidecar_unavailable':
         'ViberMate is incomplete. Reinstall or rebuild the App.',
     'bootstrap.failure.runtime_unavailable':
@@ -3535,7 +3538,8 @@ final class AppCopy {
     'common.time.days': '{count} 天前',
     'common.client_passthrough': '客户端凭据透传',
     'bootstrap.preview': '正在准备 Preview 证据…',
-    'bootstrap.live': '正在启动本地流量运行时…',
+    'bootstrap.live': '正在准备本地数据，备份和升级可能需要几分钟',
+    'bootstrap.failure.storage_upgrade_incomplete': '数据升级未完成，原数据保留',
     'bootstrap.sidecar_unavailable': 'ViberMate 安装不完整。请重新安装或重新构建 App。',
     'bootstrap.failure.runtime_unavailable': '本地流量运行时无法启动。请重试；已保存的证据未被修改。',
     'bootstrap.failure.runtime_already_active':
