@@ -32,6 +32,18 @@ final class ConversationReadingView extends StatefulWidget {
 
 enum _ReaderDetail { tools, reasoning, context, usage, raw, other }
 
+final class _ToolLookupOutcome {
+  const _ToolLookupOutcome(this.items, {required this.complete});
+  final List<ToolResultMatch> items;
+  final bool complete;
+}
+
+final class _CachedToolResults {
+  const _CachedToolResults(this.items, this.bytes);
+  final List<ToolResultMatch> items;
+  final int bytes;
+}
+
 final class _ReaderSelection {
   const _ReaderSelection(
     this.activity,
@@ -61,7 +73,10 @@ final class _ConversationReadingViewState
   final _usage = <String, RuntimeUsageReport>{};
   final _usageVersions = <String, int>{};
   final _detailTabs = <String, int>{};
-  final _toolLookups = <String, Future<List<ToolResultMatch>>>{};
+  final _toolLookups = <(String, String), Future<_ToolLookupOutcome>>{};
+  final _toolResults = <(String, String), _CachedToolResults>{};
+  int _toolLookupGeneration = 0, _toolResultBytes = 0;
+  bool _restoreToolPanel = false;
   final _panelOffsets = <String, double>{};
   final _pageStorage = PageStorageBucket();
   final _inspectorFocus = FocusNode(debugLabel: 'conversation-inspector');
@@ -107,7 +122,10 @@ final class _ConversationReadingViewState
   @override
   void didUpdateWidget(covariant ConversationReadingView oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.controller != widget.controller) {
+    final conversationChanged = _conversationIds(
+      oldWidget.activities,
+    ).intersection(_conversationIds(widget.activities)).isEmpty;
+    if (oldWidget.controller != widget.controller || conversationChanged) {
       _usageLoads.clear();
       _usage.clear();
       _usageVersions.clear();
@@ -115,13 +133,42 @@ final class _ConversationReadingViewState
       _selection = null;
       _inspection = null;
       _detailTabs.clear();
-      _toolLookups.clear();
+      _invalidateToolLookups(clearResults: true);
       _panelOffsets.clear();
       _follow = true;
       _unread = 0;
     }
     final ids = widget.activities.map((a) => a.id).toSet();
     final previous = oldWidget.activities.map((a) => a.id).toSet();
+    final deleted = previous.difference(ids);
+    final changedConversations =
+        {
+              ..._conversationIds(oldWidget.activities),
+              ..._conversationIds(widget.activities),
+            }
+            .where(
+              (id) =>
+                  _toolActivityVersion(oldWidget.activities, id) !=
+                  _toolActivityVersion(widget.activities, id),
+            )
+            .toSet();
+    final changedOrigins = {
+      for (final activity in [...oldWidget.activities, ...widget.activities])
+        if (changedConversations.contains(activity.conversation.id))
+          activity.id,
+    };
+    _removeToolResults(
+      (key, value) =>
+          changedOrigins.contains(key.$1) ||
+          deleted.contains(key.$1) ||
+          value.items.any((item) => deleted.contains(item.exchangeId)),
+    );
+    final selection = _selection;
+    if (selection != null &&
+        changedConversations.contains(selection.activity.conversation.id)) {
+      _savePanel();
+      _invalidateToolLookups();
+    }
     final newest = _ordered.lastOrNull;
     if (newest != null && !previous.contains(newest.id)) {
       final restore = _beforeLayoutChange();
@@ -150,8 +197,55 @@ final class _ConversationReadingViewState
     _usageVersions.removeWhere((id, _) => !ids.contains(id));
     _itemKeys.removeWhere((id, _) => !ids.contains(id));
     if (_selection != null && !ids.contains(_selection!.activity.id)) {
+      _invalidateToolLookups();
       _selection = null;
       _inspection = null;
+    }
+  }
+
+  Set<String> _conversationIds(List<ActivityRecord> activities) =>
+      activities.map((a) => a.conversation.id).toSet();
+
+  // Polling recreates records: compare the observed fields, not object identity.
+  // Any request in this conversation can carry a previously missing return.
+  String _toolActivityVersion(
+    List<ActivityRecord> activities,
+    String conversationId,
+  ) => jsonEncode(
+    (activities
+        .where((a) => a.conversation.id == conversationId)
+        .map(
+          (a) => [
+            a.id,
+            a.status,
+            a.contentAvailable,
+            a.reasonCode,
+            a.occurredAt.toIso8601String(),
+          ],
+        )
+        .toList()
+      ..sort((a, b) => (a.first as String).compareTo(b.first as String))),
+  );
+
+  void _invalidateToolLookups({bool clearResults = false}) {
+    _toolLookupGeneration++;
+    _toolLookups.clear();
+    _restoreToolPanel = false;
+    if (clearResults) {
+      _toolResults.clear();
+      _toolResultBytes = 0;
+    }
+  }
+
+  void _removeToolResults(
+    bool Function((String, String), _CachedToolResults) test,
+  ) {
+    for (final key in _toolResults.keys.toList()) {
+      final result = _toolResults[key]!;
+      if (test(key, result)) {
+        _toolResults.remove(key);
+        _toolResultBytes -= result.bytes;
+      }
     }
   }
 
@@ -257,6 +351,7 @@ final class _ConversationReadingViewState
       _returnFocus = focus;
     }
     setState(() {
+      _invalidateToolLookups();
       _selection = selection;
       _inspectedUsage = selection.aggregateUsage
           ? _usage.values.toList(growable: false)
@@ -277,6 +372,9 @@ final class _ConversationReadingViewState
   void _closeDetails() {
     _savePanel();
     setState(() {
+      final id = _selection?.activity.id;
+      _invalidateToolLookups();
+      _removeToolResults((key, _) => key.$1 == id);
       _selection = null;
       _inspection = null;
     });
@@ -294,6 +392,7 @@ final class _ConversationReadingViewState
 
   @override
   void dispose() {
+    _invalidateToolLookups(clearResults: true);
     _scroll.dispose();
     _panelScroll.dispose();
     _inspectorFocus.dispose();
@@ -877,36 +976,43 @@ final class _ConversationReadingViewState
                       copy('exchange.tool.unknown'),
                   style: Theme.of(context).textTheme.titleSmall,
                 ),
-              ExpansionTile(
-                key: Key('reader-tool-record-${detail.id}-$id'),
-                title: Text(
-                  copy('reader.technical_details'),
-                  style: Theme.of(context).textTheme.bodySmall,
-                ),
-                children: [
-                  Text(
-                    copy('reader.tool_pairing'),
+              KeyedSubtree(
+                // ExpansionTile's bool state must not share the panel's
+                // PageStorage path, which stores a double scroll offset.
+                key: PageStorageKey('reader-tool-expansion-${detail.id}-$id'),
+                child: ExpansionTile(
+                  key: Key('reader-tool-record-${detail.id}-$id'),
+                  title: Text(
+                    copy('reader.technical_details'),
                     style: Theme.of(context).textTheme.bodySmall,
                   ),
-                  SelectableText(
-                    id,
-                    key: PageStorageKey('tool-record-call-${detail.id}-$id'),
-                    style: monoStyle,
-                  ),
-                  for (final entry in wanted.where((e) => e.block.callId == id))
+                  children: [
+                    Text(
+                      copy('reader.tool_pairing'),
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
                     SelectableText(
-                      key: PageStorageKey(
-                        'tool-record-source-${entry.requestId}-$id-${entry.input}',
-                      ),
-                      copy.format(
-                        entry.input
-                            ? 'reader.tool_source_input'
-                            : 'reader.tool_source_output',
-                        {'request': entry.requestId},
-                      ),
+                      id,
+                      key: PageStorageKey('tool-record-call-${detail.id}-$id'),
                       style: monoStyle,
                     ),
-                ],
+                    for (final entry in wanted.where(
+                      (e) => e.block.callId == id,
+                    ))
+                      SelectableText(
+                        key: PageStorageKey(
+                          'tool-record-source-${entry.requestId}-$id-${entry.input}',
+                        ),
+                        copy.format(
+                          entry.input
+                              ? 'reader.tool_source_input'
+                              : 'reader.tool_source_output',
+                          {'request': entry.requestId},
+                        ),
+                        style: monoStyle,
+                      ),
+                  ],
+                ),
               ),
               const SizedBox(height: 6),
               Builder(
@@ -923,14 +1029,17 @@ final class _ConversationReadingViewState
                   // whichever result happens to appear last.
                   if (matches.isEmpty) {
                     if (tab == 0) return Text(copy('reader.tool_not_observed'));
-                    return FutureBuilder<List<ToolResultMatch>>(
-                      future: _toolLookups.putIfAbsent(
-                        '${detail.id}:$id',
-                        () => _findToolResults(detail.id, id),
-                      ),
+                    return FutureBuilder<_ToolLookupOutcome>(
+                      future: _toolLookup(detail.id, id),
                       builder: (context, snapshot) {
                         if (snapshot.connectionState != ConnectionState.done) {
                           return const CompactProgressIndicator();
+                        }
+                        if (_restoreToolPanel) {
+                          _restoreToolPanel = false;
+                          // Restore after the result has actually been laid out,
+                          // not while the pending indicator still bounds the list.
+                          _restorePanel();
                         }
                         if (snapshot.hasError) {
                           return Column(
@@ -938,18 +1047,32 @@ final class _ConversationReadingViewState
                             children: [
                               Text(copy('reader.tool_lookup_failed')),
                               TextButton(
-                                onPressed: () => setState(() {
-                                  _toolLookups.remove('${detail.id}:$id');
-                                }),
+                                key: Key(
+                                  'reader-tool-refresh-${detail.id}-$id',
+                                ),
+                                onPressed: _refreshToolResults,
                                 child: Text(copy('common.retry')),
                               ),
                             ],
                           );
                         }
                         final found =
-                            snapshot.data ?? const <ToolResultMatch>[];
+                            snapshot.data?.items ?? const <ToolResultMatch>[];
                         if (found.isEmpty) {
-                          return Text(copy('reader.tool_not_observed'));
+                          return Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(copy('reader.tool_not_observed')),
+                              TextButton.icon(
+                                key: Key(
+                                  'reader-tool-refresh-${detail.id}-$id',
+                                ),
+                                onPressed: _refreshToolResults,
+                                icon: const Icon(Icons.refresh, size: 14),
+                                label: Text(copy('reader.tool_refresh')),
+                              ),
+                            ],
+                          );
                         }
                         return Column(
                           crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -995,32 +1118,96 @@ final class _ConversationReadingViewState
     );
   }
 
-  Future<List<ToolResultMatch>> _findToolResults(
+  void _refreshToolResults() {
+    _savePanel();
+    setState(() {
+      _invalidateToolLookups();
+      _removeToolResults((key, _) => key.$1 == _selection?.activity.id);
+    });
+  }
+
+  Future<_ToolLookupOutcome> _toolLookup(String exchangeId, String callId) {
+    final key = (exchangeId, callId);
+    return _toolLookups.putIfAbsent(key, () {
+      final cached = _toolResults.remove(key);
+      if (cached != null) {
+        _toolResults[key] = cached; // Access refreshes the LRU order.
+        return Future.value(_ToolLookupOutcome(cached.items, complete: true));
+      }
+      final generation = _toolLookupGeneration;
+      return _findToolResults(exchangeId, callId, generation).then((outcome) {
+        if (mounted && generation == _toolLookupGeneration) {
+          if (outcome.complete && outcome.items.isNotEmpty) {
+            _rememberToolResult(key, outcome.items);
+          }
+          _restoreToolPanel = true;
+        }
+        return outcome;
+      });
+    });
+  }
+
+  void _rememberToolResult((String, String) key, List<ToolResultMatch> items) {
+    int bytes(String? text) => text == null ? 0 : utf8.encode(text).length;
+    var size = bytes(key.$1) + bytes(key.$2);
+    for (final item in items) {
+      final block = item.block;
+      size +=
+          bytes(item.exchangeId) +
+          bytes(block.text) +
+          bytes(block.arguments == null ? null : jsonEncode(block.arguments)) +
+          bytes(block.callId) +
+          bytes(block.toolName) +
+          bytes(block.toolNamespace) +
+          bytes(block.providerSource) +
+          bytes(block.providerKind) +
+          bytes(block.fingerprint) +
+          bytes(block.agent?.agentName) +
+          bytes(block.agent?.author) +
+          bytes(block.agent?.recipient) +
+          bytes(block.deferred?.exchangeId) +
+          bytes(block.deferred?.cursor);
+    }
+    _removeToolResults((candidate, _) => candidate == key);
+    if (size > 4 * 1024 * 1024) return;
+    _toolResults[key] = _CachedToolResults(List.unmodifiable(items), size);
+    _toolResultBytes += size;
+    while (_toolResults.length > 32 || _toolResultBytes > 4 * 1024 * 1024) {
+      final oldest = _toolResults.keys.first;
+      _toolResultBytes -= _toolResults.remove(oldest)!.bytes;
+    }
+  }
+
+  Future<_ToolLookupOutcome> _findToolResults(
     String exchangeId,
     String callId,
+    int generation,
   ) async {
+    final controller = widget.controller;
     final found = <ToolResultMatch>[];
     final seen = <String>{};
     String? cursor;
     do {
-      final page = await widget.controller.loadToolResults(
+      final page = await controller.loadToolResults(
         exchangeId,
         callId,
         cursor: cursor,
       );
+      if (!mounted ||
+          generation != _toolLookupGeneration ||
+          widget.controller != controller ||
+          _selection?.activity.id != exchangeId) {
+        return _ToolLookupOutcome(found, complete: false);
+      }
       found.addAll(page.items);
       cursor = page.nextCursor;
-      if (found.isNotEmpty ||
-          cursor == null ||
-          !mounted ||
-          _selection?.activity.id != exchangeId) {
-        break;
+      if (found.isNotEmpty || cursor == null) {
+        return _ToolLookupOutcome(found, complete: true);
       }
       if (!seen.add(cursor)) {
         throw const ControlContractException('Tool lookup cursor repeated');
       }
     } while (true);
-    return found;
   }
 
   Widget _usageInspector(_ReaderSelection selection) => selection.aggregateUsage

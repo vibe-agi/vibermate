@@ -24,9 +24,9 @@ void main() {
           {
             'exchangeId': 'later',
             'block': {
-            'kind': 'deferred',
-            'availability': 'recorded',
-            'originalSize': 0,
+              'kind': 'deferred',
+              'availability': 'recorded',
+              'originalSize': 0,
               'deferred': {
                 'exchangeId': 'later',
                 'cursor': 'body-cursor',
@@ -146,6 +146,652 @@ void main() {
     expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox.shrink());
   });
+  testWidgets('late tool result is visible after reopening the inspector', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1220, 950));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final api = _ReaderApi();
+    final activity = (await api.fixture.activities(
+      captureRunId: 'run-1',
+    )).items.firstWhere((a) => a.status == 'succeeded');
+    final base = await api.exchange(activity.id);
+    api.details[activity.id] = detail(
+      base,
+      [message('user', 'QUESTION')],
+      [block('text', 'REPLY'), tool('tool_call', 'late-return')],
+    );
+    final controller = makeController(api);
+    addTearDown(controller.dispose);
+    await tester.pumpWidget(host(controller, [activity]));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(Key('reader-tools-${activity.id}')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('reader-detail-tab-1')));
+    await tester.pumpAndSettle();
+    expect(find.text('Result not found yet.'), findsOneWidget);
+    api.results['late-return'] = ToolResultPage(
+      items: [
+        ToolResultMatch(
+          exchangeId: 'later-request',
+          block: tool('tool_result', 'late-return'),
+        ),
+      ],
+    );
+    await tester.tap(find.byKey(const Key('reader-close-details')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(Key('reader-tools-${activity.id}')));
+    await tester.pumpAndSettle();
+    expect(find.text('MATCHED_TOOL_RESULT'), findsOneWidget);
+    expect(find.text('Result not found yet.'), findsNothing);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets(
+    'open tool results refresh on relevant activity without moving the reader',
+    (tester) async {
+      final rig = await _ToolReaderFixture.create(tester);
+      final rows = ValueNotifier([rig.activity]);
+      addTearDown(rows.dispose);
+      await tester.pumpWidget(
+        ValueListenableBuilder<List<ActivityRecord>>(
+          valueListenable: rows,
+          builder: (_, value, _) => host(rig.controller, value),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await rig.openResults(tester);
+      final y = tester.getTopLeft(find.text('READER_ANCHOR')).dy;
+      expect(find.text('Result not found yet.'), findsOneWidget);
+      rig.api.results['call'] = resultPage('call', 'NEW_ACTIVITY_RETURN');
+      final next = readerActivity(rig.activity, 'next', seconds: 1);
+      rig.api.details[next.id] = detail(
+        rig.base,
+        [message('user', 'NEXT_INPUT')],
+        [block('text', 'NEXT_REPLY')],
+        activity: next,
+      );
+      rows.value = [rig.activity, next];
+      await tester.pumpAndSettle();
+      expect(find.text('NEW_ACTIVITY_RETURN'), findsOneWidget);
+      expect(tester.getTopLeft(find.text('READER_ANCHOR')).dy, closeTo(y, 1));
+      expect(find.textContaining('echo safe'), findsNothing);
+      // A polling rebuild of the same evidence must keep the completed Future.
+      final calls = rig.api.toolCalls.length;
+      rows.value = [readerActivity(rig.activity, rig.activity.id), next];
+      await tester.pumpAndSettle();
+      expect(find.text('NEW_ACTIVITY_RETURN'), findsOneWidget);
+      expect(rig.api.toolCalls.length, calls);
+      rig.api.results['call'] = resultPage('call', 'UPDATED_ACTIVITY_RETURN');
+      rows.value = [
+        rig.activity,
+        readerActivity(
+          next,
+          next.id,
+          contentAvailable: next.contentAvailable != true,
+        ),
+      ];
+      await tester.pumpAndSettle();
+      expect(find.text('UPDATED_ACTIVITY_RETURN'), findsOneWidget);
+      expect(find.text('NEW_ACTIVITY_RETURN'), findsNothing);
+      expect(tester.getTopLeft(find.text('READER_ANCHOR')).dy, closeTo(y, 1));
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox.shrink());
+    },
+  );
+
+  testWidgets(
+    'interrupted paginated lookup cannot poison a reopened selection',
+    (tester) async {
+      final rig = await _ToolReaderFixture.create(tester);
+      final pending = Completer<ToolResultPage>();
+      var started = false;
+      rig.api.lookup = (origin, call, cursor) {
+        if (cursor == 'page-two') return pending.future;
+        if (!started) {
+          started = true;
+          return Future.value(
+            const ToolResultPage(items: [], nextCursor: 'page-two'),
+          );
+        }
+        return Future.value(resultPage(call, 'REOPENED_RETURN'));
+      };
+      await tester.pumpWidget(host(rig.controller, [rig.activity]));
+      await tester.pumpAndSettle();
+      await rig.openResults(tester, settle: false);
+      expect(rig.api.toolRequests.map((r) => r.$3), [null, 'page-two']);
+      await tester.tap(find.byKey(const Key('reader-close-details')));
+      await tester.pumpAndSettle();
+      await rig.openResults(tester);
+      expect(find.text('REOPENED_RETURN'), findsOneWidget);
+      pending.complete(
+        const ToolResultPage(items: [], nextCursor: 'page-three'),
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('REOPENED_RETURN'), findsOneWidget);
+      expect(rig.api.toolRequests.any((r) => r.$3 == 'page-three'), isFalse);
+      expect(find.text('Result not found yet.'), findsNothing);
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox.shrink());
+    },
+  );
+
+  testWidgets('older tool replies cannot replace or cache a new selection', (
+    tester,
+  ) async {
+    final rig = await _ToolReaderFixture.create(tester);
+    final next = readerActivity(rig.activity, 'other-request', seconds: 1);
+    rig.api.details[next.id] = detail(
+      rig.base,
+      [message('user', 'OTHER_INPUT')],
+      [block('text', 'OTHER_REPLY'), tool('tool_call', 'call')],
+      activity: next,
+    );
+    final pending = Completer<ToolResultPage>();
+    var first = true;
+    rig.api.lookup = (origin, call, cursor) {
+      if (origin == rig.activity.id && first) {
+        first = false;
+        return pending.future;
+      }
+      return Future.value(
+        resultPage(
+          call,
+          origin == rig.activity.id ? 'FRESH_ORIGIN_RETURN' : 'SELECTED_RETURN',
+        ),
+      );
+    };
+    await tester.pumpWidget(host(rig.controller, [rig.activity, next]));
+    await tester.pumpAndSettle();
+    await rig.openResults(tester, settle: false);
+    await tester.tap(find.byKey(Key('reader-tools-${next.id}')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('reader-detail-tab-1')));
+    await tester.pumpAndSettle();
+    expect(find.text('SELECTED_RETURN'), findsOneWidget);
+    pending.complete(resultPage('call', 'STALE_RETURN'));
+    await tester.pumpAndSettle();
+    expect(find.text('SELECTED_RETURN'), findsOneWidget);
+    expect(find.text('STALE_RETURN'), findsNothing);
+    await rig.openResults(tester);
+    expect(find.text('FRESH_ORIGIN_RETURN'), findsOneWidget);
+    expect(find.text('STALE_RETURN'), findsNothing);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets(
+    'lookup failure and repeated pagination cursor remain retryable',
+    (tester) async {
+      final rig = await _ToolReaderFixture.create(tester);
+      rig.api.lookup = (_, _, _) async =>
+          throw const ControlContractException('unavailable');
+      await tester.pumpWidget(host(rig.controller, [rig.activity]));
+      await tester.pumpAndSettle();
+      await rig.openResults(tester);
+      expect(
+        find.text('Could not load the result. Please retry.'),
+        findsOneWidget,
+      );
+      rig.api.lookup = (_, _, _) async =>
+          const ToolResultPage(items: [], nextCursor: 'repeat');
+      await tester.tap(
+        find.byKey(Key('reader-tool-refresh-${rig.activity.id}-call')),
+      );
+      await tester.pumpAndSettle();
+      expect(
+        find.text('Could not load the result. Please retry.'),
+        findsOneWidget,
+      );
+      expect(rig.api.toolRequests.map((r) => r.$3), [null, null, 'repeat']);
+      rig.api.lookup = (_, call, cursor) async => cursor == null
+          ? const ToolResultPage(items: [], nextCursor: 'last-page')
+          : resultPage(call, 'RETRIED_PAGINATED_RETURN');
+      await tester.tap(
+        find.byKey(Key('reader-tool-refresh-${rig.activity.id}-call')),
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('RETRIED_PAGINATED_RETURN'), findsOneWidget);
+      expect(
+        find.text('Could not load the result. Please retry.'),
+        findsNothing,
+      );
+      final calls = rig.api.toolCalls.length;
+      await tester.pumpWidget(host(rig.controller, [rig.activity]));
+      await tester.pumpAndSettle();
+      expect(find.text('RETRIED_PAGINATED_RETURN'), findsOneWidget);
+      expect(rig.api.toolCalls.length, calls);
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox.shrink());
+    },
+  );
+
+  testWidgets('end of empty pagination is stable until explicit refresh', (
+    tester,
+  ) async {
+    final rig = await _ToolReaderFixture.create(tester);
+    rig.api.lookup = (_, _, cursor) async => ToolResultPage(
+      items: [],
+      nextCursor: cursor == null ? 'end-page' : null,
+    );
+    await tester.pumpWidget(host(rig.controller, [rig.activity]));
+    await tester.pumpAndSettle();
+    await rig.openResults(tester);
+    expect(find.text('Result not found yet.'), findsOneWidget);
+    expect(rig.api.toolRequests.map((r) => r.$3), [null, 'end-page']);
+    await tester.pumpWidget(host(rig.controller, [rig.activity]));
+    await tester.pumpAndSettle();
+    expect(rig.api.toolRequests, hasLength(2));
+    rig.api.lookup = (_, call, _) async => resultPage(call, 'REFRESHED_RETURN');
+    await tester.tap(
+      find.byKey(Key('reader-tool-refresh-${rig.activity.id}-call')),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('REFRESHED_RETURN'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets(
+    'deleting a selected record discards pending lookup and restored result',
+    (tester) async {
+      final rig = await _ToolReaderFixture.create(tester);
+      final pending = Completer<ToolResultPage>();
+      rig.api.lookup = (_, _, _) => pending.future;
+      await tester.pumpWidget(host(rig.controller, [rig.activity]));
+      await tester.pumpAndSettle();
+      await rig.openResults(tester, settle: false);
+      await tester.pumpWidget(host(rig.controller, []));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('reader-close-details')), findsNothing);
+      pending.complete(resultPage('call', 'DELETED_STALE_RETURN'));
+      await tester.pumpAndSettle();
+      rig.api.lookup = (_, call, _) async =>
+          resultPage(call, 'RESTORED_RETURN');
+      await tester.pumpWidget(host(rig.controller, [rig.activity]));
+      await tester.pumpAndSettle();
+      await rig.openResults(tester);
+      expect(find.text('RESTORED_RETURN'), findsOneWidget);
+      expect(find.text('DELETED_STALE_RETURN'), findsNothing);
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox.shrink());
+    },
+  );
+
+  for (final controllerSwitch in [false, true]) {
+    testWidgets(
+      'switching ${controllerSwitch ? 'controller' : 'conversation'} discards old lookup work',
+      (tester) async {
+        final rig = await _ToolReaderFixture.create(tester);
+        final pending = Completer<ToolResultPage>();
+        rig.api.lookup = (_, _, _) => pending.future;
+        await tester.pumpWidget(host(rig.controller, [rig.activity]));
+        await tester.pumpAndSettle();
+        await rig.openResults(tester, settle: false);
+        final api = controllerSwitch ? _ReaderApi() : rig.api;
+        final controller = controllerSwitch
+            ? makeController(api)
+            : rig.controller;
+        if (controllerSwitch) addTearDown(controller.dispose);
+        final next = controllerSwitch
+            ? rig.activity
+            : readerActivity(
+                rig.activity,
+                'different-conversation',
+                conversation: ActivityConversationRef(
+                  id: 'conversation-other',
+                  displayName: null,
+                  kind: 'main',
+                  evidence: 'capture_run',
+                  actor: null,
+                ),
+              );
+        api.details[next.id] = detail(
+          rig.base,
+          [message('user', 'SWITCHED_INPUT')],
+          [block('text', 'SWITCHED_REPLY'), tool('tool_call', 'call')],
+          activity: next,
+        );
+        api.lookup = (_, call, _) async => resultPage(call, 'SWITCHED_RETURN');
+        await tester.pumpWidget(host(controller, [next]));
+        await tester.pumpAndSettle();
+        expect(find.byKey(const Key('reader-close-details')), findsNothing);
+        await tester.tap(find.byKey(Key('reader-tools-${next.id}')));
+        await tester.pumpAndSettle();
+        await tester.tap(find.byKey(const Key('reader-detail-tab-1')));
+        await tester.pumpAndSettle();
+        expect(find.text('SWITCHED_RETURN'), findsOneWidget);
+        pending.complete(resultPage('call', 'OLD_CONTEXT_RETURN'));
+        await tester.pumpAndSettle();
+        expect(find.text('SWITCHED_RETURN'), findsOneWidget);
+        expect(find.text('OLD_CONTEXT_RETURN'), findsNothing);
+        expect(tester.takeException(), isNull);
+        await tester.pumpWidget(const SizedBox.shrink());
+      },
+    );
+  }
+
+  testWidgets(
+    'successful lookups evict the least recently viewed result after 32 entries',
+    (tester) async {
+      final rig = await _ToolReaderFixture.create(tester);
+      final rows = List.generate(
+        33,
+        (i) => readerActivity(rig.activity, 'cache-row-$i', seconds: i),
+      );
+      for (final (i, row) in rows.indexed) {
+        rig.api.details[row.id] = detail(
+          rig.base,
+          [message('user', 'INPUT_$i')],
+          [block('text', 'REPLY_$i'), tool('tool_call', 'cache-call-$i')],
+          activity: row,
+        );
+        rig.api.results['cache-call-$i'] = resultPage(
+          'cache-call-$i',
+          'CACHED_RETURN_$i',
+        );
+      }
+      await tester.pumpWidget(host(rig.controller, rows));
+      await tester.pumpAndSettle();
+      final scrollable = find
+          .descendant(
+            of: find.byKey(const PageStorageKey('conversation-reader-scroll')),
+            matching: find.byType(Scrollable),
+          )
+          .first;
+      Future<void> select(int i) async {
+        readerPosition(tester).jumpTo(0);
+        await tester.pumpAndSettle();
+        await tester.scrollUntilVisible(
+          find.byKey(Key('reader-tools-${rows[i].id}')),
+          400,
+          scrollable: scrollable,
+          maxScrolls: 100,
+        );
+        await tester.pumpAndSettle();
+        await tester.tap(find.byKey(Key('reader-tools-${rows[i].id}')));
+        await tester.pumpAndSettle();
+        await tester.tap(find.byKey(const Key('reader-detail-tab-1')));
+        await tester.pumpAndSettle();
+      }
+
+      for (var i = 32; i >= 0; i--) {
+        await select(i);
+        expect(find.text('CACHED_RETURN_$i'), findsOneWidget);
+      }
+      // Touch an old retained entry. Its changed remote body must stay cached.
+      rig.api.results['cache-call-31'] = resultPage(
+        'cache-call-31',
+        'REMOTE_CHANGED_31',
+      );
+      await select(31);
+      expect(find.text('CACHED_RETURN_31'), findsOneWidget);
+      // Entry 32 was evicted by entry 0 and must query its new retained body.
+      rig.api.results['cache-call-32'] = resultPage(
+        'cache-call-32',
+        'EVICTED_RETURN_32',
+      );
+      await select(32);
+      expect(find.text('EVICTED_RETURN_32'), findsOneWidget);
+      // Entry 31 was touched, so entry 30 is now the least recently used.
+      rig.api.results['cache-call-30'] = resultPage(
+        'cache-call-30',
+        'EVICTED_RETURN_30',
+      );
+      await select(30);
+      expect(find.text('EVICTED_RETURN_30'), findsOneWidget);
+      await select(31);
+      expect(find.text('CACHED_RETURN_31'), findsOneWidget);
+      expect(find.text('REMOTE_CHANGED_31'), findsNothing);
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox.shrink());
+    },
+  );
+
+  testWidgets(
+    'relevant refresh preserves expanded result and inspector scroll',
+    (tester) async {
+      final rig = await _ToolReaderFixture.create(tester);
+      final source = List.generate(
+        90,
+        (i) => 'RETAINED_RESULT_LINE_$i',
+      ).join('\n');
+      rig.api.results['call'] = resultPage('call', source);
+      final rows = ValueNotifier([rig.activity]);
+      addTearDown(rows.dispose);
+      await tester.pumpWidget(
+        ValueListenableBuilder<List<ActivityRecord>>(
+          valueListenable: rows,
+          builder: (_, value, _) => host(rig.controller, value),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await rig.openResults(tester);
+      final toggle = find.byKey(
+        const Key('toggle-long-looked-up-later-request-call-0'),
+      );
+      await tester.ensureVisible(toggle);
+      await tester.tap(toggle);
+      await tester.pumpAndSettle();
+      expect(find.text('Show first 15 lines'), findsOneWidget);
+      ScrollPosition panel() => tester
+          .state<ScrollableState>(
+            find
+                .descendant(
+                  of: find.byKey(
+                    PageStorageKey(
+                      'reader-panel-${rig.activity.id}:tools:false:1',
+                    ),
+                  ),
+                  matching: find.byType(Scrollable),
+                )
+                .first,
+          )
+          .position;
+      panel().jumpTo(400);
+      await tester.pumpAndSettle();
+      final offset = panel().pixels;
+      final anchor = tester.getTopLeft(find.text('READER_ANCHOR')).dy;
+      final pending = Completer<ToolResultPage>();
+      rig.api.lookup = (_, _, _) => pending.future;
+      rows.value = [
+        readerActivity(
+          rig.activity,
+          rig.activity.id,
+          contentAvailable: rig.activity.contentAvailable != true,
+        ),
+      ];
+      await tester.pump();
+      await tester.pump();
+      pending.complete(resultPage('call', '$source\nLATEST_RESULT_LINE'));
+      await tester.pumpAndSettle();
+      expect(find.text('Show first 15 lines'), findsOneWidget);
+      expect(find.textContaining('LATEST_RESULT_LINE'), findsOneWidget);
+      expect(panel().pixels, closeTo(offset, 1));
+      expect(
+        tester.getTopLeft(find.text('READER_ANCHOR')).dy,
+        closeTo(anchor, 1),
+      );
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox.shrink());
+    },
+  );
+
+  testWidgets(
+    'closing drops a completed result and deleting its source refreshes the open origin',
+    (tester) async {
+      final rig = await _ToolReaderFixture.create(tester);
+      final later = readerActivity(rig.activity, 'return-source', seconds: 1);
+      rig.api.details[later.id] = detail(
+        rig.base,
+        [message('user', 'LATER_INPUT')],
+        [block('text', 'LATER_REPLY')],
+        activity: later,
+      );
+      rig.api.results['call'] = resultPage(
+        'call',
+        'FIRST_RETURN',
+        exchangeId: later.id,
+      );
+      await tester.pumpWidget(host(rig.controller, [rig.activity, later]));
+      await tester.pumpAndSettle();
+      await rig.openResults(tester);
+      expect(find.text('FIRST_RETURN'), findsOneWidget);
+      await tester.tap(find.byKey(const Key('reader-close-details')));
+      await tester.pumpAndSettle();
+      rig.api.results['call'] = resultPage(
+        'call',
+        'REOPENED_POSITIVE_RETURN',
+        exchangeId: later.id,
+      );
+      await rig.openResults(tester);
+      expect(find.text('REOPENED_POSITIVE_RETURN'), findsOneWidget);
+      rig.api.results['call'] = resultPage('call', 'AFTER_SOURCE_DELETION');
+      await tester.pumpWidget(host(rig.controller, [rig.activity]));
+      await tester.pumpAndSettle();
+      expect(find.text('AFTER_SOURCE_DELETION'), findsOneWidget);
+      expect(find.text('REOPENED_POSITIVE_RETURN'), findsNothing);
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox.shrink());
+    },
+  );
+
+  testWidgets(
+    'lookup cache budget counts retained arguments and text rather than original size',
+    (tester) async {
+      final rig = await _ToolReaderFixture.create(tester);
+      final rows = List.generate(
+        4,
+        (i) => readerActivity(rig.activity, 'byte-row-$i', seconds: i),
+      );
+      for (final (i, row) in rows.indexed) {
+        rig.api.details[row.id] = detail(
+          rig.base,
+          [message('user', 'INPUT_$i')],
+          [block('text', 'REPLY_$i'), tool('tool_call', 'byte-call-$i')],
+          activity: row,
+        );
+      }
+      rig.api.results['byte-call-0'] = resultPage(
+        'byte-call-0',
+        'ARGUMENT_BUDGET_RETURN',
+        originalSize: 1,
+        arguments: {'blob': List.filled(2300000, 'x').join()},
+      );
+      rig.api.results['byte-call-1'] = resultPage(
+        'byte-call-1',
+        'TEXT_BUDGET_RETURN\n${List.filled(150000, 'retained line.').join('\n')}',
+        originalSize: 1,
+      );
+      // A deferred/omitted source can be large while the retained body is tiny.
+      rig.api.results['byte-call-2'] = resultPage(
+        'byte-call-2',
+        'SMALL_RETAINED_RETURN',
+        originalSize: 32 * 1024 * 1024,
+      );
+      rig.api.results['byte-call-3'] = resultPage(
+        'byte-call-3',
+        'OVERSIZED_RETURN',
+        originalSize: 1,
+        arguments: {'blob': List.filled(4200000, '界').join()},
+      );
+      await tester.pumpWidget(host(rig.controller, rows));
+      await tester.pumpAndSettle();
+      Future<void> select(int i) async {
+        await tester.ensureVisible(
+          find.byKey(Key('reader-tools-${rows[i].id}')),
+        );
+        await tester.tap(find.byKey(Key('reader-tools-${rows[i].id}')));
+        await tester.pumpAndSettle();
+        await tester.tap(find.byKey(const Key('reader-detail-tab-1')));
+        await tester.pumpAndSettle();
+      }
+
+      await select(0);
+      expect(find.text('ARGUMENT_BUDGET_RETURN'), findsOneWidget);
+      await select(1);
+      expect(find.textContaining('TEXT_BUDGET_RETURN'), findsOneWidget);
+      await select(2);
+      expect(find.text('SMALL_RETAINED_RETURN'), findsOneWidget);
+      rig.api.results['byte-call-0'] = resultPage(
+        'byte-call-0',
+        'ARGUMENT_BYTES_EVICTED',
+      );
+      await select(0);
+      expect(find.text('ARGUMENT_BYTES_EVICTED'), findsOneWidget);
+      // The huge originalSize must not have evicted the retained text result.
+      rig.api.results['byte-call-1'] = resultPage(
+        'byte-call-1',
+        'WRONG_ORIGINAL_SIZE_EVICTION',
+      );
+      await select(1);
+      expect(find.textContaining('TEXT_BUDGET_RETURN'), findsOneWidget);
+      expect(find.text('WRONG_ORIGINAL_SIZE_EVICTION'), findsNothing);
+      await select(3);
+      expect(find.text('OVERSIZED_RETURN'), findsOneWidget);
+      await select(2);
+      expect(find.text('SMALL_RETAINED_RETURN'), findsOneWidget);
+      rig.api.results['byte-call-3'] = resultPage(
+        'byte-call-3',
+        'OVERSIZED_REQUERIED_RETURN',
+      );
+      await select(3);
+      expect(find.text('OVERSIZED_REQUERIED_RETURN'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox.shrink());
+    },
+  );
+
+  testWidgets(
+    'relevant activity invalidates a cached result from a previous selection',
+    (tester) async {
+      final rig = await _ToolReaderFixture.create(tester);
+      final next = readerActivity(rig.activity, 'second-origin', seconds: 1);
+      rig.api.details[next.id] = detail(
+        rig.base,
+        [message('user', 'SECOND_INPUT')],
+        [block('text', 'SECOND_REPLY'), tool('tool_call', 'second-call')],
+        activity: next,
+      );
+      rig.api.results['call'] = resultPage('call', 'CACHED_FIRST_RETURN');
+      rig.api.results['second-call'] = resultPage(
+        'second-call',
+        'SECOND_RETURN',
+      );
+      await tester.pumpWidget(host(rig.controller, [rig.activity, next]));
+      await tester.pumpAndSettle();
+      await rig.openResults(tester);
+      expect(find.text('CACHED_FIRST_RETURN'), findsOneWidget);
+      await tester.tap(find.byKey(Key('reader-tools-${next.id}')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('reader-detail-tab-1')));
+      await tester.pumpAndSettle();
+      expect(find.text('SECOND_RETURN'), findsOneWidget);
+      rig.api.results['call'] = resultPage(
+        'call',
+        'UPDATED_PREVIOUS_SELECTION_RETURN',
+      );
+      await tester.pumpWidget(
+        host(rig.controller, [
+          rig.activity,
+          readerActivity(
+            next,
+            next.id,
+            contentAvailable: next.contentAvailable != true,
+          ),
+        ]),
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('SECOND_RETURN'), findsOneWidget);
+      await rig.openResults(tester);
+      expect(find.text('UPDATED_PREVIOUS_SELECTION_RETURN'), findsOneWidget);
+      expect(find.text('CACHED_FIRST_RETURN'), findsNothing);
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox.shrink());
+    },
+  );
+
   testWidgets('code-tool input is visible, not mistaken for empty arguments', (
     tester,
   ) async {
@@ -719,6 +1365,24 @@ void main() {
           await tester.pumpAndSettle();
           expect(find.textContaining('echo safe'), findsWidgets);
           expect(tester.takeException(), isNull);
+          await tester.tap(find.byKey(const Key('reader-detail-tab-1')));
+          await tester.pumpAndSettle();
+          expect(
+            find.text(
+              language == AppLanguage.english ? 'Refresh result' : '刷新结果',
+            ),
+            findsOneWidget,
+          );
+          api.results['call-one'] = resultPage(
+            'call-one',
+            'NARROW_REFRESH_RETURN',
+          );
+          await tester.tap(
+            find.byKey(Key('reader-tool-refresh-${activity.id}-call-one')),
+          );
+          await tester.pumpAndSettle();
+          expect(find.text('NARROW_REFRESH_RETURN'), findsOneWidget);
+          expect(tester.takeException(), isNull);
           await tester.tap(find.byKey(const Key('reader-close-details')));
           await tester.pumpAndSettle();
           await tester.tap(find.byKey(const Key('reader-usage-summary')));
@@ -906,6 +1570,90 @@ ExchangeDetail detail(
   );
 }
 
+ToolResultPage resultPage(
+  String call,
+  String text, {
+  String exchangeId = 'later-request',
+  int originalSize = 32,
+  JsonObject? arguments,
+}) => ToolResultPage(
+  items: [
+    ToolResultMatch(
+      exchangeId: exchangeId,
+      block: ExchangeContentBlock.fromJson({
+        'kind': 'tool_result',
+        'availability': 'recorded',
+        'originalSize': originalSize,
+        'callId': call,
+        'text': text,
+        'arguments': ?arguments,
+      }, 'fixture'),
+    ),
+  ],
+);
+
+ActivityRecord readerActivity(
+  ActivityRecord seed,
+  String id, {
+  int seconds = 0,
+  bool? contentAvailable,
+  ActivityConversationRef? conversation,
+}) => ActivityRecord(
+  id: id,
+  occurredAt: seed.occurredAt.add(Duration(seconds: seconds)),
+  title: seed.title,
+  status: seed.status,
+  reasonCode: seed.reasonCode,
+  source: seed.source,
+  conversation: conversation ?? seed.conversation,
+  environment: seed.environment,
+  contentAvailable: contentAvailable ?? seed.contentAvailable,
+  parentRefs: ActivityParentRefs(
+    exchangeId: id,
+    captureRunId: seed.captureRunId,
+    manualCaptureId: seed.manualCaptureId,
+    connectionId: seed.parentRefs.connectionId,
+  ),
+);
+
+final class _ToolReaderFixture {
+  _ToolReaderFixture(this.api, this.activity, this.base, this.controller);
+  final _ReaderApi api;
+  final ActivityRecord activity;
+  final ExchangeDetail base;
+  final WorkbenchController controller;
+  static Future<_ToolReaderFixture> create(WidgetTester tester) async {
+    await tester.binding.setSurfaceSize(const Size(1220, 950));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final api = _ReaderApi();
+    final activity = (await api.fixture.activities(
+      captureRunId: 'run-1',
+    )).items.firstWhere((a) => a.status == 'succeeded');
+    final base = await api.exchange(activity.id);
+    api.details[activity.id] = detail(
+      base,
+      [message('user', 'QUESTION')],
+      [block('text', 'READER_ANCHOR'), tool('tool_call', 'call')],
+    );
+    final controller = makeController(api);
+    addTearDown(controller.dispose);
+    return _ToolReaderFixture(api, activity, base, controller);
+  }
+
+  Future<void> openResults(WidgetTester tester, {bool settle = true}) async {
+    await tester.ensureVisible(find.byKey(Key('reader-tools-${activity.id}')));
+    await tester.tap(find.byKey(Key('reader-tools-${activity.id}')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('reader-detail-tab-1')));
+    if (settle) {
+      await tester.pumpAndSettle();
+    } else {
+      await tester.pump();
+      await tester.pump();
+    }
+  }
+}
+
 final class _ReaderApi implements ControlApi {
   final fixture = PreviewControlApi();
   final details = <String, ExchangeDetail>{};
@@ -917,6 +1665,8 @@ final class _ReaderApi implements ControlApi {
   final imageCalls = <String>[];
   final toolCalls = <String>[];
   final results = <String, ToolResultPage>{};
+  final toolRequests = <(String, String, String?)>[];
+  Future<ToolResultPage> Function(String, String, String?)? lookup;
   @override
   Future<ToolResultPage> toolResults(
     String id,
@@ -924,6 +1674,8 @@ final class _ReaderApi implements ControlApi {
     String? cursor,
   }) async {
     toolCalls.add(callId);
+    toolRequests.add((id, callId, cursor));
+    if (lookup != null) return lookup!(id, callId, cursor);
     return results[callId] ?? const ToolResultPage(items: []);
   }
 

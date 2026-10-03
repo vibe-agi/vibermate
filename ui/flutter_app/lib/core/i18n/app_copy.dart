@@ -118,6 +118,7 @@ final class AppCopy {
         'No call ID was recorded; these blocks cannot be paired.',
     'reader.tool_not_observed': 'Result not found yet.',
     'reader.tool_lookup_failed': 'Could not load the result. Please retry.',
+    'reader.tool_refresh': 'Refresh result',
     'reader.usage_unavailable':
         'Request usage is unavailable. The Server may not support request-scoped usage yet.',
     'reader.usage_not_recorded':
@@ -3007,6 +3008,7 @@ final class AppCopy {
     'reader.unmatched_tool': '未记录 call ID，不能推测这些块的配对关系。',
     'reader.tool_not_observed': '暂未找到结果。',
     'reader.tool_lookup_failed': '结果加载失败，请重试。',
+    'reader.tool_refresh': '刷新结果',
     'reader.usage_unavailable': '暂时无法读取请求级用量，当前 Server 也可能尚未支持该查询。',
     'reader.usage_not_recorded': '该请求没有保留的用量记录。未采集不等于 0。',
     'reader.checkpoint': '输入快照 · {count} 条消息 · 无法确认新增输入',
