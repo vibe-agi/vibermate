@@ -6,6 +6,9 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
+	"image"
+	"image/png"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -15,6 +18,41 @@ import (
 	"github.com/klauspost/compress/zstd"
 	"github.com/vibe-agi/vibermate/internal/rawevidence"
 )
+
+func TestImagePreviewReusesAuditedRevealWithoutExposingRawRequest(t *testing.T) {
+	var pixels bytes.Buffer
+	if err := png.Encode(&pixels, image.NewNRGBA(image.Rect(0, 0, 2, 1))); err != nil {
+		t.Fatal(err)
+	}
+	part, _ := json.Marshal(map[string]string{"type": "input_image", "image_url": "data:image/png;base64," + base64.StdEncoding.EncodeToString(pixels.Bytes())})
+	fingerprint := sha256.Sum256(part)
+	body := []byte(`{"input":[{"role":"user","content":[` + string(part) + `]}],"private":"DO_NOT_RETURN_REQUEST"}`)
+	reader := &rawEvidenceReaderFixture{
+		metadata: []rawevidence.EnvelopeMetadata{{EnvelopeID: "raw-envelope-1", ExchangeID: "exchange-1", Layer: rawevidence.LayerClientIngress, ScopeKind: rawevidence.ScopeManagedRun, ContentType: "application/json", PayloadState: rawevidence.PayloadCaptured, DigestScope: rawevidence.DigestFull}},
+		payload:  rawevidence.Payload{Body: body, Headers: []rawevidence.HeaderField{{Name: "Authorization", Values: []string{"Bearer PRIVATE_HEADER"}}}},
+	}
+	fixture := newAuditFixtureWithRawEvidence(t, reader)
+	path := fmt.Sprintf("/api/v1/raw-evidence/raw-envelope-1/actions/reveal?bodyView=image&fingerprint=sha256:%x", fingerprint)
+	denied := doRequest(t, fixture.router, fixture.authority, http.MethodPost, path, fixture.readToken, nil)
+	if denied.Code != http.StatusUnauthorized || len(reader.requests) != 0 {
+		t.Fatal("image preview bypassed reveal authority")
+	}
+	response := doRequest(t, fixture.router, fixture.authority, http.MethodPost, path, fixture.writeToken, nil)
+	var result struct {
+		Schema, MimeType string
+		Width, Height    int
+		Data             []byte `json:"dataBase64"`
+	}
+	if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &result) != nil || result.Width != 2 || result.Height != 1 || result.MimeType != "image/png" || !bytes.Equal(result.Data, pixels.Bytes()) || len(reader.requests) != 1 {
+		t.Fatalf("image preview failed: status=%d body=%s", response.Code, response.Body)
+	}
+	if strings.Contains(response.Body.String(), "DO_NOT_RETURN_REQUEST") || strings.Contains(response.Body.String(), "PRIVATE_HEADER") {
+		t.Fatal("image preview leaked unrelated raw data")
+	}
+	if !bytes.Equal(reader.payload.Body, body) {
+		t.Fatal("preview rewrote evidence")
+	}
+}
 
 func TestRawEvidenceDecodedViewIsOptInAuditedAndPreservesWire(t *testing.T) {
 	logical := []byte("{\"input\":\"\u4f60\u597d\",\"stream\":true}")

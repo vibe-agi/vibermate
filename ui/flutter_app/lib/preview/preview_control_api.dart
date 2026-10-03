@@ -3037,6 +3037,13 @@ final class PreviewControlApi implements ControlApi {
   }
 
   @override
+  Future<ToolResultPage> toolResults(
+    String exchangeId,
+    String callId, {
+    String? cursor,
+  }) async => const ToolResultPage(items: []);
+
+  @override
   Future<RevealedRawEvidence> revealRawEvidence({
     required String envelopeId,
   }) async {
@@ -3115,6 +3122,18 @@ final class PreviewControlApi implements ControlApi {
       trailers: const [],
       body: Uint8List.fromList(utf8.encode(body)),
       frames: const [],
+    );
+  }
+
+  @override
+  Future<RetainedImagePreview> previewRawImage({
+    required String envelopeId,
+    required String fingerprint,
+  }) async {
+    throw const ControlProblem(
+      status: 410,
+      reasonCode: 'image_unavailable',
+      messageKey: 'reader.image_unavailable',
     );
   }
 

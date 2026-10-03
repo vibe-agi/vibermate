@@ -61,6 +61,7 @@ final class _ConversationReadingViewState
   final _usage = <String, RuntimeUsageReport>{};
   final _usageVersions = <String, int>{};
   final _detailTabs = <String, int>{};
+  final _toolLookups = <String, Future<List<ToolResultMatch>>>{};
   final _panelOffsets = <String, double>{};
   final _pageStorage = PageStorageBucket();
   final _inspectorFocus = FocusNode(debugLabel: 'conversation-inspector');
@@ -77,6 +78,25 @@ final class _ConversationReadingViewState
       final time = a.occurredAt.compareTo(b.occurredAt);
       return time == 0 ? a.id.compareTo(b.id) : time;
     });
+
+  bool _showInput(ActivityRecord activity, String anchor) =>
+      !widget.activities.any(
+        (other) =>
+            other.conversation.id == activity.conversation.id &&
+            (other.occurredAt.isBefore(activity.occurredAt) ||
+                (other.occurredAt == activity.occurredAt &&
+                    other.id.compareTo(activity.id) < 0)) &&
+            widget.controller
+                    .exchangeDetail(other.id, contentView: 'reading')
+                    ?.content
+                    .page
+                    ?.inputAnchor ==
+                anchor,
+      );
+
+  void _inputLoaded() {
+    if (mounted) setState(() {});
+  }
 
   @override
   void initState() {
@@ -95,6 +115,7 @@ final class _ConversationReadingViewState
       _selection = null;
       _inspection = null;
       _detailTabs.clear();
+      _toolLookups.clear();
       _panelOffsets.clear();
       _follow = true;
       _unread = 0;
@@ -390,6 +411,8 @@ final class _ConversationReadingViewState
                           loadUsage: () => _loadUsage(activity.id),
                           onInspect: _inspect,
                           beforeLayoutChange: _beforeLayoutChange,
+                          showInput: (anchor) => _showInput(activity, anchor),
+                          onInputLoaded: _inputLoaded,
                         );
                       },
                     ),
@@ -543,7 +566,9 @@ final class _ConversationReadingViewState
                       ? copy.format('reader.usage_snapshot', {
                           'count': _inspectedUsage.length,
                         })
-                      : selection.activity.id,
+                      : selection.kind == _ReaderDetail.raw
+                      ? selection.activity.id
+                      : _clockTime(selection.activity.occurredAt),
                   style: monoStyle.copyWith(
                     color: context.viberColors.textMuted,
                   ),
@@ -568,7 +593,12 @@ final class _ConversationReadingViewState
                         title: copy('reader.unavailable'),
                       );
                     }
-                    return _detailBody(selection, detail);
+                    return _ContentPageScope(
+                      controller: widget.controller,
+                      exchangeId: detail.id,
+                      openPage: _ContentPageScope.of(context)?.openPage,
+                      child: _detailBody(selection, detail),
+                    );
                   },
                 ),
               ),
@@ -778,7 +808,7 @@ final class _ConversationReadingViewState
             if (ids.contains(block.callId))
               (block: block, requestId: detail.id, input: false),
         ];
-    // Later incremental requests can carry this call's return. Never match by
+    // Later requests can carry this call's return. Never match by
     // neighbouring text, tool name, or a different conversation/actor.
     for (final activity in widget.activities) {
       if (activity.id == detail.id ||
@@ -786,8 +816,14 @@ final class _ConversationReadingViewState
           !activity.occurredAt.isAfter(selection.activity.occurredAt)) {
         continue;
       }
-      final next = widget.controller.exchangeDetail(activity.id)?.content;
-      if (next?.requestProjection?.relationship != 'incremental') continue;
+      final next =
+          (widget.controller.exchangeDetail(
+                    activity.id,
+                    contentView: 'reading',
+                  ) ??
+                  widget.controller.exchangeDetail(activity.id))
+              ?.content;
+      if (next?.request == null) continue;
       for (final block in next!.request!.messages.expand((m) => m.blocks)) {
         if (block.kind == 'tool_result' &&
             block.callId != null &&
@@ -810,11 +846,6 @@ final class _ConversationReadingViewState
         _tabs(selection, ['reader.arguments', 'reader.results'], tab),
         Expanded(
           child: _panelList([
-            Text(
-              copy('reader.tool_pairing'),
-              style: Theme.of(context).textTheme.bodySmall,
-            ),
-            const SizedBox(height: 12),
             if (selection.unkeyedTools.isNotEmpty) ...[
               Text(
                 copy('reader.unmatched_tool'),
@@ -846,11 +877,37 @@ final class _ConversationReadingViewState
                       copy('exchange.tool.unknown'),
                   style: Theme.of(context).textTheme.titleSmall,
                 ),
-              if (tab == 1)
-                SelectableText(
-                  id.isEmpty ? copy('reader.unmatched_tool') : id,
-                  style: monoStyle,
+              ExpansionTile(
+                key: Key('reader-tool-record-${detail.id}-$id'),
+                title: Text(
+                  copy('reader.technical_details'),
+                  style: Theme.of(context).textTheme.bodySmall,
                 ),
+                children: [
+                  Text(
+                    copy('reader.tool_pairing'),
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                  SelectableText(
+                    id,
+                    key: PageStorageKey('tool-record-call-${detail.id}-$id'),
+                    style: monoStyle,
+                  ),
+                  for (final entry in wanted.where((e) => e.block.callId == id))
+                    SelectableText(
+                      key: PageStorageKey(
+                        'tool-record-source-${entry.requestId}-$id-${entry.input}',
+                      ),
+                      copy.format(
+                        entry.input
+                            ? 'reader.tool_source_input'
+                            : 'reader.tool_source_output',
+                        {'request': entry.requestId},
+                      ),
+                      style: monoStyle,
+                    ),
+                ],
+              ),
               const SizedBox(height: 6),
               Builder(
                 builder: (context) {
@@ -865,9 +922,47 @@ final class _ConversationReadingViewState
                   // Multiple distinct candidates are evidence, not permission to pick
                   // whichever result happens to appear last.
                   if (matches.isEmpty) {
-                    return Text(
-                      copy('reader.tool_not_observed'),
-                      style: Theme.of(context).textTheme.bodySmall,
+                    if (tab == 0) return Text(copy('reader.tool_not_observed'));
+                    return FutureBuilder<List<ToolResultMatch>>(
+                      future: _toolLookups.putIfAbsent(
+                        '${detail.id}:$id',
+                        () => _findToolResults(detail.id, id),
+                      ),
+                      builder: (context, snapshot) {
+                        if (snapshot.connectionState != ConnectionState.done) {
+                          return const CompactProgressIndicator();
+                        }
+                        if (snapshot.hasError) {
+                          return Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(copy('reader.tool_lookup_failed')),
+                              TextButton(
+                                onPressed: () => setState(() {
+                                  _toolLookups.remove('${detail.id}:$id');
+                                }),
+                                child: Text(copy('common.retry')),
+                              ),
+                            ],
+                          );
+                        }
+                        final found =
+                            snapshot.data ?? const <ToolResultMatch>[];
+                        if (found.isEmpty) {
+                          return Text(copy('reader.tool_not_observed'));
+                        }
+                        return Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            for (final entry in found)
+                              _ContentBlocksView(
+                                id: 'looked-up-${entry.exchangeId}-$id',
+                                blocks: [entry.block],
+                                copy: copy,
+                              ),
+                          ],
+                        );
+                      },
                     );
                   }
                   return Column(
@@ -879,16 +974,6 @@ final class _ConversationReadingViewState
                           style: Theme.of(context).textTheme.bodySmall,
                         ),
                       for (final (index, entry) in matches.indexed) ...[
-                        SelectableText(
-                          copy.format(
-                            entry.input
-                                ? 'reader.tool_source_input'
-                                : 'reader.tool_source_output',
-                            {'request': entry.requestId},
-                          ),
-                          style: monoStyle,
-                        ),
-                        const SizedBox(height: 6),
                         _ContentBlocksView(
                           id: 'reader-tool-${detail.id}-$id-$tab-$index',
                           blocks: [entry.block],
@@ -908,6 +993,34 @@ final class _ConversationReadingViewState
         ),
       ],
     );
+  }
+
+  Future<List<ToolResultMatch>> _findToolResults(
+    String exchangeId,
+    String callId,
+  ) async {
+    final found = <ToolResultMatch>[];
+    final seen = <String>{};
+    String? cursor;
+    do {
+      final page = await widget.controller.loadToolResults(
+        exchangeId,
+        callId,
+        cursor: cursor,
+      );
+      found.addAll(page.items);
+      cursor = page.nextCursor;
+      if (found.isNotEmpty ||
+          cursor == null ||
+          !mounted ||
+          _selection?.activity.id != exchangeId) {
+        break;
+      }
+      if (!seen.add(cursor)) {
+        throw const ControlContractException('Tool lookup cursor repeated');
+      }
+    } while (true);
+    return found;
   }
 
   Widget _usageInspector(_ReaderSelection selection) => selection.aggregateUsage
@@ -952,9 +1065,32 @@ final class _ConversationReadingViewState
 List<ExchangeContentBlock> _readerText(Iterable<ExchangeContentBlock> blocks) =>
     blocks
         .where(
-          (b) => b.kind == 'text' || b.kind == 'refusal' || b.deferred != null,
+          (b) =>
+              b.kind == 'text' ||
+              b.kind == 'refusal' ||
+              b.deferred != null ||
+              (b.kind == 'provider_extension' &&
+                  b.providerKind == 'input_image'),
         )
         .toList(growable: false);
+
+List<ExchangeContentBlock> _readerInput(List<ExchangeContentMessage> messages) {
+  final blocks = _readerText(messages.expand((m) => m.blocks));
+  final images = blocks.where((b) => b.providerKind == 'input_image').toList();
+  if (images.isEmpty) return blocks;
+  final attachmentLabel = RegExp(r'^\s*(?:\[Image #\d+\]\s*)+$');
+  final fileLabel = RegExp(r'^\s*<image name=\[Image #\d+\] path="[^"]+">\s*$');
+  return [
+    ...blocks.where(
+      (b) =>
+          b.providerKind != 'input_image' &&
+          !(b.kind == 'text' &&
+              (attachmentLabel.hasMatch(b.text ?? '') ||
+                  fileLabel.hasMatch(b.text ?? ''))),
+    ),
+    ...images,
+  ];
+}
 
 final class _ReadingRequest extends StatefulWidget {
   const _ReadingRequest({
@@ -965,6 +1101,8 @@ final class _ReadingRequest extends StatefulWidget {
     required this.loadUsage,
     required this.onInspect,
     required this.beforeLayoutChange,
+    required this.showInput,
+    required this.onInputLoaded,
     super.key,
   });
   final ActivityRecord activity;
@@ -974,6 +1112,8 @@ final class _ReadingRequest extends StatefulWidget {
   final Future<RuntimeUsageReport?> Function() loadUsage;
   final ValueChanged<_ReaderSelection> onInspect;
   final VoidCallback Function() beforeLayoutChange;
+  final bool Function(String) showInput;
+  final VoidCallback onInputLoaded;
   @override
   State<_ReadingRequest> createState() => _ReadingRequestState();
 }
@@ -986,7 +1126,10 @@ final class _ReadingRequestState extends State<_ReadingRequest> {
   @override
   void initState() {
     super.initState();
-    _detail = widget.controller.exchangeDetail(widget.activity.id);
+    _detail = widget.controller.exchangeDetail(
+      widget.activity.id,
+      contentView: 'reading',
+    );
     _loading = _detail == null;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) unawaited(_load());
@@ -1008,6 +1151,7 @@ final class _ReadingRequestState extends State<_ReadingRequest> {
     final usage = widget.loadUsage();
     final detail = await widget.controller.loadExchangeDetail(
       widget.activity.id,
+      contentView: 'reading',
       refresh: refresh,
     );
     if (!mounted || generation != _generation) return;
@@ -1017,6 +1161,7 @@ final class _ReadingRequestState extends State<_ReadingRequest> {
       _loading = false;
     });
     restore();
+    widget.onInputLoaded();
     final report = await usage;
     if (mounted && generation == _generation) setState(() => _usage = report);
   }
@@ -1067,7 +1212,9 @@ final class _ReadingRequestState extends State<_ReadingRequest> {
     final content = detail.content;
     final incremental =
         content.requestProjection?.relationship == 'incremental';
-    final inputs = incremental
+    final inputAnchor = content.page?.inputAnchor;
+    final readingInput = inputAnchor != null;
+    final inputs = (readingInput ? widget.showInput(inputAnchor) : incremental)
         ? content.request!.messages
         : const <ExchangeContentMessage>[];
     final toolBlocks = [
@@ -1110,7 +1257,7 @@ final class _ReadingRequestState extends State<_ReadingRequest> {
               Flexible(
                 flex: 8,
                 child: Text(
-                  '${copy('conversation.exchange')} ${widget.number} · ${_clockTime(widget.activity.occurredAt)}',
+                  _clockTime(widget.activity.occurredAt),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: Theme.of(context).textTheme.bodySmall,
@@ -1140,7 +1287,8 @@ final class _ReadingRequestState extends State<_ReadingRequest> {
             ),
           if (content.state == 'not_recorded')
             InlineNotice(message: copy('exchange.content.not_recorded')),
-          if (content.requestProjection?.relationship == 'checkpoint')
+          if (content.requestProjection?.relationship == 'checkpoint' &&
+              !readingInput)
             Align(
               alignment: Alignment.centerLeft,
               child: TextButton.icon(
@@ -1161,25 +1309,39 @@ final class _ReadingRequestState extends State<_ReadingRequest> {
               copy: copy,
               label: copy('content_page.earlier'),
             ),
-          for (final (index, message) in inputs.indexed)
+          if (readingInput && inputs.isNotEmpty)
+            _ReadingMessage(
+              id: '${detail.id}-input',
+              exchangeId: detail.id,
+              role: 'user',
+              roleLabel: copy('exchange.role.user'),
+              blocks: _readerInput(inputs),
+              copy: copy,
+              usage: null,
+              onUsage: null,
+            ),
+          for (final (index, message)
+              in (readingInput ? const <ExchangeContentMessage>[] : inputs)
+                  .indexed)
             if (message.role != 'system' &&
                 message.role != 'developer' &&
                 message.role != 'tool' &&
                 _readerText(message.blocks).isNotEmpty)
               _ReadingMessage(
                 id: '${detail.id}-input-$index',
+                exchangeId: detail.id,
                 role: message.role,
                 blocks: _readerText(message.blocks),
                 copy: copy,
                 agent: message.agent,
-                roleLabel:
-                    '${copy('exchange.role.${message.role}')} · ${copy('reader.input')}',
+                roleLabel: copy('exchange.role.${message.role}'),
                 usage: null,
                 onUsage: null,
               ),
           if (text.isNotEmpty)
             _ReadingMessage(
               id: '${detail.id}-response',
+              exchangeId: detail.id,
               role: 'assistant',
               roleLabel: actorLabel ?? copy('reader.agent_reply'),
               blocks: text,
@@ -1262,12 +1424,14 @@ final class _ReadingMessage extends StatelessWidget {
     required this.onUsage,
     this.agent,
     this.roleLabel,
+    this.exchangeId,
   });
   final String id, role;
   final List<ExchangeContentBlock> blocks;
   final AppCopy copy;
   final ExchangeAgentContext? agent;
   final String? roleLabel;
+  final String? exchangeId;
   final RuntimeUsageReport? usage;
   final VoidCallback? onUsage;
   @override
@@ -1330,10 +1494,15 @@ final class _ReadingMessage extends StatelessWidget {
                   borderRadius: ViberMetrics.surfaceRadius,
                 )
               : null,
-          child: _ContentBlocksView(
-            id: 'reader-message-$id',
-            blocks: blocks,
-            copy: copy,
+          child: _ContentPageScope(
+            controller: _ContentPageScope.of(context)!.controller,
+            exchangeId: exchangeId,
+            openPage: _ContentPageScope.of(context)?.openPage,
+            child: _ContentBlocksView(
+              id: 'reader-message-$id',
+              blocks: blocks,
+              copy: copy,
+            ),
           ),
         ),
       ],

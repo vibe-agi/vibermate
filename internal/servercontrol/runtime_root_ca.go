@@ -38,7 +38,8 @@ func NewRuntimeRootCA(certificate func() []byte) *RuntimeRootCAHandler {
 
 func (handler *RuntimeRootCAHandler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	if request == nil || request.URL == nil || request.Method != http.MethodGet ||
-		request.URL.Path != RuntimeRootCAPath || request.URL.RawQuery != "" || request.URL.ForceQuery {
+		request.URL.Path != RuntimeRootCAPath || request.URL.RawQuery != "" || request.URL.ForceQuery ||
+		request.ContentLength != 0 || len(request.TransferEncoding) != 0 {
 		writeProblem(writer, http.StatusNotFound, "server_route_not_found")
 		return
 	}

@@ -28,6 +28,9 @@ type DeferredContent struct {
 }
 
 type ProjectionPage struct {
+	// InputAnchor identifies the observed user group's position, so repeated
+	// requests do not repeat it and identical new messages remain distinct.
+	InputAnchor                string `json:"inputAnchor,omitempty"`
 	RequestOffset              int    `json:"requestOffset"`
 	RequestNextCursor          string `json:"requestNextCursor,omitempty"`
 	RequestEvidenceNextCursor  string `json:"requestEvidenceNextCursor,omitempty"`

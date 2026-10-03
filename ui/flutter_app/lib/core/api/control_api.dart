@@ -163,6 +163,11 @@ abstract interface class ControlApi {
   });
 
   Future<RawEvidencePage> rawEvidence(String exchangeId);
+  Future<ToolResultPage> toolResults(
+    String exchangeId,
+    String callId, {
+    String? cursor,
+  });
 
   Future<ExchangeContentPage> exchangeContentPage(
     String exchangeId,
@@ -170,6 +175,10 @@ abstract interface class ControlApi {
   );
 
   Future<RevealedRawEvidence> revealRawEvidence({required String envelopeId});
+  Future<RetainedImagePreview> previewRawImage({
+    required String envelopeId,
+    required String fingerprint,
+  });
 
   Future<String> revealRawHeader({
     required String envelopeId,
@@ -1285,7 +1294,7 @@ final class HttpControlApi implements ControlApi, ACPObservationApi {
     String contentView = 'incremental',
   }) async {
     if (!_validResourceId(exchangeId) ||
-        !const {'incremental', 'full'}.contains(contentView)) {
+        !const {'incremental', 'full', 'reading'}.contains(contentView)) {
       throw const ControlContractException('Exchange query is invalid');
     }
     final uri = Uri(
@@ -1299,6 +1308,14 @@ final class HttpControlApi implements ControlApi, ACPObservationApi {
     try {
       payload = await _read(uri.toString());
     } on ControlProblem catch (problem) {
+      if (contentView == 'reading' &&
+          problem.status == 422 &&
+          const {
+            'invalid_request',
+            'invalid_control_request',
+          }.contains(problem.reasonCode)) {
+        return exchange(exchangeId, contentView: 'incremental');
+      }
       // Older Runtimes reject the new query. Keep small legacy reads usable;
       // the ordinary 2 MiB guard is never relaxed, including on this fallback.
       if (!_pagedExchangeReads ||
@@ -1376,6 +1393,31 @@ final class HttpControlApi implements ControlApi, ACPObservationApi {
   }
 
   @override
+  Future<ToolResultPage> toolResults(
+    String exchangeId,
+    String callId, {
+    String? cursor,
+  }) async {
+    if (!_validResourceId(exchangeId) ||
+        callId.isEmpty ||
+        callId.length > 512 ||
+        (cursor != null &&
+            (cursor.length > 8192 ||
+                !RegExp(r'^[A-Za-z0-9_-]+$').hasMatch(cursor)))) {
+      throw const ControlContractException('Tool result query is invalid');
+    }
+    final uri = Uri(
+      path: '/api/v1/exchanges/${Uri.encodeComponent(exchangeId)}/tool-results',
+      queryParameters: {'callId': callId, 'cursor': ?cursor},
+    );
+    return ToolResultPage.fromJson(
+      await _read(uri.toString()),
+      exchangeId,
+      callId,
+    );
+  }
+
+  @override
   Future<RevealedRawEvidence> revealRawEvidence({
     required String envelopeId,
   }) async {
@@ -1400,6 +1442,34 @@ final class HttpControlApi implements ControlApi, ACPObservationApi {
       'rawReveal',
       expectedEnvelopeId: envelopeId,
     );
+  }
+
+  @override
+  Future<RetainedImagePreview> previewRawImage({
+    required String envelopeId,
+    required String fingerprint,
+  }) async {
+    if (!_validRawEvidenceIdentity(envelopeId) ||
+        !RegExp(r'^sha256:[0-9a-f]{64}$').hasMatch(fingerprint)) {
+      throw const ControlContractException('Image preview identity is invalid');
+    }
+    await _ensureFreshSession();
+    final uri = Uri(
+      path:
+          '/api/v1/raw-evidence/${Uri.encodeComponent(envelopeId)}/actions/reveal',
+      queryParameters: {'bodyView': 'image', 'fingerprint': fingerprint},
+    );
+    final response = await _send(
+      'POST',
+      uri.toString(),
+      token: _session.writeToken,
+      expectedStatus: 200,
+      maximumResponseBytes: 6 << 20,
+    );
+    if (response.headers.value('cache-control') != 'no-store') {
+      throw const ControlContractException('Image preview may be cached');
+    }
+    return RetainedImagePreview.fromJson(response.payload, fingerprint);
   }
 
   @override

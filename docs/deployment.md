@@ -105,6 +105,31 @@ HTTPS; HTTP is only for trusted local or private networks.
 
 ## Private HTTPS without a public domain
 
+### Install the client CA on another device
+
+Run these on the **device or container that actually runs the Agent**:
+
+```sh
+vibermate login --server https://vibermate.home.arpa:9666
+vibermate ca install --server https://vibermate.home.arpa:9666
+vibermate ca status --server https://vibermate.home.arpa:9666
+```
+
+Upgrade both the client and Server to a version supporting these commands.
+A logged-in client can download only the public CA, without management access.
+If an older Server rejects the download, upgrade the Server first.
+
+The CLI detects macOS or Linux. macOS uses current-user trust; Linux uses the native
+distribution tool and requests administrator permission when needed. Use
+`vibermate ca download --server <origin> --out root.crt` to export without installation
+or overwriting a file. Check the server and SHA-256 fingerprint before consenting;
+installation is followed by a fresh local trust check.
+
+This is the **traffic-inspection CA**, not a login credential or public HTTPS leaf.
+Trust on the host does not enter containers automatically. Unattended HTTP installation
+requires an independently checked `--fingerprint <SHA-256>` together with `--yes`.
+The command never disables server TLS verification.
+
 ### Option A: a custom name plus the hosts file
 
 Pick a stable, internal-only name such as `vibermate.home.arpa`:

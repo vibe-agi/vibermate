@@ -1960,6 +1960,12 @@ final class WorkbenchController extends ChangeNotifier
     String cursor,
   ) => _api.exchangeContentPage(exchangeId, cursor);
 
+  Future<ToolResultPage> loadToolResults(
+    String exchangeId,
+    String callId, {
+    String? cursor,
+  }) => _api.toolResults(exchangeId, callId, cursor: cursor);
+
   Future<ExchangeDetail?> _fetchExchangeDetail(
     String key,
     String exchangeId, {
@@ -2090,6 +2096,38 @@ final class WorkbenchController extends ChangeNotifier
       notifyListeners();
       return null;
     }
+  }
+
+  Future<RetainedImagePreview> loadImagePreview(
+    String exchangeId,
+    String fingerprint,
+  ) async {
+    // Keep pixels with the visible widget, never in the shared metadata cache.
+    final page = await _api.rawEvidence(exchangeId);
+    for (final layer in const ['client_ingress', 'provider_egress']) {
+      for (final item in page.items.where(
+        (e) => e.layer == layer && e.revealAvailable,
+      )) {
+        try {
+          final preview = await _api.previewRawImage(
+            envelopeId: item.envelopeId,
+            fingerprint: fingerprint,
+          );
+          if (_disposed) {
+            preview.bytes.fillRange(0, preview.bytes.length, 0);
+            throw StateError('closed');
+          }
+          return preview;
+        } on ControlProblem catch (problem) {
+          if (problem.status != 410 && problem.status != 404) rethrow;
+        }
+      }
+    }
+    throw const ControlProblem(
+      status: 410,
+      reasonCode: 'image_unavailable',
+      messageKey: 'reader.image_unavailable',
+    );
   }
 
   Future<String> revealRawHeader({

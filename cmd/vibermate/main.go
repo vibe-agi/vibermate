@@ -150,6 +150,15 @@ func executeContext(
 	if len(arguments) > 0 && arguments[0] == "profiles" {
 		return executeProfiles(ctx, arguments[1:], stdout)
 	}
+	if len(arguments) > 0 && arguments[0] == "ca" {
+		if len(arguments) == 2 && (arguments[1] == "--help" || arguments[1] == "-h") {
+			if renderCLIMessage(environment, stdout, "cli.usage.ca", nil) != nil {
+				return 1, reasonRenderFailed
+			}
+			return 0, ""
+		}
+		return executeCA(ctx, arguments[1:], stdin, stdout, stderr)
+	}
 	if len(arguments) > 0 && arguments[0] == "terminal-command" {
 		return executeTerminalCommand(arguments[1:], stdout)
 	}

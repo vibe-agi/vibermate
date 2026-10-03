@@ -366,6 +366,9 @@ func (repository *exchangeContentRepository) GetProjection(
 	now time.Time,
 	view exchangecontent.RequestView,
 ) (exchangecontent.Projection, error) {
+	if view == exchangecontent.RequestViewReading {
+		return repository.GetPagedProjection(ctx, exchangeID, now, view)
+	}
 	if view != exchangecontent.RequestViewFull &&
 		view != exchangecontent.RequestViewIncremental {
 		return exchangecontent.Projection{}, exchangecontent.ErrInvalidEvidence

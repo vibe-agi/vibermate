@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -12,6 +13,174 @@ import 'package:vibermate_app/preview/preview_control_api.dart';
 import 'package:vibermate_app/preview/preview_terminal_command.dart';
 
 void main() {
+  test(
+    'tool lookup accepts a scoped deferred result, not unrelated content',
+    () {
+      final json = {
+        'schema': 'vibermate-tool-results/v1',
+        'originExchangeId': 'origin',
+        'callId': 'call',
+        'items': [
+          {
+            'exchangeId': 'later',
+            'block': {
+            'kind': 'deferred',
+            'availability': 'recorded',
+            'originalSize': 0,
+              'deferred': {
+                'exchangeId': 'later',
+                'cursor': 'body-cursor',
+                'estimatedBytes': 300000,
+              },
+            },
+          },
+        ],
+      };
+      expect(
+        ToolResultPage.fromJson(json, 'origin', 'call').items,
+        hasLength(1),
+      );
+      expect(
+        () => ToolResultPage.fromJson(json, 'other-origin', 'call'),
+        throwsA(isA<ControlContractException>()),
+      );
+      (json['items'] as List).first['exchangeId'] = 'other-exchange';
+      expect(
+        () => ToolResultPage.fromJson(json, 'origin', 'call'),
+        throwsA(isA<ControlContractException>()),
+      );
+    },
+  );
+
+  testWidgets('checkpoint input keeps text and two previewable attachments', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1220, 950));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final api = _ReaderApi();
+    final activity = (await api.fixture.activities(
+      captureRunId: 'run-1',
+    )).items.firstWhere((a) => a.status == 'succeeded');
+    final base = await api.exchange(activity.id);
+    ExchangeContentBlock image(String hex) => ExchangeContentBlock.fromJson({
+      'kind': 'provider_extension',
+      'availability': 'omitted',
+      'originalSize': 100,
+      'providerSource': 'openai_responses',
+      'providerKind': 'input_image',
+      'fingerprint': 'sha256:${List.filled(64, hex).join()}',
+    }, 'image');
+    api.details[activity.id] = detail(
+      base,
+      [
+        ExchangeContentMessage(
+          role: 'user',
+          blocks: [
+            block('text', '<image name=[Image #1] path="/PRIVATE_TEMP_PATH">'),
+            image('a'),
+          ],
+          agent: null,
+        ),
+        ExchangeContentMessage(role: 'user', blocks: [image('b')], agent: null),
+        message('user', 'MY QUESTION WITH TWO PICTURES'),
+      ],
+      [block('text', 'REPLY')],
+      checkpoint: true,
+      inputAnchor: List.filled(64, 'c').join(),
+    );
+    final controller = makeController(api);
+    addTearDown(controller.dispose);
+    await tester.pumpWidget(host(controller, [activity]));
+    await tester.pumpAndSettle();
+    expect(find.text('MY QUESTION WITH TWO PICTURES'), findsOneWidget);
+    expect(find.textContaining('PRIVATE_TEMP_PATH'), findsNothing);
+    expect(api.imageCalls.length, 2);
+    expect(find.byType(Image), findsNWidgets(2));
+    final thumbnail = find.byKey(
+      ValueKey('image-thumbnail-sha256:${List.filled(64, 'a').join()}'),
+    );
+    await tester.ensureVisible(thumbnail);
+    await tester.tap(thumbnail);
+    await tester.pumpAndSettle();
+    expect(find.byType(InteractiveViewer), findsOneWidget);
+    await tester.tap(find.byKey(const Key('image-preview-close')));
+    await tester.pumpAndSettle();
+    expect(find.text('MY QUESTION WITH TWO PICTURES'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets('a tool result is resolved beyond the visible history cache', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1220, 950));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final api = _ReaderApi();
+    final activity = (await api.fixture.activities(
+      captureRunId: 'run-1',
+    )).items.firstWhere((a) => a.status == 'succeeded');
+    final base = await api.exchange(activity.id);
+    api.details[activity.id] = detail(
+      base,
+      [message('user', 'QUESTION')],
+      [block('text', 'REPLY'), tool('tool_call', 'outside-page')],
+    );
+    api.results['outside-page'] = ToolResultPage(
+      items: [
+        ToolResultMatch(
+          exchangeId: 'later-request',
+          block: tool('tool_result', 'outside-page'),
+        ),
+      ],
+    );
+    final controller = makeController(api);
+    addTearDown(controller.dispose);
+    await tester.pumpWidget(host(controller, [activity]));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(Key('reader-tools-${activity.id}')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('reader-detail-tab-1')));
+    await tester.pumpAndSettle();
+    expect(find.text('MATCHED_TOOL_RESULT'), findsOneWidget);
+    expect(api.toolCalls, ['outside-page']);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+  testWidgets('code-tool input is visible, not mistaken for empty arguments', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1220, 950));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final api = _ReaderApi();
+    final activity = (await api.fixture.activities(
+      captureRunId: 'run-1',
+    )).items.firstWhere((a) => a.status == 'succeeded');
+    final base = await api.exchange(activity.id);
+    const code = 'await tools.exec_command({cmd: "pwd"});';
+    final call = ExchangeContentBlock.fromJson({
+      'kind': 'tool_call',
+      'availability': 'recorded',
+      'originalSize': code.length,
+      'text': code,
+      'toolName': 'exec',
+      'callId': 'code-call',
+    }, 'fixture');
+    api.details[activity.id] = detail(
+      base,
+      [message('user', 'QUESTION')],
+      [block('text', 'REPLY'), call],
+    );
+    final controller = makeController(api);
+    addTearDown(controller.dispose);
+    await tester.pumpWidget(host(controller, [activity]));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(Key('reader-tools-${activity.id}')));
+    await tester.pumpAndSettle();
+    expect(find.text(code), findsOneWidget);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
   for (final language in AppLanguage.values) {
     testWidgets(
       'large content is opt-in and pages do not accumulate at 390px in $language',
@@ -312,7 +481,7 @@ void main() {
         expect(find.textContaining('echo safe'), findsWidgets);
         await tester.tap(find.byKey(const Key('reader-detail-tab-1')));
         await tester.pumpAndSettle();
-        expect(find.textContaining('No matching block'), findsOneWidget);
+        expect(find.text('Result not found yet.'), findsOneWidget);
         await tester.tap(find.byKey(const Key('reader-close-details')));
         await tester.pumpAndSettle();
         await tester.tap(find.byKey(Key('reader-reasoning-${activity.id}')));
@@ -403,6 +572,10 @@ void main() {
       await tester.tap(find.byKey(const Key('reader-detail-tab-1')));
       await tester.pumpAndSettle();
       expect(find.text('MATCHED_TOOL_RESULT'), findsOneWidget);
+      await tester.tap(
+        find.byKey(Key('reader-tool-record-${activity.id}-same-call')),
+      );
+      await tester.pumpAndSettle();
       expect(
         find.text('Carried in request input · ${next.id}'),
         findsOneWidget,
@@ -682,6 +855,7 @@ ExchangeDetail detail(
   List<ExchangeContentBlock> output, {
   bool checkpoint = false,
   ActivityRecord? activity,
+  String? inputAnchor,
 }) {
   final request = base.content.request!, response = base.content.response!;
   return ExchangeDetail(
@@ -693,13 +867,16 @@ ExchangeDetail detail(
     processingTrace: base.processingTrace,
     clientIdentity: base.clientIdentity,
     content: ExchangeContentDetail(
+      page: inputAnchor == null
+          ? null
+          : ExchangeContentPaging(requestOffset: 0, inputAnchor: inputAnchor),
       state: 'recorded',
       mode: 'full',
       recordedAt: base.content.recordedAt,
       expiresAt: base.content.expiresAt,
       agentConversation: base.content.agentConversation,
       requestProjection: ExchangeRequestProjection(
-        view: 'incremental',
+        view: inputAnchor == null ? 'incremental' : 'reading',
         relationship: checkpoint ? 'checkpoint' : 'incremental',
         inheritedMessageCount: checkpoint ? 0 : 2,
         totalMessageCount: messages.length + (checkpoint ? 0 : 2),
@@ -737,6 +914,38 @@ final class _ReaderApi implements ControlApi {
   final exchangeCalls = <String>[];
   final pages = <String, ExchangeContentPage>{};
   final pageCalls = <String>[];
+  final imageCalls = <String>[];
+  final toolCalls = <String>[];
+  final results = <String, ToolResultPage>{};
+  @override
+  Future<ToolResultPage> toolResults(
+    String id,
+    String callId, {
+    String? cursor,
+  }) async {
+    toolCalls.add(callId);
+    return results[callId] ?? const ToolResultPage(items: []);
+  }
+
+  @override
+  Future<RawEvidencePage> rawEvidence(String id) => fixture.rawEvidence(id);
+  @override
+  Future<RetainedImagePreview> previewRawImage({
+    required String envelopeId,
+    required String fingerprint,
+  }) async {
+    imageCalls.add(fingerprint);
+    return RetainedImagePreview(
+      fingerprint: fingerprint,
+      mimeType: 'image/png',
+      width: 1,
+      height: 1,
+      bytes: base64Decode(
+        'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jPioAAAAASUVORK5CYII=',
+      ),
+    );
+  }
+
   @override
   Future<ExchangeContentPage> exchangeContentPage(
     String id,

@@ -114,6 +114,8 @@ type RequestView string
 const (
 	RequestViewFull        RequestView = "full"
 	RequestViewIncremental RequestView = "incremental"
+	// Reading exposes the last observed user group, not an asserted new suffix.
+	RequestViewReading RequestView = "reading"
 )
 
 func (ref FrozenRef) Validate() error {
@@ -429,6 +431,24 @@ func Project(record Record, view RequestView) (Projection, error) {
 		Request: request, Presentation: record.Presentation, View: view,
 		TotalMessageCount: len(record.Request.Messages),
 	}
+	if view == RequestViewReading {
+		end := len(request.Messages)
+		for end > 0 && request.Messages[end-1].Role != "user" {
+			end--
+		}
+		start := end
+		for start > 0 && request.Messages[start-1].Role == "user" && end-start < PageMessageLimit {
+			start--
+		}
+		page := &ProjectionPage{RequestOffset: start}
+		if end > start {
+			encoded, _ := json.Marshal(request.Messages[:end])
+			digest := sha256.Sum256(encoded)
+			page.InputAnchor = fmt.Sprintf("%x", digest)
+		}
+		projection.Request.Messages = request.Messages[start:end]
+		projection.Page = page
+	}
 	if record.Response != nil {
 		response := cloneResponse(*record.Response)
 		response.Blocks = mergeDuplicateReadableReasoning(response.Blocks)
@@ -543,7 +563,7 @@ func (projection Projection) Validate() error {
 	}
 	wantMessages := projection.TotalMessageCount
 	switch projection.View {
-	case RequestViewFull:
+	case RequestViewFull, RequestViewReading:
 	case RequestViewIncremental:
 		wantMessages -= inherited
 	default:
@@ -551,6 +571,9 @@ func (projection Projection) Validate() error {
 	}
 	if projection.Page != nil {
 		page := projection.Page
+		if page.InputAnchor != "" && (projection.View != RequestViewReading || !validFingerprint("sha256:"+page.InputAnchor) || len(projection.Request.Messages) == 0) {
+			return ErrInvalidEvidence
+		}
 		if page.RequestOffset < projection.TotalMessageCount-wantMessages ||
 			page.RequestOffset+len(projection.Request.Messages) > projection.TotalMessageCount ||
 			len(projection.Request.Messages) > PageMessageLimit || !validPageCursor(page.RequestNextCursor) ||

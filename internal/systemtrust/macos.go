@@ -25,6 +25,33 @@ const (
 	trustFixtureSchemaV1    = "vibermate-macos-user-trust-fixture-v1"
 )
 
+// InstallImportedCertificate uses the same bounded current-user SSL trust
+// command as the App adapter, after explicit client-side CA approval. It is
+// not a local Root replacement and grants no certificate signing authority.
+func InstallImportedCertificate(ctx context.Context, executor CommandExecutor, path, fingerprint string) error {
+	if ctx == nil || executor == nil || !validCertificateArtifactPath(path) {
+		return ErrCommandInvalid
+	}
+	encoded, err := os.ReadFile(path)
+	if err != nil || len(encoded) > 64<<10 {
+		return ErrCommandInvalid
+	}
+	block, rest := pem.Decode(encoded)
+	if block == nil || block.Type != "CERTIFICATE" || len(bytes.TrimSpace(rest)) > 0 || fmt.Sprintf("%x", sha256.Sum256(block.Bytes)) != fingerprint {
+		return ErrCurrentRootInvalid
+	}
+	certificate, err := x509.ParseCertificate(block.Bytes)
+	if err != nil || !certificate.IsCA || !certificate.BasicConstraintsValid || certificate.CheckSignatureFrom(certificate) != nil {
+		return ErrCurrentRootInvalid
+	}
+	result, err := executor.Execute(ctx, CommandSpec{kind: CommandEnsureExactTrust, executable: macOSSecurityExecutable,
+		arguments: []string{"add-trusted-cert", "-r", "trustRoot", "-p", "ssl", path}})
+	if err != nil || result.Outcome() != CommandOutcomeSucceeded {
+		return errors.Join(ErrCommandInvalid, err)
+	}
+	return nil
+}
+
 type CommandKind string
 
 const (

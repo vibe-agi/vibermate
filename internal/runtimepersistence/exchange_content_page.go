@@ -82,7 +82,7 @@ func deferredPageBlock(cursor contentCursor, size int) exchangecontent.Block {
 }
 
 func (repository *exchangeContentRepository) GetPagedProjection(ctx context.Context, id string, now time.Time, view exchangecontent.RequestView) (exchangecontent.Projection, error) {
-	if view != exchangecontent.RequestViewFull && view != exchangecontent.RequestViewIncremental {
+	if view != exchangecontent.RequestViewFull && view != exchangecontent.RequestViewIncremental && view != exchangecontent.RequestViewReading {
 		return exchangecontent.Projection{}, exchangecontent.ErrInvalidEvidence
 	}
 	operation, finish, err := repository.operations.begin(ctx)
@@ -96,7 +96,13 @@ func (repository *exchangeContentRepository) GetPagedProjection(ctx context.Cont
 	}
 	paging := &exchangecontent.ProjectionPage{RequestOffset: ref.requestCount}
 	var messages []exchangecontent.Message
-	if view == exchangecontent.RequestViewFull || ref.inherited > 0 {
+	if view == exchangecontent.RequestViewReading {
+		messages, paging.RequestOffset, paging.InputAnchor, err = repository.readingUserGroup(operation, ref)
+		if err != nil {
+			return exchangecontent.Projection{}, err
+		}
+		paging.RequestNextCursor = encodeContentCursor(pageCursor(ref, "request", "request", ref.requestCount))
+	} else if view == exchangecontent.RequestViewFull || ref.inherited > 0 {
 		cursor := pageCursor(ref, "request", "request", ref.requestCount)
 		if view == exchangecontent.RequestViewIncremental {
 			cursor.Lower = ref.inherited

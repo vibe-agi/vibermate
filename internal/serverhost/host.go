@@ -404,6 +404,7 @@ func startAttached(
 	host.server = &http.Server{
 		Handler: router{
 			scheme:       transport.scheme,
+			clientAuth:   runtimeUserAuthenticator{users: runtime.RuntimeUsers(), isOwner: admin.IsOwner},
 			userSessions: userSessions, runtimeUsers: runtimeUsers, access: serverAccess,
 			rootCA: rootCA, ipAllowlist: remoteIPAllowlist,
 			capture: capture, manual: manual, manualOwner: manualOwner,

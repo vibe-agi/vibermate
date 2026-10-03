@@ -8237,6 +8237,115 @@ final class RawEvidenceEnvelope {
   final bool revealAvailable;
 }
 
+final class ToolResultMatch {
+  const ToolResultMatch({required this.exchangeId, required this.block});
+  final String exchangeId;
+  final ExchangeContentBlock block;
+}
+
+final class ToolResultPage {
+  const ToolResultPage({required this.items, this.nextCursor});
+  factory ToolResultPage.fromJson(Object? json, String origin, String callId) {
+    final value = requireObject(json, 'toolResults');
+    requireFields(
+      value,
+      'toolResults',
+      required: const {'schema', 'originExchangeId', 'callId', 'items'},
+      optional: const {'nextCursor'},
+    );
+    if (value['schema'] != 'vibermate-tool-results/v1' ||
+        value['originExchangeId'] != origin ||
+        value['callId'] != callId) {
+      throw const ControlContractException(
+        'Tool result lookup scope is inconsistent',
+      );
+    }
+    final items = <ToolResultMatch>[];
+    for (final raw in requireList(value['items'], 'toolResults.items')) {
+      final entry = requireObject(raw, 'toolResult');
+      requireFields(
+        entry,
+        'toolResult',
+        required: const {'exchangeId', 'block'},
+      );
+      final block = ExchangeContentBlock.fromJson(
+        entry['block'],
+        'toolResult.block',
+      );
+      final exchangeId = requireString(entry, 'exchangeId', 'toolResult');
+      final deferredResult =
+          block.kind == 'deferred' && block.deferred?.exchangeId == exchangeId;
+      if ((!deferredResult &&
+              (block.kind != 'tool_result' || block.callId != callId)) ||
+          items.length >= 24) {
+        throw const ControlContractException(
+          'Tool result lookup contains unrelated content',
+        );
+      }
+      items.add(ToolResultMatch(exchangeId: exchangeId, block: block));
+    }
+    final cursor = optionalString(value, 'nextCursor', 'toolResults');
+    if (cursor != null &&
+        (cursor.length > 128 * 1024 ||
+            !RegExp(r'^[A-Za-z0-9_-]+$').hasMatch(cursor))) {
+      throw const ControlContractException('Invalid tool result cursor');
+    }
+    return ToolResultPage(items: List.unmodifiable(items), nextCursor: cursor);
+  }
+  final List<ToolResultMatch> items;
+  final String? nextCursor;
+}
+
+final class RetainedImagePreview {
+  const RetainedImagePreview({
+    required this.fingerprint,
+    required this.mimeType,
+    required this.width,
+    required this.height,
+    required this.bytes,
+  });
+  factory RetainedImagePreview.fromJson(Object? json, String fingerprint) {
+    final value = requireObject(json, 'imagePreview');
+    requireFields(
+      value,
+      'imagePreview',
+      required: const {
+        'schema',
+        'fingerprint',
+        'mimeType',
+        'width',
+        'height',
+        'dataBase64',
+      },
+    );
+    final mime = requireString(value, 'mimeType', 'imagePreview');
+    final width = requireInteger(value, 'width', 'imagePreview', minimum: 1);
+    final height = requireInteger(value, 'height', 'imagePreview', minimum: 1);
+    final encoded = requireString(value, 'dataBase64', 'imagePreview');
+    if (value['schema'] != 'vibermate-image-preview/v1' ||
+        value['fingerprint'] != fingerprint ||
+        !const {'image/png', 'image/jpeg'}.contains(mime) ||
+        width > (16 << 20) ~/ height ||
+        encoded.length > 6 << 20) {
+      throw const ControlContractException('Image preview is invalid');
+    }
+    final data = base64Decode(encoded);
+    if (data.isEmpty || data.length > 4 << 20) {
+      throw const ControlContractException('Image preview exceeds its bound');
+    }
+    return RetainedImagePreview(
+      fingerprint: fingerprint,
+      mimeType: mime,
+      width: width,
+      height: height,
+      bytes: data,
+    );
+  }
+  final String fingerprint, mimeType;
+  final int width, height;
+  final Uint8List bytes;
+}
+
 final class RawEvidencePage {
   const RawEvidencePage({
     required this.items,
@@ -8782,6 +8891,7 @@ final class ExchangeContentPaging {
     this.requestNextCursor,
     this.requestEvidenceNextCursor,
     this.responseEvidenceNextCursor,
+    this.inputAnchor,
   });
   factory ExchangeContentPaging.fromJson(Object? json, String path) {
     final value = requireObject(json, path);
@@ -8793,9 +8903,11 @@ final class ExchangeContentPaging {
         'requestNextCursor',
         'requestEvidenceNextCursor',
         'responseEvidenceNextCursor',
+        'inputAnchor',
       },
     );
     return ExchangeContentPaging(
+      inputAnchor: _readingInputAnchor(value, path),
       requestOffset: requireInteger(value, 'requestOffset', path),
       requestNextCursor: _contentPageCursor(value, 'requestNextCursor', path),
       requestEvidenceNextCursor: _contentPageCursor(
@@ -8813,6 +8925,15 @@ final class ExchangeContentPaging {
   final int requestOffset;
   final String? requestNextCursor;
   final String? requestEvidenceNextCursor, responseEvidenceNextCursor;
+  final String? inputAnchor;
+}
+
+String? _readingInputAnchor(JsonObject value, String path) {
+  final anchor = optionalString(value, 'inputAnchor', path);
+  if (anchor != null && !RegExp(r'^[0-9a-f]{64}$').hasMatch(anchor)) {
+    throw ControlContractException('$path input identity is invalid');
+  }
+  return anchor;
 }
 
 final class ExchangeContentPage {
@@ -9335,7 +9456,7 @@ final class ExchangeRequestProjection {
       'same_transcript' => inherited == total,
       _ => false,
     };
-    if (!const {'incremental', 'full'}.contains(view) ||
+    if (!const {'incremental', 'full', 'reading'}.contains(view) ||
         !relationshipValid ||
         full != (inherited > 0)) {
       throw ControlContractException('$path request projection is invalid');
@@ -9562,7 +9683,7 @@ final class ExchangeContentDetail {
     final page = value['page'] == null
         ? null
         : ExchangeContentPaging.fromJson(value['page'], '$path.page');
-    final expectedMessages = projection.view == 'full'
+    final expectedMessages = projection.view != 'incremental'
         ? projection.totalMessageCount
         : projection.totalMessageCount - projection.inheritedMessageCount;
     if (!const {'full', 'metadata_only'}.contains(mode) ||

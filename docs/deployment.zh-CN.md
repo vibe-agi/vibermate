@@ -84,6 +84,28 @@ HTTPS，HTTP 只适合受信任的本机或私网环境。
 
 ## 私网 HTTPS：没有公网域名
 
+### 在另一台电脑安装客户端证书
+
+在**实际运行 Codex/Claude 的电脑或容器里面**执行：
+
+```sh
+vibermate login --server https://vibermate.home.arpa:9666
+vibermate ca install --server https://vibermate.home.arpa:9666
+vibermate ca status --server https://vibermate.home.arpa:9666
+```
+
+CA 命令需要客户端和服务端都升级到支持该命令的版本。已登录的普通客户端只允许下载
+公开 CA 证书，不会因此取得服务器管理权限；旧服务端若拒绝下载，请先升级服务端。
+
+命令自动识别 macOS 或 Linux；macOS 安装到当前用户，Linux 使用发行版的证书工具，
+必要时要求管理员授权。只下载文件可用 `vibermate ca download --server <地址> --out root.crt`，
+不会替换已有文件。安装前核对服务端和 SHA-256 指纹，安装后重新检查本机信任。
+
+这安装的是 **AI 流量检查 CA**，不是登录凭据，也不是公网 HTTPS 服务器证书。
+已有 App 的证书信任不会自动进入 Docker 或另一台电脑。HTTP 连接会提示其风险；
+无人值守安装必须提供由可信管理页面独立核对的 `--fingerprint <SHA-256>`，再加 `--yes`。
+命令不会使用 `--insecure` 跳过服务端证书验证。
+
 ### 方案 A：自定义名称 + hosts 文件
 
 选择一个稳定、仅内部使用的名称，例如 `vibermate.home.arpa`：

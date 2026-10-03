@@ -434,6 +434,7 @@ func New(options Options) (*Handler, error) {
 		"GET /api/v1/exchanges/{exchangeId}",
 		handler.getExchange,
 	)
+	handler.mux.HandleFunc("GET /api/v1/exchanges/{exchangeId}/tool-results", handler.getToolResults)
 	if handler.rawEvidence != nil {
 		handler.mux.HandleFunc(
 			"GET /api/v1/exchanges/{exchangeId}/raw-evidence",

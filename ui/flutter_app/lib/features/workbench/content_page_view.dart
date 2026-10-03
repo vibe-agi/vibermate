@@ -7,14 +7,18 @@ final class _ContentPageScope extends InheritedWidget {
     required this.controller,
     required super.child,
     this.openPage,
+    this.exchangeId,
   });
   final WorkbenchController controller;
+  final String? exchangeId;
   final void Function(String exchangeId, String cursor)? openPage;
   static _ContentPageScope? of(BuildContext context) =>
       context.dependOnInheritedWidgetOfExactType<_ContentPageScope>();
   @override
   bool updateShouldNotify(_ContentPageScope oldWidget) =>
-      controller != oldWidget.controller || openPage != oldWidget.openPage;
+      controller != oldWidget.controller ||
+      openPage != oldWidget.openPage ||
+      exchangeId != oldWidget.exchangeId;
 }
 
 final class _ContentPageButton extends StatelessWidget {
@@ -292,6 +296,7 @@ final class _ContentPageDialogState extends State<_ContentPageDialog> {
           padding: const EdgeInsets.all(16),
           child: _ContentPageScope(
             controller: widget.controller,
+            exchangeId: widget.exchangeId,
             openPage: (id, cursor) {
               if (id == widget.exchangeId) _load(cursor);
             },
