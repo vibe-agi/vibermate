@@ -70,6 +70,8 @@
 
 第一个已自检、可执行的子计划是 `2026-10-03-schema-upgrade-snapshot.md`：冻结 v1 并验证完整私有回滚快照，不提升 revision、不启用 MCP。原生 DDL、事务迁移/启动与传输/CA 后续子计划须各自采用后执行。
 
+快照 Task1 已于 d8a8a77 通过正常/并发/仓库/编译验证及独立复核。下一自检子计划 `2026-10-03-native-tool-store.md` 先执行 Task1（原生权限/绑定纯模型与非启用态 v2 DDL）；事务升级另行采用，之后才执行存储任务2/3。`2026-10-03-client-ca-acceptance.md` 已自检，按三项串行行为/一次性原生 runner/CI 任务排队。以上不是原生客户端、迁移或发布验收完成。
+
 - [ ] 使用隔离、固定版本的官方客户端：Codex 0.145.0、0.159.2、0.160.0，Claude 2.1.220。校验实际 version，已有后台 fixture 与请求接收器不使用用户生产账号/配置。
 - [ ] 验证已有后台、interactive/exec/resume、两个 Environment 并行、工具输入/返回、图片、取消、断网重连与下一次启动。按持久 Activity/Capture/Environment ID 断言实际请求归属，不只检查终端文本 OK。
 - [ ] 为已观察 MCP 422 只采集 method/authority/path/status 元数据，核对相应官方源码/契约，写精确失败用例。修复应保留未知操作拒绝、原始凭据同源、保留策略和工具决策；测试 initialize/list 等只读协议入口，不触发外部应用写操作。
