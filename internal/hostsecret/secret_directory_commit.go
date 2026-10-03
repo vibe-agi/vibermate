@@ -52,10 +52,11 @@ func (provisioner *secretDirectoryProvisioner) prepare(ctx context.Context) erro
 		info, err := os.Lstat(path)
 		created := false
 		if errors.Is(err, os.ErrNotExist) {
-			if err := provisioner.ops.mkdir(path, 0o700); err != nil && !errors.Is(err, os.ErrExist) {
+			mkdirErr := provisioner.ops.mkdir(path, 0o700)
+			if mkdirErr != nil && !errors.Is(mkdirErr, os.ErrExist) {
 				return failure()
 			}
-			created = true
+			created = mkdirErr == nil
 			info, err = os.Lstat(path)
 		}
 		owned := path == provisioner.boundary || path == provisioner.leaf

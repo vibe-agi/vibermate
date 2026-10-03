@@ -12,6 +12,101 @@ import (
 	"github.com/vibe-agi/vibermate/internal/secretstore"
 )
 
+// Catch assuming ownership when mkdir reports an entry created by another
+// process between the missing-entry check and the actual mkdir operation.
+func TestServerDirectoryCommitMkdirExistsPreservesAncestorPermissions(t *testing.T) {
+	for _, kind := range []string{"directory", "symlink", "owned-boundary"} {
+		t.Run(kind, func(t *testing.T) {
+			anchor, err := filepath.EvalSymlinks(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			shared := filepath.Join(anchor, "shared")
+			data := filepath.Join(shared, "server")
+			raced := shared
+			if kind == "owned-boundary" {
+				raced = data
+			}
+			target := filepath.Join(anchor, "target")
+			if kind == "symlink" {
+				if err := os.Mkdir(target, 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Chmod(target, 0o755); err != nil {
+					t.Fatal(err)
+				}
+			}
+			factory, err := NewServerFileFactory(data)
+			if err != nil {
+				t.Fatal(err)
+			}
+			real := factory.directories.ops
+			factory.directories.ops.mkdir = func(path string, mode os.FileMode) error {
+				if path != raced {
+					return real.mkdir(path, mode)
+				}
+				if kind == "symlink" {
+					if err := os.Symlink(target, path); err != nil {
+						t.Skipf("ancestor aliases unavailable: %v", err)
+					}
+				} else {
+					if err := os.Mkdir(path, 0o755); err != nil {
+						t.Fatal(err)
+					}
+					if err := os.Chmod(path, 0o755); err != nil {
+						t.Fatal(err)
+					}
+				}
+				return os.ErrExist
+			}
+			visited := make(map[string]bool)
+			factory.directories.ops.syncDirectory = func(path string) error {
+				visited[path] = true
+				return real.syncDirectory(path)
+			}
+			store, err := factory.Open(t.Context())
+			if err != nil {
+				t.Fatal(err)
+			}
+			info, err := os.Stat(raced)
+			if err != nil {
+				t.Fatal(err)
+			}
+			wantMode := os.FileMode(0o755)
+			if kind == "owned-boundary" {
+				wantMode = 0o700
+			}
+			if runtime.GOOS != "windows" && info.Mode().Perm() != wantMode {
+				t.Fatalf("mkdir ErrExist changed directory permissions: got %o want %o", info.Mode().Perm(), wantMode)
+			}
+			if !visited[raced] {
+				t.Fatal("mkdir ErrExist skipped the directory barrier")
+			}
+			if kind == "symlink" && !visited[target] {
+				t.Fatal("mkdir ErrExist skipped the physical target barrier")
+			}
+			for path := filepath.Join(data, "server-secrets"); ; path = filepath.Dir(path) {
+				if !visited[path] {
+					t.Fatal("mkdir ErrExist skipped a required path barrier")
+				}
+				if filepath.Dir(path) == path {
+					break
+				}
+			}
+			reference, err := secretstore.ParseReference("secret://provider/account")
+			if err != nil {
+				t.Fatal(err)
+			}
+			value := newServerCommitValue(t, "synthetic-credential")
+			defer value.Destroy()
+			metadata, err := store.Replace(t.Context(), secretstore.ReplaceCommand{Reference: reference, Value: value})
+			if err != nil || metadata.Revision != 1 {
+				t.Fatalf("first commit after mkdir ErrExist: %+v %v", metadata, err)
+			}
+		})
+	}
+}
+
 // Catch acknowledging a first credential through directory entries whose
 // barriers were skipped, including a retry where failed provisioning left dirs.
 func TestServerFreshDirectoryCommitBarriersAndRetry(t *testing.T) {
