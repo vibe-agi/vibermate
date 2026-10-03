@@ -500,6 +500,7 @@ func (manager *Manager) BeginRequest(
 	}
 	assignment := connection.assignment
 	snapshot := connection.snapshot
+	binding := connection.binding
 	if assignment.Validate() != nil || assignment.Capture != capture ||
 		snapshot.ID() != assignment.EnvironmentID ||
 		snapshot.Revision() != assignment.EnvironmentRevision ||
@@ -507,15 +508,15 @@ func (manager *Manager) BeginRequest(
 		state.mu.Unlock()
 		return fail(ErrAssignmentUnavailable)
 	}
-	if err := environment.ValidateConnectionBinding(snapshot, connection.binding); err != nil {
+	if err := environment.ValidateConnectionBinding(snapshot, binding); err != nil {
 		state.mu.Unlock()
 		return fail(err)
 	}
-	if !connectionBindingAuthorized(assignment, connection.binding) {
+	if !connectionBindingAuthorized(assignment, binding) {
 		state.mu.Unlock()
 		return fail(ErrAssignmentUnavailable)
 	}
-	if connection.binding.Mode != environment.ConnectionModeSemantic {
+	if binding.Mode != environment.ConnectionModeSemantic && binding.Mode != environment.ConnectionModeClientTools {
 		state.mu.Unlock()
 		return fail(environment.ErrClientProtocolNotMatched)
 	}
@@ -533,15 +534,34 @@ func (manager *Manager) BeginRequest(
 		state.mu.Unlock()
 		finish()
 	}
+	if plan, nativeErr := snapshot.ResolveClientToolRequest(binding, facts); nativeErr == nil {
+		active, activeErr := manager.activity.Active(ctx, capture)
+		if activeErr != nil || !active {
+			release()
+			return nil, errors.Join(ErrAssignmentUnavailable, activeErr)
+		}
+		boundary := assignment.LaunchAuthority
+		initial, initialErr := manager.environments.ResolveRevision(ctx, boundary.InitialEnvironmentID(), boundary.InitialEnvironmentRevision())
+		native, ok := plan.ClientToolPlan()
+		if initialErr != nil || !ok {
+			release()
+			return nil, errors.Join(ErrAssignmentUnavailable, initialErr)
+		}
+		if err := initial.ValidateClientToolLaunchAuthority(boundary, native); err != nil {
+			release()
+			return nil, errors.Join(ErrAssignmentUnavailable, err)
+		}
+		return &RequestLease{assignment: assignment, plan: plan, finish: release}, nil
+	}
 	if assignment.ClientTarget.Available() &&
-		assignment.ClientTarget.MatchesTransport(connection.binding.ProviderOrigin) &&
-		assignment.ClientTarget.CanonicalOrigin() == connection.binding.ClientOrigin &&
+		assignment.ClientTarget.MatchesTransport(binding.ProviderOrigin) &&
+		assignment.ClientTarget.CanonicalOrigin() == binding.ClientOrigin &&
 		!assignment.ClientTarget.ContainsPath(facts.Target.Path) &&
 		!upstreamservice.AllowsClientRead(assignment.ClientTarget.ActualOrigin(), assignment.ClientTarget.CanonicalOrigin(), facts.Target) {
 		release()
 		return nil, errors.Join(environment.ErrClientProtocolNotMatched, ErrClientTargetPathNotAllowed)
 	}
-	plan, err := snapshot.ResolveConnectionRequest(connection.binding, facts)
+	plan, err := snapshot.ResolveConnectionRequest(binding, facts)
 	if err != nil {
 		release()
 		return nil, err

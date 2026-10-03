@@ -3,7 +3,9 @@ package environment
 import (
 	"bytes"
 	"testing"
+	"time"
 
+	"github.com/vibe-agi/vibermate/internal/egressnetwork"
 	"github.com/vibe-agi/vibermate/internal/egressprofile"
 	"github.com/vibe-agi/vibermate/internal/protocolspec"
 	"github.com/vibe-agi/vibermate/internal/wireprofile"
@@ -17,6 +19,71 @@ func clientToolFixture(t *testing.T) Environment {
 		CredentialOwner: ClientToolCredentialOriginal, EgressProfile: egressprofile.Direct(), Contract: ClientToolContractCodexLegacy,
 	}}
 	return value
+}
+
+func TestNativeLaunchCompatibilityChecksCompleteFrozenRoute(t *testing.T) {
+	initial := mustCompile(t, clientToolFixture(t))
+	boundary, err := NewLaunchAuthorityBoundary(initial)
+	if err != nil {
+		t.Fatal(err)
+	}
+	facts := RequestFacts{Target: protocolspec.RequestTarget{Method: "POST", Path: ClientToolMCPPath, Transport: protocolspec.ClientOperationTransportHTTP}}
+	resolve := func(snapshot EnvironmentSnapshot) ClientToolPlan {
+		t.Helper()
+		binding, err := snapshot.BeginProviderConnection(snapshot.Aggregate().ClientToolAccess.Route.TargetOrigin)
+		if err != nil {
+			t.Fatal(err)
+		}
+		request, err := snapshot.ResolveClientToolRequest(binding, facts)
+		if err != nil {
+			t.Fatal(err)
+		}
+		plan, ok := request.ClientToolPlan()
+		if !ok {
+			t.Fatal("native arm absent")
+		}
+		return plan
+	}
+	if err := initial.ValidateClientToolLaunchAuthority(boundary, resolve(initial)); err != nil {
+		t.Fatal(err)
+	}
+	for _, mutate := range []func(*Environment){
+		func(v *Environment) { v.ClientToolAccess.Route.ID = "native.changed" },
+		func(v *Environment) { v.ClientToolAccess.Route.Revision++ },
+		func(v *Environment) {
+			v.ClientToolAccess.Route.TargetOrigin = mustProviderOrigin(t, "https://other.example")
+		},
+		func(v *Environment) { v.ClientToolAccess.Route.EgressProfile.ID = "profile.changed" },
+		func(v *Environment) { v.ClientToolAccess.Route.EgressProfile.Revision++ },
+		func(v *Environment) { v.ClientToolAccess.Route.EgressProfile.DisplayName = "Changed name" },
+		func(v *Environment) {
+			v.ClientToolAccess.Route.EgressProfile.PublishedAt = v.ClientToolAccess.Route.EgressProfile.PublishedAt.Add(time.Second)
+		},
+		func(v *Environment) {
+			v.ClientToolAccess.Route.EgressProfile.Policy.Proxy = egressnetwork.ProxyPolicy{Kind: egressnetwork.ProxySOCKS5, Endpoint: "proxy.example:1080"}
+		},
+	} {
+		next := initial.Aggregate()
+		next.Revision++
+		mutate(&next)
+		if initial.ValidateClientToolLaunchAuthority(boundary, resolve(mustCompile(t, next))) == nil {
+			t.Fatal("native route/profile drift accepted")
+		}
+	}
+	changed := initial.Aggregate()
+	changed.Name = "Substituted snapshot"
+	if initial.ValidateClientToolLaunchAuthority(boundary, resolve(mustCompile(t, changed))) == nil {
+		t.Fatal("same-revision native digest substitution accepted")
+	}
+	wrongDigest := initial.Digest()
+	wrongDigest[0] ^= 1
+	wrongBoundary, err := NewLaunchAuthorityBoundaryFromScopes(initial.ID(), initial.Revision(), wrongDigest, boundary.ProtectedAuthorities(), boundary.ManagedCredentialAuthorities())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if initial.ValidateClientToolLaunchAuthority(wrongBoundary, resolve(initial)) == nil {
+		t.Fatal("historical initial digest substitution accepted")
+	}
 }
 
 func TestClientToolAccessOffCanonicalBytesUnchanged(t *testing.T) {
@@ -156,5 +223,54 @@ func TestClientToolAccessRouteValidationAndTransitions(t *testing.T) {
 	resurrected.ClientToolAccess = previous.ClientToolAccess
 	if _, err := materializeIdentityHistory(&retired, resurrected); err == nil {
 		t.Fatal("retired native route reused")
+	}
+}
+
+func TestNativeOnlyConnectionGrantsOnlyExactNativeArm(t *testing.T) {
+	value := clientToolFixture(t)
+	value.ClientToolAccess.Route.TargetOrigin = mustProviderOrigin(t, "https://native.example")
+	snapshot := mustCompile(t, value)
+	binding, err := snapshot.BeginProviderConnection(value.ClientToolAccess.Route.TargetOrigin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if binding.Mode != ConnectionMode("client_tools") || binding.ClientOrigin.String() != "" || binding.ClientEndpointID != "" || binding.CompatibilityDigest == (ConnectionCompatibilityDigest{}) {
+		t.Fatalf("native-only origin classified as %+v", binding)
+	}
+	if err := ValidateConnectionBinding(snapshot, binding); err != nil {
+		t.Fatal(err)
+	}
+	facts := RequestFacts{Target: protocolspec.RequestTarget{Method: "POST", Path: ClientToolMCPPath, Transport: protocolspec.ClientOperationTransportHTTP}}
+	if _, err := snapshot.ResolveClientToolRequest(binding, facts); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := snapshot.ResolveConnectionRequest(binding, facts); err == nil {
+		t.Fatal("native connection granted model arm")
+	}
+	drifted := value.Clone()
+	drifted.Revision++
+	drifted.ClientToolAccess.Route.EgressProfile.DisplayName = "Changed profile"
+	if ValidateConnectionBinding(mustCompile(t, drifted), binding) == nil {
+		t.Fatal("native binding tolerated full profile drift")
+	}
+	for _, mutate := range []func(*ConnectionBinding){
+		func(b *ConnectionBinding) { b.ProviderOrigin = mustProviderOrigin(t, "https://other.example") },
+		func(b *ConnectionBinding) { b.ClientEndpointID = "native.mcp" },
+		func(b *ConnectionBinding) { b.CompatibilityDigest[0] ^= 1 },
+	} {
+		wrong := binding
+		mutate(&wrong)
+		if ValidateConnectionBinding(snapshot, wrong) == nil {
+			t.Fatal("invalid native binding accepted")
+		}
+	}
+	off := value.Clone()
+	off.ClientToolAccess = nil
+	offBinding, err := mustCompile(t, off).BeginProviderConnection(binding.ProviderOrigin)
+	if err != nil || offBinding.Mode != ConnectionModeBlind {
+		t.Fatalf("OFF binding: %+v %v", offBinding, err)
+	}
+	if ValidateConnectionBinding(snapshot, offBinding) == nil {
+		t.Fatal("blind binding accepted for enabled native origin")
 	}
 }

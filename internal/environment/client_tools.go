@@ -1,6 +1,8 @@
 package environment
 
 import (
+	"crypto/sha256"
+	"encoding/json"
 	"fmt"
 	"reflect"
 
@@ -8,6 +10,53 @@ import (
 	"github.com/vibe-agi/vibermate/internal/originidentity"
 	"github.com/vibe-agi/vibermate/internal/protocolspec"
 )
+
+// nativeConnectionCompatibility covers the entire validated native contract,
+// including the embedded egress profile, without inventing a model endpoint.
+func nativeConnectionCompatibility(route ClientToolRoute) (ConnectionCompatibilityDigest, error) {
+	if err := route.Validate(); err != nil {
+		return ConnectionCompatibilityDigest{}, err
+	}
+	encoded, err := json.Marshal(route)
+	if err != nil {
+		return ConnectionCompatibilityDigest{}, err
+	}
+	return ConnectionCompatibilityDigest(sha256.Sum256(append([]byte("vibermate-native-connection/v1\x00"), encoded...))), nil
+}
+
+func (snapshot EnvironmentSnapshot) clientToolRoute(origin originidentity.ProviderOrigin) (ClientToolRoute, bool) {
+	policy := snapshot.aggregate.ClientToolAccess
+	if policy == nil || !policy.Enabled || policy.Validate() != nil || policy.Route.TargetOrigin != origin {
+		return ClientToolRoute{}, false
+	}
+	return *policy.Route, true
+}
+
+// ValidateClientToolLaunchAuthority checks historical launch evidence against
+// a frozen native plan. It grants no transport or original-login capability.
+func (snapshot EnvironmentSnapshot) ValidateClientToolLaunchAuthority(boundary LaunchAuthorityBoundary, plan ClientToolPlan) error {
+	if snapshot.validate() != nil || snapshot.State() != StateActive || boundary.Validate() != nil || plan.Validate() != nil ||
+		snapshot.ID() != boundary.InitialEnvironmentID() || snapshot.Revision() != boundary.InitialEnvironmentRevision() || snapshot.Digest() != boundary.InitialEnvironmentDigest() ||
+		plan.EnvironmentID() != snapshot.ID() || plan.EnvironmentRevision() < snapshot.Revision() ||
+		(plan.EnvironmentRevision() == snapshot.Revision() && plan.EnvironmentDigest() != snapshot.Digest()) {
+		return ErrInvalidEnvironment
+	}
+	route, ok := snapshot.clientToolRoute(plan.Route().TargetOrigin)
+	if !ok {
+		return ErrClientProtocolNotMatched
+	}
+	initialDigest, err := nativeConnectionCompatibility(route)
+	currentDigest, currentErr := nativeConnectionCompatibility(plan.Route())
+	if err != nil || currentErr != nil || initialDigest != currentDigest {
+		return ErrInvalidEnvironment
+	}
+	for _, authority := range boundary.ProtectedAuthorities() {
+		if authority == route.TargetOrigin.EndpointAuthority() {
+			return nil
+		}
+	}
+	return ErrInvalidEnvironment
+}
 
 type ClientToolRouteID string
 
@@ -111,7 +160,7 @@ func (plan RequestPlan) ClientToolPlan() (ClientToolPlan, bool) {
 }
 
 func (snapshot EnvironmentSnapshot) ResolveClientToolRequest(binding ConnectionBinding, facts RequestFacts) (RequestPlan, error) {
-	if ValidateConnectionBinding(snapshot, binding) != nil || snapshot.aggregate.ClientToolAccess == nil || !snapshot.aggregate.ClientToolAccess.Enabled {
+	if ValidateConnectionBinding(snapshot, binding) != nil || (binding.Mode != ConnectionModeClientTools && binding.Mode != ConnectionModeSemantic) || snapshot.aggregate.ClientToolAccess == nil || !snapshot.aggregate.ClientToolAccess.Enabled {
 		return RequestPlan{}, ErrClientProtocolNotMatched
 	}
 	route := *snapshot.aggregate.ClientToolAccess.Route

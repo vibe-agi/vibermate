@@ -220,6 +220,12 @@ func snapshotAuthorityScopes(snapshot EnvironmentSnapshot) ([]string, []string, 
 			managed = append(managed, authority)
 		}
 	}
+	if policy := snapshot.aggregate.ClientToolAccess; policy != nil && policy.Enabled {
+		if policy.Validate() != nil {
+			return nil, nil, ErrInvalidEnvironment
+		}
+		protected = appendAuthority(protected, policy.Route.TargetOrigin.EndpointAuthority())
+	}
 	protected, _, err := canonicalLaunchAuthorities(protected)
 	if err != nil {
 		return nil, nil, err

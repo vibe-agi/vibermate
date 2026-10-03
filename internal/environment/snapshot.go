@@ -35,8 +35,9 @@ func (digest ConnectionCompatibilityDigest) String() string {
 }
 
 const (
-	ConnectionModeBlind    ConnectionMode = "blind"
-	ConnectionModeSemantic ConnectionMode = "semantic"
+	ConnectionModeBlind       ConnectionMode = "blind"
+	ConnectionModeSemantic    ConnectionMode = "semantic"
+	ConnectionModeClientTools ConnectionMode = "client_tools"
 )
 
 // ConnectionBinding is the frozen downstream shape that determines whether
@@ -260,9 +261,9 @@ func (snapshot EnvironmentSnapshot) BeginConnection(origin originidentity.Client
 	return snapshot.beginConnection(providerOrigin, origin)
 }
 
-// BeginProviderConnection resolves an ordinary proxy destination. Only an
-// exact HTTPS ClientOrigin already present in the Environment is semantic;
-// private cleartext and every other destination remain blind.
+// BeginProviderConnection resolves an ordinary proxy destination. Exact model
+// origins keep semantic mode; an enabled exact native-only HTTPS origin gets
+// its dedicated contract. Private cleartext and unrelated origins stay blind.
 func (snapshot EnvironmentSnapshot) BeginProviderConnection(
 	origin originidentity.ProviderOrigin,
 ) (ConnectionBinding, error) {
@@ -314,6 +315,13 @@ func (snapshot EnvironmentSnapshot) beginConnection(
 	}
 	endpoint, intercepted := snapshot.LookupCompiledClientOrigin(clientOrigin)
 	if !intercepted {
+		if route, ok := snapshot.clientToolRoute(providerOrigin); ok {
+			digest, err := nativeConnectionCompatibility(route)
+			if err != nil {
+				return ConnectionBinding{}, err
+			}
+			return ConnectionBinding{Mode: ConnectionModeClientTools, ProviderOrigin: providerOrigin, CompatibilityDigest: digest}, nil
+		}
 		return ConnectionBinding{
 			Mode: ConnectionModeBlind, ProviderOrigin: providerOrigin,
 		}, nil
@@ -501,6 +509,27 @@ func ValidateConnectionBinding(snapshot EnvironmentSnapshot, binding ConnectionB
 				}
 			}
 		}
+		if _, exists := snapshot.clientToolRoute(binding.ProviderOrigin); exists {
+			return ErrInvalidEnvironment
+		}
+		return nil
+	case ConnectionModeClientTools:
+		if binding.ClientOrigin.String() != "" || binding.ClientEndpointID != "" {
+			return ErrInvalidEnvironment
+		}
+		if origin, err := originidentity.ParseClientOrigin(binding.ProviderOrigin.String()); err == nil {
+			if _, exists := snapshot.LookupCompiledClientOrigin(origin); exists {
+				return ErrInvalidEnvironment
+			}
+		}
+		route, exists := snapshot.clientToolRoute(binding.ProviderOrigin)
+		if !exists {
+			return ErrInvalidEnvironment
+		}
+		digest, err := nativeConnectionCompatibility(route)
+		if err != nil || digest != binding.CompatibilityDigest {
+			return ErrInvalidEnvironment
+		}
 		return nil
 	case ConnectionModeSemantic:
 		if binding.ClientEndpointID == "" || binding.CompatibilityDigest == (ConnectionCompatibilityDigest{}) {
@@ -531,6 +560,10 @@ func validateConnectionBindingShape(binding ConnectionBinding) error {
 		if binding.ClientOrigin.Validate() != nil ||
 			validateID("ClientEndpoint ID", binding.ClientEndpointID.String()) != nil ||
 			binding.CompatibilityDigest == (ConnectionCompatibilityDigest{}) {
+			return ErrInvalidEnvironment
+		}
+	case ConnectionModeClientTools:
+		if binding.ClientOrigin.String() != "" || binding.ClientEndpointID != "" || binding.CompatibilityDigest == (ConnectionCompatibilityDigest{}) {
 			return ErrInvalidEnvironment
 		}
 	default:
