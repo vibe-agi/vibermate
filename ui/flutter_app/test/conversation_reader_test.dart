@@ -618,6 +618,386 @@ void main() {
     },
   );
 
+  for (final staleFirst in [false, true]) {
+    testWidgets(
+      'overlapping relevant refresh preserves the original panel offset staleFirst=$staleFirst',
+      (tester) async {
+        final rig = await _ToolReaderFixture.create(tester);
+        final source = List.generate(
+          90,
+          (i) => 'RETAINED_RESULT_LINE_$i',
+        ).join('\n');
+        rig.api.results['call'] = resultPage('call', source);
+        final rows = ValueNotifier([rig.activity]);
+        addTearDown(rows.dispose);
+        await tester.pumpWidget(
+          ValueListenableBuilder<List<ActivityRecord>>(
+            valueListenable: rows,
+            builder: (_, value, _) => host(rig.controller, value),
+          ),
+        );
+        await tester.pumpAndSettle();
+        await rig.openResults(tester);
+        final toggle = find.byKey(
+          const Key('toggle-long-looked-up-later-request-call-0'),
+        );
+        await tester.ensureVisible(toggle);
+        await tester.tap(toggle);
+        await tester.pumpAndSettle();
+        ScrollPosition panel() =>
+            readerPanelPosition(tester, rig.activity.id, 1);
+        panel().jumpTo(400);
+        await tester.pumpAndSettle();
+        final anchor = tester.getTopLeft(find.text('READER_ANCHOR')).dy;
+        final first = Completer<ToolResultPage>(),
+            latest = Completer<ToolResultPage>();
+        var query = 0;
+        rig.api.lookup = (_, _, _) =>
+            query++ == 0 ? first.future : latest.future;
+        rows.value = [
+          readerActivity(
+            rig.activity,
+            rig.activity.id,
+            contentAvailable: rig.activity.contentAvailable != true,
+          ),
+        ];
+        await tester.pump();
+        await tester.pump();
+        expect(
+          panel().pixels,
+          0,
+          reason: 'the temporary loading layout is short',
+        );
+        rows.value = [rig.activity];
+        await tester.pump();
+        await tester.pump();
+        if (staleFirst) {
+          first.complete(resultPage('call', '$source\nSTALE_RESULT_LINE'));
+          await tester.pump();
+          await tester.pump();
+          expect(find.textContaining('STALE_RESULT_LINE'), findsNothing);
+        }
+        latest.complete(resultPage('call', '$source\nLATEST_RESULT_LINE'));
+        await tester.pumpAndSettle();
+        expect(find.text('Show first 15 lines'), findsOneWidget);
+        expect(find.textContaining('LATEST_RESULT_LINE'), findsOneWidget);
+        expect(panel().pixels, closeTo(400, 1));
+        expect(
+          tester.getTopLeft(find.text('READER_ANCHOR')).dy,
+          closeTo(anchor, 1),
+        );
+        if (!staleFirst) {
+          first.complete(resultPage('call', '$source\nSTALE_RESULT_LINE'));
+          await tester.pumpAndSettle();
+          expect(find.textContaining('LATEST_RESULT_LINE'), findsOneWidget);
+          expect(find.textContaining('STALE_RESULT_LINE'), findsNothing);
+          expect(panel().pixels, closeTo(400, 1));
+          expect(
+            tester.getTopLeft(find.text('READER_ANCHOR')).dy,
+            closeTo(anchor, 1),
+          );
+        }
+        expect(tester.takeException(), isNull);
+        await tester.pumpWidget(const SizedBox.shrink());
+      },
+    );
+  }
+
+  testWidgets(
+    'overlapping refresh preserves position while another tool result is still pending',
+    (tester) async {
+      final rig = await _ToolReaderFixture.create(tester);
+      final source = List.generate(90, (i) => 'MULTI_TOOL_LINE_$i').join('\n');
+      rig.api.details[rig.activity.id] = detail(
+        rig.base,
+        [message('user', 'QUESTION')],
+        [
+          block('text', 'READER_ANCHOR'),
+          tool('tool_call', 'short-call'),
+          tool('tool_call', 'call'),
+        ],
+      );
+      rig.api.results['short-call'] = resultPage('short-call', 'SHORT_RETURN');
+      rig.api.results['call'] = resultPage('call', source);
+      final rows = ValueNotifier([rig.activity]);
+      addTearDown(rows.dispose);
+      await tester.pumpWidget(
+        ValueListenableBuilder<List<ActivityRecord>>(
+          valueListenable: rows,
+          builder: (_, value, _) => host(rig.controller, value),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await rig.openResults(tester);
+      final toggle = find.byKey(
+        const Key('toggle-long-looked-up-later-request-call-0'),
+      );
+      await tester.ensureVisible(toggle);
+      await tester.tap(toggle);
+      await tester.pumpAndSettle();
+      readerPanelPosition(tester, rig.activity.id, 1).jumpTo(400);
+      await tester.pumpAndSettle();
+      final anchor = tester.getTopLeft(find.text('READER_ANCHOR')).dy;
+      final first = Completer<ToolResultPage>(),
+          latest = Completer<ToolResultPage>();
+      var query = 0;
+      rig.api.lookup = (_, call, _) => call == 'short-call'
+          ? Future.value(resultPage(call, 'REFRESHED_SHORT_RETURN'))
+          : query++ == 0
+          ? first.future
+          : latest.future;
+      rows.value = [
+        readerActivity(
+          rig.activity,
+          rig.activity.id,
+          contentAvailable: rig.activity.contentAvailable != true,
+        ),
+      ];
+      await tester.pump();
+      await tester.pump();
+      await tester.pump();
+      expect(find.text('REFRESHED_SHORT_RETURN'), findsOneWidget);
+      expect(readerPanelPosition(tester, rig.activity.id, 1).pixels, 0);
+      rows.value = [rig.activity];
+      await tester.pump();
+      await tester.pump();
+      await tester.pump();
+      latest.complete(resultPage('call', '$source\nLATEST_MULTI_TOOL_LINE'));
+      await tester.pumpAndSettle();
+      expect(find.textContaining('LATEST_MULTI_TOOL_LINE'), findsOneWidget);
+      expect(find.text('Show first 15 lines'), findsOneWidget);
+      expect(
+        readerPanelPosition(tester, rig.activity.id, 1).pixels,
+        closeTo(400, 1),
+      );
+      expect(
+        tester.getTopLeft(find.text('READER_ANCHOR')).dy,
+        closeTo(anchor, 1),
+      );
+      first.complete(resultPage('call', '$source\nSTALE_MULTI_TOOL_LINE'));
+      await tester.pumpAndSettle();
+      expect(find.textContaining('STALE_MULTI_TOOL_LINE'), findsNothing);
+      expect(
+        readerPanelPosition(tester, rig.activity.id, 1).pixels,
+        closeTo(400, 1),
+      );
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox.shrink());
+    },
+  );
+
+  for (final navigation in ['tab', 'close', 'selection']) {
+    testWidgets(
+      'user $navigation navigation cancels the pending panel restore',
+      (tester) async {
+        final rig = await _ToolReaderFixture.create(tester);
+        final source = List.generate(
+          90,
+          (i) => 'NAVIGATION_RESULT_LINE_$i',
+        ).join('\n');
+        rig.api.results['call'] = resultPage('call', source);
+        final next = readerActivity(rig.activity, 'next-selection', seconds: 1);
+        rig.api.details[next.id] = detail(
+          rig.base,
+          [message('user', 'NEXT_INPUT')],
+          [block('text', 'NEXT_REPLY'), tool('tool_call', 'next-call')],
+          activity: next,
+        );
+        rig.api.results['next-call'] = resultPage(
+          'next-call',
+          'NEW_SELECTION_RETURN',
+        );
+        final rows = ValueNotifier([rig.activity, next]);
+        addTearDown(rows.dispose);
+        await tester.pumpWidget(
+          ValueListenableBuilder<List<ActivityRecord>>(
+            valueListenable: rows,
+            builder: (_, value, _) => host(rig.controller, value),
+          ),
+        );
+        await tester.pumpAndSettle();
+        await rig.openResults(tester);
+        await expandReaderResult(tester, rig.activity.id);
+        final pending = Completer<ToolResultPage>();
+        rig.api.lookup = (_, call, _) => call == 'call'
+            ? pending.future
+            : Future.value(rig.api.results[call]!);
+        rows.value = [
+          readerActivity(
+            rig.activity,
+            rig.activity.id,
+            contentAvailable: rig.activity.contentAvailable != true,
+          ),
+          next,
+        ];
+        await tester.pump();
+        await tester.pump();
+        if (navigation == 'tab') {
+          await tester.tap(find.byKey(const Key('reader-detail-tab-0')));
+        } else if (navigation == 'close') {
+          await tester.tap(find.byKey(const Key('reader-close-details')));
+        } else {
+          await tester.tap(find.byKey(Key('reader-tools-${next.id}')));
+        }
+        await tester.pumpAndSettle();
+        if (navigation == 'selection') {
+          await tester.tap(find.byKey(const Key('reader-detail-tab-1')));
+          await tester.pumpAndSettle();
+          expect(find.text('NEW_SELECTION_RETURN'), findsOneWidget);
+        }
+        pending.complete(resultPage('call', '$source\nLATE_NAVIGATED_RETURN'));
+        await tester.pumpAndSettle();
+        expect(find.textContaining('LATE_NAVIGATED_RETURN'), findsNothing);
+        if (navigation == 'tab') {
+          expect(find.textContaining('echo safe'), findsWidgets);
+          expect(readerPanelPosition(tester, rig.activity.id, 0).pixels, 0);
+        } else if (navigation == 'close') {
+          expect(find.byKey(const Key('reader-close-details')), findsNothing);
+        } else {
+          expect(find.text('NEW_SELECTION_RETURN'), findsOneWidget);
+          expect(readerPanelPosition(tester, next.id, 1).pixels, 0);
+        }
+        expect(tester.takeException(), isNull);
+        await tester.pumpWidget(const SizedBox.shrink());
+      },
+    );
+  }
+
+  testWidgets(
+    'manual refresh retains the saved offset after an empty intermediate result',
+    (tester) async {
+      final rig = await _ToolReaderFixture.create(tester);
+      final source = List.generate(
+        90,
+        (i) => 'MANUAL_RESULT_LINE_$i',
+      ).join('\n');
+      rig.api.results['call'] = resultPage('call', source);
+      final rows = ValueNotifier([rig.activity]);
+      addTearDown(rows.dispose);
+      await tester.pumpWidget(
+        ValueListenableBuilder<List<ActivityRecord>>(
+          valueListenable: rows,
+          builder: (_, value, _) => host(rig.controller, value),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await rig.openResults(tester);
+      await expandReaderResult(tester, rig.activity.id);
+      rig.api.results['call'] = const ToolResultPage(items: []);
+      rows.value = [
+        readerActivity(
+          rig.activity,
+          rig.activity.id,
+          contentAvailable: rig.activity.contentAvailable != true,
+        ),
+      ];
+      await tester.pumpAndSettle();
+      expect(find.text('Result not found yet.'), findsOneWidget);
+      expect(readerPanelPosition(tester, rig.activity.id, 1).pixels, 0);
+      rig.api.results['call'] = resultPage(
+        'call',
+        '$source\nMANUALLY_REFRESHED_LINE',
+      );
+      await tester.tap(
+        find.byKey(Key('reader-tool-refresh-${rig.activity.id}-call')),
+      );
+      await tester.pumpAndSettle();
+      expect(find.textContaining('MANUALLY_REFRESHED_LINE'), findsOneWidget);
+      expect(find.text('Show first 15 lines'), findsOneWidget);
+      expect(
+        readerPanelPosition(tester, rig.activity.id, 1).pixels,
+        closeTo(400, 1),
+      );
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox.shrink());
+    },
+  );
+
+  testWidgets(
+    'a user scroll supersedes restoration from another pending tool result',
+    (tester) async {
+      final rig = await _ToolReaderFixture.create(tester);
+      final source = List.generate(
+        90,
+        (i) => 'SCROLLED_RESULT_LINE_$i',
+      ).join('\n');
+      rig.api.details[rig.activity.id] = detail(
+        rig.base,
+        [message('user', 'QUESTION')],
+        [
+          block('text', 'READER_ANCHOR'),
+          tool('tool_call', 'call'),
+          tool('tool_call', 'pending-call'),
+        ],
+      );
+      rig.api.results['call'] = resultPage('call', source);
+      rig.api.results['pending-call'] = resultPage(
+        'pending-call',
+        'INITIAL_SECOND_RETURN',
+      );
+      final rows = ValueNotifier([rig.activity]);
+      addTearDown(rows.dispose);
+      await tester.pumpWidget(
+        ValueListenableBuilder<List<ActivityRecord>>(
+          valueListenable: rows,
+          builder: (_, value, _) => host(rig.controller, value),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await rig.openResults(tester);
+      await expandReaderResult(tester, rig.activity.id);
+      final pending = Completer<ToolResultPage>();
+      rig.api.lookup = (_, call, _) => call == 'pending-call'
+          ? pending.future
+          : Future.value(resultPage(call, source));
+      rows.value = [
+        readerActivity(
+          rig.activity,
+          rig.activity.id,
+          contentAvailable: rig.activity.contentAvailable != true,
+        ),
+      ];
+      await tester.pump();
+      await tester.pump();
+      await tester.pump();
+      await tester.pump();
+      expect(
+        readerPanelPosition(tester, rig.activity.id, 1).pixels,
+        closeTo(400, 1),
+      );
+      final panel = find.byKey(
+        PageStorageKey('reader-panel-${rig.activity.id}:tools:false:1'),
+      );
+      await tester.drag(panel, const Offset(0, 150));
+      await tester.pump(const Duration(seconds: 1));
+      final chosenOffset = readerPanelPosition(
+        tester,
+        rig.activity.id,
+        1,
+      ).pixels;
+      expect(chosenOffset, greaterThan(0));
+      expect(chosenOffset, lessThan(390));
+      pending.complete(resultPage('pending-call', 'LATEST_SECOND_RETURN'));
+      await tester.pumpAndSettle();
+      // Scroll to the second result only after proving its completion kept the
+      // position the user chose rather than jumping back to the saved 400.
+      expect(
+        readerPanelPosition(tester, rig.activity.id, 1).pixels,
+        closeTo(chosenOffset, 1),
+      );
+      await tester.scrollUntilVisible(
+        find.text('LATEST_SECOND_RETURN'),
+        300,
+        scrollable: find
+            .descendant(of: panel, matching: find.byType(Scrollable))
+            .first,
+      );
+      expect(find.text('LATEST_SECOND_RETURN'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox.shrink());
+    },
+  );
+
   testWidgets(
     'closing drops a completed result and deleting its source refreshes the open origin',
     (tester) async {
@@ -1484,6 +1864,32 @@ ScrollPosition readerPosition(WidgetTester tester) => tester
           .first,
     )
     .position;
+
+ScrollPosition readerPanelPosition(WidgetTester tester, String id, int tab) =>
+    tester
+        .state<ScrollableState>(
+          find
+              .descendant(
+                of: find.byKey(
+                  PageStorageKey('reader-panel-$id:tools:false:$tab'),
+                ),
+                matching: find.byType(Scrollable),
+              )
+              .first,
+        )
+        .position;
+
+Future<void> expandReaderResult(WidgetTester tester, String originId) async {
+  final toggle = find.byKey(
+    const Key('toggle-long-looked-up-later-request-call-0'),
+  );
+  await tester.ensureVisible(toggle);
+  await tester.tap(toggle);
+  await tester.pumpAndSettle();
+  expect(find.text('Show first 15 lines'), findsOneWidget);
+  readerPanelPosition(tester, originId, 1).jumpTo(400);
+  await tester.pumpAndSettle();
+}
 
 ExchangeContentBlock block(String kind, String text) =>
     ExchangeContentBlock.fromJson({

@@ -77,6 +77,8 @@ final class _ConversationReadingViewState
   final _toolResults = <(String, String), _CachedToolResults>{};
   int _toolLookupGeneration = 0, _toolResultBytes = 0;
   bool _restoreToolPanel = false;
+  String? _refreshingToolPanel;
+  int _panelNavigation = 0;
   final _panelOffsets = <String, double>{};
   final _pageStorage = PageStorageBucket();
   final _inspectorFocus = FocusNode(debugLabel: 'conversation-inspector');
@@ -166,7 +168,7 @@ final class _ConversationReadingViewState
     final selection = _selection;
     if (selection != null &&
         changedConversations.contains(selection.activity.conversation.id)) {
-      _savePanel();
+      _beginToolPanelRefresh();
       _invalidateToolLookups();
     }
     final newest = _ordered.lastOrNull;
@@ -197,6 +199,7 @@ final class _ConversationReadingViewState
     _usageVersions.removeWhere((id, _) => !ids.contains(id));
     _itemKeys.removeWhere((id, _) => !ids.contains(id));
     if (_selection != null && !ids.contains(_selection!.activity.id)) {
+      _cancelToolPanelRestore();
       _invalidateToolLookups();
       _selection = null;
       _inspection = null;
@@ -232,6 +235,7 @@ final class _ConversationReadingViewState
     _toolLookups.clear();
     _restoreToolPanel = false;
     if (clearResults) {
+      _cancelToolPanelRestore();
       _toolResults.clear();
       _toolResultBytes = 0;
     }
@@ -330,21 +334,54 @@ final class _ConversationReadingViewState
       '${_selection?.key}:${_detailTabs[_selection?.key] ?? 0}';
 
   void _savePanel() {
+    // Pending results can temporarily clamp the list to zero. A second refresh
+    // must preserve the position from before this loading episode.
+    if (_refreshingToolPanel == _panelKey) return;
     if (_panelScroll.hasClients) _panelOffsets[_panelKey] = _panelScroll.offset;
   }
 
-  void _restorePanel() => WidgetsBinding.instance.addPostFrameCallback((_) {
-    if (!mounted || !_panelScroll.hasClients) return;
-    _panelScroll.jumpTo(
-      (_panelOffsets[_panelKey] ?? 0).clamp(
-        0,
-        _panelScroll.position.maxScrollExtent,
-      ),
-    );
-  });
+  void _beginToolPanelRefresh() {
+    _savePanel();
+    if (_selection?.kind == _ReaderDetail.tools &&
+        _detailTabs[_selection?.key] == 1) {
+      _refreshingToolPanel = _panelKey;
+    }
+  }
+
+  void _cancelToolPanelRestore() {
+    _refreshingToolPanel = null;
+    _restoreToolPanel = false;
+    _panelNavigation++;
+  }
+
+  void _restorePanel({bool completesToolRefresh = false}) {
+    final key = _panelKey;
+    final generation = _toolLookupGeneration, navigation = _panelNavigation;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted ||
+          !_panelScroll.hasClients ||
+          key != _panelKey ||
+          generation != _toolLookupGeneration ||
+          navigation != _panelNavigation) {
+        return;
+      }
+      _panelScroll.jumpTo(
+        (_panelOffsets[key] ?? 0).clamp(
+          0,
+          _panelScroll.position.maxScrollExtent,
+        ),
+      );
+      if (completesToolRefresh &&
+          _refreshingToolPanel == key &&
+          (_panelScroll.offset - (_panelOffsets[key] ?? 0)).abs() <= 1) {
+        _refreshingToolPanel = null;
+      }
+    });
+  }
 
   void _inspect(_ReaderSelection selection) {
     _savePanel();
+    _cancelToolPanelRestore();
     final focus = FocusManager.instance.primaryFocus;
     if (focus != _inspectorFocus &&
         !(focus?.ancestors.contains(_inspectorFocus) ?? false)) {
@@ -371,6 +408,7 @@ final class _ConversationReadingViewState
 
   void _closeDetails() {
     _savePanel();
+    _cancelToolPanelRestore();
     setState(() {
       final id = _selection?.activity.id;
       _invalidateToolLookups();
@@ -875,6 +913,7 @@ final class _ConversationReadingViewState
                 ),
                 onPressed: () {
                   _savePanel();
+                  _cancelToolPanelRestore();
                   setState(() => _detailTabs[selection.key] = i);
                   _restorePanel();
                 },
@@ -884,12 +923,23 @@ final class _ConversationReadingViewState
         ),
       );
 
-  Widget _panelList(List<Widget> children) => ListView(
-    key: PageStorageKey('reader-panel-$_panelKey'),
-    controller: _panelScroll,
-    padding: const EdgeInsets.all(12),
-    children: children,
-  );
+  Widget _panelList(List<Widget> children) =>
+      NotificationListener<UserScrollNotification>(
+        onNotification: (notification) {
+          if (notification.depth == 0 &&
+              notification.direction != ScrollDirection.idle) {
+            // A drag/wheel scroll supersedes an automatic position restoration.
+            _cancelToolPanelRestore();
+          }
+          return false;
+        },
+        child: ListView(
+          key: PageStorageKey('reader-panel-$_panelKey'),
+          controller: _panelScroll,
+          padding: const EdgeInsets.all(12),
+          children: children,
+        ),
+      );
 
   Widget _toolInspector(_ReaderSelection selection, ExchangeDetail detail) {
     final ids = selection.toolIds;
@@ -1039,7 +1089,11 @@ final class _ConversationReadingViewState
                           _restoreToolPanel = false;
                           // Restore after the result has actually been laid out,
                           // not while the pending indicator still bounds the list.
-                          _restorePanel();
+                          _restorePanel(
+                            completesToolRefresh:
+                                snapshot.data?.complete == true &&
+                                snapshot.data!.items.isNotEmpty,
+                          );
                         }
                         if (snapshot.hasError) {
                           return Column(
@@ -1119,7 +1173,7 @@ final class _ConversationReadingViewState
   }
 
   void _refreshToolResults() {
-    _savePanel();
+    _beginToolPanelRefresh();
     setState(() {
       _invalidateToolLookups();
       _removeToolResults((key, _) => key.$1 == _selection?.activity.id);
@@ -1135,12 +1189,13 @@ final class _ConversationReadingViewState
         return Future.value(_ToolLookupOutcome(cached.items, complete: true));
       }
       final generation = _toolLookupGeneration;
+      final navigation = _panelNavigation;
       return _findToolResults(exchangeId, callId, generation).then((outcome) {
         if (mounted && generation == _toolLookupGeneration) {
           if (outcome.complete && outcome.items.isNotEmpty) {
             _rememberToolResult(key, outcome.items);
           }
-          _restoreToolPanel = true;
+          if (navigation == _panelNavigation) _restoreToolPanel = true;
         }
         return outcome;
       });
