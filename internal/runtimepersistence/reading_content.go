@@ -2,58 +2,70 @@ package runtimepersistence
 
 import (
 	"context"
+	"database/sql"
+	"errors"
+	"slices"
+
 	"github.com/vibe-agi/vibermate/internal/exchangecontent"
 )
 
-// Only metadata is walked through earlier history. The bounded user group is
-// hydrated, without declaring it a new turn or altering retained evidence.
+// Every role influencing the group is proved by the whole canonical message,
+// including skipped assistant messages. Proof shares the preview's message and
+// byte limits; an unprovable role has a neutral explicit-loading entry instead.
 func (repository *exchangeContentRepository) readingUserGroup(ctx context.Context, ref storedContentReference) ([]exchangecontent.Message, int, string, error) {
-	rows, err := repository.database.QueryContext(ctx, `WITH RECURSIVE chain(digest,parent_digest,message_digest,depth,role,seen_user) AS (
- SELECT t.digest,t.parent_digest,t.message_digest,t.depth,m.role,m.role='user'
- FROM runtime_exchange_content_transcripts t JOIN runtime_exchange_content_messages m ON m.digest=t.message_digest WHERE t.digest=?
- UNION ALL
- SELECT t.digest,t.parent_digest,t.message_digest,t.depth,m.role,chain.seen_user OR m.role='user'
- FROM runtime_exchange_content_transcripts t JOIN chain ON t.digest=chain.parent_digest
- JOIN runtime_exchange_content_messages m ON m.digest=t.message_digest
- WHERE NOT(chain.seen_user AND chain.role<>'user')
- ) SELECT digest,message_digest,depth FROM chain WHERE role='user' ORDER BY depth DESC LIMIT ?`, ref.requestRoot, exchangecontent.PageMessageLimit)
-	if err != nil {
-		return nil, 0, "", err
-	}
-	type userRef struct {
-		node, message string
-		depth         int
-	}
-	var refs []userRef
-	for rows.Next() {
-		var item userRef
-		if err := rows.Scan(&item.node, &item.message, &item.depth); err != nil {
-			_ = rows.Close()
-			return nil, 0, "", err
-		}
-		refs = append(refs, item)
-	}
-	if err := rows.Err(); err != nil {
-		_ = rows.Close()
-		return nil, 0, "", err
-	}
-	if err := rows.Close(); err != nil {
-		return nil, 0, "", err
-	}
 	messages := []exchangecontent.Message{}
-	if len(refs) == 0 {
-		return messages, ref.requestCount, "", nil
-	}
+	offset, anchor := ref.requestCount, ""
 	budget := exchangecontent.PageContentBytes
-	// Return oldest-to-newest within this user group, as in the original wire.
-	for i := len(refs) - 1; i >= 0; i-- {
-		item := refs[i]
-		message, used, err := repository.inlinePageMessage(ctx, item.message, pageCursor(ref, "request", "message", item.depth), budget)
+	wantDigest := ref.requestRoot
+	for depth := ref.requestCount; depth > 0; depth-- {
+		var node storedTranscriptNode
+		var parent sql.NullString
+		err := repository.database.QueryRowContext(ctx, `SELECT digest,parent_digest,message_digest,depth
+		 FROM runtime_exchange_content_transcripts WHERE digest=?`, wantDigest).Scan(&node.digest, &parent, &node.messageDigest, &node.depth)
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, 0, "", exchangecontent.ErrInvalidEvidence
+		}
 		if err != nil {
 			return nil, 0, "", err
 		}
-		messages = append(messages, message)
-		budget = max(0, budget-used)
+		if parent.Valid {
+			value := parent.String
+			node.parentDigest = &value
+		}
+		if err := validateContentNode(node, wantDigest, depth); err != nil {
+			return nil, 0, "", err
+		}
+		cursor := pageCursor(ref, "request", "message", depth)
+		if ref.requestCount-depth == exchangecontent.PageMessageLimit {
+			// We have verified the latest 24 positions. If a group was found,
+			// its bounded suffix is sufficient; otherwise role discovery needs
+			// explicit loading at this next, ancestry-verified position.
+			if len(messages) > 0 {
+				break
+			}
+			return []exchangecontent.Message{{Role: "unknown", Blocks: []exchangecontent.Block{deferredPageBlock(cursor, 0)}}}, depth - 1, "", nil
+		}
+		message, used, err := repository.inlinePageMessage(ctx, node.messageDigest, cursor, budget)
+		if err != nil {
+			return nil, 0, "", err
+		}
+		if len(message.Blocks) == 1 && message.Blocks[0].Deferred != nil {
+			// No SQL role may classify or skip this message, or establish a
+			// group boundary. Discard any partial group rather than claim one.
+			return []exchangecontent.Message{message}, depth - 1, "", nil
+		}
+		budget -= used
+		if message.Role == "user" {
+			if anchor == "" {
+				anchor = node.digest
+			}
+			messages = append(messages, message)
+			offset = depth - 1
+		} else if len(messages) > 0 {
+			break
+		}
+		wantDigest = parent.String
 	}
-	return messages, refs[len(refs)-1].depth - 1, refs[0].node, nil
+	slices.Reverse(messages)
+	return messages, offset, anchor, nil
 }

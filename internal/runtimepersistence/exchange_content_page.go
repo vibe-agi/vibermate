@@ -326,10 +326,10 @@ func (repository *exchangeContentRepository) contentNodes(ctx context.Context, r
 	if before < 1 || before > ref.requestCount || lower < 0 || lower >= before {
 		return nil, exchangecontent.ErrInvalidEvidence
 	}
-	rows, err := repository.database.QueryContext(ctx, `WITH RECURSIVE chain(digest,parent_digest,message_digest,depth) AS (
-	 SELECT digest,parent_digest,message_digest,depth FROM runtime_exchange_content_transcripts WHERE digest=?
-	 UNION ALL SELECT n.digest,n.parent_digest,n.message_digest,n.depth FROM runtime_exchange_content_transcripts n JOIN chain c ON n.digest=c.parent_digest WHERE c.depth>?
-	) SELECT digest,parent_digest,message_digest,depth FROM chain`, ref.requestRoot, lower+1)
+	rows, err := repository.database.QueryContext(ctx, `WITH RECURSIVE chain(digest,parent_digest,message_digest,depth,steps) AS (
+	 SELECT digest,parent_digest,message_digest,depth,1 FROM runtime_exchange_content_transcripts WHERE digest=?
+	 UNION ALL SELECT n.digest,n.parent_digest,n.message_digest,n.depth,c.steps+1 FROM runtime_exchange_content_transcripts n JOIN chain c ON n.digest=c.parent_digest WHERE c.steps<?
+	) SELECT digest,parent_digest,message_digest,depth FROM chain`, ref.requestRoot, ref.requestCount-lower)
 	if err != nil {
 		return nil, err
 	}
@@ -342,14 +342,12 @@ func (repository *exchangeContentRepository) contentNodes(ctx context.Context, r
 		if rows.Scan(&node.digest, &parent, &node.messageDigest, &node.depth) != nil {
 			return nil, exchangecontent.ErrInvalidEvidence
 		}
-		if node.depth != wantDepth || node.digest != wantDigest || !validStoredDigest(node.messageDigest) ||
-			(node.depth > 1 && (!parent.Valid || !validStoredDigest(parent.String))) || (node.depth == 1 && parent.Valid) ||
-			transcriptNodeDigest(parent.String, node.messageDigest) != node.digest {
-			return nil, exchangecontent.ErrInvalidEvidence
-		}
 		if parent.Valid {
 			value := parent.String
 			node.parentDigest = &value
+		}
+		if err := validateContentNode(node, wantDigest, wantDepth); err != nil {
+			return nil, err
 		}
 		if node.depth <= before {
 			result = append(result, node)
@@ -398,6 +396,8 @@ func (repository *exchangeContentRepository) requestContentPage(ctx context.Cont
 
 // Sizes are computed from the ordered manifest (including repeated blocks),
 // not the deduplicated reference index, and without fetching block payloads.
+// Actual SQLite payload lengths must agree with the codec/size contract before
+// hydration: a forged plain_bytes cannot authorize a larger payload read.
 func (repository *exchangeContentRepository) inlinePageMessage(ctx context.Context, digest string, cursor contentCursor, budget int) (exchangecontent.Message, int, error) {
 	size, count, err := repository.inlineMessageSize(ctx, digest, exchangecontent.PageMessageLimit)
 	if err != nil {
@@ -425,7 +425,9 @@ func (repository *exchangeContentRepository) inlineMessageSize(ctx context.Conte
 	 AND length(block_manifest)%64=0 AND length(block_manifest) BETWEEN 64 AND ?
 	 AND coalesce(length(agent_json),0)<=4096
 	), spans(position) AS (SELECT 1 FROM message UNION ALL SELECT position+64 FROM spans,message WHERE position+64<=min(length(message.block_manifest),?))
-	SELECT length(message.block_manifest)/64,coalesce(sum(b.plain_bytes),0),sum(CASE WHEN b.digest IS NULL OR b.plain_bytes<1 OR b.plain_bytes>? THEN 1 ELSE 0 END),
+	SELECT length(message.block_manifest)/64,coalesce(sum(b.plain_bytes),0),sum(CASE WHEN b.digest IS NULL OR b.plain_bytes<1 OR b.plain_bytes>?
+	 OR b.codec NOT IN ('identity','zstd') OR length(b.payload)<1 OR length(b.payload)>b.plain_bytes
+	 OR (b.codec='identity' AND length(b.payload)<>b.plain_bytes) THEN 1 ELSE 0 END),
 	 coalesce(length(message.agent_json),0)+length(message.role)+64
 	FROM message,spans LEFT JOIN runtime_exchange_content_blocks b ON b.digest=substr(message.block_manifest,spans.position,64)`, digest, protocolcore.MaxContentBlocks*64, blockLimit*64, exchangecontent.MaxEncodedBytes).Scan(&count, &sum, &missing, &metadataBytes)
 	if err != nil || missing != 0 || count < 1 || sum > exchangecontent.MaxEncodedBytes {

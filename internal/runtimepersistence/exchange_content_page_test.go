@@ -179,3 +179,45 @@ func TestContentPagesDeferLargeBodiesAndValidateCursors(t *testing.T) {
 		t.Fatal("read-time placeholder admitted to immutable recording")
 	}
 }
+
+func TestContentPagesRejectInvalidFrozenNodeShapes(t *testing.T) {
+	for _, corruption := range []struct{ name, query string }{
+		{"terminal_parent", `UPDATE runtime_exchange_content_transcripts SET parent_digest=? WHERE depth=1`},
+		{"missing_parent", `UPDATE runtime_exchange_content_transcripts SET parent_digest=NULL WHERE digest=?`},
+		{"nonhex_message_digest", `UPDATE runtime_exchange_content_transcripts SET message_digest='zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz' WHERE digest=?`},
+	} {
+		t.Run(corruption.name, func(t *testing.T) {
+			store := openTestStore(t, filepath.Join(t.TempDir(), "runtime.db"))
+			t.Cleanup(func() { _ = store.Shutdown(context.Background()) })
+			ctx := context.Background()
+			at := time.Date(2026, 10, 2, 0, 0, 0, 0, time.UTC)
+			record := transcriptContentRecordFixture(t, "node-shapes", at, exchangecontent.ParentRef{}, []transcriptMessage{{role: protocolcore.RoleUser, text: "image"}, {role: protocolcore.RoleUser, text: "question"}}, "")
+			repo := store.ExchangeContentRepository()
+			if err := repo.Put(ctx, record); err != nil {
+				t.Fatal(err)
+			}
+			ref, err := loadStoredContentReference(ctx, store.database, record.ExchangeID, at)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := store.database.Exec(`PRAGMA foreign_keys=OFF`); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := store.database.Exec(corruption.query, ref.requestRoot); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := store.database.Exec(`PRAGMA foreign_keys=ON`); err != nil {
+				t.Fatal(err)
+			}
+			for _, view := range []exchangecontent.RequestView{exchangecontent.RequestViewFull, exchangecontent.RequestViewReading} {
+				if _, err := repo.GetPagedProjection(ctx, record.ExchangeID, at, view); !errors.Is(err, exchangecontent.ErrInvalidEvidence) {
+					t.Errorf("%s accepted invalid node shape: %v", view, err)
+				}
+			}
+			cursor := encodeContentCursor(pageCursor(ref, "request", "message", 1))
+			if _, err := repo.GetContentPage(ctx, record.ExchangeID, at, cursor); !errors.Is(err, exchangecontent.ErrInvalidEvidence) {
+				t.Errorf("explicit ordinal load accepted invalid node shape: %v", err)
+			}
+		})
+	}
+}
