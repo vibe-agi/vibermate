@@ -82,10 +82,12 @@ func (factory DevelopmentFileFactory) Open(
 }
 
 type developmentFileStore struct {
-	mu     sync.Mutex
-	path   string
-	schema string
-	items  map[string]developmentSecret
+	mu          sync.Mutex
+	path        string
+	schema      string
+	items       map[string]developmentSecret
+	ops         secretFileOps
+	unavailable bool
 }
 
 var _ secretstore.Store = (*developmentFileStore)(nil)
@@ -109,6 +111,7 @@ func openDevelopmentFileStore(
 		path:   path,
 		schema: schema,
 		items:  items,
+		ops:    defaultSecretFileOps(),
 	}, nil
 }
 
@@ -142,6 +145,9 @@ func (store *developmentFileStore) read(
 	}
 	store.mu.Lock()
 	defer store.mu.Unlock()
+	if store.unavailable {
+		return nil, secretstore.ErrUnavailable
+	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -172,6 +178,9 @@ func (store *developmentFileStore) Inspect(
 	}
 	store.mu.Lock()
 	defer store.mu.Unlock()
+	if store.unavailable {
+		return secretstore.Metadata{}, secretstore.ErrUnavailable
+	}
 	if err := ctx.Err(); err != nil {
 		return secretstore.Metadata{}, err
 	}
@@ -209,6 +218,9 @@ func (store *developmentFileStore) Replace(
 
 	store.mu.Lock()
 	defer store.mu.Unlock()
+	if store.unavailable {
+		return secretstore.Metadata{}, secretstore.ErrUnavailable
+	}
 	if err := ctx.Err(); err != nil {
 		return secretstore.Metadata{}, err
 	}
@@ -230,7 +242,8 @@ func (store *developmentFileStore) Replace(
 		value:    bytes.Clone(value),
 	}
 	defer destroyDevelopmentItems(candidate)
-	if err := persistDevelopmentFile(store.path, store.schema, candidate); err != nil {
+	if err := persistDevelopmentFileWithOps(ctx, store.path, store.schema, candidate, store.ops); err != nil {
+		store.quarantineUncertainCommit(err)
 		return secretstore.Metadata{}, err
 	}
 
@@ -257,6 +270,9 @@ func (store *developmentFileStore) Delete(
 	}
 	store.mu.Lock()
 	defer store.mu.Unlock()
+	if store.unavailable {
+		return secretstore.ErrUnavailable
+	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -269,7 +285,8 @@ func (store *developmentFileStore) Delete(
 	clear(removed.value)
 	delete(candidate, key)
 	defer destroyDevelopmentItems(candidate)
-	if err := persistDevelopmentFile(store.path, store.schema, candidate); err != nil {
+	if err := persistDevelopmentFileWithOps(ctx, store.path, store.schema, candidate, store.ops); err != nil {
+		store.quarantineUncertainCommit(err)
 		return err
 	}
 	clear(current.value)
@@ -390,6 +407,16 @@ func persistDevelopmentFile(
 	schema string,
 	items map[string]developmentSecret,
 ) error {
+	return persistDevelopmentFileWithOps(context.Background(), path, schema, items, defaultSecretFileOps())
+}
+
+func persistDevelopmentFileWithOps(
+	ctx context.Context,
+	path string,
+	schema string,
+	items map[string]developmentSecret,
+	ops secretFileOps,
+) error {
 	document := developmentFileDocument{
 		Schema: schema,
 		Items:  make(map[string]developmentFileItem, len(items)),
@@ -411,7 +438,7 @@ func persistDevelopmentFile(
 	encoded = append(encoded, '\n')
 	defer clear(encoded)
 
-	file, err := os.CreateTemp(
+	file, err := ops.createTemp(
 		filepath.Dir(path),
 		".vibermate-development-secrets-*",
 	)
@@ -419,29 +446,48 @@ func persistDevelopmentFile(
 		return developmentWriteError()
 	}
 	temporaryPath := file.Name()
-	committed := false
+	renamed := false
+	failure := func(phase string) error { return &secretCommitError{phase: phase, renamed: renamed} }
 	defer func() {
 		_ = file.Close()
-		if !committed {
+		if !renamed {
 			_ = os.Remove(temporaryPath)
 		}
 	}()
-	if err := file.Chmod(0o600); err != nil {
-		return developmentWriteError()
+	if ctx.Err() != nil {
+		return failure("cancelled")
 	}
-	if _, err := file.Write(encoded); err != nil {
-		return developmentWriteError()
+	if err := file.Chmod(0o600); err != nil {
+		return failure("permissions")
+	}
+	if written, err := file.Write(encoded); err != nil || written != len(encoded) {
+		return failure("write")
+	}
+	if ctx.Err() != nil {
+		return failure("cancelled")
 	}
 	if err := file.Sync(); err != nil {
-		return developmentWriteError()
+		return failure("file sync")
 	}
 	if err := file.Close(); err != nil {
-		return developmentWriteError()
+		return failure("close")
 	}
-	if err := replaceDevelopmentFile(temporaryPath, path); err != nil {
-		return developmentWriteError()
+	if ctx.Err() != nil {
+		return failure("cancelled")
 	}
-	committed = true
+	if err := ops.rename(temporaryPath, path); err != nil {
+		return failure("rename")
+	}
+	renamed = true
+	if ctx.Err() != nil {
+		return failure("cancelled")
+	}
+	if err := ops.syncParent(path); err != nil {
+		return failure("directory sync")
+	}
+	if ctx.Err() != nil {
+		return failure("cancelled")
+	}
 	return nil
 }
 

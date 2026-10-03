@@ -34,6 +34,19 @@ that still exist in that Mac's Keychain. On another machine, reconnect provider
 accounts. For a Server restore, credentials must also be configured again.
 External Server HTTPS files must be supplied separately in either case.
 
+The Server credential file is plaintext-equivalent and protected by owner-only
+filesystem permissions. On Linux/Unix, a successful credential replacement or
+deletion requires a complete temporary-file write, file sync, close, atomic
+rename, and parent-directory sync on local persistent storage. If the commit
+fails before rename, the confirmed credential remains usable. If rename succeeds
+but directory sync fails or the operation is cancelled, the active credential
+store becomes unavailable until reopened; the file may already contain the new
+credential. Check storage health and reopen the Server before retrying. Already
+issued credential copies retain their existing lifetime. This does not export
+credentials into backups or guarantee recovery from failing storage hardware.
+Windows compilation compatibility does not establish the same crash-durability
+guarantee.
+
 ## macOS App
 
 Open **Settings → Safety & data → Evidence storage**. Choose **Create backup**
