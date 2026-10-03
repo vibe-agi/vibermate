@@ -12,3 +12,5 @@ func replaceDevelopmentFile(source string, destination string) error {
 // Preserve the existing Windows behavior; the durable Server commit contract
 // is verified on Unix. Windows cross-compilation does not prove durability.
 func syncSecretParent(string) error { return nil }
+
+func syncSecretDirectory(string) error { return nil }

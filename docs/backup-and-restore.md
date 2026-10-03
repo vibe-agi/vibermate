@@ -37,9 +37,22 @@ External Server HTTPS files must be supplied separately in either case.
 The Server credential file is plaintext-equivalent and protected by owner-only
 filesystem permissions. On Linux/Unix, a successful credential replacement or
 deletion requires a complete temporary-file write, file sync, close, atomic
-rename, and parent-directory sync on local persistent storage. If the commit
-fails before rename, the confirmed credential remains usable. If rename succeeds
-but directory sync fails or the operation is cancelled, the active credential
+rename, and parent-directory sync on local persistent storage. Opening the
+credential store creates missing components and syncs the exact directory path
+and its ancestor entries through the filesystem root, including resolved ancestor
+aliases. Every open
+repeats these barriers, so retries also certify directories left by a failed
+initialization. The Server account needs permission to open and sync this path's
+ancestor directories. Existing ancestors above the Server data directory retain
+their permissions. Ancestor aliases with noncanonical targets are unavailable;
+use the resolved data directory path.
+New components and the Server data/credential directories use owner-only
+permissions. A failed initialization returns an unavailable-store error and may
+leave these directories for the next attempt.
+
+If a credential file commit fails before rename, the confirmed credential remains
+usable. If rename succeeds but directory sync fails or the operation is cancelled,
+the active credential
 store becomes unavailable until reopened; the file may already contain the new
 credential. Check storage health and reopen the Server before retrying. Already
 issued credential copies retain their existing lifetime. This does not export

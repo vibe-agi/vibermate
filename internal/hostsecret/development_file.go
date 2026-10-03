@@ -41,7 +41,8 @@ type developmentSecret struct {
 // plaintext-equivalent at rest and this factory must never enter a release
 // sidecar.
 type DevelopmentFileFactory struct {
-	path string
+	path        string
+	directories *secretDirectoryProvisioner
 }
 
 var _ secretstore.Factory = DevelopmentFileFactory{}
@@ -55,7 +56,7 @@ func NewDevelopmentFileFactory(path string) (DevelopmentFileFactory, error) {
 		return DevelopmentFileFactory{},
 			errors.New("development secret file path is invalid")
 	}
-	return DevelopmentFileFactory{path: path}, nil
+	return DevelopmentFileFactory{path: path, directories: newSecretDirectoryProvisioner(filepath.Dir(path), filepath.Dir(path))}, nil
 }
 
 func (factory DevelopmentFileFactory) Open(
@@ -69,6 +70,12 @@ func (factory DevelopmentFileFactory) Open(
 	}
 	if factory.path == "" {
 		return nil, errors.New("development SecretStore factory is invalid")
+	}
+	if factory.directories == nil {
+		return nil, secretstore.ErrUnavailable
+	}
+	if err := factory.directories.prepare(ctx); err != nil {
+		return nil, err
 	}
 	store, err := openDevelopmentFileStore(
 		ctx,
@@ -295,24 +302,13 @@ func (store *developmentFileStore) Delete(
 }
 
 func prepareDevelopmentDirectory(path string) error {
-	if err := os.MkdirAll(path, 0o700); err != nil {
-		return fmt.Errorf(
-			"%w: development secret directory could not be created",
-			secretstore.ErrUnavailable,
-		)
-	}
 	info, err := os.Lstat(path)
 	if err != nil ||
 		!info.IsDir() ||
-		info.Mode()&os.ModeSymlink != 0 {
+		info.Mode()&os.ModeSymlink != 0 ||
+		(runtime.GOOS != "windows" && info.Mode().Perm()&0o077 != 0) {
 		return fmt.Errorf(
 			"%w: development secret directory is invalid",
-			secretstore.ErrUnavailable,
-		)
-	}
-	if err := os.Chmod(path, 0o700); err != nil {
-		return fmt.Errorf(
-			"%w: development secret directory permissions could not be applied",
 			secretstore.ErrUnavailable,
 		)
 	}
@@ -499,6 +495,7 @@ func persistDevelopmentFileWithOps(
 type ServerFileFactory struct {
 	dataDirectory string
 	path          string
+	directories   *secretDirectoryProvisioner
 }
 
 var _ secretstore.Factory = ServerFileFactory{}
@@ -513,6 +510,7 @@ func NewServerFileFactory(dataDirectory string) (ServerFileFactory, error) {
 	}
 	return ServerFileFactory{
 		dataDirectory: dataDirectory,
+		directories:   newSecretDirectoryProvisioner(dataDirectory, filepath.Join(dataDirectory, "server-secrets")),
 		path: filepath.Join(
 			dataDirectory,
 			"server-secrets",
@@ -533,6 +531,12 @@ func (factory ServerFileFactory) Open(
 	if factory.dataDirectory == "" || factory.path == "" {
 		return nil, errors.New("Server SecretStore factory is invalid")
 	}
+	if factory.directories == nil {
+		return nil, secretstore.ErrUnavailable
+	}
+	if err := factory.directories.prepare(ctx); err != nil {
+		return nil, err
+	}
 	if err := prepareServerDataDirectory(factory.dataDirectory); err != nil {
 		return nil, err
 	}
@@ -540,26 +544,13 @@ func (factory ServerFileFactory) Open(
 }
 
 func prepareServerDataDirectory(path string) error {
-	if err := os.MkdirAll(path, 0o700); err != nil {
-		return fmt.Errorf(
-			"%w: Server data directory could not be created",
-			secretstore.ErrUnavailable,
-		)
-	}
 	info, err := os.Lstat(path)
-	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 ||
+		(runtime.GOOS != "windows" && info.Mode().Perm()&0o077 != 0) {
 		return fmt.Errorf(
 			"%w: Server data directory is invalid",
 			secretstore.ErrUnavailable,
 		)
-	}
-	if runtime.GOOS != "windows" && info.Mode().Perm()&0o077 != 0 {
-		if err := os.Chmod(path, 0o700); err != nil {
-			return fmt.Errorf(
-				"%w: Server data directory permissions could not be applied",
-				secretstore.ErrUnavailable,
-			)
-		}
 	}
 	return nil
 }

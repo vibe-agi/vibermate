@@ -13,7 +13,11 @@ func replaceDevelopmentFile(source string, destination string) error {
 }
 
 func syncSecretParent(path string) error {
-	directory, err := os.Open(filepath.Dir(path))
+	return syncSecretDirectory(filepath.Dir(path))
+}
+
+func syncSecretDirectory(path string) error {
+	directory, err := os.Open(path)
 	if err != nil {
 		return err
 	}
