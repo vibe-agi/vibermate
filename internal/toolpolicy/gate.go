@@ -40,6 +40,9 @@ func (gate Gate) Decide(
 		return exchange.ToolDecision{}, errors.New("tool policy context is nil")
 	}
 	if _, binding, native := request.NativeExecution(); native {
+		if err := request.VerifyNativeEvidence(); err != nil {
+			return exchange.ToolDecision{}, err
+		}
 		policyContext, available := request.NativeContext()
 		policy := policyContext.PolicySet()
 		if !available || policy.Validate() != nil || policy != binding.Plan().PolicySet() {

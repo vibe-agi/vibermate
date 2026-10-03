@@ -248,6 +248,24 @@ func (r *nativeToolRepository) EnsureScope(ctx context.Context, in nativetool.Sc
 	}
 	return revision, nil
 }
+func (r *nativeToolRepository) GetScope(ctx context.Context, capture captureidentity.Reference) (nativetool.Scope, error) {
+	if capture.Validate() != nil {
+		return nativetool.Scope{}, nativetool.ErrInvalid
+	}
+	var result nativetool.Scope
+	err := r.transaction(ctx, func(ctx context.Context, tx *sql.Tx) error {
+		scope, err := loadNativeScope(ctx, tx, capture)
+		if err != nil {
+			return err
+		}
+		result = nativetool.Scope{Capture: capture, Revision: scope.revision, OwnerEpoch: scope.owner, State: scope.state, ReplayBarrier: scope.barrier, ExpiresAt: scope.expires}
+		return nil
+	})
+	if err != nil {
+		return nativetool.Scope{}, err
+	}
+	return result, nil
+}
 func (r *nativeToolRepository) RegisterSession(ctx context.Context, in nativetool.SessionInput) error {
 	if !nativeID(in.ID) || !nativeRevision(in.OwnerEpoch) || !nativeRevision(in.ExpectedAuthorityRevision) || !nativeTime(in.ExpiresAt) {
 		return nativetool.ErrInvalid
@@ -268,16 +286,11 @@ func (r *nativeToolRepository) RegisterSession(ctx context.Context, in nativetoo
 			return err
 		}
 		var count int
-		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM native_tool_sessions WHERE capture_kind=? AND capture_id=?`, in.Capture.Kind, in.Capture.ID).Scan(&count); err != nil {
+		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM native_tool_sessions WHERE capture_kind=? AND capture_id=? AND owner_epoch=? AND state IN('initializing','ready') AND expires_at_unix_ms>?`, in.Capture.Kind, in.Capture.ID, in.OwnerEpoch, now.UnixMilli()).Scan(&count); err != nil {
 			return err
 		}
-		if count > 0 {
-			if _, err := tx.ExecContext(ctx, `UPDATE native_tool_scopes SET replay_barrier=1 WHERE capture_kind=? AND capture_id=?`, in.Capture.Kind, in.Capture.ID); err != nil {
-				return err
-			}
-			if err := retireNativeWork(ctx, tx, in.Capture, now); err != nil {
-				return err
-			}
+		if count >= 64 {
+			return nativetool.ErrDenied
 		}
 		digest := in.Plan.EnvironmentDigest()
 		route := in.Plan.Route()
@@ -502,7 +515,32 @@ func (r *nativeToolRepository) SetCatalog(ctx context.Context, id nativetool.ID,
 		if _, err := tx.ExecContext(ctx, `UPDATE native_tool_sessions SET revision=revision+1,catalog_generation=catalog_generation+1,catalog_digest=? WHERE session_id=? AND revision=?`, digest[:], id, expected); err != nil {
 			return err
 		}
-		return cancelNativeApprovals(ctx, tx, s.capture, now, "canceled")
+		return cancelNativeSessionApprovals(ctx, tx, s.capture, s.id, now, "canceled")
+	})
+	if err != nil {
+		return 0, err
+	}
+	return expected + 1, nil
+}
+func (r *nativeToolRepository) InvalidateCatalog(ctx context.Context, id nativetool.ID, expected uint64, now time.Time) (uint64, error) {
+	if !nativeID(id) || !nativeRevision(expected) || expected == math.MaxInt64 || !nativeTime(now) {
+		return 0, nativetool.ErrInvalid
+	}
+	err := r.transaction(ctx, func(ctx context.Context, tx *sql.Tx) error {
+		s, err := loadNativeSession(ctx, tx, id)
+		if err != nil {
+			return err
+		}
+		if err = validateNativeSession(ctx, tx, s, now); err != nil {
+			return err
+		}
+		if s.revision != expected || s.state != "ready" {
+			return nativetool.ErrConflict
+		}
+		if _, err = tx.ExecContext(ctx, `UPDATE native_tool_sessions SET revision=revision+1,catalog_generation=0,catalog_digest=NULL WHERE session_id=? AND revision=?`, id, expected); err != nil {
+			return err
+		}
+		return cancelNativeSessionApprovals(ctx, tx, s.capture, id, now, "canceled")
 	})
 	if err != nil {
 		return 0, err
@@ -693,7 +731,7 @@ func (r *nativeToolRepository) Bind(ctx context.Context, id nativetool.ID, b nat
 			return nativetool.ErrConflict
 		}
 		catalog, hasCatalog := b.CatalogDigest()
-		if b.CatalogGeneration() > s.generation || b.Kind() != nativetool.RequestServerReply && (s.generation != b.CatalogGeneration() || (s.catalog != nil) != hasCatalog || hasCatalog && string(s.catalog) != string(catalog[:])) {
+		if b.CatalogGeneration() > s.generation && !(b.Kind()==nativetool.RequestServerReply&&b.SessionRevision()<s.revision) || b.Kind() != nativetool.RequestServerReply && (s.generation != b.CatalogGeneration() || (s.catalog != nil) != hasCatalog || hasCatalog && string(s.catalog) != string(catalog[:])) {
 			return nativetool.ErrConflict
 		}
 		switch b.Kind() {

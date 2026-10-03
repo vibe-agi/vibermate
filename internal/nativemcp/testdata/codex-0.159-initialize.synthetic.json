@@ -1,0 +1,1 @@
+{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{"elicitation":{"form":{},"url":{}},"extensions":{"openai/form":{},"openai/elicitation":{"form":{}}}},"clientInfo":{"name":"codex-mcp-client","version":"0.159.0","title":"Codex"}}}

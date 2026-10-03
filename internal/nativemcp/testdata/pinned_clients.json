@@ -1,0 +1,16 @@
+{
+  "profiles": [
+    {"client":"codex","version":"0.145.0","commit":"25af12f7e61572b0bc18ddb1008be543b91519b0","sdk":"rmcp 1.8.0","sdk_commit":"25220361d5540715294c501c289d79de4bec2bfc"},
+    {"client":"codex","version":"0.159.0","commit":"ff6aec96948b70d94983af2641a6b67c94faeff5","sdk":"rmcp 3.2.0","sdk_commit":"51ccb42993d6eb5075399672ce7a0c21a0e55eea"},
+    {"client":"codex","version":"0.160.0","commit":"a956835d020762cb2b570053af06f643a11c0ecc","sdk":"rmcp 3.2.0","sdk_commit":"51ccb42993d6eb5075399672ce7a0c21a0e55eea"}
+  ],
+  "sources": [
+    "codex-rs/codex-mcp/src/rmcp_client.rs: client_info",
+    "codex-rs/rmcp-client/src/elicitation_client_service.rs: OpenAiFormRequestParams, dispatch and response serialization",
+    "codex-rs/rmcp-client/src/user_verification.rs: RequestParams, Proof, validate_response",
+    "rmcp/src/model.rs: ElicitRequestParamsWire, ElicitResult",
+    "codex-rs/core/src/mcp_tool_call.rs: build_mcp_tool_call_request_meta callId"
+  ],
+  "scope":"Synthetic fixtures validate protocol and retention mechanisms against immutable client source shapes. They do not establish live server schemas, authentication success outside controlled transport, or complete sensitive-field profiles for production tools.",
+  "production_tool_content_profiles":"unavailable; exact source-evidenced upstream tool argument/result field profiles remain required before release acceptance"
+}

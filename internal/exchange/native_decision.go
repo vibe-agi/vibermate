@@ -40,3 +40,36 @@ func (request ToolDecisionRequest) NativeContext() (ToolDecisionContext, bool) {
 	}
 	return request.nativeContext, true
 }
+
+func NewSensitiveClientToolDecisionRequest(id nativetool.ID, binding nativetool.Binding, policy ToolDecisionContext, intents []protocolcore.ToolIntent, witness nativetool.SensitiveToolWitness) (ToolDecisionRequest, error) {
+	if policy.policySet.Validate() != nil || policy.policySet != binding.Plan().PolicySet() || policy.workspaceRoot != "" || policy.structuredWorkspaceTools || len(policy.tools) != 0 || len(policy.toolNamespaces) != 0 || witness.Verify(id, binding, intents) != nil {
+		return ToolDecisionRequest{}, nativetool.ErrDenied
+	}
+	cloned := witness
+	return ToolDecisionRequest{nativeOperation: id, nativeBinding: &binding, nativeContext: policy, nativeToolWitness: &cloned, intents: cloneToolIntents(intents)}, nil
+}
+
+// VerifyNativeEvidence checks only immutable consistency of the private union.
+// It grants no decision, current permission or committed send capability.
+func (request ToolDecisionRequest) VerifyNativeEvidence() error {
+	if request.nativeBinding == nil || request.nativeOperation == "" {
+		return nativetool.ErrDenied
+	}
+	binding := *request.nativeBinding
+	if request.nativeToolWitness != nil {
+		return request.nativeToolWitness.Verify(request.nativeOperation, binding, request.intents)
+	}
+	switch binding.Kind() {
+	case nativetool.RequestToolsCall:
+		if len(request.intents) != 1 || request.nativeWitness != nil || !binding.MatchesIntents(request.intents) {
+			return nativetool.ErrDenied
+		}
+	case nativetool.RequestServerReply:
+		if len(request.intents) != 0 || request.nativeWitness == nil || request.nativeWitness.Verify(request.nativeOperation, binding) != nil {
+			return nativetool.ErrDenied
+		}
+	default:
+		return nativetool.ErrDenied
+	}
+	return nil
+}

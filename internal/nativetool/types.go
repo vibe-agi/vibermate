@@ -9,8 +9,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"slices"
+	"unicode/utf8"
 
 	"github.com/vibe-agi/vibermate/internal/captureidentity"
 	"github.com/vibe-agi/vibermate/internal/environment"
@@ -95,6 +97,9 @@ type BindingInput struct {
 	Intents                            []protocolcore.ToolIntent
 	PublicToolDefinition               *protocolcore.ToolDefinition
 	CatalogEvidence                    *CatalogEvidence
+	SensitiveObservation               *SensitiveObservation
+	SensitiveContext                   *SensitiveBindingContext
+	SensitiveToolContext               *SensitiveToolContext
 }
 type Binding struct {
 	kind                                                    RequestKind
@@ -112,9 +117,21 @@ type Binding struct {
 	toolName                                                string
 	rpcIDDigest                                             *Digest
 	cancelledRPCIDDigest                                    *Digest
+	sensitiveTool                                           bool
 }
 
 func NewBinding(input BindingInput) (Binding, error) {
+	// Sensitive callbacks must select the keyed branch before any raw digest.
+	sensitive := input.SensitiveObservation != nil || input.SensitiveContext != nil || input.SensitiveToolContext != nil
+	if input.Kind == RequestServerReply && !sensitive {
+		var response map[string]json.RawMessage
+		var result map[string]json.RawMessage
+		_ = json.Unmarshal(input.ExactRPC, &response)
+		_ = json.Unmarshal(response["result"], &result)
+		if _, recognized := result["action"]; recognized {
+			return Binding{}, ErrDenied
+		}
+	}
 	if input.Kind.Validate() != nil || input.Kind == RequestUnclassified || input.Plan.Validate() != nil || input.Capture.Validate() != nil ||
 		!revision(input.AssignmentRevision) || !revision(input.OwnerEpoch) || !revision(input.SessionRevision) || input.CatalogGeneration > math.MaxInt64 ||
 		len(input.ExactRPC) > MaxRPCBytes || len(input.ObservedCallID) > MaxObservedIDBytes || len(input.Intents) > MaxIntentGroup {
@@ -164,17 +181,35 @@ func NewBinding(input BindingInput) (Binding, error) {
 		// A caller-supplied definition cannot prove membership in CatalogDigest.
 		// Keep public metadata empty until a reviewed catalog-proof contract exists.
 	}
+	var requestDigest, paramsDigest, groupDigest, sensitiveRPC, sensitiveParent Digest
+	if sensitive {
+		if input.Kind == RequestToolsCall {
+			requestDigest, paramsDigest, groupDigest, sensitiveRPC, err = sensitiveToolBindingDigests(input, params, group)
+		} else {
+			requestDigest, paramsDigest, groupDigest, sensitiveRPC, sensitiveParent, err = sensitiveBindingDigests(input)
+		}
+		if err != nil {
+			return Binding{}, err
+		}
+		if input.Kind == RequestServerReply {
+			input.ServerRequestDigest = &sensitiveParent
+		}
+	} else {
+		requestDigest, paramsDigest, groupDigest = Digest(sha256.Sum256(input.ExactRPC)), Digest(sha256.Sum256(params)), Digest(sha256.Sum256(group))
+	}
 	binding := Binding{kind: input.Kind, plan: input.Plan, capture: input.Capture, assignmentRevision: input.AssignmentRevision, ownerEpoch: input.OwnerEpoch,
 		sessionID: input.SessionID, sessionRevision: input.SessionRevision, catalogGeneration: input.CatalogGeneration, catalogDigest: copyPointer(input.CatalogDigest),
 		parentOperationID: copyPointer(input.ParentOperationID), serverRequestDigest: copyPointer(input.ServerRequestDigest),
-		requestDigest: Digest(sha256.Sum256(input.ExactRPC)), paramsDigest: Digest(sha256.Sum256(params)), groupDigest: Digest(sha256.Sum256(group)), safeCallRefs: refs}
+		requestDigest: requestDigest, paramsDigest: paramsDigest, groupDigest: groupDigest, safeCallRefs: refs, sensitiveTool: sensitive && input.Kind == RequestToolsCall}
 	if input.CatalogEvidence != nil {
 		binding.toolName, err = input.CatalogEvidence.member(input)
 		if err != nil {
 			return Binding{}, err
 		}
 	}
-	if input.Kind != RequestGetStream && input.Kind != RequestDeleteSession {
+	if sensitive {
+		binding.rpcIDDigest = &sensitiveRPC
+	} else if input.Kind != RequestGetStream && input.Kind != RequestDeleteSession {
 		var envelope map[string]json.RawMessage
 		_ = json.Unmarshal(input.ExactRPC, &envelope)
 		identity := envelope["id"]
@@ -320,7 +355,7 @@ func validateEnvelope(input BindingInput) ([]byte, error) {
 	return canonicalObject(params)
 }
 func validRPCID(raw []byte) bool {
-	if len(raw) == 0 || len(raw) > MaxObservedIDBytes {
+	if len(raw) == 0 || len(raw) > 6*MaxObservedIDBytes+2 || !utf8.Valid(raw) {
 		return false
 	}
 	decoder := json.NewDecoder(bytes.NewReader(raw))
@@ -329,9 +364,13 @@ func validRPCID(raw []byte) bool {
 	if decoder.Decode(&value) != nil {
 		return false
 	}
+	var trailing any
+	if decoder.Decode(&trailing) != io.EOF {
+		return false
+	}
 	switch v := value.(type) {
 	case string:
-		return len(v) > 0 && len(v) <= MaxObservedIDBytes
+		return len(v) > 0 && len(v) <= MaxObservedIDBytes && utf8.ValidString(v)
 	case json.Number:
 		_, err := v.Int64()
 		return err == nil
@@ -433,6 +472,14 @@ func (binding Binding) RPCIDDigest() (Digest, bool) {
 	return *binding.rpcIDDigest, true
 }
 func (binding Binding) MatchesIntents(intents []protocolcore.ToolIntent) bool {
+	if binding.sensitiveTool {
+		return false
+	}
+	// Reply group digests may be scoped MACs. Cardinality alone is checked
+	// here; the decision union separately requires the registered witness.
+	if binding.kind == RequestServerReply {
+		return binding.bindingDigest != (Digest{}) && len(intents) == 0
+	}
 	if binding.bindingDigest == (Digest{}) || len(intents) > MaxIntentGroup {
 		return false
 	}

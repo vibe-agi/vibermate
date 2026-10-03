@@ -36,6 +36,56 @@ type CatalogEvidence struct {
 	requests    []Digest
 }
 
+// CatalogDefinition exposes only the validated complete public projection.
+// It carries no authenticated-source, decision or send capability.
+type CatalogDefinition struct{ definition catalogDefinition }
+
+func (d CatalogDefinition) Definition() protocolcore.ToolDefinition {
+	schema, _ := protocolcore.NewJSONObject(d.definition.InputSchema, MaxRPCBytes)
+	return protocolcore.ToolDefinition{Name: d.definition.Name, Description: d.definition.Description, InputSchema: schema}
+}
+func (d CatalogDefinition) Annotations() protocolcore.JSONDocument {
+	encoded, _ := json.Marshal(d.definition.Annotations)
+	if len(d.definition.Annotations) == 0 {
+		encoded = []byte("{}")
+	}
+	document, _ := protocolcore.NewJSONObject(encoded, MaxRPCBytes)
+	return document
+}
+func (d CatalogDefinition) Digest() Digest {
+	if d.definition.Name == "" {
+		return Digest{}
+	}
+	return hashJSON(struct {
+		Domain     string
+		Definition catalogDefinition
+	}{"native-public-definition/v1", d.definition})
+}
+func cloneCatalogDefinition(d catalogDefinition) CatalogDefinition {
+	d.InputSchema = bytes.Clone(d.InputSchema)
+	annotations := make(map[string]any, len(d.Annotations))
+	for key, value := range d.Annotations {
+		annotations[key] = value
+	}
+	d.Annotations = annotations
+	return CatalogDefinition{d}
+}
+func (e CatalogEvidence) Definitions() []CatalogDefinition {
+	result := make([]CatalogDefinition, len(e.definitions))
+	for index, d := range e.definitions {
+		result[index] = cloneCatalogDefinition(d)
+	}
+	return result
+}
+func (e CatalogEvidence) Lookup(name string) (CatalogDefinition, bool) {
+	for _, definition := range e.definitions {
+		if definition.Name == name {
+			return cloneCatalogDefinition(definition), true
+		}
+	}
+	return CatalogDefinition{}, false
+}
+
 var publicName = regexp.MustCompile(`^[A-Za-z0-9_.:/-]+$`)
 
 func validCatalogScope(scope CatalogScope) bool {
@@ -84,7 +134,7 @@ func (observer *CatalogObserver) Observe(pages []CatalogPageObservation) (Catalo
 			return CatalogEvidence{}, ErrInvalid
 		}
 		for key := range request {
-			if key != "jsonrpc" && key != "id" && key != "method" && key != "params" {
+			if key != "jsonrpc" && key != "id" && key != "method" && key != "params" && key != "_meta" {
 				return CatalogEvidence{}, ErrDenied
 			}
 		}
@@ -95,7 +145,7 @@ func (observer *CatalogObserver) Observe(pages []CatalogPageObservation) (Catalo
 			var fields map[string]json.RawMessage
 			_ = json.Unmarshal(raw, &fields)
 			for key := range fields {
-				if key != "cursor" {
+				if key != "cursor" && key != "_meta" {
 					return CatalogEvidence{}, ErrDenied
 				}
 			}

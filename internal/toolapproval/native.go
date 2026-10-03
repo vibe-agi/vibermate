@@ -12,6 +12,9 @@ import (
 )
 
 func (authority *Authority) decideNative(ctx context.Context, request exchange.ToolDecisionRequest) (exchange.ToolDecision, error) {
+	if err := request.VerifyNativeEvidence(); err != nil {
+		return exchange.ToolDecision{}, err
+	}
 	id, binding, native := request.NativeExecution()
 	policy, available := request.NativeContext()
 	if !native || !available || authority.nativeRepository == nil || binding.Digest() == (nativetool.Digest{}) || policy.PolicySet() != binding.Plan().PolicySet() {
@@ -83,6 +86,9 @@ func (authority *Authority) decideNative(ctx context.Context, request exchange.T
 		case "allowed":
 			if record.ConsumedAt != nil || !record.ExpiresAt.After(authority.clock.Now().UTC()) {
 				return exchange.ToolDecision{}, nativetool.ErrDenied
+			}
+			if err := request.VerifyNativeEvidence(); err != nil {
+				return exchange.ToolDecision{}, err
 			}
 			return exchange.ToolDecision{Outcome: exchange.ToolDecisionApproved}, nil
 		case "denied", "canceled", "expired":

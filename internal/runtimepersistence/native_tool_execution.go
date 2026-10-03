@@ -431,6 +431,30 @@ func (r *nativeToolRepository) Finish(ctx context.Context, id nativetool.ID, in 
 		if err != nil {
 			return err
 		}
+		if op.State == "received" || op.State == "validated" {
+			if in.BytesIn != 0 || in.BytesOut != 0 || (in.Outcome != "failed" && in.Outcome != "canceled") {
+				return nativetool.ErrInvalid
+			}
+			var once, audits int
+			if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM native_tool_once WHERE operation_id=?`, id).Scan(&once); err != nil {
+				return err
+			}
+			if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM runtime_egress_attempts WHERE parent_kind='client_operation' AND parent_id=?`, id).Scan(&audits); err != nil {
+				return err
+			}
+			if once != 0 || audits != 0 {
+				return nativetool.ErrInvalid
+			}
+			state := in.Outcome
+			if state == "failed" && op.State == "received" {
+				state = "denied"
+			}
+			if err := nativeTransition(ctx, tx, op, state, op.DecisionSource, in.Reason, state, in.ObservedAt); err != nil {
+				return err
+			}
+			_, err := tx.ExecContext(ctx, `UPDATE native_tool_operations SET bytes_in=0,bytes_out=0 WHERE operation_id=?`, id)
+			return err
+		}
 		return finishNative(ctx, tx, op, in)
 	})
 }

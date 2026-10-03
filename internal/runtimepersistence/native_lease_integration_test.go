@@ -38,6 +38,7 @@ type nativeLeaseFixture struct {
 	facts        environment.RequestFacts
 	snapshot     environment.EnvironmentSnapshot
 	clock        *manualCaptureClock
+	admission    captureadmission.Admission
 }
 
 func newNativeLeaseFixture(t *testing.T, enabled, shared bool) nativeLeaseFixture {
@@ -117,7 +118,7 @@ func newNativeLeaseFixture(t *testing.T, enabled, shared bool) nativeLeaseFixtur
 		t.Fatal(err)
 	}
 	t.Cleanup(connection.Close)
-	return nativeLeaseFixture{store: store, assignments: assignments, environments: environments, capture: capture, connectionID: "native.connection", snapshot: snapshot, clock: clock, facts: environment.RequestFacts{Target: protocolspec.RequestTarget{Method: "POST", Path: environment.ClientToolMCPPath, Transport: protocolspec.ClientOperationTransportHTTP}, DownstreamProtocol: wireprofile.ApplicationProtocolHTTP1}}
+	return nativeLeaseFixture{store: store, assignments: assignments, environments: environments, capture: capture, connectionID: "native.connection", snapshot: snapshot, clock: clock, admission: admission, facts: environment.RequestFacts{Target: protocolspec.RequestTarget{Method: "POST", Path: environment.ClientToolMCPPath, Transport: protocolspec.ClientOperationTransportHTTP}, DownstreamProtocol: wireprofile.ApplicationProtocolHTTP1}}
 }
 
 func TestNativeLeaseExactAdmissionAndLiveCapture(t *testing.T) {

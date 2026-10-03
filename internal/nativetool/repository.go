@@ -15,6 +15,15 @@ type ScopeInput struct {
 	ExpectedRevision, OwnerEpoch uint64
 	ExpiresAt                    time.Time
 }
+
+// Scope is body-free CAS evidence, never live permission or send authority.
+type Scope struct {
+	Capture              captureidentity.Reference
+	Revision, OwnerEpoch uint64
+	State                string
+	ReplayBarrier        bool
+	ExpiresAt            time.Time
+}
 type SessionInput struct {
 	ID                                                        ID
 	Capture                                                   captureidentity.Reference
@@ -112,10 +121,12 @@ type Page struct {
 	NextSequence int64
 }
 type LifecycleRepository interface {
+	GetScope(context.Context, captureidentity.Reference) (Scope, error)
 	EnsureScope(context.Context, ScopeInput) (uint64, error)
 	RegisterSession(context.Context, SessionInput) error
 	ReadySession(context.Context, ID, uint64, time.Time) (uint64, error)
 	SetCatalog(context.Context, ID, uint64, CatalogEvidence, time.Time) (uint64, error)
+	InvalidateCatalog(context.Context, ID, uint64, time.Time) (uint64, error)
 	Receive(context.Context, ReceiveInput) (ReceiveResult, error)
 	Bind(context.Context, ID, Binding, time.Time) error
 	RequestApproval(context.Context, ID, ID, time.Time, time.Time) (Approval, error)

@@ -1232,6 +1232,7 @@ type ToolDecisionRequest struct {
 	nativeBinding       *nativetool.Binding
 	nativeContext       ToolDecisionContext
 	nativeWitness       *nativetool.RegisteredParentWitness
+	nativeToolWitness   *nativetool.SensitiveToolWitness
 	exchangeID          string
 	environmentID       environment.EnvironmentID
 	environmentRevision environment.Revision
