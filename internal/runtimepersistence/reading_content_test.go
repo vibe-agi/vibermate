@@ -352,13 +352,13 @@ func TestReadingViewIntegrityRejectsHiddenManifestSpansBeforeHydration(t *testin
 			manifest := smallDigest + "\x00" + strings.Repeat("a", 63) + largeDigest
 			wantTextBytes, wantBlobBytes := 64, 192
 			if variant == "nul_non_ascii" {
-				manifest = smallDigest + "\x00" + strings.Repeat("é", 31) + "a" + largeDigest
+				manifest = smallDigest + "\x00" + strings.Repeat("\u00e9", 31) + "a" + largeDigest
 			}
 			if variant == "non_ascii_only" {
 				// The current block-digest schema checks byte length/lowercase but
 				// does not require hex. A 64-byte non-ASCII digest is schema-valid
 				// and lets the foreign-key trigger accept this malformed manifest.
-				alias := strings.Repeat("é", 32)
+				alias := strings.Repeat("\u00e9", 32)
 				if _, err := store.database.Exec(`INSERT INTO runtime_exchange_content_blocks(digest,plain_bytes,codec,payload) SELECT ?,plain_bytes,codec,payload FROM runtime_exchange_content_blocks WHERE digest=?`, alias, largeDigest); err != nil {
 					t.Fatal(err)
 				}

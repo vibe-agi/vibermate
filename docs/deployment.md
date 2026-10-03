@@ -411,6 +411,29 @@ change their own password, and the owner can reset members' passwords. The
 recovery key can only be read on the server itself. Rotate it after use, and
 never share it with members.
 
+## Private rollback snapshots
+
+The internal schema-upgrade snapshot is a private, local rollback copy. It
+includes every present persistent file in the data directory, including local
+provider credential stores, configuration, history, evidence and CA private
+keys. Keep it in a private location with owner-only directories (0700) and
+files (0600). It is not encrypted at rest. Ordinary backups retain their
+existing credential exclusions; this snapshot is not a downloadable export.
+
+Stop every Runtime and attached Server host before restoring. Independently
+validate the snapshot, restore into a new directory, then validate the restored
+data before selecting it. Retain the original source directory; a failed copy
+or restore never makes the destination authoritative. An incomplete snapshot
+without a verified completion manifest must not be used for rollback.
+If creation reports a failure, treat any remaining directory or manifest as
+incomplete. A later independent validation must verify the entire snapshot
+and flush its files and directory entries before it can be used.
+
+Local file credentials retain their original account references after restore.
+External and keychain credentials stay in their existing locations on the
+original host and are not exported. This internal snapshot facility does not
+introduce a schema-upgrade command or activate a new database revision.
+
 ## Diagnostics and checks
 
 Show the three common setups, the server-local commands and the offline data

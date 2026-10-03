@@ -9,14 +9,16 @@ import (
 	"time"
 )
 
-// The Runtime database has one schema, schema.sql, identified by an integer
-// revision. There are no migrations: a file created with another revision is
-// refused before any write, and the user starts a new data directory. Any
-// change to schema.sql bumps schemaRevision; TestSchemaRevisionTracksSchemaFile
-// fails until it does.
+// schema.sql is the current bootstrap, identified by an integer revision.
+// Older supported schemas are frozen separately for read-only inspection and
+// private rollback validation. This build does not migrate or accept revision 2.
+// Any bootstrap change requires its corresponding revision and upgrade review.
 //
 //go:embed schema.sql
 var schemaSQL string
+
+//go:embed schema/v1.sql
+var schemaV1SQL string
 
 const (
 	// schemaIdentity marks a SQLite file as a ViberMate Runtime database.
@@ -85,7 +87,7 @@ func readSchemaRevision(ctx context.Context, database schemaQuerier) (int64, err
 	if !hasMetadata {
 		var objects int
 		if err := database.QueryRowContext(ctx,
-			`SELECT COUNT(*) FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%'`,
+			`SELECT COUNT(*) FROM sqlite_schema WHERE name NOT GLOB 'sqlite_*'`,
 		).Scan(&objects); err != nil {
 			return 0, fmt.Errorf("inspect empty SQLite schema: %w", err)
 		}
