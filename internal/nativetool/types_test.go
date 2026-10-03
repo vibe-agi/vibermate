@@ -15,7 +15,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/wireprofile"
 )
 
-func bindingFixture(t *testing.T) BindingInput {
+func bindingFixture(t *testing.T, mutations ...func(*environment.Environment)) BindingInput {
 	t.Helper()
 	origin, _ := originidentity.ParseProviderOrigin("https://chatgpt.com")
 	operations, _ := operationcatalog.BuiltIn()
@@ -26,13 +26,17 @@ func bindingFixture(t *testing.T) BindingInput {
 	}
 	wires, _ := wireprofile.BuiltInCatalog()
 	compiler, _ := environment.NewCompiler(nil, nil, catalog, wires)
-	snapshot, err := compiler.Compile(environment.Environment{ID: "native", Name: "Native", State: environment.StateActive, Revision: 1,
+	aggregate := environment.Environment{ID: "native", Name: "Native", State: environment.StateActive, Revision: 1,
 		ContentRecording: environment.ContentRecordingPolicy{Mode: environment.ContentRecordingOff},
-		ClientToolAccess: &environment.ClientToolAccessPolicy{Enabled: true, Route: &environment.ClientToolRoute{ID: "native.mcp", Revision: 1, TargetOrigin: origin, Path: "/backend-api/ps/mcp", CredentialOwner: environment.ClientToolCredentialOriginal, EgressProfile: egressprofile.Direct(), Contract: environment.ClientToolContractCodexLegacy}}})
+		ClientToolAccess: &environment.ClientToolAccessPolicy{Enabled: true, Route: &environment.ClientToolRoute{ID: "native.mcp", Revision: 1, TargetOrigin: origin, Path: "/backend-api/ps/mcp", CredentialOwner: environment.ClientToolCredentialOriginal, EgressProfile: egressprofile.Direct(), Contract: environment.ClientToolContractCodexLegacy}}}
+	for _, mutate := range mutations {
+		mutate(&aggregate)
+	}
+	snapshot, err := compiler.Compile(aggregate)
 	if err != nil {
 		t.Fatal(err)
 	}
-	connection, err := snapshot.BeginProviderConnection(origin)
+	connection, err := snapshot.BeginProviderConnection(aggregate.ClientToolAccess.Route.TargetOrigin)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -51,6 +55,65 @@ func bindingFixture(t *testing.T) BindingInput {
 		SessionID: ID(strings.Repeat("a", 32)), SessionRevision: 1, CatalogGeneration: 1, CatalogDigest: &catalogDigest,
 		ObservedCallID: []byte("observed-only"), ExactRPC: []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"read_file","arguments":{"path":"a"}},"_meta":{"trace":"first"}}`),
 		Intents: []protocolcore.ToolIntent{{ResponseID: "rpc-1", Ordinal: 0, Call: protocolcore.ToolCall{Key: key, Name: "read_file", Arguments: args}}}}
+}
+
+func TestNativeBindingReplayScopeSurvivesEnvironmentAndRouteReplacement(t *testing.T) {
+	original, err := NewBinding(bindingFixture(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	key, ok := original.ReplayKey()
+	if !ok {
+		t.Fatal("missing observed correlation")
+	}
+	for _, test := range []struct {
+		name   string
+		mutate func(*environment.Environment)
+	}{
+		{"environment", func(e *environment.Environment) { e.ID = "replacement" }},
+		{"route", func(e *environment.Environment) { e.ClientToolAccess.Route.ID = "replacement.mcp" }},
+		{"revisions", func(e *environment.Environment) { e.Revision++; e.ClientToolAccess.Route.Revision++ }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			input := bindingFixture(t, test.mutate)
+			input.OwnerEpoch++
+			input.AssignmentRevision++
+			input.SessionRevision++
+			input.SessionID = ID(strings.Repeat("b", 32))
+			replacement, err := NewBinding(input)
+			if err != nil {
+				t.Fatal(err)
+			}
+			replacementKey, _ := replacement.ReplayKey()
+			if replacementKey != key {
+				t.Fatal("same Capture and actual target lost observed-call replay correlation")
+			}
+			if replacement.Digest() == original.Digest() {
+				t.Fatal("replacement authority failed to change binding digest")
+			}
+		})
+	}
+	differentTarget := bindingFixture(t, func(e *environment.Environment) {
+		e.ClientToolAccess.Route.TargetOrigin, _ = originidentity.ParseProviderOrigin("https://other.example")
+	})
+	for _, input := range []BindingInput{differentTarget, func() BindingInput { i := bindingFixture(t); i.Capture.ID = "different"; return i }(), func() BindingInput {
+		i := bindingFixture(t)
+		i.Capture.Kind = captureidentity.KindManualCapture
+		return i
+	}(), func() BindingInput {
+		i := bindingFixture(t)
+		i.ObservedCallID = []byte("another observed call")
+		return i
+	}()} {
+		binding, err := NewBinding(input)
+		if err != nil {
+			t.Fatal(err)
+		}
+		otherKey, _ := binding.ReplayKey()
+		if otherKey == key {
+			t.Fatal("distinct Capture/target/observed identity shared replay correlation")
+		}
+	}
 }
 
 func TestNativeBindingRejectsModelAndManagedOwner(t *testing.T) {

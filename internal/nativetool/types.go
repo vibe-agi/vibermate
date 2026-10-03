@@ -166,16 +166,16 @@ func NewBinding(input BindingInput) (Binding, error) {
 		parentOperationID: copyPointer(input.ParentOperationID), serverRequestDigest: copyPointer(input.ServerRequestDigest),
 		requestDigest: Digest(sha256.Sum256(input.ExactRPC)), paramsDigest: Digest(sha256.Sum256(params)), groupDigest: Digest(sha256.Sum256(group)), safeCallRefs: refs}
 	if len(input.ObservedCallID) > 0 {
-		// Deliberately excludes changing RPC/session IDs. This is restricted
-		// correlation evidence, not proof of general client idempotency.
+		// Scope correlation to the actual service, independently of mutable
+		// Environment/route/owner/session generations. The parser supplies an
+		// opaque type-sensitive observed identity; it is never send authority.
 		key := hashJSON(struct {
 			Domain       string
 			Capture      captureidentity.Reference
-			Environment  environment.EnvironmentID
-			Route        environment.ClientToolRouteID
 			Origin, Path string
+			Contract     environment.ClientToolContract
 			Observed     []byte
-		}{"native-observed-call/v1", input.Capture, input.Plan.EnvironmentID(), input.Plan.Route().ID, input.Plan.Route().TargetOrigin.String(), input.Plan.Route().Path, slices.Clone(input.ObservedCallID)})
+		}{"native-observed-call/v1", input.Capture, input.Plan.Route().TargetOrigin.String(), input.Plan.Route().Path, input.Plan.Route().Contract, slices.Clone(input.ObservedCallID)})
 		binding.replayKey = &key
 	}
 	route := input.Plan.Route()
