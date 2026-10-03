@@ -22,6 +22,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/exchangecontent"
 	"github.com/vibe-agi/vibermate/internal/manualcapture"
+	"github.com/vibe-agi/vibermate/internal/nativetool"
 	"github.com/vibe-agi/vibermate/internal/provideraccount"
 	"github.com/vibe-agi/vibermate/internal/proxyclient"
 	"github.com/vibe-agi/vibermate/internal/rawevidence"
@@ -127,6 +128,10 @@ func Open(ctx context.Context, options Options) (*Store, error) {
 	}
 
 	operations := newOperationGate()
+	issuer, err := nativetool.NewStartReceiptIssuer()
+	if err != nil {
+		return fail(fmt.Errorf("create native receipt issuer: %w", err))
+	}
 	repository := newRepository(database, operations)
 	captureRepo := newCaptureRunRepository(database, operations)
 	codeLibrary := newCodeLibraryRepository(
@@ -216,7 +221,7 @@ func Open(ctx context.Context, options Options) (*Store, error) {
 		rawEvidence:        rawEvidence,
 		runtimeUsers:       runtimeUsers,
 		operations:         operations,
-		nativeTools:        &nativeToolRepository{database: database, operations: operations},
+		nativeTools:        &nativeToolRepository{database: database, operations: operations, committer: sqlTransactionCommitter{}, issuer: issuer},
 		closeDone:          make(chan struct{}),
 	}, nil
 }
@@ -352,7 +357,20 @@ func (s *Store) Shutdown(ctx context.Context) error {
 	}
 	s.closeMu.Unlock()
 
-	closeErr := errors.Join(s.reads.Close(), s.database.Close())
+	// Admission is closed and drained; the final native boundary uses the
+	// Store's writer directly, without reopening public operation admission.
+	tx, err := s.database.BeginTx(ctx, nil)
+	var nativeErr error
+	if err != nil {
+		nativeErr = err
+	} else {
+		nativeErr = revokeNativeScopesWhere(ctx, tx, "state<>'closed'", time.Now().UTC())
+		if nativeErr == nil {
+			nativeErr = tx.Commit()
+		}
+		_ = tx.Rollback()
+	}
+	closeErr := errors.Join(nativeErr, s.reads.Close(), s.database.Close())
 	s.closeMu.Lock()
 	s.closeErr = closeErr
 	s.closed = true

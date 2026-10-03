@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/vibe-agi/vibermate/internal/captureidentity"
 	"github.com/vibe-agi/vibermate/internal/manualcapture"
 )
 
@@ -263,6 +264,9 @@ func (repository *manualCaptureRepository) mutate(
 			return manualcapture.DurableRecord{}, fmt.Errorf("commit rejected ManualCapture mutation: %w", err)
 		}
 		return current, outcome
+	}
+	if err := revokeNativeScope(operation, transaction, captureidentity.Reference{Kind: captureidentity.KindManualCapture, ID: id.String()}, now); err != nil {
+		return manualcapture.DurableRecord{}, err
 	}
 	record, err := scanManualCapture(transaction.QueryRowContext(
 		operation,
@@ -574,6 +578,9 @@ func (repository *manualCaptureRepository) Recover(
 		return manualcapture.Recovery{}, fmt.Errorf("count expired ManualCaptures: %w", err)
 	}
 	var active int
+	if err := revokeNativeScopesWhere(operation, transaction, `capture_kind='manual_capture' AND capture_id IN(SELECT capture_id FROM manual_captures WHERE state='expired')`, now); err != nil {
+		return manualcapture.Recovery{}, err
+	}
 	if err := transaction.QueryRowContext(
 		operation,
 		`SELECT COUNT(*) FROM manual_captures WHERE state = 'active'`,

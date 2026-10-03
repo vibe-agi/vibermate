@@ -22,6 +22,15 @@ func nativeLifecycleFixture(t *testing.T, mode environment.ToolPolicyMode) (*Sto
 	return nativeLifecycleFixtureRecording(t, mode, environment.ContentRecordingPolicy{Mode: environment.ContentRecordingOff})
 }
 func nativeLifecycleFixtureRecording(t *testing.T, mode environment.ToolPolicyMode, recording environment.ContentRecordingPolicy) (*Store, nativetool.ID, uint64) {
+	return nativeFixture(t, mode, recording, false)
+}
+func nativeExecutionHandshakeFixture(t *testing.T) (*Store, nativetool.ID, uint64) {
+	return nativeFixture(t, environment.ToolPolicyReview, environment.ContentRecordingPolicy{Mode: environment.ContentRecordingOff}, true)
+}
+func nativeFixture(t *testing.T, mode environment.ToolPolicyMode, recording environment.ContentRecordingPolicy, execute bool) (*Store, nativetool.ID, uint64) {
+	return nativeFixtureWithCapture(t, mode, recording, execute, nil)
+}
+func nativeFixtureWithCapture(t *testing.T, mode environment.ToolPolicyMode, recording environment.ContentRecordingPolicy, execute bool, create func(*Store, time.Time) captureidentity.Reference) (*Store, nativetool.ID, uint64) {
 	t.Helper()
 	ctx := context.Background()
 	now := time.Now().UTC().Truncate(time.Millisecond)
@@ -62,7 +71,12 @@ func nativeLifecycleFixtureRecording(t *testing.T, mode environment.ToolPolicyMo
 		t.Fatal(err)
 	}
 	capture := captureidentity.Reference{Kind: captureidentity.KindManualCapture, ID: created.Capture.ID}
-	assignment := captureAssignmentFixture(capture, aggregate.ID, 1, captureassignment.SourceManualCreate)
+	source := captureassignment.SourceManualCreate
+	if create != nil {
+		capture = create(store, now)
+		source = captureassignment.SourceLaunch
+	}
+	assignment := captureAssignmentFixture(capture, aggregate.ID, 1, source)
 	assignment.EnvironmentDigest = plan.EnvironmentDigest()
 	assignment.LaunchAuthority, err = environment.NewLaunchAuthorityBoundaryFromScopes(aggregate.ID, 1, plan.EnvironmentDigest(), []string{"chatgpt.com:443"}, nil)
 	if err != nil {
@@ -107,8 +121,38 @@ func nativeLifecycleFixtureRecording(t *testing.T, mode environment.ToolPolicyMo
 	}
 	initialize := nativetool.ID("11111111111111111111111111111111")
 	bind(initialize, nativetool.RequestInitialize, `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}`, nil)
-	seedNativeHistoricalCompletion(t, store, initialize, now)
+	handshakeAttempt := 0
+	complete := func(id nativetool.ID) {
+		t.Helper()
+		if !execute {
+			seedNativeHistoricalCompletion(t, store, id, now)
+			return
+		}
+		full := nativeFullRepository(t, store)
+		var generation int
+		if err := store.database.QueryRowContext(ctx, `SELECT catalog_generation FROM native_tool_sessions WHERE session_id=?`, session).Scan(&generation); err != nil || generation != 0 {
+			t.Fatalf("handshake invented catalog: %d %v", generation, err)
+		}
+		handshakeAttempt++
+		receipt, err := full.Start(ctx, id, fmt.Sprintf("native-handshake-%d", handshakeAttempt), revision, now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := full.VerifyStartReceipt(ctx, receipt, now); err != nil {
+			t.Fatal(err)
+		}
+		if err := full.Finish(ctx, id, nativetool.TerminalInput{Outcome: "completed", Reason: "completed", ObservedAt: now}); err != nil {
+			t.Fatal(err)
+		}
+		if countRows(t, store, "native_tool_approvals") != 0 {
+			t.Fatal("handshake/list invented approval")
+		}
+	}
+	complete(initialize)
 	bind("22222222222222222222222222222222", nativetool.RequestInitialized, `{"jsonrpc":"2.0","method":"notifications/initialized"}`, nil)
+	if execute {
+		complete("22222222222222222222222222222222")
+	}
 	sessionRevision, err := repo.ReadySession(ctx, session, 1, now)
 	if err != nil {
 		t.Fatal(err)
@@ -116,7 +160,7 @@ func nativeLifecycleFixtureRecording(t *testing.T, mode environment.ToolPolicyMo
 	input.SessionRevision = sessionRevision
 	list := nativetool.ID("33333333333333333333333333333333")
 	bind(list, nativetool.RequestToolsList, `{"jsonrpc":"2.0","id":2,"method":"tools/list"}`, nil)
-	seedNativeHistoricalCompletion(t, store, list, now)
+	complete(list)
 	observer, err := nativetool.NewCatalogObserver(nativetool.CatalogScope{Capture: capture, Plan: plan, AssignmentRevision: 1, OwnerEpoch: 1, SessionID: session, SessionRevision: sessionRevision + 1, CatalogGeneration: 1})
 	if err != nil {
 		t.Fatal(err)

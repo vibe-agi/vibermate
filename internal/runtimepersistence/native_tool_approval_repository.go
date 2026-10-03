@@ -30,7 +30,7 @@ func nativeApprovalAuthority(ctx context.Context, tx *sql.Tx, op nativetool.Oper
 		return nativetool.ErrDenied
 	}
 	if op.Kind == nativetool.RequestServerReply {
-		if err := validateNativeParent(ctx, tx, op, b, s); err != nil {
+		if err := validateNativeParent(ctx, tx, op, b, s, now); err != nil {
 			return err
 		}
 	} else if s.revision != b.sessionRevision || s.generation != b.generation || string(s.catalog) != string(b.catalog) {
@@ -208,7 +208,7 @@ func (r *nativeToolRepository) DecideApproval(ctx context.Context, in nativetool
 	return answer, nil
 }
 func cancelNativeApprovals(ctx context.Context, tx *sql.Tx, c captureidentity.Reference, now time.Time, state string) error {
-	rows, err := tx.QueryContext(ctx, `SELECT a.approval_id FROM native_tool_approvals a JOIN native_tool_operations o ON o.operation_id=a.operation_id WHERE o.capture_kind=? AND o.capture_id=? AND a.state='pending'`, c.Kind, c.ID)
+	rows, err := tx.QueryContext(ctx, `SELECT a.approval_id FROM native_tool_approvals a JOIN native_tool_operations o ON o.operation_id=a.operation_id WHERE o.capture_kind=? AND o.capture_id=? AND (a.state='pending' OR (a.state='allowed' AND a.consumed_at_unix_ms IS NULL))`, c.Kind, c.ID)
 	if err != nil {
 		return err
 	}
@@ -241,7 +241,29 @@ func cancelNativeApprovals(ctx context.Context, tx *sql.Tx, c captureidentity.Re
 			return err
 		}
 		if now.Before(a.CreatedAt) {
-			return nativetool.ErrInvalid
+			now = a.CreatedAt
+		}
+		if a.State == "allowed" {
+			// A known Start consumes approval atomically. An unconsumed allow on
+			// any other state is corrupt, and cancellation must not conceal it.
+			if op.State != "validated" {
+				return nativetool.ErrInvalid
+			}
+			result, err := tx.ExecContext(ctx, `UPDATE native_tool_approvals SET state='canceled',revision=revision+1,idempotency_key='' WHERE approval_id=? AND revision=? AND state='allowed' AND consumed_at_unix_ms IS NULL`, a.ID, a.Revision)
+			if err != nil {
+				return err
+			}
+			count, err := result.RowsAffected()
+			if err != nil {
+				return err
+			}
+			if count != 1 {
+				return nativetool.ErrConflict
+			}
+			if err := nativeTransition(ctx, tx, op, "canceled", op.DecisionSource, "canceled", "canceled", now); err != nil {
+				return err
+			}
+			continue
 		}
 		if err := resolveNativeApproval(ctx, tx, a, op, state, "", now); err != nil {
 			return err

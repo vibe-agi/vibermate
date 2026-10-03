@@ -14,7 +14,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/provideraccount"
 	"github.com/vibe-agi/vibermate/internal/providerauth"
 	"github.com/vibe-agi/vibermate/internal/secretstore"
@@ -209,19 +208,8 @@ func TestNativeAuditRebuildPreservesRowsAndSequence(t *testing.T) {
 	if _, err := store.ProviderAccountRepository().Write(ctx, 0, account); err != nil {
 		t.Fatal(err)
 	}
-	manager := newEnvironmentManager(t, store)
 	candidate := environmentFixture(t, "native-legacy", 1)
-	draft, err := manager.SaveDraft(ctx, environment.DraftCommand{Candidate: candidate})
-	if err != nil {
-		t.Fatal(err)
-	}
-	preview, err := manager.Preview(ctx, candidate.ID, draft.Revision)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := manager.Publish(ctx, preview); err != nil {
-		t.Fatal(err)
-	}
+	seedFrozenV1Environment(t, store, candidate, now)
 	if err := store.ExchangeContentRepository().Put(ctx, contentRecordFixture(t, "native-legacy-history", now)); err != nil {
 		t.Fatal(err)
 	}
@@ -234,7 +222,7 @@ func TestNativeAuditRebuildPreservesRowsAndSequence(t *testing.T) {
 	// A deleted high autoincrement row must not permit sequence reuse after rebuild.
 	nativeExec(t, store.database, `INSERT INTO runtime_egress_attempts(sequence,attempt_id,purpose,payload_class,parent_kind,parent_id,caller_kind,target_origin,policy_id,policy_revision,policy_authority,rule_id,proxy_id,proxy_revision,account_id,account_settings_revision,started_at_unix_ms) VALUES (90000,'deleted-high','update','none','runtime_action','legacy','core','https://legacy.example','legacy',1,'runtime','legacy','direct',0,'',0,1)`)
 	nativeExec(t, store.database, `DELETE FROM runtime_egress_attempts WHERE sequence=90000`)
-	shutdownTestStore(t, store)
+	closeFrozenV1Store(t, store)
 	db := openSQLiteForTest(t, path)
 	nativeExec(t, db, "PRAGMA foreign_keys=ON")
 	frozen := openSQLiteForTest(t, filepath.Join(t.TempDir(), "frozen-v1.db"))
@@ -318,9 +306,17 @@ func TestNativeSchemaConstraints(t *testing.T) {
 			}
 			deny(`UPDATE native_tool_operations SET rpc_kind='unknown'`)
 			deny(`UPDATE native_tool_operations SET state='started'`)
-			deny(`INSERT INTO native_tool_bindings VALUES ('bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb','aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',1,0,zeroblob(32),'native.mcp',1,1,1,zeroblob(32),zeroblob(32),zeroblob(32),zeroblob(32),NULL,NULL,NULL,'')`)
-			nativeExec(t, db, `INSERT INTO native_tool_bindings VALUES ('bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb','aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',1,1,zeroblob(32),'native.mcp',1,1,1,zeroblob(32),zeroblob(32),zeroblob(32),zeroblob(32),NULL,NULL,NULL,'')`)
+			deny(`INSERT INTO native_tool_bindings VALUES ('bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb','aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',1,0,zeroblob(32),'native.mcp',1,1,1,zeroblob(32),zeroblob(32),zeroblob(32),zeroblob(32),NULL,NULL,NULL,'',NULL)`)
+			deny(`INSERT INTO native_tool_bindings VALUES ('bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb','aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',1,1,zeroblob(32),'native.mcp',1,1,1,zeroblob(32),zeroblob(32),zeroblob(32),zeroblob(32),NULL,NULL,NULL,'',zeroblob(32))`)
+			nativeExec(t, db, `INSERT INTO native_tool_bindings VALUES ('bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb','aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',1,1,zeroblob(32),'native.mcp',1,1,1,zeroblob(32),zeroblob(32),zeroblob(32),zeroblob(32),NULL,NULL,NULL,'',NULL)`)
 			deny(`UPDATE native_tool_bindings SET owner_epoch=2`)
+			nativeExec(t, db, `INSERT INTO native_tool_operations SELECT 'eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee',capture_kind,capture_id,environment_id,environment_revision,environment_digest,connection_id,target_origin,method,'cancel',1,'received','none',recording,retention_days,created_at_unix_ms,metadata_expires_at_unix_ms,NULL,NULL,NULL,'' FROM native_tool_operations WHERE operation_id='bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'`)
+			cancelPrefix := `INSERT INTO native_tool_bindings VALUES('eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee','aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',1,1,zeroblob(32),'native.mcp',1,1,1,zeroblob(32),zeroblob(32),zeroblob(32),zeroblob(32),NULL,NULL,NULL,'',`
+			deny(cancelPrefix + `NULL)`)
+			deny(cancelPrefix + `zeroblob(31))`)
+			// Opaque 32-byte MACs and ordinary identity digests share this shape.
+			nativeExec(t, db, cancelPrefix+`zeroblob(32))`)
+			nativeExec(t, db, `DELETE FROM native_tool_operations WHERE operation_id='eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee'`)
 			nativeExec(t, db, `UPDATE native_tool_operations SET state='validated',revision=2`)
 			deny(`UPDATE native_tool_operations SET state='completed'`)
 			nativeExec(t, db, `UPDATE native_tool_operations SET state='completed',completed_at_unix_ms=3,terminal_reason='completed'`)

@@ -67,11 +67,21 @@ func (repository *egressAttemptRepository) Append(
 		return egressaudit.Record{}, err
 	}
 	defer finish()
+	return appendEgressAttempt(operation, repository.database, attempt)
+}
+
+type egressAttemptWriter interface {
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}
+
+// Shared by native Start's single writer transaction and the public audit writer.
+func appendEgressAttempt(operation context.Context, writer egressAttemptWriter, attempt egressaudit.Attempt) (egressaudit.Record, error) {
 	reused := 0
 	if attempt.ReusedTransport() {
 		reused = 1
 	}
-	result, err := repository.database.ExecContext(
+	result, err := writer.ExecContext(
 		operation,
 		`INSERT INTO runtime_egress_attempts (
 		     attempt_id,
@@ -144,7 +154,14 @@ func (repository *egressAttemptRepository) Complete(
 		return egressaudit.Record{}, err
 	}
 	defer finish()
-	result, err := repository.database.ExecContext(
+	return completeEgressAttempt(operation, repository.database, attempt)
+}
+
+func completeEgressAttempt(operation context.Context, writer egressAttemptWriter, attempt egressaudit.Attempt) (egressaudit.Record, error) {
+	if !attempt.Terminal() {
+		return egressaudit.Record{}, errors.New("EgressAttempt has not reached a terminal")
+	}
+	result, err := writer.ExecContext(
 		operation,
 		`UPDATE runtime_egress_attempts
 		    SET completed_at_unix_ms = ?,
@@ -187,7 +204,7 @@ func (repository *egressAttemptRepository) Complete(
 		var outcome, errorClass string
 		var bytesOut, bytesIn int64
 		var known bool
-		err := repository.database.QueryRowContext(
+		err := writer.QueryRowContext(
 			operation,
 			`SELECT completed_at_unix_ms, outcome, error_class, bytes_out, bytes_in, byte_counts_known
 			   FROM runtime_egress_attempts WHERE attempt_id = ?`,
@@ -382,7 +399,7 @@ func (repository *egressAttemptRepository) List(
 	return page, nil
 }
 
-func scanEgressAttempt(rows *sql.Rows) (egressaudit.Record, error) {
+func scanEgressAttempt(rows interface{ Scan(...any) error }) (egressaudit.Record, error) {
 	var (
 		sequence                int64
 		attemptID               string

@@ -19,8 +19,8 @@ func TestNativeLifecycleAdapterCompleteWithoutExecution(t *testing.T) {
 	store, id, _ := nativeLifecycleFixture(t, environment.ToolPolicyReview)
 	repo := store.NativeLifecycleRepository()
 	ctx := context.Background()
-	if _, ok := repo.(nativetool.ExecutionRepository); ok {
-		t.Fatal("premature execution interface")
+	if _, ok := repo.(nativetool.Repository); !ok {
+		t.Fatal("same lifecycle adapter lacks full repository")
 	}
 	op, err := repo.Get(ctx, id)
 	if err != nil || op.State != "validated" || op.ToolName != "read_file" || op.ApprovalID != nil || op.CredentialOwner != "original_client" || op.Recording.Mode != environment.ContentRecordingOff {
@@ -213,6 +213,7 @@ func TestNativeProjectionRejectsForgedApprovalDigest(t *testing.T) {
 	if _, err := store.database.ExecContext(ctx, `UPDATE native_tool_approvals SET binding_digest=zeroblob(32) WHERE approval_id=?`, a.ID); err != nil {
 		t.Fatal(err)
 	}
+	defer store.database.ExecContext(ctx, `UPDATE native_tool_approvals SET binding_digest=? WHERE approval_id=?`, a.BindingDigest[:], a.ID)
 	if _, err := repo.GetApproval(ctx, a.ID); !errors.Is(err, nativetool.ErrInvalid) {
 		t.Fatalf("forged binding accepted: %v", err)
 	}
@@ -235,6 +236,7 @@ func TestNativeReviewIdempotentAnswerRejectsCorruptBinding(t *testing.T) {
 	if _, err := store.database.ExecContext(ctx, `UPDATE native_tool_approvals SET binding_digest=zeroblob(32) WHERE approval_id=?`, a.ID); err != nil {
 		t.Fatal(err)
 	}
+	defer store.database.ExecContext(ctx, `UPDATE native_tool_approvals SET binding_digest=? WHERE approval_id=?`, a.BindingDigest[:], a.ID)
 	if _, err := repo.DecideApproval(ctx, answer); !errors.Is(err, nativetool.ErrInvalid) {
 		t.Fatalf("corrupt idempotent answer accepted %v", err)
 	}
@@ -412,8 +414,8 @@ func TestNativeLifecycleFrozenPolicyAndLiveOff(t *testing.T) {
 		t.Fatalf("new publication overwrote assigned frozen Review: %v", err)
 	}
 	publish(true)
-	if _, err := repo.GetApproval(ctx, "55555555555555555555555555555555"); !errors.Is(err, nativetool.ErrDenied) {
-		t.Fatalf("OFF pending question retained authority %v", err)
+	if approval, err := repo.GetApproval(ctx, "55555555555555555555555555555555"); err != nil || approval.State != "canceled" {
+		t.Fatalf("OFF pending question retained authority %+v %v", approval, err)
 	}
 	if _, err := repo.EnsureScope(ctx, nativetool.ScopeInput{Capture: binding.Capture(), ExpectedRevision: scopeRevision, OwnerEpoch: 2, ExpiresAt: now.Add(time.Hour)}); !errors.Is(err, nativetool.ErrDenied) {
 		t.Fatalf("OFF owner generation activated %v", err)
@@ -428,15 +430,8 @@ func TestNativeLifecycleFrozenPolicyAndLiveOff(t *testing.T) {
 	rpc, _ := next.RPCIDDigest()
 	digest := next.RequestDigest()
 	newID := nativetool.ID("99999999999999999999999999999999")
-	if _, err := repo.Receive(ctx, nativetool.ReceiveInput{ID: newID, Capture: binding.Capture(), EnvironmentID: plan.EnvironmentID(), EnvironmentRevision: plan.EnvironmentRevision(), EnvironmentDigest: plan.EnvironmentDigest(), ConnectionID: "synthetic-off", TargetOrigin: plan.Route().TargetOrigin.String(), Method: "POST", Kind: nativetool.RequestToolsCall, SessionID: &session, RPCIDDigest: &rpc, RequestDigest: &digest, Recording: plan.ContentRecording(), ObservedAt: now}); err != nil {
-		t.Fatal(err)
-	}
-	if err := repo.Bind(ctx, newID, next, now); !errors.Is(err, nativetool.ErrDenied) {
-		t.Fatalf("live OFF bind %v", err)
-	}
-	denied, err := repo.Get(ctx, newID)
-	if err != nil || denied.State != "denied" || denied.Reason != "permission_off" || denied.DecisionSource != "policy" || denied.BindingDigest != nil || denied.ApprovalID != nil || denied.Arguments != nil {
-		t.Fatalf("OFF metadata %+v %v", denied, err)
+	if _, err := repo.Receive(ctx, nativetool.ReceiveInput{ID: newID, Capture: binding.Capture(), EnvironmentID: plan.EnvironmentID(), EnvironmentRevision: plan.EnvironmentRevision(), EnvironmentDigest: plan.EnvironmentDigest(), ConnectionID: "synthetic-off", TargetOrigin: plan.Route().TargetOrigin.String(), Method: "POST", Kind: nativetool.RequestToolsCall, SessionID: &session, RPCIDDigest: &rpc, RequestDigest: &digest, Recording: plan.ContentRecording(), ObservedAt: now}); !errors.Is(err, nativetool.ErrDenied) {
+		t.Fatalf("OFF retired session admitted: %v", err)
 	}
 }
 
@@ -452,15 +447,17 @@ func TestNativeProjectionRejectsUnsafeNameAndMissingEvent(t *testing.T) {
 			}
 			// CORRUPT SYNTHETIC DATA: no production write API creates these rows.
 			if corrupt == "event" {
+				defer store.database.ExecContext(ctx, `INSERT INTO native_tool_events(operation_id,operation_revision,kind,occurred_at_unix_ms) VALUES(?,?,?,?)`, id, op.Revision, "validated", time.Now().UnixMilli())
 				if _, err := store.database.ExecContext(ctx, `DELETE FROM native_tool_events WHERE operation_id=? AND operation_revision=?`, id, op.Revision); err != nil {
 					t.Fatal(err)
 				}
 			} else {
 				newID := nativetool.ID("99999999999999999999999999999999")
+				defer store.database.ExecContext(ctx, `DELETE FROM native_tool_operations WHERE operation_id=?`, newID)
 				if _, err := repo.Receive(ctx, nativetool.ReceiveInput{ID: newID, Capture: op.Capture, EnvironmentID: op.EnvironmentID, EnvironmentRevision: op.EnvironmentRevision, EnvironmentDigest: op.EnvironmentDigest, ConnectionID: "synthetic-corrupt", TargetOrigin: op.TargetOrigin, Method: "POST", Kind: nativetool.RequestToolsCall, Recording: op.Recording, ObservedAt: time.Now().UTC()}); err != nil {
 					t.Fatal(err)
 				}
-				if _, err := store.database.ExecContext(ctx, `INSERT INTO native_tool_bindings SELECT ?,session_id,session_revision,catalog_generation,catalog_digest,route_id,route_revision,owner_epoch,assignment_revision,request_digest,params_digest,group_digest,binding_digest,replay_key,parent_operation_id,server_request_digest,'unsafe name' FROM native_tool_bindings WHERE operation_id=?`, newID, id); err != nil {
+				if _, err := store.database.ExecContext(ctx, `INSERT INTO native_tool_bindings SELECT ?,session_id,session_revision,catalog_generation,catalog_digest,route_id,route_revision,owner_epoch,assignment_revision,request_digest,params_digest,group_digest,binding_digest,replay_key,parent_operation_id,server_request_digest,'unsafe name',NULL FROM native_tool_bindings WHERE operation_id=?`, newID, id); err != nil {
 					t.Fatal(err)
 				}
 				if _, err := store.database.ExecContext(ctx, `UPDATE native_tool_operations SET state='validated',revision=2 WHERE operation_id=?`, newID); err != nil {
@@ -479,29 +476,20 @@ func TestNativeProjectionRejectsUnsafeNameAndMissingEvent(t *testing.T) {
 }
 
 func TestNativeLifecycleReplyFreezesParentCatalog(t *testing.T) {
-	store, parentID, _ := nativeLifecycleFixture(t, environment.ToolPolicyReview)
-	repo := store.NativeLifecycleRepository()
+	store, parentID, authorityRevision := nativeLifecycleFixture(t, environment.ToolPolicyReview)
+	repo := store.NativeToolRepository()
 	parent, _ := nativeDecisionFixture(t, store, parentID)
 	ctx := context.Background()
 	now := time.Now().UTC()
 	plan := parent.Plan()
 	session := parent.SessionID()
 	catalog, _ := parent.CatalogDigest()
-	// HISTORICAL SYNTHETIC STARTED PARENT: datastore relation only. No once/audit,
-	// committed receipt, authenticated source, executed tool or network is proved.
-	tx, err := store.database.BeginTx(ctx, nil)
+	nativeAllow(t, repo, parentID, now)
+	receipt, err := repo.Start(ctx, parentID, "parent-catalog-start", authorityRevision, now)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := tx.ExecContext(ctx, `UPDATE native_tool_operations SET state='started',revision=revision+1 WHERE operation_id=? AND state='validated'`, parentID); err != nil {
-		tx.Rollback()
-		t.Fatal(err)
-	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO native_tool_events(operation_id,operation_revision,kind,occurred_at_unix_ms) SELECT operation_id,revision,'started',? FROM native_tool_operations WHERE operation_id=?`, now.UnixMilli(), parentID); err != nil {
-		tx.Rollback()
-		t.Fatal(err)
-	}
-	if err := tx.Commit(); err != nil {
+	if err := repo.VerifyStartReceipt(ctx, receipt, now); err != nil {
 		t.Fatal(err)
 	}
 	list, err := nativetool.NewBinding(nativetool.BindingInput{Kind: nativetool.RequestToolsList, Plan: plan, Capture: parent.Capture(), AssignmentRevision: 1, OwnerEpoch: 1, SessionID: session, SessionRevision: 3, CatalogGeneration: 1, CatalogDigest: &catalog, ExactRPC: []byte(`{"jsonrpc":"2.0","id":4,"method":"tools/list"}`)})
@@ -517,7 +505,16 @@ func TestNativeLifecycleReplyFreezesParentCatalog(t *testing.T) {
 	if err := repo.Bind(ctx, listID, list, now); err != nil {
 		t.Fatal(err)
 	}
-	seedNativeHistoricalCompletion(t, store, listID, now)
+	listReceipt, err := repo.Start(ctx, listID, "parent-catalog-list", authorityRevision, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.VerifyStartReceipt(ctx, listReceipt, now); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.Finish(ctx, listID, nativetool.TerminalInput{Outcome: "completed", Reason: "completed", ObservedAt: now}); err != nil {
+		t.Fatal(err)
+	}
 	observer, err := nativetool.NewCatalogObserver(nativetool.CatalogScope{Capture: parent.Capture(), Plan: plan, AssignmentRevision: 1, OwnerEpoch: 1, SessionID: session, SessionRevision: 4, CatalogGeneration: 2})
 	if err != nil {
 		t.Fatal(err)
@@ -569,8 +566,8 @@ func TestNativeLifecycleReplyFreezesParentCatalog(t *testing.T) {
 	}
 	for _, table := range []string{"runtime_egress_attempts", "native_tool_once"} {
 		var count int
-		if err := store.database.QueryRowContext(ctx, `SELECT COUNT(*) FROM `+table).Scan(&count); err != nil || count != 0 {
-			t.Fatalf("synthetic parent claimed execution %s %d %v", table, count, err)
+		if err := store.database.QueryRowContext(ctx, `SELECT COUNT(*) FROM `+table).Scan(&count); err != nil || count != 2 {
+			t.Fatalf("real parent/list execution %s %d %v", table, count, err)
 		}
 	}
 }
@@ -609,6 +606,8 @@ func TestNativeLifecycleReadyRequiresInitializedNotTwoInitializes(t *testing.T) 
 	if _, err := store.database.ExecContext(ctx, `UPDATE native_tool_sessions SET state='initializing',revision=1,catalog_generation=0,catalog_digest=NULL WHERE session_id=?`, session); err != nil {
 		t.Fatal(err)
 	}
+	catalog, _ := parent.CatalogDigest()
+	defer store.database.ExecContext(ctx, `UPDATE native_tool_sessions SET state='ready',revision=3,catalog_generation=1,catalog_digest=? WHERE session_id=?`, catalog[:], session)
 	second, err := nativetool.NewBinding(nativetool.BindingInput{Kind: nativetool.RequestInitialize, Plan: plan, Capture: parent.Capture(), AssignmentRevision: 1, OwnerEpoch: 1, SessionID: session, SessionRevision: 1, ExactRPC: []byte(`{"jsonrpc":"2.0","id":5,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}`)})
 	if err != nil {
 		t.Fatal(err)

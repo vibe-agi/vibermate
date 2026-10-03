@@ -204,6 +204,7 @@ CREATE TABLE native_tool_bindings(
   parent_operation_id TEXT CHECK(parent_operation_id IS NULL OR (length(parent_operation_id) = 32 AND parent_operation_id NOT GLOB '*[^0-9a-f]*')),
   server_request_digest BLOB CHECK(server_request_digest IS NULL OR length(server_request_digest) = 32),
   tool_name TEXT NOT NULL DEFAULT '' CHECK(length(CAST(tool_name AS BLOB)) BETWEEN 0 AND 256),
+  cancel_rpc_id_digest BLOB CHECK(cancel_rpc_id_digest IS NULL OR length(cancel_rpc_id_digest) = 32),
   CHECK((catalog_generation = 0) = (catalog_digest IS NULL)),
   CHECK((parent_operation_id IS NULL) = (server_request_digest IS NULL)),
   UNIQUE(operation_id,binding_digest)
@@ -277,6 +278,14 @@ CREATE INDEX native_tool_contents_body ON native_tool_contents(body_digest);
 CREATE TRIGGER native_tool_binding_immutable
 BEFORE UPDATE ON native_tool_bindings BEGIN
   SELECT RAISE(ABORT,'immutable native binding');
+END;
+CREATE TRIGGER native_tool_binding_cancel_guard
+BEFORE INSERT ON native_tool_bindings
+WHEN NOT EXISTS(SELECT 1 FROM native_tool_operations WHERE operation_id=NEW.operation_id
+  AND ((rpc_kind='cancel' AND NEW.cancel_rpc_id_digest IS NOT NULL)
+    OR (rpc_kind<>'cancel' AND NEW.cancel_rpc_id_digest IS NULL)))
+BEGIN
+  SELECT RAISE(ABORT,'native cancellation target differs from kind');
 END;
 CREATE TRIGGER native_tool_operation_received
 BEFORE INSERT ON native_tool_operations WHEN NEW.state <> 'received' BEGIN

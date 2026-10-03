@@ -20,6 +20,10 @@ type nativeBindingRow struct {
 	catalog                                                       []byte
 	route, name                                                   string
 	digest, request                                               nativetool.Digest
+	group                                                         nativetool.Digest
+	params                                                        nativetool.Digest
+	replay                                                        []byte
+	cancel                                                        []byte
 	parent                                                        *nativetool.ID
 	server                                                        []byte
 }
@@ -30,7 +34,7 @@ func loadNativeBinding(ctx context.Context, tx *sql.Tx, id nativetool.ID) (nativ
 	var sr, generation, owner, assignment, rr int64
 	var parent sql.NullString
 	var request, params, group, digest, replay []byte
-	err := tx.QueryRowContext(ctx, `SELECT session_id,session_revision,catalog_generation,catalog_digest,route_id,route_revision,owner_epoch,assignment_revision,request_digest,params_digest,group_digest,binding_digest,replay_key,parent_operation_id,server_request_digest,tool_name FROM native_tool_bindings WHERE operation_id=?`, id).Scan(&session, &sr, &generation, &b.catalog, &b.route, &rr, &owner, &assignment, &request, &params, &group, &digest, &replay, &parent, &b.server, &b.name)
+	err := tx.QueryRowContext(ctx, `SELECT session_id,session_revision,catalog_generation,catalog_digest,route_id,route_revision,owner_epoch,assignment_revision,request_digest,params_digest,group_digest,binding_digest,replay_key,parent_operation_id,server_request_digest,tool_name,cancel_rpc_id_digest FROM native_tool_bindings WHERE operation_id=?`, id).Scan(&session, &sr, &generation, &b.catalog, &b.route, &rr, &owner, &assignment, &request, &params, &group, &digest, &replay, &parent, &b.server, &b.name, &b.cancel)
 	if errors.Is(err, sql.ErrNoRows) {
 		return b, nativetool.ErrNotFound
 	}
@@ -62,6 +66,12 @@ func loadNativeBinding(ctx context.Context, tx *sql.Tx, id nativetool.ID) (nativ
 	b.routeRevision = uint64(rr)
 	copy(b.digest[:], digest)
 	copy(b.request[:], request)
+	copy(b.group[:], group)
+	copy(b.params[:], params)
+	b.replay = replay
+	if b.cancel != nil && len(b.cancel) != 32 {
+		return b, nativetool.ErrInvalid
+	}
 	return b, nil
 }
 func loadNativeOperation(ctx context.Context, tx *sql.Tx, id nativetool.ID) (nativetool.Operation, error) {
@@ -158,6 +168,12 @@ func loadNativeOperation(ctx context.Context, tx *sql.Tx, id nativetool.ID) (nat
 		return op, err
 	}
 	if err == nil {
+		if (op.Kind == nativetool.RequestCancel) != (b.cancel != nil) {
+			return op, nativetool.ErrInvalid
+		}
+		if err := verifyNativeBindingEvidence(ctx, tx, op, b, aggregate); err != nil {
+			return op, err
+		}
 		s, err := loadNativeSession(ctx, tx, b.session)
 		if err != nil {
 			return op, err

@@ -40,6 +40,40 @@ func openFrozenV1Store(t *testing.T, path string) *Store {
 	reads := sql.OpenDB(newSQLiteReadConnector(path, time.Second))
 	return &Store{databasePath: path, database: db, reads: reads, operations: operations, closeDone: make(chan struct{}), repo: newRepository(db, operations), activityRepo: newActivityRepository(db, reads, operations), providerAccounts: newProviderAccountRepository(db, operations, time.Second, sqlTransactionCommitter{}), upstreamEndpoints: newUpstreamEndpointRepository(db, operations, time.Second, sqlTransactionCommitter{}), environments: newEnvironmentRepository(db, operations, time.Second, sqlTransactionCommitter{}), exchangeContents: newExchangeContentRepository(db, operations), egressAttempts: newEgressAttemptRepository(db, operations), rawEvidence: newRawEvidenceRepository(db, operations)}
 }
+
+// Frozen v1 fixtures do not use today's v2 mutation or shutdown hooks.
+func closeFrozenV1Store(t *testing.T, store *Store) {
+	t.Helper()
+	store.operations.closeAdmission()
+	if err := store.operations.drain(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := errors.Join(store.reads.Close(), store.database.Close()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func seedFrozenV1Environment(t *testing.T, store *Store, candidate environment.Environment, now time.Time) {
+	t.Helper()
+	encoded, digest, err := encodeEnvironmentCandidate(candidate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tx, err := store.database.BeginTx(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`INSERT INTO environment_revision_counters(environment_id,active_revision,draft_revision) VALUES(?,?,1)`, candidate.ID, candidate.Revision); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(`INSERT INTO environment_revisions(environment_id,revision,name,state,format_version,payload_json,candidate_digest,published_at_unix_ms) VALUES(?,?,?,?,?,?,?,?)`, candidate.ID, candidate.Revision, candidate.Name, candidate.State, environmentAggregateFormatVersion, encoded, digest[:], now.UnixMilli()); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+}
 func seedPopulatedV1(t *testing.T, store *Store) {
 	t.Helper()
 	ctx := context.Background()
@@ -50,20 +84,9 @@ func seedPopulatedV1(t *testing.T, store *Store) {
 	if _, err := store.ProviderAccountRepository().Write(ctx, 0, account); err != nil {
 		t.Fatal(err)
 	}
-	manager := newEnvironmentManager(t, store)
 	candidate := environmentFixture(t, "native-legacy", 1)
 	candidate.ContentRecording = environment.ContentRecordingPolicy{Mode: environment.ContentRecordingOff}
-	draft, err := manager.SaveDraft(ctx, environment.DraftCommand{Candidate: candidate})
-	if err != nil {
-		t.Fatal(err)
-	}
-	preview, err := manager.Preview(ctx, candidate.ID, draft.Revision)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := manager.Publish(ctx, preview); err != nil {
-		t.Fatal(err)
-	}
+	seedFrozenV1Environment(t, store, candidate, now)
 	if err := store.ExchangeContentRepository().Put(ctx, contentRecordFixture(t, "legacy-history", now)); err != nil {
 		t.Fatal(err)
 	}
@@ -120,9 +143,7 @@ func populatedV1MigrationFixture(t *testing.T) migrationFixture {
 			}
 		}
 	}
-	if err := store.Shutdown(context.Background()); err != nil {
-		t.Fatal(err)
-	}
+	closeFrozenV1Store(t, store)
 	source = stopped
 	for _, dir := range []string{source, snapshot} {
 		if err := os.WriteFile(filepath.Join(dir, "synthetic-private-config"), []byte("private-test-only"), 0600); err != nil {

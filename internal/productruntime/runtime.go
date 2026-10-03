@@ -217,6 +217,9 @@ func startWithBuilders(
 		return fail("sqlite", incompleteErr)
 	}
 	cleanups.register("sqlite", storageResult.store.Shutdown)
+	if err := storageResult.store.NativeToolRepository().Recover(ctx, options.Clock.Now().UTC()); err != nil {
+		return fail("native tool recovery", err)
+	}
 	egressRepository := storageResult.store.EgressAttemptRepository()
 	if egressRepository == nil {
 		return fail(

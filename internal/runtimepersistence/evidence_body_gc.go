@@ -31,24 +31,32 @@ func deleteRawEvidence(ctx context.Context, tx *sql.Tx, query string, args ...an
 		return 0, err
 	}
 	for _, digest := range uniqueStrings(bodies) {
-		var manifest []byte
-		err := tx.QueryRowContext(ctx, `DELETE FROM runtime_evidence_bodies
+		if err := releaseEvidenceBody(ctx, tx, []byte(digest)); err != nil {
+			return 0, err
+		}
+	}
+	return count, nil
+}
+
+func releaseEvidenceBody(ctx context.Context, tx *sql.Tx, digest []byte) error {
+	var manifest []byte
+	err := tx.QueryRowContext(ctx, `DELETE FROM runtime_evidence_bodies
 		 WHERE digest=? AND NOT EXISTS(SELECT 1 FROM runtime_raw_evidence_envelopes WHERE stored_body_digest=?)
-		 RETURNING chunk_manifest`, []byte(digest), []byte(digest)).Scan(&manifest)
-		if errors.Is(err, sql.ErrNoRows) {
-			continue
-		}
-		if err != nil {
-			return 0, fmt.Errorf("release evidence body: %w", err)
-		}
-		if _, err := tx.ExecContext(ctx, `WITH RECURSIVE spans(position) AS (
+		 AND NOT EXISTS(SELECT 1 FROM native_tool_contents WHERE body_digest=?)
+		 RETURNING chunk_manifest`, digest, digest, digest).Scan(&manifest)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("release evidence body: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `WITH RECURSIVE spans(position) AS (
 		 VALUES(1) UNION ALL SELECT position+32 FROM spans WHERE position+32<=length(?)
 		) DELETE FROM runtime_evidence_chunks
 		 WHERE digest IN(SELECT substr(?,position,32) FROM spans)
 		 AND NOT EXISTS(SELECT 1 FROM runtime_evidence_chunk_refs WHERE chunk_digest=runtime_evidence_chunks.digest)`,
-			manifest, manifest); err != nil {
-			return 0, fmt.Errorf("release evidence chunks: %w", err)
-		}
+		manifest, manifest); err != nil {
+		return fmt.Errorf("release evidence chunks: %w", err)
 	}
-	return count, nil
+	return nil
 }

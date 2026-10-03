@@ -212,28 +212,7 @@ func NewBinding(input BindingInput) (Binding, error) {
 		binding.replayKey = &key
 	}
 	route := input.Plan.Route()
-	binding.bindingDigest = hashJSON(struct {
-		Domain                             string
-		Kind                               RequestKind
-		Capture                            captureidentity.Reference
-		Environment                        environment.EnvironmentID
-		EnvironmentRevision                environment.Revision
-		EnvironmentDigest                  environment.CandidateDigest
-		Route                              environment.ClientToolRoute
-		Recording                          environment.ContentRecordingPolicy
-		Policy                             environment.PolicySet
-		Assignment, Owner                  uint64
-		Session                            ID
-		SessionRevision, CatalogGeneration uint64
-		Catalog                            *Digest
-		Parent                             *ID
-		Server                             *Digest
-		Request, Params, Group             Digest
-		Replay                             *Digest
-		Name                               string
-		RPCID                              *Digest
-		CancelledRPCID                     *Digest
-	}{"native-binding/v1", input.Kind, input.Capture, input.Plan.EnvironmentID(), input.Plan.EnvironmentRevision(), input.Plan.EnvironmentDigest(), route, input.Plan.ContentRecording(), input.Plan.PolicySet(), input.AssignmentRevision, input.OwnerEpoch, input.SessionID, input.SessionRevision, input.CatalogGeneration, binding.catalogDigest, binding.parentOperationID, binding.serverRequestDigest, binding.requestDigest, binding.paramsDigest, binding.groupDigest, binding.replayKey, binding.toolName, binding.rpcIDDigest, binding.cancelledRPCIDDigest})
+	binding.bindingDigest = bindingDigestV1(BindingEvidence{input.Kind, input.Capture, input.Plan.EnvironmentID(), input.Plan.EnvironmentRevision(), input.Plan.EnvironmentDigest(), route, input.Plan.ContentRecording(), input.Plan.PolicySet(), input.AssignmentRevision, input.OwnerEpoch, input.SessionID, input.SessionRevision, input.CatalogGeneration, binding.catalogDigest, binding.parentOperationID, binding.serverRequestDigest, binding.requestDigest, binding.paramsDigest, binding.groupDigest, binding.replayKey, binding.toolName, binding.rpcIDDigest, binding.cancelledRPCIDDigest})
 	return binding, nil
 }
 func revision(value uint64) bool { return value > 0 && value <= math.MaxInt64 }

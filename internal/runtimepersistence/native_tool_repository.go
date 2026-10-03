@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"math"
+	"sync"
 	"time"
 
 	"github.com/vibe-agi/vibermate/internal/captureidentity"
@@ -16,9 +17,15 @@ import (
 type nativeToolRepository struct {
 	database   *sql.DB
 	operations *operationGate
+	committer  transactionCommitter
+	issuerMu   sync.Mutex
+	issuer     *nativetool.StartReceiptIssuer
 }
 
 var _ nativetool.LifecycleRepository = (*nativeToolRepository)(nil)
+var _ nativetool.Repository = (*nativeToolRepository)(nil)
+
+func (store *Store) NativeToolRepository() nativetool.Repository { return store.nativeTools }
 
 func (store *Store) NativeLifecycleRepository() nativetool.LifecycleRepository {
 	return store.nativeTools
@@ -44,10 +51,13 @@ func (r *nativeToolRepository) transaction(ctx context.Context, fn func(context.
 	defer permit.finish()
 	tx, err := r.database.BeginTx(permit.context, nil)
 	if err != nil {
-		return errors.Join(nativetool.ErrUnavailable, err)
+		return errors.Join(nativetool.ErrUnavailable, err, context.Cause(permit.context))
 	}
 	defer tx.Rollback()
 	if err = fn(permit.context, tx); err != nil {
+		// SQLite interruption is not necessarily wrapped as context.Canceled.
+		// Preserve the actual cancellation/close cause at the owned boundary.
+		err = errors.Join(err, context.Cause(permit.context))
 		for _, known := range []error{nativetool.ErrInvalid, nativetool.ErrNotFound, nativetool.ErrConflict, nativetool.ErrDenied, nativetool.ErrReplay, nativetool.ErrUnavailable} {
 			if errors.Is(err, known) {
 				return err
@@ -55,8 +65,8 @@ func (r *nativeToolRepository) transaction(ctx context.Context, fn func(context.
 		}
 		return errors.Join(nativetool.ErrUnavailable, err)
 	}
-	if err = tx.Commit(); err != nil {
-		return errors.Join(nativetool.ErrUnavailable, err)
+	if err = r.committer.Commit(tx); err != nil {
+		return errors.Join(nativetool.ErrUnavailable, err, context.Cause(permit.context))
 	}
 	return nil
 }
@@ -82,6 +92,23 @@ func nativeCapture(ctx context.Context, tx *sql.Tx, c captureidentity.Reference,
 	}
 	if !valid || expires.Valid && expires.Int64 <= now.UnixMilli() {
 		return nativetool.ErrDenied
+	}
+	if c.Kind == captureidentity.KindManagedRun {
+		var active int
+		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM capture_runs WHERE run_id=? AND `+captureRunIdentityActive, c.ID, now.UnixMilli()).Scan(&active); err != nil {
+			return err
+		}
+		if active != 1 {
+			return nativetool.ErrDenied
+		}
+	} else {
+		var active int
+		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM manual_captures c WHERE capture_id=? AND (owner_kind='local_installation' OR EXISTS(SELECT 1 FROM proxy_client_bindings p WHERE p.binding_id=c.owner_id AND p.state='active'))`, c.ID).Scan(&active); err != nil {
+			return err
+		}
+		if active != 1 {
+			return nativetool.ErrDenied
+		}
 	}
 	return nil
 }
@@ -209,10 +236,7 @@ func (r *nativeToolRepository) EnsureScope(ctx context.Context, in nativetool.Sc
 			return nativetool.ErrConflict
 		}
 		if s.owner != in.OwnerEpoch {
-			if _, err := tx.ExecContext(ctx, `UPDATE native_tool_sessions SET state='revoked',revision=revision+1 WHERE capture_kind=? AND capture_id=? AND state IN('initializing','ready')`, in.Capture.Kind, in.Capture.ID); err != nil {
-				return err
-			}
-			if err := cancelNativeApprovals(ctx, tx, in.Capture, now, "canceled"); err != nil {
+			if err := retireNativeWork(ctx, tx, in.Capture, now); err != nil {
 				return err
 			}
 		}
@@ -251,10 +275,7 @@ func (r *nativeToolRepository) RegisterSession(ctx context.Context, in nativetoo
 			if _, err := tx.ExecContext(ctx, `UPDATE native_tool_scopes SET replay_barrier=1 WHERE capture_kind=? AND capture_id=?`, in.Capture.Kind, in.Capture.ID); err != nil {
 				return err
 			}
-			if _, err := tx.ExecContext(ctx, `UPDATE native_tool_sessions SET state='revoked',revision=revision+1 WHERE capture_kind=? AND capture_id=? AND state IN('initializing','ready')`, in.Capture.Kind, in.Capture.ID); err != nil {
-				return err
-			}
-			if err := cancelNativeApprovals(ctx, tx, in.Capture, now, "canceled"); err != nil {
+			if err := retireNativeWork(ctx, tx, in.Capture, now); err != nil {
 				return err
 			}
 		}
@@ -736,7 +757,7 @@ func (r *nativeToolRepository) Bind(ctx context.Context, id nativetool.ID, b nat
 			if hasCatalog {
 				frozen.catalog = catalog[:]
 			}
-			if err := validateNativeParent(ctx, tx, op, frozen, s); err != nil {
+			if err := validateNativeParent(ctx, tx, op, frozen, s, now); err != nil {
 				return err
 			}
 		default:
@@ -761,12 +782,13 @@ func (r *nativeToolRepository) Bind(ctx context.Context, id nativetool.ID, b nat
 		}
 		server, hasServer := b.ServerRequestDigest()
 		replay, hasReplay := b.ReplayKey()
+		cancel, hasCancel := b.CancelledRPCIDDigest()
 		route := plan.Route()
 		request := b.RequestDigest()
 		params := b.ParamsDigest()
 		group := b.GroupDigest()
 		digest := b.Digest()
-		if _, err := tx.ExecContext(ctx, `INSERT INTO native_tool_bindings(operation_id,session_id,session_revision,catalog_generation,catalog_digest,route_id,route_revision,owner_epoch,assignment_revision,request_digest,params_digest,group_digest,binding_digest,replay_key,parent_operation_id,server_request_digest,tool_name) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, id, b.SessionID(), b.SessionRevision(), b.CatalogGeneration(), nativeOptional(catalog, hasCatalog), route.ID, route.Revision, b.OwnerEpoch(), b.AssignmentRevision(), request[:], params[:], group[:], digest[:], nativeOptional(replay, hasReplay), parentValue, nativeOptional(server, hasServer), b.ToolName()); err != nil {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO native_tool_bindings(operation_id,session_id,session_revision,catalog_generation,catalog_digest,route_id,route_revision,owner_epoch,assignment_revision,request_digest,params_digest,group_digest,binding_digest,replay_key,parent_operation_id,server_request_digest,tool_name,cancel_rpc_id_digest) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, id, b.SessionID(), b.SessionRevision(), b.CatalogGeneration(), nativeOptional(catalog, hasCatalog), route.ID, route.Revision, b.OwnerEpoch(), b.AssignmentRevision(), request[:], params[:], group[:], digest[:], nativeOptional(replay, hasReplay), parentValue, nativeOptional(server, hasServer), b.ToolName(), nativeOptional(cancel, hasCancel)); err != nil {
 			return err
 		}
 		if plan.PolicySet().ToolMode == environment.ToolPolicyStrict && (b.Kind() == nativetool.RequestToolsCall || b.Kind() == nativetool.RequestServerReply) {
@@ -784,7 +806,7 @@ func (r *nativeToolRepository) Bind(ctx context.Context, id nativetool.ID, b nat
 	return nil
 }
 
-func validateNativeParent(ctx context.Context, tx *sql.Tx, op nativetool.Operation, b nativeBindingRow, s nativeSession) error {
+func validateNativeParent(ctx context.Context, tx *sql.Tx, op nativetool.Operation, b nativeBindingRow, s nativeSession, now time.Time) error {
 	if b.parent == nil || *b.parent == op.ID || s.state != "ready" {
 		return nativetool.ErrDenied
 	}
@@ -799,5 +821,5 @@ func validateNativeParent(ctx context.Context, tx *sql.Tx, op nativetool.Operati
 	if p.Capture != op.Capture || p.EnvironmentID != op.EnvironmentID || p.EnvironmentRevision != op.EnvironmentRevision || p.EnvironmentDigest != op.EnvironmentDigest || p.TargetOrigin != op.TargetOrigin || p.Kind != nativetool.RequestToolsCall || p.State != "started" || parent.session != s.id || parent.owner != s.owner || parent.assignment != s.assignment || parent.sessionRevision != b.sessionRevision || parent.generation != b.generation || string(parent.catalog) != string(b.catalog) {
 		return nativetool.ErrDenied
 	}
-	return nil
+	return verifyNativeCommittedParent(ctx, tx, p, parent, s, now)
 }

@@ -94,6 +94,9 @@ type StartReceipt struct {
 	operationID       ID
 	attemptID         string
 	authorityRevision uint64
+	ownerEpoch        uint64
+	bindingDigest     Digest
+	issuer            [32]byte
 }
 
 func (receipt StartReceipt) OperationID() ID   { return receipt.operationID }

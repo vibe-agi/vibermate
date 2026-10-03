@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/vibe-agi/vibermate/internal/captureidentity"
 	"github.com/vibe-agi/vibermate/internal/capturerun"
 	"github.com/vibe-agi/vibermate/internal/clientadapter"
 	"github.com/vibe-agi/vibermate/internal/runtimeuser"
@@ -338,7 +339,12 @@ func (repository *captureRunRepository) Finish(
 		return err
 	}
 	defer finish()
-	result, err := repository.database.ExecContext(
+	transaction, err := repository.database.BeginTx(operation, nil)
+	if err != nil {
+		return err
+	}
+	defer transaction.Rollback()
+	result, err := transaction.ExecContext(
 		operation,
 		`UPDATE capture_runs
 		 SET state = 'finished', updated_at_unix_ms = ?
@@ -359,7 +365,10 @@ func (repository *captureRunRepository) Finish(
 	if affected != 1 {
 		return capturerun.ErrCapabilityRejected
 	}
-	return nil
+	if err := revokeNativeScope(operation, transaction, captureidentity.Reference{Kind: captureidentity.KindManagedRun, ID: runID}, now); err != nil {
+		return err
+	}
+	return transaction.Commit()
 }
 
 func (repository *captureRunRepository) Recover(
@@ -394,6 +403,9 @@ func (repository *captureRunRepository) Recover(
 	if err != nil {
 		return capturerun.Recovery{}, fmt.Errorf("count expired CaptureRuns: %w", err)
 	}
+	if err := revokeNativeScopesWhere(operation, transaction, `capture_kind='managed_run' AND capture_id IN(SELECT run_id FROM capture_runs WHERE state='expired')`, now); err != nil {
+		return capturerun.Recovery{}, err
+	}
 	var active int
 	if err := transaction.QueryRowContext(
 		operation,
@@ -423,7 +435,12 @@ func (repository *captureRunRepository) RevokeActive(
 		return 0, err
 	}
 	defer finish()
-	result, err := repository.database.ExecContext(
+	transaction, err := repository.database.BeginTx(operation, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer transaction.Rollback()
+	result, err := transaction.ExecContext(
 		operation,
 		`UPDATE capture_runs
 		 SET state = 'revoked', updated_at_unix_ms = ?
@@ -436,6 +453,12 @@ func (repository *captureRunRepository) RevokeActive(
 	affected, err := result.RowsAffected()
 	if err != nil {
 		return 0, fmt.Errorf("count revoked CaptureRuns: %w", err)
+	}
+	if err := revokeNativeScopesWhere(operation, transaction, `capture_kind='managed_run' AND capture_id IN(SELECT run_id FROM capture_runs WHERE state='revoked')`, now); err != nil {
+		return 0, err
+	}
+	if err := transaction.Commit(); err != nil {
+		return 0, err
 	}
 	return int(affected), nil
 }
