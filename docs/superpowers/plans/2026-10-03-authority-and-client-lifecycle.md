@@ -110,14 +110,16 @@ DEVELOPER_DIR=/Library/Developer/CommandLineTools go test -race -short ./interna
 **Interfaces:**
 - Consumes: 已验证的 executable 路径、用户原始 argv、现有准备后的 argv、caller environment、已知 client family。
 - Produces: 私有 `prepareCodexCaptureArguments(ctx context.Context, executable string, original []string, prepared []string, environment []string, legacyIndependent bool) ([]string, error)`。
-- `legacyIndependent` 只能由当前有效的 Codex 0.145.0 Adapter evidence 导出；不能由 probe 的自报版本直接授予。
+- `legacyIndependent` 只能由当前有效的 Codex 0.145.0 Adapter evidence 与 LaunchCodexResponsesHTTP recipe 共同导出；helper 还须确认准备参数中该 recipe 的必需非空 config override 前缀，不能由 probe 的自报版本或用户任意 config 参数直接授予。
 - New sentinel: `ErrCodexIsolationUnsupported`，由 CLI 映射到本地化说明。
 - 只在 catalog 已知 Codex family 的调用点使用；此函数不提高 recognition，不修改 Adapter/Root/Account 权限。
 - 新私有 `classifyCodexInvocation(args []string) (codexInvocationKind, error)`；枚举 interactive、separate-process、remote。
 
 - [ ] **Step 1: 先核对真实参数契约并保存元数据证据。**
 
-在隔离配置中查看实际 Codex 0.145.0、0.159.2、0.160.0 的 `--version`、`--help`、`exec --help`、`resume --help`，并核对对应官方源码。证据只记录版本、支持的参数和进程模式，不记录登录文件/环境值。若支持入口与本设计不同，先记 controller ruling、修订契约，再写实现。
+在隔离配置中查看实际 Codex 0.145.0、0.159.2、0.160.0 的 `--version`、`--help`、`exec --help`、`resume --help`、`app-server --help`，并核对对应官方源码。证据只记录版本、支持的参数和进程模式，不记录登录文件/环境值。若支持入口与本设计不同，先记 controller ruling、修订契约，再写实现。
+
+Controller 已完成上述三版帮助、官方源码 tag→commit 核对；证据在 `.superpowers/sdd/2026-10-03-authority-and-client-lifecycle/codex-0.160-contract-evidence.md`。0.145.0 并非天然独立：其非空 config override 才会禁用已有 daemon 复用，必须绑定已验证 recipe 前缀。所有版本的 app-server 都有 daemon/proxy 子命令，不能把整个 app-server family 当成前台进程。实现者须核对对应源码的实际分支；已有 session 控制命令没有独立证明时失败关闭。
 
 - [ ] **Step 2: 为复用旧后台的触发条件写 red 集成用例。**
 
@@ -138,7 +140,7 @@ cases := []struct {
     {[]string{"--remote", "ws://127.0.0.1:9999"}, codexRemote},
 }
 ```
-加入已有 `--no-daemon` 的幂等用例与 help 超时/超量输出用例。fake help 只替代外部 CLI 进程，Launcher/argv consumer 保持真实。
+加入已有 `--no-daemon` 的幂等用例、help 超时/超量输出、legacy 缺少 recipe/config 前缀拒绝、app-server daemon/proxy 与 agents 拒绝用例。测试 global/嵌套 option values、变长 image 和短参数组合；不能把名为 exec/daemon 的 option 值当命令，也不能把 `--` 后的提示当控制参数。fake help 只替代外部 CLI 进程，Launcher/argv consumer 保持真实。
 
 - [ ] **Step 3: 跑 red。**
 
@@ -154,13 +156,14 @@ Expected：当前调用允许共享后台继续工作，或没有隔离参数准
 处理规则：
 ```text
 remote invocation -> ErrCodexIsolationUnsupported
+existing-daemon control/proxy, shared-only or unproven mode -> ErrCodexIsolationUnsupported
 separate-process invocation -> prepared argv unchanged
 interactive + explicit --no-daemon -> prepared argv unchanged
 interactive + proven --no-daemon support -> prefix --no-daemon
-verified 0.145.0 legacy no-shared-server contract -> existing argv
+verified 0.145.0 + verified launch recipe + mandatory prepared config override prefix -> existing argv
 other unproven interactive mode -> ErrCodexIsolationUnsupported
 ```
-原始提示、option values、`--` 分隔及 approval/sandbox 参数全部保留。能力事实不改变 release 验证和 Root 授权。Actual launcher 在创建 child 前消费准备结果，失败仍用原有 finish cleanup。
+原始提示、option values、`--` 分隔及 approval/sandbox 参数全部保留。普通前台 app-server 与其 daemon/proxy 子命令分别证明；未知或歧义的入口不能回落到共享后台。能力事实不改变 release 验证和 Root 授权。Actual launcher 在创建 child 前消费准备结果，失败仍用原有 finish cleanup。
 
 核心参数变换（分类与 probe 在本任务内定义）：
 ```go
@@ -171,7 +174,9 @@ if kind == codexSeparateProcess || explicitNoDaemon {
 if supportsNoDaemon {
     return append([]string{"--no-daemon"}, prepared...), nil
 }
-if legacyIndependent { return append([]string(nil), prepared...), nil }
+if legacyIndependent && hasVerifiedRecipeConfigPrefix(prepared, original) {
+    return append([]string(nil), prepared...), nil
+}
 return nil, ErrCodexIsolationUnsupported
 ```
 
