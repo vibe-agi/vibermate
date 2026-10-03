@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:vibermate_app/core/api/control_api.dart';
 import 'package:vibermate_app/core/api/control_models.dart';
@@ -109,6 +110,440 @@ void main() {
     expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox.shrink());
   });
+
+  for (final imagePayload in [false, true]) {
+    testWidgets('wire tool return does not invent User image=$imagePayload', (
+      tester,
+    ) async {
+      final api = _ReaderApi();
+      final activity = (await api.fixture.activities(
+        captureRunId: 'run-1',
+      )).items.firstWhere((a) => a.status == 'succeeded');
+      final base = await api.exchange(activity.id);
+      final result = imagePayload
+          ? ExchangeContentBlock.fromJson({
+              'kind': 'tool_result',
+              'availability': 'recorded',
+              'originalSize': 32,
+              'callId': 'claude-return',
+              'providerKind': 'input_image',
+              'text': 'TOOL_IMAGE_PAYLOAD',
+            }, 'fixture')
+          : tool('tool_result', 'claude-return');
+      api.details[activity.id] = detail(
+        base,
+        [
+          ExchangeContentMessage(role: 'user', blocks: [result], agent: null),
+        ],
+        [block('text', 'DONE')],
+        checkpoint: true,
+        inputAnchor: List.filled(64, 'c').join(),
+      );
+      final controller = makeController(api);
+      addTearDown(controller.dispose);
+      await tester.pumpWidget(host(controller, [activity]));
+      await tester.pumpAndSettle();
+      expect(find.text('User'), findsNothing);
+      expect(find.byType(Image), findsNothing);
+      await tester.tap(find.byKey(Key('reader-tools-${activity.id}')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('reader-detail-tab-1')));
+      await tester.pumpAndSettle();
+      expect(
+        find.text(imagePayload ? 'TOOL_IMAGE_PAYLOAD' : 'MATCHED_TOOL_RESULT'),
+        findsOneWidget,
+      );
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox.shrink());
+    });
+  }
+
+  for (final humanKind in ['text', 'refusal', 'image']) {
+    testWidgets('wire tool return preserves real $humanKind once', (
+      tester,
+    ) async {
+      final api = _ReaderApi();
+      final activity = (await api.fixture.activities(
+        captureRunId: 'run-1',
+      )).items.firstWhere((a) => a.status == 'succeeded');
+      final base = await api.exchange(activity.id);
+      api.details[activity.id] = detail(
+        base,
+        [
+          ExchangeContentMessage(
+            role: 'user',
+            blocks: [
+              tool('tool_result', 'mixed-return'),
+              humanKind == 'image'
+                  ? readerImage('a')
+                  : block(humanKind, 'REAL HUMAN CONTENT'),
+            ],
+            agent: null,
+          ),
+        ],
+        [block('text', 'DONE')],
+        checkpoint: true,
+        inputAnchor: List.filled(64, 'c').join(),
+      );
+      final controller = makeController(api);
+      addTearDown(controller.dispose);
+      await tester.pumpWidget(host(controller, [activity]));
+      await tester.pumpAndSettle();
+      expect(find.text('User'), findsOneWidget);
+      expect(find.text('MATCHED_TOOL_RESULT'), findsNothing);
+      if (humanKind == 'image') {
+        expect(find.byType(Image), findsOneWidget);
+        expect(
+          find.byKey(Key('reader-copy-${activity.id}-input')),
+          findsNothing,
+        );
+      } else {
+        expect(find.text('REAL HUMAN CONTENT'), findsOneWidget);
+      }
+      await tester.tap(find.byKey(Key('reader-tools-${activity.id}')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('reader-detail-tab-1')));
+      await tester.pumpAndSettle();
+      expect(find.text('MATCHED_TOOL_RESULT'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox.shrink());
+    });
+  }
+
+  for (final language in AppLanguage.values) {
+    for (final verifiedKind in ['text', 'image', 'tool_result']) {
+      testWidgets(
+        'unproved deferred input stays neutral then loads $verifiedKind in $language',
+        (tester) async {
+          await tester.binding.setSurfaceSize(const Size(390, 1000));
+          addTearDown(() => tester.binding.setSurfaceSize(null));
+          final api = _ReaderApi();
+          final activity = (await api.fixture.activities(
+            captureRunId: 'run-1',
+          )).items.firstWhere((a) => a.status == 'succeeded');
+          final base = await api.exchange(activity.id);
+          api.details[activity.id] = detail(
+            base,
+            [
+              ExchangeContentMessage(
+                role: 'unknown',
+                blocks: [readerDeferred(activity.id, 'unproved-input')],
+                agent: null,
+              ),
+            ],
+            [block('text', 'DONE')],
+            checkpoint: true,
+            reading: true,
+          );
+          // R3's unproved message cursor returns canonical blocks, not a
+          // manufactured user role or inputAnchor (reading_content.go).
+          api.pages['unproved-input'] = ExchangeContentPage(
+            exchangeId: activity.id,
+            kind: 'message',
+            messages: const [],
+            blocks: [
+              if (verifiedKind == 'image')
+                readerImage('a')
+              else if (verifiedKind == 'tool_result')
+                tool('tool_result', 'verified-return')
+              else
+                block('text', 'VERIFIED HUMAN TEXT'),
+              readerDeferred(activity.id, 'nested-input'),
+            ],
+            text: '',
+            offset: 0,
+            total: 2,
+          );
+          api.pages['nested-input'] = ExchangeContentPage(
+            exchangeId: activity.id,
+            kind: 'text',
+            messages: const [],
+            blocks: const [],
+            text: 'NESTED SEGMENT',
+            offset: 0,
+            total: 14,
+          );
+          final controller = makeController(api);
+          addTearDown(controller.dispose);
+          final copy = AppCopy.forLanguage(language);
+          await tester.pumpWidget(
+            host(controller, [activity], language: language, scale: 2),
+          );
+          await tester.pumpAndSettle();
+          expect(find.text(copy('exchange.role.user')), findsNothing);
+          expect(
+            find.byKey(Key('reader-copy-${activity.id}-input-0')),
+            findsNothing,
+          );
+          final before = readerPosition(tester).pixels;
+          final open = find.byKey(
+            const ValueKey('content-page-open-unproved-input'),
+          );
+          expect(open, findsOneWidget);
+          await tester.ensureVisible(open);
+          await tester.tap(open);
+          await tester.pumpAndSettle();
+          expect(find.text(copy('exchange.role.user')), findsNothing);
+          if (verifiedKind == 'image') {
+            final thumbnail = find.byKey(
+              ValueKey('image-thumbnail-sha256:${List.filled(64, 'a').join()}'),
+            );
+            await tester.ensureVisible(thumbnail);
+            await tester.tap(thumbnail);
+            await tester.pumpAndSettle();
+            expect(find.byType(InteractiveViewer), findsOneWidget);
+            await tester.tap(find.byKey(const Key('image-preview-close')));
+            await tester.pumpAndSettle();
+          } else {
+            expect(
+              find.text(
+                verifiedKind == 'text'
+                    ? 'VERIFIED HUMAN TEXT'
+                    : 'MATCHED_TOOL_RESULT',
+              ),
+              findsOneWidget,
+            );
+          }
+          final nested = find.byKey(
+            const ValueKey('content-page-open-nested-input'),
+          );
+          await tester.ensureVisible(nested);
+          await tester.pumpAndSettle();
+          await tester.tap(nested);
+          await tester.pumpAndSettle();
+          expect(find.text('NESTED SEGMENT'), findsOneWidget);
+          await tester.tap(find.byKey(const Key('content-page-back')));
+          await tester.pumpAndSettle();
+          expect(find.text('NESTED SEGMENT'), findsNothing);
+          expect(
+            find.byKey(const ValueKey('content-page-open-nested-input')),
+            findsOneWidget,
+          );
+          await tester.tap(find.byKey(const Key('content-page-close')));
+          await tester.pumpAndSettle();
+          expect(readerPosition(tester).pixels, before);
+          expect(find.text(copy('exchange.role.user')), findsNothing);
+          expect(tester.takeException(), isNull);
+          await tester.pumpWidget(const SizedBox.shrink());
+        },
+      );
+    }
+  }
+
+  testWidgets('deferred wire-user input uses neutral content entry', (
+    tester,
+  ) async {
+    final api = _ReaderApi();
+    final activity = (await api.fixture.activities(
+      captureRunId: 'run-1',
+    )).items.firstWhere((a) => a.status == 'succeeded');
+    final base = await api.exchange(activity.id);
+    api.details[activity.id] = detail(
+      base,
+      [
+        ExchangeContentMessage(
+          role: 'user',
+          blocks: [readerDeferred(activity.id, 'untyped')],
+          agent: null,
+        ),
+      ],
+      [block('text', 'DONE')],
+      checkpoint: true,
+      inputAnchor: List.filled(64, 'c').join(),
+    );
+    final controller = makeController(api);
+    addTearDown(controller.dispose);
+    await tester.pumpWidget(host(controller, [activity]));
+    await tester.pumpAndSettle();
+    expect(find.text('User'), findsNothing);
+    expect(
+      find.byKey(const ValueKey('content-page-open-untyped')),
+      findsOneWidget,
+    );
+    expect(find.byKey(Key('reader-copy-${activity.id}-input')), findsNothing);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets('human attachments keep observed text and image order at 390px', (
+    tester,
+  ) async {
+    String? copiedText;
+    tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+      SystemChannels.platform,
+      (call) async {
+        if (call.method == 'Clipboard.setData') {
+          copiedText = (call.arguments as Map)['text'] as String;
+        }
+        return null;
+      },
+    );
+    addTearDown(
+      () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        SystemChannels.platform,
+        null,
+      ),
+    );
+    await tester.binding.setSurfaceSize(const Size(390, 1200));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final api = _ReaderApi();
+    final activity = (await api.fixture.activities(
+      captureRunId: 'run-1',
+    )).items.firstWhere((a) => a.status == 'succeeded');
+    final base = await api.exchange(activity.id);
+    api.details[activity.id] = detail(
+      base,
+      [
+        ExchangeContentMessage(
+          role: 'user',
+          blocks: [
+            readerImage('a'),
+            block('text', 'QUESTION BETWEEN IMAGES'),
+            readerImage('b'),
+          ],
+          agent: null,
+        ),
+      ],
+      [block('text', 'DONE')],
+      checkpoint: true,
+      inputAnchor: List.filled(64, 'c').join(),
+    );
+    final controller = makeController(api);
+    addTearDown(controller.dispose);
+    await tester.pumpWidget(host(controller, [activity], scale: 2));
+    await tester.pumpAndSettle();
+    final first = find.byKey(
+      ValueKey('image-thumbnail-sha256:${List.filled(64, 'a').join()}'),
+    );
+    final second = find.byKey(
+      ValueKey('image-thumbnail-sha256:${List.filled(64, 'b').join()}'),
+    );
+    final question = find.text('QUESTION BETWEEN IMAGES');
+    expect(
+      tester.getTopLeft(first).dy,
+      lessThan(tester.getTopLeft(question).dy),
+    );
+    expect(
+      tester.getTopLeft(question).dy,
+      lessThan(tester.getTopLeft(second).dy),
+    );
+    expect(find.text('User'), findsOneWidget);
+    expect(find.byType(Image), findsNWidgets(2));
+    final before = readerPosition(tester).pixels;
+    await tester.ensureVisible(second);
+    await tester.tap(second);
+    await tester.pumpAndSettle();
+    expect(find.byType(InteractiveViewer), findsOneWidget);
+    await tester.tap(find.byKey(const Key('image-preview-close')));
+    await tester.pumpAndSettle();
+    expect(readerPosition(tester).pixels, before);
+    final copy = find.byKey(Key('reader-copy-${activity.id}-input'));
+    await tester.ensureVisible(copy);
+    await tester.tap(copy);
+    await tester.pumpAndSettle();
+    expect(copiedText, 'QUESTION BETWEEN IMAGES');
+    expect(question, findsOneWidget);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  for (final reading in [false, true]) {
+    testWidgets('mixed deferred input keeps observed order reading=$reading', (
+      tester,
+    ) async {
+      final api = _ReaderApi();
+      final activity = (await api.fixture.activities(
+        captureRunId: 'run-1',
+      )).items.firstWhere((a) => a.status == 'succeeded');
+      final base = await api.exchange(activity.id);
+      api.details[activity.id] = detail(
+        base,
+        [
+          ExchangeContentMessage(
+            role: 'user',
+            blocks: [
+              readerDeferred(activity.id, 'before-human'),
+              block('text', 'FIRST HUMAN TEXT'),
+              readerDeferred(activity.id, 'between-human'),
+              block('text', 'SECOND HUMAN TEXT'),
+            ],
+            agent: null,
+          ),
+        ],
+        [block('text', 'DONE')],
+        inputAnchor: reading ? List.filled(64, 'c').join() : null,
+      );
+      final controller = makeController(api);
+      addTearDown(controller.dispose);
+      await tester.pumpWidget(host(controller, [activity]));
+      await tester.pumpAndSettle();
+      final before = find.byKey(
+        const ValueKey('content-page-open-before-human'),
+      );
+      final between = find.byKey(
+        const ValueKey('content-page-open-between-human'),
+      );
+      expect(
+        tester.getTopLeft(before).dy,
+        lessThan(tester.getTopLeft(find.text('FIRST HUMAN TEXT')).dy),
+      );
+      expect(
+        tester.getTopLeft(find.text('FIRST HUMAN TEXT')).dy,
+        lessThan(tester.getTopLeft(between).dy),
+      );
+      expect(
+        tester.getTopLeft(between).dy,
+        lessThan(tester.getTopLeft(find.text('SECOND HUMAN TEXT')).dy),
+      );
+      expect(find.text('FIRST HUMAN TEXT'), findsOneWidget);
+      expect(find.text('SECOND HUMAN TEXT'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox.shrink());
+    });
+  }
+
+  testWidgets(
+    'identical questions retain distinct anchors and replay only once',
+    (tester) async {
+      await tester.binding.setSurfaceSize(const Size(1220, 1400));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      final api = _ReaderApi();
+      final activity = (await api.fixture.activities(
+        captureRunId: 'run-1',
+      )).items.firstWhere((a) => a.status == 'succeeded');
+      final base = await api.exchange(activity.id);
+      final repeated = readerActivity(
+        activity,
+        'repeated-question',
+        seconds: 1,
+      );
+      final replay = readerActivity(activity, 'replayed-request', seconds: 2);
+      for (final (row, anchor) in [
+        (activity, 'a'),
+        (repeated, 'b'),
+        (replay, 'b'),
+      ]) {
+        api.details[row.id] = detail(
+          base,
+          [message('user', 'THE SAME QUESTION')],
+          [block('text', 'REPLY ${row.id}')],
+          activity: row,
+          checkpoint: true,
+          inputAnchor: List.filled(64, anchor).join(),
+        );
+      }
+      final controller = makeController(api);
+      addTearDown(controller.dispose);
+      await tester.pumpWidget(host(controller, [activity, repeated, replay]));
+      await tester.pumpAndSettle();
+      expect(find.text('THE SAME QUESTION'), findsNWidgets(2));
+      expect(find.text('User'), findsNWidgets(2));
+      expect(find.byKey(Key('reader-copy-${replay.id}-input')), findsNothing);
+      expect(find.text('REPLY ${replay.id}'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox.shrink());
+    },
+  );
 
   testWidgets('a tool result is resolved beyond the visible history cache', (
     tester,
@@ -1899,6 +2334,27 @@ ExchangeContentBlock block(String kind, String text) =>
       'originalSize': text.length,
     }, 'fixture');
 
+ExchangeContentBlock readerImage(String hex) => ExchangeContentBlock.fromJson({
+  'kind': 'provider_extension',
+  'availability': 'omitted',
+  'originalSize': 100,
+  'providerSource': 'openai_responses',
+  'providerKind': 'input_image',
+  'fingerprint': 'sha256:${List.filled(64, hex).join()}',
+}, 'fixture');
+
+ExchangeContentBlock readerDeferred(String id, String cursor) =>
+    ExchangeContentBlock.fromJson({
+      'kind': 'deferred',
+      'availability': 'recorded',
+      'originalSize': 0,
+      'deferred': {
+        'exchangeId': id,
+        'cursor': cursor,
+        'estimatedBytes': 3 * 1024 * 1024,
+      },
+    }, 'fixture');
+
 ExchangeContentMessage message(String role, String text) =>
     ExchangeContentMessage(
       role: role,
@@ -1924,6 +2380,7 @@ ExchangeDetail detail(
   List<ExchangeContentMessage> messages,
   List<ExchangeContentBlock> output, {
   bool checkpoint = false,
+  bool reading = false,
   ActivityRecord? activity,
   String? inputAnchor,
 }) {
@@ -1937,7 +2394,7 @@ ExchangeDetail detail(
     processingTrace: base.processingTrace,
     clientIdentity: base.clientIdentity,
     content: ExchangeContentDetail(
-      page: inputAnchor == null
+      page: inputAnchor == null && !reading
           ? null
           : ExchangeContentPaging(requestOffset: 0, inputAnchor: inputAnchor),
       state: 'recorded',
@@ -1946,7 +2403,7 @@ ExchangeDetail detail(
       expiresAt: base.content.expiresAt,
       agentConversation: base.content.agentConversation,
       requestProjection: ExchangeRequestProjection(
-        view: inputAnchor == null ? 'incremental' : 'reading',
+        view: inputAnchor == null && !reading ? 'incremental' : 'reading',
         relationship: checkpoint ? 'checkpoint' : 'incremental',
         inheritedMessageCount: checkpoint ? 0 : 2,
         totalMessageCount: messages.length + (checkpoint ? 0 : 2),

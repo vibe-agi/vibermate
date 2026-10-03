@@ -1322,17 +1322,24 @@ List<ExchangeContentBlock> _readerInput(List<ExchangeContentMessage> messages) {
   if (images.isEmpty) return blocks;
   final attachmentLabel = RegExp(r'^\s*(?:\[Image #\d+\]\s*)+$');
   final fileLabel = RegExp(r'^\s*<image name=\[Image #\d+\] path="[^"]+">\s*$');
-  return [
-    ...blocks.where(
-      (b) =>
-          b.providerKind != 'input_image' &&
-          !(b.kind == 'text' &&
-              (attachmentLabel.hasMatch(b.text ?? '') ||
-                  fileLabel.hasMatch(b.text ?? ''))),
-    ),
-    ...images,
-  ];
+  return blocks
+      .where(
+        (b) =>
+            !(b.kind == 'text' &&
+                (attachmentLabel.hasMatch(b.text ?? '') ||
+                    fileLabel.hasMatch(b.text ?? ''))),
+      )
+      .toList(growable: false);
 }
+
+// A wire-user message may carry protocol tool returns. Only verified human
+// block kinds establish a User row; deferred blocks retain neutral provenance.
+bool _isHumanInput(ExchangeContentBlock block) =>
+    block.deferred == null &&
+    (block.kind == 'text' ||
+        block.kind == 'refusal' ||
+        (block.kind == 'provider_extension' &&
+            block.providerKind == 'input_image'));
 
 final class _ReadingRequest extends StatefulWidget {
   const _ReadingRequest({
@@ -1456,9 +1463,18 @@ final class _ReadingRequestState extends State<_ReadingRequest> {
         content.requestProjection?.relationship == 'incremental';
     final inputAnchor = content.page?.inputAnchor;
     final readingInput = inputAnchor != null;
-    final inputs = (readingInput ? widget.showInput(inputAnchor) : incremental)
+    // Reading can deliberately withhold the anchor when canonical role proof
+    // needs explicit loading. Keep that neutral entry even for a checkpoint.
+    final readingView = content.requestProjection?.view == 'reading';
+    final inputs =
+        (readingInput
+            ? widget.showInput(inputAnchor)
+            : readingView || incremental)
         ? content.request!.messages
         : const <ExchangeContentMessage>[];
+    final inputBlocks = _readerInput(
+      inputs.where((message) => message.role == 'user').toList(),
+    );
     final toolBlocks = [
       for (final m in inputs)
         ...m.blocks.where(
@@ -1551,34 +1567,25 @@ final class _ReadingRequestState extends State<_ReadingRequest> {
               copy: copy,
               label: copy('content_page.earlier'),
             ),
-          if (readingInput && inputs.isNotEmpty)
-            _ReadingMessage(
+          if (readingInput)
+            _ReadingInput(
               id: '${detail.id}-input',
               exchangeId: detail.id,
               role: 'user',
-              roleLabel: copy('exchange.role.user'),
-              blocks: _readerInput(inputs),
+              blocks: inputBlocks,
               copy: copy,
-              usage: null,
-              onUsage: null,
             ),
-          for (final (index, message)
-              in (readingInput ? const <ExchangeContentMessage>[] : inputs)
-                  .indexed)
+          for (final (index, message) in inputs.indexed)
             if (message.role != 'system' &&
                 message.role != 'developer' &&
-                message.role != 'tool' &&
-                _readerText(message.blocks).isNotEmpty)
-              _ReadingMessage(
+                (!readingInput || message.role != 'user'))
+              _ReadingInput(
                 id: '${detail.id}-input-$index',
                 exchangeId: detail.id,
                 role: message.role,
-                blocks: _readerText(message.blocks),
+                blocks: message.blocks,
                 copy: copy,
                 agent: message.agent,
-                roleLabel: copy('exchange.role.${message.role}'),
-                usage: null,
-                onUsage: null,
               ),
           if (text.isNotEmpty)
             _ReadingMessage(
@@ -1652,6 +1659,68 @@ final class _ReadingRequestState extends State<_ReadingRequest> {
           ),
         ],
       ),
+    );
+  }
+}
+
+final class _ReadingInput extends StatelessWidget {
+  const _ReadingInput({
+    required this.id,
+    required this.exchangeId,
+    required this.role,
+    required this.blocks,
+    required this.copy,
+    this.agent,
+  });
+  final String id, exchangeId, role;
+  final List<ExchangeContentBlock> blocks;
+  final AppCopy copy;
+  final ExchangeAgentContext? agent;
+
+  @override
+  Widget build(BuildContext context) {
+    final children = <Widget>[];
+    var human = <ExchangeContentBlock>[];
+    var segment = 0;
+    void flushHuman() {
+      if (human.isEmpty) return;
+      children.add(
+        _ReadingMessage(
+          id: segment == 0 ? id : '$id-part-$segment',
+          exchangeId: exchangeId,
+          role: role,
+          blocks: human,
+          copy: copy,
+          agent: agent,
+          roleLabel: copy('exchange.role.$role'),
+          usage: null,
+          onUsage: null,
+        ),
+      );
+      segment++;
+      human = <ExchangeContentBlock>[];
+    }
+
+    for (final block in blocks) {
+      if (block.deferred case final deferred?) {
+        flushHuman();
+        children.add(
+          _ContentPageButton(
+            exchangeId: deferred.exchangeId,
+            cursor: deferred.cursor,
+            estimatedBytes: deferred.estimatedBytes,
+            copy: copy,
+          ),
+        );
+      } else if ((role == 'user' || role == 'assistant') &&
+          _isHumanInput(block)) {
+        human.add(block);
+      }
+    }
+    flushHuman();
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: children,
     );
   }
 }
