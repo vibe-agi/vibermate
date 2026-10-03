@@ -68,6 +68,8 @@
 
 用户后续授权的绑定要求：每个 Environment 的 MCP 权限默认关闭；工具保留原客户端登录账号、模型仍用所选账号；ToolDecision 不绕过；完整 tools/call 与异常恢复不能缩为只读 discovery。用户允许内部数据格式安全升级，旧 revision-1 的数据先备份、迁移/恢复验证后才能启用新格式。controller 在执行前将迁移/原生持久化、原生传输与 CA 验收拆为自洽子计划并自检；这些准备稿不是已经通过的验收。不得伪造模型 Route/Exchange/批准或把生命周期藏在无关字段。
 
+第一个已自检、可执行的子计划是 `2026-10-03-schema-upgrade-snapshot.md`：冻结 v1 并验证完整私有回滚快照，不提升 revision、不启用 MCP。原生 DDL、事务迁移/启动与传输/CA 后续子计划须各自采用后执行。
+
 - [ ] 使用隔离、固定版本的官方客户端：Codex 0.145.0、0.159.2、0.160.0，Claude 2.1.220。校验实际 version，已有后台 fixture 与请求接收器不使用用户生产账号/配置。
 - [ ] 验证已有后台、interactive/exec/resume、两个 Environment 并行、工具输入/返回、图片、取消、断网重连与下一次启动。按持久 Activity/Capture/Environment ID 断言实际请求归属，不只检查终端文本 OK。
 - [ ] 为已观察 MCP 422 只采集 method/authority/path/status 元数据，核对相应官方源码/契约，写精确失败用例。修复应保留未知操作拒绝、原始凭据同源、保留策略和工具决策；测试 initialize/list 等只读协议入口，不触发外部应用写操作。
@@ -118,9 +120,9 @@ DEVELOPER_DIR=/Library/Developer/CommandLineTools go run golang.org/x/vuln/cmd/g
 
 | 项 | 当前状态 | 完成证据 |
 | --- | --- | --- |
-| 设计与三条详细计划 | 已写入，待 controller 自检 | 本文件及三个子计划 |
-| 隔离基线 | 待建立 | branch/worktree/seed SHA |
-| R1–R7 | 未修复 | 各子计划 red→green + review |
+| 设计与三条详细计划 | 已自检并执行 | 本文件及三个子计划/恢复账本 |
+| 隔离基线 | 已建立 | fix/production-readiness-20261003；seed b7a9ed0 |
+| R1–R7 | 已修复、独立复核通过 | 各子计划 red→green + review；core source 2cd4c53 |
 | 真实客户端与 CA | 未完成本次验收 | 精确版本/平台 reports |
 | 全包与持续运行 | 未完成本次验收 | 最终 SHA 的结果 |
 | 新版本交付 | 未发布 | GitHub release + Homebrew |
