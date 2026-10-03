@@ -16,6 +16,22 @@ import (
 
 const storedDigestHexBytes = 2 * sha256.Size
 
+// Manifests contain concatenated lowercase hex digests, not arbitrary TEXT.
+// Validate all bytes before collecting any block references: SQLite character
+// counts (and embedded NULs) must not hide spans from a caller's byte budget.
+func validStoredBlockManifest(manifest string) bool {
+	if len(manifest) == 0 || len(manifest)%storedDigestHexBytes != 0 || len(manifest) > protocolcore.MaxContentBlocks*storedDigestHexBytes {
+		return false
+	}
+	for i := range len(manifest) {
+		value := manifest[i]
+		if !((value >= '0' && value <= '9') || (value >= 'a' && value <= 'f')) {
+			return false
+		}
+	}
+	return true
+}
+
 // putStoredMessageBlocks writes a message as its role, agent context and an
 // ordered manifest of content-block digests.
 //
@@ -145,7 +161,7 @@ func loadStoredMessageBlocks(
 			"load Exchange content message: %w", err,
 		)
 	}
-	if len(manifest)%storedDigestHexBytes != 0 || manifest == "" {
+	if !validStoredBlockManifest(manifest) {
 		return exchangecontent.Message{}, exchangecontent.ErrInvalidEvidence
 	}
 	message := exchangecontent.Message{Role: role}
@@ -311,7 +327,7 @@ func loadStoredMessagesByDigest(
 		        messages.block_manifest
 		   FROM runtime_exchange_content_messages AS messages
 	   JOIN json_each(?) AS wanted ON wanted.value = messages.digest
-	   WHERE length(messages.block_manifest) BETWEEN 64 AND ?
+	   WHERE length(CAST(messages.block_manifest AS BLOB)) BETWEEN 64 AND ?
 	     AND coalesce(length(messages.agent_json),0)<=4096`,
 		string(wanted), 64*protocolcore.MaxContentBlocks,
 	)
@@ -327,7 +343,7 @@ func loadStoredMessagesByDigest(
 			_ = rows.Close()
 			return nil, exchangecontent.ErrInvalidEvidence
 		}
-		if len(item.manifest)%storedDigestHexBytes != 0 || item.manifest == "" {
+		if !validStoredBlockManifest(item.manifest) {
 			_ = rows.Close()
 			return nil, exchangecontent.ErrInvalidEvidence
 		}

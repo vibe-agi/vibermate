@@ -324,6 +324,118 @@ func TestReadingViewIntegrityRejectsForgedPayloadSizesBeforeHydration(t *testing
 	}
 }
 
+func TestReadingViewIntegrityRejectsHiddenManifestSpansBeforeHydration(t *testing.T) {
+	for _, variant := range []string{"nul_ascii", "nul_non_ascii", "non_ascii_only"} {
+		t.Run(variant, func(t *testing.T) {
+			store := openTestStore(t, filepath.Join(t.TempDir(), "runtime.db"))
+			t.Cleanup(func() { _ = store.Shutdown(context.Background()) })
+			ctx := context.Background()
+			at := time.Date(2026, 10, 2, 0, 0, 0, 0, time.UTC)
+			repo := store.ExchangeContentRepository()
+			small := transcriptContentRecordFixture(t, "hidden-spans", at, exchangecontent.ParentRef{}, []transcriptMessage{{role: protocolcore.RoleUser, text: "question"}}, "ANSWER")
+			large := contentRecordFixture(t, "unrelated-large-block", at)
+			large.Response = nil
+			large.Request.Messages[0].Blocks[0].Text = strings.Repeat("x", 8<<20)
+			large.Request.Messages[0].Blocks[0].OriginalSize = 8 << 20
+			for _, record := range []exchangecontent.Record{small, large} {
+				if err := repo.Put(ctx, record); err != nil {
+					t.Fatal(err)
+				}
+			}
+			smallDigest, _, _ := encodeStoredBlock(small.Request.Messages[0].Blocks[0])
+			largeDigest, largeJSON, _ := encodeStoredBlock(large.Request.Messages[0].Blocks[0])
+			// Store a valid identity block so hidden hydration necessarily fetches
+			// the full 8-MiB payload; its size/codec metadata is not forged.
+			if _, err := store.database.Exec(`UPDATE runtime_exchange_content_blocks SET codec='identity',payload=? WHERE digest=?`, largeJSON, largeDigest); err != nil {
+				t.Fatal(err)
+			}
+			manifest := smallDigest + "\x00" + strings.Repeat("a", 63) + largeDigest
+			wantTextBytes, wantBlobBytes := 64, 192
+			if variant == "nul_non_ascii" {
+				manifest = smallDigest + "\x00" + strings.Repeat("é", 31) + "a" + largeDigest
+			}
+			if variant == "non_ascii_only" {
+				// The current block-digest schema checks byte length/lowercase but
+				// does not require hex. A 64-byte non-ASCII digest is schema-valid
+				// and lets the foreign-key trigger accept this malformed manifest.
+				alias := strings.Repeat("é", 32)
+				if _, err := store.database.Exec(`INSERT INTO runtime_exchange_content_blocks(digest,plain_bytes,codec,payload) SELECT ?,plain_bytes,codec,payload FROM runtime_exchange_content_blocks WHERE digest=?`, alias, largeDigest); err != nil {
+					t.Fatal(err)
+				}
+				manifest = smallDigest + alias
+				wantTextBytes, wantBlobBytes = 96, 128
+			}
+			ref, err := loadStoredContentReference(ctx, store.database, small.ExchangeID, at)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := store.database.Exec(`UPDATE runtime_exchange_content_messages SET block_manifest=? WHERE digest=(SELECT message_digest FROM runtime_exchange_content_transcripts WHERE digest=?)`, manifest, ref.requestRoot); err != nil {
+				t.Fatal(err)
+			}
+			var textBytes, blobBytes int
+			if err := store.database.QueryRow(`SELECT length(block_manifest),length(CAST(block_manifest AS BLOB)) FROM runtime_exchange_content_messages WHERE digest=(SELECT message_digest FROM runtime_exchange_content_transcripts WHERE digest=?)`, ref.requestRoot).Scan(&textBytes, &blobBytes); err != nil {
+				t.Fatal(err)
+			}
+			if textBytes != wantTextBytes || blobBytes != wantBlobBytes {
+				t.Fatalf("fixture did not create the SQLite/Go byte mismatch: text=%d blob=%d", textBytes, blobBytes)
+			}
+			// Foreign keys remain enabled throughout fixture mutation.
+			var foreignKeys int
+			if err := store.database.QueryRow(`PRAGMA foreign_keys`).Scan(&foreignKeys); err != nil || foreignKeys != 1 {
+				t.Fatalf("foreign keys=%d: %v", foreignKeys, err)
+			}
+			for _, read := range []struct {
+				name string
+				run  func() error
+			}{
+				{"reading", func() error {
+					_, err := repo.GetPagedProjection(ctx, small.ExchangeID, at, exchangecontent.RequestViewReading)
+					return err
+				}},
+				{"full_page", func() error {
+					_, err := repo.GetPagedProjection(ctx, small.ExchangeID, at, exchangecontent.RequestViewFull)
+					return err
+				}},
+				{"full_record", func() error { _, err := repo.Get(ctx, small.ExchangeID, at); return err }},
+			} {
+				var before, after runtime.MemStats
+				runtime.ReadMemStats(&before)
+				err := read.run()
+				runtime.ReadMemStats(&after)
+				allocated := after.TotalAlloc - before.TotalAlloc
+				t.Logf("%s manifest text=%d byte=%d allocated=%d error=%v", read.name, textBytes, blobBytes, allocated, err)
+				if !errors.Is(err, exchangecontent.ErrInvalidEvidence) {
+					t.Errorf("%s accepted malformed manifest: %v", read.name, err)
+				}
+				if allocated > 1<<20 {
+					t.Errorf("%s fetched hidden unrelated 8-MiB block: allocated %d bytes", read.name, allocated)
+				}
+			}
+			// Restore the request, then corrupt only the response. A full Record
+			// read uses the single-message canonical loader for this location,
+			// independently of the batched request-message loader above.
+			if _, err := store.database.Exec(`UPDATE runtime_exchange_content_messages SET block_manifest=? WHERE digest=(SELECT message_digest FROM runtime_exchange_content_transcripts WHERE digest=?)`, smallDigest, ref.requestRoot); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := store.database.Exec(`UPDATE runtime_exchange_content_messages SET block_manifest=? WHERE digest=?`, manifest, ref.responseDigest.String); err != nil {
+				t.Fatal(err)
+			}
+			var before, after runtime.MemStats
+			runtime.ReadMemStats(&before)
+			_, err = repo.Get(ctx, small.ExchangeID, at)
+			runtime.ReadMemStats(&after)
+			allocated := after.TotalAlloc - before.TotalAlloc
+			t.Logf("full_response manifest text=%d byte=%d allocated=%d error=%v", textBytes, blobBytes, allocated, err)
+			if !errors.Is(err, exchangecontent.ErrInvalidEvidence) {
+				t.Errorf("full response accepted malformed manifest: %v", err)
+			}
+			if allocated > 1<<20 {
+				t.Errorf("full response fetched hidden unrelated 8-MiB block: allocated %d bytes", allocated)
+			}
+		})
+	}
+}
+
 func TestReadingViewPreservesBoundedUserGroupSuffix(t *testing.T) {
 	store := openTestStore(t, filepath.Join(t.TempDir(), "runtime.db"))
 	t.Cleanup(func() { _ = store.Shutdown(context.Background()) })

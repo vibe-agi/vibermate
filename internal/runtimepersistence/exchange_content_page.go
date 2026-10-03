@@ -418,18 +418,22 @@ func (repository *exchangeContentRepository) inlinePageMessage(ctx context.Conte
 	return message, size, nil
 }
 
+// Use BLOB lengths/offsets so preflight accounts for the exact bytes the Go
+// loader consumes. Require ASCII hex separately; SQLite TEXT matching alone
+// stops at NUL and cannot prove the rest of a manifest is valid.
 func (repository *exchangeContentRepository) inlineMessageSize(ctx context.Context, digest string, blockLimit int) (int, int, error) {
 	var count, sum, missing, metadataBytes int
 	err := repository.database.QueryRowContext(ctx, `WITH RECURSIVE message AS (
-	 SELECT role,agent_json,block_manifest FROM runtime_exchange_content_messages WHERE digest=?
-	 AND length(block_manifest)%64=0 AND length(block_manifest) BETWEEN 64 AND ?
+	 SELECT role,agent_json,CAST(block_manifest AS BLOB) AS manifest FROM runtime_exchange_content_messages WHERE digest=?
+	 AND length(CAST(block_manifest AS BLOB))%64=0 AND length(CAST(block_manifest AS BLOB)) BETWEEN 64 AND ?
+	 AND instr(CAST(block_manifest AS BLOB),x'00')=0 AND block_manifest NOT GLOB '*[^0-9a-f]*'
 	 AND coalesce(length(agent_json),0)<=4096
-	), spans(position) AS (SELECT 1 FROM message UNION ALL SELECT position+64 FROM spans,message WHERE position+64<=min(length(message.block_manifest),?))
-	SELECT length(message.block_manifest)/64,coalesce(sum(b.plain_bytes),0),sum(CASE WHEN b.digest IS NULL OR b.plain_bytes<1 OR b.plain_bytes>?
+	), spans(position) AS (SELECT 1 FROM message UNION ALL SELECT position+64 FROM spans,message WHERE position+64<=min(length(message.manifest),?))
+	SELECT length(message.manifest)/64,coalesce(sum(b.plain_bytes),0),sum(CASE WHEN b.digest IS NULL OR b.plain_bytes<1 OR b.plain_bytes>?
 	 OR b.codec NOT IN ('identity','zstd') OR length(b.payload)<1 OR length(b.payload)>b.plain_bytes
 	 OR (b.codec='identity' AND length(b.payload)<>b.plain_bytes) THEN 1 ELSE 0 END),
 	 coalesce(length(message.agent_json),0)+length(message.role)+64
-	FROM message,spans LEFT JOIN runtime_exchange_content_blocks b ON b.digest=substr(message.block_manifest,spans.position,64)`, digest, protocolcore.MaxContentBlocks*64, blockLimit*64, exchangecontent.MaxEncodedBytes).Scan(&count, &sum, &missing, &metadataBytes)
+	FROM message,spans LEFT JOIN runtime_exchange_content_blocks b ON b.digest=CAST(substr(message.manifest,spans.position,64) AS TEXT)`, digest, protocolcore.MaxContentBlocks*64, blockLimit*64, exchangecontent.MaxEncodedBytes).Scan(&count, &sum, &missing, &metadataBytes)
 	if err != nil || missing != 0 || count < 1 || sum > exchangecontent.MaxEncodedBytes {
 		return 0, 0, exchangecontent.ErrInvalidEvidence
 	}
