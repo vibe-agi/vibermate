@@ -6,14 +6,14 @@
 
 **Architecture:** 沿现有模块修复权限证明、实际客户端进程、证据链、提交边界与 UI 生命周期。三条子计划各自独立，控制器按 P1 优先顺序串行提交，最后合流到真实客户端、容量、打包和整体审查。
 
-**Tech Stack:** Go 1.26.8；Flutter 3.41.5；Node.js 22.23.1；SQLite revision 1。
+**Tech Stack:** Go 1.26.8；Flutter 3.41.5；Node.js 22.23.1；SQLite revision 1 基线，Task 8 含用户已授权的安全格式升级。
 
 **Spec:** `docs/superpowers/specs/2026-10-03-production-readiness-design.md`
 
 ## Global Constraints
 
 - Flutter revision `2c9eb20739dfec95e2c74bd3dfa4601b0a8a36aa`；不更新工具链或新增 runtime 依赖。
-- SQLite schema revision 1；保留现有数据、记录与账号权限。
+- R1–R7 不改 SQLite revision 1；Task 8 可按用户新授权安全升级格式，先验证备份与迁移，保留所有数据、记录、账号/秘密引用及权限；不得重置，禁止迁移运行中的目录。
 - 每项修复必须有原问题 red→green 和独立 spec/quality review，未解决 P1/P2 不满足 goal 完成条件。
 - 当前主工作区中的未发布功能完整带入隔离基线；执行修改和提交在隔离分支。
 - 英文/简体中文同步；默认界面文案面向用户。
@@ -65,6 +65,8 @@
 **Files:** `internal/runlauncher/codex_retry_integration_test.go`；`internal/loopbackproxy/native_compatibility_test.go`；`internal/loopbackproxy/handler_internal_test.go`；`internal/desktopcontrol/content_page_integration_test.go`；`internal/serverhost/runtime_root_ca_integration_test.go`；`cmd/vibermate/ca_test.go`；`docs/capability-support.md`；`docs/deployment.md`/`.zh-CN.md`。
 
 **Interfaces:** 已修复的 Launcher、reading projection、工具补查、CA 命令 → 精确版本/平台验收 evidence。MCP 操作支持只产生基于正式契约的精确 operation，不放开通用路径代理。
+
+用户后续授权的绑定要求：每个 Environment 的 MCP 权限默认关闭；工具保留原客户端登录账号、模型仍用所选账号；ToolDecision 不绕过；完整 tools/call 与异常恢复不能缩为只读 discovery。用户允许内部数据格式安全升级，旧 revision-1 的数据先备份、迁移/恢复验证后才能启用新格式。controller 在执行前将迁移/原生持久化、原生传输与 CA 验收拆为自洽子计划并自检；这些准备稿不是已经通过的验收。不得伪造模型 Route/Exchange/批准或把生命周期藏在无关字段。
 
 - [ ] 使用隔离、固定版本的官方客户端：Codex 0.145.0、0.159.2、0.160.0，Claude 2.1.220。校验实际 version，已有后台 fixture 与请求接收器不使用用户生产账号/配置。
 - [ ] 验证已有后台、interactive/exec/resume、两个 Environment 并行、工具输入/返回、图片、取消、断网重连与下一次启动。按持久 Activity/Capture/Environment ID 断言实际请求归属，不只检查终端文本 OK。
