@@ -16,6 +16,125 @@ import (
 	"github.com/vibe-agi/vibermate/internal/rawevidence"
 )
 
+// Catches metadata expiry deleting an otherwise unexpired Full body or the
+// frozen binding/session/inbound facts needed to read that body's history.
+func TestNativeLongFullRetentionSurvivesMetadataExpiry(t *testing.T) {
+	for _, days := range []uint16{60, 365} {
+		t.Run(fmt.Sprint(days), func(t *testing.T) {
+			store, id, rev := nativeLifecycleFixtureRecording(t, environment.ToolPolicyReview, environment.ContentRecordingPolicy{Mode: environment.ContentRecordingFull, RetentionDays: days})
+			repo := nativeFullRepository(t, store)
+			ctx := context.Background()
+			now := time.Now().UTC().Truncate(time.Millisecond)
+			nativeAllow(t, repo, id, now)
+			receipt, err := repo.Start(ctx, id, "long-full-retention", rev, now)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := repo.VerifyStartReceipt(ctx, receipt, now); err != nil {
+				t.Fatal(err)
+			}
+			body := []byte(`{"result":"safe retained tool result"}`)
+			if err := repo.PutContent(ctx, id, "tool_result", body, now); err != nil {
+				t.Fatal(err)
+			}
+			if err := repo.Finish(ctx, id, nativetool.TerminalInput{Outcome: "completed", Reason: "completed", ObservedAt: now}); err != nil {
+				t.Fatal(err)
+			}
+			op, err := repo.Get(ctx, id)
+			if err != nil || op.Result == nil {
+				t.Fatalf("Full descriptor: %+v %v", op, err)
+			}
+			deadline := op.CreatedAt.Add(time.Duration(days) * 24 * time.Hour)
+			if !op.Result.ExpiresAt.Equal(deadline) {
+				t.Fatalf("frozen deadline: %v want %v", op.Result.ExpiresAt, deadline)
+			}
+			if err := repo.MarkReplayBarrier(ctx, op.Capture, rev, now); err != nil {
+				t.Fatal(err)
+			}
+			raw := rawEvidenceRecordForTest("long-native-raw", 1, rawevidence.LayerClientIngress, body, []byte(`{"version":1,"headers":[]}`))
+			raw.ObservedAt = now
+			raw.ExpiresAt = deadline.Add(3 * 24 * time.Hour)
+			if err := store.RawEvidenceRepository().AppendBatch(ctx, []rawevidence.StoredEnvelope{raw}, now); err != nil {
+				t.Fatal(err)
+			}
+			if err := store.MaintainExpired(ctx, op.CreatedAt.Add(31*24*time.Hour)); err != nil {
+				t.Fatal(err)
+			}
+			retained, err := repo.Get(ctx, id)
+			if err != nil || retained.Result == nil || !retained.Result.ExpiresAt.Equal(deadline) {
+				t.Fatalf("day31 lost unexpired Full history: %+v %v", retained, err)
+			}
+			page, err := repo.Page(ctx, nativetool.PageRequest{Capture: op.Capture, Limit: 200})
+			if err != nil {
+				t.Fatal(err)
+			}
+			found := false
+			for _, item := range page.Items {
+				if item.ID == id && item.Result != nil && item.Result.Digest == op.Result.Digest {
+					found = true
+				}
+			}
+			if !found {
+				t.Fatal("day31 Full descriptor missing from Page")
+			}
+			got, err := repo.ReadContent(ctx, op.Capture, id, "tool_result", 0, 128<<10)
+			if err != nil || !bytes.Equal(got, body) {
+				t.Fatalf("day31 Full body: %s %v", got, err)
+			}
+			for _, table := range []string{"native_tool_bindings", "native_tool_inbound"} {
+				var count int
+				if err := store.database.QueryRow(`SELECT COUNT(*) FROM `+table+` WHERE operation_id=?`, id).Scan(&count); err != nil || count != 1 {
+					t.Fatalf("day31 lost supporting %s: %d %v", table, count, err)
+				}
+			}
+			if countRows(t, store, "native_tool_sessions") != 1 || countRows(t, store, "native_tool_approvals") != 1 || countRows(t, store, "runtime_egress_attempts") != 1 || countRows(t, store, "runtime_evidence_bodies") != 1 {
+				t.Fatal("day31 supporting history/shared root lost")
+			}
+			loaded, err := store.RawEvidenceRepository().GetEnvelope(ctx, raw.EnvelopeID)
+			if err != nil || !bytes.Equal(loaded.Body, body) {
+				t.Fatalf("day31 shared Raw body: %s %v", loaded.Body, err)
+			}
+			released, err := store.CleanupExpired(ctx, deadline.Add(24*time.Hour))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if released.Approvals != 1 || released.Attempts != 1 {
+				t.Fatalf("expired native metadata counts: %+v", released)
+			}
+			if _, err := repo.Get(ctx, id); !errors.Is(err, nativetool.ErrNotFound) {
+				t.Fatalf("expired Full operation retained: %v", err)
+			}
+			var bindings int
+			if err := store.database.QueryRow(`SELECT COUNT(*) FROM native_tool_bindings WHERE operation_id=?`, id).Scan(&bindings); err != nil || bindings != 0 {
+				t.Fatalf("expired Full binding retained: %d %v", bindings, err)
+			}
+			if countRows(t, store, "native_tool_contents") != 0 || countRows(t, store, "native_tool_approvals") != 0 || countRows(t, store, "runtime_egress_attempts") != 0 {
+				t.Fatal("expired Full dependent history retained")
+			}
+			if countRows(t, store, "runtime_evidence_bodies") != 1 {
+				t.Fatal("native expiry deleted shared Raw root")
+			}
+			loaded, err = store.RawEvidenceRepository().GetEnvelope(ctx, raw.EnvelopeID)
+			if err != nil || !bytes.Equal(loaded.Body, body) {
+				t.Fatalf("shared Raw after native expiry: %s %v", loaded.Body, err)
+			}
+			if err := store.MaintainExpired(ctx, deadline.Add(4*24*time.Hour)); err != nil {
+				t.Fatal(err)
+			}
+			if countRows(t, store, "runtime_evidence_bodies") != 0 || countRows(t, store, "runtime_evidence_chunks") != 0 {
+				t.Fatal("last expired root retained body")
+			}
+			if countRows(t, store, "native_tool_once") != 1 || countRows(t, store, "native_tool_inbound") != 4 {
+				t.Fatal("Full expiry removed replay protection")
+			}
+			var barrier bool
+			if err := store.database.QueryRow(`SELECT replay_barrier FROM native_tool_scopes`).Scan(&barrier); err != nil || !barrier {
+				t.Fatalf("Full expiry barrier: %v %v", barrier, err)
+			}
+		})
+	}
+}
+
 // Catches Full content reads that ignore Capture ownership, byte budget, expiry or verified body integrity.
 func TestNativeContentAuthorizedBudgetAndIntegrity(t *testing.T) {
 	store, id, rev := nativeLifecycleFixtureRecording(t, environment.ToolPolicyReview, environment.ContentRecordingPolicy{Mode: environment.ContentRecordingFull, RetentionDays: 1})

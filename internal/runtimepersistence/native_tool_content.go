@@ -137,20 +137,28 @@ func purgeExpiredNative(ctx context.Context, tx *sql.Tx, now time.Time, limit in
 		return released, false, err
 	}
 	// Remove safe metadata only after a terminal; inbound/once identity and the
-	// scope barrier survive independently of operation/content retention.
-	if _, err := deleteNativeContents(ctx, tx, `operation_id IN(SELECT operation_id FROM native_tool_operations WHERE metadata_expires_at_unix_ms<=? AND completed_at_unix_ms IS NOT NULL ORDER BY metadata_expires_at_unix_ms,operation_id LIMIT ?)`, now.UnixMilli(), limit); err != nil {
+	// scope barrier survive independently of operation/content retention. Full
+	// contents keep the history needed to read them until their own frozen expiry.
+	// Deleting expired contents cannot change this selector's eligibility, so the
+	// same deterministic bounded set is used for every dependent cleanup below.
+	selected := `SELECT o.operation_id FROM native_tool_operations o
+	 WHERE o.metadata_expires_at_unix_ms<=? AND o.completed_at_unix_ms IS NOT NULL
+	 AND NOT EXISTS(SELECT 1 FROM native_tool_contents c
+	   WHERE c.operation_id=o.operation_id AND c.expires_at_unix_ms>?)
+	 ORDER BY o.metadata_expires_at_unix_ms,o.operation_id LIMIT ?`
+	arguments := []any{now.UnixMilli(), now.UnixMilli(), limit}
+	if _, err := deleteNativeContents(ctx, tx, `operation_id IN(`+selected+`)`, arguments...); err != nil {
 		return released, false, err
 	}
-	selected := `SELECT operation_id FROM native_tool_operations WHERE metadata_expires_at_unix_ms<=? AND completed_at_unix_ms IS NOT NULL ORDER BY metadata_expires_at_unix_ms,operation_id LIMIT ?`
-	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM native_tool_approvals WHERE operation_id IN(`+selected+`)`, now.UnixMilli(), limit).Scan(&released.Approvals); err != nil {
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM native_tool_approvals WHERE operation_id IN(`+selected+`)`, arguments...).Scan(&released.Approvals); err != nil {
 		return released, false, err
 	}
-	attempts, err := deleteCounted(ctx, tx, `DELETE FROM runtime_egress_attempts WHERE purpose='client_tool_service' AND parent_kind='client_operation' AND parent_id IN(`+selected+`) AND completed_at_unix_ms IS NOT NULL`, now.UnixMilli(), limit)
+	attempts, err := deleteCounted(ctx, tx, `DELETE FROM runtime_egress_attempts WHERE purpose='client_tool_service' AND parent_kind='client_operation' AND parent_id IN(`+selected+`) AND completed_at_unix_ms IS NOT NULL`, arguments...)
 	if err != nil {
 		return released, false, err
 	}
 	released.Attempts = attempts
-	result, err := tx.ExecContext(ctx, `DELETE FROM native_tool_operations WHERE operation_id IN(SELECT operation_id FROM native_tool_operations WHERE metadata_expires_at_unix_ms<=? AND completed_at_unix_ms IS NOT NULL ORDER BY metadata_expires_at_unix_ms,operation_id LIMIT ?)`, now.UnixMilli(), limit)
+	result, err := tx.ExecContext(ctx, `DELETE FROM native_tool_operations WHERE operation_id IN(`+selected+`)`, arguments...)
 	if err != nil {
 		return released, false, err
 	}
