@@ -308,6 +308,7 @@ func TestLaunchFailureKeyDistinguishesEnvironmentSelection(t *testing.T) {
 		{err: runlauncher.ErrRemoteLoginRequired, want: keyRemoteLoginRequired},
 		{err: runlauncher.ErrRemoteRuntimeUnavailable, want: keyRemoteRuntimeUnavailable},
 		{err: runlauncher.ErrCapturePreparationTimedOut, want: keyCapturePreparationTimedOut},
+		{err: runlauncher.ErrCodexIsolationUnsupported, want: "cli.error.codexIsolationUnsupported"},
 		{err: errors.New("other launch failure"), want: keyLaunchFailed},
 		{err: errors.Join(runlauncher.ErrCaptureSupervisionFailed, runlauncher.ErrRuntimeUnavailable), want: "cli.error.captureSupervisionFailed"},
 		{err: errors.Join(runlauncher.ErrCaptureFinalizationFailed, runlauncher.ErrRuntimeUnavailable), want: "cli.error.captureFinalizationFailed"},

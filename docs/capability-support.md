@@ -81,6 +81,19 @@ preview normalization, all response stop reasons and empty terminals. Local
 macOS Codex capture and `vibermate doctor` check the current Root's trust status
 before recommending or starting a native-trust capture.
 
+Interactive Codex captures, including resume and fork, must own their request
+backend. For a catalog-known Codex family, the launcher reads native help with a
+1500 ms deadline and a combined 64 KiB output limit, without Capture credentials
+or proxy environment. It adds `--no-daemon` when supported (confirmed startup
+contract in 0.159.2 and 0.160.0). The exact verified 0.145.0 adapter instead uses
+its mandatory launch-recipe config overrides, which prevent implicit daemon
+reuse. A help result never changes release recognition or grants Root/tool
+authority. Ordinary exec/review and foreground app-server retain their native
+arguments. Remote connections, app-server daemon/proxy, agents, unknown options
+and unproven session-control modes fail before the captured command starts;
+existing backends are left running. Startup-contract checks do not by themselves
+prove provider or MCP compatibility.
+
 Release packaging evidence proves only the exact tagged artifacts. Deterministic
 or mocked provider tests do not prove a live provider account, and one real
 provider acceptance run does not prove every provider, model, client, or

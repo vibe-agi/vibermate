@@ -283,6 +283,18 @@ func (launcher *Launcher) Run(
 		launcher.finishBestEffort(control, grant)
 		return 1, err
 	}
+	if (grant.Adapter != nil && grant.Adapter.ID == "codex-cli") ||
+		(grant.Signer != nil && grant.Signer.ID == "codex-cli") ||
+		(grant.Run.ClientAdapter != nil && grant.Run.ClientAdapter.ID == "codex-cli") {
+		legacyIndependent := grant.Recognition == clientadapter.RecognitionVerified &&
+			grant.Adapter != nil && grant.Adapter.ID == "codex-cli" && grant.Adapter.Version == "0.145.0" &&
+			grant.LaunchRecipe == clientadapter.LaunchCodexResponsesHTTP
+		childArguments, err = prepareCodexCaptureArguments(ctx, grant.ExecutablePath, command[1:], childArguments, launcher.config.BaseEnvironment, legacyIndependent)
+		if err != nil {
+			launcher.finishBestEffort(control, grant)
+			return 1, err
+		}
+	}
 	launcher.announceCodexSessions(grant.LaunchRecipe)
 
 	childContext, cancelChild := context.WithCancelCause(context.WithoutCancel(ctx))

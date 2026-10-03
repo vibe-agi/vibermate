@@ -290,6 +290,9 @@ func executeContext(
 }
 
 func launchFailureKey(err error) string {
+	if errors.Is(err, runlauncher.ErrCodexIsolationUnsupported) {
+		return "cli.error.codexIsolationUnsupported"
+	}
 	if errors.Is(err, runlauncher.ErrLocalRootUntrusted) {
 		return "cli.error.localRootUntrusted"
 	}

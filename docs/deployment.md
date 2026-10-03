@@ -21,6 +21,24 @@ connects from another device, choose one of the HTTPS modes or use an
 authenticated, trusted tunnel. Never hand users `0.0.0.0`, a container `172.x`
 address, or a certificate warning page.
 
+## Capturing Codex sessions
+
+`vibermate run -- codex`, `vibermate run -- codex resume` and
+`vibermate run -- codex fork` start work with this capture's own backend and
+traffic policy. Supported clients receive `--no-daemon` automatically; the
+verified 0.145.0 launch recipe uses config overrides that prevent daemon reuse.
+Ordinary `codex exec`, `codex review` and foreground `codex app-server` keep
+their native startup behavior.
+
+Connecting with `--remote`, `codex agents` or `app-server daemon/proxy` would
+reuse a backend whose traffic policy belongs to another process. These modes
+and unproven session controls are rejected before launch. Use a Codex version
+supporting `--no-daemon` and run one of the independent commands above without
+those modes. ViberMate leaves existing backends and session locks in place;
+resuming a locked session may require waiting for its owner or forking saved
+history. An isolation error also means the client help contract could not be
+read within its limits or the argument mode could not be safely classified.
+
 ## Three connections, three kinds of trust
 
 1. Browser/CLI → ViberMate: protected by the **Server HTTPS certificate**

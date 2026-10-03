@@ -7,16 +7,22 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
+	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"runtime"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -27,6 +33,272 @@ import (
 	"github.com/vibe-agi/vibermate/internal/localdiscovery"
 	"github.com/vibe-agi/vibermate/internal/runlauncher"
 )
+
+// This catches routing through a pre-existing backend whose environment still
+// holds the preceding Capture's proxy, even though the launcher child exits OK.
+func TestCodexCaptureIsolationOwnsRequestsWithExistingBackend(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell fixture requires POSIX process groups")
+	}
+	directory := t.TempDir()
+	testBinary, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var oldRequests atomic.Int32
+	oldProxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		oldRequests.Add(1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer oldProxy.Close()
+	ready := filepath.Join(directory, "backend-ready")
+	backend := exec.Command(testBinary, "-test.run=^TestCodexIsolationFixtureProcess$")
+	backend.Env = []string{"CODEX_ISOLATION_ROLE=backend", "CODEX_ISOLATION_READY=" + ready, "HTTP_PROXY=" + oldProxy.URL}
+	if err := backend.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = backend.Process.Kill(); _ = backend.Wait() }()
+	backendURL := waitCodexIsolationFile(t, ready)
+	// Prove that this already-started backend owns and uses the old proxy.
+	response, err := http.Get(backendURL + "/request")
+	if err != nil {
+		t.Fatal(err)
+	}
+	response.Body.Close()
+	if oldRequests.Load() != 1 {
+		t.Fatal("old backend did not retain its proxy")
+	}
+	oldRequests.Store(0)
+	executable := filepath.Join(directory, "codex")
+	script := "#!/bin/sh\nexec " + strconv.Quote(testBinary) + " -test.run=^TestCodexIsolationFixtureProcess$ -- \"$@\"\n"
+	if err := os.WriteFile(executable, []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{nil, {"resume", "fixture-thread"}, {"fork", "fixture-thread"}, {"exec", "fixture prompt"}} {
+		t.Run(strings.Join(args, "_"), func(t *testing.T) {
+			oldRequests.Store(0)
+			command := append([]string{"codex"}, args...)
+			alive := filepath.Join(directory, "new-backend-alive")
+			control := &controlFixture{
+				t: t, executable: executable, workspace: directory, rootPath: filepath.Join(directory, "root.pem"),
+				credential: capability(0x11), proxy: capability(0x22), run: capability(0x33),
+				expectedCommand: command, recipe: clientadapter.LaunchCodexResponsesHTTP, recognition: clientadapter.RecognitionVerified,
+				adapter: &capturecontrol.ClientLaunchAdapterView{ClientAdapterView: capturecontrol.ClientAdapterView{
+					ID: "codex-cli", Revision: 1, Version: "0.160.0", CatalogRevision: 7,
+					Source: capturecontrol.ClientAdapterSourcePrelaunchDigestCatalog, InstallShape: clientadapter.InstallNativeSingleBinary,
+					LaunchRecipe: clientadapter.LaunchCodexResponsesHTTP,
+				}, StreamingFallbackPolicy: clientadapter.StreamingFallbackClientDefault},
+			}
+			var currentRequests atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Host == "codex-isolation-fixture.invalid" {
+					if r.Header.Get("Proxy-Authorization") == "" {
+						t.Error("request omitted current Capture capability")
+					}
+					currentRequests.Add(1)
+					w.WriteHeader(http.StatusOK)
+					return
+				}
+				control.ServeHTTP(w, r)
+			}))
+			defer server.Close()
+			launcher, err := runlauncher.New(runlauncher.Config{
+				Discovery: fixedDiscovery{session: localdiscovery.Session{BaseURL: server.URL, ControlCredential: control.credential}},
+				// The race-instrumented test binary otherwise waits one second in
+				// os.Exit, unlike native CLI help; keep the real probe deadline.
+				BaseEnvironment: []string{"PATH=/usr/bin:/bin", "GORACE=atexit_sleep_ms=0", "CODEX_ISOLATION_ROLE=client", "CODEX_ISOLATION_BACKEND=" + backendURL,
+					"CODEX_ISOLATION_ALIVE=" + alive, "CODEX_ISOLATION_BINARY=" + testBinary},
+				Stdin: strings.NewReader(""), Stdout: io.Discard, Stderr: io.Discard,
+				TerminationTimeout: 150 * time.Millisecond,
+				Getwd:              func() (string, error) { return directory, nil }, LookPath: func(string) (string, error) { return executable, nil },
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			code, err := launcher.Run(ctx, runlauncher.LaunchRequest{EnvironmentID: environment.SystemTransparentID, Command: command})
+			if err != nil || code != 0 {
+				t.Fatalf("launch: code=%d err=%v", code, err)
+			}
+			if currentRequests.Load() != 1 || oldRequests.Load() != 0 {
+				t.Fatalf("Capture request ownership: new proxy=%d, old proxy=%d", currentRequests.Load(), oldRequests.Load())
+			}
+			if _, err := os.Stat(alive); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("new backend outlived captured child: %v", err)
+			}
+			if control.attachCalls != 1 || control.finishCalls != 1 {
+				t.Fatalf("control lifecycle attach=%d finish=%d", control.attachCalls, control.finishCalls)
+			}
+		})
+	}
+	response, err = http.Get(backendURL + "/alive")
+	if err != nil {
+		t.Fatalf("launcher terminated unrelated existing backend: %v", err)
+	}
+	response.Body.Close()
+}
+
+func waitCodexIsolationFile(t *testing.T, path string) string {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if data, err := os.ReadFile(path); err == nil && len(data) != 0 {
+			return string(data)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("fixture did not become ready: %s", filepath.Base(path))
+	return ""
+}
+
+func TestCodexCaptureIsolationRequiresExactLegacyEvidence(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX client fixture")
+	}
+	for _, test := range []struct {
+		name, version             string
+		recipe                    clientadapter.LaunchRecipe
+		signer, withheld, unknown bool
+		wantLaunch                bool
+	}{
+		{"verified legacy", "0.145.0", clientadapter.LaunchCodexResponsesHTTP, false, false, false, true},
+		{"different exact release", "0.160.0", clientadapter.LaunchCodexResponsesHTTP, false, false, false, false},
+		{"unproven release", "fixture", clientadapter.LaunchCodexResponsesHTTP, false, false, false, false},
+		{"different launch recipe", "0.145.0", clientadapter.LaunchNodeEnvProxy, false, false, false, false},
+		{"signer recognition only", "", clientadapter.LaunchCodexResponsesHTTP, true, false, false, false},
+		{"legacy recipe withheld", "0.145.0", clientadapter.LaunchGeneric, false, true, false, false},
+		{"unknown client is never probed", "", clientadapter.LaunchGeneric, false, false, true, true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			directory := t.TempDir()
+			executable := filepath.Join(directory, "codex")
+			started, probed := filepath.Join(directory, "started"), filepath.Join(directory, "probed")
+			script := "#!/bin/sh\nif [ \"$1\" = --help ]; then\n touch " + strconv.Quote(probed) + "\n printf 'codex-cli 0.145.0\\nOptions:\\n'\n exit 0\nfi\ntouch " + strconv.Quote(started) + "\n"
+			if err := os.WriteFile(executable, []byte(script), 0700); err != nil {
+				t.Fatal(err)
+			}
+			control := &controlFixture{t: t, executable: executable, workspace: directory,
+				credential: capability(0x11), proxy: capability(0x22), run: capability(0x33), expectedCommand: []string{"codex", "resume", "fixture-thread"},
+				recipe: test.recipe, recognition: clientadapter.RecognitionVerified, rootPath: filepath.Join(directory, "root.pem"),
+			}
+			identity := capturecontrol.ClientAdapterView{ID: "codex-cli", Revision: 1, Version: test.version, CatalogRevision: 7,
+				Source: capturecontrol.ClientAdapterSourcePrelaunchDigestCatalog, InstallShape: clientadapter.InstallNativeSingleBinary, LaunchRecipe: test.recipe}
+			switch {
+			case test.unknown:
+				control.recognition, control.rootPath = clientadapter.RecognitionUnknown, ""
+			case test.signer:
+				control.recognition = clientadapter.RecognitionRecognized
+				control.signer = &capturecontrol.ClientSignerView{ID: "codex-cli", Revision: 1, CatalogRevision: 7,
+					InstallShape: clientadapter.InstallNativeSingleBinary, LaunchRecipe: test.recipe, SignedPath: executable}
+			case test.withheld:
+				control.rootPath = ""
+				identity.LaunchRecipe = clientadapter.LaunchCodexResponsesHTTP
+				control.runAdapter = &identity
+			default:
+				control.adapter = &capturecontrol.ClientLaunchAdapterView{ClientAdapterView: identity, StreamingFallbackPolicy: clientadapter.StreamingFallbackClientDefault}
+			}
+			server := httptest.NewServer(control)
+			defer server.Close()
+			launcher, err := runlauncher.New(runlauncher.Config{
+				Discovery:       fixedDiscovery{session: localdiscovery.Session{BaseURL: server.URL, ControlCredential: control.credential}},
+				BaseEnvironment: []string{"PATH=/usr/bin:/bin"}, Stdin: strings.NewReader(""), Stdout: io.Discard, Stderr: io.Discard,
+				Getwd: func() (string, error) { return directory, nil }, LookPath: func(string) (string, error) { return executable, nil },
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			code, err := launcher.Run(context.Background(), runlauncher.LaunchRequest{EnvironmentID: environment.SystemTransparentID, Command: control.expectedCommand})
+			_, startedErr := os.Stat(started)
+			if test.wantLaunch {
+				if err != nil || code != 0 || startedErr != nil || control.attachCalls != 1 {
+					t.Fatalf("authorized launch: code=%d err=%v started=%v attach=%d", code, err, startedErr, control.attachCalls)
+				}
+				if _, err := os.Stat(probed); !errors.Is(err, os.ErrNotExist) {
+					t.Fatal("already proven legacy or unknown family was probed")
+				}
+			} else if !errors.Is(err, runlauncher.ErrCodexIsolationUnsupported) || code != 1 || !errors.Is(startedErr, os.ErrNotExist) || control.attachCalls != 0 {
+				t.Fatalf("unproven interactive launch: code=%d err=%v started=%v attach=%d", code, err, startedErr, control.attachCalls)
+			}
+			if control.finishCalls != 1 {
+				t.Fatalf("unused Capture not finalized: %d", control.finishCalls)
+			}
+		})
+	}
+}
+
+// Only the external client is substituted. Launcher, grant validation, proxy
+// authentication, argv consumption and descendant cleanup remain production.
+func TestCodexIsolationFixtureProcess(t *testing.T) {
+	role := os.Getenv("CODEX_ISOLATION_ROLE")
+	if role == "" {
+		return
+	}
+	request := func() error {
+		proxy, err := url.Parse(os.Getenv("HTTP_PROXY"))
+		if err != nil {
+			return err
+		}
+		client := &http.Client{Transport: &http.Transport{Proxy: http.ProxyURL(proxy)}, Timeout: time.Second}
+		response, err := client.Post("http://codex-isolation-fixture.invalid/v1/responses", "application/json", strings.NewReader(`{"prompt":"fixture"}`))
+		if err != nil {
+			return err
+		}
+		response.Body.Close()
+		return nil
+	}
+	switch role {
+	case "backend":
+		listener, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			os.Exit(2)
+		}
+		if err := os.WriteFile(os.Getenv("CODEX_ISOLATION_READY"), []byte("http://"+listener.Addr().String()), 0600); err != nil {
+			os.Exit(2)
+		}
+		_ = http.Serve(listener, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/request" {
+				if err := request(); err != nil {
+					w.WriteHeader(502)
+					return
+				}
+			}
+			w.WriteHeader(200)
+		}))
+	case "descendant":
+		signals := make(chan os.Signal, 1)
+		signal.Notify(signals, syscall.SIGTERM)
+		_ = os.WriteFile(os.Getenv("CODEX_ISOLATION_ALIVE"), []byte("alive"), 0600)
+		<-signals
+		_ = os.Remove(os.Getenv("CODEX_ISOLATION_ALIVE"))
+		os.Exit(0)
+	case "client":
+		args := os.Args[slices.Index(os.Args, "--")+1:]
+		if slices.Contains(args, "--help") {
+			fmt.Println("Options:\n      --no-daemon  Run without the shared background server")
+			os.Exit(0)
+		}
+		if !slices.Contains(args, "--no-daemon") && !slices.Contains(args, "exec") {
+			response, err := http.Get(os.Getenv("CODEX_ISOLATION_BACKEND") + "/request")
+			if err != nil {
+				os.Exit(2)
+			}
+			response.Body.Close()
+			os.Exit(0)
+		}
+		descendant := exec.Command(os.Getenv("CODEX_ISOLATION_BINARY"), "-test.run=^TestCodexIsolationFixtureProcess$")
+		descendant.Env = append(os.Environ(), "CODEX_ISOLATION_ROLE=descendant")
+		if err := descendant.Start(); err != nil {
+			os.Exit(2)
+		}
+		waitCodexIsolationFile(t, os.Getenv("CODEX_ISOLATION_ALIVE"))
+		if err := request(); err != nil {
+			os.Exit(2)
+		}
+		os.Exit(0)
+	}
+	os.Exit(2)
+}
 
 func TestLauncherKeepsChildThroughTemporaryControlFailure(t *testing.T) {
 	t.Parallel()
@@ -590,6 +862,8 @@ type controlFixture struct {
 	recipe              clientadapter.LaunchRecipe
 	recognition         clientadapter.Recognition
 	adapter             *capturecontrol.ClientLaunchAdapterView
+	signer              *capturecontrol.ClientSignerView
+	runAdapter          *capturecontrol.ClientAdapterView
 	authorities         []string
 	rootStatus          *desktopcontrol.RootCAResponse
 
@@ -660,6 +934,7 @@ func (fixture *controlFixture) ServeHTTP(
 			LaunchRecipe:    fixture.recipe,
 			Recognition:     fixture.recognition,
 			Adapter:         fixture.adapter,
+			Signer:          fixture.signer,
 			ExecutablePath:  grantExecutable,
 			ProxyAddress:    "http://" + request.Host,
 			ProxyDelivery:   capturecontrol.ProxyDeliveryLocalListener,
@@ -714,6 +989,10 @@ func (fixture *controlFixture) runView(processID int) capturecontrol.CaptureRunV
 	if fixture.adapter != nil {
 		identity := fixture.adapter.ClientAdapterView
 		runAdapter = &identity
+	}
+	if fixture.runAdapter != nil {
+		runAdapter = fixture.runAdapter
+		state = clientadapter.StatusVerified
 	}
 	return capturecontrol.CaptureRunView{
 		ID:                 "capture-run-1",

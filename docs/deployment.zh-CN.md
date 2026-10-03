@@ -18,6 +18,21 @@
 模式，或使用经过身份验证的可信隧道。不要把 `0.0.0.0`、容器的 `172.x` 地址或证书
 警告页发给用户。
 
+## 捕获 Codex 会话
+
+`vibermate run -- codex`、`vibermate run -- codex resume` 和
+`vibermate run -- codex fork` 会使用本次捕获自己的后台与流量策略。
+支持的客户端会自动加上 `--no-daemon`；经过精确验证的 0.145.0 启动方案则通过
+必需的配置覆盖禁止复用后台。普通 `codex exec`、`codex review` 和前台
+`codex app-server` 保留原生启动行为。
+
+`--remote`、`codex agents` 和 `app-server daemon/proxy` 会复用其他进程持有流量
+策略的后台，因此会在命令启动前被拒绝；尚未证明独立运行的会话控制入口也一样。
+请使用支持 `--no-daemon` 的 Codex，不加这些模式，运行上面的独立命令。
+ViberMate 会保留已有后台和会话锁；恢复被占用的会话时，可以等待原使用者结束，
+或者从已保存的历史分叉。隔离不支持错误也可能表示未能在限额内读取客户端帮助，
+或无法安全判断参数所选择的运行模式。
+
 ## 三条连接，三种信任
 
 1. 浏览器/CLI → ViberMate：由本页配置的 **服务器 HTTPS 证书**保护。
