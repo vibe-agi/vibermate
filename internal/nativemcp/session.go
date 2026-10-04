@@ -61,6 +61,7 @@ type activeRPC struct {
 	stream           *streamRecord
 }
 type callbackParent struct {
+	authority     nativetool.CallbackAuthority
 	operation     nativetool.ID
 	binding       nativetool.Binding
 	kind          string

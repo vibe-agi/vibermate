@@ -298,6 +298,8 @@ func (r *nativeToolRepository) Get(ctx context.Context, id nativetool.ID) (nativ
 	return op, nil
 }
 func (r *nativeToolRepository) GetApproval(ctx context.Context, id nativetool.ID) (nativetool.Approval, error) {
+	r.issuerMu.Lock()
+	defer r.issuerMu.Unlock()
 	if !nativeID(id) {
 		return nativetool.Approval{}, nativetool.ErrInvalid
 	}
@@ -320,7 +322,7 @@ func (r *nativeToolRepository) GetApproval(ctx context.Context, id nativetool.ID
 			return err
 		}
 		if a.State == "pending" {
-			return nativeApprovalAuthority(ctx, tx, op, time.Now().UTC())
+			return r.nativeApprovalAuthority(ctx, tx, op, time.Now().UTC())
 		}
 		return nil
 	})

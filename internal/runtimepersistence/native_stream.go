@@ -114,7 +114,11 @@ func (r *nativeToolRepository) OpenObservedStream(ctx context.Context, receipt n
 	// removing their bounded tombstone cannot enable another observation grant.
 	for a, s := range r.streams {
 		if s.terminal && !s.cleanupOnly && !s.expires.After(now) {
-			r.dropNativeStream(a)
+			if r.hasNativeCallbacks(a) {
+				r.invalidateNativeStream(a)
+			} else {
+				r.dropNativeStream(a)
+			}
 		}
 	}
 	if r.streamOpened == nil {
@@ -221,7 +225,8 @@ func (r *nativeToolRepository) streamAuthority(ctx context.Context, tx *sql.Tx, 
 	if err != nil {
 		return op, err
 	}
-	if op.Revision != s.revision || op.BindingDigest == nil || *op.BindingDigest != s.digest || (!s.terminal && op.State != "started") || s.terminal && op.State != "completed" && !(op.State == "failed" && op.Reason == "rpc_error") {
+	getClosed := op.Kind == nativetool.RequestGetStream && (op.State == "completed" || op.State == "failed" && op.Reason == "transport_failed")
+	if op.Revision != s.revision || op.BindingDigest == nil || *op.BindingDigest != s.digest || (!s.terminal && op.State != "started") || s.terminal && !getClosed && op.State != "completed" && !(op.State == "failed" && op.Reason == "rpc_error") {
 		return op, nativetool.ErrDenied
 	}
 	b, scope, err := nativeObservationAuthority(ctx, tx, op, now)
@@ -277,8 +282,10 @@ func finishNativeLogical(ctx context.Context, tx *sql.Tx, op nativetool.Operatio
 	if op.State != "started" {
 		return nativetool.ErrConflict
 	}
-	if err := cancelNativeParentApprovals(ctx, tx, op.Capture, op.ID, in.ObservedAt); err != nil {
-		return err
+	if op.Kind != nativetool.RequestGetStream {
+		if err := cancelNativeParentApprovals(ctx, tx, op.Capture, op.ID, in.ObservedAt); err != nil {
+			return err
+		}
 	}
 	if err := nativeTransition(ctx, tx, op, in.Outcome, op.DecisionSource, in.Reason, in.Outcome, in.ObservedAt); err != nil {
 		return err
@@ -296,6 +303,7 @@ func (r *nativeToolRepository) FinishAttempt(ctx context.Context, receipt native
 	}
 	r.issuerMu.Lock()
 	defer r.issuerMu.Unlock()
+	var closedGETRevision uint64
 	err := r.transaction(ctx, func(ctx context.Context, tx *sql.Tx) error {
 		op, err := loadNativeOperation(ctx, tx, receipt.OperationID())
 		if err != nil {
@@ -343,6 +351,7 @@ func (r *nativeToolRepository) FinishAttempt(ctx context.Context, receipt native
 			return nativetool.ErrConflict
 		}
 		if op.Kind == nativetool.RequestGetStream {
+			closedGETRevision = op.Revision + 1
 			return finishNativeLogical(ctx, tx, op, nativetool.LogicalFinishInput{Outcome: in.Outcome, Reason: in.Reason, ObservedAt: in.ObservedAt})
 		}
 		return nil
@@ -352,6 +361,13 @@ func (r *nativeToolRepository) FinishAttempt(ctx context.Context, receipt native
 	}
 	if err == nil {
 		delete(r.recovery, receipt.OperationID())
+		for _, s := range r.streams {
+			if closedGETRevision != 0 && s.receipt.OperationID() == receipt.OperationID() {
+				s.revision = closedGETRevision
+				s.terminal = true
+				delete(r.streamOpened, receipt.OperationID())
+			}
+		}
 	}
 	return err
 }
@@ -378,10 +394,10 @@ func (r *nativeToolRepository) CompleteStreamRPC(ctx context.Context, authority 
 		s.revision++
 		s.terminal = true
 		if in.Outcome != "completed" && !(in.Outcome == "failed" && in.Reason == "rpc_error") {
-			r.dropNativeStream(authority)
+			r.invalidateNativeStream(authority)
 		}
 	} else if errors.Is(err, nativetool.ErrUnavailable) {
-		r.dropNativeStream(authority)
+		r.invalidateNativeStream(authority)
 	}
 	return err
 }
@@ -471,6 +487,12 @@ func (r *nativeToolRepository) dropNativeStream(a nativetool.StreamAuthority) {
 		s.timer.Stop()
 	}
 	delete(r.streams, a)
+	for authority, c := range r.callbacks {
+		if c.stream == a {
+			delete(r.replies, c.child)
+			delete(r.callbacks, authority)
+		}
+	}
 }
 
 func (r *nativeToolRepository) BindRecoveryGET(ctx context.Context, id nativetool.ID, b nativetool.Binding, a nativetool.StreamAuthority, now time.Time) error {
@@ -595,6 +617,11 @@ func (r *nativeToolRepository) RetireObservedStream(ctx context.Context, a nativ
 		return nil
 	}
 	s.cleanupOnly = true
+	for _, c := range r.callbacks {
+		if c.stream == a {
+			c.retired = true
+		}
+	}
 	// Every associated child must become durably terminal before its denying
 	// association can disappear. Receipt-bearing attempts retain the reviewed
 	// physical cleanup; pre-Start children close without creating an audit.
@@ -605,6 +632,13 @@ func (r *nativeToolRepository) RetireObservedStream(ctx context.Context, a nativ
 		}
 	}
 	err := r.transaction(ctx, func(ctx context.Context, tx *sql.Tx) error {
+		for _, c := range r.callbacks {
+			if c.stream == a {
+				if err := r.cleanupNativeCallback(ctx, tx, c, now); err != nil {
+					return err
+				}
+			}
+		}
 		for id, child := range r.recovery {
 			if child.stream == a && child.cleanupOnly {
 				if err := r.cleanupNativeRecoveryAttempt(ctx, tx, s, id, child, now); err != nil {
@@ -662,7 +696,7 @@ func (r *nativeToolRepository) cleanupNativeRecoveryAttempt(ctx context.Context,
 	if err != nil {
 		return err
 	}
-	if op.Kind != nativetool.RequestGetStream || op.BindingDigest != nil && *op.BindingDigest != child.digest || op.Capture != stream.capture {
+	if op.Kind != nativetool.RequestGetStream && op.Kind != nativetool.RequestServerReply || op.BindingDigest != nil && *op.BindingDigest != child.digest || op.Capture != stream.capture {
 		return nativetool.ErrDenied
 	}
 	if child.receipt.OperationID() == "" {
@@ -717,14 +751,18 @@ func (r *nativeToolRepository) cleanupNativeRecoveryAttempt(ctx context.Context,
 	if op.State != "started" || op.CompletedAt != nil {
 		return nativetool.ErrInvalid
 	}
-	terminal, err := audit.Finish(egressaudit.TerminalInput{Outcome: egressaudit.OutcomeFailed, ErrorClass: "transport_failed", UnobservedByteCounts: true, CompletedAt: now})
+	outcome, reason := "failed", "transport_failed"
+	if op.Kind == nativetool.RequestServerReply {
+		outcome, reason = "uncertain", "execution_uncertain"
+	}
+	terminal, err := audit.Finish(egressaudit.TerminalInput{Outcome: egressaudit.OutcomeFailed, ErrorClass: reason, UnobservedByteCounts: true, CompletedAt: now})
 	if err != nil {
 		return err
 	}
 	if _, err := completeEgressAttempt(ctx, tx, terminal); err != nil {
 		return err
 	}
-	if err := finishNativeLogical(ctx, tx, op, nativetool.LogicalFinishInput{Outcome: "failed", Reason: "transport_failed", ObservedAt: now}); err != nil {
+	if err := finishNativeLogical(ctx, tx, op, nativetool.LogicalFinishInput{Outcome: outcome, Reason: reason, ObservedAt: now}); err != nil {
 		return err
 	}
 	_, err = tx.ExecContext(ctx, `UPDATE native_tool_operations SET bytes_in=NULL,bytes_out=NULL WHERE operation_id=?`, op.ID)

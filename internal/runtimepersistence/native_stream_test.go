@@ -2,6 +2,7 @@ package runtimepersistence
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"testing"
@@ -459,13 +460,16 @@ func TestNativeStreamRetirementClosesExistingReplyQuestion(t *testing.T) {
 				t.Fatal(err)
 			}
 			catalog, _ := b.CatalogDigest()
-			digest := nativetool.Digest{9}
+			request := []byte(`{"jsonrpc":"2.0","id":"server","method":"ping"}`)
+			digest := nativetool.Digest(sha256.Sum256(request))
 			child := nativetool.ID("67676767676767676767676767676767")
 			reply, err := nativetool.NewBinding(nativetool.BindingInput{Kind: nativetool.RequestServerReply, Plan: b.Plan(), Capture: b.Capture(), AssignmentRevision: b.AssignmentRevision(), OwnerEpoch: b.OwnerEpoch(), SessionID: b.SessionID(), SessionRevision: b.SessionRevision(), CatalogGeneration: b.CatalogGeneration(), CatalogDigest: &catalog, ParentOperationID: &id, ServerRequestDigest: &digest, ExactRPC: []byte(`{"jsonrpc":"2.0","id":"server","result":{}}`)})
 			if err != nil {
 				t.Fatal(err)
 			}
-			nativeReceiveBind(t, repo, child, reply, now)
+			if err := nativeBindObservedPing(t, repo, child, reply, b, a, request, []byte(`{"jsonrpc":"2.0","id":"server","result":{}}`), now); err != nil {
+				t.Fatal(err)
+			}
 			approval, err := repo.RequestApproval(ctx, child, nativetool.ID("68686868686868686868686868686868"), now, now.Add(time.Minute))
 			if err != nil {
 				t.Fatal(err)

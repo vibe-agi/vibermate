@@ -434,10 +434,6 @@ func (e *executor) acceptStreamEvent(ctx context.Context, s *session, stream *st
 		s.mu.Unlock()
 	}
 	if !known && len(event.data) > 0 {
-		// Fresh GET callback registration is intentionally unavailable in Task1.
-		if request.kind == nativetool.RequestGetStream {
-			return false, errSession
-		}
 		cost := jsonAllocation(event.data)
 		if !e.budget.acquire(cost) {
 			return false, errBudget
@@ -517,7 +513,13 @@ func (e *executor) acceptSSEMessage(ctx context.Context, operation nativetool.ID
 		return errProtocol
 	}
 	if len(message.id) > 0 {
-		return e.observeCallback(s, operation, binding, message)
+		s.mu.Lock()
+		stream := s.streams[operation]
+		s.mu.Unlock()
+		if stream == nil {
+			return errSession
+		}
+		return e.observeCallback(ctx, s, stream, message)
 	}
 	switch message.method {
 	case "notifications/progress":

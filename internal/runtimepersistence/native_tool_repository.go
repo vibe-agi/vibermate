@@ -24,6 +24,8 @@ type nativeToolRepository struct {
 	streams        map[nativetool.StreamAuthority]*nativeObservedStream
 	recovery       map[nativetool.ID]nativeRecovery
 	streamOpened   map[nativetool.ID]time.Time
+	callbacks      map[nativetool.CallbackAuthority]*nativeObservedCallback
+	replies        map[nativetool.ID]nativetool.CallbackAuthority
 }
 
 var _ nativetool.LifecycleRepository = (*nativeToolRepository)(nil)
@@ -692,6 +694,12 @@ func nativeTransition(ctx context.Context, tx *sql.Tx, op nativetool.Operation, 
 	return appendNativeEvent(ctx, tx, op.ID, op.Revision+1, event, now)
 }
 func (r *nativeToolRepository) Bind(ctx context.Context, id nativetool.ID, b nativetool.Binding, now time.Time) error {
+	if b.Kind() == nativetool.RequestServerReply {
+		return nativetool.ErrDenied
+	}
+	return r.bind(ctx, id, b, now)
+}
+func (r *nativeToolRepository) bind(ctx context.Context, id nativetool.ID, b nativetool.Binding, now time.Time) error {
 	if !nativeID(id) || b.Digest() == (nativetool.Digest{}) || !nativeTime(now) {
 		return nativetool.ErrInvalid
 	}
@@ -804,7 +812,7 @@ func (r *nativeToolRepository) Bind(ctx context.Context, id nativetool.ID, b nat
 			if hasCatalog {
 				frozen.catalog = catalog[:]
 			}
-			if err := validateNativeParent(ctx, tx, op, frozen, s, now); err != nil {
+			if err := r.validateNativeParent(ctx, tx, op, frozen, s, now); err != nil {
 				return err
 			}
 		default:
@@ -853,7 +861,7 @@ func (r *nativeToolRepository) Bind(ctx context.Context, id nativetool.ID, b nat
 	return nil
 }
 
-func validateNativeParent(ctx context.Context, tx *sql.Tx, op nativetool.Operation, b nativeBindingRow, s nativeSession, now time.Time) error {
+func (r *nativeToolRepository) validateNativeParent(ctx context.Context, tx *sql.Tx, op nativetool.Operation, b nativeBindingRow, s nativeSession, now time.Time) error {
 	if b.parent == nil || *b.parent == op.ID || s.state != "ready" {
 		return nativetool.ErrDenied
 	}
@@ -865,8 +873,8 @@ func validateNativeParent(ctx context.Context, tx *sql.Tx, op nativetool.Operati
 	if err != nil {
 		return err
 	}
-	if p.Capture != op.Capture || p.EnvironmentID != op.EnvironmentID || p.EnvironmentRevision != op.EnvironmentRevision || p.EnvironmentDigest != op.EnvironmentDigest || p.TargetOrigin != op.TargetOrigin || p.Kind != nativetool.RequestToolsCall || p.State != "started" || parent.session != s.id || parent.owner != s.owner || parent.assignment != s.assignment || parent.sessionRevision != b.sessionRevision || parent.generation != b.generation || string(parent.catalog) != string(b.catalog) {
+	if p.Capture != op.Capture || p.EnvironmentID != op.EnvironmentID || p.EnvironmentRevision != op.EnvironmentRevision || p.EnvironmentDigest != op.EnvironmentDigest || p.TargetOrigin != op.TargetOrigin || parent.session != s.id || parent.owner != s.owner || parent.assignment != s.assignment || parent.sessionRevision != b.sessionRevision || parent.generation != b.generation || string(parent.catalog) != string(b.catalog) {
 		return nativetool.ErrDenied
 	}
-	return verifyNativeCommittedParent(ctx, tx, p, parent, s, now)
+	return r.verifyNativeCallback(ctx, tx, op, p, now)
 }

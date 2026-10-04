@@ -28,7 +28,7 @@ func (r *nativeToolRepository) PutContent(ctx context.Context, id nativetool.ID,
 		if op.Kind != nativetool.RequestToolsCall || op.Recording.Mode != environment.ContentRecordingFull || (op.State != "started" && op.State != "completed") {
 			return nativetool.ErrDenied
 		}
-		if _, _, _, err := nativeExecutionAuthority(ctx, tx, op, now); err != nil {
+		if _, _, _, err := r.nativeExecutionAuthority(ctx, tx, op, now); err != nil {
 			return err
 		}
 		var count int

@@ -14,6 +14,35 @@ type StreamAuthority struct {
 	expiresAt time.Time
 }
 
+type CallbackAuthority struct{ issuer, token [32]byte }
+type CallbackKind string
+
+const (
+	CallbackPing         CallbackKind = "ping"
+	CallbackForm         CallbackKind = "form"
+	CallbackURL          CallbackKind = "url"
+	CallbackVerification CallbackKind = "verification"
+)
+
+type CallbackFacts struct {
+	RPCIdentityDigest, RequestDigest Digest
+	Kind                             CallbackKind
+}
+
+func (issuer *StartReceiptIssuer) IssueCallback() (CallbackAuthority, error) {
+	if issuer == nil || issuer.identity == ([32]byte{}) {
+		return CallbackAuthority{}, ErrDenied
+	}
+	a := CallbackAuthority{issuer: issuer.identity}
+	if _, err := rand.Read(a.token[:]); err != nil {
+		return CallbackAuthority{}, err
+	}
+	if a.token == ([32]byte{}) {
+		return CallbackAuthority{}, ErrUnavailable
+	}
+	return a, nil
+}
+
 // ExpiresAt is immutable observation metadata, not live send permission.
 func (a StreamAuthority) ExpiresAt() time.Time { return a.expiresAt }
 
@@ -46,9 +75,12 @@ type LogicalFinishInput struct {
 	ObservedAt      time.Time
 }
 
-// StreamRepository separates one HTTP attempt from its originating logical RPC.
-// Callback registration deliberately belongs to a later, separately sealed seam.
+// StreamRepository separates HTTP attempts, logical RPCs and receipt-backed
+// callback observations. Observation capabilities never grant outbound sends.
 type StreamRepository interface {
+	RegisterObservedCallback(context.Context, StreamAuthority, CallbackFacts, time.Time) (CallbackAuthority, error)
+	BindObservedReply(context.Context, ID, Binding, CallbackAuthority, RegisteredParentWitness, time.Time) error
+	RetireObservedCallback(context.Context, CallbackAuthority, time.Time) error
 	OpenObservedStream(context.Context, StartReceipt, Binding, time.Duration, time.Time) (StreamAuthority, error)
 	BindRecoveryGET(context.Context, ID, Binding, StreamAuthority, time.Time) error
 	ValidateLocalReplay(context.Context, StreamAuthority, time.Time) error

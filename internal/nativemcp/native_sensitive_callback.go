@@ -2,10 +2,10 @@ package nativemcp
 
 import (
 	"context"
-	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"net/url"
+	"time"
 
 	"github.com/vibe-agi/vibermate/internal/nativetool"
 )
@@ -138,13 +138,14 @@ func validateSensitiveReply(r rpc, kind string) error {
 	}
 	return nil
 }
-func (e *executor) observeCallback(s *session, parentID nativetool.ID, binding nativetool.Binding, r rpc) error {
-	if binding.Kind() != nativetool.RequestToolsCall || len(r.id) == 0 {
+func (e *executor) observeCallback(ctx context.Context, s *session, stream *streamRecord, r rpc) error {
+	parentID, binding := stream.operation, stream.binding
+	if binding.Kind() != nativetool.RequestToolsCall && binding.Kind() != nativetool.RequestGetStream || len(r.id) == 0 {
 		return errProtocol
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.closed || s.parents[string(r.id)] != nil {
+	if s.closed || stream.retired || !stream.observed || stream.context.Err() != nil || s.parents[string(r.id)] != nil {
 		return errSession
 	}
 	p := &callbackParent{operation: parentID, binding: binding}
@@ -173,9 +174,19 @@ func (e *executor) observeCallback(s *session, parentID nativetool.ID, binding n
 		s.retained -= charge
 		e.budget.release(charge)
 	}
-	registered := false
+	registered, urlInstalled := false, false
+	var facts nativetool.CallbackFacts
 	defer func() {
 		if !registered {
+			if urlInstalled {
+				delete(s.elicitations, p.elicitationID)
+				charge := int64(128 + len(p.elicitationID))
+				s.retained -= charge
+				e.budget.release(charge)
+			}
+			if p.sensitive != nil {
+				_ = s.hasher.RetireParent(*p.sensitive)
+			}
 			p.release()
 		}
 	}()
@@ -189,7 +200,11 @@ func (e *executor) observeCallback(s *session, parentID nativetool.ID, binding n
 		}
 		p.observer = observer
 		p.request = append([]byte{}, r.raw...)
-		p.digest = nativetool.Digest(sha256.Sum256(r.raw))
+		facts, err = observer.ObserveRequest(r.raw)
+		if err != nil {
+			return err
+		}
+		p.digest = facts.RequestDigest
 		// The ordinary branch admits only data-free ping; its digest is derived
 		// through the reviewed observer once the exact reply arrives.
 	} else {
@@ -210,6 +225,7 @@ func (e *executor) observeCallback(s *session, parentID nativetool.ID, binding n
 		}
 		p.sensitive = &parent
 		p.kind = kind
+		facts = nativetool.CallbackFacts{RPCIdentityDigest: parent.RPCIDDigest(), RequestDigest: parent.RequestDigest(), Kind: nativetool.CallbackKind(kind)}
 		if kind == "url" {
 			p.elicitationID, _ = text(r.params["elicitationId"])
 			if len(s.elicitations) >= e.limits.Pending {
@@ -224,17 +240,72 @@ func (e *executor) observeCallback(s *session, parentID nativetool.ID, binding n
 			}
 			s.retained += charge
 			s.elicitations[p.elicitationID] = parentID
+			urlInstalled = true
 		}
 	}
+	authority, err := e.dependencies.Store.RegisterObservedCallback(ctx, stream.authority, facts, e.dependencies.Clock().UTC())
+	if err != nil {
+		return err
+	}
+	p.authority = authority
 	s.parents[string(r.id)] = p
 	registered = true
 	return nil
+}
+
+// A closed negative decision/canceled handler retires the exact observation.
+// A successful URL answer keeps its separate completion obligation alive.
+func (e *executor) retireFailedReplyParent(s *session, identity string, child nativetool.ID) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	op, err := e.dependencies.Store.Get(ctx, child)
+	if err != nil || op.CompletedAt == nil || op.State == "completed" {
+		return
+	}
+	s.mu.Lock()
+	p := s.parents[identity]
+	s.mu.Unlock()
+	if p == nil {
+		return
+	}
+	if err := e.dependencies.Store.RetireObservedCallback(ctx, p.authority, e.dependencies.Clock().UTC()); err != nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.parents[identity] != p {
+		return
+	}
+	if p.sensitive != nil {
+		_ = s.hasher.RetireParent(*p.sensitive)
+	}
+	if p.release != nil {
+		p.release()
+	}
+	delete(s.parents, identity)
+	if p.kind == "url" {
+		if _, ok := s.elicitations[p.elicitationID]; ok {
+			delete(s.elicitations, p.elicitationID)
+			charge := int64(128 + len(p.elicitationID))
+			s.retained -= charge
+			e.budget.release(charge)
+		}
+	}
 }
 
 func (e *executor) retireCompletedParents(ctx context.Context, s *session, operation nativetool.ID) {
 	op, err := e.dependencies.Store.Get(ctx, operation)
 	if err != nil || op.CompletedAt == nil {
 		return
+	}
+	if op.Kind == nativetool.RequestGetStream {
+		s.mu.Lock()
+		stream := s.streams[operation]
+		live := stream != nil && !stream.retired && stream.context.Err() == nil
+		s.mu.Unlock()
+		if live {
+			return
+		}
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()

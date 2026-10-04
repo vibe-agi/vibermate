@@ -290,6 +290,12 @@ func nativeBindCall(t *testing.T, repo nativetool.Repository, base nativetool.Bi
 }
 
 func nativeReceiveBind(t *testing.T, repo nativetool.Repository, id nativetool.ID, b nativetool.Binding, now time.Time) {
+	nativeReceiveOnly(t, repo, id, b, now)
+	if err := repo.Bind(context.Background(), id, b, now); err != nil {
+		t.Fatal(err)
+	}
+}
+func nativeReceiveOnly(t *testing.T, repo nativetool.Repository, id nativetool.ID, b nativetool.Binding, now time.Time) {
 	t.Helper()
 	plan := b.Plan()
 	sid := b.SessionID()
@@ -302,9 +308,6 @@ func nativeReceiveBind(t *testing.T, repo nativetool.Repository, id nativetool.I
 	}
 	if result, err := repo.Receive(context.Background(), nativetool.ReceiveInput{ID: id, Capture: b.Capture(), EnvironmentID: plan.EnvironmentID(), EnvironmentRevision: plan.EnvironmentRevision(), EnvironmentDigest: plan.EnvironmentDigest(), ConnectionID: "actual-native-fixture", TargetOrigin: plan.Route().TargetOrigin.String(), Method: "POST", Kind: b.Kind(), SessionID: &sid, RPCIDDigest: rpcPtr, RequestDigest: requestPtr, Recording: plan.ContentRecording(), ObservedAt: now}); err != nil || result.Duplicate {
 		t.Fatalf("receive: %+v %v", result, err)
-	}
-	if err := repo.Bind(context.Background(), id, b, now); err != nil {
-		t.Fatal(err)
 	}
 }
 
@@ -821,7 +824,12 @@ func TestNativeCatalogRefreshCancelsUnconsumedFrozenReplyApproval(t *testing.T) 
 	now := time.Now().UTC().Truncate(time.Millisecond)
 	base, _ := nativeDecisionFixture(t, store, id)
 	nativeAllow(t, repo, id, now)
-	if _, err := repo.Start(ctx, id, "catalog-parent", rev, now); err != nil {
+	parentReceipt, err := repo.Start(ctx, id, "catalog-parent", rev, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stream, err := repo.OpenObservedStream(ctx, parentReceipt, base, time.Minute, now)
+	if err != nil {
 		t.Fatal(err)
 	}
 	catalog, _ := base.CatalogDigest()
@@ -831,7 +839,9 @@ func TestNativeCatalogRefreshCancelsUnconsumedFrozenReplyApproval(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	nativeReceiveBind(t, repo, replyID, reply, now)
+	if err := nativeBindObservedPing(t, repo, replyID, reply, base, stream, []byte(`{"jsonrpc":"2.0","id":"server","method":"ping"}`), []byte(`{"jsonrpc":"2.0","id":"server","result":{}}`), now); err != nil {
+		t.Fatal(err)
+	}
 	nativeAllow(t, repo, replyID, now)
 	listRaw := []byte(`{"jsonrpc":"2.0","id":4,"method":"tools/list"}`)
 	list, err := nativetool.NewBinding(nativetool.BindingInput{Kind: nativetool.RequestToolsList, Plan: base.Plan(), Capture: base.Capture(), AssignmentRevision: 1, OwnerEpoch: 1, SessionID: base.SessionID(), SessionRevision: 3, CatalogGeneration: 1, CatalogDigest: &catalog, ExactRPC: listRaw})
@@ -879,8 +889,14 @@ func TestNativeReplyRequiresCommittedParent(t *testing.T) {
 			now := time.Now().UTC().Truncate(time.Millisecond)
 			base, _ := nativeDecisionFixture(t, store, id)
 			nativeAllow(t, repo, id, now)
+			var stream nativetool.StreamAuthority
 			if committed {
-				if _, err := repo.Start(ctx, id, "reply-parent-start", rev, now); err != nil {
+				receipt, err := repo.Start(ctx, id, "reply-parent-start", rev, now)
+				if err != nil {
+					t.Fatal(err)
+				}
+				stream, err = repo.OpenObservedStream(ctx, receipt, base, time.Minute, now)
+				if err != nil {
 					t.Fatal(err)
 				}
 			} else {
@@ -906,14 +922,7 @@ func TestNativeReplyRequiresCommittedParent(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			rpc, _ := reply.RPCIDDigest()
-			digest := reply.RequestDigest()
-			session := reply.SessionID()
-			plan := reply.Plan()
-			if _, err := repo.Receive(ctx, nativetool.ReceiveInput{ID: replyID, Capture: reply.Capture(), EnvironmentID: plan.EnvironmentID(), EnvironmentRevision: plan.EnvironmentRevision(), EnvironmentDigest: plan.EnvironmentDigest(), ConnectionID: "registered-reply-fixture", TargetOrigin: plan.Route().TargetOrigin.String(), Method: "POST", Kind: reply.Kind(), SessionID: &session, RPCIDDigest: &rpc, RequestDigest: &digest, Recording: plan.ContentRecording(), ObservedAt: now}); err != nil {
-				t.Fatal(err)
-			}
-			err = repo.Bind(ctx, replyID, reply, now)
+			err = nativeBindObservedPing(t, repo, replyID, reply, base, stream, []byte(`{"jsonrpc":"2.0","id":"server","method":"ping"}`), []byte(`{"jsonrpc":"2.0","id":"server","result":{}}`), now)
 			if !committed {
 				if !errors.Is(err, nativetool.ErrDenied) {
 					t.Fatalf("uncommitted parent granted reply binding: %v", err)

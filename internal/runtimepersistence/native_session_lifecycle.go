@@ -148,6 +148,11 @@ func (r *nativeToolRepository) CloseSession(ctx context.Context, id nativetool.I
 		return err
 	})
 	if err != nil {
+		for a, s := range r.streams {
+			if s.session == id && r.hasNativeCallbacks(a) {
+				r.invalidateNativeStream(a)
+			}
+		}
 		return 0, err
 	}
 	_ = r.pruneTerminalRecovery(ctx)

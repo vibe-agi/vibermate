@@ -415,6 +415,9 @@ func (e *executor) Serve(ctx context.Context, c CapturedRequest, w http.Response
 	if received.Duplicate {
 		return reject(w, received.OperationID, ReasonExecutionUncertain)
 	}
+	if r.kind == nativetool.RequestServerReply {
+		defer e.retireFailedReplyParent(s, string(r.id), c.id)
+	}
 	defer func() {
 		if terminal.Outcome != OutcomeRejected && terminal.Outcome != OutcomeCanceled {
 			return
@@ -447,6 +450,18 @@ func (e *executor) Serve(ctx context.Context, c CapturedRequest, w http.Response
 	}()
 	if r.stream != nil {
 		err = e.dependencies.Store.BindRecoveryGET(call, c.id, binding, r.stream.authority, e.dependencies.Clock().UTC())
+	} else if r.kind == nativetool.RequestServerReply {
+		s.mu.Lock()
+		parent := s.parents[string(r.id)]
+		var authority nativetool.CallbackAuthority
+		if parent != nil {
+			authority = parent.authority
+		}
+		s.mu.Unlock()
+		if witness == nil {
+			return reject(w, c.id, ReasonSessionInvalid)
+		}
+		err = e.dependencies.Store.BindObservedReply(call, c.id, binding, authority, *witness, e.dependencies.Clock().UTC())
 	} else {
 		err = e.dependencies.Store.Bind(call, c.id, binding, e.dependencies.Clock().UTC())
 	}

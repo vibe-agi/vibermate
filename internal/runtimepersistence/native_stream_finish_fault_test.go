@@ -19,6 +19,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/nativemcp"
 	"github.com/vibe-agi/vibermate/internal/nativetool"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
+	"github.com/vibe-agi/vibermate/internal/protocolcore"
 	"github.com/vibe-agi/vibermate/internal/toolapproval"
 	"github.com/vibe-agi/vibermate/internal/toolpolicy"
 )
@@ -167,7 +168,42 @@ func TestNativeExecutorAmbiguousFinishRetainsCleanupObligation(t *testing.T) {
 						t.Fatal(err)
 					}
 					now := time.Now().UTC()
-					nativeReceiveBind(t, f.store.NativeToolRepository(), child, b, now)
+					nativeReceiveOnly(t, f.store.NativeToolRepository(), child, b, now)
+					// The real authenticated parser has already issued this exact
+					// callback. Consume its registration, never reconstruct one from SQL.
+					f.store.nativeTools.issuerMu.Lock()
+					var callback nativetool.CallbackAuthority
+					for a, c := range f.store.nativeTools.callbacks {
+						if stream := f.store.nativeTools.streams[c.stream]; stream != nil && stream.receipt.OperationID() == id {
+							callback = a
+						}
+					}
+					f.store.nativeTools.issuerMu.Unlock()
+					args, _ := protocolcore.NewJSONObject([]byte(`{}`), 1024)
+					key, _ := protocolcore.NewCallKey("native", "40")
+					catalogObserver, err := nativetool.NewCatalogObserver(nativetool.CatalogScope{Capture: f.capture, Plan: plan, AssignmentRevision: assignment, OwnerEpoch: owner, SessionID: nativetool.ID(sid), SessionRevision: rev, CatalogGeneration: generation})
+					if err != nil {
+						t.Fatal(err)
+					}
+					catalogEvidence, err := catalogObserver.Observe([]nativetool.CatalogPageObservation{{ExactRequest: []byte(`{"jsonrpc":"2.0","id":2,"method":"tools/list"}`), ExactResponse: []byte(`{"jsonrpc":"2.0","id":2,"result":{"tools":[{"name":"read_file","inputSchema":{"type":"object"}}]}}`)}})
+					if err != nil {
+						t.Fatal(err)
+					}
+					parent, err := nativetool.NewBinding(nativetool.BindingInput{Kind: nativetool.RequestToolsCall, Plan: plan, Capture: f.capture, AssignmentRevision: assignment, OwnerEpoch: owner, SessionID: nativetool.ID(sid), SessionRevision: rev, CatalogGeneration: generation, CatalogDigest: &d, CatalogEvidence: &catalogEvidence, ExactRPC: []byte(`{"jsonrpc":"2.0","id":40,"method":"tools/call","params":{"name":"read_file","arguments":{}}}`), Intents: []protocolcore.ToolIntent{{ResponseID: "rpc-40", Call: protocolcore.ToolCall{Key: key, Name: "read_file", Arguments: args}}}})
+					if err != nil {
+						t.Fatal(err)
+					}
+					observer, err := nativetool.NewParentObserver(id, parent)
+					if err != nil {
+						t.Fatal(err)
+					}
+					witness, err := observer.ObserveReply(child, []byte(`{"jsonrpc":"2.0","id":"server","method":"ping"}`), []byte(`{"jsonrpc":"2.0","id":"server","result":{}}`))
+					if err != nil {
+						t.Fatal(err)
+					}
+					if err := f.store.NativeToolRepository().BindObservedReply(ctx, child, b, callback, witness, now); err != nil {
+						t.Fatal(err)
+					}
 					if _, err := f.store.NativeToolRepository().RequestApproval(ctx, child, question, now, now.Add(time.Minute)); err != nil {
 						t.Fatal(err)
 					}

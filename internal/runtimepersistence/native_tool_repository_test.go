@@ -492,6 +492,10 @@ func TestNativeLifecycleReplyFreezesParentCatalog(t *testing.T) {
 	if err := repo.VerifyStartReceipt(ctx, receipt, now); err != nil {
 		t.Fatal(err)
 	}
+	stream, err := repo.OpenObservedStream(ctx, receipt, parent, time.Minute, now)
+	if err != nil {
+		t.Fatal(err)
+	}
 	list, err := nativetool.NewBinding(nativetool.BindingInput{Kind: nativetool.RequestToolsList, Plan: plan, Capture: parent.Capture(), AssignmentRevision: 1, OwnerEpoch: 1, SessionID: session, SessionRevision: 3, CatalogGeneration: 1, CatalogDigest: &catalog, ExactRPC: []byte(`{"jsonrpc":"2.0","id":4,"method":"tools/list"}`)})
 	if err != nil {
 		t.Fatal(err)
@@ -546,12 +550,7 @@ func TestNativeLifecycleReplyFreezesParentCatalog(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			rpc, _ := reply.RPCIDDigest()
-			digest := reply.RequestDigest()
-			if _, err := repo.Receive(ctx, nativetool.ReceiveInput{ID: replyID, Capture: parent.Capture(), EnvironmentID: plan.EnvironmentID(), EnvironmentRevision: plan.EnvironmentRevision(), EnvironmentDigest: plan.EnvironmentDigest(), ConnectionID: "synthetic-reply", TargetOrigin: plan.Route().TargetOrigin.String(), Method: "POST", Kind: nativetool.RequestServerReply, SessionID: &session, RPCIDDigest: &rpc, RequestDigest: &digest, Recording: plan.ContentRecording(), ObservedAt: now}); err != nil {
-				t.Fatal(err)
-			}
-			err = repo.Bind(ctx, replyID, reply, now)
+			err = nativeBindObservedPing(t, repo, replyID, reply, parent, stream, request, raw, now)
 			if kind == "valid" {
 				if err != nil {
 					t.Fatalf("current catalog rewrote parent authority: %v", err)

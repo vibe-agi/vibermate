@@ -5,10 +5,9 @@ import (
 	"encoding/json"
 )
 
-// ParentObserver is consistency plumbing for trusted Go composition; it does
-// not establish an authenticated upstream producer. Task 2 admits only the
-// closed, data-free ping shape. Sensitive and unclassified callbacks require
-// the later profile-specific, registered HMAC producer before any raw hash.
+// ParentObserver checks the closed, data-free ping shape. Store-issued callback
+// registration separately establishes authenticated observation authority.
+// Sensitive callbacks use the profile-specific HMAC producer before raw hashes.
 type ParentObserver struct {
 	operation ID
 	binding   Binding
@@ -21,10 +20,24 @@ type RegisteredParentWitness struct {
 }
 
 func NewParentObserver(id ID, binding Binding) (*ParentObserver, error) {
-	if _, err := NewID(string(id)); err != nil || binding.Digest() == (Digest{}) || binding.Kind() != RequestToolsCall {
+	if _, err := NewID(string(id)); err != nil || binding.Digest() == (Digest{}) || binding.Kind() != RequestToolsCall && binding.Kind() != RequestGetStream {
 		return nil, ErrInvalid
 	}
 	return &ParentObserver{id, binding}, nil
+}
+func (observer *ParentObserver) ObserveRequest(request []byte) (CallbackFacts, error) {
+	if observer == nil {
+		return CallbackFacts{}, ErrInvalid
+	}
+	object, err := rpcObject(request)
+	if err != nil {
+		return CallbackFacts{}, err
+	}
+	var method string
+	if json.Unmarshal(object["method"], &method) != nil || method != "ping" || len(object) != 3 || !validRPCID(object["id"]) {
+		return CallbackFacts{}, ErrDenied
+	}
+	return CallbackFacts{RPCIdentityDigest: rpcIdentityDigest(object["id"]), RequestDigest: Digest(sha256.Sum256(request)), Kind: CallbackPing}, nil
 }
 func (observer *ParentObserver) ObserveReply(id ID, request, reply []byte) (RegisteredParentWitness, error) {
 	if observer == nil {

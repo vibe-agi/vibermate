@@ -16,7 +16,7 @@ import (
 
 // nativeExecutionAuthority rechecks actual current authority and frozen rows in
 // the same writer transaction as Start or Verify. A DTO or digest alone grants nothing.
-func nativeExecutionAuthority(ctx context.Context, tx *sql.Tx, op nativetool.Operation, now time.Time) (nativeBindingRow, nativeScope, environment.Environment, error) {
+func (r *nativeToolRepository) nativeExecutionAuthority(ctx context.Context, tx *sql.Tx, op nativetool.Operation, now time.Time) (nativeBindingRow, nativeScope, environment.Environment, error) {
 	b, err := loadNativeBinding(ctx, tx, op.ID)
 	if err != nil {
 		return b, nativeScope{}, environment.Environment{}, err
@@ -48,7 +48,7 @@ func nativeExecutionAuthority(ctx context.Context, tx *sql.Tx, op nativetool.Ope
 		return b, scope, e, nativetool.ErrInvalid
 	}
 	if op.Kind == nativetool.RequestServerReply {
-		if err := validateNativeParent(ctx, tx, op, b, s, now); err != nil {
+		if err := r.validateNativeParent(ctx, tx, op, b, s, now); err != nil {
 			return b, scope, e, err
 		}
 	} else if s.revision != b.sessionRevision || s.generation != b.generation || string(s.catalog) != string(b.catalog) {
@@ -128,68 +128,6 @@ func nativeDecisionKind(k nativetool.RequestKind) bool {
 	return k == nativetool.RequestToolsCall || k == nativetool.RequestServerReply
 }
 
-// Parent catalog/session revision stays frozen, but a reply still needs the
-// real known Start, consumed decision and active audit of that exact parent.
-func verifyNativeCommittedParent(ctx context.Context, tx *sql.Tx, p nativetool.Operation, b nativeBindingRow, s nativeSession, now time.Time) error {
-	var attempt string
-	var revision, claimed int64
-	var group, key []byte
-	if err := tx.QueryRowContext(ctx, `SELECT attempt_id,authority_revision,claimed_at_unix_ms,intent_digest,replay_key FROM native_tool_once WHERE operation_id=? AND capture_kind=? AND capture_id=?`, p.ID, p.Capture.Kind, p.Capture.ID).Scan(&attempt, &revision, &claimed, &group, &key); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return nativetool.ErrDenied
-		}
-		return err
-	}
-	scope, err := nativeActiveScope(ctx, tx, p.Capture, s.owner, now)
-	if err != nil {
-		return err
-	}
-	if revision <= 0 || uint64(revision) != scope.revision || claimed < p.CreatedAt.UnixMilli() || claimed > now.UnixMilli() || string(group) != string(b.group[:]) {
-		return nativetool.ErrDenied
-	}
-	expectedKey := b.replay
-	if expectedKey == nil {
-		d := sha256.Sum256([]byte("native-once-operation\x00" + string(p.ID)))
-		expectedKey = d[:]
-	}
-	if string(key) != string(expectedKey) {
-		return nativetool.ErrDenied
-	}
-	e, exists, err := loadEnvironmentRevision(ctx, tx, p.EnvironmentID, p.EnvironmentRevision)
-	if err != nil {
-		return err
-	}
-	if !exists {
-		return nativetool.ErrDenied
-	}
-	if p.DecisionSource == "user" {
-		if err := nativeApprovalForStart(ctx, tx, p, b, true, true, time.UnixMilli(claimed).UTC()); err != nil {
-			return err
-		}
-		approval, err := loadNativeApproval(ctx, tx, *p.ApprovalID)
-		if err != nil {
-			return err
-		}
-		if approval.ConsumedAt == nil || approval.ConsumedAt.UnixMilli() != claimed {
-			return nativetool.ErrDenied
-		}
-	} else if p.DecisionSource != "policy" || e.EffectivePolicySet().ToolMode != environment.ToolPolicyObserve {
-		return nativetool.ErrDenied
-	}
-	actual, err := scanEgressAttempt(tx.QueryRowContext(ctx, egressAttemptSelect+` WHERE attempt_id=?`, attempt))
-	if err != nil {
-		return nativetool.ErrDenied
-	}
-	expected, err := nativeAuditAttempt(ctx, tx, p, b, e, attempt, time.UnixMilli(claimed).UTC())
-	if err != nil {
-		return err
-	}
-	if actual.Attempt.Terminal() || actual.Attempt != expected {
-		return nativetool.ErrDenied
-	}
-	return nil
-}
-
 // Reproduces NewClientToolAttempt's exact frozen-route checks from validated SQL
 // rows; private plans cannot be reconstructed by external callers or Store DTOs.
 func nativeAuditAttempt(ctx context.Context, tx *sql.Tx, op nativetool.Operation, b nativeBindingRow, e environment.Environment, attempt string, now time.Time) (egressaudit.Attempt, error) {
@@ -246,7 +184,7 @@ func (r *nativeToolRepository) Start(ctx context.Context, id nativetool.ID, atte
 			}
 			return nativetool.ErrDenied
 		}
-		b, scope, e, err := nativeExecutionAuthority(ctx, tx, op, now)
+		b, scope, e, err := r.nativeExecutionAuthority(ctx, tx, op, now)
 		if err != nil {
 			return err
 		}
@@ -311,9 +249,20 @@ func (r *nativeToolRepository) Start(ctx context.Context, id nativetool.ID, atte
 	// Even a commit-then-error returns no receipt. Finding its once row later is
 	// evidence of uncertainty, never a delayed license to resend.
 	if err != nil {
+		if errors.Is(err, nativetool.ErrUnavailable) {
+			if c := r.callbacks[r.replies[id]]; c != nil {
+				c.retired = true
+				r.invalidateNativeStream(c.stream)
+			}
+		}
 		return nativetool.StartReceipt{}, err
 	}
 	receipt, err := r.issuer.Issue(facts)
+	if err == nil {
+		if c := r.callbacks[r.replies[id]]; c != nil {
+			c.receipt = receipt
+		}
+	}
 	if err == nil {
 		if child, exists := r.recovery[id]; exists {
 			child.receipt = receipt
@@ -340,7 +289,7 @@ func (r *nativeToolRepository) VerifyStartReceipt(ctx context.Context, receipt n
 		if err := r.verifyNativeRecovery(ctx, tx, op, now); err != nil {
 			return err
 		}
-		b, scope, e, err := nativeExecutionAuthority(ctx, tx, op, now)
+		b, scope, e, err := r.nativeExecutionAuthority(ctx, tx, op, now)
 		if err != nil {
 			return err
 		}
@@ -492,7 +441,15 @@ func (r *nativeToolRepository) Finish(ctx context.Context, id nativetool.ID, in 
 	})
 	if err == nil {
 		delete(r.recovery, id)
+		if a, ok := r.replies[id]; ok {
+			delete(r.callbacks, a)
+			delete(r.replies, id)
+		}
 	} else if errors.Is(err, nativetool.ErrUnavailable) {
+		if c := r.callbacks[r.replies[id]]; c != nil {
+			c.retired = true
+			r.invalidateNativeStream(c.stream)
+		}
 		if child, ok := r.recovery[id]; ok {
 			child.cleanupOnly = true
 			r.recovery[id] = child
@@ -633,6 +590,12 @@ func (r *nativeToolRepository) Revoke(ctx context.Context, c captureidentity.Ref
 	})
 	if err == nil {
 		_ = r.pruneTerminalRecovery(ctx)
+	} else {
+		for a, s := range r.streams {
+			if s.capture == c && r.hasNativeCallbacks(a) {
+				r.invalidateNativeStream(a)
+			}
+		}
 	}
 	return err
 }

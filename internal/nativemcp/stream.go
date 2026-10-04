@@ -123,6 +123,12 @@ func (e *executor) reclaimDeliveredStreams(s *session) {
 					break
 				}
 			}
+			for _, operation := range s.elicitations {
+				if operation == candidate.operation {
+					pending = true
+					break
+				}
+			}
 			if pending {
 				continue
 			}
@@ -354,11 +360,26 @@ func (e *executor) finishStreamAttempt(c CapturedRequest, r rpc, s *session, rec
 	err := e.dependencies.Store.FinishAttempt(ctx, receipt, nativetool.PhysicalFinishInput{Outcome: state, Reason: reason, Counts: counts, ObservedAt: e.dependencies.Clock().UTC()})
 	s.mu.Lock()
 	terminal := stream.terminal
+	getCallbacks := false
+	for _, parent := range s.parents {
+		if parent.operation == stream.operation && !parent.consumed {
+			getCallbacks = true
+			break
+		}
+	}
 	resumable := len(stream.events) > 0 && !stream.unidentifiable && !stream.retired && !stream.protocolCanceled && stream.context.Err() == nil
+	getCallbacks = getCallbacks && stream.binding.Kind() == nativetool.RequestGetStream && !stream.retired && !stream.protocolCanceled && stream.context.Err() == nil
+	if stream.binding.Kind() == nativetool.RequestGetStream && (cause == nil || getCallbacks && (errors.Is(cause, errStreamDetached) || errors.Is(cause, errStreamDelivery))) {
+		stream.terminal = true
+		stream.delivered = cause == nil
+	}
 	s.mu.Unlock()
 	if err != nil {
 		e.retireStream(s, stream)
 		return Terminal{OperationID: c.id, Outcome: OutcomeUncertain, Reason: ReasonStorageUnavailable}
+	}
+	if getCallbacks && (errors.Is(cause, errStreamDetached) || errors.Is(cause, errStreamDelivery)) {
+		return Terminal{OperationID: c.id, Outcome: OutcomeFailed, Reason: ReasonStreamDetached}
 	}
 	if terminal {
 		s.mu.Lock()

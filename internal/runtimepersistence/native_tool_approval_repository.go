@@ -3,6 +3,7 @@ package runtimepersistence
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"math"
 	"time"
 
@@ -11,7 +12,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/nativetool"
 )
 
-func nativeApprovalAuthority(ctx context.Context, tx *sql.Tx, op nativetool.Operation, now time.Time) error {
+func (r *nativeToolRepository) nativeApprovalAuthority(ctx context.Context, tx *sql.Tx, op nativetool.Operation, now time.Time) error {
 	if op.BindingDigest == nil || (op.Kind != nativetool.RequestToolsCall && op.Kind != nativetool.RequestServerReply) || (op.State != "validated" && op.State != "awaiting_decision") {
 		return nativetool.ErrDenied
 	}
@@ -30,7 +31,7 @@ func nativeApprovalAuthority(ctx context.Context, tx *sql.Tx, op nativetool.Oper
 		return nativetool.ErrDenied
 	}
 	if op.Kind == nativetool.RequestServerReply {
-		if err := validateNativeParent(ctx, tx, op, b, s, now); err != nil {
+		if err := r.validateNativeParent(ctx, tx, op, b, s, now); err != nil {
 			return err
 		}
 	} else if s.revision != b.sessionRevision || s.generation != b.generation || string(s.catalog) != string(b.catalog) {
@@ -53,6 +54,8 @@ func nativeApprovalAuthority(ctx context.Context, tx *sql.Tx, op nativetool.Oper
 	return nil
 }
 func (r *nativeToolRepository) RequestApproval(ctx context.Context, operation, id nativetool.ID, now, expires time.Time) (nativetool.Approval, error) {
+	r.issuerMu.Lock()
+	defer r.issuerMu.Unlock()
 	if !nativeID(operation) || !nativeID(id) || !nativeTime(now) || !expires.After(now) {
 		return nativetool.Approval{}, nativetool.ErrInvalid
 	}
@@ -62,7 +65,7 @@ func (r *nativeToolRepository) RequestApproval(ctx context.Context, operation, i
 		if err != nil {
 			return err
 		}
-		if err := nativeApprovalAuthority(ctx, tx, op, now); err != nil {
+		if err := r.nativeApprovalAuthority(ctx, tx, op, now); err != nil {
 			return err
 		}
 		if op.ApprovalID != nil {
@@ -109,6 +112,12 @@ func (r *nativeToolRepository) RequestApproval(ctx context.Context, operation, i
 		return err
 	})
 	if err != nil {
+		if errors.Is(err, nativetool.ErrUnavailable) {
+			if c := r.callbacks[r.replies[operation]]; c != nil {
+				c.retired = true
+				r.invalidateNativeStream(c.stream)
+			}
+		}
 		return nativetool.Approval{}, err
 	}
 	return a, nil
@@ -141,22 +150,31 @@ func resolveNativeApproval(ctx context.Context, tx *sql.Tx, a nativetool.Approva
 	return nativetool.ErrInvalid
 }
 func (r *nativeToolRepository) DecideApproval(ctx context.Context, in nativetool.DecisionInput) (nativetool.Approval, error) {
+	r.issuerMu.Lock()
+	defer r.issuerMu.Unlock()
 	if !nativeID(in.ApprovalID) || !nativeRevision(in.ExpectedRevision) || !nativeTime(in.ObservedAt) || (in.Decision != nativetool.DecisionAllowOnce && in.Decision != nativetool.DecisionDeny) || len(in.IdempotencyKey) < 16 || len(in.IdempotencyKey) > 512 {
 		return nativetool.Approval{}, nativetool.ErrInvalid
 	}
 	var answer nativetool.Approval
+	var operation nativetool.ID
 	denied := false
 	err := r.transaction(ctx, func(ctx context.Context, tx *sql.Tx) error {
 		a, err := loadNativeApproval(ctx, tx, in.ApprovalID)
 		if err != nil {
 			return err
 		}
+		operation = a.OperationID
 		op, err := loadNativeOperation(ctx, tx, a.OperationID)
 		if err != nil {
 			return err
 		}
 		if op.BindingDigest == nil || *op.BindingDigest != a.BindingDigest {
 			return nativetool.ErrInvalid
+		}
+		if op.Kind == nativetool.RequestServerReply {
+			if _, _, _, err := r.nativeExecutionAuthority(ctx, tx, op, in.ObservedAt); err != nil {
+				return err
+			}
 		}
 		desired := "allowed"
 		if in.Decision == nativetool.DecisionDeny {
@@ -183,7 +201,7 @@ func (r *nativeToolRepository) DecideApproval(ctx context.Context, in nativetool
 			denied = true
 			return nil
 		}
-		if err := nativeApprovalAuthority(ctx, tx, op, in.ObservedAt); err != nil {
+		if err := r.nativeApprovalAuthority(ctx, tx, op, in.ObservedAt); err != nil {
 			return err
 		}
 		var count int
@@ -200,6 +218,12 @@ func (r *nativeToolRepository) DecideApproval(ctx context.Context, in nativetool
 		return err
 	})
 	if err != nil {
+		if errors.Is(err, nativetool.ErrUnavailable) {
+			if c := r.callbacks[r.replies[operation]]; c != nil {
+				c.retired = true
+				r.invalidateNativeStream(c.stream)
+			}
+		}
 		return nativetool.Approval{}, err
 	}
 	if denied {
