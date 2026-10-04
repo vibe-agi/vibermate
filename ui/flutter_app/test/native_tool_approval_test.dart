@@ -42,6 +42,167 @@ Map<String, Object?> nativeApprovalFixture() => {
   },
 };
 void main() {
+  for (final choice in NativeDecision.values) {
+    for (final committed in [false, true]) {
+      for (final reopen in [false, true]) {
+        testWidgets(
+          'failed native ${choice.wire} recovers by GET committed=$committed reopen=$reopen',
+          (tester) async {
+            var posted = false;
+            var posts = 0;
+            var detailReadsAfterFailure = 0;
+            final pageCursors = <String?>[];
+            final freshRead = Completer<http.Response>();
+            final api = await nativeApi((request) async {
+              if (request.method == 'POST') {
+                posts++;
+                posted = true;
+                expect(jsonDecode(request.body), {
+                  'decision': choice.wire,
+                  'bindingDigest': 'b' * 64,
+                });
+                throw http.ClientException('synthetic response lost');
+              }
+              if (request.url.path.endsWith('/approvals')) {
+                final cursor = request.url.queryParameters['afterSequence'];
+                pageCursors.add(cursor);
+                return nativeResponse({
+                  'items': cursor == '0' ? [nativeApprovalFixture()] : [],
+                  'nextSequence': 7,
+                });
+              }
+              if (posted) {
+                detailReadsAfterFailure++;
+                return freshRead.future;
+              }
+              return nativeResponse(nativeApprovalFixture());
+            });
+            addTearDown(api.close);
+            final controller = nativeController(api)
+              ..pendingApprovals = const [];
+            addTearDown(controller.dispose);
+            await tester.runAsync(() async {
+              controller.setNativeApprovalsVisible(true);
+              while (controller.nativeApprovalsLoading) {
+                await Future<void>.delayed(Duration.zero);
+              }
+              await controller.refreshNativeApprovals();
+            });
+            expect(controller.nativeApprovalScanComplete, isTrue);
+            expect(controller.nativePendingCount, 1);
+            expect(pageCursors, ['0', '7']);
+            final old = controller.nativeApprovals.single;
+            await tester.pumpWidget(
+              MaterialApp(
+                theme: ViberTheme.light(),
+                home: Scaffold(
+                  body: AnimatedBuilder(
+                    animation: controller,
+                    builder: (context, _) => ListView(
+                      children: [
+                        for (final approval in controller.nativeApprovals)
+                          NativeToolApprovalRow(
+                            approval: approval,
+                            profileName: 'Synthetic profile',
+                            copy: AppCopy.forLanguage(AppLanguage.english),
+                            onDecision: (decision) => unawaited(
+                              controller.decideNativeApproval(
+                                approval,
+                                decision,
+                              ),
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            );
+            await tester.tap(
+              find.byKey(
+                Key('native-approval-$nativeApprovalID-${choice.wire}'),
+              ),
+            );
+            await tester.runAsync(() async {
+              while (controller.nativeApprovalError == null) {
+                await Future<void>.delayed(Duration.zero);
+              }
+            });
+            await tester.pump();
+            expect(controller.nativeApprovals, isEmpty);
+            expect(find.textContaining('frozen.txt'), findsNothing);
+            expect(
+              controller.nativeApprovalAttention,
+              isTrue,
+              reason:
+                  'An unresolved POST must retain the ID for authoritative revalidation',
+            );
+            expect(controller.nativePendingCount, 1);
+            await controller.decideNativeApproval(old, choice);
+            expect(
+              posts,
+              1,
+              reason: 'Dropped preview cannot resubmit the mutation',
+            );
+            await tester.runAsync(() async {
+              if (reopen) {
+                controller.setNativeApprovalsVisible(false);
+                controller.setNativeApprovalsVisible(true);
+              } else {
+                unawaited(controller.refreshNativeApprovals());
+              }
+              while (detailReadsAfterFailure == 0 &&
+                  controller.nativeApprovalsLoading) {
+                await Future<void>.delayed(Duration.zero);
+              }
+            });
+            expect(detailReadsAfterFailure, 1);
+            expect(
+              controller.nativeApprovals,
+              isEmpty,
+              reason:
+                  'Reopen must await a fresh GET, never restore old preview bytes',
+            );
+            await tester.runAsync(() async {
+              freshRead.complete(
+                nativeResponse(
+                  committed
+                      ? nativeResolved(
+                          choice == NativeDecision.allowOnce
+                              ? 'allowed'
+                              : 'denied',
+                        )
+                      : nativeApprovalFixture(),
+                ),
+              );
+              while (controller.nativeApprovalsLoading) {
+                await Future<void>.delayed(Duration.zero);
+              }
+            });
+            await tester.pump();
+            expect(posts, 1, reason: 'Recovery must never retry POST');
+            expect(pageCursors, ['0', '7', '7']);
+            expect(controller.nativeApprovalScanComplete, isTrue);
+            expect(controller.nativePendingCount, committed ? 0 : 1);
+            expect(controller.nativeApprovalAttention, !committed);
+            expect(
+              find.byKey(
+                const Key('native-approval-$nativeApprovalID-allow-once'),
+              ),
+              committed ? findsNothing : findsOneWidget,
+            );
+            if (!committed) {
+              expect(
+                identical(controller.nativeApprovals.single, old),
+                isFalse,
+              );
+            }
+            await tester.pumpWidget(const SizedBox());
+          },
+        );
+      }
+    }
+  }
   test(
     'hidden pending attention counts selected Capture without retaining preview',
     () async {

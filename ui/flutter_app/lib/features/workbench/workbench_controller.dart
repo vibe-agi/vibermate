@@ -424,11 +424,15 @@ final class WorkbenchController extends ChangeNotifier
     nativeApprovals = List.unmodifiable(
       nativeApprovals.where((item) => item.id != approval.id),
     );
-    _nativePendingIDs.remove(approval.id);
+    // Keep the body-free ID until the decision is confirmed. If its response
+    // is lost, the next scoped GET must reconcile it even with no new events.
     _nativeDecisions++;
     notifyListeners();
     try {
       await _api.decideNativeApproval(approval.captureKey, approval, decision);
+      if (!_disposed && epoch == _nativeApprovalEpoch) {
+        _nativePendingIDs.remove(approval.id);
+      }
     } catch (error) {
       if (!_disposed && epoch == _nativeApprovalEpoch) {
         nativeApprovalError = _describeError(error);
