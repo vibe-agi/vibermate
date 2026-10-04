@@ -115,6 +115,16 @@ func TestSidecarProfileRequiresConsistentNativeTag(t *testing.T) {
 	}
 }
 
+func TestPackagedArtifactsRejectSyntheticClassificationTag(t *testing.T) {
+	for _, role := range []string{"acceptance", "daemon", "launcher"} {
+		binaries := []goBinaryEvidence{{role: "daemon", tags: "vibermate_native_secrets"}, {role: "launcher", tags: "vibermate_native_secrets"}}
+		binaries = append(binaries, goBinaryEvidence{role: role, tags: "vibermate_acceptance_synthetic,vibermate_native_secrets"})
+		if _, err := sidecarProfile(binaries); err == nil {
+			t.Fatalf("packaged %s admitted synthetic classifier", role)
+		}
+	}
+}
+
 func TestToolchainValidationRequiresPinnedBuildAndHostVersions(t *testing.T) {
 	t.Parallel()
 

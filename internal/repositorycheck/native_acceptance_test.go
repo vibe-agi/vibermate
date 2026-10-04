@@ -53,3 +53,25 @@ func TestNativeAcceptanceCompositionAllowancePreservesIssuerBoundary(t *testing.
 		})
 	}
 }
+
+func TestNativeSyntheticFactoryOnlyInTaggedAcceptanceComposition(t *testing.T) {
+	for _, test := range []struct {
+		path, tag, source string
+		want              bool
+	}{
+		{"cmd/vibermate-acceptance/native_mcp_profiles_synthetic.go", "//go:build vibermate_acceptance_synthetic\n", `package main; import nm "github.com/vibe-agi/vibermate/internal/nativemcp"; var profiles=nm.AcceptanceSyntheticContentProfiles()`, true},
+		{"cmd/vibermate-acceptance/native_mcp_profiles_synthetic.go", "", `package main; import nm "github.com/vibe-agi/vibermate/internal/nativemcp"; var profiles=nm.AcceptanceSyntheticContentProfiles()`, false},
+		{"cmd/vibermate/main.go", "//go:build vibermate_acceptance_synthetic\n", `package main; import nm "github.com/vibe-agi/vibermate/internal/nativemcp"; var profiles=nm.AcceptanceSyntheticContentProfiles`, false},
+		{"internal/nativemcp/other.go", "", `package nativemcp; func ordinary(){ AcceptanceSyntheticContentProfiles() }`, false},
+		{"cmd/vibermate/main.go", "", `package main; import . "github.com/vibe-agi/vibermate/internal/nativemcp"; var profiles=AcceptanceSyntheticContentProfiles()`, false},
+	} {
+		t.Run(test.path+test.tag, func(t *testing.T) {
+			root := t.TempDir()
+			writeAcceptanceRuleFixture(t, root, test.path, test.tag+"\n"+test.source)
+			violations := CheckProductionCompositionBoundary(root)
+			if (len(violations) == 0) != test.want {
+				t.Fatalf("factory composition guard=%+v", violations)
+			}
+		})
+	}
+}

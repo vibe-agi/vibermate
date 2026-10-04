@@ -28,6 +28,7 @@ type nativeMCPCaseReport struct {
 	Reason             string `json:"reason"`
 }
 type nativeMCPReport struct {
+	nativeArtifactEvidence
 	SourceSHA      string                  `json:"sourceSha"`
 	Clients        []nativeMCPClientReport `json:"clients"`
 	FixtureDigests map[string]string       `json:"fixtureDigests"`
@@ -53,6 +54,7 @@ func newNativeMCPReport() nativeMCPReport {
 
 func executeNativeMCP(ctx context.Context, c config) (resultErr error) {
 	report := newNativeMCPReport()
+	report.nativeArtifactEvidence, _ = nativeExecutedArtifactEvidence()
 	defer func() {
 		if err := writeNativeMCPReport(c.reportPath, report); err != nil {
 			if errors.Is(err, errNativeSourceUnbound) {
@@ -112,6 +114,9 @@ func executeNativeMCP(ctx context.Context, c config) (resultErr error) {
 	}
 	for i := range report.Cases {
 		report.Cases[i].Reason = "case_not_implemented"
+		if _, available := nativeAcceptanceContentProfiles(); nativeProfileRequired(report.Cases[i].Name) && !available {
+			report.Cases[i].Reason = "synthetic_content_profiles_required"
+		}
 	}
 	for _, client := range clients {
 		if client.Version == "2.1.220" {
@@ -149,6 +154,8 @@ func writeNativeMCPReport(path string, report nativeMCPReport) error {
 			}
 		}
 	}
+	actual, evidenceErr := nativeExecutedArtifactEvidence()
+	unbound = validateNativeArtifactCases(&report, actual, evidenceErr) || unbound
 	if path == "" || !filepath.IsAbs(path) || filepath.Clean(path) != path {
 		return errors.New("native report path invalid")
 	}

@@ -484,6 +484,9 @@ func commonSourceEvidence(
 func sidecarProfile(binaries []goBinaryEvidence) (string, error) {
 	var daemonTags, launcherTags string
 	for _, binary := range binaries {
+		if hasBuildTag(binary.tags, "vibermate_acceptance_synthetic") {
+			return "", errors.New("packaged artifacts cannot contain synthetic native classification")
+		}
 		switch binary.role {
 		case "daemon":
 			daemonTags = binary.tags

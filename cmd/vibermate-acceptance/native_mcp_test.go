@@ -13,9 +13,73 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/vibe-agi/vibermate/internal/egressnetwork"
 )
+
+func TestNativeClientOutputDrainsStartupWhileApprovalWaits(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	reader, writer := io.Pipe()
+	defer reader.Close()
+	frames, finished := nativeClientFrames(ctx, reader)
+	written := make(chan struct{})
+	go func() {
+		defer writer.Close()
+		defer close(written)
+		for i := 0; i < 100; i++ {
+			_, _ = io.WriteString(writer, "{\"method\":\"mcpStartupUpdate\",\"params\":{}}\n")
+		}
+		_, _ = io.WriteString(writer, "{\"id\":3,\"result\":{}}\n")
+	}()
+	select {
+	case <-written:
+	case <-time.After(time.Second):
+		t.Fatal("startup output blocked while approval consumer was busy")
+	}
+	frame := <-frames
+	if string(frame["id"]) != "3" {
+		t.Fatal("correlated response lost")
+	}
+	if err := <-finished; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestNativeClientOutputOverflowAndCancellationAreBounded(t *testing.T) {
+	t.Run("overflow", func(t *testing.T) {
+		frames, finished := nativeClientFrames(context.Background(), strings.NewReader(strings.Repeat("{\"id\":3,\"result\":{}}\n", 9)))
+		select {
+		case err := <-finished:
+			if err == nil {
+				t.Fatal("response overflow silently dropped evidence")
+			}
+		case <-time.After(time.Second):
+			t.Fatal("overflow reader did not terminate")
+		}
+		count := 0
+		for range frames {
+			count++
+		}
+		if count != 8 {
+			t.Fatalf("queue retained %d frames", count)
+		}
+	})
+	t.Run("cancel", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		reader, writer := io.Pipe()
+		defer writer.Close()
+		_, finished := nativeClientFrames(ctx, reader)
+		cancel()
+		_ = reader.Close()
+		select {
+		case <-finished:
+		case <-time.After(time.Second):
+			t.Fatal("closed/canceled reader did not join")
+		}
+	})
+}
 
 func TestNativeRunnerPreservesCompleteCaseSetOnPrerequisiteFailure(t *testing.T) {
 	report := filepath.Join(t.TempDir(), "report.json")

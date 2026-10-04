@@ -12,6 +12,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/hostcontract"
 	"github.com/vibe-agi/vibermate/internal/instanceguard"
 	"github.com/vibe-agi/vibermate/internal/loopbackproxy"
+	"github.com/vibe-agi/vibermate/internal/nativemcp"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
 	"github.com/vibe-agi/vibermate/internal/originaltransport"
 	"github.com/vibe-agi/vibermate/internal/runtimedata"
@@ -115,6 +116,9 @@ func DefaultLifecycleOptions() LifecycleOptions {
 
 // Options is the complete typed ProductRuntime construction input.
 type Options struct {
+	// ContentProfiles supplies trusted retention/preview classification, never
+	// execution authorization. Nil leaves native content unclassified.
+	ContentProfiles nativemcp.ContentProfiles
 	// BlindTunnels is a trusted in-process dial dependency; nil retains the
 	// normal offline-gated dialer. It cannot grant connection policy authority.
 	BlindTunnels loopbackproxy.BlindTunnelDialer

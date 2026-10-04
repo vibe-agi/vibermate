@@ -92,6 +92,27 @@ func CheckProductionCompositionBoundary(repositoryRoot string) []Violation {
 			present["capture-control"] = true
 		}
 		violations = append(violations, file.dotImportViolations()...)
+		usesSyntheticFactory := false
+		ast.Inspect(file.parsed, func(node ast.Node) bool {
+			if id, ok := node.(*ast.Ident); ok && id.Name == "AcceptanceSyntheticContentProfiles" {
+				usesSyntheticFactory = true
+			}
+			return true
+		})
+		if usesSyntheticFactory {
+			allowedFile := file.relative == "internal/nativemcp/acceptance_synthetic_profiles.go" || file.relative == "cmd/vibermate-acceptance/native_mcp_profiles_synthetic.go"
+			tagged := false
+			for _, group := range file.parsed.Comments {
+				for _, comment := range group.List {
+					if comment.Pos() < file.parsed.Package && comment.Text == "//go:build vibermate_acceptance_synthetic" {
+						tagged = true
+					}
+				}
+			}
+			if !allowedFile || !tagged {
+				violations = append(violations, Violation{Rule: "synthetic-native-profile-outside-tagged-acceptance", Path: file.relative, Message: "the fixed synthetic factory belongs only to explicitly tagged acceptance composition"})
+			}
+		}
 	}
 
 	// Importing either capture aggregate here would recreate a mode-specific
@@ -532,7 +553,7 @@ func productionGoFiles(repositoryRoot string) ([]productionFile, error) {
 			if err != nil {
 				return err
 			}
-			parsed, err := parser.ParseFile(fileSet, path, nil, 0)
+			parsed, err := parser.ParseFile(fileSet, path, nil, parser.ParseComments)
 			if err != nil {
 				return nil
 			}

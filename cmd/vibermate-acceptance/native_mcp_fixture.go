@@ -68,6 +68,51 @@ type nativeFixtureChecks interface {
 	Logf(string, ...any)
 }
 
+type nativeProfileProbe struct {
+	inject, argumentsRetained, resultRetained bool
+	arguments                                 map[string]any
+	result                                    map[string]any
+	description                               string
+	text, image                               string
+}
+
+func nativeProfileProbeFor(scenario string) (nativeProfileProbe, bool) {
+	p := nativeProfileProbe{inject: true, argumentsRetained: true, resultRetained: true, arguments: map[string]any{"query": "synthetic"}, description: "Synthetic public tool", text: "synthetic result"}
+	p.result = map[string]any{"content": []any{map[string]any{"type": "text", "text": p.text}}, "_meta": map[string]any{"proof": "synthetic-transport-private-marker"}}
+	switch scenario {
+	case "profile_full_text":
+	case "profile_full_image":
+		p.image = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+		p.result["content"] = []any{map[string]any{"type": "image", "mimeType": "image/png", "data": p.image}}
+	case "profile_full_large":
+		p.text = strings.Repeat("x", (2<<20)+4096)
+		p.result["content"] = []any{map[string]any{"type": "text", "text": p.text}}
+	case "profile_full_unknown":
+		p.inject = false
+		p.argumentsRetained = false
+		p.resultRetained = false
+	case "profile_full_mutated":
+		p.description = "Changed synthetic public tool"
+		p.argumentsRetained = false
+		p.resultRetained = false
+	case "profile_full_proof":
+		p.arguments["proof"] = "synthetic-sensitive-argument-marker"
+		p.argumentsRetained = false
+	case "profile_full_credential":
+		p.arguments["credentialId"] = "synthetic-sensitive-argument-marker"
+		p.argumentsRetained = false
+	case "profile_full_result_credential":
+		p.result["credentialId"] = "synthetic-sensitive-result-marker"
+		p.resultRetained = false
+	case "profile_full_result_structured":
+		p.result["structuredContent"] = map[string]any{"credentialId": "synthetic-sensitive-result-marker"}
+		p.resultRetained = false
+	default:
+		return nativeProfileProbe{}, false
+	}
+	return p, true
+}
+
 func runNativeFixtureSlice(t nativeFixtureChecks, binary string, nodePaths ...string) {
 	scenario := "observe"
 	if source, ok := t.(interface{ NativeScenario() string }); ok {
@@ -77,7 +122,17 @@ func runNativeFixtureSlice(t nativeFixtureChecks, binary string, nodePaths ...st
 	if streamObserve {
 		scenario = "sse_reconnect"
 	}
-	if scenario != "observe" && scenario != "off" && scenario != "strict_external" && scenario != "review_reject" && scenario != "session404_once" && scenario != "sse_reconnect" && scenario != "model_probe" {
+	knownDeny := scenario == "review_deny_known"
+	sensitiveDeny := scenario == "review_sensitive_proof" || scenario == "review_sensitive_credential"
+	sensitiveArgument := "proof"
+	if scenario == "review_sensitive_credential" {
+		sensitiveArgument = "credentialId"
+	}
+	if knownDeny || sensitiveDeny {
+		scenario = "review_reject"
+	}
+	profileProbe, probingProfile := nativeProfileProbeFor(scenario)
+	if !probingProfile && scenario != "observe" && scenario != "off" && scenario != "strict_external" && scenario != "review_reject" && scenario != "review_allow_once" && scenario != "session404_once" && scenario != "sse_reconnect" && scenario != "model_probe" {
 		t.Fatal("native scenario not implemented")
 	}
 	parent := context.Background()
@@ -134,6 +189,24 @@ func runNativeFixtureSlice(t nativeFixtureChecks, binary string, nodePaths ...st
 	var mu sync.Mutex
 	var methods []string
 	defer func() {
+		if scenario == "review_allow_once" || probingProfile {
+			mu.Lock()
+			defer mu.Unlock()
+			gets := streams.Load()
+			if strings.Join(methods, ",") != "initialize,notifications/initialized,tools/list,tools/call" || gets < 0 || gets > 1 || nativeCount.Load() != 4+gets {
+				t.Error("profile trace differs from four native POSTs plus optional fresh GET")
+			}
+			t.Logf("profile trace handshakePOST=3 toolsCallPOST=1 freshGET=%d native=%d model=%d", gets, nativeCount.Load(), modelCount.Load())
+		}
+		if scenario == "review_reject" {
+			mu.Lock()
+			defer mu.Unlock()
+			gets := streams.Load()
+			if strings.Join(methods, ",") != "initialize,notifications/initialized,tools/list" || gets < 0 || gets > 1 || nativeCount.Load() != 3+gets {
+				t.Error("Deny trace differs from three handshake POSTs plus optional fresh GET")
+			}
+			t.Logf("Deny trace handshakePOST=3 toolsCallPOST=0 freshGET=%d native=%d model=%d", gets, nativeCount.Load(), modelCount.Load())
+		}
 		if scenario == "sse_reconnect" {
 			mu.Lock()
 			defer mu.Unlock()
@@ -249,6 +322,9 @@ func runNativeFixtureSlice(t nativeFixtureChecks, binary string, nodePaths ...st
 			return
 		case "tools/list":
 			result = map[string]any{"tools": []any{map[string]any{"name": "synthetic_read", "description": "Synthetic public tool", "inputSchema": map[string]any{"type": "object", "properties": map[string]any{"query": map[string]any{"type": "string"}}}}}}
+			if probingProfile {
+				result.(map[string]any)["tools"].([]any)[0].(map[string]any)["description"] = profileProbe.description
+			}
 		case "tools/call":
 			if scenario == "sse_reconnect" {
 				mu.Lock()
@@ -264,6 +340,9 @@ func runNativeFixtureSlice(t nativeFixtureChecks, binary string, nodePaths ...st
 				return
 			}
 			result = map[string]any{"content": []any{map[string]any{"type": "text", "text": "synthetic result"}}}
+			if probingProfile {
+				result = profileProbe.result
+			}
 		case "":
 			var id string
 			if scenario != "sse_reconnect" || json.Unmarshal(request.ID, &id) != nil || (id != "fresh-ping" && id != "post-ping" && id != "resumed-ping") || string(request.Result) != "{}" {
@@ -313,6 +392,13 @@ func runNativeFixtureSlice(t nativeFixtureChecks, binary string, nodePaths ...st
 	}
 	blind := &nativeDeniedBlindDialer{gate: gate}
 	options := serverhost.DefaultOptions(productruntime.Options{BlindTunnels: blind, OriginalTransport: transport, Paths: paths, Host: hostcontract.Server(), OfflineHold: gate, Secrets: secrets, Approvals: toolapproval.DefaultConfig(), ExchangeHold: exchange.DefaultHoldPolicy(), Clock: productruntime.SystemClock{}, InstanceIDs: productruntime.NewCryptographicInstanceIDSource(), SecurityRandom: rand.Reader, Lifecycle: productruntime.DefaultLifecycleOptions()})
+	if scenario == "review_allow_once" || knownDeny || sensitiveDeny || probingProfile && profileProbe.inject {
+		profiles, available := nativeAcceptanceContentProfiles()
+		if !available {
+			t.Fatal("synthetic_content_profiles_required")
+		}
+		options.Runtime.ContentProfiles = profiles
+	}
 	options.ListenAddress = "127.0.0.1:0"
 	host, err := serverhost.Start(ctx, options)
 	if err != nil {
@@ -330,13 +416,16 @@ func runNativeFixtureSlice(t nativeFixtureChecks, binary string, nodePaths ...st
 	}
 	origin, _ := originidentity.ParseProviderOrigin("https://chatgpt.com")
 	e := environment.Environment{ID: "native.acceptance", Name: "Private native acceptance", State: environment.StateActive, Revision: 1, ContentRecording: environment.ContentRecordingPolicy{Mode: environment.ContentRecordingOff}, PolicySet: &environment.PolicySet{ToolMode: environment.ToolPolicyObserve}, ClientToolAccess: &environment.ClientToolAccessPolicy{Enabled: true, Route: &environment.ClientToolRoute{ID: "native.acceptance.route", Revision: 1, TargetOrigin: origin, Path: environment.ClientToolMCPPath, CredentialOwner: environment.ClientToolCredentialOriginal, Contract: environment.ClientToolContractCodexLegacy, EgressProfile: egressprofile.Direct()}}}
+	if probingProfile {
+		e.ContentRecording = environment.ContentRecordingPolicy{Mode: environment.ContentRecordingFull, RetentionDays: 1}
+	}
 	if scenario == "off" {
 		e.ClientToolAccess = nil
 	}
 	if scenario == "strict_external" {
 		e.PolicySet.ToolMode = environment.ToolPolicyStrict
 	}
-	if scenario == "review_reject" || scenario == "sse_reconnect" && !streamObserve {
+	if scenario == "review_reject" || scenario == "review_allow_once" || scenario == "sse_reconnect" && !streamObserve {
 		e.PolicySet.ToolMode = environment.ToolPolicyReview
 	}
 	modelServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -543,8 +632,14 @@ func runNativeFixtureSlice(t nativeFixtureChecks, binary string, nodePaths ...st
 			t.Error("launcher cleanup timeout")
 		}
 	}()
-	scanner := bufio.NewScanner(outputReader)
-	scanner.Buffer(make([]byte, 4096), 4<<20)
+	frames, frameFinished := nativeClientFrames(ctx, outputReader)
+	defer func() {
+		cancel()
+		_ = outputReader.Close()
+		if err := <-frameFinished; err != nil {
+			t.Error("bounded client output failed")
+		}
+	}()
 	send := func(id int, method string, params any) {
 		t.Helper()
 		if err := json.NewEncoder(inputWriter).Encode(map[string]any{"id": id, "method": method, "params": params}); err != nil {
@@ -559,9 +654,8 @@ func runNativeFixtureSlice(t nativeFixtureChecks, binary string, nodePaths ...st
 	}
 	read := func(id int, expectedDenial ...bool) map[string]json.RawMessage {
 		t.Helper()
-		for scanner.Scan() {
-			var value map[string]json.RawMessage
-			if json.Unmarshal(scanner.Bytes(), &value) == nil && string(value["id"]) == fmt.Sprint(id) {
+		for value := range frames {
+			if string(value["id"]) == fmt.Sprint(id) {
 				if value["error"] != nil && !(len(expectedDenial) > 0 && expectedDenial[0]) {
 					page, _ := host.Runtime().CaptureRunReader().ListRuns(ctx, capturerun.PageRequest{Limit: 10})
 					for _, run := range page.Items {
@@ -593,11 +687,7 @@ func runNativeFixtureSlice(t nativeFixtureChecks, binary string, nodePaths ...st
 		read(3)
 		completed := false
 		turnFailure := ""
-		for scanner.Scan() {
-			var frame map[string]json.RawMessage
-			if json.Unmarshal(scanner.Bytes(), &frame) != nil {
-				continue
-			}
+		for frame := range frames {
 			var method string
 			_ = json.Unmarshal(frame["method"], &method)
 			if method == "turn/completed" {
@@ -728,13 +818,82 @@ func runNativeFixtureSlice(t nativeFixtureChecks, binary string, nodePaths ...st
 			t.Fatal("fresh GET callback reply missing")
 		}
 	}
-	send(3, "mcpServer/tool/call", map[string]any{"threadId": thread.Thread.ID, "server": "codex_apps", "tool": "synthetic_read", "arguments": map[string]any{"query": "synthetic"}})
+	callArguments := map[string]any{"query": "synthetic"}
+	if sensitiveDeny {
+		callArguments[sensitiveArgument] = "synthetic-sensitive-argument-marker"
+	}
+	if probingProfile {
+		callArguments = profileProbe.arguments
+	}
+	send(3, "mcpServer/tool/call", map[string]any{"threadId": thread.Thread.ID, "server": "codex_apps", "tool": "synthetic_read", "arguments": callArguments})
+	if scenario == "review_allow_once" {
+		runs, err := host.Runtime().CaptureRunReader().ListRuns(ctx, capturerun.PageRequest{Limit: 10})
+		if err != nil || len(runs.Items) != 1 {
+			t.Fatal("ordinary Review Capture missing")
+		}
+		management.allowSyntheticPending(ctx, captureidentity.Reference{Kind: captureidentity.KindManagedRun, ID: runs.Items[0].ID})
+	}
 	if scenario == "review_reject" {
 		runs, err := host.Runtime().CaptureRunReader().ListRuns(ctx, capturerun.PageRequest{Limit: 10})
 		if err != nil || len(runs.Items) != 1 {
 			t.Fatal("pending call Capture missing")
 		}
-		management.rejectPending(ctx, captureidentity.Reference{Kind: captureidentity.KindManagedRun, ID: runs.Items[0].ID})
+		pendingCapture := captureidentity.Reference{Kind: captureidentity.KindManagedRun, ID: runs.Items[0].ID}
+		decided := false
+		defer func() {
+			if decided {
+				return
+			}
+			select {
+			case frame := <-frames:
+				var rpcError struct {
+					Code    int    `json:"code"`
+					Message string `json:"message"`
+				}
+				_ = json.Unmarshal(frame["error"], &rpcError)
+				classification := "unclassified"
+				for _, candidate := range []string{"session_invalid", "protocol_invalid", "execution_uncertain", "not found", "initializ"} {
+					if strings.Contains(rpcError.Message, candidate) {
+						classification = candidate
+						break
+					}
+				}
+				t.Logf("client response before missing approval: hasError=%t code=%d class=%s hasResult=%t", len(frame["error"]) > 0, rpcError.Code, classification, len(frame["result"]) > 0)
+			default:
+				t.Logf("no buffered client response before missing approval")
+			}
+			page, err := host.Runtime().NativeToolRepository().Page(ctx, nativetool.PageRequest{Capture: pendingCapture, Limit: 100})
+			if err == nil {
+				seen := map[nativetool.ID]bool{}
+				for _, op := range page.Items {
+					if seen[op.ID] {
+						continue
+					}
+					seen[op.ID] = true
+					t.Logf("pending diagnostic kind=%s state=%s reason=%s", op.Kind, op.State, op.Reason)
+				}
+			}
+			reader, err := openExchangeAuditReader(ctx, paths.DataDirectory())
+			if err != nil {
+				return
+			}
+			defer reader.Close()
+			rows, err := reader.connection.QueryContext(ctx, `SELECT o.rpc_kind,o.state,COALESCE(b.session_revision,0),COALESCE(b.catalog_generation,0),COALESCE(s.revision,0),COALESCE(s.catalog_generation,0),COALESCE(n.claimed_at_unix_ms,0),COALESCE(a.completed_at_unix_ms,0),COALESCE(a.outcome,''),COALESCE(a.error_class,'') FROM native_tool_operations o LEFT JOIN native_tool_bindings b USING(operation_id) LEFT JOIN native_tool_sessions s USING(session_id) LEFT JOIN native_tool_once n USING(operation_id) LEFT JOIN runtime_egress_attempts a USING(attempt_id) WHERE o.capture_kind=? AND o.capture_id=?`, pendingCapture.Kind, pendingCapture.ID)
+			if err != nil {
+				t.Logf("pending SQL facts unavailable")
+				return
+			}
+			defer rows.Close()
+			for rows.Next() {
+				var kind, state, outcome, reason string
+				var br, bg, sr, sg, claim, end int64
+				if rows.Scan(&kind, &state, &br, &bg, &sr, &sg, &claim, &end, &outcome, &reason) == nil {
+					t.Logf("pending SQL kind=%s state=%s bindingRevision=%d bindingGeneration=%d sessionRevision=%d sessionGeneration=%d claimMS=%d physicalEndMS=%d physical=%s/%s", kind, state, br, bg, sr, sg, claim, end, outcome, reason)
+				}
+			}
+		}()
+		management.rejectPending(ctx, pendingCapture, knownDeny)
+		decided = true
 	}
 	if scenario == "sse_reconnect" {
 		allowStream() // original tools/call
@@ -827,7 +986,7 @@ func runNativeFixtureSlice(t nativeFixtureChecks, binary string, nodePaths ...st
 			}
 			time.Sleep(time.Millisecond)
 		}
-		if call.State != wantState || call.Capture != capture || call.EnvironmentID != assignment.EnvironmentID || call.EnvironmentRevision != assignment.EnvironmentRevision || call.EnvironmentDigest != assignment.EnvironmentDigest || call.BindingDigest == nil || call.CredentialOwner != "original_client" || call.Arguments != nil || call.Result != nil {
+		if call.State != wantState || call.Capture != capture || call.EnvironmentID != assignment.EnvironmentID || call.EnvironmentRevision != assignment.EnvironmentRevision || call.EnvironmentDigest != assignment.EnvironmentDigest || call.BindingDigest == nil || call.CredentialOwner != "original_client" || !probingProfile && (call.Arguments != nil || call.Result != nil) {
 			t.Fatal("native ownership/terminal/OFF recording differs from actual frozen assignment")
 		}
 		audit, err := host.Runtime().EgressAttempts().List(ctx, egressaudit.PageRequest{ParentKind: egressaudit.ParentClientOperation, ParentID: string(call.ID), Limit: 10})
@@ -838,6 +997,25 @@ func runNativeFixtureSlice(t nativeFixtureChecks, binary string, nodePaths ...st
 			if call.DecisionSource != "user" || call.ApprovalID == nil || call.Reason != "approval_denied" || len(audit.Items) != 0 || (call.BytesOut != nil && *call.BytesOut != 0) {
 				t.Fatal("Review reject did not consume the actual user decision before send")
 			}
+		} else if scenario == "review_allow_once" {
+			if call.DecisionSource != "user" || call.ApprovalID == nil || len(audit.Items) != 1 {
+				t.Fatal("ordinary Review lacks one consumed Allow send")
+			}
+			approval, err := host.Runtime().NativeToolRepository().GetApproval(ctx, *call.ApprovalID)
+			if err != nil || approval.State != "allowed" || approval.ConsumedAt == nil {
+				t.Fatal("ordinary Review Allow not consumed")
+			}
+			reader, err := openExchangeAuditReader(ctx, paths.DataDirectory())
+			if err != nil {
+				t.Fatal(err)
+			}
+			var once, consumed int
+			err = reader.connection.QueryRowContext(ctx, `SELECT (SELECT COUNT(*) FROM native_tool_once WHERE operation_id=?),(SELECT COUNT(*) FROM native_tool_approvals WHERE operation_id=? AND consumed_at_unix_ms IS NOT NULL)`, call.ID, call.ID).Scan(&once, &consumed)
+			_ = reader.Close()
+			if err != nil || once != 1 || consumed != 1 {
+				t.Fatal("synthetic Allow replay changed once/consumption")
+			}
+			t.Logf("synthetic Review SQL once=%d consumed=%d audit=%d", once, consumed, len(audit.Items))
 		} else if scenario == "sse_reconnect" && !streamObserve {
 			if call.DecisionSource != "user" || call.ApprovalID == nil || !streamApprovals[call.ApprovalID.String()] {
 				t.Fatal("stream original call lacks its own Allow")
@@ -885,7 +1063,15 @@ func runNativeFixtureSlice(t nativeFixtureChecks, binary string, nodePaths ...st
 				t.Fatal("automatic request cleared persisted uncertainty")
 			}
 		}
-		management.verifyMetadata(ctx, call)
+		if probingProfile {
+			management.verifySyntheticFull(ctx, call, profileProbe)
+			verifySyntheticSQLPrivacy(ctx, t, paths.DataDirectory())
+		} else {
+			management.verifyMetadata(ctx, call)
+		}
+		if sensitiveDeny {
+			verifySyntheticSQLPrivacy(ctx, t, paths.DataDirectory())
+		}
 		if scenario == "sse_reconnect" {
 			verifyNativeStreamSQL(ctx, t, paths.DataDirectory(), capture, !streamObserve)
 			page, err := host.Runtime().NativeToolRepository().Page(ctx, nativetool.PageRequest{Capture: capture, Limit: 100})
@@ -914,6 +1100,109 @@ func runNativeFixtureSlice(t nativeFixtureChecks, binary string, nodePaths ...st
 	if observer, ok := t.(interface{ NativeOwnership(bool, bool, bool) }); ok {
 		observer.NativeOwnership(true, true, false)
 	}
+}
+
+func verifySyntheticSQLPrivacy(ctx context.Context, t nativeFixtureChecks, directory string) {
+	reader, err := openExchangeAuditReader(ctx, directory)
+	if err != nil {
+		t.Fatal("private SQL audit unavailable")
+	}
+	defer reader.Close()
+	rows, err := reader.connection.QueryContext(ctx, `SELECT name FROM sqlite_schema WHERE type='table' AND name NOT LIKE 'sqlite_%'`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var tables []string
+	for rows.Next() {
+		var name string
+		if rows.Scan(&name) != nil {
+			t.Fatal("private schema row invalid")
+		}
+		tables = append(tables, name)
+	}
+	if rows.Err() != nil {
+		t.Fatal(rows.Err())
+	}
+	_ = rows.Close()
+	for _, table := range tables {
+		rows, err := reader.connection.QueryContext(ctx, `SELECT * FROM "`+strings.ReplaceAll(table, `"`, `""`)+`"`)
+		if err != nil {
+			t.Fatal("private table unavailable")
+		}
+		defer rows.Close()
+		columns, err := rows.Columns()
+		if err != nil {
+			t.Fatal(err)
+		}
+		for rows.Next() {
+			values := make([]any, len(columns))
+			destinations := make([]any, len(columns))
+			for i := range values {
+				destinations[i] = &values[i]
+			}
+			if rows.Scan(destinations...) != nil {
+				t.Fatal("private row unavailable")
+			}
+			for _, value := range values {
+				var raw string
+				switch value := value.(type) {
+				case []byte:
+					raw = string(value)
+				case string:
+					raw = value
+				default:
+					continue
+				}
+				for _, marker := range []string{"synthetic-original-login", "synthetic-managed-model", "private-session", "synthetic-transport-private-marker", "synthetic-sensitive-argument-marker", "synthetic-sensitive-result-marker"} {
+					if strings.Contains(raw, marker) {
+						t.Fatal("synthetic sensitive value reached SQL")
+					}
+				}
+			}
+		}
+		if rows.Err() != nil {
+			t.Fatal(rows.Err())
+		}
+		_ = rows.Close()
+	}
+}
+
+// Keep draining startup notifications while the control client reviews a
+// question. A synchronous stdout pipe must not hold the app-server's startup
+// task behind that review. Only bounded correlated responses/turn terminals
+// are retained; this is fixture I/O, not a substitute client implementation.
+func nativeClientFrames(ctx context.Context, reader io.Reader) (<-chan map[string]json.RawMessage, <-chan error) {
+	frames := make(chan map[string]json.RawMessage, 8)
+	finished := make(chan error, 1)
+	go func() {
+		defer close(frames)
+		defer close(finished)
+		scanner := bufio.NewScanner(reader)
+		scanner.Buffer(make([]byte, 4096), 4<<20)
+		for scanner.Scan() {
+			var frame map[string]json.RawMessage
+			if json.Unmarshal(scanner.Bytes(), &frame) != nil {
+				finished <- fmt.Errorf("invalid client frame")
+				return
+			}
+			if frame["id"] == nil && string(frame["method"]) != `"turn/completed"` {
+				continue
+			}
+			select {
+			case frames <- frame:
+			case <-ctx.Done():
+				return
+			default:
+				finished <- fmt.Errorf("client frame queue exceeded bound")
+				return
+			}
+		}
+		if err := scanner.Err(); err != nil && ctx.Err() == nil {
+			finished <- err
+		}
+	}()
+	return frames, finished
 }
 
 func nativeTLSFixture(t nativeFixtureChecks, handler http.Handler) (*httptest.Server, *x509.CertPool) {

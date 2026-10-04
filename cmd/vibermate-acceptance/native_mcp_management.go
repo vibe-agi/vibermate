@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/base64"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -100,7 +101,7 @@ func (fixture *nativeManagementFixture) request(ctx context.Context, method, pat
 	return response.StatusCode, data
 }
 
-func (fixture *nativeManagementFixture) rejectPending(ctx context.Context, capture captureidentity.Reference) {
+func (fixture *nativeManagementFixture) rejectPending(ctx context.Context, capture captureidentity.Reference, classified ...bool) {
 	path := "/api/v1/captures/" + capture.Key() + "/native-tools/approvals"
 	deadline := time.Now().Add(6 * time.Second)
 	for time.Now().Before(deadline) {
@@ -114,8 +115,15 @@ func (fixture *nativeManagementFixture) rejectPending(ctx context.Context, captu
 				fixture.checks.Fatal("unexpected concurrent native questions")
 			}
 			approval := page.Items[0]
-			if approval.State != "pending" || approval.CaptureKey != capture.Key() || approval.PreviewState != "unavailable" || approval.Preview != nil {
+			known := len(classified) > 0 && classified[0]
+			if approval.State != "pending" || approval.CaptureKey != capture.Key() || !known && (approval.PreviewState != "unavailable" || approval.Preview != nil) || known && (approval.PreviewState != "available" || approval.Preview == nil) {
 				fixture.checks.Fatal("unknown production profile fabricated an available preview")
+			}
+			if !known {
+				status, _ := fixture.request(ctx, "POST", path+"/"+approval.ID+"/actions/decide", fixture.session.WriteToken, desktopcontrol.NativeDecisionDTO{Decision: nativetool.DecisionAllowOnce, BindingDigest: approval.BindingDigest}, map[string]string{"If-Match": strconv.FormatUint(approval.Revision, 10), "Idempotency-Key": "native-unclassified-allow-" + approval.ID})
+				if status != http.StatusConflict {
+					fixture.checks.Fatal("unknown profile bypassed unavailable-preview Allow denial")
+				}
 			}
 			status, data = fixture.request(ctx, "POST", path+"/"+approval.ID+"/actions/decide", fixture.session.WriteToken, desktopcontrol.NativeDecisionDTO{Decision: nativetool.DecisionDeny, BindingDigest: approval.BindingDigest}, map[string]string{"If-Match": strconv.FormatUint(approval.Revision, 10), "Idempotency-Key": "native-private-reject-" + approval.ID})
 			var decided desktopcontrol.NativeApprovalDTO
@@ -166,6 +174,143 @@ func (fixture *nativeManagementFixture) allowStreamPending(ctx context.Context, 
 	}
 	fixture.checks.Fatal("stream pending approval missing")
 	return ""
+}
+
+func (fixture *nativeManagementFixture) allowSyntheticPending(ctx context.Context, capture captureidentity.Reference) {
+	path := "/api/v1/captures/" + capture.Key() + "/native-tools/approvals"
+	deadline := time.Now().Add(8 * time.Second)
+	for time.Now().Before(deadline) {
+		status, data := fixture.request(ctx, "GET", path, fixture.session.ReadToken, nil, nil)
+		var page desktopcontrol.NativeApprovalPageDTO
+		if status != 200 || json.Unmarshal(data, &page) != nil {
+			fixture.checks.Fatal("synthetic approval page unavailable")
+		}
+		for _, approval := range page.Items {
+			if approval.State != "pending" {
+				continue
+			}
+			if approval.CaptureKey != capture.Key() || approval.PreviewState != "available" || approval.Preview == nil || len(approval.Preview.Intents) != 1 {
+				fixture.checks.Fatal("ordinary synthetic Review preview unavailable")
+			}
+			intent := approval.Preview.Intents[0]
+			if intent.ToolName != "synthetic_read" || intent.Action != "tool_call" || intent.Target != "https://chatgpt.com" || string(intent.Arguments) != `{"query":"synthetic"}` || intent.Truncated {
+				fixture.checks.Fatal("synthetic Review preview differs from fixed intent")
+			}
+			status, current := fixture.request(ctx, "GET", path+"/"+approval.ID, fixture.session.ReadToken, nil, nil)
+			var reread desktopcontrol.NativeApprovalDTO
+			if status != 200 || json.Unmarshal(current, &reread) != nil || reread.OperationID != approval.OperationID || reread.BindingDigest != approval.BindingDigest || reread.Revision != approval.Revision {
+				fixture.checks.Fatal("synthetic approval changed before decision")
+			}
+			for _, wrong := range []struct {
+				revision uint64
+				digest   string
+			}{{approval.Revision + 1, approval.BindingDigest}, {approval.Revision, strings.Repeat("0", 64)}} {
+				status, _ := fixture.request(ctx, "POST", path+"/"+approval.ID+"/actions/decide", fixture.session.WriteToken, desktopcontrol.NativeDecisionDTO{Decision: nativetool.DecisionAllowOnce, BindingDigest: wrong.digest}, map[string]string{"If-Match": strconv.FormatUint(wrong.revision, 10), "Idempotency-Key": "native-stale-allow-" + approval.ID})
+				if status != http.StatusConflict {
+					fixture.checks.Fatal("stale synthetic approval granted Allow")
+				}
+			}
+			status, data = fixture.request(ctx, "POST", path+"/"+approval.ID+"/actions/decide", fixture.session.WriteToken, desktopcontrol.NativeDecisionDTO{Decision: nativetool.DecisionAllowOnce, BindingDigest: approval.BindingDigest}, map[string]string{"If-Match": strconv.FormatUint(approval.Revision, 10), "Idempotency-Key": "synthetic-profile-allow-" + approval.ID})
+			var decided desktopcontrol.NativeApprovalDTO
+			if status != 200 || json.Unmarshal(data, &decided) != nil || decided.State != "allowed" {
+				fixture.checks.Fatal("synthetic authenticated Allow failed")
+			}
+			// Retrying the exact decision is idempotent; it cannot create a
+			// second tool request or consume a second once entry.
+			status, _ = fixture.request(ctx, "POST", path+"/"+approval.ID+"/actions/decide", fixture.session.WriteToken, desktopcontrol.NativeDecisionDTO{Decision: nativetool.DecisionAllowOnce, BindingDigest: approval.BindingDigest}, map[string]string{"If-Match": strconv.FormatUint(approval.Revision, 10), "Idempotency-Key": "synthetic-profile-allow-" + approval.ID})
+			if status != 200 {
+				fixture.checks.Fatal("Allow retry lost the idempotent decision")
+			}
+			return
+		}
+		select {
+		case <-ctx.Done():
+			fixture.checks.Fatal("synthetic approval canceled")
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+	fixture.checks.Fatal("synthetic approval missing")
+}
+
+func (fixture *nativeManagementFixture) verifySyntheticFull(ctx context.Context, op nativetool.Operation, probe nativeProfileProbe) {
+	path := "/api/v1/captures/" + op.Capture.Key() + "/native-tools/operations/" + op.ID.String()
+	status, data := fixture.request(ctx, "GET", path, fixture.session.ReadToken, nil, nil)
+	var view desktopcontrol.NativeOperationDTO
+	if status != 200 || json.Unmarshal(data, &view) != nil || view.Content.Mode != environment.ContentRecordingFull || view.OperationID != op.ID.String() || view.CaptureKey != op.Capture.Key() || view.Environment.Digest != op.EnvironmentDigest.String() {
+		fixture.checks.Fatal("Full reader lost real operation ownership")
+	}
+	for _, part := range []struct {
+		name       string
+		retained   bool
+		descriptor desktopcontrol.NativePartDescriptor
+		stored     *nativetool.ContentDescriptor
+	}{
+		{"tool_arguments", probe.argumentsRetained, view.Content.Arguments, op.Arguments}, {"tool_result", probe.resultRetained, view.Content.Result, op.Result},
+	} {
+		if !part.retained {
+			if part.stored != nil || part.descriptor.State != "unavailable" || part.descriptor.Digest != "" {
+				fixture.checks.Fatal("unclassified/sensitive Full part exposed a content hash")
+			}
+			status, _ = fixture.request(ctx, "GET", path+"/content?part="+part.name, fixture.session.ReadToken, nil, nil)
+			if status != http.StatusGone {
+				fixture.checks.Fatal("suppressed Full content was readable")
+			}
+			continue
+		}
+		if part.stored == nil || part.descriptor.State != "available" || part.descriptor.Digest != part.stored.Digest.String() {
+			fixture.checks.Fatal("classified Full descriptor unavailable")
+		}
+		cursor := ""
+		var content []byte
+		pages := 0
+		for {
+			uri := path + "/content?part=" + part.name
+			if cursor != "" {
+				uri += "&cursor=" + url.QueryEscape(cursor)
+			}
+			status, data = fixture.request(ctx, "GET", uri, fixture.session.ReadToken, nil, nil)
+			var page desktopcontrol.NativeContentPageDTO
+			if status != 200 || len(data) > 128<<10 || json.Unmarshal(data, &page) != nil || page.OperationID != op.ID.String() || page.CaptureKey != op.Capture.Key() || page.BodyDigest != part.descriptor.Digest || page.Part != part.name {
+				fixture.checks.Fatal("bounded Full content page invalid")
+			}
+			for _, block := range page.Blocks {
+				if block.Offset != len(content) {
+					fixture.checks.Fatal("Full content page offset regressed")
+				}
+				if block.ImageData != nil {
+					decoded, err := base64.StdEncoding.DecodeString(*block.ImageData)
+					if err != nil || block.MIMEType != "image/png" {
+						fixture.checks.Fatal("Full image page invalid")
+					}
+					content = append(content, decoded...)
+				} else if block.Text != nil {
+					content = append(content, []byte(*block.Text)...)
+				} else {
+					fixture.checks.Fatal("Full page omitted block")
+				}
+			}
+			pages++
+			if page.NextCursor == "" {
+				break
+			}
+			if page.NextCursor == cursor || pages >= 128 {
+				fixture.checks.Fatal("Full pagination did not advance within bound")
+			}
+			cursor = page.NextCursor
+		}
+		var expected []byte
+		if part.name == "tool_arguments" {
+			expected = []byte(`{"query":"synthetic"}`)
+		} else if probe.image != "" {
+			expected, _ = base64.StdEncoding.DecodeString(probe.image)
+		} else {
+			expected = []byte(probe.text)
+		}
+		if !bytes.Equal(content, expected) || len(expected) > 2<<20 && pages < 2 {
+			fixture.checks.Fatal("Full reader content differs from exact synthetic bytes")
+		}
+		fixture.checks.Logf("Full reader part=%s bytes=%d pages=%d", part.name, len(content), pages)
+	}
 }
 
 func (fixture *nativeManagementFixture) verifyMetadata(ctx context.Context, operation nativetool.Operation) {

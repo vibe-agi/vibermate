@@ -74,6 +74,9 @@ func runNativeObserveCase(ctx context.Context, directory string, client nativePi
 }
 
 func runNativePolicyCase(ctx context.Context, directory string, client nativePinnedClient, node, scenario string, logs ...func(string, ...any)) (result nativeMCPCaseReport, resultErr error) {
+	if _, available := nativeAcceptanceContentProfiles(); nativeProfileRequired(scenario) && !available {
+		return nativeMCPCaseReport{Name: scenario, Client: client.Version, Outcome: "incomplete", Reason: "synthetic_content_profiles_required"}, fmt.Errorf("synthetic_content_profiles_required")
+	}
 	checks := &nativeExecutionChecks{ctx: ctx, directory: directory, evidence: nativeMCPCaseReport{Name: scenario, Client: client.Version, Outcome: "incomplete", Reason: "not_started"}}
 	if len(logs) > 0 {
 		checks.logf = logs[0]
@@ -96,13 +99,13 @@ func runNativePolicyCase(ctx context.Context, directory string, client nativePin
 		// of model Exchanges, not ownership of a nonexistent model Activity.
 		validCounts := result.ModelOutbound == 0
 		switch scenario {
-		case "observe":
+		case "observe", "review_allow_once":
 			validCounts = validCounts && result.NativeOutbound >= 4
 		case "off":
 			validCounts = validCounts && result.NativeOutbound == 0
 		case "strict_external":
 			validCounts = validCounts && result.NativeOutbound >= 3
-		case "review_reject":
+		case "review_reject", "review_deny_known", "review_sensitive_proof", "review_sensitive_credential":
 			validCounts = validCounts && result.NativeOutbound >= 3
 		case "session404_once":
 			validCounts = validCounts && result.NativeOutbound >= 4
@@ -111,7 +114,8 @@ func runNativePolicyCase(ctx context.Context, directory string, client nativePin
 		case "model_probe":
 			validCounts = result.ModelOutbound == 1 && result.ActivityMatched
 		default:
-			validCounts = false
+			_, probe := nativeProfileProbeFor(scenario)
+			validCounts = validCounts && probe && (result.NativeOutbound == 4 || result.NativeOutbound == 5)
 		}
 		if checks.failed || !result.CaptureMatched || !result.EnvironmentMatched || !validCounts {
 			result.Outcome = "failed"
@@ -127,8 +131,11 @@ func runNativePolicyCase(ctx context.Context, directory string, client nativePin
 		if scenario == "strict_external" {
 			result.Reason = "strict_external_zero_call"
 		}
-		if scenario == "review_reject" {
+		if scenario == "review_reject" || scenario == "review_deny_known" || scenario == "review_sensitive_proof" || scenario == "review_sensitive_credential" {
 			result.Reason = "review_rejected_zero_call"
+		}
+		if scenario == "review_allow_once" {
+			result.Reason = "synthetic_review_allowed_once"
 		}
 		if scenario == "session404_once" {
 			result.Reason = "execution_uncertain_not_replayed"
@@ -141,6 +148,9 @@ func runNativePolicyCase(ctx context.Context, directory string, client nativePin
 		}
 		if scenario == "model_probe" {
 			result.Reason = "actual_model_activity"
+		}
+		if _, probe := nativeProfileProbeFor(scenario); probe {
+			result.Reason = "synthetic_full_diagnostic_only"
 		}
 	}()
 	runNativeFixtureSlice(checks, client.invocation, node)
