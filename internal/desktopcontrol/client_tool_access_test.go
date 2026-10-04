@@ -58,6 +58,103 @@ func TestEnvironmentClientToolAccessWireRoundTrip(t *testing.T) {
 	}
 }
 
+func TestEnvironmentClientToolAccessNestedWireRejectsWithoutSaving(t *testing.T) {
+	ctx := context.Background()
+	runtime := startRuntime(t)
+	defer shutdownRuntime(t, runtime)
+	application, err := desktopcontrol.New(desktopcontrol.Options{
+		Readiness: readyState(true), Status: runtime, Environments: runtime.Environments(), ClientToolAccess: runtime,
+		Assignments: runtime.CaptureAssignments(), Activities: runtime.Activities(), Contents: runtime.ExchangeContents(),
+		Connections: runtime.ConnectionEvents(), Egress: runtime.EgressAttempts(), Approvals: runtime.ToolApprovals(),
+		Endpoints: runtime.UpstreamEndpoints(), Accounts: runtime.ProviderAccounts(), EgressProfiles: runtime.EgressProfiles(),
+		Offline: runtime, Clock: desktopcontrol.SystemClock{}, ManualCaptures: runtime.ManualCaptures(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	system, err := runtime.Environments().Get(ctx, environment.SystemTransparentID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := system.Aggregate()
+	input := desktopcontrol.EnvironmentDraftInput{Name: "Work", State: environment.StateActive, ClientEndpoints: base.ClientEndpoints, PluginBindings: base.PluginBindings, BudgetPolicy: base.BudgetPolicy, ContentRecording: base.ContentRecording, LaunchEnvironment: base.LaunchEnvironment, PolicySet: base.PolicySet, ClientToolAccess: &environment.ClientToolAccessPolicy{Enabled: true}}
+	body, _ := json.Marshal(input)
+	first := environmentRequest(t, application, http.MethodPut, "/api/v1/environments/work/draft", 0, "strict-native-initial-save", body)
+	if first.Code != 200 {
+		t.Fatalf("prepare: %d %s", first.Code, first.Body.String())
+	}
+	var prepared desktopcontrol.EnvironmentDraftResponse
+	if err := json.Unmarshal(first.Body.Bytes(), &prepared); err != nil {
+		t.Fatal(err)
+	}
+	for _, action := range []string{"preview", "publish"} {
+		response := environmentRequest(t, application, http.MethodPost, "/api/v1/environments/work/draft/actions/"+action, uint64(prepared.DraftRevision), "strict-native-initial-"+action, nil)
+		if response.Code != 200 {
+			t.Fatalf("%s: %d %s", action, response.Code, response.Body.String())
+		}
+	}
+	input.ClientToolAccess = prepared.Candidate.ClientToolAccess
+	body, _ = json.Marshal(input)
+	saved := environmentRequest(t, application, http.MethodPut, "/api/v1/environments/work/draft", 1, "strict-native-trusted-echo", body)
+	if saved.Code != 200 {
+		t.Fatalf("trusted echo: %d %s", saved.Code, saved.Body.String())
+	}
+	var existing desktopcontrol.EnvironmentDraftResponse
+	if err := json.Unmarshal(saved.Body.Bytes(), &existing); err != nil {
+		t.Fatal(err)
+	}
+	input.ExpectedDraftRevision = existing.DraftRevision
+	inputJSON, _ := json.Marshal(input)
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(inputJSON, &fields); err != nil {
+		t.Fatal(err)
+	}
+	routeJSON, _ := json.Marshal(prepared.Candidate.ClientToolAccess.Route)
+	withRoute := func(route []byte) json.RawMessage {
+		return json.RawMessage(`{"enabled":true,"route":` + string(route) + `}`)
+	}
+	cases := []struct {
+		name   string
+		policy json.RawMessage
+	}{
+		{"route alias null", json.RawMessage(`{"enabled":true,"Route":null}`)},
+		{"conflicting enabled alias", json.RawMessage(`{"enabled":true,"Enabled":false}`)},
+		{"duplicate enabled", json.RawMessage(`{"enabled":false,"enabled":true}`)},
+		{"duplicate permission container", json.RawMessage(`{"enabled":true}`)},
+		{"duplicate route", json.RawMessage(`{"enabled":true,"route":` + string(routeJSON) + `,"route":` + string(routeJSON) + `}`)},
+		{"route field alias", withRoute(bytes.Replace(routeJSON, []byte(`"id":`), []byte(`"ID":`), 1))},
+		{"egress field alias", withRoute(bytes.Replace(routeJSON, []byte(`"egressProfile":`), []byte(`"EgressProfile":`), 1))},
+		{"egress display name field alias", withRoute(bytes.Replace(routeJSON, []byte(`"displayName":`), []byte(`"DisplayName":`), 1))},
+		{"egress policy field alias", withRoute(bytes.Replace(routeJSON, []byte(`"proxy":`), []byte(`"Proxy":`), 1))},
+		{"proxy kind field alias", withRoute(bytes.Replace(routeJSON, []byte(`"kind":`), []byte(`"Kind":`), 1))},
+		{"resolver transport field alias", withRoute(bytes.Replace(routeJSON, []byte(`"transport":`), []byte(`"Transport":`), 1))},
+		{"duplicate proxy kind", withRoute(bytes.Replace(routeJSON, []byte(`"kind":"direct"`), []byte(`"kind":"direct","kind":"direct"`), 1))},
+	}
+	for index, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			before := environmentRequest(t, application, http.MethodGet, "/api/v1/environments/work/draft", 0, "", nil)
+			var prior desktopcontrol.EnvironmentDraftResponse
+			if before.Code != 200 || json.Unmarshal(before.Body.Bytes(), &prior) != nil {
+				t.Fatal("saved draft unavailable")
+			}
+			fields["expectedDraftRevision"], _ = json.Marshal(prior.DraftRevision)
+			fields["clientToolAccess"] = test.policy
+			requestBody, _ := json.Marshal(fields)
+			if test.name == "duplicate permission container" {
+				requestBody = bytes.Replace(requestBody, []byte(`"clientToolAccess":{"enabled":true}`), []byte(`"clientToolAccess":{"enabled":true},"clientToolAccess":{"enabled":true}`), 1)
+			}
+			response := environmentRequest(t, application, http.MethodPut, "/api/v1/environments/work/draft", 1, "strict-native-reject-"+strconv.Itoa(index), requestBody)
+			if response.Code != http.StatusUnprocessableEntity {
+				t.Errorf("malformed permission accepted: %d", response.Code)
+			}
+			current := environmentRequest(t, application, http.MethodGet, "/api/v1/environments/work/draft", 0, "", nil)
+			if current.Code != 200 || !bytes.Equal(current.Body.Bytes(), before.Body.Bytes()) {
+				t.Error("malformed permission changed saved draft")
+			}
+		})
+	}
+}
+
 func TestEnvironmentClientToolAccessPreparedCandidateAndFrozenRoute(t *testing.T) {
 	ctx := context.Background()
 	runtime := startRuntime(t)

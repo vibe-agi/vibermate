@@ -278,7 +278,7 @@ func (handler *Handler) putEnvironmentDraft(writer http.ResponseWriter, request 
 	}
 	id, idErr := environment.NewEnvironmentID(request.PathValue("environmentId"))
 	var input EnvironmentDraftInput
-	if idErr != nil || decodeStrictJSON(body, &input) != nil || !validClientToolAccessInput(body) {
+	if idErr != nil || !validClientToolAccessInput(body) || decodeStrictJSON(body, &input) != nil {
 		writeProblem(writer, http.StatusUnprocessableEntity, ReasonInvalidRequest)
 		return
 	}
@@ -340,37 +340,111 @@ func (handler *Handler) putEnvironmentDraft(writer http.ResponseWriter, request 
 
 // Null and missing enabled are not OFF consent; omission alone is legacy OFF.
 func validClientToolAccessInput(body []byte) bool {
-	var fields map[string]json.RawMessage
-	if json.Unmarshal(body, &fields) != nil {
+	decoder := json.NewDecoder(bytes.NewReader(body))
+	start, err := decoder.Token()
+	if err != nil || start != json.Delim('{') {
 		return false
 	}
-	for name := range fields {
-		if strings.EqualFold(name, "clientToolAccess") && name != "clientToolAccess" {
+	var raw json.RawMessage
+	present := false
+	for decoder.More() {
+		token, err := decoder.Token()
+		name, isName := token.(string)
+		if err != nil || !isName {
 			return false
 		}
+		var value json.RawMessage
+		if decoder.Decode(&value) != nil {
+			return false
+		}
+		if !strings.EqualFold(name, "clientToolAccess") {
+			continue
+		}
+		if name != "clientToolAccess" || present {
+			return false
+		}
+		raw, present = value, true
 	}
-	raw, present := fields["clientToolAccess"]
+	end, err := decoder.Token()
+	if err != nil || end != json.Delim('}') {
+		return false
+	}
 	if !present {
 		return true
 	}
-	var policy map[string]json.RawMessage
-	if json.Unmarshal(raw, &policy) != nil || policy == nil {
+	policy := clientToolAccessObject(raw, []string{"enabled"}, "route")
+	if policy == nil {
 		return false
 	}
-	enabled, ok := policy["enabled"]
-	if !ok {
-		return false
-	}
+	enabled := policy["enabled"]
 	if bytes.Equal(bytes.TrimSpace(enabled), []byte("false")) {
 		return len(policy) == 1
 	}
 	if !bytes.Equal(bytes.TrimSpace(enabled), []byte("true")) {
 		return false
 	}
-	if route, present := policy["route"]; present && bytes.Equal(bytes.TrimSpace(route), []byte("null")) {
+	rawRoute, present := policy["route"]
+	if !present {
+		return true
+	}
+	route := clientToolAccessObject(rawRoute, []string{"id", "revision", "targetOrigin", "path", "credentialOwner", "egressProfile", "contract"})
+	if route == nil {
 		return false
 	}
-	return true
+	profile := clientToolAccessObject(route["egressProfile"], []string{"id", "revision", "displayName", "policy", "publishedAt"})
+	if profile == nil {
+		return false
+	}
+	network := clientToolAccessObject(profile["policy"], []string{"proxy", "resolver"})
+	if network == nil {
+		return false
+	}
+	return clientToolAccessObject(network["proxy"], []string{"kind"}, "endpoint") != nil &&
+		clientToolAccessObject(network["resolver"], []string{"kind", "transport"}, "dohUrl") != nil
+}
+
+// The new permission and frozen route use exact names and non-null values.
+// Inspect tokens before typed decoding: encoding/json otherwise folds casing
+// and overwrites duplicate members. This helper is used only by this wire shape.
+func clientToolAccessObject(raw json.RawMessage, required []string, optional ...string) map[string]json.RawMessage {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	start, err := decoder.Token()
+	if err != nil || start != json.Delim('{') {
+		return nil
+	}
+	allowed := make(map[string]bool, len(required)+len(optional))
+	for _, name := range required {
+		allowed[name] = true
+	}
+	for _, name := range optional {
+		allowed[name] = true
+	}
+	fields := make(map[string]json.RawMessage, len(allowed))
+	for decoder.More() {
+		token, err := decoder.Token()
+		name, isName := token.(string)
+		if err != nil || !isName || !allowed[name] {
+			return nil
+		}
+		if _, duplicate := fields[name]; duplicate {
+			return nil
+		}
+		var value json.RawMessage
+		if decoder.Decode(&value) != nil || bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
+			return nil
+		}
+		fields[name] = value
+	}
+	end, err := decoder.Token()
+	if err != nil || end != json.Delim('}') {
+		return nil
+	}
+	for _, name := range required {
+		if _, present := fields[name]; !present {
+			return nil
+		}
+	}
+	return fields
 }
 
 func (handler *Handler) resolvePublishedEgressProfiles(
