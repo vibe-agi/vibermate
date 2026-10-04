@@ -632,6 +632,7 @@ type CompanionAttestation struct {
 }
 
 type CaptureRunGrant struct {
+	NativeToolLogin              *NativeToolLoginView
 	Run                          capturerun.LaunchGrant
 	CatalogRevision              clientadapter.CatalogRevision
 	Recognition                  clientadapter.Recognition
@@ -853,6 +854,7 @@ func (issuer *Issuer) IssueCaptureRun(
 		ProtectedAuthorities:         protectedAuthorities,
 		ManagedCredentialAuthorities: managedAuthorities,
 		LaunchEnvironment:            authorities.LaunchEnvironment(),
+		NativeToolLogin:              authorities.NativeToolLogin(),
 	}, nil
 }
 

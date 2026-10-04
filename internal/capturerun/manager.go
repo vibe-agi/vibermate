@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/vibe-agi/vibermate/internal/capturecredential"
+	"github.com/vibe-agi/vibermate/internal/captureidentity"
 	"github.com/vibe-agi/vibermate/internal/evidencearchive"
 )
 
@@ -36,13 +37,16 @@ func (SystemClock) Now() time.Time {
 }
 
 type Options struct {
-	Repository      Repository
-	Clock           Clock
-	Random          io.Reader
-	DefaultLifetime time.Duration
-	MaxLifetime     time.Duration
-	EvidenceBarrier EvidenceBarrier
-	ArchiveBarrier  evidencearchive.CaptureCreationBarrier
+	Repository       Repository
+	Clock            Clock
+	Random           io.Reader
+	DefaultLifetime  time.Duration
+	MaxLifetime      time.Duration
+	EvidenceBarrier  EvidenceBarrier
+	ArchiveBarrier   evidencearchive.CaptureCreationBarrier
+	NativeRevocation interface {
+		Revoke(context.Context, captureidentity.Reference, string) error
+	}
 }
 
 // TerminalEvidence owns the prepared CaptureRun evidence boundary. Commit is
@@ -71,15 +75,18 @@ func DefaultOptions(repository Repository) Options {
 }
 
 type Manager struct {
-	repository      Repository
-	clock           Clock
-	random          io.Reader
-	defaultLifetime time.Duration
-	maxLifetime     time.Duration
-	evidenceBarrier EvidenceBarrier
-	archiveBarrier  evidencearchive.CaptureCreationBarrier
-	lifecycle       *lifecycleGate
-	recovery        Recovery
+	repository       Repository
+	clock            Clock
+	random           io.Reader
+	defaultLifetime  time.Duration
+	maxLifetime      time.Duration
+	evidenceBarrier  EvidenceBarrier
+	archiveBarrier   evidencearchive.CaptureCreationBarrier
+	nativeRevocation interface {
+		Revoke(context.Context, captureidentity.Reference, string) error
+	}
+	lifecycle *lifecycleGate
+	recovery  Recovery
 
 	shutdownMu      sync.Mutex
 	activeRevoked   bool
@@ -105,15 +112,16 @@ func NewManager(ctx context.Context, options Options) (*Manager, error) {
 		return nil, fmt.Errorf("recover CaptureRuns: %w", err)
 	}
 	return &Manager{
-		repository:      options.Repository,
-		clock:           options.Clock,
-		random:          options.Random,
-		defaultLifetime: options.DefaultLifetime,
-		maxLifetime:     options.MaxLifetime,
-		evidenceBarrier: options.EvidenceBarrier,
-		archiveBarrier:  options.ArchiveBarrier,
-		lifecycle:       newLifecycleGate(),
-		recovery:        recovery,
+		repository:       options.Repository,
+		clock:            options.Clock,
+		random:           options.Random,
+		defaultLifetime:  options.DefaultLifetime,
+		maxLifetime:      options.MaxLifetime,
+		evidenceBarrier:  options.EvidenceBarrier,
+		nativeRevocation: options.NativeRevocation,
+		archiveBarrier:   options.ArchiveBarrier,
+		lifecycle:        newLifecycleGate(),
+		recovery:         recovery,
 	}, nil
 }
 
@@ -352,6 +360,12 @@ func (manager *Manager) Finish(
 		manager.clock.Now().UTC(),
 	)
 	if err != nil {
+		if errors.Is(err, ErrCommitOutcomeUnknown) {
+			if terminal != nil {
+				terminal.Commit()
+			}
+			return errors.Join(err, manager.notifyNativeStop(operation, runID))
+		}
 		if terminal != nil {
 			terminal.Abort()
 		}
@@ -360,7 +374,18 @@ func (manager *Manager) Finish(
 	if terminal != nil {
 		terminal.Commit()
 	}
-	return nil
+	return manager.notifyNativeStop(operation, runID)
+}
+
+func (manager *Manager) notifyNativeStop(ctx context.Context, id string) error {
+	if manager.nativeRevocation == nil {
+		return nil
+	}
+	capture, err := captureidentity.New(captureidentity.KindManagedRun, id)
+	if err != nil {
+		return err
+	}
+	return manager.nativeRevocation.Revoke(ctx, capture, "capture_stopped")
 }
 
 func (manager *Manager) BeginShutdown() {

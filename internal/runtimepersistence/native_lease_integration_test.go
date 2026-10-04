@@ -246,6 +246,36 @@ func TestNativeLeaseApplyLatestCannotGainLaunchAuthority(t *testing.T) {
 	}
 }
 
+func TestNativeOnlyLeaseApplyLatestKeepsOriginalRouteAuthority(t *testing.T) {
+	fixture := newNativeLeaseFixture(t, true, false)
+	initial := fixture.snapshot
+	old, err := fixture.assignments.BeginRequest(context.Background(), fixture.capture, fixture.connectionID, fixture.facts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer old.Release()
+	next := initial.Aggregate()
+	next.Revision++
+	next.Name = "Updated native-only policy"
+	publishEnvironmentRevision(t, fixture.environments, next, 1)
+	applied, err := fixture.assignments.ApplyLatest(context.Background(), fixture.capture, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	current, err := fixture.assignments.BeginRequest(context.Background(), fixture.capture, fixture.connectionID, fixture.facts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer current.Release()
+	native, ok := current.Plan().ClientToolPlan()
+	if !ok || current.Assignment() != applied || native.EnvironmentRevision() != 2 || native.Route() != *initial.Aggregate().ClientToolAccess.Route || applied.LaunchAuthority != old.Assignment().LaunchAuthority || old.Plan().EnvironmentRevision() != 1 {
+		t.Fatal("native-only apply changed original launch route authority")
+	}
+	if _, model := current.Plan().UpstreamRoute(); model {
+		t.Fatal("native-only apply fabricated model authority")
+	}
+}
+
 func TestNativeLeaseRejectsMissingOrSubstitutedHistoricalSnapshot(t *testing.T) {
 	for _, corruption := range []string{"missing", "digest", "off"} {
 		t.Run(corruption, func(t *testing.T) {

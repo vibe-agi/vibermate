@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/vibe-agi/vibermate/internal/capturecredential"
+	"github.com/vibe-agi/vibermate/internal/captureidentity"
 	"github.com/vibe-agi/vibermate/internal/evidencearchive"
 )
 
@@ -42,6 +43,9 @@ type Options struct {
 	MaxTemporaryLifetime time.Duration
 	EvidenceBarrier      EvidenceBarrier
 	ArchiveBarrier       evidencearchive.CaptureCreationBarrier
+	NativeRevocation     interface {
+		Revoke(context.Context, captureidentity.Reference, string) error
+	}
 }
 
 // TerminalEvidence owns a prepared ManualCapture evidence boundary.
@@ -72,8 +76,11 @@ type Manager struct {
 	maxTemporaryLifetime time.Duration
 	evidenceBarrier      EvidenceBarrier
 	archiveBarrier       evidencearchive.CaptureCreationBarrier
-	lifecycle            *lifecycleGate
-	recovery             Recovery
+	nativeRevocation     interface {
+		Revoke(context.Context, captureidentity.Reference, string) error
+	}
+	lifecycle *lifecycleGate
+	recovery  Recovery
 }
 
 func NewManager(ctx context.Context, options Options) (*Manager, error) {
@@ -96,6 +103,7 @@ func NewManager(ctx context.Context, options Options) (*Manager, error) {
 		random:               options.Random,
 		maxTemporaryLifetime: options.MaxTemporaryLifetime,
 		evidenceBarrier:      options.EvidenceBarrier,
+		nativeRevocation:     options.NativeRevocation,
 		archiveBarrier:       options.ArchiveBarrier,
 		lifecycle:            newLifecycleGate(),
 		recovery:             recovery,
@@ -259,6 +267,12 @@ func (manager *Manager) Revoke(
 		manager.now(),
 	)
 	if err != nil {
+		if errors.Is(err, ErrCommitOutcomeUnknown) {
+			if terminal != nil {
+				terminal.Commit()
+			}
+			return View{}, errors.Join(err, manager.notifyNativeStop(operation, command.ID.String()))
+		}
 		if terminal != nil {
 			terminal.Abort()
 		}
@@ -267,7 +281,18 @@ func (manager *Manager) Revoke(
 	if terminal != nil {
 		terminal.Commit()
 	}
-	return ViewOf(record), nil
+	return ViewOf(record), manager.notifyNativeStop(operation, command.ID.String())
+}
+
+func (manager *Manager) notifyNativeStop(ctx context.Context, id string) error {
+	if manager.nativeRevocation == nil {
+		return nil
+	}
+	capture, err := captureidentity.New(captureidentity.KindManualCapture, id)
+	if err != nil {
+		return err
+	}
+	return manager.nativeRevocation.Revoke(ctx, capture, "capture_stopped")
 }
 
 func (manager *Manager) AuthorizeProxy(

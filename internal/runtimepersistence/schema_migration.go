@@ -431,6 +431,9 @@ func migrationAdditionsEmpty(ctx context.Context, q schemaQueryer) error {
 		}
 	}
 	var wrong int64
+	if err := q.QueryRowContext(ctx, `SELECT count(*) FROM runtime_connection_events WHERE inspection_purpose<>''`).Scan(&wrong); err != nil || wrong != 0 {
+		return ErrUnsupportedSchema
+	}
 	if err := q.QueryRowContext(ctx, `SELECT count(*) FROM runtime_egress_attempts WHERE byte_counts_known<>1`).Scan(&wrong); err != nil || wrong != 0 {
 		return ErrUnsupportedSchema
 	}

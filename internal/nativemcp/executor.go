@@ -170,6 +170,10 @@ func reasonFor(err error) Reason {
 	}
 }
 func reject(w http.ResponseWriter, id nativetool.ID, reason Reason) Terminal {
+	return rejectStatus(w, id, reason, 0)
+}
+
+func rejectStatus(w http.ResponseWriter, id nativetool.ID, reason Reason, status int) Terminal {
 	if tracked, ok := w.(*nativeWriter); ok && tracked.failAfterHeaders() {
 		outcome := OutcomeRejected
 		if reason == ReasonRevoked {
@@ -177,7 +181,31 @@ func reject(w http.ResponseWriter, id nativetool.ID, reason Reason) Terminal {
 		}
 		return Terminal{OperationID: id, Outcome: outcome, Reason: reason}
 	}
-	status := http.StatusBadRequest
+	if tracked, ok := w.(*nativeWriter); ok && len(tracked.correlation) > 0 && (reason == ReasonApprovalRejected || reason == ReasonApprovalExpired) {
+		encoded, _ := json.Marshal(struct {
+			Version string          `json:"jsonrpc"`
+			ID      json.RawMessage `json:"id"`
+			Error   struct {
+				Code    int    `json:"code"`
+				Message string `json:"message"`
+			} `json:"error"`
+		}{Version: "2.0", ID: tracked.correlation, Error: struct {
+			Code    int    `json:"code"`
+			Message string `json:"message"`
+		}{-32003, string(reason)}})
+		if int64(len(encoded)) > tracked.maximum {
+			w.WriteHeader(http.StatusBadRequest)
+			return Terminal{OperationID: id, Outcome: OutcomeRejected, Reason: ReasonBudgetExceeded}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		tracked.terminal = true
+		_, _ = w.Write(encoded)
+		return Terminal{OperationID: id, Outcome: OutcomeRejected, Reason: reason}
+	}
+	if status == 0 {
+		status = http.StatusBadRequest
+	}
 	if reason == ReasonExecutionUncertain {
 		status = http.StatusConflict
 	} else if reason == ReasonPermissionOff || reason == ReasonApprovalRejected {
@@ -264,6 +292,9 @@ func (e *executor) Serve(ctx context.Context, c CapturedRequest, w http.Response
 		}
 		raw, free, err := e.readBounded(c.request.Body, e.limits.RequestBytes)
 		if err != nil {
+			if errors.Is(err, errIncomingBodyTooLarge) {
+				return rejectStatus(w, c.id, ReasonBudgetExceeded, http.StatusRequestEntityTooLarge)
+			}
 			return reject(w, c.id, reasonFor(err))
 		}
 		defer free()
@@ -792,7 +823,7 @@ func (e *executor) readBounded(reader io.Reader, maximum int64) ([]byte, func(),
 	n, err := reader.Read(extra[:])
 	if n != 0 || err != io.EOF {
 		e.budget.release(maximum)
-		return nil, func() {}, errBudget
+		return nil, func() {}, errIncomingBodyTooLarge
 	}
 	return buffer, func() { e.budget.release(maximum) }, nil
 }

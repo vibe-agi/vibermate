@@ -27,6 +27,8 @@ import (
 	"github.com/vibe-agi/vibermate/internal/localca"
 	"github.com/vibe-agi/vibermate/internal/loopbackproxy"
 	"github.com/vibe-agi/vibermate/internal/manualcapture"
+	"github.com/vibe-agi/vibermate/internal/nativemcp"
+	"github.com/vibe-agi/vibermate/internal/nativetool"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
 	"github.com/vibe-agi/vibermate/internal/openairesponses"
 	"github.com/vibe-agi/vibermate/internal/operationcatalog"
@@ -101,6 +103,7 @@ type environmentBuildRequest struct {
 	clock                captureassignment.Clock
 	accounts             environment.AccountCatalog
 	endpoints            upstreamendpoint.Catalog
+	nativeRevocation     captureassignment.NativeRevocation
 }
 
 type environmentRuntime interface {
@@ -190,10 +193,11 @@ func buildEnvironment(
 		system:             system,
 	}
 	assignments, err := captureassignment.NewManager(captureassignment.Options{
-		Repository:   request.assignmentRepository,
-		Environments: resolver,
-		Activity:     request.activity,
-		Clock:        request.clock,
+		Repository:       request.assignmentRepository,
+		Environments:     resolver,
+		Activity:         request.activity,
+		Clock:            request.clock,
+		NativeRevocation: request.nativeRevocation,
 	})
 	if err != nil {
 		return environmentBuildResult{}, fmt.Errorf("build Capture assignment manager: %w", err)
@@ -377,12 +381,13 @@ func buildConnectionEvent(
 }
 
 type approvalBuildRequest struct {
-	ctx        context.Context
-	repository toolapproval.Repository
-	clock      toolapproval.Clock
-	random     io.Reader
-	config     toolapproval.Config
-	remembered toolapproval.RememberedListener
+	ctx              context.Context
+	repository       toolapproval.Repository
+	clock            toolapproval.Clock
+	random           io.Reader
+	config           toolapproval.Config
+	remembered       toolapproval.RememberedListener
+	nativeRepository nativetool.LifecycleRepository
 }
 
 type approvalRuntime interface {
@@ -408,11 +413,12 @@ func buildApproval(
 	request approvalBuildRequest,
 ) (approvalRuntime, error) {
 	return toolapproval.New(request.ctx, toolapproval.Options{
-		Repository: request.repository,
-		Clock:      request.clock,
-		Random:     request.random,
-		Config:     request.config,
-		Remembered: request.remembered,
+		Repository:       request.repository,
+		Clock:            request.clock,
+		Random:           request.random,
+		Config:           request.config,
+		Remembered:       request.remembered,
+		NativeRepository: request.nativeRepository,
 	})
 }
 
@@ -995,6 +1001,7 @@ func buildExchange(
 type originalBuildRequest struct {
 	coordinator offlinehold.Coordinator
 	audit       egressaudit.Writer
+	transport   originaltransport.Transport
 }
 
 type originalRuntime interface {
@@ -1005,15 +1012,19 @@ type originalRuntime interface {
 func buildOriginal(
 	request originalBuildRequest,
 ) (originalRuntime, error) {
+	if request.transport != nil {
+		return originaltransport.New(originaltransport.Options{Coordinator: request.coordinator, Audit: request.audit, Transport: request.transport})
+	}
 	return originaltransport.NewProduction(request.coordinator, request.audit)
 }
 
 type captureBuildRequest struct {
-	repository     capturerun.Repository
-	clock          capturerun.Clock
-	random         io.Reader
-	barrier        capturerun.EvidenceBarrier
-	archiveBarrier evidencearchive.CaptureCreationBarrier
+	nativeRevocation captureassignment.NativeRevocation
+	repository       capturerun.Repository
+	clock            capturerun.Clock
+	random           io.Reader
+	barrier          capturerun.EvidenceBarrier
+	archiveBarrier   evidencearchive.CaptureCreationBarrier
 }
 
 type captureRuntime interface {
@@ -1031,6 +1042,7 @@ func buildCapture(
 	request captureBuildRequest,
 ) (captureRuntime, error) {
 	options := capturerun.DefaultOptions(request.repository)
+	options.NativeRevocation = request.nativeRevocation
 	options.Clock = request.clock
 	options.Random = request.random
 	options.EvidenceBarrier = request.barrier
@@ -1039,11 +1051,12 @@ func buildCapture(
 }
 
 type manualCaptureBuildRequest struct {
-	repository     manualcapture.Repository
-	clock          manualcapture.Clock
-	random         io.Reader
-	barrier        manualcapture.EvidenceBarrier
-	archiveBarrier evidencearchive.CaptureCreationBarrier
+	nativeRevocation captureassignment.NativeRevocation
+	repository       manualcapture.Repository
+	clock            manualcapture.Clock
+	random           io.Reader
+	barrier          manualcapture.EvidenceBarrier
+	archiveBarrier   evidencearchive.CaptureCreationBarrier
 }
 
 type manualCaptureRuntime interface {
@@ -1060,6 +1073,7 @@ func buildManualCapture(
 	request manualCaptureBuildRequest,
 ) (manualCaptureRuntime, error) {
 	options := manualcapture.DefaultOptions(request.repository)
+	options.NativeRevocation = request.nativeRevocation
 	options.Clock = request.clock
 	options.Random = request.random
 	options.EvidenceBarrier = request.barrier
@@ -1092,6 +1106,8 @@ func buildLocalCA(
 }
 
 type proxyBuildRequest struct {
+	nativeTools  nativemcp.Executor
+	nativeIDs    nativemcp.IDSource
 	ownerContext context.Context
 	admissions   captureadmission.Authorizer
 	assignments  loopbackproxy.CaptureAssignmentAuthority
@@ -1119,6 +1135,7 @@ func buildProxy(
 	request proxyBuildRequest,
 ) (proxyRuntime, error) {
 	return loopbackproxy.New(loopbackproxy.Options{
+		NativeTools: request.nativeTools, NativeOperationIDs: request.nativeIDs,
 		OwnerContext: request.ownerContext,
 		Admissions:   request.admissions,
 		Assignments:  request.assignments,

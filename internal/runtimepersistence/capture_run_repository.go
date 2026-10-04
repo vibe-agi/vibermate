@@ -58,8 +58,9 @@ const captureRunColumns = `
 	git_json`
 
 type captureRunRepository struct {
-	database   *sql.DB
-	operations *operationGate
+	database      *sql.DB
+	operations    *operationGate
+	stopCommitter transactionCommitter
 }
 
 // Derive display/order from scoped, body-free evidence using the existing
@@ -368,7 +369,7 @@ func (repository *captureRunRepository) Finish(
 	if err := revokeNativeScope(operation, transaction, captureidentity.Reference{Kind: captureidentity.KindManagedRun, ID: runID}, now); err != nil {
 		return err
 	}
-	return transaction.Commit()
+	return commitNativeStop(operation, repository.database, transaction, repository.stopCommitter, capturerun.ErrCommitOutcomeUnknown, "finished", 0, `SELECT state,0 FROM capture_runs WHERE run_id=? AND control_capability_hash=?`, runID, digest[:])
 }
 
 func (repository *captureRunRepository) Recover(

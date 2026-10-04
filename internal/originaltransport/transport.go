@@ -20,6 +20,10 @@ type strictTransport struct {
 	dialers egressDialerBuilder
 }
 
+// NewProductionTransport constructs the strict TLS seam shared by original
+// origin and native consumers, each retaining its own admission and audit.
+func NewProductionTransport() (Transport, error) { return newProductionStrictTransport() }
+
 func newProductionStrictTransport() (*strictTransport, error) {
 	dialers, err := egressnetwork.NewBuilder(egressnetwork.BuilderOptions{
 		BaseDialer: &net.Dialer{

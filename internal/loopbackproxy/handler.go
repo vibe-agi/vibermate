@@ -41,6 +41,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/exchange"
 	"github.com/vibe-agi/vibermate/internal/localca"
+	"github.com/vibe-agi/vibermate/internal/nativemcp"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
 	"github.com/vibe-agi/vibermate/internal/originaltransport"
 	"github.com/vibe-agi/vibermate/internal/originidentity"
@@ -187,6 +188,9 @@ type Options struct {
 	RawObservationTimeout time.Duration
 	RawResponseBodyBytes  int
 	ExchangeIDs           ExchangeIDSource
+	NativeTools           nativemcp.Executor
+	NativeOperationIDs    nativemcp.IDSource
+	TargetObserver        TargetObserver
 	HandshakeTimeout      time.Duration
 }
 
@@ -206,25 +210,28 @@ type operation struct {
 }
 
 type Handler struct {
-	admissions   captureadmission.Authorizer
-	assignments  CaptureAssignmentAuthority
-	exchanges    exchange.Executor
-	original     OriginalClient
-	accountReads CapturedAccountReader
-	certificates CertificateAuthority
-	connections  ConnectionJournal
-	policy       connectionpolicy.Source
-	approvals    NetworkApprovals
-	blindTunnels BlindTunnelDialer
-	egressAudit  egressaudit.Writer
-	rawEvidence  rawevidence.RequestRecorder
-	rawTimeout   time.Duration
-	rawBodyBytes int
-	exchangeIDs  ExchangeIDSource
-	handshake    time.Duration
-	clock        func() time.Time
-	auditTimeout time.Duration
-	ownerContext context.Context
+	admissions     captureadmission.Authorizer
+	assignments    CaptureAssignmentAuthority
+	exchanges      exchange.Executor
+	original       OriginalClient
+	accountReads   CapturedAccountReader
+	certificates   CertificateAuthority
+	connections    ConnectionJournal
+	policy         connectionpolicy.Source
+	approvals      NetworkApprovals
+	blindTunnels   BlindTunnelDialer
+	egressAudit    egressaudit.Writer
+	rawEvidence    rawevidence.RequestRecorder
+	rawTimeout     time.Duration
+	rawBodyBytes   int
+	exchangeIDs    ExchangeIDSource
+	nativeTools    nativemcp.Executor
+	nativeIDs      nativemcp.IDSource
+	targetObserver TargetObserver
+	handshake      time.Duration
+	clock          func() time.Time
+	auditTimeout   time.Duration
+	ownerContext   context.Context
 
 	mu        sync.Mutex
 	accepting bool
@@ -265,28 +272,31 @@ func New(options Options) (*Handler, error) {
 		}
 	}
 	handler := &Handler{
-		admissions:   options.Admissions,
-		assignments:  options.Assignments,
-		exchanges:    options.Exchanges,
-		original:     options.Original,
-		accountReads: options.AccountReads,
-		certificates: options.Certificates,
-		connections:  options.Connections,
-		policy:       options.Policy,
-		approvals:    options.Approvals,
-		blindTunnels: options.BlindTunnels,
-		egressAudit:  options.EgressAudit,
-		rawEvidence:  options.RawEvidence,
-		rawTimeout:   rawTimeout,
-		rawBodyBytes: rawBodyBytes,
-		exchangeIDs:  options.ExchangeIDs,
-		handshake:    options.HandshakeTimeout,
-		clock:        time.Now,
-		auditTimeout: defaultAuditCompletionLimit,
-		ownerContext: options.OwnerContext,
-		accepting:    true,
-		active:       make(map[*operation]struct{}),
-		changed:      make(chan struct{}),
+		admissions:     options.Admissions,
+		assignments:    options.Assignments,
+		exchanges:      options.Exchanges,
+		original:       options.Original,
+		accountReads:   options.AccountReads,
+		certificates:   options.Certificates,
+		connections:    options.Connections,
+		policy:         options.Policy,
+		approvals:      options.Approvals,
+		blindTunnels:   options.BlindTunnels,
+		egressAudit:    options.EgressAudit,
+		rawEvidence:    options.RawEvidence,
+		rawTimeout:     rawTimeout,
+		rawBodyBytes:   rawBodyBytes,
+		exchangeIDs:    options.ExchangeIDs,
+		nativeTools:    options.NativeTools,
+		nativeIDs:      options.NativeOperationIDs,
+		targetObserver: options.TargetObserver,
+		handshake:      options.HandshakeTimeout,
+		clock:          time.Now,
+		auditTimeout:   defaultAuditCompletionLimit,
+		ownerContext:   options.OwnerContext,
+		accepting:      true,
+		active:         make(map[*operation]struct{}),
+		changed:        make(chan struct{}),
 	}
 	handler.stopOwner = context.AfterFunc(options.OwnerContext, handler.BeginShutdown)
 	return handler, nil
@@ -615,7 +625,7 @@ func (handler *Handler) ServeHTTP(
 		return
 	}
 	endpoint, exists := snapshot.LookupCompiledClientOrigin(binding.ClientOrigin)
-	if !exists || endpoint.ID() != binding.ClientEndpointID {
+	if binding.Mode != environment.ConnectionModeClientTools && (!exists || endpoint.ID() != binding.ClientEndpointID) {
 		if handler.denyConnection(request.Context(), audit, source, ReasonEnvironmentChanged) == nil {
 			terminal = true
 			writeReason(writer, http.StatusMisdirectedRequest, ReasonEnvironmentChanged, "")
@@ -624,9 +634,14 @@ func (handler *Handler) ServeHTTP(
 		writeReason(writer, http.StatusServiceUnavailable, ReasonConnectionAuditUnavailable, "")
 		return
 	}
+	purpose := connectionevent.InspectionPurpose("")
+	if binding.Mode == environment.ConnectionModeClientTools {
+		purpose = connectionevent.InspectionPurposeClientTools
+	}
 	if err := audit.Decide(
 		request.Context(),
 		connectionevent.DecisionEvidence{
+			InspectionPurpose:      purpose,
 			Source:                 source,
 			Decision:               connectionevent.DecisionAllow,
 			RuleID:                 outcome.RuleID,
@@ -851,8 +866,20 @@ func (handler *Handler) serveInner(
 		!request.URL.IsAbs() && request.TLS != nil
 	cleartextRequest := request != nil && request.URL != nil &&
 		request.URL.IsAbs() && request.TLS == nil && request.URL.Scheme == "http"
+	observed := &observedResponseWriter{ResponseWriter: writer}
+	reason := "rejected"
+	if handler.targetObserver != nil {
+		writer = observed
+		defer func() {
+			if reason == "rejected" && observed.status >= 200 && observed.status < 400 {
+				reason = "completed"
+			}
+			handler.targetObserver.Observe(observationOf(request, binding.ProviderOrigin, observed.status, reason))
+		}()
+	}
 	if (!secureRequest && !cleartextRequest) ||
 		!authorityMatches(request.Host, binding.ProviderOrigin) {
+		reason = "request_authority_mismatch"
 		writeReason(
 			writer,
 			http.StatusMisdirectedRequest,
@@ -863,23 +890,12 @@ func (handler *Handler) serveInner(
 	}
 	request.Header.Del("Proxy-Authorization")
 	request.Header.Del("Proxy-Connection")
-	if handler.rawEvidence != nil {
-		scopeKind, scopeID, err := rawEvidenceScope(capture)
-		if err != nil {
-			handler.reportRawEvidenceFailure(fmt.Errorf(
-				"resolve Raw evidence scope: %w", err,
-			))
-		} else {
-			scopeLease, beginErr := handler.rawEvidence.BeginScope(
-				request.Context(), scopeKind, scopeID,
-			)
-			if beginErr != nil {
-				handler.reportRawEvidenceFailure(fmt.Errorf(
-					"begin Raw evidence scope: %w", beginErr,
-				))
-			} else {
-				defer scopeLease.Release()
-			}
+	if request.URL.Path == environment.ClientToolMCPPath {
+		access := connectionLease.Environment().Aggregate().ClientToolAccess
+		if access == nil || !access.Enabled {
+			reason = "permission_off"
+			writeReason(writer, http.StatusForbidden, ReasonEnvironmentOperationUnsupported, "")
+			return
 		}
 	}
 	clientProtocol, err := downstreamProtocolOf(request)
@@ -906,6 +922,7 @@ func (handler *Handler) serveInner(
 			errors.Is(err, captureassignment.ErrOperationInProgress) ||
 			errors.Is(err, environment.ErrInvalidEnvironment) {
 			writer.Header().Set("Connection", "close")
+			reason = "environment_changed"
 			writeReason(writer, http.StatusMisdirectedRequest, ReasonEnvironmentChanged, "")
 			return
 		}
@@ -915,10 +932,66 @@ func (handler *Handler) serveInner(
 			ReasonPathUnsupported,
 			protocolReasonCode(err),
 		)
+		reason = "target_unproven"
 		return
 	}
 	defer requestLease.Release()
 	plan := requestLease.Plan()
+	if native, ok := plan.ClientToolPlan(); ok {
+		if handler.nativeTools == nil || handler.nativeIDs == nil {
+			reason = "native_executor_unavailable"
+			writeReason(writer, http.StatusForbidden, ReasonEnvironmentOperationUnsupported, "")
+			return
+		}
+		auth := strings.TrimSpace(request.Header.Get("Authorization"))
+		if (auth == "" && strings.TrimSpace(request.Header.Get("Cookie")) == "") || auth == "Bearer vibermate-local-proxy" || auth == "vibermate-local-proxy" {
+			reason = "original_login_unavailable"
+			writeReason(writer, http.StatusForbidden, ReasonCaptureAdmissionRejected, "")
+			return
+		}
+		id, err := handler.nativeIDs.NewNativeOperationID(request.Context())
+		if err != nil {
+			writeReason(writer, http.StatusServiceUnavailable, ReasonProxyStopping, "")
+			return
+		}
+		// The absolute target comes only from the frozen exact native route.
+		nativeRequest := request.Clone(request.Context())
+		nativeRequest.URL.Scheme = "https"
+		nativeRequest.URL.Host = native.Route().TargetOrigin.HTTPAuthority()
+		nativeRequest.Host = nativeRequest.URL.Host
+		captured, err := nativemcp.NewCapturedRequest(requestLease, admission, nativeRequest, id)
+		if err != nil {
+			reason = "target_unproven"
+			writeReason(writer, http.StatusUnprocessableEntity, ReasonPathUnsupported, "")
+			return
+		}
+		terminal := handler.nativeTools.Serve(request.Context(), captured, writer)
+		if terminal.Reason != "" {
+			reason = string(terminal.Reason)
+		} else if terminal.Outcome == nativemcp.OutcomeCompleted {
+			reason = "completed"
+		}
+		return
+	}
+	if handler.rawEvidence != nil {
+		scopeKind, scopeID, err := rawEvidenceScope(capture)
+		if err != nil {
+			handler.reportRawEvidenceFailure(fmt.Errorf(
+				"resolve Raw evidence scope: %w", err,
+			))
+		} else {
+			scopeLease, beginErr := handler.rawEvidence.BeginScope(
+				request.Context(), scopeKind, scopeID,
+			)
+			if beginErr != nil {
+				handler.reportRawEvidenceFailure(fmt.Errorf(
+					"begin Raw evidence scope: %w", beginErr,
+				))
+			} else {
+				defer scopeLease.Release()
+			}
+		}
+	}
 	operation := plan.Operation()
 	clientDialect := plan.ProtocolPlan().ClientDialect()
 	if operation.Kind() == protocolspec.ClientOperationUnsupported {

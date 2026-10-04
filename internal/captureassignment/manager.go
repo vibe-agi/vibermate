@@ -5,6 +5,7 @@ import (
 	"errors"
 	"sort"
 	"sync"
+	"time"
 
 	"github.com/vibe-agi/vibermate/internal/captureidentity"
 	"github.com/vibe-agi/vibermate/internal/environment"
@@ -13,10 +14,11 @@ import (
 )
 
 type Options struct {
-	Repository   Repository
-	Environments environment.SnapshotResolver
-	Activity     CaptureActivity
-	Clock        Clock
+	Repository       Repository
+	Environments     environment.SnapshotResolver
+	Activity         CaptureActivity
+	Clock            Clock
+	NativeRevocation NativeRevocation
 }
 
 func DefaultOptions(
@@ -44,8 +46,9 @@ type captureState struct {
 	writer    sync.Mutex
 	mu        sync.Mutex
 
-	poisoned bool
-	shutdown bool
+	poisoned      bool
+	shutdown      bool
+	transitioning bool
 
 	connections map[string]*connectionRecord
 }
@@ -58,11 +61,12 @@ func newCaptureState(reference captureidentity.Reference) *captureState {
 }
 
 type Manager struct {
-	repository   Repository
-	environments environment.SnapshotResolver
-	activity     CaptureActivity
-	clock        Clock
-	lifecycle    *lifecycleGate
+	repository       Repository
+	environments     environment.SnapshotResolver
+	activity         CaptureActivity
+	clock            Clock
+	lifecycle        *lifecycleGate
+	nativeRevocation NativeRevocation
 
 	statesMu sync.Mutex
 	states   map[string]*captureState
@@ -81,7 +85,8 @@ func NewManager(options Options) (*Manager, error) {
 	return &Manager{
 		repository: options.Repository, environments: options.Environments,
 		activity: options.Activity, clock: options.Clock,
-		lifecycle: newLifecycleGate(), states: make(map[string]*captureState),
+		nativeRevocation: options.NativeRevocation,
+		lifecycle:        newLifecycleGate(), states: make(map[string]*captureState),
 	}, nil
 }
 
@@ -211,6 +216,23 @@ func (manager *Manager) ApplyLatest(
 	}
 	state.mu.Unlock()
 
+	state.mu.Lock()
+	state.transitioning = true
+	state.mu.Unlock()
+	defer func() { state.mu.Lock(); state.transitioning = false; state.mu.Unlock() }()
+	if manager.nativeRevocation != nil {
+		reason := "assignment_applied"
+		access := latest.Aggregate().ClientToolAccess
+		if access == nil || !access.Enabled {
+			reason = "permission_off"
+		}
+		if err := manager.nativeRevocation.Revoke(ctx, reference, reason); err != nil {
+			state.mu.Lock()
+			state.poisoned = true
+			state.mu.Unlock()
+			return Assignment{}, errors.Join(ErrAssignmentUnavailable, err)
+		}
+	}
 	candidate := current
 	candidate.Revision++
 	candidate.EnvironmentRevision = latest.Revision()
@@ -270,7 +292,7 @@ func (manager *Manager) finishWrite(state *captureState, expected Assignment, re
 			state.mu.Lock()
 			state.poisoned = true
 			state.mu.Unlock()
-			return result.Assignment, errors.Join(ErrCommitOutcomeUnknown, writeErr)
+			return result.Assignment, errors.Join(ErrCommitOutcomeUnknown, writeErr, manager.revokeNativeUnknown(state))
 		}
 		return result.Assignment, nil
 	case CommitOutcomeConflict:
@@ -279,7 +301,7 @@ func (manager *Manager) finishWrite(state *captureState, expected Assignment, re
 		state.mu.Lock()
 		state.poisoned = true
 		state.mu.Unlock()
-		return result.Assignment, errors.Join(ErrCommitOutcomeUnknown, writeErr)
+		return result.Assignment, errors.Join(ErrCommitOutcomeUnknown, writeErr, manager.revokeNativeUnknown(state))
 	default:
 		return result.Assignment, errors.Join(ErrWriteNotCommitted, writeErr)
 	}
@@ -419,7 +441,7 @@ func (manager *Manager) RegisterProviderConnection(
 	}
 	state.mu.Lock()
 	defer state.mu.Unlock()
-	if state.shutdown || state.poisoned {
+	if state.shutdown || state.poisoned || state.transitioning {
 		return fail(ErrOperationInProgress)
 	}
 	if _, exists := state.connections[id]; exists {
@@ -494,7 +516,7 @@ func (manager *Manager) BeginRequest(
 		state.mu.Unlock()
 		return fail(ErrConnectionNotFound)
 	}
-	if state.shutdown || state.poisoned {
+	if state.shutdown || state.poisoned || state.transitioning {
 		state.mu.Unlock()
 		return fail(ErrOperationInProgress)
 	}
@@ -654,11 +676,30 @@ func (manager *Manager) BeginShutdown() {
 		states = append(states, state)
 	}
 	manager.statesMu.Unlock()
+	revokeContext, cancelRevoke := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancelRevoke()
 	for _, state := range states {
 		state.mu.Lock()
 		state.shutdown = true
 		state.mu.Unlock()
+		if manager.nativeRevocation != nil {
+			err := manager.nativeRevocation.Revoke(revokeContext, state.reference, "shutdown")
+			if err != nil {
+				state.mu.Lock()
+				state.poisoned = true
+				state.mu.Unlock()
+			}
+		}
 	}
+}
+
+func (manager *Manager) revokeNativeUnknown(state *captureState) error {
+	if manager.nativeRevocation == nil {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	return manager.nativeRevocation.Revoke(ctx, state.reference, "owner_changed")
 }
 
 func (manager *Manager) Drain(ctx context.Context) error {

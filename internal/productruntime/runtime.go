@@ -34,6 +34,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/launchsnapshot"
 	"github.com/vibe-agi/vibermate/internal/localca"
 	"github.com/vibe-agi/vibermate/internal/manualcapture"
+	"github.com/vibe-agi/vibermate/internal/nativemcp"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
 	"github.com/vibe-agi/vibermate/internal/originaltransport"
 	"github.com/vibe-agi/vibermate/internal/provideraccount"
@@ -390,7 +391,9 @@ func startWithBuilders(
 		return fail("Capture activity projection", err)
 	}
 
+	nativeRevoker := &nativeRevocation{}
 	environmentResult, err := environmentBuilder(ctx, environmentBuildRequest{
+		nativeRevocation:     nativeRevoker,
 		repository:           storageResult.store.EnvironmentRepository(),
 		assignmentRepository: storageResult.store.CaptureAssignmentRepository(),
 		activity:             captureActivity,
@@ -482,12 +485,13 @@ func startWithBuilders(
 	}
 
 	approvals, err := buildApproval(approvalBuildRequest{
-		ctx:        ctx,
-		repository: storageResult.store.ToolApprovalRepository(),
-		clock:      options.Clock,
-		random:     securityRandom,
-		config:     options.Approvals,
-		remembered: connectionRules,
+		ctx:              ctx,
+		repository:       storageResult.store.ToolApprovalRepository(),
+		clock:            options.Clock,
+		random:           securityRandom,
+		config:           options.Approvals,
+		remembered:       connectionRules,
+		nativeRepository: storageResult.store.NativeToolRepository(),
 	})
 	if err != nil || approvals == nil {
 		buildErr := err
@@ -586,7 +590,12 @@ func startWithBuilders(
 	}
 	pending.register("Codex OAuth login manager", codexLogins.Shutdown)
 
+	nativeTransport, err := originaltransport.NewProductionTransport()
+	if err != nil {
+		return fail("native strict transport", err)
+	}
 	original, err := buildOriginal(originalBuildRequest{
+		transport:   nativeTransport,
 		coordinator: options.OfflineHold,
 		audit:       runtimeEgress,
 	})
@@ -603,6 +612,13 @@ func startWithBuilders(
 		)
 	}
 	pending.register("original-origin transport", original.Shutdown)
+	nativeOperationIDs := nativeIDs{random: securityRandom}
+	nativeTools, err := nativemcp.New(nativemcp.Dependencies{OwnerContext: ownerContext, Transport: nativeTransport, Store: storageResult.store.NativeToolRepository(), ToolDecisions: toolDecisions, Offline: options.OfflineHold, Clock: options.Clock.Now, IDs: nativeOperationIDs}, nativemcp.DefaultLimits())
+	if err != nil {
+		return fail("native MCP recovery", err)
+	}
+	nativeRevoker.install(nativeTools)
+	pending.register("native MCP module", nativeTools.Close)
 
 	exchanges, err := buildExchange(exchangeBuildRequest{
 		ownerContext:             ownerContext,
@@ -636,10 +652,11 @@ func startWithBuilders(
 
 	archiveBarrier := evidencearchive.NewBarrier()
 	captureRuns, err := buildCapture(ctx, captureBuildRequest{
-		repository:     captureRunRepository,
-		clock:          options.Clock,
-		random:         securityRandom,
-		archiveBarrier: archiveBarrier,
+		nativeRevocation: nativeRevoker,
+		repository:       captureRunRepository,
+		clock:            options.Clock,
+		random:           securityRandom,
+		archiveBarrier:   archiveBarrier,
 		barrier: captureEvidenceBarrier{
 			raw: rawEvidence, reporter: runtimeEgress,
 		},
@@ -655,10 +672,11 @@ func startWithBuilders(
 	}
 	pending.register("CaptureRun component", captureRuns.Shutdown)
 	manualCaptures, err := buildManualCapture(ctx, manualCaptureBuildRequest{
-		repository:     manualCaptureRepository,
-		clock:          options.Clock,
-		random:         securityRandom,
-		archiveBarrier: archiveBarrier,
+		nativeRevocation: nativeRevoker,
+		repository:       manualCaptureRepository,
+		clock:            options.Clock,
+		random:           securityRandom,
+		archiveBarrier:   archiveBarrier,
 		barrier: captureEvidenceBarrier{
 			raw: rawEvidence, reporter: runtimeEgress,
 		},
@@ -695,6 +713,7 @@ func startWithBuilders(
 		ownerContext: ownerContext,
 		admissions:   captureAdmissions,
 		assignments:  assignments,
+		nativeTools:  nativeTools, nativeIDs: nativeOperationIDs,
 		exchanges:    exchanges,
 		original:     original,
 		accountReads: accountReads,
@@ -734,6 +753,7 @@ func startWithBuilders(
 	cleanups.register("Exchange drain", exchanges.Drain)
 	cleanups.register("Capture assignment drain", assignments.Drain)
 	cleanups.register("loopback proxy drain", proxy.Drain)
+	cleanups.register("native MCP module", nativeTools.Close)
 	cleanups.register("provider transport", provider.Shutdown)
 	cleanups.register("original-origin transport", original.Shutdown)
 	cleanups.register("CaptureRun component", captureRuns.Shutdown)

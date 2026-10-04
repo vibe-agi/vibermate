@@ -128,6 +128,11 @@ type CaptureActivity interface {
 	Active(context.Context, captureidentity.Reference) (bool, error)
 }
 
+// NativeRevocation closes in-memory work; durable Store predicates remain primary.
+type NativeRevocation interface {
+	Revoke(context.Context, captureidentity.Reference, string) error
+}
+
 type CreateCommand struct {
 	Capture       captureidentity.Reference
 	EnvironmentID environment.EnvironmentID

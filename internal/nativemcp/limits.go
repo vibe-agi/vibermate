@@ -2,12 +2,14 @@ package nativemcp
 
 import (
 	"errors"
+	"fmt"
 	"sync"
 	"time"
 )
 
 var errProtocol = errors.New("native protocol invalid")
 var errBudget = errors.New("native budget exceeded")
+var errIncomingBodyTooLarge = fmt.Errorf("native body too large: %w", errBudget)
 var errSession = errors.New("native session invalid")
 
 type Limits struct {

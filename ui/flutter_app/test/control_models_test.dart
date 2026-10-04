@@ -10,6 +10,54 @@ import 'package:vibermate_app/preview/preview_control_api.dart';
 import 'runtime_usage_fixture.dart';
 
 void main() {
+  test(
+    'Native inspection purpose is explicit and rejects unknown purposes',
+    () {
+      final wire = <String, Object?>{
+        'sequence': 1,
+        'connectionId': 'synthetic-native',
+        'sourceConfidence': 'configured',
+        'environmentId': 'native.synthetic',
+        'environmentName': 'Native',
+        'environmentRevision': 1,
+        'requestedHost': 'native.example',
+        'port': 443,
+        'decision': 'allow',
+        'decryption': 'mitm',
+        'phase': 'decided',
+        'bytesUp': 0,
+        'bytesDown': 0,
+        'startedAt': '2026-10-04T00:00:00Z',
+        'inspectionPurpose': 'guessed',
+      };
+      expect(
+        () => ConnectionRecord.fromJson(wire, 'connection'),
+        throwsA(isA<ControlContractException>()),
+      );
+      wire['inspectionPurpose'] = 'client_tools';
+      expect(
+        ConnectionRecord.fromJson(wire, 'connection').inspectionPurpose,
+        'client_tools',
+      );
+      final legacy = {...wire}..remove('inspectionPurpose');
+      expect(
+        ConnectionRecord.fromJson(legacy, 'connection').inspectionPurpose,
+        isNull,
+      );
+      for (final bad in [
+        {...wire, 'decryption': 'blind'},
+        {...wire, 'decryption': 'cleartext'},
+        {...wire, 'decision': 'deny'},
+        {...wire, 'clientEndpointId': 'invented-model'},
+        {...wire}..remove('environmentRevision'),
+      ]) {
+        expect(
+          () => ConnectionRecord.fromJson(bad, 'connection'),
+          throwsA(isA<ControlContractException>()),
+        );
+      }
+    },
+  );
   test('Egress evidence keeps frozen account settings and proxy revisions', () {
     final decision = <String, Object?>{
       'authority': 'environment',

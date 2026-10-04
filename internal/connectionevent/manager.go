@@ -46,6 +46,7 @@ type Attempt struct {
 }
 
 type DecisionEvidence struct {
+	InspectionPurpose      InspectionPurpose
 	Source                 Source
 	Decision               Decision
 	RuleID                 string
@@ -310,6 +311,7 @@ func (connection *Connection) Decide(
 	candidate.EnvironmentRevision = evidence.EnvironmentRevision
 	candidate.ClientEndpointID = evidence.ClientEndpointID
 	candidate.ClientEndpointRevision = evidence.ClientEndpointRevision
+	candidate.InspectionPurpose = evidence.InspectionPurpose
 	candidate.CredentialBindingID = evidence.CredentialBindingID
 	candidate.EgressScope = evidence.EgressScope
 	candidate.EgressSource = evidence.EgressSource

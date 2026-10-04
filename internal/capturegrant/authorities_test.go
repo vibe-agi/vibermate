@@ -80,6 +80,18 @@ func TestEnvironmentAuthorityResolverCreatesTypedCaptureAssignment(t *testing.T)
 		t.Fatal(err)
 	}
 	assignment := captureAuthorityAssignment(t, nil, nil)
+	aggregate := systemEnvironmentSnapshot(t).Aggregate()
+	aggregate.ID, aggregate.Name = "work", "Work"
+	aggregate.LaunchEnvironment = environment.LaunchEnvironmentPolicy{SetEnv: map[string]string{"TEAM_CONTEXT": "team-a"}}
+	snapshot, err := manualEnvironmentCompiler(t).Compile(aggregate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assignment.EnvironmentDigest = snapshot.Digest()
+	assignment.LaunchAuthority, err = environment.NewLaunchAuthorityBoundary(snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
 	assignment.Capture = capture
 	assignment.Source = captureassignment.SourceManualCreate
 	assignments := &recordingCaptureAssignmentAuthority{
@@ -88,7 +100,7 @@ func TestEnvironmentAuthorityResolverCreatesTypedCaptureAssignment(t *testing.T)
 			SetEnv: map[string]string{"TEAM_CONTEXT": "team-a"},
 		},
 	}
-	resolver, err := NewEnvironmentAuthorityResolver(assignments, fixedSnapshotResolver{})
+	resolver, err := NewEnvironmentAuthorityResolver(assignments, &manualSnapshotResolver{snapshots: map[environment.EnvironmentID]environment.EnvironmentSnapshot{"work": snapshot}})
 	if err != nil {
 		t.Fatal(err)
 	}

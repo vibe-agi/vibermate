@@ -1,5 +1,6 @@
 -- Inactive delta; the separately reviewed migration runner owns the transaction
 -- and revision publication. Preserve the old autoincrement high-water mark.
+ALTER TABLE runtime_connection_events ADD COLUMN inspection_purpose TEXT NOT NULL DEFAULT '' CHECK(inspection_purpose IN('', 'client_tools'));
 CREATE TEMP TABLE native_migration_audit_sequence(seq INTEGER NOT NULL);
 INSERT INTO native_migration_audit_sequence(seq)
 SELECT seq FROM sqlite_sequence WHERE name = 'runtime_egress_attempts';

@@ -10284,6 +10284,7 @@ List<String> _requireApprovalIdentityList(
 
 final class ConnectionRecord {
   const ConnectionRecord({
+    this.inspectionPurpose,
     required this.sequence,
     required this.connectionId,
     required this.sourceLabel,
@@ -10311,11 +10312,26 @@ final class ConnectionRecord {
 
   factory ConnectionRecord.fromJson(Object? json, String path) {
     final value = requireObject(json, path);
+    final inspectionPurpose = optionalString(value, 'inspectionPurpose', path);
+    if (inspectionPurpose != null &&
+        (inspectionPurpose != 'client_tools' ||
+            value['decryption'] != 'mitm' ||
+            value['decision'] != 'allow' ||
+            value.containsKey('clientEndpointId') ||
+            value.containsKey('clientEndpointRevision'))) {
+      throw ControlContractException('$path.inspectionPurpose is invalid');
+    }
+    if (inspectionPurpose != null) {
+      requireString(value, 'environmentId', path);
+      requireString(value, 'environmentName', path);
+      requireInteger(value, 'environmentRevision', path, minimum: 1);
+    }
     final port = requireInteger(value, 'port', path, minimum: 1);
     if (port > 65535) {
       throw ControlContractException('$path.port exceeds 65535');
     }
     return ConnectionRecord(
+      inspectionPurpose: inspectionPurpose,
       sequence: requireInteger(value, 'sequence', path, minimum: 1),
       connectionId: requireString(value, 'connectionId', path),
       sourceLabel: optionalString(value, 'sourceLabel', path),
@@ -10344,6 +10360,7 @@ final class ConnectionRecord {
 
   final int sequence;
   final String connectionId;
+  final String? inspectionPurpose;
   final String? sourceLabel;
   final String sourceConfidence;
   final String? environmentId;

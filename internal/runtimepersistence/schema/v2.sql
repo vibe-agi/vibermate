@@ -561,6 +561,8 @@ CREATE TABLE "runtime_connection_events"(
   CHECK(length(CAST(client_endpoint_id AS BLOB)) <= 128),
   client_endpoint_revision INTEGER NOT NULL DEFAULT 0
   CHECK(client_endpoint_revision BETWEEN 0 AND 9223372036854775807),
+  inspection_purpose TEXT NOT NULL DEFAULT ''
+  CHECK(inspection_purpose IN('', 'client_tools')),
   requested_host TEXT NOT NULL
   CHECK(length(CAST(requested_host AS BLOB)) BETWEEN 1 AND 1024),
   observed_sni TEXT NOT NULL DEFAULT ''
