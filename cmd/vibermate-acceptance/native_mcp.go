@@ -229,6 +229,14 @@ func checkNativeWrapperResolution(entrypoint, native string) error {
 	if err != nil {
 		return errors.New("native package root unavailable")
 	}
+	packageDirectory, err := filepath.EvalSymlinks(filepath.Join(scope, "codex-darwin-arm64"))
+	if err != nil {
+		return errors.New("native platform package unavailable")
+	}
+	metadata, err := filepath.EvalSymlinks(filepath.Join(scope, "codex-darwin-arm64", "package.json"))
+	if err != nil || filepath.Dir(metadata) != packageDirectory {
+		return errors.New("native platform metadata redirects native child")
+	}
 	expected, err := filepath.EvalSymlinks(filepath.Join(scope, "codex-darwin-arm64", "vendor", "aarch64-apple-darwin", "bin", "codex"))
 	if err != nil {
 		return errors.New("native child unavailable")

@@ -51,6 +51,17 @@ func verifyCodexPackageResolution(entrypoint string, release Release) error {
 		filepath.Join(entryDirectory, "../..", packageName),
 	} {
 		if candidate == packageDirectory {
+			// Node derives vendor from the resolved metadata file, not the
+			// lexical package. Keep it in the same resolved directory as the
+			// declared package whose native artifact was hashed above.
+			resolvedMetadata, err := filepath.EvalSymlinks(declared)
+			if err != nil {
+				return errors.New("pinned Codex platform metadata unavailable")
+			}
+			resolvedPackage, err := filepath.EvalSymlinks(candidate)
+			if err != nil || filepath.Dir(resolvedMetadata) != resolvedPackage {
+				return errors.New("pinned Codex platform metadata redirects native child")
+			}
 			return nil
 		}
 		if _, err := os.Lstat(candidate); !errors.Is(err, os.ErrNotExist) {

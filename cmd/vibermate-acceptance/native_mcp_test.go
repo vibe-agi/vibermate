@@ -397,6 +397,9 @@ func TestNativeWrapperResolutionRejectsChildRootEscape(t *testing.T) {
 	if err := os.WriteFile(entry, []byte("synthetic"), 0700); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(filepath.Join(root, "codex-darwin-arm64", "package.json"), []byte(`{}`), 0600); err != nil {
+		t.Fatal(err)
+	}
 	outside := filepath.Join(t.TempDir(), "codex")
 	if err := os.WriteFile(outside, []byte("synthetic"), 0700); err != nil {
 		t.Fatal(err)

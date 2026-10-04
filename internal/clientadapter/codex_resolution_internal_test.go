@@ -21,6 +21,17 @@ func TestPinnedCodexResolutionPreservesDeclaredLayouts(t *testing.T) {
 		if err := os.MkdirAll(filepath.Dir(entry), 0700); err != nil {
 			t.Fatal(err)
 		}
+		for _, artifact := range release.Artifacts {
+			if artifact.Role == ArtifactPlatformPackageMetadata {
+				metadata := filepath.Join(filepath.Dir(entry), artifact.RelativePath)
+				if err := os.MkdirAll(filepath.Dir(metadata), 0700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(metadata, []byte(`{}`), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+		}
 		if err := verifyCodexPackageResolution(entry, release); err != nil {
 			t.Fatalf("declared nested=%t rejected: %v", nested, err)
 		}
