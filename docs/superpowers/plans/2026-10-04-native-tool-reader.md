@@ -1,6 +1,6 @@
 # Native tool permission, approvals and reader Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development task-by-task, with one mutable implementer and independent reviews. Task1 passed independent review at196364f; Task2 is active and Task3 remains queued. Actual-client and full reader acceptance have not run.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development task-by-task, with one mutable implementer and independent reviews. Task1 passed independent review at196364f; Task2 passed at448d8f9; Task3 is active. Actual-client and full reader acceptance have not run.
 
 **Goal:** Let users choose tool-service access per profile, approve a specific frozen action, and read truthful tool activity without learning the transport or storage internals.
 
@@ -40,6 +40,8 @@ Route identity comes from the trusted snapshot at the draft's expected published
 - [ ] Verify `go test ./internal/environment ./internal/desktopcontrol ./internal/capturecontrol ./internal/runlauncher ./cmd/vibermate ./locales -count=1`; Flutter targeted tests above plus `flutter analyze --no-pub`. Review legacy canonical bytes, frozen route clone and publish revocation; commit only after verification in implementation phase.
 
 ## Task 2: Real scoped approvals and temporary frozen-intent preview
+
+**Execution evidence:** Implementation5e152f6 and failure-recovery fix448d8f9 independently approved (task-2-rereview-1). Four-package serial Go race, post-wire scoped race, actual preview limits and ordinary/callback router integration, Flutter162/162, final affected149/149 and analyze passed. Initial test-first deviations were withdrawn and recovered with actual behavioral REDs, recorded separately from compile/harness failures. I1 fixed by retaining only unresolved pending IDs after failedPOST until authoritativeGET reconciliation; eight failure/response-loss/refresh/reopen cases establish no mutation retry or old-preview restore. Production classification, real clients and Task3 reader remain unproved.
 
 **Files:** Create `internal/desktopcontrol/native_tool_approvals.go`, `native_tool_access.go`, `native_tool_approvals_test.go`; modify `internal/desktopcontrol/{handler,router}.go`, `router_integration_test.go`, `internal/serverhost/router.go`, `host_integration_test.go`, `internal/productruntime/{builders,runtime}.go`; create `internal/nativemcp/pending_preview.go`, `pending_preview_test.go`; create Flutter `lib/core/api/native_tool_models.dart`, `lib/features/workbench/native_tool_approval_row.dart`, `test/native_tool_approval_test.dart`; modify `lib/core/api/{control_api,control_models}.dart`, `lib/features/workbench/{network_view,workbench_controller,workbench_shell}.dart`, `lib/core/i18n/app_copy.dart`, `test/control_api_http_test.dart`.
 
