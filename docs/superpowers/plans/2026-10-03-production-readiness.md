@@ -136,7 +136,7 @@ DEVELOPER_DIR=/Library/Developer/CommandLineTools go run golang.org/x/vuln/cmd/g
 | 运行时、代理、启动器接入 | 实现及独立复核通过 | 4c78056、53b61e0；真实 Store/合成 HTTP/TLS 接入，不替代官方客户端验收 |
 | Profile 工具权限 | 实现及独立复核通过 | 0899cd3、196364f；发布撤销/严格输入/中英文授权流程 |
 | 原生审批 | 实现及独立复核通过 | 5e152f6、448d8f9；真实审批/临时预览/失败恢复，不替代生产工具分类与客户端验收 |
-| 原生内容与图片阅读器 | 执行中 | native-tool-reader Task3；内容/图片与整页响应式验收待完成 |
-| 真实客户端与 CA | 未完成本次验收 | 精确版本/平台 reports |
+| 原生内容与图片阅读器 | 实现及独立复核通过 | 2f47531、fa50020；真实存储/API/界面、图片、分页、失效与整页响应式；不替代真实客户端验收 |
+| 真实客户端与 CA | 未完成本次验收 | native-mcp-transport Task4 精确46案例开始；CA/平台验收排队 |
 | 全包与持续运行 | 未完成本次验收 | 最终 SHA 的结果 |
 | 新版本交付 | 未发布 | GitHub release + Homebrew |
