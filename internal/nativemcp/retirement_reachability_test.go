@@ -169,7 +169,8 @@ func TestNativeRetiredSessionReceiptNeverSends(t *testing.T) {
 		t.Fatal(terminal)
 	}
 	before := f.transport.sends()
-	response, err := f.executor.(*executor).sendCommitted(context.Background(), request, plan, receipt)
+	sent := f.executor.(*executor).sendCommitted(context.Background(), request, plan, receipt)
+	response, err := sent.response, sent.err
 	if response != nil {
 		response.Body.Close()
 	}

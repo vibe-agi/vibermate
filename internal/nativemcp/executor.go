@@ -528,10 +528,19 @@ func (e *executor) Serve(ctx context.Context, c CapturedRequest, w http.Response
 	if err != nil {
 		return reject(w, c.id, reasonFor(err))
 	}
+	// Only this immediate Start's exact receipt can qualify its own attempt.
+	// A valid receipt belonging to some other operation must never send here.
+	if receipt.OperationID() == "" || receipt.OperationID() != c.id || receipt.AttemptID() != attempt.String() {
+		return e.finishFailure(c.id, s, w, nativetool.ErrDenied, true)
+	}
 	headerTimer := time.AfterFunc(e.limits.Headers, cancel)
-	response, err := e.sendCommitted(call, outgoing, plan, receipt)
+	send := e.sendCommitted(call, outgoing, plan, receipt)
 	headerTimer.Stop()
+	response, err := send.response, send.err
 	if err != nil {
+		if send.phase == nativeSendFirstClaimUnsent && r.stream == nil && (r.kind == nativetool.RequestGetStream || r.kind == nativetool.RequestToolsCall) {
+			return e.finishKnownUnsent(c.id, s, w, err)
+		}
 		if r.stream != nil {
 			return e.finishRecoveryTransportFailure(c, s, r.stream, receipt)
 		}

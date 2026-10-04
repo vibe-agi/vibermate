@@ -98,7 +98,8 @@ func testNativeSiblingPreservation(t *testing.T, deleteSession bool) {
 	if terminal.Outcome != OutcomeCompleted {
 		t.Fatal(terminal)
 	}
-	response, err := f.executor.(*executor).sendCommitted(context.Background(), outgoing, plan, receipt)
+	sent := f.executor.(*executor).sendCommitted(context.Background(), outgoing, plan, receipt)
+	response, err := sent.response, sent.err
 	if err != nil {
 		t.Fatal(err)
 	}

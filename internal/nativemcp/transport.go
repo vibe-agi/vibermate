@@ -95,30 +95,54 @@ func nativeProbe(plan environment.ClientToolPlan) offlinehold.ProbeTarget {
 
 // A receipt is consumed once in this executor even when verification fails.
 // Verification is point-in-time; revocation cannot retract already sent bytes.
-func (e *executor) sendCommitted(ctx context.Context, request *http.Request, plan environment.ClientToolPlan, receipt nativetool.StartReceipt) (*http.Response, error) {
+type nativeSendPhase uint8
+
+const (
+	nativeSendUnproven nativeSendPhase = iota
+	nativeSendFirstClaimUnsent
+	nativeSendTransportEntered
+)
+
+type nativeSendResult struct {
+	response *http.Response
+	err      error
+	phase    nativeSendPhase
+}
+
+func (e *executor) sendCommitted(ctx context.Context, request *http.Request, plan environment.ClientToolPlan, receipt nativetool.StartReceipt) nativeSendResult {
+	result := nativeSendResult{}
 	if ctx == nil || ctx.Err() != nil || e.dependencies.OwnerContext.Err() != nil {
-		return nil, nativetool.ErrDenied
+		result.err = nativetool.ErrDenied
+		return result
 	}
 	e.mu.Lock()
 	id := receipt.OperationID()
 	if e.closed || id == "" || e.claimed[id] {
 		e.mu.Unlock()
-		return nil, nativetool.ErrReplay
+		result.err = nativetool.ErrReplay
+		return result
 	}
 	if !e.budget.acquire(128) {
 		e.mu.Unlock()
-		return nil, errBudget
+		result.err = errBudget
+		return result
 	}
 	e.claimed[id] = true
+	result.phase = nativeSendFirstClaimUnsent
 	e.mu.Unlock()
 	if err := exactTarget(request, plan); err != nil {
-		return nil, err
+		result.err = err
+		return result
 	}
 	if err := e.dependencies.Store.VerifyStartReceipt(ctx, receipt, e.dependencies.Clock().UTC()); err != nil {
-		return nil, err
+		result.err = err
+		return result
 	}
 	if err := ctx.Err(); err != nil {
-		return nil, err
+		result.err = err
+		return result
 	}
-	return e.dependencies.Transport.RoundTrip(request, plan.Route().EgressProfile.Policy)
+	result.phase = nativeSendTransportEntered
+	result.response, result.err = e.dependencies.Transport.RoundTrip(request, plan.Route().EgressProfile.Policy)
+	return result
 }

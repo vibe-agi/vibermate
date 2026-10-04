@@ -78,7 +78,8 @@ func TestNativeSensitiveToolEvidenceRecheckedByGateAndAuthority(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	response, err := e.sendCommitted(ctx, outgoing, plan, receipt)
+	sent := e.sendCommitted(ctx, outgoing, plan, receipt)
+	response, err := sent.response, sent.err
 	if err != nil {
 		t.Fatal(err)
 	}
