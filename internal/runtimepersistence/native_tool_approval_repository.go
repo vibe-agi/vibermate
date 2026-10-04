@@ -171,11 +171,6 @@ func (r *nativeToolRepository) DecideApproval(ctx context.Context, in nativetool
 		if op.BindingDigest == nil || *op.BindingDigest != a.BindingDigest {
 			return nativetool.ErrInvalid
 		}
-		if op.Kind == nativetool.RequestServerReply {
-			if _, _, _, err := r.nativeExecutionAuthority(ctx, tx, op, in.ObservedAt); err != nil {
-				return err
-			}
-		}
 		desired := "allowed"
 		if in.Decision == nativetool.DecisionDeny {
 			desired = "denied"
@@ -190,6 +185,11 @@ func (r *nativeToolRepository) DecideApproval(ctx context.Context, in nativetool
 				return nil
 			}
 			return nativetool.ErrConflict
+		}
+		if op.Kind == nativetool.RequestServerReply {
+			if _, _, _, err := r.nativeExecutionAuthority(ctx, tx, op, in.ObservedAt); err != nil {
+				return err
+			}
 		}
 		if a.Revision != in.ExpectedRevision {
 			return nativetool.ErrConflict

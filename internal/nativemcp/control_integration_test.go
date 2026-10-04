@@ -32,9 +32,19 @@ func TestNativeApprovalRequiresAuthenticatedCaptureAndExactIntent(t *testing.T) 
 	for _, scenario := range []struct {
 		name string
 		run  func(*testing.T, func(nativemcp.Executor, *runtimepersistence.Store, manualcapture.Controller, captureidentity.Reference, nativetool.Approval))
-	}{{"callback", nativemcp.ExerciseNativePendingControl}, {"ordinary", nativemcp.ExerciseNativeToolControl}, {"expired", nativemcp.ExerciseNativeExpiredControl}, {"unavailable", nativemcp.ExerciseNativeUnavailableControl}} {
+	}{{"callback", nativemcp.ExerciseNativePendingControl}, {"callback_history_child", nil}, {"callback_history_parent", nil}, {"ordinary", nativemcp.ExerciseNativeToolControl}, {"expired", nativemcp.ExerciseNativeExpiredControl}, {"unavailable", nativemcp.ExerciseNativeUnavailableControl}} {
 		t.Run(scenario.name, func(t *testing.T) {
-			scenario.run(t, func(executor nativemcp.Executor, store *runtimepersistence.Store, manuals manualcapture.Controller, capture captureidentity.Reference, a nativetool.Approval) {
+			var complete func()
+			run := scenario.run
+			if run == nil {
+				run = func(t *testing.T, check func(nativemcp.Executor, *runtimepersistence.Store, manualcapture.Controller, captureidentity.Reference, nativetool.Approval)) {
+					nativemcp.ExerciseNativeHistoricalControl(t, scenario.name == "callback_history_parent", func(e nativemcp.Executor, s *runtimepersistence.Store, m manualcapture.Controller, c captureidentity.Reference, a nativetool.Approval, barrier func()) {
+						complete = barrier
+						check(e, s, m, c, a)
+					})
+				}
+			}
+			run(t, func(executor nativemcp.Executor, store *runtimepersistence.Store, manuals manualcapture.Controller, capture captureidentity.Reference, a nativetool.Approval) {
 				clock := &decisionClock{time.Now().UTC()}
 				app, err := desktopcontrol.New(desktopcontrol.Options{Readiness: readyState(true), Status: runtime, Environments: runtime.Environments(), Assignments: runtime.CaptureAssignments(), Activities: runtime.Activities(), Contents: runtime.ExchangeContents(), Connections: runtime.ConnectionEvents(), Egress: runtime.EgressAttempts(), Approvals: runtime.ToolApprovals(), Endpoints: runtime.UpstreamEndpoints(), Accounts: runtime.ProviderAccounts(), Offline: runtime, Clock: clock, ManualCaptures: manuals, NativeTools: store.NativeToolRepository(), NativePreviews: executor})
 				if err != nil {
@@ -116,7 +126,7 @@ func TestNativeApprovalRequiresAuthenticatedCaptureAndExactIntent(t *testing.T) 
 					t.Fatalf("missing bound preview %+v", dto)
 				}
 				intent := dto.Preview.Intents[0]
-				if scenario.name == "callback" {
+				if strings.HasPrefix(scenario.name, "callback") {
 					if intent.Action != "form_reply" || len(intent.Arguments) != 0 {
 						t.Fatalf("safe registered-parent preview %+v", dto)
 					}
@@ -141,11 +151,47 @@ func TestNativeApprovalRequiresAuthenticatedCaptureAndExactIntent(t *testing.T) 
 				check(request("POST", path+"/actions/decide", write, body, "999", "native-stale-revision"), 409)
 				check(request("POST", path+"/actions/decide", write, strings.Replace(body, a.BindingDigest.String(), strings.Repeat("0", 64), 1), "1", "native-stale-binding"), 409)
 				check(request("POST", path+"/actions/decide", write, body, "1", "native-allow-once-key"), 200)
+				if complete != nil {
+					complete()
+				}
 				check(request("POST", path+"/actions/decide", write, body, "1", "native-allow-once-key"), 200)
 				resolved := request("GET", path, read, "", "", "")
 				check(resolved, 200)
 				if bytes.Contains(resolved.Body.Bytes(), []byte(`"preview":`)) {
 					t.Fatal("decided preview survived")
+				}
+				if complete != nil {
+					foreignOwner, err := manualcapture.NewProxyClientOwnerScope("history-foreign-owner")
+					if err != nil {
+						t.Fatal(err)
+					}
+					foreign, err := manuals.Create(context.Background(), manualcapture.CreateCommand{Owner: foreignOwner, DisplayName: "Foreign history", ClientClass: manualcapture.ClientDesktopApp, Lifetime: manualcapture.LifetimeTemporary, ExpiresIn: time.Hour})
+					if err != nil {
+						t.Fatal(err)
+					}
+					foreignCollection := "/api/v1/captures/manual_capture:" + foreign.Capture.ID + "/native-tools/approvals"
+					check(request("GET", foreignCollection, read, "", "", ""), 404)
+					check(request("POST", foreignCollection+"/"+a.ID.String()+"/actions/decide", write, body, "1", "native-allow-once-key"), 404)
+					check(request("POST", path+"/actions/decide", "", body, "1", "native-allow-once-key"), 401)
+					check(request("POST", path+"/actions/decide", read, body, "1", "native-allow-once-key"), 401)
+					check(request("POST", strings.Replace(path, capture.ID, wrong.Capture.ID, 1)+"/actions/decide", write, body, "1", "native-allow-once-key"), 404)
+					check(request("POST", path+"/actions/decide", write, strings.Replace(body, a.BindingDigest.String(), strings.Repeat("0", 64), 1), "1", "native-allow-once-key"), 409)
+					check(request("POST", path+"/actions/decide", write, body, "2", "native-allow-once-key"), 409)
+					check(request("POST", path+"/actions/decide", write, body, "1", "native-wrong-history-key"), 409)
+					check(request("POST", path+"/actions/decide", write, strings.Replace(body, "allow-once", "deny", 1), "1", "native-allow-once-key"), 409)
+					check(request("POST", strings.Replace(path, a.ID.String(), strings.Repeat("f", 32), 1)+"/actions/decide", write, body, "1", "native-allow-once-key"), 404)
+					clock.now = a.ExpiresAt.Add(time.Millisecond)
+					check(request("POST", path+"/actions/decide", write, body, "1", "native-allow-once-key"), 200)
+					if err = executor.Revoke(context.Background(), capture, nativemcp.RevocationPermissionOff); err != nil {
+						t.Fatal(err)
+					}
+					check(request("POST", path+"/actions/decide", write, body, "1", "native-allow-once-key"), 200)
+					after := request("GET", path, read, "", "", "")
+					check(after, 200)
+					var historical desktopcontrol.NativeApprovalDTO
+					if json.Unmarshal(after.Body.Bytes(), &historical) != nil || historical.State != "allowed" || historical.Revision != 2 || !historical.ExpiresAt.Equal(a.ExpiresAt) || historical.Preview != nil {
+						t.Fatal("history renewed metadata/preview after expiry/OFF")
+					}
 				}
 			})
 		})

@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"github.com/vibe-agi/vibermate/internal/captureidentity"
+	"github.com/vibe-agi/vibermate/internal/egressaudit"
 	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/manualcapture"
 	"github.com/vibe-agi/vibermate/internal/nativetool"
@@ -11,10 +12,188 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
+
+type historyObservedWriter struct {
+	*httptest.ResponseRecorder
+	observed chan struct{}
+	once     sync.Once
+}
+
+func (w *historyObservedWriter) Write(body []byte) (int, error) {
+	n, err := w.ResponseRecorder.Write(body)
+	if strings.Contains(string(body), `"method":"elicitation/create"`) {
+		w.once.Do(func() { close(w.observed) })
+	}
+	return n, err
+}
+
+// Test-only completion barrier around the real executor/Store. The child
+// finishes before the handler retries; the parent can be held live separately.
+func ExerciseNativeHistoricalControl(t *testing.T, parentCompleted bool, check func(Executor, *runtimepersistence.Store, manualcapture.Controller, captureidentity.Reference, nativetool.Approval, func())) {
+	t.Helper()
+	f := newNativeFixture(t, environment.ContentRecordingPolicy{Mode: environment.ContentRecordingOff})
+	f.handshake(t)
+	manuals, err := manualcapture.NewManager(context.Background(), manualcapture.DefaultOptions(f.store.ManualCaptureRepository()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manuals.Shutdown(context.Background())
+	parentRelease := make(chan struct{})
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(parentRelease) }) }
+	defer release()
+	const callback = `{"jsonrpc":"2.0","id":17,"method":"elicitation/create","params":{"message":"callback-private-sentinel","requestedSchema":{"type":"object","properties":{"answer":{"type":"string"}}}}}`
+	const reply = `{"jsonrpc":"2.0","id":17,"result":{"action":"accept","content":{"answer":"form-proof-private-sentinel"}}}`
+	f.transport.handler = func(r *http.Request, body []byte) (*http.Response, error) {
+		if strings.Contains(string(body), `"method":"tools/call"`) {
+			reader, writer := io.Pipe()
+			go func() {
+				defer writer.Close()
+				_, _ = io.WriteString(writer, "data: "+callback+"\n\n")
+				select {
+				case <-parentRelease:
+				case <-r.Context().Done():
+					return
+				}
+				_, _ = io.WriteString(writer, "data: {\"jsonrpc\":\"2.0\",\"id\":3,\"result\":{\"content\":[]}}\n\n")
+			}()
+			return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": []string{"text/event-stream"}}, Body: reader}, nil
+		}
+		return &http.Response{StatusCode: 202, Header: http.Header{}, Body: http.NoBody}, nil
+	}
+	await := func(done <-chan struct{}) {
+		t.Helper()
+		select {
+		case <-done:
+		case <-time.After(3 * time.Second):
+			t.Fatal("real callback completion barrier timed out")
+		}
+	}
+	parent := f.captured(t, "POST", `{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"read_file","arguments":{"path":"a"}}}`, "synthetic-session")
+	w := &historyObservedWriter{ResponseRecorder: httptest.NewRecorder(), observed: make(chan struct{})}
+	parentDone := make(chan struct{})
+	var childDone chan struct{}
+	var parentResult Terminal
+	go func() { parentResult = f.executor.Serve(context.Background(), parent, w); close(parentDone) }()
+	defer func() {
+		release()
+		_ = f.executor.Close(context.Background())
+		if childDone != nil {
+			await(childDone)
+		}
+		await(parentDone)
+	}()
+	f.approve(t, parent.id)
+	await(w.observed)
+	child := f.captured(t, "POST", reply, "synthetic-session")
+	childDone = make(chan struct{})
+	var childResult Terminal
+	go func() {
+		childResult = f.executor.Serve(context.Background(), child, httptest.NewRecorder())
+		close(childDone)
+	}()
+	a := waitNativeQuestion(t, f, child.id)
+	completed := false
+	type state struct {
+		approval            nativetool.Approval
+		operation           nativetool.Operation
+		audit               egressaudit.Page
+		key                 string
+		once, events, sends int
+	}
+	snapshot := func() state {
+		t.Helper()
+		var out state
+		ctx := context.Background()
+		var err error
+		out.approval, err = f.store.NativeToolRepository().GetApproval(ctx, a.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		out.operation, err = f.store.NativeToolRepository().Get(ctx, child.id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		out.audit, err = f.store.EgressAttemptRepository().List(ctx, egressaudit.PageRequest{ParentKind: egressaudit.ParentClientOperation, ParentID: child.id.String(), Limit: 10})
+		if err != nil {
+			t.Fatal(err)
+		}
+		err = f.db.QueryRow(`SELECT idempotency_key,(SELECT COUNT(*) FROM native_tool_once WHERE operation_id=?),(SELECT COUNT(*) FROM native_tool_events WHERE operation_id=?) FROM native_tool_approvals WHERE approval_id=?`, child.id, child.id, a.ID).Scan(&out.key, &out.once, &out.events)
+		if err != nil {
+			t.Fatal(err)
+		}
+		out.sends = f.transport.sends()
+		return out
+	}
+	var beforeHistory state
+	complete := func() {
+		await(childDone)
+		if childResult.Outcome != OutcomeCompleted {
+			t.Fatalf("real child completion=%+v", childResult)
+		}
+		approval, err := f.store.NativeToolRepository().GetApproval(context.Background(), a.ID)
+		if err != nil || approval.ConsumedAt == nil {
+			t.Fatal("real callback approval was not consumed")
+		}
+		e := f.executor.(*executor)
+		e.mu.Lock()
+		for _, s := range e.scopes[f.capture.Key()].sessions {
+			s.mu.Lock()
+			_, registered := s.parents["17"]
+			s.mu.Unlock()
+			if registered {
+				t.Error("completed callback still registered in executor")
+			}
+		}
+		e.mu.Unlock()
+		if parentCompleted {
+			release()
+			await(parentDone)
+			if parentResult.Outcome != OutcomeCompleted {
+				t.Fatal(parentResult)
+			}
+		}
+		op, err := f.store.NativeToolRepository().Get(context.Background(), parent.id)
+		if err != nil || parentCompleted && op.State != "completed" || !parentCompleted && op.State != "started" {
+			t.Fatalf("parent completion ordering=%+v %v", op, err)
+		}
+		completed = true
+		beforeHistory = snapshot()
+		if beforeHistory.once != 1 || len(beforeHistory.audit.Items) != 1 || beforeHistory.sends != 5 {
+			t.Fatal("callback did not produce exactly one once/audit/send")
+		}
+	}
+	check(f.executor, f.store, manuals, f.capture, a, complete)
+	if !completed {
+		t.Fatal("handler did not exercise real completion barrier")
+	}
+	if !reflect.DeepEqual(beforeHistory, snapshot()) {
+		t.Fatal("historical HTTP responses changed approval/key/operation/once/audit/events/outbound")
+	}
+	release()
+	await(parentDone)
+	before := f.transport.sends()
+	if before != 5 {
+		t.Fatalf("real sends=%d", before)
+	}
+	scope, err := f.store.NativeToolRepository().GetScope(context.Background(), f.capture)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = f.store.NativeToolRepository().Start(context.Background(), child.id, "history-late-start", scope.Revision, time.Now().UTC()); err == nil {
+		t.Fatal("historical response renewed Start")
+	}
+	result, _ := f.serve(t, reply, "synthetic-session")
+	if result.Outcome == OutcomeCompleted || f.transport.sends() != before {
+		t.Fatal("historical response renewed reply send")
+	}
+}
 
 // Test-only bridge lets the external control integration use the same native
 // fixture without an import cycle or any test hook in production code.
