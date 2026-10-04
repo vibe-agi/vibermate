@@ -1,6 +1,8 @@
 import 'dart:async';
 import 'dart:math' as math;
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
+import 'package:flutter/scheduler.dart';
 import '../../core/api/native_tool_models.dart';
 import '../../core/design/viber_theme.dart';
 import '../../core/i18n/app_copy.dart';
@@ -172,6 +174,7 @@ final class _NativeInspectorState extends State<_NativeInspector> {
   Future<List<NativeRecordedBlock>>? _content;
   late final ScrollController _scroll;
   int _epoch = 0;
+  int _operationGeneration = 0;
   String? _signature;
   @override
   void initState() {
@@ -180,18 +183,55 @@ final class _NativeInspectorState extends State<_NativeInspector> {
     _epoch = widget.controller.nativeReaderGeneration;
     _operation = widget.operation;
     widget.controller.addListener(_updated);
+    widget.controller.nativeContentInvalidations.addListener(_invalidated);
     _load();
   }
 
   void _load() {
     final op = _operation;
     final descriptor = op?.part(_part);
+    _operationGeneration = op == null
+        ? 0
+        : widget.controller.nativeOperationGeneration(op.operationId);
     _signature = op == null
         ? null
         : '${op.revision}/$_part/${descriptor!.state}/${descriptor.digest}';
     _content = descriptor?.state == 'available'
         ? widget.controller.loadNativeToolContent(op!, _part)
         : null;
+  }
+
+  void _invalidated() {
+    final op = _operation;
+    if (!mounted ||
+        op == null ||
+        widget.controller.nativeContentScopeCurrent(
+          op,
+          _part,
+          _epoch,
+          _operationGeneration,
+        )) {
+      return;
+    }
+    _content = null;
+    _signature = null;
+    if (_epoch != widget.controller.nativeReaderGeneration ||
+        op.captureKey != widget.controller.selectedCaptureKey ||
+        widget.controller.nativeOperations.every(
+          (current) => current.operationId != op.operationId,
+        )) {
+      _operation = null;
+    }
+    if (SchedulerBinding.instance.schedulerPhase ==
+        SchedulerPhase.persistentCallbacks) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          setState(() {});
+        }
+      });
+    } else {
+      setState(() {});
+    }
   }
 
   void _updated() {
@@ -228,6 +268,7 @@ final class _NativeInspectorState extends State<_NativeInspector> {
   @override
   void dispose() {
     widget.controller.removeListener(_updated);
+    widget.controller.nativeContentInvalidations.removeListener(_invalidated);
     widget.controller.invalidateNativeInspector(widget.operation.operationId);
     _scroll.dispose();
     super.dispose();
@@ -340,14 +381,19 @@ final class _NativeInspectorState extends State<_NativeInspector> {
                                             TextButton(
                                               onPressed: () => showDialog<void>(
                                                 context: context,
-                                                builder: (_) => Dialog(
-                                                  child: InteractiveViewer(
-                                                    child: Image.memory(
-                                                      block.imageBytes!,
-                                                      fit: BoxFit.contain,
+                                                builder: (_) =>
+                                                    _NativeImageViewer(
+                                                      controller:
+                                                          widget.controller,
+                                                      operation: op!,
+                                                      part: _part,
+                                                      blockIndex: blocks
+                                                          .indexOf(block),
+                                                      epoch: _epoch,
+                                                      generation:
+                                                          _operationGeneration,
+                                                      copy: copy,
                                                     ),
-                                                  ),
-                                                ),
                                               ),
                                               child: Text(copy('native.image')),
                                             ),
@@ -382,4 +428,181 @@ final class _NativeInspectorState extends State<_NativeInspector> {
       ],
     );
   }
+}
+
+/// The route owns only its source scope. Validated bytes are loaded through the
+/// native owner and released when that exact scope changes; the widget never
+/// closes over a thumbnail's independent image reference.
+final class _NativeImageViewer extends StatefulWidget {
+  const _NativeImageViewer({
+    required this.controller,
+    required this.operation,
+    required this.part,
+    required this.blockIndex,
+    required this.epoch,
+    required this.generation,
+    required this.copy,
+  });
+  final WorkbenchController controller;
+  final NativeToolOperation operation;
+  final String part;
+  final int blockIndex, epoch, generation;
+  final AppCopy copy;
+  @override
+  State<_NativeImageViewer> createState() => _NativeImageViewerState();
+}
+
+final class _NativeImageViewerState extends State<_NativeImageViewer> {
+  Uint8List? _bytes;
+  bool _valid = true;
+  Timer? _expiry;
+  bool get _current =>
+      _valid &&
+      widget.controller.nativeContentScopeCurrent(
+        widget.operation,
+        widget.part,
+        widget.epoch,
+        widget.generation,
+      );
+  @override
+  void initState() {
+    super.initState();
+    widget.controller.nativeContentInvalidations.addListener(_check);
+    widget.controller.addListener(_check);
+    unawaited(_load());
+    _scheduleExpiry();
+  }
+
+  Future<void> _load() async {
+    try {
+      if (!_current) {
+        _invalidate();
+        return;
+      }
+      final blocks = await widget.controller.loadNativeToolContent(
+        widget.operation,
+        widget.part,
+      );
+      if (!mounted) {
+        return;
+      }
+      if (!_current ||
+          widget.blockIndex >= blocks.length ||
+          blocks[widget.blockIndex].kind != 'image') {
+        _invalidate();
+        return;
+      }
+      setState(() => _bytes = blocks[widget.blockIndex].imageBytes);
+    } on Object {
+      if (mounted) {
+        _invalidate();
+      }
+    }
+  }
+
+  void _scheduleExpiry() {
+    final remaining = widget.operation
+        .part(widget.part)
+        .expiresAt
+        ?.difference(DateTime.now().toUtc());
+    if (remaining == null || remaining <= Duration.zero) {
+      _invalidate();
+      return;
+    }
+    _expiry = Timer(
+      remaining > const Duration(days: 1) ? const Duration(days: 1) : remaining,
+      () {
+        _check();
+        if (_valid) {
+          _scheduleExpiry();
+        }
+      },
+    );
+  }
+
+  void _check() {
+    if (!_current) {
+      _invalidate();
+    }
+  }
+
+  void _invalidate() {
+    if (!_valid) {
+      return;
+    }
+    _valid = false;
+    _expiry?.cancel();
+    final old = _bytes;
+    _bytes = null;
+    if (old != null) {
+      unawaited(MemoryImage(old).evict());
+    }
+    if (!mounted) {
+      return;
+    }
+    if (SchedulerBinding.instance.schedulerPhase ==
+        SchedulerPhase.persistentCallbacks) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          setState(() {});
+        }
+      });
+    } else {
+      setState(() {});
+    }
+  }
+
+  @override
+  void dispose() {
+    widget.controller.nativeContentInvalidations.removeListener(_check);
+    widget.controller.removeListener(_check);
+    _expiry?.cancel();
+    final old = _bytes;
+    _bytes = null;
+    if (old != null) {
+      unawaited(MemoryImage(old).evict());
+    }
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => Dialog(
+    key: const Key('native-image-viewer'),
+    child: SizedBox(
+      width: 1100,
+      height: MediaQuery.sizeOf(context).height * .85,
+      child: Column(
+        children: [
+          Row(
+            children: [
+              const SizedBox(width: 12),
+              Expanded(child: Text(widget.copy('native.image'))),
+              IconButton(
+                key: const Key('native-image-close'),
+                tooltip: widget.copy('content_page.close'),
+                onPressed: () => Navigator.pop(context),
+                icon: const Icon(Icons.close),
+              ),
+            ],
+          ),
+          Expanded(
+            child: !_valid
+                ? Center(child: Text(widget.copy('native.part.unavailable')))
+                : _bytes == null
+                ? Center(child: Text(widget.copy('common.loading')))
+                : InteractiveViewer(
+                    minScale: .5,
+                    maxScale: 8,
+                    child: Image.memory(
+                      _bytes!,
+                      fit: BoxFit.contain,
+                      errorBuilder: (_, _, _) =>
+                          Text(widget.copy('native.part.unavailable')),
+                    ),
+                  ),
+          ),
+        ],
+      ),
+    ),
+  );
 }

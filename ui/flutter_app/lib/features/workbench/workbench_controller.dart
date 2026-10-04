@@ -302,9 +302,39 @@ final class WorkbenchController extends ChangeNotifier
   final _nativeContentCache = <String, List<NativeRecordedBlock>>{};
   int _nativeCacheBytes = 0;
   int get nativeReaderGeneration => _nativeReaderEpoch;
+  final _nativeContentInvalidations = ChangeNotifier();
+  Listenable get nativeContentInvalidations => _nativeContentInvalidations;
+  int nativeOperationGeneration(String id) =>
+      _nativeOperationGenerations[id] ?? 0;
+  bool nativeContentScopeCurrent(
+    NativeToolOperation operation,
+    String part,
+    int epoch,
+    int generation,
+  ) {
+    if (_disposed ||
+        !_nativeReaderVisible ||
+        epoch != _nativeReaderEpoch ||
+        operation.captureKey != selectedCaptureKey ||
+        generation != nativeOperationGeneration(operation.operationId)) {
+      return false;
+    }
+    final current = nativeOperations
+        .where(
+          (op) =>
+              op.operationId == operation.operationId &&
+              op.captureKey == operation.captureKey,
+        )
+        .firstOrNull;
+    final descriptor = current?.part(part);
+    return current?.revision == operation.revision &&
+        descriptor?.state == 'available' &&
+        descriptor?.digest == operation.part(part).digest &&
+        descriptor?.expiresAt?.isAfter(DateTime.now().toUtc()) == true;
+  }
 
   void setNativeReaderVisible(bool visible) {
-    if (_nativeReaderVisible == visible) {
+    if (_disposed || _nativeReaderVisible == visible) {
       return;
     }
     _nativeReaderVisible = visible;
@@ -326,9 +356,13 @@ final class WorkbenchController extends ChangeNotifier
     _nativeContentLoads.clear();
     _nativeContentCache.clear();
     _nativeCacheBytes = 0;
+    _nativeContentInvalidations.notifyListeners();
   }
 
   void invalidateNativeInspector(String operation) {
+    if (_disposed) {
+      return;
+    }
     _nativeOperationGenerations[operation] =
         (_nativeOperationGenerations[operation] ?? 0) + 1;
     final marker = '/$operation/';
@@ -340,6 +374,7 @@ final class WorkbenchController extends ChangeNotifier
       final removed = _nativeContentCache.remove(key)!;
       _nativeCacheBytes -= removed.fold<int>(0, (n, b) => n + b.byteSize);
     }
+    _nativeContentInvalidations.notifyListeners();
   }
 
   Future<void> refreshNativeTools() async {
@@ -370,6 +405,7 @@ final class WorkbenchController extends ChangeNotifier
         for (final op in nativeOperations) op.operationId: op,
       };
       var changed = false;
+      Object? readError;
       for (final op in page.items) {
         final old = operations[op.operationId];
         if (old == null ||
@@ -401,31 +437,36 @@ final class WorkbenchController extends ChangeNotifier
             operations[id] = op;
             changed = true;
           }
-        } on ControlProblem catch (error) {
+        } on Object catch (error) {
           if (!current()) {
             return;
           }
-          if (error.status == 404) {
+          if (error is ControlProblem && error.status == 404) {
             invalidateNativeInspector(id);
             operations.remove(id);
             changed = true;
           } else {
-            rethrow;
+            readError ??= error;
           }
         }
       }
       if (!current()) {
         return;
       }
-      nativeOperationsComplete = page.nextSequence == _nativeOperationSequence;
+      nativeOperationsComplete =
+          readError == null && page.nextSequence == _nativeOperationSequence;
       _nativeOperationSequence = page.nextSequence;
       nativeOperations = List.unmodifiable(
         operations.values.toList()
           ..sort((a, b) => a.createdAt.compareTo(b.createdAt)),
       );
-      final hadError = nativeOperationsError != null;
-      nativeOperationsError = null;
-      if (changed || hadError || previousComplete != nativeOperationsComplete) {
+      final previousError = nativeOperationsError;
+      nativeOperationsError = readError == null
+          ? null
+          : _describeError(readError);
+      if (changed ||
+          previousError != nativeOperationsError ||
+          previousComplete != nativeOperationsComplete) {
         notifyListeners();
       }
     } on Object catch (error) {
@@ -4603,6 +4644,7 @@ final class WorkbenchController extends ChangeNotifier
     _poller?.cancel();
     _evidencePoller?.cancel();
     _invalidateEvidenceCaches();
+    _nativeContentInvalidations.dispose();
     unawaited(_flushPreferencesAndCloseRuntime());
     super.dispose();
   }
