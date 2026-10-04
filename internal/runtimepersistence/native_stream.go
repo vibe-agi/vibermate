@@ -32,6 +32,10 @@ type nativeObservedStream struct {
 type nativeRecovery struct {
 	stream nativetool.StreamAuthority
 	digest nativetool.Digest
+	// A post-Start cleanup obligation retains only the actual issued receipt.
+	// This is part of the already bounded association, never a send grant.
+	receipt     nativetool.StartReceipt
+	cleanupOnly bool
 }
 
 // nativeAttemptFacts checks immutable provenance even after physical closure.
@@ -542,6 +546,8 @@ func (r *nativeToolRepository) dropNativeOperation(id nativetool.ID) {
 		}
 	}
 	if child, ok := r.recovery[id]; ok {
+		child.cleanupOnly = true
+		r.recovery[id] = child
 		r.invalidateNativeStream(child.stream)
 	}
 }
@@ -584,6 +590,13 @@ func (r *nativeToolRepository) RetireObservedStream(ctx context.Context, a nativ
 	}
 	s.cleanupOnly = true
 	err := r.transaction(ctx, func(ctx context.Context, tx *sql.Tx) error {
+		for _, child := range r.recovery {
+			if child.stream == a && child.cleanupOnly {
+				if err := r.cleanupNativeRecoveryAttempt(ctx, tx, s, child, now); err != nil {
+					return err
+				}
+			}
+		}
 		op, err := loadNativeOperation(ctx, tx, s.receipt.OperationID())
 		if err != nil {
 			return err
@@ -615,9 +628,61 @@ func (r *nativeToolRepository) RetireObservedStream(ctx context.Context, a nativ
 	})
 	if err == nil {
 		delete(r.streamOpened, s.receipt.OperationID())
+		for id, child := range r.recovery {
+			if child.stream == a && child.cleanupOnly {
+				delete(r.recovery, id)
+			}
+		}
 		r.dropNativeStream(a)
 	} else {
 		r.invalidateNativeStream(a)
 	}
+	return err
+}
+
+// Called in the same transaction as origin cleanup. Success of only one side
+// cannot discard the timer while the other still has an ambiguous audit.
+func (r *nativeToolRepository) cleanupNativeRecoveryAttempt(ctx context.Context, tx *sql.Tx, stream *nativeObservedStream, child nativeRecovery, now time.Time) error {
+	op, err := loadNativeOperation(ctx, tx, child.receipt.OperationID())
+	if err != nil {
+		return err
+	}
+	if op.Kind != nativetool.RequestGetStream || op.BindingDigest == nil || *op.BindingDigest != child.digest || op.Capture != stream.capture {
+		return nativetool.ErrDenied
+	}
+	b, err := loadNativeBinding(ctx, tx, op.ID)
+	if err != nil {
+		return err
+	}
+	if b.session != stream.session {
+		return nativetool.ErrDenied
+	}
+	facts, audit, err := nativeAttemptFacts(ctx, tx, op)
+	if err != nil {
+		return err
+	}
+	if err := r.issuer.Check(child.receipt, facts); err != nil {
+		return err
+	}
+	if audit.Terminal() {
+		if op.CompletedAt == nil {
+			return nativetool.ErrInvalid
+		}
+		return nil
+	}
+	if op.State != "started" || op.CompletedAt != nil {
+		return nativetool.ErrInvalid
+	}
+	terminal, err := audit.Finish(egressaudit.TerminalInput{Outcome: egressaudit.OutcomeFailed, ErrorClass: "transport_failed", UnobservedByteCounts: true, CompletedAt: now})
+	if err != nil {
+		return err
+	}
+	if _, err := completeEgressAttempt(ctx, tx, terminal); err != nil {
+		return err
+	}
+	if err := finishNativeLogical(ctx, tx, op, nativetool.LogicalFinishInput{Outcome: "failed", Reason: "transport_failed", ObservedAt: now}); err != nil {
+		return err
+	}
+	_, err = tx.ExecContext(ctx, `UPDATE native_tool_operations SET bytes_in=NULL,bytes_out=NULL WHERE operation_id=?`, op.ID)
 	return err
 }

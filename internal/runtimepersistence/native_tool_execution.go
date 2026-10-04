@@ -313,7 +313,14 @@ func (r *nativeToolRepository) Start(ctx context.Context, id nativetool.ID, atte
 	if err != nil {
 		return nativetool.StartReceipt{}, err
 	}
-	return r.issuer.Issue(facts)
+	receipt, err := r.issuer.Issue(facts)
+	if err == nil {
+		if child, exists := r.recovery[id]; exists {
+			child.receipt = receipt
+			r.recovery[id] = child
+		}
+	}
+	return receipt, err
 }
 
 func (r *nativeToolRepository) VerifyStartReceipt(ctx context.Context, receipt nativetool.StartReceipt, now time.Time) error {
