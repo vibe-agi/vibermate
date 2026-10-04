@@ -38,8 +38,9 @@ func TestNativeSSECompletedTerminalAndGETNeverInventSecondRPC(t *testing.T) {
 	c := f.captured(t, "GET", "", "synthetic-session")
 	c.request.Header.Set("Last-Event-Id", "known")
 	w = httptest.NewRecorder()
+	before := f.transport.sends()
 	terminal = f.executor.Serve(context.Background(), c, w)
-	if terminal.Outcome != OutcomeUncertain || w.Code != 200 || strings.Contains(w.Body.String(), `"error"`) || strings.Contains(w.Body.String(), "unknown") {
+	if terminal.Outcome != OutcomeRejected || f.transport.sends() != before || strings.Contains(w.Body.String(), "unknown") {
 		t.Fatalf("GET invented RPC terminal %+v %s", terminal, w.Body.String())
 	}
 }

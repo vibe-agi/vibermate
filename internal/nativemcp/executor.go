@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"mime"
 	"net/http"
 	"sync"
 	"sync/atomic"
@@ -67,6 +68,7 @@ const (
 	ReasonExecutionUncertain Reason = "execution_uncertain"
 	ReasonBudgetExceeded     Reason = "budget_exceeded"
 	ReasonStorageUnavailable Reason = "storage_unavailable"
+	ReasonStreamDetached     Reason = "stream_detached"
 )
 
 type RevocationReason string
@@ -322,6 +324,25 @@ func (e *executor) Serve(ctx context.Context, c CapturedRequest, w http.Response
 		return reject(w, c.id, reasonFor(err))
 	}
 	knownRPCFailure := false
+	r.resumeOrdinal = -1
+	if cursor := c.request.Header.Get("Last-Event-Id"); cursor != "" {
+		if r.kind != nativetool.RequestGetStream {
+			return reject(w, c.id, ReasonProtocolInvalid)
+		}
+		r.stream, r.resumeOrdinal, err = e.attachStream(c, s, cursor)
+		if err != nil {
+			return reject(w, c.id, reasonFor(err))
+		}
+		defer e.detachStream(s, r.stream)
+		s.mu.Lock()
+		terminalStream := r.stream.terminal
+		s.mu.Unlock()
+		if terminalStream {
+			return e.replayTerminal(call, c, s, r.stream, r.resumeOrdinal, w)
+		}
+		stop := context.AfterFunc(r.stream.context, cancel)
+		defer stop()
+	}
 	r.failure = &knownRPCFailure
 	renewalUnavailable := false
 	r.renewalUnavailable = &renewalUnavailable
@@ -351,7 +372,9 @@ func (e *executor) Serve(ctx context.Context, c CapturedRequest, w http.Response
 	if activeKey == "" {
 		activeKey = "operation:" + c.id.String()
 	}
-	s.active[activeKey].binding = binding
+	if active := s.active[activeKey]; active != nil {
+		active.binding = binding
+	}
 	s.mu.Unlock()
 	s.mu.Lock()
 	sensitiveToolWitness := s.tools[c.id]
@@ -422,7 +445,12 @@ func (e *executor) Serve(ctx context.Context, c CapturedRequest, w http.Response
 			_ = e.dependencies.Store.Finish(cleanup, c.id, nativetool.TerminalInput{Outcome: outcome, Reason: reason, ObservedAt: e.dependencies.Clock().UTC()})
 		}
 	}()
-	if err = e.dependencies.Store.Bind(call, c.id, binding, e.dependencies.Clock().UTC()); err != nil {
+	if r.stream != nil {
+		err = e.dependencies.Store.BindRecoveryGET(call, c.id, binding, r.stream.authority, e.dependencies.Clock().UTC())
+	} else {
+		err = e.dependencies.Store.Bind(call, c.id, binding, e.dependencies.Clock().UTC())
+	}
+	if err != nil {
 		return reject(w, c.id, reasonFor(err))
 	}
 	if r.kind == nativetool.RequestToolsCall || r.kind == nativetool.RequestServerReply {
@@ -480,7 +508,8 @@ func (e *executor) Serve(ctx context.Context, c CapturedRequest, w http.Response
 	if err != nil {
 		return reject(w, c.id, ReasonStorageUnavailable)
 	}
-	receipt, err := e.dependencies.Store.Start(call, c.id, attempt.String(), s.owner.revision, e.dependencies.Clock().UTC())
+	startedAt := e.dependencies.Clock().UTC()
+	receipt, err := e.dependencies.Store.Start(call, c.id, attempt.String(), s.owner.revision, startedAt)
 	if err != nil {
 		return reject(w, c.id, reasonFor(err))
 	}
@@ -488,6 +517,9 @@ func (e *executor) Serve(ctx context.Context, c CapturedRequest, w http.Response
 	response, err := e.sendCommitted(call, outgoing, plan, receipt)
 	headerTimer.Stop()
 	if err != nil {
+		if r.stream != nil {
+			return e.finishRecoveryTransportFailure(c, s, r.stream, receipt)
+		}
 		return e.finishFailure(c.id, s, w, err, true)
 	}
 	if response == nil || response.Body == nil {
@@ -507,7 +539,20 @@ func (e *executor) Serve(ctx context.Context, c CapturedRequest, w http.Response
 	if err = e.validateResponseSession(c, r, s, response); err != nil {
 		return e.finishFailure(c.id, s, w, err, true)
 	}
+	media, _, _ := mime.ParseMediaType(response.Header.Get("Content-Type"))
+	if response.StatusCode == http.StatusOK && media == "text/event-stream" && r.stream == nil {
+		r.stream, err = e.openStream(call, c, r, s, binding, receipt, startedAt)
+		if err != nil {
+			return e.finishFailure(c.id, s, w, err, true)
+		}
+		defer e.detachStream(s, r.stream)
+		stop := context.AfterFunc(r.stream.context, cancel)
+		defer stop()
+	}
 	if err = e.consumeResponse(call, c, r, s, binding, response, w); err != nil {
+		if r.stream != nil {
+			return e.finishStreamAttempt(c, r, s, receipt, counted, w, err)
+		}
 		return e.finishFailure(c.id, s, w, err, true)
 	}
 	contentReason := ContentObservationReason("")
@@ -542,7 +587,15 @@ func (e *executor) Serve(ctx context.Context, c CapturedRequest, w http.Response
 	if knownRPCFailure {
 		state, storedReason = "failed", "rpc_error"
 	}
-	if err = e.dependencies.Store.Finish(call, c.id, nativetool.TerminalInput{Outcome: state, Reason: storedReason, BytesIn: counted.bytes.Load(), BytesOut: int64(len(r.raw)), ObservedAt: e.dependencies.Clock().UTC()}); err != nil {
+	if r.stream != nil {
+		streamTerminal := e.finishStreamAttempt(c, r, s, receipt, counted, w, nil)
+		if streamTerminal.Outcome != OutcomeCompleted && !(knownRPCFailure && streamTerminal.Outcome == OutcomeFailed) {
+			return streamTerminal
+		}
+	} else {
+		err = e.dependencies.Store.Finish(call, c.id, nativetool.TerminalInput{Outcome: state, Reason: storedReason, BytesIn: counted.bytes.Load(), BytesOut: int64(len(r.raw)), ObservedAt: e.dependencies.Clock().UTC()})
+	}
+	if err != nil {
 		return e.finishFailure(c.id, s, w, err, true)
 	}
 	if r.kind == nativetool.RequestInitialized && !knownRPCFailure {

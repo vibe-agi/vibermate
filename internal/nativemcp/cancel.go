@@ -16,6 +16,9 @@ func (e *executor) cancelTarget(s *session, r rpc) error {
 	target := s.active[string(identity)]
 	if target != nil {
 		target.protocolCanceled = true
+		if target.stream != nil {
+			target.stream.protocolCanceled = true
+		}
 		if target.cancel != nil {
 			target.cancel()
 		}

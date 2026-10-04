@@ -275,6 +275,14 @@ func parseSSEEvent(wire []byte, l Limits, budgets ...*memoryBudget) (sseEvent, e
 	return event, nil
 }
 func (e *executor) consumeSSE(ctx context.Context, c CapturedRequest, request rpc, s *session, binding nativetool.Binding, response *http.Response, w http.ResponseWriter, idle *time.Timer) error {
+	stream := request.stream
+	if stream == nil {
+		return errSession
+	}
+	physicalRequest := request
+	request = stream.request
+	binding = stream.binding
+	lastReplay := physicalRequest.resumeOrdinal
 	maximum := e.limits.EventBytes
 	if !e.budget.acquire(maximum) {
 		return errBudget
@@ -293,6 +301,9 @@ func (e *executor) consumeSSE(ctx context.Context, c CapturedRequest, request rp
 	}()
 	for {
 		if ctx.Err() != nil {
+			if length == 0 {
+				return errStreamDetached
+			}
 			return ctx.Err()
 		}
 		n, err := response.Body.Read(one[:])
@@ -309,44 +320,15 @@ func (e *executor) consumeSSE(ctx context.Context, c CapturedRequest, request rp
 					return err
 				}
 				eventFree = event.free
-				if request.kind == nativetool.RequestGetStream {
-					s.mu.Lock()
-					previous, known := s.events[event.id]
-					same := known && equalEvent(previous, event.wire)
-					s.mu.Unlock()
-					if event.id == "" || !same {
-						return errSession
-					}
-				} else if len(event.data) > 0 {
-					cost := jsonAllocation(event.data)
-					if !e.budget.acquire(cost) {
-						return errBudget
-					}
-					message, parseErr := parseResponse(event.data, e.limits)
-					if parseErr == nil {
-						parseErr = e.acceptSSEMessage(ctx, c.id, request, message, s, binding, &terminal)
-					}
-					e.budget.release(cost)
-					if parseErr != nil {
-						return parseErr
-					}
-					if event.id != "" {
-						s.mu.Lock()
-						if previous, known := s.events[event.id]; known {
-							if !equalEvent(previous, event.wire) {
-								s.mu.Unlock()
-								return errSession
-							}
-						} else {
-							if !e.budget.acquire(int64(length)) {
-								s.mu.Unlock()
-								return errBudget
-							}
-							s.events[event.id] = bytes.Clone(event.wire)
-							s.retained += int64(length)
-						}
-						s.mu.Unlock()
-					}
+				skip, acceptErr := e.acceptStreamEvent(ctx, s, stream, physicalRequest.resumeOrdinal, &lastReplay, event, &terminal)
+				if acceptErr != nil {
+					return acceptErr
+				}
+				if skip {
+					event.free()
+					eventFree = nil
+					length = 0
+					continue
 				}
 				if !headersSent {
 					w.Header().Set("Content-Type", "text/event-stream")
@@ -356,16 +338,25 @@ func (e *executor) consumeSSE(ctx context.Context, c CapturedRequest, request rp
 					w.WriteHeader(http.StatusOK)
 					headersSent = true
 				}
-				if _, err = w.Write(event.wire); err != nil {
+				written, writeErr := w.Write(event.wire)
+				if writeErr != nil {
+					return writeErr
+				}
+				if written != len(event.wire) {
+					return io.ErrShortWrite
+				}
+				if err = flushStream(w); err != nil {
 					return err
+				}
+				if terminal {
+					s.mu.Lock()
+					stream.delivered = true
+					s.mu.Unlock()
 				}
 				if terminal {
 					if tracked, ok := w.(*nativeWriter); ok {
 						tracked.terminal = true
 					}
-				}
-				if flusher, ok := w.(http.Flusher); ok {
-					flusher.Flush()
 				}
 				length = 0
 				if err = e.observeActivity(ctx, request, s, terminal); err != nil {
@@ -376,15 +367,127 @@ func (e *executor) consumeSSE(ctx context.Context, c CapturedRequest, request rp
 			}
 		}
 		if err == io.EOF {
-			if length != 0 || !terminal && request.kind != nativetool.RequestGetStream {
+			if length != 0 {
 				return errProtocol
+			}
+			if !terminal && request.kind != nativetool.RequestGetStream {
+				return errStreamDetached
 			}
 			return nil
 		}
 		if err != nil {
+			if length == 0 && !terminal {
+				return errStreamDetached
+			}
 			return err
 		}
 	}
+}
+
+func (e *executor) acceptStreamEvent(ctx context.Context, s *session, stream *streamRecord, cursor int, last *int, event sseEvent, terminal *bool) (bool, error) {
+	// Serialize acceptance across this session's streams. The event-ID claim
+	// is checked before semantic effects, and no network write holds this lock.
+	s.eventMu.Lock()
+	defer s.eventMu.Unlock()
+	e.reclaimDeliveredStreams(s)
+	if event.id != "" {
+		if err := e.observeStream(ctx, s, stream); err != nil {
+			return false, err
+		}
+	}
+	s.mu.Lock()
+	previous, known := s.eventIndex[event.id]
+	if stream.retired || known && (previous.stream != stream || !equalEvent(stream.events[previous.ordinal].wire, event.wire)) {
+		s.mu.Unlock()
+		return false, errSession
+	}
+	if known {
+		if cursor < 0 || previous.ordinal <= cursor {
+			s.mu.Unlock()
+			return true, nil
+		}
+		if previous.ordinal <= *last {
+			s.mu.Unlock()
+			return false, errSession
+		}
+		*last = previous.ordinal
+	}
+	charge := int64(0)
+	if !known && event.id != "" {
+		charge = int64(len(event.wire) + len(event.id) + 256)
+		if len(s.eventIndex) >= e.limits.Pending || !e.budget.acquire(charge) {
+			s.mu.Unlock()
+			return false, errBudget
+		}
+	}
+	s.mu.Unlock()
+	defer func() {
+		if charge > 0 {
+			e.budget.release(charge)
+		}
+	}()
+	request := stream.request
+	if !known && event.id == "" && len(event.data) > 0 {
+		s.mu.Lock()
+		stream.unidentifiable = true
+		s.mu.Unlock()
+	}
+	if !known && len(event.data) > 0 {
+		// Fresh GET callback registration is intentionally unavailable in Task1.
+		if request.kind == nativetool.RequestGetStream {
+			return false, errSession
+		}
+		cost := jsonAllocation(event.data)
+		if !e.budget.acquire(cost) {
+			return false, errBudget
+		}
+		defer e.budget.release(cost)
+		message, err := parseResponse(event.data, e.limits)
+		if err != nil {
+			return false, err
+		}
+		if message.method != "" && len(message.id) > 0 {
+			if err := e.observeStream(ctx, s, stream); err != nil {
+				return false, err
+			}
+		}
+		if err := e.acceptSSEMessage(ctx, stream.operation, request, message, s, stream.binding, terminal); err != nil {
+			return false, err
+		}
+	}
+	if !known && event.id != "" {
+		s.mu.Lock()
+		if stream.retired {
+			s.mu.Unlock()
+			return false, errSession
+		}
+		s.eventIndex[event.id] = streamCursor{stream: stream, ordinal: len(stream.events)}
+		stream.events = append(stream.events, streamEvent{id: event.id, wire: bytes.Clone(event.wire)})
+		stream.charged += charge
+		s.retained += charge
+		charge = 0
+		s.mu.Unlock()
+	}
+	s.mu.Lock()
+	observed := stream.observed
+	s.mu.Unlock()
+	if *terminal && !known && observed {
+		outcome, reason := "completed", "completed"
+		if request.failure != nil && *request.failure {
+			outcome, reason = "failed", "rpc_error"
+		}
+		if err := e.dependencies.Store.CompleteStreamRPC(ctx, stream.authority, nativetool.LogicalFinishInput{Outcome: outcome, Reason: reason, ObservedAt: e.dependencies.Clock().UTC()}); err != nil {
+			return false, err
+		}
+		s.mu.Lock()
+		stream.terminal = true
+		stream.terminalCursor = event.id != ""
+		delete(s.active, string(request.id))
+		e.retireStreamToolLocked(s, stream.operation)
+		s.mu.Unlock()
+		e.retireCompletedParents(ctx, s, stream.operation)
+	}
+	return false, nil
 }
 func (e *executor) acceptSSEMessage(ctx context.Context, operation nativetool.ID, request, message rpc, s *session, binding nativetool.Binding, terminal *bool) error {
 	if message.method == "" {

@@ -24,6 +24,7 @@ type ownerScope struct {
 }
 type session struct {
 	mu                               sync.Mutex
+	eventMu                          sync.Mutex
 	owner                            *ownerScope
 	context                          context.Context
 	cancel                           context.CancelFunc
@@ -44,7 +45,8 @@ type session struct {
 	catalogBusy                      bool
 	hasher                           *nativetool.SensitiveBindingHasher
 	parents                          map[string]*callbackParent
-	events                           map[string][]byte
+	streams                          map[nativetool.ID]*streamRecord
+	eventIndex                       map[string]streamCursor
 	retained                         int64
 	publicBytes                      int64
 	callbacks                        map[string]bool
@@ -56,6 +58,7 @@ type activeRPC struct {
 	cancel           context.CancelFunc
 	binding          nativetool.Binding
 	protocolCanceled bool
+	stream           *streamRecord
 }
 type callbackParent struct {
 	operation     nativetool.ID
@@ -152,7 +155,7 @@ func (e *executor) admitSession(ctx context.Context, c CapturedRequest, r rpc, p
 		}
 		owner.expires = expires
 		sessionContext, sessionCancel := context.WithCancel(owner.context)
-		s := &session{owner: owner, context: sessionContext, cancel: sessionCancel, id: id, plan: plan, assignment: uint64(c.lease.Assignment().Revision), revision: 1, last: now, timeLimit: expires, authorization: c.request.Header.Get("Authorization"), cookie: c.request.Header.Get("Cookie"), active: map[string]*activeRPC{}, parents: map[string]*callbackParent{}, events: map[string][]byte{}}
+		s := &session{owner: owner, context: sessionContext, cancel: sessionCancel, id: id, plan: plan, assignment: uint64(c.lease.Assignment().Revision), revision: 1, last: now, timeLimit: expires, authorization: c.request.Header.Get("Authorization"), cookie: c.request.Header.Get("Cookie"), active: map[string]*activeRPC{}, parents: map[string]*callbackParent{}, streams: map[nativetool.ID]*streamRecord{}, eventIndex: map[string]streamCursor{}}
 		owner.sessions[id] = s
 		s.callbacks = callbacks
 		s.elicitations = map[string]nativetool.ID{}
@@ -231,6 +234,11 @@ func (e *executor) clearSession(s *session) {
 	if len(s.active) > 0 {
 		return
 	}
+	for _, stream := range s.streams {
+		if stream.attached {
+			return
+		}
+	}
 	s.authorization = ""
 	s.cookie = ""
 	for _, parent := range s.parents {
@@ -242,7 +250,13 @@ func (e *executor) clearSession(s *session) {
 	s.parents = nil
 	s.elicitations = nil
 	s.tools = nil
-	s.events = nil
+	for _, stream := range s.streams {
+		stream.retired = true
+		stream.cancel()
+		stream.charged = 0
+	}
+	s.streams = nil
+	s.eventIndex = nil
 	s.active = nil
 	s.callbacks = nil
 	s.listDigests = nil
@@ -256,8 +270,31 @@ func (e *executor) clearSession(s *session) {
 	e.budget.release(retained)
 }
 func (e *executor) acquireRPC(s *session, id nativetool.ID, r rpc) (func(), error) {
+	e.reclaimDeliveredStreams(s)
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if r.stream != nil {
+		if s.closed || s.renewalFailed || r.stream.retired || !r.stream.attached {
+			return nil, errSession
+		}
+		// The retained originating RPC already owns its logical concurrency
+		// slot. This GET owns only the exclusive physical attachment.
+		return func() {}, nil
+	}
+	if r.kind == nativetool.RequestCancel {
+		identity, err := identity(r.params["requestId"], e.limits.OpaqueIDBytes)
+		if err != nil {
+			return nil, err
+		}
+		if target := s.active[string(identity)]; target != nil && target.stream != nil {
+			// Cancellation addresses the retained logical slot even at its
+			// configured ceiling; the notification creates no second RPC.
+			return func() {}, nil
+		}
+	}
+	if r.kind != nativetool.RequestCancel && r.kind != nativetool.RequestDeleteSession && r.kind != nativetool.RequestServerReply && (len(s.streams) >= e.limits.Pending || len(s.eventIndex) >= e.limits.Pending) {
+		return nil, errBudget
+	}
 	key := string(r.id)
 	if key == "" {
 		key = "operation:" + id.String()
@@ -287,7 +324,10 @@ func (e *executor) acquireRPC(s *session, id nativetool.ID, r rpc) (func(), erro
 	s.active[key] = &activeRPC{operation: id, cancel: r.cancel}
 	return func() {
 		s.mu.Lock()
-		delete(s.active, key)
+		active := s.active[key]
+		if active == nil || active.stream == nil || active.stream.retired || active.stream.terminal {
+			delete(s.active, key)
+		}
 		if r.kind == nativetool.RequestToolsList {
 			s.catalogBusy = false
 		}
@@ -352,7 +392,7 @@ func (e *executor) validateResponseSession(c CapturedRequest, r rpc, s *session,
 		if r.kind != nativetool.RequestGetStream {
 			return errProtocol
 		}
-		if _, seen := s.events[last]; !seen {
+		if _, seen := s.eventIndex[last]; !seen {
 			return errSession
 		}
 	}

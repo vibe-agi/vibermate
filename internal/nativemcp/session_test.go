@@ -83,19 +83,20 @@ func TestNativeGetRedeliversOnlyObservedSameSessionEvents(t *testing.T) {
 	}
 	request := f.captured(t, "GET", "", "synthetic-session")
 	request.request.Header.Set("Last-Event-Id", "observed-ping")
+	before := f.transport.sends()
 	terminal = f.executor.Serve(context.Background(), request, httptest.NewRecorder())
-	if terminal.Outcome != OutcomeCompleted {
+	if terminal.Outcome != OutcomeRejected || f.transport.sends() != before {
 		t.Fatal(terminal)
 	}
 	event = strings.Replace(event, "observed-ping", "unobserved", 1)
 	request = f.captured(t, "GET", "", "synthetic-session")
 	request.request.Header.Set("Last-Event-Id", "observed-ping")
 	terminal = f.executor.Serve(context.Background(), request, httptest.NewRecorder())
-	if terminal.Outcome != OutcomeUncertain {
+	if terminal.Outcome != OutcomeRejected || f.transport.sends() != before {
 		t.Fatalf("unobserved GET event %+v", terminal)
 	}
 	scope, err := f.store.NativeToolRepository().GetScope(context.Background(), f.capture)
-	if err != nil || !scope.ReplayBarrier {
+	if err != nil || scope.ReplayBarrier {
 		t.Fatalf("resume uncertainty barrier %+v %v", scope, err)
 	}
 }

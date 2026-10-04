@@ -43,6 +43,9 @@ type Options struct {
 	DatabasePath           string
 	BusyTimeout            time.Duration
 	CommitReconcileTimeout time.Duration
+	// NativeStreamLifetime bounds process-local observation authority from the
+	// original Start claim. Zero selects the trusted 30-minute ceiling.
+	NativeStreamLifetime time.Duration
 }
 
 // Store owns a SQLite connection pool and its repositories.
@@ -81,6 +84,12 @@ type Store struct {
 // Open creates the data directory, opens SQLite through an explicit typed
 // connector, initializes the current schema, and reads its durable state.
 func Open(ctx context.Context, options Options) (*Store, error) {
+	if options.NativeStreamLifetime == 0 {
+		options.NativeStreamLifetime = 30 * time.Minute
+	}
+	if options.NativeStreamLifetime < 0 || options.NativeStreamLifetime > 30*time.Minute {
+		return nil, fmt.Errorf("%w: invalid native stream lifetime", ErrInvalidDatabasePath)
+	}
 	if ctx == nil {
 		return nil, fmt.Errorf("%w: context is nil", ErrInvalidDatabasePath)
 	}
@@ -221,7 +230,7 @@ func Open(ctx context.Context, options Options) (*Store, error) {
 		rawEvidence:        rawEvidence,
 		runtimeUsers:       runtimeUsers,
 		operations:         operations,
-		nativeTools:        &nativeToolRepository{database: database, operations: operations, committer: sqlTransactionCommitter{}, issuer: issuer},
+		nativeTools:        &nativeToolRepository{database: database, operations: operations, committer: sqlTransactionCommitter{}, issuer: issuer, streamLifetime: options.NativeStreamLifetime, streams: make(map[nativetool.StreamAuthority]*nativeObservedStream), recovery: make(map[nativetool.ID]nativeRecovery)},
 		closeDone:          make(chan struct{}),
 	}, nil
 }
@@ -359,6 +368,13 @@ func (s *Store) Shutdown(ctx context.Context) error {
 
 	// Admission is closed and drained; the final native boundary uses the
 	// Store's writer directly, without reopening public operation admission.
+	s.nativeTools.issuerMu.Lock()
+	for a := range s.nativeTools.streams {
+		s.nativeTools.dropNativeStream(a)
+	}
+	clear(s.nativeTools.recovery)
+	clear(s.nativeTools.streamOpened)
+	defer s.nativeTools.issuerMu.Unlock()
 	tx, err := s.database.BeginTx(ctx, nil)
 	var nativeErr error
 	if err != nil {

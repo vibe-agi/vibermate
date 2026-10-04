@@ -15,11 +15,15 @@ import (
 )
 
 type nativeToolRepository struct {
-	database   *sql.DB
-	operations *operationGate
-	committer  transactionCommitter
-	issuerMu   sync.Mutex
-	issuer     *nativetool.StartReceiptIssuer
+	database       *sql.DB
+	operations     *operationGate
+	committer      transactionCommitter
+	issuerMu       sync.Mutex
+	issuer         *nativetool.StartReceiptIssuer
+	streamLifetime time.Duration
+	streams        map[nativetool.StreamAuthority]*nativeObservedStream
+	recovery       map[nativetool.ID]nativeRecovery
+	streamOpened   map[nativetool.ID]time.Time
 }
 
 var _ nativetool.LifecycleRepository = (*nativeToolRepository)(nil)

@@ -253,6 +253,9 @@ func (r *nativeToolRepository) Start(ctx context.Context, id nativetool.ID, atte
 		if scope.revision != expected {
 			return nativetool.ErrConflict
 		}
+		if err := r.verifyNativeRecovery(ctx, tx, op, now); err != nil {
+			return err
+		}
 		required := nativeDecisionKind(op.Kind) && (e.EffectivePolicySet().ToolMode == environment.ToolPolicyReview || scope.barrier)
 		if err := nativeApprovalForStart(ctx, tx, op, b, required, false, now); err != nil {
 			return err
@@ -327,6 +330,9 @@ func (r *nativeToolRepository) VerifyStartReceipt(ctx context.Context, receipt n
 		if op.State != "started" || op.CompletedAt != nil {
 			return nativetool.ErrDenied
 		}
+		if err := r.verifyNativeRecovery(ctx, tx, op, now); err != nil {
+			return err
+		}
 		b, scope, e, err := nativeExecutionAuthority(ctx, tx, op, now)
 		if err != nil {
 			return err
@@ -380,6 +386,21 @@ func finishNative(ctx context.Context, tx *sql.Tx, op nativetool.Operation, in n
 	if op.State != "started" {
 		return nativetool.ErrConflict
 	}
+	_, physical, err := nativeAttemptFacts(ctx, tx, op)
+	if err != nil {
+		return err
+	}
+	if physical.Terminal() {
+		if physical.Outcome() != egressaudit.OutcomeFailed || physical.ErrorClass() != "transport_failed" {
+			return nativetool.ErrDenied
+		}
+		// Suspended RPC cleanup preserves its initiating attempt's immutable
+		// terminal and byte projection. Successful completion needs authority.
+		if in.Outcome != "uncertain" {
+			return nativetool.ErrDenied
+		}
+		return finishNativeLogical(ctx, tx, op, nativetool.LogicalFinishInput{Outcome: in.Outcome, Reason: in.Reason, ObservedAt: in.ObservedAt})
+	}
 	var attempt string
 	if err := tx.QueryRowContext(ctx, `SELECT attempt_id FROM native_tool_once WHERE operation_id=? AND capture_kind=? AND capture_id=?`, op.ID, op.Capture.Kind, op.Capture.ID).Scan(&attempt); err != nil {
 		return err
@@ -426,6 +447,8 @@ func (r *nativeToolRepository) Finish(ctx context.Context, id nativetool.ID, in 
 	if !nativeID(id) || !nativeTime(in.ObservedAt) || !valid || in.BytesIn < 0 || in.BytesOut < 0 || in.Outcome == "uncertain" && (in.BytesIn != 0 || in.BytesOut != 0) {
 		return nativetool.ErrInvalid
 	}
+	r.issuerMu.Lock()
+	defer r.issuerMu.Unlock()
 	return r.transaction(ctx, func(ctx context.Context, tx *sql.Tx) error {
 		op, err := loadNativeOperation(ctx, tx, id)
 		if err != nil {
@@ -570,6 +593,15 @@ func (r *nativeToolRepository) Revoke(ctx context.Context, c captureidentity.Ref
 	if c.Validate() != nil || !nativeRevision(expected) || reason != "revoked" || !nativeTime(now) {
 		return nativetool.ErrInvalid
 	}
+	r.issuerMu.Lock()
+	defer r.issuerMu.Unlock()
+	defer func() {
+		for a, s := range r.streams {
+			if s.capture == c {
+				r.dropNativeStream(a)
+			}
+		}
+	}()
 	return r.transaction(ctx, func(ctx context.Context, tx *sql.Tx) error {
 		s, err := loadNativeScope(ctx, tx, c)
 		if err != nil {
@@ -623,5 +655,9 @@ func (r *nativeToolRepository) Recover(ctx context.Context, now time.Time) error
 	})
 	// Rotate even on unknown commit: old receipts cannot outlive this boundary.
 	r.issuer = issuer
+	for a := range r.streams {
+		r.dropNativeStream(a)
+	}
+	clear(r.recovery)
 	return err
 }

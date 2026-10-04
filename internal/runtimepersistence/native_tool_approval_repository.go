@@ -214,11 +214,23 @@ func cancelNativeSessionApprovals(ctx context.Context, tx *sql.Tx, c captureiden
 	return cancelNativeSelectedApprovals(ctx, tx, c, &session, now, state)
 }
 func cancelNativeSelectedApprovals(ctx context.Context, tx *sql.Tx, c captureidentity.Reference, session *nativetool.ID, now time.Time, state string) error {
+	return cancelNativeScopedApprovals(ctx, tx, c, session, nil, now, state)
+}
+
+func cancelNativeParentApprovals(ctx context.Context, tx *sql.Tx, c captureidentity.Reference, parent nativetool.ID, now time.Time) error {
+	return cancelNativeScopedApprovals(ctx, tx, c, nil, &parent, now, "canceled")
+}
+
+func cancelNativeScopedApprovals(ctx context.Context, tx *sql.Tx, c captureidentity.Reference, session, parent *nativetool.ID, now time.Time, state string) error {
 	query := `SELECT a.approval_id FROM native_tool_approvals a JOIN native_tool_operations o ON o.operation_id=a.operation_id WHERE o.capture_kind=? AND o.capture_id=? AND (a.state='pending' OR (a.state='allowed' AND a.consumed_at_unix_ms IS NULL))`
 	arguments := []any{c.Kind, c.ID}
 	if session != nil {
 		query += ` AND EXISTS(SELECT 1 FROM native_tool_bindings b WHERE b.operation_id=o.operation_id AND b.session_id=?)`
 		arguments = append(arguments, *session)
+	}
+	if parent != nil {
+		query += ` AND EXISTS(SELECT 1 FROM native_tool_bindings b WHERE b.operation_id=o.operation_id AND b.parent_operation_id=?)`
+		arguments = append(arguments, *parent)
 	}
 	rows, err := tx.QueryContext(ctx, query, arguments...)
 	if err != nil {

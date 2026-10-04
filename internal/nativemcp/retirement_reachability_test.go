@@ -36,15 +36,15 @@ func TestNativeRetiredSessionRegistryAndMapsAreReleased(t *testing.T) {
 			for i := 0; i < 64; i++ {
 				fmt.Fprintf(&wire, "id: event-%d\ndata: {\"jsonrpc\":\"2.0\",\"method\":\"notifications/progress\",\"params\":{\"progressToken\":9,\"progress\":%d,\"message\":%q}}\n\n", i, i, strings.Repeat("x", 1024))
 			}
-			wire.WriteString("data: {\"jsonrpc\":\"2.0\",\"id\":44,\"result\":{}}\n\n")
+			wire.WriteString("id: terminal\ndata: {\"jsonrpc\":\"2.0\",\"id\":44,\"result\":{}}\n\n")
 			return wireResponse(wire.String(), true), nil
 		}
 		terminal, _ := f.serve(t, `{"jsonrpc":"2.0","id":44,"method":"ping","params":{"_meta":{"progressToken":9}}}`, "synthetic-session")
 		if terminal.Outcome != OutcomeCompleted {
 			t.Fatal(terminal)
 		}
-		if len(old.events) != 64 {
-			t.Fatalf("real event allocation absent %d", len(old.events))
+		if len(old.eventIndex) != 65 {
+			t.Fatalf("real event allocation absent %d", len(old.eventIndex))
 		}
 		terminal = e.Serve(context.Background(), f.captured(t, "DELETE", "", "synthetic-session"), httptest.NewRecorder())
 		if terminal.Outcome != OutcomeCompleted {
@@ -53,8 +53,8 @@ func TestNativeRetiredSessionRegistryAndMapsAreReleased(t *testing.T) {
 		e.mu.Lock()
 		size := len(owner.sessions)
 		e.mu.Unlock()
-		if size != 0 || old.events != nil || old.parents != nil || old.tools != nil || old.active != nil || old.callbacks != nil || old.elicitations != nil || old.hasher != nil || old.retained != 0 {
-			t.Fatalf("retired allocations reachable cycle%d registry%d eventsNil%v activeNil%v retained%d", cycle, size, old.events == nil, old.active == nil, old.retained)
+		if size != 0 || old.eventIndex != nil || old.parents != nil || old.tools != nil || old.active != nil || old.callbacks != nil || old.elicitations != nil || old.hasher != nil || old.retained != 0 {
+			t.Fatalf("retired allocations reachable cycle%d registry%d eventsNil%v activeNil%v retained%d", cycle, size, old.eventIndex == nil, old.active == nil, old.retained)
 		}
 		before := f.transport.sends()
 		terminal, _ = f.serve(t, `{"jsonrpc":"2.0","id":44,"method":"ping"}`, "synthetic-session")
@@ -92,7 +92,7 @@ func TestNativeExpiredSessionUnlinksRegistry(t *testing.T) {
 		e.mu.Lock()
 		size := len(owner.sessions)
 		e.mu.Unlock()
-		if size != 0 || old.active != nil || old.events != nil {
+		if size != 0 || old.active != nil || old.eventIndex != nil {
 			t.Fatalf("expired registry retained %d", size)
 		}
 	}
@@ -155,7 +155,7 @@ func TestNativeRetirementChargesActiveConsumersUntilDrain(t *testing.T) {
 	<-results
 	old.mu.Lock()
 	defer old.mu.Unlock()
-	if old.retained != 0 || old.active != nil || old.events != nil || old.hasher != nil {
+	if old.retained != 0 || old.active != nil || old.eventIndex != nil || old.hasher != nil {
 		t.Fatal("drained allocations retained")
 	}
 }

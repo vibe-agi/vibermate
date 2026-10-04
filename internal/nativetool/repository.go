@@ -139,6 +139,7 @@ type LifecycleRepository interface {
 	Page(context.Context, PageRequest) (Page, error)
 }
 type ExecutionRepository interface {
+	StreamRepository
 	Start(context.Context, ID, string, uint64, time.Time) (StartReceipt, error)
 	VerifyStartReceipt(context.Context, StartReceipt, time.Time) error
 	Finish(context.Context, ID, TerminalInput) error

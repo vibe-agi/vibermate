@@ -23,6 +23,8 @@ type rpc struct {
 	collectionToken    *uint64
 	cancel             context.CancelFunc
 	retention          *retentionState
+	stream             *streamRecord
+	resumeOrdinal      int
 }
 
 // Allocation preflight counts every member/container before allocating key

@@ -81,6 +81,15 @@ func (r *nativeToolRepository) CloseSession(ctx context.Context, id nativetool.I
 	if !nativeID(id) || !nativeRevision(expected) || expected == math.MaxInt64 || !nativeTime(now) {
 		return 0, nativetool.ErrInvalid
 	}
+	r.issuerMu.Lock()
+	defer r.issuerMu.Unlock()
+	defer func() {
+		for a, s := range r.streams {
+			if s.session == id {
+				r.dropNativeStream(a)
+			}
+		}
+	}()
 	err := r.transaction(ctx, func(ctx context.Context, tx *sql.Tx) error {
 		s, err := loadNativeSession(ctx, tx, id)
 		if err != nil {
