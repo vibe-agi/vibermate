@@ -11,9 +11,45 @@ import (
 	"time"
 
 	"github.com/vibe-agi/vibermate/internal/blindtunnel"
+	"github.com/vibe-agi/vibermate/internal/captureidentity"
 	"github.com/vibe-agi/vibermate/internal/egressnetwork"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
 )
+
+func verifyNativeStreamSQL(ctx context.Context, t nativeFixtureChecks, directory string, capture captureidentity.Reference, reviewed bool) {
+	reader, err := openExchangeAuditReader(ctx, directory)
+	if err != nil {
+		t.Fatal("private stream read-only audit unavailable")
+	}
+	defer reader.Close()
+	for _, check := range []struct {
+		query string
+		want  int
+	}{
+		{`SELECT COUNT(*) FROM native_tool_operations WHERE capture_kind=? AND capture_id=? AND rpc_kind='tools_call' AND state='completed'`, 1},
+		{`SELECT COUNT(*) FROM native_tool_operations o JOIN native_tool_once n USING(operation_id) WHERE o.capture_kind=? AND o.capture_id=? AND o.rpc_kind IN('tools_call','server_reply')`, 4},
+		{`SELECT COUNT(*) FROM native_tool_operations o JOIN native_tool_bindings b USING(operation_id) JOIN native_tool_operations p ON p.operation_id=b.parent_operation_id WHERE o.capture_kind=? AND o.capture_id=? AND o.rpc_kind='server_reply' AND o.state='completed' AND p.rpc_kind='get_stream'`, 1},
+		{`SELECT COUNT(*) FROM native_tool_operations o JOIN native_tool_bindings b USING(operation_id) JOIN native_tool_operations p ON p.operation_id=b.parent_operation_id WHERE o.capture_kind=? AND o.capture_id=? AND o.rpc_kind='server_reply' AND o.state='completed' AND p.rpc_kind='tools_call'`, 2},
+		{`SELECT COUNT(*) FROM native_tool_operations o JOIN native_tool_once n USING(operation_id) JOIN runtime_egress_attempts a USING(attempt_id) WHERE o.capture_kind=? AND o.capture_id=? AND o.rpc_kind='tools_call' AND a.outcome='failed' AND a.error_class='transport_failed' AND a.purpose='client_tool_service' AND a.account_id='' AND a.parent_kind='client_operation'`, 1},
+		{`SELECT COUNT(*) FROM native_tool_operations o JOIN native_tool_once n USING(operation_id) JOIN runtime_egress_attempts a USING(attempt_id) WHERE o.capture_kind=? AND o.capture_id=? AND o.rpc_kind='tools_call' AND CASE WHEN a.byte_counts_known=1 THEN o.bytes_in IS NOT a.bytes_in OR o.bytes_out IS NOT a.bytes_out ELSE o.bytes_in IS NOT NULL OR o.bytes_out IS NOT NULL END`, 0},
+		{`SELECT COUNT(*) FROM native_tool_operations o JOIN native_tool_once n USING(operation_id) JOIN runtime_egress_attempts a USING(attempt_id) WHERE o.capture_kind=? AND o.capture_id=? AND o.rpc_kind='get_stream' AND o.state='completed' AND a.outcome='completed'`, 1},
+		{`SELECT COUNT(*) FROM native_tool_contents c JOIN native_tool_operations o USING(operation_id) WHERE o.capture_kind=? AND o.capture_id=?`, 0},
+	} {
+		var got int
+		if err := reader.connection.QueryRowContext(ctx, check.query, capture.Kind, capture.ID).Scan(&got); err != nil || got != check.want {
+			t.Fatalf("stream SQL ownership/once/audit check failed got=%d want=%d error=%v", got, check.want, err)
+		}
+	}
+	want := 0
+	if reviewed {
+		want = 4
+	}
+	var consumed int
+	if err := reader.connection.QueryRowContext(ctx, `SELECT COUNT(*) FROM native_tool_approvals a JOIN native_tool_operations o USING(operation_id) WHERE o.capture_kind=? AND o.capture_id=? AND a.state='allowed' AND a.consumed_at_unix_ms IS NOT NULL`, capture.Kind, capture.ID).Scan(&consumed); err != nil || consumed != want {
+		t.Fatal("stream approval consumption differs from actual policy")
+	}
+	t.Logf("stream SQL: one original call/once/audit, freshGET parent1 originalPOST parents2, completed recoveryGET1, consumedApprovals=%d", consumed)
+}
 
 type nativeDeniedBlindDialer struct {
 	gate     offlinehold.Coordinator

@@ -20,6 +20,78 @@ import 'native_tool_reader_test.dart'
 const _otherID = '00000000000000000000000000000003';
 
 void main() {
+  for (final language in [AppLanguage.english, AppLanguage.simplifiedChinese]) {
+    for (final terminal in ['completed', 'uncertain']) {
+      testWidgets(
+        'native stream lifecycle awaits evidence $language $terminal',
+        (tester) async {
+          var state = 'started';
+          var revision = 4;
+          final api = await nativeApi((request) async {
+            final op = nativeOperationFixture()
+              ..['state'] = state
+              ..['revision'] = revision
+              ..['reason'] = state == 'started'
+                  ? ''
+                  : state == 'uncertain'
+                  ? 'execution_uncertain'
+                  : 'completed'
+              ..['completedAt'] = state == 'started'
+                  ? null
+                  : '2026-10-04T00:00:01Z';
+            return nativeResponse(
+              request.url.path.endsWith('/operations')
+                  ? {
+                      'items': [op],
+                      'nextSequence': revision,
+                    }
+                  : op,
+            );
+          });
+          addTearDown(api.close);
+          final controller = nativeController(api);
+          addTearDown(controller.dispose);
+          await tester.runAsync(() async {
+            controller.setNativeReaderVisible(true);
+            while (controller.nativeOperationsLoading) {
+              await Future<void>.delayed(Duration.zero);
+            }
+          });
+          await tester.pumpWidget(
+            MaterialApp(
+              home: Scaffold(
+                body: NativeToolReader(
+                  controller: controller,
+                  copy: AppCopy.forLanguage(language),
+                ),
+              ),
+            ),
+          );
+          final awaiting = language == AppLanguage.english
+              ? 'Awaiting result'
+              : '等待结果';
+          expect(find.text(awaiting), findsOneWidget);
+          // Detach and a recovery attempt leave the logical RPC started. The
+          // reader cannot infer an upstream execution state from those updates.
+          for (final phase in ['detached', 'recovering']) {
+            revision++;
+            await tester.runAsync(controller.refreshNativeTools);
+            await tester.pumpAndSettle();
+            expect(find.text(awaiting), findsOneWidget, reason: phase);
+          }
+          state = terminal;
+          revision++;
+          await tester.runAsync(controller.refreshNativeTools);
+          await tester.pumpAndSettle();
+          expect(find.text(awaiting), findsNothing);
+          expect(
+            find.text(AppCopy.forLanguage(language)('native.state.$terminal')),
+            findsOneWidget,
+          );
+        },
+      );
+    }
+  }
   for (final invalidation in [
     'expired',
     'deleted',

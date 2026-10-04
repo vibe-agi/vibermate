@@ -195,6 +195,18 @@ func TestNativeSSEReconnectDoesNotRepeatToolCall(t *testing.T) {
 	}
 }
 
+func TestNativeSSEObservePinnedClient(t *testing.T) {
+	binary, node, version := os.Getenv("VIBERMATE_NATIVE_CODEX"), os.Getenv("VIBERMATE_PINNED_NODE"), os.Getenv("VIBERMATE_NATIVE_VERSION")
+	if binary == "" || node == "" || version == "" {
+		t.Skip("requires an exact client, version and pinned Node; not acceptance PASS")
+	}
+	result, err := runNativePolicyCase(context.Background(), t.TempDir(), nativePinnedClient{nativeMCPClientReport: nativeMCPClientReport{Version: version}, invocation: binary}, node, "sse_observe", t.Logf)
+	if err != nil || result.Outcome != "passed" || result.Reason != "sse_observe_only_no_review_evidence" {
+		t.Fatalf("Observe-only stream=%+v err=%v", result, err)
+	}
+	t.Logf("Observe-only diagnostic: %+v", result)
+}
+
 func TestNativeModelTurnUsesActualManagedActivity(t *testing.T) {
 	binary, node := os.Getenv("VIBERMATE_NATIVE_CODEX"), os.Getenv("VIBERMATE_PINNED_NODE")
 	if binary == "" || node == "" {

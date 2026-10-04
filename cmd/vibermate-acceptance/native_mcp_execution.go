@@ -17,10 +17,15 @@ type nativeExecutionChecks struct {
 	failed    bool
 	cleanup   []func()
 	evidence  nativeMCPCaseReport
+	logf      func(string, ...any)
 }
 
-func (*nativeExecutionChecks) Helper()             {}
-func (*nativeExecutionChecks) Logf(string, ...any) {}
+func (*nativeExecutionChecks) Helper() {}
+func (checks *nativeExecutionChecks) Logf(format string, values ...any) {
+	if checks.logf != nil {
+		checks.logf(format, values...)
+	}
+}
 func (*nativeExecutionChecks) Fatal(values ...any) {
 	stage := "fixture_dependency_failed"
 	if len(values) > 0 {
@@ -68,8 +73,11 @@ func runNativeObserveCase(ctx context.Context, directory string, client nativePi
 	return runNativePolicyCase(ctx, directory, client, node, "observe")
 }
 
-func runNativePolicyCase(ctx context.Context, directory string, client nativePinnedClient, node, scenario string) (result nativeMCPCaseReport, resultErr error) {
+func runNativePolicyCase(ctx context.Context, directory string, client nativePinnedClient, node, scenario string, logs ...func(string, ...any)) (result nativeMCPCaseReport, resultErr error) {
 	checks := &nativeExecutionChecks{ctx: ctx, directory: directory, evidence: nativeMCPCaseReport{Name: scenario, Client: client.Version, Outcome: "incomplete", Reason: "not_started"}}
+	if len(logs) > 0 {
+		checks.logf = logs[0]
+	}
 	stage := "fixture_assertion_failed"
 	defer func() {
 		if recovered := recover(); recovered != nil {
@@ -98,8 +106,8 @@ func runNativePolicyCase(ctx context.Context, directory string, client nativePin
 			validCounts = validCounts && result.NativeOutbound >= 3
 		case "session404_once":
 			validCounts = validCounts && result.NativeOutbound >= 4
-		case "sse_reconnect":
-			validCounts = validCounts && result.NativeOutbound >= 6
+		case "sse_reconnect", "sse_observe":
+			validCounts = validCounts && result.NativeOutbound == 9
 		case "model_probe":
 			validCounts = result.ModelOutbound == 1 && result.ActivityMatched
 		default:
@@ -127,6 +135,9 @@ func runNativePolicyCase(ctx context.Context, directory string, client nativePin
 		}
 		if scenario == "sse_reconnect" {
 			result.Reason = "sse_resumed_without_call_replay"
+		}
+		if scenario == "sse_observe" {
+			result.Reason = "sse_observe_only_no_review_evidence"
 		}
 		if scenario == "model_probe" {
 			result.Reason = "actual_model_activity"

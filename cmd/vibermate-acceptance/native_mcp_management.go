@@ -133,6 +133,41 @@ func (fixture *nativeManagementFixture) rejectPending(ctx context.Context, captu
 	fixture.checks.Fatal("actual pending native approval missing")
 }
 
+// Only the private synthetic stream fixture calls this authenticated user
+// decision. It establishes no production content-profile classification.
+func (fixture *nativeManagementFixture) allowStreamPending(ctx context.Context, capture captureidentity.Reference) string {
+	path := "/api/v1/captures/" + capture.Key() + "/native-tools/approvals"
+	deadline := time.Now().Add(8 * time.Second)
+	for time.Now().Before(deadline) {
+		status, data := fixture.request(ctx, "GET", path, fixture.session.ReadToken, nil, nil)
+		var page desktopcontrol.NativeApprovalPageDTO
+		if status != 200 || json.Unmarshal(data, &page) != nil {
+			fixture.checks.Fatal("stream approval page unavailable")
+		}
+		for _, approval := range page.Items {
+			if approval.State != "pending" {
+				continue
+			}
+			if approval.CaptureKey != capture.Key() {
+				fixture.checks.Fatal("stream approval Capture mismatch")
+			}
+			status, data = fixture.request(ctx, "POST", path+"/"+approval.ID+"/actions/decide", fixture.session.WriteToken, desktopcontrol.NativeDecisionDTO{Decision: nativetool.DecisionAllowOnce, BindingDigest: approval.BindingDigest}, map[string]string{"If-Match": strconv.FormatUint(approval.Revision, 10), "Idempotency-Key": "native-stream-allow-" + approval.ID})
+			var decided desktopcontrol.NativeApprovalDTO
+			if status != 200 || json.Unmarshal(data, &decided) != nil || decided.State != "allowed" {
+				fixture.checks.Fatal("authenticated stream Allow failed")
+			}
+			return approval.ID
+		}
+		select {
+		case <-ctx.Done():
+			fixture.checks.Fatal("stream approval wait canceled")
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+	fixture.checks.Fatal("stream pending approval missing")
+	return ""
+}
+
 func (fixture *nativeManagementFixture) verifyMetadata(ctx context.Context, operation nativetool.Operation) {
 	path := "/api/v1/captures/" + operation.Capture.Key() + "/native-tools/operations"
 	status, data := fixture.request(ctx, "GET", path, fixture.session.ReadToken, nil, nil)

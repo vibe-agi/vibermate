@@ -51,6 +51,21 @@ func nativeSourceProvenance(ctx context.Context, directory string) (string, map[
 		digest := sha256.Sum256(data)
 		fixtures[name] = hex.EncodeToString(digest[:])
 	}
+	// The real-client stream frames and canonical TLS composition are owned
+	// here rather than by the older module-only JSON examples.
+	for _, name := range []string{"native_mcp_fixture.go", "native_mcp_audit.go"} {
+		path := filepath.Join(root, "cmd", "vibermate-acceptance", name)
+		info, err := os.Lstat(path)
+		if err != nil || !info.Mode().IsRegular() || info.Size() > 1<<20 {
+			return sha, fixtures, errors.New("native executable fixture provenance unavailable")
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return sha, fixtures, errors.New("native executable fixture provenance unavailable")
+		}
+		digest := sha256.Sum256(data)
+		fixtures[name] = hex.EncodeToString(digest[:])
+	}
 	dirty, err := git("status", "--porcelain", "--untracked-files=normal")
 	if err != nil || dirty != "" {
 		return sha, fixtures, errors.New("native source checkout is not clean")

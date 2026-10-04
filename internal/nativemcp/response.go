@@ -468,6 +468,9 @@ func (e *executor) acceptStreamEvent(ctx context.Context, s *session, stream *st
 			return false, errSession
 		}
 		s.eventIndex[event.id] = streamCursor{stream: stream, ordinal: len(stream.events)}
+		// Newly accepted events advance this attachment too. A subsequent
+		// retained event must not move delivery backwards within the stream.
+		*last = len(stream.events)
 		stream.events = append(stream.events, streamEvent{id: event.id, wire: bytes.Clone(event.wire)})
 		stream.charged += charge
 		s.retained += charge

@@ -73,6 +73,10 @@ func runNativeFixtureSlice(t nativeFixtureChecks, binary string, nodePaths ...st
 	if source, ok := t.(interface{ NativeScenario() string }); ok {
 		scenario = source.NativeScenario()
 	}
+	streamObserve := scenario == "sse_observe"
+	if streamObserve {
+		scenario = "sse_reconnect"
+	}
 	if scenario != "observe" && scenario != "off" && scenario != "strict_external" && scenario != "review_reject" && scenario != "session404_once" && scenario != "sse_reconnect" && scenario != "model_probe" {
 		t.Fatal("native scenario not implemented")
 	}
@@ -85,8 +89,11 @@ func runNativeFixtureSlice(t nativeFixtureChecks, binary string, nodePaths ...st
 	defer cancel()
 	var nativeCount, modelCount atomic.Int64
 	var streams atomic.Int64
-	releaseReconnect := make(chan struct{})
 	resumed := make(chan struct{}, 1)
+	freshReply, resumedReply := make(chan struct{}), make(chan struct{})
+	var callID json.RawMessage
+	callbackReplies := map[string]int{}
+	var initializeCapabilities json.RawMessage
 	defer func() {
 		if observer, ok := t.(interface{ NativeCounters(int, int) }); ok {
 			observer.NativeCounters(int(nativeCount.Load()), int(modelCount.Load()))
@@ -126,6 +133,19 @@ func runNativeFixtureSlice(t nativeFixtureChecks, binary string, nodePaths ...st
 	directory := t.TempDir()
 	var mu sync.Mutex
 	var methods []string
+	defer func() {
+		if scenario == "sse_reconnect" {
+			mu.Lock()
+			defer mu.Unlock()
+			calls := 0
+			for _, method := range methods {
+				if method == "tools/call" {
+					calls++
+				}
+			}
+			t.Logf("stream trace client=%s capabilities=%s toolsCallPOST=%d GET=%d freshReplies=%d postReplies=%d resumedReplies=%d native=%d model=%d", expectedVersion, initializeCapabilities, calls, streams.Load(), callbackReplies["fresh-ping"], callbackReplies["post-ping"], callbackReplies["resumed-ping"], nativeCount.Load(), modelCount.Load())
+		}
+	}()
 	upstream, roots := nativeTLSFixture(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer synthetic-original-login" {
 			t.Error("original authentication lost")
@@ -141,28 +161,38 @@ func runNativeFixtureSlice(t nativeFixtureChecks, binary string, nodePaths ...st
 		}
 		nativeCount.Add(1)
 		if r.Method == "GET" {
-			stream := streams.Add(1)
+			streams.Add(1)
 			w.Header().Set("Content-Type", "text/event-stream")
 			w.WriteHeader(200)
 			w.(http.Flusher).Flush()
 			if scenario == "sse_reconnect" {
-				if stream == 1 {
-					select {
-					case <-releaseReconnect:
-					case <-r.Context().Done():
-						return
-					}
-					_, _ = io.WriteString(w, "event: message\nid: native-result-event-1\ndata: {\"jsonrpc\":\"2.0\",\"method\":\"notifications/tools/list_changed\"}\n\n")
+				if r.Header.Get("Last-Event-Id") == "" {
+					// This no-ID callback belongs to the fresh listening GET.
+					_, _ = io.WriteString(w, ": fresh stream\n\ndata: {\"jsonrpc\":\"2.0\",\"id\":\"fresh-ping\",\"method\":\"ping\"}\n\n")
 					w.(http.Flusher).Flush()
+					<-r.Context().Done()
 					return
 				}
-				if r.Header.Get("Last-Event-Id") != "native-result-event-1" {
+				if r.Header.Get("Last-Event-Id") != "post-e1" || r.Header.Get("Mcp-Session-Id") != "private-session" {
 					t.Error("SSE resumed without the actually observed event ID")
+					return
 				}
 				select {
 				case resumed <- struct{}{}:
 				default:
 				}
+				_, _ = io.WriteString(w, "id: post-e2\ndata: {\"jsonrpc\":\"2.0\",\"id\":\"resumed-ping\",\"method\":\"ping\"}\n\n")
+				w.(http.Flusher).Flush()
+				select {
+				case <-resumedReply:
+				case <-r.Context().Done():
+					return
+				}
+				mu.Lock()
+				id := bytes.Clone(callID)
+				mu.Unlock()
+				_, _ = fmt.Fprintf(w, "id: post-e3\ndata: {\"jsonrpc\":\"2.0\",\"id\":%s,\"result\":{\"content\":[{\"type\":\"text\",\"text\":\"synthetic result\"}]}}\n\n", id)
+				return
 			}
 			<-r.Context().Done()
 			return
@@ -171,6 +201,7 @@ func runNativeFixtureSlice(t nativeFixtureChecks, binary string, nodePaths ...st
 			ID     json.RawMessage `json:"id"`
 			Method string          `json:"method"`
 			Params json.RawMessage `json:"params"`
+			Result json.RawMessage `json:"result"`
 		}
 		if json.NewDecoder(r.Body).Decode(&request) != nil {
 			w.WriteHeader(400)
@@ -184,7 +215,8 @@ func runNativeFixtureSlice(t nativeFixtureChecks, binary string, nodePaths ...st
 		switch request.Method {
 		case "initialize":
 			var params struct {
-				ClientInfo struct {
+				Capabilities json.RawMessage `json:"capabilities"`
+				ClientInfo   struct {
 					Version string `json:"version"`
 				} `json:"clientInfo"`
 			}
@@ -193,7 +225,21 @@ func runNativeFixtureSlice(t nativeFixtureChecks, binary string, nodePaths ...st
 				w.WriteHeader(400)
 				return
 			}
+			if scenario == "sse_reconnect" {
+				// These launches declare experimentalApi, not any host MCP
+				// extensions. Observe the actual client negotiation, not the
+				// broader capabilities in the module's synthetic pin fixtures.
+				var caps map[string]map[string]json.RawMessage
+				if json.Unmarshal(params.Capabilities, &caps) != nil || len(caps) != 1 || len(caps["elicitation"]) != 2 || string(caps["elicitation"]["form"]) != "{}" || string(caps["elicitation"]["url"]) != "{}" {
+					t.Error("actual initialized callback capabilities changed")
+					w.WriteHeader(400)
+					return
+				}
+			}
 			w.Header().Set("Mcp-Session-Id", "private-session")
+			mu.Lock()
+			initializeCapabilities = bytes.Clone(params.Capabilities)
+			mu.Unlock()
 			result = map[string]any{"protocolVersion": "2025-06-18", "capabilities": map[string]any{"tools": map[string]any{}}, "serverInfo": map[string]any{"name": "synthetic", "version": "1"}}
 			if scenario == "sse_reconnect" {
 				result.(map[string]any)["capabilities"] = map[string]any{"tools": map[string]any{"listChanged": true}}
@@ -204,11 +250,40 @@ func runNativeFixtureSlice(t nativeFixtureChecks, binary string, nodePaths ...st
 		case "tools/list":
 			result = map[string]any{"tools": []any{map[string]any{"name": "synthetic_read", "description": "Synthetic public tool", "inputSchema": map[string]any{"type": "object", "properties": map[string]any{"query": map[string]any{"type": "string"}}}}}}
 		case "tools/call":
+			if scenario == "sse_reconnect" {
+				mu.Lock()
+				callID = bytes.Clone(request.ID)
+				mu.Unlock()
+				w.Header().Set("Content-Type", "text/event-stream")
+				_, _ = io.WriteString(w, "id: post-e1\ndata: {\"jsonrpc\":\"2.0\",\"id\":\"post-ping\",\"method\":\"ping\"}\n\n")
+				w.(http.Flusher).Flush()
+				return
+			}
 			if scenario == "session404_once" {
 				w.WriteHeader(http.StatusNotFound)
 				return
 			}
 			result = map[string]any{"content": []any{map[string]any{"type": "text", "text": "synthetic result"}}}
+		case "":
+			var id string
+			if scenario != "sse_reconnect" || json.Unmarshal(request.ID, &id) != nil || (id != "fresh-ping" && id != "post-ping" && id != "resumed-ping") || string(request.Result) != "{}" {
+				t.Error("unexpected callback response")
+				w.WriteHeader(400)
+				return
+			}
+			mu.Lock()
+			callbackReplies[id]++
+			count := callbackReplies[id]
+			mu.Unlock()
+			if count != 1 {
+				t.Error("callback replied more than once")
+			} else if id == "fresh-ping" {
+				close(freshReply)
+			} else if id == "resumed-ping" {
+				close(resumedReply)
+			}
+			w.WriteHeader(202)
+			return
 		default:
 			w.WriteHeader(400)
 			return
@@ -261,7 +336,7 @@ func runNativeFixtureSlice(t nativeFixtureChecks, binary string, nodePaths ...st
 	if scenario == "strict_external" {
 		e.PolicySet.ToolMode = environment.ToolPolicyStrict
 	}
-	if scenario == "review_reject" {
+	if scenario == "review_reject" || scenario == "sse_reconnect" && !streamObserve {
 		e.PolicySet.ToolMode = environment.ToolPolicyReview
 	}
 	modelServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -628,6 +703,31 @@ func runNativeFixtureSlice(t nativeFixtureChecks, binary string, nodePaths ...st
 		}
 		return
 	}
+	var streamCapture captureidentity.Reference
+	streamApprovals := map[string]bool{}
+	allowStream := func() {
+		if streamObserve {
+			return
+		}
+		id := management.allowStreamPending(ctx, streamCapture)
+		if streamApprovals[id] {
+			t.Fatal("stream reused approval")
+		}
+		streamApprovals[id] = true
+	}
+	if scenario == "sse_reconnect" {
+		runs, err := host.Runtime().CaptureRunReader().ListRuns(ctx, capturerun.PageRequest{Limit: 10})
+		if err != nil || len(runs.Items) != 1 {
+			t.Fatal("stream Capture missing")
+		}
+		streamCapture = captureidentity.Reference{Kind: captureidentity.KindManagedRun, ID: runs.Items[0].ID}
+		allowStream()
+		select {
+		case <-freshReply:
+		case <-ctx.Done():
+			t.Fatal("fresh GET callback reply missing")
+		}
+	}
 	send(3, "mcpServer/tool/call", map[string]any{"threadId": thread.Thread.ID, "server": "codex_apps", "tool": "synthetic_read", "arguments": map[string]any{"query": "synthetic"}})
 	if scenario == "review_reject" {
 		runs, err := host.Runtime().CaptureRunReader().ListRuns(ctx, capturerun.PageRequest{Limit: 10})
@@ -636,17 +736,19 @@ func runNativeFixtureSlice(t nativeFixtureChecks, binary string, nodePaths ...st
 		}
 		management.rejectPending(ctx, captureidentity.Reference{Kind: captureidentity.KindManagedRun, ID: runs.Items[0].ID})
 	}
-	toolResponse := read(3, scenario != "observe")
 	if scenario == "sse_reconnect" {
-		close(releaseReconnect)
+		allowStream() // original tools/call
+		allowStream() // original POST-stream ping response
 		select {
 		case <-resumed:
 		case <-time.After(10 * time.Second):
-			t.Fatal("actual client did not resume GET after SSE closure")
+			t.Fatal("actual client did not resume original POST stream")
 		case <-ctx.Done():
 			t.Fatal("SSE resume canceled")
 		}
+		allowStream() // new callback belongs to the resumed original stream
 	}
+	toolResponse := read(3, scenario != "observe" && scenario != "sse_reconnect")
 	mu.Lock()
 	observed := append([]string{}, methods...)
 	mu.Unlock()
@@ -664,7 +766,12 @@ func runNativeFixtureSlice(t nativeFixtureChecks, binary string, nodePaths ...st
 				calls++
 			}
 		}
-		if calls != 1 || streams.Load() < 2 {
+		mu.Lock()
+		validReplies := len(callbackReplies) == 3 && callbackReplies["fresh-ping"] == 1 && callbackReplies["post-ping"] == 1 && callbackReplies["resumed-ping"] == 1
+		capabilities := string(initializeCapabilities)
+		mu.Unlock()
+		t.Logf("stream client=%s capabilities=%s originalPOST=%d GET=%d callbackRepliesValid=%t distinctApprovals=%d", expectedVersion, capabilities, calls, streams.Load(), validReplies, len(streamApprovals))
+		if calls != 1 || len(observed) != 7 || streams.Load() != 2 || !validReplies || !streamObserve && len(streamApprovals) != 4 || capabilities == "" {
 			t.Fatal("SSE reconnection repeated a tool call or omitted the stream")
 		}
 	} else if strings.Join(observed, ",") != wantMethods {
@@ -731,6 +838,10 @@ func runNativeFixtureSlice(t nativeFixtureChecks, binary string, nodePaths ...st
 			if call.DecisionSource != "user" || call.ApprovalID == nil || call.Reason != "approval_denied" || len(audit.Items) != 0 || (call.BytesOut != nil && *call.BytesOut != 0) {
 				t.Fatal("Review reject did not consume the actual user decision before send")
 			}
+		} else if scenario == "sse_reconnect" && !streamObserve {
+			if call.DecisionSource != "user" || call.ApprovalID == nil || !streamApprovals[call.ApprovalID.String()] {
+				t.Fatal("stream original call lacks its own Allow")
+			}
 		} else if call.DecisionSource != "policy" || call.ApprovalID != nil {
 			t.Fatal("native policy decision was replaced")
 		}
@@ -738,10 +849,13 @@ func runNativeFixtureSlice(t nativeFixtureChecks, binary string, nodePaths ...st
 			if call.Reason != "policy_strict" || len(audit.Items) != 0 || (call.BytesOut != nil && *call.BytesOut != 0) {
 				t.Fatal("Strict external action was not denied before send")
 			}
-		} else if scenario == "observe" || scenario == "sse_reconnect" {
+		} else if scenario == "observe" {
 			if call.BytesOut == nil || *call.BytesOut <= 0 || len(audit.Items) != 1 || audit.Items[0].Attempt.Purpose() != egressaudit.PurposeClientToolService || !bytes.Contains(toolResponse["result"], []byte("synthetic result")) {
 				t.Fatal("Observe lacks a completed matching native send and result")
 			}
+		}
+		if scenario == "sse_reconnect" && (len(audit.Items) != 1 || !bytes.Contains(toolResponse["result"], []byte("synthetic result"))) {
+			t.Fatal("recovered original call lacks its single audit/result")
 		}
 		if scenario == "session404_once" {
 			if call.Reason != "execution_uncertain" || call.BytesIn != nil || call.BytesOut != nil || len(audit.Items) != 1 || audit.Items[0].Attempt.ByteCountsKnown() || audit.Items[0].Attempt.Purpose() != egressaudit.PurposeClientToolService {
@@ -772,6 +886,23 @@ func runNativeFixtureSlice(t nativeFixtureChecks, binary string, nodePaths ...st
 			}
 		}
 		management.verifyMetadata(ctx, call)
+		if scenario == "sse_reconnect" {
+			verifyNativeStreamSQL(ctx, t, paths.DataDirectory(), capture, !streamObserve)
+			page, err := host.Runtime().NativeToolRepository().Page(ctx, nativetool.PageRequest{Capture: capture, Limit: 100})
+			if err != nil {
+				t.Fatal("stream reply page unavailable")
+			}
+			seen := map[nativetool.ID]bool{}
+			for _, op := range page.Items {
+				if op.Kind == nativetool.RequestServerReply && !seen[op.ID] {
+					seen[op.ID] = true
+					management.verifyMetadata(ctx, op)
+				}
+			}
+			if len(seen) != 3 {
+				t.Fatal("stream reply API count differs")
+			}
+		}
 	}
 	activities, err := host.Runtime().Activities().ListExchanges(ctx, activity.PageRequest{CaptureRunID: capture.ID, Limit: 100})
 	if err != nil || len(activities.Items) != 0 {
