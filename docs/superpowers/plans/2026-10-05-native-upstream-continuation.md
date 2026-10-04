@@ -4,6 +4,8 @@
 
 **Prerequisite update after335556f review:** The isolated profile checkpoint is approved, but its required historical decision-retry repair (`2026-10-05-native-decision-history.md`) and fresh-GET Start→Verify diagnostic/correction take priority. Complete those scoped reviews before starting continuation Task1; this plan does not mask or waive either instability.
 
+History is independently closed at2e5a870. Actual diagnostics now prove the pre-transport false-uncertainty mechanism for both fresh GET and approved tools/call. `2026-10-05-native-unsent-disposition.md` owns the adopted two-unit repair and remaining lifecycle coverage; finish its reviews before continuation. No gate is waived by this sequencing change.
+
 **Goal:** Keep an eligible native tools/call response alive across a broken upstream stream, including on pinned Codex 0.145, without a second tool execution or misleading request provenance.
 
 **Architecture:** The original downstream response owns a bounded sequence of genuine upstream continuation GETs. Every GET has fresh request/admission/Offline/Store authority and its own physical audit; the original logical operation and exact callback parent remain unchanged. Persist immutable, body-free initiator evidence, never durable stream authority.
