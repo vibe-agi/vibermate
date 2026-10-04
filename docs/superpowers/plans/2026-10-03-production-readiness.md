@@ -118,6 +118,8 @@ DEVELOPER_DIR=/Library/Developer/CommandLineTools go run golang.org/x/vuln/cmd/g
 
 **Interfaces:** 一个冻结源码版本 → CI、同源二进制、签名/公证/安装证据、GitHub release 和 Homebrew checksum。
 
+已执行的构建来源纠正：本机 Go1.26.8 的 VCS 根检测只认可 `.git` 目录，会跳过嵌套 worktree 的 `.git` 文件并错误记录外层 main revision/dirty。干净 worktree 本身不能证明二进制来源；最终本地客户端/soak/安装验收须从临时独立、真实 `.git` 目录的干净检出构建，或先以实际构建元数据证明精确冻结 SHA 和 `vcs.modified=false`。禁止用手填标签、关闭来源校验或改写报告绕过。b5fe693 的独立检出已实际验证此路径并运行9项原生策略场景；它不是后续最终源码的验收证据。
+
 - [ ] 对 merge-base..HEAD 生成完整 review package，交给最高能力的独立 whole-branch reviewer，包含所有 minor/ruling/未完成项。必须收敛未解决 P1/P2 与 R1–R7。
 - [ ] 核对远端版本；预期下一 patch 为 0.1.24+26。生成 release notes，准确写图片/CA/客户端范围及 Server+CLI 配套升级要求。
 - [ ] 冻结并提交源码，运行该 SHA 的现有完整 CI 与 Developer ID candidate/sign/notary/installed acceptance 流程。使用既有配置的发布凭据与保护规则，产物 hash 与 provenance 必须一致。
