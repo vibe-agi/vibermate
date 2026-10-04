@@ -367,20 +367,25 @@ type TransportProfileEvidence struct {
 }
 
 // WirePresentationEvidence records the user-visible product-level choice and
-// the same-protocol variant selected for this Exchange. It never stores the
+// the variant selected for this Exchange, including an explicit permitted
+// cleartext HTTP/1 adjustment. It never stores the
 // observed ClientHello or semantic headers.
 type WirePresentationEvidence struct {
-	RequestedRef     string `json:"requestedRef"`
-	EffectiveRef     string `json:"effectiveRef,omitempty"`
-	Revision         uint64 `json:"revision"`
-	Mode             string `json:"mode"`
-	Product          string `json:"product,omitempty"`
-	ClientProtocol   string `json:"clientProtocol"`
-	UpstreamProtocol string `json:"upstreamProtocol,omitempty"`
-	EvidenceDigest   string `json:"evidenceDigest,omitempty"`
+	RequestedRef       string `json:"requestedRef"`
+	EffectiveRef       string `json:"effectiveRef,omitempty"`
+	Revision           uint64 `json:"revision"`
+	Mode               string `json:"mode"`
+	Product            string `json:"product,omitempty"`
+	ClientProtocol     string `json:"clientProtocol"`
+	UpstreamProtocol   string `json:"upstreamProtocol,omitempty"`
+	EvidenceDigest     string `json:"evidenceDigest,omitempty"`
+	ProtocolAdjustment string `json:"protocolAdjustment,omitempty"`
 }
 
 func (evidence WirePresentationEvidence) Validate() error {
+	if evidence.ProtocolAdjustment != "" && (evidence.ProtocolAdjustment != "cleartext_http1" || evidence.Mode != "follow_client" || evidence.ClientProtocol != "h2" || evidence.UpstreamProtocol != "http/1.1" || evidence.EffectiveRef == "") {
+		return fmt.Errorf("%w: wire presentation protocol adjustment is invalid", ErrInvalidEvent)
+	}
 	if validateIdentity(
 		"requested wire presentation reference",
 		evidence.RequestedRef,
@@ -429,7 +434,7 @@ func (evidence WirePresentationEvidence) Validate() error {
 		return nil
 	}
 	if evidence.EffectiveRef != evidence.RequestedRef ||
-		evidence.UpstreamProtocol != evidence.ClientProtocol {
+		(evidence.UpstreamProtocol != evidence.ClientProtocol && evidence.ProtocolAdjustment != "cleartext_http1") {
 		return fmt.Errorf(
 			"%w: wire presentation changed profile or client protocol",
 			ErrInvalidEvent,
@@ -508,6 +513,9 @@ func (evidence TransportEvidence) Validate() error {
 	}
 	if err := evidence.Presentation.Validate(); err != nil {
 		return err
+	}
+	if evidence.Presentation.ProtocolAdjustment != "" && evidence.Requested != nil {
+		return fmt.Errorf("%w: cleartext protocol adjustment contains TLS fingerprint evidence", ErrInvalidEvent)
 	}
 	if evidence.Requested == nil {
 		if evidence.Effective != nil ||

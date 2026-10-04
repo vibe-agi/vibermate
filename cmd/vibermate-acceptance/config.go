@@ -20,6 +20,10 @@ type config struct {
 	clientID          acceptanceClientID
 	claudePath        string
 	codexPath         string
+	nativeMCPOnly     bool
+	codex145Path      string
+	codex159Path      string
+	codex160Path      string
 	environmentID     string
 	dataDirectory     string
 	reportPath        string
@@ -53,6 +57,10 @@ func parseConfig(arguments []string) (config, error) {
 	)
 	flags.StringVar(&parsed.claudePath, "claude", "", "absolute Claude Code 2.1.220 path")
 	flags.StringVar(&parsed.codexPath, "codex", "", "absolute Codex CLI 0.145.0 path")
+	flags.BoolVar(&parsed.nativeMCPOnly, "native-mcp-only", false, "run isolated native MCP exact-client acceptance")
+	flags.StringVar(&parsed.codex145Path, "codex145", "", "absolute native Codex CLI 0.145.0 executable")
+	flags.StringVar(&parsed.codex159Path, "codex159", "", "absolute native Codex CLI 0.159.2 executable")
+	flags.StringVar(&parsed.codex160Path, "codex160", "", "absolute native Codex CLI 0.160.0 executable")
 	flags.StringVar(
 		&parsed.environmentID,
 		"environment-id",
@@ -100,6 +108,16 @@ func parseConfig(arguments []string) (config, error) {
 	}
 	if flags.NArg() != 0 {
 		return config{}, errors.New("vibermate-acceptance does not accept positional arguments")
+	}
+	if parsed.nativeMCPOnly {
+		validated, err := validateNativeMCPConfig(parsed)
+		if err != nil {
+			return parsed, err
+		}
+		return validated, nil
+	}
+	if parsed.codex145Path != "" || parsed.codex159Path != "" || parsed.codex160Path != "" {
+		return config{}, errors.New("versioned native clients require --native-mcp-only")
 	}
 	if runtime.GOOS != "darwin" || runtime.GOARCH != "arm64" {
 		return config{}, errors.New("packaged-app acceptance requires macOS arm64")

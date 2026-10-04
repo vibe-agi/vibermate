@@ -77,7 +77,7 @@ func TestNativeRecordedRouterImagesPagingAndCursorScope(t *testing.T) {
 	if err := png.Encode(&img, image.NewRGBA(image.Rect(0, 0, 2, 3))); err != nil {
 		t.Fatal(err)
 	}
-	text := strings.Repeat("汉🙂<&", 12000)
+	text := strings.Repeat("\u6c49\U0001f642<&", 12000)
 	result, _ := json.Marshal(map[string]any{"content": []any{map[string]any{"type": "text", "text": text}, map[string]any{"type": "image", "mimeType": "image/png", "data": base64.StdEncoding.EncodeToString(img.Bytes())}}, "structuredContent": map[string]any{"answer": 42}})
 	nativemcp.ExerciseNativeRecordedControl(t, environment.ContentRecordingPolicy{Mode: environment.ContentRecordingFull, RetentionDays: 1}, string(result), func(store *runtimepersistence.Store, manuals manualcapture.Controller, capture captureidentity.Reference, op nativetool.Operation) {
 		clock := &decisionClock{time.Now().UTC()}

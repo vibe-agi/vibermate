@@ -57,7 +57,7 @@ func TestProfilesPermissionOutputLocalized(t *testing.T) {
 	if err = os.WriteFile(layout.CLIControlRecord, payload, 0600); err != nil {
 		t.Fatal(err)
 	}
-	for _, test := range []struct{ language, on, off string }{{"en_US.UTF-8", "Work · Tool services: On", "Personal · Tool services: Off"}, {"zh_CN.UTF-8", "Work · 工具服务：开启", "Personal · 工具服务：关闭"}} {
+	for _, test := range []struct{ language, on, off string }{{"en_US.UTF-8", "Work · Tool services: On", "Personal · Tool services: Off"}, {"zh_CN.UTF-8", "Work · \u5de5\u5177\u670d\u52a1\uff1a\u5f00\u542f", "Personal · \u5de5\u5177\u670d\u52a1\uff1a\u5173\u95ed"}} {
 		var stdout, stderr strings.Builder
 		code, key := execute([]string{"profiles"}, []string{"LANG=" + test.language}, strings.NewReader(""), &stdout, &stderr)
 		if code != 0 || key != "" || !strings.Contains(stdout.String(), test.on) || !strings.Contains(stdout.String(), test.off) {

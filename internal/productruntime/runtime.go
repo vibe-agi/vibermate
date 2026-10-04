@@ -598,7 +598,7 @@ func startWithBuilders(
 	}
 	pending.register("Codex OAuth login manager", codexLogins.Shutdown)
 
-	nativeTransport, err := originaltransport.NewProductionTransport()
+	nativeTransport, err := selectOriginalTransport(options)
 	if err != nil {
 		return fail("native strict transport", err)
 	}
@@ -709,7 +709,7 @@ func startWithBuilders(
 
 	// A blind tunnel dials through the same egress admission as every other
 	// outbound, so it cannot become the one path that ignores a planned hold.
-	blindTunnels, err := newBlindTunnelDialer(options.OfflineHold)
+	blindTunnels, err := selectBlindTunnels(options)
 	if err != nil {
 		return fail("blind tunnel dialer", err)
 	}

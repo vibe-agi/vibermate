@@ -21,6 +21,7 @@ import (
 var knownCatalogDigests = map[uint64]string{
 	1: "YB0uXijGhI25aflCKCNRJz93KaNx6zkcpLRathIU_lc",
 	2: "YdpxfC8Npf6JvnCb-Z5v_-_iilRwfwntFxcM-aiPNWY",
+	3: "LHD_vsaIYGRtuddm3iGvLZZ4KszihcrbXJ8se9awLMY",
 }
 
 func TestTheCatalogCannotChangeWithoutItsRevision(t *testing.T) {

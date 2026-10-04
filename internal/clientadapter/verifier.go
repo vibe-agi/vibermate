@@ -718,6 +718,9 @@ func verifyRelease(
 			return false, nil
 		}
 	}
+	if err := verifyCodexPackageResolution(canonicalEntrypoint, release); err != nil {
+		return false, err
+	}
 	return true, nil
 }
 
@@ -1198,7 +1201,7 @@ func codexCLI01450Release(
 // empty or partially active catalog.
 func BuiltInCatalog() Catalog {
 	return Catalog{
-		revision: 2,
+		revision: 3,
 		releases: []Release{
 			ClaudeCode221220DarwinARM64(),
 			ClaudeCode221220DarwinAMD64(),
@@ -1208,6 +1211,8 @@ func BuiltInCatalog() Catalog {
 			CodexCLI01450DarwinAMD64(),
 			CodexCLI01450LinuxAMD64(),
 			CodexCLI01450LinuxARM64(),
+			CodexCLI01592DarwinARM64(),
+			CodexCLI01600DarwinARM64(),
 		},
 		signers: []Signer{
 			ClaudeCodeSignerDarwin(),

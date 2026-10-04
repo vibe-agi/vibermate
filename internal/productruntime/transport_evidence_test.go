@@ -5,13 +5,74 @@ import (
 	"encoding/json"
 	"errors"
 	"net"
+	"net/http"
 	"testing"
 
 	"github.com/vibe-agi/vibermate/internal/activity"
+	"github.com/vibe-agi/vibermate/internal/egressprofile"
+	"github.com/vibe-agi/vibermate/internal/environment"
+	"github.com/vibe-agi/vibermate/internal/offlinehold"
+	"github.com/vibe-agi/vibermate/internal/originidentity"
+	"github.com/vibe-agi/vibermate/internal/providerauth"
 	"github.com/vibe-agi/vibermate/internal/providertransport"
 	"github.com/vibe-agi/vibermate/internal/transportprofile"
 	"github.com/vibe-agi/vibermate/internal/wireprofile"
 )
+
+func TestActualCleartextRequestPresentationIsAcceptedByActivity(t *testing.T) {
+	ctx := context.Background()
+	gate, err := offlinehold.New(offlinehold.DefaultConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = gate.Start(ctx, offlinehold.RuntimeBinding{InstanceID: "presentation-fixture"}); err != nil {
+		t.Fatal(err)
+	}
+	action, err := gate.BeginAction(ctx, offlinehold.ActionRequest{ActionID: "presentation-action"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer action.Release()
+	origin, err := originidentity.ParseProviderOrigin("http://127.0.0.1:12345")
+	if err != nil {
+		t.Fatal(err)
+	}
+	target, err := providertransport.NewTarget(origin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	provenance, err := providertransport.NewOriginalRequestProvenance("presentation.fixture", 1, environment.CandidateDigest{1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	catalog, err := wireprofile.BuiltInCatalog()
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile, err := catalog.Resolve(wireprofile.FollowClientUpstreamWireProfileRef())
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, err := providertransport.NewRequest(providertransport.RequestOptions{
+		RequestID: "presentation-request", TargetRef: "presentation-target", Target: target, Provenance: provenance, Action: action,
+		Method: http.MethodPost, RelativePath: "v1/responses", Body: []byte(`{"model":"synthetic"}`), CredentialMode: providerauth.CredentialClientPassthrough, PassthroughOrigin: origin,
+		WireProfile: profile, EgressProfile: egressprofile.Direct(), ClientProtocol: wireprofile.ApplicationProtocolHTTP2, ExchangeID: "presentation-exchange", ParentAttemptID: "presentation-parent", EgressAttemptID: "presentation-egress",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	presentation := request.WirePresentationEvidence()
+	if presentation.ClientProtocol != wireprofile.ApplicationProtocolHTTP2 || presentation.UpstreamProtocol != wireprofile.ApplicationProtocolHTTP1 {
+		t.Fatal("real Request producer did not lower cleartext protocol")
+	}
+	converted := activityTransportEvidence(presentation, transportprofile.Evidence{})
+	if converted == nil {
+		t.Fatal("real presentation disappeared")
+	}
+	if err = converted.Validate(); err != nil {
+		t.Fatalf("real cleartext producer cannot enter Activity: %v", err)
+	}
+}
 
 func TestActivityTransportEvidenceRetainsFailedProfileReason(t *testing.T) {
 	t.Parallel()

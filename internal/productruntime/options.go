@@ -11,7 +11,9 @@ import (
 	"github.com/vibe-agi/vibermate/internal/exchange"
 	"github.com/vibe-agi/vibermate/internal/hostcontract"
 	"github.com/vibe-agi/vibermate/internal/instanceguard"
+	"github.com/vibe-agi/vibermate/internal/loopbackproxy"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
+	"github.com/vibe-agi/vibermate/internal/originaltransport"
 	"github.com/vibe-agi/vibermate/internal/runtimedata"
 	"github.com/vibe-agi/vibermate/internal/secretstore"
 	"github.com/vibe-agi/vibermate/internal/toolapproval"
@@ -113,6 +115,12 @@ func DefaultLifecycleOptions() LifecycleOptions {
 
 // Options is the complete typed ProductRuntime construction input.
 type Options struct {
+	// BlindTunnels is a trusted in-process dial dependency; nil retains the
+	// normal offline-gated dialer. It cannot grant connection policy authority.
+	BlindTunnels loopbackproxy.BlindTunnelDialer
+	// OriginalTransport is a trusted in-process transport dependency. It grants
+	// no request authority. Nil selects the normal strict production transport.
+	OriginalTransport      originaltransport.Transport
 	SchemaUpgradeHostGuard *instanceguard.Guard
 	SchemaUpgradeTimeout   time.Duration
 	SchemaUpgradeProgress  func(runtimedata.SchemaUpgradePhase) error

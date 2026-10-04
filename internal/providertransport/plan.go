@@ -382,15 +382,18 @@ type Request struct {
 // before any secret lookup or outbound dial. It contains no raw ClientHello,
 // request header, credential, or payload.
 type WirePresentationEvidence struct {
-	RequestedRef     string
-	EffectiveRef     string
-	Revision         wireprofile.Revision
-	Mode             wireprofile.UpstreamWireMode
-	Product          wireprofile.UpstreamWireProduct
-	ClientProtocol   wireprofile.ApplicationProtocol
-	UpstreamProtocol wireprofile.ApplicationProtocol
-	EvidenceDigest   string
+	RequestedRef       string
+	EffectiveRef       string
+	Revision           wireprofile.Revision
+	Mode               wireprofile.UpstreamWireMode
+	Product            wireprofile.UpstreamWireProduct
+	ClientProtocol     wireprofile.ApplicationProtocol
+	UpstreamProtocol   wireprofile.ApplicationProtocol
+	EvidenceDigest     string
+	ProtocolAdjustment string
 }
+
+const ProtocolAdjustmentCleartextHTTP1 = "cleartext_http1"
 
 func NewWirePresentationEvidence(
 	profile wireprofile.CompiledUpstreamWireProfile,
@@ -720,11 +723,18 @@ func (request Request) AuthDriverRef() providerauth.DriverRef {
 }
 
 func (request Request) WirePresentationEvidence() WirePresentationEvidence {
-	return newWirePresentationEvidence(
+	evidence := newWirePresentationEvidence(
 		request.wireProfile,
 		request.clientProtocol,
 		request.wireVariant,
 	)
+	switch request.target.TransportKind() {
+	case originidentity.ProviderTransportLoopbackCleartext, originidentity.ProviderTransportPrivateCleartext:
+		if evidence.Mode == wireprofile.UpstreamWireModeFollowClient && evidence.ClientProtocol == wireprofile.ApplicationProtocolHTTP2 && evidence.UpstreamProtocol == wireprofile.ApplicationProtocolHTTP1 {
+			evidence.ProtocolAdjustment = ProtocolAdjustmentCleartextHTTP1
+		}
+	}
+	return evidence
 }
 
 func (request Request) buildURL() *url.URL {

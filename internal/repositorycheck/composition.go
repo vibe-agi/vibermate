@@ -235,7 +235,9 @@ func CheckProductionCompositionBoundary(repositoryRoot string) []Violation {
 			importPath: serverHostImportPath,
 			name:       "Start",
 		},
-		callers: []string{serverDaemonPackageDir + "/"},
+		// The standalone acceptance fixture composes a private ServerHost to
+		// exercise the real launcher/issuer/runtime. No sibling file is allowed.
+		callers: []string{serverDaemonPackageDir + "/", "cmd/vibermate-acceptance/native_mcp_fixture.go"},
 		missing: "server-daemon-does-not-start-the-host",
 		extra:   "unreviewed-server-host-composition",
 	}, {

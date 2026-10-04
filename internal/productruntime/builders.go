@@ -906,14 +906,15 @@ func activityTransportEvidence(
 	}
 	if presentation.RequestedRef != "" {
 		converted.Presentation = &activity.WirePresentationEvidence{
-			RequestedRef:     presentation.RequestedRef,
-			EffectiveRef:     presentation.EffectiveRef,
-			Revision:         uint64(presentation.Revision),
-			Mode:             string(presentation.Mode),
-			Product:          string(presentation.Product),
-			ClientProtocol:   string(presentation.ClientProtocol),
-			UpstreamProtocol: string(presentation.UpstreamProtocol),
-			EvidenceDigest:   presentation.EvidenceDigest,
+			RequestedRef:       presentation.RequestedRef,
+			EffectiveRef:       presentation.EffectiveRef,
+			Revision:           uint64(presentation.Revision),
+			Mode:               string(presentation.Mode),
+			Product:            string(presentation.Product),
+			ClientProtocol:     string(presentation.ClientProtocol),
+			UpstreamProtocol:   string(presentation.UpstreamProtocol),
+			EvidenceDigest:     presentation.EvidenceDigest,
+			ProtocolAdjustment: presentation.ProtocolAdjustment,
 		}
 	}
 	for _, attempted := range evidence.FallbackChain() {

@@ -27,7 +27,7 @@ func TestRecordedContentExactRetainedShapes(t *testing.T) {
 	encoded := base64.StdEncoding.EncodeToString(pngBytes.Bytes())
 	for _, tc := range []struct{ part, body, kind, text string }{
 		{"tool_arguments", `{"path":"frozen.txt"}`, "json", `{"path":"frozen.txt"}`},
-		{"tool_result", `{"content":[{"type":"text","text":"真实 text"}]}`, "text", "真实 text"},
+		{"tool_result", "{\"content\":[{\"type\":\"text\",\"text\":\"\u771f\u5b9e text\"}]}", "text", "\u771f\u5b9e text"},
 		{"tool_result", `{"structuredContent":{"answer":42}}`, "json", `{"answer":42}`},
 		{"tool_result", `{"content":[{"type":"image","mimeType":"image/png","data":"` + encoded + `"}]}`, "image", ""},
 	} {
