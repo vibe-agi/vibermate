@@ -425,6 +425,9 @@ func finishNative(ctx context.Context, tx *sql.Tx, op nativetool.Operation, in n
 	if _, err := completeEgressAttempt(ctx, tx, terminal); err != nil {
 		return err
 	}
+	if err := cancelNativeParentApprovals(ctx, tx, op.Capture, op.ID, in.ObservedAt); err != nil {
+		return err
+	}
 	if err := nativeTransition(ctx, tx, op, in.Outcome, op.DecisionSource, in.Reason, in.Outcome, in.ObservedAt); err != nil {
 		return err
 	}
@@ -597,7 +600,7 @@ func (r *nativeToolRepository) Revoke(ctx context.Context, c captureidentity.Ref
 	defer r.issuerMu.Unlock()
 	defer func() {
 		for a, s := range r.streams {
-			if s.capture == c {
+			if s.capture == c && !s.cleanupOnly {
 				r.dropNativeStream(a)
 			}
 		}

@@ -48,6 +48,9 @@ type StreamRepository interface {
 	BindRecoveryGET(context.Context, ID, Binding, StreamAuthority, time.Time) error
 	ValidateLocalReplay(context.Context, StreamAuthority, time.Time) error
 	FinishAttempt(context.Context, StartReceipt, PhysicalFinishInput) error
+	// FinishObservedRPC closes an attached, already sent POST with a fully
+	// validated terminal result. It never creates observation or send authority.
+	FinishObservedRPC(context.Context, StartReceipt, PhysicalFinishInput, LogicalFinishInput) error
 	CompleteStreamRPC(context.Context, StreamAuthority, LogicalFinishInput) error
 	RetireObservedStream(context.Context, StreamAuthority, time.Time) error
 }

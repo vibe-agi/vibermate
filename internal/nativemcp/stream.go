@@ -11,6 +11,7 @@ import (
 )
 
 var errStreamDetached = errors.New("native stream detached")
+var errStreamDelivery = errors.New("native complete event delivery interrupted")
 
 func (e *executor) finishRecoveryTransportFailure(c CapturedRequest, s *session, stream *streamRecord, receipt nativetool.StartReceipt) Terminal {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
@@ -53,6 +54,7 @@ type streamRecord struct {
 	credentialRevision          uint64
 	attached, terminal, retired bool
 	terminalCursor              bool
+	knownTerminal               *nativetool.LogicalFinishInput
 	protocolCanceled            bool
 	unidentifiable              bool
 	delivered                   bool
@@ -228,7 +230,14 @@ func (e *executor) retireStream(s *session, stream *streamRecord) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	if stream.observed {
-		_ = e.dependencies.Store.RetireObservedStream(ctx, stream.authority, e.dependencies.Clock().UTC())
+		if err := e.dependencies.Store.RetireObservedStream(ctx, stream.authority, e.dependencies.Clock().UTC()); err != nil {
+			// Durable cleanup keeps its exact bounded retry obligation. Fence
+			// the process owner immediately even while SQL is unavailable.
+			e.mu.Lock()
+			s.owner.revoked = true
+			s.owner.cancel()
+			e.mu.Unlock()
+		}
 	}
 	e.retireCompletedParents(ctx, s, stream.operation)
 	s.mu.Lock()
@@ -295,8 +304,17 @@ func (e *executor) finishStreamAttempt(c CapturedRequest, r rpc, s *session, rec
 	stream := r.stream
 	s.mu.Lock()
 	observed := stream.observed
+	known := stream.knownTerminal
 	s.mu.Unlock()
 	if !observed {
+		if known != nil && errors.Is(cause, errStreamDelivery) {
+			err := e.dependencies.Store.FinishObservedRPC(ctx, receipt, nativetool.PhysicalFinishInput{Outcome: "failed", Reason: "transport_failed", ObservedAt: e.dependencies.Clock().UTC()}, *known)
+			if err != nil {
+				return e.finishFailure(c.id, s, w, err, true)
+			}
+			e.retireCompletedParents(ctx, s, c.id)
+			return Terminal{OperationID: c.id, Outcome: Outcome(known.Outcome)}
+		}
 		if cause != nil {
 			return e.finishFailure(c.id, s, w, cause, true)
 		}
@@ -324,7 +342,7 @@ func (e *executor) finishStreamAttempt(c CapturedRequest, r rpc, s *session, rec
 	err := e.dependencies.Store.FinishAttempt(ctx, receipt, nativetool.PhysicalFinishInput{Outcome: state, Reason: reason, Counts: counts, ObservedAt: e.dependencies.Clock().UTC()})
 	s.mu.Lock()
 	terminal := stream.terminal
-	resumable := len(stream.events) > 0 && !stream.unidentifiable && !stream.retired && stream.context.Err() == nil
+	resumable := len(stream.events) > 0 && !stream.unidentifiable && !stream.retired && !stream.protocolCanceled && stream.context.Err() == nil
 	s.mu.Unlock()
 	if err != nil {
 		e.retireStream(s, stream)
@@ -339,7 +357,7 @@ func (e *executor) finishStreamAttempt(c CapturedRequest, r rpc, s *session, rec
 		}
 		return Terminal{OperationID: c.id, Outcome: OutcomeCompleted, BytesIn: counted.bytes.Load(), BytesOut: int64(len(r.raw))}
 	}
-	if errors.Is(cause, errStreamDetached) && resumable {
+	if (errors.Is(cause, errStreamDetached) || errors.Is(cause, errStreamDelivery)) && resumable {
 		return Terminal{OperationID: c.id, Outcome: OutcomeFailed, Reason: ReasonStreamDetached}
 	}
 	if r.kind == nativetool.RequestGetStream && cause == nil {

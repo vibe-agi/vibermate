@@ -18,14 +18,16 @@ const nativeSessionStreamLimit = 16
 // Body-free fixed-size registrations are bounded before allocation. Frozen
 // binding data stays in SQL; the transport separately owns its charged wire.
 type nativeObservedStream struct {
-	receipt  nativetool.StartReceipt
-	session  nativetool.ID
-	digest   nativetool.Digest
-	revision uint64
-	expires  time.Time
-	terminal bool
-	capture  captureidentity.Reference
-	timer    *time.Timer
+	receipt     nativetool.StartReceipt
+	session     nativetool.ID
+	digest      nativetool.Digest
+	revision    uint64
+	expires     time.Time
+	terminal    bool
+	capture     captureidentity.Reference
+	timer       *time.Timer
+	cleanupOnly bool
+	retryDelay  time.Duration
 }
 type nativeRecovery struct {
 	stream nativetool.StreamAuthority
@@ -107,7 +109,7 @@ func (r *nativeToolRepository) OpenObservedStream(ctx context.Context, receipt n
 	// Retired/expired entries never renew. Their original audit is terminal, so
 	// removing their bounded tombstone cannot enable another observation grant.
 	for a, s := range r.streams {
-		if s.terminal && !s.expires.After(now) {
+		if s.terminal && !s.cleanupOnly && !s.expires.After(now) {
 			r.dropNativeStream(a)
 		}
 	}
@@ -208,7 +210,7 @@ func (r *nativeToolRepository) OpenObservedStream(ctx context.Context, receipt n
 
 func (r *nativeToolRepository) streamAuthority(ctx context.Context, tx *sql.Tx, a nativetool.StreamAuthority, now time.Time, terminal bool) (nativetool.Operation, error) {
 	s := r.streams[a]
-	if s == nil || !s.expires.After(now) || !terminal && s.terminal {
+	if s == nil || s.cleanupOnly || !s.expires.After(now) || !terminal && s.terminal {
 		return nativetool.Operation{}, nativetool.ErrDenied
 	}
 	op, err := loadNativeOperation(ctx, tx, s.receipt.OperationID())
@@ -380,6 +382,70 @@ func (r *nativeToolRepository) CompleteStreamRPC(ctx context.Context, authority 
 	return err
 }
 
+func (r *nativeToolRepository) FinishObservedRPC(ctx context.Context, receipt nativetool.StartReceipt, physical nativetool.PhysicalFinishInput, logical nativetool.LogicalFinishInput) error {
+	known := logical.Outcome == "completed" && logical.Reason == "completed" || logical.Outcome == "failed" && logical.Reason == "rpc_error"
+	if !known || !nativeTime(logical.ObservedAt) || !nativeTime(physical.ObservedAt) || logical.ObservedAt.After(physical.ObservedAt) || !validNativeTerminal(physical.Outcome, physical.Reason) || physical.Outcome == "uncertain" || physical.Counts != nil && (physical.Counts.BytesIn < 0 || physical.Counts.BytesOut < 0) {
+		return nativetool.ErrInvalid
+	}
+	r.issuerMu.Lock()
+	defer r.issuerMu.Unlock()
+	return r.transaction(ctx, func(ctx context.Context, tx *sql.Tx) error {
+		op, err := loadNativeOperation(ctx, tx, receipt.OperationID())
+		if err != nil {
+			return err
+		}
+		if op.State != "started" || op.CompletedAt != nil {
+			return nativetool.ErrDenied
+		}
+		switch op.Kind {
+		case nativetool.RequestInitialize, nativetool.RequestPing, nativetool.RequestToolsList, nativetool.RequestToolsCall:
+		default:
+			return nativetool.ErrDenied
+		}
+		var method string
+		if err := tx.QueryRowContext(ctx, `SELECT method FROM native_tool_operations WHERE operation_id=?`, op.ID).Scan(&method); err != nil {
+			return err
+		}
+		if method != "POST" {
+			return nativetool.ErrDenied
+		}
+		facts, audit, err := nativeAttemptFacts(ctx, tx, op)
+		if err != nil {
+			return err
+		}
+		if err := r.issuer.Check(receipt, facts); err != nil {
+			return err
+		}
+		if audit.Terminal() || logical.ObservedAt.Before(audit.StartedAt()) {
+			return nativetool.ErrDenied
+		}
+		counts := nativetool.ObservedCounts{}
+		if physical.Counts != nil {
+			counts = *physical.Counts
+		}
+		reason := physical.Reason
+		if physical.Outcome == "completed" {
+			reason = ""
+		}
+		terminal, err := audit.Finish(egressaudit.TerminalInput{Outcome: egressaudit.Outcome(physical.Outcome), ErrorClass: reason, BytesIn: counts.BytesIn, BytesOut: counts.BytesOut, UnobservedByteCounts: physical.Counts == nil, CompletedAt: physical.ObservedAt})
+		if err != nil {
+			return err
+		}
+		if _, err := completeEgressAttempt(ctx, tx, terminal); err != nil {
+			return err
+		}
+		if err := finishNativeLogical(ctx, tx, op, logical); err != nil {
+			return err
+		}
+		var in, out any
+		if physical.Counts != nil {
+			in, out = counts.BytesIn, counts.BytesOut
+		}
+		_, err = tx.ExecContext(ctx, `UPDATE native_tool_operations SET bytes_in=?,bytes_out=? WHERE operation_id=?`, in, out, op.ID)
+		return err
+	})
+}
+
 func (r *nativeToolRepository) ValidateLocalReplay(ctx context.Context, a nativetool.StreamAuthority, now time.Time) error {
 	if !nativeTime(now) {
 		return nativetool.ErrInvalid
@@ -454,6 +520,11 @@ func (r *nativeToolRepository) BindRecoveryGET(ctx context.Context, id nativetoo
 }
 
 func (r *nativeToolRepository) verifyNativeRecovery(ctx context.Context, tx *sql.Tx, op nativetool.Operation, now time.Time) error {
+	for _, stream := range r.streams {
+		if stream.cleanupOnly && stream.receipt.OperationID() == op.ID {
+			return nativetool.ErrDenied
+		}
+	}
 	child, exists := r.recovery[op.ID]
 	if !exists {
 		return nil
@@ -467,9 +538,38 @@ func (r *nativeToolRepository) verifyNativeRecovery(ctx context.Context, tx *sql
 func (r *nativeToolRepository) dropNativeOperation(id nativetool.ID) {
 	for a, s := range r.streams {
 		if s.receipt.OperationID() == id {
-			r.dropNativeStream(a)
+			r.invalidateNativeStream(a)
 		}
 	}
+	if child, ok := r.recovery[id]; ok {
+		r.invalidateNativeStream(child.stream)
+	}
+}
+
+// Cleanup-only entries retain no send, replay or observation authority. One
+// timer per bounded registration backs off until exact durable cleanup wins.
+func (r *nativeToolRepository) invalidateNativeStream(a nativetool.StreamAuthority) {
+	s := r.streams[a]
+	if s == nil {
+		return
+	}
+	s.cleanupOnly = true
+	if s.timer != nil {
+		s.timer.Stop()
+	}
+	if s.retryDelay == 0 {
+		s.retryDelay = 100 * time.Millisecond
+	} else if s.retryDelay < 5*time.Second {
+		s.retryDelay *= 2
+		if s.retryDelay > 5*time.Second {
+			s.retryDelay = 5 * time.Second
+		}
+	}
+	s.timer = time.AfterFunc(s.retryDelay, func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		_ = r.RetireObservedStream(ctx, a, time.Now().UTC())
+	})
 }
 
 func (r *nativeToolRepository) RetireObservedStream(ctx context.Context, a nativetool.StreamAuthority, now time.Time) error {
@@ -482,13 +582,13 @@ func (r *nativeToolRepository) RetireObservedStream(ctx context.Context, a nativ
 	if s == nil {
 		return nil
 	}
-	defer r.dropNativeStream(a)
+	s.cleanupOnly = true
 	err := r.transaction(ctx, func(ctx context.Context, tx *sql.Tx) error {
 		op, err := loadNativeOperation(ctx, tx, s.receipt.OperationID())
 		if err != nil {
 			return err
 		}
-		facts, _, err := nativeAttemptFacts(ctx, tx, op)
+		facts, audit, err := nativeAttemptFacts(ctx, tx, op)
 		if err != nil {
 			return err
 		}
@@ -496,12 +596,28 @@ func (r *nativeToolRepository) RetireObservedStream(ctx context.Context, a nativ
 			return err
 		}
 		if op.CompletedAt != nil {
+			if !audit.Terminal() {
+				// A known RPC terminal can precede an ambiguous physical close.
+				// Finish only that exact audit; never relabel the logical result.
+				terminal, err := audit.Finish(egressaudit.TerminalInput{Outcome: egressaudit.OutcomeFailed, ErrorClass: "transport_failed", UnobservedByteCounts: true, CompletedAt: now})
+				if err != nil {
+					return err
+				}
+				if _, err := completeEgressAttempt(ctx, tx, terminal); err != nil {
+					return err
+				}
+				_, err = tx.ExecContext(ctx, `UPDATE native_tool_operations SET bytes_in=NULL,bytes_out=NULL WHERE operation_id=? AND revision=?`, op.ID, op.Revision)
+				return err
+			}
 			return nil
 		}
 		return finishNative(ctx, tx, op, nativetool.TerminalInput{Outcome: "uncertain", Reason: "execution_uncertain", ObservedAt: now})
 	})
 	if err == nil {
 		delete(r.streamOpened, s.receipt.OperationID())
+		r.dropNativeStream(a)
+	} else {
+		r.invalidateNativeStream(a)
 	}
 	return err
 }

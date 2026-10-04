@@ -41,13 +41,16 @@ type nativeLeaseFixture struct {
 	admission    captureadmission.Admission
 }
 
-func newNativeLeaseFixture(t *testing.T, enabled, shared bool) nativeLeaseFixture {
+func newNativeLeaseFixture(t *testing.T, enabled, shared bool, nativeMode ...environment.ToolPolicyMode) nativeLeaseFixture {
 	t.Helper()
 	ctx := context.Background()
 	store := openTestStore(t, t.TempDir()+"/runtime.db")
 	t.Cleanup(func() { shutdownTestStore(t, store) })
 	environments := newEnvironmentManager(t, store)
 	candidate := environmentFixture(t, "native.lease", 1)
+	if len(nativeMode) > 0 {
+		candidate.PolicySet = &environment.PolicySet{ToolMode: nativeMode[0]}
+	}
 	origin := runtimeProviderOrigin(t, "https://native.example")
 	if shared {
 		origin = runtimeProviderOrigin(t, "https://relay.example")

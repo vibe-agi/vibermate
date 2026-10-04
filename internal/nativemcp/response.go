@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"mime"
 	"net/http"
@@ -340,13 +341,13 @@ func (e *executor) consumeSSE(ctx context.Context, c CapturedRequest, request rp
 				}
 				written, writeErr := w.Write(event.wire)
 				if writeErr != nil {
-					return writeErr
+					return errors.Join(errStreamDelivery, writeErr)
 				}
 				if written != len(event.wire) {
-					return io.ErrShortWrite
+					return errors.Join(errStreamDelivery, io.ErrShortWrite)
 				}
 				if err = flushStream(w); err != nil {
-					return err
+					return errors.Join(errStreamDelivery, err)
 				}
 				if terminal {
 					s.mu.Lock()
@@ -453,6 +454,15 @@ func (e *executor) acceptStreamEvent(ctx context.Context, s *session, stream *st
 		}
 		if err := e.acceptSSEMessage(ctx, stream.operation, request, message, s, stream.binding, terminal); err != nil {
 			return false, err
+		}
+		if *terminal {
+			outcome, reason := "completed", "completed"
+			if request.failure != nil && *request.failure {
+				outcome, reason = "failed", "rpc_error"
+			}
+			s.mu.Lock()
+			stream.knownTerminal = &nativetool.LogicalFinishInput{Outcome: outcome, Reason: reason, ObservedAt: e.dependencies.Clock().UTC()}
+			s.mu.Unlock()
 		}
 	}
 	if !known && event.id != "" {
