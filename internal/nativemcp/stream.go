@@ -201,7 +201,6 @@ func (e *executor) attachStream(c CapturedRequest, s *session, cursor string) (*
 
 func (e *executor) detachStream(s *session, stream *streamRecord) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	stream.attached = false
 	if !stream.observed {
 		stream.retired = true
@@ -214,6 +213,8 @@ func (e *executor) detachStream(s *session, stream *streamRecord) {
 	if s.closed && len(s.active) == 0 {
 		e.clearSession(s)
 	}
+	s.mu.Unlock()
+	e.retireResolvedURLStream(s, stream.operation)
 }
 
 func (e *executor) releaseStreamLocked(s *session, stream *streamRecord) {
@@ -271,6 +272,31 @@ func (e *executor) retireStreamToolLocked(s *session, id nativetool.ID) {
 		s.retained -= 2048
 		e.budget.release(2048)
 	}
+}
+
+// Completion settles a detached no-cursor GET's remaining external workflow.
+// It cannot retire an attached stream, recoverable bytes or another callback.
+func (e *executor) retireResolvedURLStream(s *session, operation nativetool.ID) {
+	s.mu.Lock()
+	stream := s.streams[operation]
+	if stream == nil || stream.binding.Kind() != nativetool.RequestGetStream || !stream.terminal || stream.attached || stream.retired || len(stream.events) != 0 {
+		s.mu.Unlock()
+		return
+	}
+	for _, parent := range s.parents {
+		if parent.operation == operation {
+			s.mu.Unlock()
+			return
+		}
+	}
+	for _, owner := range s.elicitations {
+		if owner == operation {
+			s.mu.Unlock()
+			return
+		}
+	}
+	s.mu.Unlock()
+	e.retireStream(s, stream)
 }
 
 func (e *executor) replayTerminal(ctx context.Context, c CapturedRequest, s *session, stream *streamRecord, ordinal int, w http.ResponseWriter) Terminal {
@@ -363,6 +389,12 @@ func (e *executor) finishStreamAttempt(c CapturedRequest, r rpc, s *session, rec
 	getCallbacks := false
 	for _, parent := range s.parents {
 		if parent.operation == stream.operation && !parent.consumed {
+			getCallbacks = true
+			break
+		}
+	}
+	for _, operation := range s.elicitations {
+		if operation == stream.operation {
 			getCallbacks = true
 			break
 		}

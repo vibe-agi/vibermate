@@ -569,14 +569,16 @@ func (e *executor) acceptSSEMessage(ctx context.Context, operation nativetool.ID
 			return errProtocol
 		}
 		s.mu.Lock()
-		defer s.mu.Unlock()
-		if _, observed := s.elicitations[id]; observed {
+		if operation, observed := s.elicitations[id]; observed {
 			delete(s.elicitations, id)
 			charge := int64(128 + len(id))
 			s.retained -= charge
 			e.budget.release(charge)
+			s.mu.Unlock()
+			e.retireResolvedURLStream(s, operation)
 			return nil
 		}
+		s.mu.Unlock()
 		return errSession
 	default:
 		return errProtocol
