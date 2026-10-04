@@ -435,6 +435,7 @@ func Start(ctx context.Context, options Options) (*Host, error) {
 		Approvals:           runtime.ToolApprovals(),
 		NativeTools:         runtime.NativeToolRepository(),
 		NativePreviews:      runtime.NativeToolPreviews(),
+		NativeContentKey:    runtime.NativeToolContentKey(),
 		Endpoints:           runtime.UpstreamEndpoints(),
 		Models:              models,
 		ClientModels:        modelMetadata,

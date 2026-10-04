@@ -18,6 +18,21 @@ abstract interface class ACPObservationApi {
 }
 
 abstract interface class ControlApi {
+  Future<NativeToolOperationPage> nativeToolOperations(
+    String captureKey, {
+    int afterSequence = 0,
+    int limit = 50,
+  });
+  Future<NativeToolOperation> nativeToolOperation(
+    String captureKey,
+    String operationId,
+  );
+  Future<NativeToolContentPage> nativeToolContent(
+    String captureKey,
+    String operationId,
+    String part, {
+    String? cursor,
+  });
   Future<NativeApprovalPage> nativeApprovals(
     String captureKey, {
     int afterSequence = 0,
@@ -486,6 +501,74 @@ final class ControlProblem implements Exception {
 }
 
 final class HttpControlApi implements ControlApi, ACPObservationApi {
+  @override
+  Future<NativeToolOperationPage> nativeToolOperations(
+    String captureKey, {
+    int afterSequence = 0,
+    int limit = 50,
+  }) async {
+    validateNativeCapture(captureKey);
+    if (afterSequence < 0 || limit < 1 || limit > 199) {
+      throw const ControlContractException('Invalid native operation query');
+    }
+    return NativeToolOperationPage.fromJson(
+      await _readNativePreview(
+        '${_nativeOperationsPath(captureKey)}?afterSequence=$afterSequence&limit=$limit',
+      ),
+      captureKey,
+      afterSequence,
+      limit,
+    );
+  }
+
+  @override
+  Future<NativeToolOperation> nativeToolOperation(
+    String captureKey,
+    String operationId,
+  ) async {
+    nativeHex(operationId, 32);
+    final value = NativeToolOperation.fromJson(
+      await _readNativePreview(
+        '${_nativeOperationsPath(captureKey)}/$operationId',
+      ),
+      captureKey,
+    );
+    if (value.operationId != operationId) {
+      throw const ControlContractException('Native operation mismatch');
+    }
+    return value;
+  }
+
+  @override
+  Future<NativeToolContentPage> nativeToolContent(
+    String captureKey,
+    String operationId,
+    String part, {
+    String? cursor,
+  }) async {
+    nativeHex(operationId, 32);
+    if (part != 'tool_arguments' && part != 'tool_result' ||
+        cursor != null && (cursor.isEmpty || cursor.length > 512)) {
+      throw const ControlContractException('Invalid native content query');
+    }
+    final query = Uri(
+      queryParameters: {'part': part, 'cursor': ?cursor},
+    ).query;
+    return NativeToolContentPage.fromJson(
+      await _readNativePreview(
+        '${_nativeOperationsPath(captureKey)}/$operationId/content?$query',
+      ),
+      captureKey,
+      operationId,
+      part,
+    );
+  }
+
+  String _nativeOperationsPath(String capture) {
+    validateNativeCapture(capture);
+    return '/api/v1/captures/${Uri.encodeComponent(capture)}/native-tools/operations';
+  }
+
   String _nativeApprovalsPath(String captureKey) {
     validateNativeCapture(captureKey);
     return '/api/v1/captures/${Uri.encodeComponent(captureKey)}/native-tools/approvals';

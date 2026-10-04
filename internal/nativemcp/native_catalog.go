@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"strconv"
 	"strings"
 
 	"github.com/vibe-agi/vibermate/internal/environment"
@@ -49,18 +50,47 @@ func (p ContentProfile) valid(contract environment.ClientToolContract, d nativet
 }
 func containsPath(value map[string]json.RawMessage, path string) bool {
 	parts := strings.Split(strings.TrimPrefix(path, "/"), "/")
+	var current json.RawMessage
 	for index, part := range parts {
 		part = strings.ReplaceAll(strings.ReplaceAll(part, "~1", "/"), "~0", "~")
-		raw, present := value[part]
-		if !present {
-			return false
+		var raw json.RawMessage
+		if index == 0 {
+			var present bool
+			raw, present = value[part]
+			if !present {
+				return false
+			}
+		} else {
+			current = bytes.TrimSpace(current)
+			if len(current) == 0 {
+				return false
+			}
+			switch current[0] {
+			case '{':
+				var object map[string]json.RawMessage
+				if json.Unmarshal(current, &object) != nil {
+					return false
+				}
+				var present bool
+				raw, present = object[part]
+				if !present {
+					return false
+				}
+			case '[':
+				elements, valid := contentElements(current)
+				ordinal, err := strconv.Atoi(part)
+				if !valid || err != nil || ordinal < 0 || ordinal >= len(elements) || strconv.Itoa(ordinal) != part {
+					return false
+				}
+				raw = elements[ordinal]
+			default:
+				return false
+			}
 		}
 		if index == len(parts)-1 {
 			return true
 		}
-		if json.Unmarshal(raw, &value) != nil {
-			return false
-		}
+		current = raw
 	}
 	return false
 }
@@ -74,10 +104,64 @@ func retainedContent(raw []byte, paths []string, l Limits) ([]byte, bool) {
 			return nil, false
 		}
 	}
-	if _, present := object["_meta"]; !present {
+	// Arguments are classified business objects. A field named _meta is not
+	// transport metadata here; only exact profile-sensitive paths suppress it.
+	return raw, true
+}
+
+func retainedToolResult(raw []byte, paths []string, l Limits) ([]byte, bool) {
+	if _, safe := retainedContent(raw, paths, l); !safe {
+		return nil, false
+	}
+	object, err := decodeObject(raw, l.ResultBytes, l.Depth)
+	if err != nil {
+		return nil, false
+	}
+	if validateMethodResult(nativetool.RequestToolsCall, rpc{object: map[string]json.RawMessage{"result": raw}}, l) != nil {
+		return nil, false
+	}
+	changed := false
+	if _, ok := object["_meta"]; ok {
+		delete(object, "_meta")
+		changed = true
+	}
+	if elements, ok := contentElements(object["content"]); ok {
+		for i, element := range elements {
+			block, _ := decodeObject(element, l.ResultBytes, l.Depth)
+			blockChanged := false
+			if _, present := block["_meta"]; present {
+				delete(block, "_meta")
+				blockChanged = true
+			}
+			if kind, _ := text(block["type"]); kind == "resource" {
+				resource, _ := decodeObject(block["resource"], l.ResultBytes, l.Depth)
+				if _, present := resource["_meta"]; present {
+					delete(resource, "_meta")
+					block["resource"], err = json.Marshal(resource)
+					if err != nil {
+						return nil, false
+					}
+					blockChanged = true
+				}
+			}
+			if blockChanged {
+				elements[i], err = json.Marshal(block)
+				if err != nil {
+					return nil, false
+				}
+				changed = true
+			}
+		}
+		if changed {
+			object["content"], err = json.Marshal(elements)
+			if err != nil {
+				return nil, false
+			}
+		}
+	}
+	if !changed {
 		return raw, true
 	}
-	delete(object, "_meta")
 	clean, err := json.Marshal(object)
 	return clean, err == nil
 }

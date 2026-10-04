@@ -438,7 +438,7 @@ final class _CaptureRow extends StatelessWidget {
           canRequestFocus: true,
           focusColor: context.viberColors.focus.withValues(alpha: 0.15),
           child: Container(
-            height: 48,
+            height: 8 + 40 * MediaQuery.textScalerOf(context).scale(13) / 13,
             decoration: BoxDecoration(
               border: Border(
                 left: BorderSide(

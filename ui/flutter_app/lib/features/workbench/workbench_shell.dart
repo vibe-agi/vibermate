@@ -269,9 +269,13 @@ final class _TitleBar extends StatelessWidget {
             children: [
               const _ViberMark(),
               const SizedBox(width: ViberSpacing.md),
-              Text(
-                copy('app.name'),
-                style: Theme.of(context).textTheme.titleMedium,
+              Flexible(
+                child: Text(
+                  copy('app.name'),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(context).textTheme.titleMedium,
+                ),
               ),
               if (!compact) ...[
                 const SizedBox(width: ViberSpacing.md),

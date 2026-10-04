@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:collection';
+import 'dart:convert';
 import 'dart:math';
 
 import 'package:flutter/foundation.dart';
@@ -291,6 +292,274 @@ final class WorkbenchController extends ChangeNotifier
   NetworkData? networkData;
   List<ApprovalRecord>? pendingApprovals;
   List<NativeApproval> nativeApprovals = const [];
+  List<NativeToolOperation> nativeOperations = const [];
+  bool nativeOperationsLoading = false, nativeOperationsComplete = false;
+  String? nativeOperationsError;
+  bool _nativeReaderVisible = false;
+  int _nativeReaderEpoch = 0, _nativeOperationSequence = 0;
+  final _nativeOperationGenerations = <String, int>{};
+  final _nativeContentLoads = <String, Future<List<NativeRecordedBlock>>>{};
+  final _nativeContentCache = <String, List<NativeRecordedBlock>>{};
+  int _nativeCacheBytes = 0;
+  int get nativeReaderGeneration => _nativeReaderEpoch;
+
+  void setNativeReaderVisible(bool visible) {
+    if (_nativeReaderVisible == visible) {
+      return;
+    }
+    _nativeReaderVisible = visible;
+    if (visible) {
+      unawaited(refreshNativeTools());
+    } else {
+      _discardNativeReader();
+    }
+  }
+
+  void _discardNativeReader() {
+    _nativeReaderEpoch++;
+    _nativeOperationSequence = 0;
+    nativeOperations = const [];
+    nativeOperationsLoading = false;
+    nativeOperationsComplete = false;
+    nativeOperationsError = null;
+    _nativeOperationGenerations.clear();
+    _nativeContentLoads.clear();
+    _nativeContentCache.clear();
+    _nativeCacheBytes = 0;
+  }
+
+  void invalidateNativeInspector(String operation) {
+    _nativeOperationGenerations[operation] =
+        (_nativeOperationGenerations[operation] ?? 0) + 1;
+    final marker = '/$operation/';
+    _nativeContentLoads.removeWhere((key, _) => key.contains(marker));
+    for (final key
+        in _nativeContentCache.keys
+            .where((key) => key.contains(marker))
+            .toList()) {
+      final removed = _nativeContentCache.remove(key)!;
+      _nativeCacheBytes -= removed.fold<int>(0, (n, b) => n + b.byteSize);
+    }
+  }
+
+  Future<void> refreshNativeTools() async {
+    final capture = selectedCaptureKey;
+    if (_disposed ||
+        !_nativeReaderVisible ||
+        capture == null ||
+        nativeOperationsLoading) {
+      return;
+    }
+    final epoch = _nativeReaderEpoch;
+    nativeOperationsLoading = true;
+    bool current() =>
+        !_disposed &&
+        _nativeReaderVisible &&
+        epoch == _nativeReaderEpoch &&
+        capture == selectedCaptureKey;
+    try {
+      final previousComplete = nativeOperationsComplete;
+      final page = await _api.nativeToolOperations(
+        capture,
+        afterSequence: _nativeOperationSequence,
+      );
+      if (!current()) {
+        return;
+      }
+      final operations = {
+        for (final op in nativeOperations) op.operationId: op,
+      };
+      var changed = false;
+      for (final op in page.items) {
+        final old = operations[op.operationId];
+        if (old == null ||
+            old.revision != op.revision ||
+            old.arguments.digest != op.arguments.digest ||
+            old.result.digest != op.result.digest ||
+            old.arguments.state != op.arguments.state ||
+            old.result.state != op.result.state) {
+          invalidateNativeInspector(op.operationId);
+          operations[op.operationId] = op;
+          changed = true;
+        }
+      }
+      // Revalidate known IDs even at the terminal event cursor: retention and
+      // deletion are not new execution events and must still remove bodies.
+      for (final id in operations.keys.toList()) {
+        try {
+          final op = await _api.nativeToolOperation(capture, id);
+          if (!current()) {
+            return;
+          }
+          final old = operations[id]!;
+          if (old.revision != op.revision ||
+              old.arguments.digest != op.arguments.digest ||
+              old.result.digest != op.result.digest ||
+              old.arguments.state != op.arguments.state ||
+              old.result.state != op.result.state) {
+            invalidateNativeInspector(id);
+            operations[id] = op;
+            changed = true;
+          }
+        } on ControlProblem catch (error) {
+          if (!current()) {
+            return;
+          }
+          if (error.status == 404) {
+            invalidateNativeInspector(id);
+            operations.remove(id);
+            changed = true;
+          } else {
+            rethrow;
+          }
+        }
+      }
+      if (!current()) {
+        return;
+      }
+      nativeOperationsComplete = page.nextSequence == _nativeOperationSequence;
+      _nativeOperationSequence = page.nextSequence;
+      nativeOperations = List.unmodifiable(
+        operations.values.toList()
+          ..sort((a, b) => a.createdAt.compareTo(b.createdAt)),
+      );
+      final hadError = nativeOperationsError != null;
+      nativeOperationsError = null;
+      if (changed || hadError || previousComplete != nativeOperationsComplete) {
+        notifyListeners();
+      }
+    } on Object catch (error) {
+      if (current()) {
+        nativeOperationsError = _describeError(error);
+        notifyListeners();
+      }
+    } finally {
+      if (current()) {
+        nativeOperationsLoading = false;
+      }
+    }
+  }
+
+  Future<List<NativeRecordedBlock>> loadNativeToolContent(
+    NativeToolOperation op,
+    String part,
+  ) {
+    final descriptor = op.part(part);
+    if (_disposed ||
+        !_nativeReaderVisible ||
+        op.captureKey != selectedCaptureKey ||
+        descriptor.state != 'available' ||
+        descriptor.digest == null) {
+      return Future.error(
+        const ControlContractException('Native content unavailable'),
+      );
+    }
+    final epoch = _nativeReaderEpoch,
+        generation = _nativeOperationGenerations[op.operationId] ?? 0;
+    final key =
+        '$epoch/${op.captureKey}/${op.operationId}/$part/${descriptor.digest}/$generation';
+    final cached = _nativeContentCache.remove(key);
+    if (cached != null) {
+      _nativeContentCache[key] = cached;
+      return Future.value(cached);
+    }
+    final active = _nativeContentLoads[key];
+    if (active != null) {
+      return active;
+    }
+    bool current() =>
+        !_disposed &&
+        _nativeReaderVisible &&
+        epoch == _nativeReaderEpoch &&
+        op.captureKey == selectedCaptureKey &&
+        generation == (_nativeOperationGenerations[op.operationId] ?? 0);
+    final future = () async {
+      final blocks = <NativeRecordedBlock>[];
+      final seen = <String>{};
+      String? cursor;
+      String? kind, mime;
+      int total = 0, offset = 0, budget = 0;
+      var chunks = <String>[];
+      do {
+        final page = await _api.nativeToolContent(
+          op.captureKey,
+          op.operationId,
+          part,
+          cursor: cursor,
+        );
+        if (!current() || page.bodyDigest != descriptor.digest) {
+          throw const ControlContractException('Native content changed');
+        }
+        for (final block in page.blocks) {
+          if (kind == null) {
+            if (block.offset != 0) {
+              throw const ControlContractException('Missing native fragment');
+            }
+            kind = block.kind;
+            mime = block.mimeType;
+            total = block.total;
+            offset = 0;
+          }
+          if (kind != block.kind ||
+              mime != block.mimeType ||
+              total != block.total ||
+              offset != block.offset) {
+            throw const ControlContractException('Native fragment changed');
+          }
+          final length = utf8.encode(block.value).length;
+          budget += length;
+          if (budget > 16 << 20) {
+            throw const ControlContractException('Native reassembly limit');
+          }
+          offset += length;
+          chunks.add(block.value);
+          if (block.complete) {
+            blocks.add(NativeRecordedBlock(kind, chunks.join(), mime));
+            kind = null;
+            chunks = [];
+          }
+        }
+        cursor = page.nextCursor;
+        if (cursor != null && !seen.add(cursor)) {
+          throw const ControlContractException('Repeated native cursor');
+        }
+      } while (cursor != null);
+      if (kind != null || !current()) {
+        throw const ControlContractException('Incomplete native content');
+      }
+      final result = List<NativeRecordedBlock>.unmodifiable(blocks);
+      final size = result.fold<int>(0, (n, b) => n + b.byteSize);
+      if (result.isNotEmpty && size > 0 && size <= 4 << 20) {
+        while (_nativeContentCache.length >= 32 ||
+            _nativeCacheBytes + size > 4 << 20) {
+          final oldest = _nativeContentCache.remove(
+            _nativeContentCache.keys.first,
+          )!;
+          _nativeCacheBytes -= oldest.fold<int>(0, (n, b) => n + b.byteSize);
+        }
+        _nativeContentCache[key] = result;
+        _nativeCacheBytes += size;
+      }
+      return result;
+    }();
+    _nativeContentLoads[key] = future;
+    unawaited(
+      future.then<void>(
+        (_) {
+          if (identical(_nativeContentLoads[key], future)) {
+            _nativeContentLoads.remove(key);
+          }
+        },
+        onError: (Object _, StackTrace _) {
+          if (identical(_nativeContentLoads[key], future)) {
+            _nativeContentLoads.remove(key);
+          }
+        },
+      ),
+    );
+    return future;
+  }
+
   bool nativeApprovalScanComplete = false;
   bool nativeApprovalsLoading = false;
   String? nativeApprovalError;
@@ -1232,6 +1501,7 @@ final class WorkbenchController extends ChangeNotifier
         await refreshPendingApprovals(quiet: true);
       }
       final capture = selectedCapture;
+      await refreshNativeTools();
       if (section == WorkbenchSection.captures &&
           capture != null &&
           !_evidencePollInFlight &&
@@ -1489,6 +1759,9 @@ final class WorkbenchController extends ChangeNotifier
         throw const ControlContractException('storage cleanup is unavailable');
       }
       storageCleanupNotice = 'settings.storage.cleanup_complete';
+      if (outcome.deleted) {
+        _discardNativeReader();
+      }
       await refreshStorageLocation();
       return outcome;
     } catch (error) {
@@ -3096,6 +3369,7 @@ final class WorkbenchController extends ChangeNotifier
   }
 
   void _resetCaptureDetail() {
+    _discardNativeReader();
     _discardNativeApprovals();
     _selectionGeneration += 1;
     selectedAssignment = null;
@@ -3114,6 +3388,7 @@ final class WorkbenchController extends ChangeNotifier
   }
 
   void _invalidateEvidenceCaches() {
+    _discardNativeReader();
     _discardNativeApprovals();
     _exchangeLoadGeneration += 1;
     _exchangeDetails.clear();

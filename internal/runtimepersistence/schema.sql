@@ -1,5 +1,5 @@
--- Prepared revision-2 bootstrap. Inactive until the reviewed migration switch.
--- The migration runner owns revision publication; active Store remains revision 1.
+-- Current revision-2 bootstrap. The migration runner owns revision publication.
+-- Column order matches the frozen revision-1 plus revision-2 migration.
 CREATE TABLE runtime_metadata(
   singleton INTEGER PRIMARY KEY NOT NULL CHECK(singleton = 1),
   schema_identity TEXT NOT NULL CHECK(schema_identity = 'vibermate-runtime'),
@@ -561,8 +561,6 @@ CREATE TABLE "runtime_connection_events"(
   CHECK(length(CAST(client_endpoint_id AS BLOB)) <= 128),
   client_endpoint_revision INTEGER NOT NULL DEFAULT 0
   CHECK(client_endpoint_revision BETWEEN 0 AND 9223372036854775807),
-  inspection_purpose TEXT NOT NULL DEFAULT ''
-  CHECK(inspection_purpose IN('', 'client_tools')),
   requested_host TEXT NOT NULL
   CHECK(length(CAST(requested_host AS BLOB)) BETWEEN 1 AND 1024),
   observed_sni TEXT NOT NULL DEFAULT ''
@@ -610,7 +608,7 @@ CREATE TABLE "runtime_connection_events"(
   CHECK(outcome IN('', 'completed', 'denied', 'canceled', 'failed')),
   error_class TEXT NOT NULL DEFAULT ''
   CHECK(length(CAST(error_class AS BLOB)) <= 512)
-) STRICT;
+  , inspection_purpose TEXT NOT NULL DEFAULT '' CHECK(inspection_purpose IN('', 'client_tools'))) STRICT;
 CREATE TABLE runtime_egress_attempts(
   sequence INTEGER PRIMARY KEY AUTOINCREMENT,
   attempt_id TEXT NOT NULL UNIQUE

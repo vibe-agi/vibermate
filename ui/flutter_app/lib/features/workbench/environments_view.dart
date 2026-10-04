@@ -105,7 +105,12 @@ final class _EnvironmentsViewState extends State<EnvironmentsView> {
               if (compact) {
                 return Column(
                   children: [
-                    SizedBox(height: 116, child: directory),
+                    SizedBox(
+                      height:
+                          36 +
+                          80 * MediaQuery.textScalerOf(context).scale(13) / 13,
+                      child: directory,
+                    ),
                     const Divider(height: 1),
                     Expanded(child: detail),
                   ],
@@ -217,7 +222,12 @@ final class _EnvironmentDirectory extends StatelessWidget {
                 onTap: () => onSelected(environment.id),
                 child: Container(
                   width: horizontal ? 188 : null,
-                  height: horizontal ? null : 55,
+                  height: horizontal
+                      ? null
+                      : 16 +
+                            39 *
+                                MediaQuery.textScalerOf(context).scale(13) /
+                                13,
                   margin: horizontal
                       ? const EdgeInsets.only(right: 7)
                       : EdgeInsets.zero,
@@ -645,9 +655,11 @@ final class _ClientEndpointPlan extends StatelessWidget {
                     ],
                   ),
                 ),
-                Text(
-                  copy('environment.client_target'),
-                  style: Theme.of(context).textTheme.labelMedium,
+                Flexible(
+                  child: Text(
+                    copy('environment.client_target'),
+                    style: Theme.of(context).textTheme.labelMedium,
+                  ),
                 ),
               ],
             ),

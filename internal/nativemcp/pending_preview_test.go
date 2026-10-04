@@ -185,14 +185,14 @@ func TestPendingPreviewFrozenOffAndLifecycle(t *testing.T) {
 				f.executor.(*executor).dependencies.ContentProfiles = syntheticProfiles{argumentPaths: []string{"/proof"}}
 			}
 			f.handshake(t)
-			args := `{"path":"frozen.txt","_meta":{"private":"meta-sentinel"}}`
+			args := `{"path":"frozen.txt"}`
 			if classification == "sensitive" {
 				args = `{"path":"a","proof":"proof-sentinel"}`
 			}
 			if classification == "large" {
 				args = `{"path":"` + strings.Repeat("x", 70<<10) + `"}`
 			}
-			c := f.captured(t, "POST", `{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"read_file","arguments":`+args+`}}`, "synthetic-session")
+			c := f.captured(t, "POST", `{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"read_file","arguments":`+args+`,"_meta":{"private":"meta-sentinel"}}}`, "synthetic-session")
 			results := make(chan Terminal, 1)
 			go func() { results <- f.executor.Serve(context.Background(), c, httptest.NewRecorder()) }()
 			a := waitNativeQuestion(t, f, c.id)

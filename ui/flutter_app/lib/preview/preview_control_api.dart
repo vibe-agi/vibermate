@@ -12,6 +12,24 @@ import '../core/api/runtime_storage.dart';
 
 final class PreviewControlApi implements ControlApi {
   @override
+  Future<NativeToolOperationPage> nativeToolOperations(
+    String captureKey, {
+    int afterSequence = 0,
+    int limit = 50,
+  }) async => NativeToolOperationPage(const [], afterSequence);
+  @override
+  Future<NativeToolOperation> nativeToolOperation(
+    String captureKey,
+    String operationId,
+  ) => throw UnsupportedError('No native operation in preview');
+  @override
+  Future<NativeToolContentPage> nativeToolContent(
+    String captureKey,
+    String operationId,
+    String part, {
+    String? cursor,
+  }) => throw UnsupportedError('No native content in preview');
+  @override
   Future<NativeApprovalPage> nativeApprovals(
     String captureKey, {
     int afterSequence = 0,

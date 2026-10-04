@@ -6,6 +6,7 @@ import (
 	"crypto/ecdsa"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"path/filepath"
@@ -83,6 +84,7 @@ type Runtime struct {
 	runtimeUsers       *runtimeuser.Manager
 	approvals          approvalRuntime
 	nativeTools        nativemcp.Executor
+	nativeContentKey   [32]byte
 	connectionRules    *connectionpolicy.Manager
 	monitor            ownedComponent
 	rawEvidence        rawEvidenceRuntime
@@ -242,6 +244,10 @@ func startWithBuilders(
 	}
 
 	securityRandom := newSynchronizedReader(options.SecurityRandom)
+	var nativeContentKey [32]byte
+	if _, err := io.ReadFull(securityRandom, nativeContentKey[:]); err != nil {
+		return fail("native content cursor key", err)
+	}
 	clientAnnotations, err := clientannotation.Open(ctx, options.Secrets, securityRandom)
 	if err != nil {
 		return fail("client annotation signing", err)
@@ -827,6 +833,7 @@ func startWithBuilders(
 		runtimeUsers:       runtimeUsers,
 		approvals:          approvals,
 		nativeTools:        nativeTools,
+		nativeContentKey:   nativeContentKey,
 		connectionRules:    connectionRules,
 		monitor:            monitor,
 		rawEvidence:        rawEvidence,
@@ -1064,6 +1071,7 @@ func (r *Runtime) NativeToolRepository() nativetool.Repository {
 	return r.storage.NativeToolRepository()
 }
 func (r *Runtime) NativeToolPreviews() nativemcp.Executor { return r.nativeTools }
+func (r *Runtime) NativeToolContentKey() [32]byte         { return r.nativeContentKey }
 
 // ToolApprovals returns the durable interactive tool decision authority used
 // by the Exchange pipeline.

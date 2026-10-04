@@ -8,6 +8,7 @@ import '../../core/design/workbench_widgets.dart';
 import '../../core/i18n/app_copy.dart';
 import 'usage_dashboard_view.dart';
 import 'workbench_controller.dart';
+import 'native_tool_reader.dart';
 
 /// Request evidence and optional usage have independent retention. Both use the
 /// same explicit launch/session scope, but their totals are never conflated.
@@ -135,6 +136,7 @@ final class _CaptureRequestOverviewState extends State<CaptureRequestOverview>
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
+          NativeToolReader(controller: widget.controller, copy: copy),
           Wrap(
             spacing: 12,
             runSpacing: 8,

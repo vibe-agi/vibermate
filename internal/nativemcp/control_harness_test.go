@@ -2,6 +2,7 @@ package nativemcp
 
 import (
 	"context"
+	"database/sql"
 	"github.com/vibe-agi/vibermate/internal/captureidentity"
 	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/manualcapture"
@@ -161,6 +162,44 @@ func ExerciseNativeToolControl(t *testing.T, check func(Executor, *runtimepersis
 
 func ExerciseNativeExpiredControl(t *testing.T, check func(Executor, *runtimepersistence.Store, manualcapture.Controller, captureidentity.Reference, nativetool.Approval)) {
 	exerciseNativeRejectedControl(t, true, check)
+}
+
+// Real executor -> native repository bridge, intentionally test-only.
+func ExerciseNativeRecordedControl(t *testing.T, recording environment.ContentRecordingPolicy, result string, check func(*runtimepersistence.Store, manualcapture.Controller, captureidentity.Reference, nativetool.Operation), mutate ...func(*sql.DB, nativetool.Operation)) {
+	exerciseNativeRecordedControl(t, recording, result, true, check, mutate...)
+}
+func ExerciseNativeUnknownRecordedControl(t *testing.T, recording environment.ContentRecordingPolicy, result string, check func(*runtimepersistence.Store, manualcapture.Controller, captureidentity.Reference, nativetool.Operation), mutate ...func(*sql.DB, nativetool.Operation)) {
+	exerciseNativeRecordedControl(t, recording, result, false, check, mutate...)
+}
+func exerciseNativeRecordedControl(t *testing.T, recording environment.ContentRecordingPolicy, result string, known bool, check func(*runtimepersistence.Store, manualcapture.Controller, captureidentity.Reference, nativetool.Operation), mutate ...func(*sql.DB, nativetool.Operation)) {
+	t.Helper()
+	f := newNativeFixtureMode(t, environment.ToolPolicyObserve, recording)
+	if known {
+		f.executor.(*executor).dependencies.ContentProfiles = syntheticProfiles{}
+	}
+	f.handshake(t)
+	manuals, err := manualcapture.NewManager(context.Background(), manualcapture.DefaultOptions(f.store.ManualCaptureRepository()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manuals.Shutdown(context.Background())
+	f.transport.handler = func(r *http.Request, body []byte) (*http.Response, error) {
+		return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(`{"jsonrpc":"2.0","id":3,"result":` + result + `}`))}, nil
+	}
+	call := f.captured(t, "POST", `{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"read_file","arguments":{"path":"frozen.txt"},"_meta":{"private":"metadata-sentinel"}}}`, "synthetic-session")
+	terminal := f.executor.Serve(context.Background(), call, httptest.NewRecorder())
+	if terminal.Outcome != OutcomeCompleted {
+		t.Fatalf("recorded terminal %+v", terminal)
+	}
+	op, err := f.store.NativeToolRepository().Get(context.Background(), call.id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, change := range mutate {
+		change(f.db, op)
+	}
+	check(f.store, manuals, f.capture, op)
+	assertNoSensitiveRows(t, f, []string{"metadata-sentinel", "synthetic-original-login"})
 }
 
 func ExerciseNativeUnavailableControl(t *testing.T, check func(Executor, *runtimepersistence.Store, manualcapture.Controller, captureidentity.Reference, nativetool.Approval)) {

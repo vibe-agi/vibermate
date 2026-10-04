@@ -5,6 +5,7 @@ package desktopcontrol
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
@@ -154,6 +155,7 @@ type ConversationIndexer interface {
 }
 
 type Options struct {
+	NativeContentKey    [32]byte
 	NativeTools         nativetool.Repository
 	NativePreviews      PendingPreviewReader
 	LaunchSnapshots     *launchsnapshot.Store
@@ -196,6 +198,7 @@ type Options struct {
 }
 
 type Handler struct {
+	nativeContentKey    [32]byte
 	nativeTools         nativetool.Repository
 	nativePreviews      PendingPreviewReader
 	launchSnapshots     *launchsnapshot.Store
@@ -257,6 +260,11 @@ type ApprovalDecisionInput struct {
 }
 
 func New(options Options) (*Handler, error) {
+	if options.NativeContentKey == ([32]byte{}) {
+		if _, err := rand.Read(options.NativeContentKey[:]); err != nil {
+			return nil, err
+		}
+	}
 	if options.Readiness == nil ||
 		options.Status == nil ||
 		options.Environments == nil ||
@@ -273,6 +281,7 @@ func New(options Options) (*Handler, error) {
 		return nil, errors.New("Desktop control dependencies are incomplete")
 	}
 	handler := &Handler{
+		nativeContentKey:    options.NativeContentKey,
 		launchSnapshots:     options.LaunchSnapshots,
 		storage:             options.Storage,
 		acp:                 options.ACP,
@@ -478,6 +487,9 @@ func New(options Options) (*Handler, error) {
 	handler.mux.HandleFunc("GET /api/v1/captures", handler.listCaptures)
 	handler.mux.HandleFunc("GET /api/v1/captures/{captureKey}", handler.getCapture)
 	handler.mux.HandleFunc("GET /api/v1/captures/{captureKey}/native-tools/approvals", handler.listNativeApprovals)
+	handler.mux.HandleFunc("GET /api/v1/captures/{captureKey}/native-tools/operations", handler.listNativeOperations)
+	handler.mux.HandleFunc("GET /api/v1/captures/{captureKey}/native-tools/operations/{operationId}", handler.getNativeOperation)
+	handler.mux.HandleFunc("GET /api/v1/captures/{captureKey}/native-tools/operations/{operationId}/content", handler.getNativeContent)
 	handler.mux.HandleFunc("GET /api/v1/captures/{captureKey}/native-tools/approvals/{approvalId}", handler.getNativeApproval)
 	handler.mux.HandleFunc("POST /api/v1/captures/{captureKey}/native-tools/approvals/{approvalId}/actions/decide", handler.decideNativeApproval)
 	handler.mux.HandleFunc("GET /api/v1/captures/{captureKey}/environment-assignment", handler.getCaptureEnvironmentAssignment)
