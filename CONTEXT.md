@@ -257,6 +257,18 @@ _Avoid_: Conversation, request
 One captured client request and its terminal downstream outcome, together with routing and evidence. An Exchange is the evidence boundary from which a Turn is presented.
 _Avoid_: Conversation, Session
 
+**Native Tool Operation**:
+One native tool-protocol request with its own frozen Capture, Environment, original-client authority, decision and outcome. It is not a model Exchange; receiving its result after reconnection does not create a second execution.
+_Avoid_: Agent API Call, model request, connection
+
+**Native Tool Attempt**:
+The single authorized outbound send and physical network audit owned by one Native Tool Operation. A recovery GET has its own attempt; it never reuses the original tool call's send permission or rewrites that attempt's finished audit.
+_Avoid_: Tool retry, renewed approval, logical completion
+
+**Native Tool Stream**:
+An ordered server-message channel owned by one authenticated native protocol session and originating Native Tool Operation, which may continue over separately authorized GET attempts. Its event cursor identifies continuation within that stream, never permission to execute a tool or replay another stream.
+_Avoid_: Capture, Conversation, HTTP connection, session-wide event cache
+
 **Agent API Call**:
 One terminal Exchange counted once by the Usage report, regardless of retries or conversation-body retention. This count does not claim a user-visible Turn; one Turn may produce multiple Agent API Calls. Opaque forwarded connections and ACP Prompts do not establish Agent API Calls.
 _Avoid_: Turn, billing event
