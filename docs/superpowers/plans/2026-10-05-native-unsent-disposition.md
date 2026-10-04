@@ -98,6 +98,6 @@ env DEVELOPER_DIR=/Library/Developer/CommandLineTools GOFLAGS=-mod=readonly go t
 git diff --check
 ```
 
-Run named RED/GREEN/fault/race selections separately; report zero-selected cases and timeouts honestly. Main fully read and adopted both diagnostic addenda and the independent design before this plan. Task1 is authorized next with the existing uncommitted tests; Task2 waits for its review and any explicitly required kind-specific ruling. Existing upstream-continuation Task1 remains queued behind these no-send/lifecycle gates.
+Run named RED/GREEN/fault/race selections separately; report zero-selected cases and timeouts honestly. Main fully read and adopted both diagnostic addenda and the independent design before this plan. Task1 is independently complete at e83cfac; Task2 is now authorized with the concrete routing above and must return for any demonstrated new kind-specific authority/lifecycle contract. Existing upstream-continuation Task1 remains queued behind these no-send/lifecycle gates.
 
 Self-review: both identically proved GET and tools/call failures included; first-claim evidence is not conflated with mere non-entry or same-Store authority; cleanup acknowledges commit uncertainty explicitly; other supported lifecycles remain required rather than silently excluded; no automatic resend or weakened current checks; actual-client evidence, all46 and every final gate retained.
