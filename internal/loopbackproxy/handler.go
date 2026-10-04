@@ -944,7 +944,10 @@ func (handler *Handler) serveInner(
 			return
 		}
 		auth := strings.TrimSpace(request.Header.Get("Authorization"))
-		if (auth == "" && strings.TrimSpace(request.Header.Get("Cookie")) == "") || auth == "Bearer vibermate-local-proxy" || auth == "vibermate-local-proxy" {
+		authParts := strings.Fields(auth)
+		placeholder := auth == "vibermate-local-proxy" ||
+			(len(authParts) == 2 && strings.EqualFold(authParts[0], "Bearer") && authParts[1] == "vibermate-local-proxy")
+		if (auth == "" && strings.TrimSpace(request.Header.Get("Cookie")) == "") || placeholder {
 			reason = "original_login_unavailable"
 			writeReason(writer, http.StatusForbidden, ReasonCaptureAdmissionRejected, "")
 			return

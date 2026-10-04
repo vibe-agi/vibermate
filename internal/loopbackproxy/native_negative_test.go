@@ -1,7 +1,9 @@
 package loopbackproxy_test
 
 import (
+	"bufio"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -32,6 +34,11 @@ func TestNativeHandlerRejectsUnprovenTargetsWithoutObservationLeaks(t *testing.T
 		{name: "missing_executor", method: "POST", path: environment.ClientToolMCPPath, status: 403, missing: true},
 		{name: "missing_login", method: "POST", path: environment.ClientToolMCPPath, auth: "none", status: 403},
 		{name: "model_placeholder", method: "POST", path: environment.ClientToolMCPPath, auth: "Bearer vibermate-local-proxy", status: 403},
+		{name: "model_placeholder_lower", method: "POST", path: environment.ClientToolMCPPath, auth: "bearer vibermate-local-proxy", body: nativePlaceholderInitialize, status: 403},
+		{name: "model_placeholder_upper", method: "POST", path: environment.ClientToolMCPPath, auth: "BEARER vibermate-local-proxy", body: nativePlaceholderInitialize, status: 403},
+		{name: "model_placeholder_mixed", method: "POST", path: environment.ClientToolMCPPath, auth: "bEaReR vibermate-local-proxy", body: nativePlaceholderInitialize, status: 403},
+		{name: "model_placeholder_spaces", method: "POST", path: environment.ClientToolMCPPath, auth: "Bearer  vibermate-local-proxy", body: nativePlaceholderInitialize, status: 403},
+		{name: "model_placeholder_tab", method: "POST", path: environment.ClientToolMCPPath, auth: "Bearer\tvibermate-local-proxy", body: nativePlaceholderInitialize, status: 403},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ring := loopbackproxy.NewTargetObservationRing(time.Now)
@@ -72,6 +79,9 @@ func TestNativeHandlerRejectsUnprovenTargetsWithoutObservationLeaks(t *testing.T
 			if f.transport.sends() != 0 {
 				t.Fatal("rejected request reached outbound")
 			}
+			if strings.HasPrefix(tc.name, "model_placeholder") && f.ids.value.Load() != 0 {
+				t.Fatal("known model placeholder allocated a native operation ID")
+			}
 			deadline := time.Now().Add(time.Second)
 			for len(ring.Observations()) == 0 && time.Now().Before(deadline) {
 				time.Sleep(time.Millisecond)
@@ -95,6 +105,53 @@ func TestNativeHandlerRejectsUnprovenTargetsWithoutObservationLeaks(t *testing.T
 				if err := f.db.QueryRow(`SELECT count(*) FROM ` + table).Scan(&count); err != nil || count != 0 {
 					t.Fatalf("rejected payload retained %s %d %v", table, count, err)
 				}
+			}
+		})
+	}
+}
+
+const nativePlaceholderInitialize = `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"codex-mcp-client","version":"0.160.0"}}}`
+
+func TestNativePlaceholderDeniedBeforeBodyReadAndIDAllocation(t *testing.T) {
+	for _, auth := range []string{"bearer vibermate-local-proxy", "BEARER vibermate-local-proxy", "bEaReR  vibermate-local-proxy", "Bearer\tvibermate-local-proxy"} {
+		t.Run(auth, func(t *testing.T) {
+			f := newNativeFixture(t, environment.ContentRecordingPolicy{Mode: environment.ContentRecordingOff})
+			secured := f.proxy.ConnectTLS(t, f.credential, "native.example:443", "native.example")
+			defer secured.Close()
+			_ = secured.SetDeadline(time.Now().Add(time.Second))
+			// Send headers only. A native body read would emit100 Continue before
+			// this unsent valid initialize body, making the boundary observable.
+			if _, err := fmt.Fprintf(secured, "POST /backend-api/ps/mcp HTTP/1.1\r\nHost: native.example:443\r\nAuthorization: %s\r\nContent-Type: application/json\r\nAccept: application/json, text/event-stream\r\nContent-Length: %d\r\nExpect: 100-continue\r\n\r\n", auth, len(nativePlaceholderInitialize)); err != nil {
+				t.Fatal(err)
+			}
+			response, err := http.ReadResponse(bufio.NewReader(secured), &http.Request{Method: "POST"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			_ = response.Body.Close()
+			if response.StatusCode != 403 || f.ids.value.Load() != 0 || f.transport.sends() != 0 {
+				t.Fatalf("denial status%d nativeIDs%d sends%d", response.StatusCode, f.ids.value.Load(), f.transport.sends())
+			}
+		})
+	}
+}
+
+func TestNativeOriginalBearerCredentialComparisonIsExact(t *testing.T) {
+	for _, auth := range []string{"Bearer VIBERMATE-LOCAL-PROXY", "Bearer vibermate-local-proxy-legitimate", "bEaReR synthetic-original-login"} {
+		t.Run(auth, func(t *testing.T) {
+			f := newNativeFixture(t, environment.ContentRecordingPolicy{Mode: environment.ContentRecordingOff})
+			f.transport.before = func(request *http.Request) {
+				if request.Header.Get("Authorization") != auth {
+					t.Error("original credential was rewritten")
+				}
+			}
+			secured := f.proxy.ConnectTLS(t, f.credential, "native.example:443", "native.example")
+			defer secured.Close()
+			response := writeInnerRequest(t, secured, &http.Request{Method: "POST", URL: mustURL(t, environment.ClientToolMCPPath), Host: "native.example:443", Header: http.Header{"Authorization": {auth}, "Content-Type": {"application/json"}, "Accept": {"application/json, text/event-stream"}}, Body: io.NopCloser(strings.NewReader(nativePlaceholderInitialize)), ContentLength: int64(len(nativePlaceholderInitialize))})
+			_, _ = io.ReadAll(response.Body)
+			_ = response.Body.Close()
+			if response.StatusCode != 200 || f.transport.sends() != 1 {
+				t.Fatalf("original auth status%d sends%d", response.StatusCode, f.transport.sends())
 			}
 		})
 	}

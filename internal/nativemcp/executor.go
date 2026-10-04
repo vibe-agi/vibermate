@@ -820,10 +820,23 @@ func (e *executor) readBounded(reader io.Reader, maximum int64) ([]byte, func(),
 		emptyReads = 0
 	}
 	var extra [1]byte
-	n, err := reader.Read(extra[:])
-	if n != 0 || err != io.EOF {
-		e.budget.release(maximum)
-		return nil, func() {}, errIncomingBodyTooLarge
+	for {
+		n, err := reader.Read(extra[:])
+		if n > 0 {
+			e.budget.release(maximum)
+			return nil, func() {}, errIncomingBodyTooLarge
+		}
+		if err == io.EOF {
+			return buffer, func() { e.budget.release(maximum) }, nil
+		}
+		if err != nil {
+			e.budget.release(maximum)
+			return nil, func() {}, err
+		}
+		emptyReads++
+		if emptyReads >= 100 {
+			e.budget.release(maximum)
+			return nil, func() {}, io.ErrNoProgress
+		}
 	}
-	return buffer, func() { e.budget.release(maximum) }, nil
 }
