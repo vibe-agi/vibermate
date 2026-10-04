@@ -33,6 +33,7 @@ Adopt the typed composition seam plus fixed tagged adapter. Reject a permissive 
 - Create paired `cmd/vibermate-acceptance/native_mcp_profiles_synthetic.go` / `native_mcp_profiles_disabled.go` and tagged/untagged tests.
 - Modify `cmd/vibermate-acceptance/native_mcp{,_fixture,_execution,_management,_provenance}.go` only for classification composition, precise prerequisites and evidence. Add focused tests beside these consumers.
 - Add Runtime composition coverage in `internal/productruntime/native_mcp_test.go` and a tagged counterpart if necessary; do not restructure unrelated Runtime code.
+- Root-approved Step 7 owner refinement after actual RED24439: `cmd/vibermate-acceptance/provenance.go` / `provenance_test.go` may reject the synthetic tag early in `sidecarProfile` for every packaged artifact role. `internal/acceptancereport/verifier.go:638–650` already rejects nonempty acceptance tags and anything other than the exact release sidecar tag; this is not a demonstrated publication bypass. A focused test-only addition to `internal/acceptancereport/verifier_test.go` may preserve that strict negative. Keep V7 and the Go version pin unchanged in this unit.
 
 **Interfaces:**
 
