@@ -89,6 +89,8 @@ git diff --check
 
 ## Handoff and remaining gates
 
+Checkpoint implemented at `335556f2080dffb841b0f19a39eccbea47785bcf` and independently approved for its isolated composition changes in `acceptance-profile-composition-review.md`; root read the complete implementation/review reports and independently checked clean-source/tag/hash/row evidence. Source-bound actual160 Review and nine Full probes pass, while the fixed matrix remains9 policy passes/37 incomplete. This is not whole-native completion: historical callback retry409 and intermittent fresh GET uncertainty remain required work, with no assertion or authority weakening. Execute `2026-10-05-native-decision-history.md` next, then the deterministic fresh-GET diagnosis before any conditional repair or upstream continuation.
+
 This single cohesive prerequisite makes fixed synthetic preview/content testable through actual Runtime composition. It does not implement proxy continuation, a real production content profile, the remaining matrix, CA/native OS acceptance, soak or release. Production classification still requires authorized exact schema evidence. User screenshot quota alignment and `activity_start` timeout remain separately unresolved and must not be described as repaired by this work.
 
 Self-review: the alternative staged form-only test cannot prove ordinary approvals; exact profile validity and no-preview denial are preserved; factory and source/build provenance are compile-time constrained; no DDL or real-account access is needed; all affected callers and 46 required cases remain named. This plan refines the already approved isolated acceptance workflow and does not authorize any expanded external access.

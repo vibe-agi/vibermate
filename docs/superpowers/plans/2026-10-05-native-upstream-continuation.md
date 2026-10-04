@@ -2,6 +2,8 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development or superpowers:executing-plans. Execute the three cohesive units serially with behavioral TDD and independent review. Do not start while the acceptance-profile composition unit is still mutable or awaiting its review.
 
+**Prerequisite update after335556f review:** The isolated profile checkpoint is approved, but its required historical decision-retry repair (`2026-10-05-native-decision-history.md`) and fresh-GET Start→Verify diagnostic/correction take priority. Complete those scoped reviews before starting continuation Task1; this plan does not mask or waive either instability.
+
 **Goal:** Keep an eligible native tools/call response alive across a broken upstream stream, including on pinned Codex 0.145, without a second tool execution or misleading request provenance.
 
 **Architecture:** The original downstream response owns a bounded sequence of genuine upstream continuation GETs. Every GET has fresh request/admission/Offline/Store authority and its own physical audit; the original logical operation and exact callback parent remain unchanged. Persist immutable, body-free initiator evidence, never durable stream authority.
