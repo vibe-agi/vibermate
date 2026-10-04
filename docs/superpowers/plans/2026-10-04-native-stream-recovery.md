@@ -8,7 +8,7 @@
 
 **Context:** This is the corrective subplan for Task4 of `2026-10-04-native-mcp-transport.md`, not a replacement for its46 exact-client cases or production classification. Root fully read the read-only proposal/addendum and verified current schema, repository/issuer, completion/recovery and GET source before adoption. No implementation or new acceptance evidence is implied. Source inspected from fa500209777ccff1fef9f005958e0ac242c007a8 with root docs through db85439. The prior native160 cross-stream fixtures remain withdrawn.
 
-**Execution boundary:** Finish a truthful, reviewable checkpoint of the current exact-client runner/fixture work before adding these Store changes. Retain known incomplete scenarios and failed SSE evidence explicitly; checkpoint review does not mark Task4 or all46 complete. One mutable implementer only. Each step below requires its own behavioral RED, scoped GREEN and independent review before the next. No real user account, App, daemon, trust store or database changes.
+**Execution boundary:** The exact-client foundation is independently reviewed atb5fe693, with9 source-bound native policy cases passed from an independent clean checkout and37 still incomplete. Stream Task1 is implemented atd96b0eb and all five independent review findings are closed through02e7b36/4be4382/9b1ed9e/5e91a1a; final same-reviewer approval is `stream-task-1-rereview-2.md`. Task2 begins from5e91a1a4e00f139bcd24847ab7d8d564f1c9f3a8. These checkpoints do not complete transport Task4/all46 or production readiness. One mutable implementer only; each step needs behavioral RED, scoped GREEN and independent review before the next. No real user account, App, daemon, trust store or database changes.
 
 ## Adopted design
 
@@ -27,9 +27,9 @@ This is more than accepting new GET bytes. Reject the two smaller alternatives: 
 
 ## Task 1: Private stream identity and separate physical/logical completion
 
-- [ ] Add and run `TestNativeStreamSeparatesAttemptAndRPCCompletion` and `TestNativeStreamRecoveryCannotResendOriginal` against the real Store; record the intended coupled-lifecycle RED.
-- [ ] Implement bounded stream ownership and only the Task1 repository capabilities/completion changes below; keep fresh callback expansion unavailable until Task2 authority exists.
-- [ ] Run the byte-count, terminal-delivery, cancellation, revocation, corrupt-row and restart matrix plus affected normal/race tests; self-review, commit the scoped unit and obtain independent authority/lifecycle review.
+- [x] Add and run `TestNativeStreamSeparatesAttemptAndRPCCompletion` and `TestNativeStreamRecoveryCannotResendOriginal` against the real Store; record the intended coupled-lifecycle RED.
+- [x] Implement bounded stream ownership and only the Task1 repository capabilities/completion changes below; keep fresh callback expansion unavailable until Task2 authority exists.
+- [x] Run the byte-count, terminal-delivery, cancellation, revocation, corrupt-row and restart matrix plus affected normal/race tests; self-review, commit the scoped unit and obtain independent authority/lifecycle review. Five review findings and I3 ordering follow-ups closed at5e91a1a; report history preserves failed timeouts and their subsequent passing reruns.
 
 Replace `session.events` with private stream records plus a session-global event-ID index. A record owns its private stream ID, origin operation and frozen binding, original RPC ID/kind and necessary result/progress/retention context, owner/session/assignment identity, one absolute expiry, terminal flag, attachment state, and ordered event ledger. The event index maps opaque server ID to exactly one stream and ordinal. Preserve IDs/wire on the network; never persist them. Charge records, cloned RPC context, wire, index overhead, callback tombstones, and witnesses against existing budgets before allocation. Bound retained records/events as well as bytes; use existing Pending and ConcurrentRPCsPerSession ceilings, and one absolute CallLifetime deadline that reconnects do not extend.
 
