@@ -455,3 +455,10 @@ func (e *executor) observeActivity(ctx context.Context, request rpc, s *session,
 	}
 	return err
 }
+
+func (e *executor) fencePublication(s *session) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.renewalFailed = true
+	e.discardCatalog(s)
+}

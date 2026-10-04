@@ -489,6 +489,14 @@ func (e *executor) Serve(ctx context.Context, c CapturedRequest, w http.Response
 			}
 		}
 	}
+	var candidate *catalogCandidate
+	if r.kind == nativetool.RequestToolsList && !knownRPCFailure {
+		candidate, err = e.prepareCatalog(r, s)
+		if err != nil {
+			return e.finishFailure(c.id, s, w, err, true)
+		}
+		defer e.releaseCatalogCandidate(candidate)
+	}
 	state, storedReason := "completed", "completed"
 	if r.retention.unavailable {
 		contentReason = ContentAuthorityUnavailable
@@ -502,16 +510,21 @@ func (e *executor) Serve(ctx context.Context, c CapturedRequest, w http.Response
 	if r.kind == nativetool.RequestInitialized && !knownRPCFailure {
 		revision, err := e.dependencies.Store.ReadySession(call, s.id, s.revision, e.dependencies.Clock().UTC())
 		if err != nil {
-			return e.finishFailure(c.id, s, w, err, true)
+			renewalUnavailable = true
+			e.fencePublication(s)
+		} else {
+			s.mu.Lock()
+			s.revision = revision
+			s.ready = true
+			s.mu.Unlock()
 		}
-		s.mu.Lock()
-		s.revision = revision
-		s.ready = true
-		s.mu.Unlock()
 	}
 	if r.kind == nativetool.RequestToolsList && !knownRPCFailure {
-		if err = e.completeCatalog(call, r, s); err != nil {
-			return e.finishFailure(c.id, s, w, err, true)
+		if renewalUnavailable {
+			e.fencePublication(s)
+		} else if err = e.publishCatalog(call, candidate, s); err != nil {
+			renewalUnavailable = true
+			e.fencePublication(s)
 		}
 	}
 	if r.kind == nativetool.RequestServerReply {

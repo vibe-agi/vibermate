@@ -98,65 +98,80 @@ func (e *executor) contentProfile(s *session, name string) (ContentProfile, bool
 	profile, ok := e.dependencies.ContentProfiles.Resolve(contract, definition)
 	return profile, ok && profile.valid(contract, definition)
 }
-func (e *executor) completeCatalog(ctx context.Context, r rpc, s *session) error {
+
+type catalogCandidate struct {
+	evidence               nativetool.CatalogEvidence
+	scope                  nativetool.CatalogScope
+	collection             uint64
+	temporary, publicBytes int64
+	adopted                bool
+}
+
+func (e *executor) releaseCatalogCandidate(candidate *catalogCandidate) {
+	if candidate == nil {
+		return
+	}
+	e.budget.release(candidate.temporary)
+	if !candidate.adopted {
+		e.budget.release(candidate.publicBytes)
+	}
+}
+
+// Validate the authenticated collection before recording its RPC terminal.
+// This does not publish catalog evidence or establish current Store authority.
+func (e *executor) prepareCatalog(r rpc, s *session) (*catalogCandidate, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if r.collection != s.collection {
-		return nil
+		return nil, nil
 	}
 	if s.closed || len(s.pages) == 0 {
-		return errSession
+		return nil, errSession
 	}
 	last := s.pages[len(s.pages)-1]
 	object, err := decodeObject(last.ExactResponse, e.limits.CatalogPageBytes, e.limits.Depth)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	var result map[string]json.RawMessage
 	if json.Unmarshal(object["result"], &result) != nil {
-		return errProtocol
+		return nil, errProtocol
 	}
 	if cursor, present := result["nextCursor"]; present {
 		next, ok := text(cursor)
 		if !ok || len(next) > e.limits.OpaqueIDBytes {
-			return errProtocol
+			return nil, errProtocol
 		}
 		if next != "" {
 			if next == s.nextCursor {
-				return errProtocol
+				return nil, errProtocol
 			}
 			s.nextCursor = next
-			return nil
+			return nil, nil
 		}
 	}
 	scope := nativetool.CatalogScope{Capture: s.owner.capture, Plan: s.plan, AssignmentRevision: s.assignment, OwnerEpoch: s.owner.epoch, SessionID: s.id, SessionRevision: s.revision + 1, CatalogGeneration: s.generation + 1}
 	observer, err := nativetool.NewCatalogObserver(scope)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	temporary := 3 * s.catalogBytes
 	if !e.budget.acquire(temporary) {
-		return errBudget
+		return nil, errBudget
 	}
-	defer e.budget.release(temporary)
+	prepared := false
+	defer func() {
+		if !prepared {
+			e.budget.release(temporary)
+		}
+	}()
 	evidence, err := observer.Observe(s.pages)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if len(evidence.Definitions()) > e.limits.CatalogTools || !evidence.MatchesRequests(s.listDigests) {
-		return errProtocol
+		return nil, errProtocol
 	}
-	revision, err := e.dependencies.Store.SetCatalog(ctx, s.id, s.revision, evidence, e.dependencies.Clock().UTC())
-	if err != nil {
-		return err
-	}
-	if revision != scope.SessionRevision {
-		return errSession
-	}
-	s.revision = revision
-	s.generation = scope.CatalogGeneration
-	s.catalog = &evidence
-	s.nextCursor = ""
 	// The observer clones the public projection; account that live allocation
 	// alongside retained wire pages until old page buffers are released.
 	publicBytes := int64(0)
@@ -165,9 +180,38 @@ func (e *executor) completeCatalog(ctx context.Context, r rpc, s *session) error
 		publicBytes += int64(len(mapped.InputSchema.Bytes()) + len(mapped.Description) + len(mapped.Name) + len(definition.Annotations().Bytes()))
 	}
 	if !e.budget.acquire(publicBytes) {
-		s.catalog = nil
-		return errBudget
+		return nil, errBudget
 	}
+	prepared = true
+	return &catalogCandidate{evidence: evidence, scope: scope, collection: r.collection, temporary: temporary, publicBytes: publicBytes}, nil
+}
+
+// Only the actual Store can publish an already validated complete collection.
+func (e *executor) publishCatalog(ctx context.Context, candidate *catalogCandidate, s *session) error {
+	if candidate == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if candidate.collection != s.collection {
+		return nil
+	}
+	if s.closed || s.renewalFailed {
+		return errSession
+	}
+	revision, err := e.dependencies.Store.SetCatalog(ctx, s.id, s.revision, candidate.evidence, e.dependencies.Clock().UTC())
+	if err != nil {
+		return err
+	}
+	if revision != candidate.scope.SessionRevision {
+		return errSession
+	}
+	s.revision = revision
+	s.generation = candidate.scope.CatalogGeneration
+	s.catalog = &candidate.evidence
+	s.nextCursor = ""
+	publicBytes := candidate.publicBytes
+	candidate.adopted = true
 	s.retained += publicBytes
 	s.retained -= s.publicBytes
 	e.budget.release(s.publicBytes)
