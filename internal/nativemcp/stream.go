@@ -50,6 +50,7 @@ type streamRecord struct {
 	request                     rpc
 	context                     context.Context
 	cancel                      context.CancelFunc
+	expiryTimer                 *time.Timer
 	expires                     time.Time
 	credentialRevision          uint64
 	attached, terminal, retired bool
@@ -91,9 +92,10 @@ func (e *executor) openStream(ctx context.Context, c CapturedRequest, r rpc, s *
 		}
 		cloned.failure, cloned.renewalUnavailable, cloned.retention, cloned.collection, cloned.collectionToken = r.failure, r.renewalUnavailable, r.retention, r.collection, r.collectionToken
 	}
-	logical, cancel := context.WithDeadline(s.context, expires)
+	logical, cancel := context.WithCancel(s.context)
 	stream := &streamRecord{operation: c.id, binding: b, receipt: receipt, request: cloned, context: logical, cancel: cancel, expires: expires, credentialRevision: c.admission.CredentialRevision(), attached: true, charged: cost}
 	stream.created = started
+	stream.expiryTimer = time.AfterFunc(time.Until(expires), cancel)
 	s.streams[c.id] = stream
 	s.retained += cost
 	context.AfterFunc(logical, func() { e.retireStream(s, stream) })
@@ -156,10 +158,18 @@ func (e *executor) observeStream(ctx context.Context, s *session, stream *stream
 	if err != nil {
 		return err
 	}
+	effective := a.ExpiresAt()
+	if effective.IsZero() {
+		return errSession
+	}
 	stream.authority = a
 	stream.observed = true
-	if s.timeLimit.Before(stream.expires) {
-		stream.expires = s.timeLimit
+	if s.timeLimit.Before(effective) {
+		effective = s.timeLimit
+	}
+	if effective.Before(stream.expires) {
+		stream.expires = effective
+		stream.expiryTimer.Reset(time.Until(effective))
 	}
 	if active := s.active[string(stream.request.id)]; active != nil {
 		active.cancel = stream.cancel
@@ -189,6 +199,7 @@ func (e *executor) detachStream(s *session, stream *streamRecord) {
 	stream.attached = false
 	if !stream.observed {
 		stream.retired = true
+		stream.expiryTimer.Stop()
 		stream.cancel()
 	}
 	if stream.retired {
@@ -221,6 +232,7 @@ func (e *executor) retireStream(s *session, stream *streamRecord) {
 		return
 	}
 	stream.retired = true
+	stream.expiryTimer.Stop()
 	stream.cancel()
 	key := string(stream.request.id)
 	if active := s.active[key]; active != nil && active.stream == stream {

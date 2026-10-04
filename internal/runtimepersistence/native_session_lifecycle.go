@@ -150,5 +150,6 @@ func (r *nativeToolRepository) CloseSession(ctx context.Context, id nativetool.I
 	if err != nil {
 		return 0, err
 	}
+	_ = r.pruneTerminalRecovery(ctx)
 	return expected + 1, nil
 }

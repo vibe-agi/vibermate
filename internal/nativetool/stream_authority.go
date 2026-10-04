@@ -9,18 +9,23 @@ import (
 // StreamAuthority is process-local observation authority. It cannot authorize
 // an outbound send and has no serializable fields or operation-ID constructor.
 type StreamAuthority struct {
-	issuer [32]byte
-	token  [32]byte
+	issuer    [32]byte
+	token     [32]byte
+	expiresAt time.Time
 }
+
+// ExpiresAt is immutable observation metadata, not live send permission.
+func (a StreamAuthority) ExpiresAt() time.Time { return a.expiresAt }
 
 // IssueStream is used only by the repository after it verifies the original
 // receipt and commits the observation transaction. Its registry owns validity.
-func (issuer *StartReceiptIssuer) IssueStream() (StreamAuthority, error) {
-	if issuer == nil || issuer.identity == ([32]byte{}) {
+func (issuer *StartReceiptIssuer) IssueStream(expires time.Time) (StreamAuthority, error) {
+	if issuer == nil || issuer.identity == ([32]byte{}) || expires.IsZero() || expires.UnixMilli() <= 0 {
 		return StreamAuthority{}, ErrDenied
 	}
 	var authority StreamAuthority
 	authority.issuer = issuer.identity
+	authority.expiresAt = expires.UTC()
 	if _, err := rand.Read(authority.token[:]); err != nil {
 		return StreamAuthority{}, err
 	}

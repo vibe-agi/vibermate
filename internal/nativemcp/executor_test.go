@@ -110,10 +110,13 @@ func newNativeFixture(t *testing.T, recording environment.ContentRecordingPolicy
 	return newNativeFixtureMode(t, environment.ToolPolicyReview, recording, custom...)
 }
 func newNativeFixtureMode(t *testing.T, mode environment.ToolPolicyMode, recording environment.ContentRecordingPolicy, custom ...Limits) *nativeFixture {
+	return newNativeFixtureStoreLifetime(t, mode, recording, 0, custom...)
+}
+func newNativeFixtureStoreLifetime(t *testing.T, mode environment.ToolPolicyMode, recording environment.ContentRecordingPolicy, lifetime time.Duration, custom ...Limits) *nativeFixture {
 	t.Helper()
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "runtime.db")
-	store, err := runtimepersistence.Open(ctx, runtimepersistence.Options{DatabasePath: path, BusyTimeout: runtimepersistence.DefaultBusyTimeout, CommitReconcileTimeout: runtimepersistence.DefaultCommitReconcileTimeout})
+	store, err := runtimepersistence.Open(ctx, runtimepersistence.Options{DatabasePath: path, BusyTimeout: runtimepersistence.DefaultBusyTimeout, CommitReconcileTimeout: runtimepersistence.DefaultCommitReconcileTimeout, NativeStreamLifetime: lifetime})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -199,7 +199,7 @@ func (r *nativeToolRepository) OpenObservedStream(ctx context.Context, receipt n
 	if err != nil {
 		return nativetool.StreamAuthority{}, err
 	}
-	a, err := r.issuer.IssueStream()
+	a, err := r.issuer.IssueStream(entry.expires)
 	if err != nil {
 		return nativetool.StreamAuthority{}, err
 	}
@@ -479,6 +479,9 @@ func (r *nativeToolRepository) BindRecoveryGET(ctx context.Context, id nativetoo
 	}
 	r.issuerMu.Lock()
 	defer r.issuerMu.Unlock()
+	if err := r.pruneTerminalRecovery(ctx); err != nil {
+		return err
+	}
 	if len(r.recovery) >= nativeStreamLimit {
 		return nativetool.ErrDenied
 	}
@@ -532,6 +535,9 @@ func (r *nativeToolRepository) verifyNativeRecovery(ctx context.Context, tx *sql
 	child, exists := r.recovery[op.ID]
 	if !exists {
 		return nil
+	}
+	if child.cleanupOnly {
+		return nativetool.ErrDenied
 	}
 	if op.Kind != nativetool.RequestGetStream || op.BindingDigest == nil || *op.BindingDigest != child.digest {
 		return nativetool.ErrDenied
@@ -589,20 +595,19 @@ func (r *nativeToolRepository) RetireObservedStream(ctx context.Context, a nativ
 		return nil
 	}
 	s.cleanupOnly = true
-	// Retirement owns every actually started physical continuation, including
-	// an attached child whose handler has not reported completion yet. Promote
-	// those exact issued receipts before cleanup; pre-Start entries grant no
-	// such provenance and remain outside this post-Start obligation.
+	// Every associated child must become durably terminal before its denying
+	// association can disappear. Receipt-bearing attempts retain the reviewed
+	// physical cleanup; pre-Start children close without creating an audit.
 	for id, child := range r.recovery {
-		if child.stream == a && child.receipt.OperationID() != "" {
+		if child.stream == a {
 			child.cleanupOnly = true
 			r.recovery[id] = child
 		}
 	}
 	err := r.transaction(ctx, func(ctx context.Context, tx *sql.Tx) error {
-		for _, child := range r.recovery {
+		for id, child := range r.recovery {
 			if child.stream == a && child.cleanupOnly {
-				if err := r.cleanupNativeRecoveryAttempt(ctx, tx, s, child, now); err != nil {
+				if err := r.cleanupNativeRecoveryAttempt(ctx, tx, s, id, child, now); err != nil {
 					return err
 				}
 			}
@@ -652,12 +657,41 @@ func (r *nativeToolRepository) RetireObservedStream(ctx context.Context, a nativ
 
 // Called in the same transaction as origin cleanup. Success of only one side
 // cannot discard the timer while the other still has an ambiguous audit.
-func (r *nativeToolRepository) cleanupNativeRecoveryAttempt(ctx context.Context, tx *sql.Tx, stream *nativeObservedStream, child nativeRecovery, now time.Time) error {
-	op, err := loadNativeOperation(ctx, tx, child.receipt.OperationID())
+func (r *nativeToolRepository) cleanupNativeRecoveryAttempt(ctx context.Context, tx *sql.Tx, stream *nativeObservedStream, id nativetool.ID, child nativeRecovery, now time.Time) error {
+	op, err := loadNativeOperation(ctx, tx, id)
 	if err != nil {
 		return err
 	}
-	if op.Kind != nativetool.RequestGetStream || op.BindingDigest == nil || *op.BindingDigest != child.digest || op.Capture != stream.capture {
+	if op.Kind != nativetool.RequestGetStream || op.BindingDigest != nil && *op.BindingDigest != child.digest || op.Capture != stream.capture {
+		return nativetool.ErrDenied
+	}
+	if child.receipt.OperationID() == "" {
+		if op.CompletedAt != nil {
+			return nil
+		}
+		if op.State == "started" {
+			return finishNative(ctx, tx, op, nativetool.TerminalInput{Outcome: "uncertain", Reason: "execution_uncertain", ObservedAt: now})
+		}
+		if op.State != "received" && op.State != "validated" {
+			return nativetool.ErrDenied
+		}
+		var claims, audits int
+		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM native_tool_once WHERE operation_id=?`, id).Scan(&claims); err != nil {
+			return err
+		}
+		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM runtime_egress_attempts WHERE parent_kind='client_operation' AND parent_id=?`, id).Scan(&audits); err != nil {
+			return err
+		}
+		if claims != 0 || audits != 0 {
+			return nativetool.ErrInvalid
+		}
+		if err := nativeTransition(ctx, tx, op, "canceled", op.DecisionSource, "revoked", "revoked", now); err != nil {
+			return err
+		}
+		_, err := tx.ExecContext(ctx, `UPDATE native_tool_operations SET bytes_in=0,bytes_out=0 WHERE operation_id=?`, id)
+		return err
+	}
+	if child.receipt.OperationID() != id || op.BindingDigest == nil {
 		return nativetool.ErrDenied
 	}
 	b, err := loadNativeBinding(ctx, tx, op.ID)
@@ -694,5 +728,52 @@ func (r *nativeToolRepository) cleanupNativeRecoveryAttempt(ctx context.Context,
 		return err
 	}
 	_, err = tx.ExecContext(ctx, `UPDATE native_tool_operations SET bytes_in=NULL,bytes_out=NULL WHERE operation_id=?`, op.ID)
+	return err
+}
+
+// issuerMu must be held. Known terminal rows cannot pass ordinary Start, so
+// their process-local association can be released after a successful read Tx.
+// An ambiguous read/commit or still-startable row preserves its denying entry.
+func (r *nativeToolRepository) pruneTerminalRecovery(ctx context.Context) error {
+	if len(r.recovery) == 0 {
+		return nil
+	}
+	var terminal []nativetool.ID
+	err := r.transaction(ctx, func(ctx context.Context, tx *sql.Tx) error {
+		for id, child := range r.recovery {
+			op, err := loadNativeOperation(ctx, tx, id)
+			if err != nil {
+				return err
+			}
+			if op.CompletedAt == nil {
+				continue
+			}
+			var once int
+			if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM native_tool_once WHERE operation_id=?`, id).Scan(&once); err != nil {
+				return err
+			}
+			if once != 0 {
+				facts, audit, err := nativeAttemptFacts(ctx, tx, op)
+				if err != nil {
+					return err
+				}
+				if !audit.Terminal() {
+					continue
+				}
+				if child.receipt.OperationID() != "" {
+					if err := r.issuer.Check(child.receipt, facts); err != nil {
+						return err
+					}
+				}
+			}
+			terminal = append(terminal, id)
+		}
+		return nil
+	})
+	if err == nil {
+		for _, id := range terminal {
+			delete(r.recovery, id)
+		}
+	}
 	return err
 }

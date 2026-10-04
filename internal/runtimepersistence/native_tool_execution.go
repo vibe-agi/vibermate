@@ -459,7 +459,7 @@ func (r *nativeToolRepository) Finish(ctx context.Context, id nativetool.ID, in 
 	}
 	r.issuerMu.Lock()
 	defer r.issuerMu.Unlock()
-	return r.transaction(ctx, func(ctx context.Context, tx *sql.Tx) error {
+	err := r.transaction(ctx, func(ctx context.Context, tx *sql.Tx) error {
 		op, err := loadNativeOperation(ctx, tx, id)
 		if err != nil {
 			return err
@@ -490,6 +490,15 @@ func (r *nativeToolRepository) Finish(ctx context.Context, id nativetool.ID, in 
 		}
 		return finishNative(ctx, tx, op, in)
 	})
+	if err == nil {
+		delete(r.recovery, id)
+	} else if errors.Is(err, nativetool.ErrUnavailable) {
+		if child, ok := r.recovery[id]; ok {
+			child.cleanupOnly = true
+			r.recovery[id] = child
+		}
+	}
+	return err
 }
 
 // All authoritative owner hooks call this private helper in their existing Tx.
@@ -612,7 +621,7 @@ func (r *nativeToolRepository) Revoke(ctx context.Context, c captureidentity.Ref
 			}
 		}
 	}()
-	return r.transaction(ctx, func(ctx context.Context, tx *sql.Tx) error {
+	err := r.transaction(ctx, func(ctx context.Context, tx *sql.Tx) error {
 		s, err := loadNativeScope(ctx, tx, c)
 		if err != nil {
 			return err
@@ -622,6 +631,10 @@ func (r *nativeToolRepository) Revoke(ctx context.Context, c captureidentity.Ref
 		}
 		return revokeNativeScope(ctx, tx, c, now)
 	})
+	if err == nil {
+		_ = r.pruneTerminalRecovery(ctx)
+	}
+	return err
 }
 
 func (r *nativeToolRepository) MarkReplayBarrier(ctx context.Context, c captureidentity.Reference, expected uint64, now time.Time) error {
@@ -668,6 +681,13 @@ func (r *nativeToolRepository) Recover(ctx context.Context, now time.Time) error
 	for a := range r.streams {
 		r.dropNativeStream(a)
 	}
-	clear(r.recovery)
+	if err == nil {
+		clear(r.recovery)
+	} else {
+		for id, child := range r.recovery {
+			child.cleanupOnly = true
+			r.recovery[id] = child
+		}
+	}
 	return err
 }

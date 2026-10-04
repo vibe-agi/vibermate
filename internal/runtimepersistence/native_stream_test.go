@@ -95,6 +95,9 @@ func TestNativeStreamExpiryNeverRenews(t *testing.T) {
 			if _, err := repo.OpenObservedStream(ctx, receipt, binding, 30*time.Minute, now.Add(40*time.Millisecond)); err == nil {
 				t.Fatal("duplicate Open renewed authority")
 			}
+			if !a.ExpiresAt().Equal(now.Add(100 * time.Millisecond)) {
+				t.Fatalf("authority metadata lost exact clamp: %v", a.ExpiresAt())
+			}
 			if err := repo.FinishAttempt(ctx, receipt, nativetool.PhysicalFinishInput{Outcome: "failed", Reason: "transport_failed", ObservedAt: now.Add(50 * time.Millisecond)}); err != nil {
 				t.Fatal(err)
 			}

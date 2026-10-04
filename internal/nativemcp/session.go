@@ -252,6 +252,7 @@ func (e *executor) clearSession(s *session) {
 	s.tools = nil
 	for _, stream := range s.streams {
 		stream.retired = true
+		stream.expiryTimer.Stop()
 		stream.cancel()
 		stream.charged = 0
 	}
