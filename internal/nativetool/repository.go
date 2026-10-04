@@ -127,6 +127,8 @@ type LifecycleRepository interface {
 	ReadySession(context.Context, ID, uint64, time.Time) (uint64, error)
 	SetCatalog(context.Context, ID, uint64, CatalogEvidence, time.Time) (uint64, error)
 	InvalidateCatalog(context.Context, ID, uint64, time.Time) (uint64, error)
+	CloseSession(context.Context, ID, uint64, time.Time) (uint64, error)
+	TouchSession(context.Context, ID, uint64, time.Time, time.Time) error
 	Receive(context.Context, ReceiveInput) (ReceiveResult, error)
 	Bind(context.Context, ID, Binding, time.Time) error
 	RequestApproval(context.Context, ID, ID, time.Time, time.Time) (Approval, error)

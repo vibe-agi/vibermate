@@ -20,6 +20,16 @@ type ContentProfile struct {
 	definition        nativetool.Digest
 	arguments, result []string
 }
+type retentionState struct {
+	profile            ContentProfile
+	known, unavailable bool
+}
+
+func frozenProfile(p ContentProfile) ContentProfile {
+	p.arguments = append([]string{}, p.arguments...)
+	p.result = append([]string{}, p.result...)
+	return p
+}
 
 func (p ContentProfile) valid(contract environment.ClientToolContract, d nativetool.CatalogDefinition) bool {
 	if p.contract != contract || p.definition == (nativetool.Digest{}) || p.definition != d.Digest() {
@@ -91,6 +101,9 @@ func (e *executor) contentProfile(s *session, name string) (ContentProfile, bool
 func (e *executor) completeCatalog(ctx context.Context, r rpc, s *session) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if r.collection != s.collection {
+		return nil
+	}
 	if s.closed || len(s.pages) == 0 {
 		return errSession
 	}
@@ -173,6 +186,9 @@ func (e *executor) completeCatalog(ctx context.Context, r rpc, s *session) error
 func (e *executor) observeCatalogPage(r rpc, s *session, b nativetool.Binding, response []byte) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if r.collection != s.collection {
+		return nil
+	}
 	size := int64(len(r.raw) + len(response))
 	if int64(len(response)) > e.limits.CatalogPageBytes || s.catalogBytes+size > e.limits.CatalogBytes || len(s.pages) >= e.limits.CatalogPages {
 		return errBudget
@@ -185,4 +201,15 @@ func (e *executor) observeCatalogPage(r rpc, s *session, b nativetool.Binding, r
 	s.pages = append(s.pages, nativetool.CatalogPageObservation{ExactRequest: bytes.Clone(r.raw), ExactResponse: bytes.Clone(response)})
 	s.listDigests = append(s.listDigests, b.RequestDigest())
 	return nil
+}
+
+func (e *executor) discardCatalog(s *session) {
+	s.collection++
+	size := s.catalogBytes
+	s.pages = nil
+	s.listDigests = nil
+	s.catalogBytes = 0
+	s.nextCursor = ""
+	s.retained -= size
+	e.budget.release(size)
 }

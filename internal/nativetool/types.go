@@ -100,6 +100,7 @@ type BindingInput struct {
 	SensitiveObservation               *SensitiveObservation
 	SensitiveContext                   *SensitiveBindingContext
 	SensitiveToolContext               *SensitiveToolContext
+	CancellationContext                *CancellationContext
 }
 type Binding struct {
 	kind                                                    RequestKind
@@ -229,7 +230,14 @@ func NewBinding(input BindingInput) (Binding, error) {
 		if input.Kind == RequestCancel {
 			var fields map[string]json.RawMessage
 			_ = json.Unmarshal(envelope["params"], &fields)
-			digest := rpcIdentityDigest(fields["requestId"])
+			var digest Digest
+			if input.CancellationContext == nil {
+				digest = rpcIdentityDigest(fields["requestId"])
+			}
+			digest, err = cancellationIdentity(input, digest)
+			if err != nil {
+				return Binding{}, err
+			}
 			binding.cancelledRPCIDDigest = &digest
 		}
 	}

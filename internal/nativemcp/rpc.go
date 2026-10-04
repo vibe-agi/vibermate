@@ -2,6 +2,7 @@ package nativemcp
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"strconv"
 	"unicode/utf8"
@@ -10,12 +11,66 @@ import (
 )
 
 type rpc struct {
-	raw    []byte
-	object map[string]json.RawMessage
-	params map[string]json.RawMessage
-	method string
-	id     []byte
-	kind   nativetool.RequestKind
+	raw             []byte
+	object          map[string]json.RawMessage
+	params          map[string]json.RawMessage
+	method          string
+	id              []byte
+	kind            nativetool.RequestKind
+	failure         *bool
+	collection      uint64
+	collectionToken *uint64
+	cancel          context.CancelFunc
+	retention       *retentionState
+}
+
+// Allocation preflight counts every member/container before allocating key
+// sets or maps. Wire-backed RawMessages avoid nested payload copies.
+func jsonAllocation(raw []byte) int64 {
+	// Include allocator rounding and fixed decoder/map scratch in addition to
+	// payload strings, members, and element slices.
+	cost := int64(len(raw)) + 4096
+	quoted, escaped := false, false
+	var containers [65]byte
+	depth := 0
+	for _, ch := range raw {
+		if quoted {
+			if escaped {
+				escaped = false
+			} else if ch == '\\' {
+				escaped = true
+			} else if ch == '"' {
+				quoted = false
+			}
+			continue
+		}
+		if ch == '"' {
+			quoted = true
+			continue
+		}
+		switch ch {
+		case ':':
+			cost += 256
+		case '{', '[':
+			cost += 128
+			if depth < 65 {
+				containers[depth] = ch
+			}
+			depth++
+			if ch == '[' {
+				cost += 128
+			}
+		case '}', ']':
+			if depth > 0 {
+				depth--
+			}
+		case ',':
+			if depth > 0 && depth <= 65 && containers[depth-1] == '[' {
+				cost += 128
+			}
+		}
+	}
+	return cost
 }
 
 // Token scan rejects duplicate keys at every depth before DTO decoding.
@@ -29,6 +84,10 @@ func decodeObject(raw []byte, maximum int64, depth int) (map[string]json.RawMess
 	if !json.Valid(raw) {
 		return nil, errProtocol
 	}
+	if jsonAllocation(raw) > DefaultLimits().BufferBytes {
+		return nil, errBudget
+	}
+	object := map[string]json.RawMessage{}
 	position := 0
 	space := func() {
 		for position < len(raw) && bytes.ContainsRune([]byte(" \n\t\r"), rune(raw[position])) {
@@ -98,9 +157,18 @@ func decodeObject(raw []byte, maximum int64, depth int) (map[string]json.RawMess
 					seen[key] = true
 					space()
 					position++
-				}
-				if err := scan(level + 1); err != nil {
-					return err
+					space()
+					valueStart := position
+					if err := scan(level + 1); err != nil {
+						return err
+					}
+					if level == 1 {
+						object[key] = raw[valueStart:position]
+					}
+				} else {
+					if err := scan(level + 1); err != nil {
+						return err
+					}
 				}
 				space()
 				if raw[position] == ',' {
@@ -132,10 +200,6 @@ func decodeObject(raw []byte, maximum int64, depth int) (map[string]json.RawMess
 	if position != len(raw) {
 		return nil, errProtocol
 	}
-	var object map[string]json.RawMessage
-	if json.Unmarshal(raw, &object) != nil {
-		return nil, errProtocol
-	}
 	return object, nil
 }
 func objectField(raw []byte, l Limits) (map[string]json.RawMessage, error) {
@@ -157,6 +221,9 @@ func allowed(o map[string]json.RawMessage, names ...string) bool {
 	return true
 }
 func text(raw []byte) (string, bool) {
+	if len(raw) == 0 || raw[0] != '"' {
+		return "", false
+	}
 	var value string
 	err := json.Unmarshal(raw, &value)
 	return value, err == nil
@@ -245,6 +312,12 @@ func parseRequest(raw []byte, l Limits) (rpc, error) {
 		version, ok := text(r.params["protocolVersion"])
 		if !ok || version != "2025-06-18" {
 			return rpc{}, errProtocol
+		}
+		if info, present := r.params["clientInfo"]; present {
+			object, err := objectField(info, l)
+			if err != nil || !implementation(object) {
+				return rpc{}, errProtocol
+			}
 		}
 	case "notifications/initialized":
 		r.kind = nativetool.RequestInitialized

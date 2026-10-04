@@ -12,7 +12,15 @@ import (
 	"github.com/vibe-agi/vibermate/internal/environment"
 )
 
+func TestNativeDeletePreservesSiblingReceiptAndQuestion(t *testing.T) {
+	testNativeSiblingPreservation(t, true)
+}
+
 func TestNativeCatalogInvalidationPreservesSiblingReceiptAndQuestion(t *testing.T) {
+	testNativeSiblingPreservation(t, false)
+}
+
+func testNativeSiblingPreservation(t *testing.T, deleteSession bool) {
 	f := newNativeFixture(t, environment.ContentRecordingPolicy{Mode: environment.ContentRecordingOff})
 	f.handshake(t)
 	f.transport.handler = func(r *http.Request, body []byte) (*http.Response, error) {
@@ -57,6 +65,9 @@ func TestNativeCatalogInvalidationPreservesSiblingReceiptAndQuestion(t *testing.
 		t.Fatal("sibling question absent")
 	}
 	f.transport.handler = func(r *http.Request, body []byte) (*http.Response, error) {
+		if r.Method == http.MethodDelete {
+			return &http.Response{StatusCode: 202, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(""))}, nil
+		}
 		if strings.Contains(string(body), `"method":"ping"`) {
 			return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": []string{"text/event-stream"}}, Body: io.NopCloser(strings.NewReader("data: {\"jsonrpc\":\"2.0\",\"method\":\"notifications/tools/list_changed\",\"params\":{}}\n\ndata: {\"jsonrpc\":\"2.0\",\"id\":44,\"result\":{}}\n\n"))}, nil
 		}
@@ -66,7 +77,12 @@ func TestNativeCatalogInvalidationPreservesSiblingReceiptAndQuestion(t *testing.
 		}
 		return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(`{"jsonrpc":"2.0","id":` + id + `,"result":{"content":[]}}`))}, nil
 	}
-	terminal, _ := f.serve(t, `{"jsonrpc":"2.0","id":44,"method":"ping"}`, "synthetic-session")
+	var terminal Terminal
+	if deleteSession {
+		terminal = f.executor.Serve(context.Background(), f.captured(t, "DELETE", "", "synthetic-session"), httptest.NewRecorder())
+	} else {
+		terminal, _ = f.serve(t, `{"jsonrpc":"2.0","id":44,"method":"ping"}`, "synthetic-session")
+	}
 	if terminal.Outcome != OutcomeCompleted {
 		t.Fatal(terminal)
 	}

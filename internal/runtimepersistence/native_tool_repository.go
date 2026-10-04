@@ -279,7 +279,7 @@ func (r *nativeToolRepository) RegisterSession(ctx context.Context, in nativetoo
 		if s.revision != in.ExpectedAuthorityRevision {
 			return nativetool.ErrConflict
 		}
-		if !in.ExpiresAt.After(now) || in.ExpiresAt.After(s.expires) {
+		if !in.ExpiresAt.After(now) || in.ExpiresAt.After(s.expires) && in.ExpiresAt.After(now.Add(30*time.Minute)) {
 			return nativetool.ErrDenied
 		}
 		if err := nativeEnvironment(ctx, tx, in.Capture, in.Plan, in.AssignmentRevision, now); err != nil {
@@ -291,6 +291,11 @@ func (r *nativeToolRepository) RegisterSession(ctx context.Context, in nativetoo
 		}
 		if count >= 64 {
 			return nativetool.ErrDenied
+		}
+		if in.ExpiresAt.After(s.expires) {
+			if _, err = tx.ExecContext(ctx, `UPDATE native_tool_scopes SET expires_at_unix_ms=? WHERE capture_kind=? AND capture_id=? AND revision=? AND owner_epoch=?`, in.ExpiresAt.UnixMilli(), in.Capture.Kind, in.Capture.ID, s.revision, s.owner); err != nil {
+				return err
+			}
 		}
 		digest := in.Plan.EnvironmentDigest()
 		route := in.Plan.Route()
@@ -731,7 +736,7 @@ func (r *nativeToolRepository) Bind(ctx context.Context, id nativetool.ID, b nat
 			return nativetool.ErrConflict
 		}
 		catalog, hasCatalog := b.CatalogDigest()
-		if b.CatalogGeneration() > s.generation && !(b.Kind()==nativetool.RequestServerReply&&b.SessionRevision()<s.revision) || b.Kind() != nativetool.RequestServerReply && (s.generation != b.CatalogGeneration() || (s.catalog != nil) != hasCatalog || hasCatalog && string(s.catalog) != string(catalog[:])) {
+		if b.CatalogGeneration() > s.generation && !(b.Kind() == nativetool.RequestServerReply && b.SessionRevision() < s.revision) || b.Kind() != nativetool.RequestServerReply && (s.generation != b.CatalogGeneration() || (s.catalog != nil) != hasCatalog || hasCatalog && string(s.catalog) != string(catalog[:])) {
 			return nativetool.ErrConflict
 		}
 		switch b.Kind() {

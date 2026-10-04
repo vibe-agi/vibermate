@@ -36,6 +36,14 @@ func exactTarget(request *http.Request, plan environment.ClientToolPlan) error {
 	return nil
 }
 func validateRequestHeaders(request *http.Request) error {
+	for _, value := range request.Header.Values("Connection") {
+		for _, header := range strings.Split(value, ",") {
+			switch strings.ToLower(strings.TrimSpace(header)) {
+			case "authorization", "cookie", "mcp-session-id", "mcp-protocol-version", "last-event-id", "content-type", "content-length", "accept":
+				return errProtocol
+			}
+		}
+	}
 	for _, name := range []string{"Content-Type", "Mcp-Session-Id", "Mcp-Protocol-Version", "Last-Event-Id", "Authorization", "Cookie"} {
 		if len(request.Header.Values(name)) > 1 {
 			return errProtocol

@@ -25,18 +25,22 @@ type ownerScope struct {
 type session struct {
 	mu                               sync.Mutex
 	owner                            *ownerScope
+	context                          context.Context
+	cancel                           context.CancelFunc
 	id                               nativetool.ID
 	plan                             environment.ClientToolPlan
 	assignment, revision, generation uint64
 	wire, authorization, cookie      string
 	ready, closed                    bool
 	last, timeLimit                  time.Time
-	active                           map[string]bool
+	active                           map[string]*activeRPC
 	catalog                          *nativetool.CatalogEvidence
 	pages                            []nativetool.CatalogPageObservation
 	listDigests                      []nativetool.Digest
 	nextCursor                       string
 	catalogBytes                     int64
+	collection                       uint64
+	catalogBusy                      bool
 	hasher                           *nativetool.SensitiveBindingHasher
 	parents                          map[string]*callbackParent
 	events                           map[string][]byte
@@ -45,6 +49,12 @@ type session struct {
 	callbacks                        map[string]bool
 	elicitations                     map[string]nativetool.ID
 	tools                            map[nativetool.ID]*nativetool.SensitiveToolWitness
+}
+type activeRPC struct {
+	operation        nativetool.ID
+	cancel           context.CancelFunc
+	binding          nativetool.Binding
+	protocolCanceled bool
 }
 type callbackParent struct {
 	operation     nativetool.ID
@@ -75,6 +85,24 @@ func (e *executor) admitSession(ctx context.Context, c CapturedRequest, r rpc, p
 		}
 		if c.request.Header.Get("Mcp-Session-Id") != "" || c.request.Header.Get("Authorization") == "" && c.request.Header.Get("Cookie") == "" {
 			return nil, errSession
+		}
+		if owner != nil && !owner.revoked {
+			scope, err := e.dependencies.Store.GetScope(ctx, capture)
+			if err != nil {
+				return nil, err
+			}
+			for _, existing := range owner.sessions {
+				existing.mu.Lock()
+				expired := !existing.timeLimit.After(now) || now.Sub(existing.last) >= e.limits.SessionIdle
+				existing.mu.Unlock()
+				if expired {
+					_ = e.closeSession(ctx, existing)
+				}
+			}
+			if !scope.ExpiresAt.After(now) {
+				owner.revoked = true
+				owner.cancel()
+			}
 		}
 		if owner == nil || owner.revoked {
 			current, err := e.dependencies.Store.GetScope(ctx, capture)
@@ -116,11 +144,14 @@ func (e *executor) admitSession(ctx context.Context, c CapturedRequest, r rpc, p
 		if !e.budget.acquire(memory) {
 			return nil, errBudget
 		}
-		if err = e.dependencies.Store.RegisterSession(ctx, nativetool.SessionInput{ID: id, Capture: capture, Plan: plan, AssignmentRevision: uint64(c.lease.Assignment().Revision), ExpectedAuthorityRevision: owner.revision, OwnerEpoch: owner.epoch, ExpiresAt: owner.expires}); err != nil {
+		expires := now.Add(e.limits.SessionIdle)
+		if err = e.dependencies.Store.RegisterSession(ctx, nativetool.SessionInput{ID: id, Capture: capture, Plan: plan, AssignmentRevision: uint64(c.lease.Assignment().Revision), ExpectedAuthorityRevision: owner.revision, OwnerEpoch: owner.epoch, ExpiresAt: expires}); err != nil {
 			e.budget.release(memory)
 			return nil, err
 		}
-		s := &session{owner: owner, id: id, plan: plan, assignment: uint64(c.lease.Assignment().Revision), revision: 1, last: now, timeLimit: owner.expires, authorization: c.request.Header.Get("Authorization"), cookie: c.request.Header.Get("Cookie"), active: map[string]bool{}, parents: map[string]*callbackParent{}, events: map[string][]byte{}}
+		owner.expires = expires
+		sessionContext, sessionCancel := context.WithCancel(owner.context)
+		s := &session{owner: owner, context: sessionContext, cancel: sessionCancel, id: id, plan: plan, assignment: uint64(c.lease.Assignment().Revision), revision: 1, last: now, timeLimit: expires, authorization: c.request.Header.Get("Authorization"), cookie: c.request.Header.Get("Cookie"), active: map[string]*activeRPC{}, parents: map[string]*callbackParent{}, events: map[string][]byte{}}
 		owner.sessions[id] = s
 		s.callbacks = callbacks
 		s.elicitations = map[string]nativetool.ID{}
@@ -137,9 +168,21 @@ func (e *executor) admitSession(ctx context.Context, c CapturedRequest, r rpc, p
 	}
 	for _, s := range owner.sessions {
 		s.mu.Lock()
+		if s.wire == wire && !s.closed && (!s.timeLimit.After(now) || now.Sub(s.last) >= e.limits.SessionIdle) {
+			s.mu.Unlock()
+			_ = e.closeSession(ctx, s)
+			return nil, errSession
+		}
 		matches := s.wire == wire && !s.closed && s.timeLimit.After(now) && now.Sub(s.last) < e.limits.SessionIdle && s.authorization == c.request.Header.Get("Authorization") && s.cookie == c.request.Header.Get("Cookie") && s.assignment == uint64(c.lease.Assignment().Revision) && s.plan.EnvironmentDigest() == plan.EnvironmentDigest() && s.plan.Route() == plan.Route()
 		if matches {
+			expires := now.Add(e.limits.SessionIdle)
+			if err := e.dependencies.Store.TouchSession(ctx, s.id, s.revision, expires, now); err != nil {
+				s.mu.Unlock()
+				return nil, err
+			}
 			s.last = now
+			s.timeLimit = expires
+			owner.expires = expires
 		}
 		s.mu.Unlock()
 		if matches {
@@ -147,6 +190,49 @@ func (e *executor) admitSession(ctx context.Context, c CapturedRequest, r rpc, p
 		}
 	}
 	return nil, errSession
+}
+func (e *executor) closeSession(ctx context.Context, s *session) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return nil
+	}
+	revision, err := e.dependencies.Store.CloseSession(ctx, s.id, s.revision, e.dependencies.Clock().UTC())
+	if err != nil {
+		e.clearSession(s)
+		return err
+	}
+	s.revision = revision
+	e.clearSession(s)
+	return nil
+}
+func (e *executor) clearSession(s *session) {
+	s.closed = true
+	if s.cancel != nil {
+		s.cancel()
+	}
+	if s.hasher != nil {
+		s.hasher.Close()
+	}
+	s.authorization = ""
+	s.cookie = ""
+	for _, parent := range s.parents {
+		if parent.release != nil {
+			parent.release()
+			parent.release = nil
+		}
+	}
+	clear(s.parents)
+	clear(s.elicitations)
+	clear(s.tools)
+	clear(s.events)
+	s.pages = nil
+	s.catalog = nil
+	retained := s.retained
+	s.retained = 0
+	s.publicBytes = 0
+	s.catalogBytes = 0
+	e.budget.release(retained)
 }
 func (e *executor) acquireRPC(s *session, id nativetool.ID, r rpc) (func(), error) {
 	s.mu.Lock()
@@ -158,7 +244,7 @@ func (e *executor) acquireRPC(s *session, id nativetool.ID, r rpc) (func(), erro
 	if s.closed || len(s.active) >= e.limits.ConcurrentRPCsPerSession {
 		return nil, errBudget
 	}
-	if s.active[key] {
+	if s.active[key] != nil {
 		return nil, nativetool.ErrReplay
 	}
 	if r.kind == nativetool.RequestToolsList {
@@ -166,17 +252,26 @@ func (e *executor) acquireRPC(s *session, id nativetool.ID, r rpc) (func(), erro
 		if cursor != s.nextCursor {
 			return nil, errSession
 		}
-		for active := range s.active {
-			if active == "catalog-page" {
-				return nil, errSession
-			}
+		if s.catalogBusy {
+			return nil, errSession
 		}
 		if len(s.pages) >= e.limits.CatalogPages {
 			return nil, errBudget
 		}
+		s.catalogBusy = true
+		if r.collectionToken != nil {
+			*r.collectionToken = s.collection
+		}
 	}
-	s.active[key] = true
-	return func() { s.mu.Lock(); delete(s.active, key); s.mu.Unlock() }, nil
+	s.active[key] = &activeRPC{operation: id, cancel: r.cancel}
+	return func() {
+		s.mu.Lock()
+		delete(s.active, key)
+		if r.kind == nativetool.RequestToolsList {
+			s.catalogBusy = false
+		}
+		s.mu.Unlock()
+	}, nil
 }
 func (e *executor) validateResponseSession(c CapturedRequest, r rpc, s *session, response *http.Response) error {
 	if version := response.Header.Get("Mcp-Protocol-Version"); version != "" && version != "2025-06-18" {
@@ -187,7 +282,12 @@ func (e *executor) validateResponseSession(c CapturedRequest, r rpc, s *session,
 	}
 	wire := response.Header.Get("Mcp-Session-Id")
 	if r.kind == nativetool.RequestInitialize {
-		if wire == "" || len(wire) > e.limits.OpaqueIDBytes {
+		// A correlated initialization error need not create a session. A
+		// successful result still requires the authenticated header below.
+		if wire == "" {
+			return nil
+		}
+		if len(wire) > e.limits.OpaqueIDBytes {
 			return errSession
 		}
 		for _, ch := range wire {
@@ -316,3 +416,23 @@ func (e *executor) Close(ctx context.Context) error {
 	}
 }
 func equalEvent(previous, event []byte) bool { return bytes.Equal(previous, event) }
+
+func (e *executor) touchObserved(ctx context.Context, s *session) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := e.dependencies.Clock().UTC().Truncate(time.Millisecond)
+	interval := e.limits.SessionIdle / 2
+	if interval > time.Minute {
+		interval = time.Minute
+	}
+	if now.Sub(s.last) < interval {
+		return nil
+	}
+	expires := now.Add(e.limits.SessionIdle)
+	if err := e.dependencies.Store.TouchSession(ctx, s.id, s.revision, expires, now); err != nil {
+		return err
+	}
+	s.last = now
+	s.timeLimit = expires
+	return nil
+}

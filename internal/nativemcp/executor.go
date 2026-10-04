@@ -81,6 +81,7 @@ const (
 type ContentObservationReason string
 
 const ContentProfileUnavailable ContentObservationReason = "content_profile_unavailable"
+const ContentAuthorityUnavailable ContentObservationReason = "content_authority_unavailable"
 
 type Terminal struct {
 	OperationID       nativetool.ID
@@ -266,10 +267,11 @@ func (e *executor) Serve(ctx context.Context, c CapturedRequest, w http.Response
 			return reject(w, c.id, reasonFor(err))
 		}
 		defer free()
-		if !e.budget.acquire(int64(len(raw))) {
+		cost := 2 * jsonAllocation(raw)
+		if !e.budget.acquire(cost) {
 			return reject(w, c.id, ReasonBudgetExceeded)
 		}
-		defer e.budget.release(int64(len(raw)))
+		defer e.budget.release(cost)
 		r, err = parseRequest(raw, e.limits)
 		if err != nil {
 			return reject(w, c.id, reasonFor(err))
@@ -285,6 +287,12 @@ func (e *executor) Serve(ctx context.Context, c CapturedRequest, w http.Response
 	if err != nil {
 		return reject(w, c.id, reasonFor(err))
 	}
+	knownRPCFailure := false
+	r.failure = &knownRPCFailure
+	r.cancel = cancel
+	r.retention = &retentionState{}
+	collectionToken := uint64(0)
+	r.collectionToken = &collectionToken
 	if r.kind == nativetool.RequestInitialize || r.kind == nativetool.RequestToolsList || r.kind == nativetool.RequestToolsCall || r.kind == nativetool.RequestPing {
 		tracked.correlation = r.id
 	}
@@ -293,12 +301,22 @@ func (e *executor) Serve(ctx context.Context, c CapturedRequest, w http.Response
 		return reject(w, c.id, reasonFor(err))
 	}
 	defer release()
-	stopScope := context.AfterFunc(s.owner.context, cancel)
+	if r.kind == nativetool.RequestToolsList {
+		r.collection = collectionToken
+	}
+	stopScope := context.AfterFunc(s.context, cancel)
 	defer stopScope()
 	binding, intents, witness, err := e.bindRequest(c, r, s)
 	if err != nil {
 		return reject(w, c.id, reasonFor(err))
 	}
+	s.mu.Lock()
+	activeKey := string(r.id)
+	if activeKey == "" {
+		activeKey = "operation:" + c.id.String()
+	}
+	s.active[activeKey].binding = binding
+	s.mu.Unlock()
 	s.mu.Lock()
 	sensitiveToolWitness := s.tools[c.id]
 	s.mu.Unlock()
@@ -454,8 +472,7 @@ func (e *executor) Serve(ctx context.Context, c CapturedRequest, w http.Response
 	}
 	contentReason := ContentObservationReason("")
 	if r.kind == nativetool.RequestToolsCall && plan.ContentRecording().Mode == environment.ContentRecordingFull {
-		name, _ := text(r.params["name"])
-		profile, available := e.contentProfile(s, name)
+		profile, available := r.retention.profile, r.retention.known
 		if !available {
 			contentReason = ContentProfileUnavailable
 		} else {
@@ -465,15 +482,22 @@ func (e *executor) Serve(ctx context.Context, c CapturedRequest, w http.Response
 			}
 			if body, permitted := retainedContent(arguments, profile.arguments, e.limits); permitted {
 				if err = e.dependencies.Store.PutContent(call, c.id, "tool_arguments", body, e.dependencies.Clock().UTC()); err != nil {
-					return e.finishFailure(c.id, s, w, err, true)
+					r.retention.unavailable = true
 				}
 			}
 		}
 	}
-	if err = e.dependencies.Store.Finish(call, c.id, nativetool.TerminalInput{Outcome: "completed", Reason: "completed", BytesIn: counted.bytes.Load(), BytesOut: int64(len(r.raw)), ObservedAt: e.dependencies.Clock().UTC()}); err != nil {
+	state, storedReason := "completed", "completed"
+	if r.retention.unavailable {
+		contentReason = ContentAuthorityUnavailable
+	}
+	if knownRPCFailure {
+		state, storedReason = "failed", "rpc_error"
+	}
+	if err = e.dependencies.Store.Finish(call, c.id, nativetool.TerminalInput{Outcome: state, Reason: storedReason, BytesIn: counted.bytes.Load(), BytesOut: int64(len(r.raw)), ObservedAt: e.dependencies.Clock().UTC()}); err != nil {
 		return e.finishFailure(c.id, s, w, err, true)
 	}
-	if r.kind == nativetool.RequestInitialized {
+	if r.kind == nativetool.RequestInitialized && !knownRPCFailure {
 		revision, err := e.dependencies.Store.ReadySession(call, s.id, s.revision, e.dependencies.Clock().UTC())
 		if err != nil {
 			return e.finishFailure(c.id, s, w, err, true)
@@ -483,7 +507,7 @@ func (e *executor) Serve(ctx context.Context, c CapturedRequest, w http.Response
 		s.ready = true
 		s.mu.Unlock()
 	}
-	if r.kind == nativetool.RequestToolsList {
+	if r.kind == nativetool.RequestToolsList && !knownRPCFailure {
 		if err = e.completeCatalog(call, r, s); err != nil {
 			return e.finishFailure(c.id, s, w, err, true)
 		}
@@ -521,9 +545,20 @@ func (e *executor) Serve(ctx context.Context, c CapturedRequest, w http.Response
 		e.retireCompletedParents(call, s, c.id)
 	}
 	if r.kind == nativetool.RequestDeleteSession {
-		_ = e.Revoke(context.Background(), s.owner.capture, RevocationCaptureStopped)
+		if err = e.closeSession(context.Background(), s); err != nil {
+			return Terminal{OperationID: c.id, Outcome: OutcomeCompleted, Reason: ReasonStorageUnavailable, BytesIn: counted.bytes.Load(), BytesOut: int64(len(r.raw))}
+		}
 	}
-	return Terminal{OperationID: c.id, Outcome: OutcomeCompleted, BytesIn: counted.bytes.Load(), BytesOut: int64(len(r.raw)), ContentReason: contentReason}
+	if r.kind == nativetool.RequestCancel && !knownRPCFailure {
+		if err = e.cancelTarget(s, r); err != nil {
+			return Terminal{OperationID: c.id, Outcome: OutcomeCompleted, Reason: ReasonStorageUnavailable, BytesIn: counted.bytes.Load(), BytesOut: int64(len(r.raw))}
+		}
+	}
+	outcome, reason := OutcomeCompleted, Reason("")
+	if knownRPCFailure {
+		outcome, reason = OutcomeFailed, ReasonProtocolInvalid
+	}
+	return Terminal{OperationID: c.id, Outcome: outcome, Reason: reason, BytesIn: counted.bytes.Load(), BytesOut: int64(len(r.raw)), ContentReason: contentReason}
 }
 func (e *executor) bindRequest(c CapturedRequest, r rpc, s *session) (nativetool.Binding, []protocolcore.ToolIntent, *nativetool.RegisteredParentWitness, error) {
 	s.mu.Lock()
@@ -554,6 +589,16 @@ func (e *executor) bindRequest(c CapturedRequest, r rpc, s *session) (nativetool
 		intents = []protocolcore.ToolIntent{{ResponseID: c.id.String(), Ordinal: 0, Call: protocolcore.ToolCall{Key: key, Name: name, Arguments: arguments}}}
 		input.Intents = intents
 		input.CatalogEvidence = s.catalog
+		if r.retention != nil && e.dependencies.ContentProfiles != nil {
+			definition, found := s.catalog.Lookup(name)
+			if found {
+				profile, available := e.dependencies.ContentProfiles.Resolve(s.plan.Route().Contract, definition)
+				if available && profile.valid(s.plan.Route().Contract, definition) {
+					r.retention.known = true
+					r.retention.profile = frozenProfile(profile)
+				}
+			}
+		}
 		if meta := r.params["_meta"]; len(meta) > 0 {
 			fields, _ := objectField(meta, e.limits)
 			if observed, present := fields["callId"]; present {
@@ -642,6 +687,20 @@ func (e *executor) bindRequest(c CapturedRequest, r rpc, s *session) (nativetool
 		b, err := nativetool.NewBinding(input)
 		return b, nil, &witness, err
 	}
+	if r.kind == nativetool.RequestCancel {
+		identity, err := identity(r.params["requestId"], e.limits.OpaqueIDBytes)
+		if err != nil {
+			return nativetool.Binding{}, nil, nil, err
+		}
+		target := s.active[string(identity)]
+		if target == nil || target.binding.Digest() == (nativetool.Digest{}) {
+			return nativetool.Binding{}, nil, nil, errSession
+		}
+		if s.tools[target.operation] != nil {
+			binding, err := s.hasher.BindCancellation(input, target.binding)
+			return binding, nil, nil, err
+		}
+	}
 	b, err := nativetool.NewBinding(input)
 	return b, intents, nil, err
 }
@@ -661,7 +720,17 @@ func (e *executor) finishFailure(id nativetool.ID, s *session, w http.ResponseWr
 		if barrierErr := e.dependencies.Store.MarkReplayBarrier(ctx, s.owner.capture, s.owner.revision, e.dependencies.Clock().UTC()); barrierErr != nil {
 			err = errors.Join(err, barrierErr)
 		}
-		_ = e.Revoke(ctx, s.owner.capture, RevocationOwnerChanged)
+		s.mu.Lock()
+		exact := s.closed
+		for _, active := range s.active {
+			if active.operation == id && active.protocolCanceled {
+				exact = true
+			}
+		}
+		s.mu.Unlock()
+		if !exact {
+			_ = e.Revoke(ctx, s.owner.capture, RevocationOwnerChanged)
+		}
 	}
 	if err != nil {
 		reason = ReasonStorageUnavailable

@@ -70,10 +70,11 @@ func (e *executor) consumeResponse(ctx context.Context, c CapturedRequest, reque
 		return err
 	}
 	defer free()
-	if !e.budget.acquire(2 * int64(len(raw))) {
+	cost := jsonAllocation(raw)
+	if !e.budget.acquire(cost) {
 		return errBudget
 	}
-	defer e.budget.release(2 * int64(len(raw)))
+	defer e.budget.release(cost)
 	result, err := parseResponse(raw, e.limits)
 	if err != nil {
 		return err
@@ -82,6 +83,9 @@ func (e *executor) consumeResponse(ctx context.Context, c CapturedRequest, reque
 		return errProtocol
 	}
 	if err = e.acceptResult(ctx, request, result, s, binding); err != nil {
+		return err
+	}
+	if err = e.touchObserved(ctx, s); err != nil {
 		return err
 	}
 	if err = e.retainResult(ctx, c.id, request, result, s); err != nil {
@@ -101,7 +105,22 @@ func (e *executor) consumeResponse(ctx context.Context, c CapturedRequest, reque
 	return err
 }
 func (e *executor) acceptResult(ctx context.Context, request, result rpc, s *session, binding nativetool.Binding) error {
+	if err := validateMethodResult(request.kind, result, e.limits); err != nil {
+		return err
+	}
+	if _, failure := result.object["error"]; failure {
+		if request.failure != nil {
+			*request.failure = true
+		}
+		return nil
+	}
 	if request.kind == nativetool.RequestInitialize {
+		s.mu.Lock()
+		hasSession := s.wire != "" && s.hasher != nil
+		s.mu.Unlock()
+		if !hasSession {
+			return errSession
+		}
 		var initialize map[string]json.RawMessage
 		if json.Unmarshal(result.object["result"], &initialize) != nil {
 			return errProtocol
@@ -129,13 +148,18 @@ func (e *executor) retainResult(ctx context.Context, id nativetool.ID, request, 
 	if request.kind != nativetool.RequestToolsCall || s.plan.ContentRecording().Mode != environment.ContentRecordingFull {
 		return nil
 	}
-	name, _ := text(request.params["name"])
-	profile, ok := e.contentProfile(s, name)
+	if request.retention == nil {
+		return nil
+	}
+	profile, ok := request.retention.profile, request.retention.known
 	if !ok {
 		return nil
 	}
 	if body, permitted := retainedContent(result.object["result"], profile.result, e.limits); permitted {
-		return e.dependencies.Store.PutContent(ctx, id, "tool_result", body, e.dependencies.Clock().UTC())
+		if err := e.dependencies.Store.PutContent(ctx, id, "tool_result", body, e.dependencies.Clock().UTC()); err != nil {
+			request.retention.unavailable = true
+		}
+		return nil
 	}
 	return nil
 }
@@ -144,20 +168,27 @@ type sseEvent struct {
 	id   string
 	data []byte
 	wire []byte
+	free func()
 }
 
-func parseSSEEvent(wire []byte, l Limits) (sseEvent, error) {
+func parseSSEEvent(wire []byte, l Limits, budgets ...*memoryBudget) (sseEvent, error) {
 	if !utf8.Valid(wire) {
 		return sseEvent{}, errProtocol
 	}
 	if int64(len(wire)) > l.EventBytes {
 		return sseEvent{}, errBudget
 	}
-	event := sseEvent{wire: wire}
-	var data [][]byte
+	event := sseEvent{wire: wire, free: func() {}}
+	dataCount, dataBytes := 0, 0
 	eventName := ""
 	seenID, seenEvent := false, false
-	for _, line := range bytes.Split(wire, []byte("\n")) {
+	for offset := 0; offset < len(wire); {
+		end := bytes.IndexByte(wire[offset:], '\n')
+		if end < 0 {
+			end = len(wire) - offset
+		}
+		line := wire[offset : offset+end]
+		offset += end + 1
 		line = bytes.TrimSuffix(line, []byte("\r"))
 		if len(line) == 0 {
 			continue
@@ -165,21 +196,24 @@ func parseSSEEvent(wire []byte, l Limits) (sseEvent, error) {
 		if line[0] == ':' {
 			continue
 		}
-		parts := bytes.SplitN(line, []byte(":"), 2)
-		if len(parts) != 2 {
+		colon := bytes.IndexByte(line, ':')
+		if colon < 0 {
 			return sseEvent{}, errProtocol
 		}
-		value := parts[1]
+		value := line[colon+1:]
 		if len(value) > 0 && value[0] == ' ' {
 			value = value[1:]
 		}
-		switch string(parts[0]) {
+		switch string(line[:colon]) {
 		case "event":
 			if seenEvent {
 				return sseEvent{}, errProtocol
 			}
 			seenEvent = true
-			eventName = string(value)
+			if !bytes.Equal(value, []byte("message")) {
+				return sseEvent{}, errProtocol
+			}
+			eventName = "message"
 		case "id":
 			if seenID || len(value) == 0 || len(value) > l.OpaqueIDBytes || bytes.ContainsAny(value, "\x00\r\n") {
 				return sseEvent{}, errProtocol
@@ -187,21 +221,56 @@ func parseSSEEvent(wire []byte, l Limits) (sseEvent, error) {
 			seenID = true
 			event.id = string(value)
 		case "data":
-			data = append(data, value)
+			dataCount++
+			dataBytes += len(value)
+			if dataCount == 1 {
+				event.data = value
+			}
 		default:
 			return sseEvent{}, errProtocol
 		}
 	}
-	if eventName != "" && eventName != "message" || len(data) == 0 && (eventName != "" || event.id != "") {
+	if dataCount == 0 && (eventName != "" || event.id != "") {
 		return sseEvent{}, errProtocol
 	}
-	if len(data) == 0 {
+	if dataCount == 0 {
 		return event, nil
 	}
-	if len(data) == 1 {
-		event.data = data[0]
-	} else {
-		event.data = bytes.Join(data, []byte("\n"))
+	if dataCount > 1 {
+		size := int64(dataBytes + dataCount - 1)
+		if size > l.EventBytes {
+			return sseEvent{}, errBudget
+		}
+		if len(budgets) > 0 {
+			budget := budgets[0]
+			if !budget.acquire(size) {
+				return sseEvent{}, errBudget
+			}
+			event.free = func() { budget.release(size) }
+		}
+		joined := make([]byte, 0, int(size))
+		firstData := true
+		for offset := 0; offset < len(wire); {
+			end := bytes.IndexByte(wire[offset:], '\n')
+			if end < 0 {
+				end = len(wire) - offset
+			}
+			line := bytes.TrimSuffix(wire[offset:offset+end], []byte("\r"))
+			offset += end + 1
+			if !bytes.HasPrefix(line, []byte("data:")) {
+				continue
+			}
+			value := line[5:]
+			if len(value) > 0 && value[0] == ' ' {
+				value = value[1:]
+			}
+			if !firstData {
+				joined = append(joined, '\n')
+			}
+			firstData = false
+			joined = append(joined, value...)
+		}
+		event.data = joined
 	}
 	return event, nil
 }
@@ -216,6 +285,12 @@ func (e *executor) consumeSSE(ctx context.Context, c CapturedRequest, request rp
 	var one [1]byte
 	terminal := false
 	headersSent := false
+	var eventFree func()
+	defer func() {
+		if eventFree != nil {
+			eventFree()
+		}
+	}()
 	for {
 		if ctx.Err() != nil {
 			return ctx.Err()
@@ -229,10 +304,11 @@ func (e *executor) consumeSSE(ctx context.Context, c CapturedRequest, request rp
 			wire[length] = one[0]
 			length++
 			if one[0] == '\n' && (length >= 2 && wire[length-2] == '\n' || length >= 4 && string(wire[length-4:length]) == "\r\n\r\n") {
-				event, err := parseSSEEvent(wire[:length], e.limits)
+				event, err := parseSSEEvent(wire[:length], e.limits, &e.budget)
 				if err != nil {
 					return err
 				}
+				eventFree = event.free
 				if request.kind == nativetool.RequestGetStream {
 					s.mu.Lock()
 					previous, known := s.events[event.id]
@@ -242,14 +318,15 @@ func (e *executor) consumeSSE(ctx context.Context, c CapturedRequest, request rp
 						return errSession
 					}
 				} else if len(event.data) > 0 {
-					if !e.budget.acquire(2 * int64(len(event.data))) {
+					cost := jsonAllocation(event.data)
+					if !e.budget.acquire(cost) {
 						return errBudget
 					}
 					message, parseErr := parseResponse(event.data, e.limits)
 					if parseErr == nil {
 						parseErr = e.acceptSSEMessage(ctx, c.id, request, message, s, binding, &terminal)
 					}
-					e.budget.release(2 * int64(len(event.data)))
+					e.budget.release(cost)
 					if parseErr != nil {
 						return parseErr
 					}
@@ -291,6 +368,11 @@ func (e *executor) consumeSSE(ctx context.Context, c CapturedRequest, request rp
 					flusher.Flush()
 				}
 				length = 0
+				if err = e.touchObserved(ctx, s); err != nil {
+					return err
+				}
+				event.free()
+				eventFree = nil
 			}
 		}
 		if err == io.EOF {
@@ -357,6 +439,7 @@ func (e *executor) acceptSSEMessage(ctx context.Context, operation nativetool.ID
 		s.revision = revision
 		s.generation = 0
 		s.catalog = nil
+		e.discardCatalog(s)
 		s.retained -= s.publicBytes
 		e.budget.release(s.publicBytes)
 		s.publicBytes = 0
