@@ -108,6 +108,7 @@ DEVELOPER_DIR=/Library/Developer/CommandLineTools go run golang.org/x/vuln/cmd/g
 
 - [ ] Flutter 执行 pinned SDK 验证、format/analyze、全量 tests 与 Chrome reader tests；Paseo 执行 `npm ci --ignore-scripts --no-audit --no-fund`、typecheck、9 项既有测试及受影响新测试；发布工具/Actions pins 使用原 Makefile 中的固定 checks。
 - [ ] 在临时 SQLite 和合成流量上运行至少 60 分钟受控 soak。每 30 秒采集不含正文的 heap、队列、map、WAL、记录/失败计数，关闭/打开 reader、切换捕获并发，验证留存清理与工作内存趋势。监控等待以不超过 60 秒的片段推进并保持用户更新。
+- [ ] 原生流量纳入 soak 前，执行 `native-claim-lifetime-audit-draft.md` 中的真实 Store／executor 小规模完成与清空测试，确认 `claimed` 数量及其共享预算占用。源码检查显示每次 claim 收取128字节、当前只在 executor.Close 统一释放；这是源码事实，尚非执行过的耗尽故障。若已完成请求造成持续保留，按实际终态证明修复并独立复核后再验收长期运行；不得按时间／容量驱逐活动或提交不确定的 claim。旧凭据即使重新获得本地 map 槽也必须被 Store.Verify 拒绝，不能通过“本次实际新 Start”条件或改写旧发送为零。明确区分活动／不确定工作、已完成历史和其他有意保留的 tombstone，不能把现有会话 map 测试当作此运行期 map 的证据。
 - [ ] 用可控 clock 验证 10 天 Session 边界、隐藏/唤醒后的续期、401 重新授权重试；用已拥有的故障 seam 验证磁盘不足、write/rename/sync 失败、进程异常退出、备份恢复。源码与适用平台不同的结果不能相互替代。
 - [ ] 保存测试时长、数据量、p50/p95、预算与未覆盖项。实际 60 分钟 soak 与时钟推进 10 天是不同证据，报告按实际内容标注。
 - [ ] 若出现新破坏，回到对应任务 root-cause/TDD/review 环，不跳过门槛。
