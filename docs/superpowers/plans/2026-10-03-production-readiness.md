@@ -74,7 +74,7 @@
 
 原生准备 Task1 已于 8209f1b 通过测试及独立复核，无剩余 findings。`2026-10-03-schema-migration-switch.md` 已自检并采用：使用该精确 DDL、已复核的完整快照，以及持锁事务/提交结果核对/异常恢复接入启动；桌面启动只在实际数据准备或升级时延长一次有界等待。完成该项复核后再执行原生存储任务2/3；尚未迁移真实数据或完成 MCP 验收。
 
-迁移实现 c8c7e71 已通过受影响验证并提交，独立复核正在进行。原生存储任务2/3已按 `2026-10-03-native-repository-execution.md` 与 `2026-10-03-native-authority-seams.md` 自检补齐：完整分层接口、真实审批、Store 绑定的执行凭证、工具目录来源及敏感回调的临时密钥绑定；这些是后续实现要求，尚不是实际客户端支持证明。
+迁移实现 c8c7e71 及修复 8d5f76f 已通过独立复核；原生存储生命周期、执行凭证与留存修复也已通过对应复核（1664ae89、cdc03746、9b99518）。原生传输的执行计划为 `2026-10-04-native-mcp-transport.md`：Task1 真实连接/请求租约 7e94f41、Task2 协议模块及三轮修复最终源码 12320b2 均已独立复核通过，当前 Repository 为 16 个生命周期方法和 8 个执行方法。权限、目录来源、敏感回调、一次执行、续期和已知结果状态的模块验证已完成；真实运行时/代理/TLS/启动器接入 Task3 正在执行，原生阅读器及精确客户端验收仍未完成。这些模块证据不替代实际客户端、平台或发布验收。
 
 - [ ] 使用隔离、固定版本的官方客户端：Codex 0.145.0、0.159.2、0.160.0，Claude 2.1.220。校验实际 version，已有后台 fixture 与请求接收器不使用用户生产账号/配置。
 - [ ] 验证已有后台、interactive/exec/resume、两个 Environment 并行、工具输入/返回、图片、取消、断网重连与下一次启动。按持久 Activity/Capture/Environment ID 断言实际请求归属，不只检查终端文本 OK。
@@ -129,6 +129,9 @@ DEVELOPER_DIR=/Library/Developer/CommandLineTools go run golang.org/x/vuln/cmd/g
 | 设计与三条详细计划 | 已自检并执行 | 本文件及三个子计划/恢复账本 |
 | 隔离基线 | 已建立 | fix/production-readiness-20261003；seed b7a9ed0 |
 | R1–R7 | 已修复、独立复核通过 | 各子计划 red→green + review；core source 2cd4c53 |
+| 完整快照与安全迁移 | 实现及独立复核通过 | d8a8a77、8d5f76f；未迁移用户运行数据 |
+| 原生存储与 MCP 协议模块 | 实现及独立复核通过 | 存储 9b99518；租约 7e94f41；协议最终 12320b2，native-mcp-transport Task2 rereview3 |
+| 运行时、代理、启动器接入 | 执行中 | native-mcp-transport Task3；尚未通过实际接入验收 |
 | 真实客户端与 CA | 未完成本次验收 | 精确版本/平台 reports |
 | 全包与持续运行 | 未完成本次验收 | 最终 SHA 的结果 |
 | 新版本交付 | 未发布 | GitHub release + Homebrew |
