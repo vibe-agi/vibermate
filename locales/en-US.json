@@ -1,4 +1,6 @@
 {
+  "cli.profiles.off": "{{name}} · Tool services: Off",
+  "cli.profiles.on": "{{name}} · Tool services: On",
   "cli.usage.ca": "Usage: vibermate ca install|status --server <http(s)://host:port> [--fingerprint <SHA-256>] [--yes]\n       vibermate ca download --server <http(s)://host:port> --out <certificate.crt>\nLog in first with vibermate login --server. The local platform is detected automatically. HTTP installation with --yes requires an independently checked fingerprint.",
   "cli.error.caFailed": "The CA operation was not completed. Check the server login, certificate fingerprint, and local installation permissions.",
   "cli.error.caDownloadDenied": "The Server rejected CA download. Check your login and upgrade the Server to a version supporting client CA commands.",

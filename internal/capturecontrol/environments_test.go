@@ -10,7 +10,9 @@ import (
 	"testing"
 
 	"github.com/vibe-agi/vibermate/internal/controlprincipal"
+	"github.com/vibe-agi/vibermate/internal/egressprofile"
 	"github.com/vibe-agi/vibermate/internal/environment"
+	"github.com/vibe-agi/vibermate/internal/originidentity"
 	"github.com/vibe-agi/vibermate/internal/protocolspec"
 	"github.com/vibe-agi/vibermate/internal/runtimeuser"
 	"github.com/vibe-agi/vibermate/internal/wireprofile"
@@ -27,7 +29,7 @@ func (reader *environmentListFixture) List(context.Context) ([]environment.Envir
 	return reader.items, nil
 }
 
-func TestCaptureEnvironmentCatalogIsScopedAndBodyFree(t *testing.T) {
+func TestCaptureEnvironmentPermissionFlagIsScoped(t *testing.T) {
 	compiler, err := environment.NewCompiler(nil, nil, protocolspec.Catalog{}, wireprofile.Catalog{})
 	if err != nil {
 		t.Fatal(err)
@@ -37,11 +39,19 @@ func TestCaptureEnvironmentCatalogIsScopedAndBodyFree(t *testing.T) {
 		id    string
 		state environment.State
 	}{{"work", environment.StateActive}, {"personal", environment.StateActive}, {"disabled", environment.StateDisabled}} {
-		snapshot, err := compiler.Restore(environment.Environment{
+		value := environment.Environment{
 			ID: environment.EnvironmentID(item.id), Name: item.id, State: item.state, Revision: 1,
 			ContentRecording:  environment.DefaultContentRecordingPolicy(),
 			LaunchEnvironment: environment.LaunchEnvironmentPolicy{SetEnv: map[string]string{"PRIVATE_SETTING": "must-not-be-returned"}},
-		})
+		}
+		if item.id == "personal" {
+			origin, _ := originidentity.ParseProviderOrigin("https://native.example")
+			value.ClientToolAccess = &environment.ClientToolAccessPolicy{Enabled: true, Route: &environment.ClientToolRoute{
+				ID: "personal.tools", Revision: 1, TargetOrigin: origin, Path: environment.ClientToolMCPPath,
+				CredentialOwner: environment.ClientToolCredentialOriginal, Contract: environment.ClientToolContractCodexLegacy, EgressProfile: egressprofile.Direct(),
+			}}
+		}
+		snapshot, err := compiler.Restore(value)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -119,6 +129,16 @@ func TestCaptureEnvironmentCatalogIsScopedAndBodyFree(t *testing.T) {
 				strings.Contains(response.Body.String(), "must-not-be-returned") || strings.Contains(response.Body.String(), "disabled") ||
 				test.name == "member" && page.Items[0].ID != "work" {
 				t.Fatalf("catalog status=%d body=%s", response.Code, response.Body.String())
+			}
+			var wire struct {
+				Items []map[string]any `json:"items"`
+			}
+			_ = json.Unmarshal(response.Body.Bytes(), &wire)
+			for _, item := range wire.Items {
+				want := item["id"] == "personal"
+				if enabled, ok := item["clientToolAccessEnabled"].(bool); !ok || enabled != want || len(item) != 3 {
+					t.Fatalf("permission flag must be scoped and body-free: %s", response.Body.String())
+				}
 			}
 		})
 	}

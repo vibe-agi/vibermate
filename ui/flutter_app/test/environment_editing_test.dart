@@ -5,6 +5,115 @@ import 'package:vibermate_app/preview/preview_control_api.dart';
 
 void main() {
   test(
+    'client tool permission rejects incomplete enabled response and null',
+    () async {
+      final api = PreviewControlApi();
+      addTearDown(api.close);
+      final work = (await api.loadDashboard()).environments.firstWhere(
+        (value) => value.id == 'work',
+      );
+      final legacy = work.toJson();
+      expect(
+        EnvironmentRecord.fromJson(
+          legacy,
+          'environment',
+        ).toJson().containsKey('clientToolAccess'),
+        isFalse,
+      );
+      for (final invalid in [
+        null,
+        true,
+        {'enabled': true},
+        {'enabled': 'true'},
+        {'enabled': false, 'route': {}},
+      ]) {
+        expect(
+          () => EnvironmentRecord.fromJson({
+            ...legacy,
+            'clientToolAccess': invalid,
+          }, 'environment'),
+          throwsA(isA<ControlContractException>()),
+        );
+      }
+      // A strict parser must accept the additive explicit OFF field and omit it.
+      final off = EnvironmentRecord.fromJson({
+        ...legacy,
+        'clientToolAccess': {'enabled': false},
+      }, 'environment');
+      expect(off.toJson().containsKey('clientToolAccess'), isFalse);
+      final route = <String, Object?>{
+        'id': 'client.tools.fixture',
+        'revision': 1,
+        'targetOrigin': 'https://chatgpt.com',
+        'path': '/backend-api/ps/mcp',
+        'credentialOwner': 'original_client',
+        'egressProfile': EgressProfileRevision.direct.toJson(),
+        'contract': 'codex_legacy_2025_06_18',
+      };
+      final on = EnvironmentRecord.fromJson({
+        ...legacy,
+        'clientToolAccess': {'enabled': true, 'route': route},
+      }, 'environment');
+      expect(on.clientToolAccessEnabled, isTrue);
+      expect(on.toJson()['clientToolAccess'], {
+        'enabled': true,
+        'route': route,
+      });
+      expect(
+        EnvironmentDraftInput.fromEnvironment(
+          on,
+          expectedDraftRevision: 0,
+        ).toJson()['clientToolAccess'],
+        {'enabled': true},
+      );
+      expect(
+        EnvironmentDraftInput.fromEnvironment(
+          on,
+          expectedDraftRevision: 0,
+          clientToolAccessEnabled: false,
+        ).toJson().containsKey('clientToolAccess'),
+        isFalse,
+      );
+      expect(
+        EnvironmentDraftInput.fromEnvironment(
+          on,
+          expectedDraftRevision: 0,
+        ).copyWith(expectedDraftRevision: 2).clientToolAccessEnabled,
+        isTrue,
+      );
+      for (final field in route.keys) {
+        final missing = {...route}..remove(field);
+        expect(
+          () => EnvironmentRecord.fromJson({
+            ...legacy,
+            'clientToolAccess': {'enabled': true, 'route': missing},
+          }, 'environment'),
+          throwsA(isA<ControlContractException>()),
+        );
+      }
+      for (final replacement in <String, Object?>{
+        'id': '',
+        'revision': 0,
+        'targetOrigin': 'https://chatgpt.com/',
+        'path': '/guessed',
+        'credentialOwner': 'managed_account',
+        'contract': 'future',
+        'egressProfile': null,
+      }.entries) {
+        expect(
+          () => EnvironmentRecord.fromJson({
+            ...legacy,
+            'clientToolAccess': {
+              'enabled': true,
+              'route': {...route, replacement.key: replacement.value},
+            },
+          }, 'environment'),
+          throwsA(isA<ControlContractException>()),
+        );
+      }
+    },
+  );
+  test(
     'account history grant is explicit, revisioned and survives model edits',
     () async {
       final api = PreviewControlApi();

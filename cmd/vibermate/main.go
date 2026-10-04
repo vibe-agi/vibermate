@@ -148,7 +148,7 @@ func executeContext(
 		)
 	}
 	if len(arguments) > 0 && arguments[0] == "profiles" {
-		return executeProfiles(ctx, arguments[1:], stdout)
+		return executeProfiles(ctx, arguments[1:], environment, stdout)
 	}
 	if len(arguments) > 0 && arguments[0] == "ca" {
 		if len(arguments) == 2 && (arguments[1] == "--help" || arguments[1] == "-h") {

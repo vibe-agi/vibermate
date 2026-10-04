@@ -1474,6 +1474,7 @@ final class _NewEnvironmentDialogState extends State<_NewEnvironmentDialog> {
   List<EnvironmentClientEndpoint> _clientEndpoints = const [];
   String _recordingMode = 'full';
   String _toolMode = 'observe';
+  bool _clientToolAccessEnabled = false;
   EnvironmentLaunchPolicy _launchEnvironment =
       const EnvironmentLaunchPolicy.empty();
   String? _draftEnvironmentId;
@@ -1919,6 +1920,21 @@ final class _NewEnvironmentDialogState extends State<_NewEnvironmentDialog> {
                                     ],
                                   ),
                                   const SizedBox(height: 8),
+                                  ClientToolPermissionControl(
+                                    controlKey: const Key(
+                                      'environment-create-client-tool-access',
+                                    ),
+                                    copy: copy,
+                                    enabled: _clientToolAccessEnabled,
+                                    onChanged:
+                                        widget.controller.environmentMutating
+                                        ? null
+                                        : (value) => setState(
+                                            () => _clientToolAccessEnabled =
+                                                value,
+                                          ),
+                                  ),
+                                  const SizedBox(height: 8),
                                   LaunchEnvironmentEditorButton(
                                     policy: _launchEnvironment,
                                     loadSnapshots: widget
@@ -2032,6 +2048,7 @@ final class _NewEnvironmentDialogState extends State<_NewEnvironmentDialog> {
         ),
         launchEnvironment: _launchEnvironment,
         policySet: EnvironmentPolicySet(toolMode: _toolMode),
+        clientToolAccessEnabled: _clientToolAccessEnabled,
       ),
     );
     if (!mounted) return;
@@ -2084,6 +2101,7 @@ final class _EnvironmentEditorDialogState
   late String _state;
   late String _recordingMode;
   late String _toolMode;
+  late bool _clientToolAccessEnabled;
   late EnvironmentLaunchPolicy _launchEnvironment;
   late List<EnvironmentClientEndpoint> _clientEndpoints;
   bool _submitted = false;
@@ -2101,6 +2119,7 @@ final class _EnvironmentEditorDialogState
           '${environment.contentRecording.retentionDays == 0 ? 30 : environment.contentRecording.retentionDays}',
     );
     _toolMode = environment.policySet.toolMode;
+    _clientToolAccessEnabled = environment.clientToolAccessEnabled;
     _launchEnvironment = environment.launchEnvironment;
     _clientEndpoints = environment.clientEndpoints;
   }
@@ -2351,6 +2370,21 @@ final class _EnvironmentEditorDialogState
                                           ),
                                         ),
                                     ],
+                                  ),
+                                  const SizedBox(height: 8),
+                                  ClientToolPermissionControl(
+                                    controlKey: const Key(
+                                      'environment-editor-client-tool-access',
+                                    ),
+                                    copy: copy,
+                                    enabled: _clientToolAccessEnabled,
+                                    onChanged:
+                                        widget.controller.environmentMutating
+                                        ? null
+                                        : (value) => setState(
+                                            () => _clientToolAccessEnabled =
+                                                value,
+                                          ),
                                   ),
                                   const SizedBox(height: 8),
                                   LaunchEnvironmentEditorButton(
@@ -2660,6 +2694,7 @@ final class _EnvironmentEditorDialogState
         ),
         launchEnvironment: _launchEnvironment,
         policySet: EnvironmentPolicySet(toolMode: _toolMode),
+        clientToolAccessEnabled: _clientToolAccessEnabled,
       ),
       baseEnvironment: widget.environment,
     );
@@ -2676,6 +2711,79 @@ final class _EnvironmentEditorDialogState
     widget.controller.clearEnvironmentReview();
     Navigator.pop(context);
   }
+}
+
+final class ClientToolPermissionControl extends StatelessWidget {
+  const ClientToolPermissionControl({
+    super.key,
+    required this.controlKey,
+    required this.copy,
+    required this.enabled,
+    required this.onChanged,
+  });
+  final Key controlKey;
+  final AppCopy copy;
+  final bool enabled;
+  final ValueChanged<bool>? onChanged;
+  @override
+  Widget build(BuildContext context) => Row(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      const Padding(
+        padding: EdgeInsets.only(top: 8),
+        child: Icon(Icons.build_outlined, size: 16),
+      ),
+      const SizedBox(width: 8),
+      Expanded(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(copy('environment.client_tools.label')),
+            const SizedBox(height: 4),
+            Text(
+              copy('environment.client_tools.detail'),
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+          ],
+        ),
+      ),
+      Switch(
+        key: controlKey,
+        value: enabled,
+        onChanged: onChanged == null
+            ? null
+            : (value) async {
+                if (!value) {
+                  onChanged!(false);
+                  return;
+                }
+                final allowed = await showDialog<bool>(
+                  context: context,
+                  builder: (context) => AlertDialog(
+                    title: Text(copy('environment.client_tools.label')),
+                    content: SizedBox(
+                      width: ViberMetrics.dialogStandardWidth,
+                      child: Text(copy('environment.client_tools.consent')),
+                    ),
+                    actions: [
+                      TextButton(
+                        key: const Key('client-tool-consent-cancel'),
+                        onPressed: () => Navigator.pop(context, false),
+                        child: Text(copy('common.cancel')),
+                      ),
+                      FilledButton(
+                        key: const Key('client-tool-consent-allow'),
+                        onPressed: () => Navigator.pop(context, true),
+                        child: Text(copy('environment.client_tools.allow')),
+                      ),
+                    ],
+                  ),
+                );
+                if (allowed == true && context.mounted) onChanged!(true);
+              },
+      ),
+    ],
+  );
 }
 
 final class _EditorSectionLabel extends StatelessWidget {
@@ -4872,6 +4980,15 @@ final class _EnvironmentImpactReview extends StatelessWidget {
             '${copy('environment.recording.mode')}: ${copy('environment.recording.${candidate.contentRecording.mode}')}'
             '${candidate.contentRecording.mode == 'off' ? '' : ' · ${candidate.contentRecording.retentionDays} ${copy('environment.recording.days')}'}'
             '  ·  ${copy('environment.policy.tool_mode')}: ${copy('environment.policy.${candidate.policySet.toolMode}')}',
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
+          const SizedBox(height: 4),
+          Text(
+            copy(
+              candidate.clientToolAccessEnabled
+                  ? 'environment.client_tools.on'
+                  : 'environment.client_tools.off',
+            ),
             style: Theme.of(context).textTheme.bodySmall,
           ),
           const SizedBox(height: 9),

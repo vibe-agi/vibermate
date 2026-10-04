@@ -14,6 +14,7 @@ import 'package:vibermate_app/core/i18n/app_copy.dart';
 import 'package:vibermate_app/core/preferences/workbench_preferences.dart';
 import 'package:vibermate_app/features/workbench/account_selector_editor.dart';
 import 'package:vibermate_app/features/workbench/conversation_timeline.dart';
+import 'package:vibermate_app/features/workbench/environments_view.dart';
 import 'package:vibermate_app/features/workbench/network_view.dart';
 import 'package:vibermate_app/features/workbench/route_account_scope_editor.dart';
 import 'package:vibermate_app/features/workbench/settings_view.dart';
@@ -21,6 +22,136 @@ import 'package:vibermate_app/features/workbench/workbench_controller.dart';
 import 'package:vibermate_app/features/workbench/workbench_shell.dart';
 import 'package:vibermate_app/preview/preview_control_api.dart';
 import 'package:vibermate_app/preview/preview_terminal_command.dart';
+
+// Permission changes must remain local until the existing review/publish flow.
+void clientToolPermissionTests() {
+  for (final chinese in [false, true]) {
+    testWidgets(
+      'client tool consent remains reachable at 390px and 200% ($chinese)',
+      (tester) async {
+        await tester.binding.setSurfaceSize(const Size(390, 760));
+        addTearDown(() => tester.binding.setSurfaceSize(null));
+        var enabled = false;
+        await tester.pumpWidget(
+          MaterialApp(
+            theme: ViberTheme.light(),
+            builder: (context, child) => MediaQuery(
+              data: MediaQuery.of(
+                context,
+              ).copyWith(textScaler: const TextScaler.linear(2)),
+              child: child!,
+            ),
+            home: Scaffold(
+              body: Padding(
+                padding: const EdgeInsets.all(16),
+                child: StatefulBuilder(
+                  builder: (context, setState) => ClientToolPermissionControl(
+                    controlKey: const Key(
+                      'environment-editor-client-tool-access',
+                    ),
+                    copy: AppCopy.forLanguage(
+                      chinese
+                          ? AppLanguage.simplifiedChinese
+                          : AppLanguage.english,
+                    ),
+                    enabled: enabled,
+                    onChanged: (value) => setState(() => enabled = value),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+        final toggle = find.byKey(
+          const Key('environment-editor-client-tool-access'),
+        );
+        await tester.ensureVisible(toggle);
+        await tester.pumpAndSettle();
+        await tester.tap(toggle);
+        await tester.pumpAndSettle();
+        final allow = find.byKey(const Key('client-tool-consent-allow'));
+        expect(allow, findsOneWidget);
+        expect(tester.getRect(allow).bottom, lessThanOrEqualTo(760));
+        await tester.tap(find.byKey(const Key('client-tool-consent-cancel')));
+        await tester.pumpAndSettle();
+        expect(tester.widget<Switch>(toggle).value, isFalse);
+        expect(tester.takeException(), isNull);
+      },
+    );
+    testWidgets('client tool consent cancel keeps permission OFF ($chinese)', (
+      tester,
+    ) async {
+      await tester.binding.setSurfaceSize(const Size(1180, 760));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      await tester.pumpWidget(
+        ViberMateApp(previewMode: true, preferChinese: chinese),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.byIcon(Icons.tune).first);
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('environment-row-work')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('environment-edit')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('environment-tab-runtime')));
+      await tester.pumpAndSettle();
+      final toggle = find.byKey(
+        const Key('environment-editor-client-tool-access'),
+      );
+      expect(toggle, findsOneWidget);
+      expect(tester.widget<Switch>(toggle).value, isFalse);
+      await tester.tap(toggle);
+      await tester.pumpAndSettle();
+      expect(
+        find.text(
+          chinese
+              ? '工具调用内容可能包含你的问题或文档。允许此配置使用客户端当前登录账号访问工具服务，仍遵守现有工具审批设置。'
+              : "Tool calls may include your questions or documents. Allow tool services for this profile using the client's current login. Existing tool approval settings still apply.",
+        ),
+        findsOneWidget,
+      );
+      await tester.tap(find.byKey(const Key('client-tool-consent-cancel')));
+      await tester.pumpAndSettle();
+      expect(tester.widget<Switch>(toggle).value, isFalse);
+      await tester.tap(toggle);
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('client-tool-consent-allow')));
+      await tester.pumpAndSettle();
+      expect(tester.widget<Switch>(toggle).value, isTrue);
+      await tester.tap(find.byKey(const Key('environment-review')));
+      await tester.pumpAndSettle();
+      expect(
+        find.text(chinese ? '工具服务：开启' : 'Tool services: On'),
+        findsOneWidget,
+      );
+      await tester.tap(find.byKey(const Key('environment-publish')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('environment-edit')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('environment-tab-runtime')));
+      await tester.pumpAndSettle();
+      expect(tester.widget<Switch>(toggle).value, isTrue);
+      await tester.tap(toggle);
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('client-tool-consent-allow')), findsNothing);
+      await tester.tap(find.byKey(const Key('environment-review')));
+      await tester.pumpAndSettle();
+      expect(
+        find.text(chinese ? '工具服务：关闭' : 'Tool services: Off'),
+        findsOneWidget,
+      );
+      await tester.tap(find.byKey(const Key('environment-publish')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('environment-edit')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('environment-tab-runtime')));
+      await tester.pumpAndSettle();
+      expect(tester.widget<Switch>(toggle).value, isFalse);
+      expect(tester.takeException(), isNull);
+    });
+  }
+}
 
 /// Opens a Conversation the way the product does now: through the Capture that
 /// owns it. A top-level Conversations section used to be a second path to the
@@ -165,6 +296,7 @@ double paintedFormSurfaceHeight(WidgetTester tester, Finder field) {
 }
 
 void main() {
+  clientToolPermissionTests();
   WidgetController.hitTestWarningShouldBeFatal = true;
 
   test('connection commands preserve HTTPS and the browser origin', () {

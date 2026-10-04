@@ -425,6 +425,7 @@ func Start(ctx context.Context, options Options) (*Host, error) {
 		Readiness:           ready,
 		Status:              runtime,
 		Environments:        runtime.Environments(),
+		ClientToolAccess:    runtime,
 		Assignments:         runtime.CaptureAssignments(),
 		Activities:          runtime.Activities(),
 		ConversationIndexer: conversationIndexer,

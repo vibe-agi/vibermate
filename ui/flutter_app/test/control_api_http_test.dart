@@ -1586,7 +1586,7 @@ void main() {
   );
 
   test(
-    'HTTP API sends one canonical mapped draft before preview and publish',
+    'HTTP API sends one canonical mapped client tool permission draft before preview and publish',
     () async {
       final preview = PreviewControlApi();
       addTearDown(preview.close);
@@ -1648,6 +1648,7 @@ void main() {
         expectedDraftRevision: 0,
         name: 'Work mapped',
         clientEndpoints: normalized,
+        clientToolAccessEnabled: true,
       );
       final digest = List.filled(64, 'b').join();
       final candidate = work.copyWith(
@@ -1655,6 +1656,18 @@ void main() {
         revision: work.revision + 1,
         digest: digest,
         clientEndpoints: normalized,
+        clientToolAccess: EnvironmentClientToolAccess(
+          enabled: true,
+          route: EnvironmentClientToolRoute(
+            id: 'client.tools.synthetic',
+            revision: 1,
+            targetOrigin: Uri.parse('https://chatgpt.com'),
+            path: '/backend-api/ps/mcp',
+            credentialOwner: 'original_client',
+            egressProfile: EgressProfileRevision.direct,
+            contract: 'codex_legacy_2025_06_18',
+          ),
+        ),
       );
       final impactJson = <String, Object?>{
         'environmentId': work.id,
@@ -1747,11 +1760,25 @@ void main() {
       );
       expect(impact.candidateDigest, digest);
       expect(published.environment.routes, hasLength(work.routes.length));
+      expect(saved.candidate.clientToolAccessEnabled, isTrue);
+      expect(
+        published.environment.clientToolAccess!.route!.credentialOwner,
+        'original_client',
+      );
+      expect(
+        published.environment.clientToolAccess!.route!.id,
+        'client.tools.synthetic',
+      );
+      expect(
+        published.environment.contentRecording.toJson(),
+        work.contentRecording.toJson(),
+      );
 
       final put = requests.singleWhere((request) => request.method == 'PUT');
       expect(put.uri.path, '/api/v1/environments/work/draft');
       expect(put.ifMatch, '${work.revision}');
       final wireBody = jsonDecode(utf8.decode(put.body));
+      expect(wireBody['clientToolAccess'], {'enabled': true});
       expect(wireBody, input.toJson());
       expect(normalizedRoute.revision, route.revision + 1);
       expect(

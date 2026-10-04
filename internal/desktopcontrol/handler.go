@@ -62,6 +62,7 @@ const (
 	ReasonRevisionConflict                   ReasonCode = "revision_conflict"
 	ReasonEnvironmentNotFound                ReasonCode = "environment_not_found"
 	ReasonEnvironmentDraftNotFound           ReasonCode = "environment_draft_not_found"
+	ReasonClientToolAccessUnsupported        ReasonCode = "environment_client_tool_access_unsupported"
 	ReasonProjectionUnavailable              ReasonCode = "environment_projection_unavailable"
 	ReasonRuntimeUnavailable                 ReasonCode = "runtime_unavailable"
 	ReasonApprovalNotFound                   ReasonCode = "approval_not_found"
@@ -158,6 +159,7 @@ type Options struct {
 	Readiness           ReadinessReader
 	Status              StatusReader
 	Environments        environment.Controller
+	ClientToolAccess    ClientToolAccessBuilder
 	DryRun              func(context.Context, exchange.ClientRequest) (exchange.DryRunResult, error)
 	Assignments         captureassignment.Controller
 	Activities          activity.Runtime
@@ -197,6 +199,7 @@ type Handler struct {
 	readiness           ReadinessReader
 	status              StatusReader
 	environments        environment.Controller
+	clientToolAccess    ClientToolAccessBuilder
 	dryRun              func(context.Context, exchange.ClientRequest) (exchange.DryRunResult, error)
 	assignments         captureassignment.Controller
 	activities          activity.Runtime
@@ -273,6 +276,7 @@ func New(options Options) (*Handler, error) {
 		environments:        options.Environments,
 		dryRun:              options.DryRun,
 		assignments:         options.Assignments,
+		clientToolAccess:    options.ClientToolAccess,
 		activities:          options.Activities,
 		conversationIndexer: options.ConversationIndexer,
 		contents:            options.Contents,

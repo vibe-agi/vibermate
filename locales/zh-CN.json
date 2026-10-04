@@ -1,4 +1,6 @@
 {
+  "cli.profiles.off": "{{name}} · 工具服务：关闭",
+  "cli.profiles.on": "{{name}} · 工具服务：开启",
   "cli.usage.ca": "用法：vibermate ca install|status --server <http(s)://host:port> [--fingerprint <SHA-256>] [--yes]\n      vibermate ca download --server <http(s)://host:port> --out <certificate.crt>\n请先通过 vibermate login --server 登录。自动识别本机平台；HTTP 连接下使用 --yes 必须指定独立核对的证书指纹。",
   "cli.error.caFailed": "证书操作未完成，请检查服务端登录、证书指纹和本机安装权限。",
   "cli.error.caDownloadDenied": "服务器拒绝下载 CA。请检查登录，并确认服务端已升级到支持客户端 CA 命令的版本。",

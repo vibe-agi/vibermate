@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"sort"
 	"strconv"
+	"strings"
 
 	"github.com/vibe-agi/vibermate/internal/activity"
 	"github.com/vibe-agi/vibermate/internal/codelibrary"
@@ -19,6 +21,10 @@ import (
 
 type EnvironmentListResponse struct {
 	Items []EnvironmentResponse `json:"items"`
+}
+
+type ClientToolAccessBuilder interface {
+	PrepareClientToolAccess(context.Context, environment.Environment, *environment.ClientToolAccessPolicy) (environment.ClientToolAccessPolicy, error)
 }
 
 type EnvironmentResponse struct {
@@ -34,6 +40,7 @@ type EnvironmentResponse struct {
 	ContentRecording  environment.ContentRecordingPolicy  `json:"contentRecording"`
 	LaunchEnvironment environment.LaunchEnvironmentPolicy `json:"launchEnvironment"`
 	PolicySet         environment.PolicySet               `json:"policySet"`
+	ClientToolAccess  *environment.ClientToolAccessPolicy `json:"clientToolAccess,omitempty"`
 }
 
 type EnvironmentDraftResponse struct {
@@ -54,6 +61,7 @@ type EnvironmentDraftInput struct {
 	ContentRecording      environment.ContentRecordingPolicy  `json:"contentRecording"`
 	LaunchEnvironment     environment.LaunchEnvironmentPolicy `json:"launchEnvironment"`
 	PolicySet             *environment.PolicySet              `json:"policySet,omitempty"`
+	ClientToolAccess      *environment.ClientToolAccessPolicy `json:"clientToolAccess,omitempty"`
 }
 
 type EnvironmentImpactResponse struct {
@@ -98,6 +106,7 @@ func environmentResponseOfAggregate(aggregate environment.Environment, digest st
 		ContentRecording:  aggregate.ContentRecording,
 		LaunchEnvironment: aggregate.LaunchEnvironment.Clone(),
 		PolicySet:         aggregate.EffectivePolicySet(),
+		ClientToolAccess:  aggregate.Clone().ClientToolAccess,
 	}
 }
 
@@ -269,7 +278,7 @@ func (handler *Handler) putEnvironmentDraft(writer http.ResponseWriter, request 
 	}
 	id, idErr := environment.NewEnvironmentID(request.PathValue("environmentId"))
 	var input EnvironmentDraftInput
-	if idErr != nil || decodeStrictJSON(body, &input) != nil {
+	if idErr != nil || decodeStrictJSON(body, &input) != nil || !validClientToolAccessInput(body) {
 		writeProblem(writer, http.StatusUnprocessableEntity, ReasonInvalidRequest)
 		return
 	}
@@ -291,6 +300,27 @@ func (handler *Handler) putEnvironmentDraft(writer http.ResponseWriter, request 
 			ContentRecording:  input.ContentRecording,
 			LaunchEnvironment: input.LaunchEnvironment.Clone(),
 			PolicySet:         input.PolicySet,
+			ClientToolAccess:  input.ClientToolAccess,
+		}
+		if candidate.ClientToolAccess != nil {
+			if !candidate.ClientToolAccess.Enabled {
+				if candidate.ClientToolAccess.Validate() != nil {
+					return problemResponse(classifyEnvironmentError(environment.ErrInvalidEnvironment))
+				}
+				candidate.ClientToolAccess = nil
+			} else {
+				if handler.clientToolAccess == nil {
+					return problemResponse(problemSpec{status: http.StatusUnprocessableEntity, reason: ReasonClientToolAccessUnsupported})
+				}
+				prepared, prepareErr := handler.clientToolAccess.PrepareClientToolAccess(request.Context(), candidate.Clone(), input.ClientToolAccess)
+				if prepareErr != nil {
+					if errors.Is(prepareErr, environment.ErrClientProtocolNotMatched) {
+						return problemResponse(problemSpec{status: http.StatusUnprocessableEntity, reason: ReasonClientToolAccessUnsupported})
+					}
+					return problemResponse(classifyEnvironmentError(prepareErr))
+				}
+				candidate.ClientToolAccess = &prepared
+			}
 		}
 		draft, saveErr := handler.environments.SaveDraft(request.Context(), environment.DraftCommand{
 			ExpectedBaseRevision:  environment.Revision(expectedBase),
@@ -306,6 +336,41 @@ func (handler *Handler) putEnvironmentDraft(writer http.ResponseWriter, request 
 		return
 	}
 	writeCached(writer, response)
+}
+
+// Null and missing enabled are not OFF consent; omission alone is legacy OFF.
+func validClientToolAccessInput(body []byte) bool {
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(body, &fields) != nil {
+		return false
+	}
+	for name := range fields {
+		if strings.EqualFold(name, "clientToolAccess") && name != "clientToolAccess" {
+			return false
+		}
+	}
+	raw, present := fields["clientToolAccess"]
+	if !present {
+		return true
+	}
+	var policy map[string]json.RawMessage
+	if json.Unmarshal(raw, &policy) != nil || policy == nil {
+		return false
+	}
+	enabled, ok := policy["enabled"]
+	if !ok {
+		return false
+	}
+	if bytes.Equal(bytes.TrimSpace(enabled), []byte("false")) {
+		return len(policy) == 1
+	}
+	if !bytes.Equal(bytes.TrimSpace(enabled), []byte("true")) {
+		return false
+	}
+	if route, present := policy["route"]; present && bytes.Equal(bytes.TrimSpace(route), []byte("null")) {
+		return false
+	}
+	return true
 }
 
 func (handler *Handler) resolvePublishedEgressProfiles(

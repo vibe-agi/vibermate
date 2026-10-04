@@ -5359,6 +5359,106 @@ bool _stringListsEqual(List<String> left, List<String> right) {
   return true;
 }
 
+final class EnvironmentClientToolRoute {
+  const EnvironmentClientToolRoute({
+    required this.id,
+    required this.revision,
+    required this.targetOrigin,
+    required this.path,
+    required this.credentialOwner,
+    required this.egressProfile,
+    required this.contract,
+  });
+  final String id;
+  final int revision;
+  final Uri targetOrigin;
+  final String path;
+  final String credentialOwner;
+  final EgressProfileRevision egressProfile;
+  final String contract;
+  factory EnvironmentClientToolRoute.fromJson(Object? json, String path) {
+    final value = requireObject(json, path);
+    requireFields(
+      value,
+      path,
+      required: const {
+        'id',
+        'revision',
+        'targetOrigin',
+        'path',
+        'credentialOwner',
+        'egressProfile',
+        'contract',
+      },
+    );
+    final originText = requireString(value, 'targetOrigin', path);
+    final origin = Uri.tryParse(originText);
+    final servicePath = requireString(value, 'path', path);
+    final owner = requireString(value, 'credentialOwner', path);
+    final contract = requireString(value, 'contract', path);
+    if (origin == null ||
+        !isCanonicalProviderOrigin(originText) ||
+        originText.length > 1024 ||
+        origin.scheme != 'https' ||
+        origin.path.isNotEmpty ||
+        servicePath != '/backend-api/ps/mcp' ||
+        owner != 'original_client' ||
+        contract != 'codex_legacy_2025_06_18') {
+      throw ControlContractException('$path client tool route is invalid');
+    }
+    return EnvironmentClientToolRoute(
+      id: _requireResourceId(value, 'id', path),
+      revision: requireInteger(value, 'revision', path, minimum: 1),
+      targetOrigin: origin,
+      path: servicePath,
+      credentialOwner: owner,
+      egressProfile: EgressProfileRevision.fromJson(
+        value['egressProfile'],
+        '$path.egressProfile',
+      ),
+      contract: contract,
+    );
+  }
+  JsonObject toJson() => {
+    'id': id,
+    'revision': revision,
+    'targetOrigin': targetOrigin.toString(),
+    'path': path,
+    'credentialOwner': credentialOwner,
+    'egressProfile': egressProfile.toJson(),
+    'contract': contract,
+  };
+}
+
+final class EnvironmentClientToolAccess {
+  const EnvironmentClientToolAccess({required this.enabled, this.route});
+  final bool enabled;
+  final EnvironmentClientToolRoute? route;
+  factory EnvironmentClientToolAccess.fromJson(Object? json, String path) {
+    final value = requireObject(json, path);
+    requireFields(
+      value,
+      path,
+      required: const {'enabled'},
+      optional: const {'route'},
+    );
+    final enabled = requireBoolean(value, 'enabled', path);
+    if (enabled != value.containsKey('route')) {
+      throw ControlContractException('$path client tool permission is invalid');
+    }
+    return EnvironmentClientToolAccess(
+      enabled: enabled,
+      route: enabled
+          ? EnvironmentClientToolRoute.fromJson(value['route'], '$path.route')
+          : null,
+    );
+  }
+  JsonObject toJson() => {
+    'enabled': enabled,
+    if (route != null) 'route': route!.toJson(),
+  };
+}
+
 final class EnvironmentRecord {
   const EnvironmentRecord({
     required this.id,
@@ -5373,6 +5473,7 @@ final class EnvironmentRecord {
     required this.contentRecording,
     required this.launchEnvironment,
     required this.policySet,
+    this.clientToolAccess,
   });
 
   factory EnvironmentRecord.fromJson(
@@ -5398,6 +5499,7 @@ final class EnvironmentRecord {
         'launchEnvironment',
         'policySet',
       },
+      optional: const {'clientToolAccess'},
     );
     final endpoints =
         requireList(value['clientEndpoints'], '$path.clientEndpoints').indexed
@@ -5427,6 +5529,12 @@ final class EnvironmentRecord {
     );
     final id = _requireResourceId(value, 'id', path);
     final systemOwned = requireBoolean(value, 'systemOwned', path);
+    final clientToolAccess = value.containsKey('clientToolAccess')
+        ? EnvironmentClientToolAccess.fromJson(
+            value['clientToolAccess'],
+            '$path.clientToolAccess',
+          )
+        : null;
     final origins = <String>{};
     final planIds = <String>{};
     final routeIds = <String>{};
@@ -5450,6 +5558,7 @@ final class EnvironmentRecord {
         _containsControlCharacter(name) ||
         !const {'active', 'disabled'}.contains(state) ||
         systemOwned != (id == 'system_transparent') ||
+        (systemOwned && clientToolAccess?.enabled == true) ||
         nestedIdentityInvalid ||
         endpoints.map((endpoint) => endpoint.id).toSet().length !=
             endpoints.length ||
@@ -5464,6 +5573,9 @@ final class EnvironmentRecord {
       revision: revision,
       digest: _requireDigest(value, 'digest', path),
       systemOwned: systemOwned,
+      clientToolAccess: clientToolAccess?.enabled == true
+          ? clientToolAccess
+          : null,
       clientEndpoints: List.unmodifiable(endpoints),
       pluginBindings: List.unmodifiable(bindings),
       budgetPolicy: EnvironmentBudgetPolicy.fromJson(
@@ -5497,6 +5609,8 @@ final class EnvironmentRecord {
   final EnvironmentContentRecordingPolicy contentRecording;
   final EnvironmentLaunchPolicy launchEnvironment;
   final EnvironmentPolicySet policySet;
+  final EnvironmentClientToolAccess? clientToolAccess;
+  bool get clientToolAccessEnabled => clientToolAccess?.enabled == true;
 
   Iterable<EnvironmentRoute> get routes sync* {
     for (final endpoint in clientEndpoints) {
@@ -5515,6 +5629,7 @@ final class EnvironmentRecord {
     EnvironmentContentRecordingPolicy? contentRecording,
     EnvironmentLaunchPolicy? launchEnvironment,
     EnvironmentPolicySet? policySet,
+    EnvironmentClientToolAccess? clientToolAccess,
   }) => EnvironmentRecord(
     id: id,
     name: name ?? this.name,
@@ -5528,6 +5643,7 @@ final class EnvironmentRecord {
     contentRecording: contentRecording ?? this.contentRecording,
     launchEnvironment: launchEnvironment ?? this.launchEnvironment,
     policySet: policySet ?? this.policySet,
+    clientToolAccess: clientToolAccess ?? this.clientToolAccess,
   );
 
   JsonObject toJson() => {
@@ -5547,6 +5663,7 @@ final class EnvironmentRecord {
     'contentRecording': contentRecording.toJson(),
     'launchEnvironment': launchEnvironment.toJson(),
     'policySet': policySet.toJson(),
+    if (clientToolAccessEnabled) 'clientToolAccess': clientToolAccess!.toJson(),
   };
 }
 
@@ -5561,6 +5678,7 @@ final class EnvironmentDraftInput {
     required this.contentRecording,
     required this.launchEnvironment,
     required this.policySet,
+    this.clientToolAccessEnabled = false,
   });
 
   factory EnvironmentDraftInput.fromEnvironment(
@@ -5572,6 +5690,7 @@ final class EnvironmentDraftInput {
     EnvironmentContentRecordingPolicy? contentRecording,
     EnvironmentLaunchPolicy? launchEnvironment,
     EnvironmentPolicySet? policySet,
+    bool? clientToolAccessEnabled,
   }) => EnvironmentDraftInput(
     expectedDraftRevision: expectedDraftRevision,
     name: name ?? environment.name,
@@ -5582,6 +5701,8 @@ final class EnvironmentDraftInput {
     contentRecording: contentRecording ?? environment.contentRecording,
     launchEnvironment: launchEnvironment ?? environment.launchEnvironment,
     policySet: policySet ?? environment.policySet,
+    clientToolAccessEnabled:
+        clientToolAccessEnabled ?? environment.clientToolAccessEnabled,
   );
 
   final int expectedDraftRevision;
@@ -5593,6 +5714,7 @@ final class EnvironmentDraftInput {
   final EnvironmentContentRecordingPolicy contentRecording;
   final EnvironmentLaunchPolicy launchEnvironment;
   final EnvironmentPolicySet policySet;
+  final bool clientToolAccessEnabled;
 
   EnvironmentDraftInput copyWith({
     int? expectedDraftRevision,
@@ -5607,6 +5729,7 @@ final class EnvironmentDraftInput {
     contentRecording: contentRecording,
     launchEnvironment: launchEnvironment,
     policySet: policySet,
+    clientToolAccessEnabled: clientToolAccessEnabled,
   );
 
   void validateFor(String environmentId, int expectedBaseRevision) {
@@ -5643,6 +5766,7 @@ final class EnvironmentDraftInput {
 
   JsonObject toJson() => {
     'expectedDraftRevision': expectedDraftRevision,
+    if (clientToolAccessEnabled) 'clientToolAccess': {'enabled': true},
     'name': name,
     'state': state,
     'clientEndpoints': clientEndpoints

@@ -1179,6 +1179,9 @@ final class PreviewControlApi implements ControlApi {
       contentRecording: input.contentRecording,
       launchEnvironment: input.launchEnvironment,
       policySet: input.policySet,
+      clientToolAccess: input.clientToolAccessEnabled
+          ? _previewClientToolAccess(current, environmentId, draftRevision)
+          : null,
     );
     final draft = EnvironmentDraft(
       environmentId: environmentId,
@@ -1190,6 +1193,27 @@ final class PreviewControlApi implements ControlApi {
     _environmentDrafts[environmentId] = draft;
     return draft;
   }
+
+  // Demo-only shape: this API has no native transport, login, or execution
+  // authority. Production preparation lives in the Go runtime's builder.
+  EnvironmentClientToolAccess _previewClientToolAccess(
+    EnvironmentRecord? published,
+    String environmentId,
+    int draftRevision,
+  ) => EnvironmentClientToolAccess(
+    enabled: true,
+    route:
+        published?.clientToolAccess?.route ??
+        EnvironmentClientToolRoute(
+          id: 'preview.tools.${_environmentDigest(environmentId).substring(0, 16)}.$draftRevision',
+          revision: 1,
+          targetOrigin: Uri.parse('https://chatgpt.com'),
+          path: '/backend-api/ps/mcp',
+          credentialOwner: 'original_client',
+          egressProfile: EgressProfileRevision.direct,
+          contract: 'codex_legacy_2025_06_18',
+        ),
+  );
 
   @override
   Future<EnvironmentImpact> previewEnvironmentDraft(

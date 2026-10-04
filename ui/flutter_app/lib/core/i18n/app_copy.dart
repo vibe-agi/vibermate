@@ -1345,6 +1345,16 @@ final class AppCopy {
     'environment.policy.review': 'Ask before tools run',
     'environment.policy.strict': 'Allow only proven-safe tools',
     'environment.recording.mode': 'Conversation content',
+    'environment.client_tools.label': 'Allow tool services',
+    'environment.client_tools.detail':
+        "Uses the client's current login. Tool approval rules still apply.",
+    'environment.client_tools.consent':
+        "Tool calls may include your questions or documents. Allow tool services for this profile using the client's current login. Existing tool approval settings still apply.",
+    'environment.client_tools.allow': 'Allow',
+    'environment.client_tools.on': 'Tool services: On',
+    'environment.client_tools.off': 'Tool services: Off',
+    'error.environment_client_tool_access_unsupported':
+        'This profile does not yet support built-in tool services.',
     'environment.recording.full': 'Record full content',
     'environment.recording.metadata_only': 'Metadata only',
     'environment.recording.off': 'Do not record content',
@@ -4024,6 +4034,14 @@ final class AppCopy {
     'environment.policy.review': '工具执行前询问',
     'environment.policy.strict': '仅允许已证明安全的工具',
     'environment.recording.mode': '对话内容',
+    'environment.client_tools.label': '允许工具服务',
+    'environment.client_tools.detail': '使用客户端当前登录账号；仍按工具审批规则执行。',
+    'environment.client_tools.consent':
+        '工具调用内容可能包含你的问题或文档。允许此配置使用客户端当前登录账号访问工具服务，仍遵守现有工具审批设置。',
+    'environment.client_tools.allow': '允许',
+    'environment.client_tools.on': '工具服务：开启',
+    'environment.client_tools.off': '工具服务：关闭',
+    'error.environment_client_tool_access_unsupported': '该配置尚不支持内置工具服务',
     'environment.recording.full': '记录完整内容',
     'environment.recording.metadata_only': '仅元数据',
     'environment.recording.off': '不记录内容',
