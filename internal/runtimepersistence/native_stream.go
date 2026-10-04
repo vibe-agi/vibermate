@@ -589,6 +589,16 @@ func (r *nativeToolRepository) RetireObservedStream(ctx context.Context, a nativ
 		return nil
 	}
 	s.cleanupOnly = true
+	// Retirement owns every actually started physical continuation, including
+	// an attached child whose handler has not reported completion yet. Promote
+	// those exact issued receipts before cleanup; pre-Start entries grant no
+	// such provenance and remain outside this post-Start obligation.
+	for id, child := range r.recovery {
+		if child.stream == a && child.receipt.OperationID() != "" {
+			child.cleanupOnly = true
+			r.recovery[id] = child
+		}
+	}
 	err := r.transaction(ctx, func(ctx context.Context, tx *sql.Tx) error {
 		for _, child := range r.recovery {
 			if child.stream == a && child.cleanupOnly {
