@@ -27,12 +27,25 @@ Store currently checks server_reply live execution authority before its explicit
 
 ```go
 // Existing validated inputs and immutable approval/operation identity first.
+desired := "allowed"
+if in.Decision == nativetool.DecisionDeny {
+    desired = "denied"
+}
 if a.State != "pending" {
-    // Existing exact historical state, stored key, ExpectedRevision+1 checks.
-    // Return the existing approval; no transition, expiry or authority renewal.
+    var key string
+    if err := tx.QueryRowContext(ctx, `SELECT idempotency_key FROM native_tool_approvals WHERE approval_id=?`, a.ID).Scan(&key); err != nil {
+        return err
+    }
+    if a.State == desired && key == in.IdempotencyKey && a.Revision == in.ExpectedRevision+1 {
+        answer = a
+        return nil
+    }
+    return nativetool.ErrConflict
 }
 if op.Kind == nativetool.RequestServerReply {
-    // Existing nativeExecutionAuthority check for a genuinely new decision.
+    if _, _, _, err := r.nativeExecutionAuthority(ctx, tx, op, in.ObservedAt); err != nil {
+        return err
+    }
 }
 // Existing revision/expiry/nativeApprovalAuthority/key uniqueness/resolution.
 ```
