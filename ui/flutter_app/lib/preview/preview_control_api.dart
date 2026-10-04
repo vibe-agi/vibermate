@@ -6,10 +6,26 @@ import 'package:crypto/crypto.dart' as crypto;
 import '../core/api/control_api.dart';
 import '../core/api/account_facts_models.dart';
 import '../core/api/control_models.dart';
+import '../core/api/native_tool_models.dart';
 import '../core/api/provider_origin.dart';
 import '../core/api/runtime_storage.dart';
 
 final class PreviewControlApi implements ControlApi {
+  @override
+  Future<NativeApprovalPage> nativeApprovals(
+    String captureKey, {
+    int afterSequence = 0,
+    int limit = 50,
+  }) async => NativeApprovalPage(const [], afterSequence);
+  @override
+  Future<NativeApproval> nativeApproval(String captureKey, String approvalId) =>
+      throw UnsupportedError('No native approvals in preview');
+  @override
+  Future<NativeApproval> decideNativeApproval(
+    String captureKey,
+    NativeApproval approval,
+    NativeDecision decision,
+  ) => throw UnsupportedError('No native approvals in preview');
   RuntimeUsageCollection _usageCollection = RuntimeUsageCollection(
     enabled: true,
     retentionDays: 365,

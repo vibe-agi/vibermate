@@ -234,6 +234,13 @@ func TestServerOwnerWebSessionCanManageManualCapture(t *testing.T) {
 			"/api/v1/evidence/search?q=synthetic&limit=10",
 		"http://" + host.Status().ListenAddress + "/api/v1/storage",
 	}
+	// Native management uses the same installation owner, never a Runtime
+	// member's environment grant or self-scoped session.
+	nativeCapture, createErr := host.Runtime().ManualCaptures().Create(context.Background(), manualcapture.CreateCommand{Owner: manualcapture.NewLocalOwnerScope(), DisplayName: "Native management scope", ClientClass: manualcapture.ClientDesktopApp, Lifetime: manualcapture.LifetimeTemporary, ExpiresIn: time.Hour})
+	if createErr != nil {
+		t.Fatal(createErr)
+	}
+	ownerReadURLs = append(ownerReadURLs, "http://"+host.Status().ListenAddress+"/api/v1/captures/manual_capture:"+nativeCapture.Capture.ID+"/native-tools/approvals")
 	for _, ownerReadURL := range ownerReadURLs {
 		for _, trial := range []struct {
 			label      string

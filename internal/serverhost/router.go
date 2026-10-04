@@ -12,6 +12,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/controlprincipal"
 	"github.com/vibe-agi/vibermate/internal/desktopcontrol"
 	"github.com/vibe-agi/vibermate/internal/egressnetwork"
+	"github.com/vibe-agi/vibermate/internal/manualcapture"
 	"github.com/vibe-agi/vibermate/internal/serveradmin"
 	"github.com/vibe-agi/vibermate/internal/servercontrol"
 )
@@ -139,6 +140,7 @@ func (handler router) ServeHTTP(writer http.ResponseWriter, request *http.Reques
 		if !handler.authorizeAdmin(writer, request, scope) {
 			return
 		}
+		request = request.WithContext(desktopcontrol.WithNativeManagementAuthority(request.Context(), handler.application.RequiredScope(request), manualcapture.NewLocalOwnerScope()))
 		handler.application.ServeHTTP(writer, request)
 	case handler.managementUI != nil:
 		handler.managementUI.ServeHTTP(writer, request)

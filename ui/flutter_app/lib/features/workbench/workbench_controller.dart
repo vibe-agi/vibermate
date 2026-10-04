@@ -11,6 +11,7 @@ import '../../core/api/launch_environment_snapshot.dart';
 import '../../core/api/control_failure.dart';
 import '../../core/api/account_facts_models.dart';
 import '../../core/api/control_models.dart';
+import '../../core/api/native_tool_models.dart';
 import '../../core/api/runtime_storage.dart';
 import '../../core/bootstrap/root_trust_installer.dart';
 import '../../core/bootstrap/public_certificate_exporter.dart';
@@ -289,6 +290,155 @@ final class WorkbenchController extends ChangeNotifier
   RuntimeStatus? get runtimeStatus => _inventoryFailureStatus ?? data?.status;
   NetworkData? networkData;
   List<ApprovalRecord>? pendingApprovals;
+  List<NativeApproval> nativeApprovals = const [];
+  bool nativeApprovalScanComplete = false;
+  bool nativeApprovalsLoading = false;
+  String? nativeApprovalError;
+  bool _nativeApprovalVisible = false;
+  int _nativeApprovalEpoch = 0;
+  int _nativeApprovalSequence = 0;
+  int _nativeDecisions = 0;
+  Set<String> _nativePendingIDs = {};
+  bool get nativeApprovalAttention => _nativePendingIDs.isNotEmpty;
+  int? get nativePendingCount =>
+      nativeApprovalScanComplete ? _nativePendingIDs.length : null;
+
+  void setNativeApprovalsVisible(bool visible) {
+    _nativeApprovalVisible = visible;
+    if (visible) {
+      unawaited(refreshNativeApprovals());
+    } else {
+      _nativeApprovalEpoch++;
+      nativeApprovals = const [];
+      nativeApprovalsLoading = false;
+    }
+  }
+
+  void _discardNativeApprovals() {
+    _nativeApprovalEpoch++;
+    _nativeApprovalSequence = 0;
+    nativeApprovals = const [];
+    nativeApprovalScanComplete = false;
+    nativeApprovalsLoading = false;
+    nativeApprovalError = null;
+    _nativePendingIDs = {};
+  }
+
+  Future<void> refreshNativeApprovals() async {
+    final capture = selectedCaptureKey;
+    if (_disposed ||
+        capture == null ||
+        nativeApprovalsLoading ||
+        _nativeDecisions != 0) {
+      return;
+    }
+    final epoch = _nativeApprovalEpoch;
+    final previousIDs = _nativePendingIDs;
+    final previousComplete = nativeApprovalScanComplete;
+    final previousError = nativeApprovalError;
+    bool current() =>
+        !_disposed &&
+        epoch == _nativeApprovalEpoch &&
+        capture == selectedCaptureKey;
+    nativeApprovalsLoading = true;
+    try {
+      final updated = <String, NativeApproval>{};
+      final pendingIDs = <String>{};
+      // Event pages alone cannot remove a pending question when a terminal
+      // event has fallen outside this page. Revalidate every visible ID.
+      for (final id in _nativePendingIDs) {
+        try {
+          final approval = await _api.nativeApproval(capture, id);
+          if (!current()) return;
+          final previous = nativeApprovals
+              .where((item) => item.id == id)
+              .firstOrNull;
+          if (previous != null && !previous.sameIntent(approval)) {
+            throw const ControlContractException(
+              'Native approval intent changed',
+            );
+          }
+          if (approval.pending) {
+            pendingIDs.add(approval.id);
+            if (_nativeApprovalVisible) updated[approval.id] = approval;
+          }
+        } on ControlProblem catch (error) {
+          if (error.status != 404) rethrow;
+        }
+      }
+      final page = await _api.nativeApprovals(
+        capture,
+        afterSequence: _nativeApprovalSequence,
+      );
+      if (!current()) return;
+      for (final approval in page.items) {
+        if (approval.pending) {
+          pendingIDs.add(approval.id);
+          if (_nativeApprovalVisible) updated[approval.id] = approval;
+        }
+      }
+      nativeApprovalScanComplete = page.nextSequence == _nativeApprovalSequence;
+      _nativeApprovalSequence = page.nextSequence;
+      _nativePendingIDs = pendingIDs;
+      nativeApprovals = _nativeApprovalVisible
+          ? List.unmodifiable(updated.values)
+          : const [];
+      nativeApprovalError = null;
+    } catch (error) {
+      if (!current()) return;
+      nativeApprovals = const [];
+      nativeApprovalScanComplete = false;
+      _nativeApprovalSequence = 0;
+      _nativePendingIDs = {};
+      nativeApprovalError = _describeError(error);
+    } finally {
+      if (current()) {
+        nativeApprovalsLoading = false;
+        if (_nativeApprovalVisible ||
+            previousComplete != nativeApprovalScanComplete ||
+            previousError != nativeApprovalError ||
+            previousIDs.length != _nativePendingIDs.length ||
+            previousIDs.any((id) => !_nativePendingIDs.contains(id))) {
+          notifyListeners();
+        }
+      }
+    }
+  }
+
+  Future<void> decideNativeApproval(
+    NativeApproval approval,
+    NativeDecision decision,
+  ) async {
+    if (_disposed ||
+        !_nativeApprovalVisible ||
+        approval.captureKey != selectedCaptureKey ||
+        !nativeApprovals.any((item) => identical(item, approval)) ||
+        !approval.pending ||
+        decision == NativeDecision.allowOnce && !approval.canAllow) {
+      return;
+    }
+    // Invalidate reads started before this decision, and drop its preview
+    // immediately. A network error requires a fresh scoped read.
+    final epoch = ++_nativeApprovalEpoch;
+    nativeApprovalsLoading = false;
+    nativeApprovals = List.unmodifiable(
+      nativeApprovals.where((item) => item.id != approval.id),
+    );
+    _nativePendingIDs.remove(approval.id);
+    _nativeDecisions++;
+    notifyListeners();
+    try {
+      await _api.decideNativeApproval(approval.captureKey, approval, decision);
+    } catch (error) {
+      if (!_disposed && epoch == _nativeApprovalEpoch) {
+        nativeApprovalError = _describeError(error);
+      }
+    } finally {
+      _nativeDecisions--;
+    }
+    if (!_disposed && epoch == _nativeApprovalEpoch) notifyListeners();
+  }
+
   ConversationPage? selectedCaptureConversations;
   ActivityPage? selectedCapturePage;
   bool showCaptureRequestRecords = false;
@@ -681,7 +831,10 @@ final class WorkbenchController extends ChangeNotifier
     policy: policy,
   );
 
-  int? get pendingApprovalCount => pendingApprovals?.length;
+  int? get pendingApprovalCount =>
+      pendingApprovals == null && !nativeApprovalAttention
+      ? null
+      : (pendingApprovals?.length ?? 0) + (nativePendingCount ?? 0);
 
   List<ActivityRecord> get selectedActivities =>
       selectedCapturePage?.items ?? const [];
@@ -1849,6 +2002,7 @@ final class WorkbenchController extends ChangeNotifier
   }
 
   Future<void> refreshPendingApprovals({bool quiet = false}) async {
+    await refreshNativeApprovals();
     if (_disposed || pendingApprovalsLoading || networkMutating) return;
     if (!quiet) {
       pendingApprovalsLoading = true;
@@ -2234,6 +2388,7 @@ final class WorkbenchController extends ChangeNotifier
   Future<void> refreshNetwork() => _refreshNetwork();
 
   Future<void> _refreshNetwork({bool quiet = false}) async {
+    await refreshNativeApprovals();
     if (_disposed || networkLoading || networkMutating) return;
     if (!quiet) {
       networkLoading = true;
@@ -2937,6 +3092,7 @@ final class WorkbenchController extends ChangeNotifier
   }
 
   void _resetCaptureDetail() {
+    _discardNativeApprovals();
     _selectionGeneration += 1;
     selectedAssignment = null;
     selectedCaptureLaunchIncomplete = false;
@@ -2954,6 +3110,7 @@ final class WorkbenchController extends ChangeNotifier
   }
 
   void _invalidateEvidenceCaches() {
+    _discardNativeApprovals();
     _exchangeLoadGeneration += 1;
     _exchangeDetails.clear();
     _exchangeLoads.clear();

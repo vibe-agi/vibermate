@@ -7,6 +7,7 @@ import 'package:http/http.dart' as http;
 
 import 'acp_models.dart';
 import 'control_models.dart';
+import 'native_tool_models.dart';
 import 'account_facts_models.dart';
 import 'provider_origin.dart';
 import 'runtime_storage.dart';
@@ -17,6 +18,17 @@ abstract interface class ACPObservationApi {
 }
 
 abstract interface class ControlApi {
+  Future<NativeApprovalPage> nativeApprovals(
+    String captureKey, {
+    int afterSequence = 0,
+    int limit = 50,
+  });
+  Future<NativeApproval> nativeApproval(String captureKey, String approvalId);
+  Future<NativeApproval> decideNativeApproval(
+    String captureKey,
+    NativeApproval approval,
+    NativeDecision decision,
+  );
   Future<List<LaunchEnvironmentSnapshot>> launchEnvironmentSnapshots();
   Future<RuntimeStorageLocation> storageLocation();
   Future<DeletionOutcome> cleanupExpiredEvidence();
@@ -474,6 +486,98 @@ final class ControlProblem implements Exception {
 }
 
 final class HttpControlApi implements ControlApi, ACPObservationApi {
+  String _nativeApprovalsPath(String captureKey) {
+    validateNativeCapture(captureKey);
+    return '/api/v1/captures/${Uri.encodeComponent(captureKey)}/native-tools/approvals';
+  }
+
+  Future<Object?> _readNativePreview(String path) async {
+    await _ensureFreshSession();
+    final result = await _send(
+      'GET',
+      path,
+      token: _session.readToken,
+      expectedStatus: 200,
+      maximumResponseBytes: 14 << 20,
+    );
+    if (result.headers.value('cache-control') != 'no-store') {
+      throw const ControlContractException('Native preview may be cached');
+    }
+    return result.payload;
+  }
+
+  @override
+  Future<NativeApprovalPage> nativeApprovals(
+    String captureKey, {
+    int afterSequence = 0,
+    int limit = 50,
+  }) async {
+    if (afterSequence < 0 || limit < 1 || limit > 199) {
+      throw const ControlContractException('Invalid native page request');
+    }
+    final payload = await _readNativePreview(
+      '${_nativeApprovalsPath(captureKey)}?afterSequence=$afterSequence&limit=$limit',
+    );
+    return NativeApprovalPage.fromJson(
+      payload,
+      captureKey,
+      afterSequence: afterSequence,
+      limit: limit,
+    );
+  }
+
+  @override
+  Future<NativeApproval> nativeApproval(
+    String captureKey,
+    String approvalId,
+  ) async {
+    nativeHex(approvalId, 32);
+    final value = NativeApproval.fromJson(
+      await _readNativePreview(
+        '${_nativeApprovalsPath(captureKey)}/$approvalId',
+      ),
+      captureKey,
+    );
+    if (value.id != approvalId) {
+      throw const ControlContractException('Native approval ID mismatch');
+    }
+    return value;
+  }
+
+  @override
+  Future<NativeApproval> decideNativeApproval(
+    String captureKey,
+    NativeApproval approval,
+    NativeDecision decision,
+  ) async {
+    if (captureKey != approval.captureKey ||
+        !approval.pending ||
+        decision == NativeDecision.allowOnce && !approval.canAllow) {
+      throw const ControlContractException(
+        'Native approval no longer available',
+      );
+    }
+    final value = NativeApproval.fromJson(
+      await _mutation(
+        'POST',
+        '${_nativeApprovalsPath(captureKey)}/${approval.id}/actions/decide',
+        expectedRevision: approval.revision,
+        body: {
+          'decision': decision.wire,
+          'bindingDigest': approval.bindingDigest,
+        },
+      ),
+      captureKey,
+    );
+    if (!value.sameIntent(approval) ||
+        value.revision <= approval.revision ||
+        value.state !=
+            (decision == NativeDecision.allowOnce ? 'allowed' : 'denied')) {
+      throw const ControlContractException('Native decision response mismatch');
+    }
+    return value;
+  }
+
   @override
   Future<ACPRecord?> acpObservation(String captureKey) async {
     try {

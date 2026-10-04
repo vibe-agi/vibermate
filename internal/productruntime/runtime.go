@@ -35,6 +35,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/localca"
 	"github.com/vibe-agi/vibermate/internal/manualcapture"
 	"github.com/vibe-agi/vibermate/internal/nativemcp"
+	"github.com/vibe-agi/vibermate/internal/nativetool"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
 	"github.com/vibe-agi/vibermate/internal/originaltransport"
 	"github.com/vibe-agi/vibermate/internal/provideraccount"
@@ -81,6 +82,7 @@ type Runtime struct {
 	egressProfiles     *egressprofile.Manager
 	runtimeUsers       *runtimeuser.Manager
 	approvals          approvalRuntime
+	nativeTools        nativemcp.Executor
 	connectionRules    *connectionpolicy.Manager
 	monitor            ownedComponent
 	rawEvidence        rawEvidenceRuntime
@@ -824,6 +826,7 @@ func startWithBuilders(
 		egressProfiles:     egressProfiles,
 		runtimeUsers:       runtimeUsers,
 		approvals:          approvals,
+		nativeTools:        nativeTools,
 		connectionRules:    connectionRules,
 		monitor:            monitor,
 		rawEvidence:        rawEvidence,
@@ -1054,6 +1057,13 @@ func (r *Runtime) FetchModelsDevPrices(ctx context.Context) (*http.Response, err
 	}
 	return r.provider.FetchModelsDevPrices(ctx)
 }
+
+// NativeToolRepository and NativeToolPreviews expose the same Store and live
+// executor used by captured native traffic to authenticated host composition.
+func (r *Runtime) NativeToolRepository() nativetool.Repository {
+	return r.storage.NativeToolRepository()
+}
+func (r *Runtime) NativeToolPreviews() nativemcp.Executor { return r.nativeTools }
 
 // ToolApprovals returns the durable interactive tool decision authority used
 // by the Exchange pipeline.

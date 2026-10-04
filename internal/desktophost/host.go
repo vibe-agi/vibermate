@@ -433,6 +433,8 @@ func Start(ctx context.Context, options Options) (*Host, error) {
 		Connections:         runtime.ConnectionEvents(),
 		Egress:              runtime.EgressAttempts(),
 		Approvals:           runtime.ToolApprovals(),
+		NativeTools:         runtime.NativeToolRepository(),
+		NativePreviews:      runtime.NativeToolPreviews(),
 		Endpoints:           runtime.UpstreamEndpoints(),
 		Models:              models,
 		ClientModels:        modelMetadata,

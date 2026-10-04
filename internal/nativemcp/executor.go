@@ -25,6 +25,7 @@ import (
 )
 
 type Executor interface {
+	PendingPreview(context.Context, captureidentity.Reference, nativetool.ID, nativetool.Digest) (PendingPreview, error)
 	Serve(context.Context, CapturedRequest, http.ResponseWriter) Terminal
 	Revoke(context.Context, captureidentity.Reference, RevocationReason) error
 	Close(context.Context) error
@@ -133,6 +134,8 @@ type executor struct {
 	parentsMu     sync.Mutex
 	parentPending int
 	closed        bool
+	previews      map[nativetool.ID]*pendingPreviewEntry
+	previewBytes  int
 	wg            sync.WaitGroup
 }
 
@@ -436,7 +439,11 @@ func (e *executor) Serve(ctx context.Context, c CapturedRequest, w http.Response
 		if err != nil {
 			return reject(w, c.id, ReasonProtocolInvalid)
 		}
+		if err = e.retainPreview(c.id, binding, intents, r, s); err != nil {
+			return reject(w, c.id, reasonFor(err))
+		}
 		decision, err := e.dependencies.ToolDecisions.Decide(call, decisionRequest)
+		e.discardPreview(c.id)
 		if err != nil {
 			if call.Err() != nil {
 				return reject(w, c.id, ReasonRevoked)

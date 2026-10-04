@@ -37,6 +37,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/launchsnapshot"
 	"github.com/vibe-agi/vibermate/internal/manualcapture"
 	"github.com/vibe-agi/vibermate/internal/modelcatalog"
+	"github.com/vibe-agi/vibermate/internal/nativetool"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
 	"github.com/vibe-agi/vibermate/internal/productbuild"
 	"github.com/vibe-agi/vibermate/internal/productruntime"
@@ -153,6 +154,8 @@ type ConversationIndexer interface {
 }
 
 type Options struct {
+	NativeTools         nativetool.Repository
+	NativePreviews      PendingPreviewReader
 	LaunchSnapshots     *launchsnapshot.Store
 	Storage             StorageLocationReader
 	ACP                 *acpobservation.Manager
@@ -193,6 +196,8 @@ type Options struct {
 }
 
 type Handler struct {
+	nativeTools         nativetool.Repository
+	nativePreviews      PendingPreviewReader
 	launchSnapshots     *launchsnapshot.Store
 	storage             StorageLocationReader
 	acp                 *acpobservation.Manager
@@ -283,6 +288,8 @@ func New(options Options) (*Handler, error) {
 		connections:         options.Connections,
 		egress:              options.Egress,
 		approvals:           options.Approvals,
+		nativeTools:         options.NativeTools,
+		nativePreviews:      options.NativePreviews,
 		endpoints:           options.Endpoints,
 		accounts:            options.Accounts,
 		accountReads:        options.AccountReads,
@@ -470,6 +477,9 @@ func New(options Options) (*Handler, error) {
 	handler.mux.HandleFunc("/api/v1/policies/connections", handler.invalidRoute)
 	handler.mux.HandleFunc("GET /api/v1/captures", handler.listCaptures)
 	handler.mux.HandleFunc("GET /api/v1/captures/{captureKey}", handler.getCapture)
+	handler.mux.HandleFunc("GET /api/v1/captures/{captureKey}/native-tools/approvals", handler.listNativeApprovals)
+	handler.mux.HandleFunc("GET /api/v1/captures/{captureKey}/native-tools/approvals/{approvalId}", handler.getNativeApproval)
+	handler.mux.HandleFunc("POST /api/v1/captures/{captureKey}/native-tools/approvals/{approvalId}/actions/decide", handler.decideNativeApproval)
 	handler.mux.HandleFunc("GET /api/v1/captures/{captureKey}/environment-assignment", handler.getCaptureEnvironmentAssignment)
 	handler.mux.HandleFunc(
 		"POST /api/v1/captures/{captureKey}/environment-assignment/actions/apply-latest",

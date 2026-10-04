@@ -10,6 +10,7 @@ import (
 
 	"github.com/vibe-agi/vibermate/internal/capturecontrol"
 	"github.com/vibe-agi/vibermate/internal/controlprincipal"
+	"github.com/vibe-agi/vibermate/internal/manualcapture"
 	"github.com/vibe-agi/vibermate/internal/servercontrol"
 )
 
@@ -266,6 +267,7 @@ func (router *Router) ServeHTTP(
 		request = request.WithContext(WithOAuthSession(request.Context(), credential))
 	}
 	credential = ""
+	request = request.WithContext(WithNativeManagementAuthority(request.Context(), scope, manualcapture.NewLocalOwnerScope()))
 	router.application.ServeHTTP(writer, request)
 }
 

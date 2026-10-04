@@ -51,6 +51,23 @@ final class AppCopy {
   }
 
   static const _en = <String, String>{
+    'native.service': 'Tool service',
+    'native.profile': 'Profile',
+    'native.selectedCapture': 'Selected Capture',
+    'native.login': "Client's existing login",
+    'native.allowOnce': 'Allow once',
+    'native.deny': 'Deny',
+    'native.unavailable': 'Details are unavailable. Request a new approval.',
+    'native.truncated':
+        'Parameters are shortened. Approval applies to the complete frozen request.',
+    'native.action.tool_call': 'Call tool',
+    'native.action.form_reply': 'Send the client’s form response',
+    'native.action.url_reply': 'Send the client’s consent response',
+    'native.action.verification_reply':
+        'Send the client’s verification response',
+    'native.pending': 'Tool approval pending',
+    'native.pendingCount': 'Tool approvals: {count}',
+    'native.loadMore': 'Load more',
     'content_page.title': 'Retained content',
     'content_page.close': 'Close',
     'content_page.load': 'Read content',
@@ -2964,6 +2981,21 @@ final class AppCopy {
   };
 
   static const _zh = <String, String>{
+    'native.service': '工具服务',
+    'native.profile': '配置',
+    'native.selectedCapture': '所选采集',
+    'native.login': '客户端原登录账号',
+    'native.allowOnce': '仅允许这次',
+    'native.deny': '拒绝',
+    'native.unavailable': '详情已不可用，请重新发起审批。',
+    'native.truncated': '参数已缩短显示。审批适用于完整的已固定请求。',
+    'native.action.tool_call': '调用工具',
+    'native.action.form_reply': '发送客户端的表单回复',
+    'native.action.url_reply': '发送客户端的授权回复',
+    'native.action.verification_reply': '发送客户端的验证回复',
+    'native.pending': '工具等待审批',
+    'native.pendingCount': '工具审批：{count}',
+    'native.loadMore': '加载更多',
     'content_page.title': '保留内容',
     'content_page.close': '关闭',
     'content_page.load': '读取内容',

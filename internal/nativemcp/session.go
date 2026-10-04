@@ -369,6 +369,11 @@ func (e *executor) Revoke(ctx context.Context, capture captureidentity.Reference
 	}
 	e.mu.Lock()
 	owner := e.scopes[capture.Key()]
+	for id, preview := range e.previews {
+		if preview.capture == capture {
+			e.discardPreviewLocked(id)
+		}
+	}
 	if owner != nil {
 		owner.revoked = true
 		owner.cancel()

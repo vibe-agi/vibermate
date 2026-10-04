@@ -70,6 +70,7 @@ func New(options Options) (*desktopcontrol.Handler, error) {
 		Activities:       options.Runtime.Activities(), ConversationIndexer: indexer,
 		Contents: options.Runtime.ExchangeContents(), Connections: options.Runtime.ConnectionEvents(),
 		Egress: options.Runtime.EgressAttempts(), Approvals: options.Runtime.ToolApprovals(),
+		NativeTools: options.Runtime.NativeToolRepository(), NativePreviews: options.Runtime.NativeToolPreviews(),
 		Endpoints: options.Runtime.UpstreamEndpoints(), Models: models, ClientModels: metadata,
 		Accounts: options.Runtime.ProviderAccounts(), CodexOAuth: options.Runtime.CodexOAuthAccounts(),
 		AccountReads:   options.Runtime.AccountReads(),
