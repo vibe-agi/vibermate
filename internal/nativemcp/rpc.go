@@ -11,17 +11,18 @@ import (
 )
 
 type rpc struct {
-	raw             []byte
-	object          map[string]json.RawMessage
-	params          map[string]json.RawMessage
-	method          string
-	id              []byte
-	kind            nativetool.RequestKind
-	failure         *bool
-	collection      uint64
-	collectionToken *uint64
-	cancel          context.CancelFunc
-	retention       *retentionState
+	raw                []byte
+	object             map[string]json.RawMessage
+	params             map[string]json.RawMessage
+	method             string
+	id                 []byte
+	kind               nativetool.RequestKind
+	failure            *bool
+	renewalUnavailable *bool
+	collection         uint64
+	collectionToken    *uint64
+	cancel             context.CancelFunc
+	retention          *retentionState
 }
 
 // Allocation preflight counts every member/container before allocating key

@@ -3,6 +3,7 @@ package nativemcp
 import (
 	"bytes"
 	"encoding/json"
+	"time"
 
 	"github.com/vibe-agi/vibermate/internal/nativetool"
 )
@@ -83,9 +84,91 @@ func optionalObject(object map[string]json.RawMessage, key string, l Limits) boo
 	}
 	return true
 }
+
+func optionalStrings(object map[string]json.RawMessage, keys ...string) bool {
+	for _, key := range keys {
+		if raw, present := object[key]; present {
+			if _, ok := text(raw); !ok {
+				return false
+			}
+		}
+	}
+	return true
+}
+func annotations(object map[string]json.RawMessage, l Limits) bool {
+	raw, present := object["annotations"]
+	if !present {
+		return true
+	}
+	value, err := decodeObject(raw, l.ResultBytes, l.Depth)
+	if err != nil {
+		return false
+	}
+	if audience, present := value["audience"]; present {
+		roles, valid := contentElements(audience)
+		if !valid {
+			return false
+		}
+		for _, raw := range roles {
+			role, ok := text(raw)
+			if !ok || role != "user" && role != "assistant" {
+				return false
+			}
+		}
+	}
+	if priority, present := value["priority"]; present {
+		var number float64
+		if bytes.Equal(bytes.TrimSpace(priority), []byte("null")) || json.Unmarshal(priority, &number) != nil || number < 0 || number > 1 {
+			return false
+		}
+	}
+	if modified, present := value["lastModified"]; present {
+		stamp, ok := text(modified)
+		if !ok {
+			return false
+		}
+		if _, err := time.Parse(time.RFC3339Nano, stamp); err != nil {
+			return false
+		}
+	}
+	return true
+}
+func resourceIcons(raw []byte, l Limits) bool {
+	icons, valid := contentElements(raw)
+	if !valid {
+		return false
+	}
+	for _, raw := range icons {
+		icon, err := decodeObject(raw, l.ResultBytes, l.Depth)
+		if err != nil {
+			return false
+		}
+		if _, ok := text(icon["src"]); !ok || !optionalStrings(icon, "mimeType") {
+			return false
+		}
+		if raw, present := icon["sizes"]; present {
+			sizes, valid := contentElements(raw)
+			if !valid {
+				return false
+			}
+			for _, size := range sizes {
+				if _, ok := text(size); !ok {
+					return false
+				}
+			}
+		}
+		if raw, present := icon["theme"]; present {
+			theme, ok := text(raw)
+			if !ok || theme != "light" && theme != "dark" {
+				return false
+			}
+		}
+	}
+	return true
+}
 func contentBlock(raw []byte, l Limits) bool {
 	object, err := decodeObject(raw, l.ResultBytes, l.Depth)
-	if err != nil || !optionalObject(object, "_meta", l) || !optionalObject(object, "annotations", l) {
+	if err != nil || !optionalObject(object, "_meta", l) || !annotations(object, l) {
 		return false
 	}
 	kind, ok := text(object["type"])
@@ -100,6 +183,18 @@ func contentBlock(raw []byte, l Limits) bool {
 		required = []string{"data", "mimeType"}
 	case "resource_link":
 		required = []string{"uri", "name"}
+		if !optionalStrings(object, "title", "description", "mimeType") {
+			return false
+		}
+		if raw, present := object["size"]; present {
+			var size uint32
+			if bytes.Equal(bytes.TrimSpace(raw), []byte("null")) || json.Unmarshal(raw, &size) != nil {
+				return false
+			}
+		}
+		if raw, present := object["icons"]; present && !resourceIcons(raw, l) {
+			return false
+		}
 	case "resource":
 		resource, err := decodeObject(object["resource"], l.ResultBytes, l.Depth)
 		if err != nil {
@@ -120,7 +215,7 @@ func contentBlock(raw []byte, l Limits) bool {
 		if _, ok := text(resource[key]); !ok {
 			return false
 		}
-		return optionalObject(resource, "_meta", l)
+		return optionalStrings(resource, "mimeType") && optionalObject(resource, "_meta", l)
 	default:
 		return false
 	}

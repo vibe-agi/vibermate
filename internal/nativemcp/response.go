@@ -85,7 +85,7 @@ func (e *executor) consumeResponse(ctx context.Context, c CapturedRequest, reque
 	if err = e.acceptResult(ctx, request, result, s, binding); err != nil {
 		return err
 	}
-	if err = e.touchObserved(ctx, s); err != nil {
+	if err = e.observeActivity(ctx, request, s, true); err != nil {
 		return err
 	}
 	if err = e.retainResult(ctx, c.id, request, result, s); err != nil {
@@ -368,7 +368,7 @@ func (e *executor) consumeSSE(ctx context.Context, c CapturedRequest, request rp
 					flusher.Flush()
 				}
 				length = 0
-				if err = e.touchObserved(ctx, s); err != nil {
+				if err = e.observeActivity(ctx, request, s, terminal); err != nil {
 					return err
 				}
 				event.free()

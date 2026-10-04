@@ -32,6 +32,7 @@ type session struct {
 	assignment, revision, generation uint64
 	wire, authorization, cookie      string
 	ready, closed                    bool
+	renewalFailed                    bool
 	last, timeLimit                  time.Time
 	active                           map[string]*activeRPC
 	catalog                          *nativetool.CatalogEvidence
@@ -96,7 +97,7 @@ func (e *executor) admitSession(ctx context.Context, c CapturedRequest, r rpc, p
 				expired := !existing.timeLimit.After(now) || now.Sub(existing.last) >= e.limits.SessionIdle
 				existing.mu.Unlock()
 				if expired {
-					_ = e.closeSession(ctx, existing)
+					_ = e.closeSessionLocked(ctx, existing)
 				}
 			}
 			if !scope.ExpiresAt.After(now) {
@@ -170,10 +171,10 @@ func (e *executor) admitSession(ctx context.Context, c CapturedRequest, r rpc, p
 		s.mu.Lock()
 		if s.wire == wire && !s.closed && (!s.timeLimit.After(now) || now.Sub(s.last) >= e.limits.SessionIdle) {
 			s.mu.Unlock()
-			_ = e.closeSession(ctx, s)
+			_ = e.closeSessionLocked(ctx, s)
 			return nil, errSession
 		}
-		matches := s.wire == wire && !s.closed && s.timeLimit.After(now) && now.Sub(s.last) < e.limits.SessionIdle && s.authorization == c.request.Header.Get("Authorization") && s.cookie == c.request.Header.Get("Cookie") && s.assignment == uint64(c.lease.Assignment().Revision) && s.plan.EnvironmentDigest() == plan.EnvironmentDigest() && s.plan.Route() == plan.Route()
+		matches := s.wire == wire && !s.closed && !s.renewalFailed && s.timeLimit.After(now) && now.Sub(s.last) < e.limits.SessionIdle && s.authorization == c.request.Header.Get("Authorization") && s.cookie == c.request.Header.Get("Cookie") && s.assignment == uint64(c.lease.Assignment().Revision) && s.plan.EnvironmentDigest() == plan.EnvironmentDigest() && s.plan.Route() == plan.Route()
 		if matches {
 			expires := now.Add(e.limits.SessionIdle)
 			if err := e.dependencies.Store.TouchSession(ctx, s.id, s.revision, expires, now); err != nil {
@@ -192,18 +193,29 @@ func (e *executor) admitSession(ctx context.Context, c CapturedRequest, r rpc, p
 	return nil, errSession
 }
 func (e *executor) closeSession(ctx context.Context, s *session) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.closeSessionLocked(ctx, s)
+}
+
+// e.mu owns registry reachability; s.mu owns active consumers and allocations.
+func (e *executor) closeSessionLocked(ctx context.Context, s *session) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
+		e.clearSession(s)
+		delete(s.owner.sessions, s.id)
 		return nil
 	}
 	revision, err := e.dependencies.Store.CloseSession(ctx, s.id, s.revision, e.dependencies.Clock().UTC())
 	if err != nil {
 		e.clearSession(s)
+		delete(s.owner.sessions, s.id)
 		return err
 	}
 	s.revision = revision
 	e.clearSession(s)
+	delete(s.owner.sessions, s.id)
 	return nil
 }
 func (e *executor) clearSession(s *session) {
@@ -214,6 +226,11 @@ func (e *executor) clearSession(s *session) {
 	if s.hasher != nil {
 		s.hasher.Close()
 	}
+	// Closed sessions are unlinked immediately, but in-flight consumers retain
+	// their exact handles and charged map/wire allocations until final release.
+	if len(s.active) > 0 {
+		return
+	}
 	s.authorization = ""
 	s.cookie = ""
 	for _, parent := range s.parents {
@@ -222,10 +239,14 @@ func (e *executor) clearSession(s *session) {
 			parent.release = nil
 		}
 	}
-	clear(s.parents)
-	clear(s.elicitations)
-	clear(s.tools)
-	clear(s.events)
+	s.parents = nil
+	s.elicitations = nil
+	s.tools = nil
+	s.events = nil
+	s.active = nil
+	s.callbacks = nil
+	s.listDigests = nil
+	s.hasher = nil
 	s.pages = nil
 	s.catalog = nil
 	retained := s.retained
@@ -241,7 +262,7 @@ func (e *executor) acquireRPC(s *session, id nativetool.ID, r rpc) (func(), erro
 	if key == "" {
 		key = "operation:" + id.String()
 	}
-	if s.closed || len(s.active) >= e.limits.ConcurrentRPCsPerSession {
+	if s.closed || s.renewalFailed || len(s.active) >= e.limits.ConcurrentRPCsPerSession {
 		return nil, errBudget
 	}
 	if s.active[key] != nil {
@@ -270,7 +291,11 @@ func (e *executor) acquireRPC(s *session, id nativetool.ID, r rpc) (func(), erro
 		if r.kind == nativetool.RequestToolsList {
 			s.catalogBusy = false
 		}
+		drained := (s.closed || s.renewalFailed) && len(s.active) == 0
 		s.mu.Unlock()
+		if drained {
+			_ = e.closeSession(context.Background(), s)
+		}
 	}, nil
 }
 func (e *executor) validateResponseSession(c CapturedRequest, r rpc, s *session, response *http.Response) error {
@@ -347,30 +372,11 @@ func (e *executor) Revoke(ctx context.Context, capture captureidentity.Reference
 	if owner != nil {
 		owner.revoked = true
 		owner.cancel()
-		for _, s := range owner.sessions {
+		for id, s := range owner.sessions {
 			s.mu.Lock()
-			s.closed = true
-			if s.hasher != nil {
-				s.hasher.Close()
-			}
-			s.authorization = ""
-			s.cookie = ""
-			for _, parent := range s.parents {
-				if parent.release != nil {
-					parent.release()
-					parent.release = nil
-				}
-			}
-			clear(s.parents)
-			clear(s.elicitations)
-			clear(s.tools)
-			clear(s.events)
-			s.pages = nil
-			s.catalog = nil
-			retained := s.retained
-			s.retained = 0
+			e.clearSession(s)
 			s.mu.Unlock()
-			e.budget.release(retained)
+			delete(owner.sessions, id)
 		}
 	}
 	e.mu.Unlock()
@@ -420,6 +426,9 @@ func equalEvent(previous, event []byte) bool { return bytes.Equal(previous, even
 func (e *executor) touchObserved(ctx context.Context, s *session) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.renewalFailed {
+		return nil
+	}
 	now := e.dependencies.Clock().UTC().Truncate(time.Millisecond)
 	interval := e.limits.SessionIdle / 2
 	if interval > time.Minute {
@@ -430,9 +439,19 @@ func (e *executor) touchObserved(ctx context.Context, s *session) error {
 	}
 	expires := now.Add(e.limits.SessionIdle)
 	if err := e.dependencies.Store.TouchSession(ctx, s.id, s.revision, expires, now); err != nil {
+		s.renewalFailed = true
 		return err
 	}
 	s.last = now
 	s.timeLimit = expires
 	return nil
+}
+
+func (e *executor) observeActivity(ctx context.Context, request rpc, s *session, knownTerminal bool) error {
+	err := e.touchObserved(ctx, s)
+	if err != nil && knownTerminal && request.renewalUnavailable != nil {
+		*request.renewalUnavailable = true
+		return nil
+	}
+	return err
 }

@@ -34,10 +34,15 @@ func TestNativeHopNominationsCannotStripAuthenticatedEvidence(t *testing.T) {
 
 func TestNativeTypedToolResponsesAndKnownRPCErrors(t *testing.T) {
 	for _, media := range []string{"json", "sse"} {
-		for _, test := range []struct {
+		for _, test := range append([]struct {
 			payload         string
 			failed, invalid bool
-		}{{`"result":{"content":false}`, false, true}, {`"result":{"content":[{"type":"text","text":null}]}`, false, true}, {`"error":{}`, false, true}, {`"error":{"code":-32603,"message":"Synthetic known failure"}`, true, false}, {`"result":{"content":[{"type":"text","text":"valid"}]}`, false, false}} {
+		}{{`"result":{"content":false}`, false, true}, {`"result":{"content":[{"type":"text","text":null}]}`, false, true},
+			{`"result":{"content":[{"type":"resource","resource":{"uri":"synthetic:resource","text":"ok","mimeType":42}}]}`, false, true},
+			{`"result":{"content":[{"type":"text","text":"ok","annotations":{"audience":false}}]}`, false, true},
+			{`"result":{"content":[{"type":"text","text":"ok","annotations":{"priority":"high"}}]}`, false, true},
+			{`"result":{"content":[{"type":"resource","resource":{"uri":"synthetic:resource","text":"ok","mimeType":"text/plain"},"annotations":{"audience":["user","assistant"],"priority":0.5}}]}`, false, false},
+			{`"error":{}`, false, true}, {`"error":{"code":-32603,"message":"Synthetic known failure"}`, true, false}, {`"result":{"content":[{"type":"text","text":"valid"}]}`, false, false}}, optionalTypeCases()...) {
 			t.Run(media+"/"+test.payload, func(t *testing.T) {
 				f := newNativeFixtureMode(t, environment.ToolPolicyObserve, environment.ContentRecordingPolicy{Mode: environment.ContentRecordingOff})
 				f.handshake(t)
@@ -70,6 +75,37 @@ func TestNativeTypedToolResponsesAndKnownRPCErrors(t *testing.T) {
 			})
 		}
 	}
+}
+
+func optionalTypeCases() []struct {
+	payload         string
+	failed, invalid bool
+} {
+	var cases []struct {
+		payload         string
+		failed, invalid bool
+	}
+	for _, fields := range []string{`"title":false`, `"description":42`, `"mimeType":false`, `"size":-1`, `"size":1.5`, `"icons":false`, `"icons":[{"src":42}]`, `"icons":[{"src":"synthetic:icon","mimeType":42}]`, `"icons":[{"src":"synthetic:icon","sizes":false}]`, `"icons":[{"src":"synthetic:icon","sizes":[42]}]`, `"icons":[{"src":"synthetic:icon","theme":"blue"}]`} {
+		cases = append(cases, struct {
+			payload         string
+			failed, invalid bool
+		}{`"result":{"content":[{"type":"resource_link","uri":"synthetic:x","name":"x",` + fields + `}]}`, false, true})
+	}
+	for _, fields := range []string{`"audience":["system"]`, `"priority":1.1`, `"lastModified":42`, `"lastModified":"yesterday"`} {
+		cases = append(cases, struct {
+			payload         string
+			failed, invalid bool
+		}{`"result":{"content":[{"type":"text","text":"ok","annotations":{` + fields + `}}]}`, false, true})
+	}
+	cases = append(cases, struct {
+		payload         string
+		failed, invalid bool
+	}{`"result":{"content":[{"type":"resource_link","uri":"synthetic:x","name":"x","title":"Title","description":"Description","mimeType":"text/plain","size":4294967295,"icons":[{"src":"synthetic:icon","mimeType":"image/png","sizes":["48x48","any"],"theme":"dark"}],"annotations":{"audience":[],"priority":1,"lastModified":"2025-01-12T15:00:58.123Z","customExtension":false},"customExtension":42}]}`, false, false})
+	cases = append(cases, struct {
+		payload         string
+		failed, invalid bool
+	}{`"result":{"content":[{"type":"resource","resource":{"uri":"synthetic:blob","blob":"YWJj","mimeType":"application/octet-stream","_meta":{}}},{"type":"image","data":"YWJj","mimeType":"image/png","_meta":{}},{"type":"audio","data":"YWJj","mimeType":"audio/wav"}]}`, false, false})
+	return cases
 }
 
 func TestNativeRequiredTypesRejectNullAndMalformedInitialize(t *testing.T) {

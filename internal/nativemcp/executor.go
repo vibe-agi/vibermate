@@ -289,6 +289,8 @@ func (e *executor) Serve(ctx context.Context, c CapturedRequest, w http.Response
 	}
 	knownRPCFailure := false
 	r.failure = &knownRPCFailure
+	renewalUnavailable := false
+	r.renewalUnavailable = &renewalUnavailable
 	r.cancel = cancel
 	r.retention = &retentionState{}
 	collectionToken := uint64(0)
@@ -557,6 +559,9 @@ func (e *executor) Serve(ctx context.Context, c CapturedRequest, w http.Response
 	outcome, reason := OutcomeCompleted, Reason("")
 	if knownRPCFailure {
 		outcome, reason = OutcomeFailed, ReasonProtocolInvalid
+	}
+	if renewalUnavailable {
+		reason = ReasonStorageUnavailable
 	}
 	return Terminal{OperationID: c.id, Outcome: outcome, Reason: reason, BytesIn: counted.bytes.Load(), BytesOut: int64(len(r.raw)), ContentReason: contentReason}
 }
