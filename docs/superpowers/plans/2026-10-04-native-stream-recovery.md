@@ -12,6 +12,8 @@
 
 ## Adopted design
 
+Continuation follow-up (2026-10-05): `2026-10-05-native-upstream-continuation.md` now supplies the concrete three-unit plan for the remaining145 upstream-break gap. It adds immutable body-free initiator/original-ID evidence to the unpublished v2 under the existing approved safe-upgrade boundary; it does not persist or restore stream authority. The schema-preservation statements below describe this original subplan through7558ddf, not a veto of that explicitly scoped follow-up. The current acceptance-profile unit must finish independent review before continuation Task1 starts. No proxy-loop source or DDL is implemented by this plan adoption.
+
 Model a logical SSE stream separately from an HTTP attempt. Preserve the original logical RPC while a bounded, authenticated same-stream GET can recover it. Finish each physical egress audit when that HTTP attempt ends. A fresh GET owns its own observed callback authority; it never borrows a tools/call. A completed GET send receipt stays unusable for sending; a separate, expiring observation capability permits the already observed callback to obtain its own ToolDecision and once-only send.
 
 This is more than accepting new GET bytes. Reject the two smaller alternatives: a session-global event cache cannot prove stream identity; allowing every completed GET parent from SQL alone cannot prove a live, exactly observed callback or the original Store-issued receipt. Also reject keeping a dead HTTP audit open until the user replies: it confuses transport bytes and duration with callback lifetime.
