@@ -1,6 +1,6 @@
 # 全局默认网络出口设计
 
-日期：2026-10-05。源码核查基点：`938766bd17bbe3796096b3c8cf3a62f91e44fb96`。用户已确认下述优先级并要求加入本次开发；本文是架构设计，尚未实现。父设计：`2026-10-03-production-readiness-design.md`。
+日期：2026-10-05。源码核查基点：`938766bd17bbe3796096b3c8cf3a62f91e44fb96`。用户已确认下述优先级并要求加入本次开发，并在书面设计确认中选择“按设计推进”；本文是已批准架构设计，尚未实现。父设计：`2026-10-03-production-readiness-design.md`。
 
 ## 用户可理解的规则
 
@@ -86,6 +86,6 @@ Environment 发布内容与 digest 描述用户选择；实际网络选择是另
 
 ## 自检
 
-与用户批准规则一致：全局兜底不压过显式选择，代理失败不换路，在途连接不切换；首登 OAuth 和实际 Flutter 更新路径均有归属。账户缺省、策略继承、持久化未设置、读取错误四种状态未合并；旧明确直连保持兼容。原生工具原凭据/授权边界、真实本地控制引导、审计来源和安全数据升级均有对应验收。没有实现新下载器、系统代理或真实账号操作。本设计仍需用户审阅后进入详细实施计划。
+与用户批准规则一致：全局兜底不压过显式选择，代理失败不换路，在途连接不切换；首登 OAuth 和实际 Flutter 更新路径均有归属。账户缺省、策略继承、持久化未设置、读取错误四种状态未合并；旧明确直连保持兼容。原生工具原凭据/授权边界、真实本地控制引导、审计来源和安全数据升级均有对应验收。没有实现新下载器、系统代理或真实账号操作。书面设计已获用户确认，下一步为详细实施计划及串行 TDD/独立复核。
 
 源码事实已在上述固定提交核对：`provideraccount/{account_read,settings,refresh}.go` 和 `manager.go` 的账号租约、`providertransport/{plan,runtime_fetch,account_read,account_reset,transport}.go` 的实际 profile 传递、`codexoauth/login.go` 首登空 AccountRef、`originaltransport/transport.go` 的自定义 SOCKS dialer、`blindtunnel/{dialer,probe}.go` 的直连缺口、`environment/{types,aggregate,snapshot,client_tools}.go` 的持久化与摘要、`desktopcontrol/egress_profiles.go`、`runtimepersistence/egress_profile_repository.go`，以及 Flutter `product_update_api.dart` / `egress_profile_editor.dart` / `settings_view.dart`。独立只读出站清单与主控逐项自检一致；这里只证明当前调用关系，不是新功能测试通过。
