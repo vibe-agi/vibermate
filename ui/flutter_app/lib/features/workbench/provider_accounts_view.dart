@@ -133,14 +133,15 @@ final class _ProviderAccountsViewState extends State<ProviderAccountsView> {
                       icon: const Icon(Icons.add, size: 16),
                       label: Text(copy('routes.add_account')),
                     );
-              return Row(
-                mainAxisSize: MainAxisSize.min,
+              return Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                crossAxisAlignment: WrapCrossAlignment.center,
                 children: [
                   Tooltip(
                     message: copy('provider_accounts.refresh_all.hint'),
                     child: refresh,
                   ),
-                  const SizedBox(width: 8),
                   Tooltip(message: copy('routes.add_account'), child: add),
                 ],
               );
@@ -856,6 +857,7 @@ final class _ProviderAccountQuotaSummary extends StatelessWidget {
                         Wrap(
                           spacing: 12,
                           runSpacing: 3,
+                          crossAxisAlignment: WrapCrossAlignment.center,
                           children: compactFacts,
                         ),
                       ],

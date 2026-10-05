@@ -9,11 +9,353 @@ import 'package:vibermate_app/core/api/control_models.dart';
 import 'package:vibermate_app/core/design/viber_theme.dart';
 import 'package:vibermate_app/core/i18n/app_copy.dart';
 import 'package:vibermate_app/features/workbench/provider_account_facts.dart';
+import 'package:vibermate_app/features/workbench/provider_accounts_view.dart';
 import 'package:vibermate_app/features/workbench/workbench_controller.dart';
 import 'package:vibermate_app/preview/preview_control_api.dart';
 import 'package:vibermate_app/preview/preview_terminal_command.dart';
 
 void main() {
+  for (final detail in [false, true]) {
+    testWidgets(
+      'quota metadata centers align in real ${detail ? 'detail' : 'summary'}',
+      (tester) async {
+        await tester.binding.setSurfaceSize(const Size(1180, 900));
+        addTearDown(() => tester.binding.setSurfaceSize(null));
+        final api = _FactsApi()..quota = _alignmentQuota();
+        final fixture = await _fixture(
+          api,
+          codexOAuth: true,
+          withInventory: !detail,
+        );
+        try {
+          if (detail) {
+            await _pumpPanel(tester, fixture);
+            await _query(tester);
+          } else {
+            await fixture.controller.ensureProviderAccountQuotas([
+              fixture.account,
+            ]);
+            await _pumpSummary(tester, fixture);
+            await tester.pumpAndSettle();
+          }
+          _expectQuotaAlignment(
+            tester,
+            detail: detail,
+            balance: '62500.00',
+            count: 2,
+            sameRun: true,
+          );
+        } finally {
+          await tester.pumpWidget(const SizedBox.shrink());
+          fixture.controller.dispose();
+        }
+      },
+    );
+  }
+  for (final detail in [false, true]) {
+    for (final config in [
+      (width: 390.0, scale: 1.0, dark: true, english: false, parent: null),
+      (width: 1180.0, scale: 1.6, dark: false, english: true, parent: null),
+      (width: 390.0, scale: 1.6, dark: false, english: false, parent: null),
+      (width: 1180.0, scale: 2.0, dark: true, english: false, parent: null),
+      (width: 390.0, scale: 2.0, dark: true, english: true, parent: null),
+      (width: 1180.0, scale: 2.0, dark: false, english: false, parent: 320.0),
+    ]) {
+      testWidgets(
+        'quota metadata responsive ${detail ? 'detail' : 'summary'} $config',
+        (tester) async {
+          await tester.binding.setSurfaceSize(Size(config.width, 900));
+          addTearDown(() => tester.binding.setSurfaceSize(null));
+          final two = config.scale != 1.6;
+          final balance = two ? '62429.25' : '62500.00';
+          final count = two ? 1 : 2;
+          final api = _FactsApi()
+            ..quota = _alignmentQuota(
+              balance: balance,
+              count: count,
+              twoWindows: two,
+            );
+          final fixture = await _fixture(
+            api,
+            codexOAuth: true,
+            withInventory: !detail,
+          );
+          final language = config.english
+              ? AppLanguage.english
+              : AppLanguage.simplifiedChinese;
+          try {
+            if (detail) {
+              await _pumpPanel(
+                tester,
+                fixture,
+                dark: config.dark,
+                scale: config.scale,
+                language: language,
+                parentWidth: config.parent,
+              );
+              await _query(tester);
+            } else {
+              await fixture.controller.ensureProviderAccountQuotas([
+                fixture.account,
+              ]);
+              await _pumpSummary(
+                tester,
+                fixture,
+                dark: config.dark,
+                scale: config.scale,
+                language: language,
+                parentWidth: config.parent,
+              );
+              await tester.pumpAndSettle();
+            }
+            if (!detail &&
+                config.width == 390 &&
+                config.english &&
+                config.scale == 2) {
+              _logAccountActionBounds(tester);
+            }
+            _expectQuotaAlignment(
+              tester,
+              detail: detail,
+              balance: balance,
+              count: count,
+              sameRun: config.parent == null ? null : false,
+            );
+            final root = find.byKey(
+              Key(
+                detail
+                    ? 'account-facts-quota'
+                    : 'provider-account-quota-summary-account.facts',
+              ),
+            );
+            expect(
+              find.descendant(
+                of: root,
+                matching: find.byType(LinearProgressIndicator),
+              ),
+              findsNWidgets(two ? 2 : 1),
+            );
+          } finally {
+            await tester.pumpWidget(const SizedBox.shrink());
+            fixture.controller.dispose();
+          }
+        },
+      );
+    }
+  }
+  for (final detail in [false, true]) {
+    testWidgets(
+      'quota metadata loading refresh and absence ${detail ? 'detail' : 'summary'}',
+      (tester) async {
+        await tester.binding.setSurfaceSize(const Size(1180, 900));
+        addTearDown(() => tester.binding.setSurfaceSize(null));
+        final initial = Completer<AccountFacts>();
+        final api = _FactsApi()
+          ..quota = _alignmentQuota()
+          ..pendingQuota = initial.future;
+        final fixture = await _fixture(
+          api,
+          codexOAuth: true,
+          withInventory: !detail,
+        );
+        try {
+          if (detail) {
+            await _pumpPanel(tester, fixture);
+            await _startQuotaRefresh(tester, fixture, detail: true);
+          } else {
+            await _pumpSummary(tester, fixture);
+            await tester.pump();
+          }
+          expect(
+            fixture.controller.providerAccountQuotaLoading(fixture.account),
+            isTrue,
+          );
+          expect(find.textContaining('62500.00'), findsNothing);
+          expect(
+            find.byKey(const Key('provider-account-resets-account.facts')),
+            findsNothing,
+          );
+          expect(find.byType(CircularProgressIndicator), findsWidgets);
+          expect(tester.takeException(), isNull);
+          initial.complete(api.facts(false));
+          api.pendingQuota = null;
+          await tester.pumpAndSettle();
+          _expectQuotaAlignment(
+            tester,
+            detail: detail,
+            balance: '62500.00',
+            count: 2,
+            sameRun: true,
+          );
+
+          final refresh = Completer<AccountFacts>();
+          api.pendingQuota = refresh.future;
+          await _startQuotaRefresh(tester, fixture, detail: detail);
+          expect(
+            fixture.controller.providerAccountQuotaLoading(fixture.account),
+            isTrue,
+          );
+          _expectQuotaAlignment(
+            tester,
+            detail: detail,
+            balance: '62500.00',
+            count: 2,
+            sameRun: true,
+          );
+          api.quota = _alignmentQuota(
+            balance: '62429.25',
+            count: 1,
+            twoWindows: true,
+          );
+          refresh.complete(api.facts(false));
+          api.pendingQuota = null;
+          await tester.pumpAndSettle();
+          _expectQuotaAlignment(
+            tester,
+            detail: detail,
+            balance: '62429.25',
+            count: 1,
+            sameRun: true,
+          );
+
+          Future<void> replace(Map<String, Object> quota) async {
+            api.quota = quota;
+            await _startQuotaRefresh(tester, fixture, detail: detail);
+            await tester.pumpAndSettle();
+            expect(
+              fixture.controller.providerAccountQuotaLoading(fixture.account),
+              isFalse,
+            );
+            expect(tester.takeException(), isNull);
+          }
+
+          final root = find.byKey(
+            Key(
+              detail
+                  ? 'account-facts-quota'
+                  : 'provider-account-quota-summary-account.facts',
+            ),
+          );
+          final voucher = find.byKey(
+            const Key('provider-account-resets-account.facts'),
+          );
+          await replace(_alignmentQuota(count: null));
+          expect(voucher, findsNothing);
+          final absentHeight = tester.getSize(root).height;
+          await replace(_alignmentQuota());
+          _expectQuotaAlignment(
+            tester,
+            detail: detail,
+            balance: '62500.00',
+            count: 2,
+            sameRun: true,
+          );
+          await replace(_alignmentQuota(count: null));
+          expect(voucher, findsNothing);
+          expect(tester.getSize(root).height, closeTo(absentHeight, .5));
+          await replace(_alignmentQuota(count: 0));
+          _expectQuotaAlignment(
+            tester,
+            detail: detail,
+            balance: '62500.00',
+            count: 0,
+            sameRun: true,
+          );
+          expect(tester.widget<TextButton>(voucher).onPressed, isNotNull);
+          await replace(_alignmentQuota(balance: null));
+          expect(
+            find.descendant(
+              of: root,
+              matching: find.textContaining('62500.00'),
+            ),
+            findsNothing,
+          );
+          expect(
+            find.descendant(of: voucher, matching: find.text('2')),
+            findsOneWidget,
+          );
+          await replace(_alignmentQuota(balance: null, count: null));
+          expect(voucher, findsNothing);
+          expect(tester.getSize(root).height, lessThan(absentHeight));
+          expect(api.redeemCalls, isEmpty);
+        } finally {
+          await tester.pumpWidget(const SizedBox.shrink());
+          fixture.controller.dispose();
+        }
+      },
+    );
+
+    testWidgets(
+      'quota aligned voucher keeps explicit confirmation ${detail ? 'detail' : 'summary'}',
+      (tester) async {
+        await tester.binding.setSurfaceSize(const Size(1180, 900));
+        addTearDown(() => tester.binding.setSurfaceSize(null));
+        final api = _FactsApi()
+          ..quota = {
+            ..._alignmentQuota(),
+            'rateLimitResets': {
+              'availableCount': 2,
+              'applicableAvailableCount': 2,
+              'details': [
+                for (final id in ['first', 'second'])
+                  {
+                    'id': id,
+                    'title': id,
+                    'resetType': 'codex_rate_limits',
+                    'status': 'available',
+                    'grantedAt': '2026-09-01T00:00:00Z',
+                  },
+              ],
+            },
+          };
+        final fixture = await _fixture(
+          api,
+          codexOAuth: true,
+          withInventory: !detail,
+        );
+        try {
+          if (detail) {
+            await _pumpPanel(tester, fixture);
+            await _query(tester);
+          } else {
+            await fixture.controller.ensureProviderAccountQuotas([
+              fixture.account,
+            ]);
+            await _pumpSummary(tester, fixture);
+            await tester.pumpAndSettle();
+          }
+          _expectQuotaAlignment(
+            tester,
+            detail: detail,
+            balance: '62500.00',
+            count: 2,
+            sameRun: true,
+          );
+          await tester.tap(
+            find.byKey(const Key('provider-account-resets-account.facts')),
+          );
+          await tester.pumpAndSettle();
+          expect(find.byType(AlertDialog), findsOneWidget);
+          expect(api.redeemCalls, isEmpty);
+          await tester.tap(find.byKey(const Key('account-reset-credit-first')));
+          await tester.pumpAndSettle();
+          expect(
+            find.byKey(const Key('account-reset-confirm')),
+            findsOneWidget,
+          );
+          expect(api.redeemCalls, isEmpty);
+          await tester.tap(find.byKey(const Key('account-reset-confirm')));
+          await tester.pumpAndSettle();
+          expect(api.redeemCalls.single.creditId, 'first');
+          expect(find.byType(AlertDialog), findsNothing);
+          expect(tester.takeException(), isNull);
+        } finally {
+          await tester.pumpWidget(const SizedBox.shrink());
+          fixture.controller.dispose();
+        }
+      },
+    );
+  }
   test('credits have two decimals and only live vouchers expire soon', () {
     expect(accountCreditsLabel('62429.2476250000', 'unknown'), '62429.25');
     expect(accountCreditsLabel('0', 'unknown'), '0.00');
@@ -577,6 +919,7 @@ Future<_Fixture> _fixture(
   _FactsApi api, {
   String id = 'account.facts',
   bool codexOAuth = false,
+  bool withInventory = false,
 }) async {
   final preview = PreviewControlApi(seedCaptures: false);
   final claims = base64Url
@@ -620,15 +963,212 @@ Future<_Fixture> _fixture(
     headerPolicy: const ProviderAccountHeaderPolicy(),
   );
   api.account = account;
-  return (
-    account: account,
-    controller: WorkbenchController(
-      api: api,
-      terminalCommands: PreviewTerminalCommandService(),
-      previewMode: !codexOAuth,
-      closeRuntime: preview.close,
+  final controller = WorkbenchController(
+    api: api,
+    terminalCommands: PreviewTerminalCommandService(),
+    previewMode: !codexOAuth,
+    closeRuntime: preview.close,
+  );
+  if (withInventory) {
+    final dashboard = await preview.loadDashboard();
+    controller.data = DashboardData(
+      status: dashboard.status,
+      captures: dashboard.captures,
+      captureNextCursor: dashboard.captureNextCursor,
+      environments: dashboard.environments,
+      endpoints: dashboard.endpoints,
+      accounts: [account],
+    );
+  }
+  return (account: account, controller: controller);
+}
+
+Map<String, Object> _alignmentQuota({
+  String? balance = '62500.00',
+  int? count = 2,
+  bool twoWindows = false,
+}) => {
+  'limits': [
+    {
+      'id': 'codex',
+      'primary': _window(41),
+      if (twoWindows) 'secondary': {..._window(20), 'windowSeconds': 18000},
+    },
+  ],
+  if (balance != null)
+    'credits': {'hasCredits': true, 'unlimited': false, 'balance': balance},
+  if (count != null)
+    'rateLimitResets': {
+      'availableCount': count,
+      'applicableAvailableCount': count,
+    },
+};
+
+Future<void> _pumpSummary(
+  WidgetTester tester,
+  _Fixture fixture, {
+  bool dark = true,
+  double scale = 1,
+  AppLanguage language = AppLanguage.simplifiedChinese,
+  double? parentWidth,
+}) => tester.pumpWidget(
+  MaterialApp(
+    theme: dark ? ViberTheme.dark() : ViberTheme.light(),
+    builder: (context, child) => MediaQuery(
+      data: MediaQuery.of(
+        context,
+      ).copyWith(textScaler: TextScaler.linear(scale)),
+      child: child!,
+    ),
+    home: Scaffold(
+      body: Align(
+        alignment: Alignment.topLeft,
+        child: SizedBox(
+          width: parentWidth,
+          child: AnimatedBuilder(
+            animation: fixture.controller,
+            builder: (context, _) => ProviderAccountsView(
+              controller: fixture.controller,
+              copy: AppCopy.forLanguage(language),
+            ),
+          ),
+        ),
+      ),
+    ),
+  ),
+);
+
+void _logAccountActionBounds(WidgetTester tester) {
+  final refresh = find.byKey(const Key('provider-accounts-refresh-all'));
+  late Rect headerRect;
+  tester.element(refresh).visitAncestorElements((element) {
+    if (element.widget is LayoutBuilder) {
+      final box = element.findRenderObject()! as RenderBox;
+      headerRect = tester.getRect(
+        find.byElementPredicate((candidate) => identical(candidate, element)),
+      );
+      debugPrint(
+        'header local LayoutBuilder constraints=${box.constraints} maxWidthFinite=${box.constraints.maxWidth.isFinite}',
+      );
+      return false;
+    }
+    return true;
+  });
+  for (final key in [
+    'provider-accounts-refresh-all',
+    'provider-accounts-add',
+  ]) {
+    final button = find.byKey(Key(key));
+    final label = find.descendant(of: button, matching: find.byType(Text));
+    final buttonRect = tester.getRect(button),
+        labelRect = tester.getRect(label);
+    debugPrint(
+      '$key type=${tester.widget(button).runtimeType} rect=${tester.getRect(button)} label=${tester.getRect(label)}',
+    );
+    expect(buttonRect.left, greaterThanOrEqualTo(headerRect.left));
+    expect(buttonRect.right, lessThanOrEqualTo(headerRect.right));
+    expect(buttonRect.height, greaterThanOrEqualTo(30));
+    expect(labelRect.left, greaterThanOrEqualTo(buttonRect.left));
+    expect(labelRect.right, lessThanOrEqualTo(buttonRect.right));
+    expect(labelRect.top, greaterThanOrEqualTo(buttonRect.top));
+    expect(labelRect.bottom, lessThanOrEqualTo(buttonRect.bottom));
+  }
+  final hit = find.byKey(
+    const Key('account-automatic-refresh-hit-account.facts'),
+  );
+  final row = find.ancestor(of: hit, matching: find.byType(Row)).first;
+  final label = find.descendant(of: row, matching: find.byType(Text));
+  debugPrint(
+    'automatic-refresh row constraints=${tester.renderObject<RenderBox>(row).constraints} row=${tester.getRect(row)} label=${tester.getRect(label)} hit=${tester.getRect(hit)}',
+  );
+  final rowRect = tester.getRect(row),
+      hitRect = tester.getRect(hit),
+      labelRect = tester.getRect(label);
+  expect(hitRect.size, const Size(56, 44));
+  expect(hitRect.right, lessThanOrEqualTo(rowRect.right));
+  expect(labelRect.right, lessThanOrEqualTo(hitRect.left));
+  expect(labelRect.top, greaterThanOrEqualTo(rowRect.top));
+  expect(labelRect.bottom, lessThanOrEqualTo(rowRect.bottom));
+}
+
+void _expectQuotaAlignment(
+  WidgetTester tester, {
+  required bool detail,
+  required String balance,
+  required int count,
+  bool? sameRun,
+}) {
+  final root = find.byKey(
+    Key(
+      detail
+          ? 'account-facts-quota'
+          : 'provider-account-quota-summary-account.facts',
     ),
   );
+  final credits = find.descendant(
+    of: root,
+    matching: find.textContaining(balance),
+  );
+  final button = find.descendant(
+    of: root,
+    matching: find.byKey(const Key('provider-account-resets-account.facts')),
+  );
+  final voucher = find.descendant(of: button, matching: find.text('$count'));
+  expect(credits, findsOneWidget);
+  expect(voucher, findsOneWidget);
+  final creditRect = tester.getRect(credits),
+      voucherRect = tester.getRect(voucher);
+  final buttonRect = tester.getRect(button), rootRect = tester.getRect(root);
+  final onSameRun =
+      creditRect.top < buttonRect.bottom && buttonRect.top < creditRect.bottom;
+  if (sameRun != null) {
+    expect(onSameRun, sameRun, reason: 'Intended natural metadata run');
+  }
+  expect(buttonRect.width, greaterThanOrEqualTo(32));
+  expect(buttonRect.height, greaterThanOrEqualTo(28));
+  for (final rect in [creditRect, buttonRect]) {
+    expect(rect.left, greaterThanOrEqualTo(rootRect.left - .5));
+    expect(rect.right, lessThanOrEqualTo(rootRect.right + .5));
+    expect(rect.top, greaterThanOrEqualTo(rootRect.top - .5));
+    expect(rect.bottom, lessThanOrEqualTo(rootRect.bottom + .5));
+  }
+  final voucherIcon = tester.getRect(
+    find.descendant(
+      of: button,
+      matching: find.byIcon(Icons.confirmation_number_outlined),
+    ),
+  );
+  debugPrint(
+    'quota ${detail ? 'detail' : 'summary'} sameRun=$onSameRun credits=$creditRect voucher=$voucherRect voucherIcon=$voucherIcon',
+  );
+  final creditIcon = detail
+      ? null
+      : tester.getRect(
+          find.descendant(of: root, matching: find.byIcon(Icons.toll_outlined)),
+        );
+  if (creditIcon != null) {
+    debugPrint(
+      'quota summary creditIcon=$creditIcon iconCenterDelta=${(creditIcon.center.dy - voucherIcon.center.dy).abs()}',
+    );
+  }
+  expect(tester.takeException(), isNull);
+  if (onSameRun) {
+    expect(voucherRect.left, greaterThan(creditRect.right));
+    expect(
+      (creditRect.center.dy - voucherRect.center.dy).abs(),
+      lessThanOrEqualTo(.5),
+      reason: 'Actual metadata content centers must align on one run',
+    );
+    if (!detail) {
+      expect(
+        (creditIcon!.center.dy - voucherIcon.center.dy).abs(),
+        lessThanOrEqualTo(.5),
+      );
+    }
+  } else {
+    expect(buttonRect.top, greaterThanOrEqualTo(creditRect.bottom));
+    expect(buttonRect.overlaps(creditRect), isFalse);
+  }
 }
 
 Future<void> _pumpPanel(
@@ -636,23 +1176,46 @@ Future<void> _pumpPanel(
   _Fixture fixture, {
   bool dark = true,
   double scale = 1,
-}) => tester.pumpWidget(
-  MaterialApp(
-    theme: dark ? ViberTheme.dark() : ViberTheme.light(),
-    home: MediaQuery(
-      data: MediaQueryData(textScaler: TextScaler.linear(scale)),
-      child: Scaffold(
-        body: SingleChildScrollView(
-          child: ProviderAccountFactsPanel(
-            account: fixture.account,
-            controller: fixture.controller,
-            copy: AppCopy.forLanguage(AppLanguage.simplifiedChinese),
+  AppLanguage language = AppLanguage.simplifiedChinese,
+  double? parentWidth,
+}) {
+  final panel = ProviderAccountFactsPanel(
+    account: fixture.account,
+    controller: fixture.controller,
+    copy: AppCopy.forLanguage(language),
+  );
+  return tester.pumpWidget(
+    MaterialApp(
+      theme: dark ? ViberTheme.dark() : ViberTheme.light(),
+      home: MediaQuery(
+        data: MediaQueryData(textScaler: TextScaler.linear(scale)),
+        child: Scaffold(
+          body: SingleChildScrollView(
+            child: parentWidth == null
+                ? panel
+                : Align(
+                    alignment: Alignment.topLeft,
+                    child: SizedBox(width: parentWidth, child: panel),
+                  ),
           ),
         ),
       ),
     ),
-  ),
-);
+  );
+}
+
+Future<void> _startQuotaRefresh(
+  WidgetTester tester,
+  _Fixture fixture, {
+  required bool detail,
+}) async {
+  if (detail) {
+    await tester.tap(find.byKey(const Key('account-quota-account.facts')));
+  } else {
+    unawaited(fixture.controller.refreshProviderAccountQuota(fixture.account));
+  }
+  await tester.pump();
+}
 
 Future<void> _query(WidgetTester tester, {bool history = false}) async {
   final button = find.byKey(

@@ -446,6 +446,7 @@ final class _ProviderAccountFactsPanelState
           Wrap(
             spacing: 14,
             runSpacing: 3,
+            crossAxisAlignment: WrapCrossAlignment.center,
             children: [
               if (credits != null)
                 _caption(

@@ -134,9 +134,12 @@ final class ProviderAccountRow extends StatelessWidget {
                 : MainAxisAlignment.start,
             children: [
               if (!table)
-                Text(
-                  copy('provider_accounts.automatic_refresh'),
-                  style: Theme.of(context).textTheme.bodySmall,
+                Flexible(
+                  fit: FlexFit.loose,
+                  child: Text(
+                    copy('provider_accounts.automatic_refresh'),
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
                 ),
               SizedBox(
                 key: Key('account-automatic-refresh-hit-${account.id}'),

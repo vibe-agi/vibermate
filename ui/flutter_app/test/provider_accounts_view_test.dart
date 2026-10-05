@@ -8,11 +8,36 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:vibermate_app/core/api/control_models.dart';
 import 'package:vibermate_app/core/design/viber_theme.dart';
+import 'package:vibermate_app/core/i18n/app_copy.dart';
 import 'package:vibermate_app/core/preferences/workbench_preferences.dart';
 import 'package:vibermate_app/features/workbench/workbench_controller.dart';
 import 'package:vibermate_app/features/workbench/workbench_shell.dart';
+import 'package:vibermate_app/features/workbench/provider_accounts_view.dart';
 import 'package:vibermate_app/preview/preview_control_api.dart';
 import 'package:vibermate_app/preview/preview_terminal_command.dart';
+
+Future<void> _focusAccountControl(WidgetTester tester, Finder finder) async {
+  final target = tester.element(finder);
+  bool containsFocus() {
+    final focused = FocusManager.instance.primaryFocus?.context;
+    if (focused == null) return false;
+    var matched = identical(focused, target);
+    (focused as Element).visitAncestorElements((ancestor) {
+      if (identical(ancestor, target)) {
+        matched = true;
+        return false;
+      }
+      return true;
+    });
+    return matched;
+  }
+
+  for (var step = 0; step < 32 && !containsFocus(); step++) {
+    await tester.sendKeyEvent(LogicalKeyboardKey.tab);
+    await tester.pump();
+  }
+  expect(containsFocus(), isTrue, reason: 'Control remains keyboard reachable');
+}
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -124,6 +149,110 @@ void main() {
     await tester.pumpWidget(const SizedBox.shrink());
     controller.dispose();
   });
+
+  testWidgets(
+    'wrapped English scale2 account controls retain keyboard actions and semantics',
+    (tester) async {
+      await tester.binding.setSurfaceSize(const Size(390, 900));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      final api = PreviewControlApi(seedCaptures: false);
+      final login = await api.startCodexLogin(
+        accountId: 'account.keyboard',
+        upstreamEndpointId: 'target.codex.official',
+        displayName: 'Keyboard layout',
+        callbackMode: 'manual',
+      );
+      await api.completeCodexLogin(
+        login.id,
+        'http://localhost:1455/auth/callback?state=${login.id}&code=synthetic',
+      );
+      final controller = WorkbenchController(
+        api: api,
+        terminalCommands: PreviewTerminalCommandService(),
+        previewMode: true,
+        closeRuntime: api.close,
+      );
+      controller.data = await api.loadDashboard();
+      await controller.ensureProviderAccountQuotas(controller.data!.accounts);
+      final semantics = tester.ensureSemantics();
+      try {
+        await tester.pumpWidget(
+          MaterialApp(
+            theme: ViberTheme.dark(),
+            builder: (context, child) => MediaQuery(
+              data: MediaQuery.of(
+                context,
+              ).copyWith(textScaler: TextScaler.linear(2)),
+              child: child!,
+            ),
+            home: Scaffold(
+              body: AnimatedBuilder(
+                animation: controller,
+                builder: (context, _) => ProviderAccountsView(
+                  controller: controller,
+                  copy: AppCopy.forLanguage(AppLanguage.english),
+                ),
+              ),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+        await tester.enterText(
+          find.byKey(const Key('provider-accounts-search')),
+          'Keyboard layout',
+        );
+        await tester.pumpAndSettle();
+        ProviderAccount current() => controller.data!.accounts.singleWhere(
+          (a) => a.id == 'account.keyboard',
+        );
+        final original = current();
+        await api.setProviderAccountNote(original, 'Remote note');
+        await _focusAccountControl(
+          tester,
+          find.byKey(const Key('provider-accounts-refresh-all')),
+        );
+        await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+        await tester.pumpAndSettle();
+        expect(current().note, 'Remote note');
+        expect(current().credentialEpoch, original.credentialEpoch);
+        final toggle = find.byKey(
+          const Key('account-automatic-refresh-account.keyboard'),
+        );
+        await tester.ensureVisible(toggle);
+        expect(tester.widget<Switch>(toggle).value, isTrue);
+        expect(
+          find.bySemanticsLabel('Auto refresh: Keyboard layout'),
+          findsOneWidget,
+        );
+        final hit = tester.getRect(
+          find.byKey(
+            const Key('account-automatic-refresh-hit-account.keyboard'),
+          ),
+        );
+        expect(hit.size, const Size(56, 44));
+        await _focusAccountControl(tester, toggle);
+        await tester.sendKeyEvent(LogicalKeyboardKey.space);
+        await tester.pumpAndSettle();
+        expect(current().automaticRefresh, isFalse);
+        expect(tester.widget<Switch>(toggle).value, isFalse);
+        await _focusAccountControl(
+          tester,
+          find.byKey(const Key('provider-accounts-add')),
+        );
+        await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+        await tester.pumpAndSettle();
+        expect(find.byKey(const Key('account-editor-frame')), findsOneWidget);
+        await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+        await tester.pumpAndSettle();
+        expect(find.byKey(const Key('account-editor-frame')), findsNothing);
+        expect(tester.takeException(), isNull);
+      } finally {
+        semantics.dispose();
+        await tester.pumpWidget(const SizedBox.shrink());
+        controller.dispose();
+      }
+    },
+  );
 
   for (final width in [390.0, 1180.0]) {
     testWidgets(
