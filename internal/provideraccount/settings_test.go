@@ -28,7 +28,7 @@ func (profiles settingsProfiles) GetRevision(_ context.Context, id egressprofile
 
 func TestAccountSettingsFreezeAtLeaseWithoutInvalidatingRoutes(t *testing.T) {
 	ctx := context.Background()
-	manager, err := NewManager(ctx, &memoryRepository{accounts: map[ID]Account{}}, newMemorySecrets(), testEndpoints(t), BuiltInRealms(), nil)
+	manager, err := newTestAccountManager(ctx, &memoryRepository{accounts: map[ID]Account{}}, newMemorySecrets(), testEndpoints(t), BuiltInRealms(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -118,7 +118,7 @@ func TestAccountSettingsFreezeAtLeaseWithoutInvalidatingRoutes(t *testing.T) {
 func TestImportedOAuthRefreshIsOptInAndManualRefreshRemainsAvailable(t *testing.T) {
 	ctx := context.Background()
 	secrets := newMemorySecrets()
-	manager, err := NewManager(ctx, &memoryRepository{accounts: map[ID]Account{}}, secrets, testEndpoints(t), BuiltInRealms(), nil)
+	manager, err := newTestAccountManager(ctx, &memoryRepository{accounts: map[ID]Account{}}, secrets, testEndpoints(t), BuiltInRealms(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}

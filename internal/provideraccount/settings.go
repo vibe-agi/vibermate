@@ -14,15 +14,9 @@ type SettingsCommand struct {
 	AutomaticRefresh bool
 }
 
-func (account Account) credentialScope(realm string, epoch uint64, fallback egressprofile.ProfileRevision) providerauth.AccountRef {
-	if fallback == (egressprofile.ProfileRevision{}) {
-		fallback = egressprofile.Direct()
-	}
-	if account.EgressProfile != (egressprofile.ProfileRevision{}) {
-		fallback = account.EgressProfile
-	}
+func (account Account) credentialScope(realm string, epoch uint64, resolved egressprofile.Resolved) providerauth.AccountRef {
 	return providerauth.AccountRef{ID: account.ID.String(), Revision: account.Revision,
-		CredentialEpoch: epoch, RealmID: realm, SettingsRevision: account.SettingsRevision, EgressProfile: fallback}
+		CredentialEpoch: epoch, RealmID: realm, SettingsRevision: account.SettingsRevision, EgressProfile: resolved.Profile(), ResolvedEgress: resolved}
 }
 
 func (manager *Manager) BindEgressProfiles(profiles egressprofile.Controller) error {
@@ -36,6 +30,51 @@ func (manager *Manager) BindEgressProfiles(profiles egressprofile.Controller) er
 	}
 	manager.egressProfiles = profiles
 	return nil
+}
+
+func (manager *Manager) BindEgressDefaults(defaults egressprofile.Resolver) error {
+	if manager == nil || defaults == nil {
+		return ErrSettingsUnavailable
+	}
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+	if manager.closing || manager.egressDefaults != nil {
+		return ErrSettingsUnavailable
+	}
+	manager.egressDefaults = defaults
+	return nil
+}
+
+func (manager *Manager) resolveEgress(ctx context.Context, account Account, flow egressprofile.ProfileRevision) (egressprofile.Resolved, error) {
+	accountChoice, flowChoice := egressprofile.Inherit(), egressprofile.Inherit()
+	var err error
+	if account.EgressProfile != (egressprofile.ProfileRevision{}) {
+		accountChoice, err = egressprofile.Explicit(account.EgressProfile)
+		if err != nil {
+			return egressprofile.Resolved{}, err
+		}
+	}
+	if flow != (egressprofile.ProfileRevision{}) {
+		flowChoice, err = egressprofile.Explicit(flow)
+		if err != nil {
+			return egressprofile.Resolved{}, err
+		}
+	}
+	manager.mu.RLock()
+	resolver := manager.egressDefaults
+	manager.mu.RUnlock()
+	if resolver != nil {
+		return resolver.Resolve(ctx, accountChoice, flowChoice)
+	}
+	// Explicit choices need no default storage. An unbound inherited path has
+	// no knowledge of the real default revision and must not invent Direct.
+	if profile, ok := accountChoice.ExplicitProfile(); ok {
+		return egressprofile.RestoreResolved(profile, egressprofile.SelectionAccount, 0)
+	}
+	if profile, ok := flowChoice.ExplicitProfile(); ok {
+		return egressprofile.RestoreResolved(profile, egressprofile.SelectionFlow, 0)
+	}
+	return egressprofile.Resolved{}, ErrSettingsUnavailable
 }
 
 // SetSettings changes the next lease, not the identity authorized by an

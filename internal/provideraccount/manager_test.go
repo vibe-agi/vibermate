@@ -18,7 +18,7 @@ func TestManagerCreatesListsAndRotatesManagedSecretWithoutExposingIt(t *testing.
 	t.Parallel()
 	repository := &memoryRepository{accounts: make(map[ID]Account)}
 	secrets := newMemorySecrets()
-	manager, err := NewManager(
+	manager, err := newTestAccountManager(
 		context.Background(), repository, secrets, testEndpoints(t), BuiltInRealms(),
 		fixedClock{now: time.Unix(1_786_200_000, 0).UTC()},
 	)
@@ -121,7 +121,7 @@ func TestManagerRecoversMissingCredentialFailClosed(t *testing.T) {
 		Driver: providerauth.AnthropicAPIKeyDriverRef(), SecretRef: reference,
 		State: StateActive, Revision: 1, SettingsRevision: 1, CreatedAt: now, UpdatedAt: now,
 	}
-	manager, err := NewManager(
+	manager, err := newTestAccountManager(
 		context.Background(),
 		&memoryRepository{accounts: map[ID]Account{account.ID: account}},
 		newMemorySecrets(), testEndpoints(t), BuiltInRealms(), fixedClock{now: now},
@@ -147,7 +147,7 @@ func TestManagerRecoversMissingCredentialFailClosed(t *testing.T) {
 func TestBuiltInAnthropicRealmAcceptsStaticClaudeOAuthCredential(t *testing.T) {
 	t.Parallel()
 	repository := &memoryRepository{accounts: make(map[ID]Account)}
-	manager, err := NewManager(
+	manager, err := newTestAccountManager(
 		context.Background(), repository, newMemorySecrets(), testEndpoints(t), BuiltInRealms(),
 		fixedClock{now: time.Unix(1_786_200_000, 0).UTC()},
 	)
@@ -178,7 +178,7 @@ func TestManagerPreparesCodexOAuthBeforeFreezingCredentialLease(t *testing.T) {
 	t.Parallel()
 	repository := &memoryRepository{accounts: make(map[ID]Account)}
 	secrets := newMemorySecrets()
-	manager, err := NewManager(
+	manager, err := newTestAccountManager(
 		context.Background(), repository, secrets, testEndpoints(t), BuiltInRealms(),
 		fixedClock{now: time.Unix(1_786_200_000, 0).UTC()},
 	)
@@ -267,7 +267,7 @@ func TestManagerDeletesOnlyAnUnreferencedInactiveAccount(t *testing.T) {
 	t.Parallel()
 	repository := &memoryRepository{accounts: make(map[ID]Account)}
 	secrets := newMemorySecrets()
-	manager, err := NewManager(
+	manager, err := newTestAccountManager(
 		context.Background(), repository, secrets, testEndpoints(t), BuiltInRealms(),
 		fixedClock{now: time.Unix(1_786_200_000, 0).UTC()},
 	)
@@ -337,7 +337,7 @@ func TestManagerCreateDoesNotHoldTheAccountAuthorityLockDuringRepositoryWrite(
 		started:          make(chan struct{}),
 		release:          make(chan struct{}),
 	}
-	manager, err := NewManager(
+	manager, err := newTestAccountManager(
 		t.Context(),
 		repository,
 		newMemorySecrets(),
@@ -408,7 +408,7 @@ func TestManagerReplaceDoesNotHoldTheAccountAuthorityLockDuringSecretWrite(
 		started:       make(chan struct{}),
 		release:       make(chan struct{}),
 	}
-	manager, err := NewManager(
+	manager, err := newTestAccountManager(
 		t.Context(),
 		&memoryRepository{accounts: make(map[ID]Account)},
 		secrets,
@@ -492,7 +492,7 @@ func TestManagerCredentialReplacementReservesTheAccountFromNewLeases(
 		started:       make(chan struct{}),
 		release:       make(chan struct{}),
 	}
-	manager, err := NewManager(
+	manager, err := newTestAccountManager(
 		t.Context(),
 		&memoryRepository{accounts: make(map[ID]Account)},
 		secrets,
@@ -578,7 +578,7 @@ func TestManagerDeletionDoesNotHoldTheAccountAuthorityLockDuringSecretInspection
 		started:       make(chan struct{}),
 		release:       make(chan struct{}),
 	}
-	manager, err := NewManager(
+	manager, err := newTestAccountManager(
 		t.Context(),
 		repository,
 		secrets,
@@ -657,7 +657,7 @@ func TestManagerAcquireDoesNotHoldTheAccountAuthorityLockDuringSecretInspection(
 
 	repository := &memoryRepository{accounts: make(map[ID]Account)}
 	delegate := newMemorySecrets()
-	seedManager, err := NewManager(
+	seedManager, err := newTestAccountManager(
 		t.Context(),
 		repository,
 		delegate,
@@ -691,7 +691,7 @@ func TestManagerAcquireDoesNotHoldTheAccountAuthorityLockDuringSecretInspection(
 		started:       make(chan struct{}),
 		release:       make(chan struct{}),
 	}
-	manager, err := NewManager(
+	manager, err := newTestAccountManager(
 		t.Context(),
 		repository,
 		secrets,
@@ -760,7 +760,7 @@ func TestManagerLeasePinsCredentialEpochAcrossSecretRotation(t *testing.T) {
 	t.Parallel()
 
 	secrets := newMemorySecrets()
-	manager, err := NewManager(
+	manager, err := newTestAccountManager(
 		t.Context(),
 		&memoryRepository{accounts: make(map[ID]Account)},
 		secrets,
@@ -838,7 +838,7 @@ func TestManagerAcquireUsesObservedCredentialEpochWithoutAnotherInspection(t *te
 	t.Parallel()
 
 	secrets := newMemorySecrets()
-	manager, err := NewManager(
+	manager, err := newTestAccountManager(
 		t.Context(),
 		&memoryRepository{accounts: make(map[ID]Account)},
 		secrets,
@@ -887,7 +887,7 @@ func TestManagerAcquireInspectsCredentialOnlyOnceAfterRecovery(t *testing.T) {
 
 	repository := &memoryRepository{accounts: make(map[ID]Account)}
 	secrets := newMemorySecrets()
-	seedManager, err := NewManager(
+	seedManager, err := newTestAccountManager(
 		t.Context(),
 		repository,
 		secrets,
@@ -914,7 +914,7 @@ func TestManagerAcquireInspectsCredentialOnlyOnceAfterRecovery(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	recovered, err := NewManager(
+	recovered, err := newTestAccountManager(
 		t.Context(),
 		repository,
 		secrets,
@@ -958,7 +958,7 @@ func TestManagerShutdownDrainsAdmittedCredentialInspection(t *testing.T) {
 
 	repository := &memoryRepository{accounts: make(map[ID]Account)}
 	delegate := newMemorySecrets()
-	seedManager, err := NewManager(
+	seedManager, err := newTestAccountManager(
 		t.Context(),
 		repository,
 		delegate,
@@ -990,7 +990,7 @@ func TestManagerShutdownDrainsAdmittedCredentialInspection(t *testing.T) {
 		started:       make(chan struct{}),
 		release:       make(chan struct{}),
 	}
-	manager, err := NewManager(
+	manager, err := newTestAccountManager(
 		t.Context(),
 		repository,
 		secrets,

@@ -45,14 +45,12 @@ type runtimeFetchSpec struct {
 	captured     *capturedAccountRead
 	// OAuth carries the same frozen scope without applying its access token to
 	// the token endpoint. Other operations obtain it from credential.
-	account providerauth.AccountRef
+	account  providerauth.AccountRef
+	resolved egressprofile.Resolved
 }
 
 func (spec runtimeFetchSpec) egressProfile() egressprofile.ProfileRevision {
-	if spec.account.EgressProfile.ID != "" {
-		return spec.account.EgressProfile
-	}
-	return egressprofile.Direct()
+	return spec.resolved.Profile()
 }
 
 // clearingRequestBody gives the transport its own copy of a Runtime-owned
@@ -151,6 +149,27 @@ func (client *Client) fetchModelsDev(ctx context.Context, path string) (*http.Re
 // through the runtime's mandatory Hold, strict transport, and body-free audit
 // boundary. The refresh token is never emitted as Raw evidence.
 func (client *Client) DoCodexOAuthTokenRequest(request *http.Request, account providerauth.AccountRef) (*http.Response, error) {
+	if account.Validate() != nil {
+		return nil, errors.New("Codex OAuth refresh account scope is invalid")
+	}
+	return client.exchangeCodexToken(request, account, account.ResolvedEgress)
+}
+
+func (client *Client) FreezeLoginEgress(ctx context.Context) (egressprofile.Resolved, error) {
+	if client == nil || client.egressDefaults == nil {
+		return egressprofile.Resolved{}, egressprofile.ErrDefaultUnavailable
+	}
+	return client.egressDefaults.Resolve(ctx, egressprofile.Inherit(), egressprofile.Inherit())
+}
+
+func (client *Client) ExchangeLoginCode(request *http.Request, resolved egressprofile.Resolved) (*http.Response, error) {
+	if resolved.Validate() != nil {
+		return nil, egressprofile.ErrInvalidProfile
+	}
+	return client.exchangeCodexToken(request, providerauth.AccountRef{}, resolved)
+}
+
+func (client *Client) exchangeCodexToken(request *http.Request, account providerauth.AccountRef, resolved egressprofile.Resolved) (*http.Response, error) {
 	if request == nil || request.URL == nil || request.Body == nil ||
 		request.Method != http.MethodPost || request.URL.String() != codexoauth.TokenURL ||
 		(request.Header.Get("Content-Type") != "application/json" &&
@@ -181,6 +200,7 @@ func (client *Client) DoCodexOAuthTokenRequest(request *http.Request, account pr
 		body:         body,
 		contentType:  request.Header.Get("Content-Type"),
 		account:      account,
+		resolved:     resolved,
 	})
 }
 
@@ -206,6 +226,19 @@ func (client *Client) fetchRuntimeJSON(
 	}
 	if spec.account != (providerauth.AccountRef{}) && spec.account.Validate() != nil {
 		return nil, errors.New("runtime account scope is invalid")
+	}
+	if spec.account != (providerauth.AccountRef{}) {
+		spec.resolved = spec.account.ResolvedEgress
+	}
+	if spec.resolved == (egressprofile.Resolved{}) {
+		var err error
+		spec.resolved, err = client.FreezeLoginEgress(ctx)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if err := spec.resolved.Validate(); err != nil {
+		return nil, err
 	}
 	if spec.method == "" {
 		spec.method = http.MethodGet
@@ -475,6 +508,17 @@ func (client *Client) beginRuntimeAudit(
 		Decision:     egressaudit.BuiltInDirectDecision(authority),
 		StartedAt:    client.clock(),
 	}
+	if spec.resolved.Validate() == nil {
+		profile := spec.resolved.Profile()
+		input.Decision.SelectionSource = spec.resolved.Source()
+		input.Decision.DefaultRevision = spec.resolved.DefaultRevision()
+		input.Decision.ProxyID, input.Decision.ProxyRevision = profile.ID.String(), uint64(profile.Revision)
+		if spec.account.ID == "" && spec.resolved.Source() == egressprofile.SelectionGlobal {
+			input.Decision.PolicyID = "runtime.egress-default"
+			input.Decision.PolicyRevision = spec.resolved.DefaultRevision()
+			input.Decision.RuleID = "global.default"
+		}
+	}
 	if spec.captured != nil {
 		plan := spec.captured.plan
 		route, _, err := plan.AccountReadTarget()
@@ -486,6 +530,7 @@ func (client *Client) beginRuntimeAudit(
 		input.Parent = egressaudit.ParentRef{Kind: egressaudit.ParentClientOperation, ID: spec.captured.operationID}
 		input.Decision = egressaudit.DecisionRef{PolicyID: string(plan.EnvironmentID()), PolicyRevision: uint64(plan.EnvironmentRevision()),
 			Authority: egressaudit.AuthorityEnvironment, RuleID: string(route.ID()), ProxyID: string(plan.EgressProfile().ID)}
+		input.Decision.SelectionSource, input.Decision.DefaultRevision = spec.resolved.Source(), spec.resolved.DefaultRevision()
 	}
 	if spec.account.EgressProfile.ID != "" {
 		input.Decision.ProxyID = spec.account.EgressProfile.ID.String()

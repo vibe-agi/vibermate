@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/vibe-agi/vibermate/internal/egressaudit"
 	"github.com/vibe-agi/vibermate/internal/egressnetwork"
 	"github.com/vibe-agi/vibermate/internal/egressprofile"
 	"github.com/vibe-agi/vibermate/internal/environment"
@@ -139,6 +140,13 @@ func TestClientWaitsForHoldLeaseBeforeSecretAndTransport(t *testing.T) {
 	waitForGateState(t, gate, offlinehold.StateOnline)
 }
 
+type unavailablePassthroughDefault struct{ calls atomic.Int64 }
+
+func (d *unavailablePassthroughDefault) Resolve(context.Context, egressprofile.Choice, egressprofile.Choice) (egressprofile.Resolved, error) {
+	d.calls.Add(1)
+	return egressprofile.Resolved{}, egressprofile.ErrDefaultUnavailable
+}
+
 func TestClientPassthroughPreservesClientCredentialsOnlyForExactOrigin(
 	t *testing.T,
 ) {
@@ -155,10 +163,13 @@ func TestClientPassthroughPreservesClientCredentialsOnlyForExactOrigin(
 		Header:     make(http.Header),
 		Body:       io.NopCloser(strings.NewReader("response")),
 	}}
+	audit := &runtimeAuditRecorder{}
+	defaults := &unavailablePassthroughDefault{}
 	client, err := NewClient(ClientOptions{
 		Coordinator:   gate,
 		Authenticator: authenticator,
 		Transport:     transport,
+		Audit:         audit, EgressDefaults: defaults,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -224,9 +235,20 @@ func TestClientPassthroughPreservesClientCredentialsOnlyForExactOrigin(
 		t.Fatalf("Do() error = %v", err)
 	}
 	defer response.Body.Close()
+	body, readErr := io.ReadAll(response.Body)
+	if readErr != nil || string(body) != "response" {
+		t.Fatal("passthrough response did not complete", readErr)
+	}
 	request := transport.lastRequest()
 	dispatch := transport.lastDispatch()
-	decision := providerEgressDecision(frozen)
+	started, terminal := audit.attempts()
+	decision := started.Decision()
+	if started.ID() != frozen.EgressAttemptID() || !terminal.Terminal() || terminal.Outcome() != egressaudit.OutcomeCompleted || terminal.Decision() != decision || decision.SelectionSource != egressprofile.SelectionFlow || decision.DefaultRevision != 0 || decision.AccountSettingsRevision != 0 || defaults.calls.Load() != 0 {
+		t.Fatal("actual passthrough start/terminal lacks frozen explicit-flow evidence or consulted global")
+	}
+	if _, available := frozen.AccountRef(); available {
+		t.Fatal("original credentials acquired a fake account scope")
+	}
 	if decision.ProxyID != "profile.company" || decision.ProxyRevision != 3 || decision.AccountID != "" || decision.PolicyID != plan.provenance.environmentID.String() {
 		t.Fatalf("client passthrough audit lost configured exit: %+v", decision)
 	}
@@ -1388,9 +1410,11 @@ func testRequestProvenance(t *testing.T) RequestProvenance {
 }
 
 func testAccountRef() providerauth.AccountRef {
+	resolved, _ := egressprofile.RestoreResolved(egressprofile.Direct(), egressprofile.SelectionAccount, 0)
 	return providerauth.AccountRef{
 		ID: "provider-account", Revision: 2, CredentialEpoch: 5, RealmID: "provider-realm",
 		SettingsRevision: 1, EgressProfile: egressprofile.Direct(),
+		ResolvedEgress: resolved,
 	}
 }
 

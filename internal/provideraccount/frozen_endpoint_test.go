@@ -14,7 +14,7 @@ func TestFrozenEndpointLeaseSurvivesCapabilityUpgradeWithoutRetargeting(t *testi
 	t.Parallel()
 	ctx := context.Background()
 	endpoints := testEndpoints(t)
-	manager, err := NewManager(ctx, &memoryRepository{accounts: make(map[ID]Account)}, newMemorySecrets(), endpoints, BuiltInRealms(), fixedClock{now: time.Now().UTC()})
+	manager, err := newTestAccountManager(ctx, &memoryRepository{accounts: make(map[ID]Account)}, newMemorySecrets(), endpoints, BuiltInRealms(), fixedClock{now: time.Now().UTC()})
 	if err != nil {
 		t.Fatal(err)
 	}

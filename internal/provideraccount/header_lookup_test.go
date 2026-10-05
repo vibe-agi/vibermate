@@ -12,7 +12,7 @@ import (
 
 func TestOverwriteReadbackIsEpochBoundAndCannotReadPrimaryCredential(t *testing.T) {
 	ctx := context.Background()
-	manager, err := NewManager(ctx, &memoryRepository{accounts: make(map[ID]Account)}, newMemorySecrets(), testEndpoints(t), BuiltInRealms(), fixedClock{now: time.Now()})
+	manager, err := newTestAccountManager(ctx, &memoryRepository{accounts: make(map[ID]Account)}, newMemorySecrets(), testEndpoints(t), BuiltInRealms(), fixedClock{now: time.Now()})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -255,7 +255,11 @@ func (stub credentialAuthorityStub) AcquireEndpointCredential(
 		CredentialEpoch:  7,
 		SettingsRevision: stub.settingsRevision,
 		EgressProfile:    egressprofile.Direct(),
-		RealmID:          endpoint.RealmID,
+		ResolvedEgress: func() egressprofile.Resolved {
+			r, _ := egressprofile.RestoreResolved(egressprofile.Direct(), egressprofile.SelectionAccount, 0)
+			return r
+		}(),
+		RealmID: endpoint.RealmID,
 	}}, nil
 }
 

@@ -39,6 +39,7 @@ type Manager struct {
 	deletion       environment.AccountDeletionGuard
 	preparer       CredentialPreparer
 	egressProfiles egressprofile.Controller
+	egressDefaults egressprofile.Resolver
 	active         map[ID]uint64
 	operations     map[ID]accountOperation
 	refreshing     map[ID]chan struct{}
@@ -708,6 +709,10 @@ func (manager *Manager) acquire(
 		endpoint.Origin != scope.upstreamEndpointOrigin || !account.CompatibleEndpoint(endpoint)) {
 		return nil, ErrEndpointMismatch
 	}
+	resolved, err := manager.resolveEgress(ctx, account, scope.egressProfile)
+	if err != nil {
+		return nil, err
+	}
 	if credentialEpoch == 0 {
 		metadata, err := manager.secrets.Inspect(ctx, account.SecretRef)
 		if err != nil {
@@ -719,7 +724,7 @@ func (manager *Manager) acquire(
 		credentialEpoch = metadata.Revision
 		manager.observeCredentialEpoch(account.ID, credentialEpoch)
 	}
-	credentialScope := account.credentialScope(scope.realmID, uint64(credentialEpoch), scope.egressProfile)
+	credentialScope := account.credentialScope(scope.realmID, uint64(credentialEpoch), resolved)
 	if credentialScope.Validate() != nil {
 		return nil, ErrInvalidAccount
 	}

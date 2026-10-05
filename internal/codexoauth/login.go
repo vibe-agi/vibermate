@@ -18,7 +18,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/vibe-agi/vibermate/internal/providerauth"
+	"github.com/vibe-agi/vibermate/internal/egressprofile"
 )
 
 const AuthorizationURL = "https://auth.openai.com/oauth/authorize"
@@ -56,10 +56,15 @@ type LoginController interface {
 }
 
 type LoginOptions struct {
-	Client   HTTPClient
-	Clock    Clock
-	Persist  func(context.Context, LoginAccount, *Credential) (string, error)
-	Lifetime time.Duration
+	TokenClient LoginTokenClient
+	Clock       Clock
+	Persist     func(context.Context, LoginAccount, *Credential) (string, error)
+	Lifetime    time.Duration
+}
+
+type LoginTokenClient interface {
+	FreezeLoginEgress(context.Context) (egressprofile.Resolved, error)
+	ExchangeLoginCode(*http.Request, egressprofile.Resolved) (*http.Response, error)
 }
 
 // LoginManager owns short-lived PKCE transactions, including loopback listeners.
@@ -83,10 +88,11 @@ type login struct {
 	server   *http.Server
 	timer    *time.Timer
 	cancel   context.CancelFunc
+	egress   egressprofile.Resolved
 }
 
 func NewLoginManager(options LoginOptions) (*LoginManager, error) {
-	if options.Client == nil || options.Clock == nil || options.Persist == nil {
+	if options.TokenClient == nil || options.Clock == nil || options.Persist == nil {
 		return nil, ErrLoginInvalid
 	}
 	if options.Lifetime == 0 {
@@ -101,6 +107,13 @@ func NewLoginManager(options LoginOptions) (*LoginManager, error) {
 func (manager *LoginManager) Start(ctx context.Context, owner string, account LoginAccount, mode string) (LoginView, error) {
 	if ctx == nil || ctx.Err() != nil || owner == "" || account.ID == "" || account.EndpointID == "" ||
 		(mode != "loopback" && mode != "manual") {
+		return LoginView{}, ErrLoginInvalid
+	}
+	resolved, err := manager.options.TokenClient.FreezeLoginEgress(ctx)
+	if err != nil {
+		return LoginView{}, err
+	}
+	if resolved.Validate() != nil || ctx.Err() != nil {
 		return LoginView{}, ErrLoginInvalid
 	}
 	manager.mu.Lock()
@@ -124,7 +137,7 @@ func (manager *LoginManager) Start(ctx context.Context, owner string, account Lo
 	if err != nil {
 		return LoginView{}, ErrLoginInvalid
 	}
-	pending := &login{owner: owner, account: account, state: state, verifier: []byte(verifier)}
+	pending := &login{owner: owner, account: account, state: state, verifier: []byte(verifier), egress: resolved}
 	pending.view = LoginView{ID: id, State: "pending", CallbackMode: "manual", ExpiresAt: manager.options.Clock.Now().UTC().Add(manager.options.Lifetime)}
 	pending.redirect = "http://localhost:1455/auth/callback"
 	if mode == "loopback" {
@@ -238,7 +251,7 @@ func (manager *LoginManager) Complete(ctx context.Context, owner, id, callback s
 	defer manager.active.Done()
 	defer cancel()
 	defer clear(verifier)
-	credential, exchangeErr := manager.exchangeCode(operation, code, verifier, pending.redirect)
+	credential, exchangeErr := manager.exchangeCode(operation, code, verifier, pending.redirect, pending.egress)
 	accountID := ""
 	reason := ""
 	if exchangeErr != nil {
@@ -374,7 +387,7 @@ func (manager *LoginManager) callback(w http.ResponseWriter, r *http.Request, id
 	_, _ = io.WriteString(w, "Codex account saved. You can close this page and return to ViberMate.")
 }
 
-func (manager *LoginManager) exchangeCode(ctx context.Context, code string, verifier []byte, redirect string) (*Credential, error) {
+func (manager *LoginManager) exchangeCode(ctx context.Context, code string, verifier []byte, redirect string, egress egressprofile.Resolved) (*Credential, error) {
 	form := url.Values{"grant_type": {"authorization_code"}, "client_id": {ClientID}, "code": {code}, "redirect_uri": {redirect}, "code_verifier": {string(verifier)}}
 	body := []byte(form.Encode())
 	defer clear(body)
@@ -384,7 +397,7 @@ func (manager *LoginManager) exchangeCode(ctx context.Context, code string, veri
 	}
 	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	request.Header.Set("Accept", "application/json")
-	response, err := manager.options.Client.Do(request, providerauth.AccountRef{})
+	response, err := manager.options.TokenClient.ExchangeLoginCode(request, egress)
 	if err != nil || response == nil {
 		return nil, ErrLoginInvalid
 	}

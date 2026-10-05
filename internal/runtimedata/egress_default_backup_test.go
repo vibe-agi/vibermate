@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/vibe-agi/vibermate/internal/egressaudit"
 	"github.com/vibe-agi/vibermate/internal/egressnetwork"
 	"github.com/vibe-agi/vibermate/internal/egressprofile"
 )
@@ -25,6 +26,21 @@ func TestBackupRestoresExactGlobalDefaultRevision(t *testing.T) {
 	if _, err = defaults.SetDefault(ctx, egressprofile.SetDefaultCommand{ExpectedRevision: 1, Profile: &egressprofile.ProfileRef{ID: profile.ID, Revision: profile.Revision}}); err != nil {
 		t.Fatal(err)
 	}
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	attempt, err := egressaudit.New(egressaudit.NewInput{ID: "selection-backup", Purpose: egressaudit.PurposeCredentialRefresh, PayloadClass: egressaudit.PayloadRuntime, Parent: egressaudit.ParentRef{Kind: egressaudit.ParentRuntimeAction, ID: "independent-parent"}, Caller: egressaudit.CallerCore, TargetOrigin: "https://auth.openai.com", Decision: egressaudit.DecisionRef{PolicyID: "runtime.egress-default", PolicyRevision: 2, Authority: egressaudit.AuthorityRuntime, RuleID: "global.default", ProxyID: profile.ID.String(), ProxyRevision: uint64(profile.Revision), SelectionSource: egressprofile.SelectionGlobal, DefaultRevision: 2}, StartedAt: now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = store.EgressAttemptRepository().Append(ctx, attempt); err != nil {
+		t.Fatal(err)
+	}
+	terminal, err := attempt.Finish(egressaudit.TerminalInput{Outcome: egressaudit.OutcomeCompleted, BytesIn: 11, BytesOut: 13, CompletedAt: now.Add(time.Millisecond)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = store.EgressAttemptRepository().Complete(ctx, terminal); err != nil {
+		t.Fatal(err)
+	}
 	if err = store.Shutdown(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -42,5 +58,9 @@ func TestBackupRestoresExactGlobalDefaultRevision(t *testing.T) {
 	setting, err := store.EgressDefaultRepository().LoadDefault(ctx)
 	if err != nil || setting.Revision != 2 || setting.Profile == nil || !setting.Profile.Equal(profile) {
 		t.Fatalf("restored default %+v %v", setting, err)
+	}
+	page, err := store.EgressAttemptRepository().List(ctx, egressaudit.PageRequest{Limit: 20})
+	if err != nil || len(page.Items) != 1 || page.Items[0].Attempt != terminal {
+		t.Fatal("actual backup/restore lost typed frozen selection or terminal history", err)
 	}
 }

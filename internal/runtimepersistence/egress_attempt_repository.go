@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/vibe-agi/vibermate/internal/egressaudit"
+	"github.com/vibe-agi/vibermate/internal/egressprofile"
 )
 
 const egressAttemptSelect = `SELECT
@@ -28,7 +29,7 @@ const egressAttemptSelect = `SELECT
 	    policy_authority,
 	    rule_id,
 	    proxy_id,
-	    proxy_revision, account_id, account_settings_revision,
+	    proxy_revision, account_id, account_settings_revision, selection_source, default_revision,
 	    reused_transport,
 	    started_at_unix_ms,
 	    completed_at_unix_ms,
@@ -99,10 +100,10 @@ func appendEgressAttempt(operation context.Context, writer egressAttemptWriter, 
 		     policy_authority,
 		     rule_id,
 		     proxy_id,
-		     proxy_revision, account_id, account_settings_revision,
+		     proxy_revision, account_id, account_settings_revision, selection_source, default_revision,
 		     reused_transport,
 		     started_at_unix_ms
-		 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		attempt.ID(),
 		attempt.ConnectionID(),
 		string(attempt.Purpose()),
@@ -119,6 +120,7 @@ func appendEgressAttempt(operation context.Context, writer egressAttemptWriter, 
 		attempt.Decision().RuleID,
 		attempt.Decision().ProxyID,
 		attempt.Decision().ProxyRevision, attempt.Decision().AccountID, attempt.Decision().AccountSettingsRevision,
+		string(attempt.Decision().SelectionSource), attempt.Decision().DefaultRevision,
 		reused,
 		toUnixMillis(attempt.StartedAt()),
 	)
@@ -420,6 +422,8 @@ func scanEgressAttempt(rows interface{ Scan(...any) error }) (egressaudit.Record
 		proxyRevision           uint64
 		accountID               string
 		accountSettingsRevision uint64
+		selectionSource         string
+		defaultRevision         uint64
 		reused                  int64
 		startedAt               int64
 		completedAt             sql.NullInt64
@@ -447,6 +451,7 @@ func scanEgressAttempt(rows interface{ Scan(...any) error }) (egressaudit.Record
 		&ruleID,
 		&proxyID,
 		&proxyRevision, &accountID, &accountSettingsRevision,
+		&selectionSource, &defaultRevision,
 		&reused,
 		&startedAt,
 		&completedAt,
@@ -493,6 +498,7 @@ func scanEgressAttempt(rows interface{ Scan(...any) error }) (egressaudit.Record
 			ProxyRevision:           proxyRevision,
 			AccountID:               accountID,
 			AccountSettingsRevision: accountSettingsRevision,
+			SelectionSource:         egressprofile.SelectionSource(selectionSource), DefaultRevision: defaultRevision,
 		},
 		ReusedTransport: reused == 1,
 		StartedAt:       fromUnixMillis(startedAt),

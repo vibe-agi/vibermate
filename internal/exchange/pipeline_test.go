@@ -2889,6 +2889,10 @@ func (authority *accountAuthorityDouble) Acquire(
 		account: providerauth.AccountRef{
 			ID: account.id, Revision: uint64(account.revision), CredentialEpoch: account.epoch,
 			RealmID: request.RealmID(), SettingsRevision: 1, EgressProfile: request.EgressProfile(),
+			ResolvedEgress: func() egressprofile.Resolved {
+				r, _ := egressprofile.RestoreResolved(request.EgressProfile(), egressprofile.SelectionFlow, 0)
+				return r
+			}(),
 		},
 		driver: providerauth.StaticHeaderDriverRef(), secret: secret,
 		release: func() {

@@ -417,6 +417,7 @@ func TestServerUncertainCommitCannotReportOAuthRefreshSuccess(t *testing.T) {
 	t.Cleanup(func() { manager.Forget(reference, 3) })
 	injectSecretCommitFault(store, "directory-sync", func() {})
 	scope := providerauth.AccountRef{ID: "synthetic-account", Revision: 1, CredentialEpoch: 2, SettingsRevision: 1, EgressProfile: egressprofile.Direct(), RealmID: "openai.chatgpt"}
+	scope.ResolvedEgress, _ = egressprofile.RestoreResolved(scope.EgressProfile, egressprofile.SelectionAccount, 0)
 	epoch, refreshErr := manager.Refresh(t.Context(), providerauth.CodexOAuthDriverRef(), reference, scope)
 	if epoch != 0 || !errors.Is(refreshErr, secretstore.ErrUnavailable) {
 		t.Fatal("manual refresh reported an uncertain credential as saved")

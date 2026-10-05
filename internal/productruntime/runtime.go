@@ -393,6 +393,9 @@ func startWithBuilders(
 	if err := accounts.BindEgressProfiles(egressProfiles); err != nil {
 		return fail("ProviderAccount egress profiles", err)
 	}
+	if err := accounts.BindEgressDefaults(egressDefaults); err != nil {
+		return fail("ProviderAccount egress defaults", err)
+	}
 	captureRunRepository := storageResult.store.CaptureRunRepository()
 	manualCaptureRepository := storageResult.store.ManualCaptureRepository()
 	captureActivity, err := newCaptureActivityResolver(
@@ -566,11 +569,12 @@ func startWithBuilders(
 	}
 
 	provider, err := buildProvider(providerBuildRequest{
-		coordinator: options.OfflineHold,
-		secrets:     options.Secrets,
-		instanceIDs: options.InstanceIDs,
-		audit:       runtimeEgress,
-		rawEvidence: rawEvidence,
+		egressDefaults: egressDefaults,
+		coordinator:    options.OfflineHold,
+		secrets:        options.Secrets,
+		instanceIDs:    options.InstanceIDs,
+		audit:          runtimeEgress,
+		rawEvidence:    rawEvidence,
 	})
 	if err != nil {
 		return fail("provider transport", err)
@@ -595,7 +599,7 @@ func startWithBuilders(
 		return fail("ProviderAccount credential preparation authority", err)
 	}
 	codexLogins, err := codexoauth.NewLoginManager(codexoauth.LoginOptions{
-		Client: codexOAuthHTTPClient{provider: provider}, Clock: options.Clock,
+		TokenClient: provider, Clock: options.Clock,
 		Persist: persistCodexLogin(accounts),
 	})
 	if err != nil {

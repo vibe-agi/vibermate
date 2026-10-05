@@ -16,9 +16,11 @@ import (
 	"github.com/vibe-agi/vibermate/internal/captureassignment"
 	"github.com/vibe-agi/vibermate/internal/capturerun"
 	"github.com/vibe-agi/vibermate/internal/clientannotation"
+	"github.com/vibe-agi/vibermate/internal/codexoauth"
 	"github.com/vibe-agi/vibermate/internal/connectionevent"
 	"github.com/vibe-agi/vibermate/internal/connectionpolicy"
 	"github.com/vibe-agi/vibermate/internal/egressaudit"
+	"github.com/vibe-agi/vibermate/internal/egressprofile"
 	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/evidencearchive"
 	"github.com/vibe-agi/vibermate/internal/exchange"
@@ -431,14 +433,16 @@ func buildMonitor(request monitorBuildRequest) (ownedComponent, error) {
 }
 
 type providerBuildRequest struct {
-	coordinator offlinehold.Coordinator
-	secrets     secretstore.Reader
-	instanceIDs InstanceIDSource
-	audit       egressaudit.Writer
-	rawEvidence rawevidence.Observer
+	egressDefaults egressprofile.Resolver
+	coordinator    offlinehold.Coordinator
+	secrets        secretstore.Reader
+	instanceIDs    InstanceIDSource
+	audit          egressaudit.Writer
+	rawEvidence    rawevidence.Observer
 }
 
 type providerRuntime interface {
+	codexoauth.LoginTokenClient
 	exchange.Provider
 	ReadAccount(context.Context, providertransport.AccountReadRequest) (*http.Response, error)
 	ConsumeResetCredit(context.Context, providertransport.ResetRedemption) (*http.Response, error)
@@ -485,6 +489,7 @@ func buildProvider(
 		request.instanceIDs,
 		request.audit,
 		request.rawEvidence,
+		request.egressDefaults,
 	)
 }
 

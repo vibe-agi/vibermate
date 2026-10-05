@@ -51,6 +51,10 @@ func (manager *Manager) RefreshCredential(ctx context.Context, id ID, expectedEp
 	manager.beginInFlightLocked()
 	manager.mu.Unlock()
 	defer manager.finishOperation(id, accountOperationRefresh)
+	resolved, err := manager.resolveEgress(ctx, account, egressprofile.ProfileRevision{})
+	if err != nil {
+		return View{}, err
+	}
 
 	metadata, err := manager.secrets.Inspect(ctx, account.SecretRef)
 	if err != nil {
@@ -68,7 +72,7 @@ func (manager *Manager) RefreshCredential(ctx context.Context, id ID, expectedEp
 	// The preparer owns a bounded rotation once started. Keep the account gate
 	// until that rotation has committed/failed, even if the control caller leaves;
 	// otherwise a new request could freeze the epoch being replaced in the background.
-	prepared, err := refresher.Refresh(context.WithoutCancel(ctx), account.Driver, account.SecretRef, account.credentialScope(account.RealmID, uint64(metadata.Revision), egressprofile.Direct()))
+	prepared, err := refresher.Refresh(context.WithoutCancel(ctx), account.Driver, account.SecretRef, account.credentialScope(account.RealmID, uint64(metadata.Revision), resolved))
 	if err != nil {
 		return View{}, err
 	}

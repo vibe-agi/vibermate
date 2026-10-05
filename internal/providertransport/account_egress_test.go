@@ -31,12 +31,14 @@ func TestProviderAccountEgressOverridesRouteAndIsFrozen(t *testing.T) {
 			options.EgressProfile = testAccountEgress()
 			options.EgressProfile.Policy.Proxy.Endpoint = "127.0.0.1:9090"
 			options.AccountRef.EgressProfile = profile
+			options.AccountRef.ResolvedEgress, _ = egressprofile.RestoreResolved(profile, egressprofile.SelectionAccount, 0)
 			options.AccountRef.SettingsRevision = 2
 			frozen, err := NewRequest(options)
 			if err != nil {
 				t.Fatal(err)
 			}
 			options.AccountRef.EgressProfile = egressprofile.Direct()
+			options.AccountRef.ResolvedEgress, _ = egressprofile.RestoreResolved(egressprofile.Direct(), egressprofile.SelectionAccount, 0)
 			if frozen.EgressPolicy() != profile.Policy || frozen.probeTarget.EgressPolicy != profile.Policy {
 				t.Fatal("attempt or admission ignored account egress")
 			}
@@ -65,6 +67,7 @@ func TestRuntimeAccountOperationsUseAccountEgressAndNeverFallback(t *testing.T) 
 				endpoint := testDiscoveryEndpoint(t, "https://chatgpt.com")
 				credential := testRuntimeDiscoveryCredential(t, endpoint.RealmID).(*runtimeDiscoveryCredential)
 				credential.account.EgressProfile = testAccountEgress()
+				credential.account.ResolvedEgress, _ = egressprofile.RestoreResolved(credential.account.EgressProfile, egressprofile.SelectionAccount, 0)
 				credential.account.SettingsRevision = 4
 				var response *http.Response
 				var err error
@@ -115,6 +118,7 @@ func TestMalformedAccountEgressIsRejectedBeforeTransport(t *testing.T) {
 	request, _ := http.NewRequest(http.MethodPost, codexoauth.TokenURL, strings.NewReader(`{}`))
 	request.Header.Set("Content-Type", "application/json")
 	scope := providerauth.AccountRef{ID: "account", Revision: 1, CredentialEpoch: 1, SettingsRevision: 1, RealmID: "openai.chatgpt", EgressProfile: testAccountEgress()}
+	scope.ResolvedEgress, _ = egressprofile.RestoreResolved(scope.EgressProfile, egressprofile.SelectionAccount, 0)
 	scope.EgressProfile.Revision = 0
 	if _, err := client.DoCodexOAuthTokenRequest(request, scope); err == nil || transport.callCount() != 0 {
 		t.Fatal("malformed egress escaped or fell back to direct")

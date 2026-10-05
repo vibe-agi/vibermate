@@ -21,7 +21,7 @@ func TestIndependentAccountLinksReuseOneCredentialAndUnlinkWithoutDeletion(t *te
 	endpoints[second.ID] = second
 	repository := &memoryRepository{accounts: map[ID]Account{}}
 	secrets := newMemorySecrets()
-	manager, err := NewManager(ctx, repository, secrets, endpoints, BuiltInRealms(), nil)
+	manager, err := newTestAccountManager(ctx, repository, secrets, endpoints, BuiltInRealms(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}

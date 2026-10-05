@@ -14,6 +14,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/vibe-agi/vibermate/internal/egressprofile"
 	"github.com/vibe-agi/vibermate/internal/environment"
 )
 
@@ -180,6 +181,8 @@ type ParentRef struct {
 // DecisionRef records which policy produced the route, without the candidate
 // set or any credential.
 type DecisionRef struct {
+	SelectionSource         egressprofile.SelectionSource
+	DefaultRevision         uint64
 	PolicyID                string
 	PolicyRevision          uint64
 	Authority               PolicyAuthorityKind
@@ -532,6 +535,27 @@ func validateCaller(
 }
 
 func validateDecision(decision DecisionRef) error {
+	if decision.DefaultRevision > math.MaxInt64 {
+		return errors.New("egress default revision is invalid")
+	}
+	switch decision.SelectionSource {
+	case "", egressprofile.SelectionAccount, egressprofile.SelectionFlow:
+		if decision.DefaultRevision != 0 {
+			return errors.New("explicit or legacy egress cannot claim a default revision")
+		}
+	case egressprofile.SelectionGlobal, egressprofile.SelectionBuiltin:
+		if decision.DefaultRevision == 0 {
+			return errors.New("inherited egress default revision is required")
+		}
+	default:
+		return errors.New("egress selection source is invalid")
+	}
+	if decision.SelectionSource != "" && decision.ProxyRevision == 0 {
+		return errors.New("effective egress profile revision is required")
+	}
+	if decision.SelectionSource == egressprofile.SelectionBuiltin && (decision.ProxyID != egressprofile.DirectID.String() || decision.ProxyRevision != 1) {
+		return errors.New("builtin egress must be exact direct")
+	}
 	if err := validateIdentity(
 		"egress policy ID",
 		decision.PolicyID,

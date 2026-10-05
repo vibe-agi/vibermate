@@ -213,9 +213,7 @@ func TestNativeAuditRebuildPreservesRowsAndSequence(t *testing.T) {
 	if err := store.ExchangeContentRepository().Put(ctx, contentRecordFixture(t, "native-legacy-history", now)); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.EgressAttemptRepository().Append(ctx, providerAttempt(t, "native-legacy-audit")); err != nil {
-		t.Fatal(err)
-	}
+	seedFrozenV1EgressAttempt(t, store, providerAttempt(t, "native-legacy-audit"))
 	nativeExec(t, store.database, `INSERT INTO code_library_collections VALUES ('legacy-config','Legacy config')`)
 	nativeExec(t, store.database, `INSERT INTO tool_approvals(approval_id,revision,kind,subject_refs_json,subject_labels_json,aggregate_key,state,created_at_unix_ms,expires_at_unix_ms) VALUES ('legacy-approval',1,'client_root_ask',X'5b2261225d',X'5b2262225d','legacy-root','pending',1,2)`)
 	nativeExec(t, store.database, `UPDATE runtime_egress_attempts SET sequence=9999,bytes_in=23,bytes_out=17,completed_at_unix_ms=12,outcome='completed',error_class='legacy'`)

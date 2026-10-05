@@ -90,9 +90,7 @@ func seedPopulatedV1(t *testing.T, store *Store) {
 	if err := store.ExchangeContentRepository().Put(ctx, contentRecordFixture(t, "legacy-history", now)); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.EgressAttemptRepository().Append(ctx, providerAttempt(t, "legacy-audit")); err != nil {
-		t.Fatal(err)
-	}
+	seedFrozenV1EgressAttempt(t, store, providerAttempt(t, "legacy-audit"))
 	raw := rawEvidenceRecordForTest("legacy-writer.1", 1, rawevidence.LayerClientIngress, []byte(`{"legacy":"raw"}`), []byte(`{"version":1,"headers":[]}`))
 	if err := store.RawEvidenceRepository().AppendBatch(ctx, []rawevidence.StoredEnvelope{raw}, now); err != nil {
 		t.Fatal(err)
@@ -109,6 +107,21 @@ func seedPopulatedV1(t *testing.T, store *Store) {
 		t.Fatal(err)
 	}
 	insertUsageFixture(t, store, runtimeusage.Observation{ExchangeID: "legacy-usage", CaptureRunID: "legacy-run", Source: "member", OccurredAt: now, Status: activity.StatusSucceeded, EnvironmentID: "native-legacy", EnvironmentName: "Frozen legacy", UpstreamModel: "legacy-model", Client: "codex", Usage: protocolcore.Usage{InputUncached: protocolcore.UsageValue{Known: true, Tokens: 11, Source: "fixture"}}}, now.Add(24*time.Hour))
+}
+
+// Frozen legacy builders cannot use the current repository's new v2 columns.
+// Preserve every original field; this is fixture creation, never a runtime
+// fallback or a schema rewrite.
+func seedFrozenV1EgressAttempt(t *testing.T, store *Store, a egressaudit.Attempt) {
+	t.Helper()
+	if a.Decision().SelectionSource != "" || a.Decision().DefaultRevision != 0 || a.Terminal() {
+		t.Fatal("nonlegacy evidence in frozen v1 fixture")
+	}
+	d := a.Decision()
+	_, err := store.database.Exec(`INSERT INTO runtime_egress_attempts(attempt_id,connection_id,purpose,payload_class,parent_kind,parent_id,parent_exchange_id,caller_kind,caller_id,target_origin,policy_id,policy_revision,policy_authority,rule_id,proxy_id,proxy_revision,account_id,account_settings_revision,reused_transport,started_at_unix_ms) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, a.ID(), a.ConnectionID(), a.Purpose(), a.PayloadClass(), a.Parent().Kind, a.Parent().ID, a.Parent().ExchangeID, a.Caller(), a.CallerID(), a.TargetOrigin(), d.PolicyID, d.PolicyRevision, d.Authority, d.RuleID, d.ProxyID, d.ProxyRevision, d.AccountID, d.AccountSettingsRevision, a.ReusedTransport(), a.StartedAt().UnixMilli())
+	if err != nil {
+		t.Fatal(err)
+	}
 }
 
 func populatedV1MigrationFixture(t *testing.T) migrationFixture {
@@ -219,6 +232,12 @@ func TestSchemaSwitchPreservesPopulatedV1(t *testing.T) {
 		t.Fatalf("upgrade=%+v %v", result, err)
 	}
 	f.assertLegacyPreserved(t)
+	db := openSQLiteForTest(t, filepath.Join(f.source, "runtime.db"))
+	if err := migrationAdditionsEmpty(context.Background(), db); err != nil {
+		db.Close()
+		t.Fatal("populated v1 migration invented new selection evidence", err)
+	}
+	db.Close()
 	state, err := InspectSchema(context.Background(), filepath.Join(f.source, "runtime.db"), time.Second)
 	if err != nil || state.Revision != 2 {
 		t.Fatalf("schema=%+v %v", state, err)

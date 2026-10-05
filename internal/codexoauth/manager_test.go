@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -170,6 +171,7 @@ func TestManagerPrepareRefreshesNearExpiryAndAtomicallyRotatesMaterial(t *testin
 	scope.EgressProfile = egressprofile.Direct()
 	scope.EgressProfile.ID = "profile.us"
 	scope.EgressProfile.Policy.Proxy = egressnetwork.ProxyPolicy{Kind: egressnetwork.ProxySOCKS5, Endpoint: "127.0.0.1:1080"}
+	scope.ResolvedEgress, _ = egressprofile.RestoreResolved(scope.EgressProfile, egressprofile.SelectionAccount, 0)
 	revision, err := manager.Prepare(
 		context.Background(), providerauth.CodexOAuthDriverRef(), reference, scope, true,
 	)
@@ -338,6 +340,148 @@ func TestManagerPrepareCachesPermanentRefreshFailureForCredentialEpoch(t *testin
 	}
 	if client.Calls() != 1 {
 		t.Fatalf("permanent refresh calls = %d", client.Calls())
+	}
+}
+
+// This fixture's memoryStore never reads Context.Done. In prepare the first
+// Done observation therefore witnesses the real select after DoChan, while
+// returning the original channel preserves cancellation semantics unchanged.
+type refreshWaitObservation struct {
+	context.Context
+	entered chan struct{}
+	once    sync.Once
+}
+
+func (c *refreshWaitObservation) Done() <-chan struct{} {
+	c.once.Do(func() { close(c.entered) })
+	return c.Context.Done()
+}
+
+func TestSharedRefreshKeepsWinnerAndPostFreezeWaiterSelections(t *testing.T) {
+	for _, manualWinner := range []bool{false, true} {
+		t.Run(fmt.Sprintf("manual_winner=%t", manualWinner), func(t *testing.T) {
+			now := time.Date(2026, 9, 21, 10, 0, 0, 0, time.UTC)
+			oldAccess := testJWT(t, map[string]any{"exp": now.Add(time.Minute).Unix(), "https://api.openai.com/auth": map[string]any{"chatgpt_account_id": "account-work"}})
+			newAccess := testJWT(t, map[string]any{"exp": now.Add(time.Hour).Unix(), "https://api.openai.com/auth": map[string]any{"chatgpt_account_id": "account-work"}})
+			credential, err := ImportAuthJSON(testAuthJSON(t, oldAccess, oldAccess, "refresh-old", "account-work", now.Add(-time.Hour)))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer credential.Destroy()
+			store := newMemoryStore(t, credential, nil)
+			client := &recordingClient{response: httpResponse(t, http.StatusOK, map[string]any{"access_token": newAccess}), gate: make(chan struct{}), started: make(chan struct{})}
+			var release sync.Once
+			manager, err := NewManager(Options{Secrets: store, Client: client, Clock: fixedClock{now: now}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			winner, waiter := testAccountScope(), testAccountScope()
+			winner.ResolvedEgress, err = egressprofile.RestoreResolved(winner.EgressProfile, egressprofile.SelectionGlobal, 7)
+			if err != nil {
+				t.Fatal(err)
+			}
+			waiter.EgressProfile.ID = "profile.waiter"
+			waiter.EgressProfile.DisplayName = "Distinct frozen waiter"
+			waiter.EgressProfile.Policy.Proxy = egressnetwork.ProxyPolicy{Kind: egressnetwork.ProxySOCKS5, Endpoint: "127.0.0.1:18081"}
+			waiter.ResolvedEgress, err = egressprofile.RestoreResolved(waiter.EgressProfile, egressprofile.SelectionGlobal, 8)
+			if err != nil {
+				t.Fatal(err)
+			}
+			call := func(ctx context.Context, scope providerauth.AccountRef, manual bool) (secretstore.Revision, error) {
+				if manual {
+					return manager.Refresh(ctx, providerauth.CodexOAuthDriverRef(), testReference(t), scope)
+				}
+				return manager.Prepare(ctx, providerauth.CodexOAuthDriverRef(), testReference(t), scope, true)
+			}
+			type result struct {
+				revision secretstore.Revision
+				err      error
+			}
+			done := make(chan result, 1)
+			joined := make(chan result, 1)
+			operation, cancelOperation := context.WithCancel(t.Context())
+			winnerJoined, waiterLaunched, waiterJoined := false, false, false
+			defer func() {
+				release.Do(func() { close(client.gate) })
+				cancelOperation()
+				if !winnerJoined {
+					select {
+					case <-done:
+					case <-time.After(time.Second):
+						t.Error("winner cleanup did not join")
+					}
+				}
+				if waiterLaunched && !waiterJoined {
+					select {
+					case <-joined:
+					case <-time.After(time.Second):
+						t.Error("waiter cleanup did not join")
+					}
+				}
+				closing, stop := context.WithTimeout(context.Background(), time.Second)
+				defer stop()
+				if err := manager.Shutdown(closing); err != nil {
+					t.Error("refresh owner failed to drain", err)
+				}
+			}()
+			go func() { revision, err := call(operation, winner, manualWinner); done <- result{revision, err} }()
+			select {
+			case <-client.started:
+			case <-time.After(time.Second):
+				t.Fatal("winner did not enter token exchange")
+			}
+			waiting, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
+			defer cancel()
+			if _, err := call(waiting, waiter, !manualWinner); !errors.Is(err, context.DeadlineExceeded) {
+				t.Fatalf("post-freeze waiter did not remain cancelable: %v", err)
+			}
+			if client.Calls() != 1 {
+				t.Fatal("waiter started another token exchange")
+			}
+			observed := &refreshWaitObservation{Context: operation, entered: make(chan struct{})}
+			waiterLaunched = true
+			go func() { revision, err := call(observed, waiter, !manualWinner); joined <- result{revision, err} }()
+			select {
+			case <-observed.entered:
+			case <-time.After(time.Second):
+				t.Fatal("successful waiter did not enter actual post-DoChan select")
+			}
+			select {
+			case <-joined:
+				waiterJoined = true
+				t.Fatal("waiter returned before held token exchange completed")
+			default:
+			}
+			client.mu.Lock()
+			sentScope := client.scope
+			client.mu.Unlock()
+			if sentScope.ResolvedEgress != winner.ResolvedEgress || waiter.ResolvedEgress.DefaultRevision() != 8 || waiter.EgressProfile.Equal(winner.EgressProfile) {
+				t.Fatal("waiter rewrote the winning frozen selection")
+			}
+			release.Do(func() { close(client.gate) })
+			select {
+			case got := <-done:
+				winnerJoined = true
+				if got.err != nil || got.revision != 2 {
+					t.Fatalf("winner result=%+v", got)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("winner did not drain")
+			}
+			select {
+			case got := <-joined:
+				waiterJoined = true
+				if got.err != nil || got.revision != 2 {
+					t.Fatalf("coalesced live waiter result=%+v", got)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("coalesced live waiter did not join")
+			}
+			revision, err := call(t.Context(), waiter, !manualWinner)
+			if err != nil || revision != 2 || client.Calls() != 1 || waiter.ResolvedEgress.DefaultRevision() != 8 {
+				t.Fatal("joined epoch changed the caller's selection or retried token exchange")
+			}
+		})
 	}
 }
 
@@ -511,7 +655,8 @@ type recordingClient struct {
 }
 
 func testAccountScope() providerauth.AccountRef {
-	return providerauth.AccountRef{ID: "oauth", Revision: 1, CredentialEpoch: 1, SettingsRevision: 1, EgressProfile: egressprofile.Direct(), RealmID: "openai.chatgpt"}
+	resolved, _ := egressprofile.RestoreResolved(egressprofile.Direct(), egressprofile.SelectionAccount, 0)
+	return providerauth.AccountRef{ID: "oauth", Revision: 1, CredentialEpoch: 1, SettingsRevision: 1, EgressProfile: egressprofile.Direct(), ResolvedEgress: resolved, RealmID: "openai.chatgpt"}
 }
 
 func (client *recordingClient) Do(request *http.Request, scope providerauth.AccountRef) (*http.Response, error) {

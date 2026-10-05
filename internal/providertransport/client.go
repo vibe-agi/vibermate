@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/vibe-agi/vibermate/internal/egressaudit"
+	"github.com/vibe-agi/vibermate/internal/egressprofile"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
 	"github.com/vibe-agi/vibermate/internal/providerauth"
 	"github.com/vibe-agi/vibermate/internal/rawevidence"
@@ -47,6 +48,7 @@ const (
 )
 
 type ClientOptions struct {
+	EgressDefaults egressprofile.Resolver
 	Coordinator    offlinehold.Coordinator
 	Authenticator  Authenticator
 	Authenticators []Authenticator
@@ -123,7 +125,8 @@ func (operation *clientOperation) takeLease() offlinehold.Lease {
 }
 
 type Client struct {
-	mu sync.Mutex
+	egressDefaults egressprofile.Resolver
+	mu             sync.Mutex
 
 	coordinator    offlinehold.Coordinator
 	authenticators map[providerauth.DriverRef]Authenticator
@@ -185,6 +188,7 @@ func NewClient(options ClientOptions) (*Client, error) {
 		authenticators: byRef,
 		transport:      options.Transport,
 		instanceIDs:    options.InstanceIDs,
+		egressDefaults: options.EgressDefaults,
 		runtimePlan:    runtimePlan,
 		audit:          options.Audit,
 		raw:            options.RawEvidence,
@@ -223,6 +227,7 @@ func NewProductionClientWithAuthenticators(
 	instanceIDs InstanceIDSource,
 	audit egressaudit.Writer,
 	rawEvidence rawevidence.Observer,
+	defaults egressprofile.Resolver,
 ) (*Client, error) {
 	transport, err := newProductionTransport(timeouts)
 	if err != nil {
@@ -235,6 +240,7 @@ func NewProductionClientWithAuthenticators(
 		InstanceIDs:    instanceIDs,
 		Audit:          audit,
 		RawEvidence:    rawEvidence,
+		EgressDefaults: defaults,
 	})
 }
 
@@ -1111,11 +1117,18 @@ func providerEgressDecision(frozen Request) egressaudit.DecisionRef {
 	if rule == "" {
 		rule = "original.destination"
 	}
+	selection, defaultRevision := frozen.accountRef.ResolvedEgress.Source(), frozen.accountRef.ResolvedEgress.DefaultRevision()
+	if frozen.credentialMode == providerauth.CredentialClientPassthrough {
+		// This request already owns a validated concrete flow profile. It does
+		// not acquire an account or resolve a global default at audit time.
+		selection, defaultRevision = egressprofile.SelectionFlow, 0
+	}
 	return egressaudit.DecisionRef{
 		PolicyID: frozen.provenance.environmentID.String(), PolicyRevision: uint64(frozen.provenance.environmentRevision),
 		Authority: authority, RuleID: rule,
 		ProxyID: frozen.egressProfile.ID.String(), ProxyRevision: uint64(frozen.egressProfile.Revision),
 		AccountID: frozen.accountRef.ID, AccountSettingsRevision: frozen.accountRef.SettingsRevision,
+		SelectionSource: selection, DefaultRevision: defaultRevision,
 	}
 }
 
