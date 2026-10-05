@@ -78,6 +78,7 @@ func New(options Options) (*desktopcontrol.Handler, error) {
 		CodexLogins:    options.Runtime.CodexOAuthLogins(),
 		CodeLibrary:    options.Runtime.CodeLibrary(),
 		EgressProfiles: options.Runtime.EgressProfiles(),
+		EgressDefaults: options.Runtime.EgressDefaults(),
 		RawEvidence:    options.Runtime.RawEvidence(),
 		Offline:        options.Runtime, ConnectionRules: options.Runtime.ConnectionRules(),
 		CaptureRuns: options.Runtime.CaptureRunReader(), ManualCaptures: options.Runtime.ManualCaptures(),
