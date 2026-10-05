@@ -107,6 +107,7 @@ DEVELOPER_DIR=/Library/Developer/CommandLineTools go run golang.org/x/vuln/cmd/g
 ```
 
 - [ ] Flutter 执行 pinned SDK 验证、format/analyze、全量 tests 与 Chrome reader tests；Paseo 执行 `npm ci --ignore-scripts --no-audit --no-fund`、typecheck、9 项既有测试及受影响新测试；发布工具/Actions pins 使用原 Makefile 中的固定 checks。
+- [ ] 用户新报的额度/兑换券错位按 `2026-10-05-quota-metadata-alignment.md` 执行真实组件几何 RED→最小两处 Wrap 对齐→响应式/字体/刷新/交互验证和独立复核。当前源码与0.1.23的这两处布局相同，尚未执行修复；不能用其他阅读器测试代替。记录超时和历史警告持续显示另行诊断，不以该布局修正或重启清除警告宣称解决。
 - [ ] 在临时 SQLite 和合成流量上运行至少 60 分钟受控 soak。每 30 秒采集不含正文的 heap、队列、map、WAL、记录/失败计数，关闭/打开 reader、切换捕获并发，验证留存清理与工作内存趋势。监控等待以不超过 60 秒的片段推进并保持用户更新。
 - [ ] 原生流量纳入 soak 前，执行真实 Store／executor 小规模完成与清空测试：正常握手后连续完成16个独立 ping，逐项确认真实 once／物理 audit／终态及发送计数，比较 `claimed` 数量和共享预算；再真实 DELETE 会话、清空活动消费者但保持 executor 开启，确认资源基线并允许新会话。准备依据在 `.superpowers/sdd/2026-10-04-native-mcp-transport/native-claim-lifetime-audit-draft.md`；这段明确步骤不依赖 scratch 在发布环境中存在。源码检查显示每次 claim 收取128字节、当前只在 executor.Close 统一释放；这是源码事实，尚非执行过的耗尽故障。若已完成请求造成持续保留，按实际终态证明修复并独立复核后再验收长期运行；不得按时间／容量驱逐活动或提交不确定的 claim。旧凭据即使重新获得本地 map 槽也必须被 Store.Verify 拒绝，不能通过“本次实际新 Start”条件或改写旧发送为零。明确区分活动／不确定工作、已完成历史和其他有意保留的 tombstone，不能把现有会话 map 测试当作此运行期 map 的证据。
 - [ ] 用可控 clock 验证 10 天 Session 边界、隐藏/唤醒后的续期、401 重新授权重试；用已拥有的故障 seam 验证磁盘不足、write/rename/sync 失败、进程异常退出、备份恢复。源码与适用平台不同的结果不能相互替代。
