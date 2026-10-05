@@ -22,7 +22,7 @@
 
 ## Sequencing and safety
 
-Queue after the current native claim-lifetime diagnostic/correction and its independent review; use the same isolated production-readiness worktree with one source writer. Root provides the exact committed BASE at dispatch. All data is synthetic, no live App/daemon/account/database access, no restart, no CA/trust change and no original dirty-tree edit.
+The tests-only native claim diagnostic is complete (44231 real RED). Its reclamation design is being evaluated read-only, so this independent UI unit may execute now using the same isolated production-readiness worktree and sole source implementer. Protect the existing untracked `internal/nativemcp/claim_lifetime_test.go` byte-for-byte; do not stage, remove, format or run it in this UI unit. Root provides the exact committed BASE at dispatch. The UI report/review must explicitly acknowledge that protected pending diagnostic rather than falsely claiming empty porcelain. Commit/review only this unit's UI files and root-owned documentation; native implementation resumes after this UI handoff. All data is synthetic, no live App/daemon/account/database access, no restart, no CA/trust change and no original dirty-tree edit.
 
 The complete design context is retained in `.superpowers/sdd/2026-10-03-production-readiness/quota-alignment-fix-design-draft.md`, but this tracked plan contains the required execution steps and does not depend on scratch files in a release environment. Recording diagnostics, native continuation/all46, CA/native OS, soak, final-source/security/signing/notarization/install/GitHub/Homebrew gates remain separately required.
 
