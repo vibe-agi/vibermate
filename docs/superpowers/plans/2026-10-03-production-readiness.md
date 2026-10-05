@@ -108,7 +108,7 @@ DEVELOPER_DIR=/Library/Developer/CommandLineTools go run golang.org/x/vuln/cmd/g
 
 - [ ] Flutter 执行 pinned SDK 验证、format/analyze、全量 tests 与 Chrome reader tests；Paseo 执行 `npm ci --ignore-scripts --no-audit --no-fund`、typecheck、9 项既有测试及受影响新测试；发布工具/Actions pins 使用原 Makefile 中的固定 checks。
 - [x] 用户新报的额度/兑换券错位已按 `2026-10-05-quota-metadata-alignment.md` 完成真实组件几何 RED→GREEN、两处相邻窄屏溢出修正、48项受影响测试/分析/格式检查及独立复核（e60dfce）。这只是源码修复，尚未安装/发布；记录超时、历史警告和新报MODEL SSE空闲超时另行诊断，不以该布局修正宣称解决。
-- [ ] 用户0.1.23长任务反复MODEL SSE空闲超时按 `2026-10-05-model-sse-idle-diagnostic.md` 优先做连续被审核屏障暂存的参数增量、真实客户端事件语义、实际Runtime/transport对照与正确时间比例的隔离复现；证明后另行采用修复和独立复核。旧上游keepalive短测试、MCP GET续传或延长默认超时不能替代此门槛；未核对真实运行路径前不宣称解释了用户这次事故。
+- [ ] 用户0.1.23长任务MODEL SSE问题已按 `2026-10-05-model-sse-idle-diagnostic.md` 取得真实23562 RED和独立证据审核：持续参数被屏障暂存、comment不能重置客户端idle。现采用 `2026-10-05-model-sse-liveness.md` 的两项串行修复/完整截止与审批/路由/客户端复核；尚未实施或发布。旧短心跳、MCP续传或扩大timeout不替代门槛，未知generic手工客户端和用户实际路径仍待证据，不能仅凭fixture宣称事故解决。
 - [ ] 在临时 SQLite 和合成流量上运行至少 60 分钟受控 soak。每 30 秒采集不含正文的 heap、队列、map、WAL、记录/失败计数，关闭/打开 reader、切换捕获并发，验证留存清理与工作内存趋势。监控等待以不超过 60 秒的片段推进并保持用户更新。
 - [ ] 原生流量纳入 soak 前，执行真实 Store／executor 小规模完成与清空测试：正常握手后连续完成16个独立 ping，逐项确认真实 once／物理 audit／终态及发送计数，比较 `claimed` 数量和共享预算；再真实 DELETE 会话、清空活动消费者但保持 executor 开启，确认资源基线并允许新会话。准备依据在 `.superpowers/sdd/2026-10-04-native-mcp-transport/native-claim-lifetime-audit-draft.md`；这段明确步骤不依赖 scratch 在发布环境中存在。源码检查显示每次 claim 收取128字节、当前只在 executor.Close 统一释放；这是源码事实，尚非执行过的耗尽故障。若已完成请求造成持续保留，按实际终态证明修复并独立复核后再验收长期运行；不得按时间／容量驱逐活动或提交不确定的 claim。旧凭据即使重新获得本地 map 槽也必须被 Store.Verify 拒绝，不能通过“本次实际新 Start”条件或改写旧发送为零。明确区分活动／不确定工作、已完成历史和其他有意保留的 tombstone，不能把现有会话 map 测试当作此运行期 map 的证据。
 - [ ] 用可控 clock 验证 10 天 Session 边界、隐藏/唤醒后的续期、401 重新授权重试；用已拥有的故障 seam 验证磁盘不足、write/rename/sync 失败、进程异常退出、备份恢复。源码与适用平台不同的结果不能相互替代。
