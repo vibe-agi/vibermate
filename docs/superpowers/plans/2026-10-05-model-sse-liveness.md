@@ -63,6 +63,24 @@ For real MODEL approval, set the private candidate `PolicySet.ToolMode=Review` b
 
 For the bounded expiry case only, permit the existing private Runtime `Options.Approvals` configuration to use25s `DecisionTimeout` before construction, which exceeds the unchanged15s heartbeat. This is test-owned configuration of the real Authority, not a clock jump, SQL mutation, fabricated decision or production stream/approval default change. Require actual expired state/`approval_expired`, zero tool effect and watcher/client/read drain; preserve default5m approval configuration in the Allow/Deny controls. Pending raw frames are not exposed live by the current Runtime store, so use the focused production-downstream boundary plus eventual real raw evidence and actual pending/native observations; do not invent per-frame timestamps or native heartbeat receipts.
 
+### Task2 fixed-client and default-plugin containment
+
+Use each pin's actual request declaration and tool result.145 registers `update_plan` unconditionally and has no `tools.update_plan` setting; omit that setting.159.2/160 require it enabled. All three reject Plan mode for this tool; use Default. For the common response omit namespace rather than relying on159/160's `functions` normalization, which145 does not apply. All three keep built-in `openai` via `or_insert`; use typed `synthetic_idle` plus the complete private provider table after launcher CLI settings. Prove each pin's effective idle/retries and matching actual `Plan updated` acknowledgement; fixed-source contract research is not executed compatibility evidence.
+
+For the exact160 default-plugins-on long-stream control only, retain both default `plugins=true` and `remote_plugin=true` with synthetic ChatGPT auth and fresh private roots. Disabling only remote_plugin can start curated Git synchronization. Keep no configured marketplaces/plugins or app-list/install RPCs. Permit ONLY the following exact bodyless authenticated GET forms as empty local403 denials, without Location or data; they remain canonical verified TLS Host/SNI chatgpt.com:443 with no body/TE, malformed/duplicate/extra query keys or redirect. All paths below start with `/backend-api`.
+
+| Request path | Exact first-page query |
+| --- | --- |
+| `/ps/plugins/list` | `scope=GLOBAL&limit=200` |
+| `/ps/plugins/installed` metadata | `limit=200` |
+| `/ps/plugins/installed` bundle metadata | `limit=200&includeDownloadUrls=true` |
+| `/plugins/featured` | `platform=codex` |
+| `/ps/plugins/suggested/codex` | `scope=GLOBAL` |
+| `/codex/models` | `client_version=0.160.0` |
+| `/wham/settings/user` | no query |
+
+Predeclared resource guards for this new bounded profile: at most8 denials per distinct row and32 total over its60s work/90s overall case; count installed variants separately. These are fixture safety caps, NOT proved client-wide maxima or retries. Preserve stricter old diagnostic-profile caps unchanged. Overflow, any unknown form, an untrusted root or any other target still fails and drains; no automatic cap increase, general GET exemption or public dial. Return403 on the first page so no successful pagination/download metadata can authorize a download. Keep synthetic account-routing response semantics distinct from these denials. Negative-test every exact predicate and guard boundary before native execution; report only bounded method/path/query-key classes, never credentials or bodies. Successful two-request model/plan completion and zero unexpected requests are still required. The54-line primary-source contract map records repeat-trigger uncertainty and exact callers; first native evidence, not an assumed process-wide bound, decides acceptance.
+
 ## Commands, sequencing and scope
 
 ```sh
