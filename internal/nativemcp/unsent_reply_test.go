@@ -164,6 +164,7 @@ func ExerciseUnsentReply(t *testing.T, kind string, approve func(Executor, *runt
 		}
 	}
 	terminal := finish()
+	requireNativeClaimAfterDrain(t, e, child.id, retiredFirst)
 	verify := <-held.verified
 	facts := readFreshGETFacts(t, f, child.id)
 	scope, err = f.store.NativeToolRepository().GetScope(context.Background(), f.capture)

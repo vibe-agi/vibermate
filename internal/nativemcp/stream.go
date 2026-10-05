@@ -46,6 +46,7 @@ type streamCursor struct {
 	ordinal int
 }
 type streamRecord struct {
+	claim                       nativeClaimHandle
 	operation                   nativetool.ID
 	binding                     nativetool.Binding
 	authority                   nativetool.StreamAuthority
@@ -68,7 +69,7 @@ type streamRecord struct {
 	charged                     int64
 }
 
-func (e *executor) openStream(ctx context.Context, c CapturedRequest, r rpc, s *session, b nativetool.Binding, receipt nativetool.StartReceipt, started time.Time) (*streamRecord, error) {
+func (e *executor) openStream(ctx context.Context, c CapturedRequest, r rpc, s *session, b nativetool.Binding, receipt nativetool.StartReceipt, started time.Time, claim nativeClaimHandle) (*streamRecord, error) {
 	e.reclaimDeliveredStreams(s)
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -97,7 +98,7 @@ func (e *executor) openStream(ctx context.Context, c CapturedRequest, r rpc, s *
 		cloned.failure, cloned.renewalUnavailable, cloned.retention, cloned.collection, cloned.collectionToken = r.failure, r.renewalUnavailable, r.retention, r.collection, r.collectionToken
 	}
 	logical, cancel := context.WithCancel(s.context)
-	stream := &streamRecord{operation: c.id, binding: b, receipt: receipt, request: cloned, context: logical, cancel: cancel, expires: expires, credentialRevision: c.admission.CredentialRevision(), attached: true, charged: cost}
+	stream := &streamRecord{claim: claim, operation: c.id, binding: b, receipt: receipt, request: cloned, context: logical, cancel: cancel, expires: expires, credentialRevision: c.admission.CredentialRevision(), attached: true, charged: cost}
 	stream.created = started
 	stream.expiryTimer = time.AfterFunc(time.Until(expires), cancel)
 	s.streams[c.id] = stream
@@ -156,6 +157,8 @@ func (e *executor) reclaimDeliveredStreams(s *session) {
 // path. Observation authority is required before allocating a recovery cursor
 // or publishing a callback; any issuance failure remains fail-closed.
 func (e *executor) observeStream(ctx context.Context, s *session, stream *streamRecord) error {
+	// Classification precedes issuance and takes e.mu before any s.mu.
+	e.observeClaim(stream.claim)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if stream.retired {
@@ -358,13 +361,13 @@ func (e *executor) finishStreamAttempt(c CapturedRequest, r rpc, s *session, rec
 		if known != nil && errors.Is(cause, errStreamDelivery) {
 			err := e.dependencies.Store.FinishObservedRPC(ctx, receipt, nativetool.PhysicalFinishInput{Outcome: "failed", Reason: "transport_failed", ObservedAt: e.dependencies.Clock().UTC()}, *known)
 			if err != nil {
-				return e.finishFailure(c.id, s, w, err, true)
+				return e.finishFailure(c.id, s, w, err, true, stream.claim)
 			}
 			e.retireCompletedParents(ctx, s, c.id)
 			return Terminal{OperationID: c.id, Outcome: Outcome(known.Outcome)}
 		}
 		if cause != nil {
-			return e.finishFailure(c.id, s, w, cause, true)
+			return e.finishFailure(c.id, s, w, cause, true, stream.claim)
 		}
 		outcome, reason := "completed", "completed"
 		result := OutcomeCompleted
@@ -373,8 +376,9 @@ func (e *executor) finishStreamAttempt(c CapturedRequest, r rpc, s *session, rec
 			result = OutcomeFailed
 		}
 		if err := e.dependencies.Store.Finish(ctx, c.id, nativetool.TerminalInput{Outcome: outcome, Reason: reason, BytesIn: counted.bytes.Load(), BytesOut: int64(len(r.raw)), ObservedAt: e.dependencies.Clock().UTC()}); err != nil {
-			return e.finishFailure(c.id, s, w, err, true)
+			return e.finishFailure(c.id, s, w, err, true, stream.claim)
 		}
+		e.notePhysicalTerminal(stream.claim)
 		return Terminal{OperationID: c.id, Outcome: result, BytesIn: counted.bytes.Load(), BytesOut: int64(len(r.raw))}
 	}
 	state, reason := "completed", "completed"

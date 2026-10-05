@@ -302,6 +302,18 @@ func TestNativeUnsentFinishFaultsFenceAndReconcile(t *testing.T) {
 				if mode != "finish_timeout" && !fault.used.Load() {
 					t.Fatal("real transaction fault was not exercised")
 				}
+				// All Serve consumers have returned. Observe the private registry
+				// read-only from this Store fault package, without a production
+				// inspection hook or changing the real committer/receipt path.
+				claims := reflect.ValueOf(module).Elem().FieldByName("claimed")
+				token := claims.MapIndex(reflect.ValueOf(id))
+				if mode == "start_committed" {
+					if token.IsValid() || claims.Len() != 0 {
+						t.Fatal("ambiguous Start manufactured a local claim")
+					}
+				} else if !token.IsValid() || claims.Len() != 1 || token.Elem().FieldByName("physicalTerminal").Bool() || !token.Elem().FieldByName("consumerDone").Bool() {
+					t.Fatal("Finish error/terminal history manufactured physical claim proof")
+				}
 				beforeSends := transport.calls.Load()
 				wantSends := int64(3)
 				if kind == "tools_call" {

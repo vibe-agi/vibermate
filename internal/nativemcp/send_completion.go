@@ -11,7 +11,7 @@ import (
 
 // Only Serve's own successful Start plus first exclusive unsent claim selects
 // this closure. Historical metadata grants neither another send nor audit drain.
-func (e *executor) finishKnownUnsent(id nativetool.ID, s *session, w http.ResponseWriter, cause error, r rpc, b nativetool.Binding, receipt nativetool.StartReceipt) Terminal {
+func (e *executor) finishKnownUnsent(id nativetool.ID, s *session, w http.ResponseWriter, cause error, r rpc, b nativetool.Binding, receipt nativetool.StartReceipt, claim nativeClaimHandle) Terminal {
 	op, err := e.unsentOperation(id, s, b)
 	if err != nil {
 		return e.unsentStorageFailure(id, s, r, w)
@@ -27,6 +27,9 @@ func (e *executor) finishKnownUnsent(id nativetool.ID, s *session, w http.Respon
 		err = e.dependencies.Store.FinishAttempt(ctx, receipt, nativetool.PhysicalFinishInput{Outcome: "failed", Reason: "transport_failed", Counts: &nativetool.ObservedCounts{}, ObservedAt: e.dependencies.Clock().UTC()})
 	} else {
 		err = e.dependencies.Store.Finish(ctx, id, nativetool.TerminalInput{Outcome: "failed", Reason: "transport_failed", BytesIn: 0, BytesOut: 0, ObservedAt: e.dependencies.Clock().UTC()})
+		if err == nil {
+			e.notePhysicalTerminal(claim)
+		}
 	}
 	cancel()
 	if errors.Is(err, nativetool.ErrConflict) {

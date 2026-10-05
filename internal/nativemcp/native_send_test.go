@@ -116,6 +116,9 @@ func TestNativeSendRequiresSameStoreCommittedReceipt(t *testing.T) {
 				beforeAudit = freshGETRow(t, f, `SELECT * FROM runtime_egress_attempts WHERE parent_id=?`, receipt.OperationID())
 			}
 			sent := e.sendCommitted(context.Background(), request, plan, receipt)
+			if token := sent.claim.token; token != nil && (token.ownerKey != 0 || token.sessionKey != 0 || token.physicalClass != nativeClaimUnbound) {
+				t.Fatal("borrowed/foreign direct receipt gained Serve cleanup affinity")
+			}
 			response, err := sent.response, sent.err
 			if response != nil {
 				response.Body.Close()
@@ -134,6 +137,9 @@ func TestNativeSendRequiresSameStoreCommittedReceipt(t *testing.T) {
 				t.Fatal("rejected first claim lost phase distinction")
 			}
 			sent = e.sendCommitted(context.Background(), request, plan, receipt)
+			if sent.claim.token != nil {
+				t.Fatal("replay returned another invocation's claim handle")
+			}
 			response, err = sent.response, sent.err
 			if response != nil {
 				response.Body.Close()
@@ -273,6 +279,7 @@ func TestNativePostEntryFailuresStayUnknown(t *testing.T) {
 				request := f.captured(t, method, body, "synthetic-session")
 				before := f.transport.sends()
 				f.executor.Serve(ctx, request, httptest.NewRecorder())
+				requireNativeClaimAfterDrain(t, f.executor.(*executor), request.id, false)
 				op, err := f.store.NativeToolRepository().Get(context.Background(), request.id)
 				if err != nil {
 					t.Fatal(err)
@@ -409,7 +416,7 @@ func TestNativeUnsentProofCannotUndoIndependentRevocation(t *testing.T) {
 				e.mu.Lock()
 				claimed := e.claimed[request.id]
 				e.mu.Unlock()
-				if !claimed {
+				if claimed == nil {
 					t.Fatal("revocation did not race a first claim")
 				}
 				if err := e.Revoke(context.Background(), f.capture, reason); err != nil {

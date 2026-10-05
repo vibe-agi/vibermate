@@ -107,9 +107,15 @@ type nativeSendResult struct {
 	response *http.Response
 	err      error
 	phase    nativeSendPhase
+	claim    nativeClaimHandle
 }
 
 func (e *executor) sendCommitted(ctx context.Context, request *http.Request, plan environment.ClientToolPlan, receipt nativetool.StartReceipt) nativeSendResult {
+	return e.sendClaimed(ctx, request, plan, receipt, nil, false)
+}
+
+// Only Serve calls this with ownership after its own immediate matching Start.
+func (e *executor) sendClaimed(ctx context.Context, request *http.Request, plan environment.ClientToolPlan, receipt nativetool.StartReceipt, s *session, observed bool) nativeSendResult {
 	result := nativeSendResult{}
 	if ctx == nil || ctx.Err() != nil || e.dependencies.OwnerContext.Err() != nil {
 		result.err = nativetool.ErrDenied
@@ -117,17 +123,26 @@ func (e *executor) sendCommitted(ctx context.Context, request *http.Request, pla
 	}
 	e.mu.Lock()
 	id := receipt.OperationID()
-	if e.closed || id == "" || e.claimed[id] {
+	if e.closed || id == "" || e.claimed[id] != nil {
 		e.mu.Unlock()
 		result.err = nativetool.ErrReplay
 		return result
 	}
-	if !e.budget.acquire(128) {
+	if !e.budget.acquire(nativeClaimReservationBytes) {
 		e.mu.Unlock()
 		result.err = errBudget
 		return result
 	}
-	e.claimed[id] = true
+	token := &nativeClaim{}
+	if s != nil {
+		token.ownerKey, token.sessionKey = s.owner.claimKey, s.claimKey
+		token.physicalClass = nativeClaimOwnedOrdinary
+		if observed {
+			token.physicalClass = nativeClaimOwnedObserved
+		}
+	}
+	e.claimed[id] = token
+	result.claim = nativeClaimHandle{id: id, token: token}
 	result.phase = nativeSendFirstClaimUnsent
 	e.mu.Unlock()
 	if err := exactTarget(request, plan); err != nil {

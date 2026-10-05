@@ -14,6 +14,7 @@ import (
 )
 
 type ownerScope struct {
+	claimKey        uint64
 	capture         captureidentity.Reference
 	epoch, revision uint64
 	context         context.Context
@@ -23,6 +24,7 @@ type ownerScope struct {
 	expires         time.Time
 }
 type session struct {
+	claimKey                         uint64
 	mu                               sync.Mutex
 	eventMu                          sync.Mutex
 	owner                            *ownerScope
@@ -92,11 +94,24 @@ func (e *executor) admitSession(ctx context.Context, c CapturedRequest, r rpc, p
 		if c.request.Header.Get("Mcp-Session-Id") != "" || c.request.Header.Get("Authorization") == "" && c.request.Header.Get("Cookie") == "" {
 			return nil, errSession
 		}
+		keys := uint64(1)
+		scopeExpired := false
 		if owner != nil && !owner.revoked {
 			scope, err := e.dependencies.Store.GetScope(ctx, capture)
 			if err != nil {
 				return nil, err
 			}
+			scopeExpired = !scope.ExpiresAt.After(now)
+		}
+		if owner == nil || owner.revoked || scopeExpired {
+			keys = 2
+		}
+		firstKey, err := e.reserveClaimKeysLocked(keys)
+		if err != nil {
+			return nil, err
+		}
+		sessionKey := firstKey + keys - 1
+		if owner != nil && !owner.revoked {
 			for _, existing := range owner.sessions {
 				existing.mu.Lock()
 				expired := !existing.timeLimit.After(now) || now.Sub(existing.last) >= e.limits.SessionIdle
@@ -107,7 +122,7 @@ func (e *executor) admitSession(ctx context.Context, c CapturedRequest, r rpc, p
 					}
 				}
 			}
-			if !scope.ExpiresAt.After(now) {
+			if scopeExpired {
 				owner.revoked = true
 				owner.cancel()
 			}
@@ -130,7 +145,7 @@ func (e *executor) admitSession(ctx context.Context, c CapturedRequest, r rpc, p
 				return nil, err
 			}
 			ownerContext, cancel := context.WithCancel(e.dependencies.OwnerContext)
-			owner = &ownerScope{capture: capture, epoch: epoch, revision: revision, context: ownerContext, cancel: cancel, sessions: map[nativetool.ID]*session{}, expires: now.Add(e.limits.SessionIdle)}
+			owner = &ownerScope{claimKey: firstKey, capture: capture, epoch: epoch, revision: revision, context: ownerContext, cancel: cancel, sessions: map[nativetool.ID]*session{}, expires: now.Add(e.limits.SessionIdle)}
 			e.scopes[capture.Key()] = owner
 		}
 		active := 0
@@ -159,7 +174,7 @@ func (e *executor) admitSession(ctx context.Context, c CapturedRequest, r rpc, p
 		}
 		owner.expires = expires
 		sessionContext, sessionCancel := context.WithCancel(owner.context)
-		s := &session{owner: owner, context: sessionContext, cancel: sessionCancel, id: id, plan: plan, assignment: uint64(c.lease.Assignment().Revision), revision: 1, last: now, timeLimit: expires, authorization: c.request.Header.Get("Authorization"), cookie: c.request.Header.Get("Cookie"), active: map[string]*activeRPC{}, parents: map[string]*callbackParent{}, streams: map[nativetool.ID]*streamRecord{}, eventIndex: map[string]streamCursor{}}
+		s := &session{claimKey: sessionKey, owner: owner, context: sessionContext, cancel: sessionCancel, id: id, plan: plan, assignment: uint64(c.lease.Assignment().Revision), revision: 1, last: now, timeLimit: expires, authorization: c.request.Header.Get("Authorization"), cookie: c.request.Header.Get("Cookie"), active: map[string]*activeRPC{}, parents: map[string]*callbackParent{}, streams: map[nativetool.ID]*streamRecord{}, eventIndex: map[string]streamCursor{}}
 		owner.sessions[id] = s
 		s.callbacks = callbacks
 		s.elicitations = map[string]nativetool.ID{}
@@ -485,7 +500,7 @@ func (e *executor) Close(ctx context.Context) error {
 		claims := len(e.claimed)
 		clear(e.claimed)
 		e.mu.Unlock()
-		e.budget.release(int64(claims) * 128)
+		e.budget.release(int64(claims) * nativeClaimReservationBytes)
 		return result
 	case <-ctx.Done():
 		return errors.Join(result, ctx.Err())

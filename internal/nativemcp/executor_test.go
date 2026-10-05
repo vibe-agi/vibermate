@@ -311,6 +311,7 @@ func TestNativeExecutorApprovedCallHasDedicatedStartReceipt(t *testing.T) {
 	if terminal.Outcome != OutcomeCompleted || f.transport.sends() != 4 {
 		t.Fatalf("call %+v sends%d", terminal, f.transport.sends())
 	}
+	requireNativeClaimAfterDrain(t, f.executor.(*executor), request.id, false)
 	op, err := f.store.NativeToolRepository().Get(context.Background(), request.id)
 	if err != nil || op.Capture != f.capture || op.Kind != nativetool.RequestToolsCall || op.ToolName != "read_file" || op.CredentialOwner != "original_client" || op.ApprovalID == nil {
 		t.Fatalf("real native projection %+v %v", op, err)

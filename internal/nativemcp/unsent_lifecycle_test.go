@@ -20,7 +20,7 @@ func holdUnsentLifecycle(t *testing.T, f *nativeFixture, request CapturedRequest
 	t.Helper()
 	e := f.executor.(*executor)
 	held := &heldFreshGETStart{Repository: e.dependencies.Store, target: request.id, started: make(chan nativetool.StartReceipt, 1), release: make(chan struct{}), verified: make(chan error, 1), claimedAtVerify: make(chan bool, 1)}
-	held.claim = func() bool { e.mu.Lock(); defer e.mu.Unlock(); return e.claimed[request.id] }
+	held.claim = func() bool { e.mu.Lock(); defer e.mu.Unlock(); return e.claimed[request.id] != nil }
 	e.dependencies.Store = held
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	var once sync.Once
@@ -216,6 +216,7 @@ func testReadyUnsentLifecycle(t *testing.T, kind string, terminalFirst ...bool) 
 		}
 	}
 	terminal := finish()
+	requireNativeClaimAfterDrain(t, f.executor.(*executor), request.id, closedFirst || kind == "recovery")
 	verify := <-held.verified
 	facts := readFreshGETFacts(t, f, request.id)
 	scope, err := f.store.NativeToolRepository().GetScope(context.Background(), f.capture)

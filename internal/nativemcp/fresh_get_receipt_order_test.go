@@ -213,7 +213,7 @@ func runFreshGETReceiptOrder(t *testing.T, order string) freshGETDiagnostic {
 	}
 	get := f.captured(t, http.MethodGet, "", "synthetic-session")
 	held := &heldFreshGETStart{Repository: f.store.NativeToolRepository(), target: get.id, started: make(chan nativetool.StartReceipt, 1), release: make(chan struct{}), verified: make(chan error, 1), claimedAtVerify: make(chan bool, 1)}
-	held.claim = func() bool { e.mu.Lock(); defer e.mu.Unlock(); return e.claimed[get.id] }
+	held.claim = func() bool { e.mu.Lock(); defer e.mu.Unlock(); return e.claimed[get.id] != nil }
 	e.dependencies.Store = held
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	var releaseOnce sync.Once
@@ -358,7 +358,7 @@ func runAdjacentToolsCallReceiptOrder(t *testing.T) freshGETDiagnostic {
 	}
 	call := f.captured(t, http.MethodPost, `{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"read_file","arguments":{"path":"a"}}}`, "synthetic-session")
 	held := &heldFreshGETStart{Repository: f.store.NativeToolRepository(), target: call.id, started: make(chan nativetool.StartReceipt, 1), release: make(chan struct{}), verified: make(chan error, 1), claimedAtVerify: make(chan bool, 1)}
-	held.claim = func() bool { e.mu.Lock(); defer e.mu.Unlock(); return e.claimed[call.id] }
+	held.claim = func() bool { e.mu.Lock(); defer e.mu.Unlock(); return e.claimed[call.id] != nil }
 	e.dependencies.Store = held
 	// Only the following refresh reaches this transport in the expected path.
 	f.transport.handler = func(r *http.Request, body []byte) (*http.Response, error) {

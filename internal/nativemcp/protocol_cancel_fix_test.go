@@ -45,6 +45,7 @@ func TestNativeProtocolCancelClosesOrdinaryAndMACQuestions(t *testing.T) {
 			if terminal.Outcome != OutcomeCompleted {
 				t.Fatalf("cancel own receipt/send %+v", terminal)
 			}
+			requireNativeClaimAfterDrain(t, f.executor.(*executor), terminal.OperationID, false)
 			approval, err := f.store.NativeToolRepository().GetApproval(context.Background(), approvalID)
 			if err != nil || approval.State != "canceled" {
 				t.Fatalf("protocol cancel left question %s %v", approval.State, err)
