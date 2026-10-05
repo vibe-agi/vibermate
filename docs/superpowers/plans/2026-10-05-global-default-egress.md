@@ -82,11 +82,11 @@ func NewDefaultManager(DefaultRepository, Controller) (*DefaultManager, error)
 CREATE TABLE runtime_egress_default(
   singleton INTEGER PRIMARY KEY CHECK(singleton=1),
   revision INTEGER NOT NULL CHECK(revision BETWEEN 1 AND 9223372036854775807),
-  profile_id TEXT,
-  profile_revision INTEGER,
-  CHECK((profile_id IS NULL AND profile_revision IS NULL) OR
-        (profile_id IS NOT NULL AND length(CAST(profile_id AS BLOB)) BETWEEN 1 AND 128
-         AND profile_revision IS NOT NULL AND profile_revision BETWEEN 1 AND 9223372036854775807))
+  egress_id TEXT,
+  egress_revision INTEGER,
+  CHECK((egress_id IS NULL AND egress_revision IS NULL) OR
+        (egress_id IS NOT NULL AND length(CAST(egress_id AS BLOB)) BETWEEN 1 AND 128
+         AND egress_revision IS NOT NULL AND egress_revision BETWEEN 1 AND 9223372036854775807))
 ) STRICT;
 INSERT INTO runtime_egress_default(singleton,revision) VALUES(1,1);
 ```
