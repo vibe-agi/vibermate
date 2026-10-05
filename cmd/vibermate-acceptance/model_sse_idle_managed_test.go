@@ -59,28 +59,12 @@ func runModelIdleManaged(t *testing.T, mode string) {
 		ClientObservation:     client,
 		ExpectedModelRequests: expectedRequests,
 		ObserveTerminal: func(ctx context.Context, actual nativeModelProbeObservation) {
-			var records activity.Page
-			deadline := time.Now().Add(5 * time.Second)
-			for {
-				var err error
-				records, err = actual.Runtime.Activities().ListExchanges(ctx, activity.PageRequest{CaptureRunID: actual.Capture.ID, Limit: 10})
-				if err != nil {
-					t.Fatal("real Activity read failed")
-				}
-				terminal := len(records.Items) == actual.ModelRequests
-				for _, record := range records.Items {
-					terminal = terminal && record.Kind == activity.KindExchangeCompleted
-				}
-				if terminal || time.Now().After(deadline) {
-					break
-				}
-				select {
-				case <-ctx.Done():
-					t.Fatal("Activity bound expired")
-				case <-time.After(10 * time.Millisecond):
-				}
+			snapshot, snapshotErr := runtimeModelSnapshot(ctx, actual)
+			if snapshotErr != nil {
+				t.Fatal("complete actual MODEL snapshot unavailable: ", snapshotErr)
 			}
-			if len(records.Items) != actual.ModelRequests || len(records.Items) == 0 {
+			records := snapshot.records
+			if len(records) != actual.ModelRequests || len(records) == 0 {
 				t.Fatal("actual model Activity missing")
 			}
 			client.mu.Lock()
@@ -93,7 +77,8 @@ func runModelIdleManaged(t *testing.T, mode string) {
 			comments, downstreamData, argumentEvents := 0, 0, 0
 			generatedData, toolBatches, heldArguments := 0, 0, 0
 			toolExposed := false
-			for _, record := range records.Items {
+			textSeen, terminalSeen := false, false
+			for _, record := range records {
 				ownership := record.CaptureRunID == actual.Capture.ID && record.EnvironmentID == actual.Assignment.EnvironmentID.String() && record.EnvironmentRevision == uint64(actual.Assignment.EnvironmentRevision) && record.EnvironmentDigest == actual.Assignment.EnvironmentDigest.String() && record.AccountID == actual.AccountID
 				if !ownership || record.Kind != activity.KindExchangeCompleted {
 					t.Fatal("actual terminal ownership differs")
@@ -104,20 +89,15 @@ func runModelIdleManaged(t *testing.T, mode string) {
 				if record.Transport == nil || record.Transport.Presentation == nil || record.Transport.Presentation.ClientProtocol != "h2" || record.Transport.Presentation.UpstreamProtocol != "http/1.1" || record.Transport.Presentation.ProtocolAdjustment != "cleartext_http1" {
 					t.Fatal("actual managed transport presentation missing")
 				}
-				envelopes, err := actual.Runtime.RawEvidence().ListExchange(ctx, record.SubjectID)
-				if err != nil {
-					t.Fatal("actual raw envelope metadata unavailable")
-				}
-				for _, meta := range envelopes {
+				envelopes := snapshot.raw[record.SubjectID]
+				for _, raw := range envelopes {
+					meta := raw.Metadata
 					if meta.Layer != rawevidence.LayerClientDownstream && meta.Layer != rawevidence.LayerProviderResponse {
 						continue
 					}
-					// Only private synthetic response payloads; never dump headers or bodies.
-					raw, err := actual.Runtime.RawEvidence().Reveal(ctx, rawevidence.RevealRequest{EnvelopeID: meta.EnvelopeID, ActorID: "synthetic-idle-diagnostic"})
-					if err != nil {
-						t.Fatal("synthetic Full response evidence unavailable")
-					}
 					if meta.Layer == rawevidence.LayerClientDownstream {
+						textSeen = textSeen || bytes.Contains(raw.Payload.Body, []byte("synthetic idle complete"))
+						terminalSeen = terminalSeen || bytes.Contains(raw.Payload.Body, []byte(`"type":"response.completed"`))
 						for _, frame := range raw.Payload.Frames {
 							if frame.Kind == rawevidence.FrameKeepalive {
 								wire := raw.Payload.Body[frame.Offset : frame.Offset+frame.Length]
@@ -153,7 +133,7 @@ func runModelIdleManaged(t *testing.T, mode string) {
 				t.Fatal("managed fixture invalid")
 			}
 			if mode == "text" {
-				if !actual.Completed || idle || events != 27 || plans != 0 || acks != 0 || toolExposed {
+				if !actual.Completed || idle || events != 27 || plans != 0 || acks != 0 || toolExposed || downstreamData == 0 || !textSeen || !terminalSeen {
 					t.Error("actual safe text control differs")
 				}
 				return

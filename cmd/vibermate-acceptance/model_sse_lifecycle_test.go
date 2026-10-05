@@ -74,6 +74,7 @@ func TestModelProbePrivateLifetimeAndProfileBounds(t *testing.T) {
 
 type modelLifecycleEvidence struct {
 	records                                                          []activity.Record
+	raw                                                              map[string][]rawevidence.RevealedEnvelope
 	generatedData, comments, dataFrames, toolBatches, argumentEvents int
 	hasTool, hasCompleted, hasFailed                                 bool
 }
@@ -81,26 +82,12 @@ type modelLifecycleEvidence struct {
 func collectModelLifecycleEvidence(t *testing.T, ctx context.Context, actual nativeModelProbeObservation) modelLifecycleEvidence {
 	t.Helper()
 	var result modelLifecycleEvidence
-	deadline := time.Now().Add(5 * time.Second)
-	for {
-		page, err := actual.Runtime.Activities().ListExchanges(ctx, activity.PageRequest{CaptureRunID: actual.Capture.ID, Limit: 10})
-		if err != nil {
-			t.Fatal("real lifecycle Activity read failed")
-		}
-		result.records = page.Items
-		terminal := len(page.Items) == actual.ModelRequests
-		for _, record := range page.Items {
-			terminal = terminal && record.Kind == activity.KindExchangeCompleted
-		}
-		if terminal || time.Now().After(deadline) {
-			break
-		}
-		select {
-		case <-ctx.Done():
-			t.Fatal("lifecycle observation context expired")
-		case <-time.After(10 * time.Millisecond):
-		}
+	snapshot, err := runtimeModelSnapshot(ctx, actual)
+	if err != nil {
+		t.Fatal("complete lifecycle snapshot unavailable: ", err)
 	}
+	result.records = snapshot.records
+	result.raw = snapshot.raw
 	if len(result.records) != actual.ModelRequests {
 		t.Fatal("lifecycle request/Activity count differs")
 	}
@@ -111,17 +98,11 @@ func collectModelLifecycleEvidence(t *testing.T, ctx context.Context, actual nat
 		if record.Transport == nil || record.Transport.Presentation == nil || record.Transport.Presentation.ClientProtocol != "h2" || record.Transport.Presentation.UpstreamProtocol != "http/1.1" || record.Transport.Presentation.ProtocolAdjustment != "cleartext_http1" {
 			t.Fatal("actual private managed transport evidence differs")
 		}
-		metadata, err := actual.Runtime.RawEvidence().ListExchange(ctx, record.SubjectID)
-		if err != nil {
-			t.Fatal("lifecycle raw metadata unavailable")
-		}
-		for _, meta := range metadata {
+		metadata := snapshot.raw[record.SubjectID]
+		for _, raw := range metadata {
+			meta := raw.Metadata
 			if meta.Layer != rawevidence.LayerClientDownstream && meta.Layer != rawevidence.LayerProviderResponse {
 				continue
-			}
-			raw, err := actual.Runtime.RawEvidence().Reveal(ctx, rawevidence.RevealRequest{EnvelopeID: meta.EnvelopeID, ActorID: "synthetic-model-lifecycle"})
-			if err != nil {
-				t.Fatal("lifecycle synthetic Full response unavailable")
 			}
 			if meta.Layer == rawevidence.LayerProviderResponse {
 				result.argumentEvents += bytes.Count(raw.Payload.Body, []byte(`"type":"response.function_call_arguments.delta"`))

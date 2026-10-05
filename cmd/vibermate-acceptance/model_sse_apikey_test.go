@@ -165,17 +165,10 @@ func TestModelSSEEachPinnedGenericAPIKeyHeldStream(t *testing.T) {
 				if record.Status != activity.StatusSucceeded {
 					t.Error("generic client lacked successful Activity")
 				}
-				metadata, err := actual.Runtime.RawEvidence().ListExchange(ctx, record.SubjectID)
-				if err != nil {
-					t.Fatal(err)
-				}
-				for _, meta := range metadata {
+				for _, raw := range evidence.raw[record.SubjectID] {
+					meta := raw.Metadata
 					if meta.Layer != rawevidence.LayerClientIngress {
 						continue
-					}
-					raw, err := actual.Runtime.RawEvidence().Reveal(ctx, rawevidence.RevealRequest{EnvelopeID: meta.EnvelopeID, ActorID: "synthetic-apikey-proof"})
-					if err != nil {
-						t.Fatal("synthetic ingress evidence unavailable")
 					}
 					if meta.ExchangeID != record.SubjectID || meta.ScopeID != actual.Capture.ID || !modelSyntheticKeyEvidenceMatches(meta, raw.Payload.Headers, salt) {
 						t.Fatal("actual generic ingress operation/auth/account-header mismatch")
