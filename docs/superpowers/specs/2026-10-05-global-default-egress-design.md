@@ -58,6 +58,8 @@ Environment 发布内容与 digest 描述用户选择；实际网络选择是另
 
 本地控制、Runtime 连接与 CA 引导、localhost OAuth 回调、明确本地专用的回环提供者连接不进入全局外网代理，避免配置错误导致无法打开设置或自代理循环。`servertransport` 的客户端到选定 Runtime 的连接保留既有信任和目标规则；它不是该 Runtime 向上游的出口。外部浏览器/下载器/Homebrew 和未经过 ViberMate 的客户端流量不在此设置控制内。不存在的插件下载等功能不得因目的枚举中有名称就宣称已经支持或新增实现。
 
+Task2 独立审查 I1 对上述既有边界的实现细化（不增加可访问目标）：已验证实际提供者目标的类型为 `loopback_cleartext` 或 `private_cleartext` 时，在读取秘密、凭据准备、Hold、探测和发送之前处理其原有 direct-only 约束。先按原优先级选账号/策略的显式配置；获胜的明确直连保留原来源与 DNS 配置，获胜的显式代理被拒绝，不能换用较低优先级配置。只有二者均未明确选择时，使用精确内置 Direct，不查询全局设置；单独记录来源 `transport`、全局 revision0，表示连接类型约束而不是账号/策略选择或全局缺省。不根据域名字符串或泛化私网猜测新增豁免；所有 HTTPS（包括 HTTPS 回环）保持原普通选择规则，现有明文实际 peer/地址/端口检查不变。目标消费端和新审计记录必须拒绝将此来源用于非 direct-only 目标，不能将本地租约借给公网请求。正常界面不支持的 typed 本地 Codex OAuth 账号组合，也应在秘密检查/自动准备前拒绝（最终认证器原本就拒绝该目标）；独立手动刷新实际访问固定 HTTPS token 目标，仍用原账号/全局选择，不能按账号 Origin 猜成本地请求。
+
 ## 可解释的界面与审计
 
 “网络出口方案”页新增“设为默认”和“当前默认”标记，另有清晰的当前默认摘要；内置直连仍可选但不可编辑。未设置显示“未设置，使用直连”。保存未确认、冲突和失败不得显示已经切换。
@@ -66,7 +68,7 @@ Environment 发布内容与 digest 描述用户选择；实际网络选择是另
 
 保持英文/简体中文、键盘可达、390px 窄屏和 200% 字体。用户主界面展示方案名、代理类型和继承来源，默认不暴露 ID、哈希或内部 revision；诊断页可展示精确版本。
 
-出站审计记录实际所用出口的 ID/revision、明确的选择来源及适用的全局设置 revision。沿用原 purpose/authority/AccountSettingsRevision 等真实含义，不能把全局值塞进账号 revision、RuleID 文本或 Raw 字段。旧记录缺少新来源时按历史未知展示，不追溯伪造。初始/终态、Offline 探测、native 绑定与实际 socket 选择必须一致。
+出站审计记录实际所用出口的 ID/revision、明确的选择来源及适用的全局设置 revision。沿用原 purpose/authority/AccountSettingsRevision 等真实含义，不能把全局值塞进账号 revision、RuleID 文本或 Raw 字段。旧记录缺少新来源时按历史未知展示，不追溯伪造。初始/终态、Offline 探测、native 绑定与实际 socket 选择必须一致。`transport` 来源只允许上述合法 direct-only 提供者目标、精确内置 Direct 和 revision0，界面说明为“连接类型要求直连”；它不是四层优先级中的第五项，不改变 `builtin` 必须绑定真实未设置默认 revision 的含义。
 
 ## 数据升级与交付顺序
 
