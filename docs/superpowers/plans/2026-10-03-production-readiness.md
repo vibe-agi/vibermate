@@ -115,6 +115,7 @@ DEVELOPER_DIR=/Library/Developer/CommandLineTools go run golang.org/x/vuln/cmd/g
 - [ ] 用可控 clock 验证 10 天 Session 边界、隐藏/唤醒后的续期、401 重新授权重试；用已拥有的故障 seam 验证磁盘不足、write/rename/sync 失败、进程异常退出、备份恢复。源码与适用平台不同的结果不能相互替代。
 - [ ] 保存测试时长、数据量、p50/p95、预算与未覆盖项。实际 60 分钟 soak 与时钟推进 10 天是不同证据，报告按实际内容标注。
 - [ ] 若出现新破坏，回到对应任务 root-cause/TDD/review 环，不跳过门槛。
+- [ ] 用户新增并确认全局默认网络出口：账号显式选择 > 所属流量策略显式选择 > 全局默认 > 内置直连；显式直连是覆盖，代理失败不直连重试，不改在途请求。设计已写入 `docs/superpowers/specs/2026-10-05-global-default-egress-design.md`（481ac7e），当前为架构文档确认阶段，尚未实施。完成文档审阅、独立实施计划后串行接入持久化、真正的策略继承、所有已存在 Runtime 出站与 Flutter 主动更新查询的闭集转交、首登 OAuth、probe/审计及 UI；保留旧 Direct 字节/摘要和本地控制链路。按设计逐入口真实 SOCKS/TLS/DoH、失败不直连、默认切换不影响在途、安全升级/恢复及中英 UI 验证并独立复核，加入最终同源验收/soak/发布范围。不能仅添加默认标记或修改账号读取就宣称全局完成；当前 native-claim Task2 仍保持唯一代码写者直到其验收与复核结束。
 
 ## Task 10: 整体审查与修复版交付
 
