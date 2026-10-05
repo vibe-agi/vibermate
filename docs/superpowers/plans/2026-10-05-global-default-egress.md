@@ -71,7 +71,7 @@ func NewDefaultManager(DefaultRepository, Controller) (*DefaultManager, error)
 
 ## Task 1: Durable global setting, strict choices and owner control
 
-**Files:** new `internal/egressprofile/{choice,default}.go` + tests; new `internal/runtimepersistence/egress_default_repository.go` + tests; `store.go`, `schema.sql`, `schema/v2.sql`, `migrations/001_to_002.sql`, `schema_migration.go` and schema/migration/backup tests; `internal/productruntime/runtime.go`; new `internal/desktopcontrol/egress_default.go` + tests and handler routes/options. Do not yet change live outbound selection or authored Environment field types.
+**Files:** new `internal/egressprofile/{choice,default}.go` + tests; new `internal/runtimepersistence/egress_default_repository.go` + tests; `store.go`, `schema.sql`, `schema/v2.sql`, `migrations/001_to_002.sql`, `schema_migration.go` and schema/migration/backup tests; `internal/productruntime/runtime.go`; new `internal/desktopcontrol/egress_default.go` + tests and handler routes/options; the matching `internal/desktophost/host.go` dependency injection and focused host route test. Do not yet change live outbound selection or authored Environment field types.
 
 **Produces:** the shared interfaces above, `Store.EgressDefaultRepository() egressprofile.DefaultRepository`, `Runtime.EgressDefaults() egressprofile.Defaults`, owner-only `GET /api/v1/egress-default` and `PUT /api/v1/egress-default`.
 
