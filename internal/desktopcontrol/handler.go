@@ -180,6 +180,7 @@ type Options struct {
 	CodexLogins         codexoauth.LoginController
 	CodeLibrary         codelibrary.Controller
 	EgressProfiles      egressprofile.Controller
+	EgressDefaults      egressprofile.Defaults
 	Models              modelcatalog.Reader
 	ClientModels        modelcatalog.ProviderMetadataReader
 	RawEvidence         rawevidence.Reader
@@ -223,6 +224,7 @@ type Handler struct {
 	codexLogins         codexoauth.LoginController
 	codeLibrary         codelibrary.Controller
 	egressProfiles      egressprofile.Controller
+	egressDefaults      egressprofile.Defaults
 	models              modelcatalog.Reader
 	clientModels        modelcatalog.ProviderMetadataReader
 	rawEvidence         rawevidence.Reader
@@ -306,6 +308,7 @@ func New(options Options) (*Handler, error) {
 		codexLogins:         options.CodexLogins,
 		codeLibrary:         options.CodeLibrary,
 		egressProfiles:      options.EgressProfiles,
+		egressDefaults:      options.EgressDefaults,
 		models:              options.Models,
 		clientModels:        options.ClientModels,
 		rawEvidence:         options.RawEvidence,
@@ -397,6 +400,8 @@ func New(options Options) (*Handler, error) {
 			handler.getCodeLibraryAccountSelectorRevision,
 		)
 	}
+	handler.mux.HandleFunc("GET /api/v1/egress-default", handler.getEgressDefault)
+	handler.mux.HandleFunc("PUT /api/v1/egress-default", handler.setEgressDefault)
 	if handler.egressProfiles != nil {
 		handler.mux.HandleFunc("GET /api/v1/egress-profiles", handler.listEgressProfiles)
 		handler.mux.HandleFunc("PUT /api/v1/egress-profiles/{egressId}", handler.publishEgressProfile)

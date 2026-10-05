@@ -81,6 +81,7 @@ type Runtime struct {
 	codexLogins        *codexoauth.LoginManager
 	codeLibrary        *codelibrary.Manager
 	egressProfiles     *egressprofile.Manager
+	egressDefaults     *egressprofile.DefaultManager
 	runtimeUsers       *runtimeuser.Manager
 	approvals          approvalRuntime
 	nativeTools        nativemcp.Executor
@@ -269,6 +270,10 @@ func startWithBuilders(
 	)
 	if err != nil {
 		return fail("egress profiles", err)
+	}
+	egressDefaults, err := egressprofile.NewDefaultManager(storageResult.store.EgressDefaultRepository(), egressProfiles)
+	if err != nil {
+		return fail("egress defaults", err)
 	}
 	runtimeUsers, err := runtimeuser.New(runtimeuser.Options{
 		Repository:      storageResult.store.RuntimeUserRepository(),
@@ -830,6 +835,7 @@ func startWithBuilders(
 		codexLogins:        codexLogins,
 		codeLibrary:        codeLibrary,
 		egressProfiles:     egressProfiles,
+		egressDefaults:     egressDefaults,
 		runtimeUsers:       runtimeUsers,
 		approvals:          approvals,
 		nativeTools:        nativeTools,
@@ -1030,6 +1036,9 @@ func (r *Runtime) CodeLibrary() codelibrary.Controller {
 func (r *Runtime) EgressProfiles() egressprofile.Controller {
 	return r.egressProfiles
 }
+
+// EgressDefaults is the instance-owned global configuration, not send authority.
+func (r *Runtime) EgressDefaults() egressprofile.Defaults { return r.egressDefaults }
 
 // UpstreamEndpoints returns the reusable upstream authority. Every managed
 // ProviderAccount belongs to exactly one Endpoint exposed by this controller.

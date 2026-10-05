@@ -171,12 +171,23 @@ func TestSchemaSwitchPendingReceiptSurvivesCrash(t *testing.T) {
 	filter := func(rows []string) []string {
 		var result []string
 		for _, row := range rows {
-			if strings.HasPrefix(row, "runtime_metadata:") || strings.HasPrefix(row, "runtime_egress_attempts:") {
+			if strings.HasPrefix(row, "runtime_metadata:") || strings.HasPrefix(row, "runtime_egress_attempts:") || strings.HasPrefix(row, "runtime_egress_default:") {
 				continue
 			}
 			result = append(result, row)
 		}
 		return result
+	}
+	// The only new nonempty table is independently certified as revision1/unset.
+	db, openErr := sql.Open("sqlite", "file:"+filepath.Join(source, "runtime.db")+"?mode=ro")
+	if openErr != nil {
+		t.Fatal(openErr)
+	}
+	var defaults int
+	defaultErr := db.QueryRow(`SELECT count(*) FROM runtime_egress_default WHERE singleton=1 AND revision=1 AND egress_id IS NULL AND egress_revision IS NULL`).Scan(&defaults)
+	db.Close()
+	if defaultErr != nil || defaults != 1 {
+		t.Fatalf("upgrade default seed %d %v", defaults, defaultErr)
 	}
 	if fmt.Sprint(filter(before)) != fmt.Sprint(filter(after)) {
 		t.Fatal("old logical rows changed")

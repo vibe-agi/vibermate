@@ -445,6 +445,7 @@ func Start(ctx context.Context, options Options) (*Host, error) {
 		CodexLogins:         runtime.CodexOAuthLogins(),
 		CodeLibrary:         runtime.CodeLibrary(),
 		EgressProfiles:      runtime.EgressProfiles(),
+		EgressDefaults:      runtime.EgressDefaults(),
 		RawEvidence:         runtime.RawEvidence(),
 		Offline:             runtime,
 		ConnectionRules:     runtime.ConnectionRules(),

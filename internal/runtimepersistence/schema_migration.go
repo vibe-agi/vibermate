@@ -418,6 +418,13 @@ func (runner schemaMigrationRunner) reconcileVerified(ctx context.Context, v Ver
 }
 
 func migrationAdditionsEmpty(ctx context.Context, q schemaQueryer) error {
+	var defaults int
+	if err := q.QueryRowContext(ctx, `SELECT count(*) FROM runtime_egress_default WHERE singleton=1 AND revision=1 AND egress_id IS NULL AND egress_revision IS NULL`).Scan(&defaults); err != nil || defaults != 1 {
+		return ErrUnsupportedSchema
+	}
+	if err := q.QueryRowContext(ctx, `SELECT count(*) FROM runtime_egress_default`).Scan(&defaults); err != nil || defaults != 1 {
+		return ErrUnsupportedSchema
+	}
 	objects, err := schemaObjects(ctx, q)
 	if err != nil {
 		return err

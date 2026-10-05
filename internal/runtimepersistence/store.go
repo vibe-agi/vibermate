@@ -59,6 +59,7 @@ type Store struct {
 	captureRepo        *captureRunRepository
 	codeLibrary        *codeLibraryRepository
 	egressProfiles     *egressProfileRepository
+	egressDefault      *egressDefaultRepository
 	manualCapture      *manualCaptureRepository
 	proxyClients       *proxyClientRepository
 	connectionRepo     *connectionEventRepository
@@ -217,6 +218,7 @@ func Open(ctx context.Context, options Options) (*Store, error) {
 		captureRepo:        captureRepo,
 		codeLibrary:        codeLibrary,
 		egressProfiles:     egressProfiles,
+		egressDefault:      &egressDefaultRepository{database: database, reads: reads, operations: operations, reconcileTimeout: options.CommitReconcileTimeout, committer: sqlTransactionCommitter{}},
 		manualCapture:      manualCaptureRepo,
 		proxyClients:       proxyClientRepo,
 		connectionRepo:     connectionRepo,
