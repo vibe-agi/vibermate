@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"testing"
@@ -54,6 +55,10 @@ type livenessNegativeWriter struct{ livenessPlainWriter }
 
 func (livenessNegativeWriter) Write([]byte) (int, error) { return -1, nil }
 
+type livenessLegacyFlusher struct{ livenessPlainWriter }
+
+func (w livenessLegacyFlusher) Flush() { w.target.flushes++ }
+
 func begunLiveness(t *testing.T, w http.ResponseWriter, selected bool) *httpDownstream {
 	t.Helper()
 	d := newHTTPDownstream(w, httpDownstreamOptions{ClientDialect: protocolspec.DialectOpenAIResponses, responsesDataKeepalive: selected, MaximumBodyBytes: 128, Context: rawevidence.Context{Recording: rawevidence.RecordingFull}})
@@ -68,18 +73,61 @@ func begunLiveness(t *testing.T, w http.ResponseWriter, selected bool) *httpDown
 }
 
 func TestKeepaliveSurfacesFlushFailureWithCommittedPrefix(t *testing.T) {
-	for _, wrapped := range []bool{false, true} {
-		w := &livenessWriter{count: -1, flushErr: errors.New("fixture flush")}
-		var response http.ResponseWriter = w
-		if wrapped {
-			response = livenessWrappedWriter{w}
+	for _, failure := range []struct {
+		name string
+		err  error
+	}{
+		{"ordinary", errors.New("fixture flush")},
+		{"exact_not_supported", http.ErrNotSupported},
+		{"wrapped_not_supported", fmt.Errorf("flush failed: %w", http.ErrNotSupported)},
+		{"joined_connection_error", errors.Join(http.ErrNotSupported, io.ErrClosedPipe)},
+	} {
+		for _, wrapped := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/wrapped=%t", failure.name, wrapped), func(t *testing.T) {
+				w := &livenessWriter{count: -1, flushErr: failure.err}
+				var response http.ResponseWriter = w
+				if wrapped {
+					response = livenessWrappedWriter{w}
+				}
+				d := begunLiveness(t, response, true)
+				err := d.Keepalive(context.Background())
+				if !errors.Is(err, failure.err) || errors.Is(failure.err, http.ErrNotSupported) && !errors.Is(err, http.ErrNotSupported) || errors.Is(failure.err, io.ErrClosedPipe) && !errors.Is(err, io.ErrClosedPipe) {
+					t.Errorf("observed flush failure chain lost: %v", err)
+				}
+				want := "event: keepalive\ndata: {\"type\":\"keepalive\"}\n\n"
+				if w.flushes != 1 || string(w.body) != want || string(d.body) != want || d.total != int64(len(want)) || string(d.hash.Sum(nil)) != string(sha256Bytes([]byte(want))) || len(d.frames) != 1 || d.frames[0].Kind != rawevidence.FrameKeepalive || d.frames[0].Offset != 0 || d.frames[0].Length != int64(len(want)) {
+					t.Fatal("invoked flush or exact committed prefix evidence changed")
+				}
+			})
 		}
-		d := begunLiveness(t, response, true)
-		if err := d.Keepalive(context.Background()); !errors.Is(err, w.flushErr) {
-			t.Errorf("wrapped=%t flush failure lost: %v", wrapped, err)
-		}
-		if d.total != int64(len(w.body)) || string(d.hash.Sum(nil)) != string(sha256Bytes(w.body)) || len(d.frames) != 1 || d.frames[0].Kind != rawevidence.FrameKeepalive {
-			t.Fatal("committed prefix lost on flush failure")
+	}
+}
+
+func TestKeepalivePreservesAbsentAndLegacyFlushCapabilities(t *testing.T) {
+	for _, legacy := range []bool{false, true} {
+		for _, wrapped := range []bool{false, true} {
+			t.Run(fmt.Sprintf("legacy=%t/wrapped=%t", legacy, wrapped), func(t *testing.T) {
+				w := &livenessWriter{count: -1}
+				var response http.ResponseWriter = livenessPlainWriter{w}
+				if legacy {
+					response = livenessLegacyFlusher{livenessPlainWriter{w}}
+				}
+				if wrapped {
+					response = livenessWrappedWriter{response}
+				}
+				d := begunLiveness(t, response, true)
+				before := w.flushes
+				if err := d.Keepalive(context.Background()); err != nil {
+					t.Fatal(err)
+				}
+				wantFlushes := before
+				if legacy {
+					wantFlushes++
+				}
+				if w.flushes != wantFlushes || string(w.body) != "event: keepalive\ndata: {\"type\":\"keepalive\"}\n\n" {
+					t.Fatal("no-capability or legacy flushing behavior changed")
+				}
+			})
 		}
 	}
 }

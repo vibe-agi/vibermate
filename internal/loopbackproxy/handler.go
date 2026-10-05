@@ -2239,7 +2239,7 @@ func (downstream *httpDownstream) write(
 	}
 	if downstream.mode == exchange.ResponseModeEventStream {
 		if kind == rawevidence.FrameKeepalive {
-			if flushErr := http.NewResponseController(downstream.writer).Flush(); flushErr != nil && !errors.Is(flushErr, http.ErrNotSupported) {
+			if flushErr := flushKeepalive(downstream.writer); flushErr != nil {
 				err = errors.Join(err, flushErr)
 			}
 		} else if flusher, ok := downstream.writer.(http.Flusher); ok {
@@ -2247,6 +2247,25 @@ func (downstream *httpDownstream) write(
 		}
 	}
 	return count, err
+}
+
+// Absence of flushing is a supported no-op. An implemented FlushError may
+// itself return ErrNotSupported (or join it with a connection failure), so its
+// result cannot be used to infer that the capability was absent.
+func flushKeepalive(writer http.ResponseWriter) error {
+	for {
+		switch current := writer.(type) {
+		case interface{ FlushError() error }:
+			return current.FlushError()
+		case http.Flusher:
+			current.Flush()
+			return nil
+		case interface{ Unwrap() http.ResponseWriter }:
+			writer = current.Unwrap()
+		default:
+			return nil
+		}
+	}
 }
 
 func (downstream *httpDownstream) Keepalive(ctx context.Context) error {
