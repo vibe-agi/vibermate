@@ -109,5 +109,8 @@ func TestLocalResponsesDataKeepaliveDoesNotRenewProviderSemanticBudget(t *testin
 	if bytes.Contains(downstream.bytesSnapshot(), []byte("function_call")) || bytes.Contains(downstream.bytesSnapshot(), []byte("response.completed")) || decisions.callCount() != 0 || len(observer.snapshot()) != 1 {
 		t.Fatal("silent provider created tool/success/retry effects")
 	}
+	if result.Ledger.DownstreamSemanticWrites != 1 || result.Ledger.DownstreamSemanticBytes != int64(len(downstream.bytesSnapshot())) || result.TransportResends != 0 {
+		t.Fatal("local DATA heartbeat became semantic progress or resend")
+	}
 	t.Logf("semantic idle at=%dms concrete DATA keepalives=%d readPumpActive=%d outcome=%s", elapsed.Milliseconds(), len(events), body.active.Load(), result.Outcome)
 }

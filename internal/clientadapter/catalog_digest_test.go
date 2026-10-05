@@ -23,6 +23,7 @@ var knownCatalogDigests = map[uint64]string{
 	2: "YdpxfC8Npf6JvnCb-Z5v_-_iilRwfwntFxcM-aiPNWY",
 	3: "LHD_vsaIYGRtuddm3iGvLZZ4KszihcrbXJ8se9awLMY",
 	4: "GQTaA3MJwRJIlT31Ywt9IMl7uJ_U1ET03VdEvu9X9WA",
+	5: "sSjtO4_77ejxCLsCb9HH83gK1hP2GkYR3W0oeN1oPiY",
 }
 
 func TestTheCatalogCannotChangeWithoutItsRevision(t *testing.T) {

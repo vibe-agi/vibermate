@@ -1103,7 +1103,7 @@ func claudeCode221220Release(
 // CodexCLI01450DarwinARM64 returns the compound release whose HTTP fallback,
 // Root input, and wire behavior were verified by the fixed client matrix.
 func CodexCLI01450DarwinARM64() Release {
-	return codexCLI01450Release(
+	release := codexCLI01450Release(
 		"darwin",
 		"arm64",
 		"codex-darwin-arm64",
@@ -1111,6 +1111,9 @@ func CodexCLI01450DarwinARM64() Release {
 		"da204207716d61f06a70d96dd66e9b6c0728a3bdf8f696f31026549d47667a98",
 		"1da3f4e0e96028b8a771814293c3033dafd1971f943f6c7e79b0897fe705f590",
 	)
+	release.Revision = 2
+	release.Features |= FeatureResponsesDataKeepalive
+	return release
 }
 
 // CodexCLI01450DarwinAMD64 returns the Intel macOS compound npm release.
@@ -1205,7 +1208,7 @@ func codexCLI01450Release(
 // empty or partially active catalog.
 func BuiltInCatalog() Catalog {
 	return Catalog{
-		revision: 4,
+		revision: 5,
 		releases: []Release{
 			ClaudeCode221220DarwinARM64(),
 			ClaudeCode221220DarwinAMD64(),

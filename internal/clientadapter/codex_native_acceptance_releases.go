@@ -7,10 +7,13 @@ package clientadapter
 // Both accept the root CA and uncompressed Responses launch configuration.
 // Their removed responses_websockets switch grants no feature flag here.
 func CodexCLI01592DarwinARM64() Release {
-	return codexNativeMCPRelease("0.159.2",
+	release := codexNativeMCPRelease("0.159.2",
 		"d4e69a623f79ede30c5abb2a4a4bef8b7ff71dbda1362ebe198676ab56113c15",
 		"73738c674e311dae00130ae6510a7d8ef9564dbb4ff588ad2d64cc10f267041e",
 		"16593cc2f422d5f398a8e40f550ebbaf1245392528957be342c295920a300704")
+	release.Revision = 2
+	release.Features = FeatureResponsesDataKeepalive
+	return release
 }
 
 func CodexCLI01600DarwinARM64() Release {

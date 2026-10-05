@@ -12,6 +12,7 @@ import (
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math/big"
@@ -122,6 +123,53 @@ type nativeModelProbeOptions struct {
 	ClientObservation     io.Writer
 	ExpectedModelRequests int
 	ObserveTerminal       func(context.Context, nativeModelProbeObservation)
+	WorkLimit             time.Duration
+	Review                bool
+	ExpireReview          bool
+	Profile               nativeModelProbeProfile
+	BeforeTurn            func(context.Context, nativeModelProbeSetup) (func(), error)
+	Auxiliary             *nativeModelAuxiliaryGuard
+}
+
+// Closed, synthetic MODEL-only configuration, never a compatibility grant.
+type nativeModelProbeProfile uint8
+
+const (
+	nativeModelProbeNative nativeModelProbeProfile = iota
+	nativeModelProbePluginsOn
+	nativeModelProbeAPIKey
+	nativeModelProbeAPIKeyMissing
+	nativeModelProbeAPIKeyEmpty
+)
+
+func (profile nativeModelProbeProfile) usesAPIKey() bool {
+	return profile == nativeModelProbeAPIKey || profile == nativeModelProbeAPIKeyMissing || profile == nativeModelProbeAPIKeyEmpty
+}
+
+type nativeModelProbeSetup struct {
+	Runtime     *productruntime.Runtime
+	Management  *nativeManagementFixture
+	Environment environment.EnvironmentSnapshot
+	AccountID   string
+}
+
+func modelProbeWorkLimit(scenario string, probe *nativeModelProbeOptions) (time.Duration, error) {
+	if probe == nil {
+		return 60 * time.Second, nil
+	}
+	if scenario != "model_probe" || probe.Handler == nil || probe.ThreadParameters == nil || probe.ObserveTerminal == nil || probe.ExpectedModelRequests < 0 || probe.ExpectedModelRequests > 2 || probe.Profile > nativeModelProbeAPIKeyEmpty || probe.ExpireReview && !probe.Review || probe.WorkLimit < 0 || probe.WorkLimit > 330*time.Second {
+		return 0, errors.New("synthetic model diagnostic options are invalid or outside model_probe")
+	}
+	if probe.ExpectedModelRequests == 0 && probe.Profile != nativeModelProbeAPIKeyMissing && probe.Profile != nativeModelProbeAPIKeyEmpty {
+		return 0, errors.New("zero MODEL requests requires a closed missing-key negative")
+	}
+	if (probe.Auxiliary != nil) != (probe.Profile == nativeModelProbePluginsOn) {
+		return 0, errors.New("auxiliary guard is restricted to default-plugin MODEL profile")
+	}
+	if probe.WorkLimit == 0 {
+		return 60 * time.Second, nil
+	}
+	return probe.WorkLimit, nil
 }
 
 type nativeModelProbeObservation struct {
@@ -132,6 +180,7 @@ type nativeModelProbeObservation struct {
 	Completed     bool
 	Failure       string
 	ModelRequests int
+	DataDirectory string
 }
 
 func runNativeFixtureSlice(t nativeFixtureChecks, binary string, nodePaths ...string) {
@@ -143,8 +192,9 @@ func runNativeFixtureSliceWithModelProbe(t nativeFixtureChecks, binary string, m
 	if source, ok := t.(interface{ NativeScenario() string }); ok {
 		scenario = source.NativeScenario()
 	}
-	if modelProbe != nil && (scenario != "model_probe" || modelProbe.Handler == nil || modelProbe.ThreadParameters == nil || modelProbe.ObserveTerminal == nil || modelProbe.ExpectedModelRequests < 1 || modelProbe.ExpectedModelRequests > 2) {
-		t.Fatal("synthetic model diagnostic options are invalid or outside model_probe")
+	workLimit, limitErr := modelProbeWorkLimit(scenario, modelProbe)
+	if limitErr != nil {
+		t.Fatal(limitErr)
 	}
 	streamObserve := scenario == "sse_observe"
 	if streamObserve {
@@ -167,8 +217,11 @@ func runNativeFixtureSliceWithModelProbe(t nativeFixtureChecks, binary string, m
 	if source, ok := t.(interface{ NativeContext() context.Context }); ok {
 		parent = source.NativeContext()
 	}
-	// Reserve thirty seconds of the ninety-second case bound for teardown.
-	ctx, cancel := context.WithTimeout(parent, 60*time.Second)
+	if parent == nil {
+		t.Fatal("native fixture parent context is nil")
+	}
+	// Default60s or explicitly bounded MODEL330s; callers reserve30s teardown.
+	ctx, cancel := context.WithTimeout(parent, workLimit)
 	defer cancel()
 	var nativeCount, modelCount atomic.Int64
 	var streams atomic.Int64
@@ -248,6 +301,21 @@ func runNativeFixtureSliceWithModelProbe(t nativeFixtureChecks, binary string, m
 		}
 	}()
 	upstream, roots := nativeTLSFixture(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if modelProbe != nil && modelProbe.Profile == nativeModelProbePluginsOn && r.URL.Path != "/backend-api/wham/accounts/check" {
+			clone := r.Clone(r.Context())
+			u := *r.URL
+			u.Scheme = "https"
+			u.Host = r.Host
+			clone.URL = &u
+			class := nativeModelAuxiliaryClass(clone)
+			if r.TLS == nil || r.TLS.ServerName != "chatgpt.com" || class == "" || !modelProbe.Auxiliary.deny(class) {
+				t.Error("default-plugin fixture unexpected or over-cap request")
+				w.WriteHeader(400)
+				return
+			}
+			w.WriteHeader(http.StatusForbidden)
+			return
+		}
 		if r.Header.Get("Authorization") != "Bearer synthetic-original-login" {
 			t.Error("original authentication lost")
 			w.WriteHeader(401)
@@ -402,6 +470,16 @@ func runNativeFixtureSliceWithModelProbe(t nativeFixtureChecks, binary string, m
 		t.Fatal(err)
 	}
 	defer transport.transport.CloseIdleConnections()
+	if modelProbe != nil && modelProbe.Profile == nativeModelProbePluginsOn {
+		transport.modelAuxiliary = true
+		transport.modelGuard = modelProbe.Auxiliary
+		defer func() {
+			_, _, failed := modelProbe.Auxiliary.snapshot()
+			if failed {
+				t.Error("default-plugin auxiliary guard failed")
+			}
+		}()
+	}
 	paths, err := productruntime.NewRuntimePaths(filepath.Join(directory, "runtime"))
 	if err != nil {
 		t.Fatal(err)
@@ -420,6 +498,9 @@ func runNativeFixtureSliceWithModelProbe(t nativeFixtureChecks, binary string, m
 	}
 	blind := &nativeDeniedBlindDialer{gate: gate}
 	options := serverhost.DefaultOptions(productruntime.Options{BlindTunnels: blind, OriginalTransport: transport, Paths: paths, Host: hostcontract.Server(), OfflineHold: gate, Secrets: secrets, Approvals: toolapproval.DefaultConfig(), ExchangeHold: exchange.DefaultHoldPolicy(), Clock: productruntime.SystemClock{}, InstanceIDs: productruntime.NewCryptographicInstanceIDSource(), SecurityRandom: rand.Reader, Lifecycle: productruntime.DefaultLifecycleOptions()})
+	if modelProbe != nil && modelProbe.ExpireReview {
+		options.Runtime.Approvals.DecisionTimeout = 25 * time.Second
+	}
 	if scenario == "review_allow_once" || knownDeny || sensitiveDeny || probingProfile && profileProbe.inject {
 		profiles, available := nativeAcceptanceContentProfiles()
 		if !available {
@@ -454,6 +535,9 @@ func runNativeFixtureSliceWithModelProbe(t nativeFixtureChecks, binary string, m
 		e.PolicySet.ToolMode = environment.ToolPolicyStrict
 	}
 	if scenario == "review_reject" || scenario == "review_allow_once" || scenario == "sse_reconnect" && !streamObserve {
+		e.PolicySet.ToolMode = environment.ToolPolicyReview
+	}
+	if modelProbe != nil && modelProbe.Review {
 		e.PolicySet.ToolMode = environment.ToolPolicyReview
 	}
 	modelServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -507,6 +591,25 @@ func runNativeFixtureSliceWithModelProbe(t nativeFixtureChecks, binary string, m
 	}
 	clientOrigin, _ := originidentity.ParseClientOrigin("https://chatgpt.com")
 	e.ClientEndpoints = []environment.ClientEndpoint{{ID: "native.synthetic.client", Revision: 1, ClientOrigin: clientOrigin, ProtocolPlans: []environment.ClientProtocolPlan{{ID: "native.synthetic.protocol", Revision: 1, ClientProtocol: environment.ClientProtocolOpenAIResponses, ClientAdapterPolicy: environment.ClientAdapterPolicy{ID: "native.synthetic.adapter", Revision: 1}, EgressProfile: egressprofile.Direct(), Destination: environment.DestinationPlan{Kind: environment.DestinationKindUpstream, Upstream: &environment.UpstreamPlan{DefaultRouteID: "native.synthetic.route", RouteSet: environment.RouteSet{ID: "native.synthetic.routes", Revision: 1, CandidateRouteIDs: []environment.UpstreamRouteID{"native.synthetic.route"}}, Routes: []environment.UpstreamRoute{{ID: "native.synthetic.route", Revision: 1, ProviderTarget: environment.ProviderTarget{ID: endpoint.ID.String(), Revision: environment.Revision(endpoint.Revision), Origin: endpoint.Origin, RealmID: endpoint.RealmID, Capabilities: endpoint.Capabilities}, BackendProtocol: string(environment.ClientProtocolOpenAIResponses), AccountPolicy: environment.RouteAccountPolicy{Revision: 1, Mode: environment.AccountSelectionFixed, FixedAccountID: account.Account.ID.String(), Accounts: []environment.RouteAccountReference{{ID: account.Account.ID.String(), Revision: environment.Revision(account.Account.Revision), DisplayName: account.Account.DisplayName}}}, ModelPolicy: environment.ModelPolicy{Revision: 1, Mode: environment.ModelModePassthrough}, WireProfileRef: wireprofile.UpstreamWireProfileFollowClientValue}}}}}}}}
+	if modelProbe != nil && modelProbe.Profile.usesAPIKey() {
+		// Canonical flow is an existing protocol identity, not a dial grant.
+		// The actual prelaunch target remains private chatgpt.com/v1.
+		encoded, _ := json.Marshal(e.ClientEndpoints[0])
+		var generic environment.ClientEndpoint
+		if err := json.Unmarshal(encoded, &generic); err != nil {
+			t.Fatal("synthetic generic flow copy failed")
+		}
+		generic.ID = "native.synthetic.api.client"
+		generic.ClientOrigin, _ = originidentity.ParseClientOrigin("https://api.openai.com")
+		plan := &generic.ProtocolPlans[0]
+		plan.ID = "native.synthetic.api.protocol"
+		plan.ClientAdapterPolicy.ID = "native.synthetic.api.adapter"
+		plan.Destination.Upstream.DefaultRouteID = "native.synthetic.api.route"
+		plan.Destination.Upstream.RouteSet.ID = "native.synthetic.api.routes"
+		plan.Destination.Upstream.RouteSet.CandidateRouteIDs = []environment.UpstreamRouteID{"native.synthetic.api.route"}
+		plan.Destination.Upstream.Routes[0].ID = "native.synthetic.api.route"
+		e.ClientEndpoints = append(e.ClientEndpoints, generic)
+	}
 	draft, err := host.Runtime().Environments().SaveDraft(ctx, environment.DraftCommand{Candidate: e})
 	if err != nil {
 		t.Fatal(err)
@@ -532,7 +635,11 @@ func runNativeFixtureSliceWithModelProbe(t nativeFixtureChecks, binary string, m
 		return &http.Client{Transport: tr, Timeout: 3 * time.Second}
 	}
 	privateClient := proxyFor(e.ID)
-	for _, target := range []string{"https://auth.openai.com/", "https://unlisted.invalid/", "https://chatgpt.com:444/"} {
+	deniedTargets := []string{"https://auth.openai.com/", "https://unlisted.invalid/", "https://chatgpt.com:444/"}
+	if modelProbe != nil && modelProbe.Profile.usesAPIKey() {
+		deniedTargets = append(deniedTargets, "https://api.openai.com/")
+	}
+	for _, target := range deniedTargets {
 		response, requestErr := privateClient.Get(target)
 		if response != nil {
 			_ = response.Body.Close()
@@ -620,12 +727,16 @@ func runNativeFixtureSliceWithModelProbe(t nativeFixtureChecks, binary string, m
 	clientConfig := "cli_auth_credentials_store = \"file\"\n[features]\napps = true\n[analytics]\nenabled = false\n[feedback]\nenabled = false\n"
 	if modelProbe != nil {
 		clientConfig = "cli_auth_credentials_store = \"file\"\n[features]\napps = false\nplugins = false\n[analytics]\nenabled = false\n[feedback]\nenabled = false\n"
+		if modelProbe.Profile == nativeModelProbePluginsOn {
+			clientConfig = "cli_auth_credentials_store = \"file\"\n[features]\napps = false\nplugins = true\nremote_plugin = true\n[analytics]\nenabled = false\n[feedback]\nenabled = false\n"
+		}
 	}
 	if err = os.WriteFile(filepath.Join(clientHome, "config.toml"), []byte(clientConfig), 0600); err != nil {
 		t.Fatal(err)
 	}
 	inputReader, inputWriter := io.Pipe()
 	outputReader, outputWriter := io.Pipe()
+	defer ownNativeFixturePipes(ctx, inputReader, inputWriter, outputReader, outputWriter)()
 	defer inputWriter.Close()
 	defer outputReader.Close()
 	stderr := newBoundedBuffer(64 << 10)
@@ -644,11 +755,24 @@ func runNativeFixtureSliceWithModelProbe(t nativeFixtureChecks, binary string, m
 	if !filepath.IsAbs(nodePath) {
 		t.Fatal("absolute pinned Node required")
 	}
-	launcher, err := runlauncher.New(runlauncher.Config{Remote: &remote, BaseEnvironment: []string{"PATH=" + filepath.Dir(nodePath) + ":/usr/bin:/bin", "HOME=" + clientHome, "CODEX_HOME=" + clientHome}, Stdin: inputReader, Stdout: outputWriter, Stderr: stderr, Getwd: func() (string, error) { return clientHome, nil }, LookPath: func(string) (string, error) { return binary, nil }})
+	baseEnvironment := []string{"PATH=" + filepath.Dir(nodePath) + ":/usr/bin:/bin", "HOME=" + clientHome, "CODEX_HOME=" + clientHome}
+	if modelProbe != nil && modelProbe.Profile.usesAPIKey() {
+		baseEnvironment = append(baseEnvironment, "OPENAI_BASE_URL=https://chatgpt.com/v1")
+	}
+	if modelProbe != nil && modelProbe.Profile == nativeModelProbeAPIKey {
+		baseEnvironment = append(baseEnvironment, "VIBERMATE_SYNTHETIC_MODEL_API_KEY=synthetic-original-model-api-key")
+	}
+	if modelProbe != nil && modelProbe.Profile == nativeModelProbeAPIKeyEmpty {
+		baseEnvironment = append(baseEnvironment, "VIBERMATE_SYNTHETIC_MODEL_API_KEY=")
+	}
+	launcher, err := runlauncher.New(runlauncher.Config{Remote: &remote, BaseEnvironment: baseEnvironment, Stdin: inputReader, Stdout: outputWriter, Stderr: stderr, Getwd: func() (string, error) { return clientHome, nil }, LookPath: func(string) (string, error) { return binary, nil }})
 	if err != nil {
 		t.Fatal(err)
 	}
 	done := make(chan error, 1)
+	if modelProbe != nil && modelProbe.Profile == nativeModelProbePluginsOn {
+		transport.modelCaseActive.Store(true)
+	}
 	go func() {
 		code, err := launcher.Run(ctx, runlauncher.LaunchRequest{EnvironmentID: e.ID, Command: []string{"codex", "app-server", "--listen", "stdio://"}})
 		if err == nil && code != 0 {
@@ -724,8 +848,12 @@ func runNativeFixtureSliceWithModelProbe(t nativeFixtureChecks, binary string, m
 		if json.Unmarshal(read(4)["result"], &config) != nil {
 			t.Fatal("synthetic effective config unavailable")
 		}
-		if value, exists := config.Config.Features["plugins"]; !exists || value {
-			t.Fatal("synthetic startup plugins-off not confirmed")
+		wantPlugins := modelProbe.Profile == nativeModelProbePluginsOn
+		if value, exists := config.Config.Features["plugins"]; !exists || value != wantPlugins {
+			t.Fatal("synthetic startup plugin profile not confirmed")
+		}
+		if wantPlugins && !config.Config.Features["remote_plugin"] {
+			t.Fatal("default remote-plugin guard missing")
 		}
 		threadParameters = modelProbe.ThreadParameters(clientHome)
 	}
@@ -741,6 +869,19 @@ func runNativeFixtureSliceWithModelProbe(t nativeFixtureChecks, binary string, m
 		t.Fatal("actual synthetic model provider differs")
 	}
 	if scenario == "model_probe" {
+		if modelProbe != nil && modelProbe.BeforeTurn != nil {
+			snapshot, err := host.Runtime().EnvironmentResolver().Resolve(e.ID)
+			if err != nil {
+				t.Fatal("published MODEL environment unavailable")
+			}
+			cleanup, err := modelProbe.BeforeTurn(ctx, nativeModelProbeSetup{Runtime: host.Runtime(), Management: management, Environment: snapshot, AccountID: account.Account.ID.String()})
+			if cleanup != nil {
+				defer cleanup()
+			}
+			if err != nil {
+				t.Fatal("MODEL before-turn setup failed")
+			}
+		}
 		send(3, "turn/start", map[string]any{"threadId": thread.Thread.ID, "input": []any{map[string]any{"type": "text", "text": "Reply with the synthetic fixture result.", "text_elements": []any{}}}})
 		read(3)
 		completed := false
@@ -796,7 +937,7 @@ func runNativeFixtureSliceWithModelProbe(t nativeFixtureChecks, binary string, m
 			if err != nil || assignment.Source != captureassignment.SourceLaunch {
 				t.Fatal("synthetic model launch assignment missing")
 			}
-			modelProbe.ObserveTerminal(ctx, nativeModelProbeObservation{Runtime: host.Runtime(), Capture: capture, Assignment: assignment, AccountID: account.Account.ID.String(), Completed: completed, Failure: turnFailure, ModelRequests: int(modelCount.Load())})
+			modelProbe.ObserveTerminal(ctx, nativeModelProbeObservation{Runtime: host.Runtime(), Capture: capture, Assignment: assignment, AccountID: account.Account.ID.String(), Completed: completed, Failure: turnFailure, ModelRequests: int(modelCount.Load()), DataDirectory: paths.DataDirectory()})
 			if int(modelCount.Load()) != modelProbe.ExpectedModelRequests {
 				t.Fatal("synthetic model request count differs")
 			}
@@ -1233,6 +1374,29 @@ func verifySyntheticSQLPrivacy(ctx context.Context, t nativeFixtureChecks, direc
 // question. A synchronous stdout pipe must not hold the app-server's startup
 // task behind that review. Only bounded correlated responses/turn terminals
 // are retained; this is fixture I/O, not a substitute client implementation.
+func ownNativeFixturePipes(ctx context.Context, inputReader *io.PipeReader, inputWriter *io.PipeWriter, outputReader *io.PipeReader, outputWriter *io.PipeWriter) func() {
+	done := make(chan struct{})
+	var closeOnce, cleanupOnce sync.Once
+	closeOwned := func() {
+		closeOnce.Do(func() {
+			_ = inputReader.Close()
+			_ = inputWriter.Close()
+			_ = outputReader.Close()
+			_ = outputWriter.Close()
+			close(done)
+		})
+	}
+	stop := context.AfterFunc(ctx, closeOwned)
+	return func() {
+		cleanupOnce.Do(func() {
+			if stop() {
+				closeOwned()
+			}
+			<-done
+		})
+	}
+}
+
 func nativeClientFrames(ctx context.Context, reader io.Reader) (<-chan map[string]json.RawMessage, <-chan error) {
 	frames := make(chan map[string]json.RawMessage, 8)
 	finished := make(chan error, 1)

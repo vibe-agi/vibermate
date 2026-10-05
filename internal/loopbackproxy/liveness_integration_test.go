@@ -42,6 +42,7 @@ func TestResponsesKeepaliveUsesFrozenNativeClientContract(t *testing.T) {
 		{name: "native_raw_alias", host: "chatgpt.com", path: "/backend-api/codex/%72esponses"},
 		{name: "native_query", host: "chatgpt.com", path: "/backend-api/codex/responses?extra=x"},
 		{name: "generic_query", host: "api.openai.com", path: "/v1/responses?extra=x", verified: true},
+		{name: "chat_operation_unchanged", host: "api.openai.com", path: "/v1/chat/completions", verified: true},
 		{name: "other_dialect", host: "api.anthropic.com", path: "/v1/messages", want: ": keepalive\n\n", dialect: protocolspec.DialectAnthropicMessages, verified: true},
 		{name: "generic_client_chatgpt_provider", host: "api.openai.com", path: "/v1/responses", want: ": keepalive\n\n", provider: "https://chatgpt.com"},
 		{name: "native_client_private_provider", host: "chatgpt.com", path: "/backend-api/codex/responses", want: "event: keepalive\ndata: {\"type\":\"keepalive\"}\n\n", provider: "https://private.example"},

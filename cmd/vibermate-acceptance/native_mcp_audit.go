@@ -106,6 +106,9 @@ func (dialer *nativeDeniedBlindDialer) Dial(context.Context, blindtunnel.DialReq
 type nativeFixtureTransport struct {
 	transport            *http.Transport
 	deniedAccountRouting atomic.Uint64
+	modelAuxiliary       bool
+	modelGuard           *nativeModelAuxiliaryGuard
+	modelCaseActive      atomic.Bool
 }
 
 func newNativeFixtureTransport(address string, roots *x509.CertPool) (*nativeFixtureTransport, error) {
@@ -131,8 +134,28 @@ func (transport *nativeFixtureTransport) RoundTrip(request *http.Request, policy
 		return nil, errors.New("fixture policy denied")
 	}
 	u := request.URL
+	if transport.modelAuxiliary && nativeModelAuxiliaryClass(request) != "" {
+		response, err := transport.transport.RoundTrip(request)
+		if err != nil {
+			if transport.modelCaseActive.Load() && transport.modelGuard != nil {
+				transport.modelGuard.deny("")
+			}
+			return nil, errors.New("private MODEL auxiliary TLS request failed")
+		}
+		if response.StatusCode != http.StatusForbidden || response.Header.Get("Location") != "" {
+			if transport.modelCaseActive.Load() && transport.modelGuard != nil {
+				transport.modelGuard.deny("")
+			}
+			_ = response.Body.Close()
+			return nil, errors.New("private MODEL auxiliary did not return closed denial")
+		}
+		return response, nil
+	}
 	accountRouting := u.Path == "/backend-api/wham/accounts/check" && request.Method == "GET" && request.ContentLength == 0 && len(request.TransferEncoding) == 0 && (request.Body == nil || request.Body == http.NoBody)
 	if u.Scheme != "https" || (u.Host != "chatgpt.com" && u.Host != "chatgpt.com:443") || u.User != nil || (u.Path != "/backend-api/ps/mcp" && !accountRouting) || u.RawPath != "" || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || (request.Host != "" && request.Host != u.Host) {
+		if transport.modelCaseActive.Load() && transport.modelGuard != nil {
+			transport.modelGuard.deny("")
+		}
 		if u.Path == "/backend-api/wham/accounts/check" {
 			transport.deniedAccountRouting.Add(1)
 		}

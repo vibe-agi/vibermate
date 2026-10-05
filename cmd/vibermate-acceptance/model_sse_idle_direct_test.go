@@ -43,6 +43,9 @@ type modelIdleTrace struct {
 	first, last            time.Time
 	failure                string
 	failureDetails         []string
+	terminal               chan struct{}
+	terminalOnce           sync.Once
+	terminalAt             time.Time
 }
 
 func (trace *modelIdleTrace) event() {
@@ -84,7 +87,11 @@ func modelIdleItem(args, status string) map[string]any {
 	return map[string]any{"id": "fc_plan", "type": "function_call", "call_id": "plan_call", "name": "update_plan", "arguments": args, "status": status}
 }
 func modelIdleComplete(w http.ResponseWriter, trace *modelIdleTrace, items []any) bool {
-	return modelIdleWrite(w, trace, "response.completed", map[string]any{"type": "response.completed", "response": map[string]any{"id": "resp_idle", "created_at": 1, "model": "gpt-5.4", "status": "completed", "output": items, "usage": map[string]any{"input_tokens": 3, "output_tokens": 2, "total_tokens": 5}}})
+	ok := modelIdleWrite(w, trace, "response.completed", map[string]any{"type": "response.completed", "response": map[string]any{"id": "resp_idle", "created_at": 1, "model": "gpt-5.4", "status": "completed", "output": items, "usage": map[string]any{"input_tokens": 3, "output_tokens": 2, "total_tokens": 5}}})
+	if ok && trace.terminal != nil {
+		trace.terminalOnce.Do(func() { trace.mu.Lock(); trace.terminalAt = time.Now(); trace.mu.Unlock(); close(trace.terminal) })
+	}
+	return ok
 }
 
 func modelIdleProvider(trace *modelIdleTrace, modes ...string) http.Handler {
@@ -276,12 +283,17 @@ func modelIdleProvider(trace *modelIdleTrace, modes ...string) http.Handler {
 					}
 					continue
 				}
+				if mode == "mixed" && index%4 == 0 {
+					if !modelIdleWrite(w, trace, "keepalive", map[string]any{"type": "keepalive"}) {
+						return
+					}
+				}
 				delta := modelIdleArguments[len(modelIdleArguments)*index/20 : len(modelIdleArguments)*(index+1)/20]
 				if !modelIdleWrite(w, trace, "response.function_call_arguments.delta", map[string]any{"type": "response.function_call_arguments.delta", "output_index": 0, "item_id": "fc_plan", "delta": delta}) {
 					return
 				}
 			}
-			if mode != "arguments" {
+			if mode != "arguments" && mode != "mixed" {
 				modelIdleWrite(w, trace, "response.function_call_arguments.delta", map[string]any{"type": "response.function_call_arguments.delta", "output_index": 0, "item_id": "fc_plan", "delta": modelIdleArguments})
 			}
 			modelIdleWrite(w, trace, "response.output_item.done", map[string]any{"type": "response.output_item.done", "output_index": 0, "item": modelIdleItem(modelIdleArguments, "completed")})
@@ -549,8 +561,15 @@ func modelIdleProxy(t *testing.T, address string) (*httptest.Server, *atomic.Int
 	return server, denied
 }
 
-func modelIdleVerifiedClient(t *testing.T, ctx context.Context, dir string) (string, string) {
+func modelIdleVerifiedClient(t *testing.T, ctx context.Context, dir string, versions ...string) (string, string) {
 	t.Helper()
+	version := "0.160.0"
+	if len(versions) > 0 {
+		version = versions[0]
+	}
+	if version != "0.145.0" && version != "0.159.2" && version != "0.160.0" {
+		t.Fatal("unsupported fixed MODEL client pin")
+	}
 	binary, node := os.Getenv("VIBERMATE_NATIVE_CODEX"), os.Getenv("VIBERMATE_PINNED_NODE")
 	if binary == "" || node == "" {
 		t.Skip("requires explicit exact160/Node; no diagnostic evidence")
@@ -572,20 +591,24 @@ func modelIdleVerifiedClient(t *testing.T, ctx context.Context, dir string) (str
 		t.Fatal(err)
 	}
 	detection, err := verifier.Verify(ctx, clientadapter.Request{Command: []string{"codex"}, ExecutablePath: binary, CWD: dir})
-	if err != nil || detection.Status != clientadapter.StatusVerified || detection.Evidence == nil || detection.Evidence.Version != "0.160.0" {
-		t.Fatal("exact compound160 verification failed")
+	if err != nil || detection.Status != clientadapter.StatusVerified || detection.Evidence == nil || detection.Evidence.Version != version {
+		t.Fatal("exact compound MODEL client verification failed")
 	}
-	if err = verifyNativeClientVersions(ctx, []nativePinnedClient{{nativeMCPClientReport: nativeMCPClientReport{Version: "0.160.0"}, invocation: binary}}, node, dir); err != nil {
+	if err = verifyNativeClientVersions(ctx, []nativePinnedClient{{nativeMCPClientReport: nativeMCPClientReport{Version: version}, invocation: binary}}, node, dir); err != nil {
 		t.Fatal(err)
 	}
 	return binary, node
 }
 
 type modelIdleClientObservation struct {
-	mu              sync.Mutex
-	partial         []byte
-	plans           int
-	finalText, idle bool
+	mu                                                      sync.Mutex
+	partial                                                 []byte
+	plans                                                   int
+	finalText, idle                                         bool
+	missingEnv, authenticationFailure                       bool
+	pathUnsupported, targetUnproven, operationNotCatalogued bool
+	errorClass                                              string
+	threadID, turnID, planThread, planTurn                  string
 }
 
 func (observer *modelIdleClientObservation) Write(body []byte) (int, error) {
@@ -605,11 +628,72 @@ func (observer *modelIdleClientObservation) Write(body []byte) (int, error) {
 		if json.Unmarshal(frame, &value) != nil {
 			return 0, fmt.Errorf("client observation invalid JSON")
 		}
+		var identity struct {
+			ID     int
+			Result struct {
+				Thread struct{ ID string }
+				Turn   struct{ ID string }
+			}
+			Params struct {
+				ThreadID string `json:"threadId"`
+				TurnID   string `json:"turnId"`
+				Turn     struct{ ID string }
+				Plan     []struct{ Step, Status string }
+			}
+		}
+		if json.Unmarshal(frame, &identity) != nil {
+			return 0, fmt.Errorf("client identity frame invalid")
+		}
+		if identity.ID == 2 && identity.Result.Thread.ID != "" {
+			observer.threadID = identity.Result.Thread.ID
+		}
+		if identity.ID == 3 && identity.Result.Turn.ID != "" {
+			observer.turnID = identity.Result.Turn.ID
+		}
+		if value.Method == "turn/started" && identity.Params.Turn.ID != "" {
+			observer.turnID = identity.Params.Turn.ID
+		}
 		if value.Method == "turn/plan/updated" {
+			if len(identity.Params.Plan) != 1 || identity.Params.Plan[0].Step != "Check synthetic progress" || identity.Params.Plan[0].Status != "completed" || identity.Params.ThreadID == "" || identity.Params.TurnID == "" {
+				return 0, fmt.Errorf("actual plan notification did not match the synthetic tool result")
+			}
+			observer.planThread, observer.planTurn = identity.Params.ThreadID, identity.Params.TurnID
 			observer.plans++
+		}
+		if value.Method == "turn/completed" && observer.plans > 0 && (observer.threadID == "" || observer.turnID == "" || observer.planThread != observer.threadID || observer.planTurn != observer.turnID || identity.Params.ThreadID != observer.threadID || identity.Params.Turn.ID != observer.turnID) {
+			return 0, fmt.Errorf("plan notification was not correlated to actual thread and turn")
 		}
 		observer.finalText = observer.finalText || bytes.Contains(frame, []byte("synthetic idle complete"))
 		observer.idle = observer.idle || bytes.Contains(frame, []byte("idle timeout waiting for SSE"))
+		observer.missingEnv = observer.missingEnv || bytes.Contains(frame, []byte("Missing environment variable")) || bytes.Contains(frame, []byte("VIBERMATE_SYNTHETIC_MODEL_API_KEY"))
+		observer.authenticationFailure = observer.authenticationFailure || bytes.Contains(frame, []byte("401 Unauthorized")) || bytes.Contains(frame, []byte("not authenticated"))
+		observer.pathUnsupported = observer.pathUnsupported || bytes.Contains(frame, []byte("path_unsupported"))
+		observer.targetUnproven = observer.targetUnproven || bytes.Contains(frame, []byte("target_unproven"))
+		observer.operationNotCatalogued = observer.operationNotCatalogued || bytes.Contains(frame, []byte("operation_not_catalogued"))
+		if value.Method == "turn/completed" {
+			var terminal struct {
+				Params struct {
+					Turn struct {
+						Error *struct {
+							Code json.RawMessage `json:"codexErrorInfo"`
+						} `json:"error"`
+					}
+				}
+			}
+			if json.Unmarshal(frame, &terminal) == nil && terminal.Params.Turn.Error != nil {
+				var code string
+				if json.Unmarshal(terminal.Params.Turn.Error.Code, &code) == nil {
+					switch code {
+					case "other", "badRequest", "unauthorized", "internalServerError":
+						observer.errorClass = code
+					default:
+						observer.errorClass = "unclassified"
+					}
+				} else {
+					observer.errorClass = "structured_transport"
+				}
+			}
+		}
 		observer.partial = observer.partial[index+1:]
 	}
 	return len(body), nil

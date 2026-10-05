@@ -12,10 +12,20 @@ import (
 	"github.com/vibe-agi/vibermate/internal/rawevidence"
 )
 
-type modelIdleManagedChecks struct{ *testing.T }
+type modelIdleManagedChecks struct {
+	*testing.T
+	ctx     context.Context
+	version string
+}
 
-func (modelIdleManagedChecks) NativeScenario() string        { return "model_probe" }
-func (modelIdleManagedChecks) NativeExpectedVersion() string { return "0.160.0" }
+func (modelIdleManagedChecks) NativeScenario() string { return "model_probe" }
+func (checks modelIdleManagedChecks) NativeExpectedVersion() string {
+	if checks.version != "" {
+		return checks.version
+	}
+	return "0.160.0"
+}
+func (checks modelIdleManagedChecks) NativeContext() context.Context { return checks.ctx }
 
 // Desired behavior, intentionally RED if healthy provider argument events are
 // held until after the real client's event-idle deadline. No product timers or
@@ -23,6 +33,8 @@ func (modelIdleManagedChecks) NativeExpectedVersion() string { return "0.160.0" 
 func TestModelSSEIdleManagedHeldArgumentsComplete(t *testing.T) {
 	runModelIdleManaged(t, "long_arguments")
 }
+
+func TestModelSSEIdleManagedMixedProgress(t *testing.T) { runModelIdleManaged(t, "long_mixed") }
 
 func TestModelSSEIdleManagedControls(t *testing.T) {
 	// The pre-fix long_silence client-idle observation is retained in report
@@ -152,6 +164,12 @@ func runModelIdleManaged(t *testing.T, mode string) {
 				}
 				return
 			}
+			if mode == "long_mixed" {
+				if !actual.Completed || idle || requests != 2 || events != 31 || argumentEvents != 20 || plans != 1 || acks != 1 || toolBatches != 1 || heldArguments != 20 || generatedData != 0 || comments != 0 {
+					t.Error("mixed real arguments/upstream DATA control differs")
+				}
+				return
+			}
 			if !actual.Completed {
 				if !idle || interval < 19*time.Second || interval > 25*time.Second || argumentEvents < 10 || comments < 1 || toolExposed || plans != 0 || acks != 0 {
 					t.Fatal("failed turn does not establish target progressing-stream/comment mechanism")
@@ -164,5 +182,5 @@ func runModelIdleManaged(t *testing.T, mode string) {
 			}
 		},
 	}
-	runNativeFixtureSliceWithModelProbe(modelIdleManagedChecks{t}, binary, options, node)
+	runNativeFixtureSliceWithModelProbe(modelIdleManagedChecks{T: t, ctx: ctx}, binary, options, node)
 }

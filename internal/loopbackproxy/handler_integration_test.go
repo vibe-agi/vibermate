@@ -1256,6 +1256,15 @@ func newProxyFixtureForDialectWithPolicyAndRawEvidence(
 	assignmentEnvironmentID environment.EnvironmentID,
 	clientOrigins ...string,
 ) *proxyFixture {
+	return newProxyFixtureConfigured(t, clientDialect, adapter, policy, raw, assignmentEnvironmentID, nil, clientOrigins...)
+}
+
+type proxyFixtureComposition struct {
+	compiler  environment.Compiler
+	configure func(*environment.Environment)
+}
+
+func newProxyFixtureConfigured(t *testing.T, clientDialect protocolspec.Dialect, adapter *clientadapter.Evidence, policy connectionpolicy.Snapshot, raw rawevidence.RequestRecorder, assignmentEnvironmentID environment.EnvironmentID, composition *proxyFixtureComposition, clientOrigins ...string) *proxyFixture {
 	t.Helper()
 	directory := t.TempDir()
 	store, err := runtimepersistence.Open(
@@ -1331,6 +1340,12 @@ func newProxyFixtureForDialectWithPolicyAndRawEvidence(
 	if len(clientOrigins) > 1 {
 		configureLivenessUpstream(t, &aggregate, clientOrigins[1])
 		compiler = testEnvironmentCompiler(t, clientDialect, livenessAccountCatalog{})
+	}
+	if composition != nil {
+		compiler = composition.compiler
+		if composition.configure != nil {
+			composition.configure(&aggregate)
+		}
 	}
 	snapshot, err := compiler.Compile(aggregate)
 	if err != nil {
@@ -1604,6 +1619,7 @@ type exchangeRecorder struct {
 	blockRelease chan struct{}
 	startOnce    sync.Once
 	keepalive    bool
+	delegate     exchange.Executor
 }
 
 func (recorder *exchangeRecorder) Execute(
@@ -1617,7 +1633,11 @@ func (recorder *exchangeRecorder) Execute(
 	blockStarted := recorder.blockStarted
 	blockRelease := recorder.blockRelease
 	keepalive := recorder.keepalive
+	delegate := recorder.delegate
 	recorder.mu.Unlock()
+	if delegate != nil {
+		return delegate.Execute(ctx, request, downstream)
+	}
 	if failure != nil {
 		return exchange.Result{}, failure
 	}

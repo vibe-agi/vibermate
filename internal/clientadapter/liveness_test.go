@@ -11,8 +11,8 @@ func TestResponsesDataKeepaliveRequiresExactCatalogEvidence(t *testing.T) {
 		version, os, arch string
 		want              bool
 	}{
-		{"0.160.0", "darwin", "arm64", true}, {"0.160.0", "darwin", "amd64", false}, {"0.160.0", "linux", "arm64", false}, {"0.159.2", "darwin", "arm64", false},
-		{"0.145.0", "darwin", "arm64", false}, {"0.145.0", "darwin", "amd64", false}, {"0.145.0", "linux", "amd64", false}, {"0.145.0", "linux", "arm64", false}, {"0.160.1", "darwin", "arm64", false},
+		{"0.160.0", "darwin", "arm64", true}, {"0.160.0", "darwin", "amd64", false}, {"0.160.0", "linux", "arm64", false}, {"0.159.2", "darwin", "arm64", true},
+		{"0.145.0", "darwin", "arm64", true}, {"0.145.0", "darwin", "amd64", false}, {"0.145.0", "linux", "amd64", false}, {"0.145.0", "linux", "arm64", false}, {"0.160.1", "darwin", "arm64", false},
 	} {
 		evidence, found := catalog.ExpectedEvidenceForPlatform("codex-cli", tuple.version, tuple.os, tuple.arch)
 		if (found && evidence.Supports(FeatureResponsesDataKeepalive)) != tuple.want {
@@ -30,7 +30,7 @@ func TestResponsesDataKeepaliveRequiresExactCatalogEvidence(t *testing.T) {
 		{"wrong_digest", func(e *Evidence) {
 			e.ReleaseSHA256 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 		}},
-		{"old_catalog", func(e *Evidence) { e.CatalogRevision = 3 }},
+		{"old_catalog", func(e *Evidence) { e.CatalogRevision = 4 }},
 		{"old_release", func(e *Evidence) { e.Revision = 1 }},
 		{"unknown_version", func(e *Evidence) { e.Version = "0.160.1" }},
 		{"foreign_client", func(e *Evidence) { e.ID = "claude-code" }},
