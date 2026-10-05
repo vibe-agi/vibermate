@@ -91,6 +91,14 @@ Root fully read the61-line `unsent-task-2-lifecycle-routing-draft.md` and inspec
 
 The complete named kind list in Task2 remains mandatory. These routing refinements add no source changes, weaker guards, send retries, DDL or production test hooks. Task2 may now execute serially from approved e83cfac, with first behavioral REDs before expanding closure eligibility. Its exact-client steps use the existing explicit synthetic tag, containment and independent clean-source builds; no user login/data access.
 
+### Demonstrated expiry-sweep close failure: bounded ruling
+
+Actual regression11804 holds the original initialize's genuine first claim at Verify, then drives another real initialize to sweep that expired provisional session. A real CloseSession rollback is ignored: the newer initialize completes with one extra send, and the original later close reports nil solely because the local session was marked closed. This is the Task2 cleanup-error boundary above, not permission for a new lifecycle API.
+
+Retain a private failed-close latch on that old session. Under the existing executor/session lock order, a failed close must fence/cancel its owner, retain the owner for durable reconciliation, and safely unlink/drain local resources without claiming durable success. Repeated cleanup of this failed old handle must return an explicit unavailable/error outcome; `closed` or map removal cannot clear the latch. Propagate cleanup failure at BOTH admission expiry sites before allowing new initialization. Do not recursively call Revoke while holding the executor mutex. Existing bounded Revoke/Close/Recover reconciles persistence, and a fresh owner still requires real EnsureScope. Store.CloseSession is not idempotent: commit-then-error may advance SQL revision, so blindly retrying the old revision is not a success proof. No public API, schema, generic retry or send-predicate relaxation.
+
+Require11804 RED→GREEN plus real rollback, commit-then-error, persistent-failure, repeat-close/new-initialize/late-original-request controls, normal close and valid sibling/drain checks. Preserve already-terminal audit/once/counts. Earlier passing suites predate this correction; rerun affected normal and race checks before clean-source client diagnostics and independent review.
+
 ```sh
 env DEVELOPER_DIR=/Library/Developer/CommandLineTools GOFLAGS=-mod=readonly go test -count=1 ./internal/runtimepersistence ./internal/nativemcp ./internal/loopbackproxy ./internal/productruntime ./internal/desktopcontrol
 env DEVELOPER_DIR=/Library/Developer/CommandLineTools GOFLAGS=-mod=readonly go run ./cmd/repositorycheck
