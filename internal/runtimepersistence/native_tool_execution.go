@@ -574,7 +574,7 @@ func (r *nativeToolRepository) Revoke(ctx context.Context, c captureidentity.Ref
 	defer func() {
 		for a, s := range r.streams {
 			if s.capture == c && !s.cleanupOnly {
-				r.dropNativeStream(a)
+				r.invalidateNativeStream(a)
 			}
 		}
 	}()

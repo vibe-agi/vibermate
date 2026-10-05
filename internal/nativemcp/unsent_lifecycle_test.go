@@ -216,7 +216,9 @@ func testReadyUnsentLifecycle(t *testing.T, kind string, terminalFirst ...bool) 
 		}
 	}
 	terminal := finish()
-	requireNativeClaimAfterDrain(t, f.executor.(*executor), request.id, closedFirst || kind == "recovery")
+	// An actual module CloseSession is a new ordinary physical proof event;
+	// observed recovery attempts still require their exact receipt boundary.
+	requireNativeClaimAfterDrain(t, f.executor.(*executor), request.id, closedFirst && kind == "recovery")
 	verify := <-held.verified
 	facts := readFreshGETFacts(t, f, request.id)
 	scope, err := f.store.NativeToolRepository().GetScope(context.Background(), f.capture)

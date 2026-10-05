@@ -80,7 +80,10 @@ type LogicalFinishInput struct {
 type StreamRepository interface {
 	RegisterObservedCallback(context.Context, StreamAuthority, CallbackFacts, time.Time) (CallbackAuthority, error)
 	BindObservedReply(context.Context, ID, Binding, CallbackAuthority, RegisteredParentWitness, time.Time) error
-	RetireObservedCallback(context.Context, CallbackAuthority, time.Time) error
+	// Retirement returns only previously issued physical receipts verified
+	// terminal by its successful transaction. Empty/nil is not proof; every
+	// error returns no receipts. These results never authorize another send.
+	RetireObservedCallback(context.Context, CallbackAuthority, time.Time) ([]StartReceipt, error)
 	OpenObservedStream(context.Context, StartReceipt, Binding, time.Duration, time.Time) (StreamAuthority, error)
 	BindRecoveryGET(context.Context, ID, Binding, StreamAuthority, time.Time) error
 	ValidateLocalReplay(context.Context, StreamAuthority, time.Time) error
@@ -89,5 +92,5 @@ type StreamRepository interface {
 	// validated terminal result. It never creates observation or send authority.
 	FinishObservedRPC(context.Context, StartReceipt, PhysicalFinishInput, LogicalFinishInput) error
 	CompleteStreamRPC(context.Context, StreamAuthority, LogicalFinishInput) error
-	RetireObservedStream(context.Context, StreamAuthority, time.Time) error
+	RetireObservedStream(context.Context, StreamAuthority, time.Time) ([]StartReceipt, error)
 }

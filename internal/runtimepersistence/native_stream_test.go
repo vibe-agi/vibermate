@@ -181,7 +181,7 @@ func TestNativeStreamSuspendedCleanupPreservesPhysicalAudit(t *testing.T) {
 				case "session":
 					_, err = repo.CloseSession(ctx, b.SessionID(), b.SessionRevision(), now)
 				case "retire":
-					err = repo.RetireObservedStream(ctx, a, now)
+					_, err = repo.RetireObservedStream(ctx, a, now)
 				case "reopen":
 					shutdownTestStore(t, store)
 					store = openTestStore(t, store.databasePath)
@@ -299,7 +299,7 @@ func TestNativeStreamCapacityReusesCompletedRegistrations(t *testing.T) {
 		if err := repo.FinishAttempt(ctx, receipt, nativetool.PhysicalFinishInput{Outcome: "completed", Reason: "completed", ObservedAt: now}); err != nil {
 			t.Fatal(err)
 		}
-		if err := repo.RetireObservedStream(ctx, a, now); err != nil {
+		if _, err := repo.RetireObservedStream(ctx, a, now); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -413,7 +413,7 @@ func TestNativeRecoveryRechecksStreamRetirementAtStartAndVerify(t *testing.T) {
 				ready := make(chan struct{})
 				retired := make(chan error, 1)
 				started := make(chan nativetool.StartReceipt, 1)
-				go func() { <-ready; retired <- repo.RetireObservedStream(ctx, a, now) }()
+				go func() { <-ready; _, err := repo.RetireObservedStream(ctx, a, now); retired <- err }()
 				go func() {
 					<-ready
 					receipt, _ := repo.Start(ctx, child, "recheck-child", revision, now)
@@ -424,7 +424,7 @@ func TestNativeRecoveryRechecksStreamRetirementAtStartAndVerify(t *testing.T) {
 					t.Fatal(err)
 				}
 				getReceipt = <-started
-			} else if err := repo.RetireObservedStream(ctx, a, now); err != nil {
+			} else if _, err := repo.RetireObservedStream(ctx, a, now); err != nil {
 				t.Fatal(err)
 			}
 			if stage == "start" {
@@ -483,7 +483,7 @@ func TestNativeStreamRetirementClosesExistingReplyQuestion(t *testing.T) {
 			if err := repo.FinishAttempt(ctx, receipt, nativetool.PhysicalFinishInput{Outcome: "failed", Reason: "transport_failed", ObservedAt: now}); err != nil {
 				t.Fatal(err)
 			}
-			if err := repo.RetireObservedStream(ctx, a, now); err != nil {
+			if _, err := repo.RetireObservedStream(ctx, a, now); err != nil {
 				t.Fatal(err)
 			}
 			closed, err := repo.GetApproval(ctx, approval.ID)

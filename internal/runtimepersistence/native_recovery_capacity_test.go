@@ -51,7 +51,7 @@ func TestNativeRecoveryCapacityLifecycleAndAmbiguity(t *testing.T) {
 			case "finish":
 				err = repo.Finish(ctx, child, nativetool.TerminalInput{Outcome: "canceled", Reason: "canceled", ObservedAt: now})
 			case "parent":
-				err = repo.RetireObservedStream(ctx, a, now)
+				_, err = repo.RetireObservedStream(ctx, a, now)
 			case "session":
 				_, err = repo.CloseSession(ctx, b.SessionID(), b.SessionRevision(), now)
 			case "revoke":
@@ -72,7 +72,7 @@ func TestNativeRecoveryCapacityLifecycleAndAmbiguity(t *testing.T) {
 					t.Fatal("ambiguous cancellation reopened Start")
 				}
 				if edge == "rollback-finish" {
-					err = repo.RetireObservedStream(ctx, a, now)
+					_, err = repo.RetireObservedStream(ctx, a, now)
 				} else {
 					receiveRecoveryCapacityChild(t, repo, b, a, nativetool.ID("35353535353535353535353535353535"), now)
 					err = nil

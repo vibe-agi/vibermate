@@ -42,6 +42,8 @@ func TestNativeGETCallbackKeepsObservedAuthorityAfterEOF(t *testing.T) {
 	if got := <-done; got.Outcome != OutcomeCompleted {
 		t.Fatalf("late approved callback: %+v", got)
 	}
+	requireNativeClaimAfterDrain(t, f.executor.(*executor), get.id, false)
+	requireNativeClaimAfterDrain(t, f.executor.(*executor), child.id, false)
 	var parent string
 	if err := f.db.QueryRow(`SELECT parent_operation_id FROM native_tool_bindings WHERE operation_id=?`, child.id).Scan(&parent); err != nil || parent != string(get.id) {
 		t.Fatalf("wrong callback owner %q %v", parent, err)
@@ -190,6 +192,12 @@ func TestNativeGETCallbackDenyReleasesParent(t *testing.T) {
 	if got := <-done; got.Outcome == OutcomeCompleted || f.transport.sends() != before {
 		t.Fatal("denied callback sent", got)
 	}
+	var once, audits int
+	if err := f.db.QueryRow(`SELECT (SELECT COUNT(*) FROM native_tool_once WHERE operation_id=?),(SELECT COUNT(*) FROM runtime_egress_attempts WHERE parent_id=?)`, child.id, child.id).Scan(&once, &audits); err != nil || once != 0 || audits != 0 {
+		t.Fatal("denied callback created a Start/physical audit", err)
+	}
+	requireNativeClaimAfterDrain(t, f.executor.(*executor), child.id, false)
+	requireNativeClaimAfterDrain(t, f.executor.(*executor), get.id, false)
 	e := f.executor.(*executor)
 	e.parentsMu.Lock()
 	pending := e.parentPending

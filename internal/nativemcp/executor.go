@@ -562,7 +562,7 @@ func (e *executor) Serve(ctx context.Context, c CapturedRequest, w http.Response
 			return e.finishKnownUnsent(c.id, s, w, err, r, binding, receipt, claim)
 		}
 		if r.stream != nil {
-			return e.finishRecoveryTransportFailure(c, s, r.stream, receipt, nil)
+			return e.finishRecoveryTransportFailure(c, s, r.stream, receipt, nil, claim)
 		}
 		return e.finishFailure(c.id, s, w, err, true, claim)
 	}
@@ -603,7 +603,7 @@ func (e *executor) Serve(ctx context.Context, c CapturedRequest, w http.Response
 	}
 	if err = e.consumeResponse(call, c, r, s, binding, response, w); err != nil {
 		if r.stream != nil {
-			return e.finishStreamAttempt(c, r, s, receipt, counted, w, err)
+			return e.finishStreamAttempt(c, r, s, receipt, counted, w, err, claim)
 		}
 		return e.finishFailure(c.id, s, w, err, true, claim)
 	}
@@ -640,7 +640,7 @@ func (e *executor) Serve(ctx context.Context, c CapturedRequest, w http.Response
 		state, storedReason = "failed", "rpc_error"
 	}
 	if r.stream != nil {
-		streamTerminal := e.finishStreamAttempt(c, r, s, receipt, counted, w, nil)
+		streamTerminal := e.finishStreamAttempt(c, r, s, receipt, counted, w, nil, claim)
 		if streamTerminal.Outcome != OutcomeCompleted && !(knownRPCFailure && streamTerminal.Outcome == OutcomeFailed) {
 			return streamTerminal
 		}

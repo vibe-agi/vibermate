@@ -67,6 +67,8 @@ func TestNativeStreamDetachedRecoveryUsesOnePOST(t *testing.T) {
 	if once != 1 || audits != 2 {
 		t.Fatalf("once=%d audits=%d", once, audits)
 	}
+	requireNativeClaimAfterDrain(t, f.executor.(*executor), resume.id, false)
+	requireNativeClaimAfterDrain(t, f.executor.(*executor), call.id, false)
 }
 
 type terminalDeliveryFailure struct {
@@ -254,6 +256,7 @@ func TestNativeStreamRecoveryNetworkBreakPreservesOriginal(t *testing.T) {
 		get := f.captured(t, "GET", "", "synthetic-session")
 		get.request.Header.Set("Last-Event-Id", "before")
 		got := f.executor.Serve(context.Background(), get, httptest.NewRecorder())
+		requireNativeClaimAfterDrain(t, f.executor.(*executor), get.id, false)
 		op, err := f.store.NativeToolRepository().Get(context.Background(), call.id)
 		if err != nil {
 			t.Fatal(err)

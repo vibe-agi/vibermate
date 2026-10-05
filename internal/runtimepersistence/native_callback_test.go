@@ -173,7 +173,7 @@ func TestNativeObservedCallbackRechecksEveryAuthoritySeam(t *testing.T) {
 				case "expiry":
 					now = now.Add(time.Minute)
 				case "retired":
-					if err := f.repo.RetireObservedCallback(ctx, f.callback, now); err != nil {
+					if _, err := f.repo.RetireObservedCallback(ctx, f.callback, now); err != nil {
 						t.Fatal(err)
 					}
 				case "off":
@@ -390,13 +390,13 @@ func TestNativeObservedCallbackCommitCleanupPreservesKnownGET(t *testing.T) {
 				if first == "finish" {
 					err = f.repo.Finish(ctx, f.child, nativetool.TerminalInput{Outcome: "completed", Reason: "completed", ObservedAt: f.now})
 				} else if first == "callback-retire" {
-					err = f.repo.RetireObservedCallback(ctx, f.callback, f.now)
+					_, err = f.repo.RetireObservedCallback(ctx, f.callback, f.now)
 				} else if first == "session" {
 					_, err = f.repo.CloseSession(ctx, f.binding.SessionID(), f.binding.SessionRevision(), f.now)
 				} else if first == "revoke" {
 					err = f.repo.Revoke(ctx, f.binding.Capture(), f.revision, "revoked", f.now)
 				} else {
-					err = f.repo.RetireObservedStream(ctx, f.stream, f.now)
+					_, err = f.repo.RetireObservedStream(ctx, f.stream, f.now)
 				}
 				setCallbackCommitter(f.store, original)
 				if err == nil {
@@ -405,7 +405,7 @@ func TestNativeObservedCallbackCommitCleanupPreservesKnownGET(t *testing.T) {
 				if f.repo.VerifyStartReceipt(ctx, childReceipt, f.now) == nil {
 					t.Fatal("cleanup-only callback still sendable")
 				}
-				if err := f.repo.RetireObservedStream(ctx, f.stream, f.now); err != nil {
+				if _, err := f.repo.RetireObservedStream(ctx, f.stream, f.now); err != nil {
 					t.Fatal(err)
 				}
 				child, err := f.repo.Get(ctx, f.child)
@@ -474,7 +474,7 @@ func TestNativeObservedCallbackRetirementSettlesStartedChild(t *testing.T) {
 					t.Fatal("completion fault not exercised")
 				}
 			}
-			if err := repo.RetireObservedStream(ctx, stream, now); err != nil {
+			if _, err := repo.RetireObservedStream(ctx, stream, now); err != nil {
 				t.Fatal(err)
 			}
 			op, err := repo.Get(ctx, child)
@@ -542,7 +542,7 @@ func TestNativeObservedExpiredGETKeepsStartedChildCleanup(t *testing.T) {
 	if _, err := f.repo.OpenObservedStream(ctx, f.receipt, f.binding, time.Minute, expired); err == nil {
 		t.Fatal("finished GET reopened")
 	}
-	if err := f.repo.RetireObservedStream(ctx, f.stream, expired); err != nil {
+	if _, err := f.repo.RetireObservedStream(ctx, f.stream, expired); err != nil {
 		t.Fatal(err)
 	}
 	op, err := f.repo.Get(ctx, f.child)
@@ -588,7 +588,7 @@ func TestNativeObservedDeniedRetirementRejectsUnclaimedAudit(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer f.store.database.Exec(`DELETE FROM runtime_egress_attempts WHERE attempt_id='unclaimed-callback-audit'`)
-	if err := f.repo.RetireObservedCallback(ctx, f.callback, f.now); err == nil {
+	if _, err := f.repo.RetireObservedCallback(ctx, f.callback, f.now); err == nil {
 		t.Fatal("terminal child concealed an unclaimed physical audit")
 	}
 	f.store.nativeTools.issuerMu.Lock()

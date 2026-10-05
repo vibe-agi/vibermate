@@ -13,10 +13,13 @@ import (
 var errStreamDetached = errors.New("native stream detached")
 var errStreamDelivery = errors.New("native complete event delivery interrupted")
 
-func (e *executor) finishRecoveryTransportFailure(c CapturedRequest, s *session, stream *streamRecord, receipt nativetool.StartReceipt, counts *nativetool.ObservedCounts) Terminal {
+func (e *executor) finishRecoveryTransportFailure(c CapturedRequest, s *session, stream *streamRecord, receipt nativetool.StartReceipt, counts *nativetool.ObservedCounts, claim nativeClaimHandle) Terminal {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	err := e.dependencies.Store.FinishAttempt(ctx, receipt, nativetool.PhysicalFinishInput{Outcome: "failed", Reason: "transport_failed", Counts: counts, ObservedAt: e.dependencies.Clock().UTC()})
+	if err == nil {
+		e.notePhysicalTerminal(claim)
+	}
 	if err != nil {
 		e.retireStream(s, stream)
 		return Terminal{OperationID: c.id, Outcome: OutcomeUncertain, Reason: ReasonStorageUnavailable}
@@ -256,13 +259,17 @@ func (e *executor) retireStream(s *session, stream *streamRecord) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	if stream.observed {
-		if err := e.dependencies.Store.RetireObservedStream(ctx, stream.authority, e.dependencies.Clock().UTC()); err != nil {
+		claims := e.snapshotRetirementClaims(s.owner.claimKey, s.claimKey, "")
+		proof, err := e.dependencies.Store.RetireObservedStream(ctx, stream.authority, e.dependencies.Clock().UTC())
+		if err != nil {
 			// Durable cleanup keeps its exact bounded retry obligation. Fence
 			// the process owner immediately even while SQL is unavailable.
 			e.mu.Lock()
 			s.owner.revoked = true
 			s.owner.cancel()
 			e.mu.Unlock()
+		} else {
+			e.noteRetirementProof(claims, proof, s.owner.claimKey, s.claimKey)
 		}
 	}
 	e.retireCompletedParents(ctx, s, stream.operation)
@@ -349,7 +356,7 @@ func flushStream(w http.ResponseWriter) error {
 	return http.NewResponseController(w).Flush()
 }
 
-func (e *executor) finishStreamAttempt(c CapturedRequest, r rpc, s *session, receipt nativetool.StartReceipt, counted *countedResponseBody, w http.ResponseWriter, cause error) Terminal {
+func (e *executor) finishStreamAttempt(c CapturedRequest, r rpc, s *session, receipt nativetool.StartReceipt, counted *countedResponseBody, w http.ResponseWriter, cause error, claim nativeClaimHandle) Terminal {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	stream := r.stream
@@ -361,13 +368,14 @@ func (e *executor) finishStreamAttempt(c CapturedRequest, r rpc, s *session, rec
 		if known != nil && errors.Is(cause, errStreamDelivery) {
 			err := e.dependencies.Store.FinishObservedRPC(ctx, receipt, nativetool.PhysicalFinishInput{Outcome: "failed", Reason: "transport_failed", ObservedAt: e.dependencies.Clock().UTC()}, *known)
 			if err != nil {
-				return e.finishFailure(c.id, s, w, err, true, stream.claim)
+				return e.finishFailure(c.id, s, w, err, true, claim)
 			}
+			e.notePhysicalTerminal(claim)
 			e.retireCompletedParents(ctx, s, c.id)
 			return Terminal{OperationID: c.id, Outcome: Outcome(known.Outcome)}
 		}
 		if cause != nil {
-			return e.finishFailure(c.id, s, w, cause, true, stream.claim)
+			return e.finishFailure(c.id, s, w, cause, true, claim)
 		}
 		outcome, reason := "completed", "completed"
 		result := OutcomeCompleted
@@ -376,9 +384,9 @@ func (e *executor) finishStreamAttempt(c CapturedRequest, r rpc, s *session, rec
 			result = OutcomeFailed
 		}
 		if err := e.dependencies.Store.Finish(ctx, c.id, nativetool.TerminalInput{Outcome: outcome, Reason: reason, BytesIn: counted.bytes.Load(), BytesOut: int64(len(r.raw)), ObservedAt: e.dependencies.Clock().UTC()}); err != nil {
-			return e.finishFailure(c.id, s, w, err, true, stream.claim)
+			return e.finishFailure(c.id, s, w, err, true, claim)
 		}
-		e.notePhysicalTerminal(stream.claim)
+		e.notePhysicalTerminal(claim)
 		return Terminal{OperationID: c.id, Outcome: result, BytesIn: counted.bytes.Load(), BytesOut: int64(len(r.raw))}
 	}
 	state, reason := "completed", "completed"
@@ -392,6 +400,11 @@ func (e *executor) finishStreamAttempt(c CapturedRequest, r rpc, s *session, rec
 		counts = &nativetool.ObservedCounts{BytesIn: counted.bytes.Load(), BytesOut: int64(len(r.raw))}
 	}
 	err := e.dependencies.Store.FinishAttempt(ctx, receipt, nativetool.PhysicalFinishInput{Outcome: state, Reason: reason, Counts: counts, ObservedAt: e.dependencies.Clock().UTC()})
+	if err == nil {
+		// This physical response may belong to a recovery child. Its exact
+		// handle is not interchangeable with the original stream's handle.
+		e.notePhysicalTerminal(claim)
+	}
 	s.mu.Lock()
 	terminal := stream.terminal
 	getCallbacks := false

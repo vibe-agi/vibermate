@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/vibe-agi/vibermate/internal/captureidentity"
 	"github.com/vibe-agi/vibermate/internal/egressaudit"
 	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/nativemcp"
@@ -28,6 +29,7 @@ type unsentCommitFault struct {
 	target      nativetool.ID
 	mode        string
 	armed, used atomic.Bool
+	revokeUsed  atomic.Bool
 	physical    egressaudit.Attempt
 }
 
@@ -58,10 +60,13 @@ func (f *unsentCommitFault) Commit(tx *sql.Tx) error {
 	}
 	if state == "failed" && audit.Attempt.Terminal() && f.used.CompareAndSwap(false, true) {
 		f.physical = audit.Attempt
-		if f.mode == "committed" {
+		if strings.HasPrefix(f.mode, "committed") {
 			return (commitThenError{}).Commit(tx)
 		}
 		return (rollbackThenError{}).Commit(tx)
+	}
+	if f.mode == "committed_revoke_error" && f.used.Load() && scope == "revoked" && f.revokeUsed.CompareAndSwap(false, true) {
+		return (commitThenError{}).Commit(tx)
 	}
 	if f.used.Load() && strings.HasPrefix(f.mode, "persistent_") && (scope == "revoked" || state == "uncertain") {
 		return (rollbackThenError{}).Commit(tx)
@@ -75,13 +80,23 @@ type unsentStartObservation struct {
 }
 type heldUnsentAttempt struct {
 	nativetool.Repository
-	target        nativetool.ID
-	started       chan unsentStartObservation
-	release       chan struct{}
-	timeoutFinish bool
-	verified      atomic.Bool
-	afterFinish   func(error)
-	beforeVerify  func()
+	target                       nativetool.ID
+	started                      chan unsentStartObservation
+	release                      chan struct{}
+	timeoutFinish                bool
+	verified                     atomic.Bool
+	afterFinish                  func(error)
+	beforeVerify                 func()
+	revokeCalls, revokeSuccesses atomic.Int32
+}
+
+func (h *heldUnsentAttempt) Revoke(ctx context.Context, capture captureidentity.Reference, revision uint64, reason string, now time.Time) error {
+	h.revokeCalls.Add(1)
+	err := h.Repository.Revoke(ctx, capture, revision, reason, now)
+	if err == nil {
+		h.revokeSuccesses.Add(1)
+	}
+	return err
 }
 
 func (h *heldUnsentAttempt) Start(ctx context.Context, id nativetool.ID, attempt string, revision uint64, now time.Time) (nativetool.StartReceipt, error) {
@@ -124,7 +139,7 @@ func (h *heldUnsentAttempt) Finish(ctx context.Context, id nativetool.ID, in nat
 
 func TestNativeUnsentFinishFaultsFenceAndReconcile(t *testing.T) {
 	for _, kind := range []string{"get", "tools_call"} {
-		for _, mode := range []string{"rollback", "committed", "persistent_close", "persistent_recover", "finish_timeout", "start_committed"} {
+		for _, mode := range []string{"rollback", "committed", "committed_revoke_error", "persistent_close", "persistent_recover", "persistent_late_revoke", "finish_timeout", "start_committed"} {
 			t.Run(kind+"/"+mode, func(t *testing.T) {
 				f := newNativeLeaseFixture(t, true, false, environment.ToolPolicyReview)
 				ctx := context.Background()
@@ -307,9 +322,9 @@ func TestNativeUnsentFinishFaultsFenceAndReconcile(t *testing.T) {
 				// inspection hook or changing the real committer/receipt path.
 				claims := reflect.ValueOf(module).Elem().FieldByName("claimed")
 				token := claims.MapIndex(reflect.ValueOf(id))
-				if mode == "start_committed" {
+				if mode == "start_committed" || held.revokeSuccesses.Load() > 0 {
 					if token.IsValid() || claims.Len() != 0 {
-						t.Fatal("ambiguous Start manufactured a local claim")
+						t.Fatal("missing Start manufactured a claim or actual positive Revoke left an ordinary claim")
 					}
 				} else if !token.IsValid() || claims.Len() != 1 || token.Elem().FieldByName("physicalTerminal").Bool() || !token.Elem().FieldByName("consumerDone").Bool() {
 					t.Fatal("Finish error/terminal history manufactured physical claim proof")
@@ -342,7 +357,7 @@ func TestNativeUnsentFinishFaultsFenceAndReconcile(t *testing.T) {
 					if op.State != "started" || audit.Attempt.Terminal() || scope.State != "active" {
 						t.Fatal("rollback/open obligation was lost")
 					}
-				} else if mode == "committed" {
+				} else if strings.HasPrefix(mode, "committed") {
 					if op.State != "failed" || op.BytesIn == nil || op.BytesOut == nil || *op.BytesIn != 0 || *op.BytesOut != 0 || audit.Attempt != fault.physical || !audit.Attempt.ByteCountsKnown() {
 						t.Fatal("committed known-zero terminal was overwritten")
 					}
@@ -376,6 +391,44 @@ func TestNativeUnsentFinishFaultsFenceAndReconcile(t *testing.T) {
 				if err = f.store.database.QueryRow(`SELECT (SELECT COUNT(*) FROM native_tool_once WHERE operation_id=?),(SELECT COUNT(*) FROM runtime_egress_attempts WHERE parent_id=?)`, id, id).Scan(&once, &audits); err != nil || once != 1 || audits != 1 {
 					t.Fatal("cleanup changed one-attempt provenance")
 				}
+				if mode == "persistent_late_revoke" {
+					// The first real Finish and Revoke rolled back; Serve and the
+					// session consumers have drained. Only the sole claim registry
+					// still names this physical attempt. A later same-owner actual
+					// transaction, not the wrapper's early nil, must find it.
+					fault.armed.Store(false)
+					if err := module.Revoke(ctx, f.capture, nativemcp.RevocationOwnerChanged); err != nil {
+						t.Fatal("later real same-owner Revoke failed", err)
+					}
+					settled, err := f.store.NativeToolRepository().Get(ctx, id)
+					closedAudit, auditErr := scanEgressAttempt(f.store.database.QueryRow(egressAttemptSelect+` WHERE parent_id=?`, id))
+					if err != nil || auditErr != nil || settled.State != "uncertain" || !closedAudit.Attempt.Terminal() || closedAudit.Attempt.ByteCountsKnown() {
+						t.Fatal("later transaction did not really close unknown physical history")
+					}
+					if reflect.ValueOf(module).Elem().FieldByName("claimed").MapIndex(reflect.ValueOf(id)).IsValid() {
+						t.Fatal("later actual same-owner Revoke missed drained/unlinked ordinary claim")
+					}
+				}
+				if mode == "committed_revoke_error" {
+					if !fault.revokeUsed.Load() || held.revokeSuccesses.Load() != 0 {
+						t.Fatal("real Revoke commit-then-error fault missing")
+					}
+					calls := held.revokeCalls.Load()
+					if err := module.Revoke(ctx, f.capture, nativemcp.RevocationOwnerChanged); err != nil {
+						t.Fatal(err)
+					}
+					if held.revokeCalls.Load() != calls || held.revokeSuccesses.Load() != 0 {
+						t.Fatal("already-revoked wrapper performed a new transaction")
+					}
+					token := reflect.ValueOf(module).Elem().FieldByName("claimed").MapIndex(reflect.ValueOf(id))
+					if !token.IsValid() || token.Elem().FieldByName("physicalTerminal").Bool() || !token.Elem().FieldByName("consumerDone").Bool() {
+						t.Fatal("metadata/early nil manufactured physical proof after ambiguous commits")
+					}
+					after, err := scanEgressAttempt(f.store.database.QueryRow(egressAttemptSelect+` WHERE parent_id=?`, id))
+					if err != nil || after.Attempt != fault.physical {
+						t.Fatal("early nil changed committed audit/counts")
+					}
+				}
 				if mode == "persistent_recover" {
 					if err := module.Close(ctx); err == nil {
 						t.Fatal("Close falsely succeeded while cleanup remained unavailable")
@@ -399,6 +452,9 @@ func TestNativeUnsentFinishFaultsFenceAndReconcile(t *testing.T) {
 				if err := module.Close(ctx); err != nil {
 					t.Fatal(err)
 				}
+				if reflect.ValueOf(module).Elem().FieldByName("claimed").Len() != 0 {
+					t.Fatal("permanently closed/drained executor retained local guards")
+				}
 				final, err := f.store.NativeToolRepository().Get(ctx, id)
 				if err != nil {
 					t.Fatal(err)
@@ -407,7 +463,7 @@ func TestNativeUnsentFinishFaultsFenceAndReconcile(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				if mode == "committed" {
+				if strings.HasPrefix(mode, "committed") {
 					if finalAudit.Attempt != audit.Attempt {
 						t.Fatal("Close rewrote known terminal")
 					}

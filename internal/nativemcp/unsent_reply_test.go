@@ -149,7 +149,7 @@ func ExerciseUnsentReply(t *testing.T, kind string, approve func(Executor, *runt
 	var historicalScope nativetool.Scope
 	if retiredFirst {
 		retireTarget := func() {
-			if err := f.store.NativeToolRepository().RetireObservedCallback(context.Background(), observed.authority, clock.now()); err != nil {
+			if _, err := f.store.NativeToolRepository().RetireObservedCallback(context.Background(), observed.authority, clock.now()); err != nil {
 				t.Error(err)
 				return
 			}

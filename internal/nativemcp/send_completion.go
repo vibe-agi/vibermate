@@ -25,6 +25,9 @@ func (e *executor) finishKnownUnsent(id nativetool.ID, s *session, w http.Respon
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	if r.stream != nil {
 		err = e.dependencies.Store.FinishAttempt(ctx, receipt, nativetool.PhysicalFinishInput{Outcome: "failed", Reason: "transport_failed", Counts: &nativetool.ObservedCounts{}, ObservedAt: e.dependencies.Clock().UTC()})
+		if err == nil {
+			e.notePhysicalTerminal(claim)
+		}
 	} else {
 		err = e.dependencies.Store.Finish(ctx, id, nativetool.TerminalInput{Outcome: "failed", Reason: "transport_failed", BytesIn: 0, BytesOut: 0, ObservedAt: e.dependencies.Clock().UTC()})
 		if err == nil {

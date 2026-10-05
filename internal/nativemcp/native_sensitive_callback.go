@@ -271,7 +271,7 @@ func (e *executor) retireFailedReplyParent(s *session, identity string, child na
 	if p == nil {
 		return nil
 	}
-	if err := e.dependencies.Store.RetireObservedCallback(ctx, p.authority, e.dependencies.Clock().UTC()); err != nil {
+	if err := e.retireCallbackPhysical(ctx, s, p.authority, child); err != nil {
 		return err
 	}
 	s.mu.Lock()
@@ -295,6 +295,15 @@ func (e *executor) retireFailedReplyParent(s *session, identity string, child na
 		}
 	}
 	return nil
+}
+
+func (e *executor) retireCallbackPhysical(ctx context.Context, s *session, authority nativetool.CallbackAuthority, child nativetool.ID) error {
+	claims := e.snapshotRetirementClaims(s.owner.claimKey, s.claimKey, child)
+	proof, err := e.dependencies.Store.RetireObservedCallback(ctx, authority, e.dependencies.Clock().UTC())
+	if err == nil {
+		e.noteRetirementProof(claims, proof, s.owner.claimKey, s.claimKey)
+	}
+	return err
 }
 
 func (e *executor) retireCompletedParents(ctx context.Context, s *session, operation nativetool.ID) {

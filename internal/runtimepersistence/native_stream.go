@@ -211,7 +211,7 @@ func (r *nativeToolRepository) OpenObservedStream(ctx context.Context, receipt n
 	entry.timer = time.AfterFunc(time.Until(entry.expires), func() {
 		cleanup, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
-		_ = r.RetireObservedStream(cleanup, a, time.Now().UTC())
+		_, _ = r.RetireObservedStream(cleanup, a, time.Now().UTC())
 	})
 	return a, nil
 }
@@ -602,19 +602,19 @@ func (r *nativeToolRepository) invalidateNativeStream(a nativetool.StreamAuthori
 	s.timer = time.AfterFunc(s.retryDelay, func() {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
-		_ = r.RetireObservedStream(ctx, a, time.Now().UTC())
+		_, _ = r.RetireObservedStream(ctx, a, time.Now().UTC())
 	})
 }
 
-func (r *nativeToolRepository) RetireObservedStream(ctx context.Context, a nativetool.StreamAuthority, now time.Time) error {
+func (r *nativeToolRepository) RetireObservedStream(ctx context.Context, a nativetool.StreamAuthority, now time.Time) ([]nativetool.StartReceipt, error) {
 	if !nativeTime(now) {
-		return nativetool.ErrInvalid
+		return nil, nativetool.ErrInvalid
 	}
 	r.issuerMu.Lock()
 	defer r.issuerMu.Unlock()
 	s := r.streams[a]
 	if s == nil {
-		return nil
+		return nil, nil
 	}
 	s.cleanupOnly = true
 	for _, c := range r.callbacks {
@@ -631,11 +631,17 @@ func (r *nativeToolRepository) RetireObservedStream(ctx context.Context, a nativ
 			r.recovery[id] = child
 		}
 	}
+	// Candidates remain private until the entire retirement transaction has
+	// committed. An ambiguous commit must return no physical verification.
+	var verified []nativetool.StartReceipt
 	err := r.transaction(ctx, func(ctx context.Context, tx *sql.Tx) error {
 		for _, c := range r.callbacks {
 			if c.stream == a {
 				if err := r.cleanupNativeCallback(ctx, tx, c, now); err != nil {
 					return err
+				}
+				if c.receipt.OperationID() != "" {
+					verified = append(verified, c.receipt)
 				}
 			}
 		}
@@ -643,6 +649,9 @@ func (r *nativeToolRepository) RetireObservedStream(ctx context.Context, a nativ
 			if child.stream == a && child.cleanupOnly {
 				if err := r.cleanupNativeRecoveryAttempt(ctx, tx, s, id, child, now); err != nil {
 					return err
+				}
+				if child.receipt.OperationID() != "" {
+					verified = append(verified, child.receipt)
 				}
 			}
 		}
@@ -657,6 +666,7 @@ func (r *nativeToolRepository) RetireObservedStream(ctx context.Context, a nativ
 		if err := r.issuer.Check(s.receipt, facts); err != nil {
 			return err
 		}
+		verified = append(verified, s.receipt)
 		if op.CompletedAt != nil {
 			if !audit.Terminal() {
 				// A known RPC terminal can precede an ambiguous physical close.
@@ -683,10 +693,11 @@ func (r *nativeToolRepository) RetireObservedStream(ctx context.Context, a nativ
 			}
 		}
 		r.dropNativeStream(a)
+		return verified, nil
 	} else {
 		r.invalidateNativeStream(a)
 	}
-	return err
+	return nil, err
 }
 
 // Called in the same transaction as origin cleanup. Success of only one side

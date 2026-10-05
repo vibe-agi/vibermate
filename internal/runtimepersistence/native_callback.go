@@ -132,15 +132,15 @@ func (r *nativeToolRepository) verifyNativeCallback(ctx context.Context, tx *sql
 	return nil
 }
 
-func (r *nativeToolRepository) RetireObservedCallback(ctx context.Context, a nativetool.CallbackAuthority, now time.Time) error {
+func (r *nativeToolRepository) RetireObservedCallback(ctx context.Context, a nativetool.CallbackAuthority, now time.Time) ([]nativetool.StartReceipt, error) {
 	if !nativeTime(now) {
-		return nativetool.ErrInvalid
+		return nil, nativetool.ErrInvalid
 	}
 	r.issuerMu.Lock()
 	defer r.issuerMu.Unlock()
 	c := r.callbacks[a]
 	if c == nil {
-		return nil
+		return nil, nil
 	}
 	c.retired = true
 	prunable := false
@@ -162,8 +162,11 @@ func (r *nativeToolRepository) RetireObservedCallback(ctx context.Context, a nat
 	} else if prunable {
 		delete(r.replies, c.child)
 		delete(r.callbacks, a)
+		if c.receipt.OperationID() != "" {
+			return []nativetool.StartReceipt{c.receipt}, nil
+		}
 	}
-	return err
+	return nil, err
 }
 
 // A terminal flag alone cannot release a receipt-bearing cleanup obligation.

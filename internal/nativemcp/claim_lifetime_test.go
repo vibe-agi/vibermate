@@ -285,17 +285,22 @@ func TestNativeClaimReplyIsIndependentOfObservedParent(t *testing.T) {
 	}
 	e.mu.Lock()
 	parentClaim := e.claimed[parent.id]
-	valid := parentClaim != nil && parentClaim.physicalClass == nativeClaimOwnedObserved && parentClaim.ownerKey != 0 && parentClaim.sessionKey != 0 && parentClaim.consumerDone && !parentClaim.physicalTerminal
+	valid := parentClaim == nil
+	for _, s := range e.scopes[f.capture.Key()].sessions {
+		s.mu.Lock()
+		valid = valid && s.parents["17"] != nil && s.streams[parent.id] != nil && s.streams[parent.id].observed
+		s.mu.Unlock()
+	}
 	e.mu.Unlock()
 	if !valid {
-		t.Fatal("observed parent classification/proof boundary not preserved")
+		t.Fatal("physical collection changed independent observed callback lifetime")
 	}
 	child := f.captured(t, "POST", `{"jsonrpc":"2.0","id":17,"result":{}}`, "synthetic-session")
 	if result := e.Serve(context.Background(), child, httptest.NewRecorder()); result.Outcome != OutcomeCompleted {
 		t.Fatal(result)
 	}
 	requireNativeClaimAfterDrain(t, e, child.id, false)
-	requireNativeClaimAfterDrain(t, e, parent.id, true) // Task2 receipt proof remains separate.
+	requireNativeClaimAfterDrain(t, e, parent.id, false)
 }
 
 func TestNativeClaimObservedClassificationPrecedesClosureRace(t *testing.T) {

@@ -210,7 +210,7 @@ func TestNativeUnsentLifecycleCleanupFaults(t *testing.T) {
 					if kind == "recovery" {
 						// Exercise exact I3 settlement before general Close, retaining
 						// its documented failed/unknown child outcome deterministically.
-						if err := h.f.store.NativeToolRepository().RetireObservedStream(ctx, parentAuthority, h.now()); err != nil {
+						if _, err := h.f.store.NativeToolRepository().RetireObservedStream(ctx, parentAuthority, h.now()); err != nil {
 							t.Fatal(err)
 						}
 					}

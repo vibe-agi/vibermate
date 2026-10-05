@@ -144,7 +144,7 @@ func TestNativeAmbiguousPhysicalFinishCleansKnownTerminal(t *testing.T) {
 			if err == nil {
 				t.Fatal("fault absent")
 			}
-			if err := repo.RetireObservedStream(ctx, a, now); err != nil {
+			if _, err := repo.RetireObservedStream(ctx, a, now); err != nil {
 				t.Fatal(err)
 			}
 			op, err := repo.Get(ctx, id)

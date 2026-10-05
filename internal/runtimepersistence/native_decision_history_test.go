@@ -96,7 +96,7 @@ func TestNativeCallbackDecisionHistoryAfterRetirement(t *testing.T) {
 				if err = f.repo.FinishAttempt(ctx, f.receipt, nativetool.PhysicalFinishInput{Outcome: "completed", Reason: "completed", Counts: &nativetool.ObservedCounts{}, ObservedAt: f.now.Add(2 * time.Millisecond)}); err != nil {
 					t.Fatal(err)
 				}
-				if err = f.repo.RetireObservedStream(ctx, f.stream, f.now.Add(3*time.Millisecond)); err != nil {
+				if _, err = f.repo.RetireObservedStream(ctx, f.stream, f.now.Add(3*time.Millisecond)); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -200,7 +200,7 @@ func TestNativeCallbackClosedUnconsumedHistoryCannotAuthorize(t *testing.T) {
 			var err error
 			switch edge {
 			case "retired":
-				err = f.repo.RetireObservedCallback(ctx, f.callback, now)
+				_, err = f.repo.RetireObservedCallback(ctx, f.callback, now)
 			case "off":
 				err = f.repo.Revoke(ctx, f.binding.Capture(), f.revision, "revoked", now)
 			case "canceled":
@@ -237,7 +237,7 @@ func TestNativeCallbackClosedUnconsumedHistoryCannotAuthorize(t *testing.T) {
 func TestNativeCallbackDeniedHistorySurvivesRetirement(t *testing.T) {
 	f, a, in, _ := prepareCallbackHistory(t, "denied")
 	ctx := context.Background()
-	if err := f.repo.RetireObservedCallback(ctx, f.callback, f.now.Add(time.Millisecond)); err != nil {
+	if _, err := f.repo.RetireObservedCallback(ctx, f.callback, f.now.Add(time.Millisecond)); err != nil {
 		t.Fatal(err)
 	}
 	before := snapshotDecisionHistory(t, f, a.ID)

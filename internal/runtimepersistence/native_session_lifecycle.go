@@ -86,7 +86,7 @@ func (r *nativeToolRepository) CloseSession(ctx context.Context, id nativetool.I
 	defer func() {
 		for a, s := range r.streams {
 			if s.session == id && !s.cleanupOnly {
-				r.dropNativeStream(a)
+				r.invalidateNativeStream(a)
 			}
 		}
 	}()

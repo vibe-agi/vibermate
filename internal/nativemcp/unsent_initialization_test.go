@@ -136,7 +136,7 @@ func testUnsentInitialization(t *testing.T, initialized bool, terminalFirst ...b
 		}
 	}
 	terminal := finish()
-	requireNativeClaimAfterDrain(t, e, request.id, closedFirst)
+	requireNativeClaimAfterDrain(t, e, request.id, false)
 	verify := <-held.verified
 	facts := readFreshGETFacts(t, f, request.id)
 	scope, err = f.store.NativeToolRepository().GetScope(context.Background(), f.capture)

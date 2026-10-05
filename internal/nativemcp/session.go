@@ -225,7 +225,13 @@ func (e *executor) closeSession(ctx context.Context, s *session) error {
 // e.mu owns registry reachability; s.mu owns active consumers and allocations.
 func (e *executor) closeSessionLocked(ctx context.Context, s *session) error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	var physicallyClosed []nativeClaimHandle
+	defer func() {
+		s.mu.Unlock()
+		// The caller still owns e.mu; apply only after the session lock is
+		// released, and never for closed/failed-memory early returns.
+		e.noteOrdinaryClaimsLocked(physicallyClosed, s.owner.claimKey, s.claimKey)
+	}()
 	if s.closed {
 		e.clearSession(s)
 		delete(s.owner.sessions, s.id)
@@ -234,6 +240,7 @@ func (e *executor) closeSessionLocked(ctx context.Context, s *session) error {
 		}
 		return nil
 	}
+	claims := e.ordinaryClaimsLocked(s.owner.claimKey, s.claimKey)
 	revision, err := e.dependencies.Store.CloseSession(ctx, s.id, s.revision, e.dependencies.Clock().UTC())
 	if err != nil {
 		// The transaction may have committed despite its error. Keep this old
@@ -245,6 +252,7 @@ func (e *executor) closeSessionLocked(ctx context.Context, s *session) error {
 		delete(s.owner.sessions, s.id)
 		return err
 	}
+	physicallyClosed = claims
 	s.revision = revision
 	e.clearSession(s)
 	delete(s.owner.sessions, s.id)
@@ -449,6 +457,10 @@ func (e *executor) revokeOwner(ctx context.Context, capture captureidentity.Refe
 		e.mu.Unlock()
 		return nil
 	}
+	var claims []nativeClaimHandle
+	if owner != nil {
+		claims = e.ordinaryClaimsLocked(owner.claimKey, 0)
+	}
 	for id, preview := range e.previews {
 		if preview.capture == capture {
 			e.discardPreviewLocked(id)
@@ -475,7 +487,13 @@ func (e *executor) revokeOwner(ctx context.Context, capture captureidentity.Refe
 	if scope.OwnerEpoch != owner.epoch || scope.State == "revoked" || scope.State == "closed" {
 		return nil
 	}
-	return e.dependencies.Store.Revoke(ctx, capture, scope.Revision, "revoked", e.dependencies.Clock().UTC())
+	err = e.dependencies.Store.Revoke(ctx, capture, scope.Revision, "revoked", e.dependencies.Clock().UTC())
+	if err == nil {
+		e.mu.Lock()
+		e.noteOrdinaryClaimsLocked(claims, owner.claimKey, 0)
+		e.mu.Unlock()
+	}
+	return err
 }
 func (e *executor) Close(ctx context.Context) error {
 	if ctx == nil {
