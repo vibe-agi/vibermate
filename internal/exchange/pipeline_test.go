@@ -2776,6 +2776,7 @@ func newTestPipelineWithContentObserver(
 	decisions ToolDecisionGate,
 	observer ExchangeObserver,
 	content ContentObserver,
+	streamOptions ...StreamBudgets,
 ) *Pipeline {
 	t.Helper()
 	annotations, err := clientannotation.NewSigner(bytes.Repeat([]byte{0x5a}, 32))
@@ -2783,13 +2784,17 @@ func newTestPipelineWithContentObserver(
 		t.Fatal(err)
 	}
 	t.Cleanup(annotations.Destroy)
+	stream := DefaultStreamBudgets()
+	if len(streamOptions) > 0 {
+		stream = streamOptions[0]
+	}
 	pipeline, err := New(Options{
 		OwnerContext: context.Background(), Actions: newTestActionGate(t), Accounts: accounts,
 		ProtocolPaths: mustProtocolPathSelector(t), Provider: provider, ToolDecisions: decisions,
 		RetryWaiter: &retryWaiterDouble{}, Observer: observer, ContentObserver: content,
 		ObservationTimeout: time.Second,
 		Hold:               HoldPolicy{MaxTransportResends: 0, RetryDelay: 0, MaxDuration: time.Second},
-		Stream:             DefaultStreamBudgets(),
+		Stream:             stream,
 		ClientAnnotations:  annotations,
 		Now:                time.Now,
 	})

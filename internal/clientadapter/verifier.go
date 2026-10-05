@@ -118,11 +118,15 @@ const (
 	// semantics match the Core workspace classifier. It does not cover shell,
 	// MCP, plugin, or arbitrary custom tools.
 	FeatureStructuredWorkspaceTools
+	// FeatureResponsesDataKeepalive attests only acceptance of the fixed,
+	// non-executable Responses SSE keepalive frame. It grants no authority.
+	FeatureResponsesDataKeepalive
 )
 
 const knownFeatures = FeatureResponsesWebSocketHTTPFallback |
 	FeatureCoreOwnedStreamingFallback |
-	FeatureStructuredWorkspaceTools
+	FeatureStructuredWorkspaceTools |
+	FeatureResponsesDataKeepalive
 
 func (features Feature) valid() bool {
 	return features&^knownFeatures == 0
@@ -1201,7 +1205,7 @@ func codexCLI01450Release(
 // empty or partially active catalog.
 func BuiltInCatalog() Catalog {
 	return Catalog{
-		revision: 3,
+		revision: 4,
 		releases: []Release{
 			ClaudeCode221220DarwinARM64(),
 			ClaudeCode221220DarwinAMD64(),

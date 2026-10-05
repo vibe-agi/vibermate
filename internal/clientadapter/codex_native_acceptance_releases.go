@@ -14,10 +14,14 @@ func CodexCLI01592DarwinARM64() Release {
 }
 
 func CodexCLI01600DarwinARM64() Release {
-	return codexNativeMCPRelease("0.160.0",
+	release := codexNativeMCPRelease("0.160.0",
 		"29c350dfcd8d33749852c16e2f5dcde528409d7e1d3f5d916fe3c576f3914820",
 		"2497ae33d4df7cb43618e3935fb1dfbff6a7bf536e2258776d1e95afc3c47017",
 		"112fae7a5a1223e673c8a1791d32338f37df8b527ff1159bb8adac6c4dbf1b4b")
+	// Native DATA controls prove this exact tuple, not the shared factory.
+	release.Revision = 2
+	release.Features = FeatureResponsesDataKeepalive
+	return release
 }
 
 func codexNativeMCPRelease(version, metadata, platformMetadata, native string) Release {

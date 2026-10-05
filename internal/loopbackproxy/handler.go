@@ -34,6 +34,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/captureassignment"
 	"github.com/vibe-agi/vibermate/internal/captureidentity"
 	"github.com/vibe-agi/vibermate/internal/certidentity"
+	"github.com/vibe-agi/vibermate/internal/clientadapter"
 	"github.com/vibe-agi/vibermate/internal/connectionevent"
 	"github.com/vibe-agi/vibermate/internal/connectionpolicy"
 	"github.com/vibe-agi/vibermate/internal/egressaudit"
@@ -43,6 +44,8 @@ import (
 	"github.com/vibe-agi/vibermate/internal/localca"
 	"github.com/vibe-agi/vibermate/internal/nativemcp"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
+	"github.com/vibe-agi/vibermate/internal/openairesponses"
+	"github.com/vibe-agi/vibermate/internal/operationcatalog"
 	"github.com/vibe-agi/vibermate/internal/originaltransport"
 	"github.com/vibe-agi/vibermate/internal/originidentity"
 	"github.com/vibe-agi/vibermate/internal/protocolcore"
@@ -1280,15 +1283,16 @@ func (handler *Handler) serveSemantic(
 		}
 	}
 	downstream := newHTTPDownstream(writer, httpDownstreamOptions{
-		ClientDialect:    plan.ProtocolPlan().ClientDialect(),
-		Observer:         handler.rawEvidence,
-		ObservationLimit: handler.rawTimeout,
-		MaximumBodyBytes: handler.rawBodyBytes,
-		Context:          rawContext,
-		Scheme:           requestScheme(request),
-		Authority:        request.Host,
-		Path:             request.URL.EscapedPath(),
-		RawQuery:         request.URL.RawQuery,
+		responsesDataKeepalive: responsesDataKeepaliveFor(plan, admission),
+		ClientDialect:          plan.ProtocolPlan().ClientDialect(),
+		Observer:               handler.rawEvidence,
+		ObservationLimit:       handler.rawTimeout,
+		MaximumBodyBytes:       handler.rawBodyBytes,
+		Context:                rawContext,
+		Scheme:                 requestScheme(request),
+		Authority:              request.Host,
+		Path:                   request.URL.EscapedPath(),
+		RawQuery:               request.URL.RawQuery,
 	})
 	_, err = handler.exchanges.Execute(
 		request.Context(),
@@ -2085,30 +2089,34 @@ func copyResponseHeaders(destination, source http.Header) {
 }
 
 type httpDownstreamOptions struct {
-	ClientDialect    protocolspec.Dialect
-	Observer         rawevidence.Observer
-	ObservationLimit time.Duration
-	MaximumBodyBytes int
-	Context          rawevidence.Context
-	Scheme           string
-	Authority        string
-	Path             string
-	RawQuery         string
+	responsesDataKeepalive bool
+	ClientDialect          protocolspec.Dialect
+	Observer               rawevidence.Observer
+	ObservationLimit       time.Duration
+	MaximumBodyBytes       int
+	Context                rawevidence.Context
+	Scheme                 string
+	Authority              string
+	Path                   string
+	RawQuery               string
 }
 
 type httpDownstream struct {
-	writer  http.ResponseWriter
-	options httpDownstreamOptions
-	mode    exchange.ResponseMode
-	begun   bool
-	status  int
-	headers http.Header
-	hash    hash.Hash
-	body    []byte
-	total   int64
-	frames  []rawevidence.Frame
-	once    sync.Once
-	rawErr  error
+	writer           http.ResponseWriter
+	options          httpDownstreamOptions
+	mode             exchange.ResponseMode
+	begun            bool
+	status           int
+	headers          http.Header
+	hash             hash.Hash
+	body             []byte
+	total            int64
+	frames           []rawevidence.Frame
+	once             sync.Once
+	rawErr           error
+	keepaliveWire    []byte
+	keepaliveErr     error
+	keepaliveStopped bool
 }
 
 func newHTTPDownstream(
@@ -2119,12 +2127,38 @@ func newHTTPDownstream(
 	if options.Context.Recording != rawevidence.RecordingFull {
 		maximum = 0
 	}
-	return &httpDownstream{
-		writer:  writer,
-		options: options,
-		hash:    sha256.New(),
-		body:    make([]byte, 0, min(maximum, 32<<10)),
+	downstream := &httpDownstream{
+		writer:        writer,
+		options:       options,
+		hash:          sha256.New(),
+		body:          make([]byte, 0, min(maximum, 32<<10)),
+		keepaliveWire: []byte(": keepalive\n\n"),
 	}
+	if options.responsesDataKeepalive {
+		downstream.keepaliveWire, downstream.keepaliveErr = openairesponses.EncodeKeepalive()
+	}
+	return downstream
+}
+
+// Compatibility is selected from the frozen CLIENT contract, never the
+// selected provider origin or untrusted client-identifying headers.
+func responsesDataKeepaliveFor(plan environment.RequestPlan, admission captureadmission.Admission) bool {
+	if admission.Validate() != nil || plan.ProtocolPlan().ClientDialect() != protocolspec.DialectOpenAIResponses {
+		return false
+	}
+	op := plan.Operation()
+	methods := op.Methods()
+	if op.ClientDialect() != protocolspec.DialectOpenAIResponses || op.Kind() != protocolspec.ClientOperationSemantic || op.Transport() != protocolspec.ClientOperationTransportHTTP || op.PathMatch() != protocolspec.ClientOperationPathExact || len(methods) != 1 || methods[0] != http.MethodPost {
+		return false
+	}
+	origin := plan.Endpoint().ClientOrigin()
+	if origin.Validate() != nil {
+		return false
+	}
+	if op.ID().String() == operationcatalog.OpenAICodexResponsesCreateID && op.PathPattern() == "/backend-api/codex/responses" {
+		return origin.Host() == "chatgpt.com" && origin.Port() == 443
+	}
+	return op.ID().String() == operationcatalog.OpenAIResponsesCreateID && op.PathPattern() == "/v1/responses" && admission.Supports(clientadapter.FeatureResponsesDataKeepalive)
 }
 
 func (downstream *httpDownstream) Begin(
@@ -2204,7 +2238,11 @@ func (downstream *httpDownstream) write(
 		}
 	}
 	if downstream.mode == exchange.ResponseModeEventStream {
-		if flusher, ok := downstream.writer.(http.Flusher); ok {
+		if kind == rawevidence.FrameKeepalive {
+			if flushErr := http.NewResponseController(downstream.writer).Flush(); flushErr != nil && !errors.Is(flushErr, http.ErrNotSupported) {
+				err = errors.Join(err, flushErr)
+			}
+		} else if flusher, ok := downstream.writer.(http.Flusher); ok {
 			flusher.Flush()
 		}
 	}
@@ -2212,14 +2250,20 @@ func (downstream *httpDownstream) write(
 }
 
 func (downstream *httpDownstream) Keepalive(ctx context.Context) error {
+	if downstream.keepaliveStopped {
+		return errors.New("terminal downstream cannot accept a keepalive")
+	}
 	if !downstream.begun ||
 		downstream.mode != exchange.ResponseModeEventStream {
 		return errors.New("only a begun event stream accepts a keepalive")
 	}
-	const wire = ": keepalive\n\n"
+	if downstream.keepaliveErr != nil {
+		return downstream.keepaliveErr
+	}
+	wire := downstream.keepaliveWire
 	count, err := downstream.write(
 		ctx,
-		[]byte(wire),
+		wire,
 		rawevidence.FrameKeepalive,
 	)
 	if err != nil {
@@ -2258,6 +2302,7 @@ func (downstream *httpDownstream) Begun() bool {
 
 func (downstream *httpDownstream) Finalize() error {
 	downstream.once.Do(func() {
+		downstream.keepaliveStopped = true
 		if downstream.options.Observer == nil ||
 			downstream.options.Context.Recording == rawevidence.RecordingOff ||
 			!downstream.begun {

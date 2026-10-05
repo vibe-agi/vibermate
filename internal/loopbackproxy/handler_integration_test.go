@@ -1254,6 +1254,7 @@ func newProxyFixtureForDialectWithPolicyAndRawEvidence(
 	policy connectionpolicy.Snapshot,
 	raw rawevidence.RequestRecorder,
 	assignmentEnvironmentID environment.EnvironmentID,
+	clientOrigins ...string,
 ) *proxyFixture {
 	t.Helper()
 	directory := t.TempDir()
@@ -1278,12 +1279,16 @@ func newProxyFixtureForDialectWithPolicyAndRawEvidence(
 	if err != nil {
 		t.Fatal(err)
 	}
+	catalogRevision := clientadapter.CatalogRevision(1)
+	if adapter != nil {
+		catalogRevision = adapter.CatalogRevision
+	}
 	grant, err := runs.Create(context.Background(), capturerun.CreateCommand{
 		CWD:                     filepath.Join(directory, "workspace"),
 		CanonicalExecutablePath: filepath.Join(directory, "bin", "claude"),
 		ExecutableLabel:         "claude",
 		Lifetime:                5 * time.Minute,
-		CatalogRevision:         1,
+		CatalogRevision:         catalogRevision,
 		Adapter:                 adapter,
 		Recognition:             fixtureRecognition(adapter),
 		Workspace:               proxyWorkspaceScope(t),
@@ -1316,6 +1321,17 @@ func newProxyFixtureForDialectWithPolicyAndRawEvidence(
 		1,
 		1,
 	)
+	if len(clientOrigins) != 0 {
+		origin, err := originidentity.ParseClientOrigin(clientOrigins[0])
+		if err != nil {
+			t.Fatal(err)
+		}
+		aggregate.ClientEndpoints[0].ClientOrigin = origin
+	}
+	if len(clientOrigins) > 1 {
+		configureLivenessUpstream(t, &aggregate, clientOrigins[1])
+		compiler = testEnvironmentCompiler(t, clientDialect, livenessAccountCatalog{})
+	}
 	snapshot, err := compiler.Compile(aggregate)
 	if err != nil {
 		t.Fatal(err)
@@ -1587,6 +1603,7 @@ type exchangeRecorder struct {
 	blockStarted chan struct{}
 	blockRelease chan struct{}
 	startOnce    sync.Once
+	keepalive    bool
 }
 
 func (recorder *exchangeRecorder) Execute(
@@ -1599,6 +1616,7 @@ func (recorder *exchangeRecorder) Execute(
 	failure := recorder.failure
 	blockStarted := recorder.blockStarted
 	blockRelease := recorder.blockRelease
+	keepalive := recorder.keepalive
 	recorder.mu.Unlock()
 	if failure != nil {
 		return exchange.Result{}, failure
@@ -1610,6 +1628,19 @@ func (recorder *exchangeRecorder) Execute(
 		case <-ctx.Done():
 			return exchange.Result{}, context.Cause(ctx)
 		}
+	}
+	if keepalive {
+		envelope, err := exchange.NewResponseEnvelope(exchange.ResponseModeEventStream, http.StatusOK, http.Header{"Content-Type": {"text/event-stream"}})
+		if err != nil {
+			return exchange.Result{}, err
+		}
+		if err := downstream.Begin(ctx, envelope); err != nil {
+			return exchange.Result{}, err
+		}
+		if err := downstream.Keepalive(ctx); err != nil {
+			return exchange.Result{}, err
+		}
+		return exchange.Result{Outcome: exchange.AttemptSucceeded}, nil
 	}
 	envelope, err := exchange.NewResponseEnvelope(
 		exchange.ResponseModeJSON,
@@ -1693,6 +1724,7 @@ func (recorder *originalRecorder) Count() int {
 func testEnvironmentCompiler(
 	t *testing.T,
 	clientDialect protocolspec.Dialect,
+	accountCatalogs ...environment.AccountCatalog,
 ) environment.Compiler {
 	t.Helper()
 	operations, err := operationcatalog.BuiltIn()
@@ -1733,7 +1765,11 @@ func testEnvironmentCompiler(
 	if err != nil {
 		t.Fatal(err)
 	}
-	compiler, err := environment.NewCompiler(nil, nil, protocols, wires)
+	var accounts environment.AccountCatalog
+	if len(accountCatalogs) > 0 {
+		accounts = accountCatalogs[0]
+	}
+	compiler, err := environment.NewCompiler(accounts, nil, protocols, wires)
 	if err != nil {
 		t.Fatal(err)
 	}
