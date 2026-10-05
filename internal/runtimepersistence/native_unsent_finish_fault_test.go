@@ -80,6 +80,8 @@ type heldUnsentAttempt struct {
 	release       chan struct{}
 	timeoutFinish bool
 	verified      atomic.Bool
+	afterFinish   func(error)
+	beforeVerify  func()
 }
 
 func (h *heldUnsentAttempt) Start(ctx context.Context, id nativetool.ID, attempt string, revision uint64, now time.Time) (nativetool.StartReceipt, error) {
@@ -97,6 +99,9 @@ func (h *heldUnsentAttempt) Start(ctx context.Context, id nativetool.ID, attempt
 	return receipt, err
 }
 func (h *heldUnsentAttempt) VerifyStartReceipt(ctx context.Context, r nativetool.StartReceipt, now time.Time) error {
+	if r.OperationID() == h.target && h.beforeVerify != nil {
+		h.beforeVerify()
+	}
 	err := h.Repository.VerifyStartReceipt(ctx, r, now)
 	if r.OperationID() == h.target {
 		h.verified.Store(true)
@@ -110,7 +115,11 @@ func (h *heldUnsentAttempt) Finish(ctx context.Context, id nativetool.ID, in nat
 	if h.timeoutFinish && id == h.target && in.Outcome == "failed" {
 		<-ctx.Done()
 	}
-	return h.Repository.Finish(ctx, id, in)
+	err := h.Repository.Finish(ctx, id, in)
+	if id == h.target && h.afterFinish != nil {
+		h.afterFinish(err)
+	}
+	return err
 }
 
 func TestNativeUnsentFinishFaultsFenceAndReconcile(t *testing.T) {

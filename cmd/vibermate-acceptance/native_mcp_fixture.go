@@ -873,24 +873,7 @@ func runNativeFixtureSlice(t nativeFixtureChecks, binary string, nodePaths ...st
 					t.Logf("pending diagnostic kind=%s state=%s reason=%s", op.Kind, op.State, op.Reason)
 				}
 			}
-			reader, err := openExchangeAuditReader(ctx, paths.DataDirectory())
-			if err != nil {
-				return
-			}
-			defer reader.Close()
-			rows, err := reader.connection.QueryContext(ctx, `SELECT o.rpc_kind,o.state,COALESCE(b.session_revision,0),COALESCE(b.catalog_generation,0),COALESCE(s.revision,0),COALESCE(s.catalog_generation,0),COALESCE(n.claimed_at_unix_ms,0),COALESCE(a.completed_at_unix_ms,0),COALESCE(a.outcome,''),COALESCE(a.error_class,'') FROM native_tool_operations o LEFT JOIN native_tool_bindings b USING(operation_id) LEFT JOIN native_tool_sessions s USING(session_id) LEFT JOIN native_tool_once n USING(operation_id) LEFT JOIN runtime_egress_attempts a USING(attempt_id) WHERE o.capture_kind=? AND o.capture_id=?`, pendingCapture.Kind, pendingCapture.ID)
-			if err != nil {
-				t.Logf("pending SQL facts unavailable")
-				return
-			}
-			defer rows.Close()
-			for rows.Next() {
-				var kind, state, outcome, reason string
-				var br, bg, sr, sg, claim, end int64
-				if rows.Scan(&kind, &state, &br, &bg, &sr, &sg, &claim, &end, &outcome, &reason) == nil {
-					t.Logf("pending SQL kind=%s state=%s bindingRevision=%d bindingGeneration=%d sessionRevision=%d sessionGeneration=%d claimMS=%d physicalEndMS=%d physical=%s/%s", kind, state, br, bg, sr, sg, claim, end, outcome, reason)
-				}
-			}
+			logNativePhaseSQL(ctx, t, paths.DataDirectory(), pendingCapture)
 		}()
 		management.rejectPending(ctx, pendingCapture, knownDeny)
 		decided = true
@@ -1097,6 +1080,10 @@ func runNativeFixtureSlice(t nativeFixtureChecks, binary string, nodePaths ...st
 	if blind.attempts.Load() != 1 {
 		t.Fatal("actual client attempted blind egress after preflight")
 	}
+	mu.Lock()
+	t.Logf("actual native startup client=%s initializedCapabilities=%s freshGET=%d", expectedVersion, initializeCapabilities, streams.Load())
+	mu.Unlock()
+	logNativePhaseSQL(ctx, t, paths.DataDirectory(), capture)
 	if observer, ok := t.(interface{ NativeOwnership(bool, bool, bool) }); ok {
 		observer.NativeOwnership(true, true, false)
 	}

@@ -30,6 +30,7 @@ type heldFreshGETStart struct {
 	verified        chan error
 	claim           func() bool
 	claimedAtVerify chan bool
+	beforeVerify    func()
 }
 
 func (h *heldFreshGETStart) Start(ctx context.Context, id nativetool.ID, attempt string, revision uint64, now time.Time) (nativetool.StartReceipt, error) {
@@ -51,6 +52,9 @@ func (h *heldFreshGETStart) Start(ctx context.Context, id nativetool.ID, attempt
 func (h *heldFreshGETStart) VerifyStartReceipt(ctx context.Context, receipt nativetool.StartReceipt, now time.Time) error {
 	if receipt.OperationID() == h.target && h.claim != nil {
 		h.claimedAtVerify <- h.claim()
+		if h.beforeVerify != nil {
+			h.beforeVerify()
+		}
 	}
 	err := h.Repository.VerifyStartReceipt(ctx, receipt, now)
 	if receipt.OperationID() == h.target {

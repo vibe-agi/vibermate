@@ -255,26 +255,29 @@ func (e *executor) observeCallback(ctx context.Context, s *session, stream *stre
 
 // A closed negative decision/canceled handler retires the exact observation.
 // A successful URL answer keeps its separate completion obligation alive.
-func (e *executor) retireFailedReplyParent(s *session, identity string, child nativetool.ID) {
+func (e *executor) retireFailedReplyParent(s *session, identity string, child nativetool.ID) error {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	op, err := e.dependencies.Store.Get(ctx, child)
-	if err != nil || op.CompletedAt == nil || op.State == "completed" {
-		return
+	if err != nil {
+		return err
+	}
+	if op.CompletedAt == nil || op.State == "completed" {
+		return nil
 	}
 	s.mu.Lock()
 	p := s.parents[identity]
 	s.mu.Unlock()
 	if p == nil {
-		return
+		return nil
 	}
 	if err := e.dependencies.Store.RetireObservedCallback(ctx, p.authority, e.dependencies.Clock().UTC()); err != nil {
-		return
+		return err
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.parents[identity] != p {
-		return
+		return nil
 	}
 	if p.sensitive != nil {
 		_ = s.hasher.RetireParent(*p.sensitive)
@@ -291,6 +294,7 @@ func (e *executor) retireFailedReplyParent(s *session, identity string, child na
 			e.budget.release(charge)
 		}
 	}
+	return nil
 }
 
 func (e *executor) retireCompletedParents(ctx context.Context, s *session, operation nativetool.ID) {

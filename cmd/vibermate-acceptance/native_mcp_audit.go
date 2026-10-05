@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"database/sql"
 	"errors"
 	"net"
 	"net/http"
@@ -15,6 +16,42 @@ import (
 	"github.com/vibe-agi/vibermate/internal/egressnetwork"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
 )
+
+// Body-free bounded evidence, not a completion inference: an open audit may
+// carry a default known flag while the operation still has no byte projection.
+func logNativePhaseSQL(ctx context.Context, t nativeFixtureChecks, directory string, capture captureidentity.Reference) {
+	reader, err := openExchangeAuditReader(ctx, directory)
+	if err != nil {
+		t.Error("native phase audit unavailable")
+		return
+	}
+	defer reader.Close()
+	rows, err := reader.connection.QueryContext(ctx, `SELECT o.rpc_kind,o.state,o.terminal_reason,COALESCE(b.session_revision,0),COALESCE(b.catalog_generation,0),COALESCE(s.revision,0),COALESCE(s.catalog_generation,0),COALESCE(n.claimed_at_unix_ms,0),COALESCE(a.completed_at_unix_ms,0),COALESCE(a.outcome,''),COALESCE(a.error_class,''),COALESCE(a.byte_counts_known,-1),COALESCE(a.bytes_in,0),COALESCE(a.bytes_out,0),o.bytes_in,o.bytes_out,c.state,c.replay_barrier FROM native_tool_operations o LEFT JOIN native_tool_bindings b USING(operation_id) LEFT JOIN native_tool_sessions s USING(session_id) LEFT JOIN native_tool_once n USING(operation_id) LEFT JOIN runtime_egress_attempts a USING(attempt_id) JOIN native_tool_scopes c ON c.capture_kind=o.capture_kind AND c.capture_id=o.capture_id WHERE o.capture_kind=? AND o.capture_id=? ORDER BY o.created_at_unix_ms,o.operation_id LIMIT 129`, capture.Kind, capture.ID)
+	if err != nil {
+		t.Error("native phase SQL unavailable")
+		return
+	}
+	defer rows.Close()
+	count := 0
+	for rows.Next() {
+		count++
+		if count > 128 {
+			t.Error("native phase row bound exceeded")
+			return
+		}
+		var kind, state, reason, outcome, errorClass, scope string
+		var br, bg, sr, sg, claim, end, known, bytesIn, bytesOut, barrier int64
+		var opIn, opOut sql.NullInt64
+		if err := rows.Scan(&kind, &state, &reason, &br, &bg, &sr, &sg, &claim, &end, &outcome, &errorClass, &known, &bytesIn, &bytesOut, &opIn, &opOut, &scope, &barrier); err != nil {
+			t.Error("native phase row invalid")
+			return
+		}
+		t.Logf("native SQL kind=%s state=%s/%s binding=%d/%d current=%d/%d claimMS=%d physicalEndMS=%d audit=%s/%s byte_counts_known=%d numericAuditBytes=%d/%d opCountsValid=%t/%t opBytes=%d/%d scope=%s barrier=%d", kind, state, reason, br, bg, sr, sg, claim, end, outcome, errorClass, known, bytesIn, bytesOut, opIn.Valid, opOut.Valid, opIn.Int64, opOut.Int64, scope, barrier)
+	}
+	if rows.Err() != nil {
+		t.Error("native phase read failed")
+	}
+}
 
 func verifyNativeStreamSQL(ctx context.Context, t nativeFixtureChecks, directory string, capture captureidentity.Reference, reviewed bool) {
 	reader, err := openExchangeAuditReader(ctx, directory)

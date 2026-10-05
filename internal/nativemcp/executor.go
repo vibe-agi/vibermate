@@ -538,11 +538,11 @@ func (e *executor) Serve(ctx context.Context, c CapturedRequest, w http.Response
 	headerTimer.Stop()
 	response, err := send.response, send.err
 	if err != nil {
-		if send.phase == nativeSendFirstClaimUnsent && r.stream == nil && (r.kind == nativetool.RequestGetStream || r.kind == nativetool.RequestToolsCall) {
-			return e.finishKnownUnsent(c.id, s, w, err)
+		if send.phase == nativeSendFirstClaimUnsent && knownUnsentKind(r.kind) {
+			return e.finishKnownUnsent(c.id, s, w, err, r, binding, receipt)
 		}
 		if r.stream != nil {
-			return e.finishRecoveryTransportFailure(c, s, r.stream, receipt)
+			return e.finishRecoveryTransportFailure(c, s, r.stream, receipt, nil)
 		}
 		return e.finishFailure(c.id, s, w, err, true)
 	}

@@ -13,22 +13,26 @@ import (
 var errStreamDetached = errors.New("native stream detached")
 var errStreamDelivery = errors.New("native complete event delivery interrupted")
 
-func (e *executor) finishRecoveryTransportFailure(c CapturedRequest, s *session, stream *streamRecord, receipt nativetool.StartReceipt) Terminal {
+func (e *executor) finishRecoveryTransportFailure(c CapturedRequest, s *session, stream *streamRecord, receipt nativetool.StartReceipt, counts *nativetool.ObservedCounts) Terminal {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	err := e.dependencies.Store.FinishAttempt(ctx, receipt, nativetool.PhysicalFinishInput{Outcome: "failed", Reason: "transport_failed", ObservedAt: e.dependencies.Clock().UTC()})
+	err := e.dependencies.Store.FinishAttempt(ctx, receipt, nativetool.PhysicalFinishInput{Outcome: "failed", Reason: "transport_failed", Counts: counts, ObservedAt: e.dependencies.Clock().UTC()})
 	if err != nil {
 		e.retireStream(s, stream)
 		return Terminal{OperationID: c.id, Outcome: OutcomeUncertain, Reason: ReasonStorageUnavailable}
 	}
+	return e.recoveryFailureTerminal(c.id, s, stream)
+}
+
+func (e *executor) recoveryFailureTerminal(id nativetool.ID, s *session, stream *streamRecord) Terminal {
 	s.mu.Lock()
 	live := !stream.retired && stream.context.Err() == nil && !stream.protocolCanceled
 	s.mu.Unlock()
 	if !live {
 		e.retireStream(s, stream)
-		return Terminal{OperationID: c.id, Outcome: OutcomeUncertain, Reason: ReasonExecutionUncertain}
+		return Terminal{OperationID: id, Outcome: OutcomeUncertain, Reason: ReasonExecutionUncertain}
 	}
-	return Terminal{OperationID: c.id, Outcome: OutcomeFailed, Reason: ReasonStreamDetached}
+	return Terminal{OperationID: id, Outcome: OutcomeFailed, Reason: ReasonStreamDetached}
 }
 
 // A server event ID names one private stream and one immutable ordinal. The

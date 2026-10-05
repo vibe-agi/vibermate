@@ -33,6 +33,7 @@ type session struct {
 	assignment, revision, generation uint64
 	wire, authorization, cookie      string
 	ready, closed                    bool
+	closeFailed                      bool
 	renewalFailed                    bool
 	last, timeLimit                  time.Time
 	active                           map[string]*activeRPC
@@ -101,7 +102,9 @@ func (e *executor) admitSession(ctx context.Context, c CapturedRequest, r rpc, p
 				expired := !existing.timeLimit.After(now) || now.Sub(existing.last) >= e.limits.SessionIdle
 				existing.mu.Unlock()
 				if expired {
-					_ = e.closeSessionLocked(ctx, existing)
+					if err := e.closeSessionLocked(ctx, existing); err != nil {
+						return nil, err
+					}
 				}
 			}
 			if !scope.ExpiresAt.After(now) {
@@ -175,7 +178,9 @@ func (e *executor) admitSession(ctx context.Context, c CapturedRequest, r rpc, p
 		s.mu.Lock()
 		if s.wire == wire && !s.closed && (!s.timeLimit.After(now) || now.Sub(s.last) >= e.limits.SessionIdle) {
 			s.mu.Unlock()
-			_ = e.closeSessionLocked(ctx, s)
+			if err := e.closeSessionLocked(ctx, s); err != nil {
+				return nil, err
+			}
 			return nil, errSession
 		}
 		matches := s.wire == wire && !s.closed && !s.renewalFailed && s.timeLimit.After(now) && now.Sub(s.last) < e.limits.SessionIdle && s.authorization == c.request.Header.Get("Authorization") && s.cookie == c.request.Header.Get("Cookie") && s.assignment == uint64(c.lease.Assignment().Revision) && s.plan.EnvironmentDigest() == plan.EnvironmentDigest() && s.plan.Route() == plan.Route()
@@ -209,10 +214,18 @@ func (e *executor) closeSessionLocked(ctx context.Context, s *session) error {
 	if s.closed {
 		e.clearSession(s)
 		delete(s.owner.sessions, s.id)
+		if s.closeFailed {
+			return nativetool.ErrUnavailable
+		}
 		return nil
 	}
 	revision, err := e.dependencies.Store.CloseSession(ctx, s.id, s.revision, e.dependencies.Clock().UTC())
 	if err != nil {
+		// The transaction may have committed despite its error. Keep this old
+		// handle failed; only existing owner reconciliation may settle SQL.
+		s.closeFailed = true
+		s.owner.revoked = true
+		s.owner.cancel()
 		e.clearSession(s)
 		delete(s.owner.sessions, s.id)
 		return err
@@ -401,6 +414,12 @@ func (e *executor) validateResponseSession(c CapturedRequest, r rpc, s *session,
 	return nil
 }
 func (e *executor) Revoke(ctx context.Context, capture captureidentity.Reference, reason RevocationReason) error {
+	return e.revokeOwner(ctx, capture, nil, reason)
+}
+
+// A failed old request may clean up only its original in-memory owner. A
+// replacement is admitted by real EnsureScope and must not be fenced by it.
+func (e *executor) revokeOwner(ctx context.Context, capture captureidentity.Reference, expected *ownerScope, reason RevocationReason) error {
 	if ctx == nil || capture.Validate() != nil {
 		return nativetool.ErrInvalid
 	}
@@ -411,6 +430,10 @@ func (e *executor) Revoke(ctx context.Context, capture captureidentity.Reference
 	}
 	e.mu.Lock()
 	owner := e.scopes[capture.Key()]
+	if expected != nil && owner != expected {
+		e.mu.Unlock()
+		return nil
+	}
 	for id, preview := range e.previews {
 		if preview.capture == capture {
 			e.discardPreviewLocked(id)
