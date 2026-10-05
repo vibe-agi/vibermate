@@ -1,0 +1,86 @@
+# Native Physical Claim Reclamation Implementation Plan
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development or superpowers:executing-plans. Execute these two units serially, with real behavioral TDD and independent spec/quality review. Do not begin while the quota UI unit is mutable or awaiting review.
+
+**Goal:** Stop completed physical requests from accumulating executor-lifetime send guards and charged memory, while preserving exactly-once send, truthful audit history and every existing logical-stream/callback/recovery obligation.
+
+**Architecture:** A tiny private claim token records physical-terminal proof and local consumer drain. Refund its one reservation only when both are true and the exact token is still registered. Logical operation completion and retained stream caches are independent. Permanently closed-executor disposal remains a separate safety boundary.
+
+**Tech Stack:** Go1.26.8, existing real native Store/receipt/ToolDecision/Offline/executor, SQLite fault seams and shared memoryBudget. No runtime dependency, DDL, public API or new recovery/authority framework.
+
+## Executed evidence and source boundary
+
+Source958779805336835a8589c6d0d4953508b4368fad has independently approved unsent Tasks1/2. Root fully read the53-line audit,147-line real diagnostic,46-line report and final83-line design refinement; inspected current Verify, Serve/Finish, Close/Revoke and stream-retirement source. The only pending native edit is `internal/nativemcp/claim_lifetime_test.go`, SHA256 `baf3a73cc46cb87b57bc93ea00b70eeaecf3876b1cc57676fb86a6b5c9caf905`. Preserve its first failing evidence, not a newly weakened copy. Root provides the exact post-UI committed BASE at dispatch.
+
+First44231 exits1/test0.10s/package0.813s without setup failure or retry. A legal64KiB fixture completes the real handshake:3 claims,4,600 charged bytes,4,216 intentional session retention. Sixteen genuine completed pings add16 claims/2,048 bytes while all active consumers are0 and every request has one real once/known terminal audit/send. Real DELETE leaves no session/catalog/request consumers but20 claims/2,560 bytes; a new session works, and only final Close clears guards. SQL24 once/known terminal audits remain intact. This is completed-history retention, not measured RSS, budget exhaustion or soak.
+
+Current `VerifyStartReceipt` explicitly rejects a terminal physical audit even when the original POST's logical row remains started. Therefore physical-terminal proof plus physical-consumer drain is sufficient for this local send guard. CompleteStreamRPC alone is not. Root rejected a three-bit logical/observation model and extra wire retention because they unnecessarily couple independent lifetimes.
+
+## Global invariants
+
+- One source implementer in the existing isolated production-readiness worktree. UI work completes/reviews first. Original dirty workspace, running App/daemon, real accounts/data/trust and user processes remain untouched.
+- Keep real Start/Verify/current owner/session/catalog/assignment/OFF/route/once/approval checks unchanged. A first local claim is not same-Store authority. No POST retry, receipt reissue or second approval consumption.
+- Map absence after collection means only no retained local guard, never historical never-sent. SAME Serve's NEW successful matching Start is still mandatory for known-zero disposition. A copied old receipt must fail actual Verify before transport and cannot rewrite prior audit/counts.
+- Positive proof comes only from an actual successful operation on this executor's immutable trusted Store at the listed boundary. Metadata, returned Terminal, ErrConflict, default count flags, missing rows, closed/unlinked memory or wrapper no-op nil is insufficient.
+- Preserve128 logical bytes per specified core token; measure separately from allocator/RSS and existing session/stream charges. No payload copy, large-object back-reference, second token cache, age/LRU/capacity eviction or Capture-name map reset.
+- Keep current lock order e.mu→s.mu and e.mu→budget.mu. Apply notes after releasing s.mu. No extra network/Offline serialization, generic retry, claim-driven retirement, nonempty production Recover wrapper or changed public Close error contract.
+
+## Private token and affinity contract
+
+Create `internal/nativemcp/claim.go` and change `claimed` values to private pointers:
+
+```go
+type nativeClaimPhysicalClass uint8 // unbound, owned ordinary, owned observed
+type nativeClaim struct {
+    ownerKey, sessionKey uint64
+    physicalClass nativeClaimPhysicalClass
+    consumerDone, physicalTerminal bool
+}
+type nativeClaimHandle struct { id nativetool.ID; token *nativeClaim }
+const nativeClaimReservationBytes int64 = 128
+func (e *executor) notePhysicalTerminal(nativeClaimHandle)
+func (e *executor) drainClaimConsumer(nativeClaimHandle)
+func (e *executor) collectClaimLocked(nativeClaimHandle)
+```
+
+Owner/session keys are executor-local, monotonic, never reused uint64 cleanup identities, not capabilities or SQL authority. Add keys to existing ownerScope/session, no reverse pointers in token. Zero means unowned. Allocate under e.mu; check capacity before any durable admission mutation, and reject on exhaustion instead of wrapping. If admission needs both new keys, reserve/preflight both. Test the boundary without billions of iterations. On current64-bit targets the token is about24 bytes and core key/value/ID accounting about80 before map allocator overhead; if implementation adds separately owned fields, review/increase the named charge instead of hiding them.
+
+Only Serve's immediate successful matching actual Start may supply nonzero ownership to the newly inserted token. An unproven/borrowed/foreign direct helper call has zero keys/unbound class and cannot enter owner/session closure snapshots. Existing activeRPC/stream/attachment/callback records may retain tiny exact handles for later positive events, without retaining freed wire through the token. Set observed classification before actual observed registration can occur; cover classification promotion racing scope closure. Affinity and classification never authorize transport or logical cleanup.
+
+Add the exact handle to nativeSendResult. Under e.mu an exclusive claim allocates/charges once; refused prior-claim/replay returns no handle to an existing entry. Collection requires `claimed[id] == handle.token`, physicalTerminal and consumerDone. Delete/refund that exact entry once; duplicate notes/drains and old-token events after same-ID reallocation are no-ops. Token pointers supply generation identity and ABA protection.
+
+## Task 1: Ordinary physical completion and actual handler drain
+
+**Files:** `internal/nativemcp/{claim,executor,transport,send_completion,session}.go` and the existing nonobserved whole-Finish branch in `stream.go`; preserve/extend `claim_lifetime_test.go`; adapt direct real-send tests and focused existing module/Store fault tests only as needed. Observed stream-bearing paths may receive a tiny handle without implementing their later receipt-backed proof producers yet.
+
+- [ ] **Retain RED:**44231 is the original failure. Preserve real handshake,16 independent pings, exact per-operation once/audit/send evidence, DELETE with executor open, new session and final Close controls. Do not replace the actual path with manual map insertion or mocked Finish.
+- [ ] **Implement tiny registry/ownership:** Preserve exclusive first-claim/phase checks and128 budget semantics. Bind genuine ownership before Verify/RoundTrip without s.mu→e.mu inversion. Test zero/public/foreign/mismatched/reused receipt and borrowed token exclusions; a token alone cannot acquire known-zero Finish permission.
+- [ ] **Final local drain:** Register one final cleanup closure immediately after CapturedRequest one-shot validation, before existing lease/input/header defers. Assign the normal work-finish callback when beginWork actually succeeds. All response/input bodies, callback/witness/active/attachment cleanup, buffer/header refunds and lease release finish before consumerDone; then call work finish/wg.Done. Zero handles and pre-beginWork failures remain safe. No extra stream-lifetime consumer.
+- [ ] **Ordinary proof producers:** Immediately after nil normal whole Store.Finish, the existing nonobserved stream whole-Finish branch, finishFailure's whole Finish or an actual successful own deferred Finish, note only the corresponding local handle. Ordinary finishKnownUnsent nil also notes its exact handle; retain original same-Start qualification, known0/unknown distinctions and approved provisional/reply cleanup. Typed history/Finish-conflict reread alone never notes proof. Cover initialize, initialized, ping, list, tools_call, server_reply, cancel, DELETE and non-observed fresh GET with actual boundaries; do not apply successful response effects to an unsent request.
+- [ ] **Real fault/drain/replay tests:** Held real body or callback cleanup prevents refund despite SQL terminal proof. Drain before proof remains charged until the later actual event. Whole Finish rollback, commit-then-error and persistent failure grant no note merely from error; preserve historical counts/approval. After successful physical closure and refund, an old receipt still fails actual Verify with no extra send and cannot pass NEW Start or zero-Finish qualification. Race collector/Close, duplicate notes and old-token events after same-ID reallocation; no double refund/negative budget. Preserve all prior unsent and owner-isolation controls.
+- [ ] **GREEN/commit/review:** Original44231 must pass with no growing completed claims and no live claim charge after actual DELETE; SQL24 history stays. Run affected normal packages, targeted race and repository checks. Self-review, commit owned source, drain handles and write exact report/failures/limits. Independent review precedes Task2; do not call only the ordinary path full native reclamation.
+
+## Task 2: Stream, callback and late lifecycle proof integration
+
+**Files:** `internal/nativemcp/{claim,executor,stream,response,native_sensitive_callback,session}.go` and their focused real module/Store fault tests. No new Store method, DDL or broad lifecycle rewrite.
+
+- [ ] **Real streamed REDs:** Hold a genuine original POST/body, test actual physical-only detach with logical row still started, logical-terminal-before-physical, a genuine recovery GET, and approved/denied/failed callback replies. Establish missing refund or premature release through actual receipts/audits/transport, not direct flags. Keep original stream/cursor/approval evidence separately observable.
+- [ ] **Exact physical producers:** Nil FinishObservedRPC or nonobserved whole Finish proves the original audit terminal. Nil FinishAttempt in normal stream completion, recovery transport failure or qualified recovery-unsent closure proves ONLY that receipt's physical attempt. Original POST may refund after its handler drains while logical stream remains live. CompleteStreamRPC alone never notes physical proof. Unknown byte counts may be terminal but never become known0 because a guard was refunded.
+- [ ] **Existing receipt-backed retirement:** At actual nil RetireObservedStream, note the known registered original and only exact child handles whose physical cleanup was included. At actual nil RetireObservedCallback, note its exact receipt-bearing child. Preserve tiny references at existing owned handle locations while applicable; do not clone Store's I3 registry or infer children by Capture. Foreign/missing/early-no-op handles do not prove cleanup. Do not add automatic retirement merely for refunds; callback/URL/cursor/wire/Store I3 lifetimes and existing failure behavior stay independent.
+- [ ] **Late ordinary proof is reachable:** Before ACTUAL Store.CloseSession or Store.Revoke, snapshot exact token pointers in the existing sole registry using admitted sessionKey/expected-ownerKey and eligible ordinary class. This includes drained/unlinked attempts. Actual nil transaction may note the included ordinary physical closures; observed logical-terminal/open-audit cases need their own receipt boundary. Recheck token identity/class safely when applying notes. Existing expected-owner pointer/SQL epoch guards precede the actual call; wrapper early nil, already revoked/closed, wrong epoch, s.closed, closeFailed or unlink supplies no new proof.
+- [ ] **Real late-proof positive/negative tests:** Fail actual ordinary Finish and Revoke persistently, let handler/session maps drain, observe charged token, disarm fault, then make the SAME owner's later real Store.Revoke transaction succeed; it must locate/refund exactly that old token without harming a valid other owner. Contrast commit-then-error followed only by metadata/no-op nil, replacement owner and foreign/unbound token: no invented physical note or new-owner collection. Preserve the approved closeFailed and expected-owner behavior; no stale-revision retry.
+- [ ] **I3/recovery/Close controls:** Keep existing rollback/commit-then-error/persistent physical FinishAttempt/retirement faults in both original-child orders. Refund only after an observed real physical closing event and consumer drain; unresolved local proof may remain charged until a real event or closed disposal, never masked as SQL success. Permanently e.closed plus actual consumer/wg drain retains the existing LOCAL disposal safety reason, including unproven guards; return original Revoke/cleanup errors. A timed-out Close does not discard live guards. Fresh Store Recover settles/invalidates durable history and new executor starts empty; no nonempty production recovery API. Old receipts/counts/once/approval remain unchanged by local disposal.
+- [ ] **Full scoped verification/review:** Repeat real terminal→drain and drain→terminal ordering, held attachment, scope-classification/close race, nonce exhaustion, collector/Close and ABA, independent callbacks and terminal replay, current authority, approval-history and unsent controls. Run affected normal/race/repository suites, commit/self-review and build the existing tagged18-case145/159.2/160 diagnostic from an independent clean real-.git checkout of that exact source. Verify client/artifact identity and all first outcomes with existing containment; no public fallback or retry-until-green. Retain older full46 reports unchanged: their old-source passes are not proof for this new source, and these18 diagnostics cannot promote matrix rows. The complete final-source46 gate remains open. Drained handles and final report precede independent full-unit review. Only after BOTH units pass return to continuation/all46/production-classification/CA/soak/final-source/release.
+
+## Verification commands and handoff
+
+```sh
+env DEVELOPER_DIR=/Library/Developer/CommandLineTools GOFLAGS=-mod=readonly go test -count=1 ./internal/nativemcp ./internal/runtimepersistence ./internal/loopbackproxy ./internal/productruntime ./internal/desktopcontrol
+env DEVELOPER_DIR=/Library/Developer/CommandLineTools GOFLAGS=-mod=readonly go run ./cmd/repositorycheck
+env DEVELOPER_DIR=/Library/Developer/CommandLineTools GOFLAGS=-mod=readonly go test -count=1 ./internal/repositorycheck
+git diff --check
+```
+
+Use separate named RED/GREEN and targeted race commands; record first failures, exact source and all terminal handles. Zero-selected/skipped tests are not passes. Update the private native-resource/soak observations to distinguish physical guard charges, logical stream work, intentional caches and durable replay history. The16-request test is not the60-minute soak. All46, real model cancellation, production tool classification, native CA,10-day/hidden-window behavior, recording-timeout diagnosis, final-source/security/signing/notarization/install/GitHub/Homebrew remain required.
+
+Self-review: physical audit rejection directly supports refund safety; generation tokens and actual consumer drain prevent ABA/early refund; tiny fixed ownership preserves late proof after maps unlink without pinning large objects; errors/no-op history never invent proof; local closed disposal is not durable success; no new wire/authority/retry/cache semantics; all supported lifecycles and downstream gates retained.
