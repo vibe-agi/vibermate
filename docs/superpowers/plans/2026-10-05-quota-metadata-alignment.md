@@ -4,7 +4,7 @@
 
 **Goal:** Make the credits value and reset-voucher action visually line up when they share a row, while retaining natural wrapping, readable text and the existing action behavior.
 
-**Architecture:** Keep the actual ProviderAccountsView and AccountFactsPanel. After a real-widget regression establishes the unequal-height cross-axis defect, center the children of their two existing metadata Wraps. No new layout component, offsets, fixed-height row or account behavior.
+**Architecture:** Keep the actual ProviderAccountsView and AccountFactsPanel. After a real-widget regression establishes the unequal-height cross-axis defect, center the children of their two existing metadata Wraps. The subsequently proved narrow-screen overflow below permits only two adjacent local responsive corrections. No new layout component, offsets, fixed-height row or account behavior.
 
 **Tech Stack:** Existing pinned Flutter 3.41.5/revision2c9eb20739dfec95e2c74bd3dfa4601b0a8a36aa and repository widget-test helpers; no dependency or toolchain upgrade.
 
@@ -12,7 +12,7 @@
 
 ## Task 1: Reproduce, align and verify the actual widgets
 
-**Files:** `ui/flutter_app/lib/features/workbench/provider_accounts_view.dart`; `provider_account_facts.dart` in that same directory; `ui/flutter_app/test/provider_accounts_view_test.dart`; `account_facts_test.dart` or a focused adjacent alignment test file using their real helpers.
+**Files:** `ui/flutter_app/lib/features/workbench/provider_accounts_view.dart`; `provider_account_facts.dart` and the local automatic-refresh status Row in `provider_account_editor.dart` in that same directory; `ui/flutter_app/test/provider_accounts_view_test.dart`; `account_facts_test.dart` or a focused adjacent alignment test file using their real helpers.
 
 - [ ] **Real-widget RED:** Build the real public ProviderAccountsView with WorkbenchController, ordinary controlled AccountFacts and the existing preview inventory fixture. Do not duplicate a Wrap in the test, subclass the final preview API, or add a product test hook. Populate quota through the actual controller method. At1180x900, scale1, Chinese copy and dark theme, use one fixed synthetic7-day window, credits62500.00 and available/applicable voucher count2. Scope finders to the account's quota summary; measure the actual credit Text/count Text and icons. Require same horizontal run, absolute centerY difference at most0.5 logical pixels, and no framework overflow. Record actual rectangles for the first failure. Add the corresponding real detail-panel geometry case using its existing fixture/API/pump helpers. If no intended failure occurs, inspect resolved child/run/button geometry before proposing any layout change; do not weaken the assertion to obtain a RED.
 - [ ] **Minimal GREEN:** Only after the intended failure, add `crossAxisAlignment: WrapCrossAlignment.center` to the summary metadata Wrap currently aroundprovider_accounts_view.dart856 and the detail metadata Wrap aroundprovider_account_facts.dart446. Resolve by structure rather than blindly trusting old line numbers. Preserve spacing, wrapping, fonts, minimum hit area, semantics, focus/hover and voucher confirmation behavior. Rerun the exact failing tests first.
@@ -22,8 +22,14 @@
 
 ## Sequencing and safety
 
+### Actual responsive failure88295: limited additional correction
+
+First48904 real same-run geometry RED measured summary6.5px/detail6.0px center differences. Two metadata-center edits make87125 GREEN (summary values/icons0px, detail values0px). The unchanged responsive matrix88295 passes11/12 but its390px/English/scale2 summary case reports header action Row overflow756px and account automatic-refresh label/switch Row overflow53px; metadata centers remain0px. Root inspected both Row sites and shared PageHeading. The second source location is the automatic-refresh control, not a service-link Row; final reporting must use the verified control identity.
+
+Do not remove that combination, suppress its exceptions, replace it with easier language/width cases or park it as a passing out-of-scope result. Before local changes, record actual finite/max-width constraints and button/label/switch rectangles. Permit a natural wrapping header action layout preserving the existing narrow icon variant, and a bounded wrapping refresh label (for example Flexible with loose fit) preserving the table-only centered switch. Keep keys, callbacks, tooltips/semantics, focus/keyboard operation, font/text scale and hit areas. Do not modify shared PageHeading/global design primitives or hide controls; return with concrete geometry evidence if broader sizing is required. The exact88295 case must turn GREEN, followed by all12 configurations and affected refresh/add/editor/switch/voucher interaction controls. This does not alter recording diagnostics or native behavior.
+
 The tests-only native claim diagnostic is complete (44231 real RED). Its reclamation design is being evaluated read-only, so this independent UI unit may execute now using the same isolated production-readiness worktree and sole source implementer. Protect the existing untracked `internal/nativemcp/claim_lifetime_test.go` byte-for-byte; do not stage, remove, format or run it in this UI unit. Root provides the exact committed BASE at dispatch. The UI report/review must explicitly acknowledge that protected pending diagnostic rather than falsely claiming empty porcelain. Commit/review only this unit's UI files and root-owned documentation; native implementation resumes after this UI handoff. All data is synthetic, no live App/daemon/account/database access, no restart, no CA/trust change and no original dirty-tree edit.
 
 The complete design context is retained in `.superpowers/sdd/2026-10-03-production-readiness/quota-alignment-fix-design-draft.md`, but this tracked plan contains the required execution steps and does not depend on scratch files in a release environment. Recording diagnostics, native continuation/all46, CA/native OS, soak, final-source/security/signing/notarization/install/GitHub/Homebrew gates remain separately required.
 
-Self-review: test the actual user-visible components and data transitions; fix only the proved cross-axis relationship; distinguish wrapped runs from same-run alignment; preserve interaction/accessibility and unknown historical trigger; no public API, runtime dependency or unrelated recording-state change.
+Self-review: test the actual user-visible components and data transitions; fix only the proved cross-axis relationship and two measured adjacent overflow sites; distinguish wrapped runs from same-run alignment; preserve interaction/accessibility and unknown historical trigger; no public API, runtime dependency or unrelated recording-state change.
