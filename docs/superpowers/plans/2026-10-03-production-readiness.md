@@ -115,7 +115,7 @@ DEVELOPER_DIR=/Library/Developer/CommandLineTools go run golang.org/x/vuln/cmd/g
 - [ ] 用可控 clock 验证 10 天 Session 边界、隐藏/唤醒后的续期、401 重新授权重试；用已拥有的故障 seam 验证磁盘不足、write/rename/sync 失败、进程异常退出、备份恢复。源码与适用平台不同的结果不能相互替代。
 - [ ] 保存测试时长、数据量、p50/p95、预算与未覆盖项。实际 60 分钟 soak 与时钟推进 10 天是不同证据，报告按实际内容标注。
 - [ ] 若出现新破坏，回到对应任务 root-cause/TDD/review 环，不跳过门槛。
-- [ ] 用户确认的全局默认网络出口按 `2026-10-05-global-default-egress.md` 六项串行计划推进（设计已书面批准）：账号显式选择 > 所属流量策略显式选择 > 全局默认 > 内置直连；显式直连覆盖，代理失败不换路，不改在途请求。Task1默认持久化/严格Choice/选择器/owner-control于511079f实现，独立复核发现并经dd7ea8b修正Runtime Server接线；真实Server503 RED→GREEN、正常/定向五轮race及独立定点复审通过，桌面/Server两入口均有证据。Task2账号/OAuth及公共元数据接入待按计划执行，后续策略/原生工具、盲转发/probe、闭集更新查询和UI仍未实现，不宣称全局出站已启用。保留旧Direct字节/摘要、本地控制和原权限；逐入口真实SOCKS/TLS/DoH、失败不直连、默认切换不影响在途、安全升级/恢复及中英UI均须验证。Global实施先于continuation，后者消费实际冻结出口；最终同源完整客户端/soak/安装/发布加入默认与显式覆盖场景。不能仅增加默认标记或账号读取就宣称全局完成，整个工作树始终只有一个源码实现者。
+- [ ] 用户确认的全局默认网络出口按 `2026-10-05-global-default-egress.md` 六项串行计划推进（设计已书面批准）：账号显式选择 > 所属流量策略显式选择 > 全局默认 > 内置直连；显式直连覆盖，代理失败不换路，不改在途请求。Task1默认持久化/严格Choice/选择器/owner-control于511079f实现，独立复核发现并经dd7ea8b修正Runtime Server接线；真实Server503 RED→GREEN、正常/定向五轮race及独立定点复审通过，桌面/Server两入口均有证据。Task2账号/OAuth及公共元数据接入于d3b8152实现，独立复核的本地提供者兼容I1经580e0de修正并通过spec/security及quality定点复审；当前源码9包normal、20组五轮race、迁移/备份故障和仓库检查通过。本地直连事实只由实际已验证目标类型产生，不能借用于HTTPS，不作为代理失败后的换路。后续Task3策略/原生工具、Task4盲转发/probe、Task5闭集更新查询和Task6 UI/完整入口验收仍未完成，不宣称全局出站已全部接入。保留旧Direct字节/摘要、本地控制和原权限；逐入口真实SOCKS/TLS/DoH、失败不直连、默认切换不影响在途、安全升级/恢复及中英UI均须验证。Global实施先于continuation，后者消费实际冻结出口；最终同源完整客户端/soak/安装/发布加入默认与显式覆盖场景。不能仅增加默认标记或账号读取就宣称全局完成，整个工作树始终只有一个源码实现者。
 
 ## Task 10: 整体审查与修复版交付
 
