@@ -63,12 +63,12 @@ CREATE TABLE runtime_egress_attempts_v2(
   proxy_id TEXT NOT NULL
   CHECK(length(CAST(proxy_id AS BLOB)) BETWEEN 1 AND 512),
   proxy_revision INTEGER NOT NULL CHECK(proxy_revision >= 0),
-  selection_source TEXT NOT NULL DEFAULT '' CHECK(selection_source IN('', 'account', 'flow', 'global', 'builtin')),
+  selection_source TEXT NOT NULL DEFAULT '' CHECK(selection_source IN('', 'account', 'flow', 'global', 'builtin', 'transport')),
   default_revision INTEGER NOT NULL DEFAULT 0 CHECK(default_revision >= 0)
-  CHECK((selection_source IN('', 'account', 'flow') AND default_revision = 0) OR
+  CHECK((selection_source IN('', 'account', 'flow', 'transport') AND default_revision = 0) OR
         (selection_source IN('global', 'builtin') AND default_revision > 0))
   CHECK(selection_source = '' OR proxy_revision > 0)
-  CHECK(selection_source <> 'builtin' OR (proxy_id = 'profile.direct' AND proxy_revision = 1)),
+  CHECK(selection_source NOT IN('builtin', 'transport') OR (proxy_id = 'profile.direct' AND proxy_revision = 1)),
   account_id TEXT NOT NULL CHECK(length(CAST(account_id AS BLOB)) <= 512),
   account_settings_revision INTEGER NOT NULL CHECK(account_settings_revision >= 0)
   CHECK((account_id = '' AND account_settings_revision = 0) OR

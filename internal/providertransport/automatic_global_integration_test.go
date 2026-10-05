@@ -21,9 +21,77 @@ import (
 	"github.com/vibe-agi/vibermate/internal/providerauth"
 	"github.com/vibe-agi/vibermate/internal/providertransport"
 	"github.com/vibe-agi/vibermate/internal/responseschat"
+	"github.com/vibe-agi/vibermate/internal/transportprofile"
 	"github.com/vibe-agi/vibermate/internal/upstreamendpoint"
 	"github.com/vibe-agi/vibermate/internal/wireprofile"
 )
+
+func syntheticManagedModelRequest(t *testing.T, accounts *provideraccount.Manager, endpoints *upstreamendpoint.Manager, endpoint upstreamendpoint.Endpoint, view provideraccount.View, flow egressprofile.ProfileRevision, hello transportprofile.Observation) exchange.ClientRequest {
+	t.Helper()
+	origin, err := originidentity.ParseClientOrigin("https://chatgpt.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ops, err := operationcatalog.BuiltIn()
+	if err != nil {
+		t.Fatal(err)
+	}
+	pair, err := protocolspec.NewCodecPairID(responseschat.ResponsesPassthroughCodecPairID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	protocols, err := protocolspec.NewCatalog(ops.Definitions(), []protocolspec.CodecPairDefinition{{ID: pair, Revision: responseschat.ResponsesPassthroughCodecRevision, ClientDialect: protocolspec.DialectOpenAIResponses, ProviderDialect: protocolspec.DialectOpenAIResponses, ClientOperationIDs: ops.SemanticOperationIDs(protocolspec.DialectOpenAIResponses), RequiredCapabilities: []protocolspec.ProviderCapability{protocolspec.ProviderCapabilityMessages, protocolspec.ProviderCapabilityStreaming, protocolspec.ProviderCapabilityToolCalls}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wires, err := wireprofile.BuiltInCatalog()
+	if err != nil {
+		t.Fatal(err)
+	}
+	compiler, err := environment.NewCompiler(accounts, endpoints, protocols, wires)
+	if err != nil {
+		t.Fatal(err)
+	}
+	route := environment.UpstreamRoute{
+		ID: "route.synthetic", Revision: 1,
+		ProviderTarget:  environment.ProviderTarget{ID: endpoint.ID.String(), Revision: environment.Revision(endpoint.Revision), Origin: endpoint.Origin, RealmID: endpoint.RealmID, Capabilities: endpoint.Capabilities},
+		BackendProtocol: string(environment.ClientProtocolOpenAIResponses),
+		AccountPolicy:   environment.RouteAccountPolicy{Revision: 1, Mode: environment.AccountSelectionFixed, FixedAccountID: view.Account.ID.String(), Accounts: []environment.RouteAccountReference{{ID: view.Account.ID.String(), Revision: environment.Revision(view.Account.Revision), DisplayName: view.Account.DisplayName}}},
+		ModelPolicy:     environment.ModelPolicy{Revision: 1, Mode: environment.ModelModePassthrough},
+		WireProfileRef:  wireprofile.UpstreamWireProfileFollowClientValue,
+	}
+	aggregate := environment.Environment{
+		ID: "env.synthetic", Name: "Synthetic", State: environment.StateActive, Revision: 1,
+		ContentRecording: environment.DefaultContentRecordingPolicy(),
+		ClientEndpoints: []environment.ClientEndpoint{{ID: "endpoint.synthetic", Revision: 1, ClientOrigin: origin,
+			ProtocolPlans: []environment.ClientProtocolPlan{{
+				ID: "protocol.synthetic", Revision: 1, ClientProtocol: environment.ClientProtocolOpenAIResponses,
+				ClientAdapterPolicy: environment.ClientAdapterPolicy{ID: "adapter.synthetic", Revision: 1}, EgressProfile: flow,
+				Destination: environment.DestinationPlan{Kind: environment.DestinationKindUpstream, Upstream: &environment.UpstreamPlan{
+					DefaultRouteID: route.ID, RouteSet: environment.RouteSet{ID: "routes.synthetic", Revision: 1, CandidateRouteIDs: []environment.UpstreamRouteID{route.ID}}, Routes: []environment.UpstreamRoute{route},
+				}},
+			}},
+		}},
+	}
+	snapshot, err := compiler.Compile(aggregate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := snapshot.ResolveRequest(origin, environment.RequestFacts{Target: protocolspec.RequestTarget{Method: http.MethodPost, Path: "/backend-api/codex/responses", Transport: protocolspec.ClientOperationTransportHTTP}, DownstreamProtocol: wireprofile.ApplicationProtocolHTTP1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	operation := plan.Operation()
+	evidence, err := exchange.NewClientOperationEvidence(operation.ID(), operation.Revision(), http.MethodPost, operation.PathPattern(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, err := exchange.NewClientRequest("exchange.synthetic", plan, evidence, []byte(`{"model":"synthetic","input":"synthetic request","stream":false}`), exchange.ReplayGenerationCostOnly, wireprofile.ApplicationProtocolHTTP1, exchange.WithClientHelloObservation(hello))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return request
+}
 
 func TestAutomaticRefreshAndModelKeepExactExplicitSelection(t *testing.T) {
 	for _, choice := range []string{"account_over_flow_direct", "flow"} {
@@ -113,68 +181,7 @@ func runAutomaticModelWorkflow(t *testing.T, w *providertransport.AccountEgressW
 	if err != nil {
 		t.Fatal(err)
 	}
-	origin, err := originidentity.ParseClientOrigin("https://chatgpt.com")
-	if err != nil {
-		t.Fatal(err)
-	}
-	ops, err := operationcatalog.BuiltIn()
-	if err != nil {
-		t.Fatal(err)
-	}
-	pair, err := protocolspec.NewCodecPairID(responseschat.ResponsesPassthroughCodecPairID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	protocols, err := protocolspec.NewCatalog(ops.Definitions(), []protocolspec.CodecPairDefinition{{ID: pair, Revision: responseschat.ResponsesPassthroughCodecRevision, ClientDialect: protocolspec.DialectOpenAIResponses, ProviderDialect: protocolspec.DialectOpenAIResponses, ClientOperationIDs: ops.SemanticOperationIDs(protocolspec.DialectOpenAIResponses), RequiredCapabilities: []protocolspec.ProviderCapability{protocolspec.ProviderCapabilityMessages, protocolspec.ProviderCapabilityStreaming, protocolspec.ProviderCapabilityToolCalls}}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	wires, err := wireprofile.BuiltInCatalog()
-	if err != nil {
-		t.Fatal(err)
-	}
-	compiler, err := environment.NewCompiler(accounts, endpoints, protocols, wires)
-	if err != nil {
-		t.Fatal(err)
-	}
-	route := environment.UpstreamRoute{
-		ID: "route.synthetic", Revision: 1,
-		ProviderTarget:  environment.ProviderTarget{ID: endpoint.ID.String(), Revision: environment.Revision(endpoint.Revision), Origin: endpoint.Origin, RealmID: endpoint.RealmID, Capabilities: endpoint.Capabilities},
-		BackendProtocol: string(environment.ClientProtocolOpenAIResponses),
-		AccountPolicy:   environment.RouteAccountPolicy{Revision: 1, Mode: environment.AccountSelectionFixed, FixedAccountID: view.Account.ID.String(), Accounts: []environment.RouteAccountReference{{ID: view.Account.ID.String(), Revision: environment.Revision(view.Account.Revision), DisplayName: view.Account.DisplayName}}},
-		ModelPolicy:     environment.ModelPolicy{Revision: 1, Mode: environment.ModelModePassthrough},
-		WireProfileRef:  wireprofile.UpstreamWireProfileFollowClientValue,
-	}
-	aggregate := environment.Environment{
-		ID: "env.synthetic", Name: "Synthetic", State: environment.StateActive, Revision: 1,
-		ContentRecording: environment.DefaultContentRecordingPolicy(),
-		ClientEndpoints: []environment.ClientEndpoint{{ID: "endpoint.synthetic", Revision: 1, ClientOrigin: origin,
-			ProtocolPlans: []environment.ClientProtocolPlan{{
-				ID: "protocol.synthetic", Revision: 1, ClientProtocol: environment.ClientProtocolOpenAIResponses,
-				ClientAdapterPolicy: environment.ClientAdapterPolicy{ID: "adapter.synthetic", Revision: 1}, EgressProfile: flow,
-				Destination: environment.DestinationPlan{Kind: environment.DestinationKindUpstream, Upstream: &environment.UpstreamPlan{
-					DefaultRouteID: route.ID, RouteSet: environment.RouteSet{ID: "routes.synthetic", Revision: 1, CandidateRouteIDs: []environment.UpstreamRouteID{route.ID}}, Routes: []environment.UpstreamRoute{route},
-				}},
-			}},
-		}},
-	}
-	snapshot, err := compiler.Compile(aggregate)
-	if err != nil {
-		t.Fatal(err)
-	}
-	plan, err := snapshot.ResolveRequest(origin, environment.RequestFacts{Target: protocolspec.RequestTarget{Method: http.MethodPost, Path: "/backend-api/codex/responses", Transport: protocolspec.ClientOperationTransportHTTP}, DownstreamProtocol: wireprofile.ApplicationProtocolHTTP1})
-	if err != nil {
-		t.Fatal(err)
-	}
-	operation := plan.Operation()
-	evidence, err := exchange.NewClientOperationEvidence(operation.ID(), operation.Revision(), http.MethodPost, operation.PathPattern(), "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	request, err := exchange.NewClientRequest("exchange.synthetic", plan, evidence, []byte(`{"model":"synthetic","input":"synthetic request","stream":false}`), exchange.ReplayGenerationCostOnly, wireprofile.ApplicationProtocolHTTP1, exchange.WithClientHelloObservation(w.ClientHello))
-	if err != nil {
-		t.Fatal(err)
-	}
+	request := syntheticManagedModelRequest(t, accounts, endpoints, endpoint, view, flow, w.ClientHello)
 	path, err := responseschat.NewResponsesPassthroughProtocolPath(openairesponses.DefaultOptions())
 	if err != nil {
 		t.Fatal(err)

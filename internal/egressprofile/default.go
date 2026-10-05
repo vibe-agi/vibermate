@@ -8,10 +8,11 @@ import (
 type SelectionSource string
 
 const (
-	SelectionAccount SelectionSource = "account"
-	SelectionFlow    SelectionSource = "flow"
-	SelectionGlobal  SelectionSource = "global"
-	SelectionBuiltin SelectionSource = "builtin"
+	SelectionAccount   SelectionSource = "account"
+	SelectionFlow      SelectionSource = "flow"
+	SelectionGlobal    SelectionSource = "global"
+	SelectionBuiltin   SelectionSource = "builtin"
+	SelectionTransport SelectionSource = "transport"
 )
 
 type Resolved struct {
@@ -35,6 +36,10 @@ func (r Resolved) Validate() error {
 		}
 	case SelectionBuiltin:
 		if r.defaultRevision > 0 && r.defaultRevision <= uint64(MaxRevision) && r.profile.Equal(Direct()) {
+			return nil
+		}
+	case SelectionTransport:
+		if r.defaultRevision == 0 && r.profile.Equal(Direct()) {
 			return nil
 		}
 	}

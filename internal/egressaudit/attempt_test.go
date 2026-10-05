@@ -127,6 +127,39 @@ func TestTypedSelectionEvidenceAndLegacyViewAreClosed(t *testing.T) {
 	}
 }
 
+func TestTransportAuditRequiresActualDirectOnlyOrigin(t *testing.T) {
+	for _, test := range []struct {
+		origin string
+		good   bool
+	}{
+		{"http://127.0.0.1:1234/v1", true}, {"http://[::1]:1234", true}, {"http://192.168.1.2:1234/v1", true}, {"http://100.64.0.1:1234", true}, {"http://local.fixture:1234", true},
+		{"https://127.0.0.1:1234", false}, {"https://provider.example", false}, {"http://203.0.113.2:1234", false}, {"http://user:password@127.0.0.1", false}, {"http://127.0.0.1/?query=1", false},
+	} {
+		t.Run(test.origin, func(t *testing.T) {
+			input := baseInput()
+			input.TargetOrigin = test.origin
+			input.Decision.SelectionSource = egressprofile.SelectionTransport
+			input.Decision.ProxyID = "profile.direct"
+			input.Decision.ProxyRevision = 1
+			_, err := egressaudit.New(input)
+			if (err == nil) != test.good {
+				t.Fatalf("direct-only target validation=%v want valid=%t", err, test.good)
+			}
+			if test.good {
+				input.Decision.DefaultRevision = 1
+				if _, err := egressaudit.New(input); err == nil {
+					t.Fatal("transport audit invented default revision")
+				}
+			}
+		})
+	}
+	input := baseInput()
+	input.TargetOrigin = "https://legacy.example/path?historic=1"
+	if _, err := egressaudit.New(input); err != nil {
+		t.Fatal("new target parser retroactively changed unknown-source history", err)
+	}
+}
+
 func TestAccountSettingsEvidenceIsCompleteAndFrozen(t *testing.T) {
 	input := baseInput()
 	input.Decision.AccountID = "account.work"

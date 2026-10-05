@@ -62,3 +62,24 @@ func TestResolvedRejectsSourceRevisionAndBuiltinMismatch(t *testing.T) {
 		}
 	}
 }
+
+func TestTransportSelectionRequiresExactDirectWithoutDefaultRevision(t *testing.T) {
+	if r, err := RestoreResolved(Direct(), SelectionTransport, 0); err != nil || r.Validate() != nil {
+		t.Fatal("valid direct-only fact rejected", err)
+	}
+	for _, mutate := range []func(*ProfileRevision){func(p *ProfileRevision) { p.ID = "named.direct" }, func(p *ProfileRevision) { p.DisplayName = "renamed" }, func(p *ProfileRevision) { p.Revision++ }} {
+		p := Direct()
+		mutate(&p)
+		if _, err := RestoreResolved(p, SelectionTransport, 0); err == nil {
+			t.Fatal("transport fact accepted nonexact Direct")
+		}
+	}
+	for _, revision := range []uint64{1, 1 << 63} {
+		if _, err := RestoreResolved(Direct(), SelectionTransport, revision); err == nil {
+			t.Fatal("transport fact invented default revision")
+		}
+	}
+	if _, err := RestoreResolved(Direct(), SelectionBuiltin, 0); err == nil {
+		t.Fatal("transport exemption weakened builtin-positive invariant")
+	}
+}

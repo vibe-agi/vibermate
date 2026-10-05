@@ -41,6 +41,20 @@ func TestBackupRestoresExactGlobalDefaultRevision(t *testing.T) {
 	if _, err = store.EgressAttemptRepository().Complete(ctx, terminal); err != nil {
 		t.Fatal(err)
 	}
+	local, err := egressaudit.New(egressaudit.NewInput{ID: "transport-backup", Purpose: egressaudit.PurposeUpstreamModelDiscovery, PayloadClass: egressaudit.PayloadRuntime, Parent: egressaudit.ParentRef{Kind: egressaudit.ParentRuntimeAction, ID: "local-parent"}, Caller: egressaudit.CallerCore, TargetOrigin: "http://local.fixture:11434/v1", Decision: egressaudit.DecisionRef{PolicyID: "account.local", PolicyRevision: 1, Authority: egressaudit.AuthorityRuntime, RuleID: "account.egress", ProxyID: "profile.direct", ProxyRevision: 1, SelectionSource: egressprofile.SelectionTransport, AccountID: "local-account", AccountSettingsRevision: 1}, StartedAt: now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = store.EgressAttemptRepository().Append(ctx, local); err != nil {
+		t.Fatal(err)
+	}
+	localTerminal, err := local.Finish(egressaudit.TerminalInput{Outcome: egressaudit.OutcomeCompleted, BytesIn: 17, BytesOut: 19, CompletedAt: now.Add(time.Millisecond)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = store.EgressAttemptRepository().Complete(ctx, localTerminal); err != nil {
+		t.Fatal(err)
+	}
 	if err = store.Shutdown(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -60,7 +74,14 @@ func TestBackupRestoresExactGlobalDefaultRevision(t *testing.T) {
 		t.Fatalf("restored default %+v %v", setting, err)
 	}
 	page, err := store.EgressAttemptRepository().List(ctx, egressaudit.PageRequest{Limit: 20})
-	if err != nil || len(page.Items) != 1 || page.Items[0].Attempt != terminal {
+	if err != nil || len(page.Items) != 2 {
 		t.Fatal("actual backup/restore lost typed frozen selection or terminal history", err)
+	}
+	seen := make(map[string]egressaudit.Attempt)
+	for _, item := range page.Items {
+		seen[item.Attempt.ID()] = item.Attempt
+	}
+	if seen[terminal.ID()] != terminal || seen[localTerminal.ID()] != localTerminal {
+		t.Fatal("actual backup/restore changed global/transport target, source, bytes or terminal")
 	}
 }

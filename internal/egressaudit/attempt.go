@@ -16,6 +16,7 @@ import (
 
 	"github.com/vibe-agi/vibermate/internal/egressprofile"
 	"github.com/vibe-agi/vibermate/internal/environment"
+	"github.com/vibe-agi/vibermate/internal/originidentity"
 )
 
 // RecoveryErrorClass marks an attempt whose process disappeared before it
@@ -289,6 +290,12 @@ func New(input NewInput) (Attempt, error) {
 	if err := validateDecision(input.Decision); err != nil {
 		return Attempt{}, err
 	}
+	if input.Decision.SelectionSource == egressprofile.SelectionTransport {
+		origin, err := originidentity.ParseProviderOrigin(input.TargetOrigin)
+		if err != nil || (origin.Transport() != originidentity.ProviderTransportLoopbackCleartext && origin.Transport() != originidentity.ProviderTransportPrivateCleartext) {
+			return Attempt{}, errors.New("transport selection requires a direct-only provider origin")
+		}
+	}
 	if input.TargetOrigin == "" ||
 		!strings.HasPrefix(input.TargetOrigin, "https://") &&
 			!strings.HasPrefix(input.TargetOrigin, "http://") {
@@ -539,7 +546,7 @@ func validateDecision(decision DecisionRef) error {
 		return errors.New("egress default revision is invalid")
 	}
 	switch decision.SelectionSource {
-	case "", egressprofile.SelectionAccount, egressprofile.SelectionFlow:
+	case "", egressprofile.SelectionAccount, egressprofile.SelectionFlow, egressprofile.SelectionTransport:
 		if decision.DefaultRevision != 0 {
 			return errors.New("explicit or legacy egress cannot claim a default revision")
 		}
@@ -553,7 +560,7 @@ func validateDecision(decision DecisionRef) error {
 	if decision.SelectionSource != "" && decision.ProxyRevision == 0 {
 		return errors.New("effective egress profile revision is required")
 	}
-	if decision.SelectionSource == egressprofile.SelectionBuiltin && (decision.ProxyID != egressprofile.DirectID.String() || decision.ProxyRevision != 1) {
+	if (decision.SelectionSource == egressprofile.SelectionBuiltin || decision.SelectionSource == egressprofile.SelectionTransport) && (decision.ProxyID != egressprofile.DirectID.String() || decision.ProxyRevision != 1) {
 		return errors.New("builtin egress must be exact direct")
 	}
 	if err := validateIdentity(

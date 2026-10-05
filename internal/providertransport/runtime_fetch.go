@@ -237,7 +237,7 @@ func (client *Client) fetchRuntimeJSON(
 			return nil, err
 		}
 	}
-	if err := spec.resolved.Validate(); err != nil {
+	if err := validateResolvedTarget(spec.resolved, spec.target); err != nil {
 		return nil, err
 	}
 	if spec.method == "" {

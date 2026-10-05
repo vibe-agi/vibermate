@@ -3,7 +3,9 @@ package provideraccount
 import (
 	"context"
 
+	"github.com/vibe-agi/vibermate/internal/egressnetwork"
 	"github.com/vibe-agi/vibermate/internal/egressprofile"
+	"github.com/vibe-agi/vibermate/internal/originidentity"
 	"github.com/vibe-agi/vibermate/internal/providerauth"
 )
 
@@ -45,20 +47,63 @@ func (manager *Manager) BindEgressDefaults(defaults egressprofile.Resolver) erro
 	return nil
 }
 
-func (manager *Manager) resolveEgress(ctx context.Context, account Account, flow egressprofile.ProfileRevision) (egressprofile.Resolved, error) {
+func accountEgressChoices(account Account, flow egressprofile.ProfileRevision) (egressprofile.Choice, egressprofile.Choice, error) {
 	accountChoice, flowChoice := egressprofile.Inherit(), egressprofile.Inherit()
 	var err error
 	if account.EgressProfile != (egressprofile.ProfileRevision{}) {
 		accountChoice, err = egressprofile.Explicit(account.EgressProfile)
 		if err != nil {
-			return egressprofile.Resolved{}, err
+			return egressprofile.Choice{}, egressprofile.Choice{}, err
 		}
 	}
 	if flow != (egressprofile.ProfileRevision{}) {
 		flowChoice, err = egressprofile.Explicit(flow)
 		if err != nil {
-			return egressprofile.Resolved{}, err
+			return egressprofile.Choice{}, egressprofile.Choice{}, err
 		}
+	}
+	return accountChoice, flowChoice, nil
+}
+
+func (manager *Manager) resolveTargetEgress(ctx context.Context, account Account, flow egressprofile.ProfileRevision, target originidentity.ProviderOrigin) (egressprofile.Resolved, error) {
+	if err := target.Validate(); err != nil {
+		return egressprofile.Resolved{}, err
+	}
+	switch target.Transport() {
+	case originidentity.ProviderTransportStrictTLS:
+		return manager.resolveEgress(ctx, account, flow)
+	case originidentity.ProviderTransportLoopbackCleartext, originidentity.ProviderTransportPrivateCleartext:
+	default:
+		return egressprofile.Resolved{}, ErrEndpointMismatch
+	}
+	// This driver's preparation uses a different, fixed HTTPS token target;
+	// its data authenticator already refuses a cleartext provider target.
+	if account.Driver == providerauth.CodexOAuthDriverRef() {
+		return egressprofile.Resolved{}, ErrEndpointMismatch
+	}
+	a, f, err := accountEgressChoices(account, flow)
+	if err != nil {
+		return egressprofile.Resolved{}, err
+	}
+	for i, choice := range []egressprofile.Choice{a, f} {
+		if profile, explicit := choice.ExplicitProfile(); explicit {
+			if profile.Policy.Proxy.Kind != egressnetwork.ProxyDirect {
+				return egressprofile.Resolved{}, ErrInvalidAccount
+			}
+			source := egressprofile.SelectionAccount
+			if i == 1 {
+				source = egressprofile.SelectionFlow
+			}
+			return egressprofile.RestoreResolved(profile, source, 0)
+		}
+	}
+	return egressprofile.RestoreResolved(egressprofile.Direct(), egressprofile.SelectionTransport, 0)
+}
+
+func (manager *Manager) resolveEgress(ctx context.Context, account Account, flow egressprofile.ProfileRevision) (egressprofile.Resolved, error) {
+	accountChoice, flowChoice, err := accountEgressChoices(account, flow)
+	if err != nil {
+		return egressprofile.Resolved{}, err
 	}
 	manager.mu.RLock()
 	resolver := manager.egressDefaults

@@ -436,6 +436,9 @@ func NewRequest(options RequestOptions) (Request, error) {
 			return Request{}, err
 		}
 		options.EgressProfile = options.AccountRef.EgressProfile
+		if err := validateResolvedTarget(options.AccountRef.ResolvedEgress, options.Target); err != nil {
+			return Request{}, err
+		}
 	}
 	if err := options.EgressProfile.Validate(); err != nil {
 		return Request{}, err

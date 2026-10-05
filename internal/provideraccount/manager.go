@@ -709,7 +709,7 @@ func (manager *Manager) acquire(
 		endpoint.Origin != scope.upstreamEndpointOrigin || !account.CompatibleEndpoint(endpoint)) {
 		return nil, ErrEndpointMismatch
 	}
-	resolved, err := manager.resolveEgress(ctx, account, scope.egressProfile)
+	resolved, err := manager.resolveTargetEgress(ctx, account, scope.egressProfile, scope.upstreamEndpointOrigin)
 	if err != nil {
 		return nil, err
 	}
