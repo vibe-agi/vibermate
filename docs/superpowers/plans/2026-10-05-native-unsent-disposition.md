@@ -99,6 +99,8 @@ Retain a private failed-close latch on that old session. Under the existing exec
 
 Require11804 RED→GREEN plus real rollback, commit-then-error, persistent-failure, repeat-close/new-initialize/late-original-request controls, normal close and valid sibling/drain checks. Preserve already-terminal audit/once/counts. Earlier passing suites predate this correction; rerun affected normal and race checks before clean-source client diagnostics and independent review.
 
+75599 confirms the sweep correction (fault fired, extra sends0, new initialization rejected, late original reports storage uncertainty). Matrix65332 passes nine real expiry/fault cases but exposes three late-original REDs: after real EnsureScope advances OwnerEpoch and a new owner is ready, the old qualified-unsent cleanup's Capture-wide Revoke selects the new map owner. Permit a private expected-owner revocation helper with an atomic pointer-identity comparison under the existing executor mutex. Public Revoke passes no expected owner and keeps its existing semantics; qualified-unsent cleanup supplies its original session owner. Preserve actual SQL epoch/revision checks and full durable cleanup when that old owner is still current. No old handle may revoke the replacement owner, nor may the identity guard create send authority. Verify the same real replacement-owner cases and ordinary current-owner cleanup before handoff.
+
 ```sh
 env DEVELOPER_DIR=/Library/Developer/CommandLineTools GOFLAGS=-mod=readonly go test -count=1 ./internal/runtimepersistence ./internal/nativemcp ./internal/loopbackproxy ./internal/productruntime ./internal/desktopcontrol
 env DEVELOPER_DIR=/Library/Developer/CommandLineTools GOFLAGS=-mod=readonly go run ./cmd/repositorycheck
