@@ -119,13 +119,22 @@ func (codec *Codec) EncodeProviderRequest(
 		})
 	}
 	var report protocolcore.TranslationReportBuilder
+	var argumentPreflight *providerArgumentPreflight
+	if budget != nil {
+		argumentPreflight = &providerArgumentPreflight{budget: budget, wire: providerWireCounter{limit: uint64(codec.options.MaxRequestBytes)}}
+	}
 	for messageIndex, message := range request.Messages {
 		encoded, normalized, err := encodeMessage(
 			message,
 			toolCatalog,
 			codec.providerRequest.instructionRoleMode,
+			argumentPreflight,
 		)
 		if err != nil {
+			var failure *protocolcore.Failure
+			if errors.As(err, &failure) {
+				return nil, report.Build(), err
+			}
 			return nil, report.Build(), protocolcore.NewFailure(
 				protocolcore.ReasonUnsupportedClientInput,
 				"$.messages",
@@ -384,6 +393,146 @@ func (codec *Codec) EncodeProviderRequest(
 // RawMessage compact/HTML escaping and string UTF-8 replacement mirror the
 // encoding/json encoder used by the immediately following Marshal.
 type providerWireCounter struct{ used, limit uint64 }
+
+// Argument bytes and the retained string overlap while constructing the wire.
+// The parent request budget reserves both before copies, across every call.
+// wire counts their eventual outer JSON strings as a cumulative lower bound;
+// the complete outgoing counter below still includes all enclosing fields.
+type providerArgumentPreflight struct {
+	budget *protocolcore.ResourceBudget
+	wire   providerWireCounter
+}
+
+func (preflight *providerArgumentPreflight) reserveCopies(size uint64) error {
+	if size > math.MaxUint64/2 {
+		return errors.New("provider argument resource accounting overflow")
+	}
+	return preflight.budget.Reserve(protocolcore.ResourceCost{PayloadBytes: size * 2, StructureBytes: uint64(unsafe.Sizeof([]byte(nil))) + uint64(unsafe.Sizeof(""))})
+}
+
+func (preflight *providerArgumentPreflight) arguments(entry providerToolEntry, call protocolcore.ToolCall) ([]byte, error) {
+	if preflight == nil {
+		return entry.providerArguments(call)
+	}
+	fail := func(err error) ([]byte, error) {
+		return nil, protocolcore.NewFailure(protocolcore.ReasonInvalidClientRequest, "$.messages", err)
+	}
+	switch entry.identity.kind {
+	case protocolcore.ToolKindCustom:
+		inner, outer, err := customArgumentJSONSizes(call.Input, preflight.wire.limit)
+		if err != nil {
+			return fail(err)
+		}
+		if err := preflight.wire.add(outer); err != nil {
+			return fail(err)
+		}
+		if err := preflight.reserveCopies(inner); err != nil {
+			return fail(err)
+		}
+	case protocolcore.ToolKindFunction:
+		// Measuring only this document's occurrence avoids Bytes() just to
+		// discover its size; opaque original JSON remains immutable.
+		cost, err := protocolcore.MeasureResponse(protocolcore.Response{Blocks: []protocolcore.ContentBlock{{ToolCall: protocolcore.ToolCall{Arguments: call.Arguments}}}})
+		if err != nil {
+			return fail(err)
+		}
+		if err := preflight.reserveCopies(cost.PayloadBytes); err != nil {
+			return fail(err)
+		}
+		arguments, err := entry.providerArguments(call)
+		if err != nil {
+			return nil, err
+		}
+		// Inspect the already-reserved owned byte clone before string conversion.
+		if err := preflight.wire.quotedBytes(arguments); err != nil {
+			return fail(err)
+		}
+		return arguments, nil
+	}
+	return entry.providerArguments(call)
+}
+
+// Counts json.Marshal({Input: input}) and then quoting that generated JSON as
+// a wire string, without constructing either representation. Empty input has
+// inner literal {"input":""} (12 bytes), outer quoted literal18 bytes.
+func customArgumentJSONSizes(input string, limit uint64) (uint64, uint64, error) {
+	inner, outer := providerWireCounter{limit: limit}, providerWireCounter{limit: limit}
+	if err := inner.add(12); err != nil {
+		return 0, 0, err
+	}
+	if err := outer.add(18); err != nil {
+		return 0, 0, err
+	}
+	for index := 0; index < len(input); {
+		innerSize, outerSize := uint64(1), uint64(1)
+		character := input[index]
+		width := 1
+		if character < utf8.RuneSelf {
+			switch character {
+			case '\\', '"':
+				innerSize, outerSize = 2, 4
+			case '\b', '\f', '\n', '\r', '\t':
+				innerSize, outerSize = 2, 3
+			case '<', '>', '&':
+				innerSize, outerSize = 6, 7
+			default:
+				if character < 0x20 {
+					innerSize, outerSize = 6, 7
+				}
+			}
+		} else {
+			var value rune
+			value, width = utf8.DecodeRuneInString(input[index:])
+			innerSize, outerSize = uint64(width), uint64(width)
+			if value == utf8.RuneError && width == 1 || value == '\u2028' || value == '\u2029' {
+				innerSize, outerSize = 6, 7
+			}
+		}
+		if err := inner.add(innerSize); err != nil {
+			return 0, 0, err
+		}
+		if err := outer.add(outerSize); err != nil {
+			return 0, 0, err
+		}
+		index += width
+	}
+	return inner.used, outer.used, nil
+}
+
+func (counter *providerWireCounter) quotedBytes(value []byte) error {
+	if err := counter.add(2); err != nil {
+		return err
+	}
+	for index := 0; index < len(value); {
+		character := value[index]
+		width := 1
+		size := uint64(1)
+		if character < utf8.RuneSelf {
+			switch character {
+			case '\\', '"', '\b', '\f', '\n', '\r', '\t':
+				size = 2
+			case '<', '>', '&':
+				size = 6
+			default:
+				if character < 0x20 {
+					size = 6
+				}
+			}
+		} else {
+			var valueRune rune
+			valueRune, width = utf8.DecodeRune(value[index:])
+			size = uint64(width)
+			if valueRune == utf8.RuneError && width == 1 || valueRune == '\u2028' || valueRune == '\u2029' {
+				size = 6
+			}
+		}
+		if err := counter.add(size); err != nil {
+			return err
+		}
+		index += width
+	}
+	return nil
+}
 
 func (counter *providerWireCounter) add(bytes uint64) error {
 	if bytes > counter.limit-counter.used {
@@ -753,6 +902,7 @@ func encodeMessage(
 	message protocolcore.Message,
 	toolCatalog providerToolCatalog,
 	instructionRoleMode InstructionRoleMode,
+	argumentPreflight *providerArgumentPreflight,
 ) ([]openAIRequestMessageWire, bool, error) {
 	switch message.Role {
 	case protocolcore.RoleSystem, protocolcore.RoleDeveloper:
@@ -836,7 +986,7 @@ func encodeMessage(
 				if err != nil {
 					return nil, false, err
 				}
-				arguments, err := entry.providerArguments(block.ToolCall)
+				arguments, err := argumentPreflight.arguments(entry, block.ToolCall)
 				if err != nil {
 					return nil, false, err
 				}

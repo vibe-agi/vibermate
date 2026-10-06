@@ -1,14 +1,280 @@
 package anthropicchat
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
+	"reflect"
 	"runtime"
 	"strings"
 	"testing"
 
 	"github.com/vibe-agi/vibermate/internal/protocolcore"
 )
+
+func customArgumentRequest(t *testing.T, input string, count int) protocolcore.Request {
+	t.Helper()
+	request := protocolcore.Request{RequestedModel: "m", EffectiveModel: "m", Tools: []protocolcore.ToolDefinition{{Kind: protocolcore.ToolKindCustom, Name: "f", CustomFormat: protocolcore.CustomToolFormat{Kind: protocolcore.CustomToolFormatText}}}}
+	for index := 0; index < count; index++ {
+		key, err := protocolcore.NewCallKey("test", fmt.Sprintf("call-%d", index))
+		if err != nil {
+			t.Fatal(err)
+		}
+		request.Messages = append(request.Messages, protocolcore.Message{Role: protocolcore.RoleAssistant, Blocks: []protocolcore.ContentBlock{{Kind: protocolcore.BlockToolCall, ToolCall: protocolcore.ToolCall{Kind: protocolcore.ToolKindCustom, Key: key, Name: "f", Input: input}}}})
+	}
+	if err := request.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	return request
+}
+
+func TestAnthropicResourceAdmissionCustomArgumentsBeforeExpansion(t *testing.T) {
+	request := customArgumentRequest(t, strings.Repeat("&", 1<<20), 1)
+	for _, control := range []struct {
+		name    string
+		payload uint64
+		wire    int
+	}{
+		{"resource", 2 << 20, 16 << 20},
+		// Inner {"input":"\\u0026..."} is6MiB+12; the outer JSON string
+		// must also escape each generated backslash, so it cannot fit here.
+		{"outer_quoting", 64 << 20, (6 << 20) + 12},
+	} {
+		t.Run(control.name, func(t *testing.T) {
+			policy := protocolcore.ResourceLimits{Request: protocolcore.ResourceCost{control.payload, 8 << 20}, Response: protocolcore.ResourceCost{16 << 20, 8 << 20}}
+			options := DefaultOptions()
+			options.Resources = &policy
+			options.MaxRequestBytes = control.wire
+			codec, err := New(options)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := codec.ValidateRequest(request); err != nil {
+				t.Fatalf("semantic input must fit: %v", err)
+			}
+			runtime.GC()
+			var before, after runtime.MemStats
+			runtime.ReadMemStats(&before)
+			_, _, err = codec.EncodeProviderRequest(request)
+			runtime.ReadMemStats(&after)
+			allocated := after.TotalAlloc - before.TotalAlloc
+			t.Logf("encoder allocation=%d error=%v", allocated, err)
+			if err == nil {
+				t.Fatal("generated custom arguments accepted beyond finite resource/wire policy")
+			}
+			if strings.Contains(err.Error(), "catalog") {
+				t.Fatalf("fixture failed before the expansion seam: %v", err)
+			}
+			if allocated > 1<<20 {
+				t.Fatalf("custom arguments materialized before refusal: %d bytes", allocated)
+			}
+		})
+	}
+}
+
+func TestAnthropicResourceAdmissionCustomArgumentsBudgetAndOwnership(t *testing.T) {
+	request := customArgumentRequest(t, strings.Repeat("&", 1<<20), 1)
+	legacy, _ := New(DefaultOptions())
+	expected, expectedReport, err := legacy.EncodeProviderRequest(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy := protocolcore.ResourceLimits{Request: protocolcore.ResourceCost{64 << 20, 8 << 20}, Response: protocolcore.ResourceCost{16 << 20, 8 << 20}}
+	options := DefaultOptions()
+	options.Resources = &policy
+	codec, err := New(options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy.Request = protocolcore.ResourceCost{1, 1}
+	actual, report, err := codec.EncodeProviderRequest(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(actual, expected) || !reflect.DeepEqual(report.Notices(), expectedReport.Notices()) {
+		t.Fatal("budgeted custom tool encoding or notice order changed")
+	}
+	var wire struct {
+		Messages []struct {
+			ToolCalls []struct {
+				Function struct {
+					Arguments string `json:"arguments"`
+				} `json:"function"`
+			} `json:"tool_calls"`
+		} `json:"messages"`
+	}
+	if err := json.Unmarshal(actual, &wire); err != nil {
+		t.Fatal(err)
+	}
+	var arguments struct {
+		Input string `json:"input"`
+	}
+	if err := json.Unmarshal([]byte(wire.Messages[0].ToolCalls[0].Function.Arguments), &arguments); err != nil {
+		t.Fatal(err)
+	}
+	if arguments.Input != request.Messages[0].Blocks[0].ToolCall.Input || len(arguments.Input) != 1<<20 {
+		t.Fatal("custom input changed or was shortened")
+	}
+}
+
+func TestAnthropicResourceAdmissionCustomArgumentsShareParentBudget(t *testing.T) {
+	policy := protocolcore.ResourceLimits{Request: protocolcore.ResourceCost{160 << 10, 8 << 20}, Response: protocolcore.ResourceCost{16 << 20, 8 << 20}}
+	options := DefaultOptions()
+	options.Resources = &policy
+	codec, _ := New(options)
+	input := strings.Repeat("x", 32<<10)
+	if _, _, err := codec.EncodeProviderRequest(customArgumentRequest(t, input, 1)); err != nil {
+		t.Fatalf("single complete call should fit: %v", err)
+	}
+	request := customArgumentRequest(t, input, 2)
+	if err := codec.ValidateRequest(request); err != nil {
+		t.Fatal(err)
+	}
+	_, report, err := codec.EncodeProviderRequest(request)
+	if err == nil {
+		t.Fatal("repeated arguments received a new full per-call budget")
+	}
+	notices := report.Notices()
+	if len(notices) != 1 || notices[0].Code != protocolcore.NoticeCustomToolKindEncoded || notices[0].Path != "$.messages[0].blocks[0].kind" {
+		t.Fatalf("preceding complete-call notice prefix changed: %+v", notices)
+	}
+}
+
+func TestAnthropicResourceAdmissionCustomArgumentsLiteralAndFunctionControl(t *testing.T) {
+	policy := protocolcore.ResourceLimits{Request: protocolcore.ResourceCost{8 << 20, 8 << 20}, Response: protocolcore.ResourceCost{16 << 20, 8 << 20}}
+	options := DefaultOptions()
+	options.Resources = &policy
+	for _, fixture := range []struct{ input, want string }{
+		{"&", `{"input":"\u0026"}`},
+		{"\"\\\n<&>\u2028世界", `{"input":"\"\\\n\u003c\u0026\u003e\u2028世界"}`},
+		{`\u0026`, `{"input":"\\u0026"}`},
+		{"\x01\b\f\r\t\u2029", `{"input":"\u0001\b\f\r\t\u2029"}`},
+		{"", `{"input":""}`},
+	} {
+		request := customArgumentRequest(t, fixture.input, 1)
+		legacy, _ := New(DefaultOptions())
+		expected, _, err := legacy.EncodeProviderRequest(request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		options.MaxRequestBytes = len(expected)
+		codec, _ := New(options)
+		actual, _, err := codec.EncodeProviderRequest(request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(actual, expected) {
+			t.Fatal("custom argument output changed")
+		}
+		var wire openAIRequestWire
+		if err := json.Unmarshal(actual, &wire); err != nil {
+			t.Fatal(err)
+		}
+		if wire.Messages[0].ToolCalls[0].Function.Arguments != fixture.want {
+			t.Fatalf("inner JSON differs from literal: %q", wire.Messages[0].ToolCalls[0].Function.Arguments)
+		}
+	}
+	schema, err := protocolcore.NewJSONObject([]byte(`{"type":"object"}`), protocolcore.MaxToolJSONBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	arguments, err := protocolcore.NewJSONObject([]byte(`{"s":"&","q":"\"","u":"世界"}`), protocolcore.MaxToolJSONBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := customArgumentRequest(t, "", 1)
+	request.Tools = []protocolcore.ToolDefinition{{Kind: protocolcore.ToolKindFunction, Name: "f", InputSchema: schema}}
+	request.Messages[0].Blocks[0].ToolCall.Kind = protocolcore.ToolKindFunction
+	request.Messages[0].Blocks[0].ToolCall.Arguments = arguments
+	legacy, _ := New(DefaultOptions())
+	expected, _, err := legacy.EncodeProviderRequest(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	options.MaxRequestBytes = len(expected)
+	codec, _ := New(options)
+	actual, _, err := codec.EncodeProviderRequest(request)
+	if err != nil || !bytes.Equal(actual, expected) {
+		t.Fatalf("function argument control changed: %v", err)
+	}
+}
+
+func TestAnthropicResourceAdmissionCustomArgumentsOuterLiteralBoundary(t *testing.T) {
+	request := customArgumentRequest(t, "&", 1)
+	// Inner literal {"input":"\u0026"} is18 bytes; quoting it as a
+	// JSON string is25 bytes (four escaped quotes, one escaped backslash).
+	// At24 it must fail before a completed-call notice; at25 the argument
+	// fits and the enclosing full request then fails, retaining that notice.
+	for _, control := range []struct{ wire, notices int }{{18, 0}, {24, 0}, {25, 1}} {
+		policy := protocolcore.ResourceLimits{Request: protocolcore.ResourceCost{8 << 20, 8 << 20}, Response: protocolcore.ResourceCost{16 << 20, 8 << 20}}
+		options := DefaultOptions()
+		options.Resources = &policy
+		options.MaxRequestBytes = control.wire
+		codec, _ := New(options)
+		_, report, err := codec.EncodeProviderRequest(request)
+		if err == nil {
+			t.Fatal("enclosing request must exceed this small wire limit")
+		}
+		if protocolcore.ReasonOf(err) != protocolcore.ReasonInvalidClientRequest {
+			t.Fatalf("resource failure category changed: %v", err)
+		}
+		if len(report.Notices()) != control.notices {
+			t.Fatalf("outer quoted literal boundary%d produced%d notices, want%d", control.wire, len(report.Notices()), control.notices)
+		}
+	}
+}
+
+func TestAnthropicResourceAdmissionFunctionArgumentsCopiesAndWire(t *testing.T) {
+	request := customArgumentRequest(t, "", 1)
+	schema, err := protocolcore.NewJSONObject([]byte(`{"type":"object"}`), protocolcore.MaxToolJSONBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	arguments, err := protocolcore.NewJSONObject([]byte(`{"input":"`+strings.Repeat("&", 1<<20)+`"}`), protocolcore.MaxToolJSONBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Tools = []protocolcore.ToolDefinition{{Kind: protocolcore.ToolKindFunction, Name: "f", InputSchema: schema}}
+	request.Messages[0].Blocks[0].ToolCall.Kind = protocolcore.ToolKindFunction
+	request.Messages[0].Blocks[0].ToolCall.Arguments = arguments
+	for _, control := range []struct {
+		name          string
+		payload       uint64
+		wire          int
+		maxAllocation uint64
+	}{
+		{"copies", 2 << 20, 16 << 20, 1 << 20},
+		{"outer_wire", 64 << 20, 2 << 20, 1800 << 10},
+	} {
+		t.Run(control.name, func(t *testing.T) {
+			policy := protocolcore.ResourceLimits{Request: protocolcore.ResourceCost{control.payload, 8 << 20}, Response: protocolcore.ResourceCost{16 << 20, 8 << 20}}
+			options := DefaultOptions()
+			options.Resources = &policy
+			options.MaxRequestBytes = control.wire
+			codec, err := New(options)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := codec.ValidateRequest(request); err != nil {
+				t.Fatal(err)
+			}
+			runtime.GC()
+			var before, after runtime.MemStats
+			runtime.ReadMemStats(&before)
+			_, _, err = codec.EncodeProviderRequest(request)
+			runtime.ReadMemStats(&after)
+			allocated := after.TotalAlloc - before.TotalAlloc
+			t.Logf("function argument allocation=%d error=%v", allocated, err)
+			if err == nil {
+				t.Fatal("function copies/wire received free allowance")
+			}
+			if allocated > control.maxAllocation {
+				t.Fatalf("unreserved function argument copy: %d bytes", allocated)
+			}
+		})
+	}
+}
 
 func TestAnthropicResourceAdmissionCompleteHistories(t *testing.T) {
 	policy := protocolcore.ResourceLimits{Request: protocolcore.ResourceCost{128 << 20, 128 << 20}, Response: protocolcore.ResourceCost{128 << 20, 128 << 20}}
