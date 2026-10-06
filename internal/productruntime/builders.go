@@ -435,6 +435,7 @@ type providerBuildRequest struct {
 }
 
 type providerRuntime interface {
+	FetchProductRelease(context.Context, egressprofile.Resolved) (*http.Response, error)
 	codexoauth.LoginTokenClient
 	exchange.Provider
 	ReadAccount(context.Context, providertransport.AccountReadRequest) (*http.Response, error)

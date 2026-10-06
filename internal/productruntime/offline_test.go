@@ -39,9 +39,9 @@ func TestRuntimeResumeProberDispatchesOnlyTypedSupportedTargets(t *testing.T) {
 	}
 
 	err = prober.Probe(context.Background(), offlinehold.ProbeRequest{Targets: []offlinehold.ProbeTarget{{
-		Kind: offlinehold.EgressUpdate, Transport: offlinehold.ProbeTransportStrictTLS,
-		TargetRef: "update-target", NetworkOrigin: "https://update.example",
-		HTTPAuthority: "update.example", TLSServerName: "update.example",
+		Kind: offlinehold.EgressPlugin, Transport: offlinehold.ProbeTransportStrictTLS,
+		TargetRef: "plugin-target", NetworkOrigin: "https://plugin.example",
+		HTTPAuthority: "plugin.example", TLSServerName: "plugin.example",
 	}}})
 	requireProbeFailureReason(t, err, offlinehold.ProbeReasonFailed)
 }

@@ -39,6 +39,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/nativetool"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
 	"github.com/vibe-agi/vibermate/internal/originaltransport"
+	"github.com/vibe-agi/vibermate/internal/productupdate"
 	"github.com/vibe-agi/vibermate/internal/provideraccount"
 	"github.com/vibe-agi/vibermate/internal/providerauth"
 	"github.com/vibe-agi/vibermate/internal/providertransport"
@@ -58,6 +59,7 @@ var ErrInvalidBuildResult = errors.New("invalid runtime build result")
 
 // Runtime owns every successfully constructed production component.
 type Runtime struct {
+	productUpdates     *productupdate.Reader
 	launchSnapshots    launchsnapshot.Store
 	paths              RuntimePaths
 	storage            *runtimepersistence.Store
@@ -115,10 +117,12 @@ func Start(ctx context.Context, options Options) (*Runtime, error) {
 }
 
 type runtimeBuildOverrides struct {
-	blindProber   func() (*blindtunnel.ReachabilityProber, error)
-	environment   func(context.Context, environmentBuildRequest) (environmentBuildResult, error)
-	provider      func(providerBuildRequest) (providerRuntime, error)
-	recoverEgress func(context.Context, egressaudit.Repository, time.Time) error
+	originalProber func() (*originaltransport.TLSProber, error)
+	providerProber func() (*providertransport.ProviderProber, error)
+	blindProber    func() (*blindtunnel.ReachabilityProber, error)
+	environment    func(context.Context, environmentBuildRequest) (environmentBuildResult, error)
+	provider       func(providerBuildRequest) (providerRuntime, error)
+	recoverEgress  func(context.Context, egressaudit.Repository, time.Time) error
 }
 
 func recoverEgressAttempts(
@@ -550,13 +554,27 @@ func startWithBuilders(
 	}
 	cleanups.register("storage health monitor", monitor.Shutdown)
 
-	providerResumeProber, err := providertransport.NewProviderProber()
+	buildProviderProber := providertransport.NewProviderProber
+	if overrides.providerProber != nil {
+		buildProviderProber = overrides.providerProber
+	}
+	providerResumeProber, err := buildProviderProber()
 	if err != nil {
 		return fail("offline-hold provider probe", err)
 	}
-	originalResumeProber, err := originaltransport.NewTLSProber()
+	if providerResumeProber == nil {
+		return fail("offline-hold provider probe", fmt.Errorf("%w: provider prober is nil", ErrInvalidBuildResult))
+	}
+	buildOriginalProber := originaltransport.NewTLSProber
+	if overrides.originalProber != nil {
+		buildOriginalProber = overrides.originalProber
+	}
+	originalResumeProber, err := buildOriginalProber()
 	if err != nil {
 		return fail("offline-hold original-origin probe", err)
+	}
+	if originalResumeProber == nil {
+		return fail("offline-hold original-origin probe", fmt.Errorf("%w: original prober is nil", ErrInvalidBuildResult))
 	}
 	buildBlindProber := blindtunnel.NewReachabilityProber
 	if overrides.blindProber != nil {
@@ -600,6 +618,10 @@ func startWithBuilders(
 		)
 	}
 	pending.register("provider transport", provider.Shutdown)
+	productUpdates, err := productupdate.New(egressDefaults, provider, options.Clock.Now)
+	if err != nil {
+		return fail("product update reader", err)
+	}
 	codexOAuth, err := codexoauth.NewManager(codexoauth.Options{
 		Secrets: options.Secrets,
 		Client:  codexOAuthHTTPClient{provider: provider},
@@ -855,6 +877,7 @@ func startWithBuilders(
 		codeLibrary:        codeLibrary,
 		egressProfiles:     egressProfiles,
 		egressDefaults:     egressDefaults,
+		productUpdates:     productUpdates,
 		runtimeUsers:       runtimeUsers,
 		approvals:          approvals,
 		nativeTools:        nativeTools,
@@ -1058,6 +1081,8 @@ func (r *Runtime) EgressProfiles() egressprofile.Controller {
 
 // EgressDefaults is the instance-owned global configuration, not send authority.
 func (r *Runtime) EgressDefaults() egressprofile.Defaults { return r.egressDefaults }
+
+func (r *Runtime) ProductUpdates() *productupdate.Reader { return r.productUpdates }
 
 // UpstreamEndpoints returns the reusable upstream authority. Every managed
 // ProviderAccount belongs to exactly one Endpoint exposed by this controller.

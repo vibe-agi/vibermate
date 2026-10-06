@@ -26,6 +26,22 @@ import (
 
 const modelsDevOrigin = "https://models.dev"
 
+// FetchProductRelease is closed: no caller-selected URL or credential.
+func (client *Client) FetchProductRelease(ctx context.Context, resolved egressprofile.Resolved) (*http.Response, error) {
+	if resolved.Validate() != nil || (resolved.Source() != egressprofile.SelectionGlobal && resolved.Source() != egressprofile.SelectionBuiltin) {
+		return nil, errors.New("product release frozen exit is invalid")
+	}
+	origin, err := originidentity.ParseProviderOrigin("https://api.github.com")
+	if err != nil {
+		return nil, err
+	}
+	target, err := NewTarget(origin)
+	if err != nil {
+		return nil, err
+	}
+	return client.fetchRuntimeJSON(ctx, runtimeFetchSpec{purpose: egressaudit.PurposeUpdate, targetRef: origin.String(), target: target, relativePath: "/repos/vibe-agi/vibermate/releases/latest", resolved: resolved})
+}
+
 // InstanceIDSource mints opaque, independent identities. Runtime-owned
 // requests need three identities because the logical action, queued egress,
 // and immutable audit attempt are different authorities and lifetimes.
@@ -318,6 +334,10 @@ func (client *Client) fetchRuntimeJSON(
 	}
 	request.Host = spec.target.HTTPAuthority()
 	request.Header.Set("Accept", "application/json")
+	if spec.purpose == egressaudit.PurposeUpdate {
+		request.Header.Set("Accept", "application/vnd.github+json")
+		request.Header.Set("X-GitHub-Api-Version", "2022-11-28")
+	}
 	if spec.contentType != "" {
 		request.Header.Set("Content-Type", spec.contentType)
 	}
@@ -447,6 +467,14 @@ func (client *Client) runtimeProbeTarget(
 	transport, err := spec.target.probeTransportKind()
 	if err != nil {
 		return offlinehold.ProbeTarget{}, err
+	}
+	if spec.purpose == egressaudit.PurposeUpdate {
+		origin := spec.target.Origin().String()
+		if origin != "https://api.github.com" || spec.relativePath != "/repos/vibe-agi/vibermate/releases/latest" {
+			return offlinehold.ProbeTarget{}, errors.New("product update probe target differs from closed operation")
+		}
+		target := offlinehold.ProbeTarget{Kind: offlinehold.EgressUpdate, Transport: transport, TargetRef: origin, NetworkOrigin: origin, HTTPAuthority: spec.target.HTTPAuthority(), TLSServerName: spec.target.TLSServerName(), EgressPolicy: spec.egressProfile().Policy}
+		return target, target.Validate()
 	}
 	requested := client.runtimePlan.Requested()
 	digest := sha256.Sum256([]byte(strings.Join([]string{

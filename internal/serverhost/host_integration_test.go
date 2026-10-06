@@ -1313,6 +1313,14 @@ func TestRuntimeUserCustomClaudeHTTPOriginProducesExchangeAndUsage(t *testing.T)
 	}
 	candidate := system.Aggregate()
 	candidate.ID, candidate.Name = "usage-only", "Usage without bodies"
+	// A new user environment is not the current builtin's historical revision.
+	candidate.Revision = 1
+	for i := range candidate.ClientEndpoints {
+		candidate.ClientEndpoints[i].Revision = 1
+		for j := range candidate.ClientEndpoints[i].ProtocolPlans {
+			candidate.ClientEndpoints[i].ProtocolPlans[j].Revision = 1
+		}
+	}
 	candidate.ContentRecording = environment.ContentRecordingPolicy{Mode: environment.ContentRecordingOff}
 	draft, err := manager.SaveDraft(context.Background(), environment.DraftCommand{Candidate: candidate})
 	if err != nil {

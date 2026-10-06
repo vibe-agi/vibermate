@@ -205,7 +205,8 @@ final class WorkbenchController extends ChangeNotifier
        _restartRuntime = restartRuntime,
        _clock = clock ?? DateTime.now,
        _productUpdateService =
-           productUpdateService ?? GitHubProductUpdateService(clock: clock),
+           productUpdateService ??
+           ControlProductUpdateService(api: api, clock: clock),
        _preferencesStore = preferencesStore,
        _preferencesWritable = preferencesWritable,
        _onThemeChanged = onThemeChanged,

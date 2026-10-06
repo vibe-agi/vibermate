@@ -51,7 +51,7 @@ func (prober *runtimeResumeProber) Probe(
 		switch target.Kind {
 		case offlinehold.EgressProvider:
 			selected = prober.provider
-		case offlinehold.EgressOpaque, offlinehold.EgressAuxiliary:
+		case offlinehold.EgressOpaque, offlinehold.EgressAuxiliary, offlinehold.EgressUpdate:
 			selected = prober.original
 		case offlinehold.EgressBlindTunnel:
 			// A CONNECT that arrived after Enter is queued like anything else,
@@ -60,7 +60,7 @@ func (prober *runtimeResumeProber) Probe(
 			// every provider request waiting behind it.
 			selected = prober.blind
 		default:
-			// Plugin distribution and update egress have Hold kinds but no
+			// Plugin distribution has Hold kinds but no
 			// subsystem that can queue one yet, so reaching here is a
 			// programming error rather than a network condition. Saying that
 			// is more useful than a reason code a person would read as "the

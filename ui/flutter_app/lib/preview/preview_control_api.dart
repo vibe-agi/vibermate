@@ -12,6 +12,11 @@ import '../core/api/runtime_storage.dart';
 
 final class PreviewControlApi implements ControlApi {
   @override
+  Future<ProductUpdateMetadata> checkProductUpdate() async =>
+      throw const ControlContractException(
+        'Product update unavailable in preview',
+      );
+  @override
   Future<NativeToolOperationPage> nativeToolOperations(
     String captureKey, {
     int afterSequence = 0,

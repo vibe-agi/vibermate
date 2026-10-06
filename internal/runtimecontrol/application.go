@@ -60,6 +60,7 @@ func New(options Options) (*desktopcontrol.Handler, error) {
 		return nil, err
 	}
 	return desktopcontrol.New(desktopcontrol.Options{
+		ProductUpdates:  options.Runtime.ProductUpdates(),
 		LaunchSnapshots: options.Runtime.LaunchSnapshots(),
 		Storage:         options.Runtime,
 		ACP:             options.Runtime.ACPObservations(),

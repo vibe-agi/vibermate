@@ -28,10 +28,22 @@ var _ offlinehold.Prober = (*ProviderProber)(nil)
 const DefaultProviderProbeTargetTimeout = 10 * time.Second
 
 func NewProviderProber() (*ProviderProber, error) {
-	return newProviderProber(
-		&net.Dialer{},
-		nil,
-	)
+	builder, err := egressnetwork.NewBuilder(egressnetwork.BuilderOptions{BaseDialer: &net.Dialer{}})
+	if err != nil {
+		return nil, err
+	}
+	return NewProviderProberWithBuilder(builder, nil)
+}
+
+// Trusted in-process composition only; it grants no target or send authority.
+func NewProviderProberWithBuilder(builder *egressnetwork.Builder, roots *x509.CertPool) (*ProviderProber, error) {
+	if builder == nil {
+		return nil, errors.New("trusted provider probe builder is missing")
+	}
+	if roots != nil {
+		roots = roots.Clone()
+	}
+	return &ProviderProber{dialers: builder, roots: roots, timeout: DefaultProviderProbeTargetTimeout}, nil
 }
 
 func newProviderProber(

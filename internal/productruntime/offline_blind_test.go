@@ -219,7 +219,7 @@ func TestAKindWithNoProberIsAProgrammingError(t *testing.T) {
 		t.Fatal(err)
 	}
 	err = prober.Probe(context.Background(), offlinehold.ProbeRequest{
-		Targets: []offlinehold.ProbeTarget{{Kind: offlinehold.EgressUpdate}},
+		Targets: []offlinehold.ProbeTarget{{Kind: offlinehold.EgressPlugin}},
 	})
 	var failure *offlinehold.ProbeFailure
 	if !errors.As(err, &failure) ||

@@ -697,32 +697,32 @@ final class _ProductUpdatePanel extends StatelessWidget {
             if (update.state == ProductUpdateState.unavailable)
               InlineNotice(message: copy('updates.unavailable'))
             else
-              Row(
+              Wrap(
+                spacing: 8,
+                runSpacing: 6,
+                crossAxisAlignment: WrapCrossAlignment.center,
                 children: [
-                  StatusPill(
-                    label: copy(
+                  Text(
+                    copy(
                       update.state == ProductUpdateState.available
                           ? 'updates.available'
                           : 'updates.current',
                     ),
-                    color: update.state == ProductUpdateState.available
-                        ? context.viberColors.warning
-                        : context.viberColors.verified,
-                    icon: update.state == ProductUpdateState.available
-                        ? Icons.system_update_alt
-                        : Icons.check_circle_outline,
-                  ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      [
-                        if (update.availableVersion != null)
-                          update.availableVersion!,
-                        if (update.releaseName != null) update.releaseName!,
-                      ].join(' · '),
-                      overflow: TextOverflow.ellipsis,
-                      style: Theme.of(context).textTheme.bodySmall,
+                    style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                      fontWeight: FontWeight.w600,
+                      color: update.state == ProductUpdateState.available
+                          ? context.viberColors.warning
+                          : context.viberColors.verified,
                     ),
+                  ),
+                  Text(
+                    [
+                      if (update.availableVersion != null)
+                        update.availableVersion!,
+                      if (update.releaseName != null) update.releaseName!,
+                    ].join(' · '),
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(context).textTheme.bodySmall,
                   ),
                 ],
               ),

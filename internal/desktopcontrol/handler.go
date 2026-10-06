@@ -155,6 +155,7 @@ type ConversationIndexer interface {
 }
 
 type Options struct {
+	ProductUpdates      ProductUpdateReader
 	NativeContentKey    [32]byte
 	NativeTools         nativetool.Repository
 	NativePreviews      PendingPreviewReader
@@ -199,6 +200,7 @@ type Options struct {
 }
 
 type Handler struct {
+	productUpdates      ProductUpdateReader
 	nativeContentKey    [32]byte
 	nativeTools         nativetool.Repository
 	nativePreviews      PendingPreviewReader
@@ -283,6 +285,7 @@ func New(options Options) (*Handler, error) {
 		return nil, errors.New("Desktop control dependencies are incomplete")
 	}
 	handler := &Handler{
+		productUpdates:      options.ProductUpdates,
 		nativeContentKey:    options.NativeContentKey,
 		launchSnapshots:     options.LaunchSnapshots,
 		storage:             options.Storage,
@@ -324,6 +327,7 @@ func New(options Options) (*Handler, error) {
 		mux:                 http.NewServeMux(),
 	}
 	handler.mux.HandleFunc("GET /api/v1/status", handler.getStatus)
+	handler.mux.HandleFunc("POST /api/v1/product-update/check", handler.checkProductUpdate)
 	handler.mux.HandleFunc("GET /api/v1/storage", handler.getStorageLocation)
 	handler.mux.HandleFunc(
 		"POST /api/v1/storage/actions/cleanup-expired",

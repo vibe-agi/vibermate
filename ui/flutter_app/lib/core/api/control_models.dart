@@ -7,6 +7,82 @@ import 'provider_origin.dart';
 
 typedef JsonObject = Map<String, Object?>;
 
+final class ProductUpdateMetadata {
+  const ProductUpdateMetadata({
+    required this.checkedAt,
+    required this.tag,
+    required this.name,
+    required this.url,
+    required this.publishedAt,
+  });
+  final DateTime checkedAt;
+  final String tag;
+  final String name;
+  final Uri url;
+  final DateTime publishedAt;
+  factory ProductUpdateMetadata.fromJson(Object? json) {
+    const path = 'productUpdate';
+    final value = requireObject(json, path);
+    requireFields(value, path, required: const {'checkedAt', 'release'});
+    final release = requireObject(value['release'], '$path.release');
+    requireFields(
+      release,
+      '$path.release',
+      required: const {'tag', 'name', 'url', 'publishedAt'},
+    );
+    final tag = requireString(release, 'tag', '$path.release');
+    final match = RegExp(r'^v?([0-9]+)\.([0-9]+)\.([0-9]+)$').firstMatch(tag);
+    if (match == null ||
+        [
+          for (var i = 1; i <= 3; i++) int.tryParse(match.group(i)!),
+        ].any((v) => v == null || v > 2147483647)) {
+      throw const ControlContractException('Product release version invalid');
+    }
+    final rawUrl = requireString(release, 'url', '$path.release');
+    if (rawUrl != 'https://github.com/vibe-agi/vibermate/releases/tag/$tag') {
+      throw const ControlContractException(
+        'Product release destination invalid',
+      );
+    }
+    final name = release['name'];
+    if (name is! String ||
+        name.runes.length > 256 ||
+        name.contains(RegExp(r'[\x00-\x1f\x7f-\x9f]'))) {
+      throw const ControlContractException('Product release name invalid');
+    }
+    DateTime timestamp(JsonObject object, String key) {
+      final raw = requireString(object, key, path);
+      final pattern = RegExp(
+        r'^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d{1,9})?Z$',
+      );
+      final m = pattern.firstMatch(raw);
+      final parsed = DateTime.tryParse(raw);
+      if (m == null ||
+          parsed == null ||
+          !parsed.isUtc ||
+          parsed.year != int.parse(m[1]!) ||
+          parsed.month != int.parse(m[2]!) ||
+          parsed.day != int.parse(m[3]!) ||
+          parsed.hour != int.parse(m[4]!) ||
+          parsed.minute != int.parse(m[5]!) ||
+          parsed.second != int.parse(m[6]!)) {
+        throw const ControlContractException(
+          'Product update timestamp invalid',
+        );
+      }
+      return parsed;
+    }
+
+    return ProductUpdateMetadata(
+      checkedAt: timestamp(value, 'checkedAt'),
+      tag: tag,
+      name: name,
+      url: Uri.parse(rawUrl),
+      publishedAt: timestamp(release, 'publishedAt'),
+    );
+  }
+}
+
 final class RuntimeRootCertificate {
   const RuntimeRootCertificate({
     required this.certificatePem,

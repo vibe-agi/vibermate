@@ -18,6 +18,7 @@ abstract interface class ACPObservationApi {
 }
 
 abstract interface class ControlApi {
+  Future<ProductUpdateMetadata> checkProductUpdate();
   Future<NativeToolOperationPage> nativeToolOperations(
     String captureKey, {
     int afterSequence = 0,
@@ -502,6 +503,15 @@ final class ControlProblem implements Exception {
 
 final class HttpControlApi implements ControlApi, ACPObservationApi {
   @override
+  Future<ProductUpdateMetadata> checkProductUpdate() async =>
+      ProductUpdateMetadata.fromJson(
+        await _command(
+          'POST',
+          '/api/v1/product-update/check',
+          body: const <String, Object?>{},
+        ),
+      );
+  @override
   Future<NativeToolOperationPage> nativeToolOperations(
     String captureKey, {
     int afterSequence = 0,
@@ -551,9 +561,7 @@ final class HttpControlApi implements ControlApi, ACPObservationApi {
         cursor != null && (cursor.isEmpty || cursor.length > 512)) {
       throw const ControlContractException('Invalid native content query');
     }
-    final query = Uri(
-      queryParameters: {'part': part, 'cursor': ?cursor},
-    ).query;
+    final query = Uri(queryParameters: {'part': part, 'cursor': ?cursor}).query;
     return NativeToolContentPage.fromJson(
       await _readNativePreview(
         '${_nativeOperationsPath(captureKey)}/$operationId/content?$query',

@@ -4,12 +4,88 @@ import 'package:vibermate_app/core/bootstrap/terminal_command.dart';
 import 'package:vibermate_app/core/design/viber_theme.dart';
 import 'package:vibermate_app/core/preferences/workbench_preferences.dart';
 import 'package:vibermate_app/core/api/product_update_api.dart';
+import 'package:vibermate_app/core/api/control_models.dart';
+import 'package:vibermate_app/core/api/control_api.dart';
 import 'package:vibermate_app/features/workbench/workbench_controller.dart';
 import 'package:vibermate_app/features/workbench/workbench_shell.dart';
 import 'package:vibermate_app/preview/preview_control_api.dart';
 import 'package:vibermate_app/preview/preview_terminal_command.dart';
 
 void main() {
+  for (final language in [AppLanguage.english, AppLanguage.simplifiedChinese]) {
+    for (final available in [true, false]) {
+      testWidgets(
+        'Actual update action ${language.name} available=$available at390px/200percent',
+        (tester) async {
+          await tester.binding.setSurfaceSize(const Size(390, 1100));
+          addTearDown(() => tester.binding.setSurfaceSize(null));
+          final api = _ViewUpdateApi(available);
+          final controller = WorkbenchController(
+            api: PreviewControlApi(),
+            terminalCommands: PreviewTerminalCommandService(),
+            previewMode: false,
+            closeRuntime: api.close,
+            productUpdateService: ControlProductUpdateService(
+              api: api,
+              channelResolver: () async => ProductInstallChannel.manual,
+            ),
+            initialPreferences: WorkbenchPreferences(
+              language: language,
+              section: WorkbenchSection.settings,
+            ),
+          );
+          addTearDown(controller.dispose);
+          await controller.initialize();
+          await tester.pumpWidget(
+            MaterialApp(
+              theme: ViberTheme.light(),
+              builder: (context, child) => MediaQuery(
+                data: MediaQuery.of(
+                  context,
+                ).copyWith(textScaler: const TextScaler.linear(2)),
+                child: child!,
+              ),
+              home: WorkbenchShell(controller: controller),
+            ),
+          );
+          await tester.pumpAndSettle();
+          expect(api.checks, 0);
+          final check = find.byKey(const Key('product-update-check'));
+          await tester.scrollUntilVisible(
+            check,
+            240,
+            scrollable: find.descendant(
+              of: find.byKey(const Key('settings-scroll')),
+              matching: find.byType(Scrollable),
+            ),
+          );
+          await tester.pumpAndSettle();
+          await tester.tap(check);
+          await tester.pumpAndSettle();
+          expect(api.checks, 1);
+          final copy = language == AppLanguage.english
+              ? (available
+                    ? 'Update available'
+                    : 'The release check is unavailable.')
+              : (available ? '有可用更新' : '暂时无法检查 Release。');
+          if (available) {
+            expect(find.text(copy), findsOneWidget);
+          } else {
+            expect(find.textContaining(copy), findsOneWidget);
+            expect(controller.productUpdate?.releaseUrl, isNull);
+            expect(
+              find.byKey(const Key('product-update-copy-brew')),
+              findsNothing,
+            );
+          }
+          expect(tester.takeException(), isNull);
+          controller.dispose();
+          await tester.pumpWidget(const SizedBox.shrink());
+          await tester.pump();
+        },
+      );
+    }
+  }
   testWidgets(
     '390px update guidance is explicit, channel-aware, and never automatic',
     (tester) async {
@@ -92,6 +168,33 @@ void main() {
       await tester.pump();
     },
   );
+}
+
+final class _ViewUpdateApi implements ControlApi {
+  _ViewUpdateApi(this.available);
+  final bool available;
+  int checks = 0;
+  @override
+  Future<ProductUpdateMetadata> checkProductUpdate() async {
+    checks++;
+    if (!available) {
+      throw const ControlContractException('Old server unavailable');
+    }
+    return ProductUpdateMetadata(
+      checkedAt: DateTime.utc(2026, 10, 5),
+      tag: 'v9.8.7',
+      name: 'Private release',
+      url: Uri.parse(
+        'https://github.com/vibe-agi/vibermate/releases/tag/v9.8.7',
+      ),
+      publishedAt: DateTime.utc(2026, 10, 4),
+    );
+  }
+
+  @override
+  Future<void> close() async {}
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }
 
 final class _UpdateService implements ProductUpdateService {

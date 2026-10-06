@@ -446,6 +446,7 @@ func Start(ctx context.Context, options Options) (*Host, error) {
 		CodeLibrary:         runtime.CodeLibrary(),
 		EgressProfiles:      runtime.EgressProfiles(),
 		EgressDefaults:      runtime.EgressDefaults(),
+		ProductUpdates:      runtime.ProductUpdates(),
 		RawEvidence:         runtime.RawEvidence(),
 		Offline:             runtime,
 		ConnectionRules:     runtime.ConnectionRules(),
