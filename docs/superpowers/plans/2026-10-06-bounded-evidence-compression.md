@@ -34,7 +34,7 @@ The actual pinned v1.19.1 NewWriter defaults concurrency to runtime.GOMAXPROCS; 
 
 **Interfaces:** Consume the existing private `mustZstdWriter() *zstd.Encoder`, existing shared `bodyEncoder`, `Store.ExchangeContentRepository()` and Raw repository test helpers. Produce no new product interface; the existing factory still returns the same compatible encoder.
 
-- [ ] **Step1: Establish a genuine real-factory allocation RED.** Use a subprocess of the test binary so no other test/goroutine contributes allocations or observes a changed GOMAXPROCS. A test-owned helper flag selects the child. Inside the child set runtime.GOMAXPROCS(8), construct synthetic input before sampling, forceGC, snapshot runtime.MemStats, then call the actual `mustZstdWriter()` and EncodeAll for4000 deterministic~1KiB blocks. Keep outputs alive; sample before any decoder verification. Assert allocated bytes≤96MiB, a generous fixture-only regression boundary separating one measured Best workspace from the eight implicit workspaces. This is NOT a production request budget.
+- [x] **Step1: Establish a genuine real-factory allocation RED.** Use a subprocess of the test binary so no other test/goroutine contributes allocations or observes a changed GOMAXPROCS. A test-owned helper flag selects the child. Inside the child set runtime.GOMAXPROCS(8), construct synthetic input before sampling, forceGC, snapshot runtime.MemStats, then call the actual `mustZstdWriter()` and EncodeAll for4000 deterministic~1KiB blocks. Keep outputs alive; sample before any decoder verification. Assert allocated bytes≤96MiB, a generous fixture-only regression boundary separating one measured Best workspace from the eight implicit workspaces. This is NOT a production request budget.
 
 ```go
 // Within the isolated helper process, no t.Parallel:
@@ -60,7 +60,7 @@ Run and preserve RED before production edits:
 env DEVELOPER_DIR=/Library/Developer/CommandLineTools GOFLAGS=-mod=readonly /usr/local/go/bin/go test -count=1 -run '^TestEvidenceCompressionColdWorkspaceIsBounded$' -v ./internal/runtimepersistence
 ```
 
-- [ ] **Step2: Make the single factory correction.** Retain the existing level and add exactly the bounded encoder-concurrency option:
+- [x] **Step2: Make the single factory correction.** Retain the existing level and add exactly the bounded encoder-concurrency option:
 
 ```go
 encoder, err := zstd.NewWriter(
@@ -72,7 +72,7 @@ encoder, err := zstd.NewWriter(
 
 Document that EncodeAll remains safe for concurrent callers but the expensive workspace count is fixed, not coupled to machine CPU count. Do not change the shared decoder, fallback or storage format. Rerun the original test unchanged for GREEN.
 
-- [ ] **Step3: Verify actual content and Raw compatibility.** In the new test file exercise8 concurrent callers of a real bounded factory with per-caller distinct payloads; store encoded results and decode after callers join, proving all bytes and SHA256 identities equal original input. Include empty input, text, binary bytes and representative small/large synthetic blocks; each payload is≤1MiB and total input≤8MiB. The factory has no context interface; don't claim aborting compression mid-frame.
+- [x] **Step3: Verify actual content and Raw compatibility.** In the new test file exercise8 concurrent callers of a real bounded factory with per-caller distinct payloads; store encoded results and decode after callers join, proving all bytes and SHA256 identities equal original input. Include empty input, text, binary bytes and representative small/large synthetic blocks; each payload is≤1MiB and total input≤8MiB. The factory has no context interface; don't claim aborting compression mid-frame.
 
 ```go
 decoded, err := bodyDecoder.DecodeAll(encoded, make([]byte, 0, len(want)))
@@ -82,7 +82,7 @@ if sha256.Sum256(decoded) != sha256.Sum256(want) { t.Fatal("plaintext digest cha
 
 Use existing actual temporary Store helpers for one Raw envelope body and one content record, with repeated data that genuinely stores aszstd and an incompressible small payload that exercisesidentity fallback. Persist, close, reopen, read and compare complete bytes/records and expiry behavior; use precise SQL inspection only to prove which existing codec was exercised. No mocked repository or fake codec. Keep raw/content ownership separate, using their existing authorized test fixtures. If existing tests already cover a specific end-to-end property, cite and include them in the final whole-package run; do not duplicate assertion-only copies without a missing behavior.
 
-- [ ] **Step4: Freeze both paths and run covering gates.** Focused regressions first, then the whole runtimepersistence package once and a bounded focused race run. Leave all existing Raw/content/reopen/hash/retention tests intact.
+- [x] **Step4: Freeze both paths and run covering gates.** Focused regressions first, then the whole runtimepersistence package once and a bounded focused race run. Leave all existing Raw/content/reopen/hash/retention tests intact.
 
 ```sh
 env DEVELOPER_DIR=/Library/Developer/CommandLineTools GOFLAGS=-mod=readonly /usr/local/go/bin/go test -count=1 -run '^TestEvidenceCompression' -v ./internal/runtimepersistence
@@ -93,8 +93,14 @@ git diff --check
 
 No opt-in live/packaged/client flags. Preserve failures and original handles; do not start another suite because an observation window expired. Report allocation figures separately under race; the same96MiB regression boundary must remain enabled. Do not claim whole-repository or long-session-release coverage.
 
-- [ ] **Step5: Commit and request independent review.** Stage only the two owned paths after inspecting the staged diff. Commit `fix: bound shared evidence compression workspaces`. Record exact dispatch BASE/HEAD, source hashes, every RED/GREEN command/handle/result, first setup failures, raw logs, clean status and remaining limitations in the task report. Controller dispatches one independent spec+quality reviewer; implementer never spawns agents. The full coupled request/record implementation remains mandatory afterward.
+- [x] **Step5: Commit and request independent review.** Stage only the two owned paths after inspecting the staged diff. Commit `fix: bound shared evidence compression workspaces`. Record exact dispatch BASE/HEAD, source hashes, every RED/GREEN command/handle/result, first setup failures, raw logs, clean status and remaining limitations in the task report. Controller dispatches one independent spec+quality reviewer; implementer never spawns agents. The full coupled request/record implementation remains mandatory afterward.
 
 ## Plan self-review
 
 One task owns both the existing factory option and its behavior tests. The tests exercise the actual factory, not a re-created options list; decoder roundtrip and repository checks preserve hashes/formats. The96MiB number is explicitly a test-case discriminator with an eight-core helper, not a new product capacity claim. The user-approved scope covers this necessary resource correction without changing data or permissions. No new execution-mode confirmation is needed; continue using one implementer and independent review.
+
+## Verified unit closure — 2026-10-06
+
+Owned commit `2c3b87343aab7322df005f1c24eb06fe8e135479`, exact BASE `ccc476755702e6e4930b3be8fdc28814819a08b4`. Independent spec/quality review Approved, no Critical/Important/Minor findings. Root read the complete report/review, all five raw logs and verified both frozen source/five log hashes. Actual factory RED426,375,608B→GREEN56,966,960B; race56,972,280B. Four focused tests, whole runtimepersistence and scoped race passed on frozen source.
+
+Source-matched synthetic Store replay after this change still reconstructs all4000 messages and166pages, with3999-message incremental prefix. Whole-child peak decreased from792,739,840B to189,988,864B and first Put cumulative allocation from1,008,710,696B to107,503,344B; wall-time samples3.46s/3.48s do not establish a speed gain. These are isolated Store results, not whole Pipeline/concurrency capacity or4096 acceptance. All count/storage/wire limits remain unchanged; continue the required coupled plan before publication.
