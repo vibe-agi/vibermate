@@ -10,6 +10,7 @@ import (
 	"math"
 	"strings"
 	"time"
+	"unicode/utf8"
 	"unsafe"
 
 	"github.com/vibe-agi/vibermate/internal/environment"
@@ -686,7 +687,11 @@ func (s *Source) Measure(ctx context.Context) (RecordCost, error) {
 	if err != nil {
 		return c, fmt.Errorf("%w: projected record policy: %w", ErrInvalidEvidence, err)
 	}
+	var retainedStringError error
 	add := func(p, n uint64) error {
+		if retainedStringError != nil {
+			return retainedStringError
+		}
 		if err := budget.Reserve(protocolcore.ResourceCost{PayloadBytes: p, StructureBytes: n}); err != nil {
 			return fmt.Errorf("%w: projected record budget: %w", ErrInvalidEvidence, err)
 		}
@@ -697,6 +702,12 @@ func (s *Source) Measure(ctx context.Context) (RecordCost, error) {
 	stringsCost := func(vs ...string) uint64 {
 		var n uint64
 		for _, v := range vs {
+			// Ordinary strings must survive decode/re-encode without replacement.
+			// RawMessage is deliberately accounted separately and never checked here.
+			if !utf8.ValidString(v) {
+				retainedStringError = fmt.Errorf("%w: retained ordinary string is invalid UTF8", ErrInvalidEvidence)
+				return 0
+			}
 			if uint64(len(v)) > math.MaxInt64-n {
 				// A rejecting sentinel still leaves room for any int-sized RawMessage
 				// added by the block caller; it cannot wrap back under the budget.
@@ -759,7 +770,7 @@ func (s *Source) Measure(ctx context.Context) (RecordCost, error) {
 			if err := u.validateEncoding(); err != nil {
 				return c, err
 			}
-			if err := add(uint64(len(u.Source)), 0); err != nil {
+			if err := add(stringsCost(u.Source), 0); err != nil {
 				return c, err
 			}
 		}
@@ -775,7 +786,7 @@ func (s *Source) Measure(ctx context.Context) (RecordCost, error) {
 			c.TranscriptNodes++
 		}
 		if p == RequestPart {
-			if err := add(uint64(len(h.Role)), uint64(unsafe.Sizeof(Message{}))); err != nil {
+			if err := add(stringsCost(h.Role), uint64(unsafe.Sizeof(Message{}))); err != nil {
 				return err
 			}
 		}
