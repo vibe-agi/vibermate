@@ -787,6 +787,13 @@ func (s *Source) Measure(ctx context.Context) (RecordCost, error) {
 			if err := b.Validate(meta.Mode); err != nil {
 				return err
 			}
+			envelope := canonicalBlockParentDepth
+			if p == RequestPart {
+				envelope = canonicalMessageParentDepth
+			}
+			if argumentDepthOverflow(b.Arguments, envelope) != 0 {
+				return fmt.Errorf("%w: canonical arguments exceed parent depth", ErrInvalidEvidence)
+			}
 			if err := add(stringsCost(b.Kind, string(b.Availability), b.Text, b.CallID, b.ToolName, b.ToolNamespace, b.ProviderSource, b.ProviderKind, b.Fingerprint)+uint64(len(b.Arguments)), uint64(unsafe.Sizeof(Block{}))); err != nil {
 				return err
 			}

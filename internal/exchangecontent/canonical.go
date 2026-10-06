@@ -274,6 +274,21 @@ func preflightRecord(r Record) error {
 			}
 		}
 	}
+	// Request.MarshalJSON finishes encoding every inner leaf before the parent
+	// marshaler rescans its output. Preserve that ordering: a late malformed
+	// leaf outranks an earlier parent-depth overflow in this same request.
+	for _, b := range r.Request.System {
+		if c := argumentDepthOverflow(b.Arguments, canonicalBlockParentDepth); c != 0 {
+			return parentDepthError(reflect.TypeOf(r.Request), c)
+		}
+	}
+	for _, m := range r.Request.Messages {
+		for _, b := range m.Blocks {
+			if c := argumentDepthOverflow(b.Arguments, canonicalMessageParentDepth); c != 0 {
+				return parentDepthError(reflect.TypeOf(r.Request), c)
+			}
+		}
+	}
 	if r.Response != nil {
 		for _, b := range r.Response.Blocks {
 			if err := preflightBlock(b); err != nil {
@@ -285,8 +300,69 @@ func preflightRecord(r Record) error {
 				return &json.MarshalerError{Type: reflect.TypeOf(r.Response), Err: &json.MarshalerError{Type: reflect.TypeOf(v), Err: err}}
 			}
 		}
+		for _, b := range r.Response.Blocks {
+			if c := argumentDepthOverflow(b.Arguments, canonicalBlockParentDepth); c != 0 {
+				return parentDepthError(reflect.TypeOf(r.Response), c)
+			}
+		}
 	}
 	return nil
+}
+
+// These envelopes derive from the existing custom-marshaler scan, not a new
+// protocol capacity: Request/messages[]/Message/blocks[]/Block is five;
+// Request/system[]/Block and Response/blocks[]/Block are three containers.
+const (
+	canonicalMaxNesting         = 10000
+	canonicalMessageParentDepth = 5
+	canonicalBlockParentDepth   = 3
+)
+
+// Grammar was already validated by json.Valid/Block.Validate. Only lexical
+// container depth is counted here, with no nesting stack or decoded strings.
+func argumentDepthOverflow(raw []byte, envelope int) byte {
+	limit := canonicalMaxNesting - envelope
+	depth := 0
+	quoted, escaped := false, false
+	for _, c := range raw {
+		if quoted {
+			if escaped {
+				escaped = false
+			} else if c == '\\' {
+				escaped = true
+			} else if c == '"' {
+				quoted = false
+			}
+			continue
+		}
+		switch c {
+		case '"':
+			quoted = true
+		case '[', '{':
+			if depth == limit {
+				return c
+			}
+			depth++
+		case ']', '}':
+			depth--
+		}
+	}
+	return 0
+}
+func parentDepthError(parent reflect.Type, opening byte) error {
+	// SyntaxError's message is private. A fixed invalid-only probe obtains the
+	// pinned scanner's exact error, including the actual offending character.
+	// Each call owns its error; exposed mutable Offset cannot alter later calls.
+	probe := make([]byte, canonicalMaxNesting+1)
+	for i := range probe {
+		probe[i] = '['
+	}
+	probe[canonicalMaxNesting] = opening
+	err := json.Unmarshal(probe, nil)
+	if syntax, ok := err.(*json.SyntaxError); ok {
+		syntax.Offset = 0
+	}
+	return &json.MarshalerError{Type: parent, Err: err}
 }
 func usageValues(u Usage) [5]UsageValue {
 	return [5]UsageValue{u.InputUncached, u.CacheWrite, u.CacheRead, u.Output, u.Reasoning}

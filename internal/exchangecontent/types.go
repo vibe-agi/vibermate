@@ -645,7 +645,7 @@ func DecodeCanonicalJSON(encoded []byte) (Record, error) {
 	var record Record
 	decoder := json.NewDecoder(bytes.NewReader(encoded))
 	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&record); err != nil {
+	if err := decodeCanonicalEnvelope(decoder, &record); err != nil {
 		return Record{}, fmt.Errorf("%w: decode: %v", ErrInvalidEvidence, err)
 	}
 	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
@@ -656,6 +656,63 @@ func DecodeCanonicalJSON(encoded []byte) (Record, error) {
 		return Record{}, fmt.Errorf("%w: JSON is not canonical", ErrInvalidEvidence)
 	}
 	return record.Clone(), nil
+}
+
+// Decode the closed Record envelope with tokens, then decode each typed field
+// at the same independent depth boundary used by its encoder. A whole-value
+// Decode would add an extra container that plain Record encoding never scans.
+func decodeCanonicalEnvelope(decoder *json.Decoder, record *Record) error {
+	token, err := decoder.Token()
+	if err != nil {
+		return err
+	}
+	if token != json.Delim('{') {
+		return ErrInvalidEvidence
+	}
+	seen := make(map[string]bool, 8)
+	for decoder.More() {
+		token, err := decoder.Token()
+		if err != nil {
+			return err
+		}
+		name, ok := token.(string)
+		if !ok || seen[name] {
+			return ErrInvalidEvidence
+		}
+		seen[name] = true
+		var field any
+		switch name {
+		case "exchangeId":
+			field = &record.ExchangeID
+		case "parent":
+			field = &record.Parent
+		case "frozen":
+			field = &record.Frozen
+		case "mode":
+			field = &record.Mode
+		case "recordedAt":
+			field = &record.RecordedAt
+		case "expiresAt":
+			field = &record.ExpiresAt
+		case "request":
+			field = &record.Request
+		case "response":
+			field = &record.Response
+		default:
+			return fmt.Errorf("%w: unknown Record field", ErrInvalidEvidence)
+		}
+		if err := decoder.Decode(field); err != nil {
+			return err
+		}
+	}
+	token, err = decoder.Token()
+	if err != nil {
+		return err
+	}
+	if token != json.Delim('}') {
+		return ErrInvalidEvidence
+	}
+	return nil
 }
 
 func (request Request) validate(mode environment.ContentRecordingMode) error {
