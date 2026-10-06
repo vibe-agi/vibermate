@@ -65,6 +65,7 @@ func CloneResponseWithin(Response, ResourceLimits) (Response, error)
 type ResourcePolicy struct {
     Semantic protocolcore.ResourceLimits
     RecordCanonicalBytes, RecordRetainedBytes, RecordStructureBytes uint64
+    RecordScratch protocolcore.ResourceCost
     SlotBytes, ActiveBytes uint64 // SlotBytes includes complete request envelope + fixed response reserve
 }
 func (ResourcePolicy) Validate() error // SlotBytes<=ActiveBytes; checked complete-envelope proof
@@ -104,7 +105,7 @@ func applyRecordOptions([]RecordOption) (ParentRef, error) // package-private sh
 func NewSource(string, FrozenRef, environment.ContentRecordingPolicy, time.Time,
     protocolcore.Request, *protocolcore.Response, ...RecordOption) (*Source, error)
 type SourceLimits struct { Semantic protocolcore.ResourceLimits;
-    CanonicalBytes, RetainedBytes, StructureBytes uint64 }
+    CanonicalBytes, RetainedBytes, StructureBytes uint64; Scratch protocolcore.ResourceCost }
 func (SourceLimits) Validate() error // finite/checked; retains the complete old32MiB record domain
 func NewSourceWithin(SourceLimits, string, FrozenRef, environment.ContentRecordingPolicy,
     time.Time, protocolcore.Request, *protocolcore.Response, ...RecordOption) (*Source, error)
@@ -129,6 +130,8 @@ func WriteCanonicalMessage(io.Writer, MessageSource) error
 Task3 option ruling: the old RecordOption callback could inspect a fully materialized Request, which a metadata-only borrowed source cannot honestly provide. A fixed-source caller audit found only WithParentRef, no custom callable options. Replace the internal callback type with the sealed value above while keeping existing call expressions. Omitted options and an explicitly empty parent are valid; an unconstructed zero option is invalid; validate every option in order and preserve last-valid-parent wins, without letting a later valid option hide an earlier invalid one. Both constructors share the helper. Nil is no longer a valid Go argument to this sealed value type; do not pretend compatibility with hypothetical callbacks or apply them to dummy Records.
 
 Task3 writer boundary: streaming canonical functions are byte-encoding interfaces, not authority/admission constructors. Source constructors perform full retained-evidence validation and bounds; the writers preserve encoding/json byte/error semantics without invoking whole Request/Response cloning marshalers. Preflight JSON-encoding errors (invalid RawMessage, invalid known/unknown UsageValue or unencodable time) before emitting bytes; a sink failure after writing begins returns its real error/short-write and stops, never a complete digest. Keep semantic invalid-record/deferred rejection in Source and legacy validated CanonicalJSON. `SourceFromRecordWithin` gives candidate Store readers the same explicit finite-policy route without falling back through legacy4096/aggregate32MiB checks; it does not re-redact already-retained data.
+
+Task3 cost/fragment ruling: RecordCost.RetainedBytes/StructureBytes count the complete logical projected record only; Semantic core costs are separately enforced. SourceLimits.Scratch is an independent copied finite per-phase allowance, released/reused between sequential leaves; derive actual sanitizer/JSON/escaping overlap rather than using the retained cap as an undocumented scratch bound. MaxPhysicalSlots is the maximum per-message SUM of1 for each canonical block≤32MiB or ceil(n/(32MiB−56)) for each larger block, including System and a nonempty response. TranscriptNodes excludes System; MaxAgentBytes measures selected physical legacy/compact agent_json while logical canonical hashes remain unchanged. Add a narrow synchronous `ProviderExtension.WalkFragments(func(size int, fragment io.Reader) error) error` in protocolcore with a private Read-only reader, invalidated after callback; no mutable []byte/WriteTo exposure, no whole-fragment clone for metadata-only traversal. All original fragment APIs/semantics remain.
 
 `ResourcePolicy` is a finite constructor value used only inside internal packages/test harnesses; it is not a user/runtime knob. Add `productruntime.Options.Resources *exchange.ResourcePolicy` and `runtimepersistence.Options.ContentLimits *exchangecontent.SourceLimits` as internal constructor injection, with no JSON/config/env exposure. Task6 constructs candidate Runtime/codec/source/Store-reader wiring with those copied/validated values, including limits-aware model-map/clone/record/read validation. Existing production constructors retain legacy checks until Task7 adopts one private `productionResourcePolicy` value. No callback replaces validation; nil/zero never means unlimited. `NewSourceWithin` and `ValidateRequestWithin` provide full final-path semantics; the4096 business check is confined to the legacy adapter. Repository readers use the same SourceLimits, so candidate >4096 roundtrips cannot accidentally fall back through legacy Record.Validate.
 
@@ -169,7 +172,7 @@ func TestStreamingCanonicalEscapedBlock(t *testing.T) {
 
 ### Task 3: Borrowed record source and byte-exact streaming canonical encoding
 
-**Files:** `exchangecontent/source.go`, `canonical.go`, `types.go`, tests.
+**Files:** `exchangecontent/source.go`, `canonical.go`, `types.go`, tests; narrowly `protocolcore/types.go` and `provider_extension_reader_test.go` for the approved read-only fragment visitor.
 **Consumes:** Task2 checked costs. **Produces:** Source/MessageSource/RecordCost plus legacy-equivalent streaming encoding.
 - [ ] Implement Source validation/measurement, projecting/redacting one logical block at a time, system separately and response as≤one transcript message. Count every projected reasoning+opaque block, OriginalSize, agent, envelope/tool/evidence bytes; reserve sanitizer worst-case scratch before expansion, then measure exact result. MetadataOnly skips payload sanitation/materialization entirely; Off creates no source.
 - [ ] Apply the sealed RecordOption metadata ruling above and test omitted/explicit-empty/valid/ambiguous/ordered/invalid-first/zero cases in both constructors, preserving actual WithParentRef callers and canonical parent bytes. Do not manufacture a partial Record to run arbitrary callbacks.
