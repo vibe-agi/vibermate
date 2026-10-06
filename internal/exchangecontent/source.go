@@ -90,7 +90,7 @@ type MessageSource struct {
 
 func (l SourceLimits) Validate() error {
 	if err := l.Semantic.Validate(); err != nil {
-		return err
+		return fmt.Errorf("%w: semantic policy: %w", ErrInvalidEvidence, err)
 	}
 	for _, n := range []uint64{l.CanonicalBytes, l.RetainedBytes, l.StructureBytes, l.Scratch.PayloadBytes, l.Scratch.StructureBytes, l.Semantic.Request.PayloadBytes, l.Semantic.Request.StructureBytes, l.Semantic.Response.PayloadBytes, l.Semantic.Response.StructureBytes} {
 		if n == 0 || n > math.MaxInt64 {
@@ -107,7 +107,7 @@ func compatibilitySourceLimits() SourceLimits {
 }
 func NewSource(id string, f FrozenRef, p environment.ContentRecordingPolicy, t time.Time, r protocolcore.Request, v *protocolcore.Response, o ...RecordOption) (*Source, error) {
 	if err := r.Validate(); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: request: %w", ErrInvalidEvidence, err)
 	}
 	return NewSourceWithin(compatibilitySourceLimits(), id, f, p, t, r, v, o...)
 }
@@ -123,11 +123,11 @@ func NewSourceWithin(l SourceLimits, id string, f FrozenRef, p environment.Conte
 		return nil, err
 	}
 	if err := protocolcore.ValidateRequestWithin(r, l.Semantic); err != nil {
-		return nil, fmt.Errorf("%w: request: %v", ErrInvalidEvidence, err)
+		return nil, fmt.Errorf("%w: request: %w", ErrInvalidEvidence, err)
 	}
 	if v != nil {
 		if err := protocolcore.ValidateResponseWithin(*v, l.Semantic); err != nil {
-			return nil, fmt.Errorf("%w: response: %v", ErrInvalidEvidence, err)
+			return nil, fmt.Errorf("%w: response: %w", ErrInvalidEvidence, err)
 		}
 	}
 	meta := RecordMetadata{ExchangeID: id, Parent: parent, Frozen: f, Mode: p.Mode, RecordedAt: t.UTC(), ExpiresAt: t.UTC().AddDate(0, 0, int(p.RetentionDays)), Request: RequestMetadata{RequestedModel: r.RequestedModel, EffectiveModel: r.EffectiveModel, MaxOutputTokens: r.MaxOutputTokens, Stream: r.Stream, ProtocolEvidence: append([]protocolcore.ProtocolEvidenceValue{}, r.ProtocolEvidence...)}}
@@ -394,7 +394,11 @@ func (s *Source) reserveScratch(payload, structure uint64) error {
 }
 func (s *Source) reserveBlockScratch(b protocolcore.ContentBlock) error {
 	if s.metadata.Mode != environment.ContentRecordingFull {
-		return s.reserveScratch(4096, uint64(unsafe.Sizeof(Block{})))
+		structure := uint64(unsafe.Sizeof(Block{}))
+		if b.Agent != nil {
+			structure += uint64(unsafe.Sizeof(AgentContext{}))
+		}
+		return s.reserveScratch(4096, structure)
 	}
 	text := b.Text
 	if b.Kind == protocolcore.BlockRefusal {
@@ -420,7 +424,7 @@ func (s *Source) reserveBlockScratch(b protocolcore.ContentBlock) error {
 		raw := b.ToolCall.Arguments.Bytes()
 		cost, err := protocolcore.MeasureJSON(raw)
 		if err != nil {
-			return err
+			return fmt.Errorf("%w: tool argument resources: %w", ErrInvalidEvidence, err)
 		}
 		out, err := sanitizerBound(uint64(len(raw)) * 3)
 		if err != nil {
@@ -673,18 +677,18 @@ func (s *Source) Measure(ctx context.Context) (RecordCost, error) {
 		return c, err
 	}
 	if _, err := s.metadata.RecordedAt.MarshalJSON(); err != nil {
-		return c, err
+		return c, fmt.Errorf("%w: recorded time: %w", ErrInvalidEvidence, err)
 	}
 	if _, err := s.metadata.ExpiresAt.MarshalJSON(); err != nil {
-		return c, err
+		return c, fmt.Errorf("%w: expiry time: %w", ErrInvalidEvidence, err)
 	}
 	budget, err := protocolcore.NewResourceBudget(protocolcore.ResourceCost{PayloadBytes: s.limits.RetainedBytes, StructureBytes: s.limits.StructureBytes})
 	if err != nil {
-		return c, err
+		return c, fmt.Errorf("%w: projected record policy: %w", ErrInvalidEvidence, err)
 	}
 	add := func(p, n uint64) error {
 		if err := budget.Reserve(protocolcore.ResourceCost{PayloadBytes: p, StructureBytes: n}); err != nil {
-			return err
+			return fmt.Errorf("%w: projected record budget: %w", ErrInvalidEvidence, err)
 		}
 		c.RetainedBytes += p
 		c.StructureBytes += n

@@ -10,11 +10,153 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unsafe"
 
 	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/openairesponses"
 	"github.com/vibe-agi/vibermate/internal/protocolcore"
 )
+
+func TestSourceMetadataOnlyAgentScratchBoundary(t *testing.T) {
+	request, _ := evidenceFixture(t)
+	request.Messages[0].Blocks = []protocolcore.ContentBlock{{Kind: protocolcore.BlockText, Text: "private"}}
+	policy := environment.ContentRecordingPolicy{Mode: environment.ContentRecordingMetadataOnly, RetentionDays: 1}
+	at := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	limits := sourceFixtureLimits()
+	limits.Scratch.StructureBytes = uint64(unsafe.Sizeof(Block{}))
+	if _, err := NewSourceWithin(limits, "scratch-agent", frozenFixture(), policy, at, request, nil); err != nil {
+		t.Fatalf("nil agent must fit the Block-only phase: %v", err)
+	}
+	request.Messages[0].Blocks[0].Agent = &protocolcore.AgentMessageContext{AgentName: "block", Author: "author", Recipient: "recipient"}
+	if _, err := NewSourceWithin(limits, "scratch-agent", frozenFixture(), policy, at, request, nil); err == nil {
+		t.Fatal("MetadataOnly admitted a copied agent beyond the Block-only scratch allowance")
+	}
+	limits.Scratch.StructureBytes += uint64(unsafe.Sizeof(AgentContext{}))
+	source, err := NewSourceWithin(limits, "scratch-agent", frozenFixture(), policy, at, request, nil)
+	if err != nil {
+		t.Fatalf("complete Block+Agent phase rejected: %v", err)
+	}
+	record, err := NewRecord("scratch-agent", frozenFixture(), policy, at, request, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got bytes.Buffer
+	if err := writeSourceCanonical(context.Background(), &got, source); err != nil {
+		t.Fatal(err)
+	}
+	want, err := json.Marshal(record)
+	if err != nil || !bytes.Equal(want, got.Bytes()) {
+		t.Fatal("scratch correction changed canonical metadata")
+	}
+	if source.Metadata().Mode != policy.Mode {
+		t.Fatal("mode changed")
+	}
+	err = source.Walk(context.Background(), func(p Part, _ int, message MessageSource) error {
+		header := message.Header()
+		if p != RequestPart || header.Role != "user" || header.BlockCount != 1 || header.Agent != nil {
+			t.Fatal("message header changed")
+		}
+		return message.WalkBlocks(context.Background(), func(block Block) error {
+			if block.Text != "" || len(block.Arguments) != 0 || block.OriginalSize != 7 || block.Availability != AvailabilityOmitted || block.Agent == nil || *block.Agent != (AgentContext{AgentName: "block", Author: "author", Recipient: "recipient"}) {
+				t.Fatal("metadata-only block facts changed")
+			}
+			block.Agent.AgentName = "mutated"
+			return nil
+		})
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if request.Messages[0].Blocks[0].Agent.AgentName != "block" {
+		t.Fatal("projected agent aliases caller")
+	}
+}
+
+func TestSourceAdmissionErrorsRemainEvidenceFailures(t *testing.T) {
+	request, response := evidenceFixture(t)
+	at := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	policy := environment.DefaultContentRecordingPolicy()
+	limits := sourceFixtureLimits()
+	source, err := NewSourceWithin(limits, "error-boundary", frozenFixture(), policy, at, request, &response)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cost, err := source.Measure(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err := NewRecord("error-boundary", frozenFixture(), policy, at, request, &response)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name string
+		run  func() error
+	}{
+		{"unencodable recorded time", func() error {
+			_, err := NewSourceWithin(limits, "error-boundary", frozenFixture(), policy, time.Date(10000, 1, 1, 0, 0, 0, 0, time.UTC), request, &response)
+			return err
+		}},
+		{"expiry crosses encoding boundary", func() error {
+			_, err := NewSourceWithin(limits, "error-boundary", frozenFixture(), policy, time.Date(9999, 12, 31, 0, 0, 0, 0, time.UTC), request, &response)
+			return err
+		}},
+		{"retained one byte short", func() error {
+			l := limits
+			l.RetainedBytes = cost.RetainedBytes - 1
+			_, err := NewSourceWithin(l, "error-boundary", frozenFixture(), policy, at, request, &response)
+			return err
+		}},
+		{"structure one byte short", func() error {
+			l := limits
+			l.StructureBytes = cost.StructureBytes - 1
+			_, err := NewSourceWithin(l, "error-boundary", frozenFixture(), policy, at, request, &response)
+			return err
+		}},
+		{"retained record one byte short", func() error {
+			l := limits
+			l.RetainedBytes = cost.RetainedBytes - 1
+			_, err := SourceFromRecordWithin(l, record)
+			return err
+		}},
+		{"retained record structure one byte short", func() error {
+			l := limits
+			l.StructureBytes = cost.StructureBytes - 1
+			_, err := SourceFromRecordWithin(l, record)
+			return err
+		}},
+		{"retained time", func() error {
+			r := record
+			r.RecordedAt = time.Date(10000, 1, 1, 0, 0, 0, 0, time.UTC)
+			r.ExpiresAt = r.RecordedAt.AddDate(0, 0, 1)
+			_, err := SourceFromRecordWithin(limits, r)
+			return err
+		}},
+		{"semantic policy", func() error { l := limits; l.Semantic.Request.StructureBytes = 0; return l.Validate() }},
+		{"scratch policy", func() error { l := limits; l.Scratch.StructureBytes = 0; return l.Validate() }},
+		{"legacy invalid request", func() error {
+			r := request
+			r.Messages = nil
+			_, err := NewSource("error-boundary", frozenFixture(), policy, at, r, &response)
+			return err
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if err := test.run(); !errors.Is(err, ErrInvalidEvidence) {
+				t.Fatalf("Source admission did not classify invalid evidence: %v", err)
+			}
+		})
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := source.Measure(ctx); err != context.Canceled || errors.Is(err, ErrInvalidEvidence) {
+		t.Fatalf("measurement cancellation changed: %v", err)
+	}
+	callbackErr := errors.New("caller callback")
+	if err := source.Walk(context.Background(), func(Part, int, MessageSource) error { return callbackErr }); err != callbackErr || errors.Is(err, ErrInvalidEvidence) {
+		t.Fatalf("caller callback changed: %v", err)
+	}
+}
 
 // This baseline catches the real wire/retained-canonical capacity mismatch.
 func TestSourceEscapedResponseBaseline(t *testing.T) {
