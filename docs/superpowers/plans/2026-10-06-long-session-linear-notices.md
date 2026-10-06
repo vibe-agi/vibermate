@@ -51,7 +51,7 @@ func (builder *TranslationReportBuilder) Build() TranslationReport
 
 Consumes existing `TranslationReport`, `TranslationNotice`, `NewTranslationReport`, actual codec request/response signatures. Produces the same immutable reports for existing callers. Append preserves all input notices in order, including duplicates; Build copies for an immutable snapshot. Reusing the builder afterward or mutating Notices() output cannot affect previous reports. Empty inputs contribute nothing. No mutable exported slice or release/reset method.
 
-- [ ] **Step1: Write and run the real-code allocation regression before product edits.** In the new Responses test file, build deterministic N=512 and N=2048 valid assistant items, each with `id`, `phase:"commentary"` and a short output_text, followed by a user tail sentinel counted withinN. Use actual DecodeClientRequest and DecodeCompatibleClientRequest separately. Warm up each codec; measure the allocations of a fresh decode, not fixture construction, via a serial test helper. Each decode must succeed under the unchanged4096 guard and have exactly the independently expected notices; no error-return shortcut.
+- [x] **Step1: Write and run the real-code allocation regression before product edits.** In the new Responses test file, build deterministic N=512 and N=2048 valid assistant items with `id` and short output_text, followed by a user tail sentinel counted withinN. Strict DecodeClientRequest fixtures omit phase; compatible DecodeCompatibleClientRequest fixtures additionally use `phase:"commentary"`, preserving the existing supported-input distinction. Warm up each codec; measure the allocations of a fresh decode, not fixture construction, via a serial test helper. Each decode must succeed under the unchanged4096 guard and have exactly the independently expected notices; no error-return shortcut.
 
 ```go
 func measuredBytes(t *testing.T, run func()) uint64 {
@@ -71,7 +71,7 @@ if large > 6*small+(8<<20) {
 }
 ```
 
-Assert every item notice code/path/order using a hand-derived pattern such as item i's identity then phase; assert tail text and complete message count. Verify which kinds actually emit notices before deriving fixture expectations. For error preservation, insert an invalid role at a known late position and require exactly the preceding valid items' notices; the invalid item's not-yet-appended report must not appear. Test both strict and compatible decode. Do not mark syntax/missing-symbol failure as this RED.
+Assert every item notice code/path/order using the hand-derived existing pattern: strict identity; compatible phase then identity. Assert tail text and complete message count. For error preservation, insert an invalid role at a known late position and require exactly the preceding valid items' notices; the invalid item's not-yet-appended report must not appear. Test both strict and compatible decode. Do not mark syntax/missing-symbol failure as this RED.
 
 Run focused real-behavior RED:
 
@@ -81,7 +81,7 @@ env DEVELOPER_DIR=/Library/Developer/CommandLineTools GOFLAGS=-mod=readonly /usr
 
 Preserve measured bytes and genuine growth failure. If this exact assertion does not fail on stable source, investigate fixture/report production and bring the evidence to the controller; do not introduce an artificial always-failing expectation.
 
-- [ ] **Step2: Add the builder ownership tests before its implementation.** Missing new symbols are setup evidence, not the behavioral RED fromStep1. Use literal notices A/B/C and prove input slices, returned notice slices and separate built snapshots are independent.
+- [x] **Step2: Add the builder ownership tests before its implementation.** Missing new symbols are setup evidence, not the behavioral RED fromStep1. Use literal notices A/B/C and prove input slices, returned notice slices and separate built snapshots are independent.
 
 ```go
 seed := []TranslationNotice{{Code: NoticeMessageItemIdentityNotForwarded, Path: "$.input[0].id"}}
@@ -109,7 +109,7 @@ if !slices.Equal(second.Notices(), wantSecond) {
 
 Add a many-append case with all exact entries and multiple snapshots; the first snapshot must not change after later appends. Use literal expected entries for the small ownership cases, not a second invocation of the builder under test.
 
-- [ ] **Step3: Implement the minimal accumulator and integrate Responses.** The core shape is:
+- [x] **Step3: Implement the minimal accumulator and integrate Responses.** The core shape is:
 
 ```go
 func (builder *TranslationReportBuilder) Append(report TranslationReport) {
@@ -139,7 +139,7 @@ Run focused GREEN and protocolcore ownership tests:
 env DEVELOPER_DIR=/Library/Developer/CommandLineTools GOFLAGS=-mod=readonly /usr/local/go/bin/go test -count=1 -parallel=1 -run 'TestResponsesRequestNotice|TestTranslationReportBuilder' -v ./internal/protocolcore ./internal/openairesponses
 ```
 
-- [ ] **Step4: Preserve the same contract across existing Anthropic/Chat request loops.** Add actual-code tests for512/2048 Anthropic messages each with text cache_control, nested512/2048 cache-bearing system/message blocks within existing limits, and Chat encoding of valid history messages containing tool calls with item identity notices. Exercise decode, encode and late-error report prefixes through actual existing public codec interfaces; don't assert a fake encoder or a hand-built report as codec evidence.
+- [x] **Step4: Preserve the same contract across existing Anthropic/Chat request loops.** Add actual-code tests for512/2048 Anthropic messages each with text cache_control, nested512/2048 cache-bearing system/message blocks within existing limits, and Chat encoding of valid history messages containing tool calls with item identity notices. Exercise decode, encode and late-error report prefixes through actual existing public codec interfaces; don't assert a fake encoder or a hand-built report as codec evidence.
 
 ```go
 // Synthetic Anthropic message shape, no network/provider call:
@@ -154,7 +154,7 @@ Before changing these loops, preserve genuine allocation-growth REDs using the s
 env DEVELOPER_DIR=/Library/Developer/CommandLineTools GOFLAGS=-mod=readonly /usr/local/go/bin/go test -count=1 -parallel=1 -run '^TestAnthropicRequestNotice' -v ./internal/anthropicchat
 ```
 
-- [ ] **Step5: Freeze the seven-file source and run covering verification.** First focused final regressions, then affected whole packages once, then the bounded named regressions under race. No unrelated whole-repo/Flutter tests in this unit.
+- [x] **Step5: Freeze the seven-file source and run covering verification.** First focused final regressions, then affected whole packages once, then the bounded named regressions under race. No unrelated whole-repo/Flutter tests in this unit.
 
 ```sh
 env DEVELOPER_DIR=/Library/Developer/CommandLineTools GOFLAGS=-mod=readonly /usr/local/go/bin/go test -count=1 ./internal/protocolcore ./internal/openairesponses ./internal/anthropicchat ./internal/responseschat
@@ -164,8 +164,14 @@ git diff --check
 
 Report memory-ratio assertions under race separately; preserve a failure instead of disabling them. The unit's result is lower allocation growth plus identical semantics, not peak-memory certification. Record actual elapsed/allocated bytes for512/2048/4000 and errors unchanged at4111;4111 must still hit the existing guard because removing it belongs to the next coupled admission/record unit.
 
-- [ ] **Step6: Commit only this unit and hand off for independent review.** Stage only the seven named owned files, inspect the staged diff, then commit `fix: accumulate request translation notices linearly`. The report records exact BASE/HEAD, all paths, original RED and final GREEN commands/output, actual measurements and first failures, remaining limits, and handles=0. No commit-amend/reset or other-owner files. Controller generates one exact BASE..HEAD review package for spec and quality review; the implementation author does not spawn reviewers.
+- [x] **Step6: Commit only this unit and hand off for independent review.** Stage only the seven named owned files, inspect the staged diff, then commit `fix: accumulate request translation notices linearly`. The report records exact BASE/HEAD, all paths, original RED and final GREEN commands/output, actual measurements and first failures, remaining limits, and handles=0. No commit-amend/reset or other-owner files. Controller generates one exact BASE..HEAD review package for spec and quality review; the implementation author does not spawn reviewers.
 
 ## Plan self-review and handoff
 
 The single batched task owns the shared builder and all chosen consumers, avoiding independently dispatched changes to the same request files. The two-method interface matches every consumer; immutable reports, partial failures, order and full semantic output have actual tests. Existing4096/record guards remain deliberately unchanged until the next required implementation unit; this plan cannot be the release endpoint. Root records the source/interface preflight table in this plan's SDD ledger, then executes with one fresh implementer and an independent reviewer, as already requested by the user. No additional execution-mode approval is needed.
+
+## Verified unit closure — 2026-10-06
+
+Implementation `d978bcf8ac896350a12a413b87058aa11a82b7fb`, exact review BASE `827aeb30bdabb51e52cbb4ee13f52c1cf4a2843c`. Independent spec compliance and task quality Approved, no Critical/Important/Minor findings. Root read the review and verified all seven frozen source blobs and ten raw-log hashes. Focused regressions, four affected whole packages and three-package scoped race all passed on the same frozen code. Original genuine RED and fixture/setup failures remain in the plan's ignored audit directory, not discarded.
+
+The fixture correction in Step1 was rooted in the actual stable codec's strict/compatible contract, not a permission to broaden valid inputs. No4096 admission or recording limit has changed. Continue the mandatory coupled resource/admission/record implementation and full hotfix acceptance; this closure does not authorize publishing the current partial branch.
