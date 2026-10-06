@@ -22,6 +22,19 @@ const (
 	storedManifestSlots = 16384
 )
 
+// Framing is a physical representation bound, not a retained-history policy.
+// Check the maximum before arithmetic so even untrusted uint64 lengths cannot
+// wrap into an apparently valid slot count.
+func storedBlockSlotCount(size uint64) (uint32, error) {
+	if size == 0 || size > uint64(storedFrameBody)*storedManifestSlots {
+		return 0, exchangecontent.ErrInvalidEvidence
+	}
+	if size <= exchangecontent.MaxEncodedBytes {
+		return 1, nil
+	}
+	return uint32((size-1)/storedFrameBody + 1), nil
+}
+
 type storedCanonicalMeasure struct {
 	ctx            context.Context
 	hash           hash.Hash
@@ -50,16 +63,15 @@ func writeStoredBlockRows(ctx context.Context, block exchangecontent.Block, maxi
 	if err := exchangecontent.WriteCanonicalBlock(&m, block); err != nil {
 		return err
 	}
-	count := uint64(1)
+	count, err := storedBlockSlotCount(m.bytes)
+	if err != nil {
+		return err
+	}
 	header := 0
 	if m.bytes > exchangecontent.MaxEncodedBytes {
-		count = (m.bytes + storedFrameBody - 1) / storedFrameBody
 		header = storedFrameHeader
 	}
-	if count > storedManifestSlots {
-		return exchangecontent.ErrInvalidEvidence
-	}
-	w := storedRowWriter{ctx: ctx, emit: emit, total: m.bytes, count: uint32(count), header: header}
+	w := storedRowWriter{ctx: ctx, emit: emit, total: m.bytes, count: count, header: header, hash: sha256.New()}
 	copy(w.logical[:], m.hash.Sum(nil))
 	w.row = make([]byte, min(uint64(exchangecontent.MaxEncodedBytes), m.bytes+uint64(header)))
 	w.reset()
@@ -71,10 +83,13 @@ func writeStoredBlockRows(ctx context.Context, block exchangecontent.Block, maxi
 			return err
 		}
 	}
-	if w.written != m.bytes || w.ordinal != w.count {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if w.written != m.bytes || w.ordinal != w.count || !bytes.Equal(w.hash.Sum(nil), w.logical[:]) {
 		return exchangecontent.ErrInvalidEvidence
 	}
-	return ctx.Err()
+	return nil
 }
 
 type storedRowWriter struct {
@@ -85,6 +100,7 @@ type storedRowWriter struct {
 	total, written uint64
 	ordinal, count uint32
 	logical        [sha256.Size]byte
+	hash           hash.Hash
 }
 
 func (w *storedRowWriter) reset() {
@@ -120,6 +136,9 @@ func (w *storedRowWriter) Write(p []byte) (int, error) {
 	written := 0
 	for len(p) > 0 {
 		n := copy(w.row[w.used:], p)
+		// Hash the second traversal's canonical body, before a callback can
+		// synchronously change any fields that traversal has not reached yet.
+		_, _ = w.hash.Write(p[:n])
 		w.used += n
 		w.written += uint64(n)
 		written += n
@@ -173,7 +192,8 @@ func newStoredLogicalBlockReader(ctx context.Context, manifest string, slot int,
 		r.Size = binary.BigEndian.Uint64(plain[40:48])
 		r.Slots = int(binary.BigEndian.Uint32(plain[52:56]))
 		copy(r.Digest[:], plain[8:40])
-		if r.Size <= exchangecontent.MaxEncodedBytes || r.Size > maximum || r.Slots < 2 || r.Slots > len(manifest)/storedDigestHexBytes-slot || uint64(r.Slots) != (r.Size+storedFrameBody-1)/storedFrameBody {
+		count, err := storedBlockSlotCount(r.Size)
+		if err != nil || r.Size <= exchangecontent.MaxEncodedBytes || r.Size > maximum || r.Slots < 2 || r.Slots > len(manifest)/storedDigestHexBytes-slot || r.Slots != int(count) {
 			return nil, exchangecontent.ErrInvalidEvidence
 		}
 		if err := r.accept(plain); err != nil {

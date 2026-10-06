@@ -84,3 +84,48 @@ func TestRetainedBlockShapeReportsMetadataBeforeBodySyntax(t *testing.T) {
 		t.Fatalf("shape/body error precedence: %v", err)
 	}
 }
+
+func TestRetainedBlockShapeMetadataOnlyParity(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		block Block
+		valid bool
+	}{
+		{"text", Block{Kind: "text"}, true},
+		{"refusal", Block{Kind: "refusal"}, true},
+		{"tool call", Block{Kind: "tool_call", CallID: "c", ToolName: "tool"}, true},
+		{"tool result", Block{Kind: "tool_result", CallID: "c"}, true},
+		{"reasoning", Block{Kind: "reasoning", ProviderSource: "p", ProviderKind: "k"}, true},
+		{"provider extension", Block{Kind: "provider_extension", ProviderSource: "p", ProviderKind: "k", Fingerprint: "sha256:" + strings.Repeat("a", 64)}, true},
+		{"omitted text", Block{Kind: "text", Text: "private"}, false},
+		{"omitted arguments", Block{Kind: "tool_call", CallID: "c", ToolName: "tool", Arguments: json.RawMessage(`null`)}, false},
+		{"result named pair", Block{Kind: "tool_result", CallID: "c", ToolName: "tool", ToolNamespace: "space", ToolError: true}, true},
+		{"result only name", Block{Kind: "tool_result", CallID: "c", ToolName: "tool"}, false},
+		{"result only namespace", Block{Kind: "tool_result", CallID: "c", ToolNamespace: "space"}, false},
+		{"result bad name", Block{Kind: "tool_result", CallID: "c", ToolName: "bad\nname", ToolNamespace: "space"}, false},
+		{"call namespaced", Block{Kind: "tool_call", CallID: "c", ToolName: "tool", ToolNamespace: "space"}, true},
+		{"call bad namespace", Block{Kind: "tool_call", CallID: "c", ToolName: "tool", ToolNamespace: "bad\nspace"}, false},
+		{"call no ID", Block{Kind: "tool_call", ToolName: "tool"}, false},
+		{"call bad ID", Block{Kind: "tool_call", CallID: "bad\nid", ToolName: "tool"}, false},
+		{"call oversized ID", Block{Kind: "tool_call", CallID: strings.Repeat("c", 513), ToolName: "tool"}, false},
+		{"call missing name", Block{Kind: "tool_call", CallID: "c"}, false},
+		{"call error flag", Block{Kind: "tool_call", CallID: "c", ToolName: "tool", ToolError: true}, false},
+		{"text tool identity", Block{Kind: "text", ToolName: "tool"}, false},
+		{"agent all fields", Block{Kind: "text", Agent: &AgentContext{AgentName: "agent", Author: "author", Recipient: "recipient"}}, true},
+		{"agent boundary", Block{Kind: "tool_call", CallID: "c", ToolName: "tool", Agent: &AgentContext{Author: strings.Repeat("a", 512), Recipient: "recipient"}}, true},
+		{"agent oversized", Block{Kind: "tool_call", CallID: "c", ToolName: "tool", Agent: &AgentContext{Author: strings.Repeat("a", 513), Recipient: "recipient"}}, false},
+		{"agent control", Block{Kind: "tool_result", CallID: "c", Agent: &AgentContext{Author: "author", Recipient: "bad\nrecipient"}}, false},
+		{"agent empty", Block{Kind: "text", Agent: &AgentContext{}}, false},
+		{"agent direction incomplete", Block{Kind: "text", Agent: &AgentContext{Author: "author"}}, false},
+		{"deferred", Block{Kind: "text", Deferred: &DeferredContent{}}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tc.block.Availability = AvailabilityOmitted
+			for name, err := range map[string]error{"shape": tc.block.RetainedShape().Validate(environment.ContentRecordingMetadataOnly), "complete": tc.block.Validate(environment.ContentRecordingMetadataOnly)} {
+				if (err == nil) != tc.valid || (err != nil && !errors.Is(err, ErrInvalidEvidence)) {
+					t.Fatalf("%s valid=%t want=%t: %v", name, err == nil, tc.valid, err)
+				}
+			}
+		})
+	}
+}
