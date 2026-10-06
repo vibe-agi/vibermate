@@ -1,5 +1,45 @@
 # Third-party licenses
 
+## Adapted Go JSON scanner
+
+The private JSON syntax scanner in
+`internal/runtimepersistence/exchange_content_json_scan.go` is adapted from
+Go 1.26.8, `src/encoding/json/scanner.go` (Copyright 2010 The Go Authors).
+Upstream SHA256: `2b16dd215274dfa8e0806b53cca144684d5b9c8a02319cf5ce10120c50e6eef2`.
+Local changes remove the pool, convenience API and build tag, privatize types,
+reset byte offsets, and reserve a caller-owned bounded nesting stack before
+growth. The grammar state transitions are retained. This is adapted source,
+not an additional module dependency. The complete upstream license follows
+and is also retained as `internal/runtimepersistence/GO_JSON_SCANNER_LICENSE`.
+
+Copyright 2009 The Go Authors.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are
+met:
+
+   * Redistributions of source code must retain the above copyright
+notice, this list of conditions and the following disclaimer.
+   * Redistributions in binary form must reproduce the above
+copyright notice, this list of conditions and the following disclaimer
+in the documentation and/or other materials provided with the
+distribution.
+   * Neither the name of Google LLC nor the names of its
+contributors may be used to endorse or promote products derived from
+this software without specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+"AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
 This inventory records the important direct dependencies and bundled assets
 observed in the current source tree and lock files. It is a practical notice,
 not a substitute for a release-specific SBOM or legal review. Release
