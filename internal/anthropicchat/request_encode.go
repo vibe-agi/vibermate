@@ -102,7 +102,7 @@ func (codec *Codec) EncodeProviderRequest(
 			Content: stringPointer(systemText),
 		})
 	}
-	report := protocolcore.TranslationReport{}
+	var report protocolcore.TranslationReportBuilder
 	for messageIndex, message := range request.Messages {
 		encoded, normalized, err := encodeMessage(
 			message,
@@ -110,19 +110,19 @@ func (codec *Codec) EncodeProviderRequest(
 			codec.providerRequest.instructionRoleMode,
 		)
 		if err != nil {
-			return nil, report, protocolcore.NewFailure(
+			return nil, report.Build(), protocolcore.NewFailure(
 				protocolcore.ReasonUnsupportedClientInput,
 				"$.messages",
 				err,
 			)
 		}
 		messages = append(messages, encoded...)
-		report = report.Merge(messageEncodingReport(
+		report.Append(messageEncodingReport(
 			messageIndex,
 			message,
 		))
 		if normalized {
-			report = report.Merge(protocolcore.NewTranslationReport(protocolcore.TranslationNotice{
+			report.Append(protocolcore.NewTranslationReport(protocolcore.TranslationNotice{
 				Code: protocolcore.NoticeContentOrderNormalized,
 				Path: "$.messages[" + integerString(messageIndex) + "].content",
 			}))
@@ -130,7 +130,7 @@ func (codec *Codec) EncodeProviderRequest(
 		if message.Role == protocolcore.RoleDeveloper &&
 			codec.providerRequest.instructionRoleMode ==
 				InstructionRoleNormalizeDeveloperToSystem {
-			report = report.Merge(protocolcore.NewTranslationReport(
+			report.Append(protocolcore.NewTranslationReport(
 				protocolcore.TranslationNotice{
 					Code: protocolcore.NoticeDeveloperRoleNormalized,
 					Path: "$.messages[" + integerString(messageIndex) + "].role",
@@ -161,7 +161,7 @@ func (codec *Codec) EncodeProviderRequest(
 			},
 		}
 		if entry.identity.namespace != "" {
-			report = report.Merge(protocolcore.NewTranslationReport(
+			report.Append(protocolcore.NewTranslationReport(
 				protocolcore.TranslationNotice{
 					Code: protocolcore.NoticeToolNamespaceEncoded,
 					Path: entry.path,
@@ -171,7 +171,7 @@ func (codec *Codec) EncodeProviderRequest(
 		if tool.EffectiveKind() == protocolcore.ToolKindCustom &&
 			tool.CustomFormat.Kind ==
 				protocolcore.CustomToolFormatGrammar {
-			report = report.Merge(protocolcore.NewTranslationReport(
+			report.Append(protocolcore.NewTranslationReport(
 				protocolcore.TranslationNotice{
 					Code: protocolcore.NoticeCustomToolGrammarNotForwarded,
 					Path: entry.path + ".format",
@@ -179,7 +179,7 @@ func (codec *Codec) EncodeProviderRequest(
 			))
 		}
 		if tool.EagerInputStreaming {
-			report = report.Merge(protocolcore.NewTranslationReport(
+			report.Append(protocolcore.NewTranslationReport(
 				protocolcore.TranslationNotice{
 					Code: protocolcore.NoticeEagerToolInputStreamingNotForwarded,
 					Path: entry.path + ".eager_input_streaming",
@@ -199,7 +199,7 @@ func (codec *Codec) EncodeProviderRequest(
 	case protocolcore.ToolChoiceNamed:
 		entry, err := toolCatalog.namedEntry(request.ToolChoice.Name)
 		if err != nil {
-			return nil, report, protocolcore.NewFailure(
+			return nil, report.Build(), protocolcore.NewFailure(
 				protocolcore.ReasonUnsupportedClientInput,
 				"$.tool_choice",
 				err,
@@ -209,7 +209,7 @@ func (codec *Codec) EncodeProviderRequest(
 	case protocolcore.ToolChoiceNone:
 		toolChoice = "none"
 	default:
-		return nil, report, protocolcore.NewFailure(
+		return nil, report.Build(), protocolcore.NewFailure(
 			protocolcore.ReasonUnsupportedClientInput,
 			"$.tool_choice",
 			errors.New("tool choice is unsupported"),
@@ -233,9 +233,9 @@ func (codec *Codec) EncodeProviderRequest(
 	}
 	reasoningEffort, reasoningReport := codec.encodeProviderReasoning(request)
 	wire.ReasoningEffort = reasoningEffort
-	report = report.Merge(reasoningReport)
+	report.Append(reasoningReport)
 	if len(request.Context.Edits) != 0 {
-		report = report.Merge(protocolcore.NewTranslationReport(
+		report.Append(protocolcore.NewTranslationReport(
 			protocolcore.TranslationNotice{
 				Code: protocolcore.NoticeContextManagementNotForwarded,
 				Path: "$.context_management",
@@ -243,7 +243,7 @@ func (codec *Codec) EncodeProviderRequest(
 		))
 	}
 	if request.Diagnostics.Requested {
-		report = report.Merge(protocolcore.NewTranslationReport(
+		report.Append(protocolcore.NewTranslationReport(
 			protocolcore.TranslationNotice{
 				Code: protocolcore.NoticeDiagnosticsNotForwarded,
 				Path: "$.diagnostics",
@@ -251,7 +251,7 @@ func (codec *Codec) EncodeProviderRequest(
 		))
 	}
 	if request.OutputVerbosity != "" {
-		report = report.Merge(protocolcore.NewTranslationReport(
+		report.Append(protocolcore.NewTranslationReport(
 			protocolcore.TranslationNotice{
 				Code: protocolcore.NoticeTextVerbosityNotForwarded,
 				Path: "$.text.verbosity",
@@ -270,7 +270,7 @@ func (codec *Codec) EncodeProviderRequest(
 			},
 		}
 	default:
-		return nil, report, protocolcore.NewFailure(
+		return nil, report.Build(), protocolcore.NewFailure(
 			protocolcore.ReasonUnsupportedClientInput,
 			"$.output_config.format",
 			errors.New("structured output kind is unavailable"),
@@ -283,7 +283,7 @@ func (codec *Codec) EncodeProviderRequest(
 		case CompletionTokenFieldMaxCompletionTokens:
 			wire.MaxCompletionTokens = integerPointer(request.MaxOutputTokens)
 		default:
-			return nil, report, protocolcore.NewFailure(
+			return nil, report.Build(), protocolcore.NewFailure(
 				protocolcore.ReasonUnsupportedClientInput,
 				"$.max_tokens",
 				errors.New("provider completion token field is unavailable"),
@@ -294,17 +294,17 @@ func (codec *Codec) EncodeProviderRequest(
 		switch codec.providerRequest.toolReasoningMode {
 		case ToolReasoningModeOmit:
 			if wire.ReasoningEffort != "" {
-				report = report.Merge(reasoningDowngradeNotice())
+				report.Append(reasoningDowngradeNotice())
 			}
 			wire.ReasoningEffort = ""
 		case ToolReasoningModeNone:
 			if wire.ReasoningEffort != "" &&
 				wire.ReasoningEffort != "none" {
-				report = report.Merge(reasoningDowngradeNotice())
+				report.Append(reasoningDowngradeNotice())
 			}
 			wire.ReasoningEffort = "none"
 		default:
-			return nil, report, protocolcore.NewFailure(
+			return nil, report.Build(), protocolcore.NewFailure(
 				protocolcore.ReasonUnsupportedClientInput,
 				"$.tools",
 				errors.New("provider tool reasoning mode is unavailable"),
@@ -316,20 +316,20 @@ func (codec *Codec) EncodeProviderRequest(
 	}
 	encoded, err := json.Marshal(wire)
 	if err != nil {
-		return nil, report, protocolcore.NewFailure(
+		return nil, report.Build(), protocolcore.NewFailure(
 			protocolcore.ReasonInvalidClientRequest,
 			"$",
 			err,
 		)
 	}
-	return encoded, report, nil
+	return encoded, report.Build(), nil
 }
 
 func messageEncodingReport(
 	messageIndex int,
 	message protocolcore.Message,
 ) protocolcore.TranslationReport {
-	report := protocolcore.TranslationReport{}
+	var report protocolcore.TranslationReportBuilder
 	for blockIndex, block := range message.Blocks {
 		if block.Kind != protocolcore.BlockToolCall {
 			continue
@@ -340,7 +340,7 @@ func messageEncodingReport(
 			blockIndex,
 		)
 		if !block.ToolCall.ItemKey.IsZero() {
-			report = report.Merge(protocolcore.NewTranslationReport(
+			report.Append(protocolcore.NewTranslationReport(
 				protocolcore.TranslationNotice{
 					Code: protocolcore.NoticeToolItemIdentityNotForwarded,
 					Path: path + ".item_id",
@@ -349,7 +349,7 @@ func messageEncodingReport(
 		}
 		if block.ToolCall.EffectiveKind() ==
 			protocolcore.ToolKindCustom {
-			report = report.Merge(protocolcore.NewTranslationReport(
+			report.Append(protocolcore.NewTranslationReport(
 				protocolcore.TranslationNotice{
 					Code: protocolcore.NoticeCustomToolKindEncoded,
 					Path: path + ".kind",
@@ -357,7 +357,7 @@ func messageEncodingReport(
 			))
 		}
 	}
-	return report
+	return report.Build()
 }
 
 func structuredOutputName(schema protocolcore.JSONDocument) string {
