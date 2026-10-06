@@ -54,6 +54,9 @@ type ResourceLimits struct { Request, Response ResourceCost }
 func (ResourceLimits) Validate() error // finite/nonzero, checked aggregate arithmetic
 func ValidateRequestWithin(Request, ResourceLimits) error // full semantics + costs; no4096 business cap
 func ValidateResponseWithin(Response, ResourceLimits) error
+func CloneRequestWithin(Request, ResourceLimits) (Request, error)
+func WithEffectiveModelWithin(Request, string, ResourceLimits) (Request, error)
+func CloneResponseWithin(Response, ResourceLimits) (Response, error)
 // Each codec adds Options.Resources *protocolcore.ResourceLimits: nil preserves legacy defaults until Task7.
 // Non-nil is copied/validated by its constructor; every decode/encode/clone uses that exact policy.
 // It cannot skip semantic, wire, duplicate-name, per-field or record checks.
@@ -80,6 +83,19 @@ func WithBodyLease(*BodyLease) ClientRequestOption
 // exchangecontent: concrete sources are sealed; callbacks cannot manufacture authority.
 type Part uint8 // SystemPart, RequestPart, ResponsePart
 type MessageHeader struct { Role string; Agent *AgentContext; BlockCount int }
+type RecordMetadata struct {
+    ExchangeID string; Parent ParentRef; Frozen FrozenRef
+    Mode environment.ContentRecordingMode; RecordedAt, ExpiresAt time.Time
+    Request RequestMetadata; Response *ResponseMetadata
+}
+type RequestMetadata struct {
+    RequestedModel, EffectiveModel string; MaxOutputTokens int; Stream bool
+    Tools []ToolDefinition; ProtocolEvidence []protocolcore.ProtocolEvidenceValue
+}
+type ResponseMetadata struct {
+    ID, RequestedModel, EffectiveModel, ReportedModel, StopReason string
+    Usage Usage; ProtocolEvidence []protocolcore.ProtocolEvidenceValue; EmptyOutput bool
+}
 type Source struct { /* private borrowed immutable semantic inputs + validated metadata */ }
 type MessageSource struct { /* private source/index */ }
 func NewSource(string, FrozenRef, environment.ContentRecordingPolicy, time.Time,
@@ -90,7 +106,7 @@ func (SourceLimits) Validate() error // finite/checked; retains the complete old
 func NewSourceWithin(SourceLimits, string, FrozenRef, environment.ContentRecordingPolicy,
     time.Time, protocolcore.Request, *protocolcore.Response, ...RecordOption) (*Source, error)
 func SourceFromRecord(Record) (*Source, error)
-func (*Source) Metadata() Record // scalars/tools/evidence only; no System/Messages/response Blocks
+func (*Source) Metadata() RecordMetadata // a distinct metadata value, never an invalid body-empty Record
 func (*Source) Walk(context.Context, func(Part, int, MessageSource) error) error
 func (MessageSource) Header() MessageHeader
 func (MessageSource) WalkBlocks(context.Context, func(Block) error) error
@@ -104,7 +120,7 @@ func WriteCanonicalMessage(io.Writer, MessageSource) error
 // Manager.RecordSource(context.Context,*Source) error; Repository.PutSource(context.Context,*Source) error.
 ```
 
-`NewSource` borrows the already-owned immutable capture only until synchronous `RecordSource` returns; it does not retain callbacks/input after return. Remove only the extra observer/Manager clones covered by that lifetime; keep ownership clones needed by scripts/provider mutation. `SourceFromRecord` uses the same checked walk. No call to `Measure` may call `Validate` recursively.
+`NewSource` borrows the already-owned immutable capture only until synchronous `RecordSource` returns; it does not retain callbacks/input after return. Metadata returns independent bounded slice headers/elements; it cannot expose mutable source arrays or masquerade as a complete valid Record. Remove only the extra observer/Manager clones covered by that lifetime; keep ownership clones needed by scripts/provider mutation. `SourceFromRecord` uses the same checked walk. No call to `Measure` may call `Validate` recursively. The three explicit checked clone/model helpers reserve/validate before cloning and preserve existing model-policy semantics; codecs and Pipeline propagate their exact copied ResourceLimits rather than accidentally calling a legacy-count helper.
 
 `ResourcePolicy` is a finite constructor value used only inside internal packages/test harnesses; it is not a user/runtime knob. Add `productruntime.Options.Resources *exchange.ResourcePolicy` and `runtimepersistence.Options.ContentLimits *exchangecontent.SourceLimits` as internal constructor injection, with no JSON/config/env exposure. Task6 constructs candidate Runtime/codec/source/Store-reader wiring with those copied/validated values, including limits-aware model-map/clone/record/read validation. Existing production constructors retain legacy checks until Task7 adopts one private `productionResourcePolicy` value. No callback replaces validation; nil/zero never means unlimited. `NewSourceWithin` and `ValidateRequestWithin` provide full final-path semantics; the4096 business check is confined to the legacy adapter. Repository readers use the same SourceLimits, so candidate >4096 roundtrips cannot accidentally fall back through legacy Record.Validate.
 
