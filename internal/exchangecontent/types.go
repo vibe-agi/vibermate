@@ -211,22 +211,32 @@ type UsageValue struct {
 // omitempty for Tokens would turn it into an internally contradictory
 // {"known":true,"source":...} value.
 func (value UsageValue) MarshalJSON() ([]byte, error) {
+	if err := value.validateEncoding(); err != nil {
+		return nil, err
+	}
 	if !value.Known {
-		if value.Tokens != 0 || value.Source != "" {
-			return nil, fmt.Errorf("%w: unknown usage has evidence", ErrInvalidEvidence)
-		}
 		return json.Marshal(struct {
 			Known bool `json:"known"`
 		}{Known: false})
-	}
-	if value.Tokens < 0 || value.Source == "" {
-		return nil, fmt.Errorf("%w: known usage is incomplete", ErrInvalidEvidence)
 	}
 	return json.Marshal(struct {
 		Known  bool   `json:"known"`
 		Tokens int64  `json:"tokens"`
 		Source string `json:"source"`
 	}{Known: true, Tokens: value.Tokens, Source: value.Source})
+}
+
+func (value UsageValue) validateEncoding() error {
+	if !value.Known {
+		if value.Tokens != 0 || value.Source != "" {
+			return fmt.Errorf("%w: unknown usage has evidence", ErrInvalidEvidence)
+		}
+		return nil
+	}
+	if value.Tokens < 0 || value.Source == "" {
+		return fmt.Errorf("%w: known usage is incomplete", ErrInvalidEvidence)
+	}
+	return nil
 }
 
 func (value *UsageValue) UnmarshalJSON(encoded []byte) error {
@@ -320,16 +330,27 @@ type Projection struct {
 	TotalMessageCount int                              `json:"-"`
 }
 
-type RecordOption func(*Record) error
+type RecordOption struct {
+	parent  ParentRef
+	present bool
+}
 
 func WithParentRef(parent ParentRef) RecordOption {
-	return func(record *Record) error {
-		if err := parent.Validate(); err != nil {
-			return err
+	return RecordOption{parent: parent, present: true}
+}
+
+func applyRecordOptions(options []RecordOption) (ParentRef, error) {
+	var parent ParentRef
+	for _, option := range options {
+		if !option.present {
+			return ParentRef{}, fmt.Errorf("%w: record option is zero", ErrInvalidEvidence)
 		}
-		record.Parent = parent
-		return nil
+		if err := option.parent.Validate(); err != nil {
+			return ParentRef{}, err
+		}
+		parent = option.parent
 	}
+	return parent, nil
 }
 
 func NewRecord(
@@ -360,14 +381,11 @@ func NewRecord(
 		Request:      requestView(request, full),
 		Presentation: RequestPresentation{Mode: RequestPresentationCheckpoint},
 	}
-	for _, option := range options {
-		if option == nil {
-			return Record{}, fmt.Errorf("%w: record option is nil", ErrInvalidEvidence)
-		}
-		if err := option(&record); err != nil {
-			return Record{}, err
-		}
+	parent, err := applyRecordOptions(options)
+	if err != nil {
+		return Record{}, err
 	}
+	record.Parent = parent
 	if response != nil {
 		if err := response.Validate(); err != nil {
 			return Record{}, fmt.Errorf("%w: response: %v", ErrInvalidEvidence, err)
@@ -648,10 +666,14 @@ func (request Request) validate(mode environment.ContentRecordingMode) error {
 }
 
 func (request Request) validateProjection(mode environment.ContentRecordingMode) error {
+	return request.validateProjectionWithin(mode, true)
+}
+
+func (request Request) validateProjectionWithin(mode environment.ContentRecordingMode, legacyCount bool) error {
 	if request.RequestedModel == "" || request.EffectiveModel == "" ||
 		request.MaxOutputTokens < 0 ||
-		len(request.System) > protocolcore.MaxContentBlocks ||
-		len(request.Messages) > protocolcore.MaxMessageCount+1 ||
+		(legacyCount && len(request.System) > protocolcore.MaxContentBlocks) ||
+		(legacyCount && len(request.Messages) > protocolcore.MaxMessageCount+1) ||
 		len(request.Tools) > protocolcore.MaxToolCount {
 		return fmt.Errorf("%w: request projection is incomplete", ErrInvalidEvidence)
 	}
@@ -667,7 +689,7 @@ func (request Request) validateProjection(mode environment.ContentRecordingMode)
 		default:
 			return fmt.Errorf("%w: message role is unsupported", ErrInvalidEvidence)
 		}
-		if len(message.Blocks) == 0 || len(message.Blocks) > protocolcore.MaxContentBlocks {
+		if len(message.Blocks) == 0 || (legacyCount && len(message.Blocks) > protocolcore.MaxContentBlocks) {
 			return fmt.Errorf("%w: message blocks are invalid", ErrInvalidEvidence)
 		}
 		if message.Agent != nil {
@@ -699,9 +721,13 @@ func (request Request) validateProjection(mode environment.ContentRecordingMode)
 }
 
 func (response Response) validate(mode environment.ContentRecordingMode) error {
+	return response.validateWithin(mode, true)
+}
+
+func (response Response) validateWithin(mode environment.ContentRecordingMode, legacyCount bool) error {
 	if !validIdentity(response.ID, 512) || response.RequestedModel == "" ||
 		response.EffectiveModel == "" || response.ReportedModel == "" ||
-		len(response.Blocks) > protocolcore.MaxContentBlocks {
+		(legacyCount && len(response.Blocks) > protocolcore.MaxContentBlocks) {
 		return fmt.Errorf("%w: response projection is incomplete", ErrInvalidEvidence)
 	}
 	if err := protocolcore.StopReason(response.StopReason).Validate(); err != nil {
@@ -980,7 +1006,7 @@ func blockViewsWithProviderReasoning(
 			view.ToolName = block.ToolCall.Name
 			view.ToolNamespace = block.ToolCall.Namespace
 			if block.ToolCall.EffectiveKind() == protocolcore.ToolKindFunction {
-				view.OriginalSize = len(block.ToolCall.Arguments.Bytes())
+				view.OriginalSize = block.ToolCall.Arguments.ByteLen()
 				if full {
 					view.Availability = AvailabilityRecorded
 					view.Arguments = sanitizeJSON(block.ToolCall.Arguments.Bytes())
@@ -1040,12 +1066,14 @@ func sanitizeText(value string) string {
 	if !utf8.ValidString(value) {
 		return "[invalid text omitted]"
 	}
-	value = unixHomePattern.ReplaceAllString(value, "${1}~")
-	value = windowsHomePattern.ReplaceAllString(value, "${1}~")
-	value = headerSecretPattern.ReplaceAllString(value, "${1}: [redacted]")
-	value = bearerPattern.ReplaceAllString(value, "Bearer [redacted]")
-	value = providerSecretPattern.ReplaceAllString(value, "[redacted credential]")
-	value = urlUserInfoPattern.ReplaceAllString(value, "${1}[redacted]@")
+	for _, replacement := range []struct {
+		pattern *regexp.Regexp
+		value   string
+	}{{unixHomePattern, "${1}~"}, {windowsHomePattern, "${1}~"}, {headerSecretPattern, "${1}: [redacted]"}, {bearerPattern, "Bearer [redacted]"}, {providerSecretPattern, "[redacted credential]"}, {urlUserInfoPattern, "${1}[redacted]@"}} {
+		if replacement.pattern.MatchString(value) {
+			value = replacement.pattern.ReplaceAllString(value, replacement.value)
+		}
+	}
 	return value
 }
 
