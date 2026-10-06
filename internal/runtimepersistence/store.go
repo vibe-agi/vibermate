@@ -42,6 +42,7 @@ type Options struct {
 	DatabasePath           string
 	BusyTimeout            time.Duration
 	CommitReconcileTimeout time.Duration
+	ContentLimits          *exchangecontent.SourceLimits
 }
 
 // Store owns a SQLite connection pool and its repositories.
@@ -90,6 +91,17 @@ func Open(ctx context.Context, options Options) (*Store, error) {
 			"%w: commit reconcile timeout must be positive",
 			ErrInvalidDatabasePath,
 		)
+	}
+	var contentLimits *exchangecontent.SourceLimits
+	if options.ContentLimits != nil {
+		copy := *options.ContentLimits
+		if err := copy.Validate(); err != nil {
+			return nil, err
+		}
+		if _, err := storedMaterializationBound(copy); err != nil {
+			return nil, err
+		}
+		contentLimits = &copy
 	}
 	if err := prepareDatabasePath(options.DatabasePath); err != nil {
 		return nil, err
@@ -144,7 +156,6 @@ func Open(ctx context.Context, options Options) (*Store, error) {
 		options.CommitReconcileTimeout,
 		sqlTransactionCommitter{},
 	)
-	exchangeContents := newExchangeContentRepository(database, operations)
 	connectionRepo := newConnectionEventRepository(database, operations)
 	egressRepo := newEgressAttemptRepository(database, operations)
 	approvalRepo := newToolApprovalRepository(database, operations)
@@ -189,6 +200,7 @@ func Open(ctx context.Context, options Options) (*Store, error) {
 		return fail(errors.Join(err, reads.Close()))
 	}
 	activityRepo := newActivityRepository(database, reads, operations)
+	exchangeContents := newExchangeContentRepository(database, reads, operations, contentLimits)
 	return &Store{
 		databasePath:       options.DatabasePath,
 		database:           database,

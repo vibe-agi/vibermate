@@ -671,8 +671,9 @@ func (w *countWriter) Write(b []byte) (int, error) {
 }
 
 // retainedCost is the logical retained-record currency, per occurrence. It is
-// independent of canonical/physical encoding and parser workspace accounting.
-// Views reuse these exact rules for the content they actually contain.
+// independent of physical encoding and parser workspace accounting. Raw JSON
+// charges the larger current/durable spelling, covering canonical HTML growth
+// without discarding the live input's whitespace. Views reuse these rules.
 type retainedCost struct {
 	budget      *protocolcore.ResourceBudget
 	cost        *RecordCost
@@ -763,8 +764,17 @@ func (c *retainedCost) message(h MessageHeader) error {
 	}
 	return c.agent(h.Agent)
 }
-func (c *retainedCost) block(b Block) error {
-	if err := c.add(c.strings(b.Kind, string(b.Availability), b.Text, b.CallID, b.ToolName, b.ToolNamespace, b.ProviderSource, b.ProviderKind, b.Fingerprint)+uint64(len(b.Arguments)), uint64(unsafe.Sizeof(Block{}))); err != nil {
+func (c *retainedCost) block(ctx context.Context, b Block) error {
+	raw, err := canonicalRawBytes(ctx, b.Arguments)
+	if err != nil {
+		return err
+	}
+	raw = max(raw, uint64(len(b.Arguments)))
+	ordinary := c.strings(b.Kind, string(b.Availability), b.Text, b.CallID, b.ToolName, b.ToolNamespace, b.ProviderSource, b.ProviderKind, b.Fingerprint)
+	if ordinary > math.MaxInt64 || raw > math.MaxInt64-ordinary {
+		return ErrInvalidEvidence
+	}
+	if err := c.add(ordinary+raw, uint64(unsafe.Sizeof(Block{}))); err != nil {
 		return err
 	}
 	return c.agent(b.Agent)
@@ -840,7 +850,7 @@ func (s *Source) Measure(ctx context.Context) (RecordCost, error) {
 			if argumentDepthOverflow(b.Arguments, envelope) != 0 {
 				return fmt.Errorf("%w: canonical arguments exceed parent depth", ErrInvalidEvidence)
 			}
-			if err := retained.block(b); err != nil {
+			if err := retained.block(ctx, b); err != nil {
 				return err
 			}
 			if err := agent(b.Agent); err != nil {

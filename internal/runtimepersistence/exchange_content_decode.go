@@ -18,10 +18,18 @@ import (
 
 type storedDecodeLimits struct{ CanonicalBytes, RetainedBytes, RetainedStructureBytes, WorkspaceBytes uint64 }
 
+// Logical Source currencies count each decoded field once, independently of
+// the parser's capacity/workspace reservations below. Zero structure denotes
+// a snapshot taken before the first authenticated pass has measured a block.
+type storedBlockLogicalCost struct{ RetainedBytes, StructureBytes uint64 }
+
 // Absolute overlapping snapshot, NOT an additive delta. The caller accounts
 // physical rows separately and keeps separate charges for earlier outputs
 // retained across subsequent calls. Failure never transfers provisional output.
-type storedDecodeCost struct{ RetainedBytes, RetainedStructureBytes, WorkspaceBytes uint64 }
+type storedDecodeCost struct {
+	RetainedBytes, RetainedStructureBytes, WorkspaceBytes uint64
+	LogicalCost                                           storedBlockLogicalCost
+}
 type storedDecodeInput struct {
 	Reader io.Reader
 	Size   uint64
@@ -32,6 +40,7 @@ type storedDecodeOpen func(context.Context) (storedDecodeInput, error)
 type storedBlockFacts struct {
 	Shape                                    exchangecontent.BlockShape
 	CanonicalBytes, TextBytes, ArgumentBytes uint64
+	LogicalCost                              storedBlockLogicalCost
 }
 type storedBodyRange struct {
 	Facts       storedBlockFacts
@@ -206,6 +215,7 @@ func (d *storedBlockDecoder) decode(ctx context.Context, open storedDecodeOpen, 
 	}
 	result := &storedDecodeResult{facts: first.facts, lengths: first.lengths}
 	cost = d.cost
+	cost.LogicalCost = first.facts.LogicalCost
 	cost.RetainedStructureBytes = uint64(reflect.TypeFor[storedBlockFacts]().Size())
 	if request.full {
 		cost.RetainedStructureBytes = uint64(reflect.TypeFor[exchangecontent.Block]().Size())
@@ -353,6 +363,17 @@ func (d *storedBlockDecoder) pass(ctx context.Context, input storedDecodeInput, 
 	p.summary.facts.CanonicalBytes = p.read
 	p.summary.facts.TextBytes = lengths[decodedText]
 	p.summary.facts.ArgumentBytes = lengths[decodedArguments]
+	logical := storedBlockLogicalCost{StructureBytes: uint64(reflect.TypeFor[exchangecontent.Block]().Size())}
+	for _, n := range lengths {
+		if n > math.MaxInt64-logical.RetainedBytes {
+			return storedPassFacts{}, exchangecontent.ErrInvalidEvidence
+		}
+		logical.RetainedBytes += n
+	}
+	if s.HasAgent {
+		logical.StructureBytes += uint64(reflect.TypeFor[exchangecontent.AgentContext]().Size())
+	}
+	p.summary.facts.LogicalCost = logical
 	if request.end >= lengths[decodedText] {
 		p.summary.textEnd = lengths[decodedText]
 	}

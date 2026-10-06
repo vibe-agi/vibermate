@@ -267,27 +267,33 @@ func TestWithinPageWireAndCurrencyBoundaries(t *testing.T) {
 		for _, delta := range []int64{-1, 0, 1} {
 			l := sourceFixtureLimits()
 			l.CanonicalBytes = uint64(int64(len(want)) + delta)
-			err := p.ValidateWithin(context.Background(), l)
+			err := countPageWire(context.Background(), l.CanonicalBytes, p)
 			if (err != nil) != (delta < 0) {
 				t.Fatalf("page %s wire delta%d: %v", kind, delta, err)
 			}
 		}
 	}
-	// Independently derive one body's logical retained currencies from its
-	// concrete container and all actually held ordinary string occurrences.
+	// The generated page kind/container/cursor have their own finite ledger;
+	// real visible fields retain the Source currency.
 	f := base.Frozen
-	payload := len(base.ExchangeID) + len(base.Kind) + len(base.Text) + len(string(base.Mode)) + len(f.EnvironmentID) + len(f.EnvironmentDigest) + len(f.ClientEndpointID) + len(f.ProtocolPlanID) + len(f.RouteID)
-	for _, currency := range []string{"retained", "structure"} {
-		for _, delta := range []int64{-1, 0, 1} {
-			l := sourceFixtureLimits()
-			if currency == "retained" {
-				l.RetainedBytes = uint64(int64(payload) + delta)
-			} else {
-				l.StructureBytes = uint64(int64(unsafe.Sizeof(ContentPage{})) + delta)
-			}
-			if err := base.ValidateWithin(context.Background(), l); (err != nil) != (delta < 0) {
-				t.Fatalf("page %s delta%d: %v", currency, delta, err)
-			}
+	payload := len(base.ExchangeID) + len(base.Text) + len(string(base.Mode)) + len(f.EnvironmentID) + len(f.EnvironmentDigest) + len(f.ClientEndpointID) + len(f.ProtocolPlanID) + len(f.RouteID)
+	for _, delta := range []int64{-1, 0, 1} {
+		l := sourceFixtureLimits()
+		l.RetainedBytes = uint64(int64(payload) + delta)
+		if err := base.ValidateWithin(context.Background(), l); (err != nil) != (delta < 0) {
+			t.Fatalf("real page payload delta%d: %v", delta, err)
+		}
+	}
+	for _, delta := range []int64{-1, 0, 1} {
+		p := base
+		p.Kind = "message"
+		p.Text = ""
+		p.Total = 1
+		p.Blocks = []Block{{Kind: "text", Availability: AvailabilityRecorded, Text: "data"}}
+		l := sourceFixtureLimits()
+		l.StructureBytes = uint64(int64(unsafe.Sizeof(Block{})) + delta)
+		if err := p.ValidateWithin(context.Background(), l); (err != nil) != (delta < 0) {
+			t.Fatalf("real block structure delta%d: %v", delta, err)
 		}
 	}
 	for _, size := range []int{PageBodyBytes - 1, PageBodyBytes, PageBodyBytes + 1} {
@@ -309,6 +315,50 @@ func TestWithinPageWireAndCurrencyBoundaries(t *testing.T) {
 	}
 	if err := p.ValidateWithin(context.Background(), sourceFixtureLimits()); !errors.Is(err, ErrInvalidEvidence) {
 		t.Fatal("page wire ceiling ignored")
+	}
+}
+
+func TestWithinGeneratedControlBudgetAndCanonicalCredit(t *testing.T) {
+	r := withinFixture(t, 1)
+	p := ContentPage{ExchangeID: "e", Parent: r.Parent, Frozen: r.Frozen, Mode: r.Mode, Kind: "text", Text: "x", Total: 1, NextCursor: strings.Repeat("\"<&", 100)}
+	// The only non-control wire in this body page is independently literal.
+	const dataWire = len(`"exchangeId":"e",` + `"text":"x"`)
+	for _, delta := range []int{-1, 0, 1} {
+		l := sourceFixtureLimits()
+		l.CanonicalBytes = uint64(dataWire + delta)
+		if err := p.ValidateWithin(context.Background(), l); (err != nil) != (delta < 0) {
+			t.Fatalf("actual data canonical delta%d: %v", delta, err)
+		}
+	}
+	p.NextCursor = strings.Repeat("c", MaxPageCursorBytes+1)
+	if err := p.ValidateWithin(context.Background(), sourceFixtureLimits()); !errors.Is(err, ErrInvalidEvidence) {
+		t.Fatal("cursor limit widened")
+	}
+	c := newReadControlCost(context.Background())
+	if err := c.add(readControlPayloadLimit, 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.add(1, 0); !errors.Is(err, ErrInvalidEvidence) {
+		t.Fatal("control payload overflow")
+	}
+	c = newReadControlCost(context.Background())
+	if err := c.add(0, math.MaxUint64); !errors.Is(err, ErrInvalidEvidence) {
+		t.Fatal("control structure overflow")
+	}
+	if c.wireLimit(math.MaxInt64) != MaxPageBytes {
+		t.Fatal("wire limit overflow or cap widening")
+	}
+	marker := Block{Kind: "deferred", Availability: AvailabilityRecorded, Deferred: &DeferredContent{ExchangeID: r.ExchangeID, Cursor: "c", EstimatedBytes: 1}}
+	projection := withinProjection(r)
+	projection.Page = &ProjectionPage{}
+	projection.Request.Messages = []Message{{Role: "unknown", Blocks: []Block{marker}}}
+	for _, mutate := range []func(*Block){func(b *Block) { b.Text = "real payload" }, func(b *Block) { b.Arguments = []byte(`null`) }, func(b *Block) { b.Agent = &AgentContext{AgentName: "a"} }, func(b *Block) { b.ProviderSource = "real" }} {
+		bad := projection
+		bad.Request.Messages = []Message{{Role: "unknown", Blocks: []Block{marker}}}
+		mutate(&bad.Request.Messages[0].Blocks[0])
+		if err := bad.ValidateWithin(context.Background(), sourceFixtureLimits()); !errors.Is(err, ErrInvalidEvidence) {
+			t.Fatal("forged shell escaped real-data admission")
+		}
 	}
 }
 

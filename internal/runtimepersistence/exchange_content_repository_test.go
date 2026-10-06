@@ -3,7 +3,9 @@ package runtimepersistence
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -13,6 +15,153 @@ import (
 	"github.com/vibe-agi/vibermate/internal/exchangecontent"
 	"github.com/vibe-agi/vibermate/internal/protocolcore"
 )
+
+func candidateContentLimits() exchangecontent.SourceLimits {
+	return exchangecontent.SourceLimits{
+		Semantic:       protocolcore.ResourceLimits{Request: protocolcore.ResourceCost{PayloadBytes: 32 << 20, StructureBytes: 32 << 20}, Response: protocolcore.ResourceCost{PayloadBytes: 32 << 20, StructureBytes: 32 << 20}},
+		Scratch:        protocolcore.ResourceCost{PayloadBytes: 128 << 20, StructureBytes: 32 << 20},
+		CanonicalBytes: 256 << 20, RetainedBytes: 64 << 20, StructureBytes: 32 << 20,
+	}
+}
+
+func openCandidateContentStore(t *testing.T, path string, limits *exchangecontent.SourceLimits) *Store {
+	t.Helper()
+	s, err := Open(context.Background(), Options{DatabasePath: path, BusyTimeout: DefaultBusyTimeout, CommitReconcileTimeout: DefaultCommitReconcileTimeout, ContentLimits: limits})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { shutdownTestStore(t, s) })
+	return s
+}
+
+func putCandidateSource(t *testing.T, store *Store, source *exchangecontent.Source) error {
+	t.Helper()
+	sink, ok := any(store.exchangeContents).(interface {
+		PutSource(context.Context, *exchangecontent.Source) error
+	})
+	if !ok {
+		t.Fatal("real Store repository has no Source transaction")
+	}
+	return sink.PutSource(context.Background(), source)
+}
+
+func TestContentSourcePolicyBeforeOpen(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "uncreated", "runtime.db")
+	limits := candidateContentLimits()
+	limits.RetainedBytes = 0
+	s, err := Open(context.Background(), Options{DatabasePath: path, BusyTimeout: DefaultBusyTimeout, CommitReconcileTimeout: DefaultCommitReconcileTimeout, ContentLimits: &limits})
+	if s != nil {
+		shutdownTestStore(t, s)
+	}
+	if !errors.Is(err, exchangecontent.ErrInvalidEvidence) {
+		t.Fatalf("invalid policy opened Store: %v", err)
+	}
+	if _, err := os.Stat(filepath.Dir(path)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("invalid policy changed filesystem: %v", err)
+	}
+}
+
+func TestContentSourceReadsUsePool(t *testing.T) {
+	l := candidateContentLimits()
+	s := openCandidateContentStore(t, filepath.Join(t.TempDir(), "runtime.db"), &l)
+	r := contentRecordFixture(t, "read-pool", time.Date(2026, 8, 8, 1, 2, 3, 0, time.UTC))
+	if err := s.exchangeContents.Put(context.Background(), r); err != nil {
+		t.Fatal(err)
+	}
+	writer, err := s.database.Conn(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer writer.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if _, err := s.exchangeContents.Get(ctx, r.ExchangeID, r.RecordedAt); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.exchangeContents.GetPagedProjection(ctx, r.ExchangeID, r.RecordedAt, exchangecontent.RequestViewFull); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.exchangeContents.AvailableBodies(ctx, []string{r.ExchangeID}, r.RecordedAt); err != nil {
+		t.Fatalf("body directory used writer: %v", err)
+	}
+	if _, err := s.exchangeContents.RequestPreviews(ctx, []string{r.ExchangeID}, r.RecordedAt); err != nil {
+		t.Fatalf("preview used writer: %v", err)
+	}
+}
+
+func TestContentSourcePublishesLongAndFramed(t *testing.T) {
+	limits := candidateContentLimits()
+	s := openCandidateContentStore(t, filepath.Join(t.TempDir(), "runtime.db"), &limits)
+	// Constructor policy must not follow later caller changes.
+	limits.RetainedBytes = 1
+	sourceLimits := candidateContentLimits()
+	record := contentRecordFixture(t, "source-long", time.Date(2026, 8, 8, 1, 2, 3, 0, time.UTC))
+	first := record.Request.Messages[0]
+	first.Blocks = []exchangecontent.Block{{Kind: "text", Availability: exchangecontent.AvailabilityRecorded, Text: strings.Repeat("x", 1024), OriginalSize: 1024}}
+	record.Request.Messages = make([]exchangecontent.Message, 4111)
+	for i := range record.Request.Messages {
+		record.Request.Messages[i] = first
+	}
+	record.Request.Messages[4110] = exchangecontent.Message{Role: "user", Blocks: []exchangecontent.Block{{Kind: "text", Availability: exchangecontent.AvailabilityRecorded, Text: "complete-tail", OriginalSize: 13}}}
+	record.Response.Blocks = []exchangecontent.Block{{Kind: "text", Availability: exchangecontent.AvailabilityRecorded, Text: strings.Repeat("&", 6<<20), OriginalSize: 6 << 20}}
+	source, err := exchangecontent.SourceFromRecordWithin(sourceLimits, record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := putCandidateSource(t, s, source); err != nil {
+		t.Fatal(err)
+	}
+	var count, slots, refs int
+	if err := s.database.QueryRow(`SELECT request_message_count FROM runtime_exchange_contents WHERE exchange_id=?`, record.ExchangeID).Scan(&count); err != nil || count != 4111 {
+		t.Fatalf("count=%d err=%v", count, err)
+	}
+	if err := s.database.QueryRow(`SELECT length(m.block_manifest)/64,(SELECT count(*) FROM runtime_exchange_content_block_refs r WHERE r.message_digest=m.digest) FROM runtime_exchange_content_messages m JOIN runtime_exchange_contents c ON c.response_message_digest=m.digest WHERE c.exchange_id=?`, record.ExchangeID).Scan(&slots, &refs); err != nil || slots != 2 || refs != 2 {
+		t.Fatalf("framed slots=%d refs=%d err=%v", slots, refs, err)
+	}
+	got, err := s.exchangeContents.Get(context.Background(), record.ExchangeID, record.RecordedAt.Add(time.Minute))
+	if err != nil {
+		t.Fatalf("complete Source read: %v", err)
+	}
+	if len(got.Request.Messages) != 4111 || got.Request.Messages[4110].Blocks[0].Text != "complete-tail" || got.Response == nil || got.Response.Blocks[0].Text != record.Response.Blocks[0].Text {
+		t.Fatal("Source read lost history or framed response")
+	}
+	paged, err := s.exchangeContents.GetPagedProjection(context.Background(), record.ExchangeID, record.RecordedAt.Add(time.Minute), exchangecontent.RequestViewFull)
+	if err != nil {
+		t.Fatalf("Source directory page: %v", err)
+	}
+	if paged.Response == nil || len(paged.Response.Blocks) != 1 || paged.Response.Blocks[0].Deferred == nil {
+		t.Fatal("framed response must defer")
+	}
+	seen, next := len(paged.Request.Messages), paged.Page.RequestOffset
+	for cursor := paged.Page.RequestNextCursor; cursor != ""; {
+		history, err := s.exchangeContents.GetContentPage(context.Background(), record.ExchangeID, record.RecordedAt.Add(time.Minute), cursor)
+		if err != nil || history.Kind != "request" || history.Total != 4111 || history.Offset+len(history.Messages) != next {
+			t.Fatalf("history page at %d: %v", next, err)
+		}
+		for i, message := range history.Messages {
+			if !reflect.DeepEqual(message, record.Request.Messages[history.Offset+i]) {
+				t.Fatalf("history page changed occurrence %d", history.Offset+i)
+			}
+		}
+		seen += len(history.Messages)
+		next = history.Offset
+		cursor = history.NextCursor
+	}
+	if seen != 4111 || next != 0 {
+		t.Fatalf("history cursor reconstruction=%d at%d", seen, next)
+	}
+	page, err := s.exchangeContents.GetContentPage(context.Background(), record.ExchangeID, record.RecordedAt.Add(time.Minute), paged.Response.Blocks[0].Deferred.Cursor)
+	if err != nil {
+		t.Fatalf("Source message page: %v", err)
+	}
+	if page.Total != 1 || len(page.Blocks) != 1 || page.Blocks[0].Deferred == nil {
+		t.Fatalf("physical slots were exposed as logical blocks: %+v", page)
+	}
+	body, err := s.exchangeContents.GetContentPage(context.Background(), record.ExchangeID, record.RecordedAt.Add(time.Minute), page.Blocks[0].Deferred.Cursor)
+	if err != nil || body.Total != 6<<20 || body.Offset != 0 || body.Text != strings.Repeat("&", exchangecontent.PageBodyBytes) {
+		t.Fatalf("Source body first page: total=%d bytes=%d err=%v", body.Total, len(body.Text), err)
+	}
+}
 
 func TestExchangeContentRepositoryReopensAndExpiresEvidence(t *testing.T) {
 	t.Parallel()

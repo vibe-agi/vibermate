@@ -14,6 +14,114 @@ import (
 // This is the existing storage identity ceiling, not a business history policy.
 const storedMessageMaximum = 100001
 
+// Every closed deferred shell occupies at least this many wire bytes. The
+// independent page wire ceiling therefore bounds even nested marker lists;
+// unknown message wrappers are additionally bounded by the 24-message window.
+const readControlMinShellWire = len(`{"deferred":{"exchangeId":"a","cursor":"c","estimatedBytes":0},"kind":"deferred","availability":"recorded","originalSize":0}`)
+const readControlMaxShells = MaxPageBytes / readControlMinShellWire
+const readControlPayloadLimit = MaxPageBytes + 3*MaxPageCursorBytes
+const readControlStructureLimit = uint64(readControlMaxShells)*(uint64(unsafe.Sizeof(Block{}))+uint64(unsafe.Sizeof(DeferredContent{}))) + PageMessageLimit*uint64(unsafe.Sizeof(Message{})) + uint64(unsafe.Sizeof(Projection{})) + uint64(unsafe.Sizeof(ProjectionPage{})) + uint64(unsafe.Sizeof(ContentPage{})) + uint64(unsafe.Sizeof(readControlCost{}))
+
+// Control is not hidden content credit. Only strictly validated generated
+// shells/wrappers enter this ledger. Real visible data keeps Source's exact
+// L/S policy. One fixed writer is reused to measure exact control wire bytes;
+// its concrete workspace is included above, independently of Source Scratch.
+type readControlCost struct {
+	payload, structure uint64
+	shells, unknown    int
+	wire               wireCounter
+	writer             canonicalWriter
+}
+
+func newReadControlCost(ctx context.Context) *readControlCost {
+	c := &readControlCost{structure: uint64(unsafe.Sizeof(readControlCost{})), wire: wireCounter{ctx: ctx, limit: MaxPageBytes}}
+	c.writer.sink = &c.wire
+	return c
+}
+func (c *readControlCost) add(payload, structure uint64) error {
+	if payload > readControlPayloadLimit-c.payload || structure > readControlStructureLimit-c.structure {
+		return fmt.Errorf("%w: page control budget exceeded", ErrInvalidEvidence)
+	}
+	c.payload += payload
+	c.structure += structure
+	return nil
+}
+func (c *readControlCost) shell(b Block) error {
+	if c.shells >= readControlMaxShells {
+		return ErrInvalidEvidence
+	}
+	c.shells++
+	d := b.Deferred
+	if err := c.add(uint64(len(b.Kind)+len(b.Availability)+len(d.ExchangeID)+len(d.Cursor)), uint64(unsafe.Sizeof(b))+uint64(unsafe.Sizeof(*d))); err != nil {
+		return err
+	}
+	c.writer.block(b)
+	c.writer.flush()
+	return c.writer.err
+}
+func (c *readControlCost) unknownMessage() error {
+	if c.unknown >= PageMessageLimit {
+		return ErrInvalidEvidence
+	}
+	c.unknown++
+	if err := c.add(uint64(len("unknown")), uint64(unsafe.Sizeof(Message{}))); err != nil {
+		return err
+	}
+	c.writer.text(`{"role":"unknown","blocks":[]}`)
+	c.writer.flush()
+	return c.writer.err
+}
+func (c *readControlCost) projection(page *ProjectionPage) error {
+	return c.add(uint64(len(page.RequestNextCursor)+len(page.RequestEvidenceNextCursor)+len(page.ResponseEvidenceNextCursor)), uint64(unsafe.Sizeof(Projection{}))-uint64(unsafe.Sizeof(Record{}))+uint64(unsafe.Sizeof(*page)))
+}
+func (c *readControlCost) page(p ContentPage) error {
+	if err := c.add(uint64(len(p.Kind)+len(p.NextCursor)), uint64(unsafe.Sizeof(p))); err != nil {
+		return err
+	}
+	w := &c.writer
+	// Exact generated container bytes from writePageWire. Exchange identity,
+	// real block/tool metadata, evidence and body bytes are not credited here.
+	w.text("{")
+	w.text(",")
+	w.field("kind", p.Kind)
+	w.text(`,"messages":`)
+	if p.Messages == nil {
+		w.text("null")
+	} else {
+		w.text("[")
+		for i := 1; i < len(p.Messages); i++ {
+			w.text(",")
+		}
+		w.text("]")
+	}
+	w.text(`,"blocks":`)
+	if p.Blocks == nil {
+		w.text("null")
+	} else {
+		w.text("[")
+		for i := 1; i < len(p.Blocks); i++ {
+			w.text(",")
+		}
+		w.text("]")
+	}
+	w.text(`,"offset":`)
+	w.integer(int64(p.Offset))
+	w.text(`,"total":`)
+	w.integer(int64(p.Total))
+	w.optional("nextCursor", p.NextCursor)
+	w.text("}")
+	w.flush()
+	return w.err
+}
+func (c *readControlCost) wireLimit(logical uint64) uint64 {
+	// Saturating at the existing page cap avoids addition overflow even for
+	// a policy at MaxInt64. Only exactly measured control bytes add credit.
+	if logical >= MaxPageBytes {
+		return MaxPageBytes
+	}
+	return logical + min(c.wire.n, uint64(MaxPageBytes)-logical)
+}
+
 func withinContext(ctx context.Context, l SourceLimits) error {
 	if ctx == nil {
 		return ErrInvalidEvidence
@@ -107,6 +215,13 @@ func (p Projection) ValidateWithin(ctx context.Context, l SourceLimits) error {
 	if err != nil {
 		return err
 	}
+	var control *readControlCost
+	if p.Page != nil {
+		control = newReadControlCost(ctx)
+		if err := control.projection(p.Page); err != nil {
+			return err
+		}
+	}
 	if err := c.metadata(projectionMetadata(p)); err != nil {
 		return err
 	}
@@ -124,45 +239,43 @@ func (p Projection) ValidateWithin(ctx context.Context, l SourceLimits) error {
 			return err
 		}
 	}
-	if err := validateVisible(ctx, c, p.Request.Messages, p.Request.System, p.Mode, p.ExchangeID, l, p.Page != nil, canonicalBlockParentDepth); err != nil {
+	if err := validateVisible(ctx, c, p.Request.Messages, p.Request.System, p.Mode, p.ExchangeID, l, control, canonicalBlockParentDepth); err != nil {
 		return err
 	}
 	if p.Response != nil {
-		if err := validateVisible(ctx, c, nil, p.Response.Blocks, p.Mode, p.ExchangeID, l, p.Page != nil, canonicalBlockParentDepth); err != nil {
+		if err := validateVisible(ctx, c, nil, p.Response.Blocks, p.Mode, p.ExchangeID, l, control, canonicalBlockParentDepth); err != nil {
 			return err
 		}
 	}
 	limit := l.CanonicalBytes
 	if p.Page != nil {
-		limit = min(limit, MaxPageBytes)
+		limit = control.wireLimit(limit)
 	}
 	return countProjectionWire(ctx, limit, p)
 }
 
-func validateVisible(ctx context.Context, c *retainedCost, messages []Message, blocks []Block, mode environment.ContentRecordingMode, id string, l SourceLimits, paged bool, envelope int) error {
+func validateVisible(ctx context.Context, c *retainedCost, messages []Message, blocks []Block, mode environment.ContentRecordingMode, id string, l SourceLimits, control *readControlCost, envelope int) error {
 	checkBlocks := func(bs []Block, depth int) error {
 		for _, b := range bs {
 			if err := ctx.Err(); err != nil {
 				return err
 			}
-			if err := c.block(b); err != nil {
-				return err
-			}
 			if b.Deferred != nil {
-				if !paged || validateDeferredShell(b, id, l.CanonicalBytes) != nil {
+				if control == nil || validateDeferredShell(b, id, l.CanonicalBytes) != nil {
 					return ErrInvalidEvidence
 				}
+				if err := control.shell(b); err != nil {
+					return err
+				}
 			} else {
+				if err := c.block(ctx, b); err != nil {
+					return err
+				}
 				if err := b.Validate(mode); err != nil {
 					return err
 				}
 				if argumentDepthOverflow(b.Arguments, depth) != 0 {
 					return fmt.Errorf("%w: canonical arguments exceed parent depth", ErrInvalidEvidence)
-				}
-			}
-			if d := b.Deferred; d != nil {
-				if err := c.add(c.strings(d.ExchangeID, d.Cursor), uint64(unsafe.Sizeof(*d))); err != nil {
-					return err
 				}
 			}
 		}
@@ -175,18 +288,20 @@ func validateVisible(ctx context.Context, c *retainedCost, messages []Message, b
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if paged && m.Role == "unknown" {
+		if control != nil && m.Role == "unknown" {
 			if m.Agent != nil || len(m.Blocks) != 1 || m.Blocks[0].Deferred == nil {
 				return ErrInvalidEvidence
 			}
+			if err := control.unknownMessage(); err != nil {
+				return err
+			}
 		} else if err := validateMessageHeader(m); err != nil {
+			return err
+		} else if err := c.message(MessageHeader{Role: m.Role, Agent: m.Agent}); err != nil {
 			return err
 		}
 		if len(m.Blocks) == 0 {
 			return ErrInvalidEvidence
-		}
-		if err := c.message(MessageHeader{Role: m.Role, Agent: m.Agent}); err != nil {
-			return err
 		}
 		if err := checkBlocks(m.Blocks, canonicalMessageParentDepth); err != nil {
 			return err
@@ -370,8 +485,12 @@ func (p ContentPage) ValidateWithin(ctx context.Context, l SourceLimits) error {
 	if err != nil {
 		return err
 	}
+	control := newReadControlCost(ctx)
+	if err := control.page(p); err != nil {
+		return err
+	}
 	f := p.Frozen
-	if err := c.add(c.strings(p.BlockKind, p.CallID, p.ToolName, p.ExchangeID, p.Kind, p.Text, p.NextCursor, p.Parent.CaptureRunID, p.Parent.ManualCaptureID, f.EnvironmentID, f.EnvironmentDigest, f.ClientEndpointID, f.ProtocolPlanID, f.RouteID, string(p.Mode)), uint64(unsafe.Sizeof(ContentPage{}))); err != nil {
+	if err := c.add(c.strings(p.BlockKind, p.CallID, p.ToolName, p.ExchangeID, p.Text, p.Parent.CaptureRunID, p.Parent.ManualCaptureID, f.EnvironmentID, f.EnvironmentDigest, f.ClientEndpointID, f.ProtocolPlanID, f.RouteID, string(p.Mode)), 0); err != nil {
 		return err
 	}
 	if err := c.evidence(p.ProtocolEvidence); err != nil {
@@ -380,8 +499,8 @@ func (p ContentPage) ValidateWithin(ctx context.Context, l SourceLimits) error {
 	if err := protocolcore.ValidateProtocolEvidence(p.ProtocolEvidence); err != nil {
 		return fmt.Errorf("%w: %v", ErrInvalidEvidence, err)
 	}
-	if err := validateVisible(ctx, c, p.Messages, p.Blocks, p.Mode, p.ExchangeID, l, true, canonicalBlockParentDepth); err != nil {
+	if err := validateVisible(ctx, c, p.Messages, p.Blocks, p.Mode, p.ExchangeID, l, control, canonicalBlockParentDepth); err != nil {
 		return err
 	}
-	return countPageWire(ctx, min(l.CanonicalBytes, MaxPageBytes), p)
+	return countPageWire(ctx, control.wireLimit(l.CanonicalBytes), p)
 }

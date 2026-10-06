@@ -72,6 +72,111 @@ func TestSourceMetadataOnlyAgentScratchBoundary(t *testing.T) {
 	}
 }
 
+func TestSourceRawRetainedFootprintCoversDurableSpelling(t *testing.T) {
+	for _, raw := range []json.RawMessage{[]byte(`{"value":"&<>  "}`), []byte(`{"value":"\u0026\u003c\u003e\u2028\u2029"}`), []byte(" { \"value\" : [ 1, 2 ] } "), []byte(`{"a":1e+02,"a":"\ud800","b":"\/\u0061"}`), []byte{'"', 0xff, '"'}} {
+		t.Run(fmt.Sprintf("%x", []byte(raw)), func(t *testing.T) {
+			encoded, err := json.Marshal(raw)
+			if err != nil {
+				t.Fatal(err)
+			}
+			wantRaw := max(len(raw), len(encoded))
+			request, response := evidenceFixture(t)
+			r, err := NewRecord("raw-footprint", frozenFixture(), environment.DefaultContentRecordingPolicy(), time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), request, &response)
+			if err != nil {
+				t.Fatal(err)
+			}
+			b := Block{Kind: "tool_call", Availability: AvailabilityRecorded, CallID: "c", ToolName: "f", Arguments: raw}
+			r.Request.Messages = []Message{{Role: "user", Blocks: []Block{b, b}}}
+			r.Request.System = nil
+			r.Response = nil
+			l := sourceFixtureLimits()
+			s, err := SourceFromRecordWithin(l, r)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, err := s.Measure(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			control := r
+			control.Request.Messages = []Message{{Role: "user", Blocks: []Block{b, b}}}
+			for i := range control.Request.Messages[0].Blocks {
+				control.Request.Messages[0].Blocks[i].Arguments = []byte(`null`)
+			}
+			baseline, err := SourceFromRecordWithin(l, control)
+			if err != nil {
+				t.Fatal(err)
+			}
+			base, err := baseline.Measure(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if int64(got.RetainedBytes) != int64(base.RetainedBytes)+2*int64(wantRaw-4) {
+				t.Fatalf("raw retained=%d base=%d original=%d durable=%d", got.RetainedBytes, base.RetainedBytes, len(raw), len(encoded))
+			}
+			l.RetainedBytes = got.RetainedBytes
+			l.StructureBytes = got.StructureBytes
+			l.CanonicalBytes = got.CanonicalBytes
+			if _, err := SourceFromRecordWithin(l, r); err != nil {
+				t.Fatalf("exact: %v", err)
+			}
+			p, err := ProjectWithin(context.Background(), l, r, RequestViewFull)
+			if err != nil {
+				t.Fatalf("typed full: %v", err)
+			}
+			if err := p.ValidateWithin(context.Background(), l); err != nil {
+				t.Fatal(err)
+			}
+			page := ContentPage{ExchangeID: r.ExchangeID, Parent: r.Parent, Frozen: r.Frozen, Mode: r.Mode, Kind: "message", Total: 2, Blocks: r.Request.Messages[0].Blocks}
+			if err := page.ValidateWithin(context.Background(), l); err != nil {
+				t.Fatalf("typed raw page: %v", err)
+			}
+			l.RetainedBytes--
+			if _, err := SourceFromRecordWithin(l, r); !errors.Is(err, ErrInvalidEvidence) {
+				t.Fatalf("short Source budget: %v", err)
+			}
+			if err := p.ValidateWithin(context.Background(), l); !errors.Is(err, ErrInvalidEvidence) {
+				t.Fatalf("short typed budget: %v", err)
+			}
+		})
+	}
+}
+
+func TestSourceRawCounterParityCancellationAndAllocation(t *testing.T) {
+	raw := []byte(` { "a": "&<>  ", "a": 1e+02, "b": "\ud800\u0061\/" } `)
+	want, err := json.Marshal(json.RawMessage(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	n, err := canonicalRawBytes(context.Background(), raw)
+	if err != nil || n != uint64(len(want)) {
+		t.Fatalf("count=%d want=%d err=%v", n, len(want), err)
+	}
+	var actual bytes.Buffer
+	w := canonicalWriter{sink: &actual}
+	w.raw(raw)
+	w.flush()
+	if w.err != nil || !bytes.Equal(actual.Bytes(), want) {
+		t.Fatalf("raw byte parity: %v", w.err)
+	}
+	if n, err := canonicalRawBytes(context.Background(), want); err != nil || n != uint64(len(want)) {
+		t.Fatalf("durable count not idempotent: %d %v", n, err)
+	}
+	allocations := testing.AllocsPerRun(1000, func() {
+		if _, err := canonicalRawBytes(context.Background(), raw); err != nil {
+			panic(err)
+		}
+	})
+	if allocations != 0 {
+		t.Fatalf("raw counter allocates per block: %v", allocations)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := canonicalRawBytes(ctx, raw); !errors.Is(err, context.Canceled) {
+		t.Fatalf("count cancellation: %v", err)
+	}
+}
+
 func TestSourceAdmissionErrorsRemainEvidenceFailures(t *testing.T) {
 	request, response := evidenceFixture(t)
 	at := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)

@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"reflect"
+	"slices"
 	"time"
 
 	"github.com/vibe-agi/vibermate/internal/environment"
@@ -21,8 +22,11 @@ import (
 const transcriptNodeDomain = "vibermate:exchange-transcript-node\x00"
 
 type exchangeContentRepository struct {
-	database   *sql.DB
-	operations *operationGate
+	database     *sql.DB
+	reads        *sql.DB
+	operations   *operationGate
+	limits       *exchangecontent.SourceLimits
+	loadPhysical storedPhysicalLoader
 }
 
 type storedExchangeContentManifest struct {
@@ -101,16 +105,26 @@ type storedContentReference struct {
 var _ exchangecontent.Repository = (*exchangeContentRepository)(nil)
 
 func newExchangeContentRepository(
-	database *sql.DB,
+	database, reads *sql.DB,
 	operations *operationGate,
+	limits *exchangecontent.SourceLimits,
 ) *exchangeContentRepository {
-	return &exchangeContentRepository{database: database, operations: operations}
+	repository := &exchangeContentRepository{database: database, reads: reads, operations: operations, limits: limits}
+	repository.loadPhysical = repository.physicalContentRow
+	return repository
 }
 
 func (repository *exchangeContentRepository) Put(
 	ctx context.Context,
 	record exchangecontent.Record,
 ) error {
+	if repository.limits != nil {
+		source, err := exchangecontent.SourceFromRecordWithin(*repository.limits, record)
+		if err != nil {
+			return err
+		}
+		return repository.PutSource(ctx, source)
+	}
 	if err := record.Validate(); err != nil {
 		return err
 	}
@@ -118,7 +132,17 @@ func (repository *exchangeContentRepository) Put(
 	if err != nil {
 		return err
 	}
-	scopeKind, scopeID := storedContentScope(record.Parent)
+	return repository.publishContent(ctx, manifest, encodedManifest, transcript, func(ctx context.Context, tx *sql.Tx, digest string) error {
+		payload, ok := transcript.messages[digest]
+		if !ok {
+			return exchangecontent.ErrInvalidEvidence
+		}
+		return putStoredMessage(ctx, tx, digest, payload)
+	})
+}
+
+func (repository *exchangeContentRepository) publishContent(ctx context.Context, manifest storedExchangeContentManifest, encodedManifest []byte, transcript storedTranscript, writeMessage func(context.Context, *sql.Tx, string) error) error {
+	scopeKind, scopeID := storedContentScope(manifest.Parent)
 	operation, finish, err := repository.operations.begin(ctx)
 	if err != nil {
 		return err
@@ -137,6 +161,7 @@ func (repository *exchangeContentRepository) Put(
 		transcript,
 		scopeKind,
 		scopeID,
+		writeMessage,
 	)
 	if err != nil {
 		return err
@@ -159,25 +184,13 @@ func (repository *exchangeContentRepository) Put(
 		return err
 	}
 	if transcript.systemDigest != "" {
-		payload, ok := transcript.messages[transcript.systemDigest]
-		if !ok {
-			return exchangecontent.ErrInvalidEvidence
-		}
-		if err := putStoredMessage(
-			operation, transaction, transcript.systemDigest, payload,
-		); err != nil {
+		if err := writeMessage(operation, transaction, transcript.systemDigest); err != nil {
 			return err
 		}
 	}
 	for index := inherited; index < len(transcript.nodes); index++ {
 		node := transcript.nodes[index]
-		payload, ok := transcript.messages[node.messageDigest]
-		if !ok {
-			return exchangecontent.ErrInvalidEvidence
-		}
-		if err := putStoredMessage(
-			operation, transaction, node.messageDigest, payload,
-		); err != nil {
+		if err := writeMessage(operation, transaction, node.messageDigest); err != nil {
 			return err
 		}
 		if err := putStoredTranscriptNode(operation, transaction, node); err != nil {
@@ -230,6 +243,7 @@ func completeStoredExchangeContent(
 	encodedManifest *[]byte,
 	transcript storedTranscript,
 	scopeKind, scopeID string,
+	writeMessage func(context.Context, *sql.Tx, string) error,
 ) (bool, error) {
 	var storedScopeKind, storedScopeID, storedMode string
 	var recordedMillis, expiresMillis int64
@@ -244,7 +258,8 @@ func completeStoredExchangeContent(
 		        request_transcript_digest, expected_transcript_digest,
 		        base_transcript_digest, request_message_count,
 		        expected_message_count, inherited_message_count,
-		        response_message_digest, system_message_digest, manifest_json
+		        response_message_digest, system_message_digest,
+		        CASE WHEN length(manifest_json) BETWEEN 1 AND 33554432 THEN manifest_json END
 		 FROM runtime_exchange_contents
 		 WHERE exchange_id = ?`,
 		manifest.ExchangeID,
@@ -306,11 +321,10 @@ func completeStoredExchangeContent(
 	*encodedManifest = encoded
 	if !manifest.Response.EmptyOutput {
 		responseNode := transcript.nodes[len(transcript.nodes)-1]
-		payload, ok := transcript.messages[responseNode.messageDigest]
-		if !ok || responseNode.digest != transcript.expectedRoot {
+		if responseNode.digest != transcript.expectedRoot {
 			return false, exchangecontent.ErrInvalidEvidence
 		}
-		if err := putStoredMessage(ctx, transaction, responseNode.messageDigest, payload); err != nil {
+		if err := writeMessage(ctx, transaction, responseNode.messageDigest); err != nil {
 			return false, err
 		}
 		if err := putStoredTranscriptNode(ctx, transaction, responseNode); err != nil {
@@ -352,12 +366,19 @@ func (repository *exchangeContentRepository) Get(
 	}
 	defer finish()
 	reference, err := loadStoredContentReference(
-		operation, repository.database, exchangeID, now,
+		operation, repository.reads, exchangeID, now,
 	)
 	if err != nil {
 		return exchangecontent.Record{}, err
 	}
-	return loadFullStoredContent(operation, repository.database, reference)
+	if repository.limits != nil {
+		p, err := repository.readSourceProjection(operation, reference, exchangecontent.RequestViewFull)
+		if err != nil {
+			return exchangecontent.Record{}, err
+		}
+		return exchangecontent.Record{ExchangeID: p.ExchangeID, Parent: p.Parent, Frozen: p.Frozen, Mode: p.Mode, RecordedAt: p.RecordedAt, ExpiresAt: p.ExpiresAt, Request: p.Request, Response: p.Response, Presentation: p.Presentation}, nil
+	}
+	return loadFullStoredContent(operation, repository.reads, reference)
 }
 
 func (repository *exchangeContentRepository) GetProjection(
@@ -376,13 +397,26 @@ func (repository *exchangeContentRepository) GetProjection(
 	}
 	defer finish()
 	reference, err := loadStoredContentReference(
-		operation, repository.database, exchangeID, now,
+		operation, repository.reads, exchangeID, now,
 	)
 	if err != nil {
 		return exchangecontent.Projection{}, err
 	}
+	if repository.limits != nil {
+		p, err := repository.readSourceProjection(operation, reference, view)
+		if err != nil || view != exchangecontent.RequestViewFull {
+			return p, err
+		}
+		// This is the complete verified Record, not a suffix dressed as one.
+		// ProjectWithin preserves legacy array/presentation semantics. Its raw
+		// clone fits the 2*payload allowance (the parser charges raw only once),
+		// cells fit 4*structure, and its bounded map shares the per-Block 4096
+		// allowance with tiny builders (both together remain below that bound).
+		r := exchangecontent.Record{ExchangeID: p.ExchangeID, Parent: p.Parent, Frozen: p.Frozen, Mode: p.Mode, RecordedAt: p.RecordedAt, ExpiresAt: p.ExpiresAt, Request: p.Request, Response: p.Response, Presentation: p.Presentation}
+		return exchangecontent.ProjectWithin(operation, *repository.limits, r, view)
+	}
 	if view == exchangecontent.RequestViewFull {
-		record, loadErr := loadFullStoredContent(operation, repository.database, reference)
+		record, loadErr := loadFullStoredContent(operation, repository.reads, reference)
 		if loadErr != nil {
 			return exchangecontent.Projection{}, loadErr
 		}
@@ -391,7 +425,7 @@ func (repository *exchangeContentRepository) GetProjection(
 
 	messages, err := loadStoredTranscriptSuffix(
 		operation,
-		repository.database,
+		repository.reads,
 		reference.requestRoot,
 		reference.baseRoot,
 		reference.inherited,
@@ -401,13 +435,13 @@ func (repository *exchangeContentRepository) GetProjection(
 		return exchangecontent.Projection{}, err
 	}
 	responseMessage, err := loadStoredResponseMessage(
-		operation, repository.database, reference.responseDigest,
+		operation, repository.reads, reference.responseDigest,
 	)
 	if err != nil {
 		return exchangecontent.Projection{}, err
 	}
 	systemBlocks, err := loadStoredSystemBlocks(
-		operation, repository.database, reference.systemDigest,
+		operation, repository.reads, reference.systemDigest,
 	)
 	if err != nil {
 		return exchangecontent.Projection{}, err
@@ -428,6 +462,130 @@ func (repository *exchangeContentRepository) GetProjection(
 	return projection.Clone(), nil
 }
 
+func newStoredReadLedger(l exchangecontent.SourceLimits, m storedExchangeContentManifest) (*storedReadLedger, error) {
+	bound, err := storedMaterializationBound(l)
+	if err != nil {
+		return nil, err
+	}
+	ledger := &storedReadLedger{limits: l, bound: bound}
+	stringsCost := func(structure uint64, values ...string) error {
+		var n uint64
+		for _, v := range values {
+			if uint64(len(v)) > l.RetainedBytes-n {
+				return exchangecontent.ErrInvalidEvidence
+			}
+			n += uint64(len(v))
+		}
+		return ledger.parent(n, structure)
+	}
+	f := m.Frozen
+	if err := stringsCost(uint64(reflect.TypeFor[exchangecontent.Record]().Size()), m.ExchangeID, m.Parent.CaptureRunID, m.Parent.ManualCaptureID, f.EnvironmentID, f.EnvironmentDigest, f.ClientEndpointID, f.ProtocolPlanID, f.RouteID, string(m.Mode), m.Request.RequestedModel, m.Request.EffectiveModel); err != nil {
+		return nil, err
+	}
+	for _, t := range m.Request.Tools {
+		if err := stringsCost(uint64(reflect.TypeFor[exchangecontent.ToolDefinition]().Size()), t.Name, t.Namespace); err != nil {
+			return nil, err
+		}
+	}
+	evidence := func(values []protocolcore.ProtocolEvidenceValue) error {
+		for _, v := range values {
+			if err := stringsCost(uint64(reflect.TypeFor[protocolcore.ProtocolEvidenceValue]().Size()), v.Name, v.Value); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	if err := evidence(m.Request.ProtocolEvidence); err != nil {
+		return nil, err
+	}
+	if v := m.Response; v != nil {
+		if err := stringsCost(uint64(reflect.TypeFor[exchangecontent.Response]().Size()), v.ID, v.RequestedModel, v.EffectiveModel, v.ReportedModel, v.StopReason); err != nil {
+			return nil, err
+		}
+		for _, u := range []exchangecontent.UsageValue{v.Usage.InputUncached, v.Usage.CacheWrite, v.Usage.CacheRead, v.Usage.Output, v.Usage.Reasoning} {
+			if err := stringsCost(0, u.Source); err != nil {
+				return nil, err
+			}
+		}
+		if err := evidence(v.ProtocolEvidence); err != nil {
+			return nil, err
+		}
+	}
+	return ledger, nil
+}
+
+func (repository *exchangeContentRepository) readSourceProjection(ctx context.Context, ref storedContentReference, view exchangecontent.RequestView) (exchangecontent.Projection, error) {
+	ledger, err := newStoredReadLedger(*repository.limits, ref.manifest)
+	if err != nil {
+		return exchangecontent.Projection{}, err
+	}
+	if ref.requestCount > 100001 {
+		return exchangecontent.Projection{}, exchangecontent.ErrInvalidEvidence
+	}
+	lower := 0
+	if view == exchangecontent.RequestViewIncremental {
+		lower = ref.inherited
+	}
+	var nodes []storedTranscriptNode
+	if lower < ref.requestCount {
+		nodes, err = repository.contentNodes(ctx, ref, ref.requestCount, lower)
+		if err != nil {
+			return exchangecontent.Projection{}, err
+		}
+		slices.Reverse(nodes)
+		if lower > 0 && (nodes[0].parentDigest == nil || *nodes[0].parentDigest != ref.baseRoot.String) {
+			return exchangecontent.Projection{}, exchangecontent.ErrInvalidEvidence
+		}
+	} else if ref.baseRoot.String != ref.requestRoot {
+		return exchangecontent.Projection{}, exchangecontent.ErrInvalidEvidence
+	}
+	var messages []exchangecontent.Message
+	for start := 0; start < len(nodes); start += exchangecontent.PageMessageLimit {
+		batch := nodes[start:min(len(nodes), start+exchangecontent.PageMessageLimit)]
+		digests := make([]string, len(batch))
+		for i, node := range batch {
+			digests[i] = node.messageDigest
+		}
+		metadata, err := repository.contentMessageMetadata(ctx, digests)
+		if err != nil {
+			return exchangecontent.Projection{}, err
+		}
+		for _, node := range batch {
+			result, err := repository.readMessageMetadata(ctx, node.messageDigest, metadata[node.messageDigest], ref.manifest.Mode, ledger, true, nil)
+			if err != nil {
+				return exchangecontent.Projection{}, err
+			}
+			messages = append(messages, result.Message)
+		}
+	}
+	if lower == 0 && ref.inherited > 0 && nodes[ref.inherited-1].digest != ref.baseRoot.String {
+		return exchangecontent.Projection{}, exchangecontent.ErrInvalidEvidence
+	}
+	var system []exchangecontent.Block
+	if ref.systemDigest.Valid {
+		message, err := repository.readVerifiedMessage(ctx, ref.systemDigest.String, ref.manifest.Mode, ledger, false)
+		if err != nil {
+			return exchangecontent.Projection{}, err
+		}
+		if message.Role != "system" {
+			return exchangecontent.Projection{}, exchangecontent.ErrInvalidEvidence
+		}
+		system = message.Blocks
+	}
+	var response *exchangecontent.Message
+	if ref.responseDigest.Valid {
+		message, err := repository.readVerifiedMessage(ctx, ref.responseDigest.String, ref.manifest.Mode, ledger, false)
+		if err != nil {
+			return exchangecontent.Projection{}, err
+		}
+		if message.Role != "assistant" {
+			return exchangecontent.Projection{}, exchangecontent.ErrInvalidEvidence
+		}
+		response = &message
+	}
+	return projectionFromStoredManifestWithin(ctx, *repository.limits, ref.manifest, system, messages, response, ref.requestCount, ref.inherited, view, nil)
+}
+
 func (repository *exchangeContentRepository) AvailableBodies(ctx context.Context, ids []string, now time.Time) (map[string]bool, error) {
 	if len(ids) > exchangecontent.MaxRequestPreviewBatch {
 		return nil, exchangecontent.ErrInvalidEvidence
@@ -441,7 +599,7 @@ func (repository *exchangeContentRepository) AvailableBodies(ctx context.Context
 		return nil, err
 	}
 	defer finish()
-	rows, err := repository.database.QueryContext(operation, `SELECT exchange_id FROM runtime_exchange_contents JOIN json_each(?) AS wanted ON wanted.value=exchange_id WHERE mode='full' AND expires_at_unix_ms>?`, string(encoded), now.UnixMilli())
+	rows, err := repository.reads.QueryContext(operation, `SELECT exchange_id FROM runtime_exchange_contents JOIN json_each(?) AS wanted ON wanted.value=exchange_id WHERE mode='full' AND expires_at_unix_ms>?`, string(encoded), now.UnixMilli())
 	if err != nil {
 		return nil, err
 	}
@@ -488,17 +646,18 @@ func (repository *exchangeContentRepository) RequestPreviews(
 
 	type terminalMessage struct {
 		messageDigest string
+		mode          environment.ContentRecordingMode
 	}
 	terminals := make(map[string]terminalMessage, len(wantedIDs))
 	digests := make([]string, 0, len(wantedIDs))
-	rows, err := repository.database.QueryContext(
+	rows, err := repository.reads.QueryContext(
 		operation,
 		`SELECT contents.exchange_id,
 		        contents.request_transcript_digest,
 		        contents.request_message_count,
 		        nodes.parent_digest,
 		        nodes.message_digest,
-		        nodes.depth
+		        nodes.depth, contents.mode
 		   FROM runtime_exchange_contents AS contents
 		   JOIN json_each(?) AS wanted ON wanted.value = contents.exchange_id
 		   LEFT JOIN runtime_exchange_content_transcripts AS nodes
@@ -515,8 +674,9 @@ func (repository *exchangeContentRepository) RequestPreviews(
 		var count int
 		var parent, messageDigest sql.NullString
 		var depth sql.NullInt64
+		var mode environment.ContentRecordingMode
 		if err := rows.Scan(
-			&exchangeID, &root, &count, &parent, &messageDigest, &depth,
+			&exchangeID, &root, &count, &parent, &messageDigest, &depth, &mode,
 		); err != nil {
 			_ = rows.Close()
 			return nil, exchangecontent.ErrInvalidEvidence
@@ -540,6 +700,7 @@ func (repository *exchangeContentRepository) RequestPreviews(
 		}
 		terminals[exchangeID] = terminalMessage{
 			messageDigest: messageDigest.String,
+			mode:          mode,
 		}
 		digests = append(digests, messageDigest.String)
 	}
@@ -555,6 +716,16 @@ func (repository *exchangeContentRepository) RequestPreviews(
 	// render a directory row. Full content stays available through paging.
 	inlineDigests := make([]string, 0, len(digests))
 	for _, digest := range uniqueStrings(digests) {
+		if repository.limits != nil {
+			probe, err := repository.probeInlineMessage(operation, digest, exchangecontent.PageMessageLimit, 16<<10)
+			if err != nil {
+				return nil, err
+			}
+			if !probe.NeedsDeferred {
+				inlineDigests = append(inlineDigests, digest)
+			}
+			continue
+		}
 		size, count, err := repository.inlineMessageSize(operation, digest, exchangecontent.PageMessageLimit)
 		if err != nil {
 			return nil, err
@@ -563,9 +734,33 @@ func (repository *exchangeContentRepository) RequestPreviews(
 			inlineDigests = append(inlineDigests, digest)
 		}
 	}
-	messages, err := loadStoredMessagesByDigest(operation, repository.database, inlineDigests)
-	if err != nil {
-		return nil, err
+	var messages map[string]exchangecontent.Message
+	if repository.limits == nil {
+		messages, err = loadStoredMessagesByDigest(operation, repository.reads, inlineDigests)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		bound, err := storedMaterializationBound(*repository.limits)
+		if err != nil {
+			return nil, err
+		}
+		ledger := &storedReadLedger{limits: *repository.limits, bound: bound}
+		modes := make(map[string]environment.ContentRecordingMode, len(terminals))
+		for _, v := range terminals {
+			modes[v.messageDigest] = v.mode
+		}
+		messages = make(map[string]exchangecontent.Message, len(inlineDigests))
+		for _, digest := range inlineDigests {
+			// Each preview comes from a separate Source. Logical admission is
+			// per Source; earlier preview outputs retain their capacity charges.
+			ledger.logical = storedBlockLogicalCost{}
+			message, err := repository.readVerifiedMessage(operation, digest, modes[digest], ledger, true)
+			if err != nil {
+				return nil, err
+			}
+			messages[digest] = message
+		}
 	}
 	previews := make(map[string]exchangecontent.RequestPreview, len(terminals))
 	for exchangeID, terminal := range terminals {
@@ -597,7 +792,8 @@ func loadStoredContentReference(
 		        request_transcript_digest, expected_transcript_digest,
 		        base_transcript_digest, request_message_count,
 		        expected_message_count, inherited_message_count,
-		        response_message_digest, system_message_digest, manifest_json
+		        response_message_digest, system_message_digest,
+		        CASE WHEN length(manifest_json) BETWEEN 1 AND 33554432 THEN manifest_json END
 		 FROM runtime_exchange_contents
 		 WHERE exchange_id = ? AND expires_at_unix_ms > ?`,
 		exchangeID,
@@ -879,7 +1075,29 @@ func recordFromStoredManifest(
 	return record, nil
 }
 
-func projectionFromStoredManifest(
+func projectionFromStoredManifest(manifest storedExchangeContentManifest, system []exchangecontent.Block, messages []exchangecontent.Message, response *exchangecontent.Message, total, inherited int, view exchangecontent.RequestView, page *exchangecontent.ProjectionPage) (exchangecontent.Projection, error) {
+	p, err := assembleStoredProjection(manifest, system, messages, response, total, inherited, view, page)
+	if err != nil {
+		return exchangecontent.Projection{}, err
+	}
+	if err := p.Validate(); err != nil {
+		return exchangecontent.Projection{}, err
+	}
+	return p, nil
+}
+
+func projectionFromStoredManifestWithin(ctx context.Context, l exchangecontent.SourceLimits, manifest storedExchangeContentManifest, system []exchangecontent.Block, messages []exchangecontent.Message, response *exchangecontent.Message, total, inherited int, view exchangecontent.RequestView, page *exchangecontent.ProjectionPage) (exchangecontent.Projection, error) {
+	p, err := assembleStoredProjection(manifest, system, messages, response, total, inherited, view, page)
+	if err != nil {
+		return exchangecontent.Projection{}, err
+	}
+	if err := p.ValidateWithin(ctx, l); err != nil {
+		return exchangecontent.Projection{}, err
+	}
+	return p, nil
+}
+
+func assembleStoredProjection(
 	manifest storedExchangeContentManifest,
 	systemBlocks []exchangecontent.Block,
 	messages []exchangecontent.Message,
@@ -938,7 +1156,7 @@ func projectionFromStoredManifest(
 			EffectiveModel: manifest.Response.EffectiveModel,
 			ReportedModel:  manifest.Response.ReportedModel,
 			StopReason:     manifest.Response.StopReason,
-			Blocks:         cloneStoredBlocks(blocks),
+			Blocks:         blocks,
 			Usage:          manifest.Response.Usage,
 			ProtocolEvidence: append(
 				[]protocolcore.ProtocolEvidenceValue(nil),
@@ -947,9 +1165,6 @@ func projectionFromStoredManifest(
 		}
 	} else if responseMessage != nil {
 		return exchangecontent.Projection{}, exchangecontent.ErrInvalidEvidence
-	}
-	if err := projection.Validate(); err != nil {
-		return exchangecontent.Projection{}, err
 	}
 	return projection, nil
 }

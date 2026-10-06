@@ -34,6 +34,80 @@ func parserFixture(t testing.TB, data []byte) (*storedBlockDecoder, storedDecode
 	return d, open
 }
 
+// A full decoder must report Source's logical bytes before opening pass two,
+// including provider strings omitted from count/selection output. Its capacity
+// reservation deliberately remains a different currency.
+func TestStoredCanonicalParserLogicalAdmission(t *testing.T) {
+	for _, mode := range []environment.ContentRecordingMode{environment.ContentRecordingFull, environment.ContentRecordingMetadataOnly} {
+		for _, limitDelta := range []int{0, -1} {
+			t.Run(string(mode)+"/"+strconvBool(limitDelta == 0), func(t *testing.T) {
+				b := exchangecontent.Block{Kind: "reasoning", Availability: exchangecontent.AvailabilityRecorded, Text: "body", ProviderSource: strings.Repeat("s", 8193), ProviderKind: "k", Agent: &exchangecontent.AgentContext{AgentName: "a", Author: "b", Recipient: "c"}}
+				if mode == environment.ContentRecordingMetadataOnly {
+					b.Text = ""
+					b.Availability = exchangecontent.AvailabilityOmitted
+				}
+				data, err := json.Marshal(b)
+				if err != nil {
+					t.Fatal(err)
+				}
+				want := storedBlockLogicalCost{uint64(9 + len(b.Availability) + len(b.Text) + 8193 + 1 + 3), uint64(reflect.TypeFor[exchangecontent.Block]().Size() + reflect.TypeFor[exchangecontent.AgentContext]().Size())}
+				allowed := want.RetainedBytes
+				if limitDelta < 0 {
+					allowed--
+				}
+				opens, measured := 0, 0
+				d, err := newStoredBlockDecoder(storedDecodeLimits{1 << 20, 1 << 20, 1 << 20, 1 << 20}, func(c storedDecodeCost) error {
+					if c.LogicalCost.StructureBytes == 0 {
+						return nil
+					}
+					measured++
+					if c.LogicalCost != want {
+						t.Fatalf("logical cost %+v, want %+v", c.LogicalCost, want)
+					}
+					if opens != 1 {
+						t.Fatalf("logical admission after output open: %d", opens)
+					}
+					if c.LogicalCost.RetainedBytes > allowed {
+						return exchangecontent.ErrInvalidEvidence
+					}
+					return nil
+				})
+				if err != nil {
+					t.Fatal(err)
+				}
+				open := func(context.Context) (storedDecodeInput, error) {
+					opens++
+					return storedDecodeInput{bytes.NewReader(data), uint64(len(data)), sha256.Sum256(data), 1}, nil
+				}
+				got, err := d.full(context.Background(), open, mode)
+				if limitDelta < 0 {
+					if !errors.Is(err, exchangecontent.ErrInvalidEvidence) || opens != 1 || !reflect.DeepEqual(got, exchangecontent.Block{}) {
+						t.Fatalf("logical rejection must precede pass two: opens=%d empty=%v err=%v", opens, reflect.DeepEqual(got, exchangecontent.Block{}), err)
+					}
+				} else if err != nil || !reflect.DeepEqual(got, b) || measured == 0 || opens != 2 {
+					t.Fatalf("exact budget: opens=%d admissions=%d equal=%v err=%v", opens, measured, reflect.DeepEqual(got, b), err)
+				}
+			})
+		}
+	}
+}
+
+func TestStoredCanonicalParserLogicalCountRawAndReuse(t *testing.T) {
+	b := exchangecontent.Block{Kind: "tool_call", Availability: exchangecontent.AvailabilityRecorded, CallID: "id", ToolName: "fn", Arguments: json.RawMessage(`{"a":[1,"x"]}`)}
+	data, err := json.Marshal(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := storedBlockLogicalCost{uint64(9 + 8 + 2 + 2 + 13), uint64(reflect.TypeFor[exchangecontent.Block]().Size())}
+	d, open := parserFixture(t, data)
+	for i := 0; i < 2; i++ {
+		facts, err := d.count(context.Background(), open, environment.ContentRecordingFull)
+		if err != nil || facts.LogicalCost != want {
+			t.Fatalf("occurrence %d: facts=%+v want=%+v err=%v", i, facts, want, err)
+		}
+	}
+}
+
 func TestStoredCanonicalParserLegacyLanguage(t *testing.T) {
 	ordinary := []string{`"plain"`, `"\"\\\b\f\n\r\t\u0000\u001f\u003c\u003e\u0026\u2028\u2029😀�"`, `"\u0061"`, `"\/"`, `"\u000a"`, `"\u003C"`, `"\ud800"`, `"\ud800\udc00"`, `"<"`, `"\ufffd"`, "\"\xff\"", `""`}
 	raw := []string{`null`, `true`, `-0`, `1e+02`, `1e9999999999999999999999`, `{"z":1,"a":"\u0061","a":"\/\u003C\ud800"}`, `[null,"\ud800\udc00"]`, "\"\xff\"", `"\ufffd"`, `"<"`, `"\u003c"`, `[ 1 ]`, `" "`, `[1,]`, `{"a":}`, `1e+`}

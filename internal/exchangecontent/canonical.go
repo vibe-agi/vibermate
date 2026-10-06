@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"reflect"
 	"strconv"
 	"unicode/utf8"
@@ -158,38 +159,105 @@ func (w *canonicalWriter) agent(a *AgentContext) {
 
 // raw compacts a prevalidated JSON leaf without decoding/reordering its values.
 func (w *canonicalWriter) raw(b []byte) {
-	inString, escaped := false, false
-	for i := 0; i < len(b); i++ {
-		c := b[i]
-		if !inString && (c == ' ' || c == '\n' || c == '\t' || c == '\r') {
+	iter := canonicalRawIterator{input: b}
+	for iter.offset < len(b) {
+		start := iter.offset
+		replacement, omit := iter.next()
+		if omit {
 			continue
 		}
-		if c == '<' || c == '>' || c == '&' {
-			w.text(`\u00`)
-			w.text(hexDigits[c>>4 : c>>4+1])
-			w.text(hexDigits[c&15 : c&15+1])
-		} else if c == 0xe2 && i+2 < len(b) && b[i+1] == 0x80 && (b[i+2] == 0xa8 || b[i+2] == 0xa9) {
-			if b[i+2] == 0xa8 {
-				w.text(`\u2028`)
-			} else {
-				w.text(`\u2029`)
-			}
-			i += 2
+		if replacement != "" {
+			w.text(replacement)
 		} else {
-			w.bytes(b[i : i+1])
-		}
-		if inString {
-			if escaped {
-				escaped = false
-			} else if c == '\\' {
-				escaped = true
-			} else if c == '"' {
-				inString = false
-			}
-		} else if c == '"' {
-			inString = true
+			w.bytes(b[start:iter.offset])
 		}
 	}
+}
+
+// This is the existing raw compaction/escaping walk, not a JSON grammar or a
+// decoded-value normalization. The writer and footprint counter share it so
+// duplicate keys, number spelling, raw invalid UTF8 and escapes stay unchanged.
+type canonicalRawIterator struct {
+	input             []byte
+	offset            int
+	inString, escaped bool
+}
+
+func (s *canonicalRawIterator) next() (replacement string, omit bool) {
+	i := s.offset
+	c := s.input[i]
+	s.offset++
+	if !s.inString && (c == ' ' || c == '\n' || c == '\t' || c == '\r') {
+		return "", true
+	}
+	switch c {
+	case '<':
+		replacement = `\u003c`
+	case '>':
+		replacement = `\u003e`
+	case '&':
+		replacement = `\u0026`
+	case 0xe2:
+		if i+2 < len(s.input) && s.input[i+1] == 0x80 && (s.input[i+2] == 0xa8 || s.input[i+2] == 0xa9) {
+			if s.input[i+2] == 0xa8 {
+				replacement = `\u2028`
+			} else {
+				replacement = `\u2029`
+			}
+			s.offset += 2
+		}
+	}
+	if s.inString {
+		if s.escaped {
+			s.escaped = false
+		} else if c == '\\' {
+			s.escaped = true
+		} else if c == '"' {
+			s.inString = false
+		}
+	} else if c == '"' {
+		s.inString = true
+	}
+	return replacement, false
+}
+
+func canonicalRawBytes(ctx context.Context, raw []byte) (uint64, error) {
+	if ctx == nil {
+		return 0, ErrInvalidEvidence
+	}
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+	iter := canonicalRawIterator{input: raw}
+	var total uint64
+	sinceCheck := 0
+	for iter.offset < len(raw) {
+		start := iter.offset
+		replacement, omit := iter.next()
+		width := iter.offset - start
+		sinceCheck += width
+		if sinceCheck >= 4096 {
+			if err := ctx.Err(); err != nil {
+				return 0, err
+			}
+			sinceCheck = 0
+		}
+		if omit {
+			continue
+		}
+		n := uint64(width)
+		if replacement != "" {
+			n = uint64(len(replacement))
+		}
+		if n > math.MaxInt64-total {
+			return 0, ErrInvalidEvidence
+		}
+		total += n
+	}
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+	return total, nil
 }
 func preflightBlock(b Block) error {
 	if len(b.Arguments) > 0 && !json.Valid(b.Arguments) {
