@@ -87,7 +87,8 @@ func (f accountReadFixture) serveProxy(t *testing.T) *url.URL {
 		exchanges: f.runtime.exchanges, original: accountFixtureOriginal{}, accountReads: f.reader,
 		certificates: f.runtime.localCA, connections: f.runtime.connections,
 		policy: connectionpolicy.NewLive(policy), approvals: f.runtime.approvals, blindTunnels: blind,
-		egressAudit: f.runtime.egressCompletion, random: rand.Reader,
+		egressDefaults: f.runtime.egressDefaults,
+		egressAudit:    f.runtime.egressCompletion, random: rand.Reader,
 	})
 	if err != nil {
 		t.Fatal(err)

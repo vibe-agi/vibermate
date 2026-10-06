@@ -130,6 +130,7 @@ type ProbeTarget struct {
 	PlanRevision  uint64
 	PlanDigest    string
 	EgressPolicy  egressnetwork.Policy
+	TargetAccess  egressnetwork.TargetAccess
 }
 
 func (target ProbeTarget) Validate() error {

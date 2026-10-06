@@ -11,6 +11,8 @@ import (
 	"time"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/vibe-agi/vibermate/internal/egressnetwork"
 )
 
 var (
@@ -399,6 +401,7 @@ func (gate *Gate) PendingProbeTargets() []ProbeTarget {
 			PlanRevision:  key.target.PlanRevision,
 			PlanDigest:    key.target.PlanDigest,
 			EgressPolicy:  key.target.EgressPolicy,
+			TargetAccess:  key.target.TargetAccess,
 		})
 	}
 	slices.SortFunc(targets, func(left, right ProbeTarget) int {
@@ -752,6 +755,13 @@ func validateProbeTarget(target ProbeTarget) error {
 	if !validEgressKind(target.Kind) {
 		return ErrInvalidRequest
 	}
+	if target.Kind == EgressBlindTunnel && target.Transport == ProbeTransportTCP {
+		if target.TargetAccess != egressnetwork.TargetAccessPublicOnly && target.TargetAccess != egressnetwork.TargetAccessOwnerConfigured {
+			return ErrInvalidRequest
+		}
+	} else if target.TargetAccess != 0 {
+		return ErrInvalidRequest
+	}
 	switch target.Transport {
 	case ProbeTransportStrictTLS:
 		if err := validateOpaqueIdentity(
@@ -815,6 +825,7 @@ func probeTargetSortKey(target ProbeTarget) string {
 		string(target.EgressPolicy.Resolver.Kind),
 		target.EgressPolicy.Resolver.DoHURL,
 		string(target.EgressPolicy.Resolver.Transport),
+		fmt.Sprintf("%03d", target.TargetAccess),
 	}, "\x00")
 }
 

@@ -115,6 +115,7 @@ func Start(ctx context.Context, options Options) (*Runtime, error) {
 }
 
 type runtimeBuildOverrides struct {
+	blindProber   func() (*blindtunnel.ReachabilityProber, error)
 	environment   func(context.Context, environmentBuildRequest) (environmentBuildResult, error)
 	provider      func(providerBuildRequest) (providerRuntime, error)
 	recoverEgress func(context.Context, egressaudit.Repository, time.Time) error
@@ -557,9 +558,16 @@ func startWithBuilders(
 	if err != nil {
 		return fail("offline-hold original-origin probe", err)
 	}
-	blindResumeProber, err := blindtunnel.NewReachabilityProber()
+	buildBlindProber := blindtunnel.NewReachabilityProber
+	if overrides.blindProber != nil {
+		buildBlindProber = overrides.blindProber
+	}
+	blindResumeProber, err := buildBlindProber()
 	if err != nil {
 		return fail("offline-hold blind tunnel probe", err)
+	}
+	if blindResumeProber == nil {
+		return fail("offline-hold blind tunnel probe", fmt.Errorf("%w: blind prober is nil", ErrInvalidBuildResult))
 	}
 	resumeProber, err := newRuntimeResumeProber(
 		providerResumeProber,
@@ -745,11 +753,12 @@ func startWithBuilders(
 		policy:       connectionRules.Source(),
 		// A rule that asks blocks the connection on the same ApprovalCenter a
 		// tool intent goes to, so a person answers both in one place.
-		approvals:    approvals,
-		blindTunnels: blindTunnels,
-		egressAudit:  runtimeEgress,
-		rawEvidence:  rawEvidence,
-		random:       securityRandom,
+		approvals:      approvals,
+		blindTunnels:   blindTunnels,
+		egressDefaults: egressDefaults,
+		egressAudit:    runtimeEgress,
+		rawEvidence:    rawEvidence,
+		random:         securityRandom,
 	})
 	if err != nil {
 		return fail("loopback proxy handler", err)

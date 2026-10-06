@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/vibe-agi/vibermate/internal/egressnetwork"
+	"github.com/vibe-agi/vibermate/internal/egressprofile"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
 )
 
@@ -19,7 +20,7 @@ const DefaultDialTimeout = 15 * time.Second
 // path that ignores a planned offline hold.
 type Dialer struct {
 	coordinator offlinehold.Coordinator
-	dialer      egressnetwork.ContextDialer
+	builder     *egressnetwork.Builder
 }
 
 func NewDialer(coordinator offlinehold.Coordinator) (*Dialer, error) {
@@ -32,13 +33,18 @@ func NewDialer(coordinator offlinehold.Coordinator) (*Dialer, error) {
 	if err != nil {
 		return nil, err
 	}
-	targetDialer, err := builder.Dialer(egressnetwork.DefaultPolicy())
-	if err != nil {
-		return nil, err
+	return NewDialerWithBuilder(coordinator, builder)
+}
+
+// NewDialerWithBuilder composes a trusted transport dependency. It grants no
+// target permission and selects no policy; each Dial supplies those facts.
+func NewDialerWithBuilder(coordinator offlinehold.Coordinator, builder *egressnetwork.Builder) (*Dialer, error) {
+	if coordinator == nil || builder == nil {
+		return nil, errors.New("blind tunnel dependencies are incomplete")
 	}
 	return &Dialer{
 		coordinator: coordinator,
-		dialer:      targetDialer,
+		builder:     builder,
 	}, nil
 }
 
@@ -50,6 +56,7 @@ type DialRequest struct {
 	Authority string
 	Host      string
 	Port      uint16
+	Egress    egressprofile.Resolved
 }
 
 // Dial acquires the egress lease before the first packet and returns the
@@ -59,11 +66,20 @@ func (dialer *Dialer) Dial(
 	ctx context.Context,
 	request DialRequest,
 ) (net.Conn, offlinehold.Lease, error) {
-	if dialer == nil {
-		return nil, nil, errors.New("blind tunnel dialer is nil")
+	if dialer == nil || ctx == nil {
+		return nil, nil, errors.New("blind tunnel dialer or context is nil")
 	}
 	if request.Authority == "" || request.Host == "" || request.Port == 0 {
 		return nil, nil, errors.New("blind tunnel target is incomplete")
+	}
+	access := egressnetwork.EffectiveTargetAccess(ctx)
+	ctx = egressnetwork.WithTargetAccess(ctx, access)
+	if err := request.Egress.Validate(); err != nil {
+		return nil, nil, fmt.Errorf("freeze blind tunnel egress: %w", err)
+	}
+	targetDialer, err := dialer.builder.Dialer(request.Egress.Profile().Policy)
+	if err != nil {
+		return nil, nil, fmt.Errorf("build blind tunnel egress: %w", err)
 	}
 	target := offlinehold.ProbeTarget{
 		Kind:          offlinehold.EgressBlindTunnel,
@@ -71,6 +87,8 @@ func (dialer *Dialer) Dial(
 		TargetRef:     request.Authority,
 		NetworkOrigin: request.Authority,
 		HTTPAuthority: request.Authority,
+		EgressPolicy:  request.Egress.Profile().Policy,
+		TargetAccess:  access,
 	}
 	if err := target.Validate(); err != nil {
 		return nil, nil, fmt.Errorf("freeze blind tunnel target: %w", err)
@@ -83,7 +101,11 @@ func (dialer *Dialer) Dial(
 	if err != nil {
 		return nil, nil, fmt.Errorf("acquire blind tunnel lease: %w", err)
 	}
-	connection, err := dialer.dialer.DialContext(ctx, "tcp", request.Authority)
+	// The bound covers resolver and SOCKS negotiation too, but not a planned
+	// Offline wait or the lifetime of an already established tunnel.
+	dialContext, cancel := context.WithTimeout(ctx, DefaultDialTimeout)
+	defer cancel()
+	connection, err := targetDialer.DialContext(dialContext, "tcp", request.Authority)
 	if err != nil {
 		lease.Release()
 		return nil, nil, fmt.Errorf("dial blind tunnel target: %w", err)

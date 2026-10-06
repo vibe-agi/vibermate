@@ -39,6 +39,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/connectionpolicy"
 	"github.com/vibe-agi/vibermate/internal/egressaudit"
 	"github.com/vibe-agi/vibermate/internal/egressnetwork"
+	"github.com/vibe-agi/vibermate/internal/egressprofile"
 	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/exchange"
 	"github.com/vibe-agi/vibermate/internal/localca"
@@ -186,6 +187,7 @@ type Options struct {
 	// person, so it denies rather than degrading into an allow.
 	Approvals             NetworkApprovals
 	BlindTunnels          BlindTunnelDialer
+	EgressDefaults        egressprofile.Resolver
 	EgressAudit           egressaudit.Writer
 	RawEvidence           rawevidence.RequestRecorder
 	RawObservationTimeout time.Duration
@@ -223,6 +225,7 @@ type Handler struct {
 	policy         connectionpolicy.Source
 	approvals      NetworkApprovals
 	blindTunnels   BlindTunnelDialer
+	egressDefaults egressprofile.Resolver
 	egressAudit    egressaudit.Writer
 	rawEvidence    rawevidence.RequestRecorder
 	rawTimeout     time.Duration
@@ -253,6 +256,9 @@ func New(options Options) (*Handler, error) {
 		options.Connections == nil ||
 		options.ExchangeIDs == nil {
 		return nil, errors.New("loopback proxy dependencies are incomplete")
+	}
+	if options.BlindTunnels != nil && options.EgressDefaults == nil {
+		return nil, errors.New("blind tunnel forwarding requires egress defaults")
 	}
 	if options.HandshakeTimeout == 0 {
 		options.HandshakeTimeout = defaultHandshakeLimit
@@ -285,6 +291,7 @@ func New(options Options) (*Handler, error) {
 		policy:         options.Policy,
 		approvals:      options.Approvals,
 		blindTunnels:   options.BlindTunnels,
+		egressDefaults: options.EgressDefaults,
 		egressAudit:    options.EgressAudit,
 		rawEvidence:    options.RawEvidence,
 		rawTimeout:     rawTimeout,
@@ -333,6 +340,11 @@ func (handler *Handler) ServeHTTP(
 		requestedHost = splitHost
 		if parsedPort, parseErr := strconv.ParseUint(splitPort, 10, 16); parseErr == nil {
 			port = uint16(parsedPort)
+		}
+	}
+	if request.Method != http.MethodConnect && request.URL != nil && request.URL.IsAbs() && request.URL.Scheme == "http" {
+		if targetHost, targetPort, err := cleartextAuthority(request.URL.Host); err == nil {
+			requestedHost, port = targetHost, targetPort
 		}
 	}
 	// The journal opens before the method check so a rejection is recorded
@@ -2447,6 +2459,11 @@ func (handler *Handler) serveBlindTunnel(
 		handler.finishConnectionAudit(audit, connectionTerminal)
 	}()
 
+	resolved, err := handler.resolveBlindEgress(request.Context())
+	if err != nil {
+		writeReason(writer, http.StatusServiceUnavailable, ReasonBlindTunnelFailed, "")
+		return true
+	}
 	egressID, err := handler.exchangeIDs.NewExchangeID(request.Context())
 	if err != nil {
 		_, connectionTerminal.Outcome, connectionTerminal.ErrorClass =
@@ -2474,6 +2491,7 @@ func (handler *Handler) serveBlindTunnel(
 		egressID,
 		audit.ID(),
 		"https://"+authority,
+		resolved,
 	)
 	if err != nil {
 		writeReason(writer, http.StatusServiceUnavailable, ReasonBlindTunnelFailed, "")
@@ -2499,6 +2517,7 @@ func (handler *Handler) serveBlindTunnel(
 			Authority: authority,
 			Host:      host,
 			Port:      port,
+			Egress:    resolved,
 		},
 	)
 	if err != nil {
@@ -2573,15 +2592,45 @@ func blindTunnelTerminal(
 	}
 }
 
+func (handler *Handler) resolveBlindEgress(ctx context.Context) (egressprofile.Resolved, error) {
+	if handler.egressDefaults == nil {
+		return egressprofile.Resolved{}, egressprofile.ErrDefaultUnavailable
+	}
+	resolved, err := handler.egressDefaults.Resolve(ctx, egressprofile.Inherit(), egressprofile.Inherit())
+	if err != nil {
+		return egressprofile.Resolved{}, err
+	}
+	if err = resolved.Validate(); err != nil {
+		return egressprofile.Resolved{}, err
+	}
+	if resolved.Source() != egressprofile.SelectionGlobal && resolved.Source() != egressprofile.SelectionBuiltin {
+		return egressprofile.Resolved{}, egressprofile.ErrDefaultUnavailable
+	}
+	return resolved, nil
+}
+
 func (handler *Handler) beginBlindAudit(
 	ctx context.Context,
 	egressID string,
 	connectionID string,
 	targetOrigin string,
+	resolved egressprofile.Resolved,
 ) (egressaudit.Attempt, error) {
+	if err := resolved.Validate(); err != nil {
+		return egressaudit.Attempt{}, err
+	}
+	if resolved.Source() != egressprofile.SelectionGlobal && resolved.Source() != egressprofile.SelectionBuiltin {
+		return egressaudit.Attempt{}, errors.New("blind egress requires global or builtin selection")
+	}
 	if handler.egressAudit == nil {
 		return egressaudit.Attempt{}, nil
 	}
+	decision := egressaudit.BuiltInDirectDecision(egressaudit.AuthorityNetwork)
+	decision.SelectionSource, decision.DefaultRevision = resolved.Source(), resolved.DefaultRevision()
+	if resolved.Source() == egressprofile.SelectionGlobal {
+		decision.PolicyID, decision.PolicyRevision, decision.RuleID = "runtime.egress-default", resolved.DefaultRevision(), "global.default"
+	}
+	decision.ProxyID, decision.ProxyRevision = resolved.Profile().ID.String(), uint64(resolved.Profile().Revision)
 	attempt, err := egressaudit.New(egressaudit.NewInput{
 		ID:           egressID,
 		ConnectionID: connectionID,
@@ -2593,10 +2642,8 @@ func (handler *Handler) beginBlindAudit(
 		},
 		Caller:       egressaudit.CallerCore,
 		TargetOrigin: targetOrigin,
-		Decision: egressaudit.BuiltInDirectDecision(
-			egressaudit.AuthorityNetwork,
-		),
-		StartedAt: handler.clock(),
+		Decision:     decision,
+		StartedAt:    handler.clock(),
 	})
 	if err != nil {
 		return egressaudit.Attempt{}, err
@@ -2720,6 +2767,11 @@ func (handler *Handler) serveCleartextForward(
 	}
 	defer func() { handler.finishConnectionAudit(audit, connectionTerminal) }()
 
+	resolved, err := handler.resolveBlindEgress(request.Context())
+	if err != nil {
+		writeReason(writer, http.StatusServiceUnavailable, ReasonBlindTunnelFailed, "")
+		return true
+	}
 	egressID, err := handler.exchangeIDs.NewExchangeID(request.Context())
 	if err != nil {
 		writeReason(writer, http.StatusServiceUnavailable, ReasonProxyStopping, "")
@@ -2736,6 +2788,7 @@ func (handler *Handler) serveCleartextForward(
 	defer actionLease.Release()
 	record, err := handler.beginBlindAudit(
 		request.Context(), egressID, audit.ID(), "http://"+authority,
+		resolved,
 	)
 	if err != nil {
 		writeReason(writer, http.StatusServiceUnavailable, ReasonBlindTunnelFailed, "")
@@ -2762,6 +2815,7 @@ func (handler *Handler) serveCleartextForward(
 			Authority: authority,
 			Host:      host,
 			Port:      port,
+			Egress:    resolved,
 		},
 	)
 	if err != nil {

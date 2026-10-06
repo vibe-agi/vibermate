@@ -3,6 +3,8 @@ package offlinehold
 import (
 	"strings"
 	"testing"
+
+	"github.com/vibe-agi/vibermate/internal/egressnetwork"
 )
 
 func TestProbePlanIdentityIsPairedAndCanonical(t *testing.T) {
@@ -48,6 +50,7 @@ func TestBlindTunnelUsesARawTCPProbeTarget(t *testing.T) {
 
 	target := ProbeTarget{
 		Kind:          EgressBlindTunnel,
+		TargetAccess:  egressnetwork.TargetAccessOwnerConfigured,
 		Transport:     ProbeTransportTCP,
 		TargetRef:     "files.example.com:443",
 		NetworkOrigin: "files.example.com:443",
@@ -65,6 +68,7 @@ func TestRawTCPProbeCannotClaimATLSServerName(t *testing.T) {
 
 	target := ProbeTarget{
 		Kind:          EgressBlindTunnel,
+		TargetAccess:  egressnetwork.TargetAccessOwnerConfigured,
 		Transport:     ProbeTransportTCP,
 		TargetRef:     "files.example.com:443",
 		NetworkOrigin: "files.example.com:443",

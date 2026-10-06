@@ -162,6 +162,7 @@ func probeTargetIdentityKey(target offlinehold.ProbeTarget) string {
 		string(target.EgressPolicy.Resolver.Kind),
 		target.EgressPolicy.Resolver.DoHURL,
 		string(target.EgressPolicy.Resolver.Transport),
+		fmt.Sprintf("%03d", target.TargetAccess),
 	}, "\x00")
 }
 

@@ -10,6 +10,27 @@ import (
 	"github.com/vibe-agi/vibermate/internal/egressnetwork"
 )
 
+func TestEffectiveTargetAccessPreservesOnlyExistingAllowance(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		ctx  context.Context
+		want egressnetwork.TargetAccess
+	}{
+		{"nil", nil, egressnetwork.TargetAccessPublicOnly},
+		{"trusted-local-unset", context.Background(), egressnetwork.TargetAccessOwnerConfigured},
+		{"owner", egressnetwork.WithTargetAccess(context.Background(), egressnetwork.TargetAccessOwnerConfigured), egressnetwork.TargetAccessOwnerConfigured},
+		{"public", egressnetwork.WithTargetAccess(context.Background(), egressnetwork.TargetAccessPublicOnly), egressnetwork.TargetAccessPublicOnly},
+		{"zero-set", egressnetwork.WithTargetAccess(context.Background(), 0), egressnetwork.TargetAccessPublicOnly},
+		{"invalid-set", egressnetwork.WithTargetAccess(context.Background(), 99), egressnetwork.TargetAccessPublicOnly},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := egressnetwork.EffectiveTargetAccess(tc.ctx); got != tc.want {
+				t.Fatalf("got %d want %d", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestPublicTargetAccessRejectsPrivateDNSBeforeDirectOrSOCKSDial(t *testing.T) {
 	for _, proxy := range []egressnetwork.ProxyPolicy{
 		{Kind: egressnetwork.ProxyDirect},

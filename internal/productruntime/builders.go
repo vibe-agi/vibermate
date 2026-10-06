@@ -1105,22 +1105,23 @@ func buildLocalCA(
 }
 
 type proxyBuildRequest struct {
-	nativeTools  nativemcp.Executor
-	nativeIDs    nativemcp.IDSource
-	ownerContext context.Context
-	admissions   captureadmission.Authorizer
-	assignments  loopbackproxy.CaptureAssignmentAuthority
-	exchanges    exchange.Executor
-	original     loopbackproxy.OriginalClient
-	accountReads loopbackproxy.CapturedAccountReader
-	certificates loopbackproxy.CertificateAuthority
-	connections  connectionevent.Runtime
-	policy       connectionpolicy.Source
-	approvals    loopbackproxy.NetworkApprovals
-	blindTunnels loopbackproxy.BlindTunnelDialer
-	egressAudit  egressaudit.Writer
-	rawEvidence  rawevidence.RequestRecorder
-	random       io.Reader
+	nativeTools    nativemcp.Executor
+	nativeIDs      nativemcp.IDSource
+	ownerContext   context.Context
+	admissions     captureadmission.Authorizer
+	assignments    loopbackproxy.CaptureAssignmentAuthority
+	exchanges      exchange.Executor
+	original       loopbackproxy.OriginalClient
+	accountReads   loopbackproxy.CapturedAccountReader
+	certificates   loopbackproxy.CertificateAuthority
+	connections    connectionevent.Runtime
+	policy         connectionpolicy.Source
+	approvals      loopbackproxy.NetworkApprovals
+	blindTunnels   loopbackproxy.BlindTunnelDialer
+	egressDefaults egressprofile.Resolver
+	egressAudit    egressaudit.Writer
+	rawEvidence    rawevidence.RequestRecorder
+	random         io.Reader
 }
 
 type proxyRuntime interface {
@@ -1135,19 +1136,20 @@ func buildProxy(
 ) (proxyRuntime, error) {
 	return loopbackproxy.New(loopbackproxy.Options{
 		NativeTools: request.nativeTools, NativeOperationIDs: request.nativeIDs,
-		OwnerContext: request.ownerContext,
-		Admissions:   request.admissions,
-		Assignments:  request.assignments,
-		Exchanges:    request.exchanges,
-		Original:     request.original,
-		AccountReads: request.accountReads,
-		Certificates: request.certificates,
-		Connections:  request.connections,
-		Policy:       request.policy,
-		Approvals:    request.approvals,
-		BlindTunnels: request.blindTunnels,
-		EgressAudit:  request.egressAudit,
-		RawEvidence:  request.rawEvidence,
+		OwnerContext:   request.ownerContext,
+		Admissions:     request.admissions,
+		Assignments:    request.assignments,
+		Exchanges:      request.exchanges,
+		Original:       request.original,
+		AccountReads:   request.accountReads,
+		Certificates:   request.certificates,
+		Connections:    request.connections,
+		Policy:         request.policy,
+		Approvals:      request.approvals,
+		BlindTunnels:   request.blindTunnels,
+		EgressDefaults: request.egressDefaults,
+		EgressAudit:    request.egressAudit,
+		RawEvidence:    request.rawEvidence,
 		ExchangeIDs: loopbackproxy.NewRandomExchangeIDSource(
 			request.random,
 		),

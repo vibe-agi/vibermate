@@ -1090,6 +1090,8 @@ type proxyFixture struct {
 	egress        egressaudit.Repository
 	approvals     *toolapproval.Authority
 	rules         *connectionpolicy.Manager
+	defaults      *egressprofile.DefaultManager
+	profiles      *egressprofile.Manager
 }
 
 type proxyEnvironmentResolver struct {
@@ -1260,8 +1262,10 @@ func newProxyFixtureForDialectWithPolicyAndRawEvidence(
 }
 
 type proxyFixtureComposition struct {
-	compiler  environment.Compiler
-	configure func(*environment.Environment)
+	compiler       environment.Compiler
+	configure      func(*environment.Environment)
+	configureProxy func(*loopbackproxy.Options)
+	ingressContext context.Context
 }
 
 func newProxyFixtureConfigured(t *testing.T, clientDialect protocolspec.Dialect, adapter *clientadapter.Evidence, policy connectionpolicy.Snapshot, raw rawevidence.RequestRecorder, assignmentEnvironmentID environment.EnvironmentID, composition *proxyFixtureComposition, clientOrigins ...string) *proxyFixture {
@@ -1430,7 +1434,7 @@ func newProxyFixtureConfigured(t *testing.T, clientDialect protocolspec.Dialect,
 	if err != nil {
 		t.Fatal(err)
 	}
-	handler, err := loopbackproxy.New(loopbackproxy.Options{
+	proxyOptions := loopbackproxy.Options{
 		OwnerContext:     context.Background(),
 		Admissions:       admissions,
 		Assignments:      assignments,
@@ -1441,11 +1445,16 @@ func newProxyFixtureConfigured(t *testing.T, clientDialect protocolspec.Dialect,
 		Policy:           rules.Source(),
 		Approvals:        approvals,
 		BlindTunnels:     newTestBlindTunnels(t),
+		EgressDefaults:   defaults,
 		EgressAudit:      store.EgressAttemptRepository(),
 		RawEvidence:      raw,
 		ExchangeIDs:      loopbackproxy.NewCryptographicExchangeIDSource(),
 		HandshakeTimeout: time.Second,
-	})
+	}
+	if composition != nil && composition.configureProxy != nil {
+		composition.configureProxy(&proxyOptions)
+	}
+	handler, err := loopbackproxy.New(proxyOptions)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1454,6 +1463,9 @@ func newProxyFixtureConfigured(t *testing.T, clientDialect protocolspec.Dialect,
 		t.Fatal(err)
 	}
 	server := &http.Server{Handler: handler}
+	if composition != nil && composition.ingressContext != nil {
+		server.BaseContext = func(net.Listener) context.Context { return composition.ingressContext }
+	}
 	go func() {
 		_ = server.Serve(listener)
 	}()
@@ -1465,6 +1477,7 @@ func newProxyFixtureConfigured(t *testing.T, clientDialect protocolspec.Dialect,
 		exchanges: exchanges, original: original,
 		connections: connections, egress: store.EgressAttemptRepository(),
 		approvals: approvals, rules: rules,
+		defaults: defaults, profiles: profiles,
 	}
 }
 

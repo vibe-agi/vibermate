@@ -53,11 +53,12 @@ func TestBlindTunnelDoesNotDialBeforeAuditAppend(t *testing.T) {
 	tunnels := &blindOrderingDialer{}
 	egress := &failingBlindAppendWriter{}
 	handler := &Handler{
-		blindTunnels: tunnels,
-		egressAudit:  egress,
-		exchangeIDs:  fixedBlindExchangeIDSource{},
-		ownerContext: context.Background(),
-		clock:        time.Now,
+		blindTunnels:   tunnels,
+		egressDefaults: blindFixedDefault{value: blindBuiltinResolved(t)},
+		egressAudit:    egress,
+		exchangeIDs:    fixedBlindExchangeIDSource{},
+		ownerContext:   context.Background(),
+		clock:          time.Now,
 	}
 	request := httptest.NewRequest(
 		http.MethodConnect,
@@ -127,11 +128,12 @@ func TestCleartextForwardDoesNotDialBeforeAuditAppend(t *testing.T) {
 	tunnels := &blindOrderingDialer{}
 	egress := &failingBlindAppendWriter{}
 	handler := &Handler{
-		blindTunnels: tunnels,
-		egressAudit:  egress,
-		exchangeIDs:  fixedBlindExchangeIDSource{},
-		ownerContext: context.Background(),
-		clock:        time.Now,
+		blindTunnels:   tunnels,
+		egressDefaults: blindFixedDefault{value: blindBuiltinResolved(t)},
+		egressAudit:    egress,
+		exchangeIDs:    fixedBlindExchangeIDSource{},
+		ownerContext:   context.Background(),
+		clock:          time.Now,
 	}
 	request := httptest.NewRequest(http.MethodPost, "http://target.example/upload", strings.NewReader("canary"))
 	writer := httptest.NewRecorder()
@@ -269,6 +271,7 @@ func TestBlindTunnelAuditClampsDecreasingWallClock(t *testing.T) {
 		"blind-terminal-attempt",
 		"blind-terminal-connection",
 		"https://target.example:443",
+		blindBuiltinResolved(t),
 	)
 	if err != nil {
 		t.Fatal(err)
