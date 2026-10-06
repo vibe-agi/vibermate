@@ -124,7 +124,7 @@ func WriteCanonicalMessage(io.Writer, MessageSource) error
 
 `ResourcePolicy` is a finite constructor value used only inside internal packages/test harnesses; it is not a user/runtime knob. Add `productruntime.Options.Resources *exchange.ResourcePolicy` and `runtimepersistence.Options.ContentLimits *exchangecontent.SourceLimits` as internal constructor injection, with no JSON/config/env exposure. Task6 constructs candidate Runtime/codec/source/Store-reader wiring with those copied/validated values, including limits-aware model-map/clone/record/read validation. Existing production constructors retain legacy checks until Task7 adopts one private `productionResourcePolicy` value. No callback replaces validation; nil/zero never means unlimited. `NewSourceWithin` and `ValidateRequestWithin` provide full final-path semantics; the4096 business check is confined to the legacy adapter. Repository readers use the same SourceLimits, so candidate >4096 roundtrips cannot accidentally fall back through legacy Record.Validate.
 
-### Task1: Capture baseline fixtures and counting invariants; fold REDs into owning units
+### Task 1: Capture baseline fixtures and counting invariants; fold REDs into owning units
 
 **Files:** new resource/source/canonical/fragment tests above; existing codec, Pipeline, Store tests.
 **Consumes:** compression prerequisite and current codecs/Store. **Produces:** fixture descriptions, original baseline observations and the source-derived inventory; no standalone failing-test commit. Add each named RED immediately before its implementation in Tasks2–5/7, and commit only its GREEN unit.
@@ -147,7 +147,7 @@ func TestStreamingCanonicalEscapedBlock(t *testing.T) {
 - [ ] Save baseline RED logs using `go test -count=1 -parallel=1 -run 'TestLongHistory|TestEscapedResponse|TestResourceEveryOccurrence'` for affected packages with the global command prefix. Compile-only failure does not establish behavioral RED.
 - [ ] Document checked sizes from actual structs and codec copy sites, including retained original/provider wire, selector/transform Goja values, neutral clones, notices, record sanitizer and readback. Count fixed response reserve independently of history; keep this inventory with calibration evidence. Preserve baseline logs in scratch; commit fixtures with their passing owning unit, never a branch-wide failing-test-only checkpoint.
 
-### Task2: Checked core accounting and early allocation bounds
+### Task 2: Checked core accounting and early allocation bounds
 
 **Files:** `protocolcore/resource*.go`, `types.go`, `json_names.go`; identified codec growth seams/tests.
 **Consumes:** Task1 inventory. **Produces:** the ResourceCost/ResourceBudget APIs above and guarded semantic construction.
@@ -157,7 +157,7 @@ func TestStreamingCanonicalEscapedBlock(t *testing.T) {
 - [ ] Keep4096 in production adapters until Task7. Add the typed `Options.Resources` constructor input to each affected codec, propagate the same validated limits through model-map cloning and semantic encode checks, and use it in candidate-path tests. This explicit bounded path replaces only the business-count check; it cannot bypass full semantics or any inherited protocol/SQL bound.
 - [ ] Run focused resource/name tests and all affected codec normal tests; commit when overflow/direct-construction/ownership tests pass.
 
-### Task3: Borrowed record source and byte-exact streaming canonical encoding
+### Task 3: Borrowed record source and byte-exact streaming canonical encoding
 
 **Files:** `exchangecontent/source.go`, `canonical.go`, `types.go`, tests.
 **Consumes:** Task2 checked costs. **Produces:** Source/MessageSource/RecordCost plus legacy-equivalent streaming encoding.
@@ -167,7 +167,7 @@ func TestStreamingCanonicalEscapedBlock(t *testing.T) {
 - [ ] Implement checked structural/payload/physical-feasibility validation in `NewSourceWithin` using explicit SourceLimits; keep the legacy `NewSource`/Record adapters until Task7. Retain bounded CanonicalJSON/DecodeCanonicalJSON roundtrip for old artifacts and expose complete WriteCanonicalJSON. Add candidate-source tests proving large valid records can persist while the32MiB byte-returning convenience correctly refuses oversized output.
 - [ ] Run `go test -count=1 ./internal/exchangecontent`; commit source/canonical unit after exact-byte fixtures pass.
 
-### Task4: Schema1 physical fragments, streaming Store and verified readers
+### Task 4: Schema1 physical fragments, streaming Store and verified readers
 
 **Files:** `runtimepersistence/exchange_content_{fragments,block,repository,page}.go`, `store.go`, page/repository tests; `exchangecontent/page.go`.
 **Consumes:** Task3 Source/RecordCost and completed compression prerequisite. **Produces:** PutSource and schema1 feasibility evidence; no claim of full SQL/control deadline acceptance until Task6.
@@ -181,7 +181,7 @@ func TestStreamingCanonicalEscapedBlock(t *testing.T) {
 - [ ] Test Full/MetadataOnly/Off; complete/reopen/Get/every page/tail; prefix→suffix, exact replay, checkpoint rewrite, empty response, reasoning/signature; expire ancestor while live child remains; delete final reference releases **every** fragment through existing refs/GC; rollback/crash publishes no partial manifest and leaves no orphan fragments. Compare sqlite_schema/schema revision byte-for-byte to baseline.
 - [ ] Run all runtimepersistence/exchangecontent normal tests and targeted race tests; commit only with legacy fixture hashes and all fragment tamper tests passing.
 
-### Task5: Prepare the bounded candidate Pipeline and pre-body backpressure
+### Task 5: Prepare the bounded candidate Pipeline and pre-body backpressure
 
 **Files:** `exchange/resource_admission.go`, `pipeline.go`, `contracts.go`, `message_transform.go`; `loopbackproxy/handler.go`; `exchangecontent/manager.go`; `productruntime/builders.go`; Pipeline/Runtime/ingress tests.
 **Consumes:** Tasks2–4 policy-independent implementation and schema feasibility. **Produces:** explicitly constructed candidate path and GREEN gate/lifetime tests; production constructors/4096 adapters remain until Task7.
@@ -196,7 +196,7 @@ func TestStreamingCanonicalEscapedBlock(t *testing.T) {
 - [ ] Wire observer→NewSource→Manager.RecordSource→Repository.PutSource synchronously; replace extra cloned observer Record handoffs under documented borrowed lifetime. Propagate first recording failure to existing diagnostics; require zero new degraded warnings in acceptance. Do not introduce asynchronous private-body retention.
 - [ ] Exercise the typed candidate-policy constructors in real Runtime/Pipeline tests for >4096 success, invalid full tail, inactive/shared payload rejection before credential/model send, transform expansion rejection and cancellation at every owned seam. Production defaults retain legacy guards. Run affected normal/race tests and commit only GREEN preparation, not the production admission switch.
 
-### Task6: Deliver bounded calibration and root's exact internal policy ruling
+### Task 6: Deliver bounded calibration and root's exact internal policy ruling
 
 **Files:** candidate acceptance harness and adopted plan evidence note; ignored child experiment sources/logs. No production-default edits in this task.
 **Consumes:** Tasks1–5, compression prerequisite and explicit finite ResourcePolicy/SourceLimits constructors. **Produces:** source-matched calibration report, exact candidate values with units/proofs, and root's recorded internal adoption ruling; Task7 consumes that ruling without re-asking the user.
@@ -224,7 +224,7 @@ request.body = JSON.stringify(body);
 - [ ] Add four waiting requests while four slots are occupied; their bodies must remain unread and all uncanceled requests must eventually finish without a synthetic busy error. Include HTTP/2 upload-window memory, shared compression wait, maximal physical fragment rows and actual SQL write-lock/audit/control deadlines. The gate bounds active body materialization and adds no waiter registry; it does not claim a global bound on arbitrary incoming connections. If transport-owned waiting buffers break the measured safety envelope, stop for root's narrowly scoped ingress ruling before changing listener/connection admission.
 - [ ] Deliver exact ResourceLimits, SourceLimits, SlotBytes and ActiveBytes, source hashes, reproducible commands/child outcomes and analytical SQL/response proofs to root. Root selects only a fully passing candidate and records values in the adopted plan; absence of that ruling blocks Task7, not Tasks2–6. Failed schema1 or SQL/control-deadline proof is a release blocker requiring a revised internal design, not an asserted pass.
 
-### Task7: Adopt the measured policy, switch production guards and prove upgrade acceptance
+### Task 7: Adopt the measured policy, switch production guards and prove upgrade acceptance
 
 **Files:** private production policy and default constructors/adapters in protocolcore/codecs/exchange/exchangecontent/productruntime/loopbackproxy; acceptance/upgrade tests and evidence note.
 **Consumes:** root's exact Task6 policy ruling and passing prerequisites. **Produces:** the coupled production switch, data-preserving compatibility evidence and final candidate gates.
