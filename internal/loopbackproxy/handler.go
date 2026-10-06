@@ -1718,19 +1718,25 @@ func (handler *Handler) forwardToOriginalOrigin(
 		writeReason(writer, http.StatusServiceUnavailable, ReasonProxyStopping, "")
 		return
 	}
+	resolved, err := plan.ResolvedEgress()
+	if err != nil {
+		writeReason(writer, http.StatusServiceUnavailable, ReasonOriginalEgressFailed, "")
+		return
+	}
 	frozen, err := originaltransport.NewRequest(originaltransport.RequestOptions{
-		RequestID:    egressID,
-		ConnectionID: connectionID,
-		ParentID:     requestID,
-		Kind:         kind,
-		Origin:       plan.Endpoint().ClientOrigin(),
-		Method:       request.Method,
-		Path:         request.URL.Path,
-		RawQuery:     request.URL.RawQuery,
-		Headers:      request.Header,
-		Body:         body,
-		PayloadClass: payloadClass,
-		EgressPolicy: plan.EgressPolicy(),
+		ResolvedEgress: resolved,
+		RequestID:      egressID,
+		ConnectionID:   connectionID,
+		ParentID:       requestID,
+		Kind:           kind,
+		Origin:         plan.Endpoint().ClientOrigin(),
+		Method:         request.Method,
+		Path:           request.URL.Path,
+		RawQuery:       request.URL.RawQuery,
+		Headers:        request.Header,
+		Body:           body,
+		PayloadClass:   payloadClass,
+		EgressPolicy:   resolved.Profile().Policy,
 	})
 	if err != nil {
 		writeReason(writer, http.StatusBadRequest, ReasonRequestBodyInvalid, "")

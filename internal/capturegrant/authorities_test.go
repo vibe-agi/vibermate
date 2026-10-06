@@ -82,6 +82,14 @@ func TestEnvironmentAuthorityResolverCreatesTypedCaptureAssignment(t *testing.T)
 	assignment := captureAuthorityAssignment(t, nil, nil)
 	aggregate := systemEnvironmentSnapshot(t).Aggregate()
 	aggregate.ID, aggregate.Name = "work", "Work"
+	// This fixture describes a new user environment, not system revision2.
+	aggregate.Revision = 1
+	for i := range aggregate.ClientEndpoints {
+		aggregate.ClientEndpoints[i].Revision = 1
+		for j := range aggregate.ClientEndpoints[i].ProtocolPlans {
+			aggregate.ClientEndpoints[i].ProtocolPlans[j].Revision = 1
+		}
+	}
 	aggregate.LaunchEnvironment = environment.LaunchEnvironmentPolicy{SetEnv: map[string]string{"TEAM_CONTEXT": "team-a"}}
 	snapshot, err := manualEnvironmentCompiler(t).Compile(aggregate)
 	if err != nil {

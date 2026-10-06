@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"testing"
 
+	"github.com/vibe-agi/vibermate/internal/egressnetwork"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
 	"github.com/vibe-agi/vibermate/internal/originaltransport"
 	"github.com/vibe-agi/vibermate/internal/originidentity"
@@ -20,15 +21,16 @@ func payloadClassRequestOptions(
 		t.Fatal(err)
 	}
 	return originaltransport.RequestOptions{
-		RequestID:    "run-1/exchange-1",
-		Kind:         offlinehold.EgressOpaque,
-		Origin:       origin,
-		Method:       http.MethodGet,
-		Path:         "/api/claude_code/settings",
-		Headers:      http.Header{"Authorization": []string{"Bearer client"}},
-		PayloadClass: protocolspec.OperationPayloadControl,
-		ConnectionID: "connection-test",
-		ParentID:     "original-request-test",
+		ResolvedEgress: originalResolved(t, egressnetwork.DefaultPolicy()),
+		RequestID:      "run-1/exchange-1",
+		Kind:           offlinehold.EgressOpaque,
+		Origin:         origin,
+		Method:         http.MethodGet,
+		Path:           "/api/claude_code/settings",
+		Headers:        http.Header{"Authorization": []string{"Bearer client"}},
+		PayloadClass:   protocolspec.OperationPayloadControl,
+		ConnectionID:   "connection-test",
+		ParentID:       "original-request-test",
 	}
 }
 

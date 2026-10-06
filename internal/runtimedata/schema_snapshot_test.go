@@ -214,7 +214,7 @@ func seedSnapshotAuthority(t *testing.T, source string) (provideraccount.Account
 	if err != nil {
 		t.Fatal(err)
 	}
-	candidate := environment.Environment{ID: "snapshot-environment", Name: "Snapshot environment", State: environment.StateActive, Revision: 1, ContentRecording: environment.DefaultContentRecordingPolicy(), ClientEndpoints: []environment.ClientEndpoint{{ID: "snapshot-endpoint", Revision: 1, ClientOrigin: origin, ProtocolPlans: []environment.ClientProtocolPlan{{ID: "snapshot-plan", Revision: 1, ClientProtocol: environment.ClientProtocolAnthropicMessages, ClientAdapterPolicy: environment.ClientAdapterPolicy{ID: "snapshot-adapter", Revision: 1}, EgressProfile: egressprofile.Direct(), Destination: environment.DestinationPlan{Kind: environment.DestinationKindOriginal}}}}}}
+	candidate := environment.Environment{ID: "snapshot-environment", Name: "Snapshot environment", State: environment.StateActive, Revision: 1, ContentRecording: environment.DefaultContentRecordingPolicy(), ClientEndpoints: []environment.ClientEndpoint{{ID: "snapshot-endpoint", Revision: 1, ClientOrigin: origin, ProtocolPlans: []environment.ClientProtocolPlan{{ID: "snapshot-plan", Revision: 1, ClientProtocol: environment.ClientProtocolAnthropicMessages, ClientAdapterPolicy: environment.ClientAdapterPolicy{ID: "snapshot-adapter", Revision: 1}, EgressProfile: authoredEgress(t, egressprofile.Direct()), Destination: environment.DestinationPlan{Kind: environment.DestinationKindOriginal}}}}}}
 	digest, err := environment.Digest(candidate)
 	if err != nil {
 		t.Fatal(err)

@@ -63,7 +63,9 @@ final class EgressProfileButton extends StatelessWidget {
     final selection = await showEgressProfileSelection(
       context: context,
       selectionId: plan.id,
-      initial: plan.egressProfile,
+      initial: plan.egressProfile is EgressProfileRevision
+          ? plan.egressProfile as EgressProfileRevision
+          : null,
       copy: copy,
       loadProfiles: loadProfiles,
     );
@@ -90,7 +92,11 @@ Future<({EgressProfileRevision? profile})?> showEgressProfileSelection({
   ),
 );
 
-String egressProfileSummary(AppCopy copy, EgressProfileRevision profile) {
+String egressProfileSummary(AppCopy copy, EgressChoice choice) {
+  if (choice is EgressInheritance) {
+    return copy('environment.egress.determinedAtExecution');
+  }
+  final profile = choice as EgressProfileRevision;
   if (profile.id == EgressProfileRevision.direct.id) {
     return egressPolicySummary(copy, profile.policy);
   }

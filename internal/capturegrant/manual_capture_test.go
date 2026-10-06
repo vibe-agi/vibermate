@@ -719,7 +719,7 @@ func semanticEnvironmentSnapshot(t *testing.T) environment.EnvironmentSnapshot {
 				ClientProtocol:      environment.ClientProtocolAnthropicMessages,
 				ClientAdapterPolicy: environment.ClientAdapterPolicy{ID: "adapter.claude", Revision: 1},
 				Destination:         environment.DestinationPlan{Kind: environment.DestinationKindOriginal},
-				EgressProfile:       egressprofile.Direct(),
+				EgressProfile:       authoredEgress(t, egressprofile.Direct()),
 			}},
 		}},
 	})

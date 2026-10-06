@@ -30,7 +30,11 @@ func TestNativeSensitiveToolEvidenceRecheckedByGateAndAuthority(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	binding, intents, _, err := e.bindRequest(c, r, s)
+	plan, err = e.operationPlan(context.Background(), r, s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	binding, intents, _, err := e.bindRequest(c, r, s, plan)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -114,11 +114,9 @@ func (r *nativeToolRepository) OpenObservedStream(ctx context.Context, receipt n
 	// removing their bounded tombstone cannot enable another observation grant.
 	for a, s := range r.streams {
 		if s.terminal && !s.cleanupOnly && !s.expires.After(now) {
-			if r.hasNativeCallbacks(a) {
-				r.invalidateNativeStream(a)
-			} else {
-				r.dropNativeStream(a)
-			}
+			// Logical terminal is not physical-audit completion. Preserve the
+			// existing exact receipt cleanup owner even without live callbacks.
+			r.invalidateNativeStream(a)
 		}
 	}
 	if r.streamOpened == nil {
@@ -496,6 +494,10 @@ func (r *nativeToolRepository) dropNativeStream(a nativetool.StreamAuthority) {
 }
 
 func (r *nativeToolRepository) BindRecoveryGET(ctx context.Context, id nativetool.ID, b nativetool.Binding, a nativetool.StreamAuthority, now time.Time) error {
+	resolved, resolvedErr := b.Plan().ResolvedEgress()
+	if resolvedErr != nil {
+		return nativetool.ErrInvalid
+	}
 	if !nativeTime(now) || !nativeID(id) || b.Kind() != nativetool.RequestGetStream {
 		return nativetool.ErrInvalid
 	}
@@ -520,7 +522,7 @@ func (r *nativeToolRepository) BindRecoveryGET(ctx context.Context, id nativetoo
 		if err != nil {
 			return err
 		}
-		if id == op.ID || b.SessionID() != s.session || b.Capture() != op.Capture || b.OwnerEpoch() != origin.owner || b.AssignmentRevision() != origin.assignment || b.Plan().EnvironmentDigest() != op.EnvironmentDigest || b.Plan().Route().ID.String() != origin.route || uint64(b.Plan().Route().Revision) != origin.routeRevision {
+		if id == op.ID || b.SessionID() != s.session || b.Capture() != op.Capture || b.OwnerEpoch() != origin.owner || b.AssignmentRevision() != origin.assignment || b.Plan().EnvironmentDigest() != op.EnvironmentDigest || b.Plan().Route().ID.String() != origin.route || uint64(b.Plan().Route().Revision) != origin.routeRevision || origin.bindingVersion != 2 || origin.resolved != resolved {
 			return nativetool.ErrDenied
 		}
 		var method string
@@ -534,7 +536,7 @@ func (r *nativeToolRepository) BindRecoveryGET(ctx context.Context, id nativetoo
 	})
 	if err != nil {
 		if errors.Is(err, nativetool.ErrUnavailable) {
-			r.dropNativeStream(a)
+			r.invalidateNativeStream(a)
 		}
 		return err
 	}
@@ -543,7 +545,7 @@ func (r *nativeToolRepository) BindRecoveryGET(ctx context.Context, id nativetoo
 	r.recovery[id] = nativeRecovery{stream: a, digest: b.Digest()}
 	err = r.Bind(ctx, id, b, now)
 	if errors.Is(err, nativetool.ErrUnavailable) {
-		r.dropNativeStream(a)
+		r.invalidateNativeStream(a)
 	}
 	return err
 }

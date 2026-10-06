@@ -479,7 +479,7 @@ func passthroughEnvironment(t *testing.T, id, rawOrigin string, protocol environ
 				ID: environment.ClientProtocolPlanID("plan." + id), Revision: 1, ClientProtocol: protocol,
 				ClientAdapterPolicy: environment.ClientAdapterPolicy{ID: "adapter." + id, Revision: 1},
 				Destination:         environment.DestinationPlan{Kind: environment.DestinationKindOriginal},
-				EgressProfile:       egressprofile.Direct(),
+				EgressProfile:       authoredEgress(t, egressprofile.Direct()),
 			}},
 		}},
 	}

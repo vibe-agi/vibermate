@@ -39,7 +39,7 @@ func nativeFixtureWithCapture(t *testing.T, mode environment.ToolPolicyMode, rec
 	aggregate := environmentFixture(t, "native", 1)
 	aggregate.ContentRecording = recording
 	aggregate.PolicySet = &environment.PolicySet{ToolMode: mode}
-	aggregate.ClientToolAccess = &environment.ClientToolAccessPolicy{Enabled: true, Route: &environment.ClientToolRoute{ID: "native.mcp", Revision: 1, TargetOrigin: runtimeProviderOrigin(t, "https://chatgpt.com"), Path: environment.ClientToolMCPPath, CredentialOwner: environment.ClientToolCredentialOriginal, EgressProfile: egressprofile.Direct(), Contract: environment.ClientToolContractCodexLegacy}}
+	aggregate.ClientToolAccess = &environment.ClientToolAccessPolicy{Enabled: true, Route: &environment.ClientToolRoute{ID: "native.mcp", Revision: 1, TargetOrigin: runtimeProviderOrigin(t, "https://chatgpt.com"), Path: environment.ClientToolMCPPath, CredentialOwner: environment.ClientToolCredentialOriginal, EgressProfile: authoredEgress(t, egressprofile.Direct()), Contract: environment.ClientToolContractCodexLegacy}}
 	manager := newEnvironmentManager(t, store)
 	draft, err := manager.SaveDraft(ctx, environment.DraftCommand{Candidate: aggregate})
 	if err != nil {
@@ -65,6 +65,14 @@ func nativeFixtureWithCapture(t *testing.T, mode environment.ToolPolicyMode, rec
 		t.Fatal(err)
 	}
 	plan, _ := request.ClientToolPlan()
+	resolved, err := egressprofile.RestoreResolved(egressprofile.Direct(), egressprofile.SelectionFlow, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err = plan.WithResolvedEgress(resolved)
+	if err != nil {
+		t.Fatal(err)
+	}
 	captures := newManualCaptureManager(t, store, &manualCaptureClock{now: now}, &manualCaptureRandom{})
 	created, err := captures.Create(ctx, manualcapture.CreateCommand{Owner: manualcapture.NewLocalOwnerScope(), DisplayName: "Synthetic Native", ClientClass: manualcapture.ClientCLI, Lifetime: manualcapture.LifetimeUntilRevoked})
 	if err != nil {

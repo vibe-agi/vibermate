@@ -50,17 +50,18 @@ func TestOriginalTransportPinsClientOriginAndStripsProxyCredentials(
 		"X-Remove":            []string{"remove"},
 	}
 	request, err := originaltransport.NewRequest(originaltransport.RequestOptions{
-		RequestID:    "opaque-1",
-		Kind:         offlinehold.EgressOpaque,
-		Origin:       origin,
-		Method:       http.MethodPost,
-		Path:         "/v1/unknown",
-		RawQuery:     "page=1",
-		Headers:      headers,
-		Body:         body,
-		PayloadClass: protocolspec.OperationPayloadControl,
-		ConnectionID: "connection-test",
-		ParentID:     "original-request-test",
+		ResolvedEgress: originalResolved(t, egressnetwork.Policy{Proxy: egressnetwork.ProxyPolicy{Kind: egressnetwork.ProxySOCKS5, Endpoint: "proxy.example:1080"}, Resolver: egressnetwork.ResolverPolicy{Kind: egressnetwork.ResolverSystem}}),
+		RequestID:      "opaque-1",
+		Kind:           offlinehold.EgressOpaque,
+		Origin:         origin,
+		Method:         http.MethodPost,
+		Path:           "/v1/unknown",
+		RawQuery:       "page=1",
+		Headers:        headers,
+		Body:           body,
+		PayloadClass:   protocolspec.OperationPayloadControl,
+		ConnectionID:   "connection-test",
+		ParentID:       "original-request-test",
 		EgressPolicy: egressnetwork.Policy{
 			Proxy: egressnetwork.ProxyPolicy{
 				Kind:     egressnetwork.ProxySOCKS5,
@@ -184,14 +185,15 @@ func originalRequest(
 		t.Fatal(err)
 	}
 	request, err := originaltransport.NewRequest(originaltransport.RequestOptions{
-		RequestID:    "original-test",
-		Kind:         kind,
-		Origin:       origin,
-		Method:       http.MethodGet,
-		Path:         "/v1/status",
-		PayloadClass: protocolspec.OperationPayloadControl,
-		ConnectionID: "connection-test",
-		ParentID:     "original-request-test",
+		ResolvedEgress: originalResolved(t, egressnetwork.DefaultPolicy()),
+		RequestID:      "original-test",
+		Kind:           kind,
+		Origin:         origin,
+		Method:         http.MethodGet,
+		Path:           "/v1/status",
+		PayloadClass:   protocolspec.OperationPayloadControl,
+		ConnectionID:   "connection-test",
+		ParentID:       "original-request-test",
 	})
 	if err != nil {
 		t.Fatal(err)

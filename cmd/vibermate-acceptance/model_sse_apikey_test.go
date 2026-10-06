@@ -191,6 +191,10 @@ func TestModelSSEEachPinnedGenericAPIKeyHeldStream(t *testing.T) {
 }
 
 func TestModelGenericPrelaunchFactsRequireCanonicalFlow(t *testing.T) {
+	directChoice, directErr := egressprofile.Explicit(egressprofile.Direct())
+	if directErr != nil {
+		t.Fatal(directErr)
+	}
 	operations, err := operationcatalog.BuiltIn()
 	if err != nil {
 		t.Fatal(err)
@@ -213,7 +217,7 @@ func TestModelGenericPrelaunchFactsRequireCanonicalFlow(t *testing.T) {
 		if withFlow {
 			origin, _ = originidentity.ParseClientOrigin("https://api.openai.com")
 		}
-		e := environment.Environment{ID: "synthetic.prelaunch", Name: "Synthetic prelaunch", Revision: 1, State: environment.StateActive, ContentRecording: environment.DefaultContentRecordingPolicy(), ClientEndpoints: []environment.ClientEndpoint{{ID: "synthetic.client", Revision: 1, ClientOrigin: origin, ProtocolPlans: []environment.ClientProtocolPlan{{ID: "synthetic.protocol", Revision: 1, ClientProtocol: environment.ClientProtocolOpenAIResponses, ClientAdapterPolicy: environment.ClientAdapterPolicy{ID: "synthetic.adapter", Revision: 1}, Destination: environment.DestinationPlan{Kind: environment.DestinationKindOriginal}, EgressProfile: egressprofile.Direct()}}}}}
+		e := environment.Environment{ID: "synthetic.prelaunch", Name: "Synthetic prelaunch", Revision: 1, State: environment.StateActive, ContentRecording: environment.DefaultContentRecordingPolicy(), ClientEndpoints: []environment.ClientEndpoint{{ID: "synthetic.client", Revision: 1, ClientOrigin: origin, ProtocolPlans: []environment.ClientProtocolPlan{{ID: "synthetic.protocol", Revision: 1, ClientProtocol: environment.ClientProtocolOpenAIResponses, ClientAdapterPolicy: environment.ClientAdapterPolicy{ID: "synthetic.adapter", Revision: 1}, Destination: environment.DestinationPlan{Kind: environment.DestinationKindOriginal}, EgressProfile: directChoice}}}}}
 		snapshot, err := compiler.Compile(e)
 		if err != nil {
 			t.Fatal(err)

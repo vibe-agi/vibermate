@@ -390,8 +390,12 @@ final class _EnvironmentDryRunDialogState
                         endpoints:
                             widget.controller.data?.endpoints ?? const [],
                         accounts: widget.controller.data?.accounts ?? const [],
-                        egressName:
-                            flows[_flowIndex].$2.egressProfile.displayName,
+                        egressName: switch (flows[_flowIndex]
+                            .$2
+                            .egressProfile) {
+                          EgressProfileRevision profile => profile.displayName,
+                          _ => '',
+                        },
                       ),
                     ],
                   ],
@@ -536,7 +540,11 @@ final class _DryRunDecisionView extends StatelessWidget {
           ),
           _DryRunFact(
             label: copy('environment.dry_run.egress'),
-            value: egressName.isEmpty ? decision.networkExitId : egressName,
+            value: decision.unverified.contains('network_exit')
+                ? copy('environment.egress.determinedAtExecution')
+                : egressName.isEmpty
+                ? decision.networkExitId
+                : egressName,
           ),
           const Divider(height: 16),
           if (decision.protocolChangedTopLevelFields case final fields?) ...[

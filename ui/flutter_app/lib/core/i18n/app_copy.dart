@@ -1510,6 +1510,7 @@ final class AppCopy {
     'environment.account.selector_none':
         'No published account selection rule; create one in Script library.',
     'environment.egress.label': 'Network path',
+    'environment.egress.determinedAtExecution': 'Determined at execution',
     'environment.egress.detail':
         'Applies only to this client flow and its upstream service connections.',
     'environment.egress.profile.title': 'Choose network exit',
@@ -4210,6 +4211,7 @@ final class AppCopy {
     'environment.account.selector_load_failed': '无法读取已发布的账号选择规则。',
     'environment.account.selector_none': '尚未发布账号选择规则；可在脚本库中创建。',
     'environment.egress.label': '网络出口',
+    'environment.egress.determinedAtExecution': '实际执行时确定',
     'environment.egress.detail': '仅作用于这条客户端流量及其上游服务连接。',
     'environment.egress.profile.title': '选择网络出口',
     'environment.egress.profile.detail': '选择一个已发布的精确网络出口版本；请在设置中统一管理。',

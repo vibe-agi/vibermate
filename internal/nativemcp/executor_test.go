@@ -113,6 +113,10 @@ func newNativeFixtureMode(t *testing.T, mode environment.ToolPolicyMode, recordi
 	return newNativeFixtureStoreLifetime(t, mode, recording, 0, custom...)
 }
 func newNativeFixtureStoreLifetime(t *testing.T, mode environment.ToolPolicyMode, recording environment.ContentRecordingPolicy, lifetime time.Duration, custom ...Limits) *nativeFixture {
+	return newNativeFixtureWithChoice(t, mode, recording, lifetime, authoredEgress(t, egressprofile.Direct()), custom...)
+}
+
+func newNativeFixtureWithChoice(t *testing.T, mode environment.ToolPolicyMode, recording environment.ContentRecordingPolicy, lifetime time.Duration, choice egressprofile.Choice, custom ...Limits) *nativeFixture {
 	t.Helper()
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "runtime.db")
@@ -146,7 +150,7 @@ func newNativeFixtureStoreLifetime(t *testing.T, mode environment.ToolPolicyMode
 		t.Fatal(err)
 	}
 	origin, _ := originidentity.ParseProviderOrigin("https://native.example")
-	e := environment.Environment{ID: "native.synthetic", Name: "Synthetic native", State: environment.StateActive, Revision: 1, ContentRecording: recording, PolicySet: &environment.PolicySet{ToolMode: mode}, ClientToolAccess: &environment.ClientToolAccessPolicy{Enabled: true, Route: &environment.ClientToolRoute{ID: "native.synthetic.route", Revision: 1, TargetOrigin: origin, Path: environment.ClientToolMCPPath, CredentialOwner: environment.ClientToolCredentialOriginal, Contract: environment.ClientToolContractCodexLegacy, EgressProfile: egressprofile.Direct()}}}
+	e := environment.Environment{ID: "native.synthetic", Name: "Synthetic native", State: environment.StateActive, Revision: 1, ContentRecording: recording, PolicySet: &environment.PolicySet{ToolMode: mode}, ClientToolAccess: &environment.ClientToolAccessPolicy{Enabled: true, Route: &environment.ClientToolRoute{ID: "native.synthetic.route", Revision: 1, TargetOrigin: origin, Path: environment.ClientToolMCPPath, CredentialOwner: environment.ClientToolCredentialOriginal, Contract: environment.ClientToolContractCodexLegacy, EgressProfile: choice}}}
 	draft, err := envs.SaveDraft(ctx, environment.DraftCommand{Candidate: e})
 	if err != nil {
 		t.Fatal(err)

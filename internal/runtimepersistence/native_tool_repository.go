@@ -3,6 +3,7 @@ package runtimepersistence
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"math"
 	"sync"
@@ -700,6 +701,14 @@ func (r *nativeToolRepository) Bind(ctx context.Context, id nativetool.ID, b nat
 	return r.bind(ctx, id, b, now)
 }
 func (r *nativeToolRepository) bind(ctx context.Context, id nativetool.ID, b nativetool.Binding, now time.Time) error {
+	resolved, resolvedErr := b.Plan().ResolvedEgress()
+	if resolvedErr != nil {
+		return nativetool.ErrInvalid
+	}
+	profileJSON, profileErr := json.Marshal(resolved.Profile())
+	if profileErr != nil || len(profileJSON) > nativetool.MaxEffectiveProfileJSONBytes {
+		return nativetool.ErrInvalid
+	}
 	if !nativeID(id) || b.Digest() == (nativetool.Digest{}) || !nativeTime(now) {
 		return nativetool.ErrInvalid
 	}
@@ -808,7 +817,7 @@ func (r *nativeToolRepository) bind(ctx context.Context, id nativetool.ID, b nat
 			if !ok {
 				return nativetool.ErrDenied
 			}
-			frozen := nativeBindingRow{session: b.SessionID(), sessionRevision: b.SessionRevision(), generation: b.CatalogGeneration(), owner: b.OwnerEpoch(), assignment: b.AssignmentRevision(), parent: &parent, catalog: nil}
+			frozen := nativeBindingRow{resolved: resolved, bindingVersion: 2, session: b.SessionID(), sessionRevision: b.SessionRevision(), generation: b.CatalogGeneration(), owner: b.OwnerEpoch(), assignment: b.AssignmentRevision(), parent: &parent, catalog: nil}
 			if hasCatalog {
 				frozen.catalog = catalog[:]
 			}
@@ -846,6 +855,9 @@ func (r *nativeToolRepository) bind(ctx context.Context, id nativetool.ID, b nat
 		if _, err := tx.ExecContext(ctx, `INSERT INTO native_tool_bindings(operation_id,session_id,session_revision,catalog_generation,catalog_digest,route_id,route_revision,owner_epoch,assignment_revision,request_digest,params_digest,group_digest,binding_digest,replay_key,parent_operation_id,server_request_digest,tool_name,cancel_rpc_id_digest) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, id, b.SessionID(), b.SessionRevision(), b.CatalogGeneration(), nativeOptional(catalog, hasCatalog), route.ID, route.Revision, b.OwnerEpoch(), b.AssignmentRevision(), request[:], params[:], group[:], digest[:], nativeOptional(replay, hasReplay), parentValue, nativeOptional(server, hasServer), b.ToolName(), nativeOptional(cancel, hasCancel)); err != nil {
 			return err
 		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO native_tool_binding_egress(operation_id,binding_digest,binding_version,profile_json,selection_source,default_revision) VALUES(?,?,2,?,?,?)`, id, digest[:], string(profileJSON), resolved.Source(), resolved.DefaultRevision()); err != nil {
+			return err
+		}
 		if plan.PolicySet().ToolMode == environment.ToolPolicyStrict && (b.Kind() == nativetool.RequestToolsCall || b.Kind() == nativetool.RequestServerReply) {
 			denied = true
 			return nativeTransition(ctx, tx, op, "denied", "policy", "policy_strict", "denied", now)
@@ -873,7 +885,7 @@ func (r *nativeToolRepository) validateNativeParent(ctx context.Context, tx *sql
 	if err != nil {
 		return err
 	}
-	if p.Capture != op.Capture || p.EnvironmentID != op.EnvironmentID || p.EnvironmentRevision != op.EnvironmentRevision || p.EnvironmentDigest != op.EnvironmentDigest || p.TargetOrigin != op.TargetOrigin || parent.session != s.id || parent.owner != s.owner || parent.assignment != s.assignment || parent.sessionRevision != b.sessionRevision || parent.generation != b.generation || string(parent.catalog) != string(b.catalog) {
+	if p.Capture != op.Capture || p.EnvironmentID != op.EnvironmentID || p.EnvironmentRevision != op.EnvironmentRevision || p.EnvironmentDigest != op.EnvironmentDigest || p.TargetOrigin != op.TargetOrigin || parent.session != s.id || parent.owner != s.owner || parent.assignment != s.assignment || parent.sessionRevision != b.sessionRevision || parent.generation != b.generation || string(parent.catalog) != string(b.catalog) || parent.bindingVersion != 2 || b.bindingVersion != 2 || parent.resolved != b.resolved {
 		return nativetool.ErrDenied
 	}
 	return r.verifyNativeCallback(ctx, tx, op, p, now)

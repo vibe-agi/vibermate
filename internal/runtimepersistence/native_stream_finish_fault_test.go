@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -59,7 +60,7 @@ func (f *streamFinishFault) Commit(tx *sql.Tx) error {
 
 type eofHookBody struct {
 	*strings.Reader
-	hook func()
+	hook func() error
 	once bool
 }
 
@@ -67,7 +68,9 @@ func (b *eofHookBody) Read(p []byte) (int, error) {
 	n, err := b.Reader.Read(p)
 	if err == io.EOF && !b.once {
 		b.once = true
-		b.hook()
+		if hookErr := b.hook(); hookErr != nil {
+			return n, hookErr
+		}
 	}
 	return n, err
 }
@@ -103,6 +106,7 @@ func TestNativeExecutorAmbiguousFinishRetainsCleanupObligation(t *testing.T) {
 					t.Fatal(err)
 				}
 				plan, _ = lease.Plan().ClientToolPlan()
+				plan = frozenExplicitNativePlan(t, plan)
 				id, _ := ids.NewNativeOperationID(ctx)
 				req := httptest.NewRequest("POST", "https://native.example/backend-api/ps/mcp", strings.NewReader(raw))
 				req.Header.Set("Content-Type", "application/json")
@@ -151,24 +155,31 @@ func TestNativeExecutorAmbiguousFinishRetainsCleanupObligation(t *testing.T) {
 			}
 			question := nativetool.ID("96969696969696969696969696969696")
 			child := nativetool.ID("95959595959595959595959595959595")
+			hookResult := make(chan error, 1)
 			transport.handler = func(_ *http.Request, _ []byte) *http.Response {
 				wire := "id: callback\ndata: {\"jsonrpc\":\"2.0\",\"id\":\"server\",\"method\":\"ping\"}\n\n"
-				return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": []string{"text/event-stream"}}, Body: &eofHookBody{Reader: strings.NewReader(wire), hook: func() {
+				return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": []string{"text/event-stream"}}, Body: &eofHookBody{Reader: strings.NewReader(wire), hook: func() (hookErr error) {
+					defer func() { hookResult <- hookErr }()
 					var sid string
 					var rev, owner, assignment, generation uint64
 					var catalog []byte
 					if err := f.store.database.QueryRow(`SELECT session_id,session_revision,owner_epoch,assignment_revision,catalog_generation,catalog_digest FROM native_tool_bindings WHERE operation_id=?`, id).Scan(&sid, &rev, &owner, &assignment, &generation, &catalog); err != nil {
-						t.Fatal(err)
+						return fmt.Errorf("callback binding scope: %w", err)
 					}
 					var d nativetool.Digest
 					copy(d[:], catalog)
 					server := nativetool.Digest(sha256.Sum256([]byte(`{"jsonrpc":"2.0","id":"server","method":"ping"}`)))
 					b, err := nativetool.NewBinding(nativetool.BindingInput{Kind: nativetool.RequestServerReply, Plan: plan, Capture: f.capture, AssignmentRevision: assignment, OwnerEpoch: owner, SessionID: nativetool.ID(sid), SessionRevision: rev, CatalogGeneration: generation, CatalogDigest: &d, ParentOperationID: &id, ServerRequestDigest: &server, ExactRPC: []byte(`{"jsonrpc":"2.0","id":"server","result":{}}`)})
 					if err != nil {
-						t.Fatal(err)
+						return fmt.Errorf("callback binding: %w", err)
 					}
 					now := time.Now().UTC()
-					nativeReceiveOnly(t, f.store.NativeToolRepository(), child, b, now)
+					rpc, _ := b.RPCIDDigest()
+					requestDigest := b.RequestDigest()
+					sessionID := b.SessionID()
+					if result, err := f.store.NativeToolRepository().Receive(ctx, nativetool.ReceiveInput{ID: child, Capture: b.Capture(), EnvironmentID: plan.EnvironmentID(), EnvironmentRevision: plan.EnvironmentRevision(), EnvironmentDigest: plan.EnvironmentDigest(), ConnectionID: "actual-native-fixture", TargetOrigin: plan.Route().TargetOrigin.String(), Method: "POST", Kind: b.Kind(), SessionID: &sessionID, RPCIDDigest: &rpc, RequestDigest: &requestDigest, Recording: plan.ContentRecording(), ObservedAt: now}); err != nil || result.Duplicate {
+						return fmt.Errorf("callback Receive duplicate=%v: %v", result.Duplicate, err)
+					}
 					// The real authenticated parser has already issued this exact
 					// callback. Consume its registration, never reconstruct one from SQL.
 					f.store.nativeTools.issuerMu.Lock()
@@ -183,30 +194,31 @@ func TestNativeExecutorAmbiguousFinishRetainsCleanupObligation(t *testing.T) {
 					key, _ := protocolcore.NewCallKey("native", "40")
 					catalogObserver, err := nativetool.NewCatalogObserver(nativetool.CatalogScope{Capture: f.capture, Plan: plan, AssignmentRevision: assignment, OwnerEpoch: owner, SessionID: nativetool.ID(sid), SessionRevision: rev, CatalogGeneration: generation})
 					if err != nil {
-						t.Fatal(err)
+						return fmt.Errorf("catalog observer: %w", err)
 					}
 					catalogEvidence, err := catalogObserver.Observe([]nativetool.CatalogPageObservation{{ExactRequest: []byte(`{"jsonrpc":"2.0","id":2,"method":"tools/list"}`), ExactResponse: []byte(`{"jsonrpc":"2.0","id":2,"result":{"tools":[{"name":"read_file","inputSchema":{"type":"object"}}]}}`)}})
 					if err != nil {
-						t.Fatal(err)
+						return fmt.Errorf("catalog observation: %w", err)
 					}
 					parent, err := nativetool.NewBinding(nativetool.BindingInput{Kind: nativetool.RequestToolsCall, Plan: plan, Capture: f.capture, AssignmentRevision: assignment, OwnerEpoch: owner, SessionID: nativetool.ID(sid), SessionRevision: rev, CatalogGeneration: generation, CatalogDigest: &d, CatalogEvidence: &catalogEvidence, ExactRPC: []byte(`{"jsonrpc":"2.0","id":40,"method":"tools/call","params":{"name":"read_file","arguments":{}}}`), Intents: []protocolcore.ToolIntent{{ResponseID: "rpc-40", Call: protocolcore.ToolCall{Key: key, Name: "read_file", Arguments: args}}}})
 					if err != nil {
-						t.Fatal(err)
+						return fmt.Errorf("parent binding: %w", err)
 					}
 					observer, err := nativetool.NewParentObserver(id, parent)
 					if err != nil {
-						t.Fatal(err)
+						return fmt.Errorf("parent observer: %w", err)
 					}
 					witness, err := observer.ObserveReply(child, []byte(`{"jsonrpc":"2.0","id":"server","method":"ping"}`), []byte(`{"jsonrpc":"2.0","id":"server","result":{}}`))
 					if err != nil {
-						t.Fatal(err)
+						return fmt.Errorf("reply witness: %w", err)
 					}
 					if err := f.store.NativeToolRepository().BindObservedReply(ctx, child, b, callback, witness, now); err != nil {
-						t.Fatal(err)
+						return fmt.Errorf("observed reply: %w", err)
 					}
 					if _, err := f.store.NativeToolRepository().RequestApproval(ctx, child, question, now, now.Add(time.Minute)); err != nil {
-						t.Fatal(err)
+						return fmt.Errorf("callback approval: %w", err)
 					}
+					return nil
 				}}}
 			}
 			f.store.nativeTools.committer = fault
@@ -229,7 +241,20 @@ func TestNativeExecutorAmbiguousFinishRetainsCleanupObligation(t *testing.T) {
 				}
 				time.Sleep(time.Millisecond)
 			}
-			got := <-done
+			var got nativemcp.Terminal
+			select {
+			case got = <-done:
+			case <-time.After(2 * time.Second):
+				t.Fatal("actual ambiguous-finish fixture did not return after real approval")
+			}
+			select {
+			case err := <-hookResult:
+				if err != nil {
+					t.Fatalf("actual EOF fixture: %v", err)
+				}
+			default:
+				t.Fatal("actual EOF fixture did not run")
+			}
 			if !fault.used.Load() || got.Outcome != nativemcp.OutcomeUncertain {
 				t.Fatalf("fault not exercised: %+v used=%v", got, fault.used.Load())
 			}

@@ -41,7 +41,7 @@ func TestSQLiteAcceptsEveryDeclaredEgressPurpose(t *testing.T) {
 func nativeAuditFixture(t *testing.T, id string) egressaudit.Attempt {
 	t.Helper()
 	candidate := environmentFixture(t, "native-audit", 1)
-	candidate.ClientToolAccess = &environment.ClientToolAccessPolicy{Enabled: true, Route: &environment.ClientToolRoute{ID: "native-route", Revision: 1, TargetOrigin: runtimeProviderOrigin(t, "https://chatgpt.com"), Path: environment.ClientToolMCPPath, CredentialOwner: environment.ClientToolCredentialOriginal, Contract: environment.ClientToolContractCodexLegacy, EgressProfile: egressprofile.Direct()}}
+	candidate.ClientToolAccess = &environment.ClientToolAccessPolicy{Enabled: true, Route: &environment.ClientToolRoute{ID: "native-route", Revision: 1, TargetOrigin: runtimeProviderOrigin(t, "https://chatgpt.com"), Path: environment.ClientToolMCPPath, CredentialOwner: environment.ClientToolCredentialOriginal, Contract: environment.ClientToolContractCodexLegacy, EgressProfile: authoredEgress(t, egressprofile.Direct())}}
 	snapshot, err := runtimeEnvironmentCompiler(t).Compile(candidate)
 	if err != nil {
 		t.Fatal(err)
@@ -58,7 +58,8 @@ func nativeAuditFixture(t *testing.T, id string) egressaudit.Attempt {
 	if !ok {
 		t.Fatal("no native plan")
 	}
-	attempt, err := egressaudit.NewClientToolAttempt(plan, egressaudit.NewInput{ID: id, ConnectionID: "native-connection", Purpose: egressaudit.PurposeClientToolService, PayloadClass: egressaudit.PayloadClientData, Parent: egressaudit.ParentRef{Kind: egressaudit.ParentClientOperation, ID: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}, Caller: egressaudit.CallerCore, TargetOrigin: plan.Route().TargetOrigin.String(), Decision: egressaudit.DecisionRef{PolicyID: "native-audit", PolicyRevision: 1, Authority: egressaudit.AuthorityEnvironment, RuleID: "native-route", ProxyID: "profile.direct", ProxyRevision: 1}, StartedAt: time.Date(2026, 10, 3, 0, 0, 0, 0, time.UTC)})
+	plan = frozenExplicitNativePlan(t, plan)
+	attempt, err := egressaudit.NewClientToolAttempt(plan, egressaudit.NewInput{ID: id, ConnectionID: "native-connection", Purpose: egressaudit.PurposeClientToolService, PayloadClass: egressaudit.PayloadClientData, Parent: egressaudit.ParentRef{Kind: egressaudit.ParentClientOperation, ID: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}, Caller: egressaudit.CallerCore, TargetOrigin: plan.Route().TargetOrigin.String(), Decision: egressaudit.DecisionRef{PolicyID: "native-audit", PolicyRevision: 1, Authority: egressaudit.AuthorityEnvironment, RuleID: "native-route", ProxyID: "profile.direct", ProxyRevision: 1, SelectionSource: egressprofile.SelectionFlow}, StartedAt: time.Date(2026, 10, 3, 0, 0, 0, 0, time.UTC)})
 	if err != nil {
 		t.Fatal(err)
 	}

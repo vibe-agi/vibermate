@@ -46,7 +46,7 @@ func TestNativeLaunchViewUsesVerifiedInitialSnapshotForCreateAndResolve(t *testi
 				next := snapshot.Aggregate()
 				next.Revision++
 				origin, _ := originidentity.ParseProviderOrigin("https://native.example")
-				next.ClientToolAccess = &environment.ClientToolAccessPolicy{Enabled: true, Route: &environment.ClientToolRoute{ID: "native.new.route", Revision: 1, TargetOrigin: origin, Path: environment.ClientToolMCPPath, CredentialOwner: environment.ClientToolCredentialOriginal, Contract: environment.ClientToolContractCodexLegacy, EgressProfile: egressprofile.Direct()}}
+				next.ClientToolAccess = &environment.ClientToolAccessPolicy{Enabled: true, Route: &environment.ClientToolRoute{ID: "native.new.route", Revision: 1, TargetOrigin: origin, Path: environment.ClientToolMCPPath, CredentialOwner: environment.ClientToolCredentialOriginal, Contract: environment.ClientToolContractCodexLegacy, EgressProfile: authoredEgress(t, egressprofile.Direct())}}
 				draft, err := f.environments.SaveDraft(ctx, environment.DraftCommand{Candidate: next, ExpectedBaseRevision: 1})
 				if err != nil {
 					t.Fatal(err)

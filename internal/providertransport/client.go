@@ -1117,12 +1117,7 @@ func providerEgressDecision(frozen Request) egressaudit.DecisionRef {
 	if rule == "" {
 		rule = "original.destination"
 	}
-	selection, defaultRevision := frozen.accountRef.ResolvedEgress.Source(), frozen.accountRef.ResolvedEgress.DefaultRevision()
-	if frozen.credentialMode == providerauth.CredentialClientPassthrough {
-		// This request already owns a validated concrete flow profile. It does
-		// not acquire an account or resolve a global default at audit time.
-		selection, defaultRevision = egressprofile.SelectionFlow, 0
-	}
+	selection, defaultRevision := frozen.resolvedEgress.Source(), frozen.resolvedEgress.DefaultRevision()
 	return egressaudit.DecisionRef{
 		PolicyID: frozen.provenance.environmentID.String(), PolicyRevision: uint64(frozen.provenance.environmentRevision),
 		Authority: authority, RuleID: rule,

@@ -38,5 +38,13 @@ func verifyNativeBindingEvidence(ctx context.Context, tx *sql.Tx, op nativetool.
 			return nativetool.ErrInvalid
 		}
 	}
-	return nativetool.VerifyBindingEvidence(nativetool.BindingEvidence{Kind: op.Kind, Capture: op.Capture, Environment: op.EnvironmentID, EnvironmentRevision: op.EnvironmentRevision, EnvironmentDigest: op.EnvironmentDigest, Route: *e.ClientToolAccess.Route, Recording: op.Recording, Policy: e.EffectivePolicySet(), Assignment: b.assignment, Owner: b.owner, Session: b.session, SessionRevision: b.sessionRevision, CatalogGeneration: b.generation, Catalog: nativeStoredDigest(b.catalog), Parent: b.parent, Server: nativeStoredDigest(b.server), Request: b.request, Params: b.params, Group: b.group, Replay: nativeStoredDigest(b.replay), Name: b.name, RPCID: nativeStoredDigest(rpc), CancelledRPCID: nativeStoredDigest(b.cancel)}, b.digest)
+	evidence := nativetool.BindingEvidence{Kind: op.Kind, Capture: op.Capture, Environment: op.EnvironmentID, EnvironmentRevision: op.EnvironmentRevision, EnvironmentDigest: op.EnvironmentDigest, Route: *e.ClientToolAccess.Route, Recording: op.Recording, Policy: e.EffectivePolicySet(), Assignment: b.assignment, Owner: b.owner, Session: b.session, SessionRevision: b.sessionRevision, CatalogGeneration: b.generation, Catalog: nativeStoredDigest(b.catalog), Parent: b.parent, Server: nativeStoredDigest(b.server), Request: b.request, Params: b.params, Group: b.group, Replay: nativeStoredDigest(b.replay), Name: b.name, RPCID: nativeStoredDigest(rpc), CancelledRPCID: nativeStoredDigest(b.cancel)}
+	switch b.bindingVersion {
+	case 1:
+		return nativetool.VerifyBindingEvidence(evidence, b.digest)
+	case 2:
+		return nativetool.VerifyBindingEvidenceV2(evidence, b.resolved, b.digest)
+	default:
+		return nativetool.ErrInvalid
+	}
 }

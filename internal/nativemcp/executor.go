@@ -17,6 +17,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/captureadmission"
 	"github.com/vibe-agi/vibermate/internal/captureassignment"
 	"github.com/vibe-agi/vibermate/internal/captureidentity"
+	"github.com/vibe-agi/vibermate/internal/egressprofile"
 	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/exchange"
 	"github.com/vibe-agi/vibermate/internal/nativetool"
@@ -36,6 +37,7 @@ type IDSource interface {
 	NewOwnerEpoch(context.Context) (uint64, error)
 }
 type Dependencies struct {
+	EgressDefaults  egressprofile.Resolver
 	OwnerContext    context.Context
 	Transport       originaltransport.Transport
 	Store           nativetool.Repository
@@ -252,9 +254,13 @@ func (e *executor) Serve(ctx context.Context, c CapturedRequest, w http.Response
 		return Terminal{OperationID: c.id, Outcome: OutcomeRejected, Reason: ReasonProtocolInvalid}
 	}
 	var claim nativeClaimHandle
+	var effectiveBytes int64
 	var finishWork func()
 	defer func() {
 		e.drainClaimConsumer(claim)
+		if effectiveBytes != 0 {
+			e.budget.release(effectiveBytes)
+		}
 		if finishWork != nil {
 			finishWork()
 		}
@@ -378,10 +384,27 @@ func (e *executor) Serve(ctx context.Context, c CapturedRequest, w http.Response
 	}
 	stopScope := context.AfterFunc(s.context, cancel)
 	defer stopScope()
-	binding, intents, witness, err := e.bindRequest(c, r, s)
+	selectedPlan, err := e.operationPlan(call, r, s)
+	if err != nil {
+		if r.kind == nativetool.RequestInitialize {
+			cleanup, cancel := context.WithTimeout(context.Background(), time.Second)
+			err = errors.Join(err, e.closeSession(cleanup, s))
+			cancel()
+		}
+		return reject(w, c.id, reasonFor(err))
+	}
+	charge, err := effectiveEgressMemory(selectedPlan)
+	if err != nil || !e.budget.acquire(charge) {
+		return reject(w, c.id, ReasonBudgetExceeded)
+	}
+	effectiveBytes = charge
+	binding, intents, witness, err := e.bindRequest(c, r, s, selectedPlan)
 	if err != nil {
 		return reject(w, c.id, reasonFor(err))
 	}
+	// The binding may select the actual registered parent. The probe and wire
+	// must consume that same per-operation fact, never the ingress/session plan.
+	plan = binding.Plan()
 	s.mu.Lock()
 	activeKey := string(r.id)
 	if activeKey == "" {
@@ -593,7 +616,7 @@ func (e *executor) Serve(ctx context.Context, c CapturedRequest, w http.Response
 	}
 	media, _, _ := mime.ParseMediaType(response.Header.Get("Content-Type"))
 	if response.StatusCode == http.StatusOK && media == "text/event-stream" && r.stream == nil {
-		r.stream, err = e.openStream(call, c, r, s, binding, receipt, startedAt, claim)
+		r.stream, err = e.openStream(call, c, r, s, binding, receipt, startedAt, claim, &effectiveBytes)
 		if err != nil {
 			return e.finishFailure(c.id, s, w, err, true, claim)
 		}
@@ -724,10 +747,68 @@ func (e *executor) Serve(ctx context.Context, c CapturedRequest, w http.Response
 	}
 	return Terminal{OperationID: c.id, Outcome: outcome, Reason: reason, BytesIn: counted.bytes.Load(), BytesOut: int64(len(r.raw)), ContentReason: contentReason}
 }
-func (e *executor) bindRequest(c CapturedRequest, r rpc, s *session) (nativetool.Binding, []protocolcore.ToolIntent, *nativetool.RegisteredParentWitness, error) {
+
+// Conservative full canonical size includes escaped strings plus512 bytes for
+// the added value/copies. The shared immutable fact transfers to retained stream
+// ownership; SQL evidence does not own or justify a local-memory refund.
+func effectiveEgressMemory(plan environment.ClientToolPlan) (int64, error) {
+	resolved, err := plan.ResolvedEgress()
+	if err != nil {
+		return 0, err
+	}
+	encoded, err := json.Marshal(resolved.Profile())
+	if err != nil || len(encoded) > nativetool.MaxEffectiveProfileJSONBytes {
+		return 0, errBudget
+	}
+	return 512 + int64(len(encoded)), nil
+}
+
+func (e *executor) operationPlan(ctx context.Context, r rpc, s *session) (environment.ClientToolPlan, error) {
+	s.mu.Lock()
+	plan := s.plan
+	if r.kind == nativetool.RequestServerReply {
+		parent := s.parents[string(r.id)]
+		if parent == nil || parent.consumed {
+			s.mu.Unlock()
+			return environment.ClientToolPlan{}, errSession
+		}
+		plan = parent.binding.Plan()
+		s.mu.Unlock()
+		if _, err := plan.ResolvedEgress(); err != nil {
+			return environment.ClientToolPlan{}, err
+		}
+		return plan, nil
+	}
+	if r.stream != nil {
+		plan = r.stream.binding.Plan()
+		s.mu.Unlock()
+		if _, err := plan.ResolvedEgress(); err != nil {
+			return environment.ClientToolPlan{}, err
+		}
+		return plan, nil
+	}
+	s.mu.Unlock()
+	// Only configuration is read here, outside owner/session locks. Bind/Start
+	// still recheck the real current authority after this potentially blocked read.
+	var resolved egressprofile.Resolved
+	var err error
+	if e.dependencies.EgressDefaults != nil {
+		resolved, err = e.dependencies.EgressDefaults.Resolve(ctx, egressprofile.Inherit(), plan.Route().EgressProfile)
+	} else if profile, explicit := plan.Route().EgressProfile.ExplicitProfile(); explicit {
+		resolved, err = egressprofile.RestoreResolved(profile, egressprofile.SelectionFlow, 0)
+	} else {
+		err = egressprofile.ErrInvalidProfile
+	}
+	if err != nil {
+		return environment.ClientToolPlan{}, errors.Join(nativetool.ErrUnavailable, err)
+	}
+	return plan.WithResolvedEgress(resolved)
+}
+
+func (e *executor) bindRequest(c CapturedRequest, r rpc, s *session, selected environment.ClientToolPlan) (nativetool.Binding, []protocolcore.ToolIntent, *nativetool.RegisteredParentWitness, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	input := nativetool.BindingInput{Kind: r.kind, Plan: s.plan, Capture: s.owner.capture, AssignmentRevision: s.assignment, OwnerEpoch: s.owner.epoch, SessionID: s.id, SessionRevision: s.revision, CatalogGeneration: s.generation, ExactRPC: r.raw}
+	input := nativetool.BindingInput{Kind: r.kind, Plan: selected, Capture: s.owner.capture, AssignmentRevision: s.assignment, OwnerEpoch: s.owner.epoch, SessionID: s.id, SessionRevision: s.revision, CatalogGeneration: s.generation, ExactRPC: r.raw}
 	if s.catalog != nil {
 		digest := s.catalog.Digest()
 		input.CatalogDigest = &digest

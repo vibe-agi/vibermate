@@ -144,7 +144,7 @@ func newEnvironmentFixture(
 				ClientProtocol:      environment.ClientProtocolAnthropicMessages,
 				ClientAdapterPolicy: environment.ClientAdapterPolicy{ID: "adapter.localca", Revision: 1},
 				Destination:         environment.DestinationPlan{Kind: environment.DestinationKindOriginal},
-				EgressProfile:       egressprofile.Direct(),
+				EgressProfile:       authoredEgress(t, egressprofile.Direct()),
 			}},
 		}},
 	}

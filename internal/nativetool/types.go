@@ -32,6 +32,9 @@ const (
 	MaxRPCBytes        = 1 << 20
 	MaxObservedIDBytes = 512
 	MaxIntentGroup     = 128
+	// Matches all native binding-evidence SQL owners. Normalized field bounds,
+	// including JSON escaping, keep every legal full profile below this ceiling.
+	MaxEffectiveProfileJSONBytes = 16384
 )
 
 type ID string
@@ -122,6 +125,10 @@ type Binding struct {
 }
 
 func NewBinding(input BindingInput) (Binding, error) {
+	resolved, resolvedErr := input.Plan.ResolvedEgress()
+	if resolvedErr != nil {
+		return Binding{}, ErrInvalid
+	}
 	// Sensitive callbacks must select the keyed branch before any raw digest.
 	sensitive := input.SensitiveObservation != nil || input.SensitiveContext != nil || input.SensitiveToolContext != nil
 	if input.Kind == RequestServerReply && !sensitive {
@@ -255,7 +262,7 @@ func NewBinding(input BindingInput) (Binding, error) {
 		binding.replayKey = &key
 	}
 	route := input.Plan.Route()
-	binding.bindingDigest = bindingDigestV1(BindingEvidence{input.Kind, input.Capture, input.Plan.EnvironmentID(), input.Plan.EnvironmentRevision(), input.Plan.EnvironmentDigest(), route, input.Plan.ContentRecording(), input.Plan.PolicySet(), input.AssignmentRevision, input.OwnerEpoch, input.SessionID, input.SessionRevision, input.CatalogGeneration, binding.catalogDigest, binding.parentOperationID, binding.serverRequestDigest, binding.requestDigest, binding.paramsDigest, binding.groupDigest, binding.replayKey, binding.toolName, binding.rpcIDDigest, binding.cancelledRPCIDDigest})
+	binding.bindingDigest = bindingDigestV2(BindingEvidence{input.Kind, input.Capture, input.Plan.EnvironmentID(), input.Plan.EnvironmentRevision(), input.Plan.EnvironmentDigest(), route, input.Plan.ContentRecording(), input.Plan.PolicySet(), input.AssignmentRevision, input.OwnerEpoch, input.SessionID, input.SessionRevision, input.CatalogGeneration, binding.catalogDigest, binding.parentOperationID, binding.serverRequestDigest, binding.requestDigest, binding.paramsDigest, binding.groupDigest, binding.replayKey, binding.toolName, binding.rpcIDDigest, binding.cancelledRPCIDDigest}, resolved)
 	return binding, nil
 }
 func revision(value uint64) bool { return value > 0 && value <= math.MaxInt64 }

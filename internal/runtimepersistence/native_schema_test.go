@@ -182,7 +182,7 @@ func TestNativeSchemaBootstrapMatchesMigration(t *testing.T) {
 			}
 		}
 	}
-	if count != 9 {
+	if count != 10 {
 		t.Fatalf("native table count %d", count)
 	}
 	nativeOnly := openSQLiteForTest(t, filepath.Join(t.TempDir(), "native-only.db"))

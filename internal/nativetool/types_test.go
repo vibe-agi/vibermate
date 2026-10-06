@@ -16,6 +16,23 @@ import (
 )
 
 func bindingFixture(t *testing.T, mutations ...func(*environment.Environment)) BindingInput {
+	input := authoredBindingFixture(t, mutations...)
+	profile, explicit := input.Plan.Route().EgressProfile.ExplicitProfile()
+	if !explicit {
+		t.Fatal("fixture requires explicit profile")
+	}
+	resolved, err := egressprofile.RestoreResolved(profile, egressprofile.SelectionFlow, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	input.Plan, err = input.Plan.WithResolvedEgress(resolved)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return input
+}
+
+func authoredBindingFixture(t *testing.T, mutations ...func(*environment.Environment)) BindingInput {
 	t.Helper()
 	origin, _ := originidentity.ParseProviderOrigin("https://chatgpt.com")
 	operations, _ := operationcatalog.BuiltIn()
@@ -28,7 +45,7 @@ func bindingFixture(t *testing.T, mutations ...func(*environment.Environment)) B
 	compiler, _ := environment.NewCompiler(nil, nil, catalog, wires)
 	aggregate := environment.Environment{ID: "native", Name: "Native", State: environment.StateActive, Revision: 1,
 		ContentRecording: environment.ContentRecordingPolicy{Mode: environment.ContentRecordingOff},
-		ClientToolAccess: &environment.ClientToolAccessPolicy{Enabled: true, Route: &environment.ClientToolRoute{ID: "native.mcp", Revision: 1, TargetOrigin: origin, Path: "/backend-api/ps/mcp", CredentialOwner: environment.ClientToolCredentialOriginal, EgressProfile: egressprofile.Direct(), Contract: environment.ClientToolContractCodexLegacy}}}
+		ClientToolAccess: &environment.ClientToolAccessPolicy{Enabled: true, Route: &environment.ClientToolRoute{ID: "native.mcp", Revision: 1, TargetOrigin: origin, Path: "/backend-api/ps/mcp", CredentialOwner: environment.ClientToolCredentialOriginal, EgressProfile: authoredEgress(t, egressprofile.Direct()), Contract: environment.ClientToolContractCodexLegacy}}}
 	for _, mutate := range mutations {
 		mutate(&aggregate)
 	}

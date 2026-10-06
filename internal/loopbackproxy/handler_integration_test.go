@@ -1360,11 +1360,20 @@ func newProxyFixtureConfigured(t *testing.T, clientDialect protocolspec.Dialect,
 		t.Fatal(err)
 	}
 	resolver := newProxyEnvironmentResolver(projection, system, snapshot)
+	profiles, err := egressprofile.NewManager(store.EgressProfileRepository(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defaults, err := egressprofile.NewDefaultManager(store.EgressDefaultRepository(), profiles)
+	if err != nil {
+		t.Fatal(err)
+	}
 	assignments, err := captureassignment.NewManager(captureassignment.Options{
-		Repository:   store.CaptureAssignmentRepository(),
-		Environments: resolver,
-		Activity:     proxyCaptureActivity{},
-		Clock:        captureassignment.SystemClock{},
+		Repository:     store.CaptureAssignmentRepository(),
+		Environments:   resolver,
+		EgressDefaults: defaults,
+		Activity:       proxyCaptureActivity{},
+		Clock:          captureassignment.SystemClock{},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1826,7 +1835,7 @@ func testEnvironmentForDialectRevision(
 					ID: "adapter-proxy", Revision: adapterRevision,
 				},
 				Destination:   environment.DestinationPlan{Kind: environment.DestinationKindOriginal},
-				EgressProfile: egressprofile.Direct(),
+				EgressProfile: authoredEgress(t, egressprofile.Direct()),
 			}},
 		}},
 	}

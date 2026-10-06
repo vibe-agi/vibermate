@@ -11,6 +11,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/vibe-agi/vibermate/internal/egressnetwork"
+	"github.com/vibe-agi/vibermate/internal/egressprofile"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
 	"github.com/vibe-agi/vibermate/internal/originidentity"
 	"github.com/vibe-agi/vibermate/internal/protocolspec"
@@ -19,15 +20,16 @@ import (
 const maxOriginalRequestBytes = 16 << 20
 
 type RequestOptions struct {
-	RequestID    string
-	Kind         offlinehold.EgressKind
-	Origin       originidentity.ClientOrigin
-	Method       string
-	Path         string
-	RawQuery     string
-	Headers      http.Header
-	Body         []byte
-	PayloadClass protocolspec.OperationPayloadClass
+	ResolvedEgress egressprofile.Resolved
+	RequestID      string
+	Kind           offlinehold.EgressKind
+	Origin         originidentity.ClientOrigin
+	Method         string
+	Path           string
+	RawQuery       string
+	Headers        http.Header
+	Body           []byte
+	PayloadClass   protocolspec.OperationPayloadClass
 	// ConnectionID and ParentID associate this outbound with the client
 	// connection and the original request that caused it. They travel as typed
 	// references so no identity encodes containment of another.
@@ -39,18 +41,19 @@ type RequestOptions struct {
 // Request freezes an original-origin auxiliary or opaque representation. It
 // cannot replace its ClientOrigin with a provider target or arbitrary URL.
 type Request struct {
-	requestID    string
-	kind         offlinehold.EgressKind
-	origin       originidentity.ClientOrigin
-	method       string
-	path         string
-	rawQuery     string
-	headers      http.Header
-	body         []byte
-	payloadClass protocolspec.OperationPayloadClass
-	connectionID string
-	parentID     string
-	egressPolicy egressnetwork.Policy
+	resolvedEgress egressprofile.Resolved
+	requestID      string
+	kind           offlinehold.EgressKind
+	origin         originidentity.ClientOrigin
+	method         string
+	path           string
+	rawQuery       string
+	headers        http.Header
+	body           []byte
+	payloadClass   protocolspec.OperationPayloadClass
+	connectionID   string
+	parentID       string
+	egressPolicy   egressnetwork.Policy
 }
 
 func NewRequest(options RequestOptions) (Request, error) {
@@ -101,9 +104,19 @@ func NewRequest(options RequestOptions) (Request, error) {
 	if err := options.Origin.Validate(); err != nil {
 		return Request{}, errors.New("original ClientOrigin is incomplete")
 	}
-	egressPolicy, err := options.EgressPolicy.Normalize()
+	resolved := options.ResolvedEgress
+	if resolved.Validate() != nil || (resolved.Source() != egressprofile.SelectionFlow && resolved.Source() != egressprofile.SelectionGlobal && resolved.Source() != egressprofile.SelectionBuiltin) {
+		return Request{}, errors.New("original-origin frozen egress is invalid")
+	}
+	egressPolicy, err := resolved.Profile().Policy.Normalize()
 	if err != nil {
 		return Request{}, err
+	}
+	if options.EgressPolicy != (egressnetwork.Policy{}) {
+		legacy, err := options.EgressPolicy.Normalize()
+		if err != nil || legacy != egressPolicy {
+			return Request{}, errors.New("original-origin policy differs from frozen egress")
+		}
 	}
 	if options.Method == "" ||
 		strings.ToUpper(options.Method) != options.Method ||
@@ -115,18 +128,19 @@ func NewRequest(options RequestOptions) (Request, error) {
 		return Request{}, errors.New("original-origin request target is invalid")
 	}
 	return Request{
-		requestID:    options.RequestID,
-		kind:         options.Kind,
-		origin:       options.Origin,
-		method:       options.Method,
-		path:         options.Path,
-		rawQuery:     options.RawQuery,
-		headers:      sanitizeHeaders(options.Headers),
-		body:         bytes.Clone(options.Body),
-		payloadClass: options.PayloadClass,
-		connectionID: options.ConnectionID,
-		parentID:     options.ParentID,
-		egressPolicy: egressPolicy,
+		resolvedEgress: resolved,
+		requestID:      options.RequestID,
+		kind:           options.Kind,
+		origin:         options.Origin,
+		method:         options.Method,
+		path:           options.Path,
+		rawQuery:       options.RawQuery,
+		headers:        sanitizeHeaders(options.Headers),
+		body:           bytes.Clone(options.Body),
+		payloadClass:   options.PayloadClass,
+		connectionID:   options.ConnectionID,
+		parentID:       options.ParentID,
+		egressPolicy:   egressPolicy,
 	}, nil
 }
 

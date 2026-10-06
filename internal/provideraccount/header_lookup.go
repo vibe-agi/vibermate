@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 
+	"github.com/vibe-agi/vibermate/internal/egressprofile"
 	"github.com/vibe-agi/vibermate/internal/providerauth"
 	"github.com/vibe-agi/vibermate/internal/secretstore"
 	"golang.org/x/net/http/httpguts"
@@ -26,7 +27,8 @@ func (manager *Manager) ReadOverwriteHeader(ctx context.Context, lookup provider
 		return "", err
 	}
 	lease, err := manager.acquire(ctx, accountLeaseScope{
-		id: id, accountRevision: lookup.AccountRevision, realmID: account.RealmID,
+		egressProfile: egressprofile.Inherit(),
+		id:            id, accountRevision: lookup.AccountRevision, realmID: account.RealmID,
 		upstreamEndpointID: lookup.UpstreamEndpointID, upstreamEndpointRevision: lookup.UpstreamEndpointRevision,
 		upstreamEndpointOrigin: account.Origin,
 	})

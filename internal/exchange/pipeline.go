@@ -285,7 +285,7 @@ func (pipeline *Pipeline) Execute(
 		operationContext,
 		selection,
 		candidate,
-		request.RequestPlan().EgressProfile(),
+		request.RequestPlan().EgressChoice(),
 	)
 	if acquireErr != nil {
 		err = newFailure(
@@ -784,12 +784,17 @@ func (pipeline *Pipeline) newProviderRequest(
 		WireProfile: selection.wireProfile, ClientProtocol: request.ClientHTTPProtocol(),
 		ClientUserAgent: request.ClientUserAgent(), ClientHello: clientHello,
 		MessageTransformUserAgent: transformedUserAgent,
-		EgressProfile:             request.RequestPlan().EgressProfile(),
 		RawEvidence:               rawEvidence,
 	}
 	if credential.mode == providerauth.CredentialClientPassthrough {
+		resolved, err := request.RequestPlan().ResolvedEgress()
+		if err != nil {
+			return providertransport.Request{}, err
+		}
+		options.EgressProfile, options.ResolvedEgress = resolved.Profile(), resolved
 		options.PassthroughOrigin = selection.target.Origin()
 	} else {
+		options.EgressProfile, options.ResolvedEgress = credential.account.EgressProfile, credential.account.ResolvedEgress
 		options.AccountRef = credential.account
 		options.SecretRef = credential.secret
 		options.AuthDriverRef = credential.driver
@@ -980,7 +985,7 @@ func (pipeline *Pipeline) acquireCredential(
 	ctx context.Context,
 	selection frozenSelection,
 	candidate credentialCandidate,
-	egressProfile egressprofile.ProfileRevision,
+	egressProfile egressprofile.Choice,
 ) (credentialMaterial, error) {
 	if candidate.mode == providerauth.CredentialClientPassthrough {
 		return credentialMaterial{mode: providerauth.CredentialClientPassthrough}, nil

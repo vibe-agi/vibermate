@@ -99,6 +99,7 @@ func buildStorage(
 }
 
 type environmentBuildRequest struct {
+	egressDefaults       egressprofile.Resolver
 	repository           environment.Repository
 	assignmentRepository captureassignment.Repository
 	activity             captureassignment.CaptureActivity
@@ -149,16 +150,7 @@ func (resolver historicalEnvironmentResolver) ResolveRevision(
 		return environment.EnvironmentSnapshot{}, err
 	}
 	if id == environment.SystemTransparentID {
-		snapshot := resolver.system
-		if snapshot.Revision() != revision {
-			return environment.EnvironmentSnapshot{}, fmt.Errorf(
-				"%w: environmentId=%q revision=%d",
-				environment.ErrEnvironmentNotFound,
-				id,
-				revision,
-			)
-		}
-		return snapshot, nil
+		return resolver.compiler.CompileSystemTransparentRevision(revision)
 	}
 	aggregate, exists, err := resolver.repository.LoadRevision(ctx, id, revision)
 	if err != nil {
@@ -195,6 +187,7 @@ func buildEnvironment(
 		system:             system,
 	}
 	assignments, err := captureassignment.NewManager(captureassignment.Options{
+		EgressDefaults:   request.egressDefaults,
 		Repository:       request.assignmentRepository,
 		Environments:     resolver,
 		Activity:         request.activity,

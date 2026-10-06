@@ -289,6 +289,7 @@ func prepareNativeSiblingBookkeepingReceipt(t *testing.T, f nativeLeaseFixture, 
 	}
 	defer lease.Release()
 	plan, _ := lease.Plan().ClientToolPlan()
+	plan = frozenExplicitNativePlan(t, plan)
 	var siblingID string
 	var revision uint64
 	if err = f.store.database.QueryRow(`SELECT session_id,revision FROM native_tool_sessions ORDER BY rowid DESC LIMIT 1`).Scan(&siblingID, &revision); err != nil {

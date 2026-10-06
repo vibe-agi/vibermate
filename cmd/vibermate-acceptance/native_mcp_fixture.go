@@ -188,6 +188,10 @@ func runNativeFixtureSlice(t nativeFixtureChecks, binary string, nodePaths ...st
 }
 
 func runNativeFixtureSliceWithModelProbe(t nativeFixtureChecks, binary string, modelProbe *nativeModelProbeOptions, nodePaths ...string) {
+	directChoice, directErr := egressprofile.Explicit(egressprofile.Direct())
+	if directErr != nil {
+		t.Fatal(directErr)
+	}
 	scenario := "observe"
 	if source, ok := t.(interface{ NativeScenario() string }); ok {
 		scenario = source.NativeScenario()
@@ -524,7 +528,7 @@ func runNativeFixtureSliceWithModelProbe(t nativeFixtureChecks, binary string, m
 		t.Fatal(err)
 	}
 	origin, _ := originidentity.ParseProviderOrigin("https://chatgpt.com")
-	e := environment.Environment{ID: "native.acceptance", Name: "Private native acceptance", State: environment.StateActive, Revision: 1, ContentRecording: environment.ContentRecordingPolicy{Mode: environment.ContentRecordingOff}, PolicySet: &environment.PolicySet{ToolMode: environment.ToolPolicyObserve}, ClientToolAccess: &environment.ClientToolAccessPolicy{Enabled: true, Route: &environment.ClientToolRoute{ID: "native.acceptance.route", Revision: 1, TargetOrigin: origin, Path: environment.ClientToolMCPPath, CredentialOwner: environment.ClientToolCredentialOriginal, Contract: environment.ClientToolContractCodexLegacy, EgressProfile: egressprofile.Direct()}}}
+	e := environment.Environment{ID: "native.acceptance", Name: "Private native acceptance", State: environment.StateActive, Revision: 1, ContentRecording: environment.ContentRecordingPolicy{Mode: environment.ContentRecordingOff}, PolicySet: &environment.PolicySet{ToolMode: environment.ToolPolicyObserve}, ClientToolAccess: &environment.ClientToolAccessPolicy{Enabled: true, Route: &environment.ClientToolRoute{ID: "native.acceptance.route", Revision: 1, TargetOrigin: origin, Path: environment.ClientToolMCPPath, CredentialOwner: environment.ClientToolCredentialOriginal, Contract: environment.ClientToolContractCodexLegacy, EgressProfile: directChoice}}}
 	if probingProfile || modelProbe != nil {
 		e.ContentRecording = environment.ContentRecordingPolicy{Mode: environment.ContentRecordingFull, RetentionDays: 1}
 	}
@@ -590,7 +594,7 @@ func runNativeFixtureSliceWithModelProbe(t nativeFixtureChecks, binary string, m
 		t.Fatal(err)
 	}
 	clientOrigin, _ := originidentity.ParseClientOrigin("https://chatgpt.com")
-	e.ClientEndpoints = []environment.ClientEndpoint{{ID: "native.synthetic.client", Revision: 1, ClientOrigin: clientOrigin, ProtocolPlans: []environment.ClientProtocolPlan{{ID: "native.synthetic.protocol", Revision: 1, ClientProtocol: environment.ClientProtocolOpenAIResponses, ClientAdapterPolicy: environment.ClientAdapterPolicy{ID: "native.synthetic.adapter", Revision: 1}, EgressProfile: egressprofile.Direct(), Destination: environment.DestinationPlan{Kind: environment.DestinationKindUpstream, Upstream: &environment.UpstreamPlan{DefaultRouteID: "native.synthetic.route", RouteSet: environment.RouteSet{ID: "native.synthetic.routes", Revision: 1, CandidateRouteIDs: []environment.UpstreamRouteID{"native.synthetic.route"}}, Routes: []environment.UpstreamRoute{{ID: "native.synthetic.route", Revision: 1, ProviderTarget: environment.ProviderTarget{ID: endpoint.ID.String(), Revision: environment.Revision(endpoint.Revision), Origin: endpoint.Origin, RealmID: endpoint.RealmID, Capabilities: endpoint.Capabilities}, BackendProtocol: string(environment.ClientProtocolOpenAIResponses), AccountPolicy: environment.RouteAccountPolicy{Revision: 1, Mode: environment.AccountSelectionFixed, FixedAccountID: account.Account.ID.String(), Accounts: []environment.RouteAccountReference{{ID: account.Account.ID.String(), Revision: environment.Revision(account.Account.Revision), DisplayName: account.Account.DisplayName}}}, ModelPolicy: environment.ModelPolicy{Revision: 1, Mode: environment.ModelModePassthrough}, WireProfileRef: wireprofile.UpstreamWireProfileFollowClientValue}}}}}}}}
+	e.ClientEndpoints = []environment.ClientEndpoint{{ID: "native.synthetic.client", Revision: 1, ClientOrigin: clientOrigin, ProtocolPlans: []environment.ClientProtocolPlan{{ID: "native.synthetic.protocol", Revision: 1, ClientProtocol: environment.ClientProtocolOpenAIResponses, ClientAdapterPolicy: environment.ClientAdapterPolicy{ID: "native.synthetic.adapter", Revision: 1}, EgressProfile: directChoice, Destination: environment.DestinationPlan{Kind: environment.DestinationKindUpstream, Upstream: &environment.UpstreamPlan{DefaultRouteID: "native.synthetic.route", RouteSet: environment.RouteSet{ID: "native.synthetic.routes", Revision: 1, CandidateRouteIDs: []environment.UpstreamRouteID{"native.synthetic.route"}}, Routes: []environment.UpstreamRoute{{ID: "native.synthetic.route", Revision: 1, ProviderTarget: environment.ProviderTarget{ID: endpoint.ID.String(), Revision: environment.Revision(endpoint.Revision), Origin: endpoint.Origin, RealmID: endpoint.RealmID, Capabilities: endpoint.Capabilities}, BackendProtocol: string(environment.ClientProtocolOpenAIResponses), AccountPolicy: environment.RouteAccountPolicy{Revision: 1, Mode: environment.AccountSelectionFixed, FixedAccountID: account.Account.ID.String(), Accounts: []environment.RouteAccountReference{{ID: account.Account.ID.String(), Revision: environment.Revision(account.Account.Revision), DisplayName: account.Account.DisplayName}}}, ModelPolicy: environment.ModelPolicy{Revision: 1, Mode: environment.ModelModePassthrough}, WireProfileRef: wireprofile.UpstreamWireProfileFollowClientValue}}}}}}}}
 	if modelProbe != nil && modelProbe.Profile.usesAPIKey() {
 		// Canonical flow is an existing protocol identity, not a dial grant.
 		// The actual prelaunch target remains private chatgpt.com/v1.

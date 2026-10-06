@@ -48,7 +48,7 @@ func TestCaptureEnvironmentPermissionFlagIsScoped(t *testing.T) {
 			origin, _ := originidentity.ParseProviderOrigin("https://native.example")
 			value.ClientToolAccess = &environment.ClientToolAccessPolicy{Enabled: true, Route: &environment.ClientToolRoute{
 				ID: "personal.tools", Revision: 1, TargetOrigin: origin, Path: environment.ClientToolMCPPath,
-				CredentialOwner: environment.ClientToolCredentialOriginal, Contract: environment.ClientToolContractCodexLegacy, EgressProfile: egressprofile.Direct(),
+				CredentialOwner: environment.ClientToolCredentialOriginal, Contract: environment.ClientToolContractCodexLegacy, EgressProfile: authoredEgress(t, egressprofile.Direct()),
 			}}
 		}
 		snapshot, err := compiler.Restore(value)

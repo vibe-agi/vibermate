@@ -13,6 +13,7 @@ import (
 
 	"github.com/vibe-agi/vibermate/internal/egressaudit"
 	"github.com/vibe-agi/vibermate/internal/egressnetwork"
+	"github.com/vibe-agi/vibermate/internal/egressprofile"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
 )
 
@@ -431,6 +432,15 @@ func (client *Client) beginAudit(
 	if err != nil {
 		return egressaudit.Attempt{}, err
 	}
+	resolved := frozen.resolvedEgress
+	if resolved.Validate() != nil {
+		return egressaudit.Attempt{}, errors.New("original-origin effective evidence missing")
+	}
+	profile := resolved.Profile()
+	decision := egressaudit.DecisionRef{Authority: authority, PolicyID: profile.ID.String(), PolicyRevision: uint64(profile.Revision), RuleID: "flow.egress", ProxyID: profile.ID.String(), ProxyRevision: uint64(profile.Revision), SelectionSource: resolved.Source(), DefaultRevision: resolved.DefaultRevision()}
+	if resolved.Source() == egressprofile.SelectionGlobal || resolved.Source() == egressprofile.SelectionBuiltin {
+		decision.PolicyID, decision.PolicyRevision, decision.RuleID = "runtime.egress-default", resolved.DefaultRevision(), "global.default"
+	}
 	attempt, err := egressaudit.New(egressaudit.NewInput{
 		ID:           frozen.requestID,
 		ConnectionID: frozen.connectionID,
@@ -442,7 +452,7 @@ func (client *Client) beginAudit(
 		},
 		Caller:       egressaudit.CallerCore,
 		TargetOrigin: frozen.origin.String(),
-		Decision:     egressaudit.BuiltInDirectDecision(authority),
+		Decision:     decision,
 		StartedAt:    client.clock(),
 	})
 	if err != nil {

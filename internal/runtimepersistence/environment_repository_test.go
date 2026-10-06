@@ -290,7 +290,7 @@ func environmentFixture(t *testing.T, id string, revision environment.Revision) 
 			ProtocolPlans: []environment.ClientProtocolPlan{{
 				ID: "plan.anthropic", Revision: 1, ClientProtocol: environment.ClientProtocolAnthropicMessages,
 				ClientAdapterPolicy: environment.ClientAdapterPolicy{ID: "adapter.anthropic", Revision: 1},
-				EgressProfile:       egressprofile.Direct(),
+				EgressProfile:       authoredEgress(t, egressprofile.Direct()),
 				Destination: environment.DestinationPlan{
 					Kind: environment.DestinationKindUpstream,
 					Upstream: &environment.UpstreamPlan{

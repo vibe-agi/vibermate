@@ -3387,7 +3387,41 @@ final class TrafficEgressPolicy {
   int get hashCode => Object.hash(proxy, resolver);
 }
 
-final class EgressProfileRevision {
+sealed class EgressChoice {
+  const EgressChoice();
+  static const inherit = EgressInheritance();
+
+  factory EgressChoice.fromJson(Object? json, String path) {
+    final value = requireObject(json, path);
+    if (value.containsKey('mode')) {
+      requireFields(value, path, required: const {'mode'});
+      if (value['mode'] != 'inherit') {
+        throw ControlContractException('$path inheritance mode is invalid');
+      }
+      return inherit;
+    }
+    final profile = EgressProfileRevision.fromJson(value, path);
+    if (profile.id == EgressProfileRevision.direct.id &&
+        profile != EgressProfileRevision.direct) {
+      throw ControlContractException('$path builtin Direct was substituted');
+    }
+    return profile;
+  }
+
+  JsonObject toJson();
+}
+
+final class EgressInheritance extends EgressChoice {
+  const EgressInheritance();
+  @override
+  JsonObject toJson() => {'mode': 'inherit'};
+  @override
+  bool operator ==(Object other) => other is EgressInheritance;
+  @override
+  int get hashCode => 'egress:inherit'.hashCode;
+}
+
+final class EgressProfileRevision extends EgressChoice {
   const EgressProfileRevision({
     required this.id,
     required this.revision,
@@ -3436,6 +3470,7 @@ final class EgressProfileRevision {
   final TrafficEgressPolicy policy;
   final DateTime publishedAt;
 
+  @override
   JsonObject toJson() => {
     'id': id,
     'revision': revision,
@@ -5090,7 +5125,7 @@ final class EnvironmentProtocolPlan {
         value['destination'],
         '$path.destination',
       ),
-      egressProfile: EgressProfileRevision.fromJson(
+      egressProfile: EgressChoice.fromJson(
         value['egressProfile'],
         '$path.egressProfile',
       ),
@@ -5104,7 +5139,7 @@ final class EnvironmentProtocolPlan {
   final String clientProtocol;
   final EnvironmentClientAdapterPolicy clientAdapterPolicy;
   final EnvironmentDestination destination;
-  final EgressProfileRevision egressProfile;
+  final EgressChoice egressProfile;
   final List<CodeLibraryTransformRevision> transforms;
   final List<EnvironmentPluginBinding> pluginBindings;
 
@@ -5113,7 +5148,7 @@ final class EnvironmentProtocolPlan {
 
   EnvironmentProtocolPlan copyWith({
     EnvironmentDestination? destination,
-    EgressProfileRevision? egressProfile,
+    EgressChoice? egressProfile,
     List<CodeLibraryTransformRevision>? transforms,
   }) => EnvironmentProtocolPlan(
     id: id,
@@ -5374,7 +5409,7 @@ final class EnvironmentClientToolRoute {
   final Uri targetOrigin;
   final String path;
   final String credentialOwner;
-  final EgressProfileRevision egressProfile;
+  final EgressChoice egressProfile;
   final String contract;
   factory EnvironmentClientToolRoute.fromJson(Object? json, String path) {
     final value = requireObject(json, path);
@@ -5412,7 +5447,7 @@ final class EnvironmentClientToolRoute {
       targetOrigin: origin,
       path: servicePath,
       credentialOwner: owner,
-      egressProfile: EgressProfileRevision.fromJson(
+      egressProfile: EgressChoice.fromJson(
         value['egressProfile'],
         '$path.egressProfile',
       ),
@@ -5994,7 +6029,21 @@ final class EnvironmentDryRunDecision {
     _requireDigest(value, 'environmentDigest', path);
     requireInteger(value, 'routeRevision', path);
     requireInteger(value, 'accountRevision', path);
-    requireInteger(value, 'networkExitRevision', path);
+    final networkExitRevision = requireInteger(
+      value,
+      'networkExitRevision',
+      path,
+    );
+    final networkExitId = requireStringValue(value, 'networkExitId', path);
+    final unverified = requireStringList(value, 'unverified', path);
+    final unresolvedExit = unverified.contains('network_exit');
+    if (unresolvedExit
+        ? networkExitId.isNotEmpty || networkExitRevision != 0
+        : networkExitId.isEmpty || networkExitRevision < 1) {
+      throw const ControlContractException(
+        'Dry run network exit is inconsistent',
+      );
+    }
     requireString(value, 'providerMethod', path);
     requireString(value, 'providerPath', path);
     final kind = requireString(value, 'destinationKind', path);
@@ -6018,7 +6067,7 @@ final class EnvironmentDryRunDecision {
       requestedModel: requireStringValue(value, 'requestedModel', path),
       effectiveModel: requireStringValue(value, 'effectiveModel', path),
       modelMapped: requireBoolean(value, 'modelMapped', path),
-      networkExitId: requireString(value, 'networkExitId', path),
+      networkExitId: networkExitId,
       bodyChanged: requireBoolean(value, 'bodyChanged', path),
       protocolChangedTopLevelFields:
           value['protocolChangedTopLevelFields'] == null

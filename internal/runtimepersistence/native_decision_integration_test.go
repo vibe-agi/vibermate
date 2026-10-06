@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/vibe-agi/vibermate/internal/egressprofile"
 	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/exchange"
 	"github.com/vibe-agi/vibermate/internal/nativetool"
@@ -36,6 +37,18 @@ func nativeDecisionFixture(t *testing.T, store *Store, id nativetool.ID) (native
 		t.Fatal(err)
 	}
 	plan, _ := request.ClientToolPlan()
+	profile, explicit := plan.Route().EgressProfile.ExplicitProfile()
+	if !explicit {
+		t.Fatal("legacy fixture requires explicit flow")
+	}
+	resolved, err := egressprofile.RestoreResolved(profile, egressprofile.SelectionFlow, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err = plan.WithResolvedEgress(resolved)
+	if err != nil {
+		t.Fatal(err)
+	}
 	args, _ := protocolcore.NewJSONObject([]byte(`{"path":"a"}`), 1024)
 	key, _ := protocolcore.NewCallKey("native", "3")
 	intents := []protocolcore.ToolIntent{{ResponseID: "rpc-3", Ordinal: 0, Call: protocolcore.ToolCall{Key: key, Name: "read_file", Arguments: args}}}

@@ -160,6 +160,17 @@ func (e *executor) observeCallback(ctx context.Context, s *session, stream *stre
 	if r.method == "ping" {
 		charge += int64(len(r.raw))
 	}
+	// A callback parent may outlive removal of its originating stream when
+	// durable projection/retirement is unavailable. Its existing owner carries
+	// its own conservative effective-fact charge until p.release/clearSession.
+	factBytes, err := effectiveEgressMemory(binding.Plan())
+	if err != nil {
+		e.parentsMu.Lock()
+		e.parentPending--
+		e.parentsMu.Unlock()
+		return err
+	}
+	charge += factBytes
 	if !e.budget.acquire(charge) {
 		e.parentsMu.Lock()
 		e.parentPending--

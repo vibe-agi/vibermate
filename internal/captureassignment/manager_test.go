@@ -48,7 +48,7 @@ func TestNativeRequestPrecedesModelClientTargetPathRestriction(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	policy.ClientToolAccess = &environment.ClientToolAccessPolicy{Enabled: true, Route: &environment.ClientToolRoute{ID: "native.route", Revision: 1, TargetOrigin: origin, Path: environment.ClientToolMCPPath, CredentialOwner: environment.ClientToolCredentialOriginal, Contract: environment.ClientToolContractCodexLegacy, EgressProfile: egressprofile.Direct()}}
+	policy.ClientToolAccess = &environment.ClientToolAccessPolicy{Enabled: true, Route: &environment.ClientToolRoute{ID: "native.route", Revision: 1, TargetOrigin: origin, Path: environment.ClientToolMCPPath, CredentialOwner: environment.ClientToolCredentialOriginal, Contract: environment.ClientToolContractCodexLegacy, EgressProfile: authoredEgress(t, egressprofile.Direct())}}
 	profile, err := clienttarget.NewProfile("claude-code", clienttarget.EnvironmentFacts{AnthropicBaseURL: "https://api.example/restricted"})
 	if err != nil {
 		t.Fatal(err)
@@ -613,7 +613,7 @@ func environmentFixture(t *testing.T, id string, adapterID string) environment.E
 				ID: "plan.messages", Revision: 1,
 				ClientProtocol:      environment.ClientProtocolAnthropicMessages,
 				ClientAdapterPolicy: environment.ClientAdapterPolicy{ID: adapterID, Revision: 1},
-				EgressProfile:       egressprofile.Direct(),
+				EgressProfile:       authoredEgress(t, egressprofile.Direct()),
 				Destination: environment.DestinationPlan{
 					Kind: environment.DestinationKindUpstream,
 					Upstream: &environment.UpstreamPlan{

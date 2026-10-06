@@ -12,6 +12,7 @@ import (
 
 	"github.com/vibe-agi/vibermate/internal/egressaudit"
 	"github.com/vibe-agi/vibermate/internal/egressnetwork"
+	"github.com/vibe-agi/vibermate/internal/egressprofile"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
 	"github.com/vibe-agi/vibermate/internal/originidentity"
 	"github.com/vibe-agi/vibermate/internal/protocolspec"
@@ -212,15 +213,20 @@ func originalAuditRequest(t *testing.T) Request {
 	if err != nil {
 		t.Fatal(err)
 	}
+	resolved, err := egressprofile.RestoreResolved(egressprofile.Direct(), egressprofile.SelectionFlow, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
 	request, err := NewRequest(RequestOptions{
-		RequestID:    "original-read-failure",
-		Kind:         offlinehold.EgressOpaque,
-		Origin:       origin,
-		Method:       http.MethodGet,
-		Path:         "/status",
-		PayloadClass: protocolspec.OperationPayloadControl,
-		ConnectionID: "connection-read-failure",
-		ParentID:     "request-read-failure",
+		ResolvedEgress: resolved,
+		RequestID:      "original-read-failure",
+		Kind:           offlinehold.EgressOpaque,
+		Origin:         origin,
+		Method:         http.MethodGet,
+		Path:           "/status",
+		PayloadClass:   protocolspec.OperationPayloadControl,
+		ConnectionID:   "connection-read-failure",
+		ParentID:       "request-read-failure",
 	})
 	if err != nil {
 		t.Fatal(err)

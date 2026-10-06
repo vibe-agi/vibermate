@@ -16,7 +16,7 @@ func clientToolFixture(t *testing.T) Environment {
 	value := fixture(t, "native", mustOrigin(t, "https://chatgpt.com"))
 	value.ClientToolAccess = &ClientToolAccessPolicy{Enabled: true, Route: &ClientToolRoute{
 		ID: "native.mcp", Revision: 1, TargetOrigin: mustProviderOrigin(t, "https://chatgpt.com"), Path: "/backend-api/ps/mcp",
-		CredentialOwner: ClientToolCredentialOriginal, EgressProfile: egressprofile.Direct(), Contract: ClientToolContractCodexLegacy,
+		CredentialOwner: ClientToolCredentialOriginal, EgressProfile: explicitEgress(t, egressprofile.Direct()), Contract: ClientToolContractCodexLegacy,
 	}}
 	return value
 }
@@ -53,14 +53,22 @@ func TestNativeLaunchCompatibilityChecksCompleteFrozenRoute(t *testing.T) {
 		func(v *Environment) {
 			v.ClientToolAccess.Route.TargetOrigin = mustProviderOrigin(t, "https://other.example")
 		},
-		func(v *Environment) { v.ClientToolAccess.Route.EgressProfile.ID = "profile.changed" },
-		func(v *Environment) { v.ClientToolAccess.Route.EgressProfile.Revision++ },
-		func(v *Environment) { v.ClientToolAccess.Route.EgressProfile.DisplayName = "Changed name" },
 		func(v *Environment) {
-			v.ClientToolAccess.Route.EgressProfile.PublishedAt = v.ClientToolAccess.Route.EgressProfile.PublishedAt.Add(time.Second)
+			v.ClientToolAccess.Route.EgressProfile = mutateEgress(t, v.ClientToolAccess.Route.EgressProfile, func(p *egressprofile.ProfileRevision) { p.ID = "profile.changed" })
 		},
 		func(v *Environment) {
-			v.ClientToolAccess.Route.EgressProfile.Policy.Proxy = egressnetwork.ProxyPolicy{Kind: egressnetwork.ProxySOCKS5, Endpoint: "proxy.example:1080"}
+			v.ClientToolAccess.Route.EgressProfile = mutateEgress(t, v.ClientToolAccess.Route.EgressProfile, func(p *egressprofile.ProfileRevision) { p.Revision++ })
+		},
+		func(v *Environment) {
+			v.ClientToolAccess.Route.EgressProfile = mutateEgress(t, v.ClientToolAccess.Route.EgressProfile, func(p *egressprofile.ProfileRevision) { p.DisplayName = "Changed name" })
+		},
+		func(v *Environment) {
+			v.ClientToolAccess.Route.EgressProfile = mutateEgress(t, v.ClientToolAccess.Route.EgressProfile, func(p *egressprofile.ProfileRevision) { p.PublishedAt = p.PublishedAt.Add(time.Second) })
+		},
+		func(v *Environment) {
+			v.ClientToolAccess.Route.EgressProfile = mutateEgress(t, v.ClientToolAccess.Route.EgressProfile, func(p *egressprofile.ProfileRevision) {
+				p.Policy.Proxy = egressnetwork.ProxyPolicy{Kind: egressnetwork.ProxySOCKS5, Endpoint: "proxy.example:1080"}
+			})
 		},
 	} {
 		next := initial.Aggregate()
@@ -185,7 +193,7 @@ func TestClientToolAccessRouteValidationAndTransitions(t *testing.T) {
 	for _, mutate := range []func(*ClientToolRoute){
 		func(r *ClientToolRoute) { r.CredentialOwner = "managed_account" }, func(r *ClientToolRoute) { r.Path = "/v1/responses" },
 		func(r *ClientToolRoute) { r.Contract = "future" }, func(r *ClientToolRoute) { r.Revision = 0 }, func(r *ClientToolRoute) { r.ID = "" },
-		func(r *ClientToolRoute) { r.TargetOrigin = mustProviderOrigin(t, "http://localhost:8080") }, func(r *ClientToolRoute) { r.EgressProfile = egressprofile.ProfileRevision{} },
+		func(r *ClientToolRoute) { r.TargetOrigin = mustProviderOrigin(t, "http://localhost:8080") }, func(r *ClientToolRoute) { r.EgressProfile = egressprofile.Choice{} },
 	} {
 		v := clientToolFixture(t)
 		mutate(v.ClientToolAccess.Route)
@@ -196,7 +204,7 @@ func TestClientToolAccessRouteValidationAndTransitions(t *testing.T) {
 	previous := clientToolFixture(t)
 	next := previous.Clone()
 	next.Revision++
-	next.ClientToolAccess.Route.EgressProfile.DisplayName = "Changed"
+	next.ClientToolAccess.Route.EgressProfile = mutateEgress(t, next.ClientToolAccess.Route.EgressProfile, func(p *egressprofile.ProfileRevision) { p.DisplayName = "Changed" })
 	if ValidateTransition(previous, next) == nil {
 		t.Fatal("changed route without revision accepted")
 	}
@@ -249,7 +257,7 @@ func TestNativeOnlyConnectionGrantsOnlyExactNativeArm(t *testing.T) {
 	}
 	drifted := value.Clone()
 	drifted.Revision++
-	drifted.ClientToolAccess.Route.EgressProfile.DisplayName = "Changed profile"
+	drifted.ClientToolAccess.Route.EgressProfile = mutateEgress(t, drifted.ClientToolAccess.Route.EgressProfile, func(p *egressprofile.ProfileRevision) { p.DisplayName = "Changed profile" })
 	if ValidateConnectionBinding(mustCompile(t, drifted), binding) == nil {
 		t.Fatal("native binding tolerated full profile drift")
 	}

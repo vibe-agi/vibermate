@@ -77,8 +77,33 @@ func TestEnvironmentClientToolAccessNestedWireRejectsWithoutSaving(t *testing.T)
 		t.Fatal(err)
 	}
 	base := system.Aggregate()
+	directChoice, err := egressprofile.Explicit(egressprofile.Direct())
+	if err != nil {
+		t.Fatal(err)
+	}
+	// This is a new user environment, not a historical system revision.
+	for i := range base.ClientEndpoints {
+		base.ClientEndpoints[i].Revision = 1
+		for j := range base.ClientEndpoints[i].ProtocolPlans {
+			base.ClientEndpoints[i].ProtocolPlans[j].Revision = 1
+			// This existing malformed-profile matrix targets the explicit wire.
+			base.ClientEndpoints[i].ProtocolPlans[j].EgressProfile = directChoice
+		}
+	}
 	input := desktopcontrol.EnvironmentDraftInput{Name: "Work", State: environment.StateActive, ClientEndpoints: base.ClientEndpoints, PluginBindings: base.PluginBindings, BudgetPolicy: base.BudgetPolicy, ContentRecording: base.ContentRecording, LaunchEnvironment: base.LaunchEnvironment, PolicySet: base.PolicySet, ClientToolAccess: &environment.ClientToolAccessPolicy{Enabled: true}}
-	body, _ := json.Marshal(input)
+	body, marshalErr := json.Marshal(input)
+	if marshalErr != nil {
+		t.Fatal(marshalErr)
+	}
+	var roundTrip desktopcontrol.EnvironmentDraftInput
+	if err := json.Unmarshal(body, &roundTrip); err != nil {
+		t.Fatalf("owner input roundtrip: %v", err)
+	}
+	decoder := json.NewDecoder(bytes.NewReader(body))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&roundTrip); err != nil {
+		t.Fatalf("strict owner input: %v", err)
+	}
 	first := environmentRequest(t, application, http.MethodPut, "/api/v1/environments/work/draft", 0, "strict-native-initial-save", body)
 	if first.Code != 200 {
 		t.Fatalf("prepare: %d %s", first.Code, first.Body.String())
@@ -174,10 +199,28 @@ func TestEnvironmentClientToolAccessPreparedCandidateAndFrozenRoute(t *testing.T
 		t.Fatal(err)
 	}
 	aggregate := base.Aggregate()
+	for i := range aggregate.ClientEndpoints {
+		aggregate.ClientEndpoints[i].Revision = 1
+		for j := range aggregate.ClientEndpoints[i].ProtocolPlans {
+			aggregate.ClientEndpoints[i].ProtocolPlans[j].Revision = 1
+		}
+	}
 	input := desktopcontrol.EnvironmentDraftInput{Name: "Work", State: environment.StateActive, ClientEndpoints: aggregate.ClientEndpoints, PluginBindings: aggregate.PluginBindings, BudgetPolicy: aggregate.BudgetPolicy, ContentRecording: aggregate.ContentRecording, LaunchEnvironment: aggregate.LaunchEnvironment, PolicySet: aggregate.PolicySet, ClientToolAccess: &environment.ClientToolAccessPolicy{Enabled: true}}
 	save := func(baseRevision, draftRevision environment.Revision, key string) desktopcontrol.EnvironmentDraftResponse {
 		input.ExpectedDraftRevision = draftRevision
-		body, _ := json.Marshal(input)
+		body, marshalErr := json.Marshal(input)
+		if marshalErr != nil {
+			t.Fatal(marshalErr)
+		}
+		var roundTrip desktopcontrol.EnvironmentDraftInput
+		if err := json.Unmarshal(body, &roundTrip); err != nil {
+			t.Fatalf("owner input roundtrip: %v", err)
+		}
+		decoder := json.NewDecoder(bytes.NewReader(body))
+		decoder.DisallowUnknownFields()
+		if err := decoder.Decode(&roundTrip); err != nil {
+			t.Fatalf("strict owner input: %v", err)
+		}
 		response := environmentRequest(t, application, http.MethodPut, "/api/v1/environments/work/draft", uint64(baseRevision), key, body)
 		if response.Code != 200 {
 			t.Fatalf("save: %d %s", response.Code, response.Body.String())
@@ -232,12 +275,12 @@ func TestEnvironmentClientToolAccessPreparedCandidateAndFrozenRoute(t *testing.T
 			for pi := range input.ClientEndpoints[ei].ProtocolPlans {
 				p := &input.ClientEndpoints[ei].ProtocolPlans[pi]
 				p.Revision++
-				p.EgressProfile = profile
+				p.EgressProfile = authoredEgress(t, profile)
 			}
 		}
 	}
 	changed := save(1, reenabledDraft.DraftRevision, "native-egress-unsaved-001")
-	if changed.Candidate.ClientToolAccess.Route.ID != route.ID || changed.Candidate.ClientToolAccess.Route.Revision != 2 || !changed.Candidate.ClientToolAccess.Route.EgressProfile.Equal(profile) {
+	if changed.Candidate.ClientToolAccess.Route.ID != route.ID || changed.Candidate.ClientToolAccess.Route.Revision != 2 || changed.Candidate.ClientToolAccess.Route.EgressProfile != authoredEgress(t, profile) {
 		t.Fatal("unsaved egress was ignored or route identity replaced")
 	}
 	publish(changed.DraftRevision, "native-egress-")
@@ -313,7 +356,7 @@ func TestEnvironmentClientToolAccessPreparedCandidateAndFrozenRoute(t *testing.T
 	p.Destination.Upstream.Routes[0].AccountPolicy.FixedAccountID = "account.native.two"
 	p.Destination.Upstream.Routes[0].AccountPolicy.Accounts = []environment.RouteAccountReference{{ID: "account.native.two", Revision: 1, DisplayName: "account.native.two"}}
 	otherAccount := save(3, managed.DraftRevision, "native-model-account-two")
-	if managed.Candidate.ClientToolAccess.Route.CredentialOwner != "original_client" || otherAccount.Candidate.ClientToolAccess.Route.CredentialOwner != "original_client" || otherAccount.Candidate.ClientToolAccess.Route.TargetOrigin.String() != "https://chatgpt.com" || !otherAccount.Candidate.ClientToolAccess.Route.EgressProfile.Equal(profile) {
+	if managed.Candidate.ClientToolAccess.Route.CredentialOwner != "original_client" || otherAccount.Candidate.ClientToolAccess.Route.CredentialOwner != "original_client" || otherAccount.Candidate.ClientToolAccess.Route.TargetOrigin.String() != "https://chatgpt.com" || otherAccount.Candidate.ClientToolAccess.Route.EgressProfile != authoredEgress(t, profile) {
 		t.Fatal("model account altered native owner/egress")
 	}
 	historical := environmentRequest(t, application, http.MethodGet, "/api/v1/environments/work/revisions/1", 0, "", nil)

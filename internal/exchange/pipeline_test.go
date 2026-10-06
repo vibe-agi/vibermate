@@ -2409,6 +2409,7 @@ func TestShutdownCancelsAndDrainsActiveFrozenRequest(t *testing.T) {
 }
 
 type testPlanOptions struct {
+	choice             *egressprofile.Choice
 	originalAccount    bool
 	clientProtocol     environment.ClientProtocol
 	chatGPTClient      bool
@@ -2559,10 +2560,13 @@ func mustEnvironmentRequestPlan(t *testing.T, options testPlanOptions) environme
 				ClientProtocol:      clientProtocol,
 				ClientAdapterPolicy: environment.ClientAdapterPolicy{ID: "adapter.anthropic", Revision: 2},
 				Destination:         destination,
-				EgressProfile:       egressprofile.Direct(),
+				EgressProfile:       authoredEgress(t, egressprofile.Direct()),
 				Transforms:          transforms,
 			}},
 		}},
+	}
+	if options.choice != nil {
+		aggregate.ClientEndpoints[0].ProtocolPlans[0].EgressProfile = *options.choice
 	}
 	compiler := mustEnvironmentCompiler(t, catalog)
 	snapshot, err := compiler.Compile(aggregate)
@@ -2705,6 +2709,18 @@ func mustClientRequestWithOptionsAndHTTPProtocol(
 	options ...ClientRequestOption,
 ) ClientRequest {
 	t.Helper()
+	if plan.PreservesOriginalDestination() || plan.UsesOriginalAccount() {
+		if profile, explicit := plan.EgressChoice().ExplicitProfile(); explicit {
+			resolved, err := egressprofile.RestoreResolved(profile, egressprofile.SelectionFlow, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			plan, err = plan.WithResolvedEgress(resolved)
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
 	operation := plan.Operation()
 	evidence, err := NewClientOperationEvidence(
 		operation.ID(), operation.Revision(), http.MethodPost, operation.PathPattern(), "",

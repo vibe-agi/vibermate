@@ -1486,6 +1486,35 @@ CREATE TABLE native_tool_inbound(
   PRIMARY KEY(session_id,rpc_id_digest,request_kind)
 ) STRICT;
 
+CREATE TABLE native_tool_binding_egress(
+  operation_id TEXT NOT NULL PRIMARY KEY REFERENCES native_tool_bindings(operation_id) ON DELETE CASCADE CHECK(length(operation_id) = 32 AND operation_id NOT GLOB '*[^0-9a-f]*'),
+  binding_digest BLOB NOT NULL CHECK(length(binding_digest) = 32),
+  binding_version INTEGER NOT NULL CHECK(binding_version = 2),
+  profile_json TEXT NOT NULL CHECK(length(CAST(profile_json AS BLOB)) BETWEEN 2 AND 16384 AND json_valid(profile_json)),
+  selection_source TEXT NOT NULL CHECK(selection_source IN('flow','global','builtin')),
+  default_revision INTEGER NOT NULL CHECK(default_revision BETWEEN 0 AND 9223372036854775807),
+  CHECK((selection_source = 'flow' AND default_revision = 0) OR (selection_source IN('global','builtin') AND default_revision > 0)),
+  CHECK(selection_source <> 'builtin' OR (json_extract(profile_json,'$.id') = 'profile.direct' AND json_extract(profile_json,'$.revision') = 1))
+) STRICT;
+
+CREATE TRIGGER native_tool_binding_egress_insert_guard
+BEFORE INSERT ON native_tool_binding_egress
+WHEN NOT EXISTS(SELECT 1 FROM native_tool_bindings b JOIN native_tool_operations o ON o.operation_id=b.operation_id
+  WHERE b.operation_id=NEW.operation_id AND b.binding_digest=NEW.binding_digest AND o.state='received')
+BEGIN
+  SELECT RAISE(ABORT,'effective egress differs from newly owned binding');
+END;
+CREATE TRIGGER native_tool_binding_egress_immutable
+BEFORE UPDATE ON native_tool_binding_egress BEGIN
+  SELECT RAISE(ABORT,'immutable native binding egress');
+END;
+CREATE TRIGGER native_tool_binding_egress_delete_guard
+BEFORE DELETE ON native_tool_binding_egress
+WHEN EXISTS(SELECT 1 FROM native_tool_operations WHERE operation_id=OLD.operation_id)
+BEGIN
+  SELECT RAISE(ABORT,'effective egress is owned by operation');
+END;
+
 CREATE TABLE native_tool_approvals(
   approval_id TEXT NOT NULL PRIMARY KEY CHECK(length(approval_id) = 32 AND approval_id NOT GLOB '*[^0-9a-f]*'),
   operation_id TEXT NOT NULL UNIQUE REFERENCES native_tool_operations(operation_id) ON DELETE CASCADE CHECK(length(operation_id) = 32 AND operation_id NOT GLOB '*[^0-9a-f]*'),

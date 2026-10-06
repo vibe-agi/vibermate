@@ -21,6 +21,9 @@ func (r *nativeToolRepository) nativeExecutionAuthority(ctx context.Context, tx 
 	if err != nil {
 		return b, nativeScope{}, environment.Environment{}, err
 	}
+	if b.bindingVersion != 2 || b.resolved.Validate() != nil {
+		return b, nativeScope{}, environment.Environment{}, nativetool.ErrDenied
+	}
 	scope, err := nativeActiveScope(ctx, tx, op.Capture, b.owner, now)
 	if err != nil {
 		return b, scope, environment.Environment{}, err
@@ -143,7 +146,11 @@ func nativeAuditAttempt(ctx context.Context, tx *sql.Tx, op nativetool.Operation
 	if op.Kind != nativetool.RequestGetStream && op.Kind != nativetool.RequestDeleteSession {
 		payload = egressaudit.PayloadClientData
 	}
-	return egressaudit.New(egressaudit.NewInput{ID: attempt, ConnectionID: connection, Purpose: egressaudit.PurposeClientToolService, PayloadClass: payload, Parent: egressaudit.ParentRef{Kind: egressaudit.ParentClientOperation, ID: string(op.ID)}, Caller: egressaudit.CallerCore, TargetOrigin: op.TargetOrigin, Decision: egressaudit.DecisionRef{PolicyID: op.EnvironmentID.String(), PolicyRevision: uint64(op.EnvironmentRevision), Authority: egressaudit.AuthorityEnvironment, RuleID: route.ID.String(), ProxyID: route.EgressProfile.ID.String(), ProxyRevision: uint64(route.EgressProfile.Revision)}, StartedAt: now})
+	if b.resolved.Validate() != nil || b.bindingVersion != 2 {
+		return egressaudit.Attempt{}, nativetool.ErrInvalid
+	}
+	profile := b.resolved.Profile()
+	return egressaudit.New(egressaudit.NewInput{ID: attempt, ConnectionID: connection, Purpose: egressaudit.PurposeClientToolService, PayloadClass: payload, Parent: egressaudit.ParentRef{Kind: egressaudit.ParentClientOperation, ID: string(op.ID)}, Caller: egressaudit.CallerCore, TargetOrigin: op.TargetOrigin, Decision: egressaudit.DecisionRef{PolicyID: op.EnvironmentID.String(), PolicyRevision: uint64(op.EnvironmentRevision), Authority: egressaudit.AuthorityEnvironment, RuleID: route.ID.String(), ProxyID: profile.ID.String(), ProxyRevision: uint64(profile.Revision), SelectionSource: b.resolved.Source(), DefaultRevision: b.resolved.DefaultRevision()}, StartedAt: now})
 }
 
 func nativeApprovalForStart(ctx context.Context, tx *sql.Tx, op nativetool.Operation, b nativeBindingRow, required, consumed bool, now time.Time) error {

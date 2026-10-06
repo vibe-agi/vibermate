@@ -8,12 +8,14 @@ import (
 	"time"
 
 	"github.com/vibe-agi/vibermate/internal/captureidentity"
+	"github.com/vibe-agi/vibermate/internal/egressprofile"
 	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/originidentity"
 	"github.com/vibe-agi/vibermate/internal/upstreamservice"
 )
 
 type Options struct {
+	EgressDefaults   egressprofile.Resolver
 	Repository       Repository
 	Environments     environment.SnapshotResolver
 	Activity         CaptureActivity
@@ -61,6 +63,7 @@ func newCaptureState(reference captureidentity.Reference) *captureState {
 }
 
 type Manager struct {
+	egressDefaults   egressprofile.Resolver
 	repository       Repository
 	environments     environment.SnapshotResolver
 	activity         CaptureActivity
@@ -83,7 +86,8 @@ func NewManager(options Options) (*Manager, error) {
 		return nil, errors.New("Capture assignment dependencies are incomplete")
 	}
 	return &Manager{
-		repository: options.Repository, environments: options.Environments,
+		egressDefaults: options.EgressDefaults,
+		repository:     options.Repository, environments: options.Environments,
 		activity: options.Activity, clock: options.Clock,
 		nativeRevocation: options.NativeRevocation,
 		lifecycle:        newLifecycleGate(), states: make(map[string]*captureState),
@@ -598,6 +602,24 @@ func (manager *Manager) BeginRequest(
 					}
 				}
 			}
+		}
+	}
+	if plan.PreservesOriginalDestination() || plan.UsesOriginalAccount() {
+		var resolved egressprofile.Resolved
+		choice := plan.EgressChoice()
+		if manager.egressDefaults != nil {
+			resolved, err = manager.egressDefaults.Resolve(ctx, egressprofile.Inherit(), choice)
+		} else if profile, explicit := choice.ExplicitProfile(); explicit {
+			resolved, err = egressprofile.RestoreResolved(profile, egressprofile.SelectionFlow, 0)
+		} else {
+			err = egressprofile.ErrInvalidProfile
+		}
+		if err == nil {
+			plan, err = plan.WithResolvedEgress(resolved)
+		}
+		if err != nil {
+			release()
+			return nil, err
 		}
 	}
 	return &RequestLease{assignment: assignment, plan: plan, finish: release}, nil

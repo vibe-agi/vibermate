@@ -47,8 +47,11 @@ func (manager *Manager) BindEgressDefaults(defaults egressprofile.Resolver) erro
 	return nil
 }
 
-func accountEgressChoices(account Account, flow egressprofile.ProfileRevision) (egressprofile.Choice, egressprofile.Choice, error) {
-	accountChoice, flowChoice := egressprofile.Inherit(), egressprofile.Inherit()
+func accountEgressChoices(account Account, flow egressprofile.Choice) (egressprofile.Choice, egressprofile.Choice, error) {
+	if flow.Validate() != nil {
+		return egressprofile.Choice{}, egressprofile.Choice{}, ErrInvalidAccount
+	}
+	accountChoice, flowChoice := egressprofile.Inherit(), flow
 	var err error
 	if account.EgressProfile != (egressprofile.ProfileRevision{}) {
 		accountChoice, err = egressprofile.Explicit(account.EgressProfile)
@@ -56,16 +59,10 @@ func accountEgressChoices(account Account, flow egressprofile.ProfileRevision) (
 			return egressprofile.Choice{}, egressprofile.Choice{}, err
 		}
 	}
-	if flow != (egressprofile.ProfileRevision{}) {
-		flowChoice, err = egressprofile.Explicit(flow)
-		if err != nil {
-			return egressprofile.Choice{}, egressprofile.Choice{}, err
-		}
-	}
 	return accountChoice, flowChoice, nil
 }
 
-func (manager *Manager) resolveTargetEgress(ctx context.Context, account Account, flow egressprofile.ProfileRevision, target originidentity.ProviderOrigin) (egressprofile.Resolved, error) {
+func (manager *Manager) resolveTargetEgress(ctx context.Context, account Account, flow egressprofile.Choice, target originidentity.ProviderOrigin) (egressprofile.Resolved, error) {
 	if err := target.Validate(); err != nil {
 		return egressprofile.Resolved{}, err
 	}
@@ -100,7 +97,7 @@ func (manager *Manager) resolveTargetEgress(ctx context.Context, account Account
 	return egressprofile.RestoreResolved(egressprofile.Direct(), egressprofile.SelectionTransport, 0)
 }
 
-func (manager *Manager) resolveEgress(ctx context.Context, account Account, flow egressprofile.ProfileRevision) (egressprofile.Resolved, error) {
+func (manager *Manager) resolveEgress(ctx context.Context, account Account, flow egressprofile.Choice) (egressprofile.Resolved, error) {
 	accountChoice, flowChoice, err := accountEgressChoices(account, flow)
 	if err != nil {
 		return egressprofile.Resolved{}, err

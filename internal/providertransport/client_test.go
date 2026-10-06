@@ -189,6 +189,15 @@ func TestClientPassthroughPreservesClientCredentialsOnlyForExactOrigin(
 		t.Fatal(err)
 	}
 	t.Cleanup(action.Release)
+	profile := egressprofile.ProfileRevision{ID: "profile.company", Revision: 3, DisplayName: "Company", PublishedAt: time.Unix(0, 0).UTC(), Policy: egressnetwork.Policy{
+		Proxy: egressnetwork.ProxyPolicy{
+			Kind:     egressnetwork.ProxySOCKS5,
+			Endpoint: "proxy.example:1080",
+		},
+		Resolver: egressnetwork.ResolverPolicy{
+			Kind: egressnetwork.ResolverSystem, Transport: egressnetwork.ResolverTransportDirect,
+		},
+	}}
 	frozen, err := NewRequest(RequestOptions{
 		RequestID:       "original-client-auth",
 		ExchangeID:      "exchange-original-client-auth",
@@ -217,15 +226,8 @@ func TestClientPassthroughPreservesClientCredentialsOnlyForExactOrigin(
 		WireProfile:       plan.wireProfile,
 		ClientProtocol:    wireprofile.ApplicationProtocolHTTP1,
 		ClientUserAgent:   "client-cli/1.0",
-		EgressProfile: egressprofile.ProfileRevision{ID: "profile.company", Revision: 3, DisplayName: "Company", PublishedAt: time.Unix(0, 0).UTC(), Policy: egressnetwork.Policy{
-			Proxy: egressnetwork.ProxyPolicy{
-				Kind:     egressnetwork.ProxySOCKS5,
-				Endpoint: "proxy.example:1080",
-			},
-			Resolver: egressnetwork.ResolverPolicy{
-				Kind: egressnetwork.ResolverSystem, Transport: egressnetwork.ResolverTransportDirect,
-			},
-		}},
+		EgressProfile:     profile,
+		ResolvedEgress:    testFlowResolved(t, profile),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -320,6 +322,7 @@ func TestClientPassthroughRejectsRedirectWithoutReturningLocationOrResponse(
 	t.Cleanup(action.Release)
 	frozen, err := NewRequest(RequestOptions{
 		RequestID:       "original-redirect",
+		ResolvedEgress:  testFlowResolved(t, egressprofile.Direct()),
 		EgressProfile:   egressprofile.Direct(),
 		ExchangeID:      "exchange-original-redirect",
 		ParentAttemptID: "attempt-original-redirect",

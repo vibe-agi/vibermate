@@ -9,6 +9,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/captureassignment"
 	"github.com/vibe-agi/vibermate/internal/manualcapture"
 	"github.com/vibe-agi/vibermate/internal/protocolcore"
+	"strings"
 	"testing"
 	"time"
 
@@ -499,27 +500,57 @@ func TestNativeStartRejectsSubstitutedBindingEvidence(t *testing.T) {
 				nativeReceiveBind(t, repo, corruptID, cancel, now)
 				assignment = fmt.Sprintf("cancel_rpc_id_digest=X'%x'", otherRPC[:])
 			}
-			// Inject corrupt stored evidence without weakening the production immutable trigger.
-			if _, err := store.database.Exec(`CREATE TEMP TABLE binding_original AS SELECT * FROM native_tool_bindings WHERE operation_id=?`, corruptID); err != nil {
+			// Synthetic on-disk corruption only: preserve the actual owned egress
+			// row and restore immutability before any production Start can run.
+			tx, err := store.database.BeginTx(ctx, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer tx.Rollback()
+			var immutableSQL string
+			if err := tx.QueryRow(`SELECT sql FROM sqlite_schema WHERE name='native_tool_binding_immutable'`).Scan(&immutableSQL); err != nil {
+				t.Fatal(err)
+			}
+			field, _, _ := strings.Cut(assignment, "=")
+			var original any
+			if err := tx.QueryRow(`SELECT `+field+` FROM native_tool_bindings WHERE operation_id=?`, corruptID).Scan(&original); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := tx.Exec(`DROP TRIGGER native_tool_binding_immutable`); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := tx.Exec(`UPDATE native_tool_bindings SET `+assignment+` WHERE operation_id=?`, corruptID); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := tx.Exec(immutableSQL); err != nil {
+				t.Fatal(err)
+			}
+			if err := tx.Commit(); err != nil {
 				t.Fatal(err)
 			}
 			defer func() {
-				store.database.Exec(`DELETE FROM native_tool_bindings WHERE operation_id=?`, corruptID)
-				store.database.Exec(`INSERT INTO native_tool_bindings SELECT * FROM binding_original`)
-				store.database.Exec(`DROP TABLE binding_original`)
+				restore, err := store.database.BeginTx(ctx, nil)
+				if err != nil {
+					t.Error(err)
+					return
+				}
+				defer restore.Rollback()
+				if _, err := restore.Exec(`DROP TRIGGER native_tool_binding_immutable`); err != nil {
+					t.Error(err)
+					return
+				}
+				if _, err := restore.Exec(`UPDATE native_tool_bindings SET `+field+`=? WHERE operation_id=?`, original, corruptID); err != nil {
+					t.Error(err)
+					return
+				}
+				if _, err := restore.Exec(immutableSQL); err != nil {
+					t.Error(err)
+					return
+				}
+				if err := restore.Commit(); err != nil {
+					t.Error(err)
+				}
 			}()
-			if _, err := store.database.Exec(`CREATE TEMP TABLE binding_corrupt AS SELECT * FROM binding_original`); err != nil {
-				t.Fatal(err)
-			}
-			if _, err := store.database.Exec(`UPDATE binding_corrupt SET ` + assignment); err != nil {
-				t.Fatal(err)
-			}
-			if _, err := store.database.Exec(`DELETE FROM native_tool_bindings WHERE operation_id=?`, corruptID); err != nil {
-				t.Fatal(err)
-			}
-			if _, err := store.database.Exec(`INSERT INTO native_tool_bindings SELECT * FROM binding_corrupt`); err != nil {
-				t.Fatal(err)
-			}
 			if r, err := repo.Start(ctx, corruptID, "corrupt-evidence", rev, now); err == nil || r.OperationID() != "" {
 				t.Fatalf("substituted binding granted receipt: %s %v", r.OperationID(), err)
 			}

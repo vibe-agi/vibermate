@@ -186,7 +186,7 @@ func newNativeFixtureMode(t *testing.T, mode environment.ToolPolicyMode, recordi
 			t.Fatal(err)
 		}
 	}
-	e := environment.Environment{ID: "native.synthetic", Name: "Synthetic native", State: environment.StateActive, Revision: 1, ContentRecording: recording, PolicySet: &environment.PolicySet{ToolMode: mode}, ClientToolAccess: &environment.ClientToolAccessPolicy{Enabled: true, Route: &environment.ClientToolRoute{ID: "native.synthetic.route", Revision: 1, TargetOrigin: origin, Path: environment.ClientToolMCPPath, CredentialOwner: environment.ClientToolCredentialOriginal, Contract: environment.ClientToolContractCodexLegacy, EgressProfile: egressprofile.Direct()}}}
+	e := environment.Environment{ID: "native.synthetic", Name: "Synthetic native", State: environment.StateActive, Revision: 1, ContentRecording: recording, PolicySet: &environment.PolicySet{ToolMode: mode}, ClientToolAccess: &environment.ClientToolAccessPolicy{Enabled: true, Route: &environment.ClientToolRoute{ID: "native.synthetic.route", Revision: 1, TargetOrigin: origin, Path: environment.ClientToolMCPPath, CredentialOwner: environment.ClientToolCredentialOriginal, Contract: environment.ClientToolContractCodexLegacy, EgressProfile: authoredEgress(t, egressprofile.Direct())}}}
 	if settings != nil {
 		if settings.shared {
 			e.ClientEndpoints = testEnvironmentForDialectRevision(t, protocolspec.DialectOpenAIResponses, "synthetic-model", 1, 1).ClientEndpoints

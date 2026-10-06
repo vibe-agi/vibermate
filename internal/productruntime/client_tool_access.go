@@ -36,16 +36,17 @@ func (b clientToolAccessBuilder) prepare(ctx context.Context, candidate environm
 		return environment.ClientToolAccessPolicy{}, unsupported
 	}
 	origin, _ := originidentity.ParseProviderOrigin("https://chatgpt.com")
-	var selected *egressprofile.ProfileRevision
+	var selected *egressprofile.Choice
 	for _, endpoint := range candidate.ClientEndpoints {
 		if endpoint.ClientOrigin.String() != origin.String() {
 			continue
 		}
 		for _, plan := range endpoint.ProtocolPlans {
-			profile := plan.EgressProfile
-			if profile.Equal(egressprofile.Direct()) {
-				profile = egressprofile.Direct()
-			} else {
+			choice := plan.EgressProfile
+			if choice.Validate() != nil {
+				return environment.ClientToolAccessPolicy{}, unsupported
+			}
+			if profile, explicit := choice.ExplicitProfile(); explicit && !profile.Equal(egressprofile.Direct()) {
 				if b.profiles == nil {
 					return environment.ClientToolAccessPolicy{}, unsupported
 				}
@@ -53,12 +54,11 @@ func (b clientToolAccessBuilder) prepare(ctx context.Context, candidate environm
 				if err != nil || !published.Equal(profile) {
 					return environment.ClientToolAccessPolicy{}, unsupported
 				}
-				profile = published
 			}
-			if profile.Validate() != nil || selected != nil && !selected.Equal(profile) {
+			if selected != nil && *selected != choice {
 				return environment.ClientToolAccessPolicy{}, unsupported
 			}
-			selected = &profile
+			selected = &choice
 		}
 	}
 	if selected == nil {
@@ -88,7 +88,7 @@ func (b clientToolAccessBuilder) prepare(ctx context.Context, candidate environm
 			return environment.ClientToolAccessPolicy{}, unsupported
 		}
 		route.ID, route.Revision = old.ID, old.Revision
-		if !old.EgressProfile.Equal(route.EgressProfile) {
+		if old.EgressProfile != route.EgressProfile {
 			if route.Revision == environment.MaxRevision {
 				return environment.ClientToolAccessPolicy{}, unsupported
 			}

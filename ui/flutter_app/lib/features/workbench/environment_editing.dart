@@ -350,7 +350,7 @@ EnvironmentProtocolPlan _originalProtocolPlan(
       revision: 1,
     ),
     destination: const EnvironmentDestination.original(),
-    egressProfile: EgressProfileRevision.direct,
+    egressProfile: EgressChoice.inherit,
     transforms: const [],
     pluginBindings: const [],
   );
@@ -469,7 +469,7 @@ EnvironmentProtocolPlan _protocolPlanFor(
         routes: [route],
       ),
     ),
-    egressProfile: EgressProfileRevision.direct,
+    egressProfile: EgressChoice.inherit,
     transforms: const [],
     pluginBindings: const [],
   );

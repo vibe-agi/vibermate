@@ -1107,7 +1107,7 @@ func assemblyEnvironment(
 				ID: planID, Revision: revision, ClientProtocol: client.ClientProtocol,
 				ClientAdapterPolicy: environment.ClientAdapterPolicy{ID: "acceptance.adapter", Revision: revision},
 				Destination:         destination,
-				EgressProfile:       egressprofile.Direct(),
+				EgressProfile:       egressprofile.Inherit(),
 			}},
 		}},
 	}, nil

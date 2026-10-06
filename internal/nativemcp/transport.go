@@ -89,8 +89,12 @@ func outbound(ctx context.Context, incoming *http.Request, body []byte, plan env
 	return r, nil
 }
 func nativeProbe(plan environment.ClientToolPlan) offlinehold.ProbeTarget {
+	resolved, err := plan.ResolvedEgress()
+	if err != nil {
+		return offlinehold.ProbeTarget{}
+	}
 	route := plan.Route()
-	return offlinehold.ProbeTarget{Kind: offlinehold.EgressAuxiliary, Transport: offlinehold.ProbeTransportStrictTLS, TargetRef: route.ID.String(), NetworkOrigin: route.TargetOrigin.String(), HTTPAuthority: route.TargetOrigin.HTTPAuthority(), TLSServerName: route.TargetOrigin.Host(), PlanRevision: uint64(plan.EnvironmentRevision()), PlanDigest: plan.EnvironmentDigest().String(), EgressPolicy: route.EgressProfile.Policy}
+	return offlinehold.ProbeTarget{Kind: offlinehold.EgressAuxiliary, Transport: offlinehold.ProbeTransportStrictTLS, TargetRef: route.ID.String(), NetworkOrigin: route.TargetOrigin.String(), HTTPAuthority: route.TargetOrigin.HTTPAuthority(), TLSServerName: route.TargetOrigin.Host(), PlanRevision: uint64(plan.EnvironmentRevision()), PlanDigest: plan.EnvironmentDigest().String(), EgressPolicy: resolved.Profile().Policy}
 }
 
 // A receipt is consumed once in this executor even when verification fails.
@@ -157,7 +161,12 @@ func (e *executor) sendClaimed(ctx context.Context, request *http.Request, plan 
 		result.err = err
 		return result
 	}
+	resolved, err := plan.ResolvedEgress()
+	if err != nil {
+		result.err = err
+		return result
+	}
 	result.phase = nativeSendTransportEntered
-	result.response, result.err = e.dependencies.Transport.RoundTrip(request, plan.Route().EgressProfile.Policy)
+	result.response, result.err = e.dependencies.Transport.RoundTrip(request, resolved.Profile().Policy)
 	return result
 }

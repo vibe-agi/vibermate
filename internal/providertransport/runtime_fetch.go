@@ -528,8 +528,9 @@ func (client *Client) beginRuntimeAudit(
 		input.ConnectionID = spec.captured.connectionID
 		input.PayloadClass = egressaudit.PayloadControl
 		input.Parent = egressaudit.ParentRef{Kind: egressaudit.ParentClientOperation, ID: spec.captured.operationID}
+		profile := spec.resolved.Profile()
 		input.Decision = egressaudit.DecisionRef{PolicyID: string(plan.EnvironmentID()), PolicyRevision: uint64(plan.EnvironmentRevision()),
-			Authority: egressaudit.AuthorityEnvironment, RuleID: string(route.ID()), ProxyID: string(plan.EgressProfile().ID)}
+			Authority: egressaudit.AuthorityEnvironment, RuleID: string(route.ID()), ProxyID: profile.ID.String(), ProxyRevision: uint64(profile.Revision)}
 		input.Decision.SelectionSource, input.Decision.DefaultRevision = spec.resolved.Source(), spec.resolved.DefaultRevision()
 	}
 	if spec.account.EgressProfile.ID != "" {

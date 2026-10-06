@@ -100,6 +100,40 @@ func TestManualRefreshRequiresOneFrozenGlobalEgress(t *testing.T) {
 	}
 }
 
+func TestAccountOverrideDoesNotMakeMissingAuthoredChoiceValid(t *testing.T) {
+	ctx := t.Context()
+	manager, err := newTestAccountManager(ctx, &memoryRepository{accounts: map[ID]Account{}}, newMemorySecrets(), testEndpoints(t), BuiltInRealms(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Shutdown(context.Background())
+	value, err := newTestCredentialValue(t, "synthetic-choice-validation")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer value.Destroy()
+	view, err := manager.Create(ctx, CreateCommand{ID: "choice-invalid", DisplayName: "Synthetic", UpstreamEndpointID: upstreamendpoint.ChatGPTOfficialID, Driver: providerauth.StaticHeaderDriverRef(), Secret: value})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.BindEgressProfiles(settingsProfiles{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.SetSettings(ctx, SettingsCommand{ID: view.Account.ID, ExpectedRevision: 1, EgressProfile: egressprofile.Direct()}); err != nil {
+		t.Fatal(err)
+	}
+	account := view.Account
+	// Missing authored configuration is not the explicitly typed absence
+	// owned/endpoint operations will supply. No alternative account is invented.
+	lease, err := manager.acquire(ctx, accountLeaseScope{id: account.ID, accountRevision: account.Revision, realmID: account.RealmID, ownerOperation: true, upstreamEndpointOrigin: account.Origin})
+	if lease != nil {
+		lease.Release()
+	}
+	if err == nil {
+		t.Fatal("explicit account override masked missing authored choice")
+	}
+}
+
 func TestAccountAdmissionRejectsUnavailableInheritedDefaultButNotExplicitExit(t *testing.T) {
 	for _, bound := range []bool{false, true} {
 		for _, choice := range []string{"inherit", "account", "flow"} {
@@ -134,9 +168,9 @@ func TestAccountAdmissionRejectsUnavailableInheritedDefaultButNotExplicitExit(t 
 					}
 				}
 				account := view.Account
-				scope := accountLeaseScope{id: account.ID, accountRevision: account.Revision, realmID: account.RealmID, ownerOperation: true, upstreamEndpointOrigin: account.Origin}
+				scope := accountLeaseScope{egressProfile: egressprofile.Inherit(), id: account.ID, accountRevision: account.Revision, realmID: account.RealmID, ownerOperation: true, upstreamEndpointOrigin: account.Origin}
 				if choice == "flow" {
-					scope.egressProfile = egressprofile.Direct()
+					scope.egressProfile = authoredEgress(t, egressprofile.Direct())
 				}
 				lease, err := manager.acquire(ctx, scope)
 				if choice == "inherit" {

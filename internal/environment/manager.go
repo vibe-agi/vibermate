@@ -363,11 +363,7 @@ func (manager *Manager) GetRevision(ctx context.Context, id EnvironmentID, revis
 		return EnvironmentSnapshot{}, ErrInvalidEnvironment
 	}
 	if id == SystemTransparentID {
-		snapshot := manager.system.clone()
-		if revision != snapshot.Revision() {
-			return EnvironmentSnapshot{}, fmt.Errorf("%w: environmentId=%q revision=%d", ErrEnvironmentNotFound, id, revision)
-		}
-		return snapshot, nil
+		return manager.compiler.CompileSystemTransparentRevision(revision)
 	}
 	aggregate, exists, err := manager.repository.LoadRevision(ctx, id, revision)
 	if err != nil {

@@ -51,7 +51,7 @@ func (manager *Manager) RefreshCredential(ctx context.Context, id ID, expectedEp
 	manager.beginInFlightLocked()
 	manager.mu.Unlock()
 	defer manager.finishOperation(id, accountOperationRefresh)
-	resolved, err := manager.resolveEgress(ctx, account, egressprofile.ProfileRevision{})
+	resolved, err := manager.resolveEgress(ctx, account, egressprofile.Inherit())
 	if err != nil {
 		return View{}, err
 	}

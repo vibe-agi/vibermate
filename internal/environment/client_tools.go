@@ -86,7 +86,7 @@ type ClientToolRoute struct {
 	TargetOrigin    originidentity.ProviderOrigin `json:"targetOrigin"`
 	Path            string                        `json:"path"`
 	CredentialOwner ClientToolCredentialOwner     `json:"credentialOwner"`
-	EgressProfile   egressprofile.ProfileRevision `json:"egressProfile"`
+	EgressProfile   egressprofile.Choice          `json:"egressProfile"`
 	Contract        ClientToolContract            `json:"contract"`
 }
 
@@ -131,6 +131,7 @@ func cloneClientToolAccess(policy *ClientToolAccessPolicy) *ClientToolAccessPoli
 // ClientToolPlan can be constructed only from a validated immutable snapshot.
 // It carries no model codec, selected account, workspace or send capability.
 type ClientToolPlan struct {
+	resolvedEgress      egressprofile.Resolved
 	environmentID       EnvironmentID
 	environmentRevision Revision
 	environmentDigest   CandidateDigest

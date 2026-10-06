@@ -77,7 +77,11 @@ func TestPendingPreviewCapacityDeniesWithoutEvictingPendingIntent(t *testing.T) 
 		t.Fatal(err)
 	}
 	r.retention = &retentionState{}
-	binding, intents, _, err := e.bindRequest(call, r, s)
+	selected, err := e.operationPlan(context.Background(), r, s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	binding, intents, _, err := e.bindRequest(call, r, s, selected)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -142,7 +146,11 @@ func TestPendingPreviewTotalByteBudget(t *testing.T) {
 		t.Fatal(err)
 	}
 	r.retention = &retentionState{}
-	binding, intents, _, err := e.bindRequest(call, r, session)
+	selected, err := e.operationPlan(context.Background(), r, session)
+	if err != nil {
+		t.Fatal(err)
+	}
+	binding, intents, _, err := e.bindRequest(call, r, session, selected)
 	if err != nil {
 		t.Fatal(err)
 	}

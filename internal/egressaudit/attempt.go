@@ -361,10 +361,16 @@ func NewClientToolAttempt(plan environment.ClientToolPlan, input NewInput) (Atte
 		return Attempt{}, err
 	}
 	route := plan.Route()
+	resolved, err := plan.ResolvedEgress()
+	if err != nil {
+		return Attempt{}, err
+	}
+	profile := resolved.Profile()
 	if input.Purpose != PurposeClientToolService || input.TargetOrigin != route.TargetOrigin.String() ||
 		input.Decision.PolicyID != plan.EnvironmentID().String() || input.Decision.PolicyRevision != uint64(plan.EnvironmentRevision()) ||
-		input.Decision.RuleID != route.ID.String() || input.Decision.ProxyID != route.EgressProfile.ID.String() ||
-		input.Decision.ProxyRevision != uint64(route.EgressProfile.Revision) || input.Decision.AccountID != "" || input.Decision.AccountSettingsRevision != 0 {
+		input.Decision.RuleID != route.ID.String() || input.Decision.ProxyID != profile.ID.String() ||
+		input.Decision.ProxyRevision != uint64(profile.Revision) || input.Decision.SelectionSource != resolved.Source() ||
+		input.Decision.DefaultRevision != resolved.DefaultRevision() || input.Decision.AccountID != "" || input.Decision.AccountSettingsRevision != 0 {
 		return Attempt{}, errors.New("native tool egress differs from frozen route")
 	}
 	return New(input)

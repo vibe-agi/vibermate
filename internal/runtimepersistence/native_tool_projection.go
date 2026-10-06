@@ -9,12 +9,15 @@ import (
 	"time"
 
 	"github.com/vibe-agi/vibermate/internal/captureidentity"
+	"github.com/vibe-agi/vibermate/internal/egressprofile"
 	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/nativetool"
 	"github.com/vibe-agi/vibermate/internal/originidentity"
 )
 
 type nativeBindingRow struct {
+	resolved                                                      egressprofile.Resolved
+	bindingVersion                                                uint64
 	session                                                       nativetool.ID
 	sessionRevision, generation, owner, assignment, routeRevision uint64
 	catalog                                                       []byte
@@ -71,6 +74,9 @@ func loadNativeBinding(ctx context.Context, tx *sql.Tx, id nativetool.ID) (nativ
 	b.replay = replay
 	if b.cancel != nil && len(b.cancel) != 32 {
 		return b, nativetool.ErrInvalid
+	}
+	if err := loadNativeBindingEgress(ctx, tx, id, &b); err != nil {
+		return b, err
 	}
 	return b, nil
 }

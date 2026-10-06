@@ -119,14 +119,30 @@ func (compiler Compiler) compile(input Environment, kind compilationKind) (Envir
 // authentication or model. Every unrelated destination remains a blind
 // tunnel.
 func (compiler Compiler) CompileSystemTransparent() (EnvironmentSnapshot, error) {
-	definition, err := systemTransparentDefinition()
+	return compiler.CompileSystemTransparentRevision(2)
+}
+
+// This privileged path reconstructs only the closed, immutable builtin revisions.
+// Ordinary Restore continues to reject system-owned configuration.
+func (compiler Compiler) CompileSystemTransparentRevision(revision Revision) (EnvironmentSnapshot, error) {
+	definition, err := systemTransparentDefinition(revision)
 	if err != nil {
 		return EnvironmentSnapshot{}, err
 	}
 	return compiler.compile(definition, compileSystem)
 }
 
-func systemTransparentDefinition() (Environment, error) {
+func systemTransparentDefinition(revision Revision) (Environment, error) {
+	if revision != 1 && revision != 2 {
+		return Environment{}, ErrEnvironmentNotFound
+	}
+	direct, err := egressprofile.Explicit(egressprofile.Direct())
+	if err != nil {
+		return Environment{}, err
+	}
+	if revision == 2 {
+		direct = egressprofile.Inherit()
+	}
 	type entry struct {
 		endpointID string
 		planID     string
@@ -154,21 +170,21 @@ func systemTransparentDefinition() (Environment, error) {
 			return Environment{}, fmt.Errorf("%w: system client origin", err)
 		}
 		endpoints = append(endpoints, ClientEndpoint{
-			ID: ClientEndpointID(entry.endpointID), Revision: 1, ClientOrigin: origin,
+			ID: ClientEndpointID(entry.endpointID), Revision: revision, ClientOrigin: origin,
 			ProtocolPlans: []ClientProtocolPlan{{
-				ID: ClientProtocolPlanID(entry.planID), Revision: 1,
+				ID: ClientProtocolPlanID(entry.planID), Revision: revision,
 				ClientProtocol: entry.protocol,
 				ClientAdapterPolicy: ClientAdapterPolicy{
 					ID: "adapter." + entry.planID, Revision: 1,
 				},
 				Destination:   DestinationPlan{Kind: DestinationKindOriginal},
-				EgressProfile: egressprofile.Direct(),
+				EgressProfile: direct,
 			}},
 		})
 	}
 	return Environment{
 		ID: SystemTransparentID, Name: "System Transparent", State: StateActive,
-		Revision: 1, ClientEndpoints: endpoints,
+		Revision: revision, ClientEndpoints: endpoints,
 		ContentRecording: DefaultContentRecordingPolicy(),
 	}, nil
 }
@@ -574,7 +590,7 @@ func validateConnectionBindingShape(binding ConnectionBinding) error {
 
 func (snapshot EnvironmentSnapshot) validate() error {
 	if snapshot.system {
-		expected, definitionErr := systemTransparentDefinition()
+		expected, definitionErr := systemTransparentDefinition(snapshot.Revision())
 		expected, normalizeErr := normalizeSystem(expected)
 		expectedJSON, expectedErr := canonicalSystemJSON(expected)
 		actualJSON, actualErr := canonicalSystemJSON(snapshot.aggregate)

@@ -286,7 +286,7 @@ type ClientProtocolPlan struct {
 	ClientProtocol      ClientProtocol                  `json:"clientProtocol"`
 	ClientAdapterPolicy ClientAdapterPolicy             `json:"clientAdapterPolicy"`
 	Destination         DestinationPlan                 `json:"destination"`
-	EgressProfile       egressprofile.ProfileRevision   `json:"egressProfile"`
+	EgressProfile       egressprofile.Choice            `json:"egressProfile"`
 	Transforms          []codelibrary.TransformRevision `json:"transforms"`
 	PluginBindings      []PluginBinding                 `json:"pluginBindings"`
 }

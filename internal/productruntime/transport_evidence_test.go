@@ -53,10 +53,14 @@ func TestActualCleartextRequestPresentationIsAcceptedByActivity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	resolved, err := egressprofile.RestoreResolved(egressprofile.Direct(), egressprofile.SelectionFlow, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
 	request, err := providertransport.NewRequest(providertransport.RequestOptions{
 		RequestID: "presentation-request", TargetRef: "presentation-target", Target: target, Provenance: provenance, Action: action,
 		Method: http.MethodPost, RelativePath: "v1/responses", Body: []byte(`{"model":"synthetic"}`), CredentialMode: providerauth.CredentialClientPassthrough, PassthroughOrigin: origin,
-		WireProfile: profile, EgressProfile: egressprofile.Direct(), ClientProtocol: wireprofile.ApplicationProtocolHTTP2, ExchangeID: "presentation-exchange", ParentAttemptID: "presentation-parent", EgressAttemptID: "presentation-egress",
+		WireProfile: profile, EgressProfile: egressprofile.Direct(), ResolvedEgress: resolved, ClientProtocol: wireprofile.ApplicationProtocolHTTP2, ExchangeID: "presentation-exchange", ParentAttemptID: "presentation-parent", EgressAttemptID: "presentation-egress",
 	})
 	if err != nil {
 		t.Fatal(err)

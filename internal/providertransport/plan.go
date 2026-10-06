@@ -304,6 +304,7 @@ func (target Target) probeTransportKind() (
 }
 
 type RequestOptions struct {
+	ResolvedEgress    egressprofile.Resolved
 	RequestID         string
 	TargetRef         string
 	Target            Target
@@ -348,6 +349,7 @@ type RequestOptions struct {
 // Request is a frozen provider representation. Its URL, authority, body,
 // credential reference, and auth driver cannot be mutated after construction.
 type Request struct {
+	resolvedEgress  egressprofile.Resolved
 	connectionID    string
 	exchangeID      string
 	parentAttemptID string
@@ -436,9 +438,26 @@ func NewRequest(options RequestOptions) (Request, error) {
 			return Request{}, err
 		}
 		options.EgressProfile = options.AccountRef.EgressProfile
+		if options.ResolvedEgress != (egressprofile.Resolved{}) && options.ResolvedEgress != options.AccountRef.ResolvedEgress {
+			return Request{}, errors.New("provider effective egress differs from account lease")
+		}
+		options.ResolvedEgress = options.AccountRef.ResolvedEgress
 		if err := validateResolvedTarget(options.AccountRef.ResolvedEgress, options.Target); err != nil {
 			return Request{}, err
 		}
+	}
+	if options.CredentialMode == providerauth.CredentialClientPassthrough {
+		resolved := options.ResolvedEgress
+		if resolved.Validate() != nil || resolved.Source() == egressprofile.SelectionAccount {
+			return Request{}, errors.New("client passthrough effective egress is invalid")
+		}
+		if err := validateResolvedTarget(resolved, options.Target); err != nil {
+			return Request{}, err
+		}
+		if options.EgressProfile != (egressprofile.ProfileRevision{}) && !options.EgressProfile.Equal(resolved.Profile()) {
+			return Request{}, errors.New("client passthrough profile differs from frozen effective egress")
+		}
+		options.EgressProfile = resolved.Profile()
 	}
 	if err := options.EgressProfile.Validate(); err != nil {
 		return Request{}, err
@@ -635,6 +654,7 @@ func NewRequest(options RequestOptions) (Request, error) {
 		)
 	}
 	return Request{
+		resolvedEgress:  options.ResolvedEgress,
 		connectionID:    options.ConnectionID,
 		exchangeID:      options.ExchangeID,
 		parentAttemptID: options.ParentAttemptID,

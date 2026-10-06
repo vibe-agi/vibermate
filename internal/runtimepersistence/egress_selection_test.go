@@ -102,12 +102,12 @@ const egressSelectionColumns = `  selection_source TEXT NOT NULL DEFAULT '' CHEC
 `
 
 func TestEgressSelectionRefusesTask1PrivateV2Unchanged(t *testing.T) {
-	prior := strings.Replace(schemaV2SQL, egressSelectionColumns, "", 1)
+	prior := strings.Replace(preNativeEffectiveEgressV2SQL, egressSelectionColumns, "", 1)
 	assertOldEgressSchemaRefusedUnchanged(t, prior, "70bec01ac198ebf108d295a23cc650b70174edb7f69c1c3bf42a1a33cce5bfba")
 }
 
 func TestEgressSelectionRefusesPreFixD3PrivateV2Unchanged(t *testing.T) {
-	prior := strings.Replace(schemaV2SQL, egressSelectionColumns, priorD3EgressSelectionColumns, 1)
+	prior := strings.Replace(preNativeEffectiveEgressV2SQL, egressSelectionColumns, priorD3EgressSelectionColumns, 1)
 	assertOldEgressSchemaRefusedUnchanged(t, prior, "fd70fbdf0d95d2c8f4d5c2a992a218cc11b25b3ab54a900336441c3442fdbffd")
 }
 

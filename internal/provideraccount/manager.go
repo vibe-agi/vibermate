@@ -561,7 +561,7 @@ func (manager *Manager) Acquire(
 ) (providerauth.Lease, error) {
 	if ctx == nil || request.AccountRevision() == 0 || request.RealmID() == "" ||
 		request.UpstreamEndpointID() == "" || request.UpstreamEndpointRevision() == 0 ||
-		request.UpstreamEndpointOrigin().Validate() != nil {
+		request.UpstreamEndpointOrigin().Validate() != nil || request.EgressChoice().Validate() != nil {
 		return nil, ErrInvalidAccount
 	}
 	id, err := NewID(request.AccountID())
@@ -575,7 +575,7 @@ func (manager *Manager) Acquire(
 		upstreamEndpointID:       request.UpstreamEndpointID(),
 		upstreamEndpointRevision: uint64(request.UpstreamEndpointRevision()),
 		upstreamEndpointOrigin:   request.UpstreamEndpointOrigin(),
-		egressProfile:            request.EgressProfile(),
+		egressProfile:            request.EgressChoice(),
 	})
 }
 
@@ -610,6 +610,7 @@ func (manager *Manager) AcquireEndpointCredential(
 		return nil, ErrEndpointMismatch
 	}
 	return manager.acquire(ctx, accountLeaseScope{
+		egressProfile:            egressprofile.Inherit(),
 		id:                       account.ID,
 		accountRevision:          account.Revision,
 		realmID:                  endpoint.RealmID,
@@ -620,7 +621,7 @@ func (manager *Manager) AcquireEndpointCredential(
 }
 
 type accountLeaseScope struct {
-	egressProfile            egressprofile.ProfileRevision
+	egressProfile            egressprofile.Choice
 	ownerOperation           bool
 	id                       ID
 	accountRevision          uint64

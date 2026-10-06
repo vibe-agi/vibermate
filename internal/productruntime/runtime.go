@@ -116,6 +116,7 @@ func Start(ctx context.Context, options Options) (*Runtime, error) {
 
 type runtimeBuildOverrides struct {
 	environment   func(context.Context, environmentBuildRequest) (environmentBuildResult, error)
+	provider      func(providerBuildRequest) (providerRuntime, error)
 	recoverEgress func(context.Context, egressaudit.Repository, time.Time) error
 }
 
@@ -409,6 +410,7 @@ func startWithBuilders(
 
 	nativeRevoker := &nativeRevocation{}
 	environmentResult, err := environmentBuilder(ctx, environmentBuildRequest{
+		egressDefaults:       egressDefaults,
 		nativeRevocation:     nativeRevoker,
 		repository:           storageResult.store.EnvironmentRepository(),
 		assignmentRepository: storageResult.store.CaptureAssignmentRepository(),
@@ -568,7 +570,11 @@ func startWithBuilders(
 		return fail("offline-hold resume probe", err)
 	}
 
-	provider, err := buildProvider(providerBuildRequest{
+	providerBuilder := buildProvider
+	if overrides.provider != nil {
+		providerBuilder = overrides.provider
+	}
+	provider, err := providerBuilder(providerBuildRequest{
 		egressDefaults: egressDefaults,
 		coordinator:    options.OfflineHold,
 		secrets:        options.Secrets,
@@ -630,7 +636,7 @@ func startWithBuilders(
 	}
 	pending.register("original-origin transport", original.Shutdown)
 	nativeOperationIDs := nativeIDs{random: securityRandom}
-	nativeTools, err := nativemcp.New(nativemcp.Dependencies{OwnerContext: ownerContext, Transport: nativeTransport, Store: storageResult.store.NativeToolRepository(), ToolDecisions: toolDecisions, Offline: options.OfflineHold, Clock: options.Clock.Now, IDs: nativeOperationIDs, ContentProfiles: options.ContentProfiles}, nativemcp.DefaultLimits())
+	nativeTools, err := nativemcp.New(nativemcp.Dependencies{EgressDefaults: egressDefaults, OwnerContext: ownerContext, Transport: nativeTransport, Store: storageResult.store.NativeToolRepository(), ToolDecisions: toolDecisions, Offline: options.OfflineHold, Clock: options.Clock.Now, IDs: nativeOperationIDs, ContentProfiles: options.ContentProfiles}, nativemcp.DefaultLimits())
 	if err != nil {
 		return fail("native MCP recovery", err)
 	}

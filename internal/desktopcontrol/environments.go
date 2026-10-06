@@ -391,16 +391,8 @@ func validClientToolAccessInput(body []byte) bool {
 	if route == nil {
 		return false
 	}
-	profile := clientToolAccessObject(route["egressProfile"], []string{"id", "revision", "displayName", "policy", "publishedAt"})
-	if profile == nil {
-		return false
-	}
-	network := clientToolAccessObject(profile["policy"], []string{"proxy", "resolver"})
-	if network == nil {
-		return false
-	}
-	return clientToolAccessObject(network["proxy"], []string{"kind"}, "endpoint") != nil &&
-		clientToolAccessObject(network["resolver"], []string{"kind", "transport"}, "dohUrl") != nil
+	var choice egressprofile.Choice
+	return json.Unmarshal(route["egressProfile"], &choice) == nil && choice.Validate() == nil
 }
 
 // The new permission and frozen route use exact names and non-null values.
@@ -454,9 +446,12 @@ func (handler *Handler) resolvePublishedEgressProfiles(
 	direct := egressprofile.Direct()
 	for endpointIndex := range endpoints {
 		for planIndex := range endpoints[endpointIndex].ProtocolPlans {
-			profile := &endpoints[endpointIndex].ProtocolPlans[planIndex].EgressProfile
-			if profile.Equal(direct) {
-				*profile = direct
+			choice := &endpoints[endpointIndex].ProtocolPlans[planIndex].EgressProfile
+			if choice.Validate() != nil {
+				return egressprofile.ErrInvalidProfile
+			}
+			profile, explicit := choice.ExplicitProfile()
+			if !explicit || profile.Equal(direct) {
 				continue
 			}
 			if handler.egressProfiles == nil {
@@ -468,10 +463,13 @@ func (handler *Handler) resolvePublishedEgressProfiles(
 			if err != nil {
 				return err
 			}
-			if !published.Equal(*profile) {
+			if !published.Equal(profile) {
 				return egressprofile.ErrInvalidProfile
 			}
-			*profile = published
+			*choice, err = egressprofile.Explicit(published)
+			if err != nil {
+				return err
+			}
 		}
 	}
 	return nil

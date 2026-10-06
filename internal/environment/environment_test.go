@@ -111,9 +111,9 @@ func TestRequestPlanFreezesTheSelectedEgressProfileRevision(t *testing.T) {
 		},
 		PublishedAt: time.Date(2026, time.August, 27, 1, 2, 3, 0, time.UTC),
 	}
-	aggregate.ClientEndpoints[0].ProtocolPlans[0].EgressProfile = want
+	aggregate.ClientEndpoints[0].ProtocolPlans[0].EgressProfile = explicitEgress(t, want)
 	snapshot := mustCompile(t, aggregate)
-	aggregate.ClientEndpoints[0].ProtocolPlans[0].EgressProfile = egressprofile.Direct()
+	aggregate.ClientEndpoints[0].ProtocolPlans[0].EgressProfile = explicitEgress(t, egressprofile.Direct())
 
 	plan, err := snapshot.ResolveRequest(
 		mustOrigin(t, "https://relay.example"),
@@ -139,7 +139,7 @@ func TestRequestPlanFreezesTheSelectedEgressProfileRevision(t *testing.T) {
 	}
 
 	invalid := fixture(t, "invalid-network-path", mustOrigin(t, "https://invalid.example"))
-	invalid.ClientEndpoints[0].ProtocolPlans[0].EgressProfile = egressprofile.ProfileRevision{
+	invalidProfile := egressprofile.ProfileRevision{
 		ID: "profile.invalid", Revision: 1, DisplayName: "Invalid",
 		Policy: egressnetwork.Policy{
 			Proxy: egressnetwork.ProxyPolicy{Kind: egressnetwork.ProxyDirect},
@@ -150,6 +150,10 @@ func TestRequestPlanFreezesTheSelectedEgressProfileRevision(t *testing.T) {
 		},
 		PublishedAt: time.Now(),
 	}
+	if _, err := egressprofile.Explicit(invalidProfile); err == nil {
+		t.Fatal("invalid authored explicit profile accepted")
+	}
+	invalid.ClientEndpoints[0].ProtocolPlans[0].EgressProfile = egressprofile.Choice{}
 	if err := invalid.Validate(); err == nil {
 		t.Fatal("Environment accepted an unusable egress profile")
 	}
@@ -1399,7 +1403,7 @@ func fixture(t *testing.T, id string, origin originidentity.ClientOrigin) Enviro
 		return ClientProtocolPlan{
 			ID: ClientProtocolPlanID(planID), Revision: 1, ClientProtocol: protocol,
 			ClientAdapterPolicy: ClientAdapterPolicy{ID: "adapter." + planID, Revision: 1},
-			EgressProfile:       egressprofile.Direct(),
+			EgressProfile:       explicitEgress(t, egressprofile.Direct()),
 			Destination: DestinationPlan{Kind: DestinationKindUpstream, Upstream: &UpstreamPlan{
 				DefaultRouteID: UpstreamRouteID(routeID), RouteSet: RouteSet{
 					ID: "routes." + planID, Revision: 1,

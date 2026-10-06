@@ -28,6 +28,10 @@ import (
 
 func syntheticManagedModelRequest(t *testing.T, accounts *provideraccount.Manager, endpoints *upstreamendpoint.Manager, endpoint upstreamendpoint.Endpoint, view provideraccount.View, flow egressprofile.ProfileRevision, hello transportprofile.Observation) exchange.ClientRequest {
 	t.Helper()
+	flowChoice, err := egressprofile.Explicit(flow)
+	if err != nil {
+		t.Fatal(err)
+	}
 	origin, err := originidentity.ParseClientOrigin("https://chatgpt.com")
 	if err != nil {
 		t.Fatal(err)
@@ -66,7 +70,7 @@ func syntheticManagedModelRequest(t *testing.T, accounts *provideraccount.Manage
 		ClientEndpoints: []environment.ClientEndpoint{{ID: "endpoint.synthetic", Revision: 1, ClientOrigin: origin,
 			ProtocolPlans: []environment.ClientProtocolPlan{{
 				ID: "protocol.synthetic", Revision: 1, ClientProtocol: environment.ClientProtocolOpenAIResponses,
-				ClientAdapterPolicy: environment.ClientAdapterPolicy{ID: "adapter.synthetic", Revision: 1}, EgressProfile: flow,
+				ClientAdapterPolicy: environment.ClientAdapterPolicy{ID: "adapter.synthetic", Revision: 1}, EgressProfile: flowChoice,
 				Destination: environment.DestinationPlan{Kind: environment.DestinationKindUpstream, Upstream: &environment.UpstreamPlan{
 					DefaultRouteID: route.ID, RouteSet: environment.RouteSet{ID: "routes.synthetic", Revision: 1, CandidateRouteIDs: []environment.UpstreamRouteID{route.ID}}, Routes: []environment.UpstreamRoute{route},
 				}},

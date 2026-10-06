@@ -62,14 +62,15 @@ func auditedRequest(t *testing.T) originaltransport.Request {
 	}
 	request, err := originaltransport.NewRequest(
 		originaltransport.RequestOptions{
-			RequestID:    "egress-original-1",
-			Kind:         offlinehold.EgressOpaque,
-			Origin:       origin,
-			Method:       http.MethodGet,
-			Path:         "/api/claude_code/settings",
-			PayloadClass: protocolspec.OperationPayloadControl,
-			ConnectionID: "connection-1",
-			ParentID:     "original-request-1",
+			ResolvedEgress: originalResolved(t, egressnetwork.DefaultPolicy()),
+			RequestID:      "egress-original-1",
+			Kind:           offlinehold.EgressOpaque,
+			Origin:         origin,
+			Method:         http.MethodGet,
+			Path:           "/api/claude_code/settings",
+			PayloadClass:   protocolspec.OperationPayloadControl,
+			ConnectionID:   "connection-1",
+			ParentID:       "original-request-1",
 		},
 	)
 	if err != nil {

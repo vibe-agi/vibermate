@@ -58,7 +58,7 @@ func newNativeLeaseFixture(t *testing.T, enabled, shared bool, nativeMode ...env
 	if enabled {
 		candidate.ClientToolAccess = &environment.ClientToolAccessPolicy{Enabled: true, Route: &environment.ClientToolRoute{
 			ID: "native.lease.route", Revision: 1, TargetOrigin: origin, Path: environment.ClientToolMCPPath,
-			CredentialOwner: environment.ClientToolCredentialOriginal, Contract: environment.ClientToolContractCodexLegacy, EgressProfile: egressprofile.Direct(),
+			CredentialOwner: environment.ClientToolCredentialOriginal, Contract: environment.ClientToolContractCodexLegacy, EgressProfile: authoredEgress(t, egressprofile.Direct()),
 		}}
 	}
 	publishEnvironmentRevision(t, environments, candidate, 0)
@@ -215,12 +215,14 @@ func TestNativeLeaseApplyLatestCannotGainLaunchAuthority(t *testing.T) {
 			next := fixture.snapshot.Aggregate()
 			next.Revision++
 			if change == "initial_off" {
-				next.ClientToolAccess = &environment.ClientToolAccessPolicy{Enabled: true, Route: &environment.ClientToolRoute{ID: "native.new", Revision: 1, TargetOrigin: runtimeProviderOrigin(t, "https://relay.example"), Path: environment.ClientToolMCPPath, CredentialOwner: environment.ClientToolCredentialOriginal, Contract: environment.ClientToolContractCodexLegacy, EgressProfile: egressprofile.Direct()}}
+				next.ClientToolAccess = &environment.ClientToolAccessPolicy{Enabled: true, Route: &environment.ClientToolRoute{ID: "native.new", Revision: 1, TargetOrigin: runtimeProviderOrigin(t, "https://relay.example"), Path: environment.ClientToolMCPPath, CredentialOwner: environment.ClientToolCredentialOriginal, Contract: environment.ClientToolContractCodexLegacy, EgressProfile: authoredEgress(t, egressprofile.Direct())}}
 			} else if change == "route" {
 				next.ClientToolAccess.Route.ID = "native.new"
 			} else if change == "profile" {
 				next.ClientToolAccess.Route.Revision++
-				next.ClientToolAccess.Route.EgressProfile.DisplayName = "Changed profile"
+				profile := egressprofile.Direct()
+				profile.ID, profile.DisplayName = "profile.changed", "Changed profile"
+				next.ClientToolAccess.Route.EgressProfile = authoredEgress(t, profile)
 			}
 			publishEnvironmentRevision(t, fixture.environments, next, 1)
 			applied, err := fixture.assignments.ApplyLatest(context.Background(), fixture.capture, 1)

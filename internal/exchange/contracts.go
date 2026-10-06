@@ -1047,7 +1047,7 @@ type Provider interface {
 // provider attempt. It is derived only from the frozen Environment request
 // plan; an ingress caller cannot choose a different account or realm.
 type AccountLeaseRequest struct {
-	egressProfile            egressprofile.ProfileRevision
+	egressProfile            egressprofile.Choice
 	environmentID            environment.EnvironmentID
 	environmentRevision      environment.Revision
 	environmentDigest        environment.CandidateDigest
@@ -1062,8 +1062,10 @@ type AccountLeaseRequest struct {
 }
 
 func (request AccountLeaseRequest) EgressProfile() egressprofile.ProfileRevision {
-	return request.egressProfile
+	profile, _ := request.egressProfile.ExplicitProfile()
+	return profile
 }
+func (request AccountLeaseRequest) EgressChoice() egressprofile.Choice { return request.egressProfile }
 
 func (request AccountLeaseRequest) EnvironmentID() environment.EnvironmentID {
 	return request.environmentID

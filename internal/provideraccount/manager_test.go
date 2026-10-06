@@ -3,6 +3,7 @@ package provideraccount
 import (
 	"context"
 	"errors"
+	"github.com/vibe-agi/vibermate/internal/egressprofile"
 	"reflect"
 	"sync"
 	"testing"
@@ -540,6 +541,7 @@ func TestManagerCredentialReplacementReservesTheAccountFromNewLeases(
 	}
 
 	lease, acquireErr := manager.acquire(t.Context(), accountLeaseScope{
+		egressProfile:            egressprofile.Inherit(),
 		id:                       view.Account.ID,
 		accountRevision:          view.Account.Revision,
 		realmID:                  view.Account.RealmID,
@@ -710,6 +712,7 @@ func TestManagerAcquireDoesNotHoldTheAccountAuthorityLockDuringSecretInspection(
 	acquireDone := make(chan acquireResult, 1)
 	go func() {
 		lease, acquireErr := manager.acquire(context.Background(), accountLeaseScope{
+			egressProfile:            egressprofile.Inherit(),
 			id:                       view.Account.ID,
 			accountRevision:          view.Account.Revision,
 			realmID:                  view.Account.RealmID,
@@ -787,6 +790,7 @@ func TestManagerLeasePinsCredentialEpochAcrossSecretRotation(t *testing.T) {
 		t.Fatal(err)
 	}
 	lease, err := manager.acquire(t.Context(), accountLeaseScope{
+		egressProfile:            egressprofile.Inherit(),
 		id:                       view.Account.ID,
 		accountRevision:          view.Account.Revision,
 		realmID:                  view.Account.RealmID,
@@ -866,6 +870,7 @@ func TestManagerAcquireUsesObservedCredentialEpochWithoutAnotherInspection(t *te
 	}
 	before := secrets.inspectCount()
 	lease, err := manager.acquire(t.Context(), accountLeaseScope{
+		egressProfile:            egressprofile.Inherit(),
 		id:                       view.Account.ID,
 		accountRevision:          view.Account.Revision,
 		realmID:                  view.Account.RealmID,
@@ -926,6 +931,7 @@ func TestManagerAcquireInspectsCredentialOnlyOnceAfterRecovery(t *testing.T) {
 		t.Fatal(err)
 	}
 	scope := accountLeaseScope{
+		egressProfile:            egressprofile.Inherit(),
 		id:                       view.Account.ID,
 		accountRevision:          view.Account.Revision,
 		realmID:                  view.Account.RealmID,
@@ -1009,6 +1015,7 @@ func TestManagerShutdownDrainsAdmittedCredentialInspection(t *testing.T) {
 	acquireDone := make(chan acquireResult, 1)
 	go func() {
 		lease, acquireErr := manager.acquire(context.Background(), accountLeaseScope{
+			egressProfile:            egressprofile.Inherit(),
 			id:                       view.Account.ID,
 			accountRevision:          view.Account.Revision,
 			realmID:                  view.Account.RealmID,

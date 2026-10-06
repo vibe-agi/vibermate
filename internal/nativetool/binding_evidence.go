@@ -4,6 +4,7 @@ import (
 	"math"
 
 	"github.com/vibe-agi/vibermate/internal/captureidentity"
+	"github.com/vibe-agi/vibermate/internal/egressprofile"
 	"github.com/vibe-agi/vibermate/internal/environment"
 )
 
@@ -43,6 +44,48 @@ func bindingDigestV1(e BindingEvidence) Digest {
 }
 
 func VerifyBindingEvidence(e BindingEvidence, expected Digest) error {
+	if _, explicit := e.Route.EgressProfile.ExplicitProfile(); !explicit {
+		return ErrInvalid
+	}
+	if validateBindingEvidence(e, expected) != nil || bindingDigestV1(e) != expected {
+		return ErrInvalid
+	}
+	return nil
+}
+
+type resolvedBindingEvidence struct {
+	Profile         egressprofile.ProfileRevision `json:"profile"`
+	Source          egressprofile.SelectionSource `json:"source"`
+	DefaultRevision uint64                        `json:"defaultRevision"`
+}
+
+func bindingDigestV2(e BindingEvidence, resolved egressprofile.Resolved) Digest {
+	return hashJSON(struct {
+		Domain string
+		BindingEvidence
+		Egress resolvedBindingEvidence
+	}{"native-binding/v2", e, resolvedBindingEvidence{resolved.Profile(), resolved.Source(), resolved.DefaultRevision()}})
+}
+
+// This verifies evidence consistency only; it grants no send or approval authority.
+func VerifyBindingEvidenceV2(e BindingEvidence, resolved egressprofile.Resolved, expected Digest) error {
+	if validateBindingEvidence(e, expected) != nil || resolved.Validate() != nil {
+		return ErrInvalid
+	}
+	if profile, explicit := e.Route.EgressProfile.ExplicitProfile(); explicit {
+		if resolved.Source() != egressprofile.SelectionFlow || resolved.Profile() != profile || resolved.DefaultRevision() != 0 {
+			return ErrInvalid
+		}
+	} else if resolved.Source() != egressprofile.SelectionGlobal && resolved.Source() != egressprofile.SelectionBuiltin {
+		return ErrInvalid
+	}
+	if bindingDigestV2(e, resolved) != expected {
+		return ErrInvalid
+	}
+	return nil
+}
+
+func validateBindingEvidence(e BindingEvidence, expected Digest) error {
 	e.Catalog = copyPointer(e.Catalog)
 	e.Parent = copyPointer(e.Parent)
 	e.Server = copyPointer(e.Server)
@@ -58,9 +101,6 @@ func VerifyBindingEvidence(e BindingEvidence, expected Digest) error {
 		if _, err := NewID(string(*e.Parent)); err != nil {
 			return ErrInvalid
 		}
-	}
-	if bindingDigestV1(e) != expected {
-		return ErrInvalid
 	}
 	return nil
 }
