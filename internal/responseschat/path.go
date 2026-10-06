@@ -21,6 +21,8 @@ const (
 )
 
 type Options struct {
+	// Non-nil Resources controls both codecs; nil preserves nested policies.
+	Resources *protocolcore.ResourceLimits
 	Responses openairesponses.Options
 	Chat      anthropicchat.Options
 }
@@ -142,6 +144,14 @@ func (adapter streamAdapter) FinishDecoded(
 }
 
 func NewProtocolPath(options Options) (*protocolpath.Path, error) {
+	if options.Resources != nil {
+		if err := options.Resources.Validate(); err != nil {
+			return nil, err
+		}
+		limits := *options.Resources
+		options.Responses.Resources = &limits
+		options.Chat.Resources = &limits
+	}
 	client, err := openairesponses.New(options.Responses)
 	if err != nil {
 		return nil, err

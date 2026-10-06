@@ -74,6 +74,7 @@ type ProviderStream struct {
 	mu sync.Mutex
 
 	codec       *Codec
+	resources   *protocolcore.ResourceBudget
 	request     protocolcore.Request
 	decoder     *ssewire.Decoder
 	encoder     protocolpath.ClientStreamEncoder
@@ -117,7 +118,7 @@ func (codec *Codec) NewProviderStreamWithEncoder(
 	request protocolcore.Request,
 	encoder protocolpath.ClientStreamEncoder,
 ) (*ProviderStream, error) {
-	if err := request.Validate(); err != nil {
+	if err := codec.ValidateRequest(request); err != nil {
 		return nil, protocolcore.NewFailure(
 			protocolcore.ReasonInvalidClientRequest,
 			"$",
@@ -148,6 +149,7 @@ func (codec *Codec) NewProviderStreamWithEncoder(
 	}
 	return &ProviderStream{
 		codec:       codec,
+		resources:   codec.responseBudget(),
 		request:     request.Clone(),
 		decoder:     decoder,
 		encoder:     encoder,
@@ -210,6 +212,10 @@ func (stream *ProviderStream) Feed(
 			)
 		}
 
+		if err := stream.resources.ReserveJSON(event.Data); err != nil {
+			stream.failed = true
+			return safe.Bytes(), protocolcore.NewFailure(protocolcore.ReasonMalformedEventStream, fmt.Sprintf("$event[%d].data", eventIndex), err)
+		}
 		var chunk openAIStreamChunkWire
 		if err := decodeStrict(event.Data, &chunk); err != nil {
 			stream.failed = true
@@ -496,7 +502,7 @@ func (stream *ProviderStream) FinishDecoded(
 		StopReason:         stream.finishReason,
 		Usage:              stream.usage,
 	}
-	if err := response.Validate(); err != nil {
+	if err := stream.codec.ValidateResponse(response); err != nil {
 		stream.failed = true
 		return nil, protocolcore.NewFailure(
 			protocolcore.ReasonInvalidProviderResponse,

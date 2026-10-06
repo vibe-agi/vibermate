@@ -91,7 +91,7 @@ func (codec *Codec) DecodeProviderResponse(
 	request protocolcore.Request,
 	body []byte,
 ) (protocolcore.Response, protocolcore.TranslationReport, error) {
-	if err := request.Validate(); err != nil {
+	if err := codec.ValidateRequest(request); err != nil {
 		return protocolcore.Response{}, protocolcore.TranslationReport{},
 			protocolcore.NewFailure(protocolcore.ReasonInvalidClientRequest, "$", err)
 	}
@@ -113,6 +113,9 @@ func (codec *Codec) DecodeProviderResponse(
 			)
 	}
 
+	if err := codec.validateResponseJSON(body); err != nil {
+		return protocolcore.Response{}, protocolcore.TranslationReport{}, protocolcore.NewFailure(protocolcore.ReasonInvalidProviderResponse, "$", err)
+	}
 	var wire openAIResponseWire
 	if err := decodeStrict(body, &wire); err != nil {
 		return protocolcore.Response{}, protocolcore.TranslationReport{},
@@ -276,7 +279,7 @@ func (codec *Codec) DecodeProviderResponse(
 		StopReason:         stopReason,
 		Usage:              usage,
 	}
-	if err := response.Validate(); err != nil {
+	if err := codec.ValidateResponse(response); err != nil {
 		return protocolcore.Response{}, protocolcore.TranslationReport{},
 			protocolcore.NewFailure(protocolcore.ReasonInvalidProviderResponse, "$", err)
 	}
@@ -558,7 +561,7 @@ type anthropicUsageWire struct {
 }
 
 func (codec *Codec) EncodeClientResponse(response protocolcore.Response) ([]byte, error) {
-	if err := response.Validate(); err != nil {
+	if err := codec.ValidateResponse(response); err != nil {
 		return nil, protocolcore.NewFailure(
 			protocolcore.ReasonInvalidProviderResponse,
 			"$",

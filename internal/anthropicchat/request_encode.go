@@ -5,6 +5,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
+	"reflect"
+	"strconv"
+	"strings"
+	"unicode/utf8"
+	"unsafe"
 
 	"github.com/vibe-agi/vibermate/internal/protocolcore"
 )
@@ -74,12 +80,22 @@ type openAIFunctionWire struct {
 func (codec *Codec) EncodeProviderRequest(
 	request protocolcore.Request,
 ) ([]byte, protocolcore.TranslationReport, error) {
-	if err := request.Validate(); err != nil {
+	if err := codec.ValidateRequest(request); err != nil {
 		return nil, protocolcore.TranslationReport{}, protocolcore.NewFailure(
 			protocolcore.ReasonInvalidClientRequest,
 			"$",
 			err,
 		)
+	}
+	budget := codec.requestBudget()
+	if budget != nil {
+		cost, err := protocolcore.MeasureRequest(request)
+		if err != nil {
+			return nil, protocolcore.TranslationReport{}, err
+		}
+		if err := budget.Reserve(cost); err != nil {
+			return nil, protocolcore.TranslationReport{}, protocolcore.NewFailure(protocolcore.ReasonInvalidClientRequest, "$", err)
+		}
 	}
 	toolCatalog, err := buildProviderToolCatalog(request)
 	if err != nil {
@@ -93,13 +109,13 @@ func (codec *Codec) EncodeProviderRequest(
 
 	messages := make([]openAIRequestMessageWire, 0, len(request.Messages)+len(request.System))
 	if len(request.System) > 0 {
-		var systemText string
+		var systemText strings.Builder
 		for _, block := range request.System {
-			systemText += block.Text
+			systemText.WriteString(block.Text)
 		}
 		messages = append(messages, openAIRequestMessageWire{
 			Role:    "system",
-			Content: stringPointer(systemText),
+			Content: stringPointer(systemText.String()),
 		})
 	}
 	var report protocolcore.TranslationReportBuilder
@@ -117,25 +133,32 @@ func (codec *Codec) EncodeProviderRequest(
 			)
 		}
 		messages = append(messages, encoded...)
-		report.Append(messageEncodingReport(
-			messageIndex,
-			message,
-		))
+		messageReport, err := messageEncodingReport(messageIndex, message, budget)
+		if err != nil {
+			return nil, report.Build(), protocolcore.NewFailure(protocolcore.ReasonInvalidClientRequest, "$.messages", err)
+		}
+		if err := protocolcore.AppendReportWithin(&report, messageReport, budget); err != nil {
+			return nil, report.Build(), protocolcore.NewFailure(protocolcore.ReasonInvalidClientRequest, "$", err)
+		}
 		if normalized {
-			report.Append(protocolcore.NewTranslationReport(protocolcore.TranslationNotice{
+			if err := protocolcore.AppendReportWithin(&report, protocolcore.NewTranslationReport(protocolcore.TranslationNotice{
 				Code: protocolcore.NoticeContentOrderNormalized,
 				Path: "$.messages[" + integerString(messageIndex) + "].content",
-			}))
+			}), budget); err != nil {
+				return nil, report.Build(), protocolcore.NewFailure(protocolcore.ReasonInvalidClientRequest, "$", err)
+			}
 		}
 		if message.Role == protocolcore.RoleDeveloper &&
 			codec.providerRequest.instructionRoleMode ==
 				InstructionRoleNormalizeDeveloperToSystem {
-			report.Append(protocolcore.NewTranslationReport(
+			if err := protocolcore.AppendReportWithin(&report, protocolcore.NewTranslationReport(
 				protocolcore.TranslationNotice{
 					Code: protocolcore.NoticeDeveloperRoleNormalized,
 					Path: "$.messages[" + integerString(messageIndex) + "].role",
 				},
-			))
+			), budget); err != nil {
+				return nil, report.Build(), protocolcore.NewFailure(protocolcore.ReasonInvalidClientRequest, "$", err)
+			}
 		}
 	}
 
@@ -161,30 +184,36 @@ func (codec *Codec) EncodeProviderRequest(
 			},
 		}
 		if entry.identity.namespace != "" {
-			report.Append(protocolcore.NewTranslationReport(
+			if err := protocolcore.AppendReportWithin(&report, protocolcore.NewTranslationReport(
 				protocolcore.TranslationNotice{
 					Code: protocolcore.NoticeToolNamespaceEncoded,
 					Path: entry.path,
 				},
-			))
+			), budget); err != nil {
+				return nil, report.Build(), protocolcore.NewFailure(protocolcore.ReasonInvalidClientRequest, "$", err)
+			}
 		}
 		if tool.EffectiveKind() == protocolcore.ToolKindCustom &&
 			tool.CustomFormat.Kind ==
 				protocolcore.CustomToolFormatGrammar {
-			report.Append(protocolcore.NewTranslationReport(
+			if err := protocolcore.AppendReportWithin(&report, protocolcore.NewTranslationReport(
 				protocolcore.TranslationNotice{
 					Code: protocolcore.NoticeCustomToolGrammarNotForwarded,
 					Path: entry.path + ".format",
 				},
-			))
+			), budget); err != nil {
+				return nil, report.Build(), protocolcore.NewFailure(protocolcore.ReasonInvalidClientRequest, "$", err)
+			}
 		}
 		if tool.EagerInputStreaming {
-			report.Append(protocolcore.NewTranslationReport(
+			if err := protocolcore.AppendReportWithin(&report, protocolcore.NewTranslationReport(
 				protocolcore.TranslationNotice{
 					Code: protocolcore.NoticeEagerToolInputStreamingNotForwarded,
 					Path: entry.path + ".eager_input_streaming",
 				},
-			))
+			), budget); err != nil {
+				return nil, report.Build(), protocolcore.NewFailure(protocolcore.ReasonInvalidClientRequest, "$", err)
+			}
 		}
 	}
 
@@ -233,30 +262,38 @@ func (codec *Codec) EncodeProviderRequest(
 	}
 	reasoningEffort, reasoningReport := codec.encodeProviderReasoning(request)
 	wire.ReasoningEffort = reasoningEffort
-	report.Append(reasoningReport)
+	if err := protocolcore.AppendReportWithin(&report, reasoningReport, budget); err != nil {
+		return nil, report.Build(), protocolcore.NewFailure(protocolcore.ReasonInvalidClientRequest, "$", err)
+	}
 	if len(request.Context.Edits) != 0 {
-		report.Append(protocolcore.NewTranslationReport(
+		if err := protocolcore.AppendReportWithin(&report, protocolcore.NewTranslationReport(
 			protocolcore.TranslationNotice{
 				Code: protocolcore.NoticeContextManagementNotForwarded,
 				Path: "$.context_management",
 			},
-		))
+		), budget); err != nil {
+			return nil, report.Build(), protocolcore.NewFailure(protocolcore.ReasonInvalidClientRequest, "$", err)
+		}
 	}
 	if request.Diagnostics.Requested {
-		report.Append(protocolcore.NewTranslationReport(
+		if err := protocolcore.AppendReportWithin(&report, protocolcore.NewTranslationReport(
 			protocolcore.TranslationNotice{
 				Code: protocolcore.NoticeDiagnosticsNotForwarded,
 				Path: "$.diagnostics",
 			},
-		))
+		), budget); err != nil {
+			return nil, report.Build(), protocolcore.NewFailure(protocolcore.ReasonInvalidClientRequest, "$", err)
+		}
 	}
 	if request.OutputVerbosity != "" {
-		report.Append(protocolcore.NewTranslationReport(
+		if err := protocolcore.AppendReportWithin(&report, protocolcore.NewTranslationReport(
 			protocolcore.TranslationNotice{
 				Code: protocolcore.NoticeTextVerbosityNotForwarded,
 				Path: "$.text.verbosity",
 			},
-		))
+		), budget); err != nil {
+			return nil, report.Build(), protocolcore.NewFailure(protocolcore.ReasonInvalidClientRequest, "$", err)
+		}
 	}
 	switch request.Output.Kind {
 	case "":
@@ -294,13 +331,17 @@ func (codec *Codec) EncodeProviderRequest(
 		switch codec.providerRequest.toolReasoningMode {
 		case ToolReasoningModeOmit:
 			if wire.ReasoningEffort != "" {
-				report.Append(reasoningDowngradeNotice())
+				if err := protocolcore.AppendReportWithin(&report, reasoningDowngradeNotice(), budget); err != nil {
+					return nil, report.Build(), protocolcore.NewFailure(protocolcore.ReasonInvalidClientRequest, "$", err)
+				}
 			}
 			wire.ReasoningEffort = ""
 		case ToolReasoningModeNone:
 			if wire.ReasoningEffort != "" &&
 				wire.ReasoningEffort != "none" {
-				report.Append(reasoningDowngradeNotice())
+				if err := protocolcore.AppendReportWithin(&report, reasoningDowngradeNotice(), budget); err != nil {
+					return nil, report.Build(), protocolcore.NewFailure(protocolcore.ReasonInvalidClientRequest, "$", err)
+				}
 			}
 			wire.ReasoningEffort = "none"
 		default:
@@ -314,6 +355,16 @@ func (codec *Codec) EncodeProviderRequest(
 	if request.Stream {
 		wire.StreamOptions = &openAIStreamOptionsWire{IncludeUsage: true}
 	}
+	if budget != nil {
+		// Count actual JSON escaping before Marshal allocates the full body.
+		counter := providerWireCounter{limit: uint64(codec.options.MaxRequestBytes)}
+		if err := counter.value(reflect.ValueOf(wire)); err != nil {
+			return nil, report.Build(), protocolcore.NewFailure(protocolcore.ReasonInvalidClientRequest, "$", err)
+		}
+		if err := budget.Reserve(protocolcore.ResourceCost{PayloadBytes: counter.used, StructureBytes: uint64(unsafe.Sizeof([]byte(nil)))}); err != nil {
+			return nil, report.Build(), protocolcore.NewFailure(protocolcore.ReasonInvalidClientRequest, "$", err)
+		}
+	}
 	encoded, err := json.Marshal(wire)
 	if err != nil {
 		return nil, report.Build(), protocolcore.NewFailure(
@@ -322,13 +373,241 @@ func (codec *Codec) EncodeProviderRequest(
 			err,
 		)
 	}
+	if budget != nil && len(encoded) > codec.options.MaxRequestBytes {
+		return nil, report.Build(), protocolcore.NewFailure(protocolcore.ReasonInvalidClientRequest, "$", errors.New("encoded provider request exceeds the configured wire limit"))
+	}
 	return encoded, report.Build(), nil
+}
+
+// providerWireCounter counts only the fixed, acyclic outgoing Chat wire types
+// above. It never creates a serialized representation or decoded JSON tree.
+// RawMessage compact/HTML escaping and string UTF-8 replacement mirror the
+// encoding/json encoder used by the immediately following Marshal.
+type providerWireCounter struct{ used, limit uint64 }
+
+func (counter *providerWireCounter) add(bytes uint64) error {
+	if bytes > counter.limit-counter.used {
+		return errors.New("encoded provider request exceeds the configured wire limit")
+	}
+	counter.used += bytes
+	return nil
+}
+
+func (counter *providerWireCounter) quoted(value string) error {
+	if err := counter.add(2); err != nil {
+		return err
+	}
+	for index := 0; index < len(value); {
+		character := value[index]
+		if character < utf8.RuneSelf {
+			size := uint64(1)
+			switch character {
+			case '\\', '"', '\b', '\f', '\n', '\r', '\t':
+				size = 2
+			case '<', '>', '&':
+				size = 6
+			default:
+				if character < 0x20 {
+					size = 6
+				}
+			}
+			if err := counter.add(size); err != nil {
+				return err
+			}
+			index++
+			continue
+		}
+		runeValue, width := utf8.DecodeRuneInString(value[index:])
+		size := uint64(width)
+		if runeValue == utf8.RuneError && width == 1 || runeValue == '\u2028' || runeValue == '\u2029' {
+			size = 6
+		}
+		if err := counter.add(size); err != nil {
+			return err
+		}
+		index += width
+	}
+	return nil
+}
+
+func (counter *providerWireCounter) raw(value []byte) error {
+	if len(value) == 0 {
+		return counter.add(4)
+	} // nil RawMessage encodes as null.
+	inString, escaped := false, false
+	for index := 0; index < len(value); index++ {
+		character := value[index]
+		if !inString && strings.ContainsRune(" \t\r\n", rune(character)) {
+			continue
+		}
+		size := uint64(1)
+		if inString && !escaped {
+			if character == '<' || character == '>' || character == '&' {
+				size = 6
+			}
+			if character == 0xe2 && index+2 < len(value) && value[index+1] == 0x80 && (value[index+2] == 0xa8 || value[index+2] == 0xa9) {
+				size = 6
+				index += 2
+			}
+		}
+		if err := counter.add(size); err != nil {
+			return err
+		}
+		if escaped {
+			escaped = false
+			continue
+		}
+		if inString && character == '\\' {
+			escaped = true
+			continue
+		}
+		if character == '"' {
+			inString = !inString
+		}
+	}
+	return nil
+}
+
+func providerWireEmpty(value reflect.Value) bool {
+	switch value.Kind() {
+	case reflect.Array, reflect.Map, reflect.Slice, reflect.String:
+		return value.Len() == 0
+	case reflect.Bool, reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64, reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Float32, reflect.Float64:
+		return value.IsZero()
+	case reflect.Interface, reflect.Pointer:
+		return value.IsNil()
+	}
+	return false
+}
+
+func (counter *providerWireCounter) value(value reflect.Value) error {
+	if !value.IsValid() {
+		return counter.add(4)
+	}
+	if value.Type() == reflect.TypeOf(json.RawMessage(nil)) {
+		return counter.raw(value.Bytes())
+	}
+	switch value.Kind() {
+	case reflect.Interface, reflect.Pointer:
+		if value.IsNil() {
+			return counter.add(4)
+		}
+		return counter.value(value.Elem())
+	case reflect.String:
+		return counter.quoted(value.String())
+	case reflect.Bool:
+		if value.Bool() {
+			return counter.add(4)
+		}
+		return counter.add(5)
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		var buffer [64]byte
+		return counter.add(uint64(len(strconv.AppendInt(buffer[:0], value.Int(), 10))))
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		var buffer [64]byte
+		return counter.add(uint64(len(strconv.AppendUint(buffer[:0], value.Uint(), 10))))
+	case reflect.Float32, reflect.Float64:
+		var buffer [64]byte
+		format := byte('f')
+		absolute := math.Abs(value.Float())
+		if absolute != 0 && (absolute < 1e-6 || absolute >= 1e21) {
+			format = 'e'
+		}
+		number := strconv.AppendFloat(buffer[:0], value.Float(), format, -1, value.Type().Bits())
+		length := len(number)
+		if format == 'e' && length >= 4 && number[length-4] == 'e' && number[length-3] == '-' && number[length-2] == '0' {
+			length--
+		}
+		return counter.add(uint64(length))
+	case reflect.Slice, reflect.Array:
+		if value.Kind() == reflect.Slice && value.IsNil() {
+			return counter.add(4)
+		}
+		if err := counter.add(2); err != nil {
+			return err
+		}
+		for index := 0; index < value.Len(); index++ {
+			if index > 0 {
+				if err := counter.add(1); err != nil {
+					return err
+				}
+			}
+			if err := counter.value(value.Index(index)); err != nil {
+				return err
+			}
+		}
+		return nil
+	case reflect.Struct:
+		if err := counter.add(2); err != nil {
+			return err
+		}
+		fields := 0
+		for index := 0; index < value.NumField(); index++ {
+			field := value.Type().Field(index)
+			name, options, _ := strings.Cut(field.Tag.Get("json"), ",")
+			if name == "-" || strings.Contains(options, "omitempty") && providerWireEmpty(value.Field(index)) {
+				continue
+			}
+			if name == "" {
+				name = field.Name
+			}
+			if fields > 0 {
+				if err := counter.add(1); err != nil {
+					return err
+				}
+			}
+			fields++
+			if err := counter.quoted(name); err != nil {
+				return err
+			}
+			if err := counter.add(1); err != nil {
+				return err
+			}
+			if err := counter.value(value.Field(index)); err != nil {
+				return err
+			}
+		}
+		return nil
+	case reflect.Map:
+		if value.IsNil() {
+			return counter.add(4)
+		}
+		if err := counter.add(2); err != nil {
+			return err
+		}
+		iterator := value.MapRange()
+		entries := 0
+		for iterator.Next() {
+			if iterator.Key().Kind() != reflect.String {
+				return errors.New("provider wire map key is unsupported")
+			}
+			if entries > 0 {
+				if err := counter.add(1); err != nil {
+					return err
+				}
+			}
+			entries++
+			if err := counter.quoted(iterator.Key().String()); err != nil {
+				return err
+			}
+			if err := counter.add(1); err != nil {
+				return err
+			}
+			if err := counter.value(iterator.Value()); err != nil {
+				return err
+			}
+		}
+		return nil
+	default:
+		return errors.New("provider request wire value is unsupported")
+	}
 }
 
 func messageEncodingReport(
 	messageIndex int,
 	message protocolcore.Message,
-) protocolcore.TranslationReport {
+	budget *protocolcore.ResourceBudget,
+) (protocolcore.TranslationReport, error) {
 	var report protocolcore.TranslationReportBuilder
 	for blockIndex, block := range message.Blocks {
 		if block.Kind != protocolcore.BlockToolCall {
@@ -340,24 +619,28 @@ func messageEncodingReport(
 			blockIndex,
 		)
 		if !block.ToolCall.ItemKey.IsZero() {
-			report.Append(protocolcore.NewTranslationReport(
+			if err := protocolcore.AppendReportWithin(&report, protocolcore.NewTranslationReport(
 				protocolcore.TranslationNotice{
 					Code: protocolcore.NoticeToolItemIdentityNotForwarded,
 					Path: path + ".item_id",
 				},
-			))
+			), budget); err != nil {
+				return report.Build(), err
+			}
 		}
 		if block.ToolCall.EffectiveKind() ==
 			protocolcore.ToolKindCustom {
-			report.Append(protocolcore.NewTranslationReport(
+			if err := protocolcore.AppendReportWithin(&report, protocolcore.NewTranslationReport(
 				protocolcore.TranslationNotice{
 					Code: protocolcore.NoticeCustomToolKindEncoded,
 					Path: path + ".kind",
 				},
-			))
+			), budget); err != nil {
+				return report.Build(), err
+			}
 		}
 	}
-	return report.Build()
+	return report.Build(), nil
 }
 
 func structuredOutputName(schema protocolcore.JSONDocument) string {
@@ -473,14 +756,14 @@ func encodeMessage(
 ) ([]openAIRequestMessageWire, bool, error) {
 	switch message.Role {
 	case protocolcore.RoleSystem, protocolcore.RoleDeveloper:
-		var text string
+		var text strings.Builder
 		for _, block := range message.Blocks {
 			if block.Kind != protocolcore.BlockText {
 				return nil, false, errors.New(
 					"instruction message contains an unsupported block",
 				)
 			}
-			text += block.Text
+			text.WriteString(block.Text)
 		}
 		role := string(message.Role)
 		if message.Role == protocolcore.RoleDeveloper &&
@@ -490,12 +773,12 @@ func encodeMessage(
 		}
 		return []openAIRequestMessageWire{{
 			Role:    role,
-			Content: stringPointer(text),
+			Content: stringPointer(text.String()),
 		}}, false, nil
 
 	case protocolcore.RoleUser:
 		var encoded []openAIRequestMessageWire
-		var text string
+		var text strings.Builder
 		hasText := false
 		hasTool := false
 		flushText := func() {
@@ -504,15 +787,15 @@ func encodeMessage(
 			}
 			encoded = append(encoded, openAIRequestMessageWire{
 				Role:    "user",
-				Content: stringPointer(text),
+				Content: stringPointer(text.String()),
 			})
-			text = ""
+			text.Reset()
 			hasText = false
 		}
 		for _, block := range message.Blocks {
 			switch block.Kind {
 			case protocolcore.BlockText:
-				text += block.Text
+				text.WriteString(block.Text)
 				hasText = true
 			case protocolcore.BlockToolResult:
 				flushText()
@@ -531,7 +814,7 @@ func encodeMessage(
 		return encoded, hasTool && len(encoded) > 1, nil
 
 	case protocolcore.RoleAssistant:
-		var text string
+		var text strings.Builder
 		toolCalls := make([]openAIToolCallWire, 0)
 		mixed := false
 		seenText := false
@@ -543,7 +826,7 @@ func encodeMessage(
 					mixed = true
 				}
 				seenText = true
-				text += block.Text
+				text.WriteString(block.Text)
 			case protocolcore.BlockToolCall:
 				if seenText {
 					mixed = true
@@ -571,7 +854,7 @@ func encodeMessage(
 		}
 		var content *string
 		if seenText {
-			content = stringPointer(text)
+			content = stringPointer(text.String())
 		}
 		return []openAIRequestMessageWire{{
 			Role:      "assistant",

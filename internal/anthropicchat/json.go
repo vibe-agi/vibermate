@@ -56,6 +56,10 @@ func decodeTolerant(
 	destination any,
 	path string,
 ) (protocolcore.TranslationReport, error) {
+	return decodeTolerantWithin(value, destination, path, nil)
+}
+
+func decodeTolerantWithin(value []byte, destination any, path string, budget *protocolcore.ResourceBudget) (protocolcore.TranslationReport, error) {
 	if err := rejectDuplicateJSONNames(value); err != nil {
 		return protocolcore.TranslationReport{}, err
 	}
@@ -71,6 +75,9 @@ func decodeTolerant(
 		}
 	}
 	sort.Strings(unknown)
+	if err := budget.ReserveNoticePaths(protocolcore.NoticeUnknownRequestFieldNotForwarded, path, unknown); err != nil {
+		return protocolcore.TranslationReport{}, err
+	}
 	notices := make([]protocolcore.TranslationNotice, 0, len(unknown))
 	for _, name := range unknown {
 		notices = append(notices, protocolcore.TranslationNotice{

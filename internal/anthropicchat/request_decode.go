@@ -89,11 +89,11 @@ func (mode requestDecodeMode) decode(value []byte, destination any) error {
 	return decodeStrict(value, destination)
 }
 
-func (mode requestDecodeMode) fields(value []byte, destination any, path string) (protocolcore.TranslationReport, error) {
+func (mode requestDecodeMode) fields(value []byte, destination any, path string, budget *protocolcore.ResourceBudget) (protocolcore.TranslationReport, error) {
 	if mode == requestDecodeNative {
 		return protocolcore.TranslationReport{}, mode.decode(value, destination)
 	}
-	return decodeTolerant(value, destination, path)
+	return decodeTolerantWithin(value, destination, path, budget)
 }
 
 type anthropicToolDefinitionWire struct {
@@ -181,24 +181,32 @@ func (codec *Codec) decodeClientRequest(
 			)
 	}
 
+	budget := codec.requestBudget()
+	if err := budget.ReserveJSON(body); err != nil {
+		return protocolcore.Request{}, protocolcore.TranslationReport{}, protocolcore.NewFailure(protocolcore.ReasonInvalidClientRequest, "$", err)
+	}
 	if err := rejectDuplicateJSONNames(body); err != nil {
 		return protocolcore.Request{}, protocolcore.TranslationReport{},
 			protocolcore.NewFailure(protocolcore.ReasonInvalidClientRequest, "$", err)
 	}
 	var wire anthropicRequestWire
-	unknownReport, err := mode.fields(body, &wire, "$")
+	unknownReport, err := mode.fields(body, &wire, "$", budget)
 	if err != nil {
 		return protocolcore.Request{}, protocolcore.TranslationReport{},
 			protocolcore.NewFailure(protocolcore.ReasonInvalidClientRequest, "$", err)
 	}
 	var report protocolcore.TranslationReportBuilder
-	report.Append(unknownReport)
+	if err := protocolcore.AppendReportWithin(&report, unknownReport, budget); err != nil {
+		return protocolcore.Request{}, report.Build(), protocolcore.NewFailure(protocolcore.ReasonInvalidClientRequest, "$", err)
+	}
 
-	system, systemReport, err := codec.decodeSystem(wire.System, mode)
+	system, systemReport, err := codec.decodeSystem(wire.System, mode, budget)
 	if err != nil {
 		return protocolcore.Request{}, report.Build(), err
 	}
-	report.Append(systemReport)
+	if err := protocolcore.AppendReportWithin(&report, systemReport, budget); err != nil {
+		return protocolcore.Request{}, report.Build(), protocolcore.NewFailure(protocolcore.ReasonInvalidClientRequest, "$", err)
+	}
 
 	messages := make([]protocolcore.Message, len(wire.Messages))
 	for index, message := range wire.Messages {
@@ -206,12 +214,15 @@ func (codec *Codec) decodeClientRequest(
 			index,
 			message,
 			mode,
+			budget,
 		)
 		if decodeErr != nil {
 			return protocolcore.Request{}, report.Build(), decodeErr
 		}
 		messages[index] = decoded
-		report.Append(messageReport)
+		if err := protocolcore.AppendReportWithin(&report, messageReport, budget); err != nil {
+			return protocolcore.Request{}, report.Build(), protocolcore.NewFailure(protocolcore.ReasonInvalidClientRequest, "$", err)
+		}
 	}
 
 	tools := make([]protocolcore.ToolDefinition, len(wire.Tools))
@@ -223,7 +234,7 @@ func (codec *Codec) decodeClientRequest(
 		// §3.2 permits the loss because it is declared.
 		var tool anthropicToolDefinitionWire
 		toolPath := fmt.Sprintf("$.tools[%d]", index)
-		unknownTool, unknownErr := mode.fields(rawTool, &tool, toolPath)
+		unknownTool, unknownErr := mode.fields(rawTool, &tool, toolPath, budget)
 		if unknownErr != nil {
 			return protocolcore.Request{}, report.Build(), protocolcore.NewFailure(
 				protocolcore.ReasonInvalidClientRequest,
@@ -231,13 +242,17 @@ func (codec *Codec) decodeClientRequest(
 				unknownErr,
 			)
 		}
-		report.Append(unknownTool)
+		if err := protocolcore.AppendReportWithin(&report, unknownTool, budget); err != nil {
+			return protocolcore.Request{}, report.Build(), protocolcore.NewFailure(protocolcore.ReasonInvalidClientRequest, "$", err)
+		}
 		decoded, toolReport, decodeErr := codec.decodeToolDefinition(index, tool, mode)
 		if decodeErr != nil {
 			return protocolcore.Request{}, report.Build(), decodeErr
 		}
 		tools[index] = decoded
-		report.Append(toolReport)
+		if err := protocolcore.AppendReportWithin(&report, toolReport, budget); err != nil {
+			return protocolcore.Request{}, report.Build(), protocolcore.NewFailure(protocolcore.ReasonInvalidClientRequest, "$", err)
+		}
 	}
 
 	toolChoice, err := decodeToolChoice(wire.ToolChoice)
@@ -268,22 +283,28 @@ func (codec *Codec) decodeClientRequest(
 				errors.New("metadata is invalid JSON"),
 			)
 		}
-		report.Append(protocolcore.NewTranslationReport(protocolcore.TranslationNotice{
+		if err := protocolcore.AppendReportWithin(&report, protocolcore.NewTranslationReport(protocolcore.TranslationNotice{
 			Code: protocolcore.NoticeMetadataNotForwarded,
 			Path: "$.metadata",
-		}))
+		}), budget); err != nil {
+			return protocolcore.Request{}, report.Build(), protocolcore.NewFailure(protocolcore.ReasonInvalidClientRequest, "$", err)
+		}
 	}
 	if wire.TopK != nil {
-		report.Append(protocolcore.NewTranslationReport(protocolcore.TranslationNotice{
+		if err := protocolcore.AppendReportWithin(&report, protocolcore.NewTranslationReport(protocolcore.TranslationNotice{
 			Code: protocolcore.NoticeTopKNotForwarded,
 			Path: "$.top_k",
-		}))
+		}), budget); err != nil {
+			return protocolcore.Request{}, report.Build(), protocolcore.NewFailure(protocolcore.ReasonInvalidClientRequest, "$", err)
+		}
 	}
 	if wire.ServiceTier != "" {
-		report.Append(protocolcore.NewTranslationReport(protocolcore.TranslationNotice{
+		if err := protocolcore.AppendReportWithin(&report, protocolcore.NewTranslationReport(protocolcore.TranslationNotice{
 			Code: protocolcore.NoticeServiceTierNotForwarded,
 			Path: "$.service_tier",
-		}))
+		}), budget); err != nil {
+			return protocolcore.Request{}, report.Build(), protocolcore.NewFailure(protocolcore.ReasonInvalidClientRequest, "$", err)
+		}
 	}
 
 	request := protocolcore.Request{
@@ -303,7 +324,7 @@ func (codec *Codec) decodeClientRequest(
 		TopP:            wire.TopP,
 		StopSequences:   append([]string(nil), wire.StopSequences...),
 	}
-	if err := request.Validate(); err != nil {
+	if err := codec.ValidateRequest(request); err != nil {
 		return protocolcore.Request{}, report.Build(), protocolcore.NewFailure(
 			protocolcore.ReasonInvalidClientRequest,
 			"$",
@@ -607,6 +628,7 @@ func decodeOutputConfiguration(
 func (codec *Codec) decodeSystem(
 	raw json.RawMessage,
 	mode requestDecodeMode,
+	budget *protocolcore.ResourceBudget,
 ) ([]protocolcore.ContentBlock, protocolcore.TranslationReport, error) {
 	if !rawPresent(raw) {
 		return nil, protocolcore.TranslationReport{}, nil
@@ -660,7 +682,9 @@ func (codec *Codec) decodeSystem(
 		}
 		blocks[index] = block
 		if rawPresent(blockWire.CacheControl) {
-			report.Append(cacheNotice(fmt.Sprintf("$.system[%d].cache_control", index)))
+			if err := protocolcore.AppendReportWithin(&report, cacheNotice(fmt.Sprintf("$.system[%d].cache_control", index)), budget); err != nil {
+				return nil, report.Build(), protocolcore.NewFailure(protocolcore.ReasonInvalidClientRequest, "$.system", err)
+			}
 		}
 	}
 	return blocks, report.Build(), nil
@@ -722,6 +746,7 @@ func (codec *Codec) decodeMessage(
 	messageIndex int,
 	wire anthropicMessageWire,
 	mode requestDecodeMode,
+	budget *protocolcore.ResourceBudget,
 ) (protocolcore.Message, protocolcore.TranslationReport, error) {
 	role := protocolcore.Role(wire.Role)
 	switch role {
@@ -814,15 +839,19 @@ func (codec *Codec) decodeMessage(
 							err,
 						)
 				}
-				report.Append(protocolcore.NewTranslationReport(
+				if err := protocolcore.AppendReportWithin(&report, protocolcore.NewTranslationReport(
 					protocolcore.TranslationNotice{
 						Code: protocolcore.NoticeCitationsNotForwarded,
 						Path: path + ".citations",
 					},
-				))
+				), budget); err != nil {
+					return protocolcore.Message{}, report.Build(), protocolcore.NewFailure(protocolcore.ReasonInvalidClientRequest, "$.messages", err)
+				}
 			}
 			if rawPresent(blockWire.CacheControl) {
-				report.Append(cacheNotice(path + ".cache_control"))
+				if err := protocolcore.AppendReportWithin(&report, cacheNotice(path+".cache_control"), budget); err != nil {
+					return protocolcore.Message{}, report.Build(), protocolcore.NewFailure(protocolcore.ReasonInvalidClientRequest, "$.messages", err)
+				}
 			}
 
 		case "tool_use":
@@ -870,15 +899,19 @@ func (codec *Codec) decodeMessage(
 							err,
 						)
 				}
-				report.Append(protocolcore.NewTranslationReport(
+				if err := protocolcore.AppendReportWithin(&report, protocolcore.NewTranslationReport(
 					protocolcore.TranslationNotice{
 						Code: protocolcore.NoticeToolCallerNotForwarded,
 						Path: path + ".caller",
 					},
-				))
+				), budget); err != nil {
+					return protocolcore.Message{}, report.Build(), protocolcore.NewFailure(protocolcore.ReasonInvalidClientRequest, "$.messages", err)
+				}
 			}
 			if rawPresent(blockWire.CacheControl) {
-				report.Append(cacheNotice(path + ".cache_control"))
+				if err := protocolcore.AppendReportWithin(&report, cacheNotice(path+".cache_control"), budget); err != nil {
+					return protocolcore.Message{}, report.Build(), protocolcore.NewFailure(protocolcore.ReasonInvalidClientRequest, "$.messages", err)
+				}
 			}
 
 		case "tool_result":
@@ -925,7 +958,9 @@ func (codec *Codec) decodeMessage(
 				blocks = append(blocks, opaque)
 			}
 			if rawPresent(blockWire.CacheControl) {
-				report.Append(cacheNotice(path + ".cache_control"))
+				if err := protocolcore.AppendReportWithin(&report, cacheNotice(path+".cache_control"), budget); err != nil {
+					return protocolcore.Message{}, report.Build(), protocolcore.NewFailure(protocolcore.ReasonInvalidClientRequest, "$.messages", err)
+				}
 			}
 
 		case "thinking", "redacted_thinking":

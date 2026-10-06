@@ -265,6 +265,10 @@ func (codec *Codec) decodeClientRequest(
 			invalidClient("$", errors.New("request body has an invalid size"))
 	}
 
+	budget := codec.requestBudget()
+	if err := budget.ReserveJSON(body); err != nil {
+		return protocolcore.Request{}, protocolcore.TranslationReport{}, invalidClient("$", err)
+	}
 	var wire requestWire
 	var decodeErr error
 	if strictRoot {
@@ -331,7 +335,9 @@ func (codec *Codec) decodeClientRequest(
 		messages = append(messages, decodedMessages...)
 		tools = append(tools, decodedTools...)
 		namespaces = append(namespaces, decodedNamespaces...)
-		report.Append(itemReport)
+		if err := protocolcore.AppendReportWithin(&report, itemReport, budget); err != nil {
+			return protocolcore.Request{}, report.Build(), invalidClient("$", err)
+		}
 	}
 	for index, raw := range wire.Tools {
 		path := fmt.Sprintf("$.tools[%d]", index)
@@ -344,10 +350,12 @@ func (codec *Codec) decodeClientRequest(
 			if err := decodeClientWire(raw, &hosted, !strictRoot); err != nil {
 				return protocolcore.Request{}, report.Build(), invalidClient(path, err)
 			}
-			report.Append(notice(
+			if err := protocolcore.AppendReportWithin(&report, notice(
 				protocolcore.NoticeHostedToolNotForwarded,
 				path,
-			))
+			), budget); err != nil {
+				return protocolcore.Request{}, report.Build(), invalidClient("$", err)
+			}
 			continue
 		}
 		if kind == "tool_search" {
@@ -357,17 +365,21 @@ func (codec *Codec) decodeClientRequest(
 					errors.New("Responses tool search requires a same-dialect path"),
 				)
 			}
-			report.Append(notice(
+			if err := protocolcore.AppendReportWithin(&report, notice(
 				protocolcore.NoticeHostedToolNotForwarded,
 				path,
-			))
+			), budget); err != nil {
+				return protocolcore.Request{}, report.Build(), invalidClient("$", err)
+			}
 			continue
 		}
 		if !strictRoot && !modelledResponsesToolType(kind) {
 			// Hosted and client-native tools the projection does not model.
 			// They carry no definition into the tool policy: calls they
 			// produce are unproven there, so nothing is approved by omission.
-			report.Append(notice(protocolcore.NoticeNativeContentNotProjected, path))
+			if err := protocolcore.AppendReportWithin(&report, notice(protocolcore.NoticeNativeContentNotProjected, path), budget); err != nil {
+				return protocolcore.Request{}, report.Build(), invalidClient("$", err)
+			}
 			continue
 		}
 		tool, namespace, err := codec.decodeTool(
@@ -394,22 +406,30 @@ func (codec *Codec) decodeClientRequest(
 	if err != nil {
 		return protocolcore.Request{}, report.Build(), err
 	}
-	report.Append(toolChoiceReport)
+	if err := protocolcore.AppendReportWithin(&report, toolChoiceReport, budget); err != nil {
+		return protocolcore.Request{}, report.Build(), invalidClient("$", err)
+	}
 	reasoning, reasoningReport, err := decodeReasoning(wire.Reasoning, !strictRoot)
 	if err != nil {
 		return protocolcore.Request{}, report.Build(), err
 	}
-	report.Append(reasoningReport)
+	if err := protocolcore.AppendReportWithin(&report, reasoningReport, budget); err != nil {
+		return protocolcore.Request{}, report.Build(), invalidClient("$", err)
+	}
 	verbosity, textReport, err := decodeText(wire.Text, !strictRoot)
 	if err != nil {
 		return protocolcore.Request{}, report.Build(), err
 	}
-	report.Append(textReport)
-	includeReport, err := decodeInclude(wire.Include, !strictRoot)
+	if err := protocolcore.AppendReportWithin(&report, textReport, budget); err != nil {
+		return protocolcore.Request{}, report.Build(), invalidClient("$", err)
+	}
+	includeReport, err := decodeInclude(wire.Include, !strictRoot, budget)
 	if err != nil {
 		return protocolcore.Request{}, report.Build(), err
 	}
-	report.Append(includeReport)
+	if err := protocolcore.AppendReportWithin(&report, includeReport, budget); err != nil {
+		return protocolcore.Request{}, report.Build(), invalidClient("$", err)
+	}
 	if wire.PromptCacheKey != "" {
 		if err := validateBoundedString(
 			wire.PromptCacheKey,
@@ -419,10 +439,12 @@ func (codec *Codec) decodeClientRequest(
 			return protocolcore.Request{}, report.Build(),
 				invalidClient("$.prompt_cache_key", err)
 		}
-		report.Append(notice(
+		if err := protocolcore.AppendReportWithin(&report, notice(
 			protocolcore.NoticePromptCacheKeyNotForwarded,
 			"$.prompt_cache_key",
-		))
+		), budget); err != nil {
+			return protocolcore.Request{}, report.Build(), invalidClient("$", err)
+		}
 	}
 	protocolEvidence, err := decodeRequestProtocolEvidence(
 		wire.ClientMetadata,
@@ -433,16 +455,20 @@ func (codec *Codec) decodeClientRequest(
 		return protocolcore.Request{}, report.Build(), err
 	}
 	if rawPresent(wire.ClientMetadata) {
-		report.Append(notice(
+		if err := protocolcore.AppendReportWithin(&report, notice(
 			protocolcore.NoticeClientMetadataNotForwarded,
 			"$.client_metadata",
-		))
+		), budget); err != nil {
+			return protocolcore.Request{}, report.Build(), invalidClient("$", err)
+		}
 	}
 	if wire.PreviousResponseID != nil {
-		report.Append(notice(
+		if err := protocolcore.AppendReportWithin(&report, notice(
 			protocolcore.NoticePreviousResponseIDNotForwarded,
 			"$.previous_response_id",
-		))
+		), budget); err != nil {
+			return protocolcore.Request{}, report.Build(), invalidClient("$", err)
+		}
 	}
 
 	request := protocolcore.Request{
@@ -459,7 +485,7 @@ func (codec *Codec) decodeClientRequest(
 		OutputVerbosity:  verbosity,
 		ProtocolEvidence: protocolEvidence,
 	}
-	if err := request.Validate(); err != nil {
+	if err := codec.ValidateRequest(request); err != nil {
 		return protocolcore.Request{}, report.Build(), invalidClient("$", err)
 	}
 	return request.Clone(), report.Build(), nil
@@ -2204,6 +2230,7 @@ func validateTextFormat(raw json.RawMessage, compatible bool) error {
 func decodeInclude(
 	values []string,
 	compatible bool,
+	budget *protocolcore.ResourceBudget,
 ) (protocolcore.TranslationReport, error) {
 	if len(values) == 0 {
 		return protocolcore.TranslationReport{}, nil
@@ -2219,10 +2246,12 @@ func decodeInclude(
 		}
 		seen[value] = struct{}{}
 		if value != "reasoning.encrypted_content" && compatible {
-			report.Append(notice(
+			if err := protocolcore.AppendReportWithin(&report, notice(
 				protocolcore.NoticeNativeContentNotProjected,
 				fmt.Sprintf("$.include[%d]", index),
-			))
+			), budget); err != nil {
+				return report.Build(), invalidClient("$.include", err)
+			}
 			continue
 		}
 		if value != "reasoning.encrypted_content" {
@@ -2231,10 +2260,12 @@ func decodeInclude(
 				errors.New("Responses include value is unsupported"),
 			)
 		}
-		report.Append(notice(
+		if err := protocolcore.AppendReportWithin(&report, notice(
 			protocolcore.NoticeReasoningIncludeNotForwarded,
 			fmt.Sprintf("$.include[%d]", index),
-		))
+		), budget); err != nil {
+			return report.Build(), invalidClient("$.include", err)
+		}
 	}
 	return report.Build(), nil
 }

@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"sync"
 	"unicode/utf8"
+	"unsafe"
 
 	"github.com/vibe-agi/vibermate/internal/protocolcore"
 	"github.com/vibe-agi/vibermate/internal/protocolpath"
@@ -104,8 +105,9 @@ type streamTextState struct {
 type StreamEncoder struct {
 	mu sync.Mutex
 
-	codec   *Codec
-	request protocolcore.Request
+	codec     *Codec
+	resources *protocolcore.ResourceBudget
+	request   protocolcore.Request
 
 	started      bool
 	terminal     bool
@@ -126,7 +128,7 @@ func (codec *Codec) NewStreamEncoder(
 	if codec == nil {
 		return nil, errors.New("Responses codec is nil")
 	}
-	if err := request.Validate(); err != nil {
+	if err := codec.ValidateRequest(request); err != nil {
 		return nil, protocolcore.NewFailure(
 			protocolcore.ReasonInvalidClientRequest,
 			"$",
@@ -144,9 +146,10 @@ func (codec *Codec) NewStreamEncoder(
 		)
 	}
 	return &StreamEncoder{
-		codec:   codec,
-		request: request.Clone(),
-		blocks:  make(map[int]protocolcore.ContentBlock),
+		codec:     codec,
+		resources: codec.responseBudget(),
+		request:   request.Clone(),
+		blocks:    make(map[int]protocolcore.ContentBlock),
 	}, nil
 }
 
@@ -169,6 +172,15 @@ func (encoder *StreamEncoder) Start(
 		return nil, encoder.fail("$", err)
 	}
 	responseID := streamResponseClientID(encoder.request, start)
+	if encoder.resources != nil {
+		cost, err := protocolcore.MeasureResponse(protocolcore.Response{ID: responseID, RequestedModel: encoder.request.RequestedModel, EffectiveModel: encoder.request.EffectiveModel, ReportedModel: start.ReportedModel})
+		if err != nil {
+			return nil, encoder.fail("$", err)
+		}
+		if err := encoder.resources.Reserve(cost); err != nil {
+			return nil, encoder.fail("$", err)
+		}
+	}
 	initial := baseResponseWire(
 		encoder.request,
 		responseID,
@@ -229,6 +241,12 @@ func (encoder *StreamEncoder) StartText(index int) ([]byte, error) {
 		encoder.responseID,
 		strconv.Itoa(index),
 	)
+	if encoder.resources != nil {
+		cost := protocolcore.ResourceCost{PayloadBytes: uint64(len(itemID) + len(protocolcore.BlockText)), StructureBytes: uint64(unsafe.Sizeof(protocolcore.ContentBlock{})) + uint64(unsafe.Sizeof(streamTextState{})) + uint64(unsafe.Sizeof(index))}
+		if err := encoder.resources.Reserve(cost); err != nil {
+			return nil, encoder.fail("$.output", err)
+		}
+	}
 	item := responseMessageItemWire{
 		ID:      itemID,
 		Type:    "message",
@@ -306,6 +324,11 @@ func (encoder *StreamEncoder) AppendText(
 			"$.output",
 			errors.New("text item exceeds the configured byte limit"),
 		)
+	}
+	if encoder.resources != nil {
+		if err := encoder.resources.Reserve(protocolcore.ResourceCost{PayloadBytes: uint64(len(text))}); err != nil {
+			return nil, encoder.fail("$.output", err)
+		}
 	}
 	event := responseTextDeltaEventWire{
 		Type:           "response.output_text.delta",
@@ -430,6 +453,15 @@ func (encoder *StreamEncoder) ToolCall(
 			errors.New("response block index is duplicated"),
 		)
 	}
+	if encoder.resources != nil {
+		cost, err := protocolcore.MeasureResponse(protocolcore.Response{Blocks: []protocolcore.ContentBlock{{Kind: protocolcore.BlockToolCall, ToolCall: call}}})
+		if err != nil {
+			return nil, encoder.fail("$.output", err)
+		}
+		if err := encoder.resources.Reserve(cost); err != nil {
+			return nil, encoder.fail("$.output", err)
+		}
+	}
 	block, err := protocolcore.NewToolCallBlock(call)
 	if err != nil {
 		return nil, encoder.fail("$.output", err)
@@ -477,7 +509,7 @@ func (encoder *StreamEncoder) Terminal(
 			errors.New("Responses terminal has an open text item"),
 		)
 	}
-	if err := response.Validate(); err != nil {
+	if err := encoder.codec.ValidateResponse(response); err != nil {
 		return nil, encoder.fail("$", err)
 	}
 	if response.ID != encoder.start.ResponseID ||

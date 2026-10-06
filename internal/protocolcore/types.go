@@ -1064,6 +1064,11 @@ func validProtocolEvidenceName(value string) bool {
 }
 
 func (request Request) Validate() error {
+	return request.validate(true)
+}
+
+// The finite-policy entry point replaces only the legacy history count check.
+func (request Request) validate(legacyCount bool) error {
 	if err := validateIdentifier("requested model", request.RequestedModel, MaxModelBytes); err != nil {
 		return err
 	}
@@ -1084,7 +1089,7 @@ func (request Request) Validate() error {
 			return fmt.Errorf("system content block %d: %w", index, err)
 		}
 	}
-	if len(request.Messages) == 0 || len(request.Messages) > MaxMessageCount {
+	if len(request.Messages) == 0 || (legacyCount && len(request.Messages) > MaxMessageCount) {
 		return errors.New("message count is invalid")
 	}
 	providerExtensionBytes := 0
