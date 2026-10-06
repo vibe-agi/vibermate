@@ -740,24 +740,14 @@ func (request Request) validateProjectionWithin(mode environment.ContentRecordin
 		}
 	}
 	for _, message := range request.Messages {
-		switch protocolcore.Role(message.Role) {
-		case protocolcore.RoleSystem, protocolcore.RoleDeveloper,
-			protocolcore.RoleUser, protocolcore.RoleAssistant, protocolcore.RoleTool:
-		default:
-			return fmt.Errorf("%w: message role is unsupported", ErrInvalidEvidence)
+		if err := validateMessageRole(message.Role); err != nil {
+			return err
 		}
 		if len(message.Blocks) == 0 || (legacyCount && len(message.Blocks) > protocolcore.MaxContentBlocks) {
 			return fmt.Errorf("%w: message blocks are invalid", ErrInvalidEvidence)
 		}
-		if message.Agent != nil {
-			context := protocolcore.AgentMessageContext{
-				AgentName: message.Agent.AgentName,
-				Author:    message.Agent.Author,
-				Recipient: message.Agent.Recipient,
-			}
-			if err := context.Validate(); err != nil {
-				return fmt.Errorf("%w: agent message context: %v", ErrInvalidEvidence, err)
-			}
+		if err := validateMessageHeader(message); err != nil {
+			return err
 		}
 		for _, block := range message.Blocks {
 			if err := block.Validate(mode); err != nil {
@@ -773,6 +763,28 @@ func (request Request) validateProjectionWithin(mode environment.ContentRecordin
 	}
 	if err := protocolcore.ValidateProtocolEvidence(request.ProtocolEvidence); err != nil {
 		return fmt.Errorf("%w: %v", ErrInvalidEvidence, err)
+	}
+	return nil
+}
+
+func validateMessageRole(role string) error {
+	switch protocolcore.Role(role) {
+	case protocolcore.RoleSystem, protocolcore.RoleDeveloper, protocolcore.RoleUser, protocolcore.RoleAssistant, protocolcore.RoleTool:
+	default:
+		return fmt.Errorf("%w: message role is unsupported", ErrInvalidEvidence)
+	}
+	return nil
+}
+
+func validateMessageHeader(message Message) error {
+	if err := validateMessageRole(message.Role); err != nil {
+		return err
+	}
+	if a := message.Agent; a != nil {
+		v := protocolcore.AgentMessageContext{AgentName: a.AgentName, Author: a.Author, Recipient: a.Recipient}
+		if err := v.Validate(); err != nil {
+			return fmt.Errorf("%w: agent message context: %v", ErrInvalidEvidence, err)
+		}
 	}
 	return nil
 }

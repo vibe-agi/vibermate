@@ -669,6 +669,107 @@ func (w *countWriter) Write(b []byte) (int, error) {
 	w.n += uint64(len(b))
 	return len(b), nil
 }
+
+// retainedCost is the logical retained-record currency, per occurrence. It is
+// independent of canonical/physical encoding and parser workspace accounting.
+// Views reuse these exact rules for the content they actually contain.
+type retainedCost struct {
+	budget      *protocolcore.ResourceBudget
+	cost        *RecordCost
+	stringError error
+}
+
+func newRetainedCost(l SourceLimits) (*retainedCost, error) {
+	b, err := protocolcore.NewResourceBudget(protocolcore.ResourceCost{PayloadBytes: l.RetainedBytes, StructureBytes: l.StructureBytes})
+	if err != nil {
+		return nil, fmt.Errorf("%w: projected record policy: %w", ErrInvalidEvidence, err)
+	}
+	return &retainedCost{budget: b, cost: &RecordCost{}}, nil
+}
+func (c *retainedCost) strings(vs ...string) uint64 {
+	var n uint64
+	for _, v := range vs {
+		if !utf8.ValidString(v) {
+			c.stringError = fmt.Errorf("%w: retained ordinary string is invalid UTF8", ErrInvalidEvidence)
+			return 0
+		}
+		if uint64(len(v)) > math.MaxInt64-n {
+			return uint64(math.MaxInt64) + 1
+		}
+		n += uint64(len(v))
+	}
+	return n
+}
+func (c *retainedCost) add(p, n uint64) error {
+	if c.stringError != nil {
+		return c.stringError
+	}
+	if err := c.budget.Reserve(protocolcore.ResourceCost{PayloadBytes: p, StructureBytes: n}); err != nil {
+		return fmt.Errorf("%w: projected record budget: %w", ErrInvalidEvidence, err)
+	}
+	c.cost.RetainedBytes += p
+	c.cost.StructureBytes += n
+	return nil
+}
+func (c *retainedCost) agent(a *AgentContext) error {
+	if a == nil {
+		return nil
+	}
+	return c.add(c.strings(a.AgentName, a.Author, a.Recipient), uint64(unsafe.Sizeof(*a)))
+}
+func (c *retainedCost) evidence(es []protocolcore.ProtocolEvidenceValue) error {
+	for _, e := range es {
+		if err := c.add(c.strings(e.Name, e.Value), uint64(unsafe.Sizeof(e))); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+func (c *retainedCost) metadata(meta RecordMetadata) error {
+	f := meta.Frozen
+	if err := c.add(c.strings(meta.ExchangeID, meta.Parent.CaptureRunID, meta.Parent.ManualCaptureID, f.EnvironmentID, f.EnvironmentDigest, f.ClientEndpointID, f.ProtocolPlanID, f.RouteID, string(meta.Mode), meta.Request.RequestedModel, meta.Request.EffectiveModel), uint64(unsafe.Sizeof(Record{}))); err != nil {
+		return err
+	}
+	for _, t := range meta.Request.Tools {
+		if err := c.add(c.strings(t.Name, t.Namespace), uint64(unsafe.Sizeof(t))); err != nil {
+			return err
+		}
+	}
+	if err := c.evidence(meta.Request.ProtocolEvidence); err != nil {
+		return err
+	}
+	if meta.Response != nil {
+		v := meta.Response
+		if err := c.add(c.strings(v.ID, v.RequestedModel, v.EffectiveModel, v.ReportedModel, v.StopReason), uint64(unsafe.Sizeof(Response{}))); err != nil {
+			return err
+		}
+		for _, u := range usageValues(v.Usage) {
+			if err := u.validateEncoding(); err != nil {
+				return err
+			}
+			if err := c.add(c.strings(u.Source), 0); err != nil {
+				return err
+			}
+		}
+		if err := c.evidence(v.ProtocolEvidence); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+func (c *retainedCost) message(h MessageHeader) error {
+	if err := c.add(c.strings(h.Role), uint64(unsafe.Sizeof(Message{}))); err != nil {
+		return err
+	}
+	return c.agent(h.Agent)
+}
+func (c *retainedCost) block(b Block) error {
+	if err := c.add(c.strings(b.Kind, string(b.Availability), b.Text, b.CallID, b.ToolName, b.ToolNamespace, b.ProviderSource, b.ProviderKind, b.Fingerprint)+uint64(len(b.Arguments)), uint64(unsafe.Sizeof(Block{}))); err != nil {
+		return err
+	}
+	return c.agent(b.Agent)
+}
+
 func (s *Source) Measure(ctx context.Context) (RecordCost, error) {
 	var c RecordCost
 	if s == nil || ctx == nil {
@@ -683,46 +784,14 @@ func (s *Source) Measure(ctx context.Context) (RecordCost, error) {
 	if _, err := s.metadata.ExpiresAt.MarshalJSON(); err != nil {
 		return c, fmt.Errorf("%w: expiry time: %w", ErrInvalidEvidence, err)
 	}
-	budget, err := protocolcore.NewResourceBudget(protocolcore.ResourceCost{PayloadBytes: s.limits.RetainedBytes, StructureBytes: s.limits.StructureBytes})
+	retained, err := newRetainedCost(s.limits)
 	if err != nil {
-		return c, fmt.Errorf("%w: projected record policy: %w", ErrInvalidEvidence, err)
+		return c, err
 	}
-	var retainedStringError error
-	add := func(p, n uint64) error {
-		if retainedStringError != nil {
-			return retainedStringError
-		}
-		if err := budget.Reserve(protocolcore.ResourceCost{PayloadBytes: p, StructureBytes: n}); err != nil {
-			return fmt.Errorf("%w: projected record budget: %w", ErrInvalidEvidence, err)
-		}
-		c.RetainedBytes += p
-		c.StructureBytes += n
-		return nil
-	}
-	stringsCost := func(vs ...string) uint64 {
-		var n uint64
-		for _, v := range vs {
-			// Ordinary strings must survive decode/re-encode without replacement.
-			// RawMessage is deliberately accounted separately and never checked here.
-			if !utf8.ValidString(v) {
-				retainedStringError = fmt.Errorf("%w: retained ordinary string is invalid UTF8", ErrInvalidEvidence)
-				return 0
-			}
-			if uint64(len(v)) > math.MaxInt64-n {
-				// A rejecting sentinel still leaves room for any int-sized RawMessage
-				// added by the block caller; it cannot wrap back under the budget.
-				return uint64(math.MaxInt64) + 1
-			}
-			n += uint64(len(v))
-		}
-		return n
-	}
+	retained.cost = &c
 	agent := func(a *AgentContext) error {
 		if a == nil {
 			return nil
-		}
-		if err := add(stringsCost(a.AgentName, a.Author, a.Recipient), uint64(unsafe.Sizeof(*a))); err != nil {
-			return err
 		}
 		cw := countWriter{}
 		w := canonicalWriter{sink: &cw}
@@ -741,42 +810,8 @@ func (s *Source) Measure(ctx context.Context) (RecordCost, error) {
 		return w.err
 	}
 	meta := s.metadata
-	f := meta.Frozen
-	if err := add(stringsCost(meta.ExchangeID, meta.Parent.CaptureRunID, meta.Parent.ManualCaptureID, f.EnvironmentID, f.EnvironmentDigest, f.ClientEndpointID, f.ProtocolPlanID, f.RouteID, string(meta.Mode), meta.Request.RequestedModel, meta.Request.EffectiveModel), uint64(unsafe.Sizeof(Record{}))); err != nil {
+	if err := retained.metadata(meta); err != nil {
 		return c, err
-	}
-	for _, t := range meta.Request.Tools {
-		if err := add(stringsCost(t.Name, t.Namespace), uint64(unsafe.Sizeof(t))); err != nil {
-			return c, err
-		}
-	}
-	evidence := func(es []protocolcore.ProtocolEvidenceValue) error {
-		for _, e := range es {
-			if err := add(stringsCost(e.Name, e.Value), uint64(unsafe.Sizeof(e))); err != nil {
-				return err
-			}
-		}
-		return nil
-	}
-	if err := evidence(meta.Request.ProtocolEvidence); err != nil {
-		return c, err
-	}
-	if meta.Response != nil {
-		v := meta.Response
-		if err := add(stringsCost(v.ID, v.RequestedModel, v.EffectiveModel, v.ReportedModel, v.StopReason), uint64(unsafe.Sizeof(Response{}))); err != nil {
-			return c, err
-		}
-		for _, u := range usageValues(v.Usage) {
-			if err := u.validateEncoding(); err != nil {
-				return c, err
-			}
-			if err := add(stringsCost(u.Source), 0); err != nil {
-				return c, err
-			}
-		}
-		if err := evidence(v.ProtocolEvidence); err != nil {
-			return c, err
-		}
 	}
 	blockCounter := countWriter{}
 	blockEncoder := canonicalWriter{sink: &blockCounter}
@@ -786,7 +821,7 @@ func (s *Source) Measure(ctx context.Context) (RecordCost, error) {
 			c.TranscriptNodes++
 		}
 		if p == RequestPart {
-			if err := add(stringsCost(h.Role), uint64(unsafe.Sizeof(Message{}))); err != nil {
+			if err := retained.message(h); err != nil {
 				return err
 			}
 		}
@@ -805,7 +840,7 @@ func (s *Source) Measure(ctx context.Context) (RecordCost, error) {
 			if argumentDepthOverflow(b.Arguments, envelope) != 0 {
 				return fmt.Errorf("%w: canonical arguments exceed parent depth", ErrInvalidEvidence)
 			}
-			if err := add(stringsCost(b.Kind, string(b.Availability), b.Text, b.CallID, b.ToolName, b.ToolNamespace, b.ProviderSource, b.ProviderKind, b.Fingerprint)+uint64(len(b.Arguments)), uint64(unsafe.Sizeof(Block{}))); err != nil {
+			if err := retained.block(b); err != nil {
 				return err
 			}
 			if err := agent(b.Agent); err != nil {

@@ -545,6 +545,107 @@ func WriteCanonicalJSON(sink io.Writer, r Record) error {
 	return w.err
 }
 
+// wireCounter stops emission at the selected finite bound without retaining
+// output. Context is checked on every bounded writer flush, including bodies.
+type wireCounter struct {
+	ctx      context.Context
+	limit, n uint64
+}
+
+func (c *wireCounter) Write(b []byte) (int, error) {
+	if err := c.ctx.Err(); err != nil {
+		return 0, err
+	}
+	if uint64(len(b)) > c.limit-c.n {
+		return 0, fmt.Errorf("%w: encoded view exceeds its bound", ErrInvalidEvidence)
+	}
+	c.n += uint64(len(b))
+	return len(b), nil
+}
+
+func countProjectionWire(ctx context.Context, limit uint64, p Projection) error {
+	c := wireCounter{ctx: ctx, limit: limit}
+	w := canonicalWriter{sink: &c}
+	m := projectionMetadata(p)
+	w.recordStart(m)
+	w.requestStart(m.Request)
+	w.text(`,"system":`)
+	w.blocks(p.Request.System, true)
+	w.text(`,"messages":[`)
+	for i, v := range p.Request.Messages {
+		if i > 0 {
+			w.text(",")
+		}
+		w.message(v, true)
+	}
+	w.text("]")
+	w.requestEnd(m.Request)
+	if p.Response != nil {
+		w.text(`,"response":`)
+		w.responseStart(*m.Response)
+		w.blocks(p.Response.Blocks, true)
+		w.responseEnd(*m.Response)
+	}
+	w.text("}")
+	w.flush()
+	return w.err
+}
+
+// ContentPage has no collection-normalizing MarshalJSON. Its nil arrays and
+// omitempty fields therefore use the page's actual wire layout, not Record's.
+func writePageWire(w *canonicalWriter, p ContentPage) {
+	w.text("{")
+	comma := false
+	for _, f := range [3][2]string{{"blockKind", p.BlockKind}, {"callId", p.CallID}, {"toolName", p.ToolName}} {
+		if f[1] != "" {
+			if comma {
+				w.text(",")
+			}
+			w.field(f[0], f[1])
+			comma = true
+		}
+	}
+	if comma {
+		w.text(",")
+	}
+	w.field("exchangeId", p.ExchangeID)
+	w.text(",")
+	w.field("kind", p.Kind)
+	w.text(`,"messages":`)
+	if p.Messages == nil {
+		w.text("null")
+	} else {
+		w.text("[")
+		for i, m := range p.Messages {
+			if i > 0 {
+				w.text(",")
+			}
+			w.message(m, false)
+		}
+		w.text("]")
+	}
+	w.text(`,"blocks":`)
+	w.blocks(p.Blocks, false)
+	if len(p.ProtocolEvidence) > 0 {
+		w.text(`,"protocolEvidence":`)
+		w.evidence(p.ProtocolEvidence)
+	}
+	w.optional("text", p.Text)
+	w.text(`,"offset":`)
+	w.integer(int64(p.Offset))
+	w.text(`,"total":`)
+	w.integer(int64(p.Total))
+	w.optional("nextCursor", p.NextCursor)
+	w.text("}")
+}
+func countPageWire(ctx context.Context, limit uint64, p ContentPage) error {
+	c := wireCounter{ctx: ctx, limit: limit}
+	w := canonicalWriter{sink: &c}
+	writePageWire(&w, p)
+	w.flush()
+	return w.err
+}
+
 func (w *canonicalWriter) sourceMessage(ctx context.Context, m MessageSource) error {
 	h := m.Header()
 	w.text("{")
