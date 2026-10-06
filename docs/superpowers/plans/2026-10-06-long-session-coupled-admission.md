@@ -1,0 +1,225 @@
+# Stable coupled admission and complete recording Implementation Plan
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. The controller dispatches one implementer with exact task briefs and independent reviews. Steps use checkbox (`- [ ]`) syntax for tracking.
+
+**Goal:** Admit complete resource-bounded long requests and preserve every supported response in complete, readable records without the 4096 history limit.
+
+**Architecture:** Add checked per-occurrence execution accounting and a synchronous borrowed record source. Keep schema1 and legacy logical canonical JSON/hash identities; stream canonical encoding and split only oversized logical blocks into bounded physical fragments directly referenced by existing message manifests. Preserve logical messages, blocks, history order, and all existing authorization boundaries.
+
+**Tech Stack:** Go1.26.8; existing encoding/json, SHA-256, modernc SQLite, zstd reader; existing Pipeline, codecs, exchangecontent, runtimepersistence.
+
+**Spec:** `docs/superpowers/specs/2026-10-06-long-session-hotfix-design.md`. The controller has read the supporting audits and actual diagnostics; their binding decisions and measured results are repeated below. Executors use this plan and their task brief, not another plan's scratch directory.
+
+## Global Constraints
+
+- Baseline hotfix HEAD `6b01fa0221f0ea1badcc08723462f2b1c46ad6ee`; notice fix `d978bcf` and bounded-compression fix `2c3b873` are independently complete. Preserve both; do not redo their implementations or unchanged covering gates.
+- Inherited limits:16MiB request/decompressed/response wire,8MiB text, existing nested/tool/JSON protections,32MiB **encoded record/physical row**, SQL100001 transcript depth and16384 physical manifest slots. There is no inherited32MiB semantic-payload accounting field. Request payload/structure, response reserve, logical-record and process capacities are proposed internal policies; Task6 measures them and root records exact values before Task7 changes production defaults.
+- No arbitrary replacement history count. SQL100001 depth is a storage invariant; reserve the possible response node and charge every request occurrence, including shared payload/inactive fields.
+- No truncation, hidden recording loss, metadata fallback, response allowance shrinking with history, new body journal/database, general scheduler, or imported development schema2/MCP/global-egress work.
+- Full/MetadataOnly/Off, redaction, expiry, raw ownership, complete-tail scripts, same-dialect wire, frozen Account/route and genuine response tool approval retain their meanings.
+- One writer and one compiler/test job at a time. All Go commands use `env DEVELOPER_DIR=/Library/Developer/CommandLineTools GOFLAGS=-mod=readonly /usr/local/go/bin/go`; keep original RED/PASS logs. No live user database/Account/Capture/App experiments.
+- Prerequisite: reviewed completion of `docs/superpowers/plans/2026-10-06-bounded-evidence-compression.md`. Consume its factory fix and recorded tests; do not reimplement it or rerun historical compression modes. Rerun only checks affected by later Store changes.
+- Capacity constants are not measured yet. Tasks2–5 implement functions taking explicit validated finite policies; existing production defaults/4096 guards remain. Task6 delivers bounded candidate-path calibration; root adopts exact internal values; Task7 switches production defaults and proves final acceptance. No failing-test-only commit or application setting/validation-disable flag.
+
+## Settled representation and ownership decisions
+
+1. Logical canonical bytes remain **exactly** current `json.Marshal` bytes: field order, HTML/control escaping, RawMessage compaction, stable empty arrays, usage semantics, time encoding. Block/message SHA-256 and `transcriptNodeDomain` never change. Implement a streaming encoder, not a new canonical language. Compare it byte-for-byte against existing encoders on legacy fixtures and fuzz input.
+2. Ordinary blocks with canonical bytes≤`MaxEncodedBytes` remain existing JSON rows. An oversized block becomes contiguous **physical fragment** entries in the same `block_manifest`; readers reassemble one logical block. Binary frame header is56 bytes: eight-byte magic `VMECB\x00\x01\x00`,32-byte logical block SHA-256, big-endian uint64 total canonical length, uint32 zero-based ordinal, uint32 fragment count. Body capacity is `(32<<20)-56`; non-final bodies fill it, final body has the exact remainder. Framing is used iff canonical length>32MiB, therefore count≥2. Physical digest is SHA-256 of the entire frame; `plain_bytes` remains the exact physical decoded row length≤32MiB.
+3. Select a schema1 record-format extension, subject to the Task4/6 feasibility gates: every physical fragment appears directly in `block_manifest`, so existing block-ref triggers/GC are intended to own all fragments. Prove that with real SQL/restart/expiry tests before adoption. No nested references, orphan staging, altered `plain_bytes` meaning, or hidden chunk table. SQL's16384 physical slots remain. Protocol blocks remain≤4096; projected request-message blocks≤4096+256=4352, response blocks≤4096+2×256=4608, system≤4096, derived from existing extension expansion. For each message, `physicalSlots <= logicalBlocks + floor(canonicalBlockBytes / ((32<<20)-56))`; derive the fixed response upper bound and prove this≤16384 before freezing execution limits. If schema1 feasibility fails, stop for root's internal representation ruling; never discover unsupported response slots after send or silently raise SQL bounds.
+4. Preserve all existing block identities/bytes. Deterministic legacy-or-fragment encoding means an existing logical message cannot acquire a different block manifest. Keep `putStoredBlock` length conflict guard; verify physical digest on every load, then canonical logical block and message digests. Codec is not identity: same bytes stored as zstd versus identity remain interchangeable. Do not replace existing rows merely to change codec.
+5. `agent_json` uses legacy JSON if≤4096 bytes; otherwise compact non-HTML JSON. Its three identifiers are each≤512 bytes and reject controls, so compact UTF-8 JSON fits4096; verify this with worst HTML/U+2028/U+2029 fixtures. The message hash always uses legacy escaped logical agent JSON. Decode accepts only either exact canonical form and rejects trailing/duplicate/unknown fields. This repairs a separate pre-existing agent physical bound without migrating hashes.
+6. Consume the separate compression unit's bounded shared factory: **BestCompression**, encoder concurrency1, existing identity fallback and old zstd reads. Its4000-block experiment measured954,018,224B allocation/424,361,984B RSS at18 workers versus56,877,360B/56,016,896B atone, with identical402,803B stored totals. This is component evidence, not a Store/concurrency proof. Charge its workspace in calibration; this plan neither owns nor changes `mustZstdWriter`.
+7. Persist a record in one existing atomic transaction. Preflight semantic validation, redaction sizing and logical hashes occur before `BeginTx`; inside, regenerate one bounded physical row at a time and insert rows/messages/nodes/manifest. Retain bounded digest/count metadata, never `map[digest][]encodedMessage`. This deliberately preserves crash/rollback/expiry correctness; calibration must prove the bounded transaction meets existing control/audit deadlines.
+8. Ordinary `Record`, `NewRecord`, `Put`, `Get`, `Projection` APIs remain adapters with explicit full-materialization accounting. `Record.Validate` no longer marshals the whole value. `CanonicalJSON` stays an explicitly32MiB bounded byte-returning convenience; add streaming `WriteCanonicalJSON` for complete larger records. Persistence never depends on `CanonicalJSON` succeeding. Page wire remains≤1MiB, body fragments≤32KiB; UI receives original logical block indices, never physical fragment indices.
+
+## File map and shared interfaces
+
+- Create `internal/protocolcore/resource.go`, `resource_json.go`, tests: checked accounting/preallocation guards and bounded lexical scan; modify `types.go`, `json_names.go` to share validation/accounting.
+- Modify `internal/openairesponses/{request_decode,provider_decode}.go`, `internal/anthropicchat` request/provider decoders, `internal/responseschat` request/provider encoders at existing ownership/growth seams; retain current public codec contracts.
+- Create `internal/exchange/resource_admission.go`, tests; modify `pipeline.go`, `message_transform.go`, `contracts.go`; modify `internal/loopbackproxy/handler.go` immediately before `serveInner` calls `readBounded` and before `serveSemantic` clones/captures the body. Wire one Runtime-owned gate through productruntime builders and loopbackproxy Options. Control/heartbeat/auxiliary routing never acquires this semantic-body gate.
+- Create `internal/exchangecontent/{source,canonical}.go`, tests; modify `types.go`, `manager.go`, `page.go`, `internal/productruntime/builders.go` for borrowed record handoff and compatible validation.
+- Create `internal/runtimepersistence/exchange_content_fragments.go`, tests; modify `exchange_content_repository.go`, `exchange_content_block.go`, `exchange_content_page.go`, `store.go`; keep `schema.sql`/revision byte-identical unless root's feasibility ruling requires a separate revision of this plan. Compression factory is a consumed prerequisite.
+- Create integration tests `internal/productruntime/long_session_acceptance_test.go`, `internal/runtimepersistence/long_session_upgrade_test.go`; retain synthetic fixtures/results in ignored scratch and final resource evidence in the adopted plan's evidence note.
+
+```go
+// protocolcore: inspect private JSONDocument/ProviderExtension storage without Bytes()/Fragments() copies.
+type ResourceCost struct { PayloadBytes, StructureBytes uint64 }
+func MeasureRequest(Request) (ResourceCost, error)
+func MeasureResponse(Response) (ResourceCost, error)
+type ResourceBudget struct { limit, used ResourceCost }
+func NewResourceBudget(ResourceCost) (*ResourceBudget, error)
+func (*ResourceBudget) Reserve(ResourceCost) error // checked addition; no refund before drain
+func MeasureJSON([]byte) (ResourceCost, error) // lexical scan before json.Decoder token allocation
+type ResourceLimits struct { Request, Response ResourceCost }
+func (ResourceLimits) Validate() error // finite/nonzero, checked aggregate arithmetic
+func ValidateRequestWithin(Request, ResourceLimits) error // full semantics + costs; no4096 business cap
+func ValidateResponseWithin(Response, ResourceLimits) error
+// Each codec adds Options.Resources *protocolcore.ResourceLimits: nil preserves legacy defaults until Task7.
+// Non-nil is copied/validated by its constructor; every decode/encode/clone uses that exact policy.
+// It cannot skip semantic, wire, duplicate-name, per-field or record checks.
+
+// exchange: one concrete gate, no worker, queue/list, per-waiter goroutine or runtime policy setting.
+type ResourcePolicy struct {
+    Semantic protocolcore.ResourceLimits
+    RecordCanonicalBytes, RecordRetainedBytes, RecordStructureBytes uint64
+    SlotBytes, ActiveBytes uint64 // SlotBytes includes complete request envelope + fixed response reserve
+}
+func (ResourcePolicy) Validate() error // SlotBytes<=ActiveBytes; checked complete-envelope proof
+type BodyAdmission struct { /* private owner context, mutex, used bytes and shared wake channel */ }
+type BodyLease struct { /* private issuing gate, finite ledger and once-only release */ }
+func NewBodyAdmission(context.Context, ResourcePolicy) (*BodyAdmission, error)
+func (*BodyAdmission) Acquire(context.Context) (*BodyLease, error)
+func (*BodyAdmission) Shutdown(context.Context) error // close admission, wake waiters, drain active slots
+func (*BodyLease) Reserve(protocolcore.ResourceCost) error // within its already-reserved full slot
+func (*BodyLease) Release() // once-only, after synchronous owner drain
+func WithBodyLease(*BodyLease) ClientRequestOption
+// exchange.Options.Resources *BodyAdmission and loopbackproxy.Options.Resources *BodyAdmission share ownership.
+// Pipeline rejects a missing/foreign lease on its resource-policy path before taking body copies.
+// nil legacy Runtime wiring remains until Task7; test harness constructs the candidate wiring explicitly.
+
+// exchangecontent: concrete sources are sealed; callbacks cannot manufacture authority.
+type Part uint8 // SystemPart, RequestPart, ResponsePart
+type MessageHeader struct { Role string; Agent *AgentContext; BlockCount int }
+type Source struct { /* private borrowed immutable semantic inputs + validated metadata */ }
+type MessageSource struct { /* private source/index */ }
+func NewSource(string, FrozenRef, environment.ContentRecordingPolicy, time.Time,
+    protocolcore.Request, *protocolcore.Response, ...RecordOption) (*Source, error)
+type SourceLimits struct { Semantic protocolcore.ResourceLimits;
+    CanonicalBytes, RetainedBytes, StructureBytes uint64 }
+func (SourceLimits) Validate() error // finite/checked; retains the complete old32MiB record domain
+func NewSourceWithin(SourceLimits, string, FrozenRef, environment.ContentRecordingPolicy,
+    time.Time, protocolcore.Request, *protocolcore.Response, ...RecordOption) (*Source, error)
+func SourceFromRecord(Record) (*Source, error)
+func (*Source) Metadata() Record // scalars/tools/evidence only; no System/Messages/response Blocks
+func (*Source) Walk(context.Context, func(Part, int, MessageSource) error) error
+func (MessageSource) Header() MessageHeader
+func (MessageSource) WalkBlocks(context.Context, func(Block) error) error
+type RecordCost struct { CanonicalBytes, RetainedBytes, StructureBytes, TranscriptNodes,
+    MaxLogicalBlockBytes, MaxPhysicalSlots, MaxAgentBytes uint64 }
+func (*Source) Measure(context.Context) (RecordCost, error)
+func WriteCanonicalJSON(io.Writer, Record) error
+func WriteCanonicalBlock(io.Writer, Block) error
+func WriteCanonicalMessage(io.Writer, MessageSource) error
+// Recorder/Repository add synchronous methods; existing Record/Put adapt through SourceFromRecord.
+// Manager.RecordSource(context.Context,*Source) error; Repository.PutSource(context.Context,*Source) error.
+```
+
+`NewSource` borrows the already-owned immutable capture only until synchronous `RecordSource` returns; it does not retain callbacks/input after return. Remove only the extra observer/Manager clones covered by that lifetime; keep ownership clones needed by scripts/provider mutation. `SourceFromRecord` uses the same checked walk. No call to `Measure` may call `Validate` recursively.
+
+`ResourcePolicy` is a finite constructor value used only inside internal packages/test harnesses; it is not a user/runtime knob. Add `productruntime.Options.Resources *exchange.ResourcePolicy` and `runtimepersistence.Options.ContentLimits *exchangecontent.SourceLimits` as internal constructor injection, with no JSON/config/env exposure. Task6 constructs candidate Runtime/codec/source/Store-reader wiring with those copied/validated values, including limits-aware model-map/clone/record/read validation. Existing production constructors retain legacy checks until Task7 adopts one private `productionResourcePolicy` value. No callback replaces validation; nil/zero never means unlimited. `NewSourceWithin` and `ValidateRequestWithin` provide full final-path semantics; the4096 business check is confined to the legacy adapter. Repository readers use the same SourceLimits, so candidate >4096 roundtrips cannot accidentally fall back through legacy Record.Validate.
+
+### Task1: Capture baseline fixtures and counting invariants; fold REDs into owning units
+
+**Files:** new resource/source/canonical/fragment tests above; existing codec, Pipeline, Store tests.
+**Consumes:** compression prerequisite and current codecs/Store. **Produces:** fixture descriptions, original baseline observations and the source-derived inventory; no standalone failing-test commit. Add each named RED immediately before its implementation in Tasks2–5/7, and commit only its GREEN unit.
+- [ ] Add `TestLongHistoryCompleteTail` with4095/4096/4097/4102/4111/16384 messages and distinct terminal sentinel; expected success only for resource-admitted inputs. Include≈4MiB4111 and longer tiny history. Tail invalid role/type, duplicate/case-fold member, invalid JSON/tool namespace must remain exact failures.
+- [ ] Add `TestEscapedResponseCompleteStore` using **literal** wire JSON containing6MiB `&` (not json.Marshal-created upstream), decode with real Responses decoder, request→response record completion, real Put/reopen/all pages. Assert original6,291,669-byte provider wire and6MiB exact text; current full recording fails. Add6MiB `x` control,8MiB text boundary, escaped controls, Unicode, and near16MiB provider reasoning containing repeating `cookie:x ` to expose redaction expansion beyond32MiB.
+- [ ] Add `TestResourceEveryOccurrence`: reuse one4MiB JSONDocument at multiple tool calls; inactive Text.ToolCall/ProviderExtension fields must be charged, as must fragment slice slots containing `0`, empty blocks, agents, tools, evidence and notices. Assert `cost(two occurrences) >= 2*payload + two cell costs`; no pointer/hash dedup discount.
+- [ ] Use this exact canonical RED as the small first implementation target (imports: bytes,encoding/json,strings,testing); persistence RED above remains mandatory:
+```go
+func TestStreamingCanonicalEscapedBlock(t *testing.T) {
+    block := Block{Kind: "text", Availability: AvailabilityRecorded,
+        Text: strings.Repeat("&", 6<<20), OriginalSize: 6<<20}
+    want, err := json.Marshal(block)
+    if err != nil { t.Fatal(err) }
+    if len(want) <= MaxEncodedBytes { t.Fatal("fixture lost expansion") }
+    var got bytes.Buffer // test oracle only; production uses counting/hash/chunk sinks
+    if err := WriteCanonicalBlock(&got, block); err != nil { t.Fatal(err) }
+    if !bytes.Equal(got.Bytes(), want) { t.Fatal("legacy canonical bytes changed") }
+}
+```
+- [ ] Save baseline RED logs using `go test -count=1 -parallel=1 -run 'TestLongHistory|TestEscapedResponse|TestResourceEveryOccurrence'` for affected packages with the global command prefix. Compile-only failure does not establish behavioral RED.
+- [ ] Document checked sizes from actual structs and codec copy sites, including retained original/provider wire, selector/transform Goja values, neutral clones, notices, record sanitizer and readback. Count fixed response reserve independently of history; keep this inventory with calibration evidence. Preserve baseline logs in scratch; commit fixtures with their passing owning unit, never a branch-wide failing-test-only checkpoint.
+
+### Task2: Checked core accounting and early allocation bounds
+
+**Files:** `protocolcore/resource*.go`, `types.go`, `json_names.go`; identified codec growth seams/tests.
+**Consumes:** Task1 inventory. **Produces:** the ResourceCost/ResourceBudget APIs above and guarded semantic construction.
+- [ ] Test arithmetic at `MaxUint64`, zero-byte dense nodes, nested JSON/duplicate names, inactive union arms, repeated JSON/extension payload and direct Request construction. Tests must prove a budget failure precedes the next clone/append allocation through actual early-failure/controlled allocation evidence; do not add a production-only test hook.
+- [ ] Implement checked reserve (`if delta > limit-used { return resource error }`), positive actual cell sizes and payload lengths of every retained field, including inactive arms. `ValidateRequestWithin`/`ValidateResponseWithin` take the explicit finite ResourceLimits above and share the semantic traversal; preserve earliest semantic failures and full-tail validation for admitted shapes. No production payload/structure constant is chosen here; unit tests use deliberately small local policies to prove arithmetic and preallocation behavior.
+- [ ] Implement allocation-bounded lexical JSON scan with checked stack/container/member/string counts before duplicate-name maps and root Unmarshal. Preserve existing exact/case-fold names and Unicode folding; then run existing name validation. Reserve codec node/notice/path/owned-fragment growth before constructors/append/make; retain nested protections. Do not infer a heap bound from the Goja timeout.
+- [ ] Keep4096 in production adapters until Task7. Add the typed `Options.Resources` constructor input to each affected codec, propagate the same validated limits through model-map cloning and semantic encode checks, and use it in candidate-path tests. This explicit bounded path replaces only the business-count check; it cannot bypass full semantics or any inherited protocol/SQL bound.
+- [ ] Run focused resource/name tests and all affected codec normal tests; commit when overflow/direct-construction/ownership tests pass.
+
+### Task3: Borrowed record source and byte-exact streaming canonical encoding
+
+**Files:** `exchangecontent/source.go`, `canonical.go`, `types.go`, tests.
+**Consumes:** Task2 checked costs. **Produces:** Source/MessageSource/RecordCost plus legacy-equivalent streaming encoding.
+- [ ] Implement Source validation/measurement, projecting/redacting one logical block at a time, system separately and response as≤one transcript message. Count every projected reasoning+opaque block, OriginalSize, agent, envelope/tool/evidence bytes; reserve sanitizer worst-case scratch before expansion, then measure exact result. MetadataOnly skips payload sanitation/materialization entirely; Off creates no source.
+- [ ] Encode fixed punctuation/property order directly to io.Writer; stream JSON string escaping through fixed scratch; normalize arrays exactly as existing custom MarshalJSON does without cloneRequest/cloneResponse. Canonicalize bounded RawMessage/usage/time with byte-equivalence tests. Keep `Request.MarshalJSON`/`Response.MarshalJSON` external contracts, but never invoke their cloning path from persistence.
+- [ ] Fuzz legacy Record/Message/Block outputs against json.Marshal across all fields, including empty arrays, RawMessage whitespace,HTML,controls,U+2028/2029,known-zero usage and timestamps; compare count/hash sinks with emitted byte length. Test source cancellation, borrowed lifetime, invalid option and no deferred block accepted as evidence.
+- [ ] Implement checked structural/payload/physical-feasibility validation in `NewSourceWithin` using explicit SourceLimits; keep the legacy `NewSource`/Record adapters until Task7. Retain bounded CanonicalJSON/DecodeCanonicalJSON roundtrip for old artifacts and expose complete WriteCanonicalJSON. Add candidate-source tests proving large valid records can persist while the32MiB byte-returning convenience correctly refuses oversized output.
+- [ ] Run `go test -count=1 ./internal/exchangecontent`; commit source/canonical unit after exact-byte fixtures pass.
+
+### Task4: Schema1 physical fragments, streaming Store and verified readers
+
+**Files:** `runtimepersistence/exchange_content_{fragments,block,repository,page}.go`, `store.go`, page/repository tests; `exchangecontent/page.go`.
+**Consumes:** Task3 Source/RecordCost and completed compression prerequisite. **Produces:** PutSource and schema1 feasibility evidence; no claim of full SQL/control deadline acceptance until Task6.
+- [ ] Implement deterministic frame reader/writer from the settled56-byte header. Test32MiB−1/32MiB/32MiB+1 canonical sizes; exact maximum row size; chunk count/slots arithmetic; missing/reordered/repeated/mixed logical fragments; wrong digest/total/ordinal/trailing bytes; identity and zstd rows; incomplete transaction rollback. Reject invalid frames before allocation.
+- [ ] Stream oversized canonical block decode with a closed field parser: decode strings incrementally into pre-reserved retained buffers; bounded args retain existing semantic/redaction limits. Do **not** feed the entire logical value into json.Decoder.Decode or concatenate fragments, both of which materialize oversized canonical JSON. Hash the incoming stream and re-encoded decoded value to verify exact legacy canonical identity. Every physical row is checked against its own digest first.
+- [ ] Confirm the prerequisite compression commit/review is present and cite its test evidence. Do not repeat its RED/factory edit; charge its shared workspace and each retained input/output row separately in the Store resource ledger. Later Store changes justify only relevant integration/race reruns.
+- [ ] Replace encoded-message map with node/digest/count metadata. First Source pass obtains logical digests, exact slot counts and agent representation; second pass writes/compresses one bounded physical row at a time inside the existing transaction. Preserve completeStoredExchangeContent's equality/empty-terminal checks and exact request-prefix base selection; count repeated nodes independently. Bulk reads must group fragments by logical block and recompute **legacy** logical message hashes.
+- [ ] Keep block and message ON CONFLICT guards strict. Same digest+same bytes with different codec succeeds; same digest+different length/manifest/agent or damaged stored content fails on checked read. Agent compact fallback is deterministic only above4096, preventing an old valid message from changing physical representation on replay.
+- [ ] Reuse Store's existing read-only pool for content reads (`newExchangeContentRepository(database, reads, operations, contentLimits)` created after reads), passing the copied optional SourceLimits from Store.Options. Use bounded batches, checked per-occurrence read materialization totals and the selected policy's full validator; preserve operationGate cancellation/drain. Full Get remains complete within derived Record limits and all legacy32MiB records stay readable. Large message pages verify the complete logical message by streamed hash while retaining only requested body/page content, not all historical bodies. Whether WAL/SQL locking still blocks control is a Task6 measurement gate, not proved by choosing the read pool.
+- [ ] Replace page assumptions tying **logical** message totals, body offsets and summed message bytes to32MiB; keep per-physical-row32MiB and page1MiB limits. Count logical blocks independently from physical manifest slots; avoid `inlineMessageSize` rejecting a valid large message—return a deferred placeholder with checked estimate. Body cursors refer to logical block and UTF-8 byte offset. Page hash validation must cover all fragments before returning content.
+- [ ] Test Full/MetadataOnly/Off; complete/reopen/Get/every page/tail; prefix→suffix, exact replay, checkpoint rewrite, empty response, reasoning/signature; expire ancestor while live child remains; delete final reference releases **every** fragment through existing refs/GC; rollback/crash publishes no partial manifest and leaves no orphan fragments. Compare sqlite_schema/schema revision byte-for-byte to baseline.
+- [ ] Run all runtimepersistence/exchangecontent normal tests and targeted race tests; commit only with legacy fixture hashes and all fragment tamper tests passing.
+
+### Task5: Prepare the bounded candidate Pipeline and pre-body backpressure
+
+**Files:** `exchange/resource_admission.go`, `pipeline.go`, `contracts.go`, `message_transform.go`; `loopbackproxy/handler.go`; `exchangecontent/manager.go`; `productruntime/builders.go`; Pipeline/Runtime/ingress tests.
+**Consumes:** Tasks2–4 policy-independent implementation and schema feasibility. **Produces:** explicitly constructed candidate path and GREEN gate/lifetime tests; production constructors/4096 adapters remain until Task7.
+- [ ] Implement `BodyAdmission.Acquire(ctx)` using a mutex, used-byte counter and one shared wake channel replaced/closed on release/shutdown. While no full SlotBytes fits, unlock and select on that wake channel, ctx.Done and owner shutdown; loop after wake. Allocate no waiter record, worker goroutine, queue/list or body buffer. Ordinary transient pressure waits; only canceled/shutdown contexts or an invalid/unsupported shape return errors. Do not use immediate busy rejection or an arbitrary queue timeout.
+- [ ] Call Acquire for semantic operations in `loopbackproxy.serveInner` **before** `readBounded` at the current handler.go:965 seam, NewClientRequest cloning, raw capture or decoding. Waiting handlers do not read/drain their request body and do not acquire Account/model authority. Their existing bounded HTTP headers/transport upload windows remain transport-owned; account for these in calibration. Auxiliary requests, control/heartbeat endpoints and their database work bypass this semantic gate.
+- [ ] Reserve a complete fixed execution envelope before body read: wire+decompressed/copy representations, largest accepted semantic/script/record overlap and a **fixed independent response reserve** covering existing supported≤16MiB response shapes. No later upgrade-wait while holding a partial body lease, which could deadlock saturated decoders. Checked Reserve within the slot may reject a genuinely unsupported/adversarial shape; normal occupancy cannot. The response reserve is never request slack.
+- [ ] Pass the lease through `WithBodyLease`; NewClientRequest checks/reserves its clone against the lease, and candidate Pipeline checks exact gate ownership. Ingress defers once-only Release for pre-Execute failures; Pipeline takes the same lease through decode/script/provider/record completion and releases only after actual drain. Bind active body reads to request/owner cancellation by closing that body with `context.AfterFunc` and stop the callback on normal completion; only already-admitted reads install callbacks. Shutdown closes gate admission, wakes waiters and drains active slots under its existing deadline. Cancellation never refunds a live script/compressor/record. Direct Pipeline test/caller construction acquires before constructing its body; desktop dry-run stays on its existing separately bounded control path and gains equivalent semantic validation without entering the model queue.
+- [ ] Test4 admitted/another4 waiting calls, all eventual complete successes; cancellation before acquire/during body read/during script/during record; no request-body Read calls, clones, Raw captures or credential/model calls for waiters; active full-slot bound; no leaked lease after read/constructor failure; control and auxiliary calls complete while semantic slots are occupied. Test HTTP/1.1 and HTTP/2 (existing32 streams/connection,1MiB upload windows) and stop/drain.
+- [ ] Decode/measure supported logical input after bounded decompression and before selector/credential acquire. Reuse that complete decoded value later; do not double-decode. Original supported paths must propagate invalid/resource failures instead of swallowing evidence decode errors. Explicit existing unsupported opaque routes retain their existing contract; they cannot be used as a fallback for failed supported admission.
+- [ ] Before each selector/model/evidence/transform/encode ownership expansion, reserve its actual maximum overlapping representation. Re-admit transformed request bytes and neutral semantics before provider construction/send; original same-dialect no-op remains byte-identical. Preserve history tool data as history and test actual response tools still wait for decisions.
+- [ ] Pre-send source preflight proves request recordability, physical slots/agent bounds and possible response node; response-side codec materialization consumes its independent pre-reserved allowance. Do not add a tighter response wire/text/semantic cap to make the record fit. Bound all direct constructed semantic inputs identically; fixed response reserve must cover the existing supported wire contract, not a few examples.
+- [ ] Wire observer→NewSource→Manager.RecordSource→Repository.PutSource synchronously; replace extra cloned observer Record handoffs under documented borrowed lifetime. Propagate first recording failure to existing diagnostics; require zero new degraded warnings in acceptance. Do not introduce asynchronous private-body retention.
+- [ ] Exercise the typed candidate-policy constructors in real Runtime/Pipeline tests for >4096 success, invalid full tail, inactive/shared payload rejection before credential/model send, transform expansion rejection and cancellation at every owned seam. Production defaults retain legacy guards. Run affected normal/race tests and commit only GREEN preparation, not the production admission switch.
+
+### Task6: Deliver bounded calibration and root's exact internal policy ruling
+
+**Files:** candidate acceptance harness and adopted plan evidence note; ignored child experiment sources/logs. No production-default edits in this task.
+**Consumes:** Tasks1–5, compression prerequisite and explicit finite ResourcePolicy/SourceLimits constructors. **Produces:** source-matched calibration report, exact candidate values with units/proofs, and root's recorded internal adoption ruling; Task7 consumes that ruling without re-asking the user.
+- [ ] Record baselines accurately: actual6MiB `&` response wire6,291,669B decoded successfully but block37,748,810B/NewRecord rejected; `x` control accepted. Existing3998→4000 Store diagnostic (`store-calibration/results-001.jsonl`) measured first Put1,008,710,696B cumulative allocation/470ms; childMaxRSS792,739,840B; incremental Put21,553,824B/21ms;166pages298,190,056B/972ms and full4000-tail verified. Compressor experiment `compressor-calibration/results-001.jsonl` SHA035f82c4bbada23576c0babcf6f93a0caecced007aaf8ddd8bfc83558ca43490 isolates the constructor workspace cause. Neither establishes whole-Pipeline/concurrency bounds.
+- [ ] Consume the source-matched post-compression replay at `2c3b873`: identical3998→4000 bodies3,978,039/3,978,241B,all4000 messages/166pages/inherited3999 verified; first Put107,503,344B allocation, whole-childMaxRSS189,988,864B. Put461ms/pages980ms/total3.48s are single samples, not a speed claim (baseline470ms/972ms/3.46s). Log `store-calibration/results-after-bounded-001.jsonl` SHAd09ffb46f960a36598b014deab488e9efab0526168b51980af83a0ac49ba1d96. Consume after independent compression review; do not repeat unchanged baseline/factory experiments or treat this replay as whole-Pipeline/concurrency capacity proof.
+- [ ] Build one synthetic child harness with real Runtime/Pipeline, loopback private exact upstream, fake isolated managed/original credentials, real file-backed Store, actual Account Selector and Goja transform scripts. Cases: selector reads last sentinel, no-op, edits last item, model map only, supported cross-dialect; all retain one complete upstream request. Include plain/native reasoning/compaction/tools/results/images, dense empties/fragments,shared payload,redaction/HTML/control worst cases and post-transform near16MiB output. Never use real user secrets/data.
+- [ ] For Responses fixtures whose final input is `{role:"user",content:"TAIL"}`, run these exact script bodies in actual engines; assert selector acquires only account.primary and the private upstream sees EDITED only for the edit case:
+```javascript
+// Account Selector
+const body = JSON.parse(request.body);
+if (body.input[body.input.length - 1].content !== "TAIL") throw new Error("tail missing");
+selection.accountId = "account.primary";
+// Separate no-op Request Transform
+const body = JSON.parse(request.body);
+if (body.input[body.input.length - 1].content !== "TAIL") throw new Error("tail missing");
+// Separate body-edit Request Transform
+const body = JSON.parse(request.body);
+body.input[body.input.length - 1].content = "EDITED";
+request.body = JSON.stringify(body);
+```
+- [ ] Run finite grid at approximately1/4/8/12/15.5MiB wire and4095/4096/4097/4102/4111/16384/densest fitting nodes; include exact byte/resource−1/at/+1, invalid last item and response6MiB ampersands/8MiB text/near16MiB fragmented reasoning. One warmup+three isolated measured children per selected boundary/shape; at most60 initial children; stop first failed safety gate and preserve its log. Reuse baseline fixture IDs/hashes.
+- [ ] Measure per stage wall time and TotalAlloc deltas separately from process MaxRSS; include request bytes/nodes, reservations, duplicate occurrence count, canonical logical/physical bytes, database/WAL size, txn duration, control ping latency, egress audit deadlines, recording failures and drain count. Use external `/usr/bin/time -l` (Linux `/usr/bin/time -v` later) for peaks, not TotalAlloc or Go heap as RSS.
+- [ ] Measure P/S minima from the4111/~4MiB and dense required fixtures, round each up to4MiB, and test finite candidate pairs `(P,S),(2P,2S),(4P,4S)` against the byte/shape grid using explicit ResourceLimits. Derive RecordCanonical/Retained/Structure and SlotBytes from complete per-occurrence redaction/clone/canonical proofs; set candidate ActiveBytes to four complete slots. No inherited32MiB semantic payload cap is presumed. Fixed response reserve must analytically cover existing supported wire response limits in every accepted dialect and leave SQL depth/physical slots feasible; a sample-only fit fails. Reject policies narrowing responses as history increases; Goja input costs are not a hard heap bound for arbitrary scripts.
+- [ ] For each finalist, run2 and4 simultaneous real exchanges, synchronized at decode/script/record, three trials each; run control pings every100ms and real egress-audit writes, cancel one mid-script and one mid-record, then shutdown/drain. Required gates: zero missing/partial/silent records,all full tails/restarts correct,no deadline/heartbeat/permission regressions,no leaked reservation/goroutine/SQLite tx,control p99<one quarter of the smallest existing relevant deadline,all four representative4111/~4MiB flows succeed. Bound child RSS before launch to≤half available memory and watchdog60s; kill child safely on bound breach and mark FAIL. A safety failure blocks freeze; contain the failing seam before rerunning, never raise timeouts or merely document it.
+- [ ] Add four waiting requests while four slots are occupied; their bodies must remain unread and all uncanceled requests must eventually finish without a synthetic busy error. Include HTTP/2 upload-window memory, shared compression wait, maximal physical fragment rows and actual SQL write-lock/audit/control deadlines. The gate bounds active body materialization and adds no waiter registry; it does not claim a global bound on arbitrary incoming connections. If transport-owned waiting buffers break the measured safety envelope, stop for root's narrowly scoped ingress ruling before changing listener/connection admission.
+- [ ] Deliver exact ResourceLimits, SourceLimits, SlotBytes and ActiveBytes, source hashes, reproducible commands/child outcomes and analytical SQL/response proofs to root. Root selects only a fully passing candidate and records values in the adopted plan; absence of that ruling blocks Task7, not Tasks2–6. Failed schema1 or SQL/control-deadline proof is a release blocker requiring a revised internal design, not an asserted pass.
+
+### Task7: Adopt the measured policy, switch production guards and prove upgrade acceptance
+
+**Files:** private production policy and default constructors/adapters in protocolcore/codecs/exchange/exchangecontent/productruntime/loopbackproxy; acceptance/upgrade tests and evidence note.
+**Consumes:** root's exact Task6 policy ruling and passing prerequisites. **Produces:** the coupled production switch, data-preserving compatibility evidence and final candidate gates.
+- [ ] First add the final-default >4096/ampersand/backpressure REDs and preserve their failures; apply exactly root-adopted private policy values. Wire the shared Runtime BodyAdmission before body reading and the same limits through codecs/Pipeline/source/readers. Replace Request.Validate's4096 business check and both exchangecontent request/projection guards together with finite resource/SQL validation. Default/nil codec resource options now select the private adopted policy; no legacy bypass remains in executable production paths.
+- [ ] Rerun actual final-default paths for4111/~4MiB plus longer representative histories,6MiB ampersand response, full-tail/inactive/shared/overflow failures, scripts/model mapping/credentials/tool decisions,2/4 active plus waiting requests, cancellation/drain, complete real Store/read/page/restart behavior. Compare measured defaults to candidate hashes/values and rerun affected safety gates; commit the switch only when these tests are GREEN.
+- [ ] Populate synthetic **old v0.1.23** schema1 data with independent captures, full/metadata/off policy, usage/egress/account metadata and ordinary hashes. Stop, `ValidateOfflineDatabase`, make verified closed-database backup in new temp directory, open with candidate without resetting/rebuilding, continue the same capture transcript beyond4096 including fragmented response, close/reopen and verify all rows/history/relations. Test old binary on a disposable copy: old ordinary rows remain readable; new long/fragment rows fail explicitly. This is data-format compatibility, not binary-only downgrade support.
+- [ ] Restore the pre-upgrade backup into another new directory and prove old reader/row hashes; separately retain and verify post-upgrade backup so rollback never overwrites newer history. Exercise interruption/rollback, integrity_check/foreign_key_check, expiry after restart and all complete/body pages. No live database writes or automatic App restart.
+- [ ] Run same-source affected normal/race and existing required Go/contracts/Flutter/Chrome/packaged-safety gates; rerun only changed/failed checks. Root's independent reviewer checks canonical/hash/GC/admission proofs and measured limits. Commit passing policy/defaults/evidence after review; source identity and official-client same-session acceptance feed the subsequent release plan, not a claim of publication here.
+
+## Self-review and handoff
+
+- Every spec requirement maps to Tasks1–7; signing/notarization/GitHub/Homebrew remain the subsequent authorized release chain. This plan does not complete the wider production-readiness Goal.
+- Schema1 is the selected implementation target, not a completed proof: Tasks4/6 must demonstrate fixed physical bounds, complete references/GC, old hashes and actual SQL/control deadlines. The56-byte fragment format avoids raising SQL leaf bounds or materializing a whole large canonical block; any failed feasibility gate returns to root before production defaults change.
+- Root adopted this plan after full reading and the recorded corrections for measured policy sequencing, pre-body cancelable backpressure and the completed compression prerequisite. No new user permission is needed for these already-authorized internal edits. The first original default-count/record failures and all prototype measurements remain evidence, not completion of the unimplemented units.

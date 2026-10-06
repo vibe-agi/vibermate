@@ -18,6 +18,16 @@ Request decode and encode loops repeatedly merge immutable translation reports. 
 
 Unchanged script components can process complete 4111-item bodies and access/edit the final sentinel, but their allocations are significant: approximately85–158MB cumulative allocation at4.15MB, and a diagnostic child peak up to237.5MB near16MiB. These are direct component observations, not complete Pipeline/Runtime performance or a hard VM memory guarantee.
 
+### Verified record-capacity conflict and scoped implementation ruling
+
+An actual source-matched experiment now establishes that the existing32MiB encoded-record contract cannot preserve every already-supported response: the real Responses decoder accepts one6MiB literal `&` text reply (6,291,669B wire), but ordinary record JSON escapes it into a37,748,810B single block and NewRecord rejects it. An equal-size `x` control records correctly. Neither request-only reservation nor a smaller response allowance preserves the requested behavior. No live data or provider was used.
+
+The necessary record-seam change is therefore included in this approved hotfix: keep the same logical canonical bytes, SHA256 identities, message/block indices and history relationships, while processing oversized logical blocks as bounded physical fragments using existing block manifests/ref ownership. Retain32MiB physical rows and1MiB pages, not32MiB as a universal total-history allocation. The existing32MiB byte-returning canonical convenience remains bounded; complete persistence and streaming validation must not depend on that convenience allocating the entire record.
+
+Schema1 reuse is the selected implementation target, not a claimed proof. The exact deterministic format, strict reassembly/tamper checks, old-record hashes, expiry/GC, atomic publication, backup/restore and old-binary behavior are mandatory gates in `../plans/2026-10-06-long-session-coupled-admission.md`. If they fail, the controller must revise the internal representation before defaults switch; no implicit SQL-bound change or ad-hoc data rewrite. The user's earlier data-upgrade approval does not authorize touching the live database during testing.
+
+Execution capacity is a separately measured internal policy, not an invented32MiB semantic allowance. Admit a complete resource envelope before reading the request body; ordinary temporary occupancy waits with cancellation and no per-waiter body retention or synthetic busy error. Control, heartbeat and auxiliary work do not enter that gate. Release only after real owned work drains. This bounds active body materialization, not arbitrary transport connection cardinality; transport buffers and real SQL/control deadlines remain acceptance gates. No public bypass or production legacy-count path remains after the final switch.
+
 ## Implementation boundaries
 
 ### 1. Linear report accumulation
@@ -58,6 +68,6 @@ No automatic user App restart. Tell the user when to stop active Captures, back 
 
 ## Sequencing
 
-The first independently reviewable implementation plan is `../plans/2026-10-06-long-session-linear-notices.md`. It removes the measured amplification before deriving new admission costs. Subsequent implementation plans cover coupled admission/record rules, actual end-to-end/client/data/resource acceptance, then the existing release chain. These are required parts of this same approved hotfix, not optional follow-up releases. The controller settles internal implementation choices from evidence without asking the user to reapprove each code edit.
+The independently reviewed notice plan is `../plans/2026-10-06-long-session-linear-notices.md` (d978bcf); the shared compressor resource plan is `../plans/2026-10-06-bounded-evidence-compression.md` (2c3b873). Both are complete prerequisites, not4096 acceptance. The adopted coupled plan is `../plans/2026-10-06-long-session-coupled-admission.md`; it covers accounting, complete record representation/readback, pre-body backpressure, measured capacities and the final default switch. Actual end-to-end/client/data/resource acceptance and the existing release chain are required parts of this same approved hotfix, not optional follow-up releases. The controller settles internal implementation choices from evidence without asking the user to reapprove each code edit.
 
 Self-review: the first release remains explicitly scoped; no claim of infinite history, universal script memory isolation or completion of the full Goal. Every execution/record/data invariant has an actual acceptance counterpart. Performance and resource evidence must precede a release capacity claim.
