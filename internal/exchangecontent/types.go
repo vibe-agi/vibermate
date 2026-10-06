@@ -753,69 +753,100 @@ func (response Response) validateWithin(mode environment.ContentRecordingMode, l
 	return nil
 }
 
-// Validate checks retained block evidence, never read-time placeholders.
-func (block Block) Validate(mode environment.ContentRecordingMode) error {
-	if block.OriginalSize < 0 || block.Deferred != nil {
+// BlockShape contains body-free facts needed for retained block semantics. It
+// does not certify body syntax, canonical identity, resource admission or a
+// complete piece of evidence. Stream readers must prove those independently.
+type BlockShape struct {
+	Kind                                                                 string
+	Availability                                                         Availability
+	OriginalSize                                                         int
+	CallID, ToolName, ToolNamespace                                      string
+	ToolError                                                            bool
+	Agent                                                                AgentContext
+	HasAgent                                                             bool
+	Deferred, HasText, HasArguments                                      bool
+	HasProviderSource, HasProviderKind, HasFingerprint, FingerprintValid bool
+}
+
+func (block Block) RetainedShape() BlockShape {
+	shape := BlockShape{Kind: block.Kind, Availability: block.Availability, OriginalSize: block.OriginalSize, CallID: block.CallID, ToolName: block.ToolName, ToolNamespace: block.ToolNamespace, ToolError: block.ToolError, Deferred: block.Deferred != nil, HasText: block.Text != "", HasArguments: len(block.Arguments) != 0, HasProviderSource: block.ProviderSource != "", HasProviderKind: block.ProviderKind != "", HasFingerprint: block.Fingerprint != "", FingerprintValid: validFingerprint(block.Fingerprint)}
+	if block.Agent != nil {
+		shape.Agent = *block.Agent
+		shape.HasAgent = true
+	}
+	return shape
+}
+
+func (shape BlockShape) Validate(mode environment.ContentRecordingMode) error {
+	if shape.OriginalSize < 0 || shape.Deferred {
 		return ErrInvalidEvidence
 	}
 	expected := AvailabilityOmitted
 	if mode == environment.ContentRecordingFull &&
-		protocolcore.BlockKind(block.Kind) != protocolcore.BlockProviderExtension {
+		protocolcore.BlockKind(shape.Kind) != protocolcore.BlockProviderExtension {
 		expected = AvailabilityRecorded
 	}
-	if block.Availability != expected {
+	if shape.Availability != expected {
 		return fmt.Errorf("%w: block availability contradicts recording mode", ErrInvalidEvidence)
 	}
-	if block.Availability == AvailabilityOmitted &&
-		(block.Text != "" || len(block.Arguments) != 0) {
+	if shape.Availability == AvailabilityOmitted &&
+		(shape.HasText || shape.HasArguments) {
 		return fmt.Errorf("%w: omitted block retains content", ErrInvalidEvidence)
 	}
-	if block.Agent != nil {
+	if shape.HasAgent {
 		context := protocolcore.AgentMessageContext{
-			AgentName: block.Agent.AgentName,
-			Author:    block.Agent.Author,
-			Recipient: block.Agent.Recipient,
+			AgentName: shape.Agent.AgentName,
+			Author:    shape.Agent.Author,
+			Recipient: shape.Agent.Recipient,
 		}
 		if err := context.Validate(); err != nil {
 			return fmt.Errorf("%w: block agent context: %v", ErrInvalidEvidence, err)
 		}
 	}
-	switch protocolcore.BlockKind(block.Kind) {
+	switch protocolcore.BlockKind(shape.Kind) {
 	case protocolcore.BlockText, protocolcore.BlockRefusal:
-		if block.CallID != "" || block.ToolName != "" || block.ToolNamespace != "" || len(block.Arguments) != 0 || block.ToolError {
+		if shape.CallID != "" || shape.ToolName != "" || shape.ToolNamespace != "" || shape.HasArguments || shape.ToolError {
 			return fmt.Errorf("%w: text block contains tool evidence", ErrInvalidEvidence)
 		}
 	case protocolcore.BlockToolCall:
-		if !validIdentity(block.CallID, 512) || !validIdentity(block.ToolName, protocolcore.MaxToolNameBytes) || block.ToolError {
+		if !validIdentity(shape.CallID, 512) || !validIdentity(shape.ToolName, protocolcore.MaxToolNameBytes) || shape.ToolError {
 			return fmt.Errorf("%w: tool call metadata is invalid", ErrInvalidEvidence)
 		}
-		if len(block.Arguments) != 0 && !json.Valid(block.Arguments) {
-			return fmt.Errorf("%w: tool arguments are invalid", ErrInvalidEvidence)
-		}
-		if block.ToolNamespace != "" && !validIdentity(block.ToolNamespace, protocolcore.MaxToolNamespaceBytes) {
+		if shape.ToolNamespace != "" && !validIdentity(shape.ToolNamespace, protocolcore.MaxToolNamespaceBytes) {
 			return fmt.Errorf("%w: tool call namespace is invalid", ErrInvalidEvidence)
 		}
 	case protocolcore.BlockToolResult:
-		if !validIdentity(block.CallID, 512) || len(block.Arguments) != 0 ||
-			(block.ToolNamespace == "") != (block.ToolName == "") ||
-			(block.ToolNamespace != "" && !validIdentity(block.ToolNamespace, protocolcore.MaxToolNamespaceBytes)) ||
-			(block.ToolName != "" && !validIdentity(block.ToolName, protocolcore.MaxToolNameBytes)) {
+		if !validIdentity(shape.CallID, 512) || shape.HasArguments ||
+			(shape.ToolNamespace == "") != (shape.ToolName == "") ||
+			(shape.ToolNamespace != "" && !validIdentity(shape.ToolNamespace, protocolcore.MaxToolNamespaceBytes)) ||
+			(shape.ToolName != "" && !validIdentity(shape.ToolName, protocolcore.MaxToolNameBytes)) {
 			return fmt.Errorf("%w: tool result metadata is invalid", ErrInvalidEvidence)
 		}
 	case protocolcore.BlockProviderExtension:
-		if block.Availability != AvailabilityOmitted || block.CallID != "" ||
-			block.ToolName != "" || block.ToolNamespace != "" || len(block.Arguments) != 0 || block.ToolError ||
-			block.ProviderSource == "" || block.ProviderKind == "" ||
-			!validFingerprint(block.Fingerprint) {
+		if shape.Availability != AvailabilityOmitted || shape.CallID != "" ||
+			shape.ToolName != "" || shape.ToolNamespace != "" || shape.HasArguments || shape.ToolError ||
+			!shape.HasProviderSource || !shape.HasProviderKind ||
+			!shape.FingerprintValid {
 			return fmt.Errorf("%w: provider extension retained wire content", ErrInvalidEvidence)
 		}
 	case protocolcore.BlockKind(BlockKindReasoning):
-		if block.CallID != "" || block.ToolName != "" || block.ToolNamespace != "" || len(block.Arguments) != 0 || block.ToolError ||
-			block.ProviderSource == "" || block.ProviderKind == "" || block.Fingerprint != "" {
+		if shape.CallID != "" || shape.ToolName != "" || shape.ToolNamespace != "" || shape.HasArguments || shape.ToolError ||
+			!shape.HasProviderSource || !shape.HasProviderKind || shape.HasFingerprint {
 			return fmt.Errorf("%w: reasoning block contains tool evidence", ErrInvalidEvidence)
 		}
 	default:
 		return fmt.Errorf("%w: block kind is unsupported", ErrInvalidEvidence)
+	}
+	return nil
+}
+
+// Validate checks retained block evidence, never read-time placeholders.
+func (block Block) Validate(mode environment.ContentRecordingMode) error {
+	if err := block.RetainedShape().Validate(mode); err != nil {
+		return err
+	}
+	if len(block.Arguments) != 0 && !json.Valid(block.Arguments) {
+		return fmt.Errorf("%w: tool arguments are invalid", ErrInvalidEvidence)
 	}
 	return nil
 }

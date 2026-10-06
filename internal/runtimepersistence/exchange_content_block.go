@@ -199,37 +199,11 @@ func loadStoredBlock(
 			"load Exchange content block: %w", err,
 		)
 	}
-	return decodeStoredBlockPayload(plainBytes, codec, stored)
-}
-
-// decodeStoredBlockPayload turns one stored row into a block. plainBytes is
-// bounded before it reaches an allocation, because this database is deliberately
-// unprotected at rest and the value arrives from it.
-func decodeStoredBlockPayload(
-	plainBytes int,
-	codec string,
-	stored []byte,
-) (exchangecontent.Block, error) {
-	if plainBytes < 1 || plainBytes > exchangecontent.MaxEncodedBytes || len(stored) > exchangecontent.MaxEncodedBytes {
-		return exchangecontent.Block{}, exchangecontent.ErrInvalidEvidence
+	plain, err := decodeStoredPhysicalPayload(digest, plainBytes, codec, stored)
+	if err != nil {
+		return exchangecontent.Block{}, err
 	}
-	switch codec {
-	case chunkCodecIdentity:
-	case chunkCodecZstd:
-		decoded, err := bodyDecoder.DecodeAll(stored, make([]byte, 0, plainBytes))
-		if err != nil {
-			return exchangecontent.Block{}, fmt.Errorf(
-				"decompress Exchange content block: %w", err,
-			)
-		}
-		stored = decoded
-	default:
-		return exchangecontent.Block{}, exchangecontent.ErrInvalidEvidence
-	}
-	if len(stored) != plainBytes {
-		return exchangecontent.Block{}, exchangecontent.ErrInvalidEvidence
-	}
-	return decodeStoredBlock(stored)
+	return decodeStoredBlock(plain)
 }
 
 func encodeStoredBlock(block exchangecontent.Block) (string, []byte, error) {
@@ -411,7 +385,11 @@ func loadStoredBlocksByDigest(
 		if err := rows.Scan(&digest, &plainBytes, &codec, &stored); err != nil {
 			return nil, exchangecontent.ErrInvalidEvidence
 		}
-		block, err := decodeStoredBlockPayload(plainBytes, codec, stored)
+		plain, err := decodeStoredPhysicalPayload(digest, plainBytes, codec, stored)
+		if err != nil {
+			return nil, err
+		}
+		block, err := decodeStoredBlock(plain)
 		if err != nil {
 			return nil, err
 		}
