@@ -93,7 +93,7 @@ func TestNativeEffectiveFactCapacityRefusesBeforeBindStartOrSend(t *testing.T) {
 	}
 }
 
-func heldEffectiveBudget(t *testing.T, name string, cancelHeld bool) int64 {
+func heldEffectiveBudget(t *testing.T, name string, cancelHeld bool, sseClose ...string) int64 {
 	t.Helper()
 	f := newNativeFixtureWithChoice(t, environment.ToolPolicyObserve, environment.ContentRecordingPolicy{Mode: environment.ContentRecordingOff}, 0, egressprofile.Inherit())
 	profiles, err := egressprofile.NewManager(f.store.EgressProfileRepository(), effectiveBudgetClock{})
@@ -116,6 +116,11 @@ func heldEffectiveBudget(t *testing.T, name string, cancelHeld bool) int64 {
 	f.handshake(t)
 	baseline := nativeClaimLifetimeFacts(t, f).Budget
 	response := wireResponse(`{"jsonrpc":"2.0","id":801,"result":{}}`, false)
+	if len(sseClose) > 0 {
+		// A complete valid terminal frame with no event ID reaches openStream,
+		// then retires on detach rather than retaining an observed cursor.
+		response = wireResponse("data: {\"jsonrpc\":\"2.0\",\"id\":801,\"result\":{}}\n\n", true)
+	}
 	body := &claimHeldCloseBody{ReadCloser: response.Body, entered: make(chan struct{}), release: make(chan struct{}), returned: make(chan struct{})}
 	response.Body = body
 	f.transport.handler = func(*http.Request, []byte) (*http.Response, error) { return response, nil }
@@ -126,11 +131,62 @@ func heldEffectiveBudget(t *testing.T, name string, cancelHeld bool) int64 {
 	defer release()
 	call, cancel := context.WithCancel(t.Context())
 	defer cancel()
+	var receiptObserver *effectiveReceiptObserver
+	if len(sseClose) > 0 {
+		receiptObserver = &effectiveReceiptObserver{Repository: e.dependencies.Store, target: request.id, receipt: make(chan nativetool.StartReceipt, 1)}
+		e.dependencies.Store = receiptObserver
+	}
+	if len(sseClose) > 0 && sseClose[0] == "cancel-entered" {
+		e.dependencies.Store = &claimAfterFinishStore{Repository: e.dependencies.Store, target: request.id, after: func() {
+			cancel()
+			select {
+			case <-body.entered:
+			case <-time.After(2 * time.Second):
+				t.Error("real canceled Close callback did not enter")
+			}
+		}}
+	}
 	go func() { done <- e.Serve(call, request, httptest.NewRecorder()) }()
 	select {
 	case <-body.entered:
 	case <-time.After(2 * time.Second):
 		t.Fatal("real body cleanup hold absent")
+	}
+	if len(sseClose) > 0 {
+		// For cancellation, entered precedes the final Finish return; wait for
+		// actual detach plus the still-live physical consumer, not a sleep guess.
+		deadline := time.Now().Add(2 * time.Second)
+		for {
+			facts := nativeClaimLifetimeFacts(t, f)
+			if facts.Streams == 0 && facts.Pending == 1 && facts.Claims == 1 {
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("no-ID SSE did not reach detached/held consumer: %+v", facts)
+			}
+			time.Sleep(time.Millisecond)
+		}
+		physical := readFreshGETFacts(t, f, request.id)
+		if physical.OperationState != "completed" || physical.AuditOutcome != "completed" || physical.AuditKnown != 1 {
+			t.Fatal("held SSE lacks real terminal Store proof", physical)
+		}
+		select {
+		case receipt := <-receiptObserver.receipt:
+			if err := receiptObserver.Repository.VerifyStartReceipt(t.Context(), receipt, time.Now().UTC()); err == nil {
+				t.Fatal("old terminal SSE receipt became sendable while Close held")
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("actual Store Start receipt absent")
+		}
+		if f.transport.sends() != 4 {
+			t.Fatal("no-ID SSE duplicated real send", f.transport.sends())
+		}
+		select {
+		case got := <-done:
+			done <- got
+			t.Fatal("Serve returned before actual response Close/join")
+		default:
+		}
 	}
 	held := nativeClaimLifetimeFacts(t, f).Budget - baseline
 	if cancelHeld {
@@ -168,6 +224,20 @@ func heldEffectiveBudget(t *testing.T, name string, cancelHeld bool) int64 {
 type effectiveParentReadFault struct {
 	nativetool.Repository
 	parent nativetool.ID
+}
+
+type effectiveReceiptObserver struct {
+	nativetool.Repository
+	target  nativetool.ID
+	receipt chan nativetool.StartReceipt
+}
+
+func (s *effectiveReceiptObserver) Start(ctx context.Context, id nativetool.ID, attempt string, revision uint64, now time.Time) (nativetool.StartReceipt, error) {
+	receipt, err := s.Repository.Start(ctx, id, attempt, revision, now)
+	if err == nil && id == s.target {
+		s.receipt <- receipt
+	}
+	return receipt, err
 }
 
 func (f *effectiveParentReadFault) Get(ctx context.Context, id nativetool.ID) (nativetool.Operation, error) {
@@ -268,6 +338,18 @@ func TestNativeEffectiveFactCancellationKeepsActualConsumerChargeUntilDrain(t *t
 	large := heldEffectiveBudget(t, strings.Repeat("&", 256), true)
 	if large-small < 251 {
 		t.Fatalf("canceled held consumer lost effective reservation %d/%d", small, large)
+	}
+}
+
+func TestNativeEffectiveFactNoIDSSECloseRemainsChargedUntilConsumerDrain(t *testing.T) {
+	for _, edge := range []string{"deferred", "cancel-entered"} {
+		t.Run(edge, func(t *testing.T) {
+			small := heldEffectiveBudget(t, "small", false, edge)
+			large := heldEffectiveBudget(t, strings.Repeat("&", 256), false, edge)
+			if large-small < 251 {
+				t.Fatalf("no-ID SSE refunded effective fact before actual Close/join: small=%d large=%d delta=%d", small, large, large-small)
+			}
+		})
 	}
 }
 

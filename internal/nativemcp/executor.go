@@ -616,7 +616,7 @@ func (e *executor) Serve(ctx context.Context, c CapturedRequest, w http.Response
 	}
 	media, _, _ := mime.ParseMediaType(response.Header.Get("Content-Type"))
 	if response.StatusCode == http.StatusOK && media == "text/event-stream" && r.stream == nil {
-		r.stream, err = e.openStream(call, c, r, s, binding, receipt, startedAt, claim, &effectiveBytes)
+		r.stream, err = e.openStream(call, c, r, s, binding, receipt, startedAt, claim, effectiveBytes)
 		if err != nil {
 			return e.finishFailure(c.id, s, w, err, true, claim)
 		}

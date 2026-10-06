@@ -72,7 +72,7 @@ type streamRecord struct {
 	charged                     int64
 }
 
-func (e *executor) openStream(ctx context.Context, c CapturedRequest, r rpc, s *session, b nativetool.Binding, receipt nativetool.StartReceipt, started time.Time, claim nativeClaimHandle, effectiveBytes *int64) (*streamRecord, error) {
+func (e *executor) openStream(ctx context.Context, c CapturedRequest, r rpc, s *session, b nativetool.Binding, receipt nativetool.StartReceipt, started time.Time, claim nativeClaimHandle, effectiveBytes int64) (*streamRecord, error) {
 	e.reclaimDeliveredStreams(s)
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -85,7 +85,10 @@ func (e *executor) openStream(ctx context.Context, c CapturedRequest, r rpc, s *
 	if s.closed || active >= e.limits.ConcurrentRPCsPerSession || len(s.streams) >= e.limits.Pending {
 		return nil, errBudget
 	}
-	cost := int64(2048) + 2*jsonAllocation(r.raw)
+	// The retained stream and active Serve own independent conservative charges.
+	// Detach/retirement may precede response Close/join; the active fact stays
+	// reserved until Serve's final consumer-drain defer, regardless of this owner.
+	cost := int64(2048) + 2*jsonAllocation(r.raw) + effectiveBytes
 	if !e.budget.acquire(cost) {
 		return nil, errBudget
 	}
@@ -101,10 +104,6 @@ func (e *executor) openStream(ctx context.Context, c CapturedRequest, r rpc, s *
 		cloned.failure, cloned.renewalUnavailable, cloned.retention, cloned.collection, cloned.collectionToken = r.failure, r.renewalUnavailable, r.retention, r.collection, r.collectionToken
 	}
 	logical, cancel := context.WithCancel(s.context)
-	// Transfer the already reserved immutable effective fact, once. An open
-	// logical stream keeps it after its physical Serve consumer drains.
-	cost += *effectiveBytes
-	*effectiveBytes = 0
 	stream := &streamRecord{claim: claim, operation: c.id, binding: b, receipt: receipt, request: cloned, context: logical, cancel: cancel, expires: expires, credentialRevision: c.admission.CredentialRevision(), attached: true, charged: cost}
 	stream.created = started
 	stream.expiryTimer = time.AfterFunc(time.Until(expires), cancel)
