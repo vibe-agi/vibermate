@@ -235,3 +235,57 @@ env DEVELOPER_DIR=/Library/Developer/CommandLineTools GOFLAGS=-mod=readonly GOTO
 New controls cover valid/invalid wrapper parity, ignored poisonous own properties/coercion, non-finite numbers, candidate invalid final role, unknown-field resource expansion, invalid transformed encoding, valid edited tail, unconfigured gzip byte preservation, configured empty/header-only script behavior, real Execute/dry-run digest/refusal parity, and nil legacy wiring. Existing overflow/getter/Unicode/cycle/proxy/aggregate/cancellation controls passed in the scoped race selection. No unchanged Runtime4111, Store, UI/Chrome, compression or fuzz campaign was repeated.
 
 Self-review and staged-diff inspection: the production diff is confined to safe wrapper classification and the missing candidate original dry-run guard; no general export/decoder abstraction or new authority was added. The initial staging command returned exit1 with the existing ignored-parent warning for the report; the four source files and report were present in the index, then the exact owned report was explicitly force-added and staged checks passed. No source or test failure was hidden by that staging correction. No remaining issue found within these two findings. Handles0; the owned GREEN fix commit is identified in the handoff. Task6/7 and release gates remain unchanged.
+
+## Task5B fix round2 — scalar shape before native wrapper export
+
+Dispatch BASE: `e1ca48587b7775c41207b82b5b5d9951612921c3`. The round1 scoped review (`task-5b-fix1-review.md`, SHA256 `305e241f85efe6931b6b1de3f35ad493d63c760f85bf76f754b7a0b0e60ed059`) closes both original findings but identifies one new Important issue: Number.prototype has Number ClassName yet inherits recursive map export. This round changes only `internal/messagetransform/engine.go`, `internal/messagetransform/export_admission_test.go`, and this appended report. Dry-run, compression, capacities, defaults, dependencies, VM version, and deadlines are unchanged.
+
+### Root cause and smallest correction
+
+Checked the actual pinned Goja `v0.0.0-20260822123354-58e940e0d230`: `builtin_number.go:227` creates Number.prototype as a templatedObject with Number class; `object.go:956` baseObject export enumerates/getters/recursive graph export; `array.go:499` allocates the host interface slice. The former ClassName-only shortcut therefore executed that host expansion before its eventual unsupported-primitive rejection.
+
+Before calling Export, the shortcut now requires both internal Number/Boolean class and an exact scalar ExportType (`int64`/`float64` for Number, `bool` for Boolean). Verified the discriminator itself: `value.go:796` delegates to the native implementation; `object.go:242` primitiveValueObject returns its pValue's type, whose primitive implementations return fixed reflect types; `object.go:976` baseObject returns the fixed map type. Those paths neither enumerate nor execute script-controlled coercion/getters. Number.prototype consequently falls through to the existing unsupported-class rejection without Export. The existing scalar switch still checks finite numbers. No arbitrary objects were moved to generic Export, and no new extractor/framework was introduced. Review-reception/debugging/TDD skills guided this pinned-dispatch check and the real RED-before-fix control.
+
+`TestContextNumberPrototypeRejectsBeforeExport` uses a real VM and exportContext, an enumerable getter counter, and an own 100000-element array with a Context-values allowance of 16. Fixture VM construction is outside the host-allocation measurement. It independently requires refusal, getter visits zero, and measured extraction allocations below 1MiB (the forbidden host slice alone exceeds that). This modest regression check is not a process-memory/VM-heap guarantee. RED observed visits=1 and 3,218,968 allocated bytes. GREEN requires both violations gone. Existing wrapper parity verifies integer/fraction/negative-zero/Boolean/nesting, ignored poisoned own properties/coercion/cycle, NaN/Infinity rejection, class spoofing, String rejection and legacy empty boxed-BigInt graph.
+
+### Preserved source and command ledger
+
+All artifacts are in `task5b-fix2-evidence.wCBqPJ/` beside this report. RED snapshot was made after adding the new test and before modifying production. Archives contain both owned source/test files and go.mod/go.sum. Final source was frozen before GREEN02 and remained unchanged through final normal/race. Both final manifest entries verified after tests and before commit.
+
+| Run | Original handle | Terminal exit | Actual result | Log SHA256 |
+| --- | --- | --- | --- | --- |
+| red-01 | 12966 | 1 | Expected getter and host-allocation failures | `ad6e7a42150dc331e99da0faabe2d4f9535e9d3fd5147770171efb6e9e061a21` |
+| green-02 | 30548 | 0 | New regression and all wrapper-parity cases PASS | `8cc79b788066c0390773c958418a869991e2a8d61c12839fc43ce7e01e8b4173` |
+| final-normal-03 | 75883 | 0 | Complete messagetransform package PASS, 0.673s | `b1a63d96efc6daf33bfdbf1bb40263db6b9a665afca5a1b52a831402ef8e6a3c` |
+| final-race-04 | 89696 | 0 | Fixed scoped selection PASS, 2.819s; no race warning | `f2715cdbd847330111049564b441c98a12bc1cd6e4d97e2be787e2049d4eae8b` |
+
+Artifact SHA256:
+
+- `red-source.sha256`: `63d37f5baea25218accf982da577073e509ea48d1fc2ca75b4243c205c7c301b`
+- `red-source.tar.gz`: `06ed3285eaed20dbf3fec9b7d6b42f3d1cd05ca9fd946c80d29780b567797b47`
+- `final-source.sha256`: `d783e182d1ad607b329484d8cb23fc78e29b8ea9c1eddc9a22970eb80e26c428`
+- `final-source.tar.gz`: `c5421967d739cfcea6c91a8911d0b515ae6b8705a2c5463373764c1f9f513dd8`
+- `final.patch`: `f2fc4540adade2abea0acb29c7d87be4561eebf5b27162813c6d6bd6b99defd3`
+- `commands.md`: `f5b7ccd4df2eee3278ac968af69cdd5f1feb19b43f4948fb84c379fd1abae46b`
+
+Every test command used the existing worktree and this exact offline prefix:
+
+```sh
+env DEVELOPER_DIR=/Library/Developer/CommandLineTools GOFLAGS=-mod=readonly GOTOOLCHAIN=local GOPROXY=off GOSUMDB=off /Users/null/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.8.darwin-arm64/bin/go
+```
+
+RED01 arguments: `test -p 1 ./internal/messagetransform -run '^TestContextNumberPrototypeRejectsBeforeExport$' -count=1 -v`.
+
+GREEN02 arguments: `test -p 1 ./internal/messagetransform -run '^(TestContextNumberPrototypeRejectsBeforeExport|TestContextPrimitiveWrapperParity)$' -count=1 -v`.
+
+Final normal03 arguments: `test -p 1 ./internal/messagetransform -count=1 -timeout=5m`.
+
+Final scoped race04 arguments, fixed in commands.md before launch:
+
+```sh
+test -race -p 1 -parallel 1 ./internal/messagetransform -run '^(TestContext.*|TestScriptExport.*|TestBodyExport.*|TestTransformRetained.*|TestTurnPreservesValidUnicodeBody|TestTurnDistinguishesReplacementCharacterFromUnpairedSurrogates|TestTurnStillRejectsInvalidUTF8Input|TestTurnRejectsInvalidOutputsAndLeavesInputImmutable|TestExecution.*|TestExportedGetter.*|TestCompileRejects.*|TestPolicyLimitsScriptAndBodySizes)$' -count=1 -v -timeout=5m
+```
+
+The race log contains the new prototype regression, wrapper parity, Unicode boundaries, arithmetic overflow, cycle/proxy/poisoned intrinsic/getter/aggregate controls, exported-getter exceptions, and original caller/program cancellation/deadline tests. No unmatched-test claim, whole-package race claim, unchanged Exchange/Runtime/Store/UI campaign, process-memory guarantee or release/default activation claim is made. All original command handles were collected to terminal, with no restart, interrupted run, hidden failure or tool refusal in this round.
+
+Self-review: inspected the complete two-file diff against BASE and the pinned non-recursive discriminator implementations; exact-type gating precedes Export and leaves existing graph walking and finite checks intact. `gofmt` and diff checks are clean. Handles0. Owned GREEN commit is supplied in the handoff for one fresh scoped independent re-review; Task6/7 gates remain unchanged.

@@ -139,3 +139,34 @@ func TestContextPrimitiveWrapperParity(t *testing.T) {
 		})
 	}
 }
+
+func TestContextNumberPrototypeRejectsBeforeExport(t *testing.T) {
+	vm := goja.New()
+	value, err := vm.RunString(`
+		var visits=0;
+		Object.defineProperty(Number.prototype,"observed",{enumerable:true,get(){visits++;return 1;}});
+		Number.prototype.expanded=Array(100000).fill("x");
+		({n:Number.prototype});
+	`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	limits := DefaultLimits()
+	limits.MaximumContextValues = 16
+	// VM fixture allocation is outside this measurement. A forbidden recursive
+	// export would allocate at least the 100000-element host interface slice.
+	runtime.GC()
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	_, err = exportContext(vm, value, limits)
+	runtime.ReadMemStats(&after)
+	if err == nil {
+		t.Error("Number.prototype accepted as a scalar wrapper")
+	}
+	if got := vm.Get("visits").ToInteger(); got != 0 {
+		t.Errorf("Number.prototype getter visited before refusal: %d", got)
+	}
+	if allocated := after.TotalAlloc - before.TotalAlloc; allocated > 1<<20 {
+		t.Errorf("Number.prototype graph exported before refusal: %d bytes", allocated)
+	}
+}

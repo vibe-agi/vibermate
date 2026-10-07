@@ -1095,11 +1095,20 @@ func exportJSONValue(
 		return nil, errors.New("Context contains a function")
 	}
 	object, isObject := value.(*goja.Object)
-	// Pinned Goja's native Number/Boolean wrappers export only their bounded
-	// primitive payload, ignoring own properties. ClassName is internal (not
-	// Symbol.toStringTag); Export invokes no poisoned valueOf/toString hook.
-	// Keep arbitrary objects on the bounded graph walker below.
-	primitiveWrapper := isObject && (object.ClassName() == "Number" || object.ClassName() == "Boolean")
+	// ClassName alone also admits Number.prototype, whose Export recursively
+	// exports a map. Pinned Goja's ExportType is non-recursive here: native
+	// wrappers return their primitive payload's type; the prototype returns map.
+	// Require the scalar shape before Export, without invoking coercion hooks.
+	primitiveWrapper := false
+	if isObject {
+		switch object.ClassName() {
+		case "Number":
+			exportType := object.ExportType()
+			primitiveWrapper = exportType == reflect.TypeFor[int64]() || exportType == reflect.TypeFor[float64]()
+		case "Boolean":
+			primitiveWrapper = object.ExportType() == reflect.TypeFor[bool]()
+		}
+	}
 	if !isObject || primitiveWrapper {
 		if _, text := value.(goja.String); text {
 			candidate, err := scriptStringWithin(value, *remaining)
