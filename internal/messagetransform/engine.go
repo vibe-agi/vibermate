@@ -1094,7 +1094,13 @@ func exportJSONValue(
 	if _, callable := goja.AssertFunction(value); callable {
 		return nil, errors.New("Context contains a function")
 	}
-	if _, object := value.(*goja.Object); !object {
+	object, isObject := value.(*goja.Object)
+	// Pinned Goja's native Number/Boolean wrappers export only their bounded
+	// primitive payload, ignoring own properties. ClassName is internal (not
+	// Symbol.toStringTag); Export invokes no poisoned valueOf/toString hook.
+	// Keep arbitrary objects on the bounded graph walker below.
+	primitiveWrapper := isObject && (object.ClassName() == "Number" || object.ClassName() == "Boolean")
+	if !isObject || primitiveWrapper {
 		if _, text := value.(goja.String); text {
 			candidate, err := scriptStringWithin(value, *remaining)
 			if err != nil {
@@ -1103,7 +1109,7 @@ func exportJSONValue(
 			*remaining -= len(candidate)
 			return candidate, nil
 		}
-		exported := value.Export() // primitives only: never recursively export a graph
+		exported := value.Export() // primitive/native primitive wrapper only; no graph export
 		switch candidate := exported.(type) {
 		case string:
 			if !validScriptString(value, candidate) {
@@ -1124,7 +1130,6 @@ func exportJSONValue(
 		}
 		return nil, errors.New("Context contains unsupported primitive")
 	}
-	object := value.ToObject(runtime)
 	if ancestors[object] {
 		return nil, errors.New("Context contains a cycle")
 	}

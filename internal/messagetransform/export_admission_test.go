@@ -104,3 +104,38 @@ func TestContextExportChecksStructureBeforeUnadmittedGetters(t *testing.T) {
 		t.Fatalf("unadmitted graph recursively exported: getter visits=%d", got)
 	}
 }
+
+func TestContextPrimitiveWrapperParity(t *testing.T) {
+	for _, test := range []struct {
+		name, source, want string
+		valid              bool
+	}{
+		{"number", `context.n=new Number(1);`, `{"n":1}`, true},
+		{"fraction", `context.n=new Number(1.25);`, `{"n":1.25}`, true},
+		{"negative_zero", `context.n=new Number(-0);`, `{"n":-0}`, true},
+		{"boolean", `context.b=new Boolean(false);context.t=new Boolean(true);`, `{"b":false,"t":true}`, true},
+		{"nested", `context.a=[new Number(2),{b:new Boolean(false)}];`, `{"a":[2,{"b":false}]}`, true},
+		{"poisoned_coercion", `const n=new Number(3);n.valueOf=()=>{throw Error("coercion")};n.toString=()=>{throw Error("coercion")};n[Symbol.toPrimitive]=()=>{throw Error("coercion")};Object.defineProperty(n,"ignored",{enumerable:true,get(){throw Error("graph export")}});n.self=n;context.n=n;`, `{"n":3}`, true},
+		{"nan", `context.n=new Number(NaN);`, "", false},
+		{"infinity", `context.n=new Number(Infinity);`, "", false},
+		{"spoofed_class", `context.n={ [Symbol.toStringTag]:"Number" };context.n.self=context.n;`, "", false},
+		// String was rejected; boxed BigInt retained the old empty Object view.
+		{"string_wrapper", `context.s=new String("text");`, "", false},
+		{"bigint_wrapper", `context.n=Object(1n);`, `{"n":{}}`, true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			program, err := Compile(Policy{RequestJavaScript: test.source}, DefaultLimits())
+			if err != nil {
+				t.Fatal(err)
+			}
+			turn := program.NewTurn()
+			_, err = turn.ApplyRequest(context.Background(), RequestMessage{Method: "POST", Path: "/v1/messages", Headers: http.Header{}, Body: []byte(`{"model":"m"}`)})
+			if (err == nil) != test.valid {
+				t.Fatalf("primitive wrapper parity: valid=%v err=%v", test.valid, err)
+			}
+			if test.valid && string(turn.context) != test.want {
+				t.Fatalf("Context=%s want=%s", turn.context, test.want)
+			}
+		})
+	}
+}

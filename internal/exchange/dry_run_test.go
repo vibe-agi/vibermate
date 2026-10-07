@@ -1,6 +1,7 @@
 package exchange
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"net/http"
@@ -12,8 +13,122 @@ import (
 	"github.com/vibe-agi/vibermate/internal/codelibrary"
 	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/messagetransform"
+	"github.com/vibe-agi/vibermate/internal/openairesponses"
+	"github.com/vibe-agi/vibermate/internal/protocolpath"
 	"github.com/vibe-agi/vibermate/internal/protocolspec"
+	"github.com/vibe-agi/vibermate/internal/responseschat"
 )
+
+func TestCandidateOriginalDryRunReadmissionParity(t *testing.T) {
+	for _, test := range []struct {
+		name, script, encoding string
+		valid                  bool
+	}{
+		{"noop", `request.headers["x-preview"]="yes";`, "", true},
+		{"gzip_noop", "", "gzip", true},
+		{"gzip_active_noop", `;`, "gzip", true},
+		{"gzip_header_only", `request.headers["x-preview"]="yes";`, "gzip", true},
+		{"valid_tail_edit", `const p=JSON.parse(request.body);p.input[1].content="edited tail";request.body=JSON.stringify(p);`, "gzip", true},
+		{"invalid_tail", `const p=JSON.parse(request.body);p.input[1].role="invalid-role";request.body=JSON.stringify(p);`, "", false},
+		{"resource_expansion", `const p=JSON.parse(request.body);p.native_extension="x".repeat(200000);request.body=JSON.stringify(p);`, "", false},
+		{"invalid_transformed_encoding", `request.headers["content-encoding"]="gzip";`, "", false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			plan := mustEnvironmentRequestPlan(t, testPlanOptions{clientProtocol: environment.ClientProtocolOpenAIResponses, destination: environment.DestinationKindOriginal, providerOrigin: "https://api.openai.com", backend: protocolspec.DialectOpenAIResponses, modelMode: environment.ModelModePassthrough, transform: messagetransform.Policy{RequestJavaScript: test.script}})
+			policy := admissionTestPolicy(1)
+			policy.RequestBytes += 64 << 20
+			policy.SlotBytes = policy.RequestBytes + policy.ResponseBytes
+			policy.ActiveBytes = policy.SlotBytes
+			gate, err := NewBodyAdmission(policy)
+			if err != nil {
+				t.Fatal(err)
+			}
+			provider := &providerDouble{results: []providerResult{{response: jsonResponse(http.StatusOK, []byte(`{"id":"r","object":"response","model":"m","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"done","annotations":[]}]}]}`))}}}
+			pipeline := newTestPipeline(t, nil, provider, approvedDecisions(), &attemptObserverDouble{})
+			defer shutdownPipeline(t, pipeline)
+			options := openairesponses.DefaultOptions()
+			options.Resources = &policy.Content.Semantic
+			path, err := responseschat.NewResponsesPassthroughProtocolPath(options)
+			if err != nil {
+				t.Fatal(err)
+			}
+			pipeline.protocolPaths, err = protocolpath.NewSelector(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			pipeline.bodyAdmission = gate
+			// The sole model slot is already held. Dry-run must remain control work.
+			lease, err := gate.Acquire(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer lease.Release()
+			logical := []byte(`{"model":"m","input":[{"role":"user","content":"first"},{"role":"user","content":"final tail"}]}`)
+			wire := logical
+			headers := http.Header{"Authorization": {"Bearer synthetic-original"}, "Content-Type": {"application/json"}}
+			if test.encoding != "" {
+				wire = compressedRequestFixture(t, test.encoding, wire)
+				headers.Set("Content-Encoding", test.encoding)
+			}
+			request := mustClientRequestWithOptions(t, "original-preview-parity", plan, wire, WithOriginalHeaders(headers), WithBodyLease(lease))
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			preview, previewErr := pipeline.DryRun(ctx, request)
+			if (previewErr == nil) != test.valid {
+				t.Errorf("dry-run valid=%v err=%v", test.valid, previewErr)
+			}
+			if provider.callCount() != 0 {
+				t.Fatal("dry-run contacted provider")
+			}
+			_, executeErr := pipeline.Execute(ctx, request, &downstreamRecorder{})
+			if (executeErr == nil) != test.valid {
+				t.Fatalf("execution valid=%v err=%v", test.valid, executeErr)
+			}
+			if !test.valid {
+				if ReasonOf(previewErr) != ReasonOf(executeErr) {
+					t.Errorf("dry-run/execution refusal differs: %v / %v", previewErr, executeErr)
+				}
+				if provider.callCount() != 0 {
+					t.Fatal("invalid transformed request sent")
+				}
+				return
+			}
+			actual := provider.requestsSnapshot()
+			if len(actual) != 1 || preview.bodyDigest != sha256.Sum256(actual[0].Body()) {
+				t.Fatal("dry-run differs from actual transformed wire")
+			}
+			if test.name == "noop" || test.name == "gzip_noop" {
+				wantHeader := "yes"
+				if test.name == "gzip_noop" {
+					wantHeader = ""
+				}
+				if preview.BodyChanged || !bytes.Equal(actual[0].Body(), wire) || actual[0].Headers().Get("Content-Encoding") != test.encoding || actual[0].Headers().Get("X-Preview") != wantHeader {
+					t.Fatal("no-op changed original wire/headers")
+				}
+			}
+			if test.name == "gzip_header_only" || test.name == "gzip_active_noop" {
+				wantHeader := ""
+				if test.name == "gzip_header_only" {
+					wantHeader = "yes"
+				}
+				if !preview.BodyChanged || !bytes.Equal(actual[0].Body(), logical) || actual[0].Headers().Get("Content-Encoding") != "" || actual[0].Headers().Get("X-Preview") != wantHeader {
+					t.Fatal("existing active-script compression behavior changed")
+				}
+			}
+		})
+	}
+}
+
+func TestLegacyOriginalDryRunKeepsExistingTransformContract(t *testing.T) {
+	plan := mustEnvironmentRequestPlan(t, testPlanOptions{clientProtocol: environment.ClientProtocolOpenAIResponses, destination: environment.DestinationKindOriginal, providerOrigin: "https://api.openai.com", backend: protocolspec.DialectOpenAIResponses, modelMode: environment.ModelModePassthrough, transform: messagetransform.Policy{RequestJavaScript: `const p=JSON.parse(request.body);p.input[0].role="invalid-role";request.body=JSON.stringify(p);`}})
+	provider := &providerDouble{}
+	pipeline := newTestPipeline(t, nil, provider, approvedDecisions(), &attemptObserverDouble{})
+	defer shutdownPipeline(t, pipeline)
+	request := mustClientRequestWithOptions(t, "legacy-original-preview", plan, []byte(`{"model":"m","input":[{"role":"user","content":"tail"}]}`), WithOriginalHeaders(http.Header{"Authorization": {"Bearer synthetic"}}))
+	if _, err := pipeline.DryRun(context.Background(), request); err != nil || provider.callCount() != 0 {
+		t.Fatalf("legacy preview contract changed: %v", err)
+	}
+}
 
 func TestDryRunMatchesExecutedFrozenDecisionWithoutSideEffects(t *testing.T) {
 	const upstreamModel = "provider-model"

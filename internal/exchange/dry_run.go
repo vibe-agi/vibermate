@@ -216,6 +216,21 @@ func (pipeline *Pipeline) dryRunOriginal(
 	if err != nil {
 		return DryRunResult{}, newFailure(ReasonMessageTransformFailed, request.exchangeID, 0, err)
 	}
+	if pipeline.bodyAdmission != nil {
+		path, err := pipeline.protocolPaths.Select(selection.codecPlan, request.operation.id)
+		if err != nil {
+			return DryRunResult{}, err
+		}
+		logical, err := decodeBoundedContent(transformedBody, strings.Join(transformedHeaders.Values("Content-Encoding"), ","))
+		if err != nil {
+			return DryRunResult{}, err
+		}
+		if !bytes.Equal(logical, logicalBody) {
+			if err = path.ValidateTransformedRequest(logical); err != nil {
+				return DryRunResult{}, newFailure(ReasonMessageTransformFailed, request.exchangeID, 0, err)
+			}
+		}
+	}
 	requestedModel := ""
 	unverified := []string{"client_authentication", "client_headers", "dns", "tls", "quota", "provider_response", "runtime_identity", "runtime_time"}
 	if path, selectErr := pipeline.protocolPaths.Select(selection.codecPlan, request.operation.id); selectErr == nil && logicalBody != nil {

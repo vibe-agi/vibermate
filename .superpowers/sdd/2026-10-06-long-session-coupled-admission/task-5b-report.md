@@ -194,3 +194,44 @@ Commit identity is supplied in the final handoff; this report and the48 owned so
 - `internal/runtimecontrol/application.go`
 - `ui/flutter_app/test/candidate_content_http_test.dart`
 - `ui/flutter_app/test/fixtures/candidate_content_http_server.py`
+
+## Task5B fix round1 — independent review findings
+
+Fix BASE `fdf0fa4dfd5d2ec6c94833527ff53d39318fe29a` (reviewed product source66f72e3 plus release-plan documentation only). Both Important findings in task-5b-review.md addressed; independent re-review remains pending. Owned source is exactly `internal/messagetransform/{engine.go,export_admission_test.go}` and `internal/exchange/{dry_run.go,dry_run_test.go}`. No dependency, default/capacity, compression policy, deadline, Runtime/Store/UI or release-tooling source changed; no subagents or live services/data were used.
+
+Primitive-wrapper parity: recognize only pinned Goja's native internal Number/Boolean classes before the primitive export switch. Its primitiveValueObject.export returns the scalar payload directly, ignoring own graph properties; ClassName is not the script-controlled Symbol.toStringTag. This restores Number/Boolean values (including false, fractions and negative zero) without invoking poisoned valueOf/toString/Symbol.toPrimitive, traversing wrapper cycles/getters, or restoring recursive graph Export. Existing finite-number, structure, Unicode, getter/proxy and cancellation guards remain. String wrappers retain rejection; boxed BigInt retains its pre-existing empty Object view.
+
+Candidate Original Destination dry-run now uses the same post-transform bounded content decoding and actual backend admission as execution. Changed logical bodies fail immediately on supported semantic/resource errors; it does not fall back to validating original bytes. Nil candidate wiring is unchanged. The sole model slot is occupied during the new dry-run tests, proving dry-run remains separate control work.
+
+Evidence directory: `task5b-fix1-evidence.0HJEyV/`.
+
+| Run | Original handle / terminal exit | Actual result | SHA256 log |
+|---|---|---|---|
+|red-01|51549 /1|Both real findings reproduced; also exposed incorrect new-test expectations for boxed BigInt and gzip script behavior.|310a677418144a32724798bb3e9bb907b903374445ee6143ed885c849fc51019|
+|red-02|71820 /1|Number/Boolean still failed and invalid-tail/resource dry-run still succeeded before fixes. BigInt control corrected; gzip empty-statement expectation still wrong.|e5475f0b55cf7fdbbfb83cbba1557324a07b6690329e89e5c7a78654845ff721|
+|green-03|27233 /1|Both product fixes passed their targeted assertions, but the gzip test expectation still failed; overall FAIL despite filename.|7fbdd6a1163dbb46e1aa34ccd5de9784f38941f96efbf9f0c335f1dc11c1f6eb|
+|green-04|10829 /0|Wrapper parity and dry-run controls passed after correcting test-only expectations.|a5ef2cba71d4ada5f417dc867d4bd39a7ed02cdec32f1842c5e9176d1e6439aa|
+|final-normal-05|92589 /0|Both complete affected packages passed on frozen fix, including malformed transformed encoding control.|482c87f9dbfac0323d88953119401f3c7a41889c7db3abc6f757f3048f51d946|
+|final-race-06|44803 /0|Both packages matched and passed the named bridge/dry-run selection; no race warning.|0dd62ab64e30282659bfbb5ed0aba4468f6e166279159bbfd5bbb412741902a7|
+
+The genuine RED archives include both new behavioral tests before production fixes: `red-source.tar.gz` SHA256 `37342fe69ec12ab3de0da46c4b0d8a72e7a02f0a14be0c0ba93251f360ea1f7f`; corrected-expectation `red2-source.tar.gz` SHA256 `80120a8a4a3610aee187f82cc9c1f6587f6b739ec9dbf9638354c418b4a094c8`. The gzip distinction was verified against unchanged applyRequestMessageTransform: no configured Request program preserves compressed wire; an active empty-statement or header-only Request script returns logical encoding. Tests now assert each behavior separately; production compression was not altered.
+
+Final four-file manifest `final-source.sha256`: `d5fe764b9314c2004ae317533889eee5bd120ae41432cac61cc5eb430e854a9c`; archive `final-source.tar.gz`: `75f0a6062caaab10065301d5e5bf299995b0d364dd4888fc846d06ed0c8456bf`; patch `final.patch`: `6fa4023b85031f15f8c701fae212fb9586a212f90d2bcc223ae9b1749f96e49a`. Archive includes go.mod/go.sum and all four owned source/test files. All four manifest entries were rechecked after final tests; gofmt -l was empty and git diff --check passed.
+
+All runs used the pinned offline prefix recorded above. RED01/02 and GREEN03/04 used `test -p 1 ./internal/messagetransform ./internal/exchange -run '^(TestContextPrimitiveWrapperParity|TestCandidateOriginalDryRunReadmissionParity|TestLegacyOriginalDryRunKeepsExistingTransformContract)$' -count=1 -v`.
+
+Final normal command:
+
+```sh
+env DEVELOPER_DIR=/Library/Developer/CommandLineTools GOFLAGS=-mod=readonly GOTOOLCHAIN=local GOPROXY=off GOSUMDB=off /Users/null/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.8.darwin-arm64/bin/go test -p 1 ./internal/messagetransform ./internal/exchange -count=1 -timeout=5m
+```
+
+Final race selection was fixed before launch:
+
+```sh
+env DEVELOPER_DIR=/Library/Developer/CommandLineTools GOFLAGS=-mod=readonly GOTOOLCHAIN=local GOPROXY=off GOSUMDB=off /Users/null/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.8.darwin-arm64/bin/go test -race -p 1 -parallel 1 ./internal/messagetransform ./internal/exchange -run '^(TestContext.*|TestScriptExport.*|TestBodyExport.*|TestTransformRetained.*|TestTurnPreservesValidUnicodeBody|TestTurnDistinguishesReplacementCharacterFromUnpairedSurrogates|TestTurnStillRejectsInvalidUTF8Input|TestTurnRejectsInvalidOutputsAndLeavesInputImmutable|TestExecution.*|TestExportedGetter.*|TestCompileRejects.*|TestPolicyLimitsScriptAndBodySizes|TestDryRun.*|TestCandidateOriginalDryRunReadmissionParity|TestLegacyOriginalDryRunKeepsExistingTransformContract)$' -count=1 -v -timeout=5m
+```
+
+New controls cover valid/invalid wrapper parity, ignored poisonous own properties/coercion, non-finite numbers, candidate invalid final role, unknown-field resource expansion, invalid transformed encoding, valid edited tail, unconfigured gzip byte preservation, configured empty/header-only script behavior, real Execute/dry-run digest/refusal parity, and nil legacy wiring. Existing overflow/getter/Unicode/cycle/proxy/aggregate/cancellation controls passed in the scoped race selection. No unchanged Runtime4111, Store, UI/Chrome, compression or fuzz campaign was repeated.
+
+Self-review and staged-diff inspection: the production diff is confined to safe wrapper classification and the missing candidate original dry-run guard; no general export/decoder abstraction or new authority was added. The initial staging command returned exit1 with the existing ignored-parent warning for the report; the four source files and report were present in the index, then the exact owned report was explicitly force-added and staged checks passed. No source or test failure was hidden by that staging correction. No remaining issue found within these two findings. Handles0; the owned GREEN fix commit is identified in the handoff. Task6/7 and release gates remain unchanged.
