@@ -70,6 +70,7 @@ type Pipeline struct {
 	observer                 ExchangeObserver
 	content                  ContentObserver
 	observeLimit             time.Duration
+	contentObserveLimit      time.Duration
 	hold                     HoldPolicy
 	streamBudgets            StreamBudgets
 	attemptIDs               AttemptIDSource
@@ -113,6 +114,13 @@ func New(options Options) (*Pipeline, error) {
 		options.ObservationTimeout <= 0 {
 		return nil, errors.New("Exchange pipeline dependencies are incomplete")
 	}
+	if options.ContentObservationTimeout < 0 {
+		return nil, errors.New("Exchange content observation timeout is invalid")
+	}
+	contentObserveLimit := options.ContentObservationTimeout
+	if contentObserveLimit == 0 {
+		contentObserveLimit = options.ObservationTimeout
+	}
 	if err := options.Hold.Validate(); err != nil {
 		return nil, err
 	}
@@ -135,6 +143,7 @@ func New(options Options) (*Pipeline, error) {
 		observer:                 options.Observer,
 		content:                  options.ContentObserver,
 		observeLimit:             options.ObservationTimeout,
+		contentObserveLimit:      contentObserveLimit,
 		hold:                     options.Hold,
 		streamBudgets:            options.Stream,
 		attemptIDs:               attemptIDs,
@@ -1346,7 +1355,7 @@ func (pipeline *Pipeline) observeContent(
 	}
 	ctx, cancel := context.WithTimeout(
 		context.WithoutCancel(pipeline.ownerContext),
-		pipeline.observeLimit,
+		pipeline.contentObserveLimit,
 	)
 	defer cancel()
 	_ = pipeline.content.ObserveContent(ctx, observation)

@@ -929,6 +929,9 @@ func activityTransportEvidence(
 	return converted
 }
 
+// Bounds synchronous evidence completion; it is not a performance threshold.
+const contentObservationCompletionBudget = 30 * time.Second
+
 func buildExchange(
 	request exchangeBuildRequest,
 ) (exchangeRuntime, error) {
@@ -996,13 +999,14 @@ func buildExchange(
 			clock:         request.clock,
 			reportFailure: request.reportObservationFailure,
 		},
-		ObservationTimeout:       2 * time.Second,
-		Hold:                     request.hold,
-		Stream:                   exchange.DefaultStreamBudgets(),
-		ClientAnnotations:        request.annotations,
-		Now:                      request.clock.Now,
-		RawEvidence:              request.rawEvidence,
-		ReportRawEvidenceFailure: request.reportRawEvidenceFailure,
+		ObservationTimeout:        2 * time.Second,
+		ContentObservationTimeout: contentObservationCompletionBudget,
+		Hold:                      request.hold,
+		Stream:                    exchange.DefaultStreamBudgets(),
+		ClientAnnotations:         request.annotations,
+		Now:                       request.clock.Now,
+		RawEvidence:               request.rawEvidence,
+		ReportRawEvidenceFailure:  request.reportRawEvidenceFailure,
 	})
 }
 

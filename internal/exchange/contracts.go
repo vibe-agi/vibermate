@@ -1558,24 +1558,26 @@ func (budgets StreamBudgets) Validate() error {
 }
 
 type Options struct {
-	BodyAdmission            *BodyAdmission
-	OwnerContext             context.Context
-	Actions                  offlinehold.ActionAdmission
-	Accounts                 AccountLeaseAuthority
-	ProtocolPaths            *protocolpath.Selector
-	Provider                 Provider
-	ToolDecisions            ToolDecisionGate
-	RetryWaiter              RetryWaiter
-	Observer                 ExchangeObserver
-	ContentObserver          ContentObserver
-	ObservationTimeout       time.Duration
-	Hold                     HoldPolicy
-	Stream                   StreamBudgets
-	AttemptIDs               AttemptIDSource
-	ClientAnnotations        *clientannotation.Signer
-	Now                      func() time.Time
-	RawEvidence              rawevidence.Observer
-	ReportRawEvidenceFailure func(error)
+	BodyAdmission      *BodyAdmission
+	OwnerContext       context.Context
+	Actions            offlinehold.ActionAdmission
+	Accounts           AccountLeaseAuthority
+	ProtocolPaths      *protocolpath.Selector
+	Provider           Provider
+	ToolDecisions      ToolDecisionGate
+	RetryWaiter        RetryWaiter
+	Observer           ExchangeObserver
+	ContentObserver    ContentObserver
+	ObservationTimeout time.Duration
+	// Zero retains ObservationTimeout for existing internal constructors.
+	ContentObservationTimeout time.Duration
+	Hold                      HoldPolicy
+	Stream                    StreamBudgets
+	AttemptIDs                AttemptIDSource
+	ClientAnnotations         *clientannotation.Signer
+	Now                       func() time.Time
+	RawEvidence               rawevidence.Observer
+	ReportRawEvidenceFailure  func(error)
 }
 
 type AttemptOutcome string

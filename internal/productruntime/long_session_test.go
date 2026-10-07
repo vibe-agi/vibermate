@@ -55,6 +55,9 @@ func TestRuntimeLongSessionResponseApprovalKeepsHistoryInert(t *testing.T) {
 func TestRuntimeCandidateFinalSourceDrainControl(t *testing.T) {
 	testRuntimeLongSessionScenario(t, false, "", true, 2)
 }
+func TestRuntimeCandidateCanceledContentDrainControl(t *testing.T) {
+	testRuntimeLongSessionScenario(t, false, "content_cancel_drain", true, 2)
+}
 func TestRuntimeCandidateResponseApprovalControl(t *testing.T) {
 	testRuntimeLongSessionScenario(t, false, "tool_approval", false, 3)
 }
@@ -67,12 +70,23 @@ func TestRuntimeLongSessionPolicyMatrix(t *testing.T) {
 	}
 }
 func testRuntimeLongSessionScenario(t *testing.T, original bool, scenario string, holdFinal bool, fixtureCount ...int) {
+	testRuntimeLongSessionFixture(t, original, scenario, holdFinal, nil, fixtureCount...)
+}
+
+// Acceptance options are test-only. Existing correctness callers keep exactly
+// the reviewed Task5B fixture, policy and ownership order.
+func testRuntimeLongSessionFixture(t *testing.T, original bool, scenario string, holdFinal bool, acceptance *longSessionAcceptanceOptions, fixtureCount ...int) {
 	count := 4111
 	if len(fixtureCount) > 0 {
 		count = fixtureCount[0]
 	}
 	ctx := context.Background()
-	f := newAccountReadFixtureWithDriver(t, providerauth.StaticHeaderDriverRef(), longSessionTestPolicy())
+	policy := longSessionTestPolicy()
+	if acceptance != nil {
+		policy = acceptance.policy
+		count = acceptance.count
+	}
+	f := newAccountReadFixtureWithDriver(t, providerauth.StaticHeaderDriverRef(), policy)
 	wantCredential := "Bearer " + f.token
 	if original {
 		f.aggregate.ClientEndpoints[0].ProtocolPlans[0].Destination.Upstream.Routes[0].AccountPolicy = environment.RouteAccountPolicy{Revision: 1, Mode: environment.AccountSelectionOriginal}
@@ -177,7 +191,7 @@ func testRuntimeLongSessionScenario(t *testing.T, original bool, scenario string
 		}
 		for i, v := range body.Input {
 			want := items[i]["content"]
-			if i == 4110 {
+			if i == count-1 {
 				want = wantTail
 			}
 			if v.Content != want {
@@ -221,6 +235,16 @@ func testRuntimeLongSessionScenario(t *testing.T, original bool, scenario string
 		t.Fatal(err)
 	}
 	var recorder exchangecontent.Recorder = f.runtime.contents
+	var concurrent *concurrentContentBudgetSource
+	if acceptance != nil && acceptance.controls != nil {
+		concurrent = &concurrentContentBudgetSource{Recorder: recorder, sink: f.runtime.contents.(exchangecontent.SourceRecorder), entered: make(chan string, 2), started: make(chan struct{}, 2), start: make(chan struct{}), overlap: make(chan struct{}), release: make(chan struct{})}
+		recorder = concurrent
+		t.Cleanup(func() { concurrent.once.Do(func() { close(concurrent.release) }) })
+		t.Cleanup(func() { concurrent.startOnce.Do(func() { close(concurrent.start) }) })
+	}
+	if acceptance != nil {
+		recorder = &longSessionAcceptanceRecorder{Recorder: recorder, sink: recorder.(exchangecontent.SourceRecorder), t: t}
+	}
 	var requestRecorded chan struct{}
 	if scenario == "script_cancel" {
 		requestRecorded = make(chan struct{})
@@ -239,6 +263,9 @@ func testRuntimeLongSessionScenario(t *testing.T, original bool, scenario string
 		t.Fatal(err)
 	}
 	defer pipeline.Shutdown(ctx)
+	if acceptance != nil {
+		acceptance.observePipelineBudget(t, pipeline)
+	}
 	compiler, err := productionEnvironmentCompiler(f.runtime.accounts, f.runtime.endpoints)
 	if err != nil {
 		t.Fatal(err)
@@ -263,6 +290,9 @@ func testRuntimeLongSessionScenario(t *testing.T, original bool, scenario string
 	items = make([]map[string]string, count)
 	for i := range items {
 		items[i] = map[string]string{"role": "user", "content": fmt.Sprintf("%08d", i) + strings.Repeat("x", 972)}
+		if acceptance != nil && acceptance.dense {
+			items[i]["content"] = ""
+		}
 	}
 	items[len(items)-1]["content"] = sentinel
 	if scenario == "tool_approval" {
@@ -282,11 +312,18 @@ func testRuntimeLongSessionScenario(t *testing.T, original bool, scenario string
 		t.Fatal(err)
 	}
 	t.Logf("complete request: items=%d wire=%d sentinel=%s", count, len(body), sentinel)
+	if acceptance != nil {
+		acceptance.measureBody(t, body)
+	}
 	request, err := exchange.NewClientRequest("long-session-4111", plan, operation, body, exchange.ReplayGenerationCostOnly, wireprofile.ApplicationProtocolHTTP1, exchange.WithBodyLease(lease), exchange.WithOriginalHeaders(http.Header{"Authorization": {wantCredential}, "Content-Type": {"application/json"}}))
 	if err != nil {
 		t.Fatal(err)
 	}
 	var result exchange.Result
+	if concurrent != nil {
+		testContentBudgetConcurrentExecutions(t, ctx, f, pipeline, request, lease, plan, operation, body, wantCredential, concurrent, acceptance.controls, func() int32 { return calls.Load() }, func() int32 { return diagnostics.Load() }, count, sentinel)
+		return
+	}
 	if scenario == "tool_approval" {
 		downstream := &longSessionDownstream{}
 		done := make(chan error, 1)
@@ -384,8 +421,17 @@ func testRuntimeLongSessionScenario(t *testing.T, original bool, scenario string
 			err    error
 		}
 		done := make(chan execution, 1)
-		go func() { r, e := pipeline.Execute(ctx, request, &longSessionDownstream{}); done <- execution{r, e} }()
+		client, cancelClient := context.WithCancel(ctx)
+		defer cancelClient()
+		go func() { r, e := pipeline.Execute(client, request, &longSessionDownstream{}); done <- execution{r, e} }()
 		<-held.entered
+		if scenario == "content_cancel_drain" {
+			cancelClient()
+			pipeline.BeginShutdown()
+			if held.observed.Err() != nil {
+				t.Fatal("caller/shutdown canceled real borrowed Source context")
+			}
+		}
 		lease.Release()
 		canceled, cancel := context.WithCancel(ctx)
 		cancel()
@@ -395,6 +441,12 @@ func testRuntimeLongSessionScenario(t *testing.T, original bool, scenario string
 		result, err = completed.result, completed.err
 		if !errors.Is(pipelineErr, context.Canceled) || !errors.Is(gateErr, context.Canceled) {
 			t.Fatalf("held real Source was refunded: Pipeline=%v gate=%v", pipelineErr, gateErr)
+		}
+		if err := pipeline.Drain(ctx); err != nil {
+			t.Fatal(err)
+		}
+		if err := f.runtime.bodyAdmission.Drain(ctx); err != nil {
+			t.Fatal(err)
 		}
 	}
 	if scenario == "invalid_tail" || scenario == "original_invalid_tail" || scenario == "transform_expansion" || scenario == "cross_chat_invalid_tail" {
@@ -412,7 +464,17 @@ func testRuntimeLongSessionScenario(t *testing.T, original bool, scenario string
 	if calls.Load() != 1 {
 		t.Fatalf("upstream calls=%d", calls.Load())
 	}
+	var projectionBefore, projectionAfter goRuntime.MemStats
+	var projectionStart time.Time
+	if acceptance != nil {
+		goRuntime.ReadMemStats(&projectionBefore)
+		projectionStart = time.Now()
+	}
 	projection, err := f.runtime.ExchangeContents().GetProjection(ctx, "long-session-4111", exchangecontent.RequestViewFull)
+	if acceptance != nil {
+		goRuntime.ReadMemStats(&projectionAfter)
+		t.Logf("TASK6_FULL_PROJECTION elapsed_ns=%d total_alloc_bytes=%d error=%q", time.Since(projectionStart).Nanoseconds(), projectionAfter.TotalAlloc-projectionBefore.TotalAlloc, errorText(err))
+	}
 	if scenario == "off" {
 		if !errors.Is(err, exchangecontent.ErrNotFound) {
 			t.Fatalf("Off retained content: %v", err)
@@ -485,10 +547,12 @@ type heldLongSessionSource struct {
 	exchangecontent.Recorder
 	sink             exchangecontent.SourceRecorder
 	entered, release chan struct{}
+	observed         context.Context
 }
 
 func (h *heldLongSessionSource) RecordSource(ctx context.Context, s *exchangecontent.Source) error {
 	if s.Metadata().Response != nil {
+		h.observed = ctx
 		close(h.entered)
 		<-h.release
 	}
