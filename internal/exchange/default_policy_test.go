@@ -51,8 +51,9 @@ func TestDefaultPolicyCoupledBoundsAndFourSlots(t *testing.T) {
 	v := uint64(protocolcore.MaxProtocolEvidenceValues)
 	extra := 4 + x + 2
 	chatP := w + a + 2*512 + k*(512+256) + (128 + 64 + 1024) + 2*e*(25+13) + 2*extra*(64+1024)
-	chatS := e*uint64(unsafe.Sizeof(json.RawMessage{})) + 2*e*uint64(unsafe.Sizeof(protocolcore.TranslationNotice{})) + k*uint64(unsafe.Sizeof((*int)(nil))) + uint64(unsafe.Sizeof(protocolcore.Response{})) + uint64(unsafe.Sizeof(protocolcore.ProviderExtension{})) + uint64(unsafe.Sizeof(json.RawMessage{})) + 2*extra*uint64(unsafe.Sizeof(protocolcore.TranslationNotice{}))
-	if 7*w > semantic.Response.PayloadBytes || w*q > semantic.Response.StructureBytes || 7*a > semantic.Response.PayloadBytes || a*q > semantic.Response.StructureBytes || chatP > semantic.Response.PayloadBytes || chatS > semantic.Response.StructureBytes {
+	// Complete Chat retained structure is asserted in anthropicchat's owning
+	// package, where the actual private streamToolAccumulator can be measured.
+	if 7*w > semantic.Response.PayloadBytes || w*q > semantic.Response.StructureBytes || 7*a > semantic.Response.PayloadBytes || a*q > semantic.Response.StructureBytes || chatP > semantic.Response.PayloadBytes {
 		t.Fatal("supported lexical/Chat retained envelope exceeds defaults")
 	}
 	metadataP := b*(3*512+2*(64+512)+2*256+2*64) + x*(128+64+1024) + v*(128+512) + 4*512 + 1024 + 5*128 + 128

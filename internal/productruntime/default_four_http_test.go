@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -186,6 +187,15 @@ func testDefaultFourHTTPExecutions(t *testing.T, ctx context.Context, f accountR
 		t.Fatal(err)
 	}
 	complete := 0
+	var expected struct {
+		Input []struct {
+			Role    string `json:"role"`
+			Content string `json:"content"`
+		} `json:"input"`
+	}
+	if err := json.Unmarshal(body, &expected); err != nil || len(expected.Input) != count {
+		t.Fatalf("invalid fixture expectation: %v", err)
+	}
 	for _, id := range ids {
 		record, err := f.runtime.ExchangeContents().Get(ctx, id)
 		if err != nil {
@@ -194,9 +204,14 @@ func testDefaultFourHTTPExecutions(t *testing.T, ctx context.Context, f accountR
 		if len(record.Request.Messages) != count || record.Request.Messages[count-1].Blocks[0].Text != tail {
 			t.Fatal("four-active HTTP history incomplete")
 		}
+		for i, message := range record.Request.Messages {
+			if message.Role != expected.Input[i].Role || len(message.Blocks) != 1 || message.Blocks[0].Text != expected.Input[i].Content {
+				t.Fatalf("exchange %s changed historical occurrence %d", id, i)
+			}
+		}
 		if record.Response != nil {
 			complete++
-			if record.Response.Blocks[0].Text != "complete-reply" {
+			if record.Response.ID != "resp_long" || len(record.Response.Blocks) != 1 || record.Response.Blocks[0].Text != "complete-reply" || record.Response.Usage != (exchangecontent.Usage{Output: exchangecontent.UsageValue{Known: true, Tokens: 1, Source: "openai-responses"}}) {
 				t.Fatal("uncanceled response incomplete")
 			}
 		}

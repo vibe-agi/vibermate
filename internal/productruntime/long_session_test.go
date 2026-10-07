@@ -537,7 +537,7 @@ func testRuntimeLongSessionFixture(t *testing.T, original bool, scenario string,
 	t.Logf("upstream_calls=1 items=%d tail=%s Store_messages=%d", count, sentinel, len(projection.Request.Messages))
 }
 
-// Deliberately test-only finite capacities. Production remains nil; this fixture
+// Deliberately explicit test-policy override; production selects its defaults. This fixture
 // does not establish the later whole-Runtime capacity/RSS calibration.
 func longSessionTestPolicy() exchange.ResourcePolicy {
 	content := exchangecontent.SourceLimits{
