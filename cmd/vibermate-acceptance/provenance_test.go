@@ -119,18 +119,38 @@ func TestToolchainValidationRequiresPinnedBuildAndHostVersions(t *testing.T) {
 	t.Parallel()
 
 	tools := toolchainProvenance{
-		Go:      "go version go1.25.13 darwin/arm64",
+		Go:      "go version go1.26.8 darwin/arm64",
 		Flutter: normalizedFlutterVersion(),
 		Dart:    "Dart " + expectedDartVersion,
 		Xcode:   expectedXcodeVersion,
 	}
 	binaries := []goBinaryEvidence{
-		{role: "acceptance", goVersion: expectedGoVersion},
-		{role: "daemon", goVersion: expectedGoVersion},
-		{role: "launcher", goVersion: expectedGoVersion},
+		{role: "acceptance", goVersion: "go1.26.8"},
+		{role: "daemon", goVersion: "go1.26.8"},
+		{role: "launcher", goVersion: "go1.26.8"},
 	}
 	if err := validateToolchains(tools, binaries); err != nil {
 		t.Fatalf("pinned toolchains were rejected: %v", err)
+	}
+	for _, version := range []string{"go1.25.13", "go1.26.0", "go1.26.9"} {
+		version := version
+		t.Run("host "+version, func(t *testing.T) {
+			candidate := tools
+			candidate.Go = "go version " + version + " darwin/arm64"
+			if err := validateToolchains(candidate, binaries); err == nil {
+				t.Fatalf("host toolchain %q was accepted", version)
+			}
+		})
+		for index, binary := range binaries {
+			index, binary := index, binary
+			t.Run(binary.role+" "+version, func(t *testing.T) {
+				candidate := append([]goBinaryEvidence(nil), binaries...)
+				candidate[index].goVersion = version
+				if err := validateToolchains(tools, candidate); err == nil {
+					t.Fatalf("%s Go version %q was accepted", binary.role, version)
+				}
+			})
+		}
 	}
 	tools.Flutter = "Flutter 99.0.0 (" + expectedFlutterRevision + ")"
 	if err := validateToolchains(tools, binaries); err == nil {
@@ -180,7 +200,7 @@ func TestDesktopBuildManifestBindsSourceSidecarsAndConfiguration(
 			Toolkit:  "flutter",
 		},
 		Toolchains: desktopBuildToolchains{
-			Go:      "go version go1.25.13 darwin/arm64",
+			Go:      "go version go1.26.8 darwin/arm64",
 			Flutter: normalizedFlutterVersion(),
 			Dart:    "Dart " + expectedDartVersion,
 			Xcode:   expectedXcodeVersion,
