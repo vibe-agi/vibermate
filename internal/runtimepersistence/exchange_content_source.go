@@ -20,7 +20,10 @@ import (
 type storedSourceMessage struct {
 	source exchangecontent.MessageSource
 	header exchangecontent.MessageHeader
-	slots  int
+	// Positive is the checked physical slot count (1..storedManifestSlots).
+	// Negative marks successful publication in this PutSource transaction only.
+	// Reusing its sign adds no descriptor/map allocation or envelope term.
+	slots int
 }
 
 // PutSource is deliberately concrete until the Manager handoff is activated.
@@ -133,6 +136,9 @@ func (repository *exchangeContentRepository) PutSource(ctx context.Context, sour
 		if !ok {
 			return exchangecontent.ErrInvalidEvidence
 		}
+		if m.slots < 0 {
+			return nil
+		}
 		var physical strings.Builder
 		physical.Grow(m.slots * storedDigestHexBytes)
 		// Check the second Source traversal against the complete first-pass
@@ -162,7 +168,15 @@ func (repository *exchangeContentRepository) PutSource(ctx context.Context, sour
 		if err != nil {
 			return err
 		}
-		return putStoredMessageManifest(ctx, tx, digest, m.header.Role, agent, physical.String())
+		if err := putStoredMessageManifest(ctx, tx, digest, m.header.Role, agent, physical.String()); err != nil {
+			return err
+		}
+		// All row/ref/conflict guards have succeeded in the same transaction.
+		// Each transcript occurrence is still inserted by publishContent. A
+		// failed publication/retry reconstructs this per-Put map from the Source.
+		m.slots = -m.slots
+		messages[digest] = m
+		return nil
 	})
 }
 
