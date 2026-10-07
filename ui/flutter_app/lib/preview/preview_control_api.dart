@@ -2856,6 +2856,21 @@ final class PreviewControlApi implements ControlApi {
   ) async {
     _requireOpen();
     // Preview's retained fixtures fit in one page and issue no remote cursors.
+    if (cursor == 'preview-complete-record' &&
+        _allPreviewActivities().any((value) => value.id == exchangeId)) {
+      final bytes = utf8.encode(
+        '{"kind":"reasoning","availability":"omitted","originalSize":0,"providerSource":"preview","providerKind":"metadata"}',
+      );
+      return ExchangeContentPage.fromJson({
+        'exchangeId': exchangeId,
+        'kind': 'block_bytes',
+        'messages': [],
+        'blocks': [],
+        'offset': 0,
+        'total': bytes.length,
+        'data': base64.encode(bytes),
+      }, 'preview.blockPage');
+    }
     throw const ControlContractException(
       'Preview content cursor is unavailable',
     );

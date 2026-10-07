@@ -2,6 +2,7 @@ package exchangecontent
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -664,6 +665,20 @@ func countProjectionWire(ctx context.Context, limit uint64, p Projection) error 
 func writePageWire(w *canonicalWriter, p ContentPage) {
 	w.text("{")
 	comma := false
+	if p.BlockMetadata != nil {
+		w.text(`"blockMetadata":`)
+		writeBlockPageMetadata(w, *p.BlockMetadata)
+		comma = true
+	}
+	for _, f := range [2][2]string{{"canonicalCursor", p.CanonicalCursor}, {"data", base64.StdEncoding.EncodeToString(p.Data)}} {
+		if f[1] != "" {
+			if comma {
+				w.text(",")
+			}
+			w.field(f[0], f[1])
+			comma = true
+		}
+	}
 	for _, f := range [3][2]string{{"blockKind", p.BlockKind}, {"callId", p.CallID}, {"toolName", p.ToolName}} {
 		if f[1] != "" {
 			if comma {
@@ -704,6 +719,33 @@ func writePageWire(w *canonicalWriter, p ContentPage) {
 	w.text(`,"total":`)
 	w.integer(int64(p.Total))
 	w.optional("nextCursor", p.NextCursor)
+	w.text("}")
+}
+
+func writeBlockPageMetadata(w *canonicalWriter, m BlockPageMetadata) {
+	w.text("{")
+	w.field("kind", m.Kind)
+	w.text(",")
+	w.field("availability", string(m.Availability))
+	w.text(`,"originalSize":`)
+	w.integer(int64(m.OriginalSize))
+	w.optional("callId", m.CallID)
+	w.optional("toolName", m.ToolName)
+	w.optional("toolNamespace", m.ToolNamespace)
+	if m.ToolError {
+		w.text(`,"toolError":true`)
+	}
+	w.optional("providerSource", m.ProviderSource)
+	w.optional("providerKind", m.ProviderKind)
+	w.optional("fingerprint", m.Fingerprint)
+	if m.Agent != nil {
+		w.text(`,"agent":`)
+		w.agent(m.Agent)
+	}
+	w.text(`,"textBytes":`)
+	w.text(strconv.FormatUint(m.TextBytes, 10))
+	w.text(`,"argumentBytes":`)
+	w.text(strconv.FormatUint(m.ArgumentBytes, 10))
 	w.text("}")
 }
 func countPageWire(ctx context.Context, limit uint64, p ContentPage) error {

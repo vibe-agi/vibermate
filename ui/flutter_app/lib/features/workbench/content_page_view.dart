@@ -1,5 +1,35 @@
 part of 'conversation_timeline.dart';
 
+// Keep valid UTF8 visible; invalid or page-split byte sequences are explicit.
+// Copy uses the original bytes, never this display string.
+String _retainedBytePreview(List<int> bytes) {
+  final text = StringBuffer();
+  for (var i = 0; i < bytes.length;) {
+    final first = bytes[i];
+    final width = first < 0x80
+        ? 1
+        : first >= 0xc2 && first <= 0xdf
+        ? 2
+        : first >= 0xe0 && first <= 0xef
+        ? 3
+        : first >= 0xf0 && first <= 0xf4
+        ? 4
+        : 0;
+    if (width > 0 && i + width <= bytes.length) {
+      try {
+        text.write(utf8.decode(bytes.sublist(i, i + width)));
+        i += width;
+        continue;
+      } on FormatException {
+        /* Mark this byte below. */
+      }
+    }
+    text.write('[${first.toRadixString(16).padLeft(2, '0').toUpperCase()}]');
+    i++;
+  }
+  return text.toString();
+}
+
 // All retained-content renderers use the same opt-in loader. A nested block
 // navigates inside the existing reader instead of opening a stack of dialogs.
 final class _ContentPageScope extends InheritedWidget {
@@ -121,6 +151,7 @@ final class _ContentPageDialogState extends State<_ContentPageDialog> {
   }
 
   String _copyText(ExchangeContentPage page) {
+    if (page.kind == 'block_bytes') return base64.encode(page.data);
     if (page.kind == 'text' || page.kind == 'arguments') return page.text;
     if (page.kind == 'protocol') {
       return page.protocolEvidence
@@ -147,6 +178,7 @@ final class _ContentPageDialogState extends State<_ContentPageDialog> {
         page.kind == 'request' ? 'content_page.earlier' : 'content_page.next',
       );
       final copyable =
+          page.data.isNotEmpty ||
           page.text.isNotEmpty ||
           page.protocolEvidence.isNotEmpty ||
           _hasCopyableContent([
@@ -172,8 +204,18 @@ final class _ContentPageDialogState extends State<_ContentPageDialog> {
             ),
           if (copyable)
             _CopyValueButton(
-              tooltip: copy('content_page.copy'),
-              label: compact ? null : copy('content_page.copy'),
+              tooltip: copy(
+                page.kind == 'block_bytes'
+                    ? 'content_page.copy_base64'
+                    : 'content_page.copy',
+              ),
+              label: compact
+                  ? null
+                  : copy(
+                      page.kind == 'block_bytes'
+                          ? 'content_page.copy_base64'
+                          : 'content_page.copy',
+                    ),
               value: () => _copyText(page),
             ),
           if (compact)
@@ -198,10 +240,16 @@ final class _ContentPageDialogState extends State<_ContentPageDialog> {
   Widget _body(ExchangeContentPage page) {
     final copy = widget.copy;
     final body = page.kind == 'text' || page.kind == 'arguments';
+    final exact = page.kind == 'block_bytes';
+    final mode = widget.controller
+        .exchangeDetail(widget.exchangeId)
+        ?.content
+        .mode;
     final count = switch (page.kind) {
       'request' => page.messages.length,
       'protocol' => page.protocolEvidence.length,
       'message' => page.blocks.length,
+      'block_bytes' => page.data.length,
       _ => utf8.encode(page.text).length,
     };
     return Column(
@@ -214,7 +262,7 @@ final class _ContentPageDialogState extends State<_ContentPageDialog> {
               children: [
                 Text(
                   copy.format(
-                    body
+                    body || exact
                         ? 'content_page.byte_range'
                         : 'content_page.item_range',
                     {
@@ -225,6 +273,54 @@ final class _ContentPageDialogState extends State<_ContentPageDialog> {
                   ),
                   style: Theme.of(context).textTheme.bodySmall,
                 ),
+                if (mode != null &&
+                    (exact ||
+                        page.blockMetadata != null ||
+                        page.canonicalCursor != null))
+                  Text(
+                    copy(
+                      mode == 'metadata_only'
+                          ? 'content_page.metadata_mode'
+                          : 'content_page.full_mode',
+                    ),
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                if (exact) ...[
+                  Text(
+                    copy('content_page.complete_record'),
+                    style: Theme.of(context).textTheme.titleSmall,
+                  ),
+                  Text(
+                    copy('content_page.exact_note'),
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                  const SizedBox(height: 8),
+                  SelectableText(
+                    _retainedBytePreview(page.data),
+                    key: const Key('content-page-bytes'),
+                    style: monoStyle,
+                  ),
+                ],
+                if (page.canonicalCursor case final cursor?)
+                  TextButton.icon(
+                    key: const Key('content-page-complete-record'),
+                    onPressed: () => _load(cursor),
+                    icon: const Icon(Icons.description_outlined, size: 16),
+                    label: Text(copy('content_page.complete_record')),
+                  ),
+                if (page.blockMetadata case final metadata?)
+                  ExpansionTile(
+                    key: const Key('content-page-metadata'),
+                    title: Text(copy('content_page.details')),
+                    children: [
+                      SelectableText(
+                        const JsonEncoder.withIndent(
+                          '  ',
+                        ).convert(metadata.values),
+                        style: monoStyle,
+                      ),
+                    ],
+                  ),
                 if (page.blockKind != null)
                   Text(
                     [
@@ -301,9 +397,16 @@ final class _ContentPageDialogState extends State<_ContentPageDialog> {
                 Row(
                   children: [
                     Expanded(
-                      child: Text(
-                        copy('content_page.title'),
-                        style: Theme.of(context).textTheme.titleMedium,
+                      child: FutureBuilder<ExchangeContentPage>(
+                        future: _page,
+                        builder: (context, snapshot) => Text(
+                          copy(
+                            snapshot.data?.kind == 'block_bytes'
+                                ? 'content_page.complete_record'
+                                : 'content_page.title',
+                          ),
+                          style: Theme.of(context).textTheme.titleMedium,
+                        ),
                       ),
                     ),
                     IconButton(

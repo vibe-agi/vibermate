@@ -162,6 +162,7 @@ func (repository *exchangeContentRepository) publishContent(ctx context.Context,
 		scopeKind,
 		scopeID,
 		writeMessage,
+		repository.limits,
 	)
 	if err != nil {
 		return err
@@ -244,6 +245,7 @@ func completeStoredExchangeContent(
 	transcript storedTranscript,
 	scopeKind, scopeID string,
 	writeMessage func(context.Context, *sql.Tx, string) error,
+	limits *exchangecontent.SourceLimits,
 ) (bool, error) {
 	var storedScopeKind, storedScopeID, storedMode string
 	var recordedMillis, expiresMillis int64
@@ -285,7 +287,10 @@ func completeStoredExchangeContent(
 	if err != nil {
 		return false, fmt.Errorf("load pending Exchange content: %w", err)
 	}
-	storedManifest, err := decodeStoredContentManifest(storedEncodedManifest)
+	storedManifest, err := decodeStoredContentManifestWithin(ctx, storedEncodedManifest, limits)
+	if err != nil {
+		return false, err
+	}
 	addedMessages := 1
 	if manifest.Response != nil && manifest.Response.EmptyOutput {
 		addedMessages = 0
@@ -365,8 +370,8 @@ func (repository *exchangeContentRepository) Get(
 		return exchangecontent.Record{}, err
 	}
 	defer finish()
-	reference, err := loadStoredContentReference(
-		operation, repository.reads, exchangeID, now,
+	reference, err := loadStoredContentReferenceWithin(
+		operation, repository.reads, exchangeID, now, repository.limits,
 	)
 	if err != nil {
 		return exchangecontent.Record{}, err
@@ -396,8 +401,8 @@ func (repository *exchangeContentRepository) GetProjection(
 		return exchangecontent.Projection{}, err
 	}
 	defer finish()
-	reference, err := loadStoredContentReference(
-		operation, repository.reads, exchangeID, now,
+	reference, err := loadStoredContentReferenceWithin(
+		operation, repository.reads, exchangeID, now, repository.limits,
 	)
 	if err != nil {
 		return exchangecontent.Projection{}, err
@@ -781,6 +786,10 @@ func loadStoredContentReference(
 	exchangeID string,
 	now time.Time,
 ) (storedContentReference, error) {
+	return loadStoredContentReferenceWithin(ctx, database, exchangeID, now, nil)
+}
+
+func loadStoredContentReferenceWithin(ctx context.Context, database *sql.DB, exchangeID string, now time.Time, limits *exchangecontent.SourceLimits) (storedContentReference, error) {
 	var reference storedContentReference
 	var scopeKind, scopeID, mode string
 	var recordedMillis, expiresMillis int64
@@ -820,7 +829,10 @@ func loadStoredContentReference(
 	if err != nil {
 		return storedContentReference{}, fmt.Errorf("load Exchange content manifest: %w", err)
 	}
-	manifest, err := decodeStoredContentManifest(encodedManifest)
+	manifest, err := decodeStoredContentManifestWithin(ctx, encodedManifest, limits)
+	if err != nil {
+		return storedContentReference{}, err
+	}
 	if err != nil || manifest.ExchangeID != exchangeID || string(manifest.Mode) != mode ||
 		toUnixMillis(manifest.RecordedAt) != recordedMillis ||
 		toUnixMillis(manifest.ExpiresAt) != expiresMillis {
@@ -999,23 +1011,7 @@ func encodeStoredContent(record exchangecontent.Record) (
 }
 
 func decodeStoredContentManifest(encoded []byte) (storedExchangeContentManifest, error) {
-	if len(encoded) == 0 || len(encoded) > exchangecontent.MaxEncodedBytes {
-		return storedExchangeContentManifest{}, exchangecontent.ErrInvalidEvidence
-	}
-	var manifest storedExchangeContentManifest
-	decoder := json.NewDecoder(bytes.NewReader(encoded))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&manifest); err != nil {
-		return storedExchangeContentManifest{}, exchangecontent.ErrInvalidEvidence
-	}
-	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
-		return storedExchangeContentManifest{}, exchangecontent.ErrInvalidEvidence
-	}
-	canonical, err := json.Marshal(manifest)
-	if err != nil || !bytes.Equal(canonical, encoded) {
-		return storedExchangeContentManifest{}, exchangecontent.ErrInvalidEvidence
-	}
-	return manifest, nil
+	return decodeStoredContentManifestWithin(context.Background(), encoded, nil)
 }
 
 func recordFromStoredManifest(

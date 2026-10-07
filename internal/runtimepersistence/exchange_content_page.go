@@ -10,7 +10,6 @@ import (
 	"encoding/json"
 	"errors"
 	"slices"
-	"strings"
 	"time"
 	"unicode/utf8"
 
@@ -91,7 +90,7 @@ func (repository *exchangeContentRepository) GetPagedProjection(ctx context.Cont
 		return exchangecontent.Projection{}, err
 	}
 	defer finish()
-	ref, err := loadStoredContentReference(operation, repository.reads, id, now)
+	ref, err := loadStoredContentReferenceWithin(operation, repository.reads, id, now, repository.limits)
 	if err != nil {
 		return exchangecontent.Projection{}, err
 	}
@@ -172,7 +171,14 @@ func (repository *exchangeContentRepository) GetContentPage(ctx context.Context,
 	if err != nil || cursor.Exchange != id {
 		return exchangecontent.ContentPage{}, exchangecontent.ErrInvalidEvidence
 	}
-	if repository.limits == nil && cursor.Offset > exchangecontent.MaxEncodedBytes || repository.limits != nil && uint64(cursor.Offset) > repository.limits.RetainedBytes {
+	maximum := uint64(exchangecontent.MaxEncodedBytes)
+	if repository.limits != nil {
+		maximum = repository.limits.RetainedBytes
+		if cursor.Kind == "block_bytes" {
+			maximum = repository.limits.CanonicalBytes
+		}
+	}
+	if uint64(cursor.Offset) > maximum || uint64(cursor.Offset) > exchangecontent.MaxCanonicalBlockBytes || cursor.Kind == "detail" && cursor.Offset != 0 {
 		return exchangecontent.ContentPage{}, exchangecontent.ErrInvalidEvidence
 	}
 	operation, finish, err := repository.operations.begin(ctx)
@@ -180,7 +186,7 @@ func (repository *exchangeContentRepository) GetContentPage(ctx context.Context,
 		return exchangecontent.ContentPage{}, err
 	}
 	defer finish()
-	ref, err := loadStoredContentReference(operation, repository.reads, id, now)
+	ref, err := loadStoredContentReferenceWithin(operation, repository.reads, id, now, repository.limits)
 	if err != nil {
 		return exchangecontent.ContentPage{}, err
 	}
@@ -221,7 +227,7 @@ func (repository *exchangeContentRepository) GetContentPage(ctx context.Context,
 		}
 		return repository.requestContentPage(operation, ref, cursor, ledger)
 	}
-	if cursor.Lower != 0 || (cursor.Kind != "message" && cursor.Kind != "body") {
+	if cursor.Lower != 0 || (cursor.Kind != "message" && cursor.Kind != "body" && cursor.Kind != "detail" && cursor.Kind != "text" && cursor.Kind != "arguments" && cursor.Kind != "block_bytes") {
 		return exchangecontent.ContentPage{}, exchangecontent.ErrInvalidEvidence
 	}
 	digest, err := repository.cursorMessage(operation, ref, cursor)
@@ -231,77 +237,12 @@ func (repository *exchangeContentRepository) GetContentPage(ctx context.Context,
 	if repository.limits != nil {
 		return repository.sourceMessagePage(operation, ref, cursor, digest, ledger)
 	}
-	if _, _, err := repository.inlineMessageSize(operation, digest, protocolcore.MaxContentBlocks); err != nil {
-		return exchangecontent.ContentPage{}, err
-	}
-	// ponytail: an explicitly opened large message is verified in full (at
-	// most 32 MiB) before returning a bounded fragment. A future authenticated
-	// block-manifest format can remove this verification read without weakening
-	// the existing canonical message-digest guarantee. Never load other messages.
-	resolved, err := loadStoredMessagesByDigest(operation, repository.reads, []string{digest})
+	legacy := legacyStoredReadLimits()
+	ledger, err = newStoredReadLedger(legacy, ref.manifest)
 	if err != nil {
 		return exchangecontent.ContentPage{}, err
 	}
-	message, ok := resolved[digest]
-	if !ok || cursor.Block >= len(message.Blocks) {
-		return exchangecontent.ContentPage{}, exchangecontent.ErrInvalidEvidence
-	}
-	if cursor.Kind == "body" {
-		return contentBodyPage(ref, cursor, message.Blocks[cursor.Block])
-	}
-	if cursor.Offset != 0 {
-		return exchangecontent.ContentPage{}, exchangecontent.ErrInvalidEvidence
-	}
-	page := contentPageBase(ref, "message")
-	page.Offset, page.Total = cursor.Block, len(message.Blocks)
-	budget := exchangecontent.PageContentBytes
-	for index := cursor.Block; index < len(message.Blocks); index++ {
-		block := message.Blocks[index]
-		_, encoded, err := encodeStoredBlock(block)
-		if err != nil {
-			return exchangecontent.ContentPage{}, err
-		}
-		if len(page.Blocks) >= exchangecontent.PageMessageLimit || (len(encoded) > budget && len(encoded) <= exchangecontent.PageContentBytes) {
-			cursor.Block = index
-			page.NextCursor = encodeContentCursor(cursor)
-			break
-		}
-		if len(encoded) > exchangecontent.PageContentBytes {
-			body := cursor
-			body.Kind, body.Block, body.Offset = "body", index, 0
-			block = deferredPageBlock(body, len(encoded))
-			budget -= 1024
-		} else {
-			budget -= len(encoded)
-		}
-		page.Blocks = append(page.Blocks, block)
-	}
-	return page, page.Validate()
-}
-
-func contentBodyPage(ref storedContentReference, cursor contentCursor, block exchangecontent.Block) (exchangecontent.ContentPage, error) {
-	if err := block.Validate(ref.manifest.Mode); err != nil {
-		return exchangecontent.ContentPage{}, err
-	}
-	text, kind := block.Text, "text"
-	if len(block.Arguments) != 0 {
-		text, kind = string(block.Arguments), "arguments"
-	}
-	if cursor.Offset >= len(text) || !utf8.ValidString(text) || !utf8.RuneStart(text[cursor.Offset]) {
-		return exchangecontent.ContentPage{}, exchangecontent.ErrInvalidEvidence
-	}
-	end := min(len(text), cursor.Offset+exchangecontent.PageBodyBytes)
-	for end < len(text) && !utf8.RuneStart(text[end]) {
-		end--
-	}
-	page := contentPageBase(ref, kind)
-	page.BlockKind, page.CallID, page.ToolName = block.Kind, block.CallID, block.ToolName
-	page.Text, page.Offset, page.Total = strings.Clone(text[cursor.Offset:end]), cursor.Offset, len(text)
-	if end < len(text) {
-		cursor.Offset = end
-		page.NextCursor = encodeContentCursor(cursor)
-	}
-	return page, page.Validate()
+	return repository.sourceMessagePage(operation, ref, cursor, digest, ledger)
 }
 
 func (repository *exchangeContentRepository) cursorMessage(ctx context.Context, ref storedContentReference, cursor contentCursor) (string, error) {
@@ -424,6 +365,9 @@ func (repository *exchangeContentRepository) inlinePageMessage(ctx context.Conte
 			return exchangecontent.Message{Role: "unknown", Blocks: []exchangecontent.Block{deferredPageBlock(cursor, int(estimate))}}, 1024, nil
 		}
 		message, err := repository.readVerifiedMessage(ctx, digest, mode, ledger, cursor.Location == "request")
+		if err == nil {
+			message, err = pageCompatibleMessage(message, cursor, ledger)
+		}
 		return message, int(probe.InlineUpperBound), err
 	}
 	size, count, err := repository.inlineMessageSize(ctx, digest, exchangecontent.PageMessageLimit)
@@ -442,7 +386,26 @@ func (repository *exchangeContentRepository) inlinePageMessage(ctx context.Conte
 	if !ok {
 		return exchangecontent.Message{}, 0, errors.New("content page message is missing")
 	}
-	return message, size, nil
+	message, err = pageCompatibleMessage(message, cursor, ledger)
+	return message, size, err
+}
+
+func pageCompatibleMessage(message exchangecontent.Message, cursor contentCursor, ledger *storedReadLedger) (exchangecontent.Message, error) {
+	for i, b := range message.Blocks {
+		if len(b.Arguments) > 0 && (!utf8.Valid(b.Arguments) || b.Arguments[0] != '{') {
+			if ledger != nil {
+				if err := ledger.holdShell(); err != nil {
+					return exchangecontent.Message{}, err
+				}
+			}
+			selected := cursor
+			selected.Kind = "detail"
+			selected.Block = i
+			selected.Offset = 0
+			message.Blocks[i] = deferredPageBlock(selected, len(b.Arguments))
+		}
+	}
+	return message, nil
 }
 
 func (repository *exchangeContentRepository) inlineMessageSize(ctx context.Context, digest string, blockLimit int) (int, int, error) {
@@ -514,21 +477,40 @@ func (repository *exchangeContentRepository) sourceMessagePage(ctx context.Conte
 	if cursor.Kind == "message" && cursor.Offset != 0 {
 		return exchangecontent.ContentPage{}, exchangecontent.ErrInvalidEvidence
 	}
-	result, err := repository.readSelectedMessage(ctx, digest, ref.manifest.Mode, ledger, cursor.Location == "request", &storedMessageReadRequest{First: cursor.Block, Body: cursor.Kind == "body", Offset: uint64(cursor.Offset)})
+	result, err := repository.readSelectedMessage(ctx, digest, ref.manifest.Mode, ledger, cursor.Location == "request", &storedMessageReadRequest{First: cursor.Block, Body: cursor.Kind != "message", Offset: uint64(cursor.Offset), Kind: cursor.Kind})
 	if err != nil {
 		return exchangecontent.ContentPage{}, err
 	}
 	if cursor.Location == "response" && result.Message.Role != "assistant" || cursor.Location == "system" && result.Message.Role != "system" {
 		return exchangecontent.ContentPage{}, exchangecontent.ErrInvalidEvidence
 	}
-	if cursor.Kind == "body" {
+	if cursor.Kind != "message" {
 		body := result.Body
+		if result.Detail.Canonical {
+			page := contentPageBase(ref, "block_bytes")
+			page.Data = body.Bytes
+			page.Offset = cursor.Offset
+			page.Total = int(body.Facts.CanonicalBytes)
+			if body.End < body.Facts.CanonicalBytes {
+				cursor.Kind = "block_bytes"
+				cursor.Offset = int(body.End)
+				page.NextCursor = encodeContentCursor(cursor)
+			}
+			return repository.checkedContentPage(ctx, page)
+		}
 		kind, total := "text", body.Facts.TextBytes
 		if body.Arguments {
 			kind, total = "arguments", body.Facts.ArgumentBytes
 		}
 		page := contentPageBase(ref, kind)
+		page.BlockMetadata = result.Detail.Metadata
 		page.BlockKind, page.CallID, page.ToolName = body.Facts.Shape.Kind, body.Facts.Shape.CallID, body.Facts.Shape.ToolName
+		if page.BlockMetadata == nil || !body.Facts.RawUTF8 || cursor.Kind == "body" && body.Facts.TextBytes > 0 && body.Facts.ArgumentBytes > 0 {
+			exact := cursor
+			exact.Kind = "block_bytes"
+			exact.Offset = 0
+			page.CanonicalCursor = encodeContentCursor(exact)
+		}
 		// The returned string owns a copy; the selected byte range still lives
 		// until this operation returns and is charged independently.
 		if uint64(len(body.Bytes)) > ledger.bound-ledger.live {
@@ -537,7 +519,12 @@ func (repository *exchangeContentRepository) sourceMessagePage(ctx context.Conte
 		ledger.live += uint64(len(body.Bytes))
 		page.Text, page.Offset, page.Total = string(body.Bytes), cursor.Offset, int(total)
 		if body.End < total {
+			cursor.Kind = kind
 			cursor.Offset = int(body.End)
+			page.NextCursor = encodeContentCursor(cursor)
+		} else if kind == "text" && body.Facts.ArgumentBytes > 0 && body.Facts.RawUTF8 {
+			cursor.Kind = "arguments"
+			cursor.Offset = 0
 			page.NextCursor = encodeContentCursor(cursor)
 		}
 		return repository.checkedContentPage(ctx, page)
@@ -546,7 +533,7 @@ func (repository *exchangeContentRepository) sourceMessagePage(ctx context.Conte
 	page.Offset, page.Total, page.Blocks = cursor.Block, result.Total, result.Message.Blocks
 	for index, size := range result.Deferred {
 		body := cursor
-		body.Kind = "body"
+		body.Kind = "detail"
 		body.Block = cursor.Block + index
 		body.Offset = 0
 		page.Blocks[index] = deferredPageBlock(body, int(size))
@@ -556,4 +543,10 @@ func (repository *exchangeContentRepository) sourceMessagePage(ctx context.Conte
 		page.NextCursor = encodeContentCursor(cursor)
 	}
 	return repository.checkedContentPage(ctx, page)
+}
+
+func legacyStoredReadLimits() exchangecontent.SourceLimits {
+	const payload = exchangecontent.MaxEncodedBytes
+	const cells = 4 * payload
+	return exchangecontent.SourceLimits{Semantic: protocolcore.ResourceLimits{Request: protocolcore.ResourceCost{PayloadBytes: payload, StructureBytes: cells}, Response: protocolcore.ResourceCost{PayloadBytes: payload, StructureBytes: cells}}, Scratch: protocolcore.ResourceCost{PayloadBytes: 4096, StructureBytes: 4096}, CanonicalBytes: payload, RetainedBytes: payload, StructureBytes: cells}
 }

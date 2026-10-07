@@ -318,6 +318,104 @@ func TestWithinPageWireAndCurrencyBoundaries(t *testing.T) {
 	}
 }
 
+func TestWithinCompleteBlockPageWireAndBounds(t *testing.T) {
+	r := withinFixture(t, 1)
+	l := sourceFixtureLimits()
+	base := ContentPage{ExchangeID: r.ExchangeID, Parent: r.Parent, Frozen: r.Frozen, Mode: r.Mode, Kind: "block_bytes", Data: []byte{0xff, 0xe2, 0x80}, Total: 3}
+	meta := &BlockPageMetadata{Kind: "tool_call", Availability: AvailabilityRecorded, CallID: "c", ToolName: "f", ToolNamespace: "ns", ProviderSource: "<&>", ProviderKind: "k", Fingerprint: "sha256:" + strings.Repeat("a", 64), Agent: &AgentContext{AgentName: "agent"}, TextBytes: 5, ArgumentBytes: 4}
+	body := base
+	body.Kind, body.Text, body.Data, body.Total, body.BlockMetadata, body.CanonicalCursor = "text", "hello", nil, 5, meta, "complete"
+	for _, p := range []ContentPage{base, body} {
+		if err := p.ValidateWithin(context.Background(), l); err != nil {
+			t.Fatal(err)
+		}
+		want, err := json.Marshal(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var got bytes.Buffer
+		w := canonicalWriter{sink: &got}
+		writePageWire(&w, p)
+		w.flush()
+		if w.err != nil || !bytes.Equal(got.Bytes(), want) {
+			t.Fatalf("page wire differs: %s / %s", got.Bytes(), want)
+		}
+		if err := countPageWire(context.Background(), uint64(len(want)), p); err != nil {
+			t.Fatal(err)
+		}
+		if err := countPageWire(context.Background(), uint64(len(want)-1), p); err == nil {
+			t.Fatal("wire -1 admitted")
+		}
+	}
+	for name, mutate := range map[string]func(*ContentPage){
+		"oversized-data": func(p *ContentPage) { p.Data = make([]byte, PageBodyBytes+1); p.Total = len(p.Data) },
+		"text-union":     func(p *ContentPage) { p.Text = "hidden" },
+		"metadata-union": func(p *ContentPage) { p.BlockMetadata = meta },
+		"cursor-union":   func(p *ContentPage) { p.CanonicalCursor = "c" },
+		"empty":          func(p *ContentPage) { p.Data = nil },
+		"past-end":       func(p *ContentPage) { p.Offset = 1 },
+		"no-progress":    func(p *ContentPage) { p.Total = 4 },
+		"spurious-next":  func(p *ContentPage) { p.NextCursor = "c" },
+		"cursor-cap":     func(p *ContentPage) { p.Total = 4; p.NextCursor = strings.Repeat("c", MaxPageCursorBytes+1) },
+		"format-cap":     func(p *ContentPage) { p.Total = int(MaxCanonicalBlockBytes) + 1; p.NextCursor = "c" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			p := base
+			mutate(&p)
+			if p.ValidateWithin(context.Background(), l) == nil {
+				t.Fatal("invalid page admitted")
+			}
+		})
+	}
+	for _, delta := range []int64{-1, 0} {
+		// A complete retained block includes its metadata/identity envelope;
+		// use a realistic extent, selecting only its final three bytes.
+		p := base
+		p.Total, p.Offset = 1024, 1021
+		limit := l
+		limit.CanonicalBytes = uint64(int64(p.Total) + delta)
+		if err := p.ValidateWithin(context.Background(), limit); (err != nil) != (delta < 0) {
+			t.Fatalf("canonical delta%d: %v", delta, err)
+		}
+	}
+	// Metadata is real retained content, not a generated control shell.
+	low, high := uint64(1), l.RetainedBytes
+	for low < high {
+		mid := (low + high) / 2
+		limit := l
+		limit.RetainedBytes = mid
+		if body.ValidateWithin(context.Background(), limit) == nil {
+			high = mid
+		} else {
+			low = mid + 1
+		}
+	}
+	for _, delta := range []int64{-1, 0} {
+		limit := l
+		limit.RetainedBytes = uint64(int64(low) + delta)
+		if err := body.ValidateWithin(context.Background(), limit); (err != nil) != (delta < 0) {
+			t.Fatalf("metadata payload delta%d: %v", delta, err)
+		}
+	}
+	limit := l
+	limit.StructureBytes = uint64(unsafe.Sizeof(Block{})) + uint64(unsafe.Sizeof(AgentContext{}))
+	if err := body.ValidateWithin(context.Background(), limit); err != nil {
+		t.Fatal(err)
+	}
+	limit.StructureBytes--
+	if body.ValidateWithin(context.Background(), limit) == nil {
+		t.Fatal("metadata structure -1 admitted")
+	}
+}
+
+func TestLegacyPageRejectsHiddenCanonicalData(t *testing.T) {
+	r := withinFixture(t, 1)
+	p := ContentPage{ExchangeID: r.ExchangeID, Parent: r.Parent, Frozen: r.Frozen, Mode: r.Mode, Kind: "text", Text: "x", Total: 1, Data: []byte("hidden")}
+	if p.Validate() == nil {
+		t.Fatal("legacy validation accepted hidden canonical data in text page")
+	}
+}
+
 func TestWithinGeneratedControlBudgetAndCanonicalCredit(t *testing.T) {
 	r := withinFixture(t, 1)
 	p := ContentPage{ExchangeID: "e", Parent: r.Parent, Frozen: r.Frozen, Mode: r.Mode, Kind: "text", Text: "x", Total: 1, NextCursor: strings.Repeat("\"<&", 100)}

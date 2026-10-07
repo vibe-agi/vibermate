@@ -1,4 +1,10 @@
 {
+  "content_page.complete_record": "完整记录",
+  "content_page.exact_note": "这是保留数据的片段，不是 Agent 的正文回复，也不是完整 JSON 文档。无效或不完整字节以 [HEX] 标记显示。",
+  "content_page.copy_base64": "复制片段（Base64）",
+  "content_page.details": "保留的详细信息",
+  "content_page.full_mode": "完整内容",
+  "content_page.metadata_mode": "仅元数据 · 未保留的正文不可读取",
   "cli.error.localRootUntrusted": "尚未确认当前本机根证书已受信任。请在 ViberMate 设置的「本机根证书」中点击「安装并信任」，完成 macOS 授权后重试。若已信任，请确认 App 与终端命令版本一致后重试。",
   "cli.usage.acp": "用法：vibermate acp [--server <主机:端口|http(s)://主机:端口>] [--record-content] -- <ACP 适配器命令> [参数...]\n编辑器传入的环境变量和参数保持不变。ACP 观察不会应用 HTTP 流量策略（--env）、账号替换或模型映射。",
   "cli.help.acp": "让支持 ACP 的编辑器通过 ViberMate 启动 Agent。请先打开本地 App；使用远程服务时，先执行 vibermate login --server <主机:端口>。\n\n编辑器的程序填写 vibermate 绝对路径，参数例如 [\"acp\", \"--\", \"/适配器绝对路径/codex-acp\"]。适配器需自行安装；Shell alias 不能作为可执行命令，GUI 应用还可能需要显式设置包含 Node 的 PATH。\n\n默认只记录元数据。在 -- 前加入 --record-content，才会按启动时冻结的服务端保留策略保存有限长度的用户与助手文本。认证、权限内容、工具输入/结果、stderr 和未知扩展均不保存；历史重放不算新 prompt。\n\n登录、权限提示、工具、服务商流量和原生历史仍由编辑器与适配器负责。真实 TTY 调用只做直通，保证终端登录仍可交互。\n\n此模式只观察 ACP，不应用 HTTP 账号替换、模型映射、脚本或网络规则。需要受支持的 HTTP 捕获时请使用 vibermate run。",

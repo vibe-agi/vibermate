@@ -670,6 +670,225 @@ func sourceText(text string) exchangecontent.Block {
 	return exchangecontent.Block{Kind: "text", Availability: exchangecontent.AvailabilityRecorded, Text: text, OriginalSize: len(text)}
 }
 
+func TestContentBlockMetadataPagesAreComplete(t *testing.T) {
+	for _, variant := range []string{"source", "kind", "extension"} {
+		for _, size := range []int{(128 << 10) + 1, (1 << 20) + 1} {
+			for _, body := range []string{"", "short"} {
+				if variant == "extension" && body != "" {
+					continue
+				}
+				t.Run(fmt.Sprintf("%s/%d/%s", variant, size, body), func(t *testing.T) {
+					l := candidateContentLimits()
+					block := exchangecontent.Block{Kind: "reasoning", Availability: exchangecontent.AvailabilityRecorded, Text: body, ProviderSource: strings.Repeat("p", size), ProviderKind: "thinking"}
+					if variant == "kind" {
+						block.ProviderSource, block.ProviderKind = "provider", strings.Repeat("k", size)
+					}
+					if variant == "extension" {
+						block.Kind = "provider_extension"
+						block.Availability = exchangecontent.AvailabilityOmitted
+						block.Fingerprint = "sha256:" + strings.Repeat("a", 64)
+					}
+					r := sourceOnlyRecord(t, "metadata-pages", block)
+					source, err := exchangecontent.SourceFromRecordWithin(l, r)
+					if err != nil {
+						t.Fatal(err)
+					}
+					cost, err := source.Measure(context.Background())
+					if err != nil {
+						t.Fatal(err)
+					}
+					l.RetainedBytes, l.StructureBytes, l.CanonicalBytes = cost.RetainedBytes, cost.StructureBytes, cost.CanonicalBytes
+					s := openCandidateContentStore(t, filepath.Join(t.TempDir(), "runtime.db"), &l)
+					if err := putCandidateSource(t, s, source); err != nil {
+						t.Fatal(err)
+					}
+					if _, err := s.exchangeContents.Get(context.Background(), r.ExchangeID, r.RecordedAt); err != nil {
+						t.Fatal(err)
+					}
+					p, err := s.exchangeContents.GetPagedProjection(context.Background(), r.ExchangeID, r.RecordedAt, exchangecontent.RequestViewFull)
+					if err != nil {
+						t.Fatal(err)
+					}
+					m, err := s.exchangeContents.GetContentPage(context.Background(), r.ExchangeID, r.RecordedAt, p.Request.Messages[0].Blocks[0].Deferred.Cursor)
+					if err != nil {
+						t.Fatal(err)
+					}
+					page, err := s.exchangeContents.GetContentPage(context.Background(), r.ExchangeID, r.RecordedAt, m.Blocks[0].Deferred.Cursor)
+					if err != nil {
+						t.Fatalf("advertised metadata cursor is unusable: %v", err)
+					}
+					encoded, _ := json.Marshal(page)
+					var fields map[string]json.RawMessage
+					json.Unmarshal(encoded, &fields)
+					if page.Kind != "block_bytes" && len(fields["canonicalCursor"]) == 0 {
+						t.Fatal("retained provider metadata has no complete route")
+					}
+					if page.Kind != "block_bytes" {
+						if page.Text != body {
+							t.Fatal("ordinary body changed")
+						}
+						page, err = s.exchangeContents.GetContentPage(context.Background(), r.ExchangeID, r.RecordedAt, page.CanonicalCursor)
+						if err != nil {
+							t.Fatal(err)
+						}
+					}
+					var complete bytes.Buffer
+					for {
+						if page.Kind != "block_bytes" || page.Offset != complete.Len() || len(page.Data) == 0 || len(page.Data) > exchangecontent.PageBodyBytes {
+							t.Fatal("invalid canonical progress")
+						}
+						complete.Write(page.Data)
+						if page.NextCursor == "" {
+							break
+						}
+						page, err = s.exchangeContents.GetContentPage(context.Background(), r.ExchangeID, r.RecordedAt, page.NextCursor)
+						if err != nil {
+							t.Fatal(err)
+						}
+					}
+					want, _ := json.Marshal(block)
+					if !bytes.Equal(complete.Bytes(), want) {
+						t.Fatal("metadata canonical reconstruction changed fields")
+					}
+				})
+			}
+		}
+	}
+}
+
+func TestContentBlockDetailBodiesAndOmittedLocations(t *testing.T) {
+	ctx := context.Background()
+	l := candidateContentLimits()
+	s := openCandidateContentStore(t, filepath.Join(t.TempDir(), "runtime.db"), &l)
+	for _, raw := range []json.RawMessage{[]byte(`[1,2,"\u0061"]`), []byte(`null`), {'"', 0xff, '"'}} {
+		block := exchangecontent.Block{Kind: "tool_call", Availability: exchangecontent.AvailabilityRecorded, CallID: "call", ToolName: "f", ToolNamespace: "ns", Text: "first text", Arguments: raw}
+		r := sourceOnlyRecord(t, fmt.Sprintf("raw-detail-%x", raw), block)
+		if err := s.exchangeContents.Put(ctx, r); err != nil {
+			t.Fatal(err)
+		}
+		p, err := s.exchangeContents.GetPagedProjection(ctx, r.ExchangeID, r.RecordedAt, exchangecontent.RequestViewFull)
+		if err != nil {
+			t.Fatal(err)
+		}
+		d := p.Request.Messages[0].Blocks[0].Deferred
+		if d == nil {
+			t.Fatal("non-object or invalidUTF8 Args sent to object-only inline client")
+		}
+		page, err := s.exchangeContents.GetContentPage(ctx, r.ExchangeID, r.RecordedAt, d.Cursor)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if utf8.Valid(raw) {
+			if page.Kind != "text" || page.Text != "first text" || page.BlockMetadata == nil || page.BlockMetadata.ToolNamespace != "ns" {
+				t.Fatal("text/metadata missing")
+			}
+			page, err = s.exchangeContents.GetContentPage(ctx, r.ExchangeID, r.RecordedAt, page.NextCursor)
+			if err != nil || page.Kind != "arguments" || page.Text != string(raw) {
+				t.Fatalf("second body lost raw spelling: %v", err)
+			}
+		} else {
+			want, _ := json.Marshal(block)
+			if page.Kind != "block_bytes" || !bytes.Equal(page.Data, want) {
+				t.Fatal("invalidUTF8 bytes changed")
+			}
+		}
+	}
+	block := exchangecontent.Block{Kind: "reasoning", Availability: exchangecontent.AvailabilityOmitted, ProviderSource: "source", ProviderKind: strings.Repeat("k", (1<<20)+1)}
+	r := sourceOnlyRecord(t, "omitted-details", block)
+	r.Mode = environment.ContentRecordingMetadataOnly
+	r.Request.System = []exchangecontent.Block{block}
+	r.Response = contentRecordFixture(t, "response", r.RecordedAt).Response
+	r.Response.Blocks = []exchangecontent.Block{block}
+	source, err := exchangecontent.SourceFromRecordWithin(l, r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cost, err := source.Measure(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	l.RetainedBytes, l.StructureBytes, l.CanonicalBytes = cost.RetainedBytes, cost.StructureBytes, cost.CanonicalBytes
+	s = openCandidateContentStore(t, filepath.Join(t.TempDir(), "omitted.db"), &l)
+	if err := s.exchangeContents.Put(ctx, r); err != nil {
+		t.Fatal(err)
+	}
+	ref, err := loadStoredContentReference(ctx, s.reads, r.ExchangeID, r.RecordedAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, location := range []string{"request", "system", "response"} {
+		depth := 0
+		if location == "request" {
+			depth = 1
+		}
+		cursor := pageCursor(ref, location, "detail", depth)
+		var complete bytes.Buffer
+		for encoded := encodeContentCursor(cursor); encoded != ""; {
+			page, err := s.exchangeContents.GetContentPage(ctx, r.ExchangeID, r.RecordedAt, encoded)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if page.Kind != "block_bytes" || page.Offset != complete.Len() {
+				t.Fatal("omitted details route")
+			}
+			complete.Write(page.Data)
+			encoded = page.NextCursor
+		}
+		want, _ := json.Marshal(block)
+		if !bytes.Equal(complete.Bytes(), want) {
+			t.Fatal("omitted fields lost")
+		}
+		cursor.Kind = "text"
+		if _, err := s.exchangeContents.GetContentPage(ctx, r.ExchangeID, r.RecordedAt, encodeContentCursor(cursor)); !errors.Is(err, exchangecontent.ErrInvalidEvidence) {
+			t.Fatalf("forged omitted body route: %v", err)
+		}
+	}
+}
+
+func TestContentBlockDetailMetadataBoundaryAndCursorAuthority(t *testing.T) {
+	ctx := context.Background()
+	l := candidateContentLimits()
+	m := exchangecontent.BlockPageMetadata{Kind: "reasoning", Availability: exchangecontent.AvailabilityRecorded, ProviderSource: "p", ProviderKind: "k", TextBytes: 1}
+	encoded, _ := json.Marshal(m)
+	for _, delta := range []int{0, 1} {
+		t.Run(fmt.Sprint(delta), func(t *testing.T) {
+			b := exchangecontent.Block{Kind: m.Kind, Availability: m.Availability, ProviderSource: strings.Repeat("p", exchangecontent.PageContentBytes-len(encoded)+1+delta), ProviderKind: "k", Text: "x"}
+			r := sourceOnlyRecord(t, "metadata-boundary", b)
+			s := openCandidateContentStore(t, filepath.Join(t.TempDir(), "runtime.db"), &l)
+			if err := s.exchangeContents.Put(ctx, r); err != nil {
+				t.Fatal(err)
+			}
+			ref, err := loadStoredContentReference(ctx, s.reads, r.ExchangeID, r.RecordedAt)
+			if err != nil {
+				t.Fatal(err)
+			}
+			cursor := pageCursor(ref, "request", "detail", 1)
+			page, err := s.exchangeContents.GetContentPage(ctx, r.ExchangeID, r.RecordedAt, encodeContentCursor(cursor))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if (page.BlockMetadata != nil) != (delta == 0) || (page.CanonicalCursor != "") != (delta == 1) || page.Text != "x" {
+				t.Fatal("metadata inline boundary changed")
+			}
+			for name, mutate := range map[string]func(*contentCursor){
+				"root": func(c *contentCursor) { c.Root = strings.Repeat("0", 64) }, "kind": func(c *contentCursor) { c.Kind = "metadata" }, "block": func(c *contentCursor) { c.Block = 1 }, "offset": func(c *contentCursor) { c.Offset = 1 }, "field": func(c *contentCursor) { c.Kind = "arguments" }, "location": func(c *contentCursor) { c.Location = "response" }, "range": func(c *contentCursor) {
+					c.Kind = "block_bytes"
+					c.Offset = int(exchangecontent.MaxCanonicalBlockBytes) + 1
+				},
+			} {
+				t.Run(name, func(t *testing.T) {
+					bad := cursor
+					mutate(&bad)
+					got, err := s.exchangeContents.GetContentPage(ctx, r.ExchangeID, r.RecordedAt, encodeContentCursor(bad))
+					if err == nil || !reflect.DeepEqual(got, exchangecontent.ContentPage{}) {
+						t.Fatal("forged cursor returned provisional data")
+					}
+				})
+			}
+		})
+	}
+}
+
 func TestContentSourceCompletionNormalizesEmptyMetadata(t *testing.T) {
 	ctx := context.Background()
 	l := candidateContentLimits()
@@ -816,43 +1035,45 @@ func TestContentSourceLateErrorSecondPassAndCancellationWithhold(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cursor := encodeContentCursor(pageCursor(ref, "request", "body", 1))
 	real := s.exchangeContents.loadPhysical
-	for _, kind := range []string{"final-row-error", "second-pass-change", "cancellation"} {
-		t.Run(kind, func(t *testing.T) {
-			ctx, cancel := context.WithCancel(context.Background())
-			defer cancel()
-			lastLoads := 0
-			s.exchangeContents.loadPhysical = func(ctx context.Context, d string) (int, string, []byte, error) {
-				n, codec, data, err := real(ctx, d)
-				if d == last {
-					lastLoads++
-					if lastLoads == 2 {
-						switch kind {
-						case "final-row-error":
-							return n, codec, data, io.ErrUnexpectedEOF
-						case "second-pass-change":
-							data = append([]byte(nil), data...)
-							data[len(data)-1] ^= 1
-						case "cancellation":
-							cancel()
+	for _, pageKind := range []string{"body", "block_bytes", "detail"} {
+		cursor := encodeContentCursor(pageCursor(ref, "request", pageKind, 1))
+		for _, kind := range []string{"final-row-error", "second-pass-change", "cancellation"} {
+			t.Run(pageKind+"/"+kind, func(t *testing.T) {
+				ctx, cancel := context.WithCancel(context.Background())
+				defer cancel()
+				lastLoads := 0
+				s.exchangeContents.loadPhysical = func(ctx context.Context, d string) (int, string, []byte, error) {
+					n, codec, data, err := real(ctx, d)
+					if d == last {
+						lastLoads++
+						if lastLoads == 2 {
+							switch kind {
+							case "final-row-error":
+								return n, codec, data, io.ErrUnexpectedEOF
+							case "second-pass-change":
+								data = append([]byte(nil), data...)
+								data[len(data)-1] ^= 1
+							case "cancellation":
+								cancel()
+							}
 						}
 					}
+					return n, codec, data, err
 				}
-				return n, codec, data, err
-			}
-			t.Cleanup(func() { s.exchangeContents.loadPhysical = real })
-			page, err := s.exchangeContents.GetContentPage(ctx, r.ExchangeID, r.RecordedAt, cursor)
-			if err == nil || !reflect.DeepEqual(page, exchangecontent.ContentPage{}) || lastLoads != 2 {
-				t.Fatalf("%s returned earlier body: last=%d page=%s err=%v", kind, lastLoads, page.Text, err)
-			}
-			if kind == "cancellation" && !errors.Is(err, context.Canceled) {
-				t.Fatalf("cancellation changed class: %v", err)
-			}
-			if kind == "final-row-error" && !errors.Is(err, io.ErrUnexpectedEOF) {
-				t.Fatalf("final read error changed class: %v", err)
-			}
-		})
+				t.Cleanup(func() { s.exchangeContents.loadPhysical = real })
+				page, err := s.exchangeContents.GetContentPage(ctx, r.ExchangeID, r.RecordedAt, cursor)
+				if err == nil || !reflect.DeepEqual(page, exchangecontent.ContentPage{}) || lastLoads != 2 {
+					t.Fatalf("%s returned earlier body: last=%d page=%s err=%v", kind, lastLoads, page.Text, err)
+				}
+				if kind == "cancellation" && !errors.Is(err, context.Canceled) {
+					t.Fatalf("cancellation changed class: %v", err)
+				}
+				if kind == "final-row-error" && !errors.Is(err, io.ErrUnexpectedEOF) {
+					t.Fatalf("final read error changed class: %v", err)
+				}
+			})
+		}
 	}
 }
 

@@ -1,4 +1,10 @@
 {
+  "content_page.complete_record": "Complete record",
+  "content_page.exact_note": "A fragment of retained data, not the Agent’s body reply or a complete JSON document. Invalid or incomplete bytes appear in [HEX] markers.",
+  "content_page.copy_base64": "Copy fragment (Base64)",
+  "content_page.details": "Retained details",
+  "content_page.full_mode": "Full content",
+  "content_page.metadata_mode": "Metadata only · omitted bodies are unavailable",
   "cli.usage.acp": "Usage: vibermate acp [--server <host:port|http(s)://host:port>] [--record-content] -- <ACP adapter command> [args...]\nEditor env and arguments are preserved. HTTP traffic policies (--env), account replacement, and model mapping are not applied by ACP observation.",
   "cli.help.acp": "Connect an ACP-capable editor through ViberMate. Open the local App first, or sign in once with vibermate login --server <host:port>.\n\nSet the editor program to the absolute path of vibermate and pass args such as [\"acp\", \"--\", \"/absolute/path/to/codex-acp\"]. Install the adapter yourself. Shell aliases are not executable commands; GUI apps may also need an explicit PATH containing Node.\n\nMetadata is recorded by default. Add --record-content before -- to retain bounded user and assistant text under the frozen Server retention policy. Authentication, permission payloads, tool inputs/results, stderr, and unknown extensions are never retained. History replay is not a new prompt.\n\nThe editor and adapter own login, permission prompts, tools, provider traffic, and native history. Real-TTY invocations pass through without registration or observation so terminal authentication stays interactive.\n\nThis mode observes ACP only. HTTP account replacement, model mapping, scripts, and network rules are not applied. Use vibermate run for supported HTTP capture.",
   "cli.error.acpUnavailable": "This Runtime does not support ACP. Update the App or Server and its Terminal command together, then restart the editor Agent.",

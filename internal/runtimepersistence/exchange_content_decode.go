@@ -41,6 +41,8 @@ type storedBlockFacts struct {
 	Shape                                    exchangecontent.BlockShape
 	CanonicalBytes, TextBytes, ArgumentBytes uint64
 	LogicalCost                              storedBlockLogicalCost
+	MetadataBytes                            uint64
+	RawUTF8, RawObject                       bool
 }
 type storedBodyRange struct {
 	Facts       storedBlockFacts
@@ -136,16 +138,60 @@ func (d *storedBlockDecoder) full(ctx context.Context, open storedDecodeOpen, mo
 	if err != nil {
 		return exchangecontent.Block{}, err
 	}
-	b := exchangecontent.Block{Kind: result.strings[decodedKind].String(), Availability: exchangecontent.Availability(result.strings[decodedAvailability].String()), Text: result.strings[decodedText].String(), OriginalSize: result.facts.Shape.OriginalSize, CallID: result.strings[decodedCallID].String(), ToolName: result.strings[decodedToolName].String(), ToolNamespace: result.strings[decodedToolNamespace].String(), Arguments: result.arguments, ToolError: result.facts.Shape.ToolError, ProviderSource: result.strings[decodedProviderSource].String(), ProviderKind: result.strings[decodedProviderKind].String(), Fingerprint: result.strings[decodedFingerprint].String()}
-	if result.facts.Shape.HasAgent {
-		b.Agent = &exchangecontent.AgentContext{AgentName: result.strings[decodedAgentName].String(), Author: result.strings[decodedAuthor].String(), Recipient: result.strings[decodedRecipient].String()}
-	}
-	// The complete raw body has already been grammar-validated in both passes.
-	// Use the shared shape predicate without a third json.Valid allocation/scan.
+	b := result.block()
 	if err := b.RetainedShape().Validate(mode); err != nil {
 		return exchangecontent.Block{}, err
 	}
 	return b, nil
+}
+
+func (result *storedDecodeResult) block() exchangecontent.Block {
+	b := exchangecontent.Block{Kind: result.strings[decodedKind].String(), Availability: exchangecontent.Availability(result.strings[decodedAvailability].String()), Text: result.strings[decodedText].String(), OriginalSize: result.facts.Shape.OriginalSize, CallID: result.strings[decodedCallID].String(), ToolName: result.strings[decodedToolName].String(), ToolNamespace: result.strings[decodedToolNamespace].String(), Arguments: result.arguments, ToolError: result.facts.Shape.ToolError, ProviderSource: result.strings[decodedProviderSource].String(), ProviderKind: result.strings[decodedProviderKind].String(), Fingerprint: result.strings[decodedFingerprint].String()}
+	if result.facts.Shape.HasAgent {
+		b.Agent = &exchangecontent.AgentContext{AgentName: result.strings[decodedAgentName].String(), Author: result.strings[decodedAuthor].String(), Recipient: result.strings[decodedRecipient].String()}
+	}
+	return b
+}
+
+type storedDetailPage struct {
+	Body      storedBodyRange
+	Metadata  *exchangecontent.BlockPageMetadata
+	Canonical bool
+}
+
+func (d *storedBlockDecoder) detail(ctx context.Context, open storedDecodeOpen, mode environment.ContentRecordingMode, kind string, offset uint64) (storedDetailPage, error) {
+	if offset > exchangecontent.MaxCanonicalBlockBytes {
+		return storedDetailPage{}, exchangecontent.ErrInvalidEvidence
+	}
+	r, err := d.decode(ctx, open, mode, storedDecodeRequest{selected: true, offset: offset, end: offset + exchangecontent.PageBodyBytes, pageKind: kind})
+	if err != nil {
+		return storedDetailPage{}, err
+	}
+	page := storedDetailPage{Canonical: r.canonical, Body: storedBodyRange{Facts: r.facts, Offset: offset, End: r.end, Arguments: r.selectedField == decodedArguments, Bytes: r.body}}
+	if r.metadata {
+		m := &exchangecontent.BlockPageMetadata{Kind: r.strings[decodedKind].String(), Availability: exchangecontent.Availability(r.strings[decodedAvailability].String()), OriginalSize: r.facts.Shape.OriginalSize, CallID: r.strings[decodedCallID].String(), ToolName: r.strings[decodedToolName].String(), ToolNamespace: r.strings[decodedToolNamespace].String(), ToolError: r.facts.Shape.ToolError, ProviderSource: r.strings[decodedProviderSource].String(), ProviderKind: r.strings[decodedProviderKind].String(), Fingerprint: r.strings[decodedFingerprint].String(), TextBytes: r.facts.TextBytes, ArgumentBytes: r.facts.ArgumentBytes}
+		if r.facts.Shape.HasAgent {
+			m.Agent = &exchangecontent.AgentContext{AgentName: r.strings[decodedAgentName].String(), Author: r.strings[decodedAuthor].String(), Recipient: r.strings[decodedRecipient].String()}
+		}
+		page.Metadata = m
+	}
+	return page, nil
+}
+
+type storedCanonicalRangeReader struct {
+	io.Reader
+	offset, end, position uint64
+	dst                   []byte
+}
+
+func (r *storedCanonicalRangeReader) Read(p []byte) (int, error) {
+	n, err := r.Reader.Read(p)
+	start, end := max(r.position, r.offset), min(r.position+uint64(n), r.end)
+	if start < end {
+		copy(r.dst[start-r.offset:end-r.offset], p[start-r.position:end-r.position])
+	}
+	r.position += uint64(n)
+	return n, err
 }
 func (d *storedBlockDecoder) count(ctx context.Context, open storedDecodeOpen, mode environment.ContentRecordingMode) (storedBlockFacts, error) {
 	result, err := d.decode(ctx, open, mode, storedDecodeRequest{})
@@ -166,23 +212,28 @@ func (d *storedBlockDecoder) selectBody(ctx context.Context, open storedDecodeOp
 }
 
 type storedDecodeRequest struct {
-	full, selected bool
-	offset, end    uint64
+	full, selected      bool
+	offset, end         uint64
+	pageKind            string
+	metadata, canonical bool
 }
 type storedDecodeResult struct {
 	facts storedBlockFacts
 	// The result remains at one address; non-zero builders are never copied.
 	// After pass 2 they are read with String only, never written/reset/reused.
-	strings         [decodedFields]strings.Builder
-	lengths         [decodedFields]uint64
-	arguments, body []byte
-	end             uint64
+	strings             [decodedFields]strings.Builder
+	lengths             [decodedFields]uint64
+	arguments, body     []byte
+	end                 uint64
+	selectedField       int
+	metadata, canonical bool
 }
 type storedPassFacts struct {
 	facts                        storedBlockFacts
 	lengths                      [decodedFields]uint64
 	textEnd, rawEnd              uint64
 	textStart, rawStart, rawUTF8 bool
+	bodyWire                     uint64
 }
 
 func (d *storedBlockDecoder) decode(ctx context.Context, open storedDecodeOpen, mode environment.ContentRecordingMode, request storedDecodeRequest) (*storedDecodeResult, error) {
@@ -214,6 +265,32 @@ func (d *storedBlockDecoder) decode(ctx context.Context, open storedDecodeOpen, 
 		return zero, err
 	}
 	result := &storedDecodeResult{facts: first.facts, lengths: first.lengths}
+	result.selectedField = decodedText
+	if first.facts.ArgumentBytes != 0 {
+		result.selectedField = decodedArguments
+	}
+	if request.pageKind != "" {
+		if request.pageKind == "detail" {
+			if first.facts.TextBytes > 0 {
+				result.selectedField = decodedText
+			}
+			request.canonical = first.facts.TextBytes == 0 && first.facts.ArgumentBytes == 0 || !first.facts.RawUTF8
+		}
+		if request.pageKind == "text" {
+			result.selectedField = decodedText
+		}
+		if request.pageKind == "arguments" {
+			result.selectedField = decodedArguments
+		}
+		if request.pageKind == "block_bytes" {
+			request.canonical = true
+		}
+		request.metadata = !request.canonical && first.facts.MetadataBytes <= exchangecontent.PageContentBytes
+		result.metadata, result.canonical = request.metadata, request.canonical
+		if request.canonical {
+			result.selectedField = -1
+		}
+	}
 	cost = d.cost
 	cost.LogicalCost = first.facts.LogicalCost
 	cost.RetainedStructureBytes = uint64(reflect.TypeFor[storedBlockFacts]().Size())
@@ -241,8 +318,11 @@ func (d *storedBlockDecoder) decode(ctx context.Context, open storedDecodeOpen, 
 		if request.selected {
 			cost.RetainedStructureBytes = uint64(reflect.TypeFor[storedBodyRange]().Size())
 			total, end, start, valid := first.facts.TextBytes, first.textEnd, first.textStart, true
-			if first.facts.ArgumentBytes != 0 {
+			if result.selectedField == decodedArguments {
 				total, end, start, valid = first.facts.ArgumentBytes, first.rawEnd, first.rawStart, first.rawUTF8
+			}
+			if request.canonical {
+				total, end, start, valid = input.Size, min(input.Size, request.end), true, true
 			}
 			if !valid || !start || request.offset >= total || end <= request.offset {
 				return zero, exchangecontent.ErrInvalidEvidence
@@ -252,14 +332,36 @@ func (d *storedBlockDecoder) decode(ctx context.Context, open storedDecodeOpen, 
 			if n > uint64(math.MaxInt) || cost.RetainedBytes > d.limits.RetainedBytes || n > d.limits.RetainedBytes-cost.RetainedBytes {
 				return zero, exchangecontent.ErrInvalidEvidence
 			}
-			cost.RetainedBytes += n
+			multiplier := uint64(1)
+			if request.canonical {
+				multiplier = 6
+			}
+			if n > (d.limits.RetainedBytes-cost.RetainedBytes)/multiplier {
+				return zero, exchangecontent.ErrInvalidEvidence
+			}
+			cost.RetainedBytes += n * multiplier
+		}
+	}
+	if request.metadata {
+		cost.RetainedStructureBytes += uint64(reflect.TypeFor[exchangecontent.BlockPageMetadata]().Size() + reflect.TypeFor[exchangecontent.AgentContext]().Size())
+		for field, n := range first.lengths {
+			if field == decodedText || field == decodedArguments {
+				continue
+			}
+			if n > (d.limits.RetainedBytes-cost.RetainedBytes)/2 {
+				return zero, exchangecontent.ErrInvalidEvidence
+			}
+			cost.RetainedBytes += 2 * n
 		}
 	}
 	if err := d.admit(cost); err != nil {
 		return zero, err
 	}
-	if request.full {
+	if request.full || request.metadata {
 		for field, n := range first.lengths {
+			if request.metadata && (field == decodedText || field == decodedArguments) {
+				continue
+			}
 			if n != 0 {
 				if field == decodedArguments {
 					result.arguments = make([]byte, int(n))
@@ -278,6 +380,9 @@ func (d *storedBlockDecoder) decode(ctx context.Context, open storedDecodeOpen, 
 	}
 	if !d.validInput(secondInput) || input.Size != secondInput.Size || input.Digest != secondInput.Digest || input.Slots != secondInput.Slots {
 		return zero, exchangecontent.ErrInvalidEvidence
+	}
+	if request.canonical {
+		secondInput.Reader = &storedCanonicalRangeReader{Reader: secondInput.Reader, offset: request.offset, end: result.end, dst: result.body}
 	}
 	second, err := d.pass(ctx, secondInput, mode, request, result)
 	if err != nil {
@@ -363,6 +468,8 @@ func (d *storedBlockDecoder) pass(ctx context.Context, input storedDecodeInput, 
 	p.summary.facts.CanonicalBytes = p.read
 	p.summary.facts.TextBytes = lengths[decodedText]
 	p.summary.facts.ArgumentBytes = lengths[decodedArguments]
+	p.summary.facts.RawUTF8 = p.summary.rawUTF8
+	p.summary.facts.MetadataBytes = p.read - p.summary.bodyWire + uint64(len(`,"textBytes":`)+len(strconv.FormatUint(lengths[decodedText], 10))+len(`,"argumentBytes":`)+len(strconv.FormatUint(lengths[decodedArguments], 10)))
 	logical := storedBlockLogicalCost{StructureBytes: uint64(reflect.TypeFor[exchangecontent.Block]().Size())}
 	for _, n := range lengths {
 		if n > math.MaxInt64-logical.RetainedBytes {
@@ -484,6 +591,7 @@ func (p *storedBlockPass) block() error {
 		}
 		rank = field
 		seen |= 1 << field
+		valueStart := p.read - uint64(p.end-p.pos)
 		switch field {
 		case decodedOriginalSize:
 			n, err := p.integer()
@@ -511,6 +619,9 @@ func (p *storedBlockPass) block() error {
 			if field != decodedKind && field != decodedAvailability && p.summary.lengths[field] == 0 {
 				return exchangecontent.ErrInvalidEvidence
 			}
+		}
+		if field == decodedText || field == decodedArguments {
+			p.summary.bodyWire += p.read - uint64(p.end-p.pos) - valueStart + uint64(len(key)+4)
 		}
 		c, err := p.take()
 		if err != nil {
@@ -714,7 +825,7 @@ func (p *storedBlockPass) emit(field int, data []byte) error {
 	if uint64(len(data)) > p.owner.limits.CanonicalBytes-position {
 		return exchangecontent.ErrInvalidEvidence
 	}
-	if p.result != nil && p.request.full {
+	if p.result != nil && (p.request.full || p.request.metadata && field != decodedText && field != decodedArguments) {
 		limit := p.result.lengths[field]
 		if position > limit || uint64(len(data)) > limit-position {
 			return exchangecontent.ErrInvalidEvidence
@@ -746,7 +857,7 @@ func (p *storedBlockPass) emit(field int, data []byte) error {
 				}
 			}
 		}
-		if p.result != nil && (field == decodedArguments) == (p.result.facts.ArgumentBytes != 0) {
+		if p.result != nil && field == p.result.selectedField {
 			start, end := max(position, p.request.offset), min(position+uint64(len(data)), p.result.end)
 			if start < end {
 				dst := p.result.body
@@ -762,6 +873,11 @@ func (p *storedBlockPass) emit(field int, data []byte) error {
 }
 
 func (p *storedBlockPass) raw() error {
+	first, err := p.peek()
+	if err != nil {
+		return err
+	}
+	p.summary.facts.RawObject = first == '{'
 	s := &p.owner.scan
 	s.depthLimit = maxNestingDepth - 1
 	s.reset()

@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"reflect"
+	"unicode/utf8"
 
 	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/exchangecontent"
@@ -131,11 +132,13 @@ type storedMessageReadRequest struct {
 	First  int
 	Body   bool
 	Offset uint64
+	Kind   string
 }
 type storedMessageReadResult struct {
 	Message     exchangecontent.Message
 	Total, Next int
 	Body        storedBodyRange
+	Detail      storedDetailPage
 	Deferred    map[int]uint64
 }
 
@@ -273,7 +276,12 @@ func (repository *exchangeContentRepository) readMessageMetadata(ctx context.Con
 			retained = true
 		}
 		if selected {
-			result.Body, err = d.selectBody(ctx, open, mode, request.Offset, exchangecontent.PageBodyBytes)
+			kind := request.Kind
+			if kind == "" {
+				kind = "body"
+			}
+			result.Detail, err = d.detail(ctx, open, mode, kind, request.Offset)
+			result.Body = result.Detail.Body
 		} else if retained {
 			block, err = d.full(ctx, open, mode)
 		} else {
@@ -287,6 +295,12 @@ func (repository *exchangeContentRepository) readMessageMetadata(ctx context.Con
 		}
 		if err := ledger.commit(d.cost, retained); err != nil {
 			return zero, err
+		}
+		if retained && !selected {
+			if request != nil && len(block.Arguments) > 0 && (!utf8.Valid(block.Arguments) || block.Arguments[0] != '{') {
+				retained = false
+				deferred = true
+			}
 		}
 		if retained && !selected {
 			if err := ledger.hold(uint64(len(block.Arguments))); err != nil {

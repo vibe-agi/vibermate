@@ -2,8 +2,10 @@ package exchangecontent
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"math"
+	"strconv"
 	"unicode/utf8"
 	"unsafe"
 
@@ -75,10 +77,27 @@ func (c *readControlCost) projection(page *ProjectionPage) error {
 	return c.add(uint64(len(page.RequestNextCursor)+len(page.RequestEvidenceNextCursor)+len(page.ResponseEvidenceNextCursor)), uint64(unsafe.Sizeof(Projection{}))-uint64(unsafe.Sizeof(Record{}))+uint64(unsafe.Sizeof(*page)))
 }
 func (c *readControlCost) page(p ContentPage) error {
-	if err := c.add(uint64(len(p.Kind)+len(p.NextCursor)), uint64(unsafe.Sizeof(p))); err != nil {
+	if err := c.add(uint64(len(p.Kind)+len(p.NextCursor)+len(p.CanonicalCursor)+6*len(p.Data)), uint64(unsafe.Sizeof(p))); err != nil {
 		return err
 	}
 	w := &c.writer
+	w.optional("canonicalCursor", p.CanonicalCursor)
+	if len(p.Data) > 0 {
+		w.optional("data", base64.StdEncoding.EncodeToString(p.Data))
+	}
+	if p.BlockMetadata != nil {
+		if err := c.add(uint64(len(p.BlockKind)+len(p.CallID)+len(p.ToolName)), 0); err != nil {
+			return err
+		}
+		w.optional("blockKind", p.BlockKind)
+		w.optional("callId", p.CallID)
+		w.optional("toolName", p.ToolName)
+		w.text(`,"blockMetadata":`)
+		w.text(`,"textBytes":`)
+		w.text(strconv.FormatUint(p.BlockMetadata.TextBytes, 10))
+		w.text(`,"argumentBytes":`)
+		w.text(strconv.FormatUint(p.BlockMetadata.ArgumentBytes, 10))
+	}
 	// Exact generated container bytes from writePageWire. Exchange identity,
 	// real block/tool metadata, evidence and body bytes are not credited here.
 	w.text("{")
@@ -458,7 +477,23 @@ func (p ContentPage) ValidateWithin(ctx context.Context, l SourceLimits) error {
 		return ErrInvalidEvidence
 	}
 	remaining := p.Total - p.Offset
+	if !validPageCursor(p.CanonicalCursor) || len(p.Data) > PageBodyBytes {
+		return ErrInvalidEvidence
+	}
+	if p.Kind != "block_bytes" && len(p.Data) != 0 {
+		return ErrInvalidEvidence
+	}
+	if p.Kind != "text" && p.Kind != "arguments" && (p.BlockMetadata != nil || p.CanonicalCursor != "") {
+		return ErrInvalidEvidence
+	}
 	switch p.Kind {
+	case "block_bytes":
+		if uint64(p.Total) > min(l.CanonicalBytes, MaxCanonicalBlockBytes) || p.Total == 0 || len(p.Data) == 0 || len(p.Data) > remaining || p.Text != "" || p.BlockMetadata != nil || p.CanonicalCursor != "" || len(p.Messages) != 0 || len(p.Blocks) != 0 || len(p.ProtocolEvidence) != 0 {
+			return ErrInvalidEvidence
+		}
+		if (p.Offset+len(p.Data) < p.Total) != (p.NextCursor != "") {
+			return ErrInvalidEvidence
+		}
 	case "protocol":
 		if p.Total > protocolcore.MaxProtocolEvidenceValues || len(p.Messages) != 0 || len(p.Blocks) != 0 || p.Text != "" || len(p.ProtocolEvidence) > PageMessageLimit || len(p.ProtocolEvidence) > remaining {
 			return ErrInvalidEvidence
@@ -490,8 +525,39 @@ func (p ContentPage) ValidateWithin(ctx context.Context, l SourceLimits) error {
 		return err
 	}
 	f := p.Frozen
-	if err := c.add(c.strings(p.BlockKind, p.CallID, p.ToolName, p.ExchangeID, p.Text, p.Parent.CaptureRunID, p.Parent.ManualCaptureID, f.EnvironmentID, f.EnvironmentDigest, f.ClientEndpointID, f.ProtocolPlanID, f.RouteID, string(p.Mode)), 0); err != nil {
+	labels := []string{p.BlockKind, p.CallID, p.ToolName}
+	if p.BlockMetadata != nil {
+		labels = nil
+	}
+	if err := c.add(c.strings(labels...), 0); err != nil {
 		return err
+	}
+	if err := c.add(c.strings(p.ExchangeID, p.Text, p.Parent.CaptureRunID, p.Parent.ManualCaptureID, f.EnvironmentID, f.EnvironmentDigest, f.ClientEndpointID, f.ProtocolPlanID, f.RouteID, string(p.Mode)), 0); err != nil {
+		return err
+	}
+	if m := p.BlockMetadata; m != nil {
+		if m.TextBytes > l.RetainedBytes || m.ArgumentBytes > l.RetainedBytes || m.Shape().Validate(p.Mode) != nil {
+			return ErrInvalidEvidence
+		}
+		if p.Kind == "text" && uint64(p.Total) != m.TextBytes || p.Kind == "arguments" && uint64(p.Total) != m.ArgumentBytes {
+			return ErrInvalidEvidence
+		}
+		if p.BlockKind != "" && p.BlockKind != m.Kind || p.CallID != "" && p.CallID != m.CallID || p.ToolName != "" && p.ToolName != m.ToolName {
+			return ErrInvalidEvidence
+		}
+		if err := c.add(c.strings(m.Kind, string(m.Availability), m.CallID, m.ToolName, m.ToolNamespace, m.ProviderSource, m.ProviderKind, m.Fingerprint), uint64(unsafe.Sizeof(Block{}))); err != nil {
+			return err
+		}
+		if err := c.agent(m.Agent); err != nil {
+			return err
+		}
+		counter := wireCounter{ctx: ctx, limit: PageContentBytes}
+		writer := canonicalWriter{sink: &counter}
+		writeBlockPageMetadata(&writer, *m)
+		writer.flush()
+		if writer.err != nil {
+			return writer.err
+		}
 	}
 	if err := c.evidence(p.ProtocolEvidence); err != nil {
 		return err

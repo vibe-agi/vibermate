@@ -52,6 +52,14 @@ final class AppCopy {
 
   static const _en = <String, String>{
     'content_page.title': 'Retained content',
+    'content_page.complete_record': 'Complete record',
+    'content_page.exact_note':
+        'A fragment of retained data, not the Agent’s body reply or a complete JSON document. Invalid or incomplete bytes appear in [HEX] markers.',
+    'content_page.copy_base64': 'Copy fragment (Base64)',
+    'content_page.details': 'Retained details',
+    'content_page.full_mode': 'Full content',
+    'content_page.metadata_mode':
+        'Metadata only · omitted bodies are unavailable',
     'content_page.close': 'Close',
     'content_page.load': 'Read content',
     'content_page.unloaded': 'Not loaded · approximately {size} KiB',
@@ -2940,6 +2948,13 @@ final class AppCopy {
 
   static const _zh = <String, String>{
     'content_page.title': '保留内容',
+    'content_page.complete_record': '完整记录',
+    'content_page.exact_note':
+        '这是保留数据的片段，不是 Agent 的正文回复，也不是完整 JSON 文档。无效或不完整字节以 [HEX] 标记显示。',
+    'content_page.copy_base64': '复制片段（Base64）',
+    'content_page.details': '保留的详细信息',
+    'content_page.full_mode': '完整内容',
+    'content_page.metadata_mode': '仅元数据 · 未保留的正文不可读取',
     'content_page.close': '关闭',
     'content_page.load': '读取内容',
     'content_page.unloaded': '尚未加载 · 约 {size} KiB',

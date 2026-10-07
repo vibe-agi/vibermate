@@ -10,6 +10,144 @@ import 'package:vibermate_app/preview/preview_control_api.dart';
 import 'runtime_usage_fixture.dart';
 
 void main() {
+  test('preview complete record is scoped and strictly decoded', () async {
+    final api = PreviewControlApi();
+    addTearDown(api.close);
+    final activity = (await api.activities(captureRunId: 'run-1')).items.first;
+    final page = await api.exchangeContentPage(
+      activity.id,
+      'preview-complete-record',
+    );
+    expect(page.kind, 'block_bytes');
+    expect(jsonDecode(utf8.decode(page.data))['providerSource'], 'preview');
+    await expectLater(
+      api.exchangeContentPage('other', 'preview-complete-record'),
+      throwsA(isA<ControlContractException>()),
+    );
+    await expectLater(
+      api.exchangeContentPage(activity.id, 'wrong'),
+      throwsA(isA<ControlContractException>()),
+    );
+  });
+  test('Complete block byte pages retain exact transport bytes', () {
+    final bytes = [123, 34, 0xff, 0xe2, 0x80];
+    final page = ExchangeContentPage.fromJson({
+      'exchangeId': 'e',
+      'kind': 'block_bytes',
+      'messages': [],
+      'blocks': [],
+      'offset': 33554432,
+      'total': 33554437,
+      'data': base64.encode(bytes),
+    }, 'page');
+    expect(page.kind, 'block_bytes');
+    expect(page.data, bytes);
+  });
+
+  test('Block detail page union and encoded bounds are strict', () {
+    final valid = <String, Object?>{
+      'exchangeId': 'e',
+      'kind': 'block_bytes',
+      'messages': [],
+      'blocks': [],
+      'offset': 0,
+      'total': 1,
+      'data': 'eA==',
+    };
+    for (final bad in <Map<String, Object?>>[
+      {...valid, 'data': 'eA'},
+      {...valid, 'data': 'eA__'},
+      {...valid, 'data': 'A' * 43696},
+      {...valid, 'data': 'eA==', 'text': 'hidden'},
+      {...valid, 'canonicalCursor': 'c'},
+      {...valid, 'total': 549754896385},
+      {...valid, 'offset': 2},
+      {...valid, 'nextCursor': 'c'},
+      {...valid, 'kind': 'text'},
+      {...valid, 'unknown': true},
+    ]) {
+      expect(
+        () => ExchangeContentPage.fromJson(bad, 'page'),
+        throwsA(isA<ControlContractException>()),
+      );
+    }
+    final metadata = {
+      'kind': 'reasoning',
+      'availability': 'recorded',
+      'originalSize': 5,
+      'providerSource': 'source',
+      'providerKind': 'thinking',
+      'textBytes': 5,
+      'argumentBytes': 0,
+    };
+    final ordinary = ExchangeContentPage.fromJson({
+      'exchangeId': 'e',
+      'kind': 'text',
+      'messages': [],
+      'blocks': [],
+      'offset': 0,
+      'total': 5,
+      'text': 'hello',
+      'blockMetadata': metadata,
+      'canonicalCursor': 'complete',
+    }, 'page');
+    expect(ordinary.blockMetadata!.values['providerSource'], 'source');
+    expect(ordinary.canonicalCursor, 'complete');
+    expect(
+      () => ExchangeBlockPageMetadata.fromJson({
+        ...metadata,
+        'text': 'forged',
+      }, 'metadata'),
+      throwsA(isA<ControlContractException>()),
+    );
+    expect(
+      () => ExchangeBlockPageMetadata.fromJson({
+        ...metadata,
+        'availability': 'omitted',
+      }, 'metadata'),
+      throwsA(isA<ControlContractException>()),
+    );
+  });
+
+  test('Block metadata rejects contradictory retained shapes', () {
+    final base = <String, Object?>{
+      'kind': 'text',
+      'availability': 'recorded',
+      'originalSize': 0,
+      'textBytes': 0,
+      'argumentBytes': 0,
+    };
+    for (final fields in <Map<String, Object?>>[
+      {'callId': 'hidden'},
+      {'argumentBytes': 1},
+      {'toolError': true},
+      {'kind': 'reasoning', 'providerSource': '', 'providerKind': 'thinking'},
+      {
+        'kind': 'reasoning',
+        'providerSource': 'p',
+        'providerKind': 'k',
+        'fingerprint': 'sha256:${'a' * 64}',
+      },
+      {
+        'kind': 'provider_extension',
+        'availability': 'omitted',
+        'providerSource': 'p',
+        'providerKind': 'k',
+      },
+      {'kind': 'tool_call', 'callId': '', 'toolName': 'f'},
+      {'kind': 'tool_result', 'callId': 'c', 'toolName': 'f'},
+    ]) {
+      expect(
+        () => ExchangeBlockPageMetadata.fromJson({
+          ...base,
+          ...fields,
+        }, 'metadata'),
+        throwsA(isA<ControlContractException>()),
+        reason: '$fields',
+      );
+    }
+  });
+
   test('Egress evidence keeps frozen account settings and proxy revisions', () {
     final decision = <String, Object?>{
       'authority': 'environment',

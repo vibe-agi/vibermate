@@ -146,11 +146,18 @@ func TestContentPagesDeferLargeBodiesAndValidateCursors(t *testing.T) {
 	if err != nil || second.Offset != len(page.Text) || text[second.Offset:second.Offset+len(second.Text)] != second.Text {
 		t.Fatalf("body continuation: %v", err)
 	}
-	position, _ := decodeContentCursor(bodyCursor)
+	// Detail chooses the first field at offset zero. Seek with the actual
+	// field continuation; legacy body cursors must retain their old meaning.
+	position, _ := decodeContentCursor(page.NextCursor)
 	position.Offset = len(text) - len(fragment)
 	last, err := repository.GetContentPage(ctx, record.ExchangeID, at, encodeContentCursor(position))
 	if err != nil || last.NextCursor != "" || last.Text != fragment {
 		t.Fatalf("last body page: %+v %v", last, err)
+	}
+	position.Kind = "body"
+	legacyLast, err := repository.GetContentPage(ctx, record.ExchangeID, at, encodeContentCursor(position))
+	if err != nil || legacyLast.Text != fragment || legacyLast.NextCursor != "" {
+		t.Fatalf("legacy last body page: %+v %v", legacyLast, err)
 	}
 	for _, mutate := range []func(*contentCursor){
 		func(c *contentCursor) { c.Exchange = "another-exchange" },
@@ -160,7 +167,7 @@ func TestContentPagesDeferLargeBodiesAndValidateCursors(t *testing.T) {
 		func(c *contentCursor) { c.Block = 10000 },
 		func(c *contentCursor) { c.Offset = 1 }, // Middle of a UTF-8 character.
 	} {
-		c, _ := decodeContentCursor(bodyCursor)
+		c, _ := decodeContentCursor(page.NextCursor)
 		mutate(&c)
 		if _, err := repository.GetContentPage(ctx, record.ExchangeID, at, encodeContentCursor(c)); err == nil {
 			t.Fatalf("invalid cursor accepted: %+v", c)

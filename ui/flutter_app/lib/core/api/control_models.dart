@@ -8762,7 +8762,7 @@ final class DeferredExchangeContent {
     );
     final cursor = _contentPageCursor(value, 'cursor', path);
     final size = requireInteger(value, 'estimatedBytes', path);
-    if (cursor == null || size > 32 * 1024 * 1024) {
+    if (cursor == null || size > maxCanonicalBlockBytes) {
       throw ControlContractException('$path deferred content is invalid');
     }
     return DeferredExchangeContent(
@@ -8815,6 +8815,155 @@ final class ExchangeContentPaging {
   final String? requestEvidenceNextCursor, responseEvidenceNextCursor;
 }
 
+const maxCanonicalBlockBytes = 549754896384;
+
+final class ExchangeBlockPageMetadata {
+  const ExchangeBlockPageMetadata._(
+    this.values,
+    this.kind,
+    this.availability,
+    this.originalSize,
+    this.textBytes,
+    this.argumentBytes,
+  );
+  factory ExchangeBlockPageMetadata.fromJson(Object? json, String path) {
+    final v = requireObject(json, path);
+    requireFields(
+      v,
+      path,
+      required: const {
+        'kind',
+        'availability',
+        'originalSize',
+        'textBytes',
+        'argumentBytes',
+      },
+      optional: const {
+        'callId',
+        'toolName',
+        'toolNamespace',
+        'toolError',
+        'providerSource',
+        'providerKind',
+        'fingerprint',
+        'agent',
+      },
+    );
+    final kind = requireString(v, 'kind', path),
+        availability = requireString(v, 'availability', path);
+    final original = requireInteger(v, 'originalSize', path),
+        text = requireInteger(v, 'textBytes', path),
+        arguments = requireInteger(v, 'argumentBytes', path);
+    if (!const {
+          'text',
+          'refusal',
+          'reasoning',
+          'tool_call',
+          'tool_result',
+          'provider_extension',
+        }.contains(kind) ||
+        !const {'recorded', 'omitted'}.contains(availability) ||
+        text > maxCanonicalBlockBytes ||
+        arguments > maxCanonicalBlockBytes ||
+        availability == 'omitted' && (text != 0 || arguments != 0)) {
+      throw ControlContractException('$path block metadata is inconsistent');
+    }
+    final owned = <String, Object?>{...v};
+    for (final key in const [
+      'callId',
+      'toolName',
+      'toolNamespace',
+      'providerSource',
+      'providerKind',
+      'fingerprint',
+    ]) {
+      if (v.containsKey(key)) optionalString(v, key, path);
+    }
+    if (v['toolError'] != null && v['toolError'] is! bool) {
+      throw ControlContractException('$path.toolError is invalid');
+    }
+    if (v['agent'] != null) {
+      ExchangeAgentContext.fromJson(v['agent'], '$path.agent');
+      owned['agent'] = Map<String, Object?>.unmodifiable(
+        requireObject(v['agent'], '$path.agent'),
+      );
+    }
+    if ((kind == 'reasoning' || kind == 'provider_extension') &&
+        (v['providerSource'] == null || v['providerKind'] == null)) {
+      throw ControlContractException('$path provider metadata is missing');
+    }
+    if ((kind == 'tool_call' || kind == 'tool_result') && v['callId'] == null ||
+        kind == 'tool_call' && v['toolName'] == null) {
+      throw ControlContractException('$path tool metadata is missing');
+    }
+    if (v['fingerprint'] case final String fingerprint
+        when !RegExp(r'^sha256:[a-f0-9]{64}$').hasMatch(fingerprint)) {
+      throw ControlContractException('$path fingerprint is invalid');
+    }
+    final call = optionalString(v, 'callId', path) ?? '';
+    final name = optionalString(v, 'toolName', path) ?? '';
+    final namespace = optionalString(v, 'toolNamespace', path) ?? '';
+    final provider = optionalString(v, 'providerSource', path) ?? '';
+    final providerKind = optionalString(v, 'providerKind', path) ?? '';
+    final fingerprint = optionalString(v, 'fingerprint', path) ?? '';
+    final toolError = v['toolError'] == true;
+    bool identity(String value, int maximum) =>
+        value.isNotEmpty &&
+        value.trim() == value &&
+        utf8.encode(value).length <= maximum &&
+        !RegExp(r'[\r\n\u0000]').hasMatch(value);
+    final noTool =
+        call.isEmpty &&
+        name.isEmpty &&
+        namespace.isEmpty &&
+        arguments == 0 &&
+        !toolError;
+    final validShape = switch (kind) {
+      'text' || 'refusal' => noTool,
+      'reasoning' =>
+        noTool &&
+            provider.isNotEmpty &&
+            providerKind.isNotEmpty &&
+            fingerprint.isEmpty,
+      'provider_extension' =>
+        noTool &&
+            availability == 'omitted' &&
+            provider.isNotEmpty &&
+            providerKind.isNotEmpty &&
+            fingerprint.isNotEmpty,
+      'tool_call' =>
+        identity(call, 512) &&
+            identity(name, 256) &&
+            !toolError &&
+            (namespace.isEmpty || identity(namespace, 256)),
+      'tool_result' =>
+        identity(call, 512) &&
+            arguments == 0 &&
+            (namespace.isEmpty == name.isEmpty) &&
+            (namespace.isEmpty ||
+                identity(namespace, 256) && identity(name, 256)),
+      _ => false,
+    };
+    if (!validShape) {
+      throw ControlContractException('$path retained shape is invalid');
+    }
+    if (utf8.encode(jsonEncode(v)).length > 128 * 1024) {
+      throw ControlContractException('$path metadata exceeds its bound');
+    }
+    return ExchangeBlockPageMetadata._(
+      Map<String, Object?>.unmodifiable(owned),
+      kind,
+      availability,
+      original,
+      text,
+      arguments,
+    );
+  }
+  final Map<String, Object?> values;
+  final String kind, availability;
+  final int originalSize, textBytes, argumentBytes;
+}
+
 final class ExchangeContentPage {
   const ExchangeContentPage({
     required this.exchangeId,
@@ -8829,6 +8978,9 @@ final class ExchangeContentPage {
     this.blockKind,
     this.callId,
     this.toolName,
+    this.blockMetadata,
+    this.canonicalCursor,
+    this.data = const [],
   });
   factory ExchangeContentPage.fromJson(Object? json, String path) {
     final value = requireObject(json, path);
@@ -8850,15 +9002,23 @@ final class ExchangeContentPage {
         'blockKind',
         'callId',
         'toolName',
+        'blockMetadata',
+        'canonicalCursor',
+        'data',
       },
     );
-    final messages = requireList(value['messages'], '$path.messages').indexed
+    final rawMessages = requireList(value['messages'], '$path.messages');
+    final rawBlocks = requireList(value['blocks'], '$path.blocks');
+    if (rawMessages.length > 24 || rawBlocks.length > 24) {
+      throw ControlContractException('$path page window exceeds its bound');
+    }
+    final messages = rawMessages.indexed
         .map(
           (e) =>
               ExchangeContentMessage.fromJson(e.$2, '$path.messages[${e.$1}]'),
         )
         .toList(growable: false);
-    final blocks = requireList(value['blocks'], '$path.blocks').indexed
+    final blocks = rawBlocks.indexed
         .map(
           (e) => ExchangeContentBlock.fromJson(e.$2, '$path.blocks[${e.$1}]'),
         )
@@ -8872,7 +9032,43 @@ final class ExchangeContentPage {
     final offset = requireInteger(value, 'offset', path);
     final total = requireInteger(value, 'total', path);
     final text = optionalString(value, 'text', path) ?? '';
+    final canonicalCursor = _contentPageCursor(value, 'canonicalCursor', path);
+    final nextCursor = _contentPageCursor(value, 'nextCursor', path);
+    final metadata = value['blockMetadata'] == null
+        ? null
+        : ExchangeBlockPageMetadata.fromJson(
+            value['blockMetadata'],
+            '$path.blockMetadata',
+          );
+    final encoded = optionalString(value, 'data', path);
+    List<int> data = const [];
+    if (encoded != null) {
+      if (encoded.isEmpty ||
+          encoded.length > 4 * ((32 * 1024 + 2) ~/ 3) ||
+          encoded.length % 4 != 0) {
+        throw ControlContractException('$path.data exceeds its encoded bound');
+      }
+      try {
+        data = base64.decode(encoded);
+      } on FormatException {
+        throw ControlContractException('$path.data is invalid');
+      }
+      if (data.length > 32 * 1024 || base64.encode(data) != encoded) {
+        throw ControlContractException('$path.data is noncanonical');
+      }
+    }
     final valid = switch (kind) {
+      'block_bytes' =>
+        messages.isEmpty &&
+            blocks.isEmpty &&
+            text.isEmpty &&
+            protocolEvidence.isEmpty &&
+            metadata == null &&
+            canonicalCursor == null &&
+            data.isNotEmpty &&
+            total <= maxCanonicalBlockBytes &&
+            offset + data.length <= total &&
+            (offset + data.length < total) == (nextCursor != null),
       'protocol' =>
         messages.isEmpty &&
             blocks.isEmpty &&
@@ -8897,12 +9093,19 @@ final class ExchangeContentPage {
             blocks.isEmpty &&
             utf8.encode(text).length <= 32 * 1024 &&
             offset + utf8.encode(text).length <= total &&
-            total <= 32 * 1024 * 1024,
+            total <= maxCanonicalBlockBytes,
       _ => false,
     };
     if (!valid ||
         offset > total ||
-        (kind != 'protocol' && protocolEvidence.isNotEmpty)) {
+        (kind != 'protocol' && protocolEvidence.isNotEmpty) ||
+        (kind != 'block_bytes' && data.isNotEmpty) ||
+        (!const {'text', 'arguments'}.contains(kind) &&
+            (metadata != null || canonicalCursor != null)) ||
+        (metadata != null &&
+            (kind == 'text' ? metadata.textBytes : metadata.argumentBytes) !=
+                total) ||
+        utf8.encode(jsonEncode(value)).length > 1024 * 1024) {
       throw ControlContractException('$path content page is inconsistent');
     }
     final exchangeId = requireString(value, 'exchangeId', path);
@@ -8923,7 +9126,10 @@ final class ExchangeContentPage {
       text: text,
       offset: offset,
       total: total,
-      nextCursor: _contentPageCursor(value, 'nextCursor', path),
+      nextCursor: nextCursor,
+      blockMetadata: metadata,
+      canonicalCursor: canonicalCursor,
+      data: List<int>.unmodifiable(data),
     );
   }
   final String exchangeId, kind, text;
@@ -8933,6 +9139,9 @@ final class ExchangeContentPage {
   final String? nextCursor;
   final List<AgentClientEvidenceValue> protocolEvidence;
   final String? blockKind, callId, toolName;
+  final ExchangeBlockPageMetadata? blockMetadata;
+  final String? canonicalCursor;
+  final List<int> data;
 }
 
 void _requireDeferredOwners(
