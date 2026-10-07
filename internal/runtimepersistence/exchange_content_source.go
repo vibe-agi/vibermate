@@ -77,6 +77,11 @@ func (repository *exchangeContentRepository) PutSource(ctx context.Context, sour
 	}
 	transcript := storedTranscript{nodes: make([]storedTranscriptNode, 0, int(cost.TranscriptNodes))}
 	messages := make(map[string]storedSourceMessage, int(cost.TranscriptNodes)+1)
+	// One operation-owned4096B canonical scratch replaces per-occurrence
+	// writers; Source's checked Scratch already reserves that fixed buffer and
+	// its owning headers. Calls clear all state before returning. Publication
+	// remains sequential and retains neither the encoder's sink nor a body.
+	var canonical exchangecontent.CanonicalEncoder
 	parent := ""
 	err = source.Walk(ctx, func(part exchangecontent.Part, _ int, m exchangecontent.MessageSource) error {
 		h := m.Header()
@@ -85,14 +90,14 @@ func (repository *exchangeContentRepository) PutSource(ctx context.Context, sour
 			return err
 		}
 		measure := storedCanonicalMeasure{ctx: ctx, hash: sha256.New(), maximum: l.CanonicalBytes}
-		if err := exchangecontent.WriteCanonicalMessage(&measure, m); err != nil {
+		if err := canonical.WriteMessage(&measure, m); err != nil {
 			return err
 		}
 		digest := hex.EncodeToString(measure.hash.Sum(nil))
 		slots := 0
 		if err := m.WalkBlocks(ctx, func(block exchangecontent.Block) error {
 			v := storedCanonicalMeasure{ctx: ctx, hash: sha256.New(), maximum: l.CanonicalBytes}
-			if err := exchangecontent.WriteCanonicalBlock(&v, block); err != nil {
+			if err := canonical.WriteBlock(&v, block); err != nil {
 				return err
 			}
 			n, err := storedBlockSlotCount(v.bytes)
@@ -144,7 +149,7 @@ func (repository *exchangeContentRepository) PutSource(ctx context.Context, sour
 		// Check the second Source traversal against the complete first-pass
 		// identity without materializing a canonical message.
 		check := storedCanonicalMeasure{ctx: ctx, hash: sha256.New(), maximum: l.CanonicalBytes}
-		if err := exchangecontent.WriteCanonicalMessage(&check, m.source); err != nil {
+		if err := canonical.WriteMessage(&check, m.source); err != nil {
 			return err
 		}
 		if hex.EncodeToString(check.hash.Sum(nil)) != digest {

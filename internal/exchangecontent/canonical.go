@@ -371,16 +371,32 @@ func (w *canonicalWriter) block(b Block) {
 }
 
 func WriteCanonicalBlock(sink io.Writer, block Block) error {
+	var encoder CanonicalEncoder
+	return encoder.WriteBlock(sink, block)
+}
+
+// CanonicalEncoder owns one fixed canonical scratch buffer for sequential
+// synchronous writes. Its zero value is ready to use. One owning operation
+// must not share/copy it during a write; reentrant sink callbacks are refused.
+// It retains no sink, Source, output or error after a call, including failures.
+type CanonicalEncoder struct{ writer canonicalWriter }
+
+func (encoder *CanonicalEncoder) WriteBlock(sink io.Writer, block Block) error {
+	if encoder == nil || encoder.writer.sink != nil {
+		return ErrInvalidEvidence
+	}
+	encoder.writer = canonicalWriter{}
+	defer func() { encoder.writer = canonicalWriter{} }()
 	if sink == nil {
 		return fmt.Errorf("%w: nil writer", ErrInvalidEvidence)
 	}
 	if err := preflightBlock(block); err != nil {
 		return err
 	}
-	w := canonicalWriter{sink: sink}
-	w.block(block)
-	w.flush()
-	return w.err
+	encoder.writer.sink = sink
+	encoder.writer.block(block)
+	encoder.writer.flush()
+	return encoder.writer.err
 }
 
 func preflightRecord(r Record) error {
@@ -840,6 +856,16 @@ func (w *canonicalWriter) sourceMessage(ctx context.Context, m MessageSource) er
 	return w.err
 }
 func WriteCanonicalMessage(sink io.Writer, m MessageSource) error {
+	var encoder CanonicalEncoder
+	return encoder.WriteMessage(sink, m)
+}
+
+func (encoder *CanonicalEncoder) WriteMessage(sink io.Writer, m MessageSource) error {
+	if encoder == nil || encoder.writer.sink != nil {
+		return ErrInvalidEvidence
+	}
+	encoder.writer = canonicalWriter{}
+	defer func() { encoder.writer = canonicalWriter{} }()
 	if sink == nil || !m.valid() {
 		return ErrInvalidEvidence
 	}
@@ -847,12 +873,12 @@ func WriteCanonicalMessage(sink io.Writer, m MessageSource) error {
 	if err := m.WalkBlocks(ctx, preflightBlock); err != nil {
 		return err
 	}
-	w := canonicalWriter{sink: sink}
-	if err := w.sourceMessage(ctx, m); err != nil {
+	encoder.writer.sink = sink
+	if err := encoder.writer.sourceMessage(ctx, m); err != nil {
 		return err
 	}
-	w.flush()
-	return w.err
+	encoder.writer.flush()
+	return encoder.writer.err
 }
 func writeSourceCanonical(ctx context.Context, sink io.Writer, s *Source) error {
 	w := canonicalWriter{sink: sink}
