@@ -43,6 +43,9 @@ type storedBlockFacts struct {
 	LogicalCost                              storedBlockLogicalCost
 	MetadataBytes                            uint64
 	RawUTF8, RawObject                       bool
+	ArgumentDepth                            uint16
+	PrettyUpper                              uint64
+	FiniteNumbers                            bool
 }
 type storedBodyRange struct {
 	Facts       storedBlockFacts
@@ -66,6 +69,7 @@ var storedDecodeFixedWorkspace = uint64(reflect.TypeFor[storedBlockDecoder]().Si
 	reflect.TypeFor[storedDecodeResult]().Size()+
 	reflect.TypeFor[exchangecontent.Block]().Size()+
 	reflect.TypeFor[exchangecontent.AgentContext]().Size()) +
+	2*uint64(reflect.TypeFor[storedRawPresentation]().Size()) +
 	2*storedDecodeSemanticBytes + 2*512 + 32*16 + 1024 + 4096
 
 const (
@@ -216,6 +220,9 @@ type storedDecodeRequest struct {
 	offset, end         uint64
 	pageKind            string
 	metadata, canonical bool
+	inline              bool
+	inlineBudget        uint64
+	inlineEnvelope      uint16
 }
 type storedDecodeResult struct {
 	facts storedBlockFacts
@@ -227,6 +234,8 @@ type storedDecodeResult struct {
 	end                 uint64
 	selectedField       int
 	metadata, canonical bool
+	deferred            bool
+	inlineDebit         uint64
 }
 type storedPassFacts struct {
 	facts                        storedBlockFacts
@@ -265,6 +274,11 @@ func (d *storedBlockDecoder) decode(ctx context.Context, open storedDecodeOpen, 
 		return zero, err
 	}
 	result := &storedDecodeResult{facts: first.facts, lengths: first.lengths}
+	if request.inline {
+		result.inlineDebit = first.facts.inlineDebit()
+		request.full = first.facts.inlineEligible(request.inlineEnvelope) && result.inlineDebit <= request.inlineBudget
+		result.deferred = !request.full
+	}
 	result.selectedField = decodedText
 	if first.facts.ArgumentBytes != 0 {
 		result.selectedField = decodedArguments
@@ -879,8 +893,9 @@ func (p *storedBlockPass) raw() error {
 	}
 	p.summary.facts.RawObject = first == '{'
 	s := &p.owner.scan
-	s.depthLimit = maxNestingDepth - 1
+	s.depthLimit = exchangecontent.MaxArgumentJSONDepth
 	s.reset()
+	presentation := storedRawPresentation{upper: 1, finite: true}
 	inString, escaped := false, false
 	var previous [2]byte
 	var carry [4]byte
@@ -909,6 +924,7 @@ func (p *storedBlockPass) raw() error {
 			return exchangecontent.ErrInvalidEvidence
 		}
 		previous = [2]byte{previous[1], c}
+		presentation.byte(c, inString, escaped)
 		if inString {
 			if escaped {
 				escaped = false
@@ -948,5 +964,156 @@ func (p *storedBlockPass) raw() error {
 	if p.summary.lengths[decodedArguments] == 0 {
 		return exchangecontent.ErrInvalidEvidence
 	}
+	presentation.finishNumber()
+	p.summary.facts.ArgumentDepth = presentation.peak
+	p.summary.facts.PrettyUpper = presentation.upper
+	p.summary.facts.FiniteNumbers = presentation.finite
 	return nil
+}
+
+// These are presentation facts collected alongside the existing grammar scan,
+// never a second parser or a retained-depth restriction. Arithmetic saturates
+// at the first value that cannot fit the aggregate inline allowance.
+const storedInlineOverflow = uint64(exchangecontent.PageContentBytes + 1)
+
+func (f storedBlockFacts) inlineEligible(envelope uint16) bool {
+	return f.argumentInlineEligible(envelope) && f.inlineDebit() <= exchangecontent.PageContentBytes
+}
+
+func (f storedBlockFacts) argumentInlineEligible(envelope uint16) bool {
+	return f.ArgumentBytes == 0 || f.RawUTF8 && f.RawObject && f.FiniteNumbers &&
+		int(f.ArgumentDepth)+int(envelope) <= exchangecontent.MaxArgumentJSONDepth && f.PrettyUpper <= exchangecontent.PageContentBytes
+}
+func (f storedBlockFacts) inlineDebit() uint64 {
+	n := max(f.ArgumentBytes, f.PrettyUpper)
+	if f.CanonicalBytes < f.ArgumentBytes || n > storedInlineOverflow || f.CanonicalBytes-f.ArgumentBytes > storedInlineOverflow-n {
+		return storedInlineOverflow
+	}
+	return f.CanonicalBytes - f.ArgumentBytes + n
+}
+
+type storedRawPresentation struct {
+	upper                                                        uint64
+	depth, peak                                                  uint16
+	unicodeLeft                                                  uint8
+	finite, number, decimal, exponent, negativeExponent, nonzero bool
+	tokenBytes, magnitude                                        uint64
+	integerDigits, leadingZeros, explicitExponent                int64
+}
+
+// upper accumulates S+N+L+2*C+K+M+W+1. Openers include both
+// punctuation bytes; delimiter whitespace uses the raw depth, including empty
+// containers. Every duplicate-key occurrence counts. Strings count decoded
+// UTF16 units conservatively without allocating a decoded string or tree.
+
+func (p *storedRawPresentation) add(n uint64) {
+	if n > storedInlineOverflow-p.upper {
+		p.upper = storedInlineOverflow
+	} else {
+		p.upper += n
+	}
+}
+func (p *storedRawPresentation) finishNumber() {
+	if !p.number {
+		return
+	}
+	if !p.decimal && !p.exponent && p.magnitude <= 9007199254740991 {
+		p.add(p.tokenBytes + 2)
+	} else {
+		// Finite VM/web formatting needs at most 17 significant digits plus
+		// punctuation/exponent or its longer plain-decimal spelling (<=32B).
+		p.add(32)
+	}
+	e := p.explicitExponent
+	if p.negativeExponent {
+		e = -e
+	}
+	// Bounded counters deliberately defer values whose finite proof overflowed.
+	if p.nonzero && (p.explicitExponent >= 1000000 || p.integerDigits >= 1000000 || p.leadingZeros >= 1000000 || e+p.integerDigits-p.leadingZeros-1 > 307) {
+		p.finite = false
+	}
+	p.number = false
+	p.decimal = false
+	p.exponent = false
+	p.negativeExponent = false
+	p.nonzero = false
+	p.tokenBytes = 0
+	p.magnitude = 0
+	p.integerDigits = 0
+	p.leadingZeros = 0
+	p.explicitExponent = 0
+}
+func (p *storedRawPresentation) byte(c byte, inString, escaped bool) {
+	if inString {
+		if p.unicodeLeft > 0 {
+			p.unicodeLeft--
+			return
+		}
+		if escaped {
+			if c == 'u' {
+				p.add(6)
+				p.unicodeLeft = 4
+			} else if c == '"' || c == '\\' || c == '/' {
+				p.add(2)
+			} else {
+				p.add(6)
+			}
+		} else if c != '"' && c != '\\' {
+			if c == '/' {
+				p.add(2)
+			} else if c < 0x80 {
+				p.add(1)
+			} else if c >= 0xf0 {
+				p.add(12)
+			} else if c >= 0xc0 {
+				p.add(6)
+			}
+		}
+		return
+	}
+	if (c >= '0' && c <= '9') || c == '-' || p.number && (c == '.' || c == 'e' || c == 'E' || c == '+') {
+		p.number = true
+		p.tokenBytes = min(p.tokenBytes+1, storedInlineOverflow)
+		switch {
+		case c == 'e' || c == 'E':
+			p.exponent = true
+		case c == '.':
+			p.decimal = true
+		case c == '-' && p.exponent:
+			p.negativeExponent = true
+		case c >= '0' && c <= '9':
+			digit := int64(c - '0')
+			if p.exponent {
+				p.explicitExponent = min(1000000, p.explicitExponent*10+digit)
+			} else {
+				if !p.decimal {
+					p.integerDigits = min(1000000, p.integerDigits+1)
+				}
+				if !p.nonzero && digit == 0 {
+					p.leadingZeros = min(1000000, p.leadingZeros+1)
+				}
+				p.nonzero = p.nonzero || digit != 0
+				p.magnitude = min(uint64(9007199254740992), p.magnitude*10+uint64(digit))
+			}
+		}
+		return
+	}
+	p.finishNumber()
+	switch c {
+	case '"':
+		p.add(2)
+	case '{', '[':
+		p.depth++
+		p.peak = max(p.peak, p.depth)
+		p.add(3 + 2*uint64(p.depth))
+	case '}', ']':
+		p.depth--
+		p.add(1 + 2*uint64(p.depth))
+	case ',':
+		p.add(2 + 2*uint64(p.depth))
+	case ':':
+		p.add(2)
+	default:
+		p.add(1) // Each byte of true/false/null.
+	}
 }

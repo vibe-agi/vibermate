@@ -536,10 +536,10 @@ func TestWithinRawDomainDepthAndPresentation(t *testing.T) {
 			t.Fatalf("raw domain/ownership changed: %v", err)
 		}
 	}
-	for _, depth := range []int{canonicalMaxNesting - canonicalMessageParentDepth, canonicalMaxNesting - canonicalMessageParentDepth + 1} {
+	for _, depth := range []int{9995, 9996, 10000, 10001} {
 		r := withinFixture(t, 1)
 		r.Request.Messages[0].Blocks = []Block{{Kind: "tool_call", Availability: AvailabilityRecorded, CallID: "c", ToolName: "read", Arguments: json.RawMessage(strings.Repeat("[", depth) + "0" + strings.Repeat("]", depth))}}
-		if err := withinProjection(r).ValidateWithin(context.Background(), sourceFixtureLimits()); (err != nil) != (depth > canonicalMaxNesting-canonicalMessageParentDepth) {
+		if err := withinProjection(r).ValidateWithin(context.Background(), sourceFixtureLimits()); (err != nil) != (depth > 10000) {
 			t.Fatalf("raw depth%d: %v", depth, err)
 		}
 	}

@@ -435,9 +435,12 @@ func TestStoredCanonicalParserRawDepthAndRanges(t *testing.T) {
 		}
 		_, legacyErr := decodeStoredBlock(data)
 		d, open := parserFixture(t, data)
-		_, err = d.count(context.Background(), open, environment.ContentRecordingFull)
-		if (err == nil) != (legacyErr == nil) {
+		facts, err := d.count(context.Background(), open, environment.ContentRecordingFull)
+		if err != nil || depth < 10000 && legacyErr != nil {
 			t.Fatalf("depth%d parser%v legacy%v", depth, err, legacyErr)
+		}
+		if facts.ArgumentDepth != uint16(depth) {
+			t.Fatalf("authenticated raw depth=%d want%d", facts.ArgumentDepth, depth)
 		}
 	}
 	for _, raw := range []string{`{"big":"` + strings.Repeat("a", 5<<20) + `"}`, "\"\xff\"", `"😀z"`} {

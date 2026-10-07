@@ -11,7 +11,6 @@ import (
 	"fmt"
 	"io"
 	"reflect"
-	"unicode/utf8"
 
 	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/exchangecontent"
@@ -129,10 +128,12 @@ func (repository *exchangeContentRepository) physicalContentRow(ctx context.Cont
 }
 
 type storedMessageReadRequest struct {
-	First  int
-	Body   bool
-	Offset uint64
-	Kind   string
+	First    int
+	Body     bool
+	Offset   uint64
+	Kind     string
+	Budget   *int
+	Envelope uint16
 }
 type storedMessageReadResult struct {
 	Message     exchangecontent.Message
@@ -140,6 +141,7 @@ type storedMessageReadResult struct {
 	Body        storedBodyRange
 	Detail      storedDetailPage
 	Deferred    map[int]uint64
+	InlineDebit int
 }
 
 type storedMessageMetadata struct {
@@ -224,6 +226,16 @@ func (repository *exchangeContentRepository) readMessageMetadata(ctx context.Con
 	message := exchangecontent.Message{Role: role, Agent: agent}
 	result := storedMessageReadResult{Next: -1}
 	budget := exchangecontent.PageContentBytes
+	envelope := uint16(3) // ContentPage.blocks[].arguments.
+	if request != nil {
+		if request.Budget != nil {
+			budget = *request.Budget
+		}
+		if request.Envelope != 0 {
+			envelope = request.Envelope
+		}
+	}
+	initialBudget := budget
 	d, err := newStoredBlockDecoder(storedDecodeLimits{CanonicalBytes: ledger.limits.CanonicalBytes, RetainedBytes: ledger.bound, RetainedStructureBytes: ledger.bound, WorkspaceBytes: storedDecodeFixedWorkspace + 2*maxNestingDepth*8}, ledger.admit)
 	if err != nil {
 		return zero, err
@@ -282,6 +294,17 @@ func (repository *exchangeContentRepository) readMessageMetadata(ctx context.Con
 			}
 			result.Detail, err = d.detail(ctx, open, mode, kind, request.Offset)
 			result.Body = result.Detail.Body
+		} else if retained && request != nil {
+			var inline *storedDecodeResult
+			inline, err = d.decode(ctx, open, mode, storedDecodeRequest{inline: true, inlineBudget: uint64(max(budget, 0)), inlineEnvelope: envelope})
+			if err == nil {
+				deferred = inline.deferred
+				retained = !deferred
+				if retained {
+					block = inline.block()
+					budget -= int(inline.inlineDebit)
+				}
+			}
 		} else if retained {
 			block, err = d.full(ctx, open, mode)
 		} else {
@@ -297,17 +320,13 @@ func (repository *exchangeContentRepository) readMessageMetadata(ctx context.Con
 			return zero, err
 		}
 		if retained && !selected {
-			if request != nil && len(block.Arguments) > 0 && (!utf8.Valid(block.Arguments) || block.Arguments[0] != '{') {
-				retained = false
-				deferred = true
-			}
-		}
-		if retained && !selected {
 			if err := ledger.hold(uint64(len(block.Arguments))); err != nil {
 				return zero, err
 			}
 			message.Blocks = append(message.Blocks, block)
-			budget -= int(canonicalSize)
+			if request == nil {
+				budget -= int(canonicalSize)
+			}
 		}
 		if deferred {
 			if err := ledger.holdShell(); err != nil {
@@ -340,6 +359,7 @@ func (repository *exchangeContentRepository) readMessageMetadata(ctx context.Con
 		return zero, exchangecontent.ErrInvalidEvidence
 	}
 	result.Message = message
+	result.InlineDebit = initialBudget - budget
 	return result, nil
 }
 

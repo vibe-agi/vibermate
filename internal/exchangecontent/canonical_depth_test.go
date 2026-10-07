@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"reflect"
 	"runtime"
 	"strings"
 	"testing"
@@ -107,12 +108,16 @@ func TestCanonicalDepthBoundaries(t *testing.T) {
 						}
 					}
 					s, sourceErr := SourceFromRecordWithin(sourceFixtureLimits(), r)
-					if depth <= limit {
+					if depth <= 10000 {
 						if sourceErr != nil {
 							t.Fatalf("valid boundary rejected by source: %v", sourceErr)
 						}
+						var sourceBytes bytes.Buffer
+						if err := writeSourceCanonical(context.Background(), &sourceBytes, s); err != nil {
+							t.Fatal(err)
+						}
 						cost, err := s.Measure(context.Background())
-						if err != nil || cost.CanonicalBytes != uint64(len(want)) {
+						if err != nil || cost.CanonicalBytes != uint64(sourceBytes.Len()) {
 							t.Fatal("source depth/bytes differs")
 						}
 					} else if !errors.Is(sourceErr, ErrInvalidEvidence) {
@@ -170,9 +175,18 @@ func TestCanonicalDepthDecodeClosedEnvelope(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		input[0] = '['
-		if decoded.ExchangeID != "depth" {
+		original := append([]byte(nil), r.Request.Messages[0].Blocks[0].Arguments...)
+		start := bytes.Index(input, original)
+		if start < 0 {
+			t.Fatal("missing raw region")
+		}
+		input[start] = '!'
+		if !bytes.Equal(decoded.Request.Messages[0].Blocks[0].Arguments, original) {
 			t.Fatal("decoder aliases input")
+		}
+		decoded.Request.Messages[0].Blocks[0].Arguments[1] = '!'
+		if input[start+1] != original[1] {
+			t.Fatal("input aliases decoded arguments")
 		}
 	}
 	valid, _ := json.Marshal(r)
@@ -230,16 +244,55 @@ func TestCanonicalDepthBoundedScratch(t *testing.T) {
 
 func TestCanonicalDepthSourceAdmission(t *testing.T) {
 	for _, p := range []string{"request", "system", "response"} {
-		n := 9998
-		if p == "request" {
-			n = 9996
-		}
 		t.Run(p, func(t *testing.T) {
-			r := depthRecord(p, depthRaw(n, "mixed"))
-			if _, err := SourceFromRecordWithin(sourceFixtureLimits(), r); !errors.Is(err, ErrInvalidEvidence) {
-				t.Fatalf("Source admitted unrepresentable parent depth: %v", err)
+			for _, n := range []int{1, 9995, 9996, 9997, 9998, 10000, 10001} {
+				r := depthRecord(p, depthRaw(n, "mixed"))
+				if _, err := SourceFromRecordWithin(sourceFixtureLimits(), r); (err == nil) != (n <= 10000) {
+					t.Fatalf("Source independent raw depth %d: %v", n, err)
+				}
 			}
 		})
+	}
+}
+
+func TestIndependentLeafExactSourceBudgets(t *testing.T) {
+	for _, position := range []string{"request", "system", "response"} {
+		r := depthRecord(position, depthRaw(10000, "mixed"))
+		limits := sourceFixtureLimits()
+		source, err := SourceFromRecordWithin(limits, r)
+		if err != nil {
+			t.Fatal(err)
+		}
+		cost, err := source.Measure(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		limits.CanonicalBytes = cost.CanonicalBytes
+		limits.RetainedBytes = cost.RetainedBytes
+		limits.StructureBytes = cost.StructureBytes
+		limits.Scratch.PayloadBytes = 2*uint64(len(depthRaw(10000, "mixed"))) + 4096
+		limits.Scratch.StructureBytes = uint64(reflect.TypeFor[Block]().Size()+reflect.TypeFor[AgentContext]().Size()) + 4096
+		if _, err := SourceFromRecordWithin(limits, r); err != nil {
+			t.Fatal(err)
+		}
+		for _, currency := range []string{"canonical", "retained", "structure", "scratchPayload", "scratchStructure"} {
+			small := limits
+			switch currency {
+			case "canonical":
+				small.CanonicalBytes--
+			case "retained":
+				small.RetainedBytes--
+			case "structure":
+				small.StructureBytes--
+			case "scratchPayload":
+				small.Scratch.PayloadBytes--
+			case "scratchStructure":
+				small.Scratch.StructureBytes--
+			}
+			if _, err := SourceFromRecordWithin(small, r); !errors.Is(err, ErrInvalidEvidence) {
+				t.Fatalf("%s %s minus1: %v", position, currency, err)
+			}
+		}
 	}
 }
 func FuzzCanonicalDepth(f *testing.F) {

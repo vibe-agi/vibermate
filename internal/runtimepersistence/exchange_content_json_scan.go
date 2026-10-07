@@ -11,7 +11,10 @@
 
 package runtimepersistence
 
-import "strconv"
+import (
+	"github.com/vibe-agi/vibermate/internal/exchangecontent"
+	"strconv"
+)
 
 // A storedJSONSyntaxError is a description of a JSON syntax error.
 // It remains private to the syntax scanner; the Block parser classifies invalid evidence.
@@ -95,7 +98,7 @@ const (
 
 // This limits the max nesting depth to prevent stack overflow.
 // This is permitted by https://tools.ietf.org/html/rfc7159#section-9
-const maxNestingDepth = 10000
+const maxNestingDepth = exchangecontent.MaxArgumentJSONDepth
 
 // reset prepares the storedJSONScanner for use.
 // It must be called before calling s.step.

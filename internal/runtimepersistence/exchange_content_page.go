@@ -100,13 +100,22 @@ func (repository *exchangeContentRepository) GetPagedProjection(ctx context.Cont
 	}
 	paging := &exchangecontent.ProjectionPage{RequestOffset: ref.requestCount}
 	var messages []exchangecontent.Message
+	// Reserve the later system/response shells before filling request history;
+	// all inline placements in this projection share one presentation window.
+	inlineBudget := exchangecontent.PageContentBytes
+	if ref.systemDigest.Valid {
+		inlineBudget -= 1024
+	}
+	if ref.responseDigest.Valid {
+		inlineBudget -= 1024
+	}
 	if view == exchangecontent.RequestViewFull || ref.inherited > 0 {
 		cursor := pageCursor(ref, "request", "request", ref.requestCount)
 		if view == exchangecontent.RequestViewIncremental {
 			cursor.Lower = ref.inherited
 		}
 		if cursor.Depth > cursor.Lower {
-			page, err := repository.requestContentPage(operation, ref, cursor, ledger)
+			page, err := repository.requestContentPage(operation, ref, cursor, ledger, &inlineBudget, 7)
 			if err != nil {
 				return exchangecontent.Projection{}, err
 			}
@@ -119,7 +128,8 @@ func (repository *exchangeContentRepository) GetPagedProjection(ctx context.Cont
 	}
 	var system []exchangecontent.Block
 	if ref.systemDigest.Valid {
-		message, _, err := repository.inlinePageMessage(operation, ref.systemDigest.String, pageCursor(ref, "system", "message", 0), exchangecontent.PageContentBytes, ref.manifest.Mode, ledger)
+		inlineBudget += 1024
+		message, debit, err := repository.inlinePageMessage(operation, ref.systemDigest.String, pageCursor(ref, "system", "message", 0), inlineBudget, ref.manifest.Mode, ledger, 5)
 		if err != nil {
 			return exchangecontent.Projection{}, err
 		}
@@ -127,10 +137,12 @@ func (repository *exchangeContentRepository) GetPagedProjection(ctx context.Cont
 			return exchangecontent.Projection{}, exchangecontent.ErrInvalidEvidence
 		}
 		system = message.Blocks
+		inlineBudget -= debit
 	}
 	var response *exchangecontent.Message
 	if ref.responseDigest.Valid {
-		message, _, err := repository.inlinePageMessage(operation, ref.responseDigest.String, pageCursor(ref, "response", "message", 0), exchangecontent.PageContentBytes, ref.manifest.Mode, ledger)
+		inlineBudget += 1024
+		message, debit, err := repository.inlinePageMessage(operation, ref.responseDigest.String, pageCursor(ref, "response", "message", 0), inlineBudget, ref.manifest.Mode, ledger, 5)
 		if err != nil {
 			return exchangecontent.Projection{}, err
 		}
@@ -138,6 +150,7 @@ func (repository *exchangeContentRepository) GetPagedProjection(ctx context.Cont
 			return exchangecontent.Projection{}, exchangecontent.ErrInvalidEvidence
 		}
 		response = &message
+		inlineBudget -= debit
 	}
 	manifest := ref.manifest
 	if len(manifest.Request.ProtocolEvidence) > exchangecontent.PageMessageLimit {
@@ -225,7 +238,8 @@ func (repository *exchangeContentRepository) GetContentPage(ctx context.Context,
 			(cursor.Lower != 0 && cursor.Lower != ref.inherited) {
 			return exchangecontent.ContentPage{}, exchangecontent.ErrInvalidEvidence
 		}
-		return repository.requestContentPage(operation, ref, cursor, ledger)
+		budget := exchangecontent.PageContentBytes
+		return repository.requestContentPage(operation, ref, cursor, ledger, &budget, 5)
 	}
 	if cursor.Lower != 0 || (cursor.Kind != "message" && cursor.Kind != "body" && cursor.Kind != "detail" && cursor.Kind != "text" && cursor.Kind != "arguments" && cursor.Kind != "block_bytes") {
 		return exchangecontent.ContentPage{}, exchangecontent.ErrInvalidEvidence
@@ -318,7 +332,7 @@ func (repository *exchangeContentRepository) contentNodes(ctx context.Context, r
 	return result, nil
 }
 
-func (repository *exchangeContentRepository) requestContentPage(ctx context.Context, ref storedContentReference, cursor contentCursor, ledger *storedReadLedger) (exchangecontent.ContentPage, error) {
+func (repository *exchangeContentRepository) requestContentPage(ctx context.Context, ref storedContentReference, cursor contentCursor, ledger *storedReadLedger, remaining *int, envelope uint16) (exchangecontent.ContentPage, error) {
 	page := contentPageBase(ref, "request")
 	page.Total = ref.requestCount
 	lower := max(cursor.Lower, cursor.Depth-exchangecontent.PageMessageLimit)
@@ -326,11 +340,11 @@ func (repository *exchangeContentRepository) requestContentPage(ctx context.Cont
 	if err != nil {
 		return exchangecontent.ContentPage{}, err
 	}
-	budget := exchangecontent.PageContentBytes
+	budget := *remaining
 	page.Offset = cursor.Depth
 	for _, node := range nodes {
 		messageCursor := pageCursor(ref, "request", "message", node.depth)
-		message, size, err := repository.inlinePageMessage(ctx, node.messageDigest, messageCursor, budget, ref.manifest.Mode, ledger)
+		message, size, err := repository.inlinePageMessage(ctx, node.messageDigest, messageCursor, budget, ref.manifest.Mode, ledger, envelope)
 		if err != nil {
 			return exchangecontent.ContentPage{}, err
 		}
@@ -342,6 +356,7 @@ func (repository *exchangeContentRepository) requestContentPage(ctx context.Cont
 		page.Offset = node.depth - 1
 	}
 	slices.Reverse(page.Messages)
+	*remaining = budget
 	if page.Offset > cursor.Lower {
 		cursor.Depth = page.Offset
 		page.NextCursor = encodeContentCursor(cursor)
@@ -349,9 +364,9 @@ func (repository *exchangeContentRepository) requestContentPage(ctx context.Cont
 	return repository.checkedContentPage(ctx, page)
 }
 
-// Sizes are computed from the ordered manifest (including repeated blocks),
-// not the deduplicated reference index, and without fetching block payloads.
-func (repository *exchangeContentRepository) inlinePageMessage(ctx context.Context, digest string, cursor contentCursor, budget int, mode environment.ContentRecordingMode, ledger *storedReadLedger) (exchangecontent.Message, int, error) {
+// The metadata-only probe may defer immediately. A candidate must still pass
+// authenticated token/indentation accounting before arguments are allocated.
+func (repository *exchangeContentRepository) inlinePageMessage(ctx context.Context, digest string, cursor contentCursor, budget int, mode environment.ContentRecordingMode, ledger *storedReadLedger, envelope uint16) (exchangecontent.Message, int, error) {
 	if repository.limits != nil {
 		probe, err := repository.probeInlineMessage(ctx, digest, exchangecontent.PageMessageLimit, budget)
 		if err != nil {
@@ -364,11 +379,25 @@ func (repository *exchangeContentRepository) inlinePageMessage(ctx context.Conte
 			estimate := min(probe.InlineUpperBound, repository.limits.CanonicalBytes)
 			return exchangecontent.Message{Role: "unknown", Blocks: []exchangecontent.Block{deferredPageBlock(cursor, int(estimate))}}, 1024, nil
 		}
-		message, err := repository.readVerifiedMessage(ctx, digest, mode, ledger, cursor.Location == "request")
-		if err == nil {
-			message, err = pageCompatibleMessage(message, cursor, ledger)
+		available := budget - int(probe.MetadataBytes)
+		result, err := repository.readSelectedMessage(ctx, digest, mode, ledger, cursor.Location == "request", &storedMessageReadRequest{Budget: &available, Envelope: envelope})
+		if err != nil {
+			return exchangecontent.Message{}, 0, err
 		}
-		return message, int(probe.InlineUpperBound), err
+		if result.Next >= 0 {
+			if err := ledger.holdShell(); err != nil {
+				return exchangecontent.Message{}, 0, err
+			}
+			return exchangecontent.Message{Role: "unknown", Blocks: []exchangecontent.Block{deferredPageBlock(cursor, int(probe.InlineUpperBound))}}, 1024, nil
+		}
+		for i, size := range result.Deferred {
+			selected := cursor
+			selected.Kind = "detail"
+			selected.Block = i
+			selected.Offset = 0
+			result.Message.Blocks[i] = deferredPageBlock(selected, int(size))
+		}
+		return result.Message, result.InlineDebit + int(probe.MetadataBytes), nil
 	}
 	size, count, err := repository.inlineMessageSize(ctx, digest, exchangecontent.PageMessageLimit)
 	if err != nil {
@@ -454,6 +483,7 @@ type storedInlineProbe struct {
 	PhysicalSlots    uint64
 	InlineUpperBound uint64
 	NeedsDeferred    bool
+	MetadataBytes    uint64
 }
 
 func (repository *exchangeContentRepository) probeInlineMessage(ctx context.Context, digest string, window, budget int) (storedInlineProbe, error) {
@@ -470,7 +500,7 @@ func (repository *exchangeContentRepository) probeInlineMessage(ctx context.Cont
 		return storedInlineProbe{}, exchangecontent.ErrInvalidEvidence
 	}
 	upper := uint64(sum + metadata + count)
-	return storedInlineProbe{PhysicalSlots: uint64(count), InlineUpperBound: upper, NeedsDeferred: count > int64(window) || upper > uint64(max(budget, 0))}, nil
+	return storedInlineProbe{PhysicalSlots: uint64(count), InlineUpperBound: upper, NeedsDeferred: count > int64(window) || upper > uint64(max(budget, 0)), MetadataBytes: uint64(metadata + count)}, nil
 }
 
 func (repository *exchangeContentRepository) sourceMessagePage(ctx context.Context, ref storedContentReference, cursor contentCursor, digest string, ledger *storedReadLedger) (exchangecontent.ContentPage, error) {
@@ -505,7 +535,12 @@ func (repository *exchangeContentRepository) sourceMessagePage(ctx context.Conte
 		page := contentPageBase(ref, kind)
 		page.BlockMetadata = result.Detail.Metadata
 		page.BlockKind, page.CallID, page.ToolName = body.Facts.Shape.Kind, body.Facts.Shape.CallID, body.Facts.Shape.ToolName
-		if page.BlockMetadata == nil || !body.Facts.RawUTF8 || cursor.Kind == "body" && body.Facts.TextBytes > 0 && body.Facts.ArgumentBytes > 0 {
+		// A large ordinary Text field already had a complete detail route. Add
+		// the exact cursor for Arguments risk or expansion of a byte-fitting
+		// block. Expansion can exceed a prior page's remaining aggregate budget;
+		// advertise from authenticated facts, without trusting a cursor hint.
+		presentationDeferred := !body.Facts.argumentInlineEligible(3) || body.Facts.CanonicalBytes <= exchangecontent.PageContentBytes && body.Facts.PrettyUpper > body.Facts.ArgumentBytes
+		if page.BlockMetadata == nil || !body.Facts.RawUTF8 || presentationDeferred || cursor.Kind == "body" && body.Facts.TextBytes > 0 && body.Facts.ArgumentBytes > 0 {
 			exact := cursor
 			exact.Kind = "block_bytes"
 			exact.Offset = 0

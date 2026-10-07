@@ -258,11 +258,11 @@ func (p Projection) ValidateWithin(ctx context.Context, l SourceLimits) error {
 			return err
 		}
 	}
-	if err := validateVisible(ctx, c, p.Request.Messages, p.Request.System, p.Mode, p.ExchangeID, l, control, canonicalBlockParentDepth); err != nil {
+	if err := validateVisible(ctx, c, p.Request.Messages, p.Request.System, p.Mode, p.ExchangeID, l, control); err != nil {
 		return err
 	}
 	if p.Response != nil {
-		if err := validateVisible(ctx, c, nil, p.Response.Blocks, p.Mode, p.ExchangeID, l, control, canonicalBlockParentDepth); err != nil {
+		if err := validateVisible(ctx, c, nil, p.Response.Blocks, p.Mode, p.ExchangeID, l, control); err != nil {
 			return err
 		}
 	}
@@ -273,8 +273,8 @@ func (p Projection) ValidateWithin(ctx context.Context, l SourceLimits) error {
 	return countProjectionWire(ctx, limit, p)
 }
 
-func validateVisible(ctx context.Context, c *retainedCost, messages []Message, blocks []Block, mode environment.ContentRecordingMode, id string, l SourceLimits, control *readControlCost, envelope int) error {
-	checkBlocks := func(bs []Block, depth int) error {
+func validateVisible(ctx context.Context, c *retainedCost, messages []Message, blocks []Block, mode environment.ContentRecordingMode, id string, l SourceLimits, control *readControlCost) error {
+	checkBlocks := func(bs []Block) error {
 		for _, b := range bs {
 			if err := ctx.Err(); err != nil {
 				return err
@@ -293,14 +293,11 @@ func validateVisible(ctx context.Context, c *retainedCost, messages []Message, b
 				if err := b.Validate(mode); err != nil {
 					return err
 				}
-				if argumentDepthOverflow(b.Arguments, depth) != 0 {
-					return fmt.Errorf("%w: canonical arguments exceed parent depth", ErrInvalidEvidence)
-				}
 			}
 		}
 		return nil
 	}
-	if err := checkBlocks(blocks, envelope); err != nil {
+	if err := checkBlocks(blocks); err != nil {
 		return err
 	}
 	for _, m := range messages {
@@ -322,7 +319,7 @@ func validateVisible(ctx context.Context, c *retainedCost, messages []Message, b
 		if len(m.Blocks) == 0 {
 			return ErrInvalidEvidence
 		}
-		if err := checkBlocks(m.Blocks, canonicalMessageParentDepth); err != nil {
+		if err := checkBlocks(m.Blocks); err != nil {
 			return err
 		}
 	}
@@ -565,7 +562,7 @@ func (p ContentPage) ValidateWithin(ctx context.Context, l SourceLimits) error {
 	if err := protocolcore.ValidateProtocolEvidence(p.ProtocolEvidence); err != nil {
 		return fmt.Errorf("%w: %v", ErrInvalidEvidence, err)
 	}
-	if err := validateVisible(ctx, c, p.Messages, p.Blocks, p.Mode, p.ExchangeID, l, control, canonicalBlockParentDepth); err != nil {
+	if err := validateVisible(ctx, c, p.Messages, p.Blocks, p.Mode, p.ExchangeID, l, control); err != nil {
 		return err
 	}
 	return countPageWire(ctx, control.wireLimit(l.CanonicalBytes), p)

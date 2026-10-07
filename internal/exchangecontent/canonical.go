@@ -66,6 +66,11 @@ func (w *canonicalWriter) bytes(b []byte) {
 
 const hexDigits = "0123456789abcdef"
 
+// MaxArgumentJSONDepth bounds each retained Arguments leaf independently of
+// fixed storage and transport wrappers. Legacy whole-record helpers retain
+// their separately bounded compatibility domain.
+const MaxArgumentJSONDepth = 10000
+
 func (w *canonicalWriter) string(s string) {
 	w.text(`"`)
 	start := 0
