@@ -48,7 +48,7 @@ func TestPinnedGoToolchainMatchesModule(t *testing.T) {
 
 ### Task 2: Supply disposable hosted inputs to unchanged packaged V7
 
-**Files:** Modify `.github/workflows/packaged-acceptance.yml`, `.github/workflows/ci.yml`, `Makefile`; create `.github/packaged-acceptance-contract.test.mjs`. Do not modify the acceptance runner/verifier or native SecretStore to accommodate missing hosted capabilities.
+**Files:** Modify `.github/workflows/packaged-acceptance.yml`, `.github/workflows/ci.yml`, `Makefile`; create `.github/packaged-acceptance-contract.test.mjs`. Add only the heavy-fixture short-mode guard to the two parent tests in `internal/runtimepersistence/exchange_content_crash_test.go` together with the dedicated required CI gate below. Do not modify the acceptance runner/verifier or native SecretStore to accommodate missing hosted capabilities.
 
 **Interfaces:** Retain DESKTOP_APP, ACCEPTANCE_ROOT, ACCEPTANCE_BIN, VERIFY_BIN, REPORT_PATH, FIXED_CLAUDE_PATH and independent GITHUB_SHA. Fixed client is an isolated native platform package under ACCEPTANCE_ROOT, not a machine-global variable/install.
 
@@ -110,6 +110,7 @@ printf 'FIXED_CLAUDE_PATH=%s\n' "${fixed_claude}" >> "${GITHUB_ENV}"
 ```
 
 - [ ] Run `node --test .github/packaged-acceptance-contract.test.mjs` and `make check-workflows check-release-tooling`; preserve exact results, commit owned paths and independently review. The actual hosted native-build/V7 runs remain final gates; local workflow/unit-test success is preparation, not actual hosted acceptance.
+- [ ] Close Task4D review's runner-budget item in this same owned workflow/test commit. Its final focused race took563.998s locally; current `go test -race -short ./...` has Go's default ten-minute package timeout and the new matrix has no short guard. Add a documented `testing.Short()` guard to `TestContentSourceProcessCrash` and `TestContentSourceProcessCrashHarnessControls`, keeping the helper and full eight-case/three-control matrix unchanged. Normal `go test ./...` continues to run it. Add Makefile target `test-store-crash-race` with exact command `go test -race ./internal/runtimepersistence -run '^TestContentSourceProcessCrash' -count=1 -parallel=1 -timeout=15m -v`, and an unconditional step invoking this target immediately after the CI short-race step. Extend workflow regression coverage to require that command, target and step with no continue-on-error/optional condition. Verify short exclusion explicitly as exclusion (not matrix PASS), then obtain actual source-bound full normal and dedicated race results from the final CI runner. A runner timeout/resource failure remains a failed gate requiring evidence-based containment; do not silently drop the matrix or claim the earlier macOS measurement proves Linux runner capacity. This is an explicit split between quick checks and mandatory full-size acceptance, not a weakened race requirement.
 
 ### Task 3: Freeze one coherent release identity
 
