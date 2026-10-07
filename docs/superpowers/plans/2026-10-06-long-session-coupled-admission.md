@@ -10,6 +10,14 @@
 
 **Spec:** `docs/superpowers/specs/2026-10-06-long-session-hotfix-design.md`. The controller has read the supporting audits and actual diagnostics; their binding decisions and measured results are repeated below. Executors use this plan and their task brief, not another plan's scratch directory.
 
+## Current delivery priority — user decision 2026-10-07
+
+Functional correctness ships first; further performance optimization ships afterward. A3s complete write is not a functional failure solely because legacy code previously canceled at2s. The spec's user-approved delivery split takes precedence over older fixed-deadline/performance language below.
+
+Immediate path: measure actual completion without the old cutoff censoring it; establish a justified finite recording budget/lifecycle and safe resource configuration; activate the reviewed default path; verify real client continuation and data preservation; complete applicable review/CI/sign/notary/GitHub/Homebrew gates. Actual data loss, permission errors, unbounded ownership, failed cancellation or blocked normal control/conversations remain functional/safety blockers. No arbitrary30s diagnostic value is adopted automatically.
+
+Task6's checked representation/storage feasibility and baseline functional resource/lifecycle checks still inform activation. Its exhaustive performance grid, three-pair optimization search, relative p99 target and allocation/throughput optimization are a later performance-release workstream, not prerequisites for the first functional release. Preserve their open status and all measurements; do not mark deferred tests passed. No more unrelated optimization loop may displace first-release correctness and delivery.
+
 ## Global Constraints
 
 - Baseline hotfix HEAD `6b01fa0221f0ea1badcc08723462f2b1c46ad6ee`; notice fix `d978bcf` and bounded-compression fix `2c3b873` are independently complete. Preserve both; do not redo their implementations or unchanged covering gates.
@@ -279,6 +287,12 @@ request.body = JSON.stringify(body);
 - [ ] Deliver exact ResourceLimits, SourceLimits, SlotBytes and ActiveBytes, source hashes, reproducible commands/child outcomes and analytical SQL/response proofs to root. Root selects only a fully passing candidate and records values in the adopted plan; absence of that ruling blocks Task7, not Tasks2–6. Failed schema1 or SQL/control-deadline proof is a release blocker requiring a revised internal design, not an asserted pass.
 
 ### Task 7: Adopt the measured policy, switch production guards and prove upgrade acceptance
+
+**Functional-first activation ruling (2026-10-07):** use one conservative finite tuple, not a three-candidate performance search. With `MiB=1<<20`, `W=16MiB` and `q=sizeof(protocolcore.ContentBlock)+2*sizeof(string)+sizeof(json.RawMessage)`, semantic request is `{P:128MiB,S:512MiB}` and response is `{P:256MiB,S:W*q+128MiB}`. Compute the existing independent response reservation `R` and leaf scratch from these semantics; Source retained/canonical/structure are `R.RetainedBytes+64MiB`, `R.CanonicalBytes+256MiB`, `R.StructureBytes+512MiB`. Compute the existing execution envelopes; request receives a further64MiB actual transform-retention allowance, response remains independent, slot is their checked sum and active credit is four slots. Validate all checked arithmetic and SQL/physical feasibility. Response logical maximum gives5724 physical slots, below16384; large logical/reservation credits are not allocations or a claimed RSS limit. Existing dense100000-item measurements justify the request tuple; source-derived lexical/Chat retained bounds justify the response tuple. Functional default/response/concurrent-control tests below must still pass before release; this ruling alone is not acceptance.
+
+**One ownership chain:** protocolcore owns and returns fresh semantic defaults; exchangecontent owns and derives Source defaults and the single implementation of response-record reservation; exchange consumes those helpers to derive full slot policy. Retain a forwarding exchange helper where needed, not copied arithmetic. Runtime, nil codec options, Source/Record/Projection/Page, Store/Manager and control adapters select these same defaults; explicit copied overrides remain authoritative. Remove all three legacy history-count default guards and the full-record32MiB validation allocation together, preserving physical32MiB rows, bounded canonical byte-returning convenience and existing semantic nested limits. Within implementations must not recurse through default adapters. No reverse imports or mutable global policy registry.
+
+**Execution split:** Task7A activates the tuple and coupled defaults, with complete normal Runtime/response/control/cancel/readback and scoped race evidence; Task7B proves old-version populated-data backup/upgrade/restart/restore plus official-client same-session continuation. Both are mandatory first-release functionality. Detailed response-bound/source references are recorded in this plan's `task-6-policy-adoption-report.md`; their named focused checks replace the deferred exhaustive performance grid, not data/security/delivery verification.
 
 **Files:** private production policy and default constructors/adapters in protocolcore/codecs/exchange/exchangecontent/productruntime/loopbackproxy; acceptance/upgrade tests and evidence note.
 **Consumes:** root's exact Task6 policy ruling and passing prerequisites. **Produces:** the coupled production switch, data-preserving compatibility evidence and final candidate gates.

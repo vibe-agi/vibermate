@@ -10,6 +10,8 @@
 
 **Spec:** `docs/superpowers/specs/2026-10-06-long-session-hotfix-design.md`. Prerequisite product plan: `2026-10-06-long-session-coupled-admission.md`, including its actual Runtime/client/resource/data gates and independent reviews. This release is an intermediate delivery; the full production-readiness Goal remains active afterward.
 
+**User-approved phase correction (2026-10-07):** this first release consumes functional/data/security/bounded-lifecycle acceptance, not completion of the later exhaustive performance-optimization campaign. Follow the current priority section of the coupled plan and spec. Complete writes are not rejected as a release outcome solely for taking more than the legacy2s; real loss/stalls/authorization errors remain blockers. Keep deferred performance work explicit and retain all applicable delivery protection, source-identity and data-safety gates.
+
 ## Global Constraints
 
 - Tasks2–3 and delivery remain preparation-only until coupled product tasks complete. Task1's independent exact Go-pin correction may run while the completed Task5B commit is under read-only review: it consumes the already-fixed module toolchain and does not change candidate product source, capacity, version identity or remote state. One source implementer and one compiler/test job at a time; fresh task reviews and whole-hotfix review remain required. Reuse completed evidence only for its actual unchanged scope.

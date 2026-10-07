@@ -10,6 +10,16 @@ Start at stable main `c61f8c6b5e2196da8e99010c169d4e3c17797933`, verified source
 
 The full production-readiness Goal remains intact. Completing this hotfix is an intermediate delivery, not completion of that Goal.
 
+## User-approved delivery split — 2026-10-07
+
+The user explicitly separates functional correctness from performance optimization: a complete successful write taking3seconds is functionally successful, not a failed feature merely because an old2second cutoff was exceeded. Ship the reliable long-session functionality first; ship further performance optimization in a later version. This supersedes earlier interpretation of the fixed2s observer budget or full performance-calibration matrix as an immutable first-release gate.
+
+First-release gates remain: complete history forwarding/recording/readback on the real default path, original-session continuation, correct account/route/tool permissions, safe existing-data upgrade/restore, finite resource ownership, reliable cancellation/shutdown, no missing records or actual failure/stall of other normal conversations/control operations, applicable tests/review/signing/notarization and GitHub/Homebrew delivery. Do not substitute clipping, metadata fallback, hidden errors, infinite waiting or an untested arbitrary budget.
+
+Measure complete-write cost and choose/verify a reasonable recording lifecycle and finite budget. A diagnostic30s overlay is not a proposed production value or release PASS. Detailed throughput/latency/TotalAlloc targets, minimizing already-safe allocations and exhaustive large-shape/concurrency tuning are retained for the subsequent performance release; deferral is not reported as a passed benchmark. Previously completed safe optimizations remain. The full production-readiness Goal and its remaining functionality/security/delivery obligations are not reduced.
+
+Functional closure ruling: the completed100000-item diagnostic measured a2.375s committed request,0.214s response completion and full readback with zero diagnostics. Select a separate30s **content-recording** completion ceiling while retaining2s for existing small activity/raw-transform observations. This is conservative failure containment, not a universal performance SLO or a delay imposed on successful operations. Preserve synchronous borrowed ownership, finite failure reporting and cancel/shutdown drain; verify actual product wiring and concurrent control success before adoption. The earlier diagnostic changed all observers and alone does not prove this separated product behavior. No queue, retry, schema or performance-tuning work is added by this ruling.
+
 ## Established cause
 
 The actual stable codec rejects the reported complete histories at `protocolcore.Request.Validate` because `MaxMessageCount` is4096. Two exchangecontent projection/readback guards also depend on that constant. Merely bypassing the first check can still fail recording or reading.
