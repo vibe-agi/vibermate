@@ -8,8 +8,124 @@ import 'package:vibermate_app/core/api/control_models.dart';
 import 'package:vibermate_app/preview/preview_control_api.dart';
 
 import 'runtime_usage_fixture.dart';
+import 'fixtures/retained_identity_pages.dart';
 
 void main() {
+  test('retained metadata identity whitespace and UTF8 limits stay exact', () {
+    final base = <String, Object?>{
+      'kind': 'tool_call',
+      'availability': 'recorded',
+      'originalSize': 0,
+      'textBytes': 0,
+      'argumentBytes': 2,
+      'callId': 'call',
+      'toolName': 'f',
+      'toolNamespace': 'ns',
+    };
+    final spaces = [
+      for (var c = 0x09; c <= 0x0d; c++) c,
+      0x20,
+      0x85,
+      0xa0,
+      0x1680,
+      for (var c = 0x2000; c <= 0x200a; c++) c,
+      0x2028,
+      0x2029,
+      0x202f,
+      0x205f,
+      0x3000,
+    ];
+    for (final key in ['callId', 'toolName', 'toolNamespace']) {
+      for (final c in spaces) {
+        final space = String.fromCharCode(c);
+        for (final value in ['${space}id', 'id$space']) {
+          expect(
+            () => ExchangeBlockPageMetadata.fromJson({
+              ...base,
+              key: value,
+            }, 'metadata'),
+            throwsA(isA<ControlContractException>()),
+            reason: '$key boundary U+${c.toRadixString(16)}',
+          );
+        }
+      }
+      for (final value in ['a\tb', 'a\u00a0b', 'a\u2028b', 'a\ufeffb']) {
+        expect(
+          ExchangeBlockPageMetadata.fromJson({
+            ...base,
+            key: value,
+          }, 'metadata').values[key],
+          value,
+        );
+      }
+      for (final value in ['a\rb', 'a\nb', 'a\u0000b', '']) {
+        if (key == 'toolNamespace' && value.isEmpty) continue;
+        expect(
+          () => ExchangeBlockPageMetadata.fromJson({
+            ...base,
+            key: value,
+          }, 'metadata'),
+          throwsA(isA<ControlContractException>()),
+        );
+      }
+      final maximum = key == 'callId' ? 512 : 256;
+      final exact = '\ufeff${'é' * ((maximum - 4) ~/ 2)}x';
+      expect(utf8.encode(exact).length, maximum);
+      expect(
+        ExchangeBlockPageMetadata.fromJson({
+          ...base,
+          key: exact,
+        }, 'metadata').values[key],
+        exact,
+      );
+      expect(
+        () => ExchangeBlockPageMetadata.fromJson({
+          ...base,
+          key: '${exact}x',
+        }, 'metadata'),
+        throwsA(isA<ControlContractException>()),
+      );
+    }
+    final withoutNamespace = {...base}..remove('toolNamespace');
+    expect(
+      ExchangeBlockPageMetadata.fromJson(
+        withoutNamespace,
+        'metadata',
+      ).values.containsKey('toolNamespace'),
+      isFalse,
+    );
+    expect(
+      () => ExchangeBlockPageMetadata.fromJson({
+        ...base,
+        'toolNamespace': '',
+      }, 'metadata'),
+      throwsA(isA<ControlContractException>()),
+    );
+  });
+  test(
+    'real Store tool detail pages preserve retained boundary BOM identities',
+    () {
+      final cases = jsonDecode(retainedIdentityPages) as List;
+      expect(cases.length, 18);
+      for (final example in cases) {
+        for (final wire in example['pages'] as List) {
+          final page = ExchangeContentPage.fromJson(
+            wire,
+            example['name'] as String,
+          );
+          final metadata = page.blockMetadata!.values;
+          for (final key in ['callId', 'toolName', 'toolNamespace']) {
+            expect(
+              metadata[key] ?? '',
+              example[key],
+              reason: '${example['name']} $key',
+            );
+          }
+          expect(page.text, page.kind == 'text' ? 'x' : '{}');
+        }
+      }
+    },
+  );
   test('preview complete record is scoped and strictly decoded', () async {
     final api = PreviewControlApi();
     addTearDown(api.close);

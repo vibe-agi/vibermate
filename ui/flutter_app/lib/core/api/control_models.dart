@@ -8817,6 +8817,21 @@ final class ExchangeContentPaging {
 
 const maxCanonicalBlockBytes = 549754896384;
 
+// Go strings.TrimSpace uses Unicode White_Space, not Dart's extra U+FEFF.
+// Check boundaries only; retained identifiers must never be normalized.
+bool _retainedIdentityBoundarySpace(int codeUnit) =>
+    codeUnit >= 0x09 && codeUnit <= 0x0d ||
+    codeUnit == 0x20 ||
+    codeUnit == 0x85 ||
+    codeUnit == 0xa0 ||
+    codeUnit == 0x1680 ||
+    codeUnit >= 0x2000 && codeUnit <= 0x200a ||
+    codeUnit == 0x2028 ||
+    codeUnit == 0x2029 ||
+    codeUnit == 0x202f ||
+    codeUnit == 0x205f ||
+    codeUnit == 0x3000;
+
 final class ExchangeBlockPageMetadata {
   const ExchangeBlockPageMetadata._(
     this.values,
@@ -8909,7 +8924,8 @@ final class ExchangeBlockPageMetadata {
     final toolError = v['toolError'] == true;
     bool identity(String value, int maximum) =>
         value.isNotEmpty &&
-        value.trim() == value &&
+        !_retainedIdentityBoundarySpace(value.codeUnitAt(0)) &&
+        !_retainedIdentityBoundarySpace(value.codeUnitAt(value.length - 1)) &&
         utf8.encode(value).length <= maximum &&
         !RegExp(r'[\r\n\u0000]').hasMatch(value);
     final noTool =
