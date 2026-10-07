@@ -53,6 +53,7 @@ var ErrInvalidBuildResult = errors.New("invalid runtime build result")
 
 // Runtime owns every successfully constructed production component.
 type Runtime struct {
+	bodyAdmission      *exchange.BodyAdmission
 	launchSnapshots    launchsnapshot.Store
 	paths              RuntimePaths
 	storage            *runtimepersistence.Store
@@ -96,9 +97,10 @@ type Runtime struct {
 	clock              Clock
 	timeout            LifecycleOptions
 
-	shutdownOnce sync.Once
-	shutdownDone chan struct{}
-	shutdownErr  error
+	shutdownOnce       sync.Once
+	shutdownDone       chan struct{}
+	shutdownBudgetDone chan struct{}
+	shutdownErr        error
 }
 
 // Start validates all dependencies and executes the typed production builder.
@@ -130,6 +132,18 @@ func startWithBuilders(
 	}
 	if err := options.validate(); err != nil {
 		return nil, err
+	}
+	var bodyAdmission *exchange.BodyAdmission
+	var contentLimits *exchangecontent.SourceLimits
+	if options.Resources != nil {
+		policy := *options.Resources
+		options.Resources = &policy
+		var err error
+		bodyAdmission, err = exchange.NewBodyAdmission(policy)
+		if err != nil {
+			return nil, err
+		}
+		contentLimits = &policy.Content
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, fmt.Errorf("start ProductRuntime: %w", err)
@@ -180,7 +194,8 @@ func startWithBuilders(
 	}
 	cleanups.register("data directory ownership", func(context.Context) error { return dataGuard.Release() })
 	storageResult, err := buildStorage(ctx, storageBuildRequest{
-		databasePath: options.Paths.DatabasePath(),
+		contentLimits: contentLimits,
+		databasePath:  options.Paths.DatabasePath(),
 	})
 	if err != nil {
 		return fail("sqlite", err)
@@ -416,9 +431,10 @@ func startWithBuilders(
 	cleanups.register("Activity component", activities.Shutdown)
 
 	contents, err := buildExchangeContent(exchangeContentBuildRequest{
-		ctx:        ctx,
-		repository: storageResult.store.ExchangeContentRepository(),
-		clock:      options.Clock,
+		contentLimits: contentLimits,
+		ctx:           ctx,
+		repository:    storageResult.store.ExchangeContentRepository(),
+		clock:         options.Clock,
 	})
 	if err != nil || contents == nil {
 		buildErr := err
@@ -587,6 +603,7 @@ func startWithBuilders(
 	pending.register("original-origin transport", original.Shutdown)
 
 	exchanges, err := buildExchange(exchangeBuildRequest{
+		bodyAdmission:            bodyAdmission,
 		ownerContext:             ownerContext,
 		actions:                  options.OfflineHold,
 		accounts:                 accounts,
@@ -674,15 +691,16 @@ func startWithBuilders(
 		return fail("account operation reader", err)
 	}
 	proxy, err := buildProxy(proxyBuildRequest{
-		ownerContext: ownerContext,
-		admissions:   captureAdmissions,
-		assignments:  assignments,
-		exchanges:    exchanges,
-		original:     original,
-		accountReads: accountReads,
-		certificates: certificateAuthority,
-		connections:  connections,
-		policy:       connectionRules.Source(),
+		bodyAdmission: bodyAdmission,
+		ownerContext:  ownerContext,
+		admissions:    captureAdmissions,
+		assignments:   assignments,
+		exchanges:     exchanges,
+		original:      original,
+		accountReads:  accountReads,
+		certificates:  certificateAuthority,
+		connections:   connections,
+		policy:        connectionRules.Source(),
 		// A rule that asks blocks the connection on the same ApprovalCenter a
 		// tool intent goes to, so a person answers both in one place.
 		approvals:    approvals,
@@ -713,6 +731,33 @@ func startWithBuilders(
 	})
 
 	cleanups.register("offline-hold drain", options.OfflineHold.Drain)
+	if bodyAdmission != nil {
+		// This flag belongs only to the existing serial cleanup goroutine.
+		// Once the caller's budget expires, dependencies must still close after
+		// real body owners drain. WithoutCancel adds no new deadline and cannot
+		// interrupt their outstanding synchronous borrows or skip final cleanup.
+		lateDrain := false
+		for index := range cleanups.entries {
+			run := cleanups.entries[index].run
+			cleanups.entries[index].run = func(ctx context.Context) error {
+				if lateDrain || ctx.Err() != nil {
+					ctx = context.WithoutCancel(ctx)
+				}
+				return run(ctx)
+			}
+		}
+		cleanups.register("body admission drain", func(ctx context.Context) error {
+			err := bodyAdmission.Drain(ctx)
+			if err == nil {
+				err = ctx.Err()
+			}
+			if err != nil {
+				lateDrain = true
+				return errors.Join(err, bodyAdmission.Drain(context.WithoutCancel(ctx)))
+			}
+			return nil
+		})
+	}
 	cleanups.register("Exchange drain", exchanges.Drain)
 	cleanups.register("Capture assignment drain", assignments.Drain)
 	cleanups.register("loopback proxy drain", proxy.Drain)
@@ -721,6 +766,9 @@ func startWithBuilders(
 	cleanups.register("CaptureRun component", captureRuns.Shutdown)
 	cleanups.register("ManualCapture component", manualCaptures.Shutdown)
 	cleanups.register("Exchange admission", func(context.Context) error {
+		if bodyAdmission != nil {
+			bodyAdmission.BeginShutdown()
+		}
 		exchanges.BeginShutdown()
 		return nil
 	})
@@ -755,7 +803,12 @@ func startWithBuilders(
 		return fail("foundation state verification", err)
 	}
 	tracker.commitInitialized(finalState.Revision)
+	var shutdownBudgetDone chan struct{}
+	if bodyAdmission != nil {
+		shutdownBudgetDone = make(chan struct{})
+	}
 	return &Runtime{
+		bodyAdmission:      bodyAdmission,
 		paths:              options.Paths,
 		storage:            storageResult.store,
 		acpObservations:    acpObservations,
@@ -798,6 +851,7 @@ func startWithBuilders(
 		clock:              options.Clock,
 		timeout:            options.Lifecycle,
 		shutdownDone:       make(chan struct{}),
+		shutdownBudgetDone: shutdownBudgetDone,
 	}, nil
 }
 
@@ -905,6 +959,13 @@ func (r *Runtime) UsageRepository() runtimeusage.Repository { return r.storage.U
 
 func (r *Runtime) ExchangeContents() exchangecontent.Reader {
 	return r.contents
+}
+
+func (r *Runtime) ExchangeContentLimits() (exchangecontent.SourceLimits, bool) {
+	if r == nil || r.bodyAdmission == nil {
+		return exchangecontent.SourceLimits{}, false
+	}
+	return r.bodyAdmission.Policy().Content, true
 }
 
 // RawEvidence returns retained HTTP evidence. Search and timeline reads expose
@@ -1113,6 +1174,8 @@ func (r *Runtime) Shutdown(ctx context.Context) error {
 	select {
 	case <-r.shutdownDone:
 		return r.shutdownErr
+	case <-r.shutdownBudgetDone:
+		return fmt.Errorf("ProductRuntime shutdown budget: %w", context.DeadlineExceeded)
 	case <-ctx.Done():
 		return fmt.Errorf("wait for ProductRuntime shutdown: %w", ctx.Err())
 	}
@@ -1123,10 +1186,26 @@ func (r *Runtime) executeShutdown() {
 		context.Background(),
 		r.timeout.ShutdownTimeout,
 	)
+	var stopBudget func() bool
+	var budgetCallbackDone chan struct{}
+	if r.shutdownBudgetDone != nil {
+		budgetCallbackDone = make(chan struct{})
+		stopBudget = context.AfterFunc(shutdownContext, func() {
+			defer close(budgetCallbackDone)
+			r.status.finishStopping(r.clock.Now(), context.DeadlineExceeded)
+			close(r.shutdownBudgetDone)
+		})
+	}
 	if r.egressCompletion != nil {
 		r.egressCompletion.beginShutdown(shutdownContext)
 	}
 	cleanupErr := r.cleanups.shutdown(shutdownContext)
+	// Stop/join the budget callback before our normal cancellation and final
+	// publication. shutdownErr is written only here, before shutdownDone closes.
+	if stopBudget != nil && !stopBudget() {
+		<-budgetCallbackDone
+		cleanupErr = errors.Join(cleanupErr, shutdownContext.Err())
+	}
 	cancel()
 	var durabilityErr error
 	if r.egressCompletion != nil {

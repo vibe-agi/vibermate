@@ -37,6 +37,21 @@ type BackendCodec interface {
 	) (protocolcore.Response, protocolcore.TranslationReport, error)
 }
 
+// TransformedRequestAdmission is implemented by the concrete backend edge;
+// candidate execution must re-admit the exact post-script provider dialect.
+type TransformedRequestAdmission interface{ ValidateTransformedRequest([]byte) error }
+
+func (path *Path) ValidateTransformedRequest(body []byte) error {
+	if path == nil {
+		return errors.New("provider admission path missing")
+	}
+	validator, ok := path.backend.(TransformedRequestAdmission)
+	if !ok {
+		return errors.New("provider dialect lacks transformed admission")
+	}
+	return validator.ValidateTransformedRequest(body)
+}
+
 // SourceRequestEncoder is implemented by an identity-compatible backend edge
 // that needs the validated client wire alongside the neutral request. It lets
 // a same-dialect path preserve provider-specific fields while still applying

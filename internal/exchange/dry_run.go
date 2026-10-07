@@ -65,14 +65,25 @@ func (pipeline *Pipeline) DryRun(ctx context.Context, request ClientRequest) (Dr
 	if err != nil {
 		return DryRunResult{}, newFailure(ReasonEnvironmentPlanInvalid, request.exchangeID, 0, err)
 	}
+	if pipeline.bodyAdmission != nil {
+		if err := pipeline.bodyAdmission.CheckPlan(request.plan); err != nil {
+			return DryRunResult{}, err
+		}
+	}
 	if err := validateClientOperation(request.plan, request.operation, request.replayClass); err != nil {
 		return DryRunResult{}, newFailure(ReasonEnvironmentPlanInvalid, request.exchangeID, 0, err)
 	}
 	logicalBody, err := logicalClientRequestBody(request)
-	if err != nil && !selection.original {
+	if err != nil && (!selection.original || pipeline.bodyAdmission != nil) {
 		return DryRunResult{}, newFailure(ReasonInvalidExchangeRequest, request.exchangeID, 0, err)
 	}
 	startedAt := pipeline.now().UTC()
+	if pipeline.bodyAdmission != nil {
+		request.admitted, request.admittedReport, err = pipeline.admitClientInput(request, logicalBody, selection)
+		if err != nil {
+			return DryRunResult{}, err
+		}
+	}
 	if selection.original {
 		return pipeline.dryRunOriginal(ctx, request, selection, logicalBody, startedAt)
 	}
@@ -88,7 +99,7 @@ func (pipeline *Pipeline) DryRun(ctx context.Context, request ClientRequest) (Dr
 	if err != nil {
 		return DryRunResult{}, newFailure(ReasonEnvironmentPlanInvalid, request.exchangeID, 0, err)
 	}
-	decoded, _, err := path.Client().DecodeRequest(logicalBody)
+	decoded, _, err := pipeline.decodeAdmitted(request, path, logicalBody)
 	if err != nil {
 		reason := ReasonInvalidExchangeRequest
 		if protocolcore.ReasonOf(err) == protocolcore.ReasonUnsupportedClientInput {
@@ -99,12 +110,18 @@ func (pipeline *Pipeline) DryRun(ctx context.Context, request ClientRequest) (Dr
 	requestedModel := decoded.RequestedModel
 	mappedModel, mapped := selection.mappedModel(requestedModel)
 	if mapped {
-		decoded, err = decoded.WithEffectiveModel(mappedModel)
+		if pipeline.bodyAdmission != nil {
+			decoded, err = protocolcore.WithEffectiveModelWithin(decoded, mappedModel, pipeline.bodyAdmission.policy.Content.Semantic)
+		} else {
+			decoded, err = decoded.WithEffectiveModel(mappedModel)
+		}
 		if err != nil {
 			return DryRunResult{}, newFailure(ReasonEnvironmentPlanInvalid, request.exchangeID, 0, err)
 		}
 	}
-	decoded = mergeClientProtocolEvidence(decoded, request.ClientProtocolEvidence())
+	if request.admitted == nil {
+		decoded = mergeClientProtocolEvidence(decoded, request.ClientProtocolEvidence())
+	}
 	providerRequest, _, err := path.EncodeProviderRequest(decoded, logicalBody, request.protocolHeaders())
 	if err != nil {
 		return DryRunResult{}, newFailure(ReasonProviderRequestInvalid, request.exchangeID, 0, err)
@@ -140,6 +157,15 @@ func (pipeline *Pipeline) DryRun(ctx context.Context, request ClientRequest) (Dr
 	if selection.codecPlan.ProviderDialect() == protocolspec.DialectOpenAIResponses &&
 		upstreamendpoint.IsChatGPTCodexOrigin(selection.target.Origin()) {
 		refreshChatGPTRoutingHint(transformedHeaders, providerRequest.Body(), transformedBody)
+	}
+	if pipeline.bodyAdmission != nil {
+		logical, err := decodeBoundedContent(transformedBody, strings.Join(transformedHeaders.Values("Content-Encoding"), ","))
+		if err != nil {
+			return DryRunResult{}, err
+		}
+		if err = path.ValidateTransformedRequest(logical); err != nil {
+			return DryRunResult{}, err
+		}
 	}
 	profile := request.plan.EgressProfile()
 	unverified := []string{"account_link", "credential", "dns", "tls", "quota", "provider_response", "runtime_time"}
@@ -193,7 +219,7 @@ func (pipeline *Pipeline) dryRunOriginal(
 	requestedModel := ""
 	unverified := []string{"client_authentication", "client_headers", "dns", "tls", "quota", "provider_response", "runtime_identity", "runtime_time"}
 	if path, selectErr := pipeline.protocolPaths.Select(selection.codecPlan, request.operation.id); selectErr == nil && logicalBody != nil {
-		if decoded, _, decodeErr := path.Client().DecodeRequest(logicalBody); decodeErr == nil {
+		if decoded, _, decodeErr := pipeline.decodeAdmitted(request, path, logicalBody); decodeErr == nil {
 			requestedModel = decoded.RequestedModel
 		}
 	}

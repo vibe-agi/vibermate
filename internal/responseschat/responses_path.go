@@ -99,6 +99,11 @@ type responsesBackendCodec struct {
 	codec *openairesponses.Codec
 }
 
+func (codec responsesBackendCodec) ValidateTransformedRequest(body []byte) error {
+	_, _, err := codec.codec.DecodeCompatibleClientRequest(body)
+	return err
+}
+
 func (responsesBackendCodec) Dialect() protocolspec.Dialect {
 	return protocolspec.DialectOpenAIResponses
 }

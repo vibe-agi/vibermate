@@ -60,6 +60,7 @@ var errOfflineHoldAdmission = errors.New(
 // Pipeline owns all active Exchange contexts. It has no listener and cannot be
 // reached without an ingress component explicitly receiving its Executor.
 type Pipeline struct {
+	bodyAdmission            *BodyAdmission
 	actions                  offlinehold.ActionAdmission
 	accounts                 AccountLeaseAuthority
 	protocolPaths            *protocolpath.Selector
@@ -94,6 +95,11 @@ type Executor interface {
 var _ Executor = (*Pipeline)(nil)
 
 func New(options Options) (*Pipeline, error) {
+	if options.BodyAdmission != nil {
+		if err := options.BodyAdmission.Policy().Validate(); err != nil {
+			return nil, err
+		}
+	}
 	if options.OwnerContext == nil ||
 		options.Actions == nil ||
 		options.ProtocolPaths == nil ||
@@ -119,6 +125,7 @@ func New(options Options) (*Pipeline, error) {
 	}
 	ownerContext, cancelOwner := context.WithCancelCause(options.OwnerContext)
 	return &Pipeline{
+		bodyAdmission:            options.BodyAdmission,
 		actions:                  options.Actions,
 		accounts:                 options.Accounts,
 		protocolPaths:            options.ProtocolPaths,
@@ -148,6 +155,18 @@ func (pipeline *Pipeline) Execute(
 	request ClientRequest,
 	downstream Downstream,
 ) (result Result, resultErr error) {
+	var activeOwner *operation
+	defer func() {
+		if activeOwner != nil {
+			pipeline.finish(activeOwner)
+		}
+	}()
+	if pipeline != nil && pipeline.bodyAdmission != nil {
+		if err := request.bodyLease.claim(pipeline.bodyAdmission); err != nil {
+			return result, err
+		}
+		defer request.bodyLease.finish()
+	}
 	captured := &contentCapture{}
 	if pipeline != nil && pipeline.now != nil {
 		captured.startedAt = pipeline.now()
@@ -239,11 +258,13 @@ func (pipeline *Pipeline) Execute(
 			err,
 		)
 	}
-	defer pipeline.finish(active)
+	activeOwner = active
 	defer action.Release()
 	logicalBody, contentErr := logicalClientRequestBody(request)
-	pipeline.observeStart(request, logicalBody)
-	if contentErr != nil && !selection.original {
+	if pipeline.bodyAdmission == nil {
+		pipeline.observeStart(request, logicalBody)
+	}
+	if contentErr != nil && (!selection.original || pipeline.bodyAdmission != nil) {
 		return result, newFailure(
 			ReasonInvalidExchangeRequest,
 			request.exchangeID,
@@ -256,6 +277,14 @@ func (pipeline *Pipeline) Execute(
 		)
 	}
 	startedAt := pipeline.now().UTC()
+	if pipeline.bodyAdmission != nil {
+		var err error
+		request.admitted, request.admittedReport, err = pipeline.admitClientInput(request, logicalBody, selection)
+		pipeline.observeStart(request, logicalBody)
+		if err != nil {
+			return result, err
+		}
+	}
 	candidate, err := pipeline.selectCredentialCandidate(
 		operationContext,
 		request,
@@ -390,7 +419,7 @@ func (pipeline *Pipeline) selectCredentialCandidate(
 				err,
 			)
 		}
-		decoded, _, err := protocolPath.Client().DecodeRequest(logicalBody)
+		decoded, _, err := pipeline.decodeAdmitted(request, protocolPath, logicalBody)
 		if err != nil {
 			reason := ReasonInvalidExchangeRequest
 			if protocolcore.ReasonOf(err) == protocolcore.ReasonUnsupportedClientInput {
@@ -508,6 +537,21 @@ func (pipeline *Pipeline) executeCandidate(
 		if err != nil {
 			return newFailure(ReasonMessageTransformFailed, request.exchangeID, 0, err)
 		}
+		if pipeline.bodyAdmission != nil {
+			path, err := pipeline.protocolPaths.Select(selection.codecPlan, request.operation.id)
+			if err != nil {
+				return err
+			}
+			logical, err := decodeBoundedContent(transformedBody, strings.Join(transformedHeaders.Values("Content-Encoding"), ","))
+			if err != nil {
+				return err
+			}
+			if !bytes.Equal(logical, logicalBody) {
+				if err = path.ValidateTransformedRequest(logical); err != nil {
+					return newFailure(ReasonMessageTransformFailed, request.exchangeID, 0, err)
+				}
+			}
+		}
 		frozenRequest, err := pipeline.newProviderRequest(
 			request,
 			selection,
@@ -530,11 +574,10 @@ func (pipeline *Pipeline) executeCandidate(
 			selection.codecPlan,
 			request.operation.id,
 		); selectErr == nil && logicalBody != nil {
-			if decoded, _, decodeErr := candidatePath.Client().DecodeRequest(logicalBody); decodeErr == nil {
-				decoded = mergeClientProtocolEvidence(
-					decoded,
-					request.ClientProtocolEvidence(),
-				)
+			if decoded, _, decodeErr := pipeline.decodeAdmitted(request, candidatePath, logicalBody); decodeErr == nil {
+				if request.admitted == nil {
+					decoded = mergeClientProtocolEvidence(decoded, request.ClientProtocolEvidence())
+				}
 				contentPath = candidatePath
 				decodedContent = &decoded
 				decodedForEvidence := decoded.Clone()
@@ -565,7 +608,7 @@ func (pipeline *Pipeline) executeCandidate(
 	if err != nil {
 		return newFailure(ReasonEnvironmentPlanInvalid, request.exchangeID, 0, err)
 	}
-	decoded, clientRequestReport, err := protocolPath.Client().DecodeRequest(logicalBody)
+	decoded, clientRequestReport, err := pipeline.decodeAdmitted(request, protocolPath, logicalBody)
 	result.Translation = result.Translation.Merge(clientRequestReport)
 	if err != nil {
 		reason := ReasonInvalidExchangeRequest
@@ -576,16 +619,19 @@ func (pipeline *Pipeline) executeCandidate(
 		failure.ClientField = classifyClientRequestField(logicalBody, err)
 		return failure
 	}
-	if mappedModel, mapped := selection.mappedModel(decoded.RequestedModel); mapped {
-		decoded, err = decoded.WithEffectiveModel(mappedModel)
+	if mappedModel, mapped := selection.mappedModel(decoded.RequestedModel); mapped && (request.admitted == nil || decoded.EffectiveModel != mappedModel) {
+		if pipeline.bodyAdmission != nil {
+			decoded, err = protocolcore.WithEffectiveModelWithin(decoded, mappedModel, pipeline.bodyAdmission.policy.Content.Semantic)
+		} else {
+			decoded, err = decoded.WithEffectiveModel(mappedModel)
+		}
 		if err != nil {
 			return newFailure(ReasonEnvironmentPlanInvalid, request.exchangeID, 0, err)
 		}
 	}
-	decoded = mergeClientProtocolEvidence(
-		decoded,
-		request.ClientProtocolEvidence(),
-	)
+	if request.admitted == nil {
+		decoded = mergeClientProtocolEvidence(decoded, request.ClientProtocolEvidence())
+	}
 	decodedForEvidence := decoded.Clone()
 	captured.request = &decodedForEvidence
 	pipeline.observeRequest(request, captured)
@@ -638,6 +684,17 @@ func (pipeline *Pipeline) executeCandidate(
 	if selection.codecPlan.ProviderDialect() == protocolspec.DialectOpenAIResponses &&
 		upstreamendpoint.IsChatGPTCodexOrigin(selection.target.Origin()) {
 		refreshChatGPTRoutingHint(transformedHeaders, encodedProvider.Body(), transformedBody)
+	}
+	if pipeline.bodyAdmission != nil {
+		logical, err := decodeBoundedContent(transformedBody, strings.Join(transformedHeaders.Values("Content-Encoding"), ","))
+		if err != nil {
+			return err
+		}
+		if selection.codecPlan.ClientDialect() != selection.codecPlan.ProviderDialect() || !bytes.Equal(logical, logicalBody) {
+			if err = protocolPath.ValidateTransformedRequest(logical); err != nil {
+				return newFailure(ReasonMessageTransformFailed, request.exchangeID, 0, err)
+			}
+		}
 	}
 	frozenRequest, err := pipeline.newProviderRequest(
 		request,
@@ -1100,16 +1157,21 @@ func (pipeline *Pipeline) observeStart(request ClientRequest, body []byte) {
 	conversation := agentconversation.Ref{}
 	evidence := request.ClientProtocolEvidence()
 	semanticRequest := protocolcore.Request{ProtocolEvidence: evidence}
-	if protocolPath, selectErr := pipeline.protocolPaths.Select(
-		plan.CodecPlan(),
-		request.operation.id,
-	); selectErr == nil {
-		if decoded, _, decodeErr := protocolPath.Client().DecodeRequest(body); decodeErr == nil {
-			semanticRequest = mergeClientProtocolEvidence(decoded, evidence)
-			evidence = append(
-				[]protocolcore.ProtocolEvidenceValue(nil),
-				semanticRequest.ProtocolEvidence...,
-			)
+	if request.admitted != nil {
+		semanticRequest = *request.admitted
+		evidence = slices.Clone(semanticRequest.ProtocolEvidence)
+	} else if pipeline.bodyAdmission == nil {
+		if protocolPath, selectErr := pipeline.protocolPaths.Select(
+			plan.CodecPlan(),
+			request.operation.id,
+		); selectErr == nil {
+			if decoded, _, decodeErr := protocolPath.Client().DecodeRequest(body); decodeErr == nil {
+				semanticRequest = mergeClientProtocolEvidence(decoded, evidence)
+				evidence = append(
+					[]protocolcore.ProtocolEvidenceValue(nil),
+					semanticRequest.ProtocolEvidence...,
+				)
+			}
 		}
 	}
 	if len(evidence) != 0 {
@@ -1268,11 +1330,19 @@ func (pipeline *Pipeline) observeContent(
 		EndpointID:        endpoint.ID(), EndpointRevision: endpoint.Revision(),
 		ProtocolPlanID: protocolPlan.ID(), ProtocolPlanRevision: protocolPlan.Revision(),
 		RouteID: routeID, RouteRevision: routeRevision,
-		Recording: plan.ContentRecording(), Request: captured.request.Clone(),
+		Recording: plan.ContentRecording(), Request: *captured.request,
 	}
 	if captured.response != nil {
-		response := captured.response.Clone()
-		observation.Response = &response
+		observation.Response = captured.response
+	}
+	// Candidate Source observation borrows immutable capture state until this
+	// synchronous call returns. Keep the legacy owned-handoff contract intact.
+	if pipeline.bodyAdmission == nil {
+		observation.Request = captured.request.Clone()
+		if captured.response != nil {
+			response := captured.response.Clone()
+			observation.Response = &response
+		}
 	}
 	ctx, cancel := context.WithTimeout(
 		context.WithoutCancel(pipeline.ownerContext),

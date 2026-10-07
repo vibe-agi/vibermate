@@ -31,6 +31,15 @@ type Recorder interface {
 	Record(context.Context, Record) error
 }
 
+// SourceRecorder consumes borrowed immutable content synchronously. Returning
+// ends the borrow; implementations may not retain Source or its input.
+type SourceRecorder interface {
+	RecordSource(context.Context, *Source) error
+}
+type SourceRepository interface {
+	PutSource(context.Context, *Source) error
+}
+
 type Reader interface {
 	Get(context.Context, string) (Record, error)
 	GetConversationEvidence(context.Context, string) (ConversationEvidence, error)
@@ -48,13 +57,16 @@ type Runtime interface {
 }
 
 type Options struct {
-	Repository Repository
-	Clock      Clock
+	Repository    Repository
+	Clock         Clock
+	ContentLimits *SourceLimits
 }
 
 type Manager struct {
-	repository Repository
-	clock      Clock
+	limits           *SourceLimits
+	sourceRepository SourceRepository
+	repository       Repository
+	clock            Clock
 
 	mu      sync.Mutex
 	closing bool
@@ -74,7 +86,30 @@ func New(ctx context.Context, options Options) (*Manager, error) {
 		clock:      options.Clock,
 		changed:    make(chan struct{}),
 	}
+	if options.ContentLimits != nil {
+		limits := *options.ContentLimits
+		if err := limits.Validate(); err != nil {
+			return nil, err
+		}
+		sink, ok := options.Repository.(SourceRepository)
+		if !ok {
+			return nil, errors.New("candidate content repository lacks synchronous Source support")
+		}
+		manager.limits, manager.sourceRepository = &limits, sink
+	}
 	return manager, nil
+}
+
+func (manager *Manager) RecordSource(ctx context.Context, source *Source) error {
+	if manager == nil || manager.limits == nil || source == nil || source.limits != *manager.limits || !source.metadata.ExpiresAt.After(manager.clock.Now().UTC()) {
+		return ErrInvalidEvidence
+	}
+	operation, finish, err := manager.begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer finish()
+	return manager.sourceRepository.PutSource(operation, source)
 }
 
 func (manager *Manager) Record(ctx context.Context, record Record) error {
@@ -108,6 +143,11 @@ func (manager *Manager) Get(ctx context.Context, exchangeID string) (Record, err
 	if err != nil {
 		return Record{}, err
 	}
+	if manager.limits != nil {
+		if _, err := SourceFromRecordWithin(*manager.limits, record); err != nil {
+			return Record{}, err
+		}
+	}
 	return record.Clone(), nil
 }
 
@@ -134,16 +174,40 @@ func (manager *Manager) GetProjection(
 	if err != nil {
 		return Projection{}, err
 	}
+	if err := manager.validateProjection(operation, projection); err != nil {
+		return Projection{}, err
+	}
+	var workspace presentationWorkspace
+	if manager.limits != nil {
+		workspace, err = presentationWorkspaceFor(projection.Response)
+		if err != nil {
+			return Projection{}, err
+		}
+	}
 	projection = projection.Clone()
 	if projection.Response != nil {
-		projection.Response.Blocks = mergeDuplicateReadableReasoning(
-			projection.Response.Blocks,
-		)
+		if manager.limits != nil {
+			projection.Response.Blocks, err = foldPresentation(operation, projection.Response.Blocks, workspace.candidates)
+			if err != nil {
+				return Projection{}, err
+			}
+		} else {
+			projection.Response.Blocks = mergeDuplicateReadableReasoning(
+				projection.Response.Blocks,
+			)
+		}
 	}
-	if err := projection.Validate(); err != nil {
+	if err := manager.validateProjection(operation, projection); err != nil {
 		return Projection{}, err
 	}
 	return projection, nil
+}
+
+func (manager *Manager) validateProjection(ctx context.Context, p Projection) error {
+	if manager.limits != nil {
+		return p.ValidateWithin(ctx, *manager.limits)
+	}
+	return p.Validate()
 }
 
 func (manager *Manager) RequestPreviews(

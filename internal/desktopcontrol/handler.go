@@ -152,6 +152,7 @@ type ConversationIndexer interface {
 }
 
 type Options struct {
+	ContentLimits       *exchangecontent.SourceLimits
 	LaunchSnapshots     *launchsnapshot.Store
 	Storage             StorageLocationReader
 	ACP                 *acpobservation.Manager
@@ -191,6 +192,7 @@ type Options struct {
 }
 
 type Handler struct {
+	contentLimits       *exchangecontent.SourceLimits
 	launchSnapshots     *launchsnapshot.Store
 	storage             StorageLocationReader
 	acp                 *acpobservation.Manager
@@ -249,6 +251,16 @@ type ApprovalDecisionInput struct {
 }
 
 func New(options Options) (*Handler, error) {
+	if options.ContentLimits != nil {
+		copy := *options.ContentLimits
+		if err := copy.Validate(); err != nil {
+			return nil, err
+		}
+		if _, err := detailOutputLimit(copy); err != nil {
+			return nil, err
+		}
+		options.ContentLimits = &copy
+	}
 	if options.Readiness == nil ||
 		options.Status == nil ||
 		options.Environments == nil ||
@@ -265,6 +277,7 @@ func New(options Options) (*Handler, error) {
 		return nil, errors.New("Desktop control dependencies are incomplete")
 	}
 	handler := &Handler{
+		contentLimits:       options.ContentLimits,
 		launchSnapshots:     options.LaunchSnapshots,
 		storage:             options.Storage,
 		acp:                 options.ACP,

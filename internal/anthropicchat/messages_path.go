@@ -103,6 +103,11 @@ type messagesBackendCodec struct {
 	codec *Codec
 }
 
+func (codec messagesBackendCodec) ValidateTransformedRequest(body []byte) error {
+	_, _, err := codec.codec.DecodeCompatibleClientRequest(body)
+	return err
+}
+
 func (messagesBackendCodec) Dialect() protocolspec.Dialect {
 	return protocolspec.DialectAnthropicMessages
 }

@@ -73,6 +73,7 @@ func DefaultLifecycleOptions() LifecycleOptions {
 
 // Options is the complete typed ProductRuntime construction input.
 type Options struct {
+	Resources      *exchange.ResourcePolicy
 	Paths          RuntimePaths
 	Host           hostcontract.Contract
 	OfflineHold    offlinehold.RuntimeCoordinator
@@ -86,6 +87,11 @@ type Options struct {
 }
 
 func (o Options) validate() error {
+	if o.Resources != nil {
+		if err := o.Resources.Validate(); err != nil {
+			return err
+		}
+	}
 	if o.Paths.dataDirectory == "" || o.Paths.databasePath == "" {
 		return fmt.Errorf("%w: runtime paths are missing", ErrInvalidOptions)
 	}

@@ -71,6 +71,60 @@ const hexDigits = "0123456789abcdef"
 // their separately bounded compatibility domain.
 const MaxArgumentJSONDepth = 10000
 
+// WriteRequestJSON and WriteResponseJSON encode admitted retained carriers
+// directly. Their independent raw leaves never re-enter a parent MarshalJSON
+// scanner; callers own semantic admission and synchronous immutable lifetime.
+func WriteRequestJSON(sink io.Writer, r Request) error {
+	if sink == nil {
+		return ErrInvalidEvidence
+	}
+	for _, b := range r.System {
+		if err := preflightBlock(b); err != nil {
+			return err
+		}
+	}
+	for _, m := range r.Messages {
+		for _, b := range m.Blocks {
+			if err := preflightBlock(b); err != nil {
+				return err
+			}
+		}
+	}
+	m := metadataFromRecord(Record{Request: r})
+	w := canonicalWriter{sink: sink}
+	w.requestStart(m.Request)
+	w.text(`,"system":`)
+	w.blocks(r.System, true)
+	w.text(`,"messages":[`)
+	for i, v := range r.Messages {
+		if i > 0 {
+			w.text(",")
+		}
+		w.message(v, true)
+	}
+	w.text("]")
+	w.requestEnd(m.Request)
+	w.flush()
+	return w.err
+}
+func WriteResponseJSON(sink io.Writer, r Response) error {
+	if sink == nil {
+		return ErrInvalidEvidence
+	}
+	for _, b := range r.Blocks {
+		if err := preflightBlock(b); err != nil {
+			return err
+		}
+	}
+	m := metadataFromRecord(Record{Response: &r})
+	w := canonicalWriter{sink: sink}
+	w.responseStart(*m.Response)
+	w.blocks(r.Blocks, true)
+	w.responseEnd(*m.Response)
+	w.flush()
+	return w.err
+}
+
 func (w *canonicalWriter) string(s string) {
 	w.text(`"`)
 	start := 0

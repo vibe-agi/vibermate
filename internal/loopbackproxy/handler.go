@@ -165,14 +165,15 @@ func (source RandomExchangeIDSource) NewExchangeID(
 }
 
 type Options struct {
-	OwnerContext context.Context
-	Admissions   captureadmission.Authorizer
-	Assignments  CaptureAssignmentAuthority
-	Exchanges    exchange.Executor
-	Original     OriginalClient
-	AccountReads CapturedAccountReader
-	Certificates CertificateAuthority
-	Connections  ConnectionJournal
+	BodyAdmission *exchange.BodyAdmission
+	OwnerContext  context.Context
+	Admissions    captureadmission.Authorizer
+	Assignments   CaptureAssignmentAuthority
+	Exchanges     exchange.Executor
+	Original      OriginalClient
+	AccountReads  CapturedAccountReader
+	Certificates  CertificateAuthority
+	Connections   ConnectionJournal
 	// Policy decides every proxied connection before any dial, DNS
 	// resolution, or certificate issuance. A ClientEndpoint is not exempt. It
 	// is read once per connection, so a rule change reaches the next
@@ -206,25 +207,26 @@ type operation struct {
 }
 
 type Handler struct {
-	admissions   captureadmission.Authorizer
-	assignments  CaptureAssignmentAuthority
-	exchanges    exchange.Executor
-	original     OriginalClient
-	accountReads CapturedAccountReader
-	certificates CertificateAuthority
-	connections  ConnectionJournal
-	policy       connectionpolicy.Source
-	approvals    NetworkApprovals
-	blindTunnels BlindTunnelDialer
-	egressAudit  egressaudit.Writer
-	rawEvidence  rawevidence.RequestRecorder
-	rawTimeout   time.Duration
-	rawBodyBytes int
-	exchangeIDs  ExchangeIDSource
-	handshake    time.Duration
-	clock        func() time.Time
-	auditTimeout time.Duration
-	ownerContext context.Context
+	bodyAdmission *exchange.BodyAdmission
+	admissions    captureadmission.Authorizer
+	assignments   CaptureAssignmentAuthority
+	exchanges     exchange.Executor
+	original      OriginalClient
+	accountReads  CapturedAccountReader
+	certificates  CertificateAuthority
+	connections   ConnectionJournal
+	policy        connectionpolicy.Source
+	approvals     NetworkApprovals
+	blindTunnels  BlindTunnelDialer
+	egressAudit   egressaudit.Writer
+	rawEvidence   rawevidence.RequestRecorder
+	rawTimeout    time.Duration
+	rawBodyBytes  int
+	exchangeIDs   ExchangeIDSource
+	handshake     time.Duration
+	clock         func() time.Time
+	auditTimeout  time.Duration
+	ownerContext  context.Context
 
 	mu        sync.Mutex
 	accepting bool
@@ -234,6 +236,11 @@ type Handler struct {
 }
 
 func New(options Options) (*Handler, error) {
+	if options.BodyAdmission != nil {
+		if err := options.BodyAdmission.Policy().Validate(); err != nil {
+			return nil, err
+		}
+	}
 	if options.OwnerContext == nil ||
 		options.Admissions == nil ||
 		options.Assignments == nil ||
@@ -265,28 +272,29 @@ func New(options Options) (*Handler, error) {
 		}
 	}
 	handler := &Handler{
-		admissions:   options.Admissions,
-		assignments:  options.Assignments,
-		exchanges:    options.Exchanges,
-		original:     options.Original,
-		accountReads: options.AccountReads,
-		certificates: options.Certificates,
-		connections:  options.Connections,
-		policy:       options.Policy,
-		approvals:    options.Approvals,
-		blindTunnels: options.BlindTunnels,
-		egressAudit:  options.EgressAudit,
-		rawEvidence:  options.RawEvidence,
-		rawTimeout:   rawTimeout,
-		rawBodyBytes: rawBodyBytes,
-		exchangeIDs:  options.ExchangeIDs,
-		handshake:    options.HandshakeTimeout,
-		clock:        time.Now,
-		auditTimeout: defaultAuditCompletionLimit,
-		ownerContext: options.OwnerContext,
-		accepting:    true,
-		active:       make(map[*operation]struct{}),
-		changed:      make(chan struct{}),
+		bodyAdmission: options.BodyAdmission,
+		admissions:    options.Admissions,
+		assignments:   options.Assignments,
+		exchanges:     options.Exchanges,
+		original:      options.Original,
+		accountReads:  options.AccountReads,
+		certificates:  options.Certificates,
+		connections:   options.Connections,
+		policy:        options.Policy,
+		approvals:     options.Approvals,
+		blindTunnels:  options.BlindTunnels,
+		egressAudit:   options.EgressAudit,
+		rawEvidence:   options.RawEvidence,
+		rawTimeout:    rawTimeout,
+		rawBodyBytes:  rawBodyBytes,
+		exchangeIDs:   options.ExchangeIDs,
+		handshake:     options.HandshakeTimeout,
+		clock:         time.Now,
+		auditTimeout:  defaultAuditCompletionLimit,
+		ownerContext:  options.OwnerContext,
+		accepting:     true,
+		active:        make(map[*operation]struct{}),
+		changed:       make(chan struct{}),
 	}
 	handler.stopOwner = context.AfterFunc(options.OwnerContext, handler.BeginShutdown)
 	return handler, nil
@@ -863,24 +871,27 @@ func (handler *Handler) serveInner(
 	}
 	request.Header.Del("Proxy-Authorization")
 	request.Header.Del("Proxy-Connection")
-	if handler.rawEvidence != nil {
-		scopeKind, scopeID, err := rawEvidenceScope(capture)
-		if err != nil {
-			handler.reportRawEvidenceFailure(fmt.Errorf(
-				"resolve Raw evidence scope: %w", err,
-			))
-		} else {
-			scopeLease, beginErr := handler.rawEvidence.BeginScope(
-				request.Context(), scopeKind, scopeID,
-			)
-			if beginErr != nil {
+	beginRawScope := func() func() {
+		if handler.rawEvidence != nil {
+			scopeKind, scopeID, err := rawEvidenceScope(capture)
+			if err != nil {
 				handler.reportRawEvidenceFailure(fmt.Errorf(
-					"begin Raw evidence scope: %w", beginErr,
+					"resolve Raw evidence scope: %w", err,
 				))
 			} else {
-				defer scopeLease.Release()
+				scopeLease, beginErr := handler.rawEvidence.BeginScope(
+					request.Context(), scopeKind, scopeID,
+				)
+				if beginErr != nil {
+					handler.reportRawEvidenceFailure(fmt.Errorf(
+						"begin Raw evidence scope: %w", beginErr,
+					))
+				} else {
+					return scopeLease.Release
+				}
 			}
 		}
+		return func() {}
 	}
 	clientProtocol, err := downstreamProtocolOf(request)
 	if err != nil {
@@ -920,6 +931,9 @@ func (handler *Handler) serveInner(
 	defer requestLease.Release()
 	plan := requestLease.Plan()
 	operation := plan.Operation()
+	if operation.Kind() != protocolspec.ClientOperationSemantic {
+		defer beginRawScope()()
+	}
 	clientDialect := plan.ProtocolPlan().ClientDialect()
 	if operation.Kind() == protocolspec.ClientOperationUnsupported {
 		// Unsupported WebSocket operations are an operation-catalog fact, not a
@@ -962,6 +976,25 @@ func (handler *Handler) serveInner(
 		)
 		return
 	}
+	var bodyLease *exchange.BodyLease
+	if operation.Kind() == protocolspec.ClientOperationSemantic && handler.bodyAdmission != nil {
+		bodyLease, err = handler.bodyAdmission.Acquire(request.Context())
+		if err != nil {
+			writeReason(writer, http.StatusServiceUnavailable, ReasonProxyStopping, "")
+			return
+		}
+		defer bodyLease.Release()
+		if err := handler.bodyAdmission.CheckPlan(plan); err != nil {
+			writeReason(writer, http.StatusRequestEntityTooLarge, ReasonRequestBodyInvalid, "")
+			return
+		}
+		// Waiters install no callbacks. Join an entered Close before returning
+		// the full slot, even when cancellation has already been observed.
+		defer joinBodyCancellation(request.Context(), request.Body)()
+	}
+	if operation.Kind() == protocolspec.ClientOperationSemantic {
+		defer beginRawScope()()
+	}
 	body, err := readBounded(request.Body, operation.MaxBodyBytes())
 	if err != nil {
 		writeReason(writer, http.StatusRequestEntityTooLarge, ReasonRequestBodyInvalid, "")
@@ -983,6 +1016,7 @@ func (handler *Handler) serveInner(
 			body,
 			observation,
 			audit,
+			bodyLease,
 		)
 	case protocolspec.ClientOperationAuxiliary:
 		handler.serveAgentProbe(
@@ -1092,6 +1126,7 @@ func (handler *Handler) serveSemantic(
 	body []byte,
 	observation transportprofile.Observation,
 	audit *connectionevent.Connection,
+	bodyLease *exchange.BodyLease,
 ) {
 	operationPlan := plan.Operation()
 	operation, err := exchange.NewClientOperationEvidence(
@@ -1115,6 +1150,9 @@ func (handler *Handler) serveSemantic(
 		// Every identity is generated independently; association travels as
 		// typed references rather than as a delimiter-joined string.
 		exchange.WithIngressCorrelation(admission, audit.ID()),
+	}
+	if bodyLease != nil {
+		requestOptions = append(requestOptions, exchange.WithBodyLease(bodyLease))
 	}
 	if observation.Available() {
 		requestOptions = append(
@@ -1936,6 +1974,20 @@ func writeReason(
 	}
 	writer.WriteHeader(status)
 	_ = json.NewEncoder(writer).Encode(payload)
+}
+
+// The cleanup joins an entered callback; cancellation alone is not drainage.
+func joinBodyCancellation(ctx context.Context, body io.Closer) func() {
+	if body == nil {
+		return func() {}
+	}
+	closed := make(chan struct{})
+	stop := context.AfterFunc(ctx, func() { defer close(closed); _ = body.Close() })
+	return func() {
+		if !stop() {
+			<-closed
+		}
+	}
 }
 
 func readBounded(reader io.Reader, limit int64) ([]byte, error) {

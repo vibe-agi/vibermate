@@ -59,7 +59,7 @@ func New(options Options) (*desktopcontrol.Handler, error) {
 	if err != nil {
 		return nil, err
 	}
-	return desktopcontrol.New(desktopcontrol.Options{
+	controlOptions := desktopcontrol.Options{
 		LaunchSnapshots: options.Runtime.LaunchSnapshots(),
 		Storage:         options.Runtime,
 		ACP:             options.Runtime.ACPObservations(),
@@ -80,5 +80,9 @@ func New(options Options) (*desktopcontrol.Handler, error) {
 		CaptureRuns: options.Runtime.CaptureRunReader(), ManualCaptures: options.Runtime.ManualCaptures(),
 		Archive: options.Runtime.EvidenceArchive(), ArchiveBarrier: options.Runtime.EvidenceArchiveBarrier(),
 		Clock: options.Clock,
-	})
+	}
+	if limits, ok := options.Runtime.ExchangeContentLimits(); ok {
+		controlOptions.ContentLimits = &limits
+	}
+	return desktopcontrol.New(controlOptions)
 }

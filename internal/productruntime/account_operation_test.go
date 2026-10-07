@@ -18,6 +18,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/codexoauth"
 	"github.com/vibe-agi/vibermate/internal/egressaudit"
 	"github.com/vibe-agi/vibermate/internal/environment"
+	"github.com/vibe-agi/vibermate/internal/exchange"
 	"github.com/vibe-agi/vibermate/internal/hostcontract"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
 	"github.com/vibe-agi/vibermate/internal/originidentity"
@@ -173,6 +174,7 @@ func TestStaticBearerCannotRedeemCodexReset(t *testing.T) {
 }
 
 type accountReadFixture struct {
+	secrets   secretstore.Store
 	runtime   *Runtime
 	reader    *accountoperation.Reader
 	wire      *accountReadWire
@@ -187,7 +189,7 @@ func newAccountReadFixture(t *testing.T) accountReadFixture {
 	return newAccountReadFixtureWithDriver(t, providerauth.StaticHeaderDriverRef())
 }
 
-func newAccountReadFixtureWithDriver(t *testing.T, driver providerauth.DriverRef) accountReadFixture {
+func newAccountReadFixtureWithDriver(t *testing.T, driver providerauth.DriverRef, resources ...exchange.ResourcePolicy) accountReadFixture {
 	t.Helper()
 	ctx := context.Background()
 	gate, err := offlinehold.New(offlinehold.Config{MaxHeldRequests: 8, MaxHeldBytes: 1 << 20, MaxHoldDuration: time.Second, ReleaseConcurrency: 2})
@@ -195,6 +197,9 @@ func newAccountReadFixtureWithDriver(t *testing.T, driver providerauth.DriverRef
 		t.Fatal(err)
 	}
 	options := testOptions(t, hostcontract.Desktop(), gate)
+	if len(resources) != 0 {
+		options.Resources = &resources[0]
+	}
 	runtime := startTestRuntime(t, options)
 	t.Cleanup(func() { shutdownRuntime(t, runtime) })
 	token := "eyJhbGciOiJub25lIn0." + base64.RawURLEncoding.EncodeToString([]byte(fmt.Sprintf(`{"exp":%d,"https://api.openai.com/auth":{"chatgpt_account_id":"workspace-B"}}`, time.Now().Add(time.Hour).Unix()))) + ".synthetic"
@@ -276,7 +281,7 @@ func newAccountReadFixtureWithDriver(t *testing.T, driver providerauth.DriverRef
 	if err != nil {
 		t.Fatal(err)
 	}
-	return accountReadFixture{runtime: runtime, reader: reader, wire: wire, plan: plan, aggregate: aggregate, account: view, token: token}
+	return accountReadFixture{secrets: options.Secrets, runtime: runtime, reader: reader, wire: wire, plan: plan, aggregate: aggregate, account: view, token: token}
 }
 
 func TestCapturedAccountReadUsesFixedAccountBeforeAnyGeneration(t *testing.T) {

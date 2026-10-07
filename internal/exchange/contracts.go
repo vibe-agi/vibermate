@@ -451,6 +451,9 @@ func (evidence ClientOperationEvidence) validate() error {
 
 // ClientRequest is an owned immutable ingress representation.
 type ClientRequest struct {
+	bodyLease          *BodyLease
+	admitted           *protocolcore.Request
+	admittedReport     protocolcore.TranslationReport
 	exchangeID         string
 	plan               environment.RequestPlan
 	operation          ClientOperationEvidence
@@ -479,11 +482,13 @@ const (
 	clientRequestOptionUserAgent        clientRequestOptionKind = 4
 	clientRequestOptionOriginalHeaders  clientRequestOptionKind = 5
 	clientRequestOptionProtocolEvidence clientRequestOptionKind = 6
+	clientRequestOptionBodyLease        clientRequestOptionKind = 7
 )
 
 // ClientRequestOption is a closed typed option. Its fields are private so an
 // ingress adapter cannot create an unvalidated option shape.
 type ClientRequestOption struct {
+	bodyLease       *BodyLease
 	kind            clientRequestOptionKind
 	clientHello     transportprofile.Observation
 	admission       captureadmission.Admission
@@ -492,6 +497,10 @@ type ClientRequestOption struct {
 	clientUserAgent string
 	clientEvidence  []protocolcore.ProtocolEvidenceValue
 	originalHeaders http.Header
+}
+
+func WithBodyLease(lease *BodyLease) ClientRequestOption {
+	return ClientRequestOption{kind: clientRequestOptionBodyLease, bodyLease: lease}
 }
 
 func WithClientHelloObservation(
@@ -591,7 +600,25 @@ func NewClientRequest(
 	if err := validateFrozenWireVariant(plan, clientProtocol); err != nil {
 		return ClientRequest{}, err
 	}
+	var bodyLease *BodyLease
+	for _, option := range options {
+		if option.kind == clientRequestOptionBodyLease {
+			if bodyLease != nil || option.bodyLease == nil {
+				return ClientRequest{}, errors.New("invalid or duplicate body lease")
+			}
+			bodyLease = option.bodyLease
+		}
+	}
+	if bodyLease != nil {
+		if err := bodyLease.checkPlan(plan); err != nil {
+			return ClientRequest{}, err
+		}
+		if err := bodyLease.reserveConstructor(uint64(len(body))); err != nil {
+			return ClientRequest{}, err
+		}
+	}
 	request := ClientRequest{
+		bodyLease:      bodyLease,
 		exchangeID:     exchangeID,
 		plan:           plan,
 		operation:      operation,
@@ -601,6 +628,7 @@ func NewClientRequest(
 	}
 	for _, option := range options {
 		switch option.kind {
+		case clientRequestOptionBodyLease:
 		case clientRequestOptionClientHello:
 			if request.hasClientHello {
 				return ClientRequest{}, errors.New(
@@ -1193,6 +1221,8 @@ type ContentObservation struct {
 }
 
 type ContentObserver interface {
+	// Candidate execution borrows immutable Request/Response capture data only
+	// through this synchronous call. Observers must not retain it asynchronously.
 	ObserveContent(context.Context, ContentObservation) error
 }
 
@@ -1528,6 +1558,7 @@ func (budgets StreamBudgets) Validate() error {
 }
 
 type Options struct {
+	BodyAdmission            *BodyAdmission
 	OwnerContext             context.Context
 	Actions                  offlinehold.ActionAdmission
 	Accounts                 AccountLeaseAuthority

@@ -1254,6 +1254,7 @@ func newProxyFixtureForDialectWithPolicyAndRawEvidence(
 	policy connectionpolicy.Snapshot,
 	raw rawevidence.RequestRecorder,
 	assignmentEnvironmentID environment.EnvironmentID,
+	configure ...func(*loopbackproxy.Options),
 ) *proxyFixture {
 	t.Helper()
 	directory := t.TempDir()
@@ -1390,7 +1391,7 @@ func newProxyFixtureForDialectWithPolicyAndRawEvidence(
 	if err != nil {
 		t.Fatal(err)
 	}
-	handler, err := loopbackproxy.New(loopbackproxy.Options{
+	handlerOptions := loopbackproxy.Options{
 		OwnerContext:     context.Background(),
 		Admissions:       admissions,
 		Assignments:      assignments,
@@ -1405,7 +1406,11 @@ func newProxyFixtureForDialectWithPolicyAndRawEvidence(
 		RawEvidence:      raw,
 		ExchangeIDs:      loopbackproxy.NewCryptographicExchangeIDSource(),
 		HandshakeTimeout: time.Second,
-	})
+	}
+	for _, configure := range configure {
+		configure(&handlerOptions)
+	}
+	handler, err := loopbackproxy.New(handlerOptions)
 	if err != nil {
 		t.Fatal(err)
 	}

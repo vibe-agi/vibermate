@@ -36,6 +36,10 @@ type backendCodec struct {
 	codec *Codec
 }
 
+func (codec backendCodec) ValidateTransformedRequest(body []byte) error {
+	return codec.codec.ValidateTransformedProviderRequest(body)
+}
+
 func (backendCodec) Dialect() protocolspec.Dialect {
 	return protocolspec.DialectOpenAIChat
 }

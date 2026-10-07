@@ -1169,7 +1169,14 @@ func sanitizeText(value string) string {
 	for _, replacement := range []struct {
 		pattern *regexp.Regexp
 		value   string
-	}{{unixHomePattern, "${1}~"}, {windowsHomePattern, "${1}~"}, {headerSecretPattern, "${1}: [redacted]"}, {bearerPattern, "Bearer [redacted]"}, {providerSecretPattern, "[redacted credential]"}, {urlUserInfoPattern, "${1}[redacted]@"}} {
+		// Each pattern requires at least one of these literal ASCII bytes.
+		// Recheck the current value after earlier ordered replacements, keeping
+		// all regex matching/redaction semantics (including Unicode folding).
+		required string
+	}{{unixHomePattern, "${1}~", "/"}, {windowsHomePattern, "${1}~", "\\"}, {headerSecretPattern, "${1}: [redacted]", ":="}, {bearerPattern, "Bearer [redacted]", " \t"}, {providerSecretPattern, "[redacted credential]", "-"}, {urlUserInfoPattern, "${1}[redacted]@", "@"}} {
+		if strings.IndexAny(value, replacement.required) < 0 {
+			continue
+		}
 		if replacement.pattern.MatchString(value) {
 			value = replacement.pattern.ReplaceAllString(value, replacement.value)
 		}

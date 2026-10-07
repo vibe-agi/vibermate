@@ -1,6 +1,7 @@
 package desktopcontrol
 
 import (
+	"context"
 	"encoding/base64"
 	"errors"
 	"net/http"
@@ -422,6 +423,9 @@ func exchangeDetailOf(
 	content *exchangecontent.Projection,
 	contentView ExchangeContentView,
 ) (ExchangeDetail, error) {
+	return exchangeDetailWithin(context.Background(), nil, record, egressPage, content, contentView)
+}
+func exchangeDetailWithin(ctx context.Context, limits *exchangecontent.SourceLimits, record activity.Record, egressPage egressaudit.Page, content *exchangecontent.Projection, contentView ExchangeContentView) (ExchangeDetail, error) {
 	requestView, viewErr := exchangeContentRequestView(contentView)
 	if !isExchangeActivity(record.Kind) || record.Validate() != nil ||
 		egressPage.NextCursor != "" ||
@@ -460,7 +464,11 @@ func exchangeDetailOf(
 		}
 	}
 	if content != nil {
-		if content.Validate() != nil || content.View != requestView ||
+		validate := content.Validate
+		if limits != nil {
+			validate = func() error { return content.ValidateWithin(ctx, *limits) }
+		}
+		if validate() != nil || content.View != requestView ||
 			!contentReferencesMatch(record, content.ExchangeID, content.Parent, content.Frozen) ||
 			!validRequestPresentation(content.Presentation, content.TotalMessageCount) {
 			return ExchangeDetail{}, errors.New("Exchange content does not match frozen Activity evidence")
@@ -475,6 +483,11 @@ func exchangeDetailOf(
 		// frozen transcript.
 		if content.Page == nil && (content.View == exchangecontent.RequestViewFull ||
 			content.Presentation.InheritedMessageCount == 0) {
+			if limits != nil {
+				if err := reserveDetailGraph(ctx, *limits, *content); err != nil {
+					return ExchangeDetail{}, err
+				}
+			}
 			agentConversation = agentConversationProjection(*content)
 		}
 		detail.Content = ExchangeContentDetail{
@@ -752,6 +765,9 @@ func (handler *Handler) getExchange(writer http.ResponseWriter, request *http.Re
 	}
 	if cursor := request.URL.Query().Get("contentCursor"); cursor != "" {
 		page, pageErr := handler.contents.GetContentPage(request.Context(), exchangeID, cursor)
+		if pageErr == nil && handler.contentLimits != nil {
+			pageErr = page.ValidateWithin(request.Context(), *handler.contentLimits)
+		}
 		switch {
 		case errors.Is(pageErr, exchangecontent.ErrNotFound):
 			writeProblem(writer, http.StatusNotFound, ReasonExchangeNotFound)
@@ -788,7 +804,7 @@ func (handler *Handler) getExchange(writer http.ResponseWriter, request *http.Re
 		writeProblem(writer, http.StatusServiceUnavailable, ReasonRuntimeUnavailable)
 		return
 	}
-	detail, err := exchangeDetailOf(record, egressPage, content, contentView)
+	detail, err := exchangeDetailWithin(request.Context(), handler.contentLimits, record, egressPage, content, contentView)
 	if err != nil {
 		writeProblem(writer, http.StatusServiceUnavailable, ReasonRuntimeUnavailable)
 		return
@@ -810,6 +826,20 @@ func (handler *Handler) getExchange(writer http.ResponseWriter, request *http.Re
 			writeProblem(writer, http.StatusServiceUnavailable, ReasonRuntimeUnavailable)
 			return
 		}
+	}
+	if handler.contentLimits != nil {
+		plan, err := prepareExchangeDetailJSON(request.Context(), *handler.contentLimits, detail)
+		if err != nil {
+			writeProblem(writer, http.StatusServiceUnavailable, ReasonRuntimeUnavailable)
+			return
+		}
+		writer.Header().Set("Content-Type", "application/json")
+		writer.Header().Set("Cache-Control", "no-store")
+		writer.WriteHeader(http.StatusOK)
+		if err := plan.WriteTo(writer); err != nil {
+			panic(http.ErrAbortHandler)
+		}
+		return
 	}
 	writeJSON(writer, http.StatusOK, detail)
 }

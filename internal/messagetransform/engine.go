@@ -19,6 +19,7 @@ import (
 	"time"
 	"unicode"
 	"unicode/utf8"
+	"unsafe"
 
 	"github.com/dop251/goja"
 	"github.com/vibe-agi/vibermate/internal/clientannotation"
@@ -120,6 +121,55 @@ func Compile(policy Policy, limits Limits) (Program, error) {
 // request representation it produced.
 type Pipeline struct {
 	programs []Program
+}
+
+// RetainedRequestBytes covers every concrete Turn retained across the request
+// and response chain. It does not count compiled programs or VM-internal heap.
+// An execution policy uses this before newTurn creates the per-stage owners.
+func (pipeline Pipeline) RetainedRequestBytes() (uint64, error) {
+	var total uint64
+	for _, program := range pipeline.programs {
+		l := program.limits
+		// Every saved header has bounded payload, field map cells and up to
+		// MaximumHeaderFields values per field (including empty strings).
+		values, err := checkedTransformBytes([2]uint64{uint64(l.MaximumHeaderFields), uint64(unsafe.Sizeof(""))}, [2]uint64{1, uint64(unsafe.Sizeof("")) + uint64(unsafe.Sizeof([]string{}))})
+		if err != nil {
+			return 0, err
+		}
+		header, err := checkedTransformBytes([2]uint64{uint64(l.MaximumHeaderBytes), 1}, [2]uint64{uint64(l.MaximumHeaderFields), values})
+		if err != nil {
+			return 0, err
+		}
+		// RuntimeMetadata.encode's eight limits + timestamp, JSON escaping and
+		// fixed closed field names. Each program owns its marshaled metadata.
+		metadata := uint64(6*(128+4096+64+256+64+128+4096+256+64) + 1024)
+		n, err := checkedTransformBytes([2]uint64{1, uint64(unsafe.Sizeof(Turn{})) + uint64(unsafe.Sizeof((*Turn)(nil))) + metadata}, [2]uint64{uint64(l.MaximumContextBytes), 1})
+		if err != nil {
+			return 0, err
+		}
+		if program.HasRequest() {
+			n, err = checkedTransformBytes([2]uint64{n, 1}, [2]uint64{uint64(l.MaximumBodyBytes), 2}, [2]uint64{header, 2})
+			if err != nil {
+				return 0, err
+			}
+		}
+		total, err = checkedTransformBytes([2]uint64{total, 1}, [2]uint64{n, 1})
+		if err != nil {
+			return 0, err
+		}
+	}
+	return total, nil
+}
+
+func checkedTransformBytes(terms ...[2]uint64) (uint64, error) {
+	var total uint64
+	for _, t := range terms {
+		if t[1] != 0 && t[0] > (math.MaxInt64-total)/t[1] {
+			return 0, errors.New("transform retention overflows")
+		}
+		total += t[0] * t[1]
+	}
+	return total, nil
 }
 
 func CompilePipeline(policies []Policy, limits Limits) (Pipeline, error) {
@@ -625,6 +675,11 @@ func executeAndExportStage(
 	limits Limits,
 	stage string,
 ) (output scriptMessage, contextOutput []byte, err error) {
+	// Capture the trusted intrinsic before operator code can replace globals.
+	keys, ok := goja.AssertFunction(runtime.Get("Object").ToObject(runtime).Get("keys"))
+	if !ok {
+		return scriptMessage{}, nil, errors.New("object enumeration unavailable")
+	}
 	defer func() {
 		recovered := recover()
 		if recovered == nil {
@@ -651,7 +706,7 @@ func executeAndExportStage(
 	); callErr != nil {
 		return scriptMessage{}, nil, classifyRuntimeError(stage, callErr)
 	}
-	output, err = exportMessage(runtime, messageValue, input, limits)
+	output, err = exportMessage(runtime, messageValue, input, limits, keys)
 	if err != nil {
 		return scriptMessage{}, nil, fmt.Errorf("%w: %s: %v", ErrInvalidOutput, stage, err)
 	}
@@ -662,7 +717,7 @@ func executeAndExportStage(
 			return scriptMessage{}, nil, fmt.Errorf("%w: request transform cannot change model", ErrInvalidOutput)
 		}
 	}
-	contextOutput, err = exportContext(runtime, contextValue, limits)
+	contextOutput, err = exportContext(runtime, contextValue, limits, keys)
 	if err != nil {
 		return scriptMessage{}, nil, fmt.Errorf("%w: %s Context: %v", ErrInvalidOutput, stage, err)
 	}
@@ -726,12 +781,23 @@ func installRuntimeCapabilities(
 	if annotations != nil {
 		if err := annotationObject.Set(
 			"create",
-			func(kind, text string) (string, error) {
+			func(call goja.FunctionCall) goja.Value {
+				// Bound native-bridge conversions too. The annotation signer's
+				// existing kind/text limits are stricter than this body ceiling;
+				// coercion remains inside the active script execution deadline.
+				kind, err := scriptStringWithin(call.Argument(0).ToString(), DefaultLimits().MaximumBodyBytes)
+				if err != nil {
+					panic(runtime.NewGoError(errors.New("client annotation is invalid")))
+				}
+				text, err := scriptStringWithin(call.Argument(1).ToString(), DefaultLimits().MaximumBodyBytes)
+				if err != nil {
+					panic(runtime.NewGoError(errors.New("client annotation is invalid")))
+				}
 				annotation, err := annotations.Issue(kind, text)
 				if err != nil {
-					return "", errors.New("client annotation is invalid")
+					panic(runtime.NewGoError(errors.New("client annotation is invalid")))
 				}
-				return annotation, nil
+				return runtime.ToValue(annotation)
 			},
 		); err != nil {
 			return err
@@ -778,14 +844,15 @@ func exportMessage(
 	value goja.Value,
 	input scriptMessage,
 	limits Limits,
+	keyFunctions ...goja.Callable,
 ) (scriptMessage, error) {
 	object := value.ToObject(runtime)
 	bodyValue := object.Get("body")
 	if bodyValue == nil || bodyValue.ExportType() != reflect.TypeFor[string]() {
 		return scriptMessage{}, errors.New("Body must remain a string")
 	}
-	bodyText := bodyValue.String()
-	if len(bodyText) > limits.MaximumBodyBytes || !validScriptString(bodyValue, bodyText) {
+	bodyText, err := scriptStringWithin(bodyValue, limits.MaximumBodyBytes)
+	if err != nil {
 		return scriptMessage{}, errors.New("Body is not bounded UTF-8")
 	}
 	body := []byte(bodyText)
@@ -793,7 +860,7 @@ func exportMessage(
 	if headersValue == nil || goja.IsNull(headersValue) || goja.IsUndefined(headersValue) {
 		return scriptMessage{}, errors.New("Headers must remain an object")
 	}
-	headers, err := exportHeaders(runtime, headersValue, limits)
+	headers, err := exportHeaders(runtime, headersValue, limits, keyFunctions...)
 	if err != nil {
 		return scriptMessage{}, err
 	}
@@ -860,13 +927,18 @@ func normalizeInputHeaders(input http.Header, limits Limits) (map[string][]strin
 	return result, nil
 }
 
-func exportHeaders(runtime *goja.Runtime, value goja.Value, limits Limits) (http.Header, error) {
+func exportHeaders(runtime *goja.Runtime, value goja.Value, limits Limits, keyFunctions ...goja.Callable) (http.Header, error) {
 	object := value.ToObject(runtime)
 	if object.ClassName() != "Object" {
 		return nil, errors.New("Headers must be a plain object")
 	}
 	valuesByName := make(map[string][]string)
-	for _, name := range object.Keys() {
+	remaining := limits.MaximumHeaderBytes
+	keys, err := scriptKeysWithin(runtime, object, limits.MaximumHeaderFields, &remaining, keyFunctions...)
+	if err != nil {
+		return nil, err
+	}
+	for _, name := range keys {
 		lower := strings.ToLower(name)
 		if !validHeaderName(lower) {
 			return nil, fmt.Errorf("Header name %q is invalid", name)
@@ -878,7 +950,12 @@ func exportHeaders(runtime *goja.Runtime, value goja.Value, limits Limits) (http
 		var values []string
 		switch {
 		case value.ExportType() == reflect.TypeFor[string]():
-			values = []string{value.String()}
+			text, err := scriptStringWithin(value, min(limits.MaximumHeaderValueBytes, remaining))
+			if err != nil {
+				return nil, err
+			}
+			remaining -= len(text)
+			values = []string{text}
 		case value.ToObject(runtime).ClassName() == "Array":
 			array := value.ToObject(runtime)
 			length := int(array.Get("length").ToInteger())
@@ -891,7 +968,12 @@ func exportHeaders(runtime *goja.Runtime, value goja.Value, limits Limits) (http
 				if entry == nil || entry.ExportType() != reflect.TypeFor[string]() {
 					return nil, fmt.Errorf("Header %q values must be strings", name)
 				}
-				values[index] = entry.String()
+				text, err := scriptStringWithin(entry, min(limits.MaximumHeaderValueBytes, remaining))
+				if err != nil {
+					return nil, err
+				}
+				remaining -= len(text)
+				values[index] = text
 			}
 		default:
 			return nil, fmt.Errorf("Header %q must be a string or string array", name)
@@ -972,12 +1054,13 @@ func stripRepresentationValidators(headers http.Header) {
 	}
 }
 
-func exportContext(runtime *goja.Runtime, value goja.Value, limits Limits) ([]byte, error) {
+func exportContext(runtime *goja.Runtime, value goja.Value, limits Limits, keyFunctions ...goja.Callable) ([]byte, error) {
 	if value == nil || goja.IsNull(value) || goja.IsUndefined(value) || value.ToObject(runtime).ClassName() != "Object" {
 		return nil, errors.New("Context must remain a plain object")
 	}
 	count := 0
-	exported, err := exportJSONValue(runtime, value, 0, &count, make(map[*goja.Object]bool), limits)
+	remaining := limits.MaximumContextBytes
+	exported, err := exportJSONValue(runtime, value, 0, &count, make(map[*goja.Object]bool), limits, &remaining, keyFunctions...)
 	if err != nil {
 		return nil, err
 	}
@@ -995,6 +1078,8 @@ func exportJSONValue(
 	count *int,
 	ancestors map[*goja.Object]bool,
 	limits Limits,
+	remaining *int,
+	keyFunctions ...goja.Callable,
 ) (any, error) {
 	*count++
 	if *count > limits.MaximumContextValues || depth > limits.MaximumContextDepth {
@@ -1009,24 +1094,35 @@ func exportJSONValue(
 	if _, callable := goja.AssertFunction(value); callable {
 		return nil, errors.New("Context contains a function")
 	}
-	exported := value.Export()
-	switch candidate := exported.(type) {
-	case string:
-		if !validScriptString(value, candidate) {
-			return nil, errors.New("Context contains invalid UTF-8")
+	if _, object := value.(*goja.Object); !object {
+		if _, text := value.(goja.String); text {
+			candidate, err := scriptStringWithin(value, *remaining)
+			if err != nil {
+				return nil, err
+			}
+			*remaining -= len(candidate)
+			return candidate, nil
 		}
-		return candidate, nil
-	case bool:
-		return candidate, nil
-	case int64:
-		return candidate, nil
-	case float64:
-		if math.IsNaN(candidate) || math.IsInf(candidate, 0) {
-			return nil, errors.New("Context contains a non-finite number")
+		exported := value.Export() // primitives only: never recursively export a graph
+		switch candidate := exported.(type) {
+		case string:
+			if !validScriptString(value, candidate) {
+				return nil, errors.New("Context contains invalid UTF-8")
+			}
+			return candidate, nil
+		case bool:
+			return candidate, nil
+		case int64:
+			return candidate, nil
+		case float64:
+			if math.IsNaN(candidate) || math.IsInf(candidate, 0) {
+				return nil, errors.New("Context contains a non-finite number")
+			}
+			return candidate, nil
+		case nil:
+			return nil, nil
 		}
-		return candidate, nil
-	case nil:
-		return nil, nil
+		return nil, errors.New("Context contains unsupported primitive")
 	}
 	object := value.ToObject(runtime)
 	if ancestors[object] {
@@ -1037,12 +1133,12 @@ func exportJSONValue(
 	switch object.ClassName() {
 	case "Array":
 		length := int(object.Get("length").ToInteger())
-		if length < 0 || length > limits.MaximumContextValues {
+		if length < 0 || length > limits.MaximumContextValues-*count {
 			return nil, errors.New("Context array exceeds its limit")
 		}
 		result := make([]any, length)
 		for index := 0; index < length; index++ {
-			entry, err := exportJSONValue(runtime, object.Get(fmt.Sprintf("%d", index)), depth+1, count, ancestors, limits)
+			entry, err := exportJSONValue(runtime, object.Get(fmt.Sprintf("%d", index)), depth+1, count, ancestors, limits, remaining, keyFunctions...)
 			if err != nil {
 				return nil, err
 			}
@@ -1050,12 +1146,16 @@ func exportJSONValue(
 		}
 		return result, nil
 	case "Object":
-		result := make(map[string]any)
-		for _, key := range object.Keys() {
+		keys, err := scriptKeysWithin(runtime, object, limits.MaximumContextValues-*count, remaining, keyFunctions...)
+		if err != nil {
+			return nil, err
+		}
+		result := make(map[string]any, len(keys))
+		for _, key := range keys {
 			if !utf8.ValidString(key) || hasForbiddenContextKeyControl(key) {
 				return nil, errors.New("Context contains an invalid key")
 			}
-			entry, err := exportJSONValue(runtime, object.Get(key), depth+1, count, ancestors, limits)
+			entry, err := exportJSONValue(runtime, object.Get(key), depth+1, count, ancestors, limits, remaining, keyFunctions...)
 			if err != nil {
 				return nil, err
 			}

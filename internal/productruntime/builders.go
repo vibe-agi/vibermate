@@ -47,7 +47,8 @@ import (
 )
 
 type storageBuildRequest struct {
-	databasePath string
+	contentLimits *exchangecontent.SourceLimits
+	databasePath  string
 }
 
 type storageBuildResult struct {
@@ -60,6 +61,7 @@ func buildStorage(
 	request storageBuildRequest,
 ) (storageBuildResult, error) {
 	store, err := runtimepersistence.Open(ctx, runtimepersistence.Options{
+		ContentLimits:          request.contentLimits,
 		DatabasePath:           request.databasePath,
 		BusyTimeout:            runtimepersistence.DefaultBusyTimeout,
 		CommitReconcileTimeout: runtimepersistence.DefaultCommitReconcileTimeout,
@@ -321,9 +323,10 @@ func buildActivity(
 }
 
 type exchangeContentBuildRequest struct {
-	ctx        context.Context
-	repository exchangecontent.Repository
-	clock      exchangecontent.Clock
+	contentLimits *exchangecontent.SourceLimits
+	ctx           context.Context
+	repository    exchangecontent.Repository
+	clock         exchangecontent.Clock
 }
 
 type exchangeContentRuntime interface {
@@ -334,8 +337,9 @@ func buildExchangeContent(
 	request exchangeContentBuildRequest,
 ) (exchangeContentRuntime, error) {
 	return exchangecontent.New(request.ctx, exchangecontent.Options{
-		Repository: request.repository,
-		Clock:      request.clock,
+		ContentLimits: request.contentLimits,
+		Repository:    request.repository,
+		Clock:         request.clock,
 	})
 }
 
@@ -536,6 +540,7 @@ func buildRawEvidence(
 }
 
 type exchangeBuildRequest struct {
+	bodyAdmission            *exchange.BodyAdmission
 	ownerContext             context.Context
 	actions                  offlinehold.ActionAdmission
 	accounts                 exchange.AccountLeaseAuthority
@@ -569,6 +574,7 @@ type activityAttemptObserver struct {
 }
 
 type exchangeContentObserver struct {
+	limits        *exchangecontent.SourceLimits
 	recorder      exchangecontent.Recorder
 	clock         Clock
 	reportFailure func(string, error)
@@ -585,6 +591,21 @@ func (observer exchangeContentObserver) ObserveContent(
 	}()
 	if observer.recorder == nil || observer.clock == nil {
 		return errors.New("Exchange content recorder is nil")
+	}
+	frozen := exchangecontent.FrozenRef{
+		EnvironmentID: observation.EnvironmentID.String(), EnvironmentRevision: uint64(observation.EnvironmentRevision), EnvironmentDigest: observation.EnvironmentDigest,
+		ClientEndpointID: observation.EndpointID.String(), ClientEndpointRevision: uint64(observation.EndpointRevision), ProtocolPlanID: observation.ProtocolPlanID.String(), ProtocolPlanRevision: uint64(observation.ProtocolPlanRevision), RouteID: observation.RouteID.String(), RouteRevision: uint64(observation.RouteRevision),
+	}
+	if observer.limits != nil {
+		source, err := exchangecontent.NewSourceWithin(*observer.limits, observation.ExchangeID, frozen, observation.Recording, observer.clock.Now(), observation.Request, observation.Response, exchangecontent.WithParentRef(exchangecontent.ParentRef{CaptureRunID: observation.CaptureRunID, ManualCaptureID: observation.ManualCaptureID}))
+		if err != nil {
+			return err
+		}
+		sink, ok := observer.recorder.(exchangecontent.SourceRecorder)
+		if !ok {
+			return errors.New("candidate content recorder lacks synchronous Source support")
+		}
+		return sink.RecordSource(ctx, source)
 	}
 	record, err := exchangecontent.NewRecord(
 		observation.ExchangeID,
@@ -915,26 +936,33 @@ func buildExchange(
 		request.contents == nil || request.clock == nil || request.annotations == nil {
 		return nil, errors.New("Exchange evidence dependencies are incomplete")
 	}
+	anthropicOptions, responsesOptions, passthroughOptions := anthropicchat.DefaultOptions(), responseschat.DefaultOptions(), openairesponses.DefaultOptions()
+	var contentLimits *exchangecontent.SourceLimits
+	if request.bodyAdmission != nil {
+		policy := request.bodyAdmission.Policy()
+		contentLimits = &policy.Content
+		anthropicOptions.Resources, responsesOptions.Resources, passthroughOptions.Resources = &policy.Content.Semantic, &policy.Content.Semantic, &policy.Content.Semantic
+	}
 	anthropicPath, err := anthropicchat.NewProtocolPath(
-		anthropicchat.DefaultOptions(),
+		anthropicOptions,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("build Anthropic Chat protocol path: %w", err)
 	}
 	responsesPath, err := responseschat.NewProtocolPath(
-		responseschat.DefaultOptions(),
+		responsesOptions,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("build Responses Chat protocol path: %w", err)
 	}
 	messagesPath, err := anthropicchat.NewMessagesProtocolPath(
-		anthropicchat.DefaultOptions(),
+		anthropicOptions,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("build Anthropic Messages protocol path: %w", err)
 	}
 	responsesPassthroughPath, err := responseschat.NewResponsesPassthroughProtocolPath(
-		openairesponses.DefaultOptions(),
+		passthroughOptions,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("build Responses passthrough protocol path: %w", err)
@@ -949,6 +977,7 @@ func buildExchange(
 		return nil, fmt.Errorf("build protocol path selector: %w", err)
 	}
 	return exchange.New(exchange.Options{
+		BodyAdmission: request.bodyAdmission,
 		OwnerContext:  request.ownerContext,
 		Actions:       request.actions,
 		Accounts:      request.accounts,
@@ -962,6 +991,7 @@ func buildExchange(
 			reportFailure: request.reportObservationFailure,
 		},
 		ContentObserver: exchangeContentObserver{
+			limits:        contentLimits,
 			recorder:      request.contents,
 			clock:         request.clock,
 			reportFailure: request.reportObservationFailure,
@@ -1076,20 +1106,21 @@ func buildLocalCA(
 }
 
 type proxyBuildRequest struct {
-	ownerContext context.Context
-	admissions   captureadmission.Authorizer
-	assignments  loopbackproxy.CaptureAssignmentAuthority
-	exchanges    exchange.Executor
-	original     loopbackproxy.OriginalClient
-	accountReads loopbackproxy.CapturedAccountReader
-	certificates loopbackproxy.CertificateAuthority
-	connections  connectionevent.Runtime
-	policy       connectionpolicy.Source
-	approvals    loopbackproxy.NetworkApprovals
-	blindTunnels loopbackproxy.BlindTunnelDialer
-	egressAudit  egressaudit.Writer
-	rawEvidence  rawevidence.RequestRecorder
-	random       io.Reader
+	bodyAdmission *exchange.BodyAdmission
+	ownerContext  context.Context
+	admissions    captureadmission.Authorizer
+	assignments   loopbackproxy.CaptureAssignmentAuthority
+	exchanges     exchange.Executor
+	original      loopbackproxy.OriginalClient
+	accountReads  loopbackproxy.CapturedAccountReader
+	certificates  loopbackproxy.CertificateAuthority
+	connections   connectionevent.Runtime
+	policy        connectionpolicy.Source
+	approvals     loopbackproxy.NetworkApprovals
+	blindTunnels  loopbackproxy.BlindTunnelDialer
+	egressAudit   egressaudit.Writer
+	rawEvidence   rawevidence.RequestRecorder
+	random        io.Reader
 }
 
 type proxyRuntime interface {
@@ -1103,19 +1134,20 @@ func buildProxy(
 	request proxyBuildRequest,
 ) (proxyRuntime, error) {
 	return loopbackproxy.New(loopbackproxy.Options{
-		OwnerContext: request.ownerContext,
-		Admissions:   request.admissions,
-		Assignments:  request.assignments,
-		Exchanges:    request.exchanges,
-		Original:     request.original,
-		AccountReads: request.accountReads,
-		Certificates: request.certificates,
-		Connections:  request.connections,
-		Policy:       request.policy,
-		Approvals:    request.approvals,
-		BlindTunnels: request.blindTunnels,
-		EgressAudit:  request.egressAudit,
-		RawEvidence:  request.rawEvidence,
+		BodyAdmission: request.bodyAdmission,
+		OwnerContext:  request.ownerContext,
+		Admissions:    request.admissions,
+		Assignments:   request.assignments,
+		Exchanges:     request.exchanges,
+		Original:      request.original,
+		AccountReads:  request.accountReads,
+		Certificates:  request.certificates,
+		Connections:   request.connections,
+		Policy:        request.policy,
+		Approvals:     request.approvals,
+		BlindTunnels:  request.blindTunnels,
+		EgressAudit:   request.egressAudit,
+		RawEvidence:   request.rawEvidence,
 		ExchangeIDs: loopbackproxy.NewRandomExchangeIDSource(
 			request.random,
 		),
