@@ -279,11 +279,8 @@ func TestSourceEscapedResponseBaseline(t *testing.T) {
 			t.Fatal(err)
 		}
 		_, err = NewRecord("escaped", frozenFixture(), environment.DefaultContentRecordingPolicy(), time.Date(2026, 8, 8, 1, 2, 3, 0, time.UTC), request, &response)
-		if ch == "x" && err != nil {
+		if err != nil {
 			t.Fatal(err)
-		}
-		if ch == "&" && err == nil {
-			t.Fatal("legacy convenience unexpectedly accepted escaped response")
 		}
 		s, err := NewSourceWithin(sourceFixtureLimits(), "escaped", frozenFixture(), environment.DefaultContentRecordingPolicy(), time.Date(2026, 8, 8, 1, 2, 3, 0, time.UTC), request, &response)
 		if err != nil {
@@ -508,8 +505,8 @@ func TestSourceRetainedLongCostAndBounds(t *testing.T) {
 	if _, err := s.Measure(context.Background()); err != nil {
 		t.Fatal("source limits alias caller")
 	}
-	if record.Validate() == nil {
-		t.Fatal("old record cap/count changed")
+	if record.Validate() != nil {
+		t.Fatal("default record refused complete history")
 	}
 	if _, err := CanonicalJSON(record); err == nil {
 		t.Fatal("byte convenience accepted oversized")
@@ -891,12 +888,12 @@ func TestSourceExpandedBlockCountRoundTrip(t *testing.T) {
 	if _, err := SourceFromRecordWithin(tight, record); err == nil {
 		t.Fatal("expanded physical-slot structures bypassed finite policy")
 	}
-	if record.Validate() == nil {
-		t.Fatal("legacy projected block cap changed")
+	if record.Validate() != nil {
+		t.Fatal("default projected expansion refused")
 	}
 	responseOnly := record
 	responseOnly.Request.Messages = []Message{{Role: "assistant", Blocks: []Block{{Kind: "text", Availability: AvailabilityRecorded}}}}
-	if responseOnly.Validate() == nil {
-		t.Fatal("legacy response projected block cap changed")
+	if responseOnly.Validate() != nil {
+		t.Fatal("default response projected expansion refused")
 	}
 }

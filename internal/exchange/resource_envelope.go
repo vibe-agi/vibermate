@@ -1,7 +1,6 @@
 package exchange
 
 import (
-	"encoding/json"
 	"errors"
 	"math"
 	"unsafe"
@@ -22,54 +21,9 @@ func checkedEnvelope(terms ...[2]uint64) (uint64, error) {
 	return total, nil
 }
 
-// RequiredResponseReservation is logical record headroom, NOT live allocation.
-// F(n)<=7n is the four-step sanitizer bound; sanitized arguments cost at most
-// 6*F(3J)+13J<=139J. Text/extensions/metadata have smaller coefficients, so
-// their disjoint, per-occurrence semantic payload sum P is bounded by139P.
-// A response has4096 blocks plus two views per256 top-level extensions. The
-// fixed per-block allowances cover identifiers, agents and canonical syntax.
+// RequiredResponseReservation forwards to the record representation owner.
 func RequiredResponseReservation(l protocolcore.ResourceLimits) (exchangecontent.RecordCost, protocolcore.ResourceCost, error) {
-	if err := l.Validate(); err != nil {
-		return exchangecontent.RecordCost{}, protocolcore.ResourceCost{}, err
-	}
-	const blocks = uint64(protocolcore.MaxContentBlocks + 2*protocolcore.MaxProviderExtensions)
-	p := l.Response.PayloadBytes
-	r, err := checkedEnvelope([2]uint64{p, 139}, [2]uint64{blocks, 4096})
-	if err != nil {
-		return exchangecontent.RecordCost{}, protocolcore.ResourceCost{}, err
-	}
-	c, err := checkedEnvelope([2]uint64{p, 139}, [2]uint64{blocks, 32768}, [2]uint64{protocolcore.MaxProtocolEvidenceValues, 32}, [2]uint64{4096, 1})
-	if err != nil {
-		return exchangecontent.RecordCost{}, protocolcore.ResourceCost{}, err
-	}
-	s, err := checkedEnvelope([2]uint64{1, uint64(unsafe.Sizeof(exchangecontent.Response{}))}, [2]uint64{blocks, uint64(unsafe.Sizeof(exchangecontent.Block{})) + uint64(unsafe.Sizeof(exchangecontent.AgentContext{}))}, [2]uint64{protocolcore.MaxProtocolEvidenceValues, uint64(unsafe.Sizeof(protocolcore.ProtocolEvidenceValue{}))})
-	if err != nil {
-		return exchangecontent.RecordCost{}, protocolcore.ResourceCost{}, err
-	}
-	// Source.reserveBlockScratch / extensionViews: maximum one leaf, never
-	// total historical preparation. JSONObject is bounded independently.
-	j := min(p, uint64(protocolcore.MaxToolJSONBytes))
-	e := min(p, uint64(protocolcore.MaxProviderExtensionBytes))
-	t := min(p, uint64(protocolcore.MaxTextBytes))
-	ordinary, err := checkedEnvelope([2]uint64{t, 29}, [2]uint64{4096, 1})
-	if err != nil {
-		return exchangecontent.RecordCost{}, protocolcore.ResourceCost{}, err
-	}
-	arguments, err := checkedEnvelope([2]uint64{j, 343}, [2]uint64{4096, 1})
-	if err != nil {
-		return exchangecontent.RecordCost{}, protocolcore.ResourceCost{}, err
-	}
-	extension, err := checkedEnvelope([2]uint64{e, 92}, [2]uint64{8192, 1})
-	if err != nil {
-		return exchangecontent.RecordCost{}, protocolcore.ResourceCost{}, err
-	}
-	q := uint64(unsafe.Sizeof(protocolcore.ContentBlock{})) + 2*uint64(unsafe.Sizeof("")) + uint64(unsafe.Sizeof(json.RawMessage{}))
-	argumentCells, err := checkedEnvelope([2]uint64{j, 2 * q}, [2]uint64{4096, 1})
-	if err != nil {
-		return exchangecontent.RecordCost{}, protocolcore.ResourceCost{}, err
-	}
-	scratch := protocolcore.ResourceCost{PayloadBytes: max(ordinary, arguments, extension), StructureBytes: max(argumentCells, 2*uint64(unsafe.Sizeof(exchangecontent.Block{}))+8192)}
-	return exchangecontent.RecordCost{RetainedBytes: r, CanonicalBytes: c, StructureBytes: s, TranscriptNodes: 1, MaxPhysicalSlots: blocks + c/uint64(exchangecontent.MaxEncodedBytes-56)}, scratch, nil
+	return exchangecontent.RequiredResponseReservation(l)
 }
 
 // RequiredExecutionEnvelope bounds application-owned representations. It is

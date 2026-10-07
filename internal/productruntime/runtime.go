@@ -130,6 +130,13 @@ func startWithBuilders(
 	if ctx == nil {
 		return nil, fmt.Errorf("%w: startup context is nil", ErrInvalidOptions)
 	}
+	if options.Resources == nil {
+		policy, err := exchange.DefaultResourcePolicy()
+		if err != nil {
+			return nil, err
+		}
+		options.Resources = &policy
+	}
 	if err := options.validate(); err != nil {
 		return nil, err
 	}

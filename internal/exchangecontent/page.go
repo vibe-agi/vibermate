@@ -96,58 +96,11 @@ type ContentPage struct {
 }
 
 func (page ContentPage) Validate() error {
-	if page.Kind != "block_bytes" && len(page.Data) != 0 {
-		return ErrInvalidEvidence
-	}
-	if page.Kind == "block_bytes" || page.BlockMetadata != nil || page.CanonicalCursor != "" {
-		limits := compatibilitySourceLimits()
-		limits.CanonicalBytes = MaxCanonicalBlockBytes
-		limits.RetainedBytes = MaxCanonicalBlockBytes
-		return page.ValidateWithin(context.Background(), limits)
-	}
-	if len(page.CallID) > 512 || len(page.ToolName) > protocolcore.MaxToolNameBytes || page.Total > MaxEncodedBytes ||
-		(page.Mode != environment.ContentRecordingFull && page.Text != "") {
-		return ErrInvalidEvidence
-	}
-	if !validIdentity(page.ExchangeID, MaxExchangeIDBytes) || page.Parent.Validate() != nil ||
-		page.Frozen.Validate() != nil || (page.Mode != environment.ContentRecordingFull && page.Mode != environment.ContentRecordingMetadataOnly) ||
-		page.Offset < 0 || page.Total < page.Offset || !validPageCursor(page.NextCursor) {
-		return ErrInvalidEvidence
-	}
-	switch page.Kind {
-	case "protocol":
-		if len(page.Messages) != 0 || len(page.Blocks) != 0 || page.Text != "" || len(page.ProtocolEvidence) > PageMessageLimit || page.Offset+len(page.ProtocolEvidence) > page.Total || protocolcore.ValidateProtocolEvidence(page.ProtocolEvidence) != nil {
-			return ErrInvalidEvidence
-		}
-	case "request":
-		if len(page.Messages) > PageMessageLimit || len(page.Blocks) != 0 || page.Text != "" ||
-			page.Offset+len(page.Messages) > page.Total {
-			return ErrInvalidEvidence
-		}
-	case "message":
-		if len(page.Messages) != 0 || len(page.Blocks) > PageMessageLimit || page.Text != "" ||
-			page.Offset+len(page.Blocks) > page.Total {
-			return ErrInvalidEvidence
-		}
-	case "text", "arguments":
-		if len(page.Messages) != 0 || len(page.Blocks) != 0 || !utf8.ValidString(page.Text) ||
-			len(page.Text) > PageBodyBytes || page.Offset+len(page.Text) > page.Total {
-			return ErrInvalidEvidence
-		}
-	default:
-		return ErrInvalidEvidence
-	}
-	if page.Kind != "protocol" && len(page.ProtocolEvidence) != 0 {
-		return ErrInvalidEvidence
-	}
-	if err := validatePageContent(page.Messages, page.Blocks, page.Mode, page.ExchangeID); err != nil {
+	l, err := DefaultSourceLimits()
+	if err != nil {
 		return err
 	}
-	encoded, err := json.Marshal(page)
-	if err != nil || len(encoded) > MaxPageBytes {
-		return ErrInvalidEvidence
-	}
-	return nil
+	return page.ValidateWithin(context.Background(), l)
 }
 
 func validPageCursor(cursor string) bool {

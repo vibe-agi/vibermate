@@ -100,17 +100,12 @@ func (l SourceLimits) Validate() error {
 	}
 	return nil
 }
-func compatibilitySourceLimits() SourceLimits {
-	// These adapters preserve legacy count/encoded bounds. Other currencies
-	// impose checked representation limits only, not a new production capacity.
-	const checkedMaximum = uint64(math.MaxInt64)
-	return SourceLimits{Semantic: protocolcore.ResourceLimits{Request: protocolcore.ResourceCost{PayloadBytes: checkedMaximum, StructureBytes: checkedMaximum}, Response: protocolcore.ResourceCost{PayloadBytes: checkedMaximum, StructureBytes: checkedMaximum}}, Scratch: protocolcore.ResourceCost{PayloadBytes: checkedMaximum, StructureBytes: checkedMaximum}, CanonicalBytes: MaxEncodedBytes, RetainedBytes: checkedMaximum, StructureBytes: checkedMaximum}
-}
 func NewSource(id string, f FrozenRef, p environment.ContentRecordingPolicy, t time.Time, r protocolcore.Request, v *protocolcore.Response, o ...RecordOption) (*Source, error) {
-	if err := r.Validate(); err != nil {
-		return nil, fmt.Errorf("%w: request: %w", ErrInvalidEvidence, err)
+	l, err := DefaultSourceLimits()
+	if err != nil {
+		return nil, err
 	}
-	return NewSourceWithin(compatibilitySourceLimits(), id, f, p, t, r, v, o...)
+	return NewSourceWithin(l, id, f, p, t, r, v, o...)
 }
 func NewSourceWithin(l SourceLimits, id string, f FrozenRef, p environment.ContentRecordingPolicy, t time.Time, r protocolcore.Request, v *protocolcore.Response, o ...RecordOption) (*Source, error) {
 	if err := l.Validate(); err != nil {
@@ -157,10 +152,11 @@ func NewSourceWithin(l SourceLimits, id string, f FrozenRef, p environment.Conte
 	return s, nil
 }
 func SourceFromRecord(r Record) (*Source, error) {
-	if err := r.Validate(); err != nil {
+	l, err := DefaultSourceLimits()
+	if err != nil {
 		return nil, err
 	}
-	return SourceFromRecordWithin(compatibilitySourceLimits(), r)
+	return SourceFromRecordWithin(l, r)
 }
 func SourceFromRecordWithin(l SourceLimits, r Record) (*Source, error) {
 	if err := l.Validate(); err != nil {

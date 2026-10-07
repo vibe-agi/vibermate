@@ -21,7 +21,9 @@ type Options struct {
 }
 
 func DefaultOptions() Options {
+	limits := protocolcore.DefaultResourceLimits()
 	return Options{
+		Resources:        &limits,
 		MaxRequestBytes:  16 << 20,
 		MaxResponseBytes: 16 << 20,
 	}
@@ -34,6 +36,10 @@ type Codec struct {
 func New(options Options) (*Codec, error) {
 	if options.MaxRequestBytes <= 0 || options.MaxResponseBytes <= 0 {
 		return nil, errors.New("Responses codec limits must be positive")
+	}
+	if options.Resources == nil {
+		limits := protocolcore.DefaultResourceLimits()
+		options.Resources = &limits
 	}
 	if options.Resources != nil {
 		if err := options.Resources.Validate(); err != nil {
@@ -63,7 +69,7 @@ func (codec *Codec) ValidateResponse(response protocolcore.Response) error {
 // Preflight is before duplicate-name maps and root unmarshal, not a substitute
 // for the final complete semantic validation before an owned clone.
 // ValidateRequestJSON preflights source bytes/resources and JSON names, not
-// dialect semantics. Nil preserves the existing source-encoder behavior.
+// dialect semantics. Constructors always select a copied finite policy.
 func (codec *Codec) ValidateRequestJSON(body []byte) error {
 	if codec.options.Resources != nil {
 		if len(body) == 0 || len(body) > codec.options.MaxRequestBytes {

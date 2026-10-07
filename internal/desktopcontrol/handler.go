@@ -251,6 +251,13 @@ type ApprovalDecisionInput struct {
 }
 
 func New(options Options) (*Handler, error) {
+	if options.ContentLimits == nil {
+		limits, err := exchangecontent.DefaultSourceLimits()
+		if err != nil {
+			return nil, err
+		}
+		options.ContentLimits = &limits
+	}
 	if options.ContentLimits != nil {
 		copy := *options.ContentLimits
 		if err := copy.Validate(); err != nil {

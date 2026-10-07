@@ -21,7 +21,10 @@ import (
 // Test-only bridge lets the external-package test exercise the real control
 // HTTP application without introducing a productruntime/desktopcontrol cycle.
 func RunContentBudgetConcurrentControlFixture(t *testing.T, control func(*Runtime, exchange.ResourcePolicy) error) {
-	policy := longSessionTestPolicy()
+	policy, err := exchange.DefaultResourcePolicy()
+	if err != nil {
+		t.Fatal(err)
+	}
 	testRuntimeLongSessionFixture(t, false, "", false, &longSessionAcceptanceOptions{count: 4111, policy: policy, controls: func(runtime *Runtime) error { return control(runtime, policy) }})
 }
 
@@ -107,7 +110,10 @@ func testContentBudgetConcurrentExecutions(t *testing.T, _ context.Context, f ac
 	case <-ctx.Done():
 		t.Fatal("real recording calls never overlapped")
 	}
-	t.Logf("controls dispatched with actual Manager/Store sink calls active=%d; post-commit borrow barrier tracked separately", source.active.Load())
+	if active := source.active.Load(); active != 2 {
+		t.Fatalf("controls dispatch outside instrumented sink-call overlap: active=%d", active)
+	}
+	t.Logf("controls dispatched with instrumented Manager/Store sink calls active=%d; post-commit borrow barrier tracked separately", source.active.Load())
 	if err := controls(f.runtime); err != nil {
 		t.Fatal(err)
 	}

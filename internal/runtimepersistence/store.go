@@ -92,6 +92,13 @@ func Open(ctx context.Context, options Options) (*Store, error) {
 			ErrInvalidDatabasePath,
 		)
 	}
+	if options.ContentLimits == nil {
+		limits, err := exchangecontent.DefaultSourceLimits()
+		if err != nil {
+			return nil, err
+		}
+		options.ContentLimits = &limits
+	}
 	var contentLimits *exchangecontent.SourceLimits
 	if options.ContentLimits != nil {
 		copy := *options.ContentLimits

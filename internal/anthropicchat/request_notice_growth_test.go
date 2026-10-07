@@ -159,12 +159,8 @@ func TestAnthropicRequestNoticeRemainingCountGuard(t *testing.T) {
 			})
 			t.Logf("decode compatible=%t n=%d allocated_bytes=%d elapsed=%s error=%v", compatible, n, allocated, elapsed, err)
 			assertAnthropicCacheNotices(t, report, n, "messages", !compatible)
-			if n == 4000 {
-				if err != nil || len(request.Messages) != n || request.Messages[n-1].Blocks[0].Text != "synthetic" {
-					t.Fatalf("4000 messages=%d error=%v", len(request.Messages), err)
-				}
-			} else if protocolcore.ReasonOf(err) != protocolcore.ReasonInvalidClientRequest || !strings.Contains(err.Error(), "message count") {
-				t.Fatalf("4111 decode guard error=%v", err)
+			if err != nil || len(request.Messages) != n || request.Messages[n-1].Blocks[0].Text != "synthetic" {
+				t.Fatalf("default messages=%d error=%v", len(request.Messages), err)
 			}
 		}
 		request := chatNoticeFixture(t, n, false)
@@ -178,14 +174,10 @@ func TestAnthropicRequestNoticeRemainingCountGuard(t *testing.T) {
 			elapsed = time.Since(start)
 		})
 		t.Logf("encode n=%d allocated_bytes=%d elapsed=%s error=%v", n, allocated, elapsed, err)
-		if n == 4000 {
-			if err != nil {
-				t.Fatal(err)
-			}
-			assertChatNoticeOutput(t, encoded, report, n, false)
-		} else if encoded != nil || !report.Empty() || protocolcore.ReasonOf(err) != protocolcore.ReasonInvalidClientRequest || !strings.Contains(err.Error(), "message count") {
-			t.Fatalf("4111 encode guard body=%d notices=%d error=%v", len(encoded), len(report.Notices()), err)
+		if err != nil {
+			t.Fatal(err)
 		}
+		assertChatNoticeOutput(t, encoded, report, n, false)
 	}
 }
 

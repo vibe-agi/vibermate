@@ -21,7 +21,19 @@ type contentBudgetReady struct{}
 func (contentBudgetReady) Ready() bool { return true }
 
 func TestRuntimeContentBudgetTwoExchangesAndRealControls(t *testing.T) {
-	productruntime.RunContentBudgetConcurrentControlFixture(t, func(runtime *productruntime.Runtime, policy exchange.ResourcePolicy) error {
+	productruntime.RunContentBudgetConcurrentControlFixture(t, runtimeDefaultControls(t))
+}
+
+func TestRuntimeDefaultFourHTTPAndWaitingUnreadBody(t *testing.T) {
+	productruntime.RunDefaultFourHTTPControlFixture(t, 4111, runtimeDefaultControls(t))
+}
+
+func TestRuntimeDefaultFourHTTPDrainSmall(t *testing.T) {
+	productruntime.RunDefaultFourHTTPControlFixture(t, 32, runtimeDefaultControls(t))
+}
+
+func runtimeDefaultControls(t *testing.T) func(*productruntime.Runtime, exchange.ResourcePolicy) error {
+	return func(runtime *productruntime.Runtime, policy exchange.ResourcePolicy) error {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		grant, err := runtime.CaptureRuns().Create(ctx, capturerun.CreateCommand{CWD: t.TempDir(), CanonicalExecutablePath: filepath.Join(t.TempDir(), "codex"), ExecutableLabel: "codex", Lifetime: 5 * time.Minute, CatalogRevision: 1})
@@ -57,5 +69,5 @@ func TestRuntimeContentBudgetTwoExchangesAndRealControls(t *testing.T) {
 			return fmt.Errorf("actual status HTTP returned%d", response.StatusCode)
 		}
 		return nil
-	})
+	}
 }

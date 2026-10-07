@@ -19,8 +19,8 @@ func TestResourceCompleteHistory(t *testing.T) {
 	if err := ValidateRequestWithin(request, limits); err != nil {
 		t.Fatalf("complete history refused: %v", err)
 	}
-	if err := request.Validate(); err == nil {
-		t.Fatal("legacy count limit disappeared")
+	if err := request.Validate(); err != nil {
+		t.Fatalf("default complete history refused: %v", err)
 	}
 }
 

@@ -312,8 +312,8 @@ func TestAnthropicResourceAdmissionCompleteHistories(t *testing.T) {
 				t.Fatal("history lost")
 			}
 			if count > 4096 {
-				if _, _, err := legacy.DecodeClientRequest([]byte(body.String())); err == nil {
-					t.Fatal("legacy count guard disappeared")
+				if got, _, err := legacy.DecodeClientRequest([]byte(body.String())); err != nil || len(got.Messages) != count {
+					t.Fatalf("default complete history lost: %v", err)
 				}
 			}
 			if _, _, err := codec.EncodeProviderRequest(request); err != nil {

@@ -86,6 +86,13 @@ func New(ctx context.Context, options Options) (*Manager, error) {
 		clock:      options.Clock,
 		changed:    make(chan struct{}),
 	}
+	if options.ContentLimits == nil {
+		limits, err := DefaultSourceLimits()
+		if err != nil {
+			return nil, err
+		}
+		options.ContentLimits = &limits
+	}
 	if options.ContentLimits != nil {
 		limits := *options.ContentLimits
 		if err := limits.Validate(); err != nil {
@@ -113,7 +120,10 @@ func (manager *Manager) RecordSource(ctx context.Context, source *Source) error 
 }
 
 func (manager *Manager) Record(ctx context.Context, record Record) error {
-	if err := record.Validate(); err != nil {
+	if manager == nil || manager.limits == nil {
+		return ErrInvalidEvidence
+	}
+	if _, err := SourceFromRecordWithin(*manager.limits, record); err != nil {
 		return err
 	}
 	operation, finish, err := manager.begin(ctx)

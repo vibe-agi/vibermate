@@ -13,6 +13,7 @@ import (
 	"net/url"
 	goRuntime "runtime"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -73,20 +74,19 @@ func testRuntimeLongSessionScenario(t *testing.T, original bool, scenario string
 	testRuntimeLongSessionFixture(t, original, scenario, holdFinal, nil, fixtureCount...)
 }
 
-// Acceptance options are test-only. Existing correctness callers keep exactly
-// the reviewed Task5B fixture, policy and ownership order.
+// Acceptance options describe the fixture; ordinary construction reaches the
+// copied production defaults without a test-only resource policy.
 func testRuntimeLongSessionFixture(t *testing.T, original bool, scenario string, holdFinal bool, acceptance *longSessionAcceptanceOptions, fixtureCount ...int) {
 	count := 4111
 	if len(fixtureCount) > 0 {
 		count = fixtureCount[0]
 	}
-	ctx := context.Background()
-	policy := longSessionTestPolicy()
+	ctx, stopFixture := context.WithTimeout(context.Background(), 45*time.Second)
+	defer stopFixture()
 	if acceptance != nil {
-		policy = acceptance.policy
 		count = acceptance.count
 	}
-	f := newAccountReadFixtureWithDriver(t, providerauth.StaticHeaderDriverRef(), policy)
+	f := newAccountReadFixtureWithDriver(t, providerauth.StaticHeaderDriverRef())
 	wantCredential := "Bearer " + f.token
 	if original {
 		f.aggregate.ClientEndpoints[0].ProtocolPlans[0].Destination.Upstream.Routes[0].AccountPolicy = environment.RouteAccountPolicy{Revision: 1, Mode: environment.AccountSelectionOriginal}
@@ -145,7 +145,7 @@ func testRuntimeLongSessionFixture(t *testing.T, original bool, scenario string,
 		wantModel = "mapped-long-model"
 		route.ModelPolicy = environment.ModelPolicy{Revision: 1, Mode: environment.ModelModeMap, Mappings: []environment.ModelMapping{{RequestedModel: "long-model", UpstreamModel: wantModel}}}
 	case "transform_expansion":
-		script = `const p=JSON.parse(request.body);p.extension="x".repeat(8*1024*1024);request.body=JSON.stringify(p);`
+		script = `const p=JSON.parse(request.body);p.extension="x".repeat(16*1024*1024);request.body=JSON.stringify(p);`
 	case "script_cancel":
 		script = `for(;;){}`
 	case "tool_approval":
@@ -235,8 +235,13 @@ func testRuntimeLongSessionFixture(t *testing.T, original bool, scenario string,
 		t.Fatal(err)
 	}
 	var recorder exchangecontent.Recorder = f.runtime.contents
+	var four *fourHTTPContentSource
+	if acceptance != nil && acceptance.httpFour {
+		four = &fourHTTPContentSource{Recorder: recorder, sink: recorder.(exchangecontent.SourceRecorder), entered: make(chan string, 4), release: make(chan struct{})}
+		recorder = four
+	}
 	var concurrent *concurrentContentBudgetSource
-	if acceptance != nil && acceptance.controls != nil {
+	if acceptance != nil && acceptance.controls != nil && !acceptance.httpFour {
 		concurrent = &concurrentContentBudgetSource{Recorder: recorder, sink: f.runtime.contents.(exchangecontent.SourceRecorder), entered: make(chan string, 2), started: make(chan struct{}, 2), start: make(chan struct{}), overlap: make(chan struct{}), release: make(chan struct{})}
 		recorder = concurrent
 		t.Cleanup(func() { concurrent.once.Do(func() { close(concurrent.release) }) })
@@ -263,6 +268,17 @@ func testRuntimeLongSessionFixture(t *testing.T, original bool, scenario string,
 		t.Fatal(err)
 	}
 	defer pipeline.Shutdown(ctx)
+	if four != nil {
+		defer four.once.Do(func() { close(four.release) })
+	}
+	// Release borrowed barriers before Shutdown on every assertion failure.
+	if held != nil {
+		defer held.releaseOnce.Do(func() { close(held.release) })
+	}
+	if concurrent != nil {
+		defer concurrent.once.Do(func() { close(concurrent.release) })
+		defer concurrent.startOnce.Do(func() { close(concurrent.start) })
+	}
 	if acceptance != nil {
 		acceptance.observePipelineBudget(t, pipeline)
 	}
@@ -310,6 +326,11 @@ func testRuntimeLongSessionFixture(t *testing.T, original bool, scenario string,
 	wantBody = body
 	if err != nil {
 		t.Fatal(err)
+	}
+	if four != nil {
+		lease.Release()
+		testDefaultFourHTTPExecutions(t, ctx, f, pipeline, body, four, acceptance.controls, func() int32 { return calls.Load() }, func() int32 { return diagnostics.Load() }, count, sentinel)
+		return
 	}
 	t.Logf("complete request: items=%d wire=%d sentinel=%s", count, len(body), sentinel)
 	if acceptance != nil {
@@ -424,7 +445,11 @@ func testRuntimeLongSessionFixture(t *testing.T, original bool, scenario string,
 		client, cancelClient := context.WithCancel(ctx)
 		defer cancelClient()
 		go func() { r, e := pipeline.Execute(client, request, &longSessionDownstream{}); done <- execution{r, e} }()
-		<-held.entered
+		select {
+		case <-held.entered:
+		case <-ctx.Done():
+			t.Fatal("Source entry watchdog: ", ctx.Err())
+		}
 		if scenario == "content_cancel_drain" {
 			cancelClient()
 			pipeline.BeginShutdown()
@@ -436,8 +461,13 @@ func testRuntimeLongSessionFixture(t *testing.T, original bool, scenario string,
 		canceled, cancel := context.WithCancel(ctx)
 		cancel()
 		pipelineErr, gateErr := pipeline.Drain(canceled), f.runtime.bodyAdmission.Drain(canceled)
-		close(held.release)
-		completed := <-done
+		held.releaseOnce.Do(func() { close(held.release) })
+		var completed execution
+		select {
+		case completed = <-done:
+		case <-ctx.Done():
+			t.Fatal("Source completion watchdog: ", ctx.Err())
+		}
 		result, err = completed.result, completed.err
 		if !errors.Is(pipelineErr, context.Canceled) || !errors.Is(gateErr, context.Canceled) {
 			t.Fatalf("held real Source was refunded: Pipeline=%v gate=%v", pipelineErr, gateErr)
@@ -548,6 +578,7 @@ type heldLongSessionSource struct {
 	sink             exchangecontent.SourceRecorder
 	entered, release chan struct{}
 	observed         context.Context
+	releaseOnce      sync.Once
 }
 
 func (h *heldLongSessionSource) RecordSource(ctx context.Context, s *exchangecontent.Source) error {

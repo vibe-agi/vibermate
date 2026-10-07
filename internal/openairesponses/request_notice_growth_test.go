@@ -131,12 +131,8 @@ func TestResponsesRequestNoticeRemainingCountGuard(t *testing.T) {
 			allocated := measuredBytes(t, func() { start := time.Now(); request, report, err = decode(body); elapsed = time.Since(start) })
 			t.Logf("compatible=%t n=%d allocated_bytes=%d elapsed=%s error=%v", compatible, n, allocated, elapsed, err)
 			assertResponsesNoticePrefix(t, report, n-1, compatible)
-			if n == 4000 {
-				if err != nil || len(request.Messages) != n || request.Messages[n-1].Blocks[0].Text != "tail sentinel" {
-					t.Fatalf("4000 decode messages=%d error=%v", len(request.Messages), err)
-				}
-			} else if protocolcore.ReasonOf(err) != protocolcore.ReasonInvalidClientRequest || !strings.Contains(err.Error(), "message count") {
-				t.Fatalf("4111 guard error=%v", err)
+			if err != nil || len(request.Messages) != n || request.Messages[n-1].Blocks[0].Text != "tail sentinel" {
+				t.Fatalf("default decode messages=%d error=%v", len(request.Messages), err)
 			}
 		}
 	}

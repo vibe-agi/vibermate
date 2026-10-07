@@ -1,6 +1,7 @@
 package protocolcore
 
 import (
+	"encoding/json"
 	"errors"
 	"math"
 	"unsafe"
@@ -32,6 +33,16 @@ func (budget *ResourceBudget) Reserve(delta ResourceCost) error {
 }
 
 type ResourceLimits struct{ Request, Response ResourceCost }
+
+// DefaultResourceLimits returns fresh logical credits, not allocated memory.
+func DefaultResourceLimits() ResourceLimits {
+	const mib = uint64(1 << 20)
+	q := uint64(unsafe.Sizeof(ContentBlock{})) + 2*uint64(unsafe.Sizeof("")) + uint64(unsafe.Sizeof(json.RawMessage{}))
+	return ResourceLimits{
+		Request:  ResourceCost{PayloadBytes: 128 * mib, StructureBytes: 512 * mib},
+		Response: ResourceCost{PayloadBytes: 256 * mib, StructureBytes: 16*mib*q + 128*mib},
+	}
+}
 
 // ReserveNoticePaths checks generated path lengths before concatenating them.
 // It reserves the temporary notice array and its immutable report copy.
@@ -235,7 +246,7 @@ func ValidateRequestWithin(request Request, limits ResourceLimits) error {
 	if err := reserveMeasured(cost, err, limits.Request); err != nil {
 		return err
 	}
-	return request.validate(false)
+	return request.validate()
 }
 
 func ValidateResponseWithin(response Response, limits ResourceLimits) error {

@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/vibe-agi/vibermate/internal/environment"
 )
@@ -304,14 +305,20 @@ func FuzzCanonicalLegacyBytes(f *testing.F) {
 			}
 			return ""
 		}()}}}}
-		if err := r.Validate(); err != nil {
-			t.Fatal(err)
-		}
 		want, oldErr = json.Marshal(r)
 		got.Reset()
 		err = WriteCanonicalJSON(&got, r)
 		if oldErr != nil || err != nil || !bytes.Equal(want, got.Bytes()) {
 			t.Fatalf("record bytes %v %v", oldErr, err)
+		}
+		// Generic canonical writers preserve legacy bytes even for ordinary
+		// strings that finite persistence cannot authenticate on readback.
+		if err := r.Validate(); !utf8.ValidString(text) {
+			if !errors.Is(err, ErrInvalidEvidence) {
+				t.Fatalf("unpersistable ordinary UTF8 accepted: %v", err)
+			}
+		} else if err != nil {
+			t.Fatal(err)
 		}
 		if !bytes.Equal(raw, b.Arguments) {
 			t.Fatal(fmt.Sprintf("caller raw changed %q", raw))

@@ -73,6 +73,8 @@ func DefaultLifecycleOptions() LifecycleOptions {
 
 // Options is the complete typed ProductRuntime construction input.
 type Options struct {
+	// Nil Resources selects fresh finite production defaults. Explicit policies
+	// are validated and copied before constructing any dependent adapter.
 	Resources      *exchange.ResourcePolicy
 	Paths          RuntimePaths
 	Host           hostcontract.Contract

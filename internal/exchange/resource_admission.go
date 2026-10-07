@@ -10,12 +10,38 @@ import (
 	"github.com/vibe-agi/vibermate/internal/exchangecontent"
 )
 
-// ResourcePolicy is an internal candidate policy, copied at construction.
+// ResourcePolicy is an internal finite policy, copied at construction.
 // ResponseBytes is independent of RequestBytes; neither may borrow the other.
-// Nil candidate wiring retains legacy behavior until the activation gate.
 type ResourcePolicy struct {
 	Content                                             exchangecontent.SourceLimits
 	RequestBytes, ResponseBytes, SlotBytes, ActiveBytes uint64
+}
+
+// DefaultResourcePolicy derives four complete ownership slots. Credits model
+// application representations; they are neither allocations nor an RSS bound.
+func DefaultResourcePolicy() (ResourcePolicy, error) {
+	content, err := exchangecontent.DefaultSourceLimits()
+	if err != nil {
+		return ResourcePolicy{}, err
+	}
+	request, response, err := RequiredExecutionEnvelope(content)
+	if err != nil {
+		return ResourcePolicy{}, err
+	}
+	request, err = checkedEnvelope([2]uint64{request, 1}, [2]uint64{64 << 20, 1})
+	if err != nil {
+		return ResourcePolicy{}, err
+	}
+	slot, err := checkedEnvelope([2]uint64{request, 1}, [2]uint64{response, 1})
+	if err != nil {
+		return ResourcePolicy{}, err
+	}
+	active, err := checkedEnvelope([2]uint64{slot, 4})
+	if err != nil {
+		return ResourcePolicy{}, err
+	}
+	policy := ResourcePolicy{Content: content, RequestBytes: request, ResponseBytes: response, SlotBytes: slot, ActiveBytes: active}
+	return policy, policy.Validate()
 }
 
 func (p ResourcePolicy) Validate() error {

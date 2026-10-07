@@ -5,6 +5,7 @@ package exchangecontent
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
@@ -362,6 +363,13 @@ func NewRecord(
 	response *protocolcore.Response,
 	options ...RecordOption,
 ) (Record, error) {
+	limits, err := DefaultSourceLimits()
+	if err != nil {
+		return Record{}, err
+	}
+	if _, err := NewSourceWithin(limits, exchangeID, frozen, policy, recordedAt, request, response, options...); err != nil {
+		return Record{}, err
+	}
 	if policy.Mode == environment.ContentRecordingOff {
 		return Record{}, fmt.Errorf("%w: recording is disabled", ErrInvalidEvidence)
 	}
@@ -400,26 +408,12 @@ func NewRecord(
 }
 
 func (record Record) Validate() error {
-	if !validIdentity(record.ExchangeID, MaxExchangeIDBytes) ||
-		record.Parent.Validate() != nil || record.Frozen.Validate() != nil || record.RecordedAt.IsZero() ||
-		record.ExpiresAt.IsZero() || !record.ExpiresAt.After(record.RecordedAt) ||
-		(record.Mode != environment.ContentRecordingFull &&
-			record.Mode != environment.ContentRecordingMetadataOnly) {
-		return ErrInvalidEvidence
-	}
-	if err := record.Request.validate(record.Mode); err != nil {
+	l, err := DefaultSourceLimits()
+	if err != nil {
 		return err
 	}
-	if record.Response != nil {
-		if err := record.Response.validate(record.Mode); err != nil {
-			return err
-		}
-	}
-	encoded, err := json.Marshal(record)
-	if err != nil || len(encoded) > MaxEncodedBytes {
-		return fmt.Errorf("%w: encoded evidence exceeds its bound", ErrInvalidEvidence)
-	}
-	return nil
+	_, err = SourceFromRecordWithin(l, record)
+	return err
 }
 
 func (record Record) Clone() Record {
@@ -434,28 +428,11 @@ func (record Record) Clone() Record {
 
 // Project derives a read model from an already verified full Record.
 func Project(record Record, view RequestView) (Projection, error) {
-	if err := record.Validate(); err != nil {
+	l, err := DefaultSourceLimits()
+	if err != nil {
 		return Projection{}, err
 	}
-	request := cloneRequest(record.Request)
-	if view == RequestViewIncremental {
-		request.Messages = record.IncrementalRequest()
-	}
-	projection := Projection{
-		ExchangeID: record.ExchangeID, Parent: record.Parent, Frozen: record.Frozen,
-		Mode: record.Mode, RecordedAt: record.RecordedAt, ExpiresAt: record.ExpiresAt,
-		Request: request, Presentation: record.Presentation, View: view,
-		TotalMessageCount: len(record.Request.Messages),
-	}
-	if record.Response != nil {
-		response := cloneResponse(*record.Response)
-		response.Blocks = mergeDuplicateReadableReasoning(response.Blocks)
-		projection.Response = &response
-	}
-	if err := projection.Validate(); err != nil {
-		return Projection{}, err
-	}
-	return projection.Clone(), nil
+	return ProjectWithin(context.Background(), l, record, view)
 }
 
 // mergeDuplicateReadableReasoning is a presentation-only fold. Some relays
@@ -519,86 +496,11 @@ func reasoningKindPriority(kind string) int {
 }
 
 func (projection Projection) Validate() error {
-	if !validIdentity(projection.ExchangeID, MaxExchangeIDBytes) ||
-		projection.Parent.Validate() != nil || projection.Frozen.Validate() != nil ||
-		projection.RecordedAt.IsZero() || projection.ExpiresAt.IsZero() ||
-		!projection.ExpiresAt.After(projection.RecordedAt) ||
-		(projection.Mode != environment.ContentRecordingFull &&
-			projection.Mode != environment.ContentRecordingMetadataOnly) ||
-		projection.TotalMessageCount < 1 ||
-		projection.TotalMessageCount > protocolcore.MaxMessageCount+1 {
-		return ErrInvalidEvidence
-	}
-	request := projection.Request
-	if projection.Page != nil {
-		request.System, request.Messages = nil, nil
-		if err := validatePageContent(projection.Request.Messages, projection.Request.System, projection.Mode, projection.ExchangeID); err != nil {
-			return err
-		}
-	}
-	if err := request.validateProjection(projection.Mode); err != nil {
+	l, err := DefaultSourceLimits()
+	if err != nil {
 		return err
 	}
-	inherited := projection.Presentation.InheritedMessageCount
-	if inherited < 0 || inherited > projection.TotalMessageCount {
-		return ErrInvalidEvidence
-	}
-	switch projection.Presentation.Mode {
-	case RequestPresentationCheckpoint:
-		if inherited != 0 {
-			return ErrInvalidEvidence
-		}
-	case RequestPresentationIncremental:
-		if inherited == 0 || inherited >= projection.TotalMessageCount {
-			return ErrInvalidEvidence
-		}
-	case RequestPresentationSameTranscript:
-		if inherited != projection.TotalMessageCount {
-			return ErrInvalidEvidence
-		}
-	default:
-		return ErrInvalidEvidence
-	}
-	wantMessages := projection.TotalMessageCount
-	switch projection.View {
-	case RequestViewFull:
-	case RequestViewIncremental:
-		wantMessages -= inherited
-	default:
-		return ErrInvalidEvidence
-	}
-	if projection.Page != nil {
-		page := projection.Page
-		if page.RequestOffset < projection.TotalMessageCount-wantMessages ||
-			page.RequestOffset+len(projection.Request.Messages) > projection.TotalMessageCount ||
-			len(projection.Request.Messages) > PageMessageLimit || !validPageCursor(page.RequestNextCursor) ||
-			!validPageCursor(page.RequestEvidenceNextCursor) || !validPageCursor(page.ResponseEvidenceNextCursor) {
-			return ErrInvalidEvidence
-		}
-	} else if len(projection.Request.Messages) != wantMessages {
-		return ErrInvalidEvidence
-	}
-	if projection.Response != nil {
-		response := *projection.Response
-		if projection.Page != nil {
-			if err := validatePageContent(nil, response.Blocks, projection.Mode, projection.ExchangeID); err != nil {
-				return err
-			}
-			response.Blocks = nil
-		}
-		if err := response.validate(projection.Mode); err != nil {
-			return err
-		}
-	}
-	encoded, err := json.Marshal(projection)
-	limit := MaxEncodedBytes
-	if projection.Page != nil {
-		limit = MaxPageBytes
-	}
-	if err != nil || len(encoded) > limit {
-		return fmt.Errorf("%w: encoded projection exceeds its bound", ErrInvalidEvidence)
-	}
-	return nil
+	return projection.ValidateWithin(context.Background(), l)
 }
 
 func (projection Projection) Clone() Projection {
@@ -628,8 +530,18 @@ func (record Record) IncrementalRequest() []Message {
 }
 
 func CanonicalJSON(record Record) ([]byte, error) {
-	if err := record.Validate(); err != nil {
+	source, err := SourceFromRecord(record)
+	if err != nil {
 		return nil, err
+	}
+	cost, err := source.Measure(context.Background())
+	if err != nil {
+		return nil, err
+	}
+	// This byte-returning convenience retains its physical-sized output bound.
+	// Complete larger records persist through streaming Source fragments.
+	if cost.CanonicalBytes > MaxEncodedBytes {
+		return nil, ErrInvalidEvidence
 	}
 	encoded, err := json.Marshal(record)
 	if err != nil || len(encoded) > MaxEncodedBytes {
@@ -723,14 +635,13 @@ func (request Request) validate(mode environment.ContentRecordingMode) error {
 }
 
 func (request Request) validateProjection(mode environment.ContentRecordingMode) error {
-	return request.validateProjectionWithin(mode, true)
+	return request.validateProjectionWithin(mode, false)
 }
 
 func (request Request) validateProjectionWithin(mode environment.ContentRecordingMode, legacyCount bool) error {
 	if request.RequestedModel == "" || request.EffectiveModel == "" ||
 		request.MaxOutputTokens < 0 ||
 		(legacyCount && len(request.System) > protocolcore.MaxContentBlocks) ||
-		(legacyCount && len(request.Messages) > protocolcore.MaxMessageCount+1) ||
 		len(request.Tools) > protocolcore.MaxToolCount {
 		return fmt.Errorf("%w: request projection is incomplete", ErrInvalidEvidence)
 	}

@@ -116,7 +116,9 @@ type Options struct {
 }
 
 func DefaultOptions() Options {
+	limits := protocolcore.DefaultResourceLimits()
 	return Options{
+		Resources:            &limits,
 		MaxRequestBytes:      16 << 20,
 		MaxResponseBytes:     16 << 20,
 		MaxToolArgumentBytes: 4 << 20,
@@ -148,6 +150,10 @@ func New(options Options) (*Codec, error) {
 	}
 	if err := options.ProviderRequest.validate(); err != nil {
 		return nil, err
+	}
+	if options.Resources == nil {
+		limits := protocolcore.DefaultResourceLimits()
+		options.Resources = &limits
 	}
 	if options.Resources != nil {
 		if err := options.Resources.Validate(); err != nil {

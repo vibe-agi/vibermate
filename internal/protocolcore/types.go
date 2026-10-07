@@ -1067,11 +1067,11 @@ func validProtocolEvidenceName(value string) bool {
 }
 
 func (request Request) Validate() error {
-	return request.validate(true)
+	return ValidateRequestWithin(request, DefaultResourceLimits())
 }
 
-// The finite-policy entry point replaces only the legacy history count check.
-func (request Request) validate(legacyCount bool) error {
+// Structural validation is independent of the selected finite policy.
+func (request Request) validate() error {
 	if err := validateIdentifier("requested model", request.RequestedModel, MaxModelBytes); err != nil {
 		return err
 	}
@@ -1092,7 +1092,7 @@ func (request Request) validate(legacyCount bool) error {
 			return fmt.Errorf("system content block %d: %w", index, err)
 		}
 	}
-	if len(request.Messages) == 0 || (legacyCount && len(request.Messages) > MaxMessageCount) {
+	if len(request.Messages) == 0 {
 		return errors.New("message count is invalid")
 	}
 	providerExtensionBytes := 0
@@ -1221,12 +1221,7 @@ func (request Request) Clone() Request {
 }
 
 func (request Request) WithEffectiveModel(model string) (Request, error) {
-	cloned := request.Clone()
-	cloned.EffectiveModel = model
-	if err := cloned.Validate(); err != nil {
-		return Request{}, err
-	}
-	return cloned, nil
+	return WithEffectiveModelWithin(request, model, DefaultResourceLimits())
 }
 
 type UsageValue struct {

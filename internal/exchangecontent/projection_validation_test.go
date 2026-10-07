@@ -209,8 +209,8 @@ func TestWithinLargeLogicalBlockAndPreclone(t *testing.T) {
 	r.Response = nil
 	r.Request.Messages[0].Blocks[0].Text = strings.Repeat("&", 6<<20)
 	r.Request.Messages[0].Blocks[0].OriginalSize = 6 << 20
-	if r.Validate() == nil {
-		t.Fatal("legacy encoded limit changed")
+	if r.Validate() != nil {
+		t.Fatal("default large logical record refused")
 	}
 	p, err := ProjectWithin(context.Background(), sourceFixtureLimits(), r, RequestViewFull)
 	if err != nil || p.Request.Messages[0].Blocks[0].Text != r.Request.Messages[0].Blocks[0].Text {
@@ -552,8 +552,8 @@ func TestWithinRawDomainDepthAndPresentation(t *testing.T) {
 	if err != nil || !bytes.Equal(a, b) || len(r.Response.Blocks) != 2 {
 		t.Fatal("presentation fold changed retained facts")
 	}
-	if withinProjection(withinFixture(t, 4111)).Validate() == nil {
-		t.Fatal("legacy count adapter activated candidate policy")
+	if withinProjection(withinFixture(t, 4111)).Validate() != nil {
+		t.Fatal("default complete projection refused")
 	}
 }
 

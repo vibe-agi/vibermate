@@ -23,7 +23,10 @@ func TestRuntimeLongSessionAcceptanceChild(t *testing.T) {
 	runtime.ReadMemStats(&before)
 	start := time.Now()
 	fixture, count := "task5b-4111-4147107", 4111
-	policy := longSessionTestPolicy()
+	policy, err := exchange.DefaultResourcePolicy()
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer func() {
 		runtime.ReadMemStats(&after)
 		encoded, err := json.Marshal(map[string]any{
@@ -38,14 +41,6 @@ func TestRuntimeLongSessionAcceptanceChild(t *testing.T) {
 	}()
 	if os.Getenv("TASK6_SHAPE") == "dense" {
 		fixture, count = "dense-100000-empty-final-sentinel", 100000
-		// Exploratory finite capacity allows measurement of the required dense
-		// shape. It is neither a candidate nor a response-domain proof.
-		policy.Content.Semantic.Request = protocolcore.ResourceCost{PayloadBytes: 128 << 20, StructureBytes: 512 << 20}
-		policy.Content.StructureBytes = 512 << 20
-		policy.RequestBytes, policy.ResponseBytes, _ = exchange.RequiredExecutionEnvelope(policy.Content)
-		policy.RequestBytes += 64 << 20
-		policy.SlotBytes = policy.RequestBytes + policy.ResponseBytes
-		policy.ActiveBytes = 4 * policy.SlotBytes
 		testRuntimeLongSessionFixture(t, false, "", false, &longSessionAcceptanceOptions{count: count, dense: true, policy: policy})
 	} else {
 		testRuntimeLongSessionScenario(t, false, "", false)
@@ -57,6 +52,7 @@ type longSessionAcceptanceOptions struct {
 	dense    bool
 	policy   exchange.ResourcePolicy
 	controls func(*Runtime) error
+	httpFour bool
 }
 
 // The diagnostic queries actual constructed Pipeline state without exposing
@@ -86,7 +82,6 @@ func (o *longSessionAcceptanceOptions) measureBody(t *testing.T, body []byte) {
 	encodedLexical, _ := json.Marshal(map[string]any{"stage": "lexical_cost", "wire_bytes": len(body), "lexical": lexical})
 	t.Logf("TASK6_STAGE %s", encodedLexical)
 	options := openairesponses.DefaultOptions()
-	options.Resources = &o.policy.Content.Semantic
 	codec, err := openairesponses.New(options)
 	if err != nil {
 		t.Fatal(err)

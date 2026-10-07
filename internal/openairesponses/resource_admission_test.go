@@ -120,8 +120,8 @@ func TestResponsesResourceAdmissionCompleteHistories(t *testing.T) {
 				t.Fatal("complete history lost")
 			}
 			if count > 4096 {
-				if _, _, err := legacy.DecodeClientRequest(body); err == nil || !strings.Contains(err.Error(), "message count") {
-					t.Fatalf("legacy count semantics changed: %v", err)
+				if got, _, err := legacy.DecodeClientRequest(body); err != nil || len(got.Messages) != count {
+					t.Fatalf("default complete history lost: %v", err)
 				}
 			}
 			request.Stream = true
