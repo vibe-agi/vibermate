@@ -147,7 +147,7 @@ func TestAnthropicResourceAdmissionCustomArgumentsLiteralAndFunctionControl(t *t
 	options.Resources = &policy
 	for _, fixture := range []struct{ input, want string }{
 		{"&", `{"input":"\u0026"}`},
-		{"\"\\\n<&>\u2028世界", `{"input":"\"\\\n\u003c\u0026\u003e\u2028世界"}`},
+		{"\"\\\n<&>\u2028\u4e16\u754c", "{\"input\":\"\\\"\\\\\\n\\u003c\\u0026\\u003e\\u2028\u4e16\u754c\"}"},
 		{`\u0026`, `{"input":"\\u0026"}`},
 		{"\x01\b\f\r\t\u2029", `{"input":"\u0001\b\f\r\t\u2029"}`},
 		{"", `{"input":""}`},
@@ -179,7 +179,7 @@ func TestAnthropicResourceAdmissionCustomArgumentsLiteralAndFunctionControl(t *t
 	if err != nil {
 		t.Fatal(err)
 	}
-	arguments, err := protocolcore.NewJSONObject([]byte(`{"s":"&","q":"\"","u":"世界"}`), protocolcore.MaxToolJSONBytes)
+	arguments, err := protocolcore.NewJSONObject([]byte("{\"s\":\"&\",\"q\":\"\\\"\",\"u\":\"\u4e16\u754c\"}"), protocolcore.MaxToolJSONBytes)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -448,7 +448,7 @@ func TestAnthropicResourceAdmissionDenseTextGrowth(t *testing.T) {
 func TestAnthropicResourceAdmissionWireBoundaryMatchesEncoding(t *testing.T) {
 	policy := protocolcore.ResourceLimits{Request: protocolcore.ResourceCost{PayloadBytes: 128 << 20, StructureBytes: 128 << 20}, Response: protocolcore.ResourceCost{PayloadBytes: 128 << 20, StructureBytes: 128 << 20}}
 	for _, fraction := range []float64{0, 0.000001, 0.0000001, 0.1234, 1} {
-		request := protocolcore.Request{RequestedModel: "m", EffectiveModel: "m", Temperature: &fraction, Messages: []protocolcore.Message{{Role: protocolcore.RoleUser, Blocks: []protocolcore.ContentBlock{{Kind: protocolcore.BlockText, Text: "<&>\n世界\u2028"}}}}}
+		request := protocolcore.Request{RequestedModel: "m", EffectiveModel: "m", Temperature: &fraction, Messages: []protocolcore.Message{{Role: protocolcore.RoleUser, Blocks: []protocolcore.ContentBlock{{Kind: protocolcore.BlockText, Text: "<&>\n\u4e16\u754c\u2028"}}}}}
 		legacy, _ := New(DefaultOptions())
 		expected, _, err := legacy.EncodeProviderRequest(request)
 		if err != nil {

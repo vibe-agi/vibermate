@@ -439,7 +439,7 @@ type prettyFixture struct {
 func TestContentPrettyBoundDartFixture(t *testing.T) {
 	cases := []struct{ name, raw string }{
 		{"ordinary", `{"a":1}`}, {"path", `{"path":"src/main.go","limit":10}`},
-		{"unicode", `{"bmp":"é中","supplementary":"😀","escapes":"\ud800\udc00\ud800\udfff\u2028\u2029\u0000\b\f\n\r\t\"\\\/\u003c\u003e\u0026"}`},
+		{"unicode", "{\"bmp\":\"\u00e9\u4e2d\",\"supplementary\":\"\U0001f600\",\"escapes\":\"\\ud800\\udc00\\ud800\\udfff\\u2028\\u2029\\u0000\\b\\f\\n\\r\\t\\\"\\\\\\/\\u003c\\u003e\\u0026\"}"},
 		{"empty", `{"a":[],"b":{},"c":[{},[]]}`}, {"dense", `{"a":[0,1,2,true,false,null,{},[]],"a":[3,4]}`},
 		{"integers", `{"a":[0,-0,1,-1,9007199254740991,-9007199254740991,9007199254740992,9223372036854775807,-9223372036854775808]}`},
 		{"doubles", `{"a":[0.0,-0.0,1.5,1e-7,1e20,1e21,1.2345678901234567e30,1e307,1e-999,0e999]}`},

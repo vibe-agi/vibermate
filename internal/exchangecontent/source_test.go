@@ -771,7 +771,7 @@ func TestSourceEmptyTerminalAndLimits(t *testing.T) {
 }
 
 func FuzzSourceThinkingMatchesLegacy(f *testing.F) {
-	for _, raw := range []string{`{"thinking":"text","signature":"sig"}`, `{"thinking":"<&>\u2028","SIGNATURE":"sig","signature":null}`, `{"thinking":"text","signature":12,"signature":"sig"}`, `{"thinking":"text","nested":{"signature":"wrong"},"signature":"s\u0069g"}`, `null`, `[1,2]`, `{"thinking":12,"signature":"sig"}`, `{"ſignature":"sig"}`, `{"signature":"first","signature":"last"}`, `{"signature":`} {
+	for _, raw := range []string{`{"thinking":"text","signature":"sig"}`, `{"thinking":"<&>\u2028","SIGNATURE":"sig","signature":null}`, `{"thinking":"text","signature":12,"signature":"sig"}`, `{"thinking":"text","nested":{"signature":"wrong"},"signature":"s\u0069g"}`, `null`, `[1,2]`, `{"thinking":12,"signature":"sig"}`, "{\"\u017fignature\":\"sig\"}", `{"signature":"first","signature":"last"}`, `{"signature":`} {
 		f.Add([]byte(raw), true)
 		f.Add([]byte(raw), false)
 	}

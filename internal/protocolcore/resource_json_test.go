@@ -20,12 +20,12 @@ func TestResourceJSONPreflightRejectsDenseNamesWithoutMaps(t *testing.T) {
 
 func TestResourceJSONGrammarAndNames(t *testing.T) {
 	limit := ResourceCost{64 << 20, 64 << 20}
-	for _, document := range []string{`{"a":"\\\"","b":"\uD834\uDD1E","c":"世界"}`, strings.Repeat("[", 9999) + "0" + strings.Repeat("]", 9999)} {
+	for _, document := range []string{"{\"a\":\"\\\\\\\"\",\"b\":\"\\uD834\\uDD1E\",\"c\":\"\u4e16\u754c\"}", strings.Repeat("[", 9999) + "0" + strings.Repeat("]", 9999)} {
 		if err := ValidateJSONWithin([]byte(document), limit); err != nil {
 			t.Fatalf("valid JSON refused: %v", err)
 		}
 	}
-	for _, document := range []string{`{"a":1,"A":2}`, `{"ſ":1,"S":2}`, `{"a":1,"\u0061":2}`, `{"ok":1} false`, `[1,]`, `{"a":"unterminated}`, `[true fals]`} {
+	for _, document := range []string{`{"a":1,"A":2}`, "{\"\u017f\":1,\"S\":2}", `{"a":1,"\u0061":2}`, `{"ok":1} false`, `[1,]`, `{"a":"unterminated}`, `[true fals]`} {
 		if err := ValidateJSONWithin([]byte(document), limit); err == nil {
 			t.Fatalf("invalid JSON accepted: %s", document)
 		}

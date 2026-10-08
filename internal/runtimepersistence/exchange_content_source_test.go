@@ -1453,7 +1453,7 @@ func TestContentSourceDeferredBoundsAndUTF8ArgumentPages(t *testing.T) {
 	if err != nil || last.Offset != 24 || len(last.Blocks) != 2 || last.Blocks[1].Text != "25" {
 		t.Fatalf("logical last window: %v", err)
 	}
-	args := json.RawMessage(`{"value":"` + strings.Repeat("界", 50000) + `","escaped":"\u0061"}`)
+	args := json.RawMessage(`{"value":"` + strings.Repeat("\u754c", 50000) + `","escaped":"\u0061"}`)
 	r := sourceOnlyRecord(t, "argument-pages", exchangecontent.Block{Kind: "tool_call", Availability: exchangecontent.AvailabilityRecorded, CallID: "call", ToolName: "f", Arguments: args})
 	if err := s.exchangeContents.Put(ctx, r); err != nil {
 		t.Fatal(err)
@@ -1493,7 +1493,7 @@ func TestContentSourceDeferredBoundsAndUTF8ArgumentPages(t *testing.T) {
 	if _, err := s.exchangeContents.GetContentPage(ctx, r.ExchangeID, r.RecordedAt, encodeContentCursor(bad)); !errors.Is(err, exchangecontent.ErrInvalidEvidence) {
 		t.Fatalf("foreign root cursor: %v", err)
 	}
-	framedText := strings.Repeat("&", 4<<20) + strings.Repeat("界", 4<<20)
+	framedText := strings.Repeat("&", 4<<20) + strings.Repeat("\u754c", 4<<20)
 	framed := sourceOnlyRecord(t, "utf8-frame-seam", sourceText(framedText))
 	if err := s.exchangeContents.Put(ctx, framed); err != nil {
 		t.Fatal(err)
@@ -1544,7 +1544,7 @@ func TestContentSourceBoundsManifestBytesBeforeScan(t *testing.T) {
 	})
 	// SQLite length(TEXT) counts characters. The damaged manifest has an
 	// apparently permitted character count but three times the byte bound.
-	if _, err := s.database.Exec(`UPDATE runtime_exchange_content_messages SET block_manifest=? WHERE digest=?`, strings.Repeat("界", 1<<19), digest); err != nil {
+	if _, err := s.database.Exec(`UPDATE runtime_exchange_content_messages SET block_manifest=? WHERE digest=?`, strings.Repeat("\u754c", 1<<19), digest); err != nil {
 		t.Fatal(err)
 	}
 	var before, after runtime.MemStats

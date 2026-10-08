@@ -26,7 +26,7 @@ func TestSanitizeTextPrefilterPreservesOrderedRedaction(t *testing.T) {
 		}
 		return value
 	}
-	for _, value := range []string{"", strings.Repeat("x", 980), "/Users/null/code /home/alice/project", `C:\Users\Alice\code`, "Bearer abcdefgh1234", "bEaReR\tabcdefgh1234", "Authorization: private Cookie=abc", "sk-ant-abcdefgh sk-abcdefghijklmnop", "https://alice:secret@example.test", "HTTP://a:b@example.test", "user:info = harmless", "\xff", "Kookie: harmless", "Bearer", "sk", "https://", "/Users", "Users"} {
+	for _, value := range []string{"", strings.Repeat("x", 980), "/Users/null/code /home/alice/project", `C:\Users\Alice\code`, "Bearer abcdefgh1234", "bEaReR\tabcdefgh1234", "Authorization: private Cookie=abc", "sk-ant-abcdefgh sk-abcdefghijklmnop", "https://alice:secret@example.test", "HTTP://a:b@example.test", "user:info = harmless", "\xff", "\u212aookie: harmless", "Bearer", "sk", "https://", "/Users", "Users"} {
 		if got, want := sanitizeText(value), legacy(value); got != want {
 			t.Fatalf("redaction differs: %q => %q, want %q", value, got, want)
 		}

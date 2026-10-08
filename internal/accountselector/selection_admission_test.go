@@ -10,11 +10,11 @@ import (
 
 func TestSelectorPrimitiveAdmissionBoundsConversionAndMembership(t *testing.T) {
 	vm := goja.New()
-	large, err := vm.RunString(`"λ".repeat(1024*1024)`)
+	large, err := vm.RunString("\"\u03bb\".repeat(1024*1024)")
 	if err != nil {
 		t.Fatal(err)
 	}
-	allowed := map[string]struct{}{"account.allowed": {}, "λ🙂": {}}
+	allowed := map[string]struct{}{"account.allowed": {}, "\u03bb\U0001f642": {}}
 	var before, after runtime.MemStats
 	runtime.ReadMemStats(&before)
 	_, err = selectedAccountIDWithin(large, allowed)
@@ -25,7 +25,7 @@ func TestSelectorPrimitiveAdmissionBoundsConversionAndMembership(t *testing.T) {
 	if n := after.TotalAlloc - before.TotalAlloc; n > 1<<20 {
 		t.Fatalf("selected string converted before admission: %d", n)
 	}
-	for _, id := range []string{"account.allowed", "λ🙂"} {
+	for _, id := range []string{"account.allowed", "\u03bb\U0001f642"} {
 		got, err := selectedAccountIDWithin(vm.ToValue(id), allowed)
 		if err != nil || got != id {
 			t.Fatalf("valid identity %q: %q %v", id, got, err)

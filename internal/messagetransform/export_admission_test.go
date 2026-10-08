@@ -12,7 +12,7 @@ import (
 
 func TestBodyExportRejectsBeforeUnicodeConversion(t *testing.T) {
 	vm := goja.New()
-	value, err := vm.RunString(`({body:"λ".repeat(1024*1024),headers:{}})`)
+	value, err := vm.RunString("({body:\"\u03bb\".repeat(1024*1024),headers:{}})")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -48,7 +48,7 @@ func TestScriptExportUnicodeBoundaries(t *testing.T) {
 		source string
 		limit  int
 		valid  bool
-	}{{`"λ"`, 2, true}, {`"λ"`, 1, false}, {`"🙂"`, 4, true}, {`"🙂"`, 3, false}, {`"\ufffd"`, 3, true}, {`"\ud800"`, 3, false}, {`"\udc00"`, 3, false}} {
+	}{{"\"\u03bb\"", 2, true}, {"\"\u03bb\"", 1, false}, {`"🙂"`, 4, true}, {`"🙂"`, 3, false}, {`"\ufffd"`, 3, true}, {`"\ud800"`, 3, false}, {`"\udc00"`, 3, false}} {
 		value, err := vm.RunString(test.source)
 		if err != nil {
 			t.Fatal(err)
