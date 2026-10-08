@@ -46,8 +46,8 @@ func validateBootstrapDiagnosticConfig(config config) error {
 	if policy != "" && policy != daemonHomeIsolated && policy != daemonHomeLogin {
 		return errors.New("unknown diagnostic daemon HOME policy")
 	}
-	if policy == daemonHomeLogin && config.bootstrapDiagnosticPath == "" {
-		return errors.New("login daemon HOME requires a bootstrap diagnostic")
+	if policy != "" && config.bootstrapDiagnosticPath == "" {
+		return errors.New("diagnostic daemon HOME policy requires a bootstrap diagnostic")
 	}
 	if config.bootstrapDiagnosticPath != "" {
 		if !config.deterministicOnly {
@@ -65,7 +65,7 @@ func validateBootstrapDiagnosticConfig(config config) error {
 			}
 		}
 	}
-	if policy == daemonHomeLogin {
+	if policy == "" || policy == daemonHomeLogin {
 		_, err := loginDaemonHome(os.Environ())
 		return err
 	}
@@ -131,9 +131,7 @@ func bootstrapDiagnosticDestination(path string) (string, error) {
 
 func diagnosticDaemonEnvironment(base []string, dataDirectory string, policy daemonHomePolicy) ([]string, error) {
 	switch policy {
-	case "", daemonHomeIsolated:
-		return isolatedDaemonEnvironment(base, dataDirectory)
-	case daemonHomeLogin:
+	case "", daemonHomeLogin:
 		if _, err := loginDaemonHome(base); err != nil {
 			return nil, err
 		}
@@ -144,6 +142,8 @@ func diagnosticDaemonEnvironment(base []string, dataDirectory string, policy dae
 			}
 		}
 		return result, nil
+	case daemonHomeIsolated:
+		return isolatedDaemonEnvironment(base, dataDirectory)
 	default:
 		return nil, errors.New("unknown diagnostic daemon HOME policy")
 	}
@@ -166,7 +166,7 @@ func loginDaemonHome(base []string) (string, error) {
 
 func initialBootstrapDiagnostic(policy daemonHomePolicy) bootstrapDiagnostic {
 	if policy == "" {
-		policy = daemonHomeIsolated
+		policy = daemonHomeLogin
 	}
 	return bootstrapDiagnostic{Schema: bootstrapDiagnosticSchema, Policy: policy, Outcome: "not_started"}
 }

@@ -4,14 +4,18 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/vibe-agi/vibermate/internal/activity"
+	"github.com/vibe-agi/vibermate/internal/captureidentity"
 	"github.com/vibe-agi/vibermate/internal/desktopbootstrap"
 	"github.com/vibe-agi/vibermate/internal/desktopcontrol"
 	"github.com/vibe-agi/vibermate/internal/environment"
@@ -318,7 +322,17 @@ func testControlClient(
 	handler http.HandlerFunc,
 ) *controlClient {
 	t.Helper()
-	server := httptest.NewServer(handler)
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Path == "/api/v1/captures" {
+			if limit, _ := strconv.Atoi(request.URL.Query().Get("limit")); limit > 199 {
+				writer.Header().Set("Content-Type", "application/problem+json")
+				writer.WriteHeader(http.StatusUnprocessableEntity)
+				_, _ = writer.Write([]byte(`{"type":"urn:vibermate:error:invalid-control-request","title":"Unprocessable Entity","status":422,"code":"invalid_control_request"}`))
+				return
+			}
+		}
+		handler(writer, request)
+	}))
 	t.Cleanup(server.Close)
 	client, err := newControlClient(desktopbootstrap.Session{
 		BaseURL:    server.URL,
@@ -330,6 +344,207 @@ func testControlClient(
 	}
 	t.Cleanup(client.client.Close)
 	return client
+}
+
+// A request above the actual Capture API maximum breaks even an empty catalog.
+func TestControlCapturesEmptyCatalogUsesLegalDefault(t *testing.T) {
+	client := testControlClient(t, func(writer http.ResponseWriter, request *http.Request) {
+		if request.Method != http.MethodGet || request.URL.Path != "/api/v1/captures" || request.URL.RawQuery != "" {
+			t.Error("initial Capture request must use the API default")
+		}
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = writer.Write([]byte(`{"items":[]}`))
+	})
+	got, err := client.captures(context.Background())
+	if err != nil || len(got.Items) != 0 || got.NextCursor != "" {
+		t.Fatal("clean empty Capture catalog did not succeed")
+	}
+}
+
+func captureFixtureItem(kind captureidentity.Kind, id string) desktopcontrol.CaptureResponse {
+	when := time.Date(2026, 10, 9, 1, 2, 3, 0, time.UTC)
+	item := desktopcontrol.CaptureResponse{
+		Key: string(kind) + ":" + id, ID: id, Kind: kind,
+		DisplayName: "fixture evidence", State: "running", Observation: "observed",
+		CreatedAt: when, UpdatedAt: when, ActivityAt: when, Transport: "loopback",
+	}
+	if kind == captureidentity.KindManagedRun {
+		item.ManagedRun = &desktopcontrol.ManagedRunResponse{
+			ExecutableLabel: "synthetic", CWD: "/fixture/work", CanonicalExecutablePath: "/fixture/client",
+			HomeDirectory: "/fixture/home", Recognition: "configured", ExpiresAt: when.Add(time.Hour),
+			ProcessID: 123, WorkspaceID: "fixture-workspace", FirstObservedAt: &when,
+		}
+	} else {
+		item.ManualCapture = &desktopcontrol.ManualCaptureResponse{CredentialRevision: 7, ExpiresAt: &when, LastObservedAt: &when}
+	}
+	return item
+}
+
+func writeCaptureFixturePage(t *testing.T, writer http.ResponseWriter, page desktopcontrol.CaptureListResponse) {
+	t.Helper()
+	writer.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(writer).Encode(page); err != nil {
+		t.Error("failed to encode fixture page")
+	}
+}
+
+// Ignoring continuation, deduplicating raw IDs, or losing nested evidence fails.
+func TestControlCapturesCollectsCompleteTypedCatalog(t *testing.T) {
+	want := []desktopcontrol.CaptureResponse{
+		captureFixtureItem(captureidentity.KindManagedRun, "shared"),
+		captureFixtureItem(captureidentity.KindManualCapture, "shared"),
+	}
+	for index := 2; index < 250; index++ {
+		want = append(want, captureFixtureItem(captureidentity.KindManagedRun, fmt.Sprintf("run-%03d", index)))
+	}
+	cursors := []string{"", "opaque+page/2?x=a&b=%#", "page:3", "page:4", "page:5"}
+	wantQueries := []string{"", "cursor=opaque%2Bpage%2F2%3Fx%3Da%26b%3D%25%23", "cursor=page%3A3", "cursor=page%3A4", "cursor=page%3A5"}
+	requests := 0
+	client := testControlClient(t, func(writer http.ResponseWriter, request *http.Request) {
+		index := requests
+		requests++
+		if index >= len(cursors) {
+			t.Error("unexpected extra page request")
+			writer.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		if request.URL.RawQuery != wantQueries[index] || request.URL.Query().Get("cursor") != cursors[index] {
+			t.Error("opaque cursor was not relayed with query escaping")
+		}
+		next := ""
+		if index+1 < len(cursors) {
+			next = cursors[index+1]
+		}
+		writeCaptureFixturePage(t, writer, desktopcontrol.CaptureListResponse{Items: want[index*50 : (index+1)*50], NextCursor: next})
+	})
+	got, err := client.captures(context.Background())
+	if err != nil || !reflect.DeepEqual(got.Items, want) || got.NextCursor != "" || requests != 5 {
+		t.Fatal("Capture snapshot did not preserve the complete ordered typed catalog")
+	}
+}
+
+func TestControlCapturesFailsClosedOnInvalidEvidence(t *testing.T) {
+	valid := captureFixtureItem(captureidentity.KindManagedRun, "sentinel-capture")
+	oversized := make([]desktopcontrol.CaptureResponse, 51)
+	for index := range oversized {
+		oversized[index] = captureFixtureItem(captureidentity.KindManagedRun, fmt.Sprintf("run-%d", index))
+	}
+	for _, test := range []struct {
+		name        string
+		pages       []desktopcontrol.CaptureListResponse
+		laterStatus int
+		raw         string
+	}{
+		{name: "later HTTP failure", pages: []desktopcontrol.CaptureListResponse{{Items: []desktopcontrol.CaptureResponse{valid}, NextCursor: "next"}}, laterStatus: 422},
+		{name: "later JSON failure", pages: []desktopcontrol.CaptureListResponse{{Items: []desktopcontrol.CaptureResponse{valid}, NextCursor: "next"}}, raw: `{"items":`},
+		{name: "duplicate key", pages: []desktopcontrol.CaptureListResponse{{Items: []desktopcontrol.CaptureResponse{valid}, NextCursor: "next"}, {Items: []desktopcontrol.CaptureResponse{valid}}}},
+		{name: "duplicate key within page", pages: []desktopcontrol.CaptureListResponse{{Items: []desktopcontrol.CaptureResponse{valid, valid}}}},
+		{name: "repeated cursor", pages: []desktopcontrol.CaptureListResponse{{Items: []desktopcontrol.CaptureResponse{valid}, NextCursor: "sentinel-cursor"}, {Items: []desktopcontrol.CaptureResponse{captureFixtureItem(captureidentity.KindManagedRun, "second")}, NextCursor: "sentinel-cursor"}}},
+		{name: "cyclic cursor", pages: []desktopcontrol.CaptureListResponse{{Items: []desktopcontrol.CaptureResponse{valid}, NextCursor: "one"}, {Items: []desktopcontrol.CaptureResponse{captureFixtureItem(captureidentity.KindManagedRun, "second")}, NextCursor: "two"}, {Items: []desktopcontrol.CaptureResponse{captureFixtureItem(captureidentity.KindManagedRun, "third")}, NextCursor: "one"}}},
+		{name: "empty nonterminal", pages: []desktopcontrol.CaptureListResponse{{Items: []desktopcontrol.CaptureResponse{}, NextCursor: "next"}}},
+		{name: "oversized cursor", pages: []desktopcontrol.CaptureListResponse{{Items: []desktopcontrol.CaptureResponse{valid}, NextCursor: strings.Repeat("x", 513)}}},
+		{name: "control cursor", pages: []desktopcontrol.CaptureListResponse{{Items: []desktopcontrol.CaptureResponse{valid}, NextCursor: "next\n"}}},
+		{name: "whitespace cursor", pages: []desktopcontrol.CaptureListResponse{{Items: []desktopcontrol.CaptureResponse{valid}, NextCursor: "next page"}}},
+		{name: "missing items", raw: `{}`},
+		{name: "null items", raw: `{"items":null}`},
+		{name: "null cursor", raw: `{"items":[],"nextCursor":null}`},
+		{name: "nonstring cursor", raw: `{"items":[],"nextCursor":123}`},
+		{name: "invalid UTF8 cursor", raw: "{\"items\":[],\"nextCursor\":\"" + string([]byte{0xff}) + "\"}"},
+		{name: "malformed page", raw: `{"items":`},
+		{name: "unknown page field", raw: `{"items":[],"sentinel-capture":true}`},
+		{name: "unknown item field", raw: `{"items":[{"key":"managed_run:sentinel-capture","id":"sentinel-capture","kind":"managed_run","sentinel-capture":true}]}`},
+		{name: "invalid key", pages: []desktopcontrol.CaptureListResponse{{Items: []desktopcontrol.CaptureResponse{{Key: "sentinel-capture", ID: "sentinel-capture", Kind: captureidentity.KindManagedRun}}}}},
+		{name: "wrong ID", pages: []desktopcontrol.CaptureListResponse{{Items: []desktopcontrol.CaptureResponse{{Key: "managed_run:sentinel-capture", ID: "other", Kind: captureidentity.KindManagedRun}}}}},
+		{name: "wrong kind", pages: []desktopcontrol.CaptureListResponse{{Items: []desktopcontrol.CaptureResponse{{Key: "managed_run:sentinel-capture", ID: "sentinel-capture", Kind: captureidentity.KindManualCapture}}}}},
+		{name: "oversized page", pages: []desktopcontrol.CaptureListResponse{{Items: oversized}}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			requests := 0
+			client := testControlClient(t, func(writer http.ResponseWriter, _ *http.Request) {
+				index := requests
+				requests++
+				if index < len(test.pages) {
+					writeCaptureFixturePage(t, writer, test.pages[index])
+					return
+				}
+				if test.laterStatus != 0 {
+					writer.Header().Set("Content-Type", "application/problem+json")
+					writer.WriteHeader(test.laterStatus)
+					_, _ = writer.Write([]byte(`{"type":"urn:vibermate:error:invalid-control-request","title":"Unprocessable Entity","status":422,"code":"invalid_control_request"}`))
+					return
+				}
+				writer.Header().Set("Content-Type", "application/json")
+				_, _ = writer.Write([]byte(test.raw))
+			})
+			got, err := client.captures(context.Background())
+			if err == nil || len(got.Items) != 0 || got.NextCursor != "" {
+				t.Fatal("invalid evidence returned success or a partial snapshot")
+			}
+			if strings.Contains(err.Error(), "sentinel-capture") || strings.Contains(err.Error(), "sentinel-cursor") {
+				t.Fatal("error disclosed Capture evidence")
+			}
+		})
+	}
+}
+
+func TestControlCapturesRelaysCursorAtTransportBound(t *testing.T) {
+	cursor := strings.Repeat("é", 256) // 512 UTF-8 bytes; opaque to the client.
+	requests := 0
+	client := testControlClient(t, func(writer http.ResponseWriter, request *http.Request) {
+		requests++
+		if requests == 1 {
+			writeCaptureFixturePage(t, writer, desktopcontrol.CaptureListResponse{Items: []desktopcontrol.CaptureResponse{captureFixtureItem(captureidentity.KindManagedRun, "first")}, NextCursor: cursor})
+			return
+		}
+		if request.URL.Query().Get("cursor") != cursor {
+			t.Error("maximum transport cursor was not preserved")
+		}
+		writeCaptureFixturePage(t, writer, desktopcontrol.CaptureListResponse{Items: []desktopcontrol.CaptureResponse{}})
+	})
+	got, err := client.captures(context.Background())
+	if err != nil || len(got.Items) != 1 || got.NextCursor != "" || requests != 2 {
+		t.Fatal("legal maximum opaque cursor failed")
+	}
+}
+
+func TestControlCapturesCancellationReturnsNoPartialEvidence(t *testing.T) {
+	for _, later := range []bool{false, true} {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		if !later {
+			cancel()
+		}
+		client := testControlClient(t, func(writer http.ResponseWriter, _ *http.Request) {
+			cancel()
+			writeCaptureFixturePage(t, writer, desktopcontrol.CaptureListResponse{Items: []desktopcontrol.CaptureResponse{captureFixtureItem(captureidentity.KindManagedRun, "first")}, NextCursor: "next"})
+		})
+		got, err := client.captures(ctx)
+		if !errors.Is(err, context.Canceled) || len(got.Items) != 0 || got.NextCursor != "" {
+			t.Fatal("cancellation did not fail without partial evidence")
+		}
+	}
+}
+
+func TestControlCapturesFixturePageBound(t *testing.T) {
+	for _, terminal := range []bool{true, false} {
+		requests := 0
+		client := testControlClient(t, func(writer http.ResponseWriter, _ *http.Request) {
+			requests++
+			next := fmt.Sprintf("page-%d", requests+1)
+			if terminal && requests == 32 {
+				next = ""
+			}
+			writeCaptureFixturePage(t, writer, desktopcontrol.CaptureListResponse{Items: []desktopcontrol.CaptureResponse{captureFixtureItem(captureidentity.KindManagedRun, fmt.Sprintf("run-%d", requests))}, NextCursor: next})
+		})
+		got, err := client.captures(context.Background())
+		if terminal {
+			if err != nil || len(got.Items) != 32 || requests != 32 || got.NextCursor != "" {
+				t.Fatal("terminal page 32 did not succeed")
+			}
+		} else if err == nil || !strings.Contains(err.Error(), "incomplete") || len(got.Items) != 0 || got.NextCursor != "" || requests != 32 {
+			t.Fatal("nonterminal page 32 did not fail with incomplete evidence")
+		}
+	}
 }
 
 func TestAssemblyEnvironmentKeepsClientAndProviderIdentityExact(t *testing.T) {

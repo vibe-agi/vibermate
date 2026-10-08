@@ -34,6 +34,34 @@ func TestDiagnosticDaemonHomeLoginPreservesOnlyLoginPolicy(t *testing.T) {
 	}
 }
 
+// Choosing an isolated HOME for normal acceptance must fail this test.
+func TestDiagnosticDaemonHomeNormalPreservesParent(t *testing.T) {
+	for _, configured := range []config{defaultConfig(), {}} {
+		base := []string{"HOME=/Users/disposable", "PATH=/usr/bin", "CFFIXED_USER_HOME=/private/app", "TOKEN=sentinel"}
+		before := slices.Clone(base)
+		directory := filepath.Join(t.TempDir(), "data")
+		got, err := diagnosticDaemonEnvironment(base, directory, daemonHomePolicy(configured.diagnosticDaemonHome))
+		if err != nil || !slices.Equal(got, []string{"HOME=/Users/disposable", "PATH=/usr/bin", "TOKEN=sentinel"}) {
+			t.Error("normal environment did not preserve parent HOME and remove only CFFIXED")
+		}
+		if !slices.Equal(base, before) {
+			t.Error("normal environment mutated parent")
+		}
+		if _, err := os.Stat(filepath.Join(directory, "acceptance-home")); !os.IsNotExist(err) {
+			t.Error("normal environment created replacement HOME")
+		}
+		if initialBootstrapDiagnostic(daemonHomePolicy(configured.diagnosticDaemonHome)).Policy != daemonHomeLogin {
+			t.Error("normal metadata does not describe login policy")
+		}
+		if len(got) > 0 {
+			got[0] = "HOME=/Users/changed"
+			if !slices.Equal(base, before) {
+				t.Error("normal environment aliases parent storage")
+			}
+		}
+	}
+}
+
 func TestBootstrapDiagnosticRejectsReportDestinationCollision(t *testing.T) {
 	for _, alias := range []string{"identical", "parent symlink", "missing parent symlink", "case basename", "unicode basename", "hardlink"} {
 		t.Run(alias, func(t *testing.T) {
@@ -334,7 +362,7 @@ func TestBootstrapDiagnosticNotStartedBeforeDaemonInvocation(t *testing.T) {
 		t.Fatal("nil startup context accepted")
 	}
 	first := recorder.snapshot()
-	if first.Outcome != "not_started" || first.Started || first.Policy != daemonHomeIsolated {
+	if first.Outcome != "not_started" || first.Started || first.Policy != daemonHomeLogin {
 		t.Fatal("early startup diagnostic mismatch")
 	}
 	configured.diagnosticDaemonHome = "login"
@@ -464,7 +492,7 @@ func TestDiagnosticDaemonHomeFlagsRejectBeforeAppInspection(t *testing.T) {
 
 func TestDiagnosticDaemonHomeIsolatedEquivalence(t *testing.T) {
 	base := []string{"PATH=/usr/bin", "HOME=/Users/disposable", "CFFIXED_USER_HOME=/private/fixture"}
-	for _, policy := range []daemonHomePolicy{"", daemonHomeIsolated} {
+	for _, policy := range []daemonHomePolicy{daemonHomeIsolated} {
 		directory := filepath.Join(t.TempDir(), "data")
 		want, err := isolatedDaemonEnvironment(base, directory)
 		if err != nil {
@@ -495,16 +523,25 @@ func TestDiagnosticDaemonHomeRejectsInvalidEnvironment(t *testing.T) {
 			}
 		})
 	}
+	for _, base := range [][]string{{"PATH=/usr/bin"}, {"HOME="}, {"HOME=relative"}, {"HOME=/Users/disposable", "HOME=/Users/other"}} {
+		if _, err := diagnosticDaemonEnvironment(base, filepath.Join(t.TempDir(), "data"), ""); err == nil {
+			t.Error("normal environment accepted invalid original HOME")
+		}
+	}
 }
 
 func TestDiagnosticDaemonHomeConfigRequiresBoundedDeterministicDiagnostic(t *testing.T) {
+	t.Setenv("HOME", "/Users/disposable")
 	for _, test := range []struct {
 		name   string
 		config config
 		valid  bool
 	}{
 		{"default", config{}, true},
-		{"isolated", config{diagnosticDaemonHome: "isolated"}, true},
+		{"isolated", config{diagnosticDaemonHome: "isolated", bootstrapDiagnosticPath: "/private/diagnostic.json", deterministicOnly: true}, true},
+		{"isolated without diagnostic", config{diagnosticDaemonHome: "isolated", deterministicOnly: true}, false},
+		{"isolated without deterministic", config{diagnosticDaemonHome: "isolated", bootstrapDiagnosticPath: "/private/diagnostic.json"}, false},
+		{"normal deterministic diagnostic", config{bootstrapDiagnosticPath: "/private/diagnostic.json", deterministicOnly: true}, true},
 		{"login", config{diagnosticDaemonHome: "login", bootstrapDiagnosticPath: "/private/diagnostic.json", deterministicOnly: true}, true},
 		{"unknown", config{diagnosticDaemonHome: "other"}, false},
 		{"login without diagnostic", config{diagnosticDaemonHome: "login", deterministicOnly: true}, false},
@@ -522,5 +559,13 @@ func TestDiagnosticDaemonHomeConfigRequiresBoundedDeterministicDiagnostic(t *tes
 				t.Fatal("valid diagnostic config rejected")
 			}
 		})
+	}
+	for _, home := range []string{"", "relative"} {
+		t.Setenv("HOME", home)
+		for _, policy := range []string{"", "login"} {
+			if err := validateBootstrapDiagnosticConfig(config{diagnosticDaemonHome: policy, bootstrapDiagnosticPath: "/private/diagnostic.json", deterministicOnly: true}); err == nil {
+				t.Error("config accepted invalid original HOME")
+			}
+		}
 	}
 }

@@ -244,10 +244,9 @@ func parseConfig(arguments []string) (config, error) {
 
 func defaultConfig() config {
 	return config{
-		diagnosticDaemonHome: "isolated",
-		clientID:             acceptanceClientClaudeCode,
-		environmentID:        "assembly-001",
-		timeout:              8 * time.Minute,
+		clientID:      acceptanceClientClaudeCode,
+		environmentID: "assembly-001",
+		timeout:       8 * time.Minute,
 	}
 }
 
