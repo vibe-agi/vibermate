@@ -91,7 +91,7 @@ func TestResponsesResourceAdmissionEncoderAggregate(t *testing.T) {
 }
 
 func resourcePolicy() protocolcore.ResourceLimits {
-	return protocolcore.ResourceLimits{Request: protocolcore.ResourceCost{128 << 20, 128 << 20}, Response: protocolcore.ResourceCost{128 << 20, 128 << 20}}
+	return protocolcore.ResourceLimits{Request: protocolcore.ResourceCost{PayloadBytes: 128 << 20, StructureBytes: 128 << 20}, Response: protocolcore.ResourceCost{PayloadBytes: 128 << 20, StructureBytes: 128 << 20}}
 }
 
 func TestResponsesResourceAdmissionCompleteHistories(t *testing.T) {
@@ -104,7 +104,7 @@ func TestResponsesResourceAdmissionCompleteHistories(t *testing.T) {
 	}
 	legacy, _ := New(DefaultOptions())
 	// Mutating caller options must not mutate the live codec's finite policy.
-	policy.Request = protocolcore.ResourceCost{1, 1}
+	policy.Request = protocolcore.ResourceCost{PayloadBytes: 1, StructureBytes: 1}
 	for _, count := range []int{4095, 4096, 4097, 4102, 4111, 16384} {
 		t.Run(fmt.Sprint(count), func(t *testing.T) {
 			textBytes := 0
@@ -202,7 +202,7 @@ func TestResponsesResourceAdmissionResponseAllowanceIsIndependent(t *testing.T) 
 }
 
 func TestResponsesResourceAdmissionConstructorRejectsZeroPolicy(t *testing.T) {
-	for _, policy := range []protocolcore.ResourceLimits{{}, {Request: protocolcore.ResourceCost{1, 1}, Response: protocolcore.ResourceCost{1, 0}}} {
+	for _, policy := range []protocolcore.ResourceLimits{{}, {Request: protocolcore.ResourceCost{PayloadBytes: 1, StructureBytes: 1}, Response: protocolcore.ResourceCost{PayloadBytes: 1, StructureBytes: 0}}} {
 		options := DefaultOptions()
 		options.Resources = &policy
 		if _, err := New(options); err == nil {

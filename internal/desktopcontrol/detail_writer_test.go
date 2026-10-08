@@ -27,7 +27,7 @@ func TestDetailWriterPreservesOrdinaryBytesAndDeepLeaf(t *testing.T) {
 		t.Fatal(err)
 	}
 	var got bytes.Buffer
-	if err = plan.WriteTo(&got); err != nil {
+	if _, err = plan.WriteTo(&got); err != nil {
 		t.Fatal(err)
 	}
 	if !bytes.Equal(got.Bytes(), append(want, '\n')) {
@@ -40,7 +40,7 @@ func TestDetailWriterPreservesOrdinaryBytesAndDeepLeaf(t *testing.T) {
 		t.Fatal(err)
 	}
 	got.Reset()
-	if err = plan.WriteTo(&got); err != nil {
+	if _, err = plan.WriteTo(&got); err != nil {
 		t.Fatal(err)
 	}
 	if !bytes.Contains(got.Bytes(), []byte(`"arguments":`+raw)) {
@@ -54,7 +54,7 @@ func TestDetailWriterPreservesOrdinaryBytesAndDeepLeaf(t *testing.T) {
 	if _, err = prepareExchangeDetailJSON(ctx, detailTestLimits(), detail); !errors.Is(err, context.Canceled) {
 		t.Fatalf("canceled preflight: %v", err)
 	}
-	if err = plan.WriteTo(detailFailWriter{}); !errors.Is(err, io.ErrClosedPipe) {
+	if _, err = plan.WriteTo(detailFailWriter{}); !errors.Is(err, io.ErrClosedPipe) {
 		t.Fatalf("writer failure hidden: %v", err)
 	}
 }

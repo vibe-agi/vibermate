@@ -14,7 +14,7 @@ import (
 )
 
 func TestPathResourceAdmissionLongNativeAndModelOwnership(t *testing.T) {
-	policy := protocolcore.ResourceLimits{Request: protocolcore.ResourceCost{128 << 20, 128 << 20}, Response: protocolcore.ResourceCost{128 << 20, 128 << 20}}
+	policy := protocolcore.ResourceLimits{Request: protocolcore.ResourceCost{PayloadBytes: 128 << 20, StructureBytes: 128 << 20}, Response: protocolcore.ResourceCost{PayloadBytes: 128 << 20, StructureBytes: 128 << 20}}
 	options := openairesponses.DefaultOptions()
 	options.Resources = &policy
 	path, err := NewResponsesPassthroughProtocolPath(options)
@@ -69,7 +69,7 @@ func TestPathResourceAdmissionLongNativeAndModelOwnership(t *testing.T) {
 }
 
 func TestPathResourceAdmissionSourceJSONBeforeRootMap(t *testing.T) {
-	policy := protocolcore.ResourceLimits{Request: protocolcore.ResourceCost{128 << 20, 20000}, Response: protocolcore.ResourceCost{128 << 20, 20000}}
+	policy := protocolcore.ResourceLimits{Request: protocolcore.ResourceCost{PayloadBytes: 128 << 20, StructureBytes: 20000}, Response: protocolcore.ResourceCost{PayloadBytes: 128 << 20, StructureBytes: 20000}}
 	options := openairesponses.DefaultOptions()
 	options.Resources = &policy
 	path, _ := NewResponsesPassthroughProtocolPath(options)
@@ -89,7 +89,7 @@ func TestPathResourceAdmissionSourceJSONBeforeRootMap(t *testing.T) {
 }
 
 func TestPathResourceAdmissionCrossDialectLongHistory(t *testing.T) {
-	policy := protocolcore.ResourceLimits{Request: protocolcore.ResourceCost{128 << 20, 128 << 20}, Response: protocolcore.ResourceCost{128 << 20, 128 << 20}}
+	policy := protocolcore.ResourceLimits{Request: protocolcore.ResourceCost{PayloadBytes: 128 << 20, StructureBytes: 128 << 20}, Response: protocolcore.ResourceCost{PayloadBytes: 128 << 20, StructureBytes: 128 << 20}}
 	options := DefaultOptions()
 	options.Resources = &policy
 	conflict := protocolcore.ResourceLimits{}
@@ -99,7 +99,7 @@ func TestPathResourceAdmissionCrossDialectLongHistory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	policy.Request = protocolcore.ResourceCost{1, 1}
+	policy.Request = protocolcore.ResourceCost{PayloadBytes: 1, StructureBytes: 1}
 	request := protocolcore.Request{RequestedModel: "m", EffectiveModel: "m", Messages: make([]protocolcore.Message, 4111)}
 	for i := range request.Messages {
 		request.Messages[i] = protocolcore.Message{Role: protocolcore.RoleUser, Blocks: []protocolcore.ContentBlock{{Kind: protocolcore.BlockText, Text: "tail"}}}

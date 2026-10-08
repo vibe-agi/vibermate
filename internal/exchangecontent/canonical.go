@@ -325,7 +325,8 @@ func preflightBlock(b Block) error {
 		// is invalid-only: no raw body is decoded, cloned or compacted. Legacy
 		// appendCompact does not count scanner bytes, so Offset is deliberately
 		// zero for MarshalJSON syntax errors, not an input byte position.
-		err := json.Unmarshal(b.Arguments, nil)
+		var ignored json.RawMessage
+		err := json.Unmarshal(b.Arguments, &ignored)
 		if syntax, ok := err.(*json.SyntaxError); ok {
 			syntax.Offset = 0
 		}
@@ -502,7 +503,8 @@ func parentDepthError(parent reflect.Type, opening byte) error {
 		probe[i] = '['
 	}
 	probe[canonicalMaxNesting] = opening
-	err := json.Unmarshal(probe, nil)
+	var ignored json.RawMessage
+	err := json.Unmarshal(probe, &ignored)
 	if syntax, ok := err.(*json.SyntaxError); ok {
 		syntax.Offset = 0
 	}

@@ -42,7 +42,7 @@ func TestAnthropicResourceAdmissionCustomArgumentsBeforeExpansion(t *testing.T) 
 		{"outer_quoting", 64 << 20, (6 << 20) + 12},
 	} {
 		t.Run(control.name, func(t *testing.T) {
-			policy := protocolcore.ResourceLimits{Request: protocolcore.ResourceCost{control.payload, 8 << 20}, Response: protocolcore.ResourceCost{16 << 20, 8 << 20}}
+			policy := protocolcore.ResourceLimits{Request: protocolcore.ResourceCost{PayloadBytes: control.payload, StructureBytes: 8 << 20}, Response: protocolcore.ResourceCost{PayloadBytes: 16 << 20, StructureBytes: 8 << 20}}
 			options := DefaultOptions()
 			options.Resources = &policy
 			options.MaxRequestBytes = control.wire
@@ -80,14 +80,14 @@ func TestAnthropicResourceAdmissionCustomArgumentsBudgetAndOwnership(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	policy := protocolcore.ResourceLimits{Request: protocolcore.ResourceCost{64 << 20, 8 << 20}, Response: protocolcore.ResourceCost{16 << 20, 8 << 20}}
+	policy := protocolcore.ResourceLimits{Request: protocolcore.ResourceCost{PayloadBytes: 64 << 20, StructureBytes: 8 << 20}, Response: protocolcore.ResourceCost{PayloadBytes: 16 << 20, StructureBytes: 8 << 20}}
 	options := DefaultOptions()
 	options.Resources = &policy
 	codec, err := New(options)
 	if err != nil {
 		t.Fatal(err)
 	}
-	policy.Request = protocolcore.ResourceCost{1, 1}
+	policy.Request = protocolcore.ResourceCost{PayloadBytes: 1, StructureBytes: 1}
 	actual, report, err := codec.EncodeProviderRequest(request)
 	if err != nil {
 		t.Fatal(err)
@@ -119,7 +119,7 @@ func TestAnthropicResourceAdmissionCustomArgumentsBudgetAndOwnership(t *testing.
 }
 
 func TestAnthropicResourceAdmissionCustomArgumentsShareParentBudget(t *testing.T) {
-	policy := protocolcore.ResourceLimits{Request: protocolcore.ResourceCost{160 << 10, 8 << 20}, Response: protocolcore.ResourceCost{16 << 20, 8 << 20}}
+	policy := protocolcore.ResourceLimits{Request: protocolcore.ResourceCost{PayloadBytes: 160 << 10, StructureBytes: 8 << 20}, Response: protocolcore.ResourceCost{PayloadBytes: 16 << 20, StructureBytes: 8 << 20}}
 	options := DefaultOptions()
 	options.Resources = &policy
 	codec, _ := New(options)
@@ -142,7 +142,7 @@ func TestAnthropicResourceAdmissionCustomArgumentsShareParentBudget(t *testing.T
 }
 
 func TestAnthropicResourceAdmissionCustomArgumentsLiteralAndFunctionControl(t *testing.T) {
-	policy := protocolcore.ResourceLimits{Request: protocolcore.ResourceCost{8 << 20, 8 << 20}, Response: protocolcore.ResourceCost{16 << 20, 8 << 20}}
+	policy := protocolcore.ResourceLimits{Request: protocolcore.ResourceCost{PayloadBytes: 8 << 20, StructureBytes: 8 << 20}, Response: protocolcore.ResourceCost{PayloadBytes: 16 << 20, StructureBytes: 8 << 20}}
 	options := DefaultOptions()
 	options.Resources = &policy
 	for _, fixture := range []struct{ input, want string }{
@@ -207,7 +207,7 @@ func TestAnthropicResourceAdmissionCustomArgumentsOuterLiteralBoundary(t *testin
 	// At24 it must fail before a completed-call notice; at25 the argument
 	// fits and the enclosing full request then fails, retaining that notice.
 	for _, control := range []struct{ wire, notices int }{{18, 0}, {24, 0}, {25, 1}} {
-		policy := protocolcore.ResourceLimits{Request: protocolcore.ResourceCost{8 << 20, 8 << 20}, Response: protocolcore.ResourceCost{16 << 20, 8 << 20}}
+		policy := protocolcore.ResourceLimits{Request: protocolcore.ResourceCost{PayloadBytes: 8 << 20, StructureBytes: 8 << 20}, Response: protocolcore.ResourceCost{PayloadBytes: 16 << 20, StructureBytes: 8 << 20}}
 		options := DefaultOptions()
 		options.Resources = &policy
 		options.MaxRequestBytes = control.wire
@@ -248,7 +248,7 @@ func TestAnthropicResourceAdmissionFunctionArgumentsCopiesAndWire(t *testing.T) 
 		{"outer_wire", 64 << 20, 2 << 20, 1800 << 10},
 	} {
 		t.Run(control.name, func(t *testing.T) {
-			policy := protocolcore.ResourceLimits{Request: protocolcore.ResourceCost{control.payload, 8 << 20}, Response: protocolcore.ResourceCost{16 << 20, 8 << 20}}
+			policy := protocolcore.ResourceLimits{Request: protocolcore.ResourceCost{PayloadBytes: control.payload, StructureBytes: 8 << 20}, Response: protocolcore.ResourceCost{PayloadBytes: 16 << 20, StructureBytes: 8 << 20}}
 			options := DefaultOptions()
 			options.Resources = &policy
 			options.MaxRequestBytes = control.wire
@@ -277,7 +277,7 @@ func TestAnthropicResourceAdmissionFunctionArgumentsCopiesAndWire(t *testing.T) 
 }
 
 func TestAnthropicResourceAdmissionCompleteHistories(t *testing.T) {
-	policy := protocolcore.ResourceLimits{Request: protocolcore.ResourceCost{128 << 20, 128 << 20}, Response: protocolcore.ResourceCost{128 << 20, 128 << 20}}
+	policy := protocolcore.ResourceLimits{Request: protocolcore.ResourceCost{PayloadBytes: 128 << 20, StructureBytes: 128 << 20}, Response: protocolcore.ResourceCost{PayloadBytes: 128 << 20, StructureBytes: 128 << 20}}
 	options := DefaultOptions()
 	options.Resources = &policy
 	codec, err := New(options)
@@ -285,7 +285,7 @@ func TestAnthropicResourceAdmissionCompleteHistories(t *testing.T) {
 		t.Fatal(err)
 	}
 	legacy, _ := New(DefaultOptions())
-	policy.Request = protocolcore.ResourceCost{1, 1}
+	policy.Request = protocolcore.ResourceCost{PayloadBytes: 1, StructureBytes: 1}
 	for _, count := range []int{4095, 4096, 4097, 4102, 4111, 16384} {
 		t.Run(fmt.Sprint(count), func(t *testing.T) {
 			var body strings.Builder
@@ -341,7 +341,7 @@ func TestAnthropicResourceAdmissionGeneratedPathsBeforeAllocation(t *testing.T) 
 	}
 	body.WriteByte('}')
 	prefix := strings.Repeat("p", 32<<10)
-	budget, _ := protocolcore.NewResourceBudget(protocolcore.ResourceCost{1000, 1 << 20})
+	budget, _ := protocolcore.NewResourceBudget(protocolcore.ResourceCost{PayloadBytes: 1000, StructureBytes: 1 << 20})
 	var destination struct {
 		Known string `json:"known"`
 	}
@@ -359,7 +359,7 @@ func TestAnthropicResourceAdmissionGeneratedPathsBeforeAllocation(t *testing.T) 
 }
 
 func TestAnthropicResourceAdmissionStreamAggregate(t *testing.T) {
-	policy := protocolcore.ResourceLimits{Request: protocolcore.ResourceCost{128 << 20, 128 << 20}, Response: protocolcore.ResourceCost{128 << 20, 20000}}
+	policy := protocolcore.ResourceLimits{Request: protocolcore.ResourceCost{PayloadBytes: 128 << 20, StructureBytes: 128 << 20}, Response: protocolcore.ResourceCost{PayloadBytes: 128 << 20, StructureBytes: 20000}}
 	options := DefaultOptions()
 	options.Resources = &policy
 	codec, _ := New(options)
@@ -401,7 +401,7 @@ func TestAnthropicResourceAdmissionConstructorRejectsZeroPolicy(t *testing.T) {
 }
 
 func TestAnthropicResourceAdmissionEscapingBeforeMarshal(t *testing.T) {
-	policy := protocolcore.ResourceLimits{Request: protocolcore.ResourceCost{128 << 20, 128 << 20}, Response: protocolcore.ResourceCost{128 << 20, 128 << 20}}
+	policy := protocolcore.ResourceLimits{Request: protocolcore.ResourceCost{PayloadBytes: 128 << 20, StructureBytes: 128 << 20}, Response: protocolcore.ResourceCost{PayloadBytes: 128 << 20, StructureBytes: 128 << 20}}
 	options := DefaultOptions()
 	options.Resources = &policy
 	codec, _ := New(options)
@@ -420,7 +420,7 @@ func TestAnthropicResourceAdmissionEscapingBeforeMarshal(t *testing.T) {
 }
 
 func TestAnthropicResourceAdmissionDenseTextGrowth(t *testing.T) {
-	policy := protocolcore.ResourceLimits{Request: protocolcore.ResourceCost{128 << 20, 128 << 20}, Response: protocolcore.ResourceCost{128 << 20, 128 << 20}}
+	policy := protocolcore.ResourceLimits{Request: protocolcore.ResourceCost{PayloadBytes: 128 << 20, StructureBytes: 128 << 20}, Response: protocolcore.ResourceCost{PayloadBytes: 128 << 20, StructureBytes: 128 << 20}}
 	options := DefaultOptions()
 	options.Resources = &policy
 	codec, _ := New(options)
@@ -446,7 +446,7 @@ func TestAnthropicResourceAdmissionDenseTextGrowth(t *testing.T) {
 }
 
 func TestAnthropicResourceAdmissionWireBoundaryMatchesEncoding(t *testing.T) {
-	policy := protocolcore.ResourceLimits{Request: protocolcore.ResourceCost{128 << 20, 128 << 20}, Response: protocolcore.ResourceCost{128 << 20, 128 << 20}}
+	policy := protocolcore.ResourceLimits{Request: protocolcore.ResourceCost{PayloadBytes: 128 << 20, StructureBytes: 128 << 20}, Response: protocolcore.ResourceCost{PayloadBytes: 128 << 20, StructureBytes: 128 << 20}}
 	for _, fraction := range []float64{0, 0.000001, 0.0000001, 0.1234, 1} {
 		request := protocolcore.Request{RequestedModel: "m", EffectiveModel: "m", Temperature: &fraction, Messages: []protocolcore.Message{{Role: protocolcore.RoleUser, Blocks: []protocolcore.ContentBlock{{Kind: protocolcore.BlockText, Text: "<&>\n世界\u2028"}}}}}
 		legacy, _ := New(DefaultOptions())

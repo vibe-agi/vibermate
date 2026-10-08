@@ -172,15 +172,15 @@ func reserveDetailGraph(ctx context.Context, l exchangecontent.SourceLimits, p e
 	}
 	return ctx.Err()
 }
-func (p detailJSONPlan) WriteTo(w io.Writer) error {
+func (p detailJSONPlan) WriteTo(w io.Writer) (int64, error) {
 	sink := detailSink{ctx: p.ctx, remaining: p.bytes, writer: w}
 	if err := writeExchangeDetailJSON(&sink, p.detail); err != nil {
-		return err
+		return int64(p.bytes - sink.remaining), err
 	}
 	if sink.remaining != 0 {
-		return io.ErrUnexpectedEOF
+		return int64(p.bytes - sink.remaining), io.ErrUnexpectedEOF
 	}
-	return nil
+	return int64(p.bytes), nil
 }
 
 type detailSink struct {

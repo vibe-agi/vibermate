@@ -836,7 +836,7 @@ func (handler *Handler) getExchange(writer http.ResponseWriter, request *http.Re
 		writer.Header().Set("Content-Type", "application/json")
 		writer.Header().Set("Cache-Control", "no-store")
 		writer.WriteHeader(http.StatusOK)
-		if err := plan.WriteTo(writer); err != nil {
+		if _, err := plan.WriteTo(writer); err != nil {
 			panic(http.ErrAbortHandler)
 		}
 		return
