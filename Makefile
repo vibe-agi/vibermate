@@ -1,4 +1,4 @@
-.PHONY: check check-format check-generated check-dependencies check-structural check-workflows check-release-tooling check-release-build check-desktop check-flutter check-flutter-macos build-flutter-app build-linux-distributions test test-race vet vuln vuln-go
+.PHONY: check check-format check-generated check-dependencies check-structural check-workflows check-release-tooling check-release-build check-desktop check-flutter check-flutter-macos build-flutter-app build-linux-distributions test test-race test-store-crash-race vet vuln vuln-go
 
 check: check-format check-generated check-dependencies check-structural check-workflows check-release-tooling check-release-build check-desktop
 
@@ -24,6 +24,7 @@ check-workflows:
 	go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.7
 	node --test .github/check-action-pins.test.mjs
 	node .github/check-action-pins.mjs
+	node --test .github/packaged-acceptance-contract.test.mjs
 
 check-release-tooling:
 	node --test ui/flutter_app/tool/desktop_build_manifest.test.mjs tool/macos-release/*.test.mjs
@@ -72,6 +73,9 @@ test:
 
 test-race:
 	go test -race -short ./...
+
+test-store-crash-race:
+	go test -race ./internal/runtimepersistence -run '^TestContentSourceProcessCrash' -count=1 -parallel=1 -timeout=15m -v
 
 vet:
 	go vet ./...

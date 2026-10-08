@@ -50,6 +50,8 @@ jobs:
           node .github/check-action-pins.mjs
       - name: Verify Flutter distribution and macOS release tooling
         run: node --test ui/flutter_app/tool/desktop_build_manifest.test.mjs tool/macos-release/*.test.mjs tool/docker/compose.test.mjs
+      - name: Verify packaged acceptance contract
+        run: node --test .github/packaged-acceptance-contract.test.mjs
 
   unit:
     needs: generated-structural
@@ -150,6 +152,49 @@ jobs:
       # Full-size SQLite scale fixtures run in unit/contracts. Instrumented
       # runs retain the functional, concurrent read/write and isolation checks.
       - run: go test -race -short ./...
+
+  store-crash-race:
+    needs: generated-structural
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: go.mod
+          check-latest: false
+          cache: true
+      - run: make test-store-crash-race
+
+  native-release-build:
+    needs: generated-structural
+    runs-on: macos-15
+    timeout-minutes: 25
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_16.2.app/Contents/Developer
+      GOFLAGS: -mod=readonly
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: go.mod
+          check-latest: false
+          cache: true
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: 22.23.1
+      - name: Prove native release inputs
+        run: |
+          set -euo pipefail
+          test "$(uname -m)" = arm64
+          case "$(sw_vers -productVersion)" in 15.*) ;; *) echo "macOS 15 required" >&2; exit 1 ;; esac
+          case "$(sw_vers -buildVersion)" in 24*) ;; *) echo "Darwin 24/macOS build24 required" >&2; exit 1 ;; esac
+          test "$(xcodebuild -version)" = $'Xcode 16.2\nBuild version 16C5032a'
+          test "$(xcrun --sdk macosx --show-sdk-version)" = 15.2
+          test "$(go version)" = 'go version go1.26.8 darwin/arm64'
+          test "$(node --version)" = v22.23.1
+      - run: make check-release-build
+      - run: go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 -tags vibermate_native_secrets ./...
 
   contracts:
     needs: generated-structural

@@ -410,6 +410,9 @@ func contentCrashRecordHash(t *testing.T, r exchangecontent.Record) string {
 }
 
 func TestContentSourceProcessCrash(t *testing.T) {
+	if testing.Short() {
+		t.Skip("full process-crash matrix runs in the dedicated test-store-crash-race job")
+	}
 	r := contentCrashRecord(t)
 	frames := contentCrashFrames(t, r)
 	_, messageDigest := contentCrashSource(t, r)
@@ -569,6 +572,9 @@ func contentCrashIntegrity(t *testing.T, s *Store) {
 }
 
 func TestContentSourceProcessCrashHarnessControls(t *testing.T) {
+	if testing.Short() {
+		t.Skip("full process-crash harness controls run in the dedicated test-store-crash-race job")
+	}
 	r := contentCrashRecord(t)
 	frames := contentCrashFrames(t, r)
 	for _, control := range []string{"wrong-marker", "child-error", "child-diagnostic"} {
