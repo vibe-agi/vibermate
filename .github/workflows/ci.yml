@@ -142,6 +142,8 @@ jobs:
   race:
     needs: generated-structural
     runs-on: ubuntu-latest
+    # Enclose sequential packages' finite process watchdogs, not product SLAs.
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
@@ -151,7 +153,7 @@ jobs:
           cache: true
       # Short mode retains functional, concurrent read/write and isolation
       # checks; dedicated jobs below race full crash and response matrices.
-      - run: go test -race -short ./...
+      - run: make test-race
 
   store-crash-race:
     needs: generated-structural

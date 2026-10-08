@@ -71,8 +71,10 @@ build-linux-distributions:
 test:
 	go test ./...
 
+# Finite per-package process containment for race instrumentation; this
+# watchdog does not change product operation deadlines.
 test-race:
-	go test -race -short ./...
+	go test -race -short -p=1 ./... -count=1 -timeout=60m
 
 test-store-crash-race:
 	go test -race ./internal/runtimepersistence -run '^TestContentSourceProcessCrash' -count=1 -parallel=1 -timeout=15m -v
