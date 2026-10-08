@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -8,6 +9,112 @@ import (
 
 	"github.com/vibe-agi/vibermate/internal/acceptancereport"
 )
+
+// Captured from the pinned SDK in a detached 3.41.5 tag checkout. The
+// informational flutterRoot is omitted because it names the temporary checkout.
+const detachedFlutterMachine = `{
+  "frameworkVersion": "3.41.5",
+  "channel": "[user-branch]",
+  "repositoryUrl": "unknown source",
+  "frameworkRevision": "2c9eb20739dfec95e2c74bd3dfa4601b0a8a36aa",
+  "frameworkCommitDate": "2026-03-17 16:14:01 -0700",
+  "engineRevision": "052f31d115eceda8cbff1b3481fcde4330c4ae12",
+  "engineCommitDate": "2026-03-17 20:29:11.000Z",
+  "engineContentHash": "c1db59d880ca73dd86cec08a6663f287522d9f39",
+  "engineBuildDate": "2026-03-18 05:45:46.041",
+  "dartSdkVersion": "3.11.3",
+  "devToolsVersion": "2.54.2",
+  "flutterVersion": "3.41.5"
+}`
+
+func TestFlutterToolchainEvidenceAcceptsPinnedDetachedTag(t *testing.T) {
+	t.Parallel()
+
+	for _, channel := range []string{"[user-branch]", "stable"} {
+		t.Run(channel, func(t *testing.T) {
+			source := strings.Replace(detachedFlutterMachine, "[user-branch]", channel, 1)
+			tools, err := parseFlutterToolchains(source)
+			if err != nil {
+				t.Fatalf("pinned Flutter checkout was rejected: %v", err)
+			}
+			if tools.Flutter != "Flutter 3.41.5 (2c9eb20739dfec95e2c74bd3dfa4601b0a8a36aa)" ||
+				tools.Dart != "Dart 3.11.3" {
+				t.Fatalf("observed Flutter identity changed: %+v", tools)
+			}
+			tools.Go = "go version go1.26.8 darwin/arm64"
+			tools.Xcode = "Xcode 16.2\nBuild version 16C5032a"
+			if err := validateToolchains(tools, nil); err != nil {
+				t.Fatalf("pinned toolchain identity was rejected: %v", err)
+			}
+		})
+	}
+}
+
+func TestFlutterToolchainEvidenceRejectsInvalidMachineData(t *testing.T) {
+	t.Parallel()
+
+	cases := map[string]string{
+		"malformed":        "{",
+		"trailing object":  detachedFlutterMachine + " {}",
+		"trailing garbage": detachedFlutterMachine + " invalid",
+		"null":             "null",
+		"array":            "[]",
+	}
+	for _, field := range []string{"frameworkVersion", "frameworkRevision", "dartSdkVersion", "channel"} {
+		for name, invalid := range map[string]any{"missing": nil, "empty": "", "wrong type": 42} {
+			// Channel is display metadata; its absence or empty value is not
+			// missing SDK identity, but an incompatible JSON type is malformed.
+			if field == "channel" && invalid != 42 {
+				continue
+			}
+			var machine map[string]any
+			if err := json.Unmarshal([]byte(detachedFlutterMachine), &machine); err != nil {
+				t.Fatal(err)
+			}
+			machine[field] = invalid
+			if invalid == nil {
+				delete(machine, field)
+			}
+			source, err := json.Marshal(machine)
+			if err != nil {
+				t.Fatal(err)
+			}
+			cases[field+" "+name] = string(source)
+		}
+	}
+	for name, source := range cases {
+		t.Run(name, func(t *testing.T) {
+			if _, err := parseFlutterToolchains(source); err == nil {
+				t.Fatal("invalid Flutter machine evidence was accepted")
+			}
+		})
+	}
+}
+
+func TestFlutterToolchainEvidencePreservesUnpinnedIdentityForRejection(t *testing.T) {
+	t.Parallel()
+
+	for _, changed := range []struct{ from, to string }{
+		{"3.41.5", "3.41.6"},
+		{"2c9eb20739dfec95e2c74bd3dfa4601b0a8a36aa", "ac9eb20739dfec95e2c74bd3dfa4601b0a8a36aa"},
+		{"3.11.3", "3.11.4"},
+	} {
+		t.Run(changed.to, func(t *testing.T) {
+			tools, err := parseFlutterToolchains(strings.ReplaceAll(detachedFlutterMachine, changed.from, changed.to))
+			if err != nil {
+				t.Fatalf("well-formed observed identity was not collected: %v", err)
+			}
+			if !strings.Contains(tools.Flutter+tools.Dart, changed.to) {
+				t.Fatalf("observed identity was replaced: %+v", tools)
+			}
+			tools.Go = "go version go1.26.8 darwin/arm64"
+			tools.Xcode = "Xcode 16.2\nBuild version 16C5032a"
+			if err := validateToolchains(tools, nil); err == nil {
+				t.Fatal("unpinned observed Flutter/Dart identity was accepted")
+			}
+		})
+	}
+}
 
 func TestBundleDigestIsDeterministicAndCoversMemberContent(t *testing.T) {
 	t.Parallel()
@@ -155,6 +262,11 @@ func TestToolchainValidationRequiresPinnedBuildAndHostVersions(t *testing.T) {
 	tools.Flutter = "Flutter 99.0.0 (" + expectedFlutterRevision + ")"
 	if err := validateToolchains(tools, binaries); err == nil {
 		t.Fatal("unpinned Flutter toolchain was accepted")
+	}
+	tools.Flutter = normalizedFlutterVersion()
+	tools.Xcode = "Xcode 16.3\nBuild version 16E140"
+	if err := validateToolchains(tools, binaries); err == nil {
+		t.Fatal("unpinned Xcode toolchain was accepted")
 	}
 }
 

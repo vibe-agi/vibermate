@@ -535,6 +535,25 @@ func collectToolchains(ctx context.Context) (toolchainProvenance, error) {
 	if err != nil {
 		return toolchainProvenance{}, err
 	}
+	tools, err := parseFlutterToolchains(flutterSource)
+	if err != nil {
+		return toolchainProvenance{}, err
+	}
+	xcodeVersion, err := toolVersion(
+		ctx,
+		"Xcode",
+		"/usr/bin/xcodebuild",
+		[]string{"-version"},
+	)
+	if err != nil {
+		return toolchainProvenance{}, err
+	}
+	tools.Go = goVersion
+	tools.Xcode = xcodeVersion
+	return tools, nil
+}
+
+func parseFlutterToolchains(flutterSource string) (toolchainProvenance, error) {
 	var flutter struct {
 		Channel           string `json:"channel"`
 		DartSDKVersion    string `json:"dartSdkVersion"`
@@ -553,29 +572,19 @@ func collectToolchains(ctx context.Context) (toolchainProvenance, error) {
 			"Flutter machine-readable toolchain evidence has trailing data",
 		)
 	}
-	if flutter.Channel != "stable" ||
-		flutter.FrameworkVersion == "" ||
+	// Flutter derives channel from the checkout branch, including [user-branch]
+	// for a detached release tag. validateToolchains pins the observed identity.
+	if flutter.FrameworkVersion == "" ||
 		flutter.FrameworkRevision == "" ||
 		flutter.DartSDKVersion == "" {
 		return toolchainProvenance{}, errors.New(
 			"Flutter machine-readable toolchain evidence is incomplete",
 		)
 	}
-	xcodeVersion, err := toolVersion(
-		ctx,
-		"Xcode",
-		"/usr/bin/xcodebuild",
-		[]string{"-version"},
-	)
-	if err != nil {
-		return toolchainProvenance{}, err
-	}
 	return toolchainProvenance{
-		Go: goVersion,
 		Flutter: "Flutter " + flutter.FrameworkVersion + " (" +
 			flutter.FrameworkRevision + ")",
-		Dart:  "Dart " + flutter.DartSDKVersion,
-		Xcode: xcodeVersion,
+		Dart: "Dart " + flutter.DartSDKVersion,
 	}, nil
 }
 
