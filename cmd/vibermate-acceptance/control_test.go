@@ -488,7 +488,7 @@ func TestControlCapturesFailsClosedOnInvalidEvidence(t *testing.T) {
 }
 
 func TestControlCapturesRelaysCursorAtTransportBound(t *testing.T) {
-	cursor := strings.Repeat("é", 256) // 512 UTF-8 bytes; opaque to the client.
+	cursor := strings.Repeat("\u00e9", 256) // 512 UTF-8 bytes; opaque to the client.
 	requests := 0
 	client := testControlClient(t, func(writer http.ResponseWriter, request *http.Request) {
 		requests++
