@@ -162,6 +162,7 @@ func TestInstalledCodexRecognizesStreamFailure(t *testing.T) {
 			}))
 			defer server.Close()
 			directory := t.TempDir()
+			requireNoNativeCodexPluginSync(t, directory)
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
 			command := exec.CommandContext(ctx, binary, "exec", "--skip-git-repo-check", "--ephemeral", "--model", "fixture",
@@ -172,6 +173,8 @@ func TestInstalledCodexRecognizesStreamFailure(t *testing.T) {
 				"-c", `model_providers.fixture.requires_openai_auth=false`,
 				"-c", `model_providers.fixture.stream_max_retries=0`,
 				"-c", `model_providers.fixture.request_max_retries=0`,
+				// Exercise native model errors without detached plugin catalog sync.
+				"-c", `features.plugins=false`,
 				"-c", `analytics.enabled=false`, "-c", `feedback.enabled=false`, "hello")
 			command.Dir = directory
 			command.Env = []string{"PATH=/opt/homebrew/bin:/usr/bin:/bin", "CODEX_HOME=" + directory}

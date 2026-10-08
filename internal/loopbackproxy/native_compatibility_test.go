@@ -33,12 +33,17 @@ func nativeCodexFixtureCommand(t *testing.T, endpoint string, options ...string)
 	directory := t.TempDir()
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	t.Cleanup(cancel)
+	requireNoNativeCodexPluginSync(t, directory)
 	args := []string{"exec", "--skip-git-repo-check", "--ephemeral", "--model", "fixture"}
 	settings := []string{`model_provider="fixture"`, `model_providers.fixture.name="fixture"`,
 		"model_providers.fixture.base_url=" + strconv.Quote(endpoint),
 		`model_providers.fixture.wire_api="responses"`, `model_providers.fixture.requires_openai_auth=false`,
 		`model_providers.fixture.stream_max_retries=1`, `model_providers.fixture.request_max_retries=0`,
-		`analytics.enabled=false`, `feedback.enabled=false`}
+		`analytics.enabled=false`, `feedback.enabled=false`,
+		// These fixtures exercise model HTTP/SSE, excluding unrelated catalog
+		// bootstrap whose detached Git can outlive native exec. Codex 0.159.2
+		// supports this stable feature gate in codex-rs/features/src/lib.rs.
+		`features.plugins=false`}
 	for _, value := range append(settings, options...) {
 		args = append(args, "-c", value)
 	}
@@ -47,6 +52,18 @@ func nativeCodexFixtureCommand(t *testing.T, endpoint string, options ...string)
 	command.Dir = directory
 	command.Env = []string{"PATH=/opt/homebrew/bin:/usr/bin:/bin", "CODEX_HOME=" + directory}
 	return command
+}
+
+func requireNoNativeCodexPluginSync(t *testing.T, directory string) {
+	t.Helper()
+	t.Cleanup(func() {
+		// In Codex 0.159.2, startup_sync.rs creates this lock before any
+		// curated plugin Git/HTTP sync. Check before testing removes the home.
+		path := filepath.Join(directory, ".tmp", "plugins.sync.lock")
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Errorf("native model fixture started unrelated plugin catalog sync: stat %s: %v", path, err)
+		}
+	})
 }
 
 func nativeResponsesFixture(t *testing.T) (*openairesponses.Codec, protocolcore.Request) {
