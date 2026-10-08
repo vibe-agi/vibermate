@@ -75,6 +75,35 @@ test('one pinned producer authenticates a shared immutable payload', () => {
   }
 });
 
+test('public App builder inherits 0022 while parent statuses remain private under 0077', () => {
+  const block = producer.match(/^          set \+e\n          [^\n]*build_macos_app\.sh live[^\n]*\n(?:          [^\n]*\n){4}/mu)?.[0];
+  assert.ok(block, 'actual App invocation and parent exit capture are required');
+  fixture((root) => {
+    const tool = join(root, 'ui/flutter_app/tool');
+    mkdirSync(tool, { recursive: true, mode: 0o700 });
+    writeFileSync(join(tool, 'build_macos_app.sh'), `#!/bin/bash
+set -euo pipefail
+test "$#" -eq 1 && test "$1" = live
+umask > "$PROBE_ROOT/child-mask"
+"$PROBE_NODE" -e 'require("node:fs").writeFileSync(process.argv[1], "synthetic executable", {mode:0o777})' "$PROBE_ROOT/gui"
+`, { mode: 0o755 });
+    const statuses = join(root, 'producer-exits.txt');
+    const result = execute(`set -euo pipefail
+umask 077
+cd "$PROBE_ROOT"
+: > "$PRODUCER_EXITS"
+${block.replace(/^          /gmu, '')}
+umask > "$PROBE_ROOT/parent-mask"
+`, { PROBE_ROOT: root, PROBE_NODE: process.execPath, PRODUCER_EXITS: statuses });
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(readFileSync(join(root, 'child-mask'), 'utf8').trim(), '0022');
+    assert.equal(statSync(join(root, 'gui')).mode & 0o777, 0o755);
+    assert.equal(readFileSync(join(root, 'parent-mask'), 'utf8').trim(), '0077');
+    assert.equal(statSync(statuses).mode & 0o777, 0o600);
+    assert.equal(readFileSync(statuses, 'utf8'), 'app_build=0\n');
+  });
+});
+
 test('both arms preserve actual harness and fresh V7 verifier outcomes and private evidence', () => {
   assert.ok(consumer, 'consumer required');
   for (const value of [

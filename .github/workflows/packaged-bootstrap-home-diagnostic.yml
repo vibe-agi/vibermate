@@ -98,7 +98,7 @@ jobs:
           printf 'client_catalog=%d\n' "$build_exit" >> "$PRODUCER_EXITS"
           test "$build_exit" -eq 0
           set +e
-          ui/flutter_app/tool/build_macos_app.sh live
+          (umask 022; ui/flutter_app/tool/build_macos_app.sh live)
           build_exit=$?
           set -e
           printf 'app_build=%d\n' "$build_exit" >> "$PRODUCER_EXITS"
