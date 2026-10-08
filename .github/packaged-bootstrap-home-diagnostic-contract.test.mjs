@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { readFileSync, writeFileSync, mkdtempSync, mkdirSync, rmSync, existsSync, symlinkSync, unlinkSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdtempSync, mkdirSync, rmSync, existsSync, symlinkSync, unlinkSync, readdirSync, statSync } from 'node:fs';
 import { spawnSync, execFileSync } from 'node:child_process';
+import { generateKeyPairSync } from 'node:crypto';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
 
 const workflow = readFileSync(new URL('./workflows/packaged-bootstrap-home-diagnostic.yml', import.meta.url), 'utf8');
 const normal = readFileSync(new URL('./workflows/packaged-acceptance.yml', import.meta.url), 'utf8');
@@ -21,10 +22,10 @@ function fixture(run) {
   try { run(root); } finally { rmSync(root, { recursive: true, force: true }); }
 }
 function execute(script, env) {
-  return spawnSync('/bin/bash', ['-c', script], { env: { ...process.env, ...env }, encoding: 'utf8', timeout: 10000 });
+  return spawnSync('/bin/bash', ['-c', script], { env: { ...process.env, PATH: `${dirname(process.execPath)}:${process.env.PATH}`, ...env }, encoding: 'utf8', timeout: 10000 });
 }
 
-test('only the dedicated push creates one producer and two fresh protected consumers', () => {
+test('only the authorized dedicated push creates one producer and two fresh named-environment consumers', () => {
   assert.match(workflow, /^on:\n  push:\n    branches:\n      - diagnostic\/packaged-bootstrap-home-20261008\npermissions:/mu);
   assert.doesNotMatch(workflow, /workflow_dispatch|workflow_call|pull_request|schedule:|self-hosted|continue-on-error/u);
   assert.ok(consumer, 'fresh consumer job is required');
@@ -69,7 +70,7 @@ test('one pinned producer authenticates a shared immutable payload', () => {
   ]);
   for (const [, action] of workflow.matchAll(/uses: ([^\s]+)/gu)) assert.ok(pins.has(action), action);
   assert.equal((workflow.match(/retention-days: 7/gu) ?? []).length, 3);
-  for (const [, name] of workflow.matchAll(/          name: (private-[^\n]+)/gu)) {
+  for (const [, name] of workflow.matchAll(/          name: ((?:diagnostic-|encrypted-)[^\n]+)/gu)) {
     for (const identity of ['github.run_id', 'github.run_attempt', 'github.sha']) assert.ok(name.includes(identity), identity);
   }
 });
@@ -91,11 +92,36 @@ test('both arms preserve actual harness and fresh V7 verifier outcomes and priva
   ]) assert.ok(consumer.includes(value), value);
   assert.ok(consumer.indexOf('id: transfer') < consumer.indexOf('id: acceptance'));
   assert.ok(consumer.indexOf('id: verifier') < consumer.indexOf('id: outcome'));
-  assert.match(consumer, /name: Retain private diagnostic only evidence\n        if: \$\{\{ always\(\) \}\}/u);
+  assert.match(consumer, /name: Retain encrypted diagnostic only evidence\n        if: \$\{\{ always\(\) && steps.seal.outcome == 'success' \}\}/u);
   assert.match(consumer, /id: outcome\n        if: \$\{\{ always\(\) \}\}/u);
-  assert.match(consumer, /name: private-bootstrap-evidence-.*matrix.policy/u);
+  assert.match(consumer, /name: encrypted-bootstrap-evidence-.*matrix.policy/u);
+  assert.match(consumer, /path: \$\{\{ env.UPLOAD_ROOT \}\}\/evidence.sealed.json/u);
+  assert.doesNotMatch(consumer, /path: \$\{\{ env.(?:STAGING_ROOT|EVIDENCE_ROOT) \}\}|path: .*\.tar\.gz|private-bootstrap/u);
   assert.doesNotMatch(workflow, /expected failure passed|release PASS|CFFIXED_USER_HOME|unset HOME|Keychain|stderr|\.log/u);
   assert.doesNotMatch(normal, /diagnostic-daemon-home|bootstrap-diagnostic/u);
+});
+
+test('actual seal shell exposes only encrypted upload bytes and no plaintext on sealer failure', () => {
+  const script = shell('seal');
+  const recipient = generateKeyPairSync('rsa', { modulusLength: 3072 });
+  for (const validKey of [true, false]) fixture((root) => {
+    const staging = join(root, 'staging'); const upload = join(root, 'upload'); const workspace = join(root, 'workspace'); const tool = join(workspace, 'tool');
+    for (const path of [staging, upload, workspace, tool]) mkdirSync(path, { mode: 0o700 });
+    writeFileSync(join(staging, 'bootstrap.json'), 'SYNTHETIC-STAGED-SENTINEL', { mode: 0o600 });
+    writeFileSync(join(tool, 'seal-packaged-bootstrap-evidence.mjs'), readFileSync(new URL('../tool/seal-packaged-bootstrap-evidence.mjs', import.meta.url)));
+    writeFileSync(join(tool, 'packaged-bootstrap-diagnostic-recipient.pem'), validKey ? recipient.publicKey.export({ type: 'spki', format: 'pem' }) : 'invalid synthetic public key');
+    const result = execute(script, { TASK_ROOT: root, STAGING_ROOT: staging, UPLOAD_ROOT: upload, GITHUB_WORKSPACE: workspace });
+    assert.equal(result.status === 0, validKey, result.stderr);
+    assert.equal(existsSync(join(root, 'evidence.tar.gz')), true, 'plaintext archive stays outside upload target');
+    assert.deepEqual(readdirSync(upload), validKey ? ['evidence.sealed.json'] : []);
+    if (validKey) {
+      const output = join(upload, 'evidence.sealed.json');
+      assert.equal(statSync(output).mode & 0o777, 0o600);
+      const sealed = readFileSync(output);
+      assert.equal(sealed.includes('SYNTHETIC-STAGED-SENTINEL'), false);
+      assert.equal(JSON.parse(sealed).schema, 'vibermate.private-bootstrap-evidence/v1');
+    }
+  });
 });
 
 test('actual final shell fails closed for nonzero, absent, duplicate or malformed exits', () => {

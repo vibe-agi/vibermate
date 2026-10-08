@@ -1,3 +1,5 @@
+# Root's authorized exact-branch push controls this diagnostic dispatch.
+# packaged-acceptance is a named test environment with no protection rules.
 name: diagnostic only - packaged bootstrap HOME A/B
 on:
   push:
@@ -151,11 +153,11 @@ jobs:
           digest="$(awk '{print $1}' "$TASK_ROOT/archive.digest")"
           [[ "$digest" =~ ^[0-9a-f]{64}$ ]]
           printf 'sha256=%s\n' "$digest" >> "$GITHUB_OUTPUT"
-      - name: Transfer the single authenticated archive
+      - name: Transfer the single non-confidential authenticated archive
         id: upload
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: private-bootstrap-inputs-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}
+          name: diagnostic-inputs-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}
           path: ${{ env.INPUT_ARCHIVE }}
           if-no-files-found: error
           retention-days: 7
@@ -163,7 +165,7 @@ jobs:
         if: ${{ always() }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: private-bootstrap-producer-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}
+          name: diagnostic-producer-status-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}
           path: ${{ env.PRODUCER_EXITS }}
           if-no-files-found: error
           retention-days: 7
@@ -214,12 +216,13 @@ jobs:
           case "$DIAGNOSTIC_POLICY" in isolated|login) ;; *) exit 1 ;; esac
           task_root="$RUNNER_TEMP/vibermate-bootstrap-consumer-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-$DIAGNOSTIC_POLICY"
           test ! -e "$task_root"
-          install -d -m 0700 "$task_root" "$task_root/download" "$task_root/payload" "$task_root/evidence" "$task_root/upload"
+          install -d -m 0700 "$task_root" "$task_root/download" "$task_root/payload" "$task_root/evidence" "$task_root/staging" "$task_root/upload"
           : > "$task_root/evidence/exits.txt"
           printf 'revision=%s\nartifact_id=%s\narchive_sha256=%s\n' "$EXPECTED_REVISION" "$EXPECTED_ARTIFACT_ID" "$EXPECTED_DIGEST" > "$task_root/evidence/identity.txt"
           {
             printf 'TASK_ROOT=%s\nDOWNLOAD_ROOT=%s/download\nPAYLOAD_ROOT=%s/payload\n' "$task_root" "$task_root" "$task_root"
             printf 'EVIDENCE_ROOT=%s/evidence\nUPLOAD_ROOT=%s/upload\n' "$task_root" "$task_root"
+            printf 'STAGING_ROOT=%s/staging\n' "$task_root"
           } >> "$GITHUB_ENV"
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
         with:
@@ -310,6 +313,7 @@ jobs:
           set -e
           printf 'verifier=%d\n' "$verifier_exit" >> "$EVIDENCE_ROOT/exits.txt"
       - name: Stage only bounded private evidence
+        id: stage
         if: ${{ always() && env.EVIDENCE_ROOT != '' }}
         shell: bash
         run: |
@@ -317,19 +321,31 @@ jobs:
           umask 077
           for name in identity.txt exits.txt deterministic-v7.json; do
             if test -f "$EVIDENCE_ROOT/$name" && test ! -L "$EVIDENCE_ROOT/$name"; then
-              install -m 0600 "$EVIDENCE_ROOT/$name" "$UPLOAD_ROOT/$name"
+              install -m 0600 "$EVIDENCE_ROOT/$name" "$STAGING_ROOT/$name"
             fi
           done
           if test -e "$EVIDENCE_ROOT/bootstrap.json" || test -L "$EVIDENCE_ROOT/bootstrap.json"; then
             node -e 'const fs=require("node:fs"); const s=fs.lstatSync(process.argv[1]); if (!s.isFile() || s.isSymbolicLink() || s.size>4096 || (s.mode&0o777)!==0o600) process.exit(1)' "$EVIDENCE_ROOT/bootstrap.json"
-            install -m 0600 "$EVIDENCE_ROOT/bootstrap.json" "$UPLOAD_ROOT/bootstrap.json"
+            install -m 0600 "$EVIDENCE_ROOT/bootstrap.json" "$STAGING_ROOT/bootstrap.json"
           fi
-      - name: Retain private diagnostic only evidence
-        if: ${{ always() }}
+      - name: Seal evidence to the committed controller public recipient
+        id: seal
+        if: ${{ always() && steps.stage.outcome == 'success' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          test ! -e "$TASK_ROOT/evidence.tar.gz"
+          COPYFILE_DISABLE=1 /usr/bin/tar -czf "$TASK_ROOT/evidence.tar.gz" -C "$STAGING_ROOT" .
+          node "$GITHUB_WORKSPACE/tool/seal-packaged-bootstrap-evidence.mjs" \
+            "$TASK_ROOT/evidence.tar.gz" "$UPLOAD_ROOT/evidence.sealed.json" \
+            "$GITHUB_WORKSPACE/tool/packaged-bootstrap-diagnostic-recipient.pem"
+      - name: Retain encrypted diagnostic only evidence
+        if: ${{ always() && steps.seal.outcome == 'success' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: private-bootstrap-evidence-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}-${{ matrix.policy }}
-          path: ${{ env.UPLOAD_ROOT }}
+          name: encrypted-bootstrap-evidence-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}-${{ matrix.policy }}
+          path: ${{ env.UPLOAD_ROOT }}/evidence.sealed.json
           if-no-files-found: error
           retention-days: 7
       - name: Preserve both actual exits as the diagnostic only job outcome
