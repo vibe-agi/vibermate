@@ -347,35 +347,9 @@ func TestInstalledCodexSameSessionContinuation(t *testing.T) {
 	}
 	task7Must(t, json.Unmarshal(actual[0], &initial))
 	task7Must(t, json.Unmarshal(actual[1], &continued))
-	if len(continued.Input) <= 4096 || len(continued.Input) < len(initial.Input)+count+1 {
-		t.Fatalf("truncated native history count=%d", len(continued.Input))
-	}
-	for i := range initial.Input {
-		if !reflect.DeepEqual(task7NormalizeJSON(t, initial.Input[i]), task7NormalizeJSON(t, continued.Input[i])) {
-			t.Fatalf("native changed original history prefix item %d", i)
-		}
-	}
-	next := 0
-	for _, item := range continued.Input {
-		var message struct {
-			Content []struct {
-				Text string `json:"text"`
-			} `json:"content"`
-		}
-		if json.Unmarshal(item, &message) != nil {
-			continue
-		}
-		for _, part := range message.Content {
-			if strings.HasPrefix(part.Text, "task7-history-") {
-				if part.Text != fmt.Sprintf("task7-history-%08d", next) {
-					t.Fatalf("native history order at %d", next)
-				}
-				next++
-			}
-		}
-	}
-	if next != count || !bytes.Contains(continued.Input[len(continued.Input)-1], []byte(sentinel)) {
-		t.Fatalf("native complete history=%d final=%s", next, continued.Input[len(continued.Input)-1])
+	firstExpected := json.RawMessage(`{"type":"message","id":"msg_native_1","role":"assistant","content":[{"type":"output_text","text":"native-reply-1"}]}`)
+	if err := task7VerifyNativeHistory(t, initial.Input, continued.Input, count, sentinel, firstExpected); err != nil {
+		t.Fatal(err)
 	}
 	after, e := os.ReadFile(rollout)
 	task7Must(t, e)
@@ -440,4 +414,84 @@ func task7NormalizeJSON(t *testing.T, data []byte) any {
 	var v any
 	task7Must(t, json.Unmarshal(data, &v))
 	return v
+}
+
+// RED control: this is the original lower-bound/marker verifier, extracted
+// unchanged so corrupted real wire can demonstrate its false-positive paths.
+func task7VerifyNativeHistory(t *testing.T, initial, actual []json.RawMessage, count int, sentinel string, firstResponse json.RawMessage) error {
+	if len(actual) != len(initial)+1+count+1 {
+		return fmt.Errorf("history count %d want %d", len(actual), len(initial)+count+2)
+	}
+	expected := append([]json.RawMessage{}, initial...)
+	expected = append(expected, firstResponse)
+	for i := 0; i < count; i++ {
+		role, kind := "user", "input_text"
+		if i%2 == 1 {
+			role, kind = "assistant", "output_text"
+		}
+		expected = append(expected, task7JSON(t, map[string]any{"type": "message", "role": role, "content": []any{map[string]string{"type": kind, "text": fmt.Sprintf("task7-history-%08d", i)}}}))
+	}
+	var actualSentinel struct {
+		ID string `json:"id"`
+	}
+	_ = json.Unmarshal(actual[len(actual)-1], &actualSentinel)
+	expected = append(expected, task7JSON(t, map[string]any{"type": "message", "id": actualSentinel.ID, "role": "user", "content": []any{map[string]string{"type": "input_text", "text": sentinel}}}))
+	type semantic struct {
+		Type    string `json:"type"`
+		Role    string `json:"role"`
+		ID      string `json:"id,omitempty"`
+		Content []struct {
+			Type string `json:"type"`
+			Text string `json:"text"`
+		} `json:"content"`
+	}
+	for i := range expected {
+		var a, b semantic
+		if json.Unmarshal(expected[i], &a) != nil || json.Unmarshal(actual[i], &b) != nil || !reflect.DeepEqual(a, b) {
+			return fmt.Errorf("semantic history mismatch at %d", i)
+		}
+	}
+	return nil
+}
+
+func TestTask7NativeHistoryVerifierControls(t *testing.T) {
+	root := os.Getenv("TASK7_RECHECK_ROOT")
+	if root == "" {
+		t.Skip("requires preserved Task7 artifacts")
+	}
+	directory := filepath.Join(root, "native-session-2606858506")
+	var initial, continued struct{ Input []json.RawMessage }
+	task7Load(t, filepath.Join(directory, "upstream-1.json"), &initial)
+	task7Load(t, filepath.Join(directory, "upstream-2.json"), &continued)
+	// This is the actual first private response item, retained in native RPC
+	// and rollout evidence; it is independent of the continuation being checked.
+	first := json.RawMessage(`{"type":"message","id":"msg_native_1","role":"assistant","content":[{"type":"output_text","text":"native-reply-1"}]}`)
+	verify := func(items []json.RawMessage) error {
+		return task7VerifyNativeHistory(t, initial.Input, items, 4110, "task7-native-final-sentinel", first)
+	}
+	if err := verify(continued.Input); err != nil {
+		t.Fatal(err)
+	}
+	for _, variant := range []string{"missing_first_reply", "changed_seed_role", "inserted", "duplicate", "sentinel_suffix"} {
+		t.Run(variant, func(t *testing.T) {
+			items := append([]json.RawMessage(nil), continued.Input...)
+			switch variant {
+			case "missing_first_reply":
+				items = append(items[:len(initial.Input)], items[len(initial.Input)+1:]...)
+			case "changed_seed_role":
+				i := len(initial.Input) + 1
+				items[i] = bytes.Replace(items[i], []byte(`"role":"user"`), []byte(`"role":"assistant"`), 1)
+			case "inserted":
+				items = append(items[:len(initial.Input):len(initial.Input)], append([]json.RawMessage{initial.Input[0]}, items[len(initial.Input):]...)...)
+			case "duplicate":
+				items = append(items[:len(initial.Input):len(initial.Input)], append([]json.RawMessage{first}, items[len(initial.Input):]...)...)
+			case "sentinel_suffix":
+				i := len(items) - 1
+				items[i] = bytes.Replace(items[i], []byte("task7-native-final-sentinel"), []byte("task7-native-final-sentinel-extra"), 1)
+			}
+			if err := verify(items); err == nil {
+				t.Fatal("corrupted native history accepted")
+			}
+		})
+	}
 }
