@@ -4,7 +4,7 @@
 
 **Goal:** Determine whether the standalone acceptance daemon's HOME policy triggers its native-release bootstrap timeout, using byte-identical packaged inputs on two fresh disposable hosted machines.
 
-**Architecture:** Add an acceptance-only diagnostic selector whose default retains existing behavior, plus a private capability-free observation of the first standalone bootstrap. A dedicated manual workflow builds and archives the App, acceptance harness, verifier and fixed client once; two independent macOS jobs authenticate and consume that exact archive. Existing packaged/release workflows, product startup, deadlines, native backend and V7 verifier remain unchanged.
+**Architecture:** Add an acceptance-only diagnostic selector whose default retains existing behavior, plus a private capability-free observation of the first standalone bootstrap. A dedicated, explicitly dispatched diagnostic workflow builds and archives the App, acceptance harness, verifier and fixed client once; two independent macOS jobs authenticate and consume that exact archive. Existing packaged/release workflows, product startup, deadlines, native backend and V7 verifier remain unchanged.
 
 **Tech Stack:** Go acceptance harness; Bash and Node built-ins for narrowly scoped artifact checks; pinned GitHub Actions; existing macOS/Flutter build helpers.
 
@@ -22,7 +22,7 @@
 
 ## Scope and file map
 
-Three reviewable tasks, one implementation writer, three commits. This is moderate acceptance/tooling work; the only expensive validation is the explicitly authorized one-producer/two-consumer hosted experiment. No general CI/archive framework or performance work.
+Three reviewable tasks, one implementation writer, task-scoped commits and reviewed fixes. This is moderate acceptance/tooling work; the only expensive validation is the explicitly authorized one-producer/two-consumer hosted experiment. No general CI/archive framework or performance work.
 
 | File | Responsibility |
 |---|---|
@@ -32,7 +32,7 @@ Three reviewable tasks, one implementation writer, three commits. This is modera
 | Modify `cmd/vibermate-acceptance/daemon.go`, `daemon_test.go` | Select environment and observe decoder/terminal milestones without changing ownership/timeouts |
 | Modify `cmd/vibermate-acceptance/main.go` | Allocate optional recorder, write it after acceptance, join write failure into command error |
 | Create `tool/verify-packaged-diagnostic-verifier.mjs`, `.test.mjs` | One narrow check for the verifier binary's otherwise-unbound source identity |
-| Create `.github/workflows/packaged-bootstrap-home-diagnostic.yml` | Manual producer plus two fresh consumers; actual exits and private evidence |
+| Create `.github/workflows/packaged-bootstrap-home-diagnostic.yml` | Explicit dedicated-branch producer plus two fresh consumers; actual exits and private evidence |
 | Create `.github/packaged-bootstrap-home-diagnostic-contract.test.mjs` | Guard single producer, pinned actions, frozen inputs, outcomes and unchanged normal gates |
 
 ## Task 1: Acceptance-only policy and private first-bootstrap observation
@@ -174,9 +174,11 @@ export function validateVerifierBuildInfo(text, expectedRevision) {
 
 **Files:** Create `.github/workflows/packaged-bootstrap-home-diagnostic.yml` and `.github/packaged-bootstrap-home-diagnostic-contract.test.mjs`.
 
-**Interfaces:** Producer outputs `artifact_id`, `archive_sha256`, `revision`; one matrix consumer job uses `policy: [isolated, login]`, `fail-fast: false`, and `needs: producer`. Each matrix entry is a fresh GitHub-hosted `macos-15` job. Artifacts are named with run ID, run attempt, full revision and policy; input archive retention is seven days. No workflow-call API, arbitrary revision input or remote URL input.
+**Interfaces:** Producer outputs `artifact_id`, `archive_sha256`, `revision`; one matrix consumer job uses `policy: [isolated, login]`, `fail-fast: false`, and `needs: producer`. Each matrix entry is a fresh GitHub-hosted `macos-15` job. Artifacts are named with run ID, run attempt, full revision and policy; input archive retention is seven days. No workflow-call API, arbitrary revision input or remote URL input. The only initial trigger is a root-authorized push of the reviewed frozen SHA to the exact dedicated branch `diagnostic/packaged-bootstrap-home-20261008`; ordinary candidate pushes, PRs and default-branch pushes must not trigger this experiment. This is an explicit one-off dispatch, not a scheduled or automatic release gate.
 
-- [ ] Add failing static contract tests using existing `.github/packaged-acceptance-contract.test.mjs` style. Assert dispatch-only trigger, protected `packaged-acceptance` environment, exactly one App/harness/verifier build producer, matrix `fail-fast: false`, same `needs.producer.outputs.artifact_id` download, hash check before extraction, no build/npm/signing in consumers, both actual exit checks, seven-day retention and no `continue-on-error`. Pin every reused action. Also assert the diagnostic selector never appears in the existing normal packaged workflow.
+**Dispatch correction (2026-10-08):** GitHub requires a workflow to exist on the default branch before `workflow_dispatch` can run; the new diagnostic workflow is not registered there. Instead of merging untested diagnostic tooling into protected main or changing an existing release gate, use the exact dedicated-branch push trigger below. Root verified that this remote branch does not yet exist and remains the sole dispatcher after review. No force-push, default-branch mutation, release approval or additional native action is authorized. Primary source: https://docs.github.com/en/actions/how-tos/manage-workflow-runs/manually-run-a-workflow .
+
+- [ ] Add failing contract tests using existing `.github/packaged-acceptance-contract.test.mjs` style. Assert the exact dedicated-branch trigger with no PR, schedule, arbitrary branch or manual-input trigger, protected `packaged-acceptance` environment, exactly one App/harness/verifier build producer, matrix `fail-fast: false`, same `needs.producer.outputs.artifact_id` download, hash check before extraction, no build/npm/signing in consumers, both actual exit checks, seven-day retention and no `continue-on-error`. Pin every reused action. Also assert the diagnostic selector never appears in the existing normal packaged workflow. For the critical exit-status and archive-integrity shell steps, execute their actual extracted shell against synthetic temporary inputs: both zero exits succeed; nonzero/missing/malformed status fails; mismatched archive digest fails before extraction. Do not launch native inputs, install tooling or emulate the entire CI runner. These behavioral checks complement the workflow wiring checks rather than merely checking source spelling.
 
 ```js
 test('normal gate does not opt into diagnostic behavior', () => {
@@ -185,14 +187,16 @@ test('normal gate does not opt into diagnostic behavior', () => {
 });
 ```
 
-- [ ] Start from a syntactically valid manual diagnostic workflow file with only its producer job and a harmless source-check step; then run `node --test .github/packaged-bootstrap-home-diagnostic-contract.test.mjs`. Require a contract assertion failure for the missing fresh-consumer/shared-artifact behavior; a missing file or parse error is setup failure, not RED.
+- [ ] Start from a syntactically valid diagnostic workflow file with only its producer job and a harmless source-check step; then run `node --test .github/packaged-bootstrap-home-diagnostic-contract.test.mjs`. Require a contract assertion failure for the missing fresh-consumer/shared-artifact behavior; a missing file or parse error is setup failure, not RED.
 
 - [ ] Add the workflow skeleton below. Use the existing workflow's exact pinned checkout/setup-Go/setup-Node/upload actions and the repository's pinned download action. No reusable workflow refactor:
 
 ```yaml
 name: diagnostic only - packaged bootstrap HOME A/B
 on:
-  workflow_dispatch:
+  push:
+    branches:
+      - diagnostic/packaged-bootstrap-home-20261008
 permissions:
   contents: read
 concurrency:
@@ -271,7 +275,7 @@ Read these variables from the closed status file in this final step; do not rely
 ## Review and hosted execution handoff
 
 - [ ] Root reviews the three commits, exact artifact/exit chain and static/unit evidence before authorizing dispatch. Do not dispatch this plan automatically.
-- [ ] Once authorized, dispatch the dedicated workflow on its clean final revision exactly once. Record producer/consumer job IDs, input artifact ID/digest, each harness and verifier exit, both observation files, and both actual V7 reports. Verify both consumer identity files agree with producer outputs before interpreting A/B.
+- [ ] Once authorized, dispatch the dedicated workflow exactly once by pushing its reviewed clean final revision to the previously absent exact dedicated branch. Record producer/consumer job IDs, input artifact ID/digest, each harness and verifier exit, both observation files, and both actual V7 reports. Verify both consumer identity files agree with producer outputs before interpreting A/B. Existing generic validation may also run on that new branch; retain one current-source run and cancel only verified duplicate validation runs, never the experiment or a failed run presented as success.
 - [ ] Interpret without overclaiming: isolated reproduces + login bootstrap succeeds supports the environment policy as an operational trigger; it does not identify a specific native call. If parent CFFIXED was absent, treatment effectively changed only HOME. Both succeed means nonreproduction; both fail means policy alone did not resolve the reproduced failure. A treatment bootstrap success followed by later failed V7 is only bootstrap success.
 - [ ] No normal/release gate is replaced by this diagnostic run. Any behavioral correction requires the measured results, separate review and ordinary current-source gate evidence. Product stage hooks remain out of scope unless the A/B remains inconclusive and root authorizes a narrower follow-up.
 
