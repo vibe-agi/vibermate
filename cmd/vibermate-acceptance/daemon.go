@@ -43,8 +43,19 @@ func startDaemon(
 	appCacheDirectory string,
 	dataDirectory string,
 ) (*daemonGeneration, error) {
+	policy := daemonHomePolicy(config.diagnosticDaemonHome)
+	diagnostic := initialBootstrapDiagnostic(policy)
+	var stderr *boundedBuffer
+	claimed := config.bootstrapDiagnostic.claim(policy)
+	if claimed {
+		started := time.Now()
+		defer func() { config.bootstrapDiagnostic.finish(diagnostic, started, stderr) }()
+	}
 	if ctx == nil {
 		return nil, errors.New("daemon startup context is nil")
+	}
+	if err := validateBootstrapDiagnosticConfig(config); err != nil {
+		return nil, err
 	}
 	reader, writer, err := os.Pipe()
 	if err != nil {
@@ -61,22 +72,32 @@ func startDaemon(
 		config.daemonPath,
 		daemonArguments(appCacheDirectory, dataDirectory)...,
 	)
-	command.Env, err = isolatedDaemonEnvironment(os.Environ(), dataDirectory)
+	parentEnvironment := os.Environ()
+	command.Env, err = diagnosticDaemonEnvironment(parentEnvironment, dataDirectory, policy)
 	if err != nil {
 		_ = writer.Close()
 		_ = parentWriter.Close()
 		return nil, err
 	}
+	if claimed {
+		parentHome, parentHasHome := daemonEnvironmentFact(parentEnvironment, "HOME")
+		childHome, childHasHome := daemonEnvironmentFact(command.Env, "HOME")
+		diagnostic.HomeMatchesParent = parentHasHome && childHasHome && parentHome == childHome
+		_, diagnostic.ParentCFFixedPresent = daemonEnvironmentFact(parentEnvironment, "CFFIXED_USER_HOME")
+		_, diagnostic.ChildCFFixedPresent = daemonEnvironmentFact(command.Env, "CFFIXED_USER_HOME")
+	}
 	command.Stdin = parentReader
 	command.ExtraFiles = []*os.File{writer}
-	stderr := newBoundedBuffer(64 << 10)
+	stderr = newBoundedBuffer(64 << 10)
 	command.Stderr = stderr
 	command.Stdout = io.Discard
 	if err := command.Start(); err != nil {
+		diagnostic.Outcome = "start_error"
 		_ = writer.Close()
 		_ = parentWriter.Close()
 		return nil, fmt.Errorf("start packaged daemon: %w", err)
 	}
+	diagnostic.Started = true
 	_ = parentReader.Close()
 	_ = writer.Close()
 	done := make(chan error, 1)
@@ -88,7 +109,11 @@ func startDaemon(
 		err        error
 	}, 1)
 	go func() {
-		descriptor, decodeErr := decodeDescriptor(reader)
+		var observed func(int)
+		if claimed {
+			observed = config.bootstrapDiagnostic.observe
+		}
+		descriptor, decodeErr := decodeDescriptorObserved(reader, observed)
 		descriptorResult <- struct {
 			descriptor desktopbootstrap.Descriptor
 			err        error
@@ -98,6 +123,7 @@ func startDaemon(
 	select {
 	case result := <-descriptorResult:
 		if result.err != nil {
+			diagnostic.Outcome = "decode_error"
 			_ = parentWriter.Close()
 			_ = command.Process.Kill()
 			<-done
@@ -105,17 +131,20 @@ func startDaemon(
 		}
 		descriptor = result.descriptor
 	case waitErr := <-done:
+		diagnostic.Outcome = "child_exit"
 		_ = parentWriter.Close()
 		return nil, fmt.Errorf(
 			"packaged daemon exited before bootstrap: %w",
 			normalizeWaitError(waitErr),
 		)
 	case <-ctx.Done():
+		diagnostic.Outcome = "context_done"
 		_ = parentWriter.Close()
 		_ = command.Process.Kill()
 		<-done
 		return nil, ctx.Err()
 	case <-time.After(bootstrapDeadline):
+		diagnostic.Outcome = "bootstrap_deadline"
 		_ = parentWriter.Close()
 		_ = command.Process.Kill()
 		<-done
@@ -123,6 +152,7 @@ func startDaemon(
 	}
 	control, err := exchangeControlSession(ctx, descriptor)
 	if err != nil {
+		diagnostic.Outcome = "exchange_error"
 		_ = parentWriter.Close()
 		_ = command.Process.Signal(syscall.SIGTERM)
 		select {
@@ -133,6 +163,7 @@ func startDaemon(
 		}
 		return nil, err
 	}
+	diagnostic.Outcome = "ready"
 	return &daemonGeneration{
 		command:        command,
 		descriptor:     descriptor,
@@ -179,6 +210,10 @@ func daemonArguments(
 }
 
 func decodeDescriptor(reader io.Reader) (desktopbootstrap.Descriptor, error) {
+	return decodeDescriptorObserved(reader, nil)
+}
+
+func decodeDescriptorObserved(reader io.Reader, observed func(frame int)) (desktopbootstrap.Descriptor, error) {
 	buffered := bufio.NewReader(io.LimitReader(reader, bootstrapLimit+1))
 	var total int
 	for index := range bootstrapFrames {
@@ -189,6 +224,9 @@ func decodeDescriptor(reader io.Reader) (desktopbootstrap.Descriptor, error) {
 				index+1,
 				err,
 			)
+		}
+		if index == 1 && observed != nil {
+			observed(2)
 		}
 		total += len(payload)
 		if total > bootstrapLimit {
@@ -203,6 +241,9 @@ func decodeDescriptor(reader io.Reader) (desktopbootstrap.Descriptor, error) {
 				return desktopbootstrap.Descriptor{}, errors.New(
 					"daemon bootstrap progress is invalid",
 				)
+			}
+			if observed != nil {
+				observed(1)
 			}
 			continue
 		}

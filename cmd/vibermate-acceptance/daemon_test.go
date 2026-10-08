@@ -85,7 +85,7 @@ func TestDaemonEnvironmentUsesAPrivateDataScopedHome(t *testing.T) {
 	if !slices.Contains(environment, home) ||
 		slices.Contains(environment, "HOME=/Users/example") ||
 		!slices.Contains(environment, "TOKEN=sentinel") {
-		t.Fatalf("isolated daemon environment = %v", environment)
+		t.Fatal("isolated daemon environment mismatch")
 	}
 	info, err := os.Stat(filepath.Join(directory, "acceptance-home"))
 	if err != nil || !info.IsDir() || info.Mode().Perm() != 0o700 {

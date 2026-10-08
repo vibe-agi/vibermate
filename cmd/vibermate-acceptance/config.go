@@ -14,25 +14,40 @@ import (
 )
 
 type config struct {
-	desktopAppPath    string
-	daemonPath        string
-	launcherPath      string
-	clientID          acceptanceClientID
-	claudePath        string
-	codexPath         string
-	environmentID     string
-	dataDirectory     string
-	reportPath        string
-	anthropicKeyPath  string
-	deterministicOnly bool
-	keepData          bool
-	timeout           time.Duration
+	diagnosticDaemonHome    string
+	bootstrapDiagnosticPath string
+	bootstrapDiagnostic     *bootstrapDiagnosticRecorder
+	desktopAppPath          string
+	daemonPath              string
+	launcherPath            string
+	clientID                acceptanceClientID
+	claudePath              string
+	codexPath               string
+	environmentID           string
+	dataDirectory           string
+	reportPath              string
+	anthropicKeyPath        string
+	deterministicOnly       bool
+	keepData                bool
+	timeout                 time.Duration
 }
 
 func parseConfig(arguments []string) (config, error) {
 	parsed := defaultConfig()
 	flags := flag.NewFlagSet("vibermate-acceptance", flag.ContinueOnError)
 	flags.SetOutput(os.Stderr)
+	flags.StringVar(
+		&parsed.diagnosticDaemonHome,
+		"diagnostic-daemon-home",
+		parsed.diagnosticDaemonHome,
+		"acceptance-only daemon HOME policy: isolated or login",
+	)
+	flags.StringVar(
+		&parsed.bootstrapDiagnosticPath,
+		"bootstrap-diagnostic",
+		"",
+		"absolute private first-bootstrap diagnostic path (deterministic only)",
+	)
 	flags.StringVar(
 		&parsed.desktopAppPath,
 		"desktop-app",
@@ -100,6 +115,9 @@ func parseConfig(arguments []string) (config, error) {
 	}
 	if flags.NArg() != 0 {
 		return config{}, errors.New("vibermate-acceptance does not accept positional arguments")
+	}
+	if err := validateBootstrapDiagnosticConfig(parsed); err != nil {
+		return config{}, err
 	}
 	if runtime.GOOS != "darwin" || runtime.GOARCH != "arm64" {
 		return config{}, errors.New("packaged-app acceptance requires macOS arm64")
@@ -211,6 +229,7 @@ func parseConfig(arguments []string) (config, error) {
 	for label, value := range map[string]string{
 		"data directory":         parsed.dataDirectory,
 		"report path":            parsed.reportPath,
+		"bootstrap diagnostic":   parsed.bootstrapDiagnosticPath,
 		"Anthropic API key file": parsed.anthropicKeyPath,
 	} {
 		if value == "" {
@@ -225,9 +244,10 @@ func parseConfig(arguments []string) (config, error) {
 
 func defaultConfig() config {
 	return config{
-		clientID:      acceptanceClientClaudeCode,
-		environmentID: "assembly-001",
-		timeout:       8 * time.Minute,
+		diagnosticDaemonHome: "isolated",
+		clientID:             acceptanceClientClaudeCode,
+		environmentID:        "assembly-001",
+		timeout:              8 * time.Minute,
 	}
 }
 
