@@ -68,7 +68,10 @@ func (s *concurrentContentBudgetSource) RecordSource(ctx context.Context, source
 	return err
 }
 func testContentBudgetConcurrentExecutions(t *testing.T, _ context.Context, f accountReadFixture, pipeline exchangeRuntime, first exchange.ClientRequest, firstLease *exchange.BodyLease, plan environment.RequestPlan, operation exchange.ClientOperationEvidence, body []byte, credential string, source *concurrentContentBudgetSource, controls func(*Runtime) error, calls, diagnostics func() int32, count int, tail string) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	// Race instrumentation can make the two real 4 MiB Store writes exceed
+	// ten seconds while the product's independent content budget remains 30s.
+	// This fixture watchdog must contain a test, not censor a valid recording.
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	secondLease, err := f.runtime.bodyAdmission.Acquire(ctx)
 	if err != nil {
