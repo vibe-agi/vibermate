@@ -159,7 +159,14 @@ func TestEvidenceCompressionContentCodecsSurviveReopen(t *testing.T) {
 	got, err := store.ExchangeContentRepository().Get(ctx, want.ExchangeID, at.Add(time.Minute))
 	// Presentation is a derived read view, not part of the retained record.
 	want.Presentation = exchangecontent.RequestPresentation{Mode: exchangecontent.RequestPresentationCheckpoint}
-	if err != nil || !reflect.DeepEqual(got, want) {
+	var gotCanonical, wantCanonical bytes.Buffer
+	if err == nil {
+		err = exchangecontent.WriteCanonicalJSON(&gotCanonical, got)
+	}
+	if err == nil {
+		err = exchangecontent.WriteCanonicalJSON(&wantCanonical, want)
+	}
+	if err != nil || !bytes.Equal(gotCanonical.Bytes(), wantCanonical.Bytes()) {
 		t.Fatalf("complete content record changed after reopen: %v", err)
 	}
 	if _, err := store.ExchangeContentRepository().Get(ctx, want.ExchangeID, want.ExpiresAt); !errors.Is(err, exchangecontent.ErrNotFound) {
