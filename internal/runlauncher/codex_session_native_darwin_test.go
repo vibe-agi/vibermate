@@ -352,7 +352,7 @@ func TestCodexSessionGuidanceUsesOnlyInteractiveTerminals(t *testing.T) {
 		}
 		launcher.announceCodexSessions(test.recipe)
 		poll := []unix.PollFd{{Fd: int32(master.Fd()), Events: unix.POLLIN}}
-		n, err := unix.Poll(poll, 20)
+		n, err := pollCodexGuidance(poll, 20, unix.Poll, time.Now)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -370,5 +370,93 @@ func TestCodexSessionGuidanceUsesOnlyInteractiveTerminals(t *testing.T) {
 		if piped.Len() != 0 || (test.want == "" && actual != "") || (test.want != "" && !strings.Contains(actual, test.want)) {
 			t.Fatalf("terminal guidance mismatch: want=%q terminal=%q pipe=%q", test.want, actual, piped.String())
 		}
+	}
+}
+
+func pollCodexGuidance(fds []unix.PollFd, timeout int, poll func([]unix.PollFd, int) (int, error), now func() time.Time) (int, error) {
+	deadline := now().Add(time.Duration(timeout) * time.Millisecond)
+	for {
+		n, err := poll(fds, timeout)
+		if err != unix.EINTR {
+			return n, err
+		}
+		remaining := deadline.Sub(now())
+		if remaining <= 0 {
+			return n, err
+		}
+		// Poll uses whole milliseconds; round up only the remaining budget.
+		timeout = int((remaining + time.Millisecond - 1) / time.Millisecond)
+	}
+}
+
+func TestCodexGuidancePollRetriesInterruptedPTYWait(t *testing.T) {
+	master, slave := codexTestPTY(t)
+	defer slave.Close()
+	if _, err := io.WriteString(slave, "guidance fixture\n"); err != nil {
+		t.Fatal(err)
+	}
+	fds := []unix.PollFd{{Fd: int32(master.Fd()), Events: unix.POLLIN}}
+	interrupted := false
+	n, err := pollCodexGuidance(fds, 20, func(fds []unix.PollFd, timeout int) (int, error) {
+		if !interrupted {
+			interrupted = true
+			return -1, unix.EINTR
+		}
+		return unix.Poll(fds, timeout)
+	}, time.Now)
+	if err != nil || n != 1 || fds[0].Revents&unix.POLLIN == 0 {
+		t.Fatalf("interrupted PTY wait did not reach readiness: n=%d revents=%d err=%v", n, fds[0].Revents, err)
+	}
+	var data [4096]byte
+	n, err = master.Read(data[:])
+	if err != nil || !strings.Contains(string(data[:n]), "guidance fixture") {
+		t.Fatalf("ready PTY did not yield fixture: n=%d err=%v", n, err)
+	}
+}
+
+func TestCodexGuidancePollPreservesHardErrorsAndTimeout(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		n    int
+		err  error
+	}{
+		{"hard error", -1, unix.EBADF},
+		{"uninterrupted timeout", 0, nil},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			n, err := pollCodexGuidance(nil, 20, func([]unix.PollFd, int) (int, error) {
+				return test.n, test.err
+			}, time.Now)
+			if n != test.n || err != test.err {
+				t.Fatalf("poll result changed: n=%d err=%v", n, err)
+			}
+		})
+	}
+}
+
+func TestCodexGuidancePollInterruptionsRespectOriginalDeadline(t *testing.T) {
+	start := time.Unix(0, 0)
+	clock := []time.Time{start, start.Add(7 * time.Millisecond), start.Add(20 * time.Millisecond)}
+	now := func() time.Time {
+		if len(clock) == 0 {
+			t.Fatal("interrupted wait exceeded its original deadline")
+		}
+		current := clock[0]
+		clock = clock[1:]
+		return current
+	}
+	var timeouts []int
+	n, err := pollCodexGuidance(nil, 20, func(_ []unix.PollFd, timeout int) (int, error) {
+		timeouts = append(timeouts, timeout)
+		if len(timeouts) > 2 {
+			t.Fatal("interrupted wait polled past its original deadline")
+		}
+		return -1, unix.EINTR
+	}, now)
+	if n != -1 || err != unix.EINTR {
+		t.Fatalf("exhausted interruption became a successful wait: n=%d err=%v", n, err)
+	}
+	if len(timeouts) != 2 || timeouts[0] != 20 || timeouts[1] != 13 || len(clock) != 0 {
+		t.Fatalf("wait did not consume only its original budget: timeouts=%v clock=%v", timeouts, clock)
 	}
 }
