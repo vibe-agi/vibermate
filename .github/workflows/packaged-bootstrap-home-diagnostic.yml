@@ -1,0 +1,361 @@
+name: diagnostic only - packaged bootstrap HOME A/B
+on:
+  push:
+    branches:
+      - diagnostic/packaged-bootstrap-home-20261008
+permissions:
+  contents: read
+concurrency:
+  group: vibermate-packaged-bootstrap-home-diagnostic
+  cancel-in-progress: false
+jobs:
+  producer:
+    environment: packaged-acceptance
+    runs-on: macos-15
+    timeout-minutes: 30
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_16.2.app/Contents/Developer
+      DESKTOP_APP: ${{ github.workspace }}/dist/ViberMate.app
+    outputs:
+      artifact_id: ${{ steps.upload.outputs.artifact-id }}
+      archive_sha256: ${{ steps.archive.outputs.sha256 }}
+      revision: ${{ steps.source.outputs.revision }}
+    steps:
+      - name: Check out the frozen diagnostic candidate
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          clean: true
+      - name: Establish clean source and private producer paths
+        id: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+          [[ "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]]
+          task_root="$RUNNER_TEMP/vibermate-bootstrap-producer-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          test ! -e "$task_root"
+          install -d -m 0700 "$task_root" "$task_root/payload"
+          printf '# absent labels are not-run; repeated app_verify records both bundle checks\n' > "$task_root/producer-exits.txt"
+          {
+            printf 'TASK_ROOT=%s\nACCEPTANCE_ROOT=%s\n' "$task_root" "$task_root"
+            printf 'PRODUCER_EXITS=%s/producer-exits.txt\n' "$task_root"
+            printf 'PAYLOAD_ROOT=%s/payload\nINPUT_ARCHIVE=%s/packaged-inputs.tar.gz\n' "$task_root" "$task_root"
+          } >> "$GITHUB_ENV"
+          printf 'revision=%s\n' "$GITHUB_SHA" >> "$GITHUB_OUTPUT"
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: go.mod
+          check-latest: false
+          cache: true
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: 22.23.1
+      - name: Install the fixed Claude package in the private acceptance root
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          npm install --ignore-scripts --no-audit --no-fund \
+            --prefix "${ACCEPTANCE_ROOT}/client" \
+            --cache "${ACCEPTANCE_ROOT}/npm-cache" \
+            @anthropic-ai/claude-code-darwin-arm64@2.1.220
+          fixed_claude="${ACCEPTANCE_ROOT}/client/node_modules/@anthropic-ai/claude-code-darwin-arm64/claude"
+          test -f "${fixed_claude}"
+          test ! -L "${fixed_claude}"
+          test -x "${fixed_claude}"
+          test "$(shasum -a 256 "${fixed_claude}" | awk '{print $1}')" = "8addc857f3fe64d5a0368af9ee50321b50afb4a6918ba3ef018ab84f5dbbe081"
+          test "$(node -p 'require(process.argv[1]+"/package.json").version' "${ACCEPTANCE_ROOT}/client/node_modules/@anthropic-ai/claude-code-darwin-arm64")" = "2.1.220"
+          node -e 'const p=require(process.argv[1]); if (p.packages["node_modules/@anthropic-ai/claude-code-darwin-arm64"].integrity !== "sha512-rmtd41Bf+n+YnhjSjtQ8WG5qy8KKogUp3YRfQrkLsTgPUD0H3j869rBInBJT3SHrKQ0hLghQLGM73CC1C+USLQ==") process.exit(1)' "${ACCEPTANCE_ROOT}/client/package-lock.json"
+          printf 'FIXED_CLAUDE_PATH=%s\n' "${fixed_claude}" >> "${GITHUB_ENV}"
+      - name: Install the pinned Flutter SDK
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          ui/flutter_app/tool/install_ci_flutter.sh "$TASK_ROOT/flutter"
+          printf '%s/flutter/bin\n' "$TASK_ROOT" >> "$GITHUB_PATH"
+          printf 'FLUTTER_ROOT=%s/flutter\n' "$TASK_ROOT" >> "$GITHUB_ENV"
+      - name: Install the locked CocoaPods version
+        run: bash ui/flutter_app/tool/install_ci_cocoapods.sh
+      - name: Check the official client catalogue and build once
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          test "$(uname -m)" = arm64
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+          set +e
+          VIBERMATE_OFFICIAL_CLAUDE="$FIXED_CLAUDE_PATH" \
+            go test -count=1 -run '^TestOfficialInstalledClientPackagesMatchTheBuiltInCatalog$/^Claude_Code$' ./internal/clientadapter
+          build_exit=$?
+          set -e
+          printf 'client_catalog=%d\n' "$build_exit" >> "$PRODUCER_EXITS"
+          test "$build_exit" -eq 0
+          set +e
+          ui/flutter_app/tool/build_macos_app.sh live
+          build_exit=$?
+          set -e
+          printf 'app_build=%d\n' "$build_exit" >> "$PRODUCER_EXITS"
+          test "$build_exit" -eq 0
+          set +e
+          ui/flutter_app/tool/verify_macos_app.sh "${DESKTOP_APP}" live
+          build_exit=$?
+          set -e
+          printf 'app_verify=%d\n' "$build_exit" >> "$PRODUCER_EXITS"
+          test "$build_exit" -eq 0
+          set +e
+          go build -buildvcs=true -trimpath -o "$TASK_ROOT/vibermate-acceptance" ./cmd/vibermate-acceptance
+          build_exit=$?
+          set -e
+          printf 'harness_build=%d\n' "$build_exit" >> "$PRODUCER_EXITS"
+          test "$build_exit" -eq 0
+          set +e
+          go build -buildvcs=true -trimpath -o "$TASK_ROOT/vibermate-acceptance-verify" ./cmd/vibermate-acceptance-verify
+          build_exit=$?
+          set -e
+          printf 'verifier_build=%d\n' "$build_exit" >> "$PRODUCER_EXITS"
+          test "$build_exit" -eq 0
+      - name: Stage and authenticate all packaged inputs
+        id: archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          ditto --norsrc --noextattr --noacl --noqtn -X "$DESKTOP_APP" "$PAYLOAD_ROOT/ViberMate.app"
+          ditto --norsrc --noextattr --noacl --noqtn -X "$ACCEPTANCE_ROOT/client" "$PAYLOAD_ROOT/client"
+          install -m 0755 "$TASK_ROOT/vibermate-acceptance" "$PAYLOAD_ROOT/vibermate-acceptance"
+          install -m 0755 "$TASK_ROOT/vibermate-acceptance-verify" "$PAYLOAD_ROOT/vibermate-acceptance-verify"
+          set +e
+          ui/flutter_app/tool/verify_macos_app.sh "$PAYLOAD_ROOT/ViberMate.app" live
+          build_exit=$?
+          set -e
+          printf 'app_verify=%d\n' "$build_exit" >> "$PRODUCER_EXITS"
+          test "$build_exit" -eq 0
+          set +e
+          node tool/verify-packaged-diagnostic-verifier.mjs "$PAYLOAD_ROOT/vibermate-acceptance-verify" "$GITHUB_SHA"
+          build_exit=$?
+          set -e
+          printf 'verifier_source=%d\n' "$build_exit" >> "$PRODUCER_EXITS"
+          test "$build_exit" -eq 0
+          set +e
+          COPYFILE_DISABLE=1 /usr/bin/tar -czf "$INPUT_ARCHIVE" -C "$PAYLOAD_ROOT" . &&
+            shasum -a 256 "$INPUT_ARCHIVE" > "$TASK_ROOT/archive.digest"
+          build_exit=$?
+          set -e
+          printf 'archive=%d\n' "$build_exit" >> "$PRODUCER_EXITS"
+          test "$build_exit" -eq 0
+          digest="$(awk '{print $1}' "$TASK_ROOT/archive.digest")"
+          [[ "$digest" =~ ^[0-9a-f]{64}$ ]]
+          printf 'sha256=%s\n' "$digest" >> "$GITHUB_OUTPUT"
+      - name: Transfer the single authenticated archive
+        id: upload
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: private-bootstrap-inputs-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}
+          path: ${{ env.INPUT_ARCHIVE }}
+          if-no-files-found: error
+          retention-days: 7
+      - name: Retain actual producer statuses; absent labels mean not-run
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: private-bootstrap-producer-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}
+          path: ${{ env.PRODUCER_EXITS }}
+          if-no-files-found: error
+          retention-days: 7
+      - name: Remove private producer state
+        if: ${{ always() }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if test -n "${TASK_ROOT:-}"; then
+            test "$TASK_ROOT" = "$RUNNER_TEMP/vibermate-bootstrap-producer-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+            test ! -L "$TASK_ROOT"
+            rm -rf -- "$TASK_ROOT"
+          fi
+  consumer:
+    needs: producer
+    environment: packaged-acceptance
+    runs-on: macos-15
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        policy: [isolated, login]
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_16.2.app/Contents/Developer
+      DIAGNOSTIC_POLICY: ${{ matrix.policy }}
+      EXPECTED_REVISION: ${{ needs.producer.outputs.revision }}
+      EXPECTED_DIGEST: ${{ needs.producer.outputs.archive_sha256 }}
+      EXPECTED_ARTIFACT_ID: ${{ needs.producer.outputs.artifact_id }}
+    steps:
+      - name: Check out the same frozen diagnostic candidate
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          clean: true
+      - name: Establish clean source and fresh private consumer paths
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          [[ "$EXPECTED_REVISION" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$EXPECTED_DIGEST" =~ ^[0-9a-f]{64}$ ]]
+          [[ "$EXPECTED_ARTIFACT_ID" =~ ^[0-9]+$ ]]
+          test "$(git rev-parse HEAD)" = "$EXPECTED_REVISION"
+          test "$GITHUB_SHA" = "$EXPECTED_REVISION"
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+          test "$(uname -m)" = arm64
+          case "$DIAGNOSTIC_POLICY" in isolated|login) ;; *) exit 1 ;; esac
+          task_root="$RUNNER_TEMP/vibermate-bootstrap-consumer-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-$DIAGNOSTIC_POLICY"
+          test ! -e "$task_root"
+          install -d -m 0700 "$task_root" "$task_root/download" "$task_root/payload" "$task_root/evidence" "$task_root/upload"
+          : > "$task_root/evidence/exits.txt"
+          printf 'revision=%s\nartifact_id=%s\narchive_sha256=%s\n' "$EXPECTED_REVISION" "$EXPECTED_ARTIFACT_ID" "$EXPECTED_DIGEST" > "$task_root/evidence/identity.txt"
+          {
+            printf 'TASK_ROOT=%s\nDOWNLOAD_ROOT=%s/download\nPAYLOAD_ROOT=%s/payload\n' "$task_root" "$task_root" "$task_root"
+            printf 'EVIDENCE_ROOT=%s/evidence\nUPLOAD_ROOT=%s/upload\n' "$task_root" "$task_root"
+          } >> "$GITHUB_ENV"
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: go.mod
+          check-latest: false
+          cache: true
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: 22.23.1
+      - name: Install the pinned Flutter SDK for provenance
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          ui/flutter_app/tool/install_ci_flutter.sh "$TASK_ROOT/flutter"
+          printf '%s/flutter/bin\n' "$TASK_ROOT" >> "$GITHUB_PATH"
+          printf 'FLUTTER_ROOT=%s/flutter\n' "$TASK_ROOT" >> "$GITHUB_ENV"
+      - name: Download only the producer artifact ID
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          artifact-ids: ${{ needs.producer.outputs.artifact_id }}
+          path: ${{ env.DOWNLOAD_ROOT }}
+          merge-multiple: true
+      - name: Authenticate bytes before extracting the archive
+        id: authenticate
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          [[ "$EXPECTED_DIGEST" =~ ^[0-9a-f]{64}$ ]]
+          shopt -s nullglob dotglob
+          entries=("$DOWNLOAD_ROOT"/*)
+          test "${#entries[@]}" -eq 1
+          archive="$DOWNLOAD_ROOT/packaged-inputs.tar.gz"
+          test "${entries[0]}" = "$archive"
+          test -f "$archive"
+          test ! -L "$archive"
+          digest="$(shasum -a 256 "$archive" | awk '{print $1}')"
+          test "$digest" = "$EXPECTED_DIGEST"
+          entries=("$PAYLOAD_ROOT"/*)
+          test "${#entries[@]}" -eq 0
+          COPYFILE_DISABLE=1 /usr/bin/tar -xzf "$archive" -C "$PAYLOAD_ROOT"
+      - name: Verify transferred verifier source and App before launch
+        id: transfer
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$EXPECTED_REVISION" =~ ^[0-9a-f]{40}$ ]]
+          node tool/verify-packaged-diagnostic-verifier.mjs "$PAYLOAD_ROOT/vibermate-acceptance-verify" "$EXPECTED_REVISION"
+          ui/flutter_app/tool/verify_macos_app.sh "$PAYLOAD_ROOT/ViberMate.app" live
+      - name: Run full diagnostic acceptance and retain its actual exit
+        id: acceptance
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          set +e
+          "$PAYLOAD_ROOT/vibermate-acceptance" \
+            --desktop-app "$PAYLOAD_ROOT/ViberMate.app" \
+            --claude "$PAYLOAD_ROOT/client/node_modules/@anthropic-ai/claude-code-darwin-arm64/claude" \
+            --deterministic-only --timeout 10m \
+            --report "$EVIDENCE_ROOT/deterministic-v7.json" \
+            --diagnostic-daemon-home "$DIAGNOSTIC_POLICY" \
+            --bootstrap-diagnostic "$EVIDENCE_ROOT/bootstrap.json"
+          harness_exit=$?
+          set -e
+          printf 'harness=%d\n' "$harness_exit" >> "$EVIDENCE_ROOT/exits.txt"
+      - name: Run the transferred fresh V7 verifier regardless of harness exit
+        id: verifier
+        if: ${{ always() && steps.transfer.outcome == 'success' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          set +e
+          "$PAYLOAD_ROOT/vibermate-acceptance-verify" \
+            --report "$EVIDENCE_ROOT/deterministic-v7.json" \
+            --expected-mode deterministic \
+            --expected-schema vibermate.m0-assembly-acceptance/v7 \
+            --expected-revision "$EXPECTED_REVISION" \
+            --expected-client-id claude-code \
+            --expected-client-version 2.1.220 \
+            --source-root "$GITHUB_WORKSPACE" \
+            --desktop-app "$PAYLOAD_ROOT/ViberMate.app" \
+            --acceptance-executable "$PAYLOAD_ROOT/vibermate-acceptance" \
+            --client-entrypoint "$PAYLOAD_ROOT/client/node_modules/@anthropic-ai/claude-code-darwin-arm64/claude"
+          verifier_exit=$?
+          set -e
+          printf 'verifier=%d\n' "$verifier_exit" >> "$EVIDENCE_ROOT/exits.txt"
+      - name: Stage only bounded private evidence
+        if: ${{ always() && env.EVIDENCE_ROOT != '' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          for name in identity.txt exits.txt deterministic-v7.json; do
+            if test -f "$EVIDENCE_ROOT/$name" && test ! -L "$EVIDENCE_ROOT/$name"; then
+              install -m 0600 "$EVIDENCE_ROOT/$name" "$UPLOAD_ROOT/$name"
+            fi
+          done
+          if test -e "$EVIDENCE_ROOT/bootstrap.json" || test -L "$EVIDENCE_ROOT/bootstrap.json"; then
+            node -e 'const fs=require("node:fs"); const s=fs.lstatSync(process.argv[1]); if (!s.isFile() || s.isSymbolicLink() || s.size>4096 || (s.mode&0o777)!==0o600) process.exit(1)' "$EVIDENCE_ROOT/bootstrap.json"
+            install -m 0600 "$EVIDENCE_ROOT/bootstrap.json" "$UPLOAD_ROOT/bootstrap.json"
+          fi
+      - name: Retain private diagnostic only evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: private-bootstrap-evidence-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}-${{ matrix.policy }}
+          path: ${{ env.UPLOAD_ROOT }}
+          if-no-files-found: error
+          retention-days: 7
+      - name: Preserve both actual exits as the diagnostic only job outcome
+        id: outcome
+        if: ${{ always() }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f "$EVIDENCE_ROOT/exits.txt"
+          test ! -L "$EVIDENCE_ROOT/exits.txt"
+          test "$(wc -l < "$EVIDENCE_ROOT/exits.txt" | tr -d ' ')" -eq 2
+          test "$(grep -Ec '^harness=[0-9]+$' "$EVIDENCE_ROOT/exits.txt")" -eq 1
+          test "$(grep -Ec '^verifier=[0-9]+$' "$EVIDENCE_ROOT/exits.txt")" -eq 1
+          harness_exit="$(sed -n 's/^harness=//p' "$EVIDENCE_ROOT/exits.txt")"
+          verifier_exit="$(sed -n 's/^verifier=//p' "$EVIDENCE_ROOT/exits.txt")"
+          printf 'diagnostic only: harness=%s verifier=%s\n' "$harness_exit" "$verifier_exit" >> "$GITHUB_STEP_SUMMARY"
+          test "$harness_exit" -eq 0
+          test "$verifier_exit" -eq 0
+      - name: Remove private consumer state
+        if: ${{ always() }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if test -n "${TASK_ROOT:-}"; then
+            case "$DIAGNOSTIC_POLICY" in isolated|login) ;; *) exit 1 ;; esac
+            test "$TASK_ROOT" = "$RUNNER_TEMP/vibermate-bootstrap-consumer-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-$DIAGNOSTIC_POLICY"
+            test ! -L "$TASK_ROOT"
+            rm -rf -- "$TASK_ROOT"
+          fi
