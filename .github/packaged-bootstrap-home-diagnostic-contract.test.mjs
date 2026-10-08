@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { readFileSync, writeFileSync, mkdtempSync, mkdirSync, rmSync, existsSync, symlinkSync, unlinkSync, readdirSync, statSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdtempSync, mkdirSync, rmSync, existsSync, symlinkSync, unlinkSync, readdirSync, statSync, chmodSync, readlinkSync } from 'node:fs';
 import { spawnSync, execFileSync } from 'node:child_process';
 import { generateKeyPairSync } from 'node:crypto';
 import { tmpdir } from 'node:os';
@@ -178,6 +178,8 @@ test('actual archive shell rejects mismatches before extraction and accepts auth
     const download = join(root, 'download'); const payload = join(root, 'payload'); const source = join(root, 'source');
     for (const path of [download, payload, source]) mkdirSync(path, { mode: 0o700 });
     writeFileSync(join(source, 'authenticated.txt'), 'same producer bytes');
+    chmodSync(join(source, 'authenticated.txt'), 0o755);
+    symlinkSync('authenticated.txt', join(source, 'authenticated-link'));
     const archive = join(download, 'packaged-inputs.tar.gz');
     execFileSync('/usr/bin/tar', ['-czf', archive, '-C', source, '.'], { env: { ...process.env, COPYFILE_DISABLE: '1' } });
     const env = { DOWNLOAD_ROOT: download, PAYLOAD_ROOT: payload, EXPECTED_DIGEST: '0'.repeat(64) };
@@ -203,5 +205,8 @@ test('actual archive shell rejects mismatches before extraction and accepts auth
     writeFileSync(archive, bytes);
     assert.equal(execute(script, env).status, 0);
     assert.equal(readFileSync(join(payload, 'authenticated.txt'), 'utf8'), 'same producer bytes');
+    assert.equal(statSync(join(payload, 'authenticated.txt')).mode & 0o777, 0o755);
+    assert.equal(readlinkSync(join(payload, 'authenticated-link')), 'authenticated.txt');
+    assert.equal(statSync(payload).mode & 0o777, 0o700);
   });
 });

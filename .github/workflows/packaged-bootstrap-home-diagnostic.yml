@@ -264,7 +264,7 @@ jobs:
           test "$digest" = "$EXPECTED_DIGEST"
           entries=("$PAYLOAD_ROOT"/*)
           test "${#entries[@]}" -eq 0
-          COPYFILE_DISABLE=1 /usr/bin/tar -xzf "$archive" -C "$PAYLOAD_ROOT"
+          COPYFILE_DISABLE=1 /usr/bin/tar -xpzf "$archive" -C "$PAYLOAD_ROOT"
       - name: Verify transferred verifier source and App before launch
         id: transfer
         shell: bash
