@@ -69,6 +69,11 @@ func (pipeline *Pipeline) DryRun(ctx context.Context, request ClientRequest) (Dr
 		if err := pipeline.bodyAdmission.CheckPlan(request.plan); err != nil {
 			return DryRunResult{}, err
 		}
+		if request.bodyLease != nil {
+			if err := request.bodyLease.checkPlan(request.plan); err != nil {
+				return DryRunResult{}, err
+			}
+		}
 	}
 	if err := validateClientOperation(request.plan, request.operation, request.replayClass); err != nil {
 		return DryRunResult{}, newFailure(ReasonEnvironmentPlanInvalid, request.exchangeID, 0, err)

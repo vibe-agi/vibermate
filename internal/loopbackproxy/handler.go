@@ -978,16 +978,16 @@ func (handler *Handler) serveInner(
 	}
 	var bodyLease *exchange.BodyLease
 	if operation.Kind() == protocolspec.ClientOperationSemantic && handler.bodyAdmission != nil {
-		bodyLease, err = handler.bodyAdmission.Acquire(request.Context())
+		if err := handler.bodyAdmission.CheckPlan(plan); err != nil {
+			writeReason(writer, http.StatusRequestEntityTooLarge, ReasonRequestBodyInvalid, "")
+			return
+		}
+		bodyLease, err = handler.bodyAdmission.AcquirePlan(request.Context(), plan)
 		if err != nil {
 			writeReason(writer, http.StatusServiceUnavailable, ReasonProxyStopping, "")
 			return
 		}
 		defer bodyLease.Release()
-		if err := handler.bodyAdmission.CheckPlan(plan); err != nil {
-			writeReason(writer, http.StatusRequestEntityTooLarge, ReasonRequestBodyInvalid, "")
-			return
-		}
 		// Waiters install no callbacks. Join an entered Close before returning
 		// the full slot, even when cancellation has already been observed.
 		defer joinBodyCancellation(request.Context(), request.Body)()

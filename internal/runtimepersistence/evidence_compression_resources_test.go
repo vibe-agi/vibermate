@@ -169,6 +169,9 @@ func TestEvidenceCompressionContentCodecsSurviveReopen(t *testing.T) {
 	if err != nil || !bytes.Equal(gotCanonical.Bytes(), wantCanonical.Bytes()) {
 		t.Fatalf("complete content record changed after reopen: %v", err)
 	}
+	if !reflect.DeepEqual(got.Presentation, want.Presentation) {
+		t.Fatalf("content presentation changed after reopen: got=%+v want=%+v", got.Presentation, want.Presentation)
+	}
 	if _, err := store.ExchangeContentRepository().Get(ctx, want.ExchangeID, want.ExpiresAt); !errors.Is(err, exchangecontent.ErrNotFound) {
 		t.Fatalf("expired content record error = %v", err)
 	}

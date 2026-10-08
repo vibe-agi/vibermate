@@ -165,6 +165,28 @@ func testRuntimeLongSessionFixture(t *testing.T, original bool, scenario string,
 	if script != "" {
 		protocol.Transforms = []codelibrary.TransformRevision{{ID: "long-transform", Revision: 1, CollectionID: "long", DisplayName: "Long transform", PublishedAt: time.Now().UTC(), Policy: messagetransform.Policy{RequestJavaScript: script}}}
 	}
+	stages := 0
+	if scenario == "transform_http_two" || scenario == "transform_http_excess" {
+		stages = 2
+	}
+	if scenario == "transform_http_three" {
+		stages = 3
+	}
+	for i := 1; i <= stages; i++ {
+		previous := wantTail
+		wantTail += fmt.Sprintf("-%d", i)
+		script := fmt.Sprintf(`const p=JSON.parse(request.body);if(p.input[0].content!==%q)throw new Error("stage order");p.input[0].content=%q;request.body=JSON.stringify(p);request.headers["x-stage"]=%q;`, previous, wantTail, fmt.Sprint(i))
+		protocol.Transforms = append(protocol.Transforms, codelibrary.TransformRevision{ID: codelibrary.TransformID(fmt.Sprintf("stage-%d", i)), Revision: 1, CollectionID: "long", DisplayName: "Ordered stage", PublishedAt: time.Now().UTC(), Policy: messagetransform.Policy{RequestJavaScript: script}})
+	}
+	if scenario == "transform_http_excess" {
+		policy := f.runtime.bodyAdmission.Policy()
+		policy.ActiveBytes = policy.SlotBytes
+		var err error
+		f.runtime.bodyAdmission, err = exchange.NewBodyAdmission(policy)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls.Add(1)
 		type wireMessage struct {
@@ -179,8 +201,11 @@ func testRuntimeLongSessionFixture(t *testing.T, original bool, scenario string,
 		if err != nil {
 			t.Error(err)
 		}
-		if !crossChat && scenario != "body_edit" && scenario != "model_mapping" && !bytes.Equal(received, wantBody) {
+		if stages == 0 && !crossChat && scenario != "body_edit" && scenario != "model_mapping" && !bytes.Equal(received, wantBody) {
 			t.Error("same-dialect no-op changed complete wire bytes")
+		}
+		if stages > 0 && r.Header.Get("X-Stage") != fmt.Sprint(stages) {
+			t.Error("ordered transform header missing")
 		}
 		if err := json.Unmarshal(received, &body); err != nil {
 			t.Error(err)
@@ -237,6 +262,11 @@ func testRuntimeLongSessionFixture(t *testing.T, original bool, scenario string,
 		t.Fatal(err)
 	}
 	var recorder exchangecontent.Recorder = f.runtime.contents
+	var transformedHTTP *transformHTTPRecorder
+	if stages > 0 {
+		transformedHTTP = &transformHTTPRecorder{Recorder: recorder, sink: recorder.(exchangecontent.SourceRecorder), completed: make(chan string, 1)}
+		recorder = transformedHTTP
+	}
 	var four *fourHTTPContentSource
 	if acceptance != nil && acceptance.httpFour {
 		four = &fourHTTPContentSource{Recorder: recorder, sink: recorder.(exchangecontent.SourceRecorder), entered: make(chan string, 4), release: make(chan struct{})}
@@ -300,9 +330,12 @@ func testRuntimeLongSessionFixture(t *testing.T, original bool, scenario string,
 	if err != nil {
 		t.Fatal(err)
 	}
-	lease, err := f.runtime.bodyAdmission.Acquire(ctx)
-	if err != nil {
-		t.Fatal(err)
+	var lease *exchange.BodyLease
+	if stages == 0 {
+		lease, err = f.runtime.bodyAdmission.AcquirePlan(ctx, plan)
+		if err != nil {
+			t.Fatal(err)
+		}
 	}
 	defer lease.Release()
 	items = make([]map[string]string, count)
@@ -332,6 +365,19 @@ func testRuntimeLongSessionFixture(t *testing.T, original bool, scenario string,
 	if four != nil {
 		lease.Release()
 		testDefaultFourHTTPExecutions(t, ctx, f, pipeline, body, four, acceptance.controls, func() int32 { return calls.Load() }, func() int32 { return diagnostics.Load() }, count, sentinel)
+		return
+	}
+	if transformedHTTP != nil {
+		lease.Release()
+		excess := scenario == "transform_http_excess"
+		testTransformHTTPExecution(t, ctx, f, pipeline, plan, body, transformedHTTP, sentinel, excess)
+		wantCalls := int32(1)
+		if excess {
+			wantCalls = 0
+		}
+		if calls.Load() != wantCalls || diagnostics.Load() != 0 {
+			t.Fatalf("upstream=%d diagnostics=%d", calls.Load(), diagnostics.Load())
+		}
 		return
 	}
 	t.Logf("complete request: items=%d wire=%d sentinel=%s", count, len(body), sentinel)

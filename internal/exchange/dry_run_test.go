@@ -58,7 +58,7 @@ func TestCandidateOriginalDryRunReadmissionParity(t *testing.T) {
 			}
 			pipeline.bodyAdmission = gate
 			// The sole model slot is already held. Dry-run must remain control work.
-			lease, err := gate.Acquire(context.Background())
+			lease, err := gate.AcquirePlan(context.Background(), plan)
 			if err != nil {
 				t.Fatal(err)
 			}

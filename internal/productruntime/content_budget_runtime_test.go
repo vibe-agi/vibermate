@@ -73,7 +73,7 @@ func testContentBudgetConcurrentExecutions(t *testing.T, _ context.Context, f ac
 	// This fixture watchdog must contain a test, not censor a valid recording.
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	secondLease, err := f.runtime.bodyAdmission.Acquire(ctx)
+	secondLease, err := f.runtime.bodyAdmission.AcquirePlan(ctx, plan)
 	if err != nil {
 		t.Fatal(err)
 	}

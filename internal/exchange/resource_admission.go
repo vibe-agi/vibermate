@@ -12,12 +12,15 @@ import (
 
 // ResourcePolicy is an internal finite policy, copied at construction.
 // ResponseBytes is independent of RequestBytes; neither may borrow the other.
+// RequestBytes and SlotBytes are base reservation floors. A compiled plan may
+// require more request credit, but its complete lease must fit ActiveBytes.
 type ResourcePolicy struct {
 	Content                                             exchangecontent.SourceLimits
 	RequestBytes, ResponseBytes, SlotBytes, ActiveBytes uint64
 }
 
-// DefaultResourcePolicy derives four complete ownership slots. Credits model
+// DefaultResourcePolicy derives four base ownership slots. Larger compiled
+// transform chains reserve more of the same finite active budget. Credits model
 // application representations; they are neither allocations nor an RSS bound.
 func DefaultResourcePolicy() (ResourcePolicy, error) {
 	content, err := exchangecontent.DefaultSourceLimits()
@@ -88,29 +91,65 @@ func NewBodyAdmission(policy ResourcePolicy) (*BodyAdmission, error) {
 }
 func (g *BodyAdmission) Policy() ResourcePolicy { return g.policy }
 
-// CheckPlan performs no body work. The fixed slot must already accommodate
-// this actual chain; callers never wait for an incremental slot upgrade.
+// CheckPlan performs no body work and checks complete plan feasibility. It does
+// not acquire credit; production ingress uses AcquirePlan before reading a body.
 func (g *BodyAdmission) CheckPlan(plan environment.RequestPlan) error {
+	_, _, _, err := g.planReservation(plan)
+	return err
+}
+
+func (g *BodyAdmission) planReservation(plan environment.RequestPlan) (cost, request, retained uint64, err error) {
 	if g == nil {
-		return errors.New("body admission gate missing")
+		return 0, 0, 0, errors.New("body admission gate missing")
 	}
-	retained, err := plan.TransformPipeline().RetainedRequestBytes()
+	retained, err = plan.TransformPipeline().RetainedRequestBytes()
 	if err != nil {
-		return err
+		return 0, 0, 0, err
 	}
 	base, _, err := RequiredExecutionEnvelope(g.policy.Content)
 	if err != nil {
-		return err
+		return 0, 0, 0, err
 	}
-	if retained > g.policy.RequestBytes-base {
-		return errors.New("transform retention exceeds the fixed request phase")
+	request, err = checkedEnvelope([2]uint64{base, 1}, [2]uint64{retained, 1})
+	if err != nil {
+		return 0, 0, 0, err
 	}
-	return nil
+	request = max(request, g.policy.RequestBytes)
+	// Preserve all explicit base-slot credit, including policy padding, while
+	// adding only the request phase's actual excess. Response never lends credit.
+	cost, err = checkedEnvelope([2]uint64{g.policy.SlotBytes, 1}, [2]uint64{request - g.policy.RequestBytes, 1})
+	if err != nil {
+		return 0, 0, 0, err
+	}
+	if cost > g.policy.ActiveBytes {
+		return 0, 0, 0, errors.New("complete transform plan exceeds active resource capacity")
+	}
+	return cost, request, retained, nil
 }
+
+// Acquire retains the base envelope for callers with no transforms. It cannot
+// later be upgraded while holding partial credits.
 func (g *BodyAdmission) Acquire(ctx context.Context) (*BodyLease, error) {
 	if g == nil || ctx == nil {
 		return nil, errors.New("body admission context or gate missing")
 	}
+	return g.acquire(ctx, bodyLeaseState{gate: g, reserved: g.policy.SlotBytes, requestBytes: g.policy.RequestBytes})
+}
+
+// AcquirePlan atomically acquires the actual frozen chain's complete envelope.
+// Waiters own neither credits nor body/Turn representations.
+func (g *BodyAdmission) AcquirePlan(ctx context.Context, plan environment.RequestPlan) (*BodyLease, error) {
+	if ctx == nil {
+		return nil, errors.New("body admission context missing")
+	}
+	cost, request, retained, err := g.planReservation(plan)
+	if err != nil {
+		return nil, err
+	}
+	return g.acquire(ctx, bodyLeaseState{gate: g, reserved: cost, requestBytes: request, transformBytes: retained, planBound: true, planDigest: plan.EnvironmentDigest(), protocolID: plan.ProtocolPlan().ID()})
+}
+
+func (g *BodyAdmission) acquire(ctx context.Context, reservation bodyLeaseState) (*BodyLease, error) {
 	for {
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -124,10 +163,10 @@ func (g *BodyAdmission) Acquire(ctx context.Context) (*BodyLease, error) {
 			g.mu.Unlock()
 			return nil, ErrRuntimeStopping
 		}
-		if g.policy.SlotBytes <= g.policy.ActiveBytes-g.used {
-			g.used += g.policy.SlotBytes
+		if reservation.reserved <= g.policy.ActiveBytes-g.used {
+			g.used += reservation.reserved
 			g.mu.Unlock()
-			return &BodyLease{state: &bodyLeaseState{gate: g}}, nil
+			return &BodyLease{state: &reservation}, nil
 		}
 		changed := g.changed
 		g.mu.Unlock()
@@ -171,13 +210,25 @@ type bodyLeaseState struct {
 	gate                                                *BodyAdmission
 	constructed, claimed, executing, released, refunded bool
 	requestUsed                                         uint64
+	reserved, requestBytes, transformBytes              uint64
+	planBound                                           bool
+	planDigest                                          environment.CandidateDigest
+	protocolID                                          environment.ClientProtocolPlanID
 }
 
 func (l *BodyLease) checkPlan(plan environment.RequestPlan) error {
 	if l == nil || l.state == nil {
 		return errors.New("body lease missing")
 	}
-	return l.state.gate.CheckPlan(plan)
+	s := l.state
+	_, _, retained, err := s.gate.planReservation(plan)
+	if err != nil {
+		return err
+	}
+	if retained != s.transformBytes || (s.planBound && (s.planDigest != plan.EnvironmentDigest() || s.protocolID != plan.ProtocolPlan().ID())) {
+		return errors.New("body lease does not reserve this frozen transform plan")
+	}
+	return nil
 }
 func (l *BodyLease) reserveConstructor(n uint64) error {
 	if l == nil || l.state == nil || l.state.gate == nil {
@@ -187,7 +238,7 @@ func (l *BodyLease) reserveConstructor(n uint64) error {
 	g := s.gate
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	if s.constructed || s.claimed || s.released || n > g.policy.RequestBytes {
+	if s.constructed || s.claimed || s.released || n > s.requestBytes {
 		return errors.New("body lease cannot construct request")
 	}
 	s.constructed = true
@@ -230,7 +281,7 @@ func (l *BodyLease) Release() {
 func (l *bodyLeaseState) refund() {
 	if l.released && !l.executing && !l.refunded {
 		l.refunded = true
-		l.gate.used -= l.gate.policy.SlotBytes
+		l.gate.used -= l.reserved
 		l.gate.notify()
 	}
 }
