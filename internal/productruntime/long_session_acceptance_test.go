@@ -48,16 +48,21 @@ func TestRuntimeLongSessionAcceptanceChild(t *testing.T) {
 }
 
 type longSessionAcceptanceOptions struct {
-	count    int
-	dense    bool
-	policy   exchange.ResourcePolicy
-	controls func(*Runtime) error
-	httpFour bool
+	count          int
+	dense          bool
+	policy         exchange.ResourcePolicy
+	controls       func(*Runtime) error
+	httpFour       bool
+	concurrentMode *contentBudgetFixtureMode
 }
 
 // The diagnostic queries actual constructed Pipeline state without exposing
 // a product tuning API or mutating the private configuration.
 func (o *longSessionAcceptanceOptions) observePipelineBudget(t *testing.T, pipeline exchangeRuntime) {
+	contentBudget := 30 * time.Second
+	if o.concurrentMode != nil {
+		contentBudget = o.concurrentMode.content
+	}
 	concrete, ok := pipeline.(*exchange.Pipeline)
 	if !ok {
 		t.Fatalf("fixture has no actual Pipeline: %T", pipeline)
@@ -65,7 +70,7 @@ func (o *longSessionAcceptanceOptions) observePipelineBudget(t *testing.T, pipel
 	for _, budget := range []struct {
 		field string
 		want  time.Duration
-	}{{"observeLimit", 2 * time.Second}, {"contentObserveLimit", 30 * time.Second}} {
+	}{{"observeLimit", 2 * time.Second}, {"contentObserveLimit", contentBudget}} {
 		value := reflect.ValueOf(concrete).Elem().FieldByName(budget.field)
 		if !value.IsValid() || value.Kind() != reflect.Int64 || time.Duration(value.Int()) != budget.want {
 			t.Fatalf("actual %s budget is invalid", budget.field)

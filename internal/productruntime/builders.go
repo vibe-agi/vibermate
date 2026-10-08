@@ -935,9 +935,18 @@ const contentObservationCompletionBudget = 30 * time.Second
 func buildExchange(
 	request exchangeBuildRequest,
 ) (exchangeRuntime, error) {
+	options, err := buildExchangeOptions(request)
+	if err != nil {
+		return nil, err
+	}
+	return exchange.New(options)
+}
+
+// Builds constructor options by value with the production completion budget.
+func buildExchangeOptions(request exchangeBuildRequest) (exchange.Options, error) {
 	if request.activities == nil || request.identities == nil ||
 		request.contents == nil || request.clock == nil || request.annotations == nil {
-		return nil, errors.New("Exchange evidence dependencies are incomplete")
+		return exchange.Options{}, errors.New("Exchange evidence dependencies are incomplete")
 	}
 	anthropicOptions, responsesOptions, passthroughOptions := anthropicchat.DefaultOptions(), responseschat.DefaultOptions(), openairesponses.DefaultOptions()
 	var contentLimits *exchangecontent.SourceLimits
@@ -950,25 +959,25 @@ func buildExchange(
 		anthropicOptions,
 	)
 	if err != nil {
-		return nil, fmt.Errorf("build Anthropic Chat protocol path: %w", err)
+		return exchange.Options{}, fmt.Errorf("build Anthropic Chat protocol path: %w", err)
 	}
 	responsesPath, err := responseschat.NewProtocolPath(
 		responsesOptions,
 	)
 	if err != nil {
-		return nil, fmt.Errorf("build Responses Chat protocol path: %w", err)
+		return exchange.Options{}, fmt.Errorf("build Responses Chat protocol path: %w", err)
 	}
 	messagesPath, err := anthropicchat.NewMessagesProtocolPath(
 		anthropicOptions,
 	)
 	if err != nil {
-		return nil, fmt.Errorf("build Anthropic Messages protocol path: %w", err)
+		return exchange.Options{}, fmt.Errorf("build Anthropic Messages protocol path: %w", err)
 	}
 	responsesPassthroughPath, err := responseschat.NewResponsesPassthroughProtocolPath(
 		passthroughOptions,
 	)
 	if err != nil {
-		return nil, fmt.Errorf("build Responses passthrough protocol path: %w", err)
+		return exchange.Options{}, fmt.Errorf("build Responses passthrough protocol path: %w", err)
 	}
 	protocolPaths, err := protocolpath.NewSelector(
 		anthropicPath,
@@ -977,9 +986,9 @@ func buildExchange(
 		responsesPassthroughPath,
 	)
 	if err != nil {
-		return nil, fmt.Errorf("build protocol path selector: %w", err)
+		return exchange.Options{}, fmt.Errorf("build protocol path selector: %w", err)
 	}
-	return exchange.New(exchange.Options{
+	return exchange.Options{
 		BodyAdmission: request.bodyAdmission,
 		OwnerContext:  request.ownerContext,
 		Actions:       request.actions,
@@ -1007,7 +1016,7 @@ func buildExchange(
 		Now:                       request.clock.Now,
 		RawEvidence:               request.rawEvidence,
 		ReportRawEvidenceFailure:  request.reportRawEvidenceFailure,
-	})
+	}, nil
 }
 
 type originalBuildRequest struct {

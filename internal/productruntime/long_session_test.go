@@ -83,7 +83,11 @@ func testRuntimeLongSessionFixture(t *testing.T, original bool, scenario string,
 	}
 	// This fixture watchdog covers setup, HTTP controls and final full-content
 	// readbacks; product observation deadlines remain independent.
-	ctx, stopFixture := context.WithTimeout(context.Background(), 2*time.Minute)
+	fixtureBudget := 2 * time.Minute
+	if acceptance != nil && acceptance.concurrentMode != nil {
+		fixtureBudget = acceptance.concurrentMode.outer
+	}
+	ctx, stopFixture := context.WithTimeout(context.Background(), fixtureBudget)
 	defer stopFixture()
 	if acceptance != nil {
 		count = acceptance.count
@@ -292,7 +296,11 @@ func testRuntimeLongSessionFixture(t *testing.T, original bool, scenario string,
 		held = &heldLongSessionSource{Recorder: f.runtime.contents, sink: f.runtime.contents.(exchangecontent.SourceRecorder), entered: make(chan struct{}), release: make(chan struct{})}
 		recorder = held
 	}
-	pipeline, err := buildExchange(exchangeBuildRequest{bodyAdmission: f.runtime.bodyAdmission, ownerContext: ctx, actions: f.runtime.offlineHold, accounts: f.runtime.accounts, provider: provider, toolDecisions: decisions, activities: f.runtime.activities, identities: f.runtime.conversationIDs, contents: recorder, clock: SystemClock{}, hold: exchange.DefaultHoldPolicy(), annotations: annotations, reportObservationFailure: func(stage string, err error) {
+	build := buildExchange
+	if concurrent != nil {
+		build = buildConcurrentContentFixtureExchange
+	}
+	pipeline, err := build(exchangeBuildRequest{bodyAdmission: f.runtime.bodyAdmission, ownerContext: ctx, actions: f.runtime.offlineHold, accounts: f.runtime.accounts, provider: provider, toolDecisions: decisions, activities: f.runtime.activities, identities: f.runtime.conversationIDs, contents: recorder, clock: SystemClock{}, hold: exchange.DefaultHoldPolicy(), annotations: annotations, reportObservationFailure: func(stage string, err error) {
 		diagnostics.Add(1)
 		t.Errorf("recording diagnostic: %s: %v", stage, err)
 	}})

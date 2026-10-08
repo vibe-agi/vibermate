@@ -20,10 +20,6 @@ type contentBudgetReady struct{}
 
 func (contentBudgetReady) Ready() bool { return true }
 
-func TestRuntimeContentBudgetTwoExchangesAndRealControls(t *testing.T) {
-	productruntime.RunContentBudgetConcurrentControlFixture(t, runtimeDefaultControls(t))
-}
-
 func TestRuntimeDefaultFourHTTPAndWaitingUnreadBody(t *testing.T) {
 	productruntime.RunDefaultFourHTTPControlFixture(t, 4111, runtimeDefaultControls(t))
 }

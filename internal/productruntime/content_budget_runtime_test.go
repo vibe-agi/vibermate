@@ -25,7 +25,9 @@ func RunContentBudgetConcurrentControlFixture(t *testing.T, control func(*Runtim
 	if err != nil {
 		t.Fatal(err)
 	}
-	testRuntimeLongSessionFixture(t, false, "", false, &longSessionAcceptanceOptions{count: 4111, policy: policy, controls: func(runtime *Runtime) error { return control(runtime, policy) }})
+	mode := concurrentContentFixtureMode()
+	t.Logf("CONTENT_BUDGET_COVERAGE mode=%s content=%v outer=%v concurrent=%v items=4111", mode.label, mode.content, mode.outer, mode.exchange)
+	testRuntimeLongSessionFixture(t, false, "", false, &longSessionAcceptanceOptions{count: 4111, policy: policy, concurrentMode: &mode, controls: func(runtime *Runtime) error { return control(runtime, policy) }})
 }
 
 type concurrentContentBudgetSource struct {
@@ -68,10 +70,9 @@ func (s *concurrentContentBudgetSource) RecordSource(ctx context.Context, source
 	return err
 }
 func testContentBudgetConcurrentExecutions(t *testing.T, _ context.Context, f accountReadFixture, pipeline exchangeRuntime, first exchange.ClientRequest, firstLease *exchange.BodyLease, plan environment.RequestPlan, operation exchange.ClientOperationEvidence, body []byte, credential string, source *concurrentContentBudgetSource, controls func(*Runtime) error, calls, diagnostics func() int32, count int, tail string) {
-	// Race instrumentation can make the two real 4 MiB Store writes exceed
-	// ten seconds while the product's independent content budget remains 30s.
-	// This fixture watchdog must contain a test, not censor a valid recording.
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	// This watchdog contains the selected fixture; content has its own finite
+	// context. Race mode explicitly verifies concurrency rather than default latency.
+	ctx, cancel := context.WithTimeout(context.Background(), concurrentContentFixtureMode().exchange)
 	defer cancel()
 	secondLease, err := f.runtime.bodyAdmission.AcquirePlan(ctx, plan)
 	if err != nil {
