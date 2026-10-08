@@ -8,6 +8,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"golang.org/x/text/unicode/norm"
 )
 
 type daemonHomePolicy string
@@ -54,12 +56,77 @@ func validateBootstrapDiagnosticConfig(config config) error {
 		if !filepath.IsAbs(config.bootstrapDiagnosticPath) || filepath.Clean(config.bootstrapDiagnosticPath) != config.bootstrapDiagnosticPath {
 			return errors.New("bootstrap diagnostic must be an absolute clean path")
 		}
+		if config.reportPath != "" {
+			if !filepath.IsAbs(config.reportPath) || filepath.Clean(config.reportPath) != config.reportPath {
+				return errors.New("report must be an absolute clean path")
+			}
+			if err := validateBootstrapDiagnosticDestinations(config.bootstrapDiagnosticPath, config.reportPath); err != nil {
+				return err
+			}
+		}
 	}
 	if policy == daemonHomeLogin {
 		_, err := loginDaemonHome(os.Environ())
 		return err
 	}
 	return nil
+}
+
+func validateBootstrapDiagnosticDestinations(diagnostic, report string) error {
+	collision := errors.New("report and bootstrap diagnostic destinations collide")
+	if diagnostic == report {
+		return collision
+	}
+	diagnosticDestination, err := bootstrapDiagnosticDestination(diagnostic)
+	if err != nil {
+		return err
+	}
+	reportDestination, err := bootstrapDiagnosticDestination(report)
+	if err != nil {
+		return err
+	}
+	// Conservatively reject case/normalization aliases even on filesystems where
+	// those names are distinct; validation never creates a filesystem probe.
+	equalName := func(left, right string) bool {
+		return strings.EqualFold(norm.NFC.String(left), norm.NFC.String(right))
+	}
+	if equalName(diagnosticDestination, reportDestination) {
+		return collision
+	}
+	for index, paths := range [][2]string{
+		{diagnosticDestination, reportDestination},
+		{filepath.Dir(diagnosticDestination), filepath.Dir(reportDestination)},
+	} {
+		left, leftErr := os.Stat(paths[0])
+		right, rightErr := os.Stat(paths[1])
+		if (leftErr != nil && !os.IsNotExist(leftErr)) || (rightErr != nil && !os.IsNotExist(rightErr)) {
+			return errors.New("cannot compare bootstrap diagnostic destinations")
+		}
+		if leftErr == nil && rightErr == nil && os.SameFile(left, right) {
+			if index == 0 || equalName(filepath.Base(diagnostic), filepath.Base(report)) {
+				return collision
+			}
+		}
+	}
+	return nil
+}
+
+// Resolve existing parent aliases without requiring future report directories
+// to exist or following a final output symlink for destination identity.
+func bootstrapDiagnosticDestination(path string) (string, error) {
+	parent := filepath.Dir(path)
+	suffix := []string{filepath.Base(path)}
+	for {
+		resolved, err := filepath.EvalSymlinks(parent)
+		if err == nil {
+			return filepath.Join(append([]string{resolved}, suffix...)...), nil
+		}
+		if !os.IsNotExist(err) || filepath.Dir(parent) == parent {
+			return "", errors.New("cannot resolve bootstrap diagnostic destination parent")
+		}
+		suffix = append([]string{filepath.Base(parent)}, suffix...)
+		parent = filepath.Dir(parent)
+	}
 }
 
 func diagnosticDaemonEnvironment(base []string, dataDirectory string, policy daemonHomePolicy) ([]string, error) {

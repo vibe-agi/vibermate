@@ -61,7 +61,8 @@ func startDaemon(
 	if err != nil {
 		return nil, fmt.Errorf("create daemon bootstrap pipe: %w", err)
 	}
-	defer reader.Close()
+	var decoderDone <-chan struct{}
+	defer func() { closeBootstrapDecoder(reader, decoderDone) }()
 	parentReader, parentWriter, err := os.Pipe()
 	if err != nil {
 		_ = writer.Close()
@@ -108,7 +109,10 @@ func startDaemon(
 		descriptor desktopbootstrap.Descriptor
 		err        error
 	}, 1)
+	decoderFinished := make(chan struct{})
+	decoderDone = decoderFinished
 	go func() {
+		defer close(decoderFinished)
 		var observed func(int)
 		if claimed {
 			observed = config.bootstrapDiagnostic.observe
@@ -172,6 +176,15 @@ func startDaemon(
 		stderr:         stderr,
 		parentLifetime: parentWriter,
 	}, nil
+}
+
+// Closing the reader interrupts an incomplete frame; joining then settles all
+// already-read callbacks before the terminal diagnostic defer runs.
+func closeBootstrapDecoder(reader io.Closer, done <-chan struct{}) {
+	_ = reader.Close()
+	if done != nil {
+		<-done
+	}
 }
 
 func isolatedDaemonEnvironment(base []string, dataDirectory string) ([]string, error) {

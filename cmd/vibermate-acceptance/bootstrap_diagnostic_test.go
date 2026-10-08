@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -30,6 +31,202 @@ func TestDiagnosticDaemonHomeLoginPreservesOnlyLoginPolicy(t *testing.T) {
 	}
 	if len(base) != 4 || base[2] != "CFFIXED_USER_HOME=/private/fixture" {
 		t.Fatal("mutated parent environment")
+	}
+}
+
+func TestBootstrapDiagnosticRejectsReportDestinationCollision(t *testing.T) {
+	for _, alias := range []string{"identical", "parent symlink", "missing parent symlink", "case basename", "unicode basename", "hardlink"} {
+		t.Run(alias, func(t *testing.T) {
+			directory := t.TempDir()
+			if err := os.Chmod(directory, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			diagnostic := filepath.Join(directory, "observation.json")
+			report := diagnostic
+			switch alias {
+			case "parent symlink", "missing parent symlink":
+				link := filepath.Join(t.TempDir(), "alias")
+				if err := os.Symlink(directory, link); err != nil {
+					t.Skip("symlink unavailable")
+				}
+				report = filepath.Join(link, "observation.json")
+				if alias == "missing parent symlink" {
+					diagnostic = filepath.Join(directory, "future", "observation.json")
+					report = filepath.Join(link, "future", "observation.json")
+				}
+			case "case basename":
+				report = filepath.Join(directory, "Observation.json")
+			case "unicode basename":
+				diagnostic = filepath.Join(directory, "caf\u00e9.json")
+				report = filepath.Join(directory, "cafe\u0301.json")
+			case "hardlink":
+				if err := os.WriteFile(diagnostic, []byte("preserve"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				report = filepath.Join(directory, "linked.json")
+				if err := os.Link(diagnostic, report); err != nil {
+					t.Skip("hardlink unavailable")
+				}
+			}
+			configured := config{bootstrapDiagnosticPath: diagnostic, reportPath: report, deterministicOnly: true}
+			if err := validateBootstrapDiagnosticConfig(configured); err == nil || !strings.Contains(err.Error(), "destinations collide") {
+				t.Fatal("report/diagnostic destination collision accepted")
+			}
+			if _, err := parseConfig([]string{"--deterministic-only", "--bootstrap-diagnostic=" + diagnostic, "--report=" + report}); err == nil || !strings.Contains(err.Error(), "destinations collide") {
+				t.Fatal("output collision was not rejected before App inspection")
+			}
+			if alias == "hardlink" {
+				raw, err := os.ReadFile(diagnostic)
+				if err != nil || string(raw) != "preserve" {
+					t.Fatal("validation modified output")
+				}
+			}
+		})
+	}
+}
+
+func TestBootstrapDiagnosticDistinctOutputsRemainSeparate(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("private writer ownership unsupported on Windows")
+	}
+	directory := t.TempDir()
+	if err := os.Chmod(directory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	diagnostic := filepath.Join(directory, "observation.json")
+	reportPath := filepath.Join(directory, "v7.json")
+	configured := config{bootstrapDiagnosticPath: diagnostic, reportPath: reportPath, deterministicOnly: true}
+	if err := validateBootstrapDiagnosticConfig(configured); err != nil {
+		t.Fatal("distinct output destinations rejected")
+	}
+	recorder := &bootstrapDiagnosticRecorder{value: initialBootstrapDiagnostic(daemonHomeIsolated)}
+	if err := writeBootstrapDiagnostic(diagnostic, recorder); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(diagnostic)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writeReport(reportPath, newReport(time.Unix(1, 0), acceptanceClient{ID: acceptanceClientClaudeCode, Version: "2.1.220"})); err != nil {
+		t.Fatal(err)
+	}
+	after, err := os.ReadFile(diagnostic)
+	if err != nil || !bytes.Equal(before, after) {
+		t.Fatal("V7 report overwrote diagnostic")
+	}
+	configured.reportPath = diagnostic
+	if err := validateBootstrapDiagnosticConfig(configured); err == nil {
+		t.Fatal("existing diagnostic overwrite was accepted")
+	}
+	final, err := os.ReadFile(diagnostic)
+	if err != nil || !bytes.Equal(before, final) {
+		t.Fatal("collision validation modified diagnostic")
+	}
+}
+
+type diagnosticCloseObserver struct {
+	io.Closer
+	closed chan struct{}
+}
+
+func (reader diagnosticCloseObserver) Close() error {
+	err := reader.Closer.Close()
+	close(reader.closed)
+	return err
+}
+
+func TestBootstrapDiagnosticTerminalWaitsForPendingDecoderCallback(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("private writer ownership unsupported on Windows")
+	}
+	for _, frame := range []int{1, 2} {
+		t.Run(string(rune('0'+frame)), func(t *testing.T) {
+			directory := t.TempDir()
+			if err := os.Chmod(directory, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			path := filepath.Join(directory, "observation.json")
+			recorder := &bootstrapDiagnosticRecorder{}
+			if !recorder.claim(daemonHomeIsolated) {
+				t.Fatal("bootstrap claim failed")
+			}
+			reader, writer := io.Pipe()
+			defer writer.Close()
+			defer reader.Close()
+			entered := make(chan struct{})
+			release := make(chan struct{})
+			var releaseOnce sync.Once
+			unblock := func() { releaseOnce.Do(func() { close(release) }) }
+			defer unblock()
+			decoderDone := make(chan struct{})
+			frames := diagnosticTestFrames(t)
+			go func() {
+				defer close(decoderDone)
+				_, _ = decodeDescriptorObserved(reader, func(got int) {
+					if got == frame {
+						close(entered)
+						<-release
+					}
+					recorder.observe(got)
+				})
+			}()
+			go func() { _, _ = writer.Write(frames) }()
+			select {
+			case <-entered:
+			case <-time.After(time.Second):
+				t.Fatal("decoder did not reach callback barrier")
+			}
+			readerClosed := make(chan struct{})
+			serialized := make(chan error, 1)
+			go func() {
+				closeBootstrapDecoder(diagnosticCloseObserver{Closer: reader, closed: readerClosed}, decoderDone)
+				recorder.finish(bootstrapDiagnostic{Started: true, Outcome: "context_done"}, time.Now(), newBoundedBuffer(64<<10))
+				serialized <- writeBootstrapDiagnostic(path, recorder)
+			}()
+			select {
+			case <-readerClosed:
+			case <-time.After(time.Second):
+				t.Fatal("cleanup did not close decoder reader")
+			}
+			// The decoder is positively parked in an observed callback, and cleanup
+			// positively closed its reader. Serialization must remain blocked until
+			// that callback is released; the timeout only bounds this negative check.
+			select {
+			case err := <-serialized:
+				unblock()
+				<-decoderDone
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Fatal("terminal observation serialized before pending decoder callback")
+			case <-time.After(100 * time.Millisecond):
+			}
+			unblock()
+			select {
+			case err := <-serialized:
+				if err != nil {
+					t.Fatal(err)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("terminal observation did not finish after decoder callback")
+			}
+			select {
+			case <-decoderDone:
+			default:
+				t.Fatal("decoder was not joined before serialization")
+			}
+			var got bootstrapDiagnostic
+			raw, err := os.ReadFile(path)
+			if err != nil || json.Unmarshal(raw, &got) != nil {
+				t.Fatal("terminal observation missing")
+			}
+			if !got.ProgressValidated || (frame == 2 && !got.SecondFrameComplete) || got.Outcome != "context_done" {
+				t.Fatal("settled callback or selected outcome lost")
+			}
+			if got != recorder.snapshot() {
+				t.Fatal("decoder updated observation after serialization")
+			}
+		})
 	}
 }
 
