@@ -42,3 +42,25 @@ test('full crash race remains mandatory outside short mode', () => {
   assert.match(make, /test-store-crash-race:/u);
   assert.match(make, /go test -race \.\/internal\/runtimepersistence -run '\^TestContentSourceProcessCrash'/u);
 });
+
+test('full response page race remains an unconditional dedicated gate', () => {
+  const job = ci.match(/^  store-response-race:\n(?:(?!^  [\w-]+:)[\s\S])*/mu)?.[0];
+  assert.ok(job, 'dedicated full response race job is required');
+  assert.match(job, /^    needs: generated-structural$/mu);
+  assert.match(job, /^    runs-on: ubuntu-latest$/mu);
+  const deadline = job.match(/^    timeout-minutes: (\d+)$/mu)?.[1];
+  assert.ok(Number(deadline) > 40 && Number(deadline) <= 60, 'finite job deadline must enclose the 40m test watchdog');
+  assert.match(job, /^      - run: make test-store-response-race$/mu);
+  assert.doesNotMatch(job, /\bif:|continue-on-error|\boptional\b|-short/u);
+  for (const value of [
+    'actions/checkout@11d5960a326750d5838078e36cf38b85af677262',
+    'actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16',
+    'go-version-file: go.mod',
+    'check-latest: false',
+  ]) assert.ok(job.includes(value), value);
+
+  const target = make.match(/^test-store-response-race:\n(?:\t[^\n]*\n)+/mu)?.[0];
+  assert.equal(target, "test-store-response-race:\n\tgo test -race -p=1 -parallel=1 ./internal/runtimepersistence -run '^TestContentSourceRealResponseEveryBodyPage$$' -count=1 -timeout=40m -v\n");
+  assert.doesNotMatch(target, /-short|\|\||;|\btrue\b/u);
+  assert.match(make, /^\.PHONY: .*\btest-store-response-race\b/mu);
+});

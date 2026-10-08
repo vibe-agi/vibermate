@@ -246,18 +246,43 @@ func TestContentSourceMixedRepeatedFramesRejectCorruption(t *testing.T) {
 }
 
 func TestContentSourceRealResponseEveryBodyPage(t *testing.T) {
+	bodyBytes := 6 << 20
+	if testing.Short() {
+		// Stay larger than the inline projection window and validate every byte
+		// of five real body pages. CI separately races the original full matrix.
+		bodyBytes = 5 * exchangecontent.PageBodyBytes
+	}
+	wantPages := (bodyBytes + exchangecontent.PageBodyBytes - 1) / exchangecontent.PageBodyBytes
+	if (testing.Short() && wantPages < 3) || (!testing.Short() && (bodyBytes != 6<<20 || wantPages != 192)) {
+		t.Fatal("short/full response fixture contract changed")
+	}
+	t.Logf("response fixture bytes=%d pages=%d exhaustive=true", bodyBytes, wantPages)
+	testContentSourceRealResponsePages(t, bodyBytes, []string{"&", "x"}, true)
+}
+
+func TestContentSourceRealResponseFragmentBoundary(t *testing.T) {
+	if !testing.Short() {
+		t.Skip("full-size initial, continuation, boundary and final pages are covered by the exhaustive matrix")
+	}
+	// Keep the actual six-MiB ampersand value that crosses the physical frame
+	// boundary, with full readback and selected pages rather than 192 rereads.
+	testContentSourceRealResponsePages(t, 6<<20, []string{"&"}, false)
+}
+
+func testContentSourceRealResponsePages(t *testing.T, bodyBytes int, characters []string, everyPage bool) {
+	t.Helper()
 	ctx := context.Background()
 	l := candidateContentLimits()
-	// Exact existing Source phase for an agent-free six-MiB ordinary text:
+	// Exact existing Source phase for an agent-free ordinary text:
 	// n + 4*F(n) + 4096, F's four sanitizer expansion stages. This is a
 	// synthetic fixture reservation, not a production capacity selection.
-	out := uint64(6 << 20)
+	out := uint64(bodyBytes)
 	for _, rule := range [4][2]uint64{{8, 11}, {15, 2}, {15, 6}, {11, 7}} {
 		out += (out / rule[0]) * rule[1]
 	}
-	l.Scratch.PayloadBytes = uint64(6<<20) + 4*out + 4096
+	l.Scratch.PayloadBytes = uint64(bodyBytes) + 4*out + 4096
 	l.Scratch.StructureBytes = uint64(reflect.TypeFor[exchangecontent.Block]().Size()) + 4096
-	if l.Scratch.PayloadBytes != 161477116 {
+	if bodyBytes == 6<<20 && l.Scratch.PayloadBytes != 161477116 {
 		t.Fatal("six-MiB fixture scratch derivation changed")
 	}
 	codec, err := openairesponses.New(openairesponses.DefaultOptions())
@@ -266,8 +291,8 @@ func TestContentSourceRealResponseEveryBodyPage(t *testing.T) {
 	}
 	request := protocolcore.Request{RequestedModel: "model", EffectiveModel: "model", MaxOutputTokens: 16, Messages: []protocolcore.Message{{Role: protocolcore.RoleUser, Blocks: []protocolcore.ContentBlock{{Kind: protocolcore.BlockText, Text: "question"}}}}}
 	base := contentRecordFixture(t, "real-source", time.Date(2026, 8, 8, 1, 2, 3, 0, time.UTC))
-	for _, ch := range []string{"&", "x"} {
-		wire := []byte(`{"id":"response","status":"completed","model":"model","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"` + strings.Repeat(ch, 6<<20) + `"}]}]}`)
+	for _, ch := range characters {
+		wire := []byte(`{"id":"response","status":"completed","model":"model","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"` + strings.Repeat(ch, bodyBytes) + `"}]}]}`)
 		response, _, err := codec.DecodeProviderResponse(request, wire)
 		if err != nil {
 			t.Fatal(err)
@@ -308,7 +333,7 @@ func TestContentSourceRealResponseEveryBodyPage(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				if !got.RecordedAt.Equal(base.RecordedAt) || got.Response == nil || len(got.Response.Blocks) != 1 || got.Response.Blocks[0].OriginalSize != 6<<20 {
+				if !got.RecordedAt.Equal(base.RecordedAt) || got.Response == nil || len(got.Response.Blocks) != 1 || got.Response.Blocks[0].OriginalSize != bodyBytes {
 					t.Fatal("completion/reopen lost response metadata")
 				}
 				if mode == environment.ContentRecordingMetadataOnly {
@@ -317,7 +342,7 @@ func TestContentSourceRealResponseEveryBodyPage(t *testing.T) {
 					}
 					return
 				}
-				if got.Response.Blocks[0].Text != strings.Repeat(ch, 6<<20) {
+				if got.Response.Blocks[0].Text != strings.Repeat(ch, bodyBytes) {
 					t.Fatal("complete response changed")
 				}
 				projection, err := s.exchangeContents.GetPagedProjection(ctx, base.ExchangeID, base.RecordedAt, exchangecontent.RequestViewFull)
@@ -328,17 +353,56 @@ func TestContentSourceRealResponseEveryBodyPage(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
+				if !everyPage {
+					ref, err := loadStoredContentReference(ctx, s.reads, base.ExchangeID, base.RecordedAt)
+					if err != nil {
+						t.Fatal(err)
+					}
+					var manifest string
+					if err := s.database.QueryRow(`SELECT block_manifest FROM runtime_exchange_content_messages WHERE digest=?`, ref.responseDigest.String).Scan(&manifest); err != nil || len(manifest) != 2*storedDigestHexBytes {
+						t.Fatalf("large ampersand response must span two physical frames: %v", err)
+					}
+					bodyCursor, err := decodeContentCursor(message.Blocks[0].Deferred.Cursor)
+					if err != nil {
+						t.Fatal(err)
+					}
+					// Six canonical bytes per ampersand put this page across the
+					// actual first physical frame seam, including a split escape.
+					seam := (storedFrameBody - len(`{"kind":"text","availability":"recorded","text":"`)) / 6
+					for _, offset := range []int{0, exchangecontent.PageBodyBytes, seam - 1, bodyBytes - exchangecontent.PageBodyBytes} {
+						bodyCursor.Offset = offset
+						page, err := s.exchangeContents.GetContentPage(ctx, base.ExchangeID, base.RecordedAt, encodeContentCursor(bodyCursor))
+						if err != nil || page.ExchangeID != base.ExchangeID || page.Kind != "text" || page.Offset != offset || page.Total != bodyBytes || page.Text != strings.Repeat(ch, exchangecontent.PageBodyBytes) {
+							t.Fatalf("fragment page offset=%d: %v", offset, err)
+						}
+						if offset+len(page.Text) == bodyBytes {
+							if page.NextCursor != "" {
+								t.Fatal("final fragment page retained continuation")
+							}
+						} else {
+							next, err := decodeContentCursor(page.NextCursor)
+							want := bodyCursor
+							want.Kind = "text"
+							want.Offset += len(page.Text)
+							if err != nil || next != want {
+								t.Fatalf("fragment page continuation identity changed: %v", err)
+							}
+							bodyCursor = next
+						}
+					}
+					return
+				}
 				cursor, offset, pages := message.Blocks[0].Deferred.Cursor, 0, 0
 				for cursor != "" {
 					page, err := s.exchangeContents.GetContentPage(ctx, base.ExchangeID, base.RecordedAt, cursor)
-					if err != nil || page.Kind != "text" || page.Offset != offset || page.Total != 6<<20 || page.Text != strings.Repeat(ch, len(page.Text)) || len(page.Text) == 0 {
+					if err != nil || page.Kind != "text" || page.Offset != offset || page.Total != bodyBytes || page.Text != strings.Repeat(ch, len(page.Text)) || len(page.Text) == 0 {
 						t.Fatalf("page %d offset%d: %v", pages, offset, err)
 					}
 					offset += len(page.Text)
 					pages++
 					cursor = page.NextCursor
 				}
-				if offset != 6<<20 || pages != 192 {
+				if offset != bodyBytes || pages != (bodyBytes+exchangecontent.PageBodyBytes-1)/exchangecontent.PageBodyBytes {
 					t.Fatalf("reconstruction bytes=%d pages=%d", offset, pages)
 				}
 			})

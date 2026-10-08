@@ -1,4 +1,4 @@
-.PHONY: check check-format check-generated check-dependencies check-structural check-workflows check-release-tooling check-release-build check-desktop check-flutter check-flutter-macos build-flutter-app build-linux-distributions test test-race test-store-crash-race vet vuln vuln-go
+.PHONY: check check-format check-generated check-dependencies check-structural check-workflows check-release-tooling check-release-build check-desktop check-flutter check-flutter-macos build-flutter-app build-linux-distributions test test-race test-store-crash-race test-store-response-race vet vuln vuln-go
 
 check: check-format check-generated check-dependencies check-structural check-workflows check-release-tooling check-release-build check-desktop
 
@@ -76,6 +76,11 @@ test-race:
 
 test-store-crash-race:
 	go test -race ./internal/runtimepersistence -run '^TestContentSourceProcessCrash' -count=1 -parallel=1 -timeout=15m -v
+
+# Contain execution of the original full 6-MiB/192-page functional matrix in
+# its own invocation. This watchdog is not a product SLA or performance goal.
+test-store-response-race:
+	go test -race -p=1 -parallel=1 ./internal/runtimepersistence -run '^TestContentSourceRealResponseEveryBodyPage$$' -count=1 -timeout=40m -v
 
 vet:
 	go vet ./...

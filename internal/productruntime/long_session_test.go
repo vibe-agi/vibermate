@@ -81,7 +81,9 @@ func testRuntimeLongSessionFixture(t *testing.T, original bool, scenario string,
 	if len(fixtureCount) > 0 {
 		count = fixtureCount[0]
 	}
-	ctx, stopFixture := context.WithTimeout(context.Background(), 45*time.Second)
+	// This fixture watchdog covers setup, HTTP controls and final full-content
+	// readbacks; product observation deadlines remain independent.
+	ctx, stopFixture := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer stopFixture()
 	if acceptance != nil {
 		count = acceptance.count

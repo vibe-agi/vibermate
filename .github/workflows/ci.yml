@@ -149,8 +149,8 @@ jobs:
           go-version-file: go.mod
           check-latest: false
           cache: true
-      # Full-size SQLite scale fixtures run in unit/contracts. Instrumented
-      # runs retain the functional, concurrent read/write and isolation checks.
+      # Short mode retains functional, concurrent read/write and isolation
+      # checks; dedicated jobs below race full crash and response matrices.
       - run: go test -race -short ./...
 
   store-crash-race:
@@ -165,6 +165,20 @@ jobs:
           check-latest: false
           cache: true
       - run: make test-store-crash-race
+
+  store-response-race:
+    needs: generated-structural
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: go.mod
+          check-latest: false
+          cache: true
+      # The per-test 40m watchdog contains execution, not product latency.
+      - run: make test-store-response-race
 
   native-release-build:
     needs: generated-structural
