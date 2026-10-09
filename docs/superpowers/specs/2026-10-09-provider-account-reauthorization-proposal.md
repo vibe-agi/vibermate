@@ -1,6 +1,6 @@
 # Existing upstream account: sign in again
 
-Status: proposed from the user's request to plan this behavior; no implementation approval or product changes yet. This complements the already implemented server URL/Web reload fixes and must not silently expand that release's scope.
+Status: approved and implemented in the stable candidate (backenddc71b24, UI930f4b1, reload-feedback correction79fb19c). Scoped/combined product review approved the original implementation; the small correction is undergoing its directed rereview. Candidate0.1.25+27 publication/whole-candidate qualification remains pending. This does not complete the larger production Goal.
 
 ## Why it is unavailable today
 
@@ -28,7 +28,7 @@ Therefore this is a missing end-to-end reauthorization mode, not simply an expir
 - Authorization-code exchange for an existing account must follow that account's selected network exit; preserve the approved account/profile/global precedence when integrated with the global-egress work. It must not fall back to direct on proxy failure. External browser networking remains the browser's responsibility.
 - No password/token/code output in logs, public account DTOs, or retained conversation evidence. No database reset or migration is expected for this bounded feature; pending login state is already ephemeral.
 
-## Implementation slices after design approval
+## Implemented slices and preserved boundaries
 
 1. Extend the existing login target with explicit create versus reauthorize intent and frozen destination/version/identity information; keep the new-account flow unchanged. Control API must authorize and validate the existing OAuth account rather than treating any existing ID as a conflict.
 2. On token exchange success, validate the intended upstream identity and perform a credential-only update through the account authority. Preserve existing request headers and settings; clear the refresh-failure state through the existing credential-preparer invalidation path. Keep completion idempotent and non-destructive.
