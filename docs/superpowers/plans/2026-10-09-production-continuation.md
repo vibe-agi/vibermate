@@ -14,10 +14,10 @@
 | 默认 HTTP(S) 端口 | 已实现/审查，未发布 | stable worktree f90d972；省略端口与80/443显式形式共享登录/信任身份 |
 | Web 同标签页刷新续登 | 已实现/审查，未发布 | stable worktree b29fff8；Chrome40、相关VM33、构建/分析和真实后端+实际浏览器重载探针通过 |
 | 上述修复整体验证 | 仍须收口 | 全量Go两项/Flutter一项失败，单独复测均过；不能把单测复测写成全量绿。原失败保留在 server-login-continuity 账本 |
-| 原账号重新 OAuth | 用户已同意继续，下一源码任务 | stable worktree 中的 2026-10-09-provider-account-reauthorization-proposal.md；保留原ID/设置/关联/历史，不误换上游身份 |
+| 原账号重新 OAuth | 后端dc71b24已实现/测试/独立审查；当前唯一写者正在做界面 | stable worktree 的2026-10-09-provider-account-reauthorization计划/账本；保留原ID/设置/关联/历史，不误换上游身份 |
 | 多 Runtime CLI 登录 | **已有功能，不重新开发** | LoginStore 按规范化 scheme+host+port 保存多条；A/B不互相覆盖，同server保留一份登录 |
 | VLESS 核心与自有 SOCKS 模块 | 已实现且对应缺陷已修复/审查 | production-readiness 的 VLESS functional Task1/2；不能等同于 Runtime/Host/UI 已连通 |
-| VLESS 配置与 Runtime TCP | Task3A已冻结、17个哈希复核一致；审查发现启动/关闭生命周期Important，定向修复已排队 | task-3a-profile-routing-report.md和task-3a-review.md；功能路径已证明，不能记为全部审查通过 |
+| VLESS 配置与 Runtime TCP | Task3A功能已冻结；启动/关闭Important已定向RED→GREEN、真实通路回归及独立复核关闭 | task-3a-profile-routing-report.md和shutdown-rereview/3hash；下一步RuntimeUDP/Host，不重复原实现或核心Proof |
 | VLESS Runtime UDP/监听/界面 | 尚未完成 | 同计划 Task3B/4；不能把核心 UDP 回环测试写成用户可用入口 |
 | R1–R7、阅读器、MCP底层、全局出口 | 保留已有提交和审查；全量功能/客户端闭环未完成 | 2026-10-03主计划及已采用子计划；2026-10-05全局出口账本 |
 | CA平台/devcontainer、完整MCP/46项客户端、持续运行与最终同源发布 | 尚未全部完成 | 原Goal范围继续有效，见下方完成条件 |
@@ -48,4 +48,4 @@
 - 同时只有一个源码实现者；独立只读审查/方案核查可以并行。本机重量级构建/全套测试串行排队，避免同时跑Go全量与Flutter全量造成资源竞争。
 - 测试和审查只覆盖实际变更与风险；已通过且源码未变的单元不因恢复会话而重做。性能目标与功能正确性分开；实际安全/数据丢失/协议错误仍需解决，不用任意快速完成阈值冒充业务成功标准。
 - 每次任务冻结，更新“已实现/已验证/已审查/已发布”四种状态、下一任务和剩余边界。旧段落留作历史，不继续把过去的待办当最新事实。
-- 本次读取Goal服务时状态仍为paused。用户文字已要求持续推进；本轮可以工作，但后台自动Goal续跑需要用户在Goal卡片恢复。现有工具只能读取/完成/明确暂停/满足规则后阻塞，不能替用户改为active；不要假称已恢复卡片。
+- Goal状态：用户已在本轮将卡片恢复为active（此前paused检查点为历史）。从当前检查点持续推进，不再等待恢复授权；现有工具不能代替用户恢复，勿把本次用户操作记成代理改了状态。
