@@ -2577,6 +2577,22 @@ final class WorkbenchController extends ChangeNotifier
 
   Future<CodexLogin> codexLoginStatus(String loginId) =>
       _api.codexLoginStatus(loginId);
+  Future<CodexLogin> startCodexReauthorization({
+    required ProviderAccount account,
+    required String callbackMode,
+  }) => _api.startCodexReauthorization(
+    account: account,
+    callbackMode: callbackMode,
+  );
+
+  Future<void> finishCodexReauthorization(ProviderAccount account) async {
+    invalidateProviderAccountQuota(account);
+    await refresh();
+    if (_disposed) return;
+    inventoryNotice = 'account_reauthorized';
+    notifyListeners();
+  }
+
   Future<CodexLogin> completeCodexLogin(String loginId, String callbackUrl) =>
       _api.completeCodexLogin(loginId, callbackUrl);
   Future<void> cancelCodexLogin(String loginId) =>
