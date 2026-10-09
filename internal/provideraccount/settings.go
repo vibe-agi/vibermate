@@ -15,6 +15,12 @@ type SettingsCommand struct {
 }
 
 func (account Account) credentialScope(realm string, epoch uint64, fallback egressprofile.ProfileRevision) providerauth.AccountRef {
+	return account.CredentialScope(realm, epoch, fallback)
+}
+
+// CredentialScope freezes the same exit precedence used by credential leases
+// for account operations which must not acquire or refresh an access token.
+func (account Account) CredentialScope(realm string, epoch uint64, fallback egressprofile.ProfileRevision) providerauth.AccountRef {
 	if fallback == (egressprofile.ProfileRevision{}) {
 		fallback = egressprofile.Direct()
 	}

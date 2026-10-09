@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -147,6 +148,48 @@ func TestCodexLoginControlUsesWriteSessionAndPersistsIndependentAccount(t *testi
 		}
 	}
 
+	t.Run("reauthorize existing account without a new destination", func(t *testing.T) {
+		r := httptest.NewRequest(http.MethodPost, desktopcontrol.CodexLoginPath,
+			strings.NewReader(`{"mode":"reauthorize","accountId":"account.codex.login","callbackMode":"manual"}`))
+		r = r.WithContext(desktopcontrol.WithOAuthSession(r.Context(), "session-one"))
+		r.Header.Set("Content-Type", "application/json")
+		r.Header.Set("If-Match", "1")
+		r.Header.Set("Idempotency-Key", "reauthorize-existing-once")
+		w := httptest.NewRecorder()
+		app.ServeHTTP(w, r)
+		if w.Code != http.StatusCreated {
+			t.Fatalf("reauthorize start status=%d", w.Code)
+		}
+		var pending codexoauth.LoginView
+		decodeResponse(t, w, &pending)
+		if pending.AccountID != "" || pending.CallbackMode != "manual" || pending.State != "pending" {
+			t.Fatal("invalid pending login view")
+		}
+		for index, test := range []struct {
+			body, epoch string
+			status      int
+		}{
+			{`{"mode":"reauthorize","accountId":"account.codex.login","callbackMode":"manual"}`, "0", 422},
+			{`{"mode":"reauthorize","accountId":"account.codex.login","callbackMode":"manual"}`, "2", 409},
+			{`{"mode":"reauthorize","accountId":"account.codex.missing","callbackMode":"manual"}`, "1", 404},
+			{`{"mode":"reauthorize","accountId":"account.codex.login","callbackMode":"manual","displayName":"forged"}`, "1", 422},
+			{`{"mode":"reauthorize","accountId":"account.codex.login","callbackMode":"manual","upstreamEndpointId":"target.codex.official"}`, "1", 422},
+			{`{"mode":"reauthorize","accountId":"account.codex.login","callbackMode":"manual","displayName":null}`, "1", 422},
+			{`{"mode":"reauthorize","accountId":"account.codex.login","callbackMode":"manual","upstreamEndpointId":null}`, "1", 422},
+		} {
+			r := httptest.NewRequest(http.MethodPost, desktopcontrol.CodexLoginPath, strings.NewReader(test.body))
+			r = r.WithContext(desktopcontrol.WithOAuthSession(r.Context(), "session-one"))
+			r.Header.Set("Content-Type", "application/json")
+			r.Header.Set("If-Match", test.epoch)
+			r.Header.Set("Idempotency-Key", fmt.Sprintf("negative-reauthorize-%d", index))
+			w := httptest.NewRecorder()
+			app.ServeHTTP(w, r)
+			if w.Code != test.status {
+				t.Fatalf("reauthorize admission case %d status=%d want=%d", index, w.Code, test.status)
+			}
+		}
+	})
+
 	t.Run("router binds OAuth before consuming the authorized credential", func(t *testing.T) {
 		readToken, writeToken := capability(11), capability(12)
 		authenticator, err := desktopcontrol.NewAuthenticator(desktopcontrol.CapabilityGrant{
@@ -182,11 +225,17 @@ func TestCodexLoginControlUsesWriteSessionAndPersistsIndependentAccount(t *testi
 			return w
 		}
 		created := route(http.MethodPost, desktopcontrol.CodexLoginPath, writeToken, map[string]any{
+			"mode":      "create",
 			"accountId": "account.codex.routed", "displayName": "Routed login",
 			"upstreamEndpointId": "target.codex.official", "callbackMode": "manual",
 		})
 		if created.Code != http.StatusCreated {
 			t.Fatalf("authorized login lost its session: status=%d", created.Code)
+		}
+		if route(http.MethodPost, desktopcontrol.CodexLoginPath, readToken, map[string]any{
+			"mode": "reauthorize", "accountId": "account.codex.login", "callbackMode": "manual",
+		}).Code != http.StatusUnauthorized {
+			t.Fatal("read-only credential could start reauthorization")
 		}
 		var routed codexoauth.LoginView
 		decodeResponse(t, created, &routed)

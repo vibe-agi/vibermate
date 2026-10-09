@@ -19,23 +19,47 @@ import (
 	"time"
 
 	"github.com/vibe-agi/vibermate/internal/providerauth"
+	"github.com/vibe-agi/vibermate/internal/secretstore"
 )
 
 const AuthorizationURL = "https://auth.openai.com/oauth/authorize"
 
 var (
-	ErrLoginInvalid  = errors.New("Codex login input is invalid")
-	ErrLoginNotFound = errors.New("Codex login is unavailable or expired")
-	ErrLoginBusy     = errors.New("Codex login is already completing")
-	ErrLoginCapacity = errors.New("Too many pending Codex logins")
+	ErrLoginInvalid        = errors.New("Codex login input is invalid")
+	ErrLoginNotFound       = errors.New("Codex login is unavailable or expired")
+	ErrLoginBusy           = errors.New("Codex login is already completing")
+	ErrLoginCapacity       = errors.New("Too many pending Codex logins")
+	ErrLoginAccountChanged = errors.New("Codex login destination account changed")
 )
 
 // LoginAccount is frozen before authorization. Browser callbacks cannot choose
 // the account destination or send credentials to a different provider origin.
 type LoginAccount struct {
-	ID          string
-	EndpointID  string
-	DisplayName string
+	Mode            string
+	ID              string
+	EndpointID      string
+	DisplayName     string
+	Reauthorization *LoginReauthorization
+}
+
+// LoginReauthorization contains only trusted, frozen server-held evidence.
+// It carries routing scope and identity metadata, never the old access token.
+type LoginReauthorization struct {
+	SecretRef       secretstore.Reference
+	CredentialEpoch uint64
+	CreatedAt       time.Time
+	Profile         Profile
+	Scope           providerauth.AccountRef
+}
+
+func (target LoginAccount) valid() bool {
+	if target.Mode == "reauthorize" {
+		frozen := target.Reauthorization
+		return frozen != nil && frozen.SecretRef.String() != "" && !frozen.CreatedAt.IsZero() &&
+			frozen.CredentialEpoch > 0 && frozen.Profile.AccountID != "" && frozen.Scope.Validate() == nil &&
+			frozen.Scope.ID == target.ID && frozen.Scope.CredentialEpoch == frozen.CredentialEpoch
+	}
+	return (target.Mode == "" || target.Mode == "create") && target.EndpointID != "" && target.Reauthorization == nil
 }
 
 type LoginView struct {
@@ -99,9 +123,13 @@ func NewLoginManager(options LoginOptions) (*LoginManager, error) {
 }
 
 func (manager *LoginManager) Start(ctx context.Context, owner string, account LoginAccount, mode string) (LoginView, error) {
-	if ctx == nil || ctx.Err() != nil || owner == "" || account.ID == "" || account.EndpointID == "" ||
+	if ctx == nil || ctx.Err() != nil || owner == "" || account.ID == "" || !account.valid() ||
 		(mode != "loopback" && mode != "manual") {
 		return LoginView{}, ErrLoginInvalid
+	}
+	if account.Reauthorization != nil {
+		frozen := *account.Reauthorization
+		account.Reauthorization = &frozen
 	}
 	manager.mu.Lock()
 	defer manager.mu.Unlock()
@@ -238,16 +266,29 @@ func (manager *LoginManager) Complete(ctx context.Context, owner, id, callback s
 	defer manager.active.Done()
 	defer cancel()
 	defer clear(verifier)
-	credential, exchangeErr := manager.exchangeCode(operation, code, verifier, pending.redirect)
+	scope := providerauth.AccountRef{}
+	if pending.account.Reauthorization != nil {
+		scope = pending.account.Reauthorization.Scope
+	}
+	credential, exchangeErr := manager.exchangeCode(operation, code, verifier, pending.redirect, scope)
 	accountID := ""
 	reason := ""
 	if exchangeErr != nil {
 		reason = "login_exchange_failed"
 	} else {
 		defer credential.Destroy()
-		accountID, err = manager.options.Persist(operation, pending.account, credential)
-		if err != nil || accountID == "" {
-			reason = "login_account_save_failed"
+		if frozen := pending.account.Reauthorization; frozen != nil &&
+			(credential.Profile().AccountID != frozen.Profile.AccountID || frozen.Profile.UserID != "" && credential.Profile().UserID != frozen.Profile.UserID) {
+			reason = "login_identity_mismatch"
+		} else {
+			accountID, err = manager.options.Persist(operation, pending.account, credential)
+			if errors.Is(err, ErrIdentityMismatch) {
+				reason = "login_identity_mismatch"
+			} else if errors.Is(err, ErrLoginAccountChanged) {
+				reason = "login_account_changed"
+			} else if err != nil || accountID == "" {
+				reason = "login_account_save_failed"
+			}
 		}
 	}
 	manager.mu.Lock()
@@ -374,7 +415,7 @@ func (manager *LoginManager) callback(w http.ResponseWriter, r *http.Request, id
 	_, _ = io.WriteString(w, "Codex account saved. You can close this page and return to ViberMate.")
 }
 
-func (manager *LoginManager) exchangeCode(ctx context.Context, code string, verifier []byte, redirect string) (*Credential, error) {
+func (manager *LoginManager) exchangeCode(ctx context.Context, code string, verifier []byte, redirect string, scope providerauth.AccountRef) (*Credential, error) {
 	form := url.Values{"grant_type": {"authorization_code"}, "client_id": {ClientID}, "code": {code}, "redirect_uri": {redirect}, "code_verifier": {string(verifier)}}
 	body := []byte(form.Encode())
 	defer clear(body)
@@ -384,7 +425,7 @@ func (manager *LoginManager) exchangeCode(ctx context.Context, code string, veri
 	}
 	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	request.Header.Set("Accept", "application/json")
-	response, err := manager.options.Client.Do(request, providerauth.AccountRef{})
+	response, err := manager.options.Client.Do(request, scope)
 	if err != nil || response == nil {
 		return nil, ErrLoginInvalid
 	}
