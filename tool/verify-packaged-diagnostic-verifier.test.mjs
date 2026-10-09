@@ -6,7 +6,7 @@ import { validateVerifierBuildInfo } from './verify-packaged-diagnostic-verifier
 
 test('verifier source rejects dirty or different builds', () => {
   const revision = '0'.repeat(40);
-  const good = `binary: go1.26.8\n\tbuild\tvcs=git\n\tbuild\tvcs.revision=${revision}\n\tbuild\tvcs.modified=false\n`;
+  const good = `binary: go1.26.9\n\tbuild\tvcs=git\n\tbuild\tvcs.revision=${revision}\n\tbuild\tvcs.modified=false\n`;
   assert.doesNotThrow(() => validateVerifierBuildInfo(good, revision));
   assert.throws(() => validateVerifierBuildInfo(good.replace('modified=false', 'modified=true'), revision));
   assert.throws(() => validateVerifierBuildInfo(good, '1'.repeat(40)));
@@ -14,7 +14,7 @@ test('verifier source rejects dirty or different builds', () => {
 
 test('verifier source rejects missing and duplicate settings', () => {
   const revision = '0'.repeat(40);
-  const good = `binary: go1.26.8\n\tbuild\tvcs=git\n\tbuild\tvcs.revision=${revision}\n\tbuild\tvcs.modified=false\n`;
+  const good = `binary: go1.26.9\n\tbuild\tvcs=git\n\tbuild\tvcs.revision=${revision}\n\tbuild\tvcs.modified=false\n`;
   assert.throws(() => validateVerifierBuildInfo(good.replace('\tbuild\tvcs=git\n', ''), revision));
   assert.throws(() => validateVerifierBuildInfo(`${good}\tbuild\tvcs=git\n`, revision));
 });

@@ -322,7 +322,7 @@ func validCLIReport(t *testing.T) acceptancereport.Report {
 	}
 	revision, commitTime := initializeCLIGitFixture(t, sourceRoot)
 	tools := acceptancereport.ToolchainProvenance{
-		Go: "go version go1.26.8 darwin/arm64",
+		Go: "go version go1.26.9 darwin/arm64",
 		Flutter: "Flutter " + acceptancereport.ExpectedFlutterVersion + " (" +
 			acceptancereport.ExpectedFlutterRevision + ")",
 		Dart:  "Dart " + acceptancereport.ExpectedDartVersion,
@@ -437,9 +437,9 @@ func validCLIReport(t *testing.T) acceptancereport.Report {
 				Toolchains:          buildTools,
 				ConfigurationSHA256: configurationDigests,
 				GoBuildVersions: map[string]string{
-					"acceptance": "go1.26.8",
-					"daemon":     "go1.26.8",
-					"launcher":   "go1.26.8",
+					"acceptance": "go1.26.9",
+					"daemon":     "go1.26.9",
+					"launcher":   "go1.26.9",
 				},
 				GoBuildTags: map[string]string{
 					"acceptance": "", "daemon": "", "launcher": "",
