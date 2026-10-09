@@ -68,6 +68,7 @@ class ReauthorizationApi implements ControlApi {
   int quotaReads = 0;
   bool includeEndpoints = false;
   int expectedEpoch = 7;
+  bool dashboardFails = false;
 
   Future<void> open() async {
     loginApi = await HttpControlApi.connect(
@@ -151,6 +152,7 @@ class ReauthorizationApi implements ControlApi {
   @override
   Future<DashboardData> loadDashboard() async {
     dashboardReads++;
+    if (dashboardFails) throw StateError('Synthetic dashboard network failure');
     final base = await preview.loadDashboard();
     return DashboardData(
       status: base.status,
@@ -270,6 +272,70 @@ Future<void> submit(WidgetTester tester) async {
 }
 
 void main() {
+  for (final language in AppLanguage.values) {
+    testWidgets(
+      'conflict reload failure blocks stale login until recovery in $language',
+      (tester) async {
+        final api = ReauthorizationApi()..failure = 'login_account_changed';
+        final controller = await openAccounts(tester, api, language);
+        final original = controller.data!.accounts.single;
+        await startAgain(tester);
+        api.dashboardFails = true;
+        await submit(tester);
+        expect(controller.data!.accounts.single, same(original));
+        expect(
+          find.textContaining(
+            language == AppLanguage.english
+                ? 'status has been reloaded'
+                : '已重新加载当前状态',
+          ),
+          findsNothing,
+        );
+        expect(
+          find.text(
+            language == AppLanguage.english
+                ? 'Could not reload this account. Check your connection and try again.'
+                : '无法重新加载此账号，请检查连接后重试。',
+          ),
+          findsOneWidget,
+        );
+        final start = find.byKey(const Key('codex-oauth-start'));
+        await tester.ensureVisible(start);
+        await tester.tap(start);
+        await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 20)),
+        );
+        await tester.pumpAndSettle();
+        expect(
+          api.requests.where((r) => r.url.path == '/api/v1/codex-oauth/logins'),
+          hasLength(1),
+          reason: 'A failed reload must never submit the unverified old epoch',
+        );
+        expect(controller.data!.accounts.single, same(original));
+        final failedReads = api.dashboardReads;
+        api.dashboardFails = false;
+        api.expectedEpoch = 8;
+        await tester.tap(start);
+        await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 20)),
+        );
+        await tester.pumpAndSettle();
+        expect(api.dashboardReads, greaterThan(failedReads));
+        expect(controller.data!.accounts.single.credentialEpoch, 8);
+        expect(
+          api.requests.where((r) => r.url.path == '/api/v1/codex-oauth/logins'),
+          hasLength(2),
+        );
+        expect(find.byKey(const Key('codex-oauth-callback')), findsOneWidget);
+        expect(controller.inventoryNotice, isNull);
+        expect(tester.takeException(), isNull);
+        await tester.pumpWidget(const SizedBox.shrink());
+        await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 20)),
+        );
+      },
+    );
+  }
   test(
     'reauthorization HTTP targets original epoch without create fields',
     () async {

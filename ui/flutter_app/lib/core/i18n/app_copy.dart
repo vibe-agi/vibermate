@@ -495,7 +495,9 @@ final class AppCopy {
     'provider_accounts.oauth.login_identity_mismatch':
         'The browser signed in to a different account. Switch to the original account and try again.',
     'provider_accounts.oauth.login_account_changed':
-        'This account changed during sign-in. Its current status has been reloaded. Try again.',
+        'This account changed during sign-in. Try again to check its current status.',
+    'provider_accounts.oauth.reload_failed':
+        'Could not reload this account. Check your connection and try again.',
     'provider_accounts.oauth.open': 'Open login page',
     'provider_accounts.oauth.copy': 'Copy login link',
     'provider_accounts.oauth.callback': 'Callback URL',
@@ -3305,7 +3307,8 @@ final class AppCopy {
     'provider_accounts.oauth.reauthorize_hint': '请登录上方显示的原账号。账号名称和关联服务将保留。',
     'provider_accounts.oauth.enable_first': '请先启用此账号，然后重新登录。',
     'provider_accounts.oauth.login_identity_mismatch': '登录的不是原账号，请在浏览器中切换后重试。',
-    'provider_accounts.oauth.login_account_changed': '登录期间账号已变更，已重新加载当前状态，请重试。',
+    'provider_accounts.oauth.login_account_changed': '登录期间账号已变更，请重试以检查当前状态。',
+    'provider_accounts.oauth.reload_failed': '无法重新加载此账号，请检查连接后重试。',
     'provider_accounts.oauth.open': '打开登录页',
     'provider_accounts.oauth.copy': '复制授权链接',
     'provider_accounts.oauth.callback': '回调 URL',

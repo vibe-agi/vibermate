@@ -50,6 +50,8 @@ final class _CodexOAuthLoginPanelState extends State<CodexOAuthLoginPanel> {
   bool _polling = false;
   String? _error;
   ProviderAccount? _currentAccount;
+  bool _reloadRequired = false;
+  bool _reloadingAccount = false;
 
   @override
   void initState() {
@@ -94,6 +96,7 @@ final class _CodexOAuthLoginPanelState extends State<CodexOAuthLoginPanel> {
             key: const Key('codex-oauth-start'),
             onPressed:
                 _busy ||
+                    _reloadingAccount ||
                     (widget.account != null &&
                         (_currentAccount?.credentialEpoch ?? 0) <= 0)
                 ? null
@@ -200,13 +203,27 @@ final class _CodexOAuthLoginPanelState extends State<CodexOAuthLoginPanel> {
   }
 
   Future<void> _start() async {
-    if (_busy || (widget.account != null && _currentAccount == null)) return;
+    if (_busy ||
+        _reloadingAccount ||
+        (widget.account != null && _currentAccount == null)) {
+      return;
+    }
     setState(() {
       _busy = true;
       _error = null;
     });
     widget.onActiveChanged(true);
     try {
+      if (_reloadRequired && !await _reloadAccount()) {
+        if (mounted) widget.onActiveChanged(false);
+        return;
+      }
+      if (!mounted) return;
+      if (widget.account != null &&
+          (_currentAccount?.credentialEpoch ?? 0) <= 0) {
+        widget.onActiveChanged(false);
+        return;
+      }
       final account = _currentAccount;
       final login = account == null
           ? await widget.controller.startCodexLogin(
@@ -232,16 +249,15 @@ final class _CodexOAuthLoginPanelState extends State<CodexOAuthLoginPanel> {
       if (mounted) {
         if (widget.account != null &&
             (problem.status == 409 || problem.status == 404)) {
-          await _reloadAccount();
+          if (await _reloadAccount() && mounted) {
+            setState(
+              () => _error = 'provider_accounts.oauth.login_account_changed',
+            );
+          }
+        } else {
+          setState(() => _error = 'provider_accounts.oauth.start_failed');
         }
         if (!mounted) return;
-        setState(
-          () => _error =
-              widget.account != null &&
-                  (problem.status == 409 || problem.status == 404)
-              ? 'provider_accounts.oauth.login_account_changed'
-              : 'provider_accounts.oauth.start_failed',
-        );
         widget.onActiveChanged(false);
       }
     } catch (_) {
@@ -339,10 +355,11 @@ final class _CodexOAuthLoginPanelState extends State<CodexOAuthLoginPanel> {
     if (login.state == 'completed') {
       if (widget.account case final account?) {
         if (login.accountId != account.id) {
-          setState(
-            () => _error = 'provider_accounts.oauth.login_account_changed',
-          );
-          await _reloadAccount();
+          if (await _reloadAccount() && mounted) {
+            setState(
+              () => _error = 'provider_accounts.oauth.login_account_changed',
+            );
+          }
           return;
         }
         await widget.controller.finishCodexReauthorization(account);
@@ -356,14 +373,29 @@ final class _CodexOAuthLoginPanelState extends State<CodexOAuthLoginPanel> {
     }
   }
 
-  Future<void> _reloadAccount() async {
-    await widget.controller.refresh();
-    if (!mounted) return;
-    setState(
-      () => _currentAccount = widget.controller.data?.accounts
+  Future<bool> _reloadAccount() async {
+    setState(() {
+      _reloadRequired = true;
+      _reloadingAccount = true;
+    });
+    final reloaded = await widget.controller
+        .refreshCodexReauthorizationAccount();
+    if (!mounted) return false;
+    setState(() {
+      _reloadingAccount = false;
+      if (!reloaded) {
+        _error = 'provider_accounts.oauth.reload_failed';
+        return;
+      }
+      _reloadRequired = false;
+      _currentAccount = widget.controller.data?.accounts
           .where((account) => account.id == widget.account!.id)
-          .firstOrNull,
-    );
+          .firstOrNull;
+      _error = _currentAccount != null && _currentAccount!.credentialEpoch <= 0
+          ? 'provider_accounts.oauth.enable_first'
+          : null;
+    });
+    return reloaded;
   }
 
   Future<void> _cancel() async {
