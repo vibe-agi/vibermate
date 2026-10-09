@@ -6,15 +6,17 @@
 
 **Architecture:** Reuse the protected signed/notarized distribution and Linux/Homebrew pipeline already used forv0.1.24. Candidate source stays on the stable releaseddbf9745 line, separate from unfinished MCP/global/VLESS WIP. Prepare version metadata, freeze reviewed source, run same-source checks, then publish immutable verified assets.
 
-**Tech Stack:** Existing pinnedGo1.26.8/Flutter3.41.5/Node22.23.1, existingGitHubCI/release tools. No tooling/dependency upgrades.
+**Tech Stack:** Pinned Go1.26.9/Flutter3.41.5/Node22.23.1 and existing GitHub CI/release tools. The observed security amendment below permits only the verified Go/x-net patch and required transitives; no unrelated upgrade.
 
 **Spec:** Approved behavior in `../specs/2026-10-09-server-login-continuity-design.md` and `../specs/2026-10-09-provider-account-reauthorization-proposal.md`; user approved phased delivery and direct publication after tests, while protected signing/notarization approval requirements remain effective.
 
-**Currentcandidate:** featurecommitsf90d972/b29fff8/dc71b24/930f4b1, reviewedmetadata1a8272e andfeedbackcorrection79fb19c. Version0.1.25+27; no newtag/releaseyet. FinalsourceSHAwillincludeapprovedplans andbeexplicitlyrecordedbeforeCI. Originalfullsuitefailuresremainpreserved; scopedpassesarenotcalledfullqualification.
+**Current candidate:** Feature commits f90d972/b29fff8/dc71b24/930f4b1, reviewed metadata1a8272e, feedback correction79fb19c, documentation correctionfa4ec09 and security patch548ff6d. All corresponding scoped reviews are approved. Version0.1.25+27 remains unpublished. Update existing PR46 after the root-owned plan commit; record the exact head and new CI IDs in this plan's ledger. Original failures remain preserved; scoped passes are not full candidate qualification.
+
+**Observedsecurity amendment:** candidatefa4ec09CI37976295645 foundreachableGo1.26.8/std-library andx/net0.57.0 vulnerabilities. Applythe narrowlyverifiedofficialpatches via `2026-10-10-go-security-patch.md` beforepublication. This is an actualCIblocker, notperformancegate expansion; priorno-upgradetaskrestrictiondoesnotpreventnecessarysecuritypatching. Keepexactpins/securityscansandallhistoricalevidence.
 
 ## Global Constraints
 
-- Stable worktree `/Users/null/Code/github/vibe-agi/vibermate/.worktrees/long-session-hotfix`. Product source frozen930f4b1 before version preparation; independent combinedreview underway, no active source writer/test at handoff.
+- Stable worktree `/Users/null/Code/github/vibe-agi/vibermate/.worktrees/long-session-hotfix`. Product source is frozen548ff6d, combined product/metadata/security reviews approved; no active local product writer or test here. The separate VLESS Runtime UDP task retains sole source/local-test ownership in production-readiness while hosted candidate CI runs.
 - Latestremote verified2026-10-10: mainprotecteddbf9745b5391723103967889939a5ab4c7fbb7bc, latestReleasev0.1.24. Prepare0.1.25+27, recheck before tag/publication. Never overwritev0.1.24 or claim localbuildpublished.
 - Preserve all user data/accounts/trust/runningprocesses and unrelated local work. Onlyownedproductdocs/version paths. One source writer/localtestowner; readonlyreview/hostedCI can run separately.
 - Do not weaken approvals, verification, signedartifact/sourcebinding, tests or watchdogs to obtaingreen. Keep original failed fullGo/Flutter logs distinct from successfulisolateddiagnostics.
