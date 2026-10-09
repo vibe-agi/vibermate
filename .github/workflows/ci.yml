@@ -334,7 +334,7 @@ jobs:
         run: |
           set -euo pipefail
           flutter test test/live_runtime_test.dart
-          go test -count=1 ../../cmd/vibermate-acceptance
+          go test -count=1 -v ../../cmd/vibermate-acceptance
           git diff --exit-code
 
   web:
