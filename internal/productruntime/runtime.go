@@ -584,7 +584,7 @@ func startWithBuilders(
 	}
 	codexLogins, err := codexoauth.NewLoginManager(codexoauth.LoginOptions{
 		Client: codexOAuthHTTPClient{provider: provider}, Clock: options.Clock,
-		Persist: persistCodexLogin(accounts),
+		Persist: persistCodexLogin(accounts, options.Secrets),
 	})
 	if err != nil {
 		return fail("Codex OAuth login manager", err)

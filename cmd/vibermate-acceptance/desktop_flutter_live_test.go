@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -41,6 +42,14 @@ func TestPackagedFlutterDesktopShellLive(t *testing.T) {
 		canonicalApp,
 		layout,
 		homeDirectory,
+		func(observation desktopExitDiagnostic) {
+			encoded, err := json.Marshal(observation)
+			if err != nil {
+				t.Log("packaged Desktop exit observation unavailable")
+				return
+			}
+			t.Logf("packaged Desktop exit observation: %s", encoded)
+		},
 	); err != nil {
 		t.Fatal(err)
 	}

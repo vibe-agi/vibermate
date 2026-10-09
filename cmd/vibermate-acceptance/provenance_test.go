@@ -41,7 +41,7 @@ func TestFlutterToolchainEvidenceAcceptsPinnedDetachedTag(t *testing.T) {
 				tools.Dart != "Dart 3.11.3" {
 				t.Fatalf("observed Flutter identity changed: %+v", tools)
 			}
-			tools.Go = "go version go1.26.8 darwin/arm64"
+			tools.Go = "go version go1.26.9 darwin/arm64"
 			tools.Xcode = "Xcode 16.2\nBuild version 16C5032a"
 			if err := validateToolchains(tools, nil); err != nil {
 				t.Fatalf("pinned toolchain identity was rejected: %v", err)
@@ -107,7 +107,7 @@ func TestFlutterToolchainEvidencePreservesUnpinnedIdentityForRejection(t *testin
 			if !strings.Contains(tools.Flutter+tools.Dart, changed.to) {
 				t.Fatalf("observed identity was replaced: %+v", tools)
 			}
-			tools.Go = "go version go1.26.8 darwin/arm64"
+			tools.Go = "go version go1.26.9 darwin/arm64"
 			tools.Xcode = "Xcode 16.2\nBuild version 16C5032a"
 			if err := validateToolchains(tools, nil); err == nil {
 				t.Fatal("unpinned observed Flutter/Dart identity was accepted")
@@ -226,20 +226,20 @@ func TestToolchainValidationRequiresPinnedBuildAndHostVersions(t *testing.T) {
 	t.Parallel()
 
 	tools := toolchainProvenance{
-		Go:      "go version go1.26.8 darwin/arm64",
+		Go:      "go version go1.26.9 darwin/arm64",
 		Flutter: normalizedFlutterVersion(),
 		Dart:    "Dart " + expectedDartVersion,
 		Xcode:   expectedXcodeVersion,
 	}
 	binaries := []goBinaryEvidence{
-		{role: "acceptance", goVersion: "go1.26.8"},
-		{role: "daemon", goVersion: "go1.26.8"},
-		{role: "launcher", goVersion: "go1.26.8"},
+		{role: "acceptance", goVersion: "go1.26.9"},
+		{role: "daemon", goVersion: "go1.26.9"},
+		{role: "launcher", goVersion: "go1.26.9"},
 	}
 	if err := validateToolchains(tools, binaries); err != nil {
 		t.Fatalf("pinned toolchains were rejected: %v", err)
 	}
-	for _, version := range []string{"go1.25.13", "go1.26.0", "go1.26.9"} {
+	for _, version := range []string{"go1.25.13", "go1.26.0", "go1.26.8", "go1.26.10"} {
 		version := version
 		t.Run("host "+version, func(t *testing.T) {
 			candidate := tools
@@ -312,7 +312,7 @@ func TestDesktopBuildManifestBindsSourceSidecarsAndConfiguration(
 			Toolkit:  "flutter",
 		},
 		Toolchains: desktopBuildToolchains{
-			Go:      "go version go1.26.8 darwin/arm64",
+			Go:      "go version go1.26.9 darwin/arm64",
 			Flutter: normalizedFlutterVersion(),
 			Dart:    "Dart " + expectedDartVersion,
 			Xcode:   expectedXcodeVersion,

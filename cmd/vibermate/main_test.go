@@ -351,6 +351,35 @@ func TestParseLoginRequiresOneExactServer(t *testing.T) {
 	}
 }
 
+func TestParseLoginAndRunNormalizeDefaultServerPorts(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct{ input, origin string }{
+		{"https://runtime.example.test", "https://runtime.example.test:443"},
+		{"http://runtime.example.test", "http://runtime.example.test:80"},
+	} {
+		t.Run(test.input, func(t *testing.T) {
+			t.Run("login", func(t *testing.T) {
+				parsed, err := parseLogin([]string{"login", "--server", test.input})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if parsed.server.Origin() != test.origin {
+					t.Fatalf("server = %q; want %q", parsed.server.Origin(), test.origin)
+				}
+			})
+			t.Run("run", func(t *testing.T) {
+				parsed, err := parseRun([]string{"run", "--server", test.input, "--", "codex"})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if parsed.server.Origin() != test.origin || !slices.Equal(parsed.command, []string{"codex"}) {
+					t.Fatalf("parseRun() = %+v; want origin %q", parsed, test.origin)
+				}
+			})
+		})
+	}
+}
+
 func TestParseLogoutRequiresOneExactServer(t *testing.T) {
 	t.Parallel()
 	parsed, err := parseLogout([]string{"logout", "--server", "runtime.lan:9666"})

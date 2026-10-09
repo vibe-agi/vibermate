@@ -26,9 +26,9 @@ const signingConfigurationNames = new Set([
 
 export const macOSDistributionPolicy = Object.freeze({
   appBundleName: "ViberMate.app",
-  appBuildNumber: "26",
+  appBuildNumber: "27",
   appIdentifier: "io.vibermate.desktop",
-  appVersion: "0.1.24",
+  appVersion: "0.1.25",
   allowedApplicationSymlinks: Object.freeze({
     "Contents/Frameworks/App.framework/App": "Versions/Current/App",
     "Contents/Frameworks/App.framework/Resources":
@@ -52,7 +52,7 @@ export const macOSDistributionPolicy = Object.freeze({
   }),
   architectures: Object.freeze(["arm64", "x86_64"]),
   developerDirectory: "/Applications/Xcode_16.2.app/Contents/Developer",
-  diskImageFilename: "ViberMate_0.1.24_universal.dmg",
+  diskImageFilename: "ViberMate_0.1.25_universal.dmg",
   diskImageIdentifier: "io.vibermate.desktop.dmg",
   evidenceSchema: "vibermate.macos-distribution-notarization/v1",
   lipoIdentity: "Apple lipo (version unavailable; SHA-256 bound)",

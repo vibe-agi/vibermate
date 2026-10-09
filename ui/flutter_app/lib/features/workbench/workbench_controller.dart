@@ -1003,7 +1003,13 @@ final class WorkbenchController extends ChangeNotifier
   }
 
   Future<void> refresh({bool selectDefaults = false}) async {
-    if (_disposed || inventoryMutating || environmentMutating) return;
+    await _refreshDashboard(selectDefaults: selectDefaults);
+  }
+
+  Future<bool> refreshCodexReauthorizationAccount() => _refreshDashboard();
+
+  Future<bool> _refreshDashboard({bool selectDefaults = false}) async {
+    if (_disposed || inventoryMutating || environmentMutating) return false;
     final generation = ++_dashboardGeneration;
     captureOverviewRefresh += 1;
     if (data == null) loading = true;
@@ -1011,7 +1017,7 @@ final class WorkbenchController extends ChangeNotifier
     notifyListeners();
     try {
       final updated = await _api.loadDashboard();
-      if (_disposed || generation != _dashboardGeneration) return;
+      if (_disposed || generation != _dashboardGeneration) return false;
       _inventoryFailureStatus = null;
       data = updated;
       _repairDashboardSelections(updated, forceCaptureDefault: selectDefaults);
@@ -1034,12 +1040,14 @@ final class WorkbenchController extends ChangeNotifier
         }
       }
     } catch (error) {
-      if (_disposed || generation != _dashboardGeneration) return;
+      if (_disposed || generation != _dashboardGeneration) return false;
       loading = false;
       if (error is DashboardUnavailable) _inventoryFailureStatus = error.status;
       errorMessage = _describeError(error);
       notifyListeners();
+      return false;
     }
+    return !_disposed && generation == _dashboardGeneration;
   }
 
   Future<void> _poll() async {
@@ -2577,6 +2585,22 @@ final class WorkbenchController extends ChangeNotifier
 
   Future<CodexLogin> codexLoginStatus(String loginId) =>
       _api.codexLoginStatus(loginId);
+  Future<CodexLogin> startCodexReauthorization({
+    required ProviderAccount account,
+    required String callbackMode,
+  }) => _api.startCodexReauthorization(
+    account: account,
+    callbackMode: callbackMode,
+  );
+
+  Future<void> finishCodexReauthorization(ProviderAccount account) async {
+    invalidateProviderAccountQuota(account);
+    await refresh();
+    if (_disposed) return;
+    inventoryNotice = 'account_reauthorized';
+    notifyListeners();
+  }
+
   Future<CodexLogin> completeCodexLogin(String loginId, String callbackUrl) =>
       _api.completeCodexLogin(loginId, callbackUrl);
   Future<void> cancelCodexLogin(String loginId) =>

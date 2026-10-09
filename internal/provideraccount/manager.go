@@ -369,6 +369,10 @@ func (manager *Manager) ReplaceSecret(
 	if ctx == nil || command.Secret == nil || command.ExpectedCredentialEpoch > MaxRevision {
 		return View{}, ErrInvalidAccount
 	}
+	if condition := command.Precondition; condition != nil &&
+		(condition.CreatedAt.IsZero() || condition.SecretRef.String() == "" || command.ExpectedCredentialEpoch == 0) {
+		return View{}, ErrInvalidAccount
+	}
 	manager.mu.Lock()
 	if manager.closing {
 		manager.mu.Unlock()
@@ -382,6 +386,11 @@ func (manager *Manager) ReplaceSecret(
 	if !exists {
 		manager.mu.Unlock()
 		return View{}, ErrAccountNotFound
+	}
+	if condition := command.Precondition; condition != nil &&
+		(!account.CreatedAt.Equal(condition.CreatedAt) || account.SecretRef != condition.SecretRef) {
+		manager.mu.Unlock()
+		return View{}, ErrRevisionConflict
 	}
 	manager.operations[command.ID] = accountOperationReplaceSecret
 	manager.beginInFlightLocked()

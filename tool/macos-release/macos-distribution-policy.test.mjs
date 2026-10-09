@@ -30,15 +30,15 @@ import {
 
 const teamID = "A1B2C3D4E5";
 const submissionID = "12345678-1234-4abc-8def-1234567890ab";
-const archiveFilename = "ViberMate_0.1.24_universal.dmg";
+const archiveFilename = "ViberMate_0.1.25_universal.dmg";
 const preStapleSHA256 = "a".repeat(64);
 
 test("frozen release identity is coherent", () => {
-  assert.equal(macOSDistributionPolicy.appVersion, "0.1.24");
-  assert.equal(macOSDistributionPolicy.appBuildNumber, "26");
+  assert.equal(macOSDistributionPolicy.appVersion, "0.1.25");
+  assert.equal(macOSDistributionPolicy.appBuildNumber, "27");
   assert.equal(
     macOSDistributionPolicy.diskImageFilename,
-    "ViberMate_0.1.24_universal.dmg",
+    "ViberMate_0.1.25_universal.dmg",
   );
   const pubspec = readFileSync(
     new URL("../../ui/flutter_app/pubspec.yaml", import.meta.url),
@@ -48,9 +48,9 @@ test("frozen release identity is coherent", () => {
     new URL("../../.github/workflows/macos-developer-id-candidate.yml", import.meta.url),
     "utf8",
   );
-  assert.match(pubspec, /^version: 0\.1\.24\+26$/mu);
+  assert.match(pubspec, /^version: 0\.1\.25\+27$/mu);
   assert.equal(
-    [...workflow.matchAll(/ViberMate_0\.1\.24_universal\.dmg/gu)].length,
+    [...workflow.matchAll(/ViberMate_0\.1\.25_universal\.dmg/gu)].length,
     3,
   );
   assert.doesNotMatch(workflow, /ViberMate_0\.1\.23_universal\.dmg/u);
@@ -262,9 +262,9 @@ test("application metadata and Mach-O inventory are fixed", () => {
     validateInfoPlist({
       bundleExecutable: "vibermate-desktop",
       bundleIdentifier: "io.vibermate.desktop",
-      bundleVersion: "26",
+      bundleVersion: "27",
       minimumSystemVersion: "14.0",
-      shortVersion: "0.1.24",
+      shortVersion: "0.1.25",
     }),
   );
   assert.throws(() =>
@@ -280,9 +280,9 @@ test("application metadata and Mach-O inventory are fixed", () => {
     validateInfoPlist({
       bundleExecutable: "vibermate-desktop",
       bundleIdentifier: "io.example.desktop",
-      bundleVersion: "26",
+      bundleVersion: "27",
       minimumSystemVersion: "14.0",
-      shortVersion: "0.1.24",
+      shortVersion: "0.1.25",
     }),
   );
   assert.doesNotThrow(() =>
@@ -526,7 +526,7 @@ test("embedded build manifest is clean distribution provenance", () => {
       toolkit: "flutter",
     },
     toolchains: {
-      go: "go version go1.26.8 darwin/arm64",
+      go: "go version go1.26.9 darwin/arm64",
       flutter:
         "Flutter 3.41.5 (2c9eb20739dfec95e2c74bd3dfa4601b0a8a36aa)",
       dart: "Dart 3.11.3",
@@ -807,7 +807,7 @@ test("private evidence has a closed secret-free schema", () => {
       sourceRevision: "4".repeat(40),
       toolingRevision: "8".repeat(40),
       unsignedArchiveSHA256: "9".repeat(64),
-      version: "0.1.24",
+      version: "0.1.25",
     },
     codeSigning: {
       certificateSHA256: "5".repeat(64),

@@ -54,7 +54,12 @@ func exercisePackagedDesktopShell(
 	appPath string,
 	layout runtimepath.Layout,
 	homeDirectory string,
+	observations ...func(desktopExitDiagnostic),
 ) error {
+	var sink func(desktopExitDiagnostic)
+	if len(observations) != 0 {
+		sink = observations[0]
+	}
 	if homeDirectory == "" ||
 		!filepath.IsAbs(homeDirectory) ||
 		filepath.Clean(homeDirectory) != homeDirectory {
@@ -119,6 +124,7 @@ func exercisePackagedDesktopShell(
 			}
 			return nil
 		},
+		desktopLaunchDiagnosticInput{phase: "first_restore", sink: sink, preferences: func() string { return desktopDiagnosticPreferences(statePath, sentinel, expected) }},
 	)
 	if err != nil {
 		return err
@@ -129,10 +135,10 @@ func exercisePackagedDesktopShell(
 		expected,
 	)
 	if err != nil {
-		return fmt.Errorf("verify first packaged preference exit flush: %w", err)
+		return fmt.Errorf("packaged Desktop first_restore: verify first packaged preference exit flush: %w", err)
 	}
 	if os.SameFile(seed.info, firstMounted.info) {
-		return errors.New("first packaged workbench restore did not atomically rewrite preferences")
+		return errors.New("packaged Desktop first_restore: first packaged workbench restore did not atomically rewrite preferences")
 	}
 
 	var secondSentinel desktopPreferencesFile
@@ -157,19 +163,20 @@ func exercisePackagedDesktopShell(
 			}
 			return nil
 		},
+		desktopLaunchDiagnosticInput{phase: "second_restore", sink: sink, preferences: func() string { return desktopDiagnosticPreferences(statePath, secondSentinel, expected) }},
 	)
 	if err != nil {
 		return err
 	}
 	if os.SameFile(firstExit.info, secondSentinel.info) {
-		return errors.New("second packaged preference sentinel was not atomically published")
+		return errors.New("packaged Desktop second_restore: second packaged preference sentinel was not atomically published")
 	}
 	if _, err := requireDesktopPreferencesRewrite(
 		statePath,
 		secondSentinel,
 		expected,
 	); err != nil {
-		return fmt.Errorf("verify second packaged preference exit flush: %w", err)
+		return fmt.Errorf("packaged Desktop second_restore: verify second packaged preference exit flush: %w", err)
 	}
 	return nil
 }
@@ -182,7 +189,51 @@ func exercisePackagedDesktopLaunch(
 	layout runtimepath.Layout,
 	homeDirectory string,
 	observe desktopObservation,
-) error {
+	diagnostics ...desktopLaunchDiagnosticInput,
+) (result error) {
+	var input desktopLaunchDiagnosticInput
+	if len(diagnostics) != 0 {
+		input = diagnostics[0]
+	}
+	recorder := newDesktopExitRecorder(input)
+	var generation localdiscovery.Session
+	var desktopApplication desktopApplicationIdentity
+	var desktopGuardian *desktopApplicationGuardian
+	var discovery *localdiscovery.File
+	var stdout, stderr *boundedBuffer
+	var launcherPID int
+	var launcherBirth desktopProcessStart
+	launcherStarted, cleaned := false, false
+	defer func() {
+		if desktopGuardian != nil {
+			defer desktopGuardian.close()
+		}
+		initial := initialDesktopExitSnapshot(launcherPID, launcherBirth, desktopApplication, generation.ProcessID)
+		if input.preferences != nil {
+			initial.Preferences = "unknown"
+		}
+		if generation.InstanceID == "" {
+			initial.Discovery = "unbound"
+		}
+		result = recorder.finish(result, cleaned, initial, func(snapshotContext context.Context) desktopExitSnapshot {
+			return collectDesktopExitSnapshot(snapshotContext, initial, desktopApplication, discovery, generation, input.preferences)
+		}, func() desktopCleanupObservation {
+			cleanup := cleanupPackagedDesktopApplication(desktopGuardian)
+			cleanup.LauncherWait = "not_started"
+			if launcherStarted {
+				select {
+				case <-recorder.wait.finished:
+					cleanup.LauncherWait = "completed"
+				case <-time.After(5 * time.Second):
+					cleanup.LauncherWait = "deadline"
+				}
+			}
+			return cleanup
+		}, stdout, stderr)
+		if result != nil {
+			result = fmt.Errorf("packaged Desktop %s: %w", recorder.input.phase, result)
+		}
+	}()
 	if observe == nil {
 		return errors.New("packaged Desktop observation is unavailable")
 	}
@@ -197,7 +248,7 @@ func exercisePackagedDesktopLaunch(
 	if len(runningApplications) != 0 {
 		return errors.New("another ViberMate Desktop application is already running")
 	}
-	discovery, err := localdiscovery.NewFile(
+	discovery, err = localdiscovery.NewFile(
 		layout.CLIControlRecord,
 		wallClock{},
 	)
@@ -216,33 +267,23 @@ func exercisePackagedDesktopLaunch(
 		desktopOpenArguments(canonicalAppPath, homeDirectory)...,
 	)
 	command.Env = acceptanceEnvironment(os.Environ())
-	stdout := newBoundedBuffer(64 << 10)
-	stderr := newBoundedBuffer(64 << 10)
+	stdout = newBoundedBuffer(64 << 10)
+	stderr = newBoundedBuffer(64 << 10)
 	command.Stdout = stdout
 	command.Stderr = stderr
 	if err := command.Start(); err != nil {
 		return fmt.Errorf("start packaged Desktop app: %w", err)
 	}
+	launcherStarted = true
+	launcherPID = command.Process.Pid
+	if process, inspectErr := inspectDesktopProcess(launcherPID); inspectErr == nil {
+		launcherBirth = process.started
+	}
 	done := make(chan error, 1)
 	go func() {
-		done <- command.Wait()
-	}()
-	var generation localdiscovery.Session
-	var desktopApplication desktopApplicationIdentity
-	var desktopGuardian *desktopApplicationGuardian
-	cleaned := false
-	defer func() {
-		if desktopGuardian != nil {
-			defer desktopGuardian.close()
-		}
-		if cleaned {
-			return
-		}
-		cleanupPackagedDesktopApplication(desktopGuardian)
-		select {
-		case <-done:
-		case <-time.After(5 * time.Second):
-		}
+		waitErr := command.Wait()
+		recorder.wait.complete(waitErr, time.Now())
+		done <- waitErr
 	}()
 
 	startupContext, cancelStartup := context.WithTimeout(ctx, 30*time.Second)
@@ -293,6 +334,7 @@ func exercisePackagedDesktopLaunch(
 		return errors.New("packaged Desktop process relationship changed after binding")
 	}
 
+	recorder.stage = "restore_observation"
 	if err := observe(startupContext, done); err != nil {
 		return err
 	}
@@ -305,13 +347,22 @@ func exercisePackagedDesktopLaunch(
 		process.started != desktopApplication.sidecarStarted {
 		return errors.New("packaged Desktop generation changed application owner")
 	}
-	if err := requestDesktopQuit(ctx, desktopGuardian); err != nil {
+	recorder.stage = "quit_request"
+	recorder.requestMS = time.Since(recorder.started).Milliseconds()
+	err = requestDesktopQuit(ctx, desktopGuardian)
+	recorder.acknowledgementMS = time.Since(recorder.started).Milliseconds()
+	if err != nil {
+		recorder.request = "error"
 		return err
 	}
+	recorder.request = "accepted"
+	recorder.stage = "launcher_wait"
 	exitContext, cancelExit := context.WithTimeout(ctx, packagedDesktopExitTimeout)
 	defer cancelExit()
 	select {
 	case waitErr := <-done:
+		recorder.selected = "launcher_wait"
+		recorder.selectedMS = time.Since(recorder.started).Milliseconds()
 		if waitErr != nil {
 			return fmt.Errorf(
 				"packaged Desktop graceful exit: %w",
@@ -319,8 +370,11 @@ func exercisePackagedDesktopLaunch(
 			)
 		}
 	case <-exitContext.Done():
+		recorder.selected = "exit_deadline"
+		recorder.selectedMS = time.Since(recorder.started).Milliseconds()
 		return errors.New("packaged Desktop graceful exit deadline exceeded")
 	}
+	recorder.stage = "registration"
 	registered, err := desktopApplicationRegistered(
 		exitContext,
 		desktopApplication,
@@ -331,6 +385,7 @@ func exercisePackagedDesktopLaunch(
 	if registered {
 		return errors.New("packaged Desktop process remained registered after exit")
 	}
+	recorder.stage = "sidecar_discovery"
 	for {
 		sidecar, inspectErr := inspectDesktopProcess(generation.ProcessID)
 		sidecarPresent, inspectErr := desktopProcessIdentityPresent(
@@ -347,6 +402,7 @@ func exercisePackagedDesktopLaunch(
 		}
 		if !sidecarPresent && removed {
 			cleaned = true
+			recorder.stage = "complete"
 			return nil
 		}
 		select {
@@ -539,13 +595,11 @@ func waitForDesktopPreferencesRewrite(
 	}
 	ticker := time.NewTicker(25 * time.Millisecond)
 	defer ticker.Stop()
-	var lastObserved []byte
 	for {
 		current, err := readDesktopPreferencesFile(path)
 		if err != nil {
 			return desktopPreferencesFile{}, err
 		}
-		lastObserved = bytes.Clone(current.encoded)
 		if bytes.Equal(current.encoded, expected) &&
 			!os.SameFile(previous.info, current.info) {
 			return current, nil
@@ -558,10 +612,7 @@ func waitForDesktopPreferencesRewrite(
 			)
 		case <-ticker.C:
 		case <-ctx.Done():
-			return desktopPreferencesFile{}, fmt.Errorf(
-				"packaged Desktop preference restore deadline exceeded; observed=%q",
-				lastObserved,
-			)
+			return desktopPreferencesFile{}, errors.New("packaged Desktop preference restore deadline exceeded")
 		}
 	}
 }
@@ -961,13 +1012,24 @@ func desktopApplicationRegistered(
 	return false, nil
 }
 
-func cleanupPackagedDesktopApplication(guardian *desktopApplicationGuardian) {
+func cleanupPackagedDesktopApplication(guardian *desktopApplicationGuardian) (observation desktopCleanupObservation) {
+	started := time.Now()
+	observation = desktopCleanupObservation{Request: "not_requested", Force: "not_requested", Outcome: "unbound", App: desktopDiagnosticProcessObservation{State: "unbound"}}
+	defer func() {
+		observation.ElapsedMS = time.Since(started).Milliseconds()
+		if guardian != nil {
+			observation.App = desktopDiagnosticProcess(guardian.application.ProcessID, guardian.application.started, inspectDesktopProcess)
+		}
+	}()
 	if guardian == nil {
-		return
+		return observation
 	}
 	application := guardian.application
 	quitContext, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	_ = requestDesktopQuit(quitContext, guardian)
+	observation.Request = "accepted"
+	if err := requestDesktopQuit(quitContext, guardian); err != nil {
+		observation.Request = "error"
+	}
 	cancel()
 	waitContext, waitCancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer waitCancel()
@@ -976,10 +1038,12 @@ func cleanupPackagedDesktopApplication(guardian *desktopApplicationGuardian) {
 	for {
 		registered, err := desktopApplicationRegistered(waitContext, application)
 		if err != nil {
-			return
+			observation.Outcome = "inspection_error"
+			return observation
 		}
 		if !registered {
-			return
+			observation.Outcome = "not_registered"
+			return observation
 		}
 		select {
 		case <-ticker.C:
@@ -988,9 +1052,13 @@ func cleanupPackagedDesktopApplication(guardian *desktopApplicationGuardian) {
 				context.Background(),
 				5*time.Second,
 			)
-			_ = guardian.action(forceContext, "force")
+			observation.Force = "accepted"
+			if err := guardian.action(forceContext, "force"); err != nil {
+				observation.Force = "error"
+			}
+			observation.Outcome = "force_requested"
 			forceCancel()
-			return
+			return observation
 		}
 	}
 }

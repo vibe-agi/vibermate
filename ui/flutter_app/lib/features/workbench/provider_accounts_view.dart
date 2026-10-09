@@ -133,14 +133,14 @@ final class _ProviderAccountsViewState extends State<ProviderAccountsView> {
                       icon: const Icon(Icons.add, size: 16),
                       label: Text(copy('routes.add_account')),
                     );
-              return Row(
-                mainAxisSize: MainAxisSize.min,
+              return Wrap(
+                spacing: 8,
+                runSpacing: 8,
                 children: [
                   Tooltip(
                     message: copy('provider_accounts.refresh_all.hint'),
                     child: refresh,
                   ),
-                  const SizedBox(width: 8),
                   Tooltip(message: copy('routes.add_account'), child: add),
                 ],
               );
@@ -420,6 +420,16 @@ final class _ProviderAccountsViewState extends State<ProviderAccountsView> {
               account: account,
             ),
           ),
+          onSignInAgain: account.kind == 'codex_oauth'
+              ? () => unawaited(
+                  showProviderAccountReauthorization(
+                    context,
+                    controller: controller,
+                    copy: copy,
+                    account: account,
+                  ),
+                )
+              : null,
           onDelete: () => unawaited(
             showProviderAccountDeletion(
               context,

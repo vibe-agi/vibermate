@@ -47,6 +47,88 @@ Future<void> showProviderAccountDeletion(
   ),
 );
 
+Future<void> showProviderAccountReauthorization(
+  BuildContext context, {
+  required WorkbenchController controller,
+  required AppCopy copy,
+  required ProviderAccount account,
+}) => showDialog<void>(
+  context: context,
+  builder: (_) => _AccountReauthorizationDialog(
+    controller: controller,
+    copy: copy,
+    account: account,
+  ),
+);
+
+final class _AccountReauthorizationDialog extends StatefulWidget {
+  const _AccountReauthorizationDialog({
+    required this.controller,
+    required this.copy,
+    required this.account,
+  });
+  final WorkbenchController controller;
+  final AppCopy copy;
+  final ProviderAccount account;
+  @override
+  State<_AccountReauthorizationDialog> createState() =>
+      _AccountReauthorizationDialogState();
+}
+
+final class _AccountReauthorizationDialogState
+    extends State<_AccountReauthorizationDialog> {
+  @override
+  Widget build(BuildContext context) => AlertDialog(
+    constraints: const BoxConstraints(
+      maxWidth: ViberMetrics.dialogStandardWidth + ViberSpacing.xl * 2,
+    ),
+    insetPadding: ViberDialogInsets.inset,
+    titlePadding: ViberDialogInsets.title,
+    contentPadding: ViberDialogInsets.content,
+    actionsPadding: ViberDialogInsets.actions,
+    title: Text(widget.copy('provider_accounts.oauth.sign_in_again')),
+    content: SizedBox(
+      width: ViberMetrics.dialogStandardWidth,
+      child: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              widget.account.displayName,
+              style: Theme.of(context).textTheme.titleMedium,
+            ),
+            const SizedBox(height: 8),
+            _CodexOAuthIdentityCard(
+              account: widget.account.codexOAuth,
+              copy: widget.copy,
+            ),
+            const SizedBox(height: 12),
+            if (widget.account.credentialEpoch <= 0)
+              InlineNotice(
+                message: widget.copy('provider_accounts.oauth.enable_first'),
+              )
+            else
+              CodexOAuthLoginPanel.reauthorize(
+                controller: widget.controller,
+                account: widget.account,
+                copy: widget.copy,
+                onActiveChanged: (_) {},
+                onCompleted: () => Navigator.pop(context),
+              ),
+          ],
+        ),
+      ),
+    ),
+    actions: [
+      TextButton(
+        onPressed: () => Navigator.pop(context),
+        child: Text(widget.copy('common.cancel')),
+      ),
+    ],
+  );
+}
+
 final class ProviderAccountRow extends StatelessWidget {
   const ProviderAccountRow({
     super.key,
@@ -57,6 +139,7 @@ final class ProviderAccountRow extends StatelessWidget {
     required this.onReplace,
     required this.onDelete,
     this.onRefreshQuota,
+    this.onSignInAgain,
     this.onEditNote,
     this.onAutomaticRefreshChanged,
     this.quota,
@@ -73,6 +156,7 @@ final class ProviderAccountRow extends StatelessWidget {
   final VoidCallback onReplace;
   final VoidCallback onDelete;
   final VoidCallback? onRefreshQuota;
+  final VoidCallback? onSignInAgain;
   final VoidCallback? onEditNote;
   final ValueChanged<bool>? onAutomaticRefreshChanged;
   final Widget? quota;
@@ -367,6 +451,20 @@ final class ProviderAccountRow extends StatelessWidget {
                     oauth?.state != 'ready') ...[
                   const SizedBox(height: 4),
                   healthStatus,
+                ],
+                if (account.kind == 'codex_oauth' && onSignInAgain != null) ...[
+                  const SizedBox(height: 4),
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: TextButton.icon(
+                      key: Key('account-sign-in-again-${account.id}'),
+                      onPressed: busy ? null : onSignInAgain,
+                      icon: const Icon(Icons.login, size: 16),
+                      label: Text(
+                        copy('provider_accounts.oauth.sign_in_again'),
+                      ),
+                    ),
+                  ),
                 ],
               ],
             ),

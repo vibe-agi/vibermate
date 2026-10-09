@@ -2664,6 +2664,8 @@ final class CodexLogin {
               'login_denied',
               'login_exchange_failed',
               'login_account_save_failed',
+              'login_identity_mismatch',
+              'login_account_changed',
               'login_expired',
             }.contains(reason)) ||
         (state == 'completed'

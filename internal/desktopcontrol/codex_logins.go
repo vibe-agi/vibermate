@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"slices"
@@ -11,8 +12,10 @@ import (
 	"unicode/utf8"
 
 	"github.com/vibe-agi/vibermate/internal/codexoauth"
+	"github.com/vibe-agi/vibermate/internal/egressprofile"
 	"github.com/vibe-agi/vibermate/internal/provideraccount"
 	"github.com/vibe-agi/vibermate/internal/providerauth"
+	"github.com/vibe-agi/vibermate/internal/secretstore"
 	"github.com/vibe-agi/vibermate/internal/upstreamendpoint"
 )
 
@@ -52,25 +55,71 @@ func (handler *Handler) startCodexLogin(w http.ResponseWriter, r *http.Request) 
 	body, bodyErr := readJSONBody(r)
 	defer clear(body)
 	var input struct {
-		ID           string `json:"accountId"`
-		EndpointID   string `json:"upstreamEndpointId"`
-		DisplayName  string `json:"displayName"`
-		CallbackMode string `json:"callbackMode"`
+		Mode         string  `json:"mode"`
+		ID           string  `json:"accountId"`
+		EndpointID   *string `json:"upstreamEndpointId"`
+		DisplayName  *string `json:"displayName"`
+		CallbackMode string  `json:"callbackMode"`
 	}
-	if headerErr != nil || expected != 0 || bodyErr != nil || decodeStrictJSON(body, &input) != nil ||
-		len(input.DisplayName) > 256 || !utf8.ValidString(input.DisplayName) || strings.ContainsAny(input.DisplayName, "\x00\r\n") ||
+	if headerErr != nil || bodyErr != nil || decodeStrictJSON(body, &input) != nil ||
 		(input.CallbackMode != "loopback" && input.CallbackMode != "manual") {
 		writeProblem(w, http.StatusUnprocessableEntity, ReasonInvalidRequest)
 		return
 	}
-	accountID, idErr := provideraccount.NewID(input.ID)
-	endpointID, endpointErr := upstreamendpoint.NewID(input.EndpointID)
-	if idErr != nil || endpointErr != nil {
+	if input.Mode == "" {
+		input.Mode = "create"
+	}
+	var fields map[string]json.RawMessage
+	_ = json.Unmarshal(body, &fields)
+	_, hasName := fields["displayName"]
+	_, hasEndpoint := fields["upstreamEndpointId"]
+	name, endpointInput := "", ""
+	if input.DisplayName != nil {
+		name = *input.DisplayName
+	}
+	if input.EndpointID != nil {
+		endpointInput = *input.EndpointID
+	}
+	if (input.Mode != "create" && input.Mode != "reauthorize") ||
+		(input.Mode == "create" && expected != 0) ||
+		(input.Mode == "reauthorize" && (expected == 0 || hasEndpoint || hasName)) ||
+		len(name) > 256 || !utf8.ValidString(name) || strings.ContainsAny(name, "\x00\r\n") {
 		writeProblem(w, http.StatusUnprocessableEntity, ReasonInvalidRequest)
 		return
 	}
-	fingerprint := sha256.Sum256(append([]byte(owner+"\x00"+r.URL.Path+"\x00"), body...))
+	accountID, idErr := provideraccount.NewID(input.ID)
+	endpointID, endpointErr := upstreamendpoint.NewID(endpointInput)
+	if idErr != nil || input.Mode == "create" && endpointErr != nil {
+		writeProblem(w, http.StatusUnprocessableEntity, ReasonInvalidRequest)
+		return
+	}
+	fingerprint := sha256.Sum256(append([]byte(owner+"\x00"+r.URL.Path+"\x00"+r.Header.Get("If-Match")+"\x00"), body...))
 	response, err := handler.idempotent.execute(r.Context(), key, fingerprint, func() cachedResponse {
+		target := codexoauth.LoginAccount{Mode: input.Mode, ID: input.ID, EndpointID: endpointInput, DisplayName: strings.TrimSpace(name)}
+		if input.Mode == "reauthorize" {
+			view, err := handler.accounts.Get(r.Context(), accountID)
+			if err != nil {
+				return problemResponse(classifyProviderAccountError(err))
+			}
+			account := view.Account
+			if account.Driver != providerauth.CodexOAuthDriverRef() || !upstreamendpoint.IsChatGPTCodexOrigin(account.Origin) || handler.codexOAuth == nil {
+				return problemResponse(problemSpec{status: http.StatusUnprocessableEntity, reason: ReasonInvalidRequest})
+			}
+			if view.Health.CredentialEpoch != expected {
+				return problemResponse(problemSpec{status: http.StatusConflict, reason: ReasonProviderAccountConflict})
+			}
+			identity, err := handler.codexOAuth.Inspect(r.Context(), account.SecretRef, secretstore.Revision(expected))
+			if err != nil {
+				return problemResponse(classifyProviderAccountError(err))
+			}
+			target.Reauthorization = &codexoauth.LoginReauthorization{SecretRef: account.SecretRef, CredentialEpoch: expected,
+				CreatedAt: account.CreatedAt, Profile: identity.Profile, Scope: account.CredentialScope(account.RealmID, expected, egressprofile.ProfileRevision{})}
+			login, err := handler.codexLogins.Start(r.Context(), owner, target, input.CallbackMode)
+			if err != nil {
+				return problemResponse(classifyCodexLoginError(err))
+			}
+			return jsonResponse(http.StatusCreated, login)
+		}
 		endpoint, err := handler.endpoints.Get(r.Context(), endpointID)
 		if err != nil {
 			return problemResponse(classifyUpstreamEndpointError(err))
@@ -84,9 +133,7 @@ func (handler *Handler) startCodexLogin(w http.ResponseWriter, r *http.Request) 
 		} else if !errors.Is(err, provideraccount.ErrAccountNotFound) {
 			return problemResponse(classifyProviderAccountError(err))
 		}
-		view, err := handler.codexLogins.Start(r.Context(), owner, codexoauth.LoginAccount{
-			ID: input.ID, EndpointID: input.EndpointID, DisplayName: strings.TrimSpace(input.DisplayName),
-		}, input.CallbackMode)
+		view, err := handler.codexLogins.Start(r.Context(), owner, target, input.CallbackMode)
 		if err != nil {
 			return problemResponse(classifyCodexLoginError(err))
 		}
