@@ -2,6 +2,7 @@ package serverconnection
 
 import (
 	"errors"
+	"net"
 	"net/url"
 	"strings"
 )
@@ -42,15 +43,27 @@ func ParseTarget(value string) (Target, error) {
 	}
 	parsed, err := url.Parse(value)
 	if err != nil || parsed.User != nil || parsed.Opaque != "" ||
-		parsed.Path != "" || parsed.RawPath != "" || parsed.RawQuery != "" ||
-		parsed.Fragment != "" {
+		parsed.Path != "" || parsed.RawPath != "" || parsed.RawQuery != "" || parsed.ForceQuery ||
+		strings.Contains(value, "#") {
 		return Target{}, ErrInvalidAddress
 	}
 	transport := Transport(parsed.Scheme)
 	if !transport.Valid() {
 		return Target{}, ErrInvalidAddress
 	}
-	address, err := ParseAddress(parsed.Host)
+	authority := parsed.Host
+	hostname := parsed.Hostname()
+	// Only a plain host or a fully bracketed IPv6 host truly omits the port.
+	// Leave empty ports and unbracketed IPv6 to the strict address parser.
+	if authority == hostname && !strings.Contains(authority, ":") ||
+		authority == "["+hostname+"]" && strings.Contains(hostname, ":") {
+		defaultPort := "80"
+		if transport == TransportHTTPS {
+			defaultPort = "443"
+		}
+		authority = net.JoinHostPort(hostname, defaultPort)
+	}
+	address, err := ParseAddress(authority)
 	if err != nil {
 		return Target{}, errors.Join(ErrInvalidAddress, err)
 	}

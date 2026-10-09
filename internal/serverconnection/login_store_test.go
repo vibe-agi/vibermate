@@ -65,6 +65,57 @@ func TestLoginStoreKeepsSessionBoundToExactServerTarget(t *testing.T) {
 	}
 }
 
+func TestLoginStoreSharesSessionAcrossDefaultPortSpellings(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 8, 24, 13, 0, 0, 0, time.UTC)
+	for _, pair := range []struct{ implicit, explicit string }{
+		{"https://runtime.example.test", "https://runtime.example.test:443"},
+		{"http://runtime.example.test", "http://runtime.example.test:80"},
+	} {
+		for _, reverse := range []bool{false, true} {
+			saved, lookup := pair.implicit, pair.explicit
+			if reverse {
+				saved, lookup = lookup, saved
+			}
+			t.Run(saved+" to "+lookup, func(t *testing.T) {
+				directory := filepath.Join(t.TempDir(), "login")
+				store, err := OpenLoginStore(directory)
+				if err != nil {
+					t.Fatal(err)
+				}
+				credential := loginStoreTestCredential(t, saved, "alice", 0x73, now)
+				if err := store.Save(credential); err != nil {
+					t.Fatal(err)
+				}
+				reopened, err := OpenLoginStore(directory)
+				if err != nil {
+					t.Fatal(err)
+				}
+				target, err := ParseTarget(lookup)
+				if err != nil {
+					t.Fatal(err)
+				}
+				loaded, err := reopened.Load(target, now)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if loaded.Target() != credential.Target() || loaded.SessionToken().Value() != credential.SessionToken().Value() || loaded.Username() != "alice" {
+					t.Fatalf("loaded session does not match saved session: %#v", loaded)
+				}
+				for _, isolated := range []string{"http://runtime.example.test:443", "https://runtime.example.test:80", "https://runtime.example.test:9443"} {
+					other, err := ParseTarget(isolated)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if _, err := reopened.Load(other, now); !errors.Is(err, ErrLoginRequired) {
+						t.Fatalf("Load(%q) error = %v", isolated, err)
+					}
+				}
+			})
+		}
+	}
+}
+
 func TestIndependentLoginStoresMergeSaveAndRemoveTransactions(t *testing.T) {
 	t.Parallel()
 	directory := filepath.Join(t.TempDir(), "login")
