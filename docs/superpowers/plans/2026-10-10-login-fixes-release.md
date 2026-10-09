@@ -10,13 +10,13 @@
 
 **Spec:** Approved behavior in `../specs/2026-10-09-server-login-continuity-design.md` and `../specs/2026-10-09-provider-account-reauthorization-proposal.md`; user approved phased delivery and direct publication after tests, while protected signing/notarization approval requirements remain effective.
 
-**Current candidate:** Feature commits f90d972/b29fff8/dc71b24/930f4b1, reviewed metadata1a8272e, feedback correction79fb19c, documentation correctionfa4ec09 and security patch548ff6d. All corresponding scoped reviews are approved. Version0.1.25+27 remains unpublished. Update existing PR46 after the root-owned plan commit; record the exact head and new CI IDs in this plan's ledger. Original failures remain preserved; scoped passes are not full candidate qualification.
+**Current candidate:** Feature commits f90d972/b29fff8/dc71b24/930f4b1, reviewed metadata1a8272e, feedback correction79fb19c, documentation correctionfa4ec09, security patch548ff6d and observation-only Desktop diagnosticsb49ae6e. All corresponding scoped reviews are approved. Version0.1.25+27 remains unpublished. Update existing PR46 after the root-owned plan commit; record the exact head and new CI IDs in this plan's ledger. Original failures remain preserved; scoped passes are not full candidate qualification or a proven fix for the original Desktop exit observation.
 
 **Observedsecurity amendment:** candidatefa4ec09CI37976295645 foundreachableGo1.26.8/std-library andx/net0.57.0 vulnerabilities. Applythe narrowlyverifiedofficialpatches via `2026-10-10-go-security-patch.md` beforepublication. This is an actualCIblocker, notperformancegate expansion; priorno-upgradetaskrestrictiondoesnotpreventnecessarysecuritypatching. Keepexactpins/securityscansandallhistoricalevidence.
 
 ## Global Constraints
 
-- Stable worktree `/Users/null/Code/github/vibe-agi/vibermate/.worktrees/long-session-hotfix`. Product source is frozen548ff6d, combined product/metadata/security reviews approved; no active local product writer or test here. The separate VLESS Runtime UDP task retains sole source/local-test ownership in production-readiness while hosted candidate CI runs.
+- Stable worktree `/Users/null/Code/github/vibe-agi/vibermate/.worktrees/long-session-hotfix`. Source is frozenb49ae6e, combined product/metadata/security and scoped Desktop-diagnostic reviews approved; no active local product writer or test here. The separate VLESS Runtime UDP shutdown correction retains sole source/local-test ownership in production-readiness while hosted candidate CI runs.
 - Latestremote verified2026-10-10: mainprotecteddbf9745b5391723103967889939a5ab4c7fbb7bc, latestReleasev0.1.24. Prepare0.1.25+27, recheck before tag/publication. Never overwritev0.1.24 or claim localbuildpublished.
 - Preserve all user data/accounts/trust/runningprocesses and unrelated local work. Onlyownedproductdocs/version paths. One source writer/localtestowner; readonlyreview/hostedCI can run separately.
 - Do not weaken approvals, verification, signedartifact/sourcebinding, tests or watchdogs to obtaingreen. Keep original failed fullGo/Flutter logs distinct from successfulisolateddiagnostics.
@@ -33,6 +33,10 @@
 - [ ] Run release-tooling Node suite, actionpins/workflowcontract tests, formatting/diffcheck and scopedversionsearch. Record any failures, commands, exactsource and limits. Commit onlyownedpaths, freeze andhand off to rootreview. Do notpush/tag/dispatchrelease yourself.
 
 ## Task 2: Freeze and validate candidate source
+
+Observed Desktop amendment2026-10-10: PR CI37989693466 passes14/14, while push37989689372 passes13/14 and fails packaged `open -W` exit observation at3s. Actual checked-out revisions differ but GitHub merge-tree551144df matches candidateec158a5 exactly. Read-only diagnosis found insufficient evidence to distinguish App/flush/sidecar failure from launcher acknowledgement delay. Add a bounded, capability-free acceptance diagnostic slice (launch labels, Wait/identity/preferences/discovery/cleanup observations), preserving existing timers and failure checks, then observe one new isolated packaged run before claiming a fix or changing policy. This is targeted evidence gathering, not a new feature/whole-matrix prerequisite. The private task brief/report and both original CI logs are retained in this plan's SDD workspace.
+
+Diagnostic slice is now implemented atb49ae6e and independently approved with no findings. Eight new and eight existing no-GUI tests plus six Node contract tests pass; two real App tests were explicitly skipped locally. App/native/daemon behavior and all exit/cleanup budgets are unchanged. Actual hosted observation is next; no local App launch or source-mismatched result is substituted for it.
 
 - [ ] Resolve combinedproductreview and version-metadata review; include onlyapprovedstablechanges. Commit root-ownedapprovedplans/statusdocs separately; preserve unrelateduntrackedVLESSdocs.
 - [ ] Push a scoped candidatebranch/PR through existing protectedmain rules. Run appropriate hostedCI and serial localchecks onexactcandidate; sourcechanges invalidate affected evidence. Do notrerun previouslypassedunchangedunit campaignsjustbecausea turnresumed.
