@@ -1,5 +1,7 @@
 # ViberMate Production Readiness Implementation Plan
 
+> **当前恢复入口（2026-10-09校准）：** 先读 [production-continuation](2026-10-09-production-continuation.md)。v0.1.24已发布；旧段落里的未发布版本、活跃agent和“下一步”属于历史状态。最终范围保留，按用户已批准的分阶段/功能优先顺序继续，不重新执行已完成任务。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** 关闭 R1–R7，完成当前未发布功能的生产候选验证和已要求的 GitHub/Homebrew 修复版交付。
