@@ -1,6 +1,6 @@
 # ViberMate 当前 Goal 与恢复入口
 
-核对日期：2026-10-09。此文件校准执行状态和顺序，不缩减原生产 Goal，也不抹掉历史失败证据。旧计划中的“当前”“下一步”“正在执行”只代表其当时状态；恢复时先读本文件和所选任务的最新账本，再核对实际 Git/agent/任务句柄。
+核对日期：2026-10-10。此文件校准执行状态和顺序，不缩减原生产 Goal，也不抹掉历史失败证据。旧计划中的“当前”“下一步”“正在执行”只代表其当时状态；恢复时先读本文件和所选任务的最新账本，再核对实际 Git/agent/任务句柄。
 
 ## 最终目标（不变，补齐已批准的新增范围）
 
@@ -13,12 +13,13 @@
 | 4096 长会话独立修复 | **已发布** v0.1.24(26)，不能重新排为待发布 | GitHub latest 查询、公开 Homebrew cask 和已保存的发布报告；发布源码 dbf9745b5391723103967889939a5ab4c7fbb7bc |
 | 默认 HTTP(S) 端口 | 已实现/审查，未发布 | stable worktree f90d972；省略端口与80/443显式形式共享登录/信任身份 |
 | Web 同标签页刷新续登 | 已实现/审查，未发布 | stable worktree b29fff8；Chrome40、相关VM33、构建/分析和真实后端+实际浏览器重载探针通过 |
-| 上述修复整体验证 | 仍须收口 | 全量Go两项/Flutter一项失败，单独复测均过；不能把单测复测写成全量绿。原失败保留在 server-login-continuity 账本 |
-| 原账号重新 OAuth | 后端dc71b24已实现/测试/独立审查；当前唯一写者正在做界面 | stable worktree 的2026-10-09-provider-account-reauthorization计划/账本；保留原ID/设置/关联/历史，不误换上游身份 |
+| 上述修复整体验证 | fa4ec09 云端12项成功；安全补丁后的新候选仍须完整 CI | 原全量Go两项/Flutter一项失败及隔离复测保留，后续实际云端结果单独记录，不能相互冒充 |
+| 0.1.25稳定候选发布 | ec158a5已推PR46；PR轮14/14通过，push轮13/14通过且打包App退出观测3秒超时，已完成只读诊断、正在补最小观察点；未合并或发布 | stable的2026-10-10-login-fixes-release及go-security-patch计划；两轮真实日志分别保留，代码树相同、build-vcs提交不同；不能用一次成功抹去另一次失败 |
+| 原账号重新 OAuth | 后端dc71b24、界面930f4b1及刷新反馈修正79fb19c均已测试/审查；未发布 | stable worktree 的2026-10-09-provider-account-reauthorization计划/账本；保留原ID/设置/关联/历史，不误换上游身份 |
 | 多 Runtime CLI 登录 | **已有功能，不重新开发** | LoginStore 按规范化 scheme+host+port 保存多条；A/B不互相覆盖，同server保留一份登录 |
 | VLESS 核心与自有 SOCKS 模块 | 已实现且对应缺陷已修复/审查 | production-readiness 的 VLESS functional Task1/2；不能等同于 Runtime/Host/UI 已连通 |
 | VLESS 配置与 Runtime TCP | Task3A功能已冻结；启动/关闭Important已定向RED→GREEN、真实通路回归及独立复核关闭 | task-3a-profile-routing-report.md和shutdown-rereview/3hash；下一步RuntimeUDP/Host，不重复原实现或核心Proof |
-| VLESS Runtime UDP/监听/界面 | 尚未完成 | 同计划 Task3B/4；不能把核心 UDP 回环测试写成用户可用入口 |
+| VLESS Runtime UDP/监听/界面 | Task3B已实现/冻结，真实通路与域名/Hold/撤销/记账/Host定向测试通过，独立审查进行；界面待接 | task-3b-runtime-udp-report.md、31份冻结hash及task-only before-based diff；真实Capture、自有SOCKS→REALITY+Vision，非最终UI/分发验收 |
 | R1–R7、阅读器、MCP底层、全局出口 | 保留已有提交和审查；全量功能/客户端闭环未完成 | 2026-10-03主计划及已采用子计划；2026-10-05全局出口账本 |
 | CA平台/devcontainer、完整MCP/46项客户端、持续运行与最终同源发布 | 尚未全部完成 | 原Goal范围继续有效，见下方完成条件 |
 
@@ -26,8 +27,8 @@
 
 ## 唯一恢复顺序
 
-1. **稳定线登录补全版本**：完成原账号重新 OAuth；合并已提交的默认端口/Web刷新修复；在隔离、避免资源互抢的环境验证。根据真实失败结果定位，不靠放大超时、删测试或反复跑同一大套件来制造绿。适用验收与独立审查通过后独立发布，不等整个MCP/VLESS计划结束。
-2. **VLESS/UDP可用版本**：先审查冻结的Task3A（只读，可与上一项实现并行），然后由唯一源码实现者接真实 Runtime UDP opener、ViberMate 自己的 SOCKS5 UDP ASSOCIATE 监听、撤销/关闭回收、配置界面与可信内核分发。使用 REALITY+Vision；域名匹配须同时绕过代理与DoH，使用Runtime系统DNS+Direct；支持`*.github.com`且不扩大私有目标访问权限。保留配置不可变和不偷偷直连的边界。
+1. **稳定线登录补全版本**：登录功能与安全补丁均已完成独立审查，下一步更新已有PR46，观察新候选CI，再进入正常合并、受保护签名公证和公开交付。根据真实失败结果定位，不靠放大超时、删测试或反复跑同一大套件来制造绿；不等待整个MCP/VLESS计划结束。
+2. **VLESS/UDP可用版本**：Task3A及关闭缺陷复核已完成，由原实现者继续Task3B真实 Runtime UDP opener、ViberMate 自己的 SOCKS5 UDP ASSOCIATE 监听、撤销/关闭回收；随后配置界面与可信内核分发。使用 REALITY+Vision；域名匹配须同时绕过代理与DoH，使用Runtime系统DNS+Direct；支持`*.github.com`且不扩大私有目标访问权限。保留配置不可变和不偷偷直连的边界。旧测试内核仅为隔离功能证据，正式分发前需完成当前安全版本与来源核验。
 3. **主生产线合流及功能闭环**：有意识地把已发布hotfix/稳定线新修复合入production-readiness，保护现有WIP；继续全局默认出口剩余请求族、原生MCP真实工具/恢复/一次执行、阅读器与CA/devcontainer闭环。TLS上游自有CA与REALITY身份校验严格区分，不修改系统信任、不把跳过CA映射为绕过REALITY。
 4. **最终生产资格与发布**：在最终同源代码上完成原Goal所有适用平台/客户端/数据恢复/持续运行/安全与发布验收。分阶段版本可以更早交付，但不能据此删掉最终目标里的剩余项。
 
@@ -43,7 +44,7 @@
 
 ## 防止中断后绕回起点
 
-- 当前稳定工作区：`/Users/null/Code/github/vibe-agi/vibermate/.worktrees/long-session-hotfix`，HEAD1cda1f6，已有修复f90d972/b29fff8。当前开发工作区：`/Users/null/Code/github/vibe-agi/vibermate/.worktrees/production-readiness`，HEAD1cbb36d和保留的WIP。两者不可混作同一最终候选。
+- 当前稳定工作区：`/Users/null/Code/github/vibe-agi/vibermate/.worktrees/long-session-hotfix`，最近产品提交548ff6d，后续文档提交/PR头以实际Git为准。当前开发工作区：`/Users/null/Code/github/vibe-agi/vibermate/.worktrees/production-readiness`，产品基线1cbb36d、文档提交f9a46ac及保留的WIP。两者不可混作同一最终候选，不因本段SHA落后于仅文档更新就重新执行已完成实现。
 - 从最新任务报告/源码哈希/真实agent状态恢复；完成任务不得因旧账本仍写“running”而重新派发。活跃句柄归原所有者，观察等待超时不构成重启理由。
 - 同时只有一个源码实现者；独立只读审查/方案核查可以并行。本机重量级构建/全套测试串行排队，避免同时跑Go全量与Flutter全量造成资源竞争。
 - 测试和审查只覆盖实际变更与风险；已通过且源码未变的单元不因恢复会话而重做。性能目标与功能正确性分开；实际安全/数据丢失/协议错误仍需解决，不用任意快速完成阈值冒充业务成功标准。
