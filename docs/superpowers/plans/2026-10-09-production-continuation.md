@@ -11,11 +11,11 @@
 | 工作 | 当前状态 | 恢复依据 |
 | --- | --- | --- |
 | 4096 长会话独立修复 | **已发布** v0.1.24(26)，不能重新排为待发布 | GitHub latest 查询、公开 Homebrew cask 和已保存的发布报告；发布源码 dbf9745b5391723103967889939a5ab4c7fbb7bc |
-| 默认 HTTP(S) 端口 | 已实现/审查，未发布 | stable worktree f90d972；省略端口与80/443显式形式共享登录/信任身份 |
-| Web 同标签页刷新续登 | 已实现/审查，未发布 | stable worktree b29fff8；Chrome40、相关VM33、构建/分析和真实后端+实际浏览器重载探针通过 |
+| 默认 HTTP(S) 端口 | **已发布 v0.1.25(27)** | stable worktree f90d972；省略端口与80/443显式形式共享登录/信任身份 |
+| Web 同标签页刷新续登 | **已发布 v0.1.25(27)** | stable worktree b29fff8；Chrome40、相关VM33、构建/分析和真实后端+实际浏览器重载探针通过 |
 | 上述修复整体验证 | 最终稳定候选999d7b0的PR与push各14/14通过；合并4e89f628后的main CI也14/14通过 | 38001191279、38001188502、38005724047；旧失败及退出诊断证据保留，不再重排已完成CI |
-| 0.1.25稳定候选发布 | 两轮14/14 CI通过，PR46已正常合并4e89f628；未签名Universal构建及R0来源/SBOM通过，等待用户审批macos-signing；未正式发布 | 发布run38005895645；已向用户发送实际审批链接，不代替审批。stable账本/desktop-exit-observation-999d7b0.md保留旧超时和新4次退出证据，旧根因仍未知 |
-| 原账号重新 OAuth | 后端dc71b24、界面930f4b1及刷新反馈修正79fb19c均已测试/审查；未发布 | stable worktree 的2026-10-09-provider-account-reauthorization计划/账本；保留原ID/设置/关联/历史，不误换上游身份 |
+| 0.1.25稳定修复发布 | **GitHub与Homebrew均已交付**；tag/source4e89f628，六项资产，签名/公证/隔离安装/公开下载核验完成 | GitHub release408868448发布2026-10-10T10:48:48Z；tapPR20合并30a170d7，PR/main CI全通过；stable public-delivery报告保留首失败与边界。旧3s退出根因仍未知，不冒称修复 |
+| 原账号重新 OAuth | **已发布 v0.1.25(27)**，后端dc71b24、界面930f4b1及刷新反馈修正79fb19c | stable worktree 的2026-10-09-provider-account-reauthorization计划/账本；保留原ID/设置/关联/历史，不误换上游身份 |
 | 多 Runtime CLI 登录 | **已有功能，不重新开发** | LoginStore 按规范化 scheme+host+port 保存多条；A/B不互相覆盖，同server保留一份登录 |
 | VLESS 核心与自有 SOCKS 模块 | 已实现且对应缺陷已修复/审查 | production-readiness 的 VLESS functional Task1/2；不能等同于 Runtime/Host/UI 已连通 |
 | VLESS 配置与 Runtime TCP | Task3A及启动/关闭修复已实现、验证、审查；其后Task3B也已关闭 | task-3a-profile-routing-report.md和shutdown-rereview/3hash；不重复原实现或核心Proof |
@@ -23,16 +23,16 @@
 | VLESS TLS／配置内自有CA核心 | 已实现、验证、独立审查通过，无Critical/Important；一个测试fixture Minor保留 | vless-tls-core/task-1-report.md与task-1-review.md。原生System信任成功证明仍待隔离runner |
 | TLS私有配置／owner控制 | 已实现、18项定向测试通过、独立审查Approved无发现；包含真实磁盘重开及owner/member权限 | tls-profile-control/task-1-report.md与task-1-review.md，11个文件hash已核对，保持冻结 |
 | TLS／CA编辑界面 | 已实现、验证、独立审查Approved无发现，正式关闭该任务 | tls-editor/task-1-report.md与task-1-review.md；13份hash已核对。114VM/86Chrome及最终受影响定向验证、分析/Web构建通过，390px实际查看；字体证据限制保留 |
-| 内核与用户连接交付 | 原生安全补丁内核的源码/二进制扫描、4项真实互通及独立审查均通过；可重复构建工具进入实施 | patched-kernel/report+review与38hash已核对；下一任务2026-10-10-vless-kernel-producer.md。仍须打包、Host发现、SOCKS用户入口，不能称完整功能已交付 |
+| 内核与用户连接交付 | 原生补丁内核资格及可重复生产工具均已独立审查关闭；生产工具29项测试与5目标编译/静态证明已完成 | producer fix1 rereview无剩余发现；仍须打包、Host发现、SOCKS用户入口，不能称完整功能已交付 |
 | R1–R7、阅读器、MCP底层、全局出口 | 保留已有提交和审查；全量功能/客户端闭环未完成 | 2026-10-03主计划及已采用子计划；2026-10-05全局出口账本 |
 | CA平台/devcontainer、完整MCP/46项客户端、持续运行与最终同源发布 | 尚未全部完成 | 原Goal范围继续有效，见下方完成条件 |
 
-远端只读核对：GitHub latest 为 v0.1.24，发布时间2026-10-09T02:21:32Z；Homebrew cask为0.1.24，DMG SHA256 `3710ff7eca5d884cb12022c6d095e31efc9eb2099ebe4199f12b322bc0ef2718`。下一版本号在候选冻结前再查远端，不再写死“等待发布0.1.24”。
+远端与公开字节核对：GitHub为v0.1.25，发布时间2026-10-10T10:48:48Z；Homebrew main30a170d7的cask为0.1.25，DMG SHA256 `0836cfd85c0f875dc6f698cc8d3c8edd9b8a114b2adff34fe65131e23f9409be`。实际Brew解析、CI安装/签名/Gatekeeper/卸载通过，原用户dirtytap与运行App未改。下一版本冻结前再查远端。
 
 ## 唯一恢复顺序
 
-1. **稳定线登录补全版本**：PR46已合并，完整CI已通过，发布run38005895645的未签名构建和来源/SBOM已通过，当前等待用户批准`macos-signing`。批准后接着签名、公证、隔离安装和公开GitHub/Homebrew交付，不再更新/重合并PR46。等待审批期间继续开发线；不代用户审批、不把未签名候选说成已发布。
-2. **VLESS/UDP可用版本**：Task3A、Task3B及各自关闭修复，Task4A基础界面、TLS/core、TLS私有配置/owner控制、TLS编辑界面均已审查关闭。固定上游源码+Go1.26.9/x-net0.60/gRPC1.83.2原生补丁输入（协议源码未改）也已独立审查通过；当前按2026-10-10-vless-kernel-producer.md实现可重复生产，随后可信内核打包与Host/bootstrap/launcher/ManualCapture组装。使用REALITY+Vision；域名匹配须同时绕过代理与DoH，使用Runtime系统DNS+Direct；支持`*.github.com`且不扩大私有目标访问权限。保留配置不可变和不偷偷直连的边界。源码/二进制扫描保留两条未导入包的模块提示，不把部分资格等同完整生产或全平台发布。
+1. **稳定线登录补全版本已交付**：v0.1.25(27) GitHub/Homebrew完成，不重新构建或重复发布。稳定修复尚需有意识地合入保留WIP的主生产线；这是后续合流，不是再次发0.1.25。
+2. **VLESS/UDP可用版本**：Task3A、Task3B及各自关闭修复，Task4A基础界面、TLS/core、TLS私有配置/owner控制、TLS编辑界面均已审查关闭。固定上游源码+Go1.26.9/x-net0.60/gRPC1.83.2原生补丁输入（协议源码未改）和可重复生产工具也已审查通过；当前推进可信内核打包与Host/bootstrap/launcher/ManualCapture组装。使用REALITY+Vision；域名匹配须同时绕过代理与DoH，使用Runtime系统DNS+Direct；支持`*.github.com`且不扩大私有目标访问权限。保留配置不可变和不偷偷直连的边界。源码/二进制扫描保留两条未导入包的模块提示，不把部分资格等同完整生产或全平台发布。
 3. **主生产线合流及功能闭环**：有意识地把已发布hotfix/稳定线新修复合入production-readiness，保护现有WIP；继续全局默认出口剩余请求族、原生MCP真实工具/恢复/一次执行、阅读器与CA/devcontainer闭环。TLS上游自有CA与REALITY身份校验严格区分，不修改系统信任、不把跳过CA映射为绕过REALITY。
 4. **最终生产资格与发布**：在最终同源代码上完成原Goal所有适用平台/客户端/数据恢复/持续运行/安全与发布验收。分阶段版本可以更早交付，但不能据此删掉最终目标里的剩余项。
 
