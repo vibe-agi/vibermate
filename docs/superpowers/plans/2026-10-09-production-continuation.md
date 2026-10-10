@@ -26,7 +26,7 @@
 | 内核生产与资格 | 原生补丁内核资格及可重复生产工具均已独立审查关闭；生产工具29项测试与5目标编译/静态证明已完成 | producer fix1 rereview无剩余发现；后续打包/Host也已完成对应单元，但SOCKS用户入口尚未交付 |
 | 内核材料、真实构建和打包接入 | packaging Task1/2均已独立审查关闭；实际本地arm64候选构建/验证成功。Task2首审两项Important已修正：正式签名漏内核、签名前漏内核哈希核对；定向22项通过，复审I1/I2均关闭 | vless-kernel-packaging/task-2-report.md及task-2-fix1-review.md；本地候选仍是dirty0.1.23+25、ad-hoc/Xcode27，不是新发布或正式Universal资格。首失败、2项原有opt-in skip及工具链诊断保留 |
 | Host启动接线 | 共享内核自动发现、Desktop认证回环SOCKS启动已实现、验证、独立审查通过 | vless-host-bootstrap Task1关闭；1个非阻断输出噪声Minor保留。实际地址/ManualCapture用户交付和完整打包网络验证仍是后续任务 |
-| SOCKS用户入口 | 详细实施计划已写入2026-10-11-socks-user-delivery.md；下一实施任务是实际地址/可信内核可用性→认证状态与ManualCapture凭证交付 | 三项顺序：Host/control/grant、Flutter/CLI文案与复制、真实用户入口REALITY/Vision TCP/UDP验收。共享凭证，HTTP字段不替换，不宣称现有HTTPS relay能承载UDP |
+| SOCKS用户入口 | 2026-10-11-socks-user-delivery Task1后端已实现、验证、独立审查Approved无发现，正式关闭；不要重复实现 | task-1-report.md/diff/hash与task-1-review.md已由root核对。下一任务Task2 Flutter/CLI；Task3真实用户入口REALITY/Vision TCP/UDP尚未实施。共享凭证，HTTP字段不替换，不宣称现有HTTPS relay能承载UDP |
 | R1–R7、阅读器、MCP底层、全局出口 | 保留已有提交和审查；全量功能/客户端闭环未完成 | 2026-10-03主计划及已采用子计划；2026-10-05全局出口账本 |
 | CA平台/devcontainer、完整MCP/46项客户端、持续运行与最终同源发布 | 尚未全部完成 | 原Goal范围继续有效，见下方完成条件 |
 
@@ -51,7 +51,7 @@
 
 ## 防止中断后绕回起点
 
-- 当前稳定工作区：`/Users/null/Code/github/vibe-agi/vibermate/.worktrees/long-session-hotfix`，本地HEAD999d7b0，远端已合并候选4e89f628，二者产品树相同。当前开发工作区：`/Users/null/Code/github/vibe-agi/vibermate/.worktrees/production-readiness`，当前UI任务BASE20d483c（计划提交）、产品基线1cbb36d及保留的WIP；后续文档提交以实际Git为准。两者不可混作同一最终候选，不因仅文档提交而重新执行已完成实现。
+- 当前稳定工作区：`/Users/null/Code/github/vibe-agi/vibermate/.worktrees/long-session-hotfix`，本地HEAD999d7b0，远端已合并候选4e89f628，二者产品树相同。当前开发工作区：`/Users/null/Code/github/vibe-agi/vibermate/.worktrees/production-readiness`，SOCKS用户入口Task1 BASE e9099de（计划/恢复文档提交）与保留的已审查产品WIP；后续HEAD以实际Git为准。20d483c/1cbb36d只是更早UI阶段的历史定位，不是当前待恢复任务。两条工作线不可混作同一最终候选，不因仅文档提交而重新执行已完成实现。
 - 从最新任务报告/源码哈希/真实agent状态恢复；完成任务不得因旧账本仍写“running”而重新派发。活跃句柄归原所有者，观察等待超时不构成重启理由。
 - 同时只有一个源码实现者；独立只读审查/方案核查可以并行。本机重量级构建/全套测试串行排队，避免同时跑Go全量与Flutter全量造成资源竞争。
 - 测试和审查只覆盖实际变更与风险；已通过且源码未变的单元不因恢复会话而重做。性能目标与功能正确性分开；实际安全/数据丢失/协议错误仍需解决，不用任意快速完成阈值冒充业务成功标准。

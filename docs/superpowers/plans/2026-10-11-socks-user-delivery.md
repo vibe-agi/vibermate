@@ -103,7 +103,7 @@ Run once after focused GREEN:
 
 ## Task 2: Understandable Flutter and CLI connection instructions
 
-**Files:** Modify `ui/flutter_app/lib/core/api/control_models.dart`, `lib/features/workbench/captures_view.dart`, `settings_view.dart`, `lib/core/i18n/app_copy.dart`; `workbench_controller.dart` only for review/grant equality if needed. Modify `internal/manualcaptureclient/client.go`, `cmd/vibermate/capture.go`, `locales/en-US.json`, `locales/zh-CN.json`. Tests: `ui/flutter_app/test/control_models_test.dart`, existing manual tests in `workbench_behavior_test.dart`, new `socks_delivery_test.dart` for focused render/copy/disabled coverage; `internal/manualcaptureclient/client_test.go`, `cmd/vibermate/capture_test.go`. Update `ui/flutter_app/README.md` with the concrete SOCKS manual flow and server flags. Preview fixtures only as needed, without pretending a real proxy exists.
+**Files:** Modify `ui/flutter_app/lib/core/api/control_models.dart`, `control_api.dart`, `lib/features/workbench/captures_view.dart`, `settings_view.dart`, `lib/core/i18n/app_copy.dart`; `workbench_controller.dart` only if an actual consumer needs an update. Modify `internal/manualcaptureclient/client.go`, `cmd/vibermate/capture.go`, `locales/en-US.json`, `locales/zh-CN.json`. Tests: `ui/flutter_app/test/control_models_test.dart`, `control_api_http_test.dart`, existing manual tests in `workbench_behavior_test.dart`, new `socks_delivery_test.dart` for focused render/copy/disabled coverage; `internal/manualcaptureclient/client_test.go`, `cmd/vibermate/capture_test.go`. Update `ui/flutter_app/README.md` with the concrete SOCKS manual flow and server flags. Preview fixtures only as needed, without pretending a real proxy exists.
 
 **Consumes:** Task1's immutable host description and optional `socksAddress`, unchanged one-time credential and Root delivery. **Produces:** Settings availability/address plus ManualCapture copyable SOCKS host/port/credentials, and localized CLI text. Existing HTTP shell output remains unchanged.
 
@@ -129,7 +129,7 @@ expect(context.socksAddress, '127.0.0.1:32124');
 
 Run `flutter test --no-pub test/control_models_test.dart --plain-name 'SOCKS delivery'` for the new test group and retain RED before implementation.
 
-- [ ] **Step 2 — consume one explicit field.** Add exact DTOs and validation, include `socksAddress` in review/grant equality wherever the current HTTP address is checked (CLI `capture.go` already performs this check). Do not infer the endpoint from the control URL, HTTP proxy port or configured `:0`. Decode unknown additional keys as errors as before. A backend with no description produces unavailable/unknown text, not a made-up operational proxy.
+- [ ] **Step 2 — consume one explicit field.** Add exact DTOs and validation, include `socksAddress` in review/grant equality in CLI `capture.go` and Flutter `HttpControlApi.createManualCapture`. The latter currently checks Capture/environment attributes but not endpoint equality; add both HTTP and SOCKS address comparisons there, with a response-mismatch rejection test. Do not infer the endpoint from the control URL, HTTP proxy port or configured `:0`. Decode unknown additional keys as errors as before. A backend with no description produces unavailable/unknown text, not a made-up operational proxy.
 
 ```dart
 final class HostNetworkAccess {
