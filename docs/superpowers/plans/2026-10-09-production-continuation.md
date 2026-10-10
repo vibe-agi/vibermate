@@ -1,6 +1,6 @@
 # ViberMate 当前 Goal 与恢复入口
 
-核对日期：2026-10-10。此文件校准执行状态和顺序，不缩减原生产 Goal，也不抹掉历史失败证据。旧计划中的“当前”“下一步”“正在执行”只代表其当时状态；恢复时先读本文件和所选任务的最新账本，再核对实际 Git/agent/任务句柄。
+核对日期：2026-10-11。此文件校准执行状态和顺序，不缩减原生产 Goal，也不抹掉历史失败证据。旧计划中的“当前”“下一步”“正在执行”只代表其当时状态；恢复时先读本文件和所选任务的最新账本，再核对实际 Git/agent/任务句柄。
 
 ## 最终目标（不变，补齐已批准的新增范围）
 
@@ -23,9 +23,10 @@
 | VLESS TLS／配置内自有CA核心 | 已实现、验证、独立审查通过，无Critical/Important；一个测试fixture Minor保留 | vless-tls-core/task-1-report.md与task-1-review.md。原生System信任成功证明仍待隔离runner |
 | TLS私有配置／owner控制 | 已实现、18项定向测试通过、独立审查Approved无发现；包含真实磁盘重开及owner/member权限 | tls-profile-control/task-1-report.md与task-1-review.md，11个文件hash已核对，保持冻结 |
 | TLS／CA编辑界面 | 已实现、验证、独立审查Approved无发现，正式关闭该任务 | tls-editor/task-1-report.md与task-1-review.md；13份hash已核对。114VM/86Chrome及最终受影响定向验证、分析/Web构建通过，390px实际查看；字体证据限制保留 |
-| 内核与用户连接交付 | 原生补丁内核资格及可重复生产工具均已独立审查关闭；生产工具29项测试与5目标编译/静态证明已完成 | producer fix1 rereview无剩余发现；仍须打包、Host发现、SOCKS用户入口，不能称完整功能已交付 |
-| 内核可分发材料组装 | Universal和Linux双架构真实组装完成，30项测试证据及实际哈希已核对；独立审查剩1处失败诊断缺项 | vless-kernel-packaging Task1 fix1已写brief并排队；原失败原因未知，不用新成功覆盖。Task2安装包脚本接入尚未实施 |
-| Host启动接线 | 正在实现共享内核自动发现与Desktop认证回环SOCKS启动；相关Go/Flutter绿测已产生，待冻结与独立审查 | 当前唯一源码/本机测试负责人vless_host_bootstrap；其释放后原packaging实现者修复诊断。实际地址/ManualCapture用户交付仍是后续任务 |
+| 内核生产与资格 | 原生补丁内核资格及可重复生产工具均已独立审查关闭；生产工具29项测试与5目标编译/静态证明已完成 | producer fix1 rereview无剩余发现；后续打包/Host也已完成对应单元，但SOCKS用户入口尚未交付 |
+| 内核材料、真实构建和打包接入 | packaging Task1/2均已独立审查关闭；实际本地arm64候选构建/验证成功。Task2首审两项Important已修正：正式签名漏内核、签名前漏内核哈希核对；定向22项通过，复审I1/I2均关闭 | vless-kernel-packaging/task-2-report.md及task-2-fix1-review.md；本地候选仍是dirty0.1.23+25、ad-hoc/Xcode27，不是新发布或正式Universal资格。首失败、2项原有opt-in skip及工具链诊断保留 |
+| Host启动接线 | 共享内核自动发现、Desktop认证回环SOCKS启动已实现、验证、独立审查通过 | vless-host-bootstrap Task1关闭；1个非阻断输出噪声Minor保留。实际地址/ManualCapture用户交付和完整打包网络验证仍是后续任务 |
+| SOCKS用户入口 | 详细实施计划已写入2026-10-11-socks-user-delivery.md；下一实施任务是实际地址/可信内核可用性→认证状态与ManualCapture凭证交付 | 三项顺序：Host/control/grant、Flutter/CLI文案与复制、真实用户入口REALITY/Vision TCP/UDP验收。共享凭证，HTTP字段不替换，不宣称现有HTTPS relay能承载UDP |
 | R1–R7、阅读器、MCP底层、全局出口 | 保留已有提交和审查；全量功能/客户端闭环未完成 | 2026-10-03主计划及已采用子计划；2026-10-05全局出口账本 |
 | CA平台/devcontainer、完整MCP/46项客户端、持续运行与最终同源发布 | 尚未全部完成 | 原Goal范围继续有效，见下方完成条件 |
 
@@ -34,7 +35,7 @@
 ## 唯一恢复顺序
 
 1. **稳定线登录补全版本已交付**：v0.1.25(27) GitHub/Homebrew完成，不重新构建或重复发布。稳定修复尚需有意识地合入保留WIP的主生产线；这是后续合流，不是再次发0.1.25。
-2. **VLESS/UDP可用版本**：Task3A、Task3B及各自关闭修复，Task4A基础界面、TLS/core、TLS私有配置/owner控制、TLS编辑界面均已审查关闭。固定上游源码+Go1.26.9/x-net0.60/gRPC1.83.2原生补丁输入（协议源码未改）和可重复生产工具也已审查通过；当前推进可信内核打包与Host/bootstrap/launcher/ManualCapture组装。使用REALITY+Vision；域名匹配须同时绕过代理与DoH，使用Runtime系统DNS+Direct；支持`*.github.com`且不扩大私有目标访问权限。保留配置不可变和不偷偷直连的边界。源码/二进制扫描保留两条未导入包的模块提示，不把部分资格等同完整生产或全平台发布。
+2. **VLESS/UDP可用版本**：Task3A、Task3B及各自关闭修复，Task4A基础界面、TLS/core、TLS私有配置/owner控制、TLS编辑界面、补丁内核生产、打包Task1/2与Host/bootstrap均已审查关闭；不重复这些实现。当前按`2026-10-11-socks-user-delivery.md`接通Host/control/grant、Flutter/CLI和实际用户入口网络验证。使用REALITY+Vision；域名匹配须同时绕过代理与DoH，使用Runtime系统DNS+Direct；支持`*.github.com`且不扩大私有目标访问权限。保留配置不可变和不偷偷直连的边界。源码/二进制扫描保留两条未导入包的模块提示，不把部分资格等同完整生产或全平台发布。
 3. **主生产线合流及功能闭环**：有意识地把已发布hotfix/稳定线新修复合入production-readiness，保护现有WIP；继续全局默认出口剩余请求族、原生MCP真实工具/恢复/一次执行、阅读器与CA/devcontainer闭环。TLS上游自有CA与REALITY身份校验严格区分，不修改系统信任、不把跳过CA映射为绕过REALITY。
 4. **最终生产资格与发布**：在最终同源代码上完成原Goal所有适用平台/客户端/数据恢复/持续运行/安全与发布验收。分阶段版本可以更早交付，但不能据此删掉最终目标里的剩余项。
 
