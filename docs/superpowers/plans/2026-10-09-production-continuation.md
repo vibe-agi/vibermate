@@ -26,7 +26,7 @@
 | 内核生产与资格 | 原生补丁内核资格及可重复生产工具均已独立审查关闭；生产工具29项测试与5目标编译/静态证明已完成 | producer fix1 rereview无剩余发现；后续打包/Host也已完成对应单元，但SOCKS用户入口尚未交付 |
 | 内核材料、真实构建和打包接入 | packaging Task1/2均已独立审查关闭；实际本地arm64候选构建/验证成功。Task2首审两项Important已修正：正式签名漏内核、签名前漏内核哈希核对；定向22项通过，复审I1/I2均关闭 | vless-kernel-packaging/task-2-report.md及task-2-fix1-review.md；本地候选仍是dirty0.1.23+25、ad-hoc/Xcode27，不是新发布或正式Universal资格。首失败、2项原有opt-in skip及工具链诊断保留 |
 | Host启动接线 | 共享内核自动发现、Desktop认证回环SOCKS启动已实现、验证、独立审查通过 | vless-host-bootstrap Task1关闭；1个非阻断输出噪声Minor保留。实际地址/ManualCapture用户交付和完整打包网络验证仍是后续任务 |
-| SOCKS用户入口 | 2026-10-11-socks-user-delivery Task1后端已实现、验证、独立审查Approved无发现，正式关闭；不要重复实现 | task-1-report.md/diff/hash与task-1-review.md已由root核对。下一任务Task2 Flutter/CLI；Task3真实用户入口REALITY/Vision TCP/UDP尚未实施。共享凭证，HTTP字段不替换，不宣称现有HTTPS relay能承载UDP |
+| SOCKS用户入口 | 2026-10-11-socks-user-delivery Task1后端与Task2 Flutter/CLI均已实现、验证、独立审查关闭；不要重复实现 | Task2一次fix关闭scoped IPv6严格校验遗漏；17VM/12Chrome/12render/4既有manual/Go3包及fix5parser、clean analyze证据保留。已看390px实际可读画面，替代测试字体不冒充native字体。下一任务Task3真实控制接口→凭证→自有SOCKS→REALITY/Vision TCP/UDP |
 | R1–R7、阅读器、MCP底层、全局出口 | 保留已有提交和审查；全量功能/客户端闭环未完成 | 2026-10-03主计划及已采用子计划；2026-10-05全局出口账本 |
 | CA平台/devcontainer、完整MCP/46项客户端、持续运行与最终同源发布 | 尚未全部完成 | 原Goal范围继续有效，见下方完成条件 |
 
@@ -38,6 +38,12 @@
 2. **VLESS/UDP可用版本**：Task3A、Task3B及各自关闭修复，Task4A基础界面、TLS/core、TLS私有配置/owner控制、TLS编辑界面、补丁内核生产、打包Task1/2与Host/bootstrap均已审查关闭；不重复这些实现。当前按`2026-10-11-socks-user-delivery.md`接通Host/control/grant、Flutter/CLI和实际用户入口网络验证。使用REALITY+Vision；域名匹配须同时绕过代理与DoH，使用Runtime系统DNS+Direct；支持`*.github.com`且不扩大私有目标访问权限。保留配置不可变和不偷偷直连的边界。源码/二进制扫描保留两条未导入包的模块提示，不把部分资格等同完整生产或全平台发布。
 3. **主生产线合流及功能闭环**：有意识地把已发布hotfix/稳定线新修复合入production-readiness，保护现有WIP；继续全局默认出口剩余请求族、原生MCP真实工具/恢复/一次执行、阅读器与CA/devcontainer闭环。TLS上游自有CA与REALITY身份校验严格区分，不修改系统信任、不把跳过CA映射为绕过REALITY。
 4. **最终生产资格与发布**：在最终同源代码上完成原Goal所有适用平台/客户端/数据恢复/持续运行/安全与发布验收。分阶段版本可以更早交付，但不能据此删掉最终目标里的剩余项。
+
+## 已发布修复合流的只读预检（2026-10-11）
+
+本地稳定HEAD999d7b0产品树`89be12a87e5c5958e0686987e60803e00867c0d9`与已发布0.1.25的已验证产品树一致；公开合并SHA4e89f628当前尚未存在于本地对象库，首次直接Git比较因此报bad object，此后改用已有的等产品树稳定HEAD，没有擅自fetch/merge或修改运行状态。生产HEAD f79c35d与稳定线共同祖先仍为c61f8c6；`git cherry`显示92项不等价补丁、0项等价（含文档/测试，不代表92个未做功能），稳定线自共同祖先改227个文件。必须合入的不仅是0.1.25登录修复，也包括0.1.24长会话实现。
+
+稳定修改与当前tracked WIP重叠19个路径，包括CI/签名工作流、第三方声明、desktopcontrol/desktophost/runtimecontrol、productruntime builders/options/runtime、macOS发布策略/测试，以及Flutter API/models/copy/account/workbench/preview与Desktop manifest测试。列表是当前时点的只读范围证据，不是冲突已解决或测试已通过。不得直接在dirty生产工作区merge/reset覆盖这些工作；功能单元冻结后先保留精确快照，再制定并执行有意识的合流与相称回归。该工作不需要重发0.1.24/0.1.25，也不重做它们已完成的签名公证。
 
 ## 原 Goal 必须保留的完成条件
 

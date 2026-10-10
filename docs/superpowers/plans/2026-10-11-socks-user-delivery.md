@@ -131,6 +131,8 @@ Run `flutter test --no-pub test/control_models_test.dart --plain-name 'SOCKS del
 
 - [ ] **Step 2 — consume one explicit field.** Add exact DTOs and validation, include `socksAddress` in review/grant equality in CLI `capture.go` and Flutter `HttpControlApi.createManualCapture`. The latter currently checks Capture/environment attributes but not endpoint equality; add both HTTP and SOCKS address comparisons there, with a response-mismatch rejection test. Do not infer the endpoint from the control URL, HTTP proxy port or configured `:0`. Decode unknown additional keys as errors as before. A backend with no description produces unavailable/unknown text, not a made-up operational proxy.
 
+Controller refinement from the actual producer contract: support raw scoped IPv6 such as `[fe80::1%en0]:1080` and numeric zones, preserving the zone in host copying. One shared address parser validates canonical IP/port plus the producer's authority/host whitespace and `://` restrictions; do not interpret the raw host:port as a URL. Keep malformed bracket/empty-zone rejection. This is parsing/copy delivery, not native link-local connectivity qualification.
+
 ```dart
 final class HostNetworkAccess {
   const HostNetworkAccess({required this.socksAddress, required this.vlessAvailable});
