@@ -26,7 +26,8 @@
 | 内核生产与资格 | 原生补丁内核资格及可重复生产工具均已独立审查关闭；生产工具29项测试与5目标编译/静态证明已完成 | producer fix1 rereview无剩余发现；后续打包/Host也已完成对应单元，但SOCKS用户入口尚未交付 |
 | 内核材料、真实构建和打包接入 | packaging Task1/2均已独立审查关闭；实际本地arm64候选构建/验证成功。Task2首审两项Important已修正：正式签名漏内核、签名前漏内核哈希核对；定向22项通过，复审I1/I2均关闭 | vless-kernel-packaging/task-2-report.md及task-2-fix1-review.md；本地候选仍是dirty0.1.23+25、ad-hoc/Xcode27，不是新发布或正式Universal资格。首失败、2项原有opt-in skip及工具链诊断保留 |
 | Host启动接线 | 共享内核自动发现、Desktop认证回环SOCKS启动已实现、验证、独立审查通过 | vless-host-bootstrap Task1关闭；1个非阻断输出噪声Minor保留。实际地址/ManualCapture用户交付和完整打包网络验证仍是后续任务 |
-| SOCKS用户入口 | 2026-10-11-socks-user-delivery Task1后端与Task2 Flutter/CLI均已实现、验证、独立审查关闭；不要重复实现 | Task2一次fix关闭scoped IPv6严格校验遗漏；17VM/12Chrome/12render/4既有manual/Go3包及fix5parser、clean analyze证据保留。已看390px实际可读画面，替代测试字体不冒充native字体。下一任务Task3真实控制接口→凭证→自有SOCKS→REALITY/Vision TCP/UDP |
+| SOCKS用户入口 | 2026-10-11-socks-user-delivery Tasks1/2/3均已实现、验证、独立审查关闭；不要重复实现 | 真实owner控制→签发凭证→自有SOCKS→打包REALITY/Vision TCP/3UDP、DNS/直连、坏节点不回退、撤销/关闭回收通过；Task3修正后的native9.36s/race10.51s及9反例通过，复审关闭。macOSarm64/currentHost+既有内核证明，不冒充最终安装包或其它平台 |
+| SOCKS Windows编译 | 实际检查失败：association.go103引用Windows没有的syscall.MSG_TRUNC；已列入同计划Task4，尚未修复，不能称Windows通过 | Task3测试问题已关闭。Task4仅用现有x/sys/windows正确标志替换共享Unix依赖，保留收包/权限/截断拒绝；真实socket回归+Windows/Linux交叉编译，不排除产品文件或声称实机运行 |
 | R1–R7、阅读器、MCP底层、全局出口 | 保留已有提交和审查；全量功能/客户端闭环未完成 | 2026-10-03主计划及已采用子计划；2026-10-05全局出口账本 |
 | CA平台/devcontainer、完整MCP/46项客户端、持续运行与最终同源发布 | 尚未全部完成 | 原Goal范围继续有效，见下方完成条件 |
 
@@ -43,7 +44,11 @@
 
 本地稳定HEAD999d7b0产品树`89be12a87e5c5958e0686987e60803e00867c0d9`与已发布0.1.25的已验证产品树一致；公开合并SHA4e89f628当前尚未存在于本地对象库，首次直接Git比较因此报bad object，此后改用已有的等产品树稳定HEAD，没有擅自fetch/merge或修改运行状态。生产HEAD f79c35d与稳定线共同祖先仍为c61f8c6；`git cherry`显示92项不等价补丁、0项等价（含文档/测试，不代表92个未做功能），稳定线自共同祖先改227个文件。必须合入的不仅是0.1.25登录修复，也包括0.1.24长会话实现。
 
+后续一次精确公开源码获取：`git fetch --no-tags https://github.com/vibe-agi/vibermate.git 4e89f628ba8eff3284e731b48475996908fa1c90`返回128/CONNECT tunnel407，未重试、未改网络代理或凭证。生产HEAD35185fd和本地稳定产品树保持不变；已有稳定等产品树源仍可用于安全合流准备，不因此停止正在进行的功能验收。正式远端发布前仍须核对所选源与实际公开版本。
+
 稳定修改与当前tracked WIP重叠19个路径，包括CI/签名工作流、第三方声明、desktopcontrol/desktophost/runtimecontrol、productruntime builders/options/runtime、macOS发布策略/测试，以及Flutter API/models/copy/account/workbench/preview与Desktop manifest测试。列表是当前时点的只读范围证据，不是冲突已解决或测试已通过。不得直接在dirty生产工作区merge/reset覆盖这些工作；功能单元冻结后先保留精确快照，再制定并执行有意识的合流与相称回归。该工作不需要重发0.1.24/0.1.25，也不重做它们已完成的签名公证。
+
+35185fd冻结时点的工作区快照已保存到`/private/tmp/vibermate-integration-snapshot.lNiS4P`（约1.3MiB、目录私有）：HEAD、NUL状态与未跟踪清单、tracked二进制patch、79个未跟踪文件tar与逐文件SHA、产物SHA。79项源码校验通过，patch/清单在捕获后再次与当前Git输出一致，全部6项产物哈希通过。它保留生成的`tool/vless-kernel/__pycache__/build_kernel.cpython-314.pyc`以防误丢；该缓存不是待发布源码，后续按精确源文件清单提交，不可git add全部。快照不构成数据库备份/迁移或发布验收；后续代码如再变化，合流前必须使用新的冻结输入。当前没有merge、reset、stash或产品提交。
 
 ## 原 Goal 必须保留的完成条件
 

@@ -200,6 +200,60 @@ payloads := [][]byte{
 
 - [ ] **Step 5 — freeze and review.** Report the actual packaged helper hash, current Host source hashes, owned fixture topology, exact commands/results, no live handles, and untested platforms. Keep a failing first observation if found; implement only the demonstrated cause via the normal review loop. Independent review checks that the test crosses the actual user entry and cannot pass via direct minting/routing. After acceptance, resume stable-line integration and next phased release preparation; do not mark the full production Goal complete.
 
+## Task 4: Repair the observed Windows UDP flag build failure
+
+**Observed cause:** Task3's real Windows package-test compilation fails in `internal/socksproxy/association.go:103` because `syscall.MSG_TRUNC` is unavailable on Windows. This is product code added with SOCKS, not a Task3 harness issue. Its packet rejection must remain enabled; do not exclude product files or replace the mask with zero.
+
+**Files:** Modify `internal/socksproxy/association.go`; create `internal/socksproxy/udp_flags_default.go`, `udp_flags_windows.go`, `udp_flags_test.go`. Existing SOCKS tests may gain focused assertions only if needed. No Go module/dependency upgrade, new UDP framing, network policy, credential or process-lifecycle change.
+
+**Interface:** A package-private `udpMessageTruncated(flags int) bool` hides the real platform mask. Shared association code keeps `ReadMsgUDPAddrPort`, its existing read-error exit, peer/port/framing checks and truncated-datagram discard. The non-Windows implementation retains the previous syscall mask; Windows uses the already pinned `golang.org/x/sys/windows.MSG_TRUNC` (v0.47.0), not a guessed Unix value.
+
+**Primary evidence:** Root read actual Go1.26.9 `net/udpsock_posix.go` and `internal/poll/fd_windows.go:ReadMsgInet4/6`: returned flags come from Winsock's WSAMSG. Existing x/sys v0.47.0 `windows/types_windows.go:1111` defines the Windows flag. Microsoft's [WSARecvMsg documentation](https://learn.microsoft.com/en-us/windows/win32/api/mswsock/nc-mswsock-lpfn_wsarecvmsg) describes truncated message flags and WSAEMSGSIZE. The browser tool returned path_unsupported422; root read the complete official MicrosoftDocs/sdk-api source through GitHub API instead. No external package update or unsupported native proof follows from this reference check.
+
+- [ ] **Step 1 — preserve the actual compiler RED.** Use retained `task-3-fix-1-windows-red.log` and `task-3-fix-1-windows-after.log`, which compile the unchanged product association at the same source hash. Record that hash before editing. No need to rerun the identical known failing compile before starting. Add the real socket regression described below; do not use source-text or self-equal constant assertions.
+
+- [ ] **Step 2 — make the platform seam without changing traffic behavior.** Keep Windows imports out of shared/non-Windows files. Source shape:
+
+```go
+// udp_flags_default.go
+//go:build !windows
+
+package socksproxy
+
+import "syscall"
+
+func udpMessageTruncated(flags int) bool { return flags&syscall.MSG_TRUNC != 0 }
+```
+
+```go
+// udp_flags_windows.go
+//go:build windows
+
+package socksproxy
+
+import "golang.org/x/sys/windows"
+
+func udpMessageTruncated(flags int) bool { return flags&windows.MSG_TRUNC != 0 }
+```
+
+In `associate`, replace only `flags&syscall.MSG_TRUNC != 0` with `udpMessageTruncated(flags)` and remove the now-unused shared syscall import. Do not alter buffer size, error handling, client binding, reauthorization, target admission or forwarding. The default build selection retains the previous non-Windows behavior rather than silently narrowing existing product targets.
+
+- [ ] **Step 3 — exercise actual received flags.** In same-package `udp_flags_test.go`, create owned loopback sender/receiver sockets, send a binary payload and read it once with a large buffer and once with a deliberately short buffer through `ReadMsgUDPAddrPort`. Verify exact complete bytes/source and `udpMessageTruncated(flags)==false` for the complete packet; verify the short receive is classified truncated, not a valid shortened packet. Use the OS-returned flags, not a test-computed expected mask. Truncated reads may additionally report a Windows socket error; non-truncation errors remain failures. Set bounded fixture deadlines, close all sockets. A wrong mask or always-true/false predicate must fail an observable case. The existing compiler error is the build regression RED; this native socket check preserves behavior through the portability change, not a new product performance standard.
+
+```go
+// With real received flags from the two distinct datagrams:
+if udpMessageTruncated(flags) != wantTruncated {
+    t.Fatalf("received datagram truncation classification mismatch")
+}
+if !wantTruncated && (err != nil || !bytes.Equal(buffer[:n], payload)) {
+    t.Fatal("complete datagram changed")
+}
+```
+
+- [ ] **Step 4 — prove the actual build is repaired and Unix traffic unchanged.** Use qualified `/tmp/vibermate-go-security.JcRyfL/go/bin/go`; preserve exact commands/results and owned output paths. Run SOCKS package tests and race once. Compile Windows amd64 `internal/socksproxy` and `internal/serverhost` tests with `go test -c -o <owned output>`, and build both `./cmd/vibermate` and `./cmd/vibermated` for Windows amd64 in that owned directory. Repeat compile/build for Linux amd64 to ensure file selection does not regress the server target. Never execute foreign binaries or call compile success native execution. Run the existing exact macOS `TestServerManualSOCKSREALITYDelivery` once with the preserved packaged helper after the shared predicate change. No kernel rebuild, UI campaign, signing or release operation.
+
+- [ ] **Step 5 — freeze for scoped independent review.** Retain before/after copies, task-only -U10 diff, source and output hashes, actual packet results, compile commands, first errors and all terminal handles. If the repaired compile exposes a different real failure, report it rather than silently broadening the change or claiming Windows GREEN. Native Windows UDP execution remains explicitly unverified unless an actual Windows runner is used later. Only source/test slot release and review approval close this product defect.
+
 ## Self-review and scope ledger
 
 | Shared Interface / task | Producer → consumer check |
@@ -210,5 +264,7 @@ payloads := [][]byte{
 | Task1 self | Authenticated delivery, ephemeral bind and reverse rollback have real HTTP/socket tests |
 | Task2 self | Strict schema, review equality, secret lifetime and narrow layout/clipboard tests match actual fields |
 | Task3 self | Real owner control→grant→own SOCKS→packaged REALITY/Vision, exact TCP/UDP replies and no Direct fallback |
+| Task4 → existing SOCKS consumer | Same received-message API and discard policy, OS-specific flag via two real platform adapters; actual socket checks and cross-compilation |
+| Task4 self | Compiler failure is real RED; no zero-mask bypass or excluded product files; foreign compilation is not native execution |
 
 This plan does not replace original MCP, CA/devcontainer, client/Paseo, data migration/soak or final same-source production qualification. It completes one approved functional delivery sequence before those remaining tasks.
