@@ -19,11 +19,13 @@
 | 多 Runtime CLI 登录 | **已有功能，不重新开发** | LoginStore 按规范化 scheme+host+port 保存多条；A/B不互相覆盖，同server保留一份登录 |
 | VLESS 核心与自有 SOCKS 模块 | 已实现且对应缺陷已修复/审查 | production-readiness 的 VLESS functional Task1/2；不能等同于 Runtime/Host/UI 已连通 |
 | VLESS 配置与 Runtime TCP | Task3A及启动/关闭修复已实现、验证、审查；其后Task3B也已关闭 | task-3a-profile-routing-report.md和shutdown-rereview/3hash；不重复原实现或核心Proof |
-| VLESS Runtime UDP/监听/界面 | Task3B及关闭修复已复核关闭，Task4A界面实现/审查通过（2个Minor和字体证据限制保留） | vless-configuration-ui的report/review；仍需TLS配置/CA界面/内核/Host组装，不把基础界面等同完整交付 |
+| VLESS Runtime UDP/监听/基础界面 | Task3B及关闭修复已复核关闭，Task4A界面实现/审查通过（2个Minor和字体证据限制保留） | vless-configuration-ui的report/review；后续TLS界面也已完成，现缺安装包/Host/用户连接交付，不重复TLS开发 |
 | VLESS TLS／配置内自有CA核心 | 已实现、验证、独立审查通过，无Critical/Important；一个测试fixture Minor保留 | vless-tls-core/task-1-report.md与task-1-review.md。原生System信任成功证明仍待隔离runner |
 | TLS私有配置／owner控制 | 已实现、18项定向测试通过、独立审查Approved无发现；包含真实磁盘重开及owner/member权限 | tls-profile-control/task-1-report.md与task-1-review.md，11个文件hash已核对，保持冻结 |
 | TLS／CA编辑界面 | 已实现、验证、独立审查Approved无发现，正式关闭该任务 | tls-editor/task-1-report.md与task-1-review.md；13份hash已核对。114VM/86Chrome及最终受影响定向验证、分析/Web构建通过，390px实际查看；字体证据限制保留 |
 | 内核与用户连接交付 | 原生补丁内核资格及可重复生产工具均已独立审查关闭；生产工具29项测试与5目标编译/静态证明已完成 | producer fix1 rereview无剩余发现；仍须打包、Host发现、SOCKS用户入口，不能称完整功能已交付 |
+| 内核可分发材料组装 | Universal和Linux双架构真实组装完成，30项测试证据及实际哈希已核对；独立审查剩1处失败诊断缺项 | vless-kernel-packaging Task1 fix1已写brief并排队；原失败原因未知，不用新成功覆盖。Task2安装包脚本接入尚未实施 |
+| Host启动接线 | 正在实现共享内核自动发现与Desktop认证回环SOCKS启动；相关Go/Flutter绿测已产生，待冻结与独立审查 | 当前唯一源码/本机测试负责人vless_host_bootstrap；其释放后原packaging实现者修复诊断。实际地址/ManualCapture用户交付仍是后续任务 |
 | R1–R7、阅读器、MCP底层、全局出口 | 保留已有提交和审查；全量功能/客户端闭环未完成 | 2026-10-03主计划及已采用子计划；2026-10-05全局出口账本 |
 | CA平台/devcontainer、完整MCP/46项客户端、持续运行与最终同源发布 | 尚未全部完成 | 原Goal范围继续有效，见下方完成条件 |
 
