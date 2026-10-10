@@ -31,6 +31,8 @@
 - Modify `internal/desktopcontrol/handler.go`: register the saved-settings GET route.
 - Extend `internal/desktopcontrol/vless_profiles_test.go`: existing owner import tests plus TLS save/update/readback/authority/idempotency behavior. Update the old REALITY-only error assertion to the new accurate safe wording.
 - Create `internal/productruntime/vless_tls_profile_test.go` for one actual SQL/host-secret save and Runtime reopen test, using the existing `testOptionsWithPaths` helper and temporary paths; no engine/listener required. The desktopcontrol `credentialStoreFixture` is a map and cannot establish disk persistence by itself.
+- Create `internal/serverhost/vless_tls_control_test.go` for the actual server owner/member/anonymous settings-route check using existing package-local host/login fixtures; no server routing product change.
+- Narrow integration correction in `internal/vlesscore/config.go` and `tls_test.go`: preserve an explicitly supported TLS fingerprint in generated TLS settings. The frozen core exposes Config.Fingerprint but currently serializes it only for REALITY; the importer must not accept and silently discard a TLS node's existing fingerprint. Before-copy these two core files; no parser/lifecycle/framing changes.
 - Existing Runtime/host consumer type adjustments only if required by the Interface below; no listener/schema/shared-Policy changes. If a new test helper is needed, keep it local to these tests.
 
 **Interfaces consumed:**
@@ -107,7 +109,15 @@ Security vlesscore.Security `json:"security,omitempty"`
 TLS *storedTLS `json:"tls,omitempty"`
 ```
 
-Use one conversion helper for validated stored payload → core Config so startup and tests exercise the same mapping. Do not start a core process merely to validate/save configuration. `start` keeps the existing pinned resolved bootstrap IP and original SNI, passing Security/TLS in addition to the existing fields. Clear copied secret bytes/destroy Values using existing patterns; redacted formatters remain required for new secret-bearing values.
+Use one conversion helper for validated stored payload → core Config so startup and tests exercise the same mapping. Do not start a core process merely to validate/save configuration. `start` keeps the existing pinned resolved bootstrap IP and original SNI, passing Security/TLS in addition to the existing fields. Add a behavior test showing nonempty `Fingerprint:"firefox"` is missing from TLS JSON before the narrow correction, then include it without changing absent/empty fingerprint defaults:
+
+```go
+if c.Fingerprint != "" {
+    tlsSettings["fingerprint"] = c.Fingerprint
+}
+```
+
+The importer keeps its existing supported fingerprint allowlist; no unsafe fingerprint option is introduced. Clear copied secret bytes/destroy Values using existing patterns; redacted formatters remain required for new secret-bearing values.
 
 - [ ] **Step 3: Implement immutable saved-credential edits and Describe.** Resolve the prior profile with `GetRevision` and load via `ReadAtRevision` before applying trust changes. Validate private data and encoded JSON size before `Replace`; allocate a fresh secret reference and keep the existing Publish CAS/indeterminate retention path. Describe reuses validated loading and returns only the two safe enums. No changes to client/Shutdown state or old referenced secrets.
 
@@ -125,7 +135,7 @@ return m.profiles.Publish(ctx, egressprofile.PublishCommand{
 
 Tests must verify: System TLS import; custom CA import/Describe; malformed/partial/mixed/empty CA rejection before any secret/public write; encoded size over64KiB rejection even when raw CA is within its bound; REALITY+TLS input rejection; TLS+REALITY query rejection; unknown/duplicate query rejection; normal TLS empty flow preserved; legacy REALITY remains readable; nil trust with empty URI preserves credential and trust; explicit System clears only new revision CA; changing CA retains node identity; old private bytes and profile digest unchanged; stale CAS conflict cannot overwrite winner; same idempotency key replays same result; changed body with same key conflicts; read-only token cannot POST; no-auth/member cannot reach owner settings; public responses/errors and fmt/JSON do not leak URI/UUID/key/CA. Use actual temporary SQL/host-secret storage and reopen it for persistence evidence; the existing memory credential fixture is sufficient for HTTP authority/idempotency tests but not disk persistence proof.
 
-- [ ] **Step 5: Targeted GREEN and freeze.** Run the new TLS profile tests, existing `vlessprofile` lifecycle tests and owner-control VLESS tests once on the final amended code. Core bytes stay unchanged; their already-passing real TCP/UDP tests need not rerun. Retain command/output, source hashes and a before-based task-only diff including newly created files. No broad full-repo/race/soak/native matrix in this unit. Write report with actual coverage and limitations; release the source/test slot for independent spec/security/quality review. No staging/commit until root's owned integration checkpoint.
+- [ ] **Step 5: Targeted GREEN and freeze.** Run the new TLS profile tests, existing `vlessprofile` lifecycle tests and owner-control VLESS tests once on the final amended code. Run the new fingerprint mapping test and relevant existing TLS JSON/REALITY unit tests for that narrow correction; no new engine handshake claim is made for alternate fingerprints. Other core bytes stay unchanged; their already-passing TCP/UDP fixture need not rerun. Retain command/output, source hashes and a before-based task-only diff including newly created files. No broad full-repo/race/soak/native matrix in this unit. Write report with actual coverage and limitations; release the source/test slot for independent spec/security/quality review. No staging/commit until root's owned integration checkpoint.
 
 ## Self-review and next consumer
 
