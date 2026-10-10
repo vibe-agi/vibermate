@@ -23,7 +23,7 @@
 | VLESS TLS／配置内自有CA核心 | 已实现、验证、独立审查通过，无Critical/Important；一个测试fixture Minor保留 | vless-tls-core/task-1-report.md与task-1-review.md。原生System信任成功证明仍待隔离runner |
 | TLS私有配置／owner控制 | 已实现、18项定向测试通过、独立审查Approved无发现；包含真实磁盘重开及owner/member权限 | tls-profile-control/task-1-report.md与task-1-review.md，11个文件hash已核对，保持冻结 |
 | TLS／CA编辑界面 | 已实现、验证、独立审查Approved无发现，正式关闭该任务 | tls-editor/task-1-report.md与task-1-review.md；13份hash已核对。114VM/86Chrome及最终受影响定向验证、分析/Web构建通过，390px实际查看；字体证据限制保留 |
-| 内核与用户连接交付 | 五平台旧官方二进制已静态核对；Host交付缺口已定位；原生补丁内核构建任务已开始 | 2026-10-10-vless-patched-kernel.md；唯一源码/本地构建测试者`vless_patched_kernel`，仅操作自有临时上游checkout。当前App尚未自动启动SOCKS/发现内核，不能称完整功能已交付 |
+| 内核与用户连接交付 | 原生安全补丁内核的源码/二进制扫描、4项真实互通及独立审查均通过；可重复构建工具进入实施 | patched-kernel/report+review与38hash已核对；下一任务2026-10-10-vless-kernel-producer.md。仍须打包、Host发现、SOCKS用户入口，不能称完整功能已交付 |
 | R1–R7、阅读器、MCP底层、全局出口 | 保留已有提交和审查；全量功能/客户端闭环未完成 | 2026-10-03主计划及已采用子计划；2026-10-05全局出口账本 |
 | CA平台/devcontainer、完整MCP/46项客户端、持续运行与最终同源发布 | 尚未全部完成 | 原Goal范围继续有效，见下方完成条件 |
 
@@ -32,7 +32,7 @@
 ## 唯一恢复顺序
 
 1. **稳定线登录补全版本**：PR46已合并，完整CI已通过，发布run38005895645的未签名构建和来源/SBOM已通过，当前等待用户批准`macos-signing`。批准后接着签名、公证、隔离安装和公开GitHub/Homebrew交付，不再更新/重合并PR46。等待审批期间继续开发线；不代用户审批、不把未签名候选说成已发布。
-2. **VLESS/UDP可用版本**：Task3A、Task3B及各自关闭修复，Task4A基础界面、TLS/core、TLS私有配置/owner控制、TLS编辑界面均已审查关闭。唯一构建测试者执行`2026-10-10-vless-patched-kernel.md`，取得真实原生补丁产物后接可信内核分发及Host/bootstrap/launcher组装。使用REALITY+Vision；域名匹配须同时绕过代理与DoH，使用Runtime系统DNS+Direct；支持`*.github.com`且不扩大私有目标访问权限。保留配置不可变和不偷偷直连的边界。五平台官方内核已实际静态核实为旧Go1.26.1/x-net0.52.0；正式分发需安全补丁构建与来源核验，不能直接把旧隔离测试产物当正式产物。
+2. **VLESS/UDP可用版本**：Task3A、Task3B及各自关闭修复，Task4A基础界面、TLS/core、TLS私有配置/owner控制、TLS编辑界面均已审查关闭。固定上游源码+Go1.26.9/x-net0.60/gRPC1.83.2原生补丁输入（协议源码未改）也已独立审查通过；当前按2026-10-10-vless-kernel-producer.md实现可重复生产，随后可信内核打包与Host/bootstrap/launcher/ManualCapture组装。使用REALITY+Vision；域名匹配须同时绕过代理与DoH，使用Runtime系统DNS+Direct；支持`*.github.com`且不扩大私有目标访问权限。保留配置不可变和不偷偷直连的边界。源码/二进制扫描保留两条未导入包的模块提示，不把部分资格等同完整生产或全平台发布。
 3. **主生产线合流及功能闭环**：有意识地把已发布hotfix/稳定线新修复合入production-readiness，保护现有WIP；继续全局默认出口剩余请求族、原生MCP真实工具/恢复/一次执行、阅读器与CA/devcontainer闭环。TLS上游自有CA与REALITY身份校验严格区分，不修改系统信任、不把跳过CA映射为绕过REALITY。
 4. **最终生产资格与发布**：在最终同源代码上完成原Goal所有适用平台/客户端/数据恢复/持续运行/安全与发布验收。分阶段版本可以更早交付，但不能据此删掉最终目标里的剩余项。
 
