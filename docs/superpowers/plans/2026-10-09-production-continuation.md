@@ -12,6 +12,8 @@
 
 最新终端状态：`2026-10-11-interactive-reconnect-diagnostics.md`已完成实现、验证及独立审查Approved，无发现。真实PTY复现输入提示旁的重连文字后，只替换两处临时诊断写入并新增私有终端判断；文件/管道/缓冲日志、输入、进程与撤销不变。Darwin定向/完整包/race通过，Linux/Windows amd64包与CLI编译通过；未执行真实Codex opt-in或外平台原生验收。下一任务为已批准全局出口Task6的账号读取/重置真实选路与暂停恢复单元，详见`2026-10-12-owned-account-egress-recovery.md`，不重开已关闭额度/终端实现。
 
+终端任务已提交`73ab8f995046a7d059d8223b2f5f7b8940d7cac3`。账号操作单元沿用真实Runtime/Reader/Manager、限定TLS/SOCKS测试网和严格原始TLS探测器；先记录实际排队恢复RED，再仅修正已有owner读取/重置的探测构造。captured账户读取仍是父计划的独立剩余项，不把本单元的origin-only规则泛化到它，也不宣称全部出口已完成。
+
 ## 最终目标（不变，补齐已批准的新增范围）
 
 按已批准的 Superpowers 设计，分阶段交付可实际使用的 ViberMate：先完成用户受阻的修复及功能贯通，再推进性能优化和最终生产资格验证；保留全部账号、配置、权限与历史，完成适用的独立审查、签名、公证、安装、GitHub Release 与 Homebrew 交付。只有全部已批准范围实际完成后才标记整个 Goal complete；单个 hotfix 发布不等于整个 Goal 完成。
