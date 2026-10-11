@@ -14,6 +14,7 @@ type runtimeResumeProber struct {
 	provider offlinehold.Prober
 	original offlinehold.Prober
 	blind    offlinehold.Prober
+	udp      offlinehold.Prober
 }
 
 func newRuntimeResumeProber(
@@ -49,6 +50,11 @@ func (prober *runtimeResumeProber) Probe(
 	for _, target := range request.Targets {
 		var selected offlinehold.Prober
 		switch target.Kind {
+		case offlinehold.EgressDatagram:
+			selected = prober.udp
+			if selected == nil {
+				return offlinehold.NewProbeFailure(offlinehold.ProbeReasonFailed, errors.New("datagram setup prober is unavailable"))
+			}
 		case offlinehold.EgressProvider:
 			selected = prober.provider
 		case offlinehold.EgressOpaque, offlinehold.EgressAuxiliary, offlinehold.EgressUpdate:
@@ -159,6 +165,9 @@ func probeTargetIdentityKey(target offlinehold.ProbeTarget) string {
 		target.PlanDigest,
 		string(target.EgressPolicy.Proxy.Kind),
 		target.EgressPolicy.Proxy.Endpoint,
+		target.EgressPolicy.Proxy.CredentialRef,
+		fmt.Sprintf("%020d", target.EgressPolicy.Proxy.CredentialRevision),
+		string(target.EgressPolicy.DirectDomains),
 		string(target.EgressPolicy.Resolver.Kind),
 		target.EgressPolicy.Resolver.DoHURL,
 		string(target.EgressPolicy.Resolver.Transport),

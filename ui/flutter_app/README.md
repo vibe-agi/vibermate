@@ -52,6 +52,8 @@ no aspect-ratio lock on manual resizing.
 cd ui/flutter_app
 flutter analyze
 flutter test
+dart run tool/prepare_chrome_test_assets.dart
+flutter test --platform chrome
 bash tool/test_window_geometry.sh # macOS geometry only; does not launch the App
 
 VIBERMATE_LIVE_TEST_DAEMON="$PWD/build/vibermated" \
@@ -67,6 +69,65 @@ make check-flutter-macos
 The live test uses temporary runtime directories, performs the real
 daemon/bootstrap/session/Control API handshake, and closes the child before it
 removes those temporary files.
+
+Chrome preparation uses the pinned SDK resolved by `package:flutter` to compile
+the two framework shaders as web JSON. It writes only the two ignored
+`test/assets/shaders/*.frag` files named by the tool; it leaves identical files
+untouched and refuses conflicting content or links. It does not modify the SDK,
+theme or production asset bundle. Run it after the approved `flutter pub get`;
+missing/mismatched SDK artifacts fail without downloading a replacement.
+
+## Manual SOCKS5 clients
+
+In Captures, create a dedicated proxy login and review the actual HTTP/HTTPS
+and SOCKS5 addresses before confirming. The one-time delivery shows separate
+copy buttons for the SOCKS5 host and port. Use the shared username (`capture`)
+and password shown there; save them before closing. Later readback cannot recover
+the password. Rotate the credential explicitly if it was lost.
+
+Choose a client supporting SOCKS5 UDP. UDP uses the global network exit and needs
+the TCP control connection to stay open. Raw UDP does not need the HTTPS
+interception Root CA; keep the existing CA instructions for eligible HTTPS
+interception. Settings → Access & launch reports the actual SOCKS5 address or
+Not enabled, and separately whether the VLESS engine is installed. An older
+backend without network metadata reports availability unknown.
+
+Desktop starts its local loopback listener on an assigned port. Standalone
+Server disables SOCKS unless configured explicitly, for example:
+`vibermated server --socks-listen=127.0.0.1:1080`. A reachable non-loopback listener
+can use `--socks-listen=0.0.0.0:1080 --socks-access-address=proxy.example:1080`;
+the advertised address must be canonical `host:port` (IPv6 bracketed), not a
+wildcard or port zero.
+For scoped IPv6, copy the zone as part of the host, for example `fe80::1%en0`
+from `[fe80::1%en0]:1080`; no URL escaping is applied to this raw SOCKS address.
+`--vless-executable=/absolute/path/to/xray` supplies a trusted VLESS engine;
+installation does not prove a node is connected.
+
+SOCKS itself is not encrypted. Remote SOCKS needs a trusted private network or
+tunnel, an explicitly reachable listener, and access to the UDP relay address
+and port. Remote `vibermate run` remains an HTTP/HTTPS relay and does not provide
+UDP over HTTPS. CLI `capture create` prints SOCKS instructions when enabled;
+`--format shell` keeps only the existing HTTP/HTTPS/CA exports and never sets
+`ALL_PROXY`.
+
+The isolated native acceptance test follows the same owner setup, authenticated
+VLESS import/global-exit controls, reviewed Capture creation, and returned SOCKS
+login. With the preserved qualified macOS ARM64 candidate available, run from
+the repository root:
+
+```sh
+VIBERMATE_TEST_XRAY_BINARY="$PWD/dist/candidates/local-o7uoeCnw/ViberMate.app/Contents/MacOS/vibermate-xray" \
+  /tmp/vibermate-go-security.JcRyfL/go/bin/go test ./internal/serverhost \
+  -run '^TestServerManualSOCKSREALITYDelivery$' -count=1 -v
+```
+
+It checks exact TCP bytes and three distinct UDP replies through packaged
+REALITY/Vision, domain routing, bad-node failure without Direct fallback,
+credential revocation, control-connection closure, and Host cleanup using only
+owned loopback fixtures. An unset helper environment skips and provides no
+acceptance evidence. The helper is pinned by SHA and version; this exercises
+current-source Host with preserved packaged engine bytes. A new distribution
+built from the final source still needs release qualification.
 
 ## Information hierarchy
 

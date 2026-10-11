@@ -16,7 +16,7 @@ import (
 func TestSchemaRevisionTracksSchemaFile(t *testing.T) {
 	t.Parallel()
 	const revision1 = "393b7d67f8ffd1952fc516a150e1a2a68707b67536fbc2e7f5a7f17208424cb1"
-	const revision2 = "536d07b1f7429efa63660f53adc3bc09f9ab39288c2d4a6e1ab1a76e9db0e600"
+	const revision2 = "9b34a40b80b1e071971c733a10ab98f20e370f6800b359edcb4915b5e5f49116"
 	if frozen := sha256.Sum256([]byte(schemaV1SQL)); hex.EncodeToString(frozen[:]) != revision1 {
 		t.Fatal("frozen v1 changed")
 	}

@@ -546,12 +546,9 @@ List<EnvironmentClientEndpoint> assignEnvironmentProtocolEgressProfile({
   required List<EnvironmentClientEndpoint> endpoints,
   required String clientEndpointId,
   required String protocolPlanId,
-  required EgressProfileRevision profile,
+  required EgressChoice profile,
 }) {
-  final validated = EgressProfileRevision.fromJson(
-    profile.toJson(),
-    'egressProfile',
-  );
+  final validated = EgressChoice.fromJson(profile.toJson(), 'egressProfile');
   var found = false;
   var changed = false;
   final result = <EnvironmentClientEndpoint>[];

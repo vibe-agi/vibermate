@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"runtime"
 	"sync"
 	"testing"
 	"time"
@@ -379,6 +380,110 @@ func TestGateUnprobedTargetRemainsHeldWithoutBreakingFIFO(t *testing.T) {
 	secondResult.lease.Release()
 	secondRequest.Action.Release()
 	waitForState(t, gate, StateOnline)
+}
+
+// Catches a late queue event getting stranded after the last active lease
+// released while its logical action still owns the releasing cycle.
+func TestGateLateAcquireAfterLastLeaseReleaseProcessesProbeSnapshot(t *testing.T) {
+	for _, known := range []bool{true, false} {
+		name := "unprobed_returns_held"
+		if known {
+			name = "probed_grants"
+		}
+		t.Run(name, func(t *testing.T) {
+			gate := startTestGate(t, Config{MaxHeldRequests: 4, MaxHeldBytes: 1024, MaxHoldDuration: time.Second, ReleaseConcurrency: 1})
+			ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+			defer cancel()
+			if _, err := gate.Enter(ctx, gate.Snapshot().Revision); err != nil {
+				t.Fatal(err)
+			}
+			firstRequest := acquireRequest(t, gate, "first-late-cycle", "target-a", 1)
+			firstResult := make(chan acquireResult, 1)
+			go acquireAsync(gate, firstRequest, firstResult)
+			waitForQueue(t, gate, 1)
+			probe := &proberStub{}
+			if _, err := gate.Resume(ctx, gate.Snapshot().Revision, ResumeRequest{Targets: gate.PendingProbeTargets()}, probe); err != nil {
+				t.Fatal(err)
+			}
+			first := waitAcquireResult(t, firstResult)
+			if first.err != nil || first.lease == nil {
+				t.Fatal("initial held lease not granted", first.err)
+			}
+			first.lease.Release()
+			// Intentionally retain the real action. The existing Online
+			// predicate must continue to require every action to finish.
+			if snapshot := gate.Snapshot(); snapshot.State != StateReleasing || snapshot.ActiveEgress != 0 || snapshot.ActiveActions != 1 || snapshot.QueuedRequests != 0 {
+				t.Fatal("wrong late-enqueue precondition", snapshot)
+			}
+			late := AcquireRequest{Action: firstRequest.Action, RequestID: "second-late-cycle", Target: providerTarget("target-b"), SizeBytes: 2}
+			if known {
+				late.Target = providerTarget("target-a")
+			}
+			result := make(chan acquireResult, 1)
+			joined := false
+			defer func() {
+				if !joined {
+					gate.BeginShutdown()
+					got := <-result
+					if got.lease != nil {
+						got.lease.Release()
+					}
+				}
+				firstRequest.Action.Release()
+				if err := gate.Drain(ctx); err != nil {
+					t.Error("late acquire consumers did not drain", err)
+				}
+			}()
+			go func() { lease, err := gate.Acquire(ctx, late); result <- acquireResult{lease: lease, err: err} }()
+			if !known {
+				observation, stop := context.WithTimeout(ctx, time.Second)
+				for gate.Snapshot().QueuedRequests != 1 && observation.Err() == nil {
+					runtime.Gosched()
+				}
+				stop()
+				if snapshot := gate.Snapshot(); snapshot.State != StateHeld || snapshot.QueuedRequests != 1 || snapshot.ActiveEgress != 0 || snapshot.HeldBytes != 2 {
+					t.Fatalf("late unprobed target did not return Held: %+v", snapshot)
+				}
+				select {
+				case got := <-result:
+					joined = true
+					if got.lease != nil {
+						got.lease.Release()
+					}
+					t.Fatalf("unprobed late target sent before second probe: %+v", got)
+				default:
+				}
+				targets := gate.PendingProbeTargets()
+				if len(targets) != 1 || targets[0] != providerTarget("target-b") {
+					t.Fatal("late target probe identity changed", targets)
+				}
+				if _, err := gate.Resume(ctx, gate.Snapshot().Revision, ResumeRequest{Targets: targets}, probe); err != nil {
+					t.Fatal(err)
+				}
+				if request := probe.lastRequest(); len(request.Targets) != 1 || request.Targets[0] != providerTarget("target-b") {
+					t.Fatal("second probe did not check actual late target", request)
+				}
+			}
+			select {
+			case got := <-result:
+				joined = true
+				if got.err != nil || got.lease == nil {
+					t.Fatal("late target not granted after its own probe", got.err)
+				}
+				if snapshot := gate.Snapshot(); snapshot.ActiveEgress != 1 || snapshot.QueuedRequests != 0 || snapshot.State != StateReleasing {
+					got.lease.Release()
+					t.Fatal("late lease lost releasing concurrency state", snapshot)
+				}
+				got.lease.Release()
+			case <-ctx.Done():
+				t.Fatal("already-probed late acquire stranded after last lease release", gate.Snapshot())
+			}
+			firstRequest.Action.Release()
+			if snapshot := gate.Snapshot(); snapshot.State != StateOnline || snapshot.ActiveActions != 0 || snapshot.ActiveEgress != 0 || snapshot.QueuedRequests != 0 {
+				t.Fatal("late cycle did not finish online with drained consumers", snapshot)
+			}
+		})
+	}
 }
 
 func TestGateShutdownRejectsQueueAndBoundsDrain(t *testing.T) {

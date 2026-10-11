@@ -37,6 +37,8 @@
   "cli.capture.client.desktop_app": "Desktop app",
   "cli.capture.client.other": "Other app",
   "cli.capture.created": "Manual capture {{captureId}} created for Environment {{environment}}. The proxy password below is shown only once.\nProxy: {{proxyUrl}}\nRoot certificate: {{rootPath}}",
+  "cli.capture.socksReview": "SOCKS5 proxy: {{address}}. Uses the same proxy credential; UDP uses the global network exit.",
+  "cli.capture.socks": "SOCKS5 proxy: {{address}}\nUse username {{username}} and the password displayed in the proxy URL above. Choose a client supporting SOCKS5 UDP; UDP uses the global network exit. Keep the TCP control connection open while using UDP. UDP does not need the HTTPS interception Root certificate. SOCKS itself is not encrypted: remote access needs a trusted private network or tunnel and access to the UDP relay address and port.",
   "cli.capture.noRoot": "Not delivered for this Environment",
   "cli.capture.review": "Review this manual capture before it is created.\nName: {{name}}\nEnvironment: {{environment}}\nUse: {{clientClass}}\nLifetime: {{lifetime}}\nProxy: {{proxyAddress}}\nRoot fingerprint: {{rootFingerprint}}\nRoot certificate: {{rootPath}}\nThis identifies possession of the proxy credential, not the originating app or process. It does not choose a route, account, or model.\nCreate it? [y/N]",
   "cli.capture.untilRevoked": "Until you revoke it",

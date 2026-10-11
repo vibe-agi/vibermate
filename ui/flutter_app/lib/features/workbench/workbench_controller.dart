@@ -1124,6 +1124,13 @@ final class WorkbenchController extends ChangeNotifier
 
   Future<EgressProfileCatalog> egressProfiles() => _api.egressProfiles();
 
+  Future<EgressDefaultSetting> egressDefault() => _api.egressDefault();
+
+  Future<EgressDefaultSetting> setEgressDefault(
+    EgressDefaultSetting current,
+    EgressProfileRevision? profile,
+  ) => _api.setEgressDefault(current, profile);
+
   Future<EgressProfileRevision> createEgressProfile({
     required String displayName,
     required TrafficEgressPolicy policy,
@@ -1145,6 +1152,45 @@ final class WorkbenchController extends ChangeNotifier
     displayName: displayName,
     policy: policy,
   );
+
+  Future<EgressProfileRevision> createVlessEgressProfile({
+    required String displayName,
+    required String uri,
+    required TrafficResolverPolicy resolver,
+    required String directDomains,
+    VlessTLSImportOptions? tls,
+  }) => importVlessEgressProfile(
+    id: 'profile.custom.${_newUuid()}',
+    expectedRevision: 0,
+    displayName: displayName,
+    uri: uri,
+    resolver: resolver,
+    directDomains: directDomains,
+    tls: tls,
+  );
+
+  Future<EgressProfileRevision> importVlessEgressProfile({
+    required String id,
+    required int expectedRevision,
+    required String displayName,
+    required String uri,
+    required TrafficResolverPolicy resolver,
+    required String directDomains,
+    VlessTLSImportOptions? tls,
+  }) => _api.importVlessEgressProfile(
+    id: id,
+    expectedRevision: expectedRevision,
+    displayName: displayName,
+    uri: uri,
+    resolver: resolver,
+    directDomains: directDomains,
+    tls: tls,
+  );
+
+  Future<VlessProfileDescription> vlessProfileDescription(
+    String id,
+    int revision,
+  ) => _api.vlessProfileDescription(id, revision);
 
   int? get pendingApprovalCount =>
       pendingApprovals == null && !nativeApprovalAttention

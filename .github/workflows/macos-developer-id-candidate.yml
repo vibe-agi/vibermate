@@ -167,6 +167,8 @@ jobs:
           main_source="${candidate_app}/Contents/MacOS/vibermate-desktop"
           launcher_source="${candidate_app}/Contents/MacOS/vibermate"
           daemon_source="${candidate_app}/Contents/MacOS/vibermated"
+          kernel_source="${candidate_app}/Contents/MacOS/vibermate-xray"
+          kernel_materials_source="${candidate_app}/Contents/Resources/vless-kernel"
           build_manifest_source="${candidate_app}/Contents/Resources/vibermate-build-manifest.json"
           license_source="candidate/LICENSE"
           dist_source="candidate/ui/flutter_app/build/distribution/universal-apple-darwin/release/r0-dist"
@@ -174,6 +176,7 @@ jobs:
             "${main_source}" \
             "${launcher_source}" \
             "${daemon_source}" \
+            "${kernel_source}" \
             "${build_manifest_source}" \
             "${license_source}"; do
             test -f "${source}"
@@ -181,10 +184,17 @@ jobs:
           done
           test -d "${dist_source}"
           test ! -L "${dist_source}"
+          test -d "${kernel_materials_source}"
+          test ! -L "${kernel_materials_source}"
 
           /usr/bin/install -m 0755 "${main_source}" "${VIBERMATE_R0_INPUT_ROOT}/vibermate-desktop"
           /usr/bin/install -m 0755 "${launcher_source}" "${VIBERMATE_R0_INPUT_ROOT}/vibermate"
           /usr/bin/install -m 0755 "${daemon_source}" "${VIBERMATE_R0_INPUT_ROOT}/vibermated"
+          /usr/bin/install -m 0755 "${kernel_source}" "${VIBERMATE_R0_INPUT_ROOT}/vibermate-xray"
+          COPYFILE_DISABLE=1 /usr/bin/ditto --norsrc --noextattr --noacl --noqtn -X \
+            "${kernel_materials_source}" "${VIBERMATE_R0_INPUT_ROOT}/vless-kernel"
+          /usr/bin/find "${VIBERMATE_R0_INPUT_ROOT}/vless-kernel" -type d -exec /bin/chmod 0755 {} +
+          /usr/bin/find "${VIBERMATE_R0_INPUT_ROOT}/vless-kernel" -type f -exec /bin/chmod 0644 {} +
           /usr/bin/install -m 0600 "${build_manifest_source}" "${VIBERMATE_R0_INPUT_ROOT}/vibermate-build-manifest.json"
           /usr/bin/install -m 0644 "${license_source}" "${VIBERMATE_R0_INPUT_ROOT}/LICENSE"
           COPYFILE_DISABLE=1 /usr/bin/ditto \
@@ -193,7 +203,7 @@ jobs:
             "${VIBERMATE_R0_INPUT_ROOT}/dist"
           /usr/bin/find "${VIBERMATE_R0_INPUT_ROOT}/dist" -type d -exec /bin/chmod 0755 {} +
           /usr/bin/find "${VIBERMATE_R0_INPUT_ROOT}/dist" -type f -exec /bin/chmod 0644 {} +
-          test "$(/usr/bin/find "${VIBERMATE_R0_INPUT_ROOT}" -mindepth 1 -maxdepth 1 -print | /usr/bin/wc -l | /usr/bin/tr -d ' ')" -eq 6
+          test "$(/usr/bin/find "${VIBERMATE_R0_INPUT_ROOT}" -mindepth 1 -maxdepth 1 -print | /usr/bin/wc -l | /usr/bin/tr -d ' ')" -eq 8
           node trusted-tooling/tool/macos-release/create-r0-build-input-transfer.mjs
 
       - name: Upload only the closed source-traceability build-input and checksum (R0)

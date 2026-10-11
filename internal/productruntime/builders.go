@@ -20,6 +20,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/connectionevent"
 	"github.com/vibe-agi/vibermate/internal/connectionpolicy"
 	"github.com/vibe-agi/vibermate/internal/egressaudit"
+	"github.com/vibe-agi/vibermate/internal/egressnetwork"
 	"github.com/vibe-agi/vibermate/internal/egressprofile"
 	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/evidencearchive"
@@ -426,6 +427,7 @@ func buildMonitor(request monitorBuildRequest) (ownedComponent, error) {
 }
 
 type providerBuildRequest struct {
+	network        *egressnetwork.Builder
 	egressDefaults egressprofile.Resolver
 	coordinator    offlinehold.Coordinator
 	secrets        secretstore.Reader
@@ -471,6 +473,9 @@ func buildProvider(
 	)
 	if err != nil {
 		return nil, fmt.Errorf("build Codex OAuth AuthDriver: %w", err)
+	}
+	if request.network != nil {
+		return providertransport.NewProductionClientWithBuilder(providertransport.ClientOptions{Coordinator: request.coordinator, Authenticators: []providertransport.Authenticator{bearerAuthenticator, anthropicAuthenticator, codexOAuthAuthenticator}, InstanceIDs: request.instanceIDs, Audit: request.audit, RawEvidence: request.rawEvidence, EgressDefaults: request.egressDefaults}, request.network, providertransport.DefaultTransportTimeouts())
 	}
 	return providertransport.NewProductionClientWithAuthenticators(
 		request.coordinator,

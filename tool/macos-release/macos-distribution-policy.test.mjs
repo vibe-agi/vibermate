@@ -386,7 +386,7 @@ test("Apple notary log admits known bundle aliases and repeated scan tickets", (
 });
 
 test("notarization evidence counts every Universal code directory", () => {
-  assert.equal(macOSDistributionPolicy.notaryTicketedCodeDirectoryCount, 14);
+  assert.equal(macOSDistributionPolicy.notaryTicketedCodeDirectoryCount, 16);
 });
 
 test("privacy resource tickets accept null or omitted architecture", () => {
@@ -520,6 +520,7 @@ test("embedded build manifest is clean distribution provenance", () => {
       "flutter-macos-framework": "9".repeat(64),
       "url-launcher-framework": "d".repeat(64),
       vibermate: "a".repeat(64),
+      "vibermate-xray": "e".repeat(64),
       vibermated: "b".repeat(64),
     },
   };
@@ -654,6 +655,7 @@ test("signing evidence binds the hostile archive to both App ledgers", () => {
         "url-launcher-framework": "e".repeat(64),
         vibermate: "4".repeat(64),
         "vibermate-desktop": "5".repeat(64),
+        "vibermate-xray": "f".repeat(64),
         vibermated: "6".repeat(64),
       },
       sourceRevision: "7".repeat(40),
@@ -668,10 +670,12 @@ test("signing evidence binds the hostile archive to both App ledgers", () => {
         "url-launcher-framework": "2".repeat(64),
         vibermate: "a".repeat(64),
         "vibermate-desktop": "b".repeat(64),
+        "vibermate-xray": "d".repeat(64),
         vibermated: "c".repeat(64),
       },
       unsignedSidecarSHA256: {
         vibermate: "a".repeat(64),
+        "vibermate-xray": "d".repeat(64),
         vibermated: "c".repeat(64),
       },
     },
@@ -801,7 +805,7 @@ test("private evidence has a closed secret-free schema", () => {
       statusCode: 0,
       submissionID,
       submitSHA256: "a".repeat(64),
-      ticketedCodeDirectories: 14,
+      ticketedCodeDirectories: 16,
     },
     tools: {
       ...admittedAppleTools(),

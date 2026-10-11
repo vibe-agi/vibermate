@@ -172,6 +172,11 @@ async function fixture(t) {
   for (const [relativePath, payload] of Object.entries(configurationPayloads)) {
     await writeFixtureFile(join(repositoryRoot, relativePath), payload);
   }
+  for (const name of flutterDesktopBuildConfigurationNames) {
+    if (!(name in configurationPayloads) && name !== "ui/flutter_app/pubspec.yaml") {
+      await writeFixtureFile(join(repositoryRoot, name), `fixed input fixture ${name}\n`);
+    }
+  }
   runGit(repositoryRoot, "init", "-q");
   runGit(repositoryRoot, "config", "user.email", "r0-test@example.invalid");
   runGit(repositoryRoot, "config", "user.name", "R0 Test");
@@ -202,6 +207,18 @@ async function fixture(t) {
   const mainPayload = Buffer.from("universal desktop main\n");
   const launcherPayload = Buffer.from("universal launcher\n");
   const daemonPayload = Buffer.from("universal daemon\n");
+  const kernelPath = join(dirname(daemonPath), "vibermate-xray");
+  const kernelMaterialsPath = join(dirname(buildManifestPath), "vless-kernel");
+  const kernelPayload = Buffer.from("universal locked kernel\n");
+  await writeFixtureFile(kernelPath, kernelPayload, 0o755);
+  const lockPayload = await readFile(join(repositoryRoot, "tool/vless-kernel/kernel-lock.json"));
+  await writeFixtureFile(join(kernelMaterialsPath, "kernel-lock.json"), lockPayload);
+  await writeFixtureFile(join(kernelMaterialsPath, "package-manifest.json"), JSON.stringify({
+    schema: "vibermate.vless-kernel-package/v1", target: "darwin/universal",
+    binary: { name: "vibermate-xray", size: kernelPayload.length, SHA256: sha256(kernelPayload), digestStage: "pre-sign" },
+    upstream: {}, inputs: [], patchSHA256: "a".repeat(64), moduleSHA256: {},
+    materials: { "kernel-lock.json": { size: lockPayload.length, SHA256: sha256(lockPayload) } },
+  }));
   await writeFixtureFile(mainPath, mainPayload, 0o755);
   await writeFixtureFile(launcherPath, launcherPayload, 0o755);
   await writeFixtureFile(daemonPath, daemonPayload, 0o755);
@@ -270,6 +287,7 @@ async function fixture(t) {
       "flutter-macos-framework": sha256(flutterFrameworkPayload),
       "url-launcher-framework": sha256(urlLauncherPayload),
       vibermate: sha256(launcherPayload),
+      "vibermate-xray": sha256(kernelPayload),
       vibermated: sha256(daemonPayload),
     },
   };
@@ -287,6 +305,8 @@ async function fixture(t) {
     daemonPath,
     distPath,
     launcherPath,
+    kernelPath,
+    kernelMaterialsPath,
     mainPath,
     repositoryRoot,
     revision,
@@ -301,17 +321,33 @@ function preparationOptions(value, artifactRoot = value.artifactRoot) {
   };
 }
 
+test("R0 refuses missing or changed kernel inputs and changed immutable materials", async (t) => {
+  for (const mutation of ["missing", "binary", "material"]) {
+    await t.test(mutation, async (t) => {
+      const value = await fixture(t);
+      if (mutation === "missing") await rm(value.kernelPath);
+      if (mutation === "binary") await writeFile(value.kernelPath, "another kernel\n");
+      if (mutation === "material") await writeFile(join(value.kernelMaterialsPath, "kernel-lock.json"), "tampered lock\n");
+      await assert.rejects(() => prepareR0ReleaseEvidence(preparationOptions(value), preparationDependencies()));
+    });
+  }
+});
+
 async function externalInputRoot(value) {
   const root = join(value.base, "r0-input");
   await mkdir(root, { mode: 0o700 });
   for (const [source, destination, mode] of [
     [value.mainPath, "vibermate-desktop", 0o755],
     [value.launcherPath, "vibermate", 0o755],
+    [value.kernelPath, "vibermate-xray", 0o755],
     [value.daemonPath, "vibermated", 0o755],
     [value.buildManifestPath, "vibermate-build-manifest.json", 0o600],
     [join(value.repositoryRoot, "LICENSE"), "LICENSE", 0o644],
   ]) {
     await writeFixtureFile(join(root, destination), await readFile(source), mode);
+  }
+  for (const name of ["kernel-lock.json", "package-manifest.json"]) {
+    await writeFixtureFile(join(root, "vless-kernel", name), await readFile(join(value.kernelMaterialsPath, name)));
   }
   await writeFixtureFile(
     join(root, "dist/App.framework/App"),
@@ -399,7 +435,7 @@ test("source-traceability preparer (R0) stages a deterministic verifier-ready ev
     await artifactSnapshot(value.artifactRoot),
     await artifactSnapshot(secondRoot),
   );
-  assert.equal(universalChecks.length, 6);
+  assert.equal(universalChecks.length, 8);
 
   assert.deepEqual(
     (await readdir(join(value.artifactRoot, "unsigned-payload"))).sort(),
@@ -409,7 +445,9 @@ test("source-traceability preparer (R0) stages a deterministic verifier-ready ev
       "vibermate",
       "vibermate-build-manifest.json",
       "vibermate-desktop",
+      "vibermate-xray",
       "vibermated",
+      "vless-kernel",
     ],
   );
   assert.deepEqual(
@@ -543,9 +581,11 @@ test(
     const main = await readFile(join(universalRoot, "vibermate-desktop"));
     const launcher = await readFile(join(universalRoot, "vibermate"));
     const daemon = await readFile(join(universalRoot, "vibermated"));
+    const kernel = await readFile(join(universalRoot, "vibermate-xray"));
     await writeFixtureFile(value.mainPath, main, 0o755);
     await writeFixtureFile(value.launcherPath, launcher, 0o755);
     await writeFixtureFile(value.daemonPath, daemon, 0o755);
+    await writeFixtureFile(value.kernelPath, kernel, 0o755);
     await writeFixtureFile(
       value.buildManifestPath,
       `${JSON.stringify(
@@ -555,6 +595,7 @@ test(
             ...value.buildManifest.nestedCodeSHA256,
             vibermate: sha256(launcher),
             vibermated: sha256(daemon),
+            "vibermate-xray": sha256(kernel),
           },
         },
         null,
@@ -587,7 +628,9 @@ test("source-traceability preparer (R0) consumes only the closed external build-
       "vibermate",
       "vibermate-build-manifest.json",
       "vibermate-desktop",
+      "vibermate-xray",
       "vibermated",
+      "vless-kernel",
     ],
   );
 });

@@ -19,7 +19,7 @@ if [[ ! "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
   exit 64
 fi
 
-for command in cmp curl go jq sha256sum tar; do
+for command in cmp curl go jq node sha256sum tar; do
   if ! command -v "${command}" >/dev/null 2>&1; then
     echo "required command is unavailable: ${command}" >&2
     exit 69
@@ -66,6 +66,7 @@ for asset_arch in x86_64 arm64; do
   bundle_root="${verification_root}/${bundle_name}"
   if [[ ! -x "${bundle_root}/vibermate" ||
         ! -x "${bundle_root}/vibermated" ||
+        ! -x "${bundle_root}/vibermate-xray" ||
         ! -f "${bundle_root}/vibermate-web/index.html" ||
         ! -f "${bundle_root}/LICENSE" ||
         ! -f "${bundle_root}/THIRD_PARTY_LICENSES.md" ||
@@ -90,6 +91,11 @@ for asset_arch in x86_64 arm64; do
   fi
   go version -m "${bundle_root}/vibermate" >/dev/null
   go version -m "${bundle_root}/vibermated" >/dev/null
+  case "${asset_arch}" in
+    x86_64) kernel_target=linux/amd64 ;;
+    arm64) kernel_target=linux/arm64 ;;
+  esac
+  node "${repository_root}/tool/vless-kernel/verify_package.mjs" linux "${bundle_root}" "${kernel_target}"
 done
 
 case "$(uname -m)" in
@@ -103,6 +109,11 @@ esac
 
 host_root="${verification_root}/ViberMate_${version}_linux_${host_arch}"
 "${host_root}/vibermate" --help >/dev/null
+kernel_version="$("${host_root}/vibermate-xray" version)"
+if [[ "${kernel_version}" != *"d2758a0-vibermate-security1"* || "${kernel_version}" != *"go1.26.9"* ]]; then
+  echo "host-native kernel version differs from fixed source/compiler" >&2
+  exit 70
+fi
 status_file="${verification_root}/server-status.json"
 error_file="${verification_root}/server-error.log"
 data_directory="${verification_root}/server-data"

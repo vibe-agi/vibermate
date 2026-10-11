@@ -29,6 +29,7 @@ import { applicationTreeLedger } from "./verify-macos-signed-candidate.mjs";
 const executableNames = Object.freeze([
   "vibermate-desktop",
   "vibermate",
+  "vibermate-xray",
   "vibermated",
 ]);
 const topLevelNames = Object.freeze([
@@ -36,6 +37,7 @@ const topLevelNames = Object.freeze([
   "vibermate-build-manifest.json",
   "LICENSE",
   "dist",
+  "vless-kernel",
 ]);
 const maximumInputEntries = 8192;
 const maximumInputFileBytes = 1 * 1024 * 1024 * 1024;
@@ -283,8 +285,13 @@ function validateInputLedger(ledger) {
   if (dist?.type !== "directory" || dist.mode !== 0o755) {
     throw new Error("dist has an invalid type or mode");
   }
+  const materials = byPath.get("vless-kernel");
+  if (materials?.type !== "directory" || materials.mode !== 0o755 ||
+      byPath.get("vless-kernel/package-manifest.json")?.type !== "file") {
+    throw new Error("vless-kernel has an invalid material inventory");
+  }
   for (const entry of ledger) {
-    if (!entry.path.startsWith("dist/")) {
+    if (!entry.path.startsWith("dist/") && !entry.path.startsWith("vless-kernel/")) {
       continue;
     }
     if (

@@ -43,6 +43,7 @@ func TestEveryPurposeMapsToAHoldKind(t *testing.T) {
 		egressaudit.PurposeOriginalOrigin:         offlinehold.EgressOpaque,
 		egressaudit.PurposeAgentProbe:             offlinehold.EgressAuxiliary,
 		egressaudit.PurposeBlindTunnel:            offlinehold.EgressBlindTunnel,
+		egressaudit.PurposeDatagram:               offlinehold.EgressDatagram,
 		egressaudit.PurposeAuxiliaryLLM:           offlinehold.EgressAuxiliary,
 		egressaudit.PurposeLanguageTransform:      offlinehold.EgressAuxiliary,
 		egressaudit.PurposePluginCatalogSync:      offlinehold.EgressPlugin,

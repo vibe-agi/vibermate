@@ -239,6 +239,7 @@ func (gate *Gate) Acquire(
 	gate.heldBytes += request.SizeBytes
 	gate.requestIDs[request.RequestID] = struct{}{}
 	gate.mutatedLocked()
+	gate.releaseQueuedLocked()
 	gate.mu.Unlock()
 
 	timer := time.NewTimer(gate.config.MaxHoldDuration)
@@ -755,7 +756,10 @@ func validateProbeTarget(target ProbeTarget) error {
 	if !validEgressKind(target.Kind) {
 		return ErrInvalidRequest
 	}
-	if target.Kind == EgressBlindTunnel && target.Transport == ProbeTransportTCP {
+	if target.Kind == EgressDatagram && target.Transport != ProbeTransportUDPSetup {
+		return ErrInvalidRequest
+	}
+	if (target.Kind == EgressBlindTunnel && target.Transport == ProbeTransportTCP) || (target.Kind == EgressDatagram && target.Transport == ProbeTransportUDPSetup) {
 		if target.TargetAccess != egressnetwork.TargetAccessPublicOnly && target.TargetAccess != egressnetwork.TargetAccessOwnerConfigured {
 			return ErrInvalidRequest
 		}
@@ -763,6 +767,10 @@ func validateProbeTarget(target ProbeTarget) error {
 		return ErrInvalidRequest
 	}
 	switch target.Transport {
+	case ProbeTransportUDPSetup:
+		if target.Kind != EgressDatagram || target.TLSServerName != "" || target.HTTPAuthority != "" || target.PlanRevision != 0 || target.PlanDigest != "" {
+			return ErrInvalidRequest
+		}
 	case ProbeTransportStrictTLS:
 		if err := validateOpaqueIdentity(
 			"probe TLS server name",
@@ -792,6 +800,9 @@ func validateProbeTarget(target ProbeTarget) error {
 		{label: "probe network origin", value: target.NetworkOrigin},
 		{label: "probe HTTP authority", value: target.HTTPAuthority},
 	} {
+		if target.Transport == ProbeTransportUDPSetup && field.label == "probe HTTP authority" {
+			continue
+		}
 		if err := validateOpaqueIdentity(field.label, field.value); err != nil {
 			return err
 		}
@@ -822,6 +833,9 @@ func probeTargetSortKey(target ProbeTarget) string {
 		target.PlanDigest,
 		string(target.EgressPolicy.Proxy.Kind),
 		target.EgressPolicy.Proxy.Endpoint,
+		target.EgressPolicy.Proxy.CredentialRef,
+		fmt.Sprintf("%020d", target.EgressPolicy.Proxy.CredentialRevision),
+		string(target.EgressPolicy.DirectDomains),
 		string(target.EgressPolicy.Resolver.Kind),
 		target.EgressPolicy.Resolver.DoHURL,
 		string(target.EgressPolicy.Resolver.Transport),
@@ -847,6 +861,7 @@ func validEgressKind(kind EgressKind) bool {
 		EgressAuxiliary,
 		EgressPlugin,
 		EgressUpdate,
+		EgressDatagram,
 		EgressBlindTunnel:
 		return true
 	default:

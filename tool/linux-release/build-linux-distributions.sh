@@ -47,6 +47,7 @@ cleanup() {
 trap cleanup EXIT
 
 archives=()
+kernel_go="$(python3 -c 'import os, shutil; print(os.path.realpath(shutil.which("go") or ""))')"
 for target in amd64:x86_64 arm64:arm64; do
   go_arch="${target%%:*}"
   asset_arch="${target#*:}"
@@ -58,6 +59,16 @@ for target in amd64:x86_64 arm64:arm64; do
     exit 73
   fi
   mkdir -p "${bundle_root}"
+  kernel_target="linux/${go_arch}"
+  kernel_build="${build_root}/kernel-${go_arch}"
+  kernel_package="${build_root}/package-${go_arch}"
+  python3 "${repository_root}/tool/vless-kernel/build_kernel.py" \
+    --go "${kernel_go}" --target "${kernel_target}" --output "${kernel_build}"
+  python3 "${repository_root}/tool/vless-kernel/package_kernel.py" \
+    --go "${kernel_go}" --target "${kernel_target}" --input "${kernel_build}" --output "${kernel_package}"
+  install -m 0755 "${kernel_package}/vibermate-xray" "${bundle_root}/vibermate-xray"
+  cp -R "${kernel_package}/vless-kernel" "${bundle_root}/vless-kernel"
+  node "${repository_root}/tool/vless-kernel/verify_package.mjs" linux "${bundle_root}" "${kernel_target}"
   (
     cd "${repository_root}"
     CGO_ENABLED=0 GOOS=linux GOARCH="${go_arch}" \
@@ -76,6 +87,7 @@ for target in amd64:x86_64 arm64:arm64; do
   cp "${repository_root}/THIRD_PARTY_LICENSES.md" "${bundle_root}/THIRD_PARTY_LICENSES.md"
   cp "${repository_root}/LICENSE" "${bundle_root}/vibermate-web/LICENSE"
   chmod 0755 "${bundle_root}/vibermate" "${bundle_root}/vibermated"
+  node "${repository_root}/tool/vless-kernel/verify_package.mjs" linux "${bundle_root}" "${kernel_target}"
   tar \
     --sort=name \
     --mtime="@${source_epoch}" \

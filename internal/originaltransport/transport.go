@@ -24,6 +24,11 @@ type strictTransport struct {
 // origin and native consumers, each retaining its own admission and audit.
 func NewProductionTransport() (Transport, error) { return newProductionStrictTransport() }
 
+// NewProductionTransportWithBuilder accepts only trusted Runtime composition.
+func NewProductionTransportWithBuilder(builder *egressnetwork.Builder) (Transport, error) {
+	return newStrictTransport(builder)
+}
+
 func newProductionStrictTransport() (*strictTransport, error) {
 	dialers, err := egressnetwork.NewBuilder(egressnetwork.BuilderOptions{
 		BaseDialer: &net.Dialer{

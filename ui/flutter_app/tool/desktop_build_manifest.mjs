@@ -26,10 +26,19 @@ export const flutterDesktopBuildManifestSchema =
 export const flutterDesktopBuildConfigurationNames = Object.freeze([
   "go.mod",
   "go.sum",
+  "tool/vless-kernel/kernel-lock.json",
+  "tool/vless-kernel/dependency.patch",
+  "tool/vless-kernel/upstream.commit",
+  "tool/vless-kernel/LICENSE.upstream",
+  "tool/vless-kernel/build_kernel.py",
+  "tool/vless-kernel/package_kernel.py",
+  "tool/vless-kernel/verify_package.mjs",
   "ui/flutter_app/.metadata",
   "ui/flutter_app/pubspec.yaml",
   "ui/flutter_app/pubspec.lock",
   "ui/flutter_app/tool/flutter-sdk.env",
+  "ui/flutter_app/macos/Podfile",
+  "ui/flutter_app/macos/Podfile.lock",
   "ui/flutter_app/macos/Runner.xcodeproj/project.pbxproj",
   "ui/flutter_app/macos/Runner/Configs/AppInfo.xcconfig",
   "ui/flutter_app/macos/Runner/Configs/Release.xcconfig",
@@ -47,6 +56,7 @@ export const flutterDesktopNestedCode = Object.freeze({
   "url-launcher-framework":
     "Contents/Frameworks/url_launcher_macos.framework/Versions/A/url_launcher_macos",
   vibermate: "Contents/MacOS/vibermate",
+  "vibermate-xray": "Contents/MacOS/vibermate-xray",
   vibermated: "Contents/MacOS/vibermated",
 });
 

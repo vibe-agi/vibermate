@@ -7,8 +7,10 @@ import '../../core/api/control_models.dart';
 import '../../core/design/viber_theme.dart';
 import '../../core/design/workbench_widgets.dart';
 import '../../core/i18n/app_copy.dart';
+import 'vless_tls_fields.dart';
 
 typedef EgressProfileLoader = Future<EgressProfileCatalog> Function();
+typedef EgressDefaultLoader = Future<EgressDefaultSetting> Function();
 
 /// Selects one exact, published network-exit revision for a protocol path.
 final class EgressProfileButton extends StatelessWidget {
@@ -18,6 +20,8 @@ final class EgressProfileButton extends StatelessWidget {
     required this.enabled,
     required this.loadProfiles,
     required this.onChanged,
+    this.loadDefault,
+    required this.selectionScope,
     super.key,
   });
 
@@ -25,7 +29,9 @@ final class EgressProfileButton extends StatelessWidget {
   final AppCopy copy;
   final bool enabled;
   final EgressProfileLoader loadProfiles;
-  final ValueChanged<EgressProfileRevision> onChanged;
+  final EgressDefaultLoader? loadDefault;
+  final Object selectionScope;
+  final ValueChanged<EgressChoice> onChanged;
 
   @override
   Widget build(BuildContext context) => Container(
@@ -37,22 +43,17 @@ final class EgressProfileButton extends StatelessWidget {
       dismissHelpLabel: copy('common.dismiss'),
       child: SizedBox(
         width: double.infinity,
-        height: ViberMetrics.controlHeight,
         child: OutlinedButton.icon(
           key: Key('environment-egress-${plan.id}'),
           onPressed: enabled ? () => unawaited(_edit(context)) : null,
           icon: const Icon(Icons.alt_route_rounded, size: 14),
           label: Align(
             alignment: Alignment.centerLeft,
-            child: Text(
-              egressProfileSummary(copy, plan.egressProfile),
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-            ),
+            child: Text(egressProfileSummary(copy, plan.egressProfile)),
           ),
           style: OutlinedButton.styleFrom(
             alignment: Alignment.centerLeft,
-            padding: const EdgeInsets.symmetric(horizontal: 9),
+            padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 8),
           ),
         ),
       ),
@@ -68,8 +69,23 @@ final class EgressProfileButton extends StatelessWidget {
           : null,
       copy: copy,
       loadProfiles: loadProfiles,
+      allowInheritance: true,
+      loadDefault: loadDefault,
+      flowInheritance: true,
     );
-    if (selection?.profile case final profile?) onChanged(profile);
+    if (!context.mounted) return;
+    final current = context.widget;
+    if (current is! EgressProfileButton ||
+        !current.enabled ||
+        !identical(current.selectionScope, selectionScope) ||
+        current.plan.id != plan.id ||
+        current.plan.revision != plan.revision ||
+        current.plan.egressProfile != plan.egressProfile) {
+      return;
+    }
+    if (selection != null) {
+      current.onChanged(selection.profile ?? EgressChoice.inherit);
+    }
   }
 }
 
@@ -81,6 +97,8 @@ Future<({EgressProfileRevision? profile})?> showEgressProfileSelection({
   required AppCopy copy,
   required EgressProfileLoader loadProfiles,
   bool allowInheritance = false,
+  EgressDefaultLoader? loadDefault,
+  bool flowInheritance = false,
 }) => showDialog<({EgressProfileRevision? profile})>(
   context: context,
   builder: (_) => _EgressProfileSelectionDialog(
@@ -89,24 +107,29 @@ Future<({EgressProfileRevision? profile})?> showEgressProfileSelection({
     copy: copy,
     loadProfiles: loadProfiles,
     allowInheritance: allowInheritance,
+    loadDefault: loadDefault,
+    flowInheritance: flowInheritance,
   ),
 );
 
 String egressProfileSummary(AppCopy copy, EgressChoice choice) {
   if (choice is EgressInheritance) {
-    return copy('environment.egress.determinedAtExecution');
+    return copy('environment.egress.use_global');
   }
   final profile = choice as EgressProfileRevision;
   if (profile.id == EgressProfileRevision.direct.id) {
     return egressPolicySummary(copy, profile.policy);
   }
-  return '${profile.displayName} · r${profile.revision}';
+  return profile.policy.proxy.isVless
+      ? '${profile.displayName} · VLESS'
+      : '${profile.displayName} · r${profile.revision}';
 }
 
 String egressPolicySummary(AppCopy copy, TrafficEgressPolicy policy) {
   final proxy = switch (policy.proxy.kind) {
     'direct' => copy('environment.egress.proxy.direct'),
     'socks5' => 'SOCKS5 · ${policy.proxy.endpoint}',
+    'vless' => 'VLESS',
     _ => policy.proxy.kind,
   };
   final resolver = switch (policy.resolver.kind) {
@@ -127,6 +150,8 @@ final class _EgressProfileSelectionDialog extends StatefulWidget {
     required this.copy,
     required this.loadProfiles,
     required this.allowInheritance,
+    required this.loadDefault,
+    required this.flowInheritance,
   }) : assert(initial != null || allowInheritance);
 
   final String planId;
@@ -134,6 +159,8 @@ final class _EgressProfileSelectionDialog extends StatefulWidget {
   final AppCopy copy;
   final EgressProfileLoader loadProfiles;
   final bool allowInheritance;
+  final EgressDefaultLoader? loadDefault;
+  final bool flowInheritance;
 
   @override
   State<_EgressProfileSelectionDialog> createState() =>
@@ -146,6 +173,8 @@ final class _EgressProfileSelectionDialogState
   late EgressProfileRevision? _selected = widget.initial;
   bool _loading = true;
   bool _failed = false;
+  EgressDefaultSetting? _default;
+  bool _defaultLoading = false;
 
   AppCopy get copy => widget.copy;
 
@@ -153,6 +182,24 @@ final class _EgressProfileSelectionDialogState
   void initState() {
     super.initState();
     unawaited(_load());
+    unawaited(_loadDefault());
+  }
+
+  Future<void> _loadDefault() async {
+    final loader = widget.loadDefault;
+    if (loader == null) return;
+    setState(() => _defaultLoading = true);
+    EgressDefaultSetting? observed;
+    try {
+      observed = await loader();
+    } on Object {
+      observed = null;
+    }
+    if (!mounted) return;
+    setState(() {
+      _default = observed;
+      _defaultLoading = false;
+    });
   }
 
   Future<void> _load() async {
@@ -215,55 +262,85 @@ final class _EgressProfileSelectionDialogState
                 ),
               ],
             )
-          : ConstrainedBox(
-              constraints: const BoxConstraints(maxHeight: 420),
-              child: ListView.separated(
-                shrinkWrap: true,
-                itemCount: _profiles.length + (widget.allowInheritance ? 1 : 0),
-                separatorBuilder: (_, _) => const Divider(height: 1),
-                itemBuilder: (context, index) {
-                  final profile = widget.allowInheritance && index == 0
-                      ? null
-                      : _profiles[index - (widget.allowInheritance ? 1 : 0)];
-                  final selected =
-                      profile?.id == _selected?.id &&
-                      profile?.revision == _selected?.revision;
-                  return ListTile(
-                    key: Key(
-                      profile == null
-                          ? 'account-egress-inherit'
-                          : 'environment-egress-profile-${profile.id}-${profile.revision}',
+          : Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                if (widget.loadDefault != null)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 8),
+                    child: Text(
+                      key: Key(
+                        _default == null
+                            ? 'egress-selection-default-unavailable'
+                            : 'egress-selection-default-preview',
+                      ),
+                      _defaultLoading
+                          ? copy('common.loading')
+                          : _default == null
+                          ? copy('settings.egress.default_unavailable')
+                          : '${copy('settings.egress.current')}: ${egressProfileSummary(copy, _default!.effectiveProfile)}',
                     ),
-                    onTap: () => setState(() => _selected = profile),
-                    leading: Icon(
-                      selected
-                          ? Icons.radio_button_checked
-                          : Icons.radio_button_unchecked,
-                      size: 18,
-                      color: selected
-                          ? context.viberColors.route
-                          : context.viberColors.textFaint,
-                    ),
-                    title: Text(
-                      profile == null
-                          ? copy('provider_accounts.egress.inherit')
-                          : egressProfileSummary(copy, profile),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                    subtitle: profile == null
-                        ? Text(copy('provider_accounts.egress.inherit.detail'))
-                        : profile.id == EgressProfileRevision.direct.id
-                        ? null
-                        : Text(
-                            egressPolicySummary(copy, profile.policy),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
+                  ),
+                Flexible(
+                  child: ConstrainedBox(
+                    constraints: const BoxConstraints(maxHeight: 420),
+                    child: ListView.separated(
+                      shrinkWrap: true,
+                      itemCount:
+                          _profiles.length + (widget.allowInheritance ? 1 : 0),
+                      separatorBuilder: (_, _) => const Divider(height: 1),
+                      itemBuilder: (context, index) {
+                        final profile = widget.allowInheritance && index == 0
+                            ? null
+                            : _profiles[index -
+                                  (widget.allowInheritance ? 1 : 0)];
+                        final selected =
+                            profile?.id == _selected?.id &&
+                            profile?.revision == _selected?.revision;
+                        return ListTile(
+                          key: Key(
+                            profile == null
+                                ? 'account-egress-inherit'
+                                : 'environment-egress-profile-${profile.id}-${profile.revision}',
                           ),
-                    contentPadding: EdgeInsets.zero,
-                  );
-                },
-              ),
+                          onTap: () => setState(() => _selected = profile),
+                          leading: Icon(
+                            selected
+                                ? Icons.radio_button_checked
+                                : Icons.radio_button_unchecked,
+                            size: 18,
+                            color: selected
+                                ? context.viberColors.route
+                                : context.viberColors.textFaint,
+                          ),
+                          title: Text(
+                            profile == null
+                                ? copy(
+                                    widget.flowInheritance
+                                        ? 'environment.egress.use_global'
+                                        : 'provider_accounts.egress.inherit',
+                                  )
+                                : egressProfileSummary(copy, profile),
+                          ),
+                          subtitle: profile == null
+                              ? Text(
+                                  copy(
+                                    widget.flowInheritance
+                                        ? 'settings.egress.default_detail'
+                                        : 'provider_accounts.egress.inherit.detail',
+                                  ),
+                                )
+                              : profile.id == EgressProfileRevision.direct.id
+                              ? null
+                              : Text(egressPolicySummary(copy, profile.policy)),
+                          contentPadding: EdgeInsets.zero,
+                        );
+                      },
+                    ),
+                  ),
+                ),
+              ],
             ),
     ),
     actions: [
@@ -282,22 +359,59 @@ final class _EgressProfileSelectionDialogState
   );
 }
 
-final class EgressProfileDraft {
+sealed class EgressProfileEditIntent {
+  const EgressProfileEditIntent();
+  String get displayName;
+}
+
+final class EgressProfileDraft extends EgressProfileEditIntent {
   const EgressProfileDraft({required this.displayName, required this.policy});
 
+  @override
   final String displayName;
   final TrafficEgressPolicy policy;
 }
 
-Future<EgressProfileDraft?> showEgressProfileEditor({
+final class VlessEgressProfileDraft extends EgressProfileEditIntent {
+  const VlessEgressProfileDraft({
+    required this.displayName,
+    required this.import,
+  });
+  @override
+  final String displayName;
+  final VlessImportIntent import;
+}
+
+/// A dialog-only private mutation intent. It has no public serialization.
+final class VlessImportIntent {
+  const VlessImportIntent({
+    required this.uri,
+    required this.resolver,
+    required this.directDomains,
+    this.tls,
+  });
+  final String uri;
+  final TrafficResolverPolicy resolver;
+  final String directDomains;
+  final VlessTLSImportOptions? tls;
+
+  @override
+  String toString() => 'VlessImportIntent(redacted)';
+}
+
+Future<EgressProfileEditIntent?> showEgressProfileEditor({
   required BuildContext context,
   required AppCopy copy,
   EgressProfileRevision? initial,
-}) => showDialog<EgressProfileDraft>(
+  Future<VlessProfileDescription> Function()? loadVlessDescription,
+}) => showDialog<EgressProfileEditIntent>(
   context: context,
   barrierDismissible: true,
-  builder: (context) =>
-      _EgressProfileEditorDialog(copy: copy, initial: initial),
+  builder: (context) => _EgressProfileEditorDialog(
+    copy: copy,
+    initial: initial,
+    loadVlessDescription: loadVlessDescription,
+  ),
 );
 
 final class _DoHPreset {
@@ -328,10 +442,15 @@ const _doHPresets = [
 ];
 
 final class _EgressProfileEditorDialog extends StatefulWidget {
-  const _EgressProfileEditorDialog({required this.copy, this.initial});
+  const _EgressProfileEditorDialog({
+    required this.copy,
+    this.initial,
+    this.loadVlessDescription,
+  });
 
   final AppCopy copy;
   final EgressProfileRevision? initial;
+  final Future<VlessProfileDescription> Function()? loadVlessDescription;
 
   @override
   State<_EgressProfileEditorDialog> createState() =>
@@ -344,11 +463,70 @@ final class _EgressProfileEditorDialogState
   late final TextEditingController _displayName;
   late final TextEditingController _proxyEndpoint;
   late final TextEditingController _dohUrl;
+  late final TextEditingController _nodeLink;
+  late final TextEditingController _directDomains;
   late String _proxyKind;
   late String _resolverKind;
   late String _resolverTransport;
   late String _dohPreset;
   String? _error;
+  VlessProfileDescription? _description;
+  bool _descriptionLoading = false;
+  bool _descriptionFailed = false;
+  int _descriptionGeneration = 0;
+  int _nodeContext = 0;
+  VlessTLSImportOptions? _tls;
+  bool _tlsValid = true;
+
+  bool get _usesSavedNode =>
+      _nodeLink.text.trim().isEmpty &&
+      widget.initial?.policy.proxy.isVless == true;
+  bool get _showsTLS {
+    if (_proxyKind != 'vless') return false;
+    if (_usesSavedNode) return _description?.security == 'tls';
+    try {
+      final uri = Uri.tryParse(_nodeLink.text.trim());
+      return uri?.scheme == 'vless' &&
+          uri?.queryParametersAll['security']?.singleOrNull == 'tls';
+    } on FormatException {
+      return false;
+    }
+  }
+
+  bool get _savedStateUnavailable =>
+      widget.initial?.policy.proxy.isVless == true &&
+      (_descriptionLoading || _descriptionFailed);
+
+  Future<void> _loadDescription() async {
+    final generation = ++_descriptionGeneration;
+    setState(() {
+      _descriptionLoading = true;
+      _descriptionFailed = false;
+    });
+    try {
+      final loader = widget.loadVlessDescription;
+      if (loader == null) throw UnsupportedError('Saved settings unavailable');
+      final description = await loader();
+      if (!mounted || generation != _descriptionGeneration) return;
+      setState(() {
+        _description = description;
+        _descriptionLoading = false;
+        if (_usesSavedNode) _clearTLS();
+      });
+    } on Object {
+      if (!mounted || generation != _descriptionGeneration) return;
+      setState(() {
+        _descriptionLoading = false;
+        _descriptionFailed = true;
+      });
+    }
+  }
+
+  void _clearTLS() {
+    _nodeContext++;
+    _tls = null;
+    _tlsValid = true;
+  }
 
   AppCopy get copy => widget.copy;
 
@@ -359,17 +537,25 @@ final class _EgressProfileEditorDialogState
     _displayName = TextEditingController(text: widget.initial?.displayName);
     _proxyKind = policy.proxy.kind;
     _proxyEndpoint = TextEditingController(text: policy.proxy.endpoint);
+    _nodeLink = TextEditingController();
+    _directDomains = TextEditingController(text: policy.directDomains);
     _resolverKind = policy.resolver.kind;
     _resolverTransport = policy.resolver.transport;
     _dohUrl = TextEditingController(text: policy.resolver.dohUrl);
     _dohPreset = _presetFor(_dohUrl.text);
+    if (policy.proxy.isVless) unawaited(_loadDescription());
   }
 
   @override
   void dispose() {
+    _descriptionGeneration++;
+    _tls = null;
     _displayName.dispose();
     _proxyEndpoint.dispose();
     _dohUrl.dispose();
+    _nodeLink.clear();
+    _nodeLink.dispose();
+    _directDomains.dispose();
     super.dispose();
   }
 
@@ -422,7 +608,7 @@ final class _EgressProfileEditorDialogState
                       initialValue: _proxyKind,
                       isExpanded: true,
                       items: [
-                        for (final kind in const ['direct', 'socks5'])
+                        for (final kind in const ['direct', 'socks5', 'vless'])
                           DropdownMenuItem(
                             key: Key('egress-profile-proxy-$kind'),
                             value: kind,
@@ -453,6 +639,72 @@ final class _EgressProfileEditorDialogState
                       ),
                     ),
                   ],
+                  if (_proxyKind == 'vless') ...[
+                    const SizedBox(height: 9),
+                    CompactLabeledControl(
+                      label: copy('environment.egress.vless.link'),
+                      detail: copy(
+                        widget.initial?.policy.proxy.isVless == true
+                            ? 'environment.egress.vless.saved'
+                            : 'environment.egress.vless.supported',
+                      ),
+                      child: TextFormField(
+                        key: const Key('egress-profile-vless-uri'),
+                        controller: _nodeLink,
+                        obscureText: true,
+                        autocorrect: false,
+                        enableSuggestions: false,
+                        onChanged: (_) => setState(_clearTLS),
+                        validator: (value) =>
+                            (value == null || value.trim().isEmpty) &&
+                                widget.initial?.policy.proxy.isVless != true
+                            ? copy('environment.egress.validation.vless')
+                            : null,
+                      ),
+                    ),
+                    if (_descriptionLoading)
+                      CompactLoadingMessage(label: copy('common.loading')),
+                    if (_descriptionFailed) ...[
+                      InlineNotice(
+                        message: copy('environment.egress.tls.load_failed'),
+                        error: true,
+                      ),
+                      OutlinedButton.icon(
+                        key: const Key('vless-settings-retry'),
+                        onPressed: _loadDescription,
+                        icon: const Icon(Icons.refresh, size: 15),
+                        label: Text(copy('common.retry')),
+                      ),
+                    ],
+                    if (_showsTLS) ...[
+                      const SizedBox(height: 9),
+                      VlessTLSFields(
+                        key: ValueKey(_nodeContext),
+                        copy: copy,
+                        savedMode: _usesSavedNode
+                            ? _description?.trustMode
+                            : null,
+                        onChanged: (tls, valid) => setState(() {
+                          _tls = tls;
+                          _tlsValid = valid;
+                        }),
+                      ),
+                    ],
+                  ],
+                  const SizedBox(height: 9),
+                  CompactLabeledControl(
+                    label: copy('environment.egress.direct_domains'),
+                    help: copy('environment.egress.direct_domains.detail'),
+                    dismissHelpLabel: copy('common.dismiss'),
+                    child: TextFormField(
+                      key: const Key('egress-profile-direct-domains'),
+                      controller: _directDomains,
+                      minLines: 2,
+                      maxLines: 4,
+                      autocorrect: false,
+                      enableSuggestions: false,
+                    ),
+                  ),
                   const SizedBox(height: 9),
                   CompactLabeledControl(
                     label: copy('environment.egress.resolver.label'),
@@ -518,7 +770,7 @@ final class _EgressProfileEditorDialogState
                         label: copy('environment.egress.doh.endpoint'),
                         child: _ReadOnlyValue(text: _dohUrl.text),
                       ),
-                    if (_proxyKind == 'socks5') ...[
+                    if (_proxyKind != 'direct') ...[
                       const SizedBox(height: 9),
                       CompactLabeledControl(
                         label: copy('environment.egress.doh.transport'),
@@ -537,7 +789,10 @@ final class _EgressProfileEditorDialogState
                                 value: transport,
                                 child: Text(
                                   copy(
-                                    'environment.egress.doh.transport.$transport',
+                                    transport == 'proxy' &&
+                                            _proxyKind == 'vless'
+                                        ? 'environment.egress.doh.transport.vless'
+                                        : 'environment.egress.doh.transport.$transport',
                                   ),
                                 ),
                               ),
@@ -566,15 +821,17 @@ final class _EgressProfileEditorDialogState
         ),
         FilledButton(
           key: const Key('egress-profile-publish'),
-          onPressed: _save,
-          child: Text(copy('settings.egress.publish')),
+          onPressed: _savedStateUnavailable || !_tlsValid ? null : _save,
+          child: Text(copy('common.save')),
         ),
       ],
     );
   }
 
   void _setProxy(String value) => setState(() {
+    _clearTLS();
     _proxyKind = value;
+    if (value != 'vless') _nodeLink.clear();
     _error = null;
     if (value == 'direct') _resolverTransport = 'direct';
   });
@@ -614,7 +871,7 @@ final class _EgressProfileEditorDialogState
       TrafficResolverPolicy.fromJson({
         'kind': 'doh',
         'dohUrl': value?.trim() ?? '',
-        'transport': _proxyKind == 'socks5' ? _resolverTransport : 'direct',
+        'transport': _proxyKind != 'direct' ? _resolverTransport : 'direct',
       }, 'resolver');
       return null;
     } on ControlContractException {
@@ -623,21 +880,44 @@ final class _EgressProfileEditorDialogState
   }
 
   void _save() {
+    if (_savedStateUnavailable || !_tlsValid) return;
     setState(() => _error = null);
     if (!_formKey.currentState!.validate()) return;
     try {
+      final resolver = TrafficResolverPolicy.fromJson({
+        'kind': _resolverKind,
+        'transport': _resolverKind == 'doh' && _proxyKind != 'direct'
+            ? _resolverTransport
+            : 'direct',
+        if (_resolverKind == 'doh') 'dohUrl': _dohUrl.text.trim(),
+      }, 'resolver');
+      if (_proxyKind == 'vless' &&
+          (_nodeLink.text.trim().isNotEmpty || _tls != null)) {
+        final intent = VlessImportIntent(
+          uri: _nodeLink.text.trim(),
+          resolver: resolver,
+          directDomains: _directDomains.text,
+          tls: _showsTLS ? _tls : null,
+        );
+        _nodeLink.clear();
+        Navigator.of(context).pop(
+          VlessEgressProfileDraft(
+            displayName: _displayName.text.trim(),
+            import: intent,
+          ),
+        );
+        return;
+      }
       final policy = TrafficEgressPolicy.fromJson({
-        'proxy': {
-          'kind': _proxyKind,
-          if (_proxyKind == 'socks5') 'endpoint': _proxyEndpoint.text.trim(),
-        },
-        'resolver': {
-          'kind': _resolverKind,
-          'transport': _resolverKind == 'doh' && _proxyKind == 'socks5'
-              ? _resolverTransport
-              : 'direct',
-          if (_resolverKind == 'doh') 'dohUrl': _dohUrl.text.trim(),
-        },
+        'proxy': _proxyKind == 'vless'
+            ? widget.initial!.policy.proxy.toJson()
+            : {
+                'kind': _proxyKind,
+                if (_proxyKind == 'socks5')
+                  'endpoint': _proxyEndpoint.text.trim(),
+              },
+        'resolver': resolver.toJson(),
+        'directDomains': _directDomains.text,
       }, 'egressProfile.policy');
       Navigator.of(context).pop(
         EgressProfileDraft(

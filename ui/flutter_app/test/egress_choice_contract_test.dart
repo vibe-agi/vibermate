@@ -1,9 +1,9 @@
 import 'dart:convert';
-import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:vibermate_app/core/api/control_models.dart';
 import 'package:vibermate_app/features/workbench/environment_editing.dart';
+import 'egress_legacy_fixture.dart';
 
 void main() {
   test(
@@ -62,31 +62,132 @@ void main() {
     },
   );
   test('Authored inherit roundtrips without becoming explicit Direct', () {
-    final legacy =
-        jsonDecode(
-              File(
-                '../../internal/environment/testdata/egress_legacy_938_direct.json',
-              ).readAsStringSync(),
-            )
-            as Map<String, dynamic>;
-    final wire =
-        legacy['clientEndpoints'][0]['protocolPlans'][0]
-            as Map<String, dynamic>;
-    // The owner-control DTO projects optional internal nil slices as arrays.
-    wire['pluginBindings'] = <Object?>[];
-    wire['transforms'] = <Object?>[];
-    wire['destination'] = <String, Object?>{'kind': 'original'};
+    final wire = _modelWire(_freshLegacy());
     wire['egressProfile'] = <String, Object?>{'mode': 'inherit'};
+    expect(EgressChoice.fromJson(wire['egressProfile'], 'choice').toJson(), {
+      'mode': 'inherit',
+    });
     final parsed = EnvironmentProtocolPlan.fromJson(wire, 'plan');
     expect(parsed.toJson()['egressProfile'], <String, Object?>{
       'mode': 'inherit',
     });
-    final nativeWire =
-        legacy['clientToolAccess']['route'] as Map<String, dynamic>;
+    expect(
+      EnvironmentProtocolPlan.fromJson(
+        parsed.toJson(),
+        'plan',
+      ).egressProfile.toJson(),
+      {'mode': 'inherit'},
+    );
+    final nativeWire = _nativeWire(_freshLegacy());
     nativeWire['egressProfile'] = <String, Object?>{'mode': 'inherit'};
     final native = EnvironmentClientToolRoute.fromJson(nativeWire, 'route');
     expect(native.toJson()['egressProfile'], <String, Object?>{
       'mode': 'inherit',
     });
+    expect(
+      EnvironmentClientToolRoute.fromJson(
+        native.toJson(),
+        'route',
+      ).egressProfile.toJson(),
+      {'mode': 'inherit'},
+    );
+    // Mutation in either projection never changes the shared input or another
+    // fresh projection's explicit authored exit.
+    _expectDirect(
+      EgressChoice.fromJson(
+        _modelWire(_freshLegacy())['egressProfile'],
+        'fresh',
+      ),
+    );
+    _expectDirect(
+      EgressChoice.fromJson(
+        _nativeWire(_freshLegacy())['egressProfile'],
+        'fresh',
+      ),
+    );
   });
+  test(
+    'Legacy explicit Direct stays explicit in Choice and both model plans and native route',
+    () {
+      for (var index = 0; index < 2; index++) {
+        final wire = _modelWire(_freshLegacy(), index);
+        final choice = EgressChoice.fromJson(wire['egressProfile'], 'choice');
+        _expectDirect(choice);
+        _expectDirect(EgressChoice.fromJson(choice.toJson(), 'choice'));
+        final plan = EnvironmentProtocolPlan.fromJson(wire, 'plan');
+        _expectDirect(plan.egressProfile);
+        _expectDirect(
+          EnvironmentProtocolPlan.fromJson(plan.toJson(), 'plan').egressProfile,
+        );
+      }
+      final route = EnvironmentClientToolRoute.fromJson(
+        _nativeWire(_freshLegacy()),
+        'route',
+      );
+      _expectDirect(route.egressProfile);
+      _expectDirect(
+        EnvironmentClientToolRoute.fromJson(
+          route.toJson(),
+          'route',
+        ).egressProfile,
+      );
+    },
+  );
+  for (final shape in ['empty', 'null', 'mixed']) {
+    test('Choice and actual model/native DTO reject $shape authored shape', () {
+      final Object? invalid = switch (shape) {
+        'empty' => <String, Object?>{},
+        'null' => null,
+        _ => <String, Object?>{
+          ..._modelWire(_freshLegacy())['egressProfile']
+              as Map<String, dynamic>,
+          'mode': 'inherit',
+        },
+      };
+      expect(
+        () => EgressChoice.fromJson(invalid, 'choice'),
+        throwsA(isA<ControlContractException>()),
+      );
+      final model = _modelWire(_freshLegacy())..['egressProfile'] = invalid;
+      final native = _nativeWire(_freshLegacy())..['egressProfile'] = invalid;
+      expect(
+        () => EnvironmentProtocolPlan.fromJson(model, 'plan'),
+        throwsA(isA<ControlContractException>()),
+      );
+      expect(
+        () => EnvironmentClientToolRoute.fromJson(native, 'route'),
+        throwsA(isA<ControlContractException>()),
+      );
+    });
+  }
+}
+
+Map<String, dynamic> _freshLegacy() =>
+    jsonDecode(egressLegacyDirectJSON) as Map<String, dynamic>;
+
+Map<String, dynamic> _modelWire(Map<String, dynamic> legacy, [int index = 0]) {
+  final wire =
+      legacy['clientEndpoints'][0]['protocolPlans'][index]
+          as Map<String, dynamic>;
+  // Existing owner-control DTO projection only; keep the original exit intact.
+  wire['pluginBindings'] = <Object?>[];
+  wire['transforms'] = <Object?>[];
+  wire['destination'] = <String, Object?>{'kind': 'original'};
+  return wire;
+}
+
+Map<String, dynamic> _nativeWire(Map<String, dynamic> legacy) =>
+    legacy['clientToolAccess']['route'] as Map<String, dynamic>;
+
+void _expectDirect(EgressChoice choice) {
+  expect(choice, isA<EgressProfileRevision>());
+  final profile = choice as EgressProfileRevision;
+  expect(profile.id, 'profile.direct');
+  expect(profile.revision, 1);
+  expect(profile.displayName, 'Direct · System DNS');
+  expect(profile.policy.proxy.kind, 'direct');
+  expect(profile.policy.resolver.kind, 'system');
+  expect(profile.policy.resolver.transport, 'direct');
+  expect(profile.publishedAt, DateTime.utc(1970));
+  expect(choice.toJson().containsKey('mode'), isFalse);
 }

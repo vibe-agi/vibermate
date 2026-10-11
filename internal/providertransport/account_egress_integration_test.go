@@ -281,6 +281,16 @@ func testAccountEgressThroughSOCKS(t *testing.T, acquire func(*testing.T, egress
 		if started.Decision().SelectionSource != egressprofile.SelectionGlobal || started.Decision().DefaultRevision != 2 || terminal.Decision() != started.Decision() {
 			t.Fatal("reset consume changed frozen selection after details")
 		}
+		starts, terminals := audit.startedSnapshot(), audit.snapshot()
+		if len(starts) != int(wantCalls) || len(terminals) != int(wantCalls) {
+			t.Fatal("owned workflow lost a physical start or terminal")
+		}
+		for i, before := range starts {
+			after := terminals[i]
+			if before.ID() != after.ID() || before.Decision() != after.Decision() || before.Decision().SelectionSource != egressprofile.SelectionGlobal || before.Decision().DefaultRevision != 2 || !after.Terminal() {
+				t.Fatalf("owned workflow audit %d changed frozen authority", i)
+			}
+		}
 		return
 	}
 	if metadata {
@@ -290,6 +300,8 @@ func testAccountEgressThroughSOCKS(t *testing.T, acquire func(*testing.T, egress
 			}
 			for _, prices := range []bool{false, true} {
 				before := proxyCalls.Load()
+				beforeDials := network.calls.Load()
+				beforeAudits := len(audit.startedSnapshot())
 				var response *http.Response
 				var err error
 				if prices {
@@ -302,7 +314,7 @@ func testAccountEgressThroughSOCKS(t *testing.T, acquire func(*testing.T, egress
 					_ = response.Body.Close()
 				}
 				if down {
-					if err == nil {
+					if err == nil || proxyCalls.Load() != before || len(observed) != 0 {
 						t.Fatal("metadata failed proxy silently fell back")
 					}
 				} else {
@@ -317,6 +329,13 @@ func testAccountEgressThroughSOCKS(t *testing.T, acquire func(*testing.T, egress
 					if r.Host != "models.dev" || r.URL.Path != want || r.Header.Get("Authorization") != "" {
 						t.Fatal("metadata target/auth broadened")
 					}
+				}
+				if network.calls.Load() != beforeDials+1 || network.direct.Load() != 0 || len(audit.startedSnapshot()) != beforeAudits+1 {
+					t.Fatal("metadata retried or bypassed its selected proxy")
+				}
+				started, terminal := audit.attempts()
+				if started.Purpose() != egressaudit.PurposeModelMetadataDirectory || started.Decision().SelectionSource != egressprofile.SelectionGlobal || started.Decision().DefaultRevision != 2 || started.Decision().AccountID != "" || !terminal.Terminal() || terminal.Decision() != started.Decision() || (down && terminal.Outcome() != egressaudit.OutcomeFailed) {
+					t.Fatal("metadata lost immutable physical audit")
 				}
 			}
 		}
@@ -482,6 +501,22 @@ type ownedWorkflowAudit struct {
 	runtimeAuditRecorder
 	allMu     sync.Mutex
 	completed []egressaudit.Attempt
+	started   []egressaudit.Attempt
+}
+
+func (a *ownedWorkflowAudit) Append(ctx context.Context, attempt egressaudit.Attempt) (egressaudit.Record, error) {
+	result, err := a.runtimeAuditRecorder.Append(ctx, attempt)
+	if err == nil {
+		a.allMu.Lock()
+		a.started = append(a.started, attempt)
+		a.allMu.Unlock()
+	}
+	return result, err
+}
+func (a *ownedWorkflowAudit) startedSnapshot() []egressaudit.Attempt {
+	a.allMu.Lock()
+	defer a.allMu.Unlock()
+	return append([]egressaudit.Attempt(nil), a.started...)
 }
 
 func (a *ownedWorkflowAudit) Complete(ctx context.Context, attempt egressaudit.Attempt) (egressaudit.Record, error) {

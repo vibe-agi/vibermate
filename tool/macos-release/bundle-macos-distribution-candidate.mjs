@@ -34,6 +34,9 @@ const sha1Pattern = /^[0-9a-f]{40}$/u;
 const sha256Pattern = /^[0-9a-f]{64}$/u;
 const maximumCommandOutput = 8 << 20;
 const localTimeoutMilliseconds = 20 * 60 * 1000;
+const nestedSigningNames = Object.freeze(
+  macOSDistributionPolicy.codeObjectNames.filter((name) => name !== "vibermate-desktop"),
+);
 const credentialNames = new Set([
   "API_PRIVATE_KEYS_DIR",
   "APPLE_API_ISSUER",
@@ -156,14 +159,7 @@ export function signingCommandArguments(kind, identity, keychainPath, path) {
     ];
   }
   if (
-    ![
-      "app-framework",
-      "file-selector-framework",
-      "flutter-macos-framework",
-      "url-launcher-framework",
-      "vibermate",
-      "vibermated",
-    ].includes(kind) ||
+    !nestedSigningNames.includes(kind) ||
     macOSDistributionPolicy.codeObjects[kind] === undefined
   ) {
     throw new Error("The requested nested signing object is not admitted");
@@ -196,6 +192,27 @@ export function diskImageCreationArguments(stagingDirectory, dmgPath) {
     "-nospotlight",
     dmgPath,
   ];
+}
+
+export function applicationSigningCommands(appPath, identity, keychainPath) {
+  const commands = [];
+  for (const name of nestedSigningNames) {
+    const signingPath = resolve(
+      appPath,
+      ...macOSDistributionPolicy.codeObjects[name].signingPath.split("/"),
+    );
+    commands.push({
+      command: "/usr/bin/codesign",
+      arguments: signingCommandArguments(name, identity, keychainPath, signingPath),
+      label: `${name} Developer ID signing`,
+    });
+  }
+  commands.push({
+    command: "/usr/bin/codesign",
+    arguments: signingCommandArguments("application", identity, keychainPath, appPath),
+    label: "ViberMate.app Developer ID signing",
+  });
+  return commands;
 }
 
 function repositoryRelativePath(path) {
@@ -299,41 +316,9 @@ async function main() {
     throw new Error("The unsigned candidate or archive-bound tree changed before signing");
   }
 
-  for (const name of [
-    "app-framework",
-    "file-selector-framework",
-    "flutter-macos-framework",
-    "url-launcher-framework",
-    "vibermate",
-    "vibermated",
-  ]) {
-    const signingRelativePath =
-      macOSDistributionPolicy.codeObjects[name].signingPath;
-    const signingPath = resolve(
-      unsigned.appPath,
-      ...signingRelativePath.split("/"),
-    );
-    runTool(
-      "/usr/bin/codesign",
-      signingCommandArguments(
-        name,
-        inputs.identity,
-        inputs.keychainPath,
-        signingPath,
-      ),
-      `${name} Developer ID signing`,
-    );
+  for (const command of applicationSigningCommands(unsigned.appPath, inputs.identity, inputs.keychainPath)) {
+    runTool(command.command, command.arguments, command.label);
   }
-  runTool(
-    "/usr/bin/codesign",
-    signingCommandArguments(
-      "application",
-      inputs.identity,
-      inputs.keychainPath,
-      unsigned.appPath,
-    ),
-    "ViberMate.app Developer ID signing",
-  );
 
   await mkdir(macOSDistributionDirectories.dmgDirectory, {
     recursive: true,

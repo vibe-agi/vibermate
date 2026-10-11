@@ -180,3 +180,44 @@ func testSession(origin, credential string) localdiscovery.Session {
 func encodedBytes(fill byte, count int) string {
 	return base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{fill}, count))
 }
+
+func TestSOCKSDeliveryRequiresCanonicalLiteralLoopback(t *testing.T) {
+	credential, err := capturecredential.New(capturecredential.KindManualCapture, bytes.Repeat([]byte{0x51}, capturecredential.EntropyBytes))
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	grant := capturecontrol.ManualCaptureGrant{
+		Capture:      capturecontrol.ManualCaptureView{ID: "manual-one", DisplayName: "Local SOCKS", ClientClass: manualcapture.ClientOther, Lifetime: manualcapture.LifetimeUntilRevoked, State: manualcapture.StateActive, Observation: manualcapture.ObservationWaiting, CreatedAt: now, UpdatedAt: now},
+		ProxyAddress: "http://127.0.0.1:32123", ProxyUsername: "capture", ProxyPassword: credential.Value(),
+		EnvironmentID: "work", AssignmentRevision: 1, LaunchAuthorityDigest: strings.Repeat("c", 64),
+		ProtectedAuthorities: []string{}, ManagedAuthorities: []string{},
+	}
+	context := capturecontrol.ManualCaptureContext{
+		ConfirmationToken: "ctx_" + encodedBytes(0x31, 32), ProxyAddress: "http://127.0.0.1:32123",
+		EnvironmentID: "work", EnvironmentRevision: 1,
+		EnvironmentDigest: strings.Repeat("b", 64), LaunchAuthorityDigest: strings.Repeat("c", 64),
+		ProtectedAuthorities: []string{}, ManagedAuthorities: []string{},
+		DefaultTemporarySeconds: 3600, MaxTemporarySeconds: 7200,
+	}
+	for _, address := range []string{"proxy.home.arpa:32124", "localhost:32124", "192.0.2.1:32124", "0.0.0.0:32124", "[::]:32124", "127.0.0.1:0", "127.0.0.1:0123", "user@127.0.0.1:1234", "127.0.0.1:1234/path", "[:::1]:32124"} {
+		context.SOCKSAddress = address
+		grant.SOCKSAddress = address
+		if err := validateGrant(grant); err == nil {
+			t.Errorf("grant accepted non-local or malformed SOCKS destination %q", address)
+		}
+		if err := validateContext(context); err == nil {
+			t.Errorf("accepted non-local or malformed SOCKS destination %q", address)
+		}
+	}
+	for _, address := range []string{"", "127.0.0.1:32124", "[::1]:32124"} {
+		context.SOCKSAddress = address
+		grant.SOCKSAddress = address
+		if err := validateGrant(grant); err != nil {
+			t.Errorf("grant rejected local SOCKS destination %q: %v", address, err)
+		}
+		if err := validateContext(context); err != nil {
+			t.Errorf("rejected local SOCKS destination %q: %v", address, err)
+		}
+	}
+}

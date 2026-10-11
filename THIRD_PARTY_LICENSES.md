@@ -80,3 +80,16 @@ requirements.
 Before shipping a closed-source product that embeds ViberMate, review the
 exact dependency graph, generated assets, platform plugins, container
 packages, and any customer-specific additions with qualified counsel.
+# Bundled VLESS kernel
+
+Live desktop and Linux bundles include the modified Xray-core helper
+`vibermate-xray`, based on upstream commit
+`d2758a023cd7f4174a5a5fa4ff66e487d4342ba0` (v26.3.27) with the supplied
+module dependency patch. Xray-core's verbatim license, Go's license, and the
+linked modules' verbatim license and notice files are bundled in `vless-kernel/`
+(`Contents/Resources/vless-kernel/` on macOS). `licenses.json` identifies each
+linked module, exact version, source URL, and notice file. The original source
+archive, public commit, `dependency.patch`, patched module files, and
+`SOURCE-ACCESS.txt` provide offline reconstruction and fixed-version source
+access. `package-manifest.json` records the immutable source and notice digests;
+its executable digest is explicitly before macOS signing.

@@ -11,6 +11,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/captureidentity"
 	"github.com/vibe-agi/vibermate/internal/nativemcp"
 	"github.com/vibe-agi/vibermate/internal/nativetool"
+	"github.com/vibe-agi/vibermate/internal/socksproxy"
 )
 
 type nativeIDs struct{ random io.Reader }
@@ -45,6 +46,13 @@ func (ids nativeIDs) NewOwnerEpoch(ctx context.Context) (uint64, error) {
 type nativeRevocation struct {
 	mu       sync.RWMutex
 	executor nativemcp.Executor
+	socks    *socksproxy.Server
+}
+
+func (adapter *nativeRevocation) installSOCKS(server *socksproxy.Server) {
+	adapter.mu.Lock()
+	adapter.socks = server
+	adapter.mu.Unlock()
 }
 
 func (adapter *nativeRevocation) install(executor nativemcp.Executor) {
@@ -60,9 +68,20 @@ func (adapter *nativeRevocation) Revoke(ctx context.Context, capture captureiden
 	}
 	adapter.mu.RLock()
 	executor := adapter.executor
+	socks := adapter.socks
 	adapter.mu.RUnlock()
-	if executor == nil {
-		return nil
+	var errs []error
+	var waitSOCKS func(context.Context) error
+	if socks != nil {
+		var err error
+		waitSOCKS, err = socks.BeginRevoke(capture)
+		errs = append(errs, err)
 	}
-	return executor.Revoke(ctx, capture, nativemcp.RevocationReason(reason))
+	if executor != nil {
+		errs = append(errs, executor.Revoke(ctx, capture, nativemcp.RevocationReason(reason)))
+	}
+	if waitSOCKS != nil {
+		errs = append(errs, waitSOCKS(ctx))
+	}
+	return errors.Join(errs...)
 }

@@ -1386,6 +1386,7 @@ void main() {
     await tester.binding.setSurfaceSize(const Size(390, 760));
     addTearDown(() => tester.binding.setSurfaceSize(null));
     final api = PreviewControlApi();
+    final defaultBefore = await api.egressDefault();
     final controller = WorkbenchController(
       api: api,
       terminalCommands: PreviewTerminalCommandService(),
@@ -1461,10 +1462,65 @@ void main() {
     expect(created.policy.proxy.endpoint, '127.0.0.1:1080');
     expect(created.policy.resolver.dohUrl, 'https://1.1.1.1/dns-query');
     expect(created.policy.resolver.transport, 'proxy');
-    expect(find.textContaining('团队代理 · r1'), findsOneWidget);
+    final row = find.byKey(Key('egress-profile-row-${created.id}'));
+    expect(
+      find.descendant(of: row, matching: find.text('团队代理')),
+      findsOneWidget,
+    );
+    expect(find.text('团队代理 · r1'), findsNothing);
 
     await tester.tap(find.byKey(Key('egress-profile-edit-${created.id}')));
     await tester.pumpAndSettle();
+    expect(
+      tester
+          .widget<TextFormField>(
+            find.byKey(const Key('egress-profile-display-name')),
+          )
+          .controller!
+          .text,
+      '团队代理',
+    );
+    expect(
+      tester
+          .widget<TextFormField>(
+            find.byKey(const Key('egress-profile-proxy-endpoint')),
+          )
+          .controller!
+          .text,
+      '127.0.0.1:1080',
+    );
+    expect(
+      tester
+          .widget<CompactSelectField<String>>(
+            find.byKey(const Key('egress-profile-proxy-kind')),
+          )
+          .initialValue,
+      'socks5',
+    );
+    expect(
+      tester
+          .widget<CompactSelectField<String>>(
+            find.byKey(const Key('egress-profile-resolver-kind')),
+          )
+          .initialValue,
+      'doh',
+    );
+    expect(
+      tester
+          .widget<CompactSelectField<String>>(
+            find.byKey(const Key('egress-profile-doh-preset')),
+          )
+          .initialValue,
+      'cloudflare',
+    );
+    expect(
+      tester
+          .widget<CompactSelectField<String>>(
+            find.byKey(const Key('egress-profile-doh-transport')),
+          )
+          .initialValue,
+      'proxy',
+    );
     await tester.enterText(
       find.byKey(const Key('egress-profile-display-name')),
       '团队代理 2',
@@ -1476,8 +1532,24 @@ void main() {
       (profile) => profile.id == created.id,
     );
     expect(updated.revision, 2);
+    expect(updated.policy, created.policy);
+    expect(
+      catalog.items.where((p) => p.id != EgressProfileRevision.direct.id),
+      hasLength(1),
+    );
     expect(await api.egressProfileRevision(created.id, 1), created);
-    expect(find.textContaining('团队代理 2 · r2'), findsOneWidget);
+    await expectLater(
+      api.egressProfileRevision(created.id, 3),
+      throwsA(isA<ControlProblem>()),
+    );
+    expect(
+      find.descendant(of: row, matching: find.text('团队代理 2')),
+      findsOneWidget,
+    );
+    final defaultAfter = await api.egressDefault();
+    expect(defaultAfter.revision, defaultBefore.revision);
+    expect(defaultAfter.profile, defaultBefore.profile);
+    expect(defaultAfter.effectiveProfile, defaultBefore.effectiveProfile);
     expect(tester.takeException(), isNull);
 
     controller.dispose();

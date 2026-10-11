@@ -468,7 +468,8 @@ final class AppCopy {
         'Overrides the traffic profile for this account, including model calls, OAuth refresh, quota and history. Applies to new requests; a failed exit never falls back to direct. Manage exits in Settings → Network exits.',
     'provider_accounts.egress.inherit': 'Follow traffic profile',
     'provider_accounts.egress.inherit.detail':
-        'Model calls follow the traffic profile. Account operations outside a profile use Direct · System DNS.',
+        'Model calls follow the traffic profile. Independent account operations use the global default.',
+    'environment.egress.use_global': 'Use global default',
     'provider_accounts.settings.failed':
         'Could not save account settings. Check the connection and try again.',
     'provider_accounts.settings.conflict':
@@ -695,7 +696,20 @@ final class AppCopy {
     'capture.manual.delivery.rotated.title': 'Proxy credential rotated',
     'capture.manual.delivery.once':
         'Copy these values now. The password is shown once and cannot be recovered later.',
-    'capture.manual.delivery.proxy': 'Proxy',
+    'capture.manual.delivery.proxy': 'HTTP/HTTPS proxy',
+    'capture.manual.delivery.socks_host': 'SOCKS5 host',
+    'capture.manual.delivery.socks_port': 'SOCKS5 port',
+    'capture.manual.delivery.socks_shared':
+        'Use the username and password above.',
+    'capture.manual.delivery.socks_udp':
+        'Choose a client supporting SOCKS5 UDP. UDP uses the global network exit.',
+    'capture.manual.delivery.socks_advanced': 'SOCKS5 connection help',
+    'capture.manual.delivery.socks_control':
+        'Keep the TCP control connection open while using UDP; closing it ends the UDP association.',
+    'capture.manual.delivery.socks_remote':
+        'SOCKS itself is not encrypted. Use a trusted private network or tunnel and allow the UDP relay address and port.',
+    'capture.manual.delivery.socks_ca':
+        'UDP does not need the Root certificate. Install the Proxy CA only for eligible HTTPS interception.',
     'capture.manual.delivery.username': 'Username',
     'capture.manual.delivery.password': 'Password',
     'capture.manual.delivery.root': 'Root path',
@@ -1524,6 +1538,37 @@ final class AppCopy {
     'environment.egress.proxy.label': 'Connection',
     'environment.egress.proxy.direct': 'Direct',
     'environment.egress.proxy.socks5': 'SOCKS5 · ViberMate resolves target',
+    'environment.egress.proxy.vless': 'VLESS',
+    'environment.egress.tls.label': 'Server certificate',
+    'environment.egress.tls.system': 'Use system certificates',
+    'environment.egress.tls.custom_ca': 'Use a custom CA',
+    'environment.egress.tls.import': 'Import CA file',
+    'environment.egress.tls.replace': 'Replace CA file',
+    'environment.egress.tls.paste': 'Paste CA certificate',
+    'environment.egress.tls.saved':
+        'A custom CA is saved. It will be kept unless replaced.',
+    'environment.egress.tls.selected': 'CA certificate selected',
+    'environment.egress.tls.local':
+        'Used only for this network exit; not installed in the system.',
+    'environment.egress.tls.load_failed':
+        'Could not load saved certificate settings. Try again.',
+    'environment.egress.tls.invalid':
+        'Choose a PEM CA certificate file no larger than 64 KiB.',
+    'environment.egress.vless.link': 'Node link',
+    'environment.egress.vless.saved':
+        'Node saved; paste a new link to replace it.',
+    'environment.egress.vless.supported':
+        'TLS and REALITY + Vision nodes are supported.',
+    'environment.egress.vless.preview_unsupported':
+        'Node import is unavailable in preview. Connect to an owner Runtime to save it.',
+    'environment.egress.validation.vless':
+        'Check the node link and certificate settings. TLS and REALITY + Vision nodes are supported.',
+    'environment.egress.direct_domains': 'Direct domains',
+    'environment.egress.direct_domains.detail':
+        'One per line. example.com includes the domain and subdomains; *.example.com matches subdomains only. Matches use system DNS and connect directly from the device running ViberMate.',
+    'environment.egress.doh.transport.vless': 'Through VLESS',
+    'settings.egress.profile_unconfirmed':
+        'The save outcome is unknown. Refresh and confirm the profile before trying again.',
     'environment.egress.proxy.endpoint': 'SOCKS proxy',
     'environment.egress.proxy.endpoint_hint': 'host:port',
     'environment.egress.resolver.label': 'Target DNS',
@@ -2153,6 +2198,12 @@ final class AppCopy {
     'settings.preferences.detail':
         'These choices affect this workbench only; they do not change captured traffic or team accounts.',
     'settings.access.title': 'Access & launch',
+    'settings.access.socks': 'SOCKS5 proxy',
+    'settings.access.network.disabled': 'Not enabled',
+    'settings.access.network.unknown': 'Availability unknown',
+    'settings.access.vless.installed': 'VLESS engine installed',
+    'settings.access.vless.absent': 'VLESS engine not installed',
+    'settings.access.vless.unknown': 'VLESS engine availability unknown',
     'settings.access.detail.server':
         'Connect an Agent from your computer. If you only need the browser, you are already connected.',
     'settings.access.detail.local':
@@ -2303,11 +2354,26 @@ final class AppCopy {
         'Publish reusable SOCKS5 and DNS choices. Traffic policies freeze an exact revision.',
     'settings.egress.add': 'New network exit profile',
     'settings.egress.create': 'New network exit profile',
-    'settings.egress.edit': 'Publish new revision',
+    'settings.egress.edit': 'Edit network exit',
     'settings.egress.name': 'Network exit profile name',
     'settings.egress.publish': 'Publish',
     'settings.egress.builtin': 'Built in · read only',
     'settings.egress.load_failed': 'Network exit profiles could not be loaded.',
+    'settings.egress.current': 'Current default',
+    'settings.egress.details': 'Default details',
+    'settings.egress.revision': 'Revision {revision}',
+    'settings.egress.default_revision': 'Default setting revision {revision}',
+    'settings.egress.default_detail':
+        'Used when no account or traffic policy selects an exit. Applies to new operations, not work already in progress.',
+    'settings.egress.remote_detail':
+        'For a remote Runtime, proxy addresses refer to that server.',
+    'settings.egress.clear_default': 'Clear default',
+    'settings.egress.unset': 'No profile selected. Uses Direct · System DNS.',
+    'settings.egress.unconfirmed':
+        'The change was not confirmed. The current state shown was read again; no write was retried.',
+    'settings.egress.set_default': 'Set as default',
+    'settings.egress.default_unavailable':
+        'The current default is unavailable.',
     'settings.egress.validation.name': 'Enter a network exit profile name.',
     'settings.language': 'Language',
     'settings.english': 'English',
@@ -3340,8 +3406,8 @@ final class AppCopy {
     'provider_accounts.egress.detail':
         '优先于流量策略，统一用于此账号的模型调用、OAuth 刷新、额度和历史查询。从下一次请求生效；出口失败不会回退直连。请在「设置 → 网络出口方案」管理可选方案。',
     'provider_accounts.egress.inherit': '跟随流量策略',
-    'provider_accounts.egress.inherit.detail':
-        '模型调用跟随流量策略；不属于流量策略的账号操作使用「直连 · 系统 DNS」。',
+    'environment.egress.use_global': '使用全局默认',
+    'provider_accounts.egress.inherit.detail': '模型调用跟随流量策略；独立账号操作使用全局默认。',
     'provider_accounts.settings.failed': '账号设置未能保存，请检查连接后重试。',
     'provider_accounts.settings.conflict': '账号设置已在别处更新，未覆盖。请核对最新设置后重试。',
     'provider_accounts.note.add': '添加备注',
@@ -3533,7 +3599,18 @@ final class AppCopy {
     'capture.manual.delivery.title': '代理登录已创建',
     'capture.manual.delivery.rotated.title': '代理凭据已轮换',
     'capture.manual.delivery.once': '请立即保存以下内容；密码只显示一次，之后无法找回。',
-    'capture.manual.delivery.proxy': '代理地址',
+    'capture.manual.delivery.proxy': 'HTTP/HTTPS 代理',
+    'capture.manual.delivery.socks_host': 'SOCKS5 主机',
+    'capture.manual.delivery.socks_port': 'SOCKS5 端口',
+    'capture.manual.delivery.socks_shared': '使用上面的用户名和密码。',
+    'capture.manual.delivery.socks_udp': '请选择支持 SOCKS5 UDP 的客户端。UDP 使用全局网络出口。',
+    'capture.manual.delivery.socks_advanced': 'SOCKS5 连接帮助',
+    'capture.manual.delivery.socks_control':
+        '使用 UDP 时请保持 TCP 控制连接；关闭它会结束 UDP 关联。',
+    'capture.manual.delivery.socks_remote':
+        'SOCKS 本身不加密。请使用可信私有网络或隧道，并允许访问 UDP 中继地址和端口。',
+    'capture.manual.delivery.socks_ca':
+        'UDP 不需要 Root 证书。仅在符合条件的 HTTPS 解密时安装代理 CA。',
     'capture.manual.delivery.username': '用户名',
     'capture.manual.delivery.password': '密码',
     'capture.manual.delivery.root': 'Root 路径',
@@ -4221,6 +4298,30 @@ final class AppCopy {
     'environment.egress.proxy.label': '连接方式',
     'environment.egress.proxy.direct': '直连',
     'environment.egress.proxy.socks5': 'SOCKS5 · ViberMate 解析目标',
+    'environment.egress.proxy.vless': 'VLESS',
+    'environment.egress.tls.label': '服务器证书',
+    'environment.egress.tls.system': '使用系统证书',
+    'environment.egress.tls.custom_ca': '使用自有 CA',
+    'environment.egress.tls.import': '导入 CA 文件',
+    'environment.egress.tls.replace': '更换 CA 文件',
+    'environment.egress.tls.paste': '粘贴 CA 证书',
+    'environment.egress.tls.saved': '已保存自有 CA；不更换会继续使用。',
+    'environment.egress.tls.selected': '已选择 CA 证书',
+    'environment.egress.tls.local': '只用于这个网络出口，不会安装到系统。',
+    'environment.egress.tls.load_failed': '无法读取已保存的证书设置，请重试。',
+    'environment.egress.tls.invalid': '请选择 PEM 格式的 CA 证书文件，大小不超过 64 KiB。',
+    'environment.egress.vless.link': '节点链接',
+    'environment.egress.vless.saved': '节点已保存；如需更换，请粘贴新链接。',
+    'environment.egress.vless.supported': '支持 TLS 和 REALITY + Vision 节点。',
+    'environment.egress.vless.preview_unsupported':
+        '预览模式不支持导入节点。请连接具有所有者权限的 Runtime 后保存。',
+    'environment.egress.validation.vless':
+        '请检查节点链接和证书设置，支持 TLS 和 REALITY + Vision 节点。',
+    'environment.egress.direct_domains': '直连域名',
+    'environment.egress.direct_domains.detail':
+        '每行一个。example.com 包含自身和子域名；*.example.com 仅匹配子域名。匹配后由运行 ViberMate 的设备使用系统 DNS 并直连。',
+    'environment.egress.doh.transport.vless': '经 VLESS',
+    'settings.egress.profile_unconfirmed': '保存结果尚未确认。请刷新并确认方案后再尝试。',
     'environment.egress.proxy.endpoint': 'SOCKS 代理',
     'environment.egress.proxy.endpoint_hint': '主机:端口',
     'environment.egress.resolver.label': '目标 DNS',
@@ -4756,6 +4857,12 @@ final class AppCopy {
     'settings.preferences.title': '工作台偏好',
     'settings.preferences.detail': '这里只改变当前工作台的显示方式，不会修改捕获流量或团队账号。',
     'settings.access.title': '接入与启动',
+    'settings.access.socks': 'SOCKS5 代理',
+    'settings.access.network.disabled': '未启用',
+    'settings.access.network.unknown': '可用性未知',
+    'settings.access.vless.installed': 'VLESS 内核已安装',
+    'settings.access.vless.absent': 'VLESS 内核未安装',
+    'settings.access.vless.unknown': 'VLESS 内核可用性未知',
     'settings.access.detail.server': '从你的电脑接入 Agent；如果只使用网页，你已经完成连接。',
     'settings.access.detail.local': '设置用于启动 Claude 与 Codex 托管运行的终端入口。',
     'settings.access.local.title': '这台电脑',
@@ -4884,11 +4991,22 @@ final class AppCopy {
     'settings.egress.detail': '统一发布可复用的 SOCKS5 与 DNS 选择；流量策略冻结所选的精确版本。',
     'settings.egress.add': '新建网络出口方案',
     'settings.egress.create': '新建网络出口方案',
-    'settings.egress.edit': '发布新版本',
+    'settings.egress.edit': '编辑网络出口方案',
     'settings.egress.name': '方案名称',
     'settings.egress.publish': '发布',
     'settings.egress.builtin': '内置 · 只读',
     'settings.egress.load_failed': '无法读取网络出口方案。',
+    'settings.egress.current': '当前默认',
+    'settings.egress.details': '默认详情',
+    'settings.egress.revision': '版本 {revision}',
+    'settings.egress.default_revision': '默认设置版本 {revision}',
+    'settings.egress.default_detail': '账号与流量策略未明确选择出口时使用。仅对新操作生效，不改变正在进行的任务。',
+    'settings.egress.remote_detail': '连接远程 Runtime 时，代理地址指向该服务端。',
+    'settings.egress.clear_default': '清除默认',
+    'settings.egress.unset': '未选择默认方案，使用直连 · 系统 DNS。',
+    'settings.egress.unconfirmed': '未能确认更改。已重新读取当前状态，没有重试写入。',
+    'settings.egress.set_default': '设为默认',
+    'settings.egress.default_unavailable': '暂时无法读取当前默认。',
     'settings.egress.validation.name': '请输入方案名称。',
     'settings.language': '语言',
     'settings.english': 'English',

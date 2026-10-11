@@ -41,10 +41,16 @@ import (
 type updateNetwork struct {
 	proxies                map[string]bool
 	unexpected, dials, dns atomic.Int64
+	directTarget           string
+	direct                 atomic.Int64
 }
 
 func (n *updateNetwork) DialContext(ctx context.Context, network, address string) (net.Conn, error) {
 	n.dials.Add(1)
+	if network == "tcp" && n.directTarget != "" && (address == "api.github.com:443" || address == "93.184.216.34:443") {
+		n.direct.Add(1)
+		return (&net.Dialer{Timeout: time.Second}).DialContext(ctx, network, n.directTarget)
+	}
 	if !n.proxies[address] {
 		n.unexpected.Add(1)
 		return nil, errors.New("contained update denied dial")
@@ -64,11 +70,15 @@ type updateWire struct {
 	builder *egressnetwork.Builder
 	roots   *x509.CertPool
 	sends   *atomic.Int64
+	before  func()
 }
 
 func (w updateWire) RoundTrip(r *http.Request, d providertransport.TransportDispatch) (*http.Response, transportprofile.Evidence, error) {
 	if w.sends != nil {
 		w.sends.Add(1)
+	}
+	if w.before != nil {
+		w.before()
 	}
 	if r.URL.String() != "https://api.github.com/repos/vibe-agi/vibermate/releases/latest" && r.URL.String() != "https://api.openai.com/v1/models" {
 		return nil, transportprofile.Evidence{}, errors.New("contained update denied request")
@@ -147,6 +157,9 @@ func (updateManualUnused) ServeHTTP(w http.ResponseWriter, _ *http.Request, _ co
 
 func TestActualOwnerProductUpdateUsesRuntimeGlobalSOCKSAndStrictTLS(t *testing.T) {
 	runActualOwnerProductUpdate(t, false)
+}
+func TestActualOwnerProductUpdateUnsetBuiltinUsesOnlyPrivateDirectTarget(t *testing.T) {
+	runActualOwnerProductUpdate(t, false, "builtin")
 }
 func TestActualOwnerProductUpdateHoldResumesThroughRealFrozenTLSProbe(t *testing.T) {
 	runActualOwnerProductUpdate(t, true)
@@ -255,6 +268,10 @@ func runActualOwnerProductUpdate(t *testing.T, held bool, edges ...string) {
 	proxy, calls, activeProxy := updateSOCKS(t, server.Listener.Addr().String(), tunnelLifetime)
 	nextProxy, nextCalls, activeNext := updateSOCKS(t, server.Listener.Addr().String(), tunnelLifetime)
 	network := &updateNetwork{proxies: map[string]bool{proxy.Addr().String(): true, nextProxy.Addr().String(): true}}
+	builtin := len(edges) > 0 && edges[0] == "builtin"
+	if builtin {
+		network.directTarget = server.Listener.Addr().String()
+	}
 	roots := x509.NewCertPool()
 	roots.AddCert(server.Certificate())
 	builder, err := egressnetwork.NewBuilder(egressnetwork.BuilderOptions{BaseDialer: network, SystemResolver: network})
@@ -266,11 +283,29 @@ func runActualOwnerProductUpdate(t *testing.T, held bool, edges ...string) {
 		t.Fatal(err)
 	}
 	var sends atomic.Int64
+	var actualRuntime *productruntime.Runtime
+	startedDecisions := map[string]egressaudit.DecisionRef{}
+	observeStart := func() {
+		if !builtin {
+			return
+		}
+		page, err := actualRuntime.EgressAttempts().List(t.Context(), egressaudit.PageRequest{Limit: 10})
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		for _, record := range page.Items {
+			if !record.Attempt.Terminal() {
+				startedDecisions[record.Attempt.ID()] = record.Attempt.Decision()
+			}
+		}
+	}
 	options := productruntime.ProductUpdateTestOptions(t, gate)
-	r, err := productruntime.StartProductUpdateTestRuntime(t.Context(), options, updateWire{builder: builder, roots: roots, sends: &sends}, builder, roots)
+	r, err := productruntime.StartProductUpdateTestRuntime(t.Context(), options, updateWire{builder: builder, roots: roots, sends: &sends, before: observeStart}, builder, roots)
 	if err != nil {
 		t.Fatal(err)
 	}
+	actualRuntime = r
 	defer func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
@@ -284,8 +319,10 @@ func runActualOwnerProductUpdate(t *testing.T, held bool, edges ...string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := r.EgressDefaults().SetDefault(t.Context(), egressprofile.SetDefaultCommand{ExpectedRevision: 1, Profile: &egressprofile.ProfileRef{ID: profile.ID, Revision: 1}}); err != nil {
-		t.Fatal(err)
+	if !builtin {
+		if _, err := r.EgressDefaults().SetDefault(t.Context(), egressprofile.SetDefaultCommand{ExpectedRevision: 1, Profile: &egressprofile.ProfileRef{ID: profile.ID, Revision: 1}}); err != nil {
+			t.Fatal(err)
+		}
 	}
 	application, err := runtimecontrol.New(runtimecontrol.Options{Runtime: r, Readiness: updateReady{}, Clock: desktopcontrol.SystemClock{}})
 	if err != nil {
@@ -607,6 +644,9 @@ func runActualOwnerProductUpdate(t *testing.T, held bool, edges ...string) {
 	} else {
 		router.ServeHTTP(response, request)
 	}
+	if builtin {
+		wantSockets = 0
+	}
 	if response.Code != 200 || !strings.Contains(response.Body.String(), `"tag":"v0.1.24"`) || calls.Load() != wantSockets || nextCalls.Load() != 0 || gets.Load() != 1 || bad.Load() != 0 || network.unexpected.Load() != 0 {
 		t.Fatalf("actual owner closed update missing: status%d response%s sockets%d/%d GET%d bad%d unexpected%d", response.Code, response.Body.String(), calls.Load(), nextCalls.Load(), gets.Load(), bad.Load(), network.unexpected.Load())
 	}
@@ -624,11 +664,51 @@ func runActualOwnerProductUpdate(t *testing.T, held bool, edges ...string) {
 		if actual.Purpose() == egressaudit.PurposeUpdate {
 			updateAudits++
 		}
-		if actual.Decision().SelectionSource != egressprofile.SelectionGlobal || actual.Decision().DefaultRevision != 2 || actual.Decision().ProxyID != profile.ID.String() || !actual.Terminal() {
+		wantSource, wantRevision, wantProfile := egressprofile.SelectionGlobal, uint64(2), profile.ID.String()
+		if builtin {
+			wantSource, wantRevision, wantProfile = egressprofile.SelectionBuiltin, 1, egressprofile.DirectID.String()
+		}
+		if actual.Decision().SelectionSource != wantSource || actual.Decision().DefaultRevision != wantRevision || actual.Decision().ProxyID != wantProfile || !actual.Terminal() {
 			t.Fatal("actual update audit lost original frozen operation", actual)
+		}
+		if builtin {
+			before, ok := startedDecisions[actual.ID()]
+			if !ok || before != actual.Decision() || network.direct.Load() != 1 || network.dials.Load() != 1 || sends.Load() != 1 {
+				t.Fatal("builtin update changed physical decision or retried")
+			}
 		}
 	}
 	if updateAudits != 1 {
 		t.Fatal("actual closed update purpose changed", updateAudits)
+	}
+	if builtin {
+		server.Close()
+		failedRequest := request.Clone(t.Context())
+		failedRequest.Body = io.NopCloser(strings.NewReader(`{}`))
+		// Authenticator consumed the first command's capability header.
+		failedRequest.Header.Set("Authorization", "Bearer "+writeToken)
+		failed := httptest.NewRecorder()
+		router.ServeHTTP(failed, failedRequest)
+		if failed.Code != 503 || gets.Load() != 1 || sends.Load() != 2 || network.direct.Load() != 2 || network.dials.Load() != 2 || calls.Load() != 0 || nextCalls.Load() != 0 || network.unexpected.Load() != 0 {
+			t.Fatalf("failed direct update path: status%d GET%d sends%d direct%d dial%d proxy%d/%d unexpected%d", failed.Code, gets.Load(), sends.Load(), network.direct.Load(), network.dials.Load(), calls.Load(), nextCalls.Load(), network.unexpected.Load())
+		}
+		page, err := r.EgressAttempts().List(t.Context(), egressaudit.PageRequest{Limit: 10})
+		if err != nil || len(page.Items) != 2 {
+			t.Fatal("failed direct update audit missing", err)
+		}
+		failures := 0
+		for _, record := range page.Items {
+			a := record.Attempt
+			before, ok := startedDecisions[a.ID()]
+			if !ok || before != a.Decision() || a.Decision().SelectionSource != egressprofile.SelectionBuiltin || a.Decision().DefaultRevision != 1 || !a.Terminal() {
+				t.Fatal("direct update terminal changed builtin selection")
+			}
+			if a.Outcome() == egressaudit.OutcomeFailed {
+				failures++
+			}
+		}
+		if failures != 1 {
+			t.Fatal("failed direct update has wrong outcome count")
+		}
 	}
 }

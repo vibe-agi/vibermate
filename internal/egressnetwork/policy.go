@@ -14,6 +14,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/vibe-agi/vibermate/internal/secretstore"
 	"golang.org/x/net/idna"
 )
 
@@ -26,6 +27,7 @@ type ProxyKind string
 const (
 	ProxyDirect ProxyKind = "direct"
 	ProxySOCKS5 ProxyKind = "socks5"
+	ProxyVLESS  ProxyKind = "vless"
 )
 
 type ResolverKind string
@@ -43,8 +45,10 @@ const (
 )
 
 type ProxyPolicy struct {
-	Kind     ProxyKind `json:"kind"`
-	Endpoint string    `json:"endpoint,omitempty"`
+	Kind               ProxyKind `json:"kind"`
+	Endpoint           string    `json:"endpoint,omitempty"`
+	CredentialRef      string    `json:"credentialRef,omitempty"`
+	CredentialRevision uint64    `json:"credentialRevision,omitempty"`
 }
 
 type ResolverPolicy struct {
@@ -59,8 +63,9 @@ type ResolverPolicy struct {
 // TCP connection is made. Resolver controls who resolves the AI endpoint; its
 // Transport controls only the DoH HTTP request itself.
 type Policy struct {
-	Proxy    ProxyPolicy    `json:"proxy"`
-	Resolver ResolverPolicy `json:"resolver"`
+	Proxy         ProxyPolicy    `json:"proxy"`
+	Resolver      ResolverPolicy `json:"resolver"`
+	DirectDomains DirectDomains  `json:"directDomains,omitempty"`
 }
 
 func DefaultPolicy() Policy {
@@ -88,6 +93,9 @@ func (policy Policy) Normalize() (Policy, error) {
 	if policy.Proxy.Kind == "" {
 		policy.Proxy.Kind = ProxyDirect
 	}
+	if policy.Proxy.Kind != ProxyVLESS && (policy.Proxy.CredentialRef != "" || policy.Proxy.CredentialRevision != 0) {
+		return Policy{}, fmt.Errorf("%w: unexpected proxy credentials", ErrInvalidPolicy)
+	}
 	switch policy.Proxy.Kind {
 	case ProxyDirect:
 		if policy.Proxy.Endpoint != "" {
@@ -99,6 +107,11 @@ func (policy Policy) Normalize() (Policy, error) {
 			return Policy{}, fmt.Errorf("%w: proxy endpoint: %v", ErrInvalidPolicy, err)
 		}
 		policy.Proxy.Endpoint = endpoint
+	case ProxyVLESS:
+		ref, err := secretstore.ParseReference(policy.Proxy.CredentialRef)
+		if err != nil || ref.Namespace() != "egress-vless" || policy.Proxy.Endpoint != "" || policy.Proxy.CredentialRevision == 0 || policy.Proxy.CredentialRevision > uint64(secretstore.MaxRevision) {
+			return Policy{}, fmt.Errorf("%w: invalid VLESS credential reference", ErrInvalidPolicy)
+		}
 	default:
 		return Policy{}, fmt.Errorf("%w: proxy kind is unsupported", ErrInvalidPolicy)
 	}
@@ -141,6 +154,11 @@ func (policy Policy) Normalize() (Policy, error) {
 		}
 	case ProxySOCKS5:
 	}
+	domains, err := policy.DirectDomains.Normalize()
+	if err != nil {
+		return Policy{}, err
+	}
+	policy.DirectDomains = domains
 	return policy, nil
 }
 

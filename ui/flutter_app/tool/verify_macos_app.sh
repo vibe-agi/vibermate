@@ -47,7 +47,7 @@ if [[ ! -d "${macos_directory}" || -n "$(find "${macos_directory}" -maxdepth 1 -
 fi
 
 if [[ "${mode}" == "live" ]]; then
-  expected_names=$'vibermate\nvibermate-desktop\nvibermated'
+  expected_names=$'vibermate\nvibermate-desktop\nvibermate-xray\nvibermated'
 else
   expected_names='vibermate-desktop'
 fi
@@ -77,7 +77,7 @@ code_paths=(
   "${app}/Contents/Frameworks/url_launcher_macos.framework/Versions/A/url_launcher_macos"
 )
 if [[ "${mode}" == "live" ]]; then
-  code_paths+=("${macos_directory}/vibermate" "${macos_directory}/vibermated")
+  code_paths+=("${macos_directory}/vibermate" "${macos_directory}/vibermated" "${macos_directory}/vibermate-xray")
 fi
 node "${script_directory}/verify_macos_build_versions.mjs" "${code_paths[@]}"
 
@@ -94,6 +94,23 @@ if [[ "${mode}" == "live" ]]; then
     echo "Packaged CLI and daemon alias one another" >&2
     exit 70
   fi
+fi
+
+if [[ "${mode}" == "live" ]]; then
+  kernel_target="$(node -e 'const fs=require("fs"); const m=JSON.parse(fs.readFileSync(process.argv[1])); process.stdout.write(m.target);' "${app}/Contents/Resources/vless-kernel/package-manifest.json")"
+  case "${kernel_target}" in
+    darwin/arm64|darwin/amd64|darwin/universal) ;;
+    *) echo "invalid bundled kernel target" >&2; exit 70 ;;
+  esac
+  node "${script_directory}/../../../tool/vless-kernel/verify_package.mjs" macos "${app}" "${kernel_target}"
+  kernel_architectures="$(lipo -archs "${macos_directory}/vibermate-xray")"
+  case "${kernel_target}:${kernel_architectures}" in
+    darwin/arm64:arm64|darwin/amd64:x86_64|"darwin/universal:x86_64 arm64"|"darwin/universal:arm64 x86_64") ;;
+    *) echo "kernel architecture differs from its package target" >&2; exit 70 ;;
+  esac
+elif [[ -e "${app}/Contents/Resources/vless-kernel" || -L "${app}/Contents/Resources/vless-kernel" ]]; then
+  echo "Preview bundle unexpectedly contains kernel authority materials" >&2
+  exit 70
 fi
 
 web_root="${app}/Contents/Resources/vibermate-web"

@@ -22,8 +22,12 @@ const (
 )
 
 type Options struct {
-	Runtime              productruntime.Options
-	ListenAddress        string
+	Runtime       productruntime.Options
+	ListenAddress string
+	// Empty disables SOCKS. This explicit bind is owned by Start's Runtime;
+	// attaching the HTTP Server to another Host never opens a second proxy.
+	SOCKSListenAddress   string
+	SOCKSAccessAddress   string
 	AccessAddress        string
 	Transport            TransportOptions
 	ManagementUIRoot     string
@@ -40,6 +44,7 @@ type Options struct {
 // ProductRuntime. DesktopHost uses this form so the Mac App and remote clients
 // see one database, one Environment authority, and one evidence timeline.
 type AttachOptions struct {
+	VLESSAvailable         bool
 	Runtime                *productruntime.Runtime
 	DataDirectory          string
 	ListenAddress          string
@@ -95,6 +100,23 @@ func validTrustedProxies(proxies ipallowlist.List) error {
 }
 
 func (options Options) validate() error {
+	if options.SOCKSAccessAddress != "" {
+		if options.SOCKSListenAddress == "" {
+			return errors.New("SOCKS access address requires a SOCKS listener")
+		}
+		if _, err := serverconnection.ParseAddress(options.SOCKSAccessAddress); err != nil {
+			return errors.New("SOCKS access address is invalid")
+		}
+	}
+	if options.SOCKSListenAddress != "" {
+		host, port, err := net.SplitHostPort(options.SOCKSListenAddress)
+		if err != nil || net.ParseIP(host) == nil {
+			return errors.New("SOCKS listener requires an explicit literal bind")
+		}
+		if _, err := strconv.ParseUint(port, 10, 16); err != nil {
+			return errors.New("SOCKS listen port is invalid")
+		}
+	}
 	if err := validTrustedProxies(options.TrustedProxies); err != nil {
 		return err
 	}

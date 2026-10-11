@@ -9,11 +9,15 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"net"
+	"net/url"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/vibe-agi/vibermate/internal/egressnetwork"
 	"github.com/vibe-agi/vibermate/internal/egressprofile"
 	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/originidentity"
@@ -41,6 +45,7 @@ const (
 	PurposeOriginalOrigin         EgressPurpose = "original_origin"
 	PurposeAgentProbe             EgressPurpose = "agent_probe"
 	PurposeBlindTunnel            EgressPurpose = "blind_tunnel"
+	PurposeDatagram               EgressPurpose = "datagram"
 	PurposeAuxiliaryLLM           EgressPurpose = "auxiliary_llm"
 	PurposeLanguageTransform      EgressPurpose = "language_transform"
 	PurposePluginCatalogSync      EgressPurpose = "plugin_catalog_sync"
@@ -64,6 +69,7 @@ func Purposes() []EgressPurpose {
 		PurposeOriginalOrigin,
 		PurposeAgentProbe,
 		PurposeBlindTunnel,
+		PurposeDatagram,
 		PurposeAuxiliaryLLM,
 		PurposeLanguageTransform,
 		PurposePluginCatalogSync,
@@ -91,7 +97,7 @@ func AuthorityForPurpose(
 	switch purpose {
 	case PurposeProviderAttempt, PurposeRouteOperation, PurposeClientToolService:
 		return AuthorityEnvironment, nil
-	case PurposeOriginalOrigin, PurposeAgentProbe, PurposeBlindTunnel:
+	case PurposeOriginalOrigin, PurposeAgentProbe, PurposeBlindTunnel, PurposeDatagram:
 		return AuthorityNetwork, nil
 	case PurposeUpstreamModelDiscovery, PurposeUpstreamAccountRead, PurposeUpstreamAccountAction, PurposeModelMetadataDirectory,
 		PurposeCredentialRefresh,
@@ -115,6 +121,7 @@ const (
 	PayloadClientData     PayloadClass = "client_data"
 	PayloadClientSemantic PayloadClass = "client_semantic"
 	PayloadOpaqueTunnel   PayloadClass = "opaque_tunnel"
+	PayloadOpaqueDatagram PayloadClass = "opaque_datagram"
 	PayloadRuntime        PayloadClass = "runtime"
 )
 
@@ -125,6 +132,7 @@ func (class PayloadClass) valid() bool {
 		PayloadClientData,
 		PayloadClientSemantic,
 		PayloadOpaqueTunnel,
+		PayloadOpaqueDatagram,
 		PayloadRuntime:
 		return true
 	default:
@@ -139,11 +147,12 @@ func (class PayloadClass) carriesClientPayload() bool {
 type ParentKind string
 
 const (
-	ParentUpstreamAttempt ParentKind = "upstream_attempt"
-	ParentClientOperation ParentKind = "client_operation"
-	ParentOriginalRequest ParentKind = "original_request"
-	ParentBlindConnection ParentKind = "blind_connection"
-	ParentRuntimeAction   ParentKind = "runtime_action"
+	ParentUpstreamAttempt    ParentKind = "upstream_attempt"
+	ParentClientOperation    ParentKind = "client_operation"
+	ParentOriginalRequest    ParentKind = "original_request"
+	ParentBlindConnection    ParentKind = "blind_connection"
+	ParentDatagramConnection ParentKind = "datagram_connection"
+	ParentRuntimeAction      ParentKind = "runtime_action"
 )
 
 type CallerKind string
@@ -242,6 +251,12 @@ type Attempt struct {
 }
 
 func New(input NewInput) (Attempt, error) {
+	if input.Purpose == PurposeDatagram && (input.Decision.AccountID != "" || input.Decision.AccountSettingsRevision != 0) {
+		return Attempt{}, errors.New("opaque datagram cannot carry a model account")
+	}
+	if input.Purpose == PurposeDatagram && (input.Caller != CallerCore || input.CallerID != "") {
+		return Attempt{}, errors.New("datagram audit requires core capture authority")
+	}
 	if input.Purpose == PurposeClientToolService && (input.Decision.AccountID != "" || input.Decision.AccountSettingsRevision != 0) {
 		return Attempt{}, errors.New("native tool egress cannot carry a model account")
 	}
@@ -296,7 +311,11 @@ func New(input NewInput) (Attempt, error) {
 			return Attempt{}, errors.New("transport selection requires a direct-only provider origin")
 		}
 	}
-	if input.TargetOrigin == "" ||
+	if input.Purpose == PurposeDatagram {
+		if !validDatagramOrigin(input.TargetOrigin) {
+			return Attempt{}, errors.New("datagram target origin is invalid")
+		}
+	} else if input.TargetOrigin == "" ||
 		!strings.HasPrefix(input.TargetOrigin, "https://") &&
 			!strings.HasPrefix(input.TargetOrigin, "http://") {
 		return Attempt{}, errors.New("egress target origin is invalid")
@@ -318,6 +337,23 @@ func New(input NewInput) (Attempt, error) {
 		startedAt:       input.StartedAt.UTC(),
 		byteCountsKnown: true,
 	}, nil
+}
+
+func validDatagramOrigin(raw string) bool {
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme != "udp" || u.User != nil || u.Path != "" || u.RawQuery != "" || u.Fragment != "" || u.Opaque != "" {
+		return false
+	}
+	host, port, err := net.SplitHostPort(u.Host)
+	if err != nil {
+		return false
+	}
+	canonical, err := egressnetwork.CanonicalHost(host)
+	if err != nil {
+		return false
+	}
+	p, err := strconv.ParseUint(port, 10, 16)
+	return err == nil && p != 0 && raw == "udp://"+net.JoinHostPort(canonical, strconv.Itoa(int(p)))
 }
 
 // Finish returns the terminal value for this attempt. A terminal attempt
@@ -404,6 +440,10 @@ func validatePayloadClass(
 	class PayloadClass,
 ) error {
 	switch purpose {
+	case PurposeDatagram:
+		if class != PayloadOpaqueDatagram {
+			return errors.New("datagram requires opaque packet payload class")
+		}
 	case PurposeClientToolService:
 		if class != PayloadClientData && class != PayloadNone {
 			return errors.New("native tool payload must be client data or none")
@@ -468,6 +508,11 @@ func validateParent(
 		return nil
 	}
 	switch purpose {
+	case PurposeDatagram:
+		if parent.Kind != ParentDatagramConnection || parent.ExchangeID != "" {
+			return errors.New("datagram requires a datagram connection parent")
+		}
+		return requireConnection()
 	case PurposeProviderAttempt:
 		if parent.Kind != ParentUpstreamAttempt {
 			return errors.New("provider attempt requires an UpstreamAttempt parent")
@@ -651,6 +696,8 @@ func PurposeForEgressKind(kind string) (EgressPurpose, error) {
 		return PurposeAgentProbe, nil
 	case "blind_tunnel":
 		return PurposeBlindTunnel, nil
+	case "datagram":
+		return PurposeDatagram, nil
 	case "update":
 		return PurposeUpdate, nil
 	default:

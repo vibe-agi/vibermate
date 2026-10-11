@@ -37,6 +37,8 @@
   "cli.capture.client.desktop_app": "桌面应用",
   "cli.capture.client.other": "其他应用",
   "cli.capture.created": "已为工作环境 {{environment}} 创建手动捕获 {{captureId}}。下面的代理密码只显示一次。\n代理：{{proxyUrl}}\n根证书：{{rootPath}}",
+  "cli.capture.socksReview": "SOCKS5 代理：{{address}}。使用同一份代理凭据；UDP 使用全局网络出口。",
+  "cli.capture.socks": "SOCKS5 代理：{{address}}\n使用用户名 {{username}} 和上方代理 URL 中显示的密码。请选择支持 SOCKS5 UDP 的客户端；UDP 使用全局网络出口。使用 UDP 时请保持 TCP 控制连接。UDP 不需要 HTTPS 解密用的 Root 证书。SOCKS 本身不加密：远程连接需要可信私有网络或隧道，并允许访问 UDP 中继地址和端口。",
   "cli.capture.noRoot": "该工作环境不交付根证书",
   "cli.capture.review": "创建前请确认这项手动捕获。\n名称：{{name}}\n工作环境：{{environment}}\n用途：{{clientClass}}\n有效期：{{lifetime}}\n代理：{{proxyAddress}}\n根证书指纹：{{rootFingerprint}}\n根证书：{{rootPath}}\n它只能证明请求持有这份代理凭据，不能证明原应用或进程身份，也不会选择线路、账号或模型。\n确认创建？[y/N]",
   "cli.capture.untilRevoked": "直到你主动撤销",

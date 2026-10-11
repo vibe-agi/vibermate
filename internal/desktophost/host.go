@@ -67,6 +67,7 @@ type Status struct {
 	InstanceID     string     `json:"instanceId"`
 	ControlBaseURL string     `json:"controlBaseUrl,omitempty"`
 	ProxyOrigin    string     `json:"proxyOrigin,omitempty"`
+	SOCKSAddress   string     `json:"socksAddress,omitempty"`
 	StartedAt      time.Time  `json:"startedAt"`
 	StoppedAt      *time.Time `json:"stoppedAt,omitempty"`
 	StopReasonCode string     `json:"stopReasonCode,omitempty"`
@@ -101,6 +102,7 @@ type Host struct {
 	remoteServer         *serverhost.Host
 	control              *trackedListener
 	proxy                *trackedListener
+	socks                *trackedListener
 	appSession           AppSession
 	instanceID           string
 	shutdownLimit        time.Duration
@@ -244,6 +246,7 @@ func Start(ctx context.Context, options Options) (*Host, error) {
 		remoteOptions.CaptureRunLifetime = options.CaptureRunLifetime
 		remoteOptions.ShutdownTimeout = options.ShutdownTimeout
 		remoteOptions.ResolveLocalIdentities = true
+		remoteOptions.VLESSAvailable = options.Runtime.VLESSExecutable != ""
 		remoteServer, err = serverhost.Attach(ctx, remoteOptions)
 		if err != nil {
 			return fail("remote Runtime Server", err)
@@ -260,6 +263,17 @@ func Start(ctx context.Context, options Options) (*Host, error) {
 		return normalizeClose(proxyTracked.Close())
 	})
 	proxyOrigin := "http://" + proxyTracked.Addr().String()
+	var socksTracked *trackedListener
+	socksAddress := ""
+	if options.SOCKSListenAddress != "" {
+		listener, err := listenLoopback(ctx, options.SOCKSListenAddress)
+		if err != nil {
+			return fail("SOCKS listener", err)
+		}
+		socksTracked = newTrackedListener(listener)
+		socksAddress = socksTracked.Addr().String()
+		rollback.register("SOCKS listener", func(context.Context) error { return normalizeClose(socksTracked.Close()) })
+	}
 
 	controlListener, err := listenLoopback(ctx, options.ControlListenAddress)
 	if err != nil {
@@ -328,16 +342,17 @@ func Start(ctx context.Context, options Options) (*Host, error) {
 		return fail("Capture Environment authority", err)
 	}
 	grantIssuer, err := capturegrant.New(capturegrant.Options{
-		Runs:           runtime.CaptureRuns(),
-		ManualCaptures: runtime.ManualCaptures(),
-		Verifier:       verifier,
-		Authorities:    captureAuthorities,
-		ProxyOrigin:    proxyOrigin,
-		Generation:     runtime.Status().InstanceID,
-		RootIdentity:   runtime.LocalRootIdentity(),
-		Root:           runtime.LocalRootCertificate(),
-		RunLifetime:    options.CaptureRunLifetime,
-		Workspaces:     workspaceResolver,
+		ManualSOCKSAddress: socksAddress,
+		Runs:               runtime.CaptureRuns(),
+		ManualCaptures:     runtime.ManualCaptures(),
+		Verifier:           verifier,
+		Authorities:        captureAuthorities,
+		ProxyOrigin:        proxyOrigin,
+		Generation:         runtime.Status().InstanceID,
+		RootIdentity:       runtime.LocalRootIdentity(),
+		Root:               runtime.LocalRootCertificate(),
+		RunLifetime:        options.CaptureRunLifetime,
+		Workspaces:         workspaceResolver,
 		// Authenticated local runs authorize their scoped process-local CA
 		// delivery; network and tool approvals remain independent of that grant.
 		ClientRootApprovals: runtime.ClientRootApprovals(),
@@ -420,6 +435,7 @@ func Start(ctx context.Context, options Options) (*Host, error) {
 		return fail("upstream model catalog", err)
 	}
 	application, err := desktopcontrol.New(desktopcontrol.Options{
+		NetworkAccess:       &desktopcontrol.NetworkAccess{SOCKSAddress: socksAddress, VLESSAvailable: options.Runtime.VLESSExecutable != ""},
 		Storage:             runtime,
 		ACP:                 runtime.ACPObservations(),
 		Readiness:           ready,
@@ -445,6 +461,7 @@ func Start(ctx context.Context, options Options) (*Host, error) {
 		CodexLogins:         runtime.CodexOAuthLogins(),
 		CodeLibrary:         runtime.CodeLibrary(),
 		EgressProfiles:      runtime.EgressProfiles(),
+		VLESSProfiles:       runtime.VLESSProfiles(),
 		EgressDefaults:      runtime.EgressDefaults(),
 		ProductUpdates:      runtime.ProductUpdates(),
 		RawEvidence:         runtime.RawEvidence(),
@@ -503,6 +520,7 @@ func Start(ctx context.Context, options Options) (*Host, error) {
 		readiness:    ready,
 		control:      controlTracked,
 		proxy:        proxyTracked,
+		socks:        socksTracked,
 		appSession:   appSession,
 		descriptor: desktopbootstrap.Descriptor{
 			Schema:         desktopbootstrap.DescriptorSchema,
@@ -526,6 +544,7 @@ func Start(ctx context.Context, options Options) (*Host, error) {
 			InstanceID:     runtime.Status().InstanceID,
 			ControlBaseURL: controlBaseURL,
 			ProxyOrigin:    proxyOrigin,
+			SOCKSAddress:   socksAddress,
 			StartedAt:      now,
 		},
 		shutdownDone: make(chan struct{}),
@@ -552,6 +571,25 @@ func Start(ctx context.Context, options Options) (*Host, error) {
 	rollback.register("proxy server", func(shutdownContext context.Context) error {
 		return stopHTTPServer(shutdownContext, host.proxyServer, proxyTracked)
 	})
+	if socksTracked != nil {
+		host.serveWG.Add(1)
+		go func() {
+			defer host.serveWG.Done()
+			err := runtime.SOCKSProxy().Serve(socksTracked)
+			if err != nil && !errors.Is(err, net.ErrClosed) && !host.closing.Load() {
+				root := fmt.Errorf("SOCKS listener failed: %w", err)
+				host.failureMu.Lock()
+				if !host.committed.Load() {
+					host.failureRoot = errors.Join(host.failureRoot, root)
+					host.failureMu.Unlock()
+					return
+				}
+				host.failureMu.Unlock()
+				host.beginShutdown(root)
+			}
+		}()
+		rollback.register("SOCKS server", runtime.SOCKSProxy().Shutdown)
+	}
 	host.startServing("control", host.controlServer, controlTracked)
 	rollback.register("control server", func(shutdownContext context.Context) error {
 		return stopHTTPServer(shutdownContext, host.controlServer, controlTracked)
@@ -709,6 +747,11 @@ func (host *Host) executeShutdown() {
 	}
 	if err := normalizeClose(host.proxy.Close()); err != nil {
 		shutdownErr = errors.Join(shutdownErr, fmt.Errorf("close proxy admission: %w", err))
+	}
+	if host.socks != nil {
+		if err := normalizeClose(host.socks.Close()); err != nil {
+			shutdownErr = errors.Join(shutdownErr, fmt.Errorf("close SOCKS admission: %w", err))
+		}
 	}
 	if err := stopControlServer(ctx, host.controlServer, host.control); err != nil {
 		shutdownErr = errors.Join(shutdownErr, fmt.Errorf("stop control server: %w", err))

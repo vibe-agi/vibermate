@@ -22,6 +22,12 @@ func TestSQLiteAcceptsEveryDeclaredEgressPurpose(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, purpose := range egressaudit.Purposes() {
+		if purpose == egressaudit.PurposeDatagram {
+			if _, err := store.EgressAttemptRepository().Append(context.Background(), packetAuditFixture(t)); err != nil {
+				t.Fatal(err)
+			}
+			continue
+		}
 		if purpose == egressaudit.PurposeClientToolService {
 			attempt := nativeAuditFixture(t, "native-catalog")
 			if _, err := store.EgressAttemptRepository().Append(context.Background(), attempt); err != nil {

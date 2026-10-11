@@ -45,8 +45,10 @@ import (
 	"github.com/vibe-agi/vibermate/internal/provideraccount"
 	"github.com/vibe-agi/vibermate/internal/rawevidence"
 	"github.com/vibe-agi/vibermate/internal/resourcedeletion"
+	"github.com/vibe-agi/vibermate/internal/serverconnection"
 	"github.com/vibe-agi/vibermate/internal/toolapproval"
 	"github.com/vibe-agi/vibermate/internal/upstreamendpoint"
+	"github.com/vibe-agi/vibermate/internal/vlessprofile"
 )
 
 const (
@@ -155,6 +157,7 @@ type ConversationIndexer interface {
 }
 
 type Options struct {
+	NetworkAccess       *NetworkAccess
 	ProductUpdates      ProductUpdateReader
 	NativeContentKey    [32]byte
 	NativeTools         nativetool.Repository
@@ -181,6 +184,7 @@ type Options struct {
 	CodexLogins         codexoauth.LoginController
 	CodeLibrary         codelibrary.Controller
 	EgressProfiles      egressprofile.Controller
+	VLESSProfiles       vlessprofile.Importer
 	EgressDefaults      egressprofile.Defaults
 	Models              modelcatalog.Reader
 	ClientModels        modelcatalog.ProviderMetadataReader
@@ -199,7 +203,13 @@ type Options struct {
 	Clock          Clock
 }
 
+type NetworkAccess struct {
+	SOCKSAddress   string `json:"socksAddress,omitempty"`
+	VLESSAvailable bool   `json:"vlessAvailable"`
+}
+
 type Handler struct {
+	networkAccess       *NetworkAccess
 	productUpdates      ProductUpdateReader
 	nativeContentKey    [32]byte
 	nativeTools         nativetool.Repository
@@ -226,6 +236,7 @@ type Handler struct {
 	codexLogins         codexoauth.LoginController
 	codeLibrary         codelibrary.Controller
 	egressProfiles      egressprofile.Controller
+	vlessProfiles       vlessprofile.Importer
 	egressDefaults      egressprofile.Defaults
 	models              modelcatalog.Reader
 	clientModels        modelcatalog.ProviderMetadataReader
@@ -249,12 +260,13 @@ type Handler struct {
 }
 
 type StatusResponse struct {
-	Generation   string                       `json:"generation"`
-	Ready        bool                         `json:"ready"`
-	APIVersion   string                       `json:"apiVersion"`
-	ProductBuild string                       `json:"productBuild"`
-	StatusKey    string                       `json:"statusKey"`
-	Runtime      productruntime.RuntimeStatus `json:"runtime"`
+	NetworkAccess *NetworkAccess               `json:"networkAccess,omitempty"`
+	Generation    string                       `json:"generation"`
+	Ready         bool                         `json:"ready"`
+	APIVersion    string                       `json:"apiVersion"`
+	ProductBuild  string                       `json:"productBuild"`
+	StatusKey     string                       `json:"statusKey"`
+	Runtime       productruntime.RuntimeStatus `json:"runtime"`
 }
 
 type ApprovalDecisionInput struct {
@@ -264,6 +276,17 @@ type ApprovalDecisionInput struct {
 }
 
 func New(options Options) (*Handler, error) {
+	var networkAccess *NetworkAccess
+	if options.NetworkAccess != nil {
+		value := *options.NetworkAccess
+		if value.SOCKSAddress != "" {
+			address, err := serverconnection.ParseAddress(value.SOCKSAddress)
+			if err != nil || address.String() != value.SOCKSAddress {
+				return nil, errors.New("Host SOCKS access address is not canonical")
+			}
+		}
+		networkAccess = &value
+	}
 	if options.NativeContentKey == ([32]byte{}) {
 		if _, err := rand.Read(options.NativeContentKey[:]); err != nil {
 			return nil, err
@@ -285,6 +308,7 @@ func New(options Options) (*Handler, error) {
 		return nil, errors.New("Desktop control dependencies are incomplete")
 	}
 	handler := &Handler{
+		networkAccess:       networkAccess,
 		productUpdates:      options.ProductUpdates,
 		nativeContentKey:    options.NativeContentKey,
 		launchSnapshots:     options.LaunchSnapshots,
@@ -311,6 +335,7 @@ func New(options Options) (*Handler, error) {
 		codexLogins:         options.CodexLogins,
 		codeLibrary:         options.CodeLibrary,
 		egressProfiles:      options.EgressProfiles,
+		vlessProfiles:       options.VLESSProfiles,
 		egressDefaults:      options.EgressDefaults,
 		models:              options.Models,
 		clientModels:        options.ClientModels,
@@ -413,6 +438,10 @@ func New(options Options) (*Handler, error) {
 			"GET /api/v1/egress-profiles/{egressId}/revisions/{egressRevision}",
 			handler.getEgressProfileRevision,
 		)
+	}
+	if handler.vlessProfiles != nil {
+		handler.mux.HandleFunc("POST /api/v1/egress-profiles/import-vless", handler.importVLESSProfile)
+		handler.mux.HandleFunc("GET /api/v1/egress-profiles/{egressId}/revisions/{egressRevision}/vless-settings", handler.getVLESSSettings)
 	}
 	handler.mux.HandleFunc("GET /api/v1/upstream-endpoints", handler.listUpstreamEndpoints)
 	handler.mux.HandleFunc("POST /api/v1/upstream-endpoints", handler.createUpstreamEndpoint)
@@ -598,12 +627,13 @@ func (handler *Handler) getStatus(
 ) {
 	status := handler.status.Status()
 	writeJSON(writer, http.StatusOK, StatusResponse{
-		Generation:   status.InstanceID,
-		Ready:        handler.readiness.Ready(),
-		APIVersion:   "v1",
-		ProductBuild: productbuild.Label(),
-		StatusKey:    "runtime.state." + string(status.State),
-		Runtime:      status,
+		NetworkAccess: handler.networkAccess,
+		Generation:    status.InstanceID,
+		Ready:         handler.readiness.Ready(),
+		APIVersion:    "v1",
+		ProductBuild:  productbuild.Label(),
+		StatusKey:     "runtime.state." + string(status.State),
+		Runtime:       status,
 	})
 }
 

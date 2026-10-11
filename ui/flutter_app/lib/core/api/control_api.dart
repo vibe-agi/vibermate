@@ -139,6 +139,13 @@ abstract interface class ControlApi {
 
   Future<EgressProfileCatalog> egressProfiles();
 
+  Future<EgressDefaultSetting> egressDefault();
+
+  Future<EgressDefaultSetting> setEgressDefault(
+    EgressDefaultSetting current,
+    EgressProfileRevision? profile,
+  );
+
   Future<EgressProfileRevision> publishEgressProfile({
     required String id,
     required int expectedRevision,
@@ -147,6 +154,21 @@ abstract interface class ControlApi {
   });
 
   Future<EgressProfileRevision> egressProfileRevision(String id, int revision);
+
+  Future<VlessProfileDescription> vlessProfileDescription(
+    String id,
+    int revision,
+  );
+
+  Future<EgressProfileRevision> importVlessEgressProfile({
+    required String id,
+    required int expectedRevision,
+    required String displayName,
+    required String uri,
+    required TrafficResolverPolicy resolver,
+    required String directDomains,
+    VlessTLSImportOptions? tls,
+  });
 
   Future<EnvironmentPublishResult> publishEnvironmentDraft(
     String environmentId,
@@ -1251,6 +1273,39 @@ final class HttpControlApi implements ControlApi, ACPObservationApi {
       );
 
   @override
+  Future<EgressDefaultSetting> egressDefault() async =>
+      EgressDefaultSetting.fromJson(await _read('/api/v1/egress-default'));
+
+  @override
+  Future<EgressDefaultSetting> setEgressDefault(
+    EgressDefaultSetting current,
+    EgressProfileRevision? profile,
+  ) async {
+    if (profile != null) {
+      EgressChoice.fromJson(profile.toJson(), 'defaultProfile');
+    }
+    final result = EgressDefaultSetting.fromJson(
+      await _mutation(
+        'PUT',
+        '/api/v1/egress-default',
+        expectedRevision: current.revision,
+        body: {
+          'profile': profile == null
+              ? null
+              : {'id': profile.id, 'revision': profile.revision},
+        },
+      ),
+    );
+    final expected = current.revision + (current.profile == profile ? 0 : 1);
+    if (result.revision != expected || result.profile != profile) {
+      throw const ControlContractException(
+        'Default mutation acknowledgement is inconsistent',
+      );
+    }
+    return result;
+  }
+
+  @override
   Future<EgressProfileRevision> publishEgressProfile({
     required String id,
     required int expectedRevision,
@@ -1270,6 +1325,79 @@ final class HttpControlApi implements ControlApi, ACPObservationApi {
         body: {'displayName': displayName, 'policy': policy.toJson()},
       ),
       'egressProfile',
+    );
+  }
+
+  @override
+  Future<EgressProfileRevision> importVlessEgressProfile({
+    required String id,
+    required int expectedRevision,
+    required String displayName,
+    required String uri,
+    required TrafficResolverPolicy resolver,
+    required String directDomains,
+    VlessTLSImportOptions? tls,
+  }) async {
+    if (!_validResourceId(id) ||
+        id == EgressProfileRevision.direct.id ||
+        expectedRevision < 0 ||
+        BigInt.from(expectedRevision) >= BigInt.parse('9223372036854775807')) {
+      throw const ControlContractException(
+        'Egress profile import authority is invalid',
+      );
+    }
+    if (tls != null &&
+        tls.mode == 'custom_ca' &&
+        (tls.caPem == null ||
+            tls.caPem!.trim().isEmpty ||
+            utf8.encode(tls.caPem!).length > 64 * 1024)) {
+      throw const ControlContractException('Custom CA input is invalid');
+    }
+    final response = await _mutation(
+      'POST',
+      '/api/v1/egress-profiles/import-vless',
+      expectedRevision: expectedRevision,
+      body: {
+        'id': id,
+        'displayName': displayName,
+        'uri': uri,
+        'resolver': resolver.toJson(),
+        'directDomains': directDomains,
+        if (tls != null)
+          'tls': {
+            'mode': tls.mode,
+            if (tls.mode == 'custom_ca') 'caPem': tls.caPem,
+          },
+      },
+    );
+    final profile = EgressProfileRevision.fromJson(response, 'egressProfile');
+    if (profile.id != id ||
+        profile.revision != expectedRevision + 1 ||
+        !profile.policy.proxy.isVless) {
+      throw const ControlContractException(
+        'Egress profile import acknowledgement is inconsistent',
+      );
+    }
+    return profile;
+  }
+
+  @override
+  Future<VlessProfileDescription> vlessProfileDescription(
+    String id,
+    int revision,
+  ) async {
+    if (!_validResourceId(id) ||
+        revision < 1 ||
+        BigInt.from(revision) > BigInt.parse('9223372036854775807')) {
+      throw const ControlContractException(
+        'VLESS settings authority is invalid',
+      );
+    }
+    return VlessProfileDescription.fromJson(
+      await _read(
+        '/api/v1/egress-profiles/${Uri.encodeComponent(id)}/revisions/$revision/vless-settings',
+      ),
+      'vlessSettings',
     );
   }
 
@@ -2685,7 +2813,9 @@ final class HttpControlApi implements ControlApi, ACPObservationApi {
       response.payload,
       'manualCaptureGrant',
     );
-    if (grant.environmentId != context.environmentId ||
+    if (grant.proxyAddress != context.proxyAddress ||
+        grant.socksAddress != context.socksAddress ||
+        grant.environmentId != context.environmentId ||
         grant.capture.displayName != displayName ||
         grant.capture.clientClass != clientClass ||
         grant.capture.lifetime != lifetime ||

@@ -19,6 +19,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/capturegrant"
 	"github.com/vibe-agi/vibermate/internal/clientadapter"
 	"github.com/vibe-agi/vibermate/internal/controlprincipal"
+	"github.com/vibe-agi/vibermate/internal/desktopcontrol"
 	"github.com/vibe-agi/vibermate/internal/instanceguard"
 	"github.com/vibe-agi/vibermate/internal/ipallowlist"
 	"github.com/vibe-agi/vibermate/internal/modelcatalog"
@@ -51,6 +52,7 @@ type Status struct {
 	Ready           bool   `json:"ready"`
 	InstanceID      string `json:"instanceId"`
 	ListenAddress   string `json:"listenAddress"`
+	SOCKSAddress    string `json:"socksAddress,omitempty"`
 	Scheme          string `json:"scheme"`
 	TLSFingerprint  string `json:"tlsFingerprint"`
 	TLSMode         string `json:"tlsMode"`
@@ -75,6 +77,9 @@ type Host struct {
 	admin          *serveradmin.Authority
 	guard          *instanceguard.Guard
 	listener       net.Listener
+	socks          net.Listener
+	socksDone      chan struct{}
+	socksAddress   string
 	server         *http.Server
 	address        string
 	scheme         string
@@ -135,7 +140,8 @@ func Start(ctx context.Context, options Options) (*Host, error) {
 	attached.CaptureRunLifetime = options.CaptureRunLifetime
 	attached.ShutdownTimeout = options.ShutdownTimeout
 	attached.TrustedProxies = options.TrustedProxies
-	host, err := startAttached(ctx, attached, guard, true)
+	attached.VLESSAvailable = options.Runtime.VLESSExecutable != ""
+	host, err := startAttached(ctx, attached, guard, true, options.SOCKSListenAddress, options.SOCKSAccessAddress)
 	if err == nil {
 		return host, nil
 	}
@@ -167,7 +173,7 @@ func Attach(ctx context.Context, options AttachOptions) (*Host, error) {
 	if err != nil {
 		return nil, fmt.Errorf("acquire Runtime Server generation: %w", err)
 	}
-	host, err := startAttached(ctx, options, guard, false)
+	host, err := startAttached(ctx, options, guard, false, "", "")
 	if err != nil {
 		return nil, errors.Join(err, guard.Release())
 	}
@@ -179,12 +185,33 @@ func startAttached(
 	options AttachOptions,
 	guard *instanceguard.Guard,
 	ownsRuntime bool,
+	socksListenAddress string,
+	socksAccessAddress string,
 ) (*Host, error) {
+	started := false
+	var socksListener net.Listener
+	manualSOCKSAddress := ""
+	if socksListenAddress != "" {
+		var err error
+		socksListener, err = (&net.ListenConfig{}).Listen(ctx, "tcp", socksListenAddress)
+		if err != nil {
+			return nil, fmt.Errorf("listen for SOCKS proxy: %w", err)
+		}
+		defer func() {
+			if !started {
+				_ = socksListener.Close()
+			}
+		}()
+		targets, err := runtimeAccessTargets(socksListener.Addr().String(), socksAccessAddress)
+		if err != nil {
+			return nil, err
+		}
+		manualSOCKSAddress = targets[0]
+	}
 	listener, err := net.Listen("tcp", options.ListenAddress)
 	if err != nil {
 		return nil, fmt.Errorf("listen for Runtime Server: %w", err)
 	}
-	started := false
 	defer func() {
 		if !started {
 			_ = listener.Close()
@@ -216,7 +243,8 @@ func startAttached(
 		manualScheme = "http"
 	}
 	application, err := runtimecontrol.New(runtimecontrol.Options{
-		Runtime: runtime, Readiness: runtimeReadiness{runtime: runtime},
+		NetworkAccess: &desktopcontrol.NetworkAccess{SOCKSAddress: manualSOCKSAddress, VLESSAvailable: options.VLESSAvailable},
+		Runtime:       runtime, Readiness: runtimeReadiness{runtime: runtime},
 		Clock: options.Clock, ResolveLocalIdentities: options.ResolveLocalIdentities,
 	})
 	if err != nil {
@@ -233,7 +261,8 @@ func startAttached(
 		return nil, err
 	}
 	issuer, err := capturegrant.New(capturegrant.Options{
-		Runs: runtime.CaptureRuns(), ManualCaptures: runtime.ManualCaptures(),
+		ManualSOCKSAddress: manualSOCKSAddress,
+		Runs:               runtime.CaptureRuns(), ManualCaptures: runtime.ManualCaptures(),
 		Verifier: verifier, Authorities: authorities,
 		ProxyDelivery:     capturegrant.ProxyDeliveryClientRelay,
 		ManualProxyOrigin: manualScheme + "://" + connectTargets[0],
@@ -389,6 +418,7 @@ func startAttached(
 	})
 	localManagement.rootCA = rootCA
 	host := &Host{
+		socks:   socksListener,
 		runtime: runtime, admin: admin,
 		guard:    guard,
 		listener: transport.listener, address: listener.Addr().String(),
@@ -418,6 +448,20 @@ func startAttached(
 		IdleTimeout:       2 * time.Minute,
 		MaxHeaderBytes:    64 << 10,
 	}
+	if socksListener != nil {
+		host.socksAddress = socksListener.Addr().String()
+		host.socksDone = make(chan struct{})
+		guarded := host.ipAllowlist.gate.listen(socksListener, false)
+		go func() {
+			defer close(host.socksDone)
+			if err := runtime.SOCKSProxy().Serve(guarded); err != nil && !errors.Is(err, net.ErrClosed) {
+				host.failureMu.Lock()
+				host.serveErr = errors.Join(host.serveErr, fmt.Errorf("serve SOCKS proxy: %w", err))
+				host.failureMu.Unlock()
+				_ = host.listener.Close()
+			}
+		}()
+	}
 	go host.serve()
 	go allowlist.watch(host.stopWatching, ipAllowlistReloadInterval)
 	started = true
@@ -446,6 +490,7 @@ func (host *Host) Status() Status {
 		Ready:           host.runtime.Status().State == productruntime.RuntimeStateInitialized,
 		InstanceID:      host.runtime.Status().InstanceID,
 		ListenAddress:   host.address,
+		SOCKSAddress:    host.socksAddress,
 		Scheme:          host.scheme,
 		TLSFingerprint:  tlsStatus.fingerprint,
 		TLSMode:         string(tlsStatus.mode),
@@ -519,6 +564,9 @@ func (host *Host) Shutdown(ctx context.Context) error {
 		defer cancel()
 	}
 	serverErr := host.server.Shutdown(shutdownContext)
+	if host.socks != nil {
+		_ = host.socks.Close()
+	}
 	serverStopped := serverErr == nil
 	select {
 	case <-host.done:
@@ -538,6 +586,14 @@ func (host *Host) Shutdown(ctx context.Context) error {
 		runtimeErr = host.runtime.Shutdown(shutdownContext)
 		runtimeStopped = runtimeErr == nil &&
 			host.runtime.Status().State == productruntime.RuntimeStateStopped
+	}
+	if host.socksDone != nil {
+		select {
+		case <-host.socksDone:
+		case <-shutdownContext.Done():
+			runtimeStopped = false
+			runtimeErr = errors.Join(runtimeErr, shutdownContext.Err())
+		}
 	}
 	attemptErr := errors.Join(serverErr, host.Failure(), runtimeErr)
 	if !serverStopped || !runtimeStopped {

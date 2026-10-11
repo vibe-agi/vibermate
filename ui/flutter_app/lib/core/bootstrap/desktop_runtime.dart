@@ -159,6 +159,7 @@ final class DesktopRuntime {
       '--webview-origin=$_flutterOrigin',
       '--parent-lifetime-fd=0',
       '--bootstrap-fd=1',
+      '--socks-listen=127.0.0.1:0',
       if (remoteServerListenAddress != null)
         '--remote-server-listen=$remoteServerListenAddress',
     ];

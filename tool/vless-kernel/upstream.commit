@@ -1,0 +1,32 @@
+tree dbcb1d31713edfcf5860cf35feee0632e9117893
+parent 8aacdbd71b92c4a85779ae7818bd0d8e8f5793d5
+author RPRX <63339210+RPRX@users.noreply.github.com> 1774633540 +0000
+committer GitHub <noreply@github.com> 1774633540 +0000
+gpgsig -----BEGIN PGP SIGNATURE-----
+ 
+ wsFcBAABCAAQBQJpxsJECRC1aQ7uu5UhlAAAMeUQABqjD0UlcHcihtjjfn7eOQUM
+ viHXSlYNzTW/3mzsdJq0vA0bzkeCx2oJIi3Nq1OF0c+XIRecgYA4rpWj9GW32ydD
+ l6MBDtu3n5Re+tDiJqZGc0XCFtL89pvoIpcWHjxv3+jmPmA0yrlto1NkTcQESmjH
+ h0v+QhkT/1uPsvq4e9LqZ07PwUVQNif9iR3ev8c9p6xDwJfGeapbLHeXgpWqbQui
+ M8LFgviqXPOZrTTo4jxsONj0LzOGVyuob2DN24LnTf+vUGHAzj9k1034rpg2Y2zr
+ OV+d/6+PHfmyfPJvrckfOczF661aquIzXL0kJogzne1pah6cKxwmeLGNSZSJAU2n
+ V44Y+bxgRoRbvKANHE+F6sbXa60z+2BykNN6fKKrXowWnUJEIyMDI0xa+wnCYyiQ
+ /zU09V9F5EK+V+iKaIE/Vbnr89IXt60mtZRReqZC2djqRE0NDqkCLcyqw4o3eTzo
+ wdXzm3io8tSG5IPGY0CqH2SfsvZgpY5ouZZ/Q1Fnp27+qzF4PWRWCMHGQfoRx7EY
+ AIS9pQx80YGXHkvveBzICLutRc1ioP+AZFz5KvauKk+KThTTwW4Do/7wBGf920OO
+ 7GiNSPhPxOjp1+rLMf/JKQoDVXQz/+p5FkBMd0FYdT87TwPkAI3NvK0CXQlMSr3+
+ BmBkZb00oO0dahvLKuoh
+ =/AcO
+ -----END PGP SIGNATURE-----
+ 
+
+v26.3.27
+
+Announcement of NFTs by Project X: https://github.com/XTLS/Xray-core/discussions/3633
+Project X NFT: https://opensea.io/assets/ethereum/0x5ee362866001613093361eb8569d59c4141b76d1/1
+
+VLESS Post-Quantum Encryption: https://github.com/XTLS/Xray-core/pull/5067
+VLESS NFT: https://opensea.io/collection/vless
+
+XHTTP: Beyond REALITY: https://github.com/XTLS/Xray-core/discussions/4113
+REALITY NFT: https://opensea.io/assets/ethereum/0x5ee362866001613093361eb8569d59c4141b76d1/2

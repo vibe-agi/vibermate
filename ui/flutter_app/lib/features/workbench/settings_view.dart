@@ -220,14 +220,12 @@ final class _SettingsPaneHeader extends StatelessWidget {
     required this.title,
     required this.detail,
     required this.dismissHelpLabel,
-    this.trailing,
   });
 
   final IconData icon;
   final String title;
   final String detail;
   final String dismissHelpLabel;
-  final Widget? trailing;
 
   @override
   Widget build(BuildContext context) => Row(
@@ -255,7 +253,6 @@ final class _SettingsPaneHeader extends StatelessWidget {
           style: Theme.of(context).textTheme.titleMedium,
         ),
       ),
-      if (trailing case final action?) ...[const SizedBox(width: 12), action],
     ],
   );
 }
@@ -310,11 +307,17 @@ final class _EgressProfilesSettingsPane extends StatefulWidget {
 final class _EgressProfilesSettingsPaneState
     extends State<_EgressProfilesSettingsPane> {
   List<EgressProfileRevision> _profiles = const [];
+  EgressDefaultSetting? _default;
   bool _loading = true;
   bool _saving = false;
   bool _failed = false;
+  bool _unconfirmed = false;
+  String? _profileMutationError;
+  int _generation = 0;
+  int _runtimeGeneration = 0;
 
   AppCopy get copy => widget.copy;
+  bool get _owner => widget.controller.webPrincipal?.owner ?? true;
 
   @override
   void initState() {
@@ -322,22 +325,53 @@ final class _EgressProfilesSettingsPaneState
     unawaited(_load());
   }
 
+  @override
+  void didUpdateWidget(covariant _EgressProfilesSettingsPane oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!identical(oldWidget.controller, widget.controller)) {
+      _runtimeGeneration++;
+      _saving = false;
+      _unconfirmed = false;
+      _profileMutationError = null;
+      unawaited(_load());
+    }
+  }
+
   Future<void> _load() async {
+    final generation = ++_generation;
+    final controller = widget.controller;
     setState(() {
       _loading = true;
       _failed = false;
+      _default = null;
+      _profileMutationError = null;
     });
     try {
-      final catalog = await widget.controller.egressProfiles();
-      if (!mounted) return;
+      final catalog = await controller.egressProfiles();
+      EgressDefaultSetting? current;
+      try {
+        current = await controller.egressDefault();
+      } on Object {
+        current = null;
+      }
+      if (!mounted ||
+          generation != _generation ||
+          !identical(controller, widget.controller)) {
+        return;
+      }
       final profiles = [...catalog.items]
         ..sort((left, right) => left.displayName.compareTo(right.displayName));
       setState(() {
         _profiles = profiles;
+        _default = current;
         _loading = false;
       });
     } on Object {
-      if (!mounted) return;
+      if (!mounted ||
+          generation != _generation ||
+          !identical(controller, widget.controller)) {
+        return;
+      }
       setState(() {
         _loading = false;
         _failed = true;
@@ -354,14 +388,31 @@ final class _EgressProfilesSettingsPaneState
         title: copy('settings.egress.title'),
         detail: copy('settings.egress.detail'),
         dismissHelpLabel: copy('common.dismiss'),
-        trailing: FilledButton.icon(
-          key: const Key('egress-profile-add'),
-          onPressed: _saving ? null : () => unawaited(_edit()),
-          icon: const Icon(Icons.add, size: 15),
-          label: Text(copy('settings.egress.add')),
-        ),
       ),
+      const SizedBox(height: 12),
+      if (_owner)
+        Align(
+          alignment: Alignment.centerLeft,
+          child: FilledButton.icon(
+            key: const Key('egress-profile-add'),
+            onPressed: _saving ? null : () => unawaited(_edit()),
+            icon: const Icon(Icons.add, size: 15),
+            label: Text(copy('settings.egress.add')),
+          ),
+        ),
       const SizedBox(height: 14),
+      if (_profileMutationError case final message?) ...[
+        InlineNotice(
+          key: const Key('egress-profile-mutation-error'),
+          message: copy(message),
+          error: true,
+        ),
+        OutlinedButton.icon(
+          onPressed: _load,
+          icon: const Icon(Icons.refresh, size: 15),
+          label: Text(copy('status.refresh')),
+        ),
+      ],
       if (_loading)
         Padding(
           padding: const EdgeInsets.all(28),
@@ -384,87 +435,261 @@ final class _EgressProfilesSettingsPaneState
           ],
         )
       else
-        Container(
-          clipBehavior: Clip.antiAlias,
-          decoration: BoxDecoration(
-            border: Border.all(color: context.viberColors.divider),
-            borderRadius: ViberMetrics.surfaceRadius,
-          ),
-          child: Column(
-            children: [
-              for (var index = 0; index < _profiles.length; index++) ...[
-                if (index > 0) const Divider(height: 1),
-                _profileRow(_profiles[index]),
-              ],
-            ],
-          ),
+        Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text(
+              key: const Key('egress-default-summary'),
+              _default == null
+                  ? copy('settings.egress.default_unavailable')
+                  : '${copy('settings.egress.current')}: ${_default!.effectiveProfile.id == EgressProfileRevision.direct.id ? egressPolicySummary(copy, _default!.effectiveProfile.policy) : _default!.effectiveProfile.displayName}',
+            ),
+            Text(
+              copy('settings.egress.default_detail'),
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+            Text(
+              copy('settings.egress.remote_detail'),
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+            if (_default case final current?)
+              ExpansionTile(
+                key: const Key('egress-default-details'),
+                title: Text(copy('settings.egress.details')),
+                children: [
+                  Text(current.effectiveProfile.id),
+                  Text(
+                    copy.format('settings.egress.revision', {
+                      'revision': current.effectiveProfile.revision,
+                    }),
+                  ),
+                  Text(
+                    copy.format('settings.egress.default_revision', {
+                      'revision': current.revision,
+                    }),
+                  ),
+                ],
+              ),
+            if (_default?.profile == null && _default != null)
+              Text(
+                key: const Key('egress-default-unset'),
+                copy('settings.egress.unset'),
+              ),
+            if (_unconfirmed)
+              InlineNotice(
+                key: const Key('egress-default-unconfirmed'),
+                message: copy('settings.egress.unconfirmed'),
+                error: true,
+              ),
+            if (_owner && _default?.profile != null)
+              Align(
+                alignment: Alignment.centerLeft,
+                child: TextButton(
+                  key: const Key('egress-default-clear'),
+                  onPressed: _saving
+                      ? null
+                      : () => unawaited(_setDefault(null)),
+                  child: Text(copy('settings.egress.clear_default')),
+                ),
+              ),
+            const SizedBox(height: 12),
+            Container(
+              clipBehavior: Clip.antiAlias,
+              decoration: BoxDecoration(
+                border: Border.all(color: context.viberColors.divider),
+                borderRadius: ViberMetrics.surfaceRadius,
+              ),
+              child: Column(
+                children: [
+                  for (var index = 0; index < _profiles.length; index++) ...[
+                    if (index > 0) const Divider(height: 1),
+                    _profileRow(_profiles[index]),
+                  ],
+                ],
+              ),
+            ),
+          ],
         ),
     ],
   );
 
   Widget _profileRow(EgressProfileRevision profile) {
     final builtIn = profile.id == EgressProfileRevision.direct.id;
-    return ListTile(
+    return Padding(
       key: Key('egress-profile-row-${profile.id}'),
-      dense: true,
-      leading: Icon(
-        builtIn ? Icons.language_rounded : Icons.alt_route_rounded,
-        size: 17,
-        color: context.viberColors.route,
-      ),
-      title: Text(
-        egressProfileSummary(copy, profile),
-        maxLines: 1,
-        overflow: TextOverflow.ellipsis,
-      ),
-      subtitle: builtIn
-          ? Text(copy('settings.egress.builtin'))
-          : Text(
-              egressPolicySummary(copy, profile.policy),
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
+      padding: const EdgeInsets.all(12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Icon(
+                builtIn ? Icons.language_rounded : Icons.alt_route_rounded,
+                size: 17,
+                color: context.viberColors.route,
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  builtIn
+                      ? egressPolicySummary(copy, profile.policy)
+                      : profile.displayName,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 4),
+          if (_default?.effectiveProfile == profile)
+            Text(copy('settings.egress.current')),
+          builtIn
+              ? Text(copy('settings.egress.builtin'))
+              : Text(egressPolicySummary(copy, profile.policy)),
+          if (_owner)
+            Wrap(
+              spacing: 8,
+              runSpacing: 4,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              children: [
+                TextButton(
+                  key: Key('egress-default-set-${profile.id}'),
+                  onPressed: _saving || _default == null
+                      ? null
+                      : () => unawaited(_setDefault(profile)),
+                  child: Text(copy('settings.egress.set_default')),
+                ),
+                if (!builtIn)
+                  IconButton(
+                    key: Key('egress-profile-edit-${profile.id}'),
+                    onPressed: _saving ? null : () => unawaited(_edit(profile)),
+                    tooltip: copy('common.edit'),
+                    icon: const Icon(Icons.edit_outlined, size: 17),
+                  ),
+              ],
             ),
-      trailing: builtIn
-          ? null
-          : IconButton(
-              key: Key('egress-profile-edit-${profile.id}'),
-              onPressed: _saving ? null : () => unawaited(_edit(profile)),
-              tooltip: copy('common.edit'),
-              icon: const Icon(Icons.edit_outlined, size: 17),
-            ),
+        ],
+      ),
     );
   }
 
+  Future<void> _setDefault(EgressProfileRevision? profile) async {
+    final current = _default;
+    if (current == null || _saving || !_owner) return;
+    final generation = _generation;
+    final controller = widget.controller;
+    setState(() {
+      _saving = true;
+      _unconfirmed = false;
+    });
+    try {
+      final acknowledged = await controller.setEgressDefault(current, profile);
+      if (!mounted ||
+          generation != _generation ||
+          !identical(controller, widget.controller)) {
+        return;
+      }
+      setState(() {
+        _default = acknowledged;
+        _saving = false;
+      });
+    } on Object {
+      if (!mounted ||
+          generation != _generation ||
+          !identical(controller, widget.controller)) {
+        return;
+      }
+      setState(() {
+        _saving = false;
+        _unconfirmed = true;
+      });
+      await _load();
+    }
+  }
+
   Future<void> _edit([EgressProfileRevision? profile]) async {
+    if (_saving || !_owner) return;
+    final controller = widget.controller;
+    final generation = _runtimeGeneration;
+    bool current() =>
+        mounted &&
+        generation == _runtimeGeneration &&
+        identical(controller, widget.controller) &&
+        _owner;
     final draft = await showEgressProfileEditor(
       context: context,
       copy: copy,
       initial: profile,
+      loadVlessDescription: profile?.policy.proxy.isVless == true
+          ? () async {
+              if (!current()) {
+                throw StateError('Profile editor is no longer current');
+              }
+              final settings = await controller.vlessProfileDescription(
+                profile!.id,
+                profile.revision,
+              );
+              if (!current()) {
+                throw StateError('Profile editor is no longer current');
+              }
+              return settings;
+            }
+          : null,
     );
-    if (draft == null || !mounted) return;
-    setState(() => _saving = true);
+    if (draft == null || !current()) return;
+    setState(() {
+      _saving = true;
+      _profileMutationError = null;
+    });
     try {
-      if (profile == null) {
-        await widget.controller.createEgressProfile(
+      if (draft is VlessEgressProfileDraft) {
+        final intent = draft.import;
+        if (profile == null) {
+          await controller.createVlessEgressProfile(
+            displayName: draft.displayName,
+            uri: intent.uri,
+            resolver: intent.resolver,
+            directDomains: intent.directDomains,
+            tls: intent.tls,
+          );
+        } else {
+          await controller.importVlessEgressProfile(
+            id: profile.id,
+            expectedRevision: profile.revision,
+            displayName: draft.displayName,
+            uri: intent.uri,
+            resolver: intent.resolver,
+            directDomains: intent.directDomains,
+            tls: intent.tls,
+          );
+        }
+      } else if (profile == null) {
+        await controller.createEgressProfile(
           displayName: draft.displayName,
-          policy: draft.policy,
+          policy: (draft as EgressProfileDraft).policy,
         );
       } else {
-        await widget.controller.publishEgressProfile(
+        await controller.publishEgressProfile(
           id: profile.id,
           expectedRevision: profile.revision,
           displayName: draft.displayName,
-          policy: draft.policy,
+          policy: (draft as EgressProfileDraft).policy,
         );
       }
-      if (!mounted) return;
+      if (!current()) return;
       setState(() => _saving = false);
       await _load();
-    } on Object {
-      if (!mounted) return;
+    } on Object catch (error) {
+      if (!current()) return;
       setState(() {
         _saving = false;
-        _failed = true;
+        _profileMutationError = switch (error) {
+          ControlProblem(status: 400 || 422)
+              when draft is VlessEgressProfileDraft =>
+            'environment.egress.validation.vless',
+          UnsupportedError() when draft is VlessEgressProfileDraft =>
+            'environment.egress.vless.preview_unsupported',
+          _ => 'settings.egress.profile_unconfirmed',
+        };
       });
     }
   }
@@ -816,6 +1041,11 @@ final class _AccessSettingsPane extends StatelessWidget {
         ),
         dismissHelpLabel: copy('common.dismiss'),
       ),
+      const SizedBox(height: 14),
+      _NetworkAccessFacts(
+        access: controller.runtimeStatus?.networkAccess,
+        copy: copy,
+      ),
       if (controller.terminalManagement || controller.serverManagement) ...[
         const SizedBox(height: 14),
         ServerDeploymentGuide(copy: copy),
@@ -866,6 +1096,45 @@ final class _AccessSettingsPane extends StatelessWidget {
         else
           _RemoteAccessGuide(controller: controller, copy: copy),
       ],
+    ],
+  );
+}
+
+final class _NetworkAccessFacts extends StatelessWidget {
+  const _NetworkAccessFacts({required this.access, required this.copy});
+  final HostNetworkAccess? access;
+  final AppCopy copy;
+
+  @override
+  Widget build(BuildContext context) => Column(
+    key: const Key('settings-network-access'),
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      Text(
+        copy('settings.access.socks'),
+        style: Theme.of(context).textTheme.titleSmall,
+      ),
+      const SizedBox(height: 4),
+      SelectableText(
+        access?.socksAddress ??
+            copy(
+              access == null
+                  ? 'settings.access.network.unknown'
+                  : 'settings.access.network.disabled',
+            ),
+        style: monoStyle,
+      ),
+      const SizedBox(height: 4),
+      Text(
+        copy(
+          access == null
+              ? 'settings.access.vless.unknown'
+              : access!.vlessAvailable
+              ? 'settings.access.vless.installed'
+              : 'settings.access.vless.absent',
+        ),
+        style: Theme.of(context).textTheme.bodySmall,
+      ),
     ],
   );
 }

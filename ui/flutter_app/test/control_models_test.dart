@@ -10,6 +10,162 @@ import 'package:vibermate_app/preview/preview_control_api.dart';
 import 'runtime_usage_fixture.dart';
 
 void main() {
+  group('SOCKS delivery', () {
+    Map<String, Object?> contextWire(String? address) => {
+      'confirmationToken': 'ctx_${List.filled(43, 'A').join()}',
+      'proxyAddress': 'http://127.0.0.1:32123',
+      'socksAddress': ?address,
+      'environmentId': 'work',
+      'environmentRevision': 7,
+      'environmentDigest': List.filled(64, 'a').join(),
+      'launchAuthorityDigest': List.filled(64, 'b').join(),
+      'protectedAuthorities': <String>[],
+      'managedCredentialAuthorities': <String>[],
+      'defaultTemporarySeconds': 3600,
+      'maxTemporarySeconds': 86400,
+    };
+    test(
+      'context accepts separate canonical endpoint and missing legacy field',
+      () {
+        for (final address in [
+          '127.0.0.1:32124',
+          '[::1]:32124',
+          '[2001:db8:1234:5678:abcd:ef01:2345:6789]:32124',
+          '[fe80::1%en0]:1080',
+          '[fe80::1%12]:1080',
+          'proxy.home.arpa:32124',
+          null,
+        ]) {
+          final context = ManualCaptureContext.fromJson(
+            contextWire(address),
+            'context',
+            expectedEnvironmentId: 'work',
+          );
+          expect(context.socksAddress, address);
+        }
+      },
+    );
+    test('context rejects malformed or noncanonical connect destinations', () {
+      for (final address in [
+        '',
+        '0.0.0.0:1234',
+        '[::]:1234',
+        '127.0.0.1:0',
+        'user@proxy:1234',
+        'proxy:1234/path',
+        'proxy:1234?q=x',
+        'Proxy:1234',
+        '[:::1]:1234',
+        'proxy:65536',
+        'proxy:0123',
+        'proxy..example:1234',
+        '-proxy.example:1234',
+        '[0:0:0:0:0:0:0:1]:1234',
+        '[fe80::1%]:1080',
+        'fe80::1%en0:1080',
+        '[fe80::1%en0]:0',
+        '[fe80::1%en0:1080',
+        '[fe80::1%en[0]:1080',
+        '[fe80::1%en]0]:1080',
+      ]) {
+        expect(
+          () => ManualCaptureContext.fromJson(
+            contextWire(address),
+            'context',
+            expectedEnvironmentId: 'work',
+          ),
+          throwsA(isA<ControlContractException>()),
+          reason: address,
+        );
+      }
+    });
+    for (final address in ['[fe80::1%en0 ]:1080', '[fe80::1%foo://bar]:1080']) {
+      test('scoped host rejects producer-invalid authority $address', () {
+        expect(
+          () => ManualCaptureContext.fromJson(
+            contextWire(address),
+            'context',
+            expectedEnvironmentId: 'work',
+          ),
+          throwsA(isA<ControlContractException>()),
+        );
+      });
+    }
+    test('grant and host metadata retain only exact SOCKS delivery fields', () {
+      Map<String, Object?> grantWire(String? address) => {
+        'capture': {
+          'id': 'manual-test',
+          'displayName': 'Test',
+          'clientClass': 'other',
+          'lifetime': 'until_revoked',
+          'state': 'active',
+          'observation': 'waiting_for_traffic',
+          'createdAt': '2026-10-11T00:00:00Z',
+          'updatedAt': '2026-10-11T00:00:00Z',
+        },
+        'proxyAddress': 'http://127.0.0.1:32123',
+        'socksAddress': ?address,
+        'proxyUsername': 'capture',
+        'proxyPassword': 'synthetic-one-time',
+        'environmentId': 'work',
+        'assignmentRevision': 7,
+        'launchAuthorityDigest': 'b' * 64,
+        'protectedAuthorities': <String>[],
+        'managedCredentialAuthorities': <String>[],
+      };
+      expect(
+        ManualCaptureGrant.fromJson(
+          grantWire('proxy.home.arpa:32124'),
+          'grant',
+        ).socksAddress,
+        'proxy.home.arpa:32124',
+      );
+      expect(
+        ManualCaptureGrant.fromJson(grantWire(null), 'grant').socksAddress,
+        isNull,
+      );
+      for (final address in [
+        '',
+        '0.0.0.0:1234',
+        '[::]:1234',
+        'proxy:0',
+        'user@proxy:1234',
+        'proxy:1234/path',
+        'proxy:1234?q=x',
+        'Proxy:1234',
+        '[:::1]:1234',
+      ]) {
+        expect(
+          () => ManualCaptureGrant.fromJson(grantWire(address), 'grant'),
+          throwsA(isA<ControlContractException>()),
+          reason: address,
+        );
+        expect(
+          () => HostNetworkAccess.fromJson({
+            'socksAddress': address,
+            'vlessAvailable': false,
+          }, 'networkAccess'),
+          throwsA(isA<ControlContractException>()),
+          reason: address,
+        );
+      }
+      expect(
+        () => ManualCaptureGrant.fromJson({
+          ...grantWire(null),
+          'extra': true,
+        }, 'grant'),
+        throwsA(isA<ControlContractException>()),
+      );
+      expect(
+        () => ManualCaptureContext.fromJson(
+          {...contextWire(null), 'extra': true},
+          'context',
+          expectedEnvironmentId: 'work',
+        ),
+        throwsA(isA<ControlContractException>()),
+      );
+    });
+  });
   test(
     'Native inspection purpose is explicit and rejects unknown purposes',
     () {
@@ -1284,6 +1440,39 @@ void main() {
     expect(status.offlineHold.activeByKind, {'provider': 1});
     expect(status.productBuild, 'test-build');
     expect(status.schemaRevision, 1);
+    expect(status.networkAccess, isNull);
+    json['networkAccess'] = {
+      'socksAddress': '127.0.0.1:32124',
+      'vlessAvailable': true,
+    };
+    final network = RuntimeStatus.fromJson(
+      json,
+      expectedInstanceId: 'instance-test',
+    ).networkAccess!;
+    expect(network.socksAddress, '127.0.0.1:32124');
+    expect(network.vlessAvailable, isTrue);
+    json['networkAccess'] = {'vlessAvailable': false};
+    expect(
+      RuntimeStatus.fromJson(
+        json,
+        expectedInstanceId: 'instance-test',
+      ).networkAccess!.socksAddress,
+      isNull,
+    );
+    for (final malformed in [
+      null,
+      {'vlessAvailable': 'true'},
+      {'socksAddress': '127.0.0.1:32124'},
+      {'vlessAvailable': false, 'password': 'never-in-status'},
+      {'vlessAvailable': true, 'socksAddress': '0.0.0.0:32124'},
+    ]) {
+      json['networkAccess'] = malformed;
+      expect(
+        () => RuntimeStatus.fromJson(json, expectedInstanceId: 'instance-test'),
+        throwsA(isA<ControlContractException>()),
+      );
+    }
+    json.remove('networkAccess');
 
     final runtime = Map<String, Object?>.from(json['runtime']! as Map);
     json['runtime'] = runtime;

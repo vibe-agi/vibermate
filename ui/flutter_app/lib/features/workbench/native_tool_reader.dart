@@ -24,24 +24,51 @@ final class NativeToolReader extends StatefulWidget {
 
 final class _NativeToolReaderState extends State<NativeToolReader> {
   String? _capture;
+  int _activationGeneration = 0;
+  bool _needsActivation = true;
   @override
   void initState() {
     super.initState();
     _capture = widget.controller.selectedCaptureKey;
-    widget.controller.setNativeReaderVisible(true);
+    _scheduleActivation();
   }
 
   @override
   void didUpdateWidget(NativeToolReader old) {
     super.didUpdateWidget(old);
-    if (old.controller != widget.controller) {
+    final replaced = old.controller != widget.controller;
+    if (replaced) {
       old.controller.setNativeReaderVisible(false);
-      widget.controller.setNativeReaderVisible(true);
+      _needsActivation = true;
     }
-    if (_capture != widget.controller.selectedCaptureKey) {
+    if (replaced || _capture != widget.controller.selectedCaptureKey) {
       _capture = widget.controller.selectedCaptureKey;
-      unawaited(widget.controller.refreshNativeTools());
+      _scheduleActivation();
     }
+  }
+
+  void _scheduleActivation() {
+    final generation = ++_activationGeneration;
+    final controller = widget.controller;
+    final capture = _capture;
+    final epoch = controller.nativeReaderGeneration;
+    // A synchronous API failure can notify ancestor listeners. Keep this work
+    // outside the build phase, without postponing hide/content invalidation.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted ||
+          generation != _activationGeneration ||
+          !identical(widget.controller, controller) ||
+          controller.selectedCaptureKey != capture ||
+          controller.nativeReaderGeneration != epoch) {
+        return;
+      }
+      if (_needsActivation) {
+        _needsActivation = false;
+        controller.setNativeReaderVisible(true);
+      } else {
+        unawaited(controller.refreshNativeTools());
+      }
+    });
   }
 
   @override

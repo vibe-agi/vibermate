@@ -21,6 +21,7 @@ import { fileURLToPath } from "node:url";
 import { createMacOSApplicationArchive } from "./macos-application-archive.mjs";
 import {
   createR0BuildInputTransfer,
+  inspectR0BuildInputTree,
   restoreR0BuildInputTransfer,
   r0BuildInputTransferPolicy,
 } from "./r0-build-input-transfer.mjs";
@@ -56,6 +57,8 @@ async function syntheticInput(context, label) {
   await chmod(resolve(inputRoot, "vibermate-build-manifest.json"), 0o600);
   await writeFile(resolve(inputRoot, "LICENSE"), "synthetic license\n");
   await chmod(resolve(inputRoot, "LICENSE"), 0o644);
+  await mkdir(resolve(inputRoot, "vless-kernel"), { mode: 0o755 });
+  await writeFile(resolve(inputRoot, "vless-kernel", "package-manifest.json"), '{"schema":"synthetic-test-materials"}\n', { mode: 0o644 });
   await mkdir(resolve(inputRoot, "dist", "assets"), {
     recursive: true,
     mode: 0o755,
@@ -138,16 +141,24 @@ test("closed source-traceability build-input transfer (R0) round-trips without e
   for (const [name, mode] of [
     ["vibermate-desktop", 0o755],
     ["vibermate", 0o755],
+    ["vibermate-xray", 0o755],
     ["vibermated", 0o755],
     ["vibermate-build-manifest.json", 0o600],
     ["LICENSE", 0o644],
     ["dist", 0o755],
+    ["vless-kernel", 0o755],
   ]) {
     assert.equal((await lstat(resolve(restored.restoredInputRoot, name))).mode & 0o7777, mode);
   }
   await assert.rejects(() => lstat(fixture.candidateExecutionMarker), {
     code: "ENOENT",
   });
+});
+
+test("R0 rejects an input that omits the required kernel executable", async (context) => {
+  const fixture = await syntheticInput(context, "missing-kernel");
+  await rm(resolve(fixture.inputRoot, "vibermate-xray"), { force: true });
+  await assert.rejects(() => inspectR0BuildInputTree(fixture.inputRoot));
 });
 
 test("source-traceability build-input restore CLI (R0) emits only the two closed digests", async (context) => {

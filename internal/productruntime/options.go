@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/vibe-agi/vibermate/internal/egressnetwork"
 	"github.com/vibe-agi/vibermate/internal/exchange"
 	"github.com/vibe-agi/vibermate/internal/hostcontract"
 	"github.com/vibe-agi/vibermate/internal/instanceguard"
@@ -116,6 +117,11 @@ func DefaultLifecycleOptions() LifecycleOptions {
 
 // Options is the complete typed ProductRuntime construction input.
 type Options struct {
+	// VLESSExecutable is selected by the trusted host, never by an import URI.
+	VLESSExecutable string
+	// NetworkOptions injects trusted dial/resolver dependencies. Runtime owns
+	// the VLESS connector and always replaces any connector in these options.
+	NetworkOptions egressnetwork.BuilderOptions
 	// ContentProfiles supplies trusted retention/preview classification, never
 	// execution authorization. Nil leaves native content unclassified.
 	ContentProfiles nativemcp.ContentProfiles
@@ -141,6 +147,9 @@ type Options struct {
 }
 
 func (o Options) validate() error {
+	if o.VLESSExecutable != "" && (!filepath.IsAbs(o.VLESSExecutable) || filepath.Clean(o.VLESSExecutable) != o.VLESSExecutable) {
+		return fmt.Errorf("%w: VLESS executable must be an absolute clean host path", ErrInvalidOptions)
+	}
 	if o.SchemaUpgradeTimeout < 0 {
 		return fmt.Errorf("%w: negative schema upgrade timeout", ErrInvalidOptions)
 	}

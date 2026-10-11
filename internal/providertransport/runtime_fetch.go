@@ -476,6 +476,36 @@ func (client *Client) runtimeProbeTarget(
 		target := offlinehold.ProbeTarget{Kind: offlinehold.EgressUpdate, Transport: transport, TargetRef: origin, NetworkOrigin: origin, HTTPAuthority: spec.target.HTTPAuthority(), TLSServerName: spec.target.TLSServerName(), EgressPolicy: spec.egressProfile().Policy}
 		return target, target.Validate()
 	}
+	if spec.purpose == egressaudit.PurposeModelMetadataDirectory {
+		origin := spec.target.Origin().String()
+		if origin != modelsDevOrigin || spec.targetRef != "runtime.models-dev" || spec.method != http.MethodGet ||
+			(spec.relativePath != "/models.json" && spec.relativePath != "/api.json") || spec.credential != nil ||
+			spec.account != (providerauth.AccountRef{}) || spec.captured != nil || len(spec.body) != 0 || spec.contentType != "" {
+			return offlinehold.ProbeTarget{}, errors.New("metadata probe target differs from closed credential-free operation")
+		}
+		// This fixed auxiliary producer has no routed model plan. The probe
+		// proves only TLS reachability of its origin, never HTTP availability.
+		target := offlinehold.ProbeTarget{Kind: offlinehold.EgressAuxiliary, Transport: transport,
+			TargetRef: origin, NetworkOrigin: origin, HTTPAuthority: spec.target.HTTPAuthority(),
+			TLSServerName: spec.target.TLSServerName(), EgressPolicy: spec.egressProfile().Policy}
+		return target, target.Validate()
+	}
+	if spec.purpose == egressaudit.PurposeCredentialRefresh {
+		origin := spec.target.Origin().String()
+		if origin != "https://auth.openai.com" || spec.targetRef != "runtime.codex-oauth" ||
+			spec.method != http.MethodPost || spec.relativePath != "/oauth/token" ||
+			(spec.contentType != "application/json" && spec.contentType != "application/x-www-form-urlencoded") ||
+			len(spec.body) == 0 || len(spec.body) > 64<<10 || spec.credential != nil || spec.captured != nil ||
+			(spec.account != (providerauth.AccountRef{}) && spec.account.Validate() != nil) {
+			return offlinehold.ProbeTarget{}, errors.New("token probe target differs from closed credential exchange")
+		}
+		// The fixed token exchange has no semantic route plan. TLS reachability
+		// carries its frozen exit only; credentials remain on the actual send.
+		target := offlinehold.ProbeTarget{Kind: offlinehold.EgressAuxiliary, Transport: transport,
+			TargetRef: origin, NetworkOrigin: origin, HTTPAuthority: spec.target.HTTPAuthority(),
+			TLSServerName: spec.target.TLSServerName(), EgressPolicy: spec.egressProfile().Policy}
+		return target, target.Validate()
+	}
 	requested := client.runtimePlan.Requested()
 	digest := sha256.Sum256([]byte(strings.Join([]string{
 		string(spec.purpose),

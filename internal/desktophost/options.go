@@ -24,9 +24,11 @@ const (
 
 // Options is the complete typed Desktop Host construction input.
 type Options struct {
-	Paths                        Paths
-	Runtime                      productruntime.Options
-	ProxyListenAddress           string
+	Paths              Paths
+	Runtime            productruntime.Options
+	ProxyListenAddress string
+	// Empty disables SOCKS; Desktop accepts only a literal loopback bind.
+	SOCKSListenAddress           string
 	ControlListenAddress         string
 	AllowedOrigins               []string
 	ClientCatalog                clientadapter.Catalog
@@ -81,6 +83,11 @@ func (options Options) validate() error {
 	}
 	if err := validateListenAddress(options.ControlListenAddress); err != nil {
 		return err
+	}
+	if options.SOCKSListenAddress != "" {
+		if err := validateListenAddress(options.SOCKSListenAddress); err != nil {
+			return err
+		}
 	}
 	if len(options.AllowedOrigins) == 0 ||
 		!options.ClientCatalog.Valid() ||

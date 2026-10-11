@@ -2961,7 +2961,7 @@ typedef _RouteModelChanged =
     );
 
 typedef _ProtocolEgressChanged =
-    void Function(EnvironmentProtocolPlan plan, EgressProfileRevision profile);
+    void Function(EnvironmentProtocolPlan plan, EgressChoice profile);
 
 typedef _ProtocolTransformChanged =
     void Function(
@@ -3694,10 +3694,12 @@ final class _EnvironmentEndpointEditor extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   EgressProfileButton(
+                    selectionScope: controller,
                     plan: plan,
                     copy: copy,
                     enabled: enabled,
                     loadProfiles: controller.egressProfiles,
+                    loadDefault: controller.egressDefault,
                     onChanged: (profile) => onEgressChanged(plan, profile),
                   ),
                   MessageTransformPipelineButton(

@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:vibermate_app/core/bootstrap/desktop_runtime.dart';
 
@@ -8,6 +9,69 @@ final class _StartedRuntime {
 }
 
 void main() {
+  for (final remoteAddress in <String?>[null, '127.0.0.1:0']) {
+    test(
+      'native launch supplies owned loopback SOCKS argv: remote=$remoteAddress',
+      () async {
+        final root = await Directory.systemTemp.createTemp(
+          'vibermate-bootstrap-argv.',
+        );
+        try {
+          final daemon = File('${root.path}/synthetic-daemon');
+          await daemon.writeAsString(r'''#!/bin/sh
+printf '%s\n' "$@" > "$0.arguments"
+printf '%s\n' '{"schema":"vibermate-daemon-progress-v1","phase":"runtime_starting"}'
+printf '%s\n' '{"schema":"vibermate-daemon-failure-v1","reason":"runtime_unavailable"}'
+while IFS= read -r line; do :; done
+: > "$0.closed"
+''');
+          final mode = await Process.run('/bin/chmod', ['700', daemon.path]);
+          expect(mode.exitCode, 0);
+          await expectLater(
+            DesktopRuntime.start(
+              daemonPath: daemon.path,
+              cacheDirectory: '${root.path}/cache',
+              dataDirectory: '${root.path}/data',
+              homeDirectory: root.path,
+              remoteServerListenAddress: remoteAddress,
+            ),
+            throwsA(
+              isA<DesktopRuntimeException>().having(
+                (error) => error.reason,
+                'bootstrap failure reason',
+                'runtime_unavailable',
+              ),
+            ),
+          );
+          final canonicalRoot = await root.resolveSymbolicLinks();
+          final arguments = await File(
+            '${daemon.path}.arguments',
+          ).readAsLines();
+          expect(
+            arguments.where(
+              (argument) => argument.startsWith('--socks-listen='),
+            ),
+            ['--socks-listen=127.0.0.1:0'],
+          );
+          expect(arguments, [
+            '--app-cache-dir=$canonicalRoot/cache',
+            '--data-dir=$canonicalRoot/data',
+            '--webview-origin=vibermate://desktop',
+            '--parent-lifetime-fd=0',
+            '--bootstrap-fd=1',
+            '--socks-listen=127.0.0.1:0',
+            if (remoteAddress != null) '--remote-server-listen=$remoteAddress',
+          ]);
+          expect(await File('${daemon.path}.closed').exists(), isTrue);
+        } finally {
+          await root.delete(recursive: true);
+        }
+      },
+      skip: Platform.isWindows
+          ? 'Native Unix synthetic executable fixture'
+          : false,
+    );
+  }
   test(
     'prelaunch preservation failure never saves or launches previous',
     () async {

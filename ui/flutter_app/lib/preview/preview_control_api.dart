@@ -1448,6 +1448,47 @@ final class PreviewControlApi implements ControlApi {
     );
   }
 
+  int _egressDefaultRevision = 1;
+  EgressProfileRevision? _egressDefaultProfile;
+
+  @override
+  Future<EgressDefaultSetting> egressDefault() async {
+    _requireOpen();
+    return EgressDefaultSetting.fromJson({
+      'revision': _egressDefaultRevision,
+      'profile': _egressDefaultProfile?.toJson(),
+      'effective': {
+        'profile': (_egressDefaultProfile ?? EgressProfileRevision.direct)
+            .toJson(),
+        'source': _egressDefaultProfile == null ? 'builtin' : 'global',
+        'defaultRevision': _egressDefaultRevision,
+      },
+    });
+  }
+
+  @override
+  Future<EgressDefaultSetting> setEgressDefault(
+    EgressDefaultSetting current,
+    EgressProfileRevision? profile,
+  ) async {
+    _requireOpen();
+    if (current.revision != _egressDefaultRevision) {
+      throw const ControlProblem(
+        status: 409,
+        reasonCode: 'egress_profile_conflict',
+        messageKey: 'error.egress_profile_conflict',
+      );
+    }
+    final selected = profile == null
+        ? null
+        : await egressProfileRevision(profile.id, profile.revision);
+    if (_egressDefaultProfile != selected) {
+      _egressDefaultProfile = selected;
+      _egressDefaultRevision++;
+    }
+    return egressDefault();
+  }
+
   @override
   Future<EgressProfileRevision> publishEgressProfile({
     required String id,
@@ -1478,6 +1519,29 @@ final class PreviewControlApi implements ControlApi {
     }, 'egressProfile');
     _egressProfileRevisions[id] = [...revisions, revision];
     return revision;
+  }
+
+  @override
+  Future<EgressProfileRevision> importVlessEgressProfile({
+    required String id,
+    required int expectedRevision,
+    required String displayName,
+    required String uri,
+    required TrafficResolverPolicy resolver,
+    required String directDomains,
+    VlessTLSImportOptions? tls,
+  }) async {
+    _requireOpen();
+    throw UnsupportedError('Private node import is unavailable in preview');
+  }
+
+  @override
+  Future<VlessProfileDescription> vlessProfileDescription(
+    String id,
+    int revision,
+  ) async {
+    _requireOpen();
+    throw UnsupportedError('Private node settings are unavailable in preview');
   }
 
   @override

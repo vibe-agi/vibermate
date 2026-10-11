@@ -302,6 +302,7 @@ jobs:
           set -euo pipefail
           tool/verify_flutter_sdk.sh
           flutter pub get
+          dart run tool/prepare_chrome_test_assets.dart
           flutter test --platform chrome
           tool/build_web.sh
           version="$(awk '$1 == "version:" { print $2 }' pubspec.yaml)"

@@ -626,6 +626,7 @@ CREATE TABLE runtime_egress_attempts(
 'original_origin',
 'agent_probe',
 'blind_tunnel',
+'datagram',
 'auxiliary_llm',
 'language_transform',
 'plugin_catalog_sync',
@@ -640,12 +641,14 @@ CREATE TABLE runtime_egress_attempts(
 'client_data',
 'client_semantic',
 'opaque_tunnel',
+'opaque_datagram',
 'runtime')),
   parent_kind TEXT NOT NULL
   CHECK(parent_kind IN('upstream_attempt',
 'client_operation',
 'original_request',
 'blind_connection',
+'datagram_connection',
 'runtime_action')),
   parent_id TEXT NOT NULL
   CHECK(length(CAST(parent_id AS BLOB)) BETWEEN 1 AND 512),
@@ -695,6 +698,11 @@ CREATE TABLE runtime_egress_attempts(
     AND parent_exchange_id = '' AND policy_authority = 'environment'
     AND caller_kind = 'core' AND caller_id = '' AND account_id = ''
     AND account_settings_revision = 0 AND payload_class IN('client_data','none')))
+  , CHECK(purpose <> 'datagram' OR (parent_kind = 'datagram_connection'
+    AND parent_exchange_id = '' AND policy_authority = 'network'
+    AND caller_kind = 'core' AND caller_id = '' AND account_id = ''
+    AND account_settings_revision = 0 AND payload_class = 'opaque_datagram'
+    AND target_origin LIKE 'udp://%'))
 ) STRICT;
 
 CREATE TABLE runtime_evidence_bodies(

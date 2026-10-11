@@ -15,6 +15,7 @@ import (
 )
 
 type Options struct {
+	NetworkAccess          *desktopcontrol.NetworkAccess
 	Runtime                *productruntime.Runtime
 	Readiness              desktopcontrol.ReadinessReader
 	Clock                  desktopcontrol.Clock
@@ -60,6 +61,7 @@ func New(options Options) (*desktopcontrol.Handler, error) {
 		return nil, err
 	}
 	return desktopcontrol.New(desktopcontrol.Options{
+		NetworkAccess:   options.NetworkAccess,
 		ProductUpdates:  options.Runtime.ProductUpdates(),
 		LaunchSnapshots: options.Runtime.LaunchSnapshots(),
 		Storage:         options.Runtime,
@@ -79,6 +81,7 @@ func New(options Options) (*desktopcontrol.Handler, error) {
 		CodexLogins:    options.Runtime.CodexOAuthLogins(),
 		CodeLibrary:    options.Runtime.CodeLibrary(),
 		EgressProfiles: options.Runtime.EgressProfiles(),
+		VLESSProfiles:  options.Runtime.VLESSProfiles(),
 		EgressDefaults: options.Runtime.EgressDefaults(),
 		RawEvidence:    options.Runtime.RawEvidence(),
 		Offline:        options.Runtime, ConnectionRules: options.Runtime.ConnectionRules(),

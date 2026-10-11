@@ -208,6 +208,7 @@ func TestPurposeAndAuthorityMustAgree(t *testing.T) {
 		egressaudit.PurposeOriginalOrigin:         egressaudit.AuthorityNetwork,
 		egressaudit.PurposeAgentProbe:             egressaudit.AuthorityNetwork,
 		egressaudit.PurposeBlindTunnel:            egressaudit.AuthorityNetwork,
+		egressaudit.PurposeDatagram:               egressaudit.AuthorityNetwork,
 		egressaudit.PurposeAuxiliaryLLM:           egressaudit.AuthorityRuntime,
 		egressaudit.PurposeLanguageTransform:      egressaudit.AuthorityRuntime,
 		egressaudit.PurposePluginCatalogSync:      egressaudit.AuthorityRuntime,

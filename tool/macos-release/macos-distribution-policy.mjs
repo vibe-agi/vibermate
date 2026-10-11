@@ -63,6 +63,7 @@ export const macOSDistributionPolicy = Object.freeze({
     "url-launcher-framework",
     "vibermate",
     "vibermate-desktop",
+    "vibermate-xray",
     "vibermated",
   ]),
   codeObjects: Object.freeze({
@@ -105,6 +106,11 @@ export const macOSDistributionPolicy = Object.freeze({
       relativePath: "Contents/MacOS/vibermated",
       signingPath: "Contents/MacOS/vibermated",
     }),
+    "vibermate-xray": Object.freeze({
+      identifier: "io.vibermate.desktop.vibermate-xray",
+      relativePath: "Contents/MacOS/vibermate-xray",
+      signingPath: "Contents/MacOS/vibermate-xray",
+    }),
   }),
   // Apple may report a signed bundle entry point in addition to its canonical
   // executable. Validation maps each admitted alias back to one code object and
@@ -133,18 +139,20 @@ export const macOSDistributionPolicy = Object.freeze({
   executableNames: Object.freeze([
     "vibermate",
     "vibermate-desktop",
+    "vibermate-xray",
     "vibermated",
   ]),
   executableIdentifiers: Object.freeze({
     vibermate: "io.vibermate.desktop.vibermate",
     "vibermate-desktop": "io.vibermate.desktop",
+    "vibermate-xray": "io.vibermate.desktop.vibermate-xray",
     vibermated: "io.vibermate.desktop.vibermated",
   }),
   minimumSystemVersion: "14.0",
   notaryEvidenceFilename: "notarization-evidence.json",
   notaryLogFilename: "apple-notary-log.json",
   notarySubmitFilename: "apple-notary-submit.json",
-  notaryTicketedCodeDirectoryCount: 14,
+  notaryTicketedCodeDirectoryCount: 16,
   releaseRelativeDirectory:
     "ui/flutter_app/build/distribution/universal-apple-darwin/release",
   signingEvidenceFilename: "signing-transformation.json",
@@ -476,6 +484,7 @@ export function validateEmbeddedBuildManifest(value, { expectedRevision }) {
     revision: provenance.revision,
     sidecarSHA256: Object.freeze({
       vibermate: provenance.nestedCodeSHA256.vibermate,
+      "vibermate-xray": provenance.nestedCodeSHA256["vibermate-xray"],
       vibermated: provenance.nestedCodeSHA256.vibermated,
     }),
   });
@@ -795,7 +804,7 @@ export function validateSigningTransformationEvidence(value) {
   );
   requireDigestObject(
     value.candidate.unsignedSidecarSHA256,
-    ["vibermate", "vibermated"],
+    ["vibermate", "vibermate-xray", "vibermated"],
     "Unsigned sidecar digests",
   );
   for (const name of macOSDistributionPolicy.codeObjectNames) {

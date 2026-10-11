@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/vibe-agi/vibermate/internal/egressaudit"
+	"github.com/vibe-agi/vibermate/internal/egressnetwork"
 	"github.com/vibe-agi/vibermate/internal/egressprofile"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
 	"github.com/vibe-agi/vibermate/internal/providerauth"
@@ -242,6 +243,21 @@ func NewProductionClientWithAuthenticators(
 		RawEvidence:    rawEvidence,
 		EgressDefaults: defaults,
 	})
+}
+
+// NewProductionClientWithBuilder shares the Runtime-owned network path while
+// retaining provider authentication, admission and strict TLS semantics.
+func NewProductionClientWithBuilder(options ClientOptions, builder *egressnetwork.Builder, timeouts TransportTimeouts) (*Client, error) {
+	strict, err := newStrictTransportWithDialers(nil, builder, timeouts)
+	if err != nil {
+		return nil, err
+	}
+	cleartext, err := newCleartextTransportWithDialers(builder, timeouts)
+	if err != nil {
+		return nil, err
+	}
+	options.Transport = &productionTransport{strictTLS: strict, cleartext: cleartext}
+	return NewClient(options)
 }
 
 // Do acquires the global egress lease before secret access, authentication, or

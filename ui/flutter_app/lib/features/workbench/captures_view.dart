@@ -2762,6 +2762,11 @@ final class _ManualContextReview extends StatelessWidget {
           ),
           const SizedBox(height: 6),
           Text(context.proxyAddress, style: monoStyle),
+          if (context.socksAddress case final address?)
+            Text(
+              '${copy('settings.access.socks')}: $address',
+              style: monoStyle,
+            ),
           Text(
             '${context.environmentId}  ·  r${context.environmentRevision}',
             style: monoStyle,
@@ -2805,6 +2810,9 @@ final class _ManualGrantDeliveryState extends State<_ManualGrantDelivery> {
     final grant = widget.grant;
     final copy = widget.copy;
     final proxy = Uri.parse(grant.proxyAddress);
+    final socks = grant.socksAddress == null
+        ? null
+        : SocksProxyAddress.parse(grant.socksAddress!);
     return Semantics(
       container: true,
       child: SingleChildScrollView(
@@ -2822,6 +2830,24 @@ final class _ManualGrantDeliveryState extends State<_ManualGrantDelivery> {
               }),
               onCopy: () => _copy('proxy', grant.proxyAddress),
             ),
+            if (socks != null) ...[
+              _ManualValueRow(
+                label: copy('capture.manual.delivery.socks_host'),
+                value: socks.host,
+                copyTooltip: copy.format('common.copy', {
+                  'field': copy('capture.manual.delivery.socks_host'),
+                }),
+                onCopy: () => _copy('socks_host', socks.host),
+              ),
+              _ManualValueRow(
+                label: copy('capture.manual.delivery.socks_port'),
+                value: '${socks.port}',
+                copyTooltip: copy.format('common.copy', {
+                  'field': copy('capture.manual.delivery.socks_port'),
+                }),
+                onCopy: () => _copy('socks_port', '${socks.port}'),
+              ),
+            ],
             _ManualValueRow(
               label: copy('capture.manual.delivery.username'),
               value: grant.proxyUsername,
@@ -2838,6 +2864,42 @@ final class _ManualGrantDeliveryState extends State<_ManualGrantDelivery> {
               }),
               onCopy: () => _copy('password', grant.proxyPassword),
             ),
+            if (socks != null) ...[
+              const SizedBox(height: 8),
+              Text(
+                copy('capture.manual.delivery.socks_shared'),
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+              Text(
+                copy('capture.manual.delivery.socks_udp'),
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+              if (!const {'127.0.0.1', '::1', 'localhost'}.contains(socks.host))
+                Text(
+                  copy('capture.manual.delivery.socks_remote'),
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: context.viberColors.warning,
+                  ),
+                ),
+              ExpansionTile(
+                tilePadding: EdgeInsets.zero,
+                childrenPadding: EdgeInsets.zero,
+                title: Text(
+                  copy('capture.manual.delivery.socks_advanced'),
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+                children: [
+                  Text(
+                    copy('capture.manual.delivery.socks_control'),
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                ],
+              ),
+              Text(
+                copy('capture.manual.delivery.socks_ca'),
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+            ],
             if (grant.root case final root? when root.kind == 'local_path')
               _ManualValueRow(
                 label: copy('capture.manual.delivery.root'),
@@ -2973,7 +3035,6 @@ final class _ManualValueRow extends StatelessWidget {
               label: '$label: $value',
               child: SelectableText(
                 value,
-                maxLines: 2,
                 style: monoStyle.copyWith(color: context.viberColors.text),
               ),
             ),

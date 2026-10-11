@@ -12,9 +12,25 @@ import test from "node:test";
 import {
   createCanonicalTemporaryDirectory,
   requireSignedCandidateMatchesSigningEvidence,
+  requireUnsignedNestedCodeMatchesBuildManifest,
 } from "./verify-macos-signed-candidate.mjs";
 
 const digest = (character) => character.repeat(64);
+
+test("unsigned preflight rejects helper-only stale nested provenance", () => {
+  const nested = {
+    "app-framework": digest("1"), "file-selector-framework": digest("2"),
+    "flutter-macos-framework": digest("3"), "url-launcher-framework": digest("4"),
+    vibermate: digest("5"), "vibermate-xray": digest("6"), vibermated: digest("7"),
+  };
+  const actual = { ...nested, "vibermate-desktop": digest("8") };
+  assert.doesNotThrow(() => requireUnsignedNestedCodeMatchesBuildManifest(actual, nested));
+  assert.throws(() => requireUnsignedNestedCodeMatchesBuildManifest({ ...actual, "vibermate-xray": digest("9") }, nested),
+    /vibermate-xray does not match its embedded build-manifest digest/);
+  for (const name of Object.keys(nested)) {
+    assert.throws(() => requireUnsignedNestedCodeMatchesBuildManifest({ ...actual, [name]: digest("a") }, nested));
+  }
+});
 
 function signingEvidenceFixture() {
   return {
@@ -29,12 +45,14 @@ function signingEvidenceFixture() {
         "url-launcher-framework": digest("e"),
         vibermate: digest("6"),
         "vibermate-desktop": digest("7"),
+        "vibermate-xray": digest("f"),
         vibermated: digest("8"),
       },
       sourceRevision: "9".repeat(40),
       toolingRevision: "a".repeat(40),
       unsignedSidecarSHA256: {
         vibermate: digest("b"),
+        "vibermate-xray": digest("e"),
         vibermated: digest("c"),
       },
     },

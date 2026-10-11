@@ -377,7 +377,7 @@ func TestManualCaptureControlHidesInternalEpochAndUsesOpaqueStateTags(
 ) {
 	t.Parallel()
 
-	fixture := newFixture(t)
+	fixture := newFixture(t, func(options *capturegrant.Options) { options.ManualSOCKSAddress = "[::1]:1080" })
 	defer fixture.Close(t)
 
 	contextResponse := fixture.DoJSON(
@@ -403,6 +403,7 @@ func TestManualCaptureControlHidesInternalEpochAndUsesOpaqueStateTags(
 	decodeRecorder(t, contextResponse, &captureContext)
 	if captureContext.ConfirmationToken == "" ||
 		captureContext.ProxyAddress != "http://127.0.0.1:32123" ||
+		captureContext.SOCKSAddress != "[::1]:1080" ||
 		captureContext.EnvironmentID != testEnvironmentID ||
 		captureContext.Root == nil || captureContext.Root.DERSHA256 == "" ||
 		captureContext.Root.PEMPath == "" {
@@ -440,6 +441,7 @@ func TestManualCaptureControlHidesInternalEpochAndUsesOpaqueStateTags(
 	var created capturecontrol.ManualCaptureGrant
 	decodeRecorder(t, createResponse, &created)
 	if created.Capture.ID == "" || created.ProxyPassword == "" ||
+		created.SOCKSAddress != captureContext.SOCKSAddress ||
 		created.ProxyUsername != manualcapture.ProxyUsername {
 		t.Fatalf("grant=%+v", created)
 	}
@@ -508,7 +510,7 @@ func TestManualCaptureControlHidesInternalEpochAndUsesOpaqueStateTags(
 	}
 	var rotated capturecontrol.ManualCaptureGrant
 	decodeRecorder(t, rotate, &rotated)
-	if rotated.ProxyPassword == "" || rotated.ProxyPassword == created.ProxyPassword {
+	if rotated.ProxyPassword == "" || rotated.ProxyPassword == created.ProxyPassword || rotated.SOCKSAddress != captureContext.SOCKSAddress {
 		t.Fatal("rotation did not return one new credential")
 	}
 	if _, err := fixture.manuals.AuthorizeProxy(context.Background(), proxyCredential); err == nil {
