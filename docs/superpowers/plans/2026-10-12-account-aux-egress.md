@@ -393,6 +393,8 @@ Evidence/review gate: actual endpoint acquisition, AP/AD/B physical GETs, existi
 
 ## Task 3: Actual first Login.Start/Complete G/B, exchange ownership and lifecycle drain
 
+Status (2026-10-12): complete implementation, selected verification and independent spec/security/quality review, Approved/no findings. Genuine four-row Runtime shutdown RED led to exactly one normal Login cleanup registration; final normal11, race55/count5 and51-case affected cohort pass. The actual owned loopback listener executed and closed (no skip). Initial bootstrap-secret accounting failure is separately preserved, not a product RED. Shared fixture/other production contracts remain unchanged. Task3 report/manifest/review retain exact evidence. All three account-aux tasks are now closed; other global families and final production/release qualification remain open.
+
 **Files:**
 - Create/Test: `internal/productruntime/first_login_egress_matrix_test.go`.
 - Reuse: `internal/productruntime/account_aux_fixture_test.go`.
@@ -403,7 +405,7 @@ Evidence/review gate: actual endpoint acquisition, AP/AD/B physical GETs, existi
 
 **Concrete lifecycle regression and conditional correction:** On the pinned source `codexOAuth.Shutdown` and `codexLogins.Shutdown` are registered only on startup `pending` (runtime.go:687,699), not final `cleanups`; `pending` is cleared at955. Runtime normal shutdown invokes `cleanups.shutdown` (1388). LoginManager.Shutdown clears timers/listeners, cancels owned exchanges and waits `active` (login.go:404–419). Existing provider/Hold shutdown may abort the held POST, but does not by itself prove the Login manager, a pending timer or loopback listener has drained. Root independently checked this source chain and authorized a narrow final-cleanup registration correction if the actual Runtime regression below confirms it. This conditional fix stays in the existing lifecycle scope and needs no new architecture choice. Any broader cancellation/retained-refresh change remains an escalation with exact source and observed failure.
 
-- [ ] **Step 1: Add actual Runtime login case tables.**
+- [x] **Step 1: Add actual Runtime login case tables.**
 
 ```go
 func TestActualRuntimeFirstLoginEgressMatrix(t *testing.T) {
@@ -447,13 +449,13 @@ Start itself must create no token HTTP/sockets/egress audit/account/secret. Capt
 
 The private token handler requires fixed host/path POST, no Authorization, Content-Type application/x-www-form-urlencoded, exactly one each of grant_type=authorization_code, client_id=Codex ClientID, code=synthetic-code, redirect_uri equal to parsed trusted Start redirect and nonempty code_verifier with no other form keys. Reply JSON `id_token`, `access_token`=`auxToken()`, `refresh_token=synthetic-login-refresh`. Assert true Runtime persistence by `ProviderAccounts().Get/List`: one account matching destination, automatic refresh on, unlinked associations, epoch1 and one physical secret create/rotation0; inspect the stored material to verify synthetic token bytes. Failure/pending cancel rows require account absent, create0 and rotation0. Avoid logging verifier/code/form/token values in evidence.
 
-- [ ] **Step 2: Implement success/freeze, pending cancel and caller ownership cases.** G/B physical success has token POST1/save1, route G SOCKS B1/Direct0 or B Direct1/SOCKS0; SQL account ID empty/settings0, `PurposeCredentialRefresh`, target auth origin, expected source/profile/default at Start, exact typed policy/rule and own start-terminal equality. Repeat Complete with the same callback after terminal success; it returns the terminal view with no second POST/save. Start and complete a new independent login with a distinct account ID after the default edit to prove the *actual new* route (G→builtin3, B→Global A2), token POST totals2/save totals2, and independent start/terminal pairs. Do not replace this with `FreezeLoginEgress()` alone.
+- [x] **Step 2: Implement success/freeze, pending cancel and caller ownership cases.** G/B physical success has token POST1/save1, route G SOCKS B1/Direct0 or B Direct1/SOCKS0; SQL account ID empty/settings0, `PurposeCredentialRefresh`, target auth origin, expected source/profile/default at Start, exact typed policy/rule and own start-terminal equality. Repeat Complete with the same callback after terminal success; it returns the terminal view with no second POST/save. Start and complete a new independent login with a distinct account ID after the default edit to prove the *actual new* route (G→builtin3, B→Global A2), token POST totals2/save totals2, and independent start/terminal pairs. Do not replace this with `FreezeLoginEgress()` alone.
 
 Held G/B cases inspect one real Auxiliary/TLS auth-origin target with zero plan identity/TargetAccess and exactly the original policy; no HTTP/socket/audit while queued. Resume through Runtime's real prober adds precisely one reachability socket plus one token socket on the frozen G or B route, token1/save1 and no probe HTTP. Drain before the next login.
 
 `pending_cancel`: Start, call Cancel before Complete, require Status cancelled and Complete terminal cancelled, token0/save0/socket0/audit0; no login exchange begins. `caller_cancel_owned_success`: start Complete under Hold, observe State exchanging and the actual queue, cancel the Complete caller, require `Cancel(context.Background(), owner,id)` returns `ErrLoginBusy` and duplicate Complete returns `ErrLoginBusy`. Confirm account absent/token0; then actual Resume completes the *owned* exchange once and persists one account. Require completion State completed with nil error even though the original caller is canceled, plus terminal token1/save1, then no replay on subsequent Complete. Existing `Login.Complete` deliberately uses a background25s operation; canceling its caller is not an exchange abort.
 
-- [ ] **Step 3: Implement down/failed probe/shutdown and reproduce the normal cleanup boundary.** G proxy-down closes B after Start and edits the default before Complete: one failed selected-proxy dial, SOCKS success0/HTTP0/save0/Direct0/A0, no retry; Complete returns a failed view with `Reason=login_exchange_failed` (not necessarily a Go error), immutable failed audit1, all operation resources drained.
+- [x] **Step 3: Implement down/failed probe/shutdown and reproduce the normal cleanup boundary.** G proxy-down closes B after Start and edits the default before Complete: one failed selected-proxy dial, SOCKS success0/HTTP0/save0/Direct0/A0, no retry; Complete returns a failed view with `Reason=login_exchange_failed` (not necessarily a Go error), immutable failed audit1, all operation resources drained.
 
 `failed_probe_shutdown`: queue actual Complete, edit default, close B, run real Resume; require failed probe/held queue1/exchanging state/token0/save0/audit0, then Runtime shutdown and join Complete; require failed terminal Login view with no save and all queue/socket workers drained. `held_shutdown` performs the same actual Runtime drain without a probe. Use context.WithTimeout(context.Background(),5*time.Second), never rely on caller cancellation or sleep25s to stand in for shutdown. Observe account absence and SQL audit0 before shutdown closes Store, then use the joined completion, retained Login controller, physical secret effect counters and drained Gate/socket workers after shutdown; do not query a closed Runtime Store to assert no save.
 
@@ -469,7 +471,7 @@ cleanups.register("original-origin transport", original.Shutdown)
 
 Show pending manual/loopback and held exchange cases turn green. If the required correction goes beyond this registration (for example synchronous listener join or refresh-manager ownership), report that additional source-backed gap for a scoped decision; do not silently redesign it. Do not add a shortened/public Login exchange timeout or change Cancel from Busy.
 
-- [ ] **Step 4: Run exact baseline and verify the approved correction if needed.**
+- [x] **Step 4: Run exact baseline and verify the approved correction if needed.**
 
 ```bash
 GOTOOLCHAIN=local /tmp/vibermate-go-security.JcRyfL/go/bin/go test ./internal/productruntime -run '^TestActualRuntimeFirstLogin(EgressMatrix|OwnershipAndDrain)$' -count=1 -timeout=90s -v
@@ -477,7 +479,7 @@ GOTOOLCHAIN=local /tmp/vibermate-go-security.JcRyfL/go/bin/go test ./internal/pr
 
 Positive selection and owned-caller cases may pass immediately. The concrete normal-cleanup assertions may reveal the source-backed gap; preserve output separately from deliberate proxy/probe failure evidence. Report why any skipped loopback row is not proven. Do not lower expectations merely to keep the matrix green.
 
-- [ ] **Step 5: Verify/review and commit the bounded login deliverable.**
+- [x] **Step 5: Verify/review and commit the bounded login deliverable.**
 
 ```bash
 gofmt -w internal/productruntime/first_login_egress_matrix_test.go
