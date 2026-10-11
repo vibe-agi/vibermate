@@ -312,6 +312,8 @@ Retain normal/race output and evidence report under this plan's SDD directory wi
 
 ## Task 2: Endpoint-matching model discovery AP/AD/B and frozen failure boundaries
 
+Status (2026-10-12): complete acceptance and independent spec/security/quality review, Approved with no findings. One new test file only, shared fixture/production unchanged. Final normal13 and race65/count5 cover actual endpoint-matching leases, distinct first/next HTTP routes and audits, Provider Hold/plan/probe, cancellation/failure, header/secret preservation and complete drain. First baseline already passed; no artificial RED or production fix. Task2 report/manifest/review in this plan's SDD retain exact source/evidence; first-login/native-client/release remain separate.
+
 **Files:**
 - Create/Test: `internal/productruntime/endpoint_models_egress_matrix_test.go`.
 - Reuse: `internal/productruntime/account_aux_fixture_test.go`.
@@ -319,7 +321,7 @@ Retain normal/race output and evidence report under this plan's SDD directory wi
 
 **Interfaces:** Consumes the Task1 fixture/helpers, actual `AcquireEndpointCredential(ctx,id,endpoint) (providerauth.Lease,error)` and `Runtime.FetchEndpointModels`. Produces `runEndpointModelsAuxCase(t *testing.T, choice, edge string)` and `TestActualRuntimeEndpointModelsEgressMatrix`/`TestActualRuntimeEndpointModelsHoldAndFailure`. No production interface change.
 
-- [ ] **Step 1: Write exact operation tests.**
+- [x] **Step 1: Write exact operation tests.**
 
 ```go
 func TestActualRuntimeEndpointModelsEgressMatrix(t *testing.T) {
@@ -361,7 +363,7 @@ go func() {
 
 Handler asserts exact `GET /v1/models`, no query/body, `Host=api.openai.com`, `Authorization=Bearer synthetic-aux-bearer`, `X-Aux-Fixture=owned`, `X-Aux-Deleted` absent; reply `{"data":[{"id":"synthetic-model"}]}`. Do not swap in a hand-built lease/account or models.dev metadata source. There is no token POST or secret rotation in this task.
 
-- [ ] **Step 2: Implement operation-specific wire/Hold/default and negative assertions.** AP/AD/G/B `send_edit` changes the default at `wire.before` after SQL start and before dialing, as Task1 specifies; require one successful GET via the original lease route, immutable expected `PurposeUpstreamModelDiscovery`/`https://api.openai.com` audit and rotation0. Then acquire a *new actual endpoint lease* and perform a second GET: AP/AD still explicit, G now builtin3, B now Global A2. Pair both attempts independently with their own starts and precomputed decisions, and require exactly two total GETs, never deriving expected route from observed audit.
+- [x] **Step 2: Implement operation-specific wire/Hold/default and negative assertions.** AP/AD/G/B `send_edit` changes the default at `wire.before` after SQL start and before dialing, as Task1 specifies; require one successful GET via the original lease route, immutable expected `PurposeUpstreamModelDiscovery`/`https://api.openai.com` audit and rotation0. Then acquire a *new actual endpoint lease* and perform a second GET: AP/AD still explicit, G now builtin3, B now Global A2. Pair both attempts independently with their own starts and precomputed decisions, and require exactly two total GETs, never deriving expected route from observed audit.
 
 For G `held_edit`, enter Hold before fetching; wait for one actual queued Provider target matching endpoint ID/network origin/authority/SNI and the lease's policy. Keep actual nonzero runtime PlanRevision/digest; this is a Provider producer, not the closed Auxiliary token producer. Do not zero the plan or canonicalize endpoint TargetRef to bypass a prober. Change default B2→unset3 only after observing that queued target. Actual `ResumeOfflineHold` must add one concrete TLS probe and one GET socket on B, with HTTP GET1, no HTTP from probe, Direct0/A0/rotation0. The new independent GET must then use builtin Direct with source/default3.
 
@@ -371,7 +373,7 @@ For proxy-down and Direct TLS failure, require one attempted send/audit start an
 
 `wrong_endpoint`: get the actual AnthropicOfficial endpoint and call Manager acquisition for the OpenAI account; require `ErrEndpointMismatch` and zero send/queue/audit/DNS/rotation. `wrong_realm`: clone the valid OpenAI endpoint with `RealmID` from the valid AnthropicOfficial endpoint, first require clone.Validate()==nil so this is a realm mismatch rather than malformed test input; acquisition must return `ErrEndpointMismatch` with the same zero effects. These exercise the real association/compatible-origin/realm boundary before a lease exists. Do not forge a cross-realm credential to test transport matching.
 
-- [ ] **Step 3: Run the acceptance baseline, classify any failure, and make only an evidenced narrow correction.**
+- [x] **Step 3: Run the acceptance baseline, classify any failure, and make only an evidenced narrow correction.**
 
 ```bash
 GOTOOLCHAIN=local /tmp/vibermate-go-security.JcRyfL/go/bin/go test ./internal/productruntime -run '^TestActualRuntimeEndpointModels(EgressMatrix|HoldAndFailure)$' -count=1 -timeout=60s -v
@@ -379,7 +381,7 @@ GOTOOLCHAIN=local /tmp/vibermate-go-security.JcRyfL/go/bin/go test ./internal/pr
 
 Expected: source already implements account priority and a Provider target accepted by the concrete Provider prober. A baseline pass fills E cells; no forced fake RED. Retain an unexpected failing real queued identity and investigate only this producer/consumer. The owned read/reset Auxiliary contract belongs to the previous writer and is not this task's route.
 
-- [ ] **Step 4: Verify/review and commit the independent endpoint-model deliverable.**
+- [x] **Step 4: Verify/review and commit the independent endpoint-model deliverable.**
 
 ```bash
 gofmt -w internal/productruntime/endpoint_models_egress_matrix_test.go

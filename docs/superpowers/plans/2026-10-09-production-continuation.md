@@ -22,6 +22,8 @@
 
 account-aux Task1手动OAuth刷新已完成真实14行normal、count5共70行race及独立spec/security/quality审查Approved，无发现，生产代码无需修改。两项新测试补齐实际AP/AD/G/B、暂停/取消/失败的选路和令牌一次轮换/原字节保留、初终审计与资源释放；并未冒称模型列表、首次登录或安装客户端已验证。下一项为同计划Task2模型列表，复用已审查共享fixture，不重复Task1的正常/失败测试整套运行。
 
+最新推进：Task1已提交1e3bcbb；Task2模型列表亦已完成真实13行normal、count5共65行race和独立审查Approved，无发现。仅新增一个测试文件，共享fixture/生产均未改；实际endpoint/realm匹配、前后两次GET各自选路/审计、Provider暂停探测、取消/失败无回退、凭据字节与资源释放已覆盖。下一项为Task3首次OAuth Start/Complete及normal Runtime关闭的登录状态/监听回收；只有具体RED确认缺口才添加已计划的清理注册，不改变既有后台兑换拥有者语义。
+
 按已批准的 Superpowers 设计，分阶段交付可实际使用的 ViberMate：先完成用户受阻的修复及功能贯通，再推进性能优化和最终生产资格验证；保留全部账号、配置、权限与历史，完成适用的独立审查、签名、公证、安装、GitHub Release 与 Homebrew 交付。只有全部已批准范围实际完成后才标记整个 Goal complete；单个 hotfix 发布不等于整个 Goal 完成。
 
 ## 真实基线
