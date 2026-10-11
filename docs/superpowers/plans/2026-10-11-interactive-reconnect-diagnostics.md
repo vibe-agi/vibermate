@@ -10,6 +10,8 @@
 
 **Spec:** Approved Goal scope10 and `2026-10-09-production-continuation.md` user-visible follow-up section. Read-only diagnosis established direct shared-stderr writes; it did not establish the cause of any real Runtime outage. This plan repairs the displayed-input interference, not a claim that all network outages are fixed.
 
+**Status (2026-10-12):** Implemented, verified and independently reviewed Approved with no findings. Real script-PTY RED showed heartbeat text next to child input; terminal/file/pipe/buffer/revoke GREEN, focused4.565s/full-package30.207s/race5.334s passed. Linux/Windows amd64 test-binary and CLI compilation passed. Three frozen files only; source/hash/report/review evidence is in this plan's SDD. Native behavioral coverage is Darwin arm64 with synthetic child/control, not installed Codex/Claude or native foreign OS qualification. No release or Runtime-outage-cause claim.
+
 ## Global Constraints
 
 - Never send input or redraw keystrokes to Codex/Claude, clear a user's screen, restart the client, replay requests, or extend/ignore a Runtime lease. Permanent rejection still follows the actual failure channel and stops supervision/child as currently defined.
@@ -40,10 +42,10 @@ func (launcher *Launcher) writeHeartbeatDiagnostic(message string) {
 
 Imports are fmt, os and the existing golang.org/x/term. Normal New already supplies a nonnil stderr and keeps *os.File unwrapped; other writers use the existing lockedWriter. The heartbeat helper is called only by the active child-supervision loop, not a new global suppression policy.
 
-- [ ] **Step1 — real terminal RED.** Adapt the existing isolated `/usr/bin/script` subprocess pattern to run a synthetic foreground child with actual TTY stdin/stderr. Exercise the same temporary503/bounded timeout/429/recovery sequence as TestLauncherKeepsChildThroughTemporaryControlFailure. Keep a literal input sentinel queued for the child and prove it receives it exactly once, one capture/create/attach/finish, no client restart. Assert terminal output contains the child's prompt/sentinel but no asynchronous Runtime interrupted/restored text. Current code must fail the text assertion for the real TTY; missing fixture setup or no heartbeat recovery does not count as RED. Retain exact command/output.
-- [ ] **Step2 — minimal presentation fix.** Add the private helper and replace only the two heartbeat diagnostic calls. Keep reconnecting boolean, retryableControlFailure, timer reset, bounded requests, failure channel and child exit/cleanup byte-for-byte where possible. Do not suppress a fatal supervision error or change the child's assigned streams.
-- [ ] **Step3 — identity and lifecycle controls.** Run the real PTY test; retain existing nonterminal buffer test proving one interrupt/restored pair and same child lifetime. Cover stderr redirected to a real file, pipe/buffer output, and permanent revocation with actual failed supervision/child stop. Verify existing terminal mode restoration and admitted input remain correct. No source-text grep as behavioral evidence and no live provider traffic.
-- [ ] **Step4 — scoped final verification.** From worktree root run:
+- [x] **Step1 — real terminal RED.** Adapt the existing isolated `/usr/bin/script` subprocess pattern to run a synthetic foreground child with actual TTY stdin/stderr. Exercise the same temporary503/bounded timeout/429/recovery sequence as TestLauncherKeepsChildThroughTemporaryControlFailure. Keep a literal input sentinel queued for the child and prove it receives it exactly once, one capture/create/attach/finish, no client restart. Assert terminal output contains the child's prompt/sentinel but no asynchronous Runtime interrupted/restored text. Current code must fail the text assertion for the real TTY; missing fixture setup or no heartbeat recovery does not count as RED. Retain exact command/output.
+- [x] **Step2 — minimal presentation fix.** Add the private helper and replace only the two heartbeat diagnostic calls. Keep reconnecting boolean, retryableControlFailure, timer reset, bounded requests, failure channel and child exit/cleanup byte-for-byte where possible. Do not suppress a fatal supervision error or change the child's assigned streams.
+- [x] **Step3 — identity and lifecycle controls.** Run the real PTY test; retain existing nonterminal buffer test proving one interrupt/restored pair and same child lifetime. Cover stderr redirected to a real file, pipe/buffer output, and permanent revocation with actual failed supervision/child stop. Verify existing terminal mode restoration and admitted input remain correct. No source-text grep as behavioral evidence and no live provider traffic.
+- [x] **Step4 — scoped final verification.** From worktree root run:
 
 ```sh
 /tmp/vibermate-go-security.JcRyfL/go/bin/go test ./internal/runlauncher -run '^(TestLauncherKeepsChildThroughTemporaryControlFailure|TestLauncherHeartbeatTerminal|TestLauncherRestoresAnIsolatedTerminal|TestInteractiveChildOwnsTheTerminalForeground)' -count=1 -v
@@ -52,7 +54,7 @@ Imports are fmt, os and the existing golang.org/x/term. Normal New already suppl
 ```
 
 The new actual terminal test should use the named TestLauncherHeartbeatTerminal prefix so the exact selection executes it. Compile this affected package/CLI for existing Linux/Windows amd64 targets into a new owned temporary directory; do not execute foreign binaries or claim native tests on those OSes. Use existing opt-in/native test boundaries honestly. No CodeGraph index exists in this worktree, so use normal rg inspection.
-- [ ] **Step5 — freeze/report/review.** Record exact source BASE, owned files/snapshots/hashes, behavioral RED, final commands/exit/output and platform/opt-in limits. Root independently reviews the fix-only diff and actual results, then commits. This closes terminal interference only, not Runtime outage diagnosis, entire client matrix, final Goal or public release.
+- [x] **Step5 — freeze/report/review.** Record exact source BASE, owned files/snapshots/hashes, behavioral RED, final commands/exit/output and platform/opt-in limits. Root independently reviews the fix-only diff and actual results, then commits. This closes terminal interference only, not Runtime outage diagnosis, entire client matrix, final Goal or public release.
 
 ## Self-review
 

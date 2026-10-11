@@ -671,7 +671,7 @@ func (launcher *Launcher) heartbeat(
 				}
 				if retryableControlFailure(err) {
 					if !reconnecting {
-						fmt.Fprintln(launcher.config.Stderr, "vibermate: Runtime connection interrupted; keeping the command running and retrying. Proxy access still requires a valid Runtime lease.")
+						launcher.writeHeartbeatDiagnostic("vibermate: Runtime connection interrupted; keeping the command running and retrying. Proxy access still requires a valid Runtime lease.")
 						reconnecting = true
 					}
 					// Do not measure an outage from the last successful heartbeat:
@@ -688,7 +688,7 @@ func (launcher *Launcher) heartbeat(
 					return
 				}
 				if reconnecting {
-					fmt.Fprintln(launcher.config.Stderr, "vibermate: Runtime connection restored.")
+					launcher.writeHeartbeatDiagnostic("vibermate: Runtime connection restored.")
 					reconnecting = false
 				}
 				timer.Reset(launcher.config.HeartbeatInterval)
