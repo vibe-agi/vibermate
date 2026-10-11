@@ -223,6 +223,8 @@ Implement `auxAssertAudit(t *testing.T, f *auxFixture, purpose egressaudit.Egres
 
 ## Task 1: Manual refresh AP/AD/B and owned Hold/cancellation/failure
 
+Status (2026-10-12): acceptance and independent spec/security/quality review complete, Approved with no findings. Existing production passed the first14-row baseline; final normal14 and race70/count5 cover frozen route, actual token/CAS/credential bytes, owned caller cancellation, immutable action-parent/audit and full socket/gate drain. Only two new test files; no fabricated RED or production fix. Exact source/evidence manifest and task-1-report/review are in this plan's SDD. Broader native/client/release and Tasks2/3 are not covered by this checkpoint.
+
 **Files:**
 - Create: `internal/productruntime/account_aux_fixture_test.go` (shared mechanics above).
 - Create/Test: `internal/productruntime/manual_refresh_egress_matrix_test.go`.
@@ -230,7 +232,7 @@ Implement `auxAssertAudit(t *testing.T, f *auxFixture, purpose egressaudit.Egres
 
 **Interfaces:** Consumes the existing Runtime bridge, `ProviderAccounts().RefreshCredential(ctx, id, expectedEpoch)` and actual Runtime-bound OAuth preparer. Produces the shared fixture/helpers above, `runManualAuxCase(t *testing.T, choice, edge string)`, `TestActualRuntimeManualRefreshEgressMatrix` and `TestActualRuntimeManualRefreshFailureAndOwnership`. No new production interface.
 
-- [ ] **Step 1: Add the real manual cases and the contained fixture.** Use these exact test tables, with each row constructing a fresh Runtime and no `t.Parallel`:
+- [x] **Step 1: Add the real manual cases and the contained fixture.** Use these exact test tables, with each row constructing a fresh Runtime and no `t.Parallel`:
 
 ```go
 func TestActualRuntimeManualRefreshEgressMatrix(t *testing.T) {
@@ -265,7 +267,7 @@ go func() {
 
 The private token handler must reject anything except fixed host/path POST, empty Authorization, Content-Type application/json, and exactly `{grant_type:refresh_token,refresh_token:synthetic-refresh-old,client_id:codexoauth.ClientID}`. Respond with access=`auxToken()`, refresh=`synthetic-refresh-new`; count actual POST before returning 200, or return 503 only for `token_503`. Store counters plus exact secret epoch/content prove rotation; never count a successful `RefreshCredential` return as the sole rotation proof.
 
-- [ ] **Step 2: Implement each table row's barriers and assertions.** For `send_edit`, capture the start and change default inside the wire `before` hook: AP/AD/G clear default2→3, B sets A default1→2. Actual send must retain the prior expected route. For `held_edit`, enter Hold before the worker, wait for exactly one actual queued target, and then clear default2→3 before real `ResumeOfflineHold`.
+- [x] **Step 2: Implement each table row's barriers and assertions.** For `send_edit`, capture the start and change default inside the wire `before` hook: AP/AD/G clear default2→3, B sets A default1→2. Actual send must retain the prior expected route. For `held_edit`, enter Hold before the worker, wait for exactly one actual queued target, and then clear default2→3 before real `ResumeOfflineHold`.
 
 Assert the manual queued target is Auxiliary/TLS, canonical origin/ref `https://auth.openai.com`, authority/SNI `auth.openai.com`, `PlanRevision=0`, `PlanDigest=""`, `TargetAccess=0`, and exact frozen policy. There must be no HTTP, socket or outgoing SQL start while queued. Successful real Resume adds one SOCKS/TLS probe and one token socket, but only one HTTP POST and one secret rotation. No model target or model POST is involved.
 
@@ -286,7 +288,7 @@ For AP/G `proxy_down`, close A/B respectively after selection but before dialing
 
 After each successful row, read actual account health/secret epoch2 and inspect the credential material through `options.Secrets` (fixture wrapper); require refresh=`synthetic-refresh-new` and access token matching the handler. Acquire and release one next endpoint lease to prove next selection: AP/AD remains Account/default0; G becomes Builtin/default3; B becomes Global A/default2. This lease assertion is not claimed as a next B network send. Drain first before acquiring next to avoid conflating operations.
 
-- [ ] **Step 3: Run targeted baseline acceptance.**
+- [x] **Step 3: Run targeted baseline acceptance.**
 
 ```bash
 export GOFLAGS=-mod=readonly
@@ -296,9 +298,9 @@ GOTOOLCHAIN=local /tmp/vibermate-go-security.JcRyfL/go/bin/go test ./internal/pr
 
 Expected version: output starts `go version go1.26.9` and reports the executor's actual host OS/architecture. Expected tests: implemented cells pass without a forced RED. For a real failure, save the exact test/subtest output, observed queued target/state/counters and physical secret epoch; classify fixture defect versus product defect using the pinned seams. Fix test setup first if it does not reach the actual intended entry. A failed probe alone is not an unexpected product failure when the proxy was deliberately closed.
 
-- [ ] **Step 4: Correct only a reproduced defect, or leave production unchanged.** If token producer identity differs from the already reviewed closed branch, retain the negative evidence and escalate rather than loosening `TLSProber` or replacing the resolver. If an implementation correction changes cancellation/retained credential behavior, obtain a scoped root decision backed by the failing case and exact source; do not erase an exchanged grant. Record already-correct baseline passes as acceptance evidence.
+- [x] **Step 4: Correct only a reproduced defect, or leave production unchanged.** If token producer identity differs from the already reviewed closed branch, retain the negative evidence and escalate rather than loosening `TLSProber` or replacing the resolver. If an implementation correction changes cancellation/retained credential behavior, obtain a scoped root decision backed by the failing case and exact source; do not erase an exchanged grant. Record already-correct baseline passes as acceptance evidence.
 
-- [ ] **Step 5: Verify/review the complete Task1 deliverable and commit when dispatched.**
+- [x] **Step 5: Verify/review the complete Task1 deliverable and commit when dispatched.**
 
 ```bash
 gofmt -w internal/productruntime/account_aux_fixture_test.go internal/productruntime/manual_refresh_egress_matrix_test.go

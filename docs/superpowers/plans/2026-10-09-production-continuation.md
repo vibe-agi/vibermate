@@ -20,6 +20,8 @@
 
 账号出口单元已提交`39ca501a3edf06a974a20b48d65f206918057071`。后续account-aux计划已由只读代理编写并由root完整审阅/修正：保留既有后台兑换/刷新拥有者的取消语义，复用真实TLS/SOCKS/Runtime，只有实测缺陷才改生产代码；normal Runtime的Login清理注册缺口有单独的条件RED修正，不在当前单元里猜测改写。root持有Git，仍为单源码写者；阶段B/最终Goal未完成，未发布。
 
+account-aux Task1手动OAuth刷新已完成真实14行normal、count5共70行race及独立spec/security/quality审查Approved，无发现，生产代码无需修改。两项新测试补齐实际AP/AD/G/B、暂停/取消/失败的选路和令牌一次轮换/原字节保留、初终审计与资源释放；并未冒称模型列表、首次登录或安装客户端已验证。下一项为同计划Task2模型列表，复用已审查共享fixture，不重复Task1的正常/失败测试整套运行。
+
 按已批准的 Superpowers 设计，分阶段交付可实际使用的 ViberMate：先完成用户受阻的修复及功能贯通，再推进性能优化和最终生产资格验证；保留全部账号、配置、权限与历史，完成适用的独立审查、签名、公证、安装、GitHub Release 与 Homebrew 交付。只有全部已批准范围实际完成后才标记整个 Goal complete；单个 hotfix 发布不等于整个 Goal 完成。
 
 ## 真实基线
