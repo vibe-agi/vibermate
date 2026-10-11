@@ -5,6 +5,7 @@ package exchangecontent
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
@@ -213,22 +214,32 @@ type UsageValue struct {
 // omitempty for Tokens would turn it into an internally contradictory
 // {"known":true,"source":...} value.
 func (value UsageValue) MarshalJSON() ([]byte, error) {
+	if err := value.validateEncoding(); err != nil {
+		return nil, err
+	}
 	if !value.Known {
-		if value.Tokens != 0 || value.Source != "" {
-			return nil, fmt.Errorf("%w: unknown usage has evidence", ErrInvalidEvidence)
-		}
 		return json.Marshal(struct {
 			Known bool `json:"known"`
 		}{Known: false})
-	}
-	if value.Tokens < 0 || value.Source == "" {
-		return nil, fmt.Errorf("%w: known usage is incomplete", ErrInvalidEvidence)
 	}
 	return json.Marshal(struct {
 		Known  bool   `json:"known"`
 		Tokens int64  `json:"tokens"`
 		Source string `json:"source"`
 	}{Known: true, Tokens: value.Tokens, Source: value.Source})
+}
+
+func (value UsageValue) validateEncoding() error {
+	if !value.Known {
+		if value.Tokens != 0 || value.Source != "" {
+			return fmt.Errorf("%w: unknown usage has evidence", ErrInvalidEvidence)
+		}
+		return nil
+	}
+	if value.Tokens < 0 || value.Source == "" {
+		return fmt.Errorf("%w: known usage is incomplete", ErrInvalidEvidence)
+	}
+	return nil
 }
 
 func (value *UsageValue) UnmarshalJSON(encoded []byte) error {
@@ -322,16 +333,27 @@ type Projection struct {
 	TotalMessageCount int                              `json:"-"`
 }
 
-type RecordOption func(*Record) error
+type RecordOption struct {
+	parent  ParentRef
+	present bool
+}
 
 func WithParentRef(parent ParentRef) RecordOption {
-	return func(record *Record) error {
-		if err := parent.Validate(); err != nil {
-			return err
+	return RecordOption{parent: parent, present: true}
+}
+
+func applyRecordOptions(options []RecordOption) (ParentRef, error) {
+	var parent ParentRef
+	for _, option := range options {
+		if !option.present {
+			return ParentRef{}, fmt.Errorf("%w: record option is zero", ErrInvalidEvidence)
 		}
-		record.Parent = parent
-		return nil
+		if err := option.parent.Validate(); err != nil {
+			return ParentRef{}, err
+		}
+		parent = option.parent
 	}
+	return parent, nil
 }
 
 func NewRecord(
@@ -343,6 +365,13 @@ func NewRecord(
 	response *protocolcore.Response,
 	options ...RecordOption,
 ) (Record, error) {
+	limits, err := DefaultSourceLimits()
+	if err != nil {
+		return Record{}, err
+	}
+	if _, err := NewSourceWithin(limits, exchangeID, frozen, policy, recordedAt, request, response, options...); err != nil {
+		return Record{}, err
+	}
 	if policy.Mode == environment.ContentRecordingOff {
 		return Record{}, fmt.Errorf("%w: recording is disabled", ErrInvalidEvidence)
 	}
@@ -362,14 +391,11 @@ func NewRecord(
 		Request:      requestView(request, full),
 		Presentation: RequestPresentation{Mode: RequestPresentationCheckpoint},
 	}
-	for _, option := range options {
-		if option == nil {
-			return Record{}, fmt.Errorf("%w: record option is nil", ErrInvalidEvidence)
-		}
-		if err := option(&record); err != nil {
-			return Record{}, err
-		}
+	parent, err := applyRecordOptions(options)
+	if err != nil {
+		return Record{}, err
 	}
+	record.Parent = parent
 	if response != nil {
 		if err := response.Validate(); err != nil {
 			return Record{}, fmt.Errorf("%w: response: %v", ErrInvalidEvidence, err)
@@ -384,26 +410,12 @@ func NewRecord(
 }
 
 func (record Record) Validate() error {
-	if !validIdentity(record.ExchangeID, MaxExchangeIDBytes) ||
-		record.Parent.Validate() != nil || record.Frozen.Validate() != nil || record.RecordedAt.IsZero() ||
-		record.ExpiresAt.IsZero() || !record.ExpiresAt.After(record.RecordedAt) ||
-		(record.Mode != environment.ContentRecordingFull &&
-			record.Mode != environment.ContentRecordingMetadataOnly) {
-		return ErrInvalidEvidence
-	}
-	if err := record.Request.validate(record.Mode); err != nil {
+	l, err := DefaultSourceLimits()
+	if err != nil {
 		return err
 	}
-	if record.Response != nil {
-		if err := record.Response.validate(record.Mode); err != nil {
-			return err
-		}
-	}
-	encoded, err := json.Marshal(record)
-	if err != nil || len(encoded) > MaxEncodedBytes {
-		return fmt.Errorf("%w: encoded evidence exceeds its bound", ErrInvalidEvidence)
-	}
-	return nil
+	_, err = SourceFromRecordWithin(l, record)
+	return err
 }
 
 func (record Record) Clone() Record {
@@ -418,46 +430,11 @@ func (record Record) Clone() Record {
 
 // Project derives a read model from an already verified full Record.
 func Project(record Record, view RequestView) (Projection, error) {
-	if err := record.Validate(); err != nil {
+	l, err := DefaultSourceLimits()
+	if err != nil {
 		return Projection{}, err
 	}
-	request := cloneRequest(record.Request)
-	if view == RequestViewIncremental {
-		request.Messages = record.IncrementalRequest()
-	}
-	projection := Projection{
-		ExchangeID: record.ExchangeID, Parent: record.Parent, Frozen: record.Frozen,
-		Mode: record.Mode, RecordedAt: record.RecordedAt, ExpiresAt: record.ExpiresAt,
-		Request: request, Presentation: record.Presentation, View: view,
-		TotalMessageCount: len(record.Request.Messages),
-	}
-	if view == RequestViewReading {
-		end := len(request.Messages)
-		for end > 0 && request.Messages[end-1].Role != "user" {
-			end--
-		}
-		start := end
-		for start > 0 && request.Messages[start-1].Role == "user" && end-start < PageMessageLimit {
-			start--
-		}
-		page := &ProjectionPage{RequestOffset: start}
-		if end > start {
-			encoded, _ := json.Marshal(request.Messages[:end])
-			digest := sha256.Sum256(encoded)
-			page.InputAnchor = fmt.Sprintf("%x", digest)
-		}
-		projection.Request.Messages = request.Messages[start:end]
-		projection.Page = page
-	}
-	if record.Response != nil {
-		response := cloneResponse(*record.Response)
-		response.Blocks = mergeDuplicateReadableReasoning(response.Blocks)
-		projection.Response = &response
-	}
-	if err := projection.Validate(); err != nil {
-		return Projection{}, err
-	}
-	return projection.Clone(), nil
+	return ProjectWithin(context.Background(), l, record, view)
 }
 
 // mergeDuplicateReadableReasoning is a presentation-only fold. Some relays
@@ -521,89 +498,11 @@ func reasoningKindPriority(kind string) int {
 }
 
 func (projection Projection) Validate() error {
-	if !validIdentity(projection.ExchangeID, MaxExchangeIDBytes) ||
-		projection.Parent.Validate() != nil || projection.Frozen.Validate() != nil ||
-		projection.RecordedAt.IsZero() || projection.ExpiresAt.IsZero() ||
-		!projection.ExpiresAt.After(projection.RecordedAt) ||
-		(projection.Mode != environment.ContentRecordingFull &&
-			projection.Mode != environment.ContentRecordingMetadataOnly) ||
-		projection.TotalMessageCount < 1 ||
-		projection.TotalMessageCount > protocolcore.MaxMessageCount+1 {
-		return ErrInvalidEvidence
-	}
-	request := projection.Request
-	if projection.Page != nil {
-		request.System, request.Messages = nil, nil
-		if err := validatePageContent(projection.Request.Messages, projection.Request.System, projection.Mode, projection.ExchangeID); err != nil {
-			return err
-		}
-	}
-	if err := request.validateProjection(projection.Mode); err != nil {
+	l, err := DefaultSourceLimits()
+	if err != nil {
 		return err
 	}
-	inherited := projection.Presentation.InheritedMessageCount
-	if inherited < 0 || inherited > projection.TotalMessageCount {
-		return ErrInvalidEvidence
-	}
-	switch projection.Presentation.Mode {
-	case RequestPresentationCheckpoint:
-		if inherited != 0 {
-			return ErrInvalidEvidence
-		}
-	case RequestPresentationIncremental:
-		if inherited == 0 || inherited >= projection.TotalMessageCount {
-			return ErrInvalidEvidence
-		}
-	case RequestPresentationSameTranscript:
-		if inherited != projection.TotalMessageCount {
-			return ErrInvalidEvidence
-		}
-	default:
-		return ErrInvalidEvidence
-	}
-	wantMessages := projection.TotalMessageCount
-	switch projection.View {
-	case RequestViewFull, RequestViewReading:
-	case RequestViewIncremental:
-		wantMessages -= inherited
-	default:
-		return ErrInvalidEvidence
-	}
-	if projection.Page != nil {
-		page := projection.Page
-		if page.InputAnchor != "" && (projection.View != RequestViewReading || !validFingerprint("sha256:"+page.InputAnchor) || len(projection.Request.Messages) == 0) {
-			return ErrInvalidEvidence
-		}
-		if page.RequestOffset < projection.TotalMessageCount-wantMessages ||
-			page.RequestOffset+len(projection.Request.Messages) > projection.TotalMessageCount ||
-			len(projection.Request.Messages) > PageMessageLimit || !validPageCursor(page.RequestNextCursor) ||
-			!validPageCursor(page.RequestEvidenceNextCursor) || !validPageCursor(page.ResponseEvidenceNextCursor) {
-			return ErrInvalidEvidence
-		}
-	} else if len(projection.Request.Messages) != wantMessages {
-		return ErrInvalidEvidence
-	}
-	if projection.Response != nil {
-		response := *projection.Response
-		if projection.Page != nil {
-			if err := validatePageContent(nil, response.Blocks, projection.Mode, projection.ExchangeID); err != nil {
-				return err
-			}
-			response.Blocks = nil
-		}
-		if err := response.validate(projection.Mode); err != nil {
-			return err
-		}
-	}
-	encoded, err := json.Marshal(projection)
-	limit := MaxEncodedBytes
-	if projection.Page != nil {
-		limit = MaxPageBytes
-	}
-	if err != nil || len(encoded) > limit {
-		return fmt.Errorf("%w: encoded projection exceeds its bound", ErrInvalidEvidence)
-	}
-	return nil
+	return projection.ValidateWithin(context.Background(), l)
 }
 
 func (projection Projection) Clone() Projection {
@@ -633,8 +532,18 @@ func (record Record) IncrementalRequest() []Message {
 }
 
 func CanonicalJSON(record Record) ([]byte, error) {
-	if err := record.Validate(); err != nil {
+	source, err := SourceFromRecord(record)
+	if err != nil {
 		return nil, err
+	}
+	cost, err := source.Measure(context.Background())
+	if err != nil {
+		return nil, err
+	}
+	// This byte-returning convenience retains its physical-sized output bound.
+	// Complete larger records persist through streaming Source fragments.
+	if cost.CanonicalBytes > MaxEncodedBytes {
+		return nil, ErrInvalidEvidence
 	}
 	encoded, err := json.Marshal(record)
 	if err != nil || len(encoded) > MaxEncodedBytes {
@@ -650,7 +559,7 @@ func DecodeCanonicalJSON(encoded []byte) (Record, error) {
 	var record Record
 	decoder := json.NewDecoder(bytes.NewReader(encoded))
 	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&record); err != nil {
+	if err := decodeCanonicalEnvelope(decoder, &record); err != nil {
 		return Record{}, fmt.Errorf("%w: decode: %v", ErrInvalidEvidence, err)
 	}
 	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
@@ -663,6 +572,63 @@ func DecodeCanonicalJSON(encoded []byte) (Record, error) {
 	return record.Clone(), nil
 }
 
+// Decode the closed Record envelope with tokens, then decode each typed field
+// at the same independent depth boundary used by its encoder. A whole-value
+// Decode would add an extra container that plain Record encoding never scans.
+func decodeCanonicalEnvelope(decoder *json.Decoder, record *Record) error {
+	token, err := decoder.Token()
+	if err != nil {
+		return err
+	}
+	if token != json.Delim('{') {
+		return ErrInvalidEvidence
+	}
+	seen := make(map[string]bool, 8)
+	for decoder.More() {
+		token, err := decoder.Token()
+		if err != nil {
+			return err
+		}
+		name, ok := token.(string)
+		if !ok || seen[name] {
+			return ErrInvalidEvidence
+		}
+		seen[name] = true
+		var field any
+		switch name {
+		case "exchangeId":
+			field = &record.ExchangeID
+		case "parent":
+			field = &record.Parent
+		case "frozen":
+			field = &record.Frozen
+		case "mode":
+			field = &record.Mode
+		case "recordedAt":
+			field = &record.RecordedAt
+		case "expiresAt":
+			field = &record.ExpiresAt
+		case "request":
+			field = &record.Request
+		case "response":
+			field = &record.Response
+		default:
+			return fmt.Errorf("%w: unknown Record field", ErrInvalidEvidence)
+		}
+		if err := decoder.Decode(field); err != nil {
+			return err
+		}
+	}
+	token, err = decoder.Token()
+	if err != nil {
+		return err
+	}
+	if token != json.Delim('}') {
+		return ErrInvalidEvidence
+	}
+	return nil
+}
+
 func (request Request) validate(mode environment.ContentRecordingMode) error {
 	if len(request.Messages) == 0 {
 		return fmt.Errorf("%w: request projection is incomplete", ErrInvalidEvidence)
@@ -671,10 +637,13 @@ func (request Request) validate(mode environment.ContentRecordingMode) error {
 }
 
 func (request Request) validateProjection(mode environment.ContentRecordingMode) error {
+	return request.validateProjectionWithin(mode, false)
+}
+
+func (request Request) validateProjectionWithin(mode environment.ContentRecordingMode, legacyCount bool) error {
 	if request.RequestedModel == "" || request.EffectiveModel == "" ||
 		request.MaxOutputTokens < 0 ||
-		len(request.System) > protocolcore.MaxContentBlocks ||
-		len(request.Messages) > protocolcore.MaxMessageCount+1 ||
+		(legacyCount && len(request.System) > protocolcore.MaxContentBlocks) ||
 		len(request.Tools) > protocolcore.MaxToolCount {
 		return fmt.Errorf("%w: request projection is incomplete", ErrInvalidEvidence)
 	}
@@ -684,24 +653,14 @@ func (request Request) validateProjection(mode environment.ContentRecordingMode)
 		}
 	}
 	for _, message := range request.Messages {
-		switch protocolcore.Role(message.Role) {
-		case protocolcore.RoleSystem, protocolcore.RoleDeveloper,
-			protocolcore.RoleUser, protocolcore.RoleAssistant, protocolcore.RoleTool:
-		default:
-			return fmt.Errorf("%w: message role is unsupported", ErrInvalidEvidence)
+		if err := validateMessageRole(message.Role); err != nil {
+			return err
 		}
-		if len(message.Blocks) == 0 || len(message.Blocks) > protocolcore.MaxContentBlocks {
+		if len(message.Blocks) == 0 || (legacyCount && len(message.Blocks) > protocolcore.MaxContentBlocks) {
 			return fmt.Errorf("%w: message blocks are invalid", ErrInvalidEvidence)
 		}
-		if message.Agent != nil {
-			context := protocolcore.AgentMessageContext{
-				AgentName: message.Agent.AgentName,
-				Author:    message.Agent.Author,
-				Recipient: message.Agent.Recipient,
-			}
-			if err := context.Validate(); err != nil {
-				return fmt.Errorf("%w: agent message context: %v", ErrInvalidEvidence, err)
-			}
+		if err := validateMessageHeader(message); err != nil {
+			return err
 		}
 		for _, block := range message.Blocks {
 			if err := block.Validate(mode); err != nil {
@@ -721,10 +680,36 @@ func (request Request) validateProjection(mode environment.ContentRecordingMode)
 	return nil
 }
 
+func validateMessageRole(role string) error {
+	switch protocolcore.Role(role) {
+	case protocolcore.RoleSystem, protocolcore.RoleDeveloper, protocolcore.RoleUser, protocolcore.RoleAssistant, protocolcore.RoleTool:
+	default:
+		return fmt.Errorf("%w: message role is unsupported", ErrInvalidEvidence)
+	}
+	return nil
+}
+
+func validateMessageHeader(message Message) error {
+	if err := validateMessageRole(message.Role); err != nil {
+		return err
+	}
+	if a := message.Agent; a != nil {
+		v := protocolcore.AgentMessageContext{AgentName: a.AgentName, Author: a.Author, Recipient: a.Recipient}
+		if err := v.Validate(); err != nil {
+			return fmt.Errorf("%w: agent message context: %v", ErrInvalidEvidence, err)
+		}
+	}
+	return nil
+}
+
 func (response Response) validate(mode environment.ContentRecordingMode) error {
+	return response.validateWithin(mode, true)
+}
+
+func (response Response) validateWithin(mode environment.ContentRecordingMode, legacyCount bool) error {
 	if !validIdentity(response.ID, 512) || response.RequestedModel == "" ||
 		response.EffectiveModel == "" || response.ReportedModel == "" ||
-		len(response.Blocks) > protocolcore.MaxContentBlocks {
+		(legacyCount && len(response.Blocks) > protocolcore.MaxContentBlocks) {
 		return fmt.Errorf("%w: response projection is incomplete", ErrInvalidEvidence)
 	}
 	if err := protocolcore.StopReason(response.StopReason).Validate(); err != nil {
@@ -750,69 +735,100 @@ func (response Response) validate(mode environment.ContentRecordingMode) error {
 	return nil
 }
 
-// Validate checks retained block evidence, never read-time placeholders.
-func (block Block) Validate(mode environment.ContentRecordingMode) error {
-	if block.OriginalSize < 0 || block.Deferred != nil {
+// BlockShape contains body-free facts needed for retained block semantics. It
+// does not certify body syntax, canonical identity, resource admission or a
+// complete piece of evidence. Stream readers must prove those independently.
+type BlockShape struct {
+	Kind                                                                 string
+	Availability                                                         Availability
+	OriginalSize                                                         int
+	CallID, ToolName, ToolNamespace                                      string
+	ToolError                                                            bool
+	Agent                                                                AgentContext
+	HasAgent                                                             bool
+	Deferred, HasText, HasArguments                                      bool
+	HasProviderSource, HasProviderKind, HasFingerprint, FingerprintValid bool
+}
+
+func (block Block) RetainedShape() BlockShape {
+	shape := BlockShape{Kind: block.Kind, Availability: block.Availability, OriginalSize: block.OriginalSize, CallID: block.CallID, ToolName: block.ToolName, ToolNamespace: block.ToolNamespace, ToolError: block.ToolError, Deferred: block.Deferred != nil, HasText: block.Text != "", HasArguments: len(block.Arguments) != 0, HasProviderSource: block.ProviderSource != "", HasProviderKind: block.ProviderKind != "", HasFingerprint: block.Fingerprint != "", FingerprintValid: validFingerprint(block.Fingerprint)}
+	if block.Agent != nil {
+		shape.Agent = *block.Agent
+		shape.HasAgent = true
+	}
+	return shape
+}
+
+func (shape BlockShape) Validate(mode environment.ContentRecordingMode) error {
+	if shape.OriginalSize < 0 || shape.Deferred {
 		return ErrInvalidEvidence
 	}
 	expected := AvailabilityOmitted
 	if mode == environment.ContentRecordingFull &&
-		protocolcore.BlockKind(block.Kind) != protocolcore.BlockProviderExtension {
+		protocolcore.BlockKind(shape.Kind) != protocolcore.BlockProviderExtension {
 		expected = AvailabilityRecorded
 	}
-	if block.Availability != expected {
+	if shape.Availability != expected {
 		return fmt.Errorf("%w: block availability contradicts recording mode", ErrInvalidEvidence)
 	}
-	if block.Availability == AvailabilityOmitted &&
-		(block.Text != "" || len(block.Arguments) != 0) {
+	if shape.Availability == AvailabilityOmitted &&
+		(shape.HasText || shape.HasArguments) {
 		return fmt.Errorf("%w: omitted block retains content", ErrInvalidEvidence)
 	}
-	if block.Agent != nil {
+	if shape.HasAgent {
 		context := protocolcore.AgentMessageContext{
-			AgentName: block.Agent.AgentName,
-			Author:    block.Agent.Author,
-			Recipient: block.Agent.Recipient,
+			AgentName: shape.Agent.AgentName,
+			Author:    shape.Agent.Author,
+			Recipient: shape.Agent.Recipient,
 		}
 		if err := context.Validate(); err != nil {
 			return fmt.Errorf("%w: block agent context: %v", ErrInvalidEvidence, err)
 		}
 	}
-	switch protocolcore.BlockKind(block.Kind) {
+	switch protocolcore.BlockKind(shape.Kind) {
 	case protocolcore.BlockText, protocolcore.BlockRefusal:
-		if block.CallID != "" || block.ToolName != "" || block.ToolNamespace != "" || len(block.Arguments) != 0 || block.ToolError {
+		if shape.CallID != "" || shape.ToolName != "" || shape.ToolNamespace != "" || shape.HasArguments || shape.ToolError {
 			return fmt.Errorf("%w: text block contains tool evidence", ErrInvalidEvidence)
 		}
 	case protocolcore.BlockToolCall:
-		if !validIdentity(block.CallID, 512) || !validIdentity(block.ToolName, protocolcore.MaxToolNameBytes) || block.ToolError {
+		if !validIdentity(shape.CallID, 512) || !validIdentity(shape.ToolName, protocolcore.MaxToolNameBytes) || shape.ToolError {
 			return fmt.Errorf("%w: tool call metadata is invalid", ErrInvalidEvidence)
 		}
-		if len(block.Arguments) != 0 && !json.Valid(block.Arguments) {
-			return fmt.Errorf("%w: tool arguments are invalid", ErrInvalidEvidence)
-		}
-		if block.ToolNamespace != "" && !validIdentity(block.ToolNamespace, protocolcore.MaxToolNamespaceBytes) {
+		if shape.ToolNamespace != "" && !validIdentity(shape.ToolNamespace, protocolcore.MaxToolNamespaceBytes) {
 			return fmt.Errorf("%w: tool call namespace is invalid", ErrInvalidEvidence)
 		}
 	case protocolcore.BlockToolResult:
-		if !validIdentity(block.CallID, 512) || len(block.Arguments) != 0 ||
-			(block.ToolNamespace == "") != (block.ToolName == "") ||
-			(block.ToolNamespace != "" && !validIdentity(block.ToolNamespace, protocolcore.MaxToolNamespaceBytes)) ||
-			(block.ToolName != "" && !validIdentity(block.ToolName, protocolcore.MaxToolNameBytes)) {
+		if !validIdentity(shape.CallID, 512) || shape.HasArguments ||
+			(shape.ToolNamespace == "") != (shape.ToolName == "") ||
+			(shape.ToolNamespace != "" && !validIdentity(shape.ToolNamespace, protocolcore.MaxToolNamespaceBytes)) ||
+			(shape.ToolName != "" && !validIdentity(shape.ToolName, protocolcore.MaxToolNameBytes)) {
 			return fmt.Errorf("%w: tool result metadata is invalid", ErrInvalidEvidence)
 		}
 	case protocolcore.BlockProviderExtension:
-		if block.Availability != AvailabilityOmitted || block.CallID != "" ||
-			block.ToolName != "" || block.ToolNamespace != "" || len(block.Arguments) != 0 || block.ToolError ||
-			block.ProviderSource == "" || block.ProviderKind == "" ||
-			!validFingerprint(block.Fingerprint) {
+		if shape.Availability != AvailabilityOmitted || shape.CallID != "" ||
+			shape.ToolName != "" || shape.ToolNamespace != "" || shape.HasArguments || shape.ToolError ||
+			!shape.HasProviderSource || !shape.HasProviderKind ||
+			!shape.FingerprintValid {
 			return fmt.Errorf("%w: provider extension retained wire content", ErrInvalidEvidence)
 		}
 	case protocolcore.BlockKind(BlockKindReasoning):
-		if block.CallID != "" || block.ToolName != "" || block.ToolNamespace != "" || len(block.Arguments) != 0 || block.ToolError ||
-			block.ProviderSource == "" || block.ProviderKind == "" || block.Fingerprint != "" {
+		if shape.CallID != "" || shape.ToolName != "" || shape.ToolNamespace != "" || shape.HasArguments || shape.ToolError ||
+			!shape.HasProviderSource || !shape.HasProviderKind || shape.HasFingerprint {
 			return fmt.Errorf("%w: reasoning block contains tool evidence", ErrInvalidEvidence)
 		}
 	default:
 		return fmt.Errorf("%w: block kind is unsupported", ErrInvalidEvidence)
+	}
+	return nil
+}
+
+// Validate checks retained block evidence, never read-time placeholders.
+func (block Block) Validate(mode environment.ContentRecordingMode) error {
+	if err := block.RetainedShape().Validate(mode); err != nil {
+		return err
+	}
+	if len(block.Arguments) != 0 && !json.Valid(block.Arguments) {
+		return fmt.Errorf("%w: tool arguments are invalid", ErrInvalidEvidence)
 	}
 	return nil
 }
@@ -1003,7 +1019,7 @@ func blockViewsWithProviderReasoning(
 			view.ToolName = block.ToolCall.Name
 			view.ToolNamespace = block.ToolCall.Namespace
 			if block.ToolCall.EffectiveKind() == protocolcore.ToolKindFunction {
-				view.OriginalSize = len(block.ToolCall.Arguments.Bytes())
+				view.OriginalSize = block.ToolCall.Arguments.ByteLen()
 				if full {
 					view.Availability = AvailabilityRecorded
 					view.Arguments = sanitizeJSON(block.ToolCall.Arguments.Bytes())
@@ -1063,12 +1079,21 @@ func sanitizeText(value string) string {
 	if !utf8.ValidString(value) {
 		return "[invalid text omitted]"
 	}
-	value = unixHomePattern.ReplaceAllString(value, "${1}~")
-	value = windowsHomePattern.ReplaceAllString(value, "${1}~")
-	value = headerSecretPattern.ReplaceAllString(value, "${1}: [redacted]")
-	value = bearerPattern.ReplaceAllString(value, "Bearer [redacted]")
-	value = providerSecretPattern.ReplaceAllString(value, "[redacted credential]")
-	value = urlUserInfoPattern.ReplaceAllString(value, "${1}[redacted]@")
+	for _, replacement := range []struct {
+		pattern *regexp.Regexp
+		value   string
+		// Each pattern requires at least one of these literal ASCII bytes.
+		// Recheck the current value after earlier ordered replacements, keeping
+		// all regex matching/redaction semantics (including Unicode folding).
+		required string
+	}{{unixHomePattern, "${1}~", "/"}, {windowsHomePattern, "${1}~", "\\"}, {headerSecretPattern, "${1}: [redacted]", ":="}, {bearerPattern, "Bearer [redacted]", " \t"}, {providerSecretPattern, "[redacted credential]", "-"}, {urlUserInfoPattern, "${1}[redacted]@", "@"}} {
+		if strings.IndexAny(value, replacement.required) < 0 {
+			continue
+		}
+		if replacement.pattern.MatchString(value) {
+			value = replacement.pattern.ReplaceAllString(value, replacement.value)
+		}
+	}
 	return value
 }
 

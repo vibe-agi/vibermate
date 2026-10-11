@@ -253,6 +253,14 @@ type ReplaceSecretCommand struct {
 	ID                      ID
 	ExpectedCredentialEpoch uint64
 	Secret                  *secretstore.Value
+	Precondition            *ReplacementPrecondition
+}
+
+// ReplacementPrecondition binds a delayed credential replacement to an
+// account incarnation. Nil preserves the ordinary epoch-only replacement.
+type ReplacementPrecondition struct {
+	CreatedAt time.Time
+	SecretRef secretstore.Reference
 }
 
 type DeleteCommand struct {

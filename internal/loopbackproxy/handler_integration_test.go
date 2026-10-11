@@ -1434,7 +1434,7 @@ func newProxyFixtureConfigured(t *testing.T, clientDialect protocolspec.Dialect,
 	if err != nil {
 		t.Fatal(err)
 	}
-	proxyOptions := loopbackproxy.Options{
+	handlerOptions := loopbackproxy.Options{
 		OwnerContext:     context.Background(),
 		Admissions:       admissions,
 		Assignments:      assignments,
@@ -1452,9 +1452,9 @@ func newProxyFixtureConfigured(t *testing.T, clientDialect protocolspec.Dialect,
 		HandshakeTimeout: time.Second,
 	}
 	if composition != nil && composition.configureProxy != nil {
-		composition.configureProxy(&proxyOptions)
+		composition.configureProxy(&handlerOptions)
 	}
-	handler, err := loopbackproxy.New(proxyOptions)
+	handler, err := loopbackproxy.New(handlerOptions)
 	if err != nil {
 		t.Fatal(err)
 	}

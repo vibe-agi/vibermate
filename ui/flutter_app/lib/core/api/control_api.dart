@@ -328,6 +328,10 @@ abstract interface class ControlApi {
     required String callbackMode,
   });
   Future<CodexLogin> codexLoginStatus(String loginId);
+  Future<CodexLogin> startCodexReauthorization({
+    required ProviderAccount account,
+    required String callbackMode,
+  });
   Future<CodexLogin> completeCodexLogin(String loginId, String callbackUrl);
   Future<void> cancelCodexLogin(String loginId);
 
@@ -2284,6 +2288,34 @@ final class HttpControlApi implements ControlApi, ACPObservationApi {
           'accountId': accountId,
           'upstreamEndpointId': upstreamEndpointId,
           'displayName': displayName,
+          'callbackMode': callbackMode,
+        },
+      ),
+    );
+  }
+
+  @override
+  Future<CodexLogin> startCodexReauthorization({
+    required ProviderAccount account,
+    required String callbackMode,
+  }) async {
+    if (!_validResourceId(account.id) ||
+        account.kind != 'codex_oauth' ||
+        account.credentialEpoch <= 0 ||
+        !const {'loopback', 'manual'}.contains(callbackMode)) {
+      throw const ControlContractException(
+        'Codex reauthorization input is invalid',
+      );
+    }
+    return CodexLogin.fromJson(
+      await _mutation(
+        'POST',
+        '/api/v1/codex-oauth/logins',
+        expectedRevision: account.credentialEpoch,
+        expectedStatus: 201,
+        body: {
+          'mode': 'reauthorize',
+          'accountId': account.id,
           'callbackMode': callbackMode,
         },
       ),

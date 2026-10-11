@@ -434,7 +434,7 @@ func Start(ctx context.Context, options Options) (*Host, error) {
 	if err != nil {
 		return fail("upstream model catalog", err)
 	}
-	application, err := desktopcontrol.New(desktopcontrol.Options{
+	controlOptions := desktopcontrol.Options{
 		NetworkAccess:       &desktopcontrol.NetworkAccess{SOCKSAddress: socksAddress, VLESSAvailable: options.Runtime.VLESSExecutable != ""},
 		Storage:             runtime,
 		ACP:                 runtime.ACPObservations(),
@@ -473,7 +473,11 @@ func Start(ctx context.Context, options Options) (*Host, error) {
 		ArchiveBarrier:      runtime.EvidenceArchiveBarrier(),
 		RootTrust:           rootTrust,
 		Clock:               options.Runtime.Clock,
-	})
+	}
+	if limits, ok := runtime.ExchangeContentLimits(); ok {
+		controlOptions.ContentLimits = &limits
+	}
+	application, err := desktopcontrol.New(controlOptions)
 	if err != nil {
 		return fail("App control routes", err)
 	}

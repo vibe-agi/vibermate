@@ -2,6 +2,7 @@ package runtimepersistence
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -11,6 +12,68 @@ import (
 	"github.com/vibe-agi/vibermate/internal/exchangecontent"
 	"github.com/vibe-agi/vibermate/internal/protocolcore"
 )
+
+// Each physical row must authenticate before it can be interpreted as JSON or
+// a fragment. A well-formed, same-length replacement is still corruption.
+func TestStoredBlockRejectsPhysicalDigestMismatch(t *testing.T) {
+	store := openTestStore(t, filepath.Join(t.TempDir(), "physical-digest.db"))
+	defer shutdownTestStore(t, store)
+	ctx := context.Background()
+	block := exchangecontent.Block{Kind: "text", Availability: exchangecontent.AvailabilityRecorded, Text: "first", OriginalSize: 5}
+	digest, encoded, err := encodeStoredBlock(block)
+	if err != nil {
+		t.Fatal(err)
+	}
+	damaged := strings.Replace(string(encoded), "first", "other", 1)
+	if _, err := store.database.ExecContext(ctx, `INSERT INTO runtime_exchange_content_blocks(digest,plain_bytes,codec,payload) VALUES(?,?,'identity',?)`, digest, len(damaged), []byte(damaged)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := loadStoredBlock(ctx, store.database, digest); !errors.Is(err, exchangecontent.ErrInvalidEvidence) {
+		t.Fatalf("same-length substituted physical row accepted: %v", err)
+	}
+	if _, err := loadStoredBlocksByDigest(ctx, store.database, []string{digest}); !errors.Is(err, exchangecontent.ErrInvalidEvidence) {
+		t.Fatalf("batch accepted same-length substituted physical row: %v", err)
+	}
+}
+
+func TestStoredPhysicalPayloadCodecAndDeclaredLength(t *testing.T) {
+	block := exchangecontent.Block{Kind: "text", Availability: exchangecontent.AvailabilityRecorded, Text: strings.Repeat("first", 1024), OriginalSize: 5120}
+	digest, encoded, err := encodeStoredBlock(block)
+	if err != nil {
+		t.Fatal(err)
+	}
+	compressed := bodyEncoder.EncodeAll(encoded, nil)
+	for _, tc := range []struct {
+		name, codec, digest string
+		plain               int
+		payload             []byte
+		valid               bool
+	}{
+		{"identity", "identity", digest, len(encoded), encoded, true},
+		{"zstd", "zstd", digest, len(encoded), compressed, true},
+		{"undersized declaration", "zstd", digest, len(encoded) - 1, compressed, false},
+		{"oversized declaration", "zstd", digest, len(encoded) + 1, compressed, false},
+		{"identity length mismatch", "identity", digest, len(encoded) - 1, encoded, false},
+		{"unknown codec", "unknown", digest, len(encoded), encoded, false},
+		{"physical limit", "identity", digest, exchangecontent.MaxEncodedBytes + 1, encoded, false},
+		{"digest mismatch", "zstd", strings.Repeat("0", 64), len(encoded), compressed, false},
+		{"invalid digest", "identity", "bad", len(encoded), encoded, false},
+		{"empty payload", "identity", digest, len(encoded), nil, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := decodeStoredPhysicalPayload(tc.digest, tc.plain, tc.codec, tc.payload)
+			if tc.valid {
+				if err != nil || string(got) != string(encoded) {
+					t.Fatalf("valid row changed: %v", err)
+				}
+				return
+			}
+			if !errors.Is(err, exchangecontent.ErrInvalidEvidence) {
+				t.Fatalf("damaged physical row accepted: %v", err)
+			}
+		})
+	}
+}
 
 func blockRecordFixture(
 	t testing.TB,

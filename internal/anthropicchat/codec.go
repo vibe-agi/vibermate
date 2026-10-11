@@ -3,6 +3,7 @@ package anthropicchat
 import (
 	"errors"
 
+	"github.com/vibe-agi/vibermate/internal/protocolcore"
 	"github.com/vibe-agi/vibermate/internal/ssewire"
 )
 
@@ -104,6 +105,7 @@ func (profile ProviderRequestProfile) validate() error {
 }
 
 type Options struct {
+	Resources            *protocolcore.ResourceLimits
 	MaxRequestBytes      int
 	MaxResponseBytes     int
 	MaxToolArgumentBytes int
@@ -114,7 +116,9 @@ type Options struct {
 }
 
 func DefaultOptions() Options {
+	limits := protocolcore.DefaultResourceLimits()
 	return Options{
+		Resources:            &limits,
 		MaxRequestBytes:      16 << 20,
 		MaxResponseBytes:     16 << 20,
 		MaxToolArgumentBytes: 4 << 20,
@@ -147,6 +151,17 @@ func New(options Options) (*Codec, error) {
 	if err := options.ProviderRequest.validate(); err != nil {
 		return nil, err
 	}
+	if options.Resources == nil {
+		limits := protocolcore.DefaultResourceLimits()
+		options.Resources = &limits
+	}
+	if options.Resources != nil {
+		if err := options.Resources.Validate(); err != nil {
+			return nil, err
+		}
+		limits := *options.Resources
+		options.Resources = &limits
+	}
 	return &Codec{
 		options:         options,
 		providerRequest: options.ProviderRequest,
@@ -155,4 +170,48 @@ func New(options Options) (*Codec, error) {
 
 func (codec *Codec) Revision() uint64 {
 	return CodecRevision
+}
+
+func (codec *Codec) ValidateRequest(request protocolcore.Request) error {
+	if codec.options.Resources != nil {
+		return protocolcore.ValidateRequestWithin(request, *codec.options.Resources)
+	}
+	return request.Validate()
+}
+
+func (codec *Codec) ValidateResponse(response protocolcore.Response) error {
+	if codec.options.Resources != nil {
+		return protocolcore.ValidateResponseWithin(response, *codec.options.Resources)
+	}
+	return response.Validate()
+}
+
+func (codec *Codec) validateRequestJSON(body []byte) error {
+	if codec.options.Resources != nil {
+		return protocolcore.ValidateJSONWithin(body, codec.options.Resources.Request)
+	}
+	return nil
+}
+
+func (codec *Codec) validateResponseJSON(body []byte) error {
+	if codec.options.Resources != nil {
+		return protocolcore.ValidateJSONWithin(body, codec.options.Resources.Response)
+	}
+	return nil
+}
+
+func (codec *Codec) requestBudget() *protocolcore.ResourceBudget {
+	if codec.options.Resources == nil {
+		return nil
+	}
+	budget, _ := protocolcore.NewResourceBudget(codec.options.Resources.Request)
+	return budget
+}
+
+func (codec *Codec) responseBudget() *protocolcore.ResourceBudget {
+	if codec.options.Resources == nil {
+		return nil
+	}
+	budget, _ := protocolcore.NewResourceBudget(codec.options.Resources.Response)
+	return budget
 }

@@ -33,7 +33,7 @@ func (codec *Codec) DecodeAnthropicProviderResponse(
 	request protocolcore.Request,
 	body []byte,
 ) (protocolcore.Response, error) {
-	if err := request.Validate(); err != nil {
+	if err := codec.ValidateRequest(request); err != nil {
 		return protocolcore.Response{}, protocolcore.NewFailure(
 			protocolcore.ReasonInvalidClientRequest,
 			"$",
@@ -46,6 +46,9 @@ func (codec *Codec) DecodeAnthropicProviderResponse(
 			"$",
 			errors.New("response body has an invalid size"),
 		)
+	}
+	if err := codec.validateResponseJSON(body); err != nil {
+		return protocolcore.Response{}, protocolcore.NewFailure(protocolcore.ReasonInvalidProviderResponse, "$", err)
 	}
 	if err := rejectDuplicateJSONNames(body); err != nil {
 		return protocolcore.Response{}, protocolcore.NewFailure(
@@ -70,12 +73,12 @@ func (codec *Codec) DecodeAnthropicProviderResponse(
 			errors.New("response body has trailing data"),
 		)
 	}
-	return decodeMessagesResponse(request, wire, codec.options.MaxToolArgumentBytes, nil)
+	return codec.decodeMessagesResponse(request, wire, codec.options.MaxToolArgumentBytes, nil)
 }
 
 // decodeMessagesResponse decodes one complete message. actionDeltas holds, by
 // content index, the streamed deltas of blocks that decode as provider actions.
-func decodeMessagesResponse(
+func (codec *Codec) decodeMessagesResponse(
 	request protocolcore.Request,
 	wire messagesProviderResponseWire,
 	maxToolArgumentBytes int,
@@ -208,7 +211,7 @@ func decodeMessagesResponse(
 		StopSequence:       stopSequence,
 		Usage:              usage,
 	}
-	if err := response.Validate(); err != nil {
+	if err := codec.ValidateResponse(response); err != nil {
 		return protocolcore.Response{}, messagesProviderFailure("$", err)
 	}
 	return response.Clone(), nil

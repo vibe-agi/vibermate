@@ -83,7 +83,8 @@ func (f accountReadFixture) serveProxy(t *testing.T) *url.URL {
 		t.Fatal(err)
 	}
 	proxy, err := buildProxy(proxyBuildRequest{
-		ownerContext: ctx, admissions: admissions, assignments: f.runtime.assignments,
+		bodyAdmission: f.runtime.bodyAdmission,
+		ownerContext:  ctx, admissions: admissions, assignments: f.runtime.assignments,
 		exchanges: f.runtime.exchanges, original: accountFixtureOriginal{}, accountReads: f.reader,
 		certificates: f.runtime.localCA, connections: f.runtime.connections,
 		policy: connectionpolicy.NewLive(policy), approvals: f.runtime.approvals, blindTunnels: blind,

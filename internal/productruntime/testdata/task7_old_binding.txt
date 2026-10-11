@@ -1,0 +1,10 @@
+package productruntime
+
+import (
+ "context"
+ "testing"
+)
+
+const task7ProducerSource = "2237b3ae35e8097987b685f6bcd08224bde62f0f"
+func task7BindAdmission(_ *Runtime, _ *exchangeBuildRequest, _ *proxyBuildRequest) {}
+func task7Upgrade(t *testing.T, _ context.Context, _ string) { t.Fatal("old executable cannot run candidate upgrade") }

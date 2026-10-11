@@ -40,6 +40,16 @@ func TestVerifyFileAcceptsKnownGoodFixedClientFixtures(t *testing.T) {
 	}
 }
 
+func TestPinnedGoToolchainMatchesModule(t *testing.T) {
+	content, err := os.ReadFile("../../go.mod")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ExpectedGoVersion != "go1.26.9" || !strings.Contains(string(content), "\ntoolchain "+ExpectedGoVersion+"\n") {
+		t.Fatalf("acceptance pin %q disagrees with module", ExpectedGoVersion)
+	}
+}
+
 func TestVerifyFileRejectsBytesChangedAfterReportCreation(t *testing.T) {
 	t.Parallel()
 
@@ -613,6 +623,30 @@ func TestVerifyFileRejectsTypedMutations(t *testing.T) {
 			},
 		},
 	}
+	for _, version := range []string{"go1.25.13", "go1.26.0", "go1.26.8", "go1.26.10"} {
+		version := version
+		tests = append(tests, struct {
+			name   string
+			mutate func(*Report, *Expectations)
+		}{
+			name: "runtime Go toolchain " + version,
+			mutate: func(report *Report, _ *Expectations) {
+				report.Provenance.Toolchains.Go = "go version " + version + " darwin/arm64"
+			},
+		})
+		for _, role := range []string{"acceptance", "daemon", "launcher"} {
+			role := role
+			tests = append(tests, struct {
+				name   string
+				mutate func(*Report, *Expectations)
+			}{
+				name: "Go build " + role + " version " + version,
+				mutate: func(report *Report, _ *Expectations) {
+					report.Provenance.Build.GoBuildVersions[role] = version
+				},
+			})
+		}
+	}
 
 	for _, test := range tests {
 		test := test
@@ -993,7 +1027,7 @@ func validFixture(
 	}
 	revision, commitTime := initializeGitFixture(t, sourceRoot)
 	runtimeToolchains := ToolchainProvenance{
-		Go:      "go version go1.25.13 darwin/arm64",
+		Go:      "go version go1.26.9 darwin/arm64",
 		Flutter: expectedFlutterToolchain(),
 		Dart:    "Dart " + ExpectedDartVersion,
 		Xcode:   ExpectedXcodeVersion,
@@ -1098,9 +1132,9 @@ func validFixture(
 				Toolchains:          buildTools,
 				ConfigurationSHA256: configurationDigests,
 				GoBuildVersions: map[string]string{
-					"acceptance": ExpectedGoVersion,
-					"daemon":     ExpectedGoVersion,
-					"launcher":   ExpectedGoVersion,
+					"acceptance": "go1.26.9",
+					"daemon":     "go1.26.9",
+					"launcher":   "go1.26.9",
 				},
 				GoBuildTags: map[string]string{
 					"acceptance": "",

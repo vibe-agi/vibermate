@@ -55,10 +55,13 @@ func (codec messagesClientCodec) EncodeSourceResponse(
 	response protocolcore.Response,
 	sourceBody []byte,
 ) ([]byte, protocolcore.TranslationReport, error) {
-	if err := request.Validate(); err != nil {
+	if err := codec.codec.ValidateRequest(request); err != nil {
 		return nil, protocolcore.TranslationReport{}, err
 	}
-	if err := response.Validate(); err != nil {
+	if err := codec.codec.ValidateResponse(response); err != nil {
+		return nil, protocolcore.TranslationReport{}, err
+	}
+	if err := codec.codec.validateResponseJSON(sourceBody); err != nil {
 		return nil, protocolcore.TranslationReport{}, err
 	}
 	if len(sourceBody) == 0 ||
@@ -100,6 +103,11 @@ type messagesBackendCodec struct {
 	codec *Codec
 }
 
+func (codec messagesBackendCodec) ValidateTransformedRequest(body []byte) error {
+	_, _, err := codec.codec.DecodeCompatibleClientRequest(body)
+	return err
+}
+
 func (messagesBackendCodec) Dialect() protocolspec.Dialect {
 	return protocolspec.DialectAnthropicMessages
 }
@@ -116,7 +124,7 @@ func (codec messagesBackendCodec) EncodeSourceRequest(
 	sourceBody []byte,
 	sourceHeaders http.Header,
 ) (protocolpath.ProviderRequest, protocolcore.TranslationReport, error) {
-	if err := request.Validate(); err != nil {
+	if err := codec.codec.ValidateRequest(request); err != nil {
 		return protocolpath.ProviderRequest{}, protocolcore.TranslationReport{},
 			protocolcore.NewFailure(protocolcore.ReasonInvalidClientRequest, "$", err)
 	}
@@ -127,6 +135,9 @@ func (codec messagesBackendCodec) EncodeSourceRequest(
 				"$",
 				errors.New("request body has an invalid size"),
 			)
+	}
+	if err := codec.codec.validateRequestJSON(sourceBody); err != nil {
+		return protocolpath.ProviderRequest{}, protocolcore.TranslationReport{}, protocolcore.NewFailure(protocolcore.ReasonInvalidClientRequest, "$", err)
 	}
 	var root map[string]json.RawMessage
 	decoder := json.NewDecoder(bytes.NewReader(sourceBody))

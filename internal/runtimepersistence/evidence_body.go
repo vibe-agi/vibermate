@@ -36,8 +36,12 @@ var bodyEncoder = mustZstdWriter()
 var bodyDecoder = mustZstdReader()
 
 func mustZstdWriter() *zstd.Encoder {
+	// EncodeAll remains safe for concurrent callers, but its expensive workspace
+	// count is fixed rather than coupled to the machine's CPU count.
 	encoder, err := zstd.NewWriter(
-		nil, zstd.WithEncoderLevel(zstd.SpeedBestCompression),
+		nil,
+		zstd.WithEncoderLevel(zstd.SpeedBestCompression),
+		zstd.WithEncoderConcurrency(1),
 	)
 	if err != nil {
 		panic(fmt.Errorf("construct evidence body encoder: %w", err))

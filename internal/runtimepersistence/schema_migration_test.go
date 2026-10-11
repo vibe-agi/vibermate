@@ -38,7 +38,7 @@ func openFrozenV1Store(t *testing.T, path string) *Store {
 	nativeExec(t, db, `INSERT INTO runtime_metadata VALUES(1,'vibermate-runtime',1,'2026-10-03T00:00:00Z')`)
 	operations := newOperationGate()
 	reads := sql.OpenDB(newSQLiteReadConnector(path, time.Second))
-	return &Store{databasePath: path, database: db, reads: reads, operations: operations, closeDone: make(chan struct{}), repo: newRepository(db, operations), activityRepo: newActivityRepository(db, reads, operations), providerAccounts: newProviderAccountRepository(db, operations, time.Second, sqlTransactionCommitter{}), upstreamEndpoints: newUpstreamEndpointRepository(db, operations, time.Second, sqlTransactionCommitter{}), environments: newEnvironmentRepository(db, operations, time.Second, sqlTransactionCommitter{}), exchangeContents: newExchangeContentRepository(db, operations), egressAttempts: newEgressAttemptRepository(db, operations), rawEvidence: newRawEvidenceRepository(db, operations)}
+	return &Store{databasePath: path, database: db, reads: reads, operations: operations, closeDone: make(chan struct{}), repo: newRepository(db, operations), activityRepo: newActivityRepository(db, reads, operations), providerAccounts: newProviderAccountRepository(db, operations, time.Second, sqlTransactionCommitter{}), upstreamEndpoints: newUpstreamEndpointRepository(db, operations, time.Second, sqlTransactionCommitter{}), environments: newEnvironmentRepository(db, operations, time.Second, sqlTransactionCommitter{}), exchangeContents: newExchangeContentRepository(db, reads, operations, nil), egressAttempts: newEgressAttemptRepository(db, operations), rawEvidence: newRawEvidenceRepository(db, operations)}
 }
 
 // Frozen v1 fixtures do not use today's v2 mutation or shutdown hooks.

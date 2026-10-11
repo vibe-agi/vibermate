@@ -442,7 +442,7 @@ func TestRequestProviderExtensionLimitsApplyAcrossHistory(t *testing.T) {
 	}{
 		{"history exceeds one-response count", slices.Repeat([]Message{message}, MaxProviderExtensions+1), false},
 		{"history at message limit", slices.Repeat([]Message{message}, MaxMessageCount), false},
-		{"history exceeds message limit", slices.Repeat([]Message{message}, MaxMessageCount+1), true},
+		{"history exceeds former message limit", slices.Repeat([]Message{message}, MaxMessageCount+1), false},
 		{"single message at count limit", []Message{{Role: RoleAssistant, Blocks: slices.Repeat([]ContentBlock{small}, MaxProviderExtensions)}}, false},
 		{"single message exceeds count limit", []Message{{Role: RoleAssistant, Blocks: slices.Repeat([]ContentBlock{small}, MaxProviderExtensions+1)}}, true},
 		{"history at byte limit", []Message{{Role: RoleAssistant, Blocks: []ContentBlock{halfBudget}}, {Role: RoleAssistant, Blocks: []ContentBlock{halfBudget}}}, false},

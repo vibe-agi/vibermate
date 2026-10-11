@@ -113,6 +113,9 @@ func (document JSONDocument) Bytes() []byte {
 	return bytes.Clone(document.value)
 }
 
+// ByteLen reports the exact owned byte length without copying private JSON.
+func (document JSONDocument) ByteLen() int { return len(document.value) }
+
 func (document JSONDocument) IsZero() bool {
 	return len(document.value) == 0
 }
@@ -1064,6 +1067,11 @@ func validProtocolEvidenceName(value string) bool {
 }
 
 func (request Request) Validate() error {
+	return ValidateRequestWithin(request, DefaultResourceLimits())
+}
+
+// Structural validation is independent of the selected finite policy.
+func (request Request) validate() error {
 	if err := validateIdentifier("requested model", request.RequestedModel, MaxModelBytes); err != nil {
 		return err
 	}
@@ -1084,7 +1092,7 @@ func (request Request) Validate() error {
 			return fmt.Errorf("system content block %d: %w", index, err)
 		}
 	}
-	if len(request.Messages) == 0 || len(request.Messages) > MaxMessageCount {
+	if len(request.Messages) == 0 {
 		return errors.New("message count is invalid")
 	}
 	providerExtensionBytes := 0
@@ -1213,12 +1221,7 @@ func (request Request) Clone() Request {
 }
 
 func (request Request) WithEffectiveModel(model string) (Request, error) {
-	cloned := request.Clone()
-	cloned.EffectiveModel = model
-	if err := cloned.Validate(); err != nil {
-		return Request{}, err
-	}
-	return cloned, nil
+	return WithEffectiveModelWithin(request, model, DefaultResourceLimits())
 }
 
 type UsageValue struct {
@@ -1334,6 +1337,46 @@ func (extension ProviderExtension) Path() string {
 
 func (extension ProviderExtension) Fragments() [][]byte {
 	return cloneByteSlices(extension.fragments)
+}
+
+// WalkFragments lends each immutable fragment through Read only. A reader is
+// valid only during its synchronous callback, which must not retain/use it
+// concurrently. Errors stop traversal before the next callback.
+func (extension ProviderExtension) WalkFragments(visit func(int, io.Reader) error) error {
+	if visit == nil {
+		return errors.New("fragment visitor is nil")
+	}
+	for _, fragment := range extension.fragments {
+		reader := &providerFragmentReader{data: fragment}
+		err := visit(len(fragment), reader)
+		reader.data = nil
+		reader.expired = true
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+type providerFragmentReader struct {
+	data    []byte
+	offset  int
+	expired bool
+}
+
+func (r *providerFragmentReader) Read(p []byte) (int, error) {
+	if r.expired {
+		return 0, errors.New("fragment reader expired")
+	}
+	if len(p) == 0 {
+		return 0, nil
+	}
+	if r.offset == len(r.data) {
+		return 0, io.EOF
+	}
+	n := copy(p, r.data[r.offset:])
+	r.offset += n
+	return n, nil
 }
 
 func (extension ProviderExtension) Validate() error {

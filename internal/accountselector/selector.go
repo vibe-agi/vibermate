@@ -261,14 +261,32 @@ func (turn *Turn) execute(ctx context.Context, request []byte) (Selection, error
 		return Selection{}, classifyRuntimeError(callErr)
 	}
 	accountID := selectionValue.Get("accountId")
-	if accountID == nil || accountID.ExportType() != reflect.TypeFor[string]() {
-		return Selection{}, fmt.Errorf("%w: accountId must be a string", ErrInvalidSelection)
-	}
-	selected := accountID.String()
-	if _, allowed := turn.allowed[selected]; !allowed {
-		return Selection{}, fmt.Errorf("%w: accountId is outside the frozen Account set", ErrInvalidSelection)
+	selected, err := selectedAccountIDWithin(accountID, turn.allowed)
+	if err != nil {
+		return Selection{}, err
 	}
 	return Selection{AccountID: selected}, nil
+}
+
+func selectedAccountIDWithin(accountID goja.Value, allowed map[string]struct{}) (string, error) {
+	if accountID == nil || accountID.ExportType() != reflect.TypeFor[string]() {
+		return "", fmt.Errorf("%w: accountId must be a string", ErrInvalidSelection)
+	}
+	// The non-configurable own accountId property above cannot be replaced
+	// with a getter. Primitive code-unit inspection invokes no operator code.
+	maximum := 0
+	for id := range allowed {
+		maximum = max(maximum, len(id))
+	}
+	text, ok := accountID.(goja.String)
+	if !ok || text.Length() > maximum {
+		return "", fmt.Errorf("%w: accountId is outside the frozen Account set", ErrInvalidSelection)
+	}
+	selected := accountID.String()
+	if _, allowed := allowed[selected]; !allowed {
+		return "", fmt.Errorf("%w: accountId is outside the frozen Account set", ErrInvalidSelection)
+	}
+	return selected, nil
 }
 
 type requestJSON struct {

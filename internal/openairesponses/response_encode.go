@@ -134,7 +134,7 @@ func (codec *Codec) EncodeClientResponse(
 			errors.New("Responses codec is nil"),
 		)
 	}
-	if err := request.Validate(); err != nil {
+	if err := codec.ValidateRequest(request); err != nil {
 		return nil, protocolcore.TranslationReport{}, protocolcore.NewFailure(
 			protocolcore.ReasonInvalidClientRequest,
 			"$",
@@ -144,7 +144,7 @@ func (codec *Codec) EncodeClientResponse(
 	if err := validateResponseToolDefinitions(request); err != nil {
 		return nil, protocolcore.TranslationReport{}, err
 	}
-	if err := response.Validate(); err != nil {
+	if err := codec.ValidateResponse(response); err != nil {
 		return nil, protocolcore.TranslationReport{}, protocolcore.NewFailure(
 			protocolcore.ReasonInvalidProviderResponse,
 			"$",

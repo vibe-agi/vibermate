@@ -106,9 +106,12 @@ func (codec *Codec) decodeProviderResponse(
 		return protocolcore.Response{}, protocolcore.TranslationReport{},
 			invalidProvider("$", errors.New("response body has an invalid size"))
 	}
-	if err := request.Validate(); err != nil {
+	if err := codec.ValidateRequest(request); err != nil {
 		return protocolcore.Response{}, protocolcore.TranslationReport{},
 			protocolcore.NewFailure(protocolcore.ReasonInvalidClientRequest, "$", err)
+	}
+	if err := codec.ValidateResponseJSON(body); err != nil {
+		return protocolcore.Response{}, protocolcore.TranslationReport{}, invalidProvider("$", err)
 	}
 	if err := rejectDuplicateNames(body); err != nil {
 		return protocolcore.Response{}, protocolcore.TranslationReport{},
@@ -218,7 +221,7 @@ func (codec *Codec) decodeProviderResponse(
 		StopReason:         stopReason,
 		Usage:              usage,
 	}
-	if err := response.Validate(); err != nil {
+	if err := codec.ValidateResponse(response); err != nil {
 		return protocolcore.Response{}, protocolcore.TranslationReport{},
 			invalidProvider("$", err)
 	}
@@ -594,6 +597,7 @@ type ProviderStream struct {
 	mu sync.Mutex
 
 	codec               *Codec
+	resources           *protocolcore.ResourceBudget
 	request             protocolcore.Request
 	decoder             *ssewire.Decoder
 	held                bytes.Buffer
@@ -612,7 +616,7 @@ func (codec *Codec) NewProviderStream(request protocolcore.Request) (*ProviderSt
 	if codec == nil {
 		return nil, errors.New("Responses codec is nil")
 	}
-	if err := request.Validate(); err != nil {
+	if err := codec.ValidateRequest(request); err != nil {
 		return nil, protocolcore.NewFailure(protocolcore.ReasonInvalidClientRequest, "$", err)
 	}
 	if !request.Stream {
@@ -631,10 +635,11 @@ func (codec *Codec) NewProviderStream(request protocolcore.Request) (*ProviderSt
 		return nil, err
 	}
 	return &ProviderStream{
-		codec:   codec,
-		request: request.Clone(),
-		decoder: decoder,
-		output:  make(map[int]json.RawMessage),
+		codec:     codec,
+		resources: codec.responseBudget(),
+		request:   request.Clone(),
+		decoder:   decoder,
+		output:    make(map[int]json.RawMessage),
 	}, nil
 }
 
@@ -685,6 +690,10 @@ func (stream *ProviderStream) Feed(_ context.Context, fragment []byte) ([]byte, 
 			stream.failed = true
 			return nil, protocolcore.NewFailure(protocolcore.ReasonStreamStateViolation, "$",
 				errors.New("event arrived after the Responses terminal event"))
+		}
+		if err := stream.resources.ReserveJSON(event.Data); err != nil {
+			stream.failed = true
+			return nil, protocolcore.NewFailure(protocolcore.ReasonMalformedEventStream, "$", err)
 		}
 		var header struct {
 			Type string `json:"type"`

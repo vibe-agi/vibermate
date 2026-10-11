@@ -21,6 +21,21 @@ func (account Account) credentialScope(realm string, epoch uint64, resolved egre
 		CredentialEpoch: epoch, RealmID: realm, SettingsRevision: account.SettingsRevision, EgressProfile: resolved.Profile(), ResolvedEgress: resolved}
 }
 
+// CredentialScope freezes the account profile for callers without a resolved exit.
+func (account Account) CredentialScope(realm string, epoch uint64, fallback egressprofile.ProfileRevision) providerauth.AccountRef {
+	if fallback == (egressprofile.ProfileRevision{}) {
+		fallback = egressprofile.Direct()
+	}
+	source := egressprofile.SelectionTransport
+	if account.EgressProfile != (egressprofile.ProfileRevision{}) {
+		fallback = account.EgressProfile
+		source = egressprofile.SelectionAccount
+	}
+	resolved, _ := egressprofile.RestoreResolved(fallback, source, 0)
+	return providerauth.AccountRef{ID: account.ID.String(), Revision: account.Revision,
+		CredentialEpoch: epoch, RealmID: realm, SettingsRevision: account.SettingsRevision, EgressProfile: fallback, ResolvedEgress: resolved}
+}
+
 func (manager *Manager) BindEgressProfiles(profiles egressprofile.Controller) error {
 	if manager == nil || profiles == nil {
 		return ErrSettingsUnavailable

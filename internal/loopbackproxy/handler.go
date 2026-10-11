@@ -170,14 +170,15 @@ func (source RandomExchangeIDSource) NewExchangeID(
 }
 
 type Options struct {
-	OwnerContext context.Context
-	Admissions   captureadmission.Authorizer
-	Assignments  CaptureAssignmentAuthority
-	Exchanges    exchange.Executor
-	Original     OriginalClient
-	AccountReads CapturedAccountReader
-	Certificates CertificateAuthority
-	Connections  ConnectionJournal
+	BodyAdmission *exchange.BodyAdmission
+	OwnerContext  context.Context
+	Admissions    captureadmission.Authorizer
+	Assignments   CaptureAssignmentAuthority
+	Exchanges     exchange.Executor
+	Original      OriginalClient
+	AccountReads  CapturedAccountReader
+	Certificates  CertificateAuthority
+	Connections   ConnectionJournal
 	// Policy decides every proxied connection before any dial, DNS
 	// resolution, or certificate issuance. A ClientEndpoint is not exempt. It
 	// is read once per connection, so a rule change reaches the next
@@ -238,6 +239,7 @@ type Handler struct {
 	clock          func() time.Time
 	auditTimeout   time.Duration
 	ownerContext   context.Context
+	bodyAdmission  *exchange.BodyAdmission
 
 	mu        sync.Mutex
 	accepting bool
@@ -247,6 +249,11 @@ type Handler struct {
 }
 
 func New(options Options) (*Handler, error) {
+	if options.BodyAdmission != nil {
+		if err := options.BodyAdmission.Policy().Validate(); err != nil {
+			return nil, err
+		}
+	}
 	if options.OwnerContext == nil ||
 		options.Admissions == nil ||
 		options.Assignments == nil ||
@@ -281,6 +288,7 @@ func New(options Options) (*Handler, error) {
 		}
 	}
 	handler := &Handler{
+		bodyAdmission:  options.BodyAdmission,
 		admissions:     options.Admissions,
 		assignments:    options.Assignments,
 		exchanges:      options.Exchanges,
@@ -913,6 +921,28 @@ func (handler *Handler) serveInner(
 			return
 		}
 	}
+	beginRawScope := func() func() {
+		if handler.rawEvidence != nil {
+			scopeKind, scopeID, err := rawEvidenceScope(capture)
+			if err != nil {
+				handler.reportRawEvidenceFailure(fmt.Errorf(
+					"resolve Raw evidence scope: %w", err,
+				))
+			} else {
+				scopeLease, beginErr := handler.rawEvidence.BeginScope(
+					request.Context(), scopeKind, scopeID,
+				)
+				if beginErr != nil {
+					handler.reportRawEvidenceFailure(fmt.Errorf(
+						"begin Raw evidence scope: %w", beginErr,
+					))
+				} else {
+					return scopeLease.Release
+				}
+			}
+		}
+		return func() {}
+	}
 	clientProtocol, err := downstreamProtocolOf(request)
 	if err != nil {
 		writeReason(writer, http.StatusBadRequest, ReasonRequestBodyInvalid, "")
@@ -991,26 +1021,10 @@ func (handler *Handler) serveInner(
 		}
 		return
 	}
-	if handler.rawEvidence != nil {
-		scopeKind, scopeID, err := rawEvidenceScope(capture)
-		if err != nil {
-			handler.reportRawEvidenceFailure(fmt.Errorf(
-				"resolve Raw evidence scope: %w", err,
-			))
-		} else {
-			scopeLease, beginErr := handler.rawEvidence.BeginScope(
-				request.Context(), scopeKind, scopeID,
-			)
-			if beginErr != nil {
-				handler.reportRawEvidenceFailure(fmt.Errorf(
-					"begin Raw evidence scope: %w", beginErr,
-				))
-			} else {
-				defer scopeLease.Release()
-			}
-		}
-	}
 	operation := plan.Operation()
+	if operation.Kind() != protocolspec.ClientOperationSemantic {
+		defer beginRawScope()()
+	}
 	clientDialect := plan.ProtocolPlan().ClientDialect()
 	if operation.Kind() == protocolspec.ClientOperationUnsupported {
 		// Unsupported WebSocket operations are an operation-catalog fact, not a
@@ -1053,6 +1067,25 @@ func (handler *Handler) serveInner(
 		)
 		return
 	}
+	var bodyLease *exchange.BodyLease
+	if operation.Kind() == protocolspec.ClientOperationSemantic && handler.bodyAdmission != nil {
+		if err := handler.bodyAdmission.CheckPlan(plan); err != nil {
+			writeReason(writer, http.StatusRequestEntityTooLarge, ReasonRequestBodyInvalid, "")
+			return
+		}
+		bodyLease, err = handler.bodyAdmission.AcquirePlan(request.Context(), plan)
+		if err != nil {
+			writeReason(writer, http.StatusServiceUnavailable, ReasonProxyStopping, "")
+			return
+		}
+		defer bodyLease.Release()
+		// Waiters install no callbacks. Join an entered Close before returning
+		// the full slot, even when cancellation has already been observed.
+		defer joinBodyCancellation(request.Context(), request.Body)()
+	}
+	if operation.Kind() == protocolspec.ClientOperationSemantic {
+		defer beginRawScope()()
+	}
 	body, err := readBounded(request.Body, operation.MaxBodyBytes())
 	if err != nil {
 		writeReason(writer, http.StatusRequestEntityTooLarge, ReasonRequestBodyInvalid, "")
@@ -1074,6 +1107,7 @@ func (handler *Handler) serveInner(
 			body,
 			observation,
 			audit,
+			bodyLease,
 		)
 	case protocolspec.ClientOperationAuxiliary:
 		handler.serveAgentProbe(
@@ -1183,6 +1217,7 @@ func (handler *Handler) serveSemantic(
 	body []byte,
 	observation transportprofile.Observation,
 	audit *connectionevent.Connection,
+	bodyLease *exchange.BodyLease,
 ) {
 	operationPlan := plan.Operation()
 	operation, err := exchange.NewClientOperationEvidence(
@@ -1206,6 +1241,9 @@ func (handler *Handler) serveSemantic(
 		// Every identity is generated independently; association travels as
 		// typed references rather than as a delimiter-joined string.
 		exchange.WithIngressCorrelation(admission, audit.ID()),
+	}
+	if bodyLease != nil {
+		requestOptions = append(requestOptions, exchange.WithBodyLease(bodyLease))
 	}
 	if observation.Available() {
 		requestOptions = append(
@@ -2034,6 +2072,20 @@ func writeReason(
 	}
 	writer.WriteHeader(status)
 	_ = json.NewEncoder(writer).Encode(payload)
+}
+
+// The cleanup joins an entered callback; cancellation alone is not drainage.
+func joinBodyCancellation(ctx context.Context, body io.Closer) func() {
+	if body == nil {
+		return func() {}
+	}
+	closed := make(chan struct{})
+	stop := context.AfterFunc(ctx, func() { defer close(closed); _ = body.Close() })
+	return func() {
+		if !stop() {
+			<-closed
+		}
+	}
 }
 
 func readBounded(reader io.Reader, limit int64) ([]byte, error) {

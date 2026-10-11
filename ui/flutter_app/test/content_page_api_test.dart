@@ -80,6 +80,50 @@ void main() {
     );
   });
 
+  test('complete record fragments use the scoped HTTP page contract', () async {
+    final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    addTearDown(() => server.close(force: true));
+    final bytes = [123, 34, 0xff, 0xe2, 0x80];
+    var payload = <String, Object?>{
+      'exchangeId': 'exchange-page',
+      'kind': 'block_bytes',
+      'messages': [],
+      'blocks': [],
+      'offset': 0,
+      'total': bytes.length,
+      'data': base64.encode(bytes),
+    };
+    server.listen((request) async {
+      expect(request.uri.queryParameters['contentMode'], 'paged');
+      expect(request.uri.queryParameters['contentCursor'], 'complete');
+      expect(request.headers.value('authorization'), 'Bearer ${'R' * 43}');
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode(payload));
+      await request.response.close();
+    });
+    final api = await connect(server);
+    expect(
+      (await api.exchangeContentPage('exchange-page', 'complete')).data,
+      bytes,
+    );
+    for (final patch in <Map<String, Object?>>[
+      {'exchangeId': 'other'},
+      {'data': 'A' * 43696},
+      {'data': 'eA__'},
+      {'text': 'hidden'},
+      {'canonicalCursor': 'not-allowed'},
+      {'total': maxCanonicalBlockBytes + 1},
+    ]) {
+      final original = payload;
+      payload = {...original, ...patch};
+      await expectLater(
+        api.exchangeContentPage('exchange-page', 'complete'),
+        throwsA(isA<ControlContractException>()),
+      );
+      payload = original;
+    }
+  });
+
   test(
     'legacy fallback is negotiated once and never bypasses auth failures',
     () async {

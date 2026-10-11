@@ -6,6 +6,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/signal"
@@ -45,7 +46,15 @@ func main() {
 		fmt.Println("native MCP exact-client acceptance passed")
 		return
 	}
+	if config.bootstrapDiagnosticPath != "" {
+		config.bootstrapDiagnostic = &bootstrapDiagnosticRecorder{
+			value: initialBootstrapDiagnostic(daemonHomePolicy(config.diagnosticDaemonHome)),
+		}
+	}
 	report, runErr := runAcceptance(ctx, config)
+	if config.bootstrapDiagnosticPath != "" {
+		runErr = errors.Join(runErr, writeBootstrapDiagnostic(config.bootstrapDiagnosticPath, config.bootstrapDiagnostic))
+	}
 	if config.reportPath != "" {
 		if err := writeReport(config.reportPath, report); err != nil {
 			fmt.Fprintln(os.Stderr, err)

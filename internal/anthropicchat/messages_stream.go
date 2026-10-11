@@ -38,11 +38,12 @@ type messagesStreamBlock struct {
 type AnthropicProviderStream struct {
 	mu sync.Mutex
 
-	codec   *Codec
-	request protocolcore.Request
-	decoder *ssewire.Decoder
-	wire    bytes.Buffer
-	held    bytes.Buffer
+	codec     *Codec
+	resources *protocolcore.ResourceBudget
+	request   protocolcore.Request
+	decoder   *ssewire.Decoder
+	wire      bytes.Buffer
+	held      bytes.Buffer
 
 	responseID       string
 	reportedModel    string
@@ -61,7 +62,7 @@ type AnthropicProviderStream struct {
 func (codec *Codec) NewAnthropicProviderStream(
 	request protocolcore.Request,
 ) (*AnthropicProviderStream, error) {
-	if err := request.Validate(); err != nil {
+	if err := codec.ValidateRequest(request); err != nil {
 		return nil, protocolcore.NewFailure(
 			protocolcore.ReasonInvalidClientRequest,
 			"$",
@@ -80,10 +81,11 @@ func (codec *Codec) NewAnthropicProviderStream(
 		return nil, err
 	}
 	return &AnthropicProviderStream{
-		codec:   codec,
-		request: request.Clone(),
-		decoder: decoder,
-		blocks:  make(map[int]*messagesStreamBlock),
+		codec:     codec,
+		resources: codec.responseBudget(),
+		request:   request.Clone(),
+		decoder:   decoder,
+		blocks:    make(map[int]*messagesStreamBlock),
 	}, nil
 }
 
@@ -298,7 +300,7 @@ func (stream *AnthropicProviderStream) FinishDecoded(
 		}
 		wire.Content = append(wire.Content, encoded)
 	}
-	response, err := decodeMessagesResponse(
+	response, err := stream.codec.decodeMessagesResponse(
 		stream.request,
 		wire,
 		stream.codec.options.MaxToolArgumentBytes,
@@ -324,7 +326,7 @@ func (stream *AnthropicProviderStream) FinishDecoded(
 		}
 		response.ProviderExtensions = append(response.ProviderExtensions, extension)
 	}
-	if err := response.Validate(); err != nil {
+	if err := stream.codec.ValidateResponse(response); err != nil {
 		return nil, messagesProviderFailure("$", err)
 	}
 	intents := make([]protocolcore.ToolIntent, 0)
@@ -370,6 +372,9 @@ func (stream *AnthropicProviderStream) consumeEvent(
 	var envelope struct {
 		Type  string          `json:"type"`
 		Error json.RawMessage `json:"error"`
+	}
+	if err := stream.resources.ReserveJSON(event.Data); err != nil {
+		return protocolcore.NewFailure(protocolcore.ReasonMalformedEventStream, fmt.Sprintf("$event[%d].data", index), err)
 	}
 	// Checked before any field is read: every later decision must see the
 	// same members the client will parse.

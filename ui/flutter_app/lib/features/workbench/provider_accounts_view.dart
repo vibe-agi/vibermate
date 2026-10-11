@@ -421,6 +421,16 @@ final class _ProviderAccountsViewState extends State<ProviderAccountsView> {
               account: account,
             ),
           ),
+          onSignInAgain: account.kind == 'codex_oauth'
+              ? () => unawaited(
+                  showProviderAccountReauthorization(
+                    context,
+                    controller: controller,
+                    copy: copy,
+                    account: account,
+                  ),
+                )
+              : null,
           onDelete: () => unawaited(
             showProviderAccountDeletion(
               context,

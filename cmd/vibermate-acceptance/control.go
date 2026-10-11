@@ -610,19 +610,76 @@ func (client *controlClient) environment(
 func (client *controlClient) captures(
 	ctx context.Context,
 ) (desktopcontrol.CaptureListResponse, error) {
-	var page desktopcontrol.CaptureListResponse
-	status, problem, err := client.request(
-		ctx, http.MethodGet, "/api/v1/captures?limit=200", false, nil, nil, &page,
-	)
-	if err != nil {
-		return desktopcontrol.CaptureListResponse{}, err
+	if ctx == nil {
+		return desktopcontrol.CaptureListResponse{}, errors.New("Capture snapshot context is missing")
 	}
-	if status != http.StatusOK {
-		return desktopcontrol.CaptureListResponse{}, fmt.Errorf(
-			"read Captures: %s", problem.ReasonCode,
-		)
+	var result desktopcontrol.CaptureListResponse
+	keys := make(map[string]bool)
+	cursors := make(map[string]bool)
+	cursor := ""
+	// This bounds only acceptance-fixture evidence traversal. Exhaustion is an
+	// error, never a successful truncated snapshot or a user history limit.
+	for pageNumber := 0; pageNumber < 32; pageNumber++ {
+		if err := ctx.Err(); err != nil {
+			return desktopcontrol.CaptureListResponse{}, err
+		}
+		query := url.Values{}
+		if cursor != "" {
+			query.Set("cursor", cursor)
+		}
+		path := "/api/v1/captures"
+		if encoded := query.Encode(); encoded != "" {
+			path += "?" + encoded
+		}
+		var wire struct {
+			Items      json.RawMessage `json:"items"`
+			NextCursor json.RawMessage `json:"nextCursor"`
+		}
+		status, _, err := client.request(ctx, http.MethodGet, path, false, nil, nil, &wire)
+		if contextErr := ctx.Err(); contextErr != nil {
+			return desktopcontrol.CaptureListResponse{}, contextErr
+		}
+		if err != nil || status != http.StatusOK {
+			// Request/decoder errors can contain response values or URLs. Keep
+			// Capture evidence and opaque cursors out of diagnostic errors.
+			return desktopcontrol.CaptureListResponse{}, errors.New("read Capture snapshot page failed")
+		}
+		var page desktopcontrol.CaptureListResponse
+		items := bytes.TrimSpace(wire.Items)
+		if len(items) == 0 || items[0] != '[' || decodeClosedJSON(items, &page.Items) != nil || len(page.Items) > 50 {
+			return desktopcontrol.CaptureListResponse{}, errors.New("Capture snapshot page is invalid")
+		}
+		if len(wire.NextCursor) != 0 {
+			if !utf8.Valid(wire.NextCursor) || bytes.Equal(bytes.TrimSpace(wire.NextCursor), []byte("null")) || json.Unmarshal(wire.NextCursor, &page.NextCursor) != nil {
+				return desktopcontrol.CaptureListResponse{}, errors.New("Capture snapshot cursor is invalid")
+			}
+		}
+		if len(page.NextCursor) > 512 || !utf8.ValidString(page.NextCursor) || strings.ContainsFunc(page.NextCursor, func(character rune) bool {
+			return unicode.IsControl(character) || unicode.IsSpace(character)
+		}) {
+			return desktopcontrol.CaptureListResponse{}, errors.New("Capture snapshot cursor is invalid")
+		}
+		for _, item := range page.Items {
+			reference, err := captureidentity.ParseKey(item.Key)
+			if err != nil || reference.Kind != item.Kind || reference.ID != item.ID || keys[item.Key] {
+				return desktopcontrol.CaptureListResponse{}, errors.New("Capture snapshot identity is invalid or duplicated")
+			}
+			keys[item.Key] = true
+		}
+		result.Items = append(result.Items, page.Items...)
+		if page.NextCursor == "" {
+			if err := ctx.Err(); err != nil {
+				return desktopcontrol.CaptureListResponse{}, err
+			}
+			return result, nil
+		}
+		if len(page.Items) == 0 || cursors[page.NextCursor] {
+			return desktopcontrol.CaptureListResponse{}, errors.New("Capture snapshot continuation is empty or cyclic")
+		}
+		cursors[page.NextCursor] = true
+		cursor = page.NextCursor
 	}
-	return page, nil
+	return desktopcontrol.CaptureListResponse{}, errors.New("Capture snapshot evidence is incomplete: acceptance fixture page bound exceeded")
 }
 
 func (client *controlClient) captureAssignment(

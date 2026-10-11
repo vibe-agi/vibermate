@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"unicode/utf8"
+	"unsafe"
 
 	"github.com/vibe-agi/vibermate/internal/protocolcore"
 	"github.com/vibe-agi/vibermate/internal/protocolpath"
@@ -74,6 +75,7 @@ type ProviderStream struct {
 	mu sync.Mutex
 
 	codec       *Codec
+	retained    *protocolcore.ResourceBudget
 	request     protocolcore.Request
 	decoder     *ssewire.Decoder
 	encoder     protocolpath.ClientStreamEncoder
@@ -101,7 +103,8 @@ type ProviderStream struct {
 	done             bool
 	failed           bool
 	finished         bool
-	report           protocolcore.TranslationReport
+	report           protocolcore.TranslationReportBuilder
+	reportErr        error
 }
 
 func (codec *Codec) NewProviderStream(
@@ -117,7 +120,7 @@ func (codec *Codec) NewProviderStreamWithEncoder(
 	request protocolcore.Request,
 	encoder protocolpath.ClientStreamEncoder,
 ) (*ProviderStream, error) {
-	if err := request.Validate(); err != nil {
+	if err := codec.ValidateRequest(request); err != nil {
 		return nil, protocolcore.NewFailure(
 			protocolcore.ReasonInvalidClientRequest,
 			"$",
@@ -148,6 +151,7 @@ func (codec *Codec) NewProviderStreamWithEncoder(
 	}
 	return &ProviderStream{
 		codec:       codec,
+		retained:    codec.responseBudget(),
 		request:     request.Clone(),
 		decoder:     decoder,
 		encoder:     encoder,
@@ -210,25 +214,43 @@ func (stream *ProviderStream) Feed(
 			)
 		}
 
-		var chunk openAIStreamChunkWire
-		if err := decodeStrict(event.Data, &chunk); err != nil {
-			stream.failed = true
-			return safe.Bytes(), protocolcore.NewFailure(
-				protocolcore.ReasonMalformedEventStream,
-				fmt.Sprintf("$event[%d].data", eventIndex),
-				err,
-			)
-		}
-		if len(chunk.Error) > 0 && !bytes.Equal(bytes.TrimSpace(chunk.Error), []byte("null")) {
-			stream.failed = true
-			return safe.Bytes(), protocolcore.NewProviderFailure(fmt.Sprintf("$event[%d].error", eventIndex), chunk.Error)
-		}
-		if err := stream.consumeChunk(&safe, chunk); err != nil {
+		if err := stream.consumeEvent(&safe, event.Data, eventIndex); err != nil {
 			stream.failed = true
 			return safe.Bytes(), err
 		}
+		events[eventIndex] = ssewire.Event{}
 	}
 	return bytes.Clone(safe.Bytes()), nil
+}
+
+// Typed event preparation is temporary. Only explicitly promoted state survives
+// this call. The enclosing Feed still owns unconsumed framing and safe output.
+func (stream *ProviderStream) consumeEvent(safe *bytes.Buffer, data []byte, index int) error {
+	if err := stream.codec.responseBudget().ReserveJSON(data); err != nil {
+		return protocolcore.NewFailure(protocolcore.ReasonMalformedEventStream, fmt.Sprintf("$event[%d].data", index), err)
+	}
+	var chunk openAIStreamChunkWire
+	if err := decodeStrict(data, &chunk); err != nil {
+		return protocolcore.NewFailure(protocolcore.ReasonMalformedEventStream, fmt.Sprintf("$event[%d].data", index), err)
+	}
+	if len(chunk.Error) > 0 && !bytes.Equal(bytes.TrimSpace(chunk.Error), []byte("null")) {
+		return protocolcore.NewProviderFailure(fmt.Sprintf("$event[%d].error", index), chunk.Error)
+	}
+	if err := stream.consumeChunk(safe, chunk); err != nil {
+		return err
+	}
+	return stream.reportErr
+}
+func (stream *ProviderStream) reserveRetained(payload, structure uint64) error {
+	if stream.retained == nil {
+		return nil
+	}
+	return stream.retained.Reserve(protocolcore.ResourceCost{PayloadBytes: payload, StructureBytes: structure})
+}
+func (stream *ProviderStream) addReport(report protocolcore.TranslationReport) {
+	if stream.reportErr == nil {
+		stream.reportErr = protocolcore.AppendReportWithin(&stream.report, report, stream.retained)
+	}
 }
 
 // SemanticProgress reports how many validated provider payloads have crossed
@@ -426,7 +448,7 @@ func (stream *ProviderStream) FinishDecoded(
 			return nil, err
 		}
 		if len(toolIndexes) > 0 {
-			stream.report = stream.report.Merge(protocolcore.NewTranslationReport(
+			stream.addReport(protocolcore.NewTranslationReport(
 				protocolcore.TranslationNotice{
 					Code: protocolcore.NoticeContentOrderNormalized,
 					Path: "$.choices[0].delta",
@@ -454,7 +476,7 @@ func (stream *ProviderStream) FinishDecoded(
 	}
 
 	if stream.usageSeen && stream.usage.InputUncached.Known {
-		stream.report = stream.report.Merge(protocolcore.NewTranslationReport(
+		stream.addReport(protocolcore.NewTranslationReport(
 			protocolcore.TranslationNotice{
 				Code: protocolcore.NoticeLateUsageAccounting,
 				Path: "$.usage",
@@ -496,7 +518,7 @@ func (stream *ProviderStream) FinishDecoded(
 		StopReason:         stream.finishReason,
 		Usage:              stream.usage,
 	}
-	if err := response.Validate(); err != nil {
+	if err := stream.codec.ValidateResponse(response); err != nil {
 		stream.failed = true
 		return nil, protocolcore.NewFailure(
 			protocolcore.ReasonInvalidProviderResponse,
@@ -510,11 +532,15 @@ func (stream *ProviderStream) FinishDecoded(
 		return nil, err
 	}
 	release.Write(terminalBytes)
-	stream.report = stream.report.Merge(
+	stream.addReport(
 		stream.encoder.TranslationReport(),
 	)
 	stream.finished = true
-	return newPendingTerminal(release.Bytes(), response, intents, stream.report), nil
+	if stream.reportErr != nil {
+		stream.failed = true
+		return nil, stream.reportErr
+	}
+	return newPendingTerminal(release.Bytes(), response, intents, stream.report.Build()), nil
 }
 
 func (stream *ProviderStream) appendEncodedTextBlock(
@@ -580,7 +606,7 @@ func (stream *ProviderStream) consumeChunk(
 		return err
 	}
 	if chunk.ServiceTier != nil {
-		stream.report = stream.report.Merge(protocolcore.NewTranslationReport(
+		stream.addReport(protocolcore.NewTranslationReport(
 			protocolcore.TranslationNotice{
 				Code: protocolcore.NoticeServiceTierNotForwarded,
 				Path: "$.service_tier",
@@ -616,9 +642,16 @@ func (stream *ProviderStream) consumeChunk(
 				)
 			}
 			if stream.reasoningUsage == nil {
+				cost, err := protocolcore.MeasureResponse(protocolcore.Response{ProviderExtensions: []protocolcore.ProviderExtension{extension}})
+				if err != nil {
+					return err
+				}
+				if err = stream.reserveRetained(cost.PayloadBytes, cost.StructureBytes); err != nil {
+					return err
+				}
 				cloned := extension.Clone()
 				stream.reasoningUsage = &cloned
-				stream.report = stream.report.Merge(reasoningUsageNotice(
+				stream.addReport(reasoningUsageNotice(
 					"$.usage.completion_tokens_details",
 				))
 			}
@@ -713,7 +746,10 @@ func (stream *ProviderStream) consumeReasoning(raw json.RawMessage) error {
 		)
 	}
 	if len(stream.reasoning) == 0 {
-		stream.report = stream.report.Merge(reasoningContentNotice(path))
+		stream.addReport(reasoningContentNotice(path))
+	}
+	if err := stream.reserveRetained(uint64(len(raw)), uint64(unsafe.Sizeof(json.RawMessage{}))); err != nil {
+		return err
 	}
 	stream.reasoning = append(stream.reasoning, bytes.Clone(raw))
 	var content string
@@ -765,6 +801,9 @@ func (stream *ProviderStream) ensureMessageStarted(
 		}
 		return nil
 	}
+	if err := stream.reserveRetained(uint64(len(responseID)+len(reportedModel)), 0); err != nil {
+		return err
+	}
 	stream.responseID = responseID
 	stream.createdAtUnix = createdAtUnix
 	stream.reportedModel = reportedModel
@@ -792,6 +831,9 @@ func (stream *ProviderStream) consumeText(safe *bytes.Buffer, text string) error
 	}
 	if text == "" {
 		return nil
+	}
+	if err := stream.reserveRetained(uint64(len(text)), 0); err != nil {
+		return err
 	}
 	stream.semanticProgress++
 	stream.decodedBytes += len(text)
@@ -865,6 +907,9 @@ func (stream *ProviderStream) consumeToolFragments(
 					errors.New("tool call count exceeds the configured limit"),
 				)
 			}
+			if err := stream.reserveRetained(0, uint64(unsafe.Sizeof(streamToolAccumulator{}))+uint64(unsafe.Sizeof(int(0)))+uint64(unsafe.Sizeof((*streamToolAccumulator)(nil)))); err != nil {
+				return err
+			}
 			accumulator = &streamToolAccumulator{index: fragment.Index}
 			stream.tools[fragment.Index] = accumulator
 		}
@@ -884,9 +929,12 @@ func (stream *ProviderStream) consumeToolFragments(
 				)
 			}
 			if accumulator.id == "" {
+				if err := stream.reserveRetained(uint64(len(fragment.ID)), 0); err != nil {
+					return err
+				}
 				stream.semanticProgress++
+				accumulator.id = fragment.ID
 			}
-			accumulator.id = fragment.ID
 		}
 		if fragment.Function.Name != "" {
 			if accumulator.name != "" && accumulator.name != fragment.Function.Name {
@@ -897,9 +945,12 @@ func (stream *ProviderStream) consumeToolFragments(
 				)
 			}
 			if accumulator.name == "" {
+				if err := stream.reserveRetained(uint64(len(fragment.Function.Name)), 0); err != nil {
+					return err
+				}
 				stream.semanticProgress++
+				accumulator.name = fragment.Function.Name
 			}
-			accumulator.name = fragment.Function.Name
 		}
 		if len(accumulator.id) > 512 ||
 			len(accumulator.name) > protocolcore.MaxToolNameBytes {
@@ -911,7 +962,7 @@ func (stream *ProviderStream) consumeToolFragments(
 		}
 		if fragment.Function.Arguments != "" {
 			stream.semanticProgress++
-			argumentBytes := []byte(fragment.Function.Arguments)
+			argumentBytes := fragment.Function.Arguments
 			if len(accumulator.arguments)+len(argumentBytes) >
 				stream.codec.options.MaxToolArgumentBytes {
 				return protocolcore.NewFailure(
@@ -920,7 +971,6 @@ func (stream *ProviderStream) consumeToolFragments(
 					errors.New("tool arguments exceed the configured byte limit"),
 				)
 			}
-			accumulator.arguments = append(accumulator.arguments, argumentBytes...)
 			stream.decodedBytes += len(argumentBytes)
 			stream.heldBytes += len(argumentBytes)
 			if stream.decodedBytes > stream.codec.options.MaxResponseBytes ||
@@ -931,6 +981,10 @@ func (stream *ProviderStream) consumeToolFragments(
 					errors.New("held stream suffix exceeds the configured byte limit"),
 				)
 			}
+			if err := stream.reserveRetained(uint64(len(argumentBytes)), 0); err != nil {
+				return err
+			}
+			accumulator.arguments = append(accumulator.arguments, argumentBytes...)
 		}
 	}
 	return nil

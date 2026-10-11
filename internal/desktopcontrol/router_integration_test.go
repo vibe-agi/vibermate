@@ -569,7 +569,7 @@ func startRuntime(t *testing.T) *productruntime.Runtime {
 	return startRuntimeWithSecrets(t, newCredentialStoreFixture())
 }
 
-func startRuntimeWithSecrets(t *testing.T, secrets secretstore.Store) *productruntime.Runtime {
+func startRuntimeWithSecrets(t *testing.T, secrets secretstore.Store, resources ...exchange.ResourcePolicy) *productruntime.Runtime {
 	t.Helper()
 	paths, err := productruntime.NewRuntimePaths(
 		filepath.Join(t.TempDir(), "runtime-data"),
@@ -589,7 +589,7 @@ func startRuntimeWithSecrets(t *testing.T, secrets secretstore.Store) *productru
 		desktopControlIntegrationStartupTimeout,
 	)
 	defer cancel()
-	runtime, err := productruntime.Start(ctx, productruntime.Options{
+	options := productruntime.Options{
 		Paths:          paths,
 		Host:           hostcontract.Desktop(),
 		OfflineHold:    gate,
@@ -600,7 +600,11 @@ func startRuntimeWithSecrets(t *testing.T, secrets secretstore.Store) *productru
 		InstanceIDs:    productruntime.NewCryptographicInstanceIDSource(),
 		SecurityRandom: rand.Reader,
 		Lifecycle:      productruntime.DefaultLifecycleOptions(),
-	})
+	}
+	if len(resources) > 0 {
+		options.Resources = &resources[0]
+	}
+	runtime, err := productruntime.Start(ctx, options)
 	if err != nil {
 		t.Fatal(err)
 	}

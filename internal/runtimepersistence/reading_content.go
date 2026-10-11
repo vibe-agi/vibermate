@@ -12,7 +12,7 @@ import (
 // Every role influencing the group is proved by the whole canonical message,
 // including skipped assistant messages. Proof shares the preview's message and
 // byte limits; an unprovable role has a neutral explicit-loading entry instead.
-func (repository *exchangeContentRepository) readingUserGroup(ctx context.Context, ref storedContentReference) ([]exchangecontent.Message, int, string, error) {
+func (repository *exchangeContentRepository) readingUserGroup(ctx context.Context, ref storedContentReference, ledger *storedReadLedger) ([]exchangecontent.Message, int, string, error) {
 	messages := []exchangecontent.Message{}
 	offset, anchor := ref.requestCount, ""
 	budget := exchangecontent.PageContentBytes
@@ -45,7 +45,7 @@ func (repository *exchangeContentRepository) readingUserGroup(ctx context.Contex
 			}
 			return []exchangecontent.Message{{Role: "unknown", Blocks: []exchangecontent.Block{deferredPageBlock(cursor, 0)}}}, depth - 1, "", nil
 		}
-		message, used, err := repository.inlinePageMessage(ctx, node.messageDigest, cursor, budget)
+		message, used, err := repository.readingPageMessage(ctx, node.messageDigest, cursor, budget, ref, ledger)
 		if err != nil {
 			return nil, 0, "", err
 		}
@@ -68,4 +68,31 @@ func (repository *exchangeContentRepository) readingUserGroup(ctx context.Contex
 	}
 	slices.Reverse(messages)
 	return messages, offset, anchor, nil
+}
+
+// Reading role proof uses the original exact 128 KiB message debit. The
+// physical preflight rejects corrupt sizes before the bounded decoder fetches
+// a payload; the conservative general page estimate would hide a valid group
+// at the exact boundary.
+func (repository *exchangeContentRepository) readingPageMessage(ctx context.Context, digest string, cursor contentCursor, budget int, ref storedContentReference, ledger *storedReadLedger) (exchangecontent.Message, int, error) {
+	size, count, err := repository.inlineMessageSize(ctx, digest, exchangecontent.PageMessageLimit)
+	if err != nil {
+		return exchangecontent.Message{}, 0, err
+	}
+	if size > budget || count > exchangecontent.PageMessageLimit {
+		if ledger != nil {
+			if err := ledger.holdShell(); err != nil {
+				return exchangecontent.Message{}, 0, err
+			}
+		}
+		return exchangecontent.Message{Role: "unknown", Blocks: []exchangecontent.Block{deferredPageBlock(cursor, min(size, exchangecontent.MaxEncodedBytes))}}, 1024, nil
+	}
+	if ledger == nil {
+		return repository.inlinePageMessage(ctx, digest, cursor, budget, ref.manifest.Mode, nil, 7)
+	}
+	message, err := repository.readVerifiedMessage(ctx, digest, ref.manifest.Mode, ledger, true)
+	if err != nil {
+		return exchangecontent.Message{}, 0, err
+	}
+	return message, size, nil
 }

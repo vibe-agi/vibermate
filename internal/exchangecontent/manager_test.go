@@ -164,6 +164,36 @@ type repositoryDouble struct {
 	projection *Projection
 }
 
+func (repository *repositoryDouble) PutSource(ctx context.Context, source *Source) error {
+	m := source.Metadata()
+	r := Record{ExchangeID: m.ExchangeID, Parent: m.Parent, Frozen: m.Frozen, Mode: m.Mode, RecordedAt: m.RecordedAt, ExpiresAt: m.ExpiresAt,
+		Request: Request{RequestedModel: m.Request.RequestedModel, EffectiveModel: m.Request.EffectiveModel, MaxOutputTokens: m.Request.MaxOutputTokens, Stream: m.Request.Stream, Tools: m.Request.Tools, ProtocolEvidence: m.Request.ProtocolEvidence}, Presentation: RequestPresentation{Mode: RequestPresentationCheckpoint}}
+	if m.Response != nil {
+		v := m.Response
+		r.Response = &Response{ID: v.ID, RequestedModel: v.RequestedModel, EffectiveModel: v.EffectiveModel, ReportedModel: v.ReportedModel, StopReason: v.StopReason, Usage: v.Usage, ProtocolEvidence: v.ProtocolEvidence}
+	}
+	err := source.Walk(ctx, func(part Part, _ int, message MessageSource) error {
+		h := message.Header()
+		v := Message{Role: h.Role, Agent: h.Agent}
+		if err := message.WalkBlocks(ctx, func(b Block) error { v.Blocks = append(v.Blocks, b); return nil }); err != nil {
+			return err
+		}
+		switch part {
+		case SystemPart:
+			r.Request.System = v.Blocks
+		case RequestPart:
+			r.Request.Messages = append(r.Request.Messages, v)
+		case ResponsePart:
+			r.Response.Blocks = v.Blocks
+		}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	return repository.Put(ctx, r)
+}
+
 func (repository *repositoryDouble) Put(_ context.Context, record Record) error {
 	repository.mu.Lock()
 	defer repository.mu.Unlock()

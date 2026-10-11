@@ -144,6 +144,8 @@ type Options struct {
 	InstanceIDs            InstanceIDSource
 	SecurityRandom         io.Reader
 	Lifecycle              LifecycleOptions
+	// Nil Resources selects fresh finite production defaults.
+	Resources *exchange.ResourcePolicy
 }
 
 func (o Options) validate() error {
@@ -152,6 +154,11 @@ func (o Options) validate() error {
 	}
 	if o.SchemaUpgradeTimeout < 0 {
 		return fmt.Errorf("%w: negative schema upgrade timeout", ErrInvalidOptions)
+	}
+	if o.Resources != nil {
+		if err := o.Resources.Validate(); err != nil {
+			return err
+		}
 	}
 	if o.Paths.dataDirectory == "" || o.Paths.databasePath == "" {
 		return fmt.Errorf("%w: runtime paths are missing", ErrInvalidOptions)

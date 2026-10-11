@@ -162,6 +162,7 @@ type Options struct {
 	NativeContentKey    [32]byte
 	NativeTools         nativetool.Repository
 	NativePreviews      PendingPreviewReader
+	ContentLimits       *exchangecontent.SourceLimits
 	LaunchSnapshots     *launchsnapshot.Store
 	Storage             StorageLocationReader
 	ACP                 *acpobservation.Manager
@@ -214,6 +215,7 @@ type Handler struct {
 	nativeContentKey    [32]byte
 	nativeTools         nativetool.Repository
 	nativePreviews      PendingPreviewReader
+	contentLimits       *exchangecontent.SourceLimits
 	launchSnapshots     *launchsnapshot.Store
 	storage             StorageLocationReader
 	acp                 *acpobservation.Manager
@@ -292,6 +294,23 @@ func New(options Options) (*Handler, error) {
 			return nil, err
 		}
 	}
+	if options.ContentLimits == nil {
+		limits, err := exchangecontent.DefaultSourceLimits()
+		if err != nil {
+			return nil, err
+		}
+		options.ContentLimits = &limits
+	}
+	if options.ContentLimits != nil {
+		copy := *options.ContentLimits
+		if err := copy.Validate(); err != nil {
+			return nil, err
+		}
+		if _, err := detailOutputLimit(copy); err != nil {
+			return nil, err
+		}
+		options.ContentLimits = &copy
+	}
 	if options.Readiness == nil ||
 		options.Status == nil ||
 		options.Environments == nil ||
@@ -311,6 +330,7 @@ func New(options Options) (*Handler, error) {
 		networkAccess:       networkAccess,
 		productUpdates:      options.ProductUpdates,
 		nativeContentKey:    options.NativeContentKey,
+		contentLimits:       options.ContentLimits,
 		launchSnapshots:     options.LaunchSnapshots,
 		storage:             options.Storage,
 		acp:                 options.ACP,

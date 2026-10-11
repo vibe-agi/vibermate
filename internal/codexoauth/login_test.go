@@ -48,6 +48,7 @@ func loginFixture(t *testing.T) (*LoginManager, *recordingClient, *atomic.Int32)
 type loginTestTransport struct {
 	*recordingClient
 	setting                      uint64
+	selected                     egressprofile.Resolved
 	freezes                      int
 	received                     egressprofile.Resolved
 	failure                      error
@@ -66,6 +67,9 @@ func (c *loginTestTransport) FreezeLoginEgress(ctx context.Context) (egressprofi
 	}
 	if c.failure != nil {
 		return egressprofile.Resolved{}, c.failure
+	}
+	if c.selected.Validate() == nil {
+		return c.selected, nil
 	}
 	revision := c.setting
 	if revision == 0 {
@@ -92,6 +96,58 @@ func TestLoginFreezesEgressBeforePublishingPKCE(t *testing.T) {
 	}
 	if client.freezes != 1 || client.received.DefaultRevision() != 7 || client.received.Source() != egressprofile.SelectionBuiltin {
 		t.Fatal("PKCE code exchange did not retain start's exact exit")
+	}
+}
+
+func TestReauthorizationFreezesSelectedAccountOrInheritedDefault(t *testing.T) {
+	for _, explicit := range []bool{false, true} {
+		t.Run(fmt.Sprintf("explicit=%t", explicit), func(t *testing.T) {
+			manager, original, _ := loginFixture(t)
+			transport := manager.options.TokenClient.(*loginTestTransport)
+			client := &recordingClient{response: original.response}
+			manager.options.Client = client
+			scope := testAccountScope()
+			scope.ID = "account.codex.test"
+			if explicit {
+				transport.failure = errors.New("default unavailable")
+			} else {
+				selected, err := egressprofile.RestoreResolved(egressprofile.Direct(), egressprofile.SelectionGlobal, 7)
+				if err != nil {
+					t.Fatal(err)
+				}
+				transport.selected = selected
+				scope.ResolvedEgress, _ = egressprofile.RestoreResolved(egressprofile.Direct(), egressprofile.SelectionTransport, 0)
+			}
+			account := LoginAccount{Mode: "reauthorize", ID: scope.ID, EndpointID: "target.codex.official", Reauthorization: &LoginReauthorization{
+				SecretRef: testReference(t), CredentialEpoch: 1, CreatedAt: time.Now().UTC(),
+				Profile: Profile{AccountID: "workspace-login"}, Scope: scope,
+			}}
+			view, err := manager.Start(context.Background(), "owner-session", account, "manual")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if explicit {
+				if transport.freezes != 0 {
+					t.Fatal("explicit account exit consulted the default")
+				}
+			} else {
+				if transport.freezes != 1 {
+					t.Fatal("inherited exit was not frozen")
+				}
+				transport.selected, _ = egressprofile.RestoreResolved(egressprofile.Direct(), egressprofile.SelectionGlobal, 8)
+			}
+			result, err := manager.Complete(context.Background(), "owner-session", view.ID, loginCallback(t, view))
+			if err != nil || result.State != "completed" {
+				t.Fatalf("reauthorization completion: %+v %v", result, err)
+			}
+			want := scope.ResolvedEgress
+			if !explicit {
+				want, _ = egressprofile.RestoreResolved(egressprofile.Direct(), egressprofile.SelectionGlobal, 7)
+			}
+			if client.scope.ResolvedEgress != want || client.scope.EgressProfile != want.Profile() {
+				t.Fatalf("token exchange exit changed: %+v", client.scope)
+			}
+		})
 	}
 }
 

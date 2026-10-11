@@ -2048,6 +2048,7 @@ final class PreviewControlApi implements ControlApi {
   }
 
   final _codexLogins = <String, CodexLogin>{};
+  final _codexReauthorizations = <String, ProviderAccount>{};
   final _codexLoginTargets =
       <String, ({String id, String endpoint, String name})>{};
 
@@ -2096,6 +2097,42 @@ final class PreviewControlApi implements ControlApi {
   }
 
   @override
+  Future<CodexLogin> startCodexReauthorization({
+    required ProviderAccount account,
+    required String callbackMode,
+  }) async {
+    _requireOpen();
+    final current = _accounts
+        .where((value) => value.id == account.id)
+        .firstOrNull;
+    if (current == null ||
+        current.credentialEpoch != account.credentialEpoch ||
+        account.credentialEpoch <= 0 ||
+        account.kind != 'codex_oauth' ||
+        !const {'manual', 'loopback'}.contains(callbackMode)) {
+      throw const ControlProblem(
+        status: 409,
+        reasonCode: 'revision_conflict',
+        messageKey: 'error.revision_conflict',
+      );
+    }
+    final id = 'preview_${_codexLogins.length}'.padRight(43, '0');
+    _codexReauthorizations[id] = current;
+    return _codexLogins[id] = CodexLogin(
+      id: id,
+      state: 'pending',
+      callbackMode: 'manual',
+      authorizationUrl: Uri.https('auth.openai.com', '/oauth/authorize', {
+        'state': id,
+        'code_challenge_method': 'S256',
+        'code_challenge': id,
+        'redirect_uri': 'http://localhost:1455/auth/callback',
+      }).toString(),
+      expiresAt: DateTime.now().toUtc().add(const Duration(minutes: 15)),
+    );
+  }
+
+  @override
   Future<CodexLogin> completeCodexLogin(
     String loginId,
     String callbackUrl,
@@ -2113,6 +2150,65 @@ final class PreviewControlApi implements ControlApi {
         status: 422,
         reasonCode: 'invalid_control_request',
         messageKey: 'error.invalid_control_request',
+      );
+    }
+    final reauthorizing = _codexReauthorizations[loginId];
+    if (reauthorizing != null) {
+      final index = _accounts.indexWhere(
+        (value) => value.id == reauthorizing.id,
+      );
+      final account = index < 0 ? null : _accounts[index];
+      if (account == null ||
+          account.credentialEpoch != reauthorizing.credentialEpoch) {
+        return _codexLogins[loginId] = CodexLogin(
+          id: loginId,
+          state: 'failed',
+          callbackMode: current.callbackMode,
+          authorizationUrl: '',
+          expiresAt: current.expiresAt,
+          reason: 'login_account_changed',
+        );
+      }
+      final oauth = account.codexOAuth!;
+      _accounts[index] = ProviderAccount(
+        id: account.id,
+        displayName: account.displayName,
+        note: account.note,
+        noteRevision: account.noteRevision,
+        credentialOrigin: account.credentialOrigin,
+        linkedEndpointIds: account.linkedEndpointIds,
+        associationRevision: account.associationRevision,
+        kind: account.kind,
+        realmId: account.realmId,
+        state: account.state,
+        revision: account.revision,
+        credentialState: 'ready',
+        credentialEpoch: account.credentialEpoch + 1,
+        setHeaderNames: account.setHeaderNames,
+        deleteHeaderNames: account.deleteHeaderNames,
+        settingsRevision: account.settingsRevision,
+        automaticRefresh: account.automaticRefresh,
+        supportsAutomaticRefresh: account.supportsAutomaticRefresh,
+        egressProfile: account.egressProfile,
+        tokenInfo: account.tokenInfo,
+        codexOAuth: CodexOAuthAccount(
+          chatgptAccountId: oauth.chatgptAccountId,
+          email: oauth.email,
+          userId: oauth.userId,
+          planType: oauth.planType,
+          fedRamp: oauth.fedRamp,
+          expiresAt: null,
+          lastRefresh: DateTime.now().toUtc(),
+          state: 'ready',
+        ),
+      );
+      return _codexLogins[loginId] = CodexLogin(
+        id: loginId,
+        state: 'completed',
+        callbackMode: current.callbackMode,
+        authorizationUrl: '',
+        expiresAt: current.expiresAt,
+        accountId: account.id,
       );
     }
     final target = _codexLoginTargets[loginId]!;
@@ -2983,6 +3079,21 @@ final class PreviewControlApi implements ControlApi {
   ) async {
     _requireOpen();
     // Preview's retained fixtures fit in one page and issue no remote cursors.
+    if (cursor == 'preview-complete-record' &&
+        _allPreviewActivities().any((value) => value.id == exchangeId)) {
+      final bytes = utf8.encode(
+        '{"kind":"reasoning","availability":"omitted","originalSize":0,"providerSource":"preview","providerKind":"metadata"}',
+      );
+      return ExchangeContentPage.fromJson({
+        'exchangeId': exchangeId,
+        'kind': 'block_bytes',
+        'messages': [],
+        'blocks': [],
+        'offset': 0,
+        'total': bytes.length,
+        'data': base64.encode(bytes),
+      }, 'preview.blockPage');
+    }
     throw const ControlContractException(
       'Preview content cursor is unavailable',
     );

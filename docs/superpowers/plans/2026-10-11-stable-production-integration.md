@@ -26,7 +26,7 @@
 
 **Produces:** `checkpoint-files.txt`, private current snapshot path with hashes, exact checkpoint commit, actual merge output, and (if any) `conflicted-paths.txt` plus Git index stage entries. These generated artifacts are Task2's exact scope, not a guessed conflict list.
 
-- [ ] **Step 1 — verify/freeze the actual inputs.** Confirm no product writer/test process remains, `git diff --cached --name-only` is empty, current branch/HEAD, stable commit/tree and the reviewed task after-snapshots. Retain a new private `mktemp -d` snapshot containing HEAD, binary tracked patch, explicit untracked source archive and hashes. The earlier snapshot `/private/tmp/vibermate-integration-snapshot.lNiS4P` remains historical and must not be overwritten. Inspect the exact source list; unknown/unrelated paths are preserved and excluded, not silently committed.
+- [x] **Step 1 — verify/freeze the actual inputs.** Confirm no product writer/test process remains, `git diff --cached --name-only` is empty, current branch/HEAD, stable commit/tree and the reviewed task after-snapshots. Retain a new private `mktemp -d` snapshot containing HEAD, binary tracked patch, explicit untracked source archive and hashes. The earlier snapshot `/private/tmp/vibermate-integration-snapshot.lNiS4P` remains historical and must not be overwritten. Inspect the exact source list; unknown/unrelated paths are preserved and excluded, not silently committed.
 
 ```sh
 git status --short
@@ -37,9 +37,9 @@ git diff --name-only HEAD
 git ls-files --others --exclude-standard
 ```
 
-- [ ] **Step 2 — checkpoint explicitly selected source.** Stage using `git add --pathspec-from-file=.superpowers/sdd/2026-10-11-stable-production-integration/checkpoint-files.txt`, inspect staged names/stat and `git diff --cached --check`, and commit the exact preserved work as a local implementation checkpoint. This commit is not a publish/production qualification claim. Record full commit/tree and remaining untracked cache; do not include that cache or ignored evidence.
+- [x] **Step 2 — checkpoint explicitly selected source.** Stage using `git add --pathspec-from-file=.superpowers/sdd/2026-10-11-stable-production-integration/checkpoint-files.txt`, inspect staged names/stat and `git diff --cached --check`, and commit the exact preserved work as a local implementation checkpoint. This commit is not a publish/production qualification claim. Record full commit/tree and remaining untracked cache; do not include that cache or ignored evidence.
 
-- [ ] **Step 3 — perform normal merge and retain its exact result.** Root runs the command below once; a conflict exit is an expected source-resolution handoff, not a reason to restart or overwrite source. Record all actual conflicted paths and stages. Do not abort or retry the merge just because resolution takes time.
+- [x] **Step 3 — perform normal merge and retain its exact result.** Root runs the command below once; a conflict exit is an expected source-resolution handoff, not a reason to restart or overwrite source. Record all actual conflicted paths and stages. Do not abort or retry the merge just because resolution takes time.
 
 ```sh
 git merge --no-ff --no-commit --no-edit 999d7b0876b1c9c570e1d2192f9cc7e5a97805ee
@@ -48,7 +48,7 @@ git ls-files --unmerged
 git status --short
 ```
 
-- [ ] **Step 4 — hand off actual evidence.** If conflicts exist, give Task2 the exact path/stage manifest and the checkpoint/stable revisions. If none, Task2 still verifies combined semantics and compilation. No merge commit before independent source review and the applicable checks below.
+- [x] **Step 4 — hand off actual evidence.** If conflicts exist, give Task2 the exact path/stage manifest and the checkpoint/stable revisions. If none, Task2 still verifies combined semantics and compilation. No merge commit before independent source review and the applicable checks below.
 
 ## Task 2: Resolve the combined source and validate affected behavior
 
@@ -56,7 +56,7 @@ git status --short
 
 **Consumes:** The complete published stable lineage, current reviewed checkpoint and exact Git merge stages. **Produces:** A resolved compiling tree, functional regression evidence, before/after hashes, all remaining qualification limits and a source-resolution report for independent review.
 
-- [ ] **Step 1 — resolve from evidence.** Read each conflicted function with its base, current and stable alternatives. Preserve each side's required behavior. Use the actual versions, fixtures and consumer contracts named in the two parent changes; do not copy one full side over the other merely to compile. Source edits use apply_patch. Record the rationale per conflict in the report. Preserve observed compiler failures as integration evidence, not a reason to invent new product behavior.
+- [x] **Step 1 — resolve from evidence.** Read each conflicted function with its base, current and stable alternatives. Preserve each side's required behavior. Use the actual versions, fixtures and consumer contracts named in the two parent changes; do not copy one full side over the other merely to compile. Source edits use apply_patch. Record the rationale per conflict in the report. Preserve observed compiler failures as integration evidence, not a reason to invent new product behavior.
 
 ```sh
 git show :1:<conflicted-path>
@@ -66,7 +66,7 @@ git show :3:<conflicted-path>
 
 These Git stage commands consume each actual path from `conflicted-paths.txt`; they are not literal filenames. If an add/delete case lacks a stage, record that absence and compare its real parent path.
 
-- [ ] **Step 2 — check combined compilation before heavy testing.** Root stages only reviewed resolutions to clear index conflicts; worker then runs qualified `go test ./... -run '^$'` and Flutter analysis with the pinned environment. This is compilation/analysis only, not full test acceptance. Resolve only actual errors caused or exposed by this merge and report any significant expansion before editing additional files.
+- [x] **Step 2 — check combined compilation before heavy testing.** Worker checks the resolved working files with qualified `go test ./... -run '^$'` and Flutter analysis in the pinned environment, retaining original unmerged index stages for the three-way review. After the worker freezes its report, root verifies/stages only the exact resolutions and demonstrated consumer fixes. Compilation/analysis is not full test acceptance. Resolve only actual errors caused or exposed by this merge and report any significant expansion before editing additional files.
 
 ```sh
 /tmp/vibermate-go-security.JcRyfL/go/bin/go test ./... -run '^$'
@@ -75,7 +75,7 @@ These Git stage commands consume each actual path from `conflicted-paths.txt`; t
 
 The Flutter command runs from `ui/flutter_app`; Go runs at the worktree root. Do not run them concurrently.
 
-- [ ] **Step 3 — run focused combined regressions.** Sequentially run the existing Go long-session/storage/runtime tests and login/grant/network consumers. Use the exact already packaged unchanged helper for the native end-to-end test; do not build it again merely because source integration occurred.
+- [x] **Step 3 — run focused combined regressions.** Sequentially run the existing Go long-session/storage/runtime tests and login/grant/network consumers. Use the exact already packaged unchanged helper for the native end-to-end test; do not build it again merely because source integration occurred.
 
 ```sh
 /tmp/vibermate-go-security.JcRyfL/go/bin/go test ./internal/exchangecontent ./internal/runtimepersistence ./internal/productruntime -count=1
@@ -93,7 +93,9 @@ Run the actual existing Flutter parser/API, original-account reauthorization, SO
 
 Run affected Node release-policy/source-manifest tests where actual merge hunks touch those consumers, using the explicit pinned Node22 binary. The report lists exact selected filenames/commands and links the corresponding hunks. Preserve all first failures and any skip/platform/font limits; do not inflate local passes into final CI/native/source qualification.
 
-- [ ] **Step 4 — independent resolution review and merge checkpoint.** Freeze source and report exact checkpoint/stable inputs, resolved conflict list, source hashes, native/functional results and remaining limits. Independent review covers resolution semantics and cross-consumer contracts. Root commits the merge only after findings and applicable checks are resolved. Then proceed to remaining functional Goal work and appropriate phased candidate/release qualification; do not mark the full Goal complete.
+- [x] **Step 4 — independent resolution review and merge checkpoint.** Freeze source and report exact checkpoint/stable inputs, resolved conflict list, source hashes, native/functional results and remaining limits. Independent review covers resolution semantics and cross-consumer contracts. Root commits the merge only after findings and applicable checks are resolved. Then proceed to remaining functional Goal work and appropriate phased candidate/release qualification; do not mark the full Goal complete.
+
+**Closure evidence:** Task2 independent review initially found duplicate/pre-admission Raw scope ownership and three missing compiler test fixtures. Fix1 preserved the actual HTTP1/HTTP2 Raw-scope12 RED, then passed five covering tests and the full loopbackproxy normal suite; independent scoped review closed I1/I2 with no new findings. Other combined evidence includes final Go compile,3+12 Go packages, Flutter analysis/VM185/Chrome52, actual packaged-helper SOCKS/REALITY TCP+UDP and Node96PASS/2existing opt-inSKIP. Exact source hashes, parents, logs and reviews remain under this plan's SDD directory. This is a local source integration checkpoint, not final CI/race/platform/signature/public-release qualification.
 
 ## Self-review
 

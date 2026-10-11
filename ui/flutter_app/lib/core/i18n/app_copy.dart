@@ -93,6 +93,14 @@ final class AppCopy {
     'native.pendingCount': 'Tool approvals: {count}',
     'native.loadMore': 'Load more',
     'content_page.title': 'Retained content',
+    'content_page.complete_record': 'Complete record',
+    'content_page.exact_note':
+        'A fragment of retained data, not the Agent’s body reply or a complete JSON document. Invalid or incomplete bytes appear in [HEX] markers.',
+    'content_page.copy_base64': 'Copy fragment (Base64)',
+    'content_page.details': 'Retained details',
+    'content_page.full_mode': 'Full content',
+    'content_page.metadata_mode':
+        'Metadata only · omitted bodies are unavailable',
     'content_page.close': 'Close',
     'content_page.load': 'Read content',
     'content_page.unloaded': 'Not loaded · approximately {size} KiB',
@@ -532,6 +540,18 @@ final class AppCopy {
     'provider_accounts.oauth.hint':
         'Sign in to Codex in your browser. ViberMate saves the account securely and refreshes its tokens automatically. Your existing Codex login is not changed.',
     'provider_accounts.oauth.start': 'Start Codex login',
+    'provider_accounts.oauth.sign_in_again': 'Sign in again',
+    'notice.inventory.account_reauthorized': 'Signed in again',
+    'provider_accounts.oauth.reauthorize_hint':
+        'Sign in to the same account shown above. Your account name and linked services will be kept.',
+    'provider_accounts.oauth.enable_first':
+        'Enable this account first, then sign in again.',
+    'provider_accounts.oauth.login_identity_mismatch':
+        'The browser signed in to a different account. Switch to the original account and try again.',
+    'provider_accounts.oauth.login_account_changed':
+        'This account changed during sign-in. Try again to check its current status.',
+    'provider_accounts.oauth.reload_failed':
+        'Could not reload this account. Check your connection and try again.',
     'provider_accounts.oauth.open': 'Open login page',
     'provider_accounts.oauth.copy': 'Copy login link',
     'provider_accounts.oauth.callback': 'Callback URL',
@@ -3110,6 +3130,13 @@ final class AppCopy {
     'native.pendingCount': '工具审批：{count}',
     'native.loadMore': '加载更多',
     'content_page.title': '保留内容',
+    'content_page.complete_record': '完整记录',
+    'content_page.exact_note':
+        '这是保留数据的片段，不是 Agent 的正文回复，也不是完整 JSON 文档。无效或不完整字节以 [HEX] 标记显示。',
+    'content_page.copy_base64': '复制片段（Base64）',
+    'content_page.details': '保留的详细信息',
+    'content_page.full_mode': '完整内容',
+    'content_page.metadata_mode': '仅元数据 · 未保留的正文不可读取',
     'content_page.close': '关闭',
     'content_page.load': '读取内容',
     'content_page.unloaded': '尚未加载 · 约 {size} KiB',
@@ -3457,6 +3484,13 @@ final class AppCopy {
     'provider_accounts.oauth.hint':
         '在浏览器中登录 Codex，ViberMate 会安全保存账号并自动刷新令牌，不会修改你原来的 Codex 登录。',
     'provider_accounts.oauth.start': '开始 Codex 登录',
+    'provider_accounts.oauth.sign_in_again': '重新登录',
+    'notice.inventory.account_reauthorized': '已重新登录',
+    'provider_accounts.oauth.reauthorize_hint': '请登录上方显示的原账号。账号名称和关联服务将保留。',
+    'provider_accounts.oauth.enable_first': '请先启用此账号，然后重新登录。',
+    'provider_accounts.oauth.login_identity_mismatch': '登录的不是原账号，请在浏览器中切换后重试。',
+    'provider_accounts.oauth.login_account_changed': '登录期间账号已变更，请重试以检查当前状态。',
+    'provider_accounts.oauth.reload_failed': '无法重新加载此账号，请检查连接后重试。',
     'provider_accounts.oauth.open': '打开登录页',
     'provider_accounts.oauth.copy': '复制授权链接',
     'provider_accounts.oauth.callback': '回调 URL',

@@ -15,7 +15,7 @@ func (manager *Manager) GetPagedProjection(ctx context.Context, exchangeID strin
 	if err != nil {
 		return Projection{}, err
 	}
-	if value.Page == nil || value.Validate() != nil {
+	if value.Page == nil || manager.validateProjection(operation, value) != nil {
 		return Projection{}, ErrInvalidEvidence
 	}
 	return value.Clone(), nil
@@ -34,7 +34,11 @@ func (manager *Manager) GetContentPage(ctx context.Context, exchangeID, cursor s
 	if err != nil {
 		return ContentPage{}, err
 	}
-	if page.ExchangeID != exchangeID || page.Validate() != nil {
+	validate := page.Validate
+	if manager.limits != nil {
+		validate = func() error { return page.ValidateWithin(operation, *manager.limits) }
+	}
+	if page.ExchangeID != exchangeID || validate() != nil {
 		return ContentPage{}, ErrInvalidEvidence
 	}
 	return page, nil

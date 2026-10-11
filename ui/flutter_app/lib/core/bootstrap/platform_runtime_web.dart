@@ -7,6 +7,7 @@ import '../api/control_api.dart';
 import '../api/control_models.dart';
 import 'runtime_connection.dart';
 import 'terminal_command.dart';
+import 'web_session_store.dart';
 
 const bool platformRuntimeRequiresLogin = true;
 const _maximumLoginResponseBytes = 16 * 1024;
@@ -21,12 +22,48 @@ bool platformRuntimeUsesPlaintext() =>
 Future<RuntimeConnection> connectPlatformRuntime({
   RuntimeLoginAttempt? login,
   String? daemonPath,
+  WebSessionStore sessionStore = const BrowserWebSessionStore(),
 }) async {
   final location = RuntimeServerLocation.fromPageUri(Uri.base);
   final baseUrl = location.baseUrl;
   final client = http.Client();
   try {
-    if (login == null) {
+    final saved = login == null
+        ? _readStoredSession(sessionStore, baseUrl)
+        : null;
+    late DesktopSession active;
+    late RuntimeWebPrincipal principal;
+    String? savedRecord;
+    if (saved != null) {
+      late ({int statusCode, List<int> bytes}) verified;
+      try {
+        verified = await _send(
+          client,
+          baseUrl,
+          'GET',
+          '/api/v1/server/web-sessions/current',
+          token: saved.session.readToken,
+        );
+      } on Object {
+        throw const RuntimeConnectionException('web_auth_unavailable');
+      }
+      if (verified.statusCode == 401) {
+        _clearStoredSession(sessionStore, saved.encoded);
+        throw const RuntimeLoginRequired('session_expired');
+      }
+      if (verified.statusCode != 200) {
+        throw const RuntimeConnectionException('web_auth_unavailable');
+      }
+      active = saved.session;
+      if (!active.expiresAt.isAfter(DateTime.now().toUtc())) {
+        _clearStoredSession(sessionStore, saved.encoded);
+        throw const RuntimeLoginRequired('session_expired');
+      }
+      principal = _decodePrincipal(
+        _decodeObject(verified.bytes, 'webPrincipal'),
+      );
+      savedRecord = saved.encoded;
+    } else if (login == null) {
       final state = await _send(
         client,
         baseUrl,
@@ -53,70 +90,79 @@ Future<RuntimeConnection> connectPlatformRuntime({
       throw RuntimeLoginRequired(
         setupRequired ? 'setup_required' : 'credentials_required',
       );
-    }
+    } else {
+      final endpoint = switch (login.mode) {
+        RuntimeLoginMode.signIn => '/api/v1/server/web-sessions',
+        RuntimeLoginMode.setup => '/api/v1/server/web-setup',
+        RuntimeLoginMode.recover => '/api/v1/server/web-recovery',
+      };
+      final body = switch (login.mode) {
+        RuntimeLoginMode.signIn => {
+          'schema': 'vibermate-web-login-v1',
+          'username': login.username,
+          'password': login.password,
+        },
+        RuntimeLoginMode.setup => {
+          'schema': 'vibermate-web-setup-v1',
+          'recoveryKey': login.recoveryKey,
+          'username': login.username,
+          'password': login.password,
+        },
+        RuntimeLoginMode.recover => {
+          'schema': 'vibermate-web-recovery-v1',
+          'recoveryKey': login.recoveryKey,
+          'newPassword': login.password,
+        },
+      };
+      final response = await _send(
+        client,
+        baseUrl,
+        'POST',
+        endpoint,
+        body: body,
+      );
+      if (response.statusCode == 429) {
+        throw const RuntimeLoginRequired('rate_limited');
+      }
+      if (response.statusCode == 401) {
+        throw RuntimeLoginRequired(
+          login.mode == RuntimeLoginMode.recover
+              ? 'recovery_rejected'
+              : 'credentials_rejected',
+        );
+      }
+      if (response.statusCode == 409) {
+        throw RuntimeLoginRequired(
+          _problemCode(response.bytes) == 'web_setup_required'
+              ? 'setup_required'
+              : 'setup_changed',
+        );
+      }
+      if (response.statusCode == 422) {
+        throw RuntimeLoginRequired(
+          login.mode == RuntimeLoginMode.setup
+              ? 'setup_invalid'
+              : login.mode == RuntimeLoginMode.recover
+              ? 'recovery_invalid'
+              : 'credentials_invalid',
+        );
+      }
+      if (response.statusCode != 201) {
+        throw const RuntimeConnectionException('web_login_unavailable');
+      }
 
-    final endpoint = switch (login.mode) {
-      RuntimeLoginMode.signIn => '/api/v1/server/web-sessions',
-      RuntimeLoginMode.setup => '/api/v1/server/web-setup',
-      RuntimeLoginMode.recover => '/api/v1/server/web-recovery',
-    };
-    final body = switch (login.mode) {
-      RuntimeLoginMode.signIn => {
-        'schema': 'vibermate-web-login-v1',
-        'username': login.username,
-        'password': login.password,
-      },
-      RuntimeLoginMode.setup => {
-        'schema': 'vibermate-web-setup-v1',
-        'recoveryKey': login.recoveryKey,
-        'username': login.username,
-        'password': login.password,
-      },
-      RuntimeLoginMode.recover => {
-        'schema': 'vibermate-web-recovery-v1',
-        'recoveryKey': login.recoveryKey,
-        'newPassword': login.password,
-      },
-    };
-    final response = await _send(client, baseUrl, 'POST', endpoint, body: body);
-    if (response.statusCode == 429) {
-      throw const RuntimeLoginRequired('rate_limited');
+      active = _decodeSession(response.bytes, baseUrl);
+      principal = _principal(response.bytes);
+      savedRecord = _saveSession(sessionStore, baseUrl, response.bytes);
     }
-    if (response.statusCode == 401) {
-      throw RuntimeLoginRequired(
-        login.mode == RuntimeLoginMode.recover
-            ? 'recovery_rejected'
-            : 'credentials_rejected',
-      );
-    }
-    if (response.statusCode == 409) {
-      throw RuntimeLoginRequired(
-        _problemCode(response.bytes) == 'web_setup_required'
-            ? 'setup_required'
-            : 'setup_changed',
-      );
-    }
-    if (response.statusCode == 422) {
-      throw RuntimeLoginRequired(
-        login.mode == RuntimeLoginMode.setup
-            ? 'setup_invalid'
-            : login.mode == RuntimeLoginMode.recover
-            ? 'recovery_invalid'
-            : 'credentials_invalid',
-      );
-    }
-    if (response.statusCode != 201) {
-      throw const RuntimeConnectionException('web_login_unavailable');
-    }
-
-    var active = _decodeSession(response.bytes, baseUrl);
-    final principal = _principal(response.bytes);
     final sessionEnded = Completer<void>();
     Timer? expiryTimer;
     var closed = false;
 
     void notifySessionEnded() {
-      if (!closed && !sessionEnded.isCompleted) sessionEnded.complete();
+      if (closed) return;
+      _clearStoredSession(sessionStore, savedRecord);
+      if (!sessionEnded.isCompleted) sessionEnded.complete();
     }
 
     void scheduleExpiry() {
@@ -150,18 +196,23 @@ Future<RuntimeConnection> connectPlatformRuntime({
       String currentPassword,
       String newPassword,
     ) async {
+      final sentSession = active;
       final changed = await _send(
         client,
         baseUrl,
         'PATCH',
         '/api/v1/server/web-account/password',
-        token: active.writeToken,
+        token: sentSession.writeToken,
         body: {
           'schema': 'vibermate-web-password-v1',
           'currentPassword': currentPassword,
           'newPassword': newPassword,
         },
       );
+      if (closed || !identical(sentSession, active)) {
+        // A late password reply belongs to a retired session, including 401.
+        throw const RuntimeConnectionException('password_change_unavailable');
+      }
       if (changed.statusCode == 401) {
         if (_problemCode(changed.bytes) == 'web_session_invalid') {
           notifySessionEnded();
@@ -180,8 +231,10 @@ Future<RuntimeConnection> connectPlatformRuntime({
           nextPrincipal.role != principal.role) {
         throw const RuntimeConnectionException('web_session_response_invalid');
       }
-      active = _decodeSession(changed.bytes, baseUrl);
-      api.replaceSession(active);
+      final next = _decodeSession(changed.bytes, baseUrl);
+      api.replaceSession(next);
+      active = next;
+      savedRecord = _saveSession(sessionStore, baseUrl, changed.bytes);
       scheduleExpiry();
     }
 
@@ -195,6 +248,7 @@ Future<RuntimeConnection> connectPlatformRuntime({
           token: active.writeToken,
         );
       } finally {
+        _clearStoredSession(sessionStore, savedRecord);
         await closeRuntime();
       }
     }
@@ -295,7 +349,12 @@ DesktopSession _decodeSession(List<int> bytes, Uri baseUrl) {
 
 RuntimeWebPrincipal _principal(List<int> bytes) {
   final value = _sessionObject(bytes);
-  final principal = requireObject(value['principal'], 'webSession.principal');
+  return _decodePrincipal(
+    requireObject(value['principal'], 'webSession.principal'),
+  );
+}
+
+RuntimeWebPrincipal _decodePrincipal(JsonObject principal) {
   requireFields(
     principal,
     'webSession.principal',
@@ -338,4 +397,75 @@ JsonObject _sessionObject(List<int> bytes) {
     throw const RuntimeConnectionException('web_session_response_invalid');
   }
   return value;
+}
+
+({DesktopSession session, String encoded})? _readStoredSession(
+  WebSessionStore store,
+  Uri baseUrl,
+) {
+  String? encoded;
+  try {
+    encoded = store.read();
+  } on Object {
+    return null; // Storage restrictions must not prevent ordinary login.
+  }
+  if (encoded == null) return null;
+  try {
+    if (encoded.length > _maximumLoginResponseBytes ||
+        utf8.encode(encoded).length > _maximumLoginResponseBytes) {
+      throw const FormatException('oversized Web session');
+    }
+    final value = requireObject(jsonDecode(encoded), 'savedWebSession');
+    requireFields(
+      value,
+      'savedWebSession',
+      required: const {'schema', 'origin', 'session'},
+    );
+    if (value['schema'] != 'vibermate-web-session-storage-v1' ||
+        value['origin'] != baseUrl.origin) {
+      throw const FormatException('unsupported Web session');
+    }
+    final bytes = utf8.encode(jsonEncode(value['session']));
+    _principal(bytes); // Validate cached metadata, never use it for authority.
+    final expiresAt = requireTimestamp(
+      _sessionObject(bytes),
+      'expiresAt',
+      'webSession',
+    );
+    if (!expiresAt.isAfter(DateTime.now().toUtc())) {
+      throw const RuntimeLoginRequired('session_expired');
+    }
+    return (session: _decodeSession(bytes, baseUrl), encoded: encoded);
+  } on Object catch (error) {
+    _clearStoredSession(store, encoded);
+    if (error is RuntimeLoginRequired) rethrow;
+    return null;
+  }
+}
+
+String? _saveSession(WebSessionStore store, Uri baseUrl, List<int> bytes) {
+  final encoded = jsonEncode({
+    'schema': 'vibermate-web-session-storage-v1',
+    'origin': baseUrl.origin,
+    'session': _sessionObject(bytes),
+  });
+  try {
+    // Retire the old account before a write that might fail (for example quota).
+    store.remove();
+    if (utf8.encode(encoded).length > _maximumLoginResponseBytes) return null;
+    store.write(encoded);
+    return encoded;
+  } on Object {
+    return null;
+  }
+}
+
+void _clearStoredSession(WebSessionStore store, String? expected) {
+  if (expected == null) return;
+  try {
+    // An old connection must not erase a newer login or password replacement.
+    if (store.read() == expected) store.remove();
+  } on Object {
+    // Browsers can deny storage access; in-memory session handling still works.
+  }
 }

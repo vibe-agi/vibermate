@@ -1,4 +1,4 @@
-.PHONY: check check-format check-generated check-dependencies check-structural check-workflows check-release-tooling check-release-build check-desktop check-flutter check-flutter-macos build-flutter-app build-linux-distributions test test-race vet vuln vuln-go
+.PHONY: check check-format check-generated check-dependencies check-structural check-workflows check-release-tooling check-release-build check-desktop check-flutter check-flutter-macos build-flutter-app build-linux-distributions test test-race test-store-crash-race test-store-response-race vet vuln vuln-go
 
 check: check-format check-generated check-dependencies check-structural check-workflows check-release-tooling check-release-build check-desktop
 
@@ -24,6 +24,7 @@ check-workflows:
 	go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.7
 	node --test .github/check-action-pins.test.mjs
 	node .github/check-action-pins.mjs
+	node --test .github/packaged-acceptance-contract.test.mjs
 
 check-release-tooling:
 	node --test ui/flutter_app/tool/desktop_build_manifest.test.mjs tool/macos-release/*.test.mjs
@@ -70,8 +71,18 @@ build-linux-distributions:
 test:
 	go test ./...
 
+# Finite per-package process containment for race instrumentation; this
+# watchdog does not change product operation deadlines.
 test-race:
-	go test -race -short ./...
+	go test -race -short -p=1 ./... -count=1 -timeout=60m
+
+test-store-crash-race:
+	go test -race ./internal/runtimepersistence -run '^TestContentSourceProcessCrash' -count=1 -parallel=1 -timeout=15m -v
+
+# Contain execution of the original full 6-MiB/192-page functional matrix in
+# its own invocation. This watchdog is not a product SLA or performance goal.
+test-store-response-race:
+	go test -race -p=1 -parallel=1 ./internal/runtimepersistence -run '^TestContentSourceRealResponseEveryBodyPage$$' -count=1 -timeout=40m -v
 
 vet:
 	go vet ./...
