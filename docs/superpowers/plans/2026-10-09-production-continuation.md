@@ -18,6 +18,8 @@
 
 当前覆盖前述历史“下一步”：账号额度/历史/重置出口单元已实现、验证并独立审查Approved，无发现。四个Go文件只增加closed-owned探测构造及真实测试；54个producer+34个Runtime行为格、count5 race和相关既有消费者通过。真实ReadOwned/RedeemOwned保持AP/AD/G/B选路、暂停恢复、一个租约的详情/兑换、取消/失败无直连回退和无重复兑换。尚未发布；下一单元是`2026-10-12-account-aux-egress.md` Task1手动OAuth刷新，再按Task2/3模型列表和首次登录推进，详情/精确BASE以各SDD首部为准。
 
+账号出口单元已提交`39ca501a3edf06a974a20b48d65f206918057071`。后续account-aux计划已由只读代理编写并由root完整审阅/修正：保留既有后台兑换/刷新拥有者的取消语义，复用真实TLS/SOCKS/Runtime，只有实测缺陷才改生产代码；normal Runtime的Login清理注册缺口有单独的条件RED修正，不在当前单元里猜测改写。root持有Git，仍为单源码写者；阶段B/最终Goal未完成，未发布。
+
 按已批准的 Superpowers 设计，分阶段交付可实际使用的 ViberMate：先完成用户受阻的修复及功能贯通，再推进性能优化和最终生产资格验证；保留全部账号、配置、权限与历史，完成适用的独立审查、签名、公证、安装、GitHub Release 与 Homebrew 交付。只有全部已批准范围实际完成后才标记整个 Goal complete；单个 hotfix 发布不等于整个 Goal 完成。
 
 ## 真实基线
