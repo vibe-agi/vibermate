@@ -26,6 +26,8 @@ account-aux Task1手动OAuth刷新已完成真实14行normal、count5共70行rac
 
 最新Task3状态覆盖上段：实际Runtime关闭仍保留4类Login状态/自有1455回调监听的RED已复现；仅新增一条normal Login cleanup注册后，11行GREEN、count5共55行race及51个相关Runtime叶子回归通过。真实自有监听已执行关闭验收，无skip；独立spec/security/quality审查Approved，无发现。account-aux三项均已关闭，不重做；后续按`2026-10-12-captured-original-egress.md`推进现有会话内读取/原凭据/原始转发剩余出口单元。该后续计划经root源码自检修正base-path探测身份和provenance摘要预期，尚未实施或验收，不代表新需求或完整MCP/发布已完成。
 
+Task3现已提交`714b8f9bc6b1aecfedfae4dd50451bf3479e16e6`；新captured-original计划的实际启动BASE/agent以该计划SDD首部为准。继续沿已批准范围逐项关闭，不回到旧手动刷新/模型列表/首次登录任务；原生MCP的已定位Auxiliary探测身份缺口仍属于稍后的既有native-family单元，不扩入当前captured实现。
+
 按已批准的 Superpowers 设计，分阶段交付可实际使用的 ViberMate：先完成用户受阻的修复及功能贯通，再推进性能优化和最终生产资格验证；保留全部账号、配置、权限与历史，完成适用的独立审查、签名、公证、安装、GitHub Release 与 Homebrew 交付。只有全部已批准范围实际完成后才标记整个 Goal complete；单个 hotfix 发布不等于整个 Goal 完成。
 
 ## 真实基线
