@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:vibermate_app/core/api/account_facts_models.dart';
 import 'package:vibermate_app/core/api/control_api.dart';
 import 'package:vibermate_app/core/api/control_models.dart';
 import 'package:vibermate_app/core/bootstrap/terminal_command.dart';
@@ -539,6 +540,9 @@ void main() {
     );
     await controller.initialize();
     expect(controller.data!.accounts, isNotEmpty);
+    // Initial quota reads intentionally complete independently of initialize.
+    // Settle them before measuring unchanged inventory poll notifications.
+    await controller.ensureProviderAccountQuotas(controller.data!.accounts);
     var notifications = 0;
     controller.addListener(() => notifications++);
 
@@ -1775,6 +1779,10 @@ final class _UsageTrackingApi implements ControlApi {
 
   @override
   Future<DashboardData> loadDashboard() => delegate.loadDashboard();
+
+  @override
+  Future<AccountFacts> accountFacts(String id, {bool history = false}) =>
+      delegate.accountFacts(id, history: history);
 
   @override
   Future<CaptureAssignment> captureAssignment(String captureKey) =>

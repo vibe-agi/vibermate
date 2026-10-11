@@ -11,6 +11,7 @@ import '../../core/api/acp_models.dart';
 import '../../core/api/launch_environment_snapshot.dart';
 import '../../core/api/control_failure.dart';
 import '../../core/api/account_facts_models.dart';
+import '../../core/api/provider_origin.dart';
 import '../../core/api/control_models.dart';
 import '../../core/api/native_tool_models.dart';
 import '../../core/api/runtime_storage.dart';
@@ -41,9 +42,52 @@ final class WorkbenchController extends ChangeNotifier
     with WidgetsBindingObserver {
   final Map<String, ({AccountFacts facts, int settings})>
   _providerAccountQuotas = {};
-  final Map<String, ({_AccountReadScope scope, Object request})>
+  final Map<
+    String,
+    ({_AccountReadScope scope, Object request, Completer<AccountFacts?> result})
+  >
   _providerAccountQuotaLoads = {};
   final Map<String, _AccountReadScope> _providerAccountQuotaFailures = {};
+  final Map<String, ({_AccountReadScope scope, DateTime checkedAt})>
+  _providerAccountQuotaChecks = {};
+  static const _accountQuotaRefreshInterval = Duration(minutes: 5);
+
+  bool get _quotaReadsAllowed => webPrincipal == null || webPrincipal!.owner;
+
+  bool _supportsProviderAccountQuota(ProviderAccount account) {
+    final origin = Uri.tryParse(account.credentialOrigin);
+    return account.usable && origin != null && isChatGPTCodexOrigin(origin);
+  }
+
+  bool _providerAccountQuotaDue(ProviderAccount account) {
+    final check = _providerAccountQuotaChecks[account.id];
+    return providerAccountQuota(account) == null ||
+        providerAccountQuotaFailed(account) ||
+        check?.scope != _accountReadScope(account) ||
+        _clock().difference(check!.checkedAt) >= _accountQuotaRefreshInterval;
+  }
+
+  Future<void> _refreshDueProviderAccountQuotas() =>
+      _ensureProviderAccountQuotas(
+        data?.accounts ?? const [],
+        refresh: true,
+        dueOnly: true,
+      );
+
+  void _startProviderAccountQuotaPolling() {
+    if (_disposed ||
+        !_observingLifecycle ||
+        data == null ||
+        !_quotaReadsAllowed ||
+        _accountQuotaPoller != null) {
+      return;
+    }
+    _accountQuotaPoller = Timer.periodic(
+      _accountQuotaRefreshInterval,
+      (_) => unawaited(_refreshDueProviderAccountQuotas()),
+    );
+    unawaited(_refreshDueProviderAccountQuotas());
+  }
 
   AccountFacts? providerAccountQuota(ProviderAccount account) {
     final cached = _providerAccountQuotas[account.id];
@@ -69,46 +113,73 @@ final class WorkbenchController extends ChangeNotifier
 
   void invalidateProviderAccountQuota(ProviderAccount account) {
     _providerAccountQuotas.remove(account.id);
-    _providerAccountQuotaLoads.remove(account.id);
+    final load = _providerAccountQuotaLoads.remove(account.id);
+    if (load != null && !load.result.isCompleted) load.result.complete(null);
     _providerAccountQuotaFailures.remove(account.id);
+    _providerAccountQuotaChecks.remove(account.id);
     notifyListeners();
   }
 
-  Future<AccountFacts?> refreshProviderAccountQuota(
-    ProviderAccount account,
-  ) async {
-    if (!account.usable || providerAccountQuotaLoading(account)) {
-      return providerAccountQuota(account);
+  Future<AccountFacts?> refreshProviderAccountQuota(ProviderAccount account) {
+    if (_disposed || !_quotaReadsAllowed || !account.usable) {
+      return Future.value(null);
+    }
+    final existing = _providerAccountQuotaLoads[account.id];
+    if (existing?.scope == _accountReadScope(account)) {
+      return existing!.result.future;
+    }
+    if (existing != null && !existing.result.isCompleted) {
+      existing.result.complete(null);
     }
     // A distinct request also prevents a pre-redemption read from repopulating
     // the cache after invalidation, even when the account scope is unchanged.
-    final load = (scope: _accountReadScope(account), request: Object());
+    final load = (
+      scope: _accountReadScope(account),
+      request: Object(),
+      result: Completer<AccountFacts?>(),
+    );
     _providerAccountQuotaLoads[account.id] = load;
     _providerAccountQuotaFailures.remove(account.id);
     notifyListeners();
+    unawaited(_readProviderAccountQuota(account, load));
+    return load.result.future;
+  }
+
+  Future<void> _readProviderAccountQuota(
+    ProviderAccount account,
+    ({_AccountReadScope scope, Object request, Completer<AccountFacts?> result})
+    load,
+  ) async {
+    AccountFacts? result;
     try {
+      if (_disposed || _providerAccountQuotaLoads[account.id] != load) return;
       final facts = await accountFacts(account);
       if (_disposed || _providerAccountQuotaLoads[account.id] != load) {
-        return null;
+        return;
       }
       final current = data?.accounts
           .where((value) => value.id == account.id)
           .firstOrNull;
       if (data != null &&
           (current == null || _accountReadScope(current) != load.scope)) {
-        return null;
+        return;
       }
       _providerAccountQuotas[account.id] = (
         facts: facts,
         settings: load.scope.settings,
       );
-      return facts;
+      _providerAccountQuotaChecks[account.id] = (
+        scope: load.scope,
+        checkedAt: _clock(),
+      );
+      result = facts;
     } catch (_) {
       if (!_disposed && _providerAccountQuotaLoads[account.id] == load) {
         _providerAccountQuotaFailures[account.id] = load.scope;
+        result = providerAccountQuota(account);
       }
-      return providerAccountQuota(account);
     } finally {
+      if (!load.result.isCompleted) load.result.complete(result);
       if (!_disposed && _providerAccountQuotaLoads[account.id] == load) {
         _providerAccountQuotaLoads.remove(account.id);
         notifyListeners();
@@ -119,19 +190,41 @@ final class WorkbenchController extends ChangeNotifier
   Future<void> ensureProviderAccountQuotas(
     Iterable<ProviderAccount> accounts, {
     bool refresh = false,
+  }) => _ensureProviderAccountQuotas(accounts, refresh: refresh);
+
+  Future<void> _ensureProviderAccountQuotas(
+    Iterable<ProviderAccount> accounts, {
+    required bool refresh,
+    bool dueOnly = false,
   }) async {
+    if (_disposed || !_quotaReadsAllowed) return;
     final pending = accounts
         .where(
           (account) =>
-              account.usable &&
+              _supportsProviderAccountQuota(account) &&
+              (!dueOnly || _providerAccountQuotaDue(account)) &&
               (refresh || providerAccountQuota(account) == null) &&
-              !providerAccountQuotaLoading(account) &&
               (refresh || !providerAccountQuotaFailed(account)),
         )
         .toList(growable: false);
     for (var index = 0; index < pending.length; index += 4) {
+      if (_disposed) return;
       await Future.wait(
-        pending.skip(index).take(4).map(refreshProviderAccountQuota),
+        pending
+            .skip(index)
+            .take(4)
+            .where((account) {
+              final current = data?.accounts
+                  .where((value) => value.id == account.id)
+                  .firstOrNull;
+              return (data == null ||
+                      (current != null &&
+                          current.usable &&
+                          _accountReadScope(current) ==
+                              _accountReadScope(account))) &&
+                  (!dueOnly || _providerAccountQuotaDue(account));
+            })
+            .map(refreshProviderAccountQuota),
       );
     }
   }
@@ -905,6 +998,7 @@ final class WorkbenchController extends ChangeNotifier
   int settingsTab = 0;
   Timer? _poller;
   Timer? _evidencePoller;
+  Timer? _accountQuotaPoller;
   bool _pollInFlight = false;
   bool _evidencePollInFlight = false;
   bool _pollingVisible = true;
@@ -1324,6 +1418,7 @@ final class WorkbenchController extends ChangeNotifier
   }
 
   Future<void> initialize() async {
+    if (_disposed) return;
     if (!_observingLifecycle) {
       WidgetsFlutterBinding.ensureInitialized().addObserver(this);
       _observingLifecycle = true;
@@ -1342,13 +1437,13 @@ final class WorkbenchController extends ChangeNotifier
       );
     }
     if (_disposed) return;
-    _poller = Timer.periodic(
+    _poller ??= Timer.periodic(
       const Duration(seconds: 5),
       (_) => unawaited(_poll()),
     );
     // Follow the visible live conversation independently of slow inventory
     // reads. This bounded point query never reloads accounts or credentials.
-    _evidencePoller = Timer.periodic(
+    _evidencePoller ??= Timer.periodic(
       const Duration(seconds: 1),
       (_) => unawaited(_pollSelectedEvidence()),
     );
@@ -1536,6 +1631,7 @@ final class WorkbenchController extends ChangeNotifier
       data = updated;
       _repairDashboardSelections(updated, forceCaptureDefault: selectDefaults);
       loading = false;
+      _startProviderAccountQuotaPolling();
       notifyListeners();
       if (selectedCapture != null) await _loadCaptureDetail(selectedCapture!);
       if (section == WorkbenchSection.network) {
@@ -1590,6 +1686,7 @@ final class WorkbenchController extends ChangeNotifier
       _inventoryFailureStatus = null;
       data = _mergePolledDashboard(previous, updated);
       _repairDashboardSelections(data!);
+      _startProviderAccountQuotaPolling();
       if (hadInventoryFailure || !_sameDashboard(previous, data!)) {
         notifyListeners();
       }
@@ -4714,6 +4811,11 @@ final class WorkbenchController extends ChangeNotifier
     }
     _poller?.cancel();
     _evidencePoller?.cancel();
+    _accountQuotaPoller?.cancel();
+    for (final load in _providerAccountQuotaLoads.values) {
+      if (!load.result.isCompleted) load.result.complete(null);
+    }
+    _providerAccountQuotaLoads.clear();
     _invalidateEvidenceCaches();
     _nativeContentInvalidations.dispose();
     unawaited(_flushPreferencesAndCloseRuntime());
@@ -4729,6 +4831,7 @@ final class WorkbenchController extends ChangeNotifier
       _pollingVisible = false;
     } else if (state == AppLifecycleState.resumed && !_pollingVisible) {
       _pollingVisible = true;
+      unawaited(_refreshDueProviderAccountQuotas());
       unawaited(refresh());
     }
   }

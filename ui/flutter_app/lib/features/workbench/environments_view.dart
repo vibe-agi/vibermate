@@ -222,12 +222,15 @@ final class _EnvironmentDirectory extends StatelessWidget {
                 onTap: () => onSelected(environment.id),
                 child: Container(
                   width: horizontal ? 188 : null,
-                  height: horizontal
+                  constraints: horizontal
                       ? null
-                      : 16 +
-                            39 *
-                                MediaQuery.textScalerOf(context).scale(13) /
-                                13,
+                      : BoxConstraints(
+                          minHeight:
+                              16 +
+                              39 *
+                                  MediaQuery.textScalerOf(context).scale(13) /
+                                  13,
+                        ),
                   margin: horizontal
                       ? const EdgeInsets.only(right: 7)
                       : EdgeInsets.zero,
@@ -249,6 +252,9 @@ final class _EnvironmentDirectory extends StatelessWidget {
                     ),
                   ),
                   child: Column(
+                    mainAxisSize: horizontal
+                        ? MainAxisSize.max
+                        : MainAxisSize.min,
                     mainAxisAlignment: MainAxisAlignment.center,
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
@@ -1297,6 +1303,61 @@ final class _RouteAccountActivationRow extends StatelessWidget {
     final identity = account.note.isNotEmpty
         ? account.note
         : account.codexOAuth?.email ?? account.tokenInfo?.email;
+    final scaler = MediaQuery.textScalerOf(context);
+    final stackAction = scaler.scale(12) > 18;
+    final actionStyle =
+        Theme.of(
+          context,
+        ).outlinedButtonTheme.style?.textStyle?.resolve(const {}) ??
+        Theme.of(context).textTheme.labelLarge;
+    var actionWidth = 96.0;
+    var actionHeight = ViberMetrics.controlHeight;
+    for (final key in [
+      'environment.account.active',
+      'environment.account.activate',
+    ]) {
+      final painter = TextPainter(
+        text: TextSpan(text: copy(key), style: actionStyle),
+        textDirection: Directionality.of(context),
+        textScaler: scaler,
+      )..layout();
+      actionWidth = math.max(actionWidth, painter.width + 36);
+      actionHeight = math.max(actionHeight, painter.height + 12);
+      painter.dispose();
+    }
+    final action = Semantics(
+      selected: active,
+      child: SizedBox(
+        width: actionWidth,
+        height: actionHeight,
+        child: OutlinedButton.icon(
+          key: Key('environment-account-activate-${account.id}'),
+          onPressed: enabled && !active ? onActivate : null,
+          style: OutlinedButton.styleFrom(
+            padding: const EdgeInsets.symmetric(horizontal: 6),
+            disabledForegroundColor: active
+                ? context.viberColors.verified
+                : null,
+            side: active
+                ? BorderSide(
+                    color: context.viberColors.verified.withValues(alpha: .5),
+                  )
+                : null,
+          ),
+          icon: Icon(
+            active ? Icons.check : Icons.radio_button_unchecked,
+            size: 14,
+          ),
+          label: Text(
+            copy(
+              active
+                  ? 'environment.account.active'
+                  : 'environment.account.activate',
+            ),
+          ),
+        ),
+      ),
+    );
     return Container(
       key: Key('environment-account-option-${account.id}'),
       padding: const EdgeInsets.fromLTRB(7, 6, 6, 6),
@@ -1334,45 +1395,18 @@ final class _RouteAccountActivationRow extends StatelessWidget {
                     style: Theme.of(context).textTheme.bodySmall,
                   ),
                 ?quota,
+                if (stackAction)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 6),
+                    child: Align(
+                      alignment: Alignment.centerRight,
+                      child: action,
+                    ),
+                  ),
               ],
             ),
           ),
-          const SizedBox(width: 6),
-          Semantics(
-            selected: active,
-            child: SizedBox(
-              width: 96,
-              height: ViberMetrics.controlHeight,
-              child: OutlinedButton.icon(
-                key: Key('environment-account-activate-${account.id}'),
-                onPressed: enabled && !active ? onActivate : null,
-                style: OutlinedButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(horizontal: 6),
-                  disabledForegroundColor: active
-                      ? context.viberColors.verified
-                      : null,
-                  side: active
-                      ? BorderSide(
-                          color: context.viberColors.verified.withValues(
-                            alpha: .5,
-                          ),
-                        )
-                      : null,
-                ),
-                icon: Icon(
-                  active ? Icons.check : Icons.radio_button_unchecked,
-                  size: 14,
-                ),
-                label: Text(
-                  copy(
-                    active
-                        ? 'environment.account.active'
-                        : 'environment.account.activate',
-                  ),
-                ),
-              ),
-            ),
-          ),
+          if (!stackAction) ...[const SizedBox(width: 6), action],
         ],
       ),
     );

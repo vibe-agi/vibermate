@@ -1,8 +1,12 @@
 # ViberMate 当前 Goal 与恢复入口
 
-核对日期：2026-10-11。此文件校准执行状态和顺序，不缩减原生产 Goal，也不抹掉历史失败证据。旧计划中的“当前”“下一步”“正在执行”只代表其当时状态；恢复时先读本文件和所选任务的最新账本，再核对实际 Git/agent/任务句柄。
+核对日期：2026-10-12。此文件校准执行状态和顺序，不缩减原生产 Goal，也不抹掉历史失败证据。旧计划中的“当前”“下一步”“正在执行”只代表其当时状态；恢复时先读本文件和所选任务的最新账本，再核对实际 Git/agent/任务句柄。
 
 本次用户明确要求重新审视并编辑Goal：已更新当前Goal引用的`/Users/null/.codex/attachments/5333dda7-121c-46a7-9d24-77ee624ae66c/pasted-text-1.txt`，保留原九项完整范围，新增已确认的5分钟额度刷新/统一credit展示/交互终端体验要求，并明确下面A/B/C交付顺序。原正文和本文件修订前副本保存在合流SDD的`goal-before-revision.ui8umB/`。这不是重新创建Goal或把未完成目标标为complete。
+
+2026-10-12复核：产品方向保持，近期执行队列固定为额度独立审查/提交 → 交互终端重连诊断修复 → 既有全局出口差距报告中的具体单元 → 阶段B冻结与发布。额度实施者已交还源码；主控核对七文件哈希、task-only diff哈希及修订后日志，Flutter87/Chrome31通过、analysis无问题，独立审查尚未完成，未发布。终端计划已准备而未实现。再次复核前副本位于合流SDD的`goal-audit-20261012.fShVj4/`，原十项最终范围未删减。
+
+最新覆盖上段额度状态：独立审查发现的I1（首次账号列表失败/附属读取失败后定时器未启动）已用真实RED3→GREEN3修正，VM59/Chrome15及实际页面VM1/Chrome1回归、analysis通过，fix1独立复审Approved无新发现。该任务实现/验证/审查已完成，接续终端计划，不再重复额度实现。未发布，真实上游/最终安装资格仍按阶段完成。
 
 ## 最终目标（不变，补齐已批准的新增范围）
 
@@ -81,9 +85,11 @@
 
 合流完成后的当前实施入口：`2026-10-11-account-quota-refresh.md`，按已确认的5分钟方案补齐同一controller内的定时/手动合并请求与小卡片credit。该计划不重建后端缓存、不更改OAuth开关或网络权限；终端诊断与全局请求族余项接续，不作为重开已完成合流的理由。
 
+2026-10-12并行只读全局出口核查已完成，报告位于全局计划SDD的`phase-b-remaining-audit.md`。主控完整阅读并独立核对了已知源码契约缺口：owned/captured账号读取和重置操作仍生成带语义/运行时plan、账号targetRef的Auxiliary探测目标，而实际Runtime选择的严格原始TLS prober要求origin-only/plan0，Hold恢复因此存在不匹配；本轮尚未执行新的实际网络RED，不能声称已复现或修复。后续在当前额度与终端任务检查点后，用既有真实Store/Manager/Reader及受限TLS/SOCKS fixture处理这一个明确单元。既有托管六层/token、公共目录/价格、更新与UI历史通过证据不重做；其它矩阵缺证据的格子和最终同源检查按报告逐项收敛，不把“缺证据”写成已确认产品失败。
+
 ## 防止中断后绕回起点
 
-- 当前稳定工作区：`/Users/null/Code/github/vibe-agi/vibermate/.worktrees/long-session-hotfix`，本地HEAD999d7b0，远端已合并候选4e89f628，二者产品树相同。当前开发工作区：`/Users/null/Code/github/vibe-agi/vibermate/.worktrees/production-readiness`，SOCKS用户入口Task1 BASE e9099de（计划/恢复文档提交）与保留的已审查产品WIP；后续HEAD以实际Git为准。20d483c/1cbb36d只是更早UI阶段的历史定位，不是当前待恢复任务。两条工作线不可混作同一最终候选，不因仅文档提交而重新执行已完成实现。
+- 当前稳定工作区：`/Users/null/Code/github/vibe-agi/vibermate/.worktrees/long-session-hotfix`，本地HEAD999d7b0，远端已合并候选4e89f628，二者产品树相同。当前开发工作区：`/Users/null/Code/github/vibe-agi/vibermate/.worktrees/production-readiness`，本次核对HEAD为d9c0941，已包含合流b5d5dbe；七文件额度任务尚未提交，主控文档修改和生成缓存分别保留。后续HEAD以实际Git为准。e9099de/20d483c/1cbb36d只是更早任务的历史定位，不是当前待恢复任务。两条工作线不可混作同一最终候选，不因仅文档提交而重新执行已完成实现。
 - 从最新任务报告/源码哈希/真实agent状态恢复；完成任务不得因旧账本仍写“running”而重新派发。活跃句柄归原所有者，观察等待超时不构成重启理由。
 - 同时只有一个源码实现者；独立只读审查/方案核查可以并行。本机重量级构建/全套测试串行排队，避免同时跑Go全量与Flutter全量造成资源竞争。
 - 测试和审查只覆盖实际变更与风险；已通过且源码未变的单元不因恢复会话而重做。性能目标与功能正确性分开；实际安全/数据丢失/协议错误仍需解决，不用任意快速完成阈值冒充业务成功标准。
