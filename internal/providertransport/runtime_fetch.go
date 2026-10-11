@@ -506,6 +506,9 @@ func (client *Client) runtimeProbeTarget(
 			TLSServerName: spec.target.TLSServerName(), EgressPolicy: spec.egressProfile().Policy}
 		return target, target.Validate()
 	}
+	if spec.purpose == egressaudit.PurposeUpstreamAccountRead || spec.purpose == egressaudit.PurposeUpstreamAccountAction {
+		return ownedAccountProbeTarget(spec)
+	}
 	requested := client.runtimePlan.Requested()
 	digest := sha256.Sum256([]byte(strings.Join([]string{
 		string(spec.purpose),
