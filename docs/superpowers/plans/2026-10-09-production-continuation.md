@@ -17,11 +17,11 @@
 ## 当前检查点
 
 - 开发目录：`/Users/null/Code/github/vibe-agi/vibermate/.worktrees/production-readiness`。
-- 分支：`fix/production-readiness-20261003`；本次读取HEAD为`d91ac52b66fc1c735cce2eafe09f93eafee700d9`。
-- Task1已完成独立首审和I1修正复审，无未解决的Critical/Important；M1父级ID关联断言、M2预期TLS日志噪声作为非阻断项保留给最终审查。实施者已交还源码，主控准备提交后启动Task2。
-- 当前计划：`docs/superpowers/plans/2026-10-12-captured-original-egress.md` Task1；账本：`.superpowers/sdd/2026-10-12-captured-original-egress/progress.md`。
+- 分支：`fix/production-readiness-20261003`；最近功能提交为`87c4fd348ac1d1de461a9dbfdb771f822af56adb`，实际HEAD以新任务启动时Git读取为准。
+- Task1已完成独立首审、I1修正复审和上述提交，无未解决的Critical/Important；M1父级ID关联断言、M2预期TLS日志噪声作为非阻断项保留给最终审查。当前源码所有者与执行BASE以任务SDD首部为准。
+- 当前计划：`docs/superpowers/plans/2026-10-12-captured-original-egress.md` Task2原账号模型请求暂停/失败验收；账本：`.superpowers/sdd/2026-10-12-captured-original-egress/progress.md`。Task1不重开，Task3随后执行。
 - Task1真实RED→GREEN、55项Runtime正常验证和五轮共275项race、31项producer及五轮race、既有owned控制均完成；I1仅修改独立测试清理，定向normal1.092s/race5.216s通过且复审关闭。源码/产物哈希和终态日志已核对。两次180s整套测试超时保留，完成时只调整测试总时限，未改产品超时；未重跑未改的全矩阵。Task2/3未开始。
-- 本次保留全部源码、测试、首失败与工作区；当前HEAD尚未变化。后续恢复先重新核对Git/任务状态，不把本次快照永远当作实时事实。
+- 本次保留全部源码、测试、首失败与工作区；Task1的8文件已精确提交，未带入无关缓存或修改用户运行状态。后续恢复先重新核对Git/任务状态，不把本次快照永远当作实时事实。
 
 ## 已完成基线：不得重开
 
@@ -37,6 +37,7 @@
 | 独立账号额度/历史/重置出口及暂停恢复 | 已实现、真实选路/race验证、独立审查、提交，未发布 | 39ca501；2026-10-12-owned-account-egress-recovery |
 | 手动OAuth刷新、账号模型列表 | 已补齐真实验收及独立审查、提交；无需改生产行为 | 1e3bcbb/86fc9ab；account-aux Tasks1/2 |
 | 首次OAuth及Runtime关闭回收 | 真实RED确认遗漏清理注册，修复/验证/独立审查/提交完成，未发布 | 714b8f9；account-aux Task3；账号状态与真实自有回调监听关闭，无skip |
+| 会话内账号额度/历史读取及暂停恢复 | 已实现、真实权限/选路/故障及race验证、独立审查和修正复审关闭、提交，未发布 | 87c4fd3；captured-original Task1；两个非阻断测试建议留给最终审查 |
 
 v0.1.25的已核验发布记录：2026-10-10T10:48:48Z，GitHub release408868448，源码4e89f628ba8eff3284e731b48475996908fa1c90，macOS/Linux六项资产；Homebrew PR20合并30a170d7。DMG SHA256为`0836cfd85c0f875dc6f698cc8d3c8edd9b8a114b2adff34fe65131e23f9409be`。这些是已保存的发布证据，不冒称本轮查询了远端；冻结新版本前再次核对。
 
@@ -48,8 +49,8 @@ v0.1.25的已核验发布记录：2026-10-10T10:48:48Z，GitHub release408868448
 
 | 顺序 | 剩余单元与完成条件 | 执行依据 |
 | --- | --- | --- |
-| B1 当前 | 会话内托管/原账号读取Task1完成定向验证、独立审查并提交；随后Task2原凭据模型、Task3原始/转换转发的真实出口、在途固定选择、取消/失败及内容保真 | 2026-10-12-captured-original-egress计划及当前SDD |
-| B2 | 已有托管模型单元的具体未覆盖故障：令牌轮换成功后、首个模型发送前所选代理失效；修正现存P3预期值自取的测试断言。沿用已通过六层/token证据，不重开发 | 全局出口phase-b-remaining-audit中managed行及既有review |
+| B1 当前 | 会话内托管/原账号读取Task1已关闭；完成Task2原凭据模型、Task3原始/转换转发的真实出口、在途固定选择、取消/失败及内容保真 | 2026-10-12-captured-original-egress计划及当前SDD |
+| B2 | 已有托管模型单元的具体未覆盖故障：令牌轮换成功后、首个模型发送前所选代理失效；修正现存P3预期值自取的测试断言。沿用已通过六层/token证据，不重开发；单任务实施稿已准备并完成主控预检，执行前核对B1新增共享fixture消费者 | 2026-10-12-managed-egress-tail计划；全局差距报告managed行及既有review |
 | B3 | 已有、可达原生工具族的出口/暂停恢复、实际审批一次消费与关联回复路径；复现已定位探测身份契约缺口，只作经证据支持的修复，不实现阶段C新续流机制 | 全局差距报告native行；phase-b-separation-audit |
 | B4 | 盲转发/普通HTTP的已列明缺口：真实默认直连、默认读取失败不外发、代理失效不回退，以及实际暂停/编辑/取消恢复 | 全局差距报告blind/cleartext行 |
 | B5 发布收尾 | 冻结候选；执行实际变更相关的Go/Flutter/Chrome、race、安全、规则和CI等适用验证及全局单元/完整候选独立审查；核验实际共享数据库升级/恢复与安装；完成同源构建、签名公证、GitHub/Homebrew和公开下载验证 | 2026-10-05-global-default-egress Task6与生产/发布计划；冻结时填写真实版本/源码/产物 |
