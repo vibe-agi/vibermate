@@ -51,6 +51,7 @@ type runtimeClosedNetwork struct {
 	proxy      string
 	otherProxy string
 	denied     atomic.Int64
+	proxyDials atomic.Int64
 	// Nonempty only for a matrix case explicitly expecting Direct. Both the
 	// canonical request and the actual private destination are closed literals.
 	directTarget string
@@ -66,6 +67,7 @@ func (n *runtimeClosedNetwork) DialContext(ctx context.Context, network, address
 		n.denied.Add(1)
 		return nil, errors.New("private fixture rejected direct/unexpected dial")
 	}
+	n.proxyDials.Add(1)
 	return (&net.Dialer{}).DialContext(ctx, network, address)
 }
 func (*runtimeClosedNetwork) LookupNetIP(_ context.Context, network, host string) ([]netip.Addr, error) {
@@ -76,9 +78,10 @@ func (*runtimeClosedNetwork) LookupNetIP(_ context.Context, network, host string
 }
 
 type runtimeOriginalWire struct {
-	builder *egressnetwork.Builder
-	roots   *x509.CertPool
-	before  func()
+	builder       *egressnetwork.Builder
+	roots         *x509.CertPool
+	before        func()
+	beforeRequest func(*http.Request) error
 }
 
 func (p *runtimeOriginalWire) RoundTrip(r *http.Request, policy egressnetwork.Policy) (*http.Response, error) {
@@ -88,6 +91,11 @@ func (p *runtimeOriginalWire) RoundTrip(r *http.Request, policy egressnetwork.Po
 	}
 	if p.before != nil {
 		p.before()
+	}
+	if p.beforeRequest != nil {
+		if err := p.beforeRequest(r); err != nil {
+			return nil, err
+		}
 	}
 	dialer, err := p.builder.Dialer(policy)
 	if err != nil {
@@ -117,6 +125,26 @@ func runtimeContainedProvider(request providerBuildRequest, wire *runtimeOrigina
 		return nil, err
 	}
 	return providertransport.NewClient(providertransport.ClientOptions{EgressDefaults: request.egressDefaults, Coordinator: request.coordinator, Authenticators: []providertransport.Authenticator{bearer, anthropic, codex}, Transport: runtimeProviderWire{original: wire}, InstanceIDs: request.instanceIDs, Audit: request.audit, RawEvidence: request.rawEvidence})
+}
+
+type runtimeSOCKSListener struct {
+	net.Listener
+	workers *sync.WaitGroup
+	once    sync.Once
+	drained chan struct{}
+}
+
+func (l *runtimeSOCKSListener) Drain(ctx context.Context) error {
+	l.once.Do(func() {
+		_ = l.Listener.Close()
+		go func() { l.workers.Wait(); close(l.drained) }()
+	})
+	select {
+	case <-l.drained:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func runtimeSOCKSFixture(t *testing.T, upstream string) (net.Listener, *atomic.Int64) {
@@ -170,8 +198,15 @@ func runtimeSOCKSFixture(t *testing.T, upstream string) (net.Listener, *atomic.I
 			}()
 		}
 	}()
-	t.Cleanup(func() { listener.Close(); workers.Wait() })
-	return listener, count
+	owned := &runtimeSOCKSListener{Listener: listener, workers: &workers, drained: make(chan struct{})}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+		defer cancel()
+		if err := owned.Drain(ctx); err != nil {
+			t.Error("private SOCKS workers did not drain", err)
+		}
+	})
+	return owned, count
 }
 
 func TestActualRuntimeOriginalAccountReadUsesFrozenGlobalExitThroughSOCKSTLS(t *testing.T) {
@@ -182,6 +217,10 @@ func TestActualRuntimeOriginalCredentialModelUsesFrozenGlobalExitThroughSOCKSTLS
 }
 func TestActualRuntimeManagedRefreshAndModelShareFrozenGlobalExitThroughSOCKSTLS(t *testing.T) {
 	runRuntimeInheritedSOCKSTLS(t, true, true, false)
+}
+func TestActualRuntimeManagedRotationThenProxyLossBeforeModelSend(t *testing.T) {
+	runRuntimeInheritedSOCKSTLS(t, true, true, false,
+		runtimeSemanticCase{managedFailure: "post_rotation_proxy_loss"})
 }
 func TestActualRuntimeExplicitAccountRefreshAndModelIgnoreUnavailableGlobal(t *testing.T) {
 	runRuntimeInheritedSOCKSTLS(t, true, true, true)
@@ -197,12 +236,12 @@ func TestActualRuntimeManagedRefreshHoldUsesConcreteProbers(t *testing.T) {
 // account/flow/default, or a default edit changing an already-running refresh.
 func TestActualRuntimeManagedRefreshAndModelPriorityMatrix(t *testing.T) {
 	for _, tc := range []runtimeManagedCase{
-		{choice: "account_proxy", source: egressprofile.SelectionAccount, profileID: "profile.runtime-original", settingsRevision: 2},
-		{choice: "account_direct", source: egressprofile.SelectionAccount, profileID: "profile.direct", settingsRevision: 2},
-		{choice: "flow_proxy", source: egressprofile.SelectionFlow, profileID: "profile.runtime-original", settingsRevision: 1},
-		{choice: "flow_direct", source: egressprofile.SelectionFlow, profileID: "profile.direct", settingsRevision: 1},
-		{choice: "global", source: egressprofile.SelectionGlobal, profileID: "profile.runtime-original", defaultRevision: 2, settingsRevision: 1},
-		{choice: "builtin", source: egressprofile.SelectionBuiltin, profileID: "profile.direct", defaultRevision: 1, settingsRevision: 1},
+		{choice: "account_proxy", source: egressprofile.SelectionAccount, profileID: "profile.runtime-original", settingsRevision: 2, nextSource: egressprofile.SelectionAccount, nextProfileID: "profile.runtime-original"},
+		{choice: "account_direct", source: egressprofile.SelectionAccount, profileID: "profile.direct", settingsRevision: 2, nextSource: egressprofile.SelectionAccount, nextProfileID: "profile.direct"},
+		{choice: "flow_proxy", source: egressprofile.SelectionFlow, profileID: "profile.runtime-original", settingsRevision: 1, nextSource: egressprofile.SelectionFlow, nextProfileID: "profile.runtime-original"},
+		{choice: "flow_direct", source: egressprofile.SelectionFlow, profileID: "profile.direct", settingsRevision: 1, nextSource: egressprofile.SelectionFlow, nextProfileID: "profile.direct"},
+		{choice: "global", source: egressprofile.SelectionGlobal, profileID: "profile.runtime-original", defaultRevision: 2, settingsRevision: 1, nextSource: egressprofile.SelectionGlobal, nextDefaultRevision: 3, nextProfileID: "profile.runtime-other"},
+		{choice: "builtin", source: egressprofile.SelectionBuiltin, profileID: "profile.direct", defaultRevision: 1, settingsRevision: 1, nextSource: egressprofile.SelectionGlobal, nextDefaultRevision: 2, nextProfileID: "profile.runtime-other"},
 	} {
 		t.Run(tc.choice, func(t *testing.T) {
 			runRuntimeInheritedSOCKSTLS(t, true, true, false, runtimeSemanticCase{managedMatrix: &tc})
@@ -223,6 +262,9 @@ type runtimeManagedCase struct {
 	source                            egressprofile.SelectionSource
 	profileID                         string
 	defaultRevision, settingsRevision uint64
+	nextSource                        egressprofile.SelectionSource
+	nextDefaultRevision               uint64
+	nextProfileID                     string
 }
 
 func TestActualRuntimeSemanticClientCredentialsUseGlobalExitWithoutAccount(t *testing.T) {
@@ -617,6 +659,212 @@ func runRuntimeInheritedSOCKSTLS(t *testing.T, model, managed, accountOverride b
 	}
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Authorization", "Bearer original-synthetic-login")
+	if managedFailure == "post_rotation_proxy_loss" {
+		wire.before = nil // This branch owns the edit after persisted rotation.
+		type sendEvent struct {
+			start  egressaudit.Attempt
+			authOK bool
+			err    error
+		}
+		events := make(chan sendEvent, 4)
+		release := make(chan struct{})
+		var releaseOnce sync.Once
+		var tokenDispatches, modelDispatches atomic.Int64
+		observationStarted := time.Now()
+		// The client's existing three-second request limit owns completion.
+		// This single longer guard only detects a request/observer hang.
+		observation := time.NewTimer(5 * time.Second)
+		defer observation.Stop()
+		logBoundary := func(stage string) {
+			t.Logf("managed-tail stage=%s elapsed=%s tokenDispatch=%d modelDispatch=%d tokenHTTP=%d modelHTTP=%d SOCKS=%d proxyDials=%d Direct=%d denied=%d bad=%d gate=%+v", stage, time.Since(observationStarted), tokenDispatches.Load(), modelDispatches.Load(), refreshCalls.Load(), upstreamCalls.Load(), calls.Load(), network.proxyDials.Load(), network.direct.Load(), network.denied.Load(), bad.Load(), gate.Snapshot())
+		}
+		wire.beforeRequest = func(req *http.Request) error {
+			purpose := egressaudit.PurposeCredentialRefresh
+			authOK := true
+			if req.URL.Host == "auth.openai.com" && req.URL.Path == "/oauth/token" {
+				tokenDispatches.Add(1)
+				authOK = req.Method == "POST" && req.Header.Get("Authorization") == ""
+			} else if req.URL.Host == "chatgpt.com" && req.URL.Path == "/backend-api/codex/responses" {
+				purpose = egressaudit.PurposeProviderAttempt
+				modelDispatches.Add(1)
+				authOK = req.Method == "POST" && req.Header.Get("Authorization") == "Bearer "+newToken && req.Header.Get("ChatGPT-Account-Id") == "synthetic-runtime-account"
+			} else {
+				return errors.New("managed tail hook rejected destination")
+			}
+			logBoundary("enter_" + string(purpose))
+			page, err := r.EgressAttempts().List(req.Context(), egressaudit.PageRequest{Limit: 10})
+			var start egressaudit.Attempt
+			matches := 0
+			if err == nil {
+				for _, record := range page.Items {
+					if !record.Attempt.Terminal() && record.Attempt.Purpose() == purpose {
+						start = record.Attempt
+						matches++
+					}
+				}
+				if matches != 1 {
+					err = fmt.Errorf("send boundary has %d current audits", matches)
+				}
+			}
+			select {
+			case events <- sendEvent{start: start, authOK: authOK, err: err}:
+			case <-req.Context().Done():
+				return req.Context().Err()
+			}
+			if purpose == egressaudit.PurposeProviderAttempt {
+				select {
+				case <-release:
+				case <-req.Context().Done():
+					return req.Context().Err()
+				}
+			}
+			return nil // The real closed-listener dial, not an injected error, fails.
+		}
+		type result struct {
+			status int
+			err    error
+		}
+		finished := make(chan result, 1)
+		joined := false
+		defer func() {
+			releaseOnce.Do(func() { close(release) })
+			cancelRequest()
+			if !joined {
+				select {
+				case got := <-finished:
+					joined = true
+					t.Logf("managed-tail cleanup completion elapsed=%s status=%d requestError=%t requestDeadline=%t", time.Since(observationStarted), got.status, got.err != nil, errors.Is(got.err, context.DeadlineExceeded))
+				case <-time.After(4 * time.Second):
+					logBoundary("cleanup_join_timeout")
+					t.Error("managed tail request did not join")
+				}
+			}
+			t.Logf("managed-tail cleanup joined=%t elapsed=%s", joined, time.Since(observationStarted))
+			logBoundary("cleanup")
+		}()
+		go func() {
+			response, err := client.Do(request)
+			got := result{err: err}
+			if response != nil {
+				_, readErr := io.Copy(io.Discard, response.Body)
+				closeErr := response.Body.Close()
+				got.status = response.StatusCode
+				got.err = errors.Join(got.err, readErr, closeErr)
+			}
+			t.Logf("managed-tail request completion elapsed=%s status=%d requestError=%t requestDeadline=%t", time.Since(observationStarted), got.status, got.err != nil, errors.Is(got.err, context.DeadlineExceeded))
+			finished <- got
+		}()
+		receive := func(stage string) sendEvent {
+			t.Helper()
+			select {
+			case event := <-events:
+				if event.err != nil || !event.authOK {
+					t.Fatalf("invalid managed send boundary: %v authOK=%t", event.err, event.authOK)
+				}
+				logBoundary("observed_" + stage)
+				return event
+			case got := <-finished:
+				joined = true
+				logBoundary("request_ended_before_" + stage)
+				t.Fatalf("managed tail ended before %s dial gate: %+v", stage, got)
+			case <-observation.C:
+				logBoundary("observation_timeout_" + stage)
+				t.Fatalf("managed tail %s send boundary not observed before hang guard", stage)
+			}
+			return sendEvent{}
+		}
+		tokenStart, modelStart := receive("token").start, receive("model").start
+		if tokenStart.Purpose() != egressaudit.PurposeCredentialRefresh || modelStart.Purpose() != egressaudit.PurposeProviderAttempt || tokenStart.ID() == modelStart.ID() {
+			t.Fatal("token/model attempt identities not distinct")
+		}
+		account, err := r.ProviderAccounts().Get(t.Context(), managedAccount.Account.ID)
+		metadata, inspectErr := options.Secrets.Inspect(t.Context(), managedAccount.Account.SecretRef)
+		if err != nil || inspectErr != nil || account.Account.ID != managedAccount.Account.ID || account.Account.SecretRef != managedAccount.Account.SecretRef || account.Health.CredentialEpoch != 2 || metadata.Revision != 2 || metadata.State != secretstore.StateConfigured || tokenDispatches.Load() != 1 || modelDispatches.Load() != 1 || refreshCalls.Load() != 1 || upstreamCalls.Load() != 0 || calls.Load() != 1 || network.proxyDials.Load() != 1 || network.direct.Load() != 0 || network.denied.Load() != 0 || bad.Load() != 0 {
+			t.Fatal("model gate was not after one successful persisted rotation and before first model dial", err, inspectErr)
+		}
+		assertRuntimeManagedSecret(t, options.Secrets, managedAccount, 2, newToken, "synthetic-refresh-new")
+		page, err := r.EgressAttempts().List(t.Context(), egressaudit.PageRequest{Limit: 10})
+		if err != nil || len(page.Items) != 2 {
+			t.Fatal("pre-loss audit pair missing", err)
+		}
+		tokenCompleted := false
+		for _, record := range page.Items {
+			if record.Attempt.ID() == tokenStart.ID() {
+				tokenCompleted = record.Attempt.Terminal() && record.Attempt.Outcome() == egressaudit.OutcomeCompleted
+			}
+		}
+		if !tokenCompleted {
+			t.Fatal("proxy loss preceded token completion")
+		}
+		t.Logf("pre-loss epoch=%d secretRevision=%d state=%s tokenCompleted=%t tokenDispatch=%d modelDispatch=%d tokenHTTP=%d modelHTTP=%d SOCKS=%d proxyDials=%d Direct=%d denied=%d bad=%d", account.Health.CredentialEpoch, metadata.Revision, metadata.State, tokenCompleted, tokenDispatches.Load(), modelDispatches.Load(), refreshCalls.Load(), upstreamCalls.Load(), calls.Load(), network.proxyDials.Load(), network.direct.Load(), network.denied.Load(), bad.Load())
+		for _, start := range []egressaudit.Attempt{tokenStart, modelStart} {
+			t.Logf("send-start id=%s purpose=%s parent=%+v target=%s decision=%+v startedAt=%s", start.ID(), start.Purpose(), start.Parent(), start.TargetOrigin(), start.Decision(), start.StartedAt())
+		}
+		if err := proxy.Close(); err != nil {
+			t.Fatal("close selected fixture proxy", err)
+		}
+		edited, err := r.EgressDefaults().SetDefault(t.Context(), egressprofile.SetDefaultCommand{ExpectedRevision: 2})
+		if err != nil || edited.Revision != 3 || edited.Profile != nil {
+			t.Fatal("default clear at model boundary failed", err)
+		}
+		releaseOnce.Do(func() { close(release) })
+		select {
+		case got := <-finished:
+			joined = true
+			if got.err != nil || got.status < 400 {
+				t.Fatalf("proxy loss did not become Runtime failure: %+v", got)
+			}
+			t.Logf("post-loss Runtime status=%d requestJoined=%t", got.status, joined)
+		case <-observation.C:
+			logBoundary("request_completion_timeout")
+			t.Fatal("failed model request did not return")
+		}
+		drain, cancel := context.WithTimeout(t.Context(), 4*time.Second)
+		defer cancel()
+		if err := gate.Drain(drain); err != nil {
+			t.Fatal("managed tail gate did not drain", err)
+		}
+		snapshot := gate.Snapshot()
+		if snapshot.ActiveActions != 0 || snapshot.EnteringActions != 0 || snapshot.ActiveEgress != 0 || snapshot.QueuedRequests != 0 || snapshot.HeldBytes != 0 {
+			t.Fatal("managed tail retained gate ownership", snapshot)
+		}
+		if err := proxy.(*runtimeSOCKSListener).Drain(drain); err != nil {
+			t.Fatal("managed tail SOCKS workers did not drain", err)
+		}
+		t.Logf("post-loss gateDrain=joined SOCKSDrain=joined snapshot=%+v", snapshot)
+		account, err = r.ProviderAccounts().Get(t.Context(), managedAccount.Account.ID)
+		metadata, inspectErr = options.Secrets.Inspect(t.Context(), managedAccount.Account.SecretRef)
+		if err != nil || inspectErr != nil || account.Health.CredentialEpoch != 2 || metadata.Revision != 2 || tokenDispatches.Load() != 1 || modelDispatches.Load() != 1 || refreshCalls.Load() != 1 || upstreamCalls.Load() != 0 || calls.Load() != 1 || network.proxyDials.Load() != 2 || network.direct.Load() != 0 || network.denied.Load() != 0 || bad.Load() != 0 {
+			t.Fatal("proxy loss replayed token/model, rotated again or fell back", err, inspectErr)
+		}
+		assertRuntimeManagedSecret(t, options.Secrets, managedAccount, 2, newToken, "synthetic-refresh-new")
+		page, err = r.EgressAttempts().List(t.Context(), egressaudit.PageRequest{Limit: 10})
+		t.Logf("post-loss epoch=%d secretRevision=%d tokenDispatch=%d modelDispatch=%d tokenHTTP=%d modelHTTP=%d SOCKS=%d proxyDials=%d Direct=%d denied=%d bad=%d", account.Health.CredentialEpoch, metadata.Revision, tokenDispatches.Load(), modelDispatches.Load(), refreshCalls.Load(), upstreamCalls.Load(), calls.Load(), network.proxyDials.Load(), network.direct.Load(), network.denied.Load(), bad.Load())
+		if err != nil || len(page.Items) != 2 {
+			t.Fatal("proxy loss created extra/missing attempts", err)
+		}
+		starts := map[string]egressaudit.Attempt{tokenStart.ID(): tokenStart, modelStart.ID(): modelStart}
+		for _, record := range page.Items {
+			audit := record.Attempt
+			start, known := starts[audit.ID()]
+			decision := audit.Decision()
+			wantOutcome, wantError := egressaudit.OutcomeCompleted, ""
+			if audit.ID() == modelStart.ID() {
+				wantOutcome, wantError = egressaudit.OutcomeFailed, "connection_failed"
+			}
+			if !known || !audit.Terminal() || audit.Outcome() != wantOutcome || audit.ErrorClass() != wantError || audit.Decision() != start.Decision() || audit.Parent() != start.Parent() || audit.Purpose() != start.Purpose() || audit.TargetOrigin() != start.TargetOrigin() || audit.StartedAt() != start.StartedAt() || decision.SelectionSource != egressprofile.SelectionGlobal || decision.DefaultRevision != 2 || decision.ProxyID != "profile.runtime-original" || decision.ProxyRevision != 1 || decision.AccountID != "account.private-runtime" || decision.AccountSettingsRevision != 1 {
+				t.Fatal("post-rotation loss changed per-ID audit identity/outcome", audit)
+			}
+			if audit.ID() == tokenStart.ID() && (audit.Parent().Kind != egressaudit.ParentRuntimeAction || audit.TargetOrigin() != "https://auth.openai.com" || decision.Authority != egressaudit.AuthorityRuntime || decision.PolicyID != "account.private-runtime") {
+				t.Fatal("token authority changed", audit)
+			}
+			if audit.ID() == modelStart.ID() && (audit.Parent().Kind != egressaudit.ParentUpstreamAttempt || audit.TargetOrigin() != "https://chatgpt.com" || decision.Authority != egressaudit.AuthorityEnvironment || decision.PolicyID != environmentID.String()) {
+				t.Fatal("model authority changed", audit)
+			}
+			t.Logf("terminal-audit id=%s purpose=%s parent=%+v target=%s outcome=%s errorClass=%s decision=%+v startedAt=%s immutable=true", audit.ID(), audit.Purpose(), audit.Parent(), audit.TargetOrigin(), audit.Outcome(), audit.ErrorClass(), decision, audit.StartedAt())
+		}
+		return
+	}
 	if managedFailure == "token_failure" || managedFailure == "model_failure" {
 		started := map[string]egressaudit.DecisionRef{}
 		var edit sync.Once
@@ -747,18 +995,26 @@ func runRuntimeInheritedSOCKSTLS(t *testing.T, model, managed, accountOverride b
 		if calls.Load() != wantProxy || callsB.Load() != 0 || network.direct.Load() != wantDirect || network.denied.Load() != 0 || refreshCalls.Load() != 1 || upstreamCalls.Load() != 1 || bad.Load() != 0 {
 			t.Fatalf("wrong actual initial wires A%d B%d Direct%d denied%d token%d model%d bad%d", calls.Load(), callsB.Load(), network.direct.Load(), network.denied.Load(), refreshCalls.Load(), upstreamCalls.Load(), bad.Load())
 		}
+		initialIDs := map[string]bool{}
 		checkAudit := func(want int, next bool) {
 			page, err := r.EgressAttempts().List(t.Context(), egressaudit.PageRequest{Limit: 10})
 			if err != nil || len(page.Items) != want {
 				t.Fatalf("managed audit count=%d want=%d err=%v", len(page.Items), want, err)
 			}
 			var tokens, models int
+			newModels := 0
 			for _, record := range page.Items {
 				audit := record.Attempt
 				decision := audit.Decision()
 				wantSource, wantRevision, wantID := matrix.source, matrix.defaultRevision, matrix.profileID
-				if next && (choice == "global" || choice == "builtin") && decision.ProxyID == "profile.runtime-other" {
-					wantSource, wantRevision, wantID = egressprofile.SelectionGlobal, expectedRevision+1, "profile.runtime-other"
+				if !next {
+					initialIDs[audit.ID()] = true
+				} else if !initialIDs[audit.ID()] {
+					newModels++
+					if audit.Purpose() != egressaudit.PurposeProviderAttempt {
+						t.Fatal("next managed request introduced another token attempt", audit.ID())
+					}
+					wantSource, wantRevision, wantID = matrix.nextSource, matrix.nextDefaultRevision, matrix.nextProfileID
 				}
 				if !audit.Terminal() || audit.Outcome() != egressaudit.OutcomeCompleted || decision != started[audit.ID()] || decision.SelectionSource != wantSource || decision.DefaultRevision != wantRevision || decision.ProxyID != wantID || decision.ProxyRevision != 1 || decision.AccountID != "account.private-runtime" || decision.AccountSettingsRevision != matrix.settingsRevision {
 					t.Fatalf("managed immutable operation audit id=%s decision=%+v start=%+v", audit.ID(), decision, started[audit.ID()])
@@ -777,10 +1033,15 @@ func runRuntimeInheritedSOCKSTLS(t *testing.T, model, managed, accountOverride b
 				default:
 					t.Fatal("unexpected managed audit purpose", audit.Purpose())
 				}
+				t.Logf("matrix-audit next=%t initial=%t id=%s purpose=%s parent=%+v target=%s outcome=%s decision=%+v immutable=true", next, initialIDs[audit.ID()], audit.ID(), audit.Purpose(), audit.Parent(), audit.TargetOrigin(), audit.Outcome(), decision)
 			}
 			if tokens != 1 || models != want-1 {
 				t.Fatalf("independent operations token%d model%d", tokens, models)
 			}
+			if len(initialIDs) != 2 || (next && newModels != 1) {
+				t.Fatalf("initial/next attempt membership initial=%d newModels=%d", len(initialIDs), newModels)
+			}
+			t.Logf("matrix-membership next=%t initialIDs=%d newModels=%d tokenAudits=%d modelAudits=%d", next, len(initialIDs), newModels, tokens, models)
 		}
 		checkAudit(2, false)
 		account, err := r.ProviderAccounts().Get(t.Context(), managedAccount.Account.ID)
@@ -836,11 +1097,13 @@ func runRuntimeInheritedSOCKSTLS(t *testing.T, model, managed, accountOverride b
 			t.Fatal("next actual managed operation did not retain explicit or use edited default", response.StatusCode, calls.Load(), callsB.Load(), network.direct.Load(), refreshCalls.Load(), upstreamCalls.Load())
 		}
 		checkAudit(3, true)
+		t.Logf("matrix-physical A=%d B=%d Direct=%d proxyDials=%d denied=%d tokenHTTP=%d modelHTTP=%d bad=%d epoch=%d secretRevision=2", calls.Load(), callsB.Load(), network.direct.Load(), network.proxyDials.Load(), network.denied.Load(), refreshCalls.Load(), upstreamCalls.Load(), bad.Load(), account.Health.CredentialEpoch)
 		drain, cancel := context.WithTimeout(t.Context(), 2*time.Second)
 		defer cancel()
 		if err := gate.Drain(drain); err != nil {
 			t.Fatal("managed operations did not drain", err)
 		}
+		t.Logf("matrix-gate drained snapshot=%+v", gate.Snapshot())
 		return
 	}
 	if managedHold {

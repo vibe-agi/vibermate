@@ -61,7 +61,7 @@ Carried evidence is the 2026-10-09 independent spec/security and quality approva
 - Add `TestActualRuntimeManagedRotationThenProxyLossBeforeModelSend`, calling the real managed helper with failure selector `post_rotation_proxy_loss`; this branch does not use Offline Hold or Resume.
 - Extend `runtimeManagedCase` with `nextSource egressprofile.SelectionSource`, `nextDefaultRevision uint64`, `nextProfileID string`. Six literal rows define expectations for both operations.
 
-- [ ] **Step 1: Add the narrowly observable fixture boundaries.**
+- [x] **Step 1: Add the narrowly observable fixture boundaries.**
 
 Add `beforeRequest` to `runtimeOriginalWire`, invoke it after the destination whitelist and existing `before`, before `p.builder.Dialer(policy)`:
 
@@ -106,7 +106,7 @@ return owned, count
 
 The accept worker's existing initial WaitGroup entry prevents a zero count while it can add connection workers. Closing the listener precedes Wait. Keep current connection deadlines/copy joins, exact SOCKS bytes, private upstream, strict roots/hostnames, and disabled keepalives.
 
-- [ ] **Step 2: Add one actual Runtime test for rotation then physical proxy loss.**
+- [x] **Step 2: Add one actual Runtime test for rotation then physical proxy loss.**
 
 ```go
 func TestActualRuntimeManagedRotationThenProxyLossBeforeModelSend(t *testing.T) {
@@ -261,7 +261,7 @@ if managedFailure == "post_rotation_proxy_loss" {
 
 The result/authority types in this block were checked at the pin as recorded above. The fixture only pauses before first model socket acquisition, after authentication and audit. Deadlines are failure guards, not sequencing sleeps. No second request is sent in this loss case; the existing matrix owns next-operation evidence. Do not assert model HTTP receipt, model success, or zero audit BytesOut merely because the remote model POST count is zero: production audit records logical request-body size on connect failure.
 
-- [ ] **Step 3: Run the new behavior once on existing production.**
+- [x] **Step 3: Run the new behavior once on existing production.**
 
 Root supplies the B1-reviewed execution baseline and identifies any overlap with the pinned fixture/type declarations above. Format the one test file and run:
 
@@ -272,7 +272,7 @@ GOTOOLCHAIN=local GOFLAGS=-mod=readonly /tmp/vibermate-go-security.JcRyfL/go/bin
 
 Expected behavioral result: token completed/epoch2; physical selected-proxy connect failure at first model dispatch; token1/model0/rotation1, successful SOCKS1/proxy dial2/Direct0/denied0, exactly two immutable per-ID audits with distinct truthful outcomes and parents, drained gate/workers and normal Runtime shutdown. Compile/fixture errors are not behavioral RED. If the behavior passes unchanged production, preserve that PASS as the missing-evidence closure. If it fails behaviorally, retain raw failure/counters/snapshots, release/join teardown, and stop production edits until root rules; no speculative production patch or broad prober/selection change.
 
-- [ ] **Step 4: Replace P3 with literal next expectations and ID-based membership.**
+- [x] **Step 4: Replace P3 with literal next expectations and ID-based membership.**
 
 Replace the six matrix row literals with these independently supplied next fields:
 
@@ -323,7 +323,7 @@ if len(initialIDs) != 2 || (next && newModels != 1) {
 
 The first `checkAudit(2,false)` saves the initial IDs. `checkAudit(3,true)` then requires exactly one new model ID and preserves the initial decisions' original literal expectations; the new decision never supplies its own expected selection. Keep the existing before-send `started` map, independent physical A/B/Direct counters, account settings/epoch/secret checks, target assertions, and drain.
 
-- [ ] **Step 5: Run only the bounded normal and race cohorts and retain truthful evidence.**
+- [x] **Step 5: Run only the bounded normal and race cohorts and retain truthful evidence.**
 
 ```sh
 GOTOOLCHAIN=local GOFLAGS=-mod=readonly /tmp/vibermate-go-security.JcRyfL/go/bin/go test ./internal/productruntime -run '^TestActualRuntimeManaged(RotationThenProxyLossBeforeModelSend|RefreshAndModelPriorityMatrix)$' -count=1 -timeout=90s -v
@@ -335,11 +335,13 @@ GOTOOLCHAIN=local GOFLAGS=-mod=readonly /tmp/vibermate-go-security.JcRyfL/go/bin
 
 The first two commands cover the one new test plus six existing priority subtests; race count5 means 35 case executions, not a whole-family qualification. The third command covers the existing managed fixture callers and preserves the adopted staged Hold boundary. The final two normal-only selections cover actual shared runtimeSOCKSFixture consumers added by B1 and the existing blind/owned consumers: actual captured recovery, semantic Hold/cancel, raw/stream positive traffic, two stream disconnects, opaque tunnel/Hold and owned held quota. They are needed because this task changes that common listener's cleanup wrapper, not because their product behavior is reopened. Do not repeat their unchanged count5 race matrices. Do not run package-wide tests/builds, network tools, or add dependencies as part of this unit. A failing required check is retained and classified; broaden checks only after root approves an actual production correction and its specific affected paths.
 
-- [ ] **Step 6: Hand off one reviewable task; root owns integration.**
+- [x] **Step 6: Hand off one reviewable task; root owns integration.**
 
 Record the execution baseline and one-file test hash/diff, command exit results and raw logs, literal expected/observed counters, pre-loss epoch2 token completion/model-start snapshot, final per-ID terminal decisions/parents, exact secret epoch checks without secret values, gate/socket joins, and Runtime shutdown. Report unchanged-production PASS honestly or the actual behavioral RED plus root ruling. Independent review assesses just these two gaps and the fixture containment; root performs any Git actions afterwards. Preserve B3/B4/B5 and the two-Resume review boundary. No execution-choice question or dispatch is part of this draft.
 
 ## Plan self-review
+
+Root execution amendment (2026-10-12, after first retained race failure): the new loss branch's independent2s boundary observers were shorter than its existing3s client request. Preserve the original34/35 union and unknown failed stage/cause; replace only those competing observer timers with named causal event/request-completion observation and one total5s hang guard, retaining the3s request and all transport/product limits and functional assertions. Final changed-branch count5 race passed; unchanged matrix30race and49 named normal leaves are retained on their covered source. Root reconstructed historicalca78 source from its frozen diff, verified its hash, and proved byte equality outside the loss branch against final5af18. Independent spec/quality review Approved with no Critical/Important; existing TLS notice noise and original cause uncertainty remain explicit in the SDD. No production logic changed.
 
 Root preflight correction (2026-10-12): actual `offlinehold/coordinator.go:656` makes SafeToDisconnect true only while Held, not merely when admission is empty. This new failure test stays Online, so require zero ownership counters and successful Drain rather than a false Held-only flag. Commands use the existing pinned Go1.26.9/read-only-module toolchain, not whichever `go` happens to be on PATH. Root mapped actual runtimeSOCKSFixture callers at69a5aa7 (managed, captured/original, blind and owned fixtures) and added the two named normal-only representative cohorts above, including B1's new stream disconnects. Before dispatch confirm the final accepted B1 source/hash. This draft does not grant final acceptance or start execution.
 
