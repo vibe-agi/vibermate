@@ -20,7 +20,7 @@
 - 分支：`fix/production-readiness-20261003`；最近功能提交为`87c4fd348ac1d1de461a9dbfdb771f822af56adb`，实际HEAD以新任务启动时Git读取为准。
 - Task1已完成独立首审、I1修正复审和上述提交，无未解决的Critical/Important；M1父级ID关联断言、M2预期TLS日志噪声作为非阻断项保留给最终审查。当前源码所有者与执行BASE以任务SDD首部为准。
 - 当前计划：`docs/superpowers/plans/2026-10-12-captured-original-egress.md` Task2原账号模型请求暂停/失败验收；账本：`.superpowers/sdd/2026-10-12-captured-original-egress/progress.md`。Task1不重开，Task3随后执行。
-- Task1真实RED→GREEN、55项Runtime正常验证和五轮共275项race、31项producer及五轮race、既有owned控制均完成；I1仅修改独立测试清理，定向normal1.092s/race5.216s通过且复审关闭。源码/产物哈希和终态日志已核对。两次180s整套测试超时保留，完成时只调整测试总时限，未改产品超时；未重跑未改的全矩阵。Task2/3未开始。
+- Task1已提交并关闭，不重跑。Task2在fc82acf基线上完成11项normal、55次race及18项受影响旧读取回归，597个内部生产Go文件哈希未变；独立spec/security/quality审查Approved，无Critical/Important。主控已核对完整报告、源码/日志及真实请求与Exchange身份边界，准备提交后启动Task3。两个非阻断测试建议保留在SDD。
 - 本次保留全部源码、测试、首失败与工作区；Task1的8文件已精确提交，未带入无关缓存或修改用户运行状态。后续恢复先重新核对Git/任务状态，不把本次快照永远当作实时事实。
 
 ## 已完成基线：不得重开

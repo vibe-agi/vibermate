@@ -9,6 +9,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -67,16 +68,20 @@ type capturedOriginalExpected struct {
 	DefaultRevision, SettingsRevision uint64
 }
 
-// This wrapper owns only the fixed captured read socket seam. It does not
+// This wrapper owns only the fixed captured read and semantic socket seam. It does not
 // broaden runtimeOriginalWire's shared whitelist or replace the proxy/Reader.
 type capturedOriginalWire struct {
-	builder *egressnetwork.Builder
-	roots   *x509.CertPool
-	before  func(context.Context) error
+	builder  *egressnetwork.Builder
+	roots    *x509.CertPool
+	before   func(context.Context) error
+	semantic bool
 }
 
 func (w *capturedOriginalWire) RoundTrip(r *http.Request, policy egressnetwork.Policy) (*http.Response, error) {
 	allowed := r.Method == http.MethodGet && (r.URL.Path == "/backend-api/wham/usage" || r.URL.Path == "/backend-api/wham/profiles/me") && r.URL.RawQuery == ""
+	if w.semantic {
+		allowed = r.Method == http.MethodPost && r.URL.Path == "/backend-api/codex/responses" && r.URL.RawQuery == ""
+	}
 	if r.URL.Scheme != "https" || r.URL.Host != "chatgpt.com" || !allowed {
 		return nil, errors.New("closed captured fixture rejected request")
 	}
@@ -103,6 +108,7 @@ type capturedOriginalNetwork struct {
 	*runtimeClosedNetwork
 	failDirect                     atomic.Bool
 	proxyAttemptsA, proxyAttemptsB atomic.Int64
+	tokenAttempts                  atomic.Int64
 }
 
 func (n *capturedOriginalNetwork) LookupNetIP(_ context.Context, network, host string) ([]netip.Addr, error) {
@@ -115,6 +121,7 @@ func (n *capturedOriginalNetwork) LookupNetIP(_ context.Context, network, host s
 
 func (n *capturedOriginalNetwork) DialContext(ctx context.Context, network, address string) (net.Conn, error) {
 	if address == "auth.openai.com:443" {
+		n.tokenAttempts.Add(1)
 		n.denied.Add(1)
 		return nil, errors.New("captured read fixture forbids token traffic")
 	}
@@ -177,12 +184,13 @@ type capturedOriginalFixture struct {
 	entered, release   chan struct{}
 	first, releaseOnce sync.Once
 	token              string
+	semanticRequests   []providertransport.Request
 }
 
 func newCapturedOriginalFixture(t *testing.T, cfg capturedOriginalConfig) *capturedOriginalFixture {
 	t.Helper()
-	if cfg.family != "managed_read" && cfg.family != "original_read" {
-		t.Fatal("captured fixture family has no Task1 consumer", cfg.family)
+	if cfg.family != "managed_read" && cfg.family != "original_read" && cfg.family != "semantic" {
+		t.Fatal("captured fixture family has no approved consumer", cfg.family)
 	}
 	f := &capturedOriginalFixture{cfg: cfg, starts: map[string]egressaudit.DecisionRef{}, wants: map[string]capturedOriginalExpected{}, asserted: map[string]bool{}}
 	if cfg.edge == "send_edit" || cfg.edge == "proxy_loss" || cfg.edge == "dial_failure" || cfg.edge == "tls_failure" {
@@ -193,7 +201,7 @@ func newCapturedOriginalFixture(t *testing.T, cfg capturedOriginalConfig) *captu
 		t.Fatal(err)
 	}
 	name := "chatgpt.com"
-	if cfg.edge == "wrong_name" || cfg.edge == "tls_failure" {
+	if cfg.edge == "wrong_name" || cfg.edge == "tls_failure" || cfg.edge == "held_tls_failure" || cfg.edge == "strict_tls_failure" {
 		name = "wrong.invalid"
 	}
 	cert := &x509.Certificate{SerialNumber: big.NewInt(91), DNSNames: []string{name}, NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour), KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}}
@@ -210,6 +218,10 @@ func newCapturedOriginalFixture(t *testing.T, cfg capturedOriginalConfig) *captu
 		f.mu.Unlock()
 		managed := cfg.family == "managed_read"
 		valid := r.Method == http.MethodGet && r.Host == "chatgpt.com" && len(body) == 0 && r.Header.Get("Proxy-Authorization") == ""
+		if cfg.family == "semantic" {
+			var fields map[string]json.RawMessage
+			valid = r.Method == http.MethodPost && r.Host == "chatgpt.com" && r.URL.RequestURI() == "/backend-api/codex/responses" && r.Header.Get("Proxy-Authorization") == "" && json.Unmarshal(body, &fields) == nil && len(fields) == 3 && string(fields["model"]) == `"synthetic"` && string(fields["input"]) == `"hello"` && string(fields["stream"]) == "false"
+		}
 		if managed {
 			valid = valid && r.Header.Get("Authorization") == "Bearer "+f.token && r.Header.Get("ChatGPT-Account-Id") == "workspace-B" && r.Header.Get("Cookie") == ""
 		} else {
@@ -221,6 +233,10 @@ func newCapturedOriginalFixture(t *testing.T, cfg capturedOriginalConfig) *captu
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
+		if cfg.family == "semantic" {
+			io.WriteString(w, `{"id":"synthetic-response","object":"response","created_at":1,"model":"synthetic","status":"completed","output":[]}`)
+			return
+		}
 		if r.URL.Path == "/backend-api/wham/profiles/me" {
 			io.WriteString(w, `{"stats":{"lifetime_tokens":1200}}`)
 			return
@@ -241,7 +257,7 @@ func newCapturedOriginalFixture(t *testing.T, cfg capturedOriginalConfig) *captu
 	if cfg.edge != "untrusted" {
 		roots.AddCert(f.upstream.Certificate())
 	}
-	wire := &capturedOriginalWire{builder: builder, roots: roots, before: func(ctx context.Context) error {
+	wire := &capturedOriginalWire{builder: builder, roots: roots, semantic: cfg.family == "semantic", before: func(ctx context.Context) error {
 		page, err := f.r.EgressAttempts().List(ctx, egressaudit.PageRequest{Limit: 100})
 		if err != nil {
 			return err
@@ -293,7 +309,11 @@ func newCapturedOriginalFixture(t *testing.T, cfg capturedOriginalConfig) *captu
 			if err != nil {
 				return nil, err
 			}
-			return providertransport.NewClient(providertransport.ClientOptions{EgressDefaults: request.egressDefaults, Coordinator: request.coordinator, Authenticators: []providertransport.Authenticator{bearer, oauth, anthropic}, Transport: capturedProviderWire{wire}, InstanceIDs: request.instanceIDs, Audit: request.audit, RawEvidence: request.rawEvidence})
+			client, err := providertransport.NewClient(providertransport.ClientOptions{EgressDefaults: request.egressDefaults, Coordinator: request.coordinator, Authenticators: []providertransport.Authenticator{bearer, oauth, anthropic}, Transport: capturedProviderWire{wire}, InstanceIDs: request.instanceIDs, Audit: request.audit, RawEvidence: request.rawEvidence})
+			if err != nil || cfg.family != "semantic" {
+				return client, err
+			}
+			return capturedSemanticProvider{providerRuntime: client, fixture: f}, nil
 		},
 	})
 	if err != nil {
@@ -529,6 +549,9 @@ func (f *capturedOriginalFixture) open(ctx context.Context, method, path, body s
 	r.Header.Set("ChatGPT-Account-Id", "workspace-A")
 	r.Header.Set("Cookie", "original-A-cookie")
 	r.Header.Set("User-Agent", "captured-original-fixture/1")
+	if f.cfg.family == "semantic" {
+		r.Header.Set("Content-Type", "application/json")
+	}
 	return f.client.Do(r)
 }
 func (f *capturedOriginalFixture) send(ctx context.Context, method, path, body string) capturedOriginalReply {
@@ -572,6 +595,10 @@ func (f *capturedOriginalFixture) editDefault(t *testing.T) {
 }
 func (f *capturedOriginalFixture) assertAudits(t *testing.T, want int) {
 	t.Helper()
+	if f.cfg.family == "semantic" {
+		f.assertSemanticAudits(t, want)
+		return
+	}
 	page, err := f.r.EgressAttempts().List(t.Context(), egressaudit.PageRequest{Limit: 100})
 	if err != nil || len(page.Items) != want {
 		t.Fatalf("captured audits=%d want=%d err=%v", len(page.Items), want, err)
@@ -670,6 +697,9 @@ func (f *capturedOriginalFixture) drain(t *testing.T) {
 	}
 	if f.secrets.writes.Load() != 0 {
 		t.Fatal("captured read saved secret material")
+	}
+	if f.cfg.family == "semantic" {
+		f.drainSemantic(t, ctx)
 	}
 	if f.bad.Load() != 0 || f.network.denied.Load() != 0 {
 		t.Fatal("captured fixture unexpected traffic/credential", f.bad.Load(), f.network.denied.Load())
