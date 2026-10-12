@@ -1,115 +1,86 @@
 # ViberMate 当前 Goal 与恢复入口
 
-核对日期：2026-10-12。此文件校准执行状态和顺序，不缩减原生产 Goal，也不抹掉历史失败证据。旧计划中的“当前”“下一步”“正在执行”只代表其当时状态；恢复时先读本文件和所选任务的最新账本，再核对实际 Git/agent/任务句柄。
+核对日期：2026-10-12。此文件是当前状态的单一快照，不是追加式流水账。后续更新对应行或当前任务，不再追加相互覆盖的“下一步”。详细过程、首失败和源码哈希留在各任务SDD账本。
 
-本次用户明确要求重新审视并编辑Goal：已更新当前Goal引用的`/Users/null/.codex/attachments/5333dda7-121c-46a7-9d24-77ee624ae66c/pasted-text-1.txt`，保留原九项完整范围，新增已确认的5分钟额度刷新/统一credit展示/交互终端体验要求，并明确下面A/B/C交付顺序。原正文和本文件修订前副本保存在合流SDD的`goal-before-revision.ui8umB/`。这不是重新创建Goal或把未完成目标标为complete。
+## 最终目标与本次校准
 
-2026-10-12复核：产品方向保持，近期执行队列固定为额度独立审查/提交 → 交互终端重连诊断修复 → 既有全局出口差距报告中的具体单元 → 阶段B冻结与发布。额度实施者已交还源码；主控核对七文件哈希、task-only diff哈希及修订后日志，Flutter87/Chrome31通过、analysis无问题，独立审查尚未完成，未发布。终端计划已准备而未实现。再次复核前副本位于合流SDD的`goal-audit-20261012.fShVj4/`，原十项最终范围未删减。
+持续分阶段交付用户实际可用的ViberMate，最终完成全部已批准功能、生产验收与GitHub/Homebrew发布；功能正确性优先，性能优化单独衡量。阶段交付不等于最终Goal完成。
 
-最新覆盖上段额度状态：独立审查发现的I1（首次账号列表失败/附属读取失败后定时器未启动）已用真实RED3→GREEN3修正，VM59/Chrome15及实际页面VM1/Chrome1回归、analysis通过，fix1独立复审Approved无新发现。该任务实现/验证/审查已完成，接续终端计划，不再重复额度实现。未发布，真实上游/最终安装资格仍按阶段完成。
+完整十项范围与执行约束见Goal引用文件：`/Users/null/.codex/attachments/5333dda7-121c-46a7-9d24-77ee624ae66c/pasted-text-1.txt`。本次保留十项原文，修正恢复入口中的过时待办和阶段边界，没有删减范围、重开已交付工作或创建新Goal。get_goal实际返回active。
 
-额度任务已提交`1ab5a05c4adfa13f8079a0756b04c71d39e7e932`，包括七个已复审源码/测试文件及其计划/恢复状态。下一实施入口为`2026-10-11-interactive-reconnect-diagnostics.md`；精确启动BASE/agent以该计划SDD首行状态为准。当前Goal最终十项范围不变，未发布的新功能不能由此宣称已交付。
+已发现的执行偏移是：旧文档同时保留“额度待审查”“终端未实现”“合流尚未发生”“captured计划尚未实施”等互相覆盖的现在时段落，混合目标、历史与待办。本次将其归档并改为下面唯一快照。原文及目标修订前全文位于：
 
-最新终端状态：`2026-10-11-interactive-reconnect-diagnostics.md`已完成实现、验证及独立审查Approved，无发现。真实PTY复现输入提示旁的重连文字后，只替换两处临时诊断写入并新增私有终端判断；文件/管道/缓冲日志、输入、进程与撤销不变。Darwin定向/完整包/race通过，Linux/Windows amd64包与CLI编译通过；未执行真实Codex opt-in或外平台原生验收。下一任务为已批准全局出口Task6的账号读取/重置真实选路与暂停恢复单元，详见`2026-10-12-owned-account-egress-recovery.md`，不重开已关闭额度/终端实现。
+`.superpowers/sdd/2026-10-11-stable-production-integration/goal-realignment-20261012.0pdErB/`
 
-终端任务已提交`73ab8f995046a7d059d8223b2f5f7b8940d7cac3`。账号操作单元沿用真实Runtime/Reader/Manager、限定TLS/SOCKS测试网和严格原始TLS探测器；先记录实际排队恢复RED，再仅修正已有owner读取/重置的探测构造。captured账户读取仍是父计划的独立剩余项，不把本单元的origin-only规则泛化到它，也不宣称全部出口已完成。
+归档只作历史证据，不作为当前调度入口。原有更早快照、日志、审查和未提交源码均保留。
 
-## 最终目标（不变，补齐已批准的新增范围）
+## 当前检查点
 
-当前覆盖前述历史“下一步”：账号额度/历史/重置出口单元已实现、验证并独立审查Approved，无发现。四个Go文件只增加closed-owned探测构造及真实测试；54个producer+34个Runtime行为格、count5 race和相关既有消费者通过。真实ReadOwned/RedeemOwned保持AP/AD/G/B选路、暂停恢复、一个租约的详情/兑换、取消/失败无直连回退和无重复兑换。尚未发布；下一单元是`2026-10-12-account-aux-egress.md` Task1手动OAuth刷新，再按Task2/3模型列表和首次登录推进，详情/精确BASE以各SDD首部为准。
+- 开发目录：`/Users/null/Code/github/vibe-agi/vibermate/.worktrees/production-readiness`。
+- 分支：`fix/production-readiness-20261003`；本次读取HEAD为`d91ac52b66fc1c735cce2eafe09f93eafee700d9`。
+- Task1已完成独立首审和I1修正复审，无未解决的Critical/Important；M1父级ID关联断言、M2预期TLS日志噪声作为非阻断项保留给最终审查。实施者已交还源码，主控准备提交后启动Task2。
+- 当前计划：`docs/superpowers/plans/2026-10-12-captured-original-egress.md` Task1；账本：`.superpowers/sdd/2026-10-12-captured-original-egress/progress.md`。
+- Task1真实RED→GREEN、55项Runtime正常验证和五轮共275项race、31项producer及五轮race、既有owned控制均完成；I1仅修改独立测试清理，定向normal1.092s/race5.216s通过且复审关闭。源码/产物哈希和终态日志已核对。两次180s整套测试超时保留，完成时只调整测试总时限，未改产品超时；未重跑未改的全矩阵。Task2/3未开始。
+- 本次保留全部源码、测试、首失败与工作区；当前HEAD尚未变化。后续恢复先重新核对Git/任务状态，不把本次快照永远当作实时事实。
 
-账号出口单元已提交`39ca501a3edf06a974a20b48d65f206918057071`。后续account-aux计划已由只读代理编写并由root完整审阅/修正：保留既有后台兑换/刷新拥有者的取消语义，复用真实TLS/SOCKS/Runtime，只有实测缺陷才改生产代码；normal Runtime的Login清理注册缺口有单独的条件RED修正，不在当前单元里猜测改写。root持有Git，仍为单源码写者；阶段B/最终Goal未完成，未发布。
+## 已完成基线：不得重开
 
-account-aux Task1手动OAuth刷新已完成真实14行normal、count5共70行race及独立spec/security/quality审查Approved，无发现，生产代码无需修改。两项新测试补齐实际AP/AD/G/B、暂停/取消/失败的选路和令牌一次轮换/原字节保留、初终审计与资源释放；并未冒称模型列表、首次登录或安装客户端已验证。下一项为同计划Task2模型列表，复用已审查共享fixture，不重复Task1的正常/失败测试整套运行。
-
-最新推进：Task1已提交1e3bcbb；Task2模型列表亦已完成真实13行normal、count5共65行race和独立审查Approved，无发现。仅新增一个测试文件，共享fixture/生产均未改；实际endpoint/realm匹配、前后两次GET各自选路/审计、Provider暂停探测、取消/失败无回退、凭据字节与资源释放已覆盖。下一项为Task3首次OAuth Start/Complete及normal Runtime关闭的登录状态/监听回收；只有具体RED确认缺口才添加已计划的清理注册，不改变既有后台兑换拥有者语义。
-
-最新Task3状态覆盖上段：实际Runtime关闭仍保留4类Login状态/自有1455回调监听的RED已复现；仅新增一条normal Login cleanup注册后，11行GREEN、count5共55行race及51个相关Runtime叶子回归通过。真实自有监听已执行关闭验收，无skip；独立spec/security/quality审查Approved，无发现。account-aux三项均已关闭，不重做；后续按`2026-10-12-captured-original-egress.md`推进现有会话内读取/原凭据/原始转发剩余出口单元。该后续计划经root源码自检修正base-path探测身份和provenance摘要预期，尚未实施或验收，不代表新需求或完整MCP/发布已完成。
-
-Task3现已提交`714b8f9bc6b1aecfedfae4dd50451bf3479e16e6`；新captured-original计划的实际启动BASE/agent以该计划SDD首部为准。继续沿已批准范围逐项关闭，不回到旧手动刷新/模型列表/首次登录任务；原生MCP的已定位Auxiliary探测身份缺口仍属于稍后的既有native-family单元，不扩入当前captured实现。
-
-按已批准的 Superpowers 设计，分阶段交付可实际使用的 ViberMate：先完成用户受阻的修复及功能贯通，再推进性能优化和最终生产资格验证；保留全部账号、配置、权限与历史，完成适用的独立审查、签名、公证、安装、GitHub Release 与 Homebrew 交付。只有全部已批准范围实际完成后才标记整个 Goal complete；单个 hotfix 发布不等于整个 Goal 完成。
-
-## 真实基线
-
-| 工作 | 当前状态 | 恢复依据 |
+| 交付/单元 | 真实状态 | 主要依据 |
 | --- | --- | --- |
-| 4096 长会话独立修复 | **已发布** v0.1.24(26)，不能重新排为待发布 | GitHub latest 查询、公开 Homebrew cask 和已保存的发布报告；发布源码 dbf9745b5391723103967889939a5ab4c7fbb7bc |
-| 默认 HTTP(S) 端口 | **已发布 v0.1.25(27)** | stable worktree f90d972；省略端口与80/443显式形式共享登录/信任身份 |
-| Web 同标签页刷新续登 | **已发布 v0.1.25(27)** | stable worktree b29fff8；Chrome40、相关VM33、构建/分析和真实后端+实际浏览器重载探针通过 |
-| 上述修复整体验证 | 最终稳定候选999d7b0的PR与push各14/14通过；合并4e89f628后的main CI也14/14通过 | 38001191279、38001188502、38005724047；旧失败及退出诊断证据保留，不再重排已完成CI |
-| 0.1.25稳定修复发布 | **GitHub与Homebrew均已交付**；tag/source4e89f628，六项资产，签名/公证/隔离安装/公开下载核验完成 | GitHub release408868448发布2026-10-10T10:48:48Z；tapPR20合并30a170d7，PR/main CI全通过；stable public-delivery报告保留首失败与边界。旧3s退出根因仍未知，不冒称修复 |
-| 原账号重新 OAuth | **已发布 v0.1.25(27)**，后端dc71b24、界面930f4b1及刷新反馈修正79fb19c | stable worktree 的2026-10-09-provider-account-reauthorization计划/账本；保留原ID/设置/关联/历史，不误换上游身份 |
-| 多 Runtime CLI 登录 | **已有功能，不重新开发** | LoginStore 按规范化 scheme+host+port 保存多条；A/B不互相覆盖，同server保留一份登录 |
-| VLESS 核心与自有 SOCKS 模块 | 已实现且对应缺陷已修复/审查；后续Runtime/Host/UI入口也已有闭环证据 | production-readiness 的 VLESS functional Task1/2及后续SOCKS用户入口Tasks1–4；不等同正式版本已发布 |
-| VLESS 配置与 Runtime TCP | Task3A及启动/关闭修复已实现、验证、审查；其后Task3B也已关闭 | task-3a-profile-routing-report.md和shutdown-rereview/3hash；不重复原实现或核心Proof |
-| VLESS Runtime UDP/监听/基础界面 | Task3B及关闭修复已复核关闭，Task4A界面实现/审查通过（2个Minor和字体证据限制保留） | vless-configuration-ui的report/review；后续TLS界面、打包接线、Host和用户连接单元均已完成，不重复开发；新正式版本未发布 |
-| VLESS TLS／配置内自有CA核心 | 已实现、验证、独立审查通过，无Critical/Important；一个测试fixture Minor保留 | vless-tls-core/task-1-report.md与task-1-review.md。原生System信任成功证明仍待隔离runner |
-| TLS私有配置／owner控制 | 已实现、18项定向测试通过、独立审查Approved无发现；包含真实磁盘重开及owner/member权限 | tls-profile-control/task-1-report.md与task-1-review.md，11个文件hash已核对，保持冻结 |
-| TLS／CA编辑界面 | 已实现、验证、独立审查Approved无发现，正式关闭该任务 | tls-editor/task-1-report.md与task-1-review.md；13份hash已核对。114VM/86Chrome及最终受影响定向验证、分析/Web构建通过，390px实际查看；字体证据限制保留 |
-| 内核生产与资格 | 原生补丁内核资格及可重复生产工具均已独立审查关闭；生产工具29项测试与5目标编译/静态证明已完成 | producer fix1 rereview无剩余发现；后续打包/Host/SOCKS用户入口也已完成对应单元，新正式版本尚未交付 |
-| 内核材料、真实构建和打包接入 | packaging Task1/2均已独立审查关闭；实际本地arm64候选构建/验证成功。Task2首审两项Important已修正：正式签名漏内核、签名前漏内核哈希核对；定向22项通过，复审I1/I2均关闭 | vless-kernel-packaging/task-2-report.md及task-2-fix1-review.md；本地候选仍是dirty0.1.23+25、ad-hoc/Xcode27，不是新发布或正式Universal资格。首失败、2项原有opt-in skip及工具链诊断保留 |
-| Host启动接线 | 共享内核自动发现、Desktop认证回环SOCKS启动已实现、验证、独立审查通过 | vless-host-bootstrap Task1关闭；1个非阻断输出噪声Minor保留。实际地址/ManualCapture交付已由后续Tasks1–4关闭；最终正式安装包验证仍需完成 |
-| SOCKS用户入口 | 2026-10-11-socks-user-delivery Tasks1/2/3均已实现、验证、独立审查关闭；不要重复实现 | 真实owner控制→签发凭证→自有SOCKS→打包REALITY/Vision TCP/3UDP、DNS/直连、坏节点不回退、撤销/关闭回收通过；Task3修正后的native9.36s/race10.51s及9反例通过，复审关闭。macOSarm64/currentHost+既有内核证明，不冒充最终安装包或其它平台 |
-| SOCKS Windows编译 | Task4已实现、验证、独立审查Approved无发现，实际编译缺陷关闭 | Windows/Linux amd64两包测试编译+CLI/daemon共8项通过；实际socket完整/截断与race、macOS真实用户入口回归通过。使用现有平台常量、不改权限或包处理；Windows原生UDP尚未验证 |
-| R1–R7、阅读器、MCP底层、全局出口 | 保留已有提交和审查；全量功能/客户端闭环未完成 | 2026-10-03主计划及已采用子计划；2026-10-05全局出口账本 |
-| CA平台/devcontainer、完整MCP/46项客户端、持续运行与最终同源发布 | 尚未全部完成 | 原Goal范围继续有效，见下方完成条件 |
+| 4096长会话修复 | 已发布v0.1.24(26) | 发布源码dbf9745；稳定线发布证据 |
+| 默认HTTP(S)端口、Web同标签页续登、原账号重新OAuth | 已发布v0.1.25(27)，GitHub/Homebrew交付完成 | tag/source4e89f628；稳定线2026-10-10-login-fixes-release计划及public-delivery报告 |
+| 多Runtime CLI登录 | 已有实现，按规范化server隔离，保留回归 | LoginStore；不是待新建功能 |
+| 稳定修复合入生产线（阶段A） | 已合流、验证、独立复审关闭 | b5d5dbe，父提交d50e0d8/999d7b0；stable-production-integration账本 |
+| VLESS/REALITY+Vision、自有SOCKS TCP/UDP、域名排除、配置内CA、界面/内核/Host入口 | 对应实现、单元验收和独立审查已关闭，尚未随新正式版本发布 | 2026-10-09-vless-udp-functional及TLS/packaging/Host子计划；2026-10-11-socks-user-delivery Tasks1–4 |
+| 5分钟共享额度刷新与credit | 已实现、验证、独立复审、提交，未发布 | 1ab5a05；2026-10-11-account-quota-refresh，含首次读取失败后的定时器恢复fix1 |
+| 交互终端重连诊断 | 已实现、真实PTY验证、独立审查、提交，未发布 | 73ab8f9；2026-10-11-interactive-reconnect-diagnostics |
+| 独立账号额度/历史/重置出口及暂停恢复 | 已实现、真实选路/race验证、独立审查、提交，未发布 | 39ca501；2026-10-12-owned-account-egress-recovery |
+| 手动OAuth刷新、账号模型列表 | 已补齐真实验收及独立审查、提交；无需改生产行为 | 1e3bcbb/86fc9ab；account-aux Tasks1/2 |
+| 首次OAuth及Runtime关闭回收 | 真实RED确认遗漏清理注册，修复/验证/独立审查/提交完成，未发布 | 714b8f9；account-aux Task3；账号状态与真实自有回调监听关闭，无skip |
 
-远端与公开字节核对：GitHub为v0.1.25，发布时间2026-10-10T10:48:48Z；Homebrew main30a170d7的cask为0.1.25，DMG SHA256 `0836cfd85c0f875dc6f698cc8d3c8edd9b8a114b2adff34fe65131e23f9409be`。实际Brew解析、CI安装/签名/Gatekeeper/卸载通过，原用户dirtytap与运行App未改。下一版本冻结前再查远端。
+v0.1.25的已核验发布记录：2026-10-10T10:48:48Z，GitHub release408868448，源码4e89f628ba8eff3284e731b48475996908fa1c90，macOS/Linux六项资产；Homebrew PR20合并30a170d7。DMG SHA256为`0836cfd85c0f875dc6f698cc8d3c8edd9b8a114b2adff34fe65131e23f9409be`。这些是已保存的发布证据，不冒称本轮查询了远端；冻结新版本前再次核对。
 
-## 唯一恢复顺序
+稳定工作树`.worktrees/long-session-hotfix`的999d7b0产品树与该发布产品树已验证相同。主工作区未提交修改、旧发布工作区、dirty tap及正在运行的App/Codex均不动。
 
-1. **稳定线登录补全版本已交付且已合流**：v0.1.25(27) GitHub/Homebrew完成，不重新构建或重复发布；稳定修复已通过下述合流提交进入主生产开发线，不再重做合流。
-2. **VLESS/UDP功能已接通**：协议/Runtime/UI/TLS、补丁内核生产、打包与Host/bootstrap及`2026-10-11-socks-user-delivery.md` Tasks1–4均已独立审查关闭；不重复实现。真实控制/凭证/自有SOCKS/REALITY+Vision TCP/UDP与坏节点/撤销/回收已证明；源码/二进制扫描两条未导入模块提示、测试字体和其它平台原生资格限制仍保留。尚未构建/发布包含这些当前源码的新正式安装包。
-3. **阶段A已完成：合流检查点b5d5dbe**：按`2026-10-11-stable-production-integration.md`完成两线合流，I1/I2真实RED→GREEN和独立复审关闭；完整loopbackproxy包已补验。两父提交为d50e0d8/999d7b0，不再重开合流或已关闭单元。这不是新版本发布或最终生产资格。
-4. **阶段B：下一阶段功能版**：交付已接通的VLESS/REALITY+Vision、自有SOCKS UDP、域名排除/配置内CA与全局默认出口剩余真实请求族闭环；补齐5分钟额度自动刷新、现有缓存统一展示credit与不污染输入的重连提示，保留已发布登录修复。冻结本阶段清单，完成其实际代码范围对应的正确性/安全/数据/安装/审查、签名公证、GitHub/Homebrew交付，不让无关MCP后续功能和性能调优自动阻挡。未完成能力须证明安全分离并如实标注，不能只说默认关闭就跳过真实可达缺陷。
-5. **阶段C：完整生产Goal**：继续原生MCP真实工具/恢复/一次执行、完整客户端矩阵、阅读器与CA/devcontainer、数据恢复/持续运行/10天边界等全部剩余范围，并在最终同源代码上完成全量适用验证、独立整体审查和正式发布。阶段B可以更早交付，但不替代或删减阶段C。
+## 阶段B唯一剩余顺序
 
-## 已发布修复合流的只读预检（2026-10-11）
+本阶段固定交付：已接通的VLESS/UDP/域名排除/配置内CA与分发、全局默认出口的现有请求族、额度/credit及终端体验。正常实现沿用已批准子计划；没有新需求，不重做整体架构规划。
 
-**最新覆盖历史状态**：合流提交为`b5d5dbe191a4e62096e57b1b3eba599374e57c01`，父提交为175项源码检查点`d50e0d8539f8777c46fc04618cad712510fd5fbf`和稳定`999d7b0876b1c9c570e1d2192f9cc7e5a97805ee`，树`01aeb4b0f3ff1777a2bffeb0ce61c7c3b4fbad3f`。24个冲突及8个直接消费者修正已完成，原72份三方源码保留。组合Go编译、相关15包、Flutter185/Chrome52及真实SOCKS入口通过；审查I1/I2经HTTP1/HTTP2 Raw作用域12的实际RED、五项GREEN、完整loopbackproxy包和独立复审关闭。先前模型容量中断未导致丢失、重做或回滚已有解析。精确日志/源码/审查及资格边界见合流SDD；以下“没有merge/产品提交/仍待修复”段落仅保留历史。正式版本仍为0.1.25，不把本地合流说成已发版。
+| 顺序 | 剩余单元与完成条件 | 执行依据 |
+| --- | --- | --- |
+| B1 当前 | 会话内托管/原账号读取Task1完成定向验证、独立审查并提交；随后Task2原凭据模型、Task3原始/转换转发的真实出口、在途固定选择、取消/失败及内容保真 | 2026-10-12-captured-original-egress计划及当前SDD |
+| B2 | 已有托管模型单元的具体未覆盖故障：令牌轮换成功后、首个模型发送前所选代理失效；修正现存P3预期值自取的测试断言。沿用已通过六层/token证据，不重开发 | 全局出口phase-b-remaining-audit中managed行及既有review |
+| B3 | 已有、可达原生工具族的出口/暂停恢复、实际审批一次消费与关联回复路径；复现已定位探测身份契约缺口，只作经证据支持的修复，不实现阶段C新续流机制 | 全局差距报告native行；phase-b-separation-audit |
+| B4 | 盲转发/普通HTTP的已列明缺口：真实默认直连、默认读取失败不外发、代理失效不回退，以及实际暂停/编辑/取消恢复 | 全局差距报告blind/cleartext行 |
+| B5 发布收尾 | 冻结候选；执行实际变更相关的Go/Flutter/Chrome、race、安全、规则和CI等适用验证及全局单元/完整候选独立审查；核验实际共享数据库升级/恢复与安装；完成同源构建、签名公证、GitHub/Homebrew和公开下载验证 | 2026-10-05-global-default-egress Task6与生产/发布计划；冻结时填写真实版本/源码/产物 |
 
-本地稳定HEAD999d7b0产品树`89be12a87e5c5958e0686987e60803e00867c0d9`与已发布0.1.25的已验证产品树一致；公开合并SHA4e89f628当前尚未存在于本地对象库，首次直接Git比较因此报bad object，此后改用已有的等产品树稳定HEAD，没有擅自fetch/merge或修改运行状态。生产HEAD f79c35d与稳定线共同祖先仍为c61f8c6；`git cherry`显示92项不等价补丁、0项等价（含文档/测试，不代表92个未做功能），稳定线自共同祖先改227个文件。必须合入的不仅是0.1.25登录修复，也包括0.1.24长会话实现。
+全局细项证据：`.superpowers/sdd/2026-10-05-global-default-egress/phase-b-remaining-audit.md`。该报告原表为历史pin；本快照及其顶部已关闭记录优先于旧表的E/I，不能重新派发owned/manual/models/first-login。metadata/prices、固定更新请求及既有UI覆盖继续复用；冻结时核验实际变化的消费者，不重建已完成界面。
 
-后续一次精确公开源码获取：`git fetch --no-tags https://github.com/vibe-agi/vibermate.git 4e89f628ba8eff3284e731b48475996908fa1c90`返回128/CONNECT tunnel407，未重试、未改网络代理或凭证。生产HEAD35185fd和本地稳定产品树保持不变；已有稳定等产品树源仍可用于安全合流准备，不因此停止正在进行的功能验收。正式远端发布前仍须核对所选源与实际公开版本。
+P3和现有两步Resume体验在相关独立审查中明确结论；只有确实影响候选功能/安全/数据/安装的问题阻挡发布，不凭未证实假设把性能或未来能力升级为门槛。非法配置在真实校验边界被拒绝是正确结果，不放宽产品权限来满足测试构造。
 
-稳定修改与当前tracked WIP重叠19个路径，包括CI/签名工作流、第三方声明、desktopcontrol/desktophost/runtimecontrol、productruntime builders/options/runtime、macOS发布策略/测试，以及Flutter API/models/copy/account/workbench/preview与Desktop manifest测试。列表是当前时点的只读范围证据，不是冲突已解决或测试已通过。不得直接在dirty生产工作区merge/reset覆盖这些工作；功能单元冻结后先保留精确快照，再制定并执行有意识的合流与相称回归。该工作不需要重发0.1.24/0.1.25，也不重做它们已完成的签名公证。
+### 阶段B退出条件与真实耦合
 
-35185fd冻结时点的工作区快照已保存到`/private/tmp/vibermate-integration-snapshot.lNiS4P`（约1.3MiB、目录私有）：HEAD、NUL状态与未跟踪清单、tracked二进制patch、79个未跟踪文件tar与逐文件SHA、产物SHA。79项源码校验通过，patch/清单在捕获后再次与当前Git输出一致，全部6项产物哈希通过。它保留生成的`tool/vless-kernel/__pycache__/build_kernel.cpython-314.pyc`以防误丢；该缓存不是待发布源码，后续按精确源文件清单提交，不可git add全部。快照不构成数据库备份/迁移或发布验收；后续代码如再变化，合流前必须使用新的冻结输入。当前没有merge、reset、stash或产品提交。
+B1–B4关闭后转B5，不自动增加新产品功能；候选范围冻结后新增需求进入下一版。只有该候选的适用验证、独立审查、实际安装和公开交付都完成，阶段B才算结束。
 
-## 原 Goal 必须保留的完成条件
+已有原生工具可在profile授权后运行，原生Store恢复也在Runtime启动时执行。因此现有工具权限/出口与共享数据迁移属于当前候选验收，不能用“默认关闭”豁免。新的代理主动续流实现和完整46项客户端验收留在阶段C；发布说明不宣称这些已经完整支持。源码审计依据：`.superpowers/sdd/2026-10-11-stable-production-integration/phase-b-separation-audit.md`，它不是独立最终生产认证。
 
-- R1–R7以及用户文字/图片预览、工具参数与返回补查、额度布局、SSE保活/异常断流、记录与资源回收的正确性；不裁剪完整历史、不隐藏数据丢失。
-- MCP按profile单独授权、默认关闭，使用客户端原登录账号，实际审批/发送凭证/幂等与恢复边界生效；不自动重发可能已经执行的工具POST。
-- 出口优先级：账号显式 > 流量策略显式 > 全局默认 > 内置直连。显式直连是覆盖，代理失败不是改走直连的理由；覆盖模型、额度/历史、重置券、OAuth、目录、原始/原生/盲转发、探测与更新查询。
-- Codex0.145.0/0.159.2/0.160.0、Claude2.1.220及原46项矩阵、取消/两profile隔离/异常恢复、Paseo/ACP约定回归；未验证手机实机能力如实标明。
-- 客户端CA下载/平台安装验证与约定devcontainer路径检查；不改用户当前账号、系统信任或正在运行的任务。
-- 安全备份/迁移/恢复故障验证，保留所有数据；至少60分钟真实两profile受控持续运行，另用可控时钟验证10天边界/隐藏窗口续期/唤醒，二者不能互相冒充。
-- 最终适用Go/race/vet/native-secrets/跨平台/依赖/Flutter/Chrome/Paseo/规则/CI、完整分支审查、同源签名公证与安装、GitHub/Homebrew公开交付和独立核验。
+保留未覆盖边界：当前本地旧候选是dirty0.1.23+25/ad-hoc，不是新正式安装包；跨平台编译不等于Windows等平台的原生UDP行为；测试字体截图不等于原生字体安装资格；已有模块测试和本地内核证明不替代最终安装包验收。
 
-## 新增的用户可见闭环（2026-10-11）
+## 阶段C：最终Goal剩余范围，不丢失
 
-以下来自实际使用截图，纳入 Goal 的后续功能正确性范围，不以临时提示或让用户删除数据规避：
+- R1–R7、完整阅读器/用户文字/图片预览、工具参数与结果、SSE/记录/资源回收的所有未闭环项。
+- 原生MCP完整续流/恢复/一次执行，按profile授权、原客户端凭据、真实权限/审批；不重发可能已执行的POST。
+- Codex0.145.0/0.159.2/0.160.0、Claude2.1.220及全部46项客户端矩阵，真实取消、两profile隔离、异常恢复、Paseo/ACP约定回归；手机实机未验部分明确标注。
+- 客户端CA适用平台原生验收，以及`/Users/null/claude/workspace`内约定devcontainer中包装启动与直接Codex的登录/连接/证书对照。
+- 全部数据的备份/升级/恢复故障验证；至少60分钟真实两profile持续运行，另用可控时钟验证10天会话/隐藏窗口/唤醒，不能混称。
+- 最终同一源码上的全量适用Go/race/vet/native-secrets/跨平台/依赖/Flutter/Chrome/Paseo/规则/CI、完整分支独立审查及正式签名/公证/安装/GitHub/Homebrew交付。
 
-- **Runtime 断线恢复**：连接短暂中断时，状态提示必须是可恢复的非阻塞状态；自动重试成功后清除或更新提示，不能在输入栏持续留下误导性错误，也不能吞掉正在输入的内容、重复提交或伪造已完成的请求。首个断线、重连、重连失败和用户可继续输入的行为都要有回归证据。
-- **原账号 OAuth 续授权**：该路径已随 v0.1.25 发布，后续保留并验证其可发现性和完整行为，不重复开发。refresh token 失效、过期或无法刷新时，在原账号卡片提供明确的“重新授权”路径；重新 OAuth 必须保留账号 ID、名称、额度关联、流量策略及历史。禁止要求用户先删除账号再导入，也禁止静默新建替代账号。需覆盖 refresh 失败、重新授权成功、取消及旧凭证失效后的状态。
-- **额度缓存单一来源**：上游账号额度缓存是账号卡片、流量策略和额度展示的统一来源，额度和 credit 余额都应一致展示。账号刷新成功后，所有消费者读取同一份已校验缓存；缓存仍新鲜时不得为同一账号重复请求。用户已确认默认每5分钟后台刷新一次，手动刷新可立即触发，各页面共用结果并合并重复请求；提供过期/刷新中/失败状态。刷新必须遵循账号配置的网络出口和权限，不把缓存缺失伪装成零额度。需要验证跨页面一致性、刷新去重、失败保留上次有效值及账号切换隔离。
+完整定义以Goal十项原文、2026-10-03-production-readiness设计/计划、2026-10-05-global-default-egress设计/计划及各已批准子计划为准。阶段B后持续推进，不要求用户重新同意已有目标；只有全部完成才能将整个Goal标为complete。
 
-只读诊断已确认：CLI心跳协程直接写入与前台Codex共用的stderr，没有终端显示协调；重连成功追加另一行不会消除旧行。额度两处已有相同controller缓存及祖先订阅，不能依据截图声称另有一份缓存或订阅缺陷；真正已定位的是环境小卡片未渲染credit，以及已有分钟计时器仅重绘倒计时、没有定期额度请求。实际上游断线/refresh拒绝原因尚未证明。诊断依据保存在当前合流SDD的quota-oauth-runtime-diagnosis.md；初版误把历史发布文档当现状的报告已明确更正，不作为结论。
+## 恢复与验证纪律
 
-后续设计保留的边界：定期查询额度不等于开启OAuth凭证自动轮换，不能擅自改变账号现有AutomaticRefresh选择。终端修复只调整前台交互时诊断的呈现位置/时机，不放宽租约校验、重试或撤销后的停止规则；重定向日志仍需可诊断，不能靠操纵Codex输入或发送重绘按键掩盖问题。
-
-这三项属于后续功能闭环，不改变当前稳定合流的已冻结源码边界；合流完成后建立对应实施任务，并在最终同源候选上通过用户路径验证。
-
-合流完成后的当前实施入口：`2026-10-11-account-quota-refresh.md`，按已确认的5分钟方案补齐同一controller内的定时/手动合并请求与小卡片credit。该计划不重建后端缓存、不更改OAuth开关或网络权限；终端诊断与全局请求族余项接续，不作为重开已完成合流的理由。
-
-2026-10-12并行只读全局出口核查已完成，报告位于全局计划SDD的`phase-b-remaining-audit.md`。主控完整阅读并独立核对了已知源码契约缺口：owned/captured账号读取和重置操作仍生成带语义/运行时plan、账号targetRef的Auxiliary探测目标，而实际Runtime选择的严格原始TLS prober要求origin-only/plan0，Hold恢复因此存在不匹配；本轮尚未执行新的实际网络RED，不能声称已复现或修复。后续在当前额度与终端任务检查点后，用既有真实Store/Manager/Reader及受限TLS/SOCKS fixture处理这一个明确单元。既有托管六层/token、公共目录/价格、更新与UI历史通过证据不重做；其它矩阵缺证据的格子和最终同源检查按报告逐项收敛，不把“缺证据”写成已确认产品失败。
-
-## 防止中断后绕回起点
-
-- 当前稳定工作区：`/Users/null/Code/github/vibe-agi/vibermate/.worktrees/long-session-hotfix`，本地HEAD999d7b0，远端已合并候选4e89f628，二者产品树相同。当前开发工作区：`/Users/null/Code/github/vibe-agi/vibermate/.worktrees/production-readiness`，本次核对HEAD为d9c0941，已包含合流b5d5dbe；七文件额度任务尚未提交，主控文档修改和生成缓存分别保留。后续HEAD以实际Git为准。e9099de/20d483c/1cbb36d只是更早任务的历史定位，不是当前待恢复任务。两条工作线不可混作同一最终候选，不因仅文档提交而重新执行已完成实现。
-- 从最新任务报告/源码哈希/真实agent状态恢复；完成任务不得因旧账本仍写“running”而重新派发。活跃句柄归原所有者，观察等待超时不构成重启理由。
-- 同时只有一个源码实现者；独立只读审查/方案核查可以并行。本机重量级构建/全套测试串行排队，避免同时跑Go全量与Flutter全量造成资源竞争。
-- 测试和审查只覆盖实际变更与风险；已通过且源码未变的单元不因恢复会话而重做。性能目标与功能正确性分开；实际安全/数据丢失/协议错误仍需解决，不用任意快速完成阈值冒充业务成功标准。
-- 每次任务冻结，更新“已实现/已验证/已审查/已发布”四种状态、下一任务和剩余边界。旧段落留作历史，不继续把过去的待办当最新事实。
-- Goal状态必须实时读取，不能照抄本文件。2026-10-11用户已将此前blocked的卡片恢复active，最新get_goal确认active，目标仍未完成；此前blocked/paused记录属于历史。现有update_goal接口不能把卡片恢复active，此次是用户操作，不能冒称由代理恢复。不能因为模型临时容量或等待超时重复启动仍存活任务。
+1. 实时核对get_goal、Git和现有agent/测试句柄，再读当前任务账本；不因中断、观察超时或旧“running”文字重开工作。
+2. 共享目录保持一名源码实现者，独立只读审查/准备可并行，重型测试避免资源争用；root管理Git，精确暂存，保留无关修改与生成缓存。
+3. 分开记录已复现缺陷、缺证据、性能改善与未来功能。已有行为只缺证据就补验收；不制造产品缺陷来凑RED，不用任意3秒阈值判断业务失败。
+4. 正确性/安全/数据/安装的实际缺陷必须解决；已通过且源码/覆盖未变的证据复用。冻结时验证真实候选，不把局部、跳过或仅编译说成全部通过。
+5. 每项只维护一份当前状态及下一动作；阶段报告区分已实现/已验证/已审查/已发布，详细历史保留在SDD，不再把旧下一步追加到本入口。

@@ -509,6 +509,9 @@ func (client *Client) runtimeProbeTarget(
 	if spec.purpose == egressaudit.PurposeUpstreamAccountRead || spec.purpose == egressaudit.PurposeUpstreamAccountAction {
 		return ownedAccountProbeTarget(spec)
 	}
+	if spec.purpose == egressaudit.PurposeRouteOperation && spec.captured != nil {
+		return capturedAccountProbeTarget(spec)
+	}
 	requested := client.runtimePlan.Requested()
 	digest := sha256.Sum256([]byte(strings.Join([]string{
 		string(spec.purpose),
