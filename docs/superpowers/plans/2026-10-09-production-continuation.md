@@ -17,11 +17,11 @@
 ## 当前检查点
 
 - 开发目录：`/Users/null/Code/github/vibe-agi/vibermate/.worktrees/production-readiness`。
-- 分支：`fix/production-readiness-20261003`；最近单元提交为`055990b57b9d4f46e4d606a69591a5837c96be10`（Task2验收，生产逻辑未改），实际HEAD以新任务启动时Git读取为准。
-- Task1已完成独立首审、I1修正复审和上述提交，无未解决的Critical/Important；M1父级ID关联断言、M2预期TLS日志噪声作为非阻断项保留给最终审查。当前源码所有者与执行BASE以任务SDD首部为准。
-- 当前计划：`docs/superpowers/plans/2026-10-12-captured-original-egress.md` Task3原始/原目标转换转发与流式验收；账本：`.superpowers/sdd/2026-10-12-captured-original-egress/progress.md`。Task1/2不重开；实际所有者与启动BASE见SDD。
-- Task1/2均已提交并关闭，不重跑。Task2的11项normal、55次race及18项受影响旧读取回归、独立spec/security/quality审查均完成；597个内部生产Go文件哈希未变，真实请求与持久Exchange身份边界已核对。Task2两个非阻断测试建议保留给最终审查。Task3交接已准备。
-- 本次保留全部源码、测试、首失败与工作区；Task1的8文件已精确提交，未带入无关缓存或修改用户运行状态。后续恢复先重新核对Git/任务状态，不把本次快照永远当作实时事实。
+- 分支：`fix/production-readiness-20261003`；最近源码单元提交`6ed836be2d1e373d286676f7f6429912548bc009`完成B1 Task3；三个测试文件及任务计划已精确提交，生产逻辑未改。实际HEAD和新任务BASE在启动时读取，未发布。
+- B1 Task1/2均已审查、提交并关闭，不重开。已记录的非阻断建议和证据边界继续保留，不把它们自动变成发布门槛。
+- B1 Task3的44项normal、220次race、128项合并回归及补充父级关联normal/race已有保留证据。独立补充复审`task-3-fix1-review.md`已完成，原“Cannot verify”判定为ADDRESSED，无新增Critical/Important；本次重新核对三个源码文件及补充日志SHA256与manifest相符，没有重跑未变套件。
+- 唯一下一动作：执行B2托管模型出口尾项；计划：`docs/superpowers/plans/2026-10-12-managed-egress-tail.md`，当前执行账本：`.superpowers/sdd/2026-10-12-managed-egress-tail/progress.md`，真实启动BASE/所有者/进度只读该账本。B1三项已关闭，不再派发；B3/B4已准备但未执行，不能冒称已验收。
+- Task3源码所有者已交回root，补充复审代理已完成，没有需重启的Task3测试。用户运行中的App、账号、信任、数据、原工作区及无关生成缓存均未修改。后续恢复核对变化，不把本次快照永久当作实时事实。
 
 ## 已完成基线：不得重开
 
@@ -39,6 +39,7 @@
 | 首次OAuth及Runtime关闭回收 | 真实RED确认遗漏清理注册，修复/验证/独立审查/提交完成，未发布 | 714b8f9；account-aux Task3；账号状态与真实自有回调监听关闭，无skip |
 | 会话内账号额度/历史读取及暂停恢复 | 已实现、真实权限/选路/故障及race验证、独立审查和修正复审关闭、提交，未发布 | 87c4fd3；captured-original Task1；两个非阻断测试建议留给最终审查 |
 | 原账号模型请求暂停/故障出口 | 已补齐实际Runtime与物理网络验收，normal/race/受影响回归及独立审查通过、提交；生产逻辑未改，未发布 | 055990b；captured-original Task2；实际原请求ID与持久Exchange关联，证据边界明确 |
+| 原始/原目标转换转发与流式出口 | 测试实现、保留验证、独立补充复审及提交已完成，未发布 | 6ed836b；captured-original Task3与task-3-fix1-review；真实父级/请求/审计关联缺口已关闭，T3-M1/M2非阻断建议保留 |
 
 v0.1.25的已核验发布记录：2026-10-10T10:48:48Z，GitHub release408868448，源码4e89f628ba8eff3284e731b48475996908fa1c90，macOS/Linux六项资产；Homebrew PR20合并30a170d7。DMG SHA256为`0836cfd85c0f875dc6f698cc8d3c8edd9b8a114b2adff34fe65131e23f9409be`。这些是已保存的发布证据，不冒称本轮查询了远端；冻结新版本前再次核对。
 
@@ -50,10 +51,10 @@ v0.1.25的已核验发布记录：2026-10-10T10:48:48Z，GitHub release408868448
 
 | 顺序 | 剩余单元与完成条件 | 执行依据 |
 | --- | --- | --- |
-| B1 当前 | 会话内托管/原账号读取Task1及原凭据模型Task2已关闭；完成Task3原始/转换转发的真实出口、在途固定选择、取消/失败及内容和流式保真 | 2026-10-12-captured-original-egress计划及当前SDD |
-| B2 | 已有托管模型单元的具体未覆盖故障：令牌轮换成功后、首个模型发送前所选代理失效；修正现存P3预期值自取的测试断言。沿用已通过六层/token证据，不重开发；单任务实施稿已准备并完成主控预检，执行前核对B1新增共享fixture消费者 | 2026-10-12-managed-egress-tail计划；全局差距报告managed行及既有review |
+| B1 已关闭 | Task1/2/3均已验证、独立审查并提交；保留证据与非阻断建议，不重做实现或整套验证 | 2026-10-12-captured-original-egress计划及当前SDD |
+| B2 下一实施单元 | 已有托管模型单元的具体未覆盖故障：令牌轮换成功后、首个模型发送前所选代理失效；修正现存P3预期值自取的测试断言。沿用已通过六层/token证据，不重开发；单任务实施稿已准备并完成主控预检，执行前核对B1新增共享fixture消费者 | 2026-10-12-managed-egress-tail计划；全局差距报告managed行及既有review |
 | B3 | 已有、可达原生工具族的出口/暂停恢复、实际审批一次消费与关联回复路径；复现已定位探测身份契约缺口，只作经证据支持的修复，不实现阶段C新续流机制；两单元计划已准备并经主控全文预检，尚未执行 | 2026-10-12-native-egress-closure计划；全局差距报告native行及phase-b-separation-audit |
-| B4 | 盲转发/普通HTTP的已列明缺口：真实默认直连、默认读取失败不外发、代理失效不回退，以及实际暂停/编辑/取消恢复 | 全局差距报告blind/cleartext行 |
+| B4 | 盲转发/普通HTTP的已列明缺口：真实默认直连、默认读取失败不外发、代理失效不回退，以及实际暂停/编辑/取消恢复；单元计划已准备并完成主控预检，尚未执行 | 2026-10-12-blind-cleartext-egress-closure计划；全局差距报告blind/cleartext行 |
 | B5 发布收尾 | 冻结候选；执行实际变更相关的Go/Flutter/Chrome、race、安全、规则和CI等适用验证及全局单元/完整候选独立审查；核验实际共享数据库升级/恢复与安装；完成同源构建、签名公证、GitHub/Homebrew和公开下载验证 | 2026-10-05-global-default-egress Task6与生产/发布计划；冻结时填写真实版本/源码/产物 |
 
 全局细项证据：`.superpowers/sdd/2026-10-05-global-default-egress/phase-b-remaining-audit.md`。该报告原表为历史pin；本快照及其顶部已关闭记录优先于旧表的E/I，不能重新派发owned/manual/models/first-login。metadata/prices、固定更新请求及既有UI覆盖继续复用；冻结时核验实际变化的消费者，不重建已完成界面。
@@ -62,7 +63,7 @@ P3和现有两步Resume体验在相关独立审查中明确结论；只有确实
 
 ### 阶段B退出条件与真实耦合
 
-B1–B4关闭后转B5，不自动增加新产品功能；候选范围冻结后新增需求进入下一版。只有该候选的适用验证、独立审查、实际安装和公开交付都完成，阶段B才算结束。
+B1–B4关闭后转B5，不自动增加新产品功能；候选范围冻结后新增需求进入下一版。新增阻断项须明确实际证据、用户影响与最小关闭条件；性能改善和非阻断测试建议单列，不混入本轮发布门槛。只有该候选的适用验证、独立审查、实际安装和公开交付都完成，阶段B才算结束。
 
 已有原生工具可在profile授权后运行，原生Store恢复也在Runtime启动时执行。因此现有工具权限/出口与共享数据迁移属于当前候选验收，不能用“默认关闭”豁免。新的代理主动续流实现和完整46项客户端验收留在阶段C；发布说明不宣称这些已经完整支持。源码审计依据：`.superpowers/sdd/2026-10-11-stable-production-integration/phase-b-separation-audit.md`，它不是独立最终生产认证。
 
