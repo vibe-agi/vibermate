@@ -333,11 +333,13 @@ Hold observes actual target before edit; preserve each family's target shape/kin
 
 ```sh
 GOTOOLCHAIN=local GOFLAGS=-mod=readonly /tmp/vibermate-go-security.JcRyfL/go/bin/go test ./internal/productruntime -run '^TestActualRuntimeOriginal(RawEgressMatrix|TransformedEgressMatrix|ForwardHoldAndFailure)$' -count=1 -timeout=150s -v
-GOTOOLCHAIN=local GOFLAGS=-mod=readonly /tmp/vibermate-go-security.JcRyfL/go/bin/go test -race ./internal/productruntime -run '^TestActualRuntimeOriginal(RawEgressMatrix|TransformedEgressMatrix|ForwardHoldAndFailure)$' -count=5 -timeout=240s -v
+GOTOOLCHAIN=local GOFLAGS=-mod=readonly /tmp/vibermate-go-security.JcRyfL/go/bin/go test -race ./internal/productruntime -run '^TestActualRuntimeOriginal(RawEgressMatrix|TransformedEgressMatrix|ForwardHoldAndFailure)$' -count=5 -timeout=360s -v
 GOTOOLCHAIN=local GOFLAGS=-mod=readonly /tmp/vibermate-go-security.JcRyfL/go/bin/go test ./internal/productruntime -run '^Test(ActualRuntime(Captured(ManagedReadConcreteRecovery|AccountRead(EgressMatrix|HoldAndFailure|Authority))|SemanticOriginalHoldAndFailure|Original(RawEgressMatrix|TransformedEgressMatrix|ForwardHoldAndFailure|AccountReadUsesFrozenGlobalExitThroughSOCKSTLS|CredentialModelUsesFrozenGlobalExitThroughSOCKSTLS)|SemanticClientCredentials(UseGlobalExitWithoutAccount|RespectFlowAndBuiltin))|ManagedAccountQueriesThroughCONNECT|OriginalAccountQueriesThroughCONNECT|CapturedAccountReadUsesFixedAccountBeforeAnyGeneration|CapturedAccountReadDoesNotRunAnUnboundTurnSelector|CapturedAccountReadRechecksRevokedAssociation)$' -count=1 -timeout=240s -v
 ```
 
 ## Planning self-review and handoff
+
+Root Task3 harness preflight: the new table has44 cases/count5=220 executions with stream work. Task1's fresh-Store race275 executions took268.460s; Task2's55 took54.049s. Set only the Task3 aggregate race watchdog to360s to allow measured setup plus stream/transform work. Keep the exact union/count5 and all individual request/observation/join safeguards unchanged. This is a test-execution budget, not a user latency criterion or a product-timeout change; incomplete/failed runs remain failures to diagnose, never inferred passes.
 
 Three independent reviewer gates: captured actual Manager/Reader authority plus recovery producer; semantic client-credential evidence; original raw/transformed physical stream behavior. There is no task per matrix cell. Shared setup belongs to Task1 and travels as an explicit dispatch sidecar. All expected routes are input facts; real sockets/probes, HTTP sends, account effects, SQL IDs and lifecycle drain are independently observed. Prior semantic four-layer/frozen/down and original G evidence is carried without reimplementation.
 
