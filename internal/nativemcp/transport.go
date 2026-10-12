@@ -94,7 +94,9 @@ func nativeProbe(plan environment.ClientToolPlan) offlinehold.ProbeTarget {
 		return offlinehold.ProbeTarget{}
 	}
 	route := plan.Route()
-	return offlinehold.ProbeTarget{Kind: offlinehold.EgressAuxiliary, Transport: offlinehold.ProbeTransportStrictTLS, TargetRef: route.ID.String(), NetworkOrigin: route.TargetOrigin.String(), HTTPAuthority: route.TargetOrigin.HTTPAuthority(), TLSServerName: route.TargetOrigin.Host(), PlanRevision: uint64(plan.EnvironmentRevision()), PlanDigest: plan.EnvironmentDigest().String(), EgressPolicy: resolved.Profile().Policy}
+	// The caller supplies binding.Plan(), already frozen for this exact operation.
+	// Probe identity describes reachability; native authority stays on the binding.
+	return offlinehold.ProbeTarget{Kind: offlinehold.EgressAuxiliary, Transport: offlinehold.ProbeTransportStrictTLS, TargetRef: route.TargetOrigin.String(), NetworkOrigin: route.TargetOrigin.String(), HTTPAuthority: route.TargetOrigin.HTTPAuthority(), TLSServerName: route.TargetOrigin.Host(), EgressPolicy: resolved.Profile().Policy}
 }
 
 // A receipt is consumed once in this executor even when verification fails.

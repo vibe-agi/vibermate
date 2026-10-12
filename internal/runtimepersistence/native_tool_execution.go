@@ -434,6 +434,35 @@ func (r *nativeToolRepository) Finish(ctx context.Context, id nativetool.ID, in 
 			if once != 0 || audits != 0 {
 				return nativetool.ErrInvalid
 			}
+			if op.ApprovalID != nil {
+				// Finish owns this unsent terminal and its exact unconsumed Allow.
+				// Close both in this transaction without granting execution authority.
+				approval, err := loadNativeApproval(ctx, tx, *op.ApprovalID)
+				if err != nil {
+					return err
+				}
+				if op.State != "validated" || op.DecisionSource != "user" || op.BindingDigest == nil || approval.OperationID != op.ID || approval.BindingDigest != *op.BindingDigest || approval.State != "allowed" || approval.ConsumedAt != nil || approval.Revision == math.MaxInt64 || in.ObservedAt.Before(approval.CreatedAt) {
+					return nativetool.ErrInvalid
+				}
+				binding, err := loadNativeBinding(ctx, tx, op.ID)
+				if err != nil {
+					return err
+				}
+				if binding.digest != approval.BindingDigest {
+					return nativetool.ErrInvalid
+				}
+				result, err := tx.ExecContext(ctx, `UPDATE native_tool_approvals SET state='canceled',revision=revision+1,idempotency_key='' WHERE approval_id=? AND operation_id=? AND binding_digest=? AND revision=? AND state='allowed' AND consumed_at_unix_ms IS NULL`, approval.ID, op.ID, approval.BindingDigest[:], approval.Revision)
+				if err != nil {
+					return err
+				}
+				count, err := result.RowsAffected()
+				if err != nil {
+					return err
+				}
+				if count != 1 {
+					return nativetool.ErrConflict
+				}
+			}
 			state := in.Outcome
 			if state == "failed" && op.State == "received" {
 				state = "denied"
