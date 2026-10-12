@@ -40,6 +40,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/hostcontract"
 	"github.com/vibe-agi/vibermate/internal/manualcapture"
+	"github.com/vibe-agi/vibermate/internal/messagetransform"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
 	"github.com/vibe-agi/vibermate/internal/originaltransport"
 	"github.com/vibe-agi/vibermate/internal/originidentity"
@@ -68,19 +69,23 @@ type capturedOriginalExpected struct {
 	DefaultRevision, SettingsRevision uint64
 }
 
-// This wrapper owns only the fixed captured read and semantic socket seam. It does not
+// This wrapper owns the fixed captured read, semantic, and opaque socket seams. It does not
 // broaden runtimeOriginalWire's shared whitelist or replace the proxy/Reader.
 type capturedOriginalWire struct {
 	builder  *egressnetwork.Builder
 	roots    *x509.CertPool
 	before   func(context.Context) error
 	semantic bool
+	raw      bool
 }
 
 func (w *capturedOriginalWire) RoundTrip(r *http.Request, policy egressnetwork.Policy) (*http.Response, error) {
 	allowed := r.Method == http.MethodGet && (r.URL.Path == "/backend-api/wham/usage" || r.URL.Path == "/backend-api/wham/profiles/me") && r.URL.RawQuery == ""
 	if w.semantic {
 		allowed = r.Method == http.MethodPost && r.URL.Path == "/backend-api/codex/responses" && r.URL.RawQuery == ""
+	}
+	if w.raw {
+		allowed = r.Method == http.MethodGet && r.URL.Path == "/backend-api/plugins/featured" && r.URL.RawQuery == "platform=synthetic%2Bfixture"
 	}
 	if r.URL.Scheme != "https" || r.URL.Host != "chatgpt.com" || !allowed {
 		return nil, errors.New("closed captured fixture rejected request")
@@ -185,16 +190,25 @@ type capturedOriginalFixture struct {
 	first, releaseOnce sync.Once
 	token              string
 	semanticRequests   []providertransport.Request
+	streamEntered      chan struct{}
+	producerDone       chan struct{}
+	streamFirst        sync.Once
 }
 
 func newCapturedOriginalFixture(t *testing.T, cfg capturedOriginalConfig) *capturedOriginalFixture {
 	t.Helper()
-	if cfg.family != "managed_read" && cfg.family != "original_read" && cfg.family != "semantic" {
+	if cfg.family != "managed_read" && cfg.family != "original_read" && cfg.family != "semantic" && cfg.family != "raw" && cfg.family != "original_model" && cfg.family != "transformed" {
 		t.Fatal("captured fixture family has no approved consumer", cfg.family)
 	}
 	f := &capturedOriginalFixture{cfg: cfg, starts: map[string]egressaudit.DecisionRef{}, wants: map[string]capturedOriginalExpected{}, asserted: map[string]bool{}}
 	if cfg.edge == "send_edit" || cfg.edge == "proxy_loss" || cfg.edge == "dial_failure" || cfg.edge == "tls_failure" {
 		f.entered, f.release = make(chan struct{}), make(chan struct{})
+	}
+	if cfg.family == "original_model" || cfg.family == "transformed" {
+		f.producerDone = make(chan struct{}, 4)
+		if cfg.edge == "stream_edit" || cfg.edge == "stream_disconnect" {
+			f.streamEntered, f.release = make(chan struct{}), make(chan struct{})
+		}
 	}
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
@@ -222,6 +236,17 @@ func newCapturedOriginalFixture(t *testing.T, cfg capturedOriginalConfig) *captu
 			var fields map[string]json.RawMessage
 			valid = r.Method == http.MethodPost && r.Host == "chatgpt.com" && r.URL.RequestURI() == "/backend-api/codex/responses" && r.Header.Get("Proxy-Authorization") == "" && json.Unmarshal(body, &fields) == nil && len(fields) == 3 && string(fields["model"]) == `"synthetic"` && string(fields["input"]) == `"hello"` && string(fields["stream"]) == "false"
 		}
+		if cfg.family == "raw" {
+			valid = valid && r.URL.RequestURI() == "/backend-api/plugins/featured?platform=synthetic%2Bfixture"
+		}
+		if cfg.family == "original_model" || cfg.family == "transformed" {
+			var fields map[string]json.RawMessage
+			input, marker := `"hello"`, ""
+			if cfg.family == "transformed" {
+				input, marker = `"transformed-input"`, "request"
+			}
+			valid = r.Method == http.MethodPost && r.Host == "chatgpt.com" && r.URL.RequestURI() == "/backend-api/codex/responses" && r.Header.Get("Proxy-Authorization") == "" && r.Header.Get("Content-Type") == "application/json" && r.Header.Get("X-Original-Transform") == marker && json.Unmarshal(body, &fields) == nil && len(fields) == 3 && string(fields["model"]) == `"synthetic"` && string(fields["input"]) == input && string(fields["stream"]) == "true"
+		}
 		if managed {
 			valid = valid && r.Header.Get("Authorization") == "Bearer "+f.token && r.Header.Get("ChatGPT-Account-Id") == "workspace-B" && r.Header.Get("Cookie") == ""
 		} else {
@@ -230,6 +255,32 @@ func newCapturedOriginalFixture(t *testing.T, cfg capturedOriginalConfig) *captu
 		if !valid {
 			f.bad.Add(1)
 			w.WriteHeader(400)
+			return
+		}
+		if cfg.family == "raw" {
+			w.Header().Set("Content-Type", "application/octet-stream")
+			w.Header().Set("X-Original-Fixture", "raw")
+			_, _ = w.Write([]byte{0, 1, 2, 'r', 'a', 'w', 255})
+			return
+		}
+		if cfg.family == "original_model" || cfg.family == "transformed" {
+			defer func() { f.producerDone <- struct{}{} }()
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = io.WriteString(w, originalForwardPrefix)
+			w.(http.Flusher).Flush()
+			if f.streamEntered != nil {
+				f.streamFirst.Do(func() {
+					close(f.streamEntered)
+					select {
+					case <-f.release:
+					case <-r.Context().Done():
+					}
+				})
+			}
+			if r.Context().Err() == nil {
+				_, _ = io.WriteString(w, originalForwardTerminal)
+				w.(http.Flusher).Flush()
+			}
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -257,7 +308,7 @@ func newCapturedOriginalFixture(t *testing.T, cfg capturedOriginalConfig) *captu
 	if cfg.edge != "untrusted" {
 		roots.AddCert(f.upstream.Certificate())
 	}
-	wire := &capturedOriginalWire{builder: builder, roots: roots, semantic: cfg.family == "semantic", before: func(ctx context.Context) error {
+	wire := &capturedOriginalWire{builder: builder, roots: roots, semantic: cfg.family == "semantic" || cfg.family == "original_model" || cfg.family == "transformed", raw: cfg.family == "raw", before: func(ctx context.Context) error {
 		page, err := f.r.EgressAttempts().List(ctx, egressaudit.PageRequest{Limit: 100})
 		if err != nil {
 			return err
@@ -310,7 +361,7 @@ func newCapturedOriginalFixture(t *testing.T, cfg capturedOriginalConfig) *captu
 				return nil, err
 			}
 			client, err := providertransport.NewClient(providertransport.ClientOptions{EgressDefaults: request.egressDefaults, Coordinator: request.coordinator, Authenticators: []providertransport.Authenticator{bearer, oauth, anthropic}, Transport: capturedProviderWire{wire}, InstanceIDs: request.instanceIDs, Audit: request.audit, RawEvidence: request.rawEvidence})
-			if err != nil || cfg.family != "semantic" {
+			if err != nil || (cfg.family != "semantic" && cfg.family != "original_model" && cfg.family != "transformed") {
 				return client, err
 			}
 			return capturedSemanticProvider{providerRuntime: client, fixture: f}, nil
@@ -427,6 +478,15 @@ func newCapturedOriginalFixture(t *testing.T, cfg capturedOriginalConfig) *captu
 		// Original caller history uses original authority. The compiler rejects
 		// attaching the managed-history grant to an original-account route.
 		route.AllowAccountHistory = false
+	}
+	if cfg.family == "raw" || cfg.family == "original_model" || cfg.family == "transformed" {
+		plan.Destination = environment.DestinationPlan{Kind: environment.DestinationKindOriginal}
+	}
+	if cfg.family == "transformed" {
+		plan.Transforms = []codelibrary.TransformRevision{{ID: "captured-original.transform", Revision: 1, CollectionID: "synthetic", DisplayName: "Synthetic original transform", PublishedAt: time.Now().UTC(), Policy: messagetransform.Policy{
+			RequestJavaScript:  `const p=JSON.parse(request.body); p.input="transformed-input"; request.body=JSON.stringify(p); request.headers["x-original-transform"]="request";`,
+			ResponseJavaScript: `response.headers["x-original-transform"]="response"; const p=JSON.parse(response.body); if(p.type==="response.output_text.delta") p.delta="transformed-delta"; response.body=JSON.stringify(p);`,
+		}}}
 	}
 	f.publish(t)
 	var capability string
@@ -549,7 +609,7 @@ func (f *capturedOriginalFixture) open(ctx context.Context, method, path, body s
 	r.Header.Set("ChatGPT-Account-Id", "workspace-A")
 	r.Header.Set("Cookie", "original-A-cookie")
 	r.Header.Set("User-Agent", "captured-original-fixture/1")
-	if f.cfg.family == "semantic" {
+	if f.cfg.family == "semantic" || f.cfg.family == "original_model" || f.cfg.family == "transformed" {
 		r.Header.Set("Content-Type", "application/json")
 	}
 	return f.client.Do(r)
@@ -595,6 +655,10 @@ func (f *capturedOriginalFixture) editDefault(t *testing.T) {
 }
 func (f *capturedOriginalFixture) assertAudits(t *testing.T, want int) {
 	t.Helper()
+	if f.cfg.family == "raw" || f.cfg.family == "original_model" || f.cfg.family == "transformed" {
+		f.assertForwardAudits(t, want)
+		return
+	}
 	if f.cfg.family == "semantic" {
 		f.assertSemanticAudits(t, want)
 		return
@@ -698,7 +762,7 @@ func (f *capturedOriginalFixture) drain(t *testing.T) {
 	if f.secrets.writes.Load() != 0 {
 		t.Fatal("captured read saved secret material")
 	}
-	if f.cfg.family == "semantic" {
+	if f.cfg.family == "semantic" || f.cfg.family == "raw" || f.cfg.family == "original_model" || f.cfg.family == "transformed" {
 		f.drainSemantic(t, ctx)
 	}
 	if f.bad.Load() != 0 || f.network.denied.Load() != 0 {
