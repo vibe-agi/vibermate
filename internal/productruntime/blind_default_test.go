@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -27,6 +28,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/hostcontract"
 	"github.com/vibe-agi/vibermate/internal/manualcapture"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
+	"github.com/vibe-agi/vibermate/internal/toolapproval"
 )
 
 type runtimeBlindNetwork struct {
@@ -101,7 +103,20 @@ func TestActualRuntimeBlindHoldProbesAndSendsFrozenDefault(t *testing.T) {
 func TestActualRuntimeBlindPublicOnlyResumeRejectsPrivateTarget(t *testing.T) {
 	runActualRuntimeBlindDefault(t, true, true)
 }
-func runActualRuntimeBlindDefault(t *testing.T, hold, publicDenied bool) {
+func TestActualRuntimeSOCKSHoldOutlivesResponseDeadline(t *testing.T) {
+	runActualRuntimeBlindDefault(t, true, false, "resume")
+}
+func TestActualRuntimeSOCKSPendingCancellation(t *testing.T) {
+	for _, action := range []string{"client_close", "revoke", "shutdown", "overflow"} {
+		t.Run(action, func(t *testing.T) { runActualRuntimeBlindDefault(t, true, false, action) })
+	}
+}
+func TestActualRuntimeSOCKSApprovalWaiting(t *testing.T) {
+	for _, action := range []string{"approval_resume", "approval_cancel"} {
+		t.Run(action, func(t *testing.T) { runActualRuntimeBlindDefault(t, true, false, action) })
+	}
+}
+func runActualRuntimeBlindDefault(t *testing.T, hold, publicDenied bool, socksMode ...string) {
 	upstream, err := net.Listen("tcp4", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -157,7 +172,11 @@ func runActualRuntimeBlindDefault(t *testing.T, hold, publicDenied bool) {
 	}
 	defer shutdownRuntime(t, r)
 	if hold && !publicDenied {
-		_, err := r.ConnectionRules().Replace(t.Context(), r.ConnectionRules().Current().Revision, []connectionpolicy.Rule{{ID: "allow.blind-private", Priority: 1, Decision: connectionpolicy.DecisionAllow, Match: connectionpolicy.MatchExactHostPort("blind.fixture", 443)}}, connectionpolicy.ModeDenyUnknown)
+		decision := connectionpolicy.DecisionAllow
+		if len(socksMode) > 0 && strings.HasPrefix(socksMode[0], "approval_") {
+			decision = connectionpolicy.DecisionAsk
+		}
+		_, err := r.ConnectionRules().Replace(t.Context(), r.ConnectionRules().Current().Revision, []connectionpolicy.Rule{{ID: "allow.blind-private", Priority: 1, Decision: decision, Match: connectionpolicy.MatchExactHostPort("blind.fixture", 443)}}, connectionpolicy.ModeDenyUnknown)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -197,7 +216,43 @@ func runActualRuntimeBlindDefault(t *testing.T, hold, publicDenied bool) {
 	}
 	server.Start()
 	defer server.Close()
+	var socks net.Listener
+	opened := make(chan net.Conn, 2)
+	if len(socksMode) != 0 {
+		socks, err = net.Listen("tcp4", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		served := make(chan error, 1)
+		go func() { served <- r.SOCKSProxy().Serve(socks) }()
+		defer func() { socks.Close(); <-served }()
+	}
 	connect := func() (net.Conn, error) {
+		if socks != nil {
+			c := runtimeSOCKSAuthenticate(t, socks.Addr().String(), grant.Credential.Value())
+			c.SetDeadline(time.Now().Add(20 * time.Second))
+			opened <- c
+			packet := runtimeUDPDomain("blind.fixture", 443, nil)
+			if _, e := c.Write(append(append([]byte{5, 1, 0}, packet[3:]...), []byte("early-one/early-two")...)); e != nil {
+				c.Close()
+				return nil, e
+			}
+			var reply [10]byte
+			if _, e := io.ReadFull(c, reply[:]); e != nil {
+				c.Close()
+				return nil, e
+			}
+			if reply[1] != 0 {
+				c.Close()
+				return nil, fmt.Errorf("SOCKS CONNECT status %d", reply[1])
+			}
+			early := make([]byte, len("early-one/early-two"))
+			if _, e := io.ReadFull(c, early); e != nil || string(early) != "early-one/early-two" {
+				c.Close()
+				return nil, fmt.Errorf("early payload %q %v", early, e)
+			}
+			return c, nil
+		}
 		c, err := net.DialTimeout("tcp4", server.Listener.Addr().String(), time.Second)
 		if err != nil {
 			return nil, err
@@ -251,7 +306,116 @@ func runActualRuntimeBlindDefault(t *testing.T, hold, publicDenied bool) {
 				}
 			}
 		}()
+		if len(socksMode) > 0 && strings.HasPrefix(socksMode[0], "approval_") {
+			var pending toolapproval.View
+			runtimeUDPWait(t, func() bool {
+				page, e := r.ToolApprovals().ListApprovals(t.Context(), toolapproval.PageRequest{State: toolapproval.StatePending, Limit: 10})
+				if e != nil {
+					t.Fatal(e)
+				}
+				if len(page.Items) == 1 {
+					pending = page.Items[0]
+					return true
+				}
+				return false
+			})
+			if pending.Kind != string(toolapproval.KindNetworkAsk) || firstCount.Load() != 0 || secondCount.Load() != 0 || gate.Snapshot().QueuedRequests != 0 {
+				t.Fatal("approval did not precede Hold/target send")
+			}
+			if socksMode[0] == "approval_cancel" {
+				(<-opened).Close()
+				result := <-done
+				joined = true
+				if result.connection != nil {
+					result.connection.Close()
+				}
+				if result.err == nil {
+					t.Fatal("canceled approval connected")
+				}
+				runtimeUDPWait(t, func() bool {
+					p, e := r.ToolApprovals().GetApproval(t.Context(), pending.ID)
+					return e == nil && p.State != toolapproval.StatePending
+				})
+				if _, e := r.ResumeOfflineHold(t.Context(), gate.Snapshot().Revision); e != nil {
+					t.Fatal(e)
+				}
+				ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+				defer cancel()
+				if e := r.SOCKSProxy().Shutdown(ctx); e != nil {
+					t.Fatal(e)
+				}
+				if s := gate.Snapshot(); s.ActiveActions != 0 || s.ActiveEgress != 0 || s.QueuedRequests != 0 || firstCount.Load() != 0 || secondCount.Load() != 0 {
+					t.Fatal("late send or retained approval work")
+				}
+				return
+			}
+			if _, e := r.ToolApprovals().DecideApproval(t.Context(), toolapproval.DecisionCommand{ApprovalID: pending.ID, ExpectedRevision: pending.Revision, IdempotencyKey: "socks-pending-allow-once", Decision: toolapproval.DecisionAllowOnce, Scope: toolapproval.ScopeRequest}); e != nil {
+				t.Fatal(e)
+			}
+			if _, e := r.ConnectionRules().Replace(t.Context(), r.ConnectionRules().Current().Revision, []connectionpolicy.Rule{{ID: "allow.blind-private", Priority: 1, Decision: connectionpolicy.DecisionAllow, Match: connectionpolicy.MatchExactHostPort("blind.fixture", 443)}}, connectionpolicy.ModeDenyUnknown); e != nil {
+				t.Fatal(e)
+			}
+		}
 		waitForQueuedTargets(t, gate, 1)
+		if socks != nil {
+			control := <-opened
+			if socksMode[0] == "resume" {
+				select {
+				case result := <-done:
+					joined = true
+					if result.connection != nil {
+						result.connection.Close()
+					}
+					t.Fatalf("authorized Hold ended before 10.5s: %v", result.err)
+				case <-time.After(10500 * time.Millisecond):
+				}
+			} else if socksMode[0] != "approval_resume" {
+				switch socksMode[0] {
+				case "client_close":
+					control.Close()
+				case "overflow":
+					control.Write(make([]byte, (64<<10)+1))
+				case "revoke":
+					ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+					defer cancel()
+					if e := r.SOCKSProxy().Revoke(ctx, capture, "capture_stopped"); e != nil {
+						t.Fatal(e)
+					}
+				case "shutdown":
+					shutdownRuntime(t, r)
+				}
+				select {
+				case result := <-done:
+					joined = true
+					if result.connection != nil {
+						result.connection.Close()
+					}
+					if result.err == nil {
+						t.Fatal("canceled pending SOCKS succeeded")
+					}
+				case <-time.After(2 * time.Second):
+					t.Fatal("pending SOCKS/Handler did not cancel")
+				}
+				runtimeUDPWait(t, func() bool {
+					s := gate.Snapshot()
+					return s.QueuedRequests == 0 && s.ActiveActions == 0 && s.ActiveEgress == 0
+				})
+				if socksMode[0] != "shutdown" {
+					if _, e := r.ResumeOfflineHold(t.Context(), gate.Snapshot().Revision); e != nil {
+						t.Fatal(e)
+					}
+					ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+					defer cancel()
+					if e := r.SOCKSProxy().Shutdown(ctx); e != nil {
+						t.Fatal(e)
+					}
+				}
+				if firstCount.Load() != 0 || secondCount.Load() != 0 || network.denied.Load() != 0 {
+					t.Fatal("late target send after pending cancellation")
+				}
+				return
+			}
+		}
 		targets, err := r.resumeProbeTargets()
 		wantAccess := egressnetwork.TargetAccessOwnerConfigured
 		if publicDenied {
@@ -301,6 +465,10 @@ func runActualRuntimeBlindDefault(t *testing.T, hold, publicDenied bool) {
 		set(1, 2)
 	}
 	echo(one, "same-open-tunnel")
+	if socks != nil {
+		// The pending-input budget must not cap established conversation bytes.
+		echo(one, strings.Repeat("streaming-after-approval/", 6000))
+	}
 	if hold {
 		one.Close()
 		deadline := time.Now().Add(time.Second)

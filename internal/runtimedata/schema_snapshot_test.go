@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/vibe-agi/vibermate/internal/activity"
+	"github.com/vibe-agi/vibermate/internal/egressnetwork"
 	"github.com/vibe-agi/vibermate/internal/egressprofile"
 	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/hostsecret"
@@ -207,6 +208,18 @@ func seedSnapshotAuthority(t *testing.T, source string) (provideraccount.Account
 		t.Fatal(err)
 	}
 	account := provideraccount.Account{ID: "snapshot-account", DisplayName: "Snapshot account", Origin: command.Origin, AssociationRevision: 1, RealmID: command.RealmID, Driver: providerauth.AnthropicAPIKeyDriverRef(), SecretRef: ref, State: provideraccount.StateActive, Revision: 1, SettingsRevision: 1, CreatedAt: now, UpdatedAt: now}
+	account.EgressProfile = egressprofile.Direct()
+	profiles, err := egressprofile.NewManager(store.EgressProfileRepository(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rules []string
+	for i := 0; i < 400; i++ {
+		rules = append(rules, fmt.Sprintf("d%03d.example.com", i))
+	}
+	if _, err := profiles.Publish(ctx, egressprofile.PublishCommand{ID: "profile.snapshot-large", DisplayName: "Snapshot large", Policy: egressnetwork.Policy{Proxy: egressnetwork.ProxyPolicy{Kind: egressnetwork.ProxySOCKS5, Endpoint: "127.0.0.1:1080"}, DirectDomains: egressnetwork.DirectDomains(strings.Join(rules, "\n"))}}); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := store.ProviderAccountRepository().Write(ctx, 0, account); err != nil {
 		t.Fatal(err)
 	}

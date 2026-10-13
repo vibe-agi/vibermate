@@ -4,6 +4,7 @@
 package egressnetwork
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -21,6 +22,10 @@ import (
 var ErrInvalidPolicy = errors.New("traffic egress policy is invalid")
 
 const maximumEndpointBytes = 2048
+
+// 16KiB of canonical domain text plus escaped newlines, bounded endpoints,
+// DoH URL, 1024-byte secret reference and fixed JSON keys fit within 64KiB.
+const MaxPolicyJSONBytes = 64 << 10
 
 type ProxyKind string
 
@@ -159,6 +164,10 @@ func (policy Policy) Normalize() (Policy, error) {
 		return Policy{}, err
 	}
 	policy.DirectDomains = domains
+	encoded, err := json.Marshal(policy)
+	if err != nil || len(encoded) > MaxPolicyJSONBytes {
+		return Policy{}, fmt.Errorf("%w: canonical policy is too large or cannot be encoded", ErrInvalidPolicy)
+	}
 	return policy, nil
 }
 

@@ -100,7 +100,7 @@ CREATE TABLE native_tool_binding_egress(
   operation_id TEXT NOT NULL PRIMARY KEY REFERENCES native_tool_bindings(operation_id) ON DELETE CASCADE CHECK(length(operation_id) = 32 AND operation_id NOT GLOB '*[^0-9a-f]*'),
   binding_digest BLOB NOT NULL CHECK(length(binding_digest) = 32),
   binding_version INTEGER NOT NULL CHECK(binding_version = 2),
-  profile_json TEXT NOT NULL CHECK(length(CAST(profile_json AS BLOB)) BETWEEN 2 AND 16384 AND json_valid(profile_json)),
+  profile_json TEXT NOT NULL CHECK(length(CAST(profile_json AS BLOB)) BETWEEN 2 AND 69632 AND json_valid(profile_json)),
   selection_source TEXT NOT NULL CHECK(selection_source IN('flow','global','builtin')),
   default_revision INTEGER NOT NULL CHECK(default_revision BETWEEN 0 AND 9223372036854775807),
   CHECK((selection_source = 'flow' AND default_revision = 0) OR (selection_source IN('global','builtin') AND default_revision > 0)),

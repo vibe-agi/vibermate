@@ -21,6 +21,30 @@ func TestFrozenRevision1SchemaBytes(t *testing.T) {
 	}
 }
 
+// The rebuilt tables and their index must have the bootstrap's exact SQLite
+// layout. Other old ALTER TABLE layout differences remain independently pinned.
+func TestExpandedProfileStorageMigrationLayoutParity(t *testing.T) {
+	fresh := openSQLiteForTest(t, filepath.Join(t.TempDir(), "fresh.db"))
+	defer fresh.Close()
+	migrated := openSQLiteForTest(t, filepath.Join(t.TempDir(), "migrated.db"))
+	defer migrated.Close()
+	nativeExec(t, fresh, schemaV2SQL)
+	nativeExec(t, migrated, schemaV1SQL)
+	nativeExec(t, migrated, migration001To002SQL)
+	for _, name := range []string{"egress_profile_revisions", "provider_accounts", "provider_accounts_origin_state", "native_tool_binding_egress"} {
+		var a, b string
+		if err := fresh.QueryRow(`SELECT sql FROM sqlite_schema WHERE name=?`, name).Scan(&a); err != nil {
+			t.Fatal(err)
+		}
+		if err := migrated.QueryRow(`SELECT sql FROM sqlite_schema WHERE name=?`, name).Scan(&b); err != nil {
+			t.Fatal(err)
+		}
+		if a != b {
+			t.Fatalf("%s migration layout differs from bootstrap", name)
+		}
+	}
+}
+
 func TestSchemaSwitchFrozenV2LayoutsAndTamper(t *testing.T) {
 	for _, layout := range []string{"fresh", "migrated"} {
 		t.Run(layout, func(t *testing.T) {

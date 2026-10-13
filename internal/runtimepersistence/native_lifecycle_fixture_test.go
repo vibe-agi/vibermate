@@ -31,15 +31,20 @@ func nativeFixture(t *testing.T, mode environment.ToolPolicyMode, recording envi
 	return nativeFixtureWithCapture(t, mode, recording, execute, nil)
 }
 func nativeFixtureWithCapture(t *testing.T, mode environment.ToolPolicyMode, recording environment.ContentRecordingPolicy, execute bool, create func(*Store, time.Time) captureidentity.Reference) (*Store, nativetool.ID, uint64) {
+	return nativeFixtureOnStore(t, mode, recording, execute, create, nil, egressprofile.Direct())
+}
+func nativeFixtureOnStore(t *testing.T, mode environment.ToolPolicyMode, recording environment.ContentRecordingPolicy, execute bool, create func(*Store, time.Time) captureidentity.Reference, store *Store, profile egressprofile.ProfileRevision) (*Store, nativetool.ID, uint64) {
 	t.Helper()
 	ctx := context.Background()
 	now := time.Now().UTC().Truncate(time.Millisecond)
-	store := openTestStore(t, filepath.Join(t.TempDir(), "runtime.db"))
+	if store == nil {
+		store = openTestStore(t, filepath.Join(t.TempDir(), "runtime.db"))
+	}
 	t.Cleanup(func() { shutdownTestStore(t, store) })
 	aggregate := environmentFixture(t, "native", 1)
 	aggregate.ContentRecording = recording
 	aggregate.PolicySet = &environment.PolicySet{ToolMode: mode}
-	aggregate.ClientToolAccess = &environment.ClientToolAccessPolicy{Enabled: true, Route: &environment.ClientToolRoute{ID: "native.mcp", Revision: 1, TargetOrigin: runtimeProviderOrigin(t, "https://chatgpt.com"), Path: environment.ClientToolMCPPath, CredentialOwner: environment.ClientToolCredentialOriginal, EgressProfile: authoredEgress(t, egressprofile.Direct()), Contract: environment.ClientToolContractCodexLegacy}}
+	aggregate.ClientToolAccess = &environment.ClientToolAccessPolicy{Enabled: true, Route: &environment.ClientToolRoute{ID: "native.mcp", Revision: 1, TargetOrigin: runtimeProviderOrigin(t, "https://chatgpt.com"), Path: environment.ClientToolMCPPath, CredentialOwner: environment.ClientToolCredentialOriginal, EgressProfile: authoredEgress(t, profile), Contract: environment.ClientToolContractCodexLegacy}}
 	manager := newEnvironmentManager(t, store)
 	draft, err := manager.SaveDraft(ctx, environment.DraftCommand{Candidate: aggregate})
 	if err != nil {
@@ -65,7 +70,7 @@ func nativeFixtureWithCapture(t *testing.T, mode environment.ToolPolicyMode, rec
 		t.Fatal(err)
 	}
 	plan, _ := request.ClientToolPlan()
-	resolved, err := egressprofile.RestoreResolved(egressprofile.Direct(), egressprofile.SelectionFlow, 0)
+	resolved, err := egressprofile.RestoreResolved(profile, egressprofile.SelectionFlow, 0)
 	if err != nil {
 		t.Fatal(err)
 	}

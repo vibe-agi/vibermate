@@ -40,7 +40,12 @@ func (rules DirectDomains) Normalize() (DirectDomains, error) {
 		names = append(names, name)
 	}
 	sort.Strings(names)
-	return DirectDomains(strings.Join(names, "\n")), nil
+	canonical := strings.Join(names, "\n")
+	// IDNA expansion must not produce a value rejected on the next read.
+	if len(canonical) > 16384 {
+		return "", fmt.Errorf("%w: canonical direct domains are too large", ErrInvalidPolicy)
+	}
+	return DirectDomains(canonical), nil
 }
 
 func (rules DirectDomains) Matches(host string) bool {

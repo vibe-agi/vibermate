@@ -253,6 +253,19 @@ func TestTLSInvalidImportsWriteNothing(t *testing.T) {
 	c = tlsCommand()
 	c.URI = ""
 	cases["edit-zero-revision"] = c
+	c = tlsCommand()
+	var expanding []string
+	for i := 0; i < 1000; i++ {
+		expanding = append(expanding, fmt.Sprintf("\u00e9%d.example", i))
+	}
+	c.DirectDomains = egressnetwork.DirectDomains(strings.Join(expanding, "\n"))
+	cases["canonical-domain-overflow"] = c
+	c = tlsCommand()
+	c.DirectDomains = egressnetwork.DirectDomains(strings.Repeat("a", 16385))
+	cases["raw-domain-overflow"] = c
+	c = tlsCommand()
+	c.DisplayName = string([]byte{0xff})
+	cases["invalid-display-encoding"] = c
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
 			m, s := tlsManager(t)

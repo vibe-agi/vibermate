@@ -9,8 +9,15 @@ from pathlib import Path
 import re
 import shutil
 import stat
+import sys
 import tempfile
 import urllib.error
+
+# The CLI runs inside a source tree whose cleanliness is release evidence.
+# Suppress adjacent import caches before loading the producer; importing this
+# module as a library retains the caller's normal bytecode policy.
+if __name__ == "__main__":
+    sys.dont_write_bytecode = True
 
 import build_kernel as producer
 from build_kernel import KernelError

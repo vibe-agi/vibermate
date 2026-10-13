@@ -177,7 +177,6 @@ func (f *udpShutdownFixture) requireControlsClosed(t *testing.T) {
 			return
 		}
 	}
-	f.network.requireClosed(t)
 }
 
 // A per-flow uncancelable terminal budget or synchronous durable Close
@@ -196,6 +195,10 @@ func TestRuntimeUDPShutdownCancelsAllSessionsBeforeSharedTerminalBudget(t *testi
 		t.Errorf("UDP terminal renewed its own deadline: got=%v shared=%v", got, deadline)
 	}
 	f.requireControlsClosed(t)
+	// Each terminal entry happens after that flow closes its destination.
+	// Observe both while persistence is still blocked, not eventual Shutdown.
+	second := f.firstTerminal(t)
+	f.network.requireClosed(t)
 	select {
 	case e := <-done:
 		if e == nil || f.runtime.egressCompletion.failure() == nil {
@@ -207,7 +210,6 @@ func TestRuntimeUDPShutdownCancelsAllSessionsBeforeSharedTerminalBudget(t *testi
 		<-done
 	}
 	if !t.Failed() {
-		second := f.firstTerminal(t)
 		other, _ := second.ctx.Deadline()
 		if !other.Equal(deadline) {
 			t.Error("later UDP terminal received a renewed shutdown window")
@@ -241,6 +243,7 @@ func TestExpiredUDPRevokeClosesAllSessionsBeforeWaitingOnPersistence(t *testing.
 		f.repository.unblock()
 		<-done
 	}
+	f.network.requireClosed(t)
 	f.repository.unblock()
 	if t.Failed() {
 		return
@@ -264,6 +267,7 @@ func TestShortNativeRevocationCancelsUDPPromptlyWithOwnedTerminalDrain(t *testin
 	case <-time.After(f.budget):
 		t.Error("short native fanout waited for UDP persistence")
 	}
+	f.network.requireClosed(t)
 	f.repository.unblock()
 	if t.Failed() {
 		return

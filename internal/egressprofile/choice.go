@@ -118,11 +118,11 @@ func (choice *Choice) UnmarshalJSON(data []byte) error {
 	if err != nil {
 		return err
 	}
-	policy, err := strictMembers(fields["policy"], []string{"proxy", "resolver"}, []string{"proxy", "resolver"})
+	policy, err := strictMembers(fields["policy"], []string{"proxy", "resolver", "directDomains"}, []string{"proxy", "resolver"})
 	if err != nil {
 		return err
 	}
-	if _, err = strictMembers(policy["proxy"], []string{"kind", "endpoint"}, []string{"kind"}); err != nil {
+	if _, err = strictMembers(policy["proxy"], []string{"kind", "endpoint", "credentialRef", "credentialRevision"}, []string{"kind"}); err != nil {
 		return err
 	}
 	if _, err = strictMembers(policy["resolver"], []string{"kind", "dohUrl", "transport"}, []string{"kind", "transport"}); err != nil {

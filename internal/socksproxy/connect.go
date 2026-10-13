@@ -89,24 +89,62 @@ func (x *session) connect(reader *bufio.Reader, target Target, basic string) {
 	server.SetKeepAlivesEnabled(false)
 	served := make(chan struct{})
 	go func() { server.Serve(listener); close(served) }()
+	chunks := make(chan connectInputChunk)
+	inputDone := make(chan struct{})
+	go readConnectInput(x.ctx, reader, chunks, inputDone)
+	responseDone := make(chan struct{})
+	// On a header-write failure there is no response reader to join.
+	responseStarted := false
 	defer func() {
 		handler.closeAdmission()
 		x.cancel()
+		x.control.Close()
 		front.Close()
 		back.Close()
 		server.Close()
 		listener.Close()
 		<-served
+		<-inputDone
+		if responseStarted {
+			<-responseDone
+		}
 		handler.wait()
 	}()
-	front.SetDeadline(time.Now().Add(10 * time.Second))
+	front.SetWriteDeadline(time.Now().Add(10 * time.Second))
 	authority := target.authority()
 	if _, e := fmt.Fprintf(front, "CONNECT %s HTTP/1.1\r\nHost: %s\r\nProxy-Authorization: Basic %s\r\n\r\n", authority, authority, basic); e != nil {
 		writeReply(x.control, 1, zeroBind)
 		return
 	}
+	front.SetWriteDeadline(time.Time{})
 	responseReader := bufio.NewReader(front)
-	response, e := http.ReadResponse(responseReader, &http.Request{Method: http.MethodConnect})
+	var response *http.Response
+	var e error
+	responseStarted = true
+	go func() {
+		response, e = http.ReadResponse(responseReader, &http.Request{Method: http.MethodConnect})
+		close(responseDone)
+	}()
+	var pending []byte
+waiting:
+	for {
+		select {
+		case <-x.ctx.Done():
+			return
+		case chunk, ok := <-chunks:
+			if !ok || chunk.err != nil {
+				return
+			}
+			if len(pending)+len(chunk.data) > maxPendingConnectInputBytes {
+				// Explicit failure; no partial payload ever reaches the target.
+				writeReply(x.control, 1, zeroBind)
+				return
+			}
+			pending = append(pending, chunk.data...)
+		case <-responseDone:
+			break waiting
+		}
+	}
 	if e != nil {
 		writeReply(x.control, 1, zeroBind)
 		return
@@ -119,7 +157,6 @@ func (x *session) connect(reader *bufio.Reader, target Target, basic string) {
 		writeReply(x.control, status, zeroBind)
 		return
 	}
-	front.SetDeadline(time.Time{})
 	local, e := netipPeer(x.control.LocalAddr())
 	if e != nil {
 		writeReply(x.control, 1, zeroBind)
@@ -129,7 +166,8 @@ func (x *session) connect(reader *bufio.Reader, target Target, basic string) {
 		return
 	}
 	done := make(chan struct{})
-	go func() { io.Copy(front, reader); front.Close(); x.control.Close(); close(done) }()
+	input := &connectInputStream{ctx: x.ctx, chunks: chunks, pending: pending}
+	go func() { io.Copy(front, input); front.Close(); x.control.Close(); close(done) }()
 	io.Copy(x.control, responseReader)
 	front.Close()
 	x.control.Close()

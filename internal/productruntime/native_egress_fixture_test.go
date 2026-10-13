@@ -45,6 +45,19 @@ import (
 )
 
 type runtimeNativeEgressConfig struct{ choice, edge string }
+
+// A contained transport seam: real Runtime/Store/receipt authority and TLS
+// remain in use. This does not qualify external VLESS/REALITY interoperability.
+type runtimeNativeVLESS struct{ network *runtimeNativeNetwork }
+
+func (v runtimeNativeVLESS) DialContext(ctx context.Context, p egressnetwork.ProxyPolicy, network, address string) (net.Conn, error) {
+	if p.Kind != egressnetwork.ProxyVLESS || p.CredentialRef != "secret://egress-vless/native-fixture" || p.CredentialRevision != 1 || address != "127.0.0.1:443" {
+		v.network.unexpected.Add(1)
+		return nil, errors.New("unexpected frozen VLESS identity/target")
+	}
+	return v.network.DialContext(ctx, network, address)
+}
+
 type runtimeNativeExpected struct {
 	ProfileID       string
 	ProfileRevision uint64
@@ -415,7 +428,7 @@ func newRuntimeNativeEgressFixture(t *testing.T, cfg runtimeNativeEgressConfig) 
 	f.proxyB = newRuntimeNativeProxy(t, f.network.upstream, &f.network.unexpected)
 	f.network.a = f.proxyA.Addr().String()
 	f.network.b = f.proxyB.Addr().String()
-	builder, e := egressnetwork.NewBuilder(egressnetwork.BuilderOptions{BaseDialer: f.network, SystemResolver: f.network})
+	builder, e := egressnetwork.NewBuilder(egressnetwork.BuilderOptions{BaseDialer: f.network, SystemResolver: f.network, VLESS: runtimeNativeVLESS{f.network}})
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -469,6 +482,17 @@ func newRuntimeNativeEgressFixture(t *testing.T, cfg runtimeNativeEgressConfig) 
 	publish := func(id, address string) egressprofile.ProfileRef {
 		policy := egressnetwork.DefaultPolicy()
 		policy.Proxy = egressnetwork.ProxyPolicy{Kind: egressnetwork.ProxySOCKS5, Endpoint: address}
+		if strings.HasPrefix(cfg.choice, "global_vless") && id == "profile.native-a" {
+			policy.Proxy = egressnetwork.ProxyPolicy{Kind: egressnetwork.ProxyVLESS, CredentialRef: "secret://egress-vless/native-fixture", CredentialRevision: 1}
+			policy.DirectDomains = "excluded.example"
+			if cfg.choice == "global_vless_large" {
+				var lines []string
+				for i := 0; i < 960; i++ {
+					lines = append(lines, fmt.Sprintf("d%03d.example.com", i))
+				}
+				policy.DirectDomains = egressnetwork.DirectDomains(strings.Join(lines, "\n"))
+			}
+		}
 		p, e := f.r.EgressProfiles().Publish(t.Context(), egressprofile.PublishCommand{ID: egressprofile.ID(id), DisplayName: id, Policy: policy})
 		if e != nil {
 			t.Fatal(e)

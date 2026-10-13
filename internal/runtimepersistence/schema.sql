@@ -228,7 +228,7 @@ CREATE TABLE egress_profile_revisions(
   display_name TEXT NOT NULL
   CHECK(length(CAST(display_name AS BLOB)) BETWEEN 1 AND 256),
   policy_json BLOB NOT NULL
-  CHECK(length(policy_json) BETWEEN 2 AND 8192 AND json_valid(CAST(policy_json AS TEXT))),
+  CHECK(length(policy_json) BETWEEN 2 AND 65536 AND json_valid(CAST(policy_json AS TEXT))),
   published_at_unix_ms INTEGER NOT NULL,
   PRIMARY KEY(egress_id, revision)
 ) STRICT;
@@ -386,7 +386,7 @@ CREATE TABLE "provider_accounts"(
   note TEXT NOT NULL DEFAULT '' CHECK(length(note) <= 256),
   note_revision INTEGER NOT NULL DEFAULT 0 CHECK(note_revision BETWEEN 0 AND 9223372036854775807),
   settings_revision INTEGER NOT NULL CHECK(settings_revision BETWEEN 1 AND 9223372036854775807),
-  egress_profile_json TEXT NOT NULL CHECK(json_valid(egress_profile_json) AND length(egress_profile_json)<=4096),
+  egress_profile_json TEXT NOT NULL CHECK(json_valid(egress_profile_json) AND length(CAST(egress_profile_json AS BLOB))<=69632),
   automatic_refresh INTEGER NOT NULL CHECK(automatic_refresh IN (0,1)),
   realm_id TEXT NOT NULL
   CHECK(length(CAST(realm_id AS BLOB)) BETWEEN 1 AND 128),
@@ -1498,7 +1498,7 @@ CREATE TABLE native_tool_binding_egress(
   operation_id TEXT NOT NULL PRIMARY KEY REFERENCES native_tool_bindings(operation_id) ON DELETE CASCADE CHECK(length(operation_id) = 32 AND operation_id NOT GLOB '*[^0-9a-f]*'),
   binding_digest BLOB NOT NULL CHECK(length(binding_digest) = 32),
   binding_version INTEGER NOT NULL CHECK(binding_version = 2),
-  profile_json TEXT NOT NULL CHECK(length(CAST(profile_json AS BLOB)) BETWEEN 2 AND 16384 AND json_valid(profile_json)),
+  profile_json TEXT NOT NULL CHECK(length(CAST(profile_json AS BLOB)) BETWEEN 2 AND 69632 AND json_valid(profile_json)),
   selection_source TEXT NOT NULL CHECK(selection_source IN('flow','global','builtin')),
   default_revision INTEGER NOT NULL CHECK(default_revision BETWEEN 0 AND 9223372036854775807),
   CHECK((selection_source = 'flow' AND default_revision = 0) OR (selection_source IN('global','builtin') AND default_revision > 0)),

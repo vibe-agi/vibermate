@@ -2,6 +2,7 @@ package runtimepersistence
 
 import (
 	"encoding/json"
+	"fmt"
 	"github.com/vibe-agi/vibermate/internal/egressnetwork"
 	"github.com/vibe-agi/vibermate/internal/egressprofile"
 	"github.com/vibe-agi/vibermate/internal/environment"
@@ -19,6 +20,11 @@ func TestNativeEffectiveEvidenceBoundCoversMaximumNormalizedAndPublishedProfile(
 	host := strings.Repeat("a", 63) + "." + strings.Repeat("b", 63) + "." + strings.Repeat("c", 63) + "." + strings.Repeat("d", 61)
 	profile.Policy.Proxy = egressnetwork.ProxyPolicy{Kind: egressnetwork.ProxySOCKS5, Endpoint: host + ":65535"}
 	profile.Policy.Resolver = egressnetwork.ResolverPolicy{Kind: egressnetwork.ResolverDoH, DoHURL: prefix + strings.Repeat("&", 2048-len(prefix)), Transport: egressnetwork.ResolverTransportProxy}
+	var domains []string
+	for i := 0; i < 960; i++ {
+		domains = append(domains, fmt.Sprintf("d%03d.example.com", i))
+	}
+	profile.Policy.DirectDomains = egressnetwork.DirectDomains(strings.Join(domains, "\n"))
 	choice := authoredEgress(t, profile)
 	encoded, err := json.Marshal(profile)
 	if err != nil || len(encoded) > nativetool.MaxEffectiveProfileJSONBytes {
@@ -46,17 +52,7 @@ func TestNativeEffectiveEvidenceBoundCoversMaximumNormalizedAndPublishedProfile(
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Find the largest number of escaped legal URL characters within the actual8192-byte policy column.
-	for {
-		policyJSON, err := json.Marshal(profile.Policy)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if len(policyJSON) <= 8192 {
-			break
-		}
-		profile.Policy.Resolver.DoHURL = strings.TrimSuffix(profile.Policy.Resolver.DoHURL, "&")
-	}
+	// Full legal escaped fields and exclusions share the public/native bound.
 	published, err := profiles.Publish(t.Context(), egressprofile.PublishCommand{ID: profile.ID, DisplayName: profile.DisplayName, Policy: profile.Policy})
 	if err != nil {
 		t.Fatal(err)
@@ -78,7 +74,7 @@ func TestNativeEffectiveEvidenceBoundCoversMaximumNormalizedAndPublishedProfile(
 	overflow := profile.Policy
 	overflow.Resolver.DoHURL += "&"
 	if _, err := profiles.Publish(t.Context(), egressprofile.PublishCommand{ID: profile.ID, ExpectedRevision: 1, DisplayName: profile.DisplayName, Policy: overflow}); err == nil {
-		t.Fatal("policy over actual8192-byte publication bound accepted")
+		t.Fatal("overlong DoH field accepted at publication")
 	}
 	if got, err := profiles.GetRevision(t.Context(), published.ID, 1); err != nil || !got.Equal(published) {
 		t.Fatal("failed overflow altered previous published value", err)

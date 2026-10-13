@@ -280,27 +280,28 @@ func TestNativeStreamCapacityReusesCompletedRegistrations(t *testing.T) {
 	store, first, revision := nativeStoreFixture(t, environment.ToolPolicyObserve)
 	repo := nativeFullRepository(t, store)
 	ctx := context.Background()
-	now := time.Now().UTC().Truncate(time.Millisecond)
 	base, _ := nativeDecisionFixture(t, store, first)
 	for i := 0; i < 1025; i++ {
+		// Capacity reuse must not impose one shared expiry on the whole loop.
+		now := time.Now().UTC().Truncate(time.Millisecond)
 		id := nativetool.ID(fmt.Sprintf("%032x", i+1000))
 		b := nativeBindCall(t, repo, base, id, i+1000, nil, now)
 		receipt, err := repo.Start(ctx, id, fmt.Sprintf("capacity-attempt-%d", i), revision, now)
 		if err != nil {
-			t.Fatal(err)
+			t.Fatalf("iteration %d operation %s age %s Start: %v", i, id, time.Since(now), err)
 		}
 		a, err := repo.OpenObservedStream(ctx, receipt, b, time.Minute, now)
 		if err != nil {
-			t.Fatalf("operation %d: %v", i, err)
+			t.Fatalf("iteration %d operation %s age %s OpenObservedStream: %v", i, id, time.Since(now), err)
 		}
 		if err := repo.CompleteStreamRPC(ctx, a, nativetool.LogicalFinishInput{Outcome: "completed", Reason: "completed", ObservedAt: now}); err != nil {
-			t.Fatal(err)
+			t.Fatalf("iteration %d operation %s age %s CompleteStreamRPC: %v", i, id, time.Since(now), err)
 		}
 		if err := repo.FinishAttempt(ctx, receipt, nativetool.PhysicalFinishInput{Outcome: "completed", Reason: "completed", ObservedAt: now}); err != nil {
-			t.Fatal(err)
+			t.Fatalf("iteration %d operation %s age %s FinishAttempt: %v", i, id, time.Since(now), err)
 		}
 		if _, err := repo.RetireObservedStream(ctx, a, now); err != nil {
-			t.Fatal(err)
+			t.Fatalf("iteration %d operation %s age %s RetireObservedStream: %v", i, id, time.Since(now), err)
 		}
 	}
 }

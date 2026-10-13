@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/vibe-agi/vibermate/internal/environment"
+	"github.com/vibe-agi/vibermate/internal/nativetool"
 )
 
 func TestNativeStreamDetachedRecoveryUsesOnePOST(t *testing.T) {
@@ -120,11 +121,14 @@ func TestNativeStreamDetachedCancellationAndExpiryFenceRecovery(t *testing.T) {
 		t.Run(edge, func(t *testing.T) {
 			limits := DefaultLimits()
 			limits.ConcurrentRPCsPerSession = 1
-			if edge == "expiry" {
-				limits.CallLifetime = 100 * time.Millisecond
-			}
 			f := newNativeFixtureMode(t, environment.ToolPolicyObserve, environment.ContentRecordingPolicy{Mode: environment.ContentRecordingOff}, limits)
 			f.handshake(t)
+			e := f.executor.(*executor)
+			if edge == "expiry" {
+				// Joined JSON/202 setup has no live limits-reading stream worker.
+				// This fixture lifetime belongs only to the actual expiry case.
+				e.limits.CallLifetime = 2 * time.Second
+			}
 			wire := "id: c1\ndata: {\"jsonrpc\":\"2.0\",\"method\":\"notifications/progress\",\"params\":{\"progressToken\":\"p\",\"progress\":1}}\n\n"
 			if edge == "partial" {
 				wire += "data: {"
@@ -136,7 +140,45 @@ func TestNativeStreamDetachedCancellationAndExpiryFenceRecovery(t *testing.T) {
 				return wireResponse(wire, true), nil
 			}
 			call := f.captured(t, "POST", `{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"read_file","arguments":{"path":"a"},"_meta":{"progressToken":"p"}}}`, "synthetic-session")
-			f.executor.Serve(context.Background(), call, httptest.NewRecorder())
+			setupStarted := time.Now()
+			terminal := f.executor.Serve(context.Background(), call, httptest.NewRecorder())
+			var expirySession *session
+			var expiryStream *streamRecord
+			var originalExpiry time.Time
+			if edge == "expiry" {
+				if terminal.OperationID != call.id || terminal.Outcome != OutcomeFailed || terminal.Reason != ReasonStreamDetached || f.transport.sends() != 4 {
+					t.Fatalf("expiry setup did not detach originating call: terminal=%+v setupAge=%s sends=%d", terminal, time.Since(setupStarted), f.transport.sends())
+				}
+				var receipt nativetool.StartReceipt
+				var binding nativetool.Digest
+				ready := false
+				e.mu.Lock()
+				if owner := e.scopes[f.capture.Key()]; owner != nil {
+					for _, s := range owner.sessions {
+						s.mu.Lock()
+						if stream := s.streams[call.id]; stream != nil {
+							expirySession, expiryStream = s, stream
+							cursor, exists := s.eventIndex["c1"]
+							receipt, binding, originalExpiry = stream.receipt, stream.binding.Digest(), stream.expires
+							ready = exists && cursor.stream == stream && cursor.ordinal == 0 && stream.observed && !stream.attached && !stream.retired && !stream.terminal && stream.context.Err() == nil && receipt.OperationID() == call.id && receipt.AttemptID() != "" && originalExpiry.Equal(stream.authority.ExpiresAt()) && originalExpiry.After(time.Now())
+						}
+						s.mu.Unlock()
+					}
+				}
+				e.mu.Unlock()
+				if !ready {
+					t.Fatalf("expiry setup missing live observed detached c1: operation=%s setupAge=%s expiry=%s", call.id, time.Since(setupStarted), originalExpiry)
+				}
+				op, err := f.store.NativeToolRepository().Get(context.Background(), call.id)
+				if err != nil || op.State != "started" || op.BindingDigest == nil || *op.BindingDigest != binding {
+					t.Fatalf("expiry setup lost exact started operation: %+v err=%v setupAge=%s", op, err, time.Since(setupStarted))
+				}
+				var startedMillis int64
+				if err := f.db.QueryRow(`SELECT started_at_unix_ms FROM runtime_egress_attempts WHERE attempt_id=? AND parent_id=?`, receipt.AttemptID(), call.id).Scan(&startedMillis); err != nil || !originalExpiry.Equal(time.UnixMilli(startedMillis).Add(2*time.Second)) || !time.Now().Before(originalExpiry) {
+					t.Fatalf("expiry setup changed original receipt deadline: operation=%s attempt=%s expiry=%s startedMillis=%d err=%v setupAge=%s", call.id, receipt.AttemptID(), originalExpiry, startedMillis, err, time.Since(setupStarted))
+				}
+				t.Logf("observed detached c1 operation=%s attempt=%s state=started expiry=%s setupAge=%s remaining=%s", call.id, receipt.AttemptID(), originalExpiry.Format(time.RFC3339Nano), time.Since(setupStarted), time.Until(originalExpiry))
+			}
 			switch edge {
 			case "cancel":
 				got, _ := f.serve(t, `{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":3}}`, "synthetic-session")
@@ -154,14 +196,33 @@ func TestNativeStreamDetachedCancellationAndExpiryFenceRecovery(t *testing.T) {
 				e.mu.Unlock()
 			}
 			if edge != "unknown" {
-				deadline := time.Now().Add(time.Second)
+				watchdog := time.Second
+				if edge == "expiry" {
+					watchdog = 5 * time.Second
+				}
+				deadline := time.Now().Add(watchdog)
 				for {
 					op, err := f.store.NativeToolRepository().Get(context.Background(), call.id)
 					if err != nil {
 						t.Fatal(err)
 					}
 					if op.State == "uncertain" {
-						break
+						if edge != "expiry" {
+							break
+						}
+						e.mu.Lock()
+						expirySession.mu.Lock()
+						_, cursorRemains := expirySession.eventIndex["c1"]
+						unchanged := expiryStream.expires.Equal(originalExpiry)
+						drained := expiryStream.retired && expiryStream.context.Err() != nil && expiryStream.charged == 0 && expirySession.streams[call.id] == nil && !cursorRemains && len(expirySession.active) == 0 && e.claimed[call.id] == nil
+						expirySession.mu.Unlock()
+						e.mu.Unlock()
+						if !unchanged || time.Now().Before(originalExpiry) {
+							t.Fatalf("expiry did not retire at its immutable original deadline: unchanged=%v expiry=%s", unchanged, originalExpiry)
+						}
+						if drained {
+							break
+						}
 					}
 					if time.Now().After(deadline) {
 						t.Fatalf("unresolved after %s: %+v", edge, op)

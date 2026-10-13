@@ -3,6 +3,7 @@ package runtimepersistence
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/vibe-agi/vibermate/internal/activity"
 	"github.com/vibe-agi/vibermate/internal/egressaudit"
+	"github.com/vibe-agi/vibermate/internal/egressprofile"
 	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/instanceguard"
 	"github.com/vibe-agi/vibermate/internal/protocolcore"
@@ -78,9 +80,19 @@ func seedPopulatedV1(t *testing.T, store *Store) {
 	t.Helper()
 	ctx := context.Background()
 	now := time.Date(2026, 10, 3, 0, 0, 0, 0, time.UTC)
+	// Real old-valid policy bytes must survive the table rebuild unchanged.
+	policyJSON, err := json.Marshal(largeProfilePolicy(400))
+	if err != nil {
+		t.Fatal(err)
+	}
+	nativeExec(t, store.database, `INSERT INTO egress_profile_heads VALUES('profile.example',1)`)
+	if _, err := store.database.Exec(`INSERT INTO egress_profile_revisions VALUES('profile.example',1,'Example',?,?)`, policyJSON, profileSizeClock{}.Now().UnixMilli()); err != nil {
+		t.Fatal(err)
+	}
 	writeAnthropicEndpoint(t, store)
 	ref, _ := secretstore.ParseReference("secret://provider-account/native-legacy")
 	account := provideraccount.Account{ID: "native-legacy", DisplayName: "Legacy", Origin: providerTestOrigin(t), AssociationRevision: 1, RealmID: "anthropic.official", Driver: providerauth.AnthropicAPIKeyDriverRef(), SecretRef: ref, State: provideraccount.StateActive, Revision: 1, SettingsRevision: 1, CreatedAt: now, UpdatedAt: now}
+	account.EgressProfile = egressprofile.Direct()
 	if _, err := store.ProviderAccountRepository().Write(ctx, 0, account); err != nil {
 		t.Fatal(err)
 	}

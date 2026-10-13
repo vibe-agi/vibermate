@@ -5,6 +5,7 @@ package egressprofile
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"regexp"
 	"sort"
@@ -17,8 +18,11 @@ import (
 )
 
 const (
-	MaxRevision Revision = 1<<63 - 1
-	DirectID    ID       = "profile.direct"
+	// Policy plus bounded ID/name (including JSON escaping), revision and
+	// timestamp encoding and fixed keys fit in an additional 4KiB.
+	MaxProfileJSONBytes          = egressnetwork.MaxPolicyJSONBytes + (4 << 10)
+	MaxRevision         Revision = 1<<63 - 1
+	DirectID            ID       = "profile.direct"
 )
 
 var (
@@ -62,6 +66,10 @@ func (profile ProfileRevision) Validate() error {
 	if !canonicalID.MatchString(profile.ID.String()) || profile.Revision == 0 ||
 		profile.Revision > MaxRevision || !validDisplayName(profile.DisplayName) ||
 		profile.PublishedAt.IsZero() || err != nil || normalized != profile.Policy {
+		return ErrInvalidProfile
+	}
+	encoded, err := json.Marshal(profile)
+	if err != nil || len(encoded) > MaxProfileJSONBytes {
 		return ErrInvalidProfile
 	}
 	return nil

@@ -15,6 +15,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/vibe-agi/vibermate/internal/captureidentity"
+	"github.com/vibe-agi/vibermate/internal/egressprofile"
 	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/protocolcore"
 )
@@ -34,7 +35,7 @@ const (
 	MaxIntentGroup     = 128
 	// Matches all native binding-evidence SQL owners. Normalized field bounds,
 	// including JSON escaping, keep every legal full profile below this ceiling.
-	MaxEffectiveProfileJSONBytes = 16384
+	MaxEffectiveProfileJSONBytes = egressprofile.MaxProfileJSONBytes
 )
 
 type ID string

@@ -8,6 +8,7 @@ import json
 import shutil
 import tempfile
 import subprocess
+import sys
 import stat
 import urllib.error
 from pathlib import Path
@@ -20,6 +21,33 @@ from package_kernel import KernelError, package_kernel
 
 
 class PackageKernelTests(unittest.TestCase):
+    def test_cli_help_does_not_mutate_source_with_standard_bytecode_flags(self):
+        source = self.root / "cli-source"
+        source.mkdir()
+        for name in ("package_kernel.py", "build_kernel.py"):
+            shutil.copyfile(producer.ASSETS / name, source / name)
+        before = {path.name: path.read_bytes() for path in source.iterdir()}
+        # Reset interpreter flags explicitly: the developer host may redirect
+        # caches even when PYTHONPYCACHEPREFIX is absent from the environment.
+        harness = """
+import runpy, sys
+from pathlib import Path
+source = Path(sys.argv[1])
+sys.pycache_prefix = None
+sys.dont_write_bytecode = False
+sys.path.insert(0, str(source))
+sys.argv = [str(source / 'package_kernel.py'), '--help']
+runpy.run_path(sys.argv[0], run_name='__main__')
+"""
+        result = subprocess.run([sys.executable, "-c", harness, str(source)],
+                                cwd=source, capture_output=True, text=True,
+                                timeout=10)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("--target", result.stdout)
+        self.assertEqual(sorted(path.name for path in source.iterdir()),
+                         sorted(before), "CLI wrote files beside locked source")
+        self.assertEqual({path.name: path.read_bytes() for path in source.iterdir()}, before)
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)

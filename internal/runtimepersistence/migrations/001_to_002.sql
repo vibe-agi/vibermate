@@ -1,3 +1,55 @@
+-- Expand existing profile storage before adding dependent candidate tables.
+-- These frozen-v1 tables have no incoming foreign keys. Copy every column
+-- byte-for-byte inside the verified migration transaction; never rewrite JSON.
+CREATE TEMP TABLE egress_profile_revisions_copy AS SELECT egress_id, revision, display_name, policy_json, published_at_unix_ms FROM egress_profile_revisions;
+DROP TABLE egress_profile_revisions;
+CREATE TABLE egress_profile_revisions(
+  egress_id TEXT NOT NULL
+  REFERENCES egress_profile_heads(egress_id),
+  revision INTEGER NOT NULL
+  CHECK(revision BETWEEN 1 AND 9223372036854775807),
+  display_name TEXT NOT NULL
+  CHECK(length(CAST(display_name AS BLOB)) BETWEEN 1 AND 256),
+  policy_json BLOB NOT NULL
+  CHECK(length(policy_json) BETWEEN 2 AND 65536 AND json_valid(CAST(policy_json AS TEXT))),
+  published_at_unix_ms INTEGER NOT NULL,
+  PRIMARY KEY(egress_id, revision)
+) STRICT;
+INSERT INTO egress_profile_revisions(egress_id, revision, display_name, policy_json, published_at_unix_ms) SELECT egress_id, revision, display_name, policy_json, published_at_unix_ms FROM egress_profile_revisions_copy;
+DROP TABLE egress_profile_revisions_copy;
+CREATE TEMP TABLE provider_accounts_copy AS SELECT account_id, display_name, credential_origin, endpoint_associations, association_revision, note, note_revision, settings_revision, egress_profile_json, automatic_refresh, realm_id, driver_ref, secret_reference, state, revision, created_at_unix_ms, updated_at_unix_ms FROM provider_accounts;
+DROP TABLE provider_accounts;
+CREATE TABLE "provider_accounts"(
+  account_id TEXT PRIMARY KEY NOT NULL
+  CHECK(length(CAST(account_id AS BLOB)) BETWEEN 1 AND 128),
+  display_name TEXT NOT NULL
+  CHECK(length(CAST(display_name AS BLOB)) BETWEEN 1 AND 256),
+  credential_origin TEXT NOT NULL,
+  endpoint_associations TEXT NOT NULL CHECK(json_valid(endpoint_associations)),
+  association_revision INTEGER NOT NULL CHECK(association_revision BETWEEN 1 AND 9223372036854775807),
+  note TEXT NOT NULL DEFAULT '' CHECK(length(note) <= 256),
+  note_revision INTEGER NOT NULL DEFAULT 0 CHECK(note_revision BETWEEN 0 AND 9223372036854775807),
+  settings_revision INTEGER NOT NULL CHECK(settings_revision BETWEEN 1 AND 9223372036854775807),
+  egress_profile_json TEXT NOT NULL CHECK(json_valid(egress_profile_json) AND length(CAST(egress_profile_json AS BLOB))<=69632),
+  automatic_refresh INTEGER NOT NULL CHECK(automatic_refresh IN (0,1)),
+  realm_id TEXT NOT NULL
+  CHECK(length(CAST(realm_id AS BLOB)) BETWEEN 1 AND 128),
+  driver_ref TEXT NOT NULL
+  CHECK(length(CAST(driver_ref AS BLOB)) BETWEEN 1 AND 128),
+  secret_reference TEXT NOT NULL UNIQUE
+  CHECK(length(CAST(secret_reference AS BLOB)) BETWEEN 1 AND 1024),
+  state TEXT NOT NULL
+  CHECK(state IN('active', 'disabled')),
+  revision INTEGER NOT NULL
+  CHECK(revision BETWEEN 1 AND 9223372036854775807),
+  created_at_unix_ms INTEGER NOT NULL,
+  updated_at_unix_ms INTEGER NOT NULL,
+  CHECK(updated_at_unix_ms >= created_at_unix_ms)
+) STRICT;
+INSERT INTO provider_accounts(account_id, display_name, credential_origin, endpoint_associations, association_revision, note, note_revision, settings_revision, egress_profile_json, automatic_refresh, realm_id, driver_ref, secret_reference, state, revision, created_at_unix_ms, updated_at_unix_ms) SELECT account_id, display_name, credential_origin, endpoint_associations, association_revision, note, note_revision, settings_revision, egress_profile_json, automatic_refresh, realm_id, driver_ref, secret_reference, state, revision, created_at_unix_ms, updated_at_unix_ms FROM provider_accounts_copy;
+DROP TABLE provider_accounts_copy;
+CREATE INDEX provider_accounts_origin_state
+ON provider_accounts(credential_origin, state, account_id);
 -- Inactive delta; the separately reviewed migration runner owns the transaction
 -- and revision publication. Preserve the old autoincrement high-water mark.
 ALTER TABLE runtime_connection_events ADD COLUMN inspection_purpose TEXT NOT NULL DEFAULT '' CHECK(inspection_purpose IN('', 'client_tools'));
@@ -238,7 +290,7 @@ CREATE TABLE native_tool_binding_egress(
   operation_id TEXT NOT NULL PRIMARY KEY REFERENCES native_tool_bindings(operation_id) ON DELETE CASCADE CHECK(length(operation_id) = 32 AND operation_id NOT GLOB '*[^0-9a-f]*'),
   binding_digest BLOB NOT NULL CHECK(length(binding_digest) = 32),
   binding_version INTEGER NOT NULL CHECK(binding_version = 2),
-  profile_json TEXT NOT NULL CHECK(length(CAST(profile_json AS BLOB)) BETWEEN 2 AND 16384 AND json_valid(profile_json)),
+  profile_json TEXT NOT NULL CHECK(length(CAST(profile_json AS BLOB)) BETWEEN 2 AND 69632 AND json_valid(profile_json)),
   selection_source TEXT NOT NULL CHECK(selection_source IN('flow','global','builtin')),
   default_revision INTEGER NOT NULL CHECK(default_revision BETWEEN 0 AND 9223372036854775807),
   CHECK((selection_source = 'flow' AND default_revision = 0) OR (selection_source IN('global','builtin') AND default_revision > 0)),
