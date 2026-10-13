@@ -1262,10 +1262,11 @@ func newProxyFixtureForDialectWithPolicyAndRawEvidence(
 }
 
 type proxyFixtureComposition struct {
-	compiler       environment.Compiler
-	configure      func(*environment.Environment)
-	configureProxy func(*loopbackproxy.Options)
-	ingressContext context.Context
+	defaultRepository func(egressprofile.DefaultRepository) egressprofile.DefaultRepository
+	compiler          environment.Compiler
+	configure         func(*environment.Environment)
+	configureProxy    func(*loopbackproxy.Options)
+	ingressContext    context.Context
 }
 
 func newProxyFixtureConfigured(t *testing.T, clientDialect protocolspec.Dialect, adapter *clientadapter.Evidence, policy connectionpolicy.Snapshot, raw rawevidence.RequestRecorder, assignmentEnvironmentID environment.EnvironmentID, composition *proxyFixtureComposition, clientOrigins ...string) *proxyFixture {
@@ -1368,7 +1369,11 @@ func newProxyFixtureConfigured(t *testing.T, clientDialect protocolspec.Dialect,
 	if err != nil {
 		t.Fatal(err)
 	}
-	defaults, err := egressprofile.NewDefaultManager(store.EgressDefaultRepository(), profiles)
+	defaultRepository := store.EgressDefaultRepository()
+	if composition != nil && composition.defaultRepository != nil {
+		defaultRepository = composition.defaultRepository(defaultRepository)
+	}
+	defaults, err := egressprofile.NewDefaultManager(defaultRepository, profiles)
 	if err != nil {
 		t.Fatal(err)
 	}

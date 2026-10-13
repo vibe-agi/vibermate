@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -32,6 +33,195 @@ import (
 type blindContainedNetwork struct {
 	allowed map[string]bool // immutable before first use
 	denied  atomic.Int64
+}
+
+// Setup reads remain real. Only the repository error is injected, after the
+// actual managers, Capture assignment and Handler have been constructed.
+type blindDefaultReadFault struct {
+	egressprofile.DefaultRepository
+	armed    atomic.Bool
+	failures atomic.Int64
+}
+
+func (f *blindDefaultReadFault) LoadDefault(ctx context.Context) (egressprofile.DefaultSetting, error) {
+	if f.armed.Load() {
+		f.failures.Add(1)
+		return egressprofile.DefaultSetting{}, egressprofile.ErrDefaultUnavailable
+	}
+	return f.DefaultRepository.LoadDefault(ctx)
+}
+
+type blindReadFailureNetwork struct {
+	delegate       *blindContainedNetwork
+	dials, lookups atomic.Int64
+}
+
+func (n *blindReadFailureNetwork) DialContext(ctx context.Context, kind, address string) (net.Conn, error) {
+	n.dials.Add(1)
+	return n.delegate.DialContext(ctx, kind, address)
+}
+func (n *blindReadFailureNetwork) LookupNetIP(ctx context.Context, kind, host string) ([]netip.Addr, error) {
+	n.lookups.Add(1)
+	return n.delegate.LookupNetIP(ctx, kind, host)
+}
+
+// Treating an unavailable default as unset would make these admitted requests
+// dial builtin Direct. The genuine manager must fail before any outbound ID.
+func TestBlindDefaultReadFailureBeforeNetwork(t *testing.T) {
+	for _, connect := range []bool{true, false} {
+		name := "cleartext"
+		if connect {
+			name = "CONNECT"
+		}
+		t.Run(name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(t.Context(), 8*time.Second)
+			defer cancel()
+			port := uint16(80)
+			if connect {
+				port = 443
+			}
+			var origins atomic.Int64
+			upstream := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { origins.Add(1) }))
+			defer upstream.Close()
+			p := newBlindPrivateProxy(t, upstream.Listener.Addr().String(), port)
+			n := &blindReadFailureNetwork{delegate: &blindContainedNetwork{allowed: map[string]bool{p.listener.Addr().String(): true}}}
+			builder, err := egressnetwork.NewBuilder(egressnetwork.BuilderOptions{BaseDialer: n, SystemResolver: n})
+			if err != nil {
+				t.Fatal(err)
+			}
+			gate, err := offlinehold.New(offlinehold.DefaultConfig())
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() {
+				gate.BeginShutdown()
+				cleanup, stop := context.WithTimeout(context.Background(), 10*time.Second)
+				defer stop()
+				if err := gate.Drain(cleanup); err != nil {
+					t.Errorf("read-fault gate drain: %v", err)
+				}
+			})
+			if err := gate.Start(ctx, offlinehold.RuntimeBinding{InstanceID: "blind-read-failure"}); err != nil {
+				t.Fatal(err)
+			}
+			dialer, err := blindtunnel.NewDialerWithBuilder(gate, builder)
+			if err != nil {
+				t.Fatal(err)
+			}
+			policy := connectionpolicy.Snapshot{Revision: 1, Mode: connectionpolicy.ModeDenyUnknown, Rules: []connectionpolicy.Rule{{ID: "allow.blind-read", Priority: 1, Decision: connectionpolicy.DecisionAllow, Match: connectionpolicy.MatchExactHostPort("blind.fixture", port)}}}
+			var fault *blindDefaultReadFault
+			f := newProxyFixtureConfigured(t, protocolspec.DialectAnthropicMessages, nil, policy, nil, "", &proxyFixtureComposition{compiler: testEnvironmentCompiler(t, protocolspec.DialectAnthropicMessages), ingressContext: egressnetwork.WithTargetAccess(ctx, egressnetwork.TargetAccessPublicOnly), defaultRepository: func(repository egressprofile.DefaultRepository) egressprofile.DefaultRepository {
+				fault = &blindDefaultReadFault{DefaultRepository: repository}
+				return fault
+			}, configureProxy: func(options *loopbackproxy.Options) {
+				options.BlindTunnels = &blindTunnelFixture{gate: gate, dialer: dialer}
+			}})
+			defer f.Close(t)
+			publishBlindDefault(t, f, p)
+			fault.armed.Store(true)
+			c, err := net.DialTimeout("tcp4", f.listener.Addr().String(), time.Second)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer c.Close()
+			_ = c.SetDeadline(time.Now().Add(3 * time.Second))
+			auth := base64.StdEncoding.EncodeToString([]byte("capture:" + f.grant.ProxyCapability.Value()))
+			request := "GET http://blind.fixture:80/b4 HTTP/1.1\r\nHost: blind.fixture:80\r\nProxy-Authorization: Basic " + auth + "\r\nConnection: close\r\n\r\n"
+			if connect {
+				request = "CONNECT blind.fixture:443 HTTP/1.1\r\nHost: blind.fixture:443\r\nProxy-Authorization: Basic " + auth + "\r\nConnection: close\r\n\r\n"
+			}
+			if _, err := io.WriteString(c, request); err != nil {
+				t.Fatal(err)
+			}
+			response, err := http.ReadResponse(bufio.NewReader(c), nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			body, err := io.ReadAll(response.Body)
+			response.Body.Close()
+			c.Close()
+			var reason struct {
+				ReasonCode string `json:"reasonCode"`
+			}
+			jsonErr := json.Unmarshal(body, &reason)
+			if err != nil || jsonErr != nil || response.StatusCode != 503 || reason.ReasonCode != "blind_tunnel_failed" || strings.Contains(string(body), egressprofile.ErrDefaultUnavailable.Error()) {
+				t.Fatalf("read failure response=%d body=%q err=%v json=%v", response.StatusCode, body, err, jsonErr)
+			}
+			if fault.failures.Load() != 1 || n.lookups.Load() != 0 || n.dials.Load() != 0 || n.delegate.denied.Load() != 0 || p.requests.Load() != 0 || origins.Load() != 0 {
+				t.Fatalf("read failure reads=%d DNS=%d base=%d rejected=%d proxy=%d origin=%d", fault.failures.Load(), n.lookups.Load(), n.dials.Load(), n.delegate.denied.Load(), p.requests.Load(), origins.Load())
+			}
+			s := gate.Snapshot()
+			if s.ActiveEgress != 0 || s.ActiveActions != 0 || s.QueuedRequests != 0 {
+				t.Fatalf("read failure gate=%+v", s)
+			}
+			attempts, err := f.egress.List(ctx, egressaudit.PageRequest{Limit: 10})
+			if err != nil || len(attempts.Items) != 0 {
+				t.Fatalf("invented outbound attempt=%+v err=%v", attempts, err)
+			}
+			var id string
+			deadline := time.NewTicker(time.Millisecond)
+			defer deadline.Stop()
+			for {
+				page, err := f.connections.List(ctx, connectionevent.PageRequest{Limit: 10})
+				if err != nil {
+					t.Fatal(err)
+				}
+				terminal := false
+				for _, event := range page.Items {
+					if id == "" {
+						id = event.ConnectionID
+					}
+					if event.ConnectionID != id {
+						t.Fatal("multiple read-fault connections")
+					}
+					if event.Phase == connectionevent.PhaseFailed {
+						terminal = true
+					}
+				}
+				if terminal {
+					break
+				}
+				select {
+				case <-deadline.C:
+				case <-ctx.Done():
+					t.Fatal("read failure terminal observer timeout")
+				}
+			}
+			timeline, err := f.connections.Timeline(ctx, id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			attempted, allowed, failed := 0, 0, 0
+			for _, event := range timeline.Events {
+				if event.ConnectionID != id || event.RequestedHost != "blind.fixture" || event.Port != port {
+					t.Fatalf("read-fault connection target=%+v", event)
+				}
+				switch event.Phase {
+				case connectionevent.PhaseAttempted:
+					attempted++
+				case connectionevent.PhaseDecided:
+					if event.Decision != connectionevent.DecisionAllow || event.Decryption != connectionevent.DecryptionBlind || event.RouteHost != "blind.fixture" {
+						t.Fatalf("read-fault allowance=%+v", event)
+					}
+					allowed++
+				case connectionevent.PhaseFailed:
+					if event.Outcome != connectionevent.OutcomeFailed || event.Decryption != connectionevent.DecryptionBlind {
+						t.Fatalf("read-fault terminal=%+v", event)
+					}
+					failed++
+				default:
+					t.Fatalf("unexpected read-fault phase=%s", event.Phase)
+				}
+			}
+			if attempted != 1 || allowed != 1 || failed != 1 {
+				t.Fatalf("read-fault journal phases=%d/%d/%d", attempted, allowed, failed)
+			}
+			if len(f.exchanges.Requests()) != 0 || f.original.Count() != 0 {
+				t.Fatal("read-fault reached payload pipeline")
+			}
+			t.Logf("B4 real manager read failure connection=%s outbound IDs=0 reads=1 DNS/base/proxy/origin=0 journal attempted/allowed/failed=1/1/1 gate=%+v", id, s)
+		})
+	}
 }
 
 func (n *blindContainedNetwork) DialContext(ctx context.Context, network, address string) (net.Conn, error) {
