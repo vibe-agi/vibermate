@@ -36,8 +36,12 @@ func nativeHandshake(t *testing.T, f *nativeFixture) net.Conn {
 func (f *nativeFixture) waitingCall(t *testing.T) nativetool.Operation {
 	t.Helper()
 	deadline := time.Now().Add(time.Second)
+	var after int64
+	var last nativetool.Page
+	var polls int
 	for time.Now().Before(deadline) {
-		page, err := f.store.NativeToolRepository().Page(context.Background(), nativetool.PageRequest{Capture: f.capture, Limit: 20})
+		page, err := f.store.NativeToolRepository().Page(context.Background(), nativetool.PageRequest{Capture: f.capture, AfterSequence: after, Limit: 20})
+		last, polls = page, polls+1
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -46,9 +50,13 @@ func (f *nativeFixture) waitingCall(t *testing.T) nativetool.Operation {
 				return op
 			}
 		}
+		// Empty pages report zero; retain the last consumed event watermark.
+		if page.NextSequence > after {
+			after = page.NextSequence
+		}
 		time.Sleep(time.Millisecond * 5)
 	}
-	t.Fatal("actual Review question missing")
+	t.Fatalf("actual Review question missing: capture=%+v polls=%d after=%d lastPage=%+v", f.capture, polls, after, last)
 	return nativetool.Operation{}
 }
 func TestNativeHandlerReviewRejectExpiryAndUncertainty(t *testing.T) {

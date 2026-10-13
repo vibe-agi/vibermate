@@ -125,12 +125,17 @@ func TestActualRuntimeOriginalForwardHoldAndFailure(t *testing.T) {
 			first := run.start(t)
 			if row.edge == "stream_disconnect" {
 				first.waitEntry(t, f.streamEntered)
-				assertOriginalForwardReply(t, f, first.firstChunk(t), true)
+				prefix := first.firstChunk(t)
+				assertOriginalForwardReply(t, f, prefix, true)
 				f.editDefault(t)
 				first.cancel()
 				reply := first.join(t)
-				if reply.Err == nil || bytes.Contains(reply.Body, []byte("response.completed")) {
-					t.Fatalf("disconnected stream unexpectedly completed: %+v", reply)
+				t.Logf("client-canceled original stream family=%s status=%d bytes=%d readErr=%v", row.family, reply.Status, len(reply.Body), reply.Err)
+				// HTTP EOF and cancellation errors both permit an incomplete SSE
+				// prefix; neither proves a semantic or audited success.
+				assertOriginalForwardBody(t, f, reply, true)
+				if !bytes.Equal(reply.Body, prefix.Body) {
+					t.Fatalf("client cancellation appended or changed downstream prefix: before=%q after=%q", prefix.Body, reply.Body)
 				}
 				run.joinProducers(t)
 				f.assertAudits(t, 1)
@@ -433,8 +438,16 @@ func (run *originalForwardRun) joinProducers(t *testing.T) {
 
 func assertOriginalForwardReply(t *testing.T, f *capturedOriginalFixture, reply capturedOriginalReply, prefix bool) {
 	t.Helper()
-	if reply.Err != nil || reply.Status != http.StatusOK {
+	if reply.Err != nil {
 		t.Fatalf("original reply status=%d err=%v body=%s", reply.Status, reply.Err, reply.Body)
+	}
+	assertOriginalForwardBody(t, f, reply, prefix)
+}
+
+func assertOriginalForwardBody(t *testing.T, f *capturedOriginalFixture, reply capturedOriginalReply, prefix bool) {
+	t.Helper()
+	if reply.Status != http.StatusOK {
+		t.Fatalf("original body status=%d err=%v body=%s", reply.Status, reply.Err, reply.Body)
 	}
 	if f.cfg.family == "raw" {
 		if reply.Header.Get("Content-Type") != "application/octet-stream" || reply.Header.Get("X-Original-Fixture") != "raw" || !bytes.Equal(reply.Body, []byte{0, 1, 2, 'r', 'a', 'w', 255}) {
